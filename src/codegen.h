@@ -124,6 +124,7 @@ typedef struct {
     /* Current method context (NULL when in top-level) */
     class_info_t *current_class;
     method_info_t *current_method;
+    module_info_t *current_module;
 } codegen_ctx_t;
 
 void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out);

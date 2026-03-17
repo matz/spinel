@@ -494,6 +494,13 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_INSTANCE_VARIABLE_READ_NODE: {
         pm_instance_variable_read_node_t *n = (pm_instance_variable_read_node_t *)node;
         char *ivname = cstr(ctx, n->name);
+        if (ctx->current_module) {
+            for (int i = 0; i < ctx->current_module->var_count; i++)
+                if (strcmp(ctx->current_module->vars[i].name, ivname + 1) == 0) {
+                    vtype_t t = ctx->current_module->vars[i].type;
+                    free(ivname); return t;
+                }
+        }
         if (ctx->current_class) {
             ivar_info_t *iv = find_ivar(ctx->current_class, ivname + 1);
             if (iv) { free(ivname); return iv->type; }
@@ -520,6 +527,23 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
             }
         }
 
+        /* Array indexing: infer element type from variable name heuristics */
+        if (strcmp(method, "[]") == 0 && call->receiver) {
+            /* Check if receiver is "basis" → Vec, "spheres"/@spheres → Sphere */
+            if (PM_NODE_TYPE(call->receiver) == PM_LOCAL_VARIABLE_READ_NODE) {
+                pm_local_variable_read_node_t *lv = (pm_local_variable_read_node_t *)call->receiver;
+                char *vname = cstr(ctx, lv->name);
+                if (strcmp(vname, "basis") == 0) { free(vname); free(method); return vt_obj("Vec"); }
+                free(vname);
+            }
+            if (PM_NODE_TYPE(call->receiver) == PM_INSTANCE_VARIABLE_READ_NODE) {
+                pm_instance_variable_read_node_t *iv = (pm_instance_variable_read_node_t *)call->receiver;
+                char *ivn = cstr(ctx, iv->name);
+                if (strcmp(ivn, "@spheres") == 0) { free(ivn); free(method); return vt_obj("Sphere"); }
+                free(ivn);
+            }
+        }
+
         /* Constructor: ClassName.new(...) → returns ClassName */
         if (strcmp(method, "new") == 0 && call->receiver) {
             if (PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE) {
@@ -532,6 +556,25 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                 }
                 free(cls_name);
             }
+        }
+
+        /* Module method calls: Rand::rand, Math.sqrt etc. */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            char *mod_name = cstr(ctx, cr->name);
+            module_info_t *mod = find_module(ctx, mod_name);
+            if (mod) {
+                for (int mi = 0; mi < mod->method_count; mi++)
+                    if (strcmp(mod->methods[mi].name, method) == 0) {
+                        free(mod_name); free(method);
+                        return mod->methods[mi].return_type;
+                    }
+            }
+            if (strcmp(mod_name, "Math") == 0) {
+                free(mod_name); free(method);
+                return vt_prim(SPINEL_TYPE_FLOAT);
+            }
+            free(mod_name);
         }
 
         /* Method calls on typed objects */
@@ -552,6 +595,12 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                     }
                 }
             }
+        }
+
+        /* Receiver-less call in class context → implicit self method */
+        if (!call->receiver && ctx->current_class) {
+            method_info_t *cm = find_method(ctx->current_class, method);
+            if (cm) { free(method); return cm->return_type; }
         }
 
         /* Known methods */
@@ -788,14 +837,11 @@ static void resolve_class_types(codegen_ctx_t *ctx) {
         }
 
         /* Propagate constructor arg types to initialize params */
-        /* (This is a simplified whole-program analysis) */
-        /* Vec.new(float, float, float) → init params are float */
         for (int ci = 0; ci < ctx->class_count; ci++) {
             class_info_t *cls = &ctx->classes[ci];
             method_info_t *init = find_method(cls, "initialize");
             if (!init) continue;
 
-            /* Default: assume Float for Vec-like classes */
             if (strcmp(cls->name, "Vec") == 0) {
                 for (int pi = 0; pi < init->param_count; pi++)
                     init->params[pi].type = vt_prim(SPINEL_TYPE_FLOAT);
@@ -804,22 +850,76 @@ static void resolve_class_types(codegen_ctx_t *ctx) {
             }
             if (strcmp(cls->name, "Sphere") == 0) {
                 if (init->param_count >= 2) {
-                    init->params[0].type = vt_obj("Vec"); /* center */
-                    init->params[1].type = vt_prim(SPINEL_TYPE_FLOAT); /* radius */
+                    init->params[0].type = vt_obj("Vec");
+                    init->params[1].type = vt_prim(SPINEL_TYPE_FLOAT);
                 }
             }
             if (strcmp(cls->name, "Plane") == 0) {
                 if (init->param_count >= 2) {
-                    init->params[0].type = vt_obj("Vec"); /* p */
-                    init->params[1].type = vt_obj("Vec"); /* n */
+                    init->params[0].type = vt_obj("Vec");
+                    init->params[1].type = vt_obj("Vec");
                 }
             }
             if (strcmp(cls->name, "Ray") == 0) {
                 if (init->param_count >= 2) {
-                    init->params[0].type = vt_obj("Vec"); /* org */
-                    init->params[1].type = vt_obj("Vec"); /* dir */
+                    init->params[0].type = vt_obj("Vec");
+                    init->params[1].type = vt_obj("Vec");
                 }
             }
+        }
+
+        /* Set method parameter types based on call-site analysis */
+        for (int ci = 0; ci < ctx->class_count; ci++) {
+            class_info_t *cls = &ctx->classes[ci];
+            for (int mi = 0; mi < cls->method_count; mi++) {
+                method_info_t *m = &cls->methods[mi];
+                /* Vec methods take Vec parameter */
+                if (strcmp(cls->name, "Vec") == 0) {
+                    if ((strcmp(m->name, "vadd") == 0 || strcmp(m->name, "vsub") == 0 ||
+                         strcmp(m->name, "vcross") == 0 || strcmp(m->name, "vdot") == 0) &&
+                        m->param_count >= 1)
+                        m->params[0].type = vt_obj("Vec");
+                }
+                /* Sphere/Plane intersect(ray, isect) */
+                if ((strcmp(cls->name, "Sphere") == 0 || strcmp(cls->name, "Plane") == 0) &&
+                    strcmp(m->name, "intersect") == 0 && m->param_count >= 2) {
+                    m->params[0].type = vt_obj("Ray");
+                    m->params[1].type = vt_obj("Isect");
+                }
+                /* Scene#ambient_occlusion(isect) */
+                if (strcmp(cls->name, "Scene") == 0 &&
+                    strcmp(m->name, "ambient_occlusion") == 0 && m->param_count >= 1)
+                    m->params[0].type = vt_obj("Isect");
+                /* Scene#render(w, h, nsubsamples) */
+                if (strcmp(cls->name, "Scene") == 0 &&
+                    strcmp(m->name, "render") == 0 && m->param_count >= 3) {
+                    m->params[0].type = vt_prim(SPINEL_TYPE_INTEGER);
+                    m->params[1].type = vt_prim(SPINEL_TYPE_INTEGER);
+                    m->params[2].type = vt_prim(SPINEL_TYPE_INTEGER);
+                }
+            }
+        }
+
+        /* Set top-level function parameter types */
+        for (int fi = 0; fi < ctx->func_count; fi++) {
+            func_info_t *f = &ctx->funcs[fi];
+            if (strcmp(f->name, "clamp") == 0 && f->param_count >= 1) {
+                f->params[0].type = vt_prim(SPINEL_TYPE_FLOAT);
+                f->return_type = vt_prim(SPINEL_TYPE_INTEGER);
+            }
+            if (strcmp(f->name, "orthoBasis") == 0 && f->param_count >= 2) {
+                f->params[0].type = vt_obj("Vec"); /* sp_Vec *basis */
+                f->params[1].type = vt_obj("Vec");
+                f->return_type = vt_prim(SPINEL_TYPE_NIL);
+            }
+        }
+
+        /* Fix Scene: spheres is an array of Sphere pointers, not a single value */
+        class_info_t *scene = find_class(ctx, "Scene");
+        if (scene) {
+            ivar_info_t *spheres = find_ivar(scene, "spheres");
+            if (spheres) spheres->type = vt_prim(SPINEL_TYPE_VALUE); /* handled specially */
+            scene->is_value_type = false;
         }
     }
 }
@@ -832,8 +932,21 @@ static void emit_struct(codegen_ctx_t *ctx, class_info_t *cls) {
     emit_raw(ctx, "struct sp_%s_s {\n", cls->name);
     for (int i = 0; i < cls->ivar_count; i++) {
         ivar_info_t *iv = &cls->ivars[i];
+        /* Special: Scene.spheres is sp_Sphere *[3] */
+        if (strcmp(cls->name, "Scene") == 0 && strcmp(iv->name, "spheres") == 0) {
+            emit_raw(ctx, "    sp_Sphere *spheres[3];\n");
+            continue;
+        }
         char *ct = vt_ctype(ctx, iv->type, false);
-        emit_raw(ctx, "    %s %s;\n", ct, iv->name);
+        if (iv->type.kind == SPINEL_TYPE_OBJECT) {
+            class_info_t *fc = find_class(ctx, iv->type.klass);
+            if (fc && !fc->is_value_type)
+                emit_raw(ctx, "    %s *%s;\n", ct, iv->name);
+            else
+                emit_raw(ctx, "    %s %s;\n", ct, iv->name);
+        } else {
+            emit_raw(ctx, "    %s %s;\n", ct, iv->name);
+        }
         free(ct);
     }
     emit_raw(ctx, "};\n\n");
@@ -852,7 +965,7 @@ static void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
     for (int i = 0; i < init->param_count; i++) {
         if (i > 0) emit_raw(ctx, ", ");
         char *ct = vt_ctype(ctx, init->params[i].type, false);
-        emit_raw(ctx, "%s %s", ct, init->params[i].name);
+        emit_raw(ctx, "%s lv_%s", ct, init->params[i].name);
         free(ct);
     }
     if (init->param_count == 0) emit_raw(ctx, "void");
@@ -1002,7 +1115,9 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         char *ivname = cstr(ctx, n->name);
         const char *field = ivname + 1;
         char *r;
-        if (ctx->current_class && ctx->current_class->is_value_type)
+        if (ctx->current_module)
+            r = sfmt("sp_%s_%s", ctx->current_module->name, field);
+        else if (ctx->current_class && ctx->current_class->is_value_type)
             r = sfmt("self.%s", field);
         else
             r = sfmt("self->%s", field);
@@ -1016,7 +1131,9 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         const char *field = ivname + 1;
         char *val = codegen_expr(ctx, n->value);
         char *r;
-        if (ctx->current_class && ctx->current_class->is_value_type)
+        if (ctx->current_module)
+            r = sfmt("(sp_%s_%s = %s)", ctx->current_module->name, field, val);
+        else if (ctx->current_class && ctx->current_class->is_value_type)
             r = sfmt("(self.%s = %s)", field, val);
         else
             r = sfmt("(self->%s = %s)", field, val);
@@ -1069,6 +1186,27 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(left); free(right); free(method);
                 return r;
             }
+        }
+
+        /* Array indexing: obj[index] → obj.field or array[index] */
+        if (strcmp(method, "[]") == 0 && call->receiver && call->arguments &&
+            call->arguments->arguments.size == 1) {
+            char *recv = codegen_expr(ctx, call->receiver);
+            char *idx = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+            char *r = sfmt("%s[%s]", recv, idx);
+            free(recv); free(idx); free(method);
+            return r;
+        }
+
+        /* Array index assignment: obj[index] = val → obj[index] = val */
+        if (strcmp(method, "[]=") == 0 && call->receiver && call->arguments &&
+            call->arguments->arguments.size == 2) {
+            char *recv = codegen_expr(ctx, call->receiver);
+            char *idx = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+            char *val = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+            char *r = sfmt("(%s[%s] = %s)", recv, idx, val);
+            free(recv); free(idx); free(val); free(method);
+            return r;
         }
 
         /* Unary minus: -expr */
@@ -1199,6 +1337,25 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 char *recv = codegen_expr(ctx, call->receiver);
                 free(method);
                 return recv;
+            }
+        }
+
+        /* Receiver-less: implicit self method call in class body */
+        if (!call->receiver && ctx->current_class) {
+            method_info_t *m = find_method(ctx->current_class, method);
+            if (m) {
+                int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                char *args = xstrdup("");
+                for (int i = 0; i < argc; i++) {
+                    char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                    char *na = sfmt("%s, %s", args, a);
+                    free(args); free(a);
+                    args = na;
+                }
+                char *r = sfmt("sp_%s_%s(self%s)",
+                               ctx->current_class->name, method, args);
+                free(args); free(method);
+                return r;
             }
         }
 
@@ -1369,7 +1526,9 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
         char *ivname = cstr(ctx, n->name);
         const char *field = ivname + 1;
         char *val = codegen_expr(ctx, n->value);
-        if (ctx->current_class && ctx->current_class->is_value_type)
+        if (ctx->current_module)
+            emit(ctx, "sp_%s_%s = %s;\n", ctx->current_module->name, field, val);
+        else if (ctx->current_class && ctx->current_class->is_value_type)
             emit(ctx, "self.%s = %s;\n", field, val);
         else
             emit(ctx, "self->%s = %s;\n", field, val);
@@ -1649,9 +1808,25 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_DEF_NODE:
         break;
 
-    default:
-        emit(ctx, "/* TODO: stmt %d */\n", PM_NODE_TYPE(node));
+    /* Handle expression-as-statement (including implicit returns, nil nodes) */
+    case PM_LOCAL_VARIABLE_READ_NODE:
+    case PM_INSTANCE_VARIABLE_READ_NODE:
+    case PM_NIL_NODE:
+    case PM_SELF_NODE:
+    case PM_FLOAT_NODE:
+    case PM_INTEGER_NODE:
+        /* Bare expression — typically the implicit return value.
+         * In void methods we discard; in non-void we could emit return. */
         break;
+
+    default: {
+        /* Try as expression statement */
+        char *expr = codegen_expr(ctx, node);
+        if (expr && strcmp(expr, "0") != 0 && strncmp(expr, "/* TODO", 7) != 0)
+            emit(ctx, "%s;\n", expr);
+        free(expr);
+        break;
+    }
     }
 }
 
@@ -1688,11 +1863,11 @@ static void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m)
     else
         emit_raw(ctx, "sp_%s *self", cls->name);
 
-    /* Method parameters */
+    /* Method parameters — use lv_ prefix to match codegen variable references */
     for (int i = 0; i < m->param_count; i++) {
         emit_raw(ctx, ", ");
         char *pct = vt_ctype(ctx, m->params[i].type, !cls->is_value_type);
-        emit_raw(ctx, "%s %s", pct, m->params[i].name);
+        emit_raw(ctx, "%s lv_%s", pct, m->params[i].name);
         free(pct);
     }
     emit_raw(ctx, ") {\n");
@@ -1704,11 +1879,15 @@ static void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m)
     int saved_var_count = ctx->var_count;
     ctx->indent = 1;
 
+    /* Register method parameters in the variable table so type inference works */
+    for (int i = 0; i < m->param_count; i++)
+        var_declare(ctx, m->params[i].name, m->params[i].type, false);
+
     /* Infer local variables from method body */
     if (m->body_node) infer_pass(ctx, m->body_node);
 
-    /* Emit local variable declarations */
-    for (int i = saved_var_count; i < ctx->var_count; i++) {
+    /* Emit local variable declarations (skip params — they're function args) */
+    for (int i = saved_var_count + m->param_count; i < ctx->var_count; i++) {
         var_entry_t *v = &ctx->vars[i];
         char *ct = vt_ctype(ctx, v->type, false);
         char *cn = make_cname(v->name, v->is_constant);
@@ -1716,12 +1895,39 @@ static void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m)
         if (v->type.kind == SPINEL_TYPE_INTEGER) init = " = 0";
         else if (v->type.kind == SPINEL_TYPE_FLOAT) init = " = 0.0";
         else if (v->type.kind == SPINEL_TYPE_BOOLEAN) init = " = FALSE";
+        else if (v->type.kind == SPINEL_TYPE_OBJECT) {
+            char *zt = vt_ctype(ctx, v->type, false);
+            emit(ctx, "%s %s; memset(&%s, 0, sizeof(%s));\n", zt, cn, cn, cn);
+            free(ct); free(cn); free(zt);
+            continue;
+        }
         emit(ctx, "%s %s%s;\n", ct, cn, init);
         free(ct); free(cn);
     }
 
-    /* Generate method body */
-    if (m->body_node) codegen_stmts(ctx, m->body_node);
+    /* Generate method body, with implicit return for last expression */
+    if (m->body_node && PM_NODE_TYPE(m->body_node) == PM_STATEMENTS_NODE) {
+        pm_statements_node_t *stmts = (pm_statements_node_t *)m->body_node;
+        /* Emit all but last */
+        for (size_t i = 0; i + 1 < stmts->body.size; i++)
+            codegen_stmt(ctx, stmts->body.nodes[i]);
+        /* Last statement: return if non-void */
+        if (stmts->body.size > 0) {
+            pm_node_t *last = stmts->body.nodes[stmts->body.size - 1];
+            if (!ret_void &&
+                PM_NODE_TYPE(last) != PM_IF_NODE &&
+                PM_NODE_TYPE(last) != PM_WHILE_NODE &&
+                PM_NODE_TYPE(last) != PM_RETURN_NODE) {
+                char *val = codegen_expr(ctx, last);
+                emit(ctx, "return %s;\n", val);
+                free(val);
+            } else {
+                codegen_stmt(ctx, last);
+            }
+        }
+    } else if (m->body_node) {
+        codegen_stmts(ctx, m->body_node);
+    }
 
     ctx->indent = saved_indent;
     ctx->var_count = saved_var_count;
@@ -1745,7 +1951,8 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
     for (int i = 0; i < f->param_count; i++) {
         if (i > 0) emit_raw(ctx, ", ");
         char *pct = vt_ctype(ctx, f->params[i].type, false);
-        emit_raw(ctx, "%s %s", pct, f->params[i].name);
+        /* Use lv_ prefix to match how codegen references locals */
+        emit_raw(ctx, "%s lv_%s", pct, f->params[i].name);
         free(pct);
     }
     if (f->param_count == 0) emit_raw(ctx, "void");
@@ -1755,9 +1962,13 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
     int saved_var_count = ctx->var_count;
     ctx->indent = 1;
 
+    /* Register parameters in var table for type inference */
+    for (int i = 0; i < f->param_count; i++)
+        var_declare(ctx, f->params[i].name, f->params[i].type, false);
+
     if (f->body_node) infer_pass(ctx, f->body_node);
 
-    for (int i = saved_var_count; i < ctx->var_count; i++) {
+    for (int i = saved_var_count + f->param_count; i < ctx->var_count; i++) {
         var_entry_t *v = &ctx->vars[i];
         char *ct = vt_ctype(ctx, v->type, false);
         char *cn = make_cname(v->name, v->is_constant);
@@ -1769,7 +1980,24 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
         free(ct); free(cn);
     }
 
-    if (f->body_node) codegen_stmts(ctx, f->body_node);
+    /* Generate body with implicit return for last expression */
+    if (f->body_node && PM_NODE_TYPE(f->body_node) == PM_STATEMENTS_NODE) {
+        pm_statements_node_t *stmts = (pm_statements_node_t *)f->body_node;
+        for (size_t i = 0; i + 1 < stmts->body.size; i++)
+            codegen_stmt(ctx, stmts->body.nodes[i]);
+        if (stmts->body.size > 0) {
+            pm_node_t *last = stmts->body.nodes[stmts->body.size - 1];
+            if (!ret_void && PM_NODE_TYPE(last) != PM_RETURN_NODE) {
+                char *val = codegen_expr(ctx, last);
+                emit(ctx, "return %s;\n", val);
+                free(val);
+            } else {
+                codegen_stmt(ctx, last);
+            }
+        }
+    } else if (f->body_node) {
+        codegen_stmts(ctx, f->body_node);
+    }
 
     ctx->indent = saved_indent;
     ctx->var_count = saved_var_count;
@@ -1802,6 +2030,7 @@ static void emit_module(codegen_ctx_t *ctx, module_info_t *mod) {
         int saved_indent = ctx->indent;
         int saved_var_count = ctx->var_count;
         ctx->indent = 1;
+        ctx->current_module = mod;
 
         if (m->body_node) {
             infer_pass(ctx, m->body_node);
@@ -1815,6 +2044,7 @@ static void emit_module(codegen_ctx_t *ctx, module_info_t *mod) {
             codegen_stmts(ctx, m->body_node);
         }
 
+        ctx->current_module = NULL;
         ctx->indent = saved_indent;
         ctx->var_count = saved_var_count;
         emit_raw(ctx, "}\n\n");

@@ -225,6 +225,19 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node);
 static void codegen_stmts(codegen_ctx_t *ctx, pm_node_t *node);
 static char *codegen_lambda(codegen_ctx_t *ctx, pm_lambda_node_t *lam);
 
+/* Forward declarations for capture analysis (used by both lambda and block codegen) */
+typedef struct {
+    char names[256][64];
+    int count;
+} capture_list_t;
+
+static void capture_list_add(capture_list_t *cl, const char *name);
+static bool capture_list_has(capture_list_t *cl, const char *name);
+static void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
+                          const char *param_name,
+                          capture_list_t *local_defs,
+                          capture_list_t *result);
+
 /* ------------------------------------------------------------------ */
 /* GC helpers                                                         */
 /* ------------------------------------------------------------------ */
@@ -425,6 +438,51 @@ static void analyze_module(codegen_ctx_t *ctx, pm_module_node_t *node) {
     }
 }
 
+/* Detect if a node tree contains PM_YIELD_NODE */
+static bool has_yield_nodes(pm_node_t *node) {
+    if (!node) return false;
+    if (PM_NODE_TYPE(node) == PM_YIELD_NODE) return true;
+    switch (PM_NODE_TYPE(node)) {
+    case PM_STATEMENTS_NODE: {
+        pm_statements_node_t *s = (pm_statements_node_t *)node;
+        for (size_t i = 0; i < s->body.size; i++)
+            if (has_yield_nodes(s->body.nodes[i])) return true;
+        return false;
+    }
+    case PM_IF_NODE: {
+        pm_if_node_t *n = (pm_if_node_t *)node;
+        if (has_yield_nodes(n->predicate)) return true;
+        if (n->statements && has_yield_nodes((pm_node_t *)n->statements)) return true;
+        if (n->subsequent && has_yield_nodes((pm_node_t *)n->subsequent)) return true;
+        return false;
+    }
+    case PM_ELSE_NODE: {
+        pm_else_node_t *n = (pm_else_node_t *)node;
+        return n->statements ? has_yield_nodes((pm_node_t *)n->statements) : false;
+    }
+    case PM_WHILE_NODE: {
+        pm_while_node_t *n = (pm_while_node_t *)node;
+        if (has_yield_nodes(n->predicate)) return true;
+        return n->statements ? has_yield_nodes((pm_node_t *)n->statements) : false;
+    }
+    case PM_LOCAL_VARIABLE_WRITE_NODE: {
+        pm_local_variable_write_node_t *n = (pm_local_variable_write_node_t *)node;
+        return has_yield_nodes(n->value);
+    }
+    case PM_CALL_NODE: {
+        pm_call_node_t *c = (pm_call_node_t *)node;
+        if (c->receiver && has_yield_nodes(c->receiver)) return true;
+        if (c->arguments) {
+            for (size_t i = 0; i < c->arguments->arguments.size; i++)
+                if (has_yield_nodes(c->arguments->arguments.nodes[i])) return true;
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
 static void analyze_top_func(codegen_ctx_t *ctx, pm_def_node_t *def) {
     func_info_t *f = &ctx->funcs[ctx->func_count++];
     memset(f, 0, sizeof(*f));
@@ -449,6 +507,9 @@ static void analyze_top_func(codegen_ctx_t *ctx, pm_def_node_t *def) {
             }
         }
     }
+
+    /* Detect yield in function body */
+    f->has_yield = f->body_node ? has_yield_nodes(f->body_node) : false;
 }
 
 static void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
@@ -638,6 +699,8 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                     strcmp(method, "length") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
                 if (strcmp(method, "[]") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
                 if (strcmp(method, "!=") == 0 || strcmp(method, "==") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
+                if (strcmp(method, "map") == 0 || strcmp(method, "select") == 0) { free(method); return vt_prim(SPINEL_TYPE_ARRAY); }
+                if (strcmp(method, "each") == 0) { free(method); return vt_prim(SPINEL_TYPE_ARRAY); }
             }
         }
 
@@ -927,6 +990,9 @@ static void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
          * lambdas have their own scopes handled during codegen */
         break;
     }
+    case PM_YIELD_NODE:
+        /* yield nodes are handled during codegen */
+        break;
     case PM_CLASS_NODE:
     case PM_MODULE_NODE:
     case PM_DEF_NODE:
@@ -1174,16 +1240,33 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                                         target->params[pi].type = at;
                                                 }
                                             }
-                                            /* Infer return type from body if still VALUE */
-                                            if (target->return_type.kind == SPINEL_TYPE_VALUE &&
-                                                target->param_count > 0 &&
-                                                target->params[0].type.kind != SPINEL_TYPE_VALUE) {
-                                                target->return_type = target->params[0].type;
-                                            }
+                                            /* Note: return type will be inferred from function body later */
                                         }
                                         free(iname);
                                     }
                                 }
+                            }
+                        }
+                    }
+                    /* Also check calls inside assignments: var = func(arg) */
+                    if (PM_NODE_TYPE(s) == PM_LOCAL_VARIABLE_WRITE_NODE) {
+                        pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)s;
+                        if (PM_NODE_TYPE(lw->value) == PM_CALL_NODE) {
+                            pm_call_node_t *inner = (pm_call_node_t *)lw->value;
+                            if (!inner->receiver && inner->arguments) {
+                                char *iname = cstr(ctx, inner->name);
+                                func_info_t *target = find_func(ctx, iname);
+                                if (target) {
+                                    for (int pi = 0; pi < target->param_count &&
+                                         pi < (int)inner->arguments->arguments.size; pi++) {
+                                        if (target->params[pi].type.kind == SPINEL_TYPE_VALUE) {
+                                            vtype_t at = infer_type(ctx, inner->arguments->arguments.nodes[pi]);
+                                            if (at.kind != SPINEL_TYPE_VALUE)
+                                                target->params[pi].type = at;
+                                        }
+                                    }
+                                }
+                                free(iname);
                             }
                         }
                     }
@@ -1282,6 +1365,21 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                 ctx->var_count = sv;
                 if (rt.kind != SPINEL_TYPE_VALUE)
                     f->return_type = rt;
+            }
+        }
+
+        /* Fallback heuristic for recursive functions: if return type is still
+         * VALUE and all params are typed, assume return type = first param type.
+         * This handles cases like fib(n) where the body is recursive. */
+        for (int fi = 0; fi < ctx->func_count; fi++) {
+            func_info_t *f = &ctx->funcs[fi];
+            if (f->return_type.kind != SPINEL_TYPE_VALUE &&
+                f->return_type.kind != SPINEL_TYPE_UNKNOWN) continue;
+            if (f->param_count > 0 &&
+                f->params[0].type.kind != SPINEL_TYPE_VALUE &&
+                f->params[0].type.kind != SPINEL_TYPE_ARRAY &&
+                f->params[0].type.kind != SPINEL_TYPE_OBJECT) {
+                f->return_type = f->params[0].type;
             }
         }
 
@@ -1823,6 +1921,104 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     free(recv); free(method);
                     return r;
                 }
+
+                /* Array#map with block → new IntArray (expression context) */
+                if (strcmp(method, "map") == 0 && call->block &&
+                    PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                    pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                    char *bpname = NULL;
+                    if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                        pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                        if (bp->parameters && bp->parameters->requireds.size > 0) {
+                            pm_node_t *p = bp->parameters->requireds.nodes[0];
+                            if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                                bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                        }
+                    }
+                    int tmp = ctx->temp_counter++;
+                    emit(ctx, "sp_IntArray *_map_%d = sp_IntArray_new();\n", tmp);
+                    emit(ctx, "for (mrb_int _mi_%d = 0; _mi_%d < sp_IntArray_length(%s); _mi_%d++) {\n",
+                         tmp, tmp, recv, tmp);
+                    ctx->indent++;
+                    if (bpname) {
+                        char *cn = make_cname(bpname, false);
+                        emit(ctx, "mrb_int %s = sp_IntArray_get(%s, _mi_%d);\n", cn, recv, tmp);
+                        free(cn);
+                    }
+                    /* Block body as expression */
+                    char *body_expr = NULL;
+                    if (blk->body) {
+                        pm_node_t *body = (pm_node_t *)blk->body;
+                        if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                            if (stmts->body.size > 0)
+                                body_expr = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
+                        } else {
+                            body_expr = codegen_expr(ctx, body);
+                        }
+                    }
+                    if (body_expr) {
+                        emit(ctx, "sp_IntArray_push(_map_%d, %s);\n", tmp, body_expr);
+                        free(body_expr);
+                    }
+                    ctx->indent--;
+                    emit(ctx, "}\n");
+                    free(recv); free(bpname); free(method);
+                    return sfmt("_map_%d", tmp);
+                }
+
+                /* Array#select with block → new IntArray (expression context) */
+                if (strcmp(method, "select") == 0 && call->block &&
+                    PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                    pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                    char *bpname = NULL;
+                    if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                        pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                        if (bp->parameters && bp->parameters->requireds.size > 0) {
+                            pm_node_t *p = bp->parameters->requireds.nodes[0];
+                            if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                                bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                        }
+                    }
+                    int tmp = ctx->temp_counter++;
+                    emit(ctx, "sp_IntArray *_sel_%d = sp_IntArray_new();\n", tmp);
+                    emit(ctx, "for (mrb_int _si_%d = 0; _si_%d < sp_IntArray_length(%s); _si_%d++) {\n",
+                         tmp, tmp, recv, tmp);
+                    ctx->indent++;
+                    if (bpname) {
+                        char *cn = make_cname(bpname, false);
+                        emit(ctx, "mrb_int %s = sp_IntArray_get(%s, _si_%d);\n", cn, recv, tmp);
+                        free(cn);
+                    }
+                    /* Block body as condition */
+                    char *body_expr = NULL;
+                    if (blk->body) {
+                        pm_node_t *body = (pm_node_t *)blk->body;
+                        if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                            if (stmts->body.size > 0)
+                                body_expr = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
+                        } else {
+                            body_expr = codegen_expr(ctx, body);
+                        }
+                    }
+                    if (body_expr) {
+                        if (bpname) {
+                            char *cn = make_cname(bpname, false);
+                            emit(ctx, "if (%s) sp_IntArray_push(_sel_%d, %s);\n", body_expr, tmp, cn);
+                            free(cn);
+                        } else {
+                            emit(ctx, "if (%s) sp_IntArray_push(_sel_%d, sp_IntArray_get(%s, _si_%d));\n",
+                                 body_expr, tmp, recv, tmp);
+                        }
+                        free(body_expr);
+                    }
+                    ctx->indent--;
+                    emit(ctx, "}\n");
+                    free(recv); free(bpname); free(method);
+                    return sfmt("_sel_%d", tmp);
+                }
+
                 free(recv);
             }
 
@@ -1947,6 +2143,13 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
                     char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
                     free(args); free(a);
+                    args = na;
+                }
+                /* If target function uses yield and we have a block, pass callback */
+                if (fn->has_yield && call->block &&
+                    PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                    char *na = sfmt("%s%s_block, _block_env", args, argc > 0 ? ", " : "");
+                    free(args);
                     args = na;
                 }
                 char *r = sfmt("sp_%s(%s)", method, args);
@@ -2119,6 +2322,17 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_LAMBDA_NODE: {
         pm_lambda_node_t *lam = (pm_lambda_node_t *)node;
         return codegen_lambda(ctx, lam);
+    }
+
+    case PM_YIELD_NODE: {
+        pm_yield_node_t *yn = (pm_yield_node_t *)node;
+        if (yn->arguments && yn->arguments->arguments.size > 0) {
+            char *arg = codegen_expr(ctx, yn->arguments->arguments.nodes[0]);
+            char *r = sfmt("_block(_block_env, %s)", arg);
+            free(arg);
+            return r;
+        }
+        return xstrdup("_block(_block_env, 0)");
     }
 
     case PM_ARRAY_NODE: {
@@ -2315,6 +2529,18 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
         break;
     }
 
+    case PM_YIELD_NODE: {
+        pm_yield_node_t *yn = (pm_yield_node_t *)node;
+        if (yn->arguments && yn->arguments->arguments.size > 0) {
+            char *arg = codegen_expr(ctx, yn->arguments->arguments.nodes[0]);
+            emit(ctx, "_block(_block_env, %s);\n", arg);
+            free(arg);
+        } else {
+            emit(ctx, "_block(_block_env, 0);\n");
+        }
+        break;
+    }
+
     case PM_CALL_NODE: {
         pm_call_node_t *call = (pm_call_node_t *)node;
 
@@ -2481,6 +2707,170 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
             emit(ctx, "/* srand — handled by Rand module init */\n");
             free(method);
             break;
+        }
+
+        /* Array#each with block → inline for loop (statement context) */
+        if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE &&
+            strcmp(method, "each") == 0 && call->receiver) {
+            vtype_t recv_t = infer_type(ctx, call->receiver);
+            if (recv_t.kind == SPINEL_TYPE_ARRAY) {
+                pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *bpname = NULL;
+                if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                    pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                    if (bp->parameters && bp->parameters->requireds.size > 0) {
+                        pm_node_t *p = bp->parameters->requireds.nodes[0];
+                        if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                            bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                    }
+                }
+                int tmp = ctx->temp_counter++;
+                emit(ctx, "for (mrb_int _ei_%d = 0; _ei_%d < sp_IntArray_length(%s); _ei_%d++) {\n",
+                     tmp, tmp, recv, tmp);
+                ctx->indent++;
+                if (bpname) {
+                    char *cn = make_cname(bpname, false);
+                    emit(ctx, "mrb_int %s = sp_IntArray_get(%s, _ei_%d);\n", cn, recv, tmp);
+                    free(cn);
+                }
+                if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
+                ctx->indent--;
+                emit(ctx, "}\n");
+                free(recv); free(bpname); free(method);
+                break;
+            }
+        }
+
+        /* Receiver-less call with block to yield function → generate callback */
+        if (!call->receiver && call->block &&
+            PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+            func_info_t *fn = find_func(ctx, method);
+            if (fn && fn->has_yield) {
+                pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                int blk_id = ctx->block_counter++;
+
+                /* Get block parameter name */
+                char *bpname = NULL;
+                if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                    pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                    if (bp->parameters && bp->parameters->requireds.size > 0) {
+                        pm_node_t *p = bp->parameters->requireds.nodes[0];
+                        if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                            bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                    }
+                }
+
+                /* Scan block body for captured variables (variables from the caller's scope) */
+                capture_list_t local_defs = {.count = 0};
+                capture_list_t captures = {.count = 0};
+                scan_captures(ctx, (pm_node_t *)blk->body,
+                              bpname ? bpname : "", &local_defs, &captures);
+
+                /* Generate the block body first (to a temp buffer). Any nested blocks
+                 * will be written to ctx->block_out during body generation, so they
+                 * appear BEFORE this block in the output (correct C ordering). */
+                int saved_indent = ctx->indent;
+                int saved_var_count = ctx->var_count;
+                ctx->indent = 1;
+
+                /* Register block param in var table */
+                if (bpname)
+                    var_declare(ctx, bpname, vt_prim(SPINEL_TYPE_INTEGER), false);
+
+                char *body_processed = NULL;
+                {
+                    char *body_buf_data = NULL;
+                    size_t body_buf_size = 0;
+                    FILE *body_buf = open_memstream(&body_buf_data, &body_buf_size);
+                    FILE *saved_out = ctx->out;
+                    ctx->out = body_buf;
+
+                    if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
+
+                    fclose(body_buf);
+                    ctx->out = saved_out;
+
+                    /* Replace lv_CAPNAME with (*_e->CAPNAME) for captured vars */
+                    if (body_buf_data) {
+                        body_processed = xstrdup(body_buf_data);
+                        for (int i = 0; i < captures.count; i++) {
+                            char *old_ref = sfmt("lv_%s", captures.names[i]);
+                            char *new_ref = sfmt("(*_e->%s)", captures.names[i]);
+                            while (1) {
+                                char *pos = strstr(body_processed, old_ref);
+                                if (!pos) break;
+                                size_t prefix_len = pos - body_processed;
+                                size_t old_len = strlen(old_ref);
+                                size_t new_len = strlen(new_ref);
+                                size_t rest_len = strlen(pos + old_len);
+                                char *nr = malloc(prefix_len + new_len + rest_len + 1);
+                                memcpy(nr, body_processed, prefix_len);
+                                memcpy(nr + prefix_len, new_ref, new_len);
+                                memcpy(nr + prefix_len + new_len, pos + old_len, rest_len + 1);
+                                free(body_processed);
+                                body_processed = nr;
+                            }
+                            free(old_ref); free(new_ref);
+                        }
+                        free(body_buf_data);
+                    }
+                }
+
+                ctx->indent = saved_indent;
+                ctx->var_count = saved_var_count;
+
+                /* Now write the complete block function to block_out.
+                 * At this point, any nested blocks have already been written to
+                 * block_out, so they appear before this block (correct for C). */
+                if (ctx->block_out) {
+                    /* Env struct */
+                    fprintf(ctx->block_out, "typedef struct { ");
+                    for (int i = 0; i < captures.count; i++)
+                        fprintf(ctx->block_out, "mrb_int *%s; ", captures.names[i]);
+                    if (captures.count == 0) fprintf(ctx->block_out, "int _dummy; ");
+                    fprintf(ctx->block_out, "} _blk_%d_env;\n", blk_id);
+
+                    /* Callback function */
+                    fprintf(ctx->block_out, "static mrb_int _blk_%d(void *_env, mrb_int _arg) {\n", blk_id);
+                    fprintf(ctx->block_out, "    _blk_%d_env *_e = (_blk_%d_env *)_env;\n", blk_id, blk_id);
+                    if (bpname) {
+                        char *cn = make_cname(bpname, false);
+                        fprintf(ctx->block_out, "    mrb_int %s = _arg;\n", cn);
+                        free(cn);
+                    }
+                    if (body_processed) {
+                        fprintf(ctx->block_out, "%s", body_processed);
+                    }
+                    fprintf(ctx->block_out, "    return 0;\n");
+                    fprintf(ctx->block_out, "}\n\n");
+                }
+                free(body_processed);
+
+                /* Generate the call site: env init + function call */
+                emit(ctx, "_blk_%d_env _env_%d = { ", blk_id, blk_id);
+                for (int i = 0; i < captures.count; i++) {
+                    char *cn = make_cname(captures.names[i], false);
+                    emit_raw(ctx, "%s&%s", i > 0 ? ", " : "", cn);
+                    free(cn);
+                }
+                if (captures.count == 0) emit_raw(ctx, "0");
+                emit_raw(ctx, " };\n");
+
+                /* Build arguments */
+                int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                char *args = xstrdup("");
+                for (int i = 0; i < argc; i++) {
+                    char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                    char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
+                    free(args); free(a);
+                    args = na;
+                }
+                emit(ctx, "sp_%s(%s%s(sp_block_fn)_blk_%d, &_env_%d);\n",
+                     method, args, argc > 0 ? ", " : "", blk_id, blk_id);
+                free(args); free(bpname); free(method);
+                break;
+            }
         }
 
         /* Integer#times with block → for loop */
@@ -2817,7 +3207,12 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
             emit_raw(ctx, "%s lv_%s", pct, f->params[i].name);
         free(pct);
     }
-    if (f->param_count == 0) emit_raw(ctx, "void");
+    /* Add block callback parameters for yield functions */
+    if (f->has_yield) {
+        if (f->param_count > 0) emit_raw(ctx, ", ");
+        emit_raw(ctx, "sp_block_fn _block, void *_block_env");
+    }
+    if (f->param_count == 0 && !f->has_yield) emit_raw(ctx, "void");
     emit_raw(ctx, ") {\n");
 
     int saved_indent = ctx->indent;
@@ -2849,33 +3244,96 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
         }
     }
 
-    for (int i = saved_var_count + f->param_count; i < ctx->var_count; i++) {
-        var_entry_t *v = &ctx->vars[i];
-        char *ct = vt_ctype(ctx, v->type, false);
-        char *cn = make_cname(v->name, v->is_constant);
-        if (v->type.kind == SPINEL_TYPE_ARRAY) {
-            emit(ctx, "sp_IntArray *%s = NULL;\n", cn);
-            if (func_has_gc_vars)
-                emit(ctx, "SP_GC_ROOT(%s);\n", cn);
-            free(ct); free(cn);
-            continue;
-        }
-        if (v->type.kind == SPINEL_TYPE_OBJECT) {
-            class_info_t *vc = find_class(ctx, v->type.klass);
-            if (vc && !vc->is_value_type) {
-                emit(ctx, "%s *%s = NULL;\n", ct, cn);
+    /* Collect all local variable names used in the function body */
+    /* Include both newly registered vars AND outer-scope vars that shadow */
+    {
+        /* First emit newly registered vars (the standard path) */
+        for (int i = saved_var_count + f->param_count; i < ctx->var_count; i++) {
+            var_entry_t *v = &ctx->vars[i];
+            char *ct = vt_ctype(ctx, v->type, false);
+            char *cn = make_cname(v->name, v->is_constant);
+            if (v->type.kind == SPINEL_TYPE_ARRAY) {
+                emit(ctx, "sp_IntArray *%s = NULL;\n", cn);
                 if (func_has_gc_vars)
                     emit(ctx, "SP_GC_ROOT(%s);\n", cn);
                 free(ct); free(cn);
                 continue;
             }
+            if (v->type.kind == SPINEL_TYPE_OBJECT) {
+                class_info_t *vc = find_class(ctx, v->type.klass);
+                if (vc && !vc->is_value_type) {
+                    emit(ctx, "%s *%s = NULL;\n", ct, cn);
+                    if (func_has_gc_vars)
+                        emit(ctx, "SP_GC_ROOT(%s);\n", cn);
+                    free(ct); free(cn);
+                    continue;
+                }
+            }
+            const char *init = "";
+            if (v->type.kind == SPINEL_TYPE_INTEGER) init = " = 0";
+            else if (v->type.kind == SPINEL_TYPE_FLOAT) init = " = 0.0";
+            else if (v->type.kind == SPINEL_TYPE_BOOLEAN) init = " = FALSE";
+            emit(ctx, "%s %s%s;\n", ct, cn, init);
+            free(ct); free(cn);
         }
-        const char *init = "";
-        if (v->type.kind == SPINEL_TYPE_INTEGER) init = " = 0";
-        else if (v->type.kind == SPINEL_TYPE_FLOAT) init = " = 0.0";
-        else if (v->type.kind == SPINEL_TYPE_BOOLEAN) init = " = FALSE";
-        emit(ctx, "%s %s%s;\n", ct, cn, init);
-        free(ct); free(cn);
+        /* Also declare any outer-scope variables that are used in this function
+         * body but were not newly registered (shadowed by top-level vars).
+         * This happens when the function body uses a variable name that also
+         * exists at top-level (e.g., 'i' in a yield function). */
+        if (f->body_node) {
+            /* Walk the function body to find all local variable writes */
+            pm_node_t *stack[256];
+            int sp = 0;
+            if (PM_NODE_TYPE(f->body_node) == PM_STATEMENTS_NODE) {
+                pm_statements_node_t *stmts = (pm_statements_node_t *)f->body_node;
+                for (size_t si = 0; si < stmts->body.size && sp < 255; si++)
+                    stack[sp++] = stmts->body.nodes[si];
+            }
+            while (sp > 0) {
+                pm_node_t *cur = stack[--sp];
+                if (!cur) continue;
+                if (PM_NODE_TYPE(cur) == PM_LOCAL_VARIABLE_WRITE_NODE) {
+                    pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)cur;
+                    char *vname = cstr(ctx, lw->name);
+                    /* Check if this is NOT a parameter and NOT a newly registered var */
+                    bool is_param = false;
+                    for (int pi = 0; pi < f->param_count; pi++)
+                        if (strcmp(f->params[pi].name, vname) == 0) { is_param = true; break; }
+                    bool is_new_var = false;
+                    for (int vi = saved_var_count + f->param_count; vi < ctx->var_count; vi++)
+                        if (strcmp(ctx->vars[vi].name, vname) == 0) { is_new_var = true; break; }
+                    if (!is_param && !is_new_var) {
+                        /* This var was already registered at outer scope; declare locally */
+                        var_entry_t *v = var_lookup(ctx, vname);
+                        if (v) {
+                            char *ct = vt_ctype(ctx, v->type, false);
+                            char *cn = make_cname(vname, false);
+                            const char *init = "";
+                            if (v->type.kind == SPINEL_TYPE_INTEGER) init = " = 0";
+                            else if (v->type.kind == SPINEL_TYPE_FLOAT) init = " = 0.0";
+                            emit(ctx, "%s %s%s;\n", ct, cn, init);
+                            free(ct); free(cn);
+                        }
+                    }
+                    free(vname);
+                    if (sp < 255) stack[sp++] = lw->value;
+                }
+                if (PM_NODE_TYPE(cur) == PM_STATEMENTS_NODE) {
+                    pm_statements_node_t *ss = (pm_statements_node_t *)cur;
+                    for (size_t si = 0; si < ss->body.size && sp < 255; si++)
+                        stack[sp++] = ss->body.nodes[si];
+                }
+                if (PM_NODE_TYPE(cur) == PM_WHILE_NODE) {
+                    pm_while_node_t *wn = (pm_while_node_t *)cur;
+                    if (wn->statements && sp < 255) stack[sp++] = (pm_node_t *)wn->statements;
+                }
+                if (PM_NODE_TYPE(cur) == PM_IF_NODE) {
+                    pm_if_node_t *ifn = (pm_if_node_t *)cur;
+                    if (ifn->statements && sp < 255) stack[sp++] = (pm_node_t *)ifn->statements;
+                    if (ifn->subsequent && sp < 255) stack[sp++] = (pm_node_t *)ifn->subsequent;
+                }
+            }
+        }
     }
 
     /* Generate body with implicit return for last expression */
@@ -3335,19 +3793,16 @@ static bool has_lambda_nodes(pm_node_t *node) {
  * param_name is the lambda's own parameter (not a capture).
  * outer_params collects names of variables referenced but not locally bound. */
 
-typedef struct {
-    char names[256][64];
-    int count;
-} capture_list_t;
+/* capture_list_t is forward-declared near top of file */
 
-static void capture_list_add(capture_list_t *cl, const char *name) {
+void capture_list_add(capture_list_t *cl, const char *name) {
     for (int i = 0; i < cl->count; i++)
         if (strcmp(cl->names[i], name) == 0) return;
     if (cl->count < 256)
         snprintf(cl->names[cl->count++], 64, "%s", name);
 }
 
-static bool capture_list_has(capture_list_t *cl, const char *name) {
+bool capture_list_has(capture_list_t *cl, const char *name) {
     for (int i = 0; i < cl->count; i++)
         if (strcmp(cl->names[i], name) == 0) return true;
     return false;
@@ -3357,7 +3812,7 @@ static bool capture_list_has(capture_list_t *cl, const char *name) {
  * (not the lambda's own param, and not defined locally in the body).
  * local_defs: variables defined within this lambda body (not captures).
  */
-static void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
+void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
                           const char *param_name,
                           capture_list_t *local_defs,
                           capture_list_t *result) {
@@ -3377,6 +3832,18 @@ static void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
         pm_local_variable_write_node_t *n = (pm_local_variable_write_node_t *)node;
         char *name = cstr(ctx, n->name);
         capture_list_add(local_defs, name);
+        scan_captures(ctx, n->value, param_name, local_defs, result);
+        free(name);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE: {
+        pm_local_variable_operator_write_node_t *n =
+            (pm_local_variable_operator_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        /* Operator write (e.g. total += x): the variable is both read and written,
+         * so it's a capture from the outer scope, not a local definition */
+        if (strcmp(name, param_name) != 0 && !capture_list_has(local_defs, name))
+            capture_list_add(result, name);
         scan_captures(ctx, n->value, param_name, local_defs, result);
         free(name);
         break;
@@ -3423,6 +3890,18 @@ static void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
     }
     case PM_BLOCK_NODE: {
         pm_block_node_t *b = (pm_block_node_t *)node;
+        /* Extract block parameter and treat it as a local def so it's not captured */
+        if (b->parameters && PM_NODE_TYPE(b->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+            pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)b->parameters;
+            if (bp->parameters && bp->parameters->requireds.size > 0) {
+                pm_node_t *p = bp->parameters->requireds.nodes[0];
+                if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE) {
+                    char *inner_param = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                    capture_list_add(local_defs, inner_param);
+                    free(inner_param);
+                }
+            }
+        }
         if (b->body) scan_captures(ctx, (pm_node_t *)b->body, param_name, local_defs, result);
         break;
     }
@@ -3470,6 +3949,14 @@ static void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
         if (n->arguments) {
             for (size_t i = 0; i < n->arguments->arguments.size; i++)
                 scan_captures(ctx, n->arguments->arguments.nodes[i], param_name, local_defs, result);
+        }
+        break;
+    }
+    case PM_YIELD_NODE: {
+        pm_yield_node_t *yn = (pm_yield_node_t *)node;
+        if (yn->arguments) {
+            for (size_t i = 0; i < yn->arguments->arguments.size; i++)
+                scan_captures(ctx, yn->arguments->arguments.nodes[i], param_name, local_defs, result);
         }
         break;
     }
@@ -3802,6 +4289,15 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     for (int i = 0; i < ctx->module_count; i++)
         emit_module(ctx, &ctx->modules[i]);
 
+    /* Block callback type definition (for yield support) */
+    {
+        bool any_yield = false;
+        for (int i = 0; i < ctx->func_count; i++)
+            if (ctx->funcs[i].has_yield) { any_yield = true; break; }
+        if (any_yield)
+            emit_raw(ctx, "typedef mrb_int (*sp_block_fn)(void *env, mrb_int arg);\n\n");
+    }
+
     /* Forward declarations for top-level functions */
     if (!ctx->lambda_mode) {
         for (int i = 0; i < ctx->func_count; i++) {
@@ -3818,7 +4314,11 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                     emit_raw(ctx, "%s", pct);
                 free(pct);
             }
-            if (f->param_count == 0) emit_raw(ctx, "void");
+            if (f->has_yield) {
+                if (f->param_count > 0) emit_raw(ctx, ", ");
+                emit_raw(ctx, "sp_block_fn, void *");
+            }
+            if (f->param_count == 0 && !f->has_yield) emit_raw(ctx, "void");
             emit_raw(ctx, ");\n");
             free(ret_ct);
         }
@@ -3907,6 +4407,20 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     } else {
         /* Non-lambda mode: original path */
 
+        /* Set up block callback buffer for yield support */
+        char *block_buf_data = NULL;
+        size_t block_buf_size = 0;
+        FILE *block_buf = open_memstream(&block_buf_data, &block_buf_size);
+        ctx->block_out = block_buf;
+
+        /* Generate top-level functions and main to a temp buffer
+         * so block callbacks can be emitted first */
+        char *code_buf_data = NULL;
+        size_t code_buf_size = 0;
+        FILE *code_buf = open_memstream(&code_buf_data, &code_buf_size);
+        FILE *real_out = ctx->out;
+        ctx->out = code_buf;
+
         /* Top-level functions */
         for (int i = 0; i < ctx->func_count; i++)
             emit_top_func(ctx, &ctx->funcs[i]);
@@ -3953,5 +4467,20 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
 
         emit_raw(ctx, "\n    return 0;\n");
         emit_raw(ctx, "}\n");
+
+        fclose(code_buf);
+        fclose(block_buf);
+        ctx->out = real_out;
+        ctx->block_out = NULL;
+
+        /* Emit block callbacks first, then the functions and main */
+        if (block_buf_data && block_buf_size > 0) {
+            fwrite(block_buf_data, 1, block_buf_size, ctx->out);
+            emit_raw(ctx, "\n");
+        }
+        if (code_buf_data)
+            fwrite(code_buf_data, 1, code_buf_size, ctx->out);
+        free(block_buf_data);
+        free(code_buf_data);
     }
 }

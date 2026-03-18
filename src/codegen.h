@@ -92,6 +92,9 @@ typedef struct {
     pm_node_t *module_node;
 } module_info_t;
 
+/* Block callback function type (for yield support) */
+typedef int64_t (*sp_block_fn)(void *env, int64_t arg);
+
 /* Top-level function info */
 typedef struct {
     char name[64];
@@ -100,6 +103,7 @@ typedef struct {
     param_info_t params[MAX_PARAMS];
     int param_count;
     vtype_t return_type;
+    bool has_yield;           /* true if function body contains yield */
 } func_info_t;
 
 /* Variable entry in the variable table */
@@ -147,6 +151,11 @@ typedef struct {
     int lambda_counter;            /* unique ID for each lambda function */
     bool lambda_mode;              /* true when fizzbuzz-style lambda code detected */
     FILE *lambda_out;              /* secondary output for lambda function bodies */
+
+    /* Block/yield codegen state */
+    int block_counter;             /* unique ID for each block callback */
+    FILE *block_out;               /* secondary output for block function bodies */
+    bool in_yield_func;            /* true when inside a function that uses yield */
 
     /* GC: true when any non-value-type class or sp_IntArray is used */
     bool needs_gc;

@@ -47,6 +47,7 @@ typedef struct {
     vtype_t type;
     bool is_array;
     bool is_optional;
+    bool is_keyword;     /* true for keyword parameters (name:) */
     void *default_node;  /* pm_node_t * for optional param default value */
 } param_info_t;
 
@@ -111,6 +112,9 @@ typedef struct {
     int param_count;
     vtype_t return_type;
     bool has_yield;           /* true if function body contains yield */
+    bool has_rest;            /* true if function has *rest parameter */
+    char rest_name[64];       /* name of the rest parameter */
+    int rest_param_index;     /* index of the rest param in params[] */
 } func_info_t;
 
 /* Variable entry in the variable table */

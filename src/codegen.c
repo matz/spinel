@@ -647,6 +647,42 @@ static void analyze_top_func(codegen_ctx_t *ctx, pm_def_node_t *def) {
                 free(pname);
             }
         }
+        /* Rest parameter (def foo(*args)) */
+        if (params->rest && PM_NODE_TYPE(params->rest) == PM_REST_PARAMETER_NODE) {
+            pm_rest_parameter_node_t *rp = (pm_rest_parameter_node_t *)params->rest;
+            char *pname = cstr(ctx, rp->name);
+            f->has_rest = true;
+            snprintf(f->rest_name, sizeof(f->rest_name), "%s", pname);
+            f->rest_param_index = f->param_count;
+            snprintf(f->params[f->param_count].name, 64, "%s", pname);
+            f->params[f->param_count].type = vt_prim(SPINEL_TYPE_ARRAY);
+            /* Note: is_array is NOT set; vt_ctype for ARRAY already returns pointer type */
+            f->param_count++;
+            free(pname);
+        }
+        /* Keyword parameters (def foo(name:, greeting: "Hello")) */
+        for (size_t i = 0; i < params->keywords.size && f->param_count < MAX_PARAMS; i++) {
+            pm_node_t *p = params->keywords.nodes[i];
+            if (PM_NODE_TYPE(p) == PM_REQUIRED_KEYWORD_PARAMETER_NODE) {
+                pm_required_keyword_parameter_node_t *kp = (pm_required_keyword_parameter_node_t *)p;
+                char *pname = cstr(ctx, kp->name);
+                snprintf(f->params[f->param_count].name, 64, "%s", pname);
+                f->params[f->param_count].type = vt_prim(SPINEL_TYPE_VALUE);
+                f->params[f->param_count].is_keyword = true;
+                f->param_count++;
+                free(pname);
+            } else if (PM_NODE_TYPE(p) == PM_OPTIONAL_KEYWORD_PARAMETER_NODE) {
+                pm_optional_keyword_parameter_node_t *kp = (pm_optional_keyword_parameter_node_t *)p;
+                char *pname = cstr(ctx, kp->name);
+                snprintf(f->params[f->param_count].name, 64, "%s", pname);
+                f->params[f->param_count].type = infer_type(ctx, kp->value);
+                f->params[f->param_count].is_keyword = true;
+                f->params[f->param_count].is_optional = true;
+                f->params[f->param_count].default_node = kp->value;
+                f->param_count++;
+                free(pname);
+            }
+        }
     }
 
     /* Detect yield in function body */
@@ -1682,12 +1718,42 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                             char *cname = cstr(ctx, call->name);
                             func_info_t *target = find_func(ctx, cname);
                             if (target) {
-                                for (int pi = 0; pi < target->param_count &&
-                                     pi < (int)call->arguments->arguments.size; pi++) {
-                                    if (target->params[pi].type.kind == SPINEL_TYPE_VALUE) {
-                                        vtype_t at = infer_type(ctx, call->arguments->arguments.nodes[pi]);
-                                        if (at.kind != SPINEL_TYPE_VALUE)
-                                            target->params[pi].type = at;
+                                /* Check for keyword hash in arguments */
+                                bool found_kw = false;
+                                for (size_t ai = 0; ai < call->arguments->arguments.size; ai++) {
+                                    pm_node_t *arg = call->arguments->arguments.nodes[ai];
+                                    if (PM_NODE_TYPE(arg) == PM_KEYWORD_HASH_NODE) {
+                                        pm_keyword_hash_node_t *kwh = (pm_keyword_hash_node_t *)arg;
+                                        for (size_t ki = 0; ki < kwh->elements.size; ki++) {
+                                            if (PM_NODE_TYPE(kwh->elements.nodes[ki]) != PM_ASSOC_NODE) continue;
+                                            pm_assoc_node_t *assoc = (pm_assoc_node_t *)kwh->elements.nodes[ki];
+                                            if (PM_NODE_TYPE(assoc->key) != PM_SYMBOL_NODE) continue;
+                                            pm_symbol_node_t *sym = (pm_symbol_node_t *)assoc->key;
+                                            const uint8_t *ksrc = pm_string_source(&sym->unescaped);
+                                            size_t klen = pm_string_length(&sym->unescaped);
+                                            char kn[64]; size_t cl = klen < 63 ? klen : 63;
+                                            memcpy(kn, ksrc, cl); kn[cl] = '\0';
+                                            for (int pi = 0; pi < target->param_count; pi++) {
+                                                if (target->params[pi].is_keyword &&
+                                                    strcmp(target->params[pi].name, kn) == 0 &&
+                                                    target->params[pi].type.kind == SPINEL_TYPE_VALUE) {
+                                                    vtype_t at = infer_type(ctx, assoc->value);
+                                                    if (at.kind != SPINEL_TYPE_VALUE)
+                                                        target->params[pi].type = at;
+                                                }
+                                            }
+                                        }
+                                        found_kw = true;
+                                    }
+                                }
+                                if (!found_kw) {
+                                    for (int pi = 0; pi < target->param_count &&
+                                         pi < (int)call->arguments->arguments.size; pi++) {
+                                        if (target->params[pi].type.kind == SPINEL_TYPE_VALUE) {
+                                            vtype_t at = infer_type(ctx, call->arguments->arguments.nodes[pi]);
+                                            if (at.kind != SPINEL_TYPE_VALUE)
+                                                target->params[pi].type = at;
+                                        }
                                     }
                                 }
                             }
@@ -3164,6 +3230,118 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             func_info_t *fn = find_func(ctx, method);
             if (fn) {
                 int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+
+                /* Check if any argument is a KeywordHashNode (keyword args at call site) */
+                bool has_kwarg_call = false;
+                pm_keyword_hash_node_t *kw_hash = NULL;
+                int kw_hash_idx = -1;
+                for (int i = 0; i < argc; i++) {
+                    if (PM_NODE_TYPE(call->arguments->arguments.nodes[i]) == PM_KEYWORD_HASH_NODE) {
+                        kw_hash = (pm_keyword_hash_node_t *)call->arguments->arguments.nodes[i];
+                        kw_hash_idx = i;
+                        has_kwarg_call = true;
+                        break;
+                    }
+                }
+
+                if (has_kwarg_call && kw_hash) {
+                    /* Keyword argument call: build args array indexed by param position */
+                    char *param_args[MAX_PARAMS];
+                    for (int i = 0; i < fn->param_count; i++) param_args[i] = NULL;
+
+                    /* First, fill positional (non-keyword) args */
+                    int pos_idx = 0;
+                    for (int i = 0; i < argc; i++) {
+                        if (i == kw_hash_idx) continue;
+                        if (pos_idx < fn->param_count && !fn->params[pos_idx].is_keyword)
+                            param_args[pos_idx] = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                        pos_idx++;
+                    }
+
+                    /* Then, match keyword args by name to param positions */
+                    for (size_t ki = 0; ki < kw_hash->elements.size; ki++) {
+                        pm_node_t *elem = kw_hash->elements.nodes[ki];
+                        if (PM_NODE_TYPE(elem) != PM_ASSOC_NODE) continue;
+                        pm_assoc_node_t *assoc = (pm_assoc_node_t *)elem;
+                        /* Get key name from SymbolNode */
+                        if (PM_NODE_TYPE(assoc->key) != PM_SYMBOL_NODE) continue;
+                        pm_symbol_node_t *sym = (pm_symbol_node_t *)assoc->key;
+                        const uint8_t *ksrc = pm_string_source(&sym->unescaped);
+                        size_t klen = pm_string_length(&sym->unescaped);
+                        char kname[64];
+                        size_t copy_len = klen < 63 ? klen : 63;
+                        memcpy(kname, ksrc, copy_len);
+                        kname[copy_len] = '\0';
+
+                        /* Find matching param */
+                        for (int pi = 0; pi < fn->param_count; pi++) {
+                            if (strcmp(fn->params[pi].name, kname) == 0) {
+                                param_args[pi] = codegen_expr(ctx, assoc->value);
+                                break;
+                            }
+                        }
+                    }
+
+                    /* Fill defaults for missing optional keyword params */
+                    for (int i = 0; i < fn->param_count; i++) {
+                        if (!param_args[i] && fn->params[i].is_optional && fn->params[i].default_node)
+                            param_args[i] = codegen_expr(ctx, (pm_node_t *)fn->params[i].default_node);
+                    }
+
+                    /* Build argument string in parameter order */
+                    char *args = xstrdup("");
+                    for (int i = 0; i < fn->param_count; i++) {
+                        if (param_args[i]) {
+                            char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", param_args[i]);
+                            free(args);
+                            args = na;
+                            free(param_args[i]);
+                        }
+                    }
+                    char *r = sfmt("sp_%s(%s)", method, args);
+                    free(args); free(method);
+                    return r;
+                }
+
+                if (fn->has_rest) {
+                    /* Rest/splat parameter call: collect positional args into IntArray */
+                    int rest_idx = fn->rest_param_index;
+                    char *args = xstrdup("");
+                    /* Emit positional args before the rest param */
+                    int ai = 0;
+                    for (int i = 0; i < rest_idx && ai < argc; i++, ai++) {
+                        char *a = codegen_expr(ctx, call->arguments->arguments.nodes[ai]);
+                        char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
+                        free(args); free(a);
+                        args = na;
+                    }
+                    /* Build the rest array from remaining args */
+                    int tmp = ctx->temp_counter++;
+                    emit(ctx, "sp_IntArray *_rest_%d = sp_IntArray_new();\n", tmp);
+                    for (int i = ai; i < argc; i++) {
+                        char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                        emit(ctx, "sp_IntArray_push(_rest_%d, %s);\n", tmp, a);
+                        free(a);
+                    }
+                    /* Add rest array to args */
+                    char *rest_ref = sfmt("_rest_%d", tmp);
+                    char *na = sfmt("%s%s%s", args, (rest_idx > 0) ? ", " : "", rest_ref);
+                    free(args); free(rest_ref);
+                    args = na;
+
+                    /* Fill in any params after rest (none typical, but handle) */
+                    /* If target function uses yield and we have a block, pass callback */
+                    if (fn->has_yield && call->block &&
+                        PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                        char *na2 = sfmt("%s, _block, _block_env", args);
+                        free(args);
+                        args = na2;
+                    }
+                    char *r = sfmt("sp_%s(%s)", method, args);
+                    free(args); free(method);
+                    return r;
+                }
+
                 char *args = xstrdup("");
                 for (int i = 0; i < argc; i++) {
                     char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);

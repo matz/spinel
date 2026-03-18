@@ -516,6 +516,34 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
             }
             free(cname);
         }
+        /* alias new_name old_name */
+        else if (PM_NODE_TYPE(s) == PM_ALIAS_METHOD_NODE) {
+            pm_alias_method_node_t *a = (pm_alias_method_node_t *)s;
+            if (PM_NODE_TYPE(a->new_name) == PM_SYMBOL_NODE &&
+                PM_NODE_TYPE(a->old_name) == PM_SYMBOL_NODE) {
+                pm_symbol_node_t *nn = (pm_symbol_node_t *)a->new_name;
+                pm_symbol_node_t *on = (pm_symbol_node_t *)a->old_name;
+                const uint8_t *ns = pm_string_source(&nn->unescaped);
+                size_t nl = pm_string_length(&nn->unescaped);
+                const uint8_t *os = pm_string_source(&on->unescaped);
+                size_t ol = pm_string_length(&on->unescaped);
+                char new_name[64], old_name[64];
+                snprintf(new_name, sizeof(new_name), "%.*s", (int)nl, ns);
+                snprintf(old_name, sizeof(old_name), "%.*s", (int)ol, os);
+                /* Find the old method and copy it with the new name */
+                for (int mi = 0; mi < cls->method_count; mi++) {
+                    if (strcmp(cls->methods[mi].name, old_name) == 0 &&
+                        cls->method_count < MAX_METHODS) {
+                        cls->methods[cls->method_count] = cls->methods[mi];
+                        snprintf(cls->methods[cls->method_count].name,
+                                 sizeof(cls->methods[cls->method_count].name),
+                                 "%s", new_name);
+                        cls->method_count++;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /* Heuristic: classes with only float/int ivars and <= 4 fields are value types */

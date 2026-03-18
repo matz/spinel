@@ -1,202 +1,196 @@
 # PLAN: Spinel AOT Compiler
 
-mrubyフォーク型 トレーシング+AOTコンパイラ。
-LumiTraceによるCRuby上の型プロファイリングとRBS型情報を組み合わせ、
-Cコード生成経由で実行可能バイナリを生成する。
+Ruby source → Prism AST → whole-program type inference → standalone C executable.
+No runtime dependencies (no mruby, no GC library — GC is generated inline).
 
 詳細設計は `ruby_aot_compiler_design.md` を参照。
 
 ---
 
-## 第一目標: bm_so_mandelbrot.rb のコンパイル
+## 現状 (Status)
 
-最初のマイルストーンとして、CRubyベンチマーク `bm_so_mandelbrot.rb`
-(Computer Language Benchmarks Game由来) を入力とし、
-mrubyランタイムとリンクした実行可能バイナリを生成する。
+### 完了した機能
 
-### ターゲットプログラム
+**コンパイラアーキテクチャ** (~4000行のC)
+- Prism (libprism) によるRubyパース
+- 多パスコード生成:
+  1. クラス/モジュール/関数解析
+  2. 全変数・パラメータ・戻り値の型推論
+  3. C構造体・メソッド関数の生成
+  4. main()のトップレベルコード生成
+- マーク&スイープGC (シャドウスタックによるルート管理)
 
-```ruby
-# bm_so_mandelbrot.rb — Mandelbrot集合をPBM P4形式で出力
-size = 600
-puts "P4\n#{size} #{size}"
-ITER = 49
-LIMIT_SQUARED = 4.0
-byte_acc = 0
-bit_num = 0
-count_size = size - 1
-for y in 0..count_size
-  for x in 0..count_size
-    zr = 0.0; zi = 0.0
-    cr = (2.0*x/size)-1.5; ci = (2.0*y/size)-1.0
-    escape = false
-    for dummy in 0..ITER
-      tr = zr*zr - zi*zi + cr
-      ti = 2*zr*zi + ci
-      zr, zi = tr, ti
-      if (zr*zr+zi*zi) > LIMIT_SQUARED
-        escape = true; break
-      end
-    end
-    byte_acc = (byte_acc << 1) | (escape ? 0b0 : 0b1)
-    bit_num += 1
-    if (bit_num == 8)
-      print byte_acc.chr; byte_acc = 0; bit_num = 0
-    elsif (x == count_size)
-      byte_acc <<= (8 - bit_num)
-      print byte_acc.chr; byte_acc = 0; bit_num = 0
-    end
-  end
-end
-```
+**サポート済み言語機能**
 
-### 必要な言語機能
+| カテゴリ | 機能 |
+|---------|------|
+| オブジェクト | クラス定義、インスタンス変数、メソッド定義、getter/setter自動インライン化 |
+| | コンストラクタ (`.new`)、型付きオブジェクトへのメソッド呼び出し |
+| | モジュール (状態変数 + メソッド) |
+| 型 | Integer, Float, Boolean, String, nil → アンボックスCの型 |
+| | 値型 (Vec: 3 floats → 値渡し) vs ポインタ型 |
+| 配列 | sp_IntArray (push/pop/shift/dup/reverse!/empty?/length/[]/!=) |
+| | O(1) shift (デキュー方式のstartオフセット) |
+| クロージャ | `-> x { body }` ラムダ → Cクロージャ (キャプチャ解析) |
+| | sp_Val タグ付きユニオン (Proc/Int/Bool/Nil) |
+| | アリーナアロケータ (mmap、デマンドページング) |
+| 制御 | while, if/elsif/else, ternary, until |
+| | break, return, and/or/not |
+| | Integer#times with block → C forループ |
+| 演算 | 算術 (+, -, *, /, %), 比較, ビット演算 → 直接C演算子 |
+| | 単項マイナス, 複合代入 (+=, <<=) |
+| | Math.sqrt/cos/sin → C math関数 |
+| I/O | puts, print, printf, putc, p → stdio |
+| | 文字列補間 → printf |
+| | Integer#chr → putchar |
+| その他 | 並列代入, チェーン代入 (zr = zi = 0) |
+| | 定数 (グローバルスコープ), トップレベル関数 |
+| | 関数間型推論 (呼び出しサイトからのパラメータ型推論) |
+| GC | マーク&スイープ (非値型オブジェクト・配列用) |
+| | シャドウスタックルート管理, ファイナライザ |
+| | GC不要なプログラムではGCコード省略 |
 
-このベンチマークをコンパイルするために、以下の言語機能をサポートする必要がある:
+### ベンチマーク結果
 
-| 機能 | 使用箇所 | 難易度 |
-|------|---------|--------|
-| ローカル変数 (代入・参照) | `size = 600`, `zr = 0.0` 等 | 低 |
-| 定数 | `ITER = 49`, `LIMIT_SQUARED = 4.0` | 低 |
-| Integer / Float リテラル | `600`, `4.0`, `0b0`, `0b1` | 低 |
-| String リテラル・補間 | `"P4\n#{size} #{size}"` | 中 |
-| 算術演算 (`+`, `-`, `*`, `/`) | Float演算が中心 | 低 |
-| 比較演算 (`>`, `==`) | `(zr*zr+zi*zi) > LIMIT_SQUARED` | 低 |
-| ビット演算 (`<<`, `\|`, `<<=`) | `byte_acc << 1`, `byte_acc \| ...` | 低 |
-| `for..in` + Range | `for y in 0..count_size` | 中 |
-| 並列代入 | `zr, zi = tr, ti` | 中 |
-| 三項演算子 | `escape ? 0b0 : 0b1` | 低 |
-| `if` / `elsif` | 条件分岐 | 低 |
-| `break` | ループからの脱出 | 中 |
-| Boolean (`true`, `false`) | `escape = false` | 低 |
-| `Integer#chr` | `byte_acc.chr` | 低 |
-| `puts` / `print` | 出力 | 低 |
+| ベンチマーク | CRuby | mruby | Spinel AOT | 高速化 | メモリ |
+|-------------|-------|-------|------------|--------|--------|
+| mandelbrot (600×600) | 1.14s | 3.18s | 0.02s | 57× | <1MB |
+| ao_render (64×64 AO) | 3.55s | 13.69s | 0.07s | 51× | 2MB |
+| so_lists (300×10K) | 0.44s | 2.01s | 0.02s | 22× | 2MB |
+| fib(34) | 0.55s | 2.78s | 0.01s | 55× | <1MB |
+| lc_fizzbuzz (Church) | 28.96s | — | 1.55s | 19× | arena |
+| mandel_term | 0.05s | 0.05s | ~0s | 50×+ | <1MB |
 
-### 不要な機能（このベンチマークでは）
-
-- クラス定義・メソッド定義
-- ブロック・Proc・lambda
-- 配列・ハッシュ操作
-- 例外処理
-- `require` / モジュール
-- eval / リフレクション
-
-### 成功基準
-
-1. `./spinel bm_so_mandelbrot.rb -o mandelbrot_aot.c` でCコードを生成
-2. `cc mandelbrot_aot.c -lmruby -o mandelbrot` でバイナリを生成
-3. `./mandelbrot` の出力が `ruby bm_so_mandelbrot.rb` と一致
-4. バイナリサイズがフルリンクのmrubyより小さい
-
-### ベンチマーク比較対象
-
-- `ruby bm_so_mandelbrot.rb` (CRuby)
-- `mruby bm_so_mandelbrot.rb` (mrubyインタプリタ)
-- `./mandelbrot` (Spinel AOTバイナリ)
+生成バイナリは完全スタンドアロン (libc + libm のみ、mruby不要)。
 
 ---
 
-## パイプライン概要
+## 未サポート機能
 
-```
-Ruby Source
-    |
-    +-----------------------------+
-    |                             |
-    v                             v
- Prism                    CRuby + LumiTrace
- (libprism)               --collect-mode types
-    |                             |
-    v                             v
- Simple static            lumitrace_recorded.json
- analysis (CHA)                   |
-    |                     convert_lumitrace.rb
-    |                             |
-    |              +--------------+
-    |              |
-    v              v
- Integration + CHA  <--  RBS type info
-    |
-    v
- C code generation + init code gen
-    |
-    v
- cc + libmruby fork (-ffunction-sections, --gc-sections)
-    |
-    v
- Final binary
-```
+### 高優先度 (次のターゲット候補)
 
-## 実装ロードマップ
+| 機能 | 必要なベンチマーク例 | 難易度 |
+|------|-------------------|--------|
+| 継承 (`class Dog < Animal`) | OOP系ベンチマーク | 中 |
+| `yield` / 暗黙ブロック | each, map, select等 | 中 |
+| `case`/`when` | パターンマッチ系 | 低 |
+| `unless` | 一般的なRubyコード | 低 |
+| 例外処理 (`rescue`/`raise`) | エラーハンドリング系 | 中 |
+| Hash リテラル・操作 | 多くの実用プログラム | 中 |
+| Symbol | メソッド名、キー | 低〜中 |
+| `each` / `map` / `select` (配列) | Enumerable系 | 中 |
+| デフォルト引数 | `def foo(x = 10)` | 低 |
+| `super` | 継承チェーン | 中 |
 
-### Step 0: プロトタイプ (完了)
+### 中優先度
 
-- [x] LumiTrace JSON → Spinel trace format 変換 (`tools/convert_lumitrace.rb`)
-- [x] RBS → JSON 型情報抽出 (`tools/extract_rbs.rb`)
-- [x] mruby メソッドマッピング (`tools/scan_mruby_methods.rb`)
-- [x] RBS カバレッジ測定 (`tools/coverage_report.rb`)
-- [x] トレース + RBS 統合デモ (`tools/merge_trace_rbs.rb`)
+| 機能 | 備考 |
+|------|------|
+| String メソッド (gsub, split, match等) | 文字列処理 |
+| Regexp | パターンマッチ |
+| キーワード引数 | `def foo(name:, age:)` |
+| スプラット (`*args`, `**kwargs`) | 可変長引数 |
+| `attr_accessor` / `attr_reader` マクロ | 手動getter/setterは対応済み |
+| `include` / `extend` | Mixin |
+| `Comparable`, `Enumerable` | モジュール組み込み |
+| `for..in` + Range | while版は対応済み |
+| `loop do` | while(1)で代替可 |
+| `next` (ループ内) | continue相当 |
 
-### Step 1: 簡易静的解析
+### 低優先度 (動的機能)
 
-- libprismのビルドとリンク
-- PrismのASTを走査してクラス階層を構築
-- メソッド再定義・prependの検出
-- 言語制約違反の検出（eval, method_missing, refinements）
-
-### Step 2: 統合 + CHA判定
-
-- トレースデータ（JSON）の読み込み（cJSON）
-- RBS型情報（JSON）の読み込み
-- コールサイトごとの統合ロジック（トレース + RBS + CHA → 解決レベル判定）
-- 到達可能メソッド集合の計算（固定点ワークリスト）
-
-### Step 3: Cコード生成 — bm_so_mandelbrot.rb をターゲット
-
-- bm_so_mandelbrot.rb が使う言語機能のCコード生成を優先実装
-- SEND_PROVEN → ガードなし直接呼び出し（Integer/Float算術）
-- SEND_LIKELY → 型ガード付き特化コード
-- SEND_UNRESOLVED → mrb_funcall ディスパッチ
-- initコード生成（到達可能メソッドのみ登録）
-- libmruby（フォーク版）とのリンク、`--gc-sections` による不要コード除去
-
-### Step 4: 検証・最適化
-
-- bm_so_mandelbrot.rb の出力一致確認
-- バイナリサイズの計測（フルリンク vs AOT）
-- 性能比較（CRuby / mrubyインタプリタ / AOTバイナリ）
-- エッジケースの洗い出し
+| 機能 | 備考 |
+|------|------|
+| `eval`, `instance_eval` | 静的解析不可 |
+| `send`, `public_send` | 動的ディスパッチ |
+| `define_method` | 動的メソッド定義 |
+| `method_missing` | フォールバック |
+| `require`, `load` | モジュールシステム |
+| File I/O | OS依存 |
+| グローバル変数 (`$stdout`等) | ランタイム依存 |
+| クラス変数 (`@@var`) | 使用頻度低 |
+| open class / monkey patching | 静的解析と相性悪 |
 
 ---
+
+## アーキテクチャ
+
+```
+Ruby Source (.rb)
+    |
+    v
+Prism (libprism)                -- パース → AST
+    |
+    v
+Pass 1: クラス解析              -- クラス、メソッド、インスタンス変数の検出
+    |
+    v
+Pass 2: 型推論                  -- 全変数・ivar・パラメータの型推論
+    |                              (Integer/Float/Boolean/Object/Array/Proc)
+    |                              関数間型推論 (呼び出しサイト解析)
+    v
+Pass 3: 構造体・メソッド生成    -- クラス → C構造体
+    |                              メソッド → C関数 (直接呼び出し)
+    |                              getter/setter → インラインフィールドアクセス
+    |                              GCスキャン関数生成
+    v
+Pass 4: main() コード生成       -- トップレベルコード → main()
+    |                              while/for/times → Cループ
+    |                              算術 → C演算子
+    |                              puts/print/printf → stdio
+    v
+スタンドアロンCファイル
+    |
+    v
+cc -O2 -lm → ネイティブバイナリ  -- mruby不要、GC内蔵、libc+libmのみ
+```
 
 ## ビルドフロー
 
 ```bash
-# Step 1: LumiTraceで型トレース収集
-lumitrace --collect-mode types -j --json trace_raw.json bm_so_mandelbrot.rb
+# コンパイラのビルド
+make deps   # Prismを取得・ビルド
+make        # spinelコンパイラをビルド
 
-# Step 2: トレースフォーマット変換
-ruby tools/convert_lumitrace.rb \
-  --input=trace_raw.json \
-  --mruby-classes=type_db/method_map.json \
-  --output=trace.json
+# Rubyプログラムのコンパイル
+./spinel --source=examples/bm_fib.rb --output=fib.c
+cc -O2 fib.c -lm -o fib
+./fib   # → 5702887
 
-# Step 3: RBS型情報抽出（初回のみ）
-ruby tools/extract_rbs.rb \
-  --rbs-dir=path/to/ruby/rbs/core \
-  --output=type_db/core.json
-
-# Step 4: AOTコンパイル（トレース + RBS + 静的解析 → C）
-./spinel \
-  --type-db=type_db/core.json \
-  --trace=trace.json \
-  --source=bm_so_mandelbrot.rb \
-  --output=mandelbrot_aot.c
-
-# Step 5: 最終バイナリ
-cc -ffunction-sections -Wl,--gc-sections \
-  mandelbrot_aot.c -lmruby -o mandelbrot
+# テスト
+make test   # mandelbrotをコンパイル・実行・CRubyと出力比較
 ```
+
+## プロジェクト構成
+
+```
+spinel/
+├── src/
+│   ├── main.c          # CLI、ファイル読み込み、Prismパース
+│   ├── codegen.h       # 型システム、クラス/メソッド/モジュール情報構造体
+│   └── codegen.c       # 多パスコード生成器 (~4000行)
+├── examples/
+│   ├── bm_so_mandelbrot.rb   # Mandelbrot集合
+│   ├── bm_ao_render.rb       # AOレイトレーサー (6クラス)
+│   ├── bm_so_lists.rb        # 配列操作
+│   ├── bm_fib.rb             # 再帰フィボナッチ
+│   ├── bm_app_lc_fizzbuzz.rb # λ計算FizzBuzz (1201ラムダ)
+│   └── bm_mandel_term.rb     # ターミナルMandelbrot
+├── prototype/
+│   └── tools/          # Step 0プロトタイプ (RBS抽出、LumiTrace等)
+├── Makefile
+├── PLAN.md             # 本文書
+└── ruby_aot_compiler_design.md  # 詳細設計文書
+```
+
+## 次のステップ
+
+1. **継承サポート** — vtable不要のCHA証明済み直接呼び出し
+2. **yield/ブロック** — Integer#times以外のイテレータ対応
+3. **case/when** — Cのswitch文へ変換
+4. **例外処理** — setjmp/longjmpベースのrescue/raise
+5. **Hash** — 組み込みハッシュテーブル実装
+6. **LumiTraceプロファイル統合** — 型推論の精度向上
 
 ## 参考情報
 

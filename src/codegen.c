@@ -1170,6 +1170,8 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                  strcmp(method, "printf") == 0 || strcmp(method, "putc") == 0 ||
                  strcmp(method, "p") == 0)
             result = vt_prim(SPINEL_TYPE_NIL);
+        else if (strcmp(method, "block_given?") == 0)
+            result = vt_prim(SPINEL_TYPE_BOOLEAN);
 
         free(method);
         return result;
@@ -3641,6 +3643,12 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             return xstrdup("0");
         }
 
+        /* block_given? → check if _block is non-NULL */
+        if (!call->receiver && strcmp(method, "block_given?") == 0) {
+            free(method);
+            return xstrdup("(_block != NULL)");
+        }
+
         /* Receiver-less: top-level function or Kernel method */
         if (!call->receiver) {
             func_info_t *fn = find_func(ctx, method);
@@ -3745,13 +3753,15 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     free(args); free(rest_ref);
                     args = na;
 
-                    /* Fill in any params after rest (none typical, but handle) */
-                    /* If target function uses yield and we have a block, pass callback */
-                    if (fn->has_yield && call->block &&
-                        PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
-                        char *na2 = sfmt("%s, _block, _block_env", args);
-                        free(args);
-                        args = na2;
+                    /* If target function uses yield, pass block (or NULL if no block) */
+                    if (fn->has_yield) {
+                        if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                            char *na2 = sfmt("%s, _block, _block_env", args);
+                            free(args); args = na2;
+                        } else {
+                            char *na2 = sfmt("%s, NULL, NULL", args);
+                            free(args); args = na2;
+                        }
                     }
                     char *r = sfmt("sp_%s(%s)", method, args);
                     free(args); free(method);
@@ -3774,13 +3784,18 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                         args = na;
                     }
                 }
-                /* If target function uses yield and we have a block, pass callback */
-                if (fn->has_yield && call->block &&
-                    PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                /* If target function uses yield, pass block (or NULL) */
+                if (fn->has_yield) {
                     int total = fn->param_count;
-                    char *na = sfmt("%s%s_block, _block_env", args, total > 0 ? ", " : "");
-                    free(args);
-                    args = na;
+                    if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE && ctx->in_yield_func) {
+                        /* Forward the block from the enclosing yield function */
+                        char *na = sfmt("%s%s_block, _block_env", args, total > 0 ? ", " : "");
+                        free(args); args = na;
+                    } else {
+                        /* No block or not in yield context → pass NULL */
+                        char *na = sfmt("%s%sNULL, NULL", args, total > 0 ? ", " : "");
+                        free(args); args = na;
+                    }
                 }
                 char *r = sfmt("sp_%s(%s)", method, args);
                 free(args); free(method);
@@ -6768,7 +6783,13 @@ void scan_captures(codegen_ctx_t *ctx, pm_node_t *node,
     case PM_LOCAL_VARIABLE_WRITE_NODE: {
         pm_local_variable_write_node_t *n = (pm_local_variable_write_node_t *)node;
         char *name = cstr(ctx, n->name);
-        capture_list_add(local_defs, name);
+        /* If the variable exists in outer scope, it's a capture (write to outer var) */
+        if (var_lookup(ctx, name) && strcmp(name, param_name) != 0 &&
+            !capture_list_has(local_defs, name)) {
+            capture_list_add(result, name);
+        } else {
+            capture_list_add(local_defs, name);
+        }
         scan_captures(ctx, n->value, param_name, local_defs, result);
         free(name);
         break;

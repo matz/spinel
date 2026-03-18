@@ -461,26 +461,87 @@ mrb_int sp_unbox_int(sp_RbValue v) {
 
 ---
 
-## その他の未対応機能
+## 全Rubyコンパイルへの残課題 (10カテゴリ)
 
-### 組込クラス (ポリモーフィズムとは独立)
-- IO, File, Dir — ファイルI/O (Cの stdio/fopen でラップ可能)
-- Time, Date — 時刻 (time.h)
-- Encoding — 文字列エンコーディング
-- Range as object — Rangeインスタンス (for..in以外の使用)
-- Thread, Fiber — 並行性
+### 1. 動的型付け / ポリモーフィズム 【核心問題 — 上記設計で対応】
+- 複数型を持つ変数 (`x = 1; x = "hello"`)
+- 異種配列 (`[1, "two", :three, 4.0]`)
+- 異種Hash (`{a: 1, b: "two"}`)
+- 条件で戻り値型が変わるメソッド
+- → **sp_RbValue + Union型 + switch dispatch** で対応
 
-### メタプログラミング (静的解析の限界)
-- `eval`, `instance_eval`, `class_eval`
-- `define_method`
-- `method_missing`, `const_missing`
-- open class / monkey patching
-→ これらは**インタプリタフォールバック**で対応する方針。
-  静的に解析可能な部分はAOT、不可能な部分はmrubyにフォールバック。
+### 2. require / load / gem
+- 複数ファイルプログラム、標準ライブラリ、gem
+- `$LOAD_PATH`, `require_relative`
+- → ファイル解決 + AST統合。単一バイナリにリンク or 動的ロード。
+- 実装方針: Prismで各ファイルをパース → クラス/関数登録をマージ → 統合コード生成
 
-### 構成管理
-- `require` / `load` — Phase 2以降でファイル間コンパイルをサポート
-- gem — bundlerとの統合は長期課題
+### 3. 完全なBlock/Proc意味論
+- `Proc.new`, `proc {}`, `method(:name)`, `&block` パラメータ
+- `block_given?`
+- Proc vs lambda の return 意味論の差異
+- スコープを超えるProc (クロージャのライフタイム管理)
+- → lambda構文は対応済み。Proc.newはsp_RbValue + クロージャランタイムの統合で対応。
+
+### 4. 未対応組込クラス
+- `IO`, `File`, `Dir` — ファイルI/O (Cの stdio/fopen でラップ)
+- `Encoding` — 文字列エンコーディング (UTF-8前提で簡略化可)
+- `Thread`, `Fiber` (基本的なもの以外)
+- `Time`, `Date` — 時刻 (time.h / strftime)
+- `Set` — ハッシュセット
+- `Range` as object — for..in以外のRange使用 (each, include?, etc.)
+- `Complex`, `Rational` — 数値型
+- `Enumerator`, `Enumerator::Lazy`
+- → 各クラスをC構造体 + メソッドセットとして実装。GC統合。
+
+### 5. 完全なString
+- ミュータブル文字列 (現在は `const char *`)
+- エンコーディング対応操作
+- `String#[]`, `#[]=`, `#freeze`, `#frozen?`
+- `#match` returning MatchData
+- `#encode`, `#bytes`, `#chars`, `#each_char`
+- → sp_String構造体 (data + length + capacity + encoding) で置き換え
+
+### 6. オブジェクトシステムの完全性
+- `method_missing`, `respond_to_missing?`
+- `send`, `public_send`
+- `define_method`, `class_eval`, `instance_eval`
+- open class (クラス再オープン、monkey patching)
+- Singleton class (`class << obj`)
+- `protected`, `private`, `public` アクセス制御
+- `alias_method`
+- `Module#ancestors`
+- `BasicObject`
+- → メタプログラミング系は**インタプリタフォールバック**で対応。
+  mrubyをリンクし、静的解析不能な部分をmrubyに委譲。
+
+### 7. 制御フローの完全性
+- `catch` / `throw`
+- `BEGIN` / `END`
+- `defined?`
+- `__method__`, `__FILE__`, `__LINE__`
+- → 多くはコンパイル時定数で解決可能。catch/throwはsetjmp/longjmpの拡張。
+
+### 8. パターンマッチ (Ruby 3.0+)
+- `case/in`
+- Pin operator (`^variable`)
+- Find pattern, array/hash pattern
+- → case/whenの拡張。型チェック + 分配束縛のコード生成。
+
+### 9. 完全な例外階層
+- Exception クラス定義 (ユーザー定義例外)
+- `rescue TypeError`, `rescue ArgumentError => e`
+- カスタム例外クラスの継承
+- `ensure` in method bodies (begin外)
+- → 現在の文字列例外を、クラスベース例外に拡張。例外オブジェクトをsp_RbValueで保持。
+
+### 10. GCの完全性
+- 現在: 構造体のみGC対象。文字列はmallocで漏れる。
+- ラムダクロージャはアリーナ（個別解放不可）。
+- 長時間動作プログラムで文字列リーク。
+- → Phase 1: 文字列をGC対象に (sp_String + ファイナライザ)
+- → Phase 2: 世代別GC (nursery/old)
+- → Phase 3: コンパクションGC (メモリフラグメント対策)
 
 ## 参考情報
 

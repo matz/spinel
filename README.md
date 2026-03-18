@@ -98,18 +98,29 @@ For `bm_ao_render.rb`, the compiler:
 | Ternary operator | `escape ? 0 : 1` |
 | `and` / `or` / `not` | boolean operators |
 | `break`, `next`, `return` | loop/method exit, continue |
+| **Exception Handling** | |
+| `begin`/`rescue`/`ensure` | exception handling (setjmp/longjmp) |
+| `raise` | `raise "error message"` |
+| `rescue => e` | capture exception message |
+| `retry` | restart begin block |
 | **Types & Literals** | |
 | Integer, Float, Boolean, String, nil | unboxed C types |
+| Symbol | `:hello` → string constant |
 | Integer arrays | push/pop/shift/dup/reverse!/each/map/select |
+| Hash (string→integer) | `h = {}; h["key"] = val; h.each { \|k,v\| }` |
 | Default parameter values | `def greet(name, greeting = "Hello")` |
 | **Arithmetic & Operators** | |
-| Arithmetic, comparison, bitwise | `+`, `-`, `*`, `/`, `%`, `<`, `>`, `==`, `<<`, `\|`, `^` |
+| Arithmetic, comparison, bitwise | `+`, `-`, `*`, `/`, `%`, `<`, `>`, `==`, `<<`, `\|`, `^`, `**` |
 | Unary minus | `-b`, `-(expr)` |
 | `Math.sqrt`, `Math.cos`, `Math.sin` | C math functions |
+| Integer methods | `abs`, `even?`, `odd?`, `zero?` |
+| Float methods | `abs`, `ceil`, `floor`, `round` |
+| **Strings** | |
+| String literals, interpolation | `"hello #{name}"` → printf |
+| String methods | `length`, `upcase`, `downcase`, `include?`, `+` |
+| `Integer#to_s`, `Integer#chr` | number to string conversion |
 | **I/O** | |
-| `puts`, `print`, `printf`, `putc`, `p` | stdio calls |
-| String interpolation | `"P4\n#{size} #{size}"` → printf |
-| `Integer#chr` | `print byte_acc.chr` → putchar |
+| `puts`, `print`, `printf`, `putc`, `p` | stdio calls (Int, Float, Bool, String) |
 | **Other** | |
 | Parallel/chained assignment | `zr, zi = tr, ti` / `a = b = 0` |
 | Local variables, constants | `size = 600`, `ITER = 49` |

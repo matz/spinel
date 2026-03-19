@@ -379,11 +379,13 @@ sp_RbValue sp_dispatch_puts(sp_RbValue v) {
 - ✅ bimorphicダックタイピング (2クラス)
 - ✅ nilable変数
 
-### 次に解放される機能
-- 異種Hash `{a: 1, b: "str"}`
-- megamorphicダックタイピング (3クラス以上 → dispatch関数)
-- 条件で型が変わるメソッド戻り値
-- sp_RbValue上の算術演算 (+, -, *, / on POLY)
+### 次の3ステップ
+
+| # | 内容 | 設計 |
+|---|------|------|
+| 1 | **異種Hash** `{a: 1, b: "str"}` | sp_RbHashでキー/値をsp_RbValueで保持 |
+| 2 | **POLY算術** (+, -, *, / on sp_RbValue) | タグcheckでInt/Float分岐、String連結対応 |
+| 3 | **Megamorphic dispatch** (3型以上) | メソッド名ごとにdispatch関数を自動生成 |
 
 ---
 

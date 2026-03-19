@@ -234,6 +234,9 @@ static char *vt_ctype(codegen_ctx_t *ctx, vtype_t t, bool as_ptr) {
             return sfmt("sp_%s *", t.klass);
         return sfmt("sp_%s", t.klass);
     }
+    /* In non-lambda mode, PROC maps to sp_Proc * instead of sp_Val * */
+    if (t.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode)
+        return xstrdup("sp_Proc *");
     return xstrdup(spinel_type_cname(t.kind));
 }
 
@@ -751,6 +754,19 @@ static void analyze_top_func(codegen_ctx_t *ctx, pm_def_node_t *def) {
         }
     }
 
+    /* Detect &block parameter */
+    if (def->parameters && def->parameters->block) {
+        pm_block_parameter_node_t *bp = def->parameters->block;
+        f->has_block_param = true;
+        if (bp->name) {
+            char *bname = cstr(ctx, bp->name);
+            snprintf(f->block_param_name, sizeof(f->block_param_name), "%s", bname);
+            free(bname);
+        } else {
+            snprintf(f->block_param_name, sizeof(f->block_param_name), "block");
+        }
+    }
+
     /* Detect yield in function body */
     f->has_yield = f->body_node ? has_yield_nodes(f->body_node) : false;
 }
@@ -1069,6 +1085,10 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
             if (recv_t.kind == SPINEL_TYPE_STR_ARRAY) {
                 if (strcmp(method, "length") == 0 || strcmp(method, "size") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
             }
+            /* Proc#call → returns INTEGER (mrb_int from sp_Proc_call) */
+            if (recv_t.kind == SPINEL_TYPE_PROC && strcmp(method, "call") == 0) {
+                free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+            }
             /* Numeric methods */
             if (recv_t.kind == SPINEL_TYPE_INTEGER) {
                 if (strcmp(method, "abs") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
@@ -1189,6 +1209,22 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
             func_info_t *fn = find_func(ctx, method);
             if (fn && fn->return_type.kind != SPINEL_TYPE_VALUE) {
                 free(method); return fn->return_type;
+            }
+        }
+
+        /* proc {} or Proc.new {} → SPINEL_TYPE_PROC */
+        if (!call->receiver && strcmp(method, "proc") == 0 &&
+            call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+            free(method);
+            return vt_prim(SPINEL_TYPE_PROC);
+        }
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE &&
+            strcmp(method, "new") == 0) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "Proc") &&
+                call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                free(method);
+                return vt_prim(SPINEL_TYPE_PROC);
             }
         }
 
@@ -2099,6 +2135,9 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                 int sv = ctx->var_count;
                 for (int pi = 0; pi < f->param_count; pi++)
                     var_declare(ctx, f->params[pi].name, f->params[pi].type, false);
+                /* Register &block parameter if present */
+                if (f->has_block_param)
+                    var_declare(ctx, f->block_param_name, vt_prim(SPINEL_TYPE_PROC), false);
                 /* Run infer_pass to register local variables */
                 infer_pass(ctx, f->body_node);
                 vtype_t rt = infer_type(ctx, f->body_node);
@@ -2711,6 +2750,274 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_CALL_NODE: {
         pm_call_node_t *call = (pm_call_node_t *)node;
         char *method = cstr(ctx, call->name);
+
+        /* Proc#call: receiver.call(arg) → sp_Proc_call(receiver, arg) */
+        if (call->receiver && strcmp(method, "call") == 0 && !ctx->lambda_mode) {
+            vtype_t recv_t = infer_type(ctx, call->receiver);
+            if (recv_t.kind == SPINEL_TYPE_PROC) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                char *arg;
+                if (argc > 0)
+                    arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                else
+                    arg = xstrdup("0");
+                char *r = sfmt("sp_Proc_call(%s, %s)", recv, arg);
+                free(recv); free(arg); free(method);
+                return r;
+            }
+        }
+
+        /* proc {} → create sp_Proc from block */
+        if (!call->receiver && strcmp(method, "proc") == 0 &&
+            call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE && !ctx->lambda_mode) {
+            pm_block_node_t *blk = (pm_block_node_t *)call->block;
+            int blk_id = ctx->block_counter++;
+            ctx->needs_proc = true;
+
+            char *bpname = NULL;
+            if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                if (bp->parameters && bp->parameters->requireds.size > 0) {
+                    pm_node_t *p = bp->parameters->requireds.nodes[0];
+                    if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                        bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                }
+            }
+
+            /* Scan for captures */
+            capture_list_t local_defs = {.count = 0};
+            capture_list_t captures = {.count = 0};
+            scan_captures(ctx, (pm_node_t *)blk->body,
+                          bpname ? bpname : "", &local_defs, &captures);
+
+            /* Generate block body to temp buffer */
+            int saved_indent = ctx->indent;
+            int saved_var_count = ctx->var_count;
+            ctx->indent = 1;
+            if (bpname)
+                var_declare(ctx, bpname, vt_prim(SPINEL_TYPE_INTEGER), false);
+
+            char *body_processed = NULL;
+            {
+                char *body_buf_data = NULL;
+                size_t body_buf_size = 0;
+                FILE *body_buf = open_memstream(&body_buf_data, &body_buf_size);
+                FILE *saved_out = ctx->out;
+                ctx->out = body_buf;
+                if (blk->body) {
+                    /* For proc {}, the last expression is the return value */
+                    if (PM_NODE_TYPE((pm_node_t *)blk->body) == PM_STATEMENTS_NODE) {
+                        pm_statements_node_t *bstmts = (pm_statements_node_t *)blk->body;
+                        for (size_t bi = 0; bi + 1 < bstmts->body.size; bi++)
+                            codegen_stmt(ctx, bstmts->body.nodes[bi]);
+                        if (bstmts->body.size > 0) {
+                            char *rv = codegen_expr(ctx, bstmts->body.nodes[bstmts->body.size - 1]);
+                            emit(ctx, "return %s;\n", rv);
+                            free(rv);
+                        }
+                    } else {
+                        char *rv = codegen_expr(ctx, (pm_node_t *)blk->body);
+                        emit(ctx, "return %s;\n", rv);
+                        free(rv);
+                    }
+                }
+                fclose(body_buf);
+                ctx->out = saved_out;
+
+                if (body_buf_data) {
+                    body_processed = xstrdup(body_buf_data);
+                    for (int i = 0; i < captures.count; i++) {
+                        char *old_ref = sfmt("lv_%s", captures.names[i]);
+                        char *new_ref = sfmt("(*_e->%s)", captures.names[i]);
+                        while (1) {
+                            char *pos = strstr(body_processed, old_ref);
+                            if (!pos) break;
+                            size_t prefix_len = pos - body_processed;
+                            size_t old_len = strlen(old_ref);
+                            size_t new_len = strlen(new_ref);
+                            size_t rest_len = strlen(pos + old_len);
+                            char *nr = malloc(prefix_len + new_len + rest_len + 1);
+                            memcpy(nr, body_processed, prefix_len);
+                            memcpy(nr + prefix_len, new_ref, new_len);
+                            memcpy(nr + prefix_len + new_len, pos + old_len, rest_len + 1);
+                            free(body_processed);
+                            body_processed = nr;
+                        }
+                        free(old_ref); free(new_ref);
+                    }
+                    free(body_buf_data);
+                }
+            }
+            ctx->indent = saved_indent;
+            ctx->var_count = saved_var_count;
+
+            /* Write the block function to block_out */
+            if (ctx->block_out) {
+                fprintf(ctx->block_out, "typedef struct { ");
+                for (int i = 0; i < captures.count; i++)
+                    fprintf(ctx->block_out, "mrb_int *%s; ", captures.names[i]);
+                if (captures.count == 0) fprintf(ctx->block_out, "int _dummy; ");
+                fprintf(ctx->block_out, "} _blk_%d_env;\n", blk_id);
+
+                fprintf(ctx->block_out, "static mrb_int _blk_%d(void *_env, mrb_int _arg) {\n", blk_id);
+                fprintf(ctx->block_out, "    _blk_%d_env *_e = (_blk_%d_env *)_env;\n", blk_id, blk_id);
+                if (bpname) {
+                    char *cn = make_cname(bpname, false);
+                    fprintf(ctx->block_out, "    mrb_int %s = _arg;\n", cn);
+                    free(cn);
+                }
+                if (body_processed)
+                    fprintf(ctx->block_out, "%s", body_processed);
+                fprintf(ctx->block_out, "    return 0;\n");
+                fprintf(ctx->block_out, "}\n\n");
+            }
+            free(body_processed);
+
+            /* Generate sp_Proc allocation at call site */
+            int tmp = ctx->temp_counter++;
+            if (captures.count > 0) {
+                emit(ctx, "_blk_%d_env _env_%d = { ", blk_id, blk_id);
+                for (int i = 0; i < captures.count; i++) {
+                    char *cn = make_cname(captures.names[i], false);
+                    emit_raw(ctx, "%s&%s", i > 0 ? ", " : "", cn);
+                    free(cn);
+                }
+                emit_raw(ctx, " };\n");
+                emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, &_env_%d);\n",
+                     tmp, blk_id, blk_id);
+            } else {
+                emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, NULL);\n",
+                     tmp, blk_id);
+            }
+            free(bpname); free(method);
+            return sfmt("_proc_%d", tmp);
+        }
+
+        /* Proc.new {} → same as proc {} */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE &&
+            strcmp(method, "new") == 0 && !ctx->lambda_mode) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "Proc") &&
+                call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                int blk_id = ctx->block_counter++;
+                ctx->needs_proc = true;
+
+                char *bpname = NULL;
+                if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                    pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                    if (bp->parameters && bp->parameters->requireds.size > 0) {
+                        pm_node_t *p = bp->parameters->requireds.nodes[0];
+                        if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                            bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                    }
+                }
+
+                capture_list_t local_defs = {.count = 0};
+                capture_list_t captures = {.count = 0};
+                scan_captures(ctx, (pm_node_t *)blk->body,
+                              bpname ? bpname : "", &local_defs, &captures);
+
+                int saved_indent = ctx->indent;
+                int saved_var_count = ctx->var_count;
+                ctx->indent = 1;
+                if (bpname)
+                    var_declare(ctx, bpname, vt_prim(SPINEL_TYPE_INTEGER), false);
+
+                char *body_processed = NULL;
+                {
+                    char *body_buf_data = NULL;
+                    size_t body_buf_size = 0;
+                    FILE *body_buf = open_memstream(&body_buf_data, &body_buf_size);
+                    FILE *saved_out = ctx->out;
+                    ctx->out = body_buf;
+                    if (blk->body) {
+                        if (PM_NODE_TYPE((pm_node_t *)blk->body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *bstmts = (pm_statements_node_t *)blk->body;
+                            for (size_t bi = 0; bi + 1 < bstmts->body.size; bi++)
+                                codegen_stmt(ctx, bstmts->body.nodes[bi]);
+                            if (bstmts->body.size > 0) {
+                                char *rv = codegen_expr(ctx, bstmts->body.nodes[bstmts->body.size - 1]);
+                                emit(ctx, "return %s;\n", rv);
+                                free(rv);
+                            }
+                        } else {
+                            char *rv = codegen_expr(ctx, (pm_node_t *)blk->body);
+                            emit(ctx, "return %s;\n", rv);
+                            free(rv);
+                        }
+                    }
+                    fclose(body_buf);
+                    ctx->out = saved_out;
+
+                    if (body_buf_data) {
+                        body_processed = xstrdup(body_buf_data);
+                        for (int i = 0; i < captures.count; i++) {
+                            char *old_ref = sfmt("lv_%s", captures.names[i]);
+                            char *new_ref = sfmt("(*_e->%s)", captures.names[i]);
+                            while (1) {
+                                char *pos = strstr(body_processed, old_ref);
+                                if (!pos) break;
+                                size_t prefix_len = pos - body_processed;
+                                size_t old_len = strlen(old_ref);
+                                size_t new_len = strlen(new_ref);
+                                size_t rest_len = strlen(pos + old_len);
+                                char *nr = malloc(prefix_len + new_len + rest_len + 1);
+                                memcpy(nr, body_processed, prefix_len);
+                                memcpy(nr + prefix_len, new_ref, new_len);
+                                memcpy(nr + prefix_len + new_len, pos + old_len, rest_len + 1);
+                                free(body_processed);
+                                body_processed = nr;
+                            }
+                            free(old_ref); free(new_ref);
+                        }
+                        free(body_buf_data);
+                    }
+                }
+                ctx->indent = saved_indent;
+                ctx->var_count = saved_var_count;
+
+                if (ctx->block_out) {
+                    fprintf(ctx->block_out, "typedef struct { ");
+                    for (int i = 0; i < captures.count; i++)
+                        fprintf(ctx->block_out, "mrb_int *%s; ", captures.names[i]);
+                    if (captures.count == 0) fprintf(ctx->block_out, "int _dummy; ");
+                    fprintf(ctx->block_out, "} _blk_%d_env;\n", blk_id);
+
+                    fprintf(ctx->block_out, "static mrb_int _blk_%d(void *_env, mrb_int _arg) {\n", blk_id);
+                    fprintf(ctx->block_out, "    _blk_%d_env *_e = (_blk_%d_env *)_env;\n", blk_id, blk_id);
+                    if (bpname) {
+                        char *cn = make_cname(bpname, false);
+                        fprintf(ctx->block_out, "    mrb_int %s = _arg;\n", cn);
+                        free(cn);
+                    }
+                    if (body_processed)
+                        fprintf(ctx->block_out, "%s", body_processed);
+                    fprintf(ctx->block_out, "    return 0;\n");
+                    fprintf(ctx->block_out, "}\n\n");
+                }
+                free(body_processed);
+
+                int tmp = ctx->temp_counter++;
+                if (captures.count > 0) {
+                    emit(ctx, "_blk_%d_env _env_%d = { ", blk_id, blk_id);
+                    for (int i = 0; i < captures.count; i++) {
+                        char *cn = make_cname(captures.names[i], false);
+                        emit_raw(ctx, "%s&%s", i > 0 ? ", " : "", cn);
+                        free(cn);
+                    }
+                    emit_raw(ctx, " };\n");
+                    emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, &_env_%d);\n",
+                         tmp, blk_id, blk_id);
+                } else {
+                    emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, NULL);\n",
+                         tmp, blk_id);
+                }
+                free(bpname); free(method);
+                return sfmt("_proc_%d", tmp);
+            }
+        }
 
         /* String binary operators: ==, !=, <, >, <=, >=, * */
         if (call->receiver && call->arguments &&
@@ -3940,6 +4247,136 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     } else {
                         /* No block or not in yield context → pass NULL */
                         char *na = sfmt("%s%sNULL, NULL", args, total > 0 ? ", " : "");
+                        free(args); args = na;
+                    }
+                }
+                /* If target function has &block param, wrap block in sp_Proc and pass it */
+                if (fn->has_block_param && !ctx->lambda_mode) {
+                    int total = fn->param_count;
+                    if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                        pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                        int blk_id = ctx->block_counter++;
+                        ctx->needs_proc = true;
+
+                        char *bpname = NULL;
+                        if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                            pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                            if (bp->parameters && bp->parameters->requireds.size > 0) {
+                                pm_node_t *p = bp->parameters->requireds.nodes[0];
+                                if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                                    bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                            }
+                        }
+
+                        capture_list_t local_defs = {.count = 0};
+                        capture_list_t captures = {.count = 0};
+                        scan_captures(ctx, (pm_node_t *)blk->body,
+                                      bpname ? bpname : "", &local_defs, &captures);
+
+                        int saved_indent2 = ctx->indent;
+                        int saved_var_count2 = ctx->var_count;
+                        ctx->indent = 1;
+                        if (bpname)
+                            var_declare(ctx, bpname, vt_prim(SPINEL_TYPE_INTEGER), false);
+
+                        char *body_processed = NULL;
+                        {
+                            char *body_buf_data = NULL;
+                            size_t body_buf_size = 0;
+                            FILE *body_buf = open_memstream(&body_buf_data, &body_buf_size);
+                            FILE *saved_out2 = ctx->out;
+                            ctx->out = body_buf;
+                            if (blk->body) {
+                                /* Generate block body; last expression becomes the return value */
+                                if (PM_NODE_TYPE((pm_node_t *)blk->body) == PM_STATEMENTS_NODE) {
+                                    pm_statements_node_t *bstmts = (pm_statements_node_t *)blk->body;
+                                    for (size_t bi = 0; bi + 1 < bstmts->body.size; bi++)
+                                        codegen_stmt(ctx, bstmts->body.nodes[bi]);
+                                    if (bstmts->body.size > 0) {
+                                        pm_node_t *last_s = bstmts->body.nodes[bstmts->body.size - 1];
+                                        vtype_t last_t = infer_type(ctx, last_s);
+                                        if (last_t.kind == SPINEL_TYPE_NIL || last_t.kind == SPINEL_TYPE_UNKNOWN) {
+                                            codegen_stmt(ctx, last_s);
+                                        } else {
+                                            char *rv = codegen_expr(ctx, last_s);
+                                            emit(ctx, "return %s;\n", rv);
+                                            free(rv);
+                                        }
+                                    }
+                                } else {
+                                    codegen_stmts(ctx, (pm_node_t *)blk->body);
+                                }
+                            }
+                            fclose(body_buf);
+                            ctx->out = saved_out2;
+                            if (body_buf_data) {
+                                body_processed = xstrdup(body_buf_data);
+                                for (int ci = 0; ci < captures.count; ci++) {
+                                    char *old_ref = sfmt("lv_%s", captures.names[ci]);
+                                    char *new_ref = sfmt("(*_e->%s)", captures.names[ci]);
+                                    while (1) {
+                                        char *pos = strstr(body_processed, old_ref);
+                                        if (!pos) break;
+                                        size_t prefix_len = pos - body_processed;
+                                        size_t old_len = strlen(old_ref);
+                                        size_t new_len = strlen(new_ref);
+                                        size_t rest_len = strlen(pos + old_len);
+                                        char *nr = malloc(prefix_len + new_len + rest_len + 1);
+                                        memcpy(nr, body_processed, prefix_len);
+                                        memcpy(nr + prefix_len, new_ref, new_len);
+                                        memcpy(nr + prefix_len + new_len, pos + old_len, rest_len + 1);
+                                        free(body_processed);
+                                        body_processed = nr;
+                                    }
+                                    free(old_ref); free(new_ref);
+                                }
+                                free(body_buf_data);
+                            }
+                        }
+                        ctx->indent = saved_indent2;
+                        ctx->var_count = saved_var_count2;
+
+                        if (ctx->block_out) {
+                            fprintf(ctx->block_out, "typedef struct { ");
+                            for (int ci = 0; ci < captures.count; ci++)
+                                fprintf(ctx->block_out, "mrb_int *%s; ", captures.names[ci]);
+                            if (captures.count == 0) fprintf(ctx->block_out, "int _dummy; ");
+                            fprintf(ctx->block_out, "} _blk_%d_env;\n", blk_id);
+                            fprintf(ctx->block_out, "static mrb_int _blk_%d(void *_env, mrb_int _arg) {\n", blk_id);
+                            fprintf(ctx->block_out, "    _blk_%d_env *_e = (_blk_%d_env *)_env;\n", blk_id, blk_id);
+                            if (bpname) {
+                                char *cn = make_cname(bpname, false);
+                                fprintf(ctx->block_out, "    mrb_int %s = _arg;\n", cn);
+                                free(cn);
+                            }
+                            if (body_processed) fprintf(ctx->block_out, "%s", body_processed);
+                            fprintf(ctx->block_out, "    return 0;\n");
+                            fprintf(ctx->block_out, "}\n\n");
+                        }
+                        free(body_processed);
+
+                        /* Create sp_Proc on the stack and pass pointer */
+                        int ptmp = ctx->temp_counter++;
+                        if (captures.count > 0) {
+                            emit(ctx, "_blk_%d_env _env_%d = { ", blk_id, blk_id);
+                            for (int ci = 0; ci < captures.count; ci++) {
+                                char *cn = make_cname(captures.names[ci], false);
+                                emit_raw(ctx, "%s&%s", ci > 0 ? ", " : "", cn);
+                                free(cn);
+                            }
+                            emit_raw(ctx, " };\n");
+                            emit(ctx, "sp_Proc _bp_%d = { (sp_block_fn)_blk_%d, &_env_%d };\n",
+                                 ptmp, blk_id, blk_id);
+                        } else {
+                            emit(ctx, "sp_Proc _bp_%d = { (sp_block_fn)_blk_%d, NULL };\n",
+                                 ptmp, blk_id);
+                        }
+                        char *na = sfmt("%s%s&_bp_%d", args, total > 0 ? ", " : "", ptmp);
+                        free(args); args = na;
+                        free(bpname);
+                    } else {
+                        /* No block provided → pass NULL */
+                        char *na = sfmt("%s%sNULL", args, total > 0 ? ", " : "");
                         free(args); args = na;
                     }
                 }
@@ -5638,7 +6075,13 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
         if (f->param_count > 0) emit_raw(ctx, ", ");
         emit_raw(ctx, "sp_block_fn _block, void *_block_env");
     }
-    if (f->param_count == 0 && !f->has_yield) emit_raw(ctx, "void");
+    /* Add sp_Proc * parameter for &block functions */
+    if (f->has_block_param && !ctx->lambda_mode) {
+        if (f->param_count > 0 || f->has_yield) emit_raw(ctx, ", ");
+        emit_raw(ctx, "sp_Proc *lv_%s", f->block_param_name);
+        ctx->needs_proc = true;
+    }
+    if (f->param_count == 0 && !f->has_yield && !f->has_block_param) emit_raw(ctx, "void");
     emit_raw(ctx, ") {\n");
 
     int saved_indent = ctx->indent;
@@ -5648,6 +6091,10 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
     /* Register parameters in var table for type inference */
     for (int i = 0; i < f->param_count; i++)
         var_declare(ctx, f->params[i].name, f->params[i].type, false);
+
+    /* Register &block parameter */
+    if (f->has_block_param && !ctx->lambda_mode)
+        var_declare(ctx, f->block_param_name, vt_prim(SPINEL_TYPE_PROC), false);
 
     if (f->body_node) infer_pass(ctx, f->body_node);
 
@@ -5689,6 +6136,16 @@ static void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
                 emit(ctx, "sp_StrIntHash *%s = NULL;\n", cn);
                 if (func_has_gc_vars)
                     emit(ctx, "SP_GC_ROOT(%s);\n", cn);
+                free(ct); free(cn);
+                continue;
+            }
+            if (v->type.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode) {
+                /* Skip if this is the &block param (already a function parameter) */
+                if (f->has_block_param && strcmp(v->name, f->block_param_name) == 0) {
+                    free(ct); free(cn);
+                    continue;
+                }
+                emit(ctx, "sp_Proc *%s = NULL;\n", cn);
                 free(ct); free(cn);
                 continue;
             }
@@ -7382,12 +7839,29 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     /* Pass 2c: Re-infer variable types now that function return types are resolved */
     infer_pass(ctx, root);
 
+    /* Pass 2d: Re-run cross-function inference now that variable types are updated */
+    resolve_class_types(ctx, root);
+    infer_pass(ctx, root);
+
     /* Detect needs_hash: any HASH-typed variable triggers hash runtime */
     for (int i = 0; i < ctx->var_count; i++) {
         if (ctx->vars[i].type.kind == SPINEL_TYPE_HASH) {
             ctx->needs_hash = true;
             break;
         }
+    }
+
+    /* Detect needs_proc: any has_block_param function, or PROC-typed variable (from proc {}/Proc.new) */
+    for (int i = 0; i < ctx->func_count && !ctx->needs_proc; i++) {
+        if (ctx->funcs[i].has_block_param) ctx->needs_proc = true;
+    }
+    for (int i = 0; i < ctx->var_count && !ctx->needs_proc; i++) {
+        if (ctx->vars[i].type.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode)
+            ctx->needs_proc = true;
+    }
+    for (int i = 0; i < ctx->func_count && !ctx->needs_proc; i++) {
+        if (ctx->funcs[i].return_type.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode)
+            ctx->needs_proc = true;
     }
 
     /* Detect needs_gc: any non-value-type class, sp_IntArray, or sp_StrIntHash triggers GC */
@@ -7522,13 +7996,30 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     for (int i = 0; i < ctx->module_count; i++)
         emit_module(ctx, &ctx->modules[i]);
 
-    /* Block callback type definition (for yield support) */
+    /* Block callback type definition (for yield support and proc) */
     {
         bool any_yield = false;
-        for (int i = 0; i < ctx->func_count; i++)
-            if (ctx->funcs[i].has_yield) { any_yield = true; break; }
-        if (any_yield)
+        bool any_block_param = false;
+        for (int i = 0; i < ctx->func_count; i++) {
+            if (ctx->funcs[i].has_yield) any_yield = true;
+            if (ctx->funcs[i].has_block_param) any_block_param = true;
+        }
+        if (any_yield || any_block_param || ctx->needs_proc)
             emit_raw(ctx, "typedef mrb_int (*sp_block_fn)(void *env, mrb_int arg);\n\n");
+    }
+
+    /* sp_Proc runtime (for &block, proc {}, Proc.new {}) */
+    if (ctx->needs_proc) {
+        emit_raw(ctx, "/* ---- sp_Proc runtime ---- */\n");
+        emit_raw(ctx, "typedef struct { sp_block_fn fn; void *env; } sp_Proc;\n");
+        emit_raw(ctx, "static sp_Proc *sp_Proc_new(sp_block_fn fn, void *env) {\n");
+        emit_raw(ctx, "    sp_Proc *p = (sp_Proc *)malloc(sizeof(sp_Proc));\n");
+        emit_raw(ctx, "    p->fn = fn; p->env = env;\n");
+        emit_raw(ctx, "    return p;\n");
+        emit_raw(ctx, "}\n");
+        emit_raw(ctx, "static mrb_int sp_Proc_call(sp_Proc *p, mrb_int arg) {\n");
+        emit_raw(ctx, "    return p->fn(p->env, arg);\n");
+        emit_raw(ctx, "}\n\n");
     }
 
     /* Forward declarations for top-level functions */
@@ -7551,7 +8042,11 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                 if (f->param_count > 0) emit_raw(ctx, ", ");
                 emit_raw(ctx, "sp_block_fn, void *");
             }
-            if (f->param_count == 0 && !f->has_yield) emit_raw(ctx, "void");
+            if (f->has_block_param) {
+                if (f->param_count > 0 || f->has_yield) emit_raw(ctx, ", ");
+                emit_raw(ctx, "sp_Proc *");
+            }
+            if (f->param_count == 0 && !f->has_yield && !f->has_block_param) emit_raw(ctx, "void");
             emit_raw(ctx, ");\n");
             free(ret_ct);
         }
@@ -7690,6 +8185,11 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                 emit_raw(ctx, "    sp_StrIntHash *%s = NULL;\n", cn);
                 if (ctx->needs_gc)
                     emit_raw(ctx, "    SP_GC_ROOT(%s);\n", cn);
+                free(ct); free(cn);
+                continue;
+            }
+            else if (v->type.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode) {
+                emit_raw(ctx, "    sp_Proc *%s = NULL;\n", cn);
                 free(ct); free(cn);
                 continue;
             }

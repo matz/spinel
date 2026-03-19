@@ -119,6 +119,8 @@ typedef struct {
     bool has_rest;            /* true if function has *rest parameter */
     char rest_name[64];       /* name of the rest parameter */
     int rest_param_index;     /* index of the rest param in params[] */
+    bool has_block_param;     /* true if function has &block parameter */
+    char block_param_name[64]; /* name of the block parameter (without &) */
 } func_info_t;
 
 /* Variable entry in the variable table */
@@ -187,6 +189,9 @@ typedef struct {
     bool needs_gc;
     int gc_type_count;  /* number of GC-managed types (for type_id assignment) */
     bool gc_scope_active; /* true when inside a function with GC roots */
+
+    /* Proc: true when sp_Proc (block param / proc {} / Proc.new) is used */
+    bool needs_proc;
 
     /* Regexp: true when any regex literal is used */
     bool needs_regexp;

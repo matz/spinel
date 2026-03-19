@@ -359,11 +359,13 @@ sp_RbValue sp_dispatch_puts(sp_RbValue v) {
 | **1d** | bimorphic call-site switch生成 | ✅ 完了 |
 | **2a** | 異種配列 `[1, "two", 3.0]` → sp_RbArray | ✅ 完了 |
 | **2b** | bimorphicダックタイピング (クラスタグ) | ✅ 完了 |
-| **2c** | 異種Hash `{a: 1, b: "str"}` | 未着手 |
+| **2c** | 異種Hash `{a: 1, b: "str"}` → sp_RbHash | ✅ 完了 |
 | **3** | パターンマッチ `case/in` (型チェック分岐) | ✅ 完了 |
-| **4** | megamorphic dispatch関数生成 (3型以上) | 未着手 |
-| **5** | sp_String (ミュータブル文字列 + GC) | 未着手 |
-| **6** | NaN-boxing (8バイト化) | 未着手 |
+| **4** | megamorphic dispatch関数生成 (3型以上) | ✅ 完了 |
+| **5** | sp_String (ミュータブル文字列 + GC) | ✅ 完了 |
+| **5b** | sp_String Phase 2-4 (replace, clear, [], gsub等) | ✅ 完了 |
+| **6** | require_relative (複数ファイルコンパイル) | ✅ 完了 |
+| **7** | NaN-boxing (8バイト化) | **次** |
 
 ### 設計原則
 
@@ -371,7 +373,55 @@ sp_RbValue sp_dispatch_puts(sp_RbValue v) {
 2. **3段階最適化**: mono→直接, bi→inline switch, mega→dispatch関数
 3. **性能優先**: 単相パスは現在の速度 (20-57× vs CRuby) を維持
 4. **互換性**: 最終的に全valid Rubyをコンパイル可能に
-5. **NaN-boxing準備**: Phase 1のsp_RbValueをPhase 5で8バイト化可能な設計
+
+---
+
+## NaN-boxing設計 (Phase 7)
+
+### 方式: Favor Pointer (JSC方式)
+
+POLYコードではオブジェクト/Integer/Stringが主、Floatは多くの場合MONO。
+ポインタとIntegerの抽出を最速にする設計。
+
+```
+typedef uint64_t sp_RbValue;  // 16B struct → 8B integer
+
+64ビットレイアウト:
+  ポインタ:  0x0000_XXXX_XXXX_XXX0  (下位48ビット、アライン済み)
+             抽出: (void *)v             コスト: ゼロ
+             判定: v < DOUBLE_OFFSET     コスト: 比較1回
+
+  Integer:   0x0001_XXXX_XXXX_XXXX  (上位16ビット=0x0001, 下位48ビット=値)
+             抽出: (int64_t)(v << 16) >> 16   符号拡張
+             判定: (v >> 48) == 0x0001   コスト: シフト+比較
+             範囲: ±140兆 (48ビット)。BigIntは将来対応。
+
+  Double:    元のdoubleビット + DOUBLE_OFFSET (2^49)
+             抽出: bit_cast<double>(v - DOUBLE_OFFSET)  コスト: 減算1回
+             判定: v >= DOUBLE_OFFSET    コスト: 比較1回
+
+  Bool:      0x0002_0000_0000_0001 (true), 0x0002_0000_0000_0000 (false)
+  Nil:       0x0003_0000_0000_0000
+  クラスタグ: 0x0004_CCCC_PPPP_PPPP  (C=class_id, P=pointer)
+```
+
+### 変更範囲
+
+sp_box_*/sp_unbox_*/タグ判定の関数のみ。codegen側は`sp_RbValue`型名のまま。
+
+```c
+// Before (16B struct):
+typedef struct { enum sp_tag tag; union { int64_t i; double f; void *p; }; } sp_RbValue;
+sp_RbValue sp_box_int(int64_t n) { return (sp_RbValue){SP_T_INT, .i = n}; }
+if (v.tag == SP_T_INT) ...
+
+// After (8B NaN-boxed):
+typedef uint64_t sp_RbValue;
+#define SP_NANBOX_INT_TAG  ((uint64_t)0x0001 << 48)
+#define SP_NANBOX_DBL_OFFSET ((uint64_t)1 << 49)
+sp_RbValue sp_box_int(int64_t n) { return SP_NANBOX_INT_TAG | (n & 0xFFFFFFFFFFFF); }
+if ((v >> 48) == 0x0001) ...
+```
 
 ### sp_RbValue完了により解放された機能
 - ✅ 多相変数 (x = 1; x = "hello")

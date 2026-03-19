@@ -3140,6 +3140,19 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             }
         }
 
+        /* String indexing: s[n] → sp_str_char_at */
+        if (strcmp(method, "[]") == 0 && call->receiver && call->arguments &&
+            call->arguments->arguments.size == 1) {
+            vtype_t recv_t_pre = infer_type(ctx, call->receiver);
+            if (recv_t_pre.kind == SPINEL_TYPE_STRING) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *idx = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                char *r = sfmt("sp_str_char_at(%s, %s)", recv, idx);
+                free(recv); free(idx); free(method);
+                return r;
+            }
+        }
+
         /* Array indexing / Proc call: obj[arg] */
         if (strcmp(method, "[]") == 0 && call->receiver && call->arguments &&
             call->arguments->arguments.size == 1) {
@@ -6545,7 +6558,12 @@ static void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    char *r = (char *)malloc(la + lb + 1);\n");
     emit_raw(ctx, "    memcpy(r, a, la); memcpy(r + la, b, lb + 1); return r;\n}\n");
     emit_raw(ctx, "static const char *sp_int_to_s(mrb_int n) {\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(24); snprintf(r, 24, \"%%lld\", (long long)n); return r;\n}\n\n");
+    emit_raw(ctx, "    char *r = (char *)malloc(24); snprintf(r, 24, \"%%lld\", (long long)n); return r;\n}\n");
+    emit_raw(ctx, "static const char *sp_str_char_at(const char *s, mrb_int idx) {\n");
+    emit_raw(ctx, "    mrb_int len = (mrb_int)strlen(s);\n");
+    emit_raw(ctx, "    if (idx < 0) idx += len;\n");
+    emit_raw(ctx, "    if (idx < 0 || idx >= len) return \"\";\n");
+    emit_raw(ctx, "    char *r = (char *)malloc(2); r[0] = s[idx]; r[1] = '\\0'; return r;\n}\n\n");
 
     /* ---- File I/O helpers ---- */
     emit_raw(ctx, "static const char *sp_File_read(const char *path) {\n");
@@ -6627,12 +6645,7 @@ static void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    for (mrb_int i = 0; i < n; i++) memcpy(r + sl * i, s, sl);\n");
     emit_raw(ctx, "    r[sl * n] = '\\0'; return r;\n}\n\n");
 
-    /* ---- String char-at (String#[]) ---- */
-    emit_raw(ctx, "static const char *sp_str_char_at(const char *s, mrb_int idx) {\n");
-    emit_raw(ctx, "    size_t len = strlen(s);\n");
-    emit_raw(ctx, "    if (idx < 0) idx += len;\n");
-    emit_raw(ctx, "    if (idx < 0 || idx >= (mrb_int)len) return \"\";\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(2); r[0] = s[idx]; r[1] = '\\0'; return r;\n}\n\n");
+    /* sp_str_char_at already emitted above */
 
     /* ---- Float format (Ruby-style: always show decimal point) ---- */
     emit_raw(ctx, "static const char *sp_float_to_s(mrb_float f) {\n");

@@ -753,7 +753,7 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
         }
 
         /* format("fmt", args...) → STRING */
-        if (!call->receiver && strcmp(method, "format") == 0) {
+        if (!call->receiver && (strcmp(method, "format") == 0 || strcmp(method, "sprintf") == 0)) {
             free(method); return vt_prim(SPINEL_TYPE_STRING);
         }
 
@@ -898,7 +898,8 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
     }
 
     case PM_HASH_NODE: {
-        /* Detect heterogeneous hash: if values have different types, use sp_RbHash */
+        /* Detect heterogeneous hash: if values have different types, use sp_RbHash.
+         * Also use sp_RbHash when values are not integers (sp_StrIntHash is string→int only). */
         pm_hash_node_t *hn = (pm_hash_node_t *)node;
         if (hn->elements.size > 0) {
             spinel_type_t first_val_kind = SPINEL_TYPE_UNKNOWN;
@@ -913,6 +914,9 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                     heterogeneous = true;
             }
             if (heterogeneous)
+                return vt_prim(SPINEL_TYPE_RB_HASH);
+            /* sp_StrIntHash only supports integer values; use sp_RbHash for other types */
+            if (first_val_kind != SPINEL_TYPE_UNKNOWN && first_val_kind != SPINEL_TYPE_INTEGER)
                 return vt_prim(SPINEL_TYPE_RB_HASH);
         }
         return vt_prim(SPINEL_TYPE_HASH);
@@ -943,6 +947,25 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
 
     case PM_RANGE_NODE:
         return vt_prim(SPINEL_TYPE_RANGE);
+
+    case PM_GLOBAL_VARIABLE_READ_NODE: {
+        pm_global_variable_read_node_t *n = (pm_global_variable_read_node_t *)node;
+        char *gname = cstr(ctx, n->name);
+        spinel_type_t t = SPINEL_TYPE_VALUE;
+        if (strcmp(gname, "$0") == 0 || strcmp(gname, "$PROGRAM_NAME") == 0)
+            t = SPINEL_TYPE_STRING;
+        else if (strcmp(gname, "$stderr") == 0 || strcmp(gname, "$stdout") == 0 || strcmp(gname, "$stdin") == 0)
+            t = SPINEL_TYPE_VALUE;
+        else if (strcmp(gname, "$?") == 0)
+            t = SPINEL_TYPE_INTEGER;
+        free(gname);
+        return vt_prim(t);
+    }
+
+    case PM_RESCUE_MODIFIER_NODE: {
+        pm_rescue_modifier_node_t *rm = (pm_rescue_modifier_node_t *)node;
+        return infer_type(ctx, rm->expression);
+    }
 
     default:
         return vt_prim(SPINEL_TYPE_VALUE);

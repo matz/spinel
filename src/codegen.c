@@ -2086,8 +2086,10 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
         FILE *real_out = ctx->out;
         ctx->out = main_buf;
 
+        emit_raw(ctx, "static const char *sp_program_name = \"\";\n");
         emit_raw(ctx, "int main(int argc, char **argv) {\n");
         emit_raw(ctx, "    (void)argc; (void)argv;\n");
+        emit_raw(ctx, "    sp_program_name = argv[0];\n");
 
         /* Variable declarations for top-level */
         for (int i = 0; i < ctx->var_count; i++) {
@@ -2227,7 +2229,9 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
         emit_raw(ctx, "static sp_Argv sp_argv;\n");
         emit_raw(ctx, "static mrb_int sp_Argv_length(sp_Argv *a) { return a->len; }\n\n");
 
+        emit_raw(ctx, "static const char *sp_program_name = \"\";\n");
         emit_raw(ctx, "int main(int argc, char **argv) {\n");
+        emit_raw(ctx, "    sp_program_name = argv[0];\n");
         emit_raw(ctx, "    sp_argv.data = (const char **)(argv + 1); sp_argv.len = argc - 1;\n");
 
         /* Variable declarations for top-level (skip constants — they're global statics) */

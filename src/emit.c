@@ -1249,7 +1249,10 @@ void emit_header(codegen_ctx_t *ctx) {
         emit_raw(ctx, "}\n\n");
 
         /* ---- Polymorphic arithmetic/comparison helpers ---- */
-        emit_raw(ctx, "static void sp_raise(const char *msg) { fprintf(stderr, \"%%s\\n\", msg); exit(1); }\n\n");
+        if (!ctx->needs_exc)
+            emit_raw(ctx, "static void sp_raise(const char *msg) { fprintf(stderr, \"%%s\\n\", msg); exit(1); }\n\n");
+        else
+            emit_raw(ctx, "static void sp_raise(const char *msg);\n");
 
         /* Helper macros for arithmetic/comparison dispatch */
         emit_raw(ctx, "#define SP_TAG_A SP_TAG(a)\n");

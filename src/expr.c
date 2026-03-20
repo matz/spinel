@@ -135,6 +135,9 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         if (strcmp(gname, "$stdout") == 0) { free(gname); return xstrdup("stdout"); }
         if (strcmp(gname, "$?") == 0) { free(gname); return xstrdup("sp_last_status"); }
         if (strcmp(gname, "$stdin") == 0) { free(gname); return xstrdup("stdin"); }
+        if (strcmp(gname, "$0") == 0 || strcmp(gname, "$PROGRAM_NAME") == 0) {
+            free(gname); return xstrdup("sp_program_name");
+        }
         free(gname);
         return xstrdup("0 /* unsupported global */");
     }
@@ -254,6 +257,26 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             free(gname);
         }
 
+        /* raise "msg" as expression (used in rescue modifier context) */
+        if (!call->receiver && strcmp(method, "raise") == 0) {
+            int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+            if (argc >= 2 && PM_NODE_TYPE(call->arguments->arguments.nodes[0]) == PM_CONSTANT_READ_NODE) {
+                pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->arguments->arguments.nodes[0];
+                char *cls = cstr(ctx, cr->name);
+                char *msg = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                emit(ctx, "sp_raise_cls(\"%s\", %s);\n", cls, msg);
+                free(cls); free(msg);
+            } else if (argc >= 1) {
+                char *msg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                emit(ctx, "sp_raise(%s);\n", msg);
+                free(msg);
+            } else {
+                emit(ctx, "sp_raise(\"RuntimeError\");\n");
+            }
+            free(method);
+            return xstrdup("0");
+        }
+
         /* system("cmd") → (system("cmd") == 0) as expression */
         if (!call->receiver && strcmp(method, "system") == 0 &&
             call->arguments && call->arguments->arguments.size >= 1) {
@@ -264,7 +287,7 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         }
 
         /* format("fmt", args...) → sp_format("fmt", args...) */
-        if (!call->receiver && strcmp(method, "format") == 0 &&
+        if (!call->receiver && (strcmp(method, "format") == 0 || strcmp(method, "sprintf") == 0) &&
             call->arguments && call->arguments->arguments.size >= 1) {
             char *fmt = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
             int argc = (int)call->arguments->arguments.size;
@@ -3621,8 +3644,24 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             }
             return sfmt("_rh_%d", tmp);
         }
-        /* Empty or homogeneous hash literal → sp_StrIntHash_new() */
-        return xstrdup("sp_StrIntHash_new()");
+        /* Empty or homogeneous integer hash literal → sp_StrIntHash */
+        ctx->needs_hash = true;
+        ctx->needs_gc = true;
+        if (hn->elements.size == 0)
+            return xstrdup("sp_StrIntHash_new()");
+        {
+            int tmp = ctx->temp_counter++;
+            emit(ctx, "sp_StrIntHash *_sh_%d = sp_StrIntHash_new();\n", tmp);
+            for (size_t i = 0; i < hn->elements.size; i++) {
+                if (PM_NODE_TYPE(hn->elements.nodes[i]) != PM_ASSOC_NODE) continue;
+                pm_assoc_node_t *assoc = (pm_assoc_node_t *)hn->elements.nodes[i];
+                char *key = codegen_expr(ctx, assoc->key);
+                char *val = codegen_expr(ctx, assoc->value);
+                emit(ctx, "sp_StrIntHash_set(_sh_%d, %s, %s);\n", tmp, key, val);
+                free(key); free(val);
+            }
+            return sfmt("_sh_%d", tmp);
+        }
     }
 
     /* Chained assignment: zr = zi = 0 — inner write used as expression */
@@ -3711,6 +3750,33 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         char *r = sfmt("sp_Range_new(%s, %s)", left, right);
         free(left); free(right);
         return r;
+    }
+
+    case PM_RESCUE_MODIFIER_NODE: {
+        pm_rescue_modifier_node_t *rm = (pm_rescue_modifier_node_t *)node;
+        vtype_t rt = infer_type(ctx, rm->expression);
+        char *ct = vt_ctype(ctx, rt, false);
+        int tmp = ctx->temp_counter++;
+        ctx->needs_exc = true;
+        emit(ctx, "%s _resc_%d;\n", ct, tmp);
+        emit(ctx, "sp_exc_depth++;\n");
+        emit(ctx, "if (setjmp(sp_exc_stack[sp_exc_depth - 1]) == 0) {\n");
+        ctx->indent++;
+        char *expr = codegen_expr(ctx, rm->expression);
+        emit(ctx, "_resc_%d = %s;\n", tmp, expr);
+        free(expr);
+        ctx->indent--;
+        emit(ctx, "    sp_exc_depth--;\n");
+        emit(ctx, "} else {\n");
+        ctx->indent++;
+        emit(ctx, "sp_exc_depth--;\n");
+        char *defval = codegen_expr(ctx, rm->rescue_expression);
+        emit(ctx, "_resc_%d = %s;\n", tmp, defval);
+        free(defval);
+        ctx->indent--;
+        emit(ctx, "}\n");
+        free(ct);
+        return sfmt("_resc_%d", tmp);
     }
 
     default:

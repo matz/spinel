@@ -1000,8 +1000,20 @@ static void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
                         cls->is_value_type = false;
                         cls->class_node = (pm_node_t *)s;
 
-                        /* Each symbol arg becomes an ivar + getter + setter */
+                        /* Check for keyword_init: true */
+                        bool keyword_init = false;
                         int nfields = (int)call->arguments->arguments.size;
+                        for (int fi = 0; fi < nfields; fi++) {
+                            pm_node_t *arg = call->arguments->arguments.nodes[fi];
+                            if (PM_NODE_TYPE(arg) == PM_KEYWORD_HASH_NODE) {
+                                /* keyword_init: true detected */
+                                keyword_init = true;
+                                nfields = fi; /* don't count keyword hash as a field */
+                                break;
+                            }
+                        }
+
+                        /* Each symbol arg becomes an ivar + getter + setter */
                         method_info_t *init = &cls->methods[cls->method_count++];
                         memset(init, 0, sizeof(*init));
                         snprintf(init->name, sizeof(init->name), "initialize");
@@ -1019,11 +1031,12 @@ static void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
                             /* Ivar */
                             ivar_info_t *iv = &cls->ivars[cls->ivar_count++];
                             snprintf(iv->name, sizeof(iv->name), "%s", fname);
-                            iv->type = vt_prim(SPINEL_TYPE_INTEGER);
+                            iv->type = keyword_init ? vt_prim(SPINEL_TYPE_VALUE) : vt_prim(SPINEL_TYPE_INTEGER);
 
                             /* Init param */
                             snprintf(init->params[init->param_count].name, 64, "%s", fname);
-                            init->params[init->param_count].type = vt_prim(SPINEL_TYPE_INTEGER);
+                            init->params[init->param_count].type = keyword_init ? vt_prim(SPINEL_TYPE_VALUE) : vt_prim(SPINEL_TYPE_INTEGER);
+                            init->params[init->param_count].is_keyword = keyword_init;
                             init->param_count++;
 
                             /* Getter */
@@ -2857,12 +2870,42 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                 init = parent ? find_method(parent, "initialize") : NULL;
                             }
                             if (init) {
-                                for (int ai = 0; ai < (int)call->arguments->arguments.size &&
-                                     ai < init->param_count; ai++) {
-                                    if (init->params[ai].type.kind == SPINEL_TYPE_VALUE) {
-                                        vtype_t at = infer_type(ctx, call->arguments->arguments.nodes[ai]);
-                                        if (at.kind != SPINEL_TYPE_VALUE && at.kind != SPINEL_TYPE_UNKNOWN)
-                                            init->params[ai].type = at;
+                                bool kw_init = init->param_count > 0 && init->params[0].is_keyword;
+                                if (kw_init && call->arguments->arguments.size == 1 &&
+                                    PM_NODE_TYPE(call->arguments->arguments.nodes[0]) == PM_KEYWORD_HASH_NODE) {
+                                    /* keyword_init Struct: match keyword args to params by name */
+                                    pm_keyword_hash_node_t *kwh = (pm_keyword_hash_node_t *)call->arguments->arguments.nodes[0];
+                                    for (int pi = 0; pi < init->param_count; pi++) {
+                                        for (size_t ki = 0; ki < kwh->elements.size; ki++) {
+                                            if (PM_NODE_TYPE(kwh->elements.nodes[ki]) != PM_ASSOC_NODE) continue;
+                                            pm_assoc_node_t *assoc = (pm_assoc_node_t *)kwh->elements.nodes[ki];
+                                            if (PM_NODE_TYPE(assoc->key) == PM_SYMBOL_NODE) {
+                                                pm_symbol_node_t *ksym = (pm_symbol_node_t *)assoc->key;
+                                                const uint8_t *ksrc = pm_string_source(&ksym->unescaped);
+                                                size_t klen = pm_string_length(&ksym->unescaped);
+                                                char kname[64];
+                                                snprintf(kname, sizeof(kname), "%.*s", (int)klen, ksrc);
+                                                if (strcmp(kname, init->params[pi].name) == 0) {
+                                                    vtype_t at = infer_type(ctx, assoc->value);
+                                                    if (at.kind != SPINEL_TYPE_VALUE && at.kind != SPINEL_TYPE_UNKNOWN) {
+                                                        init->params[pi].type = at;
+                                                        /* Also update ivar type */
+                                                        ivar_info_t *iv = find_ivar(cls, init->params[pi].name);
+                                                        if (iv) iv->type = at;
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    for (int ai = 0; ai < (int)call->arguments->arguments.size &&
+                                         ai < init->param_count; ai++) {
+                                        if (init->params[ai].type.kind == SPINEL_TYPE_VALUE) {
+                                            vtype_t at = infer_type(ctx, call->arguments->arguments.nodes[ai]);
+                                            if (at.kind != SPINEL_TYPE_VALUE && at.kind != SPINEL_TYPE_UNKNOWN)
+                                                init->params[ai].type = at;
+                                        }
                                     }
                                 }
                             }
@@ -4023,11 +4066,55 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             if (cls) {
                 int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
                 char *args = xstrdup("");
-                for (int i = 0; i < argc; i++) {
-                    char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
-                    char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
-                    free(args); free(a);
-                    args = na;
+
+                /* Check if this is a keyword_init Struct */
+                method_info_t *init_m = NULL;
+                for (int mi = 0; mi < cls->method_count; mi++) {
+                    if (strcmp(cls->methods[mi].name, "initialize") == 0) {
+                        init_m = &cls->methods[mi];
+                        break;
+                    }
+                }
+                bool kw_init = init_m && init_m->param_count > 0 && init_m->params[0].is_keyword;
+
+                if (kw_init && argc == 1 &&
+                    PM_NODE_TYPE(call->arguments->arguments.nodes[0]) == PM_KEYWORD_HASH_NODE) {
+                    /* keyword_init Struct: Session.new(pid: 123, name: "test")
+                     * Unpack KeywordHashNode and reorder args by field position */
+                    pm_keyword_hash_node_t *kwh = (pm_keyword_hash_node_t *)call->arguments->arguments.nodes[0];
+                    int nkw = (int)kwh->elements.size;
+
+                    /* For each param in field order, find matching keyword arg */
+                    for (int pi = 0; pi < init_m->param_count; pi++) {
+                        char *val = NULL;
+                        for (int ki = 0; ki < nkw; ki++) {
+                            if (PM_NODE_TYPE(kwh->elements.nodes[ki]) != PM_ASSOC_NODE) continue;
+                            pm_assoc_node_t *assoc = (pm_assoc_node_t *)kwh->elements.nodes[ki];
+                            /* Key is a SymbolNode */
+                            if (PM_NODE_TYPE(assoc->key) == PM_SYMBOL_NODE) {
+                                pm_symbol_node_t *ksym = (pm_symbol_node_t *)assoc->key;
+                                const uint8_t *ksrc = pm_string_source(&ksym->unescaped);
+                                size_t klen = pm_string_length(&ksym->unescaped);
+                                char kname[64];
+                                snprintf(kname, sizeof(kname), "%.*s", (int)klen, ksrc);
+                                if (strcmp(kname, init_m->params[pi].name) == 0) {
+                                    val = codegen_expr(ctx, assoc->value);
+                                    break;
+                                }
+                            }
+                        }
+                        if (!val) val = xstrdup("0"); /* default if missing */
+                        char *na = sfmt("%s%s%s", args, pi > 0 ? ", " : "", val);
+                        free(args); free(val);
+                        args = na;
+                    }
+                } else {
+                    for (int i = 0; i < argc; i++) {
+                        char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                        char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
+                        free(args); free(a);
+                        args = na;
+                    }
                 }
                 char *r = sfmt("sp_%s_new(%s)", cls_name, args);
                 free(cls_name); free(args); free(method);

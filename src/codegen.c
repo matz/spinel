@@ -1084,6 +1084,7 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_STRING_NODE:
     case PM_INTERPOLATED_STRING_NODE:
     case PM_SYMBOL_NODE:
+    case PM_X_STRING_NODE:
                            return vt_prim(SPINEL_TYPE_STRING);
     case PM_TRUE_NODE:
     case PM_FALSE_NODE:    return vt_prim(SPINEL_TYPE_BOOLEAN);
@@ -1182,6 +1183,25 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                 char *ivn = cstr(ctx, iv->name);
                 if (strcmp(ivn, "@spheres") == 0) { free(ivn); free(method); return vt_obj("Sphere"); }
                 free(ivn);
+            }
+        }
+
+        /* ENV['KEY'] → STRING (getenv) */
+        if (strcmp(method, "[]") == 0 && call->receiver &&
+            PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "ENV")) {
+                free(method);
+                return vt_prim(SPINEL_TYPE_STRING);
+            }
+        }
+
+        /* Dir.home → STRING */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "Dir") && strcmp(method, "home") == 0) {
+                free(method);
+                return vt_prim(SPINEL_TYPE_STRING);
             }
         }
 
@@ -1509,6 +1529,20 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
             }
         }
 
+        /* $stdin.getc → INTEGER (char code) */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_GLOBAL_VARIABLE_READ_NODE) {
+            pm_global_variable_read_node_t *gv = (pm_global_variable_read_node_t *)call->receiver;
+            char *gname = cstr(ctx, gv->name);
+            if (strcmp(gname, "$stdin") == 0 && strcmp(method, "getc") == 0) {
+                free(gname); free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+            }
+            /* $?.success? → BOOLEAN */
+            if (strcmp(gname, "$?") == 0 && strcmp(method, "success?") == 0) {
+                free(gname); free(method); return vt_prim(SPINEL_TYPE_BOOLEAN);
+            }
+            free(gname);
+        }
+
         /* Receiver-less call in class context → implicit self method (with inheritance) */
         if (!call->receiver && ctx->current_class) {
             method_info_t *cm = find_method_inherited(ctx, ctx->current_class, method, NULL);
@@ -1551,6 +1585,21 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
         /* Receiver-less rand(n) → INTEGER */
         if (!call->receiver && strcmp(method, "rand") == 0) {
             free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+        }
+
+        /* system("cmd") → BOOLEAN (true if exit 0) */
+        if (!call->receiver && strcmp(method, "system") == 0) {
+            free(method); return vt_prim(SPINEL_TYPE_BOOLEAN);
+        }
+
+        /* format("fmt", args...) → STRING */
+        if (!call->receiver && strcmp(method, "format") == 0) {
+            free(method); return vt_prim(SPINEL_TYPE_STRING);
+        }
+
+        /* trap → NIL */
+        if (!call->receiver && strcmp(method, "trap") == 0) {
+            free(method); return vt_prim(SPINEL_TYPE_NIL);
         }
 
         /* Known methods */
@@ -3215,6 +3264,8 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         char *gname = cstr(ctx, n->name);
         if (strcmp(gname, "$stderr") == 0) { free(gname); return xstrdup("stderr"); }
         if (strcmp(gname, "$stdout") == 0) { free(gname); return xstrdup("stdout"); }
+        if (strcmp(gname, "$?") == 0) { free(gname); return xstrdup("sp_last_status"); }
+        if (strcmp(gname, "$stdin") == 0) { free(gname); return xstrdup("stdin"); }
         free(gname);
         return xstrdup("0 /* unsupported global */");
     }
@@ -3308,6 +3359,62 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(recv); free(arg); free(method);
                 return r;
             }
+        }
+
+        /* $stdin.getc → getchar() */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_GLOBAL_VARIABLE_READ_NODE &&
+            strcmp(method, "getc") == 0) {
+            pm_global_variable_read_node_t *gv = (pm_global_variable_read_node_t *)call->receiver;
+            char *gname = cstr(ctx, gv->name);
+            if (strcmp(gname, "$stdin") == 0) {
+                free(gname); free(method);
+                return xstrdup("((mrb_int)getchar())");
+            }
+            free(gname);
+        }
+
+        /* $?.success? → (sp_last_status == 0) */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_GLOBAL_VARIABLE_READ_NODE &&
+            strcmp(method, "success?") == 0) {
+            pm_global_variable_read_node_t *gv = (pm_global_variable_read_node_t *)call->receiver;
+            char *gname = cstr(ctx, gv->name);
+            if (strcmp(gname, "$?") == 0) {
+                free(gname); free(method);
+                return xstrdup("(sp_last_status == 0)");
+            }
+            free(gname);
+        }
+
+        /* system("cmd") → (system("cmd") == 0) as expression */
+        if (!call->receiver && strcmp(method, "system") == 0 &&
+            call->arguments && call->arguments->arguments.size >= 1) {
+            char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+            char *r = sfmt("(sp_last_status = system(%s), sp_last_status == 0)", arg);
+            free(arg); free(method);
+            return r;
+        }
+
+        /* format("fmt", args...) → sp_format("fmt", args...) */
+        if (!call->receiver && strcmp(method, "format") == 0 &&
+            call->arguments && call->arguments->arguments.size >= 1) {
+            char *fmt = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+            int argc = (int)call->arguments->arguments.size;
+            if (argc == 1) {
+                char *r = sfmt("sp_format(%s)", fmt);
+                free(fmt); free(method);
+                return r;
+            }
+            /* Build args string */
+            char *args = xstrdup("");
+            for (int i = 1; i < argc; i++) {
+                char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                char *na = sfmt("%s, %s", args, a);
+                free(args); free(a);
+                args = na;
+            }
+            char *r = sfmt("sp_format(%s%s)", fmt, args);
+            free(fmt); free(args); free(method);
+            return r;
         }
 
         /* proc {} → create sp_Proc from block */
@@ -3621,6 +3728,15 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(left); free(right); free(method);
                 return r;
             }
+            /* string == nil → (str == NULL), string != nil → (str != NULL) */
+            if (lt.kind == SPINEL_TYPE_STRING && rt.kind == SPINEL_TYPE_NIL) {
+                if (strcmp(method, "==") == 0 || strcmp(method, "!=") == 0) {
+                    char *left = codegen_expr(ctx, call->receiver);
+                    char *r = sfmt("(%s %s NULL)", left, strcmp(method, "==") == 0 ? "==" : "!=");
+                    free(left); free(method);
+                    return r;
+                }
+            }
         }
 
         /* Binary operators on numeric types → direct C ops */
@@ -3690,6 +3806,29 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     free(left); free(right); free(bl); free(br); free(method);
                     return r;
                 }
+            }
+        }
+
+        /* ENV['KEY'] → getenv("KEY") */
+        if (strcmp(method, "[]") == 0 && call->receiver &&
+            PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "ENV") && call->arguments &&
+                call->arguments->arguments.size == 1) {
+                char *key = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                char *r = sfmt("getenv(%s)", key);
+                free(key); free(method);
+                return r;
+            }
+        }
+
+        /* Dir.home → getenv("HOME") */
+        if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_CONSTANT_READ_NODE &&
+            strcmp(method, "home") == 0) {
+            pm_constant_read_node_t *cr = (pm_constant_read_node_t *)call->receiver;
+            if (ceq(ctx, cr->name, "Dir")) {
+                free(method);
+                return xstrdup("getenv(\"HOME\")");
             }
         }
 
@@ -5808,6 +5947,18 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
         return codegen_expr(ctx, (pm_node_t *)mw->call);
     }
 
+    case PM_X_STRING_NODE: {
+        pm_x_string_node_t *xs = (pm_x_string_node_t *)node;
+        const uint8_t *src = pm_string_source(&xs->unescaped);
+        size_t len = pm_string_length(&xs->unescaped);
+        char *cmd = malloc(len + 1);
+        memcpy(cmd, src, len);
+        cmd[len] = '\0';
+        char *r = sfmt("sp_backtick(\"%s\")", cmd);
+        free(cmd);
+        return r;
+    }
+
     case PM_SELF_NODE:
         return xstrdup("self");
 
@@ -6504,6 +6655,38 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(arg);
             } else {
                 emit(ctx, "sleep(0);\n");
+            }
+            free(method);
+            break;
+        }
+
+        /* system("cmd") → system("cmd") as statement */
+        if (!call->receiver && strcmp(method, "system") == 0) {
+            if (call->arguments && call->arguments->arguments.size >= 1) {
+                char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                emit(ctx, "fflush(stdout); sp_last_status = system(%s);\n", arg);
+                free(arg);
+            }
+            free(method);
+            break;
+        }
+
+        /* trap('SIGNAL') { block } → signal(SIGxxx, SIG_IGN) */
+        if (!call->receiver && strcmp(method, "trap") == 0) {
+            if (call->arguments && call->arguments->arguments.size >= 1) {
+                char *sig = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                /* Map Ruby signal names to C signal constants */
+                const char *csig = "SIGINT"; /* default */
+                /* Extract string content (remove quotes) for comparison */
+                if (strstr(sig, "INT")) csig = "SIGINT";
+                else if (strstr(sig, "WINCH")) csig = "SIGWINCH";
+                else if (strstr(sig, "TERM")) csig = "SIGTERM";
+                else if (strstr(sig, "HUP")) csig = "SIGHUP";
+                else if (strstr(sig, "PIPE")) csig = "SIGPIPE";
+                else if (strstr(sig, "USR1")) csig = "SIGUSR1";
+                else if (strstr(sig, "USR2")) csig = "SIGUSR2";
+                emit(ctx, "signal(%s, SIG_IGN);\n", csig);
+                free(sig);
             }
             free(method);
             break;
@@ -8040,7 +8223,9 @@ static void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "#include <stdbool.h>\n");
     emit_raw(ctx, "#include <stdint.h>\n");
     emit_raw(ctx, "#include <ctype.h>\n");
-    emit_raw(ctx, "#include <unistd.h>\n\n");
+    emit_raw(ctx, "#include <unistd.h>\n");
+    emit_raw(ctx, "#include <signal.h>\n");
+    emit_raw(ctx, "#include <stdarg.h>\n\n");
     emit_raw(ctx, "typedef int64_t mrb_int;\n");
     emit_raw(ctx, "typedef double mrb_float;\n");
     emit_raw(ctx, "typedef bool mrb_bool;\n");
@@ -8316,6 +8501,22 @@ static void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    char *r = (char *)malloc(32);\n");
     emit_raw(ctx, "    snprintf(r, 32, \"%%g\", f);\n");
     emit_raw(ctx, "    if (!strchr(r, '.') && !strchr(r, 'e') && !strchr(r, 'E')) strcat(r, \".0\");\n");
+    emit_raw(ctx, "    return r;\n}\n\n");
+
+    /* ---- Backtick helper (popen/pclose) ---- */
+    emit_raw(ctx, "static const char *sp_backtick(const char *cmd) {\n");
+    emit_raw(ctx, "    FILE *p = popen(cmd, \"r\");\n");
+    emit_raw(ctx, "    if (!p) return \"\";\n");
+    emit_raw(ctx, "    char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, p);\n");
+    emit_raw(ctx, "    buf[n] = '\\0'; pclose(p);\n");
+    emit_raw(ctx, "    char *r = (char *)malloc(n+1); memcpy(r, buf, n+1); return r;\n}\n\n");
+
+    /* ---- format() helper (snprintf wrapper) ---- */
+    emit_raw(ctx, "static const char *sp_format(const char *fmt, ...) {\n");
+    emit_raw(ctx, "    va_list ap; va_start(ap, fmt);\n");
+    emit_raw(ctx, "    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);\n");
+    emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "    va_start(ap, fmt); vsnprintf(r, n + 1, fmt, ap); va_end(ap);\n");
     emit_raw(ctx, "    return r;\n}\n\n");
 
     /* ---- Polymorphic to_s (after sp_int_to_s/sp_float_to_s) ---- */
@@ -10098,6 +10299,9 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
 
     /* Emit C file */
     emit_header(ctx);
+
+    /* Global for system()/backtick exit status ($?) */
+    emit_raw(ctx, "static int sp_last_status = 0;\n\n");
 
     /* Emit top-level constants as static globals (so methods can access them) */
     for (int i = 0; i < ctx->var_count; i++) {

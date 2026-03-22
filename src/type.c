@@ -1941,6 +1941,35 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                         char *iname = cstr(ctx, inner->name);
                                         func_info_t *target2 = find_func(ctx, iname);
                                         if (target2) {
+                                            /* Check for keyword hash in nested call arguments */
+                                            bool found_kw2 = false;
+                                            for (size_t ai2 = 0; ai2 < inner->arguments->arguments.size; ai2++) {
+                                                pm_node_t *iarg = inner->arguments->arguments.nodes[ai2];
+                                                if (PM_NODE_TYPE(iarg) == PM_KEYWORD_HASH_NODE) {
+                                                    pm_keyword_hash_node_t *kwh = (pm_keyword_hash_node_t *)iarg;
+                                                    for (size_t ki = 0; ki < kwh->elements.size; ki++) {
+                                                        if (PM_NODE_TYPE(kwh->elements.nodes[ki]) != PM_ASSOC_NODE) continue;
+                                                        pm_assoc_node_t *assoc = (pm_assoc_node_t *)kwh->elements.nodes[ki];
+                                                        if (PM_NODE_TYPE(assoc->key) != PM_SYMBOL_NODE) continue;
+                                                        pm_symbol_node_t *sym = (pm_symbol_node_t *)assoc->key;
+                                                        const uint8_t *ksrc = pm_string_source(&sym->unescaped);
+                                                        size_t klen = pm_string_length(&sym->unescaped);
+                                                        char kn[64]; size_t cl = klen < 63 ? klen : 63;
+                                                        memcpy(kn, ksrc, cl); kn[cl] = '\0';
+                                                        for (int pi = 0; pi < target2->param_count; pi++) {
+                                                            if (target2->params[pi].is_keyword &&
+                                                                strcmp(target2->params[pi].name, kn) == 0 &&
+                                                                target2->params[pi].type.kind == SPINEL_TYPE_VALUE) {
+                                                                vtype_t at = infer_type(ctx, assoc->value);
+                                                                if (at.kind != SPINEL_TYPE_VALUE)
+                                                                    target2->params[pi].type = at;
+                                                            }
+                                                        }
+                                                    }
+                                                    found_kw2 = true;
+                                                }
+                                            }
+                                            if (!found_kw2) {
                                             for (int pi = 0; pi < target2->param_count &&
                                                  pi < (int)inner->arguments->arguments.size; pi++) {
                                                 vtype_t at = infer_type(ctx, inner->arguments->arguments.nodes[pi]);
@@ -1962,6 +1991,7 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                                     if (vt_is_poly_eligible(target2->params[pi].type) && vt_is_poly_eligible(at))
                                                         target2->params[pi].type = vt_prim(SPINEL_TYPE_POLY);
                                                 }
+                                            }
                                             }
                                         }
                                         free(iname);
@@ -2042,6 +2072,35 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                             for (int cp = 0; cp < caller->param_count; cp++)
                                 var_declare(ctx, caller->params[cp].name, caller->params[cp].type, false);
                             infer_pass(ctx, caller->body_node);
+                            /* Check for keyword hash in arguments */
+                            bool found_kw_inner = false;
+                            for (size_t ai2 = 0; ai2 < cc->arguments->arguments.size; ai2++) {
+                                pm_node_t *iarg = cc->arguments->arguments.nodes[ai2];
+                                if (PM_NODE_TYPE(iarg) == PM_KEYWORD_HASH_NODE) {
+                                    pm_keyword_hash_node_t *kwh = (pm_keyword_hash_node_t *)iarg;
+                                    for (size_t ki = 0; ki < kwh->elements.size; ki++) {
+                                        if (PM_NODE_TYPE(kwh->elements.nodes[ki]) != PM_ASSOC_NODE) continue;
+                                        pm_assoc_node_t *assoc = (pm_assoc_node_t *)kwh->elements.nodes[ki];
+                                        if (PM_NODE_TYPE(assoc->key) != PM_SYMBOL_NODE) continue;
+                                        pm_symbol_node_t *sym = (pm_symbol_node_t *)assoc->key;
+                                        const uint8_t *ksrc = pm_string_source(&sym->unescaped);
+                                        size_t klen = pm_string_length(&sym->unescaped);
+                                        char kn[64]; size_t cl2 = klen < 63 ? klen : 63;
+                                        memcpy(kn, ksrc, cl2); kn[cl2] = '\0';
+                                        for (int pi = 0; pi < target->param_count; pi++) {
+                                            if (target->params[pi].is_keyword &&
+                                                strcmp(target->params[pi].name, kn) == 0 &&
+                                                target->params[pi].type.kind == SPINEL_TYPE_VALUE) {
+                                                vtype_t at = infer_type(ctx, assoc->value);
+                                                if (at.kind != SPINEL_TYPE_VALUE)
+                                                    target->params[pi].type = at;
+                                            }
+                                        }
+                                    }
+                                    found_kw_inner = true;
+                                }
+                            }
+                            if (!found_kw_inner) {
                             for (int pi = 0; pi < target->param_count &&
                                  pi < (int)cc->arguments->arguments.size; pi++) {
                                 vtype_t at = infer_type(ctx, cc->arguments->arguments.nodes[pi]);
@@ -2063,6 +2122,7 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                     if (vt_is_poly_eligible(target->params[pi].type) && vt_is_poly_eligible(at))
                                         target->params[pi].type = vt_prim(SPINEL_TYPE_POLY);
                                 }
+                            }
                             }
                             ctx->var_count = sv;
                         }

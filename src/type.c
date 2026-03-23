@@ -393,7 +393,8 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                 return vt_prim(SPINEL_TYPE_POLY);
             }
             if (vt_is_numeric(lt) || vt_is_numeric(rt) ||
-                lt.kind == SPINEL_TYPE_BOOLEAN || rt.kind == SPINEL_TYPE_BOOLEAN) {
+                lt.kind == SPINEL_TYPE_BOOLEAN || rt.kind == SPINEL_TYPE_BOOLEAN ||
+                (lt.kind == SPINEL_TYPE_VALUE && rt.kind == SPINEL_TYPE_VALUE)) {
                 result = binop_result(lt, rt, method);
                 free(method);
                 return result;

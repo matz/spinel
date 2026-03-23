@@ -749,6 +749,10 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             bool rt_ok = vt_is_numeric(rt) || rt.kind == SPINEL_TYPE_BOOLEAN;
             if (!lt_ok && lt.kind == SPINEL_TYPE_VALUE && rt_ok) lt_ok = true;
             if (!rt_ok && rt.kind == SPINEL_TYPE_VALUE && lt_ok) rt_ok = true;
+            /* Both VALUE: allow binary ops (VALUE is mrb_int underneath) */
+            if (!lt_ok && !rt_ok && lt.kind == SPINEL_TYPE_VALUE && rt.kind == SPINEL_TYPE_VALUE) {
+                lt_ok = true; rt_ok = true;
+            }
 
             if (c_op && lt_ok && rt_ok) {
                 char *left = codegen_expr(ctx, call->receiver);

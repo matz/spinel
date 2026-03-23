@@ -1363,6 +1363,26 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                             return r;
                         }
                     }
+                    /* Module method call: ModuleName.method(args) */
+                    module_info_t *mod = find_module(ctx, cls_name);
+                    if (mod) {
+                        for (int mi2 = 0; mi2 < mod->method_count; mi2++) {
+                            if (strcmp(mod->methods[mi2].name, method) == 0 &&
+                                mod->methods[mi2].is_class_method) {
+                                int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                                char *args = xstrdup("");
+                                for (int i = 0; i < argc; i++) {
+                                    char *a = codegen_expr(ctx, call->arguments->arguments.nodes[i]);
+                                    char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", a);
+                                    free(args); free(a);
+                                    args = na;
+                                }
+                                char *r = sfmt("sp_%s_%s(%s)", cls_name, sanitize_method(method), args);
+                                free(cls_name); free(args); free(method);
+                                return r;
+                            }
+                        }
+                    }
                     free(cls_name);
                 }
             }

@@ -1095,7 +1095,7 @@ static void analyze_module(codegen_ctx_t *ctx, pm_module_node_t *node) {
             /* def self.foo → module function; def foo → mixin method */
             if (def->receiver && PM_NODE_TYPE(def->receiver) == PM_SELF_NODE) {
                 m->is_class_method = true;
-                m->return_type = vt_prim(SPINEL_TYPE_FLOAT); /* for Rand::rand */
+                /* return type resolved later in resolve_class_types */
             }
 
             /* Parse parameters for mixin methods */

@@ -2711,4 +2711,30 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
             cls->is_value_type = all_simple && cls->ivar_count <= 4 && cls->ivar_count > 0;
         }
     }
+
+    /* Resolve module method return types from body */
+    for (int mi = 0; mi < ctx->module_count; mi++) {
+        module_info_t *mod = &ctx->modules[mi];
+        pm_parser_t *saved_p = ctx->parser;
+        if (mod->origin_parser) ctx->parser = mod->origin_parser;
+        for (int mj = 0; mj < mod->method_count; mj++) {
+            method_info_t *m = &mod->methods[mj];
+            if (m->return_type.kind != SPINEL_TYPE_VALUE) continue;
+            if (!m->body_node) continue;
+            int sv = ctx->var_count;
+            /* Register module ivars as local vars for inference */
+            for (int vi = 0; vi < mod->var_count; vi++)
+                var_declare(ctx, mod->vars[vi].name, mod->vars[vi].type, false);
+            for (int pi = 0; pi < m->param_count; pi++)
+                var_declare(ctx, m->params[pi].name, m->params[pi].type, false);
+            infer_pass(ctx, m->body_node);
+            vtype_t rt = infer_type(ctx, m->body_node);
+            ctx->var_count = sv;
+            for (int ci = sv; ci < MAX_VARS && ctx->vars[ci].name[0]; ci++)
+                ctx->vars[ci].name[0] = '\0';
+            if (rt.kind != SPINEL_TYPE_VALUE && rt.kind != SPINEL_TYPE_UNKNOWN)
+                m->return_type = rt;
+        }
+        ctx->parser = saved_p;
+    }
 }

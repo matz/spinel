@@ -2987,6 +2987,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 }
                 else if (strcmp(method, "succ") == 0)
                     r = sfmt("((%s) + 1)", recv);
+                else if (strcmp(method, "itself") == 0)
+                    r = sfmt("%s", recv);
                 if (r) { free(recv); free(method); return r; }
                 free(recv);
             }

@@ -161,6 +161,27 @@ func_info_t *find_func(codegen_ctx_t *ctx, const char *name) {
     return NULL;
 }
 
+/* Map built-in type name to spinel_type_t */
+spinel_type_t builtin_type_for_name(const char *name) {
+    if (strcmp(name, "String") == 0)  return SPINEL_TYPE_STRING;
+    if (strcmp(name, "Integer") == 0) return SPINEL_TYPE_INTEGER;
+    if (strcmp(name, "Float") == 0)   return SPINEL_TYPE_FLOAT;
+    if (strcmp(name, "Array") == 0)   return SPINEL_TYPE_ARRAY;
+    if (strcmp(name, "Hash") == 0)    return SPINEL_TYPE_HASH;
+    if (strcmp(name, "Symbol") == 0)  return SPINEL_TYPE_STRING;
+    return SPINEL_TYPE_UNKNOWN;
+}
+
+/* Find an extension method on a built-in type */
+method_info_t *find_ext_method(codegen_ctx_t *ctx, spinel_type_t recv_type, const char *name) {
+    for (int i = 0; i < ctx->ext_method_count; i++) {
+        if (ctx->ext_methods[i].recv_type == recv_type &&
+            strcmp(ctx->ext_methods[i].method.name, name) == 0)
+            return &ctx->ext_methods[i].method;
+    }
+    return NULL;
+}
+
 /* Track which classes a POLY function parameter can hold (for bimorphic dispatch) */
 void poly_class_add(codegen_ctx_t *ctx, const char *func_name,
                             int param_idx, const char *class_name) {
@@ -1406,9 +1427,75 @@ void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
     for (size_t i = 0; i < stmts->body.size; i++) {
         pm_node_t *s = stmts->body.nodes[i];
         switch (PM_NODE_TYPE(s)) {
-        case PM_CLASS_NODE:
-            analyze_class(ctx, (pm_class_node_t *)s);
+        case PM_CLASS_NODE: {
+            /* Check if this is reopening a built-in type */
+            pm_class_node_t *cn = (pm_class_node_t *)s;
+            bool is_builtin = false;
+            if (PM_NODE_TYPE(cn->constant_path) == PM_CONSTANT_READ_NODE) {
+                pm_constant_read_node_t *cr = (pm_constant_read_node_t *)cn->constant_path;
+                char *dn = cstr(ctx, cr->name);
+                spinel_type_t bt = builtin_type_for_name(dn);
+                if (bt != SPINEL_TYPE_UNKNOWN) {
+                    is_builtin = true;
+                    /* Register methods as extension methods on the built-in type */
+                    if (cn->body && PM_NODE_TYPE((pm_node_t *)cn->body) == PM_STATEMENTS_NODE) {
+                        pm_statements_node_t *bstmts = (pm_statements_node_t *)cn->body;
+                        for (size_t bi = 0; bi < bstmts->body.size; bi++) {
+                            pm_node_t *bs = bstmts->body.nodes[bi];
+                            if (PM_NODE_TYPE(bs) == PM_DEF_NODE && ctx->ext_method_count < MAX_EXT_METHODS) {
+                                pm_def_node_t *def = (pm_def_node_t *)bs;
+                                int idx = ctx->ext_method_count++;
+                                memset(&ctx->ext_methods[idx], 0, sizeof(ctx->ext_methods[idx]));
+                                snprintf(ctx->ext_methods[idx].type_name, sizeof(ctx->ext_methods[idx].type_name), "%s", dn);
+                                ctx->ext_methods[idx].recv_type = bt;
+                                method_info_t *m = &ctx->ext_methods[idx].method;
+                                char *mname = cstr(ctx, def->name);
+                                snprintf(m->name, sizeof(m->name), "%s", mname);
+                                free(mname);
+                                m->body_node = def->body ? (pm_node_t *)def->body : NULL;
+                                m->params_node = def->parameters ? (pm_node_t *)def->parameters : NULL;
+                                m->origin_parser = ctx->parser;
+                                m->return_type = vt_prim(SPINEL_TYPE_VALUE);
+
+                                /* Extract parameters */
+                                if (def->parameters) {
+                                    pm_parameters_node_t *params = def->parameters;
+                                    for (size_t pi = 0; pi < params->requireds.size && m->param_count < MAX_PARAMS; pi++) {
+                                        pm_node_t *p = params->requireds.nodes[pi];
+                                        if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE) {
+                                            pm_required_parameter_node_t *rp = (pm_required_parameter_node_t *)p;
+                                            char *pname = cstr(ctx, rp->name);
+                                            snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                                            m->params[m->param_count].type = vt_prim(SPINEL_TYPE_VALUE);
+                                            m->param_count++;
+                                            free(pname);
+                                        }
+                                    }
+                                    /* Optional parameters */
+                                    for (size_t pi = 0; pi < params->optionals.size && m->param_count < MAX_PARAMS; pi++) {
+                                        pm_node_t *p = params->optionals.nodes[pi];
+                                        if (PM_NODE_TYPE(p) == PM_OPTIONAL_PARAMETER_NODE) {
+                                            pm_optional_parameter_node_t *op = (pm_optional_parameter_node_t *)p;
+                                            char *pname = cstr(ctx, op->name);
+                                            snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                                            m->params[m->param_count].type = infer_type(ctx, op->value);
+                                            m->params[m->param_count].is_optional = true;
+                                            m->params[m->param_count].default_node = op->value;
+                                            m->param_count++;
+                                            free(pname);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                free(dn);
+            }
+            if (!is_builtin)
+                analyze_class(ctx, (pm_class_node_t *)s);
             break;
+        }
         case PM_MODULE_NODE:
             analyze_module(ctx, (pm_module_node_t *)s);
             break;
@@ -3049,6 +3136,40 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     }
     emit_raw(ctx, "\n");
 
+    /* Forward declarations for extension methods on built-in types */
+    for (int i = 0; i < ctx->ext_method_count; i++) {
+        method_info_t *m = &ctx->ext_methods[i].method;
+        const char *tname = ctx->ext_methods[i].type_name;
+        spinel_type_t rt = ctx->ext_methods[i].recv_type;
+        char *ret_ct = vt_ctype(ctx, m->return_type, true);
+        bool ret_void = (m->return_type.kind == SPINEL_TYPE_NIL);
+        const char *c_mname = sanitize_method(m->name);
+        emit_raw(ctx, "static %s sp_%s_%s(",
+                 ret_void ? "void" : ret_ct, tname, c_mname);
+        /* self parameter: C type for the built-in receiver */
+        if (rt == SPINEL_TYPE_STRING)
+            emit_raw(ctx, "const char *");
+        else if (rt == SPINEL_TYPE_INTEGER)
+            emit_raw(ctx, "mrb_int");
+        else if (rt == SPINEL_TYPE_FLOAT)
+            emit_raw(ctx, "double");
+        else if (rt == SPINEL_TYPE_ARRAY)
+            emit_raw(ctx, "sp_IntArray *");
+        else if (rt == SPINEL_TYPE_HASH)
+            emit_raw(ctx, "sp_StrIntHash *");
+        else
+            emit_raw(ctx, "mrb_int");
+        for (int k = 0; k < m->param_count; k++) {
+            emit_raw(ctx, ", ");
+            char *pct = vt_ctype(ctx, m->params[k].type, true);
+            emit_raw(ctx, "%s", pct);
+            free(pct);
+        }
+        emit_raw(ctx, ");\n");
+        free(ret_ct);
+    }
+    if (ctx->ext_method_count > 0) emit_raw(ctx, "\n");
+
     /* Initialize functions for superclasses (called via super) */
     for (int i = 0; i < ctx->class_count; i++) {
         pm_parser_t *saved = ctx->parser;
@@ -3081,6 +3202,100 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
             emit_method(ctx, cls, m);
             ctx->parser = saved;
         }
+    }
+
+    /* Extension methods on built-in types */
+    for (int i = 0; i < ctx->ext_method_count; i++) {
+        method_info_t *m = &ctx->ext_methods[i].method;
+        const char *tname = ctx->ext_methods[i].type_name;
+        spinel_type_t rt = ctx->ext_methods[i].recv_type;
+        pm_parser_t *saved = ctx->parser;
+        if (m->origin_parser) ctx->parser = m->origin_parser;
+
+        char *ret_ct = vt_ctype(ctx, m->return_type, true);
+        bool ret_void = (m->return_type.kind == SPINEL_TYPE_NIL);
+        const char *c_mname = sanitize_method(m->name);
+        emit_raw(ctx, "static %s sp_%s_%s(",
+                 ret_void ? "void" : ret_ct, tname, c_mname);
+        /* self parameter */
+        if (rt == SPINEL_TYPE_STRING)
+            emit_raw(ctx, "const char *self");
+        else if (rt == SPINEL_TYPE_INTEGER)
+            emit_raw(ctx, "mrb_int self");
+        else if (rt == SPINEL_TYPE_FLOAT)
+            emit_raw(ctx, "double self");
+        else if (rt == SPINEL_TYPE_ARRAY)
+            emit_raw(ctx, "sp_IntArray *self");
+        else if (rt == SPINEL_TYPE_HASH)
+            emit_raw(ctx, "sp_StrIntHash *self");
+        else
+            emit_raw(ctx, "mrb_int self");
+        for (int k = 0; k < m->param_count; k++) {
+            emit_raw(ctx, ", ");
+            char *pct = vt_ctype(ctx, m->params[k].type, true);
+            emit_raw(ctx, "%s lv_%s", pct, m->params[k].name);
+            free(pct);
+        }
+        emit_raw(ctx, ") {\n");
+
+        /* Set up method context */
+        int saved_indent = ctx->indent;
+        int saved_var_count = ctx->var_count;
+        int saved_scope_floor = ctx->var_scope_floor;
+        ctx->var_scope_floor = saved_var_count;
+        for (int vi = saved_var_count; vi < MAX_VARS; vi++)
+            ctx->vars[vi].name[0] = '\0';
+        ctx->indent = 1;
+
+        /* Register parameters in var table */
+        for (int k = 0; k < m->param_count; k++)
+            var_declare(ctx, m->params[k].name, m->params[k].type, false);
+
+        int var_count_after_params = ctx->var_count;
+
+        /* Set extension method context for type inference */
+        spinel_type_t saved_ext_recv = ctx->ext_method_recv_type;
+        ctx->ext_method_recv_type = rt;
+
+        /* Infer local variables */
+        if (m->body_node) infer_pass(ctx, m->body_node);
+
+        /* Emit local variable declarations */
+        for (int vi = var_count_after_params; vi < ctx->var_count; vi++) {
+            var_entry_t *v = &ctx->vars[vi];
+            char *ct = vt_ctype(ctx, v->type, false);
+            char *cn = make_cname(v->name, v->is_constant);
+            const char *init = "";
+            if (v->type.kind == SPINEL_TYPE_INTEGER) init = " = 0";
+            else if (v->type.kind == SPINEL_TYPE_FLOAT) init = " = 0.0";
+            else if (v->type.kind == SPINEL_TYPE_BOOLEAN) init = " = FALSE";
+            else if (v->type.kind == SPINEL_TYPE_STRING) init = " = NULL";
+            emit(ctx, "%s %s%s;\n", ct, cn, init);
+            free(ct); free(cn);
+        }
+
+        /* Emit method body with implicit return */
+        class_info_t *saved_class = ctx->current_class;
+        method_info_t *saved_method = ctx->current_method;
+        ctx->current_class = NULL;
+        ctx->current_method = m;
+        ctx->ext_method_recv_type = rt;
+        bool saved_ir = ctx->implicit_return;
+        ctx->implicit_return = true;
+        if (m->body_node)
+            codegen_stmts(ctx, m->body_node);
+        ctx->implicit_return = saved_ir;
+        ctx->current_class = saved_class;
+        ctx->current_method = saved_method;
+        ctx->ext_method_recv_type = saved_ext_recv;
+
+        emit_raw(ctx, "}\n\n");
+
+        ctx->indent = saved_indent;
+        ctx->var_count = saved_var_count;
+        ctx->var_scope_floor = saved_scope_floor;
+        ctx->parser = saved;
+        free(ret_ct);
     }
 
     if (ctx->lambda_mode) {

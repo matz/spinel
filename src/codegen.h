@@ -184,6 +184,9 @@ typedef struct {
     /* When true, the last expression in a block should be emitted as a return */
     bool implicit_return;
 
+    /* Extension method emit context: receiver type when inside an ext method body */
+    spinel_type_t ext_method_recv_type;
+
     /* Lambda/closure codegen state */
     int lambda_counter;            /* unique ID for each lambda function */
     bool lambda_mode;              /* true when fizzbuzz-style lambda code detected */
@@ -275,6 +278,15 @@ typedef struct {
     } lambda_scope[MAX_LAMBDA_DEPTH];
     int lambda_scope_depth;
 
+    /* Extension methods on built-in types (open class support) */
+    #define MAX_EXT_METHODS 32
+    struct {
+        char type_name[64];    /* "String", "Integer", "Array", etc. */
+        method_info_t method;
+        spinel_type_t recv_type; /* SPINEL_TYPE_STRING, etc. */
+    } ext_methods[MAX_EXT_METHODS];
+    int ext_method_count;
+
     /* Source file path (for resolving require_relative) */
     const char *source_path;
 
@@ -343,6 +355,10 @@ method_info_t *find_method_inherited(codegen_ctx_t *ctx, class_info_t *cls, cons
 ivar_info_t *find_ivar(class_info_t *cls, const char *name);
 module_info_t *find_module(codegen_ctx_t *ctx, const char *name);
 func_info_t *find_func(codegen_ctx_t *ctx, const char *name);
+
+/* --- Extension method lookup (codegen.c) --- */
+method_info_t *find_ext_method(codegen_ctx_t *ctx, spinel_type_t recv_type, const char *name);
+spinel_type_t builtin_type_for_name(const char *name);
 
 /* --- Variable management (codegen.c) --- */
 var_entry_t *var_lookup(codegen_ctx_t *ctx, const char *name);

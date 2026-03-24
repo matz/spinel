@@ -3238,6 +3238,37 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 return xstrdup(result ? "TRUE" : "FALSE");
             }
 
+            /* Extension methods on built-in types (open class support) */
+            if (recv_t.kind == SPINEL_TYPE_STRING ||
+                recv_t.kind == SPINEL_TYPE_INTEGER ||
+                recv_t.kind == SPINEL_TYPE_FLOAT ||
+                recv_t.kind == SPINEL_TYPE_ARRAY ||
+                recv_t.kind == SPINEL_TYPE_HASH) {
+                method_info_t *em = find_ext_method(ctx, recv_t.kind, method);
+                if (em) {
+                    /* Find the type name for this extension method */
+                    const char *tname = NULL;
+                    for (int ei = 0; ei < ctx->ext_method_count; ei++) {
+                        if (&ctx->ext_methods[ei].method == em) {
+                            tname = ctx->ext_methods[ei].type_name;
+                            break;
+                        }
+                    }
+                    char *recv = codegen_expr(ctx, call->receiver);
+                    const char *c_mname = sanitize_method(method);
+                    int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                    char *args = xstrdup("");
+                    for (int ai = 0; ai < argc; ai++) {
+                        char *a = codegen_expr(ctx, call->arguments->arguments.nodes[ai]);
+                        char *na = sfmt("%s, %s", args, a);
+                        free(args); free(a); args = na;
+                    }
+                    char *r = sfmt("sp_%s_%s(%s%s)", tname, c_mname, recv, args);
+                    free(recv); free(args); free(method);
+                    return r;
+                }
+            }
+
             if (recv_t.kind == SPINEL_TYPE_OBJECT) {
                 class_info_t *cls = find_class(ctx, recv_t.klass);
                 if (cls) {
@@ -3725,6 +3756,107 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             }
             free(method);
             return xstrdup("((mrb_int)rand())");
+        }
+
+        /* Receiver-less: implicit self dispatch inside extension method body */
+        if (!call->receiver && ctx->ext_method_recv_type != SPINEL_TYPE_UNKNOWN) {
+            /* Treat receiver-less calls as calls on self with the known receiver type.
+             * For example, inside class String; def shout; upcase + "!"; end; end,
+             * 'upcase' is a call on self (which is a const char *). */
+            spinel_type_t ert = ctx->ext_method_recv_type;
+            if (ert == SPINEL_TYPE_STRING) {
+                /* Check if this is a known string method */
+                char *r = NULL;
+                if (strcmp(method, "upcase") == 0) r = sfmt("sp_str_upcase(self)");
+                else if (strcmp(method, "downcase") == 0) r = sfmt("sp_str_downcase(self)");
+                else if (strcmp(method, "reverse") == 0) r = sfmt("sp_str_reverse(self)");
+                else if (strcmp(method, "strip") == 0) r = sfmt("sp_str_strip(self)");
+                else if (strcmp(method, "chomp") == 0) r = sfmt("sp_str_chomp(self)");
+                else if (strcmp(method, "capitalize") == 0) r = sfmt("sp_str_capitalize(self)");
+                else if (strcmp(method, "length") == 0 || strcmp(method, "size") == 0)
+                    r = sfmt("((mrb_int)strlen(self))");
+                else if (strcmp(method, "to_i") == 0)
+                    r = sfmt("((mrb_int)strtol(self, NULL, 10))");
+                else if (strcmp(method, "to_f") == 0)
+                    r = sfmt("sp_str_to_f(self)");
+                else if (strcmp(method, "to_s") == 0)
+                    r = sfmt("self");
+                else if (strcmp(method, "empty?") == 0)
+                    r = sfmt("(strlen(self) == 0)");
+                /* Also check for other extension methods on the same type */
+                if (!r) {
+                    method_info_t *em = find_ext_method(ctx, ert, method);
+                    if (em) {
+                        const char *tname = NULL;
+                        for (int ei = 0; ei < ctx->ext_method_count; ei++)
+                            if (&ctx->ext_methods[ei].method == em) { tname = ctx->ext_methods[ei].type_name; break; }
+                        const char *c_mname = sanitize_method(method);
+                        int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                        char *args = xstrdup("");
+                        for (int ai = 0; ai < argc; ai++) {
+                            char *a = codegen_expr(ctx, call->arguments->arguments.nodes[ai]);
+                            char *na = sfmt("%s, %s", args, a);
+                            free(args); free(a); args = na;
+                        }
+                        r = sfmt("sp_%s_%s(self%s)", tname, c_mname, args);
+                        free(args);
+                    }
+                }
+                if (r) { free(method); return r; }
+            }
+            else if (ert == SPINEL_TYPE_INTEGER) {
+                char *r = NULL;
+                if (strcmp(method, "abs") == 0) r = sfmt("((self) < 0 ? -(self) : (self))");
+                else if (strcmp(method, "even?") == 0) r = sfmt("((self) %% 2 == 0)");
+                else if (strcmp(method, "odd?") == 0) r = sfmt("((self) %% 2 != 0)");
+                else if (strcmp(method, "zero?") == 0) r = sfmt("((self) == 0)");
+                else if (strcmp(method, "to_s") == 0) r = sfmt("sp_int_to_s(self)");
+                else if (strcmp(method, "to_f") == 0) r = sfmt("((double)(self))");
+                if (!r) {
+                    method_info_t *em = find_ext_method(ctx, ert, method);
+                    if (em) {
+                        const char *tname = NULL;
+                        for (int ei = 0; ei < ctx->ext_method_count; ei++)
+                            if (&ctx->ext_methods[ei].method == em) { tname = ctx->ext_methods[ei].type_name; break; }
+                        const char *c_mname = sanitize_method(method);
+                        int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                        char *args = xstrdup("");
+                        for (int ai = 0; ai < argc; ai++) {
+                            char *a = codegen_expr(ctx, call->arguments->arguments.nodes[ai]);
+                            char *na = sfmt("%s, %s", args, a);
+                            free(args); free(a); args = na;
+                        }
+                        r = sfmt("sp_%s_%s(self%s)", tname, c_mname, args);
+                        free(args);
+                    }
+                }
+                if (r) { free(method); return r; }
+            }
+            else if (ert == SPINEL_TYPE_FLOAT) {
+                char *r = NULL;
+                if (strcmp(method, "abs") == 0) r = sfmt("fabs(self)");
+                else if (strcmp(method, "to_i") == 0) r = sfmt("((mrb_int)(self))");
+                else if (strcmp(method, "to_s") == 0) r = sfmt("sp_float_to_s(self)");
+                if (!r) {
+                    method_info_t *em = find_ext_method(ctx, ert, method);
+                    if (em) {
+                        const char *tname = NULL;
+                        for (int ei = 0; ei < ctx->ext_method_count; ei++)
+                            if (&ctx->ext_methods[ei].method == em) { tname = ctx->ext_methods[ei].type_name; break; }
+                        const char *c_mname = sanitize_method(method);
+                        int argc = call->arguments ? (int)call->arguments->arguments.size : 0;
+                        char *args = xstrdup("");
+                        for (int ai = 0; ai < argc; ai++) {
+                            char *a = codegen_expr(ctx, call->arguments->arguments.nodes[ai]);
+                            char *na = sfmt("%s, %s", args, a);
+                            free(args); free(a); args = na;
+                        }
+                        r = sfmt("sp_%s_%s(self%s)", tname, c_mname, args);
+                        free(args);
+                    }
+                }
+                if (r) { free(method); return r; }
+            }
         }
 
         /* Receiver-less: top-level function or Kernel method */

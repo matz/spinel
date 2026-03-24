@@ -646,6 +646,15 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                     free(method); return vt_prim(SPINEL_TYPE_INTEGER);
                 }
             }
+            /* Extension methods on built-in types (open class support) */
+            {
+                method_info_t *em = find_ext_method(ctx, recv_t.kind, method);
+                if (em) {
+                    vtype_t rt = em->return_type;
+                    free(method);
+                    return rt;
+                }
+            }
         }
 
         /* Range#to_a → ARRAY */
@@ -824,6 +833,60 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
         if (!call->receiver && ctx->current_class) {
             method_info_t *cm = find_method_inherited(ctx, ctx->current_class, method, NULL);
             if (cm) { free(method); return cm->return_type; }
+        }
+
+        /* Receiver-less call inside extension method body → implicit self dispatch */
+        if (!call->receiver && ctx->ext_method_recv_type != SPINEL_TYPE_UNKNOWN) {
+            spinel_type_t ert = ctx->ext_method_recv_type;
+            if (ert == SPINEL_TYPE_STRING) {
+                if (strcmp(method, "upcase") == 0 || strcmp(method, "downcase") == 0 ||
+                    strcmp(method, "reverse") == 0 || strcmp(method, "strip") == 0 ||
+                    strcmp(method, "chomp") == 0 || strcmp(method, "capitalize") == 0 ||
+                    strcmp(method, "to_s") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_STRING);
+                }
+                if (strcmp(method, "length") == 0 || strcmp(method, "size") == 0 ||
+                    strcmp(method, "to_i") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+                }
+                if (strcmp(method, "to_f") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_FLOAT);
+                }
+                if (strcmp(method, "empty?") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_BOOLEAN);
+                }
+            }
+            if (ert == SPINEL_TYPE_INTEGER) {
+                if (strcmp(method, "abs") == 0 || strcmp(method, "succ") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+                }
+                if (strcmp(method, "even?") == 0 || strcmp(method, "odd?") == 0 ||
+                    strcmp(method, "zero?") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_BOOLEAN);
+                }
+                if (strcmp(method, "to_s") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_STRING);
+                }
+                if (strcmp(method, "to_f") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_FLOAT);
+                }
+            }
+            if (ert == SPINEL_TYPE_FLOAT) {
+                if (strcmp(method, "abs") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_FLOAT);
+                }
+                if (strcmp(method, "to_i") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+                }
+                if (strcmp(method, "to_s") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_STRING);
+                }
+            }
+            /* Also check registered extension methods on this type */
+            {
+                method_info_t *em = find_ext_method(ctx, ert, method);
+                if (em) { free(method); return em->return_type; }
+            }
         }
 
         /* Receiver-less call to top-level function */
@@ -1080,6 +1143,8 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_SELF_NODE:
         if (ctx->current_class)
             return vt_obj(ctx->current_class->name);
+        if (ctx->ext_method_recv_type != SPINEL_TYPE_UNKNOWN)
+            return vt_prim(ctx->ext_method_recv_type);
         return vt_prim(SPINEL_TYPE_VALUE);
 
     case PM_RANGE_NODE:
@@ -1723,6 +1788,30 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                 }
             }
             ctx->parser = saved_p2;
+        }
+
+        /* Resolve extension method return types from body inference */
+        for (int ei = 0; ei < ctx->ext_method_count; ei++) {
+            method_info_t *m = &ctx->ext_methods[ei].method;
+            if (m->return_type.kind != SPINEL_TYPE_VALUE || !m->body_node) continue;
+            pm_parser_t *saved_ep = ctx->parser;
+            if (m->origin_parser) ctx->parser = m->origin_parser;
+            int sv = ctx->var_count;
+            int sf = ctx->var_scope_floor;
+            ctx->var_scope_floor = sv;
+            spinel_type_t saved_ext = ctx->ext_method_recv_type;
+            ctx->ext_method_recv_type = ctx->ext_methods[ei].recv_type;
+            for (int pi = 0; pi < m->param_count; pi++)
+                var_declare(ctx, m->params[pi].name, m->params[pi].type, false);
+            vtype_t rt = infer_type(ctx, m->body_node);
+            ctx->var_count = sv;
+            ctx->var_scope_floor = sf;
+            ctx->ext_method_recv_type = saved_ext;
+            for (int vi = sv; vi < MAX_VARS && ctx->vars[vi].name[0]; vi++)
+                ctx->vars[vi].name[0] = '\0';
+            ctx->parser = saved_ep;
+            if (rt.kind != SPINEL_TYPE_VALUE && rt.kind != SPINEL_TYPE_UNKNOWN)
+                m->return_type = rt;
         }
 
         /* Infer method param types from body: if param.foo() where foo is a method

@@ -1766,9 +1766,36 @@ void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out,
 }
 
 /* Check if AST contains any lambda nodes (recursive scan) */
+/* Check if a lambda contains nested lambdas (Church encoding pattern).
+ * Simple -> { } lambdas are compiled as sp_Proc, not lambda mode. */
+static bool is_deep_lambda(pm_node_t *body) {
+    if (!body) return false;
+    pm_node_t *stack[64]; int sp = 0;
+    stack[sp++] = body;
+    while (sp > 0) {
+        pm_node_t *cur = stack[--sp];
+        if (!cur) continue;
+        if (PM_NODE_TYPE(cur) == PM_LAMBDA_NODE) return true;
+        if (PM_NODE_TYPE(cur) == PM_STATEMENTS_NODE) {
+            pm_statements_node_t *s = (pm_statements_node_t *)cur;
+            for (size_t i = 0; i < s->body.size && sp < 62; i++)
+                stack[sp++] = s->body.nodes[i];
+        }
+        if (PM_NODE_TYPE(cur) == PM_LOCAL_VARIABLE_WRITE_NODE) {
+            pm_local_variable_write_node_t *w = (pm_local_variable_write_node_t *)cur;
+            if (sp < 62) stack[sp++] = w->value;
+        }
+    }
+    return false;
+}
+
 static bool has_lambda_nodes(pm_node_t *node) {
     if (!node) return false;
-    if (PM_NODE_TYPE(node) == PM_LAMBDA_NODE) return true;
+    /* Only trigger lambda mode for NESTED lambdas (lambda inside lambda) */
+    if (PM_NODE_TYPE(node) == PM_LAMBDA_NODE) {
+        pm_lambda_node_t *lam = (pm_lambda_node_t *)node;
+        return is_deep_lambda((pm_node_t *)lam->body);
+    }
 
     switch (PM_NODE_TYPE(node)) {
     case PM_PROGRAM_NODE: {

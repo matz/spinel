@@ -4538,7 +4538,92 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
 
     case PM_LAMBDA_NODE: {
         pm_lambda_node_t *lam = (pm_lambda_node_t *)node;
-        return codegen_lambda(ctx, lam);
+        if (ctx->lambda_mode)
+            return codegen_lambda(ctx, lam);
+
+        /* Non-lambda-mode: compile -> as sp_Proc (like proc {}) */
+        ctx->needs_proc = true;
+        char *bpname = NULL;
+        if (lam->parameters) {
+            /* Extract first parameter from PM_BLOCK_PARAMETERS_NODE or PM_NUMBERED_PARAMETERS_NODE */
+            if (PM_NODE_TYPE(lam->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)lam->parameters;
+                if (bp->parameters && bp->parameters->requireds.size > 0) {
+                    pm_node_t *p = bp->parameters->requireds.nodes[0];
+                    if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                        bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                }
+            } else if (PM_NODE_TYPE(lam->parameters) == PM_NUMBERED_PARAMETERS_NODE) {
+                bpname = xstrdup("_1");
+            }
+        }
+
+        int blk_id = ctx->block_counter++;
+        /* Scan captures */
+        capture_list_t captures = {0};
+        capture_list_t local_defs = {0};
+        if (bpname) capture_list_add(&local_defs, bpname);
+        if (lam->body) scan_captures(ctx, (pm_node_t *)lam->body, bpname, &local_defs, &captures);
+
+        /* Generate block body */
+        char *body_processed = NULL;
+        if (lam->body && ctx->block_out) {
+            FILE *saved_out = ctx->out;
+            ctx->out = open_memstream(&body_processed, &(size_t){0});
+            int saved_indent = ctx->indent;
+            ctx->indent = 1;
+            if (PM_NODE_TYPE(lam->body) == PM_STATEMENTS_NODE) {
+                pm_statements_node_t *stmts = (pm_statements_node_t *)lam->body;
+                for (size_t i = 0; i + 1 < stmts->body.size; i++)
+                    codegen_stmt(ctx, stmts->body.nodes[i]);
+                if (stmts->body.size > 0) {
+                    char *val = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
+                    emit(ctx, "return %s;\n", val);
+                    free(val);
+                }
+            }
+            fclose(ctx->out);
+            ctx->out = saved_out;
+            ctx->indent = saved_indent;
+        }
+
+        /* Write block function */
+        if (ctx->block_out) {
+            fprintf(ctx->block_out, "typedef struct { ");
+            for (int i = 0; i < captures.count; i++)
+                fprintf(ctx->block_out, "mrb_int *%s; ", captures.names[i]);
+            if (captures.count == 0) fprintf(ctx->block_out, "int _dummy; ");
+            fprintf(ctx->block_out, "} _blk_%d_env;\n", blk_id);
+            fprintf(ctx->block_out, "static mrb_int _blk_%d(void *_env, mrb_int _arg) {\n", blk_id);
+            fprintf(ctx->block_out, "    _blk_%d_env *_e = (_blk_%d_env *)_env;\n", blk_id, blk_id);
+            if (bpname) {
+                char *cn = make_cname(bpname, false);
+                fprintf(ctx->block_out, "    mrb_int %s = _arg;\n", cn);
+                free(cn);
+            }
+            if (body_processed)
+                fprintf(ctx->block_out, "%s", body_processed);
+            fprintf(ctx->block_out, "    return 0;\n}\n\n");
+        }
+        free(body_processed);
+
+        int tmp = ctx->temp_counter++;
+        if (captures.count > 0) {
+            emit(ctx, "_blk_%d_env _env_%d = { ", blk_id, blk_id);
+            for (int i = 0; i < captures.count; i++) {
+                char *cn = make_cname(captures.names[i], false);
+                emit_raw(ctx, "%s&%s", i > 0 ? ", " : "", cn);
+                free(cn);
+            }
+            emit_raw(ctx, " };\n");
+            emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, &_env_%d);\n",
+                 tmp, blk_id, blk_id);
+        } else {
+            emit(ctx, "sp_Proc *_proc_%d = sp_Proc_new((sp_block_fn)_blk_%d, NULL);\n",
+                 tmp, blk_id);
+        }
+        free(bpname);
+        return sfmt("_proc_%d", tmp);
     }
 
     case PM_YIELD_NODE: {

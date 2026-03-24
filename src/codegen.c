@@ -337,12 +337,44 @@ const char *sanitize_method(const char *name) {
     return name;
 }
 /* ------------------------------------------------------------------ */
+/* Dynamic method array helpers                                       */
+/* ------------------------------------------------------------------ */
+
+static method_info_t *class_add_method(class_info_t *cls) {
+    if (cls->method_count >= cls->methods_cap) {
+        cls->methods_cap = cls->methods_cap ? cls->methods_cap * 2 : 16;
+        cls->methods = realloc(cls->methods, sizeof(method_info_t) * cls->methods_cap);
+    }
+    method_info_t *m = &cls->methods[cls->method_count++];
+    memset(m, 0, sizeof(*m));
+    return m;
+}
+
+static method_info_t *module_add_method(module_info_t *mod) {
+    if (mod->method_count >= mod->methods_cap) {
+        mod->methods_cap = mod->methods_cap ? mod->methods_cap * 2 : 16;
+        mod->methods = realloc(mod->methods, sizeof(method_info_t) * mod->methods_cap);
+    }
+    method_info_t *m = &mod->methods[mod->method_count++];
+    memset(m, 0, sizeof(*m));
+    return m;
+}
+
+/* Ensure class methods array has room for one more entry (no increment) */
+static void class_ensure_methods(class_info_t *cls, int need) {
+    if (need >= cls->methods_cap) {
+        while (cls->methods_cap <= need)
+            cls->methods_cap = cls->methods_cap ? cls->methods_cap * 2 : 16;
+        cls->methods = realloc(cls->methods, sizeof(method_info_t) * cls->methods_cap);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Pass 1: Class/Module/Function analysis                             */
 /* ------------------------------------------------------------------ */
 
 static void analyze_method(codegen_ctx_t *ctx, class_info_t *cls,
                            pm_def_node_t *def) {
-    if (cls->method_count >= MAX_METHODS) return;
     /* Skip if method already registered (class reopening) */
     {
         char *dn = cstr(ctx, def->name);
@@ -350,8 +382,7 @@ static void analyze_method(codegen_ctx_t *ctx, class_info_t *cls,
         free(dn);
         if (existing) return;
     }
-    method_info_t *m = &cls->methods[cls->method_count++];
-    memset(m, 0, sizeof(*m));
+    method_info_t *m = class_add_method(cls);
     char *name = cstr(ctx, def->name);
     snprintf(m->name, sizeof(m->name), "%s", name);
     free(name);
@@ -688,8 +719,7 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
                 }
 
                 /* Create initialize method with struct fields as params */
-                method_info_t *init = &cls->methods[cls->method_count++];
-                memset(init, 0, sizeof(*init));
+                method_info_t *init = class_add_method(cls);
                 snprintf(init->name, sizeof(init->name), "initialize");
                 init->return_type = vt_obj(cls->name);
 
@@ -714,16 +744,14 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
                     init->param_count++;
 
                     /* Getter */
-                    method_info_t *getter = &cls->methods[cls->method_count++];
-                    memset(getter, 0, sizeof(*getter));
+                    method_info_t *getter = class_add_method(cls);
                     snprintf(getter->name, sizeof(getter->name), "%s", fname);
                     getter->is_getter = true;
                     snprintf(getter->accessor_ivar, sizeof(getter->accessor_ivar), "%s", escape_c_keyword(fname));
                     getter->return_type = vt_prim(SPINEL_TYPE_INTEGER);
 
                     /* Setter */
-                    method_info_t *setter = &cls->methods[cls->method_count++];
-                    memset(setter, 0, sizeof(*setter));
+                    method_info_t *setter = class_add_method(cls);
                     snprintf(setter->name, sizeof(setter->name), "%s=", fname);
                     setter->is_setter = true;
                     snprintf(setter->accessor_ivar, sizeof(setter->accessor_ivar), "%s", escape_c_keyword(fname));
@@ -747,9 +775,7 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
 
             /* def self.foo → class method */
             if (def->receiver && PM_NODE_TYPE(def->receiver) == PM_SELF_NODE) {
-                if (cls->method_count >= MAX_METHODS) continue;
-                method_info_t *m = &cls->methods[cls->method_count++];
-                memset(m, 0, sizeof(*m));
+                method_info_t *m = class_add_method(cls);
                 char *name = cstr(ctx, def->name);
                 snprintf(m->name, sizeof(m->name), "%s", name);
                 free(name);
@@ -817,9 +843,8 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
 
                     /* Generate getter (skip if already registered) */
                     if ((is_accessor || is_reader) &&
-                        !find_method(cls, sym_name) && cls->method_count < MAX_METHODS) {
-                        method_info_t *m = &cls->methods[cls->method_count++];
-                        memset(m, 0, sizeof(*m));
+                        !find_method(cls, sym_name)) {
+                        method_info_t *m = class_add_method(cls);
                         snprintf(m->name, sizeof(m->name), "%s", sym_name);
                         m->body_node = NULL;
                         m->params_node = NULL;
@@ -836,8 +861,8 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
                     char setter_name[64];
                     snprintf(setter_name, sizeof(setter_name), "%.62s=", sym_name);
                     if ((is_accessor || is_writer) &&
-                        !find_method(cls, setter_name) && cls->method_count < MAX_METHODS) {
-                        method_info_t *m = &cls->methods[cls->method_count++];
+                        !find_method(cls, setter_name)) {
+                        method_info_t *m = class_add_method(cls);
                         snprintf(m->name, sizeof(m->name), "%.62s=", sym_name);
                         m->body_node = NULL;
                         m->params_node = NULL;
@@ -880,9 +905,8 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
                     size_t len = pm_string_length(&sym->unescaped);
                     char dname[64];
                     snprintf(dname, sizeof(dname), "%.*s", (int)len, (const char *)src);
-                    if (!find_method(cls, dname) && cls->method_count < MAX_METHODS) {
-                        method_info_t *m = &cls->methods[cls->method_count++];
-                        memset(m, 0, sizeof(*m));
+                    if (!find_method(cls, dname)) {
+                        method_info_t *m = class_add_method(cls);
                         snprintf(m->name, sizeof(m->name), "%s", dname);
                         m->return_type = vt_prim(SPINEL_TYPE_VALUE);
                         /* Try to resolve delegate target's method signature */
@@ -992,9 +1016,10 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
                 snprintf(old_name, sizeof(old_name), "%.*s", (int)ol, os);
                 /* Find the old method and copy it with the new name */
                 for (int mi = 0; mi < cls->method_count; mi++) {
-                    if (strcmp(cls->methods[mi].name, old_name) == 0 &&
-                        cls->method_count < MAX_METHODS) {
-                        cls->methods[cls->method_count] = cls->methods[mi];
+                    if (strcmp(cls->methods[mi].name, old_name) == 0) {
+                        method_info_t tmp = cls->methods[mi];
+                        class_ensure_methods(cls, cls->method_count);
+                        cls->methods[cls->method_count] = tmp;
                         snprintf(cls->methods[cls->method_count].name,
                                  sizeof(cls->methods[cls->method_count].name),
                                  "%s", new_name);
@@ -1095,8 +1120,7 @@ static void analyze_module(codegen_ctx_t *ctx, pm_module_node_t *node) {
         pm_node_t *s = stmts->body.nodes[i];
         if (PM_NODE_TYPE(s) == PM_DEF_NODE) {
             pm_def_node_t *def = (pm_def_node_t *)s;
-            method_info_t *m = &mod->methods[mod->method_count++];
-            memset(m, 0, sizeof(*m));
+            method_info_t *m = module_add_method(mod);
             char *name = cstr(ctx, def->name);
             snprintf(m->name, sizeof(m->name), "%s", name);
             free(name);
@@ -1469,8 +1493,7 @@ void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
                         }
 
                         /* Each symbol arg becomes an ivar + getter + setter */
-                        method_info_t *init = &cls->methods[cls->method_count++];
-                        memset(init, 0, sizeof(*init));
+                        method_info_t *init = class_add_method(cls);
                         snprintf(init->name, sizeof(init->name), "initialize");
                         init->return_type = vt_obj(name);
 
@@ -1495,16 +1518,14 @@ void class_analysis_pass(codegen_ctx_t *ctx, pm_node_t *root) {
                             init->param_count++;
 
                             /* Getter */
-                            method_info_t *getter = &cls->methods[cls->method_count++];
-                            memset(getter, 0, sizeof(*getter));
+                            method_info_t *getter = class_add_method(cls);
                             snprintf(getter->name, sizeof(getter->name), "%s", fname);
                             getter->is_getter = true;
                             snprintf(getter->accessor_ivar, sizeof(getter->accessor_ivar), "%s", escape_c_keyword(fname));
                             getter->return_type = vt_prim(SPINEL_TYPE_INTEGER);
 
                             /* Setter */
-                            method_info_t *setter = &cls->methods[cls->method_count++];
-                            memset(setter, 0, sizeof(*setter));
+                            method_info_t *setter = class_add_method(cls);
                             snprintf(setter->name, sizeof(setter->name), "%s=", fname);
                             setter->is_setter = true;
                             snprintf(setter->accessor_ivar, sizeof(setter->accessor_ivar), "%s", escape_c_keyword(fname));
@@ -2573,7 +2594,7 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                 if (mm->is_class_method) continue;
                 /* Don't override methods the class already defines */
                 if (find_method(cls, mm->name)) continue;
-                if (cls->method_count >= MAX_METHODS) continue;
+                class_ensure_methods(cls, cls->method_count);
                 cls->methods[cls->method_count] = *mm;
                 cls->method_count++;
             }
@@ -2598,9 +2619,7 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
         static const char *comp_ops[] = { "<", ">", "<=", ">=", "==" };
         for (int oi = 0; oi < 5; oi++) {
             if (find_method(cls, comp_ops[oi])) continue; /* already defined */
-            if (cls->method_count >= MAX_METHODS) continue;
-            method_info_t *m = &cls->methods[cls->method_count++];
-            memset(m, 0, sizeof(*m));
+            method_info_t *m = class_add_method(cls);
             snprintf(m->name, sizeof(m->name), "%s", comp_ops[oi]);
             m->body_node = NULL; /* synthetic — handled specially in emit */
             m->params_node = NULL;

@@ -90,8 +90,9 @@ typedef struct {
     ivar_info_t ivars[MAX_IVARS];
     int ivar_count;
     int own_ivar_start;    /* index where this class's own ivars begin (after inherited) */
-    method_info_t methods[MAX_METHODS];
+    method_info_t *methods;
     int method_count;
+    int methods_cap;
     bool is_value_type;    /* pass by value (small: e.g., Vec) */
     pm_node_t *class_node; /* AST node of the class definition */
     char includes[MAX_INCLUDES][64]; /* included module names */
@@ -110,8 +111,9 @@ typedef struct {
 /* Module info (for module Rand etc.) */
 typedef struct {
     char name[64];
-    method_info_t methods[MAX_METHODS];
+    method_info_t *methods;
     int method_count;
+    int methods_cap;
     ivar_info_t vars[MAX_IVARS];  /* module-level instance vars */
     int var_count;
     module_const_t consts[MAX_IVARS]; /* module-level constants */

@@ -143,6 +143,11 @@ int main(int argc, char **argv) {
         free(ctx->required_files[i].source);
         free(ctx->required_files[i].path);
     }
+    /* Free dynamically allocated method arrays */
+    for (int i = 0; i < ctx->class_count; i++)
+        free(ctx->classes[i].methods);
+    for (int i = 0; i < ctx->module_count; i++)
+        free(ctx->modules[i].methods);
     free(ctx);
 
     /* Cleanup */

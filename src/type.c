@@ -350,6 +350,26 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                         return vt_prim(SPINEL_TYPE_FLOAT_ARRAY);
                     }
                 }
+                /* Array.new(n) { block } — type depends on block body */
+                if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                    pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                    if (blk->body) {
+                        pm_node_t *body = (pm_node_t *)blk->body;
+                        pm_node_t *last = body;
+                        if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                            if (stmts->body.size > 0)
+                                last = stmts->body.nodes[stmts->body.size - 1];
+                        }
+                        vtype_t bt = infer_type(ctx, last);
+                        if (bt.kind == SPINEL_TYPE_FLOAT) {
+                            free(cls_name); free(method);
+                            return vt_prim(SPINEL_TYPE_FLOAT_ARRAY);
+                        }
+                    }
+                    free(cls_name); free(method);
+                    return vt_prim(SPINEL_TYPE_ARRAY);
+                }
                 free(cls_name); free(method);
                 return vt_prim(SPINEL_TYPE_ARRAY);
             }
@@ -647,6 +667,26 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                             free(cls_name); free(method);
                             return vt_prim(SPINEL_TYPE_FLOAT_ARRAY);
                         }
+                    }
+                    /* Array.new(n) { block } — type depends on block body */
+                    if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                        pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                        if (blk->body) {
+                            pm_node_t *body = (pm_node_t *)blk->body;
+                            pm_node_t *last = body;
+                            if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                                pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                                if (stmts->body.size > 0)
+                                    last = stmts->body.nodes[stmts->body.size - 1];
+                            }
+                            vtype_t bt = infer_type(ctx, last);
+                            if (bt.kind == SPINEL_TYPE_FLOAT) {
+                                free(cls_name); free(method);
+                                return vt_prim(SPINEL_TYPE_FLOAT_ARRAY);
+                            }
+                        }
+                        free(cls_name); free(method);
+                        return vt_prim(SPINEL_TYPE_ARRAY);
                     }
                     free(cls_name); free(method);
                     return vt_prim(SPINEL_TYPE_ARRAY);
@@ -1141,6 +1181,13 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
                 PM_NODE_TYPE(vc->receiver) == PM_CONSTANT_READ_NODE) {
                 pm_constant_read_node_t *cr = (pm_constant_read_node_t *)vc->receiver;
                 if (ceq(ctx, cr->name, "Array")) {
+                    /* Array.new(n) { block } — dynamic array, skip fixed-size */
+                    if (vc->block && PM_NODE_TYPE(vc->block) == PM_BLOCK_NODE) {
+                        /* type already inferred correctly (ARRAY or FLOAT_ARRAY) */
+                        var_declare(ctx, name, type, false);
+                        free(mname); free(name);
+                        break;
+                    }
                     /* Check if there's a size argument → fixed C array (ao_render) */
                     int arr_size = 0;
                     if (vc->arguments && vc->arguments->arguments.size == 1 &&

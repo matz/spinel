@@ -1125,6 +1125,56 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                     free(sz); free(dv); free(cls_name); free(method);
                     return sfmt("_anew_%d", tmp);
                 }
+                /* Array.new(size) { |i| expr } — block form */
+                if (argc == 1 && call->block &&
+                    PM_NODE_TYPE(call->block) == PM_BLOCK_NODE) {
+                    pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                    char *bpname = extract_block_param(ctx, blk);
+                    char *sz = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    int tmp = ctx->temp_counter++;
+                    vtype_t body_type = vt_prim(SPINEL_TYPE_INTEGER);
+                    if (blk->body) {
+                        pm_node_t *body = (pm_node_t *)blk->body;
+                        pm_node_t *last = body;
+                        if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                            if (stmts->body.size > 0)
+                                last = stmts->body.nodes[stmts->body.size - 1];
+                        }
+                        body_type = infer_type(ctx, last);
+                    }
+                    bool is_float = (body_type.kind == SPINEL_TYPE_FLOAT);
+                    char *cn = bpname ? make_cname(bpname, false) : sfmt("_abi_%d", tmp);
+                    if (is_float) {
+                        emit(ctx, "sp_FloatArray *_anew_%d = sp_FloatArray_new();\n", tmp);
+                    } else {
+                        emit(ctx, "sp_IntArray *_anew_%d = sp_IntArray_new();\n", tmp);
+                    }
+                    emit(ctx, "for (mrb_int %s = 0; %s < %s; %s++) {\n", cn, cn, sz, cn);
+                    ctx->indent++;
+                    char *body_expr = NULL;
+                    if (blk->body) {
+                        pm_node_t *body = (pm_node_t *)blk->body;
+                        if (PM_NODE_TYPE(body) == PM_STATEMENTS_NODE) {
+                            pm_statements_node_t *stmts = (pm_statements_node_t *)body;
+                            if (stmts->body.size > 0)
+                                body_expr = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
+                        } else {
+                            body_expr = codegen_expr(ctx, body);
+                        }
+                    }
+                    if (body_expr) {
+                        if (is_float)
+                            emit(ctx, "sp_FloatArray_push(_anew_%d, %s);\n", tmp, body_expr);
+                        else
+                            emit(ctx, "sp_IntArray_push(_anew_%d, %s);\n", tmp, body_expr);
+                        free(body_expr);
+                    }
+                    ctx->indent--;
+                    emit(ctx, "}\n");
+                    free(sz); free(cn); free(bpname); free(cls_name); free(method);
+                    return sfmt("_anew_%d", tmp);
+                }
                 if (argc == 1) {
                     /* Array.new(size) — zero-filled */
                     char *sz = codegen_expr(ctx, call->arguments->arguments.nodes[0]);

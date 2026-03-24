@@ -1434,7 +1434,7 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
                         spinel_type_t bp_type = SPINEL_TYPE_INTEGER;
                         {
                             char *meth = cstr(ctx, call->name);
-                            if (strcmp(meth, "scan") == 0)
+                            if (strcmp(meth, "scan") == 0 || strcmp(meth, "each_char") == 0)
                                 bp_type = SPINEL_TYPE_STRING;
                             /* File.open block param → FILE type */
                             if (strcmp(meth, "open") == 0 && call->receiver &&

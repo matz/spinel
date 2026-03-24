@@ -1128,6 +1128,42 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
             }
         }
 
+        /* String#each_char with block → iterate over characters */
+        if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE &&
+            strcmp(method, "each_char") == 0 && call->receiver) {
+            vtype_t recv_t = infer_type(ctx, call->receiver);
+            if (recv_t.kind == SPINEL_TYPE_STRING || recv_t.kind == SPINEL_TYPE_SP_STRING) {
+                pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *bpname = extract_block_param(ctx, blk);
+                const char *cstr_expr = (recv_t.kind == SPINEL_TYPE_SP_STRING)
+                    ? sfmt("sp_String_cstr(%s)", recv) : recv;
+                int tmp = ctx->temp_counter++;
+                emit(ctx, "{ const char *_cs_%d = %s; mrb_int _cl_%d = (mrb_int)strlen(_cs_%d);\n",
+                     tmp, cstr_expr, tmp, tmp);
+                emit(ctx, "for (mrb_int _ci_%d = 0; _ci_%d < _cl_%d; _ci_%d++) {\n",
+                     tmp, tmp, tmp, tmp);
+                ctx->indent++;
+                if (bpname) {
+                    char *cn = make_cname(bpname, false);
+                    emit(ctx, "char _cbuf_%d[2] = { _cs_%d[_ci_%d], 0 };\n", tmp, tmp, tmp);
+                    emit(ctx, "const char *%s = _cbuf_%d;\n", cn, tmp);
+                    free(cn);
+                }
+                if (blk->body) {
+                    bool saved_ir = ctx->implicit_return;
+                    ctx->implicit_return = false;
+                    codegen_stmts(ctx, (pm_node_t *)blk->body);
+                    ctx->implicit_return = saved_ir;
+                }
+                ctx->indent--;
+                emit(ctx, "} }\n");
+                if (recv_t.kind == SPINEL_TYPE_SP_STRING) free((char *)cstr_expr);
+                free(recv); free(bpname); free(method);
+                break;
+            }
+        }
+
         /* String#each_line with block → split by newline and iterate */
         if (call->block && PM_NODE_TYPE(call->block) == PM_BLOCK_NODE &&
             strcmp(method, "each_line") == 0 && call->receiver) {

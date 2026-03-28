@@ -908,9 +908,7 @@ module Spinel
       param_types.each do |mname, param_map|
         param_map.each do |idx, types|
           types.delete(Type::UNKNOWN)
-          # If all types are numeric (INTEGER and FLOAT), coerce to FLOAT, not POLY
-          numeric_only = types.size > 1 && types.all? { |t| t == Type::INTEGER || t == Type::FLOAT }
-          if types.size > 1 && !numeric_only
+          if types.size > 1
             @poly_method_params[mname] ||= Set.new
             @poly_method_params[mname] << idx
             @needs_poly = true

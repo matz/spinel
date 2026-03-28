@@ -29,6 +29,9 @@ module Spinel
     SYMBOL    = :symbol        # treated as string
     TIME      = :time
     FILE_OBJ  = :file_obj
+    STRINGIO  = :stringio
+    PROC      = :proc
+    POLY      = :poly       # NaN-boxed sp_RbValue
   end
 
   # -------- Data structures --------
@@ -70,6 +73,9 @@ module Spinel
       @needs_file = false
       @needs_system = false
       @needs_catch_throw = false
+      @needs_stringio = false
+      @needs_proc = false
+      @needs_poly = false
       @string_helpers_needed = Set.new
       @forward_decls = []
       @struct_decls = []
@@ -102,6 +108,9 @@ module Spinel
 
       # Phase 2: infer types for methods
       infer_method_types
+
+      # Phase 2.5: detect polymorphic variables and method params
+      detect_poly(root)
 
       # Phase 3: generate code
       generate_code(root)
@@ -447,6 +456,13 @@ module Spinel
       has_yield = body_has_yield?(node.body)
       has_kwargs = node.parameters && (node.parameters.keywords || []).any?
 
+      # Detect &block parameter
+      block_param_name = nil
+      if node.parameters && node.parameters.block.is_a?(Prism::BlockParameterNode)
+        block_param_name = node.parameters.block.name.to_s
+        has_yield = true  # &block implies the method receives a block
+      end
+
       mi = MethodInfo.new(
         name: name, params: params, return_type: Type::UNKNOWN,
         body: node.body, has_yield: has_yield,
@@ -454,6 +470,7 @@ module Spinel
         default_values: defaults, has_rest: has_rest, rest_name: rest_name,
         has_kwargs: has_kwargs
       )
+      mi.instance_variable_set(:@block_param_name, block_param_name)
 
       if owner
         if is_class_method
@@ -622,6 +639,12 @@ module Spinel
       ast2 = Prism.parse(@source).value
       scan_call_sites(ast2)
 
+      # Third pass: after var_types_global has been fully updated (including float upgrades),
+      # re-scan to propagate upgraded types to method params (e.g., cur_r becomes float
+      # from += operator, then mandelbrot(cur_r, cur_i) should get float params)
+      ast3 = Prism.parse(@source).value
+      scan_call_sites(ast3)
+
       # Scan all method bodies for attr assignments to refine nil-initialized ivars
       # e.g., n.left = make_node(x) where n is a Node and left was nil-initialized
       # Done after method return type inference so return types are known
@@ -674,6 +697,125 @@ module Spinel
       end
     end
 
+    def detect_poly(root)
+      @poly_vars = Set.new       # variable names that need sp_RbValue
+      @poly_method_params = {}   # method_name -> Set of param indices that are poly
+
+      # Track all types assigned to each variable
+      var_types = {}   # var_name -> Set of types
+      param_types = {} # method_name -> { param_idx -> Set of types }
+
+      # Scan all assignment sites
+      scan_poly_types(root, var_types, param_types)
+
+      # Mark variables with multiple types as poly
+      var_types.each do |vname, types|
+        types.delete(Type::UNKNOWN)
+        types.delete(Type::NIL)
+        if types.size > 1
+          @poly_vars << vname
+          @needs_poly = true
+        end
+        # Also mark if assigned nil AND another type (nilable)
+        if types.include?(Type::NIL) && types.any? { |t| t != Type::NIL }
+          # Don't need poly for nilable object types
+        end
+      end
+
+      # Mark method params called with multiple types
+      param_types.each do |mname, param_map|
+        param_map.each do |idx, types|
+          types.delete(Type::UNKNOWN)
+          if types.size > 1
+            @poly_method_params[mname] ||= Set.new
+            @poly_method_params[mname] << idx
+            @needs_poly = true
+            # Update the method param type
+            if @methods[mname] && idx < @methods[mname].params.length
+              @methods[mname].params[idx].type = Type::POLY
+            end
+          end
+        end
+      end
+
+      # Update method return types if they return poly params or poly expressions
+      @methods.each do |mname, mi|
+        next unless mi.body
+        if mi.params.any? { |p| p.type == Type::POLY }
+          if body_returns_poly_param?(mi.body, mi)
+            mi.return_type = Type::POLY
+          end
+          # Re-infer body type considering poly params
+          # For methods like show(x) { puts x }, return type should stay as is
+        end
+      end
+    end
+
+    def scan_poly_types(node, var_types, param_types)
+      return unless node
+      case node
+      when Prism::ProgramNode
+        scan_poly_types(node.statements, var_types, param_types)
+      when Prism::StatementsNode
+        node.body.each { |s| scan_poly_types(s, var_types, param_types) }
+      when Prism::LocalVariableWriteNode
+        t = infer_type(node.value)
+        if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+          t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
+        end
+        vname = node.name.to_s
+        var_types[vname] ||= Set.new
+        var_types[vname] << t if t != Type::UNKNOWN
+        scan_poly_types(node.value, var_types, param_types)
+      when Prism::CallNode
+        mname = node.name.to_s
+        if @methods[mname] && node.arguments
+          mi = @methods[mname]
+          node.arguments.arguments.each_with_index do |arg, i|
+            next if i >= mi.params.length
+            t = infer_type(arg)
+            if t == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+              t = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+            end
+            param_types[mname] ||= {}
+            param_types[mname][i] ||= Set.new
+            param_types[mname][i] << t if t != Type::UNKNOWN
+          end
+        end
+        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types) if c }
+      else
+        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    def body_returns_poly_param?(body, mi)
+      return false unless body
+      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      last = stmts.last
+      return false unless last
+      expr_involves_poly?(last, mi)
+    end
+
+    def expr_involves_poly?(node, mi)
+      return false unless node
+      case node
+      when Prism::LocalVariableReadNode
+        mi.params.any? { |p| p.name == node.name.to_s && p.type == Type::POLY }
+      when Prism::CallNode
+        mname = node.name.to_s
+        # Comparison operators return boolean, not poly
+        return false if %w[== != < > <= >= <=> !].include?(mname)
+        # to_s returns string, not poly
+        return false if mname == "to_s"
+        # Check if any operand involves a poly param
+        recv_poly = node.receiver ? expr_involves_poly?(node.receiver, mi) : false
+        args_poly = node.arguments&.arguments&.any? { |a| expr_involves_poly?(a, mi) } || false
+        recv_poly || args_poly
+      else
+        false
+      end
+    end
+
     def scan_mutable_strings(node)
       @mutable_string_vars = Set.new
       find_mutable_strings(node)
@@ -716,6 +858,29 @@ module Spinel
         t = infer_type(node.value)
         @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
         scan_call_sites(node.value)
+      when Prism::LocalVariableOperatorWriteNode
+        val_type = infer_type(node.value)
+        # If value is a local var reference, also check var_types_global and method params
+        if val_type == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+          ref = node.value.name.to_s
+          val_type = @var_types_global[ref] if @var_types_global[ref]
+          # Check all method params if still unknown
+          if val_type == Type::UNKNOWN || val_type.nil?
+            @methods.each_value do |mi|
+              p = mi.params.find { |pp| pp.name == ref }
+              if p && p.type != Type::UNKNOWN
+                val_type = p.type
+                break
+              end
+            end
+          end
+        end
+        vname = node.name.to_s
+        existing = @var_types_global[vname]
+        # Upgrade to float if operator involves float (e.g., x += 0.5)
+        if val_type == Type::FLOAT && (existing.nil? || existing == Type::INTEGER)
+          @var_types_global[vname] = Type::FLOAT
+        end
       when Prism::CallNode
         mname = node.name.to_s
         if @methods[mname] && node.arguments
@@ -741,7 +906,10 @@ module Spinel
             if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
               arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
-            if arg_type != Type::UNKNOWN && mi.params[i].type == Type::UNKNOWN
+            if arg_type != Type::UNKNOWN && (mi.params[i].type == Type::UNKNOWN ||
+               (arg_type == Type::FLOAT && mi.params[i].type == Type::INTEGER) ||
+               (arg_type == Type::PROC && mi.params[i].type == Type::INTEGER) ||
+               (arg_type.is_a?(String) && @classes[arg_type] && mi.params[i].type == Type::INTEGER))
               mi.params[i].type = arg_type
             end
           end
@@ -1076,6 +1244,18 @@ module Spinel
         t1 == Type::UNKNOWN ? t2 : t1
       when Prism::CaseNode
         infer_case_type(node)
+      when Prism::CaseMatchNode
+        # Pattern matching: return type of first branch body
+        if node.conditions && !node.conditions.empty?
+          first = node.conditions.first
+          if first.is_a?(Prism::InNode) && first.statements
+            infer_body_type(first.statements)
+          else
+            Type::UNKNOWN
+          end
+        else
+          Type::UNKNOWN
+        end
       when Prism::ParenthesesNode
         infer_body_type(node.body)
       when Prism::BeginNode
@@ -1089,7 +1269,13 @@ module Spinel
       when Prism::LocalVariableWriteNode
         infer_type(node.value)
       when Prism::InstanceVariableWriteNode
-        infer_type(node.value)
+        t = infer_type(node.value)
+        if t == Type::UNKNOWN && @current_class
+          ivar = node.name.to_s.delete_prefix("@")
+          ci = @classes[@current_class]
+          t = ci.ivars[ivar] if ci && ci.ivars[ivar] && ci.ivars[ivar] != Type::UNKNOWN
+        end
+        t || Type::UNKNOWN
       when Prism::MultiWriteNode
         Type::ARRAY
       when Prism::ConstantPathNode
@@ -1108,11 +1294,24 @@ module Spinel
       mname = node.name.to_s
       recv_type = node.receiver ? infer_type(node.receiver) : nil
 
+      # StringIO methods
+      if recv_type == Type::STRINGIO
+        case mname
+        when "string", "read", "gets", "getc" then return Type::STRING
+        when "pos", "tell", "size", "length", "write", "putc", "getbyte", "lineno"
+          return Type::INTEGER
+        when "eof?", "closed?", "sync", "isatty" then return Type::BOOLEAN
+        when "flush" then return Type::STRINGIO
+        end
+      end
+
       case mname
       when "+", "-", "*", "/", "%", "**"
         t1 = recv_type || Type::INTEGER
         t2 = node.arguments&.arguments&.first ? infer_type(node.arguments.arguments.first) : Type::INTEGER
-        if (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "+"
+        if t1 == Type::POLY || t2 == Type::POLY
+          Type::POLY
+        elsif (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "+"
           Type::STRING
         elsif (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "*"
           Type::STRING
@@ -1222,6 +1421,8 @@ module Spinel
           case cname
           when "Array" then Type::ARRAY
           when "Hash" then Type::HASH
+          when "StringIO" then Type::STRINGIO
+          when "Proc" then Type::PROC
           else
             if @classes[cname]
               cname  # class instance type
@@ -1240,8 +1441,10 @@ module Spinel
         recv_type == Type::STR_ARRAY ? Type::STR_ARRAY : Type::ARRAY
       when "merge"
         recv_type || Type::HASH
-      when "sort", "sort_by", "uniq", "dup", "reverse", "compact", "flatten"
+      when "sort", "sort_by", "uniq", "dup", "reverse", "compact", "flatten", "zip"
         recv_type || Type::ARRAY
+      when "transform_values"
+        recv_type || Type::HASH
       when "keys", "values"
         if recv_type == Type::HASH
           Type::STR_ARRAY  # keys are strings
@@ -1280,19 +1483,30 @@ module Spinel
         Type::INTEGER
       when "format", "sprintf"
         Type::STRING
+      when "proc"
+        Type::PROC
       when "method"
         Type::UNKNOWN # method objects not fully supported
       when "call"
-        Type::INTEGER
+        if recv_type == Type::PROC
+          Type::INTEGER
+        else
+          Type::INTEGER
+        end
       else
         # Check if it's a user-defined method
         if @methods[mname]
           @methods[mname].return_type
         elsif node.receiver
-          # Check class methods
+          # Check class from var_class_types or infer_type (which returns class name string)
           cname = nil
           if node.receiver.is_a?(Prism::LocalVariableReadNode)
             cname = @var_class_types && @var_class_types[node.receiver.name.to_s]
+          end
+          # Also try infer_type on receiver - it may return a class name string
+          if cname.nil?
+            rt = recv_type || infer_type(node.receiver)
+            cname = rt if rt.is_a?(String) && @classes[rt]
           end
           if cname && @classes[cname]
             ci = @classes[cname]
@@ -1877,7 +2091,12 @@ module Spinel
         end
       end
 
-      if mi.has_yield
+      block_param_name = mi.instance_variable_get(:@block_param_name)
+      if block_param_name
+        @needs_proc = true
+        @needs_block_fn = true
+        params_list << "sp_Proc *lv_#{block_param_name}"
+      elsif mi.has_yield
         @needs_block_fn = true
         params_list << "sp_block_fn _block"
         params_list << "void *_block_env"
@@ -1896,6 +2115,10 @@ module Spinel
       # Declare params
       mi.params.each do |p|
         declare_var(p.name, p.type, c_name: "lv_#{p.name}")
+      end
+      # Declare block param
+      if block_param_name
+        declare_var(block_param_name, Type::PROC, c_name: "lv_#{block_param_name}")
       end
 
       old_indent = @indent
@@ -1966,6 +2189,9 @@ module Spinel
         generate_if_stmt(node, return_type: mi.return_type)
       when Prism::CaseNode
         generate_case_stmt(node, return_type: mi.return_type)
+      when Prism::CaseMatchNode
+        val = compile_case_match_expr(node)
+        emit("return #{val};")
       when Prism::ReturnNode
         if node.arguments && node.arguments.arguments.length > 0
           val = compile_expr(node.arguments.arguments.first)
@@ -2051,6 +2277,8 @@ module Spinel
         generate_for_stmt(node)
       when Prism::CaseNode
         generate_case_stmt(node)
+      when Prism::CaseMatchNode
+        generate_case_match_stmt(node)
       when Prism::BeginNode
         generate_begin_stmt(node)
       when Prism::ReturnNode
@@ -2093,8 +2321,15 @@ module Spinel
       val_type = infer_type(node.value)
       existing = lookup_var(name)
 
+      # Check if this variable is polymorphic
+      is_poly = @poly_vars && @poly_vars.include?(name)
+      if is_poly
+        val_type = Type::POLY
+        @needs_poly = true
+      end
+
       # Check if this is a mutable string variable
-      if val_type == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(name)
+      if !is_poly && val_type == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(name)
         val_type = Type::MUTABLE_STRING
         @needs_mutable_string = true
       end
@@ -2106,6 +2341,11 @@ module Spinel
           @var_class_types ||= {}
           @var_class_types[name] = cname
         end
+      end
+      # Also track when val_type is a class name string (from method return types)
+      if val_type.is_a?(String) && @classes[val_type]
+        @var_class_types ||= {}
+        @var_class_types[name] = val_type
       end
 
       # Track method(:name) assignments
@@ -2130,6 +2370,10 @@ module Spinel
         if val_type == Type::MUTABLE_STRING && node.value.is_a?(Prism::StringNode)
           val = "sp_String_new(#{val})"
         end
+        # Box value for poly vars
+        if is_poly
+          val = box_value(val, infer_type(node.value))
+        end
         emit("#{c_name} = #{val};")
         # Update type if needed
         if existing.type != val_type && val_type != Type::UNKNOWN
@@ -2142,6 +2386,10 @@ module Spinel
         # Wrap string literal for mutable string
         if val_type == Type::MUTABLE_STRING && node.value.is_a?(Prism::StringNode)
           val = "sp_String_new(#{val})"
+        end
+        # Box value for poly vars
+        if is_poly
+          val = box_value(val, infer_type(node.value))
         end
 
         if @in_main
@@ -2309,7 +2557,18 @@ module Spinel
         type = infer_type(arg)
         val = compile_expr(arg)
 
+        # Check if the variable is poly
+        if arg.is_a?(Prism::LocalVariableReadNode)
+          v = lookup_var(arg.name.to_s)
+          if v && v.type == Type::POLY
+            type = Type::POLY
+          end
+        end
+
         case type
+        when Type::POLY
+          @needs_poly = true
+          emit("sp_poly_puts(#{val});")
         when Type::INTEGER
           emit("printf(\"%lld\\n\", (long long)#{val});")
         when Type::FLOAT
@@ -2602,6 +2861,162 @@ module Spinel
       generate_body_stmts(node.statements)
       @indent -= 1
       emit("}")
+    end
+
+    def generate_case_match_stmt(node)
+      # case val; in Pattern; body; end
+      pred = compile_expr(node.predicate)
+      pred_type = infer_type(node.predicate)
+      # Check if predicate var is poly
+      if node.predicate.is_a?(Prism::LocalVariableReadNode)
+        v = lookup_var(node.predicate.name.to_s)
+        pred_type = Type::POLY if v && v.type == Type::POLY
+      end
+
+      first = true
+      (node.conditions || []).each do |cond|
+        next unless cond.is_a?(Prism::InNode)
+        check = compile_pattern_check(cond.pattern, pred, pred_type)
+        if first
+          emit("if (#{check}) {")
+          first = false
+        else
+          emit("else if (#{check}) {")
+        end
+        @indent += 1
+        if cond.statements
+          stmts = cond.statements.is_a?(Prism::StatementsNode) ? cond.statements.body : [cond.statements]
+          stmts.each { |s| generate_stmt(s) }
+        end
+        @indent -= 1
+        emit("}")
+      end
+      if node.else_clause
+        emit("else {")
+        @indent += 1
+        generate_stmt(node.else_clause.statements)
+        @indent -= 1
+        emit("}")
+      end
+    end
+
+    def compile_case_match_expr(node)
+      pred = compile_expr(node.predicate)
+      pred_type = infer_type(node.predicate)
+      if node.predicate.is_a?(Prism::LocalVariableReadNode)
+        v = lookup_var(node.predicate.name.to_s)
+        pred_type = Type::POLY if v && v.type == Type::POLY
+      end
+
+      result_tmp = "_cm_#{next_temp}"
+      # Determine result type
+      first_body = node.conditions&.first
+      result_type = first_body && first_body.is_a?(Prism::InNode) && first_body.statements ?
+        infer_body_type(first_body.statements) : Type::STRING
+      emit("#{c_type(result_type)} #{result_tmp} = #{default_val(result_type)};")
+
+      first = true
+      (node.conditions || []).each do |cond|
+        next unless cond.is_a?(Prism::InNode)
+        check = compile_pattern_check(cond.pattern, pred, pred_type)
+        if first
+          emit("if (#{check}) {")
+          first = false
+        else
+          emit("else if (#{check}) {")
+        end
+        @indent += 1
+        if cond.statements
+          val = compile_block_expr_from_stmts(cond.statements)
+          emit("#{result_tmp} = #{val};")
+        end
+        @indent -= 1
+        emit("}")
+      end
+      if node.else_clause
+        emit("else {")
+        @indent += 1
+        val = compile_block_expr_from_stmts(node.else_clause.statements)
+        emit("#{result_tmp} = #{val};")
+        @indent -= 1
+        emit("}")
+      end
+      result_tmp
+    end
+
+    def compile_block_expr_from_stmts(body)
+      return "0" unless body
+      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      if stmts.length == 1
+        compile_expr(stmts.first)
+      else
+        stmts[0..-2].each { |s| generate_stmt(s) }
+        compile_expr(stmts.last)
+      end
+    end
+
+    def compile_pattern_check(pattern, pred, pred_type)
+      case pattern
+      when Prism::ConstantReadNode
+        cname = pattern.name.to_s
+        if pred_type == Type::POLY
+          @needs_poly = true
+          case cname
+          when "Integer" then "SP_IS_INT(#{pred})"
+          when "String" then "SP_IS_STR(#{pred})"
+          when "Float" then "SP_IS_DBL(#{pred})"
+          when "NilClass" then "SP_IS_NIL(#{pred})"
+          else "(0) /* unknown pattern #{cname} */"
+          end
+        else
+          # Non-poly: simple type check
+          case cname
+          when "Integer" then "1" # if pred is already int
+          when "String" then "1"
+          else "0"
+          end
+        end
+      when Prism::IntegerNode
+        val = pattern.value.to_s
+        if pred_type == Type::POLY
+          @needs_poly = true
+          "(SP_IS_INT(#{pred}) && sp_unbox_int(#{pred}) == #{val})"
+        else
+          "(#{pred} == #{val})"
+        end
+      when Prism::StringNode
+        val = c_string_literal(pattern.unescaped)
+        if pred_type == Type::POLY
+          @needs_poly = true
+          "(SP_IS_STR(#{pred}) && strcmp(sp_unbox_str(#{pred}), #{val}) == 0)"
+        else
+          "(strcmp(#{pred}, #{val}) == 0)"
+        end
+      when Prism::TrueNode
+        if pred_type == Type::POLY
+          "(SP_IS_BOOL(#{pred}) && sp_unbox_bool(#{pred}))"
+        else
+          "(#{pred})"
+        end
+      when Prism::FalseNode
+        if pred_type == Type::POLY
+          "(SP_IS_BOOL(#{pred}) && !sp_unbox_bool(#{pred}))"
+        else
+          "(!#{pred})"
+        end
+      when Prism::NilNode
+        if pred_type == Type::POLY
+          "SP_IS_NIL(#{pred})"
+        else
+          "(#{pred} == 0)"
+        end
+      when Prism::AlternationPatternNode
+        left = compile_pattern_check(pattern.left, pred, pred_type)
+        right = compile_pattern_check(pattern.right, pred, pred_type)
+        "(#{left} || #{right})"
+      else
+        "(0) /* unsupported pattern #{pattern.class} */"
+      end
     end
 
     def generate_case_stmt(node, return_type: nil)
@@ -3027,6 +3442,8 @@ module Spinel
         compile_rescue_modifier_expr(node)
       when Prism::CaseNode
         compile_case_expr(node)
+      when Prism::CaseMatchNode
+        compile_case_match_expr(node)
       when Prism::SuperNode, Prism::ForwardingSuperNode
         compile_super(node)
       when Prism::MultiWriteNode
@@ -3241,7 +3658,15 @@ module Spinel
             expr = part.statements.body.first
             type = infer_type(expr)
             val = compile_expr(expr)
+            # Check if expr is a poly variable
+            if expr.is_a?(Prism::LocalVariableReadNode)
+              v = lookup_var(expr.name.to_s)
+              type = Type::POLY if v && v.type == Type::POLY
+            end
             case type
+            when Type::POLY
+              @needs_poly = true
+              "sp_poly_to_s(#{val})"
             when Type::INTEGER
               "sp_int_to_s(#{val})"
             when Type::FLOAT
@@ -3617,6 +4042,16 @@ module Spinel
         return compile_catch(node, args)
       when "throw"
         return compile_throw(node, args)
+      when "proc"
+        if node.block
+          return compile_proc_creation(node.block)
+        end
+        return "NULL"
+      end
+
+      # Proc.new { ... }
+      if mname == "new" && recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Proc" && node.block
+        return compile_proc_creation(node.block)
       end
 
       # User-defined method
@@ -3641,7 +4076,12 @@ module Spinel
           compiled_args = args.each_with_index.map { |a, i|
             val = compile_expr(a)
             # Handle type coercion if needed
-            if i < mi.params.length && mi.params[i].type == Type::STRING && infer_type(a) == Type::INTEGER
+            if i < mi.params.length && mi.params[i].type == Type::POLY
+              # Box value for polymorphic param
+              @needs_poly = true
+              arg_type = infer_type(a)
+              box_value(val, arg_type)
+            elsif i < mi.params.length && mi.params[i].type == Type::STRING && infer_type(a) == Type::INTEGER
               @string_helpers_needed << :int_to_s
               "sp_int_to_s(#{val})"
             else
@@ -3660,7 +4100,46 @@ module Spinel
           end
         end
 
-        if mi.has_yield && node.block
+        block_param_name = mi.instance_variable_get(:@block_param_name)
+        if block_param_name
+          # &block parameter: wrap block in sp_Proc
+          @needs_proc = true
+          @needs_block_fn = true
+          if node.block
+            blk_id = next_block_id
+            blk_fn = "_blk_#{blk_id}"
+            blk_env_type = "_blk_#{blk_id}_env"
+            params_b = block_params(node.block)
+            bparam = params_b[0] || "_x"
+            # Emit block function
+            @block_defs << "typedef struct { int _dummy; } #{blk_env_type};"
+            @block_defs << "static mrb_int #{blk_fn}(void *_env, mrb_int _arg) {"
+            @block_defs << "    #{blk_env_type} *_e = (#{blk_env_type} *)_env;"
+            @block_defs << "    mrb_int lv_#{bparam} = _arg;"
+            # Compile block body
+            old_main = @in_main
+            old_func = @func_bodies
+            @in_main = false
+            @func_bodies = []
+            push_scope
+            declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+            blk_val = compile_block_expr(node.block)
+            pop_scope
+            @block_defs.concat(@func_bodies.map { |l| "  " + l.strip })
+            @func_bodies = old_func
+            @in_main = old_main
+            @block_defs << "  return #{blk_val};"
+            @block_defs << "    return 0;"
+            @block_defs << "}"
+            @block_defs << ""
+            # Create sp_Proc on stack and pass its address
+            proc_var = "_bp_#{blk_id}"
+            emit("sp_Proc #{proc_var} = { (sp_block_fn)#{blk_fn}, NULL };")
+            compiled_args << "&#{proc_var}"
+          else
+            compiled_args << "NULL"
+          end
+        elsif mi.has_yield && node.block
           # Need to create block struct and function
           @needs_block_fn = true
           block_code = compile_block_call(node.block, mi, mname, compiled_args)
@@ -3753,6 +4232,16 @@ module Spinel
 
           return "sp_#{actual}_#{cmname}(#{param_list.join(', ')})"
         end
+        # Check attr accessors when recv_type is a known class
+        needs_ptr = class_needs_gc?(ci)
+        if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+          return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
+        end
+        if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+          field = mname.chomp("=")
+          val = compile_expr(args[0])
+          return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
+        end
       end
 
       # Check open class methods for built-in types
@@ -3835,10 +4324,99 @@ module Spinel
         end
       end
 
+      # ---- StringIO methods ----
+      if recv_type == Type::STRINGIO
+        @needs_stringio = true
+        case mname
+        when "puts"
+          if args.empty?
+            emit("sp_StringIO_puts_empty(#{recv_code});")
+          else
+            args.each do |arg|
+              val = compile_expr(arg)
+              emit("sp_StringIO_puts(#{recv_code}, #{val});")
+            end
+          end
+          return "0"
+        when "print"
+          args.each do |arg|
+            val = compile_expr(arg)
+            emit("sp_StringIO_print(#{recv_code}, #{val});")
+          end
+          return "0"
+        when "write"
+          val = compile_expr(args[0])
+          return "sp_StringIO_write(#{recv_code}, #{val})"
+        when "putc"
+          val = compile_expr(args[0])
+          return "sp_StringIO_putc(#{recv_code}, #{val})"
+        when "string"
+          return "sp_StringIO_string(#{recv_code})"
+        when "pos", "tell"
+          return "sp_StringIO_pos(#{recv_code})"
+        when "size", "length"
+          return "sp_StringIO_size(#{recv_code})"
+        when "rewind"
+          emit("sp_StringIO_rewind(#{recv_code});")
+          return "0"
+        when "read"
+          if args.length > 0
+            val = compile_expr(args[0])
+            return "sp_StringIO_read_n(#{recv_code}, #{val})"
+          end
+          return "sp_StringIO_read(#{recv_code})"
+        when "gets"
+          return "sp_StringIO_gets(#{recv_code})"
+        when "getc"
+          return "sp_StringIO_getc(#{recv_code})"
+        when "getbyte"
+          return "sp_StringIO_getbyte(#{recv_code})"
+        when "seek"
+          off = compile_expr(args[0])
+          whence = args.length > 1 ? compile_expr(args[1]) : "0"
+          emit("sp_StringIO_seek(#{recv_code}, #{off}, #{whence});")
+          return "0"
+        when "truncate"
+          val = compile_expr(args[0])
+          emit("sp_StringIO_truncate(#{recv_code}, #{val});")
+          return "0"
+        when "close"
+          emit("sp_StringIO_close(#{recv_code});")
+          return "0"
+        when "eof?"
+          return "sp_StringIO_eof_p(#{recv_code})"
+        when "closed?"
+          return "sp_StringIO_closed_p(#{recv_code})"
+        when "flush"
+          return "sp_StringIO_flush(#{recv_code})"
+        when "sync"
+          return "sp_StringIO_sync(#{recv_code})"
+        when "isatty"
+          return "sp_StringIO_isatty(#{recv_code})"
+        when "lineno"
+          return "sp_StringIO_lineno(#{recv_code})"
+        end
+      end
+
       case mname
       # ---- Arithmetic operators ----
       when "+", "-", "*", "/", "%"
         arg = compile_expr(args[0])
+        arg_type = infer_type(args[0])
+        # Check if either operand is poly
+        if recv_type == Type::POLY || arg_type == Type::POLY
+          @needs_poly = true
+          a = recv_type == Type::POLY ? recv_code : box_value(recv_code, recv_type)
+          b = arg_type == Type::POLY ? arg : box_value(arg, arg_type)
+          op_name = case mname
+                    when "+" then "add"
+                    when "-" then "sub"
+                    when "*" then "mul"
+                    when "/" then "div"
+                    when "%" then "mod"
+                    end
+          return "sp_poly_#{op_name}(#{a}, #{b})"
+        end
         if (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "+"
           @string_helpers_needed << :str_concat
           return "sp_str_concat(#{mstr_recv}, #{arg})"
@@ -3879,6 +4457,19 @@ module Spinel
         return "(#{recv_code} #{mname} #{arg})"
       when "<", ">", "<=", ">="
         arg = compile_expr(args[0])
+        arg_type = infer_type(args[0])
+        if recv_type == Type::POLY || arg_type == Type::POLY
+          @needs_poly = true
+          a = recv_type == Type::POLY ? recv_code : box_value(recv_code, recv_type)
+          b = arg_type == Type::POLY ? arg : box_value(arg, arg_type)
+          op_name = case mname
+                    when "<" then "lt"
+                    when ">" then "gt"
+                    when "<=" then "le"
+                    when ">=" then "ge"
+                    end
+          return "sp_poly_#{op_name}(#{a}, #{b})"
+        end
         if recv_type == Type::STRING
           op = { "<" => "< 0", ">" => "> 0", "<=" => "<= 0", ">=" => ">= 0" }[mname]
           return "(strcmp(#{recv_code}, #{arg}) #{op})"
@@ -3934,7 +4525,10 @@ module Spinel
         end
         return "((mrb_float)(#{recv_code}))"
       when "to_s"
-        if recv_type == Type::INTEGER
+        if recv_type == Type::POLY
+          @needs_poly = true
+          return "sp_poly_to_s(#{recv_code})"
+        elsif recv_type == Type::INTEGER
           @string_helpers_needed << :int_to_s
           return "sp_int_to_s(#{recv_code})"
         elsif recv_type == Type::FLOAT
@@ -3990,6 +4584,10 @@ module Spinel
         end
         if recv_type == Type::NIL
           return "TRUE"
+        end
+        if recv_type == Type::POLY
+          @needs_poly = true
+          return "sp_poly_nil_p(#{recv_code})"
         end
         if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
           return "(#{recv_code} == NULL)"
@@ -4332,6 +4930,24 @@ module Spinel
       when "compact", "flatten"
         return recv_code  # In typed AOT, no nils in int arrays
 
+      when "zip"
+        # a.zip(b) returns array of pairs; minimal impl returns IntArray with a.length elements
+        if recv_type == Type::ARRAY && args.length > 0
+          @needs_int_array = true
+          @needs_gc = true
+          arg = compile_expr(args[0])
+          tmp = "_zip_#{next_temp}"
+          emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+          idx = "_zi_#{tmp}"
+          emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
+          @indent += 1
+          emit("sp_IntArray_push(#{tmp}, 0); /* zip pair placeholder */")
+          @indent -= 1
+          emit("}")
+          return tmp
+        end
+        return "0 /* zip */"
+
       # ---- Array [] and []= ----
       when "[]"
         # ENV["key"] -> getenv("key")
@@ -4463,6 +5079,27 @@ module Spinel
         @needs_str_int_hash = true
         arg = compile_expr(args[0])
         return "sp_StrIntHash_merge(#{recv_code}, #{arg})"
+      when "transform_values"
+        if recv_type == Type::HASH && node.block
+          @needs_str_int_hash = true
+          @needs_gc = true
+          tmp = "_tv_#{next_temp}"
+          params = block_params(node.block)
+          val_var = params[0] || "v"
+          emit("sp_StrIntHash *#{tmp} = sp_StrIntHash_new();")
+          emit("for (sp_HashEntry *_tve_#{tmp} = #{recv_code}->first; _tve_#{tmp}; _tve_#{tmp} = _tve_#{tmp}->order_next) {")
+          @indent += 1
+          push_scope
+          declare_var(val_var, Type::INTEGER, c_name: "lv_#{val_var}")
+          emit("mrb_int lv_#{val_var} = _tve_#{tmp}->value;")
+          block_val = compile_block_expr(node.block)
+          emit("sp_StrIntHash_set(#{tmp}, _tve_#{tmp}->key, #{block_val});")
+          pop_scope
+          @indent -= 1
+          emit("}")
+          return tmp
+        end
+        return "0 /* transform_values */"
 
       # ---- Range methods ----
       when "first"
@@ -4630,6 +5267,12 @@ module Spinel
 
       # ---- method().call() ----
       when "call"
+        # Check if receiver is a Proc
+        if recv_type == Type::PROC
+          @needs_proc = true
+          compiled_args = args.map { |a| compile_expr(a) }
+          return "sp_Proc_call(#{recv_code}, #{compiled_args[0] || '0'})"
+        end
         # method(:name).call(args) - limited support
         target_method = nil
         if recv.is_a?(Prism::CallNode) && recv.name.to_s == "method"
@@ -4767,6 +5410,11 @@ module Spinel
       return "0" unless recv.is_a?(Prism::ConstantReadNode)
       cname = recv.name.to_s
 
+      # Proc.new { ... }
+      if cname == "Proc" && node.block
+        return compile_proc_creation(node.block)
+      end
+
       case cname
       when "Array"
         @needs_int_array = true
@@ -4794,6 +5442,13 @@ module Spinel
           return "sp_StrIntHash_new_with_default(#{val})"
         end
         return "sp_StrIntHash_new()"
+      when "StringIO"
+        @needs_stringio = true
+        if args.length > 0
+          val = compile_expr(args[0])
+          return "sp_StringIO_new_s(#{val})"
+        end
+        return "sp_StringIO_new()"
       end
 
       if @classes[cname]
@@ -4958,6 +5613,43 @@ module Spinel
       @indent -= 1
       emit("}")
       result
+    end
+
+    def compile_proc_creation(block)
+      @needs_proc = true
+      @needs_block_fn = true
+      blk_id = next_block_id
+      blk_fn = "_blk_#{blk_id}"
+      blk_env_type = "_blk_#{blk_id}_env"
+      params_b = block_params(block)
+      bparam = params_b[0] || "_x"
+
+      # Emit block function
+      @block_defs << "typedef struct { int _dummy; } #{blk_env_type};"
+      @block_defs << "static mrb_int #{blk_fn}(void *_env, mrb_int _arg) {"
+      @block_defs << "    #{blk_env_type} *_e = (#{blk_env_type} *)_env;"
+      @block_defs << "    mrb_int lv_#{bparam} = _arg;"
+
+      old_main = @in_main
+      old_func = @func_bodies
+      @in_main = false
+      @func_bodies = []
+      push_scope
+      declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+      blk_val = compile_block_expr(block)
+      pop_scope
+      @block_defs.concat(@func_bodies.map { |l| "  " + l.strip })
+      @func_bodies = old_func
+      @in_main = old_main
+      @block_defs << "  return #{blk_val};"
+      @block_defs << "    return 0;"
+      @block_defs << "}"
+      @block_defs << ""
+
+      # Create sp_Proc on heap
+      proc_tmp = "_proc_#{blk_id}"
+      emit("sp_Proc *#{proc_tmp} = sp_Proc_new((sp_block_fn)#{blk_fn}, NULL);")
+      return proc_tmp
     end
 
     def compile_catch(node, args)
@@ -5746,7 +6438,22 @@ module Spinel
         locals[node.name.to_s] ||= infer_type(node.value)
         find_locals(node.value, locals)
       when Prism::LocalVariableOperatorWriteNode
-        locals[node.name.to_s] ||= Type::INTEGER
+        val_type = infer_type(node.value)
+        # If the value is a local var read, check method params and already-found locals
+        if val_type == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+          ref_name = node.value.name.to_s
+          val_type = locals[ref_name] if locals[ref_name]
+          if val_type == Type::UNKNOWN && @current_method
+            param = @current_method.params.find { |p| p.name == ref_name }
+            val_type = param.type if param && param.type != Type::UNKNOWN
+          end
+        end
+        existing = locals[node.name.to_s]
+        if existing == Type::INTEGER && val_type == Type::FLOAT
+          locals[node.name.to_s] = Type::FLOAT
+        else
+          locals[node.name.to_s] ||= (val_type == Type::FLOAT ? Type::FLOAT : Type::INTEGER)
+        end
       when Prism::IfNode
         find_locals(node.statements, locals)
         find_locals(node.subsequent, locals)
@@ -5847,6 +6554,9 @@ module Spinel
       when Type::MUTABLE_STRING then "sp_String *"
       when Type::TIME then "sp_Time"
       when Type::FILE_OBJ then "FILE *"
+      when Type::STRINGIO then "sp_StringIO *"
+      when Type::PROC then "sp_Proc *"
+      when Type::POLY then "sp_RbValue"
       when Type::VOID then "void"
       else
         # Check if it's a class instance type (string class name)
@@ -5877,6 +6587,9 @@ module Spinel
       when Type::RANGE then "{0,0}"
       when Type::TIME then "{0}"
       when Type::MUTABLE_STRING then "NULL"
+      when Type::STRINGIO then "NULL"
+      when Type::PROC then "NULL"
+      when Type::POLY then "sp_box_nil()"
       when Type::VOID then ""
       else
         if type.is_a?(String) && @classes[type]
@@ -5965,6 +6678,9 @@ module Spinel
       # StrStrHash (RbHash)
       emit_str_str_hash(out) if @needs_str_str_hash
 
+      # NaN-boxed polymorphic value runtime
+      emit_poly_runtime(out) if @needs_poly
+
       out.puts "static int sp_last_status = 0;"
       out.puts
 
@@ -5973,6 +6689,9 @@ module Spinel
 
       # File runtime
       emit_file_runtime(out) if @needs_file
+
+      # StringIO runtime
+      emit_stringio_runtime(out) if @needs_stringio
 
       # System runtime
       emit_system_runtime(out) if @needs_system
@@ -5994,6 +6713,23 @@ module Spinel
       # Block type
       if @needs_block_fn
         out.puts "typedef mrb_int (*sp_block_fn)(void *env, mrb_int arg);"
+        out.puts
+      end
+
+      # Proc runtime
+      if @needs_proc
+        out.puts <<~C
+          /* ---- sp_Proc runtime ---- */
+          typedef struct { sp_block_fn fn; void *env; } sp_Proc;
+          static sp_Proc *sp_Proc_new(sp_block_fn fn, void *env) {
+            sp_Proc *p = (sp_Proc *)malloc(sizeof(sp_Proc));
+            p->fn = fn; p->env = env;
+            return p;
+          }
+          static mrb_int sp_Proc_call(sp_Proc *p, mrb_int arg) {
+            return p->fn(p->env, arg);
+          }
+        C
         out.puts
       end
 
@@ -6495,6 +7231,240 @@ module Spinel
           memcpy(r + la + 1, b, lb + 1);
           return r;
         }
+
+      C
+    end
+
+    def box_value(val, orig_type)
+      case orig_type
+      when Type::INTEGER then "sp_box_int(#{val})"
+      when Type::FLOAT then "sp_box_float(#{val})"
+      when Type::STRING, Type::SYMBOL then "sp_box_str(#{val})"
+      when Type::BOOLEAN then "sp_box_bool(#{val})"
+      when Type::NIL then "sp_box_nil()"
+      when Type::POLY then val  # already boxed
+      else "sp_box_int(#{val})"
+      end
+    end
+
+    def emit_poly_runtime(out)
+      out.puts <<~C
+
+        /* NaN-boxing: 8-byte tagged value */
+        typedef uint64_t sp_RbValue;
+        #define SP_T_OBJECT 0x0000
+        #define SP_T_INT    0x0001
+        #define SP_T_STRING 0x0002
+        #define SP_T_BOOL   0x0003
+        #define SP_T_NIL    0x0004
+        #define SP_T_FLOAT  0x0005
+        #define SP_TAG(v)       ((uint16_t)((v) >> 48))
+        #define SP_PAYLOAD(v)   ((v) & 0x0000FFFFFFFFFFFFULL)
+        #define SP_IS_INT(v)    (SP_TAG(v) == SP_T_INT)
+        #define SP_IS_STR(v)    (SP_TAG(v) == SP_T_STRING)
+        #define SP_IS_BOOL(v)   (SP_TAG(v) == SP_T_BOOL)
+        #define SP_IS_NIL(v)    (SP_TAG(v) == SP_T_NIL)
+        #define SP_IS_DBL(v)    (SP_TAG(v) == SP_T_FLOAT)
+        #define SP_IS_OBJ(v)    (SP_TAG(v) >= 0x0040)
+
+        static sp_RbValue sp_box_int(int64_t n) { return ((uint64_t)0x0001 << 48) | ((uint64_t)n & 0x0000FFFFFFFFFFFFULL); }
+        static sp_RbValue sp_box_float(double f) { uint64_t b; memcpy(&b, &f, 8); return ((uint64_t)0x0005 << 48) | (b >> 16); }
+        static sp_RbValue sp_box_str(const char *s) { return ((uint64_t)0x0002 << 48) | (uint64_t)(uintptr_t)s; }
+        static sp_RbValue sp_box_bool(int b) { return ((uint64_t)0x0003 << 48) | (b ? 1 : 0); }
+        static sp_RbValue sp_box_nil(void) { return ((uint64_t)0x0004 << 48); }
+        static sp_RbValue sp_box_obj(int tag, void *p) { return ((uint64_t)(unsigned)tag << 48) | (uint64_t)(uintptr_t)p; }
+
+        static int64_t sp_unbox_int(sp_RbValue v) { int64_t raw = (int64_t)(v & 0x0000FFFFFFFFFFFFULL); return (raw << 16) >> 16; }
+        static double sp_unbox_float(sp_RbValue v) { uint64_t b = (v & 0x0000FFFFFFFFFFFFULL) << 16; double f; memcpy(&f, &b, 8); return f; }
+        static const char *sp_unbox_str(sp_RbValue v) { return (const char *)(uintptr_t)(v & 0x0000FFFFFFFFFFFFULL); }
+        static void *sp_unbox_obj(sp_RbValue v) { return (void *)(uintptr_t)(v & 0x0000FFFFFFFFFFFFULL); }
+        static int64_t sp_unbox_bool(sp_RbValue v) { return (int64_t)(v & 1); }
+
+        static void sp_poly_puts(sp_RbValue v) {
+          uint16_t t = SP_TAG(v);
+          if (t == SP_T_INT) { printf("%lld\\n", (long long)sp_unbox_int(v)); }
+          else if (t == SP_T_FLOAT) { char buf[32]; snprintf(buf,32,"%g",sp_unbox_float(v));
+            printf("%s%s\\n", buf, strchr(buf,'.')||strchr(buf,'e')?"":".0"); }
+          else if (t == SP_T_STRING) { const char *s=sp_unbox_str(v); fputs(s,stdout);
+            if(!*s||s[strlen(s)-1]!='\\n') putchar('\\n'); }
+          else if (t == SP_T_BOOL) { puts(sp_unbox_bool(v) ? "true" : "false"); }
+          else if (t == SP_T_NIL) { puts(""); }
+          else { puts("(object)"); }
+        }
+        static mrb_bool sp_poly_nil_p(sp_RbValue v) { return SP_TAG(v) == SP_T_NIL; }
+
+        static sp_RbValue sp_poly_add(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_INT && tb == SP_T_INT) return sp_box_int(sp_unbox_int(a) + sp_unbox_int(b));
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return sp_box_float(fa + fb);
+          }
+          if (ta == SP_T_STRING && tb == SP_T_STRING) {
+            const char *sa = sp_unbox_str(a), *sb = sp_unbox_str(b);
+            size_t la = strlen(sa), lb = strlen(sb);
+            char *r = (char *)malloc(la + lb + 1);
+            memcpy(r, sa, la); memcpy(r + la, sb, lb + 1);
+            return sp_box_str(r);
+          }
+          return sp_box_int(0);
+        }
+        static sp_RbValue sp_poly_sub(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return sp_box_float(fa - fb);
+          }
+          return sp_box_int(sp_unbox_int(a) - sp_unbox_int(b));
+        }
+        static sp_RbValue sp_poly_mul(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return sp_box_float(fa * fb);
+          }
+          return sp_box_int(sp_unbox_int(a) * sp_unbox_int(b));
+        }
+        static sp_RbValue sp_poly_div(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return sp_box_float(fa / fb);
+          }
+          return sp_box_int(sp_unbox_int(b) != 0 ? sp_unbox_int(a) / sp_unbox_int(b) : 0);
+        }
+        static sp_RbValue sp_poly_mod(sp_RbValue a, sp_RbValue b) {
+          return sp_box_int(sp_unbox_int(b) != 0 ? sp_unbox_int(a) % sp_unbox_int(b) : 0);
+        }
+        static mrb_bool sp_poly_gt(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return fa > fb;
+          }
+          return sp_unbox_int(a) > sp_unbox_int(b);
+        }
+        static mrb_bool sp_poly_lt(sp_RbValue a, sp_RbValue b) {
+          uint16_t ta = SP_TAG(a), tb = SP_TAG(b);
+          if (ta == SP_T_FLOAT || tb == SP_T_FLOAT) {
+            double fa = (ta == SP_T_FLOAT) ? sp_unbox_float(a) : (double)sp_unbox_int(a);
+            double fb = (tb == SP_T_FLOAT) ? sp_unbox_float(b) : (double)sp_unbox_int(b);
+            return fa < fb;
+          }
+          return sp_unbox_int(a) < sp_unbox_int(b);
+        }
+        static mrb_bool sp_poly_ge(sp_RbValue a, sp_RbValue b) { return !sp_poly_lt(a, b); }
+        static mrb_bool sp_poly_le(sp_RbValue a, sp_RbValue b) { return !sp_poly_gt(a, b); }
+
+        static const char *sp_poly_to_s(sp_RbValue v) {
+          uint16_t t = SP_TAG(v);
+          if (t == SP_T_INT) { char *r=(char*)malloc(24); snprintf(r,24,"%lld",(long long)sp_unbox_int(v)); return r; }
+          if (t == SP_T_FLOAT) { char *r=(char*)malloc(32); snprintf(r,32,"%g",sp_unbox_float(v));
+            if (!strchr(r,'.') && !strchr(r,'e') && !strchr(r,'E')) strcat(r,".0"); return r; }
+          if (t == SP_T_STRING) return sp_unbox_str(v);
+          if (t == SP_T_BOOL) return sp_unbox_bool(v) ? "true" : "false";
+          if (t == SP_T_NIL) return "";
+          return "(object)";
+        }
+
+      C
+    end
+
+    def emit_stringio_runtime(out)
+      out.puts <<~C
+
+        /* ---- StringIO runtime ---- */
+        typedef struct {
+          char *buf; int64_t len; int64_t cap; int64_t pos; int64_t lineno; int closed;
+        } sp_StringIO;
+        static void sio_grow(sp_StringIO *sio, int64_t need) {
+          int64_t req = sio->pos + need; if (req <= sio->cap) return;
+          int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2;
+          sio->buf = (char *)realloc(sio->buf, nc + 1); sio->cap = nc;
+        }
+        static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {
+          sio_grow(sio, dl);
+          if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len);
+          memcpy(sio->buf + sio->pos, d, dl); sio->pos += dl;
+          if (sio->pos > sio->len) sio->len = sio->pos;
+          sio->buf[sio->len] = '\\0'; return dl;
+        }
+        static sp_StringIO *sp_StringIO_new(void) {
+          sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));
+          s->buf = (char *)calloc(1, 64); s->cap = 63; return s;
+        }
+        static sp_StringIO *sp_StringIO_new_s(const char *init) {
+          sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));
+          int64_t l = (int64_t)strlen(init); int64_t c = l < 63 ? 63 : l;
+          s->buf = (char *)malloc(c+1); memcpy(s->buf, init, l); s->buf[l]='\\0';
+          s->len = l; s->cap = c; return s;
+        }
+        static const char *sp_StringIO_string(sp_StringIO *s) { return s->buf ? s->buf : ""; }
+        static int64_t sp_StringIO_pos(sp_StringIO *s) { return s->pos; }
+        static int64_t sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }
+        static int64_t sp_StringIO_size(sp_StringIO *s) { return s->len; }
+        static int64_t sp_StringIO_write(sp_StringIO *s, const char *str) {
+          return sio_write(s, str, (int64_t)strlen(str));
+        }
+        static int64_t sp_StringIO_puts(sp_StringIO *s, const char *str) {
+          int64_t l = (int64_t)strlen(str); sio_write(s, str, l);
+          if (l == 0 || str[l-1] != '\\n') sio_write(s, "\\n", 1); return 0;
+        }
+        static int64_t sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\\n", 1); return 0; }
+        static int64_t sp_StringIO_print(sp_StringIO *s, const char *str) {
+          return sio_write(s, str, (int64_t)strlen(str));
+        }
+        static int64_t sp_StringIO_putc(sp_StringIO *s, int64_t ch) {
+          char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch;
+        }
+        static sp_StringIO *sp_StringIO_append(sp_StringIO *s, const char *str) {
+          sio_write(s, str, (int64_t)strlen(str)); return s;
+        }
+        static const char *sp_StringIO_read(sp_StringIO *s) {
+          if (s->pos >= s->len) return "";
+          const char *r = s->buf + s->pos; s->pos = s->len; return r;
+        }
+        static const char *sp_StringIO_read_n(sp_StringIO *s, int64_t n) {
+          if (s->pos >= s->len) return NULL;
+          int64_t rem = s->len - s->pos; if (n > rem) n = rem;
+          static char rb[65536]; if (n >= (int64_t)sizeof(rb)) n = sizeof(rb)-1;
+          memcpy(rb, s->buf + s->pos, n); rb[n] = '\\0'; s->pos += n; return rb;
+        }
+        static const char *sp_StringIO_gets(sp_StringIO *s) {
+          if (s->pos >= s->len) return NULL;
+          const char *st = s->buf + s->pos; const char *nl = memchr(st, '\\n', s->len - s->pos);
+          int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos;
+          static char gb[65536]; if (ll >= (int64_t)sizeof(gb)) ll = sizeof(gb)-1;
+          memcpy(gb, st, ll); gb[ll] = '\\0'; s->pos += ll; s->lineno++; return gb;
+        }
+        static const char *sp_StringIO_getc(sp_StringIO *s) {
+          if (s->pos >= s->len) return NULL;
+          static char gc[2]; gc[0] = s->buf[s->pos++]; gc[1] = '\\0'; return gc;
+        }
+        static int64_t sp_StringIO_getbyte(sp_StringIO *s) {
+          if (s->pos >= s->len) return -1;
+          return (int64_t)(unsigned char)s->buf[s->pos++];
+        }
+        static int64_t sp_StringIO_rewind(sp_StringIO *s) { s->pos = 0; s->lineno = 0; return 0; }
+        static int64_t sp_StringIO_seek(sp_StringIO *s, int64_t off, int64_t w) {
+          int64_t np; switch(w) { case 1: np=s->pos+off; break; case 2: np=s->len+off; break; default: np=off; }
+          if (np < 0) np = 0; s->pos = np; return 0;
+        }
+        static mrb_bool sp_StringIO_eof_p(sp_StringIO *s) { return s->pos >= s->len; }
+        static int64_t sp_StringIO_truncate(sp_StringIO *s, int64_t l) {
+          if (l < 0) l = 0; if (l < s->len) { s->len = l; s->buf[l] = '\\0'; } return 0;
+        }
+        static int64_t sp_StringIO_close(sp_StringIO *s) { s->closed = 1; return 0; }
+        static mrb_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed; }
+        static sp_StringIO *sp_StringIO_flush(sp_StringIO *s) { return s; }
+        static mrb_bool sp_StringIO_sync(sp_StringIO *s) { (void)s; return 1; }
+        static mrb_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
+        static int64_t sp_StringIO_fileno(sp_StringIO *s) { (void)s; return -1; }
 
       C
     end

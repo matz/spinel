@@ -79,6 +79,9 @@ module Spinel
       @needs_stringio = false
       @needs_proc = false
       @needs_poly = false
+      @needs_regexp = false
+      @regexp_patterns = []  # collected regex patterns: [{pattern:, c_var:}]
+      @regexp_pattern_map = {}  # pattern string -> c_var name
       @string_helpers_needed = Set.new
       @forward_decls = []
       @struct_decls = []
@@ -100,6 +103,9 @@ module Spinel
     end
 
     def compile
+      # Phase 0: resolve require_relative and merge sources
+      @source = resolve_requires(@source, @source_path)
+
       ast = Prism.parse(@source)
       root = ast.value
 
@@ -137,6 +143,25 @@ module Spinel
 
     private
 
+    def resolve_requires(source, source_path)
+      base_dir = File.dirname(File.expand_path(source_path))
+      resolved = source.dup
+      # Process require_relative lines - replace with file contents
+      resolved.gsub!(/^require_relative\s+["'](.+?)["']\s*$/) do
+        rel_path = $1
+        req_file = File.join(base_dir, rel_path)
+        req_file += ".rb" unless req_file.end_with?(".rb")
+        if File.exist?(req_file)
+          # Recursively resolve requires in the included file
+          content = File.read(req_file)
+          resolve_requires(content, req_file)
+        else
+          "# require_relative not found: #{rel_path}"
+        end
+      end
+      resolved
+    end
+
     def apply_module_includes
       return unless @module_methods
       @classes.each do |cname, ci|
@@ -156,6 +181,17 @@ module Spinel
           end
         end
       end
+    end
+
+    # ---- Regexp helpers ----
+    def register_regexp(pattern)
+      @needs_regexp = true
+      return @regexp_pattern_map[pattern] if @regexp_pattern_map[pattern]
+      idx = @regexp_patterns.length
+      c_var = "_re_#{idx}"
+      @regexp_patterns << { pattern: pattern, c_var: c_var }
+      @regexp_pattern_map[pattern] = c_var
+      c_var
     end
 
     # ---- Temp/label helpers ----
@@ -519,6 +555,28 @@ module Spinel
           @classes[owner].class_methods[name] = mi
         else
           @classes[owner].methods[name] = mi
+          # Detect simple getter: def x; @x; end -> synthetic attr_reader
+          ci = @classes[owner]
+          if !name.end_with?("=") && params.empty? && node.body
+            body_stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+            if body_stmts.length == 1 && body_stmts[0].is_a?(Prism::InstanceVariableReadNode)
+              ivar = body_stmts[0].name.to_s.delete_prefix("@")
+              if ivar == name
+                ci.attrs[:reader] << name unless ci.attrs[:reader].include?(name)
+              end
+            end
+          end
+          # Detect simple setter: def x=(v); @x = v; end -> synthetic attr_writer
+          if name.end_with?("=") && params.length == 1 && node.body
+            body_stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+            if body_stmts.length == 1 && body_stmts[0].is_a?(Prism::InstanceVariableWriteNode)
+              ivar = body_stmts[0].name.to_s.delete_prefix("@")
+              field = name.chomp("=")
+              if ivar == field
+                ci.attrs[:writer] << field unless ci.attrs[:writer].include?(field)
+              end
+            end
+          end
         end
       else
         @methods[name] = mi
@@ -1764,6 +1822,10 @@ module Spinel
           t = ci.ivars[ivar] if ci && ci.ivars[ivar] && ci.ivars[ivar] != Type::UNKNOWN
         end
         t || Type::UNKNOWN
+      when Prism::NumberedReferenceReadNode
+        Type::STRING
+      when Prism::RegularExpressionNode
+        Type::UNKNOWN  # regex literals are not a value type
       when Prism::MultiWriteNode
         Type::ARRAY
       when Prism::ConstantPathNode
@@ -1813,9 +1875,16 @@ module Spinel
         else
           Type::INTEGER
         end
+      when "-@", "+@"
+        # Unary minus/plus preserves receiver type
+        recv_type || Type::INTEGER
       when "==", "!=", "<", ">", "<=", ">=", "&&", "||"
         Type::BOOLEAN
+      when "=~"
+        Type::BOOLEAN
       when "!", "not"
+        Type::BOOLEAN
+      when "match?"
         Type::BOOLEAN
       when "to_i", "ceil", "floor", "round", "abs", "length", "size", "count", "ord", "hex", "oct"
         if recv_type == Type::FLOAT && mname == "abs"
@@ -2948,7 +3017,12 @@ module Spinel
           ref = node.value.name.to_s
           promoted << ref if param_names.include?(ref)
         end
+        # Check if value expression uses param in float context (e.g., param * 255.5)
+        scan_param_float_expr(node.value, param_names, float_locals, promoted)
         scan_param_float_usage(node.value, param_names, float_locals, promoted)
+      when Prism::CallNode
+        # Check arithmetic: param <op> float_literal or float_local <op> param
+        scan_param_float_expr(node, param_names, float_locals, promoted)
       when Prism::WhileNode
         # while (cur_i > max_i) - if cur_i is float and max_i is param, promote max_i
         if node.predicate.is_a?(Prism::CallNode) &&
@@ -2971,6 +3045,32 @@ module Spinel
       else
         node.child_nodes.each { |c| scan_param_float_usage(c, param_names, float_locals, promoted) if c } if node.respond_to?(:child_nodes)
       end
+    end
+
+    # Detect param used in float arithmetic: param * 255.5, param + float_local, etc.
+    def scan_param_float_expr(node, param_names, float_locals, promoted)
+      return unless node.is_a?(Prism::CallNode)
+      mname = node.name.to_s
+      return unless %w[+ - * /].include?(mname) && node.receiver && node.arguments
+      recv = node.receiver
+      arg = node.arguments.arguments&.first
+      return unless arg
+      # Check if one side is a param and the other is float
+      recv_is_param = recv.is_a?(Prism::LocalVariableReadNode) && param_names.include?(recv.name.to_s)
+      arg_is_param = arg.is_a?(Prism::LocalVariableReadNode) && param_names.include?(arg.name.to_s)
+      recv_is_float = recv.is_a?(Prism::FloatNode) ||
+                      (recv.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(recv.name.to_s))
+      arg_is_float = arg.is_a?(Prism::FloatNode) ||
+                     (arg.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(arg.name.to_s))
+      if recv_is_param && arg_is_float
+        promoted << recv.name.to_s
+      end
+      if arg_is_param && recv_is_float
+        promoted << arg.name.to_s
+      end
+      # Recurse into sub-expressions
+      scan_param_float_expr(recv, param_names, float_locals, promoted) if recv.is_a?(Prism::CallNode)
+      scan_param_float_expr(arg, param_names, float_locals, promoted) if arg.is_a?(Prism::CallNode)
     end
 
     def generate_method_body(body, mi)
@@ -3222,7 +3322,16 @@ module Spinel
       op = node.binary_operator.to_s
       c_name = "lv_#{name}"
       val = compile_expr(node.value)
-      emit("#{c_name} #{op}= #{val};")
+      var_info = lookup_var(name)
+      var_type = var_info ? var_info.type : Type::UNKNOWN
+      val_type = infer_type(node.value)
+      if op == "/" && var_type == Type::INTEGER && val_type == Type::INTEGER
+        emit("#{c_name} = sp_idiv(#{c_name}, #{val});")
+      elsif op == "%" && var_type == Type::INTEGER && val_type == Type::INTEGER
+        emit("#{c_name} = sp_imod(#{c_name}, #{val});")
+      else
+        emit("#{c_name} #{op}= #{val};")
+      end
     end
 
     def generate_ivar_write(node)
@@ -3477,6 +3586,12 @@ module Spinel
     def generate_printf(node)
       args = call_args(node)
       return if args.empty?
+      # Special case: printf("%c", val) -> sp_putc_utf8(val) for CRuby UTF-8 compat
+      if args.length == 2 && args[0].is_a?(Prism::StringNode) && args[0].content == "%c"
+        val = compile_expr(args[1])
+        emit("sp_putc_utf8(#{val});")
+        return
+      end
       fmt = compile_expr(args[0])
       rest = args[1..].map { |a| compile_expr(a) }.join(", ")
       if rest.empty?
@@ -4170,8 +4285,10 @@ module Spinel
       when Prism::IntegerNode
         node.value.to_s
       when Prism::FloatNode
-        # Use full precision
-        "%.16g" % node.value
+        # Use full precision, ensure decimal point for C float literal
+        s = "%.16g" % node.value
+        s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
+        s
       when Prism::StringNode
         c_string_literal(node.content)
       when Prism::InterpolatedStringNode
@@ -4197,7 +4314,16 @@ module Spinel
         name = node.name.to_s
         op = node.binary_operator.to_s
         val = compile_expr(node.value)
-        "(lv_#{name} #{op}= #{val})"
+        var_info = lookup_var(name)
+        var_type = var_info ? var_info.type : Type::UNKNOWN
+        val_type = infer_type(node.value)
+        if op == "/" && var_type == Type::INTEGER && val_type == Type::INTEGER
+          "(lv_#{name} = sp_idiv(lv_#{name}, #{val}))"
+        elsif op == "%" && var_type == Type::INTEGER && val_type == Type::INTEGER
+          "(lv_#{name} = sp_imod(lv_#{name}, #{val}))"
+        else
+          "(lv_#{name} #{op}= #{val})"
+        end
       when Prism::InstanceVariableReadNode
         compile_ivar_read(node)
       when Prism::InstanceVariableWriteNode
@@ -4311,6 +4437,17 @@ module Spinel
         left = compile_expr(node.left)
         right = compile_expr(node.right)
         "(#{left} || #{right})"
+      when Prism::RegularExpressionNode
+        # Register the pattern and return the compiled regex variable
+        pattern = node.unescaped
+        c_var = register_regexp(pattern)
+        c_var
+      when Prism::NumberedReferenceReadNode
+        @needs_regexp = true
+        "sp_re_group(#{node.number})"
+      when Prism::MatchWriteNode
+        # if str =~ /pattern/ form (MatchWriteNode wraps a CallNode)
+        compile_expr(node.call)
       else
         "0 /* unsupported: #{node.class.name.split('::').last} */"
       end
@@ -5123,6 +5260,16 @@ module Spinel
       # This handles operator methods like <, >, ==, <=> on class instances
       if recv_type.is_a?(String) && @classes[recv_type]
         ci = @classes[recv_type]
+        needs_ptr = class_needs_gc?(ci)
+        # Prioritize attr reader/writer over method calls for direct field access
+        if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+          return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
+        end
+        if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+          field = mname.chomp("=")
+          val = compile_expr(args[0])
+          return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
+        end
         actual = find_method_class(recv_type, mname)
         if actual && @classes[actual].methods[mname]
           target_mi = @classes[actual].methods[mname]
@@ -5314,6 +5461,58 @@ module Spinel
       end
 
       case mname
+      # ---- Regexp operators ----
+      when "=~"
+        if args[0].is_a?(Prism::RegularExpressionNode)
+          re_var = register_regexp(args[0].unescaped)
+          return "(sp_re_match(#{re_var}, #{mstr_recv}) >= 0)"
+        end
+        return "0"
+      when "match?"
+        if args[0].is_a?(Prism::RegularExpressionNode)
+          re_var = register_regexp(args[0].unescaped)
+          return "sp_re_match_p(#{re_var}, #{mstr_recv})"
+        end
+        return "0"
+      when "scan"
+        if args[0].is_a?(Prism::RegularExpressionNode) && node.block
+          re_var = register_regexp(args[0].unescaped)
+          scan_id = next_temp
+          block_node = node.block
+          block_params = block_node.parameters&.parameters&.requireds || []
+          bparam = block_params[0]
+          bparam_name = bparam.is_a?(Prism::RequiredParameterNode) ? bparam.name.to_s : "m"
+          ensure_var_declared(bparam_name, Type::STRING)
+          emit("{ /* scan */")
+          @indent += 1
+          emit("const char *_ss_#{scan_id} = #{mstr_recv};")
+          emit("OnigRegion *_sr_#{scan_id} = onig_region_new();")
+          emit("const OnigUChar *_se_#{scan_id} = (const OnigUChar *)_ss_#{scan_id} + strlen(_ss_#{scan_id});")
+          emit("int _sp_#{scan_id} = 0;")
+          emit("while (_sp_#{scan_id} >= 0) {")
+          @indent += 1
+          emit("_sp_#{scan_id} = onig_search(#{re_var}, (const OnigUChar *)_ss_#{scan_id}, _se_#{scan_id},")
+          emit("  (const OnigUChar *)_ss_#{scan_id} + _sp_#{scan_id}, _se_#{scan_id}, _sr_#{scan_id}, ONIG_OPTION_NONE);")
+          emit("if (_sp_#{scan_id} >= 0) {")
+          @indent += 1
+          emit("int _ml_#{scan_id} = _sr_#{scan_id}->end[0] - _sr_#{scan_id}->beg[0];")
+          emit("char *lv_#{bparam_name} = (char *)malloc(_ml_#{scan_id} + 1);")
+          emit("memcpy(lv_#{bparam_name}, _ss_#{scan_id} + _sr_#{scan_id}->beg[0], _ml_#{scan_id});")
+          emit("lv_#{bparam_name}[_ml_#{scan_id}] = '\\0';")
+          if block_node.body
+            generate_body_stmts(block_node.body)
+          end
+          emit("_sp_#{scan_id} = _sr_#{scan_id}->end[0];")
+          @indent -= 1
+          emit("}")
+          @indent -= 1
+          emit("}")
+          emit("onig_region_free(_sr_#{scan_id}, 1);")
+          @indent -= 1
+          emit("}")
+          return "0"
+        end
+        return "0"
       # ---- Arithmetic operators ----
       when "+", "-", "*", "/", "%"
         arg = compile_expr(args[0])
@@ -5338,6 +5537,14 @@ module Spinel
         elsif (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "*"
           @string_helpers_needed << :str_repeat
           return "sp_str_repeat(#{mstr_recv}, #{arg})"
+        end
+        # Ruby integer division is floor division, C is truncation toward zero
+        if mname == "/" && recv_type == Type::INTEGER && arg_type == Type::INTEGER
+          return "sp_idiv(#{recv_code}, #{arg})"
+        end
+        # Ruby integer modulo follows floor division semantics
+        if mname == "%" && recv_type == Type::INTEGER && arg_type == Type::INTEGER
+          return "sp_imod(#{recv_code}, #{arg})"
         end
         return "(#{recv_code} #{mname} #{arg})"
       when "**"
@@ -5650,11 +5857,21 @@ module Spinel
         end
         return "((mrb_float)(#{recv_code}))"
       when "gsub"
+        if args[0].is_a?(Prism::RegularExpressionNode)
+          re_var = register_regexp(args[0].unescaped)
+          to = compile_expr(args[1])
+          return "sp_re_gsub(#{re_var}, #{mstr_recv}, #{to})"
+        end
         @string_helpers_needed << :str_gsub
         from = compile_expr(args[0])
         to = compile_expr(args[1])
         return "sp_str_gsub(#{mstr_recv}, #{from}, #{to})"
       when "sub"
+        if args[0].is_a?(Prism::RegularExpressionNode)
+          re_var = register_regexp(args[0].unescaped)
+          to = compile_expr(args[1])
+          return "sp_re_sub(#{re_var}, #{mstr_recv}, #{to})"
+        end
         @string_helpers_needed << :str_sub
         from = compile_expr(args[0])
         to = compile_expr(args[1])
@@ -5678,6 +5895,10 @@ module Spinel
         return "0"
       when "split"
         @needs_str_array = true
+        if !args.empty? && args[0].is_a?(Prism::RegularExpressionNode)
+          re_var = register_regexp(args[0].unescaped)
+          return "sp_re_split(#{re_var}, #{mstr_recv})"
+        end
         @string_helpers_needed << :str_split
         if args.empty?
           return "sp_str_split(#{mstr_recv}, \" \")"
@@ -7447,7 +7668,16 @@ module Spinel
       when Prism::StatementsNode
         node.body.each { |s| find_locals(s, locals) }
       when Prism::LocalVariableWriteNode
-        locals[node.name.to_s] ||= infer_type(node.value)
+        name = node.name.to_s
+        unless locals[name]
+          t = infer_type(node.value)
+          locals[name] = t
+          # Register in current scope so subsequent infer_type calls can resolve
+          existing = lookup_var(name)
+          if !existing && t != Type::UNKNOWN
+            declare_var(name, t, c_name: "lv_#{name}")
+          end
+        end
         find_locals(node.value, locals)
       when Prism::LocalVariableOperatorWriteNode
         val_type = infer_type(node.value)
@@ -7549,7 +7779,10 @@ module Spinel
     def const_value_to_c(node, type)
       case node
       when Prism::IntegerNode then node.value.to_s
-      when Prism::FloatNode then node.value.to_s
+      when Prism::FloatNode
+        s = node.value.to_s
+        s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
+        s
       when Prism::StringNode then c_string_literal(node.content)
       when Prism::TrueNode then "TRUE"
       when Prism::FalseNode then "FALSE"
@@ -7704,6 +7937,27 @@ module Spinel
       out.puts "#define FALSE false"
       out.puts "#endif"
       out.puts
+      # Ruby-compatible floor division and modulo for integers
+      out.puts "static inline mrb_int sp_idiv(mrb_int a, mrb_int b) {"
+      out.puts "  mrb_int q = a / b;"
+      out.puts "  mrb_int r = a % b;"
+      out.puts "  if ((r != 0) && ((r ^ b) < 0)) q--;"
+      out.puts "  return q;"
+      out.puts "}"
+      out.puts "static inline mrb_int sp_imod(mrb_int a, mrb_int b) {"
+      out.puts "  mrb_int r = a % b;"
+      out.puts "  if ((r != 0) && ((r ^ b) < 0)) r += b;"
+      out.puts "  return r;"
+      out.puts "}"
+      out.puts
+      # Ruby-compatible putc_utf8 for printf("%c", int) - matches CRuby UTF-8 output
+      out.puts "static inline void sp_putc_utf8(mrb_int c) {"
+      out.puts "  if (c < 0x80) { putchar((int)c); }"
+      out.puts "  else if (c < 0x800) { putchar(0xC0 | (c >> 6)); putchar(0x80 | (c & 0x3F)); }"
+      out.puts "  else if (c < 0x10000) { putchar(0xE0 | (c >> 12)); putchar(0x80 | ((c >> 6) & 0x3F)); putchar(0x80 | (c & 0x3F)); }"
+      out.puts "  else { putchar(0xF0 | (c >> 18)); putchar(0x80 | ((c >> 12) & 0x3F)); putchar(0x80 | ((c >> 6) & 0x3F)); putchar(0x80 | (c & 0x3F)); }"
+      out.puts "}"
+      out.puts
 
       # Auto-dependencies (order matters: propagate from high-level to low-level)
       @needs_str_int_hash = true if @needs_str_str_hash  # RbHash uses sp_hash_str from StrIntHash
@@ -7766,6 +8020,9 @@ module Spinel
 
       # System runtime
       emit_system_runtime(out) if @needs_system
+
+      # Regexp runtime (oniguruma)
+      emit_regexp_runtime(out) if @needs_regexp
 
       # Constants (global)
       @constants.each do |name, info|
@@ -7857,13 +8114,17 @@ module Spinel
           end
         elsif gc_type?(type)
           out.puts "  #{c_type(type)} #{name} = #{default_val(type)};"
-          out.puts "  SP_GC_ROOT(#{name});"
+          out.puts "  SP_GC_ROOT(#{name});" if @needs_gc
         elsif type == Type::RANGE
           out.puts "  #{c_type(type)} #{name};"
         else
           out.puts "  #{vol}#{c_type(type)} #{name} = #{default_val(type)};"
         end
       end
+      out.puts
+
+      # Regexp initialization
+      out.puts "  sp_regexp_init();" if @needs_regexp
       out.puts
 
       # Constants initialization
@@ -8619,6 +8880,168 @@ module Spinel
         lines << 'if (strcmp(cls, "RuntimeError") == 0) return 1;'
       end
       lines.join("\n          ")
+    end
+
+    def emit_regexp_runtime(out)
+      out.puts <<~C
+        /* ---- Regexp runtime (oniguruma) ---- */
+        /* Link with: /usr/lib/x86_64-linux-gnu/libonig.so.5 */
+        /* Minimal oniguruma declarations - no header needed */
+        typedef unsigned char OnigUChar;
+        typedef struct OnigEncodingTypeST OnigEncodingType;
+        typedef OnigEncodingType *OnigEncoding;
+        typedef struct { int num_regs; int *beg; int *end; } OnigRegion;
+        typedef struct re_pattern_buffer regex_t;
+        typedef struct { int ret; const OnigUChar *s; } OnigErrorInfo;
+        typedef struct OnigSyntaxTypeST OnigSyntaxType;
+        #define ONIG_OPTION_DEFAULT 0
+        #define ONIG_OPTION_NONE 0
+        extern OnigEncodingType OnigEncodingUTF8;
+        extern OnigSyntaxType OnigSyntaxRuby;
+        extern int onig_initialize(OnigEncoding *encs, int n);
+        extern int onig_new(regex_t **reg, const OnigUChar *pattern,
+          const OnigUChar *pattern_end, int option, OnigEncoding enc,
+          OnigSyntaxType *syntax, OnigErrorInfo *einfo);
+        extern int onig_search(regex_t *reg, const OnigUChar *str,
+          const OnigUChar *end, const OnigUChar *start, const OnigUChar *range,
+          OnigRegion *region, int option);
+        extern OnigRegion *onig_region_new(void);
+        extern void onig_region_free(OnigRegion *region, int free_self);
+
+        static OnigRegion *sp_match_region;
+        static const char *sp_match_str;
+      C
+
+      # Declare regex variables
+      @regexp_patterns.each do |rp|
+        out.puts "static regex_t *#{rp[:c_var]};"
+      end
+      out.puts
+
+      # sp_regexp_init function
+      out.puts "static void sp_regexp_init(void) {"
+      out.puts "  OnigEncoding enc = &OnigEncodingUTF8;"
+      out.puts "  OnigErrorInfo einfo;"
+      out.puts "  onig_initialize(&enc, 1);"
+      out.puts "  sp_match_region = onig_region_new();"
+      @regexp_patterns.each do |rp|
+        pat = rp[:pattern]
+        # C-escape the pattern: backslashes need doubling
+        c_pat = pat.gsub('\\', '\\\\\\\\').gsub('"', '\\"')
+        pat_len = pat.length
+        out.puts "  onig_new(&#{rp[:c_var]}, (const OnigUChar *)\"#{c_pat}\", (const OnigUChar *)\"#{c_pat}\" + #{pat_len},"
+        out.puts "    ONIG_OPTION_DEFAULT, &OnigEncodingUTF8, &OnigSyntaxRuby, &einfo);"
+      end
+      out.puts "}"
+      out.puts
+
+      # Helper functions
+      out.puts <<~C
+        static mrb_int sp_re_match(regex_t *re, const char *s) {
+          sp_match_str = s;
+          const OnigUChar *end = (const OnigUChar *)s + strlen(s);
+          int r = onig_search(re, (const OnigUChar *)s, end,
+            (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);
+          return (mrb_int)r;
+        }
+
+        static mrb_bool sp_re_match_p(regex_t *re, const char *s) {
+          const OnigUChar *end = (const OnigUChar *)s + strlen(s);
+          int r = onig_search(re, (const OnigUChar *)s, end,
+            (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);
+          return r >= 0;
+        }
+
+        static const char *sp_re_group(int n) {
+          if (n < 0 || n >= sp_match_region->num_regs) return "";
+          int beg = sp_match_region->beg[n], end = sp_match_region->end[n];
+          if (beg < 0) return "";
+          int len = end - beg;
+          char *r = (char *)malloc(len + 1);
+          memcpy(r, sp_match_str + beg, len);
+          r[len] = '\\0';
+          return r;
+        }
+
+        static const char *sp_re_gsub(regex_t *re, const char *s, const char *repl) {
+          size_t slen = strlen(s), rlen = strlen(repl);
+          size_t cap = slen * 2 + 16; char *out = (char *)malloc(cap); size_t oi = 0;
+          OnigRegion *region = onig_region_new();
+          const OnigUChar *end = (const OnigUChar *)s + slen;
+          int pos = 0;
+          while (pos <= (int)slen) {
+            int r = onig_search(re, (const OnigUChar *)s, end,
+              (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);
+            if (r < 0) break;
+            int mbeg = region->beg[0], mend = region->end[0];
+            size_t need = oi + (mbeg - pos) + rlen + (slen - mend) + 1;
+            if (need > cap) { cap = need * 2; out = (char *)realloc(out, cap); }
+            memcpy(out + oi, s + pos, mbeg - pos); oi += mbeg - pos;
+            memcpy(out + oi, repl, rlen); oi += rlen;
+            pos = mend;
+            if (mend == mbeg) pos++;
+          }
+          size_t rest = slen - pos;
+          if (oi + rest + 1 > cap) { cap = oi + rest + 1; out = (char *)realloc(out, cap); }
+          memcpy(out + oi, s + pos, rest); oi += rest;
+          out[oi] = '\\0';
+          onig_region_free(region, 1);
+          return out;
+        }
+
+        static const char *sp_re_sub(regex_t *re, const char *s, const char *repl) {
+          size_t slen = strlen(s), rlen = strlen(repl);
+          OnigRegion *region = onig_region_new();
+          const OnigUChar *end = (const OnigUChar *)s + slen;
+          int r = onig_search(re, (const OnigUChar *)s, end,
+            (const OnigUChar *)s, end, region, ONIG_OPTION_NONE);
+          if (r < 0) {
+            onig_region_free(region, 1);
+            char *dup = (char *)malloc(slen + 1); memcpy(dup, s, slen + 1); return dup;
+          }
+          int mbeg = region->beg[0], mend = region->end[0];
+          size_t olen = slen - (mend - mbeg) + rlen;
+          char *out = (char *)malloc(olen + 1);
+          memcpy(out, s, mbeg);
+          memcpy(out + mbeg, repl, rlen);
+          memcpy(out + mbeg + rlen, s + mend, slen - mend + 1);
+          onig_region_free(region, 1);
+          return out;
+        }
+      C
+
+      # sp_re_split only if str_array is needed
+      if @needs_str_array
+        out.puts <<~C
+          static sp_StrArray *sp_re_split(regex_t *re, const char *s) {
+            sp_StrArray *a = sp_StrArray_new();
+            size_t slen = strlen(s);
+            OnigRegion *region = onig_region_new();
+            const OnigUChar *end = (const OnigUChar *)s + slen;
+            int pos = 0;
+            while (pos <= (int)slen) {
+              int r = onig_search(re, (const OnigUChar *)s, end,
+                (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);
+              if (r < 0) break;
+              int mbeg = region->beg[0], mend = region->end[0];
+              int plen = mbeg - pos;
+              char *part = (char *)malloc(plen + 1);
+              memcpy(part, s + pos, plen); part[plen] = '\\0';
+              sp_StrArray_push(a, part);
+              pos = mend;
+              if (mend == mbeg) pos++;
+            }
+            if (pos <= (int)slen) {
+              int rlen = (int)slen - pos;
+              char *part = (char *)malloc(rlen + 1);
+              memcpy(part, s + pos, rlen); part[rlen] = '\\0';
+              sp_StrArray_push(a, part);
+            }
+            onig_region_free(region, 1);
+            return a;
+          }
+        C
+      end
     end
 
     def emit_exception_runtime(out)

@@ -34,7 +34,7 @@ module Spinel
   # -------- Data structures --------
   VarInfo = Struct.new(:name, :type, :c_name, :declared, :is_ivar, :is_constant, :is_global, keyword_init: true)
   MethodInfo = Struct.new(:name, :params, :return_type, :body, :has_yield, :is_class_method,
-                          :owner_class, :default_values, keyword_init: true)
+                          :owner_class, :default_values, :has_rest, :rest_name, :has_kwargs, keyword_init: true)
   ParamInfo = Struct.new(:name, :type, :default_node, keyword_init: true)
   ClassInfo = Struct.new(:name, :parent, :methods, :ivars, :class_methods, :attrs, keyword_init: true)
   BlockEnvEntry = Struct.new(:name, :type, :is_ptr, keyword_init: true)
@@ -97,6 +97,9 @@ module Spinel
       # Phase 1.5: scan for mutable string usage
       scan_mutable_strings(root)
 
+      # Phase 1.75: apply module includes (copy module methods into classes)
+      apply_module_includes
+
       # Phase 2: infer types for methods
       infer_method_types
 
@@ -108,6 +111,27 @@ module Spinel
     end
 
     private
+
+    def apply_module_includes
+      return unless @module_methods
+      @classes.each do |cname, ci|
+        includes = ci.attrs[:includes] || []
+        includes.each do |mod_name|
+          next unless @module_methods[mod_name]
+          @module_methods[mod_name].each do |mname, mi|
+            next if ci.methods[mname]  # Don't override existing methods
+            # Clone the method for this class
+            new_mi = MethodInfo.new(
+              name: mi.name, params: mi.params.map(&:dup), return_type: mi.return_type,
+              body: mi.body, has_yield: mi.has_yield,
+              is_class_method: false, owner_class: cname,
+              default_values: mi.default_values || {}
+            )
+            ci.methods[mname] = new_mi
+          end
+        end
+      end
+    end
 
     # ---- Temp/label helpers ----
     def next_temp
@@ -126,6 +150,37 @@ module Spinel
       l = @label_counter
       @label_counter += 1
       l
+    end
+
+    # Sanitize Ruby method names to valid C identifiers
+    def sanitize_method_name(name)
+      case name
+      when "<=>" then "_cmp"
+      when "<=" then "_le"
+      when ">=" then "_ge"
+      when "==" then "_eq"
+      when "!=" then "_ne"
+      when "<" then "_lt"
+      when ">" then "_gt"
+      when "+" then "_plus"
+      when "-" then "_minus"
+      when "*" then "_mul"
+      when "/" then "_div"
+      when "%" then "_mod"
+      when "**" then "_pow"
+      when "<<" then "_lshift"
+      when ">>" then "_rshift"
+      when "&" then "_and"
+      when "|" then "_or"
+      when "^" then "_xor"
+      when "~" then "_not"
+      when "[]" then "_aref"
+      when "[]=" then "_aset"
+      when "-@" then "_uminus"
+      when "+@" then "_uplus"
+      else
+        name.gsub("?", "_p").gsub("!", "_bang")
+      end
     end
 
     def indent_str
@@ -191,10 +246,42 @@ module Spinel
       end
     end
 
+    BUILTIN_TYPES = %w[Integer Float String Boolean Symbol].freeze
+
     def collect_class(node)
       name = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : node.constant_path.to_s
       parent = nil
       is_struct_inherit = false
+
+      # Open class for built-in types: just collect methods, don't create struct
+      if BUILTIN_TYPES.include?(name)
+        @open_class_methods ||= {}
+        @open_class_methods[name] ||= {}
+        if node.body
+          stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+          stmts.each do |s|
+            if s.is_a?(Prism::DefNode) && !s.receiver
+              # Instance method on built-in type
+              mi_name = s.name.to_s
+              params = []
+              if s.parameters
+                (s.parameters.requireds || []).each do |p|
+                  pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                  params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+                end
+              end
+              mi = MethodInfo.new(
+                name: mi_name, params: params, return_type: Type::UNKNOWN,
+                body: s.body, has_yield: body_has_yield?(s.body),
+                is_class_method: false, owner_class: name,
+                default_values: {}
+              )
+              @open_class_methods[name][mi_name] = mi
+            end
+          end
+        end
+        return
+      end
 
       if node.superclass
         if node.superclass.is_a?(Prism::CallNode) && node.superclass.name.to_s == "new" &&
@@ -245,6 +332,16 @@ module Spinel
             end
           when Prism::CallNode
             collect_attr_call(s, ci)
+            # Handle include Comparable / include Enumerable
+            if s.name.to_s == "include" && s.arguments
+              s.arguments.arguments.each do |arg|
+                if arg.is_a?(Prism::ConstantReadNode)
+                  mod_name = arg.name.to_s
+                  ci.attrs[:includes] ||= []
+                  ci.attrs[:includes] << mod_name
+                end
+              end
+            end
           end
         end
       end
@@ -254,6 +351,8 @@ module Spinel
 
     def collect_module(node)
       mod_name = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : node.constant_path.to_s
+      @module_methods ||= {}
+      @module_methods[mod_name] ||= {}
       if node.body
         stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
         stmts.each do |s|
@@ -264,6 +363,23 @@ module Spinel
             @module_constants["#{mod_name}::#{cname}"] = {
               type: type, c_name: "sp_#{mod_name}_#{cname}", value: val
             }
+          elsif s.is_a?(Prism::DefNode) && !s.receiver
+            # Module instance method
+            mname = s.name.to_s
+            params = []
+            if s.parameters
+              (s.parameters.requireds || []).each do |p|
+                pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+              end
+            end
+            mi = MethodInfo.new(
+              name: mname, params: params, return_type: Type::UNKNOWN,
+              body: s.body, has_yield: body_has_yield?(s.body),
+              is_class_method: false, owner_class: mod_name,
+              default_values: {}
+            )
+            @module_methods[mod_name][mname] = mi
           end
         end
       end
@@ -298,6 +414,8 @@ module Spinel
       name = node.name.to_s
       params = []
       defaults = {}
+      has_rest = false
+      rest_name = nil
 
       if node.parameters
         # Required params
@@ -311,15 +429,30 @@ module Spinel
           params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: p.value)
           defaults[pname] = p.value
         end
+        # Rest params (*args)
+        if node.parameters.rest.is_a?(Prism::RestParameterNode)
+          rest_name = node.parameters.rest.name.to_s
+          has_rest = true
+          params << ParamInfo.new(name: rest_name, type: Type::ARRAY, default_node: nil)
+        end
+        # Keyword params (name:, greeting: "Hello")
+        (node.parameters.keywords || []).each do |kw|
+          pname = kw.name.to_s.chomp(":")
+          default_node = kw.respond_to?(:value) ? kw.value : nil
+          params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: default_node)
+          defaults[pname] = default_node if default_node
+        end
       end
 
       has_yield = body_has_yield?(node.body)
+      has_kwargs = node.parameters && (node.parameters.keywords || []).any?
 
       mi = MethodInfo.new(
         name: name, params: params, return_type: Type::UNKNOWN,
         body: node.body, has_yield: has_yield,
         is_class_method: is_class_method, owner_class: owner,
-        default_values: defaults
+        default_values: defaults, has_rest: has_rest, rest_name: rest_name,
+        has_kwargs: has_kwargs
       )
 
       if owner
@@ -401,6 +534,38 @@ module Spinel
 
     # ---- Phase 2: Type inference ----
     def infer_method_types
+      # Auto-generate Comparable methods for classes that include Comparable
+      @classes.each do |cname, ci|
+        includes = ci.attrs[:includes] || []
+        if includes.include?("Comparable") && ci.methods["<=>"]
+          # Generate <, >, ==, <=, >= from <=>
+          %w[< > == <= >=].each do |op|
+            next if ci.methods[op]  # Don't override existing
+            is_bool = true
+            cmp_op = case op
+                     when "<" then "< 0"
+                     when ">" then "> 0"
+                     when "==" then "== 0"
+                     when "<=" then "<= 0"
+                     when ">=" then ">= 0"
+                     end
+            # Store the op and cmp expression for code generation
+            ci.methods[op] = MethodInfo.new(
+              name: op,
+              params: [ParamInfo.new(name: "other", type: Type::UNKNOWN)],
+              return_type: Type::BOOLEAN,
+              body: nil,
+              has_yield: false,
+              is_class_method: false,
+              owner_class: cname,
+              default_values: {}
+            )
+            # Mark as synthetic for special code generation
+            ci.methods[op].instance_variable_set(:@comparable_cmp_op, cmp_op)
+          end
+        end
+      end
+
       # Pre-collect ivars from initialize bodies
       @classes.each do |_cname, ci|
         init = ci.methods["initialize"]
@@ -452,6 +617,27 @@ module Spinel
         mi.return_type = infer_body_type(mi.body)
       end
 
+      # Second pass: re-scan call sites with updated method return types
+      # This allows local vars assigned from method calls to get correct types
+      ast2 = Prism.parse(@source).value
+      scan_call_sites(ast2)
+
+      # Scan all method bodies for attr assignments to refine nil-initialized ivars
+      # e.g., n.left = make_node(x) where n is a Node and left was nil-initialized
+      # Done after method return type inference so return types are known
+      @classes.each do |cname, ci|
+        ci.methods.each do |_mname, mi|
+          next unless mi.body
+          scan_ivar_assignments_in_body(mi.body, cname, ci)
+        end
+      end
+      @methods.each do |_mname, mi|
+        next unless mi.body
+        @classes.each do |cname, ci|
+          scan_ivar_assignments_in_body(mi.body, cname, ci)
+        end
+      end
+
       # Class methods
       @classes.each do |_cname, ci|
         # Don't re-collect ivars - already done and types updated
@@ -467,6 +653,8 @@ module Spinel
               p.type = infer_type(p.default_node)
             end
           end
+          # Don't override return type for synthetic methods (e.g., Comparable)
+          next if mi.body.nil? && mi.return_type != Type::UNKNOWN
           old_class = @current_class
           @current_class = ci.name
           mi.return_type = infer_body_type(mi.body)
@@ -533,6 +721,20 @@ module Spinel
         if @methods[mname] && node.arguments
           mi = @methods[mname]
           node.arguments.arguments.each_with_index do |arg, i|
+            # Handle keyword hash nodes - extract types by name
+            if arg.is_a?(Prism::KeywordHashNode)
+              arg.elements.each do |assoc|
+                next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+                key_name = assoc.key.value
+                arg_type = infer_type(assoc.value)
+                if arg_type != Type::UNKNOWN
+                  mi.params.each do |p|
+                    p.type = arg_type if p.name == key_name && p.type == Type::UNKNOWN
+                  end
+                end
+              end
+              next
+            end
             next if i >= mi.params.length
             arg_type = infer_type(arg)
             # Also check var_types_global for local variable reads
@@ -599,12 +801,121 @@ module Spinel
             end
           end
         end
+        # Scan attr writer calls: obj.attr = value (name ends with =)
+        if mname.end_with?("=") && node.receiver.is_a?(Prism::LocalVariableReadNode) && node.arguments
+          attr_name = mname.chomp("=")
+          recv_name = node.receiver.name.to_s
+          recv_class = @var_types_global[recv_name]
+          if recv_class.is_a?(String) && @classes[recv_class]
+            ci = @classes[recv_class]
+            if (ci.attrs[:writer].include?(attr_name) || ci.attrs[:accessor].include?(attr_name))
+              node.arguments.arguments.each do |arg|
+                arg_type = infer_type(arg)
+                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                  arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                end
+                if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::UNKNOWN || ci.ivars[attr_name] == Type::NIL)
+                  ci.ivars[attr_name] = arg_type
+                end
+              end
+            end
+          end
+        end
+        # Scan instance method calls: obj.method(args) to infer param types
+        if node.receiver.is_a?(Prism::LocalVariableReadNode) && !mname.end_with?("=") && mname != "new" && node.arguments
+          recv_name = node.receiver.name.to_s
+          recv_class = @var_types_global[recv_name]
+          if recv_class.is_a?(String) && @classes[recv_class]
+            ci = @classes[recv_class]
+            mi = ci.methods[mname]
+            if mi
+              node.arguments.arguments.each_with_index do |arg, i|
+                next if i >= mi.params.length
+                arg_type = infer_type(arg)
+                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                  arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                end
+                if arg_type != Type::UNKNOWN && mi.params[i].type == Type::UNKNOWN
+                  mi.params[i].type = arg_type
+                end
+              end
+            end
+          end
+        end
         # Also scan child nodes
         node.arguments&.arguments&.each { |a| scan_call_sites(a) }
         scan_call_sites(node.block) if node.block
       else
         # Generic traversal
         node.child_nodes.each { |c| scan_call_sites(c) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    def scan_ivar_assignments_in_body(node, cname, ci)
+      return unless node
+      case node
+      when Prism::StatementsNode
+        node.body.each { |s| scan_ivar_assignments_in_body(s, cname, ci) }
+      when Prism::LocalVariableWriteNode
+        # Refresh var_types_global with updated method return types
+        t = infer_type(node.value)
+        if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+          t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
+        end
+        @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
+        scan_ivar_assignments_in_body(node.value, cname, ci)
+      when Prism::CallNode
+        mname = node.name.to_s
+        # Check for attr_name= calls on class instances
+        if mname.end_with?("=") && !mname.start_with?("[") && node.receiver && node.arguments
+          attr_name = mname.chomp("=")
+          if (ci.attrs[:writer]&.include?(attr_name) || ci.attrs[:accessor]&.include?(attr_name))
+            # Check if receiver's class matches
+            recv_class = nil
+            if node.receiver.is_a?(Prism::LocalVariableReadNode)
+              recv_class = @var_types_global[node.receiver.name.to_s]
+            end
+            if recv_class == cname
+              node.arguments.arguments.each do |arg|
+                arg_type = infer_type(arg)
+                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                  arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                end
+                if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::NIL || ci.ivars[attr_name] == Type::UNKNOWN)
+                  ci.ivars[attr_name] = arg_type
+                end
+              end
+            end
+          end
+        end
+        # Also check @ivar = value inside class methods
+        node.child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
+      when Prism::InstanceVariableWriteNode
+        ivar = node.name.to_s.delete_prefix("@")
+        if ci.ivars.key?(ivar) && (ci.ivars[ivar] == Type::NIL || ci.ivars[ivar] == Type::UNKNOWN)
+          t = infer_type(node.value)
+          if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+            # Check method params
+            vname = node.value.name.to_s
+            ci.methods.each do |_mn, mi|
+              mi.params.each do |p|
+                if p.name == vname && p.type != Type::UNKNOWN
+                  t = p.type
+                  break
+                end
+              end
+              break if t != Type::UNKNOWN
+            end
+            t = @var_types_global[vname] || Type::UNKNOWN if t == Type::UNKNOWN
+          end
+          if t != Type::UNKNOWN && t != Type::NIL
+            ci.ivars[ivar] = t
+          end
+        end
+      else
+        if node.respond_to?(:child_nodes)
+          node.child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
+        end
       end
     end
 
@@ -667,10 +978,32 @@ module Spinel
       case node
       when Prism::StatementsNode
         return Type::VOID if node.body.empty?
-        infer_type(node.body.last)
+        last_type = infer_type(node.body.last)
+        # If last expression is a local var read with unknown type, scan body for assignments
+        if last_type == Type::UNKNOWN && node.body.last.is_a?(Prism::LocalVariableReadNode)
+          vname = node.body.last.name.to_s
+          last_type = infer_local_var_type_from_body(vname, node.body)
+        end
+        last_type
       else
         infer_type(node)
       end
+    end
+
+    def infer_local_var_type_from_body(vname, stmts)
+      stmts.each do |s|
+        if s.is_a?(Prism::LocalVariableWriteNode) && s.name.to_s == vname
+          t = infer_type(s.value)
+          return t if t != Type::UNKNOWN
+        end
+        # Check inside if/else blocks
+        if s.is_a?(Prism::IfNode)
+          t = infer_local_var_type_from_body(vname,
+            (s.statements.is_a?(Prism::StatementsNode) ? s.statements.body : [s.statements]).compact)
+          return t if t != Type::UNKNOWN
+        end
+      end
+      Type::UNKNOWN
     end
 
     def infer_type(node)
@@ -690,6 +1023,8 @@ module Spinel
         Type::BOOLEAN
       when Prism::NilNode
         Type::NIL
+      when Prism::SelfNode
+        @current_class ? @current_class : Type::UNKNOWN
       when Prism::ArrayNode
         if node.elements.empty?
           Type::ARRAY  # default to int array
@@ -752,6 +1087,8 @@ module Spinel
           infer_body_type(node.statements)
         end
       when Prism::LocalVariableWriteNode
+        infer_type(node.value)
+      when Prism::InstanceVariableWriteNode
         infer_type(node.value)
       when Prism::MultiWriteNode
         Type::ARRAY
@@ -901,6 +1238,8 @@ module Spinel
         recv_type == Type::STR_ARRAY ? Type::STR_ARRAY : Type::ARRAY
       when "select", "filter", "reject"
         recv_type == Type::STR_ARRAY ? Type::STR_ARRAY : Type::ARRAY
+      when "merge"
+        recv_type || Type::HASH
       when "sort", "sort_by", "uniq", "dup", "reverse", "compact", "flatten"
         recv_type || Type::ARRAY
       when "keys", "values"
@@ -1000,6 +1339,9 @@ module Spinel
       # Generate class structs/methods first
       @classes.each { |_name, ci| generate_class(ci) }
 
+      # Generate open class methods for built-in types
+      generate_open_class_methods if @open_class_methods
+
       # Generate top-level method forward declarations and bodies
       @methods.each { |_name, mi| generate_toplevel_method(mi) }
 
@@ -1017,15 +1359,71 @@ module Spinel
       pop_scope
     end
 
+    def generate_open_class_methods
+      @open_class_methods.each do |type_name, methods|
+        self_c_type = case type_name
+                      when "Integer" then "mrb_int"
+                      when "Float" then "mrb_float"
+                      when "String" then "const char *"
+                      when "Boolean" then "mrb_bool"
+                      else "mrb_int"
+                      end
+
+        methods.each do |mname, mi|
+          # Infer return type from body
+          old_class = @current_class
+          @current_class = nil  # Not inside a class
+          rt = infer_body_type(mi.body)
+          @current_class = old_class
+          mi.return_type = rt if rt != Type::UNKNOWN
+
+          c_rt = c_type(mi.return_type == Type::UNKNOWN ? Type::INTEGER : mi.return_type)
+          cmname = sanitize_method_name(mname)
+          params_str = "#{self_c_type} self"
+          mi.params.each do |p|
+            pt = p.type != Type::UNKNOWN ? p.type : Type::INTEGER
+            params_str += ", #{c_type(pt)} lv_#{p.name}"
+          end
+
+          @forward_decls << "static #{c_rt} sp_#{type_name}_#{cmname}(#{params_str});"
+
+          @in_main = false
+          @current_method = mi
+          @current_open_class_type = type_name
+          push_scope
+          mi.params.each { |p| declare_var(p.name, p.type, c_name: "lv_#{p.name}") }
+          old_indent = @indent
+          @indent = 1
+
+          emit_raw("")
+          emit_raw("static #{c_rt} sp_#{type_name}_#{cmname}(#{params_str}) {")
+
+          if mi.body
+            locals = collect_locals(mi.body)
+            locals.each do |lname, ltype|
+              next if mi.params.any? { |p| p.name == lname }
+              declare_var(lname, ltype, c_name: "lv_#{lname}")
+              emit("#{c_type(ltype)} lv_#{lname} = #{default_val(ltype)};")
+            end
+            generate_method_body(mi.body, mi)
+          end
+
+          emit_raw("}")
+          @current_open_class_type = nil
+          @indent = old_indent
+          pop_scope
+          @current_method = nil
+          @in_main = true
+        end
+      end
+    end
+
     def generate_class(ci)
       @needs_gc = true
       name = ci.name
 
       # Determine if class needs GC allocation (pointer-based)
-      has_heap_fields = ci.ivars.any? { |_k, v| [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::MUTABLE_STRING].include?(v) }
-      uses_inheritance = ci.parent && @classes[ci.parent]
-      is_parent_class = has_subclasses?(name)
-      needs_gc_alloc = has_heap_fields || uses_inheritance || is_parent_class
+      needs_gc_alloc = class_needs_gc?(ci)
 
       # Build ivar list (including inherited)
       all_ivars = collect_all_ivars(ci)
@@ -1062,14 +1460,17 @@ module Spinel
         mi.params.each do |p|
           param_str += ", #{c_type(resolve_param_type(p, ci, mi))}"
         end
-        @forward_decls << "static #{rt} sp_#{name}_#{mname}(#{param_str});"
+        if mi.has_yield
+          param_str += ", sp_block_fn, void *"
+        end
+        @forward_decls << "static #{rt} sp_#{name}_#{sanitize_method_name(mname)}(#{param_str});"
       end
 
       ci.class_methods.each do |mname, mi|
         rt = c_type(mi.return_type)
         param_str = mi.params.map { |p| c_type(resolve_param_type(p, ci, mi)) }.join(", ")
         param_str = "void" if param_str.empty?
-        @forward_decls << "static #{rt} sp_#{name}_#{mname}(#{param_str});"
+        @forward_decls << "static #{rt} sp_#{name}_#{sanitize_method_name(mname)}(#{param_str});"
       end
 
       # Generate constructor (new)
@@ -1111,8 +1512,41 @@ module Spinel
         # Check if param name matches ivar
         if ci.ivars[param.name]
           ci.ivars[param.name]
+        elsif %w[<=> < > == != <= >= + - * /].include?(mi.name) && param.name == "other"
+          # Operator methods: 'other' param is typically the same class type
+          ci.name
+        elsif mi.body && param_accesses_class_attr?(mi.body, param.name, ci)
+          # If the param is used like `param.attr` where attr is a class ivar/accessor, it's the same class
+          ci.name
         else
           Type::INTEGER  # default fallback
+        end
+      end
+    end
+
+    def param_accesses_class_attr?(body, pname, ci)
+      return false unless body
+      all_attrs = (ci.attrs[:reader] + ci.attrs[:accessor]).uniq
+      return false if all_attrs.empty?
+      check_param_attr_access(body, pname, all_attrs)
+    end
+
+    def check_param_attr_access(node, pname, attrs)
+      return false unless node
+      case node
+      when Prism::CallNode
+        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name.to_s == pname
+          return true if attrs.include?(node.name.to_s)
+        end
+        node.child_nodes.each { |c| return true if c && check_param_attr_access(c, pname, attrs) }
+        false
+      when Prism::StatementsNode
+        node.body.any? { |s| check_param_attr_access(s, pname, attrs) }
+      else
+        if node.respond_to?(:child_nodes)
+          node.child_nodes.any? { |c| c && check_param_attr_access(c, pname, attrs) }
+        else
+          false
         end
       end
     end
@@ -1249,7 +1683,10 @@ module Spinel
     end
 
     def class_needs_gc?(ci)
-      has_heap_fields = ci.ivars.any? { |_k, v| [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::MUTABLE_STRING].include?(v) }
+      has_heap_fields = ci.ivars.any? { |_k, v|
+        [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::MUTABLE_STRING].include?(v) ||
+        (v.is_a?(String) && @classes[v])  # ivar is a class instance type
+      }
       uses_inheritance = ci.parent && @classes[ci.parent]
       is_parent_class = has_subclasses?(ci.name)
       has_heap_fields || uses_inheritance || is_parent_class
@@ -1331,10 +1768,18 @@ module Spinel
         self_param = "sp_#{name} self"
       end
 
-      params_str = ([self_param] + mi.params.map { |p|
+      params_list = [self_param] + mi.params.map { |p|
         t = resolve_param_type(p, ci, mi)
         "#{c_type(t)} lv_#{p.name}"
-      }).join(", ")
+      }
+
+      if mi.has_yield
+        @needs_block_fn = true
+        params_list << "sp_block_fn _block"
+        params_list << "void *_block_env"
+      end
+
+      params_str = params_list.join(", ")
 
       @in_main = false
       @current_class = name
@@ -1351,7 +1796,7 @@ module Spinel
       @indent = 1
 
       lines_before = @func_bodies.length
-      emit_raw("static #{rt} sp_#{name}_#{mname}(#{params_str}) {")
+      emit_raw("static #{rt} sp_#{name}_#{sanitize_method_name(mname)}(#{params_str}) {")
 
       if needs_gc_alloc
         emit("SP_GC_SAVE();")
@@ -1359,17 +1804,21 @@ module Spinel
       end
 
       # Declare local vars and generate body
-      if mi.body
+      cmp_op = mi.instance_variable_defined?(:@comparable_cmp_op) ? mi.instance_variable_get(:@comparable_cmp_op) : nil
+      if cmp_op
+        # Synthetic Comparable method: delegate to <=>
+        emit("return (sp_#{name}__cmp(self, lv_other) #{cmp_op});")
+      elsif mi.body
         declare_locals_from_body(mi.body)
         generate_body_stmts(mi.body, is_return_context: mi.return_type != Type::VOID)
       end
 
-      if needs_gc_alloc
+      if needs_gc_alloc && !cmp_op
         emit("SP_GC_RESTORE();")
       end
 
       # Add return for non-void methods that don't already have one
-      if mi.return_type != Type::VOID && mi.body
+      if mi.return_type != Type::VOID && mi.body && !cmp_op
         last = last_stmt(mi.body)
         unless returns_value?(last)
           val = compile_expr_in_method(last, ci, needs_gc_alloc)
@@ -1404,7 +1853,7 @@ module Spinel
       old_indent = @indent
       @indent = 1
 
-      emit_raw("static #{rt} sp_#{name}_#{mname}(#{params_str}) {")
+      emit_raw("static #{rt} sp_#{name}_#{sanitize_method_name(mname)}(#{params_str}) {")
 
       if mi.body
         generate_body_return(mi.body, mi.return_type)
@@ -1420,7 +1869,7 @@ module Spinel
     end
 
     def generate_toplevel_method(mi)
-      mname = mi.name
+      mname = sanitize_method_name(mi.name)
       rt = c_type(mi.return_type)
 
       # Check if method takes a block (yield)
@@ -1729,8 +2178,7 @@ module Spinel
       val = compile_expr(node.value)
       if @current_class
         ci = @classes[@current_class]
-        needs_gc_alloc = ci.parent && @classes[ci.parent]
-        if needs_gc_alloc
+        if class_needs_gc?(ci)
           emit("self->#{ivar} = #{val};")
         else
           emit("self.#{ivar} = #{val};")
@@ -3023,6 +3471,40 @@ module Spinel
     end
 
     def compile_toplevel_call(node, mname, args)
+      # Check if inside an open class method - treat bare calls as self method calls
+      if @current_open_class_type && !@current_class
+        # Create a synthetic SelfNode-like receiver
+        compiled_args = args.map { |a| compile_expr(a) }
+        type_name = @current_open_class_type
+        # Check if it's another open class method
+        if @open_class_methods && @open_class_methods[type_name] && @open_class_methods[type_name][mname]
+          cmname = sanitize_method_name(mname)
+          return "sp_#{type_name}_#{cmname}(self#{compiled_args.empty? ? '' : ', ' + compiled_args.join(', ')})"
+        end
+        # Otherwise, treat as a built-in method on self
+        recv_type = case type_name
+                    when "Integer" then Type::INTEGER
+                    when "Float" then Type::FLOAT
+                    when "String" then Type::STRING
+                    when "Boolean" then Type::BOOLEAN
+                    else Type::UNKNOWN
+                    end
+        # Use compile_method_call logic with self as receiver
+        mstr_recv = recv_type == Type::MUTABLE_STRING ? "sp_String_cstr(self)" : "self"
+        case mname
+        when "upcase"
+          @string_helpers_needed << :str_upcase
+          return "sp_str_upcase(self)"
+        when "downcase"
+          @string_helpers_needed << :str_downcase
+          return "sp_str_downcase(self)"
+        when "to_s"
+          return "self" if recv_type == Type::STRING
+          return "sp_int_to_s(self)" if recv_type == Type::INTEGER
+          return "sp_float_to_s(self)" if recv_type == Type::FLOAT
+        end
+      end
+
       # Check implicit self method calls in class context
       if @current_class
         ci = @classes[@current_class]
@@ -3030,13 +3512,14 @@ module Spinel
         if actual_class
           needs_ptr = class_needs_gc?(ci)
           compiled_args = args.map { |a| compile_expr(a) }
+          cmname = sanitize_method_name(mname)
           if actual_class == @current_class
-            return "sp_#{actual_class}_#{mname}(#{(['self'] + compiled_args).join(', ')})"
+            return "sp_#{actual_class}_#{cmname}(#{(['self'] + compiled_args).join(', ')})"
           else
             if needs_ptr
-              return "sp_#{actual_class}_#{mname}(#{(["(sp_#{actual_class} *)self"] + compiled_args).join(', ')})"
+              return "sp_#{actual_class}_#{cmname}(#{(["(sp_#{actual_class} *)self"] + compiled_args).join(', ')})"
             else
-              return "sp_#{actual_class}_#{mname}(#{(['self'] + compiled_args).join(', ')})"
+              return "sp_#{actual_class}_#{cmname}(#{(['self'] + compiled_args).join(', ')})"
             end
           end
         end
@@ -3148,16 +3631,33 @@ module Spinel
       # User-defined method
       if @methods[mname]
         mi = @methods[mname]
-        compiled_args = args.each_with_index.map { |a, i|
-          val = compile_expr(a)
-          # Handle type coercion if needed
-          if i < mi.params.length && mi.params[i].type == Type::STRING && infer_type(a) == Type::INTEGER
-            @string_helpers_needed << :int_to_s
-            "sp_int_to_s(#{val})"
-          else
-            val
+
+        # Handle keyword arguments
+        if mi.has_kwargs && args.any? { |a| a.is_a?(Prism::KeywordHashNode) }
+          compiled_args = compile_kwargs_call(mi, args)
+        elsif mi.has_rest
+          # Rest args: pack into IntArray
+          @needs_int_array = true
+          @needs_gc = true
+          rest_tmp = "_rest_#{next_temp}"
+          emit("sp_IntArray *#{rest_tmp} = sp_IntArray_new();")
+          args.each do |a|
+            val = compile_expr(a)
+            emit("sp_IntArray_push(#{rest_tmp}, #{val});")
           end
-        }
+          compiled_args = [rest_tmp]
+        else
+          compiled_args = args.each_with_index.map { |a, i|
+            val = compile_expr(a)
+            # Handle type coercion if needed
+            if i < mi.params.length && mi.params[i].type == Type::STRING && infer_type(a) == Type::INTEGER
+              @string_helpers_needed << :int_to_s
+              "sp_int_to_s(#{val})"
+            else
+              val
+            end
+          }
+        end
 
         # Fill in default args
         while compiled_args.length < mi.params.length
@@ -3180,7 +3680,7 @@ module Spinel
           compiled_args << "NULL"
         end
 
-        return "sp_#{mname}(#{compiled_args.join(', ')})"
+        return "sp_#{sanitize_method_name(mname)}(#{compiled_args.join(', ')})"
       end
 
       # Could be a method(:name).call(args) pattern
@@ -3193,12 +3693,92 @@ module Spinel
       "0 /* unknown: #{mname} */"
     end
 
+    def compile_kwargs_call(mi, args)
+      # Extract keyword arguments from call args and map to param order
+      kw_values = {}
+      positional = []
+
+      args.each do |a|
+        if a.is_a?(Prism::KeywordHashNode)
+          a.elements.each do |assoc|
+            if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+              key = assoc.key.value
+              kw_values[key] = compile_expr(assoc.value)
+            end
+          end
+        else
+          positional << compile_expr(a)
+        end
+      end
+
+      # Build args in param order
+      compiled_args = []
+      mi.params.each_with_index do |p, i|
+        if i < positional.length
+          compiled_args << positional[i]
+        elsif kw_values[p.name]
+          compiled_args << kw_values[p.name]
+        elsif p.default_node
+          compiled_args << compile_expr(p.default_node)
+        else
+          compiled_args << default_val(p.type)
+        end
+      end
+      compiled_args
+    end
+
     def compile_method_call(node, recv, mname, args)
       recv_type = infer_type(recv)
       recv_code = compile_expr(recv)
 
       # Safe navigation operator
       is_safe_nav = node.respond_to?(:call_operator) && node.call_operator == "&."
+
+      # Check if receiver is a class instance with this method defined (including operators)
+      # This handles operator methods like <, >, ==, <=> on class instances
+      if recv_type.is_a?(String) && @classes[recv_type]
+        ci = @classes[recv_type]
+        actual = find_method_class(recv_type, mname)
+        if actual && @classes[actual].methods[mname]
+          target_mi = @classes[actual].methods[mname]
+          compiled_args = args.map { |a| compile_expr(a) }
+          needs_ptr = class_needs_gc?(ci)
+          cmname = sanitize_method_name(mname)
+          if actual != recv_type && needs_ptr
+            param_list = ["(sp_#{actual} *)#{recv_code}"] + compiled_args
+          else
+            param_list = [recv_code] + compiled_args
+          end
+
+          # Handle block/yield
+          if target_mi.has_yield && node.block
+            @needs_block_fn = true
+            block_code = compile_block_call_for_class(node.block, target_mi, actual, cmname, param_list)
+            return block_code
+          elsif target_mi.has_yield && !node.block
+            param_list << "NULL"
+            param_list << "NULL"
+          end
+
+          return "sp_#{actual}_#{cmname}(#{param_list.join(', ')})"
+        end
+      end
+
+      # Check open class methods for built-in types
+      if @open_class_methods
+        type_name = case recv_type
+                    when Type::INTEGER then "Integer"
+                    when Type::FLOAT then "Float"
+                    when Type::STRING then "String"
+                    when Type::BOOLEAN then "Boolean"
+                    else nil
+                    end
+        if type_name && @open_class_methods[type_name] && @open_class_methods[type_name][mname]
+          compiled_args = args.map { |a| compile_expr(a) }
+          cmname = sanitize_method_name(mname)
+          return "sp_#{type_name}_#{cmname}(#{recv_code}#{compiled_args.empty? ? '' : ', ' + compiled_args.join(', ')})"
+        end
+      end
 
       # Auto-convert mutable strings to const char * for string methods
       # This variable used for methods that expect const char *
@@ -3883,6 +4463,8 @@ module Spinel
       when "values"
         if recv_type == Type::HASH
           @needs_str_int_hash = true
+          @needs_int_array = true
+          @needs_gc = true
           return "sp_StrIntHash_values(#{recv_code})"
         end
         return "0"
@@ -4106,16 +4688,17 @@ module Spinel
                 needs_ptr = class_needs_gc?(ci)
                 compiled_args = args.map { |a| compile_expr(a) }
                 param_list = [recv_code] + compiled_args
+                cmname = sanitize_method_name(mname)
                 # Check if method is inherited
                 actual_class = find_method_class(cname, mname)
                 if actual_class && actual_class != cname
                   if needs_ptr
-                    return "sp_#{actual_class}_#{mname}((sp_#{actual_class} *)#{recv_code}#{compiled_args.empty? ? '' : ', ' + compiled_args.join(', ')})"
+                    return "sp_#{actual_class}_#{cmname}((sp_#{actual_class} *)#{recv_code}#{compiled_args.empty? ? '' : ', ' + compiled_args.join(', ')})"
                   else
-                    return "sp_#{actual_class}_#{mname}(#{param_list.join(', ')})"
+                    return "sp_#{actual_class}_#{cmname}(#{param_list.join(', ')})"
                   end
                 end
-                return "sp_#{cname}_#{mname}(#{param_list.join(', ')})"
+                return "sp_#{cname}_#{cmname}(#{param_list.join(', ')})"
               end
             end
           end
@@ -4132,7 +4715,7 @@ module Spinel
         if @classes[cname] && @classes[cname].class_methods[mname]
           compiled_args = args.map { |a| compile_expr(a) }
           param_str = compiled_args.empty? ? "" : compiled_args.join(", ")
-          return "sp_#{cname}_#{mname}(#{param_str})"
+          return "sp_#{cname}_#{sanitize_method_name(mname)}(#{param_str})"
         end
       end
 
@@ -4174,7 +4757,7 @@ module Spinel
         else
           param_list = [recv_code] + compiled_args
         end
-        return "sp_#{actual}_#{mname}(#{param_list.join(', ')})"
+        return "sp_#{actual}_#{sanitize_method_name(mname)}(#{param_list.join(', ')})"
       end
 
       nil
@@ -4819,6 +5402,62 @@ module Spinel
       return "sp_#{method_name}(#{(compiled_args + ["(sp_block_fn)_blk_#{blk_id}", "&#{env_var}"]).join(', ')})"
     end
 
+    def compile_block_call_for_class(block_node, mi, class_name, cmname, param_list)
+      # Similar to compile_block_call but for class method calls
+      @needs_block_fn = true
+      blk = block_node
+      params = block_params(blk)
+      iter_var = params[0] || "_arg"
+
+      blk_id = next_block_id
+
+      # Collect captured variables from outer scope
+      captured = collect_captured_vars(blk.body, params)
+
+      # Generate block struct
+      env_name = "_blk_#{blk_id}_env"
+      struct_lines = ["typedef struct { "]
+      captured.each do |cv|
+        struct_lines[0] += "#{c_type(cv[:type])} *#{cv[:name]}; "
+      end
+      struct_lines[0] += "} #{env_name};"
+
+      # Generate block function
+      func_lines = []
+      func_lines << "static mrb_int _blk_#{blk_id}(void *_env, mrb_int _arg) {"
+      func_lines << "    #{env_name} *_e = (#{env_name} *)_env;"
+      func_lines << "    mrb_int lv_#{iter_var} = _arg;"
+
+      old_main = @in_main
+      old_indent = @indent
+      old_bodies = @func_bodies
+      @func_bodies = []
+      @in_main = false
+      @indent = 1
+
+      push_scope
+      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      generate_block_body_with_env(blk, captured)
+      pop_scope
+
+      block_code = @func_bodies
+      @func_bodies = old_bodies
+      @in_main = old_main
+      @indent = old_indent
+
+      block_code.each { |l| func_lines << l }
+      func_lines << "    return 0;"
+      func_lines << "}"
+
+      @block_defs << struct_lines.join("\n")
+      @block_defs << func_lines.join("\n")
+
+      env_var = "_env_#{blk_id}"
+      env_init = captured.map { |cv| "&#{cv[:c_name]}" }.join(", ")
+      emit("#{env_name} #{env_var} = { #{env_init} };")
+      return "sp_#{class_name}_#{cmname}(#{(param_list + ["(sp_block_fn)_blk_#{blk_id}", "&#{env_var}"]).join(', ')})"
+    end
+
     def collect_captured_vars(body, block_params)
       vars = []
       seen = Set.new(block_params)
@@ -5297,10 +5936,9 @@ module Spinel
       out.puts "#endif"
       out.puts
 
-      # Auto-dependencies
-      @needs_int_array = true if @needs_str_int_hash
-      @needs_int_array = true if @needs_str_int_hash
+      # Auto-dependencies (order matters: propagate from high-level to low-level)
       @needs_str_int_hash = true if @needs_str_str_hash  # RbHash uses sp_hash_str from StrIntHash
+      @needs_int_array = true if @needs_str_int_hash     # StrIntHash_values needs IntArray
       @needs_gc = true if @needs_int_array || @needs_str_int_hash
       @needs_gc = true if @needs_str_str_hash
       @needs_gc = true if @needs_mutable_string

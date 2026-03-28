@@ -1810,20 +1810,11 @@ module Spinel
         emit("return (sp_#{name}__cmp(self, lv_other) #{cmp_op});")
       elsif mi.body
         declare_locals_from_body(mi.body)
-        generate_body_stmts(mi.body, is_return_context: mi.return_type != Type::VOID)
+        generate_body_return(mi.body, mi.return_type)
       end
 
       if needs_gc_alloc && !cmp_op
         emit("SP_GC_RESTORE();")
-      end
-
-      # Add return for non-void methods that don't already have one
-      if mi.return_type != Type::VOID && mi.body && !cmp_op
-        last = last_stmt(mi.body)
-        unless returns_value?(last)
-          val = compile_expr_in_method(last, ci, needs_gc_alloc)
-          emit("return #{val};") if val && val != ""
-        end
       end
 
       emit_raw("}")

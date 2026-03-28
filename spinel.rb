@@ -31,6 +31,7 @@ module Spinel
     FILE_OBJ  = :file_obj
     STRINGIO  = :stringio
     PROC      = :proc
+    FLOAT_ARRAY = :float_array # array of mrb_float
     POLY      = :poly       # NaN-boxed sp_RbValue
     POLY_ARRAY = :poly_array # array of sp_RbValue
     POLY_HASH = :poly_hash  # string->sp_RbValue hash
@@ -47,7 +48,7 @@ module Spinel
   # -------- Compiler --------
   class Compiler
     attr_reader :classes, :methods, :constants, :module_constants
-    attr_reader :needs_gc, :needs_int_array, :needs_str_array, :needs_range
+    attr_reader :needs_gc, :needs_int_array, :needs_float_array, :needs_str_array, :needs_range
     attr_reader :needs_str_int_hash, :needs_exception, :needs_mutable_string
     attr_reader :needs_str_str_hash, :needs_poly_hash, :needs_block_fn
     attr_reader :string_helpers_needed
@@ -64,6 +65,7 @@ module Spinel
       @label_counter = 0
       @needs_gc = false
       @needs_int_array = false
+      @needs_float_array = false
       @needs_str_array = false
       @needs_range = false
       @needs_str_int_hash = false
@@ -304,6 +306,33 @@ module Spinel
         collect_method(node, nil)
       when Prism::ConstantWriteNode
         collect_constant(node)
+      when Prism::CallNode
+        # Handle define_method(:name) { ... } as top-level method definition
+        if node.name.to_s == "define_method" && node.arguments &&
+           node.arguments.arguments.length == 1 &&
+           node.arguments.arguments[0].is_a?(Prism::SymbolNode) && node.block
+          mname = node.arguments.arguments[0].value
+          block = node.block
+          params = []
+          body = nil
+          if block.is_a?(Prism::BlockNode)
+            if block.parameters && block.parameters.parameters
+              bp = block.parameters.parameters
+              (bp.requireds || []).each do |p|
+                pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+              end
+            end
+            body = block.body
+          end
+          mi = MethodInfo.new(
+            name: mname, params: params, return_type: Type::UNKNOWN,
+            body: body, has_yield: false,
+            is_class_method: false, owner_class: nil,
+            default_values: {}
+          )
+          @methods[mname] = mi
+        end
       end
     end
 
@@ -1166,7 +1195,8 @@ module Spinel
       when Prism::CallNode
         mname = node.name.to_s
         if (mname == "<<" || mname == "replace" || mname == "clear" || mname == "gsub!" || mname == "sub!" ||
-            mname == "upcase!" || mname == "downcase!" || mname == "strip!" || mname == "chomp!") &&
+            mname == "upcase!" || mname == "downcase!" || mname == "strip!" || mname == "chomp!" ||
+            mname == "setbyte") &&
            node.receiver.is_a?(Prism::LocalVariableReadNode)
           recv_type = @var_types_global && @var_types_global[node.receiver.name.to_s]
           if recv_type == Type::STRING || recv_type.nil?
@@ -1706,6 +1736,10 @@ module Spinel
       stmts.each do |s|
         if s.is_a?(Prism::LocalVariableWriteNode) && s.name.to_s == vname
           t = infer_type(s.value)
+          # Promote STRING to MUTABLE_STRING if this var is used mutably
+          if t == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(vname)
+            t = Type::MUTABLE_STRING
+          end
           return t if t != Type::UNKNOWN
         end
         # Check inside if/else blocks
@@ -1899,7 +1933,11 @@ module Spinel
         Type::BOOLEAN
       when "match?"
         Type::BOOLEAN
-      when "to_i", "ceil", "floor", "round", "abs", "length", "size", "count", "ord", "hex", "oct"
+      when "itself"
+        recv_type || Type::UNKNOWN
+      when "succ"
+        Type::INTEGER
+      when "to_i", "ceil", "floor", "round", "abs", "length", "size", "count", "ord", "hex", "oct", "bytesize", "getbyte", "setbyte"
         if recv_type == Type::FLOAT && mname == "abs"
           Type::FLOAT
         elsif mname == "abs" && recv_type == Type::FLOAT
@@ -1922,6 +1960,16 @@ module Spinel
         end
       when "to_f", "sqrt", "cos", "sin"
         Type::FLOAT
+      when "dup"
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING || recv_type == Type::UNKNOWN || recv_type.nil?
+          Type::MUTABLE_STRING
+        elsif recv_type == Type::ARRAY
+          Type::ARRAY
+        elsif recv_type == Type::FLOAT_ARRAY
+          Type::FLOAT_ARRAY
+        else
+          recv_type
+        end
       when "to_a", "bytes"
         Type::ARRAY
       when "even?", "odd?", "zero?", "nil?", "empty?", "include?", "frozen?",
@@ -1978,6 +2026,7 @@ module Spinel
           recv_type = infer_type(node.receiver)
           case recv_type
           when Type::ARRAY then Type::INTEGER
+          when Type::FLOAT_ARRAY then Type::FLOAT
           when Type::STR_ARRAY then Type::STRING
           when Type::HASH then Type::INTEGER
           when Type::STR_HASH then Type::STRING
@@ -1995,7 +2044,18 @@ module Spinel
         if node.receiver.is_a?(Prism::ConstantReadNode)
           cname = node.receiver.name.to_s
           case cname
-          when "Array" then Type::ARRAY
+          when "Array"
+            # Detect float arrays: Array.new(n, 0.0) or Array.new(n, float_expr)
+            if node.arguments && node.arguments.arguments.length >= 2
+              default_val = node.arguments.arguments[1]
+              if default_val.is_a?(Prism::FloatNode) || infer_type(default_val) == Type::FLOAT
+                Type::FLOAT_ARRAY
+              else
+                Type::ARRAY
+              end
+            else
+              Type::ARRAY
+            end
           when "Hash" then Type::HASH
           when "StringIO" then Type::STRINGIO
           when "Proc" then Type::PROC
@@ -2224,6 +2284,8 @@ module Spinel
 
       stmts.each do |s|
         next if s.is_a?(Prism::DefNode) || s.is_a?(Prism::ClassNode) || s.is_a?(Prism::ModuleNode)
+        # Skip define_method calls (already collected as methods)
+        next if s.is_a?(Prism::CallNode) && s.name.to_s == "define_method"
         generate_stmt(s)
       end
 
@@ -2666,13 +2728,43 @@ module Spinel
 
     def class_needs_gc?(ci)
       has_heap_fields = ci.ivars.any? { |_k, v|
-        [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::MUTABLE_STRING].include?(v) ||
+        [Type::ARRAY, Type::FLOAT_ARRAY, Type::STR_ARRAY, Type::HASH, Type::MUTABLE_STRING].include?(v) ||
         (v.is_a?(String) && @classes[v])  # ivar is a class instance type
       }
       uses_inheritance = ci.parent && @classes[ci.parent]
       is_parent_class = has_subclasses?(ci.name)
       is_poly_class = @poly_classes && @poly_classes.include?(ci.name)
-      has_heap_fields || uses_inheritance || is_parent_class || is_poly_class
+      # Classes with non-setter methods that write ivars need pointer semantics
+      # (setter methods like x= work fine with value types since they're inlined as field assignment)
+      has_ivar_mutation = ci.methods.any? { |mname, mi|
+        next false if mname == "initialize"
+        next false if mname.end_with?("=")  # setters are inlined, don't need pointer
+        mi.body && body_writes_ivar?(mi.body)
+      }
+      has_heap_fields || uses_inheritance || is_parent_class || is_poly_class || has_ivar_mutation
+    end
+
+    def body_writes_ivar?(node)
+      return false unless node
+      case node
+      when Prism::InstanceVariableWriteNode, Prism::InstanceVariableOperatorWriteNode,
+           Prism::InstanceVariableAndWriteNode, Prism::InstanceVariableOrWriteNode
+        true
+      when Prism::StatementsNode
+        node.body.any? { |s| body_writes_ivar?(s) }
+      when Prism::IfNode, Prism::UnlessNode
+        body_writes_ivar?(node.statements) || body_writes_ivar?(node.consequent)
+      when Prism::WhileNode, Prism::UntilNode
+        body_writes_ivar?(node.statements)
+      when Prism::ElseNode
+        body_writes_ivar?(node.statements)
+      when Prism::LocalVariableWriteNode
+        body_writes_ivar?(node.value)
+      when Prism::CallNode
+        false  # Don't recurse into call nodes
+      else
+        false
+      end
     end
 
     def gen_parent_init_func(ci, init, _all_ivars, needs_gc_alloc)
@@ -5012,7 +5104,8 @@ module Spinel
         end
         # Check ivar access (bare name matches attr reader)
         if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
-          return needs_ptr ? "self->#{mname}" : "self.#{mname}"
+          ptr = class_needs_gc?(ci)
+          return ptr ? "self->#{mname}" : "self.#{mname}"
         end
       end
 
@@ -5783,6 +5876,10 @@ module Spinel
         return "TRUE"  # AOT: everything is frozen
       when "freeze"
         return recv_code  # no-op
+      when "itself"
+        return recv_code
+      when "succ"
+        return "((#{recv_code}) + 1)"
 
       # ---- String methods ----
       when "length", "size"
@@ -5797,6 +5894,9 @@ module Spinel
         elsif recv_type == Type::ARRAY || recv_type == Type::POLY_ARRAY
           @needs_int_array = true
           return "sp_IntArray_length(#{recv_code})"
+        elsif recv_type == Type::FLOAT_ARRAY
+          @needs_float_array = true
+          return "sp_FloatArray_length(#{recv_code})"
         elsif recv_type == Type::STR_ARRAY
           @needs_str_array = true
           return "sp_StrArray_length(#{recv_code})"
@@ -5827,6 +5927,43 @@ module Spinel
       when "chop"
         @string_helpers_needed << :str_chop
         return "sp_str_chop(#{mstr_recv})"
+      when "bytesize"
+        if recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          return "sp_String_length(#{recv_code})"
+        end
+        return "((mrb_int)strlen(#{recv_code}))"
+      when "getbyte"
+        arg = compile_expr(args[0])
+        if recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          return "((mrb_int)(unsigned char)sp_String_cstr(#{recv_code})[#{arg}])"
+        end
+        return "((mrb_int)(unsigned char)(#{recv_code})[#{arg}])"
+      when "setbyte"
+        idx = compile_expr(args[0])
+        val = compile_expr(args[1])
+        if recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          emit("sp_String_setbyte(#{recv_code}, #{idx}, #{val});")
+          return val
+        end
+        return val  # no-op on immutable strings
+      when "dup"
+        if recv_type == Type::STRING
+          @needs_mutable_string = true
+          return "sp_String_new(#{recv_code})"
+        elsif recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          return "sp_String_dup(#{recv_code})"
+        elsif recv_type == Type::ARRAY
+          @needs_int_array = true
+          return "sp_IntArray_dup(#{recv_code})"
+        elsif recv_type == Type::FLOAT_ARRAY
+          @needs_float_array = true
+          return "sp_FloatArray_dup(#{recv_code})"
+        end
+        return recv_code
       when "capitalize"
         @string_helpers_needed << :str_capitalize
         return "sp_str_capitalize(#{mstr_recv})"
@@ -6216,6 +6353,9 @@ module Spinel
         if recv_type == Type::ARRAY
           @needs_int_array = true
           return "sp_IntArray_get(#{recv_code}, #{arg})"
+        elsif recv_type == Type::FLOAT_ARRAY
+          @needs_float_array = true
+          return "sp_FloatArray_get(#{recv_code}, #{arg})"
         elsif recv_type == Type::STR_ARRAY
           @needs_str_array = true
           return "(#{recv_code})->data[#{arg}]"
@@ -6261,6 +6401,10 @@ module Spinel
         if recv_type == Type::ARRAY
           @needs_int_array = true
           emit("sp_IntArray_set(#{recv_code}, #{key}, #{val});")
+          return val
+        elsif recv_type == Type::FLOAT_ARRAY
+          @needs_float_array = true
+          emit("sp_FloatArray_set(#{recv_code}, #{key}, #{val});")
           return val
         elsif recv_type == Type::HASH
           @needs_str_int_hash = true
@@ -6713,16 +6857,26 @@ module Spinel
 
       case cname
       when "Array"
-        @needs_int_array = true
         @needs_gc = true
         if args.length >= 2
+          # Detect float array from default value
+          default_node = node.arguments.arguments[1]
+          is_float = default_node.is_a?(Prism::FloatNode) || infer_type(default_node) == Type::FLOAT
           n = compile_expr(args[0])
           val = compile_expr(args[1])
           tmp = "_arr_#{next_temp}"
-          emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
-          emit("for (mrb_int _i = 0; _i < #{n}; _i++) sp_IntArray_push(#{tmp}, #{val});")
+          if is_float
+            @needs_float_array = true
+            emit("sp_FloatArray *#{tmp} = sp_FloatArray_new();")
+            emit("for (mrb_int _i = 0; _i < #{n}; _i++) sp_FloatArray_push(#{tmp}, #{val});")
+          else
+            @needs_int_array = true
+            emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+            emit("for (mrb_int _i = 0; _i < #{n}; _i++) sp_IntArray_push(#{tmp}, #{val});")
+          end
           return tmp
         elsif args.length == 1
+          @needs_int_array = true
           n = compile_expr(args[0])
           tmp = "_arr_#{next_temp}"
           emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
@@ -7796,6 +7950,11 @@ module Spinel
         name = node.name.to_s
         unless locals[name]
           t = infer_type(node.value)
+          # Promote STRING to MUTABLE_STRING if this var is used mutably (<<, setbyte, etc.)
+          if t == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(name)
+            t = Type::MUTABLE_STRING
+            @needs_mutable_string = true
+          end
           locals[name] = t
           # Register in current scope so subsequent infer_type calls can resolve
           existing = lookup_var(name)
@@ -7966,6 +8125,7 @@ module Spinel
       when Type::STRING, Type::SYMBOL then "const char *"
       when Type::NIL then "mrb_int"
       when Type::ARRAY then "sp_IntArray *"
+      when Type::FLOAT_ARRAY then "sp_FloatArray *"
       when Type::STR_ARRAY then "sp_StrArray *"
       when Type::HASH then "sp_StrIntHash *"
       when Type::STR_HASH then "sp_RbHash *"
@@ -8002,6 +8162,7 @@ module Spinel
       when Type::STRING, Type::SYMBOL then "NULL"
       when Type::NIL then "0"
       when Type::ARRAY then "NULL"
+      when Type::FLOAT_ARRAY then "NULL"
       when Type::STR_ARRAY then "NULL"
       when Type::HASH then "NULL"
       when Type::STR_HASH then "NULL"
@@ -8025,7 +8186,7 @@ module Spinel
     end
 
     def gc_type?(type)
-      [Type::ARRAY, Type::STR_ARRAY, Type::POLY_ARRAY, Type::HASH, Type::STR_HASH, Type::POLY_HASH, Type::MUTABLE_STRING].include?(type) ||
+      [Type::ARRAY, Type::FLOAT_ARRAY, Type::STR_ARRAY, Type::POLY_ARRAY, Type::HASH, Type::STR_HASH, Type::POLY_HASH, Type::MUTABLE_STRING].include?(type) ||
         (type.is_a?(String) && @classes[type])
     end
 
@@ -8089,7 +8250,7 @@ module Spinel
       @needs_str_int_hash = true if @needs_poly_hash     # PolyHash uses sp_hash_str from StrIntHash
       @needs_poly = true if @needs_poly_hash             # PolyHash values are sp_RbValue
       @needs_int_array = true if @needs_str_int_hash     # StrIntHash_values needs IntArray
-      @needs_gc = true if @needs_int_array || @needs_str_int_hash
+      @needs_gc = true if @needs_int_array || @needs_float_array || @needs_str_int_hash
       @needs_gc = true if @needs_str_str_hash
       @needs_gc = true if @needs_poly_hash
       @needs_gc = true if @needs_mutable_string
@@ -8109,6 +8270,9 @@ module Spinel
 
       # IntArray
       emit_int_array(out) if @needs_int_array
+
+      # FloatArray
+      emit_float_array(out) if @needs_float_array
 
       # Range (standalone, if int_array wasn't needed)
       emit_range(out) if @needs_range
@@ -9465,6 +9629,55 @@ module Spinel
       C
     end
 
+    def emit_float_array(out)
+      out.puts <<~C
+        /* ---- Built-in float array ---- */
+        typedef struct { mrb_float *data; mrb_int start; mrb_int len; mrb_int cap; } sp_FloatArray;
+
+        static void sp_FloatArray_finalize(void *p) {
+          sp_FloatArray *a = (sp_FloatArray *)p;
+          free(a->data);
+        }
+
+        static sp_FloatArray *sp_FloatArray_new(void) {
+          sp_FloatArray *a = (sp_FloatArray *)sp_gc_alloc(sizeof(sp_FloatArray), sp_FloatArray_finalize, NULL);
+          a->cap = 16; a->data = (mrb_float *)malloc(sizeof(mrb_float) * a->cap);
+          sp_gc_bytes += sizeof(mrb_float) * a->cap;
+          return a;
+        }
+
+        static sp_FloatArray *sp_FloatArray_dup(sp_FloatArray *a) {
+          sp_FloatArray *b = sp_FloatArray_new();
+          if (a->len > b->cap) { sp_gc_bytes += sizeof(mrb_float) * (a->len - b->cap); b->cap = a->len; b->data = (mrb_float *)realloc(b->data, sizeof(mrb_float) * b->cap); }
+          memcpy(b->data, a->data + a->start, sizeof(mrb_float) * a->len);
+          b->len = a->len; return b;
+        }
+
+        static void sp_FloatArray_push(sp_FloatArray *a, mrb_float val) {
+          mrb_int end = a->start + a->len;
+          if (end >= a->cap) {
+            if (a->start > 0) { memmove(a->data, a->data + a->start, sizeof(mrb_float) * a->len); a->start = 0; end = a->len; }
+            if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_float *)realloc(a->data, sizeof(mrb_float) * a->cap); }
+          }
+          a->data[end] = val; a->len++;
+        }
+
+        static mrb_float sp_FloatArray_get(sp_FloatArray *a, mrb_int idx) {
+          if (idx < 0) idx += a->len;
+          return a->data[a->start + idx];
+        }
+
+        static void sp_FloatArray_set(sp_FloatArray *a, mrb_int idx, mrb_float val) {
+          if (idx < 0) idx += a->len;
+          if (idx >= 0 && idx < a->len) a->data[a->start + idx] = val;
+        }
+
+        static mrb_int sp_FloatArray_length(sp_FloatArray *a) {
+          return a->len;
+        }
+      C
+    end
+
     def emit_range(out)
       # Range is emitted inline with IntArray if both are needed
       return if @needs_int_array  # already emitted
@@ -9792,6 +10005,13 @@ module Spinel
           if (idx < 0) idx = s->len + idx;
           if (idx < 0 || idx >= s->len) return "";
           char *r = (char *)malloc(2); r[0] = s->data[idx]; r[1] = '\\0'; return r;
+        }
+        static sp_String *sp_String_dup(sp_String *s) { return sp_String_new(s->data); }
+        static void sp_String_setbyte(sp_String *s, mrb_int i, mrb_int b) {
+          if (i >= 0 && i < s->len) s->data[i] = (char)b;
+        }
+        static void sp_String_append_str(sp_String *s, sp_String *t) {
+          sp_String_append(s, t->data);
         }
 
       C

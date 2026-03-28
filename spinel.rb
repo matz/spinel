@@ -27,6 +27,8 @@ module Spinel
     RANGE     = :range
     MUTABLE_STRING = :mutable_string
     SYMBOL    = :symbol        # treated as string
+    TIME      = :time
+    FILE_OBJ  = :file_obj
   end
 
   # -------- Data structures --------
@@ -64,6 +66,10 @@ module Spinel
       @needs_exception = false
       @needs_mutable_string = false
       @needs_block_fn = false
+      @needs_time = false
+      @needs_file = false
+      @needs_system = false
+      @needs_catch_throw = false
       @string_helpers_needed = Set.new
       @forward_decls = []
       @struct_decls = []
@@ -188,15 +194,42 @@ module Spinel
     def collect_class(node)
       name = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : node.constant_path.to_s
       parent = nil
+      is_struct_inherit = false
+
       if node.superclass
-        parent = case node.superclass
-                 when Prism::ConstantReadNode then node.superclass.name.to_s
-                 else nil
-                 end
+        if node.superclass.is_a?(Prism::CallNode) && node.superclass.name.to_s == "new" &&
+           node.superclass.receiver.is_a?(Prism::ConstantReadNode) && node.superclass.receiver.name.to_s == "Struct"
+          # class X < Struct.new(:field1, :field2)
+          is_struct_inherit = true
+          struct_args = call_args(node.superclass)
+          fields = struct_args.select { |a| a.is_a?(Prism::SymbolNode) }.map { |a| a.value }
+        else
+          parent = case node.superclass
+                   when Prism::ConstantReadNode then node.superclass.name.to_s
+                   else nil
+                   end
+        end
       end
 
       ci = ClassInfo.new(name: name, parent: parent, methods: {}, ivars: {},
                          class_methods: {}, attrs: { reader: [], writer: [], accessor: [] })
+
+      if is_struct_inherit
+        fields.each { |f| ci.ivars[f] = Type::INTEGER }
+        ci.attrs[:reader] = fields.dup
+        ci.attrs[:writer] = fields.dup
+        ci.attrs[:accessor] = fields.dup
+        # Create synthetic initialize
+        params = fields.map { |f| ParamInfo.new(name: f, type: Type::INTEGER) }
+        ci.methods["initialize"] = MethodInfo.new(
+          name: "initialize", params: params, return_type: Type::VOID,
+          body: nil, has_yield: false, is_class_method: false,
+          owner_class: name
+        )
+        @struct_classes ||= {}
+        @struct_classes[name] = fields
+      end
+
       @classes[name] = ci
 
       if node.body
@@ -330,8 +363,40 @@ module Spinel
 
     def collect_constant(node)
       name = node.name.to_s
+
+      # Check for Struct.new(:x, :y)
+      if node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "new" &&
+         node.value.receiver.is_a?(Prism::ConstantReadNode) && node.value.receiver.name.to_s == "Struct"
+        collect_struct_new(name, node.value)
+        return
+      end
+
       type = infer_type(node.value)
       @constants[name] = { type: type, node: node.value }
+    end
+
+    def collect_struct_new(name, call_node)
+      args = call_args(call_node)
+      # Filter out keyword_init option
+      fields = args.select { |a| a.is_a?(Prism::SymbolNode) }.map { |a| a.value }
+
+      # Create params for constructor
+      params = fields.map { |f| ParamInfo.new(name: f, type: Type::INTEGER) }
+
+      ci = ClassInfo.new(name: name, parent: nil, methods: {}, ivars: {},
+                         class_methods: {}, attrs: { reader: fields.dup, writer: fields.dup, accessor: fields.dup })
+      fields.each { |f| ci.ivars[f] = Type::INTEGER }
+
+      # Create a synthetic initialize method
+      ci.methods["initialize"] = MethodInfo.new(
+        name: "initialize", params: params, return_type: Type::VOID,
+        body: nil, has_yield: false, is_class_method: false,
+        owner_class: name
+      )
+
+      @classes[name] = ci
+      @struct_classes ||= {}
+      @struct_classes[name] = fields
     end
 
     # ---- Phase 2: Type inference ----
@@ -407,6 +472,17 @@ module Spinel
           mi.return_type = infer_body_type(mi.body)
           @current_class = old_class
         end
+
+        # Also infer class method return types
+        ci.class_methods.each do |_mname, mi|
+          mi.params.each do |p|
+            p.type = infer_type(p.default_node) if p.default_node
+          end
+          old_class = @current_class
+          @current_class = ci.name
+          mi.return_type = infer_body_type(mi.body)
+          @current_class = old_class
+        end
       end
     end
 
@@ -423,7 +499,10 @@ module Spinel
       when Prism::StatementsNode
         node.body.each { |s| find_mutable_strings(s) }
       when Prism::CallNode
-        if node.name.to_s == "<<" && node.receiver.is_a?(Prism::LocalVariableReadNode)
+        mname = node.name.to_s
+        if (mname == "<<" || mname == "replace" || mname == "clear" || mname == "gsub!" || mname == "sub!" ||
+            mname == "upcase!" || mname == "downcase!" || mname == "strip!" || mname == "chomp!") &&
+           node.receiver.is_a?(Prism::LocalVariableReadNode)
           recv_type = @var_types_global && @var_types_global[node.receiver.name.to_s]
           if recv_type == Type::STRING || recv_type.nil?
             @mutable_string_vars << node.receiver.name.to_s
@@ -477,16 +556,42 @@ module Spinel
               ci = @classes[ci.parent]  # use parent for ivar updates
             end
             if init
-              node.arguments.arguments.each_with_index do |arg, i|
-                next if i >= init.params.length
-                arg_type = infer_type(arg)
-                if arg_type != Type::UNKNOWN && init.params[i].type == Type::UNKNOWN
-                  init.params[i].type = arg_type
-                  # Update ivar types based on init assignments
-                  pname = init.params[i].name
-                  ci.ivars.each_key do |iname|
-                    if ci.ivars[iname] == Type::UNKNOWN
-                      ci.ivars[iname] = arg_type if param_assigned_to_ivar?(init.body, pname, iname)
+              # Handle keyword arguments for struct constructors
+              if node.arguments.arguments.length == 1 &&
+                 node.arguments.arguments[0].is_a?(Prism::KeywordHashNode) &&
+                 @struct_classes && @struct_classes[cname]
+                kw_node = node.arguments.arguments[0]
+                kw_node.elements.each do |assoc|
+                  next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+                  field_name = assoc.key.value
+                  arg_type = infer_type(assoc.value)
+                  if arg_type != Type::UNKNOWN
+                    ci.ivars[field_name] = arg_type if ci.ivars[field_name] == Type::INTEGER || ci.ivars[field_name] == Type::UNKNOWN
+                    # Also update param type
+                    init.params.each do |p|
+                      p.type = arg_type if p.name == field_name && (p.type == Type::UNKNOWN || p.type == Type::INTEGER)
+                    end
+                  end
+                end
+              else
+                node.arguments.arguments.each_with_index do |arg, i|
+                  next if i >= init.params.length
+                  arg_type = infer_type(arg)
+                  if arg_type != Type::UNKNOWN
+                    if init.params[i].type == Type::UNKNOWN || (@struct_classes && @struct_classes[cname])
+                      init.params[i].type = arg_type
+                    end
+                    # Update ivar types
+                    pname = init.params[i].name
+                    if @struct_classes && @struct_classes[cname]
+                      # For struct classes, fields map directly to params
+                      ci.ivars[pname] = arg_type if ci.ivars[pname]
+                    else
+                      ci.ivars.each_key do |iname|
+                        if ci.ivars[iname] == Type::UNKNOWN
+                          ci.ivars[iname] = arg_type if param_assigned_to_ivar?(init.body, pname, iname)
+                        end
+                      end
                     end
                   end
                 end
@@ -579,6 +684,8 @@ module Spinel
         Type::STRING
       when Prism::SymbolNode
         Type::STRING
+      when Prism::XStringNode
+        Type::STRING
       when Prism::TrueNode, Prism::FalseNode
         Type::BOOLEAN
       when Prism::NilNode
@@ -668,9 +775,9 @@ module Spinel
       when "+", "-", "*", "/", "%", "**"
         t1 = recv_type || Type::INTEGER
         t2 = node.arguments&.arguments&.first ? infer_type(node.arguments.arguments.first) : Type::INTEGER
-        if t1 == Type::STRING && mname == "+"
+        if (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "+"
           Type::STRING
-        elsif t1 == Type::STRING && mname == "*"
+        elsif (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "*"
           Type::STRING
         elsif t1 == Type::FLOAT || t2 == Type::FLOAT || mname == "**"
           # ** returns int if both are int in our usage, but for safety:
@@ -686,7 +793,7 @@ module Spinel
         Type::BOOLEAN
       when "!", "not"
         Type::BOOLEAN
-      when "to_i", "ceil", "floor", "round", "abs", "length", "size", "count", "ord"
+      when "to_i", "ceil", "floor", "round", "abs", "length", "size", "count", "ord", "hex", "oct"
         if recv_type == Type::FLOAT && mname == "abs"
           Type::FLOAT
         elsif mname == "abs" && recv_type == Type::FLOAT
@@ -696,19 +803,82 @@ module Spinel
         end
       when "to_s", "to_str", "upcase", "downcase", "strip", "chomp", "chop",
            "reverse", "capitalize", "gsub", "sub", "freeze", "inspect",
-           "chars", "join", "name", "class"
+           "chars", "join", "name", "class", "to_sym", "ljust", "rjust",
+           "center", "lstrip", "rstrip", "tr", "squeeze", "delete"
         if mname == "chars"
           Type::STR_ARRAY
+        elsif mname == "reverse" && (recv_type == Type::ARRAY || recv_type == Type::STR_ARRAY)
+          recv_type
+        elsif mname == "join"
+          Type::STRING
         else
           Type::STRING
         end
       when "to_f", "sqrt"
         Type::FLOAT
-      when "to_a"
+      when "to_a", "bytes"
         Type::ARRAY
       when "even?", "odd?", "zero?", "nil?", "empty?", "include?", "frozen?",
-           "has_key?", "key?", "start_with?", "end_with?", "is_a?", "respond_to?"
+           "has_key?", "key?", "start_with?", "end_with?", "is_a?", "respond_to?",
+           "positive?", "negative?"
         Type::BOOLEAN
+      when "now"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Time"
+          Type::TIME
+        else
+          Type::UNKNOWN
+        end
+      when "at"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Time"
+          Type::TIME
+        else
+          Type::UNKNOWN
+        end
+      when "read"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+          Type::STRING
+        else
+          Type::UNKNOWN
+        end
+      when "exist?", "exists?"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+          Type::BOOLEAN
+        else
+          Type::BOOLEAN
+        end
+      when "join"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+          Type::STRING
+        else
+          Type::STRING
+        end
+      when "basename"
+        Type::STRING
+      when "home"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Dir"
+          Type::STRING
+        else
+          Type::UNKNOWN
+        end
+      when "[]"
+        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "ENV"
+          Type::STRING
+        else
+          recv_type = infer_type(node.receiver)
+          case recv_type
+          when Type::ARRAY then Type::INTEGER
+          when Type::STR_ARRAY then Type::STRING
+          when Type::HASH then Type::INTEGER
+          when Type::STR_HASH then Type::STRING
+          when Type::STRING then Type::STRING
+          when Type::MUTABLE_STRING then Type::STRING
+          else Type::UNKNOWN
+          end
+        end
+      when "system"
+        Type::BOOLEAN
+      when "strip", "chomp", "chop", "lstrip", "rstrip"
+        Type::STRING
       when "new"
         if node.receiver.is_a?(Prism::ConstantReadNode)
           cname = node.receiver.name.to_s
@@ -717,7 +887,7 @@ module Spinel
           when "Hash" then Type::HASH
           else
             if @classes[cname]
-              Type::UNKNOWN  # will be class instance
+              cname  # class instance type
             else
               Type::UNKNOWN
             end
@@ -792,6 +962,14 @@ module Spinel
               @classes[actual].methods[mname].return_type
             elsif ci.ivars[mname]
               ci.ivars[mname]
+            else
+              Type::UNKNOWN
+            end
+          elsif node.receiver.is_a?(Prism::ConstantReadNode)
+            # Class method call like Point.origin
+            rcname = node.receiver.name.to_s
+            if @classes[rcname] && @classes[rcname].class_methods[mname]
+              @classes[rcname].class_methods[mname].return_type
             else
               Type::UNKNOWN
             end
@@ -1035,6 +1213,14 @@ module Spinel
             accessor = needs_gc_alloc ? "self->#{ivar}" : "self.#{ivar}"
             lines << "  #{accessor} = #{val};"
           end
+        end
+      end
+
+      # For struct classes, generate field assignments from params
+      if @struct_classes && @struct_classes[name]
+        @struct_classes[name].each do |field|
+          accessor = needs_gc_alloc ? "self->#{field}" : "self.#{field}"
+          lines << "  #{accessor} = lv_#{field};"
         end
       end
 
@@ -1636,6 +1822,13 @@ module Spinel
     def generate_call_stmt(node)
       mname = node.name.to_s
 
+      # Check for receiver-based calls
+      if node.receiver
+        val = compile_expr(node)
+        emit("#{val};") unless val.nil? || val == "" || val == "0"
+        return
+      end
+
       case mname
       when "puts"
         generate_puts(node)
@@ -1686,7 +1879,7 @@ module Spinel
         when Type::BOOLEAN
           emit("puts(#{val} ? \"true\" : \"false\");")
         when Type::STRING, Type::SYMBOL
-          emit("{ const char *_ps = #{val}; fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '\\n') putchar('\\n'); }")
+          emit("{ const char *_ps = #{val}; if (_ps) { fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '\\n') putchar('\\n'); } else putchar('\\n'); }")
         when Type::MUTABLE_STRING
           emit("{ const char *_ps = sp_String_cstr(#{val}); fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '\\n') putchar('\\n'); }")
           @needs_mutable_string = true
@@ -1761,12 +1954,23 @@ module Spinel
       if args.empty?
         emit('sp_raise("RuntimeError");')
       elsif args.length == 1
-        val = compile_expr(args[0])
-        emit("sp_raise(#{val});")
+        arg = args[0]
+        if arg.is_a?(Prism::CallNode) && arg.name.to_s == "new" && arg.receiver.is_a?(Prism::ConstantReadNode)
+          # raise ClassName.new("msg")
+          cls_name = c_string_literal(arg.receiver.name.to_s)
+          msg_args = call_args(arg)
+          msg = msg_args.length > 0 ? compile_expr(msg_args[0]) : c_string_literal(arg.receiver.name.to_s)
+          emit("sp_raise_cls(#{cls_name}, #{msg});")
+        else
+          val = compile_expr(arg)
+          emit("sp_raise(#{val});")
+        end
       else
-        val = compile_expr(args[0])
+        # raise ClassName, "message"
+        cls_arg = args[0]
+        cls_name = cls_arg.is_a?(Prism::ConstantReadNode) ? c_string_literal(cls_arg.name.to_s) : compile_expr(cls_arg)
         msg = compile_expr(args[1])
-        emit("sp_raise_cls(#{val}, #{msg});")
+        emit("sp_raise_cls(#{cls_name}, #{msg});")
       end
     end
 
@@ -2038,6 +2242,12 @@ module Spinel
     end
 
     def generate_case_no_predicate(node, return_type)
+      res_var = nil
+      if return_type
+        res_var = "_cres_#{next_temp}"
+        emit("#{c_type(return_type)} #{res_var} = #{default_val(return_type)};")
+      end
+
       first = true
       (node.conditions || []).each do |when_node|
         cond = compile_expr(when_node.conditions.first)
@@ -2048,14 +2258,28 @@ module Spinel
           emit("else if (#{cond}) {")
         end
         @indent += 1
-        generate_body_stmts(when_node.statements)
+        if res_var && when_node.statements
+          stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+          stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
+          val = compile_expr(stmts.last)
+          emit("#{res_var} = #{val};")
+        else
+          generate_body_stmts(when_node.statements)
+        end
         @indent -= 1
         emit("}")
       end
       if node.else_clause
         emit("else {")
         @indent += 1
-        generate_body_stmts(node.else_clause.statements)
+        if res_var && node.else_clause.statements
+          stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
+          val = compile_expr(stmts.last)
+          emit("#{res_var} = #{val};")
+        else
+          generate_body_stmts(node.else_clause.statements)
+        end
         @indent -= 1
         emit("}")
       end
@@ -2117,17 +2341,55 @@ module Spinel
         emit("sp_exc_depth--;")
 
         rc = node.rescue_clause
-        if rc.reference
-          # rescue => e
-          ename = case rc.reference
-                  when Prism::LocalVariableTargetNode then rc.reference.name.to_s
-                  else "e"
-                  end
-          ensure_var_declared(ename, Type::STRING)
-          emit("lv_#{ename} = sp_exc_message;")
-        end
+        has_class_checks = rc.exceptions && !rc.exceptions.empty?
 
-        generate_body_stmts(rc.statements)
+        if has_class_checks
+          # Multiple rescue clauses with class checks
+          first = true
+          while rc
+            if rc.exceptions && !rc.exceptions.empty?
+              cls_names = rc.exceptions.map { |e|
+                e.is_a?(Prism::ConstantReadNode) ? e.name.to_s : "RuntimeError"
+              }
+              cond = cls_names.map { |c| "sp_exc_is_a(\"#{c}\")" }.join(" || ")
+              if first
+                emit("if (#{cond}) {")
+                first = false
+              else
+                emit("else if (#{cond}) {")
+              end
+            else
+              # bare rescue
+              emit("else {") unless first
+              emit("{") if first
+              first = false
+            end
+            @indent += 1
+            if rc.reference
+              ename = case rc.reference
+                      when Prism::LocalVariableTargetNode then rc.reference.name.to_s
+                      else "e"
+                      end
+              ensure_var_declared(ename, Type::STRING)
+              emit("lv_#{ename} = sp_exc_message;")
+            end
+            generate_body_stmts(rc.statements)
+            @indent -= 1
+            emit("}")
+            rc = rc.subsequent
+          end
+        else
+          # Simple rescue (no class check)
+          if rc.reference
+            ename = case rc.reference
+                    when Prism::LocalVariableTargetNode then rc.reference.name.to_s
+                    else "e"
+                    end
+            ensure_var_declared(ename, Type::STRING)
+            emit("lv_#{ename} = sp_exc_message;")
+          end
+          generate_body_stmts(rc.statements)
+        end
 
         @indent -= 1
         emit("}")
@@ -2332,6 +2594,11 @@ module Spinel
         compile_multi_write_expr(node)
       when Prism::LambdaNode
         "0 /* lambda not supported */"
+      when Prism::XStringNode
+        # Backtick execution: `cmd`
+        @needs_system = true
+        cmd = c_string_literal(node.content)
+        "sp_backtick(#{cmd})"
       when Prism::SplatNode
         if node.expression
           compile_expr(node.expression)
@@ -2390,6 +2657,10 @@ module Spinel
         @module_constants[path][:c_name]
       elsif path == "Math::PI"
         "M_PI"
+      elsif path == "Float::INFINITY"
+        "(1.0/0.0)"
+      elsif path == "Float::NAN"
+        "(0.0/0.0)"
       else
         # Try class::CONST pattern
         parts = path.split("::")
@@ -2679,7 +2950,39 @@ module Spinel
 
         res_var
       else
-        "0"
+        # Bare case as expression
+        result_type = infer_case_type(node)
+        res_var = "_cres_#{next_temp}"
+        emit("#{c_type(result_type)} #{res_var} = #{default_val(result_type)};")
+
+        first = true
+        (node.conditions || []).each do |when_node|
+          cond = compile_expr(when_node.conditions.first)
+          if first
+            emit("if (#{cond}) {")
+            first = false
+          else
+            emit("else if (#{cond}) {")
+          end
+          @indent += 1
+          if when_node.statements
+            stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+            stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
+            emit("#{res_var} = #{compile_expr(stmts.last)};")
+          end
+          @indent -= 1
+          emit("}")
+        end
+        if node.else_clause && node.else_clause.statements
+          emit("else {")
+          @indent += 1
+          stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
+          emit("#{res_var} = #{compile_expr(stmts.last)};")
+          @indent -= 1
+          emit("}")
+        end
+        res_var
       end
     end
 
@@ -2792,6 +3095,54 @@ module Spinel
       when "loop"
         generate_loop(node)
         return "0"
+      when "system"
+        @needs_system = true
+        if args.length > 0
+          arg = compile_expr(args[0])
+          return "sp_system(#{arg})"
+        end
+        return "0"
+      when "trap"
+        # Register signal handler - no-op for AOT
+        emit("/* trap: no-op */")
+        return "0"
+      when "putc"
+        if args.length > 0
+          val = compile_expr(args[0])
+          arg_type = infer_type(args[0])
+          if arg_type == Type::STRING
+            emit("fputs(#{val}, stdout);")
+          else
+            emit("putchar((char)#{val});")
+          end
+        end
+        return "0"
+      when "srand"
+        if args.length > 0
+          arg = compile_expr(args[0])
+          emit("srand(#{arg});")
+        else
+          emit("srand(0);")
+        end
+        return "0"
+      when "rand"
+        if args.length > 0
+          arg = compile_expr(args[0])
+          return "(rand() % #{arg})"
+        end
+        return "(rand())"
+      when "exit"
+        if args.length > 0
+          arg = compile_expr(args[0])
+          emit("exit(#{arg});")
+        else
+          emit("exit(0);")
+        end
+        return "0"
+      when "catch"
+        return compile_catch(node, args)
+      when "throw"
+        return compile_throw(node, args)
       end
 
       # User-defined method
@@ -2849,16 +3200,80 @@ module Spinel
       # Safe navigation operator
       is_safe_nav = node.respond_to?(:call_operator) && node.call_operator == "&."
 
+      # Auto-convert mutable strings to const char * for string methods
+      # This variable used for methods that expect const char *
+      mstr_recv = recv_type == Type::MUTABLE_STRING ? "sp_String_cstr(#{recv_code})" : recv_code
+
+      # ---- $stderr.puts ----
+      if recv.is_a?(Prism::GlobalVariableReadNode) && recv.name.to_s == "$stderr" && mname == "puts"
+        args.each do |arg|
+          val = compile_expr(arg)
+          type = infer_type(arg)
+          if type == Type::STRING
+            emit("fprintf(stderr, \"%s\\n\", #{val});")
+          else
+            emit("fprintf(stderr, \"%lld\\n\", (long long)#{val});")
+          end
+        end
+        return "0"
+      end
+
+      # ---- File object methods ----
+      if recv_type == Type::FILE_OBJ
+        @needs_file = true
+        case mname
+        when "puts"
+          args.each do |arg|
+            val = compile_expr(arg)
+            emit("sp_File_puts(#{recv_code}, #{val});")
+          end
+          return "0"
+        when "print", "write"
+          args.each do |arg|
+            val = compile_expr(arg)
+            emit("sp_File_print(#{recv_code}, #{val});")
+          end
+          return "0"
+        when "each_line"
+          if node.block
+            block = node.block
+            params = block_params(block)
+            line_var = params[0] || "line"
+            buf_var = "_buf_#{next_temp}"
+            len_var = "_len_#{buf_var}"
+            emit("{ char #{buf_var}[4096];")
+            emit("while (fgets(#{buf_var}, sizeof(#{buf_var}), #{recv_code}->fp)) {")
+            @indent += 1
+            emit("size_t #{len_var} = strlen(#{buf_var});")
+            emit("if (#{len_var} > 0 && #{buf_var}[#{len_var}-1] == '\\n') #{buf_var}[#{len_var}-1] = '\\0';")
+            emit("const char *lv_#{line_var} = #{buf_var};")
+            push_scope
+            declare_var(line_var, Type::STRING, c_name: "lv_#{line_var}")
+            generate_block_body(block)
+            pop_scope
+            @indent -= 1
+            emit("}")
+            emit("}")
+          end
+          return "0"
+        when "close"
+          emit("sp_File_close(#{recv_code});")
+          return "0"
+        when "read"
+          return "sp_File_read_all(#{recv_code})"
+        end
+      end
+
       case mname
       # ---- Arithmetic operators ----
       when "+", "-", "*", "/", "%"
         arg = compile_expr(args[0])
-        if recv_type == Type::STRING && mname == "+"
+        if (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "+"
           @string_helpers_needed << :str_concat
-          return "sp_str_concat(#{recv_code}, #{arg})"
-        elsif recv_type == Type::STRING && mname == "*"
+          return "sp_str_concat(#{mstr_recv}, #{arg})"
+        elsif (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "*"
           @string_helpers_needed << :str_repeat
-          return "sp_str_repeat(#{recv_code}, #{arg})"
+          return "sp_str_repeat(#{mstr_recv}, #{arg})"
         end
         return "(#{recv_code} #{mname} #{arg})"
       when "**"
@@ -2875,10 +3290,18 @@ module Spinel
 
       # ---- Comparison operators ----
       when "==", "!="
+        arg_type = infer_type(args[0])
         arg = compile_expr(args[0])
-        if recv_type == Type::STRING || infer_type(args[0]) == Type::STRING
+        # nil comparison for strings/pointers
+        if (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && arg_type == Type::NIL
+          op = mname == "==" ? "==" : "!="
+          return "(#{recv_code} #{op} NULL)"
+        elsif recv_type == Type::NIL && (arg_type == Type::STRING || arg_type == Type::MUTABLE_STRING)
+          op = mname == "==" ? "==" : "!="
+          return "(NULL #{op} #{arg})"
+        elsif recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING || arg_type == Type::STRING
           op = mname == "==" ? "== 0" : "!= 0"
-          return "(strcmp(#{recv_code}, #{arg}) #{op})"
+          return "(strcmp(#{mstr_recv}, #{arg}) #{op})"
         elsif recv_type == Type::ARRAY && mname == "!="
           return "sp_IntArray_neq(#{recv_code}, #{arg})"
         end
@@ -2916,8 +3339,28 @@ module Spinel
           return "(#{recv_code} < 0 ? -(#{recv_code}) : (#{recv_code}))"
         end
       when "to_i"
+        if recv_type == Type::TIME
+          @needs_time = true
+          return "sp_Time_to_i(#{recv_code})"
+        end
+        if recv_type == Type::STRING
+          return "((mrb_int)atoll(#{recv_code}))"
+        end
+        if recv_type == Type::MUTABLE_STRING
+          return "((mrb_int)atoll(#{mstr_recv}))"
+        end
         return "((mrb_int)(#{recv_code}))"
+      when "clamp"
+        if args.length >= 2
+          lo = compile_expr(args[0])
+          hi = compile_expr(args[1])
+          return "((#{recv_code}) < (#{lo}) ? (#{lo}) : ((#{recv_code}) > (#{hi}) ? (#{hi}) : (#{recv_code})))"
+        end
+        return recv_code
       when "to_f"
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
+          return "atof(#{mstr_recv})"
+        end
         return "((mrb_float)(#{recv_code}))"
       when "to_s"
         if recv_type == Type::INTEGER
@@ -2930,6 +3373,9 @@ module Spinel
           return "(#{recv_code} ? \"true\" : \"false\")"
         elsif recv_type == Type::STRING
           return recv_code
+        elsif recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          return "sp_String_cstr(#{recv_code})"
         else
           # Object to_s
           if recv.is_a?(Prism::LocalVariableReadNode)
@@ -2948,6 +3394,9 @@ module Spinel
           return "sp_Range_to_a(#{recv_code})"
         end
         return recv_code
+      when "to_sym"
+        # Symbols are just strings in AOT
+        return recv_code
       when "ceil"
         return "((mrb_int)ceil(#{recv_code}))"
       when "floor"
@@ -2960,7 +3409,17 @@ module Spinel
         return "((#{recv_code}) % 2 != 0)"
       when "zero?"
         return "((#{recv_code}) == 0)"
+      when "positive?"
+        return "((#{recv_code}) > 0)"
+      when "negative?"
+        return "((#{recv_code}) < 0)"
       when "nil?"
+        if recv.is_a?(Prism::NilNode)
+          return "TRUE"
+        end
+        if recv_type == Type::NIL
+          return "TRUE"
+        end
         if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
           return "(#{recv_code} == NULL)"
         end
@@ -2972,6 +3431,9 @@ module Spinel
 
       # ---- String methods ----
       when "length", "size"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ARGV"
+          return "sp_Argv_length(&sp_argv)"
+        end
         if recv_type == Type::STRING
           return "((mrb_int)strlen(#{recv_code}))"
         elsif recv_type == Type::MUTABLE_STRING
@@ -2994,31 +3456,55 @@ module Spinel
         end
       when "upcase"
         @string_helpers_needed << :str_upcase
-        return "sp_str_upcase(#{recv_code})"
+        return "sp_str_upcase(#{mstr_recv})"
       when "downcase"
         @string_helpers_needed << :str_downcase
-        return "sp_str_downcase(#{recv_code})"
+        return "sp_str_downcase(#{mstr_recv})"
       when "strip"
         @string_helpers_needed << :str_strip
-        return "sp_str_strip(#{recv_code})"
+        return "sp_str_strip(#{mstr_recv})"
       when "chomp"
         @string_helpers_needed << :str_chomp
-        return "sp_str_chomp(#{recv_code})"
+        return "sp_str_chomp(#{mstr_recv})"
       when "chop"
         @string_helpers_needed << :str_chop
-        return "sp_str_chop(#{recv_code})"
+        return "sp_str_chop(#{mstr_recv})"
       when "capitalize"
         @string_helpers_needed << :str_capitalize
-        return "sp_str_capitalize(#{recv_code})"
+        return "sp_str_capitalize(#{mstr_recv})"
+      when "lstrip"
+        @string_helpers_needed << :str_lstrip
+        return "sp_str_lstrip(#{mstr_recv})"
+      when "rstrip"
+        @string_helpers_needed << :str_rstrip
+        return "sp_str_rstrip(#{mstr_recv})"
+      when "ljust"
+        @string_helpers_needed << :str_ljust
+        width = compile_expr(args[0])
+        pad = args.length > 1 ? compile_expr(args[1]) : '" "'
+        return "sp_str_ljust(#{mstr_recv}, #{width}, #{pad})"
+      when "rjust"
+        @string_helpers_needed << :str_rjust
+        width = compile_expr(args[0])
+        pad = args.length > 1 ? compile_expr(args[1]) : '" "'
+        return "sp_str_rjust(#{mstr_recv}, #{width}, #{pad})"
+      when "center"
+        @string_helpers_needed << :str_center
+        width = compile_expr(args[0])
+        return "sp_str_center(#{mstr_recv}, #{width})"
       when "reverse"
-        if recv_type == Type::STRING
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
           @string_helpers_needed << :str_reverse
-          return "sp_str_reverse(#{recv_code})"
+          return "sp_str_reverse(#{mstr_recv})"
         elsif recv_type == Type::ARRAY
-          return "sp_IntArray_sort(#{recv_code})" # wrong, but array reverse is reverse_bang
+          @needs_int_array = true
+          tmp = "_rev_#{next_temp}"
+          emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+          emit("for (mrb_int _i = sp_IntArray_length(#{recv_code}) - 1; _i >= 0; _i--) sp_IntArray_push(#{tmp}, sp_IntArray_get(#{recv_code}, _i));")
+          return tmp
         end
         @string_helpers_needed << :str_reverse
-        return "sp_str_reverse(#{recv_code})"
+        return "sp_str_reverse(#{mstr_recv})"
       when "reverse!"
         if recv_type == Type::ARRAY
           @needs_int_array = true
@@ -3028,8 +3514,8 @@ module Spinel
         return recv_code
       when "include?"
         arg = compile_expr(args[0])
-        if recv_type == Type::STRING
-          return "(strstr(#{recv_code}, #{arg}) != NULL)"
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
+          return "(strstr(#{mstr_recv}, #{arg}) != NULL)"
         elsif recv_type == Type::RANGE
           @needs_range = true
           return "sp_Range_include_p(#{recv_code}, #{arg})"
@@ -3048,21 +3534,38 @@ module Spinel
       when "start_with?"
         @string_helpers_needed << :str_starts_with
         arg = compile_expr(args[0])
-        return "sp_str_starts_with(#{recv_code}, #{arg})"
+        return "sp_str_starts_with(#{mstr_recv}, #{arg})"
       when "end_with?"
         @string_helpers_needed << :str_ends_with
         arg = compile_expr(args[0])
-        return "sp_str_ends_with(#{recv_code}, #{arg})"
+        return "sp_str_ends_with(#{mstr_recv}, #{arg})"
+      when "squeeze"
+        @string_helpers_needed << :str_squeeze
+        return "sp_str_squeeze(#{mstr_recv})"
+      when "tr"
+        @string_helpers_needed << :str_tr
+        from = compile_expr(args[0])
+        to = compile_expr(args[1])
+        return "sp_str_tr(#{mstr_recv}, #{from}, #{to})"
+      when "hex"
+        return "((mrb_int)strtol(#{mstr_recv}, NULL, 16))"
+      when "oct"
+        return "((mrb_int)strtol(#{mstr_recv}, NULL, 8))"
+      when "to_f"
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
+          return "atof(#{mstr_recv})"
+        end
+        return "((mrb_float)(#{recv_code}))"
       when "gsub"
         @string_helpers_needed << :str_gsub
         from = compile_expr(args[0])
         to = compile_expr(args[1])
-        return "sp_str_gsub(#{recv_code}, #{from}, #{to})"
+        return "sp_str_gsub(#{mstr_recv}, #{from}, #{to})"
       when "sub"
         @string_helpers_needed << :str_sub
         from = compile_expr(args[0])
         to = compile_expr(args[1])
-        return "sp_str_sub(#{recv_code}, #{from}, #{to})"
+        return "sp_str_sub(#{mstr_recv}, #{from}, #{to})"
       when "count"
         if recv_type == Type::STRING
           @string_helpers_needed << :str_count
@@ -3084,10 +3587,10 @@ module Spinel
         @needs_str_array = true
         @string_helpers_needed << :str_split
         if args.empty?
-          return "sp_str_split(#{recv_code}, \" \")"
+          return "sp_str_split(#{mstr_recv}, \" \")"
         else
           arg = compile_expr(args[0])
-          return "sp_str_split(#{recv_code}, #{arg})"
+          return "sp_str_split(#{mstr_recv}, #{arg})"
         end
       when "chars"
         @needs_str_array = true
@@ -3098,6 +3601,11 @@ module Spinel
         @needs_gc = true
         return "sp_str_bytes(#{recv_code})"
       when "join"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          compiled_args = args.map { |a| compile_expr(a) }
+          return "sp_File_join(#{compiled_args.join(', ')})"
+        end
         if recv_type == Type::ARRAY
           @needs_int_array = true
           sep = args.empty? ? '""' : compile_expr(args[0])
@@ -3122,6 +3630,13 @@ module Spinel
           @needs_mutable_string = true
           arg = compile_expr(args[0])
           emit("sp_String_replace(#{recv_code}, #{arg});")
+          return recv_code
+        end
+        return recv_code
+      when "clear"
+        if recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          emit("sp_String_clear(#{recv_code});")
           return recv_code
         end
         return recv_code
@@ -3212,6 +3727,8 @@ module Spinel
         emit("for (mrb_int _si_#{tmp} = 0; _si_#{tmp} < sp_IntArray_length(#{recv_code}); _si_#{tmp}++)")
         emit(" #{tmp} += sp_IntArray_get(#{recv_code}, _si_#{tmp});")
         return tmp
+      when "reduce", "inject"
+        return compile_reduce(node, recv_code, recv_type)
       when "sort"
         if node.block
           return compile_sort_by(node, recv_code, recv_type)
@@ -3228,6 +3745,9 @@ module Spinel
         @needs_int_array = true
         return "sp_IntArray_uniq(#{recv_code})"
       when "dup"
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
+          return mstr_recv
+        end
         @needs_int_array = true
         return "sp_IntArray_dup(#{recv_code})"
       when "empty?"
@@ -3238,11 +3758,16 @@ module Spinel
           return "(strlen(#{recv_code}) == 0)"
         end
         return "FALSE"
-      when "compact"
+      when "compact", "flatten"
         return recv_code  # In typed AOT, no nils in int arrays
 
       # ---- Array [] and []= ----
       when "[]"
+        # ENV["key"] -> getenv("key")
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ENV"
+          arg = compile_expr(args[0])
+          return "getenv(#{arg})"
+        end
         arg = compile_expr(args[0])
         if recv_type == Type::ARRAY
           @needs_int_array = true
@@ -3250,9 +3775,24 @@ module Spinel
         elsif recv_type == Type::STR_ARRAY
           @needs_str_array = true
           return "(#{recv_code})->data[#{arg}]"
+        elsif recv_type == Type::MUTABLE_STRING
+          @needs_mutable_string = true
+          return "sp_String_char_at(#{recv_code}, #{arg})"
         elsif recv_type == Type::STRING
-          @string_helpers_needed << :str_char_at
-          return "sp_str_char_at(#{recv_code}, #{arg})"
+          arg_type = infer_type(args[0])
+          if arg_type == Type::RANGE
+            @needs_range = true
+            @string_helpers_needed << :str_slice_range
+            return "sp_str_slice_range(#{recv_code}, #{arg})"
+          elsif args.length >= 2
+            # s[start, len]
+            arg2 = compile_expr(args[1])
+            @string_helpers_needed << :str_slice
+            return "sp_str_slice(#{recv_code}, #{arg}, #{arg2})"
+          else
+            @string_helpers_needed << :str_char_at
+            return "sp_str_char_at(#{recv_code}, #{arg})"
+          end
         elsif recv_type == Type::HASH
           @needs_str_int_hash = true
           return "sp_StrIntHash_get(#{recv_code}, #{arg})"
@@ -3311,6 +3851,17 @@ module Spinel
         arg = compile_expr(args[0])
         return "sp_StrIntHash_has_key(#{recv_code}, #{arg})"
       when "delete"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          arg = compile_expr(args[0])
+          emit("remove(#{arg});")
+          return "0"
+        end
+        if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
+          @string_helpers_needed << :str_delete
+          arg = compile_expr(args[0])
+          return "sp_str_delete_chars(#{mstr_recv}, #{arg})"
+        end
         if recv_type == Type::HASH
           @needs_str_int_hash = true
           arg = compile_expr(args[0])
@@ -3362,6 +3913,75 @@ module Spinel
         end
         return "0"
 
+      # ---- Dir methods ----
+      when "home"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Dir"
+          return "getenv(\"HOME\")"
+        end
+        return '""'
+
+      # ---- Time methods ----
+      when "now"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Time"
+          @needs_time = true
+          return "sp_Time_now()"
+        end
+        return "0"
+      when "at"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Time"
+          @needs_time = true
+          arg = compile_expr(args[0])
+          return "sp_Time_at(#{arg})"
+        end
+        return "0"
+
+      # ---- File class methods ----
+      when "read"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          arg = compile_expr(args[0])
+          return "sp_File_read(#{arg})"
+        end
+        return "0"
+      when "write"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          path_arg = compile_expr(args[0])
+          data_arg = compile_expr(args[1])
+          return "sp_File_write(#{path_arg}, #{data_arg})"
+        end
+        return "0"
+      when "exist?", "exists?"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          arg = compile_expr(args[0])
+          return "sp_File_exist(#{arg})"
+        end
+        return "FALSE"
+      when "open"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          return compile_file_open(node, args)
+        end
+        return "0"
+      when "join"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          @needs_file = true
+          compiled_args = args.map { |a| compile_expr(a) }
+          return "sp_File_join(#{compiled_args.join(', ')})"
+        end
+        if recv_type == Type::ARRAY || recv_type == Type::STR_ARRAY
+          arg = args.length > 0 ? compile_expr(args[0]) : '","'
+          return "sp_StrArray_join(#{recv_code}, #{arg})"
+        end
+        return '""'
+      when "basename"
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+          arg = compile_expr(args[0])
+          return "basename(#{arg})"
+        end
+        return '""'
+
       # ---- new ----
       when "new"
         return compile_new(node, recv, args)
@@ -3370,8 +3990,51 @@ module Spinel
       when "class"
         return '"Object"'
       when "is_a?"
+        if args.length > 0 && args[0].is_a?(Prism::ConstantReadNode)
+          check_class = args[0].name.to_s
+          # Determine the receiver's class
+          recv_class = nil
+          if recv.is_a?(Prism::LocalVariableReadNode)
+            vname = recv.name.to_s
+            recv_class = @var_class_types && @var_class_types[vname]
+          end
+          if recv_class
+            # Check class hierarchy
+            cls = recv_class
+            while cls
+              return "TRUE" if cls == check_class
+              ci = @classes[cls]
+              cls = ci ? ci.parent : nil
+            end
+            return "FALSE"
+          end
+        end
         return "TRUE"
       when "respond_to?"
+        if args.length > 0 && args[0].is_a?(Prism::SymbolNode)
+          method_name = args[0].value
+          # Determine the receiver's class
+          recv_class = nil
+          if recv.is_a?(Prism::LocalVariableReadNode)
+            vname = recv.name.to_s
+            recv_class = @var_class_types && @var_class_types[vname]
+          end
+          if recv_class
+            # Check if method exists in class hierarchy
+            cls = recv_class
+            while cls
+              ci = @classes[cls]
+              if ci
+                if ci.methods[method_name] || ci.attrs[:reader].include?(method_name) ||
+                   ci.attrs[:accessor].include?(method_name)
+                  return "TRUE"
+                end
+              end
+              cls = ci ? ci.parent : nil
+            end
+            return "FALSE"
+          end
+        end
         return "TRUE"
       when "send"
         return "0"
@@ -3463,6 +4126,16 @@ module Spinel
     end
 
     def try_class_method_call(recv, recv_code, mname, args)
+      # Check if receiver is a class constant (static method call)
+      if recv.is_a?(Prism::ConstantReadNode)
+        cname = recv.name.to_s
+        if @classes[cname] && @classes[cname].class_methods[mname]
+          compiled_args = args.map { |a| compile_expr(a) }
+          param_str = compiled_args.empty? ? "" : compiled_args.join(", ")
+          return "sp_#{cname}_#{mname}(#{param_str})"
+        end
+      end
+
       # Check if receiver is a known class instance
       if recv.is_a?(Prism::LocalVariableReadNode)
         vname = recv.name.to_s
@@ -3524,6 +4197,20 @@ module Spinel
       when "Array"
         @needs_int_array = true
         @needs_gc = true
+        if args.length >= 2
+          n = compile_expr(args[0])
+          val = compile_expr(args[1])
+          tmp = "_arr_#{next_temp}"
+          emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+          emit("for (mrb_int _i = 0; _i < #{n}; _i++) sp_IntArray_push(#{tmp}, #{val});")
+          return tmp
+        elsif args.length == 1
+          n = compile_expr(args[0])
+          tmp = "_arr_#{next_temp}"
+          emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+          emit("for (mrb_int _i = 0; _i < #{n}; _i++) sp_IntArray_push(#{tmp}, 0);")
+          return tmp
+        end
         return "sp_IntArray_new()"
       when "Hash"
         @needs_str_int_hash = true
@@ -3536,6 +4223,21 @@ module Spinel
       end
 
       if @classes[cname]
+        # Handle keyword arguments for struct-like constructors
+        if args.length == 1 && args[0].is_a?(Prism::KeywordHashNode) && @struct_classes && @struct_classes[cname]
+          fields = @struct_classes[cname]
+          # Extract keyword args in field order
+          kw_hash = {}
+          args[0].elements.each do |assoc|
+            if assoc.is_a?(Prism::AssocNode)
+              key = assoc.key.is_a?(Prism::SymbolNode) ? assoc.key.value : assoc.key.to_s
+              kw_hash[key] = compile_expr(assoc.value)
+            end
+          end
+          compiled_args = fields.map { |f| kw_hash[f] || default_val(Type::INTEGER) }
+          return "sp_#{cname}_new(#{compiled_args.join(', ')})"
+        end
+
         compiled_args = args.map { |a| compile_expr(a) }
         return "sp_#{cname}_new(#{compiled_args.join(', ')})"
       end
@@ -3682,6 +4384,151 @@ module Spinel
       @indent -= 1
       emit("}")
       result
+    end
+
+    def compile_catch(node, args)
+      @needs_exception = true
+      @needs_catch_throw = true
+
+      tag = args.length > 0 && args[0].is_a?(Prism::SymbolNode) ? args[0].value : "tag"
+      tag_c = c_string_literal(tag)
+
+      result_var = "_catch_#{next_temp}"
+      emit("mrb_int #{result_var}; {")
+      @indent += 1
+      emit("sp_exc_depth++;")
+      jmp_var = "_cj_#{result_var}"
+      emit("int #{jmp_var} = setjmp(sp_exc_stack[sp_exc_depth - 1]);")
+      emit("if (#{jmp_var} == 0) {")
+      @indent += 1
+
+      # Generate block body
+      if node.block
+        block = node.block
+        if block.body
+          stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+          if stmts.length > 0
+            stmts[0..-2].each { |s| generate_stmt(s) }
+            last_val = compile_expr(stmts.last)
+            emit("#{result_var} = #{last_val};")
+          else
+            emit("#{result_var} = 0;")
+          end
+        else
+          emit("#{result_var} = 0;")
+        end
+      else
+        emit("#{result_var} = 0;")
+      end
+
+      emit("sp_exc_depth--;")
+      @indent -= 1
+      emit("}")
+      emit("else if (#{jmp_var} == 2 && sp_throw_tag && strcmp(sp_throw_tag, #{tag_c}) == 0) {")
+      @indent += 1
+      emit("sp_exc_depth--;")
+      emit("#{result_var} = sp_throw_is_str ? 0 : sp_throw_value_i;")
+      @indent -= 1
+      emit("}")
+      emit("else {")
+      @indent += 1
+      emit("sp_exc_depth--;")
+      emit("if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], #{jmp_var});")
+      @indent -= 1
+      emit("}")
+      @indent -= 1
+      emit("}")
+
+      result_var
+    end
+
+    def compile_throw(node, args)
+      @needs_exception = true
+      @needs_catch_throw = true
+
+      tag = args.length > 0 && args[0].is_a?(Prism::SymbolNode) ? args[0].value : "tag"
+      tag_c = c_string_literal(tag)
+
+      if args.length > 1
+        val_type = infer_type(args[1])
+        val = compile_expr(args[1])
+        if val_type == Type::STRING
+          emit("sp_throw_s(#{tag_c}, #{val});")
+        else
+          emit("sp_throw_i(#{tag_c}, #{val});")
+        end
+      else
+        emit("sp_throw_i(#{tag_c}, 0);")
+      end
+      "0"
+    end
+
+    def compile_file_open(node, args)
+      path_arg = compile_expr(args[0])
+      mode_arg = args.length > 1 ? compile_expr(args[1]) : '"r"'
+
+      if node.block
+        block = node.block
+        params = block_params(block)
+        fvar = params[0] || "f"
+
+        emit("{")
+        @indent += 1
+        emit("sp_File *lv_#{fvar} = sp_File_open(#{path_arg}, #{mode_arg});")
+        push_scope
+        declare_var(fvar, Type::FILE_OBJ, c_name: "lv_#{fvar}")
+
+        # Generate block body, but handle f.puts / f.each_line specially
+        if block.body
+          stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+          stmts.each { |s| generate_stmt(s) }
+        end
+
+        pop_scope
+        emit("sp_File_close(lv_#{fvar});")
+        @indent -= 1
+        emit("}")
+        return "0"
+      else
+        # No block - return file object
+        return "sp_File_open(#{path_arg}, #{mode_arg})"
+      end
+    end
+
+    def compile_reduce(node, recv_code, recv_type)
+      return "0" unless node.block
+      block = node.block
+      params = block_params(block)
+      acc_var = params[0] || "acc"
+      elem_var = params[1] || "x"
+      args = call_args(node)
+
+      @needs_int_array = true
+
+      acc_tmp = "_reduce_#{next_temp}"
+      # Initial value
+      if args.length > 0
+        init_val = compile_expr(args[0])
+        emit("mrb_int #{acc_tmp} = #{init_val};")
+      else
+        emit("mrb_int #{acc_tmp} = sp_IntArray_get(#{recv_code}, 0);")
+      end
+
+      idx = "_ri_#{acc_tmp}"
+      start_idx = args.length > 0 ? "0" : "1"
+      emit("for (mrb_int #{idx} = #{start_idx}; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
+      @indent += 1
+      push_scope
+      ensure_var_declared(acc_var, Type::INTEGER)
+      emit("lv_#{acc_var} = #{acc_tmp};")
+      emit("mrb_int lv_#{elem_var} = sp_IntArray_get(#{recv_code}, #{idx});")
+      declare_var(elem_var, Type::INTEGER, c_name: "lv_#{elem_var}")
+      body_val = compile_block_expr(block)
+      emit("#{acc_tmp} = #{body_val};")
+      pop_scope
+      @indent -= 1
+      emit("}")
+      acc_tmp
     end
 
     def compile_sort_by(node, recv_code, recv_type)
@@ -4344,7 +5191,14 @@ module Spinel
     end
 
     def c_string_literal(s)
-      escaped = s.gsub("\\", "\\\\\\\\").gsub('"', '\\"').gsub("\n", "\\n").gsub("\t", "\\t").gsub("\r", "\\r")
+      # Prism content preserves source escape sequences (e.g. \n stays as backslash-n)
+      # We only need to:
+      # 1. Escape double quotes
+      # 2. Convert actual control characters (real newline bytes) to C escapes
+      # Don't double-escape existing backslash sequences from source
+      escaped = s.gsub('"', '\\"')
+      # Convert actual control chars (not source-level \n which are already backslash + n)
+      escaped = escaped.gsub("\n", "\\n").gsub("\t", "\\t").gsub("\r", "\\r")
       "\"#{escaped}\""
     end
 
@@ -4361,8 +5215,21 @@ module Spinel
       when Type::STR_HASH then "sp_RbHash *"
       when Type::RANGE then "sp_Range"
       when Type::MUTABLE_STRING then "sp_String *"
+      when Type::TIME then "sp_Time"
+      when Type::FILE_OBJ then "FILE *"
       when Type::VOID then "void"
-      else "mrb_int"
+      else
+        # Check if it's a class instance type (string class name)
+        if type.is_a?(String) && @classes[type]
+          ci = @classes[type]
+          if class_needs_gc?(ci)
+            "sp_#{type} *"
+          else
+            "sp_#{type}"
+          end
+        else
+          "mrb_int"
+        end
       end
     end
 
@@ -4378,14 +5245,22 @@ module Spinel
       when Type::HASH then "NULL"
       when Type::STR_HASH then "NULL"
       when Type::RANGE then "{0,0}"
+      when Type::TIME then "{0}"
       when Type::MUTABLE_STRING then "NULL"
       when Type::VOID then ""
-      else "0"
+      else
+        if type.is_a?(String) && @classes[type]
+          ci = @classes[type]
+          class_needs_gc?(ci) ? "NULL" : "{0}"
+        else
+          "0"
+        end
       end
     end
 
     def gc_type?(type)
-      [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::STR_HASH, Type::MUTABLE_STRING].include?(type)
+      [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::STR_HASH, Type::MUTABLE_STRING].include?(type) ||
+        (type.is_a?(String) && @classes[type])
     end
 
     # ---- Phase 4: Assembly ----
@@ -4424,8 +5299,11 @@ module Spinel
 
       # Auto-dependencies
       @needs_int_array = true if @needs_str_int_hash
+      @needs_int_array = true if @needs_str_int_hash
+      @needs_str_int_hash = true if @needs_str_str_hash  # RbHash uses sp_hash_str from StrIntHash
       @needs_gc = true if @needs_int_array || @needs_str_int_hash
       @needs_gc = true if @needs_str_str_hash
+      @needs_gc = true if @needs_mutable_string
       @needs_str_array = true if @string_helpers_needed.include?(:str_split) || @string_helpers_needed.include?(:str_chars)
 
       # String helpers (non-StrArray dependent)
@@ -4460,6 +5338,15 @@ module Spinel
 
       out.puts "static int sp_last_status = 0;"
       out.puts
+
+      # Time runtime
+      emit_time_runtime(out) if @needs_time
+
+      # File runtime
+      emit_file_runtime(out) if @needs_file
+
+      # System runtime
+      emit_system_runtime(out) if @needs_system
 
       # Constants (global)
       @constants.each do |name, info|
@@ -4547,8 +5434,37 @@ module Spinel
     end
 
     def emit_string_helpers(out, before_str_array: true)
-      # str_split and str_chars depend on sp_StrArray, emit them after
+      # str_split, str_chars, str_slice_range depend on other types, emit them after
       unless before_str_array
+        if @string_helpers_needed.include?(:str_slice_range)
+          out.puts <<~C
+            static const char *sp_str_slice_range(const char *s, sp_Range r) {
+              size_t len = strlen(s);
+              mrb_int start = r.first < 0 ? (mrb_int)len + r.first : r.first;
+              mrb_int end_ = r.last < 0 ? (mrb_int)len + r.last : r.last;
+              if (start < 0) start = 0;
+              if (end_ >= (mrb_int)len) end_ = (mrb_int)len - 1;
+              if (start > end_) { char *r2 = (char *)malloc(1); r2[0] = '\\0'; return r2; }
+              size_t n = end_ - start + 1;
+              char *r2 = (char *)malloc(n + 1);
+              memcpy(r2, s + start, n); r2[n] = '\\0'; return r2;
+            }
+          C
+        end
+
+        if @string_helpers_needed.include?(:str_slice)
+          out.puts <<~C
+            static const char *sp_str_slice(const char *s, mrb_int start, mrb_int len) {
+              size_t slen = strlen(s);
+              if (start < 0) start = (mrb_int)slen + start;
+              if (start < 0 || start >= (mrb_int)slen) { char *r = (char *)malloc(1); r[0] = '\\0'; return r; }
+              if (start + len > (mrb_int)slen) len = (mrb_int)slen - start;
+              char *r = (char *)malloc(len + 1);
+              memcpy(r, s + start, len); r[len] = '\\0'; return r;
+            }
+          C
+        end
+
         # Only emit StrArray-dependent helpers
         if @string_helpers_needed.include?(:str_split)
           out.puts <<~C
@@ -4603,6 +5519,113 @@ module Spinel
         out.puts <<~C
           static const char *sp_str_strip(const char *s) {
             while (*s && isspace((unsigned char)*s)) s++;
+            size_t n = strlen(s);
+            while (n > 0 && isspace((unsigned char)s[n-1])) n--;
+            char *r = (char *)malloc(n + 1);
+            memcpy(r, s, n); r[n] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_tr)
+        out.puts <<~C
+          static const char *sp_str_tr(const char *s, const char *from, const char *to) {
+            size_t n = strlen(s), fl = strlen(from), tl = strlen(to);
+            char *r = (char *)malloc(n + 1);
+            for (size_t i = 0; i < n; i++) {
+              const char *p = memchr(from, s[i], fl);
+              if (p) {
+                size_t idx = p - from;
+                r[i] = idx < tl ? to[idx] : to[tl - 1];
+              } else {
+                r[i] = s[i];
+              }
+            }
+            r[n] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_delete)
+        out.puts <<~C
+          static const char *sp_str_delete_chars(const char *s, const char *chars) {
+            size_t n = strlen(s); char *r = (char *)malloc(n + 1); size_t ri = 0;
+            for (size_t i = 0; i < n; i++) {
+              if (!memchr(chars, s[i], strlen(chars))) r[ri++] = s[i];
+            }
+            r[ri] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_squeeze)
+        out.puts <<~C
+          static const char *sp_str_squeeze(const char *s) {
+            size_t n = strlen(s); char *r = (char *)malloc(n + 1); size_t ri = 0;
+            for (size_t i = 0; i < n; i++) {
+              if (i == 0 || s[i] != s[i-1]) r[ri++] = s[i];
+            }
+            r[ri] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_ljust)
+        out.puts <<~C
+          static const char *sp_str_ljust(const char *s, mrb_int w, const char *pad) {
+            size_t sl = strlen(s);
+            if ((mrb_int)sl >= w) { char *r = (char *)malloc(sl + 1); strcpy(r, s); return r; }
+            char *r = (char *)malloc(w + 1);
+            memcpy(r, s, sl);
+            for (size_t i = sl; i < (size_t)w; i++) r[i] = pad[0];
+            r[w] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_rjust)
+        out.puts <<~C
+          static const char *sp_str_rjust(const char *s, mrb_int w, const char *pad) {
+            size_t sl = strlen(s);
+            if ((mrb_int)sl >= w) { char *r = (char *)malloc(sl + 1); strcpy(r, s); return r; }
+            char *r = (char *)malloc(w + 1);
+            size_t pad_len = w - sl;
+            for (size_t i = 0; i < pad_len; i++) r[i] = pad[0];
+            memcpy(r + pad_len, s, sl + 1);
+            return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_center)
+        out.puts <<~C
+          static const char *sp_str_center(const char *s, mrb_int w) {
+            size_t sl = strlen(s);
+            if ((mrb_int)sl >= w) { char *r = (char *)malloc(sl + 1); strcpy(r, s); return r; }
+            char *r = (char *)malloc(w + 1);
+            size_t lpad = (w - sl) / 2;
+            size_t rpad = w - sl - lpad;
+            memset(r, ' ', lpad);
+            memcpy(r + lpad, s, sl);
+            memset(r + lpad + sl, ' ', rpad);
+            r[w] = '\\0'; return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_lstrip)
+        out.puts <<~C
+          static const char *sp_str_lstrip(const char *s) {
+            while (*s && isspace((unsigned char)*s)) s++;
+            char *r = (char *)malloc(strlen(s) + 1);
+            strcpy(r, s); return r;
+          }
+        C
+      end
+
+      if @string_helpers_needed.include?(:str_rstrip)
+        out.puts <<~C
+          static const char *sp_str_rstrip(const char *s) {
             size_t n = strlen(s);
             while (n > 0 && isspace((unsigned char)s[n-1])) n--;
             char *r = (char *)malloc(n + 1);
@@ -4767,6 +5790,141 @@ module Spinel
 
     end
 
+    def emit_time_runtime(out)
+      out.puts <<~C
+
+        /* ---- Built-in time ---- */
+        #include <time.h>
+        typedef struct { time_t t; } sp_Time;
+        static sp_Time sp_Time_now(void) { sp_Time r; r.t = time(NULL); return r; }
+        static sp_Time sp_Time_at(mrb_int n) { sp_Time r; r.t = (time_t)n; return r; }
+        static mrb_int sp_Time_to_i(sp_Time t) { return (mrb_int)t.t; }
+        static mrb_int sp_Time_diff(sp_Time a, sp_Time b) { return (mrb_int)(a.t - b.t); }
+
+      C
+    end
+
+    def emit_file_runtime(out)
+      out.puts <<~C
+
+        /* ---- Built-in file I/O ---- */
+        typedef struct { FILE *fp; } sp_File;
+
+        static sp_File *sp_File_open(const char *path, const char *mode) {
+          sp_File *f = (sp_File *)calloc(1, sizeof(sp_File));
+          f->fp = fopen(path, mode);
+          return f;
+        }
+
+        static void sp_File_close(sp_File *f) {
+          if (f && f->fp) { fclose(f->fp); f->fp = NULL; }
+        }
+
+        static void sp_File_puts(sp_File *f, const char *s) {
+          if (f && f->fp) { fputs(s, f->fp); fputc('\\n', f->fp); }
+        }
+
+        static void sp_File_print(sp_File *f, const char *s) {
+          if (f && f->fp) { fputs(s, f->fp); }
+        }
+
+        static const char *sp_File_read(const char *path) {
+          FILE *f = fopen(path, "r");
+          if (!f) return "";
+          fseek(f, 0, SEEK_END);
+          long len = ftell(f);
+          fseek(f, 0, SEEK_SET);
+          char *buf = (char *)malloc(len + 1);
+          if (fread(buf, 1, len, f)) {}
+          buf[len] = '\\0';
+          fclose(f);
+          return buf;
+        }
+
+        static mrb_int sp_File_write(const char *path, const char *data) {
+          FILE *f = fopen(path, "w");
+          if (!f) return 0;
+          mrb_int n = (mrb_int)fwrite(data, 1, strlen(data), f);
+          fclose(f);
+          return n;
+        }
+
+        static mrb_bool sp_File_exist(const char *path) {
+          struct stat st;
+          return stat(path, &st) == 0;
+        }
+
+        static mrb_int sp_File_delete(const char *path) {
+          return remove(path) == 0 ? 1 : 0;
+        }
+
+        static const char *sp_File_join(const char *a, const char *b) {
+          size_t la = strlen(a), lb = strlen(b);
+          char *r = (char *)malloc(la + lb + 2);
+          memcpy(r, a, la);
+          r[la] = '/';
+          memcpy(r + la + 1, b, lb + 1);
+          return r;
+        }
+
+      C
+    end
+
+    def emit_system_runtime(out)
+      out.puts <<~C
+
+        /* ---- System/exec runtime ---- */
+        static mrb_bool sp_system(const char *cmd) {
+          fflush(stdout);
+          int r = system(cmd);
+          sp_last_status = r;
+          return r == 0;
+        }
+
+        static const char *sp_backtick(const char *cmd) {
+          FILE *fp = popen(cmd, "r");
+          if (!fp) return "";
+          char buf[4096];
+          size_t total = 0;
+          char *result = (char *)malloc(4096);
+          result[0] = '\\0';
+          while (fgets(buf, sizeof(buf), fp)) {
+            size_t bl = strlen(buf);
+            result = (char *)realloc(result, total + bl + 1);
+            memcpy(result + total, buf, bl + 1);
+            total += bl;
+          }
+          sp_last_status = pclose(fp);
+          return result;
+        }
+
+      C
+    end
+
+    def generate_exc_hierarchy_check
+      # Generate class hierarchy checks for exception classes
+      lines = []
+      @classes.each do |cname, ci|
+        # For each exception class, check if the raised class is a subclass
+        parent = ci.parent
+        ancestors = [cname]
+        while parent
+          ancestors << parent
+          pci = @classes[parent]
+          parent = pci ? pci.parent : nil
+        end
+        # If this class has parents, generate: if raised is cname and checking for parent, match
+        ancestors[1..].each do |ancestor|
+          lines << "if (strcmp(sp_exc_class, \"#{cname}\") == 0 && strcmp(cls, \"#{ancestor}\") == 0) return 1;"
+        end
+      end
+      # Match RuntimeError as base only if no custom classes defined
+      if lines.empty?
+        lines << 'if (strcmp(cls, "RuntimeError") == 0) return 1;'
+      end
+      lines.join("\n          ")
+    end
+
     def emit_exception_runtime(out)
       out.puts <<~C
 
@@ -4790,11 +5948,35 @@ module Spinel
         }
         static int sp_exc_is_a(const char *cls) {
           if (strcmp(sp_exc_class, cls) == 0) return 1;
-          if (strcmp(cls, "RuntimeError") == 0) return 1;
+          if (strcmp(cls, "StandardError") == 0 || strcmp(cls, "Exception") == 0) return 1;
+          /* Check class hierarchy */
+          #{generate_exc_hierarchy_check}
           return 0;
         }
 
       C
+
+      if @needs_catch_throw
+        out.puts <<~C
+
+          /* ---- Catch/throw runtime ---- */
+          static const char *sp_throw_tag = NULL;
+          static mrb_int sp_throw_value_i = 0;
+          static const char *sp_throw_value_s = NULL;
+          static int sp_throw_is_str = 0;
+          static void sp_throw_i(const char *tag, mrb_int val) {
+            sp_throw_tag = tag; sp_throw_value_i = val; sp_throw_is_str = 0;
+            if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);
+            fprintf(stderr, "uncaught throw :\\"%s\\"\\n", tag); exit(1);
+          }
+          static void sp_throw_s(const char *tag, const char *val) {
+            sp_throw_tag = tag; sp_throw_value_s = val; sp_throw_is_str = 1;
+            if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);
+            fprintf(stderr, "uncaught throw :\\"%s\\"\\n", tag); exit(1);
+          }
+
+        C
+      end
     end
 
     def emit_gc_runtime(out)
@@ -5301,6 +6483,14 @@ module Spinel
           size_t tlen = strlen(t);
           if (tlen >= (size_t)s->cap) { s->cap = tlen + 1; s->data = realloc(s->data, s->cap); }
           memcpy(s->data, t, tlen + 1); s->len = tlen;
+        }
+        static void sp_String_clear(sp_String *s) {
+          s->data[0] = '\\0'; s->len = 0;
+        }
+        static const char *sp_String_char_at(sp_String *s, mrb_int idx) {
+          if (idx < 0) idx = s->len + idx;
+          if (idx < 0 || idx >= s->len) return "";
+          char *r = (char *)malloc(2); r[0] = s->data[idx]; r[1] = '\\0'; return r;
         }
 
       C

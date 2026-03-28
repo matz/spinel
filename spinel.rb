@@ -754,16 +754,26 @@ module Spinel
       # Scan all method bodies for attr assignments to refine nil-initialized ivars
       # e.g., n.left = make_node(x) where n is a Node and left was nil-initialized
       # Done after method return type inference so return types are known
-      @classes.each do |cname, ci|
-        ci.methods.each do |_mname, mi|
-          next unless mi.body
-          scan_ivar_assignments_in_body(mi.body, cname, ci)
+      # Scan all class methods against all classes (cross-class attr setters)
+      # Collect method bodies with their owning class for @current_class context
+      all_method_entries = []  # [body, owner_class_name_or_nil]
+      @classes.each do |cn, ci2|
+        ci2.methods.each do |_mn, mi|
+          all_method_entries << [mi.body, cn] if mi.body
         end
       end
-      @methods.each do |_mname, mi|
-        next unless mi.body
+      @methods.each do |_mn, mi|
+        all_method_entries << [mi.body, nil] if mi.body
+      end
+      # Run multiple passes to resolve self-referential types (e.g., tree node left/right)
+      3.times do
         @classes.each do |cname, ci|
-          scan_ivar_assignments_in_body(mi.body, cname, ci)
+          all_method_entries.each do |body, owner_class|
+            saved_class = @current_class
+            @current_class = owner_class
+            scan_ivar_assignments_in_body(body, cname, ci)
+            @current_class = saved_class
+          end
         end
       end
 
@@ -1379,10 +1389,9 @@ module Spinel
             if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
               arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
-            if arg_type != Type::UNKNOWN && (mi.params[i].type == Type::UNKNOWN ||
-               (arg_type == Type::FLOAT && mi.params[i].type == Type::INTEGER) ||
-               (arg_type == Type::PROC && mi.params[i].type == Type::INTEGER) ||
-               (arg_type.is_a?(String) && @classes[arg_type] && mi.params[i].type == Type::INTEGER))
+            can_upgrade = mi.params[i].type == Type::UNKNOWN ||
+              (mi.params[i].type == Type::INTEGER && arg_type != Type::INTEGER && arg_type != Type::BOOLEAN && arg_type != Type::NIL)
+            if arg_type != Type::UNKNOWN && can_upgrade
               mi.params[i].type = arg_type
             end
           end
@@ -1491,7 +1500,8 @@ module Spinel
             end
           end
         end
-        # Also scan child nodes
+        # Also scan child nodes (receiver, arguments, block)
+        scan_call_sites(node.receiver) if node.receiver
         node.arguments&.arguments&.each { |a| scan_call_sites(a) }
         scan_call_sites(node.block) if node.block
       else
@@ -1680,9 +1690,8 @@ module Spinel
       when Prism::CallNode
         mname = node.name.to_s
         # Setter calls, puts, print, etc. are side effects
-        mname.end_with?("=") || %w[puts print p printf].include?(mname) ||
-          (node.receiver.nil? && @methods[mname]) ||
-          true  # Any method call as statement is a side effect
+        mname.end_with?("=") || %w[puts print p printf push pop shift unshift].include?(mname) ||
+          (node.receiver.nil? && @methods[mname] && @methods[mname].return_type == Type::VOID)
       when Prism::LocalVariableWriteNode, Prism::InstanceVariableWriteNode,
            Prism::LocalVariableOperatorWriteNode, Prism::ConstantWriteNode
         true
@@ -4723,18 +4732,59 @@ module Spinel
     end
 
     def compile_if_expr(node)
+      then_stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements] if node.statements
+      then_stmts ||= []
+      else_body = case node.subsequent
+                  when Prism::ElseNode then node.subsequent.statements
+                  when Prism::IfNode then node.subsequent
+                  else node.subsequent
+                  end if node.subsequent
+      else_stmts = if else_body.is_a?(Prism::StatementsNode)
+                     else_body.body
+                   elsif else_body
+                     [else_body]
+                   else
+                     []
+                   end
+      then_last = then_stmts.last
+      else_last = else_stmts.last
+      has_return = then_last.is_a?(Prism::ReturnNode) || else_last.is_a?(Prism::ReturnNode)
+      multi_stmt = then_stmts.length > 1 || else_stmts.length > 1
+      if has_return || multi_stmt
+        # Emit as if/else statement with result variable
+        result_type = infer_type(node)
+        res_var = "_cres_#{next_temp}"
+        cond = compile_expr(node.predicate)
+        emit("#{c_type(result_type)} #{res_var} = #{default_val(result_type)};")
+        emit("if (#{cond}) {")
+        @indent += 1
+        then_stmts.each_with_index do |s, i|
+          if i == then_stmts.length - 1 && !s.is_a?(Prism::ReturnNode)
+            emit("#{res_var} = #{compile_expr(s)};")
+          else
+            generate_stmt(s)
+          end
+        end
+        @indent -= 1
+        emit("}")
+        if else_stmts.any?
+          emit("else {")
+          @indent += 1
+          else_stmts.each_with_index do |s, i|
+            if i == else_stmts.length - 1 && !s.is_a?(Prism::ReturnNode)
+              emit("#{res_var} = #{compile_expr(s)};")
+            else
+              generate_stmt(s)
+            end
+          end
+          @indent -= 1
+          emit("}")
+        end
+        return res_var
+      end
       cond = compile_expr(node.predicate)
-      then_val = node.statements ? compile_expr(node.statements.is_a?(Prism::StatementsNode) ? node.statements.body.last : node.statements) : "0"
-      else_val = if node.subsequent
-                   body = case node.subsequent
-                          when Prism::ElseNode then node.subsequent.statements
-                          when Prism::IfNode then node.subsequent
-                          else node.subsequent
-                          end
-                   compile_expr(body.is_a?(Prism::StatementsNode) ? body.body.last : body)
-                 else
-                   "0"
-                 end
+      then_val = then_last ? compile_expr(then_last) : "0"
+      else_val = else_last ? compile_expr(else_last) : "0"
       "(#{cond} ? #{then_val} : #{else_val})"
     end
 
@@ -5726,6 +5776,10 @@ module Spinel
         if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
           return "(#{recv_code} == NULL)"
         end
+        # Class-typed pointers are nullable (NULL = nil)
+        if recv_type.is_a?(String) && @classes[recv_type]
+          return "(#{recv_code} == NULL)"
+        end
         return "FALSE"
       when "frozen?"
         return "TRUE"  # AOT: everything is frozen
@@ -5887,6 +5941,25 @@ module Spinel
           @string_helpers_needed << :str_count
           arg = compile_expr(args[0])
           return "sp_str_count(#{recv_code}, #{arg})"
+        elsif recv_type == Type::RANGE && node.block
+          # Range.count { |i| expr } -> for loop over range counting truthy block results
+          params = block_params(node.block)
+          bparam = params[0] || "_i"
+          tmp = "_cnt_#{next_temp}"
+          rng_tmp = "_rng_#{next_temp}"
+          emit("mrb_int #{tmp} = 0;")
+          emit("{ sp_Range #{rng_tmp} = #{recv_code};")
+          emit("for (mrb_int lv_#{bparam} = #{rng_tmp}.first; lv_#{bparam} <= #{rng_tmp}.last; lv_#{bparam}++) {")
+          @indent += 1
+          push_scope
+          declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+          block_body = node.block.body
+          val = compile_expr(block_body.is_a?(Prism::StatementsNode) ? block_body.body.last : block_body)
+          emit("if (#{val}) #{tmp}++;")
+          pop_scope
+          @indent -= 1
+          emit("}}")
+          return tmp
         elsif recv_type == Type::ARRAY || recv_type == Type::STR_ARRAY
           if node.block
             return compile_count_with_block(node, recv_code, recv_type)
@@ -6046,11 +6119,35 @@ module Spinel
         emit("}")
         return tmp
       when "sum"
-        @needs_int_array = true
         tmp = "_sum_#{next_temp}"
         emit("mrb_int #{tmp} = 0;")
-        emit("for (mrb_int _si_#{tmp} = 0; _si_#{tmp} < sp_IntArray_length(#{recv_code}); _si_#{tmp}++)")
-        emit(" #{tmp} += sp_IntArray_get(#{recv_code}, _si_#{tmp});")
+        if recv_type == Type::RANGE && node.block
+          # Range.sum { |i| expr } -> for loop over range with block
+          params = block_params(node.block)
+          bparam = params[0] || "_i"
+          rng_tmp = "_rng_#{next_temp}"
+          emit("{ sp_Range #{rng_tmp} = #{recv_code};")
+          emit("for (mrb_int lv_#{bparam} = #{rng_tmp}.first; lv_#{bparam} <= #{rng_tmp}.last; lv_#{bparam}++) {")
+          @indent += 1
+          push_scope
+          declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+          block_body = node.block.body
+          val = compile_expr(block_body.is_a?(Prism::StatementsNode) ? block_body.body.last : block_body)
+          emit("#{tmp} += #{val};")
+          pop_scope
+          @indent -= 1
+          emit("}}")
+        elsif recv_type == Type::RANGE
+          # Range.sum without block
+          rng_tmp = "_rng_#{next_temp}"
+          emit("{ sp_Range #{rng_tmp} = #{recv_code};")
+          emit("for (mrb_int _si_#{tmp} = #{rng_tmp}.first; _si_#{tmp} <= #{rng_tmp}.last; _si_#{tmp}++)")
+          emit(" #{tmp} += _si_#{tmp}; }")
+        else
+          @needs_int_array = true
+          emit("for (mrb_int _si_#{tmp} = 0; _si_#{tmp} < sp_IntArray_length(#{recv_code}); _si_#{tmp}++)")
+          emit(" #{tmp} += sp_IntArray_get(#{recv_code}, _si_#{tmp});")
+        end
         return tmp
       when "reduce", "inject"
         return compile_reduce(node, recv_code, recv_type)
@@ -6781,10 +6878,27 @@ module Spinel
       result = "_map_#{next_temp}"
       idx = "_mi_#{result}"
 
-      emit("sp_IntArray *#{result} = sp_IntArray_new();")
-      emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
-      @indent += 1
-      emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
+      # Detect n.times.map { block } chain
+      is_times_map = node.receiver.is_a?(Prism::CallNode) && node.receiver.name.to_s == "times" && !node.receiver.block
+      if is_times_map
+        times_recv = compile_expr(node.receiver.receiver)
+        emit("sp_IntArray *#{result} = sp_IntArray_new();")
+        emit("for (mrb_int #{idx} = 0; #{idx} < #{times_recv}; #{idx}++) {")
+        @indent += 1
+        emit("mrb_int lv_#{iter_var} = #{idx};")
+      elsif recv_type == Type::RANGE
+        rng_tmp = "_rng_#{next_temp}"
+        emit("sp_IntArray *#{result} = sp_IntArray_new();")
+        emit("{ sp_Range #{rng_tmp} = #{recv_code};")
+        emit("for (mrb_int #{idx} = #{rng_tmp}.first; #{idx} <= #{rng_tmp}.last; #{idx}++) {")
+        @indent += 1
+        emit("mrb_int lv_#{iter_var} = #{idx};")
+      else
+        emit("sp_IntArray *#{result} = sp_IntArray_new();")
+        emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
+        @indent += 1
+        emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
+      end
       push_scope
       declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
 
@@ -6795,6 +6909,9 @@ module Spinel
       pop_scope
       @indent -= 1
       emit("}")
+      if recv_type == Type::RANGE && !is_times_map
+        emit("}")  # close the sp_Range block
+      end
       result
     end
 
@@ -7621,6 +7738,10 @@ module Spinel
       return [] unless block.is_a?(Prism::BlockNode)
       return [] unless block.parameters
       params = block.parameters
+      # Handle numbered parameters (_1, _2, etc.)
+      if params.is_a?(Prism::NumberedParametersNode)
+        return (1..params.maximum).map { |i| "_#{i}" }
+      end
       if params.is_a?(Prism::BlockParametersNode)
         params = params.parameters
       end

@@ -878,10 +878,14 @@ module Spinel
         types.delete(Type::UNKNOWN)
         types.delete(Type::NIL)
         if types.size > 1
-          # Extract bare variable name from scoped name (scope:name)
-          bare_name = scoped_vname.include?(":") ? scoped_vname.split(":", 2).last : scoped_vname
-          @poly_vars << bare_name
-          @needs_poly = true
+          # If all types are numeric (INTEGER and FLOAT), coerce to FLOAT, not POLY
+          numeric_only = types.all? { |t| t == Type::INTEGER || t == Type::FLOAT }
+          unless numeric_only
+            # Extract bare variable name from scoped name (scope:name)
+            bare_name = scoped_vname.include?(":") ? scoped_vname.split(":", 2).last : scoped_vname
+            @poly_vars << bare_name
+            @needs_poly = true
+          end
         end
         # Also mark if assigned nil AND another type (nilable)
         if types.include?(Type::NIL) && types.any? { |t| t != Type::NIL }
@@ -894,7 +898,9 @@ module Spinel
       param_types.each do |mname, param_map|
         param_map.each do |idx, types|
           types.delete(Type::UNKNOWN)
-          if types.size > 1
+          # If all types are numeric (INTEGER and FLOAT), coerce to FLOAT, not POLY
+          numeric_only = types.size > 1 && types.all? { |t| t == Type::INTEGER || t == Type::FLOAT }
+          if types.size > 1 && !numeric_only
             @poly_method_params[mname] ||= Set.new
             @poly_method_params[mname] << idx
             @needs_poly = true

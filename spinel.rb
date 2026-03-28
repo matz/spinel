@@ -32,6 +32,8 @@ module Spinel
     STRINGIO  = :stringio
     PROC      = :proc
     POLY      = :poly       # NaN-boxed sp_RbValue
+    POLY_ARRAY = :poly_array # array of sp_RbValue
+    POLY_HASH = :poly_hash  # string->sp_RbValue hash
   end
 
   # -------- Data structures --------
@@ -47,7 +49,7 @@ module Spinel
     attr_reader :classes, :methods, :constants, :module_constants
     attr_reader :needs_gc, :needs_int_array, :needs_str_array, :needs_range
     attr_reader :needs_str_int_hash, :needs_exception, :needs_mutable_string
-    attr_reader :needs_str_str_hash, :needs_block_fn
+    attr_reader :needs_str_str_hash, :needs_poly_hash, :needs_block_fn
     attr_reader :string_helpers_needed
 
     def initialize(source, source_path)
@@ -66,6 +68,7 @@ module Spinel
       @needs_range = false
       @needs_str_int_hash = false
       @needs_str_str_hash = false
+      @needs_poly_hash = false
       @needs_exception = false
       @needs_mutable_string = false
       @needs_block_fn = false
@@ -188,7 +191,7 @@ module Spinel
       when "-@" then "_uminus"
       when "+@" then "_uplus"
       else
-        name.gsub("?", "_p").gsub("!", "_bang")
+        name.gsub("?", "_p").gsub("!", "_bang").gsub("=", "_set")
       end
     end
 
@@ -645,6 +648,12 @@ module Spinel
       ast3 = Prism.parse(@source).value
       scan_call_sites(ast3)
 
+      # Promote INTEGER params to FLOAT when used in float context within method body
+      @methods.each do |_name, mi|
+        next unless mi.body
+        promote_params_from_body(mi)
+      end
+
       # Scan all method bodies for attr assignments to refine nil-initialized ivars
       # e.g., n.left = make_node(x) where n is a Node and left was nil-initialized
       # Done after method return type inference so return types are known
@@ -670,10 +679,18 @@ module Spinel
           ci.ivars[attr_name] ||= Type::UNKNOWN
         end
 
-        ci.methods.each do |_mname, mi|
+        ci.methods.each do |mname, mi|
           mi.params.each do |p|
             if p.default_node
               p.type = infer_type(p.default_node)
+            end
+          end
+          # For setter methods (x=), infer param type from matching ivar
+          if mname.end_with?("=") && mi.params.length == 1
+            ivar_name = mname.chomp("=")
+            if ci.ivars[ivar_name] && ci.ivars[ivar_name] != Type::UNKNOWN &&
+               (mi.params[0].type == Type::UNKNOWN || mi.params[0].type == Type::INTEGER)
+              mi.params[0].type = ci.ivars[ivar_name]
             end
           end
           # Don't override return type for synthetic methods (e.g., Comparable)
@@ -695,11 +712,51 @@ module Spinel
           @current_class = old_class
         end
       end
+
+      # Infer class method param types from body usage
+      # e.g., if param b has b.x called and x is a method on Vec, then b is Vec
+      @classes.each do |cname, ci|
+        ci.methods.each do |_mname, mi|
+          next unless mi.body
+          mi.params.each do |p|
+            next unless p.type == Type::UNKNOWN || p.type == Type::INTEGER
+            # Scan body for calls on this param
+            called = Set.new
+            scan_method_calls_on_param(mi.body, p.name, called)
+            next if called.empty?
+            # Check which class has all these methods
+            @classes.each do |candidate_name, candidate_ci|
+              if called.all? { |cm| candidate_ci.methods[cm] ||
+                   candidate_ci.attrs[:reader].include?(cm) ||
+                   candidate_ci.attrs[:accessor].include?(cm) }
+                p.type = candidate_name
+                break
+              end
+            end
+          end
+        end
+      end
+
+      # Also infer class method param types from internal call sites
+      # e.g., @center passed to vsub - since @center is Vec, vsub param is Vec
+      @classes.each do |cname, ci|
+        ci.methods.each do |_mname, mi|
+          next unless mi.body
+          old_method = @current_method
+          @current_method = mi
+          infer_class_call_params(mi.body, cname, ci)
+          @current_method = old_method
+        end
+      end
     end
 
     def detect_poly(root)
       @poly_vars = Set.new       # variable names that need sp_RbValue
       @poly_method_params = {}   # method_name -> Set of param indices that are poly
+      @poly_param_classes = {}   # method_name -> { param_idx -> Set of class names }
+      @class_tags = {}           # class_name -> tag (0x0040, 0x0041, ...)
+      @poly_classes = Set.new    # classes used in poly contexts (need heap alloc)
+      @dispatch_methods = {}     # method_name -> Set of class names that implement it
 
       # Track all types assigned to each variable
       var_types = {}   # var_name -> Set of types
@@ -723,6 +780,7 @@ module Spinel
       end
 
       # Mark method params called with multiple types
+      next_tag = 0x0040
       param_types.each do |mname, param_map|
         param_map.each do |idx, types|
           types.delete(Type::UNKNOWN)
@@ -730,10 +788,40 @@ module Spinel
             @poly_method_params[mname] ||= Set.new
             @poly_method_params[mname] << idx
             @needs_poly = true
+            # Track class types for dispatch
+            class_types = types.select { |t| t.is_a?(String) && @classes[t] }
+            if class_types.size > 1
+              @poly_param_classes[mname] ||= {}
+              @poly_param_classes[mname][idx] = class_types.to_set
+              class_types.each do |ct|
+                unless @class_tags[ct]
+                  @class_tags[ct] = next_tag
+                  next_tag += 1
+                end
+                @poly_classes << ct
+              end
+            end
             # Update the method param type
             if @methods[mname] && idx < @methods[mname].params.length
               @methods[mname].params[idx].type = Type::POLY
             end
+          end
+        end
+      end
+
+      # Detect which methods are called on poly params and build dispatch tables
+      @methods.each do |mname, mi|
+        next unless mi.body
+        mi.params.each_with_index do |p, idx|
+          next unless p.type == Type::POLY
+          classes = @poly_param_classes.dig(mname, idx)
+          next unless classes
+          # Scan body for method calls on this param
+          called_methods = Set.new
+          scan_method_calls_on_param(mi.body, p.name, called_methods)
+          called_methods.each do |cm|
+            @dispatch_methods[cm] ||= Set.new
+            @dispatch_methods[cm].merge(classes)
           end
         end
       end
@@ -786,6 +874,114 @@ module Spinel
       else
         node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types) if c } if node.respond_to?(:child_nodes)
       end
+    end
+
+    # Scan a method body for calls like `param_name.method_name`
+    def scan_method_calls_on_param(node, param_name, called_methods)
+      return unless node
+      case node
+      when Prism::StatementsNode
+        node.body.each { |s| scan_method_calls_on_param(s, param_name, called_methods) }
+      when Prism::CallNode
+        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name.to_s == param_name
+          called_methods << node.name.to_s
+        end
+        node.child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c }
+      else
+        node.child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    # Infer param types for class methods from internal call sites
+    # e.g., in Sphere.intersect, ray.dir calls are on Ray type, isect.t calls on Isect type
+    def infer_class_call_params(node, cname, ci)
+      return unless node
+      case node
+      when Prism::StatementsNode
+        node.body.each { |s| infer_class_call_params(s, cname, ci) }
+      when Prism::CallNode
+        mname = node.name.to_s
+        # Check method calls on local vars: var.method(args)
+        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.arguments
+          recv_name = node.receiver.name.to_s
+          # Get receiver type from var_types_global or scope
+          recv_class = @var_types_global[recv_name]
+          if recv_class.is_a?(String) && @classes[recv_class]
+            rci = @classes[recv_class]
+            rmi = rci.methods[mname]
+            if rmi
+              node.arguments.arguments.each_with_index do |arg, i|
+                next if i >= rmi.params.length
+                arg_type = infer_type(arg)
+                if arg_type == Type::UNKNOWN
+                  # Check if arg is an ivar read
+                  if arg.is_a?(Prism::InstanceVariableReadNode)
+                    iname = arg.name.to_s.delete_prefix("@")
+                    arg_type = ci.ivars[iname] if ci.ivars[iname]
+                  elsif arg.is_a?(Prism::LocalVariableReadNode)
+                    arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                  end
+                end
+                if arg_type != Type::UNKNOWN && (rmi.params[i].type == Type::UNKNOWN ||
+                   (arg_type == Type::FLOAT && rmi.params[i].type == Type::INTEGER) ||
+                   (arg_type.is_a?(String) && @classes[arg_type] && rmi.params[i].type == Type::INTEGER))
+                  rmi.params[i].type = arg_type
+                end
+              end
+            end
+          end
+        end
+        # Check no-receiver calls (implicit self or top-level): method(args)
+        if node.receiver.nil? && !mname.end_with?("=") && node.arguments
+          target_mi = ci.methods[mname] || @methods[mname]
+          if target_mi
+            node.arguments.arguments.each_with_index do |arg, i|
+              next if i >= target_mi.params.length
+              arg_type = infer_type(arg)
+              if arg_type == Type::UNKNOWN
+                if arg.is_a?(Prism::InstanceVariableReadNode)
+                  iname = arg.name.to_s.delete_prefix("@")
+                  arg_type = ci.ivars[iname] if ci.ivars[iname]
+                elsif arg.is_a?(Prism::LocalVariableReadNode)
+                  arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                elsif arg.is_a?(Prism::CallNode)
+                  # For chained calls like isect.n, infer the return type
+                  arg_type = infer_call_return_type_in_class(arg, ci)
+                end
+              end
+              if arg_type != Type::UNKNOWN && (target_mi.params[i].type == Type::UNKNOWN ||
+                 (arg_type == Type::FLOAT && target_mi.params[i].type == Type::INTEGER) ||
+                 (arg_type.is_a?(String) && @classes[arg_type] && target_mi.params[i].type == Type::INTEGER))
+                target_mi.params[i].type = arg_type
+              end
+            end
+          end
+        end
+        node.child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c }
+      else
+        node.child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    # Infer the return type of a call expression within a class context
+    # Handles chained calls like isect.n where isect is a class method param
+    def infer_call_return_type_in_class(node, ci)
+      return Type::UNKNOWN unless node.is_a?(Prism::CallNode)
+      mname = node.name.to_s
+      if node.receiver.is_a?(Prism::LocalVariableReadNode)
+        recv_name = node.receiver.name.to_s
+        # Check if receiver is a method param with a class type
+        if @current_method
+          param = @current_method.params.find { |p| p.name == recv_name }
+          if param && param.type.is_a?(String) && @classes[param.type]
+            rci = @classes[param.type]
+            rmi = rci.methods[mname]
+            return rmi.return_type if rmi && rmi.return_type != Type::UNKNOWN
+            return rci.ivars[mname] if rci.ivars[mname] && rci.ivars[mname] != Type::UNKNOWN
+          end
+        end
+      end
+      Type::UNKNOWN
     end
 
     def body_returns_poly_param?(body, mi)
@@ -947,8 +1143,14 @@ module Spinel
                 node.arguments.arguments.each_with_index do |arg, i|
                   next if i >= init.params.length
                   arg_type = infer_type(arg)
+                  if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                    arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+                  end
                   if arg_type != Type::UNKNOWN
-                    if init.params[i].type == Type::UNKNOWN || (@struct_classes && @struct_classes[cname])
+                    if init.params[i].type == Type::UNKNOWN ||
+                       (@struct_classes && @struct_classes[cname]) ||
+                       (arg_type == Type::FLOAT && init.params[i].type == Type::INTEGER) ||
+                       (arg_type.is_a?(String) && @classes[arg_type] && init.params[i].type == Type::INTEGER)
                       init.params[i].type = arg_type
                     end
                     # Update ivar types
@@ -958,7 +1160,9 @@ module Spinel
                       ci.ivars[pname] = arg_type if ci.ivars[pname]
                     else
                       ci.ivars.each_key do |iname|
-                        if ci.ivars[iname] == Type::UNKNOWN
+                        if ci.ivars[iname] == Type::UNKNOWN ||
+                           (arg_type == Type::FLOAT && ci.ivars[iname] == Type::INTEGER) ||
+                           (arg_type.is_a?(String) && @classes[arg_type] && ci.ivars[iname] == Type::INTEGER)
                           ci.ivars[iname] = arg_type if param_assigned_to_ivar?(init.body, pname, iname)
                         end
                       end
@@ -1146,15 +1350,66 @@ module Spinel
       case node
       when Prism::StatementsNode
         return Type::VOID if node.body.empty?
-        last_type = infer_type(node.body.last)
+        last = node.body.last
+        # If last statement is an if/while with only side-effect statements, return VOID
+        if last.is_a?(Prism::IfNode) || last.is_a?(Prism::WhileNode)
+          return Type::VOID if body_is_side_effects?(last)
+        end
+        # If last statement is a bare return with no value
+        if last.is_a?(Prism::ReturnNode) && (last.arguments.nil? || last.arguments.arguments.empty?)
+          return Type::VOID
+        end
+        last_type = infer_type(last)
         # If last expression is a local var read with unknown type, scan body for assignments
-        if last_type == Type::UNKNOWN && node.body.last.is_a?(Prism::LocalVariableReadNode)
-          vname = node.body.last.name.to_s
+        if last_type == Type::UNKNOWN && last.is_a?(Prism::LocalVariableReadNode)
+          vname = last.name.to_s
           last_type = infer_local_var_type_from_body(vname, node.body)
         end
         last_type
       else
         infer_type(node)
+      end
+    end
+
+    # Check if a node tree contains only side-effect statements
+    # (assignments, setter calls, method calls with no return value usage)
+    def body_is_side_effects?(node)
+      return true unless node
+      case node
+      when Prism::IfNode
+        body_is_side_effects?(node.statements) &&
+          (node.subsequent.nil? || body_is_side_effects?(node.subsequent))
+      when Prism::ElseNode
+        body_is_side_effects?(node.statements)
+      when Prism::WhileNode
+        body_is_side_effects?(node.statements)
+      when Prism::StatementsNode
+        node.body.all? { |s| stmt_is_side_effect?(s) }
+      when Prism::ReturnNode
+        node.arguments.nil? || node.arguments.arguments.empty?
+      else
+        stmt_is_side_effect?(node)
+      end
+    end
+
+    def stmt_is_side_effect?(node)
+      return true unless node
+      case node
+      when Prism::CallNode
+        mname = node.name.to_s
+        # Setter calls, puts, print, etc. are side effects
+        mname.end_with?("=") || %w[puts print p printf].include?(mname) ||
+          (node.receiver.nil? && @methods[mname]) ||
+          true  # Any method call as statement is a side effect
+      when Prism::LocalVariableWriteNode, Prism::InstanceVariableWriteNode,
+           Prism::LocalVariableOperatorWriteNode, Prism::ConstantWriteNode
+        true
+      when Prism::IfNode, Prism::WhileNode
+        body_is_side_effects?(node)
+      when Prism::ReturnNode
+        node.arguments.nil? || node.arguments.arguments.empty?
+      else
+        false
       end
     end
 
@@ -1197,18 +1452,27 @@ module Spinel
         if node.elements.empty?
           Type::ARRAY  # default to int array
         else
-          first_type = infer_type(node.elements.first)
-          first_type == Type::STRING ? Type::STR_ARRAY : Type::ARRAY
+          elem_types = node.elements.map { |e| infer_type(e) }
+          elem_types_uniq = elem_types.uniq - [Type::UNKNOWN, Type::NIL]
+          if elem_types_uniq.size > 1
+            Type::POLY_ARRAY
+          elsif elem_types_uniq.size == 1 && elem_types_uniq[0] == Type::STRING
+            Type::STR_ARRAY
+          else
+            Type::ARRAY
+          end
         end
       when Prism::HashNode
         # Check values to determine hash type
         if node.elements.any?
-          first_val = node.elements.first
-          if first_val.is_a?(Prism::AssocNode)
-            val_type = infer_type(first_val.value)
-            if val_type == Type::STRING
-              return Type::STR_HASH
-            end
+          val_types = node.elements.select { |e| e.is_a?(Prism::AssocNode) }.map { |e| infer_type(e.value) }
+          val_types_uniq = val_types.uniq - [Type::UNKNOWN, Type::NIL]
+          if val_types_uniq.size > 1
+            # Mixed value types -> poly hash (string key -> sp_RbValue)
+            return Type::POLY_HASH
+          end
+          if val_types_uniq.size == 1 && val_types_uniq[0] == Type::STRING
+            return Type::STR_HASH
           end
         end
         Type::HASH
@@ -1340,7 +1604,7 @@ module Spinel
       when "to_s", "to_str", "upcase", "downcase", "strip", "chomp", "chop",
            "reverse", "capitalize", "gsub", "sub", "freeze", "inspect",
            "chars", "join", "name", "class", "to_sym", "ljust", "rjust",
-           "center", "lstrip", "rstrip", "tr", "squeeze", "delete"
+           "center", "lstrip", "rstrip", "tr", "squeeze", "delete", "chr"
         if mname == "chars"
           Type::STR_ARRAY
         elsif mname == "reverse" && (recv_type == Type::ARRAY || recv_type == Type::STR_ARRAY)
@@ -1406,6 +1670,7 @@ module Spinel
           when Type::STR_ARRAY then Type::STRING
           when Type::HASH then Type::INTEGER
           when Type::STR_HASH then Type::STRING
+          when Type::POLY_HASH then Type::POLY
           when Type::STRING then Type::STRING
           when Type::MUTABLE_STRING then Type::STRING
           else Type::UNKNOWN
@@ -1497,6 +1762,15 @@ module Spinel
         # Check if it's a user-defined method
         if @methods[mname]
           @methods[mname].return_type
+        elsif recv_type == Type::POLY && @dispatch_methods && @dispatch_methods[mname]
+          # Poly dispatch: return type from first implementing class
+          @dispatch_methods[mname].each do |cname|
+            ci = @classes[cname]
+            if ci && ci.methods[mname]
+              return ci.methods[mname].return_type
+            end
+          end
+          Type::UNKNOWN
         elsif node.receiver
           # Check class from var_class_types or infer_type (which returns class name string)
           cname = nil
@@ -1555,6 +1829,9 @@ module Spinel
 
       # Generate open class methods for built-in types
       generate_open_class_methods if @open_class_methods
+
+      # Generate dispatch functions for poly class method calls
+      generate_dispatch_functions if @dispatch_methods && !@dispatch_methods.empty?
 
       # Generate top-level method forward declarations and bodies
       @methods.each { |_name, mi| generate_toplevel_method(mi) }
@@ -1630,6 +1907,45 @@ module Spinel
           @in_main = true
         end
       end
+    end
+
+    def generate_dispatch_functions
+      old_in_main = @in_main
+      @in_main = false
+      @dispatch_methods.each do |mname, class_set|
+        # Determine the return type from the first class that has this method
+        ret_type = Type::UNKNOWN
+        class_set.each do |cname|
+          ci = @classes[cname]
+          if ci && ci.methods[mname]
+            ret_type = ci.methods[mname].return_type
+            break
+          end
+        end
+
+        rt = c_type(ret_type)
+        cmname = sanitize_method_name(mname)
+
+        # Forward declaration
+        @forward_decls << "static #{rt} sp_dispatch_#{cmname}(sp_RbValue);"
+
+        # Function body
+        emit_raw("")
+        emit_raw("static #{rt} sp_dispatch_#{cmname}(sp_RbValue obj) {")
+        emit_raw("  uint16_t t = SP_TAG(obj);")
+        first = true
+        class_set.each do |cname|
+          ci = @classes[cname]
+          next unless ci && ci.methods[mname]
+          prefix = first ? "if" : "else if"
+          first = false
+          emit_raw("  #{prefix} (t == SP_TAG_#{cname}) return sp_#{cname}_#{cmname}((sp_#{cname} *)sp_unbox_obj(obj));")
+        end
+        # Default fallback
+        emit_raw("  return #{default_val(ret_type)};")
+        emit_raw("}")
+      end
+      @in_main = old_in_main
     end
 
     def generate_class(ci)
@@ -1903,7 +2219,8 @@ module Spinel
       }
       uses_inheritance = ci.parent && @classes[ci.parent]
       is_parent_class = has_subclasses?(ci.name)
-      has_heap_fields || uses_inheritance || is_parent_class
+      is_poly_class = @poly_classes && @poly_classes.include?(ci.name)
+      has_heap_fields || uses_inheritance || is_parent_class || is_poly_class
     end
 
     def gen_parent_init_func(ci, init, _all_ivars, needs_gc_alloc)
@@ -2165,6 +2482,101 @@ module Spinel
         return infer_type(param.default_node)
       end
       Type::INTEGER
+    end
+
+    # Promote INTEGER params to FLOAT when the body assigns them to float locals
+    # or uses them in float operations.  This fixes mandel_calc(-2,1,1,-1,0.04)
+    # where first 4 args are int-literals but used as floats inside the body.
+    def promote_params_from_body(mi)
+      return unless mi.body
+      param_names = mi.params.select { |p| p.type == Type::INTEGER }.map(&:name).to_set
+      return if param_names.empty?
+
+      # Build a map of local var -> types assigned to it (considering += float etc.)
+      local_types = {}
+      collect_local_types(mi.body, local_types)
+
+      # Also incorporate var_types_global for locals that were upgraded via +=
+      local_types.each_key do |vname|
+        gt = @var_types_global[vname]
+        local_types[vname] << gt if gt && gt != Type::UNKNOWN
+      end
+
+      # Find float locals
+      float_locals = Set.new
+      local_types.each do |vname, types|
+        float_locals << vname if types.include?(Type::FLOAT)
+      end
+
+      # Check which params are assigned to float locals
+      promoted = Set.new
+      scan_param_float_usage(mi.body, param_names, float_locals, promoted)
+
+      promoted.each do |pname|
+        p = mi.params.find { |pp| pp.name == pname }
+        p.type = Type::FLOAT if p
+      end
+    end
+
+    def collect_local_types(node, map)
+      return unless node
+      case node
+      when Prism::StatementsNode
+        node.body.each { |s| collect_local_types(s, map) }
+      when Prism::LocalVariableWriteNode
+        t = infer_type(node.value)
+        map[node.name.to_s] ||= Set.new
+        map[node.name.to_s] << t if t != Type::UNKNOWN
+        collect_local_types(node.value, map)
+      when Prism::LocalVariableOperatorWriteNode
+        t = infer_type(node.value)
+        map[node.name.to_s] ||= Set.new
+        map[node.name.to_s] << t if t != Type::UNKNOWN
+      when Prism::WhileNode
+        collect_local_types(node.statements, map)
+      when Prism::IfNode
+        collect_local_types(node.statements, map)
+        collect_local_types(node.subsequent, map) if node.respond_to?(:subsequent)
+      else
+        node.child_nodes.each { |c| collect_local_types(c, map) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    def scan_param_float_usage(node, param_names, float_locals, promoted)
+      return unless node
+      case node
+      when Prism::StatementsNode
+        node.body.each { |s| scan_param_float_usage(s, param_names, float_locals, promoted) }
+      when Prism::LocalVariableWriteNode
+        # local_var = param  where local_var is float
+        vname = node.name.to_s
+        if float_locals.include?(vname) && node.value.is_a?(Prism::LocalVariableReadNode)
+          ref = node.value.name.to_s
+          promoted << ref if param_names.include?(ref)
+        end
+        scan_param_float_usage(node.value, param_names, float_locals, promoted)
+      when Prism::WhileNode
+        # while (cur_i > max_i) - if cur_i is float and max_i is param, promote max_i
+        if node.predicate.is_a?(Prism::CallNode) &&
+           %w[> < >= <= == !=].include?(node.predicate.name.to_s)
+          recv = node.predicate.receiver
+          arg = node.predicate.arguments&.arguments&.first
+          if recv.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(recv.name.to_s) &&
+             arg.is_a?(Prism::LocalVariableReadNode) && param_names.include?(arg.name.to_s)
+            promoted << arg.name.to_s
+          end
+          if arg.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(arg.name.to_s) &&
+             recv.is_a?(Prism::LocalVariableReadNode) && param_names.include?(recv.name.to_s)
+            promoted << recv.name.to_s
+          end
+        end
+        scan_param_float_usage(node.statements, param_names, float_locals, promoted)
+      when Prism::IfNode
+        scan_param_float_usage(node.statements, param_names, float_locals, promoted)
+        scan_param_float_usage(node.subsequent, param_names, float_locals, promoted) if node.respond_to?(:subsequent)
+      else
+        node.child_nodes.each { |c| scan_param_float_usage(c, param_names, float_locals, promoted) if c } if node.respond_to?(:child_nodes)
+      end
     end
 
     def generate_method_body(body, mi)
@@ -2502,6 +2914,9 @@ module Spinel
         declare_var(name, type, c_name: "lv_#{name}")
         if @in_main
           @main_vars << { name: "lv_#{name}", type: type }
+        else
+          # Inside a function - emit the declaration directly
+          emit("#{c_type(type)} lv_#{name} = #{default_val(type)};")
         end
       end
     end
@@ -2598,6 +3013,12 @@ module Spinel
       args = call_args(node)
       args.each do |arg|
         type = infer_type(arg)
+        # Special case: print x.chr -> putchar(x) for binary safety
+        if arg.is_a?(Prism::CallNode) && arg.name.to_s == "chr"
+          recv = compile_expr(arg.receiver)
+          emit("putchar((char)(#{recv}));")
+          next
+        end
         val = compile_expr(arg)
         case type
         when Type::INTEGER
@@ -3461,6 +3882,14 @@ module Spinel
         else
           "0"
         end
+      when Prism::AndNode
+        left = compile_expr(node.left)
+        right = compile_expr(node.right)
+        "(#{left} && #{right})"
+      when Prism::OrNode
+        left = compile_expr(node.left)
+        right = compile_expr(node.right)
+        "(#{left} || #{right})"
       else
         "0 /* unsupported: #{node.class.name.split('::').last} */"
       end
@@ -3563,8 +3992,22 @@ module Spinel
         return tmp
       end
 
-      first_type = infer_type(node.elements.first)
-      if first_type == Type::STRING
+      arr_type = infer_type(node)
+      if arr_type == Type::POLY_ARRAY
+        # Heterogeneous array: store boxed sp_RbValue in IntArray (same size)
+        @needs_int_array = true
+        @needs_poly = true
+        @needs_gc = true
+        tmp = "_ary_#{next_temp}"
+        emit("sp_IntArray *#{tmp} = sp_IntArray_new();")
+        node.elements.each do |elem|
+          val = compile_expr(elem)
+          et = infer_type(elem)
+          boxed = box_value(val, et)
+          emit("sp_IntArray_push(#{tmp}, (mrb_int)#{boxed});")
+        end
+        return tmp
+      elsif arr_type == Type::STR_ARRAY
         @needs_str_array = true
         tmp = "_ary_#{next_temp}"
         emit("sp_StrArray *#{tmp} = sp_StrArray_new();")
@@ -3593,13 +4036,25 @@ module Spinel
         return "sp_StrIntHash_new()"
       end
 
-      # Determine types from first element
+      # Determine hash type from value types
+      ht = infer_type(node)
       first = node.elements.first
       if first.is_a?(Prism::AssocNode)
-        val_type = infer_type(first.value)
-        key_type = infer_type(first.key)
-
-        if val_type == Type::STRING
+        if ht == Type::POLY_HASH
+          @needs_poly_hash = true
+          @needs_poly = true
+          @needs_gc = true
+          tmp = "_hsh_#{next_temp}"
+          emit("sp_PolyHash *#{tmp} = sp_PolyHash_new();")
+          node.elements.each do |elem|
+            next unless elem.is_a?(Prism::AssocNode)
+            k = compile_hash_key(elem.key)
+            v = compile_expr(elem.value)
+            vt = infer_type(elem.value)
+            emit("sp_PolyHash_set(#{tmp}, #{k}, #{box_value(v, vt)});")
+          end
+          return tmp
+        elsif ht == Type::STR_HASH
           @needs_str_str_hash = true
           tmp = "_hsh_#{next_temp}"
           emit("sp_RbHash *#{tmp} = sp_RbHash_new();")
@@ -4204,6 +4659,12 @@ module Spinel
       # Safe navigation operator
       is_safe_nav = node.respond_to?(:call_operator) && node.call_operator == "&."
 
+      # Check if receiver is POLY and a dispatch function exists for this method
+      if recv_type == Type::POLY && @dispatch_methods && @dispatch_methods[mname]
+        cmname = sanitize_method_name(mname)
+        return "sp_dispatch_#{cmname}(#{recv_code})"
+      end
+
       # Check if receiver is a class instance with this method defined (including operators)
       # This handles operator methods like <, >, ==, <=> on class instances
       if recv_type.is_a?(String) && @classes[recv_type]
@@ -4432,6 +4893,12 @@ module Spinel
         else
           return "((mrb_int)pow((double)#{recv_code}, (double)#{arg}))"
         end
+      when "|", "&", "^"
+        arg = compile_expr(args[0])
+        return "(#{recv_code} #{mname} #{arg})"
+      when ">>"
+        arg = compile_expr(args[0])
+        return "(#{recv_code} >> #{arg})"
       when "-@"
         return "(-#{recv_code})"
       when "+@"
@@ -4608,7 +5075,7 @@ module Spinel
         elsif recv_type == Type::MUTABLE_STRING
           @needs_mutable_string = true
           return "sp_String_length(#{recv_code})"
-        elsif recv_type == Type::ARRAY
+        elsif recv_type == Type::ARRAY || recv_type == Type::POLY_ARRAY
           @needs_int_array = true
           return "sp_IntArray_length(#{recv_code})"
         elsif recv_type == Type::STR_ARRAY
@@ -4620,6 +5087,9 @@ module Spinel
         elsif recv_type == Type::STR_HASH
           @needs_str_str_hash = true
           return "sp_RbHash_length(#{recv_code})"
+        elsif recv_type == Type::POLY_HASH
+          @needs_poly_hash = true
+          return "sp_PolyHash_length(#{recv_code})"
         else
           return "((mrb_int)strlen(#{recv_code}))"
         end
@@ -4829,6 +5299,11 @@ module Spinel
           emit("sp_IntArray_push(#{recv_code}, #{arg});")
           return recv_code
         end
+        # Integer bitwise left shift
+        if recv_type == Type::INTEGER || recv_type == Type::UNKNOWN
+          arg = compile_expr(args[0])
+          return "(#{recv_code} << #{arg})"
+        end
         return recv_code
 
       # ---- Array methods ----
@@ -4986,6 +5461,10 @@ module Spinel
         elsif recv_type == Type::STR_HASH
           @needs_str_str_hash = true
           return "sp_RbHash_get(#{recv_code}, #{arg})"
+        elsif recv_type == Type::POLY_HASH
+          @needs_poly_hash = true
+          @needs_poly = true
+          return "sp_PolyHash_get(#{recv_code}, #{arg})"
         end
         return "0"
       when "[]="
@@ -5506,6 +5985,17 @@ module Spinel
         generate_block_body(block)
         @indent -= 1
         emit("}")
+      elsif recv_type == Type::POLY_ARRAY
+        @needs_int_array = true
+        @needs_poly = true
+        idx = "_ei_#{next_temp}"
+        emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
+        @indent += 1
+        emit("sp_RbValue lv_#{iter_var} = (sp_RbValue)sp_IntArray_get(#{recv_code}, #{idx});")
+        declare_var(iter_var, Type::POLY, c_name: "lv_#{iter_var}")
+        generate_block_body(block)
+        @indent -= 1
+        emit("}")
       elsif recv_type == Type::ARRAY
         @needs_int_array = true
         idx = "_ei_#{next_temp}"
@@ -5523,6 +6013,33 @@ module Spinel
         @indent += 1
         emit("const char *lv_#{iter_var} = (#{recv_code})->data[#{idx}];")
         declare_var(iter_var, Type::STRING, c_name: "lv_#{iter_var}")
+        generate_block_body(block)
+        @indent -= 1
+        emit("}")
+      elsif recv_type == Type::STR_HASH
+        @needs_str_str_hash = true
+        params2 = params[1] || "v"
+        ensure_var_declared(iter_var, Type::STRING)
+        ensure_var_declared(params2, Type::STRING)
+        tmp = "_he_#{next_temp}"
+        emit("for (sp_RbHashEntry *#{tmp} = #{recv_code}->first; #{tmp}; #{tmp} = #{tmp}->order_next) {")
+        @indent += 1
+        emit("lv_#{iter_var} = #{tmp}->key;")
+        emit("lv_#{params2} = #{tmp}->value;")
+        generate_block_body(block)
+        @indent -= 1
+        emit("}")
+      elsif recv_type == Type::POLY_HASH
+        @needs_poly_hash = true
+        @needs_poly = true
+        params2 = params[1] || "v"
+        ensure_var_declared(iter_var, Type::STRING)
+        ensure_var_declared(params2, Type::POLY)
+        tmp = "_he_#{next_temp}"
+        emit("for (sp_PolyHashEntry *#{tmp} = #{recv_code}->first; #{tmp}; #{tmp} = #{tmp}->order_next) {")
+        @indent += 1
+        emit("lv_#{iter_var} = #{tmp}->key;")
+        emit("lv_#{params2} = #{tmp}->value;")
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -6550,6 +7067,8 @@ module Spinel
       when Type::STR_ARRAY then "sp_StrArray *"
       when Type::HASH then "sp_StrIntHash *"
       when Type::STR_HASH then "sp_RbHash *"
+      when Type::POLY_ARRAY then "sp_IntArray *"  # reuse IntArray, values are boxed sp_RbValue
+      when Type::POLY_HASH then "sp_PolyHash *"
       when Type::RANGE then "sp_Range"
       when Type::MUTABLE_STRING then "sp_String *"
       when Type::TIME then "sp_Time"
@@ -6584,6 +7103,8 @@ module Spinel
       when Type::STR_ARRAY then "NULL"
       when Type::HASH then "NULL"
       when Type::STR_HASH then "NULL"
+      when Type::POLY_ARRAY then "NULL"
+      when Type::POLY_HASH then "NULL"
       when Type::RANGE then "{0,0}"
       when Type::TIME then "{0}"
       when Type::MUTABLE_STRING then "NULL"
@@ -6602,7 +7123,7 @@ module Spinel
     end
 
     def gc_type?(type)
-      [Type::ARRAY, Type::STR_ARRAY, Type::HASH, Type::STR_HASH, Type::MUTABLE_STRING].include?(type) ||
+      [Type::ARRAY, Type::STR_ARRAY, Type::POLY_ARRAY, Type::HASH, Type::STR_HASH, Type::POLY_HASH, Type::MUTABLE_STRING].include?(type) ||
         (type.is_a?(String) && @classes[type])
     end
 
@@ -6642,9 +7163,12 @@ module Spinel
 
       # Auto-dependencies (order matters: propagate from high-level to low-level)
       @needs_str_int_hash = true if @needs_str_str_hash  # RbHash uses sp_hash_str from StrIntHash
+      @needs_str_int_hash = true if @needs_poly_hash     # PolyHash uses sp_hash_str from StrIntHash
+      @needs_poly = true if @needs_poly_hash             # PolyHash values are sp_RbValue
       @needs_int_array = true if @needs_str_int_hash     # StrIntHash_values needs IntArray
       @needs_gc = true if @needs_int_array || @needs_str_int_hash
       @needs_gc = true if @needs_str_str_hash
+      @needs_gc = true if @needs_poly_hash
       @needs_gc = true if @needs_mutable_string
       @needs_str_array = true if @string_helpers_needed.include?(:str_split) || @string_helpers_needed.include?(:str_chars)
 
@@ -6680,6 +7204,9 @@ module Spinel
 
       # NaN-boxed polymorphic value runtime
       emit_poly_runtime(out) if @needs_poly
+
+      # PolyHash (string -> sp_RbValue)
+      emit_poly_hash(out) if @needs_poly_hash
 
       out.puts "static int sp_last_status = 0;"
       out.puts
@@ -7243,7 +7770,13 @@ module Spinel
       when Type::BOOLEAN then "sp_box_bool(#{val})"
       when Type::NIL then "sp_box_nil()"
       when Type::POLY then val  # already boxed
-      else "sp_box_int(#{val})"
+      else
+        # Check if it's a class type
+        if orig_type.is_a?(String) && @class_tags && @class_tags[orig_type]
+          "sp_box_obj(SP_TAG_#{orig_type}, #{val})"
+        else
+          "sp_box_int(#{val})"
+        end
       end
     end
 
@@ -7266,6 +7799,14 @@ module Spinel
         #define SP_IS_NIL(v)    (SP_TAG(v) == SP_T_NIL)
         #define SP_IS_DBL(v)    (SP_TAG(v) == SP_T_FLOAT)
         #define SP_IS_OBJ(v)    (SP_TAG(v) >= 0x0040)
+      C
+      # Emit class tag defines
+      if @class_tags && !@class_tags.empty?
+        @class_tags.each do |cname, tag|
+          out.puts "#define SP_TAG_#{cname} 0x#{tag.to_s(16).rjust(4, '0')}"
+        end
+      end
+      out.puts <<~C
 
         static sp_RbValue sp_box_int(int64_t n) { return ((uint64_t)0x0001 << 48) | ((uint64_t)n & 0x0000FFFFFFFFFFFFULL); }
         static sp_RbValue sp_box_float(double f) { uint64_t b; memcpy(&b, &f, 8); return ((uint64_t)0x0005 << 48) | (b >> 16); }
@@ -8050,6 +8591,63 @@ module Spinel
         }
 
         static mrb_int sp_RbHash_length(sp_RbHash *h) { return h->size; }
+
+      C
+    end
+
+    def emit_poly_hash(out)
+      out.puts <<~C
+        /* ---- Built-in string->sp_RbValue hash ---- */
+        typedef struct sp_PolyHashEntry {
+          char *key;
+          sp_RbValue value;
+          struct sp_PolyHashEntry *next;
+          struct sp_PolyHashEntry *order_next;
+        } sp_PolyHashEntry;
+
+        typedef struct {
+          sp_PolyHashEntry **buckets;
+          mrb_int size;
+          mrb_int cap;
+          sp_PolyHashEntry *first;
+          sp_PolyHashEntry *last;
+        } sp_PolyHash;
+
+        static sp_PolyHash *sp_PolyHash_new(void) {
+          sp_PolyHash *h = (sp_PolyHash *)calloc(1, sizeof(sp_PolyHash));
+          h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;
+          h->buckets = (sp_PolyHashEntry **)calloc(h->cap, sizeof(sp_PolyHashEntry *));
+          return h;
+        }
+
+        static sp_RbValue sp_PolyHash_set(sp_PolyHash *h, const char *key, sp_RbValue value) {
+          unsigned idx = sp_hash_str(key) % h->cap;
+          sp_PolyHashEntry *e = h->buckets[idx];
+          while (e) {
+            if (strcmp(e->key, key) == 0) { e->value = value; return value; }
+            e = e->next;
+          }
+          e = (sp_PolyHashEntry *)calloc(1, sizeof(sp_PolyHashEntry));
+          e->key = strdup(key); e->value = value;
+          e->next = h->buckets[idx]; h->buckets[idx] = e;
+          e->order_next = NULL;
+          if (h->last) h->last->order_next = e; else h->first = e;
+          h->last = e;
+          h->size++;
+          return value;
+        }
+
+        static sp_RbValue sp_PolyHash_get(sp_PolyHash *h, const char *key) {
+          unsigned idx = sp_hash_str(key) % h->cap;
+          sp_PolyHashEntry *e = h->buckets[idx];
+          while (e) {
+            if (strcmp(e->key, key) == 0) return e->value;
+            e = e->next;
+          }
+          return sp_box_nil();
+        }
+
+        static mrb_int sp_PolyHash_length(sp_PolyHash *h) { return h->size; }
 
       C
     end

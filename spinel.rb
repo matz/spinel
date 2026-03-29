@@ -4473,7 +4473,7 @@ module Spinel
         s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
         s
       when Prism::StringNode
-        c_string_literal(node.content)
+        c_string_literal(node.respond_to?(:unescaped) ? node.unescaped : node.content)
       when Prism::InterpolatedStringNode
         compile_interpolated_string(node)
       when Prism::SymbolNode
@@ -4604,7 +4604,7 @@ module Spinel
       when Prism::XStringNode
         # Backtick execution: `cmd`
         @needs_system = true
-        cmd = c_string_literal(node.content)
+        cmd = c_string_literal(node.respond_to?(:unescaped) ? node.unescaped : node.content)
         "sp_backtick(#{cmd})"
       when Prism::SplatNode
         if node.expression
@@ -4833,7 +4833,7 @@ module Spinel
       when Prism::SymbolNode
         c_string_literal(node.value)
       when Prism::StringNode
-        c_string_literal(node.content)
+        c_string_literal(node.respond_to?(:unescaped) ? node.unescaped : node.content)
       else
         compile_expr(node)
       end
@@ -4852,7 +4852,7 @@ module Spinel
       parts = node.parts.map do |part|
         case part
         when Prism::StringNode
-          c_string_literal(part.content)
+          c_string_literal(part.respond_to?(:unescaped) ? part.unescaped : part.content)
         when Prism::EmbeddedStatementsNode
           if part.statements && part.statements.body.length > 0
             expr = part.statements.body.first
@@ -8218,7 +8218,7 @@ module Spinel
         s = node.value.to_s
         s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
         s
-      when Prism::StringNode then c_string_literal(node.content)
+      when Prism::StringNode then c_string_literal(node.respond_to?(:unescaped) ? node.unescaped : node.content)
       when Prism::TrueNode then "TRUE"
       when Prism::FalseNode then "FALSE"
       when Prism::CallNode

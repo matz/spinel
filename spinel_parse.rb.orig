@@ -1,21 +1,14 @@
 #!/usr/bin/env ruby
 # Spinel Parse - AST Serializer
 #
-# Parses Ruby source with Prism and outputs a text AST that
+# Parses Ruby source with Prism and outputs a JSON AST that
 # spinel_codegen.rb can consume. This is the only part that
 # depends on the Prism C extension gem.
 #
-# Usage: ruby spinel_parse.rb input.rb > ast.txt
-#
-# Output format (line-based, parseable with split/to_i):
-#   N <id> <type>           - declare node with id and type
-#   S <id> <field> <escaped> - string field (escaped: \n \\n, \t \\t, \\ \\\\)
-#   I <id> <field> <integer> - integer field
-#   F <id> <field> <float>   - float field
-#   R <id> <field> <ref_id>  - node reference (-1 for nil)
-#   A <id> <field> <id1,id2,...> - array of node refs (empty = no ids)
+# Usage: ruby spinel_parse.rb input.rb > ast.json
 
 require "prism"
+require "json"
 
 # Recursively resolve require_relative and inline file contents,
 # exactly matching the original spinel.rb behavior.
@@ -611,82 +604,10 @@ def serialize_arguments(node)
   end
 end
 
-# --- Text AST serialization ---
-# Walks the hash-based AST and emits a line-based text format.
-#
-# Format:
-#   N <id> <type>              - declare node
-#   S <id> <field> <escaped>   - string field
-#   I <id> <field> <integer>   - integer field
-#   F <id> <field> <float>     - float field
-#   R <id> <field> <ref_id>    - node reference (-1 for nil)
-#   A <id> <field> <id,id,...> - array of node refs (empty string if empty)
-#
-# String escaping: \n -> %0A, % -> %25, \r -> %0D, \t -> %09
-
-$node_counter = 0
-$lines = []
-
-def escape_str(s)
-  return "" if s.nil?
-  s = s.gsub("%", "%25")
-  s = s.gsub("\n", "%0A")
-  s = s.gsub("\r", "%0D")
-  s = s.gsub("\t", "%09")
-  s = s.gsub(" ", "%20")
-  s
-end
-
-# Recursively flatten a hash-based AST node into text lines.
-# Returns the integer node ID assigned.
-def flatten_node(hash)
-  return -1 if hash.nil?
-
-  id = $node_counter
-  $node_counter += 1
-
-  type_str = hash["type"]
-  $lines << "N #{id} #{type_str}"
-
-  # First pass: flatten all child nodes/arrays to get their IDs
-  fields = hash.reject { |k, _| k == "type" }
-
-  fields.each do |key, value|
-    case value
-    when nil
-      # Skip nil fields - reader defaults handle them
-    when Integer
-      $lines << "I #{id} #{key} #{value}"
-    when Float
-      $lines << "F #{id} #{key} #{value}"
-    when String
-      $lines << "S #{id} #{key} #{escape_str(value)}"
-    when true
-      $lines << "I #{id} #{key} 1"
-    when false
-      $lines << "I #{id} #{key} 0"
-    when Hash
-      child_id = flatten_node(value)
-      $lines << "R #{id} #{key} #{child_id}"
-    when Array
-      child_ids = value.map { |elem|
-        if elem.is_a?(Hash)
-          flatten_node(elem)
-        else
-          -1
-        end
-      }
-      $lines << "A #{id} #{key} #{child_ids.join(",")}"
-    end
-  end
-
-  id
-end
-
 # --- Main ---
 source_file = ARGV[0]
 unless source_file
-  $stderr.puts "Usage: ruby spinel_parse.rb input.rb > ast.txt"
+  $stderr.puts "Usage: ruby spinel_parse.rb input.rb > ast.json"
   exit 1
 end
 
@@ -694,10 +615,4 @@ source = File.read(source_file)
 source = resolve_requires(source, source_file)
 result = Prism.parse(source)
 ast = serialize_node(result.value)
-
-$node_counter = 0
-$lines = []
-root_id = flatten_node(ast)
-# Output root ID on first line, then all node lines
-puts "ROOT #{root_id}"
-$lines.each { |l| puts l }
+puts JSON.generate(ast)

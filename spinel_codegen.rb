@@ -2,7 +2,9 @@
 # Spinel AOT Compiler (Ruby implementation)
 #
 # Compiles Ruby source to standalone C via Prism AST and type inference.
-# Usage: ruby spinel.rb --source=input.rb --output=output.c
+# Usage:
+#   ruby spinel_parse.rb input.rb > ast.txt
+#   ruby spinel_codegen.rb ast.txt output.c
 
 require "stringio"
 
@@ -238,6 +240,19 @@ def sp_node_type_hints
   n
 end
 sp_node_type_hints
+
+# Type hints for text AST reader functions.
+# Not called at startup; Spinel scans function bodies for type inference.
+def sp_ast_reader_type_hints
+  n = SpNode.new
+  arr = [n]
+  set_node_field_string(n, "name", "")
+  set_node_field_int(n, "value", 0)
+  set_node_field_float(n, "value", 0.0)
+  set_node_field_ref(n, "receiver", n)
+  set_node_field_array(n, "args", arr)
+  sp_make_node_array(arr, "")
+end
 
 # Helper: check if obj is a SpNode with given type
 def sp_is?(obj, type_name)
@@ -4124,7 +4139,13 @@ class SpCompiler
         return
       end
       fmt = compile_expr(args[0])
-      rest = args[1..].map { |a| compile_expr(a) }.join(", ")
+      rest_parts = []
+      i = 1
+      while i < args.length
+        rest_parts.push(compile_expr(args[i]))
+        i = i + 1
+      end
+      rest = rest_parts.join(", ")
       if rest.empty?
         emit("printf(#{fmt});")
       else
@@ -4811,7 +4832,7 @@ class SpCompiler
         node.value.to_s
       when "FloatNode"
         # Use full precision, ensure decimal point for C float literal
-        s = "%.16g" % node.value
+        s = sprintf("%.16g", node.value)
         s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
         s
       when "StringNode"
@@ -5544,7 +5565,13 @@ class SpCompiler
       when "format", "sprintf"
         if args.length >= 1
           fmt = compile_expr(args[0])
-          rest = args[1..].map { |a| compile_expr(a) }.join(", ")
+          rest_parts = []
+          ri = 1
+          while ri < args.length
+            rest_parts.push(compile_expr(args[ri]))
+            ri = ri + 1
+          end
+          rest = rest_parts.join(", ")
           sp_push_unique(@string_helpers_needed, "str_concat")
           if rest.empty?
             return "#{fmt}"
@@ -8092,7 +8119,7 @@ class SpCompiler
         unless seen.include?(name)
           v = lookup_var(name)
           if v
-            vars << { name: name, c_name: v.c_name, type: v.type }
+            vars << make_var_info(name, v.type, v.c_name, false, false, false, false)
             sp_push_unique(seen, name)
           end
         end
@@ -8101,7 +8128,7 @@ class SpCompiler
         unless seen.include?(name)
           v = lookup_var(name)
           if v
-            vars << { name: name, c_name: v.c_name, type: v.type }
+            vars << make_var_info(name, v.type, v.c_name, false, false, false, false)
             sp_push_unique(seen, name)
           end
         end
@@ -8111,7 +8138,7 @@ class SpCompiler
         unless seen.include?(name)
           v = lookup_var(name)
           if v
-            vars << { name: name, c_name: v.c_name, type: v.type }
+            vars << make_var_info(name, v.type, v.c_name, false, false, false, false)
             sp_push_unique(seen, name)
           end
         end
@@ -10448,177 +10475,285 @@ class SpCompiler
     end
   end
 
-# ---- Binary AST reader ----
-TAG_NIL    = 0
-TAG_INT    = 1
-TAG_STRING = 2
-TAG_NODE   = 3
-TAG_ARRAY  = 4
-TAG_FLOAT  = 5
-TAG_BOOL   = 6
+# ---- Text AST reader ----
+# Reads the line-based text format produced by spinel_parse.rb.
+# Uses only: File.read, split, to_i, to_f, basic string ops.
+#
+# Format:
+#   ROOT <id>                  - root node id (first line)
+#   N <id> <type>              - declare node
+#   S <id> <field> <escaped>   - string field (percent-encoded)
+#   I <id> <field> <integer>   - integer field
+#   F <id> <field> <float>     - float field
+#   R <id> <field> <ref_id>    - node reference (-1 for nil)
+#   A <id> <field> <id,id,...> - array of node refs
 
-def read_binary_ast(data)
-  node, _pos = read_bin_value(data, 0)
-  node
-end
-
-def read_bin_value(data, pos)
-  tag = data.getbyte(pos)
-  pos = pos + 1
-  case tag
-  when TAG_NIL
-    return nil, pos
-  when TAG_INT
-    val = data[pos, 8].unpack("q<")[0]
-    return val, pos + 8
-  when TAG_STRING
-    len = data[pos, 4].unpack("V")[0]
-    pos = pos + 4
-    str = data[pos, len]
-    return str, pos + len
-  when TAG_FLOAT
-    val = data[pos, 8].unpack("E")[0]
-    return val, pos + 8
-  when TAG_BOOL
-    val = data.getbyte(pos) != 0
-    return val, pos + 1
-  when TAG_NODE
-    return read_bin_node(data, pos)
-  when TAG_ARRAY
-    count = data[pos, 4].unpack("V")[0]
-    pos = pos + 4
-    arr = []
-    i = 0
-    while i < count
-      elem, pos = read_bin_value(data, pos)
-      arr.push(elem)
+def unescape_str(s)
+  result = ""
+  i = 0
+  while i < s.length
+    ch = s[i]
+    if ch == "%" && i + 2 < s.length
+      hex = s[i + 1, 2]
+      if hex == "0A"
+        result = result + "\n"
+      elsif hex == "0D"
+        result = result + "\r"
+      elsif hex == "09"
+        result = result + "\t"
+      elsif hex == "20"
+        result = result + " "
+      elsif hex == "25"
+        result = result + "%"
+      else
+        result = result + "%" + hex
+      end
+      i = i + 3
+    else
+      result = result + ch
       i = i + 1
     end
-    return arr, pos
-  else
-    return nil, pos
   end
+  result
 end
 
-def read_bin_short_string(data, pos)
-  len = data[pos, 2].unpack("v")[0]
-  pos = pos + 2
-  str = data[pos, len]
-  return str, pos + len
-end
-
-def read_bin_node(data, pos)
-  type_str, pos = read_bin_short_string(data, pos)
-  field_count = data[pos, 2].unpack("v")[0]
-  pos = pos + 2
-
-  node = SpNode.new
-  node.type = type_str
-
-  i = 0
-  while i < field_count
-    key, pos = read_bin_short_string(data, pos)
-    val, pos = read_bin_value(data, pos)
-
-    case key
-    when "name" then node.name = val.is_a?(String) ? val : val.to_s
-    when "value" then node.value = val
-    when "content" then node.content = val.is_a?(String) ? val : ""
-    when "receiver" then node.receiver = val
-    when "arguments"
-      if type_str == "ArgumentsNode"
-        node.args = val
-      else
-        node.arguments = val
+# Helper to parse comma-separated node IDs into an array of SpNode.
+# Separated into its own method so Spinel can infer the return type.
+def sp_make_node_array(nodes, ids_str)
+  # Type hint: first element establishes array type for Spinel
+  arr = [nodes[0]]
+  arr = []
+  if ids_str != nil && ids_str != ""
+    id_parts = ids_str.split(",")
+    j = 0
+    while j < id_parts.length
+      rid = id_parts[j].to_i
+      if rid >= 0
+        arr.push(nodes[rid])
       end
-    when "body"
-      if type_str == "StatementsNode"
-        node.stmts = val
-      else
-        node.body = val
-      end
-    when "statements" then node.statements = val
-    when "block" then node.block = val
-    when "parameters" then node.parameters = val
-    when "predicate" then node.predicate = val
-    when "subsequent" then node.subsequent = val
-    when "else_clause" then node.else_clause = val
-    when "conditions" then node.conditions = val
-    when "elements" then node.elements = val
-    when "left" then node.left = val
-    when "right" then node.right = val
-    when "parts" then node.parts = val
-    when "expression" then node.expression = val
-    when "rescue_expression" then node.rescue_expression = val
-    when "lefts" then node.lefts = val
-    when "index" then node.index = val
-    when "collection" then node.collection = val
-    when "constant_path" then node.constant_path = val
-    when "superclass" then node.superclass = val
-    when "parent" then node.parent = val
-    when "key" then node.key = val
-    when "pattern" then node.pattern = val
-    when "reference" then node.reference = val
-    when "exceptions" then node.exceptions = val
-    when "rescue_clause" then node.rescue_clause = val
-    when "ensure_clause" then node.ensure_clause = val
-    when "call_operator" then node.call_operator = val
-    when "binary_operator" then node.binary_operator = val.is_a?(String) ? val : ""
-    when "requireds" then node.requireds = val
-    when "optionals" then node.optionals = val
-    when "keywords" then node.keywords = val
-    when "rest" then node.rest = val
-    when "call" then node.call = val
-    when "target" then node.target = val
-    when "unescaped" then node.unescaped = val.is_a?(String) ? val : ""
-    when "number" then node.number = val.is_a?(Integer) ? val : 0
-    when "maximum" then node.maximum = val.is_a?(Integer) ? val : 0
-    when "start_line" then node.start_line = val.is_a?(Integer) ? val : 0
+      j = j + 1
     end
+  end
+  arr
+end
 
+def read_text_ast(data)
+  lines = data.split("\n")
+  # Pre-allocate node table: find max id from N lines
+  max_id = 0
+  li = 0
+  while li < lines.length
+    line = lines[li]
+    if line.start_with?("N ")
+      parts = line.split(" ", 3)
+      nid = parts[1].to_i
+      if nid > max_id
+        max_id = nid
+      end
+    end
+    li = li + 1
+  end
+
+  # Create node array (use dummy SpNode for type hint to Spinel)
+  dummy = SpNode.new
+  nodes = [dummy]
+  i = 1
+  while i <= max_id
+    nodes.push(dummy)
     i = i + 1
   end
 
-  return node, pos
+  root_id = 0
+
+  # First pass: create all nodes
+  li = 0
+  while li < lines.length
+    line = lines[li]
+    if line.start_with?("ROOT ")
+      root_id = line.split(" ", 2)[1].to_i
+    elsif line.start_with?("N ")
+      parts = line.split(" ", 3)
+      nid = parts[1].to_i
+      ntype = parts[2]
+      node = SpNode.new
+      node.type = ntype
+      nodes[nid] = node
+    end
+    li = li + 1
+  end
+
+  # Second pass: set fields
+  li = 0
+  while li < lines.length
+    line = lines[li]
+    if line.start_with?("S ")
+      parts = line.split(" ", 4)
+      nid = parts[1].to_i
+      key = parts[2]
+      raw = parts[3]
+      sval = ""
+      if raw != nil
+        sval = unescape_str(raw)
+      end
+      set_node_field_string(nodes[nid], key, sval)
+    elsif line.start_with?("I ")
+      parts = line.split(" ", 4)
+      nid = parts[1].to_i
+      key = parts[2]
+      ival = parts[3].to_i
+      set_node_field_int(nodes[nid], key, ival)
+    elsif line.start_with?("F ")
+      parts = line.split(" ", 4)
+      nid = parts[1].to_i
+      key = parts[2]
+      fval = parts[3].to_f
+      set_node_field_float(nodes[nid], key, fval)
+    elsif line.start_with?("R ")
+      parts = line.split(" ", 4)
+      nid = parts[1].to_i
+      key = parts[2]
+      ref_id = parts[3].to_i
+      if ref_id >= 0
+        set_node_field_ref(nodes[nid], key, nodes[ref_id])
+      end
+    elsif line.start_with?("A ")
+      parts = line.split(" ", 4)
+      nid = parts[1].to_i
+      key = parts[2]
+      ids_str = parts[3]
+      arr = sp_make_node_array(nodes, ids_str)
+      set_node_field_array(nodes[nid], key, arr)
+    end
+    li = li + 1
+  end
+
+  nodes[root_id]
+end
+
+def set_node_field_string(node, key, val)
+  case key
+  when "name" then node.name = val
+  when "value" then node.value = val
+  when "content" then node.content = val
+  when "call_operator" then node.call_operator = val
+  when "binary_operator" then node.binary_operator = val
+  when "unescaped" then node.unescaped = val
+  end
+end
+
+def set_node_field_int(node, key, val)
+  case key
+  when "value" then node.value = val
+  when "number" then node.number = val
+  when "maximum" then node.maximum = val
+  when "start_line" then node.start_line = val
+  end
+end
+
+def set_node_field_float(node, key, val)
+  case key
+  when "value" then node.value = val
+  end
+end
+
+def set_node_field_ref(node, key, child)
+  type_str = node.type
+  case key
+  when "receiver" then node.receiver = child
+  when "arguments"
+    if type_str == "ArgumentsNode"
+      node.args = [child]  # should not happen for R lines
+    else
+      node.arguments = child
+    end
+  when "body"
+    if type_str == "StatementsNode"
+      node.stmts = [child]  # should not happen for R lines
+    else
+      node.body = child
+    end
+  when "statements" then node.statements = child
+  when "block" then node.block = child
+  when "parameters" then node.parameters = child
+  when "predicate" then node.predicate = child
+  when "subsequent" then node.subsequent = child
+  when "else_clause" then node.else_clause = child
+  when "expression" then node.expression = child
+  when "rescue_expression" then node.rescue_expression = child
+  when "index" then node.index = child
+  when "collection" then node.collection = child
+  when "constant_path" then node.constant_path = child
+  when "superclass" then node.superclass = child
+  when "parent" then node.parent = child
+  when "key" then node.key = child
+  when "pattern" then node.pattern = child
+  when "reference" then node.reference = child
+  when "rescue_clause" then node.rescue_clause = child
+  when "ensure_clause" then node.ensure_clause = child
+  when "rest" then node.rest = child
+  when "call" then node.call = child
+  when "target" then node.target = child
+  when "left" then node.left = child
+  when "right" then node.right = child
+  when "value" then node.value = child
+  end
+end
+
+def set_node_field_array(node, key, arr)
+  type_str = node.type
+  case key
+  when "arguments"
+    if type_str == "ArgumentsNode"
+      node.args = arr
+    end
+  when "body"
+    if type_str == "StatementsNode"
+      node.stmts = arr
+    end
+  when "conditions" then node.conditions = arr
+  when "elements" then node.elements = arr
+  when "parts" then node.parts = arr
+  when "lefts" then node.lefts = arr
+  when "exceptions" then node.exceptions = arr
+  when "requireds" then node.requireds = arr
+  when "optionals" then node.optionals = arr
+  when "keywords" then node.keywords = arr
+  end
 end
 
 # ---- Main entry point ----
-def sp_run(args)
-  json_file = nil
-  output_file = nil
+ast_file = nil
+output_file = nil
 
-  args.each do |arg|
-    if arg.start_with?("--json=")
-      json_file = arg.split("=", 2).last
-    elsif arg.start_with?("--output=")
-      output_file = arg.split("=", 2).last
-    else
-      # Positional args: first is json_file, second is output_file
-      if json_file.nil?
-        json_file = arg
-      elsif output_file.nil?
-        output_file = arg
-      end
+i = 0
+while i < ARGV.length
+  arg = ARGV[i]
+  if arg.start_with?("--output=")
+    output_file = arg.split("=", 2).last
+  else
+    # Positional args: first is ast_file, second is output_file
+    if ast_file == nil
+      ast_file = arg
+    elsif output_file == nil
+      output_file = arg
     end
   end
+  i = i + 1
+end
 
-  unless json_file
-    $stderr.puts "Usage: ruby spinel_codegen.rb <ast.json> <output.c>"
-    $stderr.puts "   or: ruby spinel_codegen.rb --json=ast.json --output=output.c"
-    exit 1
-  end
-
-  bin_data = File.binread(json_file)
-  root = read_binary_ast(bin_data)
-  compiler = SpCompiler.new(root, json_file)
+if ast_file == nil
+  $stderr.puts "Usage: ruby spinel_codegen.rb <ast.txt> <output.c>"
+  $stderr.puts "   or: ruby spinel_codegen.rb <ast.txt> --output=output.c"
+else
+  text_data = File.read(ast_file)
+  root = read_text_ast(text_data)
+  compiler = SpCompiler.new(root, ast_file)
   c_code = compiler.compile
 
-  if output_file
+  if output_file != nil
     File.write(output_file, c_code)
     $stderr.puts "Wrote #{output_file}"
   else
     puts c_code
   end
 end
-
-sp_run(ARGV)

@@ -4,9 +4,128 @@
 # Compiles Ruby source to standalone C via Prism AST and type inference.
 # Usage: ruby spinel.rb --source=input.rb --output=output.c
 
-require "prism"
+require "json"
 require "stringio"
 require "set"
+
+
+# SpNode wraps a JSON hash to behave like a Prism AST node.
+# Attributes are accessed as methods (node.name, node.receiver, etc.)
+# and node types are checked with case/when on node.sp_type.
+class SpNode
+  attr_reader :data
+
+  def initialize(data)
+    @data = data
+  end
+
+  # The type string, e.g. "IntegerNode", "CallNode"
+  def sp_type
+    @data["type"] || ""
+  end
+
+  def sp_type?(t)
+    sp_type == t
+  end
+
+  def sp_has?(attr)
+    @data.key?(attr.to_s)
+  end
+
+  # For case/when matching: when "IntegerNode" matches if sp_type == "IntegerNode"
+  def ===(other)
+    if other.is_a?(String)
+      sp_type == other
+    else
+      super
+    end
+  end
+
+  # Collect child nodes (all SpNode values recursively in immediate children)
+  def sp_child_nodes
+    result = []
+    @data.each do |k, v|
+      next if k == "type" || k == "location"
+      case v
+      when Hash
+        result << SpNode.new(v) if v["type"]
+      when Array
+        v.each do |item|
+          result << SpNode.new(item) if item.is_a?(Hash) && item["type"]
+        end
+      end
+    end
+    result
+  end
+
+  def respond_to_missing?(sym, include_private = false)
+    @data.key?(sym.to_s) || super
+  end
+
+  def respond_to?(sym, include_private = false)
+    return true if sym == :sp_type || sym == :sp_child_nodes
+    @data.key?(sym.to_s) || super
+  end
+
+  def method_missing(sym, *args)
+    key = sym.to_s
+    if @data.key?(key)
+      val = @data[key]
+      return wrap(val)
+    end
+    # For methods like statements, body, etc. that might not exist, return nil
+    nil
+  end
+
+  def nil?
+    @data.empty?
+  end
+
+  def to_s
+    @data.to_s
+  end
+
+  # Make is_a? work - SpNode is always SpNode
+  # We override === on String class below for case/when
+
+  private
+
+  def wrap(val)
+    case val
+    when Hash
+      val["type"] ? SpNode.new(val) : val
+    when Array
+      val.map { |v| v.is_a?(Hash) && v["type"] ? SpNode.new(v) : v }
+    else
+      val
+    end
+  end
+end
+
+# Patch String#=== to check SpNode type for case/when
+class String
+  alias_method :_orig_case_eq, :===
+  def ===(other)
+    if other.is_a?(SpNode)
+      self == other.sp_type
+    else
+      _orig_case_eq(other)
+    end
+  end
+end
+
+# Helper to check if something is a specific node type
+def sp_is?(obj, type_name)
+  obj.is_a?(SpNode) && obj.sp_type == type_name
+end
+
+# Add is_a_node? to all objects for easy type checking
+class Object
+  def is_a_node?(type_name)
+    is_a?(SpNode) && sp_type == type_name
+  end
+end
+
 
 module Spinel
   VERSION = "0.1.0"
@@ -54,7 +173,7 @@ module Spinel
     attr_reader :string_helpers_needed
 
     def initialize(source, source_path)
-      @source = source
+      @source = source  # SpNode root (already parsed from JSON)
       @source_path = source_path
       @classes = {}
       @methods = {}          # top-level methods: name -> MethodInfo
@@ -103,16 +222,10 @@ module Spinel
       @array_elem_types = {} # var_name -> class_name for class-typed arrays
       @ivar_elem_types = {}  # class_name -> {ivar_name -> elem_class_name} for typed array ivars
       @ivar_array_sizes = {} # class_name -> {ivar_name -> size} for fixed-size array ivars
-      @ivar_hash_value_types = {} # class_name -> {ivar_name -> value_class_name} for class-typed hash values
-      @local_hash_value_types = {} # var_name -> value_class_name for local class-typed hash values
     end
 
     def compile
-      # Phase 0: resolve require_relative and merge sources
-      @source = resolve_requires(@source, @source_path)
-
-      ast = Prism.parse(@source)
-      root = ast.value
+      root = @source
 
       # Phase 1: collect all class/method/constant declarations
       collect_declarations(root)
@@ -306,32 +419,32 @@ module Spinel
     def collect_declarations(node)
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         collect_declarations(node.statements)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| collect_declarations(s) }
-      when Prism::ClassNode
+      when "ClassNode"
         collect_class(node)
-      when Prism::ModuleNode
+      when "ModuleNode"
         collect_module(node)
-      when Prism::DefNode
+      when "DefNode"
         collect_method(node, nil)
-      when Prism::ConstantWriteNode
+      when "ConstantWriteNode"
         collect_constant(node)
-      when Prism::CallNode
+      when "CallNode"
         # Handle define_method(:name) { ... } as top-level method definition
         if node.name.to_s == "define_method" && node.arguments &&
            node.arguments.arguments.length == 1 &&
-           node.arguments.arguments[0].is_a?(Prism::SymbolNode) && node.block
+           node.arguments.arguments[0].is_a_node?("SymbolNode") && node.block
           mname = node.arguments.arguments[0].value
           block = node.block
           params = []
           body = nil
-          if block.is_a?(Prism::BlockNode)
+          if sp_is?(block, "BlockNode")
             if block.parameters && block.parameters.parameters
               bp = block.parameters.parameters
               (bp.requireds || []).each do |p|
-                pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
                 params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
               end
             end
@@ -351,7 +464,7 @@ module Spinel
     BUILTIN_TYPES = %w[Integer Float String Boolean Symbol].freeze
 
     def collect_class(node)
-      name = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : node.constant_path.to_s
+      name = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
       parent = nil
       is_struct_inherit = false
 
@@ -360,15 +473,15 @@ module Spinel
         @open_class_methods ||= {}
         @open_class_methods[name] ||= {}
         if node.body
-          stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
           stmts.each do |s|
-            if s.is_a?(Prism::DefNode) && !s.receiver
+            if sp_is?(s, "DefNode") && !s.receiver
               # Instance method on built-in type
               mi_name = s.name.to_s
               params = []
               if s.parameters
                 (s.parameters.requireds || []).each do |p|
-                  pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                  pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
                   params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
                 end
               end
@@ -386,15 +499,15 @@ module Spinel
       end
 
       if node.superclass
-        if node.superclass.is_a?(Prism::CallNode) && node.superclass.name.to_s == "new" &&
-           node.superclass.receiver.is_a?(Prism::ConstantReadNode) && node.superclass.receiver.name.to_s == "Struct"
+        if sp_is?(node.superclass, "CallNode") && node.superclass.name.to_s == "new" &&
+           sp_is?(node.superclass.receiver, "ConstantReadNode") && node.superclass.receiver.name.to_s == "Struct"
           # class X < Struct.new(:field1, :field2)
           is_struct_inherit = true
           struct_args = call_args(node.superclass)
-          fields = struct_args.select { |a| a.is_a?(Prism::SymbolNode) }.map { |a| a.value }
+          fields = struct_args.select { |a| sp_is?(a, "SymbolNode") }.map { |a| a.value }
         else
           parent = case node.superclass
-                   when Prism::ConstantReadNode then node.superclass.name.to_s
+                   when "ConstantReadNode" then node.superclass.name.to_s
                    else nil
                    end
         end
@@ -422,22 +535,22 @@ module Spinel
       @classes[name] = ci
 
       if node.body
-        stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+        stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
         stmts.each do |s|
           case s
-          when Prism::DefNode
+          when "DefNode"
             if s.receiver
               # self.method_name -> class method
               collect_method(s, name, is_class_method: true)
             else
               collect_method(s, name)
             end
-          when Prism::CallNode
+          when "CallNode"
             collect_attr_call(s, ci)
             # Handle include Comparable / include Enumerable
             if s.name.to_s == "include" && s.arguments
               s.arguments.arguments.each do |arg|
-                if arg.is_a?(Prism::ConstantReadNode)
+                if sp_is?(arg, "ConstantReadNode")
                   mod_name = arg.name.to_s
                   ci.attrs[:includes] ||= []
                   ci.attrs[:includes] << mod_name
@@ -452,7 +565,7 @@ module Spinel
     end
 
     def collect_module(node)
-      mod_name = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : node.constant_path.to_s
+      mod_name = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
       @module_methods ||= {}
       @module_methods[mod_name] ||= {}
       @module_class_methods ||= {}
@@ -460,27 +573,27 @@ module Spinel
       @module_ivars ||= {}
       @module_ivars[mod_name] ||= {}
       if node.body
-        stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+        stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
         stmts.each do |s|
-          if s.is_a?(Prism::ConstantWriteNode)
+          if sp_is?(s, "ConstantWriteNode")
             cname = s.name.to_s
             type = infer_type(s.value)
             val = const_value_to_c(s.value, type)
             @module_constants["#{mod_name}::#{cname}"] = {
               type: type, c_name: "sp_#{mod_name}_#{cname}", value: val
             }
-          elsif s.is_a?(Prism::InstanceVariableWriteNode)
+          elsif sp_is?(s, "InstanceVariableWriteNode")
             # Module-level ivar: @x = 123 -> static mrb_int sp_Mod_x = 123;
             ivar = s.name.to_s.delete_prefix("@")
             type = infer_type(s.value)
             @module_ivars[mod_name][ivar] = { type: type, value_node: s.value }
-          elsif s.is_a?(Prism::DefNode) && s.receiver
+          elsif sp_is?(s, "DefNode") && s.receiver
             # Module class method: def self.rand
             mname = s.name.to_s
             params = []
             if s.parameters
               (s.parameters.requireds || []).each do |p|
-                pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
                 params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
               end
             end
@@ -491,13 +604,13 @@ module Spinel
               default_values: {}
             )
             @module_class_methods[mod_name][mname] = mi
-          elsif s.is_a?(Prism::DefNode) && !s.receiver
+          elsif sp_is?(s, "DefNode") && !s.receiver
             # Module instance method
             mname = s.name.to_s
             params = []
             if s.parameters
               (s.parameters.requireds || []).each do |p|
-                pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
                 params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
               end
             end
@@ -514,14 +627,14 @@ module Spinel
     end
 
     def collect_attr_call(node, ci)
-      return unless node.is_a?(Prism::CallNode)
+      return unless sp_is?(node, "CallNode")
       mname = node.name.to_s
       return unless %w[attr_accessor attr_reader attr_writer].include?(mname)
 
       args = call_args(node)
       args.each do |a|
         sym_name = case a
-                   when Prism::SymbolNode then a.value
+                   when "SymbolNode" then a.value
                    else nil
                    end
         next unless sym_name
@@ -548,7 +661,7 @@ module Spinel
       if node.parameters
         # Required params
         (node.parameters.requireds || []).each do |p|
-          pname = p.is_a?(Prism::RequiredParameterNode) ? p.name.to_s : p.to_s
+          pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
           params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
         end
         # Optional params
@@ -558,7 +671,7 @@ module Spinel
           defaults[pname] = p.value
         end
         # Rest params (*args)
-        if node.parameters.rest.is_a?(Prism::RestParameterNode)
+        if sp_is?(node.parameters.rest, "RestParameterNode")
           rest_name = node.parameters.rest.name.to_s
           has_rest = true
           params << ParamInfo.new(name: rest_name, type: Type::ARRAY, default_node: nil)
@@ -566,7 +679,7 @@ module Spinel
         # Keyword params (name:, greeting: "Hello")
         (node.parameters.keywords || []).each do |kw|
           pname = kw.name.to_s.chomp(":")
-          default_node = kw.respond_to?(:value) ? kw.value : nil
+          default_node = kw.sp_has?(:value) ? kw.value : nil
           params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: default_node)
           defaults[pname] = default_node if default_node
         end
@@ -577,7 +690,7 @@ module Spinel
 
       # Detect &block parameter
       block_param_name = nil
-      if node.parameters && node.parameters.block.is_a?(Prism::BlockParameterNode)
+      if node.parameters && sp_is?(node.parameters.block, "BlockParameterNode")
         block_param_name = node.parameters.block.name.to_s
         has_yield = true  # &block implies the method receives a block
       end
@@ -599,8 +712,8 @@ module Spinel
           # Detect simple getter: def x; @x; end -> synthetic attr_reader
           ci = @classes[owner]
           if !name.end_with?("=") && params.empty? && node.body
-            body_stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
-            if body_stmts.length == 1 && body_stmts[0].is_a?(Prism::InstanceVariableReadNode)
+            body_stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+            if body_stmts.length == 1 && body_stmts[0].is_a_node?("InstanceVariableReadNode")
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               if ivar == name
                 ci.attrs[:reader] << name unless ci.attrs[:reader].include?(name)
@@ -609,8 +722,8 @@ module Spinel
           end
           # Detect simple setter: def x=(v); @x = v; end -> synthetic attr_writer
           if name.end_with?("=") && params.length == 1 && node.body
-            body_stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
-            if body_stmts.length == 1 && body_stmts[0].is_a?(Prism::InstanceVariableWriteNode)
+            body_stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+            if body_stmts.length == 1 && body_stmts[0].is_a_node?("InstanceVariableWriteNode")
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               field = name.chomp("=")
               if ivar == field
@@ -627,24 +740,24 @@ module Spinel
     def body_has_yield?(node)
       return false unless node
       case node
-      when Prism::YieldNode
+      when "YieldNode"
         true
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.any? { |s| body_has_yield?(s) }
-      when Prism::IfNode
+      when "IfNode"
         body_has_yield?(node.statements) || body_has_yield?(node.subsequent)
-      when Prism::WhileNode
+      when "WhileNode"
         body_has_yield?(node.statements)
-      when Prism::CallNode
+      when "CallNode"
         # check if block_given? is called (indicates yield usage)
         return true if node.name.to_s == "block_given?"
         body_has_yield?(node.block) if node.block
-      when Prism::BlockNode
+      when "BlockNode"
         body_has_yield?(node.body)
       else
-        if node.respond_to?(:statements)
+        if node.sp_has?(:statements)
           body_has_yield?(node.statements)
-        elsif node.respond_to?(:body)
+        elsif node.sp_has?(:body)
           body_has_yield?(node.body)
         else
           false
@@ -656,8 +769,8 @@ module Spinel
       name = node.name.to_s
 
       # Check for Struct.new(:x, :y)
-      if node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "new" &&
-         node.value.receiver.is_a?(Prism::ConstantReadNode) && node.value.receiver.name.to_s == "Struct"
+      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" &&
+         sp_is?(node.value.receiver, "ConstantReadNode") && node.value.receiver.name.to_s == "Struct"
         collect_struct_new(name, node.value)
         return
       end
@@ -669,7 +782,7 @@ module Spinel
     def collect_struct_new(name, call_node)
       args = call_args(call_node)
       # Filter out keyword_init option
-      fields = args.select { |a| a.is_a?(Prism::SymbolNode) }.map { |a| a.value }
+      fields = args.select { |a| sp_is?(a, "SymbolNode") }.map { |a| a.value }
 
       # Create params for constructor
       params = fields.map { |f| ParamInfo.new(name: f, type: Type::INTEGER) }
@@ -731,8 +844,7 @@ module Spinel
       end
 
       # First pass: scan all call sites to infer param types
-      ast = Prism.parse(@source).value
-      scan_call_sites(ast)
+      scan_call_sites(@source)
 
       # Propagate types from child class constructors to parents via super
       @classes.each do |_cname, ci|
@@ -777,14 +889,12 @@ module Spinel
 
       # Second pass: re-scan call sites with updated method return types
       # This allows local vars assigned from method calls to get correct types
-      ast2 = Prism.parse(@source).value
-      scan_call_sites(ast2)
+      scan_call_sites(@source)
 
       # Third pass: after var_types_global has been fully updated (including float upgrades),
       # re-scan to propagate upgraded types to method params (e.g., cur_r becomes float
       # from += operator, then mandelbrot(cur_r, cur_i) should get float params)
-      ast3 = Prism.parse(@source).value
-      scan_call_sites(ast3)
+      scan_call_sites(@source)
 
       # Promote INTEGER params to FLOAT when used in float context within method body
       @methods.each do |_name, mi|
@@ -1007,42 +1117,42 @@ module Spinel
     def scan_poly_types(node, var_types, param_types, scope_prefix: "")
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         scan_poly_types(node.statements, var_types, param_types, scope_prefix: scope_prefix)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
-      when Prism::DefNode
+      when "DefNode"
         # New method scope - use class prefix + method name as scope prefix
         method_scope = node.receiver ? "#{scope_prefix}self.#{node.name}" : "#{scope_prefix}#{node.name}"
         scan_poly_types(node.body, var_types, param_types, scope_prefix: method_scope)
-      when Prism::ClassNode
-        cname = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : ""
+      when "ClassNode"
+        cname = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : ""
         if node.body
-          stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: "#{cname}#") }
         end
-      when Prism::ModuleNode
+      when "ModuleNode"
         if node.body
-          stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
         end
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         t = infer_type(node.value)
-        if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+        if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
           t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
         end
         vname = "#{scope_prefix}:#{node.name}"
         var_types[vname] ||= Set.new
         var_types[vname] << t if t != Type::UNKNOWN
         scan_poly_types(node.value, var_types, param_types, scope_prefix: scope_prefix)
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         if @methods[mname] && node.arguments
           mi = @methods[mname]
           node.arguments.arguments.each_with_index do |arg, i|
             next if i >= mi.params.length
             t = infer_type(arg)
-            if t == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+            if t == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
               t = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
             param_types[mname] ||= {}
@@ -1050,9 +1160,9 @@ module Spinel
             param_types[mname][i] << t if t != Type::UNKNOWN
           end
         end
-        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c }
+        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c }
       else
-        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c } if node.is_a?(SpNode)
       end
     end
 
@@ -1060,15 +1170,15 @@ module Spinel
     def scan_method_calls_on_param(node, param_name, called_methods)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_method_calls_on_param(s, param_name, called_methods) }
-      when Prism::CallNode
-        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name.to_s == param_name
+      when "CallNode"
+        if sp_is?(node.receiver, "LocalVariableReadNode") && node.receiver.name.to_s == param_name
           called_methods << node.name.to_s
         end
-        node.child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c }
+        node.sp_child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c }
       else
-        node.child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c } if node.is_a?(SpNode)
       end
     end
 
@@ -1077,12 +1187,12 @@ module Spinel
     def infer_class_call_params(node, cname, ci)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| infer_class_call_params(s, cname, ci) }
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         # Check method calls on local vars: var.method(args)
-        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.arguments
+        if sp_is?(node.receiver, "LocalVariableReadNode") && node.arguments
           recv_name = node.receiver.name.to_s
           # Get receiver type from var_types_global or scope
           recv_class = @var_types_global[recv_name]
@@ -1095,10 +1205,10 @@ module Spinel
                 arg_type = infer_type(arg)
                 if arg_type == Type::UNKNOWN
                   # Check if arg is an ivar read
-                  if arg.is_a?(Prism::InstanceVariableReadNode)
+                  if sp_is?(arg, "InstanceVariableReadNode")
                     iname = arg.name.to_s.delete_prefix("@")
                     arg_type = ci.ivars[iname] if ci.ivars[iname]
-                  elsif arg.is_a?(Prism::LocalVariableReadNode)
+                  elsif sp_is?(arg, "LocalVariableReadNode")
                     arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                   end
                 end
@@ -1119,12 +1229,12 @@ module Spinel
               next if i >= target_mi.params.length
               arg_type = infer_type(arg)
               if arg_type == Type::UNKNOWN
-                if arg.is_a?(Prism::InstanceVariableReadNode)
+                if sp_is?(arg, "InstanceVariableReadNode")
                   iname = arg.name.to_s.delete_prefix("@")
                   arg_type = ci.ivars[iname] if ci.ivars[iname]
-                elsif arg.is_a?(Prism::LocalVariableReadNode)
+                elsif sp_is?(arg, "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
-                elsif arg.is_a?(Prism::CallNode)
+                elsif sp_is?(arg, "CallNode")
                   # For chained calls like isect.n, infer the return type
                   arg_type = infer_call_return_type_in_class(arg, ci)
                 end
@@ -1137,18 +1247,18 @@ module Spinel
             end
           end
         end
-        node.child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c }
+        node.sp_child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c }
       else
-        node.child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| infer_class_call_params(c, cname, ci) if c } if node.is_a?(SpNode)
       end
     end
 
     # Infer the return type of a call expression within a class context
     # Handles chained calls like isect.n where isect is a class method param
     def infer_call_return_type_in_class(node, ci)
-      return Type::UNKNOWN unless node.is_a?(Prism::CallNode)
+      return Type::UNKNOWN unless sp_is?(node, "CallNode")
       mname = node.name.to_s
-      if node.receiver.is_a?(Prism::LocalVariableReadNode)
+      if sp_is?(node.receiver, "LocalVariableReadNode")
         recv_name = node.receiver.name.to_s
         # Check if receiver is a method param with a class type
         if @current_method
@@ -1166,7 +1276,7 @@ module Spinel
 
     def body_returns_poly_param?(body, mi)
       return false unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       last = stmts.last
       return false unless last
       expr_involves_poly?(last, mi)
@@ -1175,9 +1285,9 @@ module Spinel
     def expr_involves_poly?(node, mi)
       return false unless node
       case node
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         mi.params.any? { |p| p.name == node.name.to_s && p.type == Type::POLY }
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         # Comparison operators return boolean, not poly
         return false if %w[== != < > <= >= <=> !].include?(mname)
@@ -1200,26 +1310,26 @@ module Spinel
     def find_mutable_strings(node)
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         find_mutable_strings(node.statements)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| find_mutable_strings(s) }
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         if (mname == "<<" || mname == "replace" || mname == "clear" || mname == "gsub!" || mname == "sub!" ||
             mname == "upcase!" || mname == "downcase!" || mname == "strip!" || mname == "chomp!" ||
             mname == "setbyte") &&
-           node.receiver.is_a?(Prism::LocalVariableReadNode)
+           sp_is?(node.receiver, "LocalVariableReadNode")
           recv_type = @var_types_global && @var_types_global[node.receiver.name.to_s]
           if recv_type == Type::STRING || recv_type.nil?
             @mutable_string_vars << node.receiver.name.to_s
           end
         end
-        node.child_nodes.each { |c| find_mutable_strings(c) if c }
-      when Prism::DefNode
+        node.sp_child_nodes.each { |c| find_mutable_strings(c) if c }
+      when "DefNode"
         find_mutable_strings(node.body)
       else
-        node.child_nodes.each { |c| find_mutable_strings(c) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| find_mutable_strings(c) if c } if node.is_a?(SpNode)
       end
     end
 
@@ -1252,18 +1362,18 @@ module Spinel
     def fix_method_params_for_typed_arrays(node)
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         fix_method_params_for_typed_arrays(node.statements)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| fix_method_params_for_typed_arrays(s) }
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         # Check if this is a call to a known top-level method or class method
         mi = @methods[mname]
         if mi && node.arguments
           node.arguments.arguments.each_with_index do |arg, i|
             next if i >= mi.params.length
-            if arg.is_a?(Prism::LocalVariableReadNode)
+            if sp_is?(arg, "LocalVariableReadNode")
               elem_class = @array_elem_types[arg.name.to_s]
               if elem_class && mi.params[i].type == Type::ARRAY
                 mi.params[i].type = elem_class
@@ -1280,7 +1390,7 @@ module Spinel
             ami = @classes[actual].methods[mname]
             node.arguments.arguments.each_with_index do |arg, i|
               next if i >= ami.params.length
-              if arg.is_a?(Prism::LocalVariableReadNode)
+              if sp_is?(arg, "LocalVariableReadNode")
                 elem_class = @array_elem_types[arg.name.to_s]
                 if elem_class && ami.params[i].type == Type::ARRAY
                   ami.params[i].type = elem_class
@@ -1290,125 +1400,82 @@ module Spinel
             end
           end
         end
-        node.child_nodes.each { |c| fix_method_params_for_typed_arrays(c) if c }
-      when Prism::DefNode
+        node.sp_child_nodes.each { |c| fix_method_params_for_typed_arrays(c) if c }
+      when "DefNode"
         old_class = @current_class
         fix_method_params_for_typed_arrays(node.body)
         @current_class = old_class
-      when Prism::ClassNode
+      when "ClassNode"
         old_class = @current_class
-        cname = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : nil
+        cname = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : nil
         @current_class = cname if cname
         if node.body
-          stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
+          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| fix_method_params_for_typed_arrays(s) }
         end
         @current_class = old_class
       else
-        node.child_nodes.each { |c| fix_method_params_for_typed_arrays(c) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| fix_method_params_for_typed_arrays(c) if c } if node.is_a?(SpNode)
       end
     end
 
     def scan_array_elem_assigns(node, context_class)
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         scan_array_elem_assigns(node.statements, context_class)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_array_elem_assigns(s, context_class) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         # Detect var = Array.new(N) patterns
         val = node.value
-        if val.is_a?(Prism::CallNode) && val.name.to_s == "new" &&
-           val.receiver.is_a?(Prism::ConstantReadNode) && val.receiver.name.to_s == "Array" &&
+        if sp_is?(val, "CallNode") && val.name.to_s == "new" &&
+           sp_is?(val.receiver, "ConstantReadNode") && val.receiver.name.to_s == "Array" &&
            val.arguments && val.arguments.arguments.length == 1 &&
-           val.arguments.arguments[0].is_a?(Prism::IntegerNode)
+           val.arguments.arguments[0].is_a_node?("IntegerNode")
           @local_array_sizes[node.name.to_s] = val.arguments.arguments[0].value
         end
         scan_array_elem_assigns(val, context_class)
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         if mname == "[]=" && node.arguments && node.arguments.arguments.length == 2
           val_node = node.arguments.arguments[1]
           elem_class = nil
           # Check if value is ClassName.new(...)
-          if val_node.is_a?(Prism::CallNode) && val_node.name.to_s == "new" &&
-             val_node.receiver.is_a?(Prism::ConstantReadNode)
+          if sp_is?(val_node, "CallNode") && val_node.name.to_s == "new" &&
+             sp_is?(val_node.receiver, "ConstantReadNode")
             elem_class = val_node.receiver.name.to_s
             elem_class = nil unless @classes[elem_class]
           end
-          # Check if value is a local variable with known class type
-          if elem_class.nil? && val_node.is_a?(Prism::LocalVariableReadNode)
-            vt = infer_type(val_node)
-            if vt.is_a?(String) && @classes[vt]
-              elem_class = vt
-            end
-          end
-          # Check if value is a function call returning a class type
-          if elem_class.nil? && val_node.is_a?(Prism::CallNode)
-            vt = infer_call_type(val_node)
-            if vt.is_a?(String) && @classes[vt]
-              elem_class = vt
-            end
-          end
           if elem_class
             recv = node.receiver
-            idx_node = node.arguments.arguments[0]
-            is_hash_key = idx_node.is_a?(Prism::StringNode) || idx_node.is_a?(Prism::SymbolNode) ||
-                          idx_node.is_a?(Prism::LocalVariableReadNode)
-            if recv.is_a?(Prism::InstanceVariableReadNode) && context_class
+            if sp_is?(recv, "InstanceVariableReadNode") && context_class
               ivar_name = recv.name.to_s.delete_prefix("@")
-              if is_hash_key && !idx_node.is_a?(Prism::IntegerNode)
-                # Hash with class-typed values: @hash[key] = ClassName.new(...)
-                @ivar_hash_value_types[context_class] ||= {}
-                @ivar_hash_value_types[context_class][ivar_name] ||= elem_class
-              else
-                @ivar_elem_types[context_class] ||= {}
-                @ivar_elem_types[context_class][ivar_name] ||= elem_class
-                # Detect array size from index
-                if idx_node.is_a?(Prism::IntegerNode)
-                  @ivar_array_sizes[context_class] ||= {}
-                  cur = @ivar_array_sizes[context_class][ivar_name] || 0
-                  @ivar_array_sizes[context_class][ivar_name] = [cur, idx_node.value + 1].max
-                end
+              @ivar_elem_types[context_class] ||= {}
+              @ivar_elem_types[context_class][ivar_name] ||= elem_class
+              # Detect array size from index
+              idx_node = node.arguments.arguments[0]
+              if sp_is?(idx_node, "IntegerNode")
+                @ivar_array_sizes[context_class] ||= {}
+                cur = @ivar_array_sizes[context_class][ivar_name] || 0
+                @ivar_array_sizes[context_class][ivar_name] = [cur, idx_node.value + 1].max
               end
-            elsif recv.is_a?(Prism::LocalVariableReadNode)
+            elsif sp_is?(recv, "LocalVariableReadNode")
               var_name = recv.name.to_s
-              if is_hash_key && !idx_node.is_a?(Prism::IntegerNode)
-                @local_hash_value_types[var_name] ||= elem_class
-              else
-                @array_elem_types[var_name] ||= elem_class
-              end
-            end
-          end
-        end
-        # Also detect hash[key] = value via method calls (MethodInfo stored in hash)
-        if mname == "push" && node.arguments && node.arguments.arguments.length == 1
-          val_node = node.arguments.arguments[0]
-          if val_node.is_a?(Prism::LocalVariableReadNode)
-            val_type = lookup_var(val_node.name.to_s)
-            if val_type && val_type.type.is_a?(String) && @classes[val_type.type]
-              recv = node.receiver
-              if recv.is_a?(Prism::InstanceVariableReadNode) && context_class
-                ivar_name = recv.name.to_s.delete_prefix("@")
-                @ivar_elem_types[context_class] ||= {}
-                @ivar_elem_types[context_class][ivar_name] ||= val_type.type
-              elsif recv.is_a?(Prism::LocalVariableReadNode)
-                @array_elem_types[recv.name.to_s] ||= val_type.type
-              end
+              @array_elem_types[var_name] ||= elem_class
             end
           end
         end
         # Recurse into all child nodes
-        node.child_nodes.each { |c| scan_array_elem_assigns(c, context_class) if c }
-      when Prism::DefNode
+        node.sp_child_nodes.each { |c| scan_array_elem_assigns(c, context_class) if c }
+      when "DefNode"
         scan_array_elem_assigns(node.body, context_class)
-      when Prism::ClassNode
+      when "ClassNode"
         # Don't recurse into nested class definitions
-      when Prism::ModuleNode
+      when "ModuleNode"
         # Don't recurse into modules
       else
-        node.child_nodes.each { |c| scan_array_elem_assigns(c, context_class) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| scan_array_elem_assigns(c, context_class) if c } if node.is_a?(SpNode)
       end
     end
 
@@ -1416,18 +1483,18 @@ module Spinel
       @var_types_global ||= {}
       return unless node
       case node
-      when Prism::ProgramNode
+      when "ProgramNode"
         scan_call_sites(node.statements)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_call_sites(s) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         t = infer_type(node.value)
         @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
         scan_call_sites(node.value)
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         val_type = infer_type(node.value)
         # If value is a local var reference, also check var_types_global and method params
-        if val_type == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+        if val_type == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
           ref = node.value.name.to_s
           val_type = @var_types_global[ref] if @var_types_global[ref]
           # Check all method params if still unknown
@@ -1447,15 +1514,15 @@ module Spinel
         if val_type == Type::FLOAT && (existing.nil? || existing == Type::INTEGER)
           @var_types_global[vname] = Type::FLOAT
         end
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         if @methods[mname] && node.arguments
           mi = @methods[mname]
           node.arguments.arguments.each_with_index do |arg, i|
             # Handle keyword hash nodes - extract types by name
-            if arg.is_a?(Prism::KeywordHashNode)
+            if sp_is?(arg, "KeywordHashNode")
               arg.elements.each do |assoc|
-                next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+                next unless sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
                 key_name = assoc.key.value
                 arg_type = infer_type(assoc.value)
                 if arg_type != Type::UNKNOWN
@@ -1469,7 +1536,7 @@ module Spinel
             next if i >= mi.params.length
             arg_type = infer_type(arg)
             # Also check var_types_global for local variable reads
-            if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+            if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
               arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
             can_upgrade = mi.params[i].type == Type::UNKNOWN ||
@@ -1480,7 +1547,7 @@ module Spinel
           end
         end
         # Scan class constructor calls: ClassName.new(args)
-        if mname == "new" && node.receiver.is_a?(Prism::ConstantReadNode) && node.arguments
+        if mname == "new" && sp_is?(node.receiver, "ConstantReadNode") && node.arguments
           cname = node.receiver.name.to_s
           if @classes[cname]
             ci = @classes[cname]
@@ -1493,11 +1560,11 @@ module Spinel
             if init
               # Handle keyword arguments for struct constructors
               if node.arguments.arguments.length == 1 &&
-                 node.arguments.arguments[0].is_a?(Prism::KeywordHashNode) &&
+                 node.arguments.arguments[0].is_a_node?("KeywordHashNode") &&
                  @struct_classes && @struct_classes[cname]
                 kw_node = node.arguments.arguments[0]
                 kw_node.elements.each do |assoc|
-                  next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+                  next unless sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
                   field_name = assoc.key.value
                   arg_type = infer_type(assoc.value)
                   if arg_type != Type::UNKNOWN
@@ -1512,7 +1579,7 @@ module Spinel
                 node.arguments.arguments.each_with_index do |arg, i|
                   next if i >= init.params.length
                   arg_type = infer_type(arg)
-                  if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                  if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
                     arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                   end
                   if arg_type != Type::UNKNOWN
@@ -1543,7 +1610,7 @@ module Spinel
           end
         end
         # Scan attr writer calls: obj.attr = value (name ends with =)
-        if mname.end_with?("=") && node.receiver.is_a?(Prism::LocalVariableReadNode) && node.arguments
+        if mname.end_with?("=") && sp_is?(node.receiver, "LocalVariableReadNode") && node.arguments
           attr_name = mname.chomp("=")
           recv_name = node.receiver.name.to_s
           recv_class = @var_types_global[recv_name]
@@ -1552,7 +1619,7 @@ module Spinel
             if (ci.attrs[:writer].include?(attr_name) || ci.attrs[:accessor].include?(attr_name))
               node.arguments.arguments.each do |arg|
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::UNKNOWN || ci.ivars[attr_name] == Type::NIL)
@@ -1563,7 +1630,7 @@ module Spinel
           end
         end
         # Scan instance method calls: obj.method(args) to infer param types
-        if node.receiver.is_a?(Prism::LocalVariableReadNode) && !mname.end_with?("=") && mname != "new" && node.arguments
+        if sp_is?(node.receiver, "LocalVariableReadNode") && !mname.end_with?("=") && mname != "new" && node.arguments
           recv_name = node.receiver.name.to_s
           recv_class = @var_types_global[recv_name]
           if recv_class.is_a?(String) && @classes[recv_class]
@@ -1573,7 +1640,7 @@ module Spinel
               node.arguments.arguments.each_with_index do |arg, i|
                 next if i >= mi.params.length
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && mi.params[i].type == Type::UNKNOWN
@@ -1589,24 +1656,24 @@ module Spinel
         scan_call_sites(node.block) if node.block
       else
         # Generic traversal
-        node.child_nodes.each { |c| scan_call_sites(c) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| scan_call_sites(c) if c } if node.is_a?(SpNode)
       end
     end
 
     def scan_ivar_assignments_in_body(node, cname, ci)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_ivar_assignments_in_body(s, cname, ci) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         # Refresh var_types_global with updated method return types
         t = infer_type(node.value)
-        if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+        if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
           t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
         end
         @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
         scan_ivar_assignments_in_body(node.value, cname, ci)
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         # Check for attr_name= calls on class instances
         if mname.end_with?("=") && !mname.start_with?("[") && node.receiver && node.arguments
@@ -1614,13 +1681,13 @@ module Spinel
           if (ci.attrs[:writer]&.include?(attr_name) || ci.attrs[:accessor]&.include?(attr_name))
             # Check if receiver's class matches
             recv_class = nil
-            if node.receiver.is_a?(Prism::LocalVariableReadNode)
+            if sp_is?(node.receiver, "LocalVariableReadNode")
               recv_class = @var_types_global[node.receiver.name.to_s]
             end
             if recv_class == cname
               node.arguments.arguments.each do |arg|
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
+                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::NIL || ci.ivars[attr_name] == Type::UNKNOWN)
@@ -1631,12 +1698,12 @@ module Spinel
           end
         end
         # Also check @ivar = value inside class methods
-        node.child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
-      when Prism::InstanceVariableWriteNode
+        node.sp_child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
+      when "InstanceVariableWriteNode"
         ivar = node.name.to_s.delete_prefix("@")
         if ci.ivars.key?(ivar) && (ci.ivars[ivar] == Type::NIL || ci.ivars[ivar] == Type::UNKNOWN)
           t = infer_type(node.value)
-          if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+          if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
             # Check method params
             vname = node.value.name.to_s
             ci.methods.each do |_mn, mi|
@@ -1655,22 +1722,22 @@ module Spinel
           end
         end
       else
-        if node.respond_to?(:child_nodes)
-          node.child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
+        if node.is_a?(SpNode)
+          node.sp_child_nodes.each { |c| scan_ivar_assignments_in_body(c, cname, ci) if c }
         end
       end
     end
 
     def propagate_super_types(body, child_init, parent_init, parent_ci)
       return unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each do |s|
-        if (s.is_a?(Prism::CallNode) && s.name.to_s == "super") ||
-           s.is_a?(Prism::SuperNode) || s.is_a?(Prism::ForwardingSuperNode)
-          args = s.respond_to?(:arguments) && s.arguments ? s.arguments.arguments : []
+        if (sp_is?(s, "CallNode") && s.name.to_s == "super") ||
+           sp_is?(s, "SuperNode") || sp_is?(s, "ForwardingSuperNode")
+          args = s.sp_has?(:arguments) && s.arguments ? s.arguments.arguments : []
           args.each_with_index do |arg, i|
             next if i >= parent_init.params.length
-            if arg.is_a?(Prism::LocalVariableReadNode)
+            if sp_is?(arg, "LocalVariableReadNode")
               # Find this param in child init
               child_param = child_init.params.find { |p| p.name == arg.name.to_s }
               if child_param && child_param.type != Type::UNKNOWN
@@ -1690,11 +1757,11 @@ module Spinel
 
     def param_assigned_to_ivar?(body, pname, iname)
       return false unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.any? do |s|
-        s.is_a?(Prism::InstanceVariableWriteNode) &&
+        sp_is?(s, "InstanceVariableWriteNode") &&
           s.name.to_s.delete_prefix("@") == iname &&
-          s.value.is_a?(Prism::LocalVariableReadNode) &&
+          sp_is?(s.value, "LocalVariableReadNode") &&
           s.value.name.to_s == pname
       end
     end
@@ -1702,15 +1769,15 @@ module Spinel
     def collect_ivars_from_body(node, ci)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| collect_ivars_from_body(s, ci) }
-      when Prism::InstanceVariableWriteNode
+      when "InstanceVariableWriteNode"
         name = node.name.to_s.delete_prefix("@")
         ci.ivars[name] = infer_type(node.value)
-      when Prism::IfNode
+      when "IfNode"
         collect_ivars_from_body(node.statements, ci)
         collect_ivars_from_body(node.subsequent, ci)
-      when Prism::WhileNode
+      when "WhileNode"
         collect_ivars_from_body(node.statements, ci)
       end
     end
@@ -1718,25 +1785,25 @@ module Spinel
     def infer_body_type(node)
       return Type::VOID unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         return Type::VOID if node.body.empty?
         last = node.body.last
         # If last statement is an if/while with only side-effect statements, return VOID
-        if last.is_a?(Prism::IfNode) || last.is_a?(Prism::WhileNode)
+        if sp_is?(last, "IfNode") || sp_is?(last, "WhileNode")
           return Type::VOID if body_is_side_effects?(last)
         end
         # If last statement is a bare return with no value
-        if last.is_a?(Prism::ReturnNode) && (last.arguments.nil? || last.arguments.arguments.empty?)
+        if sp_is?(last, "ReturnNode") && (last.arguments.nil? || last.arguments.arguments.empty?)
           return Type::VOID
         end
         # If last statement is an array element assignment on a class-typed array (side effect), return VOID
-        if last.is_a?(Prism::CallNode) && last.name.to_s == "[]="
+        if sp_is?(last, "CallNode") && last.name.to_s == "[]="
           elem_class = array_elem_class_for_receiver(last.receiver)
           return Type::VOID if elem_class
         end
         last_type = infer_type(last)
         # If last expression is a local var read with unknown type, scan body for assignments
-        if last_type == Type::UNKNOWN && last.is_a?(Prism::LocalVariableReadNode)
+        if last_type == Type::UNKNOWN && sp_is?(last, "LocalVariableReadNode")
           vname = last.name.to_s
           last_type = infer_local_var_type_from_body(vname, node.body)
         end
@@ -1751,16 +1818,16 @@ module Spinel
     def body_is_side_effects?(node)
       return true unless node
       case node
-      when Prism::IfNode
+      when "IfNode"
         body_is_side_effects?(node.statements) &&
           (node.subsequent.nil? || body_is_side_effects?(node.subsequent))
-      when Prism::ElseNode
+      when "ElseNode"
         body_is_side_effects?(node.statements)
-      when Prism::WhileNode
+      when "WhileNode"
         body_is_side_effects?(node.statements)
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.all? { |s| stmt_is_side_effect?(s) }
-      when Prism::ReturnNode
+      when "ReturnNode"
         node.arguments.nil? || node.arguments.arguments.empty?
       else
         stmt_is_side_effect?(node)
@@ -1770,17 +1837,17 @@ module Spinel
     def stmt_is_side_effect?(node)
       return true unless node
       case node
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         # Setter calls, puts, print, etc. are side effects
         mname.end_with?("=") || %w[puts print p printf push pop shift unshift].include?(mname) ||
           (node.receiver.nil? && @methods[mname] && @methods[mname].return_type == Type::VOID)
-      when Prism::LocalVariableWriteNode, Prism::InstanceVariableWriteNode,
-           Prism::LocalVariableOperatorWriteNode, Prism::ConstantWriteNode
+      when "LocalVariableWriteNode", "InstanceVariableWriteNode",
+           "LocalVariableOperatorWriteNode", "ConstantWriteNode"
         true
-      when Prism::IfNode, Prism::WhileNode
+      when "IfNode", "WhileNode"
         body_is_side_effects?(node)
-      when Prism::ReturnNode
+      when "ReturnNode"
         node.arguments.nil? || node.arguments.arguments.empty?
       else
         false
@@ -1789,7 +1856,7 @@ module Spinel
 
     def infer_local_var_type_from_body(vname, stmts)
       stmts.each do |s|
-        if s.is_a?(Prism::LocalVariableWriteNode) && s.name.to_s == vname
+        if sp_is?(s, "LocalVariableWriteNode") && s.name.to_s == vname
           t = infer_type(s.value)
           # Promote STRING to MUTABLE_STRING if this var is used mutably
           if t == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(vname)
@@ -1798,9 +1865,9 @@ module Spinel
           return t if t != Type::UNKNOWN
         end
         # Check inside if/else blocks
-        if s.is_a?(Prism::IfNode)
+        if sp_is?(s, "IfNode")
           t = infer_local_var_type_from_body(vname,
-            (s.statements.is_a?(Prism::StatementsNode) ? s.statements.body : [s.statements]).compact)
+            (sp_is?(s.statements, "StatementsNode") ? s.statements.body : [s.statements]).compact)
           return t if t != Type::UNKNOWN
         end
       end
@@ -1810,23 +1877,23 @@ module Spinel
     def infer_type(node)
       return Type::NIL unless node
       case node
-      when Prism::IntegerNode
+      when "IntegerNode"
         Type::INTEGER
-      when Prism::FloatNode
+      when "FloatNode"
         Type::FLOAT
-      when Prism::StringNode, Prism::InterpolatedStringNode
+      when "StringNode", "InterpolatedStringNode"
         Type::STRING
-      when Prism::SymbolNode
+      when "SymbolNode"
         Type::STRING
-      when Prism::XStringNode
+      when "XStringNode"
         Type::STRING
-      when Prism::TrueNode, Prism::FalseNode
+      when "TrueNode", "FalseNode"
         Type::BOOLEAN
-      when Prism::NilNode
+      when "NilNode"
         Type::NIL
-      when Prism::SelfNode
+      when "SelfNode"
         @current_class ? @current_class : Type::UNKNOWN
-      when Prism::ArrayNode
+      when "ArrayNode"
         if node.elements.empty?
           Type::ARRAY  # default to int array
         else
@@ -1840,10 +1907,10 @@ module Spinel
             Type::ARRAY
           end
         end
-      when Prism::HashNode
+      when "HashNode"
         # Check values to determine hash type
         if node.elements.any?
-          val_types = node.elements.select { |e| e.is_a?(Prism::AssocNode) }.map { |e| infer_type(e.value) }
+          val_types = node.elements.select { |e| sp_is?(e, "AssocNode") }.map { |e| infer_type(e.value) }
           val_types_uniq = val_types.uniq - [Type::UNKNOWN, Type::NIL]
           if val_types_uniq.size > 1
             # Mixed value types -> poly hash (string key -> sp_RbValue)
@@ -1854,14 +1921,14 @@ module Spinel
           end
         end
         Type::HASH
-      when Prism::RangeNode
+      when "RangeNode"
         Type::RANGE
-      when Prism::CallNode
+      when "CallNode"
         infer_call_type(node)
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         v = lookup_var(node.name.to_s)
         v ? v.type : Type::UNKNOWN
-      when Prism::ConstantReadNode
+      when "ConstantReadNode"
         name = node.name.to_s
         if @constants[name]
           @constants[name][:type]
@@ -1870,7 +1937,7 @@ module Spinel
         else
           Type::UNKNOWN
         end
-      when Prism::InstanceVariableReadNode
+      when "InstanceVariableReadNode"
         if @current_module && @module_ivars && @module_ivars[@current_module]
           ivar = node.name.to_s.delete_prefix("@")
           info = @module_ivars[@current_module][ivar]
@@ -1882,21 +1949,21 @@ module Spinel
         else
           Type::UNKNOWN
         end
-      when Prism::IfNode
+      when "IfNode"
         t1 = infer_body_type(node.statements)
         t2 = node.subsequent ? infer_body_type(node.subsequent) : Type::NIL
         t1 == Type::UNKNOWN ? t2 : t1
-      when Prism::UnlessNode
+      when "UnlessNode"
         t1 = infer_body_type(node.statements)
         t2 = node.else_clause ? infer_body_type(node.else_clause) : Type::NIL
         t1 == Type::UNKNOWN ? t2 : t1
-      when Prism::CaseNode
+      when "CaseNode"
         infer_case_type(node)
-      when Prism::CaseMatchNode
+      when "CaseMatchNode"
         # Pattern matching: return type of first branch body
         if node.conditions && !node.conditions.empty?
           first = node.conditions.first
-          if first.is_a?(Prism::InNode) && first.statements
+          if sp_is?(first, "InNode") && first.statements
             infer_body_type(first.statements)
           else
             Type::UNKNOWN
@@ -1904,9 +1971,9 @@ module Spinel
         else
           Type::UNKNOWN
         end
-      when Prism::ParenthesesNode
+      when "ParenthesesNode"
         infer_body_type(node.body)
-      when Prism::BeginNode
+      when "BeginNode"
         if node.rescue_clause || node.ensure_clause
           # Methods with rescue/ensure typically return void or the type of the body
           t = infer_body_type(node.statements)
@@ -1914,9 +1981,9 @@ module Spinel
         else
           infer_body_type(node.statements)
         end
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         infer_type(node.value)
-      when Prism::InstanceVariableWriteNode
+      when "InstanceVariableWriteNode"
         t = infer_type(node.value)
         if t == Type::UNKNOWN && @current_class
           ivar = node.name.to_s.delete_prefix("@")
@@ -1924,13 +1991,13 @@ module Spinel
           t = ci.ivars[ivar] if ci && ci.ivars[ivar] && ci.ivars[ivar] != Type::UNKNOWN
         end
         t || Type::UNKNOWN
-      when Prism::NumberedReferenceReadNode
+      when "NumberedReferenceReadNode"
         Type::STRING
-      when Prism::RegularExpressionNode
+      when "RegularExpressionNode"
         Type::UNKNOWN  # regex literals are not a value type
-      when Prism::MultiWriteNode
+      when "MultiWriteNode"
         Type::ARRAY
-      when Prism::ConstantPathNode
+      when "ConstantPathNode"
         path = constant_path_str(node)
         if @module_constants[path]
           @module_constants[path][:type]
@@ -2032,31 +2099,31 @@ module Spinel
            "positive?", "negative?"
         Type::BOOLEAN
       when "now"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Time"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Time"
           Type::TIME
         else
           Type::UNKNOWN
         end
       when "at"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Time"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Time"
           Type::TIME
         else
           Type::UNKNOWN
         end
       when "read"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::STRING
         else
           Type::UNKNOWN
         end
       when "exist?", "exists?"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::BOOLEAN
         else
           Type::BOOLEAN
         end
       when "join"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "File"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::STRING
         else
           Type::STRING
@@ -2064,24 +2131,19 @@ module Spinel
       when "basename"
         Type::STRING
       when "home"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "Dir"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Dir"
           Type::STRING
         else
           Type::UNKNOWN
         end
       when "[]"
-        if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "ENV"
+        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "ENV"
           Type::STRING
         else
           # Check for class-typed array element access
           elem_class = array_elem_class_for_receiver(node.receiver)
           if elem_class
             return elem_class
-          end
-          # Check for class-typed hash value access
-          hash_val_class = hash_value_class_for_receiver(node.receiver)
-          if hash_val_class
-            return hash_val_class
           end
           recv_type = infer_type(node.receiver)
           case recv_type
@@ -2101,14 +2163,14 @@ module Spinel
       when "strip", "chomp", "chop", "lstrip", "rstrip"
         Type::STRING
       when "new"
-        if node.receiver.is_a?(Prism::ConstantReadNode)
+        if sp_is?(node.receiver, "ConstantReadNode")
           cname = node.receiver.name.to_s
           case cname
           when "Array"
             # Detect float arrays: Array.new(n, 0.0) or Array.new(n, float_expr)
             if node.arguments && node.arguments.arguments.length >= 2
               default_val = node.arguments.arguments[1]
-              if default_val.is_a?(Prism::FloatNode) || infer_type(default_val) == Type::FLOAT
+              if sp_is?(default_val, "FloatNode") || infer_type(default_val) == Type::FLOAT
                 Type::FLOAT_ARRAY
               else
                 Type::ARRAY
@@ -2177,7 +2239,7 @@ module Spinel
         Type::STRING
       when "rand"
         # Check if this is a module class method call (e.g., Rand::rand returns float)
-        if node.receiver.is_a?(Prism::ConstantReadNode)
+        if sp_is?(node.receiver, "ConstantReadNode")
           mod_name = node.receiver.name.to_s
           if @module_class_methods && @module_class_methods[mod_name] && @module_class_methods[mod_name][mname]
             mi = @module_class_methods[mod_name][mname]
@@ -2222,7 +2284,7 @@ module Spinel
         elsif node.receiver
           # Check class from var_class_types or infer_type (which returns class name string)
           cname = nil
-          if node.receiver.is_a?(Prism::LocalVariableReadNode)
+          if sp_is?(node.receiver, "LocalVariableReadNode")
             cname = @var_class_types && @var_class_types[node.receiver.name.to_s]
           end
           # Also try infer_type on receiver - it may return a class name string
@@ -2240,7 +2302,7 @@ module Spinel
             else
               Type::UNKNOWN
             end
-          elsif node.receiver.is_a?(Prism::ConstantReadNode)
+          elsif sp_is?(node.receiver, "ConstantReadNode")
             # Class method call like Point.origin
             rcname = node.receiver.name.to_s
             if @classes[rcname] && @classes[rcname].class_methods[mname]
@@ -2260,7 +2322,7 @@ module Spinel
     def infer_case_type(node)
       return Type::UNKNOWN unless node.conditions && !node.conditions.empty?
       first_when = node.conditions.first
-      if first_when.is_a?(Prism::WhenNode) && first_when.statements
+      if sp_is?(first_when, "WhenNode") && first_when.statements
         infer_body_type(first_when.statements)
       else
         Type::UNKNOWN
@@ -2319,7 +2381,7 @@ module Spinel
     end
 
     def generate_code(root)
-      return unless root.is_a?(Prism::ProgramNode)
+      return unless sp_is?(root, "ProgramNode")
       stmts = root.statements.body
 
       # Generate class structs/methods first
@@ -2343,9 +2405,9 @@ module Spinel
       push_scope
 
       stmts.each do |s|
-        next if s.is_a?(Prism::DefNode) || s.is_a?(Prism::ClassNode) || s.is_a?(Prism::ModuleNode)
+        next if sp_is?(s, "DefNode") || sp_is?(s, "ClassNode") || sp_is?(s, "ModuleNode")
         # Skip define_method calls (already collected as methods)
-        next if s.is_a?(Prism::CallNode) && s.name.to_s == "define_method"
+        next if sp_is?(s, "CallNode") && s.name.to_s == "define_method"
         generate_stmt(s)
       end
 
@@ -2593,17 +2655,17 @@ module Spinel
     def check_param_attr_access(node, pname, attrs)
       return false unless node
       case node
-      when Prism::CallNode
-        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name.to_s == pname
+      when "CallNode"
+        if sp_is?(node.receiver, "LocalVariableReadNode") && node.receiver.name.to_s == pname
           return true if attrs.include?(node.name.to_s)
         end
-        node.child_nodes.each { |c| return true if c && check_param_attr_access(c, pname, attrs) }
+        node.sp_child_nodes.each { |c| return true if c && check_param_attr_access(c, pname, attrs) }
         false
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.any? { |s| check_param_attr_access(s, pname, attrs) }
       else
-        if node.respond_to?(:child_nodes)
-          node.child_nodes.any? { |c| c && check_param_attr_access(c, pname, attrs) }
+        if node.is_a?(SpNode)
+          node.sp_child_nodes.any? { |c| c && check_param_attr_access(c, pname, attrs) }
         else
           false
         end
@@ -2611,11 +2673,11 @@ module Spinel
     end
 
     def infer_param_from_init(pname, body, ci)
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each do |s|
-        if s.is_a?(Prism::InstanceVariableWriteNode)
+        if sp_is?(s, "InstanceVariableWriteNode")
           ivar = s.name.to_s.delete_prefix("@")
-          if s.value.is_a?(Prism::LocalVariableReadNode) && s.value.name.to_s == pname
+          if sp_is?(s.value, "LocalVariableReadNode") && s.value.name.to_s == pname
             t = ci.ivars[ivar]
             return t if t && t != Type::UNKNOWN
           end
@@ -2688,15 +2750,15 @@ module Spinel
 
       # Handle super call in initialize
       if init && init.body
-        stmts = init.body.is_a?(Prism::StatementsNode) ? init.body.body : [init.body]
+        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
           case s
-          when Prism::CallNode
-            if s.name.to_s == "super" || s.is_a?(Prism::SuperNode) || s.is_a?(Prism::ForwardingSuperNode)
+          when "CallNode"
+            if s.name.to_s == "super" || sp_is?(s, "SuperNode") || sp_is?(s, "ForwardingSuperNode")
               # super(args) call
               if ci.parent && @classes[ci.parent]
                 super_args = s.arguments ? s.arguments.arguments.map { |a|
-                  if a.is_a?(Prism::LocalVariableReadNode)
+                  if sp_is?(a, "LocalVariableReadNode")
                     "lv_#{a.name}"
                   else
                     compile_expr(a)
@@ -2709,7 +2771,7 @@ module Spinel
                 end
               end
             # Handle @ivar[idx] = val in constructor (class-typed array assignment)
-            elsif s.name.to_s == "[]=" && s.receiver.is_a?(Prism::InstanceVariableReadNode) &&
+            elsif s.name.to_s == "[]=" && sp_is?(s.receiver, "InstanceVariableReadNode") &&
                s.arguments && s.arguments.arguments.length == 2
               ivar = s.receiver.name.to_s.delete_prefix("@")
               elem_class = @ivar_elem_types.dig(name, ivar)
@@ -2720,10 +2782,10 @@ module Spinel
                 lines << "  (#{accessor}[#{idx}] = #{val});"
               end
             end
-          when Prism::SuperNode, Prism::ForwardingSuperNode
+          when "SuperNode", "ForwardingSuperNode"
             if ci.parent && @classes[ci.parent]
-              super_args = s.respond_to?(:arguments) && s.arguments ? s.arguments.arguments.map { |a|
-                if a.is_a?(Prism::LocalVariableReadNode)
+              super_args = s.sp_has?(:arguments) && s.arguments ? s.arguments.arguments.map { |a|
+                if sp_is?(a, "LocalVariableReadNode")
                   "lv_#{a.name}"
                 else
                   compile_expr(a)
@@ -2735,14 +2797,14 @@ module Spinel
                 lines << "  sp_#{ci.parent}_initialize(&self, #{super_args});"
               end
             end
-          when Prism::InstanceVariableWriteNode
+          when "InstanceVariableWriteNode"
             ivar = s.name.to_s.delete_prefix("@")
             # Skip Array.new for class-typed array ivars
             elem_class = @ivar_elem_types.dig(name, ivar)
             if elem_class
               # Native C array - skip the Array.new initialization
             else
-              val = if s.value.is_a?(Prism::LocalVariableReadNode)
+              val = if sp_is?(s.value, "LocalVariableReadNode")
                       "lv_#{s.value.name}"
                     else
                       compile_expr_static(s.value)
@@ -2807,20 +2869,20 @@ module Spinel
     def body_writes_ivar?(node)
       return false unless node
       case node
-      when Prism::InstanceVariableWriteNode, Prism::InstanceVariableOperatorWriteNode,
-           Prism::InstanceVariableAndWriteNode, Prism::InstanceVariableOrWriteNode
+      when "InstanceVariableWriteNode", "InstanceVariableOperatorWriteNode",
+           "InstanceVariableAndWriteNode", "InstanceVariableOrWriteNode"
         true
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.any? { |s| body_writes_ivar?(s) }
-      when Prism::IfNode, Prism::UnlessNode
+      when "IfNode", "UnlessNode"
         body_writes_ivar?(node.statements) || body_writes_ivar?(node.consequent)
-      when Prism::WhileNode, Prism::UntilNode
+      when "WhileNode", "UntilNode"
         body_writes_ivar?(node.statements)
-      when Prism::ElseNode
+      when "ElseNode"
         body_writes_ivar?(node.statements)
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         body_writes_ivar?(node.value)
-      when Prism::CallNode
+      when "CallNode"
         false  # Don't recurse into call nodes
       else
         false
@@ -2839,12 +2901,12 @@ module Spinel
       lines = []
       lines << "static void sp_#{name}_initialize(#{self_type}#{param_str.empty? ? '' : ', ' + param_str}) {"
       if init.body
-        stmts = init.body.is_a?(Prism::StatementsNode) ? init.body.body : [init.body]
+        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
           case s
-          when Prism::InstanceVariableWriteNode
+          when "InstanceVariableWriteNode"
             ivar = s.name.to_s.delete_prefix("@")
-            val = if s.value.is_a?(Prism::LocalVariableReadNode)
+            val = if sp_is?(s.value, "LocalVariableReadNode")
                     "lv_#{s.value.name}"
                   else
                     compile_expr_static(s.value)
@@ -2874,12 +2936,12 @@ module Spinel
       lines = []
       lines << "static void sp_#{name}_initialize(#{self_type}, #{param_str}) {"
       if init.body
-        stmts = init.body.is_a?(Prism::StatementsNode) ? init.body.body : [init.body]
+        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
           case s
-          when Prism::InstanceVariableWriteNode
+          when "InstanceVariableWriteNode"
             ivar = s.name.to_s.delete_prefix("@")
-            val = if s.value.is_a?(Prism::LocalVariableReadNode)
+            val = if sp_is?(s.value, "LocalVariableReadNode")
                     "lv_#{s.value.name}"
                   else
                     compile_expr_static(s.value)
@@ -3168,84 +3230,84 @@ module Spinel
     def collect_local_types(node, map)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| collect_local_types(s, map) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         t = infer_type(node.value)
         map[node.name.to_s] ||= Set.new
         map[node.name.to_s] << t if t != Type::UNKNOWN
         collect_local_types(node.value, map)
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         t = infer_type(node.value)
         map[node.name.to_s] ||= Set.new
         map[node.name.to_s] << t if t != Type::UNKNOWN
-      when Prism::WhileNode
+      when "WhileNode"
         collect_local_types(node.statements, map)
-      when Prism::IfNode
+      when "IfNode"
         collect_local_types(node.statements, map)
-        collect_local_types(node.subsequent, map) if node.respond_to?(:subsequent)
+        collect_local_types(node.subsequent, map) if node.sp_has?(:subsequent)
       else
-        node.child_nodes.each { |c| collect_local_types(c, map) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| collect_local_types(c, map) if c } if node.is_a?(SpNode)
       end
     end
 
     def scan_param_float_usage(node, param_names, float_locals, promoted)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| scan_param_float_usage(s, param_names, float_locals, promoted) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         # local_var = param  where local_var is float
         vname = node.name.to_s
-        if float_locals.include?(vname) && node.value.is_a?(Prism::LocalVariableReadNode)
+        if float_locals.include?(vname) && sp_is?(node.value, "LocalVariableReadNode")
           ref = node.value.name.to_s
           promoted << ref if param_names.include?(ref)
         end
         # Check if value expression uses param in float context (e.g., param * 255.5)
         scan_param_float_expr(node.value, param_names, float_locals, promoted)
         scan_param_float_usage(node.value, param_names, float_locals, promoted)
-      when Prism::CallNode
+      when "CallNode"
         # Check arithmetic: param <op> float_literal or float_local <op> param
         scan_param_float_expr(node, param_names, float_locals, promoted)
-      when Prism::WhileNode
+      when "WhileNode"
         # while (cur_i > max_i) - if cur_i is float and max_i is param, promote max_i
-        if node.predicate.is_a?(Prism::CallNode) &&
+        if sp_is?(node.predicate, "CallNode") &&
            %w[> < >= <= == !=].include?(node.predicate.name.to_s)
           recv = node.predicate.receiver
           arg = node.predicate.arguments&.arguments&.first
-          if recv.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(recv.name.to_s) &&
-             arg.is_a?(Prism::LocalVariableReadNode) && param_names.include?(arg.name.to_s)
+          if sp_is?(recv, "LocalVariableReadNode") && float_locals.include?(recv.name.to_s) &&
+             sp_is?(arg, "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
             promoted << arg.name.to_s
           end
-          if arg.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(arg.name.to_s) &&
-             recv.is_a?(Prism::LocalVariableReadNode) && param_names.include?(recv.name.to_s)
+          if sp_is?(arg, "LocalVariableReadNode") && float_locals.include?(arg.name.to_s) &&
+             sp_is?(recv, "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
             promoted << recv.name.to_s
           end
         end
         scan_param_float_usage(node.statements, param_names, float_locals, promoted)
-      when Prism::IfNode
+      when "IfNode"
         scan_param_float_usage(node.statements, param_names, float_locals, promoted)
-        scan_param_float_usage(node.subsequent, param_names, float_locals, promoted) if node.respond_to?(:subsequent)
+        scan_param_float_usage(node.subsequent, param_names, float_locals, promoted) if node.sp_has?(:subsequent)
       else
-        node.child_nodes.each { |c| scan_param_float_usage(c, param_names, float_locals, promoted) if c } if node.respond_to?(:child_nodes)
+        node.sp_child_nodes.each { |c| scan_param_float_usage(c, param_names, float_locals, promoted) if c } if node.is_a?(SpNode)
       end
     end
 
     # Detect param used in float arithmetic: param * 255.5, param + float_local, etc.
     def scan_param_float_expr(node, param_names, float_locals, promoted)
-      return unless node.is_a?(Prism::CallNode)
+      return unless sp_is?(node, "CallNode")
       mname = node.name.to_s
       return unless %w[+ - * /].include?(mname) && node.receiver && node.arguments
       recv = node.receiver
       arg = node.arguments.arguments&.first
       return unless arg
       # Check if one side is a param and the other is float
-      recv_is_param = recv.is_a?(Prism::LocalVariableReadNode) && param_names.include?(recv.name.to_s)
-      arg_is_param = arg.is_a?(Prism::LocalVariableReadNode) && param_names.include?(arg.name.to_s)
-      recv_is_float = recv.is_a?(Prism::FloatNode) ||
-                      (recv.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(recv.name.to_s))
-      arg_is_float = arg.is_a?(Prism::FloatNode) ||
-                     (arg.is_a?(Prism::LocalVariableReadNode) && float_locals.include?(arg.name.to_s))
+      recv_is_param = sp_is?(recv, "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
+      arg_is_param = sp_is?(arg, "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
+      recv_is_float = sp_is?(recv, "FloatNode") ||
+                      (sp_is?(recv, "LocalVariableReadNode") && float_locals.include?(recv.name.to_s))
+      arg_is_float = sp_is?(arg, "FloatNode") ||
+                     (sp_is?(arg, "LocalVariableReadNode") && float_locals.include?(arg.name.to_s))
       if recv_is_param && arg_is_float
         promoted << recv.name.to_s
       end
@@ -3253,13 +3315,13 @@ module Spinel
         promoted << arg.name.to_s
       end
       # Recurse into sub-expressions
-      scan_param_float_expr(recv, param_names, float_locals, promoted) if recv.is_a?(Prism::CallNode)
-      scan_param_float_expr(arg, param_names, float_locals, promoted) if arg.is_a?(Prism::CallNode)
+      scan_param_float_expr(recv, param_names, float_locals, promoted) if sp_is?(recv, "CallNode")
+      scan_param_float_expr(arg, param_names, float_locals, promoted) if sp_is?(arg, "CallNode")
     end
 
     def generate_method_body(body, mi)
       return unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each_with_index do |s, i|
         is_last = (i == stmts.length - 1)
         if is_last && mi.return_type != Type::VOID
@@ -3273,16 +3335,16 @@ module Spinel
 
     def generate_return_stmt(node, mi)
       case node
-      when Prism::BeginNode
+      when "BeginNode"
         generate_begin_stmt(node)
-      when Prism::IfNode
+      when "IfNode"
         generate_if_stmt(node, return_type: mi.return_type)
-      when Prism::CaseNode
+      when "CaseNode"
         generate_case_stmt(node, return_type: mi.return_type)
-      when Prism::CaseMatchNode
+      when "CaseMatchNode"
         val = compile_case_match_expr(node)
         emit_gc_return(val)
-      when Prism::ReturnNode
+      when "ReturnNode"
         if node.arguments && node.arguments.arguments.length > 0
           val = compile_expr(node.arguments.arguments.first)
           emit_gc_return(val)
@@ -3292,7 +3354,7 @@ module Spinel
           end
           emit("return;")
         end
-      when Prism::CallNode
+      when "CallNode"
         if node.name.to_s == "puts" || node.name.to_s == "print" || node.name.to_s == "p"
           generate_stmt(node)
           # For void-ish last statements, don't return
@@ -3304,11 +3366,11 @@ module Spinel
             emit("#{val};")
           end
         end
-      when Prism::ArrayNode
+      when "ArrayNode"
         # Return array literal
         val = compile_expr(node)
         emit_gc_return(val)
-      when Prism::WhileNode
+      when "WhileNode"
         generate_stmt(node)
       else
         val = compile_expr(node)
@@ -3322,13 +3384,13 @@ module Spinel
 
     def generate_body_stmts(body, is_return_context: false)
       return unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each { |s| generate_stmt(s) }
     end
 
     def generate_body_return(body, return_type)
       return unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each_with_index do |s, i|
         if i == stmts.length - 1 && return_type != Type::VOID
           val = compile_expr(s)
@@ -3343,64 +3405,64 @@ module Spinel
     def generate_stmt(node)
       return unless node
       case node
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         generate_local_write(node)
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         generate_local_op_write(node)
-      when Prism::InstanceVariableWriteNode
+      when "InstanceVariableWriteNode"
         generate_ivar_write(node)
-      when Prism::ConstantWriteNode
+      when "ConstantWriteNode"
         generate_const_write(node)
-      when Prism::ConstantPathWriteNode
+      when "ConstantPathWriteNode"
         # module::CONST
         generate_stmt(node.value)
-      when Prism::MultiWriteNode
+      when "MultiWriteNode"
         generate_multi_write(node)
-      when Prism::CallNode
+      when "CallNode"
         generate_call_stmt(node)
-      when Prism::IfNode
+      when "IfNode"
         generate_if_stmt(node)
-      when Prism::UnlessNode
+      when "UnlessNode"
         generate_unless_stmt(node)
-      when Prism::WhileNode
+      when "WhileNode"
         generate_while_stmt(node)
-      when Prism::UntilNode
+      when "UntilNode"
         generate_until_stmt(node)
-      when Prism::ForNode
+      when "ForNode"
         generate_for_stmt(node)
-      when Prism::CaseNode
+      when "CaseNode"
         generate_case_stmt(node)
-      when Prism::CaseMatchNode
+      when "CaseMatchNode"
         generate_case_match_stmt(node)
-      when Prism::BeginNode
+      when "BeginNode"
         generate_begin_stmt(node)
-      when Prism::ReturnNode
+      when "ReturnNode"
         generate_return(node)
-      when Prism::BreakNode
+      when "BreakNode"
         emit("break;")
-      when Prism::NextNode
+      when "NextNode"
         emit("continue;")
-      when Prism::RetryNode
+      when "RetryNode"
         # retry jumps back to the begin label
         if @current_retry_label
           emit("goto #{@current_retry_label};")
         end
-      when Prism::DefNode, Prism::ClassNode, Prism::ModuleNode
+      when "DefNode", "ClassNode", "ModuleNode"
         # already handled
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| generate_stmt(s) }
-      when Prism::ParenthesesNode
+      when "ParenthesesNode"
         if node.body
           generate_stmt(node.body)
         end
-      when Prism::GlobalVariableWriteNode
+      when "GlobalVariableWriteNode"
         # $var = value
         gname = node.name.to_s.delete_prefix("$")
         val = compile_expr(node.value)
         emit("/* global $#{gname} = #{val} */")
-      when Prism::YieldNode
+      when "YieldNode"
         generate_yield(node)
-      when Prism::RescueModifierNode
+      when "RescueModifierNode"
         generate_rescue_modifier(node)
       else
         # Try to compile as expression statement
@@ -3416,8 +3478,8 @@ module Spinel
 
       # Skip Array.new(N) assignment for class-typed array variables
       if @array_elem_types[name] && @local_array_sizes[name] &&
-         node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "new" &&
-         node.value.receiver.is_a?(Prism::ConstantReadNode) && node.value.receiver.name.to_s == "Array"
+         sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" &&
+         sp_is?(node.value.receiver, "ConstantReadNode") && node.value.receiver.name.to_s == "Array"
         return
       end
 
@@ -3435,7 +3497,7 @@ module Spinel
       end
 
       # Track class instance types
-      if node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "new" && node.value.receiver.is_a?(Prism::ConstantReadNode)
+      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" && sp_is?(node.value.receiver, "ConstantReadNode")
         cname = node.value.receiver.name.to_s
         if @classes[cname]
           @var_class_types ||= {}
@@ -3449,9 +3511,9 @@ module Spinel
       end
 
       # Track method(:name) assignments
-      if node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "method"
+      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "method"
         margs = call_args(node.value)
-        if margs.length > 0 && margs[0].is_a?(Prism::SymbolNode)
+        if margs.length > 0 && margs[0].is_a_node?("SymbolNode")
           @method_refs[name] = margs[0].value
           emit("/* #{name} = method(:#{margs[0].value}) */")
           return
@@ -3467,7 +3529,7 @@ module Spinel
         # Already declared
         val = compile_expr(node.value)
         # Wrap string literal for mutable string
-        if val_type == Type::MUTABLE_STRING && node.value.is_a?(Prism::StringNode)
+        if val_type == Type::MUTABLE_STRING && sp_is?(node.value, "StringNode")
           val = "sp_String_new(#{val})"
         end
         # Box value for poly vars
@@ -3484,7 +3546,7 @@ module Spinel
         info = declare_var(name, val_type, c_name: c_name)
         val = compile_expr(node.value)
         # Wrap string literal for mutable string
-        if val_type == Type::MUTABLE_STRING && node.value.is_a?(Prism::StringNode)
+        if val_type == Type::MUTABLE_STRING && sp_is?(node.value, "StringNode")
           val = "sp_String_new(#{val})"
         end
         # Box value for poly vars
@@ -3552,7 +3614,7 @@ module Spinel
       value = node.value
 
       case value
-      when Prism::ArrayNode
+      when "ArrayNode"
         # a, b, c = [1, 2, 3]
         emit("{")
         @indent += 1
@@ -3565,7 +3627,7 @@ module Spinel
         end
         targets.each_with_index do |target, i|
           next if i >= value.elements.length
-          if target.is_a?(Prism::InstanceVariableTargetNode)
+          if sp_is?(target, "InstanceVariableTargetNode")
             ivar = target.name.to_s.delete_prefix("@")
             if @current_module
               emit("sp_#{@current_module}_#{ivar} = _mw_#{i};")
@@ -3583,7 +3645,7 @@ module Spinel
         end
         @indent -= 1
         emit("}")
-      when Prism::CallNode
+      when "CallNode"
         # q, r = some_method(args)
         val = compile_expr(value)
         tmp = "_mv_#{next_temp}"
@@ -3602,7 +3664,7 @@ module Spinel
           emit("/* multi-assign from call */")
           emit("#{val};")
         end
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         # a, b = b, a (swap) - this is actually multi_write with splat_node
         # In prism, swaps look like: targets = [a, b], value = [b, a]
         emit("/* swap */")
@@ -3614,9 +3676,9 @@ module Spinel
 
     def target_name(node)
       case node
-      when Prism::LocalVariableTargetNode
+      when "LocalVariableTargetNode"
         node.name.to_s
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         node.name.to_s
       else
         "unknown"
@@ -3688,7 +3750,7 @@ module Spinel
         val = compile_expr(arg)
 
         # Check if the variable is poly
-        if arg.is_a?(Prism::LocalVariableReadNode)
+        if sp_is?(arg, "LocalVariableReadNode")
           v = lookup_var(arg.name.to_s)
           if v && v.type == Type::POLY
             type = Type::POLY
@@ -3729,7 +3791,7 @@ module Spinel
       args.each do |arg|
         type = infer_type(arg)
         # Special case: print x.chr -> putchar(x) for binary safety
-        if arg.is_a?(Prism::CallNode) && arg.name.to_s == "chr"
+        if sp_is?(arg, "CallNode") && arg.name.to_s == "chr"
           recv = compile_expr(arg.receiver)
           emit("putchar((char)(#{recv}));")
           next
@@ -3774,7 +3836,7 @@ module Spinel
       args = call_args(node)
       return if args.empty?
       # Special case: printf("%c", val) -> sp_putc_utf8(val) for CRuby UTF-8 compat
-      if args.length == 2 && args[0].is_a?(Prism::StringNode) && args[0].content == "%c"
+      if args.length == 2 && args[0].is_a_node?("StringNode") && args[0].content == "%c"
         val = compile_expr(args[1])
         emit("sp_putc_utf8(#{val});")
         return
@@ -3795,7 +3857,7 @@ module Spinel
         emit('sp_raise("RuntimeError");')
       elsif args.length == 1
         arg = args[0]
-        if arg.is_a?(Prism::CallNode) && arg.name.to_s == "new" && arg.receiver.is_a?(Prism::ConstantReadNode)
+        if sp_is?(arg, "CallNode") && arg.name.to_s == "new" && sp_is?(arg.receiver, "ConstantReadNode")
           # raise ClassName.new("msg")
           cls_name = c_string_literal(arg.receiver.name.to_s)
           msg_args = call_args(arg)
@@ -3808,7 +3870,7 @@ module Spinel
       else
         # raise ClassName, "message"
         cls_arg = args[0]
-        cls_name = cls_arg.is_a?(Prism::ConstantReadNode) ? c_string_literal(cls_arg.name.to_s) : compile_expr(cls_arg)
+        cls_name = sp_is?(cls_arg, "ConstantReadNode") ? c_string_literal(cls_arg.name.to_s) : compile_expr(cls_arg)
         msg = compile_expr(args[1])
         emit("sp_raise_cls(#{cls_name}, #{msg});")
       end
@@ -3829,7 +3891,7 @@ module Spinel
       cond = compile_expr(node.predicate)
 
       # Check for modifier if (no consequent)
-      if node.is_a?(Prism::IfNode)
+      if sp_is?(node, "IfNode")
         # Handle modifier unless at statement level
       end
 
@@ -3840,7 +3902,7 @@ module Spinel
         emit("if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
+          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -3870,13 +3932,13 @@ module Spinel
 
     def generate_else_chain(node)
       case node
-      when Prism::ElseNode
+      when "ElseNode"
         emit("else {")
         @indent += 1
         generate_body_stmts(node.statements)
         @indent -= 1
         emit("}")
-      when Prism::IfNode
+      when "IfNode"
         cond = compile_expr(node.predicate)
         emit("else if (#{cond}) {")
         @indent += 1
@@ -3893,11 +3955,11 @@ module Spinel
 
     def generate_elsif_chain(node, res_var, return_type)
       case node
-      when Prism::ElseNode
+      when "ElseNode"
         emit("else {")
         @indent += 1
         if node.statements
-          stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
+          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -3909,12 +3971,12 @@ module Spinel
         end
         @indent -= 1
         emit("}")
-      when Prism::IfNode
+      when "IfNode"
         cond = compile_expr(node.predicate)
         emit("else if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
+          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -3972,7 +4034,7 @@ module Spinel
     def generate_for_stmt(node)
       # for i in range
       var_name = case node.index
-                 when Prism::LocalVariableTargetNode then node.index.name.to_s
+                 when "LocalVariableTargetNode" then node.index.name.to_s
                  else "i"
                  end
 
@@ -3980,12 +4042,12 @@ module Spinel
 
       collection = node.collection
       case collection
-      when Prism::RangeNode
+      when "RangeNode"
         @needs_range = true
         first = compile_expr(collection.left)
         last = compile_expr(collection.right)
         emit("for (lv_#{var_name} = #{first}; lv_#{var_name} <= #{last}; lv_#{var_name}++) {")
-      when Prism::CallNode
+      when "CallNode"
         # for i in arr
         val = compile_expr(collection)
         emit("for (mrb_int _fi = 0; _fi < sp_IntArray_length(#{val}); _fi++) {")
@@ -4010,14 +4072,14 @@ module Spinel
       pred = compile_expr(node.predicate)
       pred_type = infer_type(node.predicate)
       # Check if predicate var is poly
-      if node.predicate.is_a?(Prism::LocalVariableReadNode)
+      if sp_is?(node.predicate, "LocalVariableReadNode")
         v = lookup_var(node.predicate.name.to_s)
         pred_type = Type::POLY if v && v.type == Type::POLY
       end
 
       first = true
       (node.conditions || []).each do |cond|
-        next unless cond.is_a?(Prism::InNode)
+        next unless sp_is?(cond, "InNode")
         check = compile_pattern_check(cond.pattern, pred, pred_type)
         if first
           emit("if (#{check}) {")
@@ -4027,7 +4089,7 @@ module Spinel
         end
         @indent += 1
         if cond.statements
-          stmts = cond.statements.is_a?(Prism::StatementsNode) ? cond.statements.body : [cond.statements]
+          stmts = sp_is?(cond.statements, "StatementsNode") ? cond.statements.body : [cond.statements]
           stmts.each { |s| generate_stmt(s) }
         end
         @indent -= 1
@@ -4045,7 +4107,7 @@ module Spinel
     def compile_case_match_expr(node)
       pred = compile_expr(node.predicate)
       pred_type = infer_type(node.predicate)
-      if node.predicate.is_a?(Prism::LocalVariableReadNode)
+      if sp_is?(node.predicate, "LocalVariableReadNode")
         v = lookup_var(node.predicate.name.to_s)
         pred_type = Type::POLY if v && v.type == Type::POLY
       end
@@ -4053,13 +4115,13 @@ module Spinel
       result_tmp = "_cm_#{next_temp}"
       # Determine result type
       first_body = node.conditions&.first
-      result_type = first_body && first_body.is_a?(Prism::InNode) && first_body.statements ?
+      result_type = first_body && sp_is?(first_body, "InNode") && first_body.statements ?
         infer_body_type(first_body.statements) : Type::STRING
       emit("#{c_type(result_type)} #{result_tmp} = #{default_val(result_type)};")
 
       first = true
       (node.conditions || []).each do |cond|
-        next unless cond.is_a?(Prism::InNode)
+        next unless sp_is?(cond, "InNode")
         check = compile_pattern_check(cond.pattern, pred, pred_type)
         if first
           emit("if (#{check}) {")
@@ -4088,7 +4150,7 @@ module Spinel
 
     def compile_block_expr_from_stmts(body)
       return "0" unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       if stmts.length == 1
         compile_expr(stmts.first)
       else
@@ -4099,7 +4161,7 @@ module Spinel
 
     def compile_pattern_check(pattern, pred, pred_type)
       case pattern
-      when Prism::ConstantReadNode
+      when "ConstantReadNode"
         cname = pattern.name.to_s
         if pred_type == Type::POLY
           @needs_poly = true
@@ -4118,7 +4180,7 @@ module Spinel
           else "0"
           end
         end
-      when Prism::IntegerNode
+      when "IntegerNode"
         val = pattern.value.to_s
         if pred_type == Type::POLY
           @needs_poly = true
@@ -4126,7 +4188,7 @@ module Spinel
         else
           "(#{pred} == #{val})"
         end
-      when Prism::StringNode
+      when "StringNode"
         val = c_string_literal(pattern.unescaped)
         if pred_type == Type::POLY
           @needs_poly = true
@@ -4134,25 +4196,25 @@ module Spinel
         else
           "(strcmp(#{pred}, #{val}) == 0)"
         end
-      when Prism::TrueNode
+      when "TrueNode"
         if pred_type == Type::POLY
           "(SP_IS_BOOL(#{pred}) && sp_unbox_bool(#{pred}))"
         else
           "(#{pred})"
         end
-      when Prism::FalseNode
+      when "FalseNode"
         if pred_type == Type::POLY
           "(SP_IS_BOOL(#{pred}) && !sp_unbox_bool(#{pred}))"
         else
           "(!#{pred})"
         end
-      when Prism::NilNode
+      when "NilNode"
         if pred_type == Type::POLY
           "SP_IS_NIL(#{pred})"
         else
           "(#{pred} == 0)"
         end
-      when Prism::AlternationPatternNode
+      when "AlternationPatternNode"
         left = compile_pattern_check(pattern.left, pred, pred_type)
         right = compile_pattern_check(pattern.right, pred, pred_type)
         "(#{left} || #{right})"
@@ -4182,7 +4244,7 @@ module Spinel
 
       first = true
       (node.conditions || []).each do |when_node|
-        next unless when_node.is_a?(Prism::WhenNode)
+        next unless sp_is?(when_node, "WhenNode")
 
         conditions = when_node.conditions.map { |c| compile_when_condition(c, temp_pred, pred_type) }
         cond_str = conditions.join(" || ")
@@ -4196,7 +4258,7 @@ module Spinel
 
         @indent += 1
         if return_type && when_node.statements
-          stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+          stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -4216,7 +4278,7 @@ module Spinel
         emit("else {")
         @indent += 1
         if return_type && node.else_clause.statements
-          stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -4255,7 +4317,7 @@ module Spinel
         end
         @indent += 1
         if res_var && when_node.statements
-          stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+          stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           val = compile_expr(stmts.last)
           emit("#{res_var} = #{val};")
@@ -4269,7 +4331,7 @@ module Spinel
         emit("else {")
         @indent += 1
         if res_var && node.else_clause.statements
-          stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           val = compile_expr(stmts.last)
           emit("#{res_var} = #{val};")
@@ -4283,20 +4345,20 @@ module Spinel
 
     def compile_when_condition(cond, pred_var, pred_type)
       case cond
-      when Prism::RangeNode
+      when "RangeNode"
         @needs_range = true
         first = compile_expr(cond.left)
         last = compile_expr(cond.right)
         "(#{pred_var} >= #{first} && #{pred_var} <= #{last})"
-      when Prism::IntegerNode
+      when "IntegerNode"
         "#{pred_var} == #{cond.value}"
-      when Prism::StringNode
+      when "StringNode"
         if pred_type == Type::STRING
           "strcmp(#{pred_var}, #{compile_expr(cond)}) == 0"
         else
           "#{pred_var} == #{compile_expr(cond)}"
         end
-      when Prism::SymbolNode
+      when "SymbolNode"
         if pred_type == Type::STRING
           "strcmp(#{pred_var}, \"#{cond.value}\") == 0"
         else
@@ -4345,7 +4407,7 @@ module Spinel
           while rc
             if rc.exceptions && !rc.exceptions.empty?
               cls_names = rc.exceptions.map { |e|
-                e.is_a?(Prism::ConstantReadNode) ? e.name.to_s : "RuntimeError"
+                sp_is?(e, "ConstantReadNode") ? e.name.to_s : "RuntimeError"
               }
               cond = cls_names.map { |c| "sp_exc_is_a(\"#{c}\")" }.join(" || ")
               if first
@@ -4363,7 +4425,7 @@ module Spinel
             @indent += 1
             if rc.reference
               ename = case rc.reference
-                      when Prism::LocalVariableTargetNode then rc.reference.name.to_s
+                      when "LocalVariableTargetNode" then rc.reference.name.to_s
                       else "e"
                       end
               ensure_var_declared(ename, Type::STRING)
@@ -4378,7 +4440,7 @@ module Spinel
           # Simple rescue (no class check)
           if rc.reference
             ename = case rc.reference
-                    when Prism::LocalVariableTargetNode then rc.reference.name.to_s
+                    when "LocalVariableTargetNode" then rc.reference.name.to_s
                     else "e"
                     end
             ensure_var_declared(ename, Type::STRING)
@@ -4401,16 +4463,16 @@ module Spinel
     def body_has_retry?(node)
       return false unless node
       case node
-      when Prism::RetryNode
+      when "RetryNode"
         true
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.any? { |s| body_has_retry?(s) }
-      when Prism::IfNode
+      when "IfNode"
         body_has_retry?(node.statements) || body_has_retry?(node.subsequent)
-      when Prism::RescueNode
+      when "RescueNode"
         body_has_retry?(node.statements)
       else
-        if node.respond_to?(:statements)
+        if node.sp_has?(:statements)
           body_has_retry?(node.statements)
         else
           false
@@ -4463,35 +4525,35 @@ module Spinel
     def compile_expr(node)
       return "0" unless node
       case node
-      when Prism::IntegerNode
+      when "IntegerNode"
         node.value.to_s
-      when Prism::FloatNode
+      when "FloatNode"
         # Use full precision, ensure decimal point for C float literal
         s = "%.16g" % node.value
         s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
         s
-      when Prism::StringNode
+      when "StringNode"
         c_string_literal(node.content)
-      when Prism::InterpolatedStringNode
+      when "InterpolatedStringNode"
         compile_interpolated_string(node)
-      when Prism::SymbolNode
+      when "SymbolNode"
         c_string_literal(node.value)
-      when Prism::TrueNode
+      when "TrueNode"
         "TRUE"
-      when Prism::FalseNode
+      when "FalseNode"
         "FALSE"
-      when Prism::NilNode
+      when "NilNode"
         "0"
-      when Prism::SelfNode
+      when "SelfNode"
         "self"
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         "lv_#{node.name}"
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         name = node.name.to_s
         val = compile_expr(node.value)
         ensure_var_declared(name, infer_type(node.value))
         "(lv_#{name} = #{val})"
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         name = node.name.to_s
         op = node.binary_operator.to_s
         val = compile_expr(node.value)
@@ -4505,9 +4567,9 @@ module Spinel
         else
           "(lv_#{name} #{op}= #{val})"
         end
-      when Prism::InstanceVariableReadNode
+      when "InstanceVariableReadNode"
         compile_ivar_read(node)
-      when Prism::InstanceVariableWriteNode
+      when "InstanceVariableWriteNode"
         ivar = node.name.to_s.delete_prefix("@")
         val = compile_expr(node.value)
         if @current_module
@@ -4520,32 +4582,32 @@ module Spinel
         else
           val
         end
-      when Prism::ConstantReadNode
+      when "ConstantReadNode"
         compile_constant_read(node)
-      when Prism::ConstantPathNode
+      when "ConstantPathNode"
         compile_constant_path(node)
-      when Prism::GlobalVariableReadNode
+      when "GlobalVariableReadNode"
         compile_global_read(node)
-      when Prism::ArrayNode
+      when "ArrayNode"
         compile_array_literal(node)
-      when Prism::HashNode
+      when "HashNode"
         compile_hash_literal(node)
-      when Prism::RangeNode
+      when "RangeNode"
         compile_range(node)
-      when Prism::CallNode
+      when "CallNode"
         compile_call(node)
-      when Prism::IfNode
+      when "IfNode"
         compile_if_expr(node)
-      when Prism::UnlessNode
+      when "UnlessNode"
         compile_unless_expr(node)
-      when Prism::ParenthesesNode
+      when "ParenthesesNode"
         if node.body
-          inner = compile_expr(node.body.is_a?(Prism::StatementsNode) && node.body.body.length == 1 ? node.body.body.first : node.body)
+          inner = compile_expr(sp_is?(node.body, "StatementsNode") && node.body.body.length == 1 ? node.body.body.first : node.body)
           "(#{inner})"
         else
           "0"
         end
-      when Prism::StatementsNode
+      when "StatementsNode"
         if node.body.length == 1
           compile_expr(node.body.first)
         else
@@ -4553,7 +4615,7 @@ module Spinel
           node.body[0..-2].each { |s| generate_stmt(s) }
           compile_expr(node.body.last)
         end
-      when Prism::BeginNode
+      when "BeginNode"
         if node.rescue_clause
           compile_rescue_expr(node)
         elsif node.statements
@@ -4561,76 +4623,76 @@ module Spinel
         else
           "0"
         end
-      when Prism::ReturnNode
+      when "ReturnNode"
         if node.arguments && !node.arguments.arguments.empty?
           val = compile_expr(node.arguments.arguments.first)
           "return #{val}"
         else
           "return"
         end
-      when Prism::YieldNode
+      when "YieldNode"
         args = node.arguments ? node.arguments.arguments : []
         if args.empty?
           "_block(_block_env, 0)"
         else
           "_block(_block_env, #{compile_expr(args.first)})"
         end
-      when Prism::DefinedNode
+      when "DefinedNode"
         # defined?(x) -> check if variable is known
         expr = node.value
         case expr
-        when Prism::LocalVariableReadNode
+        when "LocalVariableReadNode"
           v = lookup_var(expr.name.to_s)
           v ? '"local-variable"' : "0"
         else
           '"expression"'
         end
-      when Prism::SourceLineNode
-        node.respond_to?(:location) ? node.location.start_line.to_s : "0"
-      when Prism::RescueModifierNode
+      when "SourceLineNode"
+        node.sp_has?(:start_line) ? node.start_line.to_s : "0"
+      when "RescueModifierNode"
         compile_rescue_modifier_expr(node)
-      when Prism::CaseNode
+      when "CaseNode"
         compile_case_expr(node)
-      when Prism::CaseMatchNode
+      when "CaseMatchNode"
         compile_case_match_expr(node)
-      when Prism::SuperNode, Prism::ForwardingSuperNode
+      when "SuperNode", "ForwardingSuperNode"
         compile_super(node)
-      when Prism::MultiWriteNode
+      when "MultiWriteNode"
         compile_multi_write_expr(node)
-      when Prism::LambdaNode
+      when "LambdaNode"
         "0 /* lambda not supported */"
-      when Prism::XStringNode
+      when "XStringNode"
         # Backtick execution: `cmd`
         @needs_system = true
         cmd = c_string_literal(node.content)
         "sp_backtick(#{cmd})"
-      when Prism::SplatNode
+      when "SplatNode"
         if node.expression
           compile_expr(node.expression)
         else
           "0"
         end
-      when Prism::AndNode
+      when "AndNode"
         left = compile_expr(node.left)
         right = compile_expr(node.right)
         "(#{left} && #{right})"
-      when Prism::OrNode
+      when "OrNode"
         left = compile_expr(node.left)
         right = compile_expr(node.right)
         "(#{left} || #{right})"
-      when Prism::RegularExpressionNode
+      when "RegularExpressionNode"
         # Register the pattern and return the compiled regex variable
         pattern = node.unescaped
         c_var = register_regexp(pattern)
         c_var
-      when Prism::NumberedReferenceReadNode
+      when "NumberedReferenceReadNode"
         @needs_regexp = true
         "sp_re_group(#{node.number})"
-      when Prism::MatchWriteNode
+      when "MatchWriteNode"
         # if str =~ /pattern/ form (MatchWriteNode wraps a CallNode)
         compile_expr(node.call)
       else
-        "0 /* unsupported: #{node.class.name.split('::').last} */"
+        "0 /* unsupported: #{node.sp_type} */"
       end
     end
 
@@ -4702,11 +4764,11 @@ module Spinel
 
     def constant_path_str(node)
       case node
-      when Prism::ConstantPathNode
+      when "ConstantPathNode"
         parent = node.parent ? constant_path_str(node.parent) : ""
         child = node.name.to_s
         parent.empty? ? child : "#{parent}::#{child}"
-      when Prism::ConstantReadNode
+      when "ConstantReadNode"
         node.name.to_s
       else
         node.to_s
@@ -4782,7 +4844,7 @@ module Spinel
       # Determine hash type from value types
       ht = infer_type(node)
       first = node.elements.first
-      if first.is_a?(Prism::AssocNode)
+      if sp_is?(first, "AssocNode")
         if ht == Type::POLY_HASH
           @needs_poly_hash = true
           @needs_poly = true
@@ -4790,7 +4852,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_PolyHash *#{tmp} = sp_PolyHash_new();")
           node.elements.each do |elem|
-            next unless elem.is_a?(Prism::AssocNode)
+            next unless sp_is?(elem, "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             vt = infer_type(elem.value)
@@ -4802,7 +4864,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_RbHash *#{tmp} = sp_RbHash_new();")
           node.elements.each do |elem|
-            next unless elem.is_a?(Prism::AssocNode)
+            next unless sp_is?(elem, "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             emit("sp_RbHash_set(#{tmp}, #{k}, #{v});")
@@ -4814,7 +4876,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_StrIntHash *#{tmp} = sp_StrIntHash_new();")
           node.elements.each do |elem|
-            next unless elem.is_a?(Prism::AssocNode)
+            next unless sp_is?(elem, "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             emit("sp_StrIntHash_set(#{tmp}, #{k}, #{v});")
@@ -4828,9 +4890,9 @@ module Spinel
 
     def compile_hash_key(node)
       case node
-      when Prism::SymbolNode
+      when "SymbolNode"
         c_string_literal(node.value)
-      when Prism::StringNode
+      when "StringNode"
         c_string_literal(node.content)
       else
         compile_expr(node)
@@ -4849,15 +4911,15 @@ module Spinel
       @string_helpers_needed << :int_to_s
       parts = node.parts.map do |part|
         case part
-        when Prism::StringNode
+        when "StringNode"
           c_string_literal(part.content)
-        when Prism::EmbeddedStatementsNode
+        when "EmbeddedStatementsNode"
           if part.statements && part.statements.body.length > 0
             expr = part.statements.body.first
             type = infer_type(expr)
             val = compile_expr(expr)
             # Check if expr is a poly variable
-            if expr.is_a?(Prism::LocalVariableReadNode)
+            if sp_is?(expr, "LocalVariableReadNode")
               v = lookup_var(expr.name.to_s)
               type = Type::POLY if v && v.type == Type::POLY
             end
@@ -4898,14 +4960,14 @@ module Spinel
     end
 
     def compile_if_expr(node)
-      then_stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements] if node.statements
+      then_stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements] if node.statements
       then_stmts ||= []
       else_body = case node.subsequent
-                  when Prism::ElseNode then node.subsequent.statements
-                  when Prism::IfNode then node.subsequent
+                  when "ElseNode" then node.subsequent.statements
+                  when "IfNode" then node.subsequent
                   else node.subsequent
                   end if node.subsequent
-      else_stmts = if else_body.is_a?(Prism::StatementsNode)
+      else_stmts = if sp_is?(else_body, "StatementsNode")
                      else_body.body
                    elsif else_body
                      [else_body]
@@ -4914,7 +4976,7 @@ module Spinel
                    end
       then_last = then_stmts.last
       else_last = else_stmts.last
-      has_return = then_last.is_a?(Prism::ReturnNode) || else_last.is_a?(Prism::ReturnNode)
+      has_return = sp_is?(then_last, "ReturnNode") || sp_is?(else_last, "ReturnNode")
       multi_stmt = then_stmts.length > 1 || else_stmts.length > 1
       if has_return || multi_stmt
         # Emit as if/else statement with result variable
@@ -4925,7 +4987,7 @@ module Spinel
         emit("if (#{cond}) {")
         @indent += 1
         then_stmts.each_with_index do |s, i|
-          if i == then_stmts.length - 1 && !s.is_a?(Prism::ReturnNode)
+          if i == then_stmts.length - 1 && !sp_is?(s, "ReturnNode")
             emit("#{res_var} = #{compile_expr(s)};")
           else
             generate_stmt(s)
@@ -4937,7 +4999,7 @@ module Spinel
           emit("else {")
           @indent += 1
           else_stmts.each_with_index do |s, i|
-            if i == else_stmts.length - 1 && !s.is_a?(Prism::ReturnNode)
+            if i == else_stmts.length - 1 && !sp_is?(s, "ReturnNode")
               emit("#{res_var} = #{compile_expr(s)};")
             else
               generate_stmt(s)
@@ -4956,7 +5018,7 @@ module Spinel
 
     def compile_unless_expr(node)
       cond = compile_expr(node.predicate)
-      then_val = node.statements ? compile_expr(node.statements.is_a?(Prism::StatementsNode) ? node.statements.body.last : node.statements) : "0"
+      then_val = node.statements ? compile_expr(sp_is?(node.statements, "StatementsNode") ? node.statements.body.last : node.statements) : "0"
       else_val = node.else_clause ? compile_expr(node.else_clause.statements) : "0"
       "(!(#{cond}) ? #{then_val} : #{else_val})"
     end
@@ -4977,7 +5039,7 @@ module Spinel
       emit("if (setjmp(sp_exc_stack[sp_exc_depth - 1]) == 0) {")
       @indent += 1
       # Generate the expression (which may include raise) inside the try block
-      if node.expression.is_a?(Prism::CallNode) && node.expression.name.to_s == "raise"
+      if sp_is?(node.expression, "CallNode") && node.expression.name.to_s == "raise"
         generate_raise(node.expression)
         emit("#{tmp} = 0;")
       else
@@ -5008,7 +5070,7 @@ module Spinel
 
         first = true
         (node.conditions || []).each do |when_node|
-          next unless when_node.is_a?(Prism::WhenNode)
+          next unless sp_is?(when_node, "WhenNode")
           conditions = when_node.conditions.map { |c| compile_when_condition(c, temp_pred, pred_type) }
           cond_str = conditions.join(" || ")
 
@@ -5021,7 +5083,7 @@ module Spinel
 
           @indent += 1
           if when_node.statements
-            stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+            stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
             stmts.each_with_index do |s, i|
               if i == stmts.length - 1
                 emit("#{res_var} = #{compile_expr(s)};")
@@ -5038,7 +5100,7 @@ module Spinel
           emit("else {")
           @indent += 1
           if node.else_clause.statements
-            stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+            stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
             stmts.each_with_index do |s, i|
               if i == stmts.length - 1
                 emit("#{res_var} = #{compile_expr(s)};")
@@ -5069,7 +5131,7 @@ module Spinel
           end
           @indent += 1
           if when_node.statements
-            stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
+            stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
             stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
             emit("#{res_var} = #{compile_expr(stmts.last)};")
           end
@@ -5079,7 +5141,7 @@ module Spinel
         if node.else_clause && node.else_clause.statements
           emit("else {")
           @indent += 1
-          stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           emit("#{res_var} = #{compile_expr(stmts.last)};")
           @indent -= 1
@@ -5094,7 +5156,7 @@ module Spinel
       ci = @classes[@current_class]
       return "0" unless ci.parent
 
-      args = node.respond_to?(:arguments) && node.arguments ? node.arguments.arguments.map { |a| compile_expr(a) } : []
+      args = node.sp_has?(:arguments) && node.arguments ? node.arguments.arguments.map { |a| compile_expr(a) } : []
       "sp_#{ci.parent}_initialize((sp_#{ci.parent} *)self, #{args.join(', ')})"
     end
 
@@ -5217,11 +5279,11 @@ module Spinel
         if args.length > 0
           arg_node = args[0]
           # Handle Integer(ARGV[n] || default) pattern
-          if arg_node.is_a?(Prism::OrNode)
+          if sp_is?(arg_node, "OrNode")
             left = arg_node.left
             right = arg_node.right
-            if left.is_a?(Prism::CallNode) && left.name.to_s == "[]" &&
-               left.receiver.is_a?(Prism::ConstantReadNode) && left.receiver.name.to_s == "ARGV"
+            if sp_is?(left, "CallNode") && left.name.to_s == "[]" &&
+               sp_is?(left.receiver, "ConstantReadNode") && left.receiver.name.to_s == "ARGV"
               idx = compile_expr(left.arguments.arguments[0])
               default_val = compile_expr(right)
               return "(sp_argv.len > #{idx} ? atol(sp_argv.data[#{idx}]) : #{default_val})"
@@ -5319,7 +5381,7 @@ module Spinel
       end
 
       # Proc.new { ... }
-      if mname == "new" && recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Proc" && node.block
+      if mname == "new" && sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Proc" && node.block
         return compile_proc_creation(node.block)
       end
 
@@ -5328,7 +5390,7 @@ module Spinel
         mi = @methods[mname]
 
         # Handle keyword arguments
-        if mi.has_kwargs && args.any? { |a| a.is_a?(Prism::KeywordHashNode) }
+        if mi.has_kwargs && args.any? { |a| sp_is?(a, "KeywordHashNode") }
           compiled_args = compile_kwargs_call(mi, args)
         elsif mi.has_rest
           # Rest args: pack into IntArray
@@ -5438,9 +5500,9 @@ module Spinel
       positional = []
 
       args.each do |a|
-        if a.is_a?(Prism::KeywordHashNode)
+        if sp_is?(a, "KeywordHashNode")
           a.elements.each do |assoc|
-            if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+            if sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
               key = assoc.key.value
               kw_values[key] = compile_expr(assoc.value)
             end
@@ -5471,7 +5533,7 @@ module Spinel
       recv_code = compile_expr(recv)
 
       # Safe navigation operator
-      is_safe_nav = node.respond_to?(:call_operator) && node.call_operator == "&."
+      is_safe_nav = node.sp_has?(:call_operator) && node.call_operator == "&."
 
       # Check if receiver is POLY and a dispatch function exists for this method
       if recv_type == Type::POLY && @dispatch_methods && @dispatch_methods[mname]
@@ -5550,7 +5612,7 @@ module Spinel
       mstr_recv = recv_type == Type::MUTABLE_STRING ? "sp_String_cstr(#{recv_code})" : recv_code
 
       # ---- $stderr.puts ----
-      if recv.is_a?(Prism::GlobalVariableReadNode) && recv.name.to_s == "$stderr" && mname == "puts"
+      if sp_is?(recv, "GlobalVariableReadNode") && recv.name.to_s == "$stderr" && mname == "puts"
         args.each do |arg|
           val = compile_expr(arg)
           type = infer_type(arg)
@@ -5686,25 +5748,25 @@ module Spinel
       case mname
       # ---- Regexp operators ----
       when "=~"
-        if args[0].is_a?(Prism::RegularExpressionNode)
+        if args[0].is_a_node?("RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "(sp_re_match(#{re_var}, #{mstr_recv}) >= 0)"
         end
         return "0"
       when "match?"
-        if args[0].is_a?(Prism::RegularExpressionNode)
+        if args[0].is_a_node?("RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "sp_re_match_p(#{re_var}, #{mstr_recv})"
         end
         return "0"
       when "scan"
-        if args[0].is_a?(Prism::RegularExpressionNode) && node.block
+        if args[0].is_a_node?("RegularExpressionNode") && node.block
           re_var = register_regexp(args[0].unescaped)
           scan_id = next_temp
           block_node = node.block
           block_params = block_node.parameters&.parameters&.requireds || []
           bparam = block_params[0]
-          bparam_name = bparam.is_a?(Prism::RequiredParameterNode) ? bparam.name.to_s : "m"
+          bparam_name = sp_is?(bparam, "RequiredParameterNode") ? bparam.name.to_s : "m"
           ensure_var_declared(bparam_name, Type::STRING)
           emit("{ /* scan */")
           @indent += 1
@@ -5894,7 +5956,7 @@ module Spinel
           return "sp_String_cstr(#{recv_code})"
         else
           # Object to_s
-          if recv.is_a?(Prism::LocalVariableReadNode)
+          if sp_is?(recv, "LocalVariableReadNode")
             v = lookup_var(recv.name.to_s)
             if v && @classes.key?(recv_type.to_s.delete_prefix("sp_"))
               # try class to_s method
@@ -5930,7 +5992,7 @@ module Spinel
       when "negative?"
         return "((#{recv_code}) < 0)"
       when "nil?"
-        if recv.is_a?(Prism::NilNode)
+        if sp_is?(recv, "NilNode")
           return "TRUE"
         end
         if recv_type == Type::NIL
@@ -5959,7 +6021,7 @@ module Spinel
 
       # ---- String methods ----
       when "length", "size"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ARGV"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "ARGV"
           return "sp_Argv_length(&sp_argv)"
         end
         if recv_type == Type::STRING
@@ -6128,7 +6190,7 @@ module Spinel
         end
         return "((mrb_float)(#{recv_code}))"
       when "gsub"
-        if args[0].is_a?(Prism::RegularExpressionNode)
+        if args[0].is_a_node?("RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           to = compile_expr(args[1])
           return "sp_re_gsub(#{re_var}, #{mstr_recv}, #{to})"
@@ -6138,7 +6200,7 @@ module Spinel
         to = compile_expr(args[1])
         return "sp_str_gsub(#{mstr_recv}, #{from}, #{to})"
       when "sub"
-        if args[0].is_a?(Prism::RegularExpressionNode)
+        if args[0].is_a_node?("RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           to = compile_expr(args[1])
           return "sp_re_sub(#{re_var}, #{mstr_recv}, #{to})"
@@ -6165,7 +6227,7 @@ module Spinel
           push_scope
           declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
           block_body = node.block.body
-          val = compile_expr(block_body.is_a?(Prism::StatementsNode) ? block_body.body.last : block_body)
+          val = compile_expr(sp_is?(block_body, "StatementsNode") ? block_body.body.last : block_body)
           emit("if (#{val}) #{tmp}++;")
           pop_scope
           @indent -= 1
@@ -6185,7 +6247,7 @@ module Spinel
         return "0"
       when "split"
         @needs_str_array = true
-        if !args.empty? && args[0].is_a?(Prism::RegularExpressionNode)
+        if !args.empty? && args[0].is_a_node?("RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "sp_re_split(#{re_var}, #{mstr_recv})"
         end
@@ -6205,7 +6267,7 @@ module Spinel
         @needs_gc = true
         return "sp_str_bytes(#{recv_code})"
       when "join"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           compiled_args = args.map { |a| compile_expr(a) }
           return "sp_File_join(#{compiled_args.join(', ')})"
@@ -6343,7 +6405,7 @@ module Spinel
           push_scope
           declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
           block_body = node.block.body
-          val = compile_expr(block_body.is_a?(Prism::StatementsNode) ? block_body.body.last : block_body)
+          val = compile_expr(sp_is?(block_body, "StatementsNode") ? block_body.body.last : block_body)
           emit("#{tmp} += #{val};")
           pop_scope
           @indent -= 1
@@ -6415,7 +6477,7 @@ module Spinel
       # ---- Array [] and []= ----
       when "[]"
         # ENV["key"] -> getenv("key")
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ENV"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "ENV"
           arg = compile_expr(args[0])
           return "getenv(#{arg})"
         end
@@ -6428,22 +6490,6 @@ module Spinel
         arg = compile_expr(args[0])
         if recv_type == Type::ARRAY
           @needs_int_array = true
-          # Check for class-typed dynamic array
-          dyn_elem_class = nil
-          if recv.is_a?(Prism::InstanceVariableReadNode) && @current_class
-            dyn_ivar = recv.name.to_s.delete_prefix("@")
-            dyn_elem_class = @ivar_elem_types.dig(@current_class, dyn_ivar)
-            # Only use cast for dynamic arrays (no fixed size)
-            dyn_elem_class = nil if @ivar_array_sizes.dig(@current_class, dyn_ivar)
-          elsif recv.is_a?(Prism::LocalVariableReadNode)
-            dyn_elem_class = @array_elem_types[recv.name.to_s]
-            dyn_elem_class = nil if @local_array_sizes[recv.name.to_s]
-          end
-          if dyn_elem_class && @classes[dyn_elem_class]
-            dyn_ptr = class_needs_gc?(@classes[dyn_elem_class])
-            dyn_c_type = dyn_ptr ? "sp_#{dyn_elem_class} *" : "sp_#{dyn_elem_class}"
-            return "(#{dyn_c_type})sp_IntArray_get(#{recv_code}, #{arg})"
-          end
           return "sp_IntArray_get(#{recv_code}, #{arg})"
         elsif recv_type == Type::FLOAT_ARRAY
           @needs_float_array = true
@@ -6471,15 +6517,6 @@ module Spinel
           end
         elsif recv_type == Type::HASH
           @needs_str_int_hash = true
-          val_class = hash_value_class_for_receiver(recv)
-          if val_class
-            needs_ptr = class_needs_gc?(@classes[val_class])
-            if needs_ptr
-              return "(sp_#{val_class} *)sp_StrIntHash_get(#{recv_code}, #{arg})"
-            else
-              return "(sp_#{val_class})sp_StrIntHash_get(#{recv_code}, #{arg})"
-            end
-          end
           return "sp_StrIntHash_get(#{recv_code}, #{arg})"
         elsif recv_type == Type::STR_HASH
           @needs_str_str_hash = true
@@ -6550,7 +6587,7 @@ module Spinel
         arg = compile_expr(args[0])
         return "sp_StrIntHash_has_key(#{recv_code}, #{arg})"
       when "delete"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           emit("remove(#{arg});")
@@ -6629,19 +6666,19 @@ module Spinel
 
       # ---- Math ----
       when "sqrt"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Math"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "sqrt(#{arg})"
         end
         return "0"
       when "cos"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Math"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "cos(#{arg})"
         end
         return "0"
       when "sin"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Math"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "sin(#{arg})"
         end
@@ -6649,20 +6686,20 @@ module Spinel
 
       # ---- Dir methods ----
       when "home"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Dir"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Dir"
           return "getenv(\"HOME\")"
         end
         return '""'
 
       # ---- Time methods ----
       when "now"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Time"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Time"
           @needs_time = true
           return "sp_Time_now()"
         end
         return "0"
       when "at"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "Time"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Time"
           @needs_time = true
           arg = compile_expr(args[0])
           return "sp_Time_at(#{arg})"
@@ -6671,14 +6708,14 @@ module Spinel
 
       # ---- File class methods ----
       when "read"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           return "sp_File_read(#{arg})"
         end
         return "0"
       when "write"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           path_arg = compile_expr(args[0])
           data_arg = compile_expr(args[1])
@@ -6686,20 +6723,20 @@ module Spinel
         end
         return "0"
       when "exist?", "exists?"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           return "sp_File_exist(#{arg})"
         end
         return "FALSE"
       when "open"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           return compile_file_open(node, args)
         end
         return "0"
       when "join"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           compiled_args = args.map { |a| compile_expr(a) }
           return "sp_File_join(#{compiled_args.join(', ')})"
@@ -6710,7 +6747,7 @@ module Spinel
         end
         return '""'
       when "basename"
-        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "File"
+        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
           arg = compile_expr(args[0])
           return "basename(#{arg})"
         end
@@ -6724,11 +6761,11 @@ module Spinel
       when "class"
         return '"Object"'
       when "is_a?"
-        if args.length > 0 && args[0].is_a?(Prism::ConstantReadNode)
+        if args.length > 0 && args[0].is_a_node?("ConstantReadNode")
           check_class = args[0].name.to_s
           # Determine the receiver's class
           recv_class = nil
-          if recv.is_a?(Prism::LocalVariableReadNode)
+          if sp_is?(recv, "LocalVariableReadNode")
             vname = recv.name.to_s
             recv_class = @var_class_types && @var_class_types[vname]
           end
@@ -6745,11 +6782,11 @@ module Spinel
         end
         return "TRUE"
       when "respond_to?"
-        if args.length > 0 && args[0].is_a?(Prism::SymbolNode)
+        if args.length > 0 && args[0].is_a_node?("SymbolNode")
           method_name = args[0].value
           # Determine the receiver's class
           recv_class = nil
-          if recv.is_a?(Prism::LocalVariableReadNode)
+          if sp_is?(recv, "LocalVariableReadNode")
             vname = recv.name.to_s
             recv_class = @var_class_types && @var_class_types[vname]
           end
@@ -6799,12 +6836,12 @@ module Spinel
         end
         # method(:name).call(args) - limited support
         target_method = nil
-        if recv.is_a?(Prism::CallNode) && recv.name.to_s == "method"
+        if sp_is?(recv, "CallNode") && recv.name.to_s == "method"
           method_arg = call_args(recv)
-          if method_arg.length > 0 && method_arg[0].is_a?(Prism::SymbolNode)
+          if method_arg.length > 0 && method_arg[0].is_a_node?("SymbolNode")
             target_method = method_arg[0].value
           end
-        elsif recv.is_a?(Prism::LocalVariableReadNode)
+        elsif sp_is?(recv, "LocalVariableReadNode")
           target_method = @method_refs[recv.name.to_s]
         end
         if target_method && @methods[target_method]
@@ -6824,7 +6861,7 @@ module Spinel
         return result if result
 
         # Check if receiver is a class instance and method is an attr accessor
-        if recv.is_a?(Prism::LocalVariableReadNode)
+        if sp_is?(recv, "LocalVariableReadNode")
           v = lookup_var(recv.name.to_s)
           if v
             # Try to find the class
@@ -6868,42 +6905,18 @@ module Spinel
 
     # Return the element class name for a class-typed array receiver, or nil
     def array_elem_class_for_receiver(recv)
-      if recv.is_a?(Prism::LocalVariableReadNode)
+      if sp_is?(recv, "LocalVariableReadNode")
         return @array_elem_types[recv.name.to_s]
-      elsif recv.is_a?(Prism::InstanceVariableReadNode) && @current_class
+      elsif sp_is?(recv, "InstanceVariableReadNode") && @current_class
         ivar = recv.name.to_s.delete_prefix("@")
         return @ivar_elem_types.dig(@current_class, ivar)
       end
       nil
     end
 
-    def hash_value_class_for_receiver(recv)
-      if recv.is_a?(Prism::LocalVariableReadNode)
-        return @local_hash_value_types[recv.name.to_s]
-      elsif recv.is_a?(Prism::InstanceVariableReadNode) && @current_class
-        ivar = recv.name.to_s.delete_prefix("@")
-        result = @ivar_hash_value_types.dig(@current_class, ivar)
-        return result if result
-        # Also check if this is a method call on a hash value (e.g., ci.methods)
-        # where ci was obtained from a typed hash
-      elsif recv.is_a?(Prism::CallNode)
-        # e.g., @classes["Dog"].methods["foo"] - first part returns ClassInfo, then .methods is a hash of MethodInfo
-        recv_type = infer_type(recv.receiver)
-        if recv_type.is_a?(String) && @classes[recv_type]
-          ci = @classes[recv_type]
-          mname = recv.name.to_s
-          # Check if the method/attr returns a hash that stores class instances
-          if mname == "methods" || mname == "class_methods"
-            return "MethodInfo" if @classes["MethodInfo"]
-          end
-        end
-      end
-      nil
-    end
-
     def try_class_method_call(recv, recv_code, mname, args)
       # Check if receiver is a class constant (static method call)
-      if recv.is_a?(Prism::ConstantReadNode)
+      if sp_is?(recv, "ConstantReadNode")
         cname = recv.name.to_s
         if @classes[cname] && @classes[cname].class_methods[mname]
           compiled_args = args.map { |a| compile_expr(a) }
@@ -6919,7 +6932,7 @@ module Spinel
       end
 
       # Check if receiver is a known class instance
-      if recv.is_a?(Prism::LocalVariableReadNode)
+      if sp_is?(recv, "LocalVariableReadNode")
         vname = recv.name.to_s
         # Check var_class_types
         if @var_class_types && @var_class_types[vname]
@@ -6972,7 +6985,7 @@ module Spinel
     end
 
     def compile_new(node, recv, args)
-      return "0" unless recv.is_a?(Prism::ConstantReadNode)
+      return "0" unless sp_is?(recv, "ConstantReadNode")
       cname = recv.name.to_s
 
       # Proc.new { ... }
@@ -6986,7 +6999,7 @@ module Spinel
         if args.length >= 2
           # Detect float array from default value
           default_node = node.arguments.arguments[1]
-          is_float = default_node.is_a?(Prism::FloatNode) || infer_type(default_node) == Type::FLOAT
+          is_float = sp_is?(default_node, "FloatNode") || infer_type(default_node) == Type::FLOAT
           n = compile_expr(args[0])
           val = compile_expr(args[1])
           tmp = "_arr_#{next_temp}"
@@ -7028,13 +7041,13 @@ module Spinel
 
       if @classes[cname]
         # Handle keyword arguments for struct-like constructors
-        if args.length == 1 && args[0].is_a?(Prism::KeywordHashNode) && @struct_classes && @struct_classes[cname]
+        if args.length == 1 && args[0].is_a_node?("KeywordHashNode") && @struct_classes && @struct_classes[cname]
           fields = @struct_classes[cname]
           # Extract keyword args in field order
           kw_hash = {}
           args[0].elements.each do |assoc|
-            if assoc.is_a?(Prism::AssocNode)
-              key = assoc.key.is_a?(Prism::SymbolNode) ? assoc.key.value : assoc.key.to_s
+            if sp_is?(assoc, "AssocNode")
+              key = sp_is?(assoc.key, "SymbolNode") ? assoc.key.value : assoc.key.to_s
               kw_hash[key] = compile_expr(assoc.value)
             end
           end
@@ -7072,23 +7085,12 @@ module Spinel
         @needs_str_int_hash = true
         params2 = params[1] || "v"
         ensure_var_declared(iter_var, Type::STRING)
-        val_class = hash_value_class_for_receiver(node.receiver)
-        if val_class
-          needs_ptr = class_needs_gc?(@classes[val_class])
-          val_c_type = needs_ptr ? "sp_#{val_class} *" : "sp_#{val_class}"
-          ensure_var_declared(params2, val_class)
-        else
-          ensure_var_declared(params2, Type::INTEGER)
-        end
+        ensure_var_declared(params2, Type::INTEGER)
         tmp = "_he_#{next_temp}"
         emit("for (sp_HashEntry *#{tmp} = #{recv_code}->first; #{tmp}; #{tmp} = #{tmp}->order_next) {")
         @indent += 1
         emit("lv_#{iter_var} = #{tmp}->key;")
-        if val_class
-          emit("lv_#{params2} = (#{val_c_type})#{tmp}->value;")
-        else
-          emit("lv_#{params2} = #{tmp}->value;")
-        end
+        emit("lv_#{params2} = #{tmp}->value;")
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -7105,19 +7107,11 @@ module Spinel
         emit("}")
       elsif recv_type == Type::ARRAY
         @needs_int_array = true
-        elem_class = array_elem_class_for_receiver(node.receiver)
         idx = "_ei_#{next_temp}"
         emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
         @indent += 1
-        if elem_class
-          needs_ptr = class_needs_gc?(@classes[elem_class])
-          elem_c_type = needs_ptr ? "sp_#{elem_class} *" : "sp_#{elem_class}"
-          emit("#{elem_c_type} lv_#{iter_var} = (#{elem_c_type})sp_IntArray_get(#{recv_code}, #{idx});")
-          declare_var(iter_var, elem_class, c_name: "lv_#{iter_var}")
-        else
-          emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
-          declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
-        end
+        emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
+        declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -7175,7 +7169,7 @@ module Spinel
       idx = "_mi_#{result}"
 
       # Detect n.times.map { block } chain
-      is_times_map = node.receiver.is_a?(Prism::CallNode) && node.receiver.name.to_s == "times" && !node.receiver.block
+      is_times_map = sp_is?(node.receiver, "CallNode") && node.receiver.name.to_s == "times" && !node.receiver.block
       if is_times_map
         times_recv = compile_expr(node.receiver.receiver)
         emit("sp_IntArray *#{result} = sp_IntArray_new();")
@@ -7308,7 +7302,7 @@ module Spinel
       @needs_exception = true
       @needs_catch_throw = true
 
-      tag = args.length > 0 && args[0].is_a?(Prism::SymbolNode) ? args[0].value : "tag"
+      tag = args.length > 0 && args[0].is_a_node?("SymbolNode") ? args[0].value : "tag"
       tag_c = c_string_literal(tag)
 
       result_var = "_catch_#{next_temp}"
@@ -7324,7 +7318,7 @@ module Spinel
       if node.block
         block = node.block
         if block.body
-          stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+          stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
           if stmts.length > 0
             stmts[0..-2].each { |s| generate_stmt(s) }
             last_val = compile_expr(stmts.last)
@@ -7364,7 +7358,7 @@ module Spinel
       @needs_exception = true
       @needs_catch_throw = true
 
-      tag = args.length > 0 && args[0].is_a?(Prism::SymbolNode) ? args[0].value : "tag"
+      tag = args.length > 0 && args[0].is_a_node?("SymbolNode") ? args[0].value : "tag"
       tag_c = c_string_literal(tag)
 
       if args.length > 1
@@ -7398,7 +7392,7 @@ module Spinel
 
         # Generate block body, but handle f.puts / f.each_line specially
         if block.body
-          stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+          stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
           stmts.each { |s| generate_stmt(s) }
         end
 
@@ -7803,7 +7797,7 @@ module Spinel
     def find_captured_reads(node, seen, vars)
       return unless node
       case node
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         name = node.name.to_s
         unless seen.include?(name)
           v = lookup_var(name)
@@ -7812,7 +7806,7 @@ module Spinel
             seen << name
           end
         end
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         name = node.name.to_s
         unless seen.include?(name)
           v = lookup_var(name)
@@ -7822,7 +7816,7 @@ module Spinel
           end
         end
         find_captured_reads(node.value, seen, vars)
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         name = node.name.to_s
         unless seen.include?(name)
           v = lookup_var(name)
@@ -7834,21 +7828,21 @@ module Spinel
         find_captured_reads(node.value, seen, vars)
       else
         # Recurse into child nodes
-        node.child_nodes.each { |c| find_captured_reads(c, seen, vars) if c }
+        node.sp_child_nodes.each { |c| find_captured_reads(c, seen, vars) if c }
       end
     end
 
     def generate_block_body_with_env(block, captured)
       body = block.body
       return unless body
-      stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
+      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
       stmts.each { |s| generate_stmt_with_env(s, captured) }
     end
 
     def generate_stmt_with_env(node, captured)
       # Override local variable access to use env pointers for captured vars
       case node
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         name = node.name.to_s
         cap = captured.find { |c| c[:name] == name }
         if cap
@@ -7858,7 +7852,7 @@ module Spinel
           val = compile_expr_with_env(node.value, captured)
           emit("#{compile_var_ref_env(name, captured)} = #{val};")
         end
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         name = node.name.to_s
         op = node.binary_operator.to_s
         cap = captured.find { |c| c[:name] == name }
@@ -7868,7 +7862,7 @@ module Spinel
         else
           emit("lv_#{name} #{op}= #{val};")
         end
-      when Prism::CallNode
+      when "CallNode"
         mname = node.name.to_s
         if mname == "puts"
           args = call_args(node)
@@ -7888,22 +7882,22 @@ module Spinel
           val = compile_expr_with_env(node, captured)
           emit("#{val};") if val && val != "" && val != "0"
         end
-      when Prism::IfNode
+      when "IfNode"
         cond = compile_expr_with_env(node.predicate, captured)
         emit("if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
+          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each { |s| generate_stmt_with_env(s, captured) }
         end
         @indent -= 1
         if node.subsequent
           case node.subsequent
-          when Prism::ElseNode
+          when "ElseNode"
             emit("else {")
             @indent += 1
             if node.subsequent.statements
-              stmts = node.subsequent.statements.is_a?(Prism::StatementsNode) ? node.subsequent.statements.body : [node.subsequent.statements]
+              stmts = sp_is?(node.subsequent.statements, "StatementsNode") ? node.subsequent.statements.body : [node.subsequent.statements]
               stmts.each { |s| generate_stmt_with_env(s, captured) }
             end
             @indent -= 1
@@ -7919,7 +7913,7 @@ module Spinel
 
     def compile_expr_with_env(node, captured)
       case node
-      when Prism::LocalVariableReadNode
+      when "LocalVariableReadNode"
         name = node.name.to_s
         cap = captured.find { |c| c[:name] == name }
         if cap
@@ -7927,7 +7921,7 @@ module Spinel
         else
           "lv_#{name}"
         end
-      when Prism::CallNode
+      when "CallNode"
         # For env blocks, need to handle captured var references in calls
         mname = node.name.to_s
         recv = node.receiver
@@ -8031,23 +8025,23 @@ module Spinel
     end
 
     def block_params(block)
-      return [] unless block.is_a?(Prism::BlockNode)
+      return [] unless sp_is?(block, "BlockNode")
       return [] unless block.parameters
       params = block.parameters
       # Handle numbered parameters (_1, _2, etc.)
-      if params.is_a?(Prism::NumberedParametersNode)
+      if sp_is?(params, "NumberedParametersNode")
         return (1..params.maximum).map { |i| "_#{i}" }
       end
-      if params.is_a?(Prism::BlockParametersNode)
+      if sp_is?(params, "BlockParametersNode")
         params = params.parameters
       end
       return [] unless params
       result = []
       (params.requireds || []).each do |p|
         case p
-        when Prism::RequiredParameterNode
+        when "RequiredParameterNode"
           result << p.name.to_s
-        when Prism::BlockLocalVariableNode
+        when "BlockLocalVariableNode"
           # skip
         else
           result << p.to_s
@@ -8057,14 +8051,14 @@ module Spinel
     end
 
     def generate_block_body(block)
-      return unless block.is_a?(Prism::BlockNode) && block.body
-      stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+      return unless sp_is?(block, "BlockNode") && block.body
+      stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
       stmts.each { |s| generate_stmt(s) }
     end
 
     def compile_block_expr(block)
-      return "0" unless block.is_a?(Prism::BlockNode) && block.body
-      stmts = block.body.is_a?(Prism::StatementsNode) ? block.body.body : [block.body]
+      return "0" unless sp_is?(block, "BlockNode") && block.body
+      stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
       if stmts.length == 1
         compile_expr(stmts.first)
       else
@@ -8088,9 +8082,9 @@ module Spinel
     def find_locals(node, locals)
       return unless node
       case node
-      when Prism::StatementsNode
+      when "StatementsNode"
         node.body.each { |s| find_locals(s, locals) }
-      when Prism::LocalVariableWriteNode
+      when "LocalVariableWriteNode"
         name = node.name.to_s
         unless locals[name]
           t = infer_type(node.value)
@@ -8107,10 +8101,10 @@ module Spinel
           end
         end
         find_locals(node.value, locals)
-      when Prism::LocalVariableOperatorWriteNode
+      when "LocalVariableOperatorWriteNode"
         val_type = infer_type(node.value)
         # If the value is a local var read, check method params and already-found locals
-        if val_type == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
+        if val_type == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
           ref_name = node.value.name.to_s
           val_type = locals[ref_name] if locals[ref_name]
           if val_type == Type::UNKNOWN && @current_method
@@ -8124,37 +8118,37 @@ module Spinel
         else
           locals[node.name.to_s] ||= (val_type == Type::FLOAT ? Type::FLOAT : Type::INTEGER)
         end
-      when Prism::IfNode
+      when "IfNode"
         find_locals(node.statements, locals)
         find_locals(node.subsequent, locals)
-      when Prism::ElseNode
+      when "ElseNode"
         find_locals(node.statements, locals)
-      when Prism::WhileNode
+      when "WhileNode"
         find_locals(node.statements, locals)
-      when Prism::ForNode
+      when "ForNode"
         find_locals(node.statements, locals)
-      when Prism::CaseNode
-        (node.conditions || []).each { |c| find_locals(c, locals) if c.respond_to?(:statements) }
+      when "CaseNode"
+        (node.conditions || []).each { |c| find_locals(c, locals) if c.sp_has?(:statements) }
         find_locals(node.else_clause, locals) if node.else_clause
-      when Prism::WhenNode
+      when "WhenNode"
         find_locals(node.statements, locals)
-      when Prism::BeginNode
+      when "BeginNode"
         find_locals(node.statements, locals)
         find_locals(node.rescue_clause, locals) if node.rescue_clause
-      when Prism::RescueNode
+      when "RescueNode"
         find_locals(node.statements, locals)
         if node.reference
           name = case node.reference
-                 when Prism::LocalVariableTargetNode then node.reference.name.to_s
+                 when "LocalVariableTargetNode" then node.reference.name.to_s
                  else nil
                  end
           locals[name] = Type::STRING if name
         end
-      when Prism::CallNode
+      when "CallNode"
         if node.block
           find_locals(node.block, locals)
         end
-      when Prism::BlockNode
+      when "BlockNode"
         find_locals(node.body, locals)
       end
     end
@@ -8187,16 +8181,16 @@ module Spinel
     end
 
     def last_stmt(body)
-      return body unless body.is_a?(Prism::StatementsNode)
+      return body unless sp_is?(body, "StatementsNode")
       body.body.last
     end
 
     def returns_value?(node)
       return false unless node
       case node
-      when Prism::ReturnNode
+      when "ReturnNode"
         true
-      when Prism::IfNode
+      when "IfNode"
         # Check if all branches return
         false  # conservative
       else
@@ -8206,15 +8200,15 @@ module Spinel
 
     def const_value_to_c(node, type)
       case node
-      when Prism::IntegerNode then node.value.to_s
-      when Prism::FloatNode
+      when "IntegerNode" then node.value.to_s
+      when "FloatNode"
         s = node.value.to_s
         s = s + ".0" unless s.include?('.') || s.include?('e') || s.include?('E')
         s
-      when Prism::StringNode then c_string_literal(node.content)
-      when Prism::TrueNode then "TRUE"
-      when Prism::FalseNode then "FALSE"
-      when Prism::CallNode
+      when "StringNode" then c_string_literal(node.content)
+      when "TrueNode" then "TRUE"
+      when "FalseNode" then "FALSE"
+      when "CallNode"
         # Handle simple constant expressions like 1 << 29, BNUM.to_f
         mname = node.name.to_s
         if %w[<< >> + - * / % & | ^].include?(mname) && node.receiver && node.arguments
@@ -8230,7 +8224,7 @@ module Spinel
         else
           "0"
         end
-      when Prism::ConstantReadNode
+      when "ConstantReadNode"
         name = node.name.to_s
         if @constants[name]
           "cv_#{name}"
@@ -8250,16 +8244,14 @@ module Spinel
     end
 
     def c_string_literal(s)
-      # Prism gives us the actual string value (unescaped).
-      # We need to escape it for a C string literal.
-      # Order matters: escape backslashes first, then other chars
-      # Use block form for gsub to avoid backslash replacement issues
-      escaped = s.gsub("\\") { "\\\\" }  # \ -> \\
-      escaped = escaped.gsub('"') { "\\\"" }  # " -> \"
-      escaped = escaped.gsub("\n") { "\\n" }  # newline -> \n
-      escaped = escaped.gsub("\t") { "\\t" }  # tab -> \t
-      escaped = escaped.gsub("\r") { "\\r" }  # CR -> \r
-      escaped = escaped.gsub("\0") { "\\0" }  # null -> \0
+      # Prism content preserves source escape sequences (e.g. \n stays as backslash-n)
+      # We only need to:
+      # 1. Escape double quotes
+      # 2. Convert actual control characters (real newline bytes) to C escapes
+      # Don't double-escape existing backslash sequences from source
+      escaped = s.gsub('"', '\\"')
+      # Convert actual control chars (not source-level \n which are already backslash + n)
+      escaped = escaped.gsub("\n", "\\n").gsub("\t", "\\t").gsub("\r", "\\r")
       "\"#{escaped}\""
     end
 
@@ -8574,259 +8566,7 @@ module Spinel
       out.puts "  return 0;"
       out.puts "}"
 
-      result = out.string
-      # Post-process: fix mrb_int -> pointer dereference errors
-      result = fix_mrb_int_dereference(result)
-      # Post-process: fix _cres_N = return expr; -> return expr;
-      result = fix_return_in_expression(result)
-      # Post-process: fix stray backslashes in string literals
-      result = fix_stray_backslashes(result)
-      # Post-process: fix undeclared _ary_N/_hsh_N in constructors
-      result = fix_undeclared_literals(result)
-      # Post-process: fix string += compiled as C += instead of sp_str_concat
-      result = fix_string_concat_ops(result)
-      # Post-process: fix undeclared block variables
-      result = fix_undeclared_block_vars(result)
-      result
-    end
-
-    def fix_mrb_int_dereference(code)
-      # Fix patterns where sp_StrIntHash_get or sp_IntArray_get results are dereferenced
-      # Pattern: sp_StrIntHash_get(X, Y)->field  =>  ((void *)sp_StrIntHash_get(X, Y))->field
-      # Also: _he_N->value)->field when value is mrb_int
-      # Use regex to find and fix
-
-      # Build a map of struct field names to their owning struct types
-      struct_fields = {}
-      @classes.each do |cname, ci|
-        all_ivars = collect_all_ivars(ci)
-        all_ivars.each do |iname, _itype|
-          struct_fields[iname] ||= []
-          struct_fields[iname] << cname
-        end
-        (ci.attrs[:reader] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
-        (ci.attrs[:accessor] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
-      end
-      # Add special mappings for built-in types
-      # Hash field ->first means the variable is a hash pointer
-      # We handle these specially in the cast logic below
-
-      lines = code.split("\n")
-      fixed_lines = lines.map do |line|
-        # Pattern 1: sp_StrIntHash_get(...)->field
-        line = line.gsub(/\bsp_StrIntHash_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
-          args = $1
-          field = $2
-          # Determine the struct type from the field name
-          if struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            needs_ptr = class_needs_gc?(@classes[stype])
-            if needs_ptr
-              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
-            else
-              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
-            end
-          else
-            "((void *)sp_StrIntHash_get(#{args}))->#{field}"
-          end
-        end
-
-        # Pattern 2: sp_IntArray_get(...)->field
-        line = line.gsub(/\bsp_IntArray_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
-          args = $1
-          field = $2
-          if struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            "((sp_#{stype} *)sp_IntArray_get(#{args}))->#{field}"
-          else
-            "((void *)sp_IntArray_get(#{args}))->#{field}"
-          end
-        end
-
-        line
-      end
-
-      # Pattern 3: local variables declared as mrb_int but used with ->
-      # Track variables assigned from sp_StrIntHash_get or sp_IntArray_get (including indirect via _he_N->value)
-      # Then cast those variables when they're used with ->
-      result = fixed_lines.join("\n")
-
-      # Find all variables that need casting: assigned from hash/array get and used with ->
-      # Step 1: find variables assigned from hash_get/array_get or hash entry values
-      hash_vars = {}  # var_name => true
-      result.scan(/mrb_int\s+(lv_\w+)\s*=\s*(?:sp_StrIntHash_get|sp_IntArray_get)\(/) do
-        hash_vars[$1] = true
-      end
-      # Also: lv_X = _he_N->value where _he is a hash entry iterator
-      result.scan(/(lv_\w+)\s*=\s*_he_\d+->value/) do
-        hash_vars[$1] = true
-      end
-      # Also: lv_X = sp_StrIntHash_get(...) (non-declaration assignment)
-      result.scan(/(lv_\w+)\s*=\s*(?:sp_StrIntHash_get|sp_IntArray_get)\(/) do
-        hash_vars[$1] = true
-      end
-
-      # Step 2: Find ALL mrb_int variables used with -> and add casts
-      # This includes locals, parameters, and hash entry values
-      # Scan for any pattern: (word)->field where word is an mrb_int variable
-      # We identify mrb_int variables from declarations and parameter lists
-      mrb_int_vars = {}
-      # Local variable declarations
-      result.scan(/mrb_int\s+(lv_\w+)\s*[=;]/) { hash_vars[$1] = true; mrb_int_vars[$1] = true }
-      # Function parameters: mrb_int lv_name (in function signatures)
-      result.scan(/mrb_int\s+(lv_\w+)(?:\s*[,)])/) { mrb_int_vars[$1] = true }
-
-      # Step 3: For each mrb_int variable used with ->, add a cast
-      # Special field -> type mappings for built-in types
-      hash_fields = %w[first last cap size buckets]
-      mrb_int_vars.each_key do |var|
-        result = result.gsub(/(?<!\*\))\b#{Regexp.escape(var)}->(\w+)/) do
-          field = $1
-          if hash_fields.include?(field)
-            "((sp_StrIntHash *)#{var})->#{field}"
-          elsif struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            "((sp_#{stype} *)#{var})->#{field}"
-          else
-            # For unknown fields, try to determine type from context
-            # Default to void* which allows compilation with warnings
-            "((sp_SpNode *)#{var})->#{field}"
-          end
-        end
-      end
-
-      result
-    end
-
-    def fix_return_in_expression(code)
-      # Fix pattern: _cres_N = return expr;  ->  return expr;
-      code = code.gsub(/\b_cres_\d+\s*=\s*return\b/, 'return')
-      # Fix pattern: return return expr;  ->  return expr;
-      code = code.gsub(/\breturn\s+return\b/, 'return')
-      # Fix pattern: void _cres_N = ;  ->  /* void case */
-      code = code.gsub(/\bvoid\s+_cres_\d+\s*=\s*;/, '/* void case result */;')
-      # Fix pattern: _cres_N = sp_void_func(...);  where the func returns void
-      # This is harder to detect, so we'll let void value errors be handled by adding nil
-      code
-    end
-
-    def fix_stray_backslashes(code)
-      code
-    end
-
-    def fix_string_concat_ops(code)
-      # Fix patterns where string += is compiled as lv_X += "..." instead of sp_str_concat
-      # Pattern: lv_X += "string" or lv_X += sp_str_concat(...)
-      # These should be: lv_X = sp_str_concat(lv_X, ...)
-      lines = code.split("\n")
-      fixed = lines.map do |line|
-        # Pattern: lv_var += expr; where lv_var is const char *
-        if line =~ /\A(\s*)(lv_\w+)\s*\+=\s*(.+);$/
-          indent = $1
-          var = $2
-          expr = $3
-          # Check if this is likely a string concat (not numeric +=)
-          if expr =~ /^"/ || expr =~ /^sp_str_concat/ || expr =~ /^sp_int_to_s/
-            "#{indent}#{var} = sp_str_concat(#{var}, #{expr});"
-          else
-            line
-          end
-        else
-          line
-        end
-      end
-      fixed.join("\n")
-    end
-
-    def fix_undeclared_block_vars(code)
-      # Two-pass approach:
-      # Pass 1: Identify functions and their variable declarations
-      # Pass 2: Add missing declarations
-
-      lines = code.split("\n")
-
-      # Pass 1: Find function boundaries and collect declared/used vars
-      functions = []  # [{start:, end:, declared: {}, used: {}}]
-      brace_depth = 0
-      current_func = nil
-
-      lines.each_with_index do |line, idx|
-        if line =~ /^static\s+\S+/ && line.include?("{")
-          current_func = { start: idx, declared: {}, used: {} }
-          brace_depth = 1
-          # Count any additional braces on the same line
-          line.count("{").times { brace_depth += 1 if brace_depth > 0 }
-          brace_depth -= line.count("{")
-          brace_depth += line.count("{")
-          # Actually just count net braces
-          brace_depth = line.count("{") - line.count("}")
-        elsif current_func
-          brace_depth += line.count("{") - line.count("}")
-          if brace_depth <= 0
-            current_func[:end_idx] = idx
-            functions << current_func
-            current_func = nil
-            brace_depth = 0
-          end
-        end
-
-        next unless current_func
-
-        # Track declarations (lv_ and _cres_)
-        line.scan(/(?:mrb_int|const char \*|mrb_float|mrb_bool|sp_\w+\s*\*?|void)\s+((?:lv_|_cres_)\w+)/) do |m|
-          current_func[:declared][m[0]] = true
-        end
-        # Track uses (excluding string literals)
-        stripped = line.gsub(/"(?:[^"\\]|\\.)*"/, '')
-        stripped.scan(/\b((?:lv_|_cres_)\w+)\b/) do |m|
-          current_func[:used][m[0]] = true
-        end
-      end
-
-      # Pass 2: Add declarations for undeclared vars
-      # Process in reverse to maintain line indices
-      functions.reverse.each do |func|
-        undeclared = func[:used].keys.select { |v| !func[:declared][v] }
-        next if undeclared.empty?
-
-        # Infer type from usage: if assigned from _he_N->key it's const char*
-        # if assigned from _he_N->value it stays mrb_int
-        decl_line = undeclared.map { |v|
-          # Check if this var is assigned from a hash entry key
-          is_key = false
-          is_str = false
-          (func[:start]..([func[:end_idx] || lines.length - 1, lines.length - 1].min)).each do |li|
-            l = lines[li]
-            if l && l.include?("#{v} = ") && l.include?("->key")
-              is_key = true
-            end
-            if l && l.include?("#{v} = ") && (l.include?('"') || l.include?("sp_str_"))
-              is_str = true
-            end
-          end
-          if is_key || is_str
-            "  const char *#{v} = NULL;"
-          else
-            "  mrb_int #{v} = 0;"
-          end
-        }.join("\n")
-        # Insert after the function opening line
-        lines.insert(func[:start] + 1, decl_line)
-      end
-
-      lines.join("\n")
-    end
-
-    def fix_undeclared_literals(code)
-      # Fix _ary_N and _hsh_N references in constructor functions that should be
-      # sp_IntArray_new() and sp_StrIntHash_new() respectively
-      code = code.gsub(/(\bself->\w+\s*=\s*)(_ary_\d+)\s*;/) do
-        "#{$1}sp_IntArray_new();"
-      end
-      code = code.gsub(/(\bself->\w+\s*=\s*)(_hsh_\d+)\s*;/) do
-        "#{$1}sp_StrIntHash_new();"
-      end
-      code
+      out.string
     end
 
     def emit_string_helpers(out, before_str_array: true)
@@ -10418,24 +10158,33 @@ module Spinel
 
   # ---- Main entry point ----
   def self.run(args)
-    source_file = nil
+    json_file = nil
     output_file = nil
 
     args.each do |arg|
-      if arg.start_with?("--source=")
-        source_file = arg.split("=", 2).last
+      if arg.start_with?("--json=")
+        json_file = arg.split("=", 2).last
       elsif arg.start_with?("--output=")
         output_file = arg.split("=", 2).last
+      else
+        # Positional args: first is json_file, second is output_file
+        if json_file.nil?
+          json_file = arg
+        elsif output_file.nil?
+          output_file = arg
+        end
       end
     end
 
-    unless source_file
-      $stderr.puts "Usage: ruby spinel.rb --source=input.rb --output=output.c"
+    unless json_file
+      $stderr.puts "Usage: ruby spinel_codegen.rb <ast.json> <output.c>"
+      $stderr.puts "   or: ruby spinel_codegen.rb --json=ast.json --output=output.c"
       exit 1
     end
 
-    source = File.read(source_file)
-    compiler = Compiler.new(source, source_file)
+    json_data = JSON.parse(File.read(json_file))
+    root = SpNode.new(json_data)
+    compiler = Compiler.new(root, json_file)
     c_code = compiler.compile
 
     if output_file

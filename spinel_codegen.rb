@@ -680,6 +680,21 @@ class SpCompiler
       name == "Integer" || name == "Float" || name == "String" || name == "Boolean" || name == "Symbol"
     end
 
+    def all_attr_names(ci)
+      result = []
+      ci.attr_accessors.each { |a| sp_push_unique(result, a) }
+      ci.attr_readers.each { |a| sp_push_unique(result, a) }
+      ci.attr_writers.each { |a| sp_push_unique(result, a) }
+      result
+    end
+
+    def readable_attr_names(ci)
+      result = []
+      ci.attr_readers.each { |a| sp_push_unique(result, a) }
+      ci.attr_accessors.each { |a| sp_push_unique(result, a) }
+      result
+    end
+
     def collect_class(node)
       name = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
       parent = nil
@@ -1156,7 +1171,7 @@ class SpCompiler
         # Don't re-collect ivars - already done and types updated
 
         # Also collect from attrs
-        (ci.attr_accessors + ci.attr_readers + ci.attr_writers).uniq.each do |attr_name|
+        all_attr_names(ci).each do |attr_name|
           if ci.ivars[attr_name] == nil
           ci.ivars[attr_name] = Type::UNKNOWN
         end
@@ -2146,7 +2161,7 @@ class SpCompiler
           Type::ARRAY  # default to int array
         else
           elem_types = node.elements.map { |e| infer_type(e) }
-          elem_types_uniq = elem_types.uniq - [Type::UNKNOWN, Type::NIL]
+          elem_types_uniq = elem_types.uniq.select { |t| t != Type::UNKNOWN && t != Type::NIL }
           if elem_types_uniq.size > 1
             Type::POLY_ARRAY
           elsif elem_types_uniq.size == 1 && elem_types_uniq[0] == Type::STRING
@@ -2159,7 +2174,7 @@ class SpCompiler
         # Check values to determine hash type
         if node.elements.any?
           val_types = node.elements.select { |e| (e != nil && e.type == "AssocNode") }.map { |e| infer_type(e.value) }
-          val_types_uniq = val_types.uniq - [Type::UNKNOWN, Type::NIL]
+          val_types_uniq = val_types.uniq.select { |t| t != Type::UNKNOWN && t != Type::NIL }
           if val_types_uniq.size > 1
             # Mixed value types -> poly hash (string key -> sp_RbValue)
             return Type::POLY_HASH
@@ -2865,7 +2880,7 @@ class SpCompiler
       end
       ci.ivars.each { |k, v| ivars[k] = v }
       # Also from attrs
-      (ci.attr_accessors + ci.attr_readers + ci.attr_writers).uniq.each do |attr|
+      all_attr_names(ci).each do |attr|
         if ivars[attr] == nil
         ivars[attr] = Type::UNKNOWN
       end
@@ -2897,7 +2912,7 @@ class SpCompiler
 
     def param_accesses_class_attr?(body, pname, ci)
       return false unless body
-      all_attrs = (ci.attr_readers + ci.attr_accessors).uniq
+      all_attrs = readable_attr_names(ci)
       return false if all_attrs.empty?
       check_param_attr_access(body, pname, all_attrs)
     end
@@ -5499,13 +5514,14 @@ class SpCompiler
           needs_ptr = class_needs_gc?(ci)
           compiled_args = args.map { |a| compile_expr(a) }
           cmname = sanitize_method_name(mname)
+          arg_str = compiled_args.empty? ? "" : ", " + compiled_args.join(", ")
           if actual_class == @current_class
-            return "sp_#{actual_class}_#{cmname}(#{(['self'] + compiled_args).join(', ')})"
+            return "sp_#{actual_class}_#{cmname}(self#{arg_str})"
           else
             if needs_ptr
-              return "sp_#{actual_class}_#{cmname}(#{(["(sp_#{actual_class} *)self"] + compiled_args).join(', ')})"
+              return "sp_#{actual_class}_#{cmname}((sp_#{actual_class} *)self#{arg_str})"
             else
-              return "sp_#{actual_class}_#{cmname}(#{(['self'] + compiled_args).join(', ')})"
+              return "sp_#{actual_class}_#{cmname}(self#{arg_str})"
             end
           end
         end
@@ -5831,9 +5847,11 @@ class SpCompiler
           needs_ptr = class_needs_gc?(ci)
           cmname = sanitize_method_name(mname)
           if actual != recv_type && needs_ptr
-            param_list = ["(sp_#{actual} *)#{recv_code}"] + compiled_args
+            param_list = ["(sp_#{actual} *)#{recv_code}"]
+            compiled_args.each { |_ca| param_list.push(_ca) }
           else
-            param_list = [recv_code] + compiled_args
+            param_list = [recv_code]
+            compiled_args.each { |_ca| param_list.push(_ca) }
           end
 
           # Handle block/yield
@@ -7151,7 +7169,8 @@ class SpCompiler
               if ci.methods[mname]
                 needs_ptr = class_needs_gc?(ci)
                 compiled_args = args.map { |a| compile_expr(a) }
-                param_list = [recv_code] + compiled_args
+                param_list = [recv_code]
+            compiled_args.each { |_ca| param_list.push(_ca) }
                 cmname = sanitize_method_name(mname)
                 # Check if method is inherited
                 actual_class = find_method_class(cname, mname)
@@ -7234,9 +7253,11 @@ class SpCompiler
       if actual
         compiled_args = args.map { |a| compile_expr(a) }
         if actual != cname && needs_ptr
-          param_list = ["(sp_#{actual} *)#{recv_code}"] + compiled_args
+          param_list = ["(sp_#{actual} *)#{recv_code}"]
+            compiled_args.each { |_ca| param_list.push(_ca) }
         else
-          param_list = [recv_code] + compiled_args
+          param_list = [recv_code]
+            compiled_args.each { |_ca| param_list.push(_ca) }
         end
         return "sp_#{actual}_#{sanitize_method_name(mname)}(#{param_list.join(', ')})"
       end

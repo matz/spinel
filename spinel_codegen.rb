@@ -306,10 +306,12 @@ class ParamInfo
   end
 end
 class ClassInfo
-  attr_accessor :name, :parent, :methods, :ivars, :class_methods, :attrs
+  attr_accessor :name, :parent, :methods, :ivars, :class_methods
+  attr_accessor :attr_readers, :attr_writers, :attr_accessors, :includes
   def initialize
     @name = ""; @parent = nil; @methods = {}; @ivars = {}
-    @class_methods = {}; @attrs = {"reader" => [], "writer" => [], "accessor" => []}
+    @class_methods = {}
+    @attr_readers = []; @attr_writers = []; @attr_accessors = []; @includes = []
   end
 end
 class BlockEnvEntry
@@ -356,14 +358,13 @@ def make_param_info(name, type, default_node)
   pi
 end
 
-def make_class_info(name, parent, methods, ivars, class_methods, attrs)
+def make_class_info(name, parent, methods, ivars, class_methods)
   ci = ClassInfo.new
   ci.name = name
   if parent != nil
     ci.parent = parent
   end
   ci.methods = methods; ci.ivars = ivars; ci.class_methods = class_methods
-  ci.attrs = attrs
   ci
 end
 
@@ -505,7 +506,7 @@ class SpCompiler
     def apply_module_includes
       return unless @module_methods
       @classes.each do |cname, ci|
-        includes = ci.attrs["includes"] || []
+        includes = ci.includes || []
         includes.each do |mod_name|
           next unless @module_methods[mod_name]
           @module_methods[mod_name].each do |mname, mi|
@@ -675,7 +676,9 @@ class SpCompiler
       nil
     end
 
-    BUILTIN_TYPES = %w[Integer Float String Boolean Symbol].freeze
+    def is_builtin_type(name)
+      name == "Integer" || name == "Float" || name == "String" || name == "Boolean" || name == "Symbol"
+    end
 
     def collect_class(node)
       name = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
@@ -683,7 +686,7 @@ class SpCompiler
       is_struct_inherit = false
 
       # Open class for built-in types: just collect methods, don't create struct
-      if BUILTIN_TYPES.include?(name)
+      if is_builtin_type(name)
         if @open_class_methods == nil
         @open_class_methods = {}
       end
@@ -727,13 +730,13 @@ class SpCompiler
         end
       end
 
-      ci = make_class_info(name, parent, {}, {}, {}, {"reader" => [], "writer" => [], "accessor" => []})
+      ci = make_class_info(name, parent, {}, {}, {})
 
       if is_struct_inherit
         fields.each { |f| ci.ivars[f] = Type::INTEGER }
-        ci.attrs["reader"] = fields.dup
-        ci.attrs["writer"] = fields.dup
-        ci.attrs["accessor"] = fields.dup
+        ci.attr_readers = fields.dup
+        ci.attr_writers = fields.dup
+        ci.attr_accessors = fields.dup
         # Create synthetic initialize
         params = fields.map { |f| make_param_info(f, Type::INTEGER, nil) }
         ci.methods["initialize"] = make_method_info("initialize", params, Type::VOID, nil, false, false, name, {}, false, nil, false)
@@ -764,10 +767,7 @@ class SpCompiler
               s.arguments.args.each do |arg|
                 if (arg != nil && arg.type == "ConstantReadNode")
                   mod_name = arg.name.to_s
-                  if ci.attrs["includes"] == nil
-              ci.attrs["includes"] = []
-            end
-                  ci.attrs["includes"] << mod_name
+                  ci.includes << mod_name
                 end
               end
             end
@@ -859,13 +859,13 @@ class SpCompiler
         next unless sym_name
         case mname
         when "attr_accessor"
-          ci.attrs["accessor"] << sym_name
-          ci.attrs["reader"] << sym_name
-          ci.attrs["writer"] << sym_name
+          ci.attr_accessors << sym_name
+          ci.attr_readers << sym_name
+          ci.attr_writers << sym_name
         when "attr_reader"
-          ci.attrs["reader"] << sym_name
+          ci.attr_readers << sym_name
         when "attr_writer"
-          ci.attrs["writer"] << sym_name
+          ci.attr_writers << sym_name
         end
       end
     end
@@ -929,7 +929,7 @@ class SpCompiler
             if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableReadNode")
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               if ivar == name
-                ci.attrs["reader"] << name unless ci.attrs["reader"].include?(name)
+                ci.attr_readers << name unless ci.attr_readers.include?(name)
               end
             end
           end
@@ -940,7 +940,7 @@ class SpCompiler
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               field = name.chomp("=")
               if ivar == field
-                ci.attrs["writer"] << field unless ci.attrs["writer"].include?(field)
+                ci.attr_writers << field unless ci.attr_writers.include?(field)
               end
             end
           end
@@ -1000,7 +1000,10 @@ class SpCompiler
       # Create params for constructor
       params = fields.map { |f| make_param_info(f, Type::INTEGER, nil) }
 
-      ci = make_class_info(name, nil, {}, {}, {}, {"reader" => fields.dup, "writer" => fields.dup, "accessor" => fields.dup})
+      ci = make_class_info(name, nil, {}, {}, {})
+      ci.attr_readers = fields.dup
+      ci.attr_writers = fields.dup
+      ci.attr_accessors = fields.dup
       fields.each { |f| ci.ivars[f] = Type::INTEGER }
 
       # Create a synthetic initialize method
@@ -1018,7 +1021,7 @@ class SpCompiler
     def infer_method_types
       # Auto-generate Comparable methods for classes that include Comparable
       @classes.each do |cname, ci|
-        includes = ci.attrs["includes"] || []
+        includes = ci.includes || []
         if includes.include?("Comparable") && ci.methods["<=>"]
           # Generate <, >, ==, <=, >= from <=>
           %w[< > == <= >=].each do |op|
@@ -1118,23 +1121,32 @@ class SpCompiler
       # Done after method return type inference so return types are known
       # Scan all class methods against all classes (cross-class attr setters)
       # Collect method bodies with their owning class for @current_class context
-      all_method_entries = []  # [body, owner_class_name_or_nil]
+      all_method_bodies = []
+      all_method_owners = []
       @classes.each do |cn, ci2|
         ci2.methods.each do |_mn, mi|
-          all_method_entries << [mi.body, cn] if mi.body
+          if mi.body
+            all_method_bodies << mi.body
+            all_method_owners << cn
+          end
         end
       end
       @methods.each do |_mn, mi|
-        all_method_entries << [mi.body, nil] if mi.body
+        if mi.body
+          all_method_bodies << mi.body
+          all_method_owners << ""
+        end
       end
       # Run multiple passes to resolve self-referential types (e.g., tree node left/right)
       3.times do
         @classes.each do |cname, ci|
-          all_method_entries.each do |body, owner_class|
+          ame_idx = 0
+          while ame_idx < all_method_bodies.length
             saved_class = @current_class
-            @current_class = owner_class
-            scan_ivar_assignments_in_body(body, cname, ci)
+            @current_class = all_method_owners[ame_idx] == "" ? nil : all_method_owners[ame_idx]
+            scan_ivar_assignments_in_body(all_method_bodies[ame_idx], cname, ci)
             @current_class = saved_class
+            ame_idx = ame_idx + 1
           end
         end
       end
@@ -1144,7 +1156,7 @@ class SpCompiler
         # Don't re-collect ivars - already done and types updated
 
         # Also collect from attrs
-        (ci.attrs["accessor"] + ci.attrs["reader"] + ci.attrs["writer"]).uniq.each do |attr_name|
+        (ci.attr_accessors + ci.attr_readers + ci.attr_writers).uniq.each do |attr_name|
           if ci.ivars[attr_name] == nil
           ci.ivars[attr_name] = Type::UNKNOWN
         end
@@ -1209,8 +1221,8 @@ class SpCompiler
             # Check which class has all these methods
             @classes.each do |candidate_name, candidate_ci|
               if called.all? { |cm| candidate_ci.methods[cm] ||
-                   candidate_ci.attrs["reader"].include?(cm) ||
-                   candidate_ci.attrs["accessor"].include?(cm) }
+                   candidate_ci.attr_readers.include?(cm) ||
+                   candidate_ci.attr_accessors.include?(cm) }
                 p.type = candidate_name
                 break
               end
@@ -1852,7 +1864,7 @@ class SpCompiler
           recv_class = @var_types_global[recv_name]
           if recv_class.is_a?(String) && @classes[recv_class]
             ci = @classes[recv_class]
-            if (ci.attrs["writer"].include?(attr_name) || ci.attrs["accessor"].include?(attr_name))
+            if (ci.attr_writers.include?(attr_name) || ci.attr_accessors.include?(attr_name))
               node.arguments.args.each do |arg|
                 arg_type = infer_type(arg)
                 if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
@@ -1914,7 +1926,7 @@ class SpCompiler
         # Check for attr_name= calls on class instances
         if mname.end_with?("=") && !mname.start_with?("[") && node.receiver && node.arguments
           attr_name = mname.chomp("=")
-          if (ci.attrs["writer"]&.include?(attr_name) || ci.attrs["accessor"]&.include?(attr_name))
+          if (ci.attr_writers&.include?(attr_name) || ci.attr_accessors&.include?(attr_name))
             # Check if receiver's class matches
             recv_class = nil
             if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode")
@@ -2853,7 +2865,7 @@ class SpCompiler
       end
       ci.ivars.each { |k, v| ivars[k] = v }
       # Also from attrs
-      (ci.attrs["accessor"] + ci.attrs["reader"] + ci.attrs["writer"]).uniq.each do |attr|
+      (ci.attr_accessors + ci.attr_readers + ci.attr_writers).uniq.each do |attr|
         if ivars[attr] == nil
         ivars[attr] = Type::UNKNOWN
       end
@@ -2885,7 +2897,7 @@ class SpCompiler
 
     def param_accesses_class_attr?(body, pname, ci)
       return false unless body
-      all_attrs = (ci.attrs["reader"] + ci.attrs["accessor"]).uniq
+      all_attrs = (ci.attr_readers + ci.attr_accessors).uniq
       return false if all_attrs.empty?
       check_param_attr_access(body, pname, all_attrs)
     end
@@ -3206,15 +3218,16 @@ class SpCompiler
         self_param = "sp_#{name} self"
       end
 
-      params_list = [self_param] + mi.params.map { |p|
+      params_list = [self_param]
+      mi.params.each do |p|
         t = resolve_param_type(p, ci, mi)
-        "#{c_type(t)} lv_#{p.name}"
-      }
+        params_list.push("#{c_type(t)} lv_#{p.name}")
+      end
 
       if mi.has_yield
         @needs_block_fn = true
-        params_list << "sp_block_fn _block"
-        params_list << "void *_block_env"
+        params_list.push("sp_block_fn _block")
+        params_list.push("void *_block_env")
       end
 
       params_str = params_list.join(", ")
@@ -3314,15 +3327,16 @@ class SpCompiler
       rt = c_type(mi.return_type)
 
       # Check if method takes a block (yield)
-      params_list = mi.params.map { |p|
+      params_list = []
+      mi.params.each do |p|
         t = p.type != Type::UNKNOWN ? p.type : infer_param_type_from_calls(mname, p)
         p.type = t
         if p.instance_variable_defined?(:@is_typed_array) && p.instance_variable_get(:@is_typed_array)
-          "#{c_type(t)} *lv_#{p.name}"
+          params_list.push("#{c_type(t)} *lv_#{p.name}")
         else
-          "#{c_type(t)} lv_#{p.name}"
+          params_list.push("#{c_type(t)} lv_#{p.name}")
         end
-      }
+      end
 
       # Handle default parameters
       mi.params.each_with_index do |p, _i|
@@ -3335,11 +3349,11 @@ class SpCompiler
       if block_param_name
         @needs_proc = true
         @needs_block_fn = true
-        params_list << "sp_Proc *lv_#{block_param_name}"
+        params_list.push("sp_Proc *lv_#{block_param_name}")
       elsif mi.has_yield
         @needs_block_fn = true
-        params_list << "sp_block_fn _block"
-        params_list << "void *_block_env"
+        params_list.push("sp_block_fn _block")
+        params_list.push("void *_block_env")
       end
 
       param_str = params_list.join(", ")
@@ -5496,7 +5510,7 @@ class SpCompiler
           end
         end
         # Check ivar access (bare name matches attr reader)
-        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
+        if ci.attr_readers.include?(mname) || ci.attr_accessors.include?(mname)
           ptr = class_needs_gc?(ci)
           return ptr ? "self->#{mname}" : "self.#{mname}"
         end
@@ -5802,10 +5816,10 @@ class SpCompiler
         ci = @classes[recv_type]
         needs_ptr = class_needs_gc?(ci)
         # Prioritize attr reader/writer over method calls for direct field access
-        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
+        if ci.attr_readers.include?(mname) || ci.attr_accessors.include?(mname)
           return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
         end
-        if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
+        if mname.end_with?("=") && (ci.attr_writers.include?(mname.chomp("=")) || ci.attr_accessors.include?(mname.chomp("=")))
           field = mname.chomp("=")
           val = compile_expr(args[0])
           return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
@@ -5836,10 +5850,10 @@ class SpCompiler
         end
         # Check attr accessors when recv_type is a known class
         needs_ptr = class_needs_gc?(ci)
-        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
+        if ci.attr_readers.include?(mname) || ci.attr_accessors.include?(mname)
           return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
         end
-        if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
+        if mname.end_with?("=") && (ci.attr_writers.include?(mname.chomp("=")) || ci.attr_accessors.include?(mname.chomp("=")))
           field = mname.chomp("=")
           val = compile_expr(args[0])
           return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
@@ -7051,8 +7065,8 @@ class SpCompiler
             while cls
               ci = @classes[cls]
               if ci
-                if ci.methods[method_name] || ci.attrs["reader"].include?(method_name) ||
-                   ci.attrs["accessor"].include?(method_name)
+                if ci.methods[method_name] || ci.attr_readers.include?(method_name) ||
+                   ci.attr_accessors.include?(method_name)
                   return "TRUE"
                 end
               end
@@ -7122,12 +7136,12 @@ class SpCompiler
             # Try to find the class
             @classes.each do |cname, ci|
               all_ivars = collect_all_ivars(ci)
-              if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
+              if ci.attr_readers.include?(mname) || ci.attr_accessors.include?(mname)
                 needs_ptr = class_needs_gc?(ci)
                 accessor = needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
                 return accessor
               end
-              if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
+              if mname.end_with?("=") && (ci.attr_writers.include?(mname.chomp("=")) || ci.attr_accessors.include?(mname.chomp("=")))
                 field = mname.chomp("=")
                 needs_ptr = class_needs_gc?(ci)
                 accessor = needs_ptr ? "#{recv_code}->#{field}" : "#{recv_code}.#{field}"
@@ -7205,11 +7219,11 @@ class SpCompiler
       needs_ptr = class_needs_gc?(ci)
 
       # Check attrs
-      if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
+      if ci.attr_readers.include?(mname) || ci.attr_accessors.include?(mname)
         return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
       end
 
-      if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
+      if mname.end_with?("=") && (ci.attr_writers.include?(mname.chomp("=")) || ci.attr_accessors.include?(mname.chomp("=")))
         field = mname.chomp("=")
         val = compile_expr(args[0])
         return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"

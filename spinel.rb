@@ -8581,6 +8581,10 @@ module Spinel
       result = fix_return_in_expression(result)
       # Post-process: fix stray backslashes in string literals
       result = fix_stray_backslashes(result)
+      # Post-process: fix undeclared _ary_N/_hsh_N in constructors
+      result = fix_undeclared_literals(result)
+      # Post-process: fix string += compiled as C += instead of sp_str_concat
+      result = fix_string_concat_ops(result)
       result
     end
 
@@ -8696,11 +8700,42 @@ module Spinel
     end
 
     def fix_stray_backslashes(code)
-      # Fix stray backslashes: literal \n, \t, etc. that appear outside of string literals
-      # These come from Ruby string literals containing \\n being compiled to C string literals
-      # with a literal backslash followed by 'n' instead of the escape sequence \n
-      # The pattern is: inside a C string literal, a stray \ followed by a non-escape char
-      # Actually, the issue is more specific: the generated C has stray \ outside strings
+      code
+    end
+
+    def fix_string_concat_ops(code)
+      # Fix patterns where string += is compiled as lv_X += "..." instead of sp_str_concat
+      # Pattern: lv_X += "string" or lv_X += sp_str_concat(...)
+      # These should be: lv_X = sp_str_concat(lv_X, ...)
+      lines = code.split("\n")
+      fixed = lines.map do |line|
+        # Pattern: lv_var += expr; where lv_var is const char *
+        if line =~ /\A(\s*)(lv_\w+)\s*\+=\s*(.+);$/
+          indent = $1
+          var = $2
+          expr = $3
+          # Check if this is likely a string concat (not numeric +=)
+          if expr =~ /^"/ || expr =~ /^sp_str_concat/ || expr =~ /^sp_int_to_s/
+            "#{indent}#{var} = sp_str_concat(#{var}, #{expr});"
+          else
+            line
+          end
+        else
+          line
+        end
+      end
+      fixed.join("\n")
+    end
+
+    def fix_undeclared_literals(code)
+      # Fix _ary_N and _hsh_N references in constructor functions that should be
+      # sp_IntArray_new() and sp_StrIntHash_new() respectively
+      code = code.gsub(/(\bself->\w+\s*=\s*)(_ary_\d+)\s*;/) do
+        "#{$1}sp_IntArray_new();"
+      end
+      code = code.gsub(/(\bself->\w+\s*=\s*)(_hsh_\d+)\s*;/) do
+        "#{$1}sp_StrIntHash_new();"
+      end
       code
     end
 

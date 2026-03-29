@@ -1898,9 +1898,15 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
           free(lo); free(hi);
         }
         else if (pred) {
-          /* when value → _case == value */
+          /* when value → _case == value (use strcmp for strings) */
+          vtype_t pt = infer_type(ctx, n->predicate);
           char *val = codegen_expr(ctx, wc);
-          emit_raw(ctx, "_case_%d == %s", case_id, val);
+          if (pt.kind == SPINEL_TYPE_STRING) {
+            emit_raw(ctx, "strcmp(_case_%d, %s) == 0", case_id, val);
+          }
+          else {
+            emit_raw(ctx, "_case_%d == %s", case_id, val);
+          }
           free(val);
         }
         else {

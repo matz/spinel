@@ -1670,8 +1670,20 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                 pm_local_variable_read_node_t *lv = (pm_local_variable_read_node_t *)call->receiver;
                 if (ceq(ctx, lv->name, m->params[pi].name)) {
                   char *called = cstr(ctx, call->name);
-                  if (find_method(cls, called))
+                  /* Check current class first */
+                  if (find_method(cls, called)) {
                     m->params[pi].type = vt_obj(cls->name);
+                  }
+                  else {
+                    /* Check all other classes for the called method */
+                    for (int oci = 0; oci < ctx->class_count; oci++) {
+                      if (oci == ci) continue;
+                      if (find_method(&ctx->classes[oci], called)) {
+                        m->params[pi].type = vt_obj(ctx->classes[oci].name);
+                        break;
+                      }
+                    }
+                  }
                   free(called);
                 }
               }
@@ -1691,6 +1703,50 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
             else if (PM_NODE_TYPE(n) == PM_LOCAL_VARIABLE_WRITE_NODE) {
               pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)n;
               if (scan_sp < 127) scan_stack[scan_sp++] = lw->value;
+            }
+            else if (PM_NODE_TYPE(n) == PM_CASE_NODE) {
+              pm_case_node_t *cn = (pm_case_node_t *)n;
+              if (cn->predicate && scan_sp < 127) scan_stack[scan_sp++] = cn->predicate;
+              for (size_t wi = 0; wi < cn->conditions.size && scan_sp < 127; wi++) {
+                pm_node_t *wn = cn->conditions.nodes[wi];
+                if (PM_NODE_TYPE(wn) == PM_WHEN_NODE) {
+                  pm_when_node_t *when = (pm_when_node_t *)wn;
+                  if (when->statements && scan_sp < 127)
+                    scan_stack[scan_sp++] = (pm_node_t *)when->statements;
+                }
+              }
+              if (cn->else_clause && scan_sp < 127)
+                scan_stack[scan_sp++] = (pm_node_t *)cn->else_clause;
+            }
+            else if (PM_NODE_TYPE(n) == PM_IF_NODE) {
+              pm_if_node_t *ifn = (pm_if_node_t *)n;
+              if (ifn->predicate && scan_sp < 127) scan_stack[scan_sp++] = ifn->predicate;
+              if (ifn->statements && scan_sp < 127) scan_stack[scan_sp++] = (pm_node_t *)ifn->statements;
+              if (ifn->subsequent && scan_sp < 127) scan_stack[scan_sp++] = ifn->subsequent;
+            }
+            else if (PM_NODE_TYPE(n) == PM_ELSE_NODE) {
+              pm_else_node_t *en = (pm_else_node_t *)n;
+              if (en->statements && scan_sp < 127) scan_stack[scan_sp++] = (pm_node_t *)en->statements;
+            }
+            else if (PM_NODE_TYPE(n) == PM_WHILE_NODE) {
+              pm_while_node_t *wn = (pm_while_node_t *)n;
+              if (wn->predicate && scan_sp < 127) scan_stack[scan_sp++] = wn->predicate;
+              if (wn->statements && scan_sp < 127) scan_stack[scan_sp++] = (pm_node_t *)wn->statements;
+            }
+            else if (PM_NODE_TYPE(n) == PM_RETURN_NODE) {
+              pm_return_node_t *rn = (pm_return_node_t *)n;
+              if (rn->arguments && scan_sp < 127)
+                scan_stack[scan_sp++] = (pm_node_t *)rn->arguments;
+            }
+            else if (PM_NODE_TYPE(n) == PM_ARGUMENTS_NODE) {
+              pm_arguments_node_t *an = (pm_arguments_node_t *)n;
+              for (size_t ai = 0; ai < an->arguments.size && scan_sp < 127; ai++)
+                scan_stack[scan_sp++] = an->arguments.nodes[ai];
+            }
+            else if (PM_NODE_TYPE(n) == PM_UNLESS_NODE) {
+              pm_unless_node_t *un = (pm_unless_node_t *)n;
+              if (un->predicate && scan_sp < 127) scan_stack[scan_sp++] = un->predicate;
+              if (un->statements && scan_sp < 127) scan_stack[scan_sp++] = (pm_node_t *)un->statements;
             }
           }
         }

@@ -6795,6 +6795,11 @@ class SpCompiler
           arg = compile_expr(args[0])
           return "getenv(#{arg})"
         end
+        # ARGV[n] -> sp_argv.data[n]
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "ARGV"
+          arg = compile_expr(args[0])
+          return "sp_argv.data[#{arg}]"
+        end
         # Check for class-typed array element access
         elem_class = array_elem_class_for_receiver(recv)
         if elem_class

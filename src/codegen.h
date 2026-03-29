@@ -82,7 +82,7 @@ typedef struct {
 } method_info_t;
 
 /* Class info */
-#define MAX_IVARS 48
+#define MAX_IVARS 96
 #define MAX_METHODS 96
 #define MAX_INCLUDES 16
 typedef struct {

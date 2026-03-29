@@ -591,6 +591,14 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
       free(key); free(method);
       return r;
     }
+    /* ARGV[n] → sp_argv.data[n] */
+    if (ceq(ctx, cr->name, "ARGV") && call->arguments &&
+      call->arguments->arguments.size == 1) {
+      char *idx = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+      char *r = sfmt("sp_argv.data[%s]", idx);
+      free(idx); free(method);
+      return r;
+    }
   }
 
   /* Dir.home → getenv("HOME"), Dir.glob(pat) → sp_Dir_glob(pat) */
@@ -5082,8 +5090,14 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
           free(lo); free(hi);
         }
         else if (pred) {
+          vtype_t pt = n->predicate ? infer_type(ctx, n->predicate) : vt_prim(SPINEL_TYPE_VALUE);
           char *val = codegen_expr(ctx, wc);
-          emit_raw(ctx, "_cpred_%d == %s", cid, val);
+          if (pt.kind == SPINEL_TYPE_STRING) {
+            emit_raw(ctx, "strcmp(_cpred_%d, %s) == 0", cid, val);
+          }
+          else {
+            emit_raw(ctx, "_cpred_%d == %s", cid, val);
+          }
           free(val);
         }
         else {

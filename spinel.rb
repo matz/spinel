@@ -2072,6 +2072,8 @@ module Spinel
       when "[]"
         if node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "ENV"
           Type::STRING
+        elsif node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name.to_s == "ARGV"
+          Type::STRING
         else
           # Check for class-typed array element access
           elem_class = array_elem_class_for_receiver(node.receiver)
@@ -6418,6 +6420,11 @@ module Spinel
         if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ENV"
           arg = compile_expr(args[0])
           return "getenv(#{arg})"
+        end
+        # ARGV[i] -> sp_argv.data[i]
+        if recv.is_a?(Prism::ConstantReadNode) && recv.name.to_s == "ARGV"
+          arg = compile_expr(args[0])
+          return "sp_argv.data[#{arg}]"
         end
         # Check for class-typed array element access
         elem_class = array_elem_class_for_receiver(recv)

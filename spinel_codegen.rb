@@ -10722,26 +10722,28 @@ def set_node_field_array(node, key, arr)
 end
 
 # ---- Main entry point ----
-ast_file = nil
-output_file = nil
+ast_file = ""
+output_file = ""
 
+argv_str = ""
 i = 0
 while i < ARGV.length
-  arg = ARGV[i]
+  argv_str = ARGV[i].to_s
+  arg = argv_str
   if arg.start_with?("--output=")
     output_file = arg.split("=", 2).last
   else
     # Positional args: first is ast_file, second is output_file
-    if ast_file == nil
+    if ast_file == ""
       ast_file = arg
-    elsif output_file == nil
+    elsif output_file == ""
       output_file = arg
     end
   end
   i = i + 1
 end
 
-if ast_file == nil
+if ast_file == ""
   $stderr.puts "Usage: ruby spinel_codegen.rb <ast.txt> <output.c>"
   $stderr.puts "   or: ruby spinel_codegen.rb <ast.txt> --output=output.c"
 else
@@ -10750,7 +10752,7 @@ else
   compiler = SpCompiler.new(root, ast_file)
   c_code = compiler.compile
 
-  if output_file != nil
+  if output_file != ""
     File.write(output_file, c_code)
     $stderr.puts "Wrote #{output_file}"
   else

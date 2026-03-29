@@ -8595,7 +8595,7 @@ module Spinel
       out.puts "}"
 
       result = out.string
-      # Post-process: fix mrb_int -> pointer dereference errors
+      # Post-process: fix mrb_int -> pointer dereference errors (inline calls only)
       result = fix_mrb_int_dereference(result)
       # Post-process: fix _cres_N = return expr; -> return expr;
       result = fix_return_in_expression(result)
@@ -8611,6 +8611,11 @@ module Spinel
       result = fix_intarray_push_cast(result)
       # Post-process: fix dot-member-access on mrb_int (e.g. lv_v.c_name)
       result = fix_dot_member_on_mrb_int(result)
+      # Post-process: fix sp_IntArray_get passed to functions expecting pointer args
+      result = fix_intarray_get_ptr_arg(result)
+      # Post-process: fix mrb_int variable -> pointer dereferences (must run after
+      # fix_undeclared_block_vars which adds missing mrb_int declarations)
+      result = fix_mrb_int_deref_variables(result)
       result
     end
 
@@ -8679,6 +8684,8 @@ module Spinel
       # Add special mappings for built-in types
       # Hash field ->first means the variable is a hash pointer
       # We handle these specially in the cast logic below
+      # De-duplicate struct_fields entries
+      struct_fields.each { |k, v| struct_fields[k] = v.uniq }
 
       lines = code.split("\n")
       fixed_lines = lines.map do |line|
@@ -8709,36 +8716,129 @@ module Spinel
         hash_vars[$1] = true
       end
 
-      # Step 2: Find ALL mrb_int variables used with -> and add casts
-      # This includes locals, parameters, and hash entry values
-      # Scan for any pattern: (word)->field where word is an mrb_int variable
-      # We identify mrb_int variables from declarations and parameter lists
-      mrb_int_vars = {}
-      # Local variable declarations
-      result.scan(/mrb_int\s+(lv_\w+)\s*[=;]/) { hash_vars[$1] = true; mrb_int_vars[$1] = true }
-      # Function parameters: mrb_int lv_name (in function signatures)
-      result.scan(/mrb_int\s+(lv_\w+)(?:\s*[,)])/) { mrb_int_vars[$1] = true }
+      result
+    end
 
-      # Step 3: For each mrb_int variable used with ->, add a cast
-      # Special field -> type mappings for built-in types
+    # Separate pass for fixing mrb_int variable dereferences.  This runs
+    # AFTER fix_undeclared_block_vars so that all variable declarations
+    # are present in the code.
+    def fix_mrb_int_deref_variables(code)
+      struct_fields = {}
+      @classes.each do |cname, ci|
+        all_ivars = collect_all_ivars(ci)
+        all_ivars.each do |iname, _itype|
+          struct_fields[iname] ||= []
+          struct_fields[iname] << cname
+        end
+        (ci.attrs[:reader] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+        (ci.attrs[:accessor] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+      end
+      struct_fields.each { |k, v| struct_fields[k] = v.uniq }
       hash_fields = %w[first last cap size buckets]
-      mrb_int_vars.each_key do |var|
-        result = result.gsub(/(?<!\*\))\b#{Regexp.escape(var)}->(\w+)/) do
-          field = $1
-          if hash_fields.include?(field)
-            "((sp_StrIntHash *)#{var})->#{field}"
-          elsif struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            "((sp_#{stype} *)#{var})->#{field}"
+      fix_mrb_int_deref_per_function(code, struct_fields, hash_fields)
+    end
+
+    # Apply mrb_int -> pointer casts using line-by-line nearest-declaration
+    # lookup.  For each lv_X->field, we find the nearest preceding
+    # declaration of lv_X.  If it is mrb_int, we add a cast; if it is a
+    # typed pointer, we leave it alone.  This avoids the fragile problem
+    # of trying to detect C function boundaries.
+    def fix_mrb_int_deref_per_function(code, struct_fields, hash_fields)
+      lines = code.split("\n")
+
+      # Pass 1: record every declaration of lv_* variables with their type.
+      # var_decls[var_name] = [[line_no, :mrb_int/:typed], ...]  sorted by line
+      var_decls = {}
+      lines.each_with_index do |line, i|
+        line.scan(/mrb_int\s+(lv_\w+)\s*[=;,)]/) do
+          (var_decls[$1] ||= []) << [i, :mrb_int]
+        end
+        line.scan(/(?:sp_\w+|const\s+char)\s*\*\s*(lv_\w+)/) do
+          (var_decls[$1] ||= []) << [i, :typed]
+        end
+      end
+
+      # Also record function-start lines for same-function checks
+      func_boundary_lines = Set.new
+      lines.each_with_index do |l, i|
+        if l =~ /\Astatic\s+/ && l.include?("(") && l.rstrip.end_with?("{")
+          func_boundary_lines << i
+        end
+      end
+      # Precompute: for each line, the last function boundary at or before it
+      last_func_start = Array.new(lines.length, -1)
+      cur = -1
+      lines.each_index do |i|
+        cur = i if func_boundary_lines.include?(i)
+        last_func_start[i] = cur
+      end
+
+
+      # Pass 2: process each line that has uncast lv_X->field
+      lines.each_with_index do |line, i|
+        next unless line =~ /\blv_\w+->/ && line !~ /\A\s*(?:static\s|\/\*|\/\/|#define)/
+        my_func = last_func_start[i]
+        lines[i] = line.gsub(/(?<!\*\))\b(lv_\w+)->(\w+)/) do
+          var = $1; field = $2
+          decls = var_decls[var]
+          if decls
+            # Find nearest declaration in the SAME function
+            nearest = decls.select { |ln, _| ln <= i && last_func_start[ln] == my_func }.last
+            if nearest && nearest[1] == :mrb_int
+              cast = resolve_deref_cast(var, field, i, lines, struct_fields, hash_fields)
+              "((sp_#{cast} *)#{var})->#{field}"
+            else
+              "#{var}->#{field}"
+            end
           else
-            # For unknown fields, try to determine type from context
-            # Default to void* which allows compilation with warnings
-            "((sp_SpNode *)#{var})->#{field}"
+            "#{var}->#{field}"
           end
         end
       end
 
-      result
+      lines.join("\n")
+    end
+
+    # Determine the best cast type for a mrb_int variable dereferencing a field.
+    def resolve_deref_cast(var, field, line_no, lines, struct_fields, hash_fields)
+      return "StrIntHash" if hash_fields.include?(field)
+
+      # Look at context around the variable (backwards ~300 lines to its decl)
+      search_start = [line_no - 300, 0].max
+      context = lines[search_start..line_no].join("\n")
+
+      # 1. Existing explicit cast on this variable in nearby context
+      if context =~ /\(\(sp_(\w+)\s*\*\)#{Regexp.escape(var)}\)->/
+        return $1
+      end
+
+      # 2. Unique field mapping (field exists in only one struct)
+      if struct_fields[field] && struct_fields[field].length == 1
+        return struct_fields[field][0]
+      end
+
+      # 3. Hash iteration assignment context
+      if context =~ /#{Regexp.escape(var)}\s*=\s*(_he_\d+)->value/
+        he_var = $1
+        return "MethodInfo" if context =~ /#{Regexp.escape(he_var)}\b.*->methods->first/
+        return "ClassInfo"  if context =~ /#{Regexp.escape(he_var)}\b.*->classes->first/
+      end
+
+      # 4. StrIntHash_get assignment
+      return "MethodInfo" if context =~ /#{Regexp.escape(var)}\s*=\s*sp_StrIntHash_get\([^,]*->methods\b/
+      return "ClassInfo"  if context =~ /#{Regexp.escape(var)}\s*=\s*sp_StrIntHash_get\([^,]*->classes\b/
+
+      # 5. Variable name heuristics
+      case var
+      when "lv_mi" then return "MethodInfo"
+      when "lv_ci" then return "ClassInfo"
+      when "lv_pi" then return "ParamInfo"
+      when "lv_vi", "lv_var_info" then return "VarInfo"
+      end
+
+      # 6. Fall back to struct_fields first entry or SpNode
+      return struct_fields[field][0] if struct_fields[field] && !struct_fields[field].empty?
+      "SpNode"
     end
 
     def fix_return_in_expression(code)
@@ -8966,6 +9066,118 @@ module Spinel
         end
       end
       code
+    end
+
+    def fix_intarray_get_ptr_arg(code)
+      # Fix sp_IntArray_get(...) passed as argument to functions expecting pointer types.
+      # sp_IntArray_get returns mrb_int, but functions like sp_set_node_field_* expect
+      # sp_SpNode * or sp_IntArray * arguments.  We wrap with (Type *)(intptr_t) cast.
+      #
+      # Patterns handled (balanced-paren aware):
+      #   sp_set_node_field_{string,int,float,ref}( sp_IntArray_get(...), ... )
+      #     -> first arg is sp_SpNode *
+      #   sp_set_node_field_ref( ..., sp_IntArray_get(...) )
+      #     -> third arg is sp_SpNode *
+      #   sp_set_node_field_array( sp_IntArray_get(...), ..., arr )
+      #     -> first arg is sp_SpNode *
+      #   sp_SpNode_*( sp_IntArray_get(...), ... )
+      #     -> first arg is sp_SpNode *
+      #   sp_SpNode__add_child( sp_IntArray_get(...), ... )
+      #     -> first arg is sp_SpNode *
+      #   sp_SpNode__add_children( sp_IntArray_get(...), ..., sp_IntArray_get(...) )
+      #     -> first arg is sp_SpNode *, third arg stays (it's sp_IntArray * but stored in IntArray)
+
+      # Map: function name prefix -> { arg_positions => cast_type }
+      # We use a line-based approach with balanced paren matching.
+      lines = code.split("\n")
+      fixed = lines.map do |line|
+        # Pattern: sp_set_node_field_*(sp_IntArray_get(...), ...)
+        # Cast first arg of sp_set_node_field_* to (sp_SpNode *)(intptr_t)
+        %w[sp_set_node_field_string sp_set_node_field_int
+           sp_set_node_field_float sp_set_node_field_ref
+           sp_set_node_field_array].each do |fname|
+          line = cast_intarray_get_in_func_arg(line, fname, 0, "sp_SpNode *")
+        end
+
+        # Pattern: sp_set_node_field_ref(..., ..., sp_IntArray_get(...))
+        # Cast third arg (index 2) to (sp_SpNode *)(intptr_t)
+        line = cast_intarray_get_in_func_arg(line, "sp_set_node_field_ref", 2, "sp_SpNode *")
+
+        # Pattern: sp_set_node_field_array(..., ..., sp_IntArray_get(...))
+        # Cast third arg (index 2) to (sp_IntArray *)(intptr_t)
+        line = cast_intarray_get_in_func_arg(line, "sp_set_node_field_array", 2, "sp_IntArray *")
+
+        # Pattern: sp_SpNode_* functions with sp_IntArray_get as first arg
+        %w[sp_SpNode_sp_type sp_SpNode_sp_type_is sp_SpNode_sp_has
+           sp_SpNode_sp_child_nodes sp_SpNode__add_child
+           sp_SpNode__add_children sp_SpNode_to_s].each do |fname|
+          line = cast_intarray_get_in_func_arg(line, fname, 0, "sp_SpNode *")
+        end
+
+        line
+      end
+      fixed.join("\n")
+    end
+
+    # In +line+, find calls to +func_name+ and if the argument at +arg_index+
+    # is a bare sp_IntArray_get(...) call, wrap it with (cast_type)(intptr_t).
+    def cast_intarray_get_in_func_arg(line, func_name, arg_index, cast_type)
+      result = ""
+      remaining = line
+      while (idx = remaining.index(func_name + "("))
+        result << remaining[0...idx]
+        remaining = remaining[idx..]
+        open_idx = func_name.length  # index of '('
+
+        # Find balanced closing paren of the outer function call
+        depth = 1
+        pos = open_idx + 1
+        while pos < remaining.length && depth > 0
+          depth += 1 if remaining[pos] == "("
+          depth -= 1 if remaining[pos] == ")"
+          pos += 1
+        end
+        # pos is right after closing paren
+        call_text = remaining[0...pos]
+        after = remaining[pos..]
+
+        # Parse arguments using balanced paren tracking
+        args = split_balanced_args(remaining[(open_idx + 1)...(pos - 1)])
+
+        if args[arg_index] && args[arg_index].strip =~ /\Asp_IntArray_get\(/
+          arg = args[arg_index].strip
+          # Only cast if not already cast
+          unless arg =~ /\A\(\s*#{Regexp.escape(cast_type)}\s*\)/
+            args[arg_index] = " (#{cast_type})(intptr_t)#{arg}"
+          end
+          call_text = "#{func_name}(#{args.join(',')})"
+        end
+
+        result << call_text
+        remaining = after
+      end
+      result << remaining
+      result
+    end
+
+    # Split a string of function arguments by top-level commas (respecting parens).
+    def split_balanced_args(text)
+      args = []
+      depth = 0
+      current = ""
+      text.each_char do |ch|
+        if ch == "(" then depth += 1
+        elsif ch == ")" then depth -= 1
+        end
+        if ch == "," && depth == 0
+          args << current
+          current = ""
+        else
+          current << ch
+        end
+      end
+      args << current unless current.empty?
+      args
     end
 
     def emit_string_helpers(out, before_str_array: true)

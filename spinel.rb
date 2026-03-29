@@ -98,6 +98,7 @@ module Spinel
       @in_main = true
       @line_map = {}         # for __LINE__
       @current_retry_label = nil
+      @gc_restore_before_return = false  # true when class methods need SP_GC_RESTORE() before return
       @method_refs = {}      # var_name -> method_name for method(:name) tracking
       @array_elem_types = {} # var_name -> class_name for class-typed arrays
       @ivar_elem_types = {}  # class_name -> {ivar_name -> elem_class_name} for typed array ivars
@@ -264,6 +265,15 @@ module Spinel
       else
         @func_bodies << line
       end
+    end
+
+    # Emit a return statement, prepending SP_GC_RESTORE() when inside a
+    # GC-managed class method so roots are cleaned up before the frame exits.
+    def emit_gc_return(val)
+      if @gc_restore_before_return
+        emit("SP_GC_RESTORE();")
+      end
+      emit("return #{val};")
     end
 
     # ---- Scope management ----
@@ -2889,14 +2899,19 @@ module Spinel
       cmp_op = mi.instance_variable_defined?(:@comparable_cmp_op) ? mi.instance_variable_get(:@comparable_cmp_op) : nil
       if cmp_op
         # Synthetic Comparable method: delegate to <=>
+        if needs_gc_alloc
+          emit("SP_GC_RESTORE();")
+        end
         emit("return (sp_#{name}__cmp(self, lv_other) #{cmp_op});")
       elsif mi.body
         declare_locals_from_body(mi.body)
+        @gc_restore_before_return = needs_gc_alloc
         generate_body_return(mi.body, mi.return_type)
-      end
-
-      if needs_gc_alloc && !cmp_op
-        emit("SP_GC_RESTORE();")
+        @gc_restore_before_return = false
+        # For void methods the SP_GC_RESTORE() at end of body is reachable
+        if needs_gc_alloc && mi.return_type == Type::VOID
+          emit("SP_GC_RESTORE();")
+        end
       end
 
       emit_raw("}")
@@ -3038,7 +3053,14 @@ module Spinel
           gc_vars.each { |v| emit("SP_GC_ROOT(lv_#{v});") }
         end
 
+        has_gc_roots = !gc_vars.empty?
+        @gc_restore_before_return = has_gc_roots
         generate_method_body(mi.body, mi)
+        @gc_restore_before_return = false
+        # For void methods the trailing SP_GC_RESTORE() is reachable
+        if has_gc_roots && mi.return_type == Type::VOID
+          emit("SP_GC_RESTORE();")
+        end
       end
 
       emit_raw("}")
@@ -3209,12 +3231,15 @@ module Spinel
         generate_case_stmt(node, return_type: mi.return_type)
       when Prism::CaseMatchNode
         val = compile_case_match_expr(node)
-        emit("return #{val};")
+        emit_gc_return(val)
       when Prism::ReturnNode
         if node.arguments && node.arguments.arguments.length > 0
           val = compile_expr(node.arguments.arguments.first)
-          emit("return #{val};")
+          emit_gc_return(val)
         else
+          if @gc_restore_before_return
+            emit("SP_GC_RESTORE();")
+          end
           emit("return;")
         end
       when Prism::CallNode
@@ -3224,7 +3249,7 @@ module Spinel
         else
           val = compile_expr(node)
           if mi.return_type != Type::VOID
-            emit("return #{val};")
+            emit_gc_return(val)
           else
             emit("#{val};")
           end
@@ -3232,13 +3257,13 @@ module Spinel
       when Prism::ArrayNode
         # Return array literal
         val = compile_expr(node)
-        emit("return #{val};")
+        emit_gc_return(val)
       when Prism::WhileNode
         generate_stmt(node)
       else
         val = compile_expr(node)
         if val && val != "" && mi.return_type != Type::VOID
-          emit("return #{val};")
+          emit_gc_return(val)
         else
           generate_stmt(node) if val.nil? || val == ""
         end
@@ -3257,7 +3282,7 @@ module Spinel
       stmts.each_with_index do |s, i|
         if i == stmts.length - 1 && return_type != Type::VOID
           val = compile_expr(s)
-          emit("return #{val};")
+          emit_gc_return(val)
         else
           generate_stmt(s)
         end
@@ -3780,7 +3805,7 @@ module Spinel
         if node.subsequent
           generate_elsif_chain(node.subsequent, res_var, return_type)
         end
-        emit("return #{res_var};")
+        emit_gc_return(res_var)
       else
         emit("if (#{cond}) {")
         @indent += 1
@@ -4158,7 +4183,7 @@ module Spinel
       end
 
       if return_type
-        emit("return #{res_var};")
+        emit_gc_return(res_var)
       end
     end
 
@@ -4346,17 +4371,11 @@ module Spinel
     def generate_return(node)
       if node.arguments && !node.arguments.arguments.empty?
         val = compile_expr(node.arguments.arguments.first)
-        # Check if we need GC restore
-        if @current_class
-          ci = @classes[@current_class]
-          needs_gc_alloc = ci.parent && @classes[ci.parent]
-          if needs_gc_alloc
-            emit("{ SP_GC_RESTORE(); return #{val}; }")
-            return
-          end
-        end
-        emit("return #{val};")
+        emit_gc_return(val)
       else
+        if @gc_restore_before_return
+          emit("SP_GC_RESTORE();")
+        end
         emit("return;")
       end
     end

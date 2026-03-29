@@ -3021,14 +3021,21 @@ module Spinel
           end
         end
 
-        # Check if we need GC for array params
+        # GC root management for pointer-typed locals and params
+        gc_vars = []
         mi.params.each do |p|
-          if [Type::ARRAY, Type::STR_ARRAY, Type::HASH].include?(p.type)
-            @needs_gc = true
-            emit("SP_GC_SAVE();")
-            emit("SP_GC_ROOT(lv_#{p.name});")
-            break
-          end
+          gc_vars << p.name if [Type::ARRAY, Type::FLOAT_ARRAY, Type::STR_ARRAY, Type::HASH, Type::POLY_HASH].include?(p.type)
+          gc_vars << p.name if p.type.is_a?(String) && @classes[p.type] && class_needs_gc?(@classes[p.type])
+        end
+        locals.each do |lname, ltype|
+          next if mi.params.any? { |p| p.name == lname }
+          gc_vars << lname if [Type::ARRAY, Type::FLOAT_ARRAY, Type::STR_ARRAY, Type::HASH, Type::POLY_HASH].include?(ltype)
+          gc_vars << lname if ltype.is_a?(String) && @classes[ltype] && class_needs_gc?(@classes[ltype])
+        end
+        unless gc_vars.empty?
+          @needs_gc = true
+          emit("SP_GC_SAVE();")
+          gc_vars.each { |v| emit("SP_GC_ROOT(lv_#{v});") }
         end
 
         generate_method_body(mi.body, mi)
@@ -9400,7 +9407,7 @@ module Spinel
 
         static sp_gc_hdr *sp_gc_heap = NULL;
         static size_t sp_gc_bytes = 0;
-        static size_t sp_gc_threshold = 256 * 1024 * 1024;
+        static size_t sp_gc_threshold = 256 * 1024;
 
         #define SP_GC_STACK_MAX 8192
         static void **sp_gc_roots[SP_GC_STACK_MAX];

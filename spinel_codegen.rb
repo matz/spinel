@@ -4,165 +4,325 @@
 # Compiles Ruby source to standalone C via Prism AST and type inference.
 # Usage: ruby spinel.rb --source=input.rb --output=output.c
 
-require "json"
 require "stringio"
-require "set"
 
-
-# SpNode wraps a JSON hash to behave like a Prism AST node.
-# Attributes are accessed as methods (node.name, node.receiver, etc.)
-# and node types are checked with case/when on node.sp_type.
+# SpNode wraps AST data with explicit attributes.
+# All attributes accessed by name; type field identifies node kind.
 class SpNode
-  attr_reader :data
+  attr_accessor :type, :name, :value, :content, :receiver, :arguments
+  attr_accessor :body, :statements, :block, :parameters, :predicate
+  attr_accessor :subsequent, :else_clause, :conditions, :elements
+  attr_accessor :left, :right, :parts, :expression, :rescue_expression
+  attr_accessor :lefts, :targets, :index, :collection
+  attr_accessor :constant_path, :superclass, :parent
+  attr_accessor :key, :pattern, :reference, :exceptions
+  attr_accessor :rescue_clause, :ensure_clause, :call_operator
+  attr_accessor :binary_operator, :default_node
+  attr_accessor :requireds, :optionals, :keywords, :rest
+  attr_accessor :call, :target, :unescaped, :number, :maximum
+  attr_accessor :start_line
 
-  def initialize(data)
-    @data = data
+  def initialize
+    @type = ""
+    @name = ""
+    @value = nil
+    @content = ""
+    @receiver = nil
+    @arguments = nil
+    @body = nil
+    @statements = nil
+    @block = nil
+    @parameters = nil
+    @predicate = nil
+    @subsequent = nil
+    @else_clause = nil
+    @conditions = nil
+    @elements = nil
+    @left = nil
+    @right = nil
+    @parts = nil
+    @expression = nil
+    @rescue_expression = nil
+    @lefts = nil
+    @targets = nil
+    @index = nil
+    @collection = nil
+    @constant_path = nil
+    @superclass = nil
+    @parent = nil
+    @key = nil
+    @pattern = nil
+    @reference = nil
+    @exceptions = nil
+    @rescue_clause = nil
+    @ensure_clause = nil
+    @call_operator = nil
+    @binary_operator = nil
+    @default_node = nil
+    @requireds = nil
+    @optionals = nil
+    @keywords = nil
+    @rest = nil
+    @call = nil
+    @target = nil
+    @unescaped = nil
+    @number = 0
+    @maximum = 0
+    @start_line = 0
   end
 
-  # The type string, e.g. "IntegerNode", "CallNode"
   def sp_type
-    @data["type"] || ""
+    @type
   end
 
-  def sp_type?(t)
-    sp_type == t
+  def sp_type_is(t)
+    @type == t
   end
 
-  def sp_has?(attr)
-    @data.key?(attr.to_s)
-  end
-
-  # For case/when matching: when "IntegerNode" matches if sp_type == "IntegerNode"
-  def ===(other)
-    if other.is_a?(String)
-      sp_type == other
+  def sp_has(attr_name)
+    case attr_name
+    when "type" then @type != ""
+    when "name" then @name != ""
+    when "value" then @value != nil
+    when "content" then @content != ""
+    when "receiver" then @receiver != nil
+    when "arguments" then @arguments != nil
+    when "body" then @body != nil
+    when "statements" then @statements != nil
+    when "block" then @block != nil
+    when "parameters" then @parameters != nil
+    when "predicate" then @predicate != nil
+    when "subsequent" then @subsequent != nil
+    when "else_clause" then @else_clause != nil
+    when "conditions" then @conditions != nil
+    when "elements" then @elements != nil
+    when "left" then @left != nil
+    when "right" then @right != nil
+    when "parts" then @parts != nil
+    when "expression" then @expression != nil
+    when "lefts" then @lefts != nil
+    when "index" then @index != nil
+    when "collection" then @collection != nil
+    when "constant_path" then @constant_path != nil
+    when "superclass" then @superclass != nil
+    when "parent" then @parent != nil
+    when "key" then @key != nil
+    when "pattern" then @pattern != nil
+    when "reference" then @reference != nil
+    when "exceptions" then @exceptions != nil
+    when "rescue_clause" then @rescue_clause != nil
+    when "ensure_clause" then @ensure_clause != nil
+    when "call_operator" then @call_operator != nil
+    when "binary_operator" then @binary_operator != nil
+    when "rest" then @rest != nil
+    when "call" then @call != nil
+    when "target" then @target != nil
+    when "unescaped" then @unescaped != nil
+    when "start_line" then @start_line != 0
     else
-      super
+      false
     end
   end
 
-  # Collect child nodes (all SpNode values recursively in immediate children)
+  # Collect child nodes (all SpNode values in immediate children)
   def sp_child_nodes
     result = []
-    @data.each do |k, v|
-      next if k == "type" || k == "location"
-      case v
-      when Hash
-        result << SpNode.new(v) if v["type"]
-      when Array
-        v.each do |item|
-          result << SpNode.new(item) if item.is_a?(Hash) && item["type"]
-        end
-      end
+    # Check all attributes that could be SpNode or Array of SpNode
+    _add_child(result, @receiver)
+    _add_child(result, @arguments)
+    # @body can be SpNode or Array (StatementsNode.body is Array)
+    if @body.is_a?(Array)
+      _add_children(result, @body)
+    else
+      _add_child(result, @body)
     end
+    _add_child(result, @statements)
+    _add_child(result, @block)
+    _add_child(result, @parameters)
+    _add_child(result, @predicate)
+    _add_child(result, @subsequent)
+    _add_child(result, @else_clause)
+    _add_child(result, @expression)
+    _add_child(result, @rescue_expression)
+    _add_child(result, @constant_path)
+    _add_child(result, @superclass)
+    _add_child(result, @key)
+    _add_child(result, @value) if @value.is_a?(SpNode)
+    _add_child(result, @pattern)
+    _add_child(result, @reference)
+    _add_child(result, @rescue_clause)
+    _add_child(result, @ensure_clause)
+    _add_child(result, @left)
+    _add_child(result, @right)
+    _add_child(result, @call)
+    _add_child(result, @target)
+    _add_child(result, @index)
+    _add_child(result, @collection)
+    _add_children(result, @elements)
+    _add_children(result, @conditions)
+    _add_children(result, @parts)
+    _add_children(result, @lefts)
+    _add_children(result, @exceptions)
+    _add_children(result, @requireds)
+    _add_children(result, @optionals)
+    _add_children(result, @keywords)
     result
   end
 
-  def respond_to_missing?(sym, include_private = false)
-    @data.key?(sym.to_s) || super
-  end
-
-  def respond_to?(sym, include_private = false)
-    return true if sym == :sp_type || sym == :sp_child_nodes
-    @data.key?(sym.to_s) || super
-  end
-
-  def method_missing(sym, *args)
-    key = sym.to_s
-    if @data.key?(key)
-      val = @data[key]
-      return wrap(val)
+  def _add_child(result, child)
+    if child.is_a?(SpNode)
+      result.push(child)
     end
-    # For methods like statements, body, etc. that might not exist, return nil
-    nil
   end
 
-  def nil?
-    @data.empty?
+  def _add_children(result, arr)
+    if arr.is_a?(Array)
+      i = 0
+      while i < arr.length
+        if arr[i].is_a?(SpNode)
+          result.push(arr[i])
+        end
+        i += 1
+      end
+    end
   end
 
   def to_s
-    @data.to_s
-  end
-
-  # Make is_a? work - SpNode is always SpNode
-  # We override === on String class below for case/when
-
-  private
-
-  def wrap(val)
-    case val
-    when Hash
-      val["type"] ? SpNode.new(val) : val
-    when Array
-      val.map { |v| v.is_a?(Hash) && v["type"] ? SpNode.new(v) : v }
-    else
-      val
-    end
+    @type
   end
 end
 
-# Patch String#=== to check SpNode type for case/when
-class String
-  alias_method :_orig_case_eq, :===
-  def ===(other)
-    if other.is_a?(SpNode)
-      self == other.sp_type
-    else
-      _orig_case_eq(other)
-    end
-  end
-end
-
-# Helper to check if something is a specific node type
+# Helper: check if obj is a SpNode with given type
 def sp_is?(obj, type_name)
-  obj.is_a?(SpNode) && obj.sp_type == type_name
+  if obj == nil
+    return false
+  end
+  if obj.is_a?(SpNode)
+    return obj.type == type_name
+  end
+  false
 end
 
-# Add is_a_node? to all objects for easy type checking
-class Object
-  def is_a_node?(type_name)
-    is_a?(SpNode) && sp_type == type_name
-  end
-end
+
 
 
 module Spinel
+  def self.push_unique(arr, val)
+    arr.push(val) unless arr.include?(val)
+  end
+
   VERSION = "0.1.0"
 
   # -------- Type system --------
   module Type
-    UNKNOWN   = :unknown
-    INTEGER   = :integer
-    FLOAT     = :float
-    BOOLEAN   = :boolean
-    STRING    = :string
-    NIL       = :nil
-    VOID      = :void
-    ARRAY     = :int_array
-    STR_ARRAY = :str_array
-    HASH      = :str_int_hash
-    STR_HASH  = :str_str_hash  # string->string hash (sp_RbHash)
-    RANGE     = :range
-    MUTABLE_STRING = :mutable_string
-    SYMBOL    = :symbol        # treated as string
-    TIME      = :time
-    FILE_OBJ  = :file_obj
-    STRINGIO  = :stringio
-    PROC      = :proc
-    FLOAT_ARRAY = :float_array # array of mrb_float
-    POLY      = :poly       # NaN-boxed sp_RbValue
-    POLY_ARRAY = :poly_array # array of sp_RbValue
-    POLY_HASH = :poly_hash  # string->sp_RbValue hash
+    UNKNOWN   = "unknown"
+    INTEGER   = "integer"
+    FLOAT     = "float"
+    BOOLEAN   = "boolean"
+    STRING    = "string"
+    NIL       = "nil_type"
+    VOID      = "void"
+    ARRAY     = "int_array"
+    STR_ARRAY = "str_array"
+    HASH      = "str_int_hash"
+    STR_HASH  = "str_str_hash"  # string->string hash (sp_RbHash)
+    RANGE     = "range"
+    MUTABLE_STRING = "mutable_string"
+    SYMBOL    = "symbol"        # treated as string
+    TIME      = "time"
+    FILE_OBJ  = "file_obj"
+    STRINGIO  = "stringio"
+    PROC      = "proc"
+    FLOAT_ARRAY = "float_array" # array of mrb_float
+    POLY      = "poly"       # NaN-boxed sp_RbValue
+    POLY_ARRAY = "poly_array" # array of sp_RbValue
+    POLY_HASH = "poly_hash"  # string->sp_RbValue hash
   end
 
   # -------- Data structures --------
-  VarInfo = Struct.new(:name, :type, :c_name, :declared, :is_ivar, :is_constant, :is_global, keyword_init: true)
-  MethodInfo = Struct.new(:name, :params, :return_type, :body, :has_yield, :is_class_method,
-                          :owner_class, :default_values, :has_rest, :rest_name, :has_kwargs, keyword_init: true)
-  ParamInfo = Struct.new(:name, :type, :default_node, keyword_init: true)
-  ClassInfo = Struct.new(:name, :parent, :methods, :ivars, :class_methods, :attrs, keyword_init: true)
-  BlockEnvEntry = Struct.new(:name, :type, :is_ptr, keyword_init: true)
+class VarInfo
+  attr_accessor :name, :type, :c_name, :declared, :is_ivar, :is_constant, :is_global
+  def initialize
+    @name = ""; @type = "unknown"; @c_name = ""
+    @declared = false; @is_ivar = false; @is_constant = false; @is_global = false
+  end
+end
+class MethodInfo
+  attr_accessor :name, :params, :return_type, :body, :has_yield, :is_class_method
+  attr_accessor :owner_class, :default_values, :has_rest, :rest_name, :has_kwargs
+  def initialize
+    @name = ""; @params = []; @return_type = "unknown"; @body = nil
+    @has_yield = false; @is_class_method = false; @owner_class = nil
+    @default_values = {}; @has_rest = false; @rest_name = nil; @has_kwargs = false
+  end
+end
+class ParamInfo
+  attr_accessor :name, :type, :default_node
+  def initialize
+    @name = ""; @type = "unknown"; @default_node = nil
+  end
+end
+class ClassInfo
+  attr_accessor :name, :parent, :methods, :ivars, :class_methods, :attrs
+  def initialize
+    @name = ""; @parent = nil; @methods = {}; @ivars = {}
+    @class_methods = {}; @attrs = {"reader" => [], "writer" => [], "accessor" => []}
+  end
+end
+class BlockEnvEntry
+  attr_accessor :name, :type, :is_ptr
+  def initialize
+    @name = ""; @type = "unknown"; @is_ptr = false
+  end
+end
+
+  def self.make_var_info(name, type, c_name, declared, is_ivar, is_constant, is_global)
+    vi = VarInfo.new
+    vi.name = name; vi.type = type; vi.c_name = c_name
+    vi.declared = declared; vi.is_ivar = is_ivar
+    vi.is_constant = is_constant; vi.is_global = is_global
+    vi
+  end
+
+  def self.make_method_info(name, params, return_type, body, has_yield, is_class_method, owner_class, default_values, has_rest, rest_name, has_kwargs)
+    mi = MethodInfo.new
+    mi.name = name; mi.params = params; mi.return_type = return_type
+    mi.body = body; mi.has_yield = has_yield; mi.is_class_method = is_class_method
+    mi.owner_class = owner_class
+    if default_values != nil
+      mi.default_values = default_values
+    end
+    if has_rest != nil && has_rest != false
+      mi.has_rest = has_rest
+    end
+    if rest_name != nil
+      mi.rest_name = rest_name
+    end
+    if has_kwargs != nil && has_kwargs != false
+      mi.has_kwargs = has_kwargs
+    end
+    mi
+  end
+
+  def self.make_param_info(name, type, default_node)
+    pi = ParamInfo.new
+    pi.name = name; pi.type = type
+    if default_node != nil
+      pi.default_node = default_node
+    end
+    pi
+  end
+
+  def self.make_class_info(name, parent, methods, ivars, class_methods, attrs)
+    ci = ClassInfo.new
+    ci.name = name
+    if parent != nil
+      ci.parent = parent
+    end
+    ci.methods = methods; ci.ivars = ivars; ci.class_methods = class_methods
+    ci.attrs = attrs
+    ci
+  end
 
   # -------- Compiler --------
   class Compiler
@@ -203,7 +363,7 @@ module Spinel
       @needs_regexp = false
       @regexp_patterns = []  # collected regex patterns: [{pattern:, c_var:}]
       @regexp_pattern_map = {}  # pattern string -> c_var name
-      @string_helpers_needed = Set.new
+      @string_helpers_needed = []
       @forward_decls = []
       @struct_decls = []
       @func_bodies = []
@@ -283,18 +443,13 @@ module Spinel
     def apply_module_includes
       return unless @module_methods
       @classes.each do |cname, ci|
-        includes = ci.attrs[:includes] || []
+        includes = ci.attrs["includes"] || []
         includes.each do |mod_name|
           next unless @module_methods[mod_name]
           @module_methods[mod_name].each do |mname, mi|
             next if ci.methods[mname]  # Don't override existing methods
             # Clone the method for this class
-            new_mi = MethodInfo.new(
-              name: mi.name, params: mi.params.map(&:dup), return_type: mi.return_type,
-              body: mi.body, has_yield: mi.has_yield,
-              is_class_method: false, owner_class: cname,
-              default_values: mi.default_values || {}
-            )
+            new_mi = Spinel.make_method_info(mi.name, mi.params.map { |_x| _x.dup }, mi.return_type, mi.body, mi.has_yield, false, cname, mi.default_values || {}, false, nil, false)
             ci.methods[mname] = new_mi
           end
         end
@@ -408,9 +563,10 @@ module Spinel
     end
 
     def declare_var(name, type, c_name: nil, is_ivar: false, is_constant: false, is_global: false)
-      c_name ||= "lv_#{name}"
-      info = VarInfo.new(name: name, type: type, c_name: c_name, declared: false,
-                         is_ivar: is_ivar, is_constant: is_constant, is_global: is_global)
+      if c_name == nil
+        c_name = "lv_#{name}"
+      end
+      info = Spinel.make_var_info(name, type, c_name, false, is_ivar, is_constant, is_global)
       @scope_stack.last[name] = info
       info
     end
@@ -418,7 +574,7 @@ module Spinel
     # ---- Phase 1: Collect declarations ----
     def collect_declarations(node)
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         collect_declarations(node.statements)
       when "StatementsNode"
@@ -435,27 +591,22 @@ module Spinel
         # Handle define_method(:name) { ... } as top-level method definition
         if node.name.to_s == "define_method" && node.arguments &&
            node.arguments.arguments.length == 1 &&
-           node.arguments.arguments[0].is_a_node?("SymbolNode") && node.block
+           (node.arguments.arguments[0] != nil && node.arguments.arguments[0].type == "SymbolNode") && node.block
           mname = node.arguments.arguments[0].value
           block = node.block
           params = []
           body = nil
-          if sp_is?(block, "BlockNode")
+          if (block != nil && block.type == "BlockNode")
             if block.parameters && block.parameters.parameters
               bp = block.parameters.parameters
               (bp.requireds || []).each do |p|
-                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
-                params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+                pname = (p != nil && p.type == "RequiredParameterNode") ? p.name.to_s : p.to_s
+                params << Spinel.make_param_info(pname, Type::UNKNOWN, nil)
               end
             end
             body = block.body
           end
-          mi = MethodInfo.new(
-            name: mname, params: params, return_type: Type::UNKNOWN,
-            body: body, has_yield: false,
-            is_class_method: false, owner_class: nil,
-            default_values: {}
-          )
+          mi = Spinel.make_method_info(mname, params, Type::UNKNOWN, body, false, false, nil, {}, false, nil, false)
           @methods[mname] = mi
         end
       end
@@ -464,33 +615,33 @@ module Spinel
     BUILTIN_TYPES = %w[Integer Float String Boolean Symbol].freeze
 
     def collect_class(node)
-      name = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
+      name = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
       parent = nil
       is_struct_inherit = false
 
       # Open class for built-in types: just collect methods, don't create struct
       if BUILTIN_TYPES.include?(name)
-        @open_class_methods ||= {}
-        @open_class_methods[name] ||= {}
+        if @open_class_methods == nil
+        @open_class_methods = {}
+      end
+      @open_class_methods
+        if @open_class_methods[name] == nil
+        @open_class_methods[name] = {}
+      end
         if node.body
-          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+          stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
           stmts.each do |s|
-            if sp_is?(s, "DefNode") && !s.receiver
+            if (s != nil && s.type == "DefNode") && !s.receiver
               # Instance method on built-in type
               mi_name = s.name.to_s
               params = []
               if s.parameters
                 (s.parameters.requireds || []).each do |p|
-                  pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
-                  params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+                  pname = (p != nil && p.type == "RequiredParameterNode") ? p.name.to_s : p.to_s
+                  params << Spinel.make_param_info(pname, Type::UNKNOWN, nil)
                 end
               end
-              mi = MethodInfo.new(
-                name: mi_name, params: params, return_type: Type::UNKNOWN,
-                body: s.body, has_yield: body_has_yield?(s.body),
-                is_class_method: false, owner_class: name,
-                default_values: {}
-              )
+              mi = Spinel.make_method_info(mi_name, params, Type::UNKNOWN, s.body, body_has_yield?(s.body), false, name, {}, false, nil, false)
               @open_class_methods[name][mi_name] = mi
             end
           end
@@ -499,45 +650,43 @@ module Spinel
       end
 
       if node.superclass
-        if sp_is?(node.superclass, "CallNode") && node.superclass.name.to_s == "new" &&
-           sp_is?(node.superclass.receiver, "ConstantReadNode") && node.superclass.receiver.name.to_s == "Struct"
+        if (node.superclass != nil && node.superclass.type == "CallNode") && node.superclass.name.to_s == "new" &&
+           (node.superclass.receiver != nil && node.superclass.receiver.type == "ConstantReadNode") && node.superclass.receiver.name.to_s == "Struct"
           # class X < Struct.new(:field1, :field2)
           is_struct_inherit = true
           struct_args = call_args(node.superclass)
-          fields = struct_args.select { |a| sp_is?(a, "SymbolNode") }.map { |a| a.value }
+          fields = struct_args.select { |a| (a != nil && a.type == "SymbolNode") }.map { |a| a.value }
         else
-          parent = case node.superclass
+          parent = case node.superclass.type
                    when "ConstantReadNode" then node.superclass.name.to_s
                    else nil
                    end
         end
       end
 
-      ci = ClassInfo.new(name: name, parent: parent, methods: {}, ivars: {},
-                         class_methods: {}, attrs: { reader: [], writer: [], accessor: [] })
+      ci = Spinel.make_class_info(name, parent, {}, {}, {}, {"reader" => [], "writer" => [], "accessor" => []})
 
       if is_struct_inherit
         fields.each { |f| ci.ivars[f] = Type::INTEGER }
-        ci.attrs[:reader] = fields.dup
-        ci.attrs[:writer] = fields.dup
-        ci.attrs[:accessor] = fields.dup
+        ci.attrs["reader"] = fields.dup
+        ci.attrs["writer"] = fields.dup
+        ci.attrs["accessor"] = fields.dup
         # Create synthetic initialize
-        params = fields.map { |f| ParamInfo.new(name: f, type: Type::INTEGER) }
-        ci.methods["initialize"] = MethodInfo.new(
-          name: "initialize", params: params, return_type: Type::VOID,
-          body: nil, has_yield: false, is_class_method: false,
-          owner_class: name
-        )
-        @struct_classes ||= {}
+        params = fields.map { |f| Spinel.make_param_info(f, Type::INTEGER, nil) }
+        ci.methods["initialize"] = Spinel.make_method_info("initialize", params, Type::VOID, nil, false, false, name, {}, false, nil, false)
+        if @struct_classes == nil
+        @struct_classes = {}
+      end
+      @struct_classes
         @struct_classes[name] = fields
       end
 
       @classes[name] = ci
 
       if node.body
-        stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+        stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
         stmts.each do |s|
-          case s
+          case s.type
           when "DefNode"
             if s.receiver
               # self.method_name -> class method
@@ -550,10 +699,12 @@ module Spinel
             # Handle include Comparable / include Enumerable
             if s.name.to_s == "include" && s.arguments
               s.arguments.arguments.each do |arg|
-                if sp_is?(arg, "ConstantReadNode")
+                if (arg != nil && arg.type == "ConstantReadNode")
                   mod_name = arg.name.to_s
-                  ci.attrs[:includes] ||= []
-                  ci.attrs[:includes] << mod_name
+                  if ci.attrs["includes"] == nil
+              ci.attrs["includes"] = []
+            end
+                  ci.attrs["includes"] << mod_name
                 end
               end
             end
@@ -565,61 +716,66 @@ module Spinel
     end
 
     def collect_module(node)
-      mod_name = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
-      @module_methods ||= {}
-      @module_methods[mod_name] ||= {}
-      @module_class_methods ||= {}
-      @module_class_methods[mod_name] ||= {}
-      @module_ivars ||= {}
-      @module_ivars[mod_name] ||= {}
+      mod_name = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : node.constant_path.to_s
+      if @module_methods == nil
+        @module_methods = {}
+      end
+      @module_methods
+      if @module_methods[mod_name] == nil
+        @module_methods[mod_name] = {}
+      end
+      if @module_class_methods == nil
+        @module_class_methods = {}
+      end
+      @module_class_methods
+      if @module_class_methods[mod_name] == nil
+        @module_class_methods[mod_name] = {}
+      end
+      if @module_ivars == nil
+        @module_ivars = {}
+      end
+      @module_ivars
+      if @module_ivars[mod_name] == nil
+        @module_ivars[mod_name] = {}
+      end
       if node.body
-        stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+        stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
         stmts.each do |s|
-          if sp_is?(s, "ConstantWriteNode")
+          if (s != nil && s.type == "ConstantWriteNode")
             cname = s.name.to_s
             type = infer_type(s.value)
             val = const_value_to_c(s.value, type)
             @module_constants["#{mod_name}::#{cname}"] = {
               type: type, c_name: "sp_#{mod_name}_#{cname}", value: val
             }
-          elsif sp_is?(s, "InstanceVariableWriteNode")
+          elsif (s != nil && s.type == "InstanceVariableWriteNode")
             # Module-level ivar: @x = 123 -> static mrb_int sp_Mod_x = 123;
             ivar = s.name.to_s.delete_prefix("@")
             type = infer_type(s.value)
             @module_ivars[mod_name][ivar] = { type: type, value_node: s.value }
-          elsif sp_is?(s, "DefNode") && s.receiver
+          elsif (s != nil && s.type == "DefNode") && s.receiver
             # Module class method: def self.rand
             mname = s.name.to_s
             params = []
             if s.parameters
               (s.parameters.requireds || []).each do |p|
-                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
-                params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+                pname = (p != nil && p.type == "RequiredParameterNode") ? p.name.to_s : p.to_s
+                params << Spinel.make_param_info(pname, Type::UNKNOWN, nil)
               end
             end
-            mi = MethodInfo.new(
-              name: mname, params: params, return_type: Type::UNKNOWN,
-              body: s.body, has_yield: body_has_yield?(s.body),
-              is_class_method: true, owner_class: mod_name,
-              default_values: {}
-            )
+            mi = Spinel.make_method_info(mname, params, Type::UNKNOWN, s.body, body_has_yield?(s.body), true, mod_name, {}, false, nil, false)
             @module_class_methods[mod_name][mname] = mi
-          elsif sp_is?(s, "DefNode") && !s.receiver
+          elsif (s != nil && s.type == "DefNode") && !s.receiver
             # Module instance method
             mname = s.name.to_s
             params = []
             if s.parameters
               (s.parameters.requireds || []).each do |p|
-                pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
-                params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+                pname = (p != nil && p.type == "RequiredParameterNode") ? p.name.to_s : p.to_s
+                params << Spinel.make_param_info(pname, Type::UNKNOWN, nil)
               end
             end
-            mi = MethodInfo.new(
-              name: mname, params: params, return_type: Type::UNKNOWN,
-              body: s.body, has_yield: body_has_yield?(s.body),
-              is_class_method: false, owner_class: mod_name,
-              default_values: {}
-            )
+            mi = Spinel.make_method_info(mname, params, Type::UNKNOWN, s.body, body_has_yield?(s.body), false, mod_name, {}, false, nil, false)
             @module_methods[mod_name][mname] = mi
           end
         end
@@ -627,26 +783,26 @@ module Spinel
     end
 
     def collect_attr_call(node, ci)
-      return unless sp_is?(node, "CallNode")
+      return unless (node != nil && node.type == "CallNode")
       mname = node.name.to_s
       return unless %w[attr_accessor attr_reader attr_writer].include?(mname)
 
       args = call_args(node)
       args.each do |a|
-        sym_name = case a
+        sym_name = case a.type
                    when "SymbolNode" then a.value
                    else nil
                    end
         next unless sym_name
         case mname
         when "attr_accessor"
-          ci.attrs[:accessor] << sym_name
-          ci.attrs[:reader] << sym_name
-          ci.attrs[:writer] << sym_name
+          ci.attrs["accessor"] << sym_name
+          ci.attrs["reader"] << sym_name
+          ci.attrs["writer"] << sym_name
         when "attr_reader"
-          ci.attrs[:reader] << sym_name
+          ci.attrs["reader"] << sym_name
         when "attr_writer"
-          ci.attrs[:writer] << sym_name
+          ci.attrs["writer"] << sym_name
         end
       end
     end
@@ -661,26 +817,26 @@ module Spinel
       if node.parameters
         # Required params
         (node.parameters.requireds || []).each do |p|
-          pname = sp_is?(p, "RequiredParameterNode") ? p.name.to_s : p.to_s
-          params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: nil)
+          pname = (p != nil && p.type == "RequiredParameterNode") ? p.name.to_s : p.to_s
+          params << Spinel.make_param_info(pname, Type::UNKNOWN, nil)
         end
         # Optional params
         (node.parameters.optionals || []).each do |p|
           pname = p.name.to_s
-          params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: p.value)
+          params << Spinel.make_param_info(pname, Type::UNKNOWN, p.value)
           defaults[pname] = p.value
         end
         # Rest params (*args)
-        if sp_is?(node.parameters.rest, "RestParameterNode")
+        if (node.parameters.rest != nil && node.parameters.rest.type == "RestParameterNode")
           rest_name = node.parameters.rest.name.to_s
           has_rest = true
-          params << ParamInfo.new(name: rest_name, type: Type::ARRAY, default_node: nil)
+          params << Spinel.make_param_info(rest_name, Type::ARRAY, nil)
         end
         # Keyword params (name:, greeting: "Hello")
         (node.parameters.keywords || []).each do |kw|
           pname = kw.name.to_s.chomp(":")
-          default_node = kw.sp_has?(:value) ? kw.value : nil
-          params << ParamInfo.new(name: pname, type: Type::UNKNOWN, default_node: default_node)
+          default_node = kw.sp_has("value") ? kw.value : nil
+          params << Spinel.make_param_info(pname, Type::UNKNOWN, default_node)
           defaults[pname] = default_node if default_node
         end
       end
@@ -690,18 +846,12 @@ module Spinel
 
       # Detect &block parameter
       block_param_name = nil
-      if node.parameters && sp_is?(node.parameters.block, "BlockParameterNode")
+      if node.parameters && (node.parameters.block != nil && node.parameters.block.type == "BlockParameterNode")
         block_param_name = node.parameters.block.name.to_s
         has_yield = true  # &block implies the method receives a block
       end
 
-      mi = MethodInfo.new(
-        name: name, params: params, return_type: Type::UNKNOWN,
-        body: node.body, has_yield: has_yield,
-        is_class_method: is_class_method, owner_class: owner,
-        default_values: defaults, has_rest: has_rest, rest_name: rest_name,
-        has_kwargs: has_kwargs
-      )
+      mi = Spinel.make_method_info(name, params, Type::UNKNOWN, node.body, has_yield, is_class_method, owner, defaults, has_rest, rest_name, has_kwargs)
       mi.instance_variable_set(:@block_param_name, block_param_name)
 
       if owner
@@ -712,22 +862,22 @@ module Spinel
           # Detect simple getter: def x; @x; end -> synthetic attr_reader
           ci = @classes[owner]
           if !name.end_with?("=") && params.empty? && node.body
-            body_stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
-            if body_stmts.length == 1 && body_stmts[0].is_a_node?("InstanceVariableReadNode")
+            body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
+            if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableReadNode")
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               if ivar == name
-                ci.attrs[:reader] << name unless ci.attrs[:reader].include?(name)
+                ci.attrs["reader"] << name unless ci.attrs["reader"].include?(name)
               end
             end
           end
           # Detect simple setter: def x=(v); @x = v; end -> synthetic attr_writer
           if name.end_with?("=") && params.length == 1 && node.body
-            body_stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
-            if body_stmts.length == 1 && body_stmts[0].is_a_node?("InstanceVariableWriteNode")
+            body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
+            if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableWriteNode")
               ivar = body_stmts[0].name.to_s.delete_prefix("@")
               field = name.chomp("=")
               if ivar == field
-                ci.attrs[:writer] << field unless ci.attrs[:writer].include?(field)
+                ci.attrs["writer"] << field unless ci.attrs["writer"].include?(field)
               end
             end
           end
@@ -739,7 +889,7 @@ module Spinel
 
     def body_has_yield?(node)
       return false unless node
-      case node
+      case node.type
       when "YieldNode"
         true
       when "StatementsNode"
@@ -755,9 +905,9 @@ module Spinel
       when "BlockNode"
         body_has_yield?(node.body)
       else
-        if node.sp_has?(:statements)
+        if node.sp_has("statements")
           body_has_yield?(node.statements)
-        elsif node.sp_has?(:body)
+        elsif node.sp_has("body")
           body_has_yield?(node.body)
         else
           false
@@ -769,8 +919,8 @@ module Spinel
       name = node.name.to_s
 
       # Check for Struct.new(:x, :y)
-      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" &&
-         sp_is?(node.value.receiver, "ConstantReadNode") && node.value.receiver.name.to_s == "Struct"
+      if (node.value != nil && node.value.type == "CallNode") && node.value.name.to_s == "new" &&
+         (node.value.receiver != nil && node.value.receiver.type == "ConstantReadNode") && node.value.receiver.name.to_s == "Struct"
         collect_struct_new(name, node.value)
         return
       end
@@ -782,24 +932,22 @@ module Spinel
     def collect_struct_new(name, call_node)
       args = call_args(call_node)
       # Filter out keyword_init option
-      fields = args.select { |a| sp_is?(a, "SymbolNode") }.map { |a| a.value }
+      fields = args.select { |a| (a != nil && a.type == "SymbolNode") }.map { |a| a.value }
 
       # Create params for constructor
-      params = fields.map { |f| ParamInfo.new(name: f, type: Type::INTEGER) }
+      params = fields.map { |f| Spinel.make_param_info(f, Type::INTEGER, nil) }
 
-      ci = ClassInfo.new(name: name, parent: nil, methods: {}, ivars: {},
-                         class_methods: {}, attrs: { reader: fields.dup, writer: fields.dup, accessor: fields.dup })
+      ci = Spinel.make_class_info(name, nil, {}, {}, {}, {"reader" => fields.dup, "writer" => fields.dup, "accessor" => fields.dup})
       fields.each { |f| ci.ivars[f] = Type::INTEGER }
 
       # Create a synthetic initialize method
-      ci.methods["initialize"] = MethodInfo.new(
-        name: "initialize", params: params, return_type: Type::VOID,
-        body: nil, has_yield: false, is_class_method: false,
-        owner_class: name
-      )
+      ci.methods["initialize"] = Spinel.make_method_info("initialize", params, Type::VOID, nil, false, false, name, {}, false, nil, false)
 
       @classes[name] = ci
-      @struct_classes ||= {}
+      if @struct_classes == nil
+        @struct_classes = {}
+      end
+      @struct_classes
       @struct_classes[name] = fields
     end
 
@@ -807,7 +955,7 @@ module Spinel
     def infer_method_types
       # Auto-generate Comparable methods for classes that include Comparable
       @classes.each do |cname, ci|
-        includes = ci.attrs[:includes] || []
+        includes = ci.attrs["includes"] || []
         if includes.include?("Comparable") && ci.methods["<=>"]
           # Generate <, >, ==, <=, >= from <=>
           %w[< > == <= >=].each do |op|
@@ -823,7 +971,7 @@ module Spinel
             # Store the op and cmp expression for code generation
             ci.methods[op] = MethodInfo.new(
               name: op,
-              params: [ParamInfo.new(name: "other", type: Type::UNKNOWN)],
+              params: [Spinel.make_param_info("other", Type::UNKNOWN, nil)],
               return_type: Type::BOOLEAN,
               body: nil,
               has_yield: false,
@@ -933,8 +1081,10 @@ module Spinel
         # Don't re-collect ivars - already done and types updated
 
         # Also collect from attrs
-        (ci.attrs[:accessor] + ci.attrs[:reader] + ci.attrs[:writer]).uniq.each do |attr_name|
-          ci.ivars[attr_name] ||= Type::UNKNOWN
+        (ci.attrs["accessor"] + ci.attrs["reader"] + ci.attrs["writer"]).uniq.each do |attr_name|
+          if ci.ivars[attr_name] == nil
+          ci.ivars[attr_name] = Type::UNKNOWN
+        end
         end
 
         ci.methods.each do |mname, mi|
@@ -990,14 +1140,14 @@ module Spinel
           mi.params.each do |p|
             next unless p.type == Type::UNKNOWN || p.type == Type::INTEGER
             # Scan body for calls on this param
-            called = Set.new
+            called = []
             scan_method_calls_on_param(mi.body, p.name, called)
             next if called.empty?
             # Check which class has all these methods
             @classes.each do |candidate_name, candidate_ci|
               if called.all? { |cm| candidate_ci.methods[cm] ||
-                   candidate_ci.attrs[:reader].include?(cm) ||
-                   candidate_ci.attrs[:accessor].include?(cm) }
+                   candidate_ci.attrs["reader"].include?(cm) ||
+                   candidate_ci.attrs["accessor"].include?(cm) }
                 p.type = candidate_name
                 break
               end
@@ -1020,11 +1170,11 @@ module Spinel
     end
 
     def detect_poly(root)
-      @poly_vars = Set.new       # variable names that need sp_RbValue
+      @poly_vars = []       # variable names that need sp_RbValue
       @poly_method_params = {}   # method_name -> Set of param indices that are poly
       @poly_param_classes = {}   # method_name -> { param_idx -> Set of class names }
       @class_tags = {}           # class_name -> tag (0x0040, 0x0041, ...)
-      @poly_classes = Set.new    # classes used in poly contexts (need heap alloc)
+      @poly_classes = []    # classes used in poly contexts (need heap alloc)
       @dispatch_methods = {}     # method_name -> Set of class names that implement it
 
       # Track all types assigned to each variable
@@ -1044,7 +1194,7 @@ module Spinel
           unless numeric_only
             # Extract bare variable name from scoped name (scope:name)
             bare_name = scoped_vname.include?(":") ? scoped_vname.split(":", 2).last : scoped_vname
-            @poly_vars << bare_name
+            Spinel.push_unique(@poly_vars, bare_name)
             @needs_poly = true
           end
         end
@@ -1060,20 +1210,24 @@ module Spinel
         param_map.each do |idx, types|
           types.delete(Type::UNKNOWN)
           if types.size > 1
-            @poly_method_params[mname] ||= Set.new
-            @poly_method_params[mname] << idx
+            if @poly_method_params[mname] == nil
+        @poly_method_params[mname] = []
+      end
+            Spinel.push_unique(@poly_method_params[mname], idx)
             @needs_poly = true
             # Track class types for dispatch
             class_types = types.select { |t| t.is_a?(String) && @classes[t] }
             if class_types.size > 1
-              @poly_param_classes[mname] ||= {}
-              @poly_param_classes[mname][idx] = class_types.to_set
+              if @poly_param_classes[mname] == nil
+        @poly_param_classes[mname] = {}
+      end
+              @poly_param_classes[mname][idx] = class_types.uniq
               class_types.each do |ct|
                 unless @class_tags[ct]
                   @class_tags[ct] = next_tag
                   next_tag += 1
                 end
-                @poly_classes << ct
+                Spinel.push_unique(@poly_classes, ct)
               end
             end
             # Update the method param type
@@ -1092,11 +1246,13 @@ module Spinel
           classes = @poly_param_classes.dig(mname, idx)
           next unless classes
           # Scan body for method calls on this param
-          called_methods = Set.new
+          called_methods = []
           scan_method_calls_on_param(mi.body, p.name, called_methods)
           called_methods.each do |cm|
-            @dispatch_methods[cm] ||= Set.new
-            @dispatch_methods[cm].merge(classes)
+            if @dispatch_methods[cm] == nil
+        @dispatch_methods[cm] = []
+      end
+            classes.each { |_c| Spinel.push_unique(@dispatch_methods[cm], _c) }
           end
         end
       end
@@ -1116,7 +1272,7 @@ module Spinel
 
     def scan_poly_types(node, var_types, param_types, scope_prefix: "")
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         scan_poly_types(node.statements, var_types, param_types, scope_prefix: scope_prefix)
       when "StatementsNode"
@@ -1126,24 +1282,26 @@ module Spinel
         method_scope = node.receiver ? "#{scope_prefix}self.#{node.name}" : "#{scope_prefix}#{node.name}"
         scan_poly_types(node.body, var_types, param_types, scope_prefix: method_scope)
       when "ClassNode"
-        cname = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : ""
+        cname = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : ""
         if node.body
-          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+          stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: "#{cname}#") }
         end
       when "ModuleNode"
         if node.body
-          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+          stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
         end
       when "LocalVariableWriteNode"
         t = infer_type(node.value)
-        if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
+        if t == Type::UNKNOWN && (node.value != nil && node.value.type == "LocalVariableReadNode")
           t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
         end
         vname = "#{scope_prefix}:#{node.name}"
-        var_types[vname] ||= Set.new
-        var_types[vname] << t if t != Type::UNKNOWN
+        if var_types[vname] == nil
+        var_types[vname] = []
+      end
+        Spinel.push_unique(var_types[vname], t) if t != Type::UNKNOWN
         scan_poly_types(node.value, var_types, param_types, scope_prefix: scope_prefix)
       when "CallNode"
         mname = node.name.to_s
@@ -1152,12 +1310,16 @@ module Spinel
           node.arguments.arguments.each_with_index do |arg, i|
             next if i >= mi.params.length
             t = infer_type(arg)
-            if t == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+            if t == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
               t = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
-            param_types[mname] ||= {}
-            param_types[mname][i] ||= Set.new
-            param_types[mname][i] << t if t != Type::UNKNOWN
+            if param_types[mname] == nil
+        param_types[mname] = {}
+      end
+            if param_types[mname][i] == nil
+            param_types[mname][i] = []
+          end
+            Spinel.push_unique(param_types[mname][i], t) if t != Type::UNKNOWN
           end
         end
         node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c }
@@ -1169,12 +1331,12 @@ module Spinel
     # Scan a method body for calls like `param_name.method_name`
     def scan_method_calls_on_param(node, param_name, called_methods)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| scan_method_calls_on_param(s, param_name, called_methods) }
       when "CallNode"
-        if sp_is?(node.receiver, "LocalVariableReadNode") && node.receiver.name.to_s == param_name
-          called_methods << node.name.to_s
+        if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode") && node.receiver.name.to_s == param_name
+          Spinel.push_unique(called_methods, node.name.to_s)
         end
         node.sp_child_nodes.each { |c| scan_method_calls_on_param(c, param_name, called_methods) if c }
       else
@@ -1186,13 +1348,13 @@ module Spinel
     # e.g., in Sphere.intersect, ray.dir calls are on Ray type, isect.t calls on Isect type
     def infer_class_call_params(node, cname, ci)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| infer_class_call_params(s, cname, ci) }
       when "CallNode"
         mname = node.name.to_s
         # Check method calls on local vars: var.method(args)
-        if sp_is?(node.receiver, "LocalVariableReadNode") && node.arguments
+        if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode") && node.arguments
           recv_name = node.receiver.name.to_s
           # Get receiver type from var_types_global or scope
           recv_class = @var_types_global[recv_name]
@@ -1205,10 +1367,10 @@ module Spinel
                 arg_type = infer_type(arg)
                 if arg_type == Type::UNKNOWN
                   # Check if arg is an ivar read
-                  if sp_is?(arg, "InstanceVariableReadNode")
+                  if (arg != nil && arg.type == "InstanceVariableReadNode")
                     iname = arg.name.to_s.delete_prefix("@")
                     arg_type = ci.ivars[iname] if ci.ivars[iname]
-                  elsif sp_is?(arg, "LocalVariableReadNode")
+                  elsif (arg != nil && arg.type == "LocalVariableReadNode")
                     arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                   end
                 end
@@ -1229,12 +1391,12 @@ module Spinel
               next if i >= target_mi.params.length
               arg_type = infer_type(arg)
               if arg_type == Type::UNKNOWN
-                if sp_is?(arg, "InstanceVariableReadNode")
+                if (arg != nil && arg.type == "InstanceVariableReadNode")
                   iname = arg.name.to_s.delete_prefix("@")
                   arg_type = ci.ivars[iname] if ci.ivars[iname]
-                elsif sp_is?(arg, "LocalVariableReadNode")
+                elsif (arg != nil && arg.type == "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
-                elsif sp_is?(arg, "CallNode")
+                elsif (arg != nil && arg.type == "CallNode")
                   # For chained calls like isect.n, infer the return type
                   arg_type = infer_call_return_type_in_class(arg, ci)
                 end
@@ -1256,9 +1418,9 @@ module Spinel
     # Infer the return type of a call expression within a class context
     # Handles chained calls like isect.n where isect is a class method param
     def infer_call_return_type_in_class(node, ci)
-      return Type::UNKNOWN unless sp_is?(node, "CallNode")
+      return Type::UNKNOWN unless (node != nil && node.type == "CallNode")
       mname = node.name.to_s
-      if sp_is?(node.receiver, "LocalVariableReadNode")
+      if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode")
         recv_name = node.receiver.name.to_s
         # Check if receiver is a method param with a class type
         if @current_method
@@ -1276,7 +1438,7 @@ module Spinel
 
     def body_returns_poly_param?(body, mi)
       return false unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       last = stmts.last
       return false unless last
       expr_involves_poly?(last, mi)
@@ -1284,7 +1446,7 @@ module Spinel
 
     def expr_involves_poly?(node, mi)
       return false unless node
-      case node
+      case node.type
       when "LocalVariableReadNode"
         mi.params.any? { |p| p.name == node.name.to_s && p.type == Type::POLY }
       when "CallNode"
@@ -1295,7 +1457,7 @@ module Spinel
         return false if mname == "to_s"
         # Check if any operand involves a poly param
         recv_poly = node.receiver ? expr_involves_poly?(node.receiver, mi) : false
-        args_poly = node.arguments&.arguments&.any? { |a| expr_involves_poly?(a, mi) } || false
+        args_poly = (node.arguments != nil ? node.arguments.arguments : []).any? { |a| expr_involves_poly?(a, mi) } || false
         recv_poly || args_poly
       else
         false
@@ -1303,13 +1465,13 @@ module Spinel
     end
 
     def scan_mutable_strings(node)
-      @mutable_string_vars = Set.new
+      @mutable_string_vars = []
       find_mutable_strings(node)
     end
 
     def find_mutable_strings(node)
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         find_mutable_strings(node.statements)
       when "StatementsNode"
@@ -1319,10 +1481,10 @@ module Spinel
         if (mname == "<<" || mname == "replace" || mname == "clear" || mname == "gsub!" || mname == "sub!" ||
             mname == "upcase!" || mname == "downcase!" || mname == "strip!" || mname == "chomp!" ||
             mname == "setbyte") &&
-           sp_is?(node.receiver, "LocalVariableReadNode")
+           (node.receiver != nil && node.receiver.type == "LocalVariableReadNode")
           recv_type = @var_types_global && @var_types_global[node.receiver.name.to_s]
           if recv_type == Type::STRING || recv_type.nil?
-            @mutable_string_vars << node.receiver.name.to_s
+            Spinel.push_unique(@mutable_string_vars, node.receiver.name.to_s)
           end
         end
         node.sp_child_nodes.each { |c| find_mutable_strings(c) if c }
@@ -1361,7 +1523,7 @@ module Spinel
 
     def fix_method_params_for_typed_arrays(node)
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         fix_method_params_for_typed_arrays(node.statements)
       when "StatementsNode"
@@ -1373,7 +1535,7 @@ module Spinel
         if mi && node.arguments
           node.arguments.arguments.each_with_index do |arg, i|
             next if i >= mi.params.length
-            if sp_is?(arg, "LocalVariableReadNode")
+            if (arg != nil && arg.type == "LocalVariableReadNode")
               elem_class = @array_elem_types[arg.name.to_s]
               if elem_class && mi.params[i].type == Type::ARRAY
                 mi.params[i].type = elem_class
@@ -1390,7 +1552,7 @@ module Spinel
             ami = @classes[actual].methods[mname]
             node.arguments.arguments.each_with_index do |arg, i|
               next if i >= ami.params.length
-              if sp_is?(arg, "LocalVariableReadNode")
+              if (arg != nil && arg.type == "LocalVariableReadNode")
                 elem_class = @array_elem_types[arg.name.to_s]
                 if elem_class && ami.params[i].type == Type::ARRAY
                   ami.params[i].type = elem_class
@@ -1407,10 +1569,10 @@ module Spinel
         @current_class = old_class
       when "ClassNode"
         old_class = @current_class
-        cname = sp_is?(node.constant_path, "ConstantReadNode") ? node.constant_path.name.to_s : nil
+        cname = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : nil
         @current_class = cname if cname
         if node.body
-          stmts = sp_is?(node.body, "StatementsNode") ? node.body.body : [node.body]
+          stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.body : [node.body]
           stmts.each { |s| fix_method_params_for_typed_arrays(s) }
         end
         @current_class = old_class
@@ -1421,7 +1583,7 @@ module Spinel
 
     def scan_array_elem_assigns(node, context_class)
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         scan_array_elem_assigns(node.statements, context_class)
       when "StatementsNode"
@@ -1429,10 +1591,10 @@ module Spinel
       when "LocalVariableWriteNode"
         # Detect var = Array.new(N) patterns
         val = node.value
-        if sp_is?(val, "CallNode") && val.name.to_s == "new" &&
-           sp_is?(val.receiver, "ConstantReadNode") && val.receiver.name.to_s == "Array" &&
+        if (val != nil && val.type == "CallNode") && val.name.to_s == "new" &&
+           (val.receiver != nil && val.receiver.type == "ConstantReadNode") && val.receiver.name.to_s == "Array" &&
            val.arguments && val.arguments.arguments.length == 1 &&
-           val.arguments.arguments[0].is_a_node?("IntegerNode")
+           (val.arguments.arguments[0] != nil && val.arguments.arguments[0].type == "IntegerNode")
           @local_array_sizes[node.name.to_s] = val.arguments.arguments[0].value
         end
         scan_array_elem_assigns(val, context_class)
@@ -1442,27 +1604,35 @@ module Spinel
           val_node = node.arguments.arguments[1]
           elem_class = nil
           # Check if value is ClassName.new(...)
-          if sp_is?(val_node, "CallNode") && val_node.name.to_s == "new" &&
-             sp_is?(val_node.receiver, "ConstantReadNode")
+          if (val_node != nil && val_node.type == "CallNode") && val_node.name.to_s == "new" &&
+             (val_node.receiver != nil && val_node.receiver.type == "ConstantReadNode")
             elem_class = val_node.receiver.name.to_s
             elem_class = nil unless @classes[elem_class]
           end
           if elem_class
             recv = node.receiver
-            if sp_is?(recv, "InstanceVariableReadNode") && context_class
+            if (recv != nil && recv.type == "InstanceVariableReadNode") && context_class
               ivar_name = recv.name.to_s.delete_prefix("@")
-              @ivar_elem_types[context_class] ||= {}
-              @ivar_elem_types[context_class][ivar_name] ||= elem_class
+              if @ivar_elem_types[context_class] == nil
+        @ivar_elem_types[context_class] = {}
+      end
+              if @ivar_elem_types[context_class][ivar_name] == nil
+              @ivar_elem_types[context_class][ivar_name] = elem_class
+            end
               # Detect array size from index
               idx_node = node.arguments.arguments[0]
-              if sp_is?(idx_node, "IntegerNode")
-                @ivar_array_sizes[context_class] ||= {}
+              if (idx_node != nil && idx_node.type == "IntegerNode")
+                if @ivar_array_sizes[context_class] == nil
+        @ivar_array_sizes[context_class] = {}
+      end
                 cur = @ivar_array_sizes[context_class][ivar_name] || 0
                 @ivar_array_sizes[context_class][ivar_name] = [cur, idx_node.value + 1].max
               end
-            elsif sp_is?(recv, "LocalVariableReadNode")
+            elsif (recv != nil && recv.type == "LocalVariableReadNode")
               var_name = recv.name.to_s
-              @array_elem_types[var_name] ||= elem_class
+              if @array_elem_types[var_name] == nil
+              @array_elem_types[var_name] = elem_class
+            end
             end
           end
         end
@@ -1480,9 +1650,12 @@ module Spinel
     end
 
     def scan_call_sites(node)
-      @var_types_global ||= {}
+      if @var_types_global == nil
+        @var_types_global = {}
+      end
+      @var_types_global
       return unless node
-      case node
+      case node.type
       when "ProgramNode"
         scan_call_sites(node.statements)
       when "StatementsNode"
@@ -1494,7 +1667,7 @@ module Spinel
       when "LocalVariableOperatorWriteNode"
         val_type = infer_type(node.value)
         # If value is a local var reference, also check var_types_global and method params
-        if val_type == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
+        if val_type == Type::UNKNOWN && (node.value != nil && node.value.type == "LocalVariableReadNode")
           ref = node.value.name.to_s
           val_type = @var_types_global[ref] if @var_types_global[ref]
           # Check all method params if still unknown
@@ -1520,9 +1693,9 @@ module Spinel
           mi = @methods[mname]
           node.arguments.arguments.each_with_index do |arg, i|
             # Handle keyword hash nodes - extract types by name
-            if sp_is?(arg, "KeywordHashNode")
+            if (arg != nil && arg.type == "KeywordHashNode")
               arg.elements.each do |assoc|
-                next unless sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
+                next unless (assoc != nil && assoc.type == "AssocNode") && (assoc.key != nil && assoc.key.type == "SymbolNode")
                 key_name = assoc.key.value
                 arg_type = infer_type(assoc.value)
                 if arg_type != Type::UNKNOWN
@@ -1536,7 +1709,7 @@ module Spinel
             next if i >= mi.params.length
             arg_type = infer_type(arg)
             # Also check var_types_global for local variable reads
-            if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+            if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
               arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
             end
             can_upgrade = mi.params[i].type == Type::UNKNOWN ||
@@ -1547,7 +1720,7 @@ module Spinel
           end
         end
         # Scan class constructor calls: ClassName.new(args)
-        if mname == "new" && sp_is?(node.receiver, "ConstantReadNode") && node.arguments
+        if mname == "new" && (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.arguments
           cname = node.receiver.name.to_s
           if @classes[cname]
             ci = @classes[cname]
@@ -1560,11 +1733,11 @@ module Spinel
             if init
               # Handle keyword arguments for struct constructors
               if node.arguments.arguments.length == 1 &&
-                 node.arguments.arguments[0].is_a_node?("KeywordHashNode") &&
+                 (node.arguments.arguments[0] != nil && node.arguments.arguments[0].type == "KeywordHashNode") &&
                  @struct_classes && @struct_classes[cname]
                 kw_node = node.arguments.arguments[0]
                 kw_node.elements.each do |assoc|
-                  next unless sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
+                  next unless (assoc != nil && assoc.type == "AssocNode") && (assoc.key != nil && assoc.key.type == "SymbolNode")
                   field_name = assoc.key.value
                   arg_type = infer_type(assoc.value)
                   if arg_type != Type::UNKNOWN
@@ -1579,7 +1752,7 @@ module Spinel
                 node.arguments.arguments.each_with_index do |arg, i|
                   next if i >= init.params.length
                   arg_type = infer_type(arg)
-                  if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+                  if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
                     arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                   end
                   if arg_type != Type::UNKNOWN
@@ -1610,16 +1783,16 @@ module Spinel
           end
         end
         # Scan attr writer calls: obj.attr = value (name ends with =)
-        if mname.end_with?("=") && sp_is?(node.receiver, "LocalVariableReadNode") && node.arguments
+        if mname.end_with?("=") && (node.receiver != nil && node.receiver.type == "LocalVariableReadNode") && node.arguments
           attr_name = mname.chomp("=")
           recv_name = node.receiver.name.to_s
           recv_class = @var_types_global[recv_name]
           if recv_class.is_a?(String) && @classes[recv_class]
             ci = @classes[recv_class]
-            if (ci.attrs[:writer].include?(attr_name) || ci.attrs[:accessor].include?(attr_name))
+            if (ci.attrs["writer"].include?(attr_name) || ci.attrs["accessor"].include?(attr_name))
               node.arguments.arguments.each do |arg|
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+                if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::UNKNOWN || ci.ivars[attr_name] == Type::NIL)
@@ -1630,7 +1803,7 @@ module Spinel
           end
         end
         # Scan instance method calls: obj.method(args) to infer param types
-        if sp_is?(node.receiver, "LocalVariableReadNode") && !mname.end_with?("=") && mname != "new" && node.arguments
+        if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode") && !mname.end_with?("=") && mname != "new" && node.arguments
           recv_name = node.receiver.name.to_s
           recv_class = @var_types_global[recv_name]
           if recv_class.is_a?(String) && @classes[recv_class]
@@ -1640,7 +1813,7 @@ module Spinel
               node.arguments.arguments.each_with_index do |arg, i|
                 next if i >= mi.params.length
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+                if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && mi.params[i].type == Type::UNKNOWN
@@ -1652,7 +1825,7 @@ module Spinel
         end
         # Also scan child nodes (receiver, arguments, block)
         scan_call_sites(node.receiver) if node.receiver
-        node.arguments&.arguments&.each { |a| scan_call_sites(a) }
+        (node.arguments != nil ? node.arguments.arguments : []).each { |a| scan_call_sites(a) }
         scan_call_sites(node.block) if node.block
       else
         # Generic traversal
@@ -1662,13 +1835,13 @@ module Spinel
 
     def scan_ivar_assignments_in_body(node, cname, ci)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| scan_ivar_assignments_in_body(s, cname, ci) }
       when "LocalVariableWriteNode"
         # Refresh var_types_global with updated method return types
         t = infer_type(node.value)
-        if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
+        if t == Type::UNKNOWN && (node.value != nil && node.value.type == "LocalVariableReadNode")
           t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
         end
         @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
@@ -1678,16 +1851,16 @@ module Spinel
         # Check for attr_name= calls on class instances
         if mname.end_with?("=") && !mname.start_with?("[") && node.receiver && node.arguments
           attr_name = mname.chomp("=")
-          if (ci.attrs[:writer]&.include?(attr_name) || ci.attrs[:accessor]&.include?(attr_name))
+          if (ci.attrs["writer"]&.include?(attr_name) || ci.attrs["accessor"]&.include?(attr_name))
             # Check if receiver's class matches
             recv_class = nil
-            if sp_is?(node.receiver, "LocalVariableReadNode")
+            if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode")
               recv_class = @var_types_global[node.receiver.name.to_s]
             end
             if recv_class == cname
               node.arguments.arguments.each do |arg|
                 arg_type = infer_type(arg)
-                if arg_type == Type::UNKNOWN && sp_is?(arg, "LocalVariableReadNode")
+                if arg_type == Type::UNKNOWN && (arg != nil && arg.type == "LocalVariableReadNode")
                   arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
                 end
                 if arg_type != Type::UNKNOWN && (ci.ivars[attr_name] == Type::NIL || ci.ivars[attr_name] == Type::UNKNOWN)
@@ -1703,7 +1876,7 @@ module Spinel
         ivar = node.name.to_s.delete_prefix("@")
         if ci.ivars.key?(ivar) && (ci.ivars[ivar] == Type::NIL || ci.ivars[ivar] == Type::UNKNOWN)
           t = infer_type(node.value)
-          if t == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
+          if t == Type::UNKNOWN && (node.value != nil && node.value.type == "LocalVariableReadNode")
             # Check method params
             vname = node.value.name.to_s
             ci.methods.each do |_mn, mi|
@@ -1730,14 +1903,14 @@ module Spinel
 
     def propagate_super_types(body, child_init, parent_init, parent_ci)
       return unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each do |s|
-        if (sp_is?(s, "CallNode") && s.name.to_s == "super") ||
-           sp_is?(s, "SuperNode") || sp_is?(s, "ForwardingSuperNode")
-          args = s.sp_has?(:arguments) && s.arguments ? s.arguments.arguments : []
+        if ((s != nil && s.type == "CallNode") && s.name.to_s == "super") ||
+           (s != nil && s.type == "SuperNode") || (s != nil && s.type == "ForwardingSuperNode")
+          args = s.sp_has("arguments") && s.arguments ? s.arguments.arguments : []
           args.each_with_index do |arg, i|
             next if i >= parent_init.params.length
-            if sp_is?(arg, "LocalVariableReadNode")
+            if (arg != nil && arg.type == "LocalVariableReadNode")
               # Find this param in child init
               child_param = child_init.params.find { |p| p.name == arg.name.to_s }
               if child_param && child_param.type != Type::UNKNOWN
@@ -1757,18 +1930,18 @@ module Spinel
 
     def param_assigned_to_ivar?(body, pname, iname)
       return false unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.any? do |s|
-        sp_is?(s, "InstanceVariableWriteNode") &&
+        (s != nil && s.type == "InstanceVariableWriteNode") &&
           s.name.to_s.delete_prefix("@") == iname &&
-          sp_is?(s.value, "LocalVariableReadNode") &&
+          (s.value != nil && s.value.type == "LocalVariableReadNode") &&
           s.value.name.to_s == pname
       end
     end
 
     def collect_ivars_from_body(node, ci)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| collect_ivars_from_body(s, ci) }
       when "InstanceVariableWriteNode"
@@ -1784,26 +1957,26 @@ module Spinel
 
     def infer_body_type(node)
       return Type::VOID unless node
-      case node
+      case node.type
       when "StatementsNode"
         return Type::VOID if node.body.empty?
         last = node.body.last
         # If last statement is an if/while with only side-effect statements, return VOID
-        if sp_is?(last, "IfNode") || sp_is?(last, "WhileNode")
+        if (last != nil && last.type == "IfNode") || (last != nil && last.type == "WhileNode")
           return Type::VOID if body_is_side_effects?(last)
         end
         # If last statement is a bare return with no value
-        if sp_is?(last, "ReturnNode") && (last.arguments.nil? || last.arguments.arguments.empty?)
+        if (last != nil && last.type == "ReturnNode") && (last.arguments.nil? || last.arguments.arguments.empty?)
           return Type::VOID
         end
         # If last statement is an array element assignment on a class-typed array (side effect), return VOID
-        if sp_is?(last, "CallNode") && last.name.to_s == "[]="
+        if (last != nil && last.type == "CallNode") && last.name.to_s == "[]="
           elem_class = array_elem_class_for_receiver(last.receiver)
           return Type::VOID if elem_class
         end
         last_type = infer_type(last)
         # If last expression is a local var read with unknown type, scan body for assignments
-        if last_type == Type::UNKNOWN && sp_is?(last, "LocalVariableReadNode")
+        if last_type == Type::UNKNOWN && (last != nil && last.type == "LocalVariableReadNode")
           vname = last.name.to_s
           last_type = infer_local_var_type_from_body(vname, node.body)
         end
@@ -1817,7 +1990,7 @@ module Spinel
     # (assignments, setter calls, method calls with no return value usage)
     def body_is_side_effects?(node)
       return true unless node
-      case node
+      case node.type
       when "IfNode"
         body_is_side_effects?(node.statements) &&
           (node.subsequent.nil? || body_is_side_effects?(node.subsequent))
@@ -1836,7 +2009,7 @@ module Spinel
 
     def stmt_is_side_effect?(node)
       return true unless node
-      case node
+      case node.type
       when "CallNode"
         mname = node.name.to_s
         # Setter calls, puts, print, etc. are side effects
@@ -1856,7 +2029,7 @@ module Spinel
 
     def infer_local_var_type_from_body(vname, stmts)
       stmts.each do |s|
-        if sp_is?(s, "LocalVariableWriteNode") && s.name.to_s == vname
+        if (s != nil && s.type == "LocalVariableWriteNode") && s.name.to_s == vname
           t = infer_type(s.value)
           # Promote STRING to MUTABLE_STRING if this var is used mutably
           if t == Type::STRING && @mutable_string_vars && @mutable_string_vars.include?(vname)
@@ -1865,9 +2038,9 @@ module Spinel
           return t if t != Type::UNKNOWN
         end
         # Check inside if/else blocks
-        if sp_is?(s, "IfNode")
+        if (s != nil && s.type == "IfNode")
           t = infer_local_var_type_from_body(vname,
-            (sp_is?(s.statements, "StatementsNode") ? s.statements.body : [s.statements]).compact)
+            ((s.statements != nil && s.statements.type == "StatementsNode") ? s.statements.body : [s.statements]).compact)
           return t if t != Type::UNKNOWN
         end
       end
@@ -1876,7 +2049,7 @@ module Spinel
 
     def infer_type(node)
       return Type::NIL unless node
-      case node
+      case node.type
       when "IntegerNode"
         Type::INTEGER
       when "FloatNode"
@@ -1910,7 +2083,7 @@ module Spinel
       when "HashNode"
         # Check values to determine hash type
         if node.elements.any?
-          val_types = node.elements.select { |e| sp_is?(e, "AssocNode") }.map { |e| infer_type(e.value) }
+          val_types = node.elements.select { |e| (e != nil && e.type == "AssocNode") }.map { |e| infer_type(e.value) }
           val_types_uniq = val_types.uniq - [Type::UNKNOWN, Type::NIL]
           if val_types_uniq.size > 1
             # Mixed value types -> poly hash (string key -> sp_RbValue)
@@ -1963,7 +2136,7 @@ module Spinel
         # Pattern matching: return type of first branch body
         if node.conditions && !node.conditions.empty?
           first = node.conditions.first
-          if sp_is?(first, "InNode") && first.statements
+          if (first != nil && first.type == "InNode") && first.statements
             infer_body_type(first.statements)
           else
             Type::UNKNOWN
@@ -2027,7 +2200,7 @@ module Spinel
       case mname
       when "+", "-", "*", "/", "%", "**"
         t1 = recv_type || Type::INTEGER
-        t2 = node.arguments&.arguments&.first ? infer_type(node.arguments.arguments.first) : Type::INTEGER
+        t2 = (node.arguments != nil && node.arguments.arguments != nil ? node.arguments.arguments.first : nil) ? infer_type(node.arguments.arguments.first) : Type::INTEGER
         if t1 == Type::POLY || t2 == Type::POLY
           Type::POLY
         elsif (t1 == Type::STRING || t1 == Type::MUTABLE_STRING) && mname == "+"
@@ -2099,31 +2272,31 @@ module Spinel
            "positive?", "negative?"
         Type::BOOLEAN
       when "now"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Time"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "Time"
           Type::TIME
         else
           Type::UNKNOWN
         end
       when "at"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Time"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "Time"
           Type::TIME
         else
           Type::UNKNOWN
         end
       when "read"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::STRING
         else
           Type::UNKNOWN
         end
       when "exist?", "exists?"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::BOOLEAN
         else
           Type::BOOLEAN
         end
       when "join"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "File"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "File"
           Type::STRING
         else
           Type::STRING
@@ -2131,13 +2304,13 @@ module Spinel
       when "basename"
         Type::STRING
       when "home"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "Dir"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "Dir"
           Type::STRING
         else
           Type::UNKNOWN
         end
       when "[]"
-        if sp_is?(node.receiver, "ConstantReadNode") && node.receiver.name.to_s == "ENV"
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode") && node.receiver.name.to_s == "ENV"
           Type::STRING
         else
           # Check for class-typed array element access
@@ -2163,14 +2336,14 @@ module Spinel
       when "strip", "chomp", "chop", "lstrip", "rstrip"
         Type::STRING
       when "new"
-        if sp_is?(node.receiver, "ConstantReadNode")
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode")
           cname = node.receiver.name.to_s
           case cname
           when "Array"
             # Detect float arrays: Array.new(n, 0.0) or Array.new(n, float_expr)
             if node.arguments && node.arguments.arguments.length >= 2
               default_val = node.arguments.arguments[1]
-              if sp_is?(default_val, "FloatNode") || infer_type(default_val) == Type::FLOAT
+              if (default_val != nil && default_val.type == "FloatNode") || infer_type(default_val) == Type::FLOAT
                 Type::FLOAT_ARRAY
               else
                 Type::ARRAY
@@ -2239,7 +2412,7 @@ module Spinel
         Type::STRING
       when "rand"
         # Check if this is a module class method call (e.g., Rand::rand returns float)
-        if sp_is?(node.receiver, "ConstantReadNode")
+        if (node.receiver != nil && node.receiver.type == "ConstantReadNode")
           mod_name = node.receiver.name.to_s
           if @module_class_methods && @module_class_methods[mod_name] && @module_class_methods[mod_name][mname]
             mi = @module_class_methods[mod_name][mname]
@@ -2284,7 +2457,7 @@ module Spinel
         elsif node.receiver
           # Check class from var_class_types or infer_type (which returns class name string)
           cname = nil
-          if sp_is?(node.receiver, "LocalVariableReadNode")
+          if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode")
             cname = @var_class_types && @var_class_types[node.receiver.name.to_s]
           end
           # Also try infer_type on receiver - it may return a class name string
@@ -2302,7 +2475,7 @@ module Spinel
             else
               Type::UNKNOWN
             end
-          elsif sp_is?(node.receiver, "ConstantReadNode")
+          elsif (node.receiver != nil && node.receiver.type == "ConstantReadNode")
             # Class method call like Point.origin
             rcname = node.receiver.name.to_s
             if @classes[rcname] && @classes[rcname].class_methods[mname]
@@ -2322,7 +2495,7 @@ module Spinel
     def infer_case_type(node)
       return Type::UNKNOWN unless node.conditions && !node.conditions.empty?
       first_when = node.conditions.first
-      if sp_is?(first_when, "WhenNode") && first_when.statements
+      if (first_when != nil && first_when.type == "WhenNode") && first_when.statements
         infer_body_type(first_when.statements)
       else
         Type::UNKNOWN
@@ -2381,7 +2554,7 @@ module Spinel
     end
 
     def generate_code(root)
-      return unless sp_is?(root, "ProgramNode")
+      return unless (root != nil && root.type == "ProgramNode")
       stmts = root.statements.body
 
       # Generate class structs/methods first
@@ -2405,9 +2578,9 @@ module Spinel
       push_scope
 
       stmts.each do |s|
-        next if sp_is?(s, "DefNode") || sp_is?(s, "ClassNode") || sp_is?(s, "ModuleNode")
+        next if (s != nil && s.type == "DefNode") || (s != nil && s.type == "ClassNode") || (s != nil && s.type == "ModuleNode")
         # Skip define_method calls (already collected as methods)
-        next if sp_is?(s, "CallNode") && s.name.to_s == "define_method"
+        next if (s != nil && s.type == "CallNode") && s.name.to_s == "define_method"
         generate_stmt(s)
       end
 
@@ -2617,8 +2790,10 @@ module Spinel
       end
       ci.ivars.each { |k, v| ivars[k] = v }
       # Also from attrs
-      (ci.attrs[:accessor] + ci.attrs[:reader] + ci.attrs[:writer]).uniq.each do |attr|
-        ivars[attr] ||= Type::UNKNOWN
+      (ci.attrs["accessor"] + ci.attrs["reader"] + ci.attrs["writer"]).uniq.each do |attr|
+        if ivars[attr] == nil
+        ivars[attr] = Type::UNKNOWN
+      end
       end
       ivars
     end
@@ -2647,16 +2822,16 @@ module Spinel
 
     def param_accesses_class_attr?(body, pname, ci)
       return false unless body
-      all_attrs = (ci.attrs[:reader] + ci.attrs[:accessor]).uniq
+      all_attrs = (ci.attrs["reader"] + ci.attrs["accessor"]).uniq
       return false if all_attrs.empty?
       check_param_attr_access(body, pname, all_attrs)
     end
 
     def check_param_attr_access(node, pname, attrs)
       return false unless node
-      case node
+      case node.type
       when "CallNode"
-        if sp_is?(node.receiver, "LocalVariableReadNode") && node.receiver.name.to_s == pname
+        if (node.receiver != nil && node.receiver.type == "LocalVariableReadNode") && node.receiver.name.to_s == pname
           return true if attrs.include?(node.name.to_s)
         end
         node.sp_child_nodes.each { |c| return true if c && check_param_attr_access(c, pname, attrs) }
@@ -2673,11 +2848,11 @@ module Spinel
     end
 
     def infer_param_from_init(pname, body, ci)
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each do |s|
-        if sp_is?(s, "InstanceVariableWriteNode")
+        if (s != nil && s.type == "InstanceVariableWriteNode")
           ivar = s.name.to_s.delete_prefix("@")
-          if sp_is?(s.value, "LocalVariableReadNode") && s.value.name.to_s == pname
+          if (s.value != nil && s.value.type == "LocalVariableReadNode") && s.value.name.to_s == pname
             t = ci.ivars[ivar]
             return t if t && t != Type::UNKNOWN
           end
@@ -2710,7 +2885,10 @@ module Spinel
       lines.concat(mark_lines)
       lines << "}"
       @func_bodies << lines.join("\n")
-      @has_gc_scan ||= {}
+      if @has_gc_scan == nil
+        @has_gc_scan = {}
+      end
+      @has_gc_scan
       @has_gc_scan[name] = true
     end
 
@@ -2750,15 +2928,15 @@ module Spinel
 
       # Handle super call in initialize
       if init && init.body
-        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
+        stmts = (init.body != nil && init.body.type == "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
-          case s
+          case s.type
           when "CallNode"
-            if s.name.to_s == "super" || sp_is?(s, "SuperNode") || sp_is?(s, "ForwardingSuperNode")
+            if s.name.to_s == "super" || (s != nil && s.type == "SuperNode") || (s != nil && s.type == "ForwardingSuperNode")
               # super(args) call
               if ci.parent && @classes[ci.parent]
                 super_args = s.arguments ? s.arguments.arguments.map { |a|
-                  if sp_is?(a, "LocalVariableReadNode")
+                  if (a != nil && a.type == "LocalVariableReadNode")
                     "lv_#{a.name}"
                   else
                     compile_expr(a)
@@ -2771,7 +2949,7 @@ module Spinel
                 end
               end
             # Handle @ivar[idx] = val in constructor (class-typed array assignment)
-            elsif s.name.to_s == "[]=" && sp_is?(s.receiver, "InstanceVariableReadNode") &&
+            elsif s.name.to_s == "[]=" && (s.receiver != nil && s.receiver.type == "InstanceVariableReadNode") &&
                s.arguments && s.arguments.arguments.length == 2
               ivar = s.receiver.name.to_s.delete_prefix("@")
               elem_class = @ivar_elem_types.dig(name, ivar)
@@ -2784,8 +2962,8 @@ module Spinel
             end
           when "SuperNode", "ForwardingSuperNode"
             if ci.parent && @classes[ci.parent]
-              super_args = s.sp_has?(:arguments) && s.arguments ? s.arguments.arguments.map { |a|
-                if sp_is?(a, "LocalVariableReadNode")
+              super_args = s.sp_has("arguments") && s.arguments ? s.arguments.arguments.map { |a|
+                if (a != nil && a.type == "LocalVariableReadNode")
                   "lv_#{a.name}"
                 else
                   compile_expr(a)
@@ -2804,7 +2982,7 @@ module Spinel
             if elem_class
               # Native C array - skip the Array.new initialization
             else
-              val = if sp_is?(s.value, "LocalVariableReadNode")
+              val = if (s.value != nil && s.value.type == "LocalVariableReadNode")
                       "lv_#{s.value.name}"
                     else
                       compile_expr_static(s.value)
@@ -2868,14 +3046,14 @@ module Spinel
 
     def body_writes_ivar?(node)
       return false unless node
-      case node
+      case node.type
       when "InstanceVariableWriteNode", "InstanceVariableOperatorWriteNode",
            "InstanceVariableAndWriteNode", "InstanceVariableOrWriteNode"
         true
       when "StatementsNode"
         node.body.any? { |s| body_writes_ivar?(s) }
       when "IfNode", "UnlessNode"
-        body_writes_ivar?(node.statements) || body_writes_ivar?(node.consequent)
+        body_writes_ivar?(node.statements) || body_writes_ivar?(node.subsequent)
       when "WhileNode", "UntilNode"
         body_writes_ivar?(node.statements)
       when "ElseNode"
@@ -2901,12 +3079,12 @@ module Spinel
       lines = []
       lines << "static void sp_#{name}_initialize(#{self_type}#{param_str.empty? ? '' : ', ' + param_str}) {"
       if init.body
-        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
+        stmts = (init.body != nil && init.body.type == "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
-          case s
+          case s.type
           when "InstanceVariableWriteNode"
             ivar = s.name.to_s.delete_prefix("@")
-            val = if sp_is?(s.value, "LocalVariableReadNode")
+            val = if (s.value != nil && s.value.type == "LocalVariableReadNode")
                     "lv_#{s.value.name}"
                   else
                     compile_expr_static(s.value)
@@ -2936,12 +3114,12 @@ module Spinel
       lines = []
       lines << "static void sp_#{name}_initialize(#{self_type}, #{param_str}) {"
       if init.body
-        stmts = sp_is?(init.body, "StatementsNode") ? init.body.body : [init.body]
+        stmts = (init.body != nil && init.body.type == "StatementsNode") ? init.body.body : [init.body]
         stmts.each do |s|
-          case s
+          case s.type
           when "InstanceVariableWriteNode"
             ivar = s.name.to_s.delete_prefix("@")
-            val = if sp_is?(s.value, "LocalVariableReadNode")
+            val = if (s.value != nil && s.value.type == "LocalVariableReadNode")
                     "lv_#{s.value.name}"
                   else
                     compile_expr_static(s.value)
@@ -3198,7 +3376,7 @@ module Spinel
     # where first 4 args are int-literals but used as floats inside the body.
     def promote_params_from_body(mi)
       return unless mi.body
-      param_names = mi.params.select { |p| p.type == Type::INTEGER }.map(&:name).to_set
+      param_names = mi.params.select { |p| p.type == Type::INTEGER }.map { |_x| _x.name }.uniq
       return if param_names.empty?
 
       # Build a map of local var -> types assigned to it (considering += float etc.)
@@ -3208,17 +3386,17 @@ module Spinel
       # Also incorporate var_types_global for locals that were upgraded via +=
       local_types.each_key do |vname|
         gt = @var_types_global[vname]
-        local_types[vname] << gt if gt && gt != Type::UNKNOWN
+        Spinel.push_unique(local_types[vname], gt) if gt && gt != Type::UNKNOWN
       end
 
       # Find float locals
-      float_locals = Set.new
+      float_locals = []
       local_types.each do |vname, types|
-        float_locals << vname if types.include?(Type::FLOAT)
+        Spinel.push_unique(float_locals, vname) if types.include?(Type::FLOAT)
       end
 
       # Check which params are assigned to float locals
-      promoted = Set.new
+      promoted = []
       scan_param_float_usage(mi.body, param_names, float_locals, promoted)
 
       promoted.each do |pname|
@@ -3229,23 +3407,27 @@ module Spinel
 
     def collect_local_types(node, map)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| collect_local_types(s, map) }
       when "LocalVariableWriteNode"
         t = infer_type(node.value)
-        map[node.name.to_s] ||= Set.new
-        map[node.name.to_s] << t if t != Type::UNKNOWN
+        if map[node.name.to_s] == nil
+        map[node.name.to_s] = []
+      end
+        Spinel.push_unique(map[node.name.to_s], t) if t != Type::UNKNOWN
         collect_local_types(node.value, map)
       when "LocalVariableOperatorWriteNode"
         t = infer_type(node.value)
-        map[node.name.to_s] ||= Set.new
-        map[node.name.to_s] << t if t != Type::UNKNOWN
+        if map[node.name.to_s] == nil
+        map[node.name.to_s] = []
+      end
+        Spinel.push_unique(map[node.name.to_s], t) if t != Type::UNKNOWN
       when "WhileNode"
         collect_local_types(node.statements, map)
       when "IfNode"
         collect_local_types(node.statements, map)
-        collect_local_types(node.subsequent, map) if node.sp_has?(:subsequent)
+        collect_local_types(node.subsequent, map) if node.sp_has("subsequent")
       else
         node.sp_child_nodes.each { |c| collect_local_types(c, map) if c } if node.is_a?(SpNode)
       end
@@ -3253,15 +3435,15 @@ module Spinel
 
     def scan_param_float_usage(node, param_names, float_locals, promoted)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| scan_param_float_usage(s, param_names, float_locals, promoted) }
       when "LocalVariableWriteNode"
         # local_var = param  where local_var is float
         vname = node.name.to_s
-        if float_locals.include?(vname) && sp_is?(node.value, "LocalVariableReadNode")
+        if float_locals.include?(vname) && (node.value != nil && node.value.type == "LocalVariableReadNode")
           ref = node.value.name.to_s
-          promoted << ref if param_names.include?(ref)
+          Spinel.push_unique(promoted, ref) if param_names.include?(ref)
         end
         # Check if value expression uses param in float context (e.g., param * 255.5)
         scan_param_float_expr(node.value, param_names, float_locals, promoted)
@@ -3271,23 +3453,23 @@ module Spinel
         scan_param_float_expr(node, param_names, float_locals, promoted)
       when "WhileNode"
         # while (cur_i > max_i) - if cur_i is float and max_i is param, promote max_i
-        if sp_is?(node.predicate, "CallNode") &&
+        if (node.predicate != nil && node.predicate.type == "CallNode") &&
            %w[> < >= <= == !=].include?(node.predicate.name.to_s)
           recv = node.predicate.receiver
           arg = node.predicate.arguments&.arguments&.first
-          if sp_is?(recv, "LocalVariableReadNode") && float_locals.include?(recv.name.to_s) &&
-             sp_is?(arg, "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
-            promoted << arg.name.to_s
+          if (recv != nil && recv.type == "LocalVariableReadNode") && float_locals.include?(recv.name.to_s) &&
+             (arg != nil && arg.type == "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
+            Spinel.push_unique(promoted, arg.name.to_s)
           end
-          if sp_is?(arg, "LocalVariableReadNode") && float_locals.include?(arg.name.to_s) &&
-             sp_is?(recv, "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
-            promoted << recv.name.to_s
+          if (arg != nil && arg.type == "LocalVariableReadNode") && float_locals.include?(arg.name.to_s) &&
+             (recv != nil && recv.type == "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
+            Spinel.push_unique(promoted, recv.name.to_s)
           end
         end
         scan_param_float_usage(node.statements, param_names, float_locals, promoted)
       when "IfNode"
         scan_param_float_usage(node.statements, param_names, float_locals, promoted)
-        scan_param_float_usage(node.subsequent, param_names, float_locals, promoted) if node.sp_has?(:subsequent)
+        scan_param_float_usage(node.subsequent, param_names, float_locals, promoted) if node.sp_has("subsequent")
       else
         node.sp_child_nodes.each { |c| scan_param_float_usage(c, param_names, float_locals, promoted) if c } if node.is_a?(SpNode)
       end
@@ -3295,33 +3477,33 @@ module Spinel
 
     # Detect param used in float arithmetic: param * 255.5, param + float_local, etc.
     def scan_param_float_expr(node, param_names, float_locals, promoted)
-      return unless sp_is?(node, "CallNode")
+      return unless (node != nil && node.type == "CallNode")
       mname = node.name.to_s
       return unless %w[+ - * /].include?(mname) && node.receiver && node.arguments
       recv = node.receiver
       arg = node.arguments.arguments&.first
       return unless arg
       # Check if one side is a param and the other is float
-      recv_is_param = sp_is?(recv, "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
-      arg_is_param = sp_is?(arg, "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
-      recv_is_float = sp_is?(recv, "FloatNode") ||
-                      (sp_is?(recv, "LocalVariableReadNode") && float_locals.include?(recv.name.to_s))
-      arg_is_float = sp_is?(arg, "FloatNode") ||
-                     (sp_is?(arg, "LocalVariableReadNode") && float_locals.include?(arg.name.to_s))
+      recv_is_param = (recv != nil && recv.type == "LocalVariableReadNode") && param_names.include?(recv.name.to_s)
+      arg_is_param = (arg != nil && arg.type == "LocalVariableReadNode") && param_names.include?(arg.name.to_s)
+      recv_is_float = (recv != nil && recv.type == "FloatNode") ||
+                      ((recv != nil && recv.type == "LocalVariableReadNode") && float_locals.include?(recv.name.to_s))
+      arg_is_float = (arg != nil && arg.type == "FloatNode") ||
+                     ((arg != nil && arg.type == "LocalVariableReadNode") && float_locals.include?(arg.name.to_s))
       if recv_is_param && arg_is_float
-        promoted << recv.name.to_s
+        Spinel.push_unique(promoted, recv.name.to_s)
       end
       if arg_is_param && recv_is_float
-        promoted << arg.name.to_s
+        Spinel.push_unique(promoted, arg.name.to_s)
       end
       # Recurse into sub-expressions
-      scan_param_float_expr(recv, param_names, float_locals, promoted) if sp_is?(recv, "CallNode")
-      scan_param_float_expr(arg, param_names, float_locals, promoted) if sp_is?(arg, "CallNode")
+      scan_param_float_expr(recv, param_names, float_locals, promoted) if (recv != nil && recv.type == "CallNode")
+      scan_param_float_expr(arg, param_names, float_locals, promoted) if (arg != nil && arg.type == "CallNode")
     end
 
     def generate_method_body(body, mi)
       return unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each_with_index do |s, i|
         is_last = (i == stmts.length - 1)
         if is_last && mi.return_type != Type::VOID
@@ -3334,7 +3516,7 @@ module Spinel
     end
 
     def generate_return_stmt(node, mi)
-      case node
+      case node.type
       when "BeginNode"
         generate_begin_stmt(node)
       when "IfNode"
@@ -3384,13 +3566,13 @@ module Spinel
 
     def generate_body_stmts(body, is_return_context: false)
       return unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each { |s| generate_stmt(s) }
     end
 
     def generate_body_return(body, return_type)
       return unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each_with_index do |s, i|
         if i == stmts.length - 1 && return_type != Type::VOID
           val = compile_expr(s)
@@ -3404,7 +3586,7 @@ module Spinel
     # ---- Statement generation ----
     def generate_stmt(node)
       return unless node
-      case node
+      case node.type
       when "LocalVariableWriteNode"
         generate_local_write(node)
       when "LocalVariableOperatorWriteNode"
@@ -3478,8 +3660,8 @@ module Spinel
 
       # Skip Array.new(N) assignment for class-typed array variables
       if @array_elem_types[name] && @local_array_sizes[name] &&
-         sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" &&
-         sp_is?(node.value.receiver, "ConstantReadNode") && node.value.receiver.name.to_s == "Array"
+         (node.value != nil && node.value.type == "CallNode") && node.value.name.to_s == "new" &&
+         (node.value.receiver != nil && node.value.receiver.type == "ConstantReadNode") && node.value.receiver.name.to_s == "Array"
         return
       end
 
@@ -3497,23 +3679,29 @@ module Spinel
       end
 
       # Track class instance types
-      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "new" && sp_is?(node.value.receiver, "ConstantReadNode")
+      if (node.value != nil && node.value.type == "CallNode") && node.value.name.to_s == "new" && (node.value.receiver != nil && node.value.receiver.type == "ConstantReadNode")
         cname = node.value.receiver.name.to_s
         if @classes[cname]
-          @var_class_types ||= {}
+          if @var_class_types == nil
+        @var_class_types = {}
+      end
+      @var_class_types
           @var_class_types[name] = cname
         end
       end
       # Also track when val_type is a class name string (from method return types)
       if val_type.is_a?(String) && @classes[val_type]
-        @var_class_types ||= {}
+        if @var_class_types == nil
+        @var_class_types = {}
+      end
+      @var_class_types
         @var_class_types[name] = val_type
       end
 
       # Track method(:name) assignments
-      if sp_is?(node.value, "CallNode") && node.value.name.to_s == "method"
+      if (node.value != nil && node.value.type == "CallNode") && node.value.name.to_s == "method"
         margs = call_args(node.value)
-        if margs.length > 0 && margs[0].is_a_node?("SymbolNode")
+        if margs.length > 0 && (margs[0] != nil && margs[0].type == "SymbolNode")
           @method_refs[name] = margs[0].value
           emit("/* #{name} = method(:#{margs[0].value}) */")
           return
@@ -3529,7 +3717,7 @@ module Spinel
         # Already declared
         val = compile_expr(node.value)
         # Wrap string literal for mutable string
-        if val_type == Type::MUTABLE_STRING && sp_is?(node.value, "StringNode")
+        if val_type == Type::MUTABLE_STRING && (node.value != nil && node.value.type == "StringNode")
           val = "sp_String_new(#{val})"
         end
         # Box value for poly vars
@@ -3546,7 +3734,7 @@ module Spinel
         info = declare_var(name, val_type, c_name: c_name)
         val = compile_expr(node.value)
         # Wrap string literal for mutable string
-        if val_type == Type::MUTABLE_STRING && sp_is?(node.value, "StringNode")
+        if val_type == Type::MUTABLE_STRING && (node.value != nil && node.value.type == "StringNode")
           val = "sp_String_new(#{val})"
         end
         # Box value for poly vars
@@ -3613,7 +3801,7 @@ module Spinel
       targets = node.lefts
       value = node.value
 
-      case value
+      case value.type
       when "ArrayNode"
         # a, b, c = [1, 2, 3]
         emit("{")
@@ -3627,7 +3815,7 @@ module Spinel
         end
         targets.each_with_index do |target, i|
           next if i >= value.elements.length
-          if sp_is?(target, "InstanceVariableTargetNode")
+          if (target != nil && target.type == "InstanceVariableTargetNode")
             ivar = target.name.to_s.delete_prefix("@")
             if @current_module
               emit("sp_#{@current_module}_#{ivar} = _mw_#{i};")
@@ -3675,7 +3863,7 @@ module Spinel
     end
 
     def target_name(node)
-      case node
+      case node.type
       when "LocalVariableTargetNode"
         node.name.to_s
       when "LocalVariableWriteNode"
@@ -3750,7 +3938,7 @@ module Spinel
         val = compile_expr(arg)
 
         # Check if the variable is poly
-        if sp_is?(arg, "LocalVariableReadNode")
+        if (arg != nil && arg.type == "LocalVariableReadNode")
           v = lookup_var(arg.name.to_s)
           if v && v.type == Type::POLY
             type = Type::POLY
@@ -3765,7 +3953,7 @@ module Spinel
           emit("printf(\"%lld\\n\", (long long)#{val});")
         when Type::FLOAT
           emit("{ const char *_fs = sp_float_to_s(#{val}); printf(\"%s\\n\", _fs); }")
-          @string_helpers_needed << :float_to_s
+          Spinel.push_unique(@string_helpers_needed, "float_to_s")
         when Type::BOOLEAN
           emit("puts(#{val} ? \"true\" : \"false\");")
         when Type::STRING, Type::SYMBOL
@@ -3791,7 +3979,7 @@ module Spinel
       args.each do |arg|
         type = infer_type(arg)
         # Special case: print x.chr -> putchar(x) for binary safety
-        if sp_is?(arg, "CallNode") && arg.name.to_s == "chr"
+        if (arg != nil && arg.type == "CallNode") && arg.name.to_s == "chr"
           recv = compile_expr(arg.receiver)
           emit("putchar((char)(#{recv}));")
           next
@@ -3836,7 +4024,7 @@ module Spinel
       args = call_args(node)
       return if args.empty?
       # Special case: printf("%c", val) -> sp_putc_utf8(val) for CRuby UTF-8 compat
-      if args.length == 2 && args[0].is_a_node?("StringNode") && args[0].content == "%c"
+      if args.length == 2 && (args[0] != nil && args[0].type == "StringNode") && args[0].content == "%c"
         val = compile_expr(args[1])
         emit("sp_putc_utf8(#{val});")
         return
@@ -3857,7 +4045,7 @@ module Spinel
         emit('sp_raise("RuntimeError");')
       elsif args.length == 1
         arg = args[0]
-        if sp_is?(arg, "CallNode") && arg.name.to_s == "new" && sp_is?(arg.receiver, "ConstantReadNode")
+        if (arg != nil && arg.type == "CallNode") && arg.name.to_s == "new" && (arg.receiver != nil && arg.receiver.type == "ConstantReadNode")
           # raise ClassName.new("msg")
           cls_name = c_string_literal(arg.receiver.name.to_s)
           msg_args = call_args(arg)
@@ -3870,7 +4058,7 @@ module Spinel
       else
         # raise ClassName, "message"
         cls_arg = args[0]
-        cls_name = sp_is?(cls_arg, "ConstantReadNode") ? c_string_literal(cls_arg.name.to_s) : compile_expr(cls_arg)
+        cls_name = (cls_arg != nil && cls_arg.type == "ConstantReadNode") ? c_string_literal(cls_arg.name.to_s) : compile_expr(cls_arg)
         msg = compile_expr(args[1])
         emit("sp_raise_cls(#{cls_name}, #{msg});")
       end
@@ -3891,7 +4079,7 @@ module Spinel
       cond = compile_expr(node.predicate)
 
       # Check for modifier if (no consequent)
-      if sp_is?(node, "IfNode")
+      if (node != nil && node.type == "IfNode")
         # Handle modifier unless at statement level
       end
 
@@ -3902,7 +4090,7 @@ module Spinel
         emit("if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
+          stmts = (node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -3931,7 +4119,7 @@ module Spinel
     end
 
     def generate_else_chain(node)
-      case node
+      case node.type
       when "ElseNode"
         emit("else {")
         @indent += 1
@@ -3954,12 +4142,12 @@ module Spinel
     end
 
     def generate_elsif_chain(node, res_var, return_type)
-      case node
+      case node.type
       when "ElseNode"
         emit("else {")
         @indent += 1
         if node.statements
-          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
+          stmts = (node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -3976,7 +4164,7 @@ module Spinel
         emit("else if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
+          stmts = (node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -4033,7 +4221,7 @@ module Spinel
 
     def generate_for_stmt(node)
       # for i in range
-      var_name = case node.index
+      var_name = case node.index.type
                  when "LocalVariableTargetNode" then node.index.name.to_s
                  else "i"
                  end
@@ -4041,7 +4229,7 @@ module Spinel
       ensure_var_declared(var_name, Type::INTEGER)
 
       collection = node.collection
-      case collection
+      case collection.type
       when "RangeNode"
         @needs_range = true
         first = compile_expr(collection.left)
@@ -4072,14 +4260,14 @@ module Spinel
       pred = compile_expr(node.predicate)
       pred_type = infer_type(node.predicate)
       # Check if predicate var is poly
-      if sp_is?(node.predicate, "LocalVariableReadNode")
+      if (node.predicate != nil && node.predicate.type == "LocalVariableReadNode")
         v = lookup_var(node.predicate.name.to_s)
         pred_type = Type::POLY if v && v.type == Type::POLY
       end
 
       first = true
       (node.conditions || []).each do |cond|
-        next unless sp_is?(cond, "InNode")
+        next unless (cond != nil && cond.type == "InNode")
         check = compile_pattern_check(cond.pattern, pred, pred_type)
         if first
           emit("if (#{check}) {")
@@ -4089,7 +4277,7 @@ module Spinel
         end
         @indent += 1
         if cond.statements
-          stmts = sp_is?(cond.statements, "StatementsNode") ? cond.statements.body : [cond.statements]
+          stmts = (cond.statements != nil && cond.statements.type == "StatementsNode") ? cond.statements.body : [cond.statements]
           stmts.each { |s| generate_stmt(s) }
         end
         @indent -= 1
@@ -4107,7 +4295,7 @@ module Spinel
     def compile_case_match_expr(node)
       pred = compile_expr(node.predicate)
       pred_type = infer_type(node.predicate)
-      if sp_is?(node.predicate, "LocalVariableReadNode")
+      if (node.predicate != nil && node.predicate.type == "LocalVariableReadNode")
         v = lookup_var(node.predicate.name.to_s)
         pred_type = Type::POLY if v && v.type == Type::POLY
       end
@@ -4115,13 +4303,13 @@ module Spinel
       result_tmp = "_cm_#{next_temp}"
       # Determine result type
       first_body = node.conditions&.first
-      result_type = first_body && sp_is?(first_body, "InNode") && first_body.statements ?
+      result_type = first_body && (first_body != nil && first_body.type == "InNode") && first_body.statements ?
         infer_body_type(first_body.statements) : Type::STRING
       emit("#{c_type(result_type)} #{result_tmp} = #{default_val(result_type)};")
 
       first = true
       (node.conditions || []).each do |cond|
-        next unless sp_is?(cond, "InNode")
+        next unless (cond != nil && cond.type == "InNode")
         check = compile_pattern_check(cond.pattern, pred, pred_type)
         if first
           emit("if (#{check}) {")
@@ -4150,7 +4338,7 @@ module Spinel
 
     def compile_block_expr_from_stmts(body)
       return "0" unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       if stmts.length == 1
         compile_expr(stmts.first)
       else
@@ -4160,7 +4348,7 @@ module Spinel
     end
 
     def compile_pattern_check(pattern, pred, pred_type)
-      case pattern
+      case pattern.type
       when "ConstantReadNode"
         cname = pattern.name.to_s
         if pred_type == Type::POLY
@@ -4244,7 +4432,7 @@ module Spinel
 
       first = true
       (node.conditions || []).each do |when_node|
-        next unless sp_is?(when_node, "WhenNode")
+        next unless (when_node != nil && when_node.type == "WhenNode")
 
         conditions = when_node.conditions.map { |c| compile_when_condition(c, temp_pred, pred_type) }
         cond_str = conditions.join(" || ")
@@ -4258,7 +4446,7 @@ module Spinel
 
         @indent += 1
         if return_type && when_node.statements
-          stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
+          stmts = (when_node.statements != nil && when_node.statements.type == "StatementsNode") ? when_node.statements.body : [when_node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -4278,7 +4466,7 @@ module Spinel
         emit("else {")
         @indent += 1
         if return_type && node.else_clause.statements
-          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = (node.else_clause.statements != nil && node.else_clause.statements.type == "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
               val = compile_expr(s)
@@ -4317,7 +4505,7 @@ module Spinel
         end
         @indent += 1
         if res_var && when_node.statements
-          stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
+          stmts = (when_node.statements != nil && when_node.statements.type == "StatementsNode") ? when_node.statements.body : [when_node.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           val = compile_expr(stmts.last)
           emit("#{res_var} = #{val};")
@@ -4331,7 +4519,7 @@ module Spinel
         emit("else {")
         @indent += 1
         if res_var && node.else_clause.statements
-          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = (node.else_clause.statements != nil && node.else_clause.statements.type == "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           val = compile_expr(stmts.last)
           emit("#{res_var} = #{val};")
@@ -4344,7 +4532,7 @@ module Spinel
     end
 
     def compile_when_condition(cond, pred_var, pred_type)
-      case cond
+      case cond.type
       when "RangeNode"
         @needs_range = true
         first = compile_expr(cond.left)
@@ -4407,7 +4595,7 @@ module Spinel
           while rc
             if rc.exceptions && !rc.exceptions.empty?
               cls_names = rc.exceptions.map { |e|
-                sp_is?(e, "ConstantReadNode") ? e.name.to_s : "RuntimeError"
+                (e != nil && e.type == "ConstantReadNode") ? e.name.to_s : "RuntimeError"
               }
               cond = cls_names.map { |c| "sp_exc_is_a(\"#{c}\")" }.join(" || ")
               if first
@@ -4424,7 +4612,7 @@ module Spinel
             end
             @indent += 1
             if rc.reference
-              ename = case rc.reference
+              ename = case rc.reference.type
                       when "LocalVariableTargetNode" then rc.reference.name.to_s
                       else "e"
                       end
@@ -4439,7 +4627,7 @@ module Spinel
         else
           # Simple rescue (no class check)
           if rc.reference
-            ename = case rc.reference
+            ename = case rc.reference.type
                     when "LocalVariableTargetNode" then rc.reference.name.to_s
                     else "e"
                     end
@@ -4462,7 +4650,7 @@ module Spinel
 
     def body_has_retry?(node)
       return false unless node
-      case node
+      case node.type
       when "RetryNode"
         true
       when "StatementsNode"
@@ -4472,7 +4660,7 @@ module Spinel
       when "RescueNode"
         body_has_retry?(node.statements)
       else
-        if node.sp_has?(:statements)
+        if node.sp_has("statements")
           body_has_retry?(node.statements)
         else
           false
@@ -4524,7 +4712,7 @@ module Spinel
     # ---- Expression compilation ----
     def compile_expr(node)
       return "0" unless node
-      case node
+      case node.type
       when "IntegerNode"
         node.value.to_s
       when "FloatNode"
@@ -4602,7 +4790,7 @@ module Spinel
         compile_unless_expr(node)
       when "ParenthesesNode"
         if node.body
-          inner = compile_expr(sp_is?(node.body, "StatementsNode") && node.body.body.length == 1 ? node.body.body.first : node.body)
+          inner = compile_expr((node.body != nil && node.body.type == "StatementsNode") && node.body.body.length == 1 ? node.body.body.first : node.body)
           "(#{inner})"
         else
           "0"
@@ -4640,7 +4828,7 @@ module Spinel
       when "DefinedNode"
         # defined?(x) -> check if variable is known
         expr = node.value
-        case expr
+        case expr.type
         when "LocalVariableReadNode"
           v = lookup_var(expr.name.to_s)
           v ? '"local-variable"' : "0"
@@ -4648,7 +4836,7 @@ module Spinel
           '"expression"'
         end
       when "SourceLineNode"
-        node.sp_has?(:start_line) ? node.start_line.to_s : "0"
+        node.sp_has("start_line") ? node.start_line.to_s : "0"
       when "RescueModifierNode"
         compile_rescue_modifier_expr(node)
       when "CaseNode"
@@ -4763,7 +4951,7 @@ module Spinel
     end
 
     def constant_path_str(node)
-      case node
+      case node.type
       when "ConstantPathNode"
         parent = node.parent ? constant_path_str(node.parent) : ""
         child = node.name.to_s
@@ -4844,7 +5032,7 @@ module Spinel
       # Determine hash type from value types
       ht = infer_type(node)
       first = node.elements.first
-      if sp_is?(first, "AssocNode")
+      if (first != nil && first.type == "AssocNode")
         if ht == Type::POLY_HASH
           @needs_poly_hash = true
           @needs_poly = true
@@ -4852,7 +5040,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_PolyHash *#{tmp} = sp_PolyHash_new();")
           node.elements.each do |elem|
-            next unless sp_is?(elem, "AssocNode")
+            next unless (elem != nil && elem.type == "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             vt = infer_type(elem.value)
@@ -4864,7 +5052,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_RbHash *#{tmp} = sp_RbHash_new();")
           node.elements.each do |elem|
-            next unless sp_is?(elem, "AssocNode")
+            next unless (elem != nil && elem.type == "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             emit("sp_RbHash_set(#{tmp}, #{k}, #{v});")
@@ -4876,7 +5064,7 @@ module Spinel
           tmp = "_hsh_#{next_temp}"
           emit("sp_StrIntHash *#{tmp} = sp_StrIntHash_new();")
           node.elements.each do |elem|
-            next unless sp_is?(elem, "AssocNode")
+            next unless (elem != nil && elem.type == "AssocNode")
             k = compile_hash_key(elem.key)
             v = compile_expr(elem.value)
             emit("sp_StrIntHash_set(#{tmp}, #{k}, #{v});")
@@ -4889,7 +5077,7 @@ module Spinel
     end
 
     def compile_hash_key(node)
-      case node
+      case node.type
       when "SymbolNode"
         c_string_literal(node.value)
       when "StringNode"
@@ -4907,10 +5095,10 @@ module Spinel
     end
 
     def compile_interpolated_string(node)
-      @string_helpers_needed << :str_concat
-      @string_helpers_needed << :int_to_s
+      Spinel.push_unique(@string_helpers_needed, "str_concat")
+      Spinel.push_unique(@string_helpers_needed, "int_to_s")
       parts = node.parts.map do |part|
-        case part
+        case part.type
         when "StringNode"
           c_string_literal(part.content)
         when "EmbeddedStatementsNode"
@@ -4919,7 +5107,7 @@ module Spinel
             type = infer_type(expr)
             val = compile_expr(expr)
             # Check if expr is a poly variable
-            if sp_is?(expr, "LocalVariableReadNode")
+            if (expr != nil && expr.type == "LocalVariableReadNode")
               v = lookup_var(expr.name.to_s)
               type = Type::POLY if v && v.type == Type::POLY
             end
@@ -4930,7 +5118,7 @@ module Spinel
             when Type::INTEGER
               "sp_int_to_s(#{val})"
             when Type::FLOAT
-              @string_helpers_needed << :float_to_s
+              Spinel.push_unique(@string_helpers_needed, "float_to_s")
               "sp_float_to_s(#{val})"
             when Type::STRING
               val
@@ -4960,14 +5148,16 @@ module Spinel
     end
 
     def compile_if_expr(node)
-      then_stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements] if node.statements
-      then_stmts ||= []
-      else_body = case node.subsequent
+      then_stmts = (node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body : [node.statements] if node.statements
+      if then_stmts == nil
+      then_stmts = []
+    end
+      else_body = case node.subsequent.type
                   when "ElseNode" then node.subsequent.statements
                   when "IfNode" then node.subsequent
                   else node.subsequent
                   end if node.subsequent
-      else_stmts = if sp_is?(else_body, "StatementsNode")
+      else_stmts = if (else_body != nil && else_body.type == "StatementsNode")
                      else_body.body
                    elsif else_body
                      [else_body]
@@ -4976,7 +5166,7 @@ module Spinel
                    end
       then_last = then_stmts.last
       else_last = else_stmts.last
-      has_return = sp_is?(then_last, "ReturnNode") || sp_is?(else_last, "ReturnNode")
+      has_return = (then_last != nil && then_last.type == "ReturnNode") || (else_last != nil && else_last.type == "ReturnNode")
       multi_stmt = then_stmts.length > 1 || else_stmts.length > 1
       if has_return || multi_stmt
         # Emit as if/else statement with result variable
@@ -4987,7 +5177,7 @@ module Spinel
         emit("if (#{cond}) {")
         @indent += 1
         then_stmts.each_with_index do |s, i|
-          if i == then_stmts.length - 1 && !sp_is?(s, "ReturnNode")
+          if i == then_stmts.length - 1 && !(s != nil && s.type == "ReturnNode")
             emit("#{res_var} = #{compile_expr(s)};")
           else
             generate_stmt(s)
@@ -4999,7 +5189,7 @@ module Spinel
           emit("else {")
           @indent += 1
           else_stmts.each_with_index do |s, i|
-            if i == else_stmts.length - 1 && !sp_is?(s, "ReturnNode")
+            if i == else_stmts.length - 1 && !(s != nil && s.type == "ReturnNode")
               emit("#{res_var} = #{compile_expr(s)};")
             else
               generate_stmt(s)
@@ -5018,7 +5208,7 @@ module Spinel
 
     def compile_unless_expr(node)
       cond = compile_expr(node.predicate)
-      then_val = node.statements ? compile_expr(sp_is?(node.statements, "StatementsNode") ? node.statements.body.last : node.statements) : "0"
+      then_val = node.statements ? compile_expr((node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body.last : node.statements) : "0"
       else_val = node.else_clause ? compile_expr(node.else_clause.statements) : "0"
       "(!(#{cond}) ? #{then_val} : #{else_val})"
     end
@@ -5039,7 +5229,7 @@ module Spinel
       emit("if (setjmp(sp_exc_stack[sp_exc_depth - 1]) == 0) {")
       @indent += 1
       # Generate the expression (which may include raise) inside the try block
-      if sp_is?(node.expression, "CallNode") && node.expression.name.to_s == "raise"
+      if (node.expression != nil && node.expression.type == "CallNode") && node.expression.name.to_s == "raise"
         generate_raise(node.expression)
         emit("#{tmp} = 0;")
       else
@@ -5070,7 +5260,7 @@ module Spinel
 
         first = true
         (node.conditions || []).each do |when_node|
-          next unless sp_is?(when_node, "WhenNode")
+          next unless (when_node != nil && when_node.type == "WhenNode")
           conditions = when_node.conditions.map { |c| compile_when_condition(c, temp_pred, pred_type) }
           cond_str = conditions.join(" || ")
 
@@ -5083,7 +5273,7 @@ module Spinel
 
           @indent += 1
           if when_node.statements
-            stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
+            stmts = (when_node.statements != nil && when_node.statements.type == "StatementsNode") ? when_node.statements.body : [when_node.statements]
             stmts.each_with_index do |s, i|
               if i == stmts.length - 1
                 emit("#{res_var} = #{compile_expr(s)};")
@@ -5100,7 +5290,7 @@ module Spinel
           emit("else {")
           @indent += 1
           if node.else_clause.statements
-            stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
+            stmts = (node.else_clause.statements != nil && node.else_clause.statements.type == "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
             stmts.each_with_index do |s, i|
               if i == stmts.length - 1
                 emit("#{res_var} = #{compile_expr(s)};")
@@ -5131,7 +5321,7 @@ module Spinel
           end
           @indent += 1
           if when_node.statements
-            stmts = sp_is?(when_node.statements, "StatementsNode") ? when_node.statements.body : [when_node.statements]
+            stmts = (when_node.statements != nil && when_node.statements.type == "StatementsNode") ? when_node.statements.body : [when_node.statements]
             stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
             emit("#{res_var} = #{compile_expr(stmts.last)};")
           end
@@ -5141,7 +5331,7 @@ module Spinel
         if node.else_clause && node.else_clause.statements
           emit("else {")
           @indent += 1
-          stmts = sp_is?(node.else_clause.statements, "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
+          stmts = (node.else_clause.statements != nil && node.else_clause.statements.type == "StatementsNode") ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
           emit("#{res_var} = #{compile_expr(stmts.last)};")
           @indent -= 1
@@ -5156,7 +5346,7 @@ module Spinel
       ci = @classes[@current_class]
       return "0" unless ci.parent
 
-      args = node.sp_has?(:arguments) && node.arguments ? node.arguments.arguments.map { |a| compile_expr(a) } : []
+      args = node.sp_has("arguments") && node.arguments ? node.arguments.arguments.map { |a| compile_expr(a) } : []
       "sp_#{ci.parent}_initialize((sp_#{ci.parent} *)self, #{args.join(', ')})"
     end
 
@@ -5210,10 +5400,10 @@ module Spinel
         mstr_recv = recv_type == Type::MUTABLE_STRING ? "sp_String_cstr(self)" : "self"
         case mname
         when "upcase"
-          @string_helpers_needed << :str_upcase
+          Spinel.push_unique(@string_helpers_needed, "str_upcase")
           return "sp_str_upcase(self)"
         when "downcase"
-          @string_helpers_needed << :str_downcase
+          Spinel.push_unique(@string_helpers_needed, "str_downcase")
           return "sp_str_downcase(self)"
         when "to_s"
           return "self" if recv_type == Type::STRING
@@ -5241,7 +5431,7 @@ module Spinel
           end
         end
         # Check ivar access (bare name matches attr reader)
-        if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
           ptr = class_needs_gc?(ci)
           return ptr ? "self->#{mname}" : "self.#{mname}"
         end
@@ -5260,7 +5450,7 @@ module Spinel
         if args.length >= 1
           fmt = compile_expr(args[0])
           rest = args[1..].map { |a| compile_expr(a) }.join(", ")
-          @string_helpers_needed << :str_concat
+          Spinel.push_unique(@string_helpers_needed, "str_concat")
           if rest.empty?
             return "#{fmt}"
           end
@@ -5279,11 +5469,11 @@ module Spinel
         if args.length > 0
           arg_node = args[0]
           # Handle Integer(ARGV[n] || default) pattern
-          if sp_is?(arg_node, "OrNode")
+          if (arg_node != nil && arg_node.type == "OrNode")
             left = arg_node.left
             right = arg_node.right
-            if sp_is?(left, "CallNode") && left.name.to_s == "[]" &&
-               sp_is?(left.receiver, "ConstantReadNode") && left.receiver.name.to_s == "ARGV"
+            if (left != nil && left.type == "CallNode") && left.name.to_s == "[]" &&
+               (left.receiver != nil && left.receiver.type == "ConstantReadNode") && left.receiver.name.to_s == "ARGV"
               idx = compile_expr(left.arguments.arguments[0])
               default_val = compile_expr(right)
               return "(sp_argv.len > #{idx} ? atol(sp_argv.data[#{idx}]) : #{default_val})"
@@ -5381,7 +5571,7 @@ module Spinel
       end
 
       # Proc.new { ... }
-      if mname == "new" && sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Proc" && node.block
+      if mname == "new" && (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Proc" && node.block
         return compile_proc_creation(node.block)
       end
 
@@ -5390,7 +5580,7 @@ module Spinel
         mi = @methods[mname]
 
         # Handle keyword arguments
-        if mi.has_kwargs && args.any? { |a| sp_is?(a, "KeywordHashNode") }
+        if mi.has_kwargs && args.any? { |a| (a != nil && a.type == "KeywordHashNode") }
           compiled_args = compile_kwargs_call(mi, args)
         elsif mi.has_rest
           # Rest args: pack into IntArray
@@ -5413,7 +5603,7 @@ module Spinel
               arg_type = infer_type(a)
               box_value(val, arg_type)
             elsif i < mi.params.length && mi.params[i].type == Type::STRING && infer_type(a) == Type::INTEGER
-              @string_helpers_needed << :int_to_s
+              Spinel.push_unique(@string_helpers_needed, "int_to_s")
               "sp_int_to_s(#{val})"
             else
               val
@@ -5500,9 +5690,9 @@ module Spinel
       positional = []
 
       args.each do |a|
-        if sp_is?(a, "KeywordHashNode")
+        if (a != nil && a.type == "KeywordHashNode")
           a.elements.each do |assoc|
-            if sp_is?(assoc, "AssocNode") && sp_is?(assoc.key, "SymbolNode")
+            if (assoc != nil && assoc.type == "AssocNode") && (assoc.key != nil && assoc.key.type == "SymbolNode")
               key = assoc.key.value
               kw_values[key] = compile_expr(assoc.value)
             end
@@ -5533,7 +5723,7 @@ module Spinel
       recv_code = compile_expr(recv)
 
       # Safe navigation operator
-      is_safe_nav = node.sp_has?(:call_operator) && node.call_operator == "&."
+      is_safe_nav = node.sp_has("call_operator") && node.call_operator == "&."
 
       # Check if receiver is POLY and a dispatch function exists for this method
       if recv_type == Type::POLY && @dispatch_methods && @dispatch_methods[mname]
@@ -5547,10 +5737,10 @@ module Spinel
         ci = @classes[recv_type]
         needs_ptr = class_needs_gc?(ci)
         # Prioritize attr reader/writer over method calls for direct field access
-        if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
           return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
         end
-        if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+        if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
           field = mname.chomp("=")
           val = compile_expr(args[0])
           return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
@@ -5581,10 +5771,10 @@ module Spinel
         end
         # Check attr accessors when recv_type is a known class
         needs_ptr = class_needs_gc?(ci)
-        if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+        if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
           return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
         end
-        if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+        if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
           field = mname.chomp("=")
           val = compile_expr(args[0])
           return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
@@ -5612,7 +5802,7 @@ module Spinel
       mstr_recv = recv_type == Type::MUTABLE_STRING ? "sp_String_cstr(#{recv_code})" : recv_code
 
       # ---- $stderr.puts ----
-      if sp_is?(recv, "GlobalVariableReadNode") && recv.name.to_s == "$stderr" && mname == "puts"
+      if (recv != nil && recv.type == "GlobalVariableReadNode") && recv.name.to_s == "$stderr" && mname == "puts"
         args.each do |arg|
           val = compile_expr(arg)
           type = infer_type(arg)
@@ -5748,25 +5938,25 @@ module Spinel
       case mname
       # ---- Regexp operators ----
       when "=~"
-        if args[0].is_a_node?("RegularExpressionNode")
+        if (args[0] != nil && args[0].type == "RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "(sp_re_match(#{re_var}, #{mstr_recv}) >= 0)"
         end
         return "0"
       when "match?"
-        if args[0].is_a_node?("RegularExpressionNode")
+        if (args[0] != nil && args[0].type == "RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "sp_re_match_p(#{re_var}, #{mstr_recv})"
         end
         return "0"
       when "scan"
-        if args[0].is_a_node?("RegularExpressionNode") && node.block
+        if (args[0] != nil && args[0].type == "RegularExpressionNode") && node.block
           re_var = register_regexp(args[0].unescaped)
           scan_id = next_temp
           block_node = node.block
           block_params = block_node.parameters&.parameters&.requireds || []
           bparam = block_params[0]
-          bparam_name = sp_is?(bparam, "RequiredParameterNode") ? bparam.name.to_s : "m"
+          bparam_name = (bparam != nil && bparam.type == "RequiredParameterNode") ? bparam.name.to_s : "m"
           ensure_var_declared(bparam_name, Type::STRING)
           emit("{ /* scan */")
           @indent += 1
@@ -5817,10 +6007,10 @@ module Spinel
           return "sp_poly_#{op_name}(#{a}, #{b})"
         end
         if (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "+"
-          @string_helpers_needed << :str_concat
+          Spinel.push_unique(@string_helpers_needed, "str_concat")
           return "sp_str_concat(#{mstr_recv}, #{arg})"
         elsif (recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING) && mname == "*"
-          @string_helpers_needed << :str_repeat
+          Spinel.push_unique(@string_helpers_needed, "str_repeat")
           return "sp_str_repeat(#{mstr_recv}, #{arg})"
         end
         # Ruby integer division is floor division, C is truncation toward zero
@@ -5942,10 +6132,10 @@ module Spinel
           @needs_poly = true
           return "sp_poly_to_s(#{recv_code})"
         elsif recv_type == Type::INTEGER
-          @string_helpers_needed << :int_to_s
+          Spinel.push_unique(@string_helpers_needed, "int_to_s")
           return "sp_int_to_s(#{recv_code})"
         elsif recv_type == Type::FLOAT
-          @string_helpers_needed << :float_to_s
+          Spinel.push_unique(@string_helpers_needed, "float_to_s")
           return "sp_float_to_s(#{recv_code})"
         elsif recv_type == Type::BOOLEAN
           return "(#{recv_code} ? \"true\" : \"false\")"
@@ -5956,7 +6146,7 @@ module Spinel
           return "sp_String_cstr(#{recv_code})"
         else
           # Object to_s
-          if sp_is?(recv, "LocalVariableReadNode")
+          if (recv != nil && recv.type == "LocalVariableReadNode")
             v = lookup_var(recv.name.to_s)
             if v && @classes.key?(recv_type.to_s.delete_prefix("sp_"))
               # try class to_s method
@@ -5992,7 +6182,7 @@ module Spinel
       when "negative?"
         return "((#{recv_code}) < 0)"
       when "nil?"
-        if sp_is?(recv, "NilNode")
+        if (recv != nil && recv.type == "NilNode")
           return "TRUE"
         end
         if recv_type == Type::NIL
@@ -6021,7 +6211,7 @@ module Spinel
 
       # ---- String methods ----
       when "length", "size"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "ARGV"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "ARGV"
           return "sp_Argv_length(&sp_argv)"
         end
         if recv_type == Type::STRING
@@ -6051,19 +6241,19 @@ module Spinel
           return "((mrb_int)strlen(#{recv_code}))"
         end
       when "upcase"
-        @string_helpers_needed << :str_upcase
+        Spinel.push_unique(@string_helpers_needed, "str_upcase")
         return "sp_str_upcase(#{mstr_recv})"
       when "downcase"
-        @string_helpers_needed << :str_downcase
+        Spinel.push_unique(@string_helpers_needed, "str_downcase")
         return "sp_str_downcase(#{mstr_recv})"
       when "strip"
-        @string_helpers_needed << :str_strip
+        Spinel.push_unique(@string_helpers_needed, "str_strip")
         return "sp_str_strip(#{mstr_recv})"
       when "chomp"
-        @string_helpers_needed << :str_chomp
+        Spinel.push_unique(@string_helpers_needed, "str_chomp")
         return "sp_str_chomp(#{mstr_recv})"
       when "chop"
-        @string_helpers_needed << :str_chop
+        Spinel.push_unique(@string_helpers_needed, "str_chop")
         return "sp_str_chop(#{mstr_recv})"
       when "bytesize"
         if recv_type == Type::MUTABLE_STRING
@@ -6103,31 +6293,31 @@ module Spinel
         end
         return recv_code
       when "capitalize"
-        @string_helpers_needed << :str_capitalize
+        Spinel.push_unique(@string_helpers_needed, "str_capitalize")
         return "sp_str_capitalize(#{mstr_recv})"
       when "lstrip"
-        @string_helpers_needed << :str_lstrip
+        Spinel.push_unique(@string_helpers_needed, "str_lstrip")
         return "sp_str_lstrip(#{mstr_recv})"
       when "rstrip"
-        @string_helpers_needed << :str_rstrip
+        Spinel.push_unique(@string_helpers_needed, "str_rstrip")
         return "sp_str_rstrip(#{mstr_recv})"
       when "ljust"
-        @string_helpers_needed << :str_ljust
+        Spinel.push_unique(@string_helpers_needed, "str_ljust")
         width = compile_expr(args[0])
         pad = args.length > 1 ? compile_expr(args[1]) : '" "'
         return "sp_str_ljust(#{mstr_recv}, #{width}, #{pad})"
       when "rjust"
-        @string_helpers_needed << :str_rjust
+        Spinel.push_unique(@string_helpers_needed, "str_rjust")
         width = compile_expr(args[0])
         pad = args.length > 1 ? compile_expr(args[1]) : '" "'
         return "sp_str_rjust(#{mstr_recv}, #{width}, #{pad})"
       when "center"
-        @string_helpers_needed << :str_center
+        Spinel.push_unique(@string_helpers_needed, "str_center")
         width = compile_expr(args[0])
         return "sp_str_center(#{mstr_recv}, #{width})"
       when "reverse"
         if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
-          @string_helpers_needed << :str_reverse
+          Spinel.push_unique(@string_helpers_needed, "str_reverse")
           return "sp_str_reverse(#{mstr_recv})"
         elsif recv_type == Type::ARRAY
           @needs_int_array = true
@@ -6136,7 +6326,7 @@ module Spinel
           emit("for (mrb_int _i = sp_IntArray_length(#{recv_code}) - 1; _i >= 0; _i--) sp_IntArray_push(#{tmp}, sp_IntArray_get(#{recv_code}, _i));")
           return tmp
         end
-        @string_helpers_needed << :str_reverse
+        Spinel.push_unique(@string_helpers_needed, "str_reverse")
         return "sp_str_reverse(#{mstr_recv})"
       when "reverse!"
         if recv_type == Type::ARRAY
@@ -6165,18 +6355,18 @@ module Spinel
         end
         return "(strstr(#{recv_code}, #{arg}) != NULL)"
       when "start_with?"
-        @string_helpers_needed << :str_starts_with
+        Spinel.push_unique(@string_helpers_needed, "str_starts_with")
         arg = compile_expr(args[0])
         return "sp_str_starts_with(#{mstr_recv}, #{arg})"
       when "end_with?"
-        @string_helpers_needed << :str_ends_with
+        Spinel.push_unique(@string_helpers_needed, "str_ends_with")
         arg = compile_expr(args[0])
         return "sp_str_ends_with(#{mstr_recv}, #{arg})"
       when "squeeze"
-        @string_helpers_needed << :str_squeeze
+        Spinel.push_unique(@string_helpers_needed, "str_squeeze")
         return "sp_str_squeeze(#{mstr_recv})"
       when "tr"
-        @string_helpers_needed << :str_tr
+        Spinel.push_unique(@string_helpers_needed, "str_tr")
         from = compile_expr(args[0])
         to = compile_expr(args[1])
         return "sp_str_tr(#{mstr_recv}, #{from}, #{to})"
@@ -6190,28 +6380,28 @@ module Spinel
         end
         return "((mrb_float)(#{recv_code}))"
       when "gsub"
-        if args[0].is_a_node?("RegularExpressionNode")
+        if (args[0] != nil && args[0].type == "RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           to = compile_expr(args[1])
           return "sp_re_gsub(#{re_var}, #{mstr_recv}, #{to})"
         end
-        @string_helpers_needed << :str_gsub
+        Spinel.push_unique(@string_helpers_needed, "str_gsub")
         from = compile_expr(args[0])
         to = compile_expr(args[1])
         return "sp_str_gsub(#{mstr_recv}, #{from}, #{to})"
       when "sub"
-        if args[0].is_a_node?("RegularExpressionNode")
+        if (args[0] != nil && args[0].type == "RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           to = compile_expr(args[1])
           return "sp_re_sub(#{re_var}, #{mstr_recv}, #{to})"
         end
-        @string_helpers_needed << :str_sub
+        Spinel.push_unique(@string_helpers_needed, "str_sub")
         from = compile_expr(args[0])
         to = compile_expr(args[1])
         return "sp_str_sub(#{mstr_recv}, #{from}, #{to})"
       when "count"
         if recv_type == Type::STRING
-          @string_helpers_needed << :str_count
+          Spinel.push_unique(@string_helpers_needed, "str_count")
           arg = compile_expr(args[0])
           return "sp_str_count(#{recv_code}, #{arg})"
         elsif recv_type == Type::RANGE && node.block
@@ -6227,7 +6417,7 @@ module Spinel
           push_scope
           declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
           block_body = node.block.body
-          val = compile_expr(sp_is?(block_body, "StatementsNode") ? block_body.body.last : block_body)
+          val = compile_expr((block_body != nil && block_body.type == "StatementsNode") ? block_body.body.last : block_body)
           emit("if (#{val}) #{tmp}++;")
           pop_scope
           @indent -= 1
@@ -6247,11 +6437,11 @@ module Spinel
         return "0"
       when "split"
         @needs_str_array = true
-        if !args.empty? && args[0].is_a_node?("RegularExpressionNode")
+        if !args.empty? && (args[0] != nil && args[0].type == "RegularExpressionNode")
           re_var = register_regexp(args[0].unescaped)
           return "sp_re_split(#{re_var}, #{mstr_recv})"
         end
-        @string_helpers_needed << :str_split
+        Spinel.push_unique(@string_helpers_needed, "str_split")
         if args.empty?
           return "sp_str_split(#{mstr_recv}, \" \")"
         else
@@ -6260,14 +6450,14 @@ module Spinel
         end
       when "chars"
         @needs_str_array = true
-        @string_helpers_needed << :str_chars
+        Spinel.push_unique(@string_helpers_needed, "str_chars")
         return "sp_str_chars(#{recv_code})"
       when "bytes"
         @needs_int_array = true
         @needs_gc = true
         return "sp_str_bytes(#{recv_code})"
       when "join"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           compiled_args = args.map { |a| compile_expr(a) }
           return "sp_File_join(#{compiled_args.join(', ')})"
@@ -6405,7 +6595,7 @@ module Spinel
           push_scope
           declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
           block_body = node.block.body
-          val = compile_expr(sp_is?(block_body, "StatementsNode") ? block_body.body.last : block_body)
+          val = compile_expr((block_body != nil && block_body.type == "StatementsNode") ? block_body.body.last : block_body)
           emit("#{tmp} += #{val};")
           pop_scope
           @indent -= 1
@@ -6477,7 +6667,7 @@ module Spinel
       # ---- Array [] and []= ----
       when "[]"
         # ENV["key"] -> getenv("key")
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "ENV"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "ENV"
           arg = compile_expr(args[0])
           return "getenv(#{arg})"
         end
@@ -6504,15 +6694,15 @@ module Spinel
           arg_type = infer_type(args[0])
           if arg_type == Type::RANGE
             @needs_range = true
-            @string_helpers_needed << :str_slice_range
+            Spinel.push_unique(@string_helpers_needed, "str_slice_range")
             return "sp_str_slice_range(#{recv_code}, #{arg})"
           elsif args.length >= 2
             # s[start, len]
             arg2 = compile_expr(args[1])
-            @string_helpers_needed << :str_slice
+            Spinel.push_unique(@string_helpers_needed, "str_slice")
             return "sp_str_slice(#{recv_code}, #{arg}, #{arg2})"
           else
-            @string_helpers_needed << :str_char_at
+            Spinel.push_unique(@string_helpers_needed, "str_char_at")
             return "sp_str_char_at(#{recv_code}, #{arg})"
           end
         elsif recv_type == Type::HASH
@@ -6587,14 +6777,14 @@ module Spinel
         arg = compile_expr(args[0])
         return "sp_StrIntHash_has_key(#{recv_code}, #{arg})"
       when "delete"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           emit("remove(#{arg});")
           return "0"
         end
         if recv_type == Type::STRING || recv_type == Type::MUTABLE_STRING
-          @string_helpers_needed << :str_delete
+          Spinel.push_unique(@string_helpers_needed, "str_delete")
           arg = compile_expr(args[0])
           return "sp_str_delete_chars(#{mstr_recv}, #{arg})"
         end
@@ -6666,19 +6856,19 @@ module Spinel
 
       # ---- Math ----
       when "sqrt"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "sqrt(#{arg})"
         end
         return "0"
       when "cos"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "cos(#{arg})"
         end
         return "0"
       when "sin"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Math"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Math"
           arg = compile_expr(args[0])
           return "sin(#{arg})"
         end
@@ -6686,20 +6876,20 @@ module Spinel
 
       # ---- Dir methods ----
       when "home"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Dir"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Dir"
           return "getenv(\"HOME\")"
         end
         return '""'
 
       # ---- Time methods ----
       when "now"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Time"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Time"
           @needs_time = true
           return "sp_Time_now()"
         end
         return "0"
       when "at"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "Time"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "Time"
           @needs_time = true
           arg = compile_expr(args[0])
           return "sp_Time_at(#{arg})"
@@ -6708,14 +6898,14 @@ module Spinel
 
       # ---- File class methods ----
       when "read"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           return "sp_File_read(#{arg})"
         end
         return "0"
       when "write"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           path_arg = compile_expr(args[0])
           data_arg = compile_expr(args[1])
@@ -6723,20 +6913,20 @@ module Spinel
         end
         return "0"
       when "exist?", "exists?"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           arg = compile_expr(args[0])
           return "sp_File_exist(#{arg})"
         end
         return "FALSE"
       when "open"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           return compile_file_open(node, args)
         end
         return "0"
       when "join"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           @needs_file = true
           compiled_args = args.map { |a| compile_expr(a) }
           return "sp_File_join(#{compiled_args.join(', ')})"
@@ -6747,7 +6937,7 @@ module Spinel
         end
         return '""'
       when "basename"
-        if sp_is?(recv, "ConstantReadNode") && recv.name.to_s == "File"
+        if (recv != nil && recv.type == "ConstantReadNode") && recv.name.to_s == "File"
           arg = compile_expr(args[0])
           return "basename(#{arg})"
         end
@@ -6761,11 +6951,11 @@ module Spinel
       when "class"
         return '"Object"'
       when "is_a?"
-        if args.length > 0 && args[0].is_a_node?("ConstantReadNode")
+        if args.length > 0 && (args[0] != nil && args[0].type == "ConstantReadNode")
           check_class = args[0].name.to_s
           # Determine the receiver's class
           recv_class = nil
-          if sp_is?(recv, "LocalVariableReadNode")
+          if (recv != nil && recv.type == "LocalVariableReadNode")
             vname = recv.name.to_s
             recv_class = @var_class_types && @var_class_types[vname]
           end
@@ -6782,11 +6972,11 @@ module Spinel
         end
         return "TRUE"
       when "respond_to?"
-        if args.length > 0 && args[0].is_a_node?("SymbolNode")
+        if args.length > 0 && (args[0] != nil && args[0].type == "SymbolNode")
           method_name = args[0].value
           # Determine the receiver's class
           recv_class = nil
-          if sp_is?(recv, "LocalVariableReadNode")
+          if (recv != nil && recv.type == "LocalVariableReadNode")
             vname = recv.name.to_s
             recv_class = @var_class_types && @var_class_types[vname]
           end
@@ -6796,8 +6986,8 @@ module Spinel
             while cls
               ci = @classes[cls]
               if ci
-                if ci.methods[method_name] || ci.attrs[:reader].include?(method_name) ||
-                   ci.attrs[:accessor].include?(method_name)
+                if ci.methods[method_name] || ci.attrs["reader"].include?(method_name) ||
+                   ci.attrs["accessor"].include?(method_name)
                   return "TRUE"
                 end
               end
@@ -6836,12 +7026,12 @@ module Spinel
         end
         # method(:name).call(args) - limited support
         target_method = nil
-        if sp_is?(recv, "CallNode") && recv.name.to_s == "method"
+        if (recv != nil && recv.type == "CallNode") && recv.name.to_s == "method"
           method_arg = call_args(recv)
-          if method_arg.length > 0 && method_arg[0].is_a_node?("SymbolNode")
+          if method_arg.length > 0 && (method_arg[0] != nil && method_arg[0].type == "SymbolNode")
             target_method = method_arg[0].value
           end
-        elsif sp_is?(recv, "LocalVariableReadNode")
+        elsif (recv != nil && recv.type == "LocalVariableReadNode")
           target_method = @method_refs[recv.name.to_s]
         end
         if target_method && @methods[target_method]
@@ -6861,18 +7051,18 @@ module Spinel
         return result if result
 
         # Check if receiver is a class instance and method is an attr accessor
-        if sp_is?(recv, "LocalVariableReadNode")
+        if (recv != nil && recv.type == "LocalVariableReadNode")
           v = lookup_var(recv.name.to_s)
           if v
             # Try to find the class
             @classes.each do |cname, ci|
               all_ivars = collect_all_ivars(ci)
-              if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+              if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
                 needs_ptr = class_needs_gc?(ci)
                 accessor = needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
                 return accessor
               end
-              if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+              if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
                 field = mname.chomp("=")
                 needs_ptr = class_needs_gc?(ci)
                 accessor = needs_ptr ? "#{recv_code}->#{field}" : "#{recv_code}.#{field}"
@@ -6905,9 +7095,9 @@ module Spinel
 
     # Return the element class name for a class-typed array receiver, or nil
     def array_elem_class_for_receiver(recv)
-      if sp_is?(recv, "LocalVariableReadNode")
+      if (recv != nil && recv.type == "LocalVariableReadNode")
         return @array_elem_types[recv.name.to_s]
-      elsif sp_is?(recv, "InstanceVariableReadNode") && @current_class
+      elsif (recv != nil && recv.type == "InstanceVariableReadNode") && @current_class
         ivar = recv.name.to_s.delete_prefix("@")
         return @ivar_elem_types.dig(@current_class, ivar)
       end
@@ -6916,7 +7106,7 @@ module Spinel
 
     def try_class_method_call(recv, recv_code, mname, args)
       # Check if receiver is a class constant (static method call)
-      if sp_is?(recv, "ConstantReadNode")
+      if (recv != nil && recv.type == "ConstantReadNode")
         cname = recv.name.to_s
         if @classes[cname] && @classes[cname].class_methods[mname]
           compiled_args = args.map { |a| compile_expr(a) }
@@ -6932,7 +7122,7 @@ module Spinel
       end
 
       # Check if receiver is a known class instance
-      if sp_is?(recv, "LocalVariableReadNode")
+      if (recv != nil && recv.type == "LocalVariableReadNode")
         vname = recv.name.to_s
         # Check var_class_types
         if @var_class_types && @var_class_types[vname]
@@ -6950,11 +7140,11 @@ module Spinel
       needs_ptr = class_needs_gc?(ci)
 
       # Check attrs
-      if ci.attrs[:reader].include?(mname) || ci.attrs[:accessor].include?(mname)
+      if ci.attrs["reader"].include?(mname) || ci.attrs["accessor"].include?(mname)
         return needs_ptr ? "#{recv_code}->#{mname}" : "#{recv_code}.#{mname}"
       end
 
-      if mname.end_with?("=") && (ci.attrs[:writer].include?(mname.chomp("=")) || ci.attrs[:accessor].include?(mname.chomp("=")))
+      if mname.end_with?("=") && (ci.attrs["writer"].include?(mname.chomp("=")) || ci.attrs["accessor"].include?(mname.chomp("=")))
         field = mname.chomp("=")
         val = compile_expr(args[0])
         return needs_ptr ? "(#{recv_code}->#{field} = #{val})" : "(#{recv_code}.#{field} = #{val})"
@@ -6985,7 +7175,7 @@ module Spinel
     end
 
     def compile_new(node, recv, args)
-      return "0" unless sp_is?(recv, "ConstantReadNode")
+      return "0" unless (recv != nil && recv.type == "ConstantReadNode")
       cname = recv.name.to_s
 
       # Proc.new { ... }
@@ -6999,7 +7189,7 @@ module Spinel
         if args.length >= 2
           # Detect float array from default value
           default_node = node.arguments.arguments[1]
-          is_float = sp_is?(default_node, "FloatNode") || infer_type(default_node) == Type::FLOAT
+          is_float = (default_node != nil && default_node.type == "FloatNode") || infer_type(default_node) == Type::FLOAT
           n = compile_expr(args[0])
           val = compile_expr(args[1])
           tmp = "_arr_#{next_temp}"
@@ -7041,13 +7231,13 @@ module Spinel
 
       if @classes[cname]
         # Handle keyword arguments for struct-like constructors
-        if args.length == 1 && args[0].is_a_node?("KeywordHashNode") && @struct_classes && @struct_classes[cname]
+        if args.length == 1 && (args[0] != nil && args[0].type == "KeywordHashNode") && @struct_classes && @struct_classes[cname]
           fields = @struct_classes[cname]
           # Extract keyword args in field order
           kw_hash = {}
           args[0].elements.each do |assoc|
-            if sp_is?(assoc, "AssocNode")
-              key = sp_is?(assoc.key, "SymbolNode") ? assoc.key.value : assoc.key.to_s
+            if (assoc != nil && assoc.type == "AssocNode")
+              key = (assoc.key != nil && assoc.key.type == "SymbolNode") ? assoc.key.value : assoc.key.to_s
               kw_hash[key] = compile_expr(assoc.value)
             end
           end
@@ -7169,7 +7359,7 @@ module Spinel
       idx = "_mi_#{result}"
 
       # Detect n.times.map { block } chain
-      is_times_map = sp_is?(node.receiver, "CallNode") && node.receiver.name.to_s == "times" && !node.receiver.block
+      is_times_map = (node.receiver != nil && node.receiver.type == "CallNode") && node.receiver.name.to_s == "times" && !node.receiver.block
       if is_times_map
         times_recv = compile_expr(node.receiver.receiver)
         emit("sp_IntArray *#{result} = sp_IntArray_new();")
@@ -7302,7 +7492,7 @@ module Spinel
       @needs_exception = true
       @needs_catch_throw = true
 
-      tag = args.length > 0 && args[0].is_a_node?("SymbolNode") ? args[0].value : "tag"
+      tag = args.length > 0 && (args[0] != nil && args[0].type == "SymbolNode") ? args[0].value : "tag"
       tag_c = c_string_literal(tag)
 
       result_var = "_catch_#{next_temp}"
@@ -7318,7 +7508,7 @@ module Spinel
       if node.block
         block = node.block
         if block.body
-          stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
+          stmts = (block.body != nil && block.body.type == "StatementsNode") ? block.body.body : [block.body]
           if stmts.length > 0
             stmts[0..-2].each { |s| generate_stmt(s) }
             last_val = compile_expr(stmts.last)
@@ -7358,7 +7548,7 @@ module Spinel
       @needs_exception = true
       @needs_catch_throw = true
 
-      tag = args.length > 0 && args[0].is_a_node?("SymbolNode") ? args[0].value : "tag"
+      tag = args.length > 0 && (args[0] != nil && args[0].type == "SymbolNode") ? args[0].value : "tag"
       tag_c = c_string_literal(tag)
 
       if args.length > 1
@@ -7392,7 +7582,7 @@ module Spinel
 
         # Generate block body, but handle f.puts / f.each_line specially
         if block.body
-          stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
+          stmts = (block.body != nil && block.body.type == "StatementsNode") ? block.body.body : [block.body]
           stmts.each { |s| generate_stmt(s) }
         end
 
@@ -7789,21 +7979,21 @@ module Spinel
 
     def collect_captured_vars(body, block_params)
       vars = []
-      seen = Set.new(block_params)
+      seen = block_params.dup
       find_captured_reads(body, seen, vars)
       vars.uniq { |v| v[:name] }
     end
 
     def find_captured_reads(node, seen, vars)
       return unless node
-      case node
+      case node.type
       when "LocalVariableReadNode"
         name = node.name.to_s
         unless seen.include?(name)
           v = lookup_var(name)
           if v
             vars << { name: name, c_name: v.c_name, type: v.type }
-            seen << name
+            Spinel.push_unique(seen, name)
           end
         end
       when "LocalVariableWriteNode"
@@ -7812,7 +8002,7 @@ module Spinel
           v = lookup_var(name)
           if v
             vars << { name: name, c_name: v.c_name, type: v.type }
-            seen << name
+            Spinel.push_unique(seen, name)
           end
         end
         find_captured_reads(node.value, seen, vars)
@@ -7822,7 +8012,7 @@ module Spinel
           v = lookup_var(name)
           if v
             vars << { name: name, c_name: v.c_name, type: v.type }
-            seen << name
+            Spinel.push_unique(seen, name)
           end
         end
         find_captured_reads(node.value, seen, vars)
@@ -7835,13 +8025,13 @@ module Spinel
     def generate_block_body_with_env(block, captured)
       body = block.body
       return unless body
-      stmts = sp_is?(body, "StatementsNode") ? body.body : [body]
+      stmts = (body != nil && body.type == "StatementsNode") ? body.body : [body]
       stmts.each { |s| generate_stmt_with_env(s, captured) }
     end
 
     def generate_stmt_with_env(node, captured)
       # Override local variable access to use env pointers for captured vars
-      case node
+      case node.type
       when "LocalVariableWriteNode"
         name = node.name.to_s
         cap = captured.find { |c| c[:name] == name }
@@ -7887,17 +8077,17 @@ module Spinel
         emit("if (#{cond}) {")
         @indent += 1
         if node.statements
-          stmts = sp_is?(node.statements, "StatementsNode") ? node.statements.body : [node.statements]
+          stmts = (node.statements != nil && node.statements.type == "StatementsNode") ? node.statements.body : [node.statements]
           stmts.each { |s| generate_stmt_with_env(s, captured) }
         end
         @indent -= 1
         if node.subsequent
-          case node.subsequent
+          case node.subsequent.type
           when "ElseNode"
             emit("else {")
             @indent += 1
             if node.subsequent.statements
-              stmts = sp_is?(node.subsequent.statements, "StatementsNode") ? node.subsequent.statements.body : [node.subsequent.statements]
+              stmts = (node.subsequent.statements != nil && node.subsequent.statements.type == "StatementsNode") ? node.subsequent.statements.body : [node.subsequent.statements]
               stmts.each { |s| generate_stmt_with_env(s, captured) }
             end
             @indent -= 1
@@ -7912,7 +8102,7 @@ module Spinel
     end
 
     def compile_expr_with_env(node, captured)
-      case node
+      case node.type
       when "LocalVariableReadNode"
         name = node.name.to_s
         cap = captured.find { |c| c[:name] == name }
@@ -8025,20 +8215,20 @@ module Spinel
     end
 
     def block_params(block)
-      return [] unless sp_is?(block, "BlockNode")
+      return [] unless (block != nil && block.type == "BlockNode")
       return [] unless block.parameters
       params = block.parameters
       # Handle numbered parameters (_1, _2, etc.)
-      if sp_is?(params, "NumberedParametersNode")
+      if (params != nil && params.type == "NumberedParametersNode")
         return (1..params.maximum).map { |i| "_#{i}" }
       end
-      if sp_is?(params, "BlockParametersNode")
+      if (params != nil && params.type == "BlockParametersNode")
         params = params.parameters
       end
       return [] unless params
       result = []
       (params.requireds || []).each do |p|
-        case p
+        case p.type
         when "RequiredParameterNode"
           result << p.name.to_s
         when "BlockLocalVariableNode"
@@ -8051,14 +8241,14 @@ module Spinel
     end
 
     def generate_block_body(block)
-      return unless sp_is?(block, "BlockNode") && block.body
-      stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
+      return unless (block != nil && block.type == "BlockNode") && block.body
+      stmts = (block.body != nil && block.body.type == "StatementsNode") ? block.body.body : [block.body]
       stmts.each { |s| generate_stmt(s) }
     end
 
     def compile_block_expr(block)
-      return "0" unless sp_is?(block, "BlockNode") && block.body
-      stmts = sp_is?(block.body, "StatementsNode") ? block.body.body : [block.body]
+      return "0" unless (block != nil && block.type == "BlockNode") && block.body
+      stmts = (block.body != nil && block.body.type == "StatementsNode") ? block.body.body : [block.body]
       if stmts.length == 1
         compile_expr(stmts.first)
       else
@@ -8081,7 +8271,7 @@ module Spinel
 
     def find_locals(node, locals)
       return unless node
-      case node
+      case node.type
       when "StatementsNode"
         node.body.each { |s| find_locals(s, locals) }
       when "LocalVariableWriteNode"
@@ -8104,7 +8294,7 @@ module Spinel
       when "LocalVariableOperatorWriteNode"
         val_type = infer_type(node.value)
         # If the value is a local var read, check method params and already-found locals
-        if val_type == Type::UNKNOWN && sp_is?(node.value, "LocalVariableReadNode")
+        if val_type == Type::UNKNOWN && (node.value != nil && node.value.type == "LocalVariableReadNode")
           ref_name = node.value.name.to_s
           val_type = locals[ref_name] if locals[ref_name]
           if val_type == Type::UNKNOWN && @current_method
@@ -8116,7 +8306,9 @@ module Spinel
         if existing == Type::INTEGER && val_type == Type::FLOAT
           locals[node.name.to_s] = Type::FLOAT
         else
-          locals[node.name.to_s] ||= (val_type == Type::FLOAT ? Type::FLOAT : Type::INTEGER)
+          if locals[node.name.to_s] == nil
+          locals[node.name.to_s] = (val_type == Type::FLOAT ? Type::FLOAT : Type::INTEGER)
+        end
         end
       when "IfNode"
         find_locals(node.statements, locals)
@@ -8128,7 +8320,7 @@ module Spinel
       when "ForNode"
         find_locals(node.statements, locals)
       when "CaseNode"
-        (node.conditions || []).each { |c| find_locals(c, locals) if c.sp_has?(:statements) }
+        (node.conditions || []).each { |c| find_locals(c, locals) if c.sp_has("statements") }
         find_locals(node.else_clause, locals) if node.else_clause
       when "WhenNode"
         find_locals(node.statements, locals)
@@ -8138,7 +8330,7 @@ module Spinel
       when "RescueNode"
         find_locals(node.statements, locals)
         if node.reference
-          name = case node.reference
+          name = case node.reference.type
                  when "LocalVariableTargetNode" then node.reference.name.to_s
                  else nil
                  end
@@ -8181,13 +8373,13 @@ module Spinel
     end
 
     def last_stmt(body)
-      return body unless sp_is?(body, "StatementsNode")
+      return body unless (body != nil && body.type == "StatementsNode")
       body.body.last
     end
 
     def returns_value?(node)
       return false unless node
-      case node
+      case node.type
       when "ReturnNode"
         true
       when "IfNode"
@@ -8199,7 +8391,7 @@ module Spinel
     end
 
     def const_value_to_c(node, type)
-      case node
+      case node.type
       when "IntegerNode" then node.value.to_s
       when "FloatNode"
         s = node.value.to_s
@@ -8392,7 +8584,7 @@ module Spinel
       @needs_gc = true if @needs_str_str_hash
       @needs_gc = true if @needs_poly_hash
       @needs_gc = true if @needs_mutable_string
-      @needs_str_array = true if @string_helpers_needed.include?(:str_split) || @string_helpers_needed.include?(:str_chars)
+      @needs_str_array = true if @string_helpers_needed.include?("str_split") || @string_helpers_needed.include?("str_chars")
 
       # String helpers (non-StrArray dependent)
       emit_string_helpers(out, before_str_array: true)
@@ -8572,7 +8764,7 @@ module Spinel
     def emit_string_helpers(out, before_str_array: true)
       # str_split, str_chars, str_slice_range depend on other types, emit them after
       unless before_str_array
-        if @string_helpers_needed.include?(:str_slice_range)
+        if @string_helpers_needed.include?("str_slice_range")
           out.puts <<~C
             static const char *sp_str_slice_range(const char *s, sp_Range r) {
               size_t len = strlen(s);
@@ -8588,7 +8780,7 @@ module Spinel
           C
         end
 
-        if @string_helpers_needed.include?(:str_slice)
+        if @string_helpers_needed.include?("str_slice")
           out.puts <<~C
             static const char *sp_str_slice(const char *s, mrb_int start, mrb_int len) {
               size_t slen = strlen(s);
@@ -8602,7 +8794,7 @@ module Spinel
         end
 
         # Only emit StrArray-dependent helpers
-        if @string_helpers_needed.include?(:str_split)
+        if @string_helpers_needed.include?("str_split")
           out.puts <<~C
             static sp_StrArray *sp_str_split(const char *s, const char *delim) {
               sp_StrArray *a = sp_StrArray_new();
@@ -8616,7 +8808,7 @@ module Spinel
             }
           C
         end
-        if @string_helpers_needed.include?(:str_chars)
+        if @string_helpers_needed.include?("str_chars")
           out.puts <<~C
             static sp_StrArray *sp_str_chars(const char *s) {
               sp_StrArray *a = sp_StrArray_new();
@@ -8631,7 +8823,7 @@ module Spinel
       end
 
       # Emit non-StrArray-dependent helpers
-      if @string_helpers_needed.include?(:str_upcase)
+      if @string_helpers_needed.include?("str_upcase")
         out.puts <<~C
           static const char *sp_str_upcase(const char *s) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1);
@@ -8641,7 +8833,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_downcase)
+      if @string_helpers_needed.include?("str_downcase")
         out.puts <<~C
           static const char *sp_str_downcase(const char *s) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1);
@@ -8651,7 +8843,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_strip)
+      if @string_helpers_needed.include?("str_strip")
         out.puts <<~C
           static const char *sp_str_strip(const char *s) {
             while (*s && isspace((unsigned char)*s)) s++;
@@ -8663,7 +8855,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_tr)
+      if @string_helpers_needed.include?("str_tr")
         out.puts <<~C
           static const char *sp_str_tr(const char *s, const char *from, const char *to) {
             size_t n = strlen(s), fl = strlen(from), tl = strlen(to);
@@ -8682,7 +8874,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_delete)
+      if @string_helpers_needed.include?("str_delete")
         out.puts <<~C
           static const char *sp_str_delete_chars(const char *s, const char *chars) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1); size_t ri = 0;
@@ -8694,7 +8886,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_squeeze)
+      if @string_helpers_needed.include?("str_squeeze")
         out.puts <<~C
           static const char *sp_str_squeeze(const char *s) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1); size_t ri = 0;
@@ -8706,7 +8898,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_ljust)
+      if @string_helpers_needed.include?("str_ljust")
         out.puts <<~C
           static const char *sp_str_ljust(const char *s, mrb_int w, const char *pad) {
             size_t sl = strlen(s);
@@ -8719,7 +8911,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_rjust)
+      if @string_helpers_needed.include?("str_rjust")
         out.puts <<~C
           static const char *sp_str_rjust(const char *s, mrb_int w, const char *pad) {
             size_t sl = strlen(s);
@@ -8733,7 +8925,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_center)
+      if @string_helpers_needed.include?("str_center")
         out.puts <<~C
           static const char *sp_str_center(const char *s, mrb_int w) {
             size_t sl = strlen(s);
@@ -8749,7 +8941,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_lstrip)
+      if @string_helpers_needed.include?("str_lstrip")
         out.puts <<~C
           static const char *sp_str_lstrip(const char *s) {
             while (*s && isspace((unsigned char)*s)) s++;
@@ -8759,7 +8951,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_rstrip)
+      if @string_helpers_needed.include?("str_rstrip")
         out.puts <<~C
           static const char *sp_str_rstrip(const char *s) {
             size_t n = strlen(s);
@@ -8770,7 +8962,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_chomp)
+      if @string_helpers_needed.include?("str_chomp")
         out.puts <<~C
           static const char *sp_str_chomp(const char *s) {
             size_t n = strlen(s);
@@ -8781,7 +8973,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_chop)
+      if @string_helpers_needed.include?("str_chop")
         out.puts <<~C
           static const char *sp_str_chop(const char *s) {
             size_t n = strlen(s);
@@ -8792,7 +8984,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_capitalize)
+      if @string_helpers_needed.include?("str_capitalize")
         out.puts <<~C
           static const char *sp_str_capitalize(const char *s) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1);
@@ -8802,7 +8994,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_reverse)
+      if @string_helpers_needed.include?("str_reverse")
         out.puts <<~C
           static const char *sp_str_reverse(const char *s) {
             size_t n = strlen(s); char *r = (char *)malloc(n + 1);
@@ -8812,7 +9004,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_count)
+      if @string_helpers_needed.include?("str_count")
         out.puts <<~C
           static mrb_int sp_str_count(const char *s, const char *chars) {
             mrb_int c = 0;
@@ -8822,7 +9014,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_starts_with)
+      if @string_helpers_needed.include?("str_starts_with")
         out.puts <<~C
           static mrb_bool sp_str_starts_with(const char *s, const char *prefix) {
             size_t pn = strlen(prefix);
@@ -8831,7 +9023,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_ends_with)
+      if @string_helpers_needed.include?("str_ends_with")
         out.puts <<~C
           static mrb_bool sp_str_ends_with(const char *s, const char *suffix) {
             size_t sn = strlen(s), xn = strlen(suffix);
@@ -8840,7 +9032,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_gsub)
+      if @string_helpers_needed.include?("str_gsub")
         out.puts <<~C
           static const char *sp_str_gsub(const char *s, const char *from, const char *to) {
             size_t fl = strlen(from), tl = strlen(to);
@@ -8860,7 +9052,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_sub)
+      if @string_helpers_needed.include?("str_sub")
         out.puts <<~C
           static const char *sp_str_sub(const char *s, const char *from, const char *to) {
             const char *p = strstr(s, from);
@@ -8874,7 +9066,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_char_at)
+      if @string_helpers_needed.include?("str_char_at")
         out.puts <<~C
           static const char *sp_str_char_at(const char *s, mrb_int idx) {
             mrb_int len = (mrb_int)strlen(s);
@@ -8885,7 +9077,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_concat)
+      if @string_helpers_needed.include?("str_concat")
         out.puts <<~C
           static const char *sp_str_concat(const char *a, const char *b) {
             size_t la = strlen(a), lb = strlen(b);
@@ -8895,7 +9087,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:int_to_s)
+      if @string_helpers_needed.include?("int_to_s")
         out.puts <<~C
           static const char *sp_int_to_s(mrb_int n) {
             char *r = (char *)malloc(24); snprintf(r, 24, "%lld", (long long)n); return r;
@@ -8903,7 +9095,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:str_repeat)
+      if @string_helpers_needed.include?("str_repeat")
         out.puts <<~C
           static const char *sp_str_repeat(const char *s, mrb_int n) {
             size_t sl = strlen(s); char *r = (char *)malloc(sl * n + 1);
@@ -8913,7 +9105,7 @@ module Spinel
         C
       end
 
-      if @string_helpers_needed.include?(:float_to_s)
+      if @string_helpers_needed.include?("float_to_s")
         out.puts <<~C
           static const char *sp_float_to_s(mrb_float f) {
             char *r = (char *)malloc(32);
@@ -10156,6 +10348,130 @@ module Spinel
     end
   end
 
+  # ---- Binary AST reader ----
+  TAG_NIL    = 0
+  TAG_INT    = 1
+  TAG_STRING = 2
+  TAG_NODE   = 3
+  TAG_ARRAY  = 4
+  TAG_FLOAT  = 5
+  TAG_BOOL   = 6
+
+  def self.read_binary_ast(data)
+    node, _pos = read_bin_value(data, 0)
+    node
+  end
+
+  def self.read_bin_value(data, pos)
+    tag = data.getbyte(pos)
+    pos = pos + 1
+    case tag
+    when TAG_NIL
+      return nil, pos
+    when TAG_INT
+      val = data[pos, 8].unpack("q<")[0]
+      return val, pos + 8
+    when TAG_STRING
+      len = data[pos, 4].unpack("V")[0]
+      pos = pos + 4
+      str = data[pos, len]
+      return str, pos + len
+    when TAG_FLOAT
+      val = data[pos, 8].unpack("E")[0]
+      return val, pos + 8
+    when TAG_BOOL
+      val = data.getbyte(pos) != 0
+      return val, pos + 1
+    when TAG_NODE
+      return read_bin_node(data, pos)
+    when TAG_ARRAY
+      count = data[pos, 4].unpack("V")[0]
+      pos = pos + 4
+      arr = []
+      i = 0
+      while i < count
+        elem, pos = read_bin_value(data, pos)
+        arr.push(elem)
+        i = i + 1
+      end
+      return arr, pos
+    else
+      return nil, pos
+    end
+  end
+
+  def self.read_bin_short_string(data, pos)
+    len = data[pos, 2].unpack("v")[0]
+    pos = pos + 2
+    str = data[pos, len]
+    return str, pos + len
+  end
+
+  def self.read_bin_node(data, pos)
+    type_str, pos = read_bin_short_string(data, pos)
+    field_count = data[pos, 2].unpack("v")[0]
+    pos = pos + 2
+
+    node = SpNode.new
+    node.type = type_str
+
+    i = 0
+    while i < field_count
+      key, pos = read_bin_short_string(data, pos)
+      val, pos = read_bin_value(data, pos)
+
+      case key
+      when "name" then node.name = val.is_a?(String) ? val : val.to_s
+      when "value" then node.value = val
+      when "content" then node.content = val.is_a?(String) ? val : ""
+      when "receiver" then node.receiver = val
+      when "arguments" then node.arguments = val
+      when "body" then node.body = val
+      when "statements" then node.statements = val
+      when "block" then node.block = val
+      when "parameters" then node.parameters = val
+      when "predicate" then node.predicate = val
+      when "subsequent" then node.subsequent = val
+      when "else_clause" then node.else_clause = val
+      when "conditions" then node.conditions = val
+      when "elements" then node.elements = val
+      when "left" then node.left = val
+      when "right" then node.right = val
+      when "parts" then node.parts = val
+      when "expression" then node.expression = val
+      when "rescue_expression" then node.rescue_expression = val
+      when "lefts" then node.lefts = val
+      when "index" then node.index = val
+      when "collection" then node.collection = val
+      when "constant_path" then node.constant_path = val
+      when "superclass" then node.superclass = val
+      when "parent" then node.parent = val
+      when "key" then node.key = val
+      when "pattern" then node.pattern = val
+      when "reference" then node.reference = val
+      when "exceptions" then node.exceptions = val
+      when "rescue_clause" then node.rescue_clause = val
+      when "ensure_clause" then node.ensure_clause = val
+      when "call_operator" then node.call_operator = val
+      when "binary_operator" then node.binary_operator = val.is_a?(String) ? val : ""
+      when "requireds" then node.requireds = val
+      when "optionals" then node.optionals = val
+      when "keywords" then node.keywords = val
+      when "rest" then node.rest = val
+      when "call" then node.call = val
+      when "target" then node.target = val
+      when "unescaped" then node.unescaped = val.is_a?(String) ? val : ""
+      when "number" then node.number = val.is_a?(Integer) ? val : 0
+      when "maximum" then node.maximum = val.is_a?(Integer) ? val : 0
+      when "start_line" then node.start_line = val.is_a?(Integer) ? val : 0
+      end
+
+      i = i + 1
+    end
+
+    return node, pos
+  end
+
   # ---- Main entry point ----
   def self.run(args)
     json_file = nil
@@ -10182,8 +10498,8 @@ module Spinel
       exit 1
     end
 
-    json_data = JSON.parse(File.read(json_file))
-    root = SpNode.new(json_data)
+    bin_data = File.binread(json_file)
+    root = Spinel.read_binary_ast(bin_data)
     compiler = Compiler.new(root, json_file)
     c_code = compiler.compile
 

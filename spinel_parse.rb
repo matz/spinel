@@ -1,11 +1,12 @@
 #!/usr/bin/env ruby
 # Spinel Parse - AST Serializer
 #
-# Parses Ruby source with Prism and outputs a JSON AST that
+# Parses Ruby source with Prism and outputs a binary AST that
 # spinel_codegen.rb can consume. This is the only part that
 # depends on the Prism C extension gem.
 #
-# Usage: ruby spinel_parse.rb input.rb > ast.json
+# Usage: ruby spinel_parse.rb input.rb > ast.bin
+#   or:  ruby spinel_parse.rb input.rb --json > ast.json  (legacy JSON mode)
 
 require "prism"
 require "json"
@@ -604,10 +605,118 @@ def serialize_arguments(node)
   end
 end
 
+# --- Binary AST serialization ---
+# Format:
+#   TAG_NIL    = 0  (no payload)
+#   TAG_INT    = 1  (8 bytes LE signed)
+#   TAG_STRING = 2  (4 bytes LE length + bytes)
+#   TAG_NODE   = 3  (type_string + field_count(2 bytes LE) + fields)
+#   TAG_ARRAY  = 4  (4 bytes LE count + elements)
+#   TAG_FLOAT  = 5  (8 bytes LE double)
+#   TAG_BOOL   = 6  (1 byte: 0=false, 1=true)
+#
+# Each node field: key_string + value
+# key_string: 2 bytes LE length + bytes (short strings)
+
+TAG_NIL    = 0
+TAG_INT    = 1
+TAG_STRING = 2
+TAG_NODE   = 3
+TAG_ARRAY  = 4
+TAG_FLOAT  = 5
+TAG_BOOL   = 6
+
+def write_bin_nil(out)
+  out << [TAG_NIL].pack("C")
+end
+
+def write_bin_int(out, val)
+  out << [TAG_INT].pack("C")
+  out << [val].pack("q<")
+end
+
+def write_bin_string(out, str)
+  out << [TAG_STRING].pack("C")
+  bytes = str.encode("UTF-8")
+  out << [bytes.bytesize].pack("V")
+  out << bytes
+end
+
+def write_bin_float(out, val)
+  out << [TAG_FLOAT].pack("C")
+  out << [val].pack("E")
+end
+
+def write_bin_bool(out, val)
+  out << [TAG_BOOL].pack("C")
+  out << [val ? 1 : 0].pack("C")
+end
+
+def write_bin_short_string(out, str)
+  bytes = str.encode("UTF-8")
+  out << [bytes.bytesize].pack("v")
+  out << bytes
+end
+
+def write_bin_hash(out, hash)
+  return write_bin_nil(out) if hash.nil?
+
+  # Determine the node type
+  type_str = hash["type"]
+  unless type_str
+    write_bin_nil(out)
+    return
+  end
+
+  out << [TAG_NODE].pack("C")
+  write_bin_short_string(out, type_str)
+
+  # Collect non-type fields
+  fields = hash.reject { |k, _| k == "type" }
+  out << [fields.size].pack("v")
+
+  fields.each do |key, value|
+    write_bin_short_string(out, key)
+    write_bin_value(out, value)
+  end
+end
+
+def write_bin_value(out, value)
+  case value
+  when nil
+    write_bin_nil(out)
+  when Integer
+    write_bin_int(out, value)
+  when Float
+    write_bin_float(out, value)
+  when String
+    write_bin_string(out, value)
+  when true
+    write_bin_bool(out, true)
+  when false
+    write_bin_bool(out, false)
+  when Hash
+    if value["type"]
+      write_bin_hash(out, value)
+    else
+      # Non-node hash - serialize as nil (shouldn't happen in AST)
+      write_bin_nil(out)
+    end
+  when Array
+    out << [TAG_ARRAY].pack("C")
+    out << [value.size].pack("V")
+    value.each { |elem| write_bin_value(out, elem) }
+  else
+    write_bin_nil(out)
+  end
+end
+
 # --- Main ---
 source_file = ARGV[0]
+json_mode = ARGV.include?("--json")
 unless source_file
-  $stderr.puts "Usage: ruby spinel_parse.rb input.rb > ast.json"
+  $stderr.puts "Usage: ruby spinel_parse.rb input.rb > ast.bin"
+  $stderr.puts "       ruby spinel_parse.rb input.rb --json > ast.json"
   exit 1
 end
 
@@ -615,4 +724,12 @@ source = File.read(source_file)
 source = resolve_requires(source, source_file)
 result = Prism.parse(source)
 ast = serialize_node(result.value)
-puts JSON.generate(ast)
+
+if json_mode
+  puts JSON.generate(ast)
+else
+  out = String.new("", encoding: "BINARY")
+  write_bin_hash(out, ast)
+  $stdout.binmode
+  $stdout.write(out)
+end

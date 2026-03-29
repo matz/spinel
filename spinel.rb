@@ -8587,6 +8587,55 @@ module Spinel
       result = fix_string_concat_ops(result)
       # Post-process: fix undeclared block variables
       result = fix_undeclared_block_vars(result)
+      # Post-process: fix IntArray_push with struct/pointer arguments
+      result = fix_intarray_push_cast(result)
+      # Post-process: fix dot-member-access on mrb_int (e.g. lv_v.c_name)
+      result = fix_dot_member_on_mrb_int(result)
+      result
+    end
+
+    # Find the balanced closing paren for a function call and fix ->field dereference
+    def fix_hash_get_deref(line, func_name, struct_fields)
+      result = ""
+      remaining = line
+      while (idx = remaining.index(func_name))
+        result << remaining[0...idx]
+        remaining = remaining[idx..]
+        # Find the opening paren
+        open_idx = func_name.length
+        if remaining[open_idx] == "("
+          # Find matching close paren using balanced counting
+          depth = 1
+          pos = open_idx + 1
+          while pos < remaining.length && depth > 0
+            depth += 1 if remaining[pos] == "("
+            depth -= 1 if remaining[pos] == ")"
+            pos += 1
+          end
+          # pos is now right after the closing paren
+          call_text = remaining[0...pos]  # e.g. "sp_StrIntHash_get(...)"
+          args_text = remaining[(open_idx + 1)...(pos - 1)]  # the args inside parens
+          after = remaining[pos..]
+          if after =~ /\A->(\w+)(.*)/
+            field = $1
+            rest = $2
+            if struct_fields[field] && struct_fields[field].length > 0
+              stype = struct_fields[field][0]
+              result << "((sp_#{stype} *)#{call_text})->#{field}"
+            else
+              result << "((sp_SpNode *)#{call_text})->#{field}"
+            end
+            remaining = rest
+          else
+            result << call_text
+            remaining = after
+          end
+        else
+          result << func_name
+          remaining = remaining[func_name.length..]
+        end
+      end
+      result << remaining
       result
     end
 
@@ -8613,36 +8662,10 @@ module Spinel
 
       lines = code.split("\n")
       fixed_lines = lines.map do |line|
-        # Pattern 1: sp_StrIntHash_get(...)->field
-        line = line.gsub(/\bsp_StrIntHash_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
-          args = $1
-          field = $2
-          # Determine the struct type from the field name
-          if struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            needs_ptr = class_needs_gc?(@classes[stype])
-            if needs_ptr
-              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
-            else
-              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
-            end
-          else
-            "((void *)sp_StrIntHash_get(#{args}))->#{field}"
-          end
-        end
-
+        # Pattern 1: sp_StrIntHash_get(...)->field - use balanced paren matching
+        line = fix_hash_get_deref(line, "sp_StrIntHash_get", struct_fields)
         # Pattern 2: sp_IntArray_get(...)->field
-        line = line.gsub(/\bsp_IntArray_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
-          args = $1
-          field = $2
-          if struct_fields[field] && struct_fields[field].length > 0
-            stype = struct_fields[field][0]
-            "((sp_#{stype} *)sp_IntArray_get(#{args}))->#{field}"
-          else
-            "((void *)sp_IntArray_get(#{args}))->#{field}"
-          end
-        end
-
+        line = fix_hash_get_deref(line, "sp_IntArray_get", struct_fields)
         line
       end
 
@@ -8751,17 +8774,13 @@ module Spinel
       current_func = nil
 
       lines.each_with_index do |line, idx|
+        # Strip string literals before counting braces to avoid miscounts
+        stripped_for_braces = line.gsub(/"(?:[^"\\]|\\.)*"/, '')
         if line =~ /^static\s+\S+/ && line.include?("{")
           current_func = { start: idx, declared: {}, used: {} }
-          brace_depth = 1
-          # Count any additional braces on the same line
-          line.count("{").times { brace_depth += 1 if brace_depth > 0 }
-          brace_depth -= line.count("{")
-          brace_depth += line.count("{")
-          # Actually just count net braces
-          brace_depth = line.count("{") - line.count("}")
+          brace_depth = stripped_for_braces.count("{") - stripped_for_braces.count("}")
         elsif current_func
-          brace_depth += line.count("{") - line.count("}")
+          brace_depth += stripped_for_braces.count("{") - stripped_for_braces.count("}")
           if brace_depth <= 0
             current_func[:end_idx] = idx
             functions << current_func
@@ -8772,9 +8791,18 @@ module Spinel
 
         next unless current_func
 
-        # Track declarations (lv_ and _cres_)
-        line.scan(/(?:mrb_int|const char \*|mrb_float|mrb_bool|sp_\w+\s*\*?|void)\s+((?:lv_|_cres_)\w+)/) do |m|
-          current_func[:declared][m[0]] = true
+        # Track declarations only at function body level (brace_depth == 1)
+        # Declarations at deeper brace levels are block-scoped in C
+        if brace_depth == 1
+          line.scan(/(?:mrb_int|const char \*|mrb_float|mrb_bool|sp_\w+\s*\*?|void)\s+((?:lv_|_cres_)\w+)/) do |m|
+            current_func[:declared][m[0]] = true
+          end
+        end
+        # Also track function parameter declarations (on the start line)
+        if idx == current_func[:start]
+          line.scan(/(?:mrb_int|const char \*|mrb_float|mrb_bool|sp_\w+\s*\*?)\s+(lv_\w+)/) do |m|
+            current_func[:declared][m[0]] = true
+          end
         end
         # Track uses (excluding string literals)
         stripped = line.gsub(/"(?:[^"\\]|\\.)*"/, '')
@@ -8825,6 +8853,97 @@ module Spinel
       end
       code = code.gsub(/(\bself->\w+\s*=\s*)(_hsh_\d+)\s*;/) do
         "#{$1}sp_StrIntHash_new();"
+      end
+      code
+    end
+
+    def fix_intarray_push_cast(code)
+      # Fix sp_IntArray_push(arr, sp_make_param_info(...)) and sp_make_var_info(...)
+      # These return structs by value but IntArray stores mrb_int.
+      # We need to heap-allocate the struct and push the pointer.
+      # Use balanced paren matching to handle nested calls
+      {"sp_make_param_info" => "sp_ParamInfo", "sp_make_var_info" => "sp_VarInfo"}.each do |func, stype|
+        result = ""
+        remaining = code
+        pattern = "sp_IntArray_push("
+        while (idx = remaining.index(pattern))
+          result << remaining[0...idx]
+          remaining = remaining[idx..]
+          # Find the balanced close paren of sp_IntArray_push(...)
+          push_open = pattern.length - 1  # index of '('
+          depth = 1
+          pos = push_open + 1
+          while pos < remaining.length && depth > 0
+            depth += 1 if remaining[pos] == "("
+            depth -= 1 if remaining[pos] == ")"
+            pos += 1
+          end
+          push_call = remaining[0...pos]
+          after = remaining[pos..]
+          # Check if the second argument is sp_make_param_info/sp_make_var_info
+          if push_call.include?(func)
+            # Find the func call within the push args and wrap it
+            func_idx = push_call.index(func)
+            if func_idx
+              # Find balanced parens for the inner func call
+              inner_open = func_idx + func.length
+              if push_call[inner_open] == "("
+                d2 = 1
+                p2 = inner_open + 1
+                while p2 < push_call.length && d2 > 0
+                  d2 += 1 if push_call[p2] == "("
+                  d2 -= 1 if push_call[p2] == ")"
+                  p2 += 1
+                end
+                inner_call = push_call[func_idx...p2]
+                # Heap-allocate the struct and cast to mrb_int
+                # { Type _t = make_func(...); sp_IntArray_push(arr, (mrb_int)memcpy(malloc(sizeof(Type)), &_t, sizeof(Type))); }
+                # Extract array argument (first arg to push)
+                arr_arg = push_call[pattern.length...func_idx].strip
+                arr_arg = arr_arg.chomp(",").strip
+                push_call = "{ #{stype} _sv = #{inner_call}; sp_IntArray_push(#{arr_arg}, (mrb_int)(intptr_t)memcpy(malloc(sizeof(#{stype})), &_sv, sizeof(#{stype}))); }"
+              end
+            end
+          end
+          result << push_call
+          remaining = after
+        end
+        result << remaining
+        code = result
+      end
+      code
+    end
+
+    def fix_dot_member_on_mrb_int(code)
+      # Fix patterns like lv_v.c_name where lv_v is mrb_int
+      # These should be ((sp_VarInfo *)lv_v)->c_name or similar
+      # Collect all mrb_int local variables
+      mrb_int_vars = {}
+      code.scan(/mrb_int\s+(lv_\w+)\s*[=;,)]/) { mrb_int_vars[$1] = true }
+
+      # Build a map of struct fields
+      struct_fields = {}
+      @classes.each do |cname, ci|
+        all_ivars = collect_all_ivars(ci)
+        all_ivars.each do |iname, _itype|
+          struct_fields[iname] ||= []
+          struct_fields[iname] << cname
+        end
+        (ci.attrs[:reader] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+        (ci.attrs[:accessor] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+      end
+
+      mrb_int_vars.each_key do |var|
+        # Fix var.field (dot access on mrb_int) -> ((type *)var)->field
+        code = code.gsub(/\b#{Regexp.escape(var)}\.(\w+)\b/) do
+          field = $1
+          if struct_fields[field] && struct_fields[field].length > 0
+            stype = struct_fields[field][0]
+            "((sp_#{stype} *)#{var})->#{field}"
+          else
+            "((sp_VarInfo *)#{var})->#{field}"
+          end
+        end
       end
       code
     end

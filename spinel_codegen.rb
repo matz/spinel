@@ -624,7 +624,7 @@ class SpCompiler
       nil
     end
 
-    def declare_var(name, type, c_name: nil, is_ivar: false, is_constant: false, is_global: false)
+    def declare_var(name, type, c_name, is_ivar, is_constant, is_global)
       if c_name == nil
         c_name = "lv_#{name}"
       end
@@ -646,7 +646,7 @@ class SpCompiler
       when "ModuleNode"
         collect_module(node)
       when "DefNode"
-        collect_method(node, nil)
+        collect_method(node, nil, false)
       when "ConstantWriteNode"
         collect_constant(node)
       when "CallNode"
@@ -752,9 +752,9 @@ class SpCompiler
           when "DefNode"
             if s.receiver
               # self.method_name -> class method
-              collect_method(s, name, is_class_method: true)
+              collect_method(s, name, true)
             else
-              collect_method(s, name)
+              collect_method(s, name, false)
             end
           when "CallNode"
             collect_attr_call(s, ci)
@@ -869,7 +869,7 @@ class SpCompiler
       end
     end
 
-    def collect_method(node, owner, is_class_method: false)
+    def collect_method(node, owner, is_class_method)
       name = node.name.to_s
       params = []
       defaults = {}
@@ -1244,7 +1244,7 @@ class SpCompiler
       param_types = {} # method_name -> { param_idx -> Set of types }
 
       # Scan all assignment sites
-      scan_poly_types(root, var_types, param_types)
+      scan_poly_types(root, var_types, param_types, "")
 
       # Mark variables with multiple types as poly
       var_types.each do |scoped_vname, types|
@@ -1332,27 +1332,27 @@ class SpCompiler
       end
     end
 
-    def scan_poly_types(node, var_types, param_types, scope_prefix: "")
+    def scan_poly_types(node, var_types, param_types, scope_prefix)
       return unless node
       case node.type
       when "ProgramNode"
-        scan_poly_types(node.statements, var_types, param_types, scope_prefix: scope_prefix)
+        scan_poly_types(node.statements, var_types, param_types, scope_prefix)
       when "StatementsNode"
-        node.stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
+        node.stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix) }
       when "DefNode"
         # New method scope - use class prefix + method name as scope prefix
         method_scope = node.receiver ? "#{scope_prefix}self.#{node.name}" : "#{scope_prefix}#{node.name}"
-        scan_poly_types(node.body, var_types, param_types, scope_prefix: method_scope)
+        scan_poly_types(node.body, var_types, param_types, method_scope)
       when "ClassNode"
         cname = (node.constant_path != nil && node.constant_path.type == "ConstantReadNode") ? node.constant_path.name.to_s : ""
         if node.body
           stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
-          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: "#{cname}#") }
+          stmts.each { |s| scan_poly_types(s, var_types, param_types, "#{cname}#") }
         end
       when "ModuleNode"
         if node.body
           stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
-          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
+          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix) }
         end
       when "LocalVariableWriteNode"
         t = infer_type(node.value)
@@ -1364,7 +1364,7 @@ class SpCompiler
         var_types[vname] = []
       end
         sp_push_unique(var_types[vname], t) if t != Type::UNKNOWN
-        scan_poly_types(node.value, var_types, param_types, scope_prefix: scope_prefix)
+        scan_poly_types(node.value, var_types, param_types, scope_prefix)
       when "CallNode"
         mname = node.name.to_s
         if @methods[mname] && node.arguments
@@ -1384,9 +1384,9 @@ class SpCompiler
             sp_push_unique(param_types[mname][i], t) if t != Type::UNKNOWN
           end
         end
-        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c }
+        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix) if c }
       else
-        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c } if node != nil
+        node.sp_child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix) if c } if node != nil
       end
     end
 
@@ -2591,7 +2591,7 @@ class SpCompiler
           @current_module = mod_name
           push_scope
 
-          mi.params.each { |p| declare_var(p.name, p.type, c_name: "lv_#{p.name}") }
+          mi.params.each { |p| declare_var(p.name, p.type, "lv_#{p.name}", false, false, false) }
 
           old_indent = @indent
           @indent = 1
@@ -2681,7 +2681,7 @@ class SpCompiler
           @current_method = mi
           @current_open_class_type = type_name
           push_scope
-          mi.params.each { |p| declare_var(p.name, p.type, c_name: "lv_#{p.name}") }
+          mi.params.each { |p| declare_var(p.name, p.type, "lv_#{p.name}", false, false, false) }
           old_indent = @indent
           @indent = 1
 
@@ -2692,7 +2692,7 @@ class SpCompiler
             locals = collect_locals(mi.body)
             locals.each do |lname, ltype|
               next if mi.params.any? { |p| p.name == lname }
-              declare_var(lname, ltype, c_name: "lv_#{lname}")
+              declare_var(lname, ltype, "lv_#{lname}", false, false, false)
               emit("#{c_type(ltype)} lv_#{lname} = #{default_val(ltype)};")
             end
             generate_method_body(mi.body, mi)
@@ -3226,7 +3226,7 @@ class SpCompiler
       # Declare params in scope
       mi.params.each do |p|
         t = resolve_param_type(p, ci, mi)
-        declare_var(p.name, t, c_name: "lv_#{p.name}")
+        declare_var(p.name, t, "lv_#{p.name}", false, false, false)
       end
 
       old_indent = @indent
@@ -3353,11 +3353,11 @@ class SpCompiler
 
       # Declare params
       mi.params.each do |p|
-        declare_var(p.name, p.type, c_name: "lv_#{p.name}")
+        declare_var(p.name, p.type, "lv_#{p.name}", false, false, false)
       end
       # Declare block param
       if block_param_name
-        declare_var(block_param_name, Type::PROC, c_name: "lv_#{block_param_name}")
+        declare_var(block_param_name, Type::PROC, "lv_#{block_param_name}", false, false, false)
       end
 
       old_indent = @indent
@@ -3376,14 +3376,14 @@ class SpCompiler
           arr_size = @local_array_sizes[lname]
           if elem_class && arr_size
             eci = @classes[elem_class]
-            declare_var(lname, elem_class, c_name: "lv_#{lname}")
+            declare_var(lname, elem_class, "lv_#{lname}", false, false, false)
             if eci && class_needs_gc?(eci)
               emit("sp_#{elem_class} *lv_#{lname}[#{arr_size}];")
             else
               emit("sp_#{elem_class} lv_#{lname}[#{arr_size}];")
             end
           else
-            declare_var(lname, ltype, c_name: "lv_#{lname}")
+            declare_var(lname, ltype, "lv_#{lname}", false, false, false)
             emit("#{c_type(ltype)} lv_#{lname} = #{default_val(ltype)};")
           end
         end
@@ -3582,9 +3582,9 @@ class SpCompiler
       when "BeginNode"
         generate_begin_stmt(node)
       when "IfNode"
-        generate_if_stmt(node, return_type: mi.return_type)
+        generate_if_stmt(node, mi.return_type)
       when "CaseNode"
-        generate_case_stmt(node, return_type: mi.return_type)
+        generate_case_stmt(node, mi.return_type)
       when "CaseMatchNode"
         val = compile_case_match_expr(node)
         emit_gc_return(val)
@@ -3626,7 +3626,7 @@ class SpCompiler
       end
     end
 
-    def generate_body_stmts(body, is_return_context: false)
+    def generate_body_stmts(body)
       return unless body
       stmts = (body != nil && body.type == "StatementsNode") ? body.stmts : [body]
       stmts.each { |s| generate_stmt(s) }
@@ -3665,7 +3665,7 @@ class SpCompiler
       when "CallNode"
         generate_call_stmt(node)
       when "IfNode"
-        generate_if_stmt(node)
+        generate_if_stmt(node, nil)
       when "UnlessNode"
         generate_unless_stmt(node)
       when "WhileNode"
@@ -3675,7 +3675,7 @@ class SpCompiler
       when "ForNode"
         generate_for_stmt(node)
       when "CaseNode"
-        generate_case_stmt(node)
+        generate_case_stmt(node, nil)
       when "CaseMatchNode"
         generate_case_match_stmt(node)
       when "BeginNode"
@@ -3793,7 +3793,7 @@ class SpCompiler
         end
       else
         # New variable
-        info = declare_var(name, val_type, c_name: c_name)
+        info = declare_var(name, val_type, c_name, false, false, false)
         val = compile_expr(node.value)
         # Wrap string literal for mutable string
         if val_type == Type::MUTABLE_STRING && (node.value != nil && node.value.type == "StringNode")
@@ -3938,7 +3938,7 @@ class SpCompiler
     def ensure_var_declared(name, type)
       existing = lookup_var(name)
       unless existing
-        declare_var(name, type, c_name: "lv_#{name}")
+        declare_var(name, type, "lv_#{name}", false, false, false)
         if @in_main
           @main_vars << { name: "lv_#{name}", type: type }
         else
@@ -4137,7 +4137,7 @@ class SpCompiler
       emit("}")
     end
 
-    def generate_if_stmt(node, return_type: nil)
+    def generate_if_stmt(node, return_type)
       cond = compile_expr(node.predicate)
 
       # Check for modifier if (no consequent)
@@ -4473,7 +4473,7 @@ class SpCompiler
       end
     end
 
-    def generate_case_stmt(node, return_type: nil)
+    def generate_case_stmt(node, return_type)
       if node.predicate.nil?
         # case with no predicate (acts like if/elsif)
         generate_case_no_predicate(node, return_type)
@@ -5705,7 +5705,7 @@ class SpCompiler
             @in_main = false
             @func_bodies = []
             push_scope
-            declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+            declare_var(bparam, Type::INTEGER, "lv_#{bparam}", false, false, false)
             blk_val = compile_block_expr(node.block)
             pop_scope
             @block_defs.concat(@func_bodies.map { |l| "  " + l.strip })
@@ -5907,7 +5907,7 @@ class SpCompiler
             emit("if (#{len_var} > 0 && #{buf_var}[#{len_var}-1] == '\\n') #{buf_var}[#{len_var}-1] = '\\0';")
             emit("const char *lv_#{line_var} = #{buf_var};")
             push_scope
-            declare_var(line_var, Type::STRING, c_name: "lv_#{line_var}")
+            declare_var(line_var, Type::STRING, "lv_#{line_var}", false, false, false)
             generate_block_body(block)
             pop_scope
             @indent -= 1
@@ -6477,7 +6477,7 @@ class SpCompiler
           emit("for (mrb_int lv_#{bparam} = #{rng_tmp}.first; lv_#{bparam} <= #{rng_tmp}.last; lv_#{bparam}++) {")
           @indent += 1
           push_scope
-          declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+          declare_var(bparam, Type::INTEGER, "lv_#{bparam}", false, false, false)
           block_body = node.block.body
           val = compile_expr((block_body != nil && block_body.type == "StatementsNode") ? block_body.stmts.last : block_body)
           emit("if (#{val}) #{tmp}++;")
@@ -6655,7 +6655,7 @@ class SpCompiler
           emit("for (mrb_int lv_#{bparam} = #{rng_tmp}.first; lv_#{bparam} <= #{rng_tmp}.last; lv_#{bparam}++) {")
           @indent += 1
           push_scope
-          declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+          declare_var(bparam, Type::INTEGER, "lv_#{bparam}", false, false, false)
           block_body = node.block.body
           val = compile_expr((block_body != nil && block_body.type == "StatementsNode") ? block_body.stmts.last : block_body)
           emit("#{tmp} += #{val};")
@@ -6891,7 +6891,7 @@ class SpCompiler
           emit("for (sp_HashEntry *_tve_#{tmp} = #{recv_code}->first; _tve_#{tmp}; _tve_#{tmp} = _tve_#{tmp}->order_next) {")
           @indent += 1
           push_scope
-          declare_var(val_var, Type::INTEGER, c_name: "lv_#{val_var}")
+          declare_var(val_var, Type::INTEGER, "lv_#{val_var}", false, false, false)
           emit("mrb_int lv_#{val_var} = _tve_#{tmp}->value;")
           block_val = compile_block_expr(node.block)
           emit("sp_StrIntHash_set(#{tmp}, _tve_#{tmp}->key, #{block_val});")
@@ -7353,7 +7353,7 @@ class SpCompiler
         emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
         @indent += 1
         emit("sp_RbValue lv_#{iter_var} = (sp_RbValue)sp_IntArray_get(#{recv_code}, #{idx});")
-        declare_var(iter_var, Type::POLY, c_name: "lv_#{iter_var}")
+        declare_var(iter_var, Type::POLY, "lv_#{iter_var}", false, false, false)
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -7363,7 +7363,7 @@ class SpCompiler
         emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
         @indent += 1
         emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
-        declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+        declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -7373,7 +7373,7 @@ class SpCompiler
         emit("for (mrb_int #{idx} = 0; #{idx} < sp_StrArray_length(#{recv_code}); #{idx}++) {")
         @indent += 1
         emit("const char *lv_#{iter_var} = (#{recv_code})->data[#{idx}];")
-        declare_var(iter_var, Type::STRING, c_name: "lv_#{iter_var}")
+        declare_var(iter_var, Type::STRING, "lv_#{iter_var}", false, false, false)
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -7442,7 +7442,7 @@ class SpCompiler
         emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
       end
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
 
       # Compile block body to get the expression
       body_val = compile_block_expr(block)
@@ -7474,7 +7474,7 @@ class SpCompiler
       @indent += 1
       emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
 
       body_val = compile_block_expr(block)
       emit("if (#{body_val}) sp_IntArray_push(#{result}, lv_#{iter_var});")
@@ -7502,7 +7502,7 @@ class SpCompiler
       @indent += 1
       emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
 
       body_val = compile_block_expr(block)
       emit("if (!(#{body_val})) sp_IntArray_push(#{result}, lv_#{iter_var});")
@@ -7533,7 +7533,7 @@ class SpCompiler
       @in_main = false
       @func_bodies = []
       push_scope
-      declare_var(bparam, Type::INTEGER, c_name: "lv_#{bparam}")
+      declare_var(bparam, Type::INTEGER, "lv_#{bparam}", false, false, false)
       blk_val = compile_block_expr(block)
       pop_scope
       @block_defs.concat(@func_bodies.map { |l| "  " + l.strip })
@@ -7640,7 +7640,7 @@ class SpCompiler
         @indent += 1
         emit("sp_File *lv_#{fvar} = sp_File_open(#{path_arg}, #{mode_arg});")
         push_scope
-        declare_var(fvar, Type::FILE_OBJ, c_name: "lv_#{fvar}")
+        declare_var(fvar, Type::FILE_OBJ, "lv_#{fvar}", false, false, false)
 
         # Generate block body, but handle f.puts / f.each_line specially
         if block.body
@@ -7686,7 +7686,7 @@ class SpCompiler
       ensure_var_declared(acc_var, Type::INTEGER)
       emit("lv_#{acc_var} = #{acc_tmp};")
       emit("mrb_int lv_#{elem_var} = sp_IntArray_get(#{recv_code}, #{idx});")
-      declare_var(elem_var, Type::INTEGER, c_name: "lv_#{elem_var}")
+      declare_var(elem_var, Type::INTEGER, "lv_#{elem_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("#{acc_tmp} = #{body_val};")
       pop_scope
@@ -7718,7 +7718,7 @@ class SpCompiler
       @indent += 1
       emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, _i);")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("#{keys_var}[_i] = #{body_val};")
       emit("#{vals_var}[_i] = lv_#{iter_var};")
@@ -7750,14 +7750,14 @@ class SpCompiler
       emit("mrb_int _minkey_#{tmp};")
       emit("{ mrb_int lv_#{iter_var} = #{tmp};")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("_minkey_#{tmp} = #{body_val}; }")
       pop_scope
       emit("for (mrb_int _i = 1; _i < sp_IntArray_length(#{recv_code}); _i++) {")
       emit("  mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, _i);")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val2 = compile_block_expr(block)
       emit("  mrb_int _k = #{body_val2};")
       emit("  if (_k < _minkey_#{tmp}) { _minkey_#{tmp} = _k; #{tmp} = lv_#{iter_var}; }")
@@ -7778,14 +7778,14 @@ class SpCompiler
       emit("mrb_int _maxkey_#{tmp};")
       emit("{ mrb_int lv_#{iter_var} = #{tmp};")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("_maxkey_#{tmp} = #{body_val}; }")
       pop_scope
       emit("for (mrb_int _i = 1; _i < sp_IntArray_length(#{recv_code}); _i++) {")
       emit("  mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, _i);")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val2 = compile_block_expr(block)
       emit("  mrb_int _k = #{body_val2};")
       emit("  if (_k > _maxkey_#{tmp}) { _maxkey_#{tmp} = _k; #{tmp} = lv_#{iter_var}; }")
@@ -7804,7 +7804,7 @@ class SpCompiler
       emit("for (mrb_int _i = 0; _i < sp_IntArray_length(#{recv_code}); _i++) {")
       emit("  mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, _i);")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("  if (#{body_val}) { #{tmp} = TRUE; break; }")
       pop_scope
@@ -7822,7 +7822,7 @@ class SpCompiler
       emit("for (mrb_int _i = 0; _i < sp_IntArray_length(#{recv_code}); _i++) {")
       emit("  mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, _i);")
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("  if (!(#{body_val})) { #{tmp} = FALSE; break; }")
       pop_scope
@@ -7849,7 +7849,7 @@ class SpCompiler
 
       push_scope
       elem_type = recv_type == Type::STR_ARRAY ? Type::STRING : Type::INTEGER
-      declare_var(iter_var, elem_type, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, elem_type, "lv_#{iter_var}", false, false, false)
       body_val = compile_block_expr(block)
       emit("  if (#{body_val}) #{tmp}++;")
       pop_scope
@@ -7875,7 +7875,7 @@ class SpCompiler
         emit("lv_#{iter_var} = #{idx};")
       end
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body(block)
       pop_scope
       @indent -= 1
@@ -7896,7 +7896,7 @@ class SpCompiler
       emit("for (lv_#{iter_var} = #{recv_code}; lv_#{iter_var} <= #{upper}; lv_#{iter_var}++) {")
       @indent += 1
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body(block)
       pop_scope
       @indent -= 1
@@ -7917,7 +7917,7 @@ class SpCompiler
       emit("for (lv_#{iter_var} = #{recv_code}; lv_#{iter_var} >= #{lower}; lv_#{iter_var}--) {")
       @indent += 1
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body(block)
       pop_scope
       @indent -= 1
@@ -7960,7 +7960,7 @@ class SpCompiler
       @indent = 1
 
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body_with_env(blk, captured)
       pop_scope
 
@@ -8017,7 +8017,7 @@ class SpCompiler
       @indent = 1
 
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body_with_env(blk, captured)
       pop_scope
 
@@ -8241,7 +8241,7 @@ class SpCompiler
       @indent = 1
 
       push_scope
-      declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+      declare_var(iter_var, Type::INTEGER, "lv_#{iter_var}", false, false, false)
       generate_block_body_with_env(blk, inner_captured)
       pop_scope
 
@@ -8349,7 +8349,7 @@ class SpCompiler
           # Register in current scope so subsequent infer_type calls can resolve
           existing = lookup_var(name)
           if !existing && t != Type::UNKNOWN
-            declare_var(name, t, c_name: "lv_#{name}")
+            declare_var(name, t, "lv_#{name}", false, false, false)
           end
         end
         find_locals(node.value, locals)
@@ -8416,14 +8416,14 @@ class SpCompiler
         arr_size = @local_array_sizes[name]
         if elem_class && arr_size
           eci = @classes[elem_class]
-          declare_var(name, elem_class, c_name: "lv_#{name}")
+          declare_var(name, elem_class, "lv_#{name}", false, false, false)
           if eci && class_needs_gc?(eci)
             emit("sp_#{elem_class} *lv_#{name}[#{arr_size}];")
           else
             emit("sp_#{elem_class} lv_#{name}[#{arr_size}];")
           end
         else
-          declare_var(name, type, c_name: "lv_#{name}")
+          declare_var(name, type, "lv_#{name}", false, false, false)
           emit("#{c_type(type)} lv_#{name} = #{default_val(type)};")
           # Add GC root for pointer-type locals (class instances that need GC)
           if type.is_a?(String) && @classes[type] && class_needs_gc?(@classes[type])
@@ -8649,7 +8649,7 @@ class SpCompiler
       @needs_str_array = true if @string_helpers_needed.include?("str_split") || @string_helpers_needed.include?("str_chars")
 
       # String helpers (non-StrArray dependent)
-      emit_string_helpers(out, before_str_array: true)
+      emit_string_helpers(out, true)
 
       # Mutable String (before GC since it uses malloc)
       emit_mutable_string(out) if @needs_mutable_string
@@ -8673,7 +8673,7 @@ class SpCompiler
       emit_str_array(out) if @needs_str_array
 
       # String helpers (StrArray dependent - split, chars)
-      emit_string_helpers(out, before_str_array: false)
+      emit_string_helpers(out, false)
 
       # StrIntHash
       emit_str_int_hash(out) if @needs_str_int_hash
@@ -8823,7 +8823,7 @@ class SpCompiler
       out.string
     end
 
-    def emit_string_helpers(out, before_str_array: true)
+    def emit_string_helpers(out, before_str_array)
       # str_split, str_chars, str_slice_range depend on other types, emit them after
       unless before_str_array
         if @string_helpers_needed.include?("str_slice_range")

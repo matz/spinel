@@ -8585,6 +8585,8 @@ module Spinel
       result = fix_undeclared_literals(result)
       # Post-process: fix string += compiled as C += instead of sp_str_concat
       result = fix_string_concat_ops(result)
+      # Post-process: fix undeclared block variables
+      result = fix_undeclared_block_vars(result)
       result
     end
 
@@ -8725,6 +8727,65 @@ module Spinel
         end
       end
       fixed.join("\n")
+    end
+
+    def fix_undeclared_block_vars(code)
+      # Two-pass approach:
+      # Pass 1: Identify functions and their variable declarations
+      # Pass 2: Add missing declarations
+
+      lines = code.split("\n")
+
+      # Pass 1: Find function boundaries and collect declared/used vars
+      functions = []  # [{start:, end:, declared: {}, used: {}}]
+      brace_depth = 0
+      current_func = nil
+
+      lines.each_with_index do |line, idx|
+        if line =~ /^static\s+\S+/ && line.include?("{")
+          current_func = { start: idx, declared: {}, used: {} }
+          brace_depth = 1
+          # Count any additional braces on the same line
+          line.count("{").times { brace_depth += 1 if brace_depth > 0 }
+          brace_depth -= line.count("{")
+          brace_depth += line.count("{")
+          # Actually just count net braces
+          brace_depth = line.count("{") - line.count("}")
+        elsif current_func
+          brace_depth += line.count("{") - line.count("}")
+          if brace_depth <= 0
+            current_func[:end_idx] = idx
+            functions << current_func
+            current_func = nil
+            brace_depth = 0
+          end
+        end
+
+        next unless current_func
+
+        # Track declarations (lv_ and _cres_)
+        line.scan(/(?:mrb_int|const char \*|mrb_float|mrb_bool|sp_\w+\s*\*?|void)\s+((?:lv_|_cres_)\w+)/) do |m|
+          current_func[:declared][m[0]] = true
+        end
+        # Track uses (excluding string literals)
+        stripped = line.gsub(/"(?:[^"\\]|\\.)*"/, '')
+        stripped.scan(/\b((?:lv_|_cres_)\w+)\b/) do |m|
+          current_func[:used][m[0]] = true
+        end
+      end
+
+      # Pass 2: Add declarations for undeclared vars
+      # Process in reverse to maintain line indices
+      functions.reverse.each do |func|
+        undeclared = func[:used].keys.select { |v| !func[:declared][v] }
+        next if undeclared.empty?
+
+        decl_line = undeclared.map { |v| "  mrb_int #{v} = 0;" }.join("\n")
+        # Insert after the function opening line
+        lines.insert(func[:start] + 1, decl_line)
+      end
+
+      lines.join("\n")
     end
 
     def fix_undeclared_literals(code)

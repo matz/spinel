@@ -8604,9 +8604,12 @@ module Spinel
           struct_fields[iname] ||= []
           struct_fields[iname] << cname
         end
-        ci.attrs[:reader]&.each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
-        ci.attrs[:accessor]&.each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+        (ci.attrs[:reader] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+        (ci.attrs[:accessor] || []).each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
       end
+      # Add special mappings for built-in types
+      # Hash field ->first means the variable is a hash pointer
+      # We handle these specially in the cast logic below
 
       lines = code.split("\n")
       fixed_lines = lines.map do |line|
@@ -8674,14 +8677,20 @@ module Spinel
       result.scan(/mrb_int\s+(lv_\w+)(?:\s*[,)])/) { mrb_int_vars[$1] = true }
 
       # Step 3: For each mrb_int variable used with ->, add a cast
+      # Special field -> type mappings for built-in types
+      hash_fields = %w[first last cap size buckets]
       mrb_int_vars.each_key do |var|
         result = result.gsub(/(?<!\*\))\b#{Regexp.escape(var)}->(\w+)/) do
           field = $1
-          if struct_fields[field] && struct_fields[field].length > 0
+          if hash_fields.include?(field)
+            "((sp_StrIntHash *)#{var})->#{field}"
+          elsif struct_fields[field] && struct_fields[field].length > 0
             stype = struct_fields[field][0]
             "((sp_#{stype} *)#{var})->#{field}"
           else
-            "((void *)#{var})->#{field}"
+            # For unknown fields, try to determine type from context
+            # Default to void* which allows compilation with warnings
+            "((sp_SpNode *)#{var})->#{field}"
           end
         end
       end

@@ -1422,6 +1422,19 @@ module Spinel
         node.body.each { |s| scan_call_sites(s) }
       when Prism::LocalVariableWriteNode
         t = infer_type(node.value)
+        # Fallback: if value is a [] call on a local whose type is in var_types_global,
+        # use the element type (e.g., StrArray#[] -> STRING)
+        if t == Type::UNKNOWN && node.value.is_a?(Prism::CallNode) && node.value.name.to_s == "[]" &&
+           node.value.receiver.is_a?(Prism::LocalVariableReadNode)
+          recv_gt = @var_types_global[node.value.receiver.name.to_s]
+          case recv_gt
+          when Type::STR_ARRAY then t = Type::STRING
+          when Type::ARRAY then t = Type::INTEGER
+          when Type::FLOAT_ARRAY then t = Type::FLOAT
+          when Type::HASH then t = Type::INTEGER
+          when Type::STR_HASH then t = Type::STRING
+          end
+        end
         @var_types_global[node.name.to_s] = t if t != Type::UNKNOWN
         scan_call_sites(node.value)
       when Prism::LocalVariableOperatorWriteNode

@@ -662,7 +662,7 @@ class SpCompiler
       when "ModuleNode"
         collect_module(node)
       when "DefNode"
-        collect_method(node, nil, false)
+        collect_method(node, "", false)
       when "ConstantWriteNode"
         collect_constant(node)
       when "CallNode"
@@ -947,36 +947,36 @@ class SpCompiler
       mi = make_method_info(name, params, Type::UNKNOWN, node.body, has_yield, is_class_method, owner, defaults, has_rest, rest_name, has_kwargs)
       mi.instance_variable_set(:@block_param_name, block_param_name)
 
-      if owner
-        if is_class_method
-          @classes[owner].class_methods[name] = mi
-        else
-          @classes[owner].methods[name] = mi
-          # Detect simple getter: def x; @x; end -> synthetic attr_reader
-          ci = @classes[owner]
-          if !name.end_with?("=") && params.empty? && node.body
-            body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
-            if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableReadNode")
-              ivar = body_stmts[0].name.to_s.delete_prefix("@")
-              if ivar == name
-                ci.attr_readers << name unless ci.attr_readers.include?(name)
-              end
-            end
-          end
-          # Detect simple setter: def x=(v); @x = v; end -> synthetic attr_writer
-          if name.end_with?("=") && params.length == 1 && node.body
-            body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
-            if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableWriteNode")
-              ivar = body_stmts[0].name.to_s.delete_prefix("@")
-              field = name.chomp("=")
-              if ivar == field
-                ci.attr_writers << field unless ci.attr_writers.include?(field)
-              end
+      if owner == ""
+        @methods[name] = mi
+        return
+      end
+      if is_class_method
+        @classes[owner].class_methods[name] = mi
+      else
+        @classes[owner].methods[name] = mi
+        # Detect simple getter: def x; @x; end -> synthetic attr_reader
+        ci = @classes[owner]
+        if !name.end_with?("=") && params.empty? && node.body
+          body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
+          if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableReadNode")
+            ivar = body_stmts[0].name.to_s.delete_prefix("@")
+            if ivar == name
+              ci.attr_readers << name unless ci.attr_readers.include?(name)
             end
           end
         end
-      else
-        @methods[name] = mi
+        # Detect simple setter: def x=(v); @x = v; end -> synthetic attr_writer
+        if name.end_with?("=") && params.length == 1 && node.body
+          body_stmts = (node.body != nil && node.body.type == "StatementsNode") ? node.body.stmts : [node.body]
+          if body_stmts.length == 1 && (body_stmts[0] != nil && body_stmts[0].type == "InstanceVariableWriteNode")
+            ivar = body_stmts[0].name.to_s.delete_prefix("@")
+            field = name.chomp("=")
+            if ivar == field
+              ci.attr_writers << field unless ci.attr_writers.include?(field)
+            end
+          end
+        end
       end
     end
 
@@ -993,7 +993,7 @@ class SpCompiler
         body_has_yield?(node.statements)
       when "CallNode"
         # check if block_given? is called (indicates yield usage)
-        return true if node.name.to_s == "block_given?"
+        return true if node.name != nil && node.name.to_s == "block_given?"
         body_has_yield?(node.block) if node.block
       when "BlockNode"
         body_has_yield?(node.body)
@@ -10489,32 +10489,33 @@ class SpCompiler
 #   A <id> <field> <id,id,...> - array of node refs
 
 def unescape_str(s)
-  result = ""
+  result = "".dup
   i = 0
   while i < s.length
     ch = s[i]
     if ch == "%" && i + 2 < s.length
       hex = s[i + 1, 2]
       if hex == "0A"
-        result = result + "\n"
+        result << "\n"
       elsif hex == "0D"
-        result = result + "\r"
+        result << "\r"
       elsif hex == "09"
-        result = result + "\t"
+        result << "\t"
       elsif hex == "20"
-        result = result + " "
+        result << " "
       elsif hex == "25"
-        result = result + "%"
+        result << "%"
       else
-        result = result + "%" + hex
+        result << "%"
+        result << hex
       end
       i = i + 3
     else
-      result = result + ch
+      result << ch
       i = i + 1
     end
   end
-  result
+  result.to_s
 end
 
 # Helper to parse comma-separated node IDs into an array of SpNode.
@@ -10593,7 +10594,7 @@ def read_text_ast(data)
       raw = parts[3]
       sval = ""
       if raw != nil
-        sval = unescape_str(raw)
+        sval = unescape_str(raw).to_s
       end
       set_node_field_string(nodes[nid], key, sval)
     elsif line.start_with?("I ")
@@ -10633,7 +10634,6 @@ end
 def set_node_field_string(node, key, val)
   case key
   when "name" then node.name = val
-  when "value" then node.value = val
   when "content" then node.content = val
   when "call_operator" then node.call_operator = val
   when "binary_operator" then node.binary_operator = val

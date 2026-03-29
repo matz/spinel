@@ -739,6 +739,12 @@ class Compiler
     if t == "NilNode"
       return "nil"
     end
+    if t == "XStringNode"
+      return "string"
+    end
+    if t == "InterpolatedXStringNode"
+      return "string"
+    end
     if t == "ArrayNode"
       return infer_array_elem_type(nid)
     end
@@ -1078,6 +1084,34 @@ class Compiler
           return "obj_" + @nd_name[recv]
         end
       end
+    end
+    # File operations
+    if recv >= 0
+      if @nd_type[recv] == "ConstantReadNode"
+        rcname = @nd_name[recv]
+        if rcname == "File"
+          if mname == "read"
+            return "string"
+          end
+          if mname == "exist?"
+            return "bool"
+          end
+        end
+        if rcname == "ENV"
+          if mname == "[]"
+            return "string"
+          end
+        end
+        if rcname == "Dir"
+          if mname == "home"
+            return "string"
+          end
+        end
+      end
+    end
+    # backtick
+    if mname == "`"
+      return "string"
     end
     if mname == "sqrt"
       return "float"
@@ -2388,6 +2422,21 @@ class Compiler
       return
     end
     t = @nd_type[nid]
+    if t == "BeginNode"
+      if @nd_rescue_clause[nid] >= 0
+        @needs_setjmp = 1
+      end
+      if @nd_ensure_clause[nid] >= 0
+        @needs_setjmp = 1
+      end
+    end
+    if t == "InterpolatedXStringNode"
+      @needs_file_io = 1
+      @needs_string_helpers = 1
+    end
+    if t == "XStringNode"
+      @needs_file_io = 1
+    end
     if t == "ArrayNode"
       et = infer_array_elem_type(nid)
       if et == "str_array"
@@ -2489,6 +2538,26 @@ class Compiler
       if mname == "reject"
         @needs_int_array = 1
         @needs_gc = 1
+      end
+      if mname == "raise"
+        @needs_setjmp = 1
+      end
+      if mname == "catch"
+        @needs_setjmp = 1
+      end
+      if mname == "throw"
+        @needs_setjmp = 1
+      end
+      if mname == "system"
+        @needs_file_io = 1
+      end
+      if @nd_receiver[nid] >= 0
+        if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
+          rn = @nd_name[@nd_receiver[nid]]
+          if rn == "File"
+            @needs_file_io = 1
+          end
+        end
       end
       if mname == "keys"
         @needs_str_array = 1
@@ -2668,6 +2737,12 @@ class Compiler
       end
       emit_string_helpers
     end
+    if @needs_setjmp == 1
+      emit_setjmp_runtime
+    end
+    if @needs_file_io == 1
+      emit_file_io_runtime
+    end
     emit_class_structs
     emit_forward_decls
     emit_class_methods
@@ -2803,6 +2878,33 @@ class Compiler
     emit_raw("static mrb_int sp_str_index(const char*s,const char*sub){const char*f=strstr(s,sub);if(!f)return -1;return(mrb_int)(f-s);}")
     emit_raw("static const char*sp_str_sub_range(const char*s,mrb_int start,mrb_int len){mrb_int sl=(mrb_int)strlen(s);if(start<0)start+=sl;if(start<0)start=0;if(start>=sl)return\"\";if(len<0)len=0;if(start+len>sl)len=sl-start;char*r=(char*)malloc(len+1);memcpy(r,s+start,len);r[len]=0;return r;}")
     emit_raw("static const char*sp_sprintf(const char*fmt,...){char*b=(char*)malloc(4096);va_list ap;va_start(ap,fmt);vsnprintf(b,4096,fmt,ap);va_end(ap);return b;}")
+    emit_raw("")
+  end
+
+  def emit_setjmp_runtime
+    emit_raw("#include <setjmp.h>")
+    emit_raw("#define SP_EXC_STACK_MAX 64")
+    emit_raw("static jmp_buf sp_exc_stack[SP_EXC_STACK_MAX];")
+    emit_raw("static const char *sp_exc_msg[SP_EXC_STACK_MAX];")
+    emit_raw("static volatile int sp_exc_top = 0;")
+    emit_raw("static void sp_raise(const char *msg) { if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; longjmp(sp_exc_stack[sp_exc_top-1], 1); } fprintf(stderr, \"unhandled exception: %s\\n\", msg); exit(1); }")
+    emit_raw("")
+    # catch/throw support
+    emit_raw("#define SP_CATCH_STACK_MAX 64")
+    emit_raw("static jmp_buf sp_catch_stack[SP_CATCH_STACK_MAX];")
+    emit_raw("static const char *sp_catch_tag[SP_CATCH_STACK_MAX];")
+    emit_raw("static mrb_int sp_catch_val[SP_CATCH_STACK_MAX];")
+    emit_raw("static volatile int sp_catch_top = 0;")
+    emit_raw("static void sp_throw(const char *tag, mrb_int val) { int i = sp_catch_top - 1; while (i >= 0) { if (strcmp(sp_catch_tag[i], tag) == 0) { sp_catch_val[i] = val; sp_catch_top = i + 1; longjmp(sp_catch_stack[i], 1); } i--; } fprintf(stderr, \"uncaught throw: %s\\n\", tag); exit(1); }")
+    emit_raw("")
+  end
+
+  def emit_file_io_runtime
+    emit_raw("static const char *sp_file_read(const char *path) { FILE *f = fopen(path, \"rb\"); if (!f) return \"\"; fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET); char *buf = (char *)malloc(sz + 1); if (sz > 0) fread(buf, 1, sz, f); buf[sz] = 0; fclose(f); return buf; }")
+    emit_raw("static void sp_file_write(const char *path, const char *data) { FILE *f = fopen(path, \"w\"); if (f) { fputs(data, f); fclose(f); } }")
+    emit_raw("static mrb_bool sp_file_exist(const char *path) { FILE *f = fopen(path, \"r\"); if (f) { fclose(f); return TRUE; } return FALSE; }")
+    emit_raw("static void sp_file_delete(const char *path) { remove(path); }")
+    emit_raw("static const char *sp_backtick(const char *cmd) { FILE *p = popen(cmd, \"r\"); if (!p) return \"\"; char *buf = (char *)malloc(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; pclose(p); return buf; }")
     emit_raw("")
   end
 
@@ -3632,6 +3734,19 @@ class Compiler
         end
       end
     end
+    # Rescue reference (=> e) needs to be declared as a local
+    if @nd_type[nid] == "RescueNode"
+      ref = @nd_reference[nid]
+      if ref >= 0
+        lname = @nd_name[ref]
+        if not_in(lname, names) == 1
+          if not_in(lname, params) == 1
+            names.push(lname)
+            types.push("string")
+          end
+        end
+      end
+    end
     # Block parameters need to be declared as locals
     if @nd_type[nid] == "CallNode"
       blk = @nd_block[nid]
@@ -3789,6 +3904,12 @@ class Compiler
     if @nd_collection[nid] >= 0
       scan_locals(@nd_collection[nid], names, types, params)
     end
+    if @nd_rescue_clause[nid] >= 0
+      scan_locals(@nd_rescue_clause[nid], names, types, params)
+    end
+    if @nd_ensure_clause[nid] >= 0
+      scan_locals(@nd_ensure_clause[nid], names, types, params)
+    end
   end
 
   def not_in(name, arr)
@@ -3832,15 +3953,19 @@ class Compiler
       i = i + 1
     end
 
+    vol = ""
+    if @needs_setjmp == 1
+      vol = "volatile "
+    end
     j = 0
     while j < lnames.length
       declare_var(lnames[j], ltypes[j])
       ctp = c_type(ltypes[j])
       if type_is_pointer(ltypes[j]) == 1
-        emit("  " + ctp + "lv_" + lnames[j] + " = NULL;")
+        emit("  " + vol + ctp + "lv_" + lnames[j] + " = NULL;")
         emit("  SP_GC_ROOT(lv_" + lnames[j] + ");")
       else
-        emit("  " + ctp + " lv_" + lnames[j] + " = " + c_default_val(ltypes[j]) + ";")
+        emit("  " + vol + ctp + " lv_" + lnames[j] + " = " + c_default_val(ltypes[j]) + ";")
       end
       j = j + 1
     end
@@ -3966,6 +4091,29 @@ class Compiler
     if t == "DefinedNode"
       return "\"expression\""
     end
+    if t == "XStringNode"
+      @needs_file_io = 1
+      return "sp_backtick(" + c_string_literal(@nd_content[nid]) + ")"
+    end
+    if t == "InterpolatedXStringNode"
+      @needs_file_io = 1
+      @needs_string_helpers = 1
+      interp = compile_interpolated(nid)
+      return "sp_backtick(" + interp + ")"
+    end
+    if t == "GlobalVariableReadNode"
+      gname = @nd_name[nid]
+      if gname == "$stderr"
+        return "0"
+      end
+      if gname == "$stdout"
+        return "0"
+      end
+      if gname == "$?"
+        return "sp_last_status"
+      end
+      return "0"
+    end
     if t == "SourceLineNode"
       return @nd_value[nid].to_s
     end
@@ -4002,7 +4150,40 @@ class Compiler
     while i < s.length
       ch = s[i]
       if ch == "\\"
-        result = result + "\\\\"
+        # Check for Ruby escape sequences
+        if i + 1 < s.length
+          nch = s[i + 1]
+          if nch == "n"
+            result = result + "\\n"
+            i = i + 2
+          else
+            if nch == "t"
+              result = result + "\\t"
+              i = i + 2
+            else
+              if nch == "r"
+                result = result + "\\r"
+                i = i + 2
+              else
+                if nch == "\\"
+                  result = result + "\\\\"
+                  i = i + 2
+                else
+                  if nch == "\""
+                    result = result + "\\\""
+                    i = i + 2
+                  else
+                    result = result + "\\\\"
+                    i = i + 1
+                  end
+                end
+              end
+            end
+          end
+        else
+          result = result + "\\\\"
+          i = i + 1
+        end
       else
         if ch == "\""
           result = result + "\\\""
@@ -4021,8 +4202,8 @@ class Compiler
             end
           end
         end
+        i = i + 1
       end
-      i = i + 1
     end
     result + "\""
   end
@@ -4133,6 +4314,12 @@ class Compiler
 
     # No receiver
     if recv < 0
+      # catch as expression
+      if mname == "catch"
+        if @nd_block[nid] >= 0
+          return compile_catch_expr(nid)
+        end
+      end
       if mname == "block_given?"
         if @in_yield_method == 1
           return "(_block != NULL)"
@@ -4457,9 +4644,37 @@ class Compiler
 
     # Math
     if @nd_type[recv] == "ConstantReadNode"
-      if @nd_name[recv] == "Math"
+      rcname = @nd_name[recv]
+      if rcname == "Math"
         if mname == "sqrt"
           return "sqrt(" + compile_arg0(nid) + ")"
+        end
+      end
+      # File operations
+      if rcname == "File"
+        if mname == "read"
+          @needs_file_io = 1
+          return "sp_file_read(" + compile_arg0(nid) + ")"
+        end
+        if mname == "exist?"
+          @needs_file_io = 1
+          return "sp_file_exist(" + compile_arg0(nid) + ")"
+        end
+        if mname == "delete"
+          @needs_file_io = 1
+          return "(sp_file_delete(" + compile_arg0(nid) + "), 0)"
+        end
+      end
+      # ENV
+      if rcname == "ENV"
+        if mname == "[]"
+          return "getenv(" + compile_arg0(nid) + ")"
+        end
+      end
+      # Dir
+      if rcname == "Dir"
+        if mname == "home"
+          return "getenv(\"HOME\")"
         end
       end
     end
@@ -4855,8 +5070,16 @@ class Compiler
       emit("  continue;")
       return
     end
+    if t == "RetryNode"
+      emit("  continue;")
+      return
+    end
     if t == "YieldNode"
       compile_yield_stmt(nid)
+      return
+    end
+    if t == "BeginNode"
+      compile_begin_stmt(nid)
       return
     end
     if t == "CallNode"
@@ -5236,6 +5459,80 @@ class Compiler
         emit("  }")
         @in_loop = old
         return
+      end
+    end
+
+    # raise
+    if mname == "raise"
+      if recv < 0
+        @needs_setjmp = 1
+        msg = compile_arg0(nid)
+        emit("  sp_raise(" + msg + ");")
+        return
+      end
+    end
+
+    # system
+    if mname == "system"
+      if recv < 0
+        @needs_file_io = 1
+        emit("  sp_last_status = system(" + compile_arg0(nid) + ");")
+        return
+      end
+    end
+
+    # trap (just ignore)
+    if mname == "trap"
+      if recv < 0
+        return
+      end
+    end
+
+    # catch/throw
+    if mname == "catch"
+      if recv < 0
+        if @nd_block[nid] >= 0
+          compile_catch_stmt(nid)
+          return
+        end
+      end
+    end
+    if mname == "throw"
+      if recv < 0
+        compile_throw_stmt(nid)
+        return
+      end
+    end
+
+    # File operations
+    if recv >= 0
+      if @nd_type[recv] == "ConstantReadNode"
+        rcname = @nd_name[recv]
+        if rcname == "File"
+          if mname == "write"
+            @needs_file_io = 1
+            args_id = @nd_arguments[nid]
+            arg_ids = []
+            if args_id >= 0
+              arg_ids = get_args(args_id)
+            end
+            a0 = "0"
+            a1 = "0"
+            if arg_ids.length >= 1
+              a0 = compile_expr(arg_ids[0])
+            end
+            if arg_ids.length >= 2
+              a1 = compile_expr(arg_ids[1])
+            end
+            emit("  sp_file_write(" + a0 + ", " + a1 + ");")
+            return
+          end
+          if mname == "delete"
+            @needs_file_io = 1
+            emit("  sp_file_delete(" + compile_arg0(nid) + ");")
+            return
+          end
+        end
       end
     end
 
@@ -5768,6 +6065,186 @@ class Compiler
       @indent = @indent - 1
       emit("  }")
     end
+  end
+
+  def compile_catch_expr(nid)
+    @needs_setjmp = 1
+    tag = compile_arg0(nid)
+    blk = @nd_block[nid]
+    tmp = new_temp
+
+    emit("  mrb_int " + tmp + " = 0;")
+    emit("  sp_catch_tag[sp_catch_top] = " + tag + ";")
+    emit("  sp_catch_top++;")
+    emit("  if (setjmp(sp_catch_stack[sp_catch_top-1]) == 0) {")
+    @indent = @indent + 1
+    if blk >= 0
+      body = @nd_body[blk]
+      if body >= 0
+        stmts = get_stmts(body)
+        # Compile all but last as statements
+        k = 0
+        while k < stmts.length - 1
+          compile_stmt(stmts[k])
+          k = k + 1
+        end
+        if stmts.length > 0
+          last = stmts[stmts.length - 1]
+          emit("  " + tmp + " = " + compile_expr(last) + ";")
+        end
+      end
+    end
+    @indent = @indent - 1
+    emit("    sp_catch_top--;")
+    emit("  } else {")
+    emit("    sp_catch_top--;")
+    emit("    " + tmp + " = sp_catch_val[sp_catch_top];")
+    emit("  }")
+    tmp
+  end
+
+  def compile_catch_stmt(nid)
+    @needs_setjmp = 1
+    # catch(:tag) do ... end
+    tag = compile_arg0(nid)
+    blk = @nd_block[nid]
+    bp1 = get_block_param(nid, 0)
+
+    emit("  sp_catch_tag[sp_catch_top] = " + tag + ";")
+    emit("  sp_catch_top++;")
+    emit("  if (setjmp(sp_catch_stack[sp_catch_top-1]) == 0) {")
+    @indent = @indent + 1
+    if blk >= 0
+      compile_stmts_body(@nd_body[blk])
+    end
+    @indent = @indent - 1
+    emit("    sp_catch_top--;")
+    emit("  } else {")
+    emit("    sp_catch_top--;")
+    emit("  }")
+  end
+
+  def compile_throw_stmt(nid)
+    @needs_setjmp = 1
+    args_id = @nd_arguments[nid]
+    arg_ids = []
+    if args_id >= 0
+      arg_ids = get_args(args_id)
+    end
+    tag = "\"\""
+    val = "0"
+    if arg_ids.length >= 1
+      tag = compile_expr(arg_ids[0])
+    end
+    if arg_ids.length >= 2
+      val = compile_expr(arg_ids[1])
+    end
+    emit("  sp_throw(" + tag + ", " + val + ");")
+  end
+
+  def compile_begin_stmt(nid)
+    @needs_setjmp = 1
+    has_rescue = @nd_rescue_clause[nid] >= 0
+    has_ensure = @nd_ensure_clause[nid] >= 0
+
+    # Check if rescue body has retry
+    has_retry = 0
+    rc = @nd_rescue_clause[nid]
+    if rc >= 0
+      if body_has_retry(@nd_body[rc]) == 1
+        has_retry = 1
+      end
+    end
+
+    if has_retry == 1
+      emit("  for (;;) {")
+      @indent = @indent + 1
+    end
+
+    if has_rescue
+      emit("  sp_exc_top++;")
+      emit("  if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {")
+      @indent = @indent + 1
+      compile_stmts_body(@nd_body[nid])
+      @indent = @indent - 1
+      emit("    sp_exc_top--;")
+      if has_retry == 1
+        emit("    break;")
+      end
+
+      rc = @nd_rescue_clause[nid]
+      if rc >= 0
+        emit("  } else {")
+        emit("    sp_exc_top--;")
+        @indent = @indent + 1
+        ref = @nd_reference[rc]
+        if ref >= 0
+          rname = @nd_name[ref]
+          emit("  lv_" + rname + " = sp_exc_msg[sp_exc_top];")
+        end
+        compile_rescue_body(@nd_body[rc], has_retry)
+        @indent = @indent - 1
+      end
+      emit("  }")
+    else
+      compile_stmts_body(@nd_body[nid])
+    end
+
+    if has_retry == 1
+      @indent = @indent - 1
+      emit("  }")
+    end
+
+    if has_ensure
+      ec = @nd_ensure_clause[nid]
+      if ec >= 0
+        compile_stmts_body(@nd_body[ec])
+      end
+    end
+  end
+
+  def compile_rescue_body(nid, has_retry)
+    if nid < 0
+      return
+    end
+    stmts = get_stmts(nid)
+    k = 0
+    while k < stmts.length
+      compile_stmt(stmts[k])
+      k = k + 1
+    end
+    if has_retry == 1
+      # If we get here without a retry (continue), break out of the loop
+      emit("  break;")
+    end
+  end
+
+  def body_has_retry(nid)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] == "RetryNode"
+      return 1
+    end
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      if body_has_retry(stmts[k]) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_body[nid] >= 0
+      if body_has_retry(@nd_body[nid]) == 1
+        return 1
+      end
+    end
+    if @nd_subsequent[nid] >= 0
+      if body_has_retry(@nd_subsequent[nid]) == 1
+        return 1
+      end
+    end
+    0
   end
 
   def compile_yield_stmt(nid)
@@ -6513,6 +6990,13 @@ class Compiler
     end
     if @nd_type[last] == "YieldNode"
       compile_yield_stmt(last)
+      if return_type != "void"
+        emit("  return " + c_default_val(return_type) + ";")
+      end
+      return
+    end
+    if @nd_type[last] == "BeginNode"
+      compile_begin_stmt(last)
       if return_type != "void"
         emit("  return " + c_default_val(return_type) + ";")
       end

@@ -672,6 +672,7 @@ class SpCompiler
           @methods[mname] = mi
         end
       end
+      nil
     end
 
     BUILTIN_TYPES = %w[Integer Float String Boolean Symbol].freeze
@@ -3713,6 +3714,7 @@ class SpCompiler
         val = compile_expr(node)
         emit("#{val};") if val && val != ""
       end
+      nil
     end
 
     def generate_local_write(node)
@@ -3986,6 +3988,7 @@ class SpCompiler
           emit("#{val};") unless val.nil? || val == ""
         end
       end
+      nil
     end
 
     def generate_puts(node)

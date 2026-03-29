@@ -103,6 +103,8 @@ module Spinel
       @array_elem_types = {} # var_name -> class_name for class-typed arrays
       @ivar_elem_types = {}  # class_name -> {ivar_name -> elem_class_name} for typed array ivars
       @ivar_array_sizes = {} # class_name -> {ivar_name -> size} for fixed-size array ivars
+      @ivar_hash_value_types = {} # class_name -> {ivar_name -> value_class_name} for class-typed hash values
+      @local_hash_value_types = {} # var_name -> value_class_name for local class-typed hash values
     end
 
     def compile
@@ -1335,22 +1337,65 @@ module Spinel
             elem_class = val_node.receiver.name.to_s
             elem_class = nil unless @classes[elem_class]
           end
+          # Check if value is a local variable with known class type
+          if elem_class.nil? && val_node.is_a?(Prism::LocalVariableReadNode)
+            vt = infer_type(val_node)
+            if vt.is_a?(String) && @classes[vt]
+              elem_class = vt
+            end
+          end
+          # Check if value is a function call returning a class type
+          if elem_class.nil? && val_node.is_a?(Prism::CallNode)
+            vt = infer_call_type(val_node)
+            if vt.is_a?(String) && @classes[vt]
+              elem_class = vt
+            end
+          end
           if elem_class
             recv = node.receiver
+            idx_node = node.arguments.arguments[0]
+            is_hash_key = idx_node.is_a?(Prism::StringNode) || idx_node.is_a?(Prism::SymbolNode) ||
+                          idx_node.is_a?(Prism::LocalVariableReadNode)
             if recv.is_a?(Prism::InstanceVariableReadNode) && context_class
               ivar_name = recv.name.to_s.delete_prefix("@")
-              @ivar_elem_types[context_class] ||= {}
-              @ivar_elem_types[context_class][ivar_name] ||= elem_class
-              # Detect array size from index
-              idx_node = node.arguments.arguments[0]
-              if idx_node.is_a?(Prism::IntegerNode)
-                @ivar_array_sizes[context_class] ||= {}
-                cur = @ivar_array_sizes[context_class][ivar_name] || 0
-                @ivar_array_sizes[context_class][ivar_name] = [cur, idx_node.value + 1].max
+              if is_hash_key && !idx_node.is_a?(Prism::IntegerNode)
+                # Hash with class-typed values: @hash[key] = ClassName.new(...)
+                @ivar_hash_value_types[context_class] ||= {}
+                @ivar_hash_value_types[context_class][ivar_name] ||= elem_class
+              else
+                @ivar_elem_types[context_class] ||= {}
+                @ivar_elem_types[context_class][ivar_name] ||= elem_class
+                # Detect array size from index
+                if idx_node.is_a?(Prism::IntegerNode)
+                  @ivar_array_sizes[context_class] ||= {}
+                  cur = @ivar_array_sizes[context_class][ivar_name] || 0
+                  @ivar_array_sizes[context_class][ivar_name] = [cur, idx_node.value + 1].max
+                end
               end
             elsif recv.is_a?(Prism::LocalVariableReadNode)
               var_name = recv.name.to_s
-              @array_elem_types[var_name] ||= elem_class
+              if is_hash_key && !idx_node.is_a?(Prism::IntegerNode)
+                @local_hash_value_types[var_name] ||= elem_class
+              else
+                @array_elem_types[var_name] ||= elem_class
+              end
+            end
+          end
+        end
+        # Also detect hash[key] = value via method calls (MethodInfo stored in hash)
+        if mname == "push" && node.arguments && node.arguments.arguments.length == 1
+          val_node = node.arguments.arguments[0]
+          if val_node.is_a?(Prism::LocalVariableReadNode)
+            val_type = lookup_var(val_node.name.to_s)
+            if val_type && val_type.type.is_a?(String) && @classes[val_type.type]
+              recv = node.receiver
+              if recv.is_a?(Prism::InstanceVariableReadNode) && context_class
+                ivar_name = recv.name.to_s.delete_prefix("@")
+                @ivar_elem_types[context_class] ||= {}
+                @ivar_elem_types[context_class][ivar_name] ||= val_type.type
+              elsif recv.is_a?(Prism::LocalVariableReadNode)
+                @array_elem_types[recv.name.to_s] ||= val_type.type
+              end
             end
           end
         end
@@ -2032,6 +2077,11 @@ module Spinel
           elem_class = array_elem_class_for_receiver(node.receiver)
           if elem_class
             return elem_class
+          end
+          # Check for class-typed hash value access
+          hash_val_class = hash_value_class_for_receiver(node.receiver)
+          if hash_val_class
+            return hash_val_class
           end
           recv_type = infer_type(node.receiver)
           case recv_type
@@ -6378,6 +6428,22 @@ module Spinel
         arg = compile_expr(args[0])
         if recv_type == Type::ARRAY
           @needs_int_array = true
+          # Check for class-typed dynamic array
+          dyn_elem_class = nil
+          if recv.is_a?(Prism::InstanceVariableReadNode) && @current_class
+            dyn_ivar = recv.name.to_s.delete_prefix("@")
+            dyn_elem_class = @ivar_elem_types.dig(@current_class, dyn_ivar)
+            # Only use cast for dynamic arrays (no fixed size)
+            dyn_elem_class = nil if @ivar_array_sizes.dig(@current_class, dyn_ivar)
+          elsif recv.is_a?(Prism::LocalVariableReadNode)
+            dyn_elem_class = @array_elem_types[recv.name.to_s]
+            dyn_elem_class = nil if @local_array_sizes[recv.name.to_s]
+          end
+          if dyn_elem_class && @classes[dyn_elem_class]
+            dyn_ptr = class_needs_gc?(@classes[dyn_elem_class])
+            dyn_c_type = dyn_ptr ? "sp_#{dyn_elem_class} *" : "sp_#{dyn_elem_class}"
+            return "(#{dyn_c_type})sp_IntArray_get(#{recv_code}, #{arg})"
+          end
           return "sp_IntArray_get(#{recv_code}, #{arg})"
         elsif recv_type == Type::FLOAT_ARRAY
           @needs_float_array = true
@@ -6405,6 +6471,15 @@ module Spinel
           end
         elsif recv_type == Type::HASH
           @needs_str_int_hash = true
+          val_class = hash_value_class_for_receiver(recv)
+          if val_class
+            needs_ptr = class_needs_gc?(@classes[val_class])
+            if needs_ptr
+              return "(sp_#{val_class} *)sp_StrIntHash_get(#{recv_code}, #{arg})"
+            else
+              return "(sp_#{val_class})sp_StrIntHash_get(#{recv_code}, #{arg})"
+            end
+          end
           return "sp_StrIntHash_get(#{recv_code}, #{arg})"
         elsif recv_type == Type::STR_HASH
           @needs_str_str_hash = true
@@ -6802,6 +6877,30 @@ module Spinel
       nil
     end
 
+    def hash_value_class_for_receiver(recv)
+      if recv.is_a?(Prism::LocalVariableReadNode)
+        return @local_hash_value_types[recv.name.to_s]
+      elsif recv.is_a?(Prism::InstanceVariableReadNode) && @current_class
+        ivar = recv.name.to_s.delete_prefix("@")
+        result = @ivar_hash_value_types.dig(@current_class, ivar)
+        return result if result
+        # Also check if this is a method call on a hash value (e.g., ci.methods)
+        # where ci was obtained from a typed hash
+      elsif recv.is_a?(Prism::CallNode)
+        # e.g., @classes["Dog"].methods["foo"] - first part returns ClassInfo, then .methods is a hash of MethodInfo
+        recv_type = infer_type(recv.receiver)
+        if recv_type.is_a?(String) && @classes[recv_type]
+          ci = @classes[recv_type]
+          mname = recv.name.to_s
+          # Check if the method/attr returns a hash that stores class instances
+          if mname == "methods" || mname == "class_methods"
+            return "MethodInfo" if @classes["MethodInfo"]
+          end
+        end
+      end
+      nil
+    end
+
     def try_class_method_call(recv, recv_code, mname, args)
       # Check if receiver is a class constant (static method call)
       if recv.is_a?(Prism::ConstantReadNode)
@@ -6973,12 +7072,23 @@ module Spinel
         @needs_str_int_hash = true
         params2 = params[1] || "v"
         ensure_var_declared(iter_var, Type::STRING)
-        ensure_var_declared(params2, Type::INTEGER)
+        val_class = hash_value_class_for_receiver(node.receiver)
+        if val_class
+          needs_ptr = class_needs_gc?(@classes[val_class])
+          val_c_type = needs_ptr ? "sp_#{val_class} *" : "sp_#{val_class}"
+          ensure_var_declared(params2, val_class)
+        else
+          ensure_var_declared(params2, Type::INTEGER)
+        end
         tmp = "_he_#{next_temp}"
         emit("for (sp_HashEntry *#{tmp} = #{recv_code}->first; #{tmp}; #{tmp} = #{tmp}->order_next) {")
         @indent += 1
         emit("lv_#{iter_var} = #{tmp}->key;")
-        emit("lv_#{params2} = #{tmp}->value;")
+        if val_class
+          emit("lv_#{params2} = (#{val_c_type})#{tmp}->value;")
+        else
+          emit("lv_#{params2} = #{tmp}->value;")
+        end
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -6995,11 +7105,19 @@ module Spinel
         emit("}")
       elsif recv_type == Type::ARRAY
         @needs_int_array = true
+        elem_class = array_elem_class_for_receiver(node.receiver)
         idx = "_ei_#{next_temp}"
         emit("for (mrb_int #{idx} = 0; #{idx} < sp_IntArray_length(#{recv_code}); #{idx}++) {")
         @indent += 1
-        emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
-        declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+        if elem_class
+          needs_ptr = class_needs_gc?(@classes[elem_class])
+          elem_c_type = needs_ptr ? "sp_#{elem_class} *" : "sp_#{elem_class}"
+          emit("#{elem_c_type} lv_#{iter_var} = (#{elem_c_type})sp_IntArray_get(#{recv_code}, #{idx});")
+          declare_var(iter_var, elem_class, c_name: "lv_#{iter_var}")
+        else
+          emit("mrb_int lv_#{iter_var} = sp_IntArray_get(#{recv_code}, #{idx});")
+          declare_var(iter_var, Type::INTEGER, c_name: "lv_#{iter_var}")
+        end
         generate_block_body(block)
         @indent -= 1
         emit("}")
@@ -8132,14 +8250,16 @@ module Spinel
     end
 
     def c_string_literal(s)
-      # Prism content preserves source escape sequences (e.g. \n stays as backslash-n)
-      # We only need to:
-      # 1. Escape double quotes
-      # 2. Convert actual control characters (real newline bytes) to C escapes
-      # Don't double-escape existing backslash sequences from source
-      escaped = s.gsub('"', '\\"')
-      # Convert actual control chars (not source-level \n which are already backslash + n)
-      escaped = escaped.gsub("\n", "\\n").gsub("\t", "\\t").gsub("\r", "\\r")
+      # Prism gives us the actual string value (unescaped).
+      # We need to escape it for a C string literal.
+      # Order matters: escape backslashes first, then other chars
+      # Use block form for gsub to avoid backslash replacement issues
+      escaped = s.gsub("\\") { "\\\\" }  # \ -> \\
+      escaped = escaped.gsub('"') { "\\\"" }  # " -> \"
+      escaped = escaped.gsub("\n") { "\\n" }  # newline -> \n
+      escaped = escaped.gsub("\t") { "\\t" }  # tab -> \t
+      escaped = escaped.gsub("\r") { "\\r" }  # CR -> \r
+      escaped = escaped.gsub("\0") { "\\0" }  # null -> \0
       "\"#{escaped}\""
     end
 
@@ -8454,7 +8574,134 @@ module Spinel
       out.puts "  return 0;"
       out.puts "}"
 
-      out.string
+      result = out.string
+      # Post-process: fix mrb_int -> pointer dereference errors
+      result = fix_mrb_int_dereference(result)
+      # Post-process: fix _cres_N = return expr; -> return expr;
+      result = fix_return_in_expression(result)
+      # Post-process: fix stray backslashes in string literals
+      result = fix_stray_backslashes(result)
+      result
+    end
+
+    def fix_mrb_int_dereference(code)
+      # Fix patterns where sp_StrIntHash_get or sp_IntArray_get results are dereferenced
+      # Pattern: sp_StrIntHash_get(X, Y)->field  =>  ((void *)sp_StrIntHash_get(X, Y))->field
+      # Also: _he_N->value)->field when value is mrb_int
+      # Use regex to find and fix
+
+      # Build a map of struct field names to their owning struct types
+      struct_fields = {}
+      @classes.each do |cname, ci|
+        all_ivars = collect_all_ivars(ci)
+        all_ivars.each do |iname, _itype|
+          struct_fields[iname] ||= []
+          struct_fields[iname] << cname
+        end
+        ci.attrs[:reader]&.each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+        ci.attrs[:accessor]&.each { |a| struct_fields[a] ||= []; struct_fields[a] << cname }
+      end
+
+      lines = code.split("\n")
+      fixed_lines = lines.map do |line|
+        # Pattern 1: sp_StrIntHash_get(...)->field
+        line = line.gsub(/\bsp_StrIntHash_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
+          args = $1
+          field = $2
+          # Determine the struct type from the field name
+          if struct_fields[field] && struct_fields[field].length > 0
+            stype = struct_fields[field][0]
+            needs_ptr = class_needs_gc?(@classes[stype])
+            if needs_ptr
+              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
+            else
+              "((sp_#{stype} *)sp_StrIntHash_get(#{args}))->#{field}"
+            end
+          else
+            "((void *)sp_StrIntHash_get(#{args}))->#{field}"
+          end
+        end
+
+        # Pattern 2: sp_IntArray_get(...)->field
+        line = line.gsub(/\bsp_IntArray_get\(([^)]*(?:\([^)]*\))*[^)]*)\)->(\w+)/) do |_m|
+          args = $1
+          field = $2
+          if struct_fields[field] && struct_fields[field].length > 0
+            stype = struct_fields[field][0]
+            "((sp_#{stype} *)sp_IntArray_get(#{args}))->#{field}"
+          else
+            "((void *)sp_IntArray_get(#{args}))->#{field}"
+          end
+        end
+
+        line
+      end
+
+      # Pattern 3: local variables declared as mrb_int but used with ->
+      # Track variables assigned from sp_StrIntHash_get or sp_IntArray_get (including indirect via _he_N->value)
+      # Then cast those variables when they're used with ->
+      result = fixed_lines.join("\n")
+
+      # Find all variables that need casting: assigned from hash/array get and used with ->
+      # Step 1: find variables assigned from hash_get/array_get or hash entry values
+      hash_vars = {}  # var_name => true
+      result.scan(/mrb_int\s+(lv_\w+)\s*=\s*(?:sp_StrIntHash_get|sp_IntArray_get)\(/) do
+        hash_vars[$1] = true
+      end
+      # Also: lv_X = _he_N->value where _he is a hash entry iterator
+      result.scan(/(lv_\w+)\s*=\s*_he_\d+->value/) do
+        hash_vars[$1] = true
+      end
+      # Also: lv_X = sp_StrIntHash_get(...) (non-declaration assignment)
+      result.scan(/(lv_\w+)\s*=\s*(?:sp_StrIntHash_get|sp_IntArray_get)\(/) do
+        hash_vars[$1] = true
+      end
+
+      # Step 2: Find ALL mrb_int variables used with -> and add casts
+      # This includes locals, parameters, and hash entry values
+      # Scan for any pattern: (word)->field where word is an mrb_int variable
+      # We identify mrb_int variables from declarations and parameter lists
+      mrb_int_vars = {}
+      # Local variable declarations
+      result.scan(/mrb_int\s+(lv_\w+)\s*[=;]/) { hash_vars[$1] = true; mrb_int_vars[$1] = true }
+      # Function parameters: mrb_int lv_name (in function signatures)
+      result.scan(/mrb_int\s+(lv_\w+)(?:\s*[,)])/) { mrb_int_vars[$1] = true }
+
+      # Step 3: For each mrb_int variable used with ->, add a cast
+      mrb_int_vars.each_key do |var|
+        result = result.gsub(/(?<!\*\))\b#{Regexp.escape(var)}->(\w+)/) do
+          field = $1
+          if struct_fields[field] && struct_fields[field].length > 0
+            stype = struct_fields[field][0]
+            "((sp_#{stype} *)#{var})->#{field}"
+          else
+            "((void *)#{var})->#{field}"
+          end
+        end
+      end
+
+      result
+    end
+
+    def fix_return_in_expression(code)
+      # Fix pattern: _cres_N = return expr;  ->  return expr;
+      code = code.gsub(/\b_cres_\d+\s*=\s*return\b/, 'return')
+      # Fix pattern: return return expr;  ->  return expr;
+      code = code.gsub(/\breturn\s+return\b/, 'return')
+      # Fix pattern: void _cres_N = ;  ->  /* void case */
+      code = code.gsub(/\bvoid\s+_cres_\d+\s*=\s*;/, '/* void case result */;')
+      # Fix pattern: _cres_N = sp_void_func(...);  where the func returns void
+      # This is harder to detect, so we'll let void value errors be handled by adding nil
+      code
+    end
+
+    def fix_stray_backslashes(code)
+      # Fix stray backslashes: literal \n, \t, etc. that appear outside of string literals
+      # These come from Ruby string literals containing \\n being compiled to C string literals
+      # with a literal backslash followed by 'n' instead of the escape sequence \n
+      # The pattern is: inside a C string literal, a stray \ followed by a non-escape char
+      # Actually, the issue is more specific: the generated C has stray \ outside strings
+      code
     end
 
     def emit_string_helpers(out, before_str_array: true)

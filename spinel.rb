@@ -1004,37 +1004,45 @@ module Spinel
       end
     end
 
-    def scan_poly_types(node, var_types, param_types, scope_prefix: "")
+    def scan_poly_types(node, var_types, param_types, scope_prefix: "", local_types: nil)
       return unless node
+      local_types ||= {}
       case node
       when Prism::ProgramNode
-        scan_poly_types(node.statements, var_types, param_types, scope_prefix: scope_prefix)
+        scan_poly_types(node.statements, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types)
       when Prism::StatementsNode
-        node.body.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
+        node.body.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types) }
       when Prism::DefNode
         # New method scope - use class prefix + method name as scope prefix
         method_scope = node.receiver ? "#{scope_prefix}self.#{node.name}" : "#{scope_prefix}#{node.name}"
-        scan_poly_types(node.body, var_types, param_types, scope_prefix: method_scope)
+        scan_poly_types(node.body, var_types, param_types, scope_prefix: method_scope, local_types: {})
       when Prism::ClassNode
         cname = node.constant_path.is_a?(Prism::ConstantReadNode) ? node.constant_path.name.to_s : ""
         if node.body
           stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
-          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: "#{cname}#") }
+          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: "#{cname}#", local_types: {}) }
         end
       when Prism::ModuleNode
         if node.body
           stmts = node.body.is_a?(Prism::StatementsNode) ? node.body.body : [node.body]
-          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix) }
+          stmts.each { |s| scan_poly_types(s, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types) }
         end
       when Prism::LocalVariableWriteNode
-        t = infer_type(node.value)
+        # For CallNode values, try local-aware inference first (handles result + sep etc.)
+        if node.value.is_a?(Prism::CallNode)
+          t = infer_call_type_with_locals(node.value, local_types)
+          t = infer_type(node.value) if t == Type::UNKNOWN
+        else
+          t = infer_type(node.value)
+        end
         if t == Type::UNKNOWN && node.value.is_a?(Prism::LocalVariableReadNode)
-          t = @var_types_global[node.value.name.to_s] || Type::UNKNOWN
+          t = local_types[node.value.name.to_s] || @var_types_global[node.value.name.to_s] || Type::UNKNOWN
         end
         vname = "#{scope_prefix}:#{node.name}"
         var_types[vname] ||= Set.new
         var_types[vname] << t if t != Type::UNKNOWN
-        scan_poly_types(node.value, var_types, param_types, scope_prefix: scope_prefix)
+        local_types[node.name.to_s] = t if t != Type::UNKNOWN
+        scan_poly_types(node.value, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types)
       when Prism::CallNode
         mname = node.name.to_s
         if @methods[mname] && node.arguments
@@ -1050,9 +1058,43 @@ module Spinel
             param_types[mname][i] << t if t != Type::UNKNOWN
           end
         end
-        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c }
+        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types) if c }
       else
-        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix) if c } if node.respond_to?(:child_nodes)
+        node.child_nodes.each { |c| scan_poly_types(c, var_types, param_types, scope_prefix: scope_prefix, local_types: local_types) if c } if node.respond_to?(:child_nodes)
+      end
+    end
+
+    # Infer call type using method-local type information for receivers
+    def infer_call_type_with_locals(node, local_types)
+      return Type::UNKNOWN unless node.is_a?(Prism::CallNode)
+      mname = node.name.to_s
+      recv_type = if node.receiver.is_a?(Prism::LocalVariableReadNode)
+                    local_types[node.receiver.name.to_s] || infer_type(node.receiver)
+                  elsif node.receiver.is_a?(Prism::CallNode)
+                    # Recursively resolve nested call types (e.g., (result + "%") + hex)
+                    infer_call_type_with_locals(node.receiver, local_types)
+                  elsif node.receiver
+                    infer_type(node.receiver)
+                  else
+                    nil
+                  end
+
+      case mname
+      when "+"
+        t1 = recv_type || Type::INTEGER
+        if (t1 == Type::STRING || t1 == Type::MUTABLE_STRING)
+          Type::STRING
+        else
+          t1
+        end
+      when "split"
+        Type::STR_ARRAY
+      when "to_i", "length", "size", "count"
+        Type::INTEGER
+      when "to_s"
+        Type::STRING
+      else
+        infer_call_type(node)
       end
     end
 
@@ -1480,11 +1522,7 @@ module Spinel
               next
             end
             next if i >= mi.params.length
-            arg_type = infer_type(arg)
-            # Also check var_types_global for local variable reads
-            if arg_type == Type::UNKNOWN && arg.is_a?(Prism::LocalVariableReadNode)
-              arg_type = @var_types_global[arg.name.to_s] || Type::UNKNOWN
-            end
+            arg_type = infer_arg_type_for_scan(arg)
             can_upgrade = mi.params[i].type == Type::UNKNOWN ||
               (mi.params[i].type == Type::INTEGER && arg_type != Type::INTEGER && arg_type != Type::BOOLEAN && arg_type != Type::NIL)
             if arg_type != Type::UNKNOWN && can_upgrade
@@ -1596,14 +1634,97 @@ module Spinel
             end
           end
         end
+        # Scan implicit self calls (no receiver) to class methods
+        if node.receiver.nil? && node.arguments
+          @classes.each do |_cname, ci|
+            mi = ci.methods[mname]
+            if mi
+              node.arguments.arguments.each_with_index do |arg, i|
+                next if i >= mi.params.length
+                arg_type = infer_arg_type_for_scan(arg)
+                if arg_type != Type::UNKNOWN && mi.params[i].type == Type::UNKNOWN
+                  mi.params[i].type = arg_type
+                end
+              end
+              break
+            end
+          end
+        end
         # Also scan child nodes (receiver, arguments, block)
         scan_call_sites(node.receiver) if node.receiver
         node.arguments&.arguments&.each { |a| scan_call_sites(a) }
         scan_call_sites(node.block) if node.block
+      when Prism::ClassNode
+        # Track current class context for ivar type resolution
+        old_class = @current_class
+        cname = node.name.to_s
+        @current_class = cname if @classes[cname]
+        node.child_nodes.each { |c| scan_call_sites(c) if c }
+        @current_class = old_class
+      when Prism::DefNode
+        # Save and restore var_types_global for method scope isolation
+        saved_vars = @var_types_global.dup
+        # Pre-populate with method param types if available within current class
+        if @current_class && @classes[@current_class]
+          ci = @classes[@current_class]
+          mi = ci.methods[node.name.to_s]
+          if mi
+            mi.params.each do |p|
+              @var_types_global[p.name] = p.type if p.type != Type::UNKNOWN
+            end
+          end
+        end
+        node.child_nodes.each { |c| scan_call_sites(c) if c }
+        @var_types_global = saved_vars
       else
         # Generic traversal
         node.child_nodes.each { |c| scan_call_sites(c) if c } if node.respond_to?(:child_nodes)
       end
+    end
+
+    # Enhanced type inference for arguments during call site scanning.
+    # Uses var_types_global to resolve types that infer_type cannot
+    # (e.g., locals in class method bodies that aren't in the current scope).
+    def infer_arg_type_for_scan(arg)
+      t = infer_type(arg)
+      return t if t != Type::UNKNOWN
+
+      if arg.is_a?(Prism::LocalVariableReadNode)
+        t = @var_types_global[arg.name.to_s] || Type::UNKNOWN
+      elsif arg.is_a?(Prism::CallNode)
+        # Handle patterns like arr[i] where arr is in var_types_global
+        if arg.name.to_s == "[]" && arg.receiver.is_a?(Prism::LocalVariableReadNode)
+          recv_gt = @var_types_global[arg.receiver.name.to_s]
+          case recv_gt
+          when Type::STR_ARRAY then t = Type::STRING
+          when Type::ARRAY then t = Type::INTEGER
+          when Type::FLOAT_ARRAY then t = Type::FLOAT
+          when Type::HASH then t = Type::INTEGER
+          when Type::STR_HASH then t = Type::STRING
+          end
+        elsif arg.name.to_s == "[]" && arg.receiver.is_a?(Prism::InstanceVariableReadNode) && @current_class
+          # Handle @ivar[i] inside class methods
+          ci = @classes[@current_class]
+          if ci
+            ivar = arg.receiver.name.to_s.delete_prefix("@")
+            ivar_type = ci.ivars[ivar]
+            case ivar_type
+            when Type::STR_ARRAY, :str_array then t = Type::STRING
+            when Type::ARRAY, :array then t = Type::INTEGER
+            when Type::HASH, :hash then t = Type::INTEGER
+            end
+          end
+        elsif %w[split].include?(arg.name.to_s)
+          t = Type::STR_ARRAY
+        elsif %w[to_i to_int length size count].include?(arg.name.to_s)
+          t = Type::INTEGER
+        elsif %w[to_s to_str].include?(arg.name.to_s)
+          t = Type::STRING
+        elsif %w[to_f].include?(arg.name.to_s)
+          t = Type::FLOAT
+        end
+      end
+      t
     end
 
     def scan_ivar_assignments_in_body(node, cname, ci)
@@ -2592,8 +2713,71 @@ module Spinel
         elsif mi.body && param_accesses_class_attr?(mi.body, param.name, ci)
           # If the param is used like `param.attr` where attr is a class ivar/accessor, it's the same class
           ci.name
+        elsif mi.body && param_used_as_string?(mi.body, param.name)
+          # If param is used with string methods (split, length on string, etc.), infer STRING
+          Type::STRING
         else
           Type::INTEGER  # default fallback
+        end
+      end
+    end
+
+    # Check if a parameter is used in string-like contexts in the method body.
+    # Looks for: param.split, param.upcase, param + "str", param == "str",
+    # strcmp(param, ...), param used as a StrArray element, etc.
+    def param_used_as_string?(node, pname)
+      return false unless node
+      case node
+      when Prism::StatementsNode
+        node.body.any? { |s| param_used_as_string?(s, pname) }
+      when Prism::CallNode
+        if node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name.to_s == pname
+          return true if %w[split gsub sub upcase downcase strip chomp chop
+                            start_with? end_with? include? index tr
+                            length size bytes chars encode force_encoding
+                            freeze dup to_i to_f to_s to_sym inspect
+                            match? scan replace delete squeeze].include?(node.name.to_s)
+          # param[i] where param is used as string
+          return true if node.name.to_s == "[]"
+          # param + something (string concat)
+          return true if node.name.to_s == "+"
+          # param == "str" (comparison with string literal)
+          if %w[== !=].include?(node.name.to_s) && node.arguments&.arguments&.first
+            arg = node.arguments.arguments.first
+            return true if arg.is_a?(Prism::StringNode)
+          end
+        end
+        # Check if param is passed to a method that expects a string
+        # e.g., emit(param), strcmp(param, something), str_concat(param, ...)
+        if node.arguments
+          node.arguments.arguments.each do |arg|
+            if arg.is_a?(Prism::LocalVariableReadNode) && arg.name.to_s == pname
+              # If param is concatenated with a string: result + param
+              if node.name.to_s == "+" && node.receiver.is_a?(Prism::LocalVariableReadNode)
+                return true
+              end
+              # Param passed to emit, puts, push on a StrArray, etc.
+              return true if %w[emit emit_raw push puts print].include?(node.name.to_s)
+            end
+          end
+        end
+        node.child_nodes.each { |c| return true if c && param_used_as_string?(c, pname) }
+        false
+      when Prism::LocalVariableWriteNode
+        param_used_as_string?(node.value, pname)
+      when Prism::IfNode
+        param_used_as_string?(node.statements, pname) ||
+          (node.subsequent && param_used_as_string?(node.subsequent, pname))
+      when Prism::WhileNode
+        param_used_as_string?(node.statements, pname)
+      when Prism::ElseNode
+        param_used_as_string?(node.statements, pname)
+      else
+        # Generic traversal for other node types
+        if node.respond_to?(:child_nodes)
+          node.child_nodes.any? { |c| c && param_used_as_string?(c, pname) }
+        else
+          false
         end
       end
     end
@@ -3346,8 +3530,45 @@ module Spinel
       stmts = body.is_a?(Prism::StatementsNode) ? body.body : [body]
       stmts.each_with_index do |s, i|
         if i == stmts.length - 1 && return_type != Type::VOID
-          val = compile_expr(s)
-          emit_gc_return(val)
+          # Statement-only nodes cannot be compiled as expressions
+          case s
+          when Prism::WhileNode, Prism::UntilNode, Prism::ForNode
+            generate_stmt(s)
+          when Prism::IfNode
+            generate_if_stmt(s, return_type: return_type)
+          when Prism::CaseNode
+            generate_case_stmt(s, return_type: return_type)
+          when Prism::BeginNode
+            generate_begin_stmt(s)
+          when Prism::ReturnNode
+            if s.arguments && s.arguments.arguments.length > 0
+              val = compile_expr(s.arguments.arguments.first)
+              emit_gc_return(val)
+            else
+              if @gc_restore_before_return
+                emit("SP_GC_RESTORE();")
+              end
+              emit("return;")
+            end
+          when Prism::CallNode
+            if s.name.to_s == "puts" || s.name.to_s == "print" || s.name.to_s == "p"
+              generate_stmt(s)
+            else
+              val = compile_expr(s)
+              if return_type != Type::VOID
+                emit_gc_return(val)
+              else
+                emit("#{val};")
+              end
+            end
+          else
+            val = compile_expr(s)
+            if val && val != "" && return_type != Type::VOID
+              emit_gc_return(val)
+            else
+              generate_stmt(s) if val.nil? || val == ""
+            end
+          end
         else
           generate_stmt(s)
         end
@@ -3840,6 +4061,18 @@ module Spinel
       emit("}")
     end
 
+    # Compile the last statement of a branch into res_var, handling
+    # statement-only nodes (WhileNode, etc.) that cannot be expressions.
+    def compile_last_into(s, res_var)
+      case s
+      when Prism::WhileNode, Prism::UntilNode, Prism::ForNode
+        generate_stmt(s)
+      else
+        val = compile_expr(s)
+        emit("#{res_var} = #{val};")
+      end
+    end
+
     def generate_if_stmt(node, return_type: nil)
       cond = compile_expr(node.predicate)
 
@@ -3858,8 +4091,7 @@ module Spinel
           stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
-              val = compile_expr(s)
-              emit("#{res_var} = #{val};")
+              compile_last_into(s, res_var)
             else
               generate_stmt(s)
             end
@@ -3915,8 +4147,7 @@ module Spinel
           stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
-              val = compile_expr(s)
-              emit("#{res_var} = #{val};")
+              compile_last_into(s, res_var)
             else
               generate_stmt(s)
             end
@@ -3932,8 +4163,7 @@ module Spinel
           stmts = node.statements.is_a?(Prism::StatementsNode) ? node.statements.body : [node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
-              val = compile_expr(s)
-              emit("#{res_var} = #{val};")
+              compile_last_into(s, res_var)
             else
               generate_stmt(s)
             end
@@ -4214,8 +4444,7 @@ module Spinel
           stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
-              val = compile_expr(s)
-              emit("#{res_var} = #{val};")
+              compile_last_into(s, res_var)
             else
               generate_stmt(s)
             end
@@ -4234,8 +4463,7 @@ module Spinel
           stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts.each_with_index do |s, i|
             if i == stmts.length - 1
-              val = compile_expr(s)
-              emit("#{res_var} = #{val};")
+              compile_last_into(s, res_var)
             else
               generate_stmt(s)
             end
@@ -4272,8 +4500,7 @@ module Spinel
         if res_var && when_node.statements
           stmts = when_node.statements.is_a?(Prism::StatementsNode) ? when_node.statements.body : [when_node.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
-          val = compile_expr(stmts.last)
-          emit("#{res_var} = #{val};")
+          compile_last_into(stmts.last, res_var)
         else
           generate_body_stmts(when_node.statements)
         end
@@ -4286,8 +4513,7 @@ module Spinel
         if res_var && node.else_clause.statements
           stmts = node.else_clause.statements.is_a?(Prism::StatementsNode) ? node.else_clause.statements.body : [node.else_clause.statements]
           stmts[0..-2].each { |s| generate_stmt(s) } if stmts.length > 1
-          val = compile_expr(stmts.last)
-          emit("#{res_var} = #{val};")
+          compile_last_into(stmts.last, res_var)
         else
           generate_body_stmts(node.else_clause.statements)
         end

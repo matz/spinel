@@ -7435,9 +7435,7 @@ class Compiler
     ltypes = "".split(",")
 
     empty_params = "".split(",")
-    i = 0
-    while i < stmts.length
-      sid = stmts[i]
+    stmts.each { |sid|
       if @nd_type[sid] != "DefNode"
         if @nd_type[sid] != "ClassNode"
           if @nd_type[sid] != "ConstantWriteNode"
@@ -7445,8 +7443,7 @@ class Compiler
           end
         end
       end
-      i = i + 1
-    end
+    }
 
     # Declare vars for second pass to resolve dependent types
     j = 0
@@ -7458,9 +7455,7 @@ class Compiler
     lnames2 = "".split(",")
     ltypes2 = "".split(",")
 
-    i = 0
-    while i < stmts.length
-      sid = stmts[i]
+    stmts.each { |sid|
       if @nd_type[sid] != "DefNode"
         if @nd_type[sid] != "ClassNode"
           if @nd_type[sid] != "ConstantWriteNode"
@@ -7470,8 +7465,7 @@ class Compiler
           end
         end
       end
-      i = i + 1
-    end
+    }
     # Update types that improved in second pass
     j = 0
     while j < lnames2.length
@@ -7543,9 +7537,7 @@ class Compiler
     emit_raw("")
 
     # Compile main statements
-    i = 0
-    while i < stmts.length
-      sid = stmts[i]
+    stmts.each { |sid|
       if @nd_type[sid] != "DefNode"
         if @nd_type[sid] != "ClassNode"
           if @nd_type[sid] != "ConstantWriteNode"
@@ -7553,8 +7545,7 @@ class Compiler
           end
         end
       end
-      i = i + 1
-    end
+    }
 
     emit_raw("  return 0;")
     emit_raw("}")
@@ -7985,9 +7976,7 @@ class Compiler
     end
     fmt = ""
     arg_exprs = "".split(",")
-    i = 0
-    while i < parts.length
-      pid = parts[i]
+    parts.each { |pid|
       if @nd_type[pid] == "StringNode"
         fmt = fmt + escape_c_format(@nd_content[pid])
       else
@@ -8029,8 +8018,7 @@ class Compiler
           end
         end
       end
-      i = i + 1
-    end
+    }
     result = "sp_sprintf(\"" + fmt + "\""
     j = 0
     while j < arg_exprs.length
@@ -10279,9 +10267,7 @@ class Compiler
       @needs_string_helpers = 1
       tmp = new_temp
       emit("  sp_StrStrHash *" + tmp + " = sp_StrStrHash_new();")
-      k = 0
-      while k < elems.length
-        el = elems[k]
+      elems.each { |el|
         if @nd_type[el] == "AssocNode"
           vt = infer_type(@nd_expression[el])
           val = compile_expr(@nd_expression[el])
@@ -10298,21 +10284,17 @@ class Compiler
           end
           emit("  sp_StrStrHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + val + ");")
         end
-        k = k + 1
-      end
+      }
       return tmp
     end
     @needs_str_int_hash = 1
     tmp = new_temp
     emit("  sp_StrIntHash *" + tmp + " = sp_StrIntHash_new();")
-    k = 0
-    while k < elems.length
-      el = elems[k]
+    elems.each { |el|
       if @nd_type[el] == "AssocNode"
         emit("  sp_StrIntHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
       end
-      k = k + 1
-    end
+    }
     tmp
   end
 
@@ -11531,9 +11513,7 @@ class Compiler
         inner_locals = "".split(",")
         inner_free = "".split(",")
         scan_lambda_free_vars(inner_body, inner_params, inner_locals, inner_free)
-        k = 0
-        while k < inner_free.length
-          vn = inner_free[k]
+        inner_free.each { |vn|
           if not_in(vn, params) == 1
             if not_in(vn, locals) == 1
               if not_in(vn, free_vars) == 1
@@ -11541,8 +11521,7 @@ class Compiler
               end
             end
           end
-          k = k + 1
-        end
+        }
       end
       return
     end

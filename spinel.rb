@@ -2288,6 +2288,8 @@ module Spinel
           Type::MUTABLE_STRING
         elsif recv_type == Type::MUTABLE_STRING && mname == "<<"
           Type::MUTABLE_STRING
+        elsif %w[first last pop shift].include?(mname) && recv_type == Type::STR_ARRAY
+          Type::STRING
         elsif %w[first last min max sum pop shift].include?(mname)
           Type::INTEGER
         else
@@ -2837,6 +2839,9 @@ module Spinel
           end
         elsif itype.is_a?(String) && @classes[itype] && class_needs_gc?(@classes[itype])
           mark_lines << "  sp_gc_mark(o->#{iname});"
+        elsif itype == Type::ARRAY || itype == :int_array
+          # IntArrays are GC-allocated and must be marked
+          mark_lines << "  if (o->#{iname}) sp_gc_mark(o->#{iname});"
         end
       end
       return if mark_lines.empty?
@@ -3157,8 +3162,10 @@ module Spinel
         @gc_restore_before_return = needs_gc_alloc
         generate_body_return(mi.body, mi.return_type)
         @gc_restore_before_return = false
-        # For void methods the SP_GC_RESTORE() at end of body is reachable
-        if needs_gc_alloc && mi.return_type == Type::VOID
+        # Emit SP_GC_RESTORE() at end of body for all GC-rooted methods
+        # (not just void -- methods with unknown/integer return also need it
+        # when they fall through without an explicit return)
+        if needs_gc_alloc
           emit("SP_GC_RESTORE();")
         end
       end
@@ -3306,8 +3313,8 @@ module Spinel
         @gc_restore_before_return = has_gc_roots
         generate_method_body(mi.body, mi)
         @gc_restore_before_return = false
-        # For void methods the trailing SP_GC_RESTORE() is reachable
-        if has_gc_roots && mi.return_type == Type::VOID
+        # Emit SP_GC_RESTORE() at end of body for all GC-rooted methods
+        if has_gc_roots
           emit("SP_GC_RESTORE();")
         end
       end
@@ -6525,6 +6532,10 @@ module Spinel
         end
         return recv_code
       when "pop"
+        if recv_type == Type::STR_ARRAY
+          @needs_str_array = true
+          return "sp_StrArray_pop(#{recv_code})"
+        end
         @needs_int_array = true
         return "sp_IntArray_pop(#{recv_code})"
       when "shift"
@@ -6547,6 +6558,9 @@ module Spinel
         if recv_type == Type::ARRAY
           @needs_int_array = true
           return "sp_IntArray_get(#{recv_code}, sp_IntArray_length(#{recv_code}) - 1)"
+        elsif recv_type == Type::STR_ARRAY
+          @needs_str_array = true
+          return "sp_StrArray_last(#{recv_code})"
         elsif recv_type == Type::RANGE
           @needs_range = true
           return "(#{recv_code}).last"
@@ -6752,6 +6766,10 @@ module Spinel
         elsif recv_type == Type::FLOAT_ARRAY
           @needs_float_array = true
           emit("sp_FloatArray_set(#{recv_code}, #{key}, #{val});")
+          return val
+        elsif recv_type == Type::STR_ARRAY
+          @needs_str_array = true
+          emit("sp_StrArray_set(#{recv_code}, #{key}, #{val});")
           return val
         elsif recv_type == Type::HASH
           @needs_str_int_hash = true
@@ -10685,6 +10703,22 @@ module Spinel
 
         static mrb_int sp_StrArray_length(sp_StrArray *a) {
           return a->len;
+        }
+
+        static void sp_StrArray_set(sp_StrArray *a, mrb_int i, const char *v) {
+          if (i < 0) i += a->len;
+          while (i >= a->len) sp_StrArray_push(a, "");
+          a->data[i] = v;
+        }
+
+        static const char *sp_StrArray_pop(sp_StrArray *a) {
+          if (a->len <= 0) return "";
+          return a->data[--a->len];
+        }
+
+        static const char *sp_StrArray_last(sp_StrArray *a) {
+          if (a->len <= 0) return "";
+          return a->data[a->len - 1];
         }
 
         static sp_StrArray *sp_Dir_glob(const char *pattern) {

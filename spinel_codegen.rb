@@ -8058,363 +8058,520 @@ class Compiler
     "0"
   end
 
+
   def compile_call_expr(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
 
     # No receiver
     if recv < 0
-      # catch as expression
-      if mname == "catch"
-        if @nd_block[nid] >= 0
-          return compile_catch_expr(nid)
-        end
-      end
-      if mname == "block_given?"
-        if @in_yield_method == 1
-          return "(_block != NULL)"
-        end
-        return "0"
-      end
-      if mname == "__method__"
-        return "\"" + @current_method_name + "\""
-      end
-      if mname == "Integer"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          arg_ids = get_args(args_id)
-          if arg_ids.length > 0
-            a0 = arg_ids[0]
-            # Handle OrNode: Integer(ARGV[0] || default)
-            if @nd_type[a0] == "OrNode"
-              lt = infer_type(@nd_left[a0])
-              rt = infer_type(@nd_right[a0])
-              if lt == "string" or lt == "argv"
-                # ARGV access || default
-                lc = compile_expr(@nd_left[a0])
-                rc2 = compile_expr(@nd_right[a0])
-                if rt == "int"
-                  return "((" + lc + ") ? (mrb_int)strtoll(" + lc + ", NULL, 10) : " + rc2 + ")"
-                else
-                  return "((" + lc + ") ? (mrb_int)strtoll(" + lc + ", NULL, 10) : (mrb_int)strtoll(" + rc2 + ", NULL, 10))"
-                end
-              end
-            end
-            at = infer_type(a0)
-            if at == "string"
-              return "(mrb_int)strtoll(" + compile_expr(a0) + ", NULL, 10)"
-            end
-            if at == "argv"
-              return "(mrb_int)strtoll(" + compile_expr(a0) + ", NULL, 10)"
-            end
-          end
-        end
-        return "(mrb_int)(" + compile_arg0(nid) + ")"
-      end
-      if mname == "Float"
-        return "(mrb_float)(" + compile_arg0(nid) + ")"
-      end
-      if mname == "proc"
-        if @nd_block[nid] >= 0
-          @needs_proc = 1
-          return compile_proc_literal(nid)
-        end
-      end
-      if mname == "method"
-        # method(:name) - record the method reference
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          arg_ids = get_args(args_id)
-          if arg_ids.length >= 1
-            mref = @nd_content[arg_ids[0]]
-            if mref == ""
-              mref = @nd_name[arg_ids[0]]
-            end
-            # Return a placeholder - the actual dispatch happens in .call
-            # We store this in the parent LocalVariableWriteNode handler
-            @pending_method_ref = mref
-            return "0 /* method:" + mref + " */"
-          end
-        end
-        return "0"
-      end
-      if mname == "p"
-        # p(val) -> puts(val.inspect) - for simplicity, same as puts
-        compile_puts(nid)
-        return "0"
-      end
-      if mname == "srand"
-        emit("  srand((unsigned)" + compile_arg0(nid) + ");")
-        return "0"
-      end
-      if mname == "rand"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          return "((mrb_int)(rand() % (int)" + compile_arg0(nid) + "))"
-        end
-        return "((mrb_int)rand())"
-      end
-      if mname == "raise"
-        @needs_setjmp = 1
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          arg_ids = get_args(args_id)
-          if arg_ids.length >= 1
-            emit("  sp_raise(" + compile_expr(arg_ids[0]) + ");")
-          end
-        else
-          emit("  sp_raise(\"RuntimeError\");")
-        end
-        return "0"
-      end
-      if mname == "format"
-        @needs_string_helpers = 1
-        return compile_sprintf_call(nid)
-      end
-      if mname == "sprintf"
-        @needs_string_helpers = 1
-        return compile_sprintf_call(nid)
-      end
-      if mname == "putc"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          arg_ids = get_args(args_id)
-          if arg_ids.length > 0
-            at = infer_type(arg_ids[0])
-            if at == "int"
-              return "(putchar((char)" + compile_expr(arg_ids[0]) + "), 0)"
-            else
-              return "(putchar(" + compile_expr(arg_ids[0]) + "[0]), 0)"
-            end
-          end
-        end
-        return "0"
-      end
-      mi = find_method_idx(mname)
-      if mi >= 0
-        yargs = ""
-        if @meth_has_yield[mi] == 1
-          yargs = ", NULL, NULL"
-        end
-        # Check if function has a &block param and caller provides a block
-        ptypes = @meth_param_types[mi].split(",")
-        has_block_param = 0
-        pk = 0
-        while pk < ptypes.length
-          if ptypes[pk] == "proc"
-            has_block_param = 1
-          end
-          pk = pk + 1
-        end
-        if has_block_param == 1
-          if @nd_block[nid] >= 0
-            @needs_proc = 1
-            block_proc = compile_proc_literal(nid)
-            return "sp_" + sanitize_name(mname) + "(" + compile_call_args(nid) + ", " + block_proc + ")"
-          end
-        end
-        return "sp_" + sanitize_name(mname) + "(" + compile_call_args_with_defaults(nid, mi) + yargs + ")"
-      end
-      # Check if we're inside an open class method: implicit self.method
-      st = find_var_type("__self_type")
-      if st != ""
-        # Redirect as self.mname - string methods
-        if st == "string"
-          @needs_string_helpers = 1
-          if mname == "upcase"
-            return "sp_str_upcase(self)"
-          end
-          if mname == "downcase"
-            return "sp_str_downcase(self)"
-          end
-          if mname == "length"
-            return "(mrb_int)strlen(self)"
-          end
-          if mname == "strip"
-            return "sp_str_strip(self)"
-          end
-          if mname == "chomp"
-            return "sp_str_chomp(self)"
-          end
-          if mname == "to_i"
-            return "((mrb_int)atoll(self))"
-          end
-          if mname == "split"
-            @needs_str_array = 1
-            return "sp_str_split(self, " + compile_arg0(nid) + ")"
-          end
-          if mname == "include?"
-            return "sp_str_include(self, " + compile_arg0(nid) + ")"
-          end
-          if mname == "gsub"
-            args_id = @nd_arguments[nid]
-            arg1 = "\"\""
-            if args_id >= 0
-              a = get_args(args_id)
-              if a.length >= 2
-                arg1 = compile_expr(a[1])
-              end
-            end
-            return "sp_str_gsub(self, " + compile_arg0(nid) + ", " + arg1 + ")"
-          end
-        end
-        # int methods
-        if st == "int"
-          if mname == "to_s"
-            @needs_string_helpers = 1
-            return "sp_int_to_s(self)"
-          end
-          if mname == "to_f"
-            return "(mrb_float)(self)"
-          end
-          if mname == "abs"
-            return "((self) < 0 ? -(self) : (self))"
-          end
-        end
-        # float methods
-        if st == "float"
-          if mname == "to_i"
-            return "(mrb_int)(self)"
-          end
-          if mname == "to_s"
-            @needs_string_helpers = 1
-            return "sp_float_to_s(self)"
-          end
-        end
-      end
-      if @current_class_idx >= 0
-        cidx = cls_find_method(@current_class_idx, mname)
-        if cidx >= 0
-          ca = compile_call_args(nid)
-          cname = @cls_names[@current_class_idx]
-          owner = find_method_owner(@current_class_idx, mname)
-          if ca != ""
-            return "sp_" + owner + "_" + sanitize_name(mname) + "(self, " + ca + ")"
-          else
-            return "sp_" + owner + "_" + sanitize_name(mname) + "(self)"
-          end
-        end
-        # Check attr_readers (bare method call like `x` meaning self.x)
-        readers = @cls_attr_readers[@current_class_idx].split(";")
-        rk = 0
-        while rk < readers.length
-          if readers[rk] == mname
-            return "self->" + sanitize_ivar(mname)
-          end
-          rk = rk + 1
-        end
-      end
-      return "0"
+      return compile_no_recv_call_expr(nid, mname)
     end
 
-    # Lambda calls: f[arg] or f.call(arg) where f is sp_Val*
-    if recv >= 0
-      rt = infer_type(recv)
-      if rt == "lambda"
-        rc = compile_expr(recv)
-        if mname == "[]"
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            aargs = get_args(args_id)
-            if aargs.length > 0
-              ac = wrap_as_sp_val(aargs.first)
-              return "sp_lam_call(" + rc + ", " + ac + ")"
-            end
-          end
-          return "sp_lam_call(" + rc + ", &sp_lam_nil_val)"
-        end
-        if mname == "call"
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            aargs = get_args(args_id)
-            if aargs.length > 0
-              ac = wrap_as_sp_val(aargs.first)
-              return "sp_lam_call(" + rc + ", " + ac + ")"
-            end
-          end
-          return "sp_lam_call(" + rc + ", &sp_lam_nil_val)"
-        end
+    # Lambda calls
+    rt = infer_type(recv)
+    if rt == "lambda"
+      r = compile_lambda_call_expr(nid, mname, recv)
+      if r != ""
+        return r
       end
     end
 
-    # Check if operator is on an object with custom method
+    # Operator on object with custom method
     if is_operator_name(mname) == 1
-      lt = infer_type(recv)
-      if is_obj_type(lt) == 1
-        cname = lt[4, lt.length - 4]
-        ci = find_class_idx(cname)
-        if ci >= 0
-          owner = find_method_owner(ci, mname)
-          if owner != ""
-            ca = compile_call_args(nid)
-            rc = compile_expr(recv)
-            if owner == cname
-              if ca != ""
-                return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ", " + ca + ")"
-              else
-                return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ")"
-              end
-            else
-              if ca != ""
-                return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ", " + ca + ")"
-              else
-                return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ")"
-              end
-            end
-          else
-            # Check if class has <=> (Comparable) for comparison operators
-            cmp_owner = find_method_owner(ci, "<=>")
-            if cmp_owner != ""
-              ca = compile_call_args(nid)
-              rc = compile_expr(recv)
-              cmp_call = "sp_" + cmp_owner + "__cmp(" + rc + ", " + ca + ")"
-              if mname == "<"
-                return "(" + cmp_call + " < 0)"
-              end
-              if mname == ">"
-                return "(" + cmp_call + " > 0)"
-              end
-              if mname == "<="
-                return "(" + cmp_call + " <= 0)"
-              end
-              if mname == ">="
-                return "(" + cmp_call + " >= 0)"
-              end
-              if mname == "=="
-                return "(" + cmp_call + " == 0)"
-              end
-            end
-          end
-        end
+      r = compile_obj_operator_expr(nid, mname, recv)
+      if r != ""
+        return r
       end
     end
 
     # .call on method reference or proc
     if mname == "call"
-      if recv >= 0
-        if @nd_type[recv] == "LocalVariableReadNode"
-          rname = @nd_name[recv]
-          # Check method references
-          ri = 0
-          while ri < @method_ref_vars.length
-            if @method_ref_vars[ri] == rname
-              ref_mname = @method_ref_names[ri]
-              mi = find_method_idx(ref_mname)
-              if mi >= 0
-                return "sp_" + sanitize_name(ref_mname) + "(" + compile_call_args(nid) + ")"
+      r = compile_dot_call_expr(nid, recv)
+      if r != ""
+        return r
+      end
+    end
+
+    # Operators
+    r = compile_operator_expr(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # .new
+    if mname == "new"
+      r = compile_constructor_expr(nid, recv)
+      if r != ""
+        return r
+      end
+    end
+
+    recv_type = infer_type(recv)
+    rc = compile_expr(recv)
+
+    # StringIO methods
+    if recv_type == "stringio"
+      r = compile_stringio_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+    # String methods
+    if recv_type == "string"
+      r = compile_string_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+    # Range methods
+    if recv_type == "range"
+      r = compile_range_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+    # Integer methods
+    if recv_type == "int"
+      r = compile_int_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+    # Float methods
+    if recv_type == "float"
+      r = compile_float_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+    # Bool methods
+    if recv_type == "bool"
+      if mname == "to_s"
+        return "(" + rc + " ? \"true\" : \"false\")"
+      end
+    end
+
+    # Array methods
+    r = compile_array_method_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    # Hash methods
+    r = compile_hash_method_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    # map/select/reject/reduce as expression
+    r = compile_enumerable_expr(nid, mname)
+    if r != ""
+      return r
+    end
+
+    # Constant receiver (ARGV, Math, File, Time, ENV, Dir, Module, Class)
+    r = compile_constant_recv_expr(nid, mname, recv, rc)
+    if r != ""
+      return r
+    end
+
+    # to_a on range
+    if mname == "to_a"
+      r = compile_to_a_range_expr(nid, recv)
+      if r != ""
+        return r
+      end
+    end
+
+    # Open class method dispatch on built-in types
+    r = compile_open_class_dispatch_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    # Poly method calls
+    if recv_type == "poly"
+      return compile_poly_method_call(nid, rc, mname)
+    end
+
+    # is_a? / respond_to? / nil? / frozen? / positive? / negative?
+    r = compile_introspection_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    # Object method calls
+    r = compile_object_method_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    # Fallback: int-to-class dispatch
+    r = compile_int_class_fallback_expr(nid, mname, rc, recv_type)
+    if r != ""
+      return r
+    end
+
+    "0"
+  end
+
+  def compile_no_recv_call_expr(nid, mname)
+    # catch as expression
+    if mname == "catch"
+      if @nd_block[nid] >= 0
+        return compile_catch_expr(nid)
+      end
+    end
+    if mname == "block_given?"
+      if @in_yield_method == 1
+        return "(_block != NULL)"
+      end
+      return "0"
+    end
+    if mname == "__method__"
+      return "\"" + @current_method_name + "\""
+    end
+    if mname == "Integer"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length > 0
+          a0 = arg_ids[0]
+          # Handle OrNode: Integer(ARGV[0] || default)
+          if @nd_type[a0] == "OrNode"
+            lt = infer_type(@nd_left[a0])
+            rt = infer_type(@nd_right[a0])
+            if lt == "string" or lt == "argv"
+              # ARGV access || default
+              lc = compile_expr(@nd_left[a0])
+              rc2 = compile_expr(@nd_right[a0])
+              if rt == "int"
+                return "((" + lc + ") ? (mrb_int)strtoll(" + lc + ", NULL, 10) : " + rc2 + ")"
+              else
+                return "((" + lc + ") ? (mrb_int)strtoll(" + lc + ", NULL, 10) : (mrb_int)strtoll(" + rc2 + ", NULL, 10))"
               end
             end
-            ri = ri + 1
           end
-          # Check if it's a proc variable
-          vt = find_var_type(rname)
-          if vt == "proc"
-            return "sp_proc_call(lv_" + rname + ", " + compile_arg0(nid) + ")"
+          at = infer_type(a0)
+          if at == "string"
+            return "(mrb_int)strtoll(" + compile_expr(a0) + ", NULL, 10)"
+          end
+          if at == "argv"
+            return "(mrb_int)strtoll(" + compile_expr(a0) + ", NULL, 10)"
+          end
+        end
+      end
+      return "(mrb_int)(" + compile_arg0(nid) + ")"
+    end
+    if mname == "Float"
+      return "(mrb_float)(" + compile_arg0(nid) + ")"
+    end
+    if mname == "proc"
+      if @nd_block[nid] >= 0
+        @needs_proc = 1
+        return compile_proc_literal(nid)
+      end
+    end
+    if mname == "method"
+      # method(:name) - record the method reference
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length >= 1
+          mref = @nd_content[arg_ids[0]]
+          if mref == ""
+            mref = @nd_name[arg_ids[0]]
+          end
+          # Return a placeholder - the actual dispatch happens in .call
+          # We store this in the parent LocalVariableWriteNode handler
+          @pending_method_ref = mref
+          return "0 /* method:" + mref + " */"
+        end
+      end
+      return "0"
+    end
+    if mname == "p"
+      # p(val) -> puts(val.inspect) - for simplicity, same as puts
+      compile_puts(nid)
+      return "0"
+    end
+    if mname == "srand"
+      emit("  srand((unsigned)" + compile_arg0(nid) + ");")
+      return "0"
+    end
+    if mname == "rand"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        return "((mrb_int)(rand() % (int)" + compile_arg0(nid) + "))"
+      end
+      return "((mrb_int)rand())"
+    end
+    if mname == "raise"
+      @needs_setjmp = 1
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length >= 1
+          emit("  sp_raise(" + compile_expr(arg_ids[0]) + ");")
+        end
+      else
+        emit("  sp_raise(\"RuntimeError\");")
+      end
+      return "0"
+    end
+    if mname == "format"
+      @needs_string_helpers = 1
+      return compile_sprintf_call(nid)
+    end
+    if mname == "sprintf"
+      @needs_string_helpers = 1
+      return compile_sprintf_call(nid)
+    end
+    if mname == "putc"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length > 0
+          at = infer_type(arg_ids[0])
+          if at == "int"
+            return "(putchar((char)" + compile_expr(arg_ids[0]) + "), 0)"
+          else
+            return "(putchar(" + compile_expr(arg_ids[0]) + "[0]), 0)"
+          end
+        end
+      end
+      return "0"
+    end
+    mi = find_method_idx(mname)
+    if mi >= 0
+      yargs = ""
+      if @meth_has_yield[mi] == 1
+        yargs = ", NULL, NULL"
+      end
+      # Check if function has a &block param and caller provides a block
+      ptypes = @meth_param_types[mi].split(",")
+      has_block_param = 0
+      pk = 0
+      while pk < ptypes.length
+        if ptypes[pk] == "proc"
+          has_block_param = 1
+        end
+        pk = pk + 1
+      end
+      if has_block_param == 1
+        if @nd_block[nid] >= 0
+          @needs_proc = 1
+          block_proc = compile_proc_literal(nid)
+          return "sp_" + sanitize_name(mname) + "(" + compile_call_args(nid) + ", " + block_proc + ")"
+        end
+      end
+      return "sp_" + sanitize_name(mname) + "(" + compile_call_args_with_defaults(nid, mi) + yargs + ")"
+    end
+    # Check if we're inside an open class method: implicit self.method
+    st = find_var_type("__self_type")
+    if st != ""
+      # Redirect as self.mname - string methods
+      if st == "string"
+        @needs_string_helpers = 1
+        if mname == "upcase"
+          return "sp_str_upcase(self)"
+        end
+        if mname == "downcase"
+          return "sp_str_downcase(self)"
+        end
+        if mname == "length"
+          return "(mrb_int)strlen(self)"
+        end
+        if mname == "strip"
+          return "sp_str_strip(self)"
+        end
+        if mname == "chomp"
+          return "sp_str_chomp(self)"
+        end
+        if mname == "to_i"
+          return "((mrb_int)atoll(self))"
+        end
+        if mname == "split"
+          @needs_str_array = 1
+          return "sp_str_split(self, " + compile_arg0(nid) + ")"
+        end
+        if mname == "include?"
+          return "sp_str_include(self, " + compile_arg0(nid) + ")"
+        end
+        if mname == "gsub"
+          args_id = @nd_arguments[nid]
+          arg1 = "\"\""
+          if args_id >= 0
+            a = get_args(args_id)
+            if a.length >= 2
+              arg1 = compile_expr(a[1])
+            end
+          end
+          return "sp_str_gsub(self, " + compile_arg0(nid) + ", " + arg1 + ")"
+        end
+      end
+      # int methods
+      if st == "int"
+        if mname == "to_s"
+          @needs_string_helpers = 1
+          return "sp_int_to_s(self)"
+        end
+        if mname == "to_f"
+          return "(mrb_float)(self)"
+        end
+        if mname == "abs"
+          return "((self) < 0 ? -(self) : (self))"
+        end
+      end
+      # float methods
+      if st == "float"
+        if mname == "to_i"
+          return "(mrb_int)(self)"
+        end
+        if mname == "to_s"
+          @needs_string_helpers = 1
+          return "sp_float_to_s(self)"
+        end
+      end
+    end
+    if @current_class_idx >= 0
+      cidx = cls_find_method(@current_class_idx, mname)
+      if cidx >= 0
+        ca = compile_call_args(nid)
+        cname = @cls_names[@current_class_idx]
+        owner = find_method_owner(@current_class_idx, mname)
+        if ca != ""
+          return "sp_" + owner + "_" + sanitize_name(mname) + "(self, " + ca + ")"
+        else
+          return "sp_" + owner + "_" + sanitize_name(mname) + "(self)"
+        end
+      end
+      # Check attr_readers (bare method call like `x` meaning self.x)
+      readers = @cls_attr_readers[@current_class_idx].split(";")
+      rk = 0
+      while rk < readers.length
+        if readers[rk] == mname
+          return "self->" + sanitize_ivar(mname)
+        end
+        rk = rk + 1
+      end
+    end
+    return "0"
+    "0"
+  end
+
+  def compile_lambda_call_expr(nid, mname, recv)
+    rc = compile_expr(recv)
+    if mname == "[]"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length > 0
+          ac = wrap_as_sp_val(aargs.first)
+          return "sp_lam_call(" + rc + ", " + ac + ")"
+        end
+      end
+      return "sp_lam_call(" + rc + ", &sp_lam_nil_val)"
+    end
+    if mname == "call"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length > 0
+          ac = wrap_as_sp_val(aargs.first)
+          return "sp_lam_call(" + rc + ", " + ac + ")"
+        end
+      end
+      return "sp_lam_call(" + rc + ", &sp_lam_nil_val)"
+    end
+    ""
+  end
+
+  def compile_obj_operator_expr(nid, mname, recv)
+    lt = infer_type(recv)
+    if is_obj_type(lt) == 1
+      cname = lt[4, lt.length - 4]
+      ci = find_class_idx(cname)
+      if ci >= 0
+        owner = find_method_owner(ci, mname)
+        if owner != ""
+          ca = compile_call_args(nid)
+          rc = compile_expr(recv)
+          if owner == cname
+            if ca != ""
+              return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ", " + ca + ")"
+            else
+              return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ")"
+            end
+          else
+            if ca != ""
+              return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ", " + ca + ")"
+            else
+              return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ")"
+            end
+          end
+        else
+          # Check if class has <=> (Comparable) for comparison operators
+          cmp_owner = find_method_owner(ci, "<=>")
+          if cmp_owner != ""
+            ca = compile_call_args(nid)
+            rc = compile_expr(recv)
+            cmp_call = "sp_" + cmp_owner + "__cmp(" + rc + ", " + ca + ")"
+            if mname == "<"
+              return "(" + cmp_call + " < 0)"
+            end
+            if mname == ">"
+              return "(" + cmp_call + " > 0)"
+            end
+            if mname == "<="
+              return "(" + cmp_call + " <= 0)"
+            end
+            if mname == ">="
+              return "(" + cmp_call + " >= 0)"
+            end
+            if mname == "=="
+              return "(" + cmp_call + " == 0)"
+            end
           end
         end
       end
     end
+    ""
+  end
 
+  def compile_dot_call_expr(nid, recv)
+    if recv >= 0
+      if @nd_type[recv] == "LocalVariableReadNode"
+        rname = @nd_name[recv]
+        # Check method references
+        ri = 0
+        while ri < @method_ref_vars.length
+          if @method_ref_vars[ri] == rname
+            ref_mname = @method_ref_names[ri]
+            mi = find_method_idx(ref_mname)
+            if mi >= 0
+              return "sp_" + sanitize_name(ref_mname) + "(" + compile_call_args(nid) + ")"
+            end
+          end
+          ri = ri + 1
+        end
+        # Check if it's a proc variable
+        vt = find_var_type(rname)
+        if vt == "proc"
+          return "sp_proc_call(lv_" + rname + ", " + compile_arg0(nid) + ")"
+        end
+      end
+    end
+    ""
+  end
+
+  def compile_operator_expr(nid, mname, recv)
     # Operators
     if mname == "**"
       lt = infer_type(recv)
@@ -8541,485 +8698,480 @@ class Compiler
       end
       return "(-" + compile_expr(recv) + ")"
     end
+    ""
+  end
 
-    # .new
-    if mname == "new"
-      if @nd_type[recv] == "ConstantReadNode"
-        cname = @nd_name[recv]
-        if cname == "Proc"
-          if @nd_block[nid] >= 0
-            @needs_proc = 1
-            return compile_proc_literal(nid)
-          end
+  def compile_constructor_expr(nid, recv)
+    if @nd_type[recv] == "ConstantReadNode"
+      cname = @nd_name[recv]
+      if cname == "Proc"
+        if @nd_block[nid] >= 0
+          @needs_proc = 1
+          return compile_proc_literal(nid)
         end
-        if cname == "Array"
-          @needs_gc = 1
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            aargs = get_args(args_id)
-            if aargs.length >= 2
-              # Array.new(n, val) - check if float
-              vt = infer_type(aargs[1])
-              if vt == "float"
-                @needs_float_array = 1
-                tmp = new_temp
-                emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
-                emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; mrb_float _v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_FloatArray_push(" + tmp + ", _v); }")
-                return tmp
-              end
-              @needs_int_array = 1
+      end
+      if cname == "Array"
+        @needs_gc = 1
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          aargs = get_args(args_id)
+          if aargs.length >= 2
+            # Array.new(n, val) - check if float
+            vt = infer_type(aargs[1])
+            if vt == "float"
+              @needs_float_array = 1
               tmp = new_temp
-              emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
-              emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; mrb_int _v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_IntArray_push(" + tmp + ", _v); }")
+              emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
+              emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; mrb_float _v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_FloatArray_push(" + tmp + ", _v); }")
               return tmp
             end
-          end
-          @needs_int_array = 1
-          return "sp_IntArray_new()"
-        end
-        if cname == "Hash"
-          @needs_str_int_hash = 1
-          @needs_gc = 1
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            aargs = get_args(args_id)
-            if aargs.length >= 1
-              # Hash.new(default_val) - check type
-              defval = compile_expr(aargs.first)
-              dt = infer_type(aargs.first)
-              if dt == "string"
-                @needs_str_str_hash = 1
-                return "sp_StrStrHash_new()"
-              end
-              # Default is int - for now just return normal hash
-              # Default value is handled by the get function
-              return "sp_StrIntHash_new()"
-            end
-          end
-          return "sp_StrIntHash_new()"
-        end
-        if cname == "StringIO"
-          @needs_stringio = 1
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            aargs = get_args(args_id)
-            if aargs.length >= 1
-              return "sp_StringIO_new_s(" + compile_expr(aargs.first) + ")"
-            end
-          end
-          return "sp_StringIO_new()"
-        end
-        ci = find_class_idx(cname)
-        if ci >= 0
-          return "sp_" + cname + "_new(" + compile_constructor_args(ci, nid) + ")"
-        end
-      end
-    end
-
-    recv_type = infer_type(recv)
-    rc = compile_expr(recv)
-
-    # StringIO methods
-    if recv_type == "stringio"
-      if mname == "string"
-        return "sp_StringIO_string(" + rc + ")"
-      end
-      if mname == "pos" || mname == "tell"
-        return "sp_StringIO_pos(" + rc + ")"
-      end
-      if mname == "size" || mname == "length"
-        return "sp_StringIO_size(" + rc + ")"
-      end
-      if mname == "write"
-        return "sp_StringIO_write(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "read"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          aargs = get_args(args_id)
-          if aargs.length >= 1
-            return "sp_StringIO_read_n(" + rc + ", " + compile_expr(aargs.first) + ")"
+            @needs_int_array = 1
+            tmp = new_temp
+            emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
+            emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; mrb_int _v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_IntArray_push(" + tmp + ", _v); }")
+            return tmp
           end
         end
-        return "sp_StringIO_read(" + rc + ")"
-      end
-      if mname == "gets"
-        return "sp_StringIO_gets(" + rc + ")"
-      end
-      if mname == "getc"
-        return "sp_StringIO_getc(" + rc + ")"
-      end
-      if mname == "getbyte"
-        return "sp_StringIO_getbyte(" + rc + ")"
-      end
-      if mname == "puts"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          aargs = get_args(args_id)
-          if aargs.length >= 1
-            emit("  sp_StringIO_puts(" + rc + ", " + compile_expr(aargs.first) + ");")
-            return "0"
-          end
-        end
-        emit("  sp_StringIO_puts_empty(" + rc + ");")
-        return "0"
-      end
-      if mname == "print"
-        emit("  sp_StringIO_print(" + rc + ", " + compile_arg0(nid) + ");")
-        return "0"
-      end
-      if mname == "putc"
-        return "sp_StringIO_putc(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "rewind"
-        emit("  sp_StringIO_rewind(" + rc + ");")
-        return "0"
-      end
-      if mname == "seek"
-        emit("  sp_StringIO_seek(" + rc + ", " + compile_arg0(nid) + ");")
-        return "0"
-      end
-      if mname == "truncate"
-        emit("  sp_StringIO_truncate(" + rc + ", " + compile_arg0(nid) + ");")
-        return "0"
-      end
-      if mname == "close"
-        emit("  sp_StringIO_close(" + rc + ");")
-        return "0"
-      end
-      if mname == "eof?"
-        return "sp_StringIO_eof_p(" + rc + ")"
-      end
-      if mname == "closed?"
-        return "sp_StringIO_closed_p(" + rc + ")"
-      end
-      if mname == "flush"
-        return "sp_StringIO_flush(" + rc + ")"
-      end
-      if mname == "sync"
-        return "sp_StringIO_sync(" + rc + ")"
-      end
-      if mname == "isatty"
-        return "sp_StringIO_isatty(" + rc + ")"
-      end
-    end
-
-    # String methods
-    if recv_type == "string"
-      @needs_string_helpers = 1
-      if mname == "length"
-        return "(mrb_int)strlen(" + rc + ")"
-      end
-      if mname == "to_i"
-        return "((mrb_int)atoll(" + rc + "))"
-      end
-      if mname == "to_f"
-        return "atof(" + rc + ")"
-      end
-      if mname == "upcase"
-        return "sp_str_upcase(" + rc + ")"
-      end
-      if mname == "downcase"
-        return "sp_str_downcase(" + rc + ")"
-      end
-      if mname == "strip"
-        return "sp_str_strip(" + rc + ")"
-      end
-      if mname == "chomp"
-        return "sp_str_chomp(" + rc + ")"
-      end
-      if mname == "include?"
-        return "sp_str_include(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "start_with?"
-        return "sp_str_start_with(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "end_with?"
-        return "sp_str_end_with(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "split"
-        @needs_str_array = 1
-        return "sp_str_split(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "gsub"
-        args_id = @nd_arguments[nid]
-        arg1 = "\"\""
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            arg1 = compile_expr(a[1])
-          end
-        end
-        return "sp_str_gsub(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
-      end
-      if mname == "index"
-        return "sp_str_index(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "[]"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 1
-            if @nd_type[a[0]] == "RangeNode"
-              # s[1..3]
-              left = compile_expr(@nd_left[a[0]])
-              right = compile_expr(@nd_right[a[0]])
-              return "sp_str_sub_range(" + rc + ", " + left + ", " + right + " - " + left + " + 1)"
-            end
-            if a.length >= 2
-              # s[0, 2]
-              return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-            end
-          end
-        end
-        return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
-      end
-      if mname == "reverse"
-        @needs_string_helpers = 1
-        return "sp_str_reverse(" + rc + ")"
-      end
-      if mname == "freeze"
-        return rc
-      end
-      if mname == "frozen?"
-        return "TRUE"
-      end
-      if mname == "to_sym"
-        return rc
-      end
-      if mname == "ord"
-        return "((mrb_int)(unsigned char)" + rc + "[0])"
-      end
-      if mname == "sub"
-        args_id = @nd_arguments[nid]
-        arg1 = "\"\""
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            arg1 = compile_expr(a[1])
-          end
-        end
-        return "sp_str_sub(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
-      end
-      if mname == "capitalize"
-        return "sp_str_capitalize(" + rc + ")"
-      end
-      if mname == "count"
-        return "sp_str_count(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "*"
-        return "sp_str_repeat(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "empty?"
-        return "(strlen(" + rc + ") == 0)"
-      end
-      if mname == "chars"
-        @needs_str_array = 1
-        @needs_gc = 1
-        return "sp_str_split(" + rc + ", \"\")"
-      end
-      if mname == "bytes"
         @needs_int_array = 1
+        return "sp_IntArray_new()"
+      end
+      if cname == "Hash"
+        @needs_str_int_hash = 1
         @needs_gc = 1
-        return "sp_str_bytes(" + rc + ")"
-      end
-      if mname == "hex"
-        return "((mrb_int)strtoll(" + rc + ", NULL, 16))"
-      end
-      if mname == "oct"
-        return "((mrb_int)strtoll(" + rc + ", NULL, 8))"
-      end
-      if mname == "tr"
         args_id = @nd_arguments[nid]
-        arg1 = "\"\""
         if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            arg1 = compile_expr(a[1])
+          aargs = get_args(args_id)
+          if aargs.length >= 1
+            # Hash.new(default_val) - check type
+            defval = compile_expr(aargs.first)
+            dt = infer_type(aargs.first)
+            if dt == "string"
+              @needs_str_str_hash = 1
+              return "sp_StrStrHash_new()"
+            end
+            # Default is int - for now just return normal hash
+            # Default value is handled by the get function
+            return "sp_StrIntHash_new()"
           end
         end
-        return "sp_str_tr(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+        return "sp_StrIntHash_new()"
       end
-      if mname == "delete"
-        return "sp_str_delete(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "squeeze"
-        return "sp_str_squeeze(" + rc + ")"
-      end
-      if mname == "size"
-        return "(mrb_int)strlen(" + rc + ")"
-      end
-      if mname == "slice"
+      if cname == "StringIO"
+        @needs_stringio = 1
         args_id = @nd_arguments[nid]
         if args_id >= 0
-          a = get_args(args_id)
+          aargs = get_args(args_id)
+          if aargs.length >= 1
+            return "sp_StringIO_new_s(" + compile_expr(aargs.first) + ")"
+          end
+        end
+        return "sp_StringIO_new()"
+      end
+      ci = find_class_idx(cname)
+      if ci >= 0
+        return "sp_" + cname + "_new(" + compile_constructor_args(ci, nid) + ")"
+      end
+    end
+    ""
+  end
+
+  def compile_stringio_method_expr(nid, mname, rc)
+    if mname == "string"
+      return "sp_StringIO_string(" + rc + ")"
+    end
+    if mname == "pos" || mname == "tell"
+      return "sp_StringIO_pos(" + rc + ")"
+    end
+    if mname == "size" || mname == "length"
+      return "sp_StringIO_size(" + rc + ")"
+    end
+    if mname == "write"
+      return "sp_StringIO_write(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "read"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 1
+          return "sp_StringIO_read_n(" + rc + ", " + compile_expr(aargs.first) + ")"
+        end
+      end
+      return "sp_StringIO_read(" + rc + ")"
+    end
+    if mname == "gets"
+      return "sp_StringIO_gets(" + rc + ")"
+    end
+    if mname == "getc"
+      return "sp_StringIO_getc(" + rc + ")"
+    end
+    if mname == "getbyte"
+      return "sp_StringIO_getbyte(" + rc + ")"
+    end
+    if mname == "puts"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 1
+          emit("  sp_StringIO_puts(" + rc + ", " + compile_expr(aargs.first) + ");")
+          return "0"
+        end
+      end
+      emit("  sp_StringIO_puts_empty(" + rc + ");")
+      return "0"
+    end
+    if mname == "print"
+      emit("  sp_StringIO_print(" + rc + ", " + compile_arg0(nid) + ");")
+      return "0"
+    end
+    if mname == "putc"
+      return "sp_StringIO_putc(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "rewind"
+      emit("  sp_StringIO_rewind(" + rc + ");")
+      return "0"
+    end
+    if mname == "seek"
+      emit("  sp_StringIO_seek(" + rc + ", " + compile_arg0(nid) + ");")
+      return "0"
+    end
+    if mname == "truncate"
+      emit("  sp_StringIO_truncate(" + rc + ", " + compile_arg0(nid) + ");")
+      return "0"
+    end
+    if mname == "close"
+      emit("  sp_StringIO_close(" + rc + ");")
+      return "0"
+    end
+    if mname == "eof?"
+      return "sp_StringIO_eof_p(" + rc + ")"
+    end
+    if mname == "closed?"
+      return "sp_StringIO_closed_p(" + rc + ")"
+    end
+    if mname == "flush"
+      return "sp_StringIO_flush(" + rc + ")"
+    end
+    if mname == "sync"
+      return "sp_StringIO_sync(" + rc + ")"
+    end
+    if mname == "isatty"
+      return "sp_StringIO_isatty(" + rc + ")"
+    end
+    ""
+  end
+
+  def compile_string_method_expr(nid, mname, rc)
+    @needs_string_helpers = 1
+    if mname == "length"
+      return "(mrb_int)strlen(" + rc + ")"
+    end
+    if mname == "to_i"
+      return "((mrb_int)atoll(" + rc + "))"
+    end
+    if mname == "to_f"
+      return "atof(" + rc + ")"
+    end
+    if mname == "upcase"
+      return "sp_str_upcase(" + rc + ")"
+    end
+    if mname == "downcase"
+      return "sp_str_downcase(" + rc + ")"
+    end
+    if mname == "strip"
+      return "sp_str_strip(" + rc + ")"
+    end
+    if mname == "chomp"
+      return "sp_str_chomp(" + rc + ")"
+    end
+    if mname == "include?"
+      return "sp_str_include(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "start_with?"
+      return "sp_str_start_with(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "end_with?"
+      return "sp_str_end_with(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "split"
+      @needs_str_array = 1
+      return "sp_str_split(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "gsub"
+      args_id = @nd_arguments[nid]
+      arg1 = "\"\""
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          arg1 = compile_expr(a[1])
+        end
+      end
+      return "sp_str_gsub(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+    end
+    if mname == "index"
+      return "sp_str_index(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "[]"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 1
+          if @nd_type[a[0]] == "RangeNode"
+            # s[1..3]
+            left = compile_expr(@nd_left[a[0]])
+            right = compile_expr(@nd_right[a[0]])
+            return "sp_str_sub_range(" + rc + ", " + left + ", " + right + " - " + left + " + 1)"
+          end
           if a.length >= 2
+            # s[0, 2]
             return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
-        return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
       end
-      if mname == "ljust"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            return "sp_str_ljust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-          end
-        end
-        return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "rjust"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            return "sp_str_rjust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-          end
-        end
-        return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "center"
-        return "sp_str_center(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "lstrip"
-        return "sp_str_lstrip(" + rc + ")"
-      end
-      if mname == "rstrip"
-        return "sp_str_rstrip(" + rc + ")"
-      end
-      if mname == "dup"
-        return "sp_str_dup(" + rc + ")"
-      end
-      if mname == "getbyte"
-        return "((mrb_int)(unsigned char)(" + rc + ")[" + compile_arg0(nid) + "])"
-      end
-      if mname == "setbyte"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            return "(((char*)" + rc + ")[" + compile_expr(a[0]) + "] = (char)" + compile_expr(a[1]) + ", 0)"
-          end
-        end
-        return "0"
-      end
-      if mname == "bytesize"
-        return "(mrb_int)strlen(" + rc + ")"
-      end
-      if mname == "to_s"
-        return rc
-      end
+      return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
     end
-
-    # Range methods
-    if recv_type == "range"
-      if mname == "first"
-        return rc + ".first"
-      end
-      if mname == "last"
-        return rc + ".last"
-      end
-      if mname == "include?"
-        tmp = new_temp
-        emit("  sp_Range " + tmp + " = " + rc + ";")
-        return "(" + compile_arg0(nid) + " >= " + tmp + ".first && " + compile_arg0(nid) + " <= " + tmp + ".last)"
-      end
-      if mname == "to_a"
-        @needs_int_array = 1
-        @needs_gc = 1
-        return "sp_IntArray_from_range(" + rc + ".first, " + rc + ".last)"
-      end
-      if mname == "length"
-        return "(" + rc + ".last - " + rc + ".first + 1)"
-      end
-      if mname == "size"
-        return "(" + rc + ".last - " + rc + ".first + 1)"
-      end
+    if mname == "reverse"
+      @needs_string_helpers = 1
+      return "sp_str_reverse(" + rc + ")"
     end
-
-    # Integer methods
-    if recv_type == "int"
-      if mname == "to_s"
-        @needs_string_helpers = 1
-        return "sp_int_to_s(" + rc + ")"
-      end
-      if mname == "to_i"
-        return rc
-      end
-      if mname == "to_f"
-        return "(mrb_float)(" + rc + ")"
-      end
-      if mname == "abs"
-        return "((" + rc + ") < 0 ? -(" + rc + ") : (" + rc + "))"
-      end
-      if mname == "even?"
-        return "((" + rc + ") % 2 == 0)"
-      end
-      if mname == "odd?"
-        return "((" + rc + ") % 2 != 0)"
-      end
-      if mname == "zero?"
-        return "((" + rc + ") == 0)"
-      end
-      if mname == "gcd"
-        return "sp_gcd(" + rc + ", " + compile_arg0(nid) + ")"
-      end
-      if mname == "clamp"
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 2
-            return "sp_int_clamp(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-          end
+    if mname == "freeze"
+      return rc
+    end
+    if mname == "frozen?"
+      return "TRUE"
+    end
+    if mname == "to_sym"
+      return rc
+    end
+    if mname == "ord"
+      return "((mrb_int)(unsigned char)" + rc + "[0])"
+    end
+    if mname == "sub"
+      args_id = @nd_arguments[nid]
+      arg1 = "\"\""
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          arg1 = compile_expr(a[1])
         end
       end
-      if mname == "frozen?"
-        return "TRUE"
+      return "sp_str_sub(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+    end
+    if mname == "capitalize"
+      return "sp_str_capitalize(" + rc + ")"
+    end
+    if mname == "count"
+      return "sp_str_count(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "*"
+      return "sp_str_repeat(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "empty?"
+      return "(strlen(" + rc + ") == 0)"
+    end
+    if mname == "chars"
+      @needs_str_array = 1
+      @needs_gc = 1
+      return "sp_str_split(" + rc + ", \"\")"
+    end
+    if mname == "bytes"
+      @needs_int_array = 1
+      @needs_gc = 1
+      return "sp_str_bytes(" + rc + ")"
+    end
+    if mname == "hex"
+      return "((mrb_int)strtoll(" + rc + ", NULL, 16))"
+    end
+    if mname == "oct"
+      return "((mrb_int)strtoll(" + rc + ", NULL, 8))"
+    end
+    if mname == "tr"
+      args_id = @nd_arguments[nid]
+      arg1 = "\"\""
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          arg1 = compile_expr(a[1])
+        end
       end
-      if mname == "chr"
-        @needs_string_helpers = 1
-        return "sp_int_chr(" + rc + ")"
+      return "sp_str_tr(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+    end
+    if mname == "delete"
+      return "sp_str_delete(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "squeeze"
+      return "sp_str_squeeze(" + rc + ")"
+    end
+    if mname == "size"
+      return "(mrb_int)strlen(" + rc + ")"
+    end
+    if mname == "slice"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
       end
-      if mname == "succ"
-        return "((" + rc + ") + 1)"
+      return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
+    end
+    if mname == "ljust"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_ljust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
       end
-      if mname == "itself"
-        return rc
+      return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "rjust"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_rjust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
+      end
+      return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "center"
+      return "sp_str_center(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "lstrip"
+      return "sp_str_lstrip(" + rc + ")"
+    end
+    if mname == "rstrip"
+      return "sp_str_rstrip(" + rc + ")"
+    end
+    if mname == "dup"
+      return "sp_str_dup(" + rc + ")"
+    end
+    if mname == "getbyte"
+      return "((mrb_int)(unsigned char)(" + rc + ")[" + compile_arg0(nid) + "])"
+    end
+    if mname == "setbyte"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "(((char*)" + rc + ")[" + compile_expr(a[0]) + "] = (char)" + compile_expr(a[1]) + ", 0)"
+        end
+      end
+      return "0"
+    end
+    if mname == "bytesize"
+      return "(mrb_int)strlen(" + rc + ")"
+    end
+    if mname == "to_s"
+      return rc
+    end
+    ""
+  end
+
+  def compile_range_method_expr(nid, mname, rc)
+    if mname == "first"
+      return rc + ".first"
+    end
+    if mname == "last"
+      return rc + ".last"
+    end
+    if mname == "include?"
+      tmp = new_temp
+      emit("  sp_Range " + tmp + " = " + rc + ";")
+      return "(" + compile_arg0(nid) + " >= " + tmp + ".first && " + compile_arg0(nid) + " <= " + tmp + ".last)"
+    end
+    if mname == "to_a"
+      @needs_int_array = 1
+      @needs_gc = 1
+      return "sp_IntArray_from_range(" + rc + ".first, " + rc + ".last)"
+    end
+    if mname == "length"
+      return "(" + rc + ".last - " + rc + ".first + 1)"
+    end
+    if mname == "size"
+      return "(" + rc + ".last - " + rc + ".first + 1)"
+    end
+    ""
+  end
+
+  def compile_int_method_expr(nid, mname, rc)
+    if mname == "to_s"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + rc + ")"
+    end
+    if mname == "to_i"
+      return rc
+    end
+    if mname == "to_f"
+      return "(mrb_float)(" + rc + ")"
+    end
+    if mname == "abs"
+      return "((" + rc + ") < 0 ? -(" + rc + ") : (" + rc + "))"
+    end
+    if mname == "even?"
+      return "((" + rc + ") % 2 == 0)"
+    end
+    if mname == "odd?"
+      return "((" + rc + ") % 2 != 0)"
+    end
+    if mname == "zero?"
+      return "((" + rc + ") == 0)"
+    end
+    if mname == "gcd"
+      return "sp_gcd(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "clamp"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_int_clamp(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
       end
     end
-
-    if recv_type == "float"
-      if mname == "itself"
-        return rc
-      end
-      if mname == "to_s"
-        @needs_string_helpers = 1
-        return "sp_float_to_s(" + rc + ")"
-      end
-      if mname == "to_i"
-        return "(mrb_int)(" + rc + ")"
-      end
-      if mname == "ceil"
-        return "(mrb_int)ceil(" + rc + ")"
-      end
-      if mname == "floor"
-        return "(mrb_int)floor(" + rc + ")"
-      end
-      if mname == "round"
-        return "(mrb_int)round(" + rc + ")"
-      end
-      if mname == "abs"
-        return "fabs(" + rc + ")"
-      end
+    if mname == "frozen?"
+      return "TRUE"
     end
-
-    if recv_type == "bool"
-      if mname == "to_s"
-        return "(" + rc + " ? \"true\" : \"false\")"
-      end
+    if mname == "chr"
+      @needs_string_helpers = 1
+      return "sp_int_chr(" + rc + ")"
     end
+    if mname == "succ"
+      return "((" + rc + ") + 1)"
+    end
+    if mname == "itself"
+      return rc
+    end
+    ""
+  end
 
+  def compile_float_method_expr(nid, mname, rc)
+    if mname == "itself"
+      return rc
+    end
+    if mname == "to_s"
+      @needs_string_helpers = 1
+      return "sp_float_to_s(" + rc + ")"
+    end
+    if mname == "to_i"
+      return "(mrb_int)(" + rc + ")"
+    end
+    if mname == "ceil"
+      return "(mrb_int)ceil(" + rc + ")"
+    end
+    if mname == "floor"
+      return "(mrb_int)floor(" + rc + ")"
+    end
+    if mname == "round"
+      return "(mrb_int)round(" + rc + ")"
+    end
+    if mname == "abs"
+      return "fabs(" + rc + ")"
+    end
+    ""
+  end
+
+  def compile_array_method_expr(nid, mname, rc, recv_type)
     # Array methods
     if recv_type == "int_array"
       if mname == "length"
@@ -9285,7 +9437,10 @@ class Compiler
         return "sp_PolyArray_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
     end
+    ""
+  end
 
+  def compile_hash_method_expr(nid, mname, rc, recv_type)
     # Hash methods
     if recv_type == "str_int_hash"
       if mname == "[]"
@@ -9343,7 +9498,10 @@ class Compiler
         return "sp_StrStrHash_keys(" + rc + ")"
       end
     end
+    ""
+  end
 
+  def compile_enumerable_expr(nid, mname)
     # map as expression
     if mname == "map"
       if @nd_block[nid] >= 0
@@ -9376,7 +9534,10 @@ class Compiler
         return compile_reduce_expr(nid)
       end
     end
+    ""
+  end
 
+  def compile_constant_recv_expr(nid, mname, recv, rc)
     # ARGV methods
     if @nd_type[recv] == "ConstantReadNode"
       if @nd_name[recv] == "ARGV"
@@ -9506,31 +9667,34 @@ class Compiler
         end
       end
     end
+    ""
+  end
 
-    # to_a on range (including parenthesized range)
-    if mname == "to_a"
-      range_nid = -1
-      if @nd_type[recv] == "RangeNode"
-        range_nid = recv
-      end
-      if @nd_type[recv] == "ParenthesesNode"
-        pb = @nd_body[recv]
-        if pb >= 0
-          pstmts = get_stmts(pb)
-          if pstmts.length > 0
-            if @nd_type[pstmts.first] == "RangeNode"
-              range_nid = pstmts.first
-            end
+  def compile_to_a_range_expr(nid, recv)
+    range_nid = -1
+    if @nd_type[recv] == "RangeNode"
+      range_nid = recv
+    end
+    if @nd_type[recv] == "ParenthesesNode"
+      pb = @nd_body[recv]
+      if pb >= 0
+        pstmts = get_stmts(pb)
+        if pstmts.length > 0
+          if @nd_type[pstmts.first] == "RangeNode"
+            range_nid = pstmts.first
           end
         end
       end
-      if range_nid >= 0
-        @needs_int_array = 1
-        @needs_gc = 1
-        return "sp_IntArray_from_range(" + compile_expr(@nd_left[range_nid]) + ", " + compile_expr(@nd_right[range_nid]) + ")"
-      end
     end
+    if range_nid >= 0
+      @needs_int_array = 1
+      @needs_gc = 1
+      return "sp_IntArray_from_range(" + compile_expr(@nd_left[range_nid]) + ", " + compile_expr(@nd_right[range_nid]) + ")"
+    end
+    ""
+  end
 
+  def compile_open_class_dispatch_expr(nid, mname, rc, recv_type)
     # Open class method dispatch on built-in types
     oc_prefix = ""
     if recv_type == "int"
@@ -9554,12 +9718,10 @@ class Compiler
         end
       end
     end
+    ""
+  end
 
-    # Poly method calls
-    if recv_type == "poly"
-      return compile_poly_method_call(nid, rc, mname)
-    end
-
+  def compile_introspection_expr(nid, mname, rc, recv_type)
     # is_a? - check class hierarchy
     if mname == "is_a?"
       if is_obj_type(recv_type) == 1
@@ -9640,7 +9802,10 @@ class Compiler
     if mname == "negative?"
       return "(" + rc + " < 0)"
     end
+    ""
+  end
 
+  def compile_object_method_expr(nid, mname, rc, recv_type)
     # Object method calls
     if is_obj_type(recv_type) == 1
       cname = recv_type[4, recv_type.length - 4]
@@ -9699,7 +9864,10 @@ class Compiler
         end
       end
     end
+    ""
+  end
 
+  def compile_int_class_fallback_expr(nid, mname, rc, recv_type)
     # Fallback: if receiver is int (e.g. from IntArray get) but method belongs to a class,
     # cast the int to the appropriate class pointer and dispatch
     if recv_type == "int"
@@ -9755,9 +9923,9 @@ class Compiler
         ci2 = ci2 + 1
       end
     end
-
-    "0"
+    ""
   end
+
 
   def compile_poly_method_call(nid, rc, mname)
     @needs_rb_value = 1

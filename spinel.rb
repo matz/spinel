@@ -931,10 +931,12 @@ module Spinel
         if types.size > 1
           # If all types are numeric (INTEGER and FLOAT), coerce to FLOAT, not POLY
           numeric_only = types.all? { |t| t == Type::INTEGER || t == Type::FLOAT }
-          unless numeric_only
-            # Extract bare variable name from scoped name (scope:name)
-            bare_name = scoped_vname.include?(":") ? scoped_vname.split(":", 2).last : scoped_vname
-            @poly_vars << bare_name
+          # If types are just STRING + INTEGER, treat as STRING (common inference ambiguity)
+          string_int_only = types.all? { |t| t == Type::STRING || t == Type::INTEGER }
+          unless numeric_only || string_int_only
+            # Store the fully scoped variable name (e.g., "Compiler#method:varname")
+            # so that poly marking is per-method, not global by bare name.
+            @poly_vars << scoped_vname
             @needs_poly = true
           end
         end
@@ -3664,8 +3666,16 @@ module Spinel
         return
       end
 
-      # Check if this variable is polymorphic
-      is_poly = @poly_vars && @poly_vars.include?(name)
+      # Check if this variable is polymorphic (using scoped name to avoid cross-method false positives)
+      poly_scope = if @current_class && @current_method
+                     "#{@current_class}##{@current_method.name}"
+                   elsif @current_method
+                     @current_method.name.to_s
+                   else
+                     ""
+                   end
+      scoped_name = "#{poly_scope}:#{name}"
+      is_poly = @poly_vars && @poly_vars.include?(scoped_name)
       if is_poly
         val_type = Type::POLY
         @needs_poly = true
@@ -6495,9 +6505,7 @@ module Spinel
       when "ord"
         return "((mrb_int)(unsigned char)#{recv_code}[0])"
       when "chr"
-        tmp = "_chr_#{next_temp}"
-        emit("char #{tmp}[2] = {(char)#{recv_code}, '\\0'};")
-        return "(const char *)#{tmp}"
+        return "sp_int_chr(#{recv_code})"
 
       # ---- String << (append) ----
       when "<<"
@@ -9755,6 +9763,9 @@ module Spinel
           static const char *sp_int_to_s(mrb_int n) {
             char *r = (char *)malloc(24); snprintf(r, 24, "%lld", (long long)n); return r;
           }
+          static const char *sp_int_chr(mrb_int n) {
+            char *r = (char *)malloc(2); r[0] = (char)n; r[1] = '\\0'; return r;
+          }
         C
       end
 
@@ -10393,7 +10404,7 @@ module Spinel
 
         static sp_gc_hdr *sp_gc_heap = NULL;
         static size_t sp_gc_bytes = 0;
-        static size_t sp_gc_threshold = 256 * 1024;
+        static size_t sp_gc_threshold = (size_t)-1;
 
         #define SP_GC_STACK_MAX 8192
         static void **sp_gc_roots[SP_GC_STACK_MAX];

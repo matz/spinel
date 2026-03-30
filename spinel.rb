@@ -10398,7 +10398,8 @@ module Spinel
         #define SP_GC_STACK_MAX 8192
         static void **sp_gc_roots[SP_GC_STACK_MAX];
         static int sp_gc_nroots = 0;
-        #define SP_GC_SAVE() int _gc_saved = sp_gc_nroots
+        static void sp_gc_cleanup(int *p) { sp_gc_nroots = *p; }
+        #define SP_GC_SAVE() int __attribute__((cleanup(sp_gc_cleanup))) _gc_saved = sp_gc_nroots
         #define SP_GC_ROOT(v) do { if (sp_gc_nroots < SP_GC_STACK_MAX) sp_gc_roots[sp_gc_nroots++] = (void **)&(v); } while(0)
         #define SP_GC_RESTORE() sp_gc_nroots = _gc_saved
 

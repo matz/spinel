@@ -12,3 +12,6 @@
 # Temp files
 /tmp/
 /spinel_codegen
+/spinel_parse_bin
+/perf.data
+/perf.data.old

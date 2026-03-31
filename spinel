@@ -20,6 +20,7 @@ require "tempfile"
 
 dir = File.dirname(File.realpath(__FILE__))
 parse_rb = File.join(dir, "spinel_parse.rb")
+parse_bin = File.join(dir, "spinel_parse_bin")  # compiled parser (C + libprism)
 codegen_rb = File.join(dir, "spinel_codegen.rb")
 codegen_bin = File.join(dir, "spinel_codegen")  # compiled binary
 
@@ -83,9 +84,13 @@ end
 
 basename = File.basename(source, ".rb")
 
-# Step 1: Parse (always needs CRuby + Prism)
+# Step 1: Parse (use compiled parser if available, else CRuby + Prism)
 ast_tmp = Tempfile.new(["spinel_ast", ".txt"])
-system("ruby", parse_rb, source, out: ast_tmp.path)
+if File.executable?(parse_bin)
+  system(parse_bin, source, ast_tmp.path)
+else
+  system("ruby", parse_rb, source, out: ast_tmp.path)
+end
 unless $?.success?
   $stderr.puts "spinel: parse failed"
   ast_tmp.close; ast_tmp.unlink

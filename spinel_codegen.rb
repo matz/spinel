@@ -748,14 +748,6 @@ class Compiler
     @out = @out + s + 10.chr
   end
 
-  def emit_return(val)
-    s = "" + val
-    if @in_gc_scope == 1
-      emit("  SP_GC_RESTORE();")
-    end
-    emit("  return " + s + ";")
-    0
-  end
 
   # ---- Type inference ----
   def infer_type(nid)
@@ -6187,7 +6179,7 @@ class Compiler
   end
 
   def emit_file_io_runtime
-    emit_raw("static const char *sp_file_read(const char *path) { FILE *f = fopen(path, \"rb\"); if (!f) return \"\"; fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET); char *buf = (char *)malloc(sz + 1); if (sz > 0) fread(buf, 1, sz, f); buf[sz] = 0; fclose(f); return buf; }")
+    emit_raw("static const char *sp_file_read(const char *path) { FILE *f = fopen(path, \"rb\"); if (!f) return \"\"; fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET); char *buf = (char *)malloc(sz + 1); if (sz > 0) { size_t r = fread(buf, 1, sz, f); (void)r; } buf[sz] = 0; fclose(f); return buf; }")
     emit_raw("static void sp_file_write(const char *path, const char *data) { FILE *f = fopen(path, \"w\"); if (f) { fputs(data, f); fclose(f); } }")
     emit_raw("static mrb_bool sp_file_exist(const char *path) { FILE *f = fopen(path, \"r\"); if (f) { fclose(f); return TRUE; } return FALSE; }")
     emit_raw("static void sp_file_delete(const char *path) { remove(path); }")
@@ -13761,88 +13753,6 @@ class Compiler
       emit("  }")
     end
     @in_loop = old
-  end
-
-  def scan_captured_locals(nid, excludes, names, types)
-    # Type hint: use str_array method to force param typing
-    if excludes.length < 0
-      excludes.push("")
-    end
-    if names.length < 0
-      names.push("")
-    end
-    if types.length < 0
-      types.push("")
-    end
-    if nid < 0
-      return
-    end
-    if @nd_type[nid] == "LocalVariableReadNode"
-      lname = @nd_name[nid]
-      if not_in(lname, excludes) == 1
-        if not_in(lname, names) == 1
-          names.push(lname)
-          vt = find_var_type(lname)
-          if vt == ""
-            vt = "int"
-          end
-          types.push(vt)
-        end
-      end
-    end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
-      if not_in(lname, excludes) == 1
-        if not_in(lname, names) == 1
-          names.push(lname)
-          vt = find_var_type(lname)
-          if vt == ""
-            vt = "int"
-          end
-          types.push(vt)
-        end
-      end
-    end
-    # Recurse
-    if @nd_body[nid] >= 0
-      scan_captured_locals(@nd_body[nid], excludes, names, types)
-    end
-    stmts = parse_id_list(@nd_stmts[nid])
-    k = 0
-    while k < stmts.length
-      scan_captured_locals(stmts[k], excludes, names, types)
-      k = k + 1
-    end
-    if @nd_expression[nid] >= 0
-      scan_captured_locals(@nd_expression[nid], excludes, names, types)
-    end
-    if @nd_predicate[nid] >= 0
-      scan_captured_locals(@nd_predicate[nid], excludes, names, types)
-    end
-    if @nd_left[nid] >= 0
-      scan_captured_locals(@nd_left[nid], excludes, names, types)
-    end
-    if @nd_right[nid] >= 0
-      scan_captured_locals(@nd_right[nid], excludes, names, types)
-    end
-    if @nd_subsequent[nid] >= 0
-      scan_captured_locals(@nd_subsequent[nid], excludes, names, types)
-    end
-    if @nd_else_clause[nid] >= 0
-      scan_captured_locals(@nd_else_clause[nid], excludes, names, types)
-    end
-    if @nd_arguments[nid] >= 0
-      scan_captured_locals(@nd_arguments[nid], excludes, names, types)
-    end
-    args = parse_id_list(@nd_args[nid])
-    k = 0
-    while k < args.length
-      scan_captured_locals(args[k], excludes, names, types)
-      k = k + 1
-    end
-    if @nd_receiver[nid] >= 0
-      scan_captured_locals(@nd_receiver[nid], excludes, names, types)
-    end
   end
 
   def compile_map_block(nid)

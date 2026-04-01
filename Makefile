@@ -39,9 +39,9 @@ build/prism/%.o: $(PRISM_DIR)/src/%.c
 
 # ---- C Parser ----
 
-parse: spinel_parse_bin
+parse: spinel_parse
 
-spinel_parse_bin: spinel_parse.c $(PRISM_LIB)
+spinel_parse: spinel_parse.c $(PRISM_LIB)
 	$(CC) $(CFLAGS) -I$(PRISM_INC) $< $(PRISM_LIB) -lm -o $@
 
 # ---- Regexp library (for programs using /pattern/) ----
@@ -63,9 +63,9 @@ build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h
 
 bootstrap: spinel_codegen
 
-spinel_codegen: spinel_codegen.rb spinel_parse_bin
+spinel_codegen: spinel_codegen.rb spinel_parse
 	@echo "=== Bootstrap Step 1: parse ==="
-	./spinel_parse_bin spinel_codegen.rb build/codegen.ast
+	./spinel_parse spinel_codegen.rb build/codegen.ast
 	@echo "=== Bootstrap Step 2: gen1 (CRuby) ==="
 	ruby spinel_codegen.rb build/codegen.ast build/gen1.c
 	$(CC) $(CFLAGS) build/gen1.c -lm -o build/bin1
@@ -79,11 +79,11 @@ spinel_codegen: spinel_codegen.rb spinel_parse_bin
 
 # ---- Test ----
 
-test: spinel_parse_bin spinel_codegen
+test: spinel_parse spinel_codegen
 	@pass=0; fail=0; err=0; \
 	for f in test/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
-	  ./spinel_parse_bin "$$f" /tmp/_sp_t.ast 2>/dev/null && \
+	  ./spinel_parse "$$f" /tmp/_sp_t.ast 2>/dev/null && \
 	  ./spinel_codegen /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) /tmp/_sp_t.c -lm -o /tmp/_sp_t_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
@@ -101,11 +101,11 @@ test: spinel_parse_bin spinel_codegen
 	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin; \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"
 
-bench: spinel_parse_bin spinel_codegen
+bench: spinel_parse spinel_codegen
 	@pass=0; fail=0; \
 	for f in benchmark/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
-	  ./spinel_parse_bin "$$f" /tmp/_sp_b.ast 2>/dev/null && \
+	  ./spinel_parse "$$f" /tmp/_sp_b.ast 2>/dev/null && \
 	  ./spinel_codegen /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) /tmp/_sp_b.c -lm -o /tmp/_sp_b_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
@@ -131,7 +131,7 @@ SPNLDIR   = $(PREFIX)/lib/spinel
 install: all
 	install -d $(SPNLDIR)/lib/regexp
 	install -m 755 spinel           $(SPNLDIR)/
-	install -m 755 spinel_parse_bin $(SPNLDIR)/
+	install -m 755 spinel_parse $(SPNLDIR)/
 	install -m 755 spinel_codegen   $(SPNLDIR)/
 	install -m 644 spinel_parse.rb  $(SPNLDIR)/
 	install -m 644 spinel_codegen.rb $(SPNLDIR)/
@@ -147,4 +147,4 @@ uninstall:
 
 clean:
 	rm -rf build/
-	rm -f spinel_parse_bin spinel_codegen
+	rm -f spinel_parse spinel_codegen

@@ -2011,6 +2011,9 @@ class Compiler
   end
 
   def type_is_pointer(t)
+    if is_nullable_type(t) == 1
+      return type_is_pointer(base_type(t))
+    end
     if t == "int_array"
       return 1
     end
@@ -2043,6 +2046,41 @@ class Compiler
     0
   end
 
+  def is_nullable_type(t)
+    if t.length > 1 && t[t.length - 1] == "?"
+      return 1
+    end
+    0
+  end
+
+  def base_type(t)
+    if t.length > 1 && t[t.length - 1] == "?"
+      return t[0, t.length - 1]
+    end
+    t
+  end
+
+  def is_nullable_pointer_type(t)
+    # Pointer types that can represent nil as NULL
+    bt = base_type(t)
+    if bt == "string" || bt == "mutable_str"
+      return 1
+    end
+    if bt == "int_array" || bt == "str_array" || bt == "float_array"
+      return 1
+    end
+    if bt == "str_int_hash" || bt == "str_str_hash"
+      return 1
+    end
+    if bt == "stringio" || bt == "lambda" || bt == "poly_array"
+      return 1
+    end
+    if is_obj_type(bt) == 1
+      return 1
+    end
+    0
+  end
+
   def is_value_type_obj(t)
     if is_obj_type(t) == 1
       cname = t[4, t.length - 4]
@@ -2056,6 +2094,9 @@ class Compiler
 
   # ---- C type mapping ----
   def c_type(t)
+    if is_nullable_type(t) == 1
+      return c_type(base_type(t))
+    end
     if t == "range"
       return "sp_Range"
     end
@@ -2122,6 +2163,9 @@ class Compiler
   end
 
   def c_default_val(t)
+    if is_nullable_type(t) == 1
+      return "NULL"
+    end
     if t == "range"
       return "((sp_Range){0,0})"
     end
@@ -5584,9 +5628,20 @@ class Compiler
       end
       if idx >= 0
         if types[idx] != at
-          if types[idx] != "poly"
-            types[idx] = "poly"
-            @needs_rb_value = 1
+          old = types[idx]
+          if old != "poly"
+            if at == "nil" && is_nullable_pointer_type(old) == 1
+              # T + nil → T? (nullable)
+              if old[old.length - 1] != "?"
+                types[idx] = old + "?"
+              end
+            elsif old == "nil" && is_nullable_pointer_type(at) == 1
+              # nil + T → T? (nullable)
+              types[idx] = at + "?"
+            else
+              types[idx] = "poly"
+              @needs_rb_value = 1
+            end
           end
         end
       else
@@ -8139,6 +8194,12 @@ class Compiler
                   if at != "int"
                     if types[ki] == "int"
                       types[ki] = at
+                    elsif at == "nil" && is_nullable_pointer_type(types[ki]) == 1
+                      if types[ki][types[ki].length - 1] != "?"
+                        types[ki] = types[ki] + "?"
+                      end
+                    elsif types[ki] == "nil" && is_nullable_pointer_type(at) == 1
+                      types[ki] = at + "?"
                     else
                       types[ki] = "poly"
                       @needs_rb_value = 1
@@ -10894,6 +10955,9 @@ class Compiler
       if recv_type == "poly"
         return "sp_poly_nil_p(" + rc + ")"
       end
+      if is_nullable_type(recv_type) == 1
+        return "(" + rc + " == NULL)"
+      end
       if type_is_pointer(recv_type) == 1
         return "(" + rc + " == NULL)"
       end
@@ -11627,9 +11691,14 @@ class Compiler
         end
         return
       end
-      val = compile_expr(@nd_expression[nid])
-      emit("  lv_" + lname + " = " + val + ";")
-      set_var_type(lname, infer_type(@nd_expression[nid]))
+      rhs_t = infer_type(@nd_expression[nid])
+      if rhs_t == "nil" && is_nullable_type(vt) == 1
+        emit("  lv_" + lname + " = NULL;")
+      else
+        val = compile_expr(@nd_expression[nid])
+        emit("  lv_" + lname + " = " + val + ";")
+      end
+      set_var_type(lname, rhs_t)
       return
     end
     if t == "LocalVariableOperatorWriteNode"
@@ -13415,7 +13484,7 @@ class Compiler
         if at == "float"
           emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
         else
-          if at == "string"
+          if at == "string" || at == "string?"
             emit("  { const char *_ps = " + val + "; if (_ps) { fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); }")
           else
             if at == "bool"

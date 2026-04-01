@@ -841,6 +841,151 @@ static char *resolve_requires(const char *source, const char *source_path) {
   return result;
 }
 
+/* ---- Plain require resolution ---- */
+static char *resolve_plain_requires(char *source, const char *exe_path) {
+  /* Find lib/ directory relative to this executable */
+  char lib_dir[1024];
+  strncpy(lib_dir, exe_path, sizeof(lib_dir) - 1);
+  char *slash = strrchr(lib_dir, '/');
+  if (slash) *slash = '\0';
+  else strcpy(lib_dir, ".");
+  strcat(lib_dir, "/lib");
+
+  char *result = source;
+  char *pos;
+  while ((pos = strstr(result, "\nrequire ")) != NULL ||
+         (pos == NULL && result == source && strncmp(result, "require ", 8) == 0 && (pos = result))) {
+    if (pos != result) pos++; /* skip \n */
+    if (pos != result && *(pos - 1) != '\n') break;
+    char *line_end = strchr(pos, '\n');
+    if (!line_end) line_end = pos + strlen(pos);
+
+    /* Must be: require "name" or require 'name' */
+    char *q1 = strchr(pos + 7, '"');
+    char *q2 = strchr(pos + 7, '\'');
+    char *start; char quote_char;
+    if (q1 && q1 < line_end && (!q2 || q1 < q2)) { quote_char = '"'; start = q1 + 1; }
+    else if (q2 && q2 < line_end) { quote_char = '\''; start = q2 + 1; }
+    else break;
+    char *end = strchr(start, quote_char);
+    if (!end || end > line_end) break;
+
+    char lib_name[256];
+    snprintf(lib_name, sizeof(lib_name), "%.*s", (int)(end - start), start);
+    char lib_path[1024];
+    snprintf(lib_path, sizeof(lib_path), "%s/%s", lib_dir, lib_name);
+    if (!strstr(lib_path, ".rb")) strcat(lib_path, ".rb");
+
+    char *content = read_file(lib_path);
+    if (!content) {
+      content = strdup("# require not resolved");
+    } else {
+      char *resolved = resolve_requires(content, lib_path);
+      free(content);
+      content = resolved;
+    }
+
+    size_t line_len = (line_end - pos) + ((*line_end == '\n') ? 1 : 0);
+    size_t content_len = strlen(content);
+    size_t result_len = strlen(result);
+    size_t before_len = pos - result;
+    char *new_result = malloc(result_len - line_len + content_len + 2);
+    memcpy(new_result, result, before_len);
+    memcpy(new_result + before_len, content, content_len);
+    if (content_len > 0 && content[content_len - 1] != '\n')
+      new_result[before_len + content_len++] = '\n';
+    memcpy(new_result + before_len + content_len, pos + line_len, result_len - before_len - line_len + 1);
+    free(result);
+    result = new_result;
+    free(content);
+  }
+  return result;
+}
+
+/* ---- Syntax sugar rewriting ---- */
+static char *rewrite_syntax_sugar(char *source) {
+  /* Rewrite .send(:method, args) → .method(args) */
+  /* Rewrite &:symbol → { |_spx| _spx.symbol } */
+  size_t len = strlen(source);
+  size_t cap = len * 2 + 256;
+  char *out = malloc(cap);
+  size_t oi = 0;
+  size_t i = 0;
+
+  #define OUT_CHAR(c) do { if (oi >= cap - 1) { cap *= 2; out = realloc(out, cap); } out[oi++] = (c); } while(0)
+  #define OUT_STR(s) do { const char *_s = (s); while (*_s) { OUT_CHAR(*_s); _s++; } } while(0)
+
+  while (i < len) {
+    /* .send(:symbol ...) */
+    if (i + 7 < len && strncmp(source + i, ".send(:", 7) == 0) {
+      i += 7; /* skip .send(: */
+      /* Extract method name */
+      size_t ns = i;
+      while (i < len && (source[i] == '_' || (source[i] >= 'a' && source[i] <= 'z') ||
+             (source[i] >= 'A' && source[i] <= 'Z') || (source[i] >= '0' && source[i] <= '9') ||
+             source[i] == '?' || source[i] == '!' || source[i] == '+' || source[i] == '-' ||
+             source[i] == '*' || source[i] == '/' || source[i] == '<' || source[i] == '>' ||
+             source[i] == '=' || source[i] == '&' || source[i] == '|' || source[i] == '^' ||
+             source[i] == '~' || source[i] == '%')) i++;
+      size_t name_len = i - ns;
+      if (name_len > 0) {
+        OUT_CHAR('.');
+        size_t k; for (k = 0; k < name_len; k++) OUT_CHAR(source[ns + k]);
+        /* Skip optional comma + space, then copy remaining args until ) */
+        if (i < len && source[i] == ')') {
+          i++; /* no args */
+        } else if (i < len && source[i] == ',') {
+          i++; /* skip comma */
+          while (i < len && source[i] == ' ') i++;
+          OUT_CHAR('(');
+          /* Copy args until matching ) */
+          int depth = 1;
+          while (i < len && depth > 0) {
+            if (source[i] == '(') depth++;
+            else if (source[i] == ')') { depth--; if (depth == 0) { i++; break; } }
+            OUT_CHAR(source[i]); i++;
+          }
+          OUT_CHAR(')');
+        }
+        continue;
+      }
+      /* Failed to parse, output original */
+      OUT_STR(".send(:");
+      continue;
+    }
+    /* (&:symbol) → { |_spx| _spx.symbol } — also remove enclosing parens */
+    if (i + 2 < len && source[i] == '&' && source[i + 1] == ':') {
+      /* Check if preceded by ( and remove it */
+      int had_paren = 0;
+      if (oi > 0 && out[oi - 1] == '(') { oi--; had_paren = 1; }
+      i += 2;
+      size_t ns = i;
+      while (i < len && (source[i] == '_' || (source[i] >= 'a' && source[i] <= 'z') ||
+             (source[i] >= 'A' && source[i] <= 'Z') || (source[i] >= '0' && source[i] <= '9') ||
+             source[i] == '?' || source[i] == '!')) i++;
+      size_t name_len = i - ns;
+      if (name_len > 0) {
+        /* Skip closing paren if we removed opening */
+        if (had_paren && i < len && source[i] == ')') i++;
+        OUT_STR(" { |_spx| _spx.");
+        size_t k; for (k = 0; k < name_len; k++) OUT_CHAR(source[ns + k]);
+        OUT_STR(" }");
+        continue;
+      }
+      if (had_paren) OUT_CHAR('('); /* restore if failed */
+      OUT_STR("&:");
+      continue;
+    }
+    OUT_CHAR(source[i]);
+    i++;
+  }
+  out[oi] = '\0';
+  free(source);
+  return out;
+  #undef OUT_CHAR
+  #undef OUT_STR
+}
+
 /* ---- Main ---- */
 int main(int argc, char **argv) {
   if (argc < 2) {
@@ -855,10 +1000,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  /* Resolve require_relative */
+  /* Resolve require_relative and plain require */
   char *resolved = resolve_requires(source, source_file);
   free(source);
-  source = resolved;
+  source = resolve_plain_requires(resolved, argv[0]);
+  source = rewrite_syntax_sugar(source);
 
   size_t source_len = strlen(source);
 

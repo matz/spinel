@@ -2012,7 +2012,7 @@ class Compiler
 
   def type_is_pointer(t)
     if is_nullable_type(t) == 1
-      return type_is_pointer(base_type(t))
+      t = base_type(t)
     end
     if t == "int_array"
       return 1
@@ -2095,7 +2095,7 @@ class Compiler
   # ---- C type mapping ----
   def c_type(t)
     if is_nullable_type(t) == 1
-      return c_type(base_type(t))
+      t = base_type(t)
     end
     if t == "range"
       return "sp_Range"
@@ -2166,6 +2166,7 @@ class Compiler
     if is_nullable_type(t) == 1
       return "NULL"
     end
+    # NOTE: nullable returns above, so rest handles base types only
     if t == "range"
       return "((sp_Range){0,0})"
     end

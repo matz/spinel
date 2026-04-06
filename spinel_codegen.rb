@@ -6629,20 +6629,15 @@ class Compiler
     if nid < 0
       return
     end
-    # x = x * y pattern
+    # x = ... * ... pattern (any multiplication in loop → candidate for bigint)
     if @nd_type[nid] == "LocalVariableWriteNode"
       lname = @nd_name[nid]
       expr = @nd_expression[nid]
       if expr >= 0 && @nd_type[expr] == "CallNode"
         op = @nd_name[expr]
         if op == "*"
-          recv = @nd_receiver[expr]
-          if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-            if @nd_name[recv] == lname
-              if not_in(lname, bigint_names) == 1
-                bigint_names.push(lname)
-              end
-            end
+          if not_in(lname, bigint_names) == 1
+            bigint_names.push(lname)
           end
         end
       end

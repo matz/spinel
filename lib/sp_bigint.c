@@ -5262,8 +5262,8 @@ typedef struct sp_Bigint {
   mpz_t mpz;
 } sp_Bigint;
 
-/* GC integration: use Spinel's GC allocator when available */
-extern void *sp_gc_alloc(size_t sz, void(*fin)(void*), void(*scn)(void*)) __attribute__((weak));
+/* GC integration: use Spinel's no-collect allocator to avoid GC during nested bigint ops */
+extern void *sp_gc_alloc_nogc(size_t sz, void(*fin)(void*), void(*scn)(void*)) __attribute__((weak));
 
 static mpz_ctx_t sp_mpz_ctx_storage;
 static mpz_ctx_t *sp_mpz_ctx = NULL;
@@ -5284,8 +5284,8 @@ static void sp_bigint_finalizer(void *p) {
 
 static sp_Bigint *sp_bigint_alloc(void) {
   sp_bigint_init_ctx();
-  if (sp_gc_alloc) {
-    return (sp_Bigint*)sp_gc_alloc(sizeof(sp_Bigint), sp_bigint_finalizer, NULL);
+  if (sp_gc_alloc_nogc) {
+    return (sp_Bigint*)sp_gc_alloc_nogc(sizeof(sp_Bigint), sp_bigint_finalizer, NULL);
   }
   return (sp_Bigint*)calloc(1, sizeof(sp_Bigint));
 }
@@ -5306,7 +5306,7 @@ sp_Bigint *sp_bigint_new_str(const char *s, int base) {
 void sp_bigint_free(sp_Bigint *b) {
   if (b) {
     mpz_clear(sp_mpz_ctx, &b->mpz);
-    if (!sp_gc_alloc) free(b);
+    if (!sp_gc_alloc_nogc) free(b);
   }
 }
 

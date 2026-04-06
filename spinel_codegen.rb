@@ -6788,6 +6788,9 @@ class Compiler
     emit_raw("static size_t sp_gc_threshold_init=256*1024;")
     gc_linkage = @needs_bigint == 1 ? "" : "static "
     emit_raw(gc_linkage + "void*sp_gc_alloc(size_t sz,void(*fin)(void*),void(*scn)(void*)){if(sp_gc_bytes>sp_gc_threshold){size_t before=sp_gc_bytes;sp_gc_collect();size_t freed=before-sp_gc_bytes;if(freed<before/4){sp_gc_threshold=before*2;}else if(sp_gc_bytes>0){sp_gc_threshold=sp_gc_bytes*4;if(sp_gc_threshold<sp_gc_threshold_init)sp_gc_threshold=sp_gc_threshold_init;}else{sp_gc_threshold=sp_gc_threshold_init;}}size_t need=sizeof(sp_gc_hdr)+sz;int b=sp_gc_bucket(need);sp_gc_hdr*h=NULL;if(sp_gc_buckets[b]&&sp_gc_buckets[b]->size==need){h=sp_gc_buckets[b];sp_gc_buckets[b]=h->next;}if(!h){h=(sp_gc_hdr*)calloc(1,need);}h->finalize=fin;h->scan=scn;h->size=need;h->marked=0;h->next=sp_gc_heap;sp_gc_heap=h;sp_gc_bytes+=need;return(char*)h+sizeof(sp_gc_hdr);}")
+    if @needs_bigint == 1
+      emit_raw("void*sp_gc_alloc_nogc(size_t sz,void(*fin)(void*),void(*scn)(void*)){size_t need=sizeof(sp_gc_hdr)+sz;sp_gc_hdr*h=(sp_gc_hdr*)calloc(1,need);h->finalize=fin;h->scan=scn;h->size=need;h->marked=0;h->next=sp_gc_old_heap;sp_gc_old_heap=h;sp_gc_old_bytes+=need;sp_gc_bytes+=need;return(char*)h+sizeof(sp_gc_hdr);}")
+    end
     emit_raw("")
   end
 

@@ -5499,6 +5499,15 @@ class Compiler
       if mname == "sub"
         @needs_string_helpers = 1
       end
+      if mname == "tr"
+        @needs_string_helpers = 1
+      end
+      if mname == "ljust"
+        @needs_string_helpers = 1
+      end
+      if mname == "rjust"
+        @needs_string_helpers = 1
+      end
       if mname == "[]"
         if @nd_receiver[nid] >= 0
           rt = infer_type(@nd_receiver[nid])
@@ -11594,6 +11603,36 @@ class Compiler
     if mname == "index"
       return "sp_str_index(" + rc + ", " + compile_arg0(nid) + ")"
     end
+    if mname == "tr"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_tr(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
+      end
+      return rc
+    end
+    if mname == "ljust"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_ljust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
+      end
+      return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "rjust"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_rjust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
+      end
+      return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
+    end
     if mname == "[]"
       args_id = @nd_arguments[nid]
       if args_id >= 0
@@ -13654,17 +13693,39 @@ class Compiler
     @in_loop = 1
     coll = @nd_collection[nid]
     if coll >= 0
-      if @nd_type[coll] == "RangeNode"
-        vname = "i"
-        tgt = @nd_target[nid]
-        if tgt >= 0
-          if @nd_type[tgt] == "LocalVariableTargetNode"
-            vname = @nd_name[tgt]
-          end
+      vname = "i"
+      tgt = @nd_target[nid]
+      if tgt >= 0
+        if @nd_type[tgt] == "LocalVariableTargetNode"
+          vname = @nd_name[tgt]
         end
+      end
+      if @nd_type[coll] == "RangeNode"
         left = compile_expr(@nd_left[coll])
         right = compile_expr(@nd_right[coll])
         emit("  for (lv_" + vname + " = " + left + "; lv_" + vname + " <= " + right + "; lv_" + vname + "++) {")
+        @indent = @indent + 1
+        compile_stmts_body(@nd_body[nid])
+        @indent = @indent - 1
+        emit("  }")
+      else
+        # for x in array
+        ct = infer_type(coll)
+        rc = compile_expr(coll)
+        tmp = new_temp
+        if ct == "int_array"
+          emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_IntArray_length(" + rc + "); " + tmp + "++) {")
+          emit("    lv_" + vname + " = sp_IntArray_get(" + rc + ", " + tmp + ");")
+        elsif ct == "str_array"
+          emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_StrArray_length(" + rc + "); " + tmp + "++) {")
+          emit("    lv_" + vname + " = sp_StrArray_get(" + rc + ", " + tmp + ");")
+        elsif ct == "float_array"
+          emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_FloatArray_length(" + rc + "); " + tmp + "++) {")
+          emit("    lv_" + vname + " = sp_FloatArray_get(" + rc + ", " + tmp + ");")
+        else
+          emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_IntArray_length(" + rc + "); " + tmp + "++) {")
+          emit("    lv_" + vname + " = sp_IntArray_get(" + rc + ", " + tmp + ");")
+        end
         @indent = @indent + 1
         compile_stmts_body(@nd_body[nid])
         @indent = @indent - 1
@@ -14240,6 +14301,13 @@ class Compiler
           compile_each_block(nid)
           return 1
         end
+      end
+    end
+
+    if mname == "each_with_index"
+      if @nd_block[nid] >= 0
+        compile_each_with_index_block(nid)
+        return 1
       end
     end
 
@@ -15612,6 +15680,44 @@ class Compiler
       return @nd_name[reqs[idx]]
     end
     ""
+  end
+
+  def compile_each_with_index_block(nid)
+    old = @in_loop
+    @in_loop = 1
+    rt = infer_type(@nd_receiver[nid])
+    rc = compile_expr(@nd_receiver[nid])
+    bp1 = get_block_param(nid, 0)
+    bp2 = get_block_param(nid, 1)
+    if bp1 == ""
+      bp1 = "_v"
+    end
+    if bp2 == ""
+      bp2 = "_idx"
+    end
+    tmp = new_temp
+    if rt == "int_array"
+      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_IntArray_length(" + rc + "); " + tmp + "++) {")
+      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp + ");")
+      emit("    lv_" + bp2 + " = " + tmp + ";")
+    elsif rt == "str_array"
+      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_StrArray_length(" + rc + "); " + tmp + "++) {")
+      emit("    lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp + ");")
+      emit("    lv_" + bp2 + " = " + tmp + ";")
+    elsif rt == "float_array"
+      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_FloatArray_length(" + rc + "); " + tmp + "++) {")
+      emit("    lv_" + bp1 + " = sp_FloatArray_get(" + rc + ", " + tmp + ");")
+      emit("    lv_" + bp2 + " = " + tmp + ";")
+    else
+      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_IntArray_length(" + rc + "); " + tmp + "++) {")
+      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp + ");")
+      emit("    lv_" + bp2 + " = " + tmp + ";")
+    end
+    @indent = @indent + 1
+    compile_stmts_body(@nd_body[@nd_block[nid]])
+    @indent = @indent - 1
+    emit("  }")
+    @in_loop = old
   end
 
   def compile_each_block(nid)

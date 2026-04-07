@@ -11737,26 +11737,6 @@ class Compiler
       end
       return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
     end
-    if mname == "ljust"
-      args_id = @nd_arguments[nid]
-      if args_id >= 0
-        a = get_args(args_id)
-        if a.length >= 2
-          return "sp_str_ljust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-        end
-      end
-      return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
-    end
-    if mname == "rjust"
-      args_id = @nd_arguments[nid]
-      if args_id >= 0
-        a = get_args(args_id)
-        if a.length >= 2
-          return "sp_str_rjust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
-        end
-      end
-      return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
-    end
     if mname == "center"
       return "sp_str_center(" + rc + ", " + compile_arg0(nid) + ")"
     end

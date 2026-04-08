@@ -73,10 +73,10 @@ spinel_codegen: spinel_codegen.rb spinel_parse
 	./spinel_parse spinel_codegen.rb build/codegen.ast
 	@echo "=== Bootstrap Step 2: gen1 (CRuby) ==="
 	ruby spinel_codegen.rb build/codegen.ast build/gen1.c
-	$(CC) $(CFLAGS) build/gen1.c -lm -o build/bin1
+	$(CC) $(CFLAGS) -Ilib build/gen1.c -lm -o build/bin1
 	@echo "=== Bootstrap Step 3: gen2 (bin1) ==="
 	./build/bin1 build/codegen.ast build/gen2.c
-	$(CC) $(CFLAGS) build/gen2.c -lm -o build/bin2
+	$(CC) $(CFLAGS) -Ilib build/gen2.c -lm -o build/bin2
 	@echo "=== Bootstrap Step 4: gen3 (bin2) - verify ==="
 	./build/bin2 build/codegen.ast build/gen3.c
 	@diff build/gen2.c build/gen3.c > /dev/null && echo "gen2.c == gen3.c (bootstrap OK)" || (echo "BOOTSTRAP FAILED: gen2.c != gen3.c" && exit 1)
@@ -91,7 +91,7 @@ test: spinel_parse $(SP_RT_LIB)
 	  bn=$$(basename "$$f" .rb); \
 	  ./spinel_parse "$$f" /tmp/_sp_t.ast 2>/dev/null && \
 	  ./spinel_codegen /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) /tmp/_sp_t.c $(SP_RT_LIB) -lm -o /tmp/_sp_t_bin 2>/dev/null; \
+	  $(CC) $(CFLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) -lm -o /tmp/_sp_t_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 10 ruby "$$f" 2>/dev/null); \
 	    actual=$$(timeout 10 /tmp/_sp_t_bin 2>/dev/null); \
@@ -114,7 +114,7 @@ bench: spinel_parse $(SP_RT_LIB)
 	  bn=$$(basename "$$f" .rb); \
 	  timeout 10 ./spinel_parse "$$f" /tmp/_sp_b.ast 2>/dev/null && \
 	  timeout 10 ./spinel_codegen /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) /tmp/_sp_b.c $(SP_RT_LIB) -lm -o /tmp/_sp_b_bin 2>/dev/null; \
+	  $(CC) $(CFLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) -lm -o /tmp/_sp_b_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 60 ruby "$$f" 2>/dev/null); \
 	    ruby_rc=$$?; \

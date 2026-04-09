@@ -1590,6 +1590,9 @@ class Compiler
     if mname == "empty?"
       return "bool"
     end
+    if mname == "any?" || mname == "all?" || mname == "none?"
+      return "bool"
+    end
     if mname == "nil?"
       return "bool"
     end
@@ -11890,6 +11893,15 @@ class Compiler
   end
 
   def compile_array_method_expr(nid, mname, rc, recv_type)
+    # Common array methods (all array types)
+    if mname == "any?" && @nd_block[nid] < 0
+      pfx = array_c_prefix(recv_type)
+      return "(sp_" + pfx + "_length(" + rc + ") > 0)"
+    end
+    if mname == "none?" && @nd_block[nid] < 0
+      pfx = array_c_prefix(recv_type)
+      return "(sp_" + pfx + "_length(" + rc + ") == 0)"
+    end
     # Array methods
     if recv_type == "int_array"
       if mname == "length"

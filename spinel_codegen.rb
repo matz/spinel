@@ -1808,6 +1808,17 @@ class Compiler
       end
       return "int_array"
     end
+    if mname == "reduce" || mname == "inject"
+      # Return type is the accumulator type, inferred from initial value
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length > 0
+          return infer_type(aargs[0])
+        end
+      end
+      return "int"
+    end
     if mname == "[]"
       if recv >= 0
         rt = infer_type(recv)
@@ -16131,26 +16142,25 @@ class Compiler
     end
     emit("  lv_" + bp1 + " = " + init_val + ";")
     rt = infer_type(@nd_receiver[nid])
-    if rt == "int_array"
-      tmp = new_temp
-      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_IntArray_length(" + rc + "); " + tmp + "++) {")
-      emit("    lv_" + bp2 + " = sp_IntArray_get(" + rc + ", " + tmp + ");")
-      @indent = @indent + 1
-      blk = @nd_block[nid]
-      if blk >= 0
-        body = @nd_body[blk]
-        if body >= 0
-          stmts = get_stmts(body)
-          if stmts.length > 0
-            last = stmts.last
-            val = compile_expr(last)
-            emit("  lv_" + bp1 + " = " + val + ";")
-          end
+    pfx = array_c_prefix(rt)
+    tmp = new_temp
+    emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
+    emit("    lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+    @indent = @indent + 1
+    blk = @nd_block[nid]
+    if blk >= 0
+      body = @nd_body[blk]
+      if body >= 0
+        stmts = get_stmts(body)
+        if stmts.length > 0
+          last = stmts.last
+          val = compile_expr(last)
+          emit("  lv_" + bp1 + " = " + val + ";")
         end
       end
-      @indent = @indent - 1
-      emit("  }")
     end
+    @indent = @indent - 1
+    emit("  }")
   end
 
   def compile_reject_expr(nid)

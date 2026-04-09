@@ -9189,63 +9189,71 @@ class Compiler
                     bk = bk + 1
                     next
                   end
-                  if mname == "each"
-                    if recv_type == "int_array"
+                  if mname == "times" || mname == "upto" || mname == "downto"
+                    types.push("int")
+                  elsif mname == "each" || mname == "map" || mname == "select" || mname == "reject" || mname == "find" || mname == "detect" || mname == "any?" || mname == "all?" || mname == "none?" || mname == "count" || mname == "min_by" || mname == "max_by" || mname == "sort_by" || mname == "flat_map"
+                    # Element iteration: infer block param from collection type
+                    if recv_type == "str_array"
+                      types.push("string")
+                    elsif recv_type == "float_array"
+                      types.push("float")
+                    elsif recv_type == "str_int_hash"
                       if bk == 0
+                        types.push("string")
+                      else
                         types.push("int")
+                      end
+                    elsif recv_type == "str_str_hash"
+                      types.push("string")
+                    elsif recv_type == "poly_array"
+                      types.push("poly")
+                      @needs_rb_value = 1
+                    elsif is_ptr_array_type(recv_type) == 1
+                      types.push(ptr_array_elem_type(recv_type))
+                    else
+                      types.push("int")
+                    end
+                  elsif mname == "each_with_index"
+                    if bk == 0
+                      # Element
+                      if recv_type == "str_array"
+                        types.push("string")
+                      elsif recv_type == "float_array"
+                        types.push("float")
+                      elsif is_ptr_array_type(recv_type) == 1
+                        types.push(ptr_array_elem_type(recv_type))
                       else
                         types.push("int")
                       end
                     else
+                      # Index
+                      types.push("int")
+                    end
+                  elsif mname == "reduce" || mname == "inject"
+                    if bk == 0
+                      # Accumulator: infer from initial value argument
+                      args_id = @nd_arguments[nid]
+                      if args_id >= 0
+                        aargs = get_args(args_id)
+                        if aargs.length > 0
+                          types.push(infer_type(aargs[0]))
+                          bk = bk + 1
+                          next
+                        end
+                      end
+                      types.push("int")
+                    else
+                      # Element
                       if recv_type == "str_array"
                         types.push("string")
+                      elsif recv_type == "float_array"
+                        types.push("float")
                       else
-                        if recv_type == "str_int_hash"
-                          if bk == 0
-                            types.push("string")
-                          else
-                            types.push("int")
-                          end
-                        else
-                          if recv_type == "str_str_hash"
-                            types.push("string")
-                          else
-                            if recv_type == "poly_array"
-                              types.push("poly")
-                              @needs_rb_value = 1
-                            else
-                              types.push("int")
-                            end
-                          end
-                        end
+                        types.push("int")
                       end
                     end
                   else
-                    if mname == "times"
-                      types.push("int")
-                    else
-                      if mname == "upto"
-                        types.push("int")
-                      else
-                        if mname == "downto"
-                          types.push("int")
-                        else
-                          if mname == "reduce"
-                            types.push("int")
-                          else
-                            if mname == "inject"
-                              types.push("int")
-                            else
-                              if mname == "reject"
-                                types.push("int")
-                              else
-                                types.push("int")
-                              end
-                            end
-                          end
-                        end
-                      end
-                    end
+                    types.push("int")
                   end
                 end
               end

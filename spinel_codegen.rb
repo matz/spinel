@@ -9031,6 +9031,34 @@ class Compiler
         end
       end
     end
+    # Detect hash value type from h["key"] = val
+    if @nd_type[nid] == "CallNode"
+      if @nd_name[nid] == "[]="
+        recv = @nd_receiver[nid]
+        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
+          hname = @nd_name[recv]
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            aargs = get_args(args_id)
+            if aargs.length >= 2
+              val_type = infer_type(aargs[1])
+              if val_type == "string"
+                ki = 0
+                while ki < names.length
+                  if names[ki] == hname
+                    if types[ki] == "str_int_hash"
+                      types[ki] = "str_str_hash"
+                      @needs_str_str_hash = 1
+                    end
+                  end
+                  ki = ki + 1
+                end
+              end
+            end
+          end
+        end
+      end
+    end
     if @nd_type[nid] == "ForNode"
       tgt = @nd_target[nid]
       if tgt >= 0
@@ -13248,6 +13276,19 @@ class Compiler
               @needs_gc = 1
               emit("  " + vref + " = sp_PtrArray_new();")
             end
+            return
+          end
+        end
+      end
+      # Empty hash literal: create the correct hash type
+      if vt == "str_str_hash"
+        expr_id2 = @nd_expression[nid]
+        if expr_id2 >= 0 && @nd_type[expr_id2] == "HashNode"
+          elems2 = parse_id_list(@nd_elements[expr_id2])
+          if elems2.length == 0
+            @needs_str_str_hash = 1
+            @needs_gc = 1
+            emit("  " + vref + " = sp_StrStrHash_new();")
             return
           end
         end

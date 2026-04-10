@@ -1903,6 +1903,12 @@ class Compiler
       end
       return "int_array"
     end
+    if mname == "reject"
+      if recv >= 0
+        return infer_type(recv)
+      end
+      return "int_array"
+    end
     if mname == "reduce" || mname == "inject"
       # Return type is the accumulator type, inferred from initial value
       args_id = @nd_arguments[nid]
@@ -12382,6 +12388,9 @@ class Compiler
       if mname == "values"
         return "sp_StrIntHash_values(" + rc + ")"
       end
+      if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
+        return compile_hash_select_reject(nid, "str_int_hash", rc, mname)
+      end
       if mname == "fetch"
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -12447,6 +12456,9 @@ class Compiler
       end
       if mname == "invert"
         return "sp_StrStrHash_invert(" + rc + ")"
+      end
+      if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
+        return compile_hash_select_reject(nid, "str_str_hash", rc, mname)
       end
       if mname == "fetch"
         args_id = @nd_arguments[nid]
@@ -16372,6 +16384,66 @@ class Compiler
     @indent = @indent - 1
     emit("  }")
     @in_loop = old
+  end
+
+  def compile_hash_select_reject(nid, hash_type, rc, mname)
+    # Build a new hash by filtering entries using the block
+    bp1 = get_block_param(nid, 0)
+    bp2 = get_block_param(nid, 1)
+    if bp1 == ""
+      bp1 = "_k"
+    end
+    if bp2 == ""
+      bp2 = "_v"
+    end
+    ctor = ""
+    getter = ""
+    setter = ""
+    val_type = ""
+    if hash_type == "str_int_hash"
+      ctor = "sp_StrIntHash_new"
+      getter = "sp_StrIntHash_get"
+      setter = "sp_StrIntHash_set"
+      val_type = "int"
+      @needs_str_int_hash = 1
+    else
+      ctor = "sp_StrStrHash_new"
+      getter = "sp_StrStrHash_get"
+      setter = "sp_StrStrHash_set"
+      val_type = "string"
+      @needs_str_str_hash = 1
+    end
+    @needs_gc = 1
+    declare_var(bp1, "string")
+    declare_var(bp2, val_type)
+    tmp = new_temp
+    itmp = new_temp
+    emit("  " + c_type(hash_type) + tmp + " = " + ctor + "();")
+    emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+    emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
+    emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
+    blk = @nd_block[nid]
+    bbody = @nd_body[blk]
+    bexpr = "0"
+    if bbody >= 0
+      bs = get_stmts(bbody)
+      if bs.length > 0
+        # Emit all but last as stmts
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        bexpr = compile_expr(bs.last)
+      end
+    end
+    cond = bexpr
+    if mname == "reject"
+      cond = "!(" + bexpr + ")"
+    end
+    emit("    if (" + cond + ") " + setter + "(" + tmp + ", lv_" + bp1 + ", lv_" + bp2 + ");")
+    emit("  }")
+    tmp
   end
 
   def compile_flat_map_expr(nid)

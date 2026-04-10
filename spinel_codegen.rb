@@ -11979,6 +11979,10 @@ class Compiler
   end
 
   def compile_array_method_expr(nid, mname, rc, recv_type)
+    # Skip non-array types
+    if recv_type == "str_int_hash" || recv_type == "str_str_hash"
+      return ""
+    end
     # Common array methods (all array types)
     if mname == "take"
       pfx = array_c_prefix(recv_type)
@@ -12332,8 +12336,14 @@ class Compiler
       if mname == "has_key?" || mname == "key?"
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "length"
+      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
         return "sp_StrIntHash_length(" + rc + ")"
+      end
+      if mname == "empty?"
+        return "(sp_StrIntHash_length(" + rc + ") == 0)"
+      end
+      if mname == "any?" && @nd_block[nid] < 0
+        return "(sp_StrIntHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
         return "sp_StrIntHash_keys(" + rc + ")"
@@ -12389,8 +12399,14 @@ class Compiler
       if mname == "has_key?" || mname == "key?"
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "length"
+      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
         return "sp_StrStrHash_length(" + rc + ")"
+      end
+      if mname == "empty?"
+        return "(sp_StrStrHash_length(" + rc + ") == 0)"
+      end
+      if mname == "any?" && @nd_block[nid] < 0
+        return "(sp_StrStrHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
         return "sp_StrStrHash_keys(" + rc + ")"

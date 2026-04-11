@@ -14757,6 +14757,20 @@ class Compiler
           emit("    sp_" + pfx + "_push(" + rc + ", sp_" + pfx + "_get(" + arg + ", " + tmp + "));")
           return 1
         end
+        if rt == "mutable_str"
+          @needs_mutable_str = 1
+          rc = compile_expr(recv)
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            aargs = get_args(args_id)
+            ak = 0
+            while ak < aargs.length
+              emit("  sp_String_append(" + rc + ", " + compile_expr(aargs[ak]) + ");")
+              ak = ak + 1
+            end
+          end
+          return 1
+        end
       end
     end
 

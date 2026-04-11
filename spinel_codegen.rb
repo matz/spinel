@@ -1754,7 +1754,7 @@ class Compiler
       end
       return "int"
     end
-    if mname == "take" || mname == "drop" || mname == "rotate"
+    if mname == "take" || mname == "drop" || mname == "rotate" || mname == "fill"
       if recv >= 0
         return infer_type(recv)
       end
@@ -12081,6 +12081,14 @@ class Compiler
       emit("    sp_" + pfx + "_push(" + tmp + ", sp_" + pfx + "_get(" + rc + ", " + itmp + "));")
       return tmp
     end
+    if mname == "fill"
+      pfx = array_c_prefix(recv_type)
+      val = compile_arg0(nid)
+      itmp = new_temp
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_" + pfx + "_length(" + rc + "); " + itmp + "++)")
+      emit("    sp_" + pfx + "_set(" + rc + ", " + itmp + ", " + val + ");")
+      return rc
+    end
     if mname == "rotate"
       pfx = array_c_prefix(recv_type)
       n = compile_arg0(nid)
@@ -17879,7 +17887,7 @@ class Compiler
     lt = @nd_type[last]
     if lt == "CallNode"
       lm = @nd_name[last]
-      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
+      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
         compile_stmt(last)
         if return_type != "void"
           emit("  return " + c_return_default(return_type) + ";")

@@ -14724,6 +14724,23 @@ class Compiler
       end
     end
 
+    # update / merge! on hash (mutating merge)
+    if mname == "update" || mname == "merge!"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "str_int_hash"
+          rc = compile_expr(recv)
+          emit("  sp_StrIntHash_update(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if rt == "str_str_hash"
+          rc = compile_expr(recv)
+          emit("  sp_StrStrHash_update(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+      end
+    end
+
     # concat on array (mutating append)
     if mname == "concat"
       if recv >= 0
@@ -17965,7 +17982,7 @@ class Compiler
     lt = @nd_type[last]
     if lt == "CallNode"
       lm = @nd_name[last]
-      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
+      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "update" || lm == "merge!" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
         compile_stmt(last)
         if return_type != "void"
           emit("  return " + c_return_default(return_type) + ";")

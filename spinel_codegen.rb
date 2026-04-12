@@ -1491,6 +1491,12 @@ class Compiler
     if mname == "delete_prefix" || mname == "delete_suffix"
       return "string"
     end
+    if mname == "eql?"
+      return "bool"
+    end
+    if mname == "hash"
+      return "int"
+    end
     if mname == "strip"
       return "string"
     end
@@ -11742,6 +11748,12 @@ class Compiler
     end
     if mname == "delete_suffix"
       return "sp_str_delete_suffix(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "eql?"
+      return "(strcmp(" + rc + ", " + compile_arg0(nid) + ") == 0)"
+    end
+    if mname == "hash"
+      return "(mrb_int)sp_str_hash(" + rc + ")"
     end
     if mname == "strip"
       return "sp_str_strip(" + rc + ")"

@@ -1786,6 +1786,9 @@ class Compiler
         if rt == "float_array"
           return "float"
         end
+        if rt == "str_int_hash" || rt == "str_str_hash"
+          return "string"
+        end
       end
       return "int"
     end
@@ -12763,6 +12766,9 @@ class Compiler
       if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
         return compile_hash_select_reject(nid, "str_int_hash", rc, mname)
       end
+      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @nd_block[nid] >= 0
+        return compile_hash_block_predicate(nid, "str_int_hash", rc, mname)
+      end
       if mname == "fetch"
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -12831,6 +12837,9 @@ class Compiler
       end
       if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
         return compile_hash_select_reject(nid, "str_str_hash", rc, mname)
+      end
+      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @nd_block[nid] >= 0
+        return compile_hash_block_predicate(nid, "str_str_hash", rc, mname)
       end
       if mname == "fetch"
         args_id = @nd_arguments[nid]
@@ -17404,6 +17413,128 @@ class Compiler
     emit("    if (" + cond + ") " + setter + "(" + tmp + ", lv_" + bp1 + ", lv_" + bp2 + ");")
     emit("  }")
     tmp
+  end
+
+  def compile_hash_block_predicate(nid, hash_type, rc, mname)
+    bp1 = get_block_param(nid, 0)
+    bp2 = get_block_param(nid, 1)
+    if bp1 == ""
+      bp1 = "_k"
+    end
+    if bp2 == ""
+      bp2 = "_v"
+    end
+    val_type = "int"
+    getter = "sp_StrIntHash_get"
+    if hash_type == "str_str_hash"
+      val_type = "string"
+      getter = "sp_StrStrHash_get"
+    end
+    declare_var(bp1, "string")
+    declare_var(bp2, val_type)
+    itmp = new_temp
+    # Compile block expression
+    blk = @nd_block[nid]
+    bbody = @nd_body[blk]
+    bexpr = "0"
+    blk_stmts = "".split(",")
+    if bbody >= 0
+      bs = get_stmts(bbody)
+      if bs.length > 0
+        k = 0
+        while k < bs.length - 1
+          blk_stmts.push(bs[k].to_s)
+          k = k + 1
+        end
+        bexpr = "PLACEHOLDER"
+      end
+    end
+    if mname == "count"
+      tmp_c = new_temp
+      emit("  mrb_int " + tmp_c + " = 0;")
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+      emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
+      emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
+      if bbody >= 0
+        bs = get_stmts(bbody)
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        if bs.length > 0
+          bexpr = compile_expr(bs.last)
+        end
+      end
+      emit("    if (" + bexpr + ") " + tmp_c + "++;")
+      emit("  }")
+      return tmp_c
+    end
+    if mname == "any?"
+      tmp_r = new_temp
+      emit("  mrb_bool " + tmp_r + " = FALSE;")
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+      emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
+      emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
+      if bbody >= 0
+        bs = get_stmts(bbody)
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        if bs.length > 0
+          bexpr = compile_expr(bs.last)
+        end
+      end
+      emit("    if (" + bexpr + ") { " + tmp_r + " = TRUE; break; }")
+      emit("  }")
+      return tmp_r
+    end
+    if mname == "all?"
+      tmp_r = new_temp
+      emit("  mrb_bool " + tmp_r + " = TRUE;")
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+      emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
+      emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
+      if bbody >= 0
+        bs = get_stmts(bbody)
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        if bs.length > 0
+          bexpr = compile_expr(bs.last)
+        end
+      end
+      emit("    if (!(" + bexpr + ")) { " + tmp_r + " = FALSE; break; }")
+      emit("  }")
+      return tmp_r
+    end
+    # find / detect — return key of first match
+    if mname == "find" || mname == "detect"
+      tmp_r = new_temp
+      emit("  const char *" + tmp_r + " = \"\";")
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+      emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
+      emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
+      if bbody >= 0
+        bs = get_stmts(bbody)
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        if bs.length > 0
+          bexpr = compile_expr(bs.last)
+        end
+      end
+      emit("    if (" + bexpr + ") { " + tmp_r + " = lv_" + bp1 + "; break; }")
+      emit("  }")
+      return tmp_r
+    end
+    "0"
   end
 
   def compile_flat_map_expr(nid)

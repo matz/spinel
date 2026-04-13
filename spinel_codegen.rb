@@ -127,6 +127,7 @@ class Compiler
     @needs_int_array = 0
     @needs_float_array = 0
     @needs_ptr_array = 0
+    @tuple_types = "".split(",")
     @needs_str_array = 0
     @needs_str_int_hash = 0
     @needs_str_str_hash = 0
@@ -2018,7 +2019,18 @@ class Compiler
           end
         end
         if heterogeneous == 1 || multi_arg == 1
-          return "poly_array_ptr_array"
+          # Build tuple type: receiver elem + each arg elem
+          parts = "".split(",")
+          parts.push(elem_type_of_array(rt))
+          aargs2 = get_args(args_id)
+          k2 = 0
+          while k2 < aargs2.length
+            parts.push(elem_type_of_array(infer_type(aargs2[k2])))
+            k2 = k2 + 1
+          end
+          tt = "tuple:" + parts.join(",")
+          register_tuple_type(tt)
+          return tt + "_ptr_array"
         end
         if rt == "str_array"
           return "str_array_ptr_array"
@@ -2107,6 +2119,19 @@ class Compiler
         end
         if is_ptr_array_type(rt) == 1
           return ptr_array_elem_type(rt)
+        end
+        if is_tuple_type(rt) == 1
+          # Infer element type from constant index
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            aargs = get_args(args_id)
+            if aargs.length > 0
+              if @nd_type[aargs[0]] == "IntegerNode"
+                return tuple_elem_type_at(rt, @nd_value[aargs[0]])
+              end
+            end
+          end
+          return tuple_elem_type_at(rt, 0)
         end
         if rt == "str_int_hash"
           return "int"
@@ -2518,6 +2543,54 @@ class Compiler
     ""
   end
 
+  # ---- Tuple type helpers ----
+  def is_tuple_type(t)
+    if t != nil && t.length > 6
+      if t[0] == "t" && t[1] == "u" && t[2] == "p" && t[3] == "l" && t[4] == "e" && t[5] == ":"
+        return 1
+      end
+    end
+    0
+  end
+
+  def tuple_elem_types_str(t)
+    # "tuple:int,string" → "int,string"
+    t[6, t.length - 6]
+  end
+
+  def tuple_elem_type_at(t, idx)
+    parts = tuple_elem_types_str(t).split(",")
+    if idx < parts.length
+      return parts[idx]
+    end
+    "int"
+  end
+
+  def tuple_arity(t)
+    tuple_elem_types_str(t).split(",").length
+  end
+
+  def tuple_c_name(t)
+    # "tuple:int,string" → "sp_Tuple_int_string"
+    "sp_Tuple_" + tuple_elem_types_str(t).split(",").join("_")
+  end
+
+  def register_tuple_type(t)
+    if is_tuple_type(t) == 1
+      k = 0
+      found = 0
+      while k < @tuple_types.length
+        if @tuple_types[k] == t
+          found = 1
+        end
+        k = k + 1
+      end
+      if found == 0
+        @tuple_types.push(t)
+      end
+    end
+  end
+
   def type_is_pointer(t)
     if is_nullable_type(t) == 1
       t = base_type(t)
@@ -2555,6 +2628,9 @@ class Compiler
       if ci >= 0 && @cls_is_value_type[ci] == 1
         return 0
       end
+      return 1
+    end
+    if is_tuple_type(t) == 1
       return 1
     end
     0
@@ -2617,6 +2693,9 @@ class Compiler
       return 1
     end
     if is_obj_type(bt) == 1
+      return 1
+    end
+    if is_tuple_type(bt) == 1
       return 1
     end
     0
@@ -2682,6 +2761,9 @@ class Compiler
     end
     if t == "str_str_hash"
       return "sp_StrStrHash *"
+    end
+    if is_tuple_type(t) == 1
+      return tuple_c_name(t) + " *"
     end
     if t == "fiber"
       return "sp_Fiber *"
@@ -6850,6 +6932,7 @@ class Compiler
       emit_regexp_runtime
     end
     emit_class_structs
+    @tuple_insert_pos = @out.length
     emit_gc_scan_functions
     # Emit global variable declarations before functions
     gi = 0
@@ -6877,6 +6960,29 @@ class Compiler
     # Emit lambda functions before main (they are generated during compilation)
     # We emit them in emit_main after forward declarations
     emit_main
+    # Insert tuple struct definitions at the saved position
+    if @tuple_types.length > 0
+      tuple_lines = ""
+      k = 0
+      while k < @tuple_types.length
+        t = @tuple_types[k]
+        name = tuple_c_name(t)
+        parts = tuple_elem_types_str(t).split(",")
+        fields = ""
+        fi = 0
+        while fi < parts.length
+          if fi > 0
+            fields = fields + " "
+          end
+          fields = fields + c_type(parts[fi]) + " _" + fi.to_s + ";"
+          fi = fi + 1
+        end
+        tuple_lines = tuple_lines + "typedef struct { " + fields + " } " + name + ";\n"
+        k = k + 1
+      end
+      # Prepend before the content at @tuple_insert_pos
+      @out[@tuple_insert_pos] = tuple_lines + @out[@tuple_insert_pos]
+    end
     0
   end
 
@@ -8124,6 +8230,10 @@ class Compiler
         i = i + 1
       end
     end
+  end
+
+  def emit_tuple_structs
+    # Tuple structs are now inserted at end of generate_code
   end
 
   def emit_class_structs
@@ -9781,7 +9891,7 @@ class Compiler
             ltypes[k] = ltypes2[j]
             set_var_type(lnames[k], ltypes2[j])
           end
-          if ltypes[k] == "int_array_ptr_array" && ltypes2[j] != "int_array_ptr_array" && is_ptr_array_type(ltypes2[j]) == 1
+          if is_ptr_array_type(ltypes[k]) == 1 && ltypes2[j] != ltypes[k] && is_ptr_array_type(ltypes2[j]) == 1
             ltypes[k] = ltypes2[j]
             set_var_type(lnames[k], ltypes2[j])
           end
@@ -9792,6 +9902,13 @@ class Compiler
         end
         k = k + 1
       end
+      j = j + 1
+    end
+
+    # Update scope with second-pass results before third pass
+    j = 0
+    while j < lnames.length
+      set_var_type(lnames[j], ltypes[j])
       j = j + 1
     end
 
@@ -9815,6 +9932,14 @@ class Compiler
       while k < lnames.length
         if lnames[k] == lnames3[j]
           if ltypes[k] == "int_array" && ltypes3[j] != "int_array" && ltypes3[j] != "int"
+            ltypes[k] = ltypes3[j]
+            set_var_type(lnames[k], ltypes3[j])
+          end
+          if is_tuple_type(ltypes3[j]) == 1 && is_tuple_type(ltypes[k]) == 0
+            ltypes[k] = ltypes3[j]
+            set_var_type(lnames[k], ltypes3[j])
+          end
+          if is_tuple_type(ltypes[k]) == 1 && is_tuple_type(ltypes3[j]) == 1 && ltypes[k] != ltypes3[j]
             ltypes[k] = ltypes3[j]
             set_var_type(lnames[k], ltypes3[j])
           end
@@ -11039,6 +11164,34 @@ class Compiler
     if recv_type == "bool"
       if mname == "to_s"
         return "(" + rc + " ? \"true\" : \"false\")"
+      end
+    end
+
+    # Tuple methods
+    if is_tuple_type(recv_type) == 1
+      if mname == "[]"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          aargs = get_args(args_id)
+          if aargs.length > 0
+            if @nd_type[aargs[0]] == "IntegerNode"
+              idx = @nd_value[aargs[0]]
+              return rc + "->_" + idx.to_s
+            end
+            idx_expr = compile_expr(aargs[0])
+            return rc + "->_" + idx_expr
+          end
+        end
+      end
+      if mname == "first"
+        return rc + "->_0"
+      end
+      if mname == "last"
+        arity = tuple_arity(recv_type)
+        return rc + "->_" + (arity - 1).to_s
+      end
+      if mname == "length" || mname == "size"
+        return tuple_arity(recv_type).to_s
       end
     end
 
@@ -12426,13 +12579,23 @@ class Compiler
       emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
       emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_" + pfx_recv + "_length(" + rc + "); " + itmp + "++) {")
       if heterogeneous == 1
-        @needs_rb_value = 1
-        emit("    sp_PolyArray *" + pair_tmp + " = sp_PolyArray_new();")
-        emit("    sp_PolyArray_push(" + pair_tmp + ", " + box_val_to_poly("sp_" + pfx_recv + "_get(" + rc + ", " + itmp + ")", elem_type_of_array(recv_type)) + ");")
+        # Build tuple type
+        parts = "".split(",")
+        parts.push(elem_type_of_array(recv_type))
+        k = 0
+        while k < arg_types.length
+          parts.push(elem_type_of_array(arg_types[k]))
+          k = k + 1
+        end
+        tt = "tuple:" + parts.join(",")
+        register_tuple_type(tt)
+        tname = tuple_c_name(tt)
+        emit("    " + tname + " *" + pair_tmp + " = (" + tname + " *)sp_gc_alloc(sizeof(" + tname + "), NULL, NULL);")
+        emit("    " + pair_tmp + "->_0 = sp_" + pfx_recv + "_get(" + rc + ", " + itmp + ");")
         k = 0
         while k < arg_rcs.length
           apfx = array_c_prefix(arg_types[k])
-          emit("    sp_PolyArray_push(" + pair_tmp + ", " + box_val_to_poly("sp_" + apfx + "_get(" + arg_rcs[k] + ", " + itmp + ")", elem_type_of_array(arg_types[k])) + ");")
+          emit("    " + pair_tmp + "->_" + (k + 1).to_s + " = sp_" + apfx + "_get(" + arg_rcs[k] + ", " + itmp + ");")
           k = k + 1
         end
       else
@@ -14030,6 +14193,30 @@ class Compiler
       return "sp_IntArray_new()"
     end
     arr_type = infer_array_elem_type(nid)
+    if is_tuple_type(arr_type) == 1
+      name = tuple_c_name(arr_type)
+      tmp = new_temp
+      has_ptr = 0
+      parts = tuple_elem_types_str(arr_type).split(",")
+      fi = 0
+      while fi < parts.length
+        if type_is_pointer(parts[fi]) == 1
+          has_ptr = 1
+        end
+        fi = fi + 1
+      end
+      scan_fn = "NULL"
+      if has_ptr == 1
+        scan_fn = name + "_gc_scan"
+      end
+      emit("  " + name + " *" + tmp + " = (" + name + " *)sp_gc_alloc(sizeof(" + name + "), NULL, " + scan_fn + ");")
+      k = 0
+      while k < elems.length && k < parts.length
+        emit("  " + tmp + "->_" + k.to_s + " = " + compile_expr(elems[k]) + ";")
+        k = k + 1
+      end
+      return tmp
+    end
     if arr_type == "str_array"
       @needs_str_array = 1
       tmp = new_temp

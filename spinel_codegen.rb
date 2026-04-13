@@ -1849,6 +1849,17 @@ class Compiler
       end
       return "tuple:int_array,int_array"
     end
+    if mname == "to_a"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "str_int_hash"
+          return "tuple:string,int_ptr_array"
+        end
+        if rt == "str_str_hash"
+          return "tuple:string,string_ptr_array"
+        end
+      end
+    end
     if mname == "fdiv"
       return "float"
     end
@@ -2565,6 +2576,10 @@ class Compiler
   def is_tuple_type(t)
     if t != nil && t.length > 6
       if t[0] == "t" && t[1] == "u" && t[2] == "p" && t[3] == "l" && t[4] == "e" && t[5] == ":"
+        # Exclude ptr_array of tuples
+        if is_ptr_array_type(t) == 1
+          return 0
+        end
         return 1
       end
     end
@@ -13201,6 +13216,23 @@ class Compiler
         emit("  sp_StrIntHash *" + tmp + " = sp_StrIntHash_merge(" + rc + ", " + arg + ");")
         return tmp
       end
+      if mname == "to_a"
+        tt = "tuple:string,int"
+        register_tuple_type(tt)
+        @needs_ptr_array = 1
+        @needs_gc = 1
+        tname = tuple_c_name(tt)
+        tmp = new_temp
+        itmp = new_temp
+        emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+        emit("    " + tname + " *_tp = (" + tname + " *)sp_gc_alloc(sizeof(" + tname + "), NULL, NULL);")
+        emit("    _tp->_0 = " + rc + "->order[" + itmp + "];")
+        emit("    _tp->_1 = sp_StrIntHash_get(" + rc + ", " + rc + "->order[" + itmp + "]);")
+        emit("    sp_PtrArray_push(" + tmp + ", _tp);")
+        emit("  }")
+        return tmp
+      end
       if mname == "transform_values"
         if @nd_block[nid] >= 0
           blk = @nd_block[nid]
@@ -13248,6 +13280,23 @@ class Compiler
       end
       if mname == "invert"
         return "sp_StrStrHash_invert(" + rc + ")"
+      end
+      if mname == "to_a"
+        tt = "tuple:string,string"
+        register_tuple_type(tt)
+        @needs_ptr_array = 1
+        @needs_gc = 1
+        tname = tuple_c_name(tt)
+        tmp = new_temp
+        itmp = new_temp
+        emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < " + rc + "->len; " + itmp + "++) {")
+        emit("    " + tname + " *_tp = (" + tname + " *)sp_gc_alloc(sizeof(" + tname + "), NULL, NULL);")
+        emit("    _tp->_0 = " + rc + "->order[" + itmp + "];")
+        emit("    _tp->_1 = sp_StrStrHash_get(" + rc + ", " + rc + "->order[" + itmp + "]);")
+        emit("    sp_PtrArray_push(" + tmp + ", _tp);")
+        emit("  }")
+        return tmp
       end
       if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
         return compile_hash_select_reject(nid, "str_str_hash", rc, mname)

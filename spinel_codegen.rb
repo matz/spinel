@@ -9961,9 +9961,41 @@ class Compiler
     end
   end
 
+  # Returns 1 if `nid` is an explicit literal value (not a placeholder or
+  # inferred fallback). Used by scan_locals to distinguish a genuine int
+  # write like `x = 1` from a defaulted "int" from an unresolved read.
+  def is_literal_value_expr(nid)
+    if nid < 0
+      return 0
+    end
+    t = @nd_type[nid]
+    if t == "IntegerNode"
+      return 1
+    end
+    if t == "FloatNode"
+      return 1
+    end
+    if t == "StringNode"
+      return 1
+    end
+    if t == "SymbolNode"
+      return 1
+    end
+    if t == "TrueNode" || t == "FalseNode"
+      return 1
+    end
+    0
+  end
+
   def scan_locals(nid, names, types, params)
     if nid < 0
       return
+    end
+    # Parallel to `names`: "1" if this local's current stored type was set
+    # by an explicit literal write, "" otherwise. Reset when called with
+    # a fresh (empty) names array.
+    if names.length == 0
+      @scan_literal_flags = "".split(",")
     end
     if @nd_type[nid] == "MultiWriteNode"
       targets = parse_id_list(@nd_targets[nid])
@@ -9974,6 +10006,7 @@ class Compiler
             if not_in(lname, params) == 1
               names.push(lname)
               types.push("int")
+              @scan_literal_flags.push("")
             end
           end
         end
@@ -9989,6 +10022,11 @@ class Compiler
         if not_in(lname, params) == 1
           names.push(lname)
           types.push(infer_type(@nd_expression[nid]))
+          if is_literal_value_expr(@nd_expression[nid]) == 1
+            @scan_literal_flags.push("1")
+          else
+            @scan_literal_flags.push("")
+          end
         end
       else
         if not_in(lname, params) == 1
@@ -9999,6 +10037,17 @@ class Compiler
             if names[ki] == lname
               if types[ki] != at
                 if types[ki] != "poly"
+                  # Genuine polymorphism: both the first write and this
+                  # write were explicit literals, and their types differ.
+                  # This catches `x = 1; x = "hello"` which the legacy
+                  # "int is fallback" rule below would silently coerce.
+                  if ki < @scan_literal_flags.length && @scan_literal_flags[ki] == "1" && is_literal_value_expr(@nd_expression[nid]) == 1 && at != "nil" && types[ki] != "nil"
+                    types[ki] = "poly"
+                    @needs_rb_value = 1
+                    @scan_literal_flags[ki] = ""
+                    ki = ki + 1
+                    next
+                  end
                   # Don't mark poly if new type is fallback "int" and existing is richer
                   if at != "int"
                     if types[ki] == "int"

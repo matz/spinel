@@ -227,16 +227,27 @@ Whole-program type inference drives several compile-time optimizations:
 - **Dead-code elimination**: compiled with `-ffunction-sections
   -fdata-sections` and linked with `--gc-sections`; each unused
   runtime function is stripped from the final binary.
+- **Iterative inference early exit**: the param/return/ivar fixed-point
+  loop stops as soon as a signature of the three refined arrays stops
+  changing. Most programs converge in 1-2 iterations instead of the
+  full 4, cutting bootstrap time by ~14%.
+- **`parse_id_list` byte walk**: the AST-field list parser (called
+  ~120 K times during self-compile) walks bytes manually via
+  `s.bytes[i]` instead of `s.split(",")`, dropping N+1 allocations
+  per call to 2.
+- **Warning-free build**: generated C compiles cleanly at the default
+  warning level across every test and benchmark; the harness uses
+  `-Werror` so regressions surface immediately.
 
 ## Architecture
 
 ```
 spinel                One-command wrapper script (POSIX shell)
 spinel_parse.c        C frontend: libprism → text AST (1,061 lines)
-spinel_codegen.rb     Compiler backend: AST → C code (20,851 lines)
+spinel_codegen.rb     Compiler backend: AST → C code (21,109 lines)
 lib/sp_runtime.h      Runtime library header (581 lines)
 lib/sp_bigint.c       Arbitrary precision integers (5,394 lines)
-lib/regexp/           Built-in regexp engine (1,626 lines)
+lib/regexp/           Built-in regexp engine (1,759 lines)
 test/                 74 feature tests
 benchmark/            55 benchmarks
 Makefile              Build automation

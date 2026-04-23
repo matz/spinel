@@ -7682,9 +7682,11 @@ class Compiler
 
   def emit_ptr_array_runtime
     emit_raw("/* ---- PtrArray: array of void* pointers ---- */")
-    emit_raw("typedef struct{void**data;mrb_int len;mrb_int cap;}sp_PtrArray;")
+    emit_raw("typedef struct{void**data;mrb_int len;mrb_int cap;void(*scan_elem)(void*);}sp_PtrArray;")
     emit_raw("static void sp_PtrArray_fin(void*p){free(((sp_PtrArray*)p)->data);}")
-    emit_raw("static sp_PtrArray*sp_PtrArray_new(void){sp_PtrArray*a=(sp_PtrArray*)sp_gc_alloc(sizeof(sp_PtrArray),sp_PtrArray_fin,NULL);a->cap=16;a->data=(void**)malloc(sizeof(void*)*a->cap);a->len=0;return a;}")
+    emit_raw("static void sp_PtrArray_gc_scan(void*p){sp_PtrArray*a=(sp_PtrArray*)p;if(!a->scan_elem)return;for(mrb_int i=0;i<a->len;i++){if(a->data[i])a->scan_elem(a->data[i]);}}")
+    emit_raw("static sp_PtrArray*sp_PtrArray_new_scan(void(*scan_elem)(void*)){sp_PtrArray*a=(sp_PtrArray*)sp_gc_alloc(sizeof(sp_PtrArray),sp_PtrArray_fin,scan_elem?sp_PtrArray_gc_scan:NULL);a->cap=16;a->data=(void**)malloc(sizeof(void*)*a->cap);a->len=0;a->scan_elem=scan_elem;return a;}")
+    emit_raw("static sp_PtrArray*sp_PtrArray_new(void){return sp_PtrArray_new_scan(sp_gc_mark);}")
     emit_raw("static inline void sp_PtrArray_push(sp_PtrArray*a,void*v){if(a->len>=a->cap){a->cap=a->cap*2+1;a->data=(void**)realloc(a->data,sizeof(void*)*a->cap);}a->data[a->len++]=v;}")
     emit_raw("static inline void*sp_PtrArray_get(sp_PtrArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}")
     emit_raw("static inline void sp_PtrArray_set(sp_PtrArray*a,mrb_int i,void*v){if(i<0)i+=a->len;a->data[i]=v;}")

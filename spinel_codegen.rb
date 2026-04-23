@@ -4395,6 +4395,78 @@ class Compiler
     scan_new_calls(@root_id)
   end
 
+  # Merge `at` (inferred from a new call-site argument) into the
+  # accumulated ctor param type `old_pt`. "int" is normally treated as
+  # a fallback/placeholder (many unresolved reads default to it), but a
+  # literal IntegerNode is concrete — if old_pt is already a different
+  # concrete pointer type, int becomes genuine polymorphism. `arg_id`
+  # lets us distinguish literal from inferred.
+  def unify_call_types(old_pt, at, arg_id)
+    if old_pt == at
+      return old_pt
+    end
+    arg_is_literal = 0
+    if arg_id >= 0 && is_literal_value_expr(arg_id) == 1
+      arg_is_literal = 1
+    end
+    if old_pt == "nil"
+      if at == "nil"
+        return "nil"
+      end
+      if is_nullable_pointer_type(at) == 1
+        if is_nullable_type(at) == 1
+          return at
+        end
+        return at + "?"
+      end
+      return at
+    end
+    if at == "nil"
+      if is_nullable_pointer_type(old_pt) == 1
+        if is_nullable_type(old_pt) == 1
+          return old_pt
+        end
+        return old_pt + "?"
+      end
+      return old_pt
+    end
+    if old_pt == "int"
+      if at == "int"
+        return "int"
+      end
+      return at
+    end
+    if at == "int"
+      # Numeric compat: int + float is safe in both directions.
+      if old_pt == "float"
+        return "float"
+      end
+      # Literal int into a non-numeric concrete type: genuine poly.
+      if arg_is_literal == 1
+        @needs_rb_value = 1
+        return "poly"
+      end
+      # Inferred int (likely fallback): keep existing type.
+      return old_pt
+    end
+    if base_type(old_pt) == base_type(at)
+      # Nullable-compatible variants of the same base.
+      if is_nullable_type(at) == 1
+        return at
+      end
+      if is_nullable_type(old_pt) == 1
+        return old_pt
+      end
+      return old_pt
+    end
+    if (old_pt == "float" && at == "int") || (old_pt == "int" && at == "float")
+      return "float"
+    end
+    # Genuinely incompatible types: fall back to polymorphic value.
+    @needs_rb_value = 1
+    "poly"
+  end
+
   def scan_new_calls(nid)
     if nid < 0
       return
@@ -4495,16 +4567,13 @@ class Compiler
                                 if @nd_type[key_id] == "SymbolNode"
                                   kname = @nd_content[key_id]
                                 end
-                                at = infer_type(@nd_expression[elems[ek]])
+                                expr_id = @nd_expression[elems[ek]]
+                                at = infer_type(expr_id)
                                 pi = 0
                                 while pi < pnames.length
                                   if pnames[pi] == kname
                                     if pi < ptypes.length
-                                      if ptypes[pi] == "int"
-                                        if at != "int"
-                                          ptypes[pi] = at
-                                        end
-                                      end
+                                      ptypes[pi] = unify_call_types(ptypes[pi], at, expr_id)
                                     end
                                   end
                                   pi = pi + 1
@@ -4516,22 +4585,7 @@ class Compiler
                         else
                           at = infer_type(arg_ids[k])
                           if k < ptypes.length
-                            old_pt = ptypes[k]
-                            if old_pt == "int"
-                              if at != "int"
-                                ptypes[k] = at
-                              end
-                            elsif old_pt == "nil" && at != "nil" && at != "int"
-                              if is_nullable_pointer_type(at) == 1
-                                ptypes[k] = at + "?"
-                              else
-                                ptypes[k] = at
-                              end
-                            elsif at == "nil" && old_pt != "nil" && is_nullable_pointer_type(old_pt) == 1
-                              if old_pt[old_pt.length - 1] != "?"
-                                ptypes[k] = old_pt + "?"
-                              end
-                            end
+                            ptypes[k] = unify_call_types(ptypes[k], at, arg_ids[k])
                           end
                         end
                         k = k + 1
@@ -15159,11 +15213,52 @@ class Compiler
       ak = ak + 1
     end
     if has_kw == 0
+      # Positional args: still need to box any arg whose corresponding
+      # ctor param is poly.
+      init_ci_p = find_init_class(ci)
+      if init_ci_p >= 0
+        init_idx_p = cls_find_method_direct(init_ci_p, "initialize")
+        if init_idx_p >= 0
+          all_ptypes_p = @cls_meth_ptypes[init_ci_p].split("|")
+          if init_idx_p < all_ptypes_p.length
+            ptypes_p = all_ptypes_p[init_idx_p].split(",")
+            has_poly = 0
+            kpp = 0
+            while kpp < ptypes_p.length
+              if ptypes_p[kpp] == "poly"
+                has_poly = 1
+              end
+              kpp = kpp + 1
+            end
+            if has_poly == 1
+              result_p = ""
+              kp = 0
+              while kp < arg_ids.length
+                if kp > 0
+                  result_p = result_p + ", "
+                end
+                pt_p = "int"
+                if kp < ptypes_p.length
+                  pt_p = ptypes_p[kp]
+                end
+                if pt_p == "poly"
+                  result_p = result_p + box_expr_to_poly(arg_ids[kp])
+                else
+                  result_p = result_p + compile_expr(arg_ids[kp])
+                end
+                kp = kp + 1
+              end
+              return result_p
+            end
+          end
+        end
+      end
       return compile_call_args(nid)
     end
-    # Extract keyword pairs
+    # Extract keyword pairs — remember the expression nid too so we can
+    # box it (sp_box_int etc.) when the matching ctor param is poly.
     kw_names = "".split(",")
-    kw_vals = "".split(",")
+    kw_exprs = []
     ak = 0
     while ak < arg_ids.length
       if @nd_type[arg_ids[ak]] == "KeywordHashNode"
@@ -15178,7 +15273,7 @@ class Compiler
                 kname = @nd_content[key_id]
               end
               kw_names.push(kname)
-              kw_vals.push(compile_expr(@nd_expression[elems[ek]]))
+              kw_exprs.push(@nd_expression[elems[ek]])
             end
           end
           ek = ek + 1
@@ -15186,7 +15281,7 @@ class Compiler
       end
       ak = ak + 1
     end
-    # Get init param names from class
+    # Get init param names/types from class
     init_ci = find_init_class(ci)
     if init_ci < 0
       return compile_call_args(nid)
@@ -15196,9 +15291,14 @@ class Compiler
       return compile_call_args(nid)
     end
     all_params = @cls_meth_params[init_ci].split("|")
+    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
     pnames = "".split(",")
+    ptypes = "".split(",")
     if init_idx < all_params.length
       pnames = all_params[init_idx].split(",")
+    end
+    if init_idx < all_ptypes.length
+      ptypes = all_ptypes[init_idx].split(",")
     end
     # Build args in param order using keyword values
     result = ""
@@ -15207,17 +15307,30 @@ class Compiler
       if pk > 0
         result = result + ", "
       end
+      pt = "int"
+      if pk < ptypes.length
+        pt = ptypes[pk]
+      end
       found = 0
       ki = 0
       while ki < kw_names.length
         if kw_names[ki] == pnames[pk]
-          result = result + kw_vals[ki]
+          expr_id = kw_exprs[ki]
+          if pt == "poly"
+            result = result + box_expr_to_poly(expr_id)
+          else
+            result = result + compile_expr(expr_id)
+          end
           found = 1
         end
         ki = ki + 1
       end
       if found == 0
-        result = result + "0"
+        if pt == "poly"
+          result = result + "sp_box_nil()"
+        else
+          result = result + "0"
+        end
       end
       pk = pk + 1
     end

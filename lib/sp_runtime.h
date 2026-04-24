@@ -67,7 +67,7 @@ static char *sp_str_alloc(size_t len) {
   sp_str_heap = h;
   sp_gc_bytes += total;
   char *body = (char *)(h + 1);
-  body[0] = (char)0xfe;
+  body[0] = (char)0xfc; /* young: survive one sweep */
   body[1 + len] = 0;
   return body + 1;
 }

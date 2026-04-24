@@ -30,6 +30,25 @@ OPT_LEVEL="2"
 CC_CMD="cc"
 EXTRA_FLAGS=""
 
+# Platform-specific flags (see Makefile for rationale).
+PLATFORM_DEFS=""
+PLATFORM_INC=""
+GC_FLAG="-Wl,--gc-sections"
+if [ "$(uname -s)" = "Darwin" ]; then
+  PLATFORM_DEFS="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE -Wno-deprecated-declarations"
+  PLATFORM_INC="-I$(cd "$(dirname "$0")" && pwd)/lib/compat"
+  GC_FLAG="-Wl,-dead_strip"
+  # Codegen emits nested C functions (GCC extension) for procs/lambdas.
+  # Apple's cc is clang and will reject them. Prefer Homebrew's real GCC
+  # if the user hasn't overridden CC_CMD.
+  if [ "$CC_CMD" = "cc" ]; then
+    for g in /usr/local/bin/gcc-[0-9]* /opt/homebrew/bin/gcc-[0-9]*; do
+      [ -x "$g" ] && GCC_CANDIDATE="$g"
+    done
+    [ -n "$GCC_CANDIDATE" ] && CC_CMD="$GCC_CANDIDATE"
+  fi
+fi
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --source=*) SOURCE="${1#--source=}" ;;
@@ -129,7 +148,7 @@ if grep -q 're_compile' "$C_FILE" 2>/dev/null && [ ! -f "$SP_RT_LIB" ] && [ -f "
   EXTRA_FLAGS="$EXTRA_FLAGS $RE_LIB"
 fi
 INCLUDE_FLAGS="$INCLUDE_FLAGS -I$DIR/lib/regexp"
-$CC_CMD -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS -Wl,--gc-sections -o "$BIN_FILE"
+$CC_CMD -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $PLATFORM_DEFS $PLATFORM_INC $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS $GC_FLAG -o "$BIN_FILE"
 if [ $? -ne 0 ]; then
   echo "spinel: C compilation failed" >&2
   exit 1

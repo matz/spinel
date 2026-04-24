@@ -15,6 +15,42 @@ CFLAGS   = -O2 -Wno-all
 SEC_FLAGS = -ffunction-sections -fdata-sections
 GC_FLAGS  = -Wl,--gc-sections
 
+# ---- Platform-specific flags ----
+# On macOS:
+#   * <ucontext.h> routines (getcontext/makecontext/swapcontext) are marked
+#     deprecated and guarded behind _XOPEN_SOURCE. _DARWIN_C_SOURCE re-enables
+#     Darwin extensions (MAP_ANON, etc.) that _XOPEN_SOURCE would otherwise hide.
+#   * <malloc.h> is not a system header; malloc lives in <stdlib.h>. We shadow
+#     the missing header via lib/compat/malloc.h (a stdlib.h shim). -Ilib/compat
+#     must appear in front of -Ilib so it's searched first.
+#   * The GNU linker flag --gc-sections is unsupported by ld64; use -dead_strip.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  PLATFORM_DEFS = -D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE -Wno-deprecated-declarations
+  PLATFORM_INC  = -Ilib/compat
+  GC_FLAGS      = -Wl,-dead_strip
+  # The codegen emits nested C functions (a GCC extension) for Ruby
+  # procs/lambdas. Clang — macOS's default /usr/bin/cc — does not
+  # implement them, so test programs with procs fail to compile. If
+  # the user hasn't set CC explicitly, look for a Homebrew GCC and
+  # prefer it. `origin CC == default` means CC is still make's built-in
+  # ("cc"), i.e. nobody overrode it on the command line or in the env.
+  # On macOS plain `gcc` (incl. /usr/bin/gcc) is a clang wrapper, not real
+  # GCC. Homebrew installs real GCC only as versioned `gcc-NN`, so the
+  # version suffix is the reliable signal. Prefer the newest installed.
+  ifeq ($(origin CC),default)
+    GCC_BIN := $(lastword $(sort $(wildcard /usr/local/bin/gcc-[0-9]* /opt/homebrew/bin/gcc-[0-9]*)))
+    ifneq ($(GCC_BIN),)
+      CC := $(GCC_BIN)
+    endif
+  endif
+else
+  PLATFORM_DEFS =
+  PLATFORM_INC  =
+endif
+
+CFLAGS += $(PLATFORM_DEFS)
+
 # Prism library: prefer vendor/prism (fetched via `make deps`), then
 # fall back to the Prism gem if one is installed. Override by setting
 # PRISM_DIR=/path/to/prism on the command line.
@@ -111,10 +147,10 @@ spinel_codegen: spinel_codegen.rb spinel_parse
 	./spinel_parse spinel_codegen.rb build/codegen.ast
 	@echo "=== Bootstrap Step 2: gen1 (CRuby) ==="
 	ruby spinel_codegen.rb build/codegen.ast build/gen1.c
-	$(CC) $(CFLAGS) -Ilib build/gen1.c -lm -o build/bin1
+	$(CC) $(CFLAGS) $(PLATFORM_INC) -Ilib build/gen1.c -lm -o build/bin1
 	@echo "=== Bootstrap Step 3: gen2 (bin1) ==="
 	./build/bin1 build/codegen.ast build/gen2.c
-	$(CC) $(CFLAGS) -Ilib build/gen2.c -lm -o build/bin2
+	$(CC) $(CFLAGS) $(PLATFORM_INC) -Ilib build/gen2.c -lm -o build/bin2
 	@echo "=== Bootstrap Step 4: gen3 (bin2) - verify ==="
 	./build/bin2 build/codegen.ast build/gen3.c
 	@diff build/gen2.c build/gen3.c > /dev/null && echo "gen2.c == gen3.c (bootstrap OK)" || (echo "BOOTSTRAP FAILED: gen2.c != gen3.c" && exit 1)
@@ -129,7 +165,7 @@ test: spinel_parse $(SP_RT_LIB)
 	  bn=$$(basename "$$f" .rb); \
 	  ./spinel_parse "$$f" /tmp/_sp_t.ast 2>/dev/null && \
 	  ./spinel_codegen /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin 2>/dev/null; \
+	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) $(PLATFORM_INC) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 10 ruby "$$f" 2>/dev/null); \
 	    actual=$$(timeout 10 /tmp/_sp_t_bin 2>/dev/null); \
@@ -152,7 +188,7 @@ bench: spinel_parse $(SP_RT_LIB)
 	  bn=$$(basename "$$f" .rb); \
 	  timeout 10 ./spinel_parse "$$f" /tmp/_sp_b.ast 2>/dev/null && \
 	  timeout 10 ./spinel_codegen /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin 2>/dev/null; \
+	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) $(PLATFORM_INC) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 60 ruby "$$f" 2>/dev/null); \
 	    ruby_rc=$$?; \

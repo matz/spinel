@@ -43,6 +43,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # if the user hasn't overridden CC_CMD.
   if [ "$CC_CMD" = "cc" ]; then
     GCC_CANDIDATE=$(ls /usr/local/bin/gcc-[0-9]* /opt/homebrew/bin/gcc-[0-9]* 2>/dev/null | sort -t- -k2,2n | tail -n 1)
+    if [ -n "$GCC_CANDIDATE" ]; then
+      CC_CMD="$GCC_CANDIDATE"
+    fi
   fi
 fi
 

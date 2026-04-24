@@ -148,7 +148,7 @@ if grep -q 're_compile' "$C_FILE" 2>/dev/null && [ ! -f "$SP_RT_LIB" ] && [ -f "
   EXTRA_FLAGS="$EXTRA_FLAGS $RE_LIB"
 fi
 INCLUDE_FLAGS="$INCLUDE_FLAGS -I$DIR/lib/regexp"
-$CC_CMD -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $PLATFORM_DEFS $PLATFORM_INC $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS $GC_FLAG -o "$BIN_FILE"
+"$CC_CMD" -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $PLATFORM_DEFS $PLATFORM_INC $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS $GC_FLAG -o "$BIN_FILE"
 if [ $? -ne 0 ]; then
   echo "spinel: C compilation failed" >&2
   exit 1

@@ -20,9 +20,12 @@ else
   GC_FLAGS = -Wl,--gc-sections
 endif
 
-# Windows (MinGW) default stack is 1MB — far too small for the deeply
-# recursive bootstrap compile (~75k frames of AST traversal). Reserve 64MB.
+# MinGW gcc appends .exe to its output filename; reflect that in target
+# names so Make's dependency tracking and install/clean match reality.
+# Windows (MinGW) default stack is also only 1MB — far too small for the
+# deeply recursive bootstrap compile (~75k frames of AST traversal).
 ifeq ($(OS),Windows_NT)
+  EXE = .exe
   LDFLAGS += -Wl,--stack,67108864
 endif
 
@@ -88,9 +91,9 @@ build/prism/%.o: $(PRISM_DIR)/src/%.c
 
 # ---- C Parser ----
 
-parse: spinel_parse
+parse: spinel_parse$(EXE)
 
-spinel_parse: spinel_parse.c $(PRISM_LIB)
+spinel_parse$(EXE): spinel_parse.c $(PRISM_LIB)
 	$(CC) $(CFLAGS) -I$(PRISM_INC) $< $(PRISM_LIB) -lm -o $@
 
 # ---- Runtime library (regexp + bigint) ----
@@ -115,35 +118,35 @@ regexp: $(SP_RT_LIB)
 
 # ---- Bootstrap ----
 
-bootstrap: spinel_codegen
+bootstrap: spinel_codegen$(EXE)
 
-spinel_codegen: spinel_codegen.rb spinel_parse
+spinel_codegen$(EXE): spinel_codegen.rb spinel_parse$(EXE)
 	@echo "=== Bootstrap Step 1: parse ==="
-	./spinel_parse spinel_codegen.rb build/codegen.ast
+	./spinel_parse$(EXE) spinel_codegen.rb build/codegen.ast
 	@echo "=== Bootstrap Step 2: gen1 (CRuby) ==="
 	ruby spinel_codegen.rb build/codegen.ast build/gen1.c
-	$(CC) $(CFLAGS) -Ilib build/gen1.c $(LDFLAGS) -lm -o build/bin1
+	$(CC) $(CFLAGS) -Ilib build/gen1.c $(LDFLAGS) -lm -o build/bin1$(EXE)
 	@echo "=== Bootstrap Step 3: gen2 (bin1) ==="
-	./build/bin1 build/codegen.ast build/gen2.c
-	$(CC) $(CFLAGS) -Ilib build/gen2.c $(LDFLAGS) -lm -o build/bin2
+	./build/bin1$(EXE) build/codegen.ast build/gen2.c
+	$(CC) $(CFLAGS) -Ilib build/gen2.c $(LDFLAGS) -lm -o build/bin2$(EXE)
 	@echo "=== Bootstrap Step 4: gen3 (bin2) - verify ==="
-	./build/bin2 build/codegen.ast build/gen3.c
+	./build/bin2$(EXE) build/codegen.ast build/gen3.c
 	@diff build/gen2.c build/gen3.c > /dev/null && echo "gen2.c == gen3.c (bootstrap OK)" || (echo "BOOTSTRAP FAILED: gen2.c != gen3.c" && exit 1)
-	cp build/bin2 spinel_codegen
+	cp build/bin2$(EXE) spinel_codegen$(EXE)
 
 # ---- Test ----
 
-test: spinel_parse $(SP_RT_LIB)
-	@if [ ! -f spinel_codegen ]; then echo "Run 'make bootstrap' first"; exit 1; fi
+test: spinel_parse$(EXE) $(SP_RT_LIB)
+	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make bootstrap' first"; exit 1; fi
 	@pass=0; fail=0; err=0; \
 	for f in test/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
-	  ./spinel_parse "$$f" /tmp/_sp_t.ast 2>/dev/null && \
-	  ./spinel_codegen /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin 2>/dev/null; \
+	  ./spinel_parse$(EXE) "$$f" /tmp/_sp_t.ast 2>/dev/null && \
+	  ./spinel_codegen$(EXE) /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
+	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 10 ruby "$$f" 2>/dev/null); \
-	    actual=$$(timeout 10 /tmp/_sp_t_bin 2>/dev/null); \
+	    actual=$$(timeout 10 /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
 	    if [ "$$expected" = "$$actual" ]; then \
 	      pass=$$((pass+1)); \
 	    else \
@@ -153,24 +156,24 @@ test: spinel_parse $(SP_RT_LIB)
 	    echo "ERR:  $$bn"; err=$$((err+1)); \
 	  fi; \
 	done; \
-	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin; \
+	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin$(EXE); \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"
 
-bench: spinel_parse $(SP_RT_LIB)
-	@if [ ! -f spinel_codegen ]; then echo "Run 'make bootstrap' first"; exit 1; fi
+bench: spinel_parse$(EXE) $(SP_RT_LIB)
+	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make bootstrap' first"; exit 1; fi
 	@pass=0; fail=0; skip=0; \
 	for f in benchmark/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
-	  timeout 10 ./spinel_parse "$$f" /tmp/_sp_b.ast 2>/dev/null && \
-	  timeout 10 ./spinel_codegen /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin 2>/dev/null; \
+	  timeout 10 ./spinel_parse$(EXE) "$$f" /tmp/_sp_b.ast 2>/dev/null && \
+	  timeout 10 ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
+	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    expected=$$(timeout 60 ruby "$$f" 2>/dev/null); \
 	    ruby_rc=$$?; \
 	    if [ $$ruby_rc -eq 124 ]; then \
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
-	      actual=$$(timeout 60 /tmp/_sp_b_bin 2>/dev/null); \
+	      actual=$$(timeout 60 /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
 	      if [ "$$expected" = "$$actual" ]; then \
 	        pass=$$((pass+1)); \
 	      else \
@@ -181,7 +184,7 @@ bench: spinel_parse $(SP_RT_LIB)
 	    echo "ERR:  $$bn"; \
 	  fi; \
 	done; \
-	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin; \
+	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin$(EXE); \
 	echo "Benchmarks: $$pass pass, $$fail fail, $$skip skip"
 
 # ---- Install ----
@@ -191,14 +194,14 @@ SPNLDIR   = $(PREFIX)/lib/spinel
 
 install: all
 	install -d $(SPNLDIR)/lib
-	install -m 755 spinel           $(SPNLDIR)/
-	install -m 755 spinel_parse $(SPNLDIR)/
-	install -m 755 spinel_codegen   $(SPNLDIR)/
-	install -m 644 spinel_parse.rb  $(SPNLDIR)/
-	install -m 644 spinel_codegen.rb $(SPNLDIR)/
-	install -m 644 lib/libspinel_rt.a $(SPNLDIR)/lib/
-	install -m 644 lib/sp_runtime.h   $(SPNLDIR)/lib/
-	install -m 644 lib/*.rb           $(SPNLDIR)/lib/
+	install -m 755 spinel                $(SPNLDIR)/
+	install -m 755 spinel_parse$(EXE)    $(SPNLDIR)/
+	install -m 755 spinel_codegen$(EXE)  $(SPNLDIR)/
+	install -m 644 spinel_parse.rb       $(SPNLDIR)/
+	install -m 644 spinel_codegen.rb     $(SPNLDIR)/
+	install -m 644 lib/libspinel_rt.a    $(SPNLDIR)/lib/
+	install -m 644 lib/sp_runtime.h      $(SPNLDIR)/lib/
+	install -m 644 lib/*.rb              $(SPNLDIR)/lib/
 	install -d $(PREFIX)/bin
 	ln -sf $(SPNLDIR)/spinel $(PREFIX)/bin/spinel
 
@@ -210,4 +213,4 @@ uninstall:
 
 clean:
 	rm -rf build/
-	rm -f spinel_parse spinel_codegen
+	rm -f spinel_parse$(EXE) spinel_codegen$(EXE)

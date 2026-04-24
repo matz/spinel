@@ -24,9 +24,13 @@
 #include <stdarg.h>
 #include <time.h>
 #include <setjmp.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <ucontext.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#endif
 #ifndef __APPLE__
 #include <malloc.h>
 #endif
@@ -141,7 +145,7 @@ static int sp_gc_cycle=0;
 static sp_gc_hdr*sp_gc_old_heap=NULL;static size_t sp_gc_old_bytes=0;
 #define SP_GC_FULL_INTERVAL 8
 static void sp_gc_collect(void){int full=(sp_gc_cycle%SP_GC_FULL_INTERVAL==0);sp_gc_cycle++;sp_gc_hdr*hh=sp_gc_old_heap;while(hh){hh->marked=0;hh=hh->next;}sp_gc_mark_all();if(full){sp_gc_hdr**pp=&sp_gc_old_heap;sp_gc_old_bytes=0;while(*pp){sp_gc_hdr*h=*pp;if(!h->marked){*pp=h->next;if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}else{h->marked=1;sp_gc_old_bytes+=h->size;pp=&h->next;}}}else{hh=sp_gc_old_heap;while(hh){hh->marked=1;hh=hh->next;}}sp_gc_hdr**pp=&sp_gc_heap;sp_gc_bytes=sp_gc_old_bytes;while(*pp){sp_gc_hdr*h=*pp;if(!h->marked){*pp=h->next;if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}else{h->marked=1;*pp=h->next;h->next=sp_gc_old_heap;sp_gc_old_heap=h;sp_gc_old_bytes+=h->size;sp_gc_bytes+=h->size;}}sp_str_sweep();
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_WIN32)
 malloc_trim(0);
 #endif
 }
@@ -567,13 +571,20 @@ static mrb_bool sp_StringIO_sync(sp_StringIO *s) { (void)s; return 1; }
 static mrb_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
 
 /* ---- Lambda/closure runtime (sp_Val) ---- */
-#include <sys/mman.h>
 typedef struct sp_Val sp_Val;
 typedef sp_Val *(*sp_fn_t)(sp_Val *self, sp_Val *arg);
 struct sp_Val { enum { SP_PROC2, SP_INT2, SP_BOOL2, SP_NIL2 } tag; union { struct { sp_fn_t fn; int ncaptures; } proc; mrb_int ival; mrb_bool bval; } u; sp_Val *captures[]; };
+#ifdef _WIN32
+#define SP_ARENA_SIZE ((size_t)256ULL * 1024 * 1024)
+#else
 #define SP_ARENA_SIZE ((size_t)16ULL * 1024 * 1024 * 1024)
+#endif
 static char *sp_arena = NULL; static size_t sp_arena_pos = 0;
+#ifdef _WIN32
+static void *sp_lam_alloc(size_t sz) { sz = (sz + 7) & ~(size_t)7; if (!sp_arena) { sp_arena = (char *)VirtualAlloc(NULL, SP_ARENA_SIZE, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE); if (!sp_arena) { fprintf(stderr, "VirtualAlloc failed\n"); exit(1); } sp_arena_pos = 0; } if (sp_arena_pos + sz > SP_ARENA_SIZE) { fprintf(stderr, "arena exhausted\n"); exit(1); } void *p = sp_arena + sp_arena_pos; sp_arena_pos += sz; return p; }
+#else
 static void *sp_lam_alloc(size_t sz) { sz = (sz + 7) & ~(size_t)7; if (!sp_arena) { sp_arena = (char *)mmap(NULL, SP_ARENA_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0); if (sp_arena == MAP_FAILED) { perror("mmap"); exit(1); } sp_arena_pos = 0; } if (sp_arena_pos + sz > SP_ARENA_SIZE) { fprintf(stderr, "arena exhausted\n"); exit(1); } void *p = sp_arena + sp_arena_pos; sp_arena_pos += sz; return p; }
+#endif
 static sp_Val *sp_lam_proc(sp_fn_t fn, int ncap) { sp_Val *v = (sp_Val *)sp_lam_alloc(sizeof(sp_Val) + sizeof(sp_Val *) * ncap); v->tag = SP_PROC2; v->u.proc.fn = fn; v->u.proc.ncaptures = ncap; return v; }
 static sp_Val *sp_lam_int(mrb_int n) { sp_Val *v = (sp_Val *)sp_lam_alloc(sizeof(sp_Val)); v->tag = SP_INT2; v->u.ival = n; return v; }
 static sp_Val *sp_lam_bool(mrb_bool b) { sp_Val *v = (sp_Val *)sp_lam_alloc(sizeof(sp_Val)); v->tag = SP_BOOL2; v->u.bval = b; return v; }
@@ -581,10 +592,22 @@ static sp_Val sp_lam_nil_val = { .tag = SP_NIL2 };
 static sp_Val *sp_lam_call(sp_Val *f, sp_Val *arg) { return f->u.proc.fn(f, arg); }
 static mrb_int sp_lam_to_int(sp_Val *v) { return v->u.ival; }
 
-/* ---- Fiber runtime (ucontext) ---- */
-#include <ucontext.h>
-#include <sys/mman.h>
+/* ---- Fiber runtime ---- */
 #define SP_FIBER_STACK_SIZE (64*1024)
+#ifdef _WIN32
+typedef struct sp_Fiber{LPVOID ctx;LPVOID caller_ctx;char*stack;int state;int transferred;sp_RbVal yielded_value;sp_RbVal resumed_value;void(*body)(struct sp_Fiber*);void*user_data;int saved_exc_top;int saved_catch_top;struct sp_Fiber*caller;}sp_Fiber;
+static sp_Fiber sp_fiber_root;
+static sp_Fiber*sp_fiber_current=&sp_fiber_root;
+static void sp_Fiber_fin(void*p){sp_Fiber*f=(sp_Fiber*)p;if(f->ctx)DeleteFiber(f->ctx);}
+static void sp_Fiber_scan(void*p){sp_Fiber*f=(sp_Fiber*)p;if(f->user_data)sp_gc_mark(f->user_data);}
+static sp_Fiber*sp_Fiber_new(void(*body)(sp_Fiber*)){sp_Fiber*f=(sp_Fiber*)sp_gc_alloc(sizeof(sp_Fiber),sp_Fiber_fin,sp_Fiber_scan);f->ctx=NULL;f->caller_ctx=NULL;f->stack=NULL;f->state=0;f->transferred=0;f->body=body;f->yielded_value=sp_box_nil();f->resumed_value=sp_box_nil();f->user_data=NULL;f->saved_exc_top=0;f->saved_catch_top=0;f->caller=NULL;return f;}
+static VOID CALLBACK sp_fiber_trampoline(LPVOID param){sp_Fiber*f=(sp_Fiber*)param;f->body(f);f->state=3;if(f->transferred){sp_fiber_current=&sp_fiber_root;SwitchToFiber(sp_fiber_root.ctx);}else{SwitchToFiber(f->caller->ctx);}}
+static void sp_fiber_ensure_root(void){if(!sp_fiber_root.ctx)sp_fiber_root.ctx=ConvertThreadToFiber(NULL);}
+static sp_RbVal sp_Fiber_resume(sp_Fiber*f,sp_RbVal val){if(f->state==3){sp_raise_cls("FiberError","attempt to resume a terminated fiber");}sp_fiber_ensure_root();f->resumed_value=val;sp_Fiber*prev=sp_fiber_current;f->caller=prev;sp_fiber_current=f;if(f->state==0){f->state=1;f->ctx=CreateFiber(SP_FIBER_STACK_SIZE,sp_fiber_trampoline,f);}else{f->state=1;}SwitchToFiber(f->ctx);sp_fiber_current=prev;return f->yielded_value;}
+static sp_RbVal sp_Fiber_yield(sp_RbVal val){sp_Fiber*f=sp_fiber_current;f->yielded_value=val;f->state=2;SwitchToFiber(f->caller->ctx);return f->resumed_value;}
+static mrb_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
+static sp_RbVal sp_Fiber_transfer(sp_Fiber*f,sp_RbVal val){sp_fiber_ensure_root();f->resumed_value=val;sp_Fiber*prev=sp_fiber_current;sp_fiber_current=f;if(f->state==0){f->state=1;f->transferred=1;f->caller=prev;f->ctx=CreateFiber(SP_FIBER_STACK_SIZE,sp_fiber_trampoline,f);}else{f->state=1;}SwitchToFiber(f->ctx);sp_fiber_current=prev;return prev->resumed_value;}
+#else
 typedef struct sp_Fiber{ucontext_t ctx;ucontext_t caller_ctx;char*stack;int state;int transferred;sp_RbVal yielded_value;sp_RbVal resumed_value;void(*body)(struct sp_Fiber*);void*user_data;int saved_exc_top;int saved_catch_top;}sp_Fiber;
 static sp_Fiber sp_fiber_root;
 static sp_Fiber*sp_fiber_current=&sp_fiber_root;
@@ -596,6 +619,7 @@ static sp_RbVal sp_Fiber_resume(sp_Fiber*f,sp_RbVal val){if(f->state==3){sp_rais
 static sp_RbVal sp_Fiber_yield(sp_RbVal val){sp_Fiber*f=sp_fiber_current;f->yielded_value=val;f->state=2;swapcontext(&f->ctx,&f->caller_ctx);return f->resumed_value;}
 static mrb_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
 static sp_RbVal sp_Fiber_transfer(sp_Fiber*f,sp_RbVal val){f->resumed_value=val;sp_Fiber*prev=sp_fiber_current;sp_fiber_current=f;if(f->state==0){f->state=1;f->transferred=1;getcontext(&f->ctx);f->ctx.uc_stack.ss_sp=f->stack;f->ctx.uc_stack.ss_size=SP_FIBER_STACK_SIZE;f->ctx.uc_link=&prev->ctx;makecontext(&f->ctx,(void(*)(void))sp_fiber_trampoline,0);swapcontext(&prev->ctx,&f->ctx);}else{f->state=1;swapcontext(&prev->ctx,&f->ctx);}sp_fiber_current=prev;return prev->resumed_value;}
+#endif
 
 /* Bigint (linked from sp_bigint.o) */
 typedef struct sp_Bigint sp_Bigint;

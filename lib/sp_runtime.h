@@ -5,6 +5,8 @@
 #ifdef __APPLE__
 #define _XOPEN_SOURCE 600
 #define _DARWIN_C_SOURCE
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
 #include <stdio.h>
@@ -624,5 +626,9 @@ int sp_bigint_cmp(sp_Bigint *a, sp_Bigint *b);
 int64_t sp_bigint_to_int(sp_Bigint *b);
 const char *sp_bigint_to_s(sp_Bigint *b);
 void sp_bigint_free(sp_Bigint *b);
+
+#ifdef __APPLE__
+#pragma clang diagnostic pop
+#endif
 
 #endif /* SP_RUNTIME_H */

@@ -129,7 +129,12 @@ if grep -q 're_compile' "$C_FILE" 2>/dev/null && [ ! -f "$SP_RT_LIB" ] && [ -f "
   EXTRA_FLAGS="$EXTRA_FLAGS $RE_LIB"
 fi
 INCLUDE_FLAGS="$INCLUDE_FLAGS -I$DIR/lib/regexp"
-$CC_CMD -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS -Wl,--gc-sections -o "$BIN_FILE"
+if [ "$(uname -s)" = "Darwin" ]; then
+  GC_FLAGS="-Wl,-dead_strip"
+else
+  GC_FLAGS="-Wl,--gc-sections"
+fi
+$CC_CMD -O${OPT_LEVEL} -Wno-all -ffunction-sections -fdata-sections $INCLUDE_FLAGS "$C_FILE" -lm $EXTRA_FLAGS $GC_FLAGS -o "$BIN_FILE"
 if [ $? -ne 0 ]; then
   echo "spinel: C compilation failed" >&2
   exit 1

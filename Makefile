@@ -13,7 +13,11 @@ CFLAGS   = -O2 -Wno-all
 # Per-function sections allow the linker to strip unused bigint/regexp
 # functions from the final binary (supported since GCC 2.7 / binutils 2.17).
 SEC_FLAGS = -ffunction-sections -fdata-sections
-GC_FLAGS  = -Wl,--gc-sections
+ifeq ($(shell uname -s),Darwin)
+  GC_FLAGS = -Wl,-dead_strip
+else
+  GC_FLAGS = -Wl,--gc-sections
+endif
 
 # Prism library: prefer vendor/prism (fetched via `make deps`), then
 # fall back to the Prism gem if one is installed. Override by setting

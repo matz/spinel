@@ -18602,7 +18602,7 @@ class Compiler
     @out_lines = save_out
     # Hoist function to file scope (via @lambda_funcs) for Clang compat
     if body_stmts != ""
-      @lambda_funcs << "static mrb_int " + fname + "(mrb_int lv_" + bp + ") { " + body_stmts.strip + " return " + bexpr + "; }\n"
+      @lambda_funcs << "static mrb_int " + fname + "(mrb_int lv_" + bp + ") {\n" + body_stmts + "  return " + bexpr + ";\n}\n"
     else
       @lambda_funcs << "static mrb_int " + fname + "(mrb_int lv_" + bp + ") { return " + bexpr + "; }\n"
     end

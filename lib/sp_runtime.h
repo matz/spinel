@@ -3,7 +3,8 @@
 #define SP_RUNTIME_H
 
 #ifdef __APPLE__
-#define _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#define _DARWIN_C_SOURCE
 #endif
 
 #include <stdio.h>
@@ -577,10 +578,6 @@ static sp_Val *sp_lam_call(sp_Val *f, sp_Val *arg) { return f->u.proc.fn(f, arg)
 static mrb_int sp_lam_to_int(sp_Val *v) { return v->u.ival; }
 
 /* ---- Fiber runtime (ucontext) ---- */
-#ifdef __APPLE__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
 #define SP_FIBER_STACK_SIZE (64*1024)
 typedef struct sp_Fiber{ucontext_t ctx;ucontext_t caller_ctx;char*stack;int state;int transferred;sp_RbVal yielded_value;sp_RbVal resumed_value;void(*body)(struct sp_Fiber*);void*user_data;int saved_exc_top;int saved_catch_top;}sp_Fiber;
 static sp_Fiber sp_fiber_root;
@@ -593,9 +590,6 @@ static sp_RbVal sp_Fiber_resume(sp_Fiber*f,sp_RbVal val){if(f->state==3){sp_rais
 static sp_RbVal sp_Fiber_yield(sp_RbVal val){sp_Fiber*f=sp_fiber_current;f->yielded_value=val;f->state=2;swapcontext(&f->ctx,&f->caller_ctx);return f->resumed_value;}
 static mrb_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
 static sp_RbVal sp_Fiber_transfer(sp_Fiber*f,sp_RbVal val){f->resumed_value=val;sp_Fiber*prev=sp_fiber_current;sp_fiber_current=f;if(f->state==0){f->state=1;f->transferred=1;getcontext(&f->ctx);f->ctx.uc_stack.ss_sp=f->stack;f->ctx.uc_stack.ss_size=SP_FIBER_STACK_SIZE;f->ctx.uc_link=&prev->ctx;makecontext(&f->ctx,(void(*)(void))sp_fiber_trampoline,0);swapcontext(&prev->ctx,&f->ctx);}else{f->state=1;swapcontext(&prev->ctx,&f->ctx);}sp_fiber_current=prev;return prev->resumed_value;}
-#ifdef __APPLE__
-#pragma clang diagnostic pop
-#endif
 
 /* Bigint (linked from sp_bigint.o) */
 typedef struct sp_Bigint sp_Bigint;

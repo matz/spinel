@@ -92,16 +92,16 @@ substantial on computation-heavy workloads.
 
 | Benchmark | Spinel | miniruby | Speedup |
 |---|---|---|---|
-| life (Conway's GoL) | 20 ms | 1,733 ms | 86.7x |
+| life (Conway's GoL) | 20 ms | 1_733 ms | 86.7x |
 | ackermann | 5 ms | 374 ms | 74.8x |
-| mandelbrot | 25 ms | 1,453 ms | 58.1x |
+| mandelbrot | 25 ms | 1_453 ms | 58.1x |
 | fib (recursive) | 17 ms | 581 ms | 34.2x |
 | nqueens | 10 ms | 304 ms | 30.4x |
 | tarai | 16 ms | 461 ms | 28.8x |
 | tak | 22 ms | 532 ms | 24.2x |
 | matmul | 13 ms | 313 ms | 24.1x |
 | sudoku | 6 ms | 102 ms | 17.0x |
-| partial_sums | 93 ms | 1,498 ms | 16.1x |
+| partial_sums | 93 ms | 1_498 ms | 16.1x |
 | fannkuch | 2 ms | 19 ms | 9.5x |
 | sieve | 39 ms | 332 ms | 8.5x |
 | fasta (DNA seq gen) | 3 ms | 21 ms | 7.0x |
@@ -116,7 +116,7 @@ substantial on computation-heavy workloads.
 | so_lists | 76 ms | 410 ms | 5.4x |
 | binary_trees | 11 ms | 40 ms | 3.6x |
 | linked_list | 136 ms | 388 ms | 2.9x |
-| gcbench | 1,845 ms | 3,641 ms | 2.0x |
+| gcbench | 1_845 ms | 3_641 ms | 2.0x |
 
 ### Real-World Programs
 
@@ -124,7 +124,7 @@ substantial on computation-heavy workloads.
 |---|---|---|---|
 | json_parse | 39 ms | 394 ms | 10.1x |
 | bigint_fib (1000 digits) | 2 ms | 16 ms | 8.0x |
-| ao_render (ray tracer) | 417 ms | 3,334 ms | 8.0x |
+| ao_render (ray tracer) | 417 ms | 3_334 ms | 8.0x |
 | pidigits (bigint) | 2 ms | 13 ms | 6.5x |
 | str_concat | 2 ms | 13 ms | 6.5x |
 | template engine | 152 ms | 936 ms | 6.2x |
@@ -243,11 +243,11 @@ Whole-program type inference drives several compile-time optimizations:
 
 ```
 spinel                One-command wrapper script (POSIX shell)
-spinel_parse.c        C frontend: libprism → text AST (1,061 lines)
-spinel_codegen.rb     Compiler backend: AST → C code (21,109 lines)
+spinel_parse.c        C frontend: libprism → text AST (1_061 lines)
+spinel_codegen.rb     Compiler backend: AST → C code (21_109 lines)
 lib/sp_runtime.h      Runtime library header (581 lines)
-lib/sp_bigint.c       Arbitrary precision integers (5,394 lines)
-lib/regexp/           Built-in regexp engine (1,759 lines)
+lib/sp_bigint.c       Arbitrary precision integers (5_394 lines)
+lib/regexp/           Built-in regexp engine (1_759 lines)
 test/                 74 feature tests
 benchmark/            55 benchmarks
 Makefile              Build automation

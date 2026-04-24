@@ -39,7 +39,7 @@ ifeq ($(UNAME_S),Darwin)
   # GCC. Homebrew installs real GCC only as versioned `gcc-NN`, so the
   # version suffix is the reliable signal. Prefer the newest installed.
   ifeq ($(origin CC),default)
-    GCC_BIN := $(lastword $(sort $(wildcard /usr/local/bin/gcc-[0-9]* /opt/homebrew/bin/gcc-[0-9]*)))
+    GCC_BIN := $(shell ls /usr/local/bin/gcc-[0-9]* /opt/homebrew/bin/gcc-[0-9]* 2>/dev/null | sort -t- -k2,2n | tail -n 1)
     ifneq ($(GCC_BIN),)
       CC := $(GCC_BIN)
     endif

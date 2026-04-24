@@ -2,6 +2,10 @@
 #ifndef SP_RUNTIME_H
 #define SP_RUNTIME_H
 
+#ifdef __APPLE__
+#define _XOPEN_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,12 +16,15 @@
 #include <stdarg.h>
 #include <time.h>
 #include <setjmp.h>
-#ifdef __APPLE__
-#define _XOPEN_SOURCE
-#endif
 #include <ucontext.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0
+#endif
 #if !defined(__APPLE__)
 #include <malloc.h>
 #endif
@@ -570,11 +577,6 @@ static sp_Val *sp_lam_call(sp_Val *f, sp_Val *arg) { return f->u.proc.fn(f, arg)
 static mrb_int sp_lam_to_int(sp_Val *v) { return v->u.ival; }
 
 /* ---- Fiber runtime (ucontext) ---- */
-#include <ucontext.h>
-#include <sys/mman.h>
-#ifndef MAP_ANONYMOUS
-#define MAP_ANONYMOUS MAP_ANON
-#endif
 #ifdef __APPLE__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"

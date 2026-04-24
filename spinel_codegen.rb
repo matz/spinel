@@ -18600,11 +18600,13 @@ class Compiler
     end
     pop_scope
     @out_lines = save_out
-    # Build function body
+    # Hoist function to file scope (via @lambda_funcs) for Clang compat
     if body_stmts != ""
-      return "({ mrb_int " + fname + "(mrb_int lv_" + bp + ") { " + body_stmts.strip + " return " + bexpr + "; } sp_proc_new(" + fname + "); })"
+      @lambda_funcs << "static mrb_int " + fname + "(mrb_int lv_" + bp + ") { " + body_stmts.strip + " return " + bexpr + "; }\n"
+    else
+      @lambda_funcs << "static mrb_int " + fname + "(mrb_int lv_" + bp + ") { return " + bexpr + "; }\n"
     end
-    return "({ mrb_int " + fname + "(mrb_int lv_" + bp + ") { return " + bexpr + "; } sp_proc_new(" + fname + "); })"
+    return "sp_proc_new(" + fname + ")"
   end
 
   def compile_bracket_assign(nid)

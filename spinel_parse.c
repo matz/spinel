@@ -1038,7 +1038,7 @@ int main(int argc, char **argv) {
   /* Output */
   FILE *out = stdout;
   if (argc >= 3) {
-    out = fopen(argv[2], "w");
+    out = fopen(argv[2], "wb");
     if (!out) {
       fprintf(stderr, "spinel_parse: cannot write '%s'\n", argv[2]);
       return 1;

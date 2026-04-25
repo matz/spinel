@@ -18876,6 +18876,10 @@ class Compiler
     if arg_ids.length >= 2
       val = compile_expr(arg_ids[1])
     end
+    if rt == "int_str_hash"
+      emit("  sp_IntStrHash_set(" + rc + ", " + idx + ", " + val + ");")
+      return
+    end
     if rt == "sym_int_hash"
       emit("  sp_SymIntHash_set(" + rc + ", " + idx + ", " + val + ");")
       return
@@ -19332,6 +19336,18 @@ class Compiler
       emit("    lv_" + bp1 + " = " + rc + "->order[" + tmp + "];")
       if bp2 != ""
         emit("    lv_" + bp2 + " = sp_StrIntHash_get(" + rc + ", " + rc + "->order[" + tmp + "]);")
+      end
+      @indent = @indent + 1
+      compile_stmts_body(@nd_body[@nd_block[nid]])
+      @indent = @indent - 1
+      emit("  }")
+    end
+    if rt == "int_str_hash"
+      tmp = new_temp
+      emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < " + rc + "->len; " + tmp + "++) {")
+      emit("    lv_" + bp1 + " = " + rc + "->order[" + tmp + "];")
+      if bp2 != ""
+        emit("    lv_" + bp2 + " = sp_IntStrHash_get(" + rc + ", " + rc + "->order[" + tmp + "]);")
       end
       @indent = @indent + 1
       compile_stmts_body(@nd_body[@nd_block[nid]])

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(gem list:*)",
-      "Bash(gem env:*)",
-      "Bash(find:*)"
-    ]
-  }
-}

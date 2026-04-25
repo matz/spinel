@@ -23,3 +23,7 @@
 lib/libspinel_rt.a
 lib/libspbi.a
 HANDOFF.md
+
+# Local Claude config
+.claude/settings.local.json
+CLAUDE.local.md

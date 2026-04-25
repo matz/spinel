@@ -16165,7 +16165,7 @@ class Compiler
         return
       end
       if op == "+"
-        if vt == "string"
+        if vt == "string" && infer_type(@nd_expression[nid]) == "string"
           @needs_string_helpers = 1
           emit("  " + vref + " = sp_str_concat(" + vref + ", " + val + ");")
         else

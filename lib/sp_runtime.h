@@ -27,7 +27,6 @@
 #ifdef _WIN32
 #include <windows.h>
 /* POSIX compat shims for MinGW */
-#define malloc_trim(x) ((void)0)
 #define mmap(a,l,p,f,fd,off) VirtualAlloc(NULL,(l),MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE)
 #define munmap(a,l) (VirtualFree((a),0,MEM_RELEASE)?0:-1)
 #define MAP_FAILED NULL
@@ -41,7 +40,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #endif
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_WIN32)
 #include <malloc.h>
 #else
 /* Darwin's libc has no malloc_trim; make it a no-op so call sites stay portable. */

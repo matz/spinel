@@ -162,6 +162,7 @@ class Compiler
     @needs_str_array = 0
     @needs_str_int_hash = 0
     @needs_str_str_hash = 0
+    @needs_int_str_hash = 0
     @needs_sym_int_hash = 0
     @needs_sym_str_hash = 0
     @needs_str_poly_hash = 0
@@ -1277,8 +1278,23 @@ class Compiler
           end
           kk = kk + 1
         end
+        all_int_keys = 1
+        ki = 0
+        while ki < elems.length
+          ekid2 = elems[ki]
+          if @nd_type[ekid2] == "AssocNode"
+            kid2 = @nd_key[ekid2]
+            if kid2 < 0 || @nd_type[kid2] != "IntegerNode"
+              all_int_keys = 0
+            end
+          end
+          ki = ki + 1
+        end
         if all_same == 1
           if first_vt == "string"
+            if all_int_keys == 1
+              return "int_str_hash"
+            end
             if all_sym_keys == 1
               return "sym_str_hash"
             end
@@ -1831,7 +1847,7 @@ class Compiler
     if mname == "fetch"
       if recv >= 0
         rt = infer_type(recv)
-        if rt == "str_str_hash" || rt == "sym_str_hash"
+        if rt == "str_str_hash" || rt == "sym_str_hash" || rt == "int_str_hash"
           return "string"
         end
       end
@@ -1966,6 +1982,12 @@ class Compiler
       return "int"
     end
     if mname == "keys"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "int_str_hash"
+          return "int_array"
+        end
+      end
       return "str_array"
     end
     if mname == "sample"
@@ -2042,7 +2064,7 @@ class Compiler
     if mname == "values"
       if recv >= 0
         rt = infer_type(recv)
-        if rt == "str_str_hash"
+        if rt == "str_str_hash" || rt == "int_str_hash"
           return "str_array"
         end
       end
@@ -2342,6 +2364,9 @@ class Compiler
           return "int"
         end
         if rt == "str_str_hash"
+          return "string"
+        end
+        if rt == "int_str_hash"
           return "string"
         end
         if rt == "sym_int_hash"
@@ -2837,6 +2862,9 @@ class Compiler
     if t == "str_str_hash"
       return 1
     end
+    if t == "int_str_hash"
+      return 1
+    end
     if t == "sym_int_hash"
       return 1
     end
@@ -3012,6 +3040,9 @@ class Compiler
     end
     if t == "str_str_hash"
       return "sp_StrStrHash *"
+    end
+    if t == "int_str_hash"
+      return "sp_IntStrHash *"
     end
     if t == "sym_int_hash"
       return "sp_SymIntHash *"
@@ -6287,6 +6318,9 @@ class Compiler
       ht = infer_hash_val_type(nid)
       if ht == "str_str_hash"
         @needs_str_str_hash = 1
+      elsif ht == "int_str_hash"
+        @needs_int_str_hash = 1
+        @needs_int_array = 1
       elsif ht == "sym_int_hash"
         @needs_sym_int_hash = 1
       elsif ht == "sym_str_hash"
@@ -6499,7 +6533,7 @@ class Compiler
         if @nd_receiver[nid] >= 0
           vrt = infer_type(@nd_receiver[nid])
         end
-        if vrt == "str_str_hash"
+        if vrt == "str_str_hash" || vrt == "int_str_hash"
           @needs_str_array = 1
         else
           @needs_int_array = 1
@@ -6514,6 +6548,9 @@ class Compiler
           end
           if rt == "str_str_hash"
             @needs_str_str_hash = 1
+          end
+          if rt == "int_str_hash"
+            @needs_int_str_hash = 1
           end
         end
       end
@@ -7902,6 +7939,23 @@ class Compiler
     emit_raw("")
   end
 
+  # Integer-keyed hash with string values.
+  def emit_int_str_hash_runtime
+    emit_raw("typedef struct{mrb_int*keys;const char**vals;mrb_int*order;mrb_bool*used;mrb_int len;mrb_int cap;mrb_int mask;}sp_IntStrHash;")
+    emit_raw("static void sp_IntStrHash_fin(void*p){sp_IntStrHash*h=(sp_IntStrHash*)p;free(h->keys);free(h->vals);free(h->order);free(h->used);}")
+    emit_raw("static void sp_IntStrHash_scan(void*p){sp_IntStrHash*h=(sp_IntStrHash*)p;for(mrb_int i=0;i<h->cap;i++)if(h->used[i])sp_mark_string(h->vals[i]);}")
+    emit_raw("static sp_IntStrHash*sp_IntStrHash_new(void){sp_IntStrHash*h=(sp_IntStrHash*)sp_gc_alloc(sizeof(sp_IntStrHash),sp_IntStrHash_fin,sp_IntStrHash_scan);h->cap=16;h->mask=15;h->keys=(mrb_int*)calloc(h->cap,sizeof(mrb_int));h->vals=(const char**)calloc(h->cap,sizeof(const char*));h->order=(mrb_int*)malloc(sizeof(mrb_int)*h->cap);h->used=(mrb_bool*)calloc(h->cap,sizeof(mrb_bool));h->len=0;return h;}")
+    emit_raw("static inline mrb_int _sp_istr_idx(mrb_int mask,mrb_int k){return(mrb_int)(((uint64_t)(unsigned long long)k*11400714819323198485ULL)&(uint64_t)mask);}")
+    emit_raw("static void sp_IntStrHash_grow(sp_IntStrHash*h){mrb_int oc=h->cap,ol=h->len;mrb_int*ok=h->keys;const char**ov=h->vals;mrb_bool*ou=h->used;mrb_int*oo=h->order;h->cap*=2;h->mask=h->cap-1;h->keys=(mrb_int*)calloc(h->cap,sizeof(mrb_int));h->vals=(const char**)calloc(h->cap,sizeof(const char*));h->order=(mrb_int*)malloc(sizeof(mrb_int)*h->cap);h->used=(mrb_bool*)calloc(h->cap,sizeof(mrb_bool));h->len=0;for(mrb_int i=0;i<ol;i++){mrb_int k=oo[i];mrb_int si=_sp_istr_idx(oc-1,k);while(!ou[si]||ok[si]!=k)si=(si+1)&(oc-1);const char*v=ov[si];mrb_int di=_sp_istr_idx(h->mask,k);while(h->used[di])di=(di+1)&h->mask;h->used[di]=TRUE;h->keys[di]=k;h->vals[di]=v;h->order[h->len++]=k;}free(ok);free(ov);free(ou);free(oo);}")
+    emit_raw("static void sp_IntStrHash_set(sp_IntStrHash*h,mrb_int k,const char*v){if(h->len*2>=h->cap)sp_IntStrHash_grow(h);mrb_int idx=_sp_istr_idx(h->mask,k);while(h->used[idx]){if(h->keys[idx]==k){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}h->used[idx]=TRUE;h->keys[idx]=k;h->vals[idx]=v;h->order[h->len++]=k;}")
+    emit_raw("static const char*sp_IntStrHash_get(sp_IntStrHash*h,mrb_int k){mrb_int idx=_sp_istr_idx(h->mask,k);while(h->used[idx]){if(h->keys[idx]==k)return h->vals[idx];idx=(idx+1)&h->mask;}return\"\";}")
+    emit_raw("static mrb_bool sp_IntStrHash_has_key(sp_IntStrHash*h,mrb_int k){mrb_int idx=_sp_istr_idx(h->mask,k);while(h->used[idx]){if(h->keys[idx]==k)return TRUE;idx=(idx+1)&h->mask;}return FALSE;}")
+    emit_raw("static mrb_int sp_IntStrHash_length(sp_IntStrHash*h){return h->len;}")
+    emit_raw("static sp_IntArray*sp_IntStrHash_keys(sp_IntStrHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,h->order[i]);return a;}")
+    emit_raw("static sp_StrArray*sp_IntStrHash_values(sp_IntStrHash*h){sp_StrArray*a=sp_StrArray_new();for(mrb_int i=0;i<h->len;i++)sp_StrArray_push(a,sp_IntStrHash_get(h,h->order[i]));return a;}")
+    emit_raw("")
+  end
+
   # Symbol-keyed hash with string values.
   def emit_sym_str_hash_runtime
     emit_raw("typedef struct{sp_sym*keys;const char**vals;sp_sym*order;mrb_int len;mrb_int cap;mrb_int mask;}sp_SymStrHash;")
@@ -8801,7 +8855,7 @@ class Compiler
       if @needs_int_array == 1 || @needs_float_array == 1 || @needs_str_array == 1
         @needs_gc = 1
       end
-      if @needs_str_int_hash == 1 || @needs_str_str_hash == 1
+      if @needs_str_int_hash == 1 || @needs_str_str_hash == 1 || @needs_int_str_hash == 1
         @needs_gc = 1
       end
       if @needs_sym_int_hash == 1 || @needs_sym_str_hash == 1
@@ -10491,6 +10545,25 @@ class Compiler
                         end
                       end
                     end
+                    # For chained calls like int_str_hash.keys.each, infer_type
+                    # returns "str_array" because map's type isn't in @scope_names
+                    # during the scan. Resolve by checking the names array.
+                    if recv_type == "str_array"
+                      rnode = @nd_receiver[nid]
+                      if @nd_type[rnode] == "CallNode" && @nd_name[rnode] == "keys"
+                        krnode = @nd_receiver[rnode]
+                        if krnode >= 0 && @nd_type[krnode] == "LocalVariableReadNode"
+                          krname = @nd_name[krnode]
+                          kri = 0
+                          while kri < names.length
+                            if names[kri] == krname && types[kri] == "int_str_hash"
+                              recv_type = "int_array"
+                            end
+                            kri = kri + 1
+                          end
+                        end
+                      end
+                    end
                   end
                   mname = @nd_name[nid]
                   if mname == "scan"
@@ -10513,6 +10586,12 @@ class Compiler
                         types.push("string")
                       else
                         types.push("int")
+                      end
+                    elsif recv_type == "int_str_hash"
+                      if bk == 0
+                        types.push("int")
+                      else
+                        types.push("string")
                       end
                     elsif recv_type == "str_str_hash"
                       types.push("string")
@@ -11494,7 +11573,7 @@ class Compiler
     if t == "int_array" || t == "str_array" || t == "float_array" || t == "sym_array"
       return 1
     end
-    if t == "str_int_hash" || t == "str_str_hash" || t == "sym_int_hash" || t == "sym_str_hash"
+    if t == "str_int_hash" || t == "str_str_hash" || t == "int_str_hash" || t == "sym_int_hash" || t == "sym_str_hash"
       return 1
     end
     if t == "str_poly_hash" || t == "sym_poly_hash"
@@ -14528,6 +14607,44 @@ class Compiler
         end
       end
     end
+    if recv_type == "int_str_hash"
+      @needs_int_str_hash = 1
+      if mname == "[]"
+        return "sp_IntStrHash_get(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
+        return "sp_IntStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+        return "sp_IntStrHash_length(" + rc + ")"
+      end
+      if mname == "empty?"
+        return "(sp_IntStrHash_length(" + rc + ") == 0)"
+      end
+      if mname == "any?" && @nd_block[nid] < 0
+        return "(sp_IntStrHash_length(" + rc + ") > 0)"
+      end
+      if mname == "keys"
+        @needs_int_array = 1
+        return "sp_IntStrHash_keys(" + rc + ")"
+      end
+      if mname == "values"
+        @needs_str_array = 1
+        return "sp_IntStrHash_values(" + rc + ")"
+      end
+      if mname == "fetch"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          aargs = get_args(args_id)
+          key = compile_expr(aargs[0])
+          if aargs.length >= 2
+            defval = compile_expr(aargs[1])
+            return "(sp_IntStrHash_has_key(" + rc + ", " + key + ") ? sp_IntStrHash_get(" + rc + ", " + key + ") : " + defval + ")"
+          end
+          return "sp_IntStrHash_get(" + rc + ", " + key + ")"
+        end
+      end
+    end
     if recv_type == "str_str_hash"
       if mname == "[]"
         return "sp_StrStrHash_get(" + rc + ", " + compile_str_arg0(nid) + ")"
@@ -15797,6 +15914,17 @@ class Compiler
       return "sp_StrIntHash_new()"
     end
     ht = infer_hash_val_type(nid)
+    if ht == "int_str_hash"
+      @needs_int_str_hash = 1
+      tmp = new_temp
+      emit("  sp_IntStrHash *" + tmp + " = sp_IntStrHash_new();")
+      elems.each { |el|
+        if @nd_type[el] == "AssocNode"
+          emit("  sp_IntStrHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
+        end
+      }
+      return tmp
+    end
     if ht == "str_str_hash"
       @needs_str_str_hash = 1
       @needs_string_helpers = 1
@@ -16037,7 +16165,12 @@ class Compiler
         return
       end
       if op == "+"
-        emit("  " + vref + " += " + val + ";")
+        if vt == "string"
+          @needs_string_helpers = 1
+          emit("  " + vref + " = sp_str_concat(" + vref + ", " + val + ");")
+        else
+          emit("  " + vref + " += " + val + ";")
+        end
       end
       if op == "-"
         emit("  " + vref + " -= " + val + ";")
@@ -16309,6 +16442,9 @@ class Compiler
     end
     if rt == "str_str_hash"
       return "sp_StrStrHash_length(" + rc + ")"
+    end
+    if rt == "int_str_hash"
+      return "sp_IntStrHash_length(" + rc + ")"
     end
     if rt == "sym_int_hash"
       return "sp_SymIntHash_length((sp_SymIntHash *)(" + rc + "))"
@@ -16984,6 +17120,10 @@ class Compiler
             end
             if rt == "sym_str_hash"
               emit("  sp_SymStrHash_set(" + rc + ", " + compile_expr(aargs[0]) + ", " + val + ");")
+              return 1
+            end
+            if rt == "int_str_hash"
+              emit("  sp_IntStrHash_set(" + rc + ", " + compile_expr(aargs[0]) + ", " + val + ");")
               return 1
             end
             key = compile_expr_as_string(aargs[0])

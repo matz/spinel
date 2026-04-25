@@ -3309,6 +3309,53 @@ class Compiler
       return
     end
 
+    # Class reopening: if the class was already registered (in an
+    # earlier `class Foo ... end` block), reuse the existing entry
+    # so methods and attrs from this body get appended rather than
+    # producing a duplicate C struct/constructor.
+    existing_ci = find_class_idx(cname)
+    if existing_ci >= 0
+      ci = existing_ci
+      body = @nd_body[nid]
+      if body < 0
+        return
+      end
+      body_stmts = get_stmts(body)
+      body_stmts.each { |sid|
+        if @nd_type[sid] == "DefNode"
+          collect_class_method(ci, sid)
+        end
+        if @nd_type[sid] == "CallNode"
+          cn = @nd_name[sid]
+          if cn != "include"
+            if cn != "private"
+              collect_attr_call(ci, sid)
+            end
+          end
+        end
+      }
+      body_stmts.each { |sid|
+        if @nd_type[sid] == "CallNode"
+          if @nd_name[sid] == "include"
+            inc_args = @nd_arguments[sid]
+            if inc_args >= 0
+              inc_ids = get_args(inc_args)
+              ik = 0
+              while ik < inc_ids.length
+                if @nd_type[inc_ids[ik]] == "ConstantReadNode"
+                  mod_name = @nd_name[inc_ids[ik]]
+                  collect_module_methods_into_class(ci, mod_name)
+                end
+                ik = ik + 1
+              end
+            end
+          end
+        end
+      }
+      collect_ivars(ci)
+      return
+    end
+
     parent = ""
     sp = @nd_superclass[nid]
     struct_fields = "".split(",")

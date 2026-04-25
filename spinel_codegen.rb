@@ -1457,9 +1457,11 @@ class Compiler
   end
 
   def infer_operator_type(nid, mname, recv)
-    # Bigint operators return bigint
+    # Receiver type is consulted by nearly every branch below; compute once.
+    lt = ""
     if recv >= 0
       lt = infer_type(recv)
+      # Bigint operators return bigint
       if lt == "bigint"
         if mname == "+" || mname == "-" || mname == "*" || mname == "/" || mname == "%"
           return "bigint"
@@ -1477,7 +1479,6 @@ class Compiler
     end
     if mname == "+"
       if recv >= 0
-        lt = infer_type(recv)
         if lt == "string"
           return "string"
         end
@@ -1509,7 +1510,6 @@ class Compiler
     end
     if mname == "-"
       if recv >= 0
-        lt = infer_type(recv)
         if lt == "float"
           return "float"
         end
@@ -1529,7 +1529,6 @@ class Compiler
     end
     if mname == "*"
       if recv >= 0
-        lt = infer_type(recv)
         if lt == "float"
           return "float"
         end
@@ -1555,7 +1554,6 @@ class Compiler
     end
     if mname == "/"
       if recv >= 0
-        lt = infer_type(recv)
         if lt == "float"
           return "float"
         end
@@ -1578,7 +1576,6 @@ class Compiler
     end
     if mname == "<<"
       if recv >= 0
-        lt = infer_type(recv)
         if lt == "mutable_str"
           return "mutable_str"
         end
@@ -1590,7 +1587,7 @@ class Compiler
     end
     if mname == "-@"
       if recv >= 0
-        return infer_type(recv)
+        return lt
       end
       return "int"
     end

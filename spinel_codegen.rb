@@ -174,6 +174,7 @@ class Compiler
     @needs_mutable_str = 0
     @needs_rb_value = 0
     @needs_regexp = 0
+    @needs_rand = 0
     @regexp_patterns = "".split(",")
     @regexp_flags = "".split(",")
 
@@ -1670,6 +1671,12 @@ class Compiler
       return "int"
     end
     if mname == "%"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "string" || rt == "mutable_str"
+          return "string"
+        end
+      end
       return "int"
     end
     if mname == "-@"
@@ -2227,6 +2234,12 @@ class Compiler
       return "int"
     end
     if mname == "reverse"
+      if recv >= 0
+        return infer_type(recv)
+      end
+      return "int_array"
+    end
+    if mname == "shuffle" || mname == "shuffle!"
       if recv >= 0
         return infer_type(recv)
       end
@@ -6501,6 +6514,10 @@ class Compiler
          mname == "ljust" || mname == "rjust" || mname == "capitalize" ||
          mname == "count" || mname == "<<"
         @needs_string_helpers = 1
+      end
+      if mname == "rand" || mname == "srand" || mname == "sample" ||
+         mname == "shuffle" || mname == "shuffle!"
+        @needs_rand = 1
       end
       if mname == "split"
         @needs_string_helpers = 1
@@ -10997,6 +11014,9 @@ class Compiler
     emit_raw("")
     emit_raw("int main(int argc,char**argv){")
     emit_raw("  sp_argv.len=argc-1;sp_argv.data=(const char**)malloc(sizeof(const char*)*(argc>1?argc-1:1));{int _i;for(_i=0;_i<sp_argv.len;_i++)sp_argv.data[_i]=sp_str_dup_external(argv[_i+1]);}")
+    if @needs_rand == 1
+      emit_raw("  srand((unsigned)time(NULL));")
+    end
     if @needs_regexp == 1
       emit_raw("  sp_re_init();")
     end
@@ -12644,6 +12664,7 @@ class Compiler
       return "0"
     end
     if mname == "srand"
+      @needs_rand = 1
       emit("  srand((unsigned)" + compile_arg0(nid) + ");")
       return "0"
     end
@@ -12663,6 +12684,7 @@ class Compiler
       return "sp_readlines()"
     end
     if mname == "rand"
+      @needs_rand = 1
       args_id = @nd_arguments[nid]
       if args_id >= 0
         return "((mrb_int)(rand() % (int)" + compile_arg0(nid) + "))"
@@ -13152,6 +13174,23 @@ class Compiler
       return "sp_idiv(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
     end
     if mname == "%"
+      lt = infer_type(recv)
+      if lt == "string" || lt == "mutable_str"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          aargs = get_args(args_id)
+          if aargs.length > 0
+            rt = infer_type(aargs[0])
+            if rt == "str_array"
+              recv_c = compile_expr(recv)
+              if lt == "mutable_str"
+                recv_c = recv_c + "->data"
+              end
+              return "sp_str_format_strarr(" + recv_c + ", " + compile_expr(aargs[0]) + ")"
+            end
+          end
+        end
+      end
       return "sp_imod(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
     end
     if mname == "<"
@@ -14276,8 +14315,20 @@ class Compiler
       return tmp
     end
     if mname == "sample"
+      @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_get(" + rc + ", rand() % sp_" + pfx + "_length(" + rc + "))"
+    end
+    if mname == "shuffle"
+      @needs_rand = 1
+      pfx = array_c_prefix(recv_type)
+      return "sp_" + pfx + "_shuffle(" + rc + ")"
+    end
+    if mname == "shuffle!"
+      @needs_rand = 1
+      pfx = array_c_prefix(recv_type)
+      emit("  sp_" + pfx + "_shuffle_bang(" + rc + ");")
+      return rc
     end
     if mname == "any?" && @nd_block[nid] < 0
       pfx = array_c_prefix(recv_type)

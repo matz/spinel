@@ -14041,9 +14041,43 @@ class Compiler
     end
     if mname == "fill"
       pfx = array_c_prefix(recv_type)
+      args_id_fill = @nd_arguments[nid]
       val = compile_arg0(nid)
+      start_expr = "0"
+      # Default end: current array length (matches CRuby's no-args
+      # form which fills the entire existing array).
+      end_expr = "sp_" + pfx + "_length(" + rc + ")"
+      if args_id_fill >= 0
+        aargs_fill = get_args(args_id_fill)
+        if aargs_fill.length >= 3
+          # arr.fill(value, start, length): negative start counts from
+          # the end; if still negative after that, clamp to 0
+          # (matches CRuby: `[1,2,3].fill(9, -5, 2) #=> [9, 9, 3]`).
+          # end_expr = start + length lets the array grow past its
+          # current length when start+length > length; sp_*_set
+          # auto-grows and zero-fills gaps (matches CRuby:
+          # `[1,2,3].fill(9, 5, 2) #=> [1, 2, 3, 0, 0, 9, 9]`).
+          start_tmp = new_temp
+          len_tmp = new_temp
+          emit("  mrb_int " + start_tmp + " = " + compile_expr(aargs_fill[1]) + ";")
+          emit("  mrb_int " + len_tmp + " = " + compile_expr(aargs_fill[2]) + ";")
+          emit("  if (" + start_tmp + " < 0) " + start_tmp + " += sp_" + pfx + "_length(" + rc + ");")
+          emit("  if (" + start_tmp + " < 0) " + start_tmp + " = 0;")
+          start_expr = start_tmp
+          end_expr = "(" + start_tmp + " + " + len_tmp + ")"
+        elsif aargs_fill.length == 2
+          # arr.fill(value, start): fills from start to end of EXISTING
+          # array. If start >= length, fills nothing (does NOT grow,
+          # matching CRuby: `[1,2,3].fill(9, 5) #=> [1, 2, 3]`).
+          start_tmp = new_temp
+          emit("  mrb_int " + start_tmp + " = " + compile_expr(aargs_fill[1]) + ";")
+          emit("  if (" + start_tmp + " < 0) " + start_tmp + " += sp_" + pfx + "_length(" + rc + ");")
+          emit("  if (" + start_tmp + " < 0) " + start_tmp + " = 0;")
+          start_expr = start_tmp
+        end
+      end
       itmp = new_temp
-      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_" + pfx + "_length(" + rc + "); " + itmp + "++)")
+      emit("  for (mrb_int " + itmp + " = " + start_expr + "; " + itmp + " < " + end_expr + "; " + itmp + "++)")
       emit("    sp_" + pfx + "_set(" + rc + ", " + itmp + ", " + val + ");")
       return rc
     end

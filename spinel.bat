@@ -121,8 +121,8 @@ if defined OUTPUT (
 )
 
 set "SP_RT_LIB=%DIR%\lib\libspinel_rt.a"
-set "INCLUDE_FLAGS=-I%DIR%\lib -I%DIR%\lib\regexp"
-if exist "%SP_RT_LIB%" set "EXTRA_FLAGS=%EXTRA_FLAGS% %SP_RT_LIB%"
+set "INCLUDE_FLAGS=-I"%DIR%\lib" -I"%DIR%\lib\regexp""
+if exist "%SP_RT_LIB%" set "EXTRA_FLAGS=%EXTRA_FLAGS% "%SP_RT_LIB%""
 
 %CC_CMD% -O%OPT_LEVEL% -Wno-all -ffunction-sections -fdata-sections %INCLUDE_FLAGS% "%C_FILE%" -lm %EXTRA_FLAGS% -Wl,--gc-sections -Wl,--stack,67108864 -o "%BIN_FILE%"
 set "EC=%ERRORLEVEL%"

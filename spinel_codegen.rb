@@ -2500,13 +2500,28 @@ class Compiler
     if mname == "sin"
       return "float"
     end
+    if mname == "tan"
+      return "float"
+    end
+    if mname == "acos" || mname == "asin" || mname == "atan"
+      return "float"
+    end
     if mname == "log"
+      return "float"
+    end
+    if mname == "log2"
+      return "float"
+    end
+    if mname == "log10"
       return "float"
     end
     if mname == "exp"
       return "float"
     end
     if mname == "atan2"
+      return "float"
+    end
+    if mname == "hypot"
       return "float"
     end
     if mname == "freeze"
@@ -14688,11 +14703,26 @@ class Compiler
         if mname == "sin"
           return "sin(" + compile_arg0(nid) + ")"
         end
+        if mname == "tan"
+          return "tan(" + compile_arg0(nid) + ")"
+        end
+        if mname == "acos"
+          return "acos(" + compile_arg0(nid) + ")"
+        end
+        if mname == "asin"
+          return "asin(" + compile_arg0(nid) + ")"
+        end
+        if mname == "atan"
+          return "atan(" + compile_arg0(nid) + ")"
+        end
         if mname == "log"
           return "log(" + compile_arg0(nid) + ")"
         end
         if mname == "log2"
           return "log2(" + compile_arg0(nid) + ")"
+        end
+        if mname == "log10"
+          return "log10(" + compile_arg0(nid) + ")"
         end
         if mname == "exp"
           return "exp(" + compile_arg0(nid) + ")"
@@ -14703,6 +14733,15 @@ class Compiler
             arg_ids = get_args(args_id)
             if arg_ids.length >= 2
               return "atan2(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
+            end
+          end
+        end
+        if mname == "hypot"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            arg_ids = get_args(args_id)
+            if arg_ids.length >= 2
+              return "hypot(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
           end
         end

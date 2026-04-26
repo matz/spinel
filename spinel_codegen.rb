@@ -13185,6 +13185,44 @@ class Compiler
       if cname == "Array"
         @needs_gc = 1
         args_id = @nd_arguments[nid]
+        # Array.new(n) { |i| ... } -- IntArray-only fast path. We don't
+        # try to introspect the block body to pick a typed container
+        # (calling infer_type from this dispatch perturbs the bootstrap;
+        # see bug-11 commit). Float/String collectors must be built via
+        # explicit `[]` + `N.times { ... << }` instead.
+        if args_id >= 0 && @nd_block[nid] >= 0
+          arrnew_aargs = get_args(args_id)
+          if arrnew_aargs.length >= 1
+            arrnew_blk = @nd_block[nid]
+            arrnew_body = @nd_body[arrnew_blk]
+            arrnew_count = compile_expr(arrnew_aargs.first)
+            arrnew_bp = get_block_param(nid, 0)
+            arrnew_tmp = new_temp
+            arrnew_iv = new_temp
+            @needs_int_array = 1
+            emit("  sp_IntArray *" + arrnew_tmp + " = sp_IntArray_new();")
+            emit("  for (mrb_int " + arrnew_iv + " = 0; " + arrnew_iv + " < " + arrnew_count + "; " + arrnew_iv + "++) {")
+            if arrnew_bp != ""
+              emit("    lv_" + arrnew_bp + " = " + arrnew_iv + ";")
+            end
+            @indent = @indent + 1
+            if arrnew_body >= 0
+              arrnew_stmts2 = get_stmts(arrnew_body)
+              if arrnew_stmts2.length > 0
+                arrnew_k = 0
+                while arrnew_k < arrnew_stmts2.length - 1
+                  compile_stmt(arrnew_stmts2[arrnew_k])
+                  arrnew_k = arrnew_k + 1
+                end
+                arrnew_lastv = compile_expr(arrnew_stmts2.last)
+                emit("  sp_IntArray_push(" + arrnew_tmp + ", " + arrnew_lastv + ");")
+              end
+            end
+            @indent = @indent - 1
+            emit("  }")
+            return arrnew_tmp
+          end
+        end
         if args_id >= 0
           aargs = get_args(args_id)
           if aargs.length >= 2

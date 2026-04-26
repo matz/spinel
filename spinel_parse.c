@@ -938,13 +938,26 @@ static char *resolve_plain_requires(char *source, const char *exe_path) {
     snprintf(lib_path, sizeof(lib_path), "%s/%s", lib_dir, lib_name);
     if (!strstr(lib_path, ".rb")) strcat(lib_path, ".rb");
 
-    char *content = read_file(lib_path);
-    if (!content) {
-      content = strdup("# require not resolved");
+    /* Same dedup as resolve_requires: a file pulled in via plain `require`
+       must not be re-inlined if a previous `require` or `require_relative`
+       already pulled it. Otherwise mixing the two forms for the same lib
+       still produces struct-redefinition errors. */
+    char *canonical = sp_canonical_path(lib_path);
+    char *content;
+    if (sp_path_already_included(canonical)) {
+      content = strdup("# require skipped (already included)");
+      free(canonical);
     } else {
-      char *resolved = resolve_requires(content, lib_path);
-      free(content);
-      content = resolved;
+      sp_mark_path_included(canonical);
+      free(canonical);
+      content = read_file(lib_path);
+      if (!content) {
+        content = strdup("# require not resolved");
+      } else {
+        char *resolved = resolve_requires(content, lib_path);
+        free(content);
+        content = resolved;
+      }
     }
 
     size_t line_len = (line_end - pos) + ((*line_end == '\n') ? 1 : 0);
@@ -1119,5 +1132,6 @@ int main(int argc, char **argv) {
   pm_node_destroy(&parser, root);
   pm_parser_free(&parser);
   free(source);
+  sp_includes_free();
   return 0;
 }

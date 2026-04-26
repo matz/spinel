@@ -16,10 +16,11 @@
 #   A <id> <field> <id1,id2,...> - array of node refs (empty = no ids)
 
 require "prism"
+require "set"
 
 # Recursively resolve require_relative and inline file contents,
 # exactly matching the original spinel.rb behavior.
-def resolve_requires(source, source_path)
+def resolve_requires(source, source_path, visited = Set.new)
   base_dir = File.dirname(File.expand_path(source_path))
   resolved = source.dup
   # require_relative
@@ -27,9 +28,12 @@ def resolve_requires(source, source_path)
     rel_path = $1
     req_file = File.join(base_dir, rel_path)
     req_file += ".rb" unless req_file.end_with?(".rb")
-    if File.exist?(req_file)
+    abs_path = File.expand_path(req_file)
+    if visited.include?(abs_path)
+      "# require_relative skipped (circular): #{rel_path}"
+    elsif File.exist?(req_file)
       content = File.read(req_file)
-      resolve_requires(content, req_file)
+      resolve_requires(content, req_file, visited + [abs_path])
     else
       "# require_relative not found: #{rel_path}"
     end
@@ -40,9 +44,12 @@ def resolve_requires(source, source_path)
     lib_name = $1
     lib_file = File.join(lib_dir, lib_name)
     lib_file += ".rb" unless lib_file.end_with?(".rb")
-    if File.exist?(lib_file)
+    abs_path = File.expand_path(lib_file)
+    if visited.include?(abs_path)
+      "# require skipped (circular): #{lib_name}"
+    elsif File.exist?(lib_file)
       content = File.read(lib_file)
-      resolve_requires(content, lib_file)
+      resolve_requires(content, lib_file, visited + [abs_path])
     else
       "# require not resolved: #{lib_name}"
     end

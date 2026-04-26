@@ -762,8 +762,17 @@ static char *read_file(const char *path) {
 }
 
 /* Simple require_relative resolver: replace lines matching
-   require_relative "path" with the file content */
-static char *resolve_requires(const char *source, const char *source_path) {
+   require_relative "path" with the file content.
+   visited/visited_count track absolute paths already resolved to prevent
+   infinite recursion on circular require_relative chains. */
+static int resolve_visited_contains(char **visited, int count, const char *path) {
+  for (int i = 0; i < count; i++)
+    if (strcmp(visited[i], path) == 0) return 1;
+  return 0;
+}
+
+static char *resolve_requires_impl(const char *source, const char *source_path,
+                                    char **visited, int visited_count) {
   /* Get base directory */
   char *path_copy = strdup(source_path);
   char *dir = strdup(path_copy);
@@ -772,6 +781,13 @@ static char *resolve_requires(const char *source, const char *source_path) {
   if (slash) *slash = '\0';
   else { free(dir); dir = strdup("."); }
   free(path_copy);
+
+  /* Record this file as visited */
+  {
+    char abs[1024];
+    if (realpath(source_path, abs))
+      visited[visited_count++] = strdup(abs);
+  }
 
   char *result = strdup(source);
   char *pos;
@@ -800,10 +816,10 @@ static char *resolve_requires(const char *source, const char *source_path) {
     } else if (q2 && q2 < line_end) {
       quote_char = '\'';
       start = q2 + 1;
-    } else break;
+    } else { scan_from = pos + 1; continue; }
 
     char *end = strchr(start, quote_char);
-    if (!end || end > line_end) break;
+    if (!end || end > line_end) { scan_from = pos + 1; continue; }
 
     size_t path_len = end - start;
     char rel_path[512];
@@ -815,12 +831,21 @@ static char *resolve_requires(const char *source, const char *source_path) {
     if (!strstr(full_path, ".rb"))
       strcat(full_path, ".rb");
 
+    /* Check for circular require */
+    {
+      char abs[1024];
+      if (realpath(full_path, abs) && resolve_visited_contains(visited, visited_count, abs)) {
+        scan_from = pos + 1;
+        continue;
+      }
+    }
+
     char *content = read_file(full_path);
     if (!content) {
       content = strdup("# require_relative not found");
     } else {
       /* Recursively resolve */
-      char *resolved = resolve_requires(content, full_path);
+      char *resolved = resolve_requires_impl(content, full_path, visited, visited_count);
       free(content);
       content = resolved;
     }
@@ -845,6 +870,14 @@ static char *resolve_requires(const char *source, const char *source_path) {
     free(content);
   }
   free(dir);
+  return result;
+}
+
+static char *resolve_requires(const char *source, const char *source_path) {
+  char *visited[256];
+  int visited_count = 0;
+  char *result = resolve_requires_impl(source, source_path, visited, 0);
+  for (int i = 0; i < visited_count; i++) free(visited[i]);
   return result;
 }
 

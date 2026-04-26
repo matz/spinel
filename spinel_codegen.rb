@@ -704,11 +704,36 @@ class Compiler
       end
       base = const_ref_flat_name(parent)
       if base == ""
-        return leaf
+        return ""
       end
       return base + "_" + leaf
     end
     ""
+  end
+
+  def const_ref_is_relative(nid)
+    if nid < 0
+      return 0
+    end
+    t = @nd_type[nid]
+    if t == "ConstantReadNode"
+      return 1
+    end
+    if t == "ConstantPathNode"
+      parent = @nd_receiver[nid]
+      if parent < 0
+        return 0
+      end
+      pt = @nd_type[parent]
+      if pt == "ConstantReadNode"
+        return 1
+      end
+      if pt == "ConstantPathNode"
+        return const_ref_is_relative(parent)
+      end
+      return 0
+    end
+    0
   end
 
   def constructor_class_name(recv_nid)
@@ -3379,7 +3404,7 @@ class Compiler
       cname = const_ref_flat_name(cp)
       # For `module M; class C; ... end; end`, Prism gives class name as
       # ConstantReadNode("C"), so attach lexical module prefix.
-      if module_prefix != "" && @nd_type[cp] == "ConstantReadNode"
+      if module_prefix != "" && const_ref_is_relative(cp) == 1
         cname = module_prefix + "_" + cname
       end
     end
@@ -4313,7 +4338,7 @@ class Compiler
     cp = @nd_constant_path[nid]
     if cp >= 0
       mname = const_ref_flat_name(cp)
-      if module_prefix != "" && @nd_type[cp] == "ConstantReadNode"
+      if module_prefix != "" && const_ref_is_relative(cp) == 1
         mname = module_prefix + "_" + mname
       end
     end

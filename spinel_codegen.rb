@@ -17479,6 +17479,26 @@ class Compiler
             return 1
           end
         end
+        if rt == "int_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_IntArray_replace(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if rt == "sym_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_IntArray_replace(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if rt == "str_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_StrArray_replace(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if rt == "float_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_FloatArray_replace(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
       end
     end
 

@@ -6374,6 +6374,11 @@ class Compiler
           rt = infer_type(@nd_receiver[nid])
           if rt == "string"
             @needs_string_helpers = 1
+            # Long string concat chains emit SP_GC_ROOT temps, so the
+            # enclosing function needs SP_GC_SAVE() in its header.
+            if mname == "+"
+              @needs_gc = 1
+            end
           end
         end
       end
@@ -12849,18 +12854,33 @@ class Compiler
           return "sp_str_concat4(" + parts[0] + ", " + parts[1] + ", " + parts[2] + ", " + parts[3] + ")"
         end
         if parts.length >= 5
-          # Variable-length: single malloc for N parts via sp_str_concat_arr
-          arr = "(const char *const[]){"
+          # Variable-length: single malloc for N parts via sp_str_concat_arr.
+          # Hoist each part into a rooted temp first — the compound-literal
+          # initializer order is unspecified, and any part that is a fresh
+          # GC string would otherwise sit unrooted on the C stack while
+          # later parts evaluate (and may trigger sp_gc_collect).
+          # @needs_gc is set in scan_features for any string `+`, ensuring
+          # SP_GC_SAVE() is in the function header before we emit roots here.
+          tnames = "".split(",")
           k = 0
           while k < parts.length
+            t = new_temp
+            emit("  const char * " + t + " = " + parts[k] + ";")
+            emit("  SP_GC_ROOT(" + t + ");")
+            tnames.push(t)
+            k = k + 1
+          end
+          arr = "(const char *const[]){"
+          k = 0
+          while k < tnames.length
             if k > 0
               arr = arr + ", "
             end
-            arr = arr + parts[k]
+            arr = arr + tnames[k]
             k = k + 1
           end
           arr = arr + "}"
-          return "sp_str_concat_arr(" + arr + ", " + parts.length.to_s + ")"
+          return "sp_str_concat_arr(" + arr + ", " + tnames.length.to_s + ")"
         end
         return "sp_str_concat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
       end

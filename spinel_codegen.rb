@@ -14386,6 +14386,21 @@ class Compiler
       if mname == "size"
         return "sp_FloatArray_length(" + rc + ")"
       end
+      if mname == "min"
+        return "sp_FloatArray_min(" + rc + ")"
+      end
+      if mname == "max"
+        return "sp_FloatArray_max(" + rc + ")"
+      end
+      if mname == "sum"
+        return "sp_FloatArray_sum(" + rc + ")"
+      end
+      if mname == "first"
+        return "sp_FloatArray_get(" + rc + ", 0)"
+      end
+      if mname == "last"
+        return "sp_FloatArray_get(" + rc + ", -1)"
+      end
     end
     if is_ptr_array_type(recv_type) == 1
       elem_type = ptr_array_elem_type(recv_type)

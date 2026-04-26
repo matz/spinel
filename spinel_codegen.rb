@@ -683,6 +683,45 @@ class Compiler
     result
   end
 
+  # Flatten a constant reference into an internal name.
+  #   C       -> C
+  #   ::C     -> C
+  #   M::C    -> M_C
+  #   A::B::C -> A_B_C
+  def const_ref_flat_name(nid)
+    if nid < 0
+      return ""
+    end
+    t = @nd_type[nid]
+    if t == "ConstantReadNode"
+      return @nd_name[nid]
+    end
+    if t == "ConstantPathNode"
+      leaf = @nd_name[nid]
+      parent = @nd_receiver[nid]
+      if parent < 0
+        return leaf
+      end
+      base = const_ref_flat_name(parent)
+      if base == ""
+        return leaf
+      end
+      return base + "_" + leaf
+    end
+    ""
+  end
+
+  def constructor_class_name(recv_nid)
+    if recv_nid < 0
+      return ""
+    end
+    rt = @nd_type[recv_nid]
+    if rt == "ConstantReadNode" || rt == "ConstantPathNode"
+      return const_ref_flat_name(recv_nid)
+    end
+    ""
+  end
+
   # ---- Scope management ----
   def push_scope
     @scope_names.push("---")
@@ -2403,9 +2442,9 @@ class Compiler
   def infer_constructor_type(nid, mname, recv)
     if mname == "new"
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          rn = @nd_name[recv]
-          if rn == "Array"
+        rn = constructor_class_name(recv)
+        if rn != ""
+          if @nd_type[recv] == "ConstantReadNode" && rn == "Array"
             # Check fill value type
             args_id = @nd_arguments[nid]
             if args_id >= 0
@@ -2422,16 +2461,16 @@ class Compiler
             end
             return "int_array"
           end
-          if rn == "Hash"
+          if @nd_type[recv] == "ConstantReadNode" && rn == "Hash"
             return "str_int_hash"
           end
-          if rn == "Proc"
+          if @nd_type[recv] == "ConstantReadNode" && rn == "Proc"
             return "proc"
           end
-          if rn == "StringIO"
+          if @nd_type[recv] == "ConstantReadNode" && rn == "StringIO"
             return "stringio"
           end
-          if rn == "Fiber"
+          if @nd_type[recv] == "ConstantReadNode" && rn == "Fiber"
             return "fiber"
           end
           return "obj_" + rn
@@ -2474,9 +2513,9 @@ class Compiler
     end
     # User-defined class methods
     if recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        rcname = @nd_name[recv]
-        if rcname == "Fiber"
+      rcname = constructor_class_name(recv)
+      if rcname != ""
+        if @nd_type[recv] == "ConstantReadNode" && rcname == "Fiber"
           if mname == "new"
             return "fiber"
           end
@@ -3332,11 +3371,20 @@ class Compiler
   end
 
   def collect_class(nid)
+    collect_class_with_prefix(nid, "")
+  end
+
+  def collect_class_with_prefix(nid, module_prefix)
     ci = @cls_names.length
     cname = ""
     cp = @nd_constant_path[nid]
     if cp >= 0
-      cname = @nd_name[cp]
+      cname = const_ref_flat_name(cp)
+      # For `module M; class C; ... end; end`, Prism gives class name as
+      # ConstantReadNode("C"), so attach lexical module prefix.
+      if module_prefix != "" && @nd_type[cp] == "ConstantReadNode"
+        cname = module_prefix + "_" + cname
+      end
     end
 
     # Check for open class on built-in type
@@ -4110,12 +4158,12 @@ class Compiler
       if mname == "new"
         r = @nd_receiver[nid]
         if r >= 0
-          if @nd_type[r] == "ConstantReadNode"
-            rname = @nd_name[r]
-            if rname == "Array"
+          rname = constructor_class_name(r)
+          if rname != ""
+            if @nd_type[r] == "ConstantReadNode" && rname == "Array"
               return "int_array"
             end
-            if rname == "Hash"
+            if @nd_type[r] == "ConstantReadNode" && rname == "Hash"
               return "str_int_hash"
             end
             return "obj_" + rname
@@ -4260,10 +4308,17 @@ class Compiler
   end
 
   def collect_module(nid)
+    collect_module_with_prefix(nid, "")
+  end
+
+  def collect_module_with_prefix(nid, module_prefix)
     mname = ""
     cp = @nd_constant_path[nid]
     if cp >= 0
-      mname = @nd_name[cp]
+      mname = const_ref_flat_name(cp)
+      if module_prefix != "" && @nd_type[cp] == "ConstantReadNode"
+        mname = module_prefix + "_" + mname
+      end
     end
     body = @nd_body[nid]
     # Store module info for include
@@ -4273,6 +4328,19 @@ class Compiler
       return
     end
     body_stmts = get_stmts(body)
+
+    # Match top-level collection order: modules first, then classes.
+    body_stmts.each { |sid|
+      if @nd_type[sid] == "ModuleNode"
+        collect_module_with_prefix(sid, mname)
+      end
+    }
+    body_stmts.each { |sid|
+      if @nd_type[sid] == "ClassNode"
+        collect_class_with_prefix(sid, mname)
+      end
+    }
+
     body_stmts.each { |sid|
       if @nd_type[sid] == "ConstantWriteNode"
         cname = mname + "_" + @nd_name[sid]
@@ -4664,8 +4732,8 @@ class Compiler
       if @nd_name[nid] == "new"
         recv = @nd_receiver[nid]
         if recv >= 0
-          if @nd_type[recv] == "ConstantReadNode"
-            cname = @nd_name[recv]
+          cname = constructor_class_name(recv)
+          if cname != ""
             ci = find_class_idx(cname)
             if ci >= 0
               init_ci = find_init_class(ci)
@@ -13168,15 +13236,15 @@ class Compiler
   end
 
   def compile_constructor_expr(nid, recv)
-    if @nd_type[recv] == "ConstantReadNode"
-      cname = @nd_name[recv]
-      if cname == "Proc"
+    cname = constructor_class_name(recv)
+    if cname != ""
+      if @nd_type[recv] == "ConstantReadNode" && cname == "Proc"
         if @nd_block[nid] >= 0
           @needs_proc = 1
           return compile_proc_literal(nid)
         end
       end
-      if cname == "Array"
+      if @nd_type[recv] == "ConstantReadNode" && cname == "Array"
         @needs_gc = 1
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -13208,7 +13276,7 @@ class Compiler
         @needs_int_array = 1
         return "sp_IntArray_new()"
       end
-      if cname == "Hash"
+      if @nd_type[recv] == "ConstantReadNode" && cname == "Hash"
         @needs_str_int_hash = 1
         @needs_gc = 1
         args_id = @nd_arguments[nid]
@@ -13228,7 +13296,7 @@ class Compiler
         end
         return "sp_StrIntHash_new()"
       end
-      if cname == "StringIO"
+      if @nd_type[recv] == "ConstantReadNode" && cname == "StringIO"
         @needs_stringio = 1
         args_id = @nd_arguments[nid]
         if args_id >= 0

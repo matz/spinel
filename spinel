@@ -38,6 +38,7 @@ STDOUT_MODE=0
 OPT_LEVEL="2"
 CC_CMD="cc"
 EXTRA_FLAGS=""
+C_TMP=""
 
 while [ $# -gt 0 ]; do
   case "$1" in

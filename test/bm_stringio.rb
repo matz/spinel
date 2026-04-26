@@ -69,3 +69,16 @@ s10 = StringIO.new
 s10.flush
 puts s10.sync
 puts s10.isatty
+
+# StringIO stored in an instance variable
+class StringIOHolder
+  def initialize
+    @io = StringIO.new("abc")
+  end
+
+  def value
+    @io.string
+  end
+end
+
+puts StringIOHolder.new.value

@@ -812,8 +812,11 @@ static char *resolve_requires(const char *source, const char *source_path) {
     /* Build full path */
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", dir, rel_path);
-    if (!strstr(full_path, ".rb"))
-      strcat(full_path, ".rb");
+    {
+      size_t fl = strlen(full_path);
+      if (fl < sizeof(full_path) - 4 && (fl < 3 || strcmp(full_path + fl - 3, ".rb") != 0))
+        strcat(full_path, ".rb");
+    }
 
     char *content = read_file(full_path);
     if (!content) {
@@ -881,7 +884,11 @@ static char *resolve_plain_requires(char *source, const char *exe_path) {
     snprintf(lib_name, sizeof(lib_name), "%.*s", (int)(end - start), start);
     char lib_path[1024];
     snprintf(lib_path, sizeof(lib_path), "%s/%s", lib_dir, lib_name);
-    if (!strstr(lib_path, ".rb")) strcat(lib_path, ".rb");
+    {
+      size_t fl = strlen(lib_path);
+      if (fl < sizeof(lib_path) - 4 && (fl < 3 || strcmp(lib_path + fl - 3, ".rb") != 0))
+        strcat(lib_path, ".rb");
+    }
 
     char *content = read_file(lib_path);
     if (!content) {

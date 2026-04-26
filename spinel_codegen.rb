@@ -1454,13 +1454,12 @@ class Compiler
     end
     if mname == "new"
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          if @nd_name[recv] == "Proc"
-            return "proc"
-          end
-          if @nd_name[recv] == "Fiber"
-            return "fiber"
-          end
+        rcname = constructor_class_name(recv)
+        if rcname == "Proc"
+          return "proc"
+        end
+        if rcname == "Fiber"
+          return "fiber"
         end
       end
     end
@@ -1476,10 +1475,9 @@ class Compiler
     # Fiber.yield returns poly
     if mname == "yield"
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          if @nd_name[recv] == "Fiber"
-            return "poly"
-          end
+        rcname = constructor_class_name(recv)
+        if rcname == "Fiber"
+          return "poly"
         end
       end
     end
@@ -1504,10 +1502,9 @@ class Compiler
     # Fiber.current returns fiber
     if mname == "current"
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          if @nd_name[recv] == "Fiber"
-            return "fiber"
-          end
+        rcname = constructor_class_name(recv)
+        if rcname == "Fiber"
+          return "fiber"
         end
       end
     end
@@ -2450,7 +2447,7 @@ class Compiler
       if recv >= 0
         rn = constructor_class_name(recv)
         if rn != ""
-          if @nd_type[recv] == "ConstantReadNode" && rn == "Array"
+          if rn == "Array"
             # Check fill value type
             args_id = @nd_arguments[nid]
             if args_id >= 0
@@ -2467,16 +2464,16 @@ class Compiler
             end
             return "int_array"
           end
-          if @nd_type[recv] == "ConstantReadNode" && rn == "Hash"
+          if rn == "Hash"
             return "str_int_hash"
           end
-          if @nd_type[recv] == "ConstantReadNode" && rn == "Proc"
+          if rn == "Proc"
             return "proc"
           end
-          if @nd_type[recv] == "ConstantReadNode" && rn == "StringIO"
+          if rn == "StringIO"
             return "stringio"
           end
-          if @nd_type[recv] == "ConstantReadNode" && rn == "Fiber"
+          if rn == "Fiber"
             return "fiber"
           end
           return "obj_" + rn
@@ -2521,7 +2518,7 @@ class Compiler
     if recv >= 0
       rcname = constructor_class_name(recv)
       if rcname != ""
-        if @nd_type[recv] == "ConstantReadNode" && rcname == "Fiber"
+        if rcname == "Fiber"
           if mname == "new"
             return "fiber"
           end
@@ -4166,10 +4163,10 @@ class Compiler
         if r >= 0
           rname = constructor_class_name(r)
           if rname != ""
-            if @nd_type[r] == "ConstantReadNode" && rname == "Array"
+            if rname == "Array"
               return "int_array"
             end
-            if @nd_type[r] == "ConstantReadNode" && rname == "Hash"
+            if rname == "Hash"
               return "str_int_hash"
             end
             if rname == "StringIO"
@@ -11920,7 +11917,7 @@ class Compiler
       mn = @nd_name[nid]
       if mn == "new"
         rv = @nd_receiver[nid]
-        if rv >= 0 && @nd_type[rv] == "ConstantReadNode" && @nd_name[rv] == "Fiber"
+        if rv >= 0 && constructor_class_name(rv) == "Fiber"
           return
         end
       end
@@ -12213,10 +12210,8 @@ class Compiler
 
     # Fiber.new { block }
     if mname == "new" && recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        if @nd_name[recv] == "Fiber"
-          return compile_fiber_new(nid)
-        end
+      if constructor_class_name(recv) == "Fiber"
+        return compile_fiber_new(nid)
       end
     end
     # fiber.resume(val)
@@ -12236,17 +12231,16 @@ class Compiler
     end
     # Fiber.yield(val)
     if mname == "yield" && recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        if @nd_name[recv] == "Fiber"
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            arg_ids = get_args(args_id)
-            if arg_ids.length > 0
-              return "sp_Fiber_yield(" + box_expr_to_poly(arg_ids[0]) + ")"
-            end
+      if constructor_class_name(recv) == "Fiber"
+        @needs_fiber = 1
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if arg_ids.length > 0
+            return "sp_Fiber_yield(" + box_expr_to_poly(arg_ids[0]) + ")"
           end
-          return "sp_Fiber_yield(sp_box_nil())"
         end
+        return "sp_Fiber_yield(sp_box_nil())"
       end
     end
     # fiber.alive?
@@ -12274,10 +12268,9 @@ class Compiler
     end
     # Fiber.current
     if mname == "current" && recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        if @nd_name[recv] == "Fiber"
-          return "sp_fiber_current"
-        end
+      if constructor_class_name(recv) == "Fiber"
+        @needs_fiber = 1
+        return "sp_fiber_current"
       end
     end
 
@@ -13247,13 +13240,13 @@ class Compiler
   def compile_constructor_expr(nid, recv)
     cname = constructor_class_name(recv)
     if cname != ""
-      if @nd_type[recv] == "ConstantReadNode" && cname == "Proc"
+      if cname == "Proc"
         if @nd_block[nid] >= 0
           @needs_proc = 1
           return compile_proc_literal(nid)
         end
       end
-      if @nd_type[recv] == "ConstantReadNode" && cname == "Array"
+      if cname == "Array"
         @needs_gc = 1
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -13285,7 +13278,7 @@ class Compiler
         @needs_int_array = 1
         return "sp_IntArray_new()"
       end
-      if @nd_type[recv] == "ConstantReadNode" && cname == "Hash"
+      if cname == "Hash"
         @needs_str_int_hash = 1
         @needs_gc = 1
         args_id = @nd_arguments[nid]
@@ -13305,7 +13298,7 @@ class Compiler
         end
         return "sp_StrIntHash_new()"
       end
-      if @nd_type[recv] == "ConstantReadNode" && cname == "StringIO"
+      if cname == "StringIO"
         @needs_stringio = 1
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -14307,13 +14300,7 @@ class Compiler
     end
     # Array methods
     if recv_type == "int_array" || recv_type == "sym_array"
-      if mname == "length"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
-        return "sp_IntArray_length(" + rc + ")"
-      end
-      if mname == "size"
+      if mname == "length" || mname == "size"
         if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
           return @hoisted_strlen_var
         end

@@ -761,8 +761,53 @@ static char *read_file(const char *path) {
   return buf;
 }
 
+/* Track files already inlined so duplicate requires/require_relatives in
+   different files don't re-emit (and re-define structs/classes) the same
+   content. Dynamic so we don't silently drop entries on large projects. */
+static char **sp_included_paths = NULL;
+static int sp_included_count = 0;
+static int sp_included_cap = 0;
+
+/* Resolve a path to its canonical form for dedup. realpath() returns NULL
+   on missing files; in that case fall back to the literal path. */
+static char *sp_canonical_path(const char *path) {
+  char *real = realpath(path, NULL);
+  return real ? real : strdup(path);
+}
+
+static int sp_path_already_included(const char *canonical) {
+  for (int i = 0; i < sp_included_count; i++) {
+    if (strcmp(sp_included_paths[i], canonical) == 0) return 1;
+  }
+  return 0;
+}
+
+static void sp_mark_path_included(const char *canonical) {
+  if (sp_included_count >= sp_included_cap) {
+    sp_included_cap = sp_included_cap == 0 ? 16 : sp_included_cap * 2;
+    sp_included_paths = (char **)realloc(sp_included_paths,
+                                         sizeof(char *) * sp_included_cap);
+  }
+  sp_included_paths[sp_included_count++] = strdup(canonical);
+}
+
+/* Free the included-paths table at end of run. The process is short-lived,
+   so this matters mostly for tools (leak checkers, embedders) that
+   scrutinise end-of-run state. */
+static void sp_includes_free(void) {
+  for (int i = 0; i < sp_included_count; i++) {
+    free(sp_included_paths[i]);
+  }
+  free(sp_included_paths);
+  sp_included_paths = NULL;
+  sp_included_count = 0;
+  sp_included_cap = 0;
+}
+
 /* Simple require_relative resolver: replace lines matching
-   require_relative "path" with the file content */
+   require_relative "path" with the file content. Files that have
+   already been included once are silently skipped on subsequent
+   requires (matching Ruby's load-once semantics). */
 static char *resolve_requires(const char *source, const char *source_path) {
   /* Get base directory */
   char *path_copy = strdup(source_path);
@@ -815,14 +860,24 @@ static char *resolve_requires(const char *source, const char *source_path) {
     if (!strstr(full_path, ".rb"))
       strcat(full_path, ".rb");
 
-    char *content = read_file(full_path);
-    if (!content) {
-      content = strdup("# require_relative not found");
+    char *canonical = sp_canonical_path(full_path);
+    char *content;
+    if (sp_path_already_included(canonical)) {
+      /* Already inlined once -- replace require with empty content */
+      content = strdup("# require_relative skipped (already included)");
+      free(canonical);
     } else {
-      /* Recursively resolve */
-      char *resolved = resolve_requires(content, full_path);
-      free(content);
-      content = resolved;
+      sp_mark_path_included(canonical);
+      content = read_file(full_path);
+      if (!content) {
+        content = strdup("# require_relative not found");
+      } else {
+        /* Recursively resolve */
+        char *resolved = resolve_requires(content, full_path);
+        free(content);
+        content = resolved;
+      }
+      free(canonical);
     }
 
     /* Replace the line */

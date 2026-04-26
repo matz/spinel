@@ -13201,11 +13201,15 @@ class Compiler
             arrnew_iv = new_temp
             @needs_int_array = 1
             emit("  sp_IntArray *" + arrnew_tmp + " = sp_IntArray_new();")
+            # Root the new array before running the block body — pushing
+            # poly/string values inside the loop can trigger a GC cycle
+            # that would otherwise sweep the local pointer.
+            emit("  SP_GC_ROOT(" + arrnew_tmp + ");")
             emit("  for (mrb_int " + arrnew_iv + " = 0; " + arrnew_iv + " < " + arrnew_count + "; " + arrnew_iv + "++) {")
-            if arrnew_bp != ""
-              emit("    lv_" + arrnew_bp + " = " + arrnew_iv + ";")
-            end
             @indent = @indent + 1
+            if arrnew_bp != ""
+              emit("  lv_" + arrnew_bp + " = " + arrnew_iv + ";")
+            end
             if arrnew_body >= 0
               arrnew_stmts2 = get_stmts(arrnew_body)
               if arrnew_stmts2.length > 0

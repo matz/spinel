@@ -39,7 +39,13 @@ if /i "%~1"=="-o" (set "OUTPUT=%~2" & shift & shift & goto parse)
 if /i "%~1"=="-O" (set "OPT_LEVEL=%~2" & shift & shift & goto parse)
 if /i "%~1"=="-c" (set "C_ONLY=1" & shift & goto parse)
 if /i "%~1"=="-S" (set "STDOUT_MODE=1" & shift & goto parse)
-if /i "%~1"=="--lonig" (set "EXTRA_FLAGS=%EXTRA_FLAGS% -lonig" & shift & goto parse)
+if /i "%~1"=="--lonig" (
+  if defined EXTRA_FLAGS (
+    set "EXTRA_FLAGS=%EXTRA_FLAGS% -lonig"
+  ) else (
+    set "EXTRA_FLAGS=-lonig"
+  ) & shift & goto parse
+)
 set "_a=%~1"
 if "%_a:~0,5%"=="--cc=" (set "CC_CMD=%_a:~5%" & shift & goto parse)
 if not defined SOURCE set "SOURCE=%~1"
@@ -122,7 +128,13 @@ if defined OUTPUT (
 
 set "SP_RT_LIB=%DIR%\lib\libspinel_rt.a"
 set "INCLUDE_FLAGS=-I"%DIR%\lib" -I"%DIR%\lib\regexp""
-if exist "%SP_RT_LIB%" set "EXTRA_FLAGS=%EXTRA_FLAGS% "%SP_RT_LIB%""
+if exist "%SP_RT_LIB%" (
+  if defined EXTRA_FLAGS (
+    set "EXTRA_FLAGS=%EXTRA_FLAGS% "%SP_RT_LIB%""
+  ) else (
+    set "EXTRA_FLAGS="%SP_RT_LIB%""
+  )
+)
 
 %CC_CMD% -O%OPT_LEVEL% -Wno-all -ffunction-sections -fdata-sections %INCLUDE_FLAGS% "%C_FILE%" -lm %EXTRA_FLAGS% -Wl,--gc-sections -Wl,--stack,67108864 -o "%BIN_FILE%"
 set "EC=%ERRORLEVEL%"

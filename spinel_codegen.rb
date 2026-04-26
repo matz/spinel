@@ -12743,7 +12743,7 @@ class Compiler
           return "sp_str_downcase(self)"
         end
         if mname == "length"
-          return "(mrb_int)strlen(self)"
+          return "sp_str_length(self)"
         end
         if mname == "strip"
           return "sp_str_strip(self)"
@@ -13496,7 +13496,7 @@ class Compiler
       if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
         return @hoisted_strlen_var
       end
-      return "(mrb_int)strlen(" + rc + ")"
+      return "sp_str_length(" + rc + ")"
     end
     if mname == "to_i"
       return "((mrb_int)atoll(" + rc + "))"
@@ -13690,6 +13690,9 @@ class Compiler
     if mname == "index"
       return "sp_str_index(" + rc + ", " + compile_arg0(nid) + ")"
     end
+    if mname == "rindex"
+      return "sp_str_rindex(" + rc + ", " + compile_arg0(nid) + ")"
+    end
     if mname == "tr"
       args_id = @nd_arguments[nid]
       if args_id >= 0
@@ -13757,7 +13760,7 @@ class Compiler
       return "sp_sym_intern(" + rc + ")"
     end
     if mname == "ord"
-      return "((mrb_int)(unsigned char)" + rc + "[0])"
+      return "sp_str_ord(" + rc + ")"
     end
     if mname == "sub"
       args_id = @nd_arguments[nid]
@@ -13816,7 +13819,10 @@ class Compiler
       return "sp_str_squeeze(" + rc + ")"
     end
     if mname == "size"
-      return "(mrb_int)strlen(" + rc + ")"
+      if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+        return @hoisted_strlen_var
+      end
+      return "sp_str_length(" + rc + ")"
     end
     if mname == "slice"
       args_id = @nd_arguments[nid]
@@ -16776,7 +16782,7 @@ class Compiler
   # Returns "" if the type doesn't have a hoist-friendly length op.
   def length_c_expr(rt, rc)
     if rt == "string"
-      return "(mrb_int)strlen(" + rc + ")"
+      return "sp_str_length(" + rc + ")"
     end
     if rt == "int_array" || rt == "sym_array"
       return "sp_IntArray_length(" + rc + ")"
@@ -16953,7 +16959,7 @@ class Compiler
       end
       tmp = new_temp
       rc = compile_expr_gc_rooted(recv)
-      emit("  mrb_int " + tmp + " = (mrb_int)strlen(" + rc + ");")
+      emit("  mrb_int " + tmp + " = sp_str_length(" + rc + ");")
       @hoisted_strlen_recv = rc
       return tmp
     end
@@ -17832,12 +17838,19 @@ class Compiler
             src = rc + "->data"
           end
           src_tmp = new_temp
+          cn_tmp = new_temp
+          char_buf = new_temp
           emit("  const char *" + src_tmp + " = " + src + ";")
-          emit("  for (mrb_int " + tmp + " = 0; " + src_tmp + "[" + tmp + "]; " + tmp + "++) {")
-          emit("    lv_" + bp + " = sp_str_sub_range(" + src_tmp + ", " + tmp + ", 1);")
+          emit("  for (mrb_int " + tmp + " = 0; " + src_tmp + "[" + tmp + "]; ) {")
+          emit("    int " + cn_tmp + " = sp_utf8_char_len((unsigned char)" + src_tmp + "[" + tmp + "]);")
+          emit("    char *" + char_buf + " = sp_str_alloc_raw(" + cn_tmp + " + 1);")
+          emit("    memcpy(" + char_buf + ", " + src_tmp + " + " + tmp + ", " + cn_tmp + ");")
+          emit("    " + char_buf + "[" + cn_tmp + "] = 0;")
+          emit("    lv_" + bp + " = " + char_buf + ";")
           @indent = @indent + 1
           compile_stmts_body(@nd_body[@nd_block[nid]])
           @indent = @indent - 1
+          emit("    " + tmp + " += " + cn_tmp + ";")
           emit("  }")
           return 1
         end

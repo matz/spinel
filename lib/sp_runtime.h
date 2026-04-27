@@ -424,6 +424,15 @@ static inline void sp_String_prepend(sp_String*s,const char*t){int64_t tl=(int64
 static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 static sp_String*sp_String_dup(sp_String*s){return sp_String_new(s->data);}
+/* Array#inspect for each typed array: `[elem1, elem2, ...]` with each
+   element rendered via its own primitive inspect. Matches CRuby's
+   Array#inspect output byte-for-byte. Returns a GC-managed C string. */
+static const char*sp_IntArray_inspect(sp_IntArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_int_to_s(a->data[a->start+i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_FloatArray_inspect(sp_FloatArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_float_inspect(a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_StrArray_inspect(sp_StrArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_str_inspect(a->data[i]));}sp_String_append(s,"]");return s->data;}
+/* Symbol arrays share the IntArray representation (sp_sym = mrb_int),
+   but each element is rendered as ":name" via sp_sym_to_s. */
+static const char*sp_SymArray_inspect(sp_IntArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,":");sp_String_append(s,sp_sym_to_s((sp_sym)a->data[a->start+i]));}sp_String_append(s,"]");return s->data;}
 
 /* Regexp engine (link with libspre.a from lib/regexp/) */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;

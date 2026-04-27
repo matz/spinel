@@ -2711,16 +2711,10 @@ class Compiler
         if mname == "nil?"
           return "bool"
         end
-        # Check all classes for this method and return the first matching return type
-        ci = 0
-        while ci < @cls_names.length
-          midx = cls_find_method_direct(ci, mname)
-          if midx >= 0
-            return cls_method_return(ci, mname)
-          end
-          ci = ci + 1
-        end
-        return "int"
+        # Scan every user class that defines this method. If they all
+        # agree on the return type, the call has that concrete type.
+        # If they disagree, the call is genuinely polymorphic.
+        return poly_dispatch_return_type(mname)
       end
       # Method call on int (possible IntArray element storing object pointers)
       if rt == "int"
@@ -15691,6 +15685,33 @@ class Compiler
   end
 
 
+  # Inferred return type for `recv.mname(...)` when `recv` is poly.
+  # If every user class that defines mname agrees on the return type,
+  # that concrete type is used. If any two disagree, the call is
+  # genuinely polymorphic and the caller must treat the result as
+  # an sp_RbVal.
+  def poly_dispatch_return_type(mname)
+    common = ""
+    ci = 0
+    while ci < @cls_names.length
+      if cls_find_method_direct(ci, mname) >= 0
+        rt = cls_method_return(ci, mname)
+        if common == ""
+          common = rt
+        else
+          if common != rt
+            return "poly"
+          end
+        end
+      end
+      ci = ci + 1
+    end
+    if common == ""
+      return "int"
+    end
+    common
+  end
+
   def compile_poly_method_call(nid, rc, mname)
     @needs_rb_value = 1
     if mname == "nil?"
@@ -15699,19 +15720,32 @@ class Compiler
     if mname == "to_s"
       return "sp_poly_to_s(" + rc + ")"
     end
-    # For object method calls, dispatch based on cls_id
-    # Generate: switch on v.tag and cls_id
+    # For object method calls, dispatch based on cls_id. The result
+    # temp is typed by the method's return type. If user classes
+    # disagree on that type, the result is sp_RbVal and each branch
+    # boxes its concrete return value.
+    ret_type = poly_dispatch_return_type(mname)
+    is_poly_ret = 0
+    if ret_type == "poly"
+      is_poly_ret = 1
+    end
+    ret_ct = c_type(ret_type)
+    ret_def = c_default_val(ret_type)
     tmp = new_temp
-    emit("  const char *" + tmp + " = \"\";")
+    emit("  " + ret_ct + " " + tmp + " = " + ret_def + ";")
     emit("  if (" + rc + ".tag == SP_TAG_OBJ) {")
-    # Dispatch to each possible class
     i = 0
     while i < @cls_names.length
       cname = @cls_names[i]
-      # Check if this class has the method
       midx = cls_find_method_direct(i, mname)
       if midx >= 0
-        emit("    if (" + rc + ".v.cls_id == " + i.to_s + ") " + tmp + " = sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + rc + ".v.p);")
+        call_expr = "sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + rc + ".v.p)"
+        rhs = call_expr
+        if is_poly_ret == 1
+          this_rt = cls_method_return(i, mname)
+          rhs = box_val_to_poly(call_expr, this_rt)
+        end
+        emit("    if (" + rc + ".v.cls_id == " + i.to_s + ") " + tmp + " = " + rhs + ";")
       end
       i = i + 1
     end

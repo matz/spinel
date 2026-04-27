@@ -4600,7 +4600,10 @@ class Compiler
         expr_id = @nd_expression[sid]
         ct = "int"
         if expr_id >= 0
+          old_scope = @current_lexical_scope
+          @current_lexical_scope = mname
           ct = infer_type(expr_id)
+          @current_lexical_scope = old_scope
         end
         @const_names.push(cname2)
         @const_types.push(ct)

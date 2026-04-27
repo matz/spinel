@@ -15920,6 +15920,23 @@ class Compiler
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
     end
+    # Built-in pointer types: route through sp_box_obj with a reserved
+    # negative cls_id (SP_BUILTIN_*) so dispatch is uniform.
+    if at == "int_array"
+      return "sp_box_int_array(" + val + ")"
+    end
+    if at == "float_array"
+      return "sp_box_float_array(" + val + ")"
+    end
+    if at == "str_array"
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "sym_array"
+      return "sp_box_sym_array(" + val + ")"
+    end
+    if is_ptr_array_type(at) == 1
+      return "sp_box_ptr_array(" + val + ")"
+    end
     "sp_box_int(" + val + ")"
   end
 

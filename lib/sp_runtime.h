@@ -528,6 +528,17 @@ typedef uint64_t sp_RbValue;
 #define SP_TAG_NIL  4
 #define SP_TAG_OBJ  5
 #define SP_TAG_SYM  6
+/* Negative cls_id values let SP_TAG_OBJ also carry built-in pointer
+   types (IntArray, FloatArray, ...) — avoids minting a new SP_TAG_*
+   per type. Non-negative cls_id stays an index into the user-class
+   table as before. The element-type tag and the array cls_id are
+   paired by `array_cls_id = -element_tag - 1`. */
+#define SP_BUILTIN_ARRAY_OF(tag) (-(tag) - 1)
+#define SP_BUILTIN_INT_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_INT)   /* -1 */
+#define SP_BUILTIN_STR_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_STR)   /* -2 */
+#define SP_BUILTIN_FLT_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_FLT)   /* -3 */
+#define SP_BUILTIN_PTR_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_OBJ)   /* -6 */
+#define SP_BUILTIN_SYM_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_SYM)   /* -7 */
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }
@@ -536,6 +547,13 @@ static sp_RbVal sp_box_bool(mrb_bool v) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls
 static sp_RbVal sp_box_nil(void) { sp_RbVal r; r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.i = 0; return r; }
 static sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = cls_id; r.v.p = p; return r; }
 static sp_RbVal sp_box_sym(sp_sym v) { sp_RbVal r; r.tag = SP_TAG_SYM; r.cls_id = 0; r.v.i = (mrb_int)v; return r; }
+/* Built-in pointer boxes — share SP_TAG_OBJ with a reserved negative
+   cls_id so the dispatch path is uniform. */
+static sp_RbVal sp_box_int_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_INT_ARRAY); }
+static sp_RbVal sp_box_float_array(void *p) { return sp_box_obj(p, SP_BUILTIN_FLT_ARRAY); }
+static sp_RbVal sp_box_str_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_STR_ARRAY); }
+static sp_RbVal sp_box_sym_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_SYM_ARRAY); }
+static sp_RbVal sp_box_ptr_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_PTR_ARRAY); }
 static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;

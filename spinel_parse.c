@@ -771,7 +771,11 @@ static int sp_included_cap = 0;
 /* Resolve a path to its canonical form for dedup. realpath() returns NULL
    on missing files; in that case fall back to the literal path. */
 static char *sp_canonical_path(const char *path) {
+#ifdef _WIN32
+  char *real = _fullpath(NULL, path, 0);
+#else
   char *real = realpath(path, NULL);
+#endif
   return real ? real : strdup(path);
 }
 

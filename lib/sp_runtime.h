@@ -361,7 +361,7 @@ static const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)ba
 /* Float#to_s (Ruby semantics): matches CRuby by guaranteeing a `.0`
    suffix for whole values (e.g. 1.0 -> "1.0", not "1"). NaN and
    Infinity are left as-is from snprintf. Float#inspect is aliased. */
-static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
+static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(68);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
 #define sp_float_inspect sp_float_to_s
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
@@ -555,7 +555,7 @@ static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
     case SP_TAG_STR: if (v.v.s) { fputs(v.v.s, stdout); if (!*v.v.s || v.v.s[strlen(v.v.s)-1] != '\n') putchar('\n'); } else putchar('\n'); break;
-    case SP_TAG_FLT: { char _fb[64]; snprintf(_fb,64,"%g",v.v.f); if(!strchr(_fb,'.')&&!strchr(_fb,'e')&&!strchr(_fb,'i')&&!strchr(_fb,'n')){strcat(_fb,".0");} printf("%s\n",_fb); break; }
+    case SP_TAG_FLT: { const char *_fs = sp_float_to_s(v.v.f); fputs(_fs, stdout); putchar('\n'); break; }
     case SP_TAG_BOOL: puts(v.v.b ? "true" : "false"); break;
     case SP_TAG_NIL: putchar('\n'); break;
     case SP_TAG_SYM: { const char *_ss = sp_sym_to_s((sp_sym)v.v.i); fputs(_ss, stdout); putchar('\n'); break; }

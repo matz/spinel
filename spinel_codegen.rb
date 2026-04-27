@@ -8351,7 +8351,7 @@ class Compiler
   def emit_string_helpers
     emit_raw("static const char*sp_str_concat(const char*a,const char*b){size_t la=strlen(a),lb=strlen(b);char*r=(char*)malloc(la+lb+1);memcpy(r,a,la);memcpy(r+la,b,lb+1);return r;}")
     emit_raw("static const char*sp_int_to_s(mrb_int n){char*b=(char*)malloc(32);snprintf(b,32,\"%lld\",(long long)n);return b;}")
-    emit_raw("static const char*sp_float_to_s(mrb_float f){char*b=(char*)malloc(64);snprintf(b,64,\"%g\",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}")
+    emit_raw("static const char*sp_float_to_s(mrb_float f){char*b=(char*)malloc(68);snprintf(b,64,\"%g\",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}")
     emit_raw("static const char*sp_str_upcase(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<=l;i++)r[i]=toupper((unsigned char)s[i]);return r;}")
     emit_raw("static const char*sp_str_downcase(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<=l;i++)r[i]=tolower((unsigned char)s[i]);return r;}")
     emit_raw("static const char*sp_str_strip(const char*s){while(*s&&isspace((unsigned char)*s))s++;size_t l=strlen(s);while(l>0&&isspace((unsigned char)s[l-1]))l--;char*r=(char*)malloc(l+1);memcpy(r,s,l);r[l]=0;return r;}")
@@ -8455,7 +8455,7 @@ class Compiler
     emit_raw("  switch (v.tag) {")
     emit_raw("    case SP_TAG_INT: printf(\"%lld" + bsl_n + "\", (long long)v.v.i); break;")
     emit_raw("    case SP_TAG_STR: if (v.v.s) { fputs(v.v.s, stdout); if (!*v.v.s || v.v.s[strlen(v.v.s)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); break;")
-    emit_raw("    case SP_TAG_FLT: { char _fb[64]; snprintf(_fb,64,\"%g\",v.v.f); if(!strchr(_fb,'.')&&!strchr(_fb,'e')&&!strchr(_fb,'i')&&!strchr(_fb,'n')){strcat(_fb,\".0\");} printf(\"%s" + bsl_n + "\",_fb); break; }")
+    emit_raw("    case SP_TAG_FLT: { const char *_fs = sp_float_to_s(v.v.f); fputs(_fs, stdout); putchar('" + bsl_n + "'); break; }")
     emit_raw("    case SP_TAG_BOOL: puts(v.v.b ? \"true\" : \"false\"); break;")
     emit_raw("    case SP_TAG_NIL: putchar('" + bsl_n + "'); break;")
     emit_raw("    default: printf(\"%lld" + bsl_n + "\", (long long)v.v.i); break;")

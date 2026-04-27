@@ -1671,10 +1671,19 @@ class Compiler
       return "int"
     end
     if mname == "%"
+      # String#% returns "string" only when the RHS is a str_array
+      # (sprintf-style format). Other RHS types fall through to sp_imod
+      # in compile_operator_expr, which yields int.
       if recv >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
-          return "string"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            aargs = get_args(args_id)
+            if aargs.length > 0 && infer_type(aargs[0]) == "str_array"
+              return "string"
+            end
+          end
         end
       end
       return "int"
@@ -14319,12 +14328,14 @@ class Compiler
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_get(" + rc + ", rand() % sp_" + pfx + "_length(" + rc + "))"
     end
-    if mname == "shuffle"
+    if mname == "shuffle" &&
+       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array")
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_shuffle(" + rc + ")"
     end
-    if mname == "shuffle!"
+    if mname == "shuffle!" &&
+       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array")
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       emit("  sp_" + pfx + "_shuffle_bang(" + rc + ");")

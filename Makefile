@@ -16,7 +16,7 @@ CFLAGS   = -O2 -Wno-all
 # Override with LTO=0 on toolchains without LTO support.
 LTO     ?= 1
 ifeq ($(LTO),1)
-  BOOTSTRAP_CFLAGS = -O3 -flto -Wno-all
+  BOOTSTRAP_CFLAGS = -O3 -flto=auto -Wno-all
 else
   BOOTSTRAP_CFLAGS = $(CFLAGS)
 endif

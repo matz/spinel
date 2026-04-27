@@ -100,7 +100,9 @@ static char *sp_str_alloc(size_t len) {
   sp_str_heap = h;
   sp_gc_bytes += total;
   char *body = (char *)(h + 1);
-  body[0] = (char)0xfe;
+  /* Mark live so results of nested calls in stack-temp array literals
+     survive a sweep triggered by a later sibling arg's evaluation. */
+  body[0] = (char)0xfc;
   body[1 + len] = 0;
   return body + 1;
 }

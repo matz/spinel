@@ -1,4 +1,5 @@
 # Test Fiber (cooperative concurrency)
+require "fiber"
 
 # Basic yield/resume
 f = Fiber.new {

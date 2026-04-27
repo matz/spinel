@@ -1,6 +1,7 @@
 # Test: built-in constructors via absolute ConstantPath (::X.new)
 
 require "stringio"
+require "fiber"
 
 a = ::Array.new(3, 2)
 puts a[0] + a[2]

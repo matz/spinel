@@ -17505,9 +17505,23 @@ class Compiler
     if mname == "<<"
       if recv >= 0
         rt = infer_type(recv)
-        if rt == "int_array"
+        if rt == "int_array" || rt == "sym_array"
           rc = compile_expr_gc_rooted(recv)
-          emit("  sp_IntArray_push(" + rc + ", " + compile_arg0(nid) + ");")
+          av = compile_arg0(nid)
+          a0id = -1
+          args_id2 = @nd_arguments[nid]
+          if args_id2 >= 0
+            aargs2 = get_args(args_id2)
+            if aargs2.length > 0
+              a0id = aargs2[0]
+            end
+          end
+          if a0id >= 0
+            if infer_type(a0id) == "lambda"
+              av = "(mrb_int)" + av
+            end
+          end
+          emit("  sp_IntArray_push(" + rc + ", " + av + ");")
           return 1
         end
         if rt == "str_array"
@@ -17659,8 +17673,8 @@ class Compiler
     if mname == "push"
       if recv >= 0
         rt = infer_type(recv)
-        rc = compile_expr_gc_rooted(recv)
-        if rt == "int_array"
+        if rt == "int_array" || rt == "sym_array"
+          rc = compile_expr_gc_rooted(recv)
           av = compile_arg0(nid)
           # If pushing a lambda value, cast to mrb_int
           a0id = -1
@@ -17680,7 +17694,18 @@ class Compiler
           return 1
         end
         if rt == "str_array"
+          rc = compile_expr_gc_rooted(recv)
           emit("  sp_StrArray_push(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if rt == "float_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_FloatArray_push(" + rc + ", " + compile_arg0(nid) + ");")
+          return 1
+        end
+        if is_ptr_array_type(rt) == 1
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + ");")
           return 1
         end
       end
@@ -17690,9 +17715,22 @@ class Compiler
     if mname == "reverse!"
       if recv >= 0
         rt = infer_type(recv)
-        rc = compile_expr_gc_rooted(recv)
-        if rt == "int_array"
-          emit("  sp_IntArray_reverse_bang(" + rc + ");")
+        rev_pfx = ""
+        if rt == "int_array" || rt == "sym_array"
+          rev_pfx = "IntArray"
+        end
+        if rt == "str_array"
+          rev_pfx = "StrArray"
+        end
+        if rt == "float_array"
+          rev_pfx = "FloatArray"
+        end
+        if is_ptr_array_type(rt) == 1
+          rev_pfx = "PtrArray"
+        end
+        if rev_pfx != ""
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_" + rev_pfx + "_reverse_bang(" + rc + ");")
           return 1
         end
       end
@@ -17700,13 +17738,25 @@ class Compiler
     if mname == "sort!"
       if recv >= 0
         rt = infer_type(recv)
-        rc = compile_expr_gc_rooted(recv)
+        if rt == "int_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_IntArray_sort_bang(" + rc + ");")
+          return 1
+        end
         if rt == "sym_array"
+          # sym sort compares by symbol name, not numeric ID
+          rc = compile_expr_gc_rooted(recv)
           emit("  sp_sym_array_sort(" + rc + ");")
           return 1
         end
-        if rt == "int_array"
-          emit("  sp_IntArray_sort_bang(" + rc + ");")
+        if rt == "str_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_StrArray_sort_bang(" + rc + ");")
+          return 1
+        end
+        if rt == "float_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_FloatArray_sort_bang(" + rc + ");")
           return 1
         end
       end

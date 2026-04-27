@@ -1735,6 +1735,9 @@ class Compiler
     if mname == "to_s"
       return "string"
     end
+    if mname == "inspect"
+      return "string"
+    end
     if mname == "to_i"
       return "int"
     end
@@ -12544,6 +12547,21 @@ class Compiler
       if mname == "to_s"
         return "(" + rc + " ? \"true\" : \"false\")"
       end
+      if mname == "inspect"
+        return "(" + rc + " ? \"true\" : \"false\")"
+      end
+    end
+
+    # nil methods (receiver inferred as "nil" — only .inspect and .to_s
+    # need an expression-level answer; other nil methods like .nil? are
+    # already handled earlier.)
+    if recv_type == "nil"
+      if mname == "inspect"
+        return "\"nil\""
+      end
+      if mname == "to_s"
+        return "\"\""
+      end
     end
 
     # Tuple methods
@@ -13607,6 +13625,9 @@ class Compiler
     if mname == "to_f"
       return "atof(" + rc + ")"
     end
+    if mname == "inspect"
+      return "sp_str_inspect(" + rc + ")"
+    end
     if mname == "upcase"
       return "sp_str_upcase(" + rc + ")"
     end
@@ -14101,6 +14122,10 @@ class Compiler
       end
       return "sp_int_to_s(" + rc + ")"
     end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + rc + ")"
+    end
     if mname == "digits"
       @needs_int_array = 1
       @needs_gc = 1
@@ -14185,6 +14210,10 @@ class Compiler
     if mname == "to_s"
       @needs_string_helpers = 1
       return "sp_float_to_s(" + rc + ")"
+    end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + rc + ")"
     end
     if mname == "to_i"
       return "(mrb_int)(" + rc + ")"
@@ -19717,9 +19746,44 @@ class Compiler
     end
   end
 
-  # Kernel#p: like puts, but symbols print as ":name" and strings get
-  # quotes. Falls back to compile_puts for types where inspect and
-  # to_s produce identical output (ints, floats, bools, nil).
+  # Return a C expression that evaluates to the inspected form of `val`
+  # (a value of inferred Ruby type `at`), following Ruby's Object#inspect
+  # contract. Returns "" when `at` has no inspect implementation yet, so
+  # callers can fall back to their previous behaviour.
+  def compile_inspect_for(at, val)
+    if at == "int"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + val + ")"
+    end
+    if at == "float"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + val + ")"
+    end
+    if at == "string" || at == "string?"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + ")"
+    end
+    if at == "mutable_str"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + "->data)"
+    end
+    if at == "symbol"
+      @needs_string_helpers = 1
+      return "sp_str_concat(\":\", sp_sym_to_s(" + val + "))"
+    end
+    if at == "bool"
+      return "(" + val + " ? \"true\" : \"false\")"
+    end
+    if at == "nil"
+      return "\"nil\""
+    end
+    ""
+  end
+
+  # Kernel#p: for each argument, prints `arg.inspect` followed by a
+  # newline. Uses `compile_inspect_for` for types that implement inspect;
+  # falls back to puts-style output for types that don't yet (e.g.
+  # user-defined classes, ranges, hashes).
   def compile_p(nid)
     args_id = @nd_arguments[nid]
     if args_id < 0
@@ -19734,15 +19798,13 @@ class Compiler
       aid = arg_ids[k]
       at = infer_type(aid)
       val = compile_expr(aid)
-      if at == "symbol"
-        emit("  { putchar(':'); fputs(sp_sym_to_s(" + val + "), stdout); putchar('" + bsl_n + "'); }")
-      elsif at == "string" || at == "string?"
-        emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { putchar('\"'); fputs(_ps, stdout); putchar('\"'); putchar('" + bsl_n + "'); } else { fputs(\"nil\", stdout); putchar('" + bsl_n + "'); } }")
-      elsif at == "nil"
-        emit("  fputs(\"nil\\n\", stdout);")
-      else
-        # Fall back to puts-style output for this one argument
+      ins = compile_inspect_for(at, val)
+      if ins == ""
+        # No inspect implementation for this type — keep the historic
+        # behaviour so nothing regresses.
         compile_puts_single(aid, at, val)
+      else
+        emit("  fputs(" + ins + ", stdout); putchar('" + bsl_n + "');")
       end
       k = k + 1
     end

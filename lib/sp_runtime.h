@@ -359,6 +359,13 @@ static const char*sp_str_concat_arr(const char *const *parts,int n){size_t total
 static const char*sp_int_to_s(mrb_int n){char*b=sp_str_alloc_raw(32);snprintf(b,32,"%lld",(long long)n);return b;}
 static const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)base=10;char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}else{while(u>0){mrb_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;return b;}
 static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);return b;}
+/* Float#inspect: like to_s but guarantees a `.0` suffix for whole values,
+   matching CRuby's Float#inspect (e.g. 1.0 -> "1.0", not "1"). NaN and
+   Infinity are left as-is from snprintf. */
+static const char*sp_float_inspect(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
+/* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
+   plus any non-printable byte as \xNN. Output is always ASCII-safe. */
+static const char*sp_str_inspect(const char*s){if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=strlen(s);size_t cap=sl*4+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}else if(c=='\n'){r[o++]='\\';r[o++]='n';}else if(c=='\t'){r[o++]='\\';r[o++]='t';}else if(c=='\r'){r[o++]='\\';r[o++]='r';}else if(c<0x20||c==0x7f){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;return r;}
 static const char*sp_str_upcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++)r[i]=toupper((unsigned char)s[i]);return r;}
 static const char*sp_str_downcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++)r[i]=tolower((unsigned char)s[i]);return r;}
 static const char*sp_str_swapcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++){unsigned char c=(unsigned char)s[i];if(isupper(c))r[i]=tolower(c);else if(islower(c))r[i]=toupper(c);else r[i]=s[i];}return r;}

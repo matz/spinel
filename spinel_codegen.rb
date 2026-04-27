@@ -15222,12 +15222,7 @@ class Compiler
     # each_with_object as expression: run the loop as side effect, return obj
     if mname == "each_with_object"
       if @nd_block[nid] >= 0
-        compile_each_with_object_block(nid)
-        bp2 = get_block_param(nid, 1)
-        if bp2 == ""
-          bp2 = "_obj"
-        end
-        return "lv_" + bp2
+        return compile_each_with_object_block(nid)
       end
     end
 
@@ -18158,10 +18153,11 @@ class Compiler
           bp2 = "_b"
         end
         pfx = array_c_prefix(rt)
+        et = c_type(elem_type_of_array(rt))
         tmp_i = new_temp
         emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-        emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
-        emit("    lv_" + bp2 + " = sp_" + pfx + "_get(" + arg + ", " + tmp_i + ");")
+        emit("    " + et + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+        emit("    " + et + " lv_" + bp2 + " = sp_" + pfx + "_get(" + arg + ", " + tmp_i + ");")
         @indent = @indent + 1
         compile_stmts_body(@nd_body[@nd_block[nid]])
         @indent = @indent - 1
@@ -19984,6 +19980,14 @@ class Compiler
     @in_loop = 1
     rt = infer_type(@nd_receiver[nid])
     rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    obj_ct = "mrb_int"
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      aargs = get_args(args_id)
+      if aargs.length > 0
+        obj_ct = c_type(infer_type(aargs[0]))
+      end
+    end
     obj_arg = compile_arg0(nid)
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
@@ -19993,18 +19997,28 @@ class Compiler
     if bp2 == ""
       bp2 = "_obj"
     end
+    # Outer-scope slot survives the inner `{}` so the expression form
+    # of each_with_object can still observe the final accumulator.
+    result = new_temp
+    emit("  " + obj_ct + " " + result + " = " + obj_arg + ";")
     tmp_i = new_temp
     if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array"
       pfx = array_c_prefix(rt)
-      emit("  lv_" + bp2 + " = " + obj_arg + ";")
+      emit("  {")
+      @indent = @indent + 1
+      emit("  " + obj_ct + " lv_" + bp2 + " = " + result + ";")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+      emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       compile_stmts_body(@nd_body[@nd_block[nid]])
       @indent = @indent - 1
       emit("  }")
+      emit("  " + result + " = lv_" + bp2 + ";")
+      @indent = @indent - 1
+      emit("  }")
     end
     @in_loop = old
+    result
   end
 
   def compile_each_with_index_block(nid)
@@ -20023,8 +20037,8 @@ class Compiler
     tmp = new_temp
     pfx = array_c_prefix(rt)
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
-    emit("    lv_" + bp2 + " = " + tmp + ";")
+    emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+    emit("    mrb_int lv_" + bp2 + " = " + tmp + ";")
     @indent = @indent + 1
     compile_stmts_body(@nd_body[@nd_block[nid]])
     @indent = @indent - 1
@@ -20050,7 +20064,7 @@ class Compiler
       pfx = array_c_prefix(rt)
       emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
       if has_bp == 1
-        emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+        emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
       end
       @indent = @indent + 1
       compile_stmts_body(@nd_body[@nd_block[nid]])
@@ -21048,7 +21062,7 @@ class Compiler
       @needs_gc = 1
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -21095,7 +21109,7 @@ class Compiler
     pfx = array_c_prefix(rt)
     tmp = new_temp
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
-    emit("    lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+    emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
     @indent = @indent + 1
     blk = @nd_block[nid]
     if blk >= 0
@@ -21126,7 +21140,7 @@ class Compiler
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       tmp_i = new_temp
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -21160,7 +21174,7 @@ class Compiler
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       tmp_i = new_temp
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22028,7 +22042,7 @@ class Compiler
     if rt == "int_array"
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22049,7 +22063,7 @@ class Compiler
       @needs_str_array = 1
       emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    const char *lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22085,7 +22099,7 @@ class Compiler
     if rt == "int_array" || rt == "sym_array"
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0

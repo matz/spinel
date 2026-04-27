@@ -39,6 +39,16 @@ ifeq ($(OS),Windows_NT)
   LDFLAGS += -Wl,--stack,67108864
 endif
 
+# `timeout` is GNU coreutils — present by default on Linux but missing
+# on macOS unless `brew install coreutils` is run (where it's named
+# `gtimeout`). Without it test/bench would chain-fail at the very first
+# `timeout` call with exit 127, reporting 0 pass / 0 fail. Detect both
+# names; if neither is found, run without time limits (slow benches
+# won't be auto-killed, but otherwise everything works).
+TIMEOUT_BIN := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+TIMEOUT10 := $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10,)
+TIMEOUT60 := $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 60,)
+
 # Prism library: prefer vendor/prism (fetched via `make deps`), then
 # fall back to the Prism gem if one is installed. Override by setting
 # PRISM_DIR=/path/to/prism on the command line.
@@ -148,6 +158,7 @@ spinel_codegen$(EXE): spinel_codegen.rb spinel_parse$(EXE)
 
 test: spinel_parse$(EXE) $(SP_RT_LIB)
 	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make bootstrap' first"; exit 1; fi
+	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@pass=0; fail=0; err=0; \
 	for f in test/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
@@ -155,8 +166,8 @@ test: spinel_parse$(EXE) $(SP_RT_LIB)
 	  ./spinel_codegen$(EXE) /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$(timeout 10 ruby "$$f" 2>/dev/null); \
-	    actual=$$(timeout 10 /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
+	    expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
+	    actual=$$($(TIMEOUT10) /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
 	    if [ "$$expected" = "$$actual" ]; then \
 	      pass=$$((pass+1)); \
 	    else \
@@ -171,19 +182,20 @@ test: spinel_parse$(EXE) $(SP_RT_LIB)
 
 bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make bootstrap' first"; exit 1; fi
+	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@pass=0; fail=0; skip=0; \
 	for f in benchmark/*.rb; do \
 	  bn=$$(basename "$$f" .rb); \
-	  timeout 10 ./spinel_parse$(EXE) "$$f" /tmp/_sp_b.ast 2>/dev/null && \
-	  timeout 10 ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
+	  $(TIMEOUT10) ./spinel_parse$(EXE) "$$f" /tmp/_sp_b.ast 2>/dev/null && \
+	  $(TIMEOUT10) ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$(timeout 60 ruby "$$f" 2>/dev/null); \
+	    expected=$$($(TIMEOUT60) ruby "$$f" 2>/dev/null); \
 	    ruby_rc=$$?; \
 	    if [ $$ruby_rc -eq 124 ]; then \
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
-	      actual=$$(timeout 60 /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
+	      actual=$$($(TIMEOUT60) /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
 	      if [ "$$expected" = "$$actual" ]; then \
 	        pass=$$((pass+1)); \
 	      else \

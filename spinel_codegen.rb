@@ -17842,7 +17842,7 @@ class Compiler
           char_buf = new_temp
           emit("  const char *" + src_tmp + " = " + src + ";")
           emit("  for (mrb_int " + tmp + " = 0; " + src_tmp + "[" + tmp + "]; ) {")
-          emit("    int " + cn_tmp + " = sp_utf8_char_len((unsigned char)" + src_tmp + "[" + tmp + "]);")
+          emit("    int " + cn_tmp + " = sp_utf8_advance(" + src_tmp + " + " + tmp + ");")
           emit("    char *" + char_buf + " = sp_str_alloc_raw(" + cn_tmp + " + 1);")
           emit("    memcpy(" + char_buf + ", " + src_tmp + " + " + tmp + ", " + cn_tmp + ");")
           emit("    " + char_buf + "[" + cn_tmp + "] = 0;")

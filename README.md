@@ -154,6 +154,16 @@ Range, Time, StringIO, File, Regexp, Bigint (auto-promoted), Fiber.
 Polymorphic values via tagged unions. Nullable object types (`T?`)
 for self-referential data structures (linked lists, trees).
 
+**Inspect / `p`**: `Object#inspect` is implemented for all primitive
+types (Integer, Float, String, Symbol, Boolean, nil) and for typed
+arrays (`int_array`, `float_array`, `str_array`, `sym_array`).
+`Array#to_s` is aliased to `Array#inspect`, matching CRuby.
+`Kernel#p` dispatches through `compile_inspect_for` so `p obj`,
+`obj.inspect`, `obj.to_s`, and `"#{obj.inspect}"` interpolation
+all produce CRuby-byte-identical output. Not yet implemented for
+Hash, Range, Struct, user classes, or the polymorphic `sp_RbVal`
+tagged union.
+
 **Global Variables**: `$name` compiled to static C variables with
 type-mismatch detection at compile time.
 

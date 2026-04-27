@@ -4252,6 +4252,20 @@ class Compiler
           rname = constructor_class_name(r)
           if rname != ""
             if rname == "Array"
+              # Check fill value type for Array.new(n, val) -- match infer_constructor_type
+              args_id = @nd_arguments[nid]
+              if args_id >= 0
+                aargs = get_args(args_id)
+                if aargs.length >= 2
+                  vt = infer_type(aargs[1])
+                  if vt == "float"
+                    return "float_array"
+                  end
+                  if vt == "string"
+                    return "str_array"
+                  end
+                end
+              end
               return "int_array"
             end
             if rname == "Hash"

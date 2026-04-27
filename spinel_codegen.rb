@@ -1045,6 +1045,13 @@ class Compiler
       if @nd_name[nid] == "ARGV"
         return "argv"
       end
+      if @current_class_idx >= 0
+        cpname = @cls_names[@current_class_idx] + "_" + @nd_name[nid]
+        ci2 = find_const_idx(cpname)
+        if ci2 >= 0
+          return @const_types[ci2]
+        end
+      end
       ci = find_const_idx(@nd_name[nid])
       if ci >= 0
         return @const_types[ci]
@@ -11397,6 +11404,17 @@ class Compiler
     if t == "ConstantReadNode"
       if @nd_name[nid] == "ARGV"
         return "sp_argv"
+      end
+      if @current_class_idx >= 0
+        cpname_cls = @cls_names[@current_class_idx] + "_" + @nd_name[nid]
+        ci_cls = find_const_idx(cpname_cls)
+        if ci_cls >= 0
+          lv_cls = const_literal_c_value(ci_cls)
+          if lv_cls != ""
+            return lv_cls
+          end
+          return "cst_" + cpname_cls
+        end
       end
       ci = find_const_idx(@nd_name[nid])
       if ci >= 0

@@ -185,6 +185,22 @@ class Compiler
     @parse_id_cache = {}
     @parse_id_pool = [[0]]
 
+    # Caches for split_semi/split_pipe/split_comma. Class metadata fields
+    # like @cls_meth_names are read via .split(sep) hundreds of thousands
+    # of times per codegen run; profiling showed >99% reuse. Cached results
+    # are READ-ONLY — call sites that mutate (type-refinement code paths
+    # like scan_new_calls, infer_all_returns, etc.) must use raw .split.
+    # Strings get *replaced* (not mutated in place) by append_cls_meth, so
+    # old keys remain coherent.
+    # The `[[""]]` seed teaches Spinel that the pool is ptr_array<str_array>;
+    # slot 0 is a reserved dummy.
+    @split_semi_cache = {}
+    @split_semi_pool = [[""]]
+    @split_pipe_cache = {}
+    @split_pipe_pool = [[""]]
+    @split_comma_cache = {}
+    @split_comma_pool = [[""]]
+
     @needs_stringio = 0
     @needs_proc = 0
     @proc_counter = 0
@@ -294,6 +310,49 @@ class Compiler
     @parse_id_cache[s] = @parse_id_pool.length
     @parse_id_pool.push(result)
     result
+  end
+
+  # Cached String#split for the three separators used to pack class metadata
+  # (";", "|", ","). Returns a read-only StrArray shared across callers —
+  # call sites that mutate the result (e.g. ptypes[k] = at) must use raw
+  # `.split(...)` instead.
+  def split_semi(s)
+    if s == ""
+      return "".split(";")
+    end
+    if @split_semi_cache.key?(s)
+      return @split_semi_pool[@split_semi_cache[s]]
+    end
+    r = s.split(";")
+    @split_semi_cache[s] = @split_semi_pool.length
+    @split_semi_pool.push(r)
+    r
+  end
+
+  def split_pipe(s)
+    if s == ""
+      return "".split("|")
+    end
+    if @split_pipe_cache.key?(s)
+      return @split_pipe_pool[@split_pipe_cache[s]]
+    end
+    r = s.split("|")
+    @split_pipe_cache[s] = @split_pipe_pool.length
+    @split_pipe_pool.push(r)
+    r
+  end
+
+  def split_comma(s)
+    if s == ""
+      return "".split(",")
+    end
+    if @split_comma_cache.key?(s)
+      return @split_comma_pool[@split_comma_cache[s]]
+    end
+    r = s.split(",")
+    @split_comma_cache[s] = @split_comma_pool.length
+    @split_comma_pool.push(r)
+    r
   end
 
   def new_temp
@@ -885,7 +944,7 @@ class Compiler
 
   # Find method in class (search parent chain)
   def cls_find_method(ci, mname)
-    names = @cls_meth_names[ci].split(";")
+    names = split_semi(@cls_meth_names[ci])
     j = 0
     while j < names.length
       if names[j] == mname
@@ -905,8 +964,8 @@ class Compiler
 
   # Get method return type from class
   def cls_method_return(ci, mname)
-    names = @cls_meth_names[ci].split(";")
-    returns = @cls_meth_returns[ci].split(";")
+    names = split_semi(@cls_meth_names[ci])
+    returns = split_semi(@cls_meth_returns[ci])
     j = 0
     while j < names.length
       if names[j] == mname
@@ -928,8 +987,8 @@ class Compiler
 
   # Get ivar type from class
   def cls_ivar_type(ci, iname)
-    names = @cls_ivar_names[ci].split(";")
-    types = @cls_ivar_types[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
+    types = split_semi(@cls_ivar_types[ci])
     j = 0
     while j < names.length
       if names[j] == iname
@@ -2553,8 +2612,8 @@ class Compiler
           if mname == "new"
             return "obj_" + rcname
           end
-          cmnames = @cls_cmeth_names[ci2].split(";")
-          cm_returns = @cls_cmeth_returns[ci2].split(";")
+          cmnames = split_semi(@cls_cmeth_names[ci2])
+          cm_returns = split_semi(@cls_cmeth_returns[ci2])
           cj = 0
           while cj < cmnames.length
             if cmnames[cj] == mname
@@ -2671,8 +2730,8 @@ class Compiler
         ci = 0
         while ci < @cls_names.length
           # Check zero-arg methods (getters)
-          ci2_mnames = @cls_meth_names[ci].split(";")
-          ci2_mparams = @cls_meth_params[ci].split("|")
+          ci2_mnames = split_semi(@cls_meth_names[ci])
+          ci2_mparams = split_pipe(@cls_meth_params[ci])
           mi2 = 0
           while mi2 < ci2_mnames.length
             if ci2_mnames[mi2] == mname
@@ -2691,7 +2750,7 @@ class Compiler
             mi2 = mi2 + 1
           end
           # Check attr_readers
-          readers2 = @cls_attr_readers[ci].split(";")
+          readers2 = split_semi(@cls_attr_readers[ci])
           j2 = 0
           while j2 < readers2.length
             if readers2[j2] == mname
@@ -2719,7 +2778,7 @@ class Compiler
         ci = find_class_idx(cname)
         if ci >= 0
           # Check attr_reader
-          readers = @cls_attr_readers[ci].split(";")
+          readers = split_semi(@cls_attr_readers[ci])
           j = 0
           while j < readers.length
             if readers[j] == mname
@@ -3969,7 +4028,7 @@ class Compiler
 
   def collect_ivars(ci)
     # Scan all methods for ivar writes
-    meths = @cls_meth_bodies[ci].split(";")
+    meths = split_semi(@cls_meth_bodies[ci])
     j = 0
     while j < meths.length
       bid = meths[j].to_i
@@ -3979,7 +4038,7 @@ class Compiler
       j = j + 1
     end
     # Add ivars from attr_readers/writers that might not have explicit writes
-    readers = @cls_attr_readers[ci].split(";")
+    readers = split_semi(@cls_attr_readers[ci])
     j = 0
     while j < readers.length
       iname = "@" + readers[j]
@@ -3988,7 +4047,7 @@ class Compiler
       end
       j = j + 1
     end
-    writers = @cls_attr_writers[ci].split(";")
+    writers = split_semi(@cls_attr_writers[ci])
     j = 0
     while j < writers.length
       iname = "@" + writers[j]
@@ -4000,7 +4059,7 @@ class Compiler
   end
 
   def update_ivar_type(ci, iname, new_type)
-    names = @cls_ivar_names[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
     types = @cls_ivar_types[ci].split(";")
     k = 0
     while k < names.length
@@ -4033,7 +4092,7 @@ class Compiler
   end
 
   def ivar_exists(ci, iname)
-    names = @cls_ivar_names[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
     k = 0
     while k < names.length
       if names[k] == iname
@@ -4710,7 +4769,7 @@ class Compiler
           if args_id >= 0
             arg_ids = get_args(args_id)
             ptypes = @meth_param_types[mi].split(",")
-            pnames = @meth_param_names[mi].split(",")
+            pnames = split_comma(@meth_param_names[mi])
             # Handle keyword hash args
             ak = 0
             while ak < arg_ids.length
@@ -4775,12 +4834,12 @@ class Compiler
                   if args_id >= 0
                     arg_ids = get_args(args_id)
                     all_ptypes = @cls_meth_ptypes[init_ci].split("|")
-                    all_params = @cls_meth_params[init_ci].split("|")
+                    all_params = split_pipe(@cls_meth_params[init_ci])
                     if init_idx < all_ptypes.length
                       ptypes = all_ptypes[init_idx].split(",")
                       pnames = "".split(",")
                       if init_idx < all_params.length
-                        pnames = all_params[init_idx].split(",")
+                        pnames = split_comma(all_params[init_idx])
                       end
                       k = 0
                       while k < arg_ids.length
@@ -4928,20 +4987,20 @@ class Compiler
     while i < @cls_names.length
       init_idx2 = cls_find_method_direct(i, "initialize")
       if init_idx2 >= 0
-        bodies = @cls_meth_bodies[i].split(";")
+        bodies = split_semi(@cls_meth_bodies[i])
         if init_idx2 < bodies.length
           if bodies[init_idx2].to_i == -2
             # Synthetic struct - update ivar types from init param types
-            all_params = @cls_meth_params[i].split("|")
-            all_ptypes = @cls_meth_ptypes[i].split("|")
+            all_params = split_pipe(@cls_meth_params[i])
+            all_ptypes = split_pipe(@cls_meth_ptypes[i])
             pnames = "".split(",")
             ptypes = "".split(",")
 
             if init_idx2 < all_params.length
-              pnames = all_params[init_idx2].split(",")
+              pnames = split_comma(all_params[init_idx2])
             end
             if init_idx2 < all_ptypes.length
-              ptypes = all_ptypes[init_idx2].split(",")
+              ptypes = split_comma(all_ptypes[init_idx2])
             end
             pk = 0
             while pk < pnames.length
@@ -4961,22 +5020,22 @@ class Compiler
     # For each class method, if it assigns @ivar = param, update ivar type from param type
     i = 0
     while i < @cls_names.length
-      mnames = @cls_meth_names[i].split(";")
+      mnames = split_semi(@cls_meth_names[i])
       mi = 0
       while mi < mnames.length
         init_idx = mi
-        all_params = @cls_meth_params[i].split("|")
-        all_ptypes = @cls_meth_ptypes[i].split("|")
+        all_params = split_pipe(@cls_meth_params[i])
+        all_ptypes = split_pipe(@cls_meth_ptypes[i])
         pnames = "".split(",")
         ptypes = "".split(",")
 
         if init_idx < all_params.length
-          pnames = all_params[init_idx].split(",")
+          pnames = split_comma(all_params[init_idx])
         end
         if init_idx < all_ptypes.length
-          ptypes = all_ptypes[init_idx].split(",")
+          ptypes = split_comma(all_ptypes[init_idx])
         end
-        bodies = @cls_meth_bodies[i].split(";")
+        bodies = split_semi(@cls_meth_bodies[i])
         bid = -1
         if init_idx < bodies.length
           bid = bodies[init_idx].to_i
@@ -4996,7 +5055,7 @@ class Compiler
                       if pi < ptypes.length
                         # Update ivar type
                         iname = @nd_name[sid]
-                        ivar_names = @cls_ivar_names[i].split(";")
+                        ivar_names = split_semi(@cls_ivar_names[i])
                         ivar_types = @cls_ivar_types[i].split(";")
                         ij = 0
                         while ij < ivar_names.length
@@ -5034,10 +5093,10 @@ class Compiler
     # Check all classes' methods (not just the class owning the readers).
     oci = 0
     while oci < @cls_names.length
-      mnames = @cls_meth_names[oci].split(";")
-      all_params = @cls_meth_params[oci].split("|")
+      mnames = split_semi(@cls_meth_names[oci])
+      all_params = split_pipe(@cls_meth_params[oci])
       all_ptypes = @cls_meth_ptypes[oci].split("|")
-      bodies = @cls_meth_bodies[oci].split(";")
+      bodies = split_semi(@cls_meth_bodies[oci])
       j = 0
       while j < mnames.length
         if mnames[j] != "initialize"
@@ -5045,7 +5104,7 @@ class Compiler
           ptypes = "".split(",")
 
           if j < all_params.length
-            pnames = all_params[j].split(",")
+            pnames = split_comma(all_params[j])
           end
           if j < all_ptypes.length
             ptypes = all_ptypes[j].split(",")
@@ -5064,7 +5123,7 @@ class Compiler
                   found_class = 0
                   while ci2 < @cls_names.length
                     if found_class == 0
-                      readers = @cls_attr_readers[ci2].split(";")
+                      readers = split_semi(@cls_attr_readers[ci2])
                       if readers.length > 0
                         if param_calls_reader(bid, pnames[pk], readers) == 1
                           found_class = 1
@@ -5072,8 +5131,8 @@ class Compiler
                       end
                       # Also check zero-arg class methods as readers
                       if found_class == 0
-                        ci2_mnames = @cls_meth_names[ci2].split(";")
-                        ci2_mparams = @cls_meth_params[ci2].split("|")
+                        ci2_mnames = split_semi(@cls_meth_names[ci2])
+                        ci2_mparams = split_pipe(@cls_meth_params[ci2])
                         zero_arg_meths = "".split(",")
                         mi2 = 0
                         while mi2 < ci2_mnames.length
@@ -5118,7 +5177,7 @@ class Compiler
     while mi < @meth_names.length
       bid = @meth_body_ids[mi]
       if bid >= 0
-        pnames = @meth_param_names[mi].split(",")
+        pnames = split_comma(@meth_param_names[mi])
         ptypes = @meth_param_types[mi].split(",")
         pk = 0
         while pk < pnames.length
@@ -5128,15 +5187,15 @@ class Compiler
               found_class = 0
               while ci2 < @cls_names.length
                 if found_class == 0
-                  readers = @cls_attr_readers[ci2].split(";")
+                  readers = split_semi(@cls_attr_readers[ci2])
                   if readers.length > 0
                     if param_calls_reader(bid, pnames[pk], readers) == 1
                       found_class = 1
                     end
                   end
                   if found_class == 0
-                    ci2_mnames = @cls_meth_names[ci2].split(";")
-                    ci2_mparams = @cls_meth_params[ci2].split("|")
+                    ci2_mnames = split_semi(@cls_meth_names[ci2])
+                    ci2_mparams = split_pipe(@cls_meth_params[ci2])
                     zero_arg_meths = "".split(",")
                     mi2 = 0
                     while mi2 < ci2_mnames.length
@@ -5272,8 +5331,8 @@ class Compiler
     i = 0
     while i < @meth_names.length
       push_scope
-      pnames = @meth_param_names[i].split(",")
-      ptypes = @meth_param_types[i].split(",")
+      pnames = split_comma(@meth_param_names[i])
+      ptypes = split_comma(@meth_param_types[i])
       j = 0
       while j < pnames.length
         pt = "int"
@@ -5302,10 +5361,10 @@ class Compiler
     ci = 0
     while ci < @cls_names.length
       @current_class_idx = ci
-      bodies = @cls_meth_bodies[ci].split(";")
-      mnames = @cls_meth_names[ci].split(";")
-      all_params = @cls_meth_params[ci].split("|")
-      all_ptypes = @cls_meth_ptypes[ci].split("|")
+      bodies = split_semi(@cls_meth_bodies[ci])
+      mnames = split_semi(@cls_meth_names[ci])
+      all_params = split_pipe(@cls_meth_params[ci])
+      all_ptypes = split_pipe(@cls_meth_ptypes[ci])
       bj = 0
       while bj < bodies.length
         bid = bodies[bj].to_i
@@ -5314,10 +5373,10 @@ class Compiler
           pnames2 = "".split(",")
           ptypes2 = "".split(",")
           if bj < all_params.length
-            pnames2 = all_params[bj].split(",")
+            pnames2 = split_comma(all_params[bj])
           end
           if bj < all_ptypes.length
-            ptypes2 = all_ptypes[bj].split(",")
+            ptypes2 = split_comma(all_ptypes[bj])
           end
           pk = 0
           while pk < pnames2.length
@@ -5376,7 +5435,7 @@ class Compiler
               cname = rt[4, rt.length - 4]
               ci = find_class_idx(cname)
               if ci >= 0
-                writers = @cls_attr_writers[ci].split(";")
+                writers = split_semi(@cls_attr_writers[ci])
                 wk = 0
                 while wk < writers.length
                   if writers[wk] == bname
@@ -5440,10 +5499,10 @@ class Compiler
     # For setter methods (def x=(v); @x = v; end), infer param type from ivar type
     ci = 0
     while ci < @cls_names.length
-      mnames = @cls_meth_names[ci].split(";")
+      mnames = split_semi(@cls_meth_names[ci])
       all_ptypes = @cls_meth_ptypes[ci].split("|")
-      ivar_names = @cls_ivar_names[ci].split(";")
-      ivar_types = @cls_ivar_types[ci].split(";")
+      ivar_names = split_semi(@cls_ivar_names[ci])
+      ivar_types = split_semi(@cls_ivar_types[ci])
       changed = 0
       j = 0
       bname = ""
@@ -5496,7 +5555,7 @@ class Compiler
       while mi < @meth_names.length
         bid = @meth_body_ids[mi]
         if bid >= 0
-          pnames = @meth_param_names[mi].split(",")
+          pnames = split_comma(@meth_param_names[mi])
           ptypes = @meth_param_types[mi].split(",")
           pk = 0
           while pk < pnames.length
@@ -5580,7 +5639,7 @@ class Compiler
       if recv < 0
         fmi = find_method_idx(mname)
         if fmi >= 0
-          fptypes = @meth_param_types[fmi].split(",")
+          fptypes = split_comma(@meth_param_types[fmi])
           args_id = @nd_arguments[nid]
           if args_id >= 0
             aargs = get_args(args_id)
@@ -5807,7 +5866,7 @@ class Compiler
       if mfn.start_with?("__oc_Float_")
         declare_var("__self_type", "float")
       end
-      pnames = @meth_param_names[i].split(",")
+      pnames = split_comma(@meth_param_names[i])
       ptypes = @meth_param_types[i].split(",")
       j = 0
       while j < pnames.length
@@ -5859,10 +5918,10 @@ class Compiler
     i = 0
     while i < @cls_names.length
       @current_class_idx = i
-      mnames = @cls_meth_names[i].split(";")
-      all_params = @cls_meth_params[i].split("|")
+      mnames = split_semi(@cls_meth_names[i])
+      all_params = split_pipe(@cls_meth_params[i])
       all_ptypes = @cls_meth_ptypes[i].split("|")
-      bodies = @cls_meth_bodies[i].split(";")
+      bodies = split_semi(@cls_meth_bodies[i])
       returns = @cls_meth_returns[i].split(";")
 
       j = 0
@@ -5872,7 +5931,7 @@ class Compiler
         ptypes = "".split(",")
 
         if j < all_params.length
-          pnames = all_params[j].split(",")
+          pnames = split_comma(all_params[j])
         end
         if j < all_ptypes.length
           ptypes = all_ptypes[j].split(",")
@@ -5953,8 +6012,8 @@ class Compiler
       end
 
       # Class methods
-      cmnames = @cls_cmeth_names[i].split(";")
-      cm_bodies = @cls_cmeth_bodies[i].split(";")
+      cmnames = split_semi(@cls_cmeth_names[i])
+      cm_bodies = split_semi(@cls_cmeth_bodies[i])
       cm_returns = @cls_cmeth_returns[i].split(";")
       j = 0
       while j < cmnames.length
@@ -5983,14 +6042,14 @@ class Compiler
     # has already propagated call-site-inferred types into ivars by this point.
     init_idx0 = cls_find_method_direct(ci, "initialize")
     if init_idx0 >= 0
-      bodies0 = @cls_meth_bodies[ci].split(";")
+      bodies0 = split_semi(@cls_meth_bodies[ci])
       if init_idx0 < bodies0.length && bodies0[init_idx0].to_i == -2
         return cls_ivar_type(ci, "@" + pname)
       end
     end
     # Check if param is assigned to an ivar in initialize
-    mnames = @cls_meth_names[ci].split(";")
-    bodies = @cls_meth_bodies[ci].split(";")
+    mnames = split_semi(@cls_meth_names[ci])
+    bodies = split_semi(@cls_meth_bodies[ci])
     j = 0
     while j < mnames.length
       if mnames[j] == "initialize"
@@ -6026,9 +6085,9 @@ class Compiler
                         if parent_ci >= 0
                           parent_init = cls_find_method_direct(parent_ci, "initialize")
                           if parent_init >= 0
-                            parent_ptypes = @cls_meth_ptypes[parent_ci].split("|")
+                            parent_ptypes = split_pipe(@cls_meth_ptypes[parent_ci])
                             if parent_init < parent_ptypes.length
-                              ppt = parent_ptypes[parent_init].split(",")
+                              ppt = split_comma(parent_ptypes[parent_init])
                               if sk < ppt.length
                                 return ppt[sk]
                               end
@@ -6814,8 +6873,8 @@ class Compiler
           # Check if it's a method parameter with a known type
           mi = 0
           while mi < @meth_names.length
-            pnames = @meth_param_names[mi].split(",")
-            ptypes = @meth_param_types[mi].split(",")
+            pnames = split_comma(@meth_param_names[mi])
+            ptypes = split_comma(@meth_param_types[mi])
             pi = 0
             while pi < pnames.length
               if pnames[pi] == vn && pi < ptypes.length
@@ -6834,7 +6893,7 @@ class Compiler
           ci = find_class_idx(cname)
           if ci >= 0
             mname = @nd_name[nid]
-            readers = @cls_attr_readers[ci].split(";")
+            readers = split_semi(@cls_attr_readers[ci])
             rk = 0
             while rk < readers.length
               if readers[rk] == mname
@@ -6861,10 +6920,10 @@ class Compiler
       return ivt
     end
     # Scan initialize body for @ivar = param assignments
-    all_bodies = @cls_meth_bodies[ci].split(";")
-    all_mnames = @cls_meth_names[ci].split(";")
-    all_params = @cls_meth_params[ci].split("|")
-    all_ptypes = @cls_meth_ptypes[ci].split("|")
+    all_bodies = split_semi(@cls_meth_bodies[ci])
+    all_mnames = split_semi(@cls_meth_names[ci])
+    all_params = split_pipe(@cls_meth_params[ci])
+    all_ptypes = split_pipe(@cls_meth_ptypes[ci])
     bj = 0
     while bj < all_mnames.length
       if all_mnames[bj] == "initialize"
@@ -6873,10 +6932,10 @@ class Compiler
           pnames = "".split(",")
           ptypes = "".split(",")
           if bj < all_params.length
-            pnames = all_params[bj].split(",")
+            pnames = split_comma(all_params[bj])
           end
           if bj < all_ptypes.length
-            ptypes = all_ptypes[bj].split(",")
+            ptypes = split_comma(all_ptypes[bj])
           end
           # Find @ivar = param_name in initialize body
           resolve_ivar_from_body(ci, bid, iname, pnames, ptypes)
@@ -7133,8 +7192,8 @@ class Compiler
       if bid >= 0
         # Build local scope for this function
         push_scope
-        pnames = @meth_param_names[mi].split(",")
-        ptypes = @meth_param_types[mi].split(",")
+        pnames = split_comma(@meth_param_names[mi])
+        ptypes = split_comma(@meth_param_types[mi])
         pk = 0
         while pk < pnames.length
           if pnames[pk] != ""
@@ -7255,10 +7314,10 @@ class Compiler
     while pass < 5
       ci = 0
       while ci < @cls_names.length
-        mnames = @cls_meth_names[ci].split(";")
-        all_params = @cls_meth_params[ci].split("|")
-        all_ptypes = @cls_meth_ptypes[ci].split("|")
-        bodies = @cls_meth_bodies[ci].split(";")
+        mnames = split_semi(@cls_meth_names[ci])
+        all_params = split_pipe(@cls_meth_params[ci])
+        all_ptypes = split_pipe(@cls_meth_ptypes[ci])
+        bodies = split_semi(@cls_meth_bodies[ci])
         mi = 0
         while mi < mnames.length
           bid = -1
@@ -7271,11 +7330,11 @@ class Compiler
             # Declare params in scope with current types
             pnames_arr = "".split(",")
             if mi < all_params.length
-              pnames_arr = all_params[mi].split(",")
+              pnames_arr = split_comma(all_params[mi])
             end
             ptypes_arr = "".split(",")
             if mi < all_ptypes.length
-              ptypes_arr = all_ptypes[mi].split(",")
+              ptypes_arr = split_comma(all_ptypes[mi])
             end
             pk = 0
             while pk < pnames_arr.length
@@ -7419,8 +7478,8 @@ class Compiler
     ci = 0
     while ci < @cls_names.length
       cname = @cls_names[ci]
-      writers = @cls_attr_writers[ci].split(";")
-      names = @cls_ivar_names[ci].split(";")
+      writers = split_semi(@cls_attr_writers[ci])
+      names = split_semi(@cls_ivar_names[ci])
       types = @cls_ivar_types[ci].split(";")
       changed = 0
       k = 0
@@ -8637,9 +8696,9 @@ class Compiler
     if mnames_str == ""
       return 0
     end
-    mnames = mnames_str.split(";")
-    bodies = @cls_meth_bodies[ci].split(";")
-    writers = @cls_attr_writers[ci].split(";")
+    mnames = split_semi(mnames_str)
+    bodies = split_semi(@cls_meth_bodies[ci])
+    writers = split_semi(@cls_attr_writers[ci])
     mi = 0
     while mi < mnames.length
       mn = mnames[mi]
@@ -8683,9 +8742,9 @@ class Compiler
     while i < @cls_names.length
       mnames_str = @cls_meth_names[i]
       if mnames_str != ""
-        mnames = mnames_str.split(";")
-        bodies = @cls_meth_bodies[i].split(";")
-        writers = @cls_attr_writers[i].split(";")
+        mnames = split_semi(mnames_str)
+        bodies = split_semi(@cls_meth_bodies[i])
+        writers = split_semi(@cls_attr_writers[i])
         mi = 0
         while mi < mnames.length
           mn = mnames[mi]
@@ -8752,9 +8811,9 @@ class Compiler
     while i < @cls_names.length
       mnames_str = @cls_meth_names[i]
       if mnames_str != ""
-        mnames = mnames_str.split(";")
-        bodies = @cls_meth_bodies[i].split(";")
-        readers = @cls_attr_readers[i].split(";")
+        mnames = split_semi(mnames_str)
+        bodies = split_semi(@cls_meth_bodies[i])
+        readers = split_semi(@cls_attr_readers[i])
         mi = 0
         while mi < mnames.length
           mn = mnames[mi]
@@ -8877,18 +8936,18 @@ class Compiler
     while i < @cls_names.length
       mnames_str = @cls_meth_names[i]
       if mnames_str != ""
-        mnames = mnames_str.split(";")
-        all_params = @cls_meth_params[i].split("|")
-        all_ptypes = @cls_meth_ptypes[i].split("|")
-        bodies = @cls_meth_bodies[i].split(";")
+        mnames = split_semi(mnames_str)
+        all_params = split_pipe(@cls_meth_params[i])
+        all_ptypes = split_pipe(@cls_meth_ptypes[i])
+        bodies = split_semi(@cls_meth_bodies[i])
         mi = 0
         while mi < mnames.length
           if mi < bodies.length && mi < all_params.length
             bid = bodies[mi].to_i
-            pnames = all_params[mi].split(",")
+            pnames = split_comma(all_params[mi])
             ptypes = "".split(",")
             if mi < all_ptypes.length
-              ptypes = all_ptypes[mi].split(",")
+              ptypes = split_comma(all_ptypes[mi])
             end
             # Collect object-type param names
             obj_param_names = "".split(",")
@@ -8928,8 +8987,8 @@ class Compiler
     mi = 0
     while mi < @meth_names.length
       bid = @meth_body_ids[mi]
-      pnames = @meth_param_names[mi].split(",")
-      ptypes = @meth_param_types[mi].split(",")
+      pnames = split_comma(@meth_param_names[mi])
+      ptypes = split_comma(@meth_param_types[mi])
       obj_param_names = "".split(",")
       obj_param_types = "".split(",")
       pj = 0
@@ -9006,8 +9065,8 @@ class Compiler
     2.times do
       i = 0
       while i < @cls_names.length
-        names = @cls_ivar_names[i].split(";")
-        types = @cls_ivar_types[i].split(";")
+        names = split_semi(@cls_ivar_names[i])
+        types = split_semi(@cls_ivar_types[i])
         # Value-type candidates: small immutable scalar classes.
         # Limit to 8 ivars so the struct stays register-friendly.
         if names.length > 0 && names.length <= 8
@@ -9024,7 +9083,7 @@ class Compiler
             if cls_has_self_mutating_methods(i) == 1
               all_val = 0
             end
-            writers = @cls_attr_writers[i].split(";")
+            writers = split_semi(@cls_attr_writers[i])
             if writers.length > 0 && writers[0] != ""
               all_val = 0
             end
@@ -9071,8 +9130,8 @@ class Compiler
         i = i + 1
         next
       end
-      names = @cls_ivar_names[i].split(";")
-      types = @cls_ivar_types[i].split(";")
+      names = split_semi(@cls_ivar_names[i])
+      types = split_semi(@cls_ivar_types[i])
       eligible = 1
       if names.length == 0 || names.length > 8
         eligible = 0
@@ -9100,9 +9159,9 @@ class Compiler
       end
       # Only initialize + attr_* methods (no custom methods).
       if eligible == 1
-        mnames = @cls_meth_names[i].split(";")
-        readers = @cls_attr_readers[i].split(";")
-        writers = @cls_attr_writers[i].split(";")
+        mnames = split_semi(@cls_meth_names[i])
+        readers = split_semi(@cls_attr_readers[i])
+        writers = split_semi(@cls_attr_writers[i])
         mk = 0
         while mk < mnames.length
           mn = mnames[mk]
@@ -9247,7 +9306,7 @@ class Compiler
   end
 
   def emit_value_type_field_deps(orig_ci, ai)
-    types = @cls_ivar_types[ai].split(";")
+    types = split_semi(@cls_ivar_types[ai])
     j = 0
     while j < types.length
       emit_value_type_field_dep(orig_ci, types[j])
@@ -9274,8 +9333,8 @@ class Compiler
       end
     end
     # Own fields (skip those inherited from parent)
-    names = @cls_ivar_names[ci].split(";")
-    types = @cls_ivar_types[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
+    types = split_semi(@cls_ivar_types[ci])
     j = 0
     while j < names.length
       iname = names[j]
@@ -9306,8 +9365,8 @@ class Compiler
         emit_parent_fields(pi)
       end
     end
-    names = @cls_ivar_names[ci].split(";")
-    types = @cls_ivar_types[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
+    types = split_semi(@cls_ivar_types[ci])
     j = 0
     while j < names.length
       iname = names[j]
@@ -9331,7 +9390,7 @@ class Compiler
   end
 
   def ivar_in_chain(ci, iname)
-    names = @cls_ivar_names[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
     k = 0
     while k < names.length
       if names[k] == iname
@@ -9362,8 +9421,8 @@ class Compiler
   end
 
   def class_has_ptr_ivars(ci)
-    names = @cls_ivar_names[ci].split(";")
-    types = @cls_ivar_types[ci].split(";")
+    names = split_semi(@cls_ivar_names[ci])
+    types = split_semi(@cls_ivar_types[ci])
     j = 0
     while j < names.length
       if j < types.length
@@ -9389,8 +9448,8 @@ class Compiler
         cname = @cls_names[i]
         emit_raw("static void sp_" + cname + "_gc_scan(void *p) {")
         emit_raw("  sp_" + cname + " *self = (sp_" + cname + " *)p;")
-        names = @cls_ivar_names[i].split(";")
-        types = @cls_ivar_types[i].split(";")
+        names = split_semi(@cls_ivar_names[i])
+        types = split_semi(@cls_ivar_types[i])
         j = 0
         while j < names.length
           if j < types.length
@@ -9404,8 +9463,8 @@ class Compiler
         if @cls_parents[i] != ""
           pi = find_class_idx(@cls_parents[i])
           if pi >= 0
-            pnames = @cls_ivar_names[pi].split(";")
-            ptypes = @cls_ivar_types[pi].split(";")
+            pnames = split_semi(@cls_ivar_names[pi])
+            ptypes = split_semi(@cls_ivar_types[pi])
             pj = 0
             while pj < pnames.length
               if pj < ptypes.length
@@ -9455,10 +9514,10 @@ class Compiler
         emit_raw("static inline void sp_" + cname + "_initialize(sp_" + cname + " *self" + init_params_decl(i) + ");")
       end
       # Instance methods
-      mnames = @cls_meth_names[i].split(";")
-      returns = @cls_meth_returns[i].split(";")
-      all_params = @cls_meth_params[i].split("|")
-      all_ptypes = @cls_meth_ptypes[i].split("|")
+      mnames = split_semi(@cls_meth_names[i])
+      returns = split_semi(@cls_meth_returns[i])
+      all_params = split_pipe(@cls_meth_params[i])
+      all_ptypes = split_pipe(@cls_meth_ptypes[i])
       j = 0
       while j < mnames.length
         if mnames[j] != "initialize"
@@ -9474,17 +9533,17 @@ class Compiler
           if @cls_is_value_type[i] == 1
             sp = " self"
           end
-          bids = @cls_meth_bodies[i].split(";")
+          bids = split_semi(@cls_meth_bodies[i])
           bid_j = j < bids.length ? bids[j].to_i : -1
           emit_raw(method_linkage_named(bid_j, cls_method_has_yield(i, j), mnames[j]) + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mnames[j]) + "(sp_" + cname + sp + method_with_self_params(j, all_params, all_ptypes) + yp + ");")
         end
         j = j + 1
       end
       # Class methods
-      cmnames = @cls_cmeth_names[i].split(";")
-      cm_returns = @cls_cmeth_returns[i].split(";")
-      cm_params = @cls_cmeth_params[i].split("|")
-      cm_ptypes = @cls_cmeth_ptypes[i].split("|")
+      cmnames = split_semi(@cls_cmeth_names[i])
+      cm_returns = split_semi(@cls_cmeth_returns[i])
+      cm_params = split_pipe(@cls_cmeth_params[i])
+      cm_ptypes = split_pipe(@cls_cmeth_ptypes[i])
       j = 0
       while j < cmnames.length
         rt = "int"
@@ -9513,7 +9572,7 @@ class Compiler
   end
 
   def cls_method_has_yield(ci, midx)
-    ystr = @cls_meth_has_yield[ci].split(";")
+    ystr = split_semi(@cls_meth_has_yield[ci])
     if midx < ystr.length
       if ystr[midx] == "1"
         return 1
@@ -9523,7 +9582,7 @@ class Compiler
   end
 
   def cls_find_method_direct(ci, mname)
-    mnames = @cls_meth_names[ci].split(";")
+    mnames = split_semi(@cls_meth_names[ci])
     j = 0
     while j < mnames.length
       if mnames[j] == mname
@@ -9536,8 +9595,8 @@ class Compiler
 
   def method_params_decl(mi)
     mfullname = @meth_names[mi]
-    pnames = @meth_param_names[mi].split(",")
-    ptypes = @meth_param_types[mi].split(",")
+    pnames = split_comma(@meth_param_names[mi])
+    ptypes = split_comma(@meth_param_types[mi])
     # Check for open class method
     oc_self = ""
     if mfullname.start_with?("__oc_Integer_")
@@ -9609,16 +9668,16 @@ class Compiler
       return "void"
     end
     init_idx = cls_find_method_direct(init_ci, "initialize")
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
+    all_params = split_pipe(@cls_meth_params[init_ci])
+    all_ptypes = split_pipe(@cls_meth_ptypes[init_ci])
     pnames = "".split(",")
     ptypes = "".split(",")
 
     if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
+      pnames = split_comma(all_params[init_idx])
     end
     if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
+      ptypes = split_comma(all_ptypes[init_idx])
     end
     if pnames.length == 0
       return "void"
@@ -9648,16 +9707,16 @@ class Compiler
     if init_idx < 0
       return ""
     end
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
+    all_params = split_pipe(@cls_meth_params[init_ci])
+    all_ptypes = split_pipe(@cls_meth_ptypes[init_ci])
     pnames = "".split(",")
     ptypes = "".split(",")
 
     if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
+      pnames = split_comma(all_params[init_idx])
     end
     if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
+      ptypes = split_comma(all_ptypes[init_idx])
     end
     result = ""
     j = 0
@@ -9677,10 +9736,10 @@ class Compiler
     ptypes = "".split(",")
 
     if midx < all_params.length
-      pnames = all_params[midx].split(",")
+      pnames = split_comma(all_params[midx])
     end
     if midx < all_ptypes.length
-      ptypes = all_ptypes[midx].split(",")
+      ptypes = split_comma(all_ptypes[midx])
     end
     result = ""
     j = 0
@@ -9700,10 +9759,10 @@ class Compiler
     ptypes = "".split(",")
 
     if midx < all_params.length
-      pnames = all_params[midx].split(",")
+      pnames = split_comma(all_params[midx])
     end
     if midx < all_ptypes.length
-      ptypes = all_ptypes[midx].split(",")
+      ptypes = split_comma(all_ptypes[midx])
     end
     if pnames.length == 0
       return "void"
@@ -9729,11 +9788,11 @@ class Compiler
     i = 0
     while i < @cls_names.length
       emit_constructor(i)
-      mnames = @cls_meth_names[i].split(";")
-      returns = @cls_meth_returns[i].split(";")
-      all_params = @cls_meth_params[i].split("|")
-      all_ptypes = @cls_meth_ptypes[i].split("|")
-      bodies = @cls_meth_bodies[i].split(";")
+      mnames = split_semi(@cls_meth_names[i])
+      returns = split_semi(@cls_meth_returns[i])
+      all_params = split_pipe(@cls_meth_params[i])
+      all_ptypes = split_pipe(@cls_meth_ptypes[i])
+      bodies = split_semi(@cls_meth_bodies[i])
       j = 0
       while j < mnames.length
         if mnames[j] != "initialize"
@@ -9748,21 +9807,21 @@ class Compiler
           pnames = "".split(",")
           ptypes = "".split(",")
           if j < all_params.length
-            pnames = all_params[j].split(",")
+            pnames = split_comma(all_params[j])
           end
           if j < all_ptypes.length
-            ptypes = all_ptypes[j].split(",")
+            ptypes = split_comma(all_ptypes[j])
           end
           emit_instance_method(i, mnames[j], pnames, ptypes, rt, bid)
         end
         j = j + 1
       end
       # Class methods
-      cmnames = @cls_cmeth_names[i].split(";")
-      cm_returns = @cls_cmeth_returns[i].split(";")
-      cm_params = @cls_cmeth_params[i].split("|")
-      cm_ptypes = @cls_cmeth_ptypes[i].split("|")
-      cm_bodies = @cls_cmeth_bodies[i].split(";")
+      cmnames = split_semi(@cls_cmeth_names[i])
+      cm_returns = split_semi(@cls_cmeth_returns[i])
+      cm_params = split_pipe(@cls_cmeth_params[i])
+      cm_ptypes = split_pipe(@cls_cmeth_ptypes[i])
+      cm_bodies = split_semi(@cls_cmeth_bodies[i])
       j = 0
       while j < cmnames.length
         rt = "int"
@@ -9777,10 +9836,10 @@ class Compiler
         ptypes = "".split(",")
 
         if j < cm_params.length
-          pnames = cm_params[j].split(",")
+          pnames = split_comma(cm_params[j])
         end
         if j < cm_ptypes.length
-          ptypes = cm_ptypes[j].split(",")
+          ptypes = split_comma(cm_ptypes[j])
         end
         emit_class_level_method(i, cmnames[j], pnames, ptypes, rt, bid)
         j = j + 1
@@ -9808,13 +9867,13 @@ class Compiler
 
     # Root pointer-type constructor parameters
     if init_idx >= 0
-      all_params_str = @cls_meth_params[ci].split("|")
-      all_ptypes_str = @cls_meth_ptypes[ci].split("|")
+      all_params_str = split_pipe(@cls_meth_params[ci])
+      all_ptypes_str = split_pipe(@cls_meth_ptypes[ci])
       if init_idx < all_params_str.length
-        cp_names = all_params_str[init_idx].split(",")
+        cp_names = split_comma(all_params_str[init_idx])
         cp_types = "".split(",")
         if init_idx < all_ptypes_str.length
-          cp_types = all_ptypes_str[init_idx].split(",")
+          cp_types = split_comma(all_ptypes_str[init_idx])
         end
         cpi = 0
         while cpi < cp_names.length
@@ -9831,17 +9890,17 @@ class Compiler
     init_ci = find_init_class(ci)
 
     if init_idx >= 0
-      bodies = @cls_meth_bodies[ci].split(";")
+      bodies = split_semi(@cls_meth_bodies[ci])
       bid = -1
       if init_idx < bodies.length
         bid = bodies[init_idx].to_i
       end
       if bid == -2
         # Synthetic struct constructor
-        all_params = @cls_meth_params[ci].split("|")
+        all_params = split_pipe(@cls_meth_params[ci])
         pnames2 = "".split(",")
         if init_idx < all_params.length
-          pnames2 = all_params[init_idx].split(",")
+          pnames2 = split_comma(all_params[init_idx])
         end
         sk = 0
         while sk < pnames2.length
@@ -9855,16 +9914,16 @@ class Compiler
       end
       if bid >= 0
         @current_class_idx = ci
-        all_params = @cls_meth_params[ci].split("|")
-        all_ptypes = @cls_meth_ptypes[ci].split("|")
+        all_params = split_pipe(@cls_meth_params[ci])
+        all_ptypes = split_pipe(@cls_meth_ptypes[ci])
         pnames = "".split(",")
         ptypes = "".split(",")
 
         if init_idx < all_params.length
-          pnames = all_params[init_idx].split(",")
+          pnames = split_comma(all_params[init_idx])
         end
         if init_idx < all_ptypes.length
-          ptypes = all_ptypes[init_idx].split(",")
+          ptypes = split_comma(all_ptypes[init_idx])
         end
         push_scope
         k = 0
@@ -9922,12 +9981,12 @@ class Compiler
         if init_ci != ci
           parent_name = @cls_names[init_ci]
           # Build param forwarding: forward all constructor params to parent init
-          pi_params = @cls_meth_params[init_ci].split("|")
+          pi_params = split_pipe(@cls_meth_params[init_ci])
           pi_idx = cls_find_method_direct(init_ci, "initialize")
           pnames = "".split(",")
           if pi_idx >= 0
             if pi_idx < pi_params.length
-              pnames = pi_params[pi_idx].split(",")
+              pnames = split_comma(pi_params[pi_idx])
             end
           end
           fwd = ""
@@ -9956,23 +10015,23 @@ class Compiler
       saved_vt = @cls_is_value_type[ci]
       @cls_is_value_type[ci] = 0
       emit_raw("static inline void sp_" + cname + "_initialize(sp_" + cname + " *self" + init_params_decl(ci) + ") {")
-      bodies = @cls_meth_bodies[ci].split(";")
+      bodies = split_semi(@cls_meth_bodies[ci])
       bid = -1
       if init_idx < bodies.length
         bid = bodies[init_idx].to_i
       end
       if bid >= 0
         @current_class_idx = ci
-        all_params = @cls_meth_params[ci].split("|")
-        all_ptypes = @cls_meth_ptypes[ci].split("|")
+        all_params = split_pipe(@cls_meth_params[ci])
+        all_ptypes = split_pipe(@cls_meth_ptypes[ci])
         pnames = "".split(",")
         ptypes = "".split(",")
 
         if init_idx < all_params.length
-          pnames = all_params[init_idx].split(",")
+          pnames = split_comma(all_params[init_idx])
         end
         if init_idx < all_ptypes.length
-          ptypes = all_ptypes[init_idx].split(",")
+          ptypes = split_comma(all_ptypes[init_idx])
         end
         push_scope
         k = 0
@@ -10180,8 +10239,8 @@ class Compiler
       @in_yield_method = 0
     end
 
-    pnames = @meth_param_names[mi].split(",")
-    ptypes = @meth_param_types[mi].split(",")
+    pnames = split_comma(@meth_param_names[mi])
+    ptypes = split_comma(@meth_param_types[mi])
 
     yp = ""
     if @meth_has_yield[mi] == 1
@@ -12708,7 +12767,7 @@ class Compiler
         yargs = ", NULL, NULL"
       end
       # Check if function has a &block param and caller provides a block
-      ptypes = @meth_param_types[mi].split(",")
+      ptypes = split_comma(@meth_param_types[mi])
       has_block_param = 0
       pk = 0
       while pk < ptypes.length
@@ -12805,7 +12864,7 @@ class Compiler
         end
       end
       # Check attr_readers (bare method call like `x` meaning self.x)
-      readers = @cls_attr_readers[@current_class_idx].split(";")
+      readers = split_semi(@cls_attr_readers[@current_class_idx])
       rk = 0
       while rk < readers.length
         if readers[rk] == mname
@@ -15182,7 +15241,7 @@ class Compiler
       # Class method dispatch (def self.xxx)
       ci3 = find_class_idx(rcname)
       if ci3 >= 0
-        cmnames = @cls_cmeth_names[ci3].split(";")
+        cmnames = split_semi(@cls_cmeth_names[ci3])
         cj = 0
         while cj < cmnames.length
           if cmnames[cj] == mname
@@ -15292,7 +15351,7 @@ class Compiler
             return "TRUE"
           end
           # Check attr_readers
-          readers = @cls_attr_readers[ci].split(";")
+          readers = split_semi(@cls_attr_readers[ci])
           rk = 0
           while rk < readers.length
             if readers[rk] == arg0
@@ -15350,7 +15409,7 @@ class Compiler
           arrow = "."
         end
         # attr_reader
-        readers = @cls_attr_readers[ci].split(";")
+        readers = split_semi(@cls_attr_readers[ci])
         j = 0
         while j < readers.length
           if readers[j] == mname
@@ -15362,7 +15421,7 @@ class Compiler
         if mname.length > 1
           if mname[mname.length - 1] == "="
             bname = mname[0, mname.length - 1]
-            writers = @cls_attr_writers[ci].split(";")
+            writers = split_semi(@cls_attr_writers[ci])
             j = 0
             while j < writers.length
               if writers[j] == bname
@@ -15412,7 +15471,7 @@ class Compiler
       ci2 = 0
       while ci2 < @cls_names.length
         cname2 = @cls_names[ci2]
-        readers2 = @cls_attr_readers[ci2].split(";")
+        readers2 = split_semi(@cls_attr_readers[ci2])
         found_reader = 0
         j2 = 0
         while j2 < readers2.length
@@ -15428,7 +15487,7 @@ class Compiler
         if mname.length > 1
           if mname[mname.length - 1] == "="
             bname2 = mname[0, mname.length - 1]
-            writers2 = @cls_attr_writers[ci2].split(";")
+            writers2 = split_semi(@cls_attr_writers[ci2])
             j2 = 0
             while j2 < writers2.length
               if writers2[j2] == bname2
@@ -15678,9 +15737,9 @@ class Compiler
     if args_id >= 0
       arg_ids = get_args(args_id)
     end
-    pnames = @meth_param_names[mi].split(",")
-    ptypes = @meth_param_types[mi].split(",")
-    defaults = @meth_has_defaults[mi].split(",")
+    pnames = split_comma(@meth_param_names[mi])
+    ptypes = split_comma(@meth_param_types[mi])
+    defaults = split_comma(@meth_has_defaults[mi])
 
     # Check if args contain a KeywordHashNode - extract kw pairs
     kw_names = "".split(",")
@@ -15808,9 +15867,9 @@ class Compiler
       if init_ci_p >= 0
         init_idx_p = cls_find_method_direct(init_ci_p, "initialize")
         if init_idx_p >= 0
-          all_ptypes_p = @cls_meth_ptypes[init_ci_p].split("|")
+          all_ptypes_p = split_pipe(@cls_meth_ptypes[init_ci_p])
           if init_idx_p < all_ptypes_p.length
-            ptypes_p = all_ptypes_p[init_idx_p].split(",")
+            ptypes_p = split_comma(all_ptypes_p[init_idx_p])
             has_poly = 0
             kpp = 0
             while kpp < ptypes_p.length
@@ -15879,15 +15938,15 @@ class Compiler
     if init_idx < 0
       return compile_call_args(nid)
     end
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
+    all_params = split_pipe(@cls_meth_params[init_ci])
+    all_ptypes = split_pipe(@cls_meth_ptypes[init_ci])
     pnames = "".split(",")
     ptypes = "".split(",")
     if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
+      pnames = split_comma(all_params[init_idx])
     end
     if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
+      ptypes = split_comma(all_ptypes[init_idx])
     end
     # Build args in param order using keyword values
     result = ""
@@ -15993,10 +16052,10 @@ class Compiler
       return ""
     end
     arg_ids = get_args(args_id)
-    all_ptypes = @cls_meth_ptypes[target_ci].split("|")
+    all_ptypes = split_pipe(@cls_meth_ptypes[target_ci])
     ptypes = "".split(",")
     if target_midx < all_ptypes.length
-      ptypes = all_ptypes[target_midx].split(",")
+      ptypes = split_comma(all_ptypes[target_midx])
     end
     result = ""
     pcname = ""
@@ -16033,7 +16092,7 @@ class Compiler
     if ci < 0
       return ""
     end
-    mnames = @cls_meth_names[ci].split(";")
+    mnames = split_semi(@cls_meth_names[ci])
     j = 0
     while j < mnames.length
       if mnames[j] == mname
@@ -20600,7 +20659,7 @@ class Compiler
                 cn2 = @nd_name[stmts2[k2]]
                 fmi2 = find_method_idx(cn2)
                 if fmi2 >= 0
-                  fpt2 = @meth_param_types[fmi2].split(",")
+                  fpt2 = split_comma(@meth_param_types[fmi2])
                   if fpt2.length > 0
                     if fpt2[0] == "lambda"
                       bp_is_lambda = 1
@@ -21107,8 +21166,8 @@ class Compiler
     end
 
     # Declare and set the function's params as new temp vars
-    pnames = @meth_param_names[mi].split(",")
-    ptypes = @meth_param_types[mi].split(",")
+    pnames = split_comma(@meth_param_names[mi])
+    ptypes = split_comma(@meth_param_types[mi])
     # Create unique temp names for function params to avoid collision
     @block_counter = @block_counter + 1
     suffix = "_y" + @block_counter.to_s
@@ -21422,7 +21481,7 @@ class Compiler
     recv = @nd_receiver[nid]
     rc = compile_expr_gc_rooted(recv)
 
-    bodies = @cls_meth_bodies[cci].split(";")
+    bodies = split_semi(@cls_meth_bodies[cci])
     bid = -1
     if midx < bodies.length
       bid = bodies[midx].to_i
@@ -21435,15 +21494,15 @@ class Compiler
     suffix = "_y" + @block_counter.to_s
 
     # For the method params and locals, create remapped names
-    all_params = @cls_meth_params[cci].split("|")
-    all_ptypes = @cls_meth_ptypes[cci].split("|")
+    all_params = split_pipe(@cls_meth_params[cci])
+    all_ptypes = split_pipe(@cls_meth_ptypes[cci])
     pnames = "".split(",")
     ptypes = "".split(",")
     if midx < all_params.length
-      pnames = all_params[midx].split(",")
+      pnames = split_comma(all_params[midx])
     end
     if midx < all_ptypes.length
-      ptypes = all_ptypes[midx].split(",")
+      ptypes = split_comma(all_ptypes[midx])
     end
 
     map_from = "".split(",")

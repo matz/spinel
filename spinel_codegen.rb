@@ -15724,10 +15724,13 @@ class Compiler
     if mname == "to_s"
       return "sp_poly_to_s(" + rc + ")"
     end
-    # For object method calls, dispatch based on cls_id. The result
-    # temp is typed by the method's return type. If user classes
-    # disagree on that type, the result is sp_RbVal and each branch
-    # boxes its concrete return value.
+    # For object method calls, dispatch based on cls_id. Two namespaces
+    # of cls_id share SP_TAG_OBJ:
+    #   - non-negative: index into @cls_names (user-defined classes)
+    #   - negative SP_BUILTIN_*: built-in pointer types (IntArray, ...)
+    # The result temp is typed by the method's return type. If user
+    # classes disagree on that type, the result is sp_RbVal and each
+    # branch boxes its concrete return value.
     ret_type = poly_dispatch_return_type(mname)
     is_poly_ret = ret_type == "poly" ? 1 : 0
     ret_ct = c_type(ret_type)
@@ -15737,19 +15740,23 @@ class Compiler
     recv_tmp = new_temp
     emit("  sp_RbVal " + recv_tmp + " = " + rc + ";")
     # Compile the call's argument list once.
+    arg_compiled = "".split(",")
     arg_strs = ""
     args_id = @nd_arguments[nid]
     if args_id >= 0
       aargs = get_args(args_id)
       k = 0
       while k < aargs.length
-        arg_strs = arg_strs + ", " + compile_expr(aargs[k])
+        ce = compile_expr(aargs[k])
+        arg_compiled.push(ce)
+        arg_strs = arg_strs + ", " + ce
         k = k + 1
       end
     end
     tmp = new_temp
     emit("  " + ret_ct + " " + tmp + " = " + ret_def + ";")
     emit("  if (" + recv_tmp + ".tag == SP_TAG_OBJ) {")
+    # User-class dispatch
     i = 0
     while i < @cls_names.length
       cname = @cls_names[i]
@@ -15765,8 +15772,31 @@ class Compiler
       end
       i = i + 1
     end
+    # Built-in type dispatch (cls_id < 0).
+    emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, tmp, is_poly_ret)
     emit("  }")
     tmp
+  end
+
+  # Emit branches for the built-in (negative cls_id) entries. Each
+  # entry maps a (SP_BUILTIN_*, method) pair to a C expression.
+  # Adding a new built-in type means one more `if` branch here.
+  def emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, result_tmp, is_poly_ret)
+    a0 = ""
+    if arg_compiled.length > 0
+      a0 = arg_compiled[0]
+    end
+    # IntArray: `[]`, `length`, `size`
+    if mname == "[]" && arg_compiled.length >= 1
+      call = "sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+    end
+    if mname == "length" || mname == "size"
+      call = "sp_IntArray_length((sp_IntArray *)" + recv_tmp + ".v.p)"
+      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+    end
   end
 
   # Try to compile str[i] <op> "c" as direct char comparison

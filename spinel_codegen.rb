@@ -14352,6 +14352,15 @@ class Compiler
     if recv_type == "str_int_hash" || recv_type == "str_str_hash"
       return ""
     end
+    # Array#inspect and Array#to_s (CRuby aliases them). Delegate to
+    # compile_inspect_for so we share one definition per element type
+    # with the Kernel#p path.
+    if mname == "inspect" || mname == "to_s"
+      r = compile_inspect_for(recv_type, rc)
+      if r != ""
+        return r
+      end
+    end
     # zip without block: return array of pairs/tuples
     if mname == "zip" && @nd_block[nid] < 0
       @needs_ptr_array = 1
@@ -19906,6 +19915,26 @@ class Compiler
     end
     if at == "nil"
       return "\"nil\""
+    end
+    if at == "int_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_IntArray_inspect(" + val + ")"
+    end
+    if at == "float_array"
+      @needs_float_array = 1
+      @needs_string_helpers = 1
+      return "sp_FloatArray_inspect(" + val + ")"
+    end
+    if at == "str_array"
+      @needs_str_array = 1
+      @needs_string_helpers = 1
+      return "sp_StrArray_inspect(" + val + ")"
+    end
+    if at == "sym_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_SymArray_inspect(" + val + ")"
     end
     ""
   end

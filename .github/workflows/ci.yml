@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  posix:
+    name: ${{ matrix.os }} / ${{ matrix.cc }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cc: gcc
+          - os: ubuntu-latest
+            cc: clang
+          - os: macos-latest
+            cc: clang
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install prism gem (codegen bootstrap step 2 needs it)
+        run: gem install prism -v 1.9.0
+
+      - name: Expose GNU coreutils on PATH (macOS)
+        if: runner.os == 'macOS'
+        run: echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Fetch libprism sources
+        run: make deps
+
+      - name: Build (parse + regexp + bootstrap)
+        run: make -j$(getconf _NPROCESSORS_ONLN) all
+
+      - name: Run tests
+        run: make test
+
+  windows-mingw:
+    name: windows-mingw
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      CC: gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (MINGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-ruby
+            make
+            diffutils
+            curl
+            tar
+
+      - name: Show toolchain
+        run: |
+          uname -a
+          gcc --version
+          ruby --version
+          make --version | head -1
+
+      - name: Install prism gem (codegen bootstrap step 2 needs it)
+        run: gem install prism -v 1.9.0
+
+      - name: Fetch libprism sources
+        run: make deps
+
+      - name: Build (parse + regexp + bootstrap)
+        run: make -j$(nproc) all
+
+      - name: Run tests
+        run: make test

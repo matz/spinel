@@ -8351,7 +8351,7 @@ class Compiler
   def emit_string_helpers
     emit_raw("static const char*sp_str_concat(const char*a,const char*b){size_t la=strlen(a),lb=strlen(b);char*r=(char*)malloc(la+lb+1);memcpy(r,a,la);memcpy(r+la,b,lb+1);return r;}")
     emit_raw("static const char*sp_int_to_s(mrb_int n){char*b=(char*)malloc(32);snprintf(b,32,\"%lld\",(long long)n);return b;}")
-    emit_raw("static const char*sp_float_to_s(mrb_float f){char*b=(char*)malloc(64);snprintf(b,64,\"%g\",f);return b;}")
+    emit_raw("static const char*sp_float_to_s(mrb_float f){char*b=(char*)malloc(64);snprintf(b,64,\"%g\",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}")
     emit_raw("static const char*sp_str_upcase(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<=l;i++)r[i]=toupper((unsigned char)s[i]);return r;}")
     emit_raw("static const char*sp_str_downcase(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<=l;i++)r[i]=tolower((unsigned char)s[i]);return r;}")
     emit_raw("static const char*sp_str_strip(const char*s){while(*s&&isspace((unsigned char)*s))s++;size_t l=strlen(s);while(l>0&&isspace((unsigned char)s[l-1]))l--;char*r=(char*)malloc(l+1);memcpy(r,s,l);r[l]=0;return r;}")
@@ -19855,7 +19855,8 @@ class Compiler
       return
     end
     if at == "float"
-      emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+      @needs_string_helpers = 1
+      emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
       return
     end
     if at == "bool"
@@ -19910,7 +19911,8 @@ class Compiler
         emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
       else
         if at == "float"
-          emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+          @needs_string_helpers = 1
+          emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
         else
           if at == "string" || at == "string?"
             emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); }")
@@ -19934,6 +19936,9 @@ class Compiler
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) puts(sp_sym_to_s((sp_sym)_pa->data[_pa->start + _pi])); }")
                 elsif at == "int_array"
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) printf(\"%lld" + bsl_n + "\", (long long)_pa->data[_pa->start + _pi]); }")
+                elsif at == "float_array"
+                  @needs_string_helpers = 1
+                  emit("  { sp_FloatArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) { const char *_fs = sp_float_to_s(_pa->data[_pi]); fputs(_fs, stdout); putchar('" + bsl_n + "'); } }")
                 else
                   emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
                 end

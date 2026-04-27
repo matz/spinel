@@ -358,11 +358,11 @@ static const char*sp_str_concat4(const char*a,const char*b,const char*c,const ch
 static const char*sp_str_concat_arr(const char *const *parts,int n){size_t total=0;for(int i=0;i<n;i++)total+=strlen(parts[i]);char*r=sp_str_alloc(total);char*p=r;for(int i=0;i<n;i++){size_t sl=strlen(parts[i]);memcpy(p,parts[i],sl);p+=sl;}return r;}
 static const char*sp_int_to_s(mrb_int n){char*b=sp_str_alloc_raw(32);snprintf(b,32,"%lld",(long long)n);return b;}
 static const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)base=10;char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}else{while(u>0){mrb_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;return b;}
-static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);return b;}
-/* Float#inspect: like to_s but guarantees a `.0` suffix for whole values,
-   matching CRuby's Float#inspect (e.g. 1.0 -> "1.0", not "1"). NaN and
-   Infinity are left as-is from snprintf. */
-static const char*sp_float_inspect(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
+/* Float#to_s (Ruby semantics): matches CRuby by guaranteeing a `.0`
+   suffix for whole values (e.g. 1.0 -> "1.0", not "1"). NaN and
+   Infinity are left as-is from snprintf. Float#inspect is aliased. */
+static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
+#define sp_float_inspect sp_float_to_s
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
 static const char*sp_str_inspect(const char*s){if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=strlen(s);size_t cap=sl*4+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}else if(c=='\n'){r[o++]='\\';r[o++]='n';}else if(c=='\t'){r[o++]='\\';r[o++]='t';}else if(c=='\r'){r[o++]='\\';r[o++]='r';}else if(c<0x20||c==0x7f){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;return r;}
@@ -563,7 +563,7 @@ static void sp_poly_puts(sp_RbVal v) {
   }
 }
 static mrb_bool sp_poly_nil_p(sp_RbVal v) { return v.tag == SP_TAG_NIL; }
-static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: { char *b = sp_str_alloc_raw(32); snprintf(b, 32, "%lld", (long long)v.v.i); return b; } case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty; case SP_TAG_FLT: { char *b = sp_str_alloc_raw(64); snprintf(b, 64, "%g", v.v.f); return b; } case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false"); case SP_TAG_NIL: return sp_str_empty; case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i); default: return sp_str_empty; } }
+static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: return sp_int_to_s(v.v.i); case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty; case SP_TAG_FLT: return sp_float_to_s(v.v.f); case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false"); case SP_TAG_NIL: return sp_str_empty; case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i); default: return sp_str_empty; } }
 static sp_RbVal sp_poly_add(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i + b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i + b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (mrb_float)b.v.i); if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR) return sp_box_str(sp_str_concat(a.v.s, b.v.s)); return sp_box_int(0); }
 static sp_RbVal sp_poly_sub(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i - b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); return sp_box_int(0); }
 static sp_RbVal sp_poly_mul(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i * b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f * b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i * b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f * (mrb_float)b.v.i); return sp_box_int(0); }

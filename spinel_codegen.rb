@@ -15740,21 +15740,36 @@ class Compiler
     end
     ret_ct = c_type(ret_type)
     ret_def = c_default_val(ret_type)
+    # Stash the receiver in a temp so we don't re-evaluate the
+    # expression for every if-branch below.
+    recv_tmp = new_temp
+    emit("  sp_RbVal " + recv_tmp + " = " + rc + ";")
+    # Compile the call's argument list once.
+    arg_strs = ""
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      aargs = get_args(args_id)
+      k = 0
+      while k < aargs.length
+        arg_strs = arg_strs + ", " + compile_expr(aargs[k])
+        k = k + 1
+      end
+    end
     tmp = new_temp
     emit("  " + ret_ct + " " + tmp + " = " + ret_def + ";")
-    emit("  if (" + rc + ".tag == SP_TAG_OBJ) {")
+    emit("  if (" + recv_tmp + ".tag == SP_TAG_OBJ) {")
     i = 0
     while i < @cls_names.length
       cname = @cls_names[i]
       midx = cls_find_method_direct(i, mname)
       if midx >= 0
-        call_expr = "sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + rc + ".v.p)"
+        call_expr = "sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + recv_tmp + ".v.p" + arg_strs + ")"
         rhs = call_expr
         if is_poly_ret == 1
           this_rt = cls_method_return(i, mname)
           rhs = box_val_to_poly(call_expr, this_rt)
         end
-        emit("    if (" + rc + ".v.cls_id == " + i.to_s + ") " + tmp + " = " + rhs + ";")
+        emit("    if (" + recv_tmp + ".v.cls_id == " + i.to_s + ") " + tmp + " = " + rhs + ";")
       end
       i = i + 1
     end

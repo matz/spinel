@@ -2425,6 +2425,17 @@ class Compiler
           return "symbol"
         end
         if rt == "float_array"
+          # a[range] / a[start, len] returns a slice (still float_array).
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            a = get_args(args_id)
+            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+              return "float_array"
+            end
+            if a.length >= 2
+              return "float_array"
+            end
+          end
           return "float"
         end
         if rt == "str_array"
@@ -14616,6 +14627,19 @@ class Compiler
         return "sp_FloatArray_length(" + rc + ")"
       end
       if mname == "[]"
+        # a[range] / a[start, len] return slices; bare a[i] stays a get.
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+            left = compile_expr(@nd_left[a[0]])
+            right = compile_expr(@nd_right[a[0]])
+            return "sp_FloatArray_slice(" + rc + ", " + left + ", " + right + " - " + left + " + 1)"
+          end
+          if a.length >= 2
+            return "sp_FloatArray_slice(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+          end
+        end
         return "sp_FloatArray_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "push"

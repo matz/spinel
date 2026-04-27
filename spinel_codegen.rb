@@ -1437,6 +1437,9 @@ class Compiler
     if mname == "print"
       return "void"
     end
+    if mname == "system"
+      return "bool"
+    end
 
     # Constructor .new
     r = infer_constructor_type(nid, mname, recv)
@@ -12617,6 +12620,11 @@ class Compiler
         return "(_block != NULL)"
       end
       return "0"
+    end
+    if mname == "system"
+      @needs_file_io = 1
+      @needs_system = 1
+      return "({ fflush(stdout); sp_last_status = system(" + compile_arg0(nid) + "); sp_last_status == 0; })"
     end
     if mname == "__method__"
       return "\"" + @current_method_name + "\""

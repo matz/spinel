@@ -13048,27 +13048,38 @@ class Compiler
       end
       if lt == "string"
         @needs_string_helpers = 1
-        # Flatten chained string concat: a + b + c → sp_str_concat3(a,b,c)
+        # Flatten chained string concat: a + b + c → sp_str_concat3(a,b,c).
+        # Materialize each part into a rooted temp first so a later part's
+        # GC trigger can't sweep an earlier part's unrooted heap string.
         parts = collect_concat_chain(nid)
-        if parts.length == 3
-          return "sp_str_concat3(" + parts[0] + ", " + parts[1] + ", " + parts[2] + ")"
-        end
-        if parts.length == 4
-          return "sp_str_concat4(" + parts[0] + ", " + parts[1] + ", " + parts[2] + ", " + parts[3] + ")"
-        end
-        if parts.length >= 5
-          # Variable-length: single malloc for N parts via sp_str_concat_arr
-          arr = "(const char *const[]){"
+        if parts.length >= 3
+          @needs_gc = 1
+          tmps = "".split(",")
           k = 0
           while k < parts.length
+            tmp = new_temp
+            emit("  const char *" + tmp + " = " + parts[k] + ";")
+            emit("  SP_GC_ROOT(" + tmp + ");")
+            tmps.push(tmp)
+            k = k + 1
+          end
+          if tmps.length == 3
+            return "sp_str_concat3(" + tmps[0] + ", " + tmps[1] + ", " + tmps[2] + ")"
+          end
+          if tmps.length == 4
+            return "sp_str_concat4(" + tmps[0] + ", " + tmps[1] + ", " + tmps[2] + ", " + tmps[3] + ")"
+          end
+          arr = "(const char *const[]){"
+          k = 0
+          while k < tmps.length
             if k > 0
               arr = arr + ", "
             end
-            arr = arr + parts[k]
+            arr = arr + tmps[k]
             k = k + 1
           end
           arr = arr + "}"
-          return "sp_str_concat_arr(" + arr + ", " + parts.length.to_s + ")"
+          return "sp_str_concat_arr(" + arr + ", " + tmps.length.to_s + ")"
         end
         return "sp_str_concat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
       end

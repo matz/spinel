@@ -5170,82 +5170,10 @@ class Compiler
     end
   end
 
-  def param_calls_reader(nid, pname, readers)
-    if nid < 0
-      return 0
-    end
-    if @nd_type[nid] == "CallNode"
-      recv = @nd_receiver[nid]
-      if recv >= 0
-        if @nd_type[recv] == "LocalVariableReadNode"
-          if @nd_name[recv] == pname
-            mname = @nd_name[nid]
-            ri = 0
-            while ri < readers.length
-              if readers[ri] == mname
-                return 1
-              end
-              ri = ri + 1
-            end
-          end
-        end
-      end
-    end
-    # Recurse
-    if @nd_body[nid] >= 0
-      if param_calls_reader(@nd_body[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    stmts = parse_id_list(@nd_stmts[nid])
-    k = 0
-    while k < stmts.length
-      if param_calls_reader(stmts[k], pname, readers) == 1
-        return 1
-      end
-      k = k + 1
-    end
-    if @nd_expression[nid] >= 0
-      if param_calls_reader(@nd_expression[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    if @nd_left[nid] >= 0
-      if param_calls_reader(@nd_left[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    if @nd_right[nid] >= 0
-      if param_calls_reader(@nd_right[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    if @nd_arguments[nid] >= 0
-      if param_calls_reader(@nd_arguments[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    args = parse_id_list(@nd_args[nid])
-    k = 0
-    while k < args.length
-      if param_calls_reader(args[k], pname, readers) == 1
-        return 1
-      end
-      k = k + 1
-    end
-    if @nd_receiver[nid] >= 0
-      if param_calls_reader(@nd_receiver[nid], pname, readers) == 1
-        return 1
-      end
-    end
-    0
-  end
-
   # Collect every method name called on `pname` anywhere under nid.
   # Used by parameter type inference to find the class that satisfies
-  # ALL accesses (vs param_calls_reader's any-match shortcut, which
-  # picked the first class with a single matching reader and ignored
-  # later accesses, leading to issue #35).
+  # ALL accesses, avoiding a single-reader match that ignores later
+  # method calls on the same parameter.
   def collect_param_methods(nid, pname, acc)
     if nid < 0
       return

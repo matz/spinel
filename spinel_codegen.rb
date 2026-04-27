@@ -8441,13 +8441,13 @@ class Compiler
     emit_raw("#define SP_TAG_BOOL 3")
     emit_raw("#define SP_TAG_NIL  4")
     emit_raw("#define SP_TAG_OBJ  5")
-    emit_raw("typedef struct { int tag; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; int cls_id; } v; } sp_RbVal;")
+    emit_raw("typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;")
     emit_raw("static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.v.i = v; return r; }")
     emit_raw("static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.v.s = v; return r; }")
     emit_raw("static sp_RbVal sp_box_float(mrb_float v) { sp_RbVal r; r.tag = SP_TAG_FLT; r.v.f = v; return r; }")
     emit_raw("static sp_RbVal sp_box_bool(mrb_bool v) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.v.b = v; return r; }")
     emit_raw("static sp_RbVal sp_box_nil(void) { sp_RbVal r; r.tag = SP_TAG_NIL; r.v.i = 0; return r; }")
-    emit_raw("static sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.v.p = p; r.v.cls_id = cls_id; return r; }")
+    emit_raw("static sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = cls_id; r.v.p = p; return r; }")
     emit_raw("static void sp_poly_puts(sp_RbVal v) {")
     emit_raw("  switch (v.tag) {")
     emit_raw("    case SP_TAG_INT: printf(\"%lld" + bsl_n + "\", (long long)v.v.i); break;")
@@ -15749,7 +15749,7 @@ class Compiler
       # Check if this class has the method
       midx = cls_find_method_direct(i, mname)
       if midx >= 0
-        emit("    if (" + rc + ".v.cls_id == " + i.to_s + ") " + tmp + " = sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + rc + ".v.p);")
+        emit("    if (" + rc + ".cls_id == " + i.to_s + ") " + tmp + " = sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + rc + ".v.p);")
       end
       i = i + 1
     end

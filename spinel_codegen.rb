@@ -8343,8 +8343,9 @@ class Compiler
     emit_raw("static const char*sp_str_ljust(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);memcpy(r,s,l);memset(r+l,' ',w-l);r[w]=0;return r;}")
     emit_raw("static const char*sp_str_rjust(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);memset(r,' ',w-l);memcpy(r+w-l,s,l+1);return r;}")
     emit_raw("static const char*sp_str_center(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;mrb_int pad=w-l;mrb_int left=pad/2;mrb_int right=pad-left;char*r=(char*)malloc(w+1);memset(r,' ',left);memcpy(r+left,s,l);memset(r+left+l,' ',right);r[w]=0;return r;}")
-    emit_raw("static const char*sp_str_ljust2(const char*s,mrb_int w,const char*pad){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);memcpy(r,s,l);char pc=pad[0];for(mrb_int i=l;i<w;i++)r[i]=pc;r[w]=0;return r;}")
-    emit_raw("static const char*sp_str_rjust2(const char*s,mrb_int w,const char*pad){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);char pc=pad[0];for(mrb_int i=0;i<w-(mrb_int)l;i++)r[i]=pc;memcpy(r+w-l,s,l+1);return r;}")
+    emit_raw("static const char*sp_str_ljust2(const char*s,mrb_int w,const char*pad){size_t l=strlen(s);if((mrb_int)l>=w)return s;size_t pl=strlen(pad);if(pl==0)return s;char*r=(char*)malloc(w+1);memcpy(r,s,l);for(mrb_int i=l;i<w;i++)r[i]=pad[(i-l)%pl];r[w]=0;return r;}")
+    emit_raw("static const char*sp_str_rjust2(const char*s,mrb_int w,const char*pad){size_t l=strlen(s);if((mrb_int)l>=w)return s;size_t pl=strlen(pad);if(pl==0)return s;mrb_int np=w-(mrb_int)l;char*r=(char*)malloc(w+1);for(mrb_int i=0;i<np;i++)r[i]=pad[i%pl];memcpy(r+np,s,l+1);return r;}")
+    emit_raw("static const char*sp_str_center2(const char*s,mrb_int w,const char*pad){size_t l=strlen(s);if((mrb_int)l>=w)return s;size_t pl=strlen(pad);if(pl==0)return s;mrb_int pd=w-(mrb_int)l;mrb_int left=pd/2;mrb_int right=pd-left;char*r=(char*)malloc(w+1);for(mrb_int i=0;i<left;i++)r[i]=pad[i%pl];memcpy(r+left,s,l);for(mrb_int i=0;i<right;i++)r[left+l+i]=pad[i%pl];r[w]=0;return r;}")
     emit_raw("static const char*sp_str_lstrip(const char*s){while(*s&&isspace((unsigned char)*s))s++;char*r=(char*)malloc(strlen(s)+1);strcpy(r,s);return r;}")
     emit_raw("static const char*sp_str_rstrip(const char*s){size_t l=strlen(s);while(l>0&&isspace((unsigned char)s[l-1]))l--;char*r=(char*)malloc(l+1);memcpy(r,s,l);r[l]=0;return r;}")
     emit_raw("static const char*sp_str_dup(const char*s){char*r=(char*)malloc(strlen(s)+1);strcpy(r,s);return r;}")
@@ -13901,6 +13902,13 @@ class Compiler
       return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
     end
     if mname == "center"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 2
+          return "sp_str_center2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+        end
+      end
       return "sp_str_center(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "lstrip"

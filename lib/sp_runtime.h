@@ -576,6 +576,35 @@ static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (a->len >= a->ca
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { return a->len; }
 static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (i < 0) i += a->len; return a->data[i]; }
 
+/* Object#inspect for a tagged sp_RbVal. Dispatches on the runtime tag;
+   each branch reuses the matching primitive inspect helper. Falls back
+   to "#<Object>" for SP_TAG_OBJ because the runtime has no class-name
+   table yet (follow-up PR). Returns a GC-managed C string. */
+static const char *sp_poly_inspect(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_INT:  return sp_int_to_s(v.v.i);
+    case SP_TAG_STR:  return sp_str_inspect(v.v.s);
+    case SP_TAG_FLT:  return sp_float_to_s(v.v.f);
+    case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false");
+    case SP_TAG_NIL:  return SPL("nil");
+    case SP_TAG_SYM:  return sp_str_concat(":", sp_sym_to_s((sp_sym)v.v.i));
+    case SP_TAG_OBJ:  return SPL("#<Object>");
+    default:          return sp_str_empty;
+  }
+}
+/* Array#inspect for heterogeneous poly arrays. Each element dispatches
+   through sp_poly_inspect, so a mixed `[1, "x", :y]` renders
+   `[1, "x", :y]` byte-for-byte identical to CRuby. */
+static const char *sp_PolyArray_inspect(sp_PolyArray *a) {
+  sp_String *s = sp_String_new("[");
+  for (mrb_int i = 0; i < a->len; i++) {
+    if (i > 0) sp_String_append(s, ", ");
+    sp_String_append(s, sp_poly_inspect(a->data[i]));
+  }
+  sp_String_append(s, "]");
+  return s->data;
+}
+
 /* Mark the embedded GC reference inside an sp_RbVal (string or obj).
    Used as the scan hook for containers that store polymorphic values. */
 static inline void sp_mark_rbval(sp_RbVal v) {

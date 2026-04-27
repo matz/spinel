@@ -51,6 +51,17 @@ p ["hello", "world"]
 p [""]
 p [:foo, :bar]
 
+# Heterogeneous / mixed-type arrays (poly_array)
+p [1, "x"]
+p [nil, :sym, 1.5]
+p [1, "two", :three, 4.0, true]
+p [false, nil]
+
+# Mixed arrays as a receiver (inspect / to_s as methods)
+mx = [1, "x"]
+puts mx.inspect
+puts mx.to_s
+
 # Array#inspect as a method call
 arr = [1, 2, 3]
 puts arr.inspect

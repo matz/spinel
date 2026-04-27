@@ -14265,13 +14265,17 @@ class Compiler
     if recv_type == "str_int_hash" || recv_type == "str_str_hash"
       return ""
     end
-    # Array#inspect and Array#to_s (CRuby aliases them). Delegate to
-    # compile_inspect_for so we share one definition per element type
-    # with the Kernel#p path.
+    # Array#inspect and Array#to_s (CRuby aliases them for arrays, so
+    # the two share one definition via compile_inspect_for). Guard on
+    # recv_type being an actual array type so scalar receivers with
+    # the same method name (e.g. (poly).to_s, (int).to_s) fall through
+    # to their own scalar dispatchers.
     if mname == "inspect" || mname == "to_s"
-      r = compile_inspect_for(recv_type, rc)
-      if r != ""
-        return r
+      if recv_type == "int_array" || recv_type == "float_array" || recv_type == "str_array" || recv_type == "sym_array" || recv_type == "poly_array"
+        r = compile_inspect_for(recv_type, rc)
+        if r != ""
+          return r
+        end
       end
     end
     # zip without block: return array of pairs/tuples
@@ -19805,6 +19809,16 @@ class Compiler
       @needs_int_array = 1
       @needs_string_helpers = 1
       return "sp_SymArray_inspect(" + val + ")"
+    end
+    if at == "poly_array"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_PolyArray_inspect(" + val + ")"
+    end
+    if at == "poly"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_poly_inspect(" + val + ")"
     end
     ""
   end

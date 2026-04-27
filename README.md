@@ -155,14 +155,18 @@ Polymorphic values via tagged unions. Nullable object types (`T?`)
 for self-referential data structures (linked lists, trees).
 
 **Inspect / `p`**: `Object#inspect` is implemented for all primitive
-types (Integer, Float, String, Symbol, Boolean, nil) and for typed
-arrays (`int_array`, `float_array`, `str_array`, `sym_array`).
+types (Integer, Float, String, Symbol, Boolean, nil), for typed
+arrays (`int_array`, `float_array`, `str_array`, `sym_array`), and
+for heterogeneous arrays (`poly_array`, e.g. `[1, "x", :y]`).
+Scalar polymorphic values (the tagged-union values from the `Types`
+section above) also inspect correctly.
 `Array#to_s` is aliased to `Array#inspect`, matching CRuby.
 `Kernel#p` dispatches through `compile_inspect_for` so `p obj`,
 `obj.inspect`, `obj.to_s`, and `"#{obj.inspect}"` interpolation
-all produce CRuby-byte-identical output. Not yet implemented for
-Hash, Range, Struct, user classes, or the polymorphic `sp_RbVal`
-tagged union.
+all produce CRuby-byte-identical output. User-class instances
+inside a polymorphic value currently render as the placeholder
+`"#<Object>"` (the runtime has no class-name table yet); Hash,
+Range, and Struct inspect are not yet implemented.
 
 **Global Variables**: `$name` compiled to static C variables with
 type-mismatch detection at compile time.

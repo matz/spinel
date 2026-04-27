@@ -2620,7 +2620,9 @@ class Compiler
         rn = constructor_class_name(recv)
         if rn != ""
           if rn == "Array"
-            # Check fill value type
+            # Check fill value type. Pointer-type fills must produce a typed
+            # PtrArray; falling through to int_array would leave the
+            # elements unscanned by GC.
             args_id = @nd_arguments[nid]
             if args_id >= 0
               aargs = get_args(args_id)
@@ -2631,6 +2633,18 @@ class Compiler
                 end
                 if vt == "string"
                   return "str_array"
+                end
+                if vt == "symbol"
+                  return "sym_array"
+                end
+                if vt == "poly"
+                  @needs_rb_value = 1
+                  return "poly_array"
+                end
+                if type_is_pointer(vt) == 1
+                  @needs_ptr_array = 1
+                  @needs_gc = 1
+                  return vt + "_ptr_array"
                 end
               end
             end
@@ -4384,7 +4398,9 @@ class Compiler
           rname = constructor_class_name(r)
           if rname != ""
             if rname == "Array"
-              # Check fill value type for Array.new(n, val) -- match infer_constructor_type
+              # Check fill value type for Array.new(n, val).
+              # Pointer-type fills must produce a typed PtrArray; falling
+              # through to int_array would leave the elements unscanned by GC.
               args_id = @nd_arguments[nid]
               if args_id >= 0
                 aargs = get_args(args_id)
@@ -4395,6 +4411,18 @@ class Compiler
                   end
                   if vt == "string"
                     return "str_array"
+                  end
+                  if vt == "symbol"
+                    return "sym_array"
+                  end
+                  if vt == "poly"
+                    @needs_rb_value = 1
+                    return "poly_array"
+                  end
+                  if type_is_pointer(vt) == 1
+                    @needs_ptr_array = 1
+                    @needs_gc = 1
+                    return vt + "_ptr_array"
                   end
                 end
               end
@@ -13496,6 +13524,17 @@ class Compiler
               tmp = new_temp
               emit("  sp_StrArray *" + tmp + " = sp_StrArray_new();")
               emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; const char *_v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_StrArray_push(" + tmp + ", _v); }")
+              return tmp
+            end
+            # Pointer-type fills (objects, other arrays) need a typed PtrArray
+            # so the GC scans the elements. Without this they'd be pushed
+            # into an int_array and silently swept.
+            if type_is_pointer(vt) == 1
+              @needs_ptr_array = 1
+              @needs_gc = 1
+              tmp = new_temp
+              emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+              emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; void *_v = (void *)(" + compile_expr(aargs[1]) + "); for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp + ", _v); }")
               return tmp
             end
             @needs_int_array = 1

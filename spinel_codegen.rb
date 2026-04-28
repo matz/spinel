@@ -1667,7 +1667,7 @@ class Compiler
         if lt == "poly"
           return "poly"
         end
-        if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array" || lt == "poly_array"
+        if is_array_type(lt) == 1
           return lt
         end
         if lt == "float"
@@ -2371,7 +2371,7 @@ class Compiler
             if bbs.length > 0
               bret = infer_type(bbs.last)
               # If block returns an array type, use it as result type
-              if bret == "int_array" || bret == "str_array" || bret == "float_array" || bret == "sym_array" || bret == "poly_array"
+              if is_array_type(bret) == 1
                 return bret
               end
             end
@@ -3510,6 +3510,20 @@ class Compiler
       return "PolyArray"
     end
     "IntArray"
+  end
+
+  # The canonical "is this an array type?" check. Use this when you need
+  # to dispatch a method that's defined for every typed array — `+`,
+  # `concat`, `shuffle`, `each_with_object`, `flat_map`, etc. Covers the
+  # 5 typed arrays (int/str/float/sym/poly). *_ptr_array is intentionally
+  # excluded for now: sp_PtrArray lacks `_dup`/`_shuffle` and several
+  # other helpers, and the existing dispatchers don't route ptr_array
+  # through this path correctly even on master.
+  def is_array_type(t)
+    if t == "int_array" || t == "str_array" || t == "float_array" || t == "sym_array" || t == "poly_array"
+      return 1
+    end
+    0
   end
 
   # ---- Collection pass ----
@@ -13290,7 +13304,7 @@ class Compiler
         @needs_string_helpers = 1
         return "sp_poly_add(" + compile_expr(recv) + ", " + box_expr_to_poly(@nd_arguments[nid] >= 0 ? get_args(@nd_arguments[nid])[0] : -1) + ")"
       end
-      if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array" || lt == "poly_array"
+      if is_array_type(lt) == 1
         rc = compile_expr_gc_rooted(recv)
         arg = compile_arg0(nid)
         pfx = array_c_prefix(lt)
@@ -14379,7 +14393,7 @@ class Compiler
     # the same method name (e.g. (poly).to_s, (int).to_s) fall through
     # to their own scalar dispatchers.
     if mname == "inspect" || mname == "to_s"
-      if recv_type == "int_array" || recv_type == "float_array" || recv_type == "str_array" || recv_type == "sym_array" || recv_type == "poly_array"
+      if is_array_type(recv_type) == 1
         r = compile_inspect_for(recv_type, rc)
         if r != ""
           return r
@@ -14565,14 +14579,12 @@ class Compiler
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_get(" + rc + ", rand() % sp_" + pfx + "_length(" + rc + "))"
     end
-    if mname == "shuffle" &&
-       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array" || recv_type == "sym_array" || recv_type == "poly_array")
+    if mname == "shuffle" && is_array_type(recv_type) == 1
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_shuffle(" + rc + ")"
     end
-    if mname == "shuffle!" &&
-       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array" || recv_type == "sym_array" || recv_type == "poly_array")
+    if mname == "shuffle!" && is_array_type(recv_type) == 1
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       emit("  sp_" + pfx + "_shuffle_bang(" + rc + ");")
@@ -18106,7 +18118,7 @@ class Compiler
     if mname == "concat"
       if recv >= 0
         rt = infer_type(recv)
-        if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array" || rt == "poly_array"
+        if is_array_type(rt) == 1
           rc = compile_expr_gc_rooted(recv)
           arg = compile_arg0(nid)
           pfx = array_c_prefix(rt)
@@ -20401,7 +20413,7 @@ class Compiler
     result = new_temp
     emit("  " + obj_ct + " " + result + " = " + obj_arg + ";")
     tmp_i = new_temp
-    if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array" || rt == "poly_array"
+    if is_array_type(rt) == 1
       pfx = array_c_prefix(rt)
       emit("  {")
       @indent = @indent + 1
@@ -21162,7 +21174,7 @@ class Compiler
       end
     end
     # Fall back to receiver type if block doesn't return an array
-    if block_ret != "int_array" && block_ret != "str_array" && block_ret != "float_array" && block_ret != "sym_array" && block_ret != "poly_array"
+    if is_array_type(block_ret) == 0
       block_ret = rt
     end
     @needs_gc = 1

@@ -536,6 +536,13 @@ static sp_RbVal sp_box_bool(mrb_bool v) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls
 static sp_RbVal sp_box_nil(void) { sp_RbVal r; r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.i = 0; return r; }
 static sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = cls_id; r.v.p = p; return r; }
 static sp_RbVal sp_box_sym(sp_sym v) { sp_RbVal r; r.tag = SP_TAG_SYM; r.cls_id = 0; r.v.i = (mrb_int)v; return r; }
+#define SP_CLS_STR_ARRAY_BOX (-1)
+#define SP_CLS_INT_ARRAY_BOX (-2)
+#define SP_CLS_FLOAT_ARRAY_BOX (-3)
+#define SP_CLS_POLY_ARRAY_BOX (-4)
+static sp_RbVal sp_box_str_array(sp_StrArray *v) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_CLS_STR_ARRAY_BOX; r.v.p = (void*)v; return r; }
+static sp_RbVal sp_box_int_array(sp_IntArray *v) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_CLS_INT_ARRAY_BOX; r.v.p = (void*)v; return r; }
+static sp_RbVal sp_box_float_array(sp_FloatArray *v) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_CLS_FLOAT_ARRAY_BOX; r.v.p = (void*)v; return r; }
 static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
@@ -560,6 +567,7 @@ static sp_PolyArray *sp_PolyArray_new(void) { sp_PolyArray *a = (sp_PolyArray *)
 static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (a->len >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (sp_RbVal *)realloc(a->data, sizeof(sp_RbVal) * a->cap); } a->data[a->len++] = v; }
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { return a->len; }
 static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (i < 0) i += a->len; return a->data[i]; }
+static sp_RbVal sp_box_poly_array(sp_PolyArray *v) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_CLS_POLY_ARRAY_BOX; r.v.p = (void*)v; return r; }
 
 /* Mark the embedded GC reference inside an sp_RbVal (string or obj).
    Used as the scan hook for containers that store polymorphic values. */

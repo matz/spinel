@@ -7141,6 +7141,13 @@ class Compiler
         end
       end
     }
+    i = 0
+    while i < local_names.length
+      if local_types[i] == "poly"
+        set_var_type(local_names[i], local_types[i])
+      end
+      i = i + 1
+    end
   end
 
   def scan_poly_assigns(nid, names, types)
@@ -11197,6 +11204,37 @@ class Compiler
     while j < lnames.length
       if ltypes[j] == "bigint"
         set_var_type(lnames[j], "bigint")
+      end
+      j = j + 1
+    end
+
+    # Poly-detection pass: catch variables assigned conflicting types that
+    # scan_locals missed (e.g. obj_Var then int: scan_locals keeps obj_Var
+    # because it treats int as a fallback, but the assignment is real).
+    poly_names = "".split(",")
+    poly_types = "".split(",")
+    stmts.each { |sid|
+      if @nd_type[sid] != "DefNode"
+        if @nd_type[sid] != "ClassNode"
+          scan_poly_assigns(sid, poly_names, poly_types)
+        end
+      end
+    }
+    j = 0
+    while j < lnames.length
+      k = 0
+      while k < poly_names.length
+        if poly_names[k] == lnames[j]
+          pt = poly_types[k]
+          if pt == "poly"
+            if ltypes[j] != "poly"
+              ltypes[j] = "poly"
+              @needs_rb_value = 1
+              set_var_type(lnames[j], "poly")
+            end
+          end
+        end
+        k = k + 1
       end
       j = j + 1
     end
@@ -15938,6 +15976,22 @@ class Compiler
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
     end
+    if at == "str_array"
+      @needs_str_array = 1
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "int_array"
+      @needs_int_array = 1
+      return "sp_box_int_array(" + val + ")"
+    end
+    if at == "float_array"
+      @needs_float_array = 1
+      return "sp_box_float_array(" + val + ")"
+    end
+    if at == "poly_array"
+      @needs_rb_value = 1
+      return "sp_box_poly_array(" + val + ")"
+    end
     "sp_box_int(" + val + ")"
   end
 
@@ -15962,6 +16016,18 @@ class Compiler
     end
     if at == "symbol"
       return "sp_box_sym(" + val + ")"
+    end
+    if at == "str_array"
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "int_array"
+      return "sp_box_int_array(" + val + ")"
+    end
+    if at == "float_array"
+      return "sp_box_float_array(" + val + ")"
+    end
+    if at == "poly_array"
+      return "sp_box_poly_array(" + val + ")"
     end
     "sp_box_int(" + val + ")"
   end
@@ -16436,19 +16502,7 @@ class Compiler
       while k < elems.length
         et = infer_type(elems[k])
         val = compile_expr(elems[k])
-        if et == "string"
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_str(" + val + "));")
-        elsif et == "float"
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_float(" + val + "));")
-        elsif et == "bool"
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_bool(" + val + "));")
-        elsif et == "nil"
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_nil());")
-        elsif et == "symbol"
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_sym(" + val + "));")
-        else
-          emit("  sp_PolyArray_push(" + tmp + ", sp_box_int(" + val + "));")
-        end
+        emit("  sp_PolyArray_push(" + tmp + ", " + box_val_to_poly(val, et) + ");")
         k = k + 1
       end
       return tmp
@@ -16717,7 +16771,9 @@ class Compiler
         emit("  " + vref + " = " + val + ";")
       end
       if rhs_t != "nil" || is_nullable_type(vt) == 0
-        set_var_type(lname, rhs_t)
+        if is_nullable_type(vt) == 0
+          set_var_type(lname, rhs_t)
+        end
       end
       return
     end
@@ -17296,10 +17352,16 @@ class Compiler
       emit("  const char *" + tmp + " = " + pred_val + ";")
     else
       if is_obj_type(pred_type) == 1
-        obj_cname = pred_type[4, pred_type.length - 4]
+        bt = base_type(pred_type)
+        obj_cname = bt[4, bt.length - 4]
         emit("  sp_" + obj_cname + " *" + tmp + " = " + pred_val + ";")
       else
-        emit("  mrb_int " + tmp + " = " + pred_val + ";")
+        if pred_type == "poly"
+          @needs_rb_value = 1
+          emit("  sp_RbVal " + tmp + " = " + pred_val + ";")
+        else
+          emit("  mrb_int " + tmp + " = " + pred_val + ";")
+        end
       end
     end
     conds = parse_id_list(@nd_conditions[nid])
@@ -17361,6 +17423,87 @@ class Compiler
     emit("  }")
   end
 
+  # Build a C condition that checks whether a poly sp_RbVal `tmp` equals
+  # a literal value of any scalar type (int, string, float, bool, nil, symbol).
+  def poly_literal_cond(tmp, cid)
+    ct = infer_type(cid)
+    if ct == "string"
+      return "(" + tmp + ".tag == SP_TAG_STR && strcmp(" + tmp + ".v.s, " + compile_expr(cid) + ") == 0)"
+    end
+    if ct == "int"
+      return "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i == " + compile_expr(cid) + ")"
+    end
+    if ct == "float"
+      return "(" + tmp + ".tag == SP_TAG_FLT && " + tmp + ".v.f == " + compile_expr(cid) + ")"
+    end
+    if ct == "bool"
+      return "(" + tmp + ".tag == SP_TAG_BOOL && " + tmp + ".v.b == " + compile_expr(cid) + ")"
+    end
+    if ct == "nil"
+      return "(" + tmp + ".tag == SP_TAG_NIL)"
+    end
+    if ct == "symbol"
+      @needs_sym = 1
+      return "(" + tmp + ".tag == SP_TAG_SYM && (sp_sym)" + tmp + ".v.i == " + compile_expr(cid) + ")"
+    end
+    if ct == "str_array"
+      @needs_str_array = 1
+      elems = parse_id_list(@nd_elements[cid])
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_STR_ARRAY_BOX && ((sp_StrArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
+      k = 0
+      while k < elems.length
+        cond = cond + " && strcmp(((sp_StrArray *)" + tmp + ".v.p)->data[" + k.to_s + "], " + compile_expr(elems[k]) + ") == 0"
+        k = k + 1
+      end
+      return "(" + cond + ")"
+    end
+    if ct == "int_array"
+      @needs_int_array = 1
+      elems = parse_id_list(@nd_elements[cid])
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_INT_ARRAY_BOX && ((sp_IntArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
+      k = 0
+      while k < elems.length
+        cond = cond + " && sp_IntArray_get((sp_IntArray *)" + tmp + ".v.p, " + k.to_s + ") == " + compile_expr(elems[k])
+        k = k + 1
+      end
+      return "(" + cond + ")"
+    end
+    if ct == "poly_array"
+      @needs_rb_value = 1
+      elems = parse_id_list(@nd_elements[cid])
+      arr_ptr = "((sp_PolyArray *)" + tmp + ".v.p)"
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_POLY_ARRAY_BOX && " + arr_ptr + "->len == " + elems.length.to_s
+      k = 0
+      while k < elems.length
+        elem_rv = "sp_PolyArray_get(" + arr_ptr + ", " + k.to_s + ")"
+        cond = cond + " && " + poly_literal_cond(elem_rv, elems[k])
+        k = k + 1
+      end
+      return "(" + cond + ")"
+    end
+    "0"
+  end
+
+  # Build a C condition string that checks whether a poly sp_RbVal `tmp`
+  # holds an instance of `target_cname` or any of its subclasses.
+  def collect_matching_cls_cond(target_cname, tmp)
+    inner = ""
+    i = 0
+    while i < @cls_names.length
+      if is_class_or_ancestor(@cls_names[i], target_cname) == 1
+        if inner != ""
+          inner = inner + " || "
+        end
+        inner = inner + tmp + ".cls_id == " + i.to_s
+      end
+      i = i + 1
+    end
+    if inner == ""
+      return "0"
+    end
+    "(" + tmp + ".tag == SP_TAG_OBJ && (" + inner + "))"
+  end
+
   def compile_when_conds(wid, tmp, pred_type)
     wconds = parse_id_list(@nd_conditions[wid])
     result = ""
@@ -17374,14 +17517,23 @@ class Compiler
         left = compile_expr(@nd_left[cid])
         right = compile_expr(@nd_right[cid])
         cmp = range_excl_end(cid) == 1 ? "<" : "<="
-        result = result + "(" + tmp + " >= " + left + " && " + tmp + " " + cmp + " " + right + ")"
+        if pred_type == "poly"
+          result = result + "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i >= " + left + " && " + tmp + ".v.i " + cmp + " " + right + ")"
+        else
+          result = result + "(" + tmp + " >= " + left + " && " + tmp + " " + cmp + " " + right + ")"
+        end
       else
         if is_obj_type(pred_type) == 1 && @nd_type[cid] == "ConstantReadNode"
           cname = @nd_name[cid]
           if find_class_idx(cname) >= 0
-            pred_cname = pred_type[4, pred_type.length - 4]
+            bt = base_type(pred_type)
+            pred_cname = bt[4, bt.length - 4]
             if is_class_or_ancestor(pred_cname, cname) == 1
-              result = result + "1"
+              if is_nullable_type(pred_type) == 1
+                result = result + tmp + " != NULL"
+              else
+                result = result + "1"
+              end
             else
               result = result + "0"
             end
@@ -17389,10 +17541,51 @@ class Compiler
             result = result + "0"
           end
         else
-          if pred_type == "string"
-            result = result + "strcmp(" + tmp + ", " + compile_expr(cid) + ") == 0"
+          if pred_type == "poly" && @nd_type[cid] == "ConstantReadNode"
+            cname = @nd_name[cid]
+            if find_class_idx(cname) >= 0
+              result = result + collect_matching_cls_cond(cname, tmp)
+            else
+              if cname == "Integer"
+                result = result + tmp + ".tag == SP_TAG_INT"
+              else
+                if cname == "String"
+                  result = result + tmp + ".tag == SP_TAG_STR"
+                else
+                  if cname == "Float"
+                    result = result + tmp + ".tag == SP_TAG_FLT"
+                  else
+                    if cname == "Symbol"
+                      result = result + tmp + ".tag == SP_TAG_SYM"
+                    else
+                      if cname == "NilClass"
+                        result = result + tmp + ".tag == SP_TAG_NIL"
+                      else
+                        if cname == "TrueClass"
+                          result = result + "(" + tmp + ".tag == SP_TAG_BOOL && " + tmp + ".v.b)"
+                        else
+                          if cname == "FalseClass"
+                            result = result + "(" + tmp + ".tag == SP_TAG_BOOL && !" + tmp + ".v.b)"
+                          else
+                            result = result + "0"
+                          end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+            end
           else
-            result = result + tmp + " == " + compile_expr(cid)
+            if pred_type == "poly"
+              result = result + poly_literal_cond(tmp, cid)
+            else
+              if pred_type == "string"
+                result = result + "strcmp(" + tmp + ", " + compile_expr(cid) + ") == 0"
+              else
+                result = result + tmp + " == " + compile_expr(cid)
+              end
+            end
           end
         end
       end
@@ -22487,10 +22680,16 @@ class Compiler
         emit("  const char *" + tmp + " = " + pred_val + ";")
       else
         if is_obj_type(pred_type) == 1
-          obj_cname = pred_type[4, pred_type.length - 4]
+          bt = base_type(pred_type)
+          obj_cname = bt[4, bt.length - 4]
           emit("  sp_" + obj_cname + " *" + tmp + " = " + pred_val + ";")
         else
-          emit("  mrb_int " + tmp + " = " + pred_val + ";")
+          if pred_type == "poly"
+            @needs_rb_value = 1
+            emit("  sp_RbVal " + tmp + " = " + pred_val + ";")
+          else
+            emit("  mrb_int " + tmp + " = " + pred_val + ";")
+          end
         end
       end
       conds = parse_id_list(@nd_conditions[nid])

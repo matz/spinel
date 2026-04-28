@@ -3022,6 +3022,9 @@ class Compiler
     if t == "sym_array"
       return "symbol"
     end
+    if t == "poly_array"
+      return "poly"
+    end
     if is_ptr_array_type(t) == 1
       return ptr_array_elem_type(t)
     end
@@ -20398,7 +20401,7 @@ class Compiler
     result = new_temp
     emit("  " + obj_ct + " " + result + " = " + obj_arg + ";")
     tmp_i = new_temp
-    if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array"
+    if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array" || rt == "poly_array"
       pfx = array_c_prefix(rt)
       emit("  {")
       @indent = @indent + 1

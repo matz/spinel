@@ -14946,8 +14946,15 @@ class Compiler
   end
 
   def compile_array_method_expr(nid, mname, rc, recv_type)
-    # Skip non-array types
-    if recv_type == "str_int_hash" || recv_type == "str_str_hash"
+    # Skip non-array types. Without this guard a user class with a
+    # method whose name happens to overlap an Array method (e.g.
+    # `def sample`, `def first`) would be dispatched as that Array
+    # method, with `array_c_prefix` falling back to `IntArray` and
+    # the receiver pointer used as if it were an `sp_IntArray *`.
+    # `is_array_type` deliberately omits *_ptr_array (see its
+    # docstring), so include it explicitly here — Array#length, #[],
+    # #each, … all work on a ptr_array via `sp_PtrArray_*`.
+    if is_array_type(recv_type) == 0 && is_ptr_array_type(recv_type) == 0
       return ""
     end
     # Array#inspect and Array#to_s (CRuby aliases them for arrays, so

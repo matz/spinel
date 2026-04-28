@@ -3295,6 +3295,30 @@ class Compiler
     0
   end
 
+  # True when class `ci` (or any of its parents) has registered `bname` as
+  # an attr_writer / attr_accessor or a struct field — i.e. `obj.bname = v`
+  # may safely become a direct field write.
+  def cls_has_attr_writer(ci, bname)
+    if ci < 0
+      return 0
+    end
+    writers = @cls_attr_writers[ci].split(";")
+    wi = 0
+    while wi < writers.length
+      if writers[wi] == bname
+        return 1
+      end
+      wi = wi + 1
+    end
+    if @cls_parents[ci] != ""
+      pi = find_class_idx(@cls_parents[ci])
+      if pi >= 0
+        return cls_has_attr_writer(pi, bname)
+      end
+    end
+    0
+  end
+
   def is_value_type_obj(t)
     if is_obj_type(t) == 1
       cname = t[4, t.length - 4]
@@ -9176,33 +9200,41 @@ class Compiler
 
   def is_simple_writer_method(mn, bid)
     # Check if method is a simple attr_writer pattern: def x=(v); @x = v; end
+    # The RHS must be a bare reference to the parameter — `@x = v * 2`
+    # is NOT a simple writer and must not bypass dispatch.
     if mn.length <= 1 || mn[mn.length - 1] != "="
       return 0
     end
     if bid < 0 || bid >= @nd_count
       return 0
     end
-    # Body should be a StatementsNode with a single InstanceVariableWriteNode
+    # Find the single InstanceVariableWriteNode body (directly or wrapped
+    # in a StatementsNode of length 1).
     t = @nd_type[bid]
-    if t == "StatementsNode"
+    iv_id = -1
+    if t == "InstanceVariableWriteNode"
+      iv_id = bid
+    elsif t == "StatementsNode"
       stmts = @nd_stmts[bid]
       if stmts != ""
         parts = stmts.split(",")
         if parts.length == 1
           sid = parts[0].to_i
-          if sid >= 0 && sid < @nd_count
-            if @nd_type[sid] == "InstanceVariableWriteNode"
-              return 1
-            end
+          if sid >= 0 && sid < @nd_count && @nd_type[sid] == "InstanceVariableWriteNode"
+            iv_id = sid
           end
         end
       end
     end
-    # Body might be a single InstanceVariableWriteNode directly
-    if t == "InstanceVariableWriteNode"
-      return 1
+    if iv_id < 0
+      return 0
     end
-    0
+    # RHS must be a bare LocalVariableReadNode for the writer's single param.
+    rhs = @nd_value[iv_id]
+    if rhs < 0 || @nd_type[rhs] != "LocalVariableReadNode"
+      return 0
+    end
+    1
   end
 
   def cls_has_self_mutating_methods(ci)
@@ -19554,20 +19586,31 @@ class Compiler
   end
 
   def compile_writer_and_block_call_stmt(nid, mname, recv)
-    # attr_writer: obj.x = val
+    # attr_writer: obj.x = val — only short-circuit to a direct field
+    # write when `x=` is actually a registered attr_writer on the class
+    # (or transitive parent). Otherwise fall through to method-call
+    # dispatch so a real `def x=(v)` method gets called.
     if recv >= 0
       if mname.length > 1
         if mname[mname.length - 1] == "="
           bname = mname[0, mname.length - 1]
           rt = infer_type(recv)
           if is_obj_type(rt) == 1
-            rc = compile_expr_gc_rooted(recv)
-            arrow2 = "->"
-            if is_value_type_obj(rt) == 1
-              arrow2 = "."
+            r_cname = rt[4, rt.length - 4]
+            r_ci = find_class_idx(r_cname)
+            is_writer = 0
+            if r_ci >= 0
+              is_writer = cls_has_attr_writer(r_ci, bname)
             end
-            emit("  " + rc + arrow2 + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ";")
-            return 1
+            if is_writer == 1
+              rc = compile_expr_gc_rooted(recv)
+              arrow2 = "->"
+              if is_value_type_obj(rt) == 1
+                arrow2 = "."
+              end
+              emit("  " + rc + arrow2 + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ";")
+              return 1
+            end
           end
         end
       end

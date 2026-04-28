@@ -13866,23 +13866,35 @@ class Compiler
       if cidx >= 0
         owner = find_method_owner(@current_class_idx, mname)
         # Look up the method's owning class so we can fill in defaults
-        # from @cls_meth_defaults (issue #49).
+        # from @cls_meth_defaults (issue #49) and check for a &block slot.
         owner_ci = find_class_idx(owner)
         owner_midx = -1
         if owner_ci >= 0
           owner_midx = cls_find_method_direct(owner_ci, mname)
         end
+        # Omit the trailing &block slot from default-padding when the
+        # callee declares one — we'll fill it explicitly from the
+        # call site's literal block below.
+        has_proc = cls_method_has_block_param(owner_ci, owner_midx)
         ca = ""
         if owner_midx >= 0
-          ca = compile_typed_call_args(nid, owner_ci, owner_midx, 0)
+          ca = compile_typed_call_args(nid, owner_ci, owner_midx, has_proc)
         else
           ca = compile_call_args(nid)
         end
-        if ca != ""
-          return "sp_" + owner + "_" + sanitize_name(mname) + "(self, " + ca + ")"
-        else
-          return "sp_" + owner + "_" + sanitize_name(mname) + "(self)"
+        bp = ""
+        if has_proc == 1
+          if has_literal_block(nid) == 1
+            @needs_proc = 1
+            bp = compile_proc_literal(nid)
+          else
+            # The callee declares &block but the call site provides
+            # none — fill the slot with NULL so the C call has the
+            # right arity.
+            bp = "0"
+          end
         end
+        return "sp_" + owner + "_" + sanitize_name(mname) + "(self" + build_call_tail(ca, bp) + ")"
       end
       # Check attr_readers (bare method call like `x` meaning self.x)
       readers = @cls_attr_readers[@current_class_idx].split(";")

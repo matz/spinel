@@ -4373,7 +4373,7 @@ class Compiler
       return "string"
     end
     if t == "SymbolNode"
-      return "string"
+      return "symbol"
     end
     if t == "TrueNode"
       return "bool"

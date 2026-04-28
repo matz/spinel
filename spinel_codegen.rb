@@ -2371,7 +2371,7 @@ class Compiler
             if bbs.length > 0
               bret = infer_type(bbs.last)
               # If block returns an array type, use it as result type
-              if bret == "int_array" || bret == "str_array" || bret == "float_array" || bret == "sym_array"
+              if bret == "int_array" || bret == "str_array" || bret == "float_array" || bret == "sym_array" || bret == "poly_array"
                 return bret
               end
             end
@@ -21162,7 +21162,7 @@ class Compiler
       end
     end
     # Fall back to receiver type if block doesn't return an array
-    if block_ret != "int_array" && block_ret != "str_array" && block_ret != "float_array" && block_ret != "sym_array"
+    if block_ret != "int_array" && block_ret != "str_array" && block_ret != "float_array" && block_ret != "sym_array" && block_ret != "poly_array"
       block_ret = rt
     end
     @needs_gc = 1
@@ -21179,6 +21179,8 @@ class Compiler
       elem_type = "string"
     elsif rt == "float_array"
       elem_type = "float"
+    elsif rt == "poly_array"
+      elem_type = "poly"
     end
     declare_var(bp1, elem_type)
     emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx_src + "_length(" + rc + "); " + tmp_i + "++) {")

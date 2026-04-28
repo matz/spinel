@@ -18103,7 +18103,7 @@ class Compiler
     if mname == "concat"
       if recv >= 0
         rt = infer_type(recv)
-        if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array"
+        if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array" || rt == "poly_array"
           rc = compile_expr_gc_rooted(recv)
           arg = compile_arg0(nid)
           pfx = array_c_prefix(rt)

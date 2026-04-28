@@ -7,6 +7,7 @@
 #   spinel app.rb -c               - generate C only (app.c)
 #   spinel app.rb -c -o app.c     - generate C to specific file
 #   spinel app.rb -S               - print C to stdout
+#   spinel -e 'puts 42'            - compile inline source (default name: a)
 #
 # Options:
 #   -o FILE    Output file (binary or C depending on -c)
@@ -14,6 +15,7 @@
 #   -S         Print generated C to stdout
 #   -O LEVEL   Optimization level for cc (default: 2)
 #   --cc=CMD   C compiler command (default: cc)
+#   -e STR     Inline Ruby source (repeatable; multiple -e join with \n)
 
 DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 PARSE_BIN="$DIR/spinel_parse"
@@ -37,6 +39,9 @@ OPT_LEVEL="2"
 CC_CMD="cc"
 EXTRA_FLAGS=""
 C_TMP=""
+EVAL_SCRIPT=""
+EVAL_USED=0
+EVAL_TMP=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,12 +50,31 @@ while [ $# -gt 0 ]; do
     --cc=*)     CC_CMD="${1#--cc=}" ;;
     -o)         shift; OUTPUT="$1" ;;
     -O)         shift; OPT_LEVEL="$1" ;;
+    -e)         shift
+                if [ "$EVAL_USED" -eq 0 ]; then
+                  EVAL_SCRIPT="$1"
+                else
+                  EVAL_SCRIPT="$EVAL_SCRIPT
+$1"
+                fi
+                EVAL_USED=1 ;;
     -c)         C_ONLY=1 ;;
     -S)         STDOUT_MODE=1 ;;
     *.rb)       [ -z "$SOURCE" ] && SOURCE="$1" ;;
   esac
   shift
 done
+
+# `-e` mode: write the accumulated inline script to a temp file and
+# treat it as the source. Default output name is `a` since the
+# inline form has no .rb basename to derive from. If both -e and a
+# .rb file were given, -e wins (consistent with `ruby -e ... script.rb`
+# where the .rb file becomes ARGV — Spinel only consumes the source).
+if [ "$EVAL_USED" -eq 1 ]; then
+  EVAL_TMP="$(mktemp /tmp/spinel_eval.XXXXXX).rb"
+  printf '%s\n' "$EVAL_SCRIPT" > "$EVAL_TMP"
+  SOURCE="$EVAL_TMP"
+fi
 
 if [ -z "$SOURCE" ]; then
   echo "Spinel AOT Compiler" >&2
@@ -59,6 +83,7 @@ if [ -z "$SOURCE" ]; then
   echo "       spinel app.rb -o myapp     - compile to ./myapp" >&2
   echo "       spinel app.rb -c           - generate app.c only" >&2
   echo "       spinel app.rb -S           - print C to stdout" >&2
+  echo "       spinel -e 'puts 42'        - compile inline source" >&2
   echo "" >&2
   echo "Options:" >&2
   echo "  -o FILE     Output file" >&2
@@ -66,6 +91,7 @@ if [ -z "$SOURCE" ]; then
   echo "  -S          Print C to stdout" >&2
   echo "  -O LEVEL    Optimization level (default: 2)" >&2
   echo "  --cc=CMD    C compiler (default: cc)" >&2
+  echo "  -e STR      Inline Ruby source (repeatable; joined with newlines)" >&2
   exit 1
 fi
 
@@ -74,9 +100,13 @@ if [ ! -f "$SOURCE" ]; then
   exit 1
 fi
 
-BASENAME="$(basename "$SOURCE" .rb)"
+if [ "$EVAL_USED" -eq 1 ]; then
+  BASENAME="a"
+else
+  BASENAME="$(basename "$SOURCE" .rb)"
+fi
 AST_TMP="$(mktemp /tmp/spinel_ast.XXXXXX)"
-trap 'rm -f "$AST_TMP" "$C_TMP"' EXIT
+trap 'rm -f "$AST_TMP" "$C_TMP" "$EVAL_TMP"' EXIT
 
 # Step 1: Parse. spinel_parse is C-only; build it via `make parse`
 # (or `make all`) before invoking spinel.

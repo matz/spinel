@@ -18390,14 +18390,27 @@ class Compiler
           end
         end
         bp1 = get_block_param(nid, 0)
+        synth = 0
         if bp1 == ""
           bp1 = "_i"
+          synth = 1
+        end
+        # When the block omits its parameter, the synthesized `_i` isn't
+        # declared anywhere — wrap the loop in a block scope and declare
+        # it locally. This also avoids redefinition errors when multiple
+        # paramless `step` blocks appear in the same function.
+        if synth == 1
+          emit("  {")
+          emit("  mrb_int lv_" + bp1 + " = 0;")
         end
         emit("  for (lv_" + bp1 + " = " + rc + "; lv_" + bp1 + " <= " + limit_val + "; lv_" + bp1 + " += " + step_val + ") {")
         @indent = @indent + 1
         compile_stmts_body(@nd_body[@nd_block[nid]])
         @indent = @indent - 1
         emit("  }")
+        if synth == 1
+          emit("  }")
+        end
         @in_loop = old
         return 1
       end

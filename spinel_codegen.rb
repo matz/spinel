@@ -696,6 +696,14 @@ class Compiler
     result
   end
 
+  # Returns 1 if @nd_block[nid] is a literal BlockNode (do/end body),
+  # 0 otherwise. Used by &block-forwarding call sites to decide
+  # whether to emit a proc literal for the trailing block slot.
+  def has_literal_block(nid)
+    blk = @nd_block[nid]
+    (blk >= 0 && @nd_type[blk] == "BlockNode") ? 1 : 0
+  end
+
   # Flatten a constant reference into an internal name.
   #   C       -> C
   #   ::C     -> C
@@ -10261,6 +10269,24 @@ class Compiler
     0
   end
 
+  # Returns 1 if the (ci, midx) method declares a `&block` parameter,
+  # 0 otherwise. Ruby syntax requires `&block` to be the trailing
+  # param, so we check only the last slot — a proc-typed slot in any
+  # other position is a positional proc argument, not a block param.
+  # Mirrors cls_method_has_yield: call sites use it to decide whether
+  # to omit the trailing &block slot from default-padding.
+  def cls_method_has_block_param(ci, midx)
+    if ci < 0 || midx < 0
+      return 0
+    end
+    all_ptypes = @cls_meth_ptypes[ci].split("|")
+    if midx >= all_ptypes.length
+      return 0
+    end
+    pts = all_ptypes[midx].split(",")
+    (pts.length > 0 && pts.last == "proc") ? 1 : 0
+  end
+
   # Returns the name of a method's `&block` parameter (the first
   # proc-typed slot in pnames), or "" if the method doesn't take
   # one. Used at method-emit time to set @current_method_block_param
@@ -10901,6 +10927,21 @@ class Compiler
       end
       result = result + c_type(pt) + " lv_" + pnames[j]
       j = j + 1
+    end
+    result
+  end
+
+  # Builds the trailing portion of a call-args list — each non-empty
+  # piece prefixed with ", ", empties skipped. Returns "" when both
+  # are empty. Mirrors build_params_str: callers concatenate the
+  # result onto a self/recv prefix to form the full arg list.
+  def build_call_tail(ca, bp)
+    result = ""
+    if ca != ""
+      result = result + ", " + ca
+    end
+    if bp != ""
+      result = result + ", " + bp
     end
     result
   end
@@ -13833,7 +13874,7 @@ class Compiler
         end
         ca = ""
         if owner_midx >= 0
-          ca = compile_typed_call_args(nid, owner_ci, owner_midx)
+          ca = compile_typed_call_args(nid, owner_ci, owner_midx, 0)
         else
           ca = compile_call_args(nid)
         end
@@ -16701,24 +16742,34 @@ class Compiler
           if oci2 >= 0
             midx2 = cls_find_method_direct(oci2, mname)
           end
+          # Omit the trailing &block slot from default-padding when the
+          # callee declares one — we'll fill it explicitly from the
+          # call site's literal block below.
+          has_proc = cls_method_has_block_param(oci2, midx2)
           ca = ""
           if midx2 >= 0
-            ca = compile_typed_call_args(nid, oci2, midx2)
+            ca = compile_typed_call_args(nid, oci2, midx2, has_proc)
           else
             ca = compile_call_args(nid)
           end
+          bp = ""
+          if has_proc == 1
+            if has_literal_block(nid) == 1
+              @needs_proc = 1
+              bp = compile_proc_literal(nid)
+            else
+              # The callee declares &block but the call site provides
+              # none — fill the slot with NULL so the C call has the
+              # right arity (compile_typed_call_args has already been
+              # told to skip default-padding for this slot).
+              bp = "0"
+            end
+          end
+          tail = build_call_tail(ca, bp)
           if owner == cname
-            if ca != ""
-              return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ", " + ca + ")"
-            else
-              return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ")"
-            end
+            return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + tail + ")"
           else
-            if ca != ""
-              return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ", " + ca + ")"
-            else
-              return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ")"
-            end
+            return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + tail + ")"
           end
         end
       end
@@ -16769,7 +16820,7 @@ class Compiler
           end
           ca2 = ""
           if midx3 >= 0
-            ca2 = compile_typed_call_args(nid, oci3, midx3)
+            ca2 = compile_typed_call_args(nid, oci3, midx3, 0)
           else
             ca2 = compile_call_args(nid)
           end
@@ -17238,7 +17289,7 @@ class Compiler
       if init_ci >= 0
         init_idx = cls_find_method_direct(init_ci, "initialize")
         if init_idx >= 0
-          return compile_typed_call_args(nid, init_ci, init_idx)
+          return compile_typed_call_args(nid, init_ci, init_idx, 0)
         end
       end
       return ""
@@ -17438,11 +17489,16 @@ class Compiler
     result
   end
 
-  def compile_typed_call_args(nid, target_ci, target_midx)
+  def compile_typed_call_args(nid, target_ci, target_midx, omit_trailing)
     # Like compile_call_args but casts arguments to match target method param
     # types AND fills in defaults from @cls_meth_defaults for trailing
     # parameters the caller omitted (issue #49). Returns "" only when the
     # method takes no parameters at all.
+    #
+    # `omit_trailing` is the number of trailing param slots to leave out
+    # entirely — block-forwarding call sites pass 1 so the &block slot
+    # isn't default-padded with "0" (the actual proc is appended by the
+    # caller after this returns).
     args_id = @nd_arguments[nid]
     arg_ids = []
     if args_id >= 0
@@ -17457,6 +17513,24 @@ class Compiler
     end
     if target_midx < all_defaults.length
       defaults = all_defaults[target_midx].split(",")
+    end
+    # Drop the trailing slots the caller will fill explicitly (the
+    # &block slot when block-forwarding) — otherwise a surplus
+    # positional arg would mis-cast against the omitted slot's type
+    # and the loop's default-padding would emit "0" for the slot the
+    # caller is about to fill itself.
+    if omit_trailing > 0
+      kept = []
+      pk = 0
+      limit = ptypes.length - omit_trailing
+      if limit < 0
+        limit = 0
+      end
+      while pk < limit
+        kept.push(ptypes[pk])
+        pk = pk + 1
+      end
+      ptypes = kept
     end
     total = ptypes.length
     if arg_ids.length > total

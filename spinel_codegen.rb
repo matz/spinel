@@ -8863,6 +8863,9 @@ class Compiler
     emit_raw("static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (a->len >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (sp_RbVal *)realloc(a->data, sizeof(sp_RbVal) * a->cap); } a->data[a->len++] = v; }")
     emit_raw("static mrb_int sp_PolyArray_length(sp_PolyArray *a) { return a->len; }")
     emit_raw("static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (i < 0) i += a->len; return a->data[i]; }")
+    emit_raw("static sp_PolyArray *sp_PolyArray_dup(sp_PolyArray *a) { sp_PolyArray *b = sp_PolyArray_new(); for (mrb_int i = 0; i < a->len; i++) sp_PolyArray_push(b, a->data[i]); return b; }")
+    emit_raw("static void sp_PolyArray_shuffle_bang(sp_PolyArray *a) { for (mrb_int i = a->len - 1; i > 0; i--) { mrb_int j = (mrb_int)(rand() % (i + 1)); sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }")
+    emit_raw("static sp_PolyArray *sp_PolyArray_shuffle(sp_PolyArray *a) { sp_PolyArray *b = sp_PolyArray_dup(a); sp_PolyArray_shuffle_bang(b); return b; }")
     emit_raw("")
   end
 
@@ -15084,13 +15087,13 @@ class Compiler
       return "sp_" + pfx + "_get(" + rc + ", rand() % sp_" + pfx + "_length(" + rc + "))"
     end
     if mname == "shuffle" &&
-       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array")
+       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array" || recv_type == "sym_array" || recv_type == "poly_array")
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       return "sp_" + pfx + "_shuffle(" + rc + ")"
     end
     if mname == "shuffle!" &&
-       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array")
+       (recv_type == "int_array" || recv_type == "str_array" || recv_type == "float_array" || recv_type == "sym_array" || recv_type == "poly_array")
       @needs_rand = 1
       pfx = array_c_prefix(recv_type)
       emit("  sp_" + pfx + "_shuffle_bang(" + rc + ");")

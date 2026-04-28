@@ -358,7 +358,14 @@ static const char*sp_str_concat4(const char*a,const char*b,const char*c,const ch
 static const char*sp_str_concat_arr(const char *const *parts,int n){size_t total=0;for(int i=0;i<n;i++)total+=strlen(parts[i]);char*r=sp_str_alloc(total);char*p=r;for(int i=0;i<n;i++){size_t sl=strlen(parts[i]);memcpy(p,parts[i],sl);p+=sl;}return r;}
 static const char*sp_int_to_s(mrb_int n){char*b=sp_str_alloc_raw(32);snprintf(b,32,"%lld",(long long)n);return b;}
 static const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)base=10;char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}else{while(u>0){mrb_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;return b;}
-static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(64);snprintf(b,64,"%g",f);return b;}
+/* Float#to_s (Ruby semantics): matches CRuby by guaranteeing a `.0`
+   suffix for whole values (e.g. 1.0 -> "1.0", not "1"). NaN and
+   Infinity are left as-is from snprintf. Float#inspect is aliased. */
+static const char*sp_float_to_s(mrb_float f){char*b=sp_str_alloc_raw(68);snprintf(b,64,"%g",f);if(!strchr(b,'.')&&!strchr(b,'e')&&!strchr(b,'i')&&!strchr(b,'n')){size_t l=strlen(b);b[l]='.';b[l+1]='0';b[l+2]=0;}return b;}
+#define sp_float_inspect sp_float_to_s
+/* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
+   plus any non-printable byte as \xNN. Output is always ASCII-safe. */
+static const char*sp_str_inspect(const char*s){if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=strlen(s);size_t cap=sl*4+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}else if(c=='\n'){r[o++]='\\';r[o++]='n';}else if(c=='\t'){r[o++]='\\';r[o++]='t';}else if(c=='\r'){r[o++]='\\';r[o++]='r';}else if(c<0x20||c==0x7f){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;return r;}
 static const char*sp_str_upcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++)r[i]=toupper((unsigned char)s[i]);return r;}
 static const char*sp_str_downcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++)r[i]=tolower((unsigned char)s[i]);return r;}
 static const char*sp_str_swapcase(const char*s){size_t l=strlen(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<=l;i++){unsigned char c=(unsigned char)s[i];if(isupper(c))r[i]=tolower(c);else if(islower(c))r[i]=toupper(c);else r[i]=s[i];}return r;}
@@ -418,6 +425,15 @@ static inline void sp_String_prepend(sp_String*s,const char*t){int64_t tl=(int64
 static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 static sp_String*sp_String_dup(sp_String*s){return sp_String_new(s->data);}
+/* Array#inspect for each typed array: `[elem1, elem2, ...]` with each
+   element rendered via its own primitive inspect. Matches CRuby's
+   Array#inspect output byte-for-byte. Returns a GC-managed C string. */
+static const char*sp_IntArray_inspect(sp_IntArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_int_to_s(a->data[a->start+i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_FloatArray_inspect(sp_FloatArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_float_inspect(a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_StrArray_inspect(sp_StrArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_str_inspect(a->data[i]));}sp_String_append(s,"]");return s->data;}
+/* Symbol arrays share the IntArray representation (sp_sym = mrb_int),
+   but each element is rendered as ":name" via sp_sym_to_s. */
+static const char*sp_SymArray_inspect(sp_IntArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,":");sp_String_append(s,sp_sym_to_s((sp_sym)a->data[a->start+i]));}sp_String_append(s,"]");return s->data;}
 
 /* Regexp engine (link with libspre.a from lib/regexp/) */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;
@@ -540,7 +556,7 @@ static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
     case SP_TAG_STR: if (v.v.s) { fputs(v.v.s, stdout); if (!*v.v.s || v.v.s[strlen(v.v.s)-1] != '\n') putchar('\n'); } else putchar('\n'); break;
-    case SP_TAG_FLT: { char _fb[64]; snprintf(_fb,64,"%g",v.v.f); if(!strchr(_fb,'.')&&!strchr(_fb,'e')&&!strchr(_fb,'i')&&!strchr(_fb,'n')){strcat(_fb,".0");} printf("%s\n",_fb); break; }
+    case SP_TAG_FLT: { const char *_fs = sp_float_to_s(v.v.f); fputs(_fs, stdout); putchar('\n'); break; }
     case SP_TAG_BOOL: puts(v.v.b ? "true" : "false"); break;
     case SP_TAG_NIL: putchar('\n'); break;
     case SP_TAG_SYM: { const char *_ss = sp_sym_to_s((sp_sym)v.v.i); fputs(_ss, stdout); putchar('\n'); break; }
@@ -548,7 +564,7 @@ static void sp_poly_puts(sp_RbVal v) {
   }
 }
 static mrb_bool sp_poly_nil_p(sp_RbVal v) { return v.tag == SP_TAG_NIL; }
-static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: { char *b = sp_str_alloc_raw(32); snprintf(b, 32, "%lld", (long long)v.v.i); return b; } case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty; case SP_TAG_FLT: { char *b = sp_str_alloc_raw(64); snprintf(b, 64, "%g", v.v.f); return b; } case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false"); case SP_TAG_NIL: return sp_str_empty; case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i); default: return sp_str_empty; } }
+static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: return sp_int_to_s(v.v.i); case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty; case SP_TAG_FLT: return sp_float_to_s(v.v.f); case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false"); case SP_TAG_NIL: return sp_str_empty; case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i); default: return sp_str_empty; } }
 static sp_RbVal sp_poly_add(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i + b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i + b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (mrb_float)b.v.i); if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR) return sp_box_str(sp_str_concat(a.v.s, b.v.s)); return sp_box_int(0); }
 static sp_RbVal sp_poly_sub(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i - b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); return sp_box_int(0); }
 static sp_RbVal sp_poly_mul(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i * b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f * b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i * b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f * (mrb_float)b.v.i); return sp_box_int(0); }
@@ -560,6 +576,35 @@ static sp_PolyArray *sp_PolyArray_new(void) { sp_PolyArray *a = (sp_PolyArray *)
 static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (a->len >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (sp_RbVal *)realloc(a->data, sizeof(sp_RbVal) * a->cap); } a->data[a->len++] = v; }
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { return a->len; }
 static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (i < 0) i += a->len; return a->data[i]; }
+
+/* Object#inspect for a tagged sp_RbVal. Dispatches on the runtime tag;
+   each branch reuses the matching primitive inspect helper. Falls back
+   to "#<Object>" for SP_TAG_OBJ because the runtime has no class-name
+   table yet (follow-up PR). Returns a GC-managed C string. */
+static const char *sp_poly_inspect(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_INT:  return sp_int_to_s(v.v.i);
+    case SP_TAG_STR:  return sp_str_inspect(v.v.s);
+    case SP_TAG_FLT:  return sp_float_to_s(v.v.f);
+    case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false");
+    case SP_TAG_NIL:  return SPL("nil");
+    case SP_TAG_SYM:  return sp_str_concat(":", sp_sym_to_s((sp_sym)v.v.i));
+    case SP_TAG_OBJ:  return SPL("#<Object>");
+    default:          return sp_str_empty;
+  }
+}
+/* Array#inspect for heterogeneous poly arrays. Each element dispatches
+   through sp_poly_inspect, so a mixed `[1, "x", :y]` renders
+   `[1, "x", :y]` byte-for-byte identical to CRuby. */
+static const char *sp_PolyArray_inspect(sp_PolyArray *a) {
+  sp_String *s = sp_String_new("[");
+  for (mrb_int i = 0; i < a->len; i++) {
+    if (i > 0) sp_String_append(s, ", ");
+    sp_String_append(s, sp_poly_inspect(a->data[i]));
+  }
+  sp_String_append(s, "]");
+  return s->data;
+}
 
 /* Mark the embedded GC reference inside an sp_RbVal (string or obj).
    Used as the scan hook for containers that store polymorphic values. */

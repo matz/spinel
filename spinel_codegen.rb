@@ -1735,6 +1735,9 @@ class Compiler
     if mname == "to_s"
       return "string"
     end
+    if mname == "inspect"
+      return "string"
+    end
     if mname == "to_i"
       return "int"
     end
@@ -8410,7 +8413,7 @@ class Compiler
     emit_raw("  switch (v.tag) {")
     emit_raw("    case SP_TAG_INT: printf(\"%lld" + bsl_n + "\", (long long)v.v.i); break;")
     emit_raw("    case SP_TAG_STR: if (v.v.s) { fputs(v.v.s, stdout); if (!*v.v.s || v.v.s[strlen(v.v.s)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); break;")
-    emit_raw("    case SP_TAG_FLT: { char _fb[64]; snprintf(_fb,64,\"%g\",v.v.f); if(!strchr(_fb,'.')&&!strchr(_fb,'e')&&!strchr(_fb,'i')&&!strchr(_fb,'n')){strcat(_fb,\".0\");} printf(\"%s" + bsl_n + "\",_fb); break; }")
+    emit_raw("    case SP_TAG_FLT: { const char *_fs = sp_float_to_s(v.v.f); fputs(_fs, stdout); putchar('" + bsl_n + "'); break; }")
     emit_raw("    case SP_TAG_BOOL: puts(v.v.b ? \"true\" : \"false\"); break;")
     emit_raw("    case SP_TAG_NIL: putchar('" + bsl_n + "'); break;")
     emit_raw("    default: printf(\"%lld" + bsl_n + "\", (long long)v.v.i); break;")
@@ -12502,6 +12505,21 @@ class Compiler
       if mname == "to_s"
         return "(" + rc + " ? \"true\" : \"false\")"
       end
+      if mname == "inspect"
+        return "(" + rc + " ? \"true\" : \"false\")"
+      end
+    end
+
+    # nil methods (receiver inferred as "nil" — only .inspect and .to_s
+    # need an expression-level answer; other nil methods like .nil? are
+    # already handled earlier.)
+    if recv_type == "nil"
+      if mname == "inspect"
+        return "\"nil\""
+      end
+      if mname == "to_s"
+        return "\"\""
+      end
     end
 
     # Tuple methods
@@ -13565,6 +13583,9 @@ class Compiler
     if mname == "to_f"
       return "atof(" + rc + ")"
     end
+    if mname == "inspect"
+      return "sp_str_inspect(" + rc + ")"
+    end
     if mname == "upcase"
       return "sp_str_upcase(" + rc + ")"
     end
@@ -14066,6 +14087,10 @@ class Compiler
       end
       return "sp_int_to_s(" + rc + ")"
     end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + rc + ")"
+    end
     if mname == "digits"
       @needs_int_array = 1
       @needs_gc = 1
@@ -14151,6 +14176,10 @@ class Compiler
       @needs_string_helpers = 1
       return "sp_float_to_s(" + rc + ")"
     end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + rc + ")"
+    end
     if mname == "to_i"
       return "(mrb_int)(" + rc + ")"
     end
@@ -14200,6 +14229,19 @@ class Compiler
     # Skip non-array types
     if recv_type == "str_int_hash" || recv_type == "str_str_hash"
       return ""
+    end
+    # Array#inspect and Array#to_s (CRuby aliases them for arrays, so
+    # the two share one definition via compile_inspect_for). Guard on
+    # recv_type being an actual array type so scalar receivers with
+    # the same method name (e.g. (poly).to_s, (int).to_s) fall through
+    # to their own scalar dispatchers.
+    if mname == "inspect" || mname == "to_s"
+      if recv_type == "int_array" || recv_type == "float_array" || recv_type == "str_array" || recv_type == "sym_array" || recv_type == "poly_array"
+        r = compile_inspect_for(recv_type, rc)
+        if r != ""
+          return r
+        end
+      end
     end
     # zip without block: return array of pairs/tuples
     if mname == "zip" && @nd_block[nid] < 0
@@ -19729,9 +19771,74 @@ class Compiler
     end
   end
 
-  # Kernel#p: like puts, but symbols print as ":name" and strings get
-  # quotes. Falls back to compile_puts for types where inspect and
-  # to_s produce identical output (ints, floats, bools, nil).
+  # Return a C expression that evaluates to the inspected form of `val`
+  # (a value of inferred Ruby type `at`), following Ruby's Object#inspect
+  # contract. Returns "" when `at` has no inspect implementation yet, so
+  # callers can fall back to their previous behaviour.
+  def compile_inspect_for(at, val)
+    if at == "int"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + val + ")"
+    end
+    if at == "float"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + val + ")"
+    end
+    if at == "string" || at == "string?"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + ")"
+    end
+    if at == "mutable_str"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + "->data)"
+    end
+    if at == "symbol"
+      @needs_string_helpers = 1
+      return "sp_str_concat(\":\", sp_sym_to_s(" + val + "))"
+    end
+    if at == "bool"
+      return "(" + val + " ? \"true\" : \"false\")"
+    end
+    if at == "nil"
+      return "\"nil\""
+    end
+    if at == "int_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_IntArray_inspect(" + val + ")"
+    end
+    if at == "float_array"
+      @needs_float_array = 1
+      @needs_string_helpers = 1
+      return "sp_FloatArray_inspect(" + val + ")"
+    end
+    if at == "str_array"
+      @needs_str_array = 1
+      @needs_string_helpers = 1
+      return "sp_StrArray_inspect(" + val + ")"
+    end
+    if at == "sym_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_SymArray_inspect(" + val + ")"
+    end
+    if at == "poly_array"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_PolyArray_inspect(" + val + ")"
+    end
+    if at == "poly"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_poly_inspect(" + val + ")"
+    end
+    ""
+  end
+
+  # Kernel#p: for each argument, prints `arg.inspect` followed by a
+  # newline. Uses `compile_inspect_for` for types that implement inspect;
+  # falls back to puts-style output for types that don't yet (e.g.
+  # user-defined classes, ranges, hashes).
   def compile_p(nid)
     args_id = @nd_arguments[nid]
     if args_id < 0
@@ -19746,15 +19853,13 @@ class Compiler
       aid = arg_ids[k]
       at = infer_type(aid)
       val = compile_expr(aid)
-      if at == "symbol"
-        emit("  { putchar(':'); fputs(sp_sym_to_s(" + val + "), stdout); putchar('" + bsl_n + "'); }")
-      elsif at == "string" || at == "string?"
-        emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { putchar('\"'); fputs(_ps, stdout); putchar('\"'); putchar('" + bsl_n + "'); } else { fputs(\"nil\", stdout); putchar('" + bsl_n + "'); } }")
-      elsif at == "nil"
-        emit("  fputs(\"nil\\n\", stdout);")
-      else
-        # Fall back to puts-style output for this one argument
+      ins = compile_inspect_for(at, val)
+      if ins == ""
+        # No inspect implementation for this type — keep the historic
+        # behaviour so nothing regresses.
         compile_puts_single(aid, at, val)
+      else
+        emit("  fputs(" + ins + ", stdout); putchar('" + bsl_n + "');")
       end
       k = k + 1
     end
@@ -19776,7 +19881,8 @@ class Compiler
       return
     end
     if at == "float"
-      emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+      @needs_string_helpers = 1
+      emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
       return
     end
     if at == "bool"
@@ -19831,7 +19937,8 @@ class Compiler
         emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
       else
         if at == "float"
-          emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+          @needs_string_helpers = 1
+          emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
         else
           if at == "string" || at == "string?"
             emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); }")
@@ -19855,6 +19962,9 @@ class Compiler
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) puts(sp_sym_to_s((sp_sym)_pa->data[_pa->start + _pi])); }")
                 elsif at == "int_array"
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) printf(\"%lld" + bsl_n + "\", (long long)_pa->data[_pa->start + _pi]); }")
+                elsif at == "float_array"
+                  @needs_string_helpers = 1
+                  emit("  { sp_FloatArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) { const char *_fs = sp_float_to_s(_pa->data[_pi]); fputs(_fs, stdout); putchar('" + bsl_n + "'); } }")
                 else
                   emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
                 end

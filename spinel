@@ -14,10 +14,8 @@
 #   -S         Print generated C to stdout
 #   -O LEVEL   Optimization level for cc (default: 2)
 #   --cc=CMD   C compiler command (default: cc)
-#   --lonig    Link with oniguruma (for regexp programs)
 
 DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
-PARSE_RB="$DIR/spinel_parse.rb"
 PARSE_BIN="$DIR/spinel_parse"
 CODEGEN_RB="$DIR/spinel_codegen.rb"
 CODEGEN_BIN="$DIR/spinel_codegen"
@@ -49,7 +47,6 @@ while [ $# -gt 0 ]; do
     -O)         shift; OPT_LEVEL="$1" ;;
     -c)         C_ONLY=1 ;;
     -S)         STDOUT_MODE=1 ;;
-    --lonig)    EXTRA_FLAGS="$EXTRA_FLAGS -lonig" ;;
     *.rb)       [ -z "$SOURCE" ] && SOURCE="$1" ;;
   esac
   shift
@@ -69,7 +66,6 @@ if [ -z "$SOURCE" ]; then
   echo "  -S          Print C to stdout" >&2
   echo "  -O LEVEL    Optimization level (default: 2)" >&2
   echo "  --cc=CMD    C compiler (default: cc)" >&2
-  echo "  --lonig     Link with oniguruma (regexp)" >&2
   exit 1
 fi
 
@@ -82,12 +78,13 @@ BASENAME="$(basename "$SOURCE" .rb)"
 AST_TMP="$(mktemp /tmp/spinel_ast.XXXXXX)"
 trap 'rm -f "$AST_TMP" "$C_TMP"' EXIT
 
-# Step 1: Parse (use compiled parser if available, else CRuby + Prism)
-if [ -x "$PARSE_BIN" ]; then
-  "$PARSE_BIN" "$SOURCE" "$AST_TMP"
-else
-  ruby "$PARSE_RB" "$SOURCE" > "$AST_TMP"
+# Step 1: Parse. spinel_parse is C-only; build it via `make parse`
+# (or `make all`) before invoking spinel.
+if [ ! -x "$PARSE_BIN" ]; then
+  echo "spinel: parser binary not found at $PARSE_BIN; run 'make parse' or 'make all' first" >&2
+  exit 1
 fi
+"$PARSE_BIN" "$SOURCE" "$AST_TMP"
 if [ $? -ne 0 ]; then
   echo "spinel: parse failed" >&2
   exit 1

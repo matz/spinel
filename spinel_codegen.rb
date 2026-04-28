@@ -96,6 +96,12 @@ class Compiler
     @meth_names = "".split(",")
     @meth_param_names = "".split(",")
     @meth_param_types = "".split(",")
+    # Per-param "deferred element" flag: "1" means at least one caller
+    # passed an empty `[]` literal (or a local that itself was assigned
+    # an empty literal). Used by the param body-push promotion pass
+    # (issue #58) to decide whether the param's int_array can be safely
+    # promoted to a concrete typed-array based on body usage.
+    @meth_param_empty = "".split(",")
     @meth_return_types = "".split(",")
     @meth_body_ids = []
     @meth_has_defaults = "".split(",")
@@ -111,6 +117,9 @@ class Compiler
     @cls_meth_returns = "".split(",")
     @cls_meth_bodies = "".split(",")
     @cls_meth_defaults = "".split(",")
+    # Mirror of @meth_param_empty for class methods. Pipe-separated by
+    # method, comma-separated by param. Issue #58.
+    @cls_meth_ptypes_empty = "".split(",")
     @cls_attr_readers = "".split(",")
     @cls_attr_writers = "".split(",")
     @cls_cmeth_names = "".split(",")
@@ -129,6 +138,7 @@ class Compiler
     @const_names = "".split(",")
     @const_types = "".split(",")
     @const_expr_ids = []
+    @const_scope_names = "".split(",")
 
     # ---- Scope stack for local variables ----
     @scope_names = "".split(",")
@@ -136,6 +146,7 @@ class Compiler
 
     @current_class_idx = -1
     @current_method_name = ""
+    @current_lexical_scope = ""
     @current_method_return = ""
     @in_main = 0
     @in_loop = 0
@@ -743,7 +754,99 @@ class Compiler
     end
     rt = @nd_type[recv_nid]
     if rt == "ConstantReadNode" || rt == "ConstantPathNode"
-      return const_ref_flat_name(recv_nid)
+      return resolve_const_ref_name(recv_nid)
+    end
+    ""
+  end
+
+  def module_name_exists(name)
+    i = 0
+    while i < @module_names.length
+      if @module_names[i] == name
+        return 1
+      end
+      i = i + 1
+    end
+    0
+  end
+
+  def const_namespace_exists(name)
+    if name == ""
+      return 0
+    end
+    if find_const_idx(name) >= 0
+      return 1
+    end
+    if find_class_idx(name) >= 0
+      return 1
+    end
+    if module_name_exists(name) == 1
+      return 1
+    end
+    0
+  end
+
+  def current_lexical_scope_name
+    if @current_lexical_scope != ""
+      return @current_lexical_scope
+    end
+    if @current_class_idx >= 0
+      if @current_class_idx < @cls_names.length
+        return @cls_names[@current_class_idx]
+      end
+      return ""
+    end
+    if @current_method_name != ""
+      cls_idx = @current_method_name.index("_cls_")
+      if cls_idx >= 0
+        return @current_method_name[0, cls_idx]
+      end
+    end
+    ""
+  end
+
+  def trim_const_scope_once(name)
+    if name == ""
+      return ""
+    end
+    idx = name.rindex("_")
+    if idx < 0
+      return ""
+    end
+    name[0, idx]
+  end
+
+  def resolve_const_read_name(name)
+    scope = current_lexical_scope_name
+    while scope != ""
+      cand = scope + "_" + name
+      if const_namespace_exists(cand) == 1
+        return cand
+      end
+      scope = trim_const_scope_once(scope)
+    end
+    name
+  end
+
+  def resolve_const_ref_name(nid)
+    if nid < 0
+      return ""
+    end
+    t = @nd_type[nid]
+    if t == "ConstantReadNode"
+      return resolve_const_read_name(@nd_name[nid])
+    end
+    if t == "ConstantPathNode"
+      leaf = @nd_name[nid]
+      parent = @nd_receiver[nid]
+      if parent < 0
+        return leaf
+      end
+      base = resolve_const_ref_name(parent)
+      if base == ""
+        return ""
+      end
+      return base + "_" + leaf
     end
     ""
   end
@@ -1045,48 +1148,32 @@ class Compiler
       if @nd_name[nid] == "ARGV"
         return "argv"
       end
-      if @current_class_idx >= 0
-        cpname = @cls_names[@current_class_idx] + "_" + @nd_name[nid]
-        ci2 = find_const_idx(cpname)
-        if ci2 >= 0
-          return @const_types[ci2]
-        end
-      end
-      ci = find_const_idx(@nd_name[nid])
+      rname = resolve_const_read_name(@nd_name[nid])
+      ci = find_const_idx(rname)
       if ci >= 0
         return @const_types[ci]
       end
-      cx = find_class_idx(@nd_name[nid])
+      cx = find_class_idx(rname)
       if cx >= 0
-        return "class_" + @nd_name[nid]
-      end
-      # Check module-prefixed constants
-      mi3 = 0
-      while mi3 < @module_names.length
-        mmod = @module_names[mi3]
-        if mmod != ""
-          cpname = mmod + "_" + @nd_name[nid]
-          ci4 = find_const_idx(cpname)
-          if ci4 >= 0
-            return @const_types[ci4]
-          end
-        end
-        mi3 = mi3 + 1
+        return "class_" + rname
       end
       return "int"
     end
     if t == "ConstantPathNode"
-      if @nd_receiver[nid] >= 0
-        rname = const_ref_flat_name(@nd_receiver[nid])
-        nname = @nd_name[nid]
-        if rname == ""
-          return "int"
-        end
-        cpname = rname + "_" + nname
+      cpname = resolve_const_ref_name(nid)
+      if cpname != ""
         ci = find_const_idx(cpname)
         if ci >= 0
           return @const_types[ci]
         end
+        cx = find_class_idx(cpname)
+        if cx >= 0
+          return "class_" + cpname
+        end
+      end
+      parent = @nd_receiver[nid]
+      if parent >= 0
+        rname = resolve_const_ref_name(parent)
         if rname == "Float"
           return "float"
         end
@@ -1740,6 +1827,9 @@ class Compiler
       return "int"
     end
     if mname == "to_s"
+      return "string"
+    end
+    if mname == "inspect"
       return "string"
     end
     if mname == "to_i"
@@ -2542,7 +2632,9 @@ class Compiler
         rn = constructor_class_name(recv)
         if rn != ""
           if rn == "Array"
-            # Check fill value type
+            # Check fill value type. Pointer-type fills must produce a typed
+            # PtrArray; falling through to int_array would leave the
+            # elements unscanned by GC.
             args_id = @nd_arguments[nid]
             if args_id >= 0
               aargs = get_args(args_id)
@@ -2553,6 +2645,18 @@ class Compiler
                 end
                 if vt == "string"
                   return "str_array"
+                end
+                if vt == "symbol"
+                  return "sym_array"
+                end
+                if vt == "poly"
+                  @needs_rb_value = 1
+                  return "poly_array"
+                end
+                if type_is_pointer(vt) == 1
+                  @needs_ptr_array = 1
+                  @needs_gc = 1
+                  return vt + "_ptr_array"
                 end
               end
             end
@@ -3089,6 +3193,24 @@ class Compiler
     0
   end
 
+  # Issue #58: empty `[]` literal needs deferred element-type
+  # resolution. This helper distinguishes `[]` from `[1, 2, 3]` so the
+  # promotion machinery can know "writes haven't fixed the element type
+  # yet, so a later push can still pick it".
+  def is_empty_array_literal(nid)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] != "ArrayNode"
+      return 0
+    end
+    elems = parse_id_list(@nd_elements[nid])
+    if elems.length == 0
+      return 1
+    end
+    0
+  end
+
   def base_type(t)
     if t.length > 1 && t[t.length - 1] == "?"
       return t[0, t.length - 1]
@@ -3473,21 +3595,44 @@ class Compiler
   end
 
   def collect_scoped_constant(scope_name, nid)
-    cname = scope_name + "_" + @nd_name[nid]
+    cname = @nd_name[nid]
+    if scope_name != ""
+      cname = scope_name + "_" + cname
+    end
     expr_id = @nd_expression[nid]
+    if expr_id >= 0
+      if @nd_type[expr_id] == "CallNode"
+        if @nd_name[expr_id] == "new"
+          sr = @nd_receiver[expr_id]
+          if sr >= 0
+            if @nd_type[sr] == "ConstantReadNode"
+              if @nd_name[sr] == "Struct"
+                collect_struct_class(cname, expr_id)
+                return
+              end
+            end
+          end
+        end
+      end
+    end
     ct = "int"
     if expr_id >= 0
+      old_scope = @current_lexical_scope
+      @current_lexical_scope = scope_name
       ct = infer_type(expr_id)
+      @current_lexical_scope = old_scope
     end
     ci = find_const_idx(cname)
     if ci >= 0
       @const_types[ci] = ct
       @const_expr_ids[ci] = expr_id
+      @const_scope_names[ci] = scope_name
       return
     end
     @const_names.push(cname)
     @const_types.push(ct)
     @const_expr_ids.push(expr_id)
+    @const_scope_names.push(scope_name)
   end
 
   def collect_class_with_prefix(nid, module_prefix)
@@ -3519,6 +3664,7 @@ class Compiler
             params = collect_params_str(sid)
             @meth_param_names.push(params)
             @meth_param_types.push(collect_ptypes_str(sid, -1))
+            @meth_param_empty.push("")
             @meth_return_types.push("int")
             @meth_body_ids.push(@nd_body[sid])
             @meth_has_yield.push(0)
@@ -3666,6 +3812,7 @@ class Compiler
       @cls_meth_returns.push("void")
       @cls_meth_bodies.push("-2")
       @cls_meth_defaults.push(init_defaults)
+      @cls_meth_ptypes_empty.push("")
     else
       @cls_meth_names.push("")
       @cls_meth_params.push("")
@@ -3673,6 +3820,7 @@ class Compiler
       @cls_meth_returns.push("")
       @cls_meth_bodies.push("")
       @cls_meth_defaults.push("")
+      @cls_meth_ptypes_empty.push("")
     end
     @cls_attr_readers.push(attr_readers)
     @cls_attr_writers.push(attr_writers)
@@ -3985,6 +4133,7 @@ class Compiler
       @cls_meth_returns[ci] = @cls_meth_returns[ci] + ";" + ret
       @cls_meth_bodies[ci] = @cls_meth_bodies[ci] + ";" + body_id.to_s
       @cls_meth_defaults[ci] = @cls_meth_defaults[ci] + "|" + defaults
+      @cls_meth_ptypes_empty[ci] = @cls_meth_ptypes_empty[ci] + "|"
     else
       @cls_meth_names[ci] = name
       @cls_meth_params[ci] = params
@@ -3992,6 +4141,7 @@ class Compiler
       @cls_meth_returns[ci] = ret
       @cls_meth_bodies[ci] = body_id.to_s
       @cls_meth_defaults[ci] = defaults
+      @cls_meth_ptypes_empty[ci] = ""
     end
   end
 
@@ -4255,7 +4405,7 @@ class Compiler
       return "string"
     end
     if t == "SymbolNode"
-      return "string"
+      return "symbol"
     end
     if t == "TrueNode"
       return "bool"
@@ -4283,6 +4433,34 @@ class Compiler
           rname = constructor_class_name(r)
           if rname != ""
             if rname == "Array"
+              # Check fill value type for Array.new(n, val).
+              # Pointer-type fills must produce a typed PtrArray; falling
+              # through to int_array would leave the elements unscanned by GC.
+              args_id = @nd_arguments[nid]
+              if args_id >= 0
+                aargs = get_args(args_id)
+                if aargs.length >= 2
+                  vt = infer_type(aargs[1])
+                  if vt == "float"
+                    return "float_array"
+                  end
+                  if vt == "string"
+                    return "str_array"
+                  end
+                  if vt == "symbol"
+                    return "sym_array"
+                  end
+                  if vt == "poly"
+                    @needs_rb_value = 1
+                    return "poly_array"
+                  end
+                  if type_is_pointer(vt) == 1
+                    @needs_ptr_array = 1
+                    @needs_gc = 1
+                    return vt + "_ptr_array"
+                  end
+                end
+              end
               return "int_array"
             end
             if rname == "Hash"
@@ -4377,6 +4555,7 @@ class Compiler
     @meth_names.push(mname)
     @meth_param_names.push(params_str)
     @meth_param_types.push(ptypes_str)
+    @meth_param_empty.push("")
     @meth_return_types.push("int")
     @meth_body_ids.push(body_id)
     @meth_has_defaults.push(defaults_str)
@@ -4426,6 +4605,7 @@ class Compiler
     @meth_names.push(mname)
     @meth_param_names.push(params_str)
     @meth_param_types.push(ptypes_str)
+    @meth_param_empty.push("")
     @meth_return_types.push("int")
     @meth_body_ids.push(body_id)
     @meth_has_defaults.push("")
@@ -4468,15 +4648,7 @@ class Compiler
 
     body_stmts.each { |sid|
       if @nd_type[sid] == "ConstantWriteNode"
-        cname = mname + "_" + @nd_name[sid]
-        expr_id = @nd_expression[sid]
-        ct = "int"
-        if expr_id >= 0
-          ct = infer_type(expr_id)
-        end
-        @const_names.push(cname)
-        @const_types.push(ct)
-        @const_expr_ids.push(expr_id)
+        collect_scoped_constant(mname, sid)
       end
       # Collect module class methods (def self.xxx) as top-level functions
       if @nd_type[sid] == "DefNode"
@@ -4487,6 +4659,7 @@ class Compiler
             @meth_names.push(mname + "_cls_" + dmname)
             @meth_param_names.push(collect_params_str(sid))
             @meth_param_types.push(collect_ptypes_str(sid, -1))
+            @meth_param_empty.push("")
             @meth_return_types.push("int")
             @meth_body_ids.push(@nd_body[sid])
             @meth_has_yield.push(0)
@@ -4501,40 +4674,21 @@ class Compiler
         expr_id = @nd_expression[sid]
         ct = "int"
         if expr_id >= 0
+          old_scope = @current_lexical_scope
+          @current_lexical_scope = mname
           ct = infer_type(expr_id)
+          @current_lexical_scope = old_scope
         end
         @const_names.push(cname2)
         @const_types.push(ct)
         @const_expr_ids.push(expr_id)
+        @const_scope_names.push(mname)
       end
     }
   end
 
   def collect_constant(nid)
-    # Check for Struct.new(:x, :y)
-    expr_id = @nd_expression[nid]
-    if expr_id >= 0
-      if @nd_type[expr_id] == "CallNode"
-        if @nd_name[expr_id] == "new"
-          sr = @nd_receiver[expr_id]
-          if sr >= 0
-            if @nd_type[sr] == "ConstantReadNode"
-              if @nd_name[sr] == "Struct"
-                collect_struct_class(@nd_name[nid], expr_id)
-                return
-              end
-            end
-          end
-        end
-      end
-    end
-    @const_names.push(@nd_name[nid])
-    ct = "int"
-    if expr_id >= 0
-      ct = infer_type(expr_id)
-    end
-    @const_types.push(ct)
-    @const_expr_ids.push(expr_id)
+    collect_scoped_constant("", nid)
   end
 
   def collect_struct_class(cname, call_nid)
@@ -4552,6 +4706,7 @@ class Compiler
     @cls_meth_returns.push("")
     @cls_meth_bodies.push("")
     @cls_meth_defaults.push("")
+    @cls_meth_ptypes_empty.push("")
     @cls_attr_readers.push("")
     @cls_attr_writers.push("")
     @cls_cmeth_names.push("")
@@ -5274,6 +5429,258 @@ class Compiler
     if @nd_receiver[nid] >= 0
       collect_param_methods(@nd_receiver[nid], pname, acc)
     end
+  end
+
+  # Issue #58: collect every element type seen in `pname.push(elem)`
+  # or `pname << elem` patterns under nid. The deferred-element-type
+  # promotion pass uses this to decide what concrete typed-array a
+  # parameter should be promoted to when callers all passed empty
+  # `[]` literals.
+  def collect_param_push_elem_types(nid, pname, acc)
+    if nid < 0
+      return
+    end
+    if @nd_type[nid] == "CallNode"
+      if @nd_name[nid] == "push" || @nd_name[nid] == "<<"
+        recv = @nd_receiver[nid]
+        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
+          if @nd_name[recv] == pname
+            args_id = @nd_arguments[nid]
+            if args_id >= 0
+              aargs = get_args(args_id)
+              if aargs.length > 0
+                at = infer_type(aargs[0])
+                if not_in(at, acc) == 1
+                  acc.push(at)
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    if @nd_body[nid] >= 0
+      collect_param_push_elem_types(@nd_body[nid], pname, acc)
+    end
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      collect_param_push_elem_types(stmts[k], pname, acc)
+      k = k + 1
+    end
+    if @nd_expression[nid] >= 0
+      collect_param_push_elem_types(@nd_expression[nid], pname, acc)
+    end
+    if @nd_left[nid] >= 0
+      collect_param_push_elem_types(@nd_left[nid], pname, acc)
+    end
+    if @nd_right[nid] >= 0
+      collect_param_push_elem_types(@nd_right[nid], pname, acc)
+    end
+    if @nd_arguments[nid] >= 0
+      collect_param_push_elem_types(@nd_arguments[nid], pname, acc)
+    end
+    args2 = parse_id_list(@nd_args[nid])
+    k = 0
+    while k < args2.length
+      collect_param_push_elem_types(args2[k], pname, acc)
+      k = k + 1
+    end
+    if @nd_receiver[nid] >= 0
+      collect_param_push_elem_types(@nd_receiver[nid], pname, acc)
+    end
+    if @nd_predicate[nid] >= 0
+      collect_param_push_elem_types(@nd_predicate[nid], pname, acc)
+    end
+    if @nd_subsequent[nid] >= 0
+      collect_param_push_elem_types(@nd_subsequent[nid], pname, acc)
+    end
+    if @nd_else_clause[nid] >= 0
+      collect_param_push_elem_types(@nd_else_clause[nid], pname, acc)
+    end
+    if @nd_block[nid] >= 0
+      collect_param_push_elem_types(@nd_block[nid], pname, acc)
+    end
+  end
+
+  # Issue #58: promote each top-level method parameter from int_array
+  # to a concrete typed-array (str_array, float_array, sym_array)
+  # when (a) every caller passed an empty `[]` literal — guarded by
+  # @meth_param_empty[mi][k] == "1" — and (b) the body's pushes on
+  # that parameter all agree on a single concrete element type.
+  # Without (a), a caller passing a real int_array would be silently
+  # miscompiled. Without (b), a body that pushes mixed types should
+  # surface as a type error rather than picking one arbitrarily.
+  def infer_param_array_type_from_body
+    iter = 0
+    changed = 1
+    while changed == 1 && iter < 4
+      changed = 0
+      iter = iter + 1
+      # Top-level methods. Set up the method's scope so that
+      # collect_param_push_elem_types' infer_type calls can resolve
+      # other parameters (e.g. `buf.push(name)` where `name` is a
+      # string-typed parameter on the same method).
+      mi = 0
+      while mi < @meth_names.length
+        bid = @meth_body_ids[mi]
+        if bid >= 0
+          pnames = @meth_param_names[mi].split(",")
+          ptypes = @meth_param_types[mi].split(",")
+          empty_str = ""
+          if mi < @meth_param_empty.length
+            empty_str = @meth_param_empty[mi]
+          end
+          empties = empty_str.split(",")
+          push_scope
+          dj = 0
+          while dj < pnames.length
+            pt = "int"
+            if dj < ptypes.length
+              pt = ptypes[dj]
+            end
+            declare_var(pnames[dj], pt)
+            dj = dj + 1
+          end
+          ml = "".split(",")
+          mt = "".split(",")
+          scan_locals(bid, ml, mt, pnames)
+          lk = 0
+          while lk < ml.length
+            declare_var(ml[lk], mt[lk])
+            lk = lk + 1
+          end
+          promoted = 0
+          pk = 0
+          while pk < pnames.length
+            if pk < ptypes.length && pk < empties.length
+              if empties[pk] == "1" && ptypes[pk] == "int_array"
+                elem_acc = "".split(",")
+                collect_param_push_elem_types(bid, pnames[pk], elem_acc)
+                promoted_type = empty_array_promotion_for(elem_acc)
+                if promoted_type != ""
+                  ptypes[pk] = promoted_type
+                  if promoted_type == "str_array"
+                    @needs_str_array = 1
+                  end
+                  if promoted_type == "float_array"
+                    @needs_float_array = 1
+                  end
+                  promoted = 1
+                  changed = 1
+                end
+              end
+            end
+            pk = pk + 1
+          end
+          pop_scope
+          if promoted == 1
+            @meth_param_types[mi] = ptypes.join(",")
+          end
+        end
+        mi = mi + 1
+      end
+      # Class methods (instance methods on user classes). Same
+      # scope-setup so `buf.push(name)` resolves the param type.
+      ci = 0
+      while ci < @cls_names.length
+        @current_class_idx = ci
+        all_params = @cls_meth_params[ci].split("|")
+        all_ptypes = @cls_meth_ptypes[ci].split("|")
+        all_empty = @cls_meth_ptypes_empty[ci].split("|")
+        bodies = @cls_meth_bodies[ci].split(";")
+        cls_changed = 0
+        mj = 0
+        while mj < all_params.length
+          bid = -1
+          if mj < bodies.length
+            bid = bodies[mj].to_i
+          end
+          if bid >= 0
+            cm_pnames = all_params[mj].split(",")
+            cm_ptypes = "".split(",")
+            cm_empties = "".split(",")
+            if mj < all_ptypes.length
+              cm_ptypes = all_ptypes[mj].split(",")
+            end
+            if mj < all_empty.length
+              cm_empties = all_empty[mj].split(",")
+            end
+            push_scope
+            cdj = 0
+            while cdj < cm_pnames.length
+              cpt = "int"
+              if cdj < cm_ptypes.length
+                cpt = cm_ptypes[cdj]
+              end
+              declare_var(cm_pnames[cdj], cpt)
+              cdj = cdj + 1
+            end
+            cml = "".split(",")
+            cmt = "".split(",")
+            scan_locals(bid, cml, cmt, cm_pnames)
+            cmlk = 0
+            while cmlk < cml.length
+              declare_var(cml[cmlk], cmt[cmlk])
+              cmlk = cmlk + 1
+            end
+            pk = 0
+            cm_promoted = 0
+            while pk < cm_pnames.length
+              if pk < cm_ptypes.length && pk < cm_empties.length
+                if cm_empties[pk] == "1" && cm_ptypes[pk] == "int_array"
+                  elem_acc = "".split(",")
+                  collect_param_push_elem_types(bid, cm_pnames[pk], elem_acc)
+                  promoted_type = empty_array_promotion_for(elem_acc)
+                  if promoted_type != ""
+                    cm_ptypes[pk] = promoted_type
+                    if promoted_type == "str_array"
+                      @needs_str_array = 1
+                    end
+                    if promoted_type == "float_array"
+                      @needs_float_array = 1
+                    end
+                    cm_promoted = 1
+                    changed = 1
+                  end
+                end
+              end
+              pk = pk + 1
+            end
+            pop_scope
+            if cm_promoted == 1
+              all_ptypes[mj] = cm_ptypes.join(",")
+              cls_changed = 1
+            end
+          end
+          mj = mj + 1
+        end
+        if cls_changed == 1
+          @cls_meth_ptypes[ci] = all_ptypes.join("|")
+        end
+        ci = ci + 1
+      end
+      @current_class_idx = -1
+    end
+  end
+
+  # Helper: given the set of element types observed in pname.push(...)
+  # patterns, return the typed-array tag to promote to, or "" if the
+  # observations don't agree on a single concrete type.
+  def empty_array_promotion_for(elem_acc)
+    if elem_acc.length != 1
+      return ""
+    end
+    if elem_acc[0] == "string"
+      return "str_array"
+    end
+    if elem_acc[0] == "float"
+      return "float_array"
+    end
+    if elem_acc[0] == "symbol"
+      return "sym_array"
+    end
+    ""
   end
 
   # Does class `ci` provide `mname` as a reader, writer, or method?
@@ -7036,6 +7443,17 @@ class Compiler
                   k = k + 1
                   next
                 end
+                # Issue #58: an empty `[]` literal at the call site is
+                # compatible with any concrete typed-array param type.
+                # Without this, `foo([])` against a body-promoted
+                # `str_array` param triggers the ct != at mismatch and
+                # bumps the param back to poly.
+                if is_empty_array_literal(arg_ids[k]) == 1
+                  if ct == "str_array" || ct == "float_array" || ct == "sym_array" || is_ptr_array_type(ct) == 1
+                    k = k + 1
+                    next
+                  end
+                end
                 if ct != at
                   if ct != "poly"
                     # Only mark as poly if both types are meaningful
@@ -7538,7 +7956,7 @@ class Compiler
   # refines. Identical fingerprints between successive iterations means a
   # fixed point has been reached and further iterations are wasted work.
   def inference_signature
-    @meth_return_types.join("|") + "/" + @cls_ivar_types.join("|") + "/" + @meth_param_types.join("|")
+    @meth_return_types.join("|") + "/" + @cls_ivar_types.join("|") + "/" + @meth_param_types.join("|") + "/" + @cls_meth_ptypes.join("/")
   end
 
   def compile
@@ -7554,6 +7972,12 @@ class Compiler
     while iter < 4
       infer_all_returns
       infer_ivar_types_from_writers
+      # Issue #58: after scan_locals has populated @meth_param_empty
+      # via the per-call-site forward propagation, promote int_array
+      # params to concrete typed-arrays where bodies push known types.
+      # Then the next iteration's scan_locals back-propagates those
+      # promoted types to caller-side locals.
+      infer_param_array_type_from_body
       detect_poly_params
       cur_sig = inference_signature
       if cur_sig == prev_sig
@@ -8431,7 +8855,7 @@ class Compiler
     emit_raw("  }")
     emit_raw("}")
     emit_raw("static mrb_bool sp_poly_nil_p(sp_RbVal v) { return v.tag == SP_TAG_NIL; }")
-    emit_raw("static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: { char *b = (char*)malloc(32); snprintf(b, 32, \"%lld\", (long long)v.v.i); return b; } case SP_TAG_STR: return v.v.s ? v.v.s : \"\"; case SP_TAG_FLT: { char *b = (char*)malloc(64); snprintf(b, 64, \"%g\", v.v.f); return b; } case SP_TAG_BOOL: return v.v.b ? \"true\" : \"false\"; case SP_TAG_NIL: return \"\"; default: return \"\"; } }")
+    emit_raw("static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: return sp_int_to_s(v.v.i); case SP_TAG_STR: return v.v.s ? v.v.s : \"\"; case SP_TAG_FLT: return sp_float_to_s(v.v.f); case SP_TAG_BOOL: return v.v.b ? \"true\" : \"false\"; case SP_TAG_NIL: return \"\"; default: return \"\"; } }")
     emit_raw("static sp_RbVal sp_poly_add(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i + b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i + b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (mrb_float)b.v.i); if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR) return sp_box_str(sp_str_concat(a.v.s, b.v.s)); return sp_box_int(0); }")
     emit_raw("static sp_RbVal sp_poly_sub(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i - b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); return sp_box_int(0); }")
     emit_raw("static sp_RbVal sp_poly_mul(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i * b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f * b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i * b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f * (mrb_float)b.v.i); return sp_box_int(0); }")
@@ -10423,6 +10847,11 @@ class Compiler
     # a fresh (empty) names array.
     if names.length == 0
       @scan_literal_flags = "".split(",")
+      # Parallel to `names`: "1" if every write to this local so far was
+      # an empty `[]` literal — used to defer the array element type
+      # until first `push` (issue #58). A subsequent write with a
+      # concrete element resets the flag to "".
+      @scan_empty_flags = "".split(",")
     end
     if @nd_type[nid] == "MultiWriteNode"
       targets = parse_id_list(@nd_targets[nid])
@@ -10434,6 +10863,7 @@ class Compiler
               names.push(lname)
               types.push("int")
               @scan_literal_flags.push("")
+              @scan_empty_flags.push("")
             end
           end
         end
@@ -10454,11 +10884,29 @@ class Compiler
           else
             @scan_literal_flags.push("")
           end
+          # Track empty-array literal so a later push() can promote
+          # the local's element type (issue #58).
+          if is_empty_array_literal(@nd_expression[nid]) == 1
+            @scan_empty_flags.push("1")
+          else
+            @scan_empty_flags.push("")
+          end
         end
       else
         if not_in(lname, params) == 1
           # Check if type changed
           at = infer_type(@nd_expression[nid])
+          # Concrete (non-empty) array overwrite clears the deferred
+          # element-type flag — a `[1,2,3]` write commits to int_array.
+          if is_empty_array_literal(@nd_expression[nid]) == 0
+            ei = 0
+            while ei < names.length
+              if names[ei] == lname && ei < @scan_empty_flags.length
+                @scan_empty_flags[ei] = ""
+              end
+              ei = ei + 1
+            end
+          end
           ki = 0
           while ki < names.length
             if names[ki] == lname
@@ -10606,6 +11054,197 @@ class Compiler
                   ki = ki + 1
                 end
               end
+            end
+          end
+        end
+      end
+    end
+    # Issue #58: empty-array param promotion at instance-method call
+    # sites — `obj.method(arg)`. Same forward/backward propagation as
+    # the top-level branch below, but reads/writes the per-class
+    # @cls_meth_ptypes / @cls_meth_ptypes_empty storage.
+    if @nd_type[nid] == "CallNode"
+      icm_recv = @nd_receiver[nid]
+      if icm_recv >= 0
+        icm_rt = infer_type(icm_recv)
+        # When the receiver is a local declared in this same
+        # scan_locals pass (`r = Recorder.new` followed by `r.method(...)`),
+        # infer_type still returns "int" because we haven't called
+        # declare_var yet. Fall back to the names/types accumulator.
+        if icm_rt == "int" && @nd_type[icm_recv] == "LocalVariableReadNode"
+          icm_recv_name = @nd_name[icm_recv]
+          icm_ni0 = 0
+          while icm_ni0 < names.length
+            if names[icm_ni0] == icm_recv_name
+              icm_rt = types[icm_ni0]
+            end
+            icm_ni0 = icm_ni0 + 1
+          end
+        end
+        if is_obj_type(icm_rt) == 1
+          icm_cname = icm_rt[4, icm_rt.length - 4]
+          icm_ci = find_class_idx(icm_cname)
+          if icm_ci >= 0
+            icm_mname = @nd_name[nid]
+            icm_midx = cls_find_method_direct(icm_ci, icm_mname)
+            # Walk parents if not found on the receiver class itself
+            icm_owner_ci = icm_ci
+            if icm_midx < 0
+              icm_owner_name = find_method_owner(icm_ci, icm_mname)
+              if icm_owner_name != ""
+                icm_owner_ci = find_class_idx(icm_owner_name)
+                if icm_owner_ci >= 0
+                  icm_midx = cls_find_method_direct(icm_owner_ci, icm_mname)
+                end
+              end
+            end
+            if icm_midx >= 0
+              icm_args_id = @nd_arguments[nid]
+              if icm_args_id >= 0
+                icm_aargs = get_args(icm_args_id)
+                icm_all_ptypes = @cls_meth_ptypes[icm_owner_ci].split("|")
+                icm_all_empty = @cls_meth_ptypes_empty[icm_owner_ci].split("|")
+                icm_ptypes = "".split(",")
+                icm_empties = "".split(",")
+                if icm_midx < icm_all_ptypes.length
+                  icm_ptypes = icm_all_ptypes[icm_midx].split(",")
+                end
+                if icm_midx < icm_all_empty.length
+                  icm_empties = icm_all_empty[icm_midx].split(",")
+                end
+                icm_changed = 0
+                icm_k = 0
+                while icm_k < icm_aargs.length
+                  icm_arg_id = icm_aargs[icm_k]
+                  icm_arg_is_empty = is_empty_array_literal(icm_arg_id)
+                  icm_local_idx = -1
+                  if @nd_type[icm_arg_id] == "LocalVariableReadNode"
+                    icm_arg_lname = @nd_name[icm_arg_id]
+                    icm_ni = 0
+                    while icm_ni < names.length
+                      if names[icm_ni] == icm_arg_lname
+                        icm_local_idx = icm_ni
+                      end
+                      icm_ni = icm_ni + 1
+                    end
+                    if icm_local_idx >= 0 && icm_local_idx < @scan_empty_flags.length
+                      if @scan_empty_flags[icm_local_idx] == "1"
+                        icm_arg_is_empty = 1
+                      end
+                    end
+                  end
+                  if icm_arg_is_empty == 1
+                    while icm_empties.length <= icm_k
+                      icm_empties.push("")
+                    end
+                    if icm_empties[icm_k] != "1"
+                      icm_empties[icm_k] = "1"
+                      icm_changed = 1
+                    end
+                  end
+                  if icm_local_idx >= 0 && icm_k < icm_ptypes.length
+                    icm_pt = icm_ptypes[icm_k]
+                    if types[icm_local_idx] == "int_array" && icm_local_idx < @scan_empty_flags.length && @scan_empty_flags[icm_local_idx] == "1"
+                      if icm_pt == "str_array"
+                        types[icm_local_idx] = "str_array"
+                        @needs_str_array = 1
+                      end
+                      if icm_pt == "float_array"
+                        types[icm_local_idx] = "float_array"
+                        @needs_float_array = 1
+                      end
+                      if icm_pt == "sym_array"
+                        types[icm_local_idx] = "sym_array"
+                      end
+                    end
+                  end
+                  icm_k = icm_k + 1
+                end
+                if icm_changed == 1
+                  icm_all_empty[icm_midx] = icm_empties.join(",")
+                  @cls_meth_ptypes_empty[icm_owner_ci] = icm_all_empty.join("|")
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    # Issue #58: empty-array param promotion at top-level function
+    # call sites. Two directions in one place:
+    #   (a) Forward: if `arg` is `[]` literal or a local with the
+    #       empty flag set, mark @meth_param_empty[mi][k] = "1" so a
+    #       later body-promotion pass can refine the param type.
+    #   (b) Backward: if @meth_param_types[mi][k] has already been
+    #       promoted to a concrete typed-array (str_array, etc.) and
+    #       `arg` is a local with the empty flag, upgrade the local's
+    #       type to match — this is what propagates the deferred
+    #       resolution back to the caller's variable.
+    if @nd_type[nid] == "CallNode"
+      if @nd_receiver[nid] < 0
+        ea_mname = @nd_name[nid]
+        ea_mi = find_method_idx(ea_mname)
+        if ea_mi >= 0
+          ea_args_id = @nd_arguments[nid]
+          if ea_args_id >= 0
+            ea_aargs = get_args(ea_args_id)
+            ea_ptypes = @meth_param_types[ea_mi].split(",")
+            ea_empty_str = ""
+            if ea_mi < @meth_param_empty.length
+              ea_empty_str = @meth_param_empty[ea_mi]
+            end
+            ea_empties = ea_empty_str.split(",")
+            ea_changed = 0
+            ea_k = 0
+            while ea_k < ea_aargs.length
+              ea_arg_id = ea_aargs[ea_k]
+              ea_arg_is_empty = is_empty_array_literal(ea_arg_id)
+              ea_local_idx = -1
+              if @nd_type[ea_arg_id] == "LocalVariableReadNode"
+                ea_arg_lname = @nd_name[ea_arg_id]
+                ea_ni = 0
+                while ea_ni < names.length
+                  if names[ea_ni] == ea_arg_lname
+                    ea_local_idx = ea_ni
+                  end
+                  ea_ni = ea_ni + 1
+                end
+                if ea_local_idx >= 0 && ea_local_idx < @scan_empty_flags.length
+                  if @scan_empty_flags[ea_local_idx] == "1"
+                    ea_arg_is_empty = 1
+                  end
+                end
+              end
+              if ea_arg_is_empty == 1
+                while ea_empties.length <= ea_k
+                  ea_empties.push("")
+                end
+                if ea_empties[ea_k] != "1"
+                  ea_empties[ea_k] = "1"
+                  ea_changed = 1
+                end
+              end
+              # Backward: param already promoted, lift the local too.
+              if ea_local_idx >= 0 && ea_k < ea_ptypes.length
+                ea_pt = ea_ptypes[ea_k]
+                if types[ea_local_idx] == "int_array" && ea_local_idx < @scan_empty_flags.length && @scan_empty_flags[ea_local_idx] == "1"
+                  if ea_pt == "str_array"
+                    types[ea_local_idx] = "str_array"
+                    @needs_str_array = 1
+                  end
+                  if ea_pt == "float_array"
+                    types[ea_local_idx] = "float_array"
+                    @needs_float_array = 1
+                  end
+                  if ea_pt == "sym_array"
+                    types[ea_local_idx] = "sym_array"
+                  end
+                end
+              end
+              ea_k = ea_k + 1
+            end
+            if ea_changed == 1
+              @meth_param_empty[ea_mi] = ea_empties.join(",")
             end
           end
         end
@@ -11258,7 +11897,14 @@ class Compiler
     # Constants (initialize global declarations)
     i = 0
     while i < @const_names.length
+      old_scope = @current_lexical_scope
+      if i < @const_scope_names.length
+        @current_lexical_scope = @const_scope_names[i]
+      else
+        @current_lexical_scope = ""
+      end
       val = compile_expr(@const_expr_ids[i])
+      @current_lexical_scope = old_scope
       emit("  cst_" + @const_names[i] + " = " + val + ";")
       if type_is_pointer(@const_types[i]) == 1
         emit("  SP_GC_ROOT(cst_" + @const_names[i] + ");")
@@ -11401,61 +12047,29 @@ class Compiler
       if @nd_name[nid] == "ARGV"
         return "sp_argv"
       end
-      if @current_class_idx >= 0
-        cpname_cls = @cls_names[@current_class_idx] + "_" + @nd_name[nid]
-        ci_cls = find_const_idx(cpname_cls)
-        if ci_cls >= 0
-          lv_cls = const_literal_c_value(ci_cls)
-          if lv_cls != ""
-            return lv_cls
-          end
-          return "cst_" + cpname_cls
-        end
-      end
-      ci = find_const_idx(@nd_name[nid])
+      rname = resolve_const_read_name(@nd_name[nid])
+      ci = find_const_idx(rname)
       if ci >= 0
         # Propagate simple literal constants to their use sites.
         lv = const_literal_c_value(ci)
         if lv != ""
           return lv
         end
-        return "cst_" + @nd_name[nid]
+        return "cst_" + rname
       end
-      # Check if inside a module method and constant belongs to that module
-      mi3 = 0
-      while mi3 < @module_names.length
-        mmod = @module_names[mi3]
-        if mmod != ""
-          if @current_method_name.start_with?(mmod + "_cls_")
-            cpname = mmod + "_" + @nd_name[nid]
-            ci4 = find_const_idx(cpname)
-            if ci4 >= 0
-              return "cst_" + cpname
-            end
-          end
-          # Also check when in main scope (module constants referenced at top level)
-          cpname = mmod + "_" + @nd_name[nid]
-          ci5 = find_const_idx(cpname)
-          if ci5 >= 0
-            return "cst_" + cpname
-          end
-        end
-        mi3 = mi3 + 1
-      end
-      return @nd_name[nid]
+      return rname
     end
     if t == "ConstantPathNode"
-      if @nd_receiver[nid] >= 0
-        rname = const_ref_flat_name(@nd_receiver[nid])
-        nname = @nd_name[nid]
-        if rname == ""
-          return @nd_name[nid]
-        end
-        cpname = rname + "_" + nname
+      cpname = resolve_const_ref_name(nid)
+      if cpname != ""
         ci = find_const_idx(cpname)
         if ci >= 0
           return "cst_" + cpname
         end
+      end
+      if @nd_receiver[nid] >= 0
+        rname = resolve_const_ref_name(@nd_receiver[nid])
+        nname = @nd_name[nid]
         # Built-in constants
         if rname == "Float"
           if nname == "INFINITY"
@@ -11478,7 +12092,9 @@ class Compiler
             return "2.71828182845904523536"
           end
         end
-        return cpname
+        if cpname != ""
+          return cpname
+        end
       end
       return @nd_name[nid]
     end
@@ -12558,6 +13174,21 @@ class Compiler
       if mname == "to_s"
         return "(" + rc + " ? \"true\" : \"false\")"
       end
+      if mname == "inspect"
+        return "(" + rc + " ? \"true\" : \"false\")"
+      end
+    end
+
+    # nil methods (receiver inferred as "nil" — only .inspect and .to_s
+    # need an expression-level answer; other nil methods like .nil? are
+    # already handled earlier.)
+    if recv_type == "nil"
+      if mname == "inspect"
+        return "\"nil\""
+      end
+      if mname == "to_s"
+        return "\"\""
+      end
     end
 
     # Tuple methods
@@ -12900,8 +13531,20 @@ class Compiler
     if @current_class_idx >= 0
       cidx = cls_find_method(@current_class_idx, mname)
       if cidx >= 0
-        ca = compile_call_args(nid)
         owner = find_method_owner(@current_class_idx, mname)
+        # Look up the method's owning class so we can fill in defaults
+        # from @cls_meth_defaults (issue #49).
+        owner_ci = find_class_idx(owner)
+        owner_midx = -1
+        if owner_ci >= 0
+          owner_midx = cls_find_method_direct(owner_ci, mname)
+        end
+        ca = ""
+        if owner_midx >= 0
+          ca = compile_typed_call_args(nid, owner_ci, owner_midx)
+        else
+          ca = compile_call_args(nid)
+        end
         if ca != ""
           return "sp_" + owner + "_" + sanitize_name(mname) + "(self, " + ca + ")"
         else
@@ -13471,6 +14114,17 @@ class Compiler
               emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; const char *_v = " + compile_expr(aargs[1]) + "; for (mrb_int _i = 0; _i < _n; _i++) sp_StrArray_push(" + tmp + ", _v); }")
               return tmp
             end
+            # Pointer-type fills (objects, other arrays) need a typed PtrArray
+            # so the GC scans the elements. Without this they'd be pushed
+            # into an int_array and silently swept.
+            if type_is_pointer(vt) == 1
+              @needs_ptr_array = 1
+              @needs_gc = 1
+              tmp = new_temp
+              emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+              emit("  { mrb_int _n = " + compile_expr(aargs.first) + "; void *_v = (void *)(" + compile_expr(aargs[1]) + "); for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp + ", _v); }")
+              return tmp
+            end
             @needs_int_array = 1
             tmp = new_temp
             emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
@@ -13620,6 +14274,9 @@ class Compiler
     end
     if mname == "to_f"
       return "atof(" + rc + ")"
+    end
+    if mname == "inspect"
+      return "sp_str_inspect(" + rc + ")"
     end
     if mname == "upcase"
       return "sp_str_upcase(" + rc + ")"
@@ -14122,6 +14779,10 @@ class Compiler
       end
       return "sp_int_to_s(" + rc + ")"
     end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + rc + ")"
+    end
     if mname == "digits"
       @needs_int_array = 1
       @needs_gc = 1
@@ -14207,6 +14868,10 @@ class Compiler
       @needs_string_helpers = 1
       return "sp_float_to_s(" + rc + ")"
     end
+    if mname == "inspect"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + rc + ")"
+    end
     if mname == "to_i"
       return "(mrb_int)(" + rc + ")"
     end
@@ -14256,6 +14921,19 @@ class Compiler
     # Skip non-array types
     if recv_type == "str_int_hash" || recv_type == "str_str_hash"
       return ""
+    end
+    # Array#inspect and Array#to_s (CRuby aliases them for arrays, so
+    # the two share one definition via compile_inspect_for). Guard on
+    # recv_type being an actual array type so scalar receivers with
+    # the same method name (e.g. (poly).to_s, (int).to_s) fall through
+    # to their own scalar dispatchers.
+    if mname == "inspect" || mname == "to_s"
+      if recv_type == "int_array" || recv_type == "float_array" || recv_type == "str_array" || recv_type == "sym_array" || recv_type == "poly_array"
+        r = compile_inspect_for(recv_type, rc)
+        if r != ""
+          return r
+        end
+      end
     end
     # zip without block: return array of pairs/tuples
     if mname == "zip" && @nd_block[nid] < 0
@@ -15272,12 +15950,7 @@ class Compiler
     # each_with_object as expression: run the loop as side effect, return obj
     if mname == "each_with_object"
       if @nd_block[nid] >= 0
-        compile_each_with_object_block(nid)
-        bp2 = get_block_param(nid, 1)
-        if bp2 == ""
-          bp2 = "_obj"
-        end
-        return "lv_" + bp2
+        return compile_each_with_object_block(nid)
       end
     end
 
@@ -15780,10 +16453,13 @@ class Compiler
     if mname == "to_s"
       return "sp_poly_to_s(" + rc + ")"
     end
-    # For object method calls, dispatch based on cls_id. The result
-    # temp is typed by the method's return type. If user classes
-    # disagree on that type, the result is sp_RbVal and each branch
-    # boxes its concrete return value.
+    # For object method calls, dispatch based on cls_id. Two namespaces
+    # of cls_id share SP_TAG_OBJ:
+    #   - non-negative: index into @cls_names (user-defined classes)
+    #   - negative SP_BUILTIN_*: built-in pointer types (IntArray, ...)
+    # The result temp is typed by the method's return type. If user
+    # classes disagree on that type, the result is sp_RbVal and each
+    # branch boxes its concrete return value.
     ret_type = poly_dispatch_return_type(mname)
     is_poly_ret = ret_type == "poly" ? 1 : 0
     ret_ct = c_type(ret_type)
@@ -15793,19 +16469,23 @@ class Compiler
     recv_tmp = new_temp
     emit("  sp_RbVal " + recv_tmp + " = " + rc + ";")
     # Compile the call's argument list once.
+    arg_compiled = "".split(",")
     arg_strs = ""
     args_id = @nd_arguments[nid]
     if args_id >= 0
       aargs = get_args(args_id)
       k = 0
       while k < aargs.length
-        arg_strs = arg_strs + ", " + compile_expr(aargs[k])
+        ce = compile_expr(aargs[k])
+        arg_compiled.push(ce)
+        arg_strs = arg_strs + ", " + ce
         k = k + 1
       end
     end
     tmp = new_temp
     emit("  " + ret_ct + " " + tmp + " = " + ret_def + ";")
     emit("  if (" + recv_tmp + ".tag == SP_TAG_OBJ) {")
+    # User-class dispatch
     i = 0
     while i < @cls_names.length
       cname = @cls_names[i]
@@ -15821,8 +16501,31 @@ class Compiler
       end
       i = i + 1
     end
+    # Built-in type dispatch (cls_id < 0).
+    emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, tmp, is_poly_ret)
     emit("  }")
     tmp
+  end
+
+  # Emit branches for the built-in (negative cls_id) entries. Each
+  # entry maps a (SP_BUILTIN_*, method) pair to a C expression.
+  # Adding a new built-in type means one more `if` branch here.
+  def emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, result_tmp, is_poly_ret)
+    a0 = ""
+    if arg_compiled.length > 0
+      a0 = arg_compiled[0]
+    end
+    # IntArray: `[]`, `length`, `size`
+    if mname == "[]" && arg_compiled.length >= 1
+      call = "sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+    end
+    if mname == "length" || mname == "size"
+      call = "sp_IntArray_length((sp_IntArray *)" + recv_tmp + ".v.p)"
+      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+    end
   end
 
   # Try to compile str[i] <op> "c" as direct char comparison
@@ -15976,20 +16679,22 @@ class Compiler
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
     end
-    if at == "str_array"
-      @needs_str_array = 1
-      return "sp_box_str_array(" + val + ")"
-    end
     if at == "int_array"
-      @needs_int_array = 1
       return "sp_box_int_array(" + val + ")"
     end
     if at == "float_array"
-      @needs_float_array = 1
       return "sp_box_float_array(" + val + ")"
     end
+    if at == "str_array"
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "sym_array"
+      return "sp_box_sym_array(" + val + ")"
+    end
+    if is_ptr_array_type(at) == 1
+      return "sp_box_ptr_array(" + val + ")"
+    end
     if at == "poly_array"
-      @needs_rb_value = 1
       return "sp_box_poly_array(" + val + ")"
     end
     "sp_box_int(" + val + ")"
@@ -16125,6 +16830,34 @@ class Compiler
               k = k + 1
               next
             end
+            # Issue #58: empty `[]` literal at the call site needs to
+            # construct the right typed-array container. The literal's
+            # own infer_type returns int_array (compile_array_literal
+            # emits sp_IntArray_new()), but if the param is a concrete
+            # typed-array, emit the matching constructor instead.
+            if is_empty_array_literal(positional_ids[k]) == 1
+              if ptypes[k] == "str_array"
+                @needs_str_array = 1
+                @needs_gc = 1
+                result = result + "sp_StrArray_new()"
+                k = k + 1
+                next
+              end
+              if ptypes[k] == "float_array"
+                @needs_float_array = 1
+                @needs_gc = 1
+                result = result + "sp_FloatArray_new()"
+                k = k + 1
+                next
+              end
+              if ptypes[k] == "sym_array"
+                @needs_int_array = 1
+                @needs_gc = 1
+                result = result + "sp_IntArray_new()"
+                k = k + 1
+                next
+              end
+            end
           end
           result = result + compile_expr(positional_ids[k])
         else
@@ -16149,6 +16882,15 @@ class Compiler
   def compile_constructor_args(ci, nid)
     args_id = @nd_arguments[nid]
     if args_id < 0
+      # No call-site args. If init has parameters with defaults, fill them
+      # in here (issue #49: `Counter.new` for `initialize(start = 0)`).
+      init_ci = find_init_class(ci)
+      if init_ci >= 0
+        init_idx = cls_find_method_direct(init_ci, "initialize")
+        if init_idx >= 0
+          return compile_typed_call_args(nid, init_ci, init_idx)
+        end
+      end
       return ""
     end
     arg_ids = get_args(args_id)
@@ -16347,43 +17089,72 @@ class Compiler
   end
 
   def compile_typed_call_args(nid, target_ci, target_midx)
-    # Like compile_call_args but casts arguments to match target method param types
+    # Like compile_call_args but casts arguments to match target method param
+    # types AND fills in defaults from @cls_meth_defaults for trailing
+    # parameters the caller omitted (issue #49). Returns "" only when the
+    # method takes no parameters at all.
     args_id = @nd_arguments[nid]
-    if args_id < 0
-      return ""
+    arg_ids = []
+    if args_id >= 0
+      arg_ids = get_args(args_id)
     end
-    arg_ids = get_args(args_id)
     all_ptypes = @cls_meth_ptypes[target_ci].split("|")
+    all_defaults = @cls_meth_defaults[target_ci].split("|")
     ptypes = "".split(",")
+    defaults = "".split(",")
     if target_midx < all_ptypes.length
       ptypes = all_ptypes[target_midx].split(",")
+    end
+    if target_midx < all_defaults.length
+      defaults = all_defaults[target_midx].split(",")
+    end
+    total = ptypes.length
+    if arg_ids.length > total
+      total = arg_ids.length
+    end
+    if total == 0
+      return ""
     end
     result = ""
     pcname = ""
     k = 0
-    while k < arg_ids.length
+    while k < total
       if k > 0
         result = result + ", "
       end
-      aexpr = compile_expr(arg_ids[k])
-      at = infer_type(arg_ids[k])
-      if k < ptypes.length
-        pt = ptypes[k]
-        if at == "int"
-          if is_obj_type(pt) == 1
-            # Cast int to object pointer
-            pcname = pt[4, pt.length - 4]
-            aexpr = "(sp_" + pcname + " *)" + aexpr
+      if k < arg_ids.length
+        aexpr = compile_expr(arg_ids[k])
+        at = infer_type(arg_ids[k])
+        if k < ptypes.length
+          pt = ptypes[k]
+          if at == "int"
+            if is_obj_type(pt) == 1
+              # Cast int to object pointer
+              pcname = pt[4, pt.length - 4]
+              aexpr = "(sp_" + pcname + " *)" + aexpr
+            end
+          end
+          if is_obj_type(at) == 1
+            if pt == "int"
+              # Cast object pointer to int
+              aexpr = "(mrb_int)" + aexpr
+            end
           end
         end
-        if is_obj_type(at) == 1
-          if pt == "int"
-            # Cast object pointer to int
-            aexpr = "(mrb_int)" + aexpr
+        result = result + aexpr
+      else
+        # Caller omitted this trailing arg — emit the method's default.
+        if k < defaults.length
+          def_id = defaults[k].to_i
+          if def_id >= 0
+            result = result + compile_expr(def_id)
+          else
+            result = result + "0"
           end
+        else
+          result = result + "0"
         end
       end
-      result = result + aexpr
       k = k + 1
     end
     result
@@ -17449,7 +18220,7 @@ class Compiler
     if ct == "str_array"
       @needs_str_array = 1
       elems = parse_id_list(@nd_elements[cid])
-      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_STR_ARRAY_BOX && ((sp_StrArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_BUILTIN_STR_ARRAY && ((sp_StrArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
       k = 0
       while k < elems.length
         cond = cond + " && strcmp(((sp_StrArray *)" + tmp + ".v.p)->data[" + k.to_s + "], " + compile_expr(elems[k]) + ") == 0"
@@ -17460,7 +18231,7 @@ class Compiler
     if ct == "int_array"
       @needs_int_array = 1
       elems = parse_id_list(@nd_elements[cid])
-      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_INT_ARRAY_BOX && ((sp_IntArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_BUILTIN_INT_ARRAY && ((sp_IntArray *)" + tmp + ".v.p)->len == " + elems.length.to_s
       k = 0
       while k < elems.length
         cond = cond + " && sp_IntArray_get((sp_IntArray *)" + tmp + ".v.p, " + k.to_s + ") == " + compile_expr(elems[k])
@@ -17472,7 +18243,7 @@ class Compiler
       @needs_rb_value = 1
       elems = parse_id_list(@nd_elements[cid])
       arr_ptr = "((sp_PolyArray *)" + tmp + ".v.p)"
-      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_CLS_POLY_ARRAY_BOX && " + arr_ptr + "->len == " + elems.length.to_s
+      cond = tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id == SP_BUILTIN_POLY_ARRAY && " + arr_ptr + "->len == " + elems.length.to_s
       k = 0
       while k < elems.length
         elem_rv = "sp_PolyArray_get(" + arr_ptr + ", " + k.to_s + ")"
@@ -18429,10 +19200,11 @@ class Compiler
           bp2 = "_b"
         end
         pfx = array_c_prefix(rt)
+        et = c_type(elem_type_of_array(rt))
         tmp_i = new_temp
         emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-        emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
-        emit("    lv_" + bp2 + " = sp_" + pfx + "_get(" + arg + ", " + tmp_i + ");")
+        emit("    " + et + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+        emit("    " + et + " lv_" + bp2 + " = sp_" + pfx + "_get(" + arg + ", " + tmp_i + ");")
         @indent = @indent + 1
         compile_stmts_body(@nd_body[@nd_block[nid]])
         @indent = @indent - 1
@@ -18460,14 +19232,27 @@ class Compiler
           end
         end
         bp1 = get_block_param(nid, 0)
+        synth = 0
         if bp1 == ""
           bp1 = "_i"
+          synth = 1
+        end
+        # When the block omits its parameter, the synthesized `_i` isn't
+        # declared anywhere — wrap the loop in a block scope and declare
+        # it locally. This also avoids redefinition errors when multiple
+        # paramless `step` blocks appear in the same function.
+        if synth == 1
+          emit("  {")
+          emit("  mrb_int lv_" + bp1 + " = 0;")
         end
         emit("  for (lv_" + bp1 + " = " + rc + "; lv_" + bp1 + " <= " + limit_val + "; lv_" + bp1 + " += " + step_val + ") {")
         @indent = @indent + 1
         compile_stmts_body(@nd_body[@nd_block[nid]])
         @indent = @indent - 1
         emit("  }")
+        if synth == 1
+          emit("  }")
+        end
         @in_loop = old
         return 1
       end
@@ -19959,9 +20744,74 @@ class Compiler
     end
   end
 
-  # Kernel#p: like puts, but symbols print as ":name" and strings get
-  # quotes. Falls back to compile_puts for types where inspect and
-  # to_s produce identical output (ints, floats, bools, nil).
+  # Return a C expression that evaluates to the inspected form of `val`
+  # (a value of inferred Ruby type `at`), following Ruby's Object#inspect
+  # contract. Returns "" when `at` has no inspect implementation yet, so
+  # callers can fall back to their previous behaviour.
+  def compile_inspect_for(at, val)
+    if at == "int"
+      @needs_string_helpers = 1
+      return "sp_int_to_s(" + val + ")"
+    end
+    if at == "float"
+      @needs_string_helpers = 1
+      return "sp_float_inspect(" + val + ")"
+    end
+    if at == "string" || at == "string?"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + ")"
+    end
+    if at == "mutable_str"
+      @needs_string_helpers = 1
+      return "sp_str_inspect(" + val + "->data)"
+    end
+    if at == "symbol"
+      @needs_string_helpers = 1
+      return "sp_str_concat(\":\", sp_sym_to_s(" + val + "))"
+    end
+    if at == "bool"
+      return "(" + val + " ? \"true\" : \"false\")"
+    end
+    if at == "nil"
+      return "\"nil\""
+    end
+    if at == "int_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_IntArray_inspect(" + val + ")"
+    end
+    if at == "float_array"
+      @needs_float_array = 1
+      @needs_string_helpers = 1
+      return "sp_FloatArray_inspect(" + val + ")"
+    end
+    if at == "str_array"
+      @needs_str_array = 1
+      @needs_string_helpers = 1
+      return "sp_StrArray_inspect(" + val + ")"
+    end
+    if at == "sym_array"
+      @needs_int_array = 1
+      @needs_string_helpers = 1
+      return "sp_SymArray_inspect(" + val + ")"
+    end
+    if at == "poly_array"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_PolyArray_inspect(" + val + ")"
+    end
+    if at == "poly"
+      @needs_rb_value = 1
+      @needs_string_helpers = 1
+      return "sp_poly_inspect(" + val + ")"
+    end
+    ""
+  end
+
+  # Kernel#p: for each argument, prints `arg.inspect` followed by a
+  # newline. Uses `compile_inspect_for` for types that implement inspect;
+  # falls back to puts-style output for types that don't yet (e.g.
+  # user-defined classes, ranges, hashes).
   def compile_p(nid)
     args_id = @nd_arguments[nid]
     if args_id < 0
@@ -19976,15 +20826,13 @@ class Compiler
       aid = arg_ids[k]
       at = infer_type(aid)
       val = compile_expr(aid)
-      if at == "symbol"
-        emit("  { putchar(':'); fputs(sp_sym_to_s(" + val + "), stdout); putchar('" + bsl_n + "'); }")
-      elsif at == "string" || at == "string?"
-        emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { putchar('\"'); fputs(_ps, stdout); putchar('\"'); putchar('" + bsl_n + "'); } else { fputs(\"nil\", stdout); putchar('" + bsl_n + "'); } }")
-      elsif at == "nil"
-        emit("  fputs(\"nil\\n\", stdout);")
-      else
-        # Fall back to puts-style output for this one argument
+      ins = compile_inspect_for(at, val)
+      if ins == ""
+        # No inspect implementation for this type — keep the historic
+        # behaviour so nothing regresses.
         compile_puts_single(aid, at, val)
+      else
+        emit("  fputs(" + ins + ", stdout); putchar('" + bsl_n + "');")
       end
       k = k + 1
     end
@@ -20006,7 +20854,7 @@ class Compiler
       return
     end
     if at == "float"
-      emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+      emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
       return
     end
     if at == "bool"
@@ -20061,7 +20909,7 @@ class Compiler
         emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
       else
         if at == "float"
-          emit("  printf(\"%g" + bsl_n + "\", " + val + ");")
+          emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
         else
           if at == "string" || at == "string?"
             emit("  { const char *_ps = (const char *)(" + val + "); if (_ps) { fputs(_ps, stdout); if (!*_ps || _ps[strlen(_ps)-1] != '" + bsl_n + "') putchar('" + bsl_n + "'); } else putchar('" + bsl_n + "'); }")
@@ -20085,6 +20933,8 @@ class Compiler
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) puts(sp_sym_to_s((sp_sym)_pa->data[_pa->start + _pi])); }")
                 elsif at == "int_array"
                   emit("  { sp_IntArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) printf(\"%lld" + bsl_n + "\", (long long)_pa->data[_pa->start + _pi]); }")
+                elsif at == "float_array"
+                  emit("  { sp_FloatArray *_pa = " + val + "; for (mrb_int _pi = 0; _pi < _pa->len; _pi++) { const char *_fs = sp_float_to_s(_pa->data[_pi]); fputs(_fs, stdout); putchar('" + bsl_n + "'); } }")
                 else
                   emit("  printf(\"%lld" + bsl_n + "\", (long long)" + val + ");")
                 end
@@ -20255,7 +21105,25 @@ class Compiler
     @in_loop = 1
     rt = infer_type(@nd_receiver[nid])
     rc = compile_expr_gc_rooted(@nd_receiver[nid])
-    obj_arg = compile_arg0(nid)
+    obj_ct = "mrb_int"
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      aargs = get_args(args_id)
+      if aargs.length > 0
+        obj_ct = c_type(infer_type(aargs[0]))
+      end
+    end
+    # Root the seed: it lives across every loop iteration, and any
+    # allocation inside the block can trigger a GC that would otherwise
+    # sweep the freshly constructed seed object before the loop ends.
+    obj_arg_nid = -1
+    if args_id >= 0
+      aargs2 = get_args(args_id)
+      if aargs2.length > 0
+        obj_arg_nid = aargs2[0]
+      end
+    end
+    obj_arg = compile_expr_gc_rooted(obj_arg_nid)
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
     if bp1 == ""
@@ -20264,18 +21132,28 @@ class Compiler
     if bp2 == ""
       bp2 = "_obj"
     end
+    # Outer-scope slot survives the inner `{}` so the expression form
+    # of each_with_object can still observe the final accumulator.
+    result = new_temp
+    emit("  " + obj_ct + " " + result + " = " + obj_arg + ";")
     tmp_i = new_temp
     if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array"
       pfx = array_c_prefix(rt)
-      emit("  lv_" + bp2 + " = " + obj_arg + ";")
+      emit("  {")
+      @indent = @indent + 1
+      emit("  " + obj_ct + " lv_" + bp2 + " = " + result + ";")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+      emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       compile_stmts_body(@nd_body[@nd_block[nid]])
       @indent = @indent - 1
       emit("  }")
+      emit("  " + result + " = lv_" + bp2 + ";")
+      @indent = @indent - 1
+      emit("  }")
     end
     @in_loop = old
+    result
   end
 
   def compile_each_with_index_block(nid)
@@ -20294,8 +21172,8 @@ class Compiler
     tmp = new_temp
     pfx = array_c_prefix(rt)
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
-    emit("    lv_" + bp2 + " = " + tmp + ";")
+    emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+    emit("    mrb_int lv_" + bp2 + " = " + tmp + ";")
     @indent = @indent + 1
     compile_stmts_body(@nd_body[@nd_block[nid]])
     @indent = @indent - 1
@@ -20321,7 +21199,7 @@ class Compiler
       pfx = array_c_prefix(rt)
       emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
       if has_bp == 1
-        emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+        emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
       end
       @indent = @indent + 1
       compile_stmts_body(@nd_body[@nd_block[nid]])
@@ -21319,7 +22197,7 @@ class Compiler
       @needs_gc = 1
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -21366,7 +22244,7 @@ class Compiler
     pfx = array_c_prefix(rt)
     tmp = new_temp
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
-    emit("    lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
+    emit("    " + c_type(elem_type_of_array(rt)) + " lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
     @indent = @indent + 1
     blk = @nd_block[nid]
     if blk >= 0
@@ -21397,7 +22275,7 @@ class Compiler
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       tmp_i = new_temp
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -21431,7 +22309,7 @@ class Compiler
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       tmp_i = new_temp
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22299,7 +23177,7 @@ class Compiler
     if rt == "int_array"
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22320,7 +23198,7 @@ class Compiler
       @needs_str_array = 1
       emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    const char *lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0
@@ -22356,7 +23234,7 @@ class Compiler
     if rt == "int_array" || rt == "sym_array"
       emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
-      emit("    lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
+      emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       blk = @nd_block[nid]
       if blk >= 0

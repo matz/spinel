@@ -11,6 +11,14 @@
 #include <string.h>
 #include <assert.h>
 
+/* GCC < 10 doesn't predefine __has_builtin, so #if expressions like
+   `defined(__GNUC__) || __has_builtin(...)` choke on the bare token.
+   Provide a no-op fallback so the || short-circuits cleanly on the
+   left when the compiler doesn't support __has_builtin (issue #55). */
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
 /* Basic mruby types */
 typedef int64_t mrb_int;
 typedef uint64_t mrb_uint;

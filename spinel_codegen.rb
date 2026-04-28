@@ -1667,7 +1667,7 @@ class Compiler
         if lt == "poly"
           return "poly"
         end
-        if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array"
+        if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array" || lt == "poly_array"
           return lt
         end
         if lt == "float"
@@ -13287,7 +13287,7 @@ class Compiler
         @needs_string_helpers = 1
         return "sp_poly_add(" + compile_expr(recv) + ", " + box_expr_to_poly(@nd_arguments[nid] >= 0 ? get_args(@nd_arguments[nid])[0] : -1) + ")"
       end
-      if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array"
+      if lt == "int_array" || lt == "str_array" || lt == "float_array" || lt == "sym_array" || lt == "poly_array"
         rc = compile_expr_gc_rooted(recv)
         arg = compile_arg0(nid)
         pfx = array_c_prefix(lt)

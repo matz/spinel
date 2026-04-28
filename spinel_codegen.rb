@@ -12294,13 +12294,17 @@ class Compiler
         last = stmts.last
         # Compile last as statement for side effects, then capture value
         last_type = infer_type(last)
-        if @nd_type[last] == "LocalVariableWriteNode" || @nd_type[last] == "LocalVariableOperatorWriteNode"
+        if last_type == "void"
+          # Side-effect-only stmt (puts, print, etc.) — compile_expr would drop the call
           compile_stmt(last)
-          last_val = compile_expr(last)
+          emit("  _fb->yielded_value = sp_box_nil();")
         else
+          if @nd_type[last] == "LocalVariableWriteNode" || @nd_type[last] == "LocalVariableOperatorWriteNode"
+            compile_stmt(last)
+          end
           last_val = compile_expr(last)
+          emit("  _fb->yielded_value = " + box_val_to_poly(last_val, last_type) + ";")
         end
-        emit("  _fb->yielded_value = " + box_val_to_poly(last_val, last_type) + ";")
       end
     end
     pop_scope
@@ -17068,6 +17072,18 @@ class Compiler
       while k < stmts.length
         compile_stmt(stmts[k])
         k = k + 1
+      end
+      return
+    end
+    if t == "ParenthesesNode"
+      body = @nd_body[nid]
+      if body >= 0
+        pstmts = get_stmts(body)
+        pk = 0
+        while pk < pstmts.length
+          compile_stmt(pstmts[pk])
+          pk = pk + 1
+        end
       end
       return
     end

@@ -586,6 +586,15 @@ static int flatten(pm_node_t *node) {
     if (n->name) { NAME("name", n->name); }
     break;
   }
+  case PM_BLOCK_ARGUMENT_NODE: {
+    /* `&expr` in call argument position. Wraps the expression that
+     * provides the proc to forward (typically a LocalVariableReadNode
+     * for a `&block`-captured param, or a SymbolNode for `&:to_s`). */
+    pm_block_argument_node_t *n = (pm_block_argument_node_t *)node;
+    N("BlockArgumentNode");
+    R("expression", n->expression);
+    break;
+  }
   case PM_BLOCK_LOCAL_VARIABLE_NODE: {
     pm_block_local_variable_node_t *n = (pm_block_local_variable_node_t *)node;
     N("BlockLocalVariableNode");

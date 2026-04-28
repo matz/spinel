@@ -697,11 +697,69 @@ class Compiler
   end
 
   # Returns 1 if @nd_block[nid] is a literal BlockNode (do/end body),
-  # 0 otherwise. Used by &block-forwarding call sites to decide
-  # whether to emit a proc literal for the trailing block slot.
+  # 0 otherwise. Pairs with find_block_arg to dispatch correctly at
+  # &block-forwarding call sites (literal block vs. `&proc_var`).
   def has_literal_block(nid)
     blk = @nd_block[nid]
     (blk >= 0 && @nd_type[blk] == "BlockNode") ? 1 : 0
+  end
+
+  # Returns the inner expression of a BlockArgumentNode whose payload
+  # is a captured proc local (the `&block` form). Returns -1 for
+  # absent block-arg, or for shapes the codegen doesn't yet forward
+  # — `&:sym` (SymbolNode) and `&nil` (NilNode), which would need
+  # symbol-to-proc / nil-as-no-block lowering. Call sites fall
+  # through to the no-block path in those cases.
+  def find_block_arg(nid)
+    blk = @nd_block[nid]
+    if blk < 0
+      return -1
+    end
+    if @nd_type[blk] != "BlockArgumentNode"
+      return -1
+    end
+    inner = @nd_expression[blk]
+    if inner < 0
+      return -1
+    end
+    if @nd_type[inner] != "LocalVariableReadNode"
+      return -1
+    end
+    inner
+  end
+
+  # Strip BlockArgumentNode entries from a positional-args id list.
+  # The block-arg is forwarded via the call's trailing &block slot,
+  # not as a positional, so it must not appear in the comma-separated
+  # arg list for the callee's regular params.
+  def strip_block_arg(arg_ids)
+    result = []
+    k = 0
+    while k < arg_ids.length
+      if @nd_type[arg_ids[k]] != "BlockArgumentNode"
+        result.push(arg_ids[k])
+      end
+      k = k + 1
+    end
+    result
+  end
+
+  # Resolves the call-site block-forwarding expression: returns the C
+  # expression for the proc to forward at a `&block`-taking call site
+  # (a literal block compiles to sp_proc_new(...); a `&proc_var` is
+  # the captured `sp_Proc *` local), or "" if the call site provides
+  # no block. Sets @needs_proc when a forwarded proc is emitted.
+  def block_forward_expr(nid)
+    if has_literal_block(nid) == 1
+      @needs_proc = 1
+      return compile_proc_literal(nid)
+    end
+    ba = find_block_arg(nid)
+    if ba >= 0
+      @needs_proc = 1
+      return compile_expr(ba)
+    end
+    ""
   end
 
   # Flatten a constant reference into an internal name.
@@ -13786,10 +13844,18 @@ class Compiler
         pk = pk + 1
       end
       if has_block_param == 1
-        if @nd_block[nid] >= 0
-          @needs_proc = 1
-          block_proc = compile_proc_literal(nid)
-          return "sp_" + sanitize_name(mname) + "(" + compile_call_args(nid) + ", " + block_proc + ")"
+        # Forward the call site's literal block or `&proc_var` into the
+        # callee's &block slot. Fall through when no block is given —
+        # `proc`-typed ptype is not a reliable &block marker
+        # (positional proc args also type as proc), so we only emit
+        # the trailing slot when block_forward_expr resolves non-empty.
+        block_proc = block_forward_expr(nid)
+        if block_proc != ""
+          ca = compile_call_args(nid)
+          if ca == ""
+            return "sp_" + sanitize_name(mname) + "(" + block_proc + ")"
+          end
+          return "sp_" + sanitize_name(mname) + "(" + ca + ", " + block_proc + ")"
         end
       end
       return "sp_" + sanitize_name(mname) + "(" + compile_call_args_with_defaults(nid, mi) + yargs + ")"
@@ -13884,10 +13950,8 @@ class Compiler
         end
         bp = ""
         if has_proc == 1
-          if has_literal_block(nid) == 1
-            @needs_proc = 1
-            bp = compile_proc_literal(nid)
-          else
+          bp = block_forward_expr(nid)
+          if bp == ""
             # The callee declares &block but the call site provides
             # none — fill the slot with NULL so the C call has the
             # right arity.
@@ -16766,14 +16830,11 @@ class Compiler
           end
           bp = ""
           if has_proc == 1
-            if has_literal_block(nid) == 1
-              @needs_proc = 1
-              bp = compile_proc_literal(nid)
-            else
+            bp = block_forward_expr(nid)
+            if bp == ""
               # The callee declares &block but the call site provides
               # none — fill the slot with NULL so the C call has the
-              # right arity (compile_typed_call_args has already been
-              # told to skip default-padding for this slot).
+              # right arity.
               bp = "0"
             end
           end
@@ -17154,7 +17215,7 @@ class Compiler
     args_id = @nd_arguments[nid]
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = strip_block_arg(get_args(args_id))
     end
     pnames = @meth_param_names[mi].split(",")
     ptypes = @meth_param_types[mi].split(",")
@@ -17446,7 +17507,7 @@ class Compiler
     if args_id < 0
       return ""
     end
-    arg_ids = get_args(args_id)
+    arg_ids = strip_block_arg(get_args(args_id))
     # Check if multiple args may trigger GC
     gc_count = 0
     k = 0
@@ -17514,7 +17575,7 @@ class Compiler
     args_id = @nd_arguments[nid]
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = strip_block_arg(get_args(args_id))
     end
     all_ptypes = @cls_meth_ptypes[target_ci].split("|")
     all_defaults = @cls_meth_defaults[target_ci].split("|")

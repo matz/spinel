@@ -18253,6 +18253,31 @@ class Compiler
     "0"
   end
 
+  # Map a Ruby class name to the C condition that checks a poly sp_RbVal `tmp`.
+  def poly_class_cond(cname, tmp)
+    if find_class_idx(cname) >= 0
+      return collect_matching_cls_cond(cname, tmp)
+    elsif cname == "Integer"
+      return tmp + ".tag == SP_TAG_INT"
+    elsif cname == "String"
+      return tmp + ".tag == SP_TAG_STR"
+    elsif cname == "Float"
+      return tmp + ".tag == SP_TAG_FLT"
+    elsif cname == "Symbol"
+      return tmp + ".tag == SP_TAG_SYM"
+    elsif cname == "NilClass"
+      return tmp + ".tag == SP_TAG_NIL"
+    elsif cname == "TrueClass"
+      return "(" + tmp + ".tag == SP_TAG_BOOL && " + tmp + ".v.b)"
+    elsif cname == "FalseClass"
+      return "(" + tmp + ".tag == SP_TAG_BOOL && !" + tmp + ".v.b)"
+    elsif cname == "Array"
+      return "(" + tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id < 0)"
+    else
+      return "0"
+    end
+  end
+
   # Build a C condition string that checks whether a poly sp_RbVal `tmp`
   # holds an instance of `target_cname` or any of its subclasses.
   def collect_matching_cls_cond(target_cname, tmp)
@@ -18311,44 +18336,7 @@ class Compiler
           end
         else
           if pred_type == "poly" && @nd_type[cid] == "ConstantReadNode"
-            cname = @nd_name[cid]
-            if find_class_idx(cname) >= 0
-              result = result + collect_matching_cls_cond(cname, tmp)
-            else
-              if cname == "Integer"
-                result = result + tmp + ".tag == SP_TAG_INT"
-              else
-                if cname == "String"
-                  result = result + tmp + ".tag == SP_TAG_STR"
-                else
-                  if cname == "Float"
-                    result = result + tmp + ".tag == SP_TAG_FLT"
-                  else
-                    if cname == "Symbol"
-                      result = result + tmp + ".tag == SP_TAG_SYM"
-                    else
-                      if cname == "NilClass"
-                        result = result + tmp + ".tag == SP_TAG_NIL"
-                      else
-                        if cname == "TrueClass"
-                          result = result + "(" + tmp + ".tag == SP_TAG_BOOL && " + tmp + ".v.b)"
-                        else
-                          if cname == "FalseClass"
-                            result = result + "(" + tmp + ".tag == SP_TAG_BOOL && !" + tmp + ".v.b)"
-                          else
-                            if cname == "Array"
-                              result = result + "(" + tmp + ".tag == SP_TAG_OBJ && " + tmp + ".cls_id < 0)"
-                            else
-                              result = result + "0"
-                            end
-                          end
-                        end
-                      end
-                    end
-                  end
-                end
-              end
-            end
+            result = result + poly_class_cond(@nd_name[cid], tmp)
           else
             if pred_type == "poly"
               result = result + poly_literal_cond(tmp, cid)

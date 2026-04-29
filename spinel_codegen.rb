@@ -9036,7 +9036,12 @@ class Compiler
         end
         pi = pi + 1
       end
-      emit_raw("  sp_re_pat_" + i.to_s + " = re_compile(\"" + cpat + "\", " + pat.length.to_s + ", " + flags + ");")
+      # Byte count, not character count — `re_compile` reads `pat`
+       # as a byte buffer, and a UTF-8 char class (`[₀₁₂…]`) has
+      # `pat.length < pat.bytesize`. Truncating to char count cuts
+      # off a multi-byte char mid-sequence and the engine reports
+      # "unterminated character class". Issue #61.
+      emit_raw("  sp_re_pat_" + i.to_s + " = re_compile(\"" + cpat + "\", " + pat.bytesize.to_s + ", " + flags + ");")
       i = i + 1
     end
     emit_raw("}")

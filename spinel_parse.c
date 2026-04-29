@@ -662,9 +662,14 @@ static int flatten(pm_node_t *node) {
     pm_multi_write_node_t *n = (pm_multi_write_node_t *)node;
     N("MultiWriteNode");
     A("lefts", &n->lefts);
+    if (n->rest) R("rest", n->rest);
+    A("rights", &n->rights);
     R("value", n->value);
     break;
   }
+  case PM_IMPLICIT_REST_NODE:
+    N("ImplicitRestNode");
+    break;
   case PM_LAMBDA_NODE: {
     pm_lambda_node_t *n = (pm_lambda_node_t *)node;
     N("LambdaNode");

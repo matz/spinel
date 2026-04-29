@@ -88,6 +88,7 @@ class Compiler
     @nd_conditions = "".split(",")
     @nd_exceptions = "".split(",")
     @nd_targets = "".split(",")
+    @nd_rights = "".split(",")
 
     @nd_count = 0
     @root_id = 0
@@ -357,6 +358,7 @@ class Compiler
     @nd_conditions.push("")
     @nd_exceptions.push("")
     @nd_targets.push("")
+    @nd_rights.push("")
     @nd_count = @nd_count + 1
     nid
   end
@@ -657,6 +659,9 @@ class Compiler
     end
     if field == "targets"
       @nd_targets[nid] = ids_str
+    end
+    if field == "rights"
+      @nd_rights[nid] = ids_str
     end
   end
 
@@ -3207,7 +3212,47 @@ class Compiler
     if is_tuple_type(rt) == 1
       return tuple_elem_type_at(rt, ti)
     end
+    # Array literal RHS: each target gets the precise element type so a
+    # heterogeneous literal like [1, "x", 2.0] doesn't force everything
+    # through the poly boxer.
+    if @nd_type[val_id] == "ArrayNode"
+      elems = parse_id_list(@nd_elements[val_id])
+      if ti < elems.length
+        return infer_type(elems[ti])
+      end
+    end
+    if rt == "str_array"
+      return "string"
+    end
+    if rt == "float_array"
+      return "float"
+    end
+    if rt == "sym_array"
+      return "symbol"
+    end
+    if is_ptr_array_type(rt) == 1
+      return ptr_array_elem_type(rt)
+    end
+    if rt == "poly_array"
+      return "poly"
+    end
     "int"
+  end
+
+  # Type for the splat target in `a, *b = rhs`. Returns the rhs's array
+  # type (so `b` is a typed-array of the same element type).
+  def splat_rest_type(val_id)
+    if val_id < 0
+      return "int_array"
+    end
+    rt = infer_type(val_id)
+    if rt == "int_array" || rt == "str_array" || rt == "float_array" || rt == "sym_array" || rt == "poly_array"
+      return rt
+    end
+    if is_ptr_array_type(rt) == 1
+      return rt
+    end
+    "int_array"
   end
 
   def is_splat_with_target(nid)
@@ -7965,6 +8010,48 @@ class Compiler
         end
         ti = ti + 1
       }
+      rest_id = @nd_rest[nid]
+      if is_splat_with_target(rest_id) == 1
+        st = @nd_expression[rest_id]
+        if @nd_type[st] == "LocalVariableTargetNode"
+          lname = @nd_name[st]
+          if not_in(lname, names) == 1
+            if not_in(lname, params) == 1
+              names.push(lname)
+              types.push(splat_rest_type(val_id))
+            end
+          end
+        end
+      end
+      rights2 = parse_id_list(@nd_rights[nid])
+      r_total = 0
+      if val_id >= 0 && @nd_type[val_id] == "ArrayNode"
+        r_total = parse_id_list(@nd_elements[val_id]).length
+      end
+      r_idx = 0
+      rights2.each { |tid|
+        if @nd_type[tid] == "LocalVariableTargetNode"
+          lname = @nd_name[tid]
+          if not_in(lname, names) == 1
+            if not_in(lname, params) == 1
+              names.push(lname)
+              # For an ArrayNode literal RHS we know each right's actual
+              # element index; use it so heterogeneous literals like
+              # [1, "x", 2.0] type each target precisely. Other RHS
+              # shapes use index 0 (typed-array element type is uniform).
+              t_idx = 0
+              if r_total > 0
+                t_idx = r_total - rights2.length + r_idx
+                if t_idx < 0
+                  t_idx = 0
+                end
+              end
+              types.push(multi_write_target_type(val_id, t_idx))
+            end
+          end
+        end
+        r_idx = r_idx + 1
+      }
     end
     # Recurse
     if @nd_body[nid] >= 0
@@ -9059,6 +9146,7 @@ class Compiler
     if check_ivar_write_list(@nd_stmts[nid]) == 1; return 1; end
     if check_ivar_write_list(@nd_elements[nid]) == 1; return 1; end
     if check_ivar_write_list(@nd_targets[nid]) == 1; return 1; end
+    if check_ivar_write_list(@nd_rights[nid]) == 1; return 1; end
     0
   end
 
@@ -9335,6 +9423,8 @@ class Compiler
     r = check_setter_on_params_list(@nd_elements[nid], param_names)
     if r != ""; return r; end
     r = check_setter_on_params_list(@nd_targets[nid], param_names)
+    if r != ""; return r; end
+    r = check_setter_on_params_list(@nd_rights[nid], param_names)
     if r != ""; return r; end
     ""
   end
@@ -10938,6 +11028,48 @@ class Compiler
           end
         end
         ti2 = ti2 + 1
+      }
+      rest_id2 = @nd_rest[nid]
+      if is_splat_with_target(rest_id2) == 1
+        st = @nd_expression[rest_id2]
+        if @nd_type[st] == "LocalVariableTargetNode"
+          lname = @nd_name[st]
+          if not_in(lname, names) == 1
+            if not_in(lname, params) == 1
+              names.push(lname)
+              types.push(splat_rest_type(val_id2))
+              @scan_literal_flags.push("")
+              @scan_empty_flags.push("")
+            end
+          end
+        end
+      end
+      rights3 = parse_id_list(@nd_rights[nid])
+      r_total2 = 0
+      if val_id2 >= 0 && @nd_type[val_id2] == "ArrayNode"
+        r_total2 = parse_id_list(@nd_elements[val_id2]).length
+      end
+      r_idx2 = 0
+      rights3.each { |tid|
+        if @nd_type[tid] == "LocalVariableTargetNode"
+          lname = @nd_name[tid]
+          if not_in(lname, names) == 1
+            if not_in(lname, params) == 1
+              names.push(lname)
+              t_idx2 = 0
+              if r_total2 > 0
+                t_idx2 = r_total2 - rights3.length + r_idx2
+                if t_idx2 < 0
+                  t_idx2 = 0
+                end
+              end
+              types.push(multi_write_target_type(val_id2, t_idx2))
+              @scan_literal_flags.push("")
+              @scan_empty_flags.push("")
+            end
+          end
+        end
+        r_idx2 = r_idx2 + 1
       }
       if @nd_expression[nid] >= 0
         scan_locals(@nd_expression[nid], names, types, params)
@@ -16788,6 +16920,34 @@ class Compiler
     "(" + lc + " " + op + " " + rc + ")"
   end
 
+  # Box an already-compiled value of static type `at` into an sp_RbVal.
+  # Mirrors box_expr_to_poly but operates on a raw (type, value) pair so
+  # callers that already have temps don't have to re-emit the expr.
+  def box_value_to_poly(at, val)
+    if at == "poly"
+      return val
+    end
+    if at == "int"
+      return "sp_box_int(" + val + ")"
+    end
+    if at == "string"
+      return "sp_box_str(" + val + ")"
+    end
+    if at == "float"
+      return "sp_box_float(" + val + ")"
+    end
+    if at == "bool"
+      return "sp_box_bool(" + val + ")"
+    end
+    if at == "nil"
+      return "sp_box_nil()"
+    end
+    if at == "symbol"
+      return "sp_box_sym(" + val + ")"
+    end
+    "sp_box_int(" + val + ")"
+  end
+
   def box_expr_to_poly(nid)
     at = infer_type(nid)
     val = compile_expr(nid)
@@ -18189,10 +18349,196 @@ class Compiler
     return
   end
 
+  # Emit assignment of `value_expr` to a single MultiWrite target node
+  # (LocalVariableTargetNode or InstanceVariableTargetNode). Centralized
+  # so the splat path doesn't have to duplicate the InstanceVariable
+  # special-cases (module-method-promoted ivar handling).
+  # Assign `value_expr` (whose static C type is `value_type`) into the
+  # multi-write target node. When the local target's slot is `poly` and
+  # the source value isn't already boxed, the value is boxed first so a
+  # heterogeneous RHS like `a, b, c = [1, "b", 2.0]` lands in the right
+  # tagged-union slots.
+  def emit_multi_write_target(tid, value_expr, value_type)
+    if @nd_type[tid] == "LocalVariableTargetNode"
+      lname = @nd_name[tid]
+      vt = find_var_type(lname)
+      v = value_expr
+      if vt == "poly" && value_type != "" && value_type != "poly"
+        v = box_value_to_poly(value_type, value_expr)
+      end
+      emit("  " + fiber_var_ref(lname) + " = " + v + ";")
+      return
+    end
+    if @nd_type[tid] == "InstanceVariableTargetNode"
+      iname = @nd_name[tid]
+      mod_ivar = 0
+      mi3 = 0
+      while mi3 < @module_names.length
+        mmod = @module_names[mi3]
+        if mmod != ""
+          if @current_method_name.start_with?(mmod + "_cls_")
+            cname3 = mmod + "_" + iname[1, iname.length - 1]
+            ci3 = find_const_idx(cname3)
+            if ci3 >= 0
+              emit("  cst_" + cname3 + " = " + value_expr + ";")
+              mod_ivar = 1
+            end
+          end
+        end
+        mi3 = mi3 + 1
+      end
+      if mod_ivar == 0
+        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + value_expr + ";")
+      end
+    end
+  end
+
+  # Handle `a, *b = rhs` / `*a, b = rhs` / `a, *b, c = rhs`.
+  # `lefts` are pre-splat targets, `rest_id` is the SplatNode (its
+  # expression is the splat target), `rights` are post-splat targets.
+  def compile_multi_write_splat(lefts, rest_id, rights, val_id)
+    splat_target = @nd_expression[rest_id]
+    nleft = lefts.length
+    nright = rights.length
+
+    # ArrayNode literal RHS — split statically.
+    if @nd_type[val_id] == "ArrayNode"
+      elems = parse_id_list(@nd_elements[val_id])
+      n = elems.length
+      # Evaluate all RHS into temps first (swap-safe).
+      tmps = "".split(",")
+      ttypes = "".split(",")
+      k = 0
+      while k < n
+        tmp = new_temp
+        tmps.push(tmp)
+        et = infer_type(elems[k])
+        ttypes.push(et)
+        emit("  " + c_type(et) + " " + tmp + " = " + compile_expr(elems[k]) + ";")
+        k = k + 1
+      end
+      # Pre-splat targets get the first `nleft` temps.
+      k = 0
+      while k < nleft
+        if k < n
+          emit_multi_write_target(lefts[k], tmps[k], ttypes[k])
+        end
+        k = k + 1
+      end
+      # Splat target receives a fresh array of the matching element type.
+      mid_count = n - nleft - nright
+      if mid_count < 0
+        mid_count = 0
+      end
+      st_type = splat_rest_type(val_id)
+      st_tmp = new_temp
+      @needs_gc = 1
+      if st_type == "str_array"
+        @needs_str_array = 1
+        emit("  sp_StrArray *" + st_tmp + " = sp_StrArray_new();")
+        k = 0
+        while k < mid_count
+          emit("  sp_StrArray_push(" + st_tmp + ", " + tmps[nleft + k] + ");")
+          k = k + 1
+        end
+      elsif st_type == "float_array"
+        @needs_float_array = 1
+        emit("  sp_FloatArray *" + st_tmp + " = sp_FloatArray_new();")
+        k = 0
+        while k < mid_count
+          emit("  sp_FloatArray_push(" + st_tmp + ", " + tmps[nleft + k] + ");")
+          k = k + 1
+        end
+      elsif is_ptr_array_type(st_type) == 1
+        emit("  sp_PtrArray *" + st_tmp + " = sp_PtrArray_new();")
+        k = 0
+        while k < mid_count
+          emit("  sp_PtrArray_push(" + st_tmp + ", " + tmps[nleft + k] + ");")
+          k = k + 1
+        end
+      elsif st_type == "poly_array"
+        emit("  sp_PolyArray *" + st_tmp + " = sp_PolyArray_new();")
+        k = 0
+        while k < mid_count
+          boxed = box_value_to_poly(ttypes[nleft + k], tmps[nleft + k])
+          emit("  sp_PolyArray_push(" + st_tmp + ", " + boxed + ");")
+          k = k + 1
+        end
+      else
+        # int_array / sym_array share IntArray storage via mrb_int
+        # reinterpretation at compile time.
+        @needs_int_array = 1
+        emit("  sp_IntArray *" + st_tmp + " = sp_IntArray_new();")
+        k = 0
+        while k < mid_count
+          emit("  sp_IntArray_push(" + st_tmp + ", (mrb_int)" + tmps[nleft + k] + ");")
+          k = k + 1
+        end
+      end
+      emit_multi_write_target(splat_target, st_tmp, st_type)
+      # Post-splat targets get the trailing temps.
+      k = 0
+      while k < nright
+        idx = n - nright + k
+        if idx >= 0 && idx < n
+          emit_multi_write_target(rights[k], tmps[idx], ttypes[idx])
+        end
+        k = k + 1
+      end
+      return
+    end
+
+    # Generic typed-array RHS — slice at runtime.
+    rt = infer_type(val_id)
+    @needs_gc = 1
+    tmp = new_temp
+    emit("  " + c_type(rt) + " " + tmp + " = " + compile_expr(val_id) + ";")
+    emit("  SP_GC_ROOT(" + tmp + ");")
+    len_tmp = new_temp
+    emit("  mrb_int " + len_tmp + " = " + length_c_expr(rt, tmp) + ";")
+    # Pre-splat targets.
+    get_fn = "sp_IntArray_get"
+    slice_fn = "sp_IntArray_slice"
+    if rt == "str_array"
+      get_fn = "sp_StrArray_get"
+      slice_fn = "sp_StrArray_slice"
+    end
+    if rt == "float_array"
+      get_fn = "sp_FloatArray_get"
+      slice_fn = "sp_FloatArray_slice"
+    end
+    if is_ptr_array_type(rt) == 1
+      get_fn = "sp_PtrArray_get"
+      slice_fn = "sp_PtrArray_slice"
+    end
+    elem_t = elem_type_of_array(rt)
+    k = 0
+    while k < nleft
+      emit_multi_write_target(lefts[k], get_fn + "(" + tmp + ", " + k.to_s + ")", elem_t)
+      k = k + 1
+    end
+    # Splat target gets a runtime slice.
+    mid_len = len_tmp + " - " + (nleft + nright).to_s
+    emit_multi_write_target(splat_target, slice_fn + "(" + tmp + ", " + nleft.to_s + ", " + mid_len + ")", rt)
+    # Post-splat targets.
+    k = 0
+    while k < nright
+      offset_expr = len_tmp + " - " + (nright - k).to_s
+      emit_multi_write_target(rights[k], get_fn + "(" + tmp + ", " + offset_expr + ")", elem_t)
+      k = k + 1
+    end
+  end
+
   def compile_multi_write(nid)
     targets = parse_id_list(@nd_targets[nid])
     val_id = @nd_expression[nid]
     if val_id < 0
+      return
+    end
+    rest_id = @nd_rest[nid]
+    if is_splat_with_target(rest_id) == 1
+      rights = parse_id_list(@nd_rights[nid])
+      compile_multi_write_splat(targets, rest_id, rights, val_id)
       return
     end
     if @nd_type[val_id] == "ArrayNode"
@@ -18200,45 +18546,21 @@ class Compiler
       elems = parse_id_list(@nd_elements[val_id])
       # For swap safety, evaluate all RHS first into temps
       tmps = "".split(",")
+      ttypes_lit = "".split(",")
       k = 0
       while k < elems.length
         tmp = new_temp
         tmps.push(tmp)
         et = infer_type(elems[k])
+        ttypes_lit.push(et)
         emit("  " + c_type(et) + " " + tmp + " = " + compile_expr(elems[k]) + ";")
         k = k + 1
       end
-      # Now assign
+      # Now assign — emit_multi_write_target boxes when target slot is poly.
       k = 0
       while k < targets.length
         if k < tmps.length
-          tid = targets[k]
-          if @nd_type[tid] == "LocalVariableTargetNode"
-            emit("  " + fiber_var_ref(@nd_name[tid]) + " = " + tmps[k] + ";")
-          end
-          if @nd_type[tid] == "InstanceVariableTargetNode"
-            iname = @nd_name[tid]
-            # Check if in module method
-            mod_ivar = 0
-            mi3 = 0
-            while mi3 < @module_names.length
-              mmod = @module_names[mi3]
-              if mmod != ""
-                if @current_method_name.start_with?(mmod + "_cls_")
-                  cname3 = mmod + "_" + iname[1, iname.length - 1]
-                  ci3 = find_const_idx(cname3)
-                  if ci3 >= 0
-                    emit("  cst_" + cname3 + " = " + tmps[k] + ";")
-                    mod_ivar = 1
-                  end
-                end
-              end
-              mi3 = mi3 + 1
-            end
-            if mod_ivar == 0
-              emit("  " + self_arrow + sanitize_ivar(iname) + " = " + tmps[k] + ";")
-            end
-          end
+          emit_multi_write_target(targets[k], tmps[k], ttypes_lit[k])
         end
         k = k + 1
       end

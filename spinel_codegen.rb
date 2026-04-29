@@ -179,7 +179,6 @@ class Compiler
     @needs_str_poly_hash = 0
     @needs_sym_poly_hash = 0
     @needs_sym_intern = 0
-    @needs_string_helpers = 0
     @needs_setjmp = 0
     @needs_file_io = 0
     @needs_mutable_str = 0
@@ -7050,7 +7049,6 @@ class Compiler
     end
     if t == "InterpolatedXStringNode"
       @needs_file_io = 1
-      @needs_string_helpers = 1
     end
     if t == "RegularExpressionNode"
       @needs_regexp = 1
@@ -7114,10 +7112,8 @@ class Compiler
       @needs_str_array = 1
     end
     if t == "InterpolatedStringNode"
-      @needs_string_helpers = 1
     end
     if t == "SymbolNode"
-      @needs_string_helpers = 1
     end
     if t == "GlobalVariableWriteNode"
       gname = @nd_name[nid]
@@ -7159,14 +7155,12 @@ class Compiler
          mname == "gsub" || mname == "index" || mname == "sub" || mname == "tr" ||
          mname == "ljust" || mname == "rjust" || mname == "capitalize" ||
          mname == "count" || mname == "<<"
-        @needs_string_helpers = 1
       end
       if mname == "rand" || mname == "srand" || mname == "sample" ||
          mname == "shuffle" || mname == "shuffle!"
         @needs_rand = 1
       end
       if mname == "split"
-        @needs_string_helpers = 1
         @needs_str_array = 1
         @needs_gc = 1
       end
@@ -7183,7 +7177,6 @@ class Compiler
         if @nd_receiver[nid] >= 0
           rt = infer_type(@nd_receiver[nid])
           if rt == "string"
-            @needs_string_helpers = 1
             # Long string concat chains emit SP_GC_ROOT temps, so the
             # enclosing function needs SP_GC_SAVE() in its header.
             if mname == "+"
@@ -7193,7 +7186,6 @@ class Compiler
         end
       end
       if mname == "[]"
-        @needs_string_helpers = 1
       end
       if mname == "new"
         if @nd_receiver[nid] >= 0
@@ -7307,10 +7299,8 @@ class Compiler
           if rn == "File"
             @needs_file_io = 1
             if mname == "join"
-              @needs_string_helpers = 1
             end
             if mname == "basename"
-              @needs_string_helpers = 1
             end
           end
         end
@@ -12414,7 +12404,6 @@ class Compiler
     end
     if t == "InterpolatedXStringNode"
       @needs_file_io = 1
-      @needs_string_helpers = 1
       interp = compile_interpolated(nid)
       return "sp_backtick(" + interp + ")"
     end
@@ -12627,7 +12616,6 @@ class Compiler
   end
 
   def compile_interpolated(nid)
-    @needs_string_helpers = 1
     parts = parse_id_list(@nd_parts[nid])
     if parts.length == 0
       return "(&(\"\\xff\")[1])"
@@ -13682,11 +13670,9 @@ class Compiler
       return "0"
     end
     if mname == "format"
-      @needs_string_helpers = 1
       return compile_sprintf_call(nid)
     end
     if mname == "sprintf"
-      @needs_string_helpers = 1
       return compile_sprintf_call(nid)
     end
     if mname == "putc"
@@ -13734,7 +13720,6 @@ class Compiler
     if st != ""
       # Redirect as self.mname - string methods
       if st == "string"
-        @needs_string_helpers = 1
         if mname == "upcase"
           return "sp_str_upcase(self)"
         end
@@ -13775,7 +13760,6 @@ class Compiler
       # int methods
       if st == "int"
         if mname == "to_s"
-          @needs_string_helpers = 1
           return "sp_int_to_s(self)"
         end
         if mname == "to_f"
@@ -13791,7 +13775,6 @@ class Compiler
           return "(mrb_int)(self)"
         end
         if mname == "to_s"
-          @needs_string_helpers = 1
           return "sp_float_to_s(self)"
         end
       end
@@ -13977,10 +13960,8 @@ class Compiler
             if at == "string"
               parts.push(compile_expr(aargs[0]))
             elsif at == "int"
-              @needs_string_helpers = 1
               parts.push("sp_int_to_s(" + compile_expr(aargs[0]) + ")")
             elsif at == "float"
-              @needs_string_helpers = 1
               parts.push("sp_float_to_s(" + compile_expr(aargs[0]) + ")")
             else
               parts.push(compile_expr(aargs[0]))
@@ -14058,11 +14039,9 @@ class Compiler
     if mname == "+"
       lt = infer_type(recv)
       if lt == "mutable_str"
-        @needs_string_helpers = 1
         return "sp_str_concat(" + compile_expr(recv) + "->data, " + compile_arg0(nid) + ")"
       end
       if lt == "string"
-        @needs_string_helpers = 1
         # Flatten chained string concat: a + b + c → sp_str_concat3(a,b,c)
         parts = collect_concat_chain(nid)
         if parts.length == 3
@@ -14104,7 +14083,6 @@ class Compiler
       end
       if lt == "poly"
         @needs_rb_value = 1
-        @needs_string_helpers = 1
         return "sp_poly_add(" + compile_expr(recv) + ", " + box_expr_to_poly(@nd_arguments[nid] >= 0 ? get_args(@nd_arguments[nid])[0] : -1) + ")"
       end
       if is_array_type(lt) == 1
@@ -14135,7 +14113,6 @@ class Compiler
     if mname == "*"
       lt = infer_type(recv)
       if lt == "string"
-        @needs_string_helpers = 1
         return "sp_str_repeat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
       end
       if lt == "poly"
@@ -14351,7 +14328,6 @@ class Compiler
         return "(sp_String_append(" + rc + ", " + val + "), " + rc + ")"
       end
       if lt == "string"
-        @needs_string_helpers = 1
         return "sp_str_concat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
       end
       return "(" + compile_expr(recv) + " << " + compile_arg0(nid) + ")"
@@ -14600,7 +14576,6 @@ class Compiler
   end
 
   def compile_string_method_expr(nid, mname, rc)
-    @needs_string_helpers = 1
     if mname == "length"
       # Only use hoisted length if the receiver matches (otherwise we'd
       # return the wrong string's length).
@@ -14862,7 +14837,6 @@ class Compiler
       return fn + "(" + lprefix + ", " + compile_arg0(nid) + ", 1)"
     end
     if mname == "reverse"
-      @needs_string_helpers = 1
       return "sp_str_reverse(" + rc + ")"
     end
     if mname == "freeze"
@@ -15050,7 +15024,6 @@ class Compiler
       return rc
     end
     if mname == "inspect"
-      @needs_string_helpers = 1
       return "sp_str_concat(\":\", sp_sym_to_s(" + rc + "))"
     end
     if mname == "length" || mname == "size"
@@ -15110,7 +15083,6 @@ class Compiler
 
   def compile_int_method_expr(nid, mname, rc)
     if mname == "to_s"
-      @needs_string_helpers = 1
       if @nd_arguments[nid] >= 0
         aargs = get_args(@nd_arguments[nid])
         if aargs.length > 0
@@ -15188,7 +15160,6 @@ class Compiler
       return "TRUE"
     end
     if mname == "chr"
-      @needs_string_helpers = 1
       return "sp_int_chr(" + rc + ")"
     end
     if mname == "succ" || mname == "next"
@@ -15205,7 +15176,6 @@ class Compiler
       return rc
     end
     if mname == "to_s"
-      @needs_string_helpers = 1
       return "sp_float_to_s(" + rc + ")"
     end
     if mname == "inspect"
@@ -15673,7 +15643,6 @@ class Compiler
         return "sp_IntArray_uniq(" + rc + ")"
       end
       if mname == "join"
-        @needs_string_helpers = 1
         jarg = compile_arg0(nid)
         if jarg == "0"
           jarg = "\"\""
@@ -15884,7 +15853,6 @@ class Compiler
         return "sp_StrArray_get(" + rc + ", sp_StrArray_length(" + rc + ") - 1)"
       end
       if mname == "join"
-        @needs_string_helpers = 1
         jarg = compile_arg0(nid)
         if jarg == "0"
           jarg = "\"\""
@@ -16420,7 +16388,6 @@ class Compiler
           return "(sp_file_delete(" + compile_arg0(nid) + "), 0)"
         end
         if mname == "join"
-          @needs_string_helpers = 1
           args_id = @nd_arguments[nid]
           if args_id >= 0
             arg_ids = get_args(args_id)
@@ -16431,7 +16398,6 @@ class Compiler
           return "\"\""
         end
         if mname == "basename"
-          @needs_string_helpers = 1
           return "sp_file_basename(" + compile_arg0(nid) + ")"
         end
       end
@@ -17658,7 +17624,6 @@ class Compiler
     end
     if ht == "str_str_hash"
       @needs_str_str_hash = 1
-      @needs_string_helpers = 1
       tmp = new_temp
       emit("  sp_StrStrHash *" + tmp + " = sp_StrStrHash_new();")
       elems.each { |el|
@@ -17905,7 +17870,6 @@ class Compiler
       end
       if op == "+"
         if vt == "string" && infer_type(@nd_expression[nid]) == "string"
-          @needs_string_helpers = 1
           emit("  " + vref + " = sp_str_concat(" + vref + ", " + val + ");")
         else
           emit("  " + vref + " += " + val + ";")
@@ -19005,7 +18969,6 @@ class Compiler
           return 1
         end
         if rt == "string"
-          @needs_string_helpers = 1
           rc = compile_expr_gc_rooted(recv)
           val = compile_arg0(nid)
           # If receiver is a local variable, reassign
@@ -19328,7 +19291,6 @@ class Compiler
             bp = "_c"
           end
           declare_var(bp, "string")
-          @needs_string_helpers = 1
           tmp = new_temp
           src = rc
           if rt == "mutable_str"
@@ -22644,7 +22606,6 @@ class Compiler
   end
 
   def compile_sprintf_call(nid)
-    @needs_string_helpers = 1
     args_id = @nd_arguments[nid]
     if args_id < 0
       return "\"\""

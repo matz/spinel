@@ -843,6 +843,33 @@ class Compiler
     0
   end
 
+  # Constant names the codegen recognises as legitimate even when no
+  # user-defined class / module / constant of the same name exists.
+  # These are dispatcher-handled module-like receivers (Math, File,
+  # ENV, Dir, Time, Process, IO), the global ARGV, the built-in type
+  # names used in `is_a?` / `case`/`when` arms, and a handful of
+  # exception classes referenced by `raise` / `rescue` patterns.
+  def is_known_constant_name(name)
+    if const_namespace_exists(name) == 1
+      return 1
+    end
+    if name == "ARGV" || name == "ENV" || name == "STDIN" || name == "STDOUT" || name == "STDERR"
+      return 1
+    end
+    if name == "Math" || name == "File" || name == "Dir" || name == "Time" || name == "IO" || name == "Process" || name == "Kernel" || name == "Comparable" || name == "Enumerable"
+      return 1
+    end
+    if name == "Object" || name == "Integer" || name == "String" || name == "Float" || name == "Symbol" || name == "Array" || name == "Hash" || name == "Range" || name == "Numeric" || name == "TrueClass" || name == "FalseClass" || name == "NilClass" || name == "Proc" || name == "Lambda" || name == "Regexp" || name == "MatchData" || name == "StringIO" || name == "Fiber"
+      return 1
+    end
+    # Common exception classes referenced by raise / rescue. We
+    # don't model the exception hierarchy beyond name-tagging.
+    if name == "StandardError" || name == "RuntimeError" || name == "ArgumentError" || name == "TypeError" || name == "NameError" || name == "NoMethodError" || name == "IndexError" || name == "KeyError" || name == "ZeroDivisionError" || name == "FloatDomainError" || name == "RangeError" || name == "IOError" || name == "Errno" || name == "NotImplementedError" || name == "StopIteration" || name == "RegexpError" || name == "FrozenError" || name == "LocalJumpError" || name == "Exception"
+      return 1
+    end
+    0
+  end
+
   def current_lexical_scope_name
     if @current_lexical_scope != ""
       return @current_lexical_scope
@@ -12592,6 +12619,17 @@ class Compiler
           return lv
         end
         return "cst_" + rname
+      end
+      # Built-in module-like constants (Math, File, ENV, …) and
+      # registered classes / modules legitimately reach here as a
+      # method-call receiver and don't need their own value at the
+      # use site. Any other unresolved constant means the user wrote
+      # a name we don't know about — reject it now with a clear
+      # NameError-style message instead of emitting a bare C
+      # identifier that the C compiler later trips over (issue #75).
+      if is_known_constant_name(rname) == 0
+        $stderr.puts "Error: uninitialized constant " + rname
+        exit(1)
       end
       return rname
     end

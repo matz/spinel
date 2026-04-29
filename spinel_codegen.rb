@@ -16147,21 +16147,20 @@ class Compiler
               mref = @nd_name[arg_ids[0]]
             end
             recv_cname = recv_t[4, recv_t.length - 4]
-            # Verify the method actually exists on the receiver's class
-            # (or any ancestor). Optcarrot has registration sites like
-            # `@pulse_0.method(:poke_2)` where Pulse — the inferred
-            # type — doesn't define poke_2; in Ruby the resulting
-            # NoMethodError surfaces only when that BM is invoked,
-            # which (for an address-mapping table) may never happen.
-            # Emitting `&sp_Pulse_poke_2` regardless leaves an
-            # unresolved symbol the linker rejects. Fall back to a
-            # null fn_ptr — safe as long as the BM isn't called.
-            recv_ci = find_class_idx(recv_cname)
-            method_exists = 0
-            walker_ci = recv_ci
-            while walker_ci >= 0 && method_exists == 0
+            # Walk the inheritance chain to find which class actually
+            # defines `mref`. The C function symbol for an inherited
+            # method lives under the *defining* class (`sp_Parent_foo`),
+            # not the receiver's own name (`sp_Child_foo`). Without
+            # this walk a `Noise.method(:poke_0)` where Noise inherits
+            # poke_0 from Oscillator emitted `&sp_Noise_poke_0` and
+            # the linker rejected the unresolved symbol. If no
+            # ancestor defines the method, fall back to a null
+            # fn_ptr — Ruby's NoMethodError-on-invoke equivalent.
+            owner_cname = ""
+            walker_ci = find_class_idx(recv_cname)
+            while walker_ci >= 0 && owner_cname == ""
               if cls_find_method_direct(walker_ci, mref) >= 0
-                method_exists = 1
+                owner_cname = @cls_names[walker_ci]
               else
                 if @cls_parents[walker_ci] != ""
                   walker_ci = find_class_idx(@cls_parents[walker_ci])
@@ -16171,8 +16170,8 @@ class Compiler
               end
             end
             rc = compile_expr(recv)
-            if method_exists == 1
-              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)(uintptr_t)&sp_" + recv_cname + "_" + mref + ")"
+            if owner_cname != ""
+              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)(uintptr_t)&sp_" + owner_cname + "_" + mref + ")"
             else
               return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)0)"
             end

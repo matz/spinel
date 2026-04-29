@@ -13586,7 +13586,6 @@ class Compiler
         bp = ""
         if has_proc == 1
           if has_literal_block(nid) == 1
-            @needs_proc = 1
             bp = compile_proc_literal(nid)
           else
             # The callee declares &block but the call site provides
@@ -16441,7 +16440,6 @@ class Compiler
           bp = ""
           if has_proc == 1
             if has_literal_block(nid) == 1
-              @needs_proc = 1
               bp = compile_proc_literal(nid)
             else
               # The callee declares &block but the call site provides

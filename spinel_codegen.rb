@@ -16647,10 +16647,29 @@ class Compiler
           if mref == ""
             mref = @nd_name[arg_ids[0]]
           end
-          # No receiver, inside a class body: bind to `self`.
+          # No receiver, inside a class body: bind to `self`. Use the
+          # same inheritance-walk logic as the obj-recv path so the
+          # symbol points at the defining class and missing methods
+          # fall back to a null fn_ptr instead of a link error.
           if @current_class_idx >= 0
-            cls_for_bm = @cls_names[@current_class_idx]
-            return "sp_Method_new((sp_Method *)self, (mrb_int)(uintptr_t)&sp_" + cls_for_bm + "_" + mref + ")"
+            owner_cname2 = ""
+            walker_ci2 = @current_class_idx
+            while walker_ci2 >= 0 && owner_cname2 == ""
+              if cls_find_method_direct(walker_ci2, mref) >= 0
+                owner_cname2 = @cls_names[walker_ci2]
+              else
+                if @cls_parents[walker_ci2] != ""
+                  walker_ci2 = find_class_idx(@cls_parents[walker_ci2])
+                else
+                  walker_ci2 = -1
+                end
+              end
+            end
+            if owner_cname2 != ""
+              return "sp_Method_new((sp_Method *)self, (mrb_int)(uintptr_t)&sp_" + owner_cname2 + "_" + mref + ")"
+            else
+              return "sp_Method_new((sp_Method *)self, (mrb_int)0)"
+            end
           end
           # Top-level: keep the static-alias placeholder. Calls like
           # `m = method(:foo); m.call(x)` are rewritten in the

@@ -744,6 +744,17 @@ class Compiler
       @needs_proc = 1
       return compile_proc_literal(nid)
     end
+    # Anonymous `&` forwarding (Ruby 3.1+): `inner(&)` where the
+    # enclosing method declared `def outer(&)`. The BlockArgumentNode
+    # carries no expression, so `find_block_arg` returns -1; we forward
+    # the enclosing method's anon-block param directly.
+    blk = @nd_block[nid]
+    if blk >= 0 && @nd_type[blk] == "BlockArgumentNode" && @nd_expression[blk] < 0
+      if @current_method_block_param != ""
+        @needs_proc = 1
+        return "lv_" + @current_method_block_param
+      end
+    end
     ba = find_block_arg(nid)
     if ba >= 0
       @needs_proc = 1
@@ -4332,7 +4343,16 @@ class Compiler
         if result != ""
           result = result + ","
         end
-        result = result + @nd_name[blk]
+        # Anonymous `&` (Ruby 3.1+) — `def m(&); inner(&); end` —
+        # produces a BlockParameterNode with no name. Synthesize a
+        # stable internal name so the param gets a proper `lv_` slot
+        # and downstream lookups (find_block_param_name,
+        # @current_method_block_param) work the same as for `&block`.
+        bn = @nd_name[blk]
+        if bn == ""
+          bn = "__anon_block"
+        end
+        result = result + bn
       end
     end
     result

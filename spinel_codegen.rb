@@ -16147,8 +16147,35 @@ class Compiler
               mref = @nd_name[arg_ids[0]]
             end
             recv_cname = recv_t[4, recv_t.length - 4]
+            # Verify the method actually exists on the receiver's class
+            # (or any ancestor). Optcarrot has registration sites like
+            # `@pulse_0.method(:poke_2)` where Pulse — the inferred
+            # type — doesn't define poke_2; in Ruby the resulting
+            # NoMethodError surfaces only when that BM is invoked,
+            # which (for an address-mapping table) may never happen.
+            # Emitting `&sp_Pulse_poke_2` regardless leaves an
+            # unresolved symbol the linker rejects. Fall back to a
+            # null fn_ptr — safe as long as the BM isn't called.
+            recv_ci = find_class_idx(recv_cname)
+            method_exists = 0
+            walker_ci = recv_ci
+            while walker_ci >= 0 && method_exists == 0
+              if cls_find_method_direct(walker_ci, mref) >= 0
+                method_exists = 1
+              else
+                if @cls_parents[walker_ci] != ""
+                  walker_ci = find_class_idx(@cls_parents[walker_ci])
+                else
+                  walker_ci = -1
+                end
+              end
+            end
             rc = compile_expr(recv)
-            return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)(uintptr_t)&sp_" + recv_cname + "_" + mref + ")"
+            if method_exists == 1
+              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)(uintptr_t)&sp_" + recv_cname + "_" + mref + ")"
+            else
+              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)0)"
+            end
           end
         end
       end

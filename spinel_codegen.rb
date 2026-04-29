@@ -14288,7 +14288,18 @@ class Compiler
         # Check if it's a proc variable
         vt = find_var_type(rname)
         if vt == "proc"
-          return "sp_proc_call(lv_" + rname + ", " + compile_arg0(nid) + ")"
+          # Pack the call-site args into a stack-allocated mrb_int array
+          # (C99 compound literal) so a single `sp_proc_call(p, args)`
+          # helper covers any arity. The proc fn unpacks args[i] into
+          # named locals at function entry. compile_call_args returns
+          # "" for zero args; pad with "0" so the array has at least
+          # one slot (the proc fn's `_unused` fallback expects args[0]
+          # to be addressable).
+          ca = compile_call_args(nid)
+          if ca == ""
+            ca = "0"
+          end
+          return "sp_proc_call(lv_" + rname + ", (mrb_int[]){" + ca + "})"
         end
       end
     end
@@ -21723,14 +21734,38 @@ class Compiler
     end
   end
 
+  # Build the proc-fn body prelude that unpacks the args array passed
+  # to the uniform `(void *_cap, mrb_int *args)` signature into named
+  # `lv_<bp>` locals — one `mrb_int lv_<bp> = args[<idx>];` line per
+  # block param. Used at both proc-fn body emit sites (captures and
+  # no-captures branches; identical shape).
+  def proc_fn_args_unpack(bps)
+    s = ""
+    bk = 0
+    while bk < bps.length
+      s = s + "  mrb_int lv_" + bps[bk] + " = args[" + bk.to_s + "];\n"
+      bk = bk + 1
+    end
+    s
+  end
+
   def compile_proc_literal(nid)
     blk = @nd_block[nid]
     if blk < 0
       return "sp_proc_new(NULL, NULL, NULL)"
     end
-    bp = get_block_param(nid, 0)
-    if bp == ""
-      bp = "_unused"
+    # Collect every block param name. Single-param blocks fall through
+    # to the existing `_unused` fallback for parameterless bodies.
+    bps = "".split(",")
+    pi = 0
+    pn = get_block_param(nid, pi)
+    while pn != ""
+      bps.push(pn)
+      pi = pi + 1
+      pn = get_block_param(nid, pi)
+    end
+    if bps.length == 0
+      bps.push("_unused")
     end
     # Generate a static function for the proc body
     @proc_counter = @proc_counter + 1
@@ -21741,12 +21776,14 @@ class Compiler
     bbody = @nd_body[blk]
 
     # Detect captures (free variables that resolve in outer scope).
+    # Every block param is in scope inside the body; only locals from
+    # the outer scope read inside the body count as free.
     free_vars = "".split(",")
     if bbody >= 0
-      proc_params = "".split(",")
-      proc_params.push(bp)
+      # scan_lambda_free_vars treats `params` as read-only, so bps can
+      # be passed directly without an intermediate copy.
       proc_locals = "".split(",")
-      scan_lambda_free_vars(bbody, proc_params, proc_locals, free_vars)
+      scan_lambda_free_vars(bbody, bps, proc_locals, free_vars)
     end
     captures = "".split(",")
     capture_types = "".split(",")
@@ -21781,7 +21818,11 @@ class Compiler
       @proc_capture_types = capture_types
     end
     push_scope
-    declare_var(bp, "int")
+    di = 0
+    while di < bps.length
+      declare_var(bps[di], "int")
+      di = di + 1
+    end
     bexpr = "0"
     body_stmts = ""
     if bbody >= 0
@@ -21859,9 +21900,8 @@ class Compiler
       @lambda_funcs << "}\n"
       @lambda_funcs << "static mrb_int "
       @lambda_funcs << fname
-      @lambda_funcs << "(void *_cap_raw, mrb_int lv_"
-      @lambda_funcs << bp
-      @lambda_funcs << ") {\n"
+      @lambda_funcs << "(void *_cap_raw, mrb_int *args) {\n"
+      @lambda_funcs << proc_fn_args_unpack(bps)
       @lambda_funcs << "  "
       @lambda_funcs << cap_name
       @lambda_funcs << " *_cap = ("
@@ -21922,10 +21962,9 @@ class Compiler
     # with NULL cap and NULL scan.
     @lambda_funcs << "static mrb_int "
     @lambda_funcs << fname
-    @lambda_funcs << "(void *_cap, mrb_int lv_"
-    @lambda_funcs << bp
-    @lambda_funcs << ") {\n"
+    @lambda_funcs << "(void *_cap, mrb_int *args) {\n"
     @lambda_funcs << "  (void)_cap;\n"
+    @lambda_funcs << proc_fn_args_unpack(bps)
     if body_stmts != ""
       @lambda_funcs << body_stmts
     end

@@ -695,11 +695,10 @@ static void sp_file_delete(const char *path) { remove(path); }
 static const char *sp_backtick(const char *cmd) { FILE *p = popen(cmd, "r"); if (!p) return sp_str_empty; char *buf = sp_str_alloc_raw(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; pclose(p); return buf; }
 static const char *sp_file_basename(const char *path) { const char *s = strrchr(path, '/'); if (s) return s + 1; return path; }
 
-typedef mrb_int (*sp_proc_fn_t)(void *, mrb_int);
-typedef struct sp_Proc { sp_proc_fn_t fn; void *cap; void (*cap_scan)(void *); } sp_Proc;
+typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); } sp_Proc;
 static void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }
-static sp_Proc *sp_proc_new(sp_proc_fn_t fn, void *cap, void (*cap_scan)(void *)) { sp_Proc *p = (sp_Proc *)sp_gc_alloc(sizeof(sp_Proc), NULL, sp_Proc_scan); p->fn = fn; p->cap = cap; p->cap_scan = cap_scan; return p; }
-static mrb_int sp_proc_call(sp_Proc *p, mrb_int arg) { return (p && p->fn) ? p->fn(p->cap, arg) : 0; }
+static sp_Proc *sp_proc_new(void *fn, void *cap, void (*cap_scan)(void *)) { sp_Proc *p = (sp_Proc *)sp_gc_alloc(sizeof(sp_Proc), NULL, sp_Proc_scan); p->fn = fn; p->cap = cap; p->cap_scan = cap_scan; return p; }
+static mrb_int sp_proc_call(sp_Proc *p, mrb_int *args) { return (p && p->fn) ? ((mrb_int (*)(void *, mrb_int *))p->fn)(p->cap, args) : 0; }
 
 /* ---- StringIO runtime ---- */
 typedef struct { char *buf; int64_t len; int64_t cap; int64_t pos; int64_t lineno; int closed; } sp_StringIO;

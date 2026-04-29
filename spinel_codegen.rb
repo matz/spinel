@@ -155,6 +155,12 @@ class Compiler
     @hoisted_strlen_recv = ""
     @in_yield_method = 0
     @in_gc_scope = 0
+    # Set during the arity-0 instance_eval trampoline inlining so
+    # receiverless calls in the spliced block body dispatch against
+    # the rebound self (the .instance_eval receiver) instead of the
+    # enclosing method's self.
+    @instance_eval_self_var = ""
+    @instance_eval_self_type = ""
 
     # Yield/block tracking (parallel with meth_names / cls_meth_names)
     @meth_has_yield = []
@@ -760,6 +766,69 @@ class Compiler
       return compile_expr(ba)
     end
     ""
+  end
+
+  # Detects the exact arity-0 instance_eval trampoline shape:
+  # `def m(&b); instance_eval(&b); end`. Returns 1 when the
+  # (ci, midx) method body is a single CallNode of `instance_eval`
+  # forwarded the method's sole proc-typed param via &-arg, 0
+  # otherwise. Spinel inlines these at the call site (yield-style)
+  # with self rebound to the receiver — full Ruby instance_eval is
+  # dynamic, but this AOT compromise covers the common DSL-trampoline
+  # shape. Anything wider falls through to today's silent no-op.
+  def is_instance_eval_trampoline(ci, midx)
+    bodies = @cls_meth_bodies[ci].split(";")
+    if midx >= bodies.length
+      return 0
+    end
+    bid = bodies[midx].to_i
+    if bid < 0
+      return 0
+    end
+    stmts = get_stmts(bid)
+    if stmts.length != 1
+      return 0
+    end
+    s = stmts[0]
+    if @nd_type[s] != "CallNode"
+      return 0
+    end
+    if @nd_name[s] != "instance_eval"
+      return 0
+    end
+    if @nd_receiver[s] >= 0
+      return 0
+    end
+    inner = find_block_arg(s)
+    if inner < 0
+      return 0
+    end
+    if @nd_type[inner] != "LocalVariableReadNode"
+      return 0
+    end
+    all_params = @cls_meth_params[ci].split("|")
+    all_ptypes = @cls_meth_ptypes[ci].split("|")
+    if midx >= all_params.length
+      return 0
+    end
+    if midx >= all_ptypes.length
+      return 0
+    end
+    pnames = all_params[midx].split(",")
+    ptypes = all_ptypes[midx].split(",")
+    if pnames.length != 1
+      return 0
+    end
+    if ptypes.length != 1
+      return 0
+    end
+    if ptypes[0] != "proc"
+      return 0
+    end
+    if @nd_name[inner] != pnames[0]
+      return 0
+    end
+    1
   end
 
   # Flatten a constant reference into an internal name.
@@ -13927,6 +13996,24 @@ class Compiler
         end
       end
     end
+    # Inside an instance_eval inlined block: receiverless calls in
+    # the spliced body dispatch against the rebound self (the
+    # receiver that .instance_eval was called on), not the enclosing
+    # method's self. Static type inference gives us the class name,
+    # so we resolve the method at compile time and emit a typed-self
+    # call.
+    if @instance_eval_self_var != ""
+      target_ci = find_class_idx(@instance_eval_self_type)
+      if target_ci >= 0
+        cidx = cls_find_method(target_ci, mname)
+        if cidx >= 0
+          owner = find_method_owner(target_ci, mname)
+          cast_recv = "(sp_" + owner + " *)" + @instance_eval_self_var
+          tail = build_call_tail(compile_call_args(nid), "")
+          return "sp_" + owner + "_" + sanitize_name(mname) + "(" + cast_recv + tail + ")"
+        end
+      end
+    end
     if @current_class_idx >= 0
       cidx = cls_find_method(@current_class_idx, mname)
       if cidx >= 0
@@ -19964,8 +20051,11 @@ class Compiler
       end
     end
 
-    # User-defined yield function called with block
-    if @nd_block[nid] >= 0
+    # User-defined yield function or instance_eval trampoline, called
+    # with a literal block. (A `&proc_var` forward at the call site
+    # doesn't trigger inlining — those flow through compile_call_expr's
+    # regular block-forwarding path.)
+    if has_literal_block(nid) == 1
       if recv < 0
         mi = find_method_idx(mname)
         if mi >= 0
@@ -19975,7 +20065,7 @@ class Compiler
           end
         end
       end
-      # Class method with yield
+      # Class method with yield, or an arity-0 instance_eval trampoline.
       if recv >= 0
         rtype = infer_type(recv)
         if is_obj_type(rtype) == 1
@@ -19988,6 +20078,10 @@ class Compiler
                 compile_yield_method_call_stmt(nid, cci, midx, mname)
                 return 1
               end
+              if is_instance_eval_trampoline(cci, midx) == 1
+                compile_instance_eval_inlined_stmt(nid, recv, cci)
+                return 1
+              end
             end
             # Check parent
             if @cls_parents[cci] != ""
@@ -19997,6 +20091,10 @@ class Compiler
                 if pidx >= 0
                   if cls_method_has_yield(pci, pidx) == 1
                     compile_yield_method_call_stmt(nid, pci, pidx, mname)
+                    return 1
+                  end
+                  if is_instance_eval_trampoline(pci, pidx) == 1
+                    compile_instance_eval_inlined_stmt(nid, recv, pci)
                     return 1
                   end
                 end
@@ -23397,6 +23495,49 @@ class Compiler
       end
     end
     "0"
+  end
+
+  # Inlines a `recv.m { body }` call when `m` is an arity-0
+  # instance_eval trampoline. The entire method body is the call
+  # `instance_eval(&block)`, so we splice the block body in place
+  # with self rebound to the receiver. compile_no_recv_call_expr's
+  # instance_eval-self branch handles receiverless calls inside the
+  # spliced body. Modeled on compile_yield_method_call_stmt but
+  # simpler — the trampoline body has no locals/params to remap.
+  def compile_instance_eval_inlined_stmt(nid, recv, owner_ci)
+    blk = @nd_block[nid]
+    if blk < 0
+      return
+    end
+    rc = compile_expr_gc_rooted(recv)
+    rtype = infer_type(recv)
+    cname = ""
+    if is_obj_type(rtype) == 1
+      cname = rtype[4, rtype.length - 4]
+    end
+    if cname == ""
+      return
+    end
+    prev_self_var = @instance_eval_self_var
+    prev_self_type = @instance_eval_self_type
+    self_var = new_temp
+    emit("  sp_" + cname + " *" + self_var + " = (sp_" + cname + " *)" + rc + ";")
+    if @in_gc_scope == 1
+      emit("  SP_GC_ROOT(" + self_var + ");")
+    end
+    @instance_eval_self_var = self_var
+    @instance_eval_self_type = cname
+    body = @nd_body[blk]
+    if body >= 0
+      stmts = get_stmts(body)
+      k = 0
+      while k < stmts.length
+        compile_stmt(stmts[k])
+        k = k + 1
+      end
+    end
+    @instance_eval_self_var = prev_self_var
+    @instance_eval_self_type = prev_self_type
   end
 
   def compile_yield_method_call_stmt(nid, cci, midx, mname)

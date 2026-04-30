@@ -3054,6 +3054,21 @@ class Compiler
             cj = cj + 1
           end
         end
+        # Issue #127: same lookup for module class methods. They live in
+        # the top-level @meth_* table as `<Mod>_cls_<method>`, not in
+        # @cls_cmeth_* (which is class-only). Without this branch every
+        # `Module.cls_method` call inferred as int regardless of return
+        # type, so `s = M.greet` declared `lv_s` as mrb_int even though
+        # `sp_M_cls_greet()` returns `const char *`.
+        if module_name_exists(rcname) == 1
+          mfi = find_method_idx(rcname + "_cls_" + mname)
+          if mfi >= 0 && mfi < @meth_return_types.length
+            mrt = @meth_return_types[mfi]
+            if mrt != "" && mrt != "int"
+              return mrt
+            end
+          end
+        end
       end
     end
     # StringIO methods

@@ -93,6 +93,10 @@ class Compiler
     @nd_count = 0
     @root_id = 0
 
+    # Issue: unresolved-call warnings deduped by "<mname>:<recv_type>"
+    # so a hot call site that fails to resolve emits one warning, not N.
+    @unresolved_call_warnings = "".split(",")
+
     # ---- Top-level methods (parallel arrays) ----
     @meth_names = "".split(",")
     @meth_param_names = "".split(",")
@@ -4177,6 +4181,26 @@ class Compiler
       i = i + 1
     end
     0
+  end
+
+  # Print a stderr warning the first time we see an unresolved call to
+  # `mname` with the given receiver-type tag. Subsequent identical
+  # warnings are suppressed so a silent-fallthrough call inside a hot
+  # loop emits one line, not a torrent. The warning is informational
+  # only — codegen continues and emits `0` for the call's C expression
+  # (the historical silent-no-op behaviour) so existing tests/benches
+  # whose outputs happen to coincide with `0` keep compiling.
+  def warn_unresolved_call(mname, recv_tag)
+    key = mname + ":" + recv_tag
+    i = 0
+    while i < @unresolved_call_warnings.length
+      if @unresolved_call_warnings[i] == key
+        return
+      end
+      i = i + 1
+    end
+    @unresolved_call_warnings.push(key)
+    $stderr.puts "warning: cannot resolve call to '" + mname + "' on " + recv_tag + " (emitting 0)"
   end
 
   # Walk every class's parent chain. A cycle anywhere on the chain is
@@ -14839,6 +14863,17 @@ class Compiler
       return r
     end
 
+    # Unresolved method call on a known receiver. None of the dispatch
+    # branches above claimed the shape — typical causes: typo in the
+    # method name, missing def on the receiver class, or a Ruby idiom
+    # Spinel doesn't support yet. Warn loud at codegen so the user
+    # sees the problem instead of just getting a silently-zero-valued
+    # binary; emit `0` as the C expression so existing call sites that
+    # genuinely rely on the silent fallback (the instance_eval
+    # trampoline body, partially-implemented features whose bench/test
+    # outputs happen to coincide with `0`) keep compiling. Hard fail
+    # would catch more typos but tear up those existing patterns.
+    warn_unresolved_call(mname, base_type(recv_type))
     "0"
   end
 
@@ -15161,7 +15196,12 @@ class Compiler
         rk = rk + 1
       end
     end
-    return "0"
+    # Unresolved bare-name call (`foobar(0)`, `foobar`). CRuby would
+    # raise NoMethodError; Spinel can't, but warning at codegen so the
+    # user sees the problem is far better than a silently-empty binary.
+    # See the matching warn at the receiver-form fallthrough above for
+    # why this is a warn-and-emit-0 rather than a hard error.
+    warn_unresolved_call(mname, "(no receiver)")
     "0"
   end
 

@@ -2239,7 +2239,7 @@ class Compiler
     if mname == "chr"
       return "string"
     end
-    if mname == "gcd"
+    if mname == "gcd" || mname == "lcm"
       return "int"
     end
     if mname == "clamp"
@@ -16550,6 +16550,9 @@ class Compiler
     end
     if mname == "gcd"
       return "sp_gcd(" + rc + ", " + compile_arg0(nid) + ")"
+    end
+    if mname == "lcm"
+      return "sp_lcm(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "clamp"
       args_id = @nd_arguments[nid]

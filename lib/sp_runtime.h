@@ -444,6 +444,9 @@ static const char*sp_StrArray_inspect(sp_StrArray*a){sp_String*s=sp_String_new("
 /* Symbol arrays share the IntArray representation (sp_sym = mrb_int),
    but each element is rendered as ":name" via sp_sym_to_s. */
 static const char*sp_SymArray_inspect(sp_IntArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,":");sp_String_append(s,sp_sym_to_s((sp_sym)a->data[a->start+i]));}sp_String_append(s,"]");return s->data;}
+/* PtrArray elements are object pointers without a per-element class
+   tag, so we render them as `#<Object>` rather than recursing. */
+static const char*sp_PtrArray_inspect(sp_PtrArray*a){sp_String*s=sp_String_new("[");for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,"#<Object>");}sp_String_append(s,"]");return s->data;}
 
 /* Regexp engine (link with libspre.a from lib/regexp/) */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;
@@ -590,11 +593,45 @@ static void sp_poly_puts(sp_RbVal v) {
     case SP_TAG_BOOL: puts(v.v.b ? "true" : "false"); break;
     case SP_TAG_NIL: putchar('\n'); break;
     case SP_TAG_SYM: { const char *_ss = sp_sym_to_s((sp_sym)v.v.i); fputs(_ss, stdout); putchar('\n'); break; }
+    case SP_TAG_OBJ: {
+      /* Built-in pointer types route through their inspect helpers
+         (one line per array, matching `puts arr`'s short form). User
+         classes (cls_id >= 0) fall through to the raw-pointer path
+         since we don't have per-class inspect dispatch here. */
+      switch (v.cls_id) {
+        case SP_BUILTIN_INT_ARRAY: puts(sp_IntArray_inspect((sp_IntArray *)v.v.p)); break;
+        case SP_BUILTIN_FLT_ARRAY: puts(sp_FloatArray_inspect((sp_FloatArray *)v.v.p)); break;
+        case SP_BUILTIN_STR_ARRAY: puts(sp_StrArray_inspect((sp_StrArray *)v.v.p)); break;
+        case SP_BUILTIN_SYM_ARRAY: puts(sp_SymArray_inspect((sp_IntArray *)v.v.p)); break;
+        case SP_BUILTIN_PTR_ARRAY: puts(sp_PtrArray_inspect((sp_PtrArray *)v.v.p)); break;
+        default: printf("#<Object:0x%p>\n", v.v.p); break;
+      }
+      break;
+    }
     default: printf("%lld\n", (long long)v.v.i); break;
   }
 }
 static mrb_bool sp_poly_nil_p(sp_RbVal v) { return v.tag == SP_TAG_NIL; }
-static const char *sp_poly_to_s(sp_RbVal v) { switch (v.tag) { case SP_TAG_INT: return sp_int_to_s(v.v.i); case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty; case SP_TAG_FLT: return sp_float_to_s(v.v.f); case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false"); case SP_TAG_NIL: return sp_str_empty; case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i); default: return sp_str_empty; } }
+static const char *sp_poly_to_s(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_INT: return sp_int_to_s(v.v.i);
+    case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_empty;
+    case SP_TAG_FLT: return sp_float_to_s(v.v.f);
+    case SP_TAG_BOOL: return v.v.b ? SPL("true") : SPL("false");
+    case SP_TAG_NIL: return sp_str_empty;
+    case SP_TAG_SYM: return sp_sym_to_s((sp_sym)v.v.i);
+    case SP_TAG_OBJ:
+      switch (v.cls_id) {
+        case SP_BUILTIN_INT_ARRAY: return sp_IntArray_inspect((sp_IntArray *)v.v.p);
+        case SP_BUILTIN_FLT_ARRAY: return sp_FloatArray_inspect((sp_FloatArray *)v.v.p);
+        case SP_BUILTIN_STR_ARRAY: return sp_StrArray_inspect((sp_StrArray *)v.v.p);
+        case SP_BUILTIN_SYM_ARRAY: return sp_SymArray_inspect((sp_IntArray *)v.v.p);
+        case SP_BUILTIN_PTR_ARRAY: return sp_PtrArray_inspect((sp_PtrArray *)v.v.p);
+        default: return sp_str_empty;
+      }
+    default: return sp_str_empty;
+  }
+}
 static sp_RbVal sp_poly_add(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i + b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f + b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i + b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f + (mrb_float)b.v.i); if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR) return sp_box_str(sp_str_concat(a.v.s, b.v.s)); return sp_box_int(0); }
 static sp_RbVal sp_poly_sub(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i - b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f - b.v.f); return sp_box_int(0); }
 static sp_RbVal sp_poly_mul(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return sp_box_int(a.v.i * b.v.i); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_FLT) return sp_box_float(a.v.f * b.v.f); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_FLT) return sp_box_float((mrb_float)a.v.i * b.v.f); if (a.tag == SP_TAG_FLT && b.tag == SP_TAG_INT) return sp_box_float(a.v.f * (mrb_float)b.v.i); return sp_box_int(0); }

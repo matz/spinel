@@ -17789,16 +17789,52 @@ class Compiler
     if arg_compiled.length > 0
       a0 = arg_compiled[0]
     end
-    # IntArray: `[]`, `length`, `size`
+    # `[]` — element types differ per built-in. When the result temp
+    # is sp_RbVal (poly return), every branch can box into it. When
+    # the temp is concretely typed, only built-ins whose element type
+    # fits the temp can contribute — otherwise the assignment is a
+    # C type mismatch. The unmatched runtime types simply leave the
+    # temp at its default (`0`/empty) for that input, which is
+    # acceptable since the caller's static type analysis already
+    # picked a compatible result type.
     if mname == "[]" && arg_compiled.length >= 1
-      call = "sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
-      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
-      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+      ic = "sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      irhs = is_poly_ret == 1 ? "sp_box_int(" + ic + ")" : ic
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + irhs + ";")
+      if is_poly_ret == 1
+        fc = "sp_FloatArray_get((sp_FloatArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_FLT_ARRAY) " + result_tmp + " = sp_box_float(" + fc + ");")
+        sc = "sp_StrArray_get((sp_StrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_ARRAY) " + result_tmp + " = sp_box_str(" + sc + ");")
+        # sym_array shares IntArray storage; tag back as symbol when
+        # the caller wants a poly result.
+        yc = "(sp_sym)sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_SYM_ARRAY) " + result_tmp + " = sp_box_sym(" + yc + ");")
+      end
+      # PtrArray's element type is class-specific (sp_<C> *) so a
+      # uniform poly result needs sp_box_obj — but we don't have a
+      # cls_id here. Defer (the issue notes this is more involved).
     end
+    # `length` / `size` — every built-in array exposes its own
+    # `_length` helper (sym_array shares IntArray's). PtrArray is
+    # safe here because length doesn't need an element type.
     if mname == "length" || mname == "size"
-      call = "sp_IntArray_length((sp_IntArray *)" + recv_tmp + ".v.p)"
-      rhs = is_poly_ret == 1 ? "sp_box_int(" + call + ")" : call
-      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + rhs + ";")
+      ic = "sp_IntArray_length((sp_IntArray *)" + recv_tmp + ".v.p)"
+      irhs = is_poly_ret == 1 ? "sp_box_int(" + ic + ")" : ic
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + irhs + ";")
+      fc = "sp_FloatArray_length((sp_FloatArray *)" + recv_tmp + ".v.p)"
+      frhs = is_poly_ret == 1 ? "sp_box_int(" + fc + ")" : fc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_FLT_ARRAY) " + result_tmp + " = " + frhs + ";")
+      sc = "sp_StrArray_length((sp_StrArray *)" + recv_tmp + ".v.p)"
+      srhs = is_poly_ret == 1 ? "sp_box_int(" + sc + ")" : sc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_ARRAY) " + result_tmp + " = " + srhs + ";")
+      # sym_array shares the IntArray representation (same `_length`).
+      yc = "sp_IntArray_length((sp_IntArray *)" + recv_tmp + ".v.p)"
+      yrhs = is_poly_ret == 1 ? "sp_box_int(" + yc + ")" : yc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_SYM_ARRAY) " + result_tmp + " = " + yrhs + ";")
+      pc = "sp_PtrArray_length((sp_PtrArray *)" + recv_tmp + ".v.p)"
+      prhs = is_poly_ret == 1 ? "sp_box_int(" + pc + ")" : pc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
     end
   end
 

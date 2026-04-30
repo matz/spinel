@@ -310,6 +310,41 @@ can also point at a custom location with `PRISM_DIR=/path/to/prism`.
 CRuby is needed only for the initial bootstrap. After `make`, the
 entire pipeline runs without Ruby.
 
+## Portability
+
+Spinel can emit C without invoking the C compiler — useful when you
+want to build the Ruby program on one machine and ship the generated
+sources to another:
+
+```sh
+spinel app.rb -c            # writes app.c next to the source
+spinel app.rb -c -o app.c   # specify output path
+spinel app.rb -S            # print the C to stdout
+```
+
+The output is one self-contained `.c` file that compiles against
+`lib/sp_runtime.h`. The two together are everything a downstream
+consumer needs — no link to `libspinel`.
+
+The runtime is POSIX-flavoured but covers every platform CI exercises:
+
+| Platform | Status | Compiler |
+|---|---|---|
+| Linux (x86-64, arm64) | Supported | gcc, clang |
+| macOS (Intel, Apple Silicon) | Supported | clang |
+| *BSD | Expected to work; not in CI | clang |
+| Windows | Supported via [MSYS2](https://www.msys2.org/) / MinGW | gcc |
+| Windows native (MSVC) | Not supported | -- |
+
+Every PR runs `ubuntu-latest / gcc`, `ubuntu-latest / clang`,
+`macos-latest / clang`, and `windows-mingw` jobs end-to-end (parser
+build, codegen build, fixed-point bootstrap, full test + benchmark
+suites). MSVC isn't supported because the runtime relies on POSIX
+assumptions (`<ucontext.h>` for `Fiber`, `<sys/mman.h>` for the
+regexp engine's executable buffers, GCC's `__attribute__((cleanup))`
+for the GC root stack); a port would either replace those or guard
+them behind compile-time switches.
+
 ## Limitations
 
 - **No eval**: `eval`, `instance_eval`, `class_eval`

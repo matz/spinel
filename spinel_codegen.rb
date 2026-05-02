@@ -15912,6 +15912,18 @@ class Compiler
       end
     end
 
+    # Time.now.to_i — bypass the Time.now float roundtrip and emit
+    # time(NULL) directly. Going through (mrb_int)((double)tv_sec +
+    # tv_nsec/1e9) rounds up to tv_sec+1 when tv_nsec lands in the
+    # last ~240ns of a second (~2.4e-7 chance per call); time(NULL)
+    # returns exact tv_sec, matching CRuby's Time#to_i semantics.
+    if mname == "to_i" && recv >= 0 && @nd_type[recv] == "CallNode" && @nd_name[recv] == "now"
+      rr = @nd_receiver[recv]
+      if rr >= 0 && @nd_type[rr] == "ConstantReadNode" && @nd_name[rr] == "Time"
+        return "((mrb_int)time(NULL))"
+      end
+    end
+
     recv_type = infer_type(recv)
     # Nullable receiver: dispatch identically to the base type. The
     # null check is the caller's responsibility, matching Ruby's

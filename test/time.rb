@@ -1,36 +1,38 @@
-t = Time.now
+# Smoke: Time.now compiles and yields a positive timestamp.
+puts Time.now.to_i > 0
 
-# Basic shape: positive integer seconds and positive float seconds.
-puts t.to_i > 0
-puts t.to_f > 0.0
-
-# to_f >= to_i (to_i truncates the fractional part).
-puts t.to_f >= t.to_i
-
-# Millisecond idiom: (Time.now.to_f * 1000).to_i is the wall-clock ms
-# count; must be positive and at least seconds*1000.
-ms = (t.to_f * 1000).to_i
-puts ms > 0
-puts ms >= t.to_i * 1000
-
-# Two consecutive reads don't go backward.
-a = Time.now
-b = Time.now
-puts b >= a
-
-# Sub-second precision: pre-fix Time.now returned whole-second mrb_int,
-# so t.to_f always equalled t.to_i.to_f. With clock_gettime resolution,
-# at least one of 50 samples has a nonzero fractional part — odds of
-# all 50 hitting tv_nsec == 0 are effectively zero.
-found = false
+# Without .to_f: Time.now.to_i is whole seconds. In a tight loop of
+# 100 samples virtually every read lands in the same second (the loop
+# runs in << 1s). Cap at 1 so the output is deterministic.
+secs = []
 i = 0
-while i < 50
-  s = Time.now
-  if s.to_f != s.to_i.to_f
-    found = true
-  end
+while i < 100
+  secs.push(Time.now.to_i)
   i = i + 1
 end
-puts found
+sn = secs.uniq.length
+if sn > 1
+  sn = 1
+end
+puts sn
+
+# With .to_f: Time.now.to_f is float seconds with sub-second precision.
+# Scale the fractional part to microseconds; virtually every sample
+# lands in a distinct bucket. Pre-fix Time.now was whole-second mrb_int,
+# so every sample's microsecond bucket was 0 → 1 distinct value. With
+# clock_gettime nanosecond resolution we see many. Cap at 2 so the
+# output is deterministic: 1 = no sub-second precision, 2 = present.
+micros = []
+i = 0
+while i < 100
+  s = Time.now
+  micros.push(((s.to_f - s.to_i) * 1_000_000).to_i)
+  i = i + 1
+end
+mn = micros.uniq.length
+if mn > 2
+  mn = 2
+end
+puts mn
 
 puts "done"

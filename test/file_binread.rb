@@ -5,10 +5,11 @@
 #
 # `File.binread(path)` standalone is aliased to File.read.
 
-# Set up a binary file with embedded NULs via a shell command.
+# Set up a binary file with embedded NULs via Ruby. This keeps the
+# fixture portable across POSIX shells and Windows cmd.exe.
 # spinel's File.write uses fputs and would stop at the first NUL.
-path = "/tmp/spinel_binread_test.bin"
-`printf 'AB\\000CD\\000EF' > #{path}`
+path = "spinel_binread_test.bin"
+`ruby -e "File.binwrite('#{path}', [65,66,0,67,68,0,69,70].pack('C*'))"`
 
 # Pattern-matched: emits sp_file_binread_bytes(path) which reads
 # the file by its actual byte count, NOT through sp_str_bytes.

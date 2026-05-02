@@ -193,8 +193,8 @@ test: spinel_parse$(EXE) $(SP_RT_LIB)
 	      expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
 	    fi; \
 	    actual=$$($(TIMEOUT10) /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
-	    expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
-	    actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
+	    expected=$$(printf "%s" "$$expected" | LC_ALL=C tr -d '\r'); \
+	    actual=$$(printf "%s" "$$actual" | LC_ALL=C tr -d '\r'); \
 	    if [ "$$expected" = "$$actual" ]; then \
 	      pass=$$((pass+1)); \
 	    else \
@@ -230,8 +230,8 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
 	      actual=$$($(TIMEOUT60) /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
-	      expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
-	      actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
+	      expected=$$(printf "%s" "$$expected" | LC_ALL=C tr -d '\r'); \
+	      actual=$$(printf "%s" "$$actual" | LC_ALL=C tr -d '\r'); \
 	      if [ "$$expected" = "$$actual" ]; then \
 	        pass=$$((pass+1)); \
 	      else \

@@ -1,9 +1,0 @@
-integer: 42
-string: hello
-float
-boolean
-nil
-zero
-one
-other int
-done

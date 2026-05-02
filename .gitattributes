@@ -1,4 +1,0 @@
-# Keep test expected outputs LF on every platform — they're compared
-# against spinel binary stdout, which always produces LF, after a
-# sed/CRLF strip pass on both sides.
-test/*.rb.expected text eol=lf

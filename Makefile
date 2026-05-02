@@ -91,7 +91,7 @@ PRISM_SRC    = $(wildcard $(PRISM_DIR)/src/*.c) $(wildcard $(PRISM_DIR)/src/util
 PRISM_OBJ    = $(patsubst $(PRISM_DIR)/src/%.c,build/prism/%.o,$(PRISM_SRC))
 PRISM_LIB    = build/libprism.a
 
-.PHONY: all parse bootstrap codegen test test-run clean-test-results regen-expected bench clean install uninstall deps
+.PHONY: all parse bootstrap codegen test test-run clean-test-results bench clean install uninstall deps
 
 all: parse regexp spinel_codegen$(EXE)
 
@@ -231,16 +231,12 @@ build/test-results/%.ok: test/%.rb spinel_parse$(EXE) $(SP_RT_LIB) spinel_codege
 	./spinel_codegen$(EXE) "$$ast" "$$cfile" 2>/dev/null && \
 	$(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib "$$cfile" $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
 	if [ $$? -eq 0 ]; then \
-	  if [ -f "$<.expected" ]; then \
-	    LC_ALL=C sed 's/\r$$//' "$<.expected" >"$$exp.n"; \
-	  else \
-	    $(TIMEOUT10) $(REF_RUBY) "$<" >"$$exp" 2>/dev/null; \
-	    ruby_rc=$$?; \
-	    if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
-	      $(TIMEOUT10) ruby "$<" >"$$exp" 2>/dev/null; \
-	    fi; \
-	    LC_ALL=C sed 's/\r$$//' "$$exp" >"$$exp.n"; \
+	  $(TIMEOUT10) $(REF_RUBY) "$<" >"$$exp" 2>/dev/null; \
+	  ruby_rc=$$?; \
+	  if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
+	    $(TIMEOUT10) ruby "$<" >"$$exp" 2>/dev/null; \
 	  fi; \
+	  LC_ALL=C sed 's/\r$$//' "$$exp" >"$$exp.n"; \
 	  $(TIMEOUT10) "$$bin" >"$$act" 2>/dev/null; \
 	  LC_ALL=C sed 's/\r$$//' "$$act" >"$$act.n"; \
 	  if cmp -s "$$exp.n" "$$act.n"; then \
@@ -259,26 +255,6 @@ build/test-results/%.ok: test/%.rb spinel_parse$(EXE) $(SP_RT_LIB) spinel_codege
 
 clean-test-results:
 	@rm -rf build/test-results
-
-# ---- Expected-output regeneration ----
-# Capture each test's reference Ruby output into test/<name>.rb.expected.
-# Once committed, the test target uses the .expected file directly and
-# skips the per-test ruby invocation — useful in CI where ruby's startup
-# (especially mingw64 ruby on Windows) adds up across hundreds of tests.
-# Regenerate after adding or modifying tests; commit the result.
-
-EXPECTED_FILES := $(patsubst test/%.rb,test/%.rb.expected,$(TESTS))
-
-regen-expected: $(EXPECTED_FILES)
-
-test/%.rb.expected: test/%.rb
-	@$(TIMEOUT10) $(REF_RUBY) $< >$@.tmp 2>/dev/null; \
-	rc=$$?; \
-	if [ $$rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
-	  $(TIMEOUT10) ruby $< >$@.tmp 2>/dev/null; \
-	fi; \
-	LC_ALL=C sed 's/\r$$//' $@.tmp > $@; \
-	rm -f $@.tmp
 
 bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi

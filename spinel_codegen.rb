@@ -23020,6 +23020,9 @@ class Compiler
     if at == "proc" || at == "lambda"
       return "sp_box_proc(" + val + ")"
     end
+    if at == "range"
+      return "sp_box_range(" + val + ")"
+    end
     if is_obj_type(at) == 1
       cname = at[4, at.length - 4]
       ci = find_class_idx(cname)
@@ -24238,6 +24241,8 @@ class Compiler
           emit("  sp_PolyArray_push(" + tmp + ", sp_box_nil());")
         elsif et == "symbol"
           emit("  sp_PolyArray_push(" + tmp + ", sp_box_sym(" + val + "));")
+        elsif et == "range"
+          emit("  sp_PolyArray_push(" + tmp + ", sp_box_range(" + val + "));")
         else
           emit("  sp_PolyArray_push(" + tmp + ", sp_box_int(" + val + "));")
         end

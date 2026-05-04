@@ -690,6 +690,7 @@ typedef uint64_t sp_RbValue;
 #define SP_BUILTIN_PTR_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_OBJ)   /* -6 */
 #define SP_BUILTIN_SYM_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_SYM)   /* -7 */
 #define SP_BUILTIN_PROC         (-9)                              /* sp_Proc *, distinct from any tag-based id */
+#define SP_BUILTIN_RANGE        (-10)                             /* heap-boxed sp_Range */
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }
@@ -708,6 +709,7 @@ static sp_RbVal sp_box_str_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_ST
 static sp_RbVal sp_box_sym_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_SYM_ARRAY); }
 static sp_RbVal sp_box_ptr_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_PTR_ARRAY); }
 static sp_RbVal sp_box_proc(void *p)        { return sp_box_obj(p, SP_BUILTIN_PROC); }
+static sp_RbVal sp_box_range(sp_Range v)    { sp_Range *h=(sp_Range *)sp_gc_alloc(sizeof(sp_Range),NULL,NULL);*h=v;return sp_box_obj(h, SP_BUILTIN_RANGE); }
 static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;

@@ -171,7 +171,7 @@ regexp: $(SP_RT_LIB)
 
 codegen: spinel_codegen$(EXE)
 
-spinel_codegen$(EXE): spinel_codegen.rb spinel_parse$(EXE)
+spinel_codegen$(EXE): spinel_codegen.rb lib/node_store.rb spinel_parse$(EXE)
 	./spinel_parse$(EXE) spinel_codegen.rb build/codegen.ast
 	ruby spinel_codegen.rb build/codegen.ast build/gen1.c
 	$(CC) $(BOOTSTRAP_CFLAGS) -Ilib build/gen1.c $(LDFLAGS) -lm -o spinel_codegen$(EXE)

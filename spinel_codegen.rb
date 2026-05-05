@@ -5,8 +5,10 @@
 #
 # Usage: ruby spinel_codegen.rb ast.txt output.c
 #
-# All data structures use parallel arrays (no arrays of objects).
-# Node fields stored as parallel arrays indexed by integer node ID.
+# Most compiler data structures use parallel arrays. AST node fields are
+# owned by NodeStore and indexed by integer node ID.
+
+require_relative "lib/node_store"
 
 class Compiler
   attr_accessor :out
@@ -42,64 +44,7 @@ class Compiler
     @temp_counter = 0
     @label_counter = 0
 
-    # ---- AST node storage (parallel arrays by node ID) ----
-    # Use "".split(",") for StrArray init (v1 infers StrArray from split)
-    @nd_type = "".split(",")
-    @nd_name = "".split(",")
-    @nd_value = []
-    @nd_content = "".split(",")
-    @nd_flags = []
-    @nd_operator = "".split(",")
-    @nd_binop = "".split(",")
-    @nd_callop = "".split(",")
-    @nd_unescaped = "".split(",")
-
-    # Node references (integer node IDs, -1 = nil)
-    @nd_receiver = []
-    @nd_arguments = []
-    @nd_body = []
-    @nd_block = []
-    @nd_parameters = []
-    @nd_predicate = []
-    @nd_subsequent = []
-    @nd_else_clause = []
-    @nd_left = []
-    @nd_right = []
-    @nd_constant_path = []
-    @nd_superclass = []
-    @nd_rest = []
-    # ParametersNode#keyword_rest -- holds a KeywordRestParameterNode
-    # (def f(**kw)) or NoKeywordsParameterNode (def f(**nil)).
-    @nd_keyword_rest = []
-    @nd_rescue_clause = []
-    @nd_ensure_clause = []
-    @nd_expression = []
-    @nd_target = []
-    @nd_pattern = []
-    @nd_key = []
-    @nd_reference = []
-    @nd_collection = []
-
-    # Node array fields: stored as comma-separated ID strings
-    @nd_stmts = "".split(",")
-    @nd_args = "".split(",")
-    @nd_requireds = "".split(",")
-    @nd_optionals = "".split(",")
-    @nd_keywords = "".split(",")
-    @nd_elements = "".split(",")
-    @nd_parts = "".split(",")
-    @nd_conditions = "".split(",")
-    @nd_exceptions = "".split(",")
-    @nd_targets = "".split(",")
-    @nd_rights = "".split(",")
-    # ParametersNode#posts -- required params after the splat
-    # (def f(*r, x, y) → posts = [x, y]). Currently unused by codegen
-    # (post-rest parameters aren't observed in test/), but the parser
-    # emits the field so future tests get a proper AST.
-    @nd_posts = "".split(",")
-
-    @nd_count = 0
-    @root_id = 0
+    @node_store = NodeStore.new
 
     # Issue: unresolved-call warnings deduped by "<mname>:<recv_type>"
     # so a hot call site that fails to resolve emits one warning, not N.
@@ -277,14 +222,6 @@ class Compiler
     @local_regex_names = "".split(",")
     @local_regex_idx = []
 
-    # Cache for parse_id_list: AST list fields never change once loaded,
-    # so the parsed IntArray can be shared across callers. The `[[0]]`
-    # literal teaches Spinel that @parse_id_pool is ptr_array<int_array>;
-    # slot 0 is a reserved dummy. PtrArray now scans its elements, so
-    # cached IntArrays stay reachable.
-    @parse_id_cache = {}
-    @parse_id_pool = [[0]]
-
     @needs_stringio = 0
     @proc_counter = 0
     @proc_funcs = ""
@@ -354,7 +291,7 @@ class Compiler
     @ffi_func_names = "".split(",")       # C symbol name
     @ffi_func_arg_types = "".split(",")   # ";"-joined Spinel type tokens
     @ffi_func_ret_types = "".split(",")   # single Spinel type token
-    @ffi_func_arg_specs = "".split(",")   # ";"-joined original specs (uint32, str, …)
+    @ffi_func_arg_specs = "".split(",")   # ";"-joined original specs (uint32, str, ...)
     @ffi_func_ret_specs = "".split(",")   # original return spec
     # Buffer registry (one entry per ffi_buffer decl):
     @ffi_buf_modules = "".split(",")
@@ -400,445 +337,22 @@ class Compiler
   end
 
 
-  # Parse comma-sep node IDs into IntArray. Manually walks bytes to avoid
-  # allocating the intermediate StrArray + substrings that `String#split`
-  # would produce — this is called ~100 K times during bootstrap.
-  # Results are cached by input string: AST fields are immutable once
-  # parsed, so the same IntArray can be shared across callers. Callers
-  # must treat the result as read-only.
-  def parse_id_list(s)
-    if s == ""
-      return []
-    end
-    if @parse_id_cache.key?(s)
-      return @parse_id_pool[@parse_id_cache[s]]
-    end
-    result = []
-    bs = s.bytes
-    i = 0
-    n = bs.length
-    num = 0
-    while i < n
-      b = bs[i]
-      if b == 44  # ','
-        result.push(num)
-        num = 0
-      else
-        num = num * 10 + (b - 48)
-      end
-      i = i + 1
-    end
-    result.push(num)
-    @parse_id_cache[s] = @parse_id_pool.length
-    @parse_id_pool.push(result)
-    result
-  end
-
   def new_temp
     @temp_counter = @temp_counter + 1
     "_t" + @temp_counter.to_s
   end
 
   # ---- AST reader ----
-  def alloc_node
-    nid = @nd_count
-    @nd_type.push("")
-    @nd_name.push("")
-    @nd_value.push(0)
-    @nd_content.push("")
-    @nd_flags.push(0)
-    @nd_operator.push("")
-    @nd_binop.push("")
-    @nd_callop.push("")
-    @nd_unescaped.push("")
-    @nd_receiver.push(-1)
-    @nd_arguments.push(-1)
-    @nd_body.push(-1)
-    @nd_block.push(-1)
-    @nd_parameters.push(-1)
-    @nd_predicate.push(-1)
-    @nd_subsequent.push(-1)
-    @nd_else_clause.push(-1)
-    @nd_left.push(-1)
-    @nd_right.push(-1)
-    @nd_constant_path.push(-1)
-    @nd_superclass.push(-1)
-    @nd_rest.push(-1)
-    @nd_keyword_rest.push(-1)
-    @nd_rescue_clause.push(-1)
-    @nd_ensure_clause.push(-1)
-    @nd_expression.push(-1)
-    @nd_target.push(-1)
-    @nd_pattern.push(-1)
-    @nd_key.push(-1)
-    @nd_reference.push(-1)
-    @nd_collection.push(-1)
-    @nd_stmts.push("")
-    @nd_args.push("")
-    @nd_requireds.push("")
-    @nd_optionals.push("")
-    @nd_keywords.push("")
-    @nd_elements.push("")
-    @nd_parts.push("")
-    @nd_conditions.push("")
-    @nd_exceptions.push("")
-    @nd_targets.push("")
-    @nd_rights.push("")
-    @nd_posts.push("")
-    @nd_count = @nd_count + 1
-    nid
-  end
-
   def read_text_ast(data)
-    lines = data.split(10.chr)
-    # Pass 1: find max node ID
-    max_id = 0
-    i = 0
-    while i < lines.length
-      line = lines[i]
-      if line.length > 0
-        parts = line.split(" ")
-        if parts.length >= 2
-          if parts.first == "ROOT"
-            @root_id = parts[1].to_i
-          end
-          if parts.first == "N"
-            nid = parts[1].to_i
-            if nid > max_id
-              max_id = nid
-            end
-          end
-        end
-      end
-      i = i + 1
-    end
-    # Allocate nodes
-    j = 0
-    while j <= max_id
-      alloc_node
-      j = j + 1
-    end
-    # Pass 2: populate fields
-    i = 0
-    while i < lines.length
-      line = lines[i]
-      if line.length > 0
-        ast_parse_line(line)
-      end
-      i = i + 1
-    end
+    @node_store.read_text_ast(data)
   end
 
-  def ast_parse_line(line)
-    parts = line.split(" ")
-    if parts.length < 3
-      return
-    end
-    tag = parts.first
-    nid = parts[1].to_i
-    if tag == "N"
-      @nd_type[nid] = parts[2]
-    end
-    if tag == "S"
-      field = parts[2]
-      val = ""
-      if parts.length >= 4
-        val = unescape_str(parts[3])
-      end
-      set_string_field(nid, field, val)
-    end
-    if tag == "I"
-      field = parts[2]
-      ival = 0
-      if parts.length >= 4
-        ival = parts[3].to_i
-      end
-      set_int_field(nid, field, ival)
-    end
-    if tag == "F"
-      if parts.length >= 4
-        @nd_content[nid] = parts[3]
-      end
-    end
-    if tag == "R"
-      field = parts[2]
-      ref_id = -1
-      if parts.length >= 4
-        ref_id = parts[3].to_i
-      end
-      set_ref_field(nid, field, ref_id)
-    end
-    if tag == "A"
-      field = parts[2]
-      ids_str = ""
-      if parts.length >= 4
-        ids_str = parts[3]
-      end
-      set_array_field(nid, field, ids_str)
-    end
-    0
-  end
-
-  def unescape_str(s)
-    result = ""
-    i = 0
-    while i < s.length
-      ch = s[i]
-      if ch == "%"
-        if i + 2 < s.length
-          hex = s[i + 1] + s[i + 2]
-          if hex == "0A"
-            result = result + 10.chr
-            i = i + 3
-          else
-            if hex == "0D"
-              result = result + 13.chr
-              i = i + 3
-            else
-              if hex == "09"
-                result = result + 9.chr
-                i = i + 3
-              else
-                if hex == "20"
-                  result = result + " "
-                  i = i + 3
-                else
-                  if hex == "25"
-                    result = result + "%"
-                    i = i + 3
-                  else
-                    result = result + "%" + hex
-                    i = i + 3
-                  end
-                end
-              end
-            end
-          end
-        else
-          result = result + ch
-          i = i + 1
-        end
-      else
-        result = result + ch
-        i = i + 1
-      end
-    end
-    result
-  end
-
-  def set_string_field(nid, field, val)
-    if field == "name"
-      @nd_name[nid] = val
-    end
-    if field == "content"
-      @nd_content[nid] = val
-    end
-    if field == "value"
-      @nd_content[nid] = val
-    end
-    if field == "operator"
-      @nd_operator[nid] = val
-    end
-    if field == "binary_operator"
-      @nd_binop[nid] = val
-    end
-    if field == "call_operator"
-      @nd_callop[nid] = val
-    end
-    if field == "unescaped"
-      @nd_unescaped[nid] = val
-    end
-  end
-
-  def set_int_field(nid, field, val)
-    if field == "value"
-      @nd_value[nid] = val
-    end
-    if field == "flags"
-      @nd_flags[nid] = val
-    end
-    if field == "number"
-      @nd_value[nid] = val
-    end
-    if field == "maximum"
-      @nd_value[nid] = val
-    end
-    if field == "start_line"
-      @nd_value[nid] = val
-    end
-  end
-
-  def set_ref_field(nid, field, ref_id)
-    if field == "receiver"
-      @nd_receiver[nid] = ref_id
-    end
-    if field == "arguments"
-      @nd_arguments[nid] = ref_id
-    end
-    if field == "body"
-      @nd_body[nid] = ref_id
-    end
-    if field == "block"
-      @nd_block[nid] = ref_id
-    end
-    if field == "parameters"
-      @nd_parameters[nid] = ref_id
-    end
-    if field == "predicate"
-      @nd_predicate[nid] = ref_id
-    end
-    if field == "subsequent"
-      @nd_subsequent[nid] = ref_id
-    end
-    if field == "else_clause"
-      @nd_else_clause[nid] = ref_id
-    end
-    if field == "left"
-      @nd_left[nid] = ref_id
-    end
-    if field == "right"
-      @nd_right[nid] = ref_id
-    end
-    if field == "constant_path"
-      @nd_constant_path[nid] = ref_id
-    end
-    if field == "superclass"
-      @nd_superclass[nid] = ref_id
-    end
-    if field == "rest"
-      @nd_rest[nid] = ref_id
-    end
-    if field == "keyword_rest"
-      @nd_keyword_rest[nid] = ref_id
-    end
-    if field == "rescue_clause"
-      @nd_rescue_clause[nid] = ref_id
-    end
-    if field == "ensure_clause"
-      @nd_ensure_clause[nid] = ref_id
-    end
-    if field == "expression"
-      @nd_expression[nid] = ref_id
-    end
-    if field == "target"
-      @nd_target[nid] = ref_id
-    end
-    if field == "pattern"
-      @nd_pattern[nid] = ref_id
-    end
-    if field == "key"
-      @nd_key[nid] = ref_id
-    end
-    if field == "reference"
-      @nd_reference[nid] = ref_id
-    end
-    if field == "collection"
-      @nd_collection[nid] = ref_id
-    end
-    if field == "statements"
-      @nd_body[nid] = ref_id
-    end
-    if field == "value"
-      @nd_expression[nid] = ref_id
-    end
-    if field == "index"
-      @nd_target[nid] = ref_id
-    end
-    if field == "parent"
-      @nd_receiver[nid] = ref_id
-    end
-    if field == "rescue_expression"
-      @nd_else_clause[nid] = ref_id
-    end
-    if field == "call"
-      @nd_receiver[nid] = ref_id
-    end
-  end
-
-  def set_array_field(nid, field, ids_str)
-    if field == "body"
-      @nd_stmts[nid] = ids_str
-    end
-    if field == "arguments"
-      @nd_args[nid] = ids_str
-    end
-    if field == "requireds"
-      @nd_requireds[nid] = ids_str
-    end
-    if field == "optionals"
-      @nd_optionals[nid] = ids_str
-    end
-    if field == "keywords"
-      @nd_keywords[nid] = ids_str
-    end
-    if field == "elements"
-      @nd_elements[nid] = ids_str
-    end
-    if field == "parts"
-      @nd_parts[nid] = ids_str
-    end
-    if field == "conditions"
-      @nd_conditions[nid] = ids_str
-    end
-    if field == "exceptions"
-      @nd_exceptions[nid] = ids_str
-    end
-    if field == "lefts"
-      @nd_targets[nid] = ids_str
-    end
-    if field == "targets"
-      @nd_targets[nid] = ids_str
-    end
-    if field == "rights"
-      @nd_rights[nid] = ids_str
-    end
-    if field == "posts"
-      @nd_posts[nid] = ids_str
-    end
-  end
-
-  # ---- Convenience: get stmts of a body node ----
-  def get_stmts(nid)
-    if nid < 0
-      return []
-    end
-    # If it's a StatementsNode, return its stmts
-    if @nd_type[nid] == "StatementsNode"
-      return parse_id_list(@nd_stmts[nid])
-    end
-    # Otherwise return single-element array
-    result = []
-    result.push(nid)
-    result
-  end
-
-  def get_body_stmts(nid)
-    body = @nd_body[nid]
-    if body < 0
-      return []
-    end
-    get_stmts(body)
-  end
-
-  def get_args(nid)
-    # nid is an ArgumentsNode
-    if nid < 0
-      return []
-    end
-    if @nd_type[nid] == "ArgumentsNode"
-      return parse_id_list(@nd_args[nid])
-    end
-    result = []
-    result.push(nid)
-    result
-  end
-
-  # Returns 1 if @nd_block[nid] is a literal BlockNode (do/end body),
+  # Returns 1 if @node_store.node_block(nid) is a literal BlockNode (do/end body),
   # 0 otherwise. Pairs with find_block_arg to dispatch correctly at
   # &block-forwarding call sites (literal block vs. `&proc_var`).
   def has_literal_block(nid)
-    blk = @nd_block[nid]
-    (blk >= 0 && @nd_type[blk] == "BlockNode") ? 1 : 0
+    blk = @node_store.node_block(nid)
+    (blk >= 0 && @node_store.node_type(blk) == "BlockNode") ? 1 : 0
   end
 
   # Returns the inner expression of a BlockArgumentNode whose payload
@@ -848,18 +362,18 @@ class Compiler
   # symbol-to-proc / nil-as-no-block lowering. Call sites fall
   # through to the no-block path in those cases.
   def find_block_arg(nid)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return -1
     end
-    if @nd_type[blk] != "BlockArgumentNode"
+    if @node_store.node_type(blk) != "BlockArgumentNode"
       return -1
     end
-    inner = @nd_expression[blk]
+    inner = @node_store.node_expression(blk)
     if inner < 0
       return -1
     end
-    if @nd_type[inner] != "LocalVariableReadNode"
+    if @node_store.node_type(inner) != "LocalVariableReadNode"
       return -1
     end
     inner
@@ -878,8 +392,7 @@ class Compiler
     # enclosing method declared `def outer(&)`. The BlockArgumentNode
     # carries no expression, so `find_block_arg` returns -1; we forward
     # the enclosing method's anon-block param directly.
-    blk = @nd_block[nid]
-    if blk >= 0 && @nd_type[blk] == "BlockArgumentNode" && @nd_expression[blk] < 0
+    if @node_store.has_anonymous_block_forward(nid) == 1
       if @current_method_block_param != ""
         return "lv_" + @current_method_block_param
       end
@@ -949,25 +462,25 @@ class Compiler
     if bid < 0
       return 0
     end
-    stmts = get_stmts(bid)
+    stmts = @node_store.get_stmts(bid)
     if stmts.length != 1
       return 0
     end
     s = stmts[0]
-    if @nd_type[s] != "CallNode"
+    if @node_store.node_type(s) != "CallNode"
       return 0
     end
-    if @nd_name[s] != "instance_eval"
+    if @node_store.node_name(s) != "instance_eval"
       return 0
     end
-    if @nd_receiver[s] >= 0
+    if @node_store.node_receiver(s) >= 0
       return 0
     end
     inner = find_block_arg(s)
     if inner < 0
       return 0
     end
-    if @nd_type[inner] != "LocalVariableReadNode"
+    if @node_store.node_type(inner) != "LocalVariableReadNode"
       return 0
     end
     # Param signature gate (does the string splits) — only methods
@@ -976,7 +489,7 @@ class Compiler
     if pname == ""
       return 0
     end
-    if @nd_name[inner] != pname
+    if @node_store.node_name(inner) != pname
       return 0
     end
     1
@@ -991,13 +504,13 @@ class Compiler
     if nid < 0
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ConstantReadNode"
-      return @nd_name[nid]
+      return @node_store.node_name(nid)
     end
     if t == "ConstantPathNode"
-      leaf = @nd_name[nid]
-      parent = @nd_receiver[nid]
+      leaf = @node_store.node_name(nid)
+      parent = @node_store.node_receiver(nid)
       if parent < 0
         return leaf
       end
@@ -1014,16 +527,16 @@ class Compiler
     if nid < 0
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ConstantReadNode"
       return 1
     end
     if t == "ConstantPathNode"
-      parent = @nd_receiver[nid]
+      parent = @node_store.node_receiver(nid)
       if parent < 0
         return 0
       end
-      pt = @nd_type[parent]
+      pt = @node_store.node_type(parent)
       if pt == "ConstantReadNode"
         return 1
       end
@@ -1039,7 +552,7 @@ class Compiler
     if recv_nid < 0
       return ""
     end
-    rt = @nd_type[recv_nid]
+    rt = @node_store.node_type(recv_nid)
     if rt == "ConstantReadNode" || rt == "ConstantPathNode"
       return resolve_const_ref_name(recv_nid)
     end
@@ -1148,13 +661,13 @@ class Compiler
     if nid < 0
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ConstantReadNode"
-      return resolve_const_read_name(@nd_name[nid])
+      return resolve_const_read_name(@node_store.node_name(nid))
     end
     if t == "ConstantPathNode"
-      leaf = @nd_name[nid]
-      parent = @nd_receiver[nid]
+      leaf = @node_store.node_name(nid)
+      parent = @node_store.node_receiver(nid)
       if parent < 0
         return leaf
       end
@@ -1292,30 +805,30 @@ class Compiler
     if pred_id < 0
       return ""
     end
-    if @nd_type[pred_id] != "CallNode"
+    if @node_store.node_type(pred_id) != "CallNode"
       return ""
     end
-    pname = @nd_name[pred_id]
+    pname = @node_store.node_name(pred_id)
     if pname != "is_a?" && pname != "kind_of?"
       return ""
     end
-    expr = @nd_receiver[pred_id]
+    expr = @node_store.node_receiver(pred_id)
     if expr < 0
       return ""
     end
-    args = @nd_arguments[pred_id]
+    args = @node_store.node_arguments(pred_id)
     if args < 0
       return ""
     end
-    arg_ids = get_args(args)
+    arg_ids = @node_store.get_args(args)
     if arg_ids.length < 1
       return ""
     end
     arg0 = arg_ids[0]
     cname = ""
-    if @nd_type[arg0] == "ConstantReadNode"
-      cname = @nd_name[arg0]
-    elsif @nd_type[arg0] == "ConstantPathNode"
+    if @node_store.node_type(arg0) == "ConstantReadNode"
+      cname = @node_store.node_name(arg0)
+    elsif @node_store.node_type(arg0) == "ConstantPathNode"
       cname = resolve_const_ref_name(arg0)
     end
     if cname == ""
@@ -1428,30 +941,30 @@ class Compiler
     if pred_id < 0
       return ["", ""]
     end
-    if @nd_type[pred_id] != "CallNode"
+    if @node_store.node_type(pred_id) != "CallNode"
       return ["", ""]
     end
-    pname = @nd_name[pred_id]
+    pname = @node_store.node_name(pred_id)
     if pname != "is_a?" && pname != "kind_of?"
       return ["", ""]
     end
-    expr = @nd_receiver[pred_id]
-    if expr < 0 || @nd_type[expr] != "LocalVariableReadNode"
+    expr = @node_store.node_receiver(pred_id)
+    if expr < 0 || @node_store.node_type(expr) != "LocalVariableReadNode"
       return ["", ""]
     end
-    args = @nd_arguments[pred_id]
+    args = @node_store.node_arguments(pred_id)
     if args < 0
       return ["", ""]
     end
-    arg_ids = get_args(args)
+    arg_ids = @node_store.get_args(args)
     if arg_ids.length < 1
       return ["", ""]
     end
     arg0 = arg_ids[0]
     cname = ""
-    if @nd_type[arg0] == "ConstantReadNode"
-      cname = @nd_name[arg0]
-    elsif @nd_type[arg0] == "ConstantPathNode"
+    if @node_store.node_type(arg0) == "ConstantReadNode"
+      cname = @node_store.node_name(arg0)
+    elsif @node_store.node_type(arg0) == "ConstantPathNode"
       cname = resolve_const_ref_name(arg0)
     end
     if cname == ""
@@ -1461,7 +974,7 @@ class Compiler
     if nt == ""
       return ["", ""]
     end
-    [@nd_name[expr], nt]
+    [@node_store.node_name(expr), nt]
   end
 
   def set_var_type(name, vtype)
@@ -1477,8 +990,8 @@ class Compiler
 
   # ---- Class/Method lookup (all parallel arrays) ----
   def find_regexp_index(nid)
-    if @nd_type[nid] == "RegularExpressionNode"
-      pat = @nd_unescaped[nid]
+    if @node_store.node_type(nid) == "RegularExpressionNode"
+      pat = @node_store.node_unescaped(nid)
       i = 0
       while i < @regexp_patterns.length
         if @regexp_patterns[i] == pat
@@ -1492,13 +1005,13 @@ class Compiler
     # underlying pattern, so `RX = /pat/; RX.match?(s)` and
     # `s =~ RX` dispatch to the engine instead of falling through
     # to the literal-`(-1)` / `sp_str_include` fallbacks.
-    if @nd_type[nid] == "ConstantReadNode"
+    if @node_store.node_type(nid) == "ConstantReadNode"
       cname = resolve_const_ref_name(nid)
       if cname != ""
         ci = find_const_idx(cname)
         if ci >= 0 && ci < @const_expr_ids.length
           eid = @const_expr_ids[ci]
-          if eid >= 0 && @nd_type[eid] == "RegularExpressionNode"
+          if eid >= 0 && @node_store.node_type(eid) == "RegularExpressionNode"
             return find_regexp_index(eid)
           end
         end
@@ -1507,8 +1020,8 @@ class Compiler
     # A local variable with exactly one write to a regex literal is
     # also resolvable. Multi-write or non-regex-write names were
     # marked ambiguous (-1) by scan_features.
-    if @nd_type[nid] == "LocalVariableReadNode"
-      lname = @nd_name[nid]
+    if @node_store.node_type(nid) == "LocalVariableReadNode"
+      lname = @node_store.node_name(nid)
       i = 0
       while i < @local_regex_names.length
         if @local_regex_names[i] == lname
@@ -1617,19 +1130,19 @@ class Compiler
     if value_id < 0
       return
     end
-    vt = @nd_type[value_id]
+    vt = @node_store.node_type(value_id)
     lit = ""
     if vt == "IntegerNode"
-      lit = @nd_value[value_id].to_s
+      lit = @node_store.node_value(value_id).to_s
     end
     if vt == "FloatNode"
-      lit = @nd_content[value_id]
+      lit = @node_store.node_content(value_id)
     end
     if vt == "StringNode"
-      lit = c_string_literal(@nd_content[value_id])
+      lit = c_string_literal(@node_store.node_content(value_id))
     end
     if vt == "SymbolNode"
-      lit = compile_symbol_literal(@nd_content[value_id])
+      lit = compile_symbol_literal(@node_store.node_content(value_id))
     end
     if vt == "TrueNode"
       lit = "TRUE"
@@ -1664,15 +1177,15 @@ class Compiler
     if eid < 0
       return ""
     end
-    et = @nd_type[eid]
+    et = @node_store.node_type(eid)
     if et == "IntegerNode"
-      return @nd_value[eid].to_s
+      return @node_store.node_value(eid).to_s
     end
     if et == "FloatNode"
-      return @nd_content[eid]
+      return @node_store.node_content(eid)
     end
     if et == "StringNode"
-      return c_string_literal(@nd_content[eid])
+      return c_string_literal(@node_store.node_content(eid))
     end
     if et == "TrueNode"
       return "TRUE"
@@ -1684,7 +1197,7 @@ class Compiler
       return "0"
     end
     if et == "SymbolNode"
-      return compile_symbol_literal(@nd_content[eid])
+      return compile_symbol_literal(@node_store.node_content(eid))
     end
     ""
   end
@@ -1840,7 +1353,7 @@ class Compiler
     if nid < 0
       return "void"
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "IntegerNode"
       return "int"
     end
@@ -1905,14 +1418,14 @@ class Compiler
       return "range"
     end
     if t == "LocalVariableReadNode"
-      vt = find_var_type(@nd_name[nid])
+      vt = find_var_type(@node_store.node_name(nid))
       if vt != ""
         return vt
       end
       return "int"
     end
     if t == "GlobalVariableReadNode"
-      gname = @nd_name[nid]
+      gname = @node_store.node_name(nid)
       gi = 0
       while gi < @gvar_names.length
         if @gvar_names[gi] == gname
@@ -1924,16 +1437,16 @@ class Compiler
     end
     if t == "InstanceVariableReadNode"
       if @current_class_idx >= 0
-        return cls_ivar_type(@current_class_idx, @nd_name[nid])
+        return cls_ivar_type(@current_class_idx, @node_store.node_name(nid))
       end
-      tit = toplevel_ivar_type(@nd_name[nid])
+      tit = toplevel_ivar_type(@node_store.node_name(nid))
       if tit != ""
         return tit
       end
       return "int"
     end
     if t == "ClassVariableReadNode"
-      qname = cvar_qname(@current_class_idx, @nd_name[nid])
+      qname = cvar_qname(@current_class_idx, @node_store.node_name(nid))
       ci = find_cvar_idx(qname)
       if ci >= 0
         return @cvar_types[ci]
@@ -1941,10 +1454,10 @@ class Compiler
       return "int"
     end
     if t == "ConstantReadNode"
-      if @nd_name[nid] == "ARGV"
+      if @node_store.node_name(nid) == "ARGV"
         return "argv"
       end
-      rname = resolve_const_read_name(@nd_name[nid])
+      rname = resolve_const_read_name(@node_store.node_name(nid))
       ci = find_const_idx(rname)
       if ci >= 0
         return @const_types[ci]
@@ -1967,7 +1480,7 @@ class Compiler
           return "class_" + cpname
         end
       end
-      parent = @nd_receiver[nid]
+      parent = @node_store.node_receiver(nid)
       if parent >= 0
         rname = resolve_const_ref_name(parent)
         if rname == "Float"
@@ -1984,20 +1497,20 @@ class Compiler
     end
     if t == "IfNode"
       then_type = "nil"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         if stmts.length > 0
           then_type = infer_type(stmts.last)
         end
       end
       else_type = "nil"
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
-        if @nd_type[sub] == "ElseNode"
-          ebody = @nd_body[sub]
+        if @node_store.node_type(sub) == "ElseNode"
+          ebody = @node_store.node_body(sub)
           if ebody >= 0
-            es = get_stmts(ebody)
+            es = @node_store.get_stmts(ebody)
             if es.length > 0
               else_type = infer_type(es.last)
             end
@@ -2014,14 +1527,14 @@ class Compiler
     end
     if t == "CaseMatchNode"
       types = "".split(",")
-      conds = parse_id_list(@nd_conditions[nid])
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         inid = conds[k]
-        if @nd_type[inid] == "InNode"
-          ibody = @nd_body[inid]
+        if @node_store.node_type(inid) == "InNode"
+          ibody = @node_store.node_body(inid)
           if ibody >= 0
-            is = get_stmts(ibody)
+            is = @node_store.get_stmts(ibody)
             if is.length > 0
               types.push(infer_type(is.last))
             end
@@ -2029,11 +1542,11 @@ class Compiler
         end
         k = k + 1
       end
-      ec = @nd_else_clause[nid]
+      ec = @node_store.node_else_clause(nid)
       if ec >= 0
-        ebody = @nd_body[ec]
+        ebody = @node_store.node_body(ec)
         if ebody >= 0
-          es = get_stmts(ebody)
+          es = @node_store.get_stmts(ebody)
           if es.length > 0
             types.push(infer_type(es.last))
           end
@@ -2046,14 +1559,14 @@ class Compiler
     end
     if t == "CaseNode"
       types = "".split(",")
-      conds = parse_id_list(@nd_conditions[nid])
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         wid = conds[k]
-        if @nd_type[wid] == "WhenNode"
-          wbody = @nd_body[wid]
+        if @node_store.node_type(wid) == "WhenNode"
+          wbody = @node_store.node_body(wid)
           if wbody >= 0
-            ws = get_stmts(wbody)
+            ws = @node_store.get_stmts(wbody)
             if ws.length > 0
               types.push(infer_type(ws.last))
             end
@@ -2061,11 +1574,11 @@ class Compiler
         end
         k = k + 1
       end
-      ec = @nd_else_clause[nid]
+      ec = @node_store.node_else_clause(nid)
       if ec >= 0
-        ebody = @nd_body[ec]
+        ebody = @node_store.node_body(ec)
         if ebody >= 0
-          es = get_stmts(ebody)
+          es = @node_store.get_stmts(ebody)
           if es.length > 0
             types.push(infer_type(es.last))
           end
@@ -2083,9 +1596,9 @@ class Compiler
       return or_result_type(nid)
     end
     if t == "ParenthesesNode"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         if stmts.length > 0
           return infer_type(stmts.last)
         end
@@ -2104,9 +1617,9 @@ class Compiler
     end
     if t == "LambdaNode"
       # Record return type if inside a variable assignment context
-      lbody = @nd_body[nid]
+      lbody = @node_store.node_body(nid)
       if lbody >= 0
-        lbs = get_stmts(lbody)
+        lbs = @node_store.get_stmts(lbody)
         if lbs.length > 0
           lrt = infer_type(lbs.last)
           @last_lambda_ret_type = lrt
@@ -2118,7 +1631,7 @@ class Compiler
   end
 
   def infer_array_elem_type(nid)
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length > 0
       et = infer_type(elems[0])
       if et == "symbol"
@@ -2223,18 +1736,18 @@ class Compiler
   end
 
   def infer_hash_val_type(nid)
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length > 0
       eid = elems[0]
-      if @nd_type[eid] == "AssocNode"
-        first_vt = infer_type(@nd_expression[eid])
+      if @node_store.node_type(eid) == "AssocNode"
+        first_vt = infer_type(@node_store.node_expression(eid))
         # Check if all values have the same type
         all_same = 1
         k = 1
         while k < elems.length
           eid2 = elems[k]
-          if @nd_type[eid2] == "AssocNode"
-            vt2 = infer_type(@nd_expression[eid2])
+          if @node_store.node_type(eid2) == "AssocNode"
+            vt2 = infer_type(@node_store.node_expression(eid2))
             if vt2 != first_vt
               all_same = 0
             end
@@ -2248,9 +1761,9 @@ class Compiler
         kk = 0
         while kk < elems.length
           ekid = elems[kk]
-          if @nd_type[ekid] == "AssocNode"
-            kid = @nd_key[ekid]
-            if kid < 0 || @nd_type[kid] != "SymbolNode"
+          if @node_store.node_type(ekid) == "AssocNode"
+            kid = @node_store.node_key(ekid)
+            if kid < 0 || @node_store.node_type(kid) != "SymbolNode"
               all_sym_keys = 0
             end
           end
@@ -2260,9 +1773,9 @@ class Compiler
         ki = 0
         while ki < elems.length
           ekid2 = elems[ki]
-          if @nd_type[ekid2] == "AssocNode"
-            kid2 = @nd_key[ekid2]
-            if kid2 < 0 || @nd_type[kid2] != "IntegerNode"
+          if @node_store.node_type(ekid2) == "AssocNode"
+            kid2 = @node_store.node_key(ekid2)
+            if kid2 < 0 || @node_store.node_type(kid2) != "IntegerNode"
               all_int_keys = 0
             end
           end
@@ -2332,8 +1845,8 @@ class Compiler
   # return. Mirror new cases in both functions, in the same order, with
   # the same recogniser logic.
   def infer_call_type(nid)
-    mname = @nd_name[nid]
-    recv = @nd_receiver[nid]
+    mname = @node_store.node_name(nid)
+    recv = @node_store.node_receiver(nid)
 
     # `recv.__sp_ieval_<N>(...)`: the rewritten form of an
     # `recv.instance_eval { ... }` call. v1 only fired on top-level call
@@ -2362,11 +1875,11 @@ class Compiler
     # only when we have a confident answer means the existing
     # operator/comparison/etc paths still get to chime in for shapes
     # that don't match this chain.
-    if recv >= 0 && @nd_type[recv] == "CallNode"
-      inner_recv = @nd_receiver[recv]
-      inner_mname = @nd_name[recv]
-      if inner_recv >= 0 && @nd_type[inner_recv] == "ConstantReadNode"
-        mod_name = @nd_name[inner_recv]
+    if recv >= 0 && @node_store.node_type(recv) == "CallNode"
+      inner_recv = @node_store.node_receiver(recv)
+      inner_mname = @node_store.node_name(recv)
+      if inner_recv >= 0 && @node_store.node_type(inner_recv) == "ConstantReadNode"
+        mod_name = @node_store.node_name(inner_recv)
         if module_name_exists(mod_name) == 1
           rconsts = module_acc_resolved(mod_name, inner_mname)
           if rconsts != "" && rconsts != "?"
@@ -2419,8 +1932,8 @@ class Compiler
       if recv >= 0
         rt = infer_type(recv)
         if rt == "lambda"
-          if @nd_type[recv] == "LocalVariableReadNode"
-            lrt = lambda_var_ret_type(@nd_name[recv])
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            lrt = lambda_var_ret_type(@node_store.node_name(recv))
             if lrt != ""
               return lrt
             end
@@ -2446,9 +1959,9 @@ class Compiler
           cname_w = bt_w[4, bt_w.length - 4]
           ci_w = find_class_idx(cname_w)
           if ci_w >= 0 && cls_has_attr_writer(ci_w, bname_w) == 1
-            args_id_w = @nd_arguments[nid]
+            args_id_w = @node_store.node_arguments(nid)
             if args_id_w >= 0
-              arg_ids_w = get_args(args_id_w)
+              arg_ids_w = @node_store.get_args(args_id_w)
               if arg_ids_w.length > 0
                 return infer_type(arg_ids_w[0])
               end
@@ -2614,9 +2127,9 @@ class Compiler
           return "bigint"
         end
       end
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = parse_id_list(@nd_args[args_id])
+        aargs = @node_store.parse_id_list(@node_store.node_args(args_id))
         if aargs.length > 0 && infer_type(aargs[0]) == "bigint"
           if mname == "+" || mname == "-" || mname == "*" || mname == "/" || mname == "%"
             return "bigint"
@@ -2642,9 +2155,9 @@ class Compiler
           return "float"
         end
         # Check RHS for float promotion
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             rt2 = infer_type(aargs.first)
             if rt2 == "float"
@@ -2667,9 +2180,9 @@ class Compiler
           return lt
         end
         # Check RHS for float promotion
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             rt2 = infer_type(aargs.first)
             if rt2 == "float"
@@ -2696,9 +2209,9 @@ class Compiler
           return lt
         end
         # Check RHS for float promotion
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             rt2 = infer_type(aargs.first)
             if rt2 == "float"
@@ -2715,9 +2228,9 @@ class Compiler
           return "float"
         end
         # Check RHS for float promotion
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             rt2 = infer_type(aargs.first)
             if rt2 == "float"
@@ -2758,9 +2271,9 @@ class Compiler
       if recv >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
               at = infer_type(aargs[0])
               if at == "str_array"
@@ -2830,7 +2343,7 @@ class Compiler
     # used to live next to nan?/infinite? — folded in here for one place
     # to update.)
     if mname == "ceil" || mname == "floor" || mname == "round" || mname == "truncate"
-      if @nd_arguments[nid] >= 0
+      if @node_store.node_arguments(nid) >= 0
         return "float"
       end
       return "int"
@@ -2928,7 +2441,7 @@ class Compiler
     # form is handled in compile_string_method_expr; the inference rule
     # here is what makes `ret = "hi".each_byte { ... }` typed as string.
     if mname == "each_byte"
-      if recv >= 0 && @nd_block[nid] >= 0
+      if recv >= 0 && @node_store.node_block(nid) >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
           return rt
@@ -2940,11 +2453,11 @@ class Compiler
       # the receiver's type so infer_type sees the inner shadow, not any
       # outer same-named local of a different type.
       if recv >= 0
-        blk = @nd_block[nid]
+        blk = @node_store.node_block(nid)
         if blk >= 0
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           if bbody >= 0
-            bbs = get_stmts(bbody)
+            bbs = @node_store.get_stmts(bbody)
             if bbs.length > 0
               bp = get_block_param(nid, 0)
               if bp == ""
@@ -3170,11 +2683,11 @@ class Compiler
     end
     if mname == "filter_map"
       if recv >= 0
-        blk = @nd_block[nid]
+        blk = @node_store.node_block(nid)
         if blk >= 0
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           if bbody >= 0
-            bbs = get_stmts(bbody)
+            bbs = @node_store.get_stmts(bbody)
             if bbs.length > 0
               bret = infer_type(bbs.last)
               if bret == "string"
@@ -3362,8 +2875,8 @@ class Compiler
       if recv >= 0
         rt = infer_type(recv)
         # With arg → returns array of same type
-        if @nd_arguments[nid] >= 0
-          aargs = get_args(@nd_arguments[nid])
+        if @node_store.node_arguments(nid) >= 0
+          aargs = @node_store.get_args(@node_store.node_arguments(nid))
           if aargs.length > 0
             return rt
           end
@@ -3440,11 +2953,11 @@ class Compiler
     if mname == "flat_map"
       if recv >= 0
         # Block returns an array; result type matches block return type
-        blk = @nd_block[nid]
+        blk = @node_store.node_block(nid)
         if blk >= 0
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           if bbody >= 0
-            bbs = get_stmts(bbody)
+            bbs = @node_store.get_stmts(bbody)
             if bbs.length > 0
               bret = infer_type(bbs.last)
               # If block returns an array type, use it as result type
@@ -3500,9 +3013,9 @@ class Compiler
         # Check if all zip arguments have the same element type
         heterogeneous = 0
         multi_arg = 0
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 1
             multi_arg = 1
           end
@@ -3519,7 +3032,7 @@ class Compiler
           # Build tuple type: receiver elem + each arg elem
           parts = "".split(",")
           parts.push(elem_type_of_array(rt))
-          aargs2 = get_args(args_id)
+          aargs2 = @node_store.get_args(args_id)
           k2 = 0
           while k2 < aargs2.length
             parts.push(elem_type_of_array(infer_type(aargs2[k2])))
@@ -3547,11 +3060,11 @@ class Compiler
     if mname == "map"
       if recv >= 0
         # Declare bp inside a scope so infer_type sees the inner element type, not a shadowed outer local.
-        blk = @nd_block[nid]
+        blk = @node_store.node_block(nid)
         if blk >= 0
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           if bbody >= 0
-            bbs = get_stmts(bbody)
+            bbs = @node_store.get_stmts(bbody)
             if bbs.length > 0
               recv_t = infer_type(recv)
               bp1 = get_block_param(nid, 0)
@@ -3630,9 +3143,9 @@ class Compiler
     end
     if mname == "reduce" || mname == "inject" || mname == "each_with_object"
       # Return type is the accumulator type, inferred from initial value
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 0
           return infer_type(aargs[0])
         end
@@ -3647,7 +3160,7 @@ class Compiler
         # receiver-type dispatch below misses every branch, and the function
         # returns int — making `infer_constant_recv_type`'s ENV branch (3019)
         # unreachable for `[]`. Mirrors the dispatch site's ENV check.
-        if @nd_type[recv] == "ConstantReadNode" && @nd_name[recv] == "ENV"
+        if @node_store.node_type(recv) == "ConstantReadNode" && @node_store.node_name(recv) == "ENV"
           return "string"
         end
         rt = infer_type(recv)
@@ -3663,10 +3176,10 @@ class Compiler
         if rt == "int_array"
           # a[range] / a[start, len] returns a slice (still int_array);
           # bare a[i] returns the element.
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            a = get_args(args_id)
-            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+            a = @node_store.get_args(args_id)
+            if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
               return "int_array"
             end
             if a.length >= 2
@@ -3680,10 +3193,10 @@ class Compiler
         end
         if rt == "float_array"
           # a[range] / a[start, len] returns a slice (still float_array).
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            a = get_args(args_id)
-            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+            a = @node_store.get_args(args_id)
+            if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
               return "float_array"
             end
             if a.length >= 2
@@ -3694,10 +3207,10 @@ class Compiler
         end
         if rt == "str_array"
           # a[range] / a[start, len] returns a slice (still str_array).
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            a = get_args(args_id)
-            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+            a = @node_store.get_args(args_id)
+            if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
               return "str_array"
             end
             if a.length >= 2
@@ -3707,10 +3220,10 @@ class Compiler
           return "string"
         end
         if rt == "poly_array"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            a = get_args(args_id)
-            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+            a = @node_store.get_args(args_id)
+            if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
               return "poly_array"
             end
             if a.length >= 2
@@ -3724,12 +3237,12 @@ class Compiler
         end
         if is_tuple_type(rt) == 1
           # Infer element type from constant index
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
-              if @nd_type[aargs[0]] == "IntegerNode"
-                return tuple_elem_type_at(rt, @nd_value[aargs[0]])
+              if @node_store.node_type(aargs[0]) == "IntegerNode"
+                return tuple_elem_type_at(rt, @node_store.node_value(aargs[0]))
               end
             end
           end
@@ -3816,9 +3329,9 @@ class Compiler
             # Check fill value type. Pointer-type fills must produce a typed
             # PtrArray; falling through to int_array would leave the
             # elements unscanned by GC.
-            args_id = @nd_arguments[nid]
+            args_id = @node_store.node_arguments(nid)
             if args_id >= 0
-              aargs = get_args(args_id)
+              aargs = @node_store.get_args(args_id)
               if aargs.length >= 2
                 vt = infer_type(aargs[1])
                 if vt == "float"
@@ -3873,8 +3386,8 @@ class Compiler
   def infer_constant_recv_type(nid, mname, recv)
     # File operations
     if recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        rcname = @nd_name[recv]
+      if @node_store.node_type(recv) == "ConstantReadNode"
+        rcname = @node_store.node_name(recv)
         if rcname == "Process"
           if mname == "clock_gettime"
             return "float"
@@ -4371,8 +3884,8 @@ class Compiler
     # Array literal RHS: each target gets the precise element type so a
     # heterogeneous literal like [1, "x", 2.0] doesn't force everything
     # through the poly boxer.
-    if @nd_type[val_id] == "ArrayNode"
-      elems = parse_id_list(@nd_elements[val_id])
+    if @node_store.node_type(val_id) == "ArrayNode"
+      elems = @node_store.parse_id_list(@node_store.node_elements(val_id))
       if ti < elems.length
         return infer_type(elems[ti])
       end
@@ -4415,10 +3928,10 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] != "SplatNode"
+    if @node_store.node_type(nid) != "SplatNode"
       return 0
     end
-    if @nd_expression[nid] < 0
+    if @node_store.node_expression(nid) < 0
       return 0
     end
     1
@@ -4506,7 +4019,7 @@ class Compiler
     if nid < 0
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "IntegerNode" || t == "FloatNode" || t == "StringNode"
       return 0
     end
@@ -4537,10 +4050,10 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] != "HashNode"
+    if @node_store.node_type(nid) != "HashNode"
       return 0
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length == 0
       return 1
     end
@@ -4551,10 +4064,10 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] != "ArrayNode"
+    if @node_store.node_type(nid) != "ArrayNode"
       return 0
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length == 0
       return 1
     end
@@ -4570,14 +4083,14 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] != "CallNode" || @nd_name[nid] != "*"
+    if @node_store.node_type(nid) != "CallNode" || @node_store.node_name(nid) != "*"
       return 0
     end
-    arr_recv = @nd_receiver[nid]
-    if arr_recv < 0 || @nd_type[arr_recv] != "ArrayNode"
+    arr_recv = @node_store.node_receiver(nid)
+    if arr_recv < 0 || @node_store.node_type(arr_recv) != "ArrayNode"
       return 0
     end
-    recv_elems = parse_id_list(@nd_elements[arr_recv])
+    recv_elems = @node_store.parse_id_list(@node_store.node_elements(arr_recv))
     # Restrict to single-element [nil] or [0] literals — the emit
     # paths in compile_expr_for_expected_type / emit_constructor /
     # compile_stmt all multiply by N (the multiplier) and fill with
@@ -4593,10 +4106,10 @@ class Compiler
     if ti < 0
       return 0
     end
-    if @nd_type[ti] == "NilNode"
+    if @node_store.node_type(ti) == "NilNode"
       return 1
     end
-    if @nd_type[ti] == "IntegerNode" && @nd_value[ti].to_i == 0
+    if @node_store.node_type(ti) == "IntegerNode" && @node_store.node_value(ti).to_i == 0
       return 1
     end
     0
@@ -4863,7 +4376,7 @@ class Compiler
 
   # PM_RANGE_FLAGS_EXCLUDE_END = 4: bit 2 set means `...` (exclusive).
   def range_excl_end(rid)
-    if (@nd_flags[rid] & 4) != 0
+    if (@node_store.node_flags(rid) & 4) != 0
       return 1
     end
     return 0
@@ -4988,17 +4501,17 @@ class Compiler
   # `def` bodies ARE walked: in Ruby, `def foo; @x; end` at script scope
   # shares the same `main` ivar that bare `@x` writes.
   def scan_toplevel_ivars(nid)
-    if nid < 0 || nid >= @nd_count
+    if nid < 0 || nid >= @node_store.count
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ClassNode" || t == "ModuleNode" || t == "SingletonClassNode"
       return
     end
     if t == "InstanceVariableWriteNode"
-      register_toplevel_ivar(@nd_name[nid], infer_ivar_init_type(@nd_expression[nid]))
+      register_toplevel_ivar(@node_store.node_name(nid), infer_ivar_init_type(@node_store.node_expression(nid)))
     elsif t == "InstanceVariableReadNode" || t == "InstanceVariableTargetNode" || t == "InstanceVariableOperatorWriteNode" || t == "InstanceVariableAndWriteNode" || t == "InstanceVariableOrWriteNode"
-      register_toplevel_ivar(@nd_name[nid], "int")
+      register_toplevel_ivar(@node_store.node_name(nid), "int")
     end
     cs = []
     push_child_ids(nid, cs)
@@ -5084,11 +4597,11 @@ class Compiler
       end
       return ""
     end
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return ""
     end
-    aargs = get_args(args_id)
+    aargs = @node_store.get_args(args_id)
     if aargs.length == 0
       return ""
     end
@@ -5145,23 +4658,23 @@ class Compiler
       return
     end
     nid = 0
-    while nid < @nd_type.length
-      if @nd_type[nid] == "CallNode"
-        mname = @nd_name[nid]
+    while nid < @node_store.count
+      if @node_store.node_type(nid) == "CallNode"
+        mname = @node_store.node_name(nid)
         if mname.length > 1 && mname[mname.length - 1] == "="
-          recv = @nd_receiver[nid]
-          if recv >= 0 && @nd_type[recv] == "ConstantReadNode"
-            mod_name = @nd_name[recv]
+          recv = @node_store.node_receiver(nid)
+          if recv >= 0 && @node_store.node_type(recv) == "ConstantReadNode"
+            mod_name = @node_store.node_name(recv)
             if module_name_exists(mod_name) == 1
               accessor = mname[0, mname.length - 1]
               key = mod_name + "." + accessor
               idx = find_module_acc_idx(key)
               if idx >= 0 && @module_acc_consts[idx] != "?"
-                args_id = @nd_arguments[nid]
+                args_id = @node_store.node_arguments(nid)
                 if args_id >= 0
-                  arg_ids = get_args(args_id)
-                  if arg_ids.length > 0 && @nd_type[arg_ids[0]] == "ConstantReadNode"
-                    rhs_name = @nd_name[arg_ids[0]]
+                  arg_ids = @node_store.get_args(args_id)
+                  if arg_ids.length > 0 && @node_store.node_type(arg_ids[0]) == "ConstantReadNode"
+                    rhs_name = @node_store.node_name(arg_ids[0])
                     cur = @module_acc_consts[idx]
                     cur_list = cur.split(";")
                     if not_in(rhs_name, cur_list) == 1
@@ -5380,22 +4893,22 @@ class Compiler
   # detect_*, resolve_*, rewrite_*, scan_*, infer_*, and collect_*
   # helpers that the two drivers above call into.
   def collect_all
-    root = @root_id
-    if @nd_type[root] != "ProgramNode"
+    root = @node_store.root_id
+    if @node_store.node_type(root) != "ProgramNode"
       return
     end
-    stmts = get_body_stmts(root)
+    stmts = @node_store.get_body_stmts(root)
 
     # Pass 0: modules (must come before classes for include)
     stmts.each { |sid|
-      if @nd_type[sid] == "ModuleNode"
+      if @node_store.node_type(sid) == "ModuleNode"
         collect_module(sid)
       end
     }
 
     # Pass 1: classes
     stmts.each { |sid|
-      if @nd_type[sid] == "ClassNode"
+      if @node_store.node_type(sid) == "ClassNode"
         collect_class(sid)
       end
     }
@@ -5423,18 +4936,18 @@ class Compiler
 
     # Pass 2: top-level methods, constants, define_method
     stmts.each { |sid|
-      if @nd_type[sid] == "DefNode"
+      if @node_store.node_type(sid) == "DefNode"
         collect_toplevel_method(sid)
       end
-      if @nd_type[sid] == "ConstantWriteNode"
+      if @node_store.node_type(sid) == "ConstantWriteNode"
         collect_constant(sid)
       end
       # Top-level `A, B = expr` with constant targets.
-      if @nd_type[sid] == "MultiWriteNode"
+      if @node_store.node_type(sid) == "MultiWriteNode"
         collect_scoped_multi_const("", sid)
       end
-      if @nd_type[sid] == "CallNode"
-        if @nd_name[sid] == "define_method"
+      if @node_store.node_type(sid) == "CallNode"
+        if @node_store.node_name(sid) == "define_method"
           collect_define_method(sid)
         end
       end
@@ -5483,7 +4996,7 @@ class Compiler
     # into method bodies — locals there are out of scope, and the
     # ivar-only extension does not (yet) try to type method-local copies
     # of class instances.
-    ieval_walk(@root_id, local_class)
+    ieval_walk(@node_store.root_id, local_class)
     ieval_walk_class_methods
   end
 
@@ -5558,13 +5071,13 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ProgramNode"
-      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
       return
     end
     if t == "StatementsNode"
-      stmts = parse_id_list(@nd_stmts[nid])
+      stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
       k = 0
       while k < stmts.length
         ieval_walk(stmts[k], local_class)
@@ -5573,8 +5086,8 @@ class Compiler
       return
     end
     if t == "LocalVariableWriteNode"
-      val_nid = @nd_expression[nid]
-      vname = @nd_name[nid]
+      val_nid = @node_store.node_expression(nid)
+      vname = @node_store.node_name(nid)
       if val_nid >= 0
         ieval_walk(val_nid, local_class)
         ci = ieval_expr_class_idx(val_nid)
@@ -5589,16 +5102,16 @@ class Compiler
       return
     end
     if t == "CallNode"
-      if @nd_name[nid] == "instance_eval"
+      if @node_store.node_name(nid) == "instance_eval"
         ieval_rewrite_call(nid, local_class)
         # Don't descend into the lifted block body.
         return
       end
-      r = @nd_receiver[nid]
+      r = @node_store.node_receiver(nid)
       if r >= 0
         ieval_walk(r, local_class)
       end
-      a = @nd_arguments[nid]
+      a = @node_store.node_arguments(nid)
       if a >= 0
         ieval_walk(a, local_class)
       end
@@ -5606,7 +5119,7 @@ class Compiler
       return
     end
     if t == "ArgumentsNode"
-      args = parse_id_list(@nd_args[nid])
+      args = @node_store.parse_id_list(@node_store.node_args(nid))
       k = 0
       while k < args.length
         ieval_walk(args[k], local_class)
@@ -5615,51 +5128,51 @@ class Compiler
       return
     end
     if t == "IfNode"
-      ieval_walk(@nd_predicate[nid], local_class)
-      ieval_walk(@nd_body[nid], local_class)
-      ieval_walk(@nd_subsequent[nid], local_class)
-      ieval_walk(@nd_else_clause[nid], local_class)
+      ieval_walk(@node_store.node_predicate(nid), local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
+      ieval_walk(@node_store.node_subsequent(nid), local_class)
+      ieval_walk(@node_store.node_else_clause(nid), local_class)
       return
     end
     if t == "UnlessNode"
-      ieval_walk(@nd_predicate[nid], local_class)
-      ieval_walk(@nd_body[nid], local_class)
-      ieval_walk(@nd_else_clause[nid], local_class)
+      ieval_walk(@node_store.node_predicate(nid), local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
+      ieval_walk(@node_store.node_else_clause(nid), local_class)
       return
     end
     if t == "ElseNode"
-      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
       return
     end
     if t == "WhileNode"
-      ieval_walk(@nd_predicate[nid], local_class)
-      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@node_store.node_predicate(nid), local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
       return
     end
     if t == "UntilNode"
-      ieval_walk(@nd_predicate[nid], local_class)
-      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@node_store.node_predicate(nid), local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
       return
     end
     if t == "CaseNode"
-      ieval_walk(@nd_predicate[nid], local_class)
-      conds = parse_id_list(@nd_conditions[nid])
+      ieval_walk(@node_store.node_predicate(nid), local_class)
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         ieval_walk(conds[k], local_class)
         k = k + 1
       end
-      ieval_walk(@nd_else_clause[nid], local_class)
+      ieval_walk(@node_store.node_else_clause(nid), local_class)
       return
     end
     if t == "WhenNode"
-      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
       return
     end
     if t == "BeginNode"
-      ieval_walk(@nd_body[nid], local_class)
-      ieval_walk(@nd_rescue_clause[nid], local_class)
-      ieval_walk(@nd_ensure_clause[nid], local_class)
+      ieval_walk(@node_store.node_body(nid), local_class)
+      ieval_walk(@node_store.node_rescue_clause(nid), local_class)
+      ieval_walk(@node_store.node_ensure_clause(nid), local_class)
       return
     end
     # DefNode, LambdaNode, ClassNode, ModuleNode, BlockNode: not entered.
@@ -5668,17 +5181,17 @@ class Compiler
   end
 
   def ieval_expr_class_idx(nid)
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "new"
-        recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "new"
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
-          if @nd_type[recv] == "ConstantReadNode"
-            return find_class_idx(@nd_name[recv])
+          if @node_store.node_type(recv) == "ConstantReadNode"
+            return find_class_idx(@node_store.node_name(recv))
           end
           # `Foo::Bar.new`: Spinel's class registry is keyed by the leaf
           # name, matching how `collect_class` records nested classes.
-          if @nd_type[recv] == "ConstantPathNode"
-            return find_class_idx(@nd_name[recv])
+          if @node_store.node_type(recv) == "ConstantPathNode"
+            return find_class_idx(@node_store.node_name(recv))
           end
         end
       end
@@ -5687,11 +5200,11 @@ class Compiler
   end
 
   def ieval_rewrite_call(nid, local_class)
-    if @nd_name[nid] != "instance_eval"
+    if @node_store.node_name(nid) != "instance_eval"
       return
     end
-    recv = @nd_receiver[nid]
-    blk = @nd_block[nid]
+    recv = @node_store.node_receiver(nid)
+    blk = @node_store.node_block(nid)
     if recv < 0
       return
     end
@@ -5699,12 +5212,12 @@ class Compiler
       return
     end
     # Skip blocks with parameters: lifted function takes only `self`.
-    if @nd_parameters[blk] >= 0
+    if @node_store.node_parameters(blk) >= 0
       return
     end
     ci = -1
-    if @nd_type[recv] == "LocalVariableReadNode"
-      vname = @nd_name[recv]
+    if @node_store.node_type(recv) == "LocalVariableReadNode"
+      vname = @node_store.node_name(recv)
       if local_class.key?(vname)
         ci = local_class[vname]
       else
@@ -5720,7 +5233,7 @@ class Compiler
           ci = find_class_idx(bt[4, bt.length - 4])
         end
       end
-    elsif @nd_type[recv] == "InstanceVariableReadNode"
+    elsif @node_store.node_type(recv) == "InstanceVariableReadNode"
       # `@ivar.instance_eval { }` inside a class method. ieval_walk_class_methods
       # sets @current_class_idx so cls_ivar_type returns the ivar's stored
       # type — "obj_<Class>" when the ivar was bound to `Class.new` (and
@@ -5728,7 +5241,7 @@ class Compiler
       # the class index, the same shape `is_obj_type` / `base_type`
       # gates use elsewhere in the codegen for object-typed values.
       if @current_class_idx >= 0
-        it = cls_ivar_type(@current_class_idx, @nd_name[recv])
+        it = cls_ivar_type(@current_class_idx, @node_store.node_name(recv))
         bt = base_type(it)
         if is_obj_type(bt) == 1
           ci = find_class_idx(bt[4, bt.length - 4])
@@ -5738,7 +5251,7 @@ class Compiler
     if ci < 0
       return
     end
-    body_id = @nd_body[blk]
+    body_id = @node_store.node_body(blk)
     # v1: bail if the block uses yield/block_given?. Lifting it as a
     # plain function would lose the enclosing method's block plumbing.
     # Spinel rejected such code before — leaving it rejected is no
@@ -5753,8 +5266,8 @@ class Compiler
     # Mark the call site: the function name doubles as the synthetic id.
     # compile_call_expr / compile_call_stmt recognise the prefix and
     # emit a direct C call to `sp_ieval_<N>`.
-    @nd_name[nid] = "__sp_ieval_" + n.to_s
-    @nd_block[nid] = -1
+    @node_store.set_node_name(nid, "__sp_ieval_" + n.to_s)
+    @node_store.set_node_block(nid, -1)
   end
 
   def emit_ieval_funcs
@@ -5799,10 +5312,10 @@ class Compiler
   end
 
   def compile_ieval_call(nid)
-    mname = @nd_name[nid]
+    mname = @node_store.node_name(nid)
     # Synthetic id is the suffix after the 11-char "__sp_ieval_" prefix.
     suffix = mname[11, mname.length - 11]
-    "sp_ieval_" + suffix + "(" + compile_expr(@nd_receiver[nid]) + ")"
+    "sp_ieval_" + suffix + "(" + compile_expr(@node_store.node_receiver(nid)) + ")"
   end
 
   # v1 lifts blocks into void-returning functions (Ruby's
@@ -5812,7 +5325,7 @@ class Compiler
   # `if obj.instance_eval { ... }` still type-check. Real expression
   # support — return the block's last expression — is a v2 follow-up.
   def compile_ieval_call_expr(nid)
-    "(" + compile_ieval_call(nid) + ", " + compile_expr(@nd_receiver[nid]) + ")"
+    "(" + compile_ieval_call(nid) + ", " + compile_expr(@node_store.node_receiver(nid)) + ")"
   end
 
   def emit_ieval_func(n, ci, bid)
@@ -5873,19 +5386,19 @@ class Compiler
   # `static <type> cvar_<qname> = <default>;` ahead of the
   # functions that touch it.
   def collect_cvars
-    root = @root_id
-    if @nd_type[root] != "ProgramNode"
+    root = @node_store.root_id
+    if @node_store.node_type(root) != "ProgramNode"
       return
     end
-    stmts = get_body_stmts(root)
+    stmts = @node_store.get_body_stmts(root)
     stmts.each { |sid|
-      if @nd_type[sid] == "ClassNode"
-        cp = @nd_constant_path[sid]
+      if @node_store.node_type(sid) == "ClassNode"
+        cp = @node_store.node_constant_path(sid)
         if cp >= 0
           cname = const_ref_flat_name(cp)
           ci = find_class_idx(cname)
           if ci >= 0
-            body_id = @nd_body[sid]
+            body_id = @node_store.node_body(sid)
             collect_cvars_in(body_id, ci)
           end
         end
@@ -5903,12 +5416,12 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "ClassVariableWriteNode"
-      qname = cvar_qname(class_idx, @nd_name[nid])
-      val_t = infer_type(@nd_expression[nid])
+      qname = cvar_qname(class_idx, @node_store.node_name(nid))
+      val_t = infer_type(@node_store.node_expression(nid))
       register_cvar(qname, val_t)
-      try_fold_cvar_init(qname, @nd_expression[nid])
+      try_fold_cvar_init(qname, @node_store.node_expression(nid))
     end
     cs = []
     push_child_ids(nid, cs)
@@ -5920,18 +5433,18 @@ class Compiler
   end
 
   def collect_scoped_constant(scope_name, nid)
-    cname = @nd_name[nid]
+    cname = @node_store.node_name(nid)
     if scope_name != ""
       cname = scope_name + "_" + cname
     end
-    expr_id = @nd_expression[nid]
+    expr_id = @node_store.node_expression(nid)
     if expr_id >= 0
-      if @nd_type[expr_id] == "CallNode"
-        if @nd_name[expr_id] == "new"
-          sr = @nd_receiver[expr_id]
+      if @node_store.node_type(expr_id) == "CallNode"
+        if @node_store.node_name(expr_id) == "new"
+          sr = @node_store.node_receiver(expr_id)
           if sr >= 0
-            if @nd_type[sr] == "ConstantReadNode"
-              if @nd_name[sr] == "Struct"
+            if @node_store.node_type(sr) == "ConstantReadNode"
+              if @node_store.node_name(sr) == "Struct"
                 collect_struct_class(cname, expr_id)
                 return
               end
@@ -5963,7 +5476,7 @@ class Compiler
   def collect_class_with_prefix(nid, module_prefix)
     ci = @cls_names.length
     cname = ""
-    cp = @nd_constant_path[nid]
+    cp = @node_store.node_constant_path(nid)
     if cp >= 0
       cname = const_ref_flat_name(cp)
       # For `module M; class C; ... end; end`, Prism gives class name as
@@ -5977,13 +5490,13 @@ class Compiler
     if is_builtin_type_name(cname) == 1
       @open_class_names.push(cname)
       # Collect methods as top-level functions with special naming
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        body_stmts = get_stmts(body)
+        body_stmts = @node_store.get_stmts(body)
         body_stmts.each { |sid|
-          if @nd_type[sid] == "DefNode"
+          if @node_store.node_type(sid) == "DefNode"
             # Add as top-level method with prefix
-            mname = @nd_name[sid]
+            mname = @node_store.node_name(sid)
             # Store with special naming for lookup
             @meth_names.push("__oc_" + cname + "_" + mname)
             params = collect_params_str(sid)
@@ -5991,7 +5504,7 @@ class Compiler
             @meth_param_types.push(collect_ptypes_str(sid, -1))
             @meth_param_empty.push("")
             @meth_return_types.push("int")
-            @meth_body_ids.push(@nd_body[sid])
+            @meth_body_ids.push(@node_store.node_body(sid))
             @meth_has_yield.push(0)
             @meth_has_defaults.push("0")
             @meth_rest_index.push(collect_rest_index(sid))
@@ -6008,43 +5521,43 @@ class Compiler
     existing_ci = find_class_idx(cname)
     if existing_ci >= 0
       ci = existing_ci
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body < 0
         return
       end
-      body_stmts = get_stmts(body)
+      body_stmts = @node_store.get_stmts(body)
       body_stmts.each { |sid|
-        if @nd_type[sid] == "DefNode"
+        if @node_store.node_type(sid) == "DefNode"
           collect_class_method(ci, sid)
         end
-        if @nd_type[sid] == "ConstantWriteNode"
+        if @node_store.node_type(sid) == "ConstantWriteNode"
           collect_scoped_constant(cname, sid)
         end
-        if @nd_type[sid] == "CallNode"
-          cn = @nd_name[sid]
+        if @node_store.node_type(sid) == "CallNode"
+          cn = @node_store.node_name(sid)
           if cn != "include"
             if cn != "private"
               collect_attr_call(ci, sid)
             end
           end
         end
-        if @nd_type[sid] == "ClassNode"
+        if @node_store.node_type(sid) == "ClassNode"
           collect_class_with_prefix(sid, cname)
         end
-        if @nd_type[sid] == "ModuleNode"
+        if @node_store.node_type(sid) == "ModuleNode"
           collect_module_with_prefix(sid, cname)
         end
       }
       body_stmts.each { |sid|
-        if @nd_type[sid] == "CallNode"
-          if @nd_name[sid] == "include"
-            inc_args = @nd_arguments[sid]
+        if @node_store.node_type(sid) == "CallNode"
+          if @node_store.node_name(sid) == "include"
+            inc_args = @node_store.node_arguments(sid)
             if inc_args >= 0
-              inc_ids = get_args(inc_args)
+              inc_ids = @node_store.get_args(inc_args)
               ik = 0
               while ik < inc_ids.length
-                if @nd_type[inc_ids[ik]] == "ConstantReadNode"
-                  mod_name = @nd_name[inc_ids[ik]]
+                if @node_store.node_type(inc_ids[ik]) == "ConstantReadNode"
+                  mod_name = @node_store.node_name(inc_ids[ik])
                   collect_module_methods_into_class(ci, mod_name)
                 end
                 ik = ik + 1
@@ -6063,29 +5576,29 @@ class Compiler
     end
 
     parent = ""
-    sp = @nd_superclass[nid]
+    sp = @node_store.node_superclass(nid)
     struct_fields = "".split(",")
     if sp >= 0
-      if @nd_type[sp] == "CallNode"
-        if @nd_name[sp] == "new"
-          sr = @nd_receiver[sp]
+      if @node_store.node_type(sp) == "CallNode"
+        if @node_store.node_name(sp) == "new"
+          sr = @node_store.node_receiver(sp)
           if sr >= 0
-            if @nd_type[sr] == "ConstantReadNode"
-              if @nd_name[sr] == "Struct"
+            if @node_store.node_type(sr) == "ConstantReadNode"
+              if @node_store.node_name(sr) == "Struct"
                 # Struct.new(:x, :y, keyword_init: true)
-                sargs_id = @nd_arguments[sp]
+                sargs_id = @node_store.node_arguments(sp)
                 if sargs_id >= 0
-                  sarg_ids = get_args(sargs_id)
+                  sarg_ids = @node_store.get_args(sargs_id)
                   sk = 0
                   while sk < sarg_ids.length
-                    if @nd_type[sarg_ids[sk]] == "SymbolNode"
-                      fname = @nd_content[sarg_ids[sk]]
+                    if @node_store.node_type(sarg_ids[sk]) == "SymbolNode"
+                      fname = @node_store.node_content(sarg_ids[sk])
                       if fname == ""
-                        fname = @nd_name[sarg_ids[sk]]
+                        fname = @node_store.node_name(sarg_ids[sk])
                       end
                       struct_fields.push(fname)
                     end
-                    if @nd_type[sarg_ids[sk]] == "KeywordHashNode"
+                    if @node_store.node_type(sarg_ids[sk]) == "KeywordHashNode"
                       # keyword_init detected
                     end
                     sk = sk + 1
@@ -6098,7 +5611,7 @@ class Compiler
       else
         parent = const_ref_flat_name(sp)
         if parent == ""
-          parent = @nd_name[sp]
+          parent = @node_store.node_name(sp)
         end
         # Resolve the parent class name against the same module-prefix
         # chain that was used to register the child. `class Sub < Base`
@@ -6220,25 +5733,25 @@ class Compiler
     @cls_meth_has_yield.push("")
 
     # Collect class body
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     if body < 0
       return
     end
-    body_stmts = get_stmts(body)
+    body_stmts = @node_store.get_stmts(body)
     # First pass: collect all class methods and attrs
     body_stmts.each { |sid|
-      if @nd_type[sid] == "DefNode"
+      if @node_store.node_type(sid) == "DefNode"
         collect_class_method(ci, sid)
       end
-      if @nd_type[sid] == "ConstantWriteNode"
+      if @node_store.node_type(sid) == "ConstantWriteNode"
         collect_scoped_constant(cname, sid)
       end
       # Class-body `A, B = ...` multi-write to constants.
-      if @nd_type[sid] == "MultiWriteNode"
+      if @node_store.node_type(sid) == "MultiWriteNode"
         collect_scoped_multi_const(cname, sid)
       end
-      if @nd_type[sid] == "CallNode"
-        cn = @nd_name[sid]
+      if @node_store.node_type(sid) == "CallNode"
+        cn = @node_store.node_name(sid)
         if cn != "include"
           if cn != "private"
             collect_attr_call(ci, sid)
@@ -6249,24 +5762,24 @@ class Compiler
       # nested-in-module path, the inner type is registered at top
       # level under its outer-class–prefixed name (e.g. `A::B` →
       # `A_B`) so a `A::B.new` call resolves via the same flat lookup.
-      if @nd_type[sid] == "ClassNode"
+      if @node_store.node_type(sid) == "ClassNode"
         collect_class_with_prefix(sid, cname)
       end
-      if @nd_type[sid] == "ModuleNode"
+      if @node_store.node_type(sid) == "ModuleNode"
         collect_module_with_prefix(sid, cname)
       end
     }
     # Second pass: handle includes (after all own methods are known)
     body_stmts.each { |sid|
-      if @nd_type[sid] == "CallNode"
-        if @nd_name[sid] == "include"
-          inc_args = @nd_arguments[sid]
+      if @node_store.node_type(sid) == "CallNode"
+        if @node_store.node_name(sid) == "include"
+          inc_args = @node_store.node_arguments(sid)
           if inc_args >= 0
-            inc_ids = get_args(inc_args)
+            inc_ids = @node_store.get_args(inc_args)
             ik = 0
             while ik < inc_ids.length
-              if @nd_type[inc_ids[ik]] == "ConstantReadNode"
-                mod_name = @nd_name[inc_ids[ik]]
+              if @node_store.node_type(inc_ids[ik]) == "ConstantReadNode"
+                mod_name = @node_store.node_name(inc_ids[ik])
                 collect_module_methods_into_class(ci, mod_name)
               end
               ik = ik + 1
@@ -6296,12 +5809,12 @@ class Compiler
       if @module_names[mi] == mod_name
         mbody = @module_body_ids[mi]
         if mbody >= 0
-          mstmts = get_stmts(mbody)
+          mstmts = @node_store.get_stmts(mbody)
           mk = 0
           while mk < mstmts.length
             sid = mstmts[mk]
-            if @nd_type[sid] == "DefNode"
-              mname = @nd_name[sid]
+            if @node_store.node_type(sid) == "DefNode"
+              mname = @node_store.node_name(sid)
               # Only add if class doesn't already have this method
               existing = cls_find_method_direct(ci, mname)
               if existing < 0
@@ -6317,12 +5830,12 @@ class Compiler
   end
 
   def collect_class_method(ci, nid)
-    mname = @nd_name[nid]
-    body_id = @nd_body[nid]
+    mname = @node_store.node_name(nid)
+    body_id = @node_store.node_body(nid)
 
     # Check for class method (def self.xxx)
-    if @nd_receiver[nid] >= 0
-      if @nd_type[@nd_receiver[nid]] == "SelfNode"
+    if @node_store.node_receiver(nid) >= 0
+      if @node_store.node_type(@node_store.node_receiver(nid)) == "SelfNode"
         # Class method
         params_str = collect_params_str(nid)
         ptypes_str = collect_ptypes_str(nid, ci)
@@ -6347,20 +5860,20 @@ class Compiler
   end
 
   def collect_params_str(nid)
-    params = @nd_parameters[nid]
+    params = @node_store.node_parameters(nid)
     if params < 0
       return ""
     end
-    reqs = parse_id_list(@nd_requireds[params])
-    opts = parse_id_list(@nd_optionals[params])
-    kws = parse_id_list(@nd_keywords[params])
+    reqs = @node_store.parse_id_list(@node_store.node_requireds(params))
+    opts = @node_store.parse_id_list(@node_store.node_optionals(params))
+    kws = @node_store.parse_id_list(@node_store.node_keywords(params))
     result = ""
     k = 0
     while k < reqs.length
       if result != ""
         result = result + ","
       end
-      result = result + @nd_name[reqs[k]]
+      result = result + @node_store.node_name(reqs[k])
       k = k + 1
     end
     k = 0
@@ -6368,7 +5881,7 @@ class Compiler
       if result != ""
         result = result + ","
       end
-      result = result + @nd_name[opts[k]]
+      result = result + @node_store.node_name(opts[k])
       k = k + 1
     end
     k = 0
@@ -6376,43 +5889,43 @@ class Compiler
       if result != ""
         result = result + ","
       end
-      result = result + @nd_name[kws[k]]
+      result = result + @node_store.node_name(kws[k])
       k = k + 1
     end
     # Rest param (splat)
-    rest = @nd_rest[params]
+    rest = @node_store.node_rest(params)
     if rest >= 0
-      if @nd_type[rest] == "RestParameterNode"
+      if @node_store.node_type(rest) == "RestParameterNode"
         if result != ""
           result = result + ","
         end
-        result = result + @nd_name[rest]
+        result = result + @node_store.node_name(rest)
       end
     end
     # Post-rest required params: `def f(*r, x, y)` -> `x, y` come AFTER
     # rest in the AST's `posts` slot. Same shape as `requireds` (each
     # entry is a RequiredParameterNode); flow them straight through.
-    posts = parse_id_list(@nd_posts[params])
+    posts = @node_store.parse_id_list(@node_store.node_posts(params))
     k = 0
     while k < posts.length
-      if @nd_type[posts[k]] == "RequiredParameterNode"
+      if @node_store.node_type(posts[k]) == "RequiredParameterNode"
         if result != ""
           result = result + ","
         end
-        result = result + @nd_name[posts[k]]
+        result = result + @node_store.node_name(posts[k])
       end
       k = k + 1
     end
     # Keyword rest (`**kw`). Anonymous `**` synthesizes `__anon_kwrest`.
     # NoKeywordsParameterNode (`**nil`) is skipped here -- it doesn't
     # carry a slot.
-    kwrest = @nd_keyword_rest[params]
+    kwrest = @node_store.node_keyword_rest(params)
     if kwrest >= 0
-      if @nd_type[kwrest] == "KeywordRestParameterNode"
+      if @node_store.node_type(kwrest) == "KeywordRestParameterNode"
         if result != ""
           result = result + ","
         end
-        kn = @nd_name[kwrest]
+        kn = @node_store.node_name(kwrest)
         if kn == ""
           kn = "__anon_kwrest"
         end
@@ -6420,9 +5933,9 @@ class Compiler
       end
     end
     # Block parameter (&block)
-    blk = @nd_block[params]
+    blk = @node_store.node_block(params)
     if blk >= 0
-      if @nd_type[blk] == "BlockParameterNode"
+      if @node_store.node_type(blk) == "BlockParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6431,7 +5944,7 @@ class Compiler
         # stable internal name so the param gets a proper `lv_` slot
         # and downstream lookups (find_block_param_name,
         # @current_method_block_param) work the same as for `&block`.
-        bn = @nd_name[blk]
+        bn = @node_store.node_name(blk)
         if bn == ""
           bn = "__anon_block"
         end
@@ -6442,29 +5955,29 @@ class Compiler
   end
 
   def collect_rest_index(nid)
-    params = @nd_parameters[nid]
+    params = @node_store.node_parameters(nid)
     if params < 0
       return -1
     end
-    rest = @nd_rest[params]
-    if rest < 0 || @nd_type[rest] != "RestParameterNode"
+    rest = @node_store.node_rest(params)
+    if rest < 0 || @node_store.node_type(rest) != "RestParameterNode"
       return -1
     end
     idx = 0
-    idx = idx + parse_id_list(@nd_requireds[params]).length
-    idx = idx + parse_id_list(@nd_optionals[params]).length
-    idx = idx + parse_id_list(@nd_keywords[params]).length
+    idx = idx + @node_store.parse_id_list(@node_store.node_requireds(params)).length
+    idx = idx + @node_store.parse_id_list(@node_store.node_optionals(params)).length
+    idx = idx + @node_store.parse_id_list(@node_store.node_keywords(params)).length
     idx
   end
 
   def collect_ptypes_str(nid, ci)
-    params = @nd_parameters[nid]
+    params = @node_store.node_parameters(nid)
     if params < 0
       return ""
     end
-    reqs = parse_id_list(@nd_requireds[params])
-    opts = parse_id_list(@nd_optionals[params])
-    kws = parse_id_list(@nd_keywords[params])
+    reqs = @node_store.parse_id_list(@node_store.node_requireds(params))
+    opts = @node_store.parse_id_list(@node_store.node_optionals(params))
+    kws = @node_store.parse_id_list(@node_store.node_keywords(params))
     result = ""
     k = 0
     while k < reqs.length
@@ -6480,7 +5993,7 @@ class Compiler
         result = result + ","
       end
       # Infer from default value
-      def_id = @nd_expression[opts[k]]
+      def_id = @node_store.node_expression(opts[k])
       if def_id >= 0
         result = result + infer_type(def_id)
       else
@@ -6494,7 +6007,7 @@ class Compiler
         result = result + ","
       end
       # Infer from default value
-      def_id = @nd_expression[kws[k]]
+      def_id = @node_store.node_expression(kws[k])
       if def_id >= 0
         result = result + infer_type(def_id)
       else
@@ -6503,9 +6016,9 @@ class Compiler
       k = k + 1
     end
     # Rest param (splat)
-    rest = @nd_rest[params]
+    rest = @node_store.node_rest(params)
     if rest >= 0
-      if @nd_type[rest] == "RestParameterNode"
+      if @node_store.node_type(rest) == "RestParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6513,10 +6026,10 @@ class Compiler
       end
     end
     # Post-rest required params (`def f(*r, x, y)`).
-    posts = parse_id_list(@nd_posts[params])
+    posts = @node_store.parse_id_list(@node_store.node_posts(params))
     k = 0
     while k < posts.length
-      if @nd_type[posts[k]] == "RequiredParameterNode"
+      if @node_store.node_type(posts[k]) == "RequiredParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6526,9 +6039,9 @@ class Compiler
     end
     # Keyword rest (**kw). Spinel kwargs use symbol keys (matches
     # `f(a: 1)` keyword hash construction), so the slot is sym_poly_hash.
-    kwrest = @nd_keyword_rest[params]
+    kwrest = @node_store.node_keyword_rest(params)
     if kwrest >= 0
-      if @nd_type[kwrest] == "KeywordRestParameterNode"
+      if @node_store.node_type(kwrest) == "KeywordRestParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6536,9 +6049,9 @@ class Compiler
       end
     end
     # Block parameter (&block)
-    blk = @nd_block[params]
+    blk = @node_store.node_block(params)
     if blk >= 0
-      if @nd_type[blk] == "BlockParameterNode"
+      if @node_store.node_type(blk) == "BlockParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6549,13 +6062,13 @@ class Compiler
   end
 
   def collect_defaults_str(nid)
-    params = @nd_parameters[nid]
+    params = @node_store.node_parameters(nid)
     if params < 0
       return ""
     end
-    reqs = parse_id_list(@nd_requireds[params])
-    opts = parse_id_list(@nd_optionals[params])
-    kws = parse_id_list(@nd_keywords[params])
+    reqs = @node_store.parse_id_list(@node_store.node_requireds(params))
+    opts = @node_store.parse_id_list(@node_store.node_optionals(params))
+    kws = @node_store.parse_id_list(@node_store.node_keywords(params))
     result = ""
     k = 0
     while k < reqs.length
@@ -6570,7 +6083,7 @@ class Compiler
       if result != ""
         result = result + ","
       end
-      def_id = @nd_expression[opts[k]]
+      def_id = @node_store.node_expression(opts[k])
       if def_id >= 0
         result = result + def_id.to_s
       else
@@ -6583,7 +6096,7 @@ class Compiler
       if result != ""
         result = result + ","
       end
-      def_id = @nd_expression[kws[k]]
+      def_id = @node_store.node_expression(kws[k])
       if def_id >= 0
         result = result + def_id.to_s
       else
@@ -6592,9 +6105,9 @@ class Compiler
       k = k + 1
     end
     # Rest param
-    rest = @nd_rest[params]
+    rest = @node_store.node_rest(params)
     if rest >= 0
-      if @nd_type[rest] == "RestParameterNode"
+      if @node_store.node_type(rest) == "RestParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6602,10 +6115,10 @@ class Compiler
       end
     end
     # Post-rest required params (`def f(*r, x, y)`) — no defaults.
-    posts = parse_id_list(@nd_posts[params])
+    posts = @node_store.parse_id_list(@node_store.node_posts(params))
     k = 0
     while k < posts.length
-      if @nd_type[posts[k]] == "RequiredParameterNode"
+      if @node_store.node_type(posts[k]) == "RequiredParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6615,9 +6128,9 @@ class Compiler
     end
     # Keyword rest (**kw): no compile-time default, slot stays NULL
     # until the caller provides a hash.
-    kwrest = @nd_keyword_rest[params]
+    kwrest = @node_store.node_keyword_rest(params)
     if kwrest >= 0
-      if @nd_type[kwrest] == "KeywordRestParameterNode"
+      if @node_store.node_type(kwrest) == "KeywordRestParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6625,9 +6138,9 @@ class Compiler
       end
     end
     # Block param
-    blk = @nd_block[params]
+    blk = @node_store.node_block(params)
     if blk >= 0
-      if @nd_type[blk] == "BlockParameterNode"
+      if @node_store.node_type(blk) == "BlockParameterNode"
         if result != ""
           result = result + ","
         end
@@ -6676,16 +6189,16 @@ class Compiler
   end
 
   def collect_attr_call(ci, nid)
-    mname = @nd_name[nid]
-    args_id = @nd_arguments[nid]
+    mname = @node_store.node_name(nid)
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     if mname == "attr_accessor"
       k = 0
       while k < arg_ids.length
-        aname = @nd_content[arg_ids[k]]
+        aname = @node_store.node_content(arg_ids[k])
         append_attr_reader(ci, aname)
         append_attr_writer(ci, aname)
         k = k + 1
@@ -6694,7 +6207,7 @@ class Compiler
     if mname == "attr_reader"
       k = 0
       while k < arg_ids.length
-        aname = @nd_content[arg_ids[k]]
+        aname = @node_store.node_content(arg_ids[k])
         append_attr_reader(ci, aname)
         k = k + 1
       end
@@ -6702,7 +6215,7 @@ class Compiler
     if mname == "attr_writer"
       k = 0
       while k < arg_ids.length
-        aname = @nd_content[arg_ids[k]]
+        aname = @node_store.node_content(arg_ids[k])
         append_attr_writer(ci, aname)
         k = k + 1
       end
@@ -6970,15 +6483,15 @@ class Compiler
     if nid < 0
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "IntegerNode" || t == "FloatNode" || t == "StringNode"
       return 1
     end
     if t == "SymbolNode" || t == "TrueNode" || t == "FalseNode"
       return 1
     end
-    if t == "CallNode" && @nd_name[nid] == "[]"
-      recv = @nd_receiver[nid]
+    if t == "CallNode" && @node_store.node_name(nid) == "[]"
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
         rt = infer_type(recv)
         if rt == "str_int_hash" || rt == "sym_int_hash" || rt == "str_str_hash" || rt == "sym_str_hash" || rt == "int_str_hash"
@@ -6991,20 +6504,20 @@ class Compiler
     # a later concrete write disagrees with an IfNode-typed slot.
     if t == "IfNode"
       then_d = 0
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        ts = get_stmts(body)
+        ts = @node_store.get_stmts(body)
         if ts.length > 0
           then_d = is_definite_ivar_init(ts.last)
         end
       end
       else_d = 0
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
-        if @nd_type[sub] == "ElseNode"
-          eb = @nd_body[sub]
+        if @node_store.node_type(sub) == "ElseNode"
+          eb = @node_store.node_body(sub)
           if eb >= 0
-            es = get_stmts(eb)
+            es = @node_store.get_stmts(eb)
             if es.length > 0
               else_d = is_definite_ivar_init(es.last)
             end
@@ -7040,9 +6553,9 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "InstanceVariableWriteNode"
-      iname = @nd_name[nid]
-      expr_first = @nd_expression[nid]
+    if @node_store.node_type(nid) == "InstanceVariableWriteNode"
+      iname = @node_store.node_name(nid)
+      expr_first = @node_store.node_expression(nid)
       if ivar_exists(ci, iname) == 0 && ivar_exists_in_ancestor(ci, iname) == 1
         # Slot is on a parent class — route the write through
         # update_ivar_type so the parent's type widens consistently.
@@ -7067,9 +6580,9 @@ class Compiler
         # Without the gate, spinel_codegen's own ivars (e.g.,
         # `@current_method_name = "x" + n.to_s`) would falsely widen and
         # break the bootstrap.
-        expr = @nd_expression[nid]
+        expr = @node_store.node_expression(nid)
         if expr >= 0
-          if @nd_type[expr] != "NilNode"
+          if @node_store.node_type(expr) != "NilNode"
             vtype = infer_ivar_init_type(expr)
             cur = cls_ivar_type(ci, iname)
             new_def = is_definite_ivar_init(expr)
@@ -7084,8 +6597,8 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "InstanceVariableOperatorWriteNode"
-      iname = @nd_name[nid]
+    if @node_store.node_type(nid) == "InstanceVariableOperatorWriteNode"
+      iname = @node_store.node_name(nid)
       if ivar_exists(ci, iname) == 0
         add_ivar(ci, iname, "int")
       end
@@ -7093,14 +6606,14 @@ class Compiler
     # Multi-write to ivars: `@a, @b = expr1, expr2` (or `[expr1, expr2]`).
     # Without this branch, ivars assigned only via destructuring never get
     # registered and the struct comes out missing them.
-    if @nd_type[nid] == "MultiWriteNode"
-      targets = parse_id_list(@nd_targets[nid])
-      val_id = @nd_expression[nid]
+    if @node_store.node_type(nid) == "MultiWriteNode"
+      targets = @node_store.parse_id_list(@node_store.node_targets(nid))
+      val_id = @node_store.node_expression(nid)
       ti = 0
       while ti < targets.length
         tid = targets[ti]
-        if @nd_type[tid] == "InstanceVariableTargetNode"
-          iname = @nd_name[tid]
+        if @node_store.node_type(tid) == "InstanceVariableTargetNode"
+          iname = @node_store.node_name(tid)
           vtype = scan_ivars_multi_target_type(val_id, ti)
           if ivar_exists(ci, iname) == 0
             add_ivar(ci, iname, vtype)
@@ -7126,8 +6639,8 @@ class Compiler
     if val_id < 0
       return "int"
     end
-    if @nd_type[val_id] == "ArrayNode"
-      elems = parse_id_list(@nd_elements[val_id])
+    if @node_store.node_type(val_id) == "ArrayNode"
+      elems = @node_store.parse_id_list(@node_store.node_elements(val_id))
       if ti < elems.length
         return infer_ivar_init_type(elems[ti])
       end
@@ -7146,12 +6659,12 @@ class Compiler
     # even when it's `int` — `rt` (the outer call's inferred type)
     # is unreliable for nested-array shapes per the comment above,
     # so the block return is more authoritative.
-    if @nd_type[val_id] == "CallNode" && (@nd_name[val_id] == "map" || @nd_name[val_id] == "collect")
-      blk = @nd_block[val_id]
+    if @node_store.node_type(val_id) == "CallNode" && (@node_store.node_name(val_id) == "map" || @node_store.node_name(val_id) == "collect")
+      blk = @node_store.node_block(val_id)
       if blk >= 0
-        bbody = @nd_body[blk]
+        bbody = @node_store.node_body(blk)
         if bbody >= 0
-          bbs = get_stmts(bbody)
+          bbs = @node_store.get_stmts(bbody)
           if bbs.length > 0
             bret = infer_type(bbs.last)
             if bret != "" && bret != "void"
@@ -7179,55 +6692,55 @@ class Compiler
   end
 
   def scan_ivars_children(ci, nid)
-    if @nd_body[nid] >= 0
-      scan_ivars(ci, @nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      scan_ivars(ci, @node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_ivars(ci, stmts[k])
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_ivars(ci, @nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      scan_ivars(ci, @node_store.node_expression(nid))
     end
-    if @nd_predicate[nid] >= 0
-      scan_ivars(ci, @nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      scan_ivars(ci, @node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      scan_ivars(ci, @nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      scan_ivars(ci, @node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      scan_ivars(ci, @nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      scan_ivars(ci, @node_store.node_else_clause(nid))
     end
-    if @nd_receiver[nid] >= 0
-      scan_ivars(ci, @nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      scan_ivars(ci, @node_store.node_receiver(nid))
     end
-    if @nd_arguments[nid] >= 0
-      scan_ivars(ci, @nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      scan_ivars(ci, @node_store.node_arguments(nid))
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_ivars(ci, args[k])
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_ivars(ci, conds[k])
       k = k + 1
     end
-    if @nd_left[nid] >= 0
-      scan_ivars(ci, @nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      scan_ivars(ci, @node_store.node_left(nid))
     end
-    if @nd_right[nid] >= 0
-      scan_ivars(ci, @nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      scan_ivars(ci, @node_store.node_right(nid))
     end
-    if @nd_block[nid] >= 0
-      scan_ivars(ci, @nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      scan_ivars(ci, @node_store.node_block(nid))
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_ivars(ci, elems[k])
@@ -7239,7 +6752,7 @@ class Compiler
     if nid < 0
       return "int"
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "NilNode"
       return "nil"
     end
@@ -7268,7 +6781,7 @@ class Compiler
       return infer_hash_val_type(nid)
     end
     if t == "CallNode"
-      mname = @nd_name[nid]
+      mname = @node_store.node_name(nid)
       if mname == "to_a"
         return "int_array"
       end
@@ -7276,7 +6789,7 @@ class Compiler
         return "str_array"
       end
       if mname == "new"
-        r = @nd_receiver[nid]
+        r = @node_store.node_receiver(nid)
         if r >= 0
           rname = constructor_class_name(r)
           if rname != ""
@@ -7284,9 +6797,9 @@ class Compiler
               # Check fill value type for Array.new(n, val).
               # Pointer-type fills must produce a typed PtrArray; falling
               # through to int_array would leave the elements unscanned by GC.
-              args_id = @nd_arguments[nid]
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                aargs = get_args(args_id)
+                aargs = @node_store.get_args(args_id)
                 if aargs.length >= 2
                   vt = infer_type(aargs[1])
                   if vt == "float"
@@ -7322,7 +6835,7 @@ class Compiler
       end
     end
     if t == "LocalVariableReadNode"
-      vt = find_var_type(@nd_name[nid])
+      vt = find_var_type(@node_store.node_name(nid))
       if vt != ""
         return vt
       end
@@ -7339,20 +6852,20 @@ class Compiler
     # (string + nil → string?) flows through update_ivar_type.
     if t == "IfNode"
       then_t = "nil"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        ts = get_stmts(body)
+        ts = @node_store.get_stmts(body)
         if ts.length > 0
           then_t = infer_ivar_init_type(ts.last)
         end
       end
       else_t = "nil"
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
-        if @nd_type[sub] == "ElseNode"
-          eb = @nd_body[sub]
+        if @node_store.node_type(sub) == "ElseNode"
+          eb = @node_store.node_body(sub)
           if eb >= 0
-            es = get_stmts(eb)
+            es = @node_store.get_stmts(eb)
             if es.length > 0
               else_t = infer_ivar_init_type(es.last)
             end
@@ -7387,18 +6900,18 @@ class Compiler
   end
 
   def collect_toplevel_method(nid)
-    mname = @nd_name[nid]
-    body_id = @nd_body[nid]
+    mname = @node_store.node_name(nid)
+    body_id = @node_store.node_body(nid)
     params_str = collect_params_str(nid)
     ptypes_str = ""
     defaults_str = collect_defaults_str(nid)
 
     # Infer param types from defaults
-    params = @nd_parameters[nid]
+    params = @node_store.node_parameters(nid)
     if params >= 0
-      reqs = parse_id_list(@nd_requireds[params])
-      opts = parse_id_list(@nd_optionals[params])
-      kws = parse_id_list(@nd_keywords[params])
+      reqs = @node_store.parse_id_list(@node_store.node_requireds(params))
+      opts = @node_store.parse_id_list(@node_store.node_optionals(params))
+      kws = @node_store.parse_id_list(@node_store.node_keywords(params))
       k = 0
       while k < reqs.length
         if ptypes_str != ""
@@ -7412,7 +6925,7 @@ class Compiler
         if ptypes_str != ""
           ptypes_str = ptypes_str + ","
         end
-        def_id = @nd_expression[opts[k]]
+        def_id = @node_store.node_expression(opts[k])
         if def_id >= 0
           ptypes_str = ptypes_str + infer_type(def_id)
         else
@@ -7425,7 +6938,7 @@ class Compiler
         if ptypes_str != ""
           ptypes_str = ptypes_str + ","
         end
-        def_id = @nd_expression[kws[k]]
+        def_id = @node_store.node_expression(kws[k])
         if def_id >= 0
           ptypes_str = ptypes_str + infer_type(def_id)
         else
@@ -7434,9 +6947,9 @@ class Compiler
         k = k + 1
       end
       # Rest param (splat)
-      rest = @nd_rest[params]
+      rest = @node_store.node_rest(params)
       if rest >= 0
-        if @nd_type[rest] == "RestParameterNode"
+        if @node_store.node_type(rest) == "RestParameterNode"
           if ptypes_str != ""
             ptypes_str = ptypes_str + ","
           end
@@ -7444,9 +6957,9 @@ class Compiler
         end
       end
       # Block param (&block)
-      blk = @nd_block[params]
+      blk = @node_store.node_block(params)
       if blk >= 0
-        if @nd_type[blk] == "BlockParameterNode"
+        if @node_store.node_type(blk) == "BlockParameterNode"
           if ptypes_str != ""
             ptypes_str = ptypes_str + ","
           end
@@ -7469,38 +6982,38 @@ class Compiler
 
   def collect_define_method(nid)
     # define_method(:name) { |args| body }
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     if arg_ids.length < 1
       return
     end
-    mname = @nd_content[arg_ids[0]]
+    mname = @node_store.node_content(arg_ids[0])
     if mname == ""
-      mname = @nd_name[arg_ids[0]]
+      mname = @node_store.node_name(arg_ids[0])
     end
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return
     end
-    body_id = @nd_body[blk]
+    body_id = @node_store.node_body(blk)
     # Collect block params
     params_str = ""
     ptypes_str = ""
-    bp = @nd_parameters[blk]
+    bp = @node_store.node_parameters(blk)
     if bp >= 0
-      inner = @nd_parameters[bp]
+      inner = @node_store.node_parameters(bp)
       if inner >= 0
-        reqs = parse_id_list(@nd_requireds[inner])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
         k = 0
         while k < reqs.length
           if params_str != ""
             params_str = params_str + ","
             ptypes_str = ptypes_str + ","
           end
-          params_str = params_str + @nd_name[reqs[k]]
+          params_str = params_str + @node_store.node_name(reqs[k])
           ptypes_str = ptypes_str + "int"
           k = k + 1
         end
@@ -7523,41 +7036,41 @@ class Compiler
 
   def collect_module_with_prefix(nid, module_prefix)
     mname = ""
-    cp = @nd_constant_path[nid]
+    cp = @node_store.node_constant_path(nid)
     if cp >= 0
       mname = const_ref_flat_name(cp)
       if module_prefix != "" && const_ref_is_relative(cp) == 1
         mname = module_prefix + "_" + mname
       end
     end
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     # Store module info for include
     @module_names.push(mname)
     @module_body_ids.push(body)
     if body < 0
       return
     end
-    body_stmts = get_stmts(body)
+    body_stmts = @node_store.get_stmts(body)
 
     # Match top-level collection order: modules first, then classes.
     body_stmts.each { |sid|
-      if @nd_type[sid] == "ModuleNode"
+      if @node_store.node_type(sid) == "ModuleNode"
         collect_module_with_prefix(sid, mname)
       end
     }
     body_stmts.each { |sid|
-      if @nd_type[sid] == "ClassNode"
+      if @node_store.node_type(sid) == "ClassNode"
         collect_class_with_prefix(sid, mname)
       end
     }
 
     in_module_function = 0
     body_stmts.each { |sid|
-      if @nd_type[sid] == "ConstantWriteNode"
+      if @node_store.node_type(sid) == "ConstantWriteNode"
         collect_scoped_constant(mname, sid)
       end
       # Module-body `A, B = ...` multi-write to constants.
-      if @nd_type[sid] == "MultiWriteNode"
+      if @node_store.node_type(sid) == "MultiWriteNode"
         collect_scoped_multi_const(mname, sid)
       end
       # `module_function` (no args) flips subsequent `def name`
@@ -7565,27 +7078,27 @@ class Compiler
       # Spinel only needs the class-method shape; the full Ruby
       # semantics also installs the methods as private instance
       # methods (for include-mixin), unmodeled here.
-      if @nd_type[sid] == "CallNode" && @nd_receiver[sid] < 0 && @nd_name[sid] == "module_function"
-        args_id_mf = @nd_arguments[sid]
-        if args_id_mf < 0 || get_args(args_id_mf).length == 0
+      if @node_store.node_type(sid) == "CallNode" && @node_store.node_receiver(sid) < 0 && @node_store.node_name(sid) == "module_function"
+        args_id_mf = @node_store.node_arguments(sid)
+        if args_id_mf < 0 || @node_store.get_args(args_id_mf).length == 0
           in_module_function = 1
         end
       end
       # Collect module class methods (def self.xxx) as top-level functions
-      if @nd_type[sid] == "DefNode"
+      if @node_store.node_type(sid) == "DefNode"
         is_self_def = 0
-        if @nd_receiver[sid] >= 0 && @nd_type[@nd_receiver[sid]] == "SelfNode"
+        if @node_store.node_receiver(sid) >= 0 && @node_store.node_type(@node_store.node_receiver(sid)) == "SelfNode"
           is_self_def = 1
         end
-        if is_self_def == 1 || (in_module_function == 1 && @nd_receiver[sid] < 0)
-          dmname = @nd_name[sid]
+        if is_self_def == 1 || (in_module_function == 1 && @node_store.node_receiver(sid) < 0)
+          dmname = @node_store.node_name(sid)
           # Create as top-level method with module prefix for dispatch
           @meth_names.push(mname + "_cls_" + dmname)
           @meth_param_names.push(collect_params_str(sid))
           @meth_param_types.push(collect_ptypes_str(sid, -1))
           @meth_param_empty.push("")
           @meth_return_types.push("int")
-          @meth_body_ids.push(@nd_body[sid])
+          @meth_body_ids.push(@node_store.node_body(sid))
           @meth_has_yield.push(0)
           # Issue #239: capture default-arg expressions so call
           # sites that omit trailing args get them filled in by
@@ -7598,10 +7111,10 @@ class Compiler
         end
       end
       # Collect module-level ivar writes as global statics
-      if @nd_type[sid] == "InstanceVariableWriteNode"
-        iname = @nd_name[sid]
+      if @node_store.node_type(sid) == "InstanceVariableWriteNode"
+        iname = @node_store.node_name(sid)
         cname2 = mname + "_" + iname[1, iname.length - 1]
-        expr_id = @nd_expression[sid]
+        expr_id = @node_store.node_expression(sid)
         ct = "int"
         if expr_id >= 0
           old_scope = @current_lexical_scope
@@ -7617,8 +7130,8 @@ class Compiler
       # FFI DSL: ffi_lib, ffi_cflags, ffi_func, ffi_const, ffi_buffer,
       # ffi_read_u32, ffi_read_i32, ffi_read_ptr. Bare CallNode with no
       # explicit receiver whose name starts with "ffi_".
-      if @nd_type[sid] == "CallNode" && @nd_receiver[sid] < 0
-        cname_ffi = @nd_name[sid]
+      if @node_store.node_type(sid) == "CallNode" && @node_store.node_receiver(sid) < 0
+        cname_ffi = @node_store.node_name(sid)
         if cname_ffi.length >= 4 && cname_ffi[0, 4] == "ffi_"
           scan_ffi_decl(mname, sid)
         end
@@ -7627,18 +7140,18 @@ class Compiler
       # module-level singleton accessor. Stage 1 of issue #126: the
       # accessor's value is resolved later via the constant-fold pass
       # (rewrite_module_singleton_accessors) once we've seen all writes.
-      if @nd_type[sid] == "SingletonClassNode"
-        sbody = @nd_body[sid]
+      if @node_store.node_type(sid) == "SingletonClassNode"
+        sbody = @node_store.node_body(sid)
         if sbody >= 0
-          sbody_stmts = get_stmts(sbody)
+          sbody_stmts = @node_store.get_stmts(sbody)
           sbody_stmts.each { |sst|
-            if @nd_type[sst] == "CallNode" && @nd_name[sst] == "attr_accessor"
-              args_id = @nd_arguments[sst]
+            if @node_store.node_type(sst) == "CallNode" && @node_store.node_name(sst) == "attr_accessor"
+              args_id = @node_store.node_arguments(sst)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 arg_ids.each { |aid|
-                  if @nd_type[aid] == "SymbolNode"
-                    accessor = @nd_content[aid]
+                  if @node_store.node_type(aid) == "SymbolNode"
+                    accessor = @node_store.node_content(aid)
                     @module_acc_keys.push(mname + "." + accessor)
                     @module_acc_consts.push("")
                   end
@@ -7755,9 +7268,9 @@ class Compiler
     if nid < 0
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "SymbolNode" || t == "StringNode"
-      return @nd_content[nid]
+      return @node_store.node_content(nid)
     end
     ""
   end
@@ -7767,8 +7280,8 @@ class Compiler
     if nid < 0
       return -1
     end
-    if @nd_type[nid] == "IntegerNode"
-      return @nd_value[nid]
+    if @node_store.node_type(nid) == "IntegerNode"
+      return @node_store.node_value(nid)
     end
     -1
   end
@@ -7822,11 +7335,11 @@ class Compiler
   # Dispatch on the specific ffi_* declaration name. Called once per
   # recognized CallNode in a module body.
   def scan_ffi_decl(mname, nid)
-    dname = @nd_name[nid]
-    args_id = @nd_arguments[nid]
+    dname = @node_store.node_name(nid)
+    args_id = @node_store.node_arguments(nid)
     args = []
     if args_id >= 0
-      args = get_args(args_id)
+      args = @node_store.get_args(args_id)
     end
     mi = ffi_module_idx(mname)
 
@@ -7871,10 +7384,10 @@ class Compiler
       if fname == ""
         ffi_error(mname, dname, "first arg must be a symbol (function name)")
       end
-      if @nd_type[args[1]] != "ArrayNode"
+      if @node_store.node_type(args[1]) != "ArrayNode"
         ffi_error(mname, dname, "second arg must be an array literal of type symbols")
       end
-      arg_elems = parse_id_list(@nd_elements[args[1]])
+      arg_elems = @node_store.parse_id_list(@node_store.node_elements(args[1]))
       arg_toks = ""
       arg_spec_joined = ""
       k = 0
@@ -7977,10 +7490,10 @@ class Compiler
     if recv < 0
       return ""
     end
-    if @nd_type[recv] != "ConstantReadNode"
+    if @node_store.node_type(recv) != "ConstantReadNode"
       return ""
     end
-    rcname = @nd_name[recv]
+    rcname = @node_store.node_name(recv)
     fi = ffi_find_func(rcname, mname)
     if fi >= 0
       return @ffi_func_ret_types[fi]
@@ -8028,10 +7541,10 @@ class Compiler
     if arg_specs_str != ""
       arg_specs = arg_specs_str.split(";")
     end
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     call_args = []
     if args_id >= 0
-      call_args = get_args(args_id)
+      call_args = @node_store.get_args(args_id)
     end
     if call_args.length != arg_specs.length
       $stderr.puts "FFI error: " + fname + ": expected " + arg_specs.length.to_s + " args, got " + call_args.length.to_s
@@ -8068,10 +7581,10 @@ class Compiler
 
   # Emit a field-read from a buffer: Module.<reader_name>(buf).
   def compile_ffi_reader_call(nid, ri)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     call_args = []
     if args_id >= 0
-      call_args = get_args(args_id)
+      call_args = @node_store.get_args(args_id)
     end
     if call_args.length != 1
       $stderr.puts "FFI error: " + @ffi_reader_names[ri] + ": reader takes exactly 1 arg (buf)"
@@ -8166,13 +7679,13 @@ class Compiler
   # value is the i-th element of the RHS at emit time. Used both at
   # top level and inside class/module bodies (`scope_name`).
   def collect_scoped_multi_const(scope_name, nid)
-    targets = parse_id_list(@nd_targets[nid])
-    val_id = @nd_expression[nid]
+    targets = @node_store.parse_id_list(@node_store.node_targets(nid))
+    val_id = @node_store.node_expression(nid)
     ti = 0
     while ti < targets.length
       tid = targets[ti]
-      if @nd_type[tid] == "ConstantTargetNode"
-        cname = @nd_name[tid]
+      if @node_store.node_type(tid) == "ConstantTargetNode"
+        cname = @node_store.node_name(tid)
         if scope_name != ""
           cname = scope_name + "_" + cname
         end
@@ -8240,18 +7753,18 @@ class Compiler
     @cls_meth_has_yield.push("")
 
     # Get field names from symbol args (skip keyword_init hash)
-    args_id = @nd_arguments[call_nid]
+    args_id = @node_store.node_arguments(call_nid)
     field_names = "".split(",")
     if args_id >= 0
-      aids = get_args(args_id)
+      aids = @node_store.get_args(args_id)
       k = 0
       while k < aids.length
         # Skip KeywordHashNode (keyword_init: true)
-        if @nd_type[aids[k]] == "KeywordHashNode"
+        if @node_store.node_type(aids[k]) == "KeywordHashNode"
           k = k + 1
           next
         end
-        fname = @nd_content[aids[k]]
+        fname = @node_store.node_content(aids[k])
         if fname != ""
           field_names.push(fname)
           # Add ivar
@@ -8296,16 +7809,16 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] == "YieldNode"
+    if @node_store.node_type(nid) == "YieldNode"
       return 1
     end
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "block_given?"
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "block_given?"
         return 1
       end
     end
     # Don't recurse into nested DefNode (that's a different method)
-    if @nd_type[nid] == "DefNode"
+    if @node_store.node_type(nid) == "DefNode"
       return 0
     end
     cs = []
@@ -8328,10 +7841,10 @@ class Compiler
     if nid < 0
       return current
     end
-    if @nd_type[nid] == "YieldNode"
+    if @node_store.node_type(nid) == "YieldNode"
       n = 0
-      if @nd_arguments[nid] >= 0
-        n = get_args(@nd_arguments[nid]).length
+      if @node_store.node_arguments(nid) >= 0
+        n = @node_store.get_args(@node_store.node_arguments(nid)).length
       end
       if n < 1
         n = 1
@@ -8340,7 +7853,7 @@ class Compiler
         current = n
       end
     end
-    if @nd_type[nid] == "DefNode"
+    if @node_store.node_type(nid) == "DefNode"
       return current
     end
     cs = []
@@ -8356,7 +7869,7 @@ class Compiler
   # ---- Return type inference ----
   def infer_constructor_types
     # Scan AST for ClassName.new(args) calls and infer param types
-    scan_new_calls(@root_id)
+    scan_new_calls(@node_store.root_id)
   end
 
   # Narrow pre-pass for `rewrite_instance_eval_calls`: walk top-level
@@ -8380,8 +7893,8 @@ class Compiler
   # receivers — the exact piece rewrite_instance_eval_calls needs.
   def propagate_recv_method_arg_types_for_ieval
     push_scope
-    if @nd_type[@root_id] == "ProgramNode"
-      tl_body = @nd_body[@root_id]
+    if @node_store.node_type(@node_store.root_id) == "ProgramNode"
+      tl_body = @node_store.node_body(@node_store.root_id)
       if tl_body >= 0
         empty_params = "".split(",")
         tl_lnames = "".split(",")
@@ -8394,7 +7907,7 @@ class Compiler
         end
       end
     end
-    walk_recv_method_calls(@root_id)
+    walk_recv_method_calls(@node_store.root_id)
     pop_scope
   end
 
@@ -8409,9 +7922,9 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
         rt = infer_type(recv)
         if is_obj_type(rt) == 1
@@ -8430,9 +7943,9 @@ class Compiler
               end
             end
             if midx >= 0
-              args_id = @nd_arguments[nid]
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 all_ptypes = @cls_meth_ptypes[owner_ci].split("|")
                 if midx < all_ptypes.length
                   ptypes = all_ptypes[midx].split(",")
@@ -8457,28 +7970,28 @@ class Compiler
         end
       end
     end
-    walk_recv_method_calls(@nd_body[nid])
-    stmts = parse_id_list(@nd_stmts[nid])
+    walk_recv_method_calls(@node_store.node_body(nid))
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       walk_recv_method_calls(stmts[k])
       k = k + 1
     end
-    walk_recv_method_calls(@nd_expression[nid])
-    walk_recv_method_calls(@nd_arguments[nid])
-    args = parse_id_list(@nd_args[nid])
+    walk_recv_method_calls(@node_store.node_expression(nid))
+    walk_recv_method_calls(@node_store.node_arguments(nid))
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       walk_recv_method_calls(args[k])
       k = k + 1
     end
-    walk_recv_method_calls(@nd_predicate[nid])
-    walk_recv_method_calls(@nd_subsequent[nid])
-    walk_recv_method_calls(@nd_else_clause[nid])
-    walk_recv_method_calls(@nd_rescue_clause[nid])
-    walk_recv_method_calls(@nd_ensure_clause[nid])
-    walk_recv_method_calls(@nd_receiver[nid])
-    conds = parse_id_list(@nd_conditions[nid])
+    walk_recv_method_calls(@node_store.node_predicate(nid))
+    walk_recv_method_calls(@node_store.node_subsequent(nid))
+    walk_recv_method_calls(@node_store.node_else_clause(nid))
+    walk_recv_method_calls(@node_store.node_rescue_clause(nid))
+    walk_recv_method_calls(@node_store.node_ensure_clause(nid))
+    walk_recv_method_calls(@node_store.node_receiver(nid))
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       walk_recv_method_calls(conds[k])
@@ -8627,10 +8140,10 @@ class Compiler
 
   def compile_expr_for_expected_type(nid, expected_type)
     expected_base = base_type(expected_type)
-    if expected_base == "poly_array" && nid >= 0 && @nd_type[nid] == "ArrayNode"
+    if expected_base == "poly_array" && nid >= 0 && @node_store.node_type(nid) == "ArrayNode"
       @needs_rb_value = 1
       @needs_gc = 1
-      elems = parse_id_list(@nd_elements[nid])
+      elems = @node_store.parse_id_list(@node_store.node_elements(nid))
       tmp = new_temp
       emit("  sp_PolyArray *" + tmp + " = sp_PolyArray_new();")
       k = 0
@@ -8705,7 +8218,7 @@ class Compiler
   # nested `class << self` body that hasn't been registered as a
   # regular class).
   def class_node_to_idx(nid)
-    cp = @nd_constant_path[nid]
+    cp = @node_store.node_constant_path(nid)
     if cp < 0
       return -1
     end
@@ -8737,7 +8250,7 @@ class Compiler
   # restore. Mirrors the prefix pattern that
   # `collect_module_with_prefix` uses for nested module names.
   def enter_module_scope_from_node(nid)
-    cp = @nd_constant_path[nid]
+    cp = @node_store.node_constant_path(nid)
     if cp < 0
       return
     end
@@ -8764,11 +8277,11 @@ class Compiler
     # default for an InstanceVariableReadNode with no scope), which
     # then wedges Bar.initialize's first param at int even after
     # multiple iterations of the fixpoint loop.
-    if @nd_type[nid] == "ClassNode"
+    if @node_store.node_type(nid) == "ClassNode"
       saved_ci = @current_class_idx
       saved_scope = @current_lexical_scope
       enter_class_scope_from_node(nid)
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
         scan_new_calls(body)
       end
@@ -8776,10 +8289,10 @@ class Compiler
       @current_lexical_scope = saved_scope
       return
     end
-    if @nd_type[nid] == "ModuleNode"
+    if @node_store.node_type(nid) == "ModuleNode"
       saved_scope2 = @current_lexical_scope
       enter_module_scope_from_node(nid)
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
         scan_new_calls(body)
       end
@@ -8792,8 +8305,8 @@ class Compiler
     # the narrowed type and unify_call_types widens the callee's
     # param accordingly. The else-arm walks unchanged (we don't
     # currently model "type minus C").
-    if @nd_type[nid] == "IfNode"
-      pred = @nd_predicate[nid]
+    if @node_store.node_type(nid) == "IfNode"
+      pred = @node_store.node_predicate(nid)
       if pred >= 0
         scan_new_calls(pred)
       end
@@ -8803,32 +8316,32 @@ class Compiler
       if narrow_var != ""
         push_type_narrow(narrow_var, narrow_t)
       end
-      then_body = @nd_body[nid]
+      then_body = @node_store.node_body(nid)
       if then_body >= 0
         scan_new_calls(then_body)
       end
       if narrow_var != ""
         pop_type_narrow
       end
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
         scan_new_calls(sub)
       end
-      else_body = @nd_else_clause[nid]
+      else_body = @node_store.node_else_clause(nid)
       if else_body >= 0
         scan_new_calls(else_body)
       end
       return
     end
-    if @nd_type[nid] == "CallNode"
+    if @node_store.node_type(nid) == "CallNode"
       # Also infer top-level method param types from call sites
-      mname = @nd_name[nid]
-      if @nd_receiver[nid] < 0
+      mname = @node_store.node_name(nid)
+      if @node_store.node_receiver(nid) < 0
         mi = find_method_idx(mname)
         if mi >= 0
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             ptypes = @meth_param_types[mi].split(",")
             pnames = @meth_param_names[mi].split(",")
             rest_param_idx = method_rest_index(mi)
@@ -8838,24 +8351,24 @@ class Compiler
             # Handle keyword hash args
             ak = 0
             while ak < arg_ids.length
-              if @nd_type[arg_ids[ak]] == "KeywordHashNode"
-                elems = parse_id_list(@nd_elements[arg_ids[ak]])
+              if @node_store.node_type(arg_ids[ak]) == "KeywordHashNode"
+                elems = @node_store.parse_id_list(@node_store.node_elements(arg_ids[ak]))
                 ek = 0
                 while ek < elems.length
-                  if @nd_type[elems[ek]] == "AssocNode"
-                    key_id = @nd_key[elems[ek]]
+                  if @node_store.node_type(elems[ek]) == "AssocNode"
+                    key_id = @node_store.node_key(elems[ek])
                     if key_id >= 0
                       kname = ""
-                      if @nd_type[key_id] == "SymbolNode"
-                        kname = @nd_content[key_id]
+                      if @node_store.node_type(key_id) == "SymbolNode"
+                        kname = @node_store.node_content(key_id)
                       end
-                      at = infer_type(@nd_expression[elems[ek]])
+                      at = infer_type(@node_store.node_expression(elems[ek]))
                       # Find matching param name
                       pi = 0
                       while pi < pnames.length
                         if pnames[pi] == kname
                           if pi < ptypes.length
-                            ptypes[pi] = unify_call_types(ptypes[pi], at, @nd_expression[elems[ek]])
+                            ptypes[pi] = unify_call_types(ptypes[pi], at, @node_store.node_expression(elems[ek]))
                           end
                         end
                         pi = pi + 1
@@ -8870,8 +8383,8 @@ class Compiler
                 # last non-rest one. So `foo(*strs)` correctly infers a
                 # str-typed first param even though the call site has
                 # only a single SplatNode arg.
-                if @nd_type[arg_ids[ak]] == "SplatNode"
-                  splat_src_for_inf = @nd_expression[arg_ids[ak]]
+                if @node_store.node_type(arg_ids[ak]) == "SplatNode"
+                  splat_src_for_inf = @node_store.node_expression(arg_ids[ak])
                   if splat_src_for_inf >= 0
                     splat_t_for_inf = infer_type(splat_src_for_inf)
                     elem_t_for_inf = elem_type_of_array(splat_t_for_inf)
@@ -8925,9 +8438,9 @@ class Compiler
             end
           end
           if midx_286 >= 0
-            args_id_286 = @nd_arguments[nid]
+            args_id_286 = @node_store.node_arguments(nid)
             if args_id_286 >= 0
-              arg_ids_286 = get_args(args_id_286)
+              arg_ids_286 = @node_store.get_args(args_id_286)
               all_ptypes_286 = @cls_meth_ptypes[cls_owner_286].split("|")
               if midx_286 < all_ptypes_286.length
                 ptypes_286 = all_ptypes_286[midx_286].split(",")
@@ -8946,8 +8459,8 @@ class Compiler
           end
         end
       end
-      if @nd_name[nid] == "new"
-        recv = @nd_receiver[nid]
+      if @node_store.node_name(nid) == "new"
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
           cname = constructor_class_name(recv)
           if cname != ""
@@ -8957,9 +8470,9 @@ class Compiler
               if init_ci >= 0
                 init_idx = cls_find_method_direct(init_ci, "initialize")
                 if init_idx >= 0
-                  args_id = @nd_arguments[nid]
+                  args_id = @node_store.node_arguments(nid)
                   if args_id >= 0
-                    arg_ids = get_args(args_id)
+                    arg_ids = @node_store.get_args(args_id)
                     all_ptypes = @cls_meth_ptypes[init_ci].split("|")
                     all_params = @cls_meth_params[init_ci].split("|")
                     if init_idx < all_ptypes.length
@@ -8970,19 +8483,19 @@ class Compiler
                       end
                       k = 0
                       while k < arg_ids.length
-                        if @nd_type[arg_ids[k]] == "KeywordHashNode"
+                        if @node_store.node_type(arg_ids[k]) == "KeywordHashNode"
                           # Handle keyword args
-                          elems = parse_id_list(@nd_elements[arg_ids[k]])
+                          elems = @node_store.parse_id_list(@node_store.node_elements(arg_ids[k]))
                           ek = 0
                           while ek < elems.length
-                            if @nd_type[elems[ek]] == "AssocNode"
-                              key_id = @nd_key[elems[ek]]
+                            if @node_store.node_type(elems[ek]) == "AssocNode"
+                              key_id = @node_store.node_key(elems[ek])
                               if key_id >= 0
                                 kname = ""
-                                if @nd_type[key_id] == "SymbolNode"
-                                  kname = @nd_content[key_id]
+                                if @node_store.node_type(key_id) == "SymbolNode"
+                                  kname = @node_store.node_content(key_id)
                                 end
-                                expr_id = @nd_expression[elems[ek]]
+                                expr_id = @node_store.node_expression(elems[ek])
                                 at = infer_type(expr_id)
                                 pi = 0
                                 while pi < pnames.length
@@ -9016,8 +8529,8 @@ class Compiler
         end
       end
       # Also infer method param types from method/operator calls on objects
-      if @nd_receiver[nid] >= 0
-        rt = infer_type(@nd_receiver[nid])
+      if @node_store.node_receiver(nid) >= 0
+        rt = infer_type(@node_store.node_receiver(nid))
         if is_obj_type(rt) == 1
           cname = rt[4, rt.length - 4]
           ci = find_class_idx(cname)
@@ -9039,9 +8552,9 @@ class Compiler
               end
             end
             if midx >= 0
-              args_id = @nd_arguments[nid]
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 all_ptypes = @cls_meth_ptypes[owner_ci].split("|")
                 if midx < all_ptypes.length
                   ptypes = all_ptypes[midx].split(",")
@@ -9073,22 +8586,22 @@ class Compiler
       # method parameter types from call-site argument types.
       # Same shape as the receiver-method unify above but
       # operating on @cls_cmeth_ptypes for class-constant recvs.
-      if @nd_type[nid] == "CallNode" && @nd_receiver[nid] >= 0
-        crecv = @nd_receiver[nid]
-        if @nd_type[crecv] == "ConstantReadNode" || @nd_type[crecv] == "ConstantPathNode"
+      if @node_store.node_type(nid) == "CallNode" && @node_store.node_receiver(nid) >= 0
+        crecv = @node_store.node_receiver(nid)
+        if @node_store.node_type(crecv) == "ConstantReadNode" || @node_store.node_type(crecv) == "ConstantPathNode"
           rcname = constructor_class_name(crecv)
           if rcname != ""
             cci = find_class_idx(rcname)
             if cci >= 0
-              cmname = @nd_name[nid]
+              cmname = @node_store.node_name(nid)
               cmnames = @cls_cmeth_names[cci].split(";")
               cm_ptypes_all = @cls_cmeth_ptypes[cci].split("|")
               cmidx = 0
               while cmidx < cmnames.length
                 if cmnames[cmidx] == cmname
-                  args_id = @nd_arguments[nid]
+                  args_id = @node_store.node_arguments(nid)
                   if args_id >= 0 && cmidx < cm_ptypes_all.length
-                    arg_ids = get_args(args_id)
+                    arg_ids = @node_store.get_args(args_id)
                     cmptypes = cm_ptypes_all[cmidx].split(",")
                     kk = 0
                     while kk < arg_ids.length
@@ -9116,12 +8629,12 @@ class Compiler
             # function to accept `const char *` instead of the
             # default `mrb_int`.
             if module_name_exists(rcname) == 1
-              mfn239 = rcname + "_cls_" + @nd_name[nid]
+              mfn239 = rcname + "_cls_" + @node_store.node_name(nid)
               mi239 = find_method_idx(mfn239)
               if mi239 >= 0
-                args_id239 = @nd_arguments[nid]
+                args_id239 = @node_store.node_arguments(nid)
                 if args_id239 >= 0
-                  arg_ids239 = get_args(args_id239)
+                  arg_ids239 = @node_store.get_args(args_id239)
                   ptypes239 = @meth_param_types[mi239].split(",")
                   kk239 = 0
                   while kk239 < arg_ids239.length
@@ -9140,65 +8653,65 @@ class Compiler
       end
     end
     # Recurse into children
-    if @nd_body[nid] >= 0
-      scan_new_calls(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      scan_new_calls(@node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_new_calls(stmts[k])
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      scan_new_calls(@nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      scan_new_calls(@node_store.node_receiver(nid))
     end
-    if @nd_arguments[nid] >= 0
-      scan_new_calls(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      scan_new_calls(@node_store.node_arguments(nid))
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_new_calls(args[k])
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_new_calls(@nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      scan_new_calls(@node_store.node_expression(nid))
     end
-    if @nd_predicate[nid] >= 0
-      scan_new_calls(@nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      scan_new_calls(@node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      scan_new_calls(@nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      scan_new_calls(@node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      scan_new_calls(@nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      scan_new_calls(@node_store.node_else_clause(nid))
     end
-    if @nd_left[nid] >= 0
-      scan_new_calls(@nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      scan_new_calls(@node_store.node_left(nid))
     end
-    if @nd_right[nid] >= 0
-      scan_new_calls(@nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      scan_new_calls(@node_store.node_right(nid))
     end
-    if @nd_block[nid] >= 0
-      scan_new_calls(@nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      scan_new_calls(@node_store.node_block(nid))
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_new_calls(elems[k])
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_new_calls(conds[k])
       k = k + 1
     end
-    # InterpolatedStringNode and friends carry their components in @nd_parts.
+    # InterpolatedStringNode and friends carry their components in node_parts.
     # Without this, an EmbeddedStatementsNode inside `"#{...}"` is the only
     # call site for a method whose param type would otherwise widen, and
     # the param keeps its default `int` => C error at the call site.
-    parts = parse_id_list(@nd_parts[nid])
+    parts = @node_store.parse_id_list(@node_store.node_parts(nid))
     k = 0
     while k < parts.length
       scan_new_calls(parts[k])
@@ -9263,10 +8776,10 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode" && @nd_name[nid] == "new" && @nd_receiver[nid] < 0
-      args_id = @nd_arguments[nid]
+    if @node_store.node_type(nid) == "CallNode" && @node_store.node_name(nid) == "new" && @node_store.node_receiver(nid) < 0
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         init_ci = find_init_class(cls_ci)
         if init_ci >= 0
           init_idx = cls_find_method_direct(init_ci, "initialize")
@@ -9277,8 +8790,8 @@ class Compiler
               kk = 0
               while kk < arg_ids.length
                 at = ""
-                if @nd_type[arg_ids[kk]] == "LocalVariableReadNode"
-                  vname = @nd_name[arg_ids[kk]]
+                if @node_store.node_type(arg_ids[kk]) == "LocalVariableReadNode"
+                  vname = @node_store.node_name(arg_ids[kk])
                   pi = 0
                   while pi < cm_pnames.length
                     if cm_pnames[pi] == vname && pi < cm_ptypes.length
@@ -9305,49 +8818,49 @@ class Compiler
     # Mirror scan_new_calls' recursion shape so a `new(...)` at any
     # depth in the body is reachable: stmts, body, conditionals,
     # call args, expressions, etc.
-    if @nd_body[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_body[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_body(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_body(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    bn_stmts = parse_id_list(@nd_stmts[nid])
+    bn_stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < bn_stmts.length
       walk_bare_new_in_cmeth_body(bn_stmts[k], cls_ci, cm_pnames, cm_ptypes)
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_receiver[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_receiver(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_receiver(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_arguments[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_arguments[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_arguments(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_arguments(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    bn_args = parse_id_list(@nd_args[nid])
+    bn_args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < bn_args.length
       walk_bare_new_in_cmeth_body(bn_args[k], cls_ci, cm_pnames, cm_ptypes)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_expression[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_expression(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_expression(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_predicate[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_predicate[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_predicate(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_predicate(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_subsequent[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_subsequent[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_subsequent(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_subsequent(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_else_clause[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_else_clause[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_else_clause(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_else_clause(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_left[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_left[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_left(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_left(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_right[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_right[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_right(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_right(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    if @nd_block[nid] >= 0
-      walk_bare_new_in_cmeth_body(@nd_block[nid], cls_ci, cm_pnames, cm_ptypes)
+    if @node_store.node_block(nid) >= 0
+      walk_bare_new_in_cmeth_body(@node_store.node_block(nid), cls_ci, cm_pnames, cm_ptypes)
     end
-    bn_elems = parse_id_list(@nd_elements[nid])
+    bn_elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < bn_elems.length
       walk_bare_new_in_cmeth_body(bn_elems[k], cls_ci, cm_pnames, cm_ptypes)
@@ -9415,20 +8928,20 @@ class Compiler
           bid = bodies[init_idx].to_i
         end
         if bid >= 0
-          stmts = get_stmts(bid)
+          stmts = @node_store.get_stmts(bid)
           stmts.each { |sid|
-            if @nd_type[sid] == "InstanceVariableWriteNode"
-              expr = @nd_expression[sid]
+            if @node_store.node_type(sid) == "InstanceVariableWriteNode"
+              expr = @node_store.node_expression(sid)
               if expr >= 0
-                if @nd_type[expr] == "LocalVariableReadNode"
-                  pname = @nd_name[expr]
+                if @node_store.node_type(expr) == "LocalVariableReadNode"
+                  pname = @node_store.node_name(expr)
                   # Find param index
                   pi = 0
                   while pi < pnames.length
                     if pnames[pi] == pname
                       if pi < ptypes.length
                         # Update ivar type
-                        iname = @nd_name[sid]
+                        iname = @node_store.node_name(sid)
                         ivar_names = @cls_ivar_names[i].split(";")
                         ivar_types = @cls_ivar_types[i].split(";")
                         ij = 0
@@ -9567,12 +9080,12 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
-        if @nd_type[recv] == "LocalVariableReadNode"
-          if @nd_name[recv] == pname
-            mname = @nd_name[nid]
+        if @node_store.node_type(recv) == "LocalVariableReadNode"
+          if @node_store.node_name(recv) == pname
+            mname = @node_store.node_name(nid)
             if not_in(mname, acc) == 1
               acc.push(mname)
             end
@@ -9580,35 +9093,35 @@ class Compiler
         end
       end
     end
-    if @nd_body[nid] >= 0
-      collect_param_methods(@nd_body[nid], pname, acc)
+    if @node_store.node_body(nid) >= 0
+      collect_param_methods(@node_store.node_body(nid), pname, acc)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       collect_param_methods(stmts[k], pname, acc)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      collect_param_methods(@nd_expression[nid], pname, acc)
+    if @node_store.node_expression(nid) >= 0
+      collect_param_methods(@node_store.node_expression(nid), pname, acc)
     end
-    if @nd_left[nid] >= 0
-      collect_param_methods(@nd_left[nid], pname, acc)
+    if @node_store.node_left(nid) >= 0
+      collect_param_methods(@node_store.node_left(nid), pname, acc)
     end
-    if @nd_right[nid] >= 0
-      collect_param_methods(@nd_right[nid], pname, acc)
+    if @node_store.node_right(nid) >= 0
+      collect_param_methods(@node_store.node_right(nid), pname, acc)
     end
-    if @nd_arguments[nid] >= 0
-      collect_param_methods(@nd_arguments[nid], pname, acc)
+    if @node_store.node_arguments(nid) >= 0
+      collect_param_methods(@node_store.node_arguments(nid), pname, acc)
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       collect_param_methods(args[k], pname, acc)
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      collect_param_methods(@nd_receiver[nid], pname, acc)
+    if @node_store.node_receiver(nid) >= 0
+      collect_param_methods(@node_store.node_receiver(nid), pname, acc)
     end
   end
 
@@ -9621,14 +9134,14 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "push" || @nd_name[nid] == "<<"
-        recv = @nd_receiver[nid]
-        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-          if @nd_name[recv] == pname
-            args_id = @nd_arguments[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "push" || @node_store.node_name(nid) == "<<"
+        recv = @node_store.node_receiver(nid)
+        if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+          if @node_store.node_name(recv) == pname
+            args_id = @node_store.node_arguments(nid)
             if args_id >= 0
-              aargs = get_args(args_id)
+              aargs = @node_store.get_args(args_id)
               if aargs.length > 0
                 at = infer_type(aargs[0])
                 if not_in(at, acc) == 1
@@ -9640,47 +9153,47 @@ class Compiler
         end
       end
     end
-    if @nd_body[nid] >= 0
-      collect_param_push_elem_types(@nd_body[nid], pname, acc)
+    if @node_store.node_body(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_body(nid), pname, acc)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       collect_param_push_elem_types(stmts[k], pname, acc)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      collect_param_push_elem_types(@nd_expression[nid], pname, acc)
+    if @node_store.node_expression(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_expression(nid), pname, acc)
     end
-    if @nd_left[nid] >= 0
-      collect_param_push_elem_types(@nd_left[nid], pname, acc)
+    if @node_store.node_left(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_left(nid), pname, acc)
     end
-    if @nd_right[nid] >= 0
-      collect_param_push_elem_types(@nd_right[nid], pname, acc)
+    if @node_store.node_right(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_right(nid), pname, acc)
     end
-    if @nd_arguments[nid] >= 0
-      collect_param_push_elem_types(@nd_arguments[nid], pname, acc)
+    if @node_store.node_arguments(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_arguments(nid), pname, acc)
     end
-    args2 = parse_id_list(@nd_args[nid])
+    args2 = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args2.length
       collect_param_push_elem_types(args2[k], pname, acc)
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      collect_param_push_elem_types(@nd_receiver[nid], pname, acc)
+    if @node_store.node_receiver(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_receiver(nid), pname, acc)
     end
-    if @nd_predicate[nid] >= 0
-      collect_param_push_elem_types(@nd_predicate[nid], pname, acc)
+    if @node_store.node_predicate(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_predicate(nid), pname, acc)
     end
-    if @nd_subsequent[nid] >= 0
-      collect_param_push_elem_types(@nd_subsequent[nid], pname, acc)
+    if @node_store.node_subsequent(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_subsequent(nid), pname, acc)
     end
-    if @nd_else_clause[nid] >= 0
-      collect_param_push_elem_types(@nd_else_clause[nid], pname, acc)
+    if @node_store.node_else_clause(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_else_clause(nid), pname, acc)
     end
-    if @nd_block[nid] >= 0
-      collect_param_push_elem_types(@nd_block[nid], pname, acc)
+    if @node_store.node_block(nid) >= 0
+      collect_param_push_elem_types(@node_store.node_block(nid), pname, acc)
     end
   end
 
@@ -9915,8 +9428,8 @@ class Compiler
   # scope yet, so a bare infer_type falls back to "int" and breaks
   # the promotion of the surrounding `out[k] = v` write.
   def scan_locals_arg_type(nid, names, types, params)
-    if nid >= 0 && @nd_type[nid] == "LocalVariableReadNode"
-      lname = @nd_name[nid]
+    if nid >= 0 && @node_store.node_type(nid) == "LocalVariableReadNode"
+      lname = @node_store.node_name(nid)
       k = 0
       while k < names.length
         if names[k] == lname
@@ -10018,15 +9531,15 @@ class Compiler
   def infer_ivar_types_from_writers
     # Set up main scope for type inference
     push_scope
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     lnames = "".split(",")
     ltypes = "".split(",")
     empty_p = "".split(",")
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
-            if @nd_type[sid] != "ModuleNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
+            if @node_store.node_type(sid) != "ModuleNode"
               scan_locals(sid, lnames, ltypes, empty_p)
             end
           end
@@ -10174,7 +9687,7 @@ class Compiler
     end
     @current_class_idx = -1
     # Scan main-level code
-    scan_writer_calls(@root_id)
+    scan_writer_calls(@node_store.root_id)
     pop_scope
     # Issue #247: now that every writer's concrete type observation is
     # recorded into @cls_ivar_observed_types[ci] (deduped per slot),
@@ -10217,10 +9730,10 @@ class Compiler
       return
     end
     # Direct ivar write: @left = expr (inside class methods)
-    if @nd_type[nid] == "InstanceVariableWriteNode"
+    if @node_store.node_type(nid) == "InstanceVariableWriteNode"
       if @current_class_idx >= 0
-        iname = @nd_name[nid]
-        expr_id = @nd_expression[nid]
+        iname = @node_store.node_name(nid)
+        expr_id = @node_store.node_expression(nid)
         # Drill through chained `@a = @b = ... = expr` so every chain
         # participant sees the bottom rhs type — infer_type returns
         # the default "int" for an InstanceVariableWriteNode expr,
@@ -10234,9 +9747,9 @@ class Compiler
         chain_inames = "".split(",")
         chain_inames.push(iname)
         bottom = expr_id
-        while bottom >= 0 && @nd_type[bottom] == "InstanceVariableWriteNode"
-          chain_inames.push(@nd_name[bottom])
-          bottom = @nd_expression[bottom]
+        while bottom >= 0 && @node_store.node_type(bottom) == "InstanceVariableWriteNode"
+          chain_inames.push(@node_store.node_name(bottom))
+          bottom = @node_store.node_expression(bottom)
         end
         # Empty `{}` / `[]` literal: don't reset the ivar's tracked
         # type to the default (`str_int_hash` / `int_array`), since a
@@ -10283,15 +9796,15 @@ class Compiler
     # the ivars at their initial "int" guess and the struct came out
     # with mrb_int fields that the assigning method then tried to
     # overwrite with pointer values.
-    if @nd_type[nid] == "MultiWriteNode"
+    if @node_store.node_type(nid) == "MultiWriteNode"
       if @current_class_idx >= 0
-        targets_mw = parse_id_list(@nd_targets[nid])
-        val_mw = @nd_expression[nid]
+        targets_mw = @node_store.parse_id_list(@node_store.node_targets(nid))
+        val_mw = @node_store.node_expression(nid)
         ti_mw = 0
         while ti_mw < targets_mw.length
           tid_mw = targets_mw[ti_mw]
-          if @nd_type[tid_mw] == "InstanceVariableTargetNode"
-            iname_mw = @nd_name[tid_mw]
+          if @node_store.node_type(tid_mw) == "InstanceVariableTargetNode"
+            iname_mw = @node_store.node_name(tid_mw)
             at_mw = scan_ivars_multi_target_type(val_mw, ti_mw)
             if at_mw != "int" && at_mw != "nil"
               update_ivar_type(@current_class_idx, iname_mw, at_mw)
@@ -10301,9 +9814,9 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "CallNode"
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
         if mname.length > 1
           if mname[mname.length - 1] == "="
@@ -10318,9 +9831,9 @@ class Compiler
                 while wk < writers.length
                   if writers[wk] == bname
                     iname = "@" + bname
-                    args_id = @nd_arguments[nid]
+                    args_id = @node_store.node_arguments(nid)
                     if args_id >= 0
-                      arg_ids = get_args(args_id)
+                      arg_ids = @node_store.get_args(args_id)
                       if arg_ids.length > 0
                         at = infer_type(arg_ids[0])
                         if at != "int" && at != "nil"
@@ -10341,13 +9854,13 @@ class Compiler
       # types so the codegen picks the matching `sp_*Hash_set` (issue
       # #64). Only the empty-default → another concrete hash type
       # transition; richer mismatches stay where they are.
-      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
-        iname = @nd_name[recv]
+      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @node_store.node_type(recv) == "InstanceVariableReadNode"
+        iname = @node_store.node_name(recv)
         cur_t = cls_ivar_type(@current_class_idx, iname)
         if cur_t == "str_int_hash"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            ai = get_args(args_id)
+            ai = @node_store.get_args(args_id)
             if ai.length >= 2
               kt = infer_type(ai[0])
               vt = infer_type(ai[ai.length - 1])
@@ -10378,13 +9891,13 @@ class Compiler
           end
         end
       end
-      if (mname == "push" || mname == "<<") && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
-        iname = @nd_name[recv]
+      if (mname == "push" || mname == "<<") && @current_class_idx >= 0 && recv >= 0 && @node_store.node_type(recv) == "InstanceVariableReadNode"
+        iname = @node_store.node_name(recv)
         cur_t = cls_ivar_type(@current_class_idx, iname)
         if cur_t == "int_array"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            ai = get_args(args_id)
+            ai = @node_store.get_args(args_id)
             if ai.length > 0
               et = infer_type(ai[0])
               promoted = empty_array_promotion_for([et])
@@ -10417,13 +9930,13 @@ class Compiler
       # `@fetch[addr] = method(:peek_X)` writes a Method into an
       # int_array slot — the read side then can't recover and `[].call`
       # dispatches against int.
-      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
-        iname = @nd_name[recv]
+      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @node_store.node_type(recv) == "InstanceVariableReadNode"
+        iname = @node_store.node_name(recv)
         cur_t = cls_ivar_type(@current_class_idx, iname)
         if cur_t == "int_array"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            ai = get_args(args_id)
+            ai = @node_store.get_args(args_id)
             if ai.length >= 2
               vt = infer_type(ai[ai.length - 1])
               promoted = empty_array_promotion_for([vt])
@@ -10513,7 +10026,7 @@ class Compiler
   def infer_lambda_param_types
     # Scan all call sites in the program AST for calls to top-level methods
     # where lambda arguments are passed. Update param types accordingly.
-    scan_lambda_call_sites(@root_id)
+    scan_lambda_call_sites(@node_store.root_id)
     # Second pass: scan method bodies for parameters used as lambda receivers
     # or passed to functions that expect lambda args (transitive closure)
     changed = 1
@@ -10550,10 +10063,10 @@ class Compiler
     if nid < 0
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     # Handle StatementsNode by iterating its statements
     if t == "StatementsNode"
-      stmts2 = parse_id_list(@nd_stmts[nid])
+      stmts2 = @node_store.parse_id_list(@node_store.node_stmts(nid))
       k = 0
       while k < stmts2.length
         if param_used_as_lambda(pname, stmts2[k]) == 1
@@ -10564,18 +10077,18 @@ class Compiler
       return 0
     end
     if t == "CallNode"
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       # Check if param is used as receiver of [] with a lambda argument
       # (distinguishes lambda call from array indexing)
       if mname == "[]"
         if recv >= 0
-          if @nd_type[recv] == "LocalVariableReadNode"
-            if @nd_name[recv] == pname
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            if @node_store.node_name(recv) == pname
               # Only flag as lambda if the argument is a lambda
-              args_id5 = @nd_arguments[nid]
+              args_id5 = @node_store.node_arguments(nid)
               if args_id5 >= 0
-                aargs5 = get_args(args_id5)
+                aargs5 = @node_store.get_args(args_id5)
                 if aargs5.length > 0
                   if infer_type(aargs5[0]) == "lambda"
                     return 1
@@ -10587,13 +10100,13 @@ class Compiler
           # Check if param is passed as argument to [] on a lambda receiver
           rt = infer_type(recv)
           if rt == "lambda"
-            args_id3 = @nd_arguments[nid]
+            args_id3 = @node_store.node_arguments(nid)
             if args_id3 >= 0
-              aargs3 = get_args(args_id3)
+              aargs3 = @node_store.get_args(args_id3)
               k3 = 0
               while k3 < aargs3.length
-                if @nd_type[aargs3[k3]] == "LocalVariableReadNode"
-                  if @nd_name[aargs3[k3]] == pname
+                if @node_store.node_type(aargs3[k3]) == "LocalVariableReadNode"
+                  if @node_store.node_name(aargs3[k3]) == pname
                     return 1
                   end
                 end
@@ -10608,15 +10121,15 @@ class Compiler
         fmi = find_method_idx(mname)
         if fmi >= 0
           fptypes = @meth_param_types[fmi].split(",")
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             k = 0
             while k < aargs.length
               if k < fptypes.length
                 if fptypes[k] == "lambda"
-                  if @nd_type[aargs[k]] == "LocalVariableReadNode"
-                    if @nd_name[aargs[k]] == pname
+                  if @node_store.node_type(aargs[k]) == "LocalVariableReadNode"
+                    if @node_store.node_name(aargs[k]) == pname
                       return 1
                     end
                   end
@@ -10629,8 +10142,8 @@ class Compiler
       end
     end
     # Recurse into children
-    if @nd_body[nid] >= 0
-      bstmts = get_stmts(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      bstmts = @node_store.get_stmts(@node_store.node_body(nid))
       if bstmts.length > 0
         k = 0
         while k < bstmts.length
@@ -10640,18 +10153,18 @@ class Compiler
           k = k + 1
         end
       else
-        if param_used_as_lambda(pname, @nd_body[nid]) == 1
+        if param_used_as_lambda(pname, @node_store.node_body(nid)) == 1
           return 1
         end
       end
     end
-    if @nd_receiver[nid] >= 0
-      if param_used_as_lambda(pname, @nd_receiver[nid]) == 1
+    if @node_store.node_receiver(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_receiver(nid)) == 1
         return 1
       end
     end
-    if @nd_arguments[nid] >= 0
-      aargs2 = get_args(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      aargs2 = @node_store.get_args(@node_store.node_arguments(nid))
       k = 0
       while k < aargs2.length
         if param_used_as_lambda(pname, aargs2[k]) == 1
@@ -10660,43 +10173,43 @@ class Compiler
         k = k + 1
       end
     end
-    if @nd_expression[nid] >= 0
-      if param_used_as_lambda(pname, @nd_expression[nid]) == 1
+    if @node_store.node_expression(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_expression(nid)) == 1
         return 1
       end
     end
-    if @nd_predicate[nid] >= 0
-      if param_used_as_lambda(pname, @nd_predicate[nid]) == 1
+    if @node_store.node_predicate(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_predicate(nid)) == 1
         return 1
       end
     end
-    if @nd_subsequent[nid] >= 0
-      if param_used_as_lambda(pname, @nd_subsequent[nid]) == 1
+    if @node_store.node_subsequent(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_subsequent(nid)) == 1
         return 1
       end
     end
-    if @nd_else_clause[nid] >= 0
-      if param_used_as_lambda(pname, @nd_else_clause[nid]) == 1
+    if @node_store.node_else_clause(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_else_clause(nid)) == 1
         return 1
       end
     end
-    if @nd_left[nid] >= 0
-      if param_used_as_lambda(pname, @nd_left[nid]) == 1
+    if @node_store.node_left(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_left(nid)) == 1
         return 1
       end
     end
-    if @nd_right[nid] >= 0
-      if param_used_as_lambda(pname, @nd_right[nid]) == 1
+    if @node_store.node_right(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_right(nid)) == 1
         return 1
       end
     end
-    if @nd_block[nid] >= 0
-      if param_used_as_lambda(pname, @nd_block[nid]) == 1
+    if @node_store.node_block(nid) >= 0
+      if param_used_as_lambda(pname, @node_store.node_block(nid)) == 1
         return 1
       end
     end
     # Check StatementsNode stmts
-    stmts3 = parse_id_list(@nd_stmts[nid])
+    stmts3 = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k3 = 0
     while k3 < stmts3.length
       if param_used_as_lambda(pname, stmts3[k3]) == 1
@@ -10711,17 +10224,17 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "CallNode"
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       # Only bare function calls (no receiver) can be top-level methods
       if recv < 0
         mi = find_method_idx(mname)
         if mi >= 0
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             ptypes = @meth_param_types[mi].split(",")
             changed = 0
             k = 0
@@ -10745,8 +10258,8 @@ class Compiler
       end
     end
     # Recurse into children
-    if @nd_body[nid] >= 0
-      bstmts = get_stmts(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      bstmts = @node_store.get_stmts(@node_store.node_body(nid))
       if bstmts.length > 0
         k = 0
         while k < bstmts.length
@@ -10754,54 +10267,54 @@ class Compiler
           k = k + 1
         end
       else
-        scan_lambda_call_sites(@nd_body[nid])
+        scan_lambda_call_sites(@node_store.node_body(nid))
       end
     end
-    if @nd_receiver[nid] >= 0
-      scan_lambda_call_sites(@nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_receiver(nid))
     end
-    if @nd_arguments[nid] >= 0
-      aargs2 = get_args(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      aargs2 = @node_store.get_args(@node_store.node_arguments(nid))
       k = 0
       while k < aargs2.length
         scan_lambda_call_sites(aargs2[k])
         k = k + 1
       end
     end
-    if @nd_expression[nid] >= 0
-      scan_lambda_call_sites(@nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_expression(nid))
     end
-    if @nd_predicate[nid] >= 0
-      scan_lambda_call_sites(@nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      scan_lambda_call_sites(@nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      scan_lambda_call_sites(@nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_else_clause(nid))
     end
-    if @nd_left[nid] >= 0
-      scan_lambda_call_sites(@nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_left(nid))
     end
-    if @nd_right[nid] >= 0
-      scan_lambda_call_sites(@nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_right(nid))
     end
-    if @nd_block[nid] >= 0
-      scan_lambda_call_sites(@nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      scan_lambda_call_sites(@node_store.node_block(nid))
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_lambda_call_sites(elems[k])
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_lambda_call_sites(conds[k])
       k = k + 1
     end
-    stmts2 = parse_id_list(@nd_stmts[nid])
+    stmts2 = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts2.length
       scan_lambda_call_sites(stmts2[k])
@@ -11126,27 +10639,27 @@ class Compiler
           bid = bodies[j].to_i
         end
         if bid >= 0
-          stmts = get_stmts(bid)
+          stmts = @node_store.get_stmts(bid)
           stmts.each { |sid|
-            if @nd_type[sid] == "InstanceVariableWriteNode"
-              expr = @nd_expression[sid]
+            if @node_store.node_type(sid) == "InstanceVariableWriteNode"
+              expr = @node_store.node_expression(sid)
               if expr >= 0
-                if @nd_type[expr] == "LocalVariableReadNode"
-                  if @nd_name[expr] == pname
-                    return cls_ivar_type(ci, @nd_name[sid])
+                if @node_store.node_type(expr) == "LocalVariableReadNode"
+                  if @node_store.node_name(expr) == pname
+                    return cls_ivar_type(ci, @node_store.node_name(sid))
                   end
                 end
               end
             end
             # Also check super calls
-            if @nd_type[sid] == "SuperNode"
-              super_args = @nd_arguments[sid]
+            if @node_store.node_type(sid) == "SuperNode"
+              super_args = @node_store.node_arguments(sid)
               if super_args >= 0
-                sa_ids = get_args(super_args)
+                sa_ids = @node_store.get_args(super_args)
                 sk = 0
                 while sk < sa_ids.length
-                  if @nd_type[sa_ids[sk]] == "LocalVariableReadNode"
-                    if @nd_name[sa_ids[sk]] == pname
+                  if @node_store.node_type(sa_ids[sk]) == "LocalVariableReadNode"
+                    if @node_store.node_name(sa_ids[sk]) == pname
                       # This param is passed to parent's initialize at position sk
                       if @cls_parents[ci] != ""
                         parent_ci = find_class_idx(@cls_parents[ci])
@@ -11181,7 +10694,7 @@ class Compiler
     if body_id < 0
       return "void"
     end
-    stmts = get_stmts(body_id)
+    stmts = @node_store.get_stmts(body_id)
     if stmts.length == 0
       return "void"
     end
@@ -11196,7 +10709,7 @@ class Compiler
   end
 
   def collect_return_types_nid(nid, types)
-    stmts = get_stmts(nid)
+    stmts = @node_store.get_stmts(nid)
     k = 0
     while k < stmts.length
       collect_return_types(stmts[k], types)
@@ -11208,10 +10721,10 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "ReturnNode"
-      args_id = @nd_arguments[nid]
+    if @node_store.node_type(nid) == "ReturnNode"
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         if arg_ids.length > 1
           # `return a, b` materializes as a fixed-arity tuple. Heterogeneous
           # element types are preserved unboxed (no poly_array fallback).
@@ -11227,41 +10740,41 @@ class Compiler
       return
     end
     # Don't recurse into nested method definitions
-    if @nd_type[nid] == "DefNode"
+    if @node_store.node_type(nid) == "DefNode"
       return
     end
-    if @nd_type[nid] == "IfNode"
-      body = @nd_body[nid]
+    if @node_store.node_type(nid) == "IfNode"
+      body = @node_store.node_body(nid)
       if body >= 0
         collect_return_types_nid(body, types)
       end
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
         collect_return_types(sub, types)
       end
       return
     end
-    if @nd_type[nid] == "ElseNode"
-      body = @nd_body[nid]
+    if @node_store.node_type(nid) == "ElseNode"
+      body = @node_store.node_body(nid)
       if body >= 0
         collect_return_types_nid(body, types)
       end
       return
     end
-    if @nd_type[nid] == "WhileNode"
-      body = @nd_body[nid]
+    if @node_store.node_type(nid) == "WhileNode"
+      body = @node_store.node_body(nid)
       if body >= 0
         collect_return_types_nid(body, types)
       end
       return
     end
-    if @nd_type[nid] == "CaseMatchNode"
-      conds = parse_id_list(@nd_conditions[nid])
+    if @node_store.node_type(nid) == "CaseMatchNode"
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         inid = conds[k]
-        if @nd_type[inid] == "InNode"
-          ibody = @nd_body[inid]
+        if @node_store.node_type(inid) == "InNode"
+          ibody = @node_store.node_body(inid)
           if ibody >= 0
             collect_return_types_nid(ibody, types)
           end
@@ -11323,7 +10836,7 @@ class Compiler
     while i < @meth_names.length
       if @meth_return_types[i] == "lambda"
         # Scan call sites to see what type the return value is used as
-        usage = scan_method_return_usage(@meth_names[i], @root_id)
+        usage = scan_method_return_usage(@meth_names[i], @node_store.root_id)
         if usage == "int"
           @meth_return_types[i] = "int"
         end
@@ -11342,10 +10855,10 @@ class Compiler
     if nid < 0
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "CallNode"
-      cn = @nd_name[nid]
-      recv = @nd_receiver[nid]
+      cn = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       # Check if this call is our method and its result is used somewhere
       if recv < 0
         if cn == mname
@@ -11355,13 +10868,13 @@ class Compiler
         end
       end
       # Check if our method is called as an argument to another call
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         aargs.each { |aid|
-          if @nd_type[aid] == "CallNode"
-            if @nd_name[aid] == mname
-              if @nd_receiver[aid] < 0
+          if @node_store.node_type(aid) == "CallNode"
+            if @node_store.node_name(aid) == mname
+              if @node_store.node_receiver(aid) < 0
                 # Our method is called as argument - check what the parent expects
                 if cn == "slice"
                   return "int"
@@ -11375,13 +10888,13 @@ class Compiler
     end
     # Check if method is called in a negation context (boolean)
     if t == "CallNode"
-      cn = @nd_name[nid]
+      cn = @node_store.node_name(nid)
       if cn == "!"
-        recv = @nd_receiver[nid]
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
-          if @nd_type[recv] == "CallNode"
-            if @nd_name[recv] == mname
-              if @nd_receiver[recv] < 0
+          if @node_store.node_type(recv) == "CallNode"
+            if @node_store.node_name(recv) == mname
+              if @node_store.node_receiver(recv) < 0
                 return "bool"
               end
             end
@@ -11391,11 +10904,11 @@ class Compiler
     end
     # Check UntilNode predicate
     if t == "UntilNode"
-      pred = @nd_predicate[nid]
+      pred = @node_store.node_predicate(nid)
       if pred >= 0
-        if @nd_type[pred] == "CallNode"
-          if @nd_name[pred] == mname
-            if @nd_receiver[pred] < 0
+        if @node_store.node_type(pred) == "CallNode"
+          if @node_store.node_name(pred) == mname
+            if @node_store.node_receiver(pred) < 0
               return "bool"
             end
           end
@@ -11404,8 +10917,8 @@ class Compiler
     end
     # Recurse
     result = ""
-    if @nd_body[nid] >= 0
-      bstmts = get_stmts(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      bstmts = @node_store.get_stmts(@node_store.node_body(nid))
       if bstmts.length > 0
         k = 0
         while k < bstmts.length
@@ -11416,20 +10929,20 @@ class Compiler
           k = k + 1
         end
       else
-        r = scan_method_return_usage(mname, @nd_body[nid])
+        r = scan_method_return_usage(mname, @node_store.node_body(nid))
         if r != ""
           result = r
         end
       end
     end
-    if @nd_receiver[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_receiver(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_arguments[nid] >= 0
-      aargs2 = get_args(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      aargs2 = @node_store.get_args(@node_store.node_arguments(nid))
       k = 0
       while k < aargs2.length
         r = scan_method_return_usage(mname, aargs2[k])
@@ -11439,38 +10952,38 @@ class Compiler
         k = k + 1
       end
     end
-    if @nd_expression[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_expression(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_predicate[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_predicate(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_else_clause[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_else_clause(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_left[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_left(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_right[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_right(nid))
       if r != ""
         result = r
       end
     end
-    if @nd_block[nid] >= 0
-      r = scan_method_return_usage(mname, @nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      r = scan_method_return_usage(mname, @node_store.node_block(nid))
       if r != ""
         result = r
       end
@@ -11486,7 +10999,7 @@ class Compiler
     if nid < 0
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "StringNode"
       return "string"
     end
@@ -11520,10 +11033,10 @@ class Compiler
   # calls and composite literals still go through the regular passes.
   def pre_scan_simple_local_writes(stmts)
     stmts.each { |sid|
-      if @nd_type[sid] == "LocalVariableWriteNode"
-        lname = @nd_name[sid]
+      if @node_store.node_type(sid) == "LocalVariableWriteNode"
+        lname = @node_store.node_name(sid)
         if find_var_type(lname) == ""
-          st = simple_literal_type(@nd_expression[sid])
+          st = simple_literal_type(@node_store.node_expression(sid))
           if st != ""
             declare_var(lname, st)
           end
@@ -11537,16 +11050,16 @@ class Compiler
     # Set up a temporary scope with main-level locals so feature detection
     # can infer types of local variables correctly
     push_scope
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     pre_scan_simple_local_writes(stmts)
     lnames = "".split(",")
     ltypes = "".split(",")
     empty_p = "".split(",")
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
-            if @nd_type[sid] != "ModuleNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
+            if @node_store.node_type(sid) != "ModuleNode"
               scan_locals(sid, lnames, ltypes, empty_p)
             end
           end
@@ -11558,7 +11071,7 @@ class Compiler
       declare_var(lnames[k], ltypes[k])
       k = k + 1
     end
-    scan_features(@root_id)
+    scan_features(@node_store.root_id)
     pop_scope
   end
 
@@ -11566,25 +11079,25 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LambdaNode"
       @needs_lambda = 1
     end
     if t == "BeginNode"
-      if @nd_rescue_clause[nid] >= 0
+      if @node_store.node_rescue_clause(nid) >= 0
         @needs_setjmp = 1
       end
-      if @nd_ensure_clause[nid] >= 0
+      if @node_store.node_ensure_clause(nid) >= 0
         @needs_setjmp = 1
       end
     end
     if t == "RegularExpressionNode"
       @needs_regexp = 1
       # Collect pattern and flags
-      pat = @nd_unescaped[nid]
+      pat = @node_store.node_unescaped(nid)
       flags = "0"
-      if @nd_flags[nid] != 0
-        f = @nd_flags[nid]
+      if @node_store.node_flags(nid) != 0
+        f = @node_store.node_flags(nid)
         parts = "".split(",")
         # Prism flag bits → engine `RE_FLAG_*` values (see re_internal.h).
         # Prism: IGNORE_CASE=4, EXTENDED=8, MULTI_LINE=16.
@@ -11623,15 +11136,15 @@ class Compiler
     # by find_regexp_index. A name with multiple writes (any kind, any
     # regex literal) is marked ambiguous (-1) and falls through.
     if t == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
-      vid = @nd_expression[nid]
+      lname = @node_store.node_name(nid)
+      vid = @node_store.node_expression(nid)
       this_idx = -1
-      if vid >= 0 && @nd_type[vid] == "RegularExpressionNode"
+      if vid >= 0 && @node_store.node_type(vid) == "RegularExpressionNode"
         # Register the pattern up front (the recursive scan after this
         # block would do it too, but we need the index now to record
         # the local-name → pattern mapping).
         scan_features(vid)
-        rpat = @nd_unescaped[vid]
+        rpat = @node_store.node_unescaped(vid)
         ri = 0
         while ri < @regexp_patterns.length
           if @regexp_patterns[ri] == rpat
@@ -11693,9 +11206,9 @@ class Compiler
     end
 
     if t == "GlobalVariableWriteNode"
-      gname = @nd_name[nid]
+      gname = @node_store.node_name(nid)
       if gname != "$stderr" && gname != "$stdout" && gname != "$?"
-        gt = infer_type(@nd_expression[nid])
+        gt = infer_type(@node_store.node_expression(nid))
         if not_in(gname, @gvar_names) == 1
           @gvar_names.push(gname)
           @gvar_types.push(gt)
@@ -11715,7 +11228,7 @@ class Compiler
       end
     end
     if t == "GlobalVariableReadNode"
-      gname = @nd_name[nid]
+      gname = @node_store.node_name(nid)
       if gname != "$stderr" && gname != "$stdout" && gname != "$?"
         if not_in(gname, @gvar_names) == 1
           @gvar_names.push(gname)
@@ -11724,7 +11237,7 @@ class Compiler
       end
     end
     if t == "CallNode"
-      mname = @nd_name[nid]
+      mname = @node_store.node_name(nid)
       # String methods that always need string helpers
       if mname == "to_s" || mname == "upcase" || mname == "downcase" ||
          mname == "strip" || mname == "chomp" || mname == "chop" || mname == "slice" ||
@@ -11742,8 +11255,8 @@ class Compiler
         @needs_gc = 1
       end
       if mname == "to_sym" || mname == "intern"
-        if @nd_receiver[nid] >= 0
-          rt = infer_type(@nd_receiver[nid])
+        if @node_store.node_receiver(nid) >= 0
+          rt = infer_type(@node_store.node_receiver(nid))
           if rt == "string"
             @needs_sym_intern = 1
           end
@@ -11753,8 +11266,8 @@ class Compiler
       # sp_str_downcase on the symbol's name string and re-intern via
       # sp_sym_intern. Mark the dynamic-pool path so it gets emitted.
       if mname == "upcase" || mname == "downcase"
-        if @nd_receiver[nid] >= 0
-          if infer_type(@nd_receiver[nid]) == "symbol"
+        if @node_store.node_receiver(nid) >= 0
+          if infer_type(@node_store.node_receiver(nid)) == "symbol"
             @needs_sym_intern = 1
           end
         end
@@ -11763,14 +11276,14 @@ class Compiler
       # sp_SymArray_tally lives next to the sp_SymIntHash typedef which
       # is gated on @needs_sym_int_hash, so flag the dependency.
       if mname == "tally"
-        if @nd_receiver[nid] >= 0 && infer_type(@nd_receiver[nid]) == "sym_array"
+        if @node_store.node_receiver(nid) >= 0 && infer_type(@node_store.node_receiver(nid)) == "sym_array"
           @needs_sym_int_hash = 1
         end
       end
       # Methods that need string helpers only when receiver is string
       if mname == "+" || mname == "*" || mname == "reverse"
-        if @nd_receiver[nid] >= 0
-          rt = infer_type(@nd_receiver[nid])
+        if @node_store.node_receiver(nid) >= 0
+          rt = infer_type(@node_store.node_receiver(nid))
           if rt == "string"
             # Long string concat chains emit SP_GC_ROOT temps, so the
             # enclosing function needs SP_GC_SAVE() in its header.
@@ -11782,15 +11295,15 @@ class Compiler
       end
 
       if mname == "new"
-        if @nd_receiver[nid] >= 0
-          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
+        if @node_store.node_receiver(nid) >= 0
+          if @node_store.node_type(@node_store.node_receiver(nid)) == "ConstantReadNode"
             @needs_gc = 1
-            rn = @nd_name[@nd_receiver[nid]]
+            rn = @node_store.node_name(@node_store.node_receiver(nid))
             if rn == "Array"
               # Check fill value type for Array.new(n, val)
-              args_id2 = @nd_arguments[nid]
+              args_id2 = @node_store.node_arguments(nid)
               if args_id2 >= 0
-                aargs2 = get_args(args_id2)
+                aargs2 = @node_store.get_args(args_id2)
                 if aargs2.length >= 2
                   vt2 = infer_type(aargs2[1])
                   if vt2 == "float"
@@ -11817,8 +11330,8 @@ class Compiler
         end
       end
       if mname == "to_a"
-        if @nd_receiver[nid] >= 0
-          rt = infer_type(@nd_receiver[nid])
+        if @node_store.node_receiver(nid) >= 0
+          rt = infer_type(@node_store.node_receiver(nid))
           if rt == "range"
             @needs_int_array = 1
             @needs_gc = 1
@@ -11845,27 +11358,27 @@ class Compiler
         @needs_setjmp = 1
       end
       if mname == "new"
-        if @nd_receiver[nid] >= 0
-          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
-            if @nd_name[@nd_receiver[nid]] == "Fiber"
+        if @node_store.node_receiver(nid) >= 0
+          if @node_store.node_type(@node_store.node_receiver(nid)) == "ConstantReadNode"
+            if @node_store.node_name(@node_store.node_receiver(nid)) == "Fiber"
               @needs_fiber = 1
             end
           end
         end
       end
       if mname == "yield"
-        if @nd_receiver[nid] >= 0
-          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
-            if @nd_name[@nd_receiver[nid]] == "Fiber"
+        if @node_store.node_receiver(nid) >= 0
+          if @node_store.node_type(@node_store.node_receiver(nid)) == "ConstantReadNode"
+            if @node_store.node_name(@node_store.node_receiver(nid)) == "Fiber"
               @needs_fiber = 1
             end
           end
         end
       end
       if mname == "current"
-        if @nd_receiver[nid] >= 0
-          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
-            if @nd_name[@nd_receiver[nid]] == "Fiber"
+        if @node_store.node_receiver(nid) >= 0
+          if @node_store.node_type(@node_store.node_receiver(nid)) == "ConstantReadNode"
+            if @node_store.node_name(@node_store.node_receiver(nid)) == "Fiber"
               @needs_fiber = 1
             end
           end
@@ -11886,8 +11399,8 @@ class Compiler
       end
       if mname == "values"
         vrt = "int"
-        if @nd_receiver[nid] >= 0
-          vrt = infer_type(@nd_receiver[nid])
+        if @node_store.node_receiver(nid) >= 0
+          vrt = infer_type(@node_store.node_receiver(nid))
         end
         if vrt == "str_str_hash" || vrt == "int_str_hash"
           @needs_str_array = 1
@@ -11897,8 +11410,8 @@ class Compiler
         @needs_gc = 1
       end
       if mname == "each"
-        if @nd_receiver[nid] >= 0
-          rt = infer_type(@nd_receiver[nid])
+        if @node_store.node_receiver(nid) >= 0
+          rt = infer_type(@node_store.node_receiver(nid))
           if rt == "str_int_hash"
             @needs_str_int_hash = 1
           end
@@ -11930,130 +11443,130 @@ class Compiler
   # form would lock the call site into a yield-block-forwarding path
   # and complicate dispatch unnecessarily.
   def push_child_ids(nid, acc)
-    if @nd_body[nid] >= 0
-      acc.push(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      acc.push(@node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       acc.push(stmts[k])
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      acc.push(@nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      acc.push(@node_store.node_expression(nid))
     end
-    if @nd_predicate[nid] >= 0
-      acc.push(@nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      acc.push(@node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      acc.push(@nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      acc.push(@node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      acc.push(@nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      acc.push(@node_store.node_else_clause(nid))
     end
-    if @nd_receiver[nid] >= 0
-      acc.push(@nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      acc.push(@node_store.node_receiver(nid))
     end
-    if @nd_arguments[nid] >= 0
-      acc.push(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      acc.push(@node_store.node_arguments(nid))
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       acc.push(args[k])
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       acc.push(conds[k])
       k = k + 1
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       acc.push(elems[k])
       k = k + 1
     end
-    parts = parse_id_list(@nd_parts[nid])
+    parts = @node_store.parse_id_list(@node_store.node_parts(nid))
     k = 0
     while k < parts.length
       acc.push(parts[k])
       k = k + 1
     end
-    if @nd_left[nid] >= 0
-      acc.push(@nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      acc.push(@node_store.node_left(nid))
     end
-    if @nd_right[nid] >= 0
-      acc.push(@nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      acc.push(@node_store.node_right(nid))
     end
-    if @nd_block[nid] >= 0
-      acc.push(@nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      acc.push(@node_store.node_block(nid))
     end
-    if @nd_key[nid] >= 0
-      acc.push(@nd_key[nid])
+    if @node_store.node_key(nid) >= 0
+      acc.push(@node_store.node_key(nid))
     end
-    if @nd_collection[nid] >= 0
-      acc.push(@nd_collection[nid])
+    if @node_store.node_collection(nid) >= 0
+      acc.push(@node_store.node_collection(nid))
     end
-    if @nd_target[nid] >= 0
-      acc.push(@nd_target[nid])
+    if @node_store.node_target(nid) >= 0
+      acc.push(@node_store.node_target(nid))
     end
-    if @nd_parameters[nid] >= 0
-      acc.push(@nd_parameters[nid])
+    if @node_store.node_parameters(nid) >= 0
+      acc.push(@node_store.node_parameters(nid))
     end
-    if @nd_rest[nid] >= 0
-      acc.push(@nd_rest[nid])
+    if @node_store.node_rest(nid) >= 0
+      acc.push(@node_store.node_rest(nid))
     end
-    if @nd_rescue_clause[nid] >= 0
-      acc.push(@nd_rescue_clause[nid])
+    if @node_store.node_rescue_clause(nid) >= 0
+      acc.push(@node_store.node_rescue_clause(nid))
     end
-    if @nd_ensure_clause[nid] >= 0
-      acc.push(@nd_ensure_clause[nid])
+    if @node_store.node_ensure_clause(nid) >= 0
+      acc.push(@node_store.node_ensure_clause(nid))
     end
-    if @nd_pattern[nid] >= 0
-      acc.push(@nd_pattern[nid])
+    if @node_store.node_pattern(nid) >= 0
+      acc.push(@node_store.node_pattern(nid))
     end
-    if @nd_reference[nid] >= 0
-      acc.push(@nd_reference[nid])
+    if @node_store.node_reference(nid) >= 0
+      acc.push(@node_store.node_reference(nid))
     end
-    if @nd_constant_path[nid] >= 0
-      acc.push(@nd_constant_path[nid])
+    if @node_store.node_constant_path(nid) >= 0
+      acc.push(@node_store.node_constant_path(nid))
     end
-    if @nd_superclass[nid] >= 0
-      acc.push(@nd_superclass[nid])
+    if @node_store.node_superclass(nid) >= 0
+      acc.push(@node_store.node_superclass(nid))
     end
-    reqs = parse_id_list(@nd_requireds[nid])
+    reqs = @node_store.parse_id_list(@node_store.node_requireds(nid))
     k = 0
     while k < reqs.length
       acc.push(reqs[k])
       k = k + 1
     end
-    opts = parse_id_list(@nd_optionals[nid])
+    opts = @node_store.parse_id_list(@node_store.node_optionals(nid))
     k = 0
     while k < opts.length
       acc.push(opts[k])
       k = k + 1
     end
-    kws = parse_id_list(@nd_keywords[nid])
+    kws = @node_store.parse_id_list(@node_store.node_keywords(nid))
     k = 0
     while k < kws.length
       acc.push(kws[k])
       k = k + 1
     end
-    excs = parse_id_list(@nd_exceptions[nid])
+    excs = @node_store.parse_id_list(@node_store.node_exceptions(nid))
     k = 0
     while k < excs.length
       acc.push(excs[k])
       k = k + 1
     end
-    targs = parse_id_list(@nd_targets[nid])
+    targs = @node_store.parse_id_list(@node_store.node_targets(nid))
     k = 0
     while k < targs.length
       acc.push(targs[k])
       k = k + 1
     end
-    rights = parse_id_list(@nd_rights[nid])
+    rights = @node_store.parse_id_list(@node_store.node_rights(nid))
     k = 0
     while k < rights.length
       acc.push(rights[k])
@@ -12074,16 +11587,16 @@ class Compiler
   # ---- Code generation ----
   def infer_main_call_types
     # Scan main-level code for function calls and infer param types from arguments
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     # First, figure out main local types
     push_scope
     lnames = "".split(",")
     ltypes = "".split(",")
     empty_p = "".split(",")
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
             scan_locals(sid, lnames, ltypes, empty_p)
           end
         end
@@ -12095,20 +11608,20 @@ class Compiler
       k = k + 1
     end
     # Now scan call sites to update param types
-    scan_new_calls(@root_id)
+    scan_new_calls(@node_store.root_id)
     pop_scope
   end
 
   # Like infer_type but resolves default "int" from unresolved ivar accessors
   def infer_type_deep(nid)
     at = infer_type(nid)
-    if at == "int" && @nd_type[nid] == "CallNode"
-      recv = @nd_receiver[nid]
+    if at == "int" && @node_store.node_type(nid) == "CallNode"
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
         rt = infer_type(recv)
         # If receiver type is default "int" from an unscoped parameter, try to resolve
-        if rt == "int" && @nd_type[recv] == "LocalVariableReadNode"
-          vn = @nd_name[recv]
+        if rt == "int" && @node_store.node_type(recv) == "LocalVariableReadNode"
+          vn = @node_store.node_name(recv)
           # Check if it's a method parameter with a known type
           mi = 0
           while mi < @meth_names.length
@@ -12131,7 +11644,7 @@ class Compiler
           cname = bt[4, bt.length - 4]
           ci = find_class_idx(cname)
           if ci >= 0
-            mname = @nd_name[nid]
+            mname = @node_store.node_name(nid)
             readers = @cls_attr_readers[ci].split(";")
             rk = 0
             while rk < readers.length
@@ -12193,11 +11706,11 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "InstanceVariableWriteNode"
-      if @nd_name[nid] == iname
-        expr = @nd_expression[nid]
-        if expr >= 0 && @nd_type[expr] == "LocalVariableReadNode"
-          pn = @nd_name[expr]
+    if @node_store.node_type(nid) == "InstanceVariableWriteNode"
+      if @node_store.node_name(nid) == iname
+        expr = @node_store.node_expression(nid)
+        if expr >= 0 && @node_store.node_type(expr) == "LocalVariableReadNode"
+          pn = @node_store.node_name(expr)
           pi = 0
           while pi < pnames.length
             if pnames[pi] == pn && pi < ptypes.length
@@ -12212,10 +11725,10 @@ class Compiler
       end
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      resolve_ivar_from_body(ci, @nd_body[nid], iname, pnames, ptypes)
+    if @node_store.node_body(nid) >= 0
+      resolve_ivar_from_body(ci, @node_store.node_body(nid), iname, pnames, ptypes)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       resolve_ivar_from_body(ci, stmts[k], iname, pnames, ptypes)
@@ -12225,7 +11738,7 @@ class Compiler
 
   def detect_poly_params
     # Scan all call sites to detect functions called with different param types
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     i = 0
     while i < stmts.length
       detect_poly_in_node(stmts[i])
@@ -12237,14 +11750,14 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      mname = @nd_name[nid]
-      if @nd_receiver[nid] < 0
+    if @node_store.node_type(nid) == "CallNode"
+      mname = @node_store.node_name(nid)
+      if @node_store.node_receiver(nid) < 0
         mi = find_method_idx(mname)
         if mi >= 0
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             ptypes = @meth_param_types[mi].split(",")
             rest_param_idx = method_rest_index(mi)
             k = 0
@@ -12280,7 +11793,7 @@ class Compiler
                       if at == "int"
                         # Check if arg is a literal int (genuine int value)
                         if k < arg_ids.length
-                          if @nd_type[arg_ids[k]] == "IntegerNode"
+                          if @node_store.node_type(arg_ids[k]) == "IntegerNode"
                             ptypes[k] = "poly"
                             @needs_rb_value = 1
                           end
@@ -12321,40 +11834,40 @@ class Compiler
       end
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      detect_poly_in_node(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      detect_poly_in_node(@node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       detect_poly_in_node(stmts[k])
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      detect_poly_in_node(@nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      detect_poly_in_node(@node_store.node_expression(nid))
     end
-    if @nd_arguments[nid] >= 0
-      detect_poly_in_node(@nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      detect_poly_in_node(@node_store.node_arguments(nid))
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       detect_poly_in_node(args[k])
       k = k + 1
     end
-    if @nd_predicate[nid] >= 0
-      detect_poly_in_node(@nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      detect_poly_in_node(@node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      detect_poly_in_node(@nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      detect_poly_in_node(@node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      detect_poly_in_node(@nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      detect_poly_in_node(@node_store.node_else_clause(nid))
     end
-    if @nd_block[nid] >= 0
-      detect_poly_in_node(@nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      detect_poly_in_node(@node_store.node_block(nid))
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       detect_poly_in_node(conds[k])
@@ -12364,12 +11877,12 @@ class Compiler
 
   def detect_poly_locals
     # Detect local variables assigned different types in main scope
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     local_types = "".split(",")
     local_names = "".split(",")
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
           scan_poly_assigns(sid, local_names, local_types)
         end
       end
@@ -12380,9 +11893,9 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
-      at = infer_type(@nd_expression[nid])
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      lname = @node_store.node_name(nid)
+      at = infer_type(@node_store.node_expression(nid))
       idx = -1
       k = 0
       while k < names.length
@@ -12415,23 +11928,23 @@ class Compiler
       end
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      scan_poly_assigns(@nd_body[nid], names, types)
+    if @node_store.node_body(nid) >= 0
+      scan_poly_assigns(@node_store.node_body(nid), names, types)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_poly_assigns(stmts[k], names, types)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_poly_assigns(@nd_expression[nid], names, types)
+    if @node_store.node_expression(nid) >= 0
+      scan_poly_assigns(@node_store.node_expression(nid), names, types)
     end
-    if @nd_subsequent[nid] >= 0
-      scan_poly_assigns(@nd_subsequent[nid], names, types)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_poly_assigns(@node_store.node_subsequent(nid), names, types)
     end
-    if @nd_else_clause[nid] >= 0
-      scan_poly_assigns(@nd_else_clause[nid], names, types)
+    if @node_store.node_else_clause(nid) >= 0
+      scan_poly_assigns(@node_store.node_else_clause(nid), names, types)
     end
   end
 
@@ -12475,17 +11988,17 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      lname = @node_store.node_name(nid)
       if not_in(lname, names) == 1
         if not_in(lname, params) == 1
           names.push(lname)
-          types.push(infer_type(@nd_expression[nid]))
+          types.push(infer_type(@node_store.node_expression(nid)))
         end
       end
     end
-    if @nd_type[nid] == "LocalVariableOperatorWriteNode"
-      lname = @nd_name[nid]
+    if @node_store.node_type(nid) == "LocalVariableOperatorWriteNode"
+      lname = @node_store.node_name(nid)
       if not_in(lname, names) == 1
         if not_in(lname, params) == 1
           names.push(lname)
@@ -12493,13 +12006,13 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "MultiWriteNode"
-      targets = parse_id_list(@nd_targets[nid])
-      val_id = @nd_expression[nid]
+    if @node_store.node_type(nid) == "MultiWriteNode"
+      targets = @node_store.parse_id_list(@node_store.node_targets(nid))
+      val_id = @node_store.node_expression(nid)
       ti = 0
       targets.each { |tid|
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          lname = @nd_name[tid]
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(tid)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -12509,11 +12022,11 @@ class Compiler
         end
         ti = ti + 1
       }
-      rest_id = @nd_rest[nid]
+      rest_id = @node_store.node_rest(nid)
       if is_splat_with_target(rest_id) == 1
-        st = @nd_expression[rest_id]
-        if @nd_type[st] == "LocalVariableTargetNode"
-          lname = @nd_name[st]
+        st = @node_store.node_expression(rest_id)
+        if @node_store.node_type(st) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(st)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -12522,15 +12035,15 @@ class Compiler
           end
         end
       end
-      rights2 = parse_id_list(@nd_rights[nid])
+      rights2 = @node_store.parse_id_list(@node_store.node_rights(nid))
       r_total = 0
-      if val_id >= 0 && @nd_type[val_id] == "ArrayNode"
-        r_total = parse_id_list(@nd_elements[val_id]).length
+      if val_id >= 0 && @node_store.node_type(val_id) == "ArrayNode"
+        r_total = @node_store.parse_id_list(@node_store.node_elements(val_id)).length
       end
       r_idx = 0
       rights2.each { |tid|
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          lname = @nd_name[tid]
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(tid)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -12553,53 +12066,53 @@ class Compiler
       }
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      scan_locals_first_type(@nd_body[nid], names, types, params)
+    if @node_store.node_body(nid) >= 0
+      scan_locals_first_type(@node_store.node_body(nid), names, types, params)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_locals_first_type(stmts[k], names, types, params)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_locals_first_type(@nd_expression[nid], names, types, params)
+    if @node_store.node_expression(nid) >= 0
+      scan_locals_first_type(@node_store.node_expression(nid), names, types, params)
     end
-    if @nd_predicate[nid] >= 0
-      scan_locals_first_type(@nd_predicate[nid], names, types, params)
+    if @node_store.node_predicate(nid) >= 0
+      scan_locals_first_type(@node_store.node_predicate(nid), names, types, params)
     end
-    if @nd_subsequent[nid] >= 0
-      scan_locals_first_type(@nd_subsequent[nid], names, types, params)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_locals_first_type(@node_store.node_subsequent(nid), names, types, params)
     end
-    if @nd_else_clause[nid] >= 0
-      scan_locals_first_type(@nd_else_clause[nid], names, types, params)
+    if @node_store.node_else_clause(nid) >= 0
+      scan_locals_first_type(@node_store.node_else_clause(nid), names, types, params)
     end
-    if @nd_receiver[nid] >= 0
-      scan_locals_first_type(@nd_receiver[nid], names, types, params)
+    if @node_store.node_receiver(nid) >= 0
+      scan_locals_first_type(@node_store.node_receiver(nid), names, types, params)
     end
-    if @nd_arguments[nid] >= 0
-      scan_locals_first_type(@nd_arguments[nid], names, types, params)
+    if @node_store.node_arguments(nid) >= 0
+      scan_locals_first_type(@node_store.node_arguments(nid), names, types, params)
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_locals_first_type(args[k], names, types, params)
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_locals_first_type(conds[k], names, types, params)
       k = k + 1
     end
-    if @nd_left[nid] >= 0
-      scan_locals_first_type(@nd_left[nid], names, types, params)
+    if @node_store.node_left(nid) >= 0
+      scan_locals_first_type(@node_store.node_left(nid), names, types, params)
     end
-    if @nd_right[nid] >= 0
-      scan_locals_first_type(@nd_right[nid], names, types, params)
+    if @node_store.node_right(nid) >= 0
+      scan_locals_first_type(@node_store.node_right(nid), names, types, params)
     end
-    if @nd_block[nid] >= 0
-      scan_locals_first_type(@nd_block[nid], names, types, params)
+    if @node_store.node_block(nid) >= 0
+      scan_locals_first_type(@node_store.node_block(nid), names, types, params)
     end
   end
 
@@ -12738,8 +12251,8 @@ class Compiler
     end
     # Issue #207: same is_a? narrow as scan_new_calls so a self
     # call inside the then-arm sees the narrowed receiver type.
-    if @nd_type[nid] == "IfNode"
-      pred = @nd_predicate[nid]
+    if @node_store.node_type(nid) == "IfNode"
+      pred = @node_store.node_predicate(nid)
       if pred >= 0
         scan_cls_method_calls(ci, pred)
       end
@@ -12749,32 +12262,32 @@ class Compiler
       if narrow_var != ""
         push_type_narrow(narrow_var, narrow_t)
       end
-      then_body = @nd_body[nid]
+      then_body = @node_store.node_body(nid)
       if then_body >= 0
         scan_cls_method_calls(ci, then_body)
       end
       if narrow_var != ""
         pop_type_narrow
       end
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
         scan_cls_method_calls(ci, sub)
       end
-      else_body = @nd_else_clause[nid]
+      else_body = @node_store.node_else_clause(nid)
       if else_body >= 0
         scan_cls_method_calls(ci, else_body)
       end
       return
     end
-    if @nd_type[nid] == "CallNode"
-      mname = @nd_name[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      mname = @node_store.node_name(nid)
       # Handle implicit self calls (no receiver) to same-class methods
-      if @nd_receiver[nid] < 0
+      if @node_store.node_receiver(nid) < 0
         midx = cls_find_method_direct(ci, mname)
         if midx >= 0
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             all_ptypes = @cls_meth_ptypes[ci].split("|")
             if midx < all_ptypes.length
               ptypes = all_ptypes[midx].split(",")
@@ -12801,55 +12314,55 @@ class Compiler
       end
     end
     # Recurse into children
-    if @nd_body[nid] >= 0
-      scan_cls_method_calls(ci, @nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_cls_method_calls(ci, stmts[k])
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      scan_cls_method_calls(ci, @nd_receiver[nid])
+    if @node_store.node_receiver(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_receiver(nid))
     end
-    if @nd_arguments[nid] >= 0
-      scan_cls_method_calls(ci, @nd_arguments[nid])
+    if @node_store.node_arguments(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_arguments(nid))
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_cls_method_calls(ci, args[k])
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_cls_method_calls(ci, @nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_expression(nid))
     end
-    if @nd_predicate[nid] >= 0
-      scan_cls_method_calls(ci, @nd_predicate[nid])
+    if @node_store.node_predicate(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_predicate(nid))
     end
-    if @nd_subsequent[nid] >= 0
-      scan_cls_method_calls(ci, @nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_subsequent(nid))
     end
-    if @nd_else_clause[nid] >= 0
-      scan_cls_method_calls(ci, @nd_else_clause[nid])
+    if @node_store.node_else_clause(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_else_clause(nid))
     end
-    if @nd_left[nid] >= 0
-      scan_cls_method_calls(ci, @nd_left[nid])
+    if @node_store.node_left(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_left(nid))
     end
-    if @nd_right[nid] >= 0
-      scan_cls_method_calls(ci, @nd_right[nid])
+    if @node_store.node_right(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_right(nid))
     end
-    if @nd_block[nid] >= 0
-      scan_cls_method_calls(ci, @nd_block[nid])
+    if @node_store.node_block(nid) >= 0
+      scan_cls_method_calls(ci, @node_store.node_block(nid))
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_cls_method_calls(ci, elems[k])
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_cls_method_calls(ci, conds[k])
@@ -12947,7 +12460,7 @@ class Compiler
   end
 
   def generate_code
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
 
     detect_value_types
     recalc_needs_gc
@@ -12964,7 +12477,7 @@ class Compiler
     emit_class_structs
     emit_raw("/*TUPLE_INSERT_POINT*/")
     emit_gc_scan_functions
-    scan_toplevel_ivars(@root_id)
+    scan_toplevel_ivars(@node_store.root_id)
     emit_toplevel_ivar_decls
     # Emit global variable declarations before functions
     gi = 0
@@ -13107,7 +12620,7 @@ class Compiler
   end
 
   def pre_detect_bigint
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     bigint_names = "".split(",")
     stmts.each { |sid|
       scan_bigint_candidates(sid, bigint_names)
@@ -13149,17 +12662,17 @@ class Compiler
       return
     end
     # x *= y inside while — candidate
-    if @nd_type[nid] == "WhileNode"
-      body = @nd_body[nid]
+    if @node_store.node_type(nid) == "WhileNode"
+      body = @node_store.node_body(nid)
       if body >= 0
         scan_bigint_in_loop(body, bigint_names)
       end
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      scan_bigint_candidates(@nd_body[nid], bigint_names)
+    if @node_store.node_body(nid) >= 0
+      scan_bigint_candidates(@node_store.node_body(nid), bigint_names)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_bigint_candidates(stmts[k], bigint_names)
@@ -13173,23 +12686,23 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      expr = @nd_expression[nid]
-      if expr >= 0 && @nd_type[expr] == "LocalVariableReadNode"
-        @bi_assigns = @bi_assigns + @nd_name[nid] + ":" + @nd_name[expr] + ","
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      expr = @node_store.node_expression(nid)
+      if expr >= 0 && @node_store.node_type(expr) == "LocalVariableReadNode"
+        @bi_assigns = @bi_assigns + @node_store.node_name(nid) + ":" + @node_store.node_name(expr) + ","
       end
     end
-    if @nd_body[nid] >= 0
-      scan_loop_assigns(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      scan_loop_assigns(@node_store.node_body(nid))
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_loop_assigns(stmts[k])
       k = k + 1
     end
-    if @nd_subsequent[nid] >= 0
-      scan_loop_assigns(@nd_subsequent[nid])
+    if @node_store.node_subsequent(nid) >= 0
+      scan_loop_assigns(@node_store.node_subsequent(nid))
     end
   end
 
@@ -13223,19 +12736,19 @@ class Compiler
   # are variables that reach x via the assignment chain). Rejects i = i + 1
   # where one side is a constant.
   def add_is_unbounded(lname, expr)
-    recv = @nd_receiver[expr]
+    recv = @node_store.node_receiver(expr)
     left_reaches = 0
-    if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-      if bi_reaches(lname, @nd_name[recv], 0) == 1
+    if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+      if bi_reaches(lname, @node_store.node_name(recv), 0) == 1
         left_reaches = 1
       end
     end
     right_reaches = 0
-    args_id = @nd_arguments[expr]
+    args_id = @node_store.node_arguments(expr)
     if args_id != nil && args_id >= 0
-      aargs = get_args(args_id)
-      if aargs.length > 0 && @nd_type[aargs[0]] == "LocalVariableReadNode"
-        if bi_reaches(lname, @nd_name[aargs[0]], 0) == 1
+      aargs = @node_store.get_args(args_id)
+      if aargs.length > 0 && @node_store.node_type(aargs[0]) == "LocalVariableReadNode"
+        if bi_reaches(lname, @node_store.node_name(aargs[0]), 0) == 1
           right_reaches = 1
         end
       end
@@ -13249,18 +12762,18 @@ class Compiler
 
   # Check if binary op x = a OP b has unbounded growth (self-referential via assigns)
   def op_is_unbounded(lname, expr)
-    recv = @nd_receiver[expr]
-    if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-      op = @nd_name[recv]
+    recv = @node_store.node_receiver(expr)
+    if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+      op = @node_store.node_name(recv)
       if bi_reaches(lname, op, 0) == 1
         return 1
       end
     end
-    args_id = @nd_arguments[expr]
+    args_id = @node_store.node_arguments(expr)
     if args_id != nil && args_id >= 0
-      aargs = get_args(args_id)
-      if aargs.length > 0 && @nd_type[aargs[0]] == "LocalVariableReadNode"
-        op = @nd_name[aargs[0]]
+      aargs = @node_store.get_args(args_id)
+      if aargs.length > 0 && @node_store.node_type(aargs[0]) == "LocalVariableReadNode"
+        op = @node_store.node_name(aargs[0])
         if bi_reaches(lname, op, 0) == 1
           return 1
         end
@@ -13273,11 +12786,11 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
-      expr = @nd_expression[nid]
-      if expr >= 0 && @nd_type[expr] == "CallNode"
-        op = @nd_name[expr]
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      lname = @node_store.node_name(nid)
+      expr = @node_store.node_expression(nid)
+      if expr >= 0 && @node_store.node_type(expr) == "CallNode"
+        op = @node_store.node_name(expr)
         if op == "*" || op == "**"
           if op_is_unbounded(lname, expr) == 1
             if not_in(lname, bigint_names) == 1
@@ -13297,10 +12810,10 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "LocalVariableOperatorWriteNode"
-      bop = @nd_binop[nid]
+    if @node_store.node_type(nid) == "LocalVariableOperatorWriteNode"
+      bop = @node_store.node_binop(nid)
       if bop == "*" || bop == "**"
-        lname = @nd_name[nid]
+        lname = @node_store.node_name(nid)
         if not_in(lname, bigint_names) == 1
           bigint_names.push(lname)
         end
@@ -13308,17 +12821,17 @@ class Compiler
       # += is only unbounded if self-referential with another growing var
       # (not detected here since OpWriteNode is always x += expr)
     end
-    if @nd_body[nid] >= 0
-      scan_bigint_in_loop_node((@nd_body[nid]), bigint_names)
+    if @node_store.node_body(nid) >= 0
+      scan_bigint_in_loop_node((@node_store.node_body(nid)), bigint_names)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_bigint_in_loop_node(stmts[k], bigint_names)
       k = k + 1
     end
-    if @nd_subsequent[nid] >= 0
-      scan_bigint_in_loop_node((@nd_subsequent[nid]), bigint_names)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_bigint_in_loop_node((@node_store.node_subsequent(nid)), bigint_names)
     end
   end
 
@@ -13345,8 +12858,8 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] == "LocalVariableReadNode"
-      vn = @nd_name[nid]
+    if @node_store.node_type(nid) == "LocalVariableReadNode"
+      vn = @node_store.node_name(nid)
       i = 0
       while i < names.length
         if names[i] == vn && types[i] == "bigint"
@@ -13356,15 +12869,15 @@ class Compiler
       end
       return 0
     end
-    if @nd_type[nid] == "CallNode"
-      if @nd_receiver[nid] >= 0
-        if expr_uses_bigint(@nd_receiver[nid], names, types) == 1
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_receiver(nid) >= 0
+        if expr_uses_bigint(@node_store.node_receiver(nid), names, types) == 1
           return 1
         end
       end
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id != nil && args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         ak = 0
         while ak < aargs.length
           if expr_uses_bigint(aargs[ak], names, types) == 1
@@ -13374,18 +12887,18 @@ class Compiler
         end
       end
     end
-    if @nd_expression[nid] >= 0
-      if expr_uses_bigint(@nd_expression[nid], names, types) == 1
+    if @node_store.node_expression(nid) >= 0
+      if expr_uses_bigint(@node_store.node_expression(nid), names, types) == 1
         return 1
       end
     end
-    if @nd_body[nid] >= 0
-      if expr_uses_bigint(@nd_body[nid], names, types) == 1
+    if @node_store.node_body(nid) >= 0
+      if expr_uses_bigint(@node_store.node_body(nid), names, types) == 1
         return 1
       end
     end
     # StatementsNode children
-    st = parse_id_list(@nd_stmts[nid])
+    st = @node_store.parse_id_list(@node_store.node_stmts(nid))
     si = 0
     while si < st.length
       if expr_uses_bigint(st[si], names, types) == 1
@@ -13400,9 +12913,9 @@ class Compiler
     if nid < 0
       return changed
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
-      expr = @nd_expression[nid]
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      lname = @node_store.node_name(nid)
+      expr = @node_store.node_expression(nid)
       if expr >= 0 && expr_uses_bigint(expr, names, types) == 1
         li = 0
         while li < names.length
@@ -13415,10 +12928,10 @@ class Compiler
         end
       end
     end
-    if @nd_body[nid] >= 0
-      changed = propagate_bigint_node(@nd_body[nid], names, types, changed)
+    if @node_store.node_body(nid) >= 0
+      changed = propagate_bigint_node(@node_store.node_body(nid), names, types, changed)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       changed = propagate_bigint_node(stmts[k], names, types, changed)
@@ -13475,10 +12988,10 @@ class Compiler
     # self-host codegen regression — see HANDOFF notes.)
     local = "".split(",")
     i = 0
-    while i < @nd_type.length
-      t = @nd_type[i]
+    while i < @node_store.count
+      t = @node_store.node_type(i)
       if t == "SymbolNode"
-        sname = @nd_content[i]
+        sname = @node_store.node_content(i)
         if not_in(sname, local) == 1
           local.push(sname)
         end
@@ -13486,11 +12999,11 @@ class Compiler
       # Also collect "literal".to_sym / .intern receivers so the
       # static-intern optimization can resolve them to SPS_ constants.
       if t == "CallNode"
-        mn = @nd_name[i]
+        mn = @node_store.node_name(i)
         if mn == "to_sym" || mn == "intern"
-          r = @nd_receiver[i]
-          if r >= 0 && @nd_type[r] == "StringNode"
-            lname = @nd_content[r]
+          r = @node_store.node_receiver(i)
+          if r >= 0 && @node_store.node_type(r) == "StringNode"
+            lname = @node_store.node_content(r)
             if not_in(lname, local) == 1
               local.push(lname)
             end
@@ -13785,10 +13298,10 @@ class Compiler
   end
 
   def subtree_has_ivar_write(nid)
-    if nid < 0 || nid >= @nd_count
+    if nid < 0 || nid >= @node_store.count
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "InstanceVariableWriteNode" || t == "InstanceVariableOperatorWriteNode" || t == "InstanceVariableTargetNode"
       return 1
     end
@@ -13811,22 +13324,22 @@ class Compiler
     if mn.length <= 1 || mn[mn.length - 1] != "="
       return 0
     end
-    if bid < 0 || bid >= @nd_count
+    if bid < 0 || bid >= @node_store.count
       return 0
     end
     # Find the single InstanceVariableWriteNode body (directly or wrapped
     # in a StatementsNode of length 1).
-    t = @nd_type[bid]
+    t = @node_store.node_type(bid)
     iv_id = -1
     if t == "InstanceVariableWriteNode"
       iv_id = bid
     elsif t == "StatementsNode"
-      stmts = @nd_stmts[bid]
+      stmts = @node_store.node_stmts(bid)
       if stmts != ""
         parts = stmts.split(",")
         if parts.length == 1
           sid = parts[0].to_i
-          if sid >= 0 && sid < @nd_count && @nd_type[sid] == "InstanceVariableWriteNode"
+          if sid >= 0 && sid < @node_store.count && @node_store.node_type(sid) == "InstanceVariableWriteNode"
             iv_id = sid
           end
         end
@@ -13836,8 +13349,8 @@ class Compiler
       return 0
     end
     # RHS must be a bare LocalVariableReadNode for the writer's single param.
-    rhs = @nd_value[iv_id]
-    if rhs < 0 || @nd_type[rhs] != "LocalVariableReadNode"
+    rhs = @node_store.node_value(iv_id)
+    if rhs < 0 || @node_store.node_type(rhs) != "LocalVariableReadNode"
       return 0
     end
     1
@@ -13928,19 +13441,19 @@ class Compiler
 
   def is_simple_reader_method(mn, bid)
     # Check if method is a simple attr_reader pattern: def x; @x; end
-    if bid < 0 || bid >= @nd_count
+    if bid < 0 || bid >= @node_store.count
       return 0
     end
-    t = @nd_type[bid]
+    t = @node_store.node_type(bid)
     if t == "StatementsNode"
-      stmts = @nd_stmts[bid]
+      stmts = @node_store.node_stmts(bid)
       if stmts != ""
         parts = stmts.split(",")
         if parts.length == 1
           sid = parts[0].to_i
-          if sid >= 0 && sid < @nd_count
-            if @nd_type[sid] == "InstanceVariableReadNode"
-              iname = @nd_name[sid]
+          if sid >= 0 && sid < @node_store.count
+            if @node_store.node_type(sid) == "InstanceVariableReadNode"
+              iname = @node_store.node_name(sid)
               if iname == "@" + mn
                 return 1
               end
@@ -13950,7 +13463,7 @@ class Compiler
       end
     end
     if t == "InstanceVariableReadNode"
-      iname = @nd_name[bid]
+      iname = @node_store.node_name(bid)
       if iname == "@" + mn
         return 1
       end
@@ -13993,17 +13506,17 @@ class Compiler
   end
 
   def subtree_has_setter_on_params(nid, param_names)
-    if nid < 0 || nid >= @nd_count
+    if nid < 0 || nid >= @node_store.count
       return ""
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     # Check: CallNode with setter name, receiver is a param
     if t == "CallNode"
-      mn = @nd_name[nid]
+      mn = @node_store.node_name(nid)
       if mn != "" && mn.length > 1 && mn[mn.length - 1] == "="
-        recv = @nd_receiver[nid]
-        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-          vname = @nd_name[recv]
+        recv = @node_store.node_receiver(nid)
+        if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+          vname = @node_store.node_name(recv)
           pi2 = 0
           while pi2 < param_names.length
             if param_names[pi2] == vname
@@ -14035,9 +13548,9 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "new"
-        recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "new"
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
           cname = constructor_class_name(recv)
           if cname != "" && find_class_idx(cname) >= 0
@@ -14104,8 +13617,8 @@ class Compiler
     # generated push call would be a C type error.
     @ptr_array_stored_types = "".split(",")
     nid = 0
-    while nid < @nd_type.length
-      if @nd_type[nid] == "ArrayNode"
+    while nid < @node_store.count
+      if @node_store.node_type(nid) == "ArrayNode"
         at = infer_array_elem_type(nid)
         if is_ptr_array_type(at) == 1
           obj_t = ptr_array_elem_type(at)
@@ -14122,12 +13635,12 @@ class Compiler
       # `[Foo.new(...)]` literal exists. Inspect every push-style call
       # and, if the argument's inferred type is `obj_<C>`, add `<C>`
       # to the exclusion so it stays heap-allocated.
-      if @nd_type[nid] == "CallNode"
-        mname = @nd_name[nid]
+      if @node_store.node_type(nid) == "CallNode"
+        mname = @node_store.node_name(nid)
         if mname == "push" || mname == "<<" || mname == "unshift" || mname == "prepend"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            push_args = get_args(args_id)
+            push_args = @node_store.get_args(args_id)
             pk = 0
             while pk < push_args.length
               at_push = infer_type(push_args[pk])
@@ -14439,7 +13952,7 @@ class Compiler
     if body_id < 0
       return "static inline "
     end
-    stmts = get_stmts(body_id)
+    stmts = @node_store.get_stmts(body_id)
     if stmts.length > 3
       return "static "
     end
@@ -14457,17 +13970,17 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] == "CallNode" && @nd_name[nid] == mname
+    if @node_store.node_type(nid) == "CallNode" && @node_store.node_name(nid) == mname
       return 1
     end
-    if @nd_receiver[nid] >= 0
-      if node_calls_name?(@nd_receiver[nid], mname) == 1
+    if @node_store.node_receiver(nid) >= 0
+      if node_calls_name?(@node_store.node_receiver(nid), mname) == 1
         return 1
       end
     end
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arr = get_args(args_id)
+      arr = @node_store.get_args(args_id)
       k = 0
       while k < arr.length
         if node_calls_name?(arr[k], mname) == 1
@@ -14476,12 +13989,12 @@ class Compiler
         k = k + 1
       end
     end
-    if @nd_body[nid] >= 0
-      if node_calls_name?(@nd_body[nid], mname) == 1
+    if @node_store.node_body(nid) >= 0
+      if node_calls_name?(@node_store.node_body(nid), mname) == 1
         return 1
       end
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       if node_calls_name?(stmts[k], mname) == 1
@@ -14489,8 +14002,8 @@ class Compiler
       end
       k = k + 1
     end
-    if @nd_subsequent[nid] >= 0
-      if node_calls_name?(@nd_subsequent[nid], mname) == 1
+    if @node_store.node_subsequent(nid) >= 0
+      if node_calls_name?(@node_store.node_subsequent(nid), mname) == 1
         return 1
       end
     end
@@ -15245,7 +14758,7 @@ class Compiler
   # entry is a no-op.
   def compute_live_cls_methods
     @cls_cmeth_live = ""
-    collect_cls_calls(@root_id, -1)
+    collect_cls_calls(@node_store.root_id, -1)
     iter = 0
     prev_len = @cls_cmeth_live.length
     while iter < 8
@@ -15343,11 +14856,11 @@ class Compiler
     if nid < 0
       return
     end
-    if @nd_type[nid] == "CallNode"
-      recv = @nd_receiver[nid]
-      mname = @nd_name[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      recv = @node_store.node_receiver(nid)
+      mname = @node_store.node_name(nid)
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode" || @nd_type[recv] == "ConstantPathNode"
+        if @node_store.node_type(recv) == "ConstantReadNode" || @node_store.node_type(recv) == "ConstantPathNode"
           cname = constructor_class_name(recv)
           if cname != ""
             tci = find_class_idx(cname)
@@ -15356,7 +14869,7 @@ class Compiler
             end
           end
         end
-        if @nd_type[recv] == "SelfNode" && ctx_ci >= 0
+        if @node_store.node_type(recv) == "SelfNode" && ctx_ci >= 0
           cls_cmeth_mark_live(ctx_ci, mname)
         end
         # Issue #126 / #229 interaction: `<Module>.<acc>.<method>`
@@ -15365,11 +14878,11 @@ class Compiler
         # The receiver is a CallNode at AST level, so the
         # ConstantReadNode branch above doesn't catch it. Look up
         # the fold and mark the resolved class's cls method live.
-        if @nd_type[recv] == "CallNode"
-          inner_recv = @nd_receiver[recv]
-          if inner_recv >= 0 && @nd_type[inner_recv] == "ConstantReadNode"
-            mod_name = @nd_name[inner_recv]
-            resolved = module_acc_resolved(mod_name, @nd_name[recv])
+        if @node_store.node_type(recv) == "CallNode"
+          inner_recv = @node_store.node_receiver(recv)
+          if inner_recv >= 0 && @node_store.node_type(inner_recv) == "ConstantReadNode"
+            mod_name = @node_store.node_name(inner_recv)
+            resolved = module_acc_resolved(mod_name, @node_store.node_name(recv))
             if resolved != "" && resolved != "?"
               rnames = resolved.split(";")
               ri = 0
@@ -15402,64 +14915,64 @@ class Compiler
     # body), skip nested DefNodes — their scope differs and
     # bare/self calls inside should not be attributed to the
     # outer cls method's class.
-    if @nd_type[nid] == "DefNode" && ctx_ci >= 0
+    if @node_store.node_type(nid) == "DefNode" && ctx_ci >= 0
       return
     end
-    if @nd_body[nid] >= 0
-      collect_cls_calls(@nd_body[nid], ctx_ci)
+    if @node_store.node_body(nid) >= 0
+      collect_cls_calls(@node_store.node_body(nid), ctx_ci)
     end
-    cs_stmts = parse_id_list(@nd_stmts[nid])
+    cs_stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < cs_stmts.length
       collect_cls_calls(cs_stmts[k], ctx_ci)
       k = k + 1
     end
-    if @nd_receiver[nid] >= 0
-      collect_cls_calls(@nd_receiver[nid], ctx_ci)
+    if @node_store.node_receiver(nid) >= 0
+      collect_cls_calls(@node_store.node_receiver(nid), ctx_ci)
     end
-    if @nd_arguments[nid] >= 0
-      collect_cls_calls(@nd_arguments[nid], ctx_ci)
+    if @node_store.node_arguments(nid) >= 0
+      collect_cls_calls(@node_store.node_arguments(nid), ctx_ci)
     end
-    cs_args = parse_id_list(@nd_args[nid])
+    cs_args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < cs_args.length
       collect_cls_calls(cs_args[k], ctx_ci)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      collect_cls_calls(@nd_expression[nid], ctx_ci)
+    if @node_store.node_expression(nid) >= 0
+      collect_cls_calls(@node_store.node_expression(nid), ctx_ci)
     end
-    if @nd_predicate[nid] >= 0
-      collect_cls_calls(@nd_predicate[nid], ctx_ci)
+    if @node_store.node_predicate(nid) >= 0
+      collect_cls_calls(@node_store.node_predicate(nid), ctx_ci)
     end
-    if @nd_subsequent[nid] >= 0
-      collect_cls_calls(@nd_subsequent[nid], ctx_ci)
+    if @node_store.node_subsequent(nid) >= 0
+      collect_cls_calls(@node_store.node_subsequent(nid), ctx_ci)
     end
-    if @nd_else_clause[nid] >= 0
-      collect_cls_calls(@nd_else_clause[nid], ctx_ci)
+    if @node_store.node_else_clause(nid) >= 0
+      collect_cls_calls(@node_store.node_else_clause(nid), ctx_ci)
     end
-    if @nd_left[nid] >= 0
-      collect_cls_calls(@nd_left[nid], ctx_ci)
+    if @node_store.node_left(nid) >= 0
+      collect_cls_calls(@node_store.node_left(nid), ctx_ci)
     end
-    if @nd_right[nid] >= 0
-      collect_cls_calls(@nd_right[nid], ctx_ci)
+    if @node_store.node_right(nid) >= 0
+      collect_cls_calls(@node_store.node_right(nid), ctx_ci)
     end
-    if @nd_block[nid] >= 0
-      collect_cls_calls(@nd_block[nid], ctx_ci)
+    if @node_store.node_block(nid) >= 0
+      collect_cls_calls(@node_store.node_block(nid), ctx_ci)
     end
-    cs_elems = parse_id_list(@nd_elements[nid])
+    cs_elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < cs_elems.length
       collect_cls_calls(cs_elems[k], ctx_ci)
       k = k + 1
     end
-    cs_conds = parse_id_list(@nd_conditions[nid])
+    cs_conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < cs_conds.length
       collect_cls_calls(cs_conds[k], ctx_ci)
       k = k + 1
     end
-    cs_parts = parse_id_list(@nd_parts[nid])
+    cs_parts = @node_store.parse_id_list(@node_store.node_parts(nid))
     k = 0
     while k < cs_parts.length
       collect_cls_calls(cs_parts[k], ctx_ci)
@@ -15560,13 +15073,13 @@ class Compiler
         # Declare any local variables used inside initialize so that
         # `x = 1; @a = x` style bodies don't reference an undeclared lv_x.
         declare_method_locals(bid, pnames)
-        stmts = get_stmts(bid)
+        stmts = @node_store.get_stmts(bid)
         stmts.each { |sid|
           # Bare `super` parses as ForwardingSuperNode; `super(args)`
           # parses as SuperNode. Both need to call the parent's
           # initialize. For ForwardingSuperNode we forward the
           # current method's params.
-          is_super = (@nd_type[sid] == "SuperNode" || @nd_type[sid] == "ForwardingSuperNode")
+          is_super = (@node_store.node_type(sid) == "SuperNode" || @node_store.node_type(sid) == "ForwardingSuperNode")
           if is_super
             if @cls_parents[ci] != ""
               pi = find_class_idx(@cls_parents[ci])
@@ -15589,7 +15102,7 @@ class Compiler
                   end
                 end
                 super_args = ""
-                if @nd_type[sid] == "ForwardingSuperNode"
+                if @node_store.node_type(sid) == "ForwardingSuperNode"
                   # Forward the current init's params 1:1.
                   fk = 0
                   while fk < pnames.length
@@ -15606,9 +15119,9 @@ class Compiler
                     fk = fk + 1
                   end
                 else
-                  args_id = @nd_arguments[sid]
+                  args_id = @node_store.node_arguments(sid)
                   if args_id >= 0
-                    arg_ids = get_args(args_id)
+                    arg_ids = @node_store.get_args(args_id)
                     ak = 0
                     while ak < arg_ids.length
                       if ak > 0
@@ -15630,17 +15143,17 @@ class Compiler
               end
             end
           end
-          if @nd_type[sid] == "InstanceVariableWriteNode"
-            ivar_name = @nd_name[sid]
+          if @node_store.node_type(sid) == "InstanceVariableWriteNode"
+            ivar_name = @node_store.node_name(sid)
             ivar = sanitize_ivar(ivar_name)
-            expr_id_iv = @nd_expression[sid]
+            expr_id_iv = @node_store.node_expression(sid)
             # Chained `@a = @b = ... = expr` inside `def initialize`.
             # Delegate to compile_stmt's IVW path so the rhs is
             # evaluated once via compile_chained_ivar_writes; the
             # local emit_raw special-cases below assume a non-chained
             # rhs and would otherwise re-evaluate side-effecting
             # CallNodes per slot.
-            if @nd_type[expr_id_iv] == "InstanceVariableWriteNode"
+            if @node_store.node_type(expr_id_iv) == "InstanceVariableWriteNode"
               compile_stmt(sid)
             else
               # Match the special-case in compile_stmt: empty `{}` / `[]`
@@ -15691,7 +15204,7 @@ class Compiler
                   emit_raw("  { mrb_int _n = " + cnt_e_iv + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp_iv + ", NULL); }")
                 end
                 emit_raw("  " + self_arrow + ivar + " = " + tmp_iv + ";")
-              elsif ivt == "poly_array" && @nd_type[expr_id_iv] == "ArrayNode"
+              elsif ivt == "poly_array" && @node_store.node_type(expr_id_iv) == "ArrayNode"
                 # Non-empty array literal `[a, b, ...]` going into a
                 # poly_array slot. compile_array_literal infers a typed
                 # storage (ptr_array of one class for homogeneous obj
@@ -15701,7 +15214,7 @@ class Compiler
                 @needs_rb_value = 1
                 tmp_iv = new_temp
                 emit_raw("  sp_PolyArray *" + tmp_iv + " = sp_PolyArray_new();")
-                elems_iv = parse_id_list(@nd_elements[expr_id_iv])
+                elems_iv = @node_store.parse_id_list(@node_store.node_elements(expr_id_iv))
                 ek = 0
                 while ek < elems_iv.length
                   eid = elems_iv[ek]
@@ -15709,7 +15222,7 @@ class Compiler
                   # 3D+ shape: nested ArrayNode with ptr_array elem
                   # type → recompile as poly_array so cls_id chain
                   # stays tagged through every level.
-                  if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+                  if @node_store.node_type(eid) == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
                     inner_iv = compile_array_literal_as_poly(eid)
                     emit_raw("  sp_PolyArray_push(" + tmp_iv + ", sp_box_poly_array(" + inner_iv + "));")
                   else
@@ -15815,13 +15328,13 @@ class Compiler
         # Declare locals so non-ivar statements (`x = 1`) and
         # expressions that reference them compile.
         declare_method_locals(bid, pnames)
-        stmts = get_stmts(bid)
+        stmts = @node_store.get_stmts(bid)
         stmts.each { |sid|
           # SuperNode (`super(...)`) and ForwardingSuperNode (bare
           # `super`) are emitted directly above as the parent
           # `_initialize` call. Skip them here so compile_stmt
           # doesn't emit a dummy `0;` for the AST node.
-          if @nd_type[sid] != "SuperNode" && @nd_type[sid] != "ForwardingSuperNode"
+          if @node_store.node_type(sid) != "SuperNode" && @node_store.node_type(sid) != "ForwardingSuperNode"
             compile_stmt(sid)
           end
         }
@@ -16225,7 +15738,7 @@ class Compiler
     if nid < 0
       return 0
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "IntegerNode"
       return 1
     end
@@ -16264,13 +15777,13 @@ class Compiler
       # to a more specific variant on first []= write.
       @scan_empty_hash_flags = "".split(",")
     end
-    if @nd_type[nid] == "MultiWriteNode"
-      targets = parse_id_list(@nd_targets[nid])
-      val_id2 = @nd_expression[nid]
+    if @node_store.node_type(nid) == "MultiWriteNode"
+      targets = @node_store.parse_id_list(@node_store.node_targets(nid))
+      val_id2 = @node_store.node_expression(nid)
       ti2 = 0
       targets.each { |tid|
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          lname = @nd_name[tid]
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(tid)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -16281,17 +15794,17 @@ class Compiler
             end
           end
         end
-        if @nd_type[tid] == "MultiTargetNode"
+        if @node_store.node_type(tid) == "MultiTargetNode"
           # Nested LHS: `a, (b, c) = 1, [2, 3]`. The inner targets'
           # local-variable names need to be declared in this scope
           # too, with the per-element type derived from the matching
           # outer-RHS slot's array type.
-          inner_targets = parse_id_list(@nd_targets[tid])
+          inner_targets = @node_store.parse_id_list(@node_store.node_targets(tid))
           inner_slot_type = multi_write_target_type(val_id2, ti2)
           inner_elem_type = nested_target_elem_type(inner_slot_type)
           inner_targets.each { |inner_tid|
-            if @nd_type[inner_tid] == "LocalVariableTargetNode"
-              ilname = @nd_name[inner_tid]
+            if @node_store.node_type(inner_tid) == "LocalVariableTargetNode"
+              ilname = @node_store.node_name(inner_tid)
               if not_in(ilname, names) == 1
                 if not_in(ilname, params) == 1
                   names.push(ilname)
@@ -16306,11 +15819,11 @@ class Compiler
         end
         ti2 = ti2 + 1
       }
-      rest_id2 = @nd_rest[nid]
+      rest_id2 = @node_store.node_rest(nid)
       if is_splat_with_target(rest_id2) == 1
-        st = @nd_expression[rest_id2]
-        if @nd_type[st] == "LocalVariableTargetNode"
-          lname = @nd_name[st]
+        st = @node_store.node_expression(rest_id2)
+        if @node_store.node_type(st) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(st)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -16322,15 +15835,15 @@ class Compiler
           end
         end
       end
-      rights3 = parse_id_list(@nd_rights[nid])
+      rights3 = @node_store.parse_id_list(@node_store.node_rights(nid))
       r_total2 = 0
-      if val_id2 >= 0 && @nd_type[val_id2] == "ArrayNode"
-        r_total2 = parse_id_list(@nd_elements[val_id2]).length
+      if val_id2 >= 0 && @node_store.node_type(val_id2) == "ArrayNode"
+        r_total2 = @node_store.parse_id_list(@node_store.node_elements(val_id2)).length
       end
       r_idx2 = 0
       rights3.each { |tid|
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          lname = @nd_name[tid]
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(tid)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               names.push(lname)
@@ -16350,25 +15863,25 @@ class Compiler
         end
         r_idx2 = r_idx2 + 1
       }
-      if @nd_expression[nid] >= 0
-        scan_locals(@nd_expression[nid], names, types, params)
+      if @node_store.node_expression(nid) >= 0
+        scan_locals(@node_store.node_expression(nid), names, types, params)
       end
       return
     end
-    if @nd_type[nid] == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
+    if @node_store.node_type(nid) == "LocalVariableWriteNode"
+      lname = @node_store.node_name(nid)
       if not_in(lname, names) == 1
         if not_in(lname, params) == 1
           names.push(lname)
-          types.push(infer_type(@nd_expression[nid]))
-          if is_literal_value_expr(@nd_expression[nid]) == 1
+          types.push(infer_type(@node_store.node_expression(nid)))
+          if is_literal_value_expr(@node_store.node_expression(nid)) == 1
             @scan_literal_flags.push("1")
           else
             @scan_literal_flags.push("")
           end
           # Track empty-array literal so a later push() can promote
           # the local's element type (issue #58).
-          if is_empty_array_literal(@nd_expression[nid]) == 1
+          if is_empty_array_literal(@node_store.node_expression(nid)) == 1
             @scan_empty_flags.push("1")
           else
             @scan_empty_flags.push("")
@@ -16376,7 +15889,7 @@ class Compiler
           # Track empty-hash literal so a later []= write can promote
           # the local's hash variant from the str_int_hash default to
           # whatever key/value types the first []= pins.
-          if is_empty_hash_literal(@nd_expression[nid]) == 1
+          if is_empty_hash_literal(@node_store.node_expression(nid)) == 1
             @scan_empty_hash_flags.push("1")
           else
             @scan_empty_hash_flags.push("")
@@ -16385,10 +15898,10 @@ class Compiler
       else
         if not_in(lname, params) == 1
           # Check if type changed
-          at = infer_type(@nd_expression[nid])
+          at = infer_type(@node_store.node_expression(nid))
           # Concrete (non-empty) array overwrite clears the deferred
           # element-type flag — a `[1,2,3]` write commits to int_array.
-          if is_empty_array_literal(@nd_expression[nid]) == 0
+          if is_empty_array_literal(@node_store.node_expression(nid)) == 0
             ei = 0
             while ei < names.length
               if names[ei] == lname && ei < @scan_empty_flags.length
@@ -16400,7 +15913,7 @@ class Compiler
           # Same shape for empty-hash flag: a non-empty-hash overwrite
           # commits the local to whatever concrete hash type was
           # assigned, so a later []= shouldn't trigger promotion.
-          if is_empty_hash_literal(@nd_expression[nid]) == 0
+          if is_empty_hash_literal(@node_store.node_expression(nid)) == 0
             ehi = 0
             while ehi < names.length
               if names[ehi] == lname && ehi < @scan_empty_hash_flags.length
@@ -16415,7 +15928,7 @@ class Compiler
               if types[ki] != at
                 if types[ki] != "poly"
                   if is_array_type(types[ki]) == 1 && is_array_type(at) == 1
-                    types[ki] = unify_call_types(types[ki], at, @nd_expression[nid])
+                    types[ki] = unify_call_types(types[ki], at, @node_store.node_expression(nid))
                     if types[ki] == "poly_array"
                       @needs_rb_value = 1
                       @needs_gc = 1
@@ -16427,7 +15940,7 @@ class Compiler
                   # write were explicit literals, and their types differ.
                   # This catches `x = 1; x = "hello"` which the legacy
                   # "int is fallback" rule below would silently coerce.
-                  if ki < @scan_literal_flags.length && @scan_literal_flags[ki] == "1" && is_literal_value_expr(@nd_expression[nid]) == 1 && at != "nil" && types[ki] != "nil"
+                  if ki < @scan_literal_flags.length && @scan_literal_flags[ki] == "1" && is_literal_value_expr(@node_store.node_expression(nid)) == 1 && at != "nil" && types[ki] != "nil"
                     types[ki] = "poly"
                     @needs_rb_value = 1
                     @scan_literal_flags[ki] = ""
@@ -16468,9 +15981,9 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "LocalVariableOperatorWriteNode"
-      lname = @nd_name[nid]
-      rhs_type = infer_type(@nd_expression[nid])
+    if @node_store.node_type(nid) == "LocalVariableOperatorWriteNode"
+      lname = @node_store.node_name(nid)
+      rhs_type = infer_type(@node_store.node_expression(nid))
       vtype = "int"
       if rhs_type == "float"
         vtype = "float"
@@ -16498,22 +16011,22 @@ class Compiler
       end
     end
     # Detect array element type from push/<<: arr.push(x) or arr << x
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "push" || @nd_name[nid] == "<<"
-        recv = @nd_receiver[nid]
-        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-          arr_name = @nd_name[recv]
-          args_id = @nd_arguments[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "push" || @node_store.node_name(nid) == "<<"
+        recv = @node_store.node_receiver(nid)
+        if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+          arr_name = @node_store.node_name(recv)
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
               arg_type = infer_type(aargs[0])
               # If arg is arr[i] where arr is in names, get element type
-              if arg_type == "int" && @nd_type[aargs[0]] == "CallNode"
-                if @nd_name[aargs[0]] == "[]"
-                  arr_recv = @nd_receiver[aargs[0]]
-                  if arr_recv >= 0 && @nd_type[arr_recv] == "LocalVariableReadNode"
-                    arn = @nd_name[arr_recv]
+              if arg_type == "int" && @node_store.node_type(aargs[0]) == "CallNode"
+                if @node_store.node_name(aargs[0]) == "[]"
+                  arr_recv = @node_store.node_receiver(aargs[0])
+                  if arr_recv >= 0 && @node_store.node_type(arr_recv) == "LocalVariableReadNode"
+                    arn = @node_store.node_name(arr_recv)
                     ni = 0
                     while ni < names.length
                       if names[ni] == arn
@@ -16598,16 +16111,16 @@ class Compiler
     # sites — `obj.method(arg)`. Same forward/backward propagation as
     # the top-level branch below, but reads/writes the per-class
     # @cls_meth_ptypes / @cls_meth_ptypes_empty storage.
-    if @nd_type[nid] == "CallNode"
-      icm_recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      icm_recv = @node_store.node_receiver(nid)
       if icm_recv >= 0
         icm_rt = infer_type(icm_recv)
         # When the receiver is a local declared in this same
         # scan_locals pass (`r = Recorder.new` followed by `r.method(...)`),
         # infer_type still returns "int" because we haven't called
         # declare_var yet. Fall back to the names/types accumulator.
-        if icm_rt == "int" && @nd_type[icm_recv] == "LocalVariableReadNode"
-          icm_recv_name = @nd_name[icm_recv]
+        if icm_rt == "int" && @node_store.node_type(icm_recv) == "LocalVariableReadNode"
+          icm_recv_name = @node_store.node_name(icm_recv)
           icm_ni0 = 0
           while icm_ni0 < names.length
             if names[icm_ni0] == icm_recv_name
@@ -16620,7 +16133,7 @@ class Compiler
           icm_cname = icm_rt[4, icm_rt.length - 4]
           icm_ci = find_class_idx(icm_cname)
           if icm_ci >= 0
-            icm_mname = @nd_name[nid]
+            icm_mname = @node_store.node_name(nid)
             icm_midx = cls_find_method_direct(icm_ci, icm_mname)
             # Walk parents if not found on the receiver class itself
             icm_owner_ci = icm_ci
@@ -16634,9 +16147,9 @@ class Compiler
               end
             end
             if icm_midx >= 0
-              icm_args_id = @nd_arguments[nid]
+              icm_args_id = @node_store.node_arguments(nid)
               if icm_args_id >= 0
-                icm_aargs = get_args(icm_args_id)
+                icm_aargs = @node_store.get_args(icm_args_id)
                 icm_all_ptypes = @cls_meth_ptypes[icm_owner_ci].split("|")
                 icm_all_empty = @cls_meth_ptypes_empty[icm_owner_ci].split("|")
                 icm_ptypes = "".split(",")
@@ -16653,8 +16166,8 @@ class Compiler
                   icm_arg_id = icm_aargs[icm_k]
                   icm_arg_is_empty = is_empty_array_literal(icm_arg_id)
                   icm_local_idx = -1
-                  if @nd_type[icm_arg_id] == "LocalVariableReadNode"
-                    icm_arg_lname = @nd_name[icm_arg_id]
+                  if @node_store.node_type(icm_arg_id) == "LocalVariableReadNode"
+                    icm_arg_lname = @node_store.node_name(icm_arg_id)
                     icm_ni = 0
                     while icm_ni < names.length
                       if names[icm_ni] == icm_arg_lname
@@ -16715,14 +16228,14 @@ class Compiler
     #       `arg` is a local with the empty flag, upgrade the local's
     #       type to match — this is what propagates the deferred
     #       resolution back to the caller's variable.
-    if @nd_type[nid] == "CallNode"
-      if @nd_receiver[nid] < 0
-        ea_mname = @nd_name[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_receiver(nid) < 0
+        ea_mname = @node_store.node_name(nid)
         ea_mi = find_method_idx(ea_mname)
         if ea_mi >= 0
-          ea_args_id = @nd_arguments[nid]
+          ea_args_id = @node_store.node_arguments(nid)
           if ea_args_id >= 0
-            ea_aargs = get_args(ea_args_id)
+            ea_aargs = @node_store.get_args(ea_args_id)
             ea_ptypes = @meth_param_types[ea_mi].split(",")
             ea_empty_str = ""
             if ea_mi < @meth_param_empty.length
@@ -16735,8 +16248,8 @@ class Compiler
               ea_arg_id = ea_aargs[ea_k]
               ea_arg_is_empty = is_empty_array_literal(ea_arg_id)
               ea_local_idx = -1
-              if @nd_type[ea_arg_id] == "LocalVariableReadNode"
-                ea_arg_lname = @nd_name[ea_arg_id]
+              if @node_store.node_type(ea_arg_id) == "LocalVariableReadNode"
+                ea_arg_lname = @node_store.node_name(ea_arg_id)
                 ea_ni = 0
                 while ea_ni < names.length
                   if names[ea_ni] == ea_arg_lname
@@ -16794,14 +16307,14 @@ class Compiler
     # literal — concretely-typed hashes (`h = {"a" => 1}`) keep
     # their declared type even when later []= writes mix value
     # types.
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "[]="
-        recv = @nd_receiver[nid]
-        if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode"
-          hname = @nd_name[recv]
-          args_id = @nd_arguments[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "[]="
+        recv = @node_store.node_receiver(nid)
+        if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode"
+          hname = @node_store.node_name(recv)
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length >= 2
               ki = 0
               while ki < names.length
@@ -16866,16 +16379,16 @@ class Compiler
         end
       end
     end
-    if @nd_type[nid] == "ForNode"
-      tgt = @nd_target[nid]
+    if @node_store.node_type(nid) == "ForNode"
+      tgt = @node_store.node_target(nid)
       if tgt >= 0
-        if @nd_type[tgt] == "LocalVariableTargetNode"
-          lname = @nd_name[tgt]
+        if @node_store.node_type(tgt) == "LocalVariableTargetNode"
+          lname = @node_store.node_name(tgt)
           if not_in(lname, names) == 1
             if not_in(lname, params) == 1
               # Infer element type from collection
               elem_type = "int"
-              coll = @nd_collection[nid]
+              coll = @node_store.node_collection(nid)
               if coll >= 0
                 ct = infer_type(coll)
                 if ct == "str_array"
@@ -16894,10 +16407,10 @@ class Compiler
       end
     end
     # Rescue reference (=> e) needs to be declared as a local
-    if @nd_type[nid] == "RescueNode"
-      ref = @nd_reference[nid]
+    if @node_store.node_type(nid) == "RescueNode"
+      ref = @node_store.node_reference(nid)
       if ref >= 0
-        lname = @nd_name[ref]
+        lname = @node_store.node_name(ref)
         if not_in(lname, names) == 1
           if not_in(lname, params) == 1
             names.push(lname)
@@ -16907,12 +16420,12 @@ class Compiler
       end
     end
     # Detect << on string local variable: widen to mutable_str
-    if @nd_type[nid] == "CallNode"
-      if @nd_name[nid] == "<<"
-        recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      if @node_store.node_name(nid) == "<<"
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
-          if @nd_type[recv] == "LocalVariableReadNode"
-            vname = @nd_name[recv]
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            vname = @node_store.node_name(recv)
             wi = 0
             while wi < names.length
               if names[wi] == vname
@@ -16928,12 +16441,12 @@ class Compiler
       end
     end
     # Block parameters need to be declared as locals
-    if @nd_type[nid] == "CallNode"
-      blk = @nd_block[nid]
+    if @node_store.node_type(nid) == "CallNode"
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        bp = @nd_parameters[blk]
-        if bp >= 0 && @nd_type[bp] == "NumberedParametersNode"
-          nmax = @nd_value[bp]
+        bp = @node_store.node_parameters(blk)
+        if bp >= 0 && @node_store.node_type(bp) == "NumberedParametersNode"
+          nmax = @node_store.node_value(bp)
           nk = 0
           while nk < nmax
             nbname = "_" + (nk + 1).to_s
@@ -16942,10 +16455,10 @@ class Compiler
                 names.push(nbname)
                 # Infer type from receiver element type
                 nrt = ""
-                if @nd_receiver[nid] >= 0
-                  nrt = infer_type(@nd_receiver[nid])
-                  if nrt == "int" && @nd_type[@nd_receiver[nid]] == "LocalVariableReadNode"
-                    nrname = @nd_name[@nd_receiver[nid]]
+                if @node_store.node_receiver(nid) >= 0
+                  nrt = infer_type(@node_store.node_receiver(nid))
+                  if nrt == "int" && @node_store.node_type(@node_store.node_receiver(nid)) == "LocalVariableReadNode"
+                    nrname = @node_store.node_name(@node_store.node_receiver(nid))
                     nri = 0
                     while nri < names.length
                       if names[nri] == nrname
@@ -16981,24 +16494,24 @@ class Compiler
             nk = nk + 1
           end
         end
-        if bp >= 0 && @nd_type[bp] != "NumberedParametersNode"
-          inner = @nd_parameters[bp]
+        if bp >= 0 && @node_store.node_type(bp) != "NumberedParametersNode"
+          inner = @node_store.node_parameters(bp)
           if inner >= 0
-            reqs = parse_id_list(@nd_requireds[inner])
+            reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
             bk = 0
             while bk < reqs.length
-              bname = @nd_name[reqs[bk]]
+              bname = @node_store.node_name(reqs[bk])
               if not_in(bname, names) == 1
                 if not_in(bname, params) == 1
                   names.push(bname)
                   # Infer type from receiver context
                   recv_type = ""
-                  if @nd_receiver[nid] >= 0
-                    recv_type = infer_type(@nd_receiver[nid])
+                  if @node_store.node_receiver(nid) >= 0
+                    recv_type = infer_type(@node_store.node_receiver(nid))
                     # If type is int and receiver is local var, check names array
                     if recv_type == "int"
-                      if @nd_type[@nd_receiver[nid]] == "LocalVariableReadNode"
-                        rname = @nd_name[@nd_receiver[nid]]
+                      if @node_store.node_type(@node_store.node_receiver(nid)) == "LocalVariableReadNode"
+                        rname = @node_store.node_name(@node_store.node_receiver(nid))
                         ri = 0
                         while ri < names.length
                           if names[ri] == rname
@@ -17012,11 +16525,11 @@ class Compiler
                     # returns "str_array" because map's type isn't in @scope_names
                     # during the scan. Resolve by checking the names array.
                     if recv_type == "str_array"
-                      rnode = @nd_receiver[nid]
-                      if @nd_type[rnode] == "CallNode" && @nd_name[rnode] == "keys"
-                        krnode = @nd_receiver[rnode]
-                        if krnode >= 0 && @nd_type[krnode] == "LocalVariableReadNode"
-                          krname = @nd_name[krnode]
+                      rnode = @node_store.node_receiver(nid)
+                      if @node_store.node_type(rnode) == "CallNode" && @node_store.node_name(rnode) == "keys"
+                        krnode = @node_store.node_receiver(rnode)
+                        if krnode >= 0 && @node_store.node_type(krnode) == "LocalVariableReadNode"
+                          krname = @node_store.node_name(krnode)
                           kri = 0
                           while kri < names.length
                             if names[kri] == krname && types[kri] == "int_str_hash"
@@ -17028,7 +16541,7 @@ class Compiler
                       end
                     end
                   end
-                  mname = @nd_name[nid]
+                  mname = @node_store.node_name(nid)
                   if mname == "scan"
                     types.push("string")
                     bk = bk + 1
@@ -17138,9 +16651,9 @@ class Compiler
                       end
                     else
                       # Object accumulator — infer from first argument
-                      args_id = @nd_arguments[nid]
+                      args_id = @node_store.node_arguments(nid)
                       if args_id >= 0
-                        aargs = get_args(args_id)
+                        aargs = @node_store.get_args(args_id)
                         if aargs.length > 0
                           types.push(infer_type(aargs[0]))
                           bk = bk + 1
@@ -17159,9 +16672,9 @@ class Compiler
                   elsif mname == "reduce" || mname == "inject"
                     if bk == 0
                       # Accumulator: infer from initial value argument
-                      args_id = @nd_arguments[nid]
+                      args_id = @node_store.node_arguments(nid)
                       if args_id >= 0
-                        aargs = get_args(args_id)
+                        aargs = @node_store.get_args(args_id)
                         if aargs.length > 0
                           types.push(infer_type(aargs[0]))
                           bk = bk + 1
@@ -17195,68 +16708,68 @@ class Compiler
   end
 
   def scan_locals_children(nid, names, types, params)
-    if @nd_body[nid] >= 0
-      scan_locals(@nd_body[nid], names, types, params)
+    if @node_store.node_body(nid) >= 0
+      scan_locals(@node_store.node_body(nid), names, types, params)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_locals(stmts[k], names, types, params)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_locals(@nd_expression[nid], names, types, params)
+    if @node_store.node_expression(nid) >= 0
+      scan_locals(@node_store.node_expression(nid), names, types, params)
     end
-    if @nd_predicate[nid] >= 0
-      scan_locals(@nd_predicate[nid], names, types, params)
+    if @node_store.node_predicate(nid) >= 0
+      scan_locals(@node_store.node_predicate(nid), names, types, params)
     end
-    if @nd_subsequent[nid] >= 0
-      scan_locals(@nd_subsequent[nid], names, types, params)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_locals(@node_store.node_subsequent(nid), names, types, params)
     end
-    if @nd_else_clause[nid] >= 0
-      scan_locals(@nd_else_clause[nid], names, types, params)
+    if @node_store.node_else_clause(nid) >= 0
+      scan_locals(@node_store.node_else_clause(nid), names, types, params)
     end
-    if @nd_arguments[nid] >= 0
-      scan_locals(@nd_arguments[nid], names, types, params)
+    if @node_store.node_arguments(nid) >= 0
+      scan_locals(@node_store.node_arguments(nid), names, types, params)
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_locals(args[k], names, types, params)
       k = k + 1
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       scan_locals(conds[k], names, types, params)
       k = k + 1
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_locals(elems[k], names, types, params)
       k = k + 1
     end
-    if @nd_left[nid] >= 0
-      scan_locals(@nd_left[nid], names, types, params)
+    if @node_store.node_left(nid) >= 0
+      scan_locals(@node_store.node_left(nid), names, types, params)
     end
-    if @nd_right[nid] >= 0
-      scan_locals(@nd_right[nid], names, types, params)
+    if @node_store.node_right(nid) >= 0
+      scan_locals(@node_store.node_right(nid), names, types, params)
     end
-    if @nd_block[nid] >= 0
-      scan_locals(@nd_block[nid], names, types, params)
+    if @node_store.node_block(nid) >= 0
+      scan_locals(@node_store.node_block(nid), names, types, params)
     end
-    if @nd_receiver[nid] >= 0
-      scan_locals(@nd_receiver[nid], names, types, params)
+    if @node_store.node_receiver(nid) >= 0
+      scan_locals(@node_store.node_receiver(nid), names, types, params)
     end
-    if @nd_collection[nid] >= 0
-      scan_locals(@nd_collection[nid], names, types, params)
+    if @node_store.node_collection(nid) >= 0
+      scan_locals(@node_store.node_collection(nid), names, types, params)
     end
-    if @nd_rescue_clause[nid] >= 0
-      scan_locals(@nd_rescue_clause[nid], names, types, params)
+    if @node_store.node_rescue_clause(nid) >= 0
+      scan_locals(@node_store.node_rescue_clause(nid), names, types, params)
     end
-    if @nd_ensure_clause[nid] >= 0
-      scan_locals(@nd_ensure_clause[nid], names, types, params)
+    if @node_store.node_ensure_clause(nid) >= 0
+      scan_locals(@node_store.node_ensure_clause(nid), names, types, params)
     end
   end
 
@@ -17290,7 +16803,7 @@ class Compiler
       j = 0
       while j < @multi_const_inits.length
         mw_id = @multi_const_inits[j].split("|")[1].to_i
-        rhs = @nd_expression[mw_id]
+        rhs = @node_store.node_expression(mw_id)
         if rhs >= 0
           scan_locals(rhs, lnames, ltypes, empty_params)
         end
@@ -17321,7 +16834,7 @@ class Compiler
 
   # ---- Main emission ----
   def emit_main
-    stmts = get_body_stmts(@root_id)
+    stmts = @node_store.get_body_stmts(@node_store.root_id)
     emit_raw("typedef struct{const char**data;mrb_int len;}sp_Argv;")
     emit_raw("static sp_Argv sp_argv;")
     emit_raw("")
@@ -17357,9 +16870,9 @@ class Compiler
     empty_params = "".split(",")
     pre_scan_simple_local_writes(stmts)
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
             # Skip ModuleNode bodies — their nested classes/methods are
             # collected separately, and recursing into them here would
             # pull every nested method's locals into main()'s frame and
@@ -17368,7 +16881,7 @@ class Compiler
             # function lands on bare `Video` instead of the namespaced
             # form). The other passes below already filter ModuleNode;
             # this one was the outlier.
-            if @nd_type[sid] != "ModuleNode"
+            if @node_store.node_type(sid) != "ModuleNode"
               scan_locals(sid, lnames, ltypes, empty_params)
             end
           end
@@ -17394,10 +16907,10 @@ class Compiler
     ltypes2 = "".split(",")
 
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
-            if @nd_type[sid] != "ModuleNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
+            if @node_store.node_type(sid) != "ModuleNode"
               scan_locals(sid, lnames2, ltypes2, empty_params)
             end
           end
@@ -17446,10 +16959,10 @@ class Compiler
     lnames3 = "".split(",")
     ltypes3 = "".split(",")
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
-            if @nd_type[sid] != "ModuleNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
+            if @node_store.node_type(sid) != "ModuleNode"
               scan_locals(sid, lnames3, ltypes3, empty_params)
             end
           end
@@ -17491,10 +17004,10 @@ class Compiler
         i2 = 0
         while i2 < stmts.length
           sid2 = stmts[i2]
-          if @nd_type[sid2] != "DefNode"
-            if @nd_type[sid2] != "ClassNode"
-              if @nd_type[sid2] != "ConstantWriteNode"
-                if @nd_type[sid2] != "ModuleNode"
+          if @node_store.node_type(sid2) != "DefNode"
+            if @node_store.node_type(sid2) != "ClassNode"
+              if @node_store.node_type(sid2) != "ConstantWriteNode"
+                if @node_store.node_type(sid2) != "ModuleNode"
                   if param_used_as_lambda(lnames[j], sid2) == 1
                     ltypes[j] = "lambda"
                     set_var_type(lnames[j], "lambda")
@@ -17570,17 +17083,17 @@ class Compiler
         parts = @multi_const_inits[mci].split("|")
         scope_n = parts[0]
         mw_id = parts[1].to_i
-        targets = parse_id_list(@nd_targets[mw_id])
-        val_id = @nd_expression[mw_id]
+        targets = @node_store.parse_id_list(@node_store.node_targets(mw_id))
+        val_id = @node_store.node_expression(mw_id)
         old_scope = @current_lexical_scope
         @current_lexical_scope = scope_n
-        if val_id >= 0 && @nd_type[val_id] == "ArrayNode"
-          elems = parse_id_list(@nd_elements[val_id])
+        if val_id >= 0 && @node_store.node_type(val_id) == "ArrayNode"
+          elems = @node_store.parse_id_list(@node_store.node_elements(val_id))
           ti2 = 0
           while ti2 < targets.length
             tid = targets[ti2]
-            if @nd_type[tid] == "ConstantTargetNode" && ti2 < elems.length
-              cn = @nd_name[tid]
+            if @node_store.node_type(tid) == "ConstantTargetNode" && ti2 < elems.length
+              cn = @node_store.node_name(tid)
               if scope_n != ""
                 cn = scope_n + "_" + cn
               end
@@ -17597,8 +17110,8 @@ class Compiler
             ti3 = 0
             while ti3 < targets.length
               tid = targets[ti3]
-              if @nd_type[tid] == "ConstantTargetNode"
-                cn = @nd_name[tid]
+              if @node_store.node_type(tid) == "ConstantTargetNode"
+                cn = @node_store.node_name(tid)
                 if scope_n != ""
                   cn = scope_n + "_" + cn
                 end
@@ -17617,8 +17130,8 @@ class Compiler
             ti3 = 0
             while ti3 < targets.length
               tid = targets[ti3]
-              if @nd_type[tid] == "ConstantTargetNode"
-                cn = @nd_name[tid]
+              if @node_store.node_type(tid) == "ConstantTargetNode"
+                cn = @node_store.node_name(tid)
                 if scope_n != ""
                   cn = scope_n + "_" + cn
                 end
@@ -17640,9 +17153,9 @@ class Compiler
 
     # Compile main statements
     stmts.each { |sid|
-      if @nd_type[sid] != "DefNode"
-        if @nd_type[sid] != "ClassNode"
-          if @nd_type[sid] != "ConstantWriteNode"
+      if @node_store.node_type(sid) != "DefNode"
+        if @node_store.node_type(sid) != "ClassNode"
+          if @node_store.node_type(sid) != "ConstantWriteNode"
             compile_stmt(sid)
           end
         end
@@ -17705,8 +17218,8 @@ class Compiler
   end
 
   def or_result_type(nid)
-    lt = infer_type(@nd_left[nid])
-    rt = infer_type(@nd_right[nid])
+    lt = infer_type(@node_store.node_left(nid))
+    rt = infer_type(@node_store.node_right(nid))
     if lt == rt
       return lt
     end
@@ -17727,18 +17240,18 @@ class Compiler
     if nid < 0
       return "0"
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "IntegerNode"
-      return @nd_value[nid].to_s
+      return @node_store.node_value(nid).to_s
     end
     if t == "FloatNode"
-      return @nd_content[nid]
+      return @node_store.node_content(nid)
     end
     if t == "StringNode"
-      return c_string_literal(@nd_content[nid])
+      return c_string_literal(@node_store.node_content(nid))
     end
     if t == "SymbolNode"
-      return compile_symbol_literal(@nd_content[nid])
+      return compile_symbol_literal(@node_store.node_content(nid))
     end
     if t == "InterpolatedStringNode"
       return compile_interpolated(nid)
@@ -17759,7 +17272,7 @@ class Compiler
       # is null-guarded so unused reads return "" -- matches CRuby's
       # post-no-match behavior. $~ falls back to $& since Spinel
       # has no MatchData wrapper to expose.
-      n = @nd_name[nid]
+      n = @node_store.node_name(nid)
       if n == "$&" || n == "$~"
         return "(sp_re_match_str ? sp_re_match_str : \"\")"
       end
@@ -17773,7 +17286,7 @@ class Compiler
       exit(1)
     end
     if t == "NumberedReferenceReadNode"
-      num = @nd_value[nid]
+      num = @node_store.node_value(nid)
       if num >= 1 && num <= 9
         return "(sp_re_captures[" + num.to_s + "] ? sp_re_captures[" + num.to_s + "] : \"\")"
       end
@@ -17781,7 +17294,7 @@ class Compiler
     end
     if t == "MatchWriteNode"
       # $1 = ... pattern match
-      return compile_expr(@nd_receiver[nid])
+      return compile_expr(@node_store.node_receiver(nid))
     end
     if t == "TrueNode"
       return "TRUE"
@@ -17796,7 +17309,7 @@ class Compiler
       return "self"
     end
     if t == "LocalVariableReadNode"
-      return fiber_var_ref(@nd_name[nid])
+      return fiber_var_ref(@node_store.node_name(nid))
     end
     if t == "InstanceVariableReadNode"
       # Check if we're in a module class method
@@ -17805,7 +17318,7 @@ class Compiler
         mmod = @module_names[mi3]
         if mmod != ""
           if @current_method_name.start_with?(mmod + "_cls_")
-            iname = @nd_name[nid]
+            iname = @node_store.node_name(nid)
             cname3 = mmod + "_" + iname[1, iname.length - 1]
             ci3 = find_const_idx(cname3)
             if ci3 >= 0
@@ -17815,14 +17328,14 @@ class Compiler
         end
         mi3 = mi3 + 1
       end
-      return ivar_lhs(@nd_name[nid])
+      return ivar_lhs(@node_store.node_name(nid))
     end
     if t == "ClassVariableReadNode"
       # `@@var` -- reads the per-(class,name) C global registered
       # by collect_cvars. @current_class_idx is set during class
       # body and class/instance method compilation, so the lookup
       # resolves to whichever class's body or method we're in.
-      return "cvar_" + cvar_qname(@current_class_idx, @nd_name[nid])
+      return "cvar_" + cvar_qname(@current_class_idx, @node_store.node_name(nid))
     end
     if t == "ClassVariableWriteNode"
       # Expression-form write: `def tick; @@x = @@x + 1; end` --
@@ -17831,9 +17344,9 @@ class Compiler
       # form so the assignment fires AND the value is the
       # result, matching the InstanceVariableWriteNode pattern
       # at line 14780.
-      qname = cvar_qname(@current_class_idx, @nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
-      val_t = infer_type(@nd_expression[nid])
+      qname = cvar_qname(@current_class_idx, @node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
+      val_t = infer_type(@node_store.node_expression(nid))
       register_cvar(qname, val_t)
       return "(cvar_" + qname + " = " + val + ")"
     end
@@ -17841,15 +17354,15 @@ class Compiler
       # Issue #130: same poly-slot boxing as the statement-form emit.
       # Expression form (`x = (@y = expr)`) is rarer but reaches the
       # same slot through a different compile path.
-      iname_w = @nd_name[nid]
+      iname_w = @node_store.node_name(nid)
       ivt_w = ""
       if @current_class_idx >= 0
         ivt_w = cls_ivar_type(@current_class_idx, iname_w)
       end
       if ivt_w == "poly"
-        val = box_expr_to_poly(@nd_expression[nid])
+        val = box_expr_to_poly(@node_store.node_expression(nid))
       else
-        val = compile_expr(@nd_expression[nid])
+        val = compile_expr(@node_store.node_expression(nid))
       end
       # Check if in module method
       mi3 = 0
@@ -17875,18 +17388,18 @@ class Compiler
       # zeroed the outer write — every `@_p_nz = ___a__ = __data__`
       # in optcarrots OptimizedCodeBuilder CPU output became
       # `iv__p_nz = 0`. Lower as a parenthesized C-style assignment.
-      val = compile_expr(@nd_expression[nid])
-      return "(" + fiber_var_ref(@nd_name[nid]) + " = " + val + ")"
+      val = compile_expr(@node_store.node_expression(nid))
+      return "(" + fiber_var_ref(@node_store.node_name(nid)) + " = " + val + ")"
     end
     if t == "LocalVariableOperatorWriteNode"
       # `local OP= expr` used as an expression (e.g. ORA's
       # `@_p_nz = ___a__ |= __data__`). Same shape as the chained
       # write above — without this, the op-assign drops out and the
       # outer write zeroes the ivar.
-      op = @nd_binop[nid]
-      val = compile_expr(@nd_expression[nid])
-      vref = fiber_var_ref(@nd_name[nid])
-      vt = find_var_type(@nd_name[nid])
+      op = @node_store.node_binop(nid)
+      val = compile_expr(@node_store.node_expression(nid))
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      vt = find_var_type(@node_store.node_name(nid))
       # Obj-typed local: dispatch via user-defined operator instead
       # of emitting raw C `OP=` (pointer arithmetic on an obj slot).
       disp = obj_op_dispatch_expr(vt, vref, op, val)
@@ -17899,21 +17412,21 @@ class Compiler
       # `local ||= expr` in expression context. Lower as
       # `(local = local ? local : expr)` so the side effect runs
       # only on a falsy current value.
-      vref = fiber_var_ref(@nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
       return "(" + vref + " = " + vref + " ? " + vref + " : (" + val + "))"
     end
     if t == "LocalVariableAndWriteNode"
       # `local &&= expr` in expression context.
-      vref = fiber_var_ref(@nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
       return "(" + vref + " = " + vref + " ? (" + val + ") : " + vref + ")"
     end
     if t == "ConstantReadNode"
-      if @nd_name[nid] == "ARGV"
+      if @node_store.node_name(nid) == "ARGV"
         return "sp_argv"
       end
-      rname = resolve_const_read_name(@nd_name[nid])
+      rname = resolve_const_read_name(@node_store.node_name(nid))
       ci = find_const_idx(rname)
       if ci >= 0
         # Propagate simple literal constants to their use sites.
@@ -17950,9 +17463,9 @@ class Compiler
           return "cst_" + cpname
         end
       end
-      if @nd_receiver[nid] >= 0
-        rname = resolve_const_ref_name(@nd_receiver[nid])
-        nname = @nd_name[nid]
+      if @node_store.node_receiver(nid) >= 0
+        rname = resolve_const_ref_name(@node_store.node_receiver(nid))
+        nname = @node_store.node_name(nid)
         # Built-in constants
         if rname == "Float"
           if nname == "INFINITY"
@@ -17979,7 +17492,7 @@ class Compiler
           return cpname
         end
       end
-      return @nd_name[nid]
+      return @node_store.node_name(nid)
     end
     if t == "LambdaNode"
       return compile_lambda_expr(nid)
@@ -17994,8 +17507,8 @@ class Compiler
       return compile_unless_expr(nid)
     end
     if t == "AndNode"
-      left_nid = @nd_left[nid]
-      right_nid = @nd_right[nid]
+      left_nid = @node_store.node_left(nid)
+      right_nid = @node_store.node_right(nid)
       lt = infer_type(left_nid)
       rt = infer_type(right_nid)
       le = compile_expr(left_nid)
@@ -18005,8 +17518,8 @@ class Compiler
       return "(" + le_t + " && " + re_t + ")"
     end
     if t == "OrNode"
-      left_nid = @nd_left[nid]
-      right_nid = @nd_right[nid]
+      left_nid = @node_store.node_left(nid)
+      right_nid = @node_store.node_right(nid)
       lt = infer_type(left_nid)
       rt = infer_type(right_nid)
       ot = or_result_type(nid)
@@ -18033,9 +17546,9 @@ class Compiler
       return "(" + compile_expr(left_nid) + " || " + compile_expr(right_nid) + ")"
     end
     if t == "ParenthesesNode"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         if stmts.length == 1
           return compile_expr(stmts[0])
         end
@@ -18085,7 +17598,7 @@ class Compiler
       return compile_hash_literal(nid)
     end
     if t == "RangeNode"
-      return "sp_range_new(" + compile_expr(@nd_left[nid]) + ", " + compile_expr(@nd_right[nid]) + ")"
+      return "sp_range_new(" + compile_expr(@node_store.node_left(nid)) + ", " + compile_expr(@node_store.node_right(nid)) + ")"
     end
     if t == "DefinedNode"
       return "\"expression\""
@@ -18093,27 +17606,27 @@ class Compiler
     if t == "RescueModifierNode"
       @needs_setjmp = 1
       tmp = new_temp
-      rt = infer_type(@nd_else_clause[nid])
+      rt = infer_type(@node_store.node_else_clause(nid))
       emit("  " + c_type(rt) + " " + tmp + " = " + c_default_val(rt) + ";")
       emit("  sp_exc_top++;")
       emit("  if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {")
-      emit("    " + tmp + " = " + compile_expr(@nd_expression[nid]) + ";")
+      emit("    " + tmp + " = " + compile_expr(@node_store.node_expression(nid)) + ";")
       emit("    sp_exc_top--;")
       emit("  } else {")
       emit("    sp_exc_top--;")
-      emit("    " + tmp + " = " + compile_expr(@nd_else_clause[nid]) + ";")
+      emit("    " + tmp + " = " + compile_expr(@node_store.node_else_clause(nid)) + ";")
       emit("  }")
       return tmp
     end
     if t == "XStringNode"
-      return "sp_backtick(" + c_string_literal(@nd_content[nid]) + ")"
+      return "sp_backtick(" + c_string_literal(@node_store.node_content(nid)) + ")"
     end
     if t == "InterpolatedXStringNode"
       interp = compile_interpolated(nid)
       return "sp_backtick(" + interp + ")"
     end
     if t == "GlobalVariableReadNode"
-      gname = @nd_name[nid]
+      gname = @node_store.node_name(nid)
       if gname == "$stderr"
         return "0"
       end
@@ -18127,13 +17640,13 @@ class Compiler
       return sanitize_gvar(gname)
     end
     if t == "SourceLineNode"
-      return @nd_value[nid].to_s
+      return @node_store.node_value(nid).to_s
     end
     if t == "SourceFileNode"
-      # __FILE__ — parser populated @nd_content with the toplevel
+      # __FILE__: parser populated node_content with the toplevel
       # script path. (Inlined-require call sites all see the same
       # path; documented limitation in test/source_file.rb.)
-      return c_string_literal(@nd_content[nid])
+      return c_string_literal(@node_store.node_content(nid))
     end
     if t == "SourceEncodingNode"
       # __ENCODING__ — Spinel has no Encoding runtime; we return
@@ -18141,23 +17654,23 @@ class Compiler
       return c_string_literal("UTF-8")
     end
     if t == "ArgumentsNode"
-      arg_ids = parse_id_list(@nd_args[nid])
+      arg_ids = @node_store.parse_id_list(@node_store.node_args(nid))
       if arg_ids.length > 0
         return compile_expr(arg_ids[0])
       end
       return "0"
     end
     if t == "StatementsNode"
-      stmts = parse_id_list(@nd_stmts[nid])
+      stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
       if stmts.length > 0
         return compile_expr(stmts.last)
       end
       return "0"
     end
     if t == "EmbeddedStatementsNode"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         if stmts.length > 0
           return compile_expr(stmts.first)
         end
@@ -18169,7 +17682,7 @@ class Compiler
       rt = infer_type(nid)
       tmp = new_temp
       emit("  " + c_type(rt) + " " + tmp + " = " + c_default_val(rt) + ";")
-      pred = @nd_predicate[nid]
+      pred = @node_store.node_predicate(nid)
       if pred >= 0
         pred_type = infer_type(pred)
         pred_val = compile_expr(pred)
@@ -18186,20 +17699,20 @@ class Compiler
         else
           emit("  mrb_int " + ptmp + " = " + pred_val + ";")
         end
-        conds = parse_id_list(@nd_conditions[nid])
+        conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
         k = 0
         while k < conds.length
           wid = conds[k]
-          if @nd_type[wid] == "WhenNode"
+          if @node_store.node_type(wid) == "WhenNode"
             kw = "if"
             if k > 0
               kw = "} else if"
             end
             cond_str = compile_when_conds(wid, ptmp, pred_type)
             emit("  " + kw + " (" + cond_str + ") {")
-            wbody = @nd_body[wid]
+            wbody = @node_store.node_body(wid)
             if wbody >= 0
-              ws = get_stmts(wbody)
+              ws = @node_store.get_stmts(wbody)
               if ws.length > 0
                 i = 0
                 while i < ws.length - 1
@@ -18214,24 +17727,24 @@ class Compiler
         end
       else
         # Bare case (no predicate)
-        conds = parse_id_list(@nd_conditions[nid])
+        conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
         k = 0
         while k < conds.length
           wid = conds[k]
-          if @nd_type[wid] == "WhenNode"
+          if @node_store.node_type(wid) == "WhenNode"
             kw = "if"
             if k > 0
               kw = "} else if"
             end
-            wconds = parse_id_list(@nd_conditions[wid])
+            wconds = @node_store.parse_id_list(@node_store.node_conditions(wid))
             cexpr = "0"
             if wconds.length > 0
               cexpr = compile_expr(wconds.first)
             end
             emit("  " + kw + " (" + cexpr + ") {")
-            wbody = @nd_body[wid]
+            wbody = @node_store.node_body(wid)
             if wbody >= 0
-              ws = get_stmts(wbody)
+              ws = @node_store.get_stmts(wbody)
               if ws.length > 0
                 i = 0
                 while i < ws.length - 1
@@ -18245,12 +17758,12 @@ class Compiler
           k = k + 1
         end
       end
-      ec = @nd_else_clause[nid]
+      ec = @node_store.node_else_clause(nid)
       if ec >= 0
         emit("  } else {")
-        ebody = @nd_body[ec]
+        ebody = @node_store.node_body(ec)
         if ebody >= 0
-          es = get_stmts(ebody)
+          es = @node_store.get_stmts(ebody)
           if es.length > 0
             i = 0
             while i < es.length - 1
@@ -18261,7 +17774,7 @@ class Compiler
           end
         end
       end
-      conds2 = parse_id_list(@nd_conditions[nid])
+      conds2 = @node_store.parse_id_list(@node_store.node_conditions(nid))
       if conds2.length > 0
         emit("  }")
       end
@@ -18339,20 +17852,20 @@ class Compiler
   end
 
   def compile_interpolated(nid)
-    parts = parse_id_list(@nd_parts[nid])
+    parts = @node_store.parse_id_list(@node_store.node_parts(nid))
     if parts.length == 0
       return "(&(\"\\xff\")[1])"
     end
     fmt = ""
     arg_exprs = "".split(",")
     parts.each { |pid|
-      if @nd_type[pid] == "StringNode"
-        fmt = fmt + escape_c_format(@nd_content[pid])
+      if @node_store.node_type(pid) == "StringNode"
+        fmt = fmt + escape_c_format(@node_store.node_content(pid))
       else
-        if @nd_type[pid] == "EmbeddedStatementsNode"
-          body = @nd_body[pid]
+        if @node_store.node_type(pid) == "EmbeddedStatementsNode"
+          body = @node_store.node_body(pid)
           if body >= 0
-            stmts = get_stmts(body)
+            stmts = @node_store.get_stmts(body)
             if stmts.length > 0
               inner = stmts.first
               it = infer_type(inner)
@@ -18475,7 +17988,7 @@ class Compiler
     if nid < 0
       return val
     end
-    if @nd_type[nid] != "CallNode"
+    if @node_store.node_type(nid) != "CallNode"
       return val
     end
     t = infer_type(nid)
@@ -18490,9 +18003,9 @@ class Compiler
   end
 
   def compile_arg0(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
       if arg_ids.length > 0
         return compile_expr(arg_ids[0])
       end
@@ -18503,9 +18016,9 @@ class Compiler
   # Like compile_arg0, but converts symbol-typed arg to const char *
   # (sp_sym_to_s wrap). Use for callsites that need a string key.
   def compile_str_arg0(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
       if arg_ids.length > 0
         return compile_expr_as_string(arg_ids[0])
       end
@@ -18575,9 +18088,9 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LocalVariableReadNode" || t == "LocalVariableTargetNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       if not_in(vn, params) == 1 && not_in(vn, locals) == 1 && not_in(vn, free_vars) == 1
         vt = find_var_type(vn)
         if vt != ""
@@ -18588,7 +18101,7 @@ class Compiler
       return
     end
     if t == "LocalVariableWriteNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       if not_in(vn, params) == 1 && not_in(vn, locals) == 1 && not_in(vn, free_vars) == 1
         vt = find_var_type(vn)
         if vt != ""
@@ -18597,11 +18110,11 @@ class Compiler
         end
       end
       # Also scan the expression
-      scan_fiber_free_vars(@nd_expression[nid], params, locals, free_vars, free_var_types)
+      scan_fiber_free_vars(@node_store.node_expression(nid), params, locals, free_vars, free_var_types)
       return
     end
     if t == "LocalVariableOperatorWriteNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       if not_in(vn, params) == 1 && not_in(vn, locals) == 1 && not_in(vn, free_vars) == 1
         vt = find_var_type(vn)
         if vt != ""
@@ -18609,7 +18122,7 @@ class Compiler
           free_var_types.push(vt)
         end
       end
-      scan_fiber_free_vars(@nd_expression[nid], params, locals, free_vars, free_var_types)
+      scan_fiber_free_vars(@node_store.node_expression(nid), params, locals, free_vars, free_var_types)
       return
     end
     # Stop at nested lambda/fiber boundaries (they handle their own captures)
@@ -18618,107 +18131,107 @@ class Compiler
     end
     if t == "CallNode"
       # Stop at nested Fiber.new block bodies
-      mn = @nd_name[nid]
+      mn = @node_store.node_name(nid)
       if mn == "new"
-        rv = @nd_receiver[nid]
+        rv = @node_store.node_receiver(nid)
         if rv >= 0 && constructor_class_name(rv) == "Fiber"
           return
         end
       end
     end
     # Recurse into children (follow scan_locals_children pattern)
-    if @nd_body[nid] >= 0
-      scan_fiber_free_vars(@nd_body[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_body(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_body(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_receiver[nid] >= 0
-      scan_fiber_free_vars(@nd_receiver[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_receiver(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_receiver(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_expression[nid] >= 0
-      scan_fiber_free_vars(@nd_expression[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_expression(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_expression(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_predicate[nid] >= 0
-      scan_fiber_free_vars(@nd_predicate[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_predicate(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_predicate(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_subsequent[nid] >= 0
-      scan_fiber_free_vars(@nd_subsequent[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_subsequent(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_else_clause[nid] >= 0
-      scan_fiber_free_vars(@nd_else_clause[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_else_clause(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_else_clause(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_arguments[nid] >= 0
-      scan_fiber_free_vars(@nd_arguments[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_arguments(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_arguments(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_rescue_clause[nid] >= 0
-      scan_fiber_free_vars(@nd_rescue_clause[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_rescue_clause(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_rescue_clause(nid), params, locals, free_vars, free_var_types)
     end
-    if @nd_ensure_clause[nid] >= 0
-      scan_fiber_free_vars(@nd_ensure_clause[nid], params, locals, free_vars, free_var_types)
+    if @node_store.node_ensure_clause(nid) >= 0
+      scan_fiber_free_vars(@node_store.node_ensure_clause(nid), params, locals, free_vars, free_var_types)
     end
     # Stmts list
-    stmts_list = parse_id_list(@nd_stmts[nid])
+    stmts_list = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts_list.length
       scan_fiber_free_vars(stmts_list[k], params, locals, free_vars, free_var_types)
       k = k + 1
     end
     # Args list
-    args_list = parse_id_list(@nd_args[nid])
+    args_list = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args_list.length
       scan_fiber_free_vars(args_list[k], params, locals, free_vars, free_var_types)
       k = k + 1
     end
     # Conditions list
-    conds_list = parse_id_list(@nd_conditions[nid])
+    conds_list = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds_list.length
       scan_fiber_free_vars(conds_list[k], params, locals, free_vars, free_var_types)
       k = k + 1
     end
     # Elements list
-    elems_list = parse_id_list(@nd_elements[nid])
+    elems_list = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems_list.length
       scan_fiber_free_vars(elems_list[k], params, locals, free_vars, free_var_types)
       k = k + 1
     end
     # Block body (for non-Fiber.new blocks)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk >= 0
-      if @nd_body[blk] >= 0
-        scan_fiber_free_vars(@nd_body[blk], params, locals, free_vars, free_var_types)
+      if @node_store.node_body(blk) >= 0
+        scan_fiber_free_vars(@node_store.node_body(blk), params, locals, free_vars, free_var_types)
       end
     end
   end
 
   def compile_fiber_new(nid)
     @needs_fiber = 1
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return "NULL"
     end
     # Get block parameter name
     bp = ""
-    bparams = @nd_parameters[blk]
+    bparams = @node_store.node_parameters(blk)
     if bparams >= 0
       # BlockParametersNode → inner ParametersNode
-      inner = @nd_parameters[bparams]
+      inner = @node_store.node_parameters(bparams)
       if inner >= 0
-        reqs = parse_id_list(@nd_requireds[inner])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
         if reqs.length > 0
-          bp = @nd_name[reqs[0]]
+          bp = @node_store.node_name(reqs[0])
         end
       end
       if bp == ""
         # Try direct requireds (in case it's ParametersNode directly)
-        reqs = parse_id_list(@nd_requireds[bparams])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(bparams))
         if reqs.length > 0
-          bp = @nd_name[reqs[0]]
+          bp = @node_store.node_name(reqs[0])
         end
       end
     end
 
-    body = @nd_body[blk]
+    body = @node_store.node_body(blk)
     # Scan all variables referenced in the body
     all_names = "".split(",")
     all_types = "".split(",")
@@ -18808,7 +18321,7 @@ class Compiler
         lk = lk + 1
       end
 
-      stmts = get_stmts(body)
+      stmts = @node_store.get_stmts(body)
       if stmts.length > 0
         i = 0
         while i < stmts.length - 1
@@ -18823,7 +18336,7 @@ class Compiler
           compile_stmt(last)
           emit("  _fb->yielded_value = sp_box_nil();")
         else
-          if @nd_type[last] == "LocalVariableWriteNode" || @nd_type[last] == "LocalVariableOperatorWriteNode"
+          if @node_store.node_type(last) == "LocalVariableWriteNode" || @node_store.node_type(last) == "LocalVariableOperatorWriteNode"
             compile_stmt(last)
           end
           last_val = compile_expr(last)
@@ -18918,25 +18431,25 @@ class Compiler
   # Branch order in this function mirrors infer_call_type's order so
   # the two stay diff-able.
   def compile_call_expr(nid)
-    mname = @nd_name[nid]
-    recv = @nd_receiver[nid]
+    mname = @node_store.node_name(nid)
+    recv = @node_store.node_receiver(nid)
 
     # Issue #126: `Module.accessor.<method>` where the slot was
     # resolved by `resolve_module_singleton_accessors`. With a single
     # constant in the resolved set, inline the call directly. With
     # two or more, emit a sentinel-switch over the slot variable.
-    if recv >= 0 && @nd_type[recv] == "CallNode"
-      inner_recv = @nd_receiver[recv]
-      inner_mname = @nd_name[recv]
-      if inner_recv >= 0 && @nd_type[inner_recv] == "ConstantReadNode"
-        mod_name = @nd_name[inner_recv]
+    if recv >= 0 && @node_store.node_type(recv) == "CallNode"
+      inner_recv = @node_store.node_receiver(recv)
+      inner_mname = @node_store.node_name(recv)
+      if inner_recv >= 0 && @node_store.node_type(inner_recv) == "ConstantReadNode"
+        mod_name = @node_store.node_name(inner_recv)
         if module_name_exists(mod_name) == 1
           rconsts = module_acc_resolved(mod_name, inner_mname)
           if rconsts != "" && rconsts != "?"
-            args_id = @nd_arguments[nid]
+            args_id = @node_store.node_arguments(nid)
             arg_strs = ""
             if args_id >= 0
-              aargs = get_args(args_id)
+              aargs = @node_store.get_args(args_id)
               k = 0
               while k < aargs.length
                 if k > 0
@@ -18988,9 +18501,9 @@ class Compiler
       rt2 = base_type(infer_type(recv))
       if rt2 == "fiber"
         rc = compile_expr_gc_rooted(recv)
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length > 0
             return "sp_Fiber_resume((sp_Fiber *)(" + rc + "), " + box_expr_to_poly(arg_ids[0]) + ")"
           end
@@ -19002,9 +18515,9 @@ class Compiler
     if mname == "yield" && recv >= 0
       if constructor_class_name(recv) == "Fiber"
         @needs_fiber = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length > 0
             return "sp_Fiber_yield(" + box_expr_to_poly(arg_ids[0]) + ")"
           end
@@ -19025,9 +18538,9 @@ class Compiler
       rt2 = base_type(infer_type(recv))
       if rt2 == "fiber"
         rc = compile_expr_gc_rooted(recv)
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length > 0
             return "sp_Fiber_transfer((sp_Fiber *)(" + rc + "), " + box_expr_to_poly(arg_ids[0]) + ")"
           end
@@ -19050,9 +18563,9 @@ class Compiler
     if recv >= 0 && (mname == "match?" || mname == "=~" || mname == "match")
       ridx = find_regexp_index(recv)
       if ridx >= 0
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length > 0
             sc = compile_expr(arg_ids[0])
             if mname == "match?"
@@ -19072,8 +18585,8 @@ class Compiler
     # FFI dispatch: receiver is a registered FFI module. Must precede
     # operator/constructor handlers — FFI function names can collide
     # with operator-style names (e.g. a C function named `pow`).
-    if @nd_type[recv] == "ConstantReadNode"
-      ffi_res = compile_ffi_call_expr(nid, mname, @nd_name[recv])
+    if @node_store.node_type(recv) == "ConstantReadNode"
+      ffi_res = compile_ffi_call_expr(nid, mname, @node_store.node_name(recv))
       if ffi_res != ""
         return ffi_res
       end
@@ -19131,9 +18644,9 @@ class Compiler
     rc = compile_expr_gc_rooted(recv)
     # Root receiver if it may be collected during argument evaluation
     if expr_may_gc(recv) == 1 && type_is_pointer(recv_type) == 1
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         has_gc_arg = 0
         ak = 0
         while ak < aargs.length
@@ -19164,8 +18677,8 @@ class Compiler
     # constant (SPS_<name> or ((sp_sym)<idx>)), avoiding the runtime
     # sp_sym_intern strcmp loop and dynamic pool allocation.
     if recv_type == "string" && (mname == "to_sym" || mname == "intern")
-      if recv >= 0 && @nd_type[recv] == "StringNode"
-        sname = @nd_content[recv]
+      if recv >= 0 && @node_store.node_type(recv) == "StringNode"
+        sname = @node_store.node_content(recv)
         if sym_name_index(sname) >= 0
           return compile_symbol_literal(sname)
         end
@@ -19277,12 +18790,12 @@ class Compiler
     # Tuple methods
     if is_tuple_type(recv_type) == 1
       if mname == "[]"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
-            if @nd_type[aargs[0]] == "IntegerNode"
-              idx = @nd_value[aargs[0]]
+            if @node_store.node_type(aargs[0]) == "IntegerNode"
+              idx = @node_store.node_value(aargs[0])
               return rc + "->_" + idx.to_s
             end
             idx_expr = compile_expr(aargs[0])
@@ -19391,7 +18904,7 @@ class Compiler
     end
     # catch as expression
     if mname == "catch"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_catch_expr(nid)
       end
     end
@@ -19418,21 +18931,21 @@ class Compiler
       return "\"" + @current_method_name + "\""
     end
     if mname == "Integer"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         if arg_ids.length > 0
           a0 = arg_ids[0]
           # Handle OrNode: Integer(ARGV[0] || default)
-          if @nd_type[a0] == "OrNode"
-            lt = infer_type(@nd_left[a0])
-            rt = infer_type(@nd_right[a0])
+          if @node_store.node_type(a0) == "OrNode"
+            lt = infer_type(@node_store.node_left(a0))
+            rt = infer_type(@node_store.node_right(a0))
             if lt == "string" or lt == "argv"
               # Bind the left-hand expression to a temp so it's evaluated
               # only once, and so GCC's nonnull analysis can see that the
               # strtoll call sits in the truthy branch of the same test.
-              lc = compile_expr(@nd_left[a0])
-              rc2 = compile_expr(@nd_right[a0])
+              lc = compile_expr(@node_store.node_left(a0))
+              rc2 = compile_expr(@node_store.node_right(a0))
               tmp = new_temp
               if rt == "int"
                 return "({ const char *" + tmp + " = " + lc + "; " + tmp + " ? (mrb_int)strtoll(" + tmp + ", NULL, 10) : " + rc2 + "; })"
@@ -19456,19 +18969,19 @@ class Compiler
       return "(mrb_float)(" + compile_arg0(nid) + ")"
     end
     if mname == "proc"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_proc_literal(nid)
       end
     end
     if mname == "method"
       # method(:name) - record the method reference
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         if arg_ids.length >= 1
-          mref = @nd_content[arg_ids[0]]
+          mref = @node_store.node_content(arg_ids[0])
           if mref == ""
-            mref = @nd_name[arg_ids[0]]
+            mref = @node_store.node_name(arg_ids[0])
           end
           # Return a placeholder - the actual dispatch happens in .call
           # We store this in the parent LocalVariableWriteNode handler
@@ -19490,7 +19003,7 @@ class Compiler
       return "0"
     end
     if mname == "sleep"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
         emit("  sleep((unsigned)" + compile_arg0(nid) + ");")
       end
@@ -19506,7 +19019,7 @@ class Compiler
     end
     if mname == "rand"
       @needs_rand = 1
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
         return "((mrb_int)(rand() % (int)" + compile_arg0(nid) + "))"
       end
@@ -19514,9 +19027,9 @@ class Compiler
     end
     if mname == "raise"
       @needs_setjmp = 1
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         if arg_ids.length >= 1
           emit("  sp_raise(" + compile_expr(arg_ids[0]) + ");")
         end
@@ -19532,9 +19045,9 @@ class Compiler
       return compile_sprintf_call(nid)
     end
     if mname == "putc"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        arg_ids = get_args(args_id)
+        arg_ids = @node_store.get_args(args_id)
         if arg_ids.length > 0
           at = infer_type(arg_ids[0])
           if at == "int"
@@ -19606,10 +19119,10 @@ class Compiler
           return "sp_str_include(self, " + compile_arg0(nid) + ")"
         end
         if mname == "gsub"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           arg1 = "\"\""
           if args_id >= 0
-            a = get_args(args_id)
+            a = @node_store.get_args(args_id)
             if a.length >= 2
               arg1 = compile_expr(a[1])
             end
@@ -19733,14 +19246,14 @@ class Compiler
     rc = compile_expr_gc_rooted(recv)
     # Determine return type unboxing
     ret_type = ""
-    if @nd_type[recv] == "LocalVariableReadNode"
-      ret_type = lambda_var_ret_type(@nd_name[recv])
+    if @node_store.node_type(recv) == "LocalVariableReadNode"
+      ret_type = lambda_var_ret_type(@node_store.node_name(recv))
     end
     if mname == "[]" || mname == "call"
       call_expr = ""
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 0
           ac = wrap_as_sp_val(aargs.first)
           call_expr = "sp_lam_call(" + rc + ", " + ac + ")"
@@ -19808,8 +19321,8 @@ class Compiler
 
   def compile_dot_call_expr(nid, recv)
     if recv >= 0
-      if @nd_type[recv] == "LocalVariableReadNode"
-        rname = @nd_name[recv]
+      if @node_store.node_type(recv) == "LocalVariableReadNode"
+        rname = @node_store.node_name(recv)
         # Check method references
         ri = 0
         while ri < @method_ref_vars.length
@@ -19844,9 +19357,9 @@ class Compiler
   end
 
   def compile_bigint_arg(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
       if arg_ids.length > 0
         at = infer_type(arg_ids[0])
         val = compile_expr(arg_ids[0])
@@ -19872,13 +19385,13 @@ class Compiler
       parts.push(compile_expr(nid))
       return
     end
-    if @nd_type[nid] == "CallNode" && @nd_name[nid] == "+"
-      recv = @nd_receiver[nid]
+    if @node_store.node_type(nid) == "CallNode" && @node_store.node_name(nid) == "+"
+      recv = @node_store.node_receiver(nid)
       if recv >= 0 && infer_type(recv) == "string"
         collect_concat_parts(recv, parts)
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             at = infer_type(aargs[0])
             if at == "string"
@@ -19903,9 +19416,9 @@ class Compiler
     lt = infer_type(recv)
     if lt != "bigint"
       # Check if argument is bigint
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 0 && infer_type(aargs[0]) == "bigint"
           lt = "bigint"
         end
@@ -19957,12 +19470,12 @@ class Compiler
       lt = infer_type(recv)
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_pow(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_pow(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       if lt == "int" && mname == "pow"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          a = get_args(args_id)
+          a = @node_store.get_args(args_id)
           if a.length >= 2
             return "sp_powmod(" + compile_expr(recv) + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
@@ -19979,9 +19492,9 @@ class Compiler
         return "sp_str_concat(" + compile_expr(recv) + "->data, " + compile_arg0(nid) + ")"
       end
       if lt == "string"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length > 0 && infer_type(arg_ids[0]) == "poly"
             return "sp_str_concat(" + compile_expr(recv) + ", sp_poly_to_s(" + compile_expr(arg_ids[0]) + "))"
           end
@@ -20027,7 +19540,7 @@ class Compiler
       end
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_add(" + compile_expr(recv) + ", " + box_expr_to_poly(@nd_arguments[nid] >= 0 ? get_args(@nd_arguments[nid])[0] : -1) + ")"
+        return "sp_poly_add(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.node_arguments(nid) >= 0 ? @node_store.get_args(@node_store.node_arguments(nid))[0] : -1) + ")"
       end
       if is_array_type(lt) == 1
         rc = compile_expr_gc_rooted(recv)
@@ -20044,13 +19557,13 @@ class Compiler
     end
     if mname == "-"
       lt = infer_type(recv)
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id < 0
         return "(-" + compile_expr(recv) + ")"
       end
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_sub(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(args_id)[0]) + ")"
+        return "sp_poly_sub(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(args_id)[0]) + ")"
       end
       # Hoist both sides into temps: each may be a fresh sp_time_now()
       # call, and tv_sec / tv_nsec are read twice each. Subtract the
@@ -20060,7 +19573,7 @@ class Compiler
       # `(double)a - (double)b` could miss the low-order bits even
       # though `(int64_t)(a - b)` is exact).
       if lt == "time"
-        rhs_id = get_args(args_id)[0]
+        rhs_id = @node_store.get_args(args_id)[0]
         if infer_type(rhs_id) == "time"
           return "({ sp_Time _a = " + compile_expr(recv) + "; sp_Time _b = " + compile_expr(rhs_id) + "; (mrb_float)(_a.tv_sec - _b.tv_sec) + (mrb_float)(_a.tv_nsec - _b.tv_nsec) / 1e9; })"
         end
@@ -20078,7 +19591,7 @@ class Compiler
       end
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_mul(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_mul(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       if is_array_type(lt) == 1
         # All array kinds expose `_new` / `_length` / `_get` / `_push` with
@@ -20102,15 +19615,15 @@ class Compiler
       lt = infer_type(recv)
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_div(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_div(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       if lt == "float"
         return "(" + compile_expr(recv) + " / " + compile_arg0(nid) + ")"
       end
       # Check RHS for float
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 0
           rt = infer_type(aargs.first)
           if rt == "float"
@@ -20124,12 +19637,12 @@ class Compiler
       lt = infer_type(recv)
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_mod(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_mod(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       if lt == "string" || lt == "mutable_str"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             rt = infer_type(aargs[0])
             if rt == "str_array"
@@ -20147,16 +19660,16 @@ class Compiler
         # the conversion: (double) for %f, (long long) for integer
         # conversions. Ruby's `%d` is mapped to C's `%lld` when the
         # format is a string literal — otherwise pass through.
-        arg0 = get_args(@nd_arguments[nid])[0]
+        arg0 = @node_store.get_args(@node_store.node_arguments(nid))[0]
         at = infer_type(arg0)
         fmt_c = compile_expr(recv)
         # Literal-format optimization: rewrite %d → %lld at compile time
         # (done byte-by-byte to avoid pulling in the regex engine — the
         # self-hosted bootstrap step links without libspinel_rt.a).
-        if @nd_type[recv] == "StringNode"
-          lit = @nd_unescaped[recv]
+        if @node_store.node_type(recv) == "StringNode"
+          lit = @node_store.node_unescaped(recv)
           if lit == ""
-            lit = @nd_content[recv]
+            lit = @node_store.node_content(recv)
           end
           rewritten = ""
           fi = 0
@@ -20202,7 +19715,7 @@ class Compiler
     end
     if mname == "<"
       lt = infer_type(recv)
-      arg_id = get_args(@nd_arguments[nid])[0]
+      arg_id = @node_store.get_args(@node_store.node_arguments(nid))[0]
       at = infer_type(arg_id)
       if lt == "poly" || at == "poly"
         @needs_rb_value = 1
@@ -20219,7 +19732,7 @@ class Compiler
     end
     if mname == ">"
       lt = infer_type(recv)
-      arg_id = get_args(@nd_arguments[nid])[0]
+      arg_id = @node_store.get_args(@node_store.node_arguments(nid))[0]
       at = infer_type(arg_id)
       if lt == "poly" || at == "poly"
         @needs_rb_value = 1
@@ -20236,7 +19749,7 @@ class Compiler
     end
     if mname == "<="
       lt = infer_type(recv)
-      arg_id = get_args(@nd_arguments[nid])[0]
+      arg_id = @node_store.get_args(@node_store.node_arguments(nid))[0]
       at = infer_type(arg_id)
       if lt == "poly" || at == "poly"
         @needs_rb_value = 1
@@ -20253,7 +19766,7 @@ class Compiler
     end
     if mname == ">="
       lt = infer_type(recv)
-      arg_id = get_args(@nd_arguments[nid])[0]
+      arg_id = @node_store.get_args(@node_store.node_arguments(nid))[0]
       at = infer_type(arg_id)
       if lt == "poly" || at == "poly"
         @needs_rb_value = 1
@@ -20271,9 +19784,9 @@ class Compiler
     if mname == "=~"
       # str =~ /pattern/ → sp_re_match(pat, str)
       rc = compile_expr_gc_rooted(recv)
-      re_args_id = @nd_arguments[nid]
+      re_args_id = @node_store.node_arguments(nid)
       if re_args_id >= 0
-        argl = get_args(re_args_id)
+        argl = @node_store.get_args(re_args_id)
         if argl.length > 0
           ridx = find_regexp_index(argl[0])
           if ridx >= 0
@@ -20299,9 +19812,9 @@ class Compiler
       return "(!" + compile_expr(recv) + ")"
     end
     if mname == "between?"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 2
           rc = compile_expr_gc_rooted(recv)
           lo = compile_expr(aargs[0])
@@ -20355,14 +19868,14 @@ class Compiler
       end
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_shl(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_shl(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       return "(" + compile_expr(recv) + " << " + compile_arg0(nid) + ")"
     end
     if mname == ">>"
       if infer_type(recv) == "poly"
         @needs_rb_value = 1
-        return "sp_poly_shr(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_shr(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       return "(" + compile_expr(recv) + " >> " + compile_arg0(nid) + ")"
     end
@@ -20370,7 +19883,7 @@ class Compiler
       lt = infer_type(recv)
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_band(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_band(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       r = compile_array_setop_expr(nid, recv, "intersect", lt)
       if r != ""
@@ -20382,7 +19895,7 @@ class Compiler
       lt = infer_type(recv)
       if lt == "poly"
         @needs_rb_value = 1
-        return "sp_poly_bor(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_bor(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       r = compile_array_setop_expr(nid, recv, "union", lt)
       if r != ""
@@ -20393,7 +19906,7 @@ class Compiler
     if mname == "^"
       if infer_type(recv) == "poly"
         @needs_rb_value = 1
-        return "sp_poly_bxor(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+        return "sp_poly_bxor(" + compile_expr(recv) + ", " + box_expr_to_poly(@node_store.get_args(@node_store.node_arguments(nid))[0]) + ")"
       end
       return "(" + compile_expr(recv) + " ^ " + compile_arg0(nid) + ")"
     end
@@ -20458,23 +19971,23 @@ class Compiler
     end
     if cname != ""
       if cname == "Proc"
-        if @nd_block[nid] >= 0
+        if @node_store.node_block(nid) >= 0
           return compile_proc_literal(nid)
         end
       end
       if cname == "Array"
         @needs_gc = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         # Array.new(n) { |i| ... } -- IntArray-only fast path. We don't
         # try to introspect the block body to pick a typed container
         # (calling infer_type from this dispatch perturbs the bootstrap;
         # see bug-11 commit). Float/String collectors must be built via
         # explicit `[]` + `N.times { ... << }` instead.
-        if args_id >= 0 && @nd_block[nid] >= 0
-          arrnew_aargs = get_args(args_id)
+        if args_id >= 0 && @node_store.node_block(nid) >= 0
+          arrnew_aargs = @node_store.get_args(args_id)
           if arrnew_aargs.length >= 1
-            arrnew_blk = @nd_block[nid]
-            arrnew_body = @nd_body[arrnew_blk]
+            arrnew_blk = @node_store.node_block(nid)
+            arrnew_body = @node_store.node_body(arrnew_blk)
             arrnew_count = compile_expr(arrnew_aargs.first)
             arrnew_bp = get_block_param(nid, 0)
             arrnew_tmp = new_temp
@@ -20491,7 +20004,7 @@ class Compiler
               emit("  lv_" + arrnew_bp + " = " + arrnew_iv + ";")
             end
             if arrnew_body >= 0
-              arrnew_stmts2 = get_stmts(arrnew_body)
+              arrnew_stmts2 = @node_store.get_stmts(arrnew_body)
               if arrnew_stmts2.length > 0
                 arrnew_k = 0
                 while arrnew_k < arrnew_stmts2.length - 1
@@ -20508,7 +20021,7 @@ class Compiler
           end
         end
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 2
             # Array.new(n, val) - check fill value type
             vt = infer_type(aargs[1])
@@ -20554,9 +20067,9 @@ class Compiler
         # into the freshly allocated buffer.
         @needs_mutable_str = 1
         @needs_gc = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 1
             return "sp_String_new(" + compile_expr(aargs.first) + ")"
           end
@@ -20566,9 +20079,9 @@ class Compiler
       if cname == "Hash"
         @needs_str_int_hash = 1
         @needs_gc = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 1
             # Hash.new(default_val) - check type
             dt = infer_type(aargs.first)
@@ -20585,9 +20098,9 @@ class Compiler
       end
       if cname == "StringIO"
         @needs_stringio = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 1
             return "sp_StringIO_new_s(" + compile_expr(aargs.first) + ")"
           end
@@ -20623,9 +20136,9 @@ class Compiler
       return "sp_StringIO_write(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "read"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 1
           return "sp_StringIO_read_n(" + rc + ", " + compile_expr(aargs.first) + ")"
         end
@@ -20642,9 +20155,9 @@ class Compiler
       return "sp_StringIO_getbyte(" + rc + ")"
     end
     if mname == "puts"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 1
           emit("  sp_StringIO_puts(" + rc + ", " + compile_expr(aargs.first) + ");")
           return "0"
@@ -20700,7 +20213,7 @@ class Compiler
     # end` / `{ … }` with no captured value; the expression-level form
     # (e.g. `ret = "hi".each_byte { ... }`) needs to produce the
     # receiver. Same loop body, just emit-then-return-rc.
-    if mname == "each_byte" && @nd_block[nid] >= 0
+    if mname == "each_byte" && @node_store.node_block(nid) >= 0
       bp = get_block_param(nid, 0)
       if bp == ""
         bp = "_b"
@@ -20715,7 +20228,7 @@ class Compiler
       declare_var(bp, "int")
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -20813,9 +20326,9 @@ class Compiler
       return "sp_str_include(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "start_with?"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 1
           parts = "".split(",")
           k = 0
@@ -20829,9 +20342,9 @@ class Compiler
       return "sp_str_start_with(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "end_with?"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 1
           parts = "".split(",")
           k = 0
@@ -20846,9 +20359,9 @@ class Compiler
     end
     if mname == "split"
       @needs_str_array = 1
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length > 0
           ridx = find_regexp_index(a[0])
           if ridx >= 0
@@ -20856,8 +20369,8 @@ class Compiler
           end
           # Peephole: literal "".split(literal) is the empty-StrArray idiom;
           # skip the strlen+sep scan and emit a direct allocator call.
-          recv = @nd_receiver[nid]
-          if recv >= 0 && @nd_type[recv] == "StringNode" && @nd_content[recv] == "" && @nd_type[a[0]] == "StringNode"
+          recv = @node_store.node_receiver(nid)
+          if recv >= 0 && @node_store.node_type(recv) == "StringNode" && @node_store.node_content(recv) == "" && @node_store.node_type(a[0]) == "StringNode"
             return "sp_StrArray_new()"
           end
         end
@@ -20869,10 +20382,10 @@ class Compiler
       return "sp_str_split(" + rc + ", \"\\n\")"
     end
     if mname == "scan"
-      if @nd_block[nid] < 0
-        args_id = @nd_arguments[nid]
+      if @node_store.node_block(nid) < 0
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          argl = get_args(args_id)
+          argl = @node_store.get_args(args_id)
           if argl.length > 0
             ridx = find_regexp_index(argl[0])
             if ridx >= 0
@@ -20885,9 +20398,9 @@ class Compiler
       end
     end
     if mname == "match?"
-      re_args_id = @nd_arguments[nid]
+      re_args_id = @node_store.node_arguments(nid)
       if re_args_id >= 0
-        argl = get_args(re_args_id)
+        argl = @node_store.get_args(re_args_id)
         if argl.length > 0
           ridx = find_regexp_index(argl[0])
           if ridx >= 0
@@ -20898,9 +20411,9 @@ class Compiler
       return "sp_str_include(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "gsub"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           ridx = find_regexp_index(a[0])
           if ridx >= 0
@@ -20912,9 +20425,9 @@ class Compiler
       return rc
     end
     if mname == "sub"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           ridx = find_regexp_index(a[0])
           if ridx >= 0
@@ -20932,9 +20445,9 @@ class Compiler
       return "sp_str_rindex(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "tr"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_str_tr(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -20942,9 +20455,9 @@ class Compiler
       return rc
     end
     if mname == "ljust"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_str_ljust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -20952,9 +20465,9 @@ class Compiler
       return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "rjust"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_str_rjust2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -20962,18 +20475,18 @@ class Compiler
       return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "[]"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       # Use length-aware variant if strlen of this receiver is hoisted
       use_len = (@hoisted_strlen_var != "" && @hoisted_strlen_recv == rc)
       fn = use_len ? "sp_str_sub_range_len" : "sp_str_sub_range"
       lprefix = use_len ? (rc + ", " + @hoisted_strlen_var) : rc
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 1
-          if @nd_type[a[0]] == "RangeNode"
+          if @node_store.node_type(a[0]) == "RangeNode"
             # s[1..3] inclusive, s[1...3] exclusive
-            left = compile_expr(@nd_left[a[0]])
-            right = compile_expr(@nd_right[a[0]])
+            left = compile_expr(@node_store.node_left(a[0]))
+            right = compile_expr(@node_store.node_right(a[0]))
             adj = range_excl_end(a[0]) == 1 ? "" : " + 1"
             return fn + "(" + lprefix + ", " + left + ", " + right + " - " + left + adj + ")"
           end
@@ -21001,10 +20514,10 @@ class Compiler
       return "sp_str_ord(" + rc + ")"
     end
     if mname == "sub"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       arg1 = "\"\""
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           arg1 = compile_expr(a[1])
         end
@@ -21036,15 +20549,15 @@ class Compiler
       # data (e.g. .nes ROM files). Pattern-match the chained call
       # and emit a single binread-to-IntArray helper that reads with
       # the file's actual byte count.
-      r = @nd_receiver[nid]
-      if r >= 0 && @nd_type[r] == "CallNode"
-        rmname = @nd_name[r]
+      r = @node_store.node_receiver(nid)
+      if r >= 0 && @node_store.node_type(r) == "CallNode"
+        rmname = @node_store.node_name(r)
         if rmname == "binread"
-          rr = @nd_receiver[r]
-          if rr >= 0 && @nd_type[rr] == "ConstantReadNode" && @nd_name[rr] == "File"
-            rargs = @nd_arguments[r]
+          rr = @node_store.node_receiver(r)
+          if rr >= 0 && @node_store.node_type(rr) == "ConstantReadNode" && @node_store.node_name(rr) == "File"
+            rargs = @node_store.node_arguments(r)
             if rargs >= 0
-              ras = get_args(rargs)
+              ras = @node_store.get_args(rargs)
               if ras.length >= 1
                 @needs_file_io = 1
                 return "sp_file_binread_bytes(" + compile_expr(ras[0]) + ")"
@@ -21062,10 +20575,10 @@ class Compiler
       return "((mrb_int)strtoll(" + rc + ", NULL, 8))"
     end
     if mname == "tr"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       arg1 = "\"\""
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           arg1 = compile_expr(a[1])
         end
@@ -21085,9 +20598,9 @@ class Compiler
       return "sp_str_length(" + rc + ")"
     end
     if mname == "slice"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -21095,9 +20608,9 @@ class Compiler
       return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
     end
     if mname == "center"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_str_center2(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -21117,9 +20630,9 @@ class Compiler
       return "((mrb_int)(unsigned char)(" + rc + ")[" + compile_arg0(nid) + "])"
     end
     if mname == "setbyte"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "(((char*)" + rc + ")[" + compile_expr(a[0]) + "] = (char)" + compile_expr(a[1]) + ", 0)"
         end
@@ -21140,18 +20653,18 @@ class Compiler
   # isn't a literal range — in which case the runtime sp_Range struct is
   # used and exclude_end isn't tracked.
   def resolve_literal_range_recv(nid)
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     if recv < 0
       return -1
     end
-    if @nd_type[recv] == "RangeNode"
+    if @node_store.node_type(recv) == "RangeNode"
       return recv
     end
-    if @nd_type[recv] == "ParenthesesNode"
-      pb = @nd_body[recv]
+    if @node_store.node_type(recv) == "ParenthesesNode"
+      pb = @node_store.node_body(recv)
       if pb >= 0
-        ps = get_stmts(pb)
-        if ps.length > 0 && @nd_type[ps.first] == "RangeNode"
+        ps = @node_store.get_stmts(pb)
+        if ps.length > 0 && @node_store.node_type(ps.first) == "RangeNode"
           return ps.first
         end
       end
@@ -21186,11 +20699,11 @@ class Compiler
       # and the inclusive form is used.
       range_nid = resolve_literal_range_recv(nid)
       if range_nid >= 0
-        rright = compile_expr(@nd_right[range_nid])
+        rright = compile_expr(@node_store.node_right(range_nid))
         if range_excl_end(range_nid) == 1
           rright = "(" + rright + ") - 1"
         end
-        return "sp_IntArray_from_range(" + compile_expr(@nd_left[range_nid]) + ", " + rright + ")"
+        return "sp_IntArray_from_range(" + compile_expr(@node_store.node_left(range_nid)) + ", " + rright + ")"
       end
       return "sp_IntArray_from_range(" + rc + ".first, " + rc + ".last)"
     end
@@ -21248,9 +20761,9 @@ class Compiler
       return "((mrb_int)" + rc + ")"
     end
     if mname == "<=>"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 1
           at = infer_type(aargs[0])
           if at == "symbol"
@@ -21264,9 +20777,9 @@ class Compiler
       return "0"
     end
     if mname == "==" || mname == "eql?"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 1
           at = infer_type(aargs[0])
           if at == "symbol"
@@ -21278,9 +20791,9 @@ class Compiler
       end
     end
     if mname == "!="
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 1
           at = infer_type(aargs[0])
           if at == "symbol"
@@ -21295,8 +20808,8 @@ class Compiler
 
   def compile_int_method_expr(nid, mname, rc)
     if mname == "to_s"
-      if @nd_arguments[nid] >= 0
-        aargs = get_args(@nd_arguments[nid])
+      if @node_store.node_arguments(nid) >= 0
+        aargs = @node_store.get_args(@node_store.node_arguments(nid))
         if aargs.length > 0
           return "sp_int_to_s_base(" + rc + ", " + compile_expr(aargs[0]) + ")"
         end
@@ -21310,8 +20823,8 @@ class Compiler
       @needs_int_array = 1
       @needs_gc = 1
       base = "10"
-      if @nd_arguments[nid] >= 0
-        aargs = get_args(@nd_arguments[nid])
+      if @node_store.node_arguments(nid) >= 0
+        aargs = @node_store.get_args(@node_store.node_arguments(nid))
         if aargs.length > 0
           base = compile_expr(aargs[0])
         end
@@ -21375,9 +20888,9 @@ class Compiler
       return "sp_ceildiv(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "clamp"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        a = get_args(args_id)
+        a = @node_store.get_args(args_id)
         if a.length >= 2
           return "sp_int_clamp(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
@@ -21404,13 +20917,13 @@ class Compiler
     # infer_type's tail and would otherwise eat the constant's own
     # `[]` dispatch (e.g. ENV["HOME"] → getenv, ::ARGV[i] → argv).
     if mname == "[]"
-      recv_id = @nd_receiver[nid]
-      if recv_id >= 0 && (@nd_type[recv_id] == "ConstantReadNode" || @nd_type[recv_id] == "ConstantPathNode")
+      recv_id = @node_store.node_receiver(nid)
+      if recv_id >= 0 && (@node_store.node_type(recv_id) == "ConstantReadNode" || @node_store.node_type(recv_id) == "ConstantPathNode")
         return ""
       end
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length > 0
           idx = compile_expr(aargs[0])
           return "(((" + rc + ") >> (" + idx + ")) & 1)"
@@ -21441,21 +20954,21 @@ class Compiler
     # side and pow(10, n) is evaluated once at runtime — the original
     # form double-evaluated both, which broke any side-effecting arg.
     if mname == "ceil"
-      if @nd_arguments[nid] >= 0
+      if @node_store.node_arguments(nid) >= 0
         arg = compile_arg0(nid)
         return "({ double _f = pow(10, " + arg + "); ceil((" + rc + ") * _f) / _f; })"
       end
       return "(mrb_int)ceil(" + rc + ")"
     end
     if mname == "floor"
-      if @nd_arguments[nid] >= 0
+      if @node_store.node_arguments(nid) >= 0
         arg = compile_arg0(nid)
         return "({ double _f = pow(10, " + arg + "); floor((" + rc + ") * _f) / _f; })"
       end
       return "(mrb_int)floor(" + rc + ")"
     end
     if mname == "round"
-      if @nd_arguments[nid] >= 0
+      if @node_store.node_arguments(nid) >= 0
         arg = compile_arg0(nid)
         return "({ double _f = pow(10, " + arg + "); round((" + rc + ") * _f) / _f; })"
       end
@@ -21474,7 +20987,7 @@ class Compiler
       return "(isinf(" + rc + ") ? (" + rc + " < 0 ? -1 : 1) : 0)"
     end
     if mname == "truncate"
-      if @nd_arguments[nid] >= 0
+      if @node_store.node_arguments(nid) >= 0
         arg = compile_arg0(nid)
         return "({ double _f = pow(10, " + arg + "); trunc((" + rc + ") * _f) / _f; })"
       end
@@ -21513,9 +21026,9 @@ class Compiler
     # backing buffer in place. sym_array shares the IntArray helper
     # since symbols are stored as interned int IDs.
     if mname == "slice!"
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       if args_id >= 0
-        aargs = get_args(args_id)
+        aargs = @node_store.get_args(args_id)
         if aargs.length >= 2
           from_e = compile_expr(aargs[0])
           n_e = compile_expr(aargs[1])
@@ -21556,11 +21069,11 @@ class Compiler
       end
     end
     # zip without block: return array of pairs/tuples
-    if mname == "zip" && @nd_block[nid] < 0
+    if mname == "zip" && @node_store.node_block(nid) < 0
       @needs_gc = 1
       pfx_recv = array_c_prefix(recv_type)
-      args_id = @nd_arguments[nid]
-      aargs = get_args(args_id)
+      args_id = @node_store.node_arguments(nid)
+      aargs = @node_store.get_args(args_id)
       # Check if heterogeneous or multi-arg
       heterogeneous = 0
       k = 0
@@ -21622,8 +21135,8 @@ class Compiler
       return tmp
     end
     # first(n) / last(n) with argument: return new array
-    if mname == "first" && @nd_arguments[nid] >= 0
-      aargs = get_args(@nd_arguments[nid])
+    if mname == "first" && @node_store.node_arguments(nid) >= 0
+      aargs = @node_store.get_args(@node_store.node_arguments(nid))
       if aargs.length > 0
         pfx = array_c_prefix(recv_type)
         n = compile_expr(aargs[0])
@@ -21635,8 +21148,8 @@ class Compiler
         return tmp
       end
     end
-    if mname == "last" && @nd_arguments[nid] >= 0
-      aargs = get_args(@nd_arguments[nid])
+    if mname == "last" && @node_store.node_arguments(nid) >= 0
+      aargs = @node_store.get_args(@node_store.node_arguments(nid))
       if aargs.length > 0
         pfx = array_c_prefix(recv_type)
         n = compile_expr(aargs[0])
@@ -21673,14 +21186,14 @@ class Compiler
     end
     if mname == "fill"
       pfx = array_c_prefix(recv_type)
-      args_id_fill = @nd_arguments[nid]
+      args_id_fill = @node_store.node_arguments(nid)
       val = compile_arg0(nid)
       start_expr = "0"
       # Default end: current array length (matches CRuby's no-args
       # form which fills the entire existing array).
       end_expr = "sp_" + pfx + "_length(" + rc + ")"
       if args_id_fill >= 0
-        aargs_fill = get_args(args_id_fill)
+        aargs_fill = @node_store.get_args(args_id_fill)
         if aargs_fill.length >= 3
           # arr.fill(value, start, length): negative start counts from
           # the end; if still negative after that, clamp to 0
@@ -21713,7 +21226,7 @@ class Compiler
       if recv_type == "poly_array"
         v_id = -1
         if args_id_fill >= 0
-          v_id = get_args(args_id_fill)[0]
+          v_id = @node_store.get_args(args_id_fill)[0]
         end
         vt = v_id >= 0 ? infer_type(v_id) : "int"
         vbox = vt == "poly" ? val : box_value_to_poly(vt, val)
@@ -21754,15 +21267,15 @@ class Compiler
       emit("  sp_" + pfx + "_shuffle_bang(" + rc + ");")
       return rc
     end
-    if mname == "any?" && @nd_block[nid] < 0
+    if mname == "any?" && @node_store.node_block(nid) < 0
       pfx = array_c_prefix(recv_type)
       return "(sp_" + pfx + "_length(" + rc + ") > 0)"
     end
-    if mname == "none?" && @nd_block[nid] < 0
+    if mname == "none?" && @node_store.node_block(nid) < 0
       pfx = array_c_prefix(recv_type)
       return "(sp_" + pfx + "_length(" + rc + ") == 0)"
     end
-    if mname == "count" && @nd_arguments[nid] >= 0 && @nd_block[nid] < 0
+    if mname == "count" && @node_store.node_arguments(nid) >= 0 && @node_store.node_block(nid) < 0
       # count(val) — count occurrences of a specific value
       pfx = array_c_prefix(recv_type)
       val = compile_arg0(nid)
@@ -21779,22 +21292,22 @@ class Compiler
       end
       return tmp_c
     end
-    if (mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?") && @nd_block[nid] >= 0
+    if (mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?") && @node_store.node_block(nid) >= 0
       return compile_array_predicate_block(nid, rc, recv_type, mname)
     end
-    if (mname == "find" || mname == "detect") && @nd_block[nid] >= 0
+    if (mname == "find" || mname == "detect") && @node_store.node_block(nid) >= 0
       return compile_array_find_block(nid, rc, recv_type)
     end
-    if mname == "filter_map" && @nd_block[nid] >= 0
+    if mname == "filter_map" && @node_store.node_block(nid) >= 0
       return compile_array_filter_map(nid, rc, recv_type)
     end
-    if (mname == "sum") && @nd_block[nid] >= 0
+    if (mname == "sum") && @node_store.node_block(nid) >= 0
       return compile_array_sum_block(nid, rc, recv_type)
     end
-    if (mname == "count") && @nd_block[nid] >= 0
+    if (mname == "count") && @node_store.node_block(nid) >= 0
       return compile_array_count_block(nid, rc, recv_type)
     end
-    if mname == "partition" && @nd_block[nid] >= 0
+    if mname == "partition" && @node_store.node_block(nid) >= 0
       pfx = array_c_prefix(recv_type)
       tt = "tuple:" + recv_type + "," + recv_type
       register_tuple_type(tt)
@@ -21815,10 +21328,10 @@ class Compiler
       emit("    " + c_type(et) + " lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + itmp + ");")
       push_scope
       declare_var(bp1, et)
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       bexpr = "0"
-      if @nd_body[blk] >= 0
-        bs = get_stmts(@nd_body[blk])
+      if @node_store.node_body(blk) >= 0
+        bs = @node_store.get_stmts(@node_store.node_body(blk))
         if bs.length > 0
           k = 0
           while k < bs.length - 1
@@ -21864,7 +21377,7 @@ class Compiler
       emit("  " + tmp + "->_1 = " + tmp_max + ";")
       return tmp
     end
-    if (mname == "min" || mname == "max") && @nd_block[nid] >= 0
+    if (mname == "min" || mname == "max") && @node_store.node_block(nid) >= 0
       return compile_array_min_max_block(nid, rc, recv_type, mname)
     end
     # Array methods
@@ -21878,12 +21391,12 @@ class Compiler
       if mname == "[]"
         # a[range] and a[start, len] return slices; bare a[i] stays a get.
         # Mirrors compile_string_method_expr's slicing dispatch.
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
-            left = compile_expr(@nd_left[a[0]])
-            right = compile_expr(@nd_right[a[0]])
+          a = @node_store.get_args(args_id)
+          if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
+            left = compile_expr(@node_store.node_left(a[0]))
+            right = compile_expr(@node_store.node_right(a[0]))
             adj = range_excl_end(a[0]) == 1 ? "" : " + 1"
             return "sp_IntArray_slice(" + rc + ", " + left + ", " + right + " - " + left + adj + ")"
           end
@@ -21909,12 +21422,12 @@ class Compiler
         return "sp_IntArray_include(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "index" || mname == "find_index"
-        if @nd_arguments[nid] >= 0
+        if @node_store.node_arguments(nid) >= 0
           return "sp_IntArray_index(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
       if mname == "rindex"
-        if @nd_arguments[nid] >= 0
+        if @node_store.node_arguments(nid) >= 0
           return "sp_IntArray_rindex(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
@@ -21922,9 +21435,9 @@ class Compiler
         return "sp_IntArray_delete_at(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "insert"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 2
             return "(sp_IntArray_insert(" + rc + ", " + compile_expr(aargs[0]) + ", " + compile_expr(aargs[1]) + "), " + rc + ")"
           end
@@ -21947,8 +21460,8 @@ class Compiler
       # rather than a hardcoded `mrb_int`. Multi-stmt blocks compile
       # preceding statements before extracting the predicate expr from
       # the last — same shape as the partition arm.
-      if (mname == "take_while" || mname == "drop_while") && @nd_block[nid] >= 0
-        blk = @nd_block[nid]
+      if (mname == "take_while" || mname == "drop_while") && @node_store.node_block(nid) >= 0
+        blk = @node_store.node_block(nid)
         bp = get_block_param(nid, 0)
         if bp == ""
           bp = "_x"
@@ -21964,10 +21477,10 @@ class Compiler
         emit("      " + c_type(elem_t) + " lv_" + bp + " = sp_IntArray_get(" + rc + ", " + itmp + ");")
         push_scope
         declare_var(bp, elem_t)
-        bbody = @nd_body[blk]
+        bbody = @node_store.node_body(blk)
         bexpr = "0"
         if bbody >= 0
-          bs = get_stmts(bbody)
+          bs = @node_store.get_stmts(bbody)
           if bs.length > 0
             k = 0
             while k < bs.length - 1
@@ -22052,8 +21565,8 @@ class Compiler
         return "sp_IntArray_difference(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "min_by"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           itmp = new_temp
@@ -22061,10 +21574,10 @@ class Compiler
           emit("  { mrb_int _best = INT64_MAX;")
           emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_IntArray_length(" + rc + "); " + itmp + "++) {")
           emit("    mrb_int lv_" + bp + " = sp_IntArray_get(" + rc + ", " + itmp + ");")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "0"
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22076,8 +21589,8 @@ class Compiler
         end
       end
       if mname == "max_by"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           itmp = new_temp
@@ -22085,10 +21598,10 @@ class Compiler
           emit("  { mrb_int _best = INT64_MIN;")
           emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_IntArray_length(" + rc + "); " + itmp + "++) {")
           emit("    mrb_int lv_" + bp + " = sp_IntArray_get(" + rc + ", " + itmp + ");")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "0"
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22100,8 +21613,8 @@ class Compiler
         end
       end
       if mname == "sort_by"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           emit("  sp_IntArray *" + tmp + " = sp_IntArray_dup(" + rc + ");")
@@ -22110,10 +21623,10 @@ class Compiler
           emit("  for (mrb_int _i = 0; _i < _n - 1; _i++)")
           emit("    for (mrb_int _j = 0; _j < _n - 1 - _i; _j++) {")
           emit("      mrb_int lv_" + bp + " = " + tmp + "->data[" + tmp + "->start + _j];")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "0"
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22138,12 +21651,12 @@ class Compiler
       end
       if mname == "[]"
         # a[range] / a[start, len] return slices; bare a[i] stays a get.
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
-            left = compile_expr(@nd_left[a[0]])
-            right = compile_expr(@nd_right[a[0]])
+          a = @node_store.get_args(args_id)
+          if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
+            left = compile_expr(@node_store.node_left(a[0]))
+            right = compile_expr(@node_store.node_right(a[0]))
             adj = range_excl_end(a[0]) == 1 ? "" : " + 1"
             return "sp_FloatArray_slice(" + rc + ", " + left + ", " + right + " - " + left + adj + ")"
           end
@@ -22250,12 +21763,12 @@ class Compiler
       end
       if mname == "[]"
         # a[range] / a[start, len] return slices; bare a[i] stays a get.
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          a = get_args(args_id)
-          if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
-            left = compile_expr(@nd_left[a[0]])
-            right = compile_expr(@nd_right[a[0]])
+          a = @node_store.get_args(args_id)
+          if a.length >= 1 && @node_store.node_type(a[0]) == "RangeNode"
+            left = compile_expr(@node_store.node_left(a[0]))
+            right = compile_expr(@node_store.node_right(a[0]))
             adj = range_excl_end(a[0]) == 1 ? "" : " + 1"
             return "sp_StrArray_slice(" + rc + ", " + left + ", " + right + " - " + left + adj + ")"
           end
@@ -22291,12 +21804,12 @@ class Compiler
         return "sp_StrArray_include(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "index" || mname == "find_index"
-        if @nd_arguments[nid] >= 0
+        if @node_store.node_arguments(nid) >= 0
           return "sp_StrArray_index(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
       if mname == "rindex"
-        if @nd_arguments[nid] >= 0
+        if @node_store.node_arguments(nid) >= 0
           return "sp_StrArray_rindex(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
@@ -22311,9 +21824,9 @@ class Compiler
         return "sp_StrArray_compact(" + rc + ")"
       end
       if mname == "insert"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 2
             return "(sp_StrArray_insert(" + rc + ", " + compile_expr(aargs[0]) + ", " + compile_expr(aargs[1]) + "), " + rc + ")"
           end
@@ -22343,7 +21856,7 @@ class Compiler
       end
       if mname == "push"
         arg_id = -1
-        aargs = get_args(@nd_arguments[nid])
+        aargs = @node_store.get_args(@node_store.node_arguments(nid))
         if aargs.length > 0
           arg_id = aargs[0]
         end
@@ -22357,9 +21870,9 @@ class Compiler
     # Hash methods
     if recv_type == "sym_int_hash"
       if mname == "[]"
-        args_id0 = @nd_arguments[nid]
+        args_id0 = @node_store.node_arguments(nid)
         if args_id0 >= 0
-          aa0 = get_args(args_id0)
+          aa0 = @node_store.get_args(args_id0)
           if aa0.length > 0 && infer_type(aa0[0]) != "symbol"
             return "((mrb_int)0)"
           end
@@ -22367,16 +21880,16 @@ class Compiler
         return "sp_SymIntHash_get((sp_SymIntHash *)(" + rc + "), " + compile_arg0(nid) + ")"
       end
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
-        args_id1 = @nd_arguments[nid]
+        args_id1 = @node_store.node_arguments(nid)
         if args_id1 >= 0
-          aa1 = get_args(args_id1)
+          aa1 = @node_store.get_args(args_id1)
           if aa1.length > 0 && infer_type(aa1[0]) != "symbol"
             return "FALSE"
           end
         end
         return "sp_SymIntHash_has_key((sp_SymIntHash *)(" + rc + "), " + compile_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
           return @hoisted_strlen_var
         end
@@ -22385,13 +21898,13 @@ class Compiler
       if mname == "empty?"
         return "(sp_SymIntHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_SymIntHash_length(" + rc + ") > 0)"
       end
       if mname == "fetch"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           key = compile_expr(aargs[0])
           if aargs.length >= 2
             defval = compile_expr(aargs[1])
@@ -22411,9 +21924,9 @@ class Compiler
     end
     if recv_type == "sym_str_hash"
       if mname == "[]"
-        args_id0s = @nd_arguments[nid]
+        args_id0s = @node_store.node_arguments(nid)
         if args_id0s >= 0
-          aa0s = get_args(args_id0s)
+          aa0s = @node_store.get_args(args_id0s)
           if aa0s.length > 0 && infer_type(aa0s[0]) != "symbol"
             return "(&(\"\\xff\")[1])"
           end
@@ -22421,16 +21934,16 @@ class Compiler
         return "sp_SymStrHash_get((sp_SymStrHash *)(" + rc + "), " + compile_arg0(nid) + ")"
       end
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
-        args_id1s = @nd_arguments[nid]
+        args_id1s = @node_store.node_arguments(nid)
         if args_id1s >= 0
-          aa1s = get_args(args_id1s)
+          aa1s = @node_store.get_args(args_id1s)
           if aa1s.length > 0 && infer_type(aa1s[0]) != "symbol"
             return "FALSE"
           end
         end
         return "sp_SymStrHash_has_key((sp_SymStrHash *)(" + rc + "), " + compile_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
           return @hoisted_strlen_var
         end
@@ -22439,13 +21952,13 @@ class Compiler
       if mname == "empty?"
         return "(sp_SymStrHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_SymStrHash_length(" + rc + ") > 0)"
       end
       if mname == "fetch"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           key = compile_expr(aargs[0])
           if aargs.length >= 2
             defval = compile_expr(aargs[1])
@@ -22470,13 +21983,13 @@ class Compiler
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_SymPolyHash_has_key((sp_SymPolyHash *)(" + rc + "), " + compile_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         return "sp_SymPolyHash_length((sp_SymPolyHash *)(" + rc + "))"
       end
       if mname == "empty?"
         return "(sp_SymPolyHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_SymPolyHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
@@ -22496,13 +22009,13 @@ class Compiler
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_StrPolyHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         return "sp_StrPolyHash_length(" + rc + ")"
       end
       if mname == "empty?"
         return "(sp_StrPolyHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_StrPolyHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
@@ -22521,7 +22034,7 @@ class Compiler
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
           return @hoisted_strlen_var
         end
@@ -22530,7 +22043,7 @@ class Compiler
       if mname == "empty?"
         return "(sp_StrIntHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_StrIntHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
@@ -22539,16 +22052,16 @@ class Compiler
       if mname == "values"
         return "sp_StrIntHash_values(" + rc + ")"
       end
-      if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
+      if (mname == "select" || mname == "reject") && @node_store.node_block(nid) >= 0
         return compile_hash_select_reject(nid, "str_int_hash", rc, mname)
       end
-      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @nd_block[nid] >= 0
+      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @node_store.node_block(nid) >= 0
         return compile_hash_block_predicate(nid, "str_int_hash", rc, mname)
       end
       if mname == "fetch"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           key = compile_expr_as_string(aargs[0])
           if aargs.length >= 2
             defval = compile_expr(aargs[1])
@@ -22580,8 +22093,8 @@ class Compiler
         return tmp
       end
       if mname == "transform_values"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           emit("  sp_StrIntHash *" + tmp + " = sp_StrIntHash_new();")
@@ -22589,10 +22102,10 @@ class Compiler
           emit("    mrb_int lv_" + bp + " = sp_StrIntHash_get(" + rc + ", " + rc + "->order[_i]);")
           push_scope
           declare_var(bp, "int")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "0"
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22608,8 +22121,8 @@ class Compiler
       # type when the block returns the same key C-type — the common
       # case for `transform_keys { |k| k.upcase }` etc.
       if mname == "transform_keys"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           emit("  sp_StrIntHash *" + tmp + " = sp_StrIntHash_new();")
@@ -22617,10 +22130,10 @@ class Compiler
           emit("    const char *lv_" + bp + " = " + rc + "->order[_i];")
           push_scope
           declare_var(bp, "string")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "lv_" + bp
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22640,13 +22153,13 @@ class Compiler
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_IntStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         return "sp_IntStrHash_length(" + rc + ")"
       end
       if mname == "empty?"
         return "(sp_IntStrHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_IntStrHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
@@ -22658,9 +22171,9 @@ class Compiler
         return "sp_IntStrHash_values(" + rc + ")"
       end
       if mname == "fetch"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           key = compile_expr(aargs[0])
           if aargs.length >= 2
             defval = compile_expr(aargs[1])
@@ -22674,8 +22187,8 @@ class Compiler
       # same keys and the block's returns. Result type matches the
       # input hash type.
       if mname == "transform_values"
-        if @nd_block[nid] >= 0
-          blk = @nd_block[nid]
+        if @node_store.node_block(nid) >= 0
+          blk = @node_store.node_block(nid)
           bp = get_block_param(nid, 0)
           tmp = new_temp
           emit("  sp_IntStrHash *" + tmp + " = sp_IntStrHash_new();")
@@ -22683,10 +22196,10 @@ class Compiler
           emit("    const char *lv_" + bp + " = sp_IntStrHash_get(" + rc + ", " + rc + "->order[_i]);")
           push_scope
           declare_var(bp, "string")
-          bbody = @nd_body[blk]
+          bbody = @node_store.node_body(blk)
           bexpr = "0"
           if bbody >= 0
-            bs = get_stmts(bbody)
+            bs = @node_store.get_stmts(bbody)
             if bs.length > 0
               bexpr = compile_expr(bs.last)
             end
@@ -22705,7 +22218,7 @@ class Compiler
       if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
-      if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+      if mname == "length" || mname == "size" || (mname == "count" && @node_store.node_block(nid) < 0 && @node_store.node_arguments(nid) < 0)
         if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
           return @hoisted_strlen_var
         end
@@ -22714,7 +22227,7 @@ class Compiler
       if mname == "empty?"
         return "(sp_StrStrHash_length(" + rc + ") == 0)"
       end
-      if mname == "any?" && @nd_block[nid] < 0
+      if mname == "any?" && @node_store.node_block(nid) < 0
         return "(sp_StrStrHash_length(" + rc + ") > 0)"
       end
       if mname == "keys"
@@ -22742,16 +22255,16 @@ class Compiler
         emit("  }")
         return tmp
       end
-      if (mname == "select" || mname == "reject") && @nd_block[nid] >= 0
+      if (mname == "select" || mname == "reject") && @node_store.node_block(nid) >= 0
         return compile_hash_select_reject(nid, "str_str_hash", rc, mname)
       end
-      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @nd_block[nid] >= 0
+      if (mname == "count" || mname == "any?" || mname == "all?" || mname == "find" || mname == "detect") && @node_store.node_block(nid) >= 0
         return compile_hash_block_predicate(nid, "str_str_hash", rc, mname)
       end
       if mname == "fetch"
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           key = compile_expr_as_string(aargs[0])
           if aargs.length >= 2
             defval = compile_expr(aargs[1])
@@ -22767,61 +22280,61 @@ class Compiler
   def compile_enumerable_expr(nid, mname)
     # map as expression
     if mname == "map"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_map_expr(nid)
       end
     end
 
     # flat_map as expression
     if mname == "flat_map"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_flat_map_expr(nid)
       end
     end
 
     # each_with_object as expression: run the loop as side effect, return obj
     if mname == "each_with_object"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_each_with_object_block(nid)
       end
     end
 
     # tap: run block with receiver, return receiver
     if mname == "tap"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_tap_expr(nid)
       end
     end
 
     # then / yield_self: pass receiver to block, return block result
     if mname == "then" || mname == "yield_self"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_then_expr(nid)
       end
     end
 
     # select as expression
     if mname == "select" || mname == "filter"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_select_expr(nid)
       end
     end
 
     # reject as expression
     if mname == "reject"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_reject_expr(nid)
       end
     end
 
     # reduce/inject as expression
     if mname == "reduce"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_reduce_expr(nid)
       end
     end
     if mname == "inject"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         return compile_reduce_expr(nid)
       end
     end
@@ -22877,18 +22390,18 @@ class Compiler
           return "exp(" + compile_arg0(nid) + ")"
         end
         if mname == "atan2"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             if arg_ids.length >= 2
               return "atan2(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
           end
         end
         if mname == "hypot"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             if arg_ids.length >= 2
               return "hypot(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
@@ -22907,9 +22420,9 @@ class Compiler
           return "(sp_file_delete(" + compile_arg0(nid) + "), 0)"
         end
         if mname == "join"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            arg_ids = get_args(args_id)
+            arg_ids = @node_store.get_args(args_id)
             if arg_ids.length >= 2
               return "sp_str_concat(sp_str_concat(" + compile_expr(arg_ids[0]) + ", \"/\"), " + compile_expr(arg_ids[1]) + ")"
             end
@@ -22926,9 +22439,9 @@ class Compiler
         end
         if mname == "at"
           arg_id = compile_arg0(nid)
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0 && infer_type(aargs[0]) == "float"
               return "sp_time_at_float(" + arg_id + ")"
             end
@@ -23012,10 +22525,10 @@ class Compiler
             if cmidx239 < owner_cmdefaults.length
               owner_df = owner_cmdefaults[cmidx239].split(",")
             end
-            args_id239 = @nd_arguments[nid]
+            args_id239 = @node_store.node_arguments(nid)
             arg_count239 = 0
             if args_id239 >= 0
-              arg_count239 = get_args(args_id239).length
+              arg_count239 = @node_store.get_args(args_id239).length
             end
             kk239 = arg_count239
             while kk239 < owner_pt.length
@@ -23045,15 +22558,15 @@ class Compiler
 
   def compile_to_a_range_expr(nid, recv)
     range_nid = -1
-    if @nd_type[recv] == "RangeNode"
+    if @node_store.node_type(recv) == "RangeNode"
       range_nid = recv
     end
-    if @nd_type[recv] == "ParenthesesNode"
-      pb = @nd_body[recv]
+    if @node_store.node_type(recv) == "ParenthesesNode"
+      pb = @node_store.node_body(recv)
       if pb >= 0
-        pstmts = get_stmts(pb)
+        pstmts = @node_store.get_stmts(pb)
         if pstmts.length > 0
-          if @nd_type[pstmts.first] == "RangeNode"
+          if @node_store.node_type(pstmts.first) == "RangeNode"
             range_nid = pstmts.first
           end
         end
@@ -23062,12 +22575,12 @@ class Compiler
     if range_nid >= 0
       @needs_int_array = 1
       @needs_gc = 1
-      right_expr = compile_expr(@nd_right[range_nid])
+      right_expr = compile_expr(@node_store.node_right(range_nid))
       # sp_IntArray_from_range is inclusive; for `1...3` shave the upper end.
       if range_excl_end(range_nid) == 1
         right_expr = "(" + right_expr + ") - 1"
       end
-      return "sp_IntArray_from_range(" + compile_expr(@nd_left[range_nid]) + ", " + right_expr + ")"
+      return "sp_IntArray_from_range(" + compile_expr(@node_store.node_left(range_nid)) + ", " + right_expr + ")"
     end
     ""
   end
@@ -23105,11 +22618,11 @@ class Compiler
       if is_obj_type(recv_type) == 1
         cname = recv_type[4, recv_type.length - 4]
         arg0 = ""
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          a = get_args(args_id)
+          a = @node_store.get_args(args_id)
           if a.length > 0
-            arg0 = @nd_name[a[0]]
+            arg0 = @node_store.node_name(a[0])
           end
         end
         # Check if cname is or inherits from arg0
@@ -23129,11 +22642,11 @@ class Compiler
         ci = find_class_idx(cname)
         if ci >= 0
           arg0 = ""
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            a = get_args(args_id)
+            a = @node_store.get_args(args_id)
             if a.length > 0
-              arg0 = @nd_content[a[0]]
+              arg0 = @node_store.node_content(a[0])
             end
           end
           if cls_find_method(ci, arg0) >= 0
@@ -23235,9 +22748,9 @@ class Compiler
                 arg0_w = compile_arg0(nid)
                 if slot_t == "poly"
                   arg_t = "int"
-                  args_id_w = @nd_arguments[nid]
+                  args_id_w = @node_store.node_arguments(nid)
                   if args_id_w >= 0
-                    arg_ids_w = get_args(args_id_w)
+                    arg_ids_w = @node_store.get_args(args_id_w)
                     if arg_ids_w.length > 0
                       arg_t = infer_type(arg_ids_w[0])
                     end
@@ -23427,9 +22940,9 @@ class Compiler
     arg_compiled = "".split(",")
     arg_types = "".split(",")
     arg_strs = ""
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      aargs = get_args(args_id)
+      aargs = @node_store.get_args(args_id)
       k = 0
       while k < aargs.length
         ce = compile_expr(aargs[k])
@@ -23589,30 +23102,30 @@ class Compiler
   # Try to compile str[i] <op> "c" as direct char comparison
   # Returns "" if not applicable
   def try_char_cmp(nid, c_op)
-    recv = @nd_receiver[nid]
-    args_id = @nd_arguments[nid]
+    recv = @node_store.node_receiver(nid)
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return ""
     end
-    a = get_args(args_id)
+    a = @node_store.get_args(args_id)
     if a.length == 0
       return ""
     end
     arg_id = a[0]
-    if @nd_type[arg_id] != "StringNode"
+    if @node_store.node_type(arg_id) != "StringNode"
       return ""
     end
-    lit = @nd_content[arg_id]
+    lit = @node_store.node_content(arg_id)
     if lit == ""
-      lit = @nd_unescaped[arg_id]
+      lit = @node_store.node_unescaped(arg_id)
     end
     if lit.length != 1
       return ""
     end
-    if @nd_type[recv] != "CallNode" || @nd_name[recv] != "[]"
+    if @node_store.node_type(recv) != "CallNode" || @node_store.node_name(recv) != "[]"
       return ""
     end
-    sr = @nd_receiver[recv]
+    sr = @node_store.node_receiver(recv)
     if sr < 0 || infer_type(sr) != "string"
       return ""
     end
@@ -23633,12 +23146,12 @@ class Compiler
   end
 
   def compile_eq(nid, op)
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     lt = infer_type(recv)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_id = -1
     if args_id >= 0
-      a = get_args(args_id)
+      a = @node_store.get_args(args_id)
       if a.length > 0
         arg_id = a[0]
       end
@@ -23851,7 +23364,7 @@ class Compiler
     # genuinely mixed-int-string ternary infers as "string" and the
     # gate misses it. The pre-#131 emit then `sp_box_str`'d the entire
     # raw ternary, which is the same UB.
-    if nid >= 0 && @nd_type[nid] == "IfNode"
+    if nid >= 0 && @node_store.node_type(nid) == "IfNode"
       # Issue #207: if the predicate is a statically-decidable
       # is_a? / kind_of? on an already-typed expression, emit only
       # the live arm. The dead arm may contain a recursion call
@@ -23859,11 +23372,11 @@ class Compiler
       # (e.g. `v.is_a?(Hash) ? recurse(v) : v` where v is statically
       # a string) — generating it would land as a C type error
       # even though the branch is unreachable at runtime.
-      sv = static_is_a_value(@nd_predicate[nid])
+      sv = static_is_a_value(@node_store.node_predicate(nid))
       if sv == "TRUE"
-        body = @nd_body[nid]
+        body = @node_store.node_body(nid)
         if body >= 0
-          ts = get_stmts(body)
+          ts = @node_store.get_stmts(body)
           if ts.length > 0
             return box_expr_to_poly(ts.last)
           end
@@ -23871,12 +23384,12 @@ class Compiler
         return "sp_box_nil()"
       end
       if sv == "FALSE"
-        sub = @nd_subsequent[nid]
+        sub = @node_store.node_subsequent(nid)
         if sub >= 0
-          if @nd_type[sub] == "ElseNode"
-            eb = @nd_body[sub]
+          if @node_store.node_type(sub) == "ElseNode"
+            eb = @node_store.node_body(sub)
             if eb >= 0
-              es = get_stmts(eb)
+              es = @node_store.get_stmts(eb)
               if es.length > 0
                 return box_expr_to_poly(es.last)
               end
@@ -23887,22 +23400,22 @@ class Compiler
         end
         return "sp_box_nil()"
       end
-      cond = compile_cond_expr(@nd_predicate[nid])
+      cond = compile_cond_expr(@node_store.node_predicate(nid))
       then_v = "sp_box_nil()"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        ts = get_stmts(body)
+        ts = @node_store.get_stmts(body)
         if ts.length > 0
           then_v = box_expr_to_poly(ts.last)
         end
       end
       else_v = "sp_box_nil()"
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
-        if @nd_type[sub] == "ElseNode"
-          eb = @nd_body[sub]
+        if @node_store.node_type(sub) == "ElseNode"
+          eb = @node_store.node_body(sub)
           if eb >= 0
-            es = get_stmts(eb)
+            es = @node_store.get_stmts(eb)
             if es.length > 0
               else_v = box_expr_to_poly(es.last)
             end
@@ -23936,9 +23449,9 @@ class Compiler
     # rhs node id.
     ivars = []
     cur = nid
-    while @nd_type[cur] == "InstanceVariableWriteNode"
-      ivars.push(@nd_name[cur])
-      cur = @nd_expression[cur]
+    while @node_store.node_type(cur) == "InstanceVariableWriteNode"
+      ivars.push(@node_store.node_name(cur))
+      cur = @node_store.node_expression(cur)
     end
     rhs_id = cur
     rhs_type = infer_type(rhs_id)
@@ -23948,19 +23461,19 @@ class Compiler
     # variable into pointer slots, which C won't implicitly null. Emit
     # one store per slot through the unchained IVW path; each slot
     # picks its own boxing rule (poly slots box to sp_box_nil()).
-    if @nd_type[rhs_id] == "NilNode"
+    if @node_store.node_type(rhs_id) == "NilNode"
       ki = 0
       while ki < ivars.length
         cur_iv = nid
         kj = 0
         while kj < ki
-          cur_iv = @nd_expression[cur_iv]
+          cur_iv = @node_store.node_expression(cur_iv)
           kj = kj + 1
         end
-        saved_expr = @nd_expression[cur_iv]
-        @nd_expression[cur_iv] = rhs_id
+        saved_expr = @node_store.node_expression(cur_iv)
+        @node_store.set_node_expression(cur_iv, rhs_id)
         compile_stmt(cur_iv)
-        @nd_expression[cur_iv] = saved_expr
+        @node_store.set_node_expression(cur_iv, saved_expr)
         ki = ki + 1
       end
       return
@@ -24156,7 +23669,7 @@ class Compiler
   # left; the rest param (if any) gets the remainder.
   def compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, positional_ids, splat_idx, rest_param_idx)
     splat_node = positional_ids[splat_idx]
-    splat_src_id = @nd_expression[splat_node]
+    splat_src_id = @node_store.node_expression(splat_node)
     prefix_count = splat_idx
     suffix_count = positional_ids.length - splat_idx - 1
 
@@ -24330,10 +23843,10 @@ class Compiler
     # entirely — block-forwarding call sites pass 1 so the &block slot
     # isn't default-padded with "0" (the actual proc is appended by the
     # caller after this returns).
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
     pnames = @meth_param_names[mi].split(",")
     ptypes = @meth_param_types[mi].split(",")
@@ -24364,25 +23877,25 @@ class Compiler
     splat_count_local = 0
     ak = 0
     while ak < arg_ids.length
-      if @nd_type[arg_ids[ak]] == "KeywordHashNode"
-        elems = parse_id_list(@nd_elements[arg_ids[ak]])
+      if @node_store.node_type(arg_ids[ak]) == "KeywordHashNode"
+        elems = @node_store.parse_id_list(@node_store.node_elements(arg_ids[ak]))
         ek = 0
         while ek < elems.length
-          if @nd_type[elems[ek]] == "AssocNode"
-            key_id = @nd_key[elems[ek]]
+          if @node_store.node_type(elems[ek]) == "AssocNode"
+            key_id = @node_store.node_key(elems[ek])
             if key_id >= 0
               kname = ""
-              if @nd_type[key_id] == "SymbolNode"
-                kname = @nd_content[key_id]
+              if @node_store.node_type(key_id) == "SymbolNode"
+                kname = @node_store.node_content(key_id)
               end
               kw_names.push(kname)
-              kw_vals.push(compile_expr(@nd_expression[elems[ek]]))
+              kw_vals.push(compile_expr(@node_store.node_expression(elems[ek])))
             end
           end
           ek = ek + 1
         end
       else
-        if @nd_type[arg_ids[ak]] == "SplatNode"
+        if @node_store.node_type(arg_ids[ak]) == "SplatNode"
           if splat_idx < 0
             splat_idx = positional_ids.length
           end
@@ -24432,7 +23945,7 @@ class Compiler
             has_splat_arg = 0
             si = k
             while si < positional_ids.length
-              if @nd_type[positional_ids[si]] == "SplatNode"
+              if @node_store.node_type(positional_ids[si]) == "SplatNode"
                 has_splat_arg = 1
               end
               si = si + 1
@@ -24456,8 +23969,8 @@ class Compiler
             if treat_as_rest == 1
               # Fast path: the only positional is a splat whose source is
               # already an int_array. Pass it directly without copying.
-              if has_splat_arg == 1 && positional_ids.length == k + 1 && @nd_type[positional_ids[k]] == "SplatNode"
-                src_expr = @nd_expression[positional_ids[k]]
+              if has_splat_arg == 1 && positional_ids.length == k + 1 && @node_store.node_type(positional_ids[k]) == "SplatNode"
+                src_expr = @node_store.node_expression(positional_ids[k])
                 if src_expr >= 0
                   src_t = infer_type(src_expr)
                   if src_t == "int_array" || src_t == "sym_array"
@@ -24473,8 +23986,8 @@ class Compiler
               emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
               pi = k
               while pi < positional_ids.length
-                if @nd_type[positional_ids[pi]] == "SplatNode"
-                  src_expr2 = @nd_expression[positional_ids[pi]]
+                if @node_store.node_type(positional_ids[pi]) == "SplatNode"
+                  src_expr2 = @node_store.node_expression(positional_ids[pi])
                   if src_expr2 >= 0
                     emit_splat_into_int_array(tmp, src_expr2)
                   end
@@ -24546,7 +24059,7 @@ class Compiler
   end
 
   def compile_constructor_args(ci, nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       # No call-site args. If init has parameters with defaults, fill them
       # in here (issue #49: `Counter.new` for `initialize(start = 0)`).
@@ -24559,12 +24072,12 @@ class Compiler
       end
       return ""
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     # Check if any arg is a KeywordHashNode
     has_kw = 0
     ak = 0
     while ak < arg_ids.length
-      if @nd_type[arg_ids[ak]] == "KeywordHashNode"
+      if @node_store.node_type(arg_ids[ak]) == "KeywordHashNode"
         has_kw = 1
       end
       ak = ak + 1
@@ -24587,19 +24100,19 @@ class Compiler
     kw_exprs = []
     ak = 0
     while ak < arg_ids.length
-      if @nd_type[arg_ids[ak]] == "KeywordHashNode"
-        elems = parse_id_list(@nd_elements[arg_ids[ak]])
+      if @node_store.node_type(arg_ids[ak]) == "KeywordHashNode"
+        elems = @node_store.parse_id_list(@node_store.node_elements(arg_ids[ak]))
         ek = 0
         while ek < elems.length
-          if @nd_type[elems[ek]] == "AssocNode"
-            key_id = @nd_key[elems[ek]]
+          if @node_store.node_type(elems[ek]) == "AssocNode"
+            key_id = @node_store.node_key(elems[ek])
             if key_id >= 0
               kname = ""
-              if @nd_type[key_id] == "SymbolNode"
-                kname = @nd_content[key_id]
+              if @node_store.node_type(key_id) == "SymbolNode"
+                kname = @node_store.node_content(key_id)
               end
               kw_names.push(kname)
-              kw_exprs.push(@nd_expression[elems[ek]])
+              kw_exprs.push(@node_store.node_expression(elems[ek]))
             end
           end
           ek = ek + 1
@@ -24664,11 +24177,11 @@ class Compiler
   end
 
   def compile_call_args(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return ""
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     # Check if multiple args may trigger GC
     gc_count = 0
     k = 0
@@ -24765,10 +24278,10 @@ class Compiler
     # entirely — block-forwarding call sites pass 1 so the &block slot
     # isn't default-padded with "0" (the actual proc is appended by the
     # caller after this returns).
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
     all_ptypes = @cls_meth_ptypes[target_ci].split("|")
     all_defaults = @cls_meth_defaults[target_ci].split("|")
@@ -24885,7 +24398,7 @@ class Compiler
         if k < defaults.length
           def_id = defaults[k].to_i
           if def_id >= 0
-            recv_for_default = @nd_receiver[nid]
+            recv_for_default = @node_store.node_receiver(nid)
             saved_ci = @current_class_idx
             saved_override = @self_override
             if recv_for_default >= 0
@@ -24981,22 +24494,22 @@ class Compiler
   end
 
   def compile_if_expr(nid)
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     then_val = "0"
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     if body >= 0
-      stmts = get_stmts(body)
+      stmts = @node_store.get_stmts(body)
       if stmts.length > 0
         then_val = compile_expr(stmts.last)
       end
     end
     else_val = "0"
-    sub = @nd_subsequent[nid]
+    sub = @node_store.node_subsequent(nid)
     if sub >= 0
-      if @nd_type[sub] == "ElseNode"
-        eb = @nd_body[sub]
+      if @node_store.node_type(sub) == "ElseNode"
+        eb = @node_store.node_body(sub)
         if eb >= 0
-          es = get_stmts(eb)
+          es = @node_store.get_stmts(eb)
           if es.length > 0
             else_val = compile_expr(es.last)
           end
@@ -25009,11 +24522,11 @@ class Compiler
   end
 
   def compile_unless_expr(nid)
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     then_val = "0"
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     if body >= 0
-      stmts = get_stmts(body)
+      stmts = @node_store.get_stmts(body)
       if stmts.length > 0
         then_val = compile_expr(stmts.last)
       end
@@ -25030,14 +24543,14 @@ class Compiler
   def compile_array_literal_as_poly(nid)
     @needs_gc = 1
     @needs_rb_value = 1
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     tmp = new_temp
     emit("  sp_PolyArray *" + tmp + " = sp_PolyArray_new();")
     k = 0
     while k < elems.length
       eid = elems[k]
       et = infer_type(eid)
-      if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+      if @node_store.node_type(eid) == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
         inner = compile_array_literal_as_poly(eid)
         emit("  sp_PolyArray_push(" + tmp + ", sp_box_poly_array(" + inner + "));")
       else
@@ -25051,7 +24564,7 @@ class Compiler
 
   def compile_array_literal(nid)
     @needs_gc = 1
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length == 0
       @needs_int_array = 1
       return "sp_IntArray_new()"
@@ -25095,7 +24608,7 @@ class Compiler
         # nested literal as poly_array so the next-level dispatch
         # sees `cls_id == POLY_ARRAY` and recurses with each
         # innermost typed array still tagged correctly.
-        if @nd_type[elems[k]] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+        if @node_store.node_type(elems[k]) == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
           val = compile_array_literal_as_poly(elems[k])
           emit("  sp_PolyArray_push(" + tmp + ", sp_box_poly_array(" + val + "));")
         else
@@ -25144,17 +24657,17 @@ class Compiler
       # Without this branch, compile_expr lowered the splat to a
       # default value (e.g., the lower bound of a Range), so
       # `[*0..4096]` ended up as just `[0]`.
-      if @nd_type[eid] == "SplatNode"
-        inner = @nd_expression[eid]
+      if @node_store.node_type(eid) == "SplatNode"
+        inner = @node_store.node_expression(eid)
         it = infer_type(inner)
         # Root tmp so a sp_IntArray_push grow inside the splat loop
         # can't sweep the half-built array. Hoist range / source
         # expressions to a temp so side effects (method calls in the
         # bound, chained recv) fire exactly once.
         emit("  SP_GC_ROOT(" + tmp + ");")
-        if @nd_type[inner] == "RangeNode"
-          lo = compile_expr(@nd_left[inner])
-          hi_expr = compile_expr(@nd_right[inner])
+        if @node_store.node_type(inner) == "RangeNode"
+          lo = compile_expr(@node_store.node_left(inner))
+          hi_expr = compile_expr(@node_store.node_right(inner))
           hi = new_temp
           emit("  mrb_int " + hi + " = " + hi_expr + ";")
           cmp = range_excl_end(inner) == 1 ? "<" : "<="
@@ -25193,7 +24706,7 @@ class Compiler
 
   def compile_hash_literal(nid)
     @needs_gc = 1
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     if elems.length == 0
       @needs_str_int_hash = 1
       return "sp_StrIntHash_new()"
@@ -25204,8 +24717,8 @@ class Compiler
       tmp = new_temp
       emit("  sp_IntStrHash *" + tmp + " = sp_IntStrHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          emit("  sp_IntStrHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
+        if @node_store.node_type(el) == "AssocNode"
+          emit("  sp_IntStrHash_set(" + tmp + ", " + compile_expr(@node_store.node_key(el)) + ", " + compile_expr(@node_store.node_expression(el)) + ");")
         end
       }
       return tmp
@@ -25215,9 +24728,9 @@ class Compiler
       tmp = new_temp
       emit("  sp_StrStrHash *" + tmp + " = sp_StrStrHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          vt = infer_type(@nd_expression[el])
-          val = compile_expr(@nd_expression[el])
+        if @node_store.node_type(el) == "AssocNode"
+          vt = infer_type(@node_store.node_expression(el))
+          val = compile_expr(@node_store.node_expression(el))
           if vt == "int"
             val = "sp_int_to_s(" + val + ")"
           else
@@ -25229,7 +24742,7 @@ class Compiler
               end
             end
           end
-          emit("  sp_StrStrHash_set(" + tmp + ", " + compile_expr_as_string(@nd_key[el]) + ", " + val + ");")
+          emit("  sp_StrStrHash_set(" + tmp + ", " + compile_expr_as_string(@node_store.node_key(el)) + ", " + val + ");")
         end
       }
       return tmp
@@ -25239,8 +24752,8 @@ class Compiler
       tmp = new_temp
       emit("  sp_SymIntHash *" + tmp + " = sp_SymIntHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          emit("  sp_SymIntHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
+        if @node_store.node_type(el) == "AssocNode"
+          emit("  sp_SymIntHash_set(" + tmp + ", " + compile_expr(@node_store.node_key(el)) + ", " + compile_expr(@node_store.node_expression(el)) + ");")
         end
       }
       return tmp
@@ -25250,8 +24763,8 @@ class Compiler
       tmp = new_temp
       emit("  sp_SymStrHash *" + tmp + " = sp_SymStrHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          emit("  sp_SymStrHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
+        if @node_store.node_type(el) == "AssocNode"
+          emit("  sp_SymStrHash_set(" + tmp + ", " + compile_expr(@node_store.node_key(el)) + ", " + compile_expr(@node_store.node_expression(el)) + ");")
         end
       }
       return tmp
@@ -25261,8 +24774,8 @@ class Compiler
       tmp = new_temp
       emit("  sp_SymPolyHash *" + tmp + " = sp_SymPolyHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          emit("  sp_SymPolyHash_set(" + tmp + ", " + compile_expr(@nd_key[el]) + ", " + box_expr_to_poly(@nd_expression[el]) + ");")
+        if @node_store.node_type(el) == "AssocNode"
+          emit("  sp_SymPolyHash_set(" + tmp + ", " + compile_expr(@node_store.node_key(el)) + ", " + box_expr_to_poly(@node_store.node_expression(el)) + ");")
         end
       }
       return tmp
@@ -25272,8 +24785,8 @@ class Compiler
       tmp = new_temp
       emit("  sp_StrPolyHash *" + tmp + " = sp_StrPolyHash_new();")
       elems.each { |el|
-        if @nd_type[el] == "AssocNode"
-          emit("  sp_StrPolyHash_set(" + tmp + ", " + compile_expr_as_string(@nd_key[el]) + ", " + box_expr_to_poly(@nd_expression[el]) + ");")
+        if @node_store.node_type(el) == "AssocNode"
+          emit("  sp_StrPolyHash_set(" + tmp + ", " + compile_expr_as_string(@node_store.node_key(el)) + ", " + box_expr_to_poly(@node_store.node_expression(el)) + ");")
         end
       }
       return tmp
@@ -25282,8 +24795,8 @@ class Compiler
     tmp = new_temp
     emit("  sp_StrIntHash *" + tmp + " = sp_StrIntHash_new();")
     elems.each { |el|
-      if @nd_type[el] == "AssocNode"
-        emit("  sp_StrIntHash_set(" + tmp + ", " + compile_expr_as_string(@nd_key[el]) + ", " + compile_expr(@nd_expression[el]) + ");")
+      if @node_store.node_type(el) == "AssocNode"
+        emit("  sp_StrIntHash_set(" + tmp + ", " + compile_expr_as_string(@node_store.node_key(el)) + ", " + compile_expr(@node_store.node_expression(el)) + ");")
       end
     }
     tmp
@@ -25294,16 +24807,16 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "MultiWriteNode"
       compile_multi_write(nid)
       return
     end
     if t == "GlobalVariableWriteNode"
-      gname = @nd_name[nid]
+      gname = @node_store.node_name(nid)
       if gname != "$stderr" && gname != "$stdout" && gname != "$?"
         cname = sanitize_gvar(gname)
-        val = compile_expr(@nd_expression[nid])
+        val = compile_expr(@node_store.node_expression(nid))
         emit("  " + cname + " = " + val + ";")
         return
       end
@@ -25311,9 +24824,9 @@ class Compiler
     if t == "GlobalVariableOperatorWriteNode"
       # `$x += val`, `$x -= val`, etc. Mirrors LocalVariableOperatorWriteNode
       # for the storage path (sanitize_gvar instead of fiber_var_ref).
-      op = @nd_binop[nid]
-      val = compile_expr(@nd_expression[nid])
-      cname = sanitize_gvar(@nd_name[nid])
+      op = @node_store.node_binop(nid)
+      val = compile_expr(@node_store.node_expression(nid))
+      cname = sanitize_gvar(@node_store.node_name(nid))
       if op == "+"
         emit("  " + cname + " += " + val + ";")
       end
@@ -25353,9 +24866,9 @@ class Compiler
       # fire on the assign branch. Note: in Ruby, an undefined $-var
       # reads as nil, which is falsy in C terms, so the `if (!cname)`
       # guard fires both for never-assigned and assigned-to-falsy.
-      cname = sanitize_gvar(@nd_name[nid])
+      cname = sanitize_gvar(@node_store.node_name(nid))
       emit("  if (!(" + cname + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("    " + cname + " = " + val + ";")
       emit("  }")
       return
@@ -25366,9 +24879,9 @@ class Compiler
       # by collect_cvars during the pre-pass. If the cvar wasn't seen
       # there (e.g. inside a class-method that pre-pass missed) we
       # register defensively.
-      qname = cvar_qname(@current_class_idx, @nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
-      val_t = infer_type(@nd_expression[nid])
+      qname = cvar_qname(@current_class_idx, @node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
+      val_t = infer_type(@node_store.node_expression(nid))
       register_cvar(qname, val_t)
       emit("  cvar_" + qname + " = " + val + ";")
       return
@@ -25387,19 +24900,19 @@ class Compiler
       return
     end
     if t == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
+      lname = @node_store.node_name(nid)
       # Check for method(:name) assignment
-      expr_id = @nd_expression[nid]
+      expr_id = @node_store.node_expression(nid)
       if expr_id >= 0
-        if @nd_type[expr_id] == "CallNode"
-          if @nd_name[expr_id] == "method"
-            args_id = @nd_arguments[expr_id]
+        if @node_store.node_type(expr_id) == "CallNode"
+          if @node_store.node_name(expr_id) == "method"
+            args_id = @node_store.node_arguments(expr_id)
             if args_id >= 0
-              arg_ids = get_args(args_id)
+              arg_ids = @node_store.get_args(args_id)
               if arg_ids.length >= 1
-                mref = @nd_content[arg_ids[0]]
+                mref = @node_store.node_content(arg_ids[0])
                 if mref == ""
-                  mref = @nd_name[arg_ids[0]]
+                  mref = @node_store.node_name(arg_ids[0])
                 end
                 @method_ref_vars.push(lname)
                 @method_ref_names.push(mref)
@@ -25417,9 +24930,9 @@ class Compiler
       # (issue #58, #85) — the fall-through path below would clobber
       # vt with infer_type([])'s "int_array" via set_var_type.
       if vt == "str_array" || vt == "float_array" || vt == "sym_array" || vt == "poly_array" || is_ptr_array_type(vt) == 1
-        expr_id = @nd_expression[nid]
-        if expr_id >= 0 && @nd_type[expr_id] == "ArrayNode"
-          elems = parse_id_list(@nd_elements[expr_id])
+        expr_id = @node_store.node_expression(nid)
+        if expr_id >= 0 && @node_store.node_type(expr_id) == "ArrayNode"
+          elems = @node_store.parse_id_list(@node_store.node_elements(expr_id))
           if elems.length == 0
             if vt == "str_array"
               @needs_str_array = 1
@@ -25453,9 +24966,9 @@ class Compiler
       # sp_StrIntHash_new() and the assignment would mismatch the
       # promoted local's struct type.
       if vt == "str_str_hash" || vt == "int_str_hash" || vt == "sym_int_hash" || vt == "sym_str_hash" || vt == "str_poly_hash" || vt == "sym_poly_hash"
-        expr_id2 = @nd_expression[nid]
-        if expr_id2 >= 0 && @nd_type[expr_id2] == "HashNode"
-          elems2 = parse_id_list(@nd_elements[expr_id2])
+        expr_id2 = @node_store.node_expression(nid)
+        if expr_id2 >= 0 && @node_store.node_type(expr_id2) == "HashNode"
+          elems2 = @node_store.parse_id_list(@node_store.node_elements(expr_id2))
           if elems2.length == 0
             @needs_gc = 1
             if vt == "str_str_hash"
@@ -25484,8 +24997,8 @@ class Compiler
         end
       end
       if vt == "bigint"
-        rhs_t = infer_type(@nd_expression[nid])
-        val = compile_expr(@nd_expression[nid])
+        rhs_t = infer_type(@node_store.node_expression(nid))
+        val = compile_expr(@node_store.node_expression(nid))
         if rhs_t == "bigint"
           emit("  " + vref + " = " + val + ";")
         else
@@ -25497,12 +25010,12 @@ class Compiler
       end
       if vt == "poly"
         # Box the value
-        emit("  " + vref + " = " + box_expr_to_poly(@nd_expression[nid]) + ";")
+        emit("  " + vref + " = " + box_expr_to_poly(@node_store.node_expression(nid)) + ";")
         return
       end
       if vt == "mutable_str"
-        rhs_type = infer_type(@nd_expression[nid])
-        val = compile_expr(@nd_expression[nid])
+        rhs_type = infer_type(@node_store.node_expression(nid))
+        val = compile_expr(@node_store.node_expression(nid))
         if rhs_type == "string" || rhs_type == "int"
           emit("  " + vref + " = sp_String_new(" + val + ");")
         else
@@ -25512,9 +25025,9 @@ class Compiler
       end
       # Optimize: x = str.split(sep) inside a loop → reuse StrArray
       if @in_loop == 1 && vt == "str_array"
-        expr_id = @nd_expression[nid]
-        if expr_id >= 0 && @nd_type[expr_id] == "CallNode" && @nd_name[expr_id] == "split"
-          r = @nd_receiver[expr_id]
+        expr_id = @node_store.node_expression(nid)
+        if expr_id >= 0 && @node_store.node_type(expr_id) == "CallNode" && @node_store.node_name(expr_id) == "split"
+          r = @node_store.node_receiver(expr_id)
           if r >= 0 && infer_type(r) == "string"
             src = compile_expr(r)
             sep = compile_arg0(expr_id)
@@ -25524,11 +25037,11 @@ class Compiler
           end
         end
       end
-      rhs_t = infer_type(@nd_expression[nid])
+      rhs_t = infer_type(@node_store.node_expression(nid))
       if rhs_t == "nil" && is_nullable_type(vt) == 1
         emit("  " + vref + " = NULL;")
       else
-        val = compile_expr(@nd_expression[nid])
+        val = compile_expr(@node_store.node_expression(nid))
         emit("  " + vref + " = " + val + ";")
       end
       if rhs_t != "nil" || is_nullable_type(vt) == 0
@@ -25537,10 +25050,10 @@ class Compiler
       return
     end
     if t == "LocalVariableOperatorWriteNode"
-      op = @nd_binop[nid]
-      val = compile_expr(@nd_expression[nid])
-      vref = fiber_var_ref(@nd_name[nid])
-      vt = find_var_type(@nd_name[nid])
+      op = @node_store.node_binop(nid)
+      val = compile_expr(@node_store.node_expression(nid))
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      vt = find_var_type(@node_store.node_name(nid))
       # Same desugaring as the ivar form: `local OP= rhs` is
       # `local = local OP rhs`. Dispatch through the user-defined
       # operator when the local is obj-typed.
@@ -25550,7 +25063,7 @@ class Compiler
         return
       end
       if vt == "bigint"
-        at = infer_type(@nd_expression[nid])
+        at = infer_type(@node_store.node_expression(nid))
         barg = at == "bigint" ? val : "sp_bigint_new_int(" + val + ")"
         if op == "+"
           emit("  " + vref + " = sp_bigint_add(" + vref + ", " + barg + ");")
@@ -25568,7 +25081,7 @@ class Compiler
         return
       end
       if op == "+"
-        if vt == "string" && infer_type(@nd_expression[nid]) == "string"
+        if vt == "string" && infer_type(@node_store.node_expression(nid)) == "string"
           emit("  " + vref + " = sp_str_concat(" + vref + ", " + val + ");")
         else
           emit("  " + vref + " += " + val + ";")
@@ -25604,20 +25117,20 @@ class Compiler
       return
     end
     if t == "LocalVariableOrWriteNode"
-      vref = fiber_var_ref(@nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
       emit("  if (!(" + vref + ")) " + vref + " = " + val + ";")
       return
     end
     if t == "LocalVariableAndWriteNode"
-      vref = fiber_var_ref(@nd_name[nid])
-      val = compile_expr(@nd_expression[nid])
+      vref = fiber_var_ref(@node_store.node_name(nid))
+      val = compile_expr(@node_store.node_expression(nid))
       emit("  if (" + vref + ") " + vref + " = " + val + ";")
       return
     end
     if t == "InstanceVariableWriteNode"
-      iname = @nd_name[nid]
-      expr_id = @nd_expression[nid]
+      iname = @node_store.node_name(nid)
+      expr_id = @node_store.node_expression(nid)
       # Chained `@a = @b = ... = expr`. The naive emit lowers this as
       # `iv_a = (iv_b = (... = expr))` — one `expr` evaluation, but the
       # outer slot tries to absorb the inner write's typed value, so
@@ -25626,7 +25139,7 @@ class Compiler
       # effects on a CallNode rhs. Compute `expr` once into a typed
       # temp and assign each slot from the temp, boxing to poly only
       # for the slots that scan_writer_calls already widened.
-      if @nd_type[expr_id] == "InstanceVariableWriteNode"
+      if @node_store.node_type(expr_id) == "InstanceVariableWriteNode"
         compile_chained_ivar_writes(nid)
         return
       end
@@ -25698,12 +25211,12 @@ class Compiler
       # corresponding storage — but the slot was widened to poly_array,
       # so a typed-array-pointer assignment would fail the C compile.
       # Emit a fresh PolyArray with each element boxed to sp_RbVal.
-      if ivt == "poly_array" && @nd_type[expr_id] == "ArrayNode"
+      if ivt == "poly_array" && @node_store.node_type(expr_id) == "ArrayNode"
         @needs_gc = 1
         @needs_rb_value = 1
         tmp_arr = new_temp
         emit("  sp_PolyArray *" + tmp_arr + " = sp_PolyArray_new();")
-        elems_pa = parse_id_list(@nd_elements[expr_id])
+        elems_pa = @node_store.parse_id_list(@node_store.node_elements(expr_id))
         ek = 0
         while ek < elems_pa.length
           eid = elems_pa[ek]
@@ -25711,7 +25224,7 @@ class Compiler
           # 3D+ shape: nested ArrayNode with ptr_array element
           # type — recompile as poly_array so cls_id chain stays
           # tagged through every level.
-          if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+          if @node_store.node_type(eid) == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
             inner = compile_array_literal_as_poly(eid)
             emit("  sp_PolyArray_push(" + tmp_arr + ", sp_box_poly_array(" + inner + "));")
           else
@@ -25757,12 +25270,13 @@ class Compiler
       return
     end
     if t == "InstanceVariableOperatorWriteNode"
-      op = @nd_binop[nid]
-      val = compile_expr(@nd_expression[nid])
-      lhs = ivar_lhs(@nd_name[nid])
+      op = @node_store.node_binop(nid)
+      val = compile_expr(@node_store.node_expression(nid))
+      name = @node_store.node_name(nid)
+      lhs = ivar_lhs(name)
       ivar_t = ""
       if @current_class_idx >= 0
-        ivar_t = cls_ivar_type(@current_class_idx, @nd_name[nid])
+        ivar_t = cls_ivar_type(@current_class_idx, name)
       end
       # `@x OP= v` desugars to `@x = @x OP v`. When @x is obj-typed
       # and the class defines OP, dispatch to the user method
@@ -25866,7 +25380,7 @@ class Compiler
       return
     end
     if t == "StatementsNode"
-      stmts = parse_id_list(@nd_stmts[nid])
+      stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
       k = 0
       while k < stmts.length
         compile_stmt(stmts[k])
@@ -25875,9 +25389,9 @@ class Compiler
       return
     end
     if t == "ParenthesesNode"
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        pstmts = get_stmts(body)
+        pstmts = @node_store.get_stmts(body)
         pk = 0
         while pk < pstmts.length
           compile_stmt(pstmts[pk])
@@ -25903,8 +25417,8 @@ class Compiler
   # heterogeneous RHS like `a, b, c = [1, "b", 2.0]` lands in the right
   # tagged-union slots.
   def emit_multi_write_target(tid, value_expr, value_type)
-    if @nd_type[tid] == "LocalVariableTargetNode"
-      lname = @nd_name[tid]
+    if @node_store.node_type(tid) == "LocalVariableTargetNode"
+      lname = @node_store.node_name(tid)
       vt = find_var_type(lname)
       v = value_expr
       if vt == "poly" && value_type != "" && value_type != "poly"
@@ -25913,8 +25427,8 @@ class Compiler
       emit("  " + fiber_var_ref(lname) + " = " + v + ";")
       return
     end
-    if @nd_type[tid] == "InstanceVariableTargetNode"
-      iname = @nd_name[tid]
+    if @node_store.node_type(tid) == "InstanceVariableTargetNode"
+      iname = @node_store.node_name(tid)
       mod_ivar = 0
       mi3 = 0
       while mi3 < @module_names.length
@@ -25943,13 +25457,13 @@ class Compiler
       end
       return
     end
-    if @nd_type[tid] == "CallTargetNode"
+    if @node_store.node_type(tid) == "CallTargetNode"
       # `obj.attr = val` style — used as one slot in a multi-write
       # destructure. Lower as either a direct ivar write (when the
       # receiver class has an attr_writer for the name) or as a call
       # to `sp_<C>_<attr>_eq`.
-      recv_id = @nd_receiver[tid]
-      mname = @nd_name[tid]
+      recv_id = @node_store.node_receiver(tid)
+      mname = @node_store.node_name(tid)
       if mname.end_with?("=")
         mname = mname[0, mname.length - 1]
       end
@@ -25965,7 +25479,7 @@ class Compiler
         end
       end
     end
-    if @nd_type[tid] == "IndexTargetNode"
+    if @node_store.node_type(tid) == "IndexTargetNode"
       # Multi-assign LHS: `a[0], b[1] = 1, 2`. Each LHS is an
       # IndexTargetNode with a receiver and an arguments slot.
       # Routes through the same per-receiver-type sp_<TYPE>_set
@@ -25973,9 +25487,9 @@ class Compiler
       # read-then-modify dance -- the value is supplied by the
       # caller. The temp-receiver pattern keeps `a` and the index
       # evaluated exactly once.
-      tgt_recv = @nd_receiver[tid]
-      tgt_args_id = @nd_arguments[tid]
-      tgt_arg_ids = tgt_args_id >= 0 ? get_args(tgt_args_id) : []
+      tgt_recv = @node_store.node_receiver(tid)
+      tgt_args_id = @node_store.node_arguments(tid)
+      tgt_arg_ids = tgt_args_id >= 0 ? @node_store.get_args(tgt_args_id) : []
       if tgt_arg_ids.length >= 1
         rt = infer_type(tgt_recv)
         rc = compile_expr_gc_rooted(tgt_recv)
@@ -26008,13 +25522,13 @@ class Compiler
         end
       end
     end
-    if @nd_type[tid] == "GlobalVariableTargetNode"
+    if @node_store.node_type(tid) == "GlobalVariableTargetNode"
       # Multi-assign LHS: `$a, $b = 1, 2`. Same storage path as
       # GlobalVariableWriteNode but without an embedded expression --
       # the value is supplied by the caller.
-      emit("  " + sanitize_gvar(@nd_name[tid]) + " = " + value_expr + ";")
+      emit("  " + sanitize_gvar(@node_store.node_name(tid)) + " = " + value_expr + ";")
     end
-    if @nd_type[tid] == "MultiTargetNode"
+    if @node_store.node_type(tid) == "MultiTargetNode"
       # Nested LHS: `a, (b, c), d = 1, [2, 3], 4`. The slot of the
       # outer multi-write that this node occupies is an array-typed
       # value; recursively unpack it into the inner targets via
@@ -26027,13 +25541,13 @@ class Compiler
   # `lefts` are pre-splat targets, `rest_id` is the SplatNode (its
   # expression is the splat target), `rights` are post-splat targets.
   def compile_multi_write_splat(lefts, rest_id, rights, val_id)
-    splat_target = @nd_expression[rest_id]
+    splat_target = @node_store.node_expression(rest_id)
     nleft = lefts.length
     nright = rights.length
 
     # ArrayNode literal RHS — split statically.
-    if @nd_type[val_id] == "ArrayNode"
-      elems = parse_id_list(@nd_elements[val_id])
+    if @node_store.node_type(val_id) == "ArrayNode"
+      elems = @node_store.parse_id_list(@node_store.node_elements(val_id))
       n = elems.length
       # Evaluate all RHS into temps first (swap-safe).
       tmps = "".split(",")
@@ -26191,7 +25705,7 @@ class Compiler
   # We dispatch on the array's element type and emit per-target
   # index reads.
   def compile_nested_multi_target(tid, value_expr, value_type)
-    lefts = parse_id_list(@nd_targets[tid])
+    lefts = @node_store.parse_id_list(@node_store.node_targets(tid))
     prefix = ""
     elem_t = "int"
     if value_type == "int_array"
@@ -26226,20 +25740,20 @@ class Compiler
   end
 
   def compile_multi_write(nid)
-    targets = parse_id_list(@nd_targets[nid])
-    val_id = @nd_expression[nid]
+    targets = @node_store.parse_id_list(@node_store.node_targets(nid))
+    val_id = @node_store.node_expression(nid)
     if val_id < 0
       return
     end
-    rest_id = @nd_rest[nid]
+    rest_id = @node_store.node_rest(nid)
     if is_splat_with_target(rest_id) == 1
-      rights = parse_id_list(@nd_rights[nid])
+      rights = @node_store.parse_id_list(@node_store.node_rights(nid))
       compile_multi_write_splat(targets, rest_id, rights, val_id)
       return
     end
-    if @nd_type[val_id] == "ArrayNode"
+    if @node_store.node_type(val_id) == "ArrayNode"
       # Direct array literal: a, b, c = [1, 2, 3] or a, b = b, a
-      elems = parse_id_list(@nd_elements[val_id])
+      elems = @node_store.parse_id_list(@node_store.node_elements(val_id))
       # For swap safety, evaluate all RHS first into temps
       tmps = "".split(",")
       ttypes_lit = "".split(",")
@@ -26270,8 +25784,8 @@ class Compiler
       k = 0
       while k < targets.length
         tid = targets[k]
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          emit("  " + fiber_var_ref(@nd_name[tid]) + " = " + tmp + "->_" + k.to_s + ";")
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          emit("  " + fiber_var_ref(@node_store.node_name(tid)) + " = " + tmp + "->_" + k.to_s + ";")
         end
         k = k + 1
       end
@@ -26286,23 +25800,23 @@ class Compiler
       while k < targets.length
         tid = targets[k]
         rhs = "sp_IntArray_get(" + tmp + ", " + k.to_s + ")"
-        if @nd_type[tid] == "LocalVariableTargetNode"
-          emit("  " + fiber_var_ref(@nd_name[tid]) + " = " + rhs + ";")
+        if @node_store.node_type(tid) == "LocalVariableTargetNode"
+          emit("  " + fiber_var_ref(@node_store.node_name(tid)) + " = " + rhs + ";")
         end
-        if @nd_type[tid] == "InstanceVariableTargetNode"
-          emit("  " + self_arrow + sanitize_ivar(@nd_name[tid]) + " = " + rhs + ";")
+        if @node_store.node_type(tid) == "InstanceVariableTargetNode"
+          emit("  " + self_arrow + sanitize_ivar(@node_store.node_name(tid)) + " = " + rhs + ";")
         end
-        if @nd_type[tid] == "ConstantTargetNode"
-          if find_const_idx(@nd_name[tid]) >= 0
-            emit("  cst_" + @nd_name[tid] + " = " + rhs + ";")
+        if @node_store.node_type(tid) == "ConstantTargetNode"
+          if find_const_idx(@node_store.node_name(tid)) >= 0
+            emit("  cst_" + @node_store.node_name(tid) + " = " + rhs + ";")
           end
         end
-        if @nd_type[tid] == "CallTargetNode"
+        if @node_store.node_type(tid) == "CallTargetNode"
           # `obj.attr = <slot>` in a multi-write context.
           # Inline as a direct ivar write when the recv class has an
           # attr_writer; otherwise fall back to the generated setter.
-          recv_id = @nd_receiver[tid]
-          mname = @nd_name[tid]
+          recv_id = @node_store.node_receiver(tid)
+          mname = @node_store.node_name(tid)
           if mname.end_with?("=")
             mname = mname[0, mname.length - 1]
           end
@@ -26325,17 +25839,17 @@ class Compiler
   end
 
   def compile_if_stmt(nid)
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     emit("  if (" + cond + ") {")
     @indent = @indent + 1
-    compile_stmts_body(@nd_body[nid])
+    compile_stmts_body(@node_store.node_body(nid))
     @indent = @indent - 1
-    sub = @nd_subsequent[nid]
+    sub = @node_store.node_subsequent(nid)
     if sub >= 0
-      if @nd_type[sub] == "ElseNode"
+      if @node_store.node_type(sub) == "ElseNode"
         emit("  } else {")
         @indent = @indent + 1
-        compile_stmts_body(@nd_body[sub])
+        compile_stmts_body(@node_store.node_body(sub))
         @indent = @indent - 1
       else
         emit("  } else")
@@ -26347,16 +25861,16 @@ class Compiler
   end
 
   def compile_unless_stmt(nid)
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     emit("  if (!(" + cond + ")) {")
     @indent = @indent + 1
-    compile_stmts_body(@nd_body[nid])
+    compile_stmts_body(@node_store.node_body(nid))
     @indent = @indent - 1
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_stmts_body(@nd_body[ec])
+      compile_stmts_body(@node_store.node_body(ec))
       @indent = @indent - 1
     end
     emit("  }")
@@ -26409,11 +25923,11 @@ class Compiler
     if body_nid < 0
       return 0
     end
-    t = @nd_type[body_nid]
+    t = @node_store.node_type(body_nid)
     if t == "CallNode"
-      mn = @nd_name[body_nid]
-      recv = @nd_receiver[body_nid]
-      if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode" && @nd_name[recv] == vname
+      mn = @node_store.node_name(body_nid)
+      recv = @node_store.node_receiver(body_nid)
+      if recv >= 0 && @node_store.node_type(recv) == "LocalVariableReadNode" && @node_store.node_name(recv) == vname
         if mn == "push" || mn == "pop" || mn == "shift" || mn == "unshift" ||
            mn == "<<" || mn == "[]=" || mn == "delete" || mn == "clear" ||
            mn == "insert" || mn == "replace" || mn == "concat" ||
@@ -26423,16 +25937,16 @@ class Compiler
         end
       end
     end
-    if t == "LocalVariableWriteNode" && @nd_name[body_nid] == vname
+    if t == "LocalVariableWriteNode" && @node_store.node_name(body_nid) == vname
       return 1
     end
     # Recurse into children
-    if @nd_body[body_nid] >= 0
-      if body_mutates_var?(@nd_body[body_nid], vname) == 1
+    if @node_store.node_body(body_nid) >= 0
+      if body_mutates_var?(@node_store.node_body(body_nid), vname) == 1
         return 1
       end
     end
-    stmts = parse_id_list(@nd_stmts[body_nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(body_nid))
     k = 0
     while k < stmts.length
       if body_mutates_var?(stmts[k], vname) == 1
@@ -26440,19 +25954,19 @@ class Compiler
       end
       k = k + 1
     end
-    if @nd_subsequent[body_nid] >= 0
-      if body_mutates_var?(@nd_subsequent[body_nid], vname) == 1
+    if @node_store.node_subsequent(body_nid) >= 0
+      if body_mutates_var?(@node_store.node_subsequent(body_nid), vname) == 1
         return 1
       end
     end
-    if @nd_receiver[body_nid] >= 0
-      if body_mutates_var?(@nd_receiver[body_nid], vname) == 1
+    if @node_store.node_receiver(body_nid) >= 0
+      if body_mutates_var?(@node_store.node_receiver(body_nid), vname) == 1
         return 1
       end
     end
-    args_id = @nd_arguments[body_nid]
+    args_id = @node_store.node_arguments(body_nid)
     if args_id >= 0
-      arr = get_args(args_id)
+      arr = @node_store.get_args(args_id)
       k = 0
       while k < arr.length
         if body_mutates_var?(arr[k], vname) == 1
@@ -26468,78 +25982,78 @@ class Compiler
   # inside a comparison predicate (for mutation scanning).  Empty if
   # the predicate doesn't match the hoist pattern.
   def hoist_receiver_var(pred_nid)
-    if @nd_type[pred_nid] != "CallNode"
+    if @node_store.node_type(pred_nid) != "CallNode"
       return ""
     end
-    op = @nd_name[pred_nid]
+    op = @node_store.node_name(pred_nid)
     if op != "<" && op != "<=" && op != ">" && op != ">="
       return ""
     end
     len_nid = -1
-    args_id = @nd_arguments[pred_nid]
+    args_id = @node_store.node_arguments(pred_nid)
     if args_id >= 0
-      a = get_args(args_id)
+      a = @node_store.get_args(args_id)
       if a.length > 0
         len_nid = a[0]
       end
     end
     if op == ">" || op == ">="
-      len_nid = @nd_receiver[pred_nid]
+      len_nid = @node_store.node_receiver(pred_nid)
     end
-    if len_nid < 0 || @nd_type[len_nid] != "CallNode"
+    if len_nid < 0 || @node_store.node_type(len_nid) != "CallNode"
       return ""
     end
-    mn = @nd_name[len_nid]
+    mn = @node_store.node_name(len_nid)
     if mn != "length" && mn != "size"
       return ""
     end
-    recv = @nd_receiver[len_nid]
-    if recv < 0 || @nd_type[recv] != "LocalVariableReadNode"
+    recv = @node_store.node_receiver(len_nid)
+    if recv < 0 || @node_store.node_type(recv) != "LocalVariableReadNode"
       return ""
     end
-    @nd_name[recv]
+    @node_store.node_name(recv)
   end
 
   # Check if while condition uses .length/.size and hoist if safe.
   # Supports string, arrays, and hashes.
   def try_hoist_strlen(pred_nid)
-    if @nd_type[pred_nid] != "CallNode"
+    if @node_store.node_type(pred_nid) != "CallNode"
       return ""
     end
-    op = @nd_name[pred_nid]
+    op = @node_store.node_name(pred_nid)
     if op != "<" && op != "<=" && op != ">"  && op != ">="
       return ""
     end
     # Find the .length/.size call
     len_nid = -1
-    args_id = @nd_arguments[pred_nid]
+    args_id = @node_store.node_arguments(pred_nid)
     if args_id >= 0
-      a = get_args(args_id)
+      a = @node_store.get_args(args_id)
       if a.length > 0
         len_nid = a[0]
       end
     end
     # For > or >=, the length call may be on the receiver side
     if op == ">" || op == ">="
-      len_nid = @nd_receiver[pred_nid]
+      len_nid = @node_store.node_receiver(pred_nid)
     end
     if len_nid < 0
       return ""
     end
-    if @nd_type[len_nid] != "CallNode"
+    if @node_store.node_type(len_nid) != "CallNode"
       return ""
     end
-    mn = @nd_name[len_nid]
+    mn = @node_store.node_name(len_nid)
     if mn != "length" && mn != "size"
       return ""
     end
-    recv = @nd_receiver[len_nid]
+    recv = @node_store.node_receiver(len_nid)
     if recv < 0
       return ""
     end
     rt = infer_type(recv)
     # Must be a local variable so we can check for mutations in the body
-    if @nd_type[recv] != "LocalVariableReadNode"
+    if @node_store.node_type(recv) != "LocalVariableReadNode"
       # string literal or ivar: be conservative, only hoist string (already safe)
       if rt != "string"
         return ""
@@ -26555,7 +26069,7 @@ class Compiler
       return ""
     end
     # Check that the loop body doesn't mutate this variable
-    vname = @nd_name[recv]
+    vname = @node_store.node_name(recv)
     # (The pred_nid is the while predicate; body scan happens below via caller
     #  passing @while_body_nid.  Here we only check if type is hoistable.)
     tmp = new_temp
@@ -26575,24 +26089,24 @@ class Compiler
     # loop body mutates the receiver variable (push/pop/<< etc.).
     len_tmp = ""
     can_hoist = 1
-    hoist_target = hoist_receiver_var(@nd_predicate[nid])
+    hoist_target = hoist_receiver_var(@node_store.node_predicate(nid))
     if hoist_target != ""
-      if body_mutates_var?(@nd_body[nid], hoist_target) == 1
+      if body_mutates_var?(@node_store.node_body(nid), hoist_target) == 1
         can_hoist = 0
       end
     end
     if can_hoist == 1
-      len_tmp = try_hoist_strlen(@nd_predicate[nid])
+      len_tmp = try_hoist_strlen(@node_store.node_predicate(nid))
       if len_tmp != ""
         @hoisted_strlen_var = len_tmp
       end
     end
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     emit("  while (" + cond + ") {")
     @indent = @indent + 1
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[nid])
+    compile_stmts_body(@node_store.node_body(nid))
     pop_redo_label
     @indent = @indent - 1
     emit("  }")
@@ -26604,12 +26118,12 @@ class Compiler
   def compile_until_stmt(nid)
     old = @in_loop
     @in_loop = 1
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     emit("  while (!(" + cond + ")) {")
     @indent = @indent + 1
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[nid])
+    compile_stmts_body(@node_store.node_body(nid))
     pop_redo_label
     @indent = @indent - 1
     emit("  }")
@@ -26619,24 +26133,24 @@ class Compiler
   def compile_for_stmt(nid)
     old = @in_loop
     @in_loop = 1
-    coll = @nd_collection[nid]
+    coll = @node_store.node_collection(nid)
     if coll >= 0
       vname = "i"
-      tgt = @nd_target[nid]
+      tgt = @node_store.node_target(nid)
       if tgt >= 0
-        if @nd_type[tgt] == "LocalVariableTargetNode"
-          vname = @nd_name[tgt]
+        if @node_store.node_type(tgt) == "LocalVariableTargetNode"
+          vname = @node_store.node_name(tgt)
         end
       end
-      if @nd_type[coll] == "RangeNode"
-        left = compile_expr(@nd_left[coll])
-        right = compile_expr(@nd_right[coll])
+      if @node_store.node_type(coll) == "RangeNode"
+        left = compile_expr(@node_store.node_left(coll))
+        right = compile_expr(@node_store.node_right(coll))
         cmp = range_excl_end(coll) == 1 ? "<" : "<="
         emit("  for (lv_" + vname + " = " + left + "; lv_" + vname + " " + cmp + " " + right + "; lv_" + vname + "++) {")
         @indent = @indent + 1
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[nid])
+        compile_stmts_body(@node_store.node_body(nid))
         pop_redo_label
         @indent = @indent - 1
         emit("  }")
@@ -26654,7 +26168,7 @@ class Compiler
         @indent = @indent + 1
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[nid])
+        compile_stmts_body(@node_store.node_body(nid))
         pop_redo_label
         @indent = @indent - 1
         emit("  }")
@@ -26664,7 +26178,7 @@ class Compiler
   end
 
   def compile_case_stmt(nid)
-    pred = @nd_predicate[nid]
+    pred = @node_store.node_predicate(nid)
     if pred < 0
       compile_case_no_pred(nid)
       return
@@ -26685,11 +26199,11 @@ class Compiler
     else
       emit("  mrb_int " + tmp + " = " + pred_val + ";")
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       wid = conds[k]
-      if @nd_type[wid] == "WhenNode"
+      if @node_store.node_type(wid) == "WhenNode"
         kw = "if"
         if k > 0
           kw = "} else if"
@@ -26697,55 +26211,55 @@ class Compiler
         cond_str = compile_when_conds(wid, tmp, pred_type)
         emit("  " + kw + " (" + cond_str + ") {")
         @indent = @indent + 1
-        compile_stmts_body(@nd_body[wid])
+        compile_stmts_body(@node_store.node_body(wid))
         @indent = @indent - 1
       end
       k = k + 1
     end
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_stmts_body(@nd_body[ec])
+      compile_stmts_body(@node_store.node_body(ec))
       @indent = @indent - 1
     end
     emit("  }")
   end
 
   def compile_case_no_pred(nid)
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       wid = conds[k]
-      if @nd_type[wid] == "WhenNode"
+      if @node_store.node_type(wid) == "WhenNode"
         kw = "if"
         if k > 0
           kw = "} else if"
         end
-        wconds = parse_id_list(@nd_conditions[wid])
+        wconds = @node_store.parse_id_list(@node_store.node_conditions(wid))
         cexpr = "0"
         if wconds.length > 0
           cexpr = compile_expr(wconds.first)
         end
         emit("  " + kw + " (" + cexpr + ") {")
         @indent = @indent + 1
-        compile_stmts_body(@nd_body[wid])
+        compile_stmts_body(@node_store.node_body(wid))
         @indent = @indent - 1
       end
       k = k + 1
     end
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_stmts_body(@nd_body[ec])
+      compile_stmts_body(@node_store.node_body(ec))
       @indent = @indent - 1
     end
     emit("  }")
   end
 
   def compile_when_conds(wid, tmp, pred_type)
-    wconds = parse_id_list(@nd_conditions[wid])
+    wconds = @node_store.parse_id_list(@node_store.node_conditions(wid))
     result = ""
     k = 0
     while k < wconds.length
@@ -26753,12 +26267,12 @@ class Compiler
         result = result + " || "
       end
       cid = wconds[k]
-      if @nd_type[cid] == "RangeNode"
-        left = compile_expr(@nd_left[cid])
-        right = compile_expr(@nd_right[cid])
+      if @node_store.node_type(cid) == "RangeNode"
+        left = compile_expr(@node_store.node_left(cid))
+        right = compile_expr(@node_store.node_right(cid))
         cmp = range_excl_end(cid) == 1 ? "<" : "<="
         result = result + "(" + tmp + " >= " + left + " && " + tmp + " " + cmp + " " + right + ")"
-      elsif is_obj_type(pred_type) == 1 && @nd_type[cid] == "ConstantReadNode"
+      elsif is_obj_type(pred_type) == 1 && @node_store.node_type(cid) == "ConstantReadNode"
         # `case obj when ClassName` — resolve statically against the
         # predicate's known class. Predicate type `obj_X`:
         #   when X (or any ancestor of X)  → match (with a NULL guard
@@ -26770,7 +26284,7 @@ class Compiler
         # actually carries an `obj_<Child>` instance needs a runtime
         # cls_id check; that's a separate enhancement (issue #67 only
         # covers the static-class form of the bug).
-        cname = @nd_name[cid]
+        cname = @node_store.node_name(cid)
         if find_class_idx(cname) >= 0
           bt = base_type(pred_type)
           pred_cname = bt[4, bt.length - 4]
@@ -26799,7 +26313,7 @@ class Compiler
   end
 
   def compile_case_match_stmt(nid)
-    pred = @nd_predicate[nid]
+    pred = @node_store.node_predicate(nid)
     pred_type = infer_type(pred)
     pred_val = compile_expr(pred)
     tmp = new_temp
@@ -26816,29 +26330,29 @@ class Compiler
         end
       end
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       inid = conds[k]
-      if @nd_type[inid] == "InNode"
+      if @node_store.node_type(inid) == "InNode"
         kw = "if"
         if k > 0
           kw = "} else if"
         end
-        pat = @nd_pattern[inid]
+        pat = @node_store.node_pattern(inid)
         cond_str = compile_in_pattern(pat, tmp, pred_type)
         emit("  " + kw + " (" + cond_str + ") {")
         @indent = @indent + 1
-        compile_stmts_body(@nd_body[inid])
+        compile_stmts_body(@node_store.node_body(inid))
         @indent = @indent - 1
       end
       k = k + 1
     end
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_stmts_body(@nd_body[ec])
+      compile_stmts_body(@node_store.node_body(ec))
       @indent = @indent - 1
     end
     if conds.length > 0
@@ -26850,9 +26364,9 @@ class Compiler
     if pat_id < 0
       return "1"
     end
-    pt = @nd_type[pat_id]
+    pt = @node_store.node_type(pat_id)
     if pt == "ConstantReadNode"
-      cname = @nd_name[pat_id]
+      cname = @node_store.node_name(pat_id)
       if pred_type == "poly"
         if cname == "Integer"
           return tmp + ".tag == SP_TAG_INT"
@@ -26878,15 +26392,15 @@ class Compiler
     end
     if pt == "IntegerNode"
       if pred_type == "poly"
-        return "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i == " + @nd_value[pat_id].to_s + ")"
+        return "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i == " + @node_store.node_value(pat_id).to_s + ")"
       end
-      return "#{tmp} == #{@nd_value[pat_id]}"
+      return "#{tmp} == #{@node_store.node_value(pat_id)}"
     end
     if pt == "StringNode"
       if pred_type == "poly"
-        return "(" + tmp + ".tag == SP_TAG_STR && strcmp(" + tmp + ".v.s, " + c_string_literal(@nd_content[pat_id]) + ") == 0)"
+        return "(" + tmp + ".tag == SP_TAG_STR && strcmp(" + tmp + ".v.s, " + c_string_literal(@node_store.node_content(pat_id)) + ") == 0)"
       end
-      return "strcmp(" + tmp + ", " + c_string_literal(@nd_content[pat_id]) + ") == 0"
+      return "strcmp(" + tmp + ", " + c_string_literal(@node_store.node_content(pat_id)) + ") == 0"
     end
     if pt == "NilNode"
       if pred_type == "poly"
@@ -26907,17 +26421,17 @@ class Compiler
       return tmp + " == 0"
     end
     if pt == "AlternationPatternNode"
-      left = compile_in_pattern(@nd_left[pat_id], tmp, pred_type)
-      right = compile_in_pattern(@nd_right[pat_id], tmp, pred_type)
+      left = compile_in_pattern(@node_store.node_left(pat_id), tmp, pred_type)
+      right = compile_in_pattern(@node_store.node_right(pat_id), tmp, pred_type)
       return "(" + left + " || " + right + ")"
     end
     "1"
   end
 
   def compile_return_stmt(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
       if arg_ids.length > 1
         # `return a, b [, c]` — materialize as a fixed-arity tuple struct.
         @needs_gc = 1
@@ -26983,8 +26497,8 @@ class Compiler
 
 
   def compile_call_stmt(nid)
-    mname = @nd_name[nid]
-    recv = @nd_receiver[nid]
+    mname = @node_store.node_name(nid)
+    recv = @node_store.node_receiver(nid)
 
     # define_method is handled at collection time, skip at runtime
     if mname == "define_method"
@@ -26995,8 +26509,8 @@ class Compiler
     #   Stage 1 (1 candidate): no emit; reads fold to that constant.
     #   Stage 2 (2+ candidates): emit `slot = SP_MOD_<X>;` so the
     #   read site's sentinel switch picks the right branch.
-    if mname.length > 1 && mname[mname.length - 1] == "=" && recv >= 0 && @nd_type[recv] == "ConstantReadNode"
-      mod_name = @nd_name[recv]
+    if mname.length > 1 && mname[mname.length - 1] == "=" && recv >= 0 && @node_store.node_type(recv) == "ConstantReadNode"
+      mod_name = @node_store.node_name(recv)
       if module_name_exists(mod_name) == 1
         accessor = mname[0, mname.length - 1]
         rconsts = module_acc_resolved(mod_name, accessor)
@@ -27006,11 +26520,11 @@ class Compiler
             return
           end
           # Stage 2: write the sentinel for the assigned module.
-          args_id2 = @nd_arguments[nid]
+          args_id2 = @node_store.node_arguments(nid)
           if args_id2 >= 0
-            ai = get_args(args_id2)
-            if ai.length > 0 && @nd_type[ai[0]] == "ConstantReadNode"
-              rhs = @nd_name[ai[0]]
+            ai = @node_store.get_args(args_id2)
+            if ai.length > 0 && @node_store.node_type(ai[0]) == "ConstantReadNode"
+              rhs = @node_store.node_name(ai[0])
               slot = "sp_module_" + mod_name + "_" + sanitize_name(accessor)
               emit("  " + slot + " = " + module_sentinel(rhs).to_s + ";")
               return
@@ -27071,8 +26585,8 @@ class Compiler
         return 1
       end
       if recv >= 0
-        if @nd_type[recv] == "GlobalVariableReadNode"
-          if @nd_name[recv] == "$stderr"
+        if @node_store.node_type(recv) == "GlobalVariableReadNode"
+          if @node_store.node_name(recv) == "$stderr"
             compile_stderr_puts(nid)
             return 1
           end
@@ -27088,16 +26602,16 @@ class Compiler
     # explicitly.
     if mname == "flush" && recv >= 0
       stream = ""
-      if @nd_type[recv] == "GlobalVariableReadNode"
-        if @nd_name[recv] == "$stdout"
+      if @node_store.node_type(recv) == "GlobalVariableReadNode"
+        if @node_store.node_name(recv) == "$stdout"
           stream = "stdout"
-        elsif @nd_name[recv] == "$stderr"
+        elsif @node_store.node_name(recv) == "$stderr"
           stream = "stderr"
         end
-      elsif @nd_type[recv] == "ConstantReadNode"
-        if @nd_name[recv] == "STDOUT"
+      elsif @node_store.node_type(recv) == "ConstantReadNode"
+        if @node_store.node_name(recv) == "STDOUT"
           stream = "stdout"
-        elsif @nd_name[recv] == "STDERR"
+        elsif @node_store.node_name(recv) == "STDERR"
           stream = "stderr"
         end
       end
@@ -27114,9 +26628,9 @@ class Compiler
     end
     if mname == "printf"
       if recv < 0
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length >= 1
             # First arg is format string
             fmt_expr = compile_expr(arg_ids[0])
@@ -27144,14 +26658,14 @@ class Compiler
     # File.open with block
     if mname == "open"
       if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          if @nd_name[recv] == "File"
-            if @nd_block[nid] >= 0
-              args_id = @nd_arguments[nid]
+        if @node_store.node_type(recv) == "ConstantReadNode"
+          if @node_store.node_name(recv) == "File"
+            if @node_store.node_block(nid) >= 0
+              args_id = @node_store.node_arguments(nid)
               path_expr = "\"\""
               mode_expr = "\"r\""
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 if arg_ids.length >= 1
                   path_expr = compile_expr(arg_ids[0])
                 end
@@ -27159,15 +26673,15 @@ class Compiler
                   mode_expr = compile_expr(arg_ids[1])
                 end
               end
-              blk = @nd_block[nid]
+              blk = @node_store.node_block(nid)
               bp = get_block_param(nid, 0)
               ftmp = new_temp
               emit("  { FILE *" + ftmp + " = fopen(" + path_expr + ", " + mode_expr + ");")
               emit("  if (" + ftmp + ") {")
               # Compile block body -- f.puts => fprintf, f.each_line => fgets loop
-              bbody = @nd_body[blk]
+              bbody = @node_store.node_body(blk)
               if bbody >= 0
-                bstmts = get_stmts(bbody)
+                bstmts = @node_store.get_stmts(bbody)
                 bk = 0
                 while bk < bstmts.length
                   compile_file_block_stmt(bstmts[bk], ftmp, bp)
@@ -27198,9 +26712,9 @@ class Compiler
     if mname == "store"
       if recv >= 0
         rt = infer_type(recv)
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length >= 2
             rc = compile_expr_gc_rooted(recv)
             val = compile_expr(aargs[1])
@@ -27269,9 +26783,9 @@ class Compiler
         if rt == "mutable_str"
           @needs_mutable_str = 1
           rc = compile_expr_gc_rooted(recv)
-          arg_id = @nd_arguments[nid]
+          arg_id = @node_store.node_arguments(nid)
           if arg_id >= 0
-            argl = parse_id_list(@nd_args[arg_id])
+            argl = @node_store.parse_id_list(@node_store.node_args(arg_id))
             if argl.length > 0
               at = infer_type(argl[0])
               val = compile_expr(argl[0])
@@ -27292,12 +26806,12 @@ class Compiler
           rc = compile_expr_gc_rooted(recv)
           val = compile_arg0(nid)
           # If receiver is a local variable, reassign
-          if @nd_type[recv] == "LocalVariableReadNode"
-            emit("  lv_" + @nd_name[recv] + " = sp_str_concat(lv_" + @nd_name[recv] + ", " + val + ");")
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            emit("  lv_" + @node_store.node_name(recv) + " = sp_str_concat(lv_" + @node_store.node_name(recv) + ", " + val + ");")
             return 1
           end
-          if @nd_type[recv] == "InstanceVariableReadNode"
-            emit("  " + self_arrow + sanitize_ivar(@nd_name[recv]) + " = sp_str_concat(self->" + sanitize_ivar(@nd_name[recv]) + ", " + val + ");")
+          if @node_store.node_type(recv) == "InstanceVariableReadNode"
+            emit("  " + self_arrow + sanitize_ivar(@node_store.node_name(recv)) + " = sp_str_concat(self->" + sanitize_ivar(@node_store.node_name(recv)) + ", " + val + ");")
             return 1
           end
         end
@@ -27312,9 +26826,9 @@ class Compiler
           rc = compile_expr_gc_rooted(recv)
           av = compile_arg0(nid)
           a0id = -1
-          args_id2 = @nd_arguments[nid]
+          args_id2 = @node_store.node_arguments(nid)
           if args_id2 >= 0
-            aargs2 = get_args(args_id2)
+            aargs2 = @node_store.get_args(args_id2)
             if aargs2.length > 0
               a0id = aargs2[0]
             end
@@ -27378,9 +26892,9 @@ class Compiler
         if rt == "mutable_str"
           @needs_mutable_str = 1
           rc = compile_expr_gc_rooted(recv)
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             ak = 0
             while ak < aargs.length
               emit("  sp_String_append(" + rc + ", " + compile_expr(aargs[ak]) + ");")
@@ -27404,12 +26918,12 @@ class Compiler
         end
         if rt == "string"
           val = compile_arg0(nid)
-          if @nd_type[recv] == "LocalVariableReadNode"
-            emit("  lv_" + @nd_name[recv] + " = " + val + ";")
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            emit("  lv_" + @node_store.node_name(recv) + " = " + val + ";")
             return 1
           end
-          if @nd_type[recv] == "InstanceVariableReadNode"
-            emit("  " + self_arrow + sanitize_ivar(@nd_name[recv]) + " = " + val + ";")
+          if @node_store.node_type(recv) == "InstanceVariableReadNode"
+            emit("  " + self_arrow + sanitize_ivar(@node_store.node_name(recv)) + " = " + val + ";")
             return 1
           end
         end
@@ -27460,12 +26974,12 @@ class Compiler
           return 1
         end
         if rt == "string"
-          if @nd_type[recv] == "LocalVariableReadNode"
-            emit("  lv_" + @nd_name[recv] + " = \"\";")
+          if @node_store.node_type(recv) == "LocalVariableReadNode"
+            emit("  lv_" + @node_store.node_name(recv) + " = \"\";")
             return 1
           end
-          if @nd_type[recv] == "InstanceVariableReadNode"
-            emit("  " + self_arrow + sanitize_ivar(@nd_name[recv]) + " = \"\";")
+          if @node_store.node_type(recv) == "InstanceVariableReadNode"
+            emit("  " + self_arrow + sanitize_ivar(@node_store.node_name(recv)) + " = \"\";")
             return 1
           end
         end
@@ -27504,9 +27018,9 @@ class Compiler
           av = compile_arg0(nid)
           # If pushing a lambda value, cast to mrb_int
           a0id = -1
-          args_id2 = @nd_arguments[nid]
+          args_id2 = @node_store.node_arguments(nid)
           if args_id2 >= 0
-            aargs2 = get_args(args_id2)
+            aargs2 = @node_store.get_args(args_id2)
             if aargs2.length > 0
               a0id = aargs2[0]
             end
@@ -27558,10 +27072,10 @@ class Compiler
           rot_pfx = "PolyArray"
         end
         if rot_pfx != ""
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           n_expr = "1"
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
               n_expr = compile_expr(aargs[0])
             end
@@ -27629,7 +27143,7 @@ class Compiler
   def compile_block_iteration_stmt(nid, mname, recv)
     # each with block
     if mname == "each" || (mname == "each_pair" && recv >= 0)
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         # For object types with yield-using each, use yield method call
         if recv >= 0
           ert = infer_type(recv)
@@ -27647,21 +27161,21 @@ class Compiler
     end
 
     if mname == "each_with_index"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_each_with_index_block(nid)
         return 1
       end
     end
 
     if mname == "each_slice"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_each_slice_block(nid)
         return 1
       end
     end
 
     if mname == "each_char"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
           rc = compile_expr_gc_rooted(recv)
@@ -27687,7 +27201,7 @@ class Compiler
           @indent = @indent + 1
           push_scope
           declare_var(bp, "string")
-          compile_stmts_body(@nd_body[@nd_block[nid]])
+          compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
           pop_scope
           @indent = @indent - 1
           emit("    " + tmp + " += " + cn_tmp + ";")
@@ -27698,7 +27212,7 @@ class Compiler
     end
 
     if mname == "each_byte"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
           rc = compile_expr_gc_rooted(recv)
@@ -27718,7 +27232,7 @@ class Compiler
           @indent = @indent + 1
           push_scope
           declare_var(bp, "int")
-          compile_stmts_body(@nd_body[@nd_block[nid]])
+          compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
           pop_scope
           @indent = @indent - 1
           emit("  }")
@@ -27728,7 +27242,7 @@ class Compiler
     end
 
     if mname == "each_line"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         rt = infer_type(recv)
         if rt == "string" || rt == "mutable_str"
           rc = compile_expr_gc_rooted(recv)
@@ -27749,7 +27263,7 @@ class Compiler
           @indent = @indent + 1
           push_scope
           declare_var(bp, "string")
-          compile_stmts_body(@nd_body[@nd_block[nid]])
+          compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
           pop_scope
           @indent = @indent - 1
           emit("  }")
@@ -27759,21 +27273,21 @@ class Compiler
     end
 
     if mname == "each_cons"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_each_cons_block(nid)
         return 1
       end
     end
 
     if mname == "each_with_object"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         compile_each_with_object_block(nid)
         return 1
       end
     end
 
     if mname == "zip"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         old = @in_loop
         @in_loop = 1
         rt = infer_type(recv)
@@ -27800,7 +27314,7 @@ class Compiler
         declare_var(bp2, elem_t)
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[@nd_block[nid]])
+        compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
         pop_redo_label
         pop_scope
         @indent = @indent - 1
@@ -27811,15 +27325,15 @@ class Compiler
     end
 
     if mname == "step"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         old = @in_loop
         @in_loop = 1
         rc = compile_expr_gc_rooted(recv)
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         limit_val = "0"
         step_val = "1"
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             limit_val = compile_expr(aargs[0])
           end
@@ -27847,7 +27361,7 @@ class Compiler
         declare_var(bp1, "int")
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[@nd_block[nid]])
+        compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
         pop_redo_label
         pop_scope
         @indent = @indent - 1
@@ -27861,7 +27375,7 @@ class Compiler
     end
 
     if mname == "cycle"
-      if @nd_block[nid] >= 0 && recv >= 0
+      if @node_store.node_block(nid) >= 0 && recv >= 0
         old = @in_loop
         @in_loop = 1
         rt = infer_type(recv)
@@ -27883,7 +27397,7 @@ class Compiler
         declare_var(bp1, et)
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[@nd_block[nid]])
+        compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
         pop_redo_label
         pop_scope
         @indent = @indent - 1
@@ -27895,12 +27409,12 @@ class Compiler
 
     # scan with block: str.scan(/re/) { |m| ... }
     if mname == "scan"
-      if @nd_block[nid] >= 0
-        recv = @nd_receiver[nid]
+      if @node_store.node_block(nid) >= 0
+        recv = @node_store.node_receiver(nid)
         if recv >= 0
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            argl = get_args(args_id)
+            argl = @node_store.get_args(args_id)
             if argl.length > 0
               ridx = find_regexp_index(argl[0])
               if ridx >= 0
@@ -27917,9 +27431,9 @@ class Compiler
                 emit("    const char *lv_" + bp + " = " + tmp_arr + "->data[" + tmp_i + "];")
                 push_scope
                 declare_var(bp, "string")
-                blk = @nd_block[nid]
-                if @nd_body[blk] >= 0
-                  compile_stmts_body(@nd_body[blk])
+                blk = @node_store.node_block(nid)
+                if @node_store.node_body(blk) >= 0
+                  compile_stmts_body(@node_store.node_body(blk))
                 end
                 pop_scope
                 emit("  }")
@@ -27933,19 +27447,19 @@ class Compiler
 
     # times/upto/downto with block
     if mname == "times"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_times_block(nid)
         return 1
       end
     end
     if mname == "upto"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_upto_block(nid)
         return 1
       end
     end
     if mname == "downto"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_downto_block(nid)
         return 1
       end
@@ -27953,13 +27467,13 @@ class Compiler
 
     # reduce/inject
     if mname == "reduce"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_reduce_block(nid)
         return 1
       end
     end
     if mname == "inject"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_reduce_block(nid)
         return 1
       end
@@ -27967,7 +27481,7 @@ class Compiler
 
     # reject
     if mname == "reject"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_reject_block(nid)
         return 1
       end
@@ -27975,14 +27489,14 @@ class Compiler
 
     # loop
     if mname == "loop"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         old = @in_loop
         @in_loop = 1
         emit("  while (1) {")
         @indent = @indent + 1
         redo_label = push_redo_label
         emit_redo_label(redo_label)
-        compile_stmts_body(@nd_body[@nd_block[nid]])
+        compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
         pop_redo_label
         @indent = @indent - 1
         emit("  }")
@@ -27998,21 +27512,21 @@ class Compiler
     if mname == "raise"
       if recv < 0
         @needs_setjmp = 1
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          arg_ids = get_args(args_id)
+          arg_ids = @node_store.get_args(args_id)
           if arg_ids.length >= 2
             # raise ClassName, "message" - use the message with class
-            if @nd_type[arg_ids[0]] == "ConstantReadNode"
-              emit("  sp_raise_cls(\"" + @nd_name[arg_ids[0]] + "\", " + compile_expr(arg_ids[1]) + ");")
+            if @node_store.node_type(arg_ids[0]) == "ConstantReadNode"
+              emit("  sp_raise_cls(\"" + @node_store.node_name(arg_ids[0]) + "\", " + compile_expr(arg_ids[1]) + ");")
             else
               emit("  sp_raise(" + compile_expr(arg_ids[1]) + ");")
             end
           else
             if arg_ids.length == 1
               # raise "message" or raise ClassName
-              if @nd_type[arg_ids[0]] == "ConstantReadNode"
-                emit("  sp_raise(\"" + @nd_name[arg_ids[0]] + "\");")
+              if @node_store.node_type(arg_ids[0]) == "ConstantReadNode"
+                emit("  sp_raise(\"" + @node_store.node_name(arg_ids[0]) + "\");")
               else
                 emit("  sp_raise(" + compile_expr(arg_ids[0]) + ");")
               end
@@ -28046,7 +27560,7 @@ class Compiler
     # catch/throw
     if mname == "catch"
       if recv < 0
-        if @nd_block[nid] >= 0
+        if @node_store.node_block(nid) >= 0
           compile_catch_stmt(nid)
           return 1
         end
@@ -28061,14 +27575,14 @@ class Compiler
 
     # File operations
     if recv >= 0
-      if @nd_type[recv] == "ConstantReadNode"
-        rcname = @nd_name[recv]
+      if @node_store.node_type(recv) == "ConstantReadNode"
+        rcname = @node_store.node_name(recv)
         if rcname == "File"
           if mname == "write"
-            args_id = @nd_arguments[nid]
+            args_id = @node_store.node_arguments(nid)
             arg_ids = []
             if args_id >= 0
-              arg_ids = get_args(args_id)
+              arg_ids = @node_store.get_args(args_id)
             end
             a0 = "0"
             a1 = "0"
@@ -28101,9 +27615,9 @@ class Compiler
     # abort — print message to stderr and exit(1)
     if mname == "abort"
       if recv < 0
-        args_id = @nd_arguments[nid]
+        args_id = @node_store.node_arguments(nid)
         if args_id >= 0
-          aargs = get_args(args_id)
+          aargs = @node_store.get_args(args_id)
           if aargs.length > 0
             msg = compile_expr(aargs[0])
             emit("  fputs(" + msg + ", stderr); fputc('\\n', stderr);")
@@ -28144,10 +27658,10 @@ class Compiler
               slot_t = cls_ivar_type(r_ci, "@" + bname)
               arg0_w = compile_arg0(nid)
               if slot_t == "poly"
-                args_id_w = @nd_arguments[nid]
+                args_id_w = @node_store.node_arguments(nid)
                 arg_t = "int"
                 if args_id_w >= 0
-                  arg_ids_w = get_args(args_id_w)
+                  arg_ids_w = @node_store.get_args(args_id_w)
                   if arg_ids_w.length > 0
                     arg_t = infer_type(arg_ids_w[0])
                   end
@@ -28164,7 +27678,7 @@ class Compiler
 
     # map with block
     if mname == "map"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_map_block(nid)
         return 1
       end
@@ -28172,7 +27686,7 @@ class Compiler
 
     # select with block
     if mname == "select"
-      if @nd_block[nid] >= 0
+      if @node_store.node_block(nid) >= 0
         compile_select_block(nid)
         return 1
       end
@@ -28246,18 +27760,18 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "CallNode"
-      mn = @nd_name[nid]
-      r = @nd_receiver[nid]
+      mn = @node_store.node_name(nid)
+      r = @node_store.node_receiver(nid)
       # f.puts "text"
       if mn == "puts"
         if r >= 0
-          if @nd_type[r] == "LocalVariableReadNode"
-            if @nd_name[r] == bp
-              args_id = @nd_arguments[nid]
+          if @node_store.node_type(r) == "LocalVariableReadNode"
+            if @node_store.node_name(r) == bp
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 if arg_ids.length >= 1
                   emit("  fprintf(" + ftmp + ", \"%s" + bsl_n + "\", " + compile_expr(arg_ids[0]) + ");")
                   return
@@ -28272,11 +27786,11 @@ class Compiler
       # f.print "text"
       if mn == "print"
         if r >= 0
-          if @nd_type[r] == "LocalVariableReadNode"
-            if @nd_name[r] == bp
-              args_id = @nd_arguments[nid]
+          if @node_store.node_type(r) == "LocalVariableReadNode"
+            if @node_store.node_name(r) == bp
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 if arg_ids.length >= 1
                   emit("  fputs(" + compile_expr(arg_ids[0]) + ", " + ftmp + ");")
                   return
@@ -28290,11 +27804,11 @@ class Compiler
       # f.write "text"
       if mn == "write"
         if r >= 0
-          if @nd_type[r] == "LocalVariableReadNode"
-            if @nd_name[r] == bp
-              args_id = @nd_arguments[nid]
+          if @node_store.node_type(r) == "LocalVariableReadNode"
+            if @node_store.node_name(r) == bp
+              args_id = @node_store.node_arguments(nid)
               if args_id >= 0
-                arg_ids = get_args(args_id)
+                arg_ids = @node_store.get_args(args_id)
                 if arg_ids.length >= 1
                   emit("  fputs(" + compile_expr(arg_ids[0]) + ", " + ftmp + ");")
                   return
@@ -28308,10 +27822,10 @@ class Compiler
       # f.each_line { |line| ... }
       if mn == "each_line"
         if r >= 0
-          if @nd_type[r] == "LocalVariableReadNode"
-            if @nd_name[r] == bp
-              if @nd_block[nid] >= 0
-                lblk = @nd_block[nid]
+          if @node_store.node_type(r) == "LocalVariableReadNode"
+            if @node_store.node_name(r) == bp
+              if @node_store.node_block(nid) >= 0
+                lblk = @node_store.node_block(nid)
                 lbp = get_block_param(nid, 0)
                 ltmp = new_temp
                 emit("  { char " + ltmp + "[4096];")
@@ -28320,9 +27834,9 @@ class Compiler
                 push_scope
                 declare_var(lbp, "string")
                 # Compile block body
-                lbbody = @nd_body[lblk]
+                lbbody = @node_store.node_body(lblk)
                 if lbbody >= 0
-                  lbs = get_stmts(lbbody)
+                  lbs = @node_store.get_stmts(lbbody)
                   lbk = 0
                   while lbk < lbs.length
                     compile_stmt(lbs[lbk])
@@ -28340,11 +27854,11 @@ class Compiler
     end
     # Handle control flow: while/if/unless with file block context
     if t == "WhileNode"
-      cond = @nd_predicate[nid]
+      cond = @node_store.node_predicate(nid)
       emit("  while (" + compile_expr(cond) + ") {")
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        bs = get_stmts(body)
+        bs = @node_store.get_stmts(body)
         bk = 0
         while bk < bs.length
           compile_file_block_stmt(bs[bk], ftmp, bp)
@@ -28355,20 +27869,20 @@ class Compiler
       return
     end
     if t == "IfNode"
-      cond = @nd_predicate[nid]
+      cond = @node_store.node_predicate(nid)
       emit("  if (" + compile_expr(cond) + ") {")
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        bs = get_stmts(body)
+        bs = @node_store.get_stmts(body)
         bk = 0
         while bk < bs.length
           compile_file_block_stmt(bs[bk], ftmp, bp)
           bk = bk + 1
         end
       end
-      if @nd_subsequent[nid] >= 0
+      if @node_store.node_subsequent(nid) >= 0
         emit("  } else {")
-        ebs = get_stmts(@nd_subsequent[nid])
+        ebs = @node_store.get_stmts(@node_store.node_subsequent(nid))
         ebk = 0
         while ebk < ebs.length
           compile_file_block_stmt(ebs[ebk], ftmp, bp)
@@ -28387,9 +27901,9 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LocalVariableReadNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       if not_in(vn, params) == 1
         if not_in(vn, locals) == 1
           if not_in(vn, free_vars) == 1
@@ -28403,18 +27917,18 @@ class Compiler
       # For nested lambdas, find their free vars and add them to OUR free vars
       # (they need to be captured transitively)
       inner_pname = ""
-      inner_params_id = @nd_parameters[nid]
+      inner_params_id = @node_store.node_parameters(nid)
       if inner_params_id >= 0
-        reqs = parse_id_list(@nd_requireds[inner_params_id])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(inner_params_id))
         if reqs.length > 0
-          inner_pname = @nd_name[reqs[0]]
+          inner_pname = @node_store.node_name(reqs[0])
         end
       end
       inner_params = "".split(",")
       if inner_pname != ""
         inner_params.push(inner_pname)
       end
-      inner_body = @nd_body[nid]
+      inner_body = @node_store.node_body(nid)
       if inner_body >= 0
         inner_locals = "".split(",")
         inner_free = "".split(",")
@@ -28433,10 +27947,10 @@ class Compiler
     end
     # Collect local writes — scan expression first to detect reads before the write
     if t == "LocalVariableWriteNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       # Scan the RHS expression first (may contain reads of the same var)
-      if @nd_expression[nid] >= 0
-        scan_lambda_free_vars(@nd_expression[nid], params, locals, free_vars)
+      if @node_store.node_expression(nid) >= 0
+        scan_lambda_free_vars(@node_store.node_expression(nid), params, locals, free_vars)
       end
       if not_in(vn, locals) == 1
         if not_in(vn, params) == 1
@@ -28454,56 +27968,56 @@ class Compiler
       return
     end
     # Recurse
-    if @nd_body[nid] >= 0
-      scan_lambda_free_vars(@nd_body[nid], params, locals, free_vars)
+    if @node_store.node_body(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_body(nid), params, locals, free_vars)
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       scan_lambda_free_vars(stmts[k], params, locals, free_vars)
       k = k + 1
     end
-    if @nd_expression[nid] >= 0
-      scan_lambda_free_vars(@nd_expression[nid], params, locals, free_vars)
+    if @node_store.node_expression(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_expression(nid), params, locals, free_vars)
     end
-    if @nd_left[nid] >= 0
-      scan_lambda_free_vars(@nd_left[nid], params, locals, free_vars)
+    if @node_store.node_left(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_left(nid), params, locals, free_vars)
     end
-    if @nd_right[nid] >= 0
-      scan_lambda_free_vars(@nd_right[nid], params, locals, free_vars)
+    if @node_store.node_right(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_right(nid), params, locals, free_vars)
     end
-    if @nd_receiver[nid] >= 0
-      scan_lambda_free_vars(@nd_receiver[nid], params, locals, free_vars)
+    if @node_store.node_receiver(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_receiver(nid), params, locals, free_vars)
     end
-    if @nd_arguments[nid] >= 0
-      scan_lambda_free_vars(@nd_arguments[nid], params, locals, free_vars)
+    if @node_store.node_arguments(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_arguments(nid), params, locals, free_vars)
     end
-    args = parse_id_list(@nd_args[nid])
+    args = @node_store.parse_id_list(@node_store.node_args(nid))
     k = 0
     while k < args.length
       scan_lambda_free_vars(args[k], params, locals, free_vars)
       k = k + 1
     end
-    if @nd_predicate[nid] >= 0
-      scan_lambda_free_vars(@nd_predicate[nid], params, locals, free_vars)
+    if @node_store.node_predicate(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_predicate(nid), params, locals, free_vars)
     end
-    if @nd_subsequent[nid] >= 0
-      scan_lambda_free_vars(@nd_subsequent[nid], params, locals, free_vars)
+    if @node_store.node_subsequent(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_subsequent(nid), params, locals, free_vars)
     end
-    if @nd_else_clause[nid] >= 0
-      scan_lambda_free_vars(@nd_else_clause[nid], params, locals, free_vars)
+    if @node_store.node_else_clause(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_else_clause(nid), params, locals, free_vars)
     end
-    if @nd_block[nid] >= 0
-      scan_lambda_free_vars(@nd_block[nid], params, locals, free_vars)
+    if @node_store.node_block(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_block(nid), params, locals, free_vars)
     end
-    elems = parse_id_list(@nd_elements[nid])
+    elems = @node_store.parse_id_list(@node_store.node_elements(nid))
     k = 0
     while k < elems.length
       scan_lambda_free_vars(elems[k], params, locals, free_vars)
       k = k + 1
     end
-    if @nd_collection[nid] >= 0
-      scan_lambda_free_vars(@nd_collection[nid], params, locals, free_vars)
+    if @node_store.node_collection(nid) >= 0
+      scan_lambda_free_vars(@node_store.node_collection(nid), params, locals, free_vars)
     end
   end
 
@@ -28513,25 +28027,25 @@ class Compiler
     }
     # Also check: h = method_call() where method returns lambda
     stmts.each { |sid|
-      if @nd_type[sid] == "LocalVariableWriteNode"
-        vn = @nd_name[sid]
-        expr = @nd_expression[sid]
-        if expr >= 0 && @nd_type[expr] == "CallNode"
+      if @node_store.node_type(sid) == "LocalVariableWriteNode"
+        vn = @node_store.node_name(sid)
+        expr = @node_store.node_expression(sid)
+        if expr >= 0 && @node_store.node_type(expr) == "CallNode"
           call_ret = infer_type(expr)
           if call_ret == "lambda"
             # Find the method and its lambda return
-            mn = @nd_name[expr]
+            mn = @node_store.node_name(expr)
             mi = find_method_idx(mn)
             if mi >= 0
               bid = @meth_body_ids[mi]
               if bid >= 0
-                mbs = get_stmts(bid)
+                mbs = @node_store.get_stmts(bid)
                 if mbs.length > 0
                   last = mbs.last
-                  if @nd_type[last] == "LambdaNode"
-                    lbody = @nd_body[last]
+                  if @node_store.node_type(last) == "LambdaNode"
+                    lbody = @node_store.node_body(last)
                     if lbody >= 0
-                      lbs = get_stmts(lbody)
+                      lbs = @node_store.get_stmts(lbody)
                       if lbs.length > 0
                         lrt = infer_type(lbs.last)
                         if not_in(vn, @lambda_var_ret_names) == 1
@@ -28554,14 +28068,14 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LocalVariableWriteNode"
-      vn = @nd_name[nid]
-      expr = @nd_expression[nid]
-      if expr >= 0 && @nd_type[expr] == "LambdaNode"
-        lbody = @nd_body[expr]
+      vn = @node_store.node_name(nid)
+      expr = @node_store.node_expression(nid)
+      if expr >= 0 && @node_store.node_type(expr) == "LambdaNode"
+        lbody = @node_store.node_body(expr)
         if lbody >= 0
-          lbs = get_stmts(lbody)
+          lbs = @node_store.get_stmts(lbody)
           if lbs.length > 0
             lrt = infer_type(lbs.last)
             if not_in(vn, @lambda_var_ret_names) == 1
@@ -28575,18 +28089,18 @@ class Compiler
     end
     # Scan into method bodies to find lambdas returned from methods
     if t == "DefNode"
-      if @nd_body[nid] >= 0
-        scan_lambda_ret_types_node(@nd_body[nid])
+      if @node_store.node_body(nid) >= 0
+        scan_lambda_ret_types_node(@node_store.node_body(nid))
       end
       return
     end
-    if @nd_body[nid] >= 0
-      scan_lambda_ret_types_node(@nd_body[nid])
+    if @node_store.node_body(nid) >= 0
+      scan_lambda_ret_types_node(@node_store.node_body(nid))
     end
-    if @nd_expression[nid] >= 0
-      scan_lambda_ret_types_node(@nd_expression[nid])
+    if @node_store.node_expression(nid) >= 0
+      scan_lambda_ret_types_node(@node_store.node_expression(nid))
     end
-    ss = parse_id_list(@nd_stmts[nid])
+    ss = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < ss.length
       scan_lambda_ret_types_node(ss[k])
@@ -28646,9 +28160,9 @@ class Compiler
     if nid < 0
       return "&sp_lam_nil_val"
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LocalVariableReadNode"
-      vn = @nd_name[nid]
+      vn = @node_store.node_name(nid)
       # Check param
       if not_in(vn, params) == 0
         return "lv_" + vn
@@ -28673,8 +28187,8 @@ class Compiler
       return "lv_" + vn
     end
     if t == "LocalVariableWriteNode"
-      vn = @nd_name[nid]
-      val = compile_lambda_body_expr(@nd_expression[nid], params, captures)
+      vn = @node_store.node_name(nid)
+      val = compile_lambda_body_expr(@node_store.node_expression(nid), params, captures)
       # Check if capture
       ci = 0
       while ci < captures.length
@@ -28696,7 +28210,7 @@ class Compiler
       return "lv_" + vn
     end
     if t == "IntegerNode"
-      return "sp_lam_int(" + @nd_value[nid].to_s + ")"
+      return "sp_lam_int(" + @node_store.node_value(nid).to_s + ")"
     end
     if t == "TrueNode"
       return "sp_lam_bool(TRUE)"
@@ -28711,7 +28225,7 @@ class Compiler
       return "sp_lam_int(0)"
     end
     if t == "ConstantReadNode"
-      cname = @nd_name[nid]
+      cname = @node_store.node_name(nid)
       ci = find_const_idx(cname)
       if ci >= 0
         return "cst_" + cname
@@ -28722,15 +28236,15 @@ class Compiler
       return compile_lambda_expr(nid)
     end
     if t == "CallNode"
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       # f[arg] -> sp_lam_call(f, arg)
       if mname == "[]"
         if recv >= 0
           rc = compile_lambda_body_expr(recv, params, captures)
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
               ac = compile_lambda_body_expr(aargs.first, params, captures)
               return "sp_lam_call(" + rc + ", " + ac + ")"
@@ -28743,9 +28257,9 @@ class Compiler
       if mname == "call"
         if recv >= 0
           rc = compile_lambda_body_expr(recv, params, captures)
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             if aargs.length > 0
               ac = compile_lambda_body_expr(aargs.first, params, captures)
               return "sp_lam_call(" + rc + ", " + ac + ")"
@@ -28762,9 +28276,9 @@ class Compiler
         mi = find_method_idx(mname)
         if mi >= 0
           ca = ""
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id >= 0
-            aargs = get_args(args_id)
+            aargs = @node_store.get_args(args_id)
             k = 0
             while k < aargs.length
               if k > 0
@@ -28781,26 +28295,26 @@ class Compiler
       if mname == "+"
         if recv >= 0
           rc = compile_lambda_body_expr(recv, params, captures)
-          ac = compile_lambda_body_expr(get_args(@nd_arguments[nid])[0], params, captures)
+          ac = compile_lambda_body_expr(@node_store.get_args(@node_store.node_arguments(nid))[0], params, captures)
           return "sp_lam_int(sp_lam_to_int(" + rc + ") + sp_lam_to_int(" + ac + "))"
         end
       end
       return "&sp_lam_nil_val"
     end
     if t == "IfNode"
-      pred = compile_lambda_body_expr(@nd_predicate[nid], params, captures)
-      body = @nd_body[nid]
+      pred = compile_lambda_body_expr(@node_store.node_predicate(nid), params, captures)
+      body = @node_store.node_body(nid)
       bexpr = "&sp_lam_nil_val"
       if body >= 0
-        bs = get_stmts(body)
+        bs = @node_store.get_stmts(body)
         if bs.length > 0
           bexpr = compile_lambda_body_expr(bs.last, params, captures)
         end
       end
-      ec = @nd_else_clause[nid]
+      ec = @node_store.node_else_clause(nid)
       eexpr = "&sp_lam_nil_val"
       if ec >= 0
-        ebs = get_stmts(@nd_body[ec])
+        ebs = @node_store.get_stmts(@node_store.node_body(ec))
         if ebs.length > 0
           eexpr = compile_lambda_body_expr(ebs[ebs.length - 1], params, captures)
         end
@@ -28821,7 +28335,7 @@ class Compiler
     if at == "bool"
       return "sp_lam_bool(" + compile_expr(nid) + ")"
     end
-    if @nd_type[nid] == "NilNode"
+    if @node_store.node_type(nid) == "NilNode"
       return "&sp_lam_nil_val"
     end
     # Default: try to compile as expression
@@ -28832,11 +28346,11 @@ class Compiler
     @needs_lambda = 1
     # Get the parameter name
     pname = ""
-    params_id = @nd_parameters[nid]
+    params_id = @node_store.node_parameters(nid)
     if params_id >= 0
-      reqs = parse_id_list(@nd_requireds[params_id])
+      reqs = @node_store.parse_id_list(@node_store.node_requireds(params_id))
       if reqs.length > 0
-        pname = @nd_name[reqs[0]]
+        pname = @node_store.node_name(reqs[0])
       end
     end
     param_arr = "".split(",")
@@ -28844,7 +28358,7 @@ class Compiler
       param_arr.push(pname)
     end
 
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     # Find free variables (captures)
     free_vars = "".split(",")
     locals = "".split(",")
@@ -28904,7 +28418,7 @@ class Compiler
     # Get body expression
     bexpr = "&sp_lam_nil_val"
     if body >= 0
-      bs = get_stmts(body)
+      bs = @node_store.get_stmts(body)
       if bs.length > 0 && has_typed_caps == 1
         # Typed captures: compile body using regular compiler
         save_out = @out_lines
@@ -28963,7 +28477,7 @@ class Compiler
         end
         last = bs.last
         last_type = infer_type(last)
-        if @nd_type[last] == "LocalVariableWriteNode" || @nd_type[last] == "LocalVariableOperatorWriteNode"
+        if @node_store.node_type(last) == "LocalVariableWriteNode" || @node_store.node_type(last) == "LocalVariableOperatorWriteNode"
           compile_stmt(last)
         end
         last_val = compile_expr(last)
@@ -29124,7 +28638,7 @@ class Compiler
   end
 
   def compile_proc_literal(nid)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return "sp_proc_new(NULL, NULL, NULL)"
     end
@@ -29147,7 +28661,7 @@ class Compiler
     fname = "_sp_proc_fn_" + pid.to_s
     cap_name = "_proc_cap_" + pid.to_s
     cap_scan_name = "_proc_cap_scan_" + pid.to_s
-    bbody = @nd_body[blk]
+    bbody = @node_store.node_body(blk)
 
     # Detect captures (free variables that resolve in outer scope).
     # Every block param is in scope inside the body; only locals from
@@ -29200,18 +28714,18 @@ class Compiler
     bexpr = "0"
     body_stmts = ""
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
         k = 0
         while k < bs.length
           lt = infer_type(bs[k])
           if k == bs.length - 1
-            last_t = @nd_type[bs[k]]
+            last_t = @node_store.node_type(bs[k])
             if last_t == "LocalVariableWriteNode" || last_t == "LocalVariableOperatorWriteNode"
               compile_stmt(bs[k])
               body_stmts = @out_lines.join(10.chr) + 10.chr
               @out_lines = "".split(",")
-              bexpr = fiber_var_ref(@nd_name[bs[k]])
+              bexpr = fiber_var_ref(@node_store.node_name(bs[k]))
             elsif lt != "void"
               body_stmts = @out_lines.join(10.chr) + 10.chr
               @out_lines = "".split(",")
@@ -29349,13 +28863,13 @@ class Compiler
   end
 
   def compile_bracket_assign(nid)
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
     # Slice assignment `arr[i, n] = src`: replace n elements
     # starting at index i with the elements of src. Same-length
@@ -29494,15 +29008,15 @@ class Compiler
   # hash variants. Compound-assign on string arrays / poly hashes / str
   # hashes is rarely useful and would need per-type semantics.
   def compile_index_op_assign(nid)
-    recv = @nd_receiver[nid]
-    args_id = @nd_arguments[nid]
-    arg_ids = args_id >= 0 ? get_args(args_id) : []
+    recv = @node_store.node_receiver(nid)
+    args_id = @node_store.node_arguments(nid)
+    arg_ids = args_id >= 0 ? @node_store.get_args(args_id) : []
     return if arg_ids.length < 1
-    op = @nd_binop[nid]
+    op = @node_store.node_binop(nid)
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
-    val = compile_expr(@nd_expression[nid])
+    val = compile_expr(@node_store.node_expression(nid))
 
     if rt == "float_array" || rt == "int_array"
       pfx = array_c_prefix(rt)
@@ -29556,9 +29070,9 @@ class Compiler
   # The temp pattern matters when the receiver expression has side
   # effects (e.g. `next_holder().attr += 1`).
   def compile_call_assign_typed(nid, kind)
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     rt = infer_type(recv)
-    bname = @nd_name[nid]   # parser emits read_name as "name"
+    bname = @node_store.node_name(nid)   # parser emits read_name as "name"
     if rt.length <= 4 || rt[0, 4] != "obj_"
       $stderr.puts "Spinel: Call" + kind + "WriteNode requires a typed instance receiver with attr_accessor; got receiver type \"" + rt + "\""
       exit(1)
@@ -29570,13 +29084,13 @@ class Compiler
       exit(1)
     end
     rc = compile_expr_gc_rooted(recv)
-    val = compile_expr(@nd_expression[nid])
+    val = compile_expr(@node_store.node_expression(nid))
     tt = new_temp
     field = "iv_" + bname
     if kind == "Operator"
-      op = @nd_binop[nid]
+      op = @node_store.node_binop(nid)
       ivar_t = cls_ivar_type(ci, "@" + bname)
-      if op == "+" && ivar_t == "string" && infer_type(@nd_expression[nid]) == "string"
+      if op == "+" && ivar_t == "string" && infer_type(@node_store.node_expression(nid)) == "string"
         # String-valued attr with `+=` becomes sp_str_concat, mirroring
         # the LocalVariableOperatorWriteNode arm at line 21786.
         emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
@@ -29611,14 +29125,14 @@ class Compiler
   # exactly once, matching CRuby's `a[i] = a[i] && val` evaluation
   # order.
   def compile_index_and_assign(nid)
-    recv = @nd_receiver[nid]
-    args_id = @nd_arguments[nid]
-    arg_ids = args_id >= 0 ? get_args(args_id) : []
+    recv = @node_store.node_receiver(nid)
+    args_id = @node_store.node_arguments(nid)
+    arg_ids = args_id >= 0 ? @node_store.get_args(args_id) : []
     return if arg_ids.length < 1
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
-    # Note: defer compile_expr(@nd_expression[nid]) to inside each
+    # Note: defer compile_expr(node_expression) to inside each
     # if-branch so RHS side effects only fire when the get is truthy
     # (Ruby `&&=` short-circuit semantics).
 
@@ -29628,7 +29142,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
       emit("    if (sp_" + pfx + "_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_" + pfx + "_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29640,7 +29154,7 @@ class Compiler
       idx_s = compile_expr_as_string(arg_ids[0])
       emit("  { sp_StrIntHash *" + tt + " = " + rc + "; const char *" + ti + " = " + idx_s + ";")
       emit("    if (sp_StrIntHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_StrIntHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29651,7 +29165,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_IntStrHash *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
       emit("    if (sp_IntStrHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_IntStrHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29662,7 +29176,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_SymIntHash *" + tt + " = " + rc + "; sp_sym " + ti + " = " + idx + ";")
       emit("    if (sp_SymIntHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_SymIntHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29676,14 +29190,14 @@ class Compiler
   # test/global_var_or_write.rb). For string-valued slots (NULL
   # falsy, anything else truthy) the C and Ruby semantics agree.
   def compile_index_or_assign(nid)
-    recv = @nd_receiver[nid]
-    args_id = @nd_arguments[nid]
-    arg_ids = args_id >= 0 ? get_args(args_id) : []
+    recv = @node_store.node_receiver(nid)
+    args_id = @node_store.node_arguments(nid)
+    arg_ids = args_id >= 0 ? @node_store.get_args(args_id) : []
     return if arg_ids.length < 1
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
-    # Note: defer compile_expr(@nd_expression[nid]) to inside each
+    # Note: defer compile_expr(node_expression) to inside each
     # if-branch so RHS side effects only fire when the get is falsy
     # (Ruby `||=` short-circuit semantics).
 
@@ -29693,7 +29207,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
       emit("    if (!sp_" + pfx + "_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_" + pfx + "_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29705,7 +29219,7 @@ class Compiler
       idx_s = compile_expr_as_string(arg_ids[0])
       emit("  { sp_StrIntHash *" + tt + " = " + rc + "; const char *" + ti + " = " + idx_s + ";")
       emit("    if (!sp_StrIntHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_StrIntHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29716,7 +29230,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_IntStrHash *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
       emit("    if (!sp_IntStrHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_IntStrHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29727,7 +29241,7 @@ class Compiler
       ti = new_temp
       emit("  { sp_SymIntHash *" + tt + " = " + rc + "; sp_sym " + ti + " = " + idx + ";")
       emit("    if (!sp_SymIntHash_get(" + tt + ", " + ti + ")) {")
-      val = compile_expr(@nd_expression[nid])
+      val = compile_expr(@node_store.node_expression(nid))
       emit("      sp_SymIntHash_set(" + tt + ", " + ti + ", (" + val + "));")
       emit("    }")
       emit("  }")
@@ -29813,11 +29327,11 @@ class Compiler
   # falls back to puts-style output for types that don't yet (e.g.
   # user-defined classes, ranges, hashes).
   def compile_p(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     if arg_ids.length == 0
       return
     end
@@ -29869,12 +29383,12 @@ class Compiler
   end
 
   def compile_puts(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       emit("  putchar('" + bsl_n + "');")
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     if arg_ids.length == 0
       emit("  putchar('" + bsl_n + "');")
       return
@@ -29948,12 +29462,12 @@ class Compiler
   end
 
   def compile_stderr_puts(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       emit("  fputc('" + bsl_n + "', stderr);")
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     k = 0
     while k < arg_ids.length
       at = infer_type(arg_ids[k])
@@ -29968,19 +29482,19 @@ class Compiler
   end
 
   def compile_print(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     k = 0
     while k < arg_ids.length
       aid = arg_ids[k]
       # Detect x.chr pattern and use putchar for binary-safe output
-      if @nd_type[aid] == "CallNode"
-        if @nd_name[aid] == "chr"
-          if @nd_receiver[aid] >= 0
-            rchr = compile_expr(@nd_receiver[aid])
+      if @node_store.node_type(aid) == "CallNode"
+        if @node_store.node_name(aid) == "chr"
+          if @node_store.node_receiver(aid) >= 0
+            rchr = compile_expr(@node_store.node_receiver(aid))
             emit("  putchar((unsigned char)" + rchr + ");")
             k = k + 1
             next
@@ -30017,29 +29531,29 @@ class Compiler
   end
 
   def get_block_param(nid, idx)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return ""
     end
-    params = @nd_parameters[blk]
+    params = @node_store.node_parameters(blk)
     if params < 0
       return ""
     end
     # NumberedParametersNode ({ _1 + _2 }): params is the node itself,
-    # and @nd_value holds the maximum (1 for _1, 2 for _2, etc.).
-    if @nd_type[params] == "NumberedParametersNode"
-      if idx < @nd_value[params]
+    # and node_value holds the maximum (1 for _1, 2 for _2, etc.).
+    if @node_store.node_type(params) == "NumberedParametersNode"
+      if idx < @node_store.node_value(params)
         return "_" + (idx + 1).to_s
       end
       return ""
     end
-    inner = @nd_parameters[params]
+    inner = @node_store.node_parameters(params)
     if inner < 0
       return ""
     end
-    reqs = parse_id_list(@nd_requireds[inner])
+    reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
     if idx < reqs.length
-      return @nd_name[reqs[idx]]
+      return @node_store.node_name(reqs[idx])
     end
     ""
   end
@@ -30047,8 +29561,8 @@ class Compiler
   def compile_each_slice_block(nid)
     old = @in_loop
     @in_loop = 1
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     n = compile_arg0(nid)
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
@@ -30080,7 +29594,7 @@ class Compiler
     declare_var(bp1, rt)
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30091,8 +29605,8 @@ class Compiler
   def compile_each_cons_block(nid)
     old = @in_loop
     @in_loop = 1
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     n = compile_arg0(nid)
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
@@ -30122,7 +29636,7 @@ class Compiler
     declare_var(bp1, rt)
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30133,8 +29647,8 @@ class Compiler
   def compile_each_with_object_block(nid)
     old = @in_loop
     @in_loop = 1
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     # Bind the seed to an outer-scope temp so the expression form can
     # surface the final accumulator. CallNode seeds get GC-rooted by
     # compile_expr_gc_rooted; literal/local seeds rely on the caller
@@ -30142,9 +29656,9 @@ class Compiler
     obj_ct = "mrb_int"
     obj_t = "int"
     obj_arg_nid = -1
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      aargs = get_args(args_id)
+      aargs = @node_store.get_args(args_id)
       if aargs.length > 0
         obj_arg_nid = aargs[0]
         obj_t = infer_type(obj_arg_nid)
@@ -30178,7 +29692,7 @@ class Compiler
       declare_var(bp2, obj_t)
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30194,8 +29708,8 @@ class Compiler
   def compile_each_with_index_block(nid)
     old = @in_loop
     @in_loop = 1
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
     if bp1 == ""
@@ -30215,7 +29729,7 @@ class Compiler
     declare_var(bp2, "int")
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30227,9 +29741,9 @@ class Compiler
     old = @in_loop
     @in_loop = 1
     # Fuse hash.keys.each → direct order-array loop to avoid intermediate sp_IntArray allocation
-    recv_nid = @nd_receiver[nid]
-    if recv_nid >= 0 && @nd_type[recv_nid] == "CallNode" && @nd_name[recv_nid] == "keys"
-      hash_nid = @nd_receiver[recv_nid]
+    recv_nid = @node_store.node_receiver(nid)
+    if recv_nid >= 0 && @node_store.node_type(recv_nid) == "CallNode" && @node_store.node_name(recv_nid) == "keys"
+      hash_nid = @node_store.node_receiver(recv_nid)
       if hash_nid >= 0
         ht = infer_type(hash_nid)
         if ht == "int_str_hash" || ht == "str_int_hash" || ht == "str_str_hash" || ht == "sym_int_hash" || ht == "sym_str_hash" || ht == "sym_poly_hash" || ht == "str_poly_hash"
@@ -30276,7 +29790,7 @@ class Compiler
           end
           redo_label = push_redo_label
           emit_redo_label(redo_label)
-          compile_stmts_body(@nd_body[@nd_block[nid]])
+          compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
           pop_redo_label
           pop_scope
           @indent = @indent - 1
@@ -30286,8 +29800,8 @@ class Compiler
         end
       end
     end
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
     has_bp = 1
@@ -30310,7 +29824,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30329,7 +29843,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30343,12 +29857,12 @@ class Compiler
       # binds _1=1, _2=10 in Ruby. Trigger when the block uses
       # NumberedParametersNode with maximum >= 2 over an element that is
       # itself an array we know how to index.
-      blk = @nd_block[nid]
-      bp = blk >= 0 ? @nd_parameters[blk] : -1
+      blk = @node_store.node_block(nid)
+      bp = blk >= 0 ? @node_store.node_parameters(blk) : -1
       destruct_n = 0
-      if bp >= 0 && @nd_type[bp] == "NumberedParametersNode"
-        if @nd_value[bp] >= 2 && is_array_type(elem_type) == 1
-          destruct_n = @nd_value[bp]
+      if bp >= 0 && @node_store.node_type(bp) == "NumberedParametersNode"
+        if @node_store.node_value(bp) >= 2 && is_array_type(elem_type) == 1
+          destruct_n = @node_store.node_value(bp)
         end
       end
       emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_PtrArray_length(" + rc + "); " + tmp + "++) {")
@@ -30388,7 +29902,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30409,7 +29923,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30430,7 +29944,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30451,7 +29965,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30472,7 +29986,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30493,7 +30007,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30514,7 +30028,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30535,7 +30049,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30553,7 +30067,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30570,7 +30084,7 @@ class Compiler
       end
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      compile_stmts_body(@nd_body[@nd_block[nid]])
+      compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
       pop_redo_label
       pop_scope
       @indent = @indent - 1
@@ -30582,7 +30096,7 @@ class Compiler
   def compile_times_block(nid)
     old = @in_loop
     @in_loop = 1
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     tmp = new_temp
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < " + rc + "; " + tmp + "++) {")
@@ -30596,7 +30110,7 @@ class Compiler
     end
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30631,7 +30145,7 @@ class Compiler
   def compile_upto_block(nid)
     old = @in_loop
     @in_loop = 1
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     lim = compile_arg0(nid)
     bp1 = get_block_param(nid, 0)
     tmp = new_temp
@@ -30646,7 +30160,7 @@ class Compiler
     end
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30657,7 +30171,7 @@ class Compiler
   def compile_downto_block(nid)
     old = @in_loop
     @in_loop = 1
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     lim = compile_arg0(nid)
     bp1 = get_block_param(nid, 0)
     tmp = new_temp
@@ -30672,7 +30186,7 @@ class Compiler
     end
     redo_label = push_redo_label
     emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[@nd_block[nid]])
+    compile_stmts_body(@node_store.node_body(@node_store.node_block(nid)))
     pop_redo_label
     pop_scope
     @indent = @indent - 1
@@ -30684,8 +30198,8 @@ class Compiler
     # Execute block with receiver bound to block param, return receiver.
     # Open a C block so the param is a fresh local that shadows any
     # outer same-named lv_<bp> without clobbering its value or type.
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp = get_block_param(nid, 0)
     if bp == ""
       bp = "_x"
@@ -30697,10 +30211,10 @@ class Compiler
     @indent = @indent + 1
     push_scope
     declare_var(bp, rt)
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       k = 0
       while k < bs.length
         compile_stmt(bs[k])
@@ -30719,14 +30233,14 @@ class Compiler
     # same-named lv_<bp>. The block's last-expression value is funneled
     # through a result tmp declared in the enclosing scope so callers can
     # still consume it after the C block closes.
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp = get_block_param(nid, 0)
     if bp == ""
       bp = "_x"
     end
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
 
     # Peek at the last expression's type under the inner binding so the
     # result tmp is declared with the type that infer_type sees inside
@@ -30734,7 +30248,7 @@ class Compiler
     ret_t = "int"
     bs = []
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
         push_scope
         declare_var(bp, rt)
@@ -30802,10 +30316,10 @@ class Compiler
     emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     push_scope
     declare_var(bp1, iter_elem_type(recv_type))
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     bexpr = "0"
-    if @nd_body[blk] >= 0
-      bs = get_stmts(@nd_body[blk])
+    if @node_store.node_body(blk) >= 0
+      bs = @node_store.get_stmts(@node_store.node_body(blk))
       if bs.length > 0
         k = 0
         while k < bs.length - 1
@@ -30832,10 +30346,10 @@ class Compiler
     emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     push_scope
     declare_var(bp1, iter_elem_type(recv_type))
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     bexpr = "0"
-    if @nd_body[blk] >= 0
-      bs = get_stmts(@nd_body[blk])
+    if @node_store.node_body(blk) >= 0
+      bs = @node_store.get_stmts(@node_store.node_body(blk))
       if bs.length > 0
         k = 0
         while k < bs.length - 1
@@ -30873,10 +30387,10 @@ class Compiler
     emit("    " + bp_tmp + " = lv_" + bp1 + ";")
     push_scope
     declare_var(bp1, elem_type)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     bexpr = "0"
-    if @nd_body[blk] >= 0
-      bs = get_stmts(@nd_body[blk])
+    if @node_store.node_body(blk) >= 0
+      bs = @node_store.get_stmts(@node_store.node_body(blk))
       if bs.length > 0
         k = 0
         while k < bs.length - 1
@@ -30905,12 +30419,12 @@ class Compiler
     elem_t = iter_elem_type(recv_type)
     push_scope
     declare_var(bp1, elem_t)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     block_ret = "int"
     if blk >= 0
-      bbody = @nd_body[blk]
+      bbody = @node_store.node_body(blk)
       if bbody >= 0
-        bbs = get_stmts(bbody)
+        bbs = @node_store.get_stmts(bbody)
         if bbs.length > 0
           block_ret = infer_type(bbs.last)
         end
@@ -30933,9 +30447,9 @@ class Compiler
     @indent = @indent + 1
     bexpr = "0"
     if blk >= 0
-      bbody2 = @nd_body[blk]
+      bbody2 = @node_store.node_body(blk)
       if bbody2 >= 0
-        bs = get_stmts(bbody2)
+        bs = @node_store.get_stmts(bbody2)
         if bs.length > 0
           k = 0
           while k < bs.length - 1
@@ -30966,11 +30480,11 @@ class Compiler
     emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     push_scope
     declare_var(bp1, elem_type)
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
     bexpr = "0"
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
         k = 0
         while k < bs.length - 1
@@ -31002,11 +30516,11 @@ class Compiler
     emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     push_scope
     declare_var(bp1, iter_elem_type(recv_type))
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
     bexpr = "0"
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
         k = 0
         while k < bs.length - 1
@@ -31068,11 +30582,11 @@ class Compiler
     push_scope
     declare_var(bp1, "string")
     declare_var(bp2, val_type)
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
     bexpr = "0"
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
         # Emit all but last as stmts
         k = 0
@@ -31113,18 +30627,12 @@ class Compiler
     declare_var(bp2, val_type)
     itmp = new_temp
     # Compile block expression
-    blk = @nd_block[nid]
-    bbody = @nd_body[blk]
+    blk = @node_store.node_block(nid)
+    bbody = @node_store.node_body(blk)
     bexpr = "0"
-    blk_stmts = "".split(",")
     if bbody >= 0
-      bs = get_stmts(bbody)
+      bs = @node_store.get_stmts(bbody)
       if bs.length > 0
-        k = 0
-        while k < bs.length - 1
-          blk_stmts.push(bs[k].to_s)
-          k = k + 1
-        end
         bexpr = "PLACEHOLDER"
       end
     end
@@ -31135,7 +30643,7 @@ class Compiler
       emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
       emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
       if bbody >= 0
-        bs = get_stmts(bbody)
+        bs = @node_store.get_stmts(bbody)
         k = 0
         while k < bs.length - 1
           compile_stmt(bs[k])
@@ -31157,7 +30665,7 @@ class Compiler
       emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
       emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
       if bbody >= 0
-        bs = get_stmts(bbody)
+        bs = @node_store.get_stmts(bbody)
         k = 0
         while k < bs.length - 1
           compile_stmt(bs[k])
@@ -31179,7 +30687,7 @@ class Compiler
       emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
       emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
       if bbody >= 0
-        bs = get_stmts(bbody)
+        bs = @node_store.get_stmts(bbody)
         k = 0
         while k < bs.length - 1
           compile_stmt(bs[k])
@@ -31202,7 +30710,7 @@ class Compiler
       emit("    lv_" + bp1 + " = " + rc + "->order[" + itmp + "];")
       emit("    lv_" + bp2 + " = " + getter + "(" + rc + ", lv_" + bp1 + ");")
       if bbody >= 0
-        bs = get_stmts(bbody)
+        bs = @node_store.get_stmts(bbody)
         k = 0
         while k < bs.length - 1
           compile_stmt(bs[k])
@@ -31223,8 +30731,8 @@ class Compiler
 
   def compile_flat_map_expr(nid)
     # flat_map: for each element, block returns an array; concat all results
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
@@ -31241,12 +30749,12 @@ class Compiler
     end
     push_scope
     declare_var(bp1, elem_type)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     block_ret = "int_array"
     if blk >= 0
-      bbody = @nd_body[blk]
+      bbody = @node_store.node_body(blk)
       if bbody >= 0
-        bbs = get_stmts(bbody)
+        bbs = @node_store.get_stmts(bbody)
         if bbs.length > 0
           block_ret = infer_type(bbs.last)
         end
@@ -31267,9 +30775,9 @@ class Compiler
     emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx_src + "_length(" + rc + "); " + tmp_i + "++) {")
     emit("    lv_" + bp1 + " = sp_" + pfx_src + "_get(" + rc + ", " + tmp_i + ");")
     @indent = @indent + 1
-    bbody2 = @nd_body[blk]
+    bbody2 = @node_store.node_body(blk)
     if bbody2 >= 0
-      bbs2 = get_stmts(bbody2)
+      bbs2 = @node_store.get_stmts(bbody2)
       # Compile all but last statement
       k = 0
       while k < bbs2.length - 1
@@ -31311,21 +30819,21 @@ class Compiler
 
   def compile_map_expr(nid)
     # N.times.map { |i| ... } -> loop 0..N-1 building an array
-    recv_n = @nd_receiver[nid]
-    if recv_n >= 0 && @nd_type[recv_n] == "CallNode" && @nd_name[recv_n] == "times" && @nd_block[recv_n] < 0
+    recv_n = @node_store.node_receiver(nid)
+    if recv_n >= 0 && @node_store.node_type(recv_n) == "CallNode" && @node_store.node_name(recv_n) == "times" && @node_store.node_block(recv_n) < 0
       @needs_gc = 1
-      ncount = compile_expr(@nd_receiver[recv_n])
+      ncount = compile_expr(@node_store.node_receiver(recv_n))
       bpn = get_block_param(nid, 0)
       res_type = "int"
-      blk_n = @nd_block[nid]
+      blk_n = @node_store.node_block(nid)
       push_scope
       if bpn != ""
         declare_var(bpn, "int")
       end
       if blk_n >= 0
-        body_n = @nd_body[blk_n]
+        body_n = @node_store.node_body(blk_n)
         if body_n >= 0
-          stmts_n = get_stmts(body_n)
+          stmts_n = @node_store.get_stmts(body_n)
           if stmts_n.length > 0
             res_type = infer_type(stmts_n.last)
           end
@@ -31353,8 +30861,8 @@ class Compiler
       end
       @indent = @indent + 1
       if blk_n >= 0
-        body_n2 = @nd_body[blk_n]
-        stmts_n2 = body_n2 >= 0 ? get_stmts(body_n2) : []
+        body_n2 = @node_store.node_body(blk_n)
+        stmts_n2 = body_n2 >= 0 ? @node_store.get_stmts(body_n2) : []
         n_container = res_type == "string" ? "str_array" : (res_type == "float" ? "float_array" : "int_array")
         if stmts_n2.length > 0
           k = 0
@@ -31379,8 +30887,8 @@ class Compiler
       pop_scope
       return tmp_arrn
     end
-    rt = infer_type(@nd_receiver[nid])
-    rc_expr = compile_expr(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc_expr = compile_expr(@node_store.node_receiver(nid))
     # Store receiver in a temp to avoid re-evaluation
     rc_tmp = new_temp
     emit("  " + c_type(rt) + " " + rc_tmp + " = " + rc_expr + ";")
@@ -31399,11 +30907,11 @@ class Compiler
     # CallNode(recv=ParenthesesNode(stmt=RangeNode), name=map).
     if rt == "range"
       block_ret_r = "int"
-      blk_r = @nd_block[nid]
+      blk_r = @node_store.node_block(nid)
       if blk_r >= 0
-        body_r = @nd_body[blk_r]
+        body_r = @node_store.node_body(blk_r)
         if body_r >= 0
-          stmts_r = get_stmts(body_r)
+          stmts_r = @node_store.get_stmts(body_r)
           if stmts_r.length > 0
             block_ret_r = infer_type(stmts_r.last)
           end
@@ -31443,11 +30951,11 @@ class Compiler
       # by `rc` and conservatively treat the range as inclusive
       # (sp_Range doesn't track exclude_end at runtime; see the same
       # limitation at the .each / .step paths).
-      rng_id = @nd_receiver[nid]
-      while rng_id >= 0 && @nd_type[rng_id] == "ParenthesesNode"
-        body_pn = @nd_body[rng_id]
+      rng_id = @node_store.node_receiver(nid)
+      while rng_id >= 0 && @node_store.node_type(rng_id) == "ParenthesesNode"
+        body_pn = @node_store.node_body(rng_id)
         if body_pn >= 0
-          ps = get_stmts(body_pn)
+          ps = @node_store.get_stmts(body_pn)
           if ps.length > 0
             rng_id = ps.last
           else
@@ -31457,9 +30965,9 @@ class Compiler
           rng_id = -1
         end
       end
-      if rng_id >= 0 && @nd_type[rng_id] == "RangeNode"
-        first_e = compile_expr(@nd_left[rng_id])
-        last_e = compile_expr(@nd_right[rng_id])
+      if rng_id >= 0 && @node_store.node_type(rng_id) == "RangeNode"
+        first_e = compile_expr(@node_store.node_left(rng_id))
+        last_e = compile_expr(@node_store.node_right(rng_id))
         excl = range_excl_end(rng_id) == 1 ? "<" : "<="
       else
         rng_tmp = new_temp
@@ -31476,8 +30984,8 @@ class Compiler
       end
       @indent = @indent + 1
       if blk_r >= 0
-        body_r2 = @nd_body[blk_r]
-        stmts_r2 = body_r2 >= 0 ? get_stmts(body_r2) : []
+        body_r2 = @node_store.node_body(blk_r)
+        stmts_r2 = body_r2 >= 0 ? @node_store.get_stmts(body_r2) : []
         r_container = block_ret_r == "string" ? "str_array" : (block_ret_r == "float" ? "float_array" : "int_array")
         k_r = 0
         while k_r < stmts_r2.length - 1
@@ -31506,21 +31014,21 @@ class Compiler
       @needs_gc = 1
       bp_t = elem_type_of_array(rt)
       # Check if block param is used as lambda (elements are lambda pointers in IntArray)
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       bp_is_lambda = 0
       if blk >= 0
-        bp_is_lambda = param_used_as_lambda(bp1, @nd_body[blk])
+        bp_is_lambda = param_used_as_lambda(bp1, @node_store.node_body(blk))
       end
       # Also check if bp is passed to a function expecting lambda
       if bp_is_lambda == 0
         if blk >= 0
-          body2 = @nd_body[blk]
+          body2 = @node_store.node_body(blk)
           if body2 >= 0
-            stmts2 = get_stmts(body2)
+            stmts2 = @node_store.get_stmts(body2)
             k2 = 0
             while k2 < stmts2.length
-              if @nd_type[stmts2[k2]] == "CallNode"
-                cn2 = @nd_name[stmts2[k2]]
+              if @node_store.node_type(stmts2[k2]) == "CallNode"
+                cn2 = @node_store.node_name(stmts2[k2])
                 fmi2 = find_method_idx(cn2)
                 if fmi2 >= 0
                   fpt2 = @meth_param_types[fmi2].split(",")
@@ -31543,9 +31051,9 @@ class Compiler
       declare_var(bp1, bp_t)
       block_ret = "int"
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             block_ret = infer_type(stmts.last)
           end
@@ -31567,10 +31075,10 @@ class Compiler
           emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
         end
         @indent = @indent + 1
-        blk2 = @nd_block[nid]
+        blk2 = @node_store.node_block(nid)
         if blk2 >= 0
-          body3 = @nd_body[blk2]
-          stmts3 = body3 >= 0 ? get_stmts(body3) : []
+          body3 = @node_store.node_body(blk2)
+          stmts3 = body3 >= 0 ? @node_store.get_stmts(body3) : []
           if stmts3.length > 0
             last = stmts3[stmts3.length - 1]
             val = compile_expr(last)
@@ -31604,10 +31112,10 @@ class Compiler
           emit("    mrb_int lv_" + bp1 + " = sp_IntArray_get(" + rc + ", " + tmp_i + ");")
         end
         @indent = @indent + 1
-        blk2 = @nd_block[nid]
+        blk2 = @node_store.node_block(nid)
         if blk2 >= 0
-          body3 = @nd_body[blk2]
-          stmts3 = body3 >= 0 ? get_stmts(body3) : []
+          body3 = @node_store.node_body(blk2)
+          stmts3 = body3 >= 0 ? @node_store.get_stmts(body3) : []
           if stmts3.length > 0
             last = stmts3[stmts3.length - 1]
             val = compile_expr(last)
@@ -31634,11 +31142,11 @@ class Compiler
       push_scope
       declare_var(bp1, "string")
       block_ret = "string"
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             block_ret = infer_type(stmts.last)
           end
@@ -31656,8 +31164,8 @@ class Compiler
         emit("    const char *lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
         @indent = @indent + 1
         if blk >= 0
-          body3 = @nd_body[blk]
-          stmts3 = body3 >= 0 ? get_stmts(body3) : []
+          body3 = @node_store.node_body(blk)
+          stmts3 = body3 >= 0 ? @node_store.get_stmts(body3) : []
           if stmts3.length > 0
             k = 0
             while k < stmts3.length - 1
@@ -31683,8 +31191,8 @@ class Compiler
       emit("    const char *lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       if blk >= 0
-        body3 = @nd_body[blk]
-        stmts3 = body3 >= 0 ? get_stmts(body3) : []
+        body3 = @node_store.node_body(blk)
+        stmts3 = body3 >= 0 ? @node_store.get_stmts(body3) : []
         if stmts3.length > 0
           k = 0
           while k < stmts3.length - 1
@@ -31714,11 +31222,11 @@ class Compiler
       # matches infer_type's "poly_array" prediction for
       # poly_array.map with no expression in the block.
       block_ret_p = ""
-      blk_p = @nd_block[nid]
+      blk_p = @node_store.node_block(nid)
       if blk_p >= 0
-        body_p = @nd_body[blk_p]
+        body_p = @node_store.node_body(blk_p)
         if body_p >= 0
-          stmts_p = get_stmts(body_p)
+          stmts_p = @node_store.get_stmts(body_p)
           if stmts_p.length > 0
             block_ret_p = infer_type(stmts_p.last)
           end
@@ -31749,8 +31257,8 @@ class Compiler
       emit("    sp_RbVal lv_" + bp1 + " = sp_PolyArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       if blk_p >= 0
-        body_p2 = @nd_body[blk_p]
-        stmts_p2 = body_p2 >= 0 ? get_stmts(body_p2) : []
+        body_p2 = @node_store.node_body(blk_p)
+        stmts_p2 = body_p2 >= 0 ? @node_store.get_stmts(body_p2) : []
         p_container = (block_ret_p == "string") ? "str_array" : ((block_ret_p == "float") ? "float_array" : ((block_ret_p == "int" || block_ret_p == "bool") ? "int_array" : "poly_array"))
         k_p = 0
         while k_p < stmts_p2.length - 1
@@ -31791,11 +31299,11 @@ class Compiler
       # matches infer_type's prediction for ptr_array.map with no
       # expression in the block.
       block_ret_p = ""
-      blk_p = @nd_block[nid]
+      blk_p = @node_store.node_block(nid)
       if blk_p >= 0
-        body_p = @nd_body[blk_p]
+        body_p = @node_store.node_body(blk_p)
         if body_p >= 0
-          stmts_p = get_stmts(body_p)
+          stmts_p = @node_store.get_stmts(body_p)
           if stmts_p.length > 0
             block_ret_p = infer_type(stmts_p.last)
           end
@@ -31829,8 +31337,8 @@ class Compiler
       emit("    " + cast_t + " lv_" + bp1 + " = (" + cast_t + ")sp_PtrArray_get(" + rc + ", " + tmp_i + ");")
       @indent = @indent + 1
       if blk_p >= 0
-        body_p2 = @nd_body[blk_p]
-        stmts_p2 = body_p2 >= 0 ? get_stmts(body_p2) : []
+        body_p2 = @node_store.node_body(blk_p)
+        stmts_p2 = body_p2 >= 0 ? @node_store.get_stmts(body_p2) : []
         k_p = 0
         while k_p < stmts_p2.length - 1
           compile_stmt(stmts_p2[k_p])
@@ -31860,8 +31368,8 @@ class Compiler
   end
 
   def compile_select_expr(nid)
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
@@ -31878,11 +31386,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, bp_t)
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             cond = compile_expr(last)
@@ -31906,13 +31414,13 @@ class Compiler
     old = @in_loop
     @in_loop = 1
     @needs_gc = 1
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     # Hold on to the seed AST nid so we can `infer_type` it later for
     # the accumulator's inner-scope registration.
     seed_nid = -1
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      aargs = get_args(args_id)
+      aargs = @node_store.get_args(args_id)
       if aargs.length > 0
         seed_nid = aargs[0]
       end
@@ -31926,7 +31434,7 @@ class Compiler
     if bp2 == ""
       bp2 = "_x"
     end
-    rt = infer_type(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
     pfx = array_c_prefix(rt)
     elem_t = elem_type_of_array(rt)
     # bp1 takes the seed's type. Seed-less form is currently treated as
@@ -31972,11 +31480,11 @@ class Compiler
     push_scope
     declare_var(bp1, seed_t)
     declare_var(bp2, elem_t)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk >= 0
-      body = @nd_body[blk]
+      body = @node_store.node_body(blk)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         if stmts.length > 0
           last = stmts.last
           val = compile_expr(last)
@@ -31997,12 +31505,12 @@ class Compiler
   end
 
   def compile_reject_expr(nid)
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
     end
-    rt = infer_type(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
     if rt == "int_array" || rt == "sym_array"
       @needs_int_array = 1
       bp_t = elem_type_of_array(rt)
@@ -32014,11 +31522,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, bp_t)
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             cond = compile_expr(last)
@@ -32035,12 +31543,12 @@ class Compiler
   end
 
   def compile_reject_block(nid)
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
     end
-    rt = infer_type(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
     if rt == "int_array"
       @needs_int_array = 1
       tmp_arr = new_temp
@@ -32051,11 +31559,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, "int")
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             cond = compile_expr(last)
@@ -32070,11 +31578,11 @@ class Compiler
   end
 
   def compile_sprintf_call(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id < 0
       return "\"\""
     end
-    arg_ids = get_args(args_id)
+    arg_ids = @node_store.get_args(args_id)
     if arg_ids.length == 0
       return "\"\""
     end
@@ -32097,7 +31605,7 @@ class Compiler
   def compile_catch_expr(nid)
     @needs_setjmp = 1
     tag = compile_str_arg0(nid)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     tmp = new_temp
 
     emit("  mrb_int " + tmp + " = 0;")
@@ -32106,9 +31614,9 @@ class Compiler
     emit("  if (setjmp(sp_catch_stack[sp_catch_top-1]) == 0) {")
     @indent = @indent + 1
     if blk >= 0
-      body = @nd_body[blk]
+      body = @node_store.node_body(blk)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         # Compile all but last as statements
         k = 0
         while k < stmts.length - 1
@@ -32134,13 +31642,13 @@ class Compiler
     @needs_setjmp = 1
     # catch(:tag) do ... end
     tag = compile_str_arg0(nid)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     emit("  sp_catch_tag[sp_catch_top] = " + tag + ";")
     emit("  sp_catch_top++;")
     emit("  if (setjmp(sp_catch_stack[sp_catch_top-1]) == 0) {")
     @indent = @indent + 1
     if blk >= 0
-      compile_stmts_body(@nd_body[blk])
+      compile_stmts_body(@node_store.node_body(blk))
     end
     @indent = @indent - 1
     emit("    sp_catch_top--;")
@@ -32151,10 +31659,10 @@ class Compiler
 
   def compile_throw_stmt(nid)
     @needs_setjmp = 1
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
     tag = "\"\""
     val = "0"
@@ -32169,14 +31677,14 @@ class Compiler
 
   def compile_begin_stmt(nid)
     @needs_setjmp = 1
-    has_rescue = @nd_rescue_clause[nid] >= 0
-    has_ensure = @nd_ensure_clause[nid] >= 0
+    has_rescue = @node_store.node_rescue_clause(nid) >= 0
+    has_ensure = @node_store.node_ensure_clause(nid) >= 0
 
     # Check if rescue body has retry
     has_retry = 0
-    rc = @nd_rescue_clause[nid]
+    rc = @node_store.node_rescue_clause(nid)
     if rc >= 0
-      if body_has_retry(@nd_body[rc]) == 1
+      if body_has_retry(@node_store.node_body(rc)) == 1
         has_retry = 1
       end
     end
@@ -32190,14 +31698,14 @@ class Compiler
       emit("  sp_exc_top++;")
       emit("  if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {")
       @indent = @indent + 1
-      compile_stmts_body(@nd_body[nid])
+      compile_stmts_body(@node_store.node_body(nid))
       @indent = @indent - 1
       emit("    sp_exc_top--;")
       if has_retry == 1
         emit("    break;")
       end
 
-      rc = @nd_rescue_clause[nid]
+      rc = @node_store.node_rescue_clause(nid)
       if rc >= 0
         emit("  } else {")
         emit("    sp_exc_top--;")
@@ -32208,7 +31716,7 @@ class Compiler
       end
       emit("  }")
     else
-      compile_stmts_body(@nd_body[nid])
+      compile_stmts_body(@node_store.node_body(nid))
     end
 
     if has_retry == 1
@@ -32217,17 +31725,17 @@ class Compiler
     end
 
     if has_ensure
-      ec = @nd_ensure_clause[nid]
+      ec = @node_store.node_ensure_clause(nid)
       if ec >= 0
-        compile_stmts_body(@nd_body[ec])
+        compile_stmts_body(@node_store.node_body(ec))
       end
     end
   end
 
   def compile_rescue_chain(rc, has_retry)
     # Check for exception type matching
-    exc_types = parse_id_list(@nd_exceptions[rc])
-    ref = @nd_reference[rc]
+    exc_types = @node_store.parse_id_list(@node_store.node_exceptions(rc))
+    ref = @node_store.node_reference(rc)
     has_type_check = 0
     if exc_types.length > 0
       has_type_check = 1
@@ -32238,21 +31746,21 @@ class Compiler
         if k > 0
           cond = cond + " || "
         end
-        cond = cond + "sp_exc_is_a((const char*)sp_last_exc_cls, \"" + @nd_name[exc_types[k]] + "\")"
+        cond = cond + "sp_exc_is_a((const char*)sp_last_exc_cls, \"" + @node_store.node_name(exc_types[k]) + "\")"
         k = k + 1
       end
       emit("  if (" + cond + ") {")
       @indent = @indent + 1
     end
     if ref >= 0
-      rname = @nd_name[ref]
+      rname = @node_store.node_name(ref)
       emit("  lv_" + rname + " = sp_exc_msg[sp_exc_top];")
     end
-    compile_rescue_body(@nd_body[rc], has_retry)
+    compile_rescue_body(@node_store.node_body(rc), has_retry)
     if has_type_check == 1
       @indent = @indent - 1
       # Check for subsequent rescue
-      sub = @nd_subsequent[rc]
+      sub = @node_store.node_subsequent(rc)
       if sub >= 0
         emit("  } else {")
         @indent = @indent + 1
@@ -32270,7 +31778,7 @@ class Compiler
     if nid < 0
       return
     end
-    stmts = get_stmts(nid)
+    stmts = @node_store.get_stmts(nid)
     k = 0
     while k < stmts.length
       compile_stmt(stmts[k])
@@ -32286,10 +31794,10 @@ class Compiler
     if nid < 0
       return 0
     end
-    if @nd_type[nid] == "RetryNode"
+    if @node_store.node_type(nid) == "RetryNode"
       return 1
     end
-    stmts = parse_id_list(@nd_stmts[nid])
+    stmts = @node_store.parse_id_list(@node_store.node_stmts(nid))
     k = 0
     while k < stmts.length
       if body_has_retry(stmts[k]) == 1
@@ -32297,13 +31805,13 @@ class Compiler
       end
       k = k + 1
     end
-    if @nd_body[nid] >= 0
-      if body_has_retry(@nd_body[nid]) == 1
+    if @node_store.node_body(nid) >= 0
+      if body_has_retry(@node_store.node_body(nid)) == 1
         return 1
       end
     end
-    if @nd_subsequent[nid] >= 0
-      if body_has_retry(@nd_subsequent[nid]) == 1
+    if @node_store.node_subsequent(nid) >= 0
+      if body_has_retry(@node_store.node_subsequent(nid)) == 1
         return 1
       end
     end
@@ -32311,10 +31819,10 @@ class Compiler
   end
 
   def compile_yield_stmt(nid)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     emitted = "".split(",")
     if args_id >= 0
-      aids = get_args(args_id)
+      aids = @node_store.get_args(args_id)
       k = 0
       while k < aids.length
         emitted.push(compile_expr(aids[k]))
@@ -32332,30 +31840,30 @@ class Compiler
   def compile_yield_call_stmt(nid, mi)
     # Call a yield-using top-level function with a block
     # Inline the function body, replacing yield with block body
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return
     end
 
     # Get block params
     bp_names = "".split(",")
-    bp = @nd_parameters[blk]
+    bp = @node_store.node_parameters(blk)
     if bp >= 0
-      inner = @nd_parameters[bp]
+      inner = @node_store.node_parameters(bp)
       if inner >= 0
-        reqs = parse_id_list(@nd_requireds[inner])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
         k = 0
         while k < reqs.length
-          bp_names.push(@nd_name[reqs[k]])
+          bp_names.push(@node_store.node_name(reqs[k]))
           k = k + 1
         end
       end
     end
 
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
 
     # Declare and set the function's params as new temp vars
@@ -32404,7 +31912,7 @@ class Compiler
     # Compile function body, replacing yield with block body
     # and renaming function locals to temp names
     if bid >= 0
-      stmts = get_stmts(bid)
+      stmts = @node_store.get_stmts(bid)
       k = 0
       while k < stmts.length
         compile_stmt_with_block(stmts[k], blk, bp_names, param_map_from, param_map_to)
@@ -32417,13 +31925,13 @@ class Compiler
     if nid < 0
       return
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "YieldNode"
       # Replace yield with the block body
-      args_id = @nd_arguments[nid]
+      args_id = @node_store.node_arguments(nid)
       assigned = 0
       if args_id >= 0
-        aids = get_args(args_id)
+        aids = @node_store.get_args(args_id)
         k = 0
         while k < aids.length
           if k < bp_names.length
@@ -32441,9 +31949,9 @@ class Compiler
         emit("  lv_" + bp_names[assigned] + " = 0;")
         assigned = assigned + 1
       end
-      body = @nd_body[blk]
+      body = @node_store.node_body(blk)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         sk = 0
         while sk < stmts.length
           compile_stmt(stmts[sk])
@@ -32453,17 +31961,17 @@ class Compiler
       return
     end
     if t == "LocalVariableWriteNode"
-      lname = @nd_name[nid]
+      lname = @node_store.node_name(nid)
       rname = remap_local(lname, map_from, map_to)
-      val = compile_expr_remap(@nd_expression[nid], map_from, map_to)
+      val = compile_expr_remap(@node_store.node_expression(nid), map_from, map_to)
       emit("  lv_" + rname + " = " + val + ";")
       return
     end
     if t == "LocalVariableOperatorWriteNode"
-      lname = @nd_name[nid]
+      lname = @node_store.node_name(nid)
       rname = remap_local(lname, map_from, map_to)
-      op = @nd_binop[nid]
-      val = compile_expr_remap(@nd_expression[nid], map_from, map_to)
+      op = @node_store.node_binop(nid)
+      val = compile_expr_remap(@node_store.node_expression(nid), map_from, map_to)
       if op == "+"
         emit("  lv_" + rname + " += " + val + ";")
       end
@@ -32478,14 +31986,14 @@ class Compiler
     if t == "WhileNode"
       old = @in_loop
       @in_loop = 1
-      cond = compile_expr_remap(@nd_predicate[nid], map_from, map_to)
+      cond = compile_expr_remap(@node_store.node_predicate(nid), map_from, map_to)
       emit("  while (" + cond + ") {")
       @indent = @indent + 1
       redo_label = push_redo_label
       emit_redo_label(redo_label)
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         sk = 0
         while sk < stmts.length
           compile_stmt_with_block(stmts[sk], blk, bp_names, map_from, map_to)
@@ -32499,12 +32007,12 @@ class Compiler
       return
     end
     if t == "IfNode"
-      cond = compile_expr_remap(@nd_predicate[nid], map_from, map_to)
+      cond = compile_expr_remap(@node_store.node_predicate(nid), map_from, map_to)
       emit("  if (" + cond + ") {")
       @indent = @indent + 1
-      body = @nd_body[nid]
+      body = @node_store.node_body(nid)
       if body >= 0
-        stmts = get_stmts(body)
+        stmts = @node_store.get_stmts(body)
         sk = 0
         while sk < stmts.length
           compile_stmt_with_block(stmts[sk], blk, bp_names, map_from, map_to)
@@ -32512,14 +32020,14 @@ class Compiler
         end
       end
       @indent = @indent - 1
-      sub = @nd_subsequent[nid]
+      sub = @node_store.node_subsequent(nid)
       if sub >= 0
-        if @nd_type[sub] == "ElseNode"
+        if @node_store.node_type(sub) == "ElseNode"
           emit("  } else {")
           @indent = @indent + 1
-          eb = @nd_body[sub]
+          eb = @node_store.node_body(sub)
           if eb >= 0
-            estmts = get_stmts(eb)
+            estmts = @node_store.get_stmts(eb)
             sk = 0
             while sk < estmts.length
               compile_stmt_with_block(estmts[sk], blk, bp_names, map_from, map_to)
@@ -32538,15 +32046,15 @@ class Compiler
     end
     if t == "CallNode"
       # Check if block_given? with remap
-      if @nd_name[nid] == "block_given?"
-        if @nd_receiver[nid] < 0
+      if @node_store.node_name(nid) == "block_given?"
+        if @node_store.node_receiver(nid) < 0
           # In inlined context, block IS given, do nothing
           return
         end
       end
       # Handle nested each/times with yield inside block
-      if @nd_block[nid] >= 0
-        mname2 = @nd_name[nid]
+      if @node_store.node_block(nid) >= 0
+        mname2 = @node_store.node_name(nid)
         if mname2 == "each"
           # Compile the each loop, but inside the block body, recurse with yield replacement
           compile_each_with_yield_inline(nid, blk, bp_names, map_from, map_to)
@@ -32587,34 +32095,34 @@ class Compiler
     if nid < 0
       return "0"
     end
-    t = @nd_type[nid]
+    t = @node_store.node_type(nid)
     if t == "LocalVariableReadNode"
-      rname = remap_local(@nd_name[nid], map_from, map_to)
+      rname = remap_local(@node_store.node_name(nid), map_from, map_to)
       return "lv_" + rname
     end
     if t == "InstanceVariableReadNode"
       # Remap self to the _yself variable
       self_name = remap_local("_self_", map_from, map_to)
-      return self_name + "->" + sanitize_ivar(@nd_name[nid])
+      return self_name + "->" + sanitize_ivar(@node_store.node_name(nid))
     end
     if t == "SelfNode"
       return remap_local("_self_", map_from, map_to)
     end
     if t == "CallNode"
-      if @nd_name[nid] == "block_given?"
-        if @nd_receiver[nid] < 0
+      if @node_store.node_name(nid) == "block_given?"
+        if @node_store.node_receiver(nid) < 0
           return "1"
         end
       end
       # For operators with remapped locals
-      mname = @nd_name[nid]
-      recv = @nd_receiver[nid]
+      mname = @node_store.node_name(nid)
+      recv = @node_store.node_receiver(nid)
       if recv >= 0
         if mname == "+"
           return "(" + compile_expr_remap(recv, map_from, map_to) + " + " + compile_expr_remap_arg0(nid, map_from, map_to) + ")"
         end
         if mname == "-"
-          args_id = @nd_arguments[nid]
+          args_id = @node_store.node_arguments(nid)
           if args_id < 0
             return "(-" + compile_expr_remap(recv, map_from, map_to) + ")"
           end
@@ -32654,9 +32162,9 @@ class Compiler
   end
 
   def compile_expr_remap_arg0(nid, map_from, map_to)
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
       if arg_ids.length > 0
         return compile_expr_remap(arg_ids[0], map_from, map_to)
       end
@@ -32699,7 +32207,7 @@ class Compiler
     @instance_eval_self_var = self_var
     @instance_eval_self_type = cname
     if body >= 0
-      stmts = get_stmts(body)
+      stmts = @node_store.get_stmts(body)
       k = 0
       while k < stmts.length
         compile_stmt(stmts[k])
@@ -32717,7 +32225,7 @@ class Compiler
   # compile_yield_method_call_stmt but simpler — the trampoline body
   # has no locals/params to remap.
   def compile_instance_eval_inlined_stmt(nid, recv)
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return
     end
@@ -32735,30 +32243,30 @@ class Compiler
     if @in_gc_scope == 1
       emit("  SP_GC_ROOT(" + self_var + ");")
     end
-    splice_block_with_self_rebound(@nd_body[blk], self_var, cname)
+    splice_block_with_self_rebound(@node_store.node_body(blk), self_var, cname)
   end
 
   def compile_yield_method_call_stmt(nid, cci, midx, mname)
     # Call a yield-using class method with a block - inline the method body
-    blk = @nd_block[nid]
+    blk = @node_store.node_block(nid)
     if blk < 0
       return
     end
     bp_names = "".split(",")
-    bp = @nd_parameters[blk]
+    bp = @node_store.node_parameters(blk)
     if bp >= 0
-      inner = @nd_parameters[bp]
+      inner = @node_store.node_parameters(bp)
       if inner >= 0
-        reqs = parse_id_list(@nd_requireds[inner])
+        reqs = @node_store.parse_id_list(@node_store.node_requireds(inner))
         k = 0
         while k < reqs.length
-          bp_names.push(@nd_name[reqs[k]])
+          bp_names.push(@node_store.node_name(reqs[k]))
           k = k + 1
         end
       end
     end
 
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     if recv < 0
       # Implicit self (bare `m { ... }` inside another method body
       # of the same class).
@@ -32798,10 +32306,10 @@ class Compiler
     map_from.push("_self_")
     map_to.push(rc)
 
-    args_id = @nd_arguments[nid]
+    args_id = @node_store.node_arguments(nid)
     arg_ids = []
     if args_id >= 0
-      arg_ids = get_args(args_id)
+      arg_ids = @node_store.get_args(args_id)
     end
 
     k = 0
@@ -32840,7 +32348,7 @@ class Compiler
 
     # Compile the method body inline with yield -> block body
     if bid >= 0
-      stmts = get_stmts(bid)
+      stmts = @node_store.get_stmts(bid)
       k = 0
       while k < stmts.length
         compile_stmt_with_block(stmts[k], blk, bp_names, map_from, map_to)
@@ -32854,13 +32362,13 @@ class Compiler
   def compile_each_with_yield_inline(nid, outer_blk, outer_bp_names, map_from, map_to)
     # An each call on an array inside an inlined yield function
     # The each block contains yield statements that should be replaced with outer block body
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     recv_expr = compile_expr_remap(recv, map_from, map_to)
     rt = infer_type(recv)
     # If recv is remapped, get the actual type
-    if @nd_type[recv] == "InstanceVariableReadNode"
+    if @node_store.node_type(recv) == "InstanceVariableReadNode"
       if @current_class_idx >= 0
-        rt = cls_ivar_type(@current_class_idx, @nd_name[recv])
+        rt = cls_ivar_type(@current_class_idx, @node_store.node_name(recv))
       end
     end
 
@@ -32882,20 +32390,20 @@ class Compiler
       redo_label = push_redo_label
       emit_redo_label(redo_label)
       # Compile inner block body, replacing yield with outer block body
-      inner_blk = @nd_block[nid]
+      inner_blk = @node_store.node_block(nid)
       if inner_blk >= 0
-        ibody = @nd_body[inner_blk]
+        ibody = @node_store.node_body(inner_blk)
         if ibody >= 0
-          istmts = get_stmts(ibody)
+          istmts = @node_store.get_stmts(ibody)
           sk = 0
           while sk < istmts.length
             # In the inner block, yield should be replaced with outer block body
             inner_nid = istmts[sk]
-            if @nd_type[inner_nid] == "YieldNode"
+            if @node_store.node_type(inner_nid) == "YieldNode"
               # yield x -> set outer bp from inner bp, then run outer block body
-              yargs = @nd_arguments[inner_nid]
+              yargs = @node_store.node_arguments(inner_nid)
               if yargs >= 0
-                yaids = get_args(yargs)
+                yaids = @node_store.get_args(yargs)
                 yk = 0
                 while yk < yaids.length
                   if yk < outer_bp_names.length
@@ -32904,9 +32412,9 @@ class Compiler
                   yk = yk + 1
                 end
               end
-              obody = @nd_body[outer_blk]
+              obody = @node_store.node_body(outer_blk)
               if obody >= 0
-                ostmts = get_stmts(obody)
+                ostmts = @node_store.get_stmts(obody)
                 ok = 0
                 while ok < ostmts.length
                   compile_stmt(ostmts[ok])
@@ -32933,19 +32441,19 @@ class Compiler
     old = @in_loop
     @in_loop = 1
     # N.times.map { |i| ... } -> build int_array with block body; param = index
-    recv = @nd_receiver[nid]
+    recv = @node_store.node_receiver(nid)
     times_recv = 0
     if recv >= 0
-      if @nd_type[recv] == "CallNode"
-        if @nd_name[recv] == "times"
-          if @nd_block[recv] < 0
+      if @node_store.node_type(recv) == "CallNode"
+        if @node_store.node_name(recv) == "times"
+          if @node_store.node_block(recv) < 0
             times_recv = 1
           end
         end
       end
     end
     if times_recv == 1
-      ncount = compile_expr(@nd_receiver[recv])
+      ncount = compile_expr(@node_store.node_receiver(recv))
       bpn = get_block_param(nid, 0)
       tmp_arrn = new_temp
       tmp_in = new_temp
@@ -32954,11 +32462,11 @@ class Compiler
         declare_var(bpn, "int")
       end
       res_type = "int"
-      blk_n = @nd_block[nid]
+      blk_n = @node_store.node_block(nid)
       if blk_n >= 0
-        body_n = @nd_body[blk_n]
+        body_n = @node_store.node_body(blk_n)
         if body_n >= 0
-          stmts_n = get_stmts(body_n)
+          stmts_n = @node_store.get_stmts(body_n)
           if stmts_n.length > 0
             res_type = infer_type(stmts_n.last)
           end
@@ -32978,9 +32486,9 @@ class Compiler
       end
       @indent = @indent + 1
       if blk_n >= 0
-        body_n2 = @nd_body[blk_n]
+        body_n2 = @node_store.node_body(blk_n)
         if body_n2 >= 0
-          stmts_n2 = get_stmts(body_n2)
+          stmts_n2 = @node_store.get_stmts(body_n2)
           if stmts_n2.length > 0
             k = 0
             while k < stmts_n2.length - 1
@@ -33004,8 +32512,8 @@ class Compiler
       @in_loop = old
       return
     end
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
@@ -33019,11 +32527,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, "int")
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             val = compile_expr(last)
@@ -33043,11 +32551,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, "string")
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             val = compile_expr(last)
@@ -33067,8 +32575,8 @@ class Compiler
     @needs_gc = 1
     old = @in_loop
     @in_loop = 1
-    rt = infer_type(@nd_receiver[nid])
-    rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    rt = infer_type(@node_store.node_receiver(nid))
+    rc = compile_expr_gc_rooted(@node_store.node_receiver(nid))
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
@@ -33083,11 +32591,11 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, bp_t)
-      blk = @nd_block[nid]
+      blk = @node_store.node_block(nid)
       if blk >= 0
-        body = @nd_body[blk]
+        body = @node_store.node_body(blk)
         if body >= 0
-          stmts = get_stmts(body)
+          stmts = @node_store.get_stmts(body)
           if stmts.length > 0
             last = stmts.last
             cond = compile_expr(last)
@@ -33106,7 +32614,7 @@ class Compiler
     if nid < 0
       return
     end
-    stmts = get_stmts(nid)
+    stmts = @node_store.get_stmts(nid)
     k = 0
     while k < stmts.length
       compile_stmt(stmts[k])
@@ -33121,7 +32629,7 @@ class Compiler
       end
       return
     end
-    stmts = get_stmts(body_id)
+    stmts = @node_store.get_stmts(body_id)
     if stmts.length == 0
       if return_type != "void"
         emit("  return " + c_return_default(return_type) + ";")
@@ -33135,47 +32643,47 @@ class Compiler
       i = i + 1
     end
     last = stmts.last
-    if @nd_type[last] == "ReturnNode"
+    if @node_store.node_type(last) == "ReturnNode"
       compile_return_stmt(last)
       return
     end
-    if @nd_type[last] == "IfNode"
+    if @node_store.node_type(last) == "IfNode"
       compile_if_return(last, return_type)
       return
     end
-    if @nd_type[last] == "CaseNode"
+    if @node_store.node_type(last) == "CaseNode"
       compile_case_return(last, return_type)
       return
     end
-    if @nd_type[last] == "WhileNode"
+    if @node_store.node_type(last) == "WhileNode"
       compile_while_stmt(last)
       if return_type != "void"
         emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
-    if @nd_type[last] == "YieldNode"
+    if @node_store.node_type(last) == "YieldNode"
       compile_yield_stmt(last)
       if return_type != "void"
         emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
-    if @nd_type[last] == "BeginNode"
+    if @node_store.node_type(last) == "BeginNode"
       compile_begin_stmt(last)
       if return_type != "void"
         emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
-    if @nd_type[last] == "CaseMatchNode"
+    if @node_store.node_type(last) == "CaseMatchNode"
       compile_case_match_return(last, return_type)
       return
     end
     # If last statement is a CallNode with a block, handle map/select as expressions
-    if @nd_type[last] == "CallNode"
-      if @nd_block[last] >= 0
-        lmname = @nd_name[last]
+    if @node_store.node_type(last) == "CallNode"
+      if @node_store.node_block(last) >= 0
+        lmname = @node_store.node_name(last)
         if lmname == "map"
           if return_type != "void"
             val = compile_map_expr(last)
@@ -33192,8 +32700,8 @@ class Compiler
         end
         if lmname == "sum"
           if return_type != "void"
-            rtype_sum = infer_type(@nd_receiver[last])
-            rc_sum = compile_expr(@nd_receiver[last])
+            rtype_sum = infer_type(@node_store.node_receiver(last))
+            rc_sum = compile_expr(@node_store.node_receiver(last))
             val = compile_array_sum_block(last, rc_sum, rtype_sum)
             emit("  return " + val + ";")
             return
@@ -33201,8 +32709,8 @@ class Compiler
         end
         if lmname == "count"
           if return_type != "void"
-            rtype_cnt = infer_type(@nd_receiver[last])
-            rc_cnt = compile_expr(@nd_receiver[last])
+            rtype_cnt = infer_type(@node_store.node_receiver(last))
+            rc_cnt = compile_expr(@node_store.node_receiver(last))
             val = compile_array_count_block(last, rc_cnt, rtype_cnt)
             emit("  return " + val + ";")
             return
@@ -33237,9 +32745,9 @@ class Compiler
       end
     end
     # For statement-like nodes as last expression, compile as stmt then return default
-    lt = @nd_type[last]
+    lt = @node_store.node_type(last)
     if lt == "CallNode"
-      lm = @nd_name[last]
+      lm = @node_store.node_name(last)
       if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "abort" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "update" || lm == "merge!" || lm == "store" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
         # The hardcoded list above is meant to catch builtin Array/Hash
         # mutators conventionally called for side-effect. But several of
@@ -33248,7 +32756,7 @@ class Compiler
         # call's value is the only correct behavior. If the receiver
         # resolves to a user class and that class defines a method with
         # the same name, treat the call as an ordinary expression.
-        last_recv = @nd_receiver[last]
+        last_recv = @node_store.node_receiver(last)
         is_user_method = 0
         if last_recv < 0
           if @current_class_idx >= 0
@@ -33301,21 +32809,21 @@ class Compiler
     if lt == "GlobalVariableWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return " + sanitize_gvar(@nd_name[last]) + ";")
+        emit("  return " + sanitize_gvar(@node_store.node_name(last)) + ";")
       end
       return
     end
     if lt == "LocalVariableWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return lv_" + @nd_name[last] + ";")
+        emit("  return lv_" + @node_store.node_name(last) + ";")
       end
       return
     end
     if lt == "LocalVariableOperatorWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return lv_" + @nd_name[last] + ";")
+        emit("  return lv_" + @node_store.node_name(last) + ";")
       end
       return
     end
@@ -33361,10 +32869,10 @@ class Compiler
   end
 
   def compile_if_return(nid, rt)
-    cond = compile_cond_expr(@nd_predicate[nid])
+    cond = compile_cond_expr(@node_store.node_predicate(nid))
     emit("  if (" + cond + ") {")
     @indent = @indent + 1
-    body = @nd_body[nid]
+    body = @node_store.node_body(nid)
     if body >= 0
       compile_body_return(body, rt)
     else
@@ -33373,12 +32881,12 @@ class Compiler
       end
     end
     @indent = @indent - 1
-    sub = @nd_subsequent[nid]
+    sub = @node_store.node_subsequent(nid)
     if sub >= 0
-      if @nd_type[sub] == "ElseNode"
+      if @node_store.node_type(sub) == "ElseNode"
         emit("  } else {")
         @indent = @indent + 1
-        eb = @nd_body[sub]
+        eb = @node_store.node_body(sub)
         if eb >= 0
           compile_body_return(eb, rt)
         else
@@ -33402,7 +32910,7 @@ class Compiler
   end
 
   def compile_case_match_return(nid, rt)
-    pred = @nd_predicate[nid]
+    pred = @node_store.node_predicate(nid)
     pred_type = infer_type(pred)
     pred_val = compile_expr(pred)
     tmp = new_temp
@@ -33419,29 +32927,29 @@ class Compiler
         end
       end
     end
-    conds = parse_id_list(@nd_conditions[nid])
+    conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
     k = 0
     while k < conds.length
       inid = conds[k]
-      if @nd_type[inid] == "InNode"
+      if @node_store.node_type(inid) == "InNode"
         kw = "if"
         if k > 0
           kw = "} else if"
         end
-        pat = @nd_pattern[inid]
+        pat = @node_store.node_pattern(inid)
         cond_str = compile_in_pattern(pat, tmp, pred_type)
         emit("  " + kw + " (" + cond_str + ") {")
         @indent = @indent + 1
-        compile_body_return(@nd_body[inid], rt)
+        compile_body_return(@node_store.node_body(inid), rt)
         @indent = @indent - 1
       end
       k = k + 1
     end
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_body_return(@nd_body[ec], rt)
+      compile_body_return(@node_store.node_body(ec), rt)
       @indent = @indent - 1
     end
     if conds.length > 0
@@ -33450,7 +32958,7 @@ class Compiler
   end
 
   def compile_case_return(nid, rt)
-    pred = @nd_predicate[nid]
+    pred = @node_store.node_predicate(nid)
     if pred >= 0
       pred_type = infer_type(pred)
       pred_val = compile_expr(pred)
@@ -33460,11 +32968,11 @@ class Compiler
       else
         emit("  mrb_int " + tmp + " = " + pred_val + ";")
       end
-      conds = parse_id_list(@nd_conditions[nid])
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         wid = conds[k]
-        if @nd_type[wid] == "WhenNode"
+        if @node_store.node_type(wid) == "WhenNode"
           kw = "if"
           if k > 0
             kw = "} else if"
@@ -33472,13 +32980,13 @@ class Compiler
           cond_str = compile_when_conds(wid, tmp, pred_type)
           emit("  " + kw + " (" + cond_str + ") {")
           @indent = @indent + 1
-          compile_body_return(@nd_body[wid], rt)
+          compile_body_return(@node_store.node_body(wid), rt)
           @indent = @indent - 1
         end
         k = k + 1
       end
     else
-      conds = parse_id_list(@nd_conditions[nid])
+      conds = @node_store.parse_id_list(@node_store.node_conditions(nid))
       k = 0
       while k < conds.length
         wid = conds[k]
@@ -33486,23 +32994,23 @@ class Compiler
         if k > 0
           kw = "} else if"
         end
-        wconds = parse_id_list(@nd_conditions[wid])
+        wconds = @node_store.parse_id_list(@node_store.node_conditions(wid))
         cexpr = "0"
         if wconds.length > 0
           cexpr = compile_expr(wconds.first)
         end
         emit("  " + kw + " (" + cexpr + ") {")
         @indent = @indent + 1
-        compile_body_return(@nd_body[wid], rt)
+        compile_body_return(@node_store.node_body(wid), rt)
         @indent = @indent - 1
         k = k + 1
       end
     end
-    ec = @nd_else_clause[nid]
+    ec = @node_store.node_else_clause(nid)
     if ec >= 0
       emit("  } else {")
       @indent = @indent + 1
-      compile_body_return(@nd_body[ec], rt)
+      compile_body_return(@node_store.node_body(ec), rt)
       @indent = @indent - 1
     end
     emit("  }")

@@ -30499,30 +30499,59 @@ class Compiler
       end
     else
       # RHS is a function call returning a typed array. Dispatch by
-      # the RHS's static type — IntArray default, but PolyArray when
-      # the inner is heterogeneous (optcarrots `@io_addr,
-      # @bg_pattern_lut_fetched, _ = @attr_lut[i]` where attr_lut
-      # elements are 3-tuples of mixed types).
+      # the RHS's static type so the temp's C type and the per-slot
+      # `_get` call match the runtime container — without this,
+      # `level0, level1 = float_arr_ptr_arr[i]` (float_array RHS)
+      # used to fall through to `sp_IntArray *` plus `sp_IntArray_get`
+      # while the actual `compile_expr(val_id)` emitted a
+      # `(sp_FloatArray *)` cast — the resulting `sp_IntArray * = (sp_FloatArray *)…`
+      # tripped -Wincompatible-pointer-types and read float bytes as ints.
       val_t_local = infer_type(val_id)
       @needs_gc = 1
       tmp = new_temp
+      tmp_c_type = "sp_IntArray *"
+      get_fn = "sp_IntArray_get"
+      val_t_for_target = "int"
+      ptr_array_elem_t = ""
       if val_t_local == "poly_array"
         @needs_rb_value = 1
-        emit("  sp_PolyArray *" + tmp + " = " + compile_expr(val_id) + ";")
+        tmp_c_type = "sp_PolyArray *"
+        get_fn = "sp_PolyArray_get"
+        val_t_for_target = "poly"
+      elsif val_t_local == "float_array"
+        @needs_float_array = 1
+        tmp_c_type = "sp_FloatArray *"
+        get_fn = "sp_FloatArray_get"
+        val_t_for_target = "float"
+      elsif val_t_local == "str_array"
+        @needs_str_array = 1
+        tmp_c_type = "sp_StrArray *"
+        get_fn = "sp_StrArray_get"
+        val_t_for_target = "string"
+      elsif val_t_local == "sym_array"
+        # sym_array is an IntArray internally (sp_sym = mrb_int);
+        # the per-element type is "symbol" so target slots that
+        # need a sym_id get one.
+        @needs_int_array = 1
+        val_t_for_target = "symbol"
+      elsif is_ptr_array_type(val_t_local) == 1
+        @needs_gc = 1
+        tmp_c_type = "sp_PtrArray *"
+        get_fn = "sp_PtrArray_get"
+        ptr_array_elem_t = ptr_array_elem_type(val_t_local)
+        val_t_for_target = ptr_array_elem_t
       else
         @needs_int_array = 1
-        emit("  sp_IntArray *" + tmp + " = " + compile_expr(val_id) + ";")
       end
+      emit("  " + tmp_c_type + " " + tmp + " = " + compile_expr(val_id) + ";")
       emit("  SP_GC_ROOT(" + tmp + ");")
       k = 0
       while k < targets.length
         tid = targets[k]
-        if val_t_local == "poly_array"
-          rhs = "sp_PolyArray_get(" + tmp + ", " + k.to_s + ")"
-          val_t_for_target = "poly"
+        if ptr_array_elem_t != ""
+          rhs = "((" + c_type(ptr_array_elem_t) + ")" + get_fn + "(" + tmp + ", " + k.to_s + "))"
         else
-          rhs = "sp_IntArray_get(" + tmp + ", " + k.to_s + ")"
-          val_t_for_target = "int"
+          rhs = get_fn + "(" + tmp + ", " + k.to_s + ")"
         end
         # Route ivar / local writes through emit_multi_write_target so
         # the box-when-slot-is-poly logic fires. Without boxing, an int
@@ -30550,7 +30579,7 @@ class Compiler
           end
           recv_t = infer_type(recv_id)
           recv_c = compile_expr(recv_id)
-          slot_expr = "sp_IntArray_get(" + tmp + ", " + k.to_s + ")"
+          slot_expr = rhs
           if recv_t.start_with?("obj_")
             cls_n = recv_t[4, recv_t.length - 4]
             ci_w = find_class_idx(cls_n)

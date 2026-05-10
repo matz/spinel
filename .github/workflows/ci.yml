@@ -61,6 +61,16 @@ jobs:
         # -j$(...) overlaps the per-test cc invocations.
         run: make -j$(getconf _NPROCESSORS_ONLN) test OPT=-O0
 
+      # End-to-end optcarrot integration test.  Linux only — no
+      # value in repeating it across compilers / on macOS, since
+      # the codegen output is the same and the runtime cost
+      # (~10s) is the same too.  Catches regressions in the
+      # `pack-for-spinel.rb` flow + Lan_Master.nes checksum 59662
+      # contract that the standalone `make test` doesn't cover.
+      - name: Run optcarrot integration test
+        if: matrix.os == 'ubuntu-latest' && matrix.cc == 'gcc'
+        run: make optcarrot
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats

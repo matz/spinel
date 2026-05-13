@@ -10800,6 +10800,28 @@ class Compiler
     "0"
   end
 
+  # Like compile_arg0, but coerces a poly arg to mrb_float through
+  # sp_poly_to_f, which dispatches on the runtime tag (INT->cast,
+  # FLT->v.f, etc.). Use at call sites that pass the arg directly to
+  # a C function expecting `mrb_float` (sp_FloatArray_sum's init,
+  # etc.). Without coercion, gcc rejects passing `sp_RbVal` to a
+  # `mrb_float` parameter; a tag-blind `(arg).v.f` would also misread
+  # the union for INT-tagged poly values.
+  def compile_arg0_as_float(nid)
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      arg_ids = get_args(args_id)
+      if arg_ids.length > 0
+        ce = compile_expr(arg_ids[0])
+        if infer_type(arg_ids[0]) == "poly"
+          return "sp_poly_to_f(" + ce + ")"
+        end
+        return ce
+      end
+    end
+    "0"
+  end
+
   # Like compile_arg0, but converts symbol-typed arg to const char *
   # (sp_sym_to_s wrap). Use for callsites that need a string key.
   def compile_str_arg0(nid)
@@ -15279,7 +15301,7 @@ class Compiler
         return "sp_IntArray_max(" + rc + ")"
       end
       if mname == "sum"
-        return "sp_IntArray_sum(" + rc + ")"
+        return "sp_IntArray_sum(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "to_a"
         return "sp_IntArray_dup(" + rc + ")"
@@ -15445,7 +15467,7 @@ class Compiler
         return "sp_FloatArray_max(" + rc + ")"
       end
       if mname == "sum"
-        return "sp_FloatArray_sum(" + rc + ")"
+        return "sp_FloatArray_sum(" + rc + ", " + compile_arg0_as_float(nid) + ")"
       end
       if mname == "first"
         return "sp_FloatArray_get(" + rc + ", 0)"
@@ -26714,7 +26736,11 @@ class Compiler
     end
     tmp_sum = new_temp
     tmp_i = new_temp
-    emit("  mrb_int " + tmp_sum + " = 0;")
+    if recv_type == "float_array"
+      emit("  mrb_float " + tmp_sum + " = " + compile_arg0_as_float(nid) + ";")
+    else
+      emit("  mrb_int " + tmp_sum + " = " + compile_arg0_as_int(nid) + ";")
+    end
     emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     push_scope
     declare_var(bp1, iter_elem_type(recv_type))

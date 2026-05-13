@@ -18494,12 +18494,42 @@ class Compiler
           this_rt = cls_method_return(i, mname)
           rhs = box_val_to_poly(call_expr, this_rt)
         end
+ # Suppress user-class arms whose param-slot types are
+ # incompatible with the dispatch-site arg types — when the
+ # box/unbox logic above can't bridge them. E.g. `sub.fetch(
+ # "title", "")` dispatched at a site where `sub` may be a
+ # FlashLike whose `fetch(key, default)` has `key: mrb_int`
+ # (committed by sym-only direct callers) — the String "title"
+ # can't be cast to `mrb_int` without a runtime sym lookup, and
+ # the receiver in any source-level-valid path is a Hash, never
+ # FlashLike, so the arm is unreachable at runtime. Parallels
+ # the `narrowed_int_idx` skip below.
+        arm_incompat = 0
+        pk_chk = 0
+        while pk_chk < arm_ptypes.length && pk_chk < arg_compiled.length && pk_chk < arg_types.length
+          at_b = base_type(arg_types[pk_chk])
+          pt_b = base_type(arm_ptypes[pk_chk])
+          if at_b != "" && pt_b != "" && at_b != "poly" && pt_b != "poly" && at_b != pt_b
+ # int/symbol/bool all lower to mrb_int — compatible.
+            if (at_b == "int" && pt_b == "symbol") || (at_b == "symbol" && pt_b == "int") ||
+               (at_b == "int" && pt_b == "bool")   || (at_b == "bool"   && pt_b == "int")
+ # compatible
+            else
+              arm_incompat = 1
+            end
+          end
+          pk_chk = pk_chk + 1
+        end
  # Narrowed `[]` arms (Approach 2): suppress user-class arms
  # whose `[]` doesn't return int — the dead-code emit would
  # otherwise assign e.g. a string to the now-mrb_int result
  # temp and fail the C compile. The runtime can't reach these
  # arms anyway because the observation set narrowed past them.
-        if narrowed_int_idx == 1 && cls_method_return(i, mname) != "int"
+        if arm_incompat == 1
+ # skip — runtime can't reach this arm in a source-level-valid
+ # path because the dispatch-site arg types preclude the user
+ # class as the actual receiver.
+        elsif narrowed_int_idx == 1 && cls_method_return(i, mname) != "int"
  # skip
         else
           emit("    if (" + recv_tmp + ".cls_id == " + cls_id_for_user_internal(i).to_s + ") " + tmp + " = " + rhs + ";")

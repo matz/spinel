@@ -18106,6 +18106,18 @@ class Compiler
       @needs_rb_value = 1
       return "poly"
     end
+ # `fetch` on a poly recv: runtime cls_id picks between user-class
+ # `fetch` arms and built-in Hash-variant arms (StrIntHash /
+ # StrStrHash / StrPolyHash). Each arm's value type differs (int /
+ # string / poly) so the result temp must be sp_RbVal — without
+ # widening, the temp's static C type comes from the first user
+ # class's `fetch` return (e.g. const char *) and the int-valued
+ # Hash arm's `sp_box_int(...)` rhs fails to compile against it.
+ # Sibling to `[]` widening above; same rationale.
+    if mname == "fetch"
+      @needs_rb_value = 1
+      return "poly"
+    end
  # Built-in string methods that compile_poly_method_call also
  # lowers via a SP_TAG_STR arm — their result temp needs to be
  # at least string-typed so the per-tag dispatch assignment
@@ -18599,6 +18611,34 @@ class Compiler
           emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_STR_HASH) " + result_tmp + " = sp_box_str(sp_StrStrHash_get((sp_StrStrHash *)" + recv_tmp + ".v.p, " + arg_compiled[0] + "));")
           emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_POLY_HASH) " + result_tmp + " = sp_StrPolyHash_get((sp_StrPolyHash *)" + recv_tmp + ".v.p, " + arg_compiled[0] + ");")
         end
+      end
+    end
+ # `fetch` arms — parallel to `[]` above for the (key, default)
+ # form. Each Str*-Hash variant tests has_key first, returns the
+ # boxed value on hit, or the boxed default on miss. Sibling to
+ # #456 (which added Hash arms to poly-recv `[]` / `[]=`); without
+ # this, `sub.fetch("k", "d")` on a poly recv that resolves to a
+ # Hash variant at runtime matches no arm and silently returns
+ # the temp's nil default — even though the Hash holds the key.
+ # Sym-keyed variants are deferred for the same `@needs`-gating
+ # reason as `[]`.
+    if mname == "fetch" && arg_compiled.length >= 1
+      key_t = arg_types.length > 0 ? arg_types[0] : ""
+      if (key_t == "string" || key_t == "mutable_str") && is_poly_ret == 1
+        key_c = arg_compiled[0]
+        def_box = "sp_box_nil()"
+        if arg_compiled.length >= 2
+          def_t = arg_types.length >= 2 ? arg_types[1] : ""
+          def_c = arg_compiled[1]
+          if def_t == "poly" || def_t == ""
+            def_box = def_c
+          else
+            def_box = box_value_to_poly(def_t, def_c)
+          end
+        end
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_INT_HASH) " + result_tmp + " = sp_StrIntHash_has_key((sp_StrIntHash *)" + recv_tmp + ".v.p, " + key_c + ") ? sp_box_int(sp_StrIntHash_get((sp_StrIntHash *)" + recv_tmp + ".v.p, " + key_c + ")) : " + def_box + ";")
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_STR_HASH) " + result_tmp + " = sp_StrStrHash_has_key((sp_StrStrHash *)" + recv_tmp + ".v.p, " + key_c + ") ? sp_box_str(sp_StrStrHash_get((sp_StrStrHash *)" + recv_tmp + ".v.p, " + key_c + ")) : " + def_box + ";")
+        emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_STR_POLY_HASH) " + result_tmp + " = sp_StrPolyHash_has_key((sp_StrPolyHash *)" + recv_tmp + ".v.p, " + key_c + ") ? sp_StrPolyHash_get((sp_StrPolyHash *)" + recv_tmp + ".v.p, " + key_c + ") : " + def_box + ";")
       end
     end
  # `dup` arms — Hash#dup on a poly recv whose runtime storage is

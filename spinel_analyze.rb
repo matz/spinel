@@ -3827,6 +3827,19 @@ class Compiler
         if rt == "str_str_hash" || rt == "sym_str_hash" || rt == "int_str_hash"
           return "string"
         end
+ # Poly recv: runtime can be any user class (with `def fetch`)
+ # OR any built-in Hash variant. The codegen-side dispatch
+ # (`compile_poly_method_call` + `emit_poly_builtin_dispatch`)
+ # boxes each per-cls_id arm to sp_RbVal because the value
+ # types diverge across arms. Surface that here so the caller's
+ # slot widens accordingly — without this, `lookup` keeps a
+ # `const char *` return slot and the boxed dispatch result is
+ # a C type mismatch. Sibling to the `[]` poly-recv widening
+ # at line 4520 above.
+        if rt == "poly"
+          @needs_rb_value = 1
+          return "poly"
+        end
       end
  # Don't claim "int" for fetch on receivers we don't recognize
  # as a built-in collection — let later dispatch resolve a

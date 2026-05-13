@@ -148,7 +148,12 @@ fi
 if [ $C_ONLY -eq 1 ]; then
   C_FILE="${OUTPUT:-$BASENAME.c}"
 else
-  C_TMP="$(mktemp /tmp/spinel_out.XXXXXX.c)"
+  # BSD mktemp only substitutes X's at the path tail, so a suffix
+  # after XXXXXX collapses to the literal template and collides
+  # across concurrent invocations. Mint a tail-only temp, rename .c.
+  C_TMP_BASE="$(mktemp /tmp/spinel_out.XXXXXX)"
+  C_TMP="${C_TMP_BASE}.c"
+  mv "$C_TMP_BASE" "$C_TMP"
   C_FILE="$C_TMP"
 fi
 

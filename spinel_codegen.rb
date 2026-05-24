@@ -10275,7 +10275,16 @@ class Compiler
  # doesn't fail C-compile against a narrower ivar slot.
     is_dead = 0
     if cls_meth_is_live(ci, mname) == 0
-      is_dead = 1
+      is_writer_m = 0
+      if mname.end_with?("=") && mname != "==" && mname != "!=" && mname != "<=" && mname != ">="
+        bname_m = mname[0, mname.length - 1]
+        if cls_has_attr_writer(ci, bname_m) == 0
+          is_writer_m = 1
+        end
+      end
+      if is_writer_m == 0
+        is_dead = 1
+      end
     end
     if is_dead == 1
  # Mark every param as `(void)`-cast so -Wunused doesn't fire,
@@ -32971,31 +32980,115 @@ class Compiler
     end
     cname = rt[4, rt.length - 4]
     ci = find_class_idx(cname)
-    if ci < 0 || cls_has_attr_writer(ci, bname) == 0
+    if ci < 0
       $stderr.puts "Spinel: Call" + kind + "WriteNode for `." + bname + "` requires attr_accessor (or struct field) on class " + cname
       exit(1)
     end
+    has_attr_writer = cls_has_attr_writer(ci, bname)
     rc = compile_expr_gc_rooted(recv)
     val = compile_expr(@nd_expression[nid])
+    val_t = infer_type(@nd_expression[nid])
     tt = new_temp
     field = "iv_" + bname
-    if kind == "Operator"
-      op = @nd_binop[nid]
-      ivar_t = cls_ivar_type(ci, "@" + bname)
-      if op == "+" && ivar_t == "string" && infer_type(@nd_expression[nid]) == "string"
+    if has_attr_writer == 1
+      if kind == "Operator"
+        op = @nd_binop[nid]
+        ivar_t = cls_ivar_type(ci, "@" + bname)
+        if op == "+" && ivar_t == "string" && val_t == "string"
  # String-valued attr with `+=` becomes sp_str_concat, mirroring
  # the LocalVariableOperatorWriteNode arm at line 21786.
-        emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-             tt + "->" + field + " = sp_str_concat(" + tt + "->" + field + ", (" + val + ")); }")
-        return
-      end
+          emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+               tt + "->" + field + " = sp_str_concat(" + tt + "->" + field + ", (" + val + ")); }")
+          return
+        end
  # bigint-typed attr in promote mode: route arithmetic / bitwise
  # ops through the matching sp_bigint_* helper, wrapping a raw
  # mrb_int rhs through sp_bigint_new_int first.
-      if ivar_t == "bigint"
+        if ivar_t == "bigint"
+          @needs_bigint = 1
+          rhs_t = val_t
+          rhs_big = rhs_t == "bigint" ? "(sp_Bigint *)(" + val + ")" : "sp_bigint_new_int(" + val + ")"
+          big_op = ""
+          if op == "+"
+            big_op = "sp_bigint_add"
+          elsif op == "-"
+            big_op = "sp_bigint_sub"
+          elsif op == "*"
+            big_op = "sp_bigint_mul"
+          elsif op == "/"
+            big_op = "sp_bigint_div"
+          elsif op == "%"
+            big_op = "sp_bigint_mod"
+          end
+          if big_op != ""
+            emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+                 tt + "->" + field + " = " + big_op + "((sp_Bigint *)" + tt + "->" + field + ", " + rhs_big + "); }")
+            return
+          end
+ # Bitwise ops (& | ^ << >>): unbox to mrb_int, apply C op, re-box.
+          if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>"
+            rhs_int = rhs_t == "bigint" ? "sp_bigint_to_int(" + rhs_big + ")" : "(" + val + ")"
+            emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+                 tt + "->" + field + " = sp_bigint_new_int(sp_bigint_to_int((sp_Bigint *)" + tt + "->" + field + ") " + op + " " + rhs_int + "); }")
+            return
+          end
+        end
+        if op == "%"
+          emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+               tt + "->" + field + " = sp_imod(" + tt + "->" + field + ", (" + val + ")); }")
+        else
+          emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+               tt + "->" + field + " = " + tt + "->" + field + " " + op + " (" + val + "); }")
+        end
+        return
+      end
+      if kind == "And"
+        emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+             "if (" + tt + "->" + field + ") " + tt + "->" + field + " = (" + val + "); }")
+        return
+      end
+      if kind == "Or"
+        emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
+             "if (!" + tt + "->" + field + ") " + tt + "->" + field + " = (" + val + "); }")
+        return
+      end
+    end
+    owner_get = find_method_owner(ci, bname)
+    owner_set = find_method_owner(ci, bname + "=")
+    if owner_get == "" || owner_set == ""
+      $stderr.puts "Spinel: Call" + kind + "WriteNode for `." + bname + "` requires attr_accessor or both methods `." + bname + "` and `." + bname + "=` on class " + cname
+      exit(1)
+    end
+    owner_get_ci = find_class_idx(owner_get)
+    owner_set_ci = find_class_idx(owner_set)
+    if owner_get_ci < 0 || owner_set_ci < 0
+      $stderr.puts "Spinel: Call" + kind + "WriteNode for `." + bname + "` could not resolve method owner on class " + cname
+      exit(1)
+    end
+    get_cast = owner_get == cname ? "" : "(sp_" + owner_get + " *)"
+    set_cast = owner_set == cname ? "" : "(sp_" + owner_set + " *)"
+    get_expr = "sp_" + owner_get + "_" + sanitize_name(bname) + "(" + get_cast + tt + ")"
+    setter_name = "sp_" + owner_set + "_" + sanitize_name(bname + "=")
+    set_midx = cls_find_method_direct(owner_set_ci, bname + "=")
+    set_pt = "int"
+    if set_midx >= 0
+      set_pts = cls_meth_ptypes_get(owner_set_ci, set_midx)
+      if set_pts.length > 0
+        set_pt = set_pts[0]
+      end
+    end
+    if kind == "Operator"
+      op = @nd_binop[nid]
+      get_t = cls_method_return(owner_get_ci, bname)
+      op_expr = ""
+      op_t = get_t
+      if op == "+" && get_t == "string" && val_t == "string"
+        op_expr = "sp_str_concat(" + get_expr + ", (" + val + "))"
+      elsif op == "%" 
+        op_expr = "sp_imod(" + get_expr + ", (" + val + "))"
+      elsif get_t == "bigint"
         @needs_bigint = 1
-        rhs_t = infer_type(@nd_expression[nid])
-        rhs_big = rhs_t == "bigint" ? "(sp_Bigint *)(" + val + ")" : "sp_bigint_new_int(" + val + ")"
+        rhs_big = val_t == "bigint" ? "(sp_Bigint *)(" + val + ")" : "sp_bigint_new_int(" + val + ")"
         big_op = ""
         if op == "+"
           big_op = "sp_bigint_add"
@@ -33009,35 +33102,63 @@ class Compiler
           big_op = "sp_bigint_mod"
         end
         if big_op != ""
-          emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-               tt + "->" + field + " = " + big_op + "((sp_Bigint *)" + tt + "->" + field + ", " + rhs_big + "); }")
-          return
+          op_expr = big_op + "((sp_Bigint *)" + get_expr + ", " + rhs_big + ")"
+          op_t = "bigint"
+        elsif op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>"
+          rhs_int = val_t == "bigint" ? "sp_bigint_to_int(" + rhs_big + ")" : "(" + val + ")"
+          op_expr = "sp_bigint_new_int(sp_bigint_to_int((sp_Bigint *)" + get_expr + ") " + op + " " + rhs_int + ")"
+          op_t = "bigint"
+        else
+          op_expr = "(" + get_expr + ") " + op + " (" + val + ")"
         end
- # Bitwise ops (& | ^ << >>): unbox to mrb_int, apply C op, re-box.
-        if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>"
-          rhs_int = rhs_t == "bigint" ? "sp_bigint_to_int(" + rhs_big + ")" : "(" + val + ")"
-          emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-               tt + "->" + field + " = sp_bigint_new_int(sp_bigint_to_int((sp_Bigint *)" + tt + "->" + field + ") " + op + " " + rhs_int + "); }")
-          return
-        end
-      end
-      if op == "%"
-        emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-             tt + "->" + field + " = sp_imod(" + tt + "->" + field + ", (" + val + ")); }")
       else
-        emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-             tt + "->" + field + " = " + tt + "->" + field + " " + op + " (" + val + "); }")
+        op_expr = "(" + get_expr + ") " + op + " (" + val + ")"
       end
+      set_expr = op_expr
+      if set_pt == "poly" && op_t != "poly"
+        set_expr = box_value_to_poly(op_t, op_expr)
+      elsif set_pt != "poly" && op_t == "poly"
+        set_expr = unbox_poly_to(set_pt, op_expr)
+      elsif set_pt == "bigint" && op_t == "int"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_new_int(" + op_expr + ")"
+      elsif set_pt == "int" && op_t == "bigint"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_to_int((sp_Bigint *)" + op_expr + ")"
+      end
+      emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " + setter_name + "(" + set_cast + tt + ", " + set_expr + "); }")
       return
     end
     if kind == "And"
-      emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-           "if (" + tt + "->" + field + ") " + tt + "->" + field + " = (" + val + "); }")
+      set_expr = val
+      if set_pt == "poly" && val_t != "poly"
+        set_expr = box_value_to_poly(val_t, val)
+      elsif set_pt != "poly" && val_t == "poly"
+        set_expr = unbox_poly_to(set_pt, val)
+      elsif set_pt == "bigint" && val_t == "int"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_new_int(" + val + ")"
+      elsif set_pt == "int" && val_t == "bigint"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_to_int((sp_Bigint *)" + val + ")"
+      end
+      emit("  { sp_" + cname + " *" + tt + " = " + rc + "; if (" + get_expr + ") " + setter_name + "(" + set_cast + tt + ", " + set_expr + "); }")
       return
     end
     if kind == "Or"
-      emit("  { sp_" + cname + " *" + tt + " = " + rc + "; " +
-           "if (!" + tt + "->" + field + ") " + tt + "->" + field + " = (" + val + "); }")
+      set_expr = val
+      if set_pt == "poly" && val_t != "poly"
+        set_expr = box_value_to_poly(val_t, val)
+      elsif set_pt != "poly" && val_t == "poly"
+        set_expr = unbox_poly_to(set_pt, val)
+      elsif set_pt == "bigint" && val_t == "int"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_new_int(" + val + ")"
+      elsif set_pt == "int" && val_t == "bigint"
+        @needs_bigint = 1
+        set_expr = "sp_bigint_to_int((sp_Bigint *)" + val + ")"
+      end
+      emit("  { sp_" + cname + " *" + tt + " = " + rc + "; if (!" + get_expr + ") " + setter_name + "(" + set_cast + tt + ", " + set_expr + "); }")
       return
     end
   end

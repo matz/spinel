@@ -2771,6 +2771,52 @@ typedef struct { sp_RbVal *data; mrb_int len; mrb_int cap; mrb_int frozen; } sp_
 static void sp_PolyArray_scan(void *p) { sp_PolyArray *a = (sp_PolyArray *)p; for (mrb_int i = 0; i < a->len; i++) sp_mark_rbval(a->data[i]); }
 static void sp_PolyArray_fin(void *p) { sp_PolyArray *a = (sp_PolyArray *)p; sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes -= sizeof(sp_RbVal) * a->cap; h->size -= sizeof(sp_RbVal) * a->cap; free(a->data); }
 static sp_PolyArray *sp_PolyArray_new(void) { sp_PolyArray *a = (sp_PolyArray *)sp_gc_alloc(sizeof(sp_PolyArray), sp_PolyArray_fin, sp_PolyArray_scan); a->cap = 16; a->data = (sp_RbVal *)malloc(sizeof(sp_RbVal) * a->cap); if (!a->data) sp_oom_die(); a->len = 0; { sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes += sizeof(sp_RbVal) * a->cap; } return a; }
+
+/* PolyArray free-list pool (manual recycle, GC-independent).
+
+   sp_PolyArray_pool_acquire() pops a pre-cleared PolyArray off a
+   process-global LIFO; if the pool is empty it falls back to
+   sp_PolyArray_new(). sp_PolyArray_pool_release(a) clears `a` and
+   pushes it back (capped by SP_POLY_ARRAY_POOL_CAP, default 4096).
+
+   Intended use: short-lived arrays whose lifetime is bounded by the
+   enclosing call frame. The canonical case is tree-walking
+   interpreters that evaluate per-call argument lists (e.g.
+   `evaluate_args(node)` returning a fresh PolyArray that the called
+   method consumes via a `bind_params` step and never retains). In
+   that pattern the pool eliminates one ~448 B alloc (16 sp_RbVal
+   cap + sp_gc_hdr + sp_PolyArray header) per call site, which under
+   SPINEL_NO_GC=1 is otherwise an unrecoverable leak driving
+   memory-pressure kills on long-running interpreters.
+
+   The release helper does NOT consult sp_gc_bytes; the array stays
+   tracked in the GC heap the same as any other PolyArray. The pool
+   just keeps the (header, data buffer) pair in a per-process LIFO
+   so the next acquire skips malloc.
+
+   Safety: the caller must guarantee that no live reference to `a`
+   exists past the release point. Releasing an array that is still
+   reachable from a live root will result in use-after-free the
+   next time acquire hands it out. */
+#ifndef SP_POLY_ARRAY_POOL_CAP
+#define SP_POLY_ARRAY_POOL_CAP 4096
+#endif
+static sp_PolyArray *sp_PolyArray_pool_buf[SP_POLY_ARRAY_POOL_CAP];
+static int sp_PolyArray_pool_count = 0;
+static inline sp_PolyArray *sp_PolyArray_pool_acquire(void) {
+  if (sp_PolyArray_pool_count > 0) {
+    sp_PolyArray *a = sp_PolyArray_pool_buf[--sp_PolyArray_pool_count];
+    a->len = 0;
+    return a;
+  }
+  return sp_PolyArray_new();
+}
+static inline void sp_PolyArray_pool_release(sp_PolyArray *a) {
+  if (a == NULL) return;
+  if (sp_PolyArray_pool_count >= SP_POLY_ARRAY_POOL_CAP) return;
+  a->len = 0;
+  sp_PolyArray_pool_buf[sp_PolyArray_pool_count++] = a;
+}
 static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; if (a->frozen) { sp_raise_frozen_array(); return; } if (a->len >= a->cap) { sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes -= sizeof(sp_RbVal) * a->cap; h->size -= sizeof(sp_RbVal) * a->cap; a->cap = a->cap * 2 + 1; void *nd = realloc(a->data, sizeof(sp_RbVal) * a->cap); if (!nd) sp_oom_die(); a->data = (sp_RbVal *)nd; h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes += sizeof(sp_RbVal) * a->cap; } a->data[a->len++] = v; }
 static sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
   sp_PolyArray *arr = sp_PolyArray_new();

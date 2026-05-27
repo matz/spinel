@@ -1,0 +1,6 @@
+2
+false
+[[:opt, :a], [:opt, :b]]
+2
+true
+[[:req, :a], [:req, :b]]

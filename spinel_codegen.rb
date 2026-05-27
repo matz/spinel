@@ -3249,6 +3249,9 @@ class Compiler
           return "obj_" + implicit
         end
       end
+      if @nd_receiver[nid] < 0 && (@nd_name[nid] == "proc" || @nd_name[nid] == "lambda")
+        return "proc"
+      end
  # Bare class-method call inside a class-method body (`def
  # self.last; all[-1]; end` — both `all` and `last` are cmeths
  # on the same class hierarchy). analyze skips the cache for
@@ -3278,6 +3281,18 @@ class Compiler
  # outer `.to_s` emit `sp_int_to_s(...)` instead of the bool
  # ternary `(... ? "true" : "false")`.
       cmp_mname = @nd_name[nid]
+      cmp_recv_proc = @nd_receiver[nid]
+      if cmp_recv_proc >= 0 && infer_type(cmp_recv_proc) == "proc"
+        if cmp_mname == "arity"
+          return "int"
+        end
+        if cmp_mname == "lambda?"
+          return "bool"
+        end
+        if cmp_mname == "parameters"
+          return "poly_array"
+        end
+      end
       if cmp_mname == "block_given?"
         cmp_recv = @nd_receiver[nid]
         if cmp_recv < 0 || (cmp_recv >= 0 && @nd_type[cmp_recv] == "SelfNode")
@@ -16446,6 +16461,20 @@ class Compiler
       end
     end
 
+ # Proc introspection.
+    if recv_type == "proc"
+      if mname == "arity"
+        return "sp_proc_arity(" + rc + ")"
+      end
+      if mname == "lambda?"
+        return "sp_proc_lambda_p(" + rc + ")"
+      end
+      if mname == "parameters"
+        @needs_rb_value = 1
+        return "sp_proc_parameters(" + rc + ")"
+      end
+    end
+
  # Wrap in a statement expression so receivers like `Time.now`
  # (which expand to a clock_gettime call) are evaluated exactly once
  # even when to_f references the value twice.
@@ -17128,6 +17157,12 @@ class Compiler
       if @nd_block[nid] >= 0
         return compile_proc_literal(nid)
       end
+    end
+    if mname == "lambda"
+      if @nd_block[nid] >= 0
+        return compile_proc_literal(nid, "", 1)
+      end
+      return "sp_proc_new_meta(NULL, NULL, NULL, 0, TRUE, 0, NULL, NULL)"
     end
     if mname == "method"
       args_id = @nd_arguments[nid]
@@ -36067,9 +36102,12 @@ class Compiler
     s
   end
 
-  def compile_proc_literal(nid, blk_param_types = "")
+  def compile_proc_literal(nid, blk_param_types = "", lambda_flag = 0)
     blk = @nd_block[nid]
     if blk < 0
+      if lambda_flag == 1
+        return "sp_proc_new_meta(NULL, NULL, NULL, 0, TRUE, 0, NULL, NULL)"
+      end
       return "sp_proc_new(NULL, NULL, NULL)"
     end
  # Collect every block param name. Single-param blocks fall through
@@ -36091,6 +36129,7 @@ class Compiler
     fname = "_sp_proc_fn_" + pid.to_s
     cap_name = "_proc_cap_" + pid.to_s
     cap_scan_name = "_proc_cap_scan_" + pid.to_s
+    meta_args = proc_metadata_args(nid, pid, lambda_flag)
     bbody = @nd_body[blk]
 
  # Detect captures (free variables that resolve in outer scope).
@@ -36332,7 +36371,7 @@ class Compiler
         emit("  " + cap_ptr + "->" + vn + " = " + cell + ";")
         k = k + 1
       end
-      return "sp_proc_new(" + fname + ", " + cap_ptr + ", " + cap_scan_name + ")"
+      return "sp_proc_new_meta(" + fname + ", " + cap_ptr + ", " + cap_scan_name + ", " + meta_args + ")"
     end
 
  # No captures: file-scope function with unused cap arg, sp_proc_new
@@ -36348,7 +36387,7 @@ class Compiler
     @lambda_funcs << "  return "
     @lambda_funcs << bexpr
     @lambda_funcs << ";\n}\n"
-    return "sp_proc_new(" + fname + ", NULL, NULL)"
+    return "sp_proc_new_meta(" + fname + ", NULL, NULL, " + meta_args + ")"
   end
 
   def compile_bracket_assign(nid)
@@ -38049,6 +38088,102 @@ class Compiler
       return @nd_name[reqs[idx]]
     end
     ""
+  end
+
+  def proc_metadata_args(nid, pid, lambda_flag)
+    kinds = "".split(",", -1)
+    names = "".split(",", -1)
+    arity = 0
+    blk = @nd_block[nid]
+    if blk >= 0
+      params = @nd_parameters[blk]
+      if params >= 0
+        req_kind = lambda_flag == 1 ? "req" : "opt"
+        if @nd_type[params] == "NumberedParametersNode"
+          n = @nd_value[params]
+          arity = n
+          k_np = 0
+          while k_np < n
+            kinds.push(req_kind)
+            names.push("_" + (k_np + 1).to_s)
+            k_np = k_np + 1
+          end
+        else
+          inner = @nd_parameters[params]
+          if inner >= 0
+            reqs = parse_id_list(@nd_requireds[inner])
+            opts = parse_id_list(@nd_optionals[inner])
+            posts = parse_id_list(@nd_posts[inner])
+            min_required = reqs.length + posts.length
+            k = 0
+            while k < reqs.length
+              kinds.push(req_kind)
+              names.push(@nd_name[reqs[k]])
+              k = k + 1
+            end
+            k = 0
+            while k < opts.length
+              kinds.push("opt")
+              names.push(@nd_name[opts[k]])
+              k = k + 1
+            end
+            rest = @nd_rest[inner]
+            has_rest = 0
+            if rest >= 0 && @nd_type[rest] == "RestParameterNode"
+              has_rest = 1
+              kinds.push("rest")
+              names.push(@nd_name[rest])
+            end
+            k = 0
+            while k < posts.length
+              if @nd_type[posts[k]] == "RequiredParameterNode"
+                kinds.push(req_kind)
+                names.push(@nd_name[posts[k]])
+              end
+              k = k + 1
+            end
+            arity = min_required
+            if has_rest == 1 || (lambda_flag == 1 && opts.length > 0)
+              arity = -(min_required + 1)
+            end
+          end
+        end
+      end
+    end
+    lambda_c = lambda_flag == 1 ? "TRUE" : "FALSE"
+    if kinds.length == 0
+      return arity.to_s + ", " + lambda_c + ", 0, NULL, NULL"
+    end
+    kinds_name = "_sp_proc_param_kinds_" + pid.to_s
+    names_name = "_sp_proc_param_names_" + pid.to_s
+    kind_vals = ""
+    name_vals = ""
+    k = 0
+    while k < kinds.length
+      if k > 0
+        kind_vals = kind_vals + ", "
+        name_vals = name_vals + ", "
+      end
+      kind_vals = kind_vals + compile_symbol_literal(kinds[k])
+      pname = names[k]
+      if pname == ""
+        name_vals = name_vals + "((sp_sym)-1)"
+      else
+        name_vals = name_vals + compile_symbol_literal(pname)
+      end
+      k = k + 1
+    end
+    @lambda_funcs << "static const sp_sym "
+    @lambda_funcs << kinds_name
+    @lambda_funcs << "[] = {"
+    @lambda_funcs << kind_vals
+    @lambda_funcs << "};\n"
+    @lambda_funcs << "static const sp_sym "
+    @lambda_funcs << names_name
+    @lambda_funcs << "[] = {"
+    @lambda_funcs << name_vals
+    @lambda_funcs << "};\n"
+    arity.to_s + ", " + lambda_c + ", " + kinds.length.to_s + ", " + kinds_name + ", " + names_name
   end
 
   def compile_each_slice_block(nid)

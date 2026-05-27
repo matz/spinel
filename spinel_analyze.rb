@@ -3367,6 +3367,9 @@ class Compiler
     if mname == "proc"
       return "proc"
     end
+    if mname == "lambda"
+      return "proc"
+    end
     if mname == "new"
       if recv >= 0
         rcname = constructor_class_name(recv)
@@ -6274,6 +6277,17 @@ class Compiler
  # Method call on poly
     if recv >= 0
       rt = infer_type(recv)
+      if rt == "proc"
+        if mname == "arity"
+          return "int"
+        end
+        if mname == "lambda?"
+          return "bool"
+        end
+        if mname == "parameters"
+          return "poly_array"
+        end
+      end
  # Complex value-type methods.
       if rt == "complex"
         if mname == "real" || mname == "imaginary" || mname == "imag"
@@ -24514,6 +24528,64 @@ class Compiler
 
  # Symbol-keyed hash with string values.
 
+  def collect_sym_name_into(local, name)
+    if name != "" && not_in(name, local) == 1
+      local.push(name)
+    end
+  end
+
+  def collect_proc_param_sym_names(local, blk, lambda_flag)
+    if blk < 0
+      return
+    end
+    params = @nd_parameters[blk]
+    if params < 0
+      return
+    end
+    kind_req = lambda_flag == 1 ? "req" : "opt"
+    collect_sym_name_into(local, kind_req)
+    if @nd_type[params] == "NumberedParametersNode"
+      k_np = 0
+      while k_np < @nd_value[params]
+        collect_sym_name_into(local, "_" + (k_np + 1).to_s)
+        k_np = k_np + 1
+      end
+      return
+    end
+    inner = @nd_parameters[params]
+    if inner < 0
+      return
+    end
+    reqs = parse_id_list(@nd_requireds[inner])
+    k = 0
+    while k < reqs.length
+      collect_sym_name_into(local, @nd_name[reqs[k]])
+      k = k + 1
+    end
+    opts = parse_id_list(@nd_optionals[inner])
+    if opts.length > 0
+      collect_sym_name_into(local, "opt")
+    end
+    k = 0
+    while k < opts.length
+      collect_sym_name_into(local, @nd_name[opts[k]])
+      k = k + 1
+    end
+    rest = @nd_rest[inner]
+    if rest >= 0 && @nd_type[rest] == "RestParameterNode"
+      collect_sym_name_into(local, "rest")
+      collect_sym_name_into(local, @nd_name[rest])
+    end
+    posts = parse_id_list(@nd_posts[inner])
+    k = 0
+    while k < posts.length
+      if @nd_type[posts[k]] == "RequiredParameterNode"
+        collect_sym_name_into(local, @nd_name[posts[k]])
+      end
+      k = k + 1
+    end
+  end
+
  # Symbol type Phase 2, Step 1: collect all SymbolNode content strings
  # into @sym_names as a separate pass (dedup, stable order).
   def collect_sym_names
@@ -24526,9 +24598,10 @@ class Compiler
       t = @nd_type[i]
       if t == "SymbolNode"
         sname = @nd_content[i]
-        if not_in(sname, local) == 1
-          local.push(sname)
-        end
+        collect_sym_name_into(local, sname)
+      end
+      if t == "BlockNode"
+        collect_proc_param_sym_names(local, i, 0)
       end
  # Also collect "literal".to_sym / .intern receivers so the
  # static-intern optimization can resolve them to SPS_ constants.
@@ -24538,8 +24611,18 @@ class Compiler
           r = @nd_receiver[i]
           if r >= 0 && @nd_type[r] == "StringNode"
             lname = @nd_content[r]
-            if not_in(lname, local) == 1
-              local.push(lname)
+            collect_sym_name_into(local, lname)
+          end
+        end
+        if mn == "proc" || mn == "lambda"
+          collect_proc_param_sym_names(local, @nd_block[i], mn == "lambda" ? 1 : 0)
+        end
+        if mn == "new"
+          r_proc_sym = @nd_receiver[i]
+          if r_proc_sym >= 0 && (@nd_type[r_proc_sym] == "ConstantReadNode" || @nd_type[r_proc_sym] == "ConstantPathNode")
+            cn_proc_sym = @nd_name[r_proc_sym]
+            if cn_proc_sym == "Proc" || cn_proc_sym == "Lambda"
+              collect_proc_param_sym_names(local, @nd_block[i], cn_proc_sym == "Lambda" ? 1 : 0)
             end
           end
         end

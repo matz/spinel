@@ -9976,9 +9976,16 @@ class Compiler
           end
           j = j + 1
         end
- # Also scan parent fields
-        if @cls_parents[i] != ""
-          pi = find_class_idx(@cls_parents[i])
+ # Also scan inherited fields. Walk the FULL ancestor chain, not just
+ # the immediate parent: each class records only its OWN ivars (step 1
+ # skips inherited names so they're marked under the ancestor's type),
+ # so a passthrough parent that introduces no ivars of its own would
+ # otherwise drop a grandparent's ivars from this class's scan -- the
+ # collector then frees objects still reachable through those fields
+ # (issue #1050).
+        anc = @cls_parents[i]
+        while anc != ""
+          pi = find_class_idx(anc)
           if pi >= 0
             pnames = @cls_ivar_names[pi].split(";", -1)
             ptypes = @cls_ivar_types[pi].split(";", -1)
@@ -9991,6 +9998,9 @@ class Compiler
               end
               pj = pj + 1
             end
+            anc = @cls_parents[pi]
+          else
+            anc = ""
           end
         end
         emit_raw("}")

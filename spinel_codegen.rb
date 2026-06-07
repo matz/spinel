@@ -3418,6 +3418,10 @@ class Compiler
         end
       end
     end
+    spec_expr_t = implicit_specialized_expr_type(nid)
+    if spec_expr_t != ""
+      return spec_expr_t
+    end
  # Sibling-scope narrow override: when the active narrow stack
  # narrows `x` to `obj_<C>` and this CallNode is `x.attr` where
  # `attr` is an attr_reader on `C`, the cached type (filled by

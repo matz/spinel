@@ -3842,7 +3842,23 @@ static sp_Time sp_file_mtime(const char *path) {
 #endif
 #endif
 }
-static const char *sp_backtick(const char *cmd) { fflush(NULL); FILE *p = popen(cmd, "r"); if (!p) { sp_last_status = -1; return sp_str_empty; } char *buf = sp_str_alloc_raw(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; sp_last_status = pclose(p); return buf; }
+static const char *sp_backtick(const char *cmd) {
+  fflush(NULL);
+  FILE *p = popen(cmd, "r");
+  if (!p) {
+    sp_last_status = -1;
+    return sp_str_empty;
+  }
+  char *buf = sp_str_alloc_raw(4096);
+  size_t n = fread(buf, 1, 4095, p);
+  buf[n] = 0;
+  int status = pclose(p);
+#ifdef _WIN32
+  if (status >= 0) status <<= 8;
+#endif
+  sp_last_status = status;
+  return buf;
+}
 static const char *sp_file_basename(const char *path) {
   const char *s = strrchr(path, '/');
   const char *base = s ? s + 1 : path;

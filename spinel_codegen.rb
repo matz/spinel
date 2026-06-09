@@ -9879,9 +9879,6 @@ class Compiler
     emit_raw("typedef struct{mrb_int first;mrb_int last;mrb_int excl;}sp_Range;")
     emit_raw("static sp_Range sp_range_new(mrb_int f,mrb_int l,mrb_int e){sp_Range r;r.first=f;r.last=l;r.excl=e;return r;}")
     emit_raw("static mrb_bool sp_range_eq(sp_Range a,sp_Range b){return a.first==b.first&&a.last==b.last&&a.excl==b.excl;}")
-    if @needs_system == 1
-      emit_raw("static int sp_last_status = 0;")
-    end
     emit_raw("")
   end
 

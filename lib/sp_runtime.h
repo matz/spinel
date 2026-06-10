@@ -3853,9 +3853,6 @@ static const char *sp_backtick(const char *cmd) {
   size_t n = fread(buf, 1, 4095, p);
   buf[n] = 0;
   int status = pclose(p);
-#ifdef _WIN32
-  if (status >= 0) status <<= 8;
-#endif
   sp_last_status = status;
   return buf;
 }

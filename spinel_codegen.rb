@@ -39922,7 +39922,12 @@ class Compiler
           elsif ct == "SymbolNode"
             result = result + "(" + tmp + ".tag == SP_TAG_SYM && " + tmp + ".v.i == " + compile_expr(cid) + ")"
           elsif ct == "StringNode"
-            result = result + "(" + tmp + ".tag == SP_TAG_STR && strcmp(" + tmp + ".v.s, " + compile_expr(cid) + ") == 0)"
+            # Lever 4 toward issue #282: pointer-eq pre-check before
+            # strcmp. See the string-pred arm below for the rationale —
+            # same pattern, .v.s extracts the const char* from the
+            # sp_RbVal tag union first.
+            poly_lit = compile_expr(cid)
+            result = result + "(" + tmp + ".tag == SP_TAG_STR && (" + tmp + ".v.s == " + poly_lit + " || strcmp(" + tmp + ".v.s, " + poly_lit + ") == 0))"
           elsif ct == "IntegerNode"
             result = result + "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i == " + compile_expr(cid) + ")"
           elsif ct == "FloatNode"
@@ -39969,7 +39974,16 @@ class Compiler
               result = result + "0"
             end
           else
-            result = result + "strcmp(" + tmp + ", " + compile_expr(cid) + ") == 0"
+            # Lever 4 toward issue #282: pointer-eq pre-check before
+            # strcmp. If the predicate value was interned (via
+            # sp_str_intern, called explicitly downstream) and the
+            # literal arm matches that same content, the pointer
+            # comparison decides in one cycle. strcmp remains as the
+            # fallback for non-interned values, so semantics are
+            # unchanged. Net cost: one branch on the fast path; win
+            # is O(N) → O(1) per arm when interning is active.
+            lit = compile_expr(cid)
+            result = result + "(" + tmp + " == " + lit + " || strcmp(" + tmp + ", " + lit + ") == 0)"
           end
         else
  # Symmetric case: `case <sym> when "literal_str"` is

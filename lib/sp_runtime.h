@@ -1240,6 +1240,51 @@ static mrb_int sp_str_field_count(const char*s,const char*sep){
   if(*s==0)return 0;size_t sl=strlen(sep);if(sl==0)return(mrb_int)strlen(s);
   mrb_int c=1;const char*p=s;while((p=strstr(p,sep))!=NULL){c++;p+=sl;}return c;}
 static const char*sp_str_concat(const char*a,const char*b){if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b);char*r=sp_str_alloc(la+lb);memcpy(r,a,la);memcpy(r+la,b,lb);return r;}
+
+/* String interning pool (lever 4 toward issue #282).
+
+   sp_str_intern(s) returns a canonical pointer for the content of `s`.
+   First call for a given content allocates a copy via sp_str_alloc and
+   stores it; subsequent calls return the same pointer. Two strings
+   with identical content always compare pointer-equal after both pass
+   through sp_str_intern.
+
+   Intended use: case-on-string predicates and hash-key-string compares
+   in interpreters compiled by spinel. Before: every `case h["k"] when
+   "literal"` compares via strcmp (O(n) per arm). After: if both the
+   lookup result and the literal are interned, pointer-eq decides in
+   one cycle. Implementation here is a simple linear-probing array
+   bounded by SP_STR_INTERN_CAP. Production-grade interning would use
+   a hash table; this starter is enough to validate the speedup for
+   small key sets (AST node-kind alphabets, parser token names, etc.).
+
+   Companion codegen change in compile_when_conds wraps the strcmp
+   arm with a pointer-eq pre-check, so even un-interned strings hit
+   the strcmp fallback. Existing callers see no change.
+
+   Caller responsibility: pass strings you actually want to intern. The
+   pool grows monotonically — there's no eviction. For short-lived
+   per-call strings, this is the wrong helper. */
+#ifndef SP_STR_INTERN_CAP
+#define SP_STR_INTERN_CAP 1024
+#endif
+static const char *sp_str_intern_pool[SP_STR_INTERN_CAP];
+static int sp_str_intern_count = 0;
+static const char *sp_str_intern(const char *s) {
+  if (!s) return s;
+  size_t sl = sp_str_byte_len(s);
+  for (int i = 0; i < sp_str_intern_count; i++) {
+    const char *p = sp_str_intern_pool[i];
+    if (p == s) return p;
+    size_t pl = sp_str_byte_len(p);
+    if (pl == sl && memcmp(p, s, sl) == 0) return p;
+  }
+  if (sp_str_intern_count >= SP_STR_INTERN_CAP) return s;
+  char *copy = sp_str_alloc(sl);
+  memcpy(copy, s, sl);
+  sp_str_intern_pool[sp_str_intern_count++] = copy;
+  return copy;
+}
 /* Issue #760: NULL src to memcpy is UB. Treat NULL as empty string. */
 static const char*sp_str_concat3(const char*a,const char*b,const char*c){if(!a)a="";if(!b)b="";if(!c)c="";size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),lc=sp_str_byte_len(c);char*r=sp_str_alloc(la+lb+lc);memcpy(r,a,la);memcpy(r+la,b,lb);memcpy(r+la+lb,c,lc);return r;}
 static const char*sp_str_concat4(const char*a,const char*b,const char*c,const char*d){if(!a)a="";if(!b)b="";if(!c)c="";if(!d)d="";size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),lc=sp_str_byte_len(c),ld=sp_str_byte_len(d);char*r=sp_str_alloc(la+lb+lc+ld);memcpy(r,a,la);memcpy(r+la,b,lb);memcpy(r+la+lb,c,lc);memcpy(r+la+lb+lc,d,ld);return r;}

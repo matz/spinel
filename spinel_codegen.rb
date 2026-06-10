@@ -18758,6 +18758,7 @@ class Compiler
         ct = c_type(free_var_types[k])
         emit("  " + ct + " *" + cell + " = (" + ct + "*)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
         emit("  *" + cell + " = self;")
+        emit("  SP_GC_ROOT(" + cell + ");")
       else
         already_promoted = 0
  # Check outer scope heap promotions
@@ -18782,6 +18783,7 @@ class Compiler
           ct = c_type(free_var_types[k])
           emit("  " + ct + " *" + cell + " = (" + ct + "*)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
           emit("  *" + cell + " = " + fiber_var_ref(vn) + ";")
+          emit("  SP_GC_ROOT(" + cell + ");")
           @heap_promoted_names.push(vn)
           @heap_promoted_cells.push(cell)
         end
@@ -18794,6 +18796,7 @@ class Compiler
     tmp_fb = "_tmpfb_" + fid.to_s
     cap_ptr = "_cap_ptr_" + fid.to_s
     emit("  " + cap_name + " *" + cap_ptr + " = (" + cap_name + "*)sp_gc_alloc(sizeof(" + cap_name + "), NULL, " + cap_scan_name + ");")
+    emit("  SP_GC_ROOT(" + cap_ptr + ");")
     k = 0
     while k < free_vars.length
       vn = free_vars[k]
@@ -43597,6 +43600,7 @@ class Compiler
               cell = "_hcell_" + fv + "_l" + lam_id.to_s
               emit("  " + ct + " *" + cell + " = (" + ct + "*)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
               emit("  *" + cell + " = " + fiber_var_ref(fv) + ";")
+              emit("  SP_GC_ROOT(" + cell + ");")
               @heap_promoted_names.push(fv)
               @heap_promoted_cells.push(cell)
             end
@@ -44189,6 +44193,7 @@ class Compiler
           cell = "_hcell_self_p" + pid.to_s
           emit("  " + ct + " *" + cell + " = (" + ct + " *)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
           emit("  *" + cell + " = " + self_expr + ";")
+          emit("  SP_GC_ROOT(" + cell + ");")
         else
           already_promoted = 0
           ci = 0
@@ -44206,6 +44211,7 @@ class Compiler
               cell = "_hcell_" + vn + "_p" + pid.to_s
               emit("  " + ct + " *" + cell + " = (" + ct + " *)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
               emit("  *" + cell + " = " + fiber_var_ref(vn) + ";")
+              emit("  SP_GC_ROOT(" + cell + ");")
             end
             @heap_promoted_names.push(vn)
             @heap_promoted_cells.push(cell)
@@ -44216,6 +44222,7 @@ class Compiler
       end
       cap_ptr = "_cap_ptr_p" + pid.to_s
       emit("  " + cap_name + " *" + cap_ptr + " = (" + cap_name + " *)sp_gc_alloc(sizeof(" + cap_name + "), NULL, " + cap_scan_name + ");")
+      emit("  SP_GC_ROOT(" + cap_ptr + ");")
       k = 0
       while k < captures.length
         emit("  " + cap_ptr + "->" + captures[k] + " = " + local_cells[k] + ";")

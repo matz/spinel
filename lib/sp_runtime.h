@@ -2033,6 +2033,12 @@ static void sp_mark_in_flight_exceptions(void);
    writes get prematurely collected. The forward declaration is
    needed because sp_fiber_root is defined further down in the
    Fiber runtime block. */
+/* Forward declared: defined alongside the PolyArray pool below.
+   Pooled sp_PolyArray*s are not user-visible roots, so they need
+   explicit marking during a GC mark phase or the sweep will free
+   them while pointers remain in the pool. */
+static void sp_PolyArray_pool_scan_roots(void);
+
 /* External linkage: lib/sp_gc.c's sp_gc_mark_all reaches this by name. */
 static void sp_re_mark_globals(void) {
   sp_mark_string(sp_re_last_str);
@@ -2041,6 +2047,7 @@ static void sp_re_mark_globals(void) {
   sp_mark_string(sp_re_match_pre);
   sp_mark_string(sp_re_match_post);
   for (mrb_int i = 0; i < sp_argv.len; i++) sp_mark_string(sp_argv.data[i]);
+  sp_PolyArray_pool_scan_roots();
   sp_mark_in_flight_exceptions();
   sp_mark_fiber_root_storage();
 }
@@ -2803,10 +2810,23 @@ static sp_PolyArray *sp_PolyArray_new(void) { sp_PolyArray *a = (sp_PolyArray *)
 #endif
 static sp_PolyArray *sp_PolyArray_pool_buf[SP_POLY_ARRAY_POOL_CAP];
 static int sp_PolyArray_pool_count = 0;
+/* GC root-scan callback for the pool. Called from
+   sp_re_mark_globals (forward-declared above) so pooled arrays are
+   kept alive across a GC cycle. Without this, sp_gc_collect would
+   sweep pooled-but-not-otherwise-reachable arrays and the pool
+   would dispense dangling pointers. */
+static void sp_PolyArray_pool_scan_roots(void) {
+  for (int i = 0; i < sp_PolyArray_pool_count; i++) {
+    sp_gc_mark(sp_PolyArray_pool_buf[i]);
+  }
+}
 static inline sp_PolyArray *sp_PolyArray_pool_acquire(void) {
   if (sp_PolyArray_pool_count > 0) {
     sp_PolyArray *a = sp_PolyArray_pool_buf[--sp_PolyArray_pool_count];
     a->len = 0;
+    /* Clear frozen so reuse doesn't surface stale FrozenError on
+       Array#push (post-#760 the flag persists on the struct). */
+    a->frozen = 0;
     return a;
   }
   return sp_PolyArray_new();
@@ -2815,6 +2835,7 @@ static inline void sp_PolyArray_pool_release(sp_PolyArray *a) {
   if (a == NULL) return;
   if (sp_PolyArray_pool_count >= SP_POLY_ARRAY_POOL_CAP) return;
   a->len = 0;
+  a->frozen = 0;
   sp_PolyArray_pool_buf[sp_PolyArray_pool_count++] = a;
 }
 static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; if (a->frozen) { sp_raise_frozen_array(); return; } if (a->len >= a->cap) { sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes -= sizeof(sp_RbVal) * a->cap; h->size -= sizeof(sp_RbVal) * a->cap; a->cap = a->cap * 2 + 1; void *nd = realloc(a->data, sizeof(sp_RbVal) * a->cap); if (!nd) sp_oom_die(); a->data = (sp_RbVal *)nd; h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes += sizeof(sp_RbVal) * a->cap; } a->data[a->len++] = v; }

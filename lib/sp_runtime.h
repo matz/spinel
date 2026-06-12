@@ -1282,6 +1282,13 @@ static const char *sp_str_intern(const char *s) {
   if (sp_str_intern_count >= SP_STR_INTERN_CAP) return s;
   char *copy = sp_str_alloc(sl);
   memcpy(copy, s, sl);
+  /* sp_str_alloc returns a buffer with a marker byte at [-1] and the
+     content slot; we explicitly null-terminate at [sl] to make the
+     C-string contract independent of any future sp_str_alloc
+     internal change. Otherwise sp_str_intern's returned pointer
+     could feed into strcmp / strlen with undefined trailing bytes
+     if sp_str_alloc's invariant ever loosens. */
+  copy[sl] = '\0';
   sp_str_intern_pool[sp_str_intern_count++] = copy;
   return copy;
 }
@@ -2086,6 +2093,14 @@ static void sp_re_mark_globals(void) {
   sp_mark_string(sp_re_match_pre);
   sp_mark_string(sp_re_match_post);
   for (mrb_int i = 0; i < sp_argv.len; i++) sp_mark_string(sp_argv.data[i]);
+  /* Strings live in sp_str_intern_pool are owned by the pool, not
+     reachable through any user-visible root. sp_str_sweep would
+     otherwise free them on the next GC cycle, leaving dangling
+     pointers in the pool. Mark each pool entry so the str heap
+     keeps them alive while the pool holds a reference. */
+  for (int i = 0; i < sp_str_intern_count; i++) {
+    sp_mark_string(sp_str_intern_pool[i]);
+  }
   sp_mark_in_flight_exceptions();
   sp_mark_fiber_root_storage();
 }

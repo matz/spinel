@@ -39925,9 +39925,11 @@ class Compiler
             # Lever 4 toward issue #282: pointer-eq pre-check before
             # strcmp. See the string-pred arm below for the rationale —
             # same pattern, .v.s extracts the const char* from the
-            # sp_RbVal tag union first.
+            # sp_RbVal tag union first. compile_expr is evaluated
+            # once and hoisted to a C statement-expression temp so
+            # any future non-pure expansion stays safe.
             poly_lit = compile_expr(cid)
-            result = result + "(" + tmp + ".tag == SP_TAG_STR && (" + tmp + ".v.s == " + poly_lit + " || strcmp(" + tmp + ".v.s, " + poly_lit + ") == 0))"
+            result = result + "(" + tmp + ".tag == SP_TAG_STR && ({ const char *_sl = " + poly_lit + "; (" + tmp + ".v.s == _sl || strcmp(" + tmp + ".v.s, _sl) == 0); }))"
           elsif ct == "IntegerNode"
             result = result + "(" + tmp + ".tag == SP_TAG_INT && " + tmp + ".v.i == " + compile_expr(cid) + ")"
           elsif ct == "FloatNode"
@@ -39982,8 +39984,11 @@ class Compiler
             # fallback for non-interned values, so semantics are
             # unchanged. Net cost: one branch on the fast path; win
             # is O(N) → O(1) per arm when interning is active.
+            # compile_expr is evaluated once and hoisted to a C
+            # statement-expression temp so any future non-pure
+            # expansion stays safe.
             lit = compile_expr(cid)
-            result = result + "(" + tmp + " == " + lit + " || strcmp(" + tmp + ", " + lit + ") == 0)"
+            result = result + "({ const char *_sl = " + lit + "; (" + tmp + " == _sl || strcmp(" + tmp + ", _sl) == 0); })"
           end
         else
  # Symmetric case: `case <sym> when "literal_str"` is

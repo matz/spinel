@@ -7935,14 +7935,22 @@ else {
       const char *fd = is_err ? "stderr" : "stdout";
       if (!strcmp(name, "puts") || !strcmp(name, "print")) {
         int want_nl = !strcmp(name, "puts");
+        /* Emit a SINGLE C expression, joining the pieces with the comma
+           operator (not ';'). $stderr.puts/print can appear in value/return
+           position, where the surrounding emitter wraps this as
+           `(<here>, sp_box_nil())`; a ';' produced invalid C
+           (`(fputs(..); fputc(..), sp_box_nil())`). The comma operator also
+           gives the missing separator between multiple args. */
+        int emitted = 0;
         for (int k = 0; k < argc; k++) {
+          if (emitted++) buf_puts(b, ", ");
           TyKind at = comp_ntype(c, argv[k]);
           if (at == TY_STRING) { buf_printf(b, "fputs("); emit_expr(c, argv[k], b); buf_printf(b, ", %s)", fd); }
           else if (at == TY_INT) { buf_printf(b, "fprintf(%s, \"%%lld\", (long long)(", fd); emit_expr(c, argv[k], b); buf_puts(b, "))"); }
           else { buf_printf(b, "fputs(sp_poly_to_s("); emit_expr(c, argv[k], b); buf_printf(b, "), %s)", fd); }
-          if (want_nl && k == argc - 1) buf_printf(b, "; fputc('\\n', %s)", fd);
         }
-        if (argc == 0 && want_nl) buf_printf(b, "fputc('\\n', %s)", fd);
+        if (want_nl) { if (emitted++) buf_puts(b, ", "); buf_printf(b, "fputc('\\n', %s)", fd); }
+        if (!emitted) buf_puts(b, "(void)0");  /* e.g. bare `$stdout.print` */
         return;
       }
       if (!strcmp(name, "flush")) { buf_printf(b, "fflush(%s)", fd); return; }

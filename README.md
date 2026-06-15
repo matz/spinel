@@ -584,7 +584,11 @@ Adjacent ecosystem (community-built, not part of this repo):
   disagreements, C-build failures), a differential
   CRuby-vs-Spinel value-bisector for silent miscompiles, a
   delta-debugging minimal-repro reducer, an inferred-types
-  ruby-lsp addon, and flamegraph-based perf analysis.
+  ruby-lsp addon, and flamegraph-based perf analysis. Plus a
+  migration toolset for keeping real projects building against a
+  fast-moving compiler — a capability/layout probe, a two-compiler
+  parity check, a multi-file repro reducer, and a commit-bisector —
+  which has driven several minimal reproducers and fixes upstream.
 - [spinelgems](https://github.com/OriPekelman/spinelgems) —
   a gem-compatibility survey and differential-verification
   harness that determines which RubyGems compile and run

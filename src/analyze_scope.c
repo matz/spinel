@@ -1680,6 +1680,8 @@ int cmethod_needs_specialization(Compiler *c, int mi, int ci, int def_cls, int *
   return need;
 }
 
+int is_descendant(Compiler *c, int k, int anc);  /* codegen_fold.c */
+
 /* `Subclass.create` where `create` is an inherited class method whose body
    does `new(...)`: Ruby's bare `new` constructs the *calling* class, so copy
    the inherited cls method into each calling subclass (the copy's class_id
@@ -1766,11 +1768,10 @@ void specialize_inherited_cls_new(Compiler *c) {
     int specialized = 0;
     for (int d = snap; d < c->nscopes && !specialized; d++) {
       if (!c->scopes[d].is_cmethod || !c->scopes[d].name ||
-          strcmp(c->scopes[d].name, src->name)) continue;
+          strcmp(c->scopes[d].name, src->name) != 0) continue;
       int dcls = c->scopes[d].class_id;
-      if (dcls == src->class_id) continue;
-      for (int x = dcls; x >= 0; x = c->classes[x].parent)
-        if (x == src->class_id) { specialized = 1; break; }
+      if (dcls != src->class_id && is_descendant(c, dcls, src->class_id))
+        specialized = 1;
     }
     if (!specialized) continue;
     /* keep it if called directly as <DefiningClass>.<name> */

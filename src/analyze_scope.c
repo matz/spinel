@@ -1755,12 +1755,23 @@ void specialize_inherited_cls_new(Compiler *c) {
   for (int s = 0; s < snap; s++) {
     Scope *src = &c->scopes[s];
     if (!src->is_cmethod || !src->name || src->class_id < 0) continue;
-    /* did we specialize this one into a subclass? (a fresh cmethod copy with
-       the same name was appended) */
+    /* did we specialize this one into a subclass? A specialization clones the
+       inherited cmethod into a *subclass*, so the appended copy's class_id is a
+       proper descendant of src's defining class. Match on name AND lineage: a
+       same-named cmethod in an unrelated class must NOT count. Without the
+       lineage test, e.g. `Base.find` specialized into `Article`/`Comment` also
+       flags the unrelated `SqliteAdapter.find` (same name "find"); that source
+       is then DCE'd while its devirtualized call site survives, leaving a call
+       to an undefined function (#1314). */
     int specialized = 0;
-    for (int d = snap; d < c->nscopes; d++)
-      if (c->scopes[d].is_cmethod && c->scopes[d].name &&
-          !strcmp(c->scopes[d].name, src->name)) { specialized = 1; break; }
+    for (int d = snap; d < c->nscopes && !specialized; d++) {
+      if (!c->scopes[d].is_cmethod || !c->scopes[d].name ||
+          strcmp(c->scopes[d].name, src->name)) continue;
+      int dcls = c->scopes[d].class_id;
+      if (dcls == src->class_id) continue;
+      for (int x = dcls; x >= 0; x = c->classes[x].parent)
+        if (x == src->class_id) { specialized = 1; break; }
+    }
     if (!specialized) continue;
     /* keep it if called directly as <DefiningClass>.<name> */
     int called_direct = 0;

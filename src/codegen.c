@@ -892,8 +892,8 @@ static int block_stored_in_ivar(Compiler *c, int id, const char *bp) {
    enforces the isolation rule by rejecting any captured outer local or `self`
    (a later milestone copies shareable captures by value). The body talks to
    the outside world only through Ractor.receive / Ractor.yield, so there is no
-   resume/yield slot to thread; the block's implicit return value is not
-   delivered (also a later milestone). The body wraps itself in a top-level
+   resume/yield slot to thread; the block's implicit return value is delivered
+   to the first r.take as a final implicit yield (#1453). The body wraps itself in a top-level
    rescue landing pad so an uncaught exception terminates just this Ractor
    instead of exit(1)-ing the whole process. */
 /* Recursively scan a Ractor body (including nested blocks) for cross-Ractor
@@ -1040,9 +1040,37 @@ void emit_ractor_new(Compiler *c, int id, Buf *b) {
      Ractor simply terminates (its taker then sees the closed outbox). */
   buf_puts(pb, "    sp_exc_top++;\n");
   buf_puts(pb, "    if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
+  /* Run the body. Its tail value is delivered to the first r.take, matching
+     CRuby: the block's return value becomes a final implicit yield (pushed to
+     the outbox after any explicit Ractor.yield, so FIFO order is preserved).
+     Only on the success path -- an uncaught raise longjmps to the else arm and
+     delivers nothing (the taker then sees the closed outbox). The fiber-body
+     tail handling (emit_fiber_new) is the template. */
   if (body >= 0) {
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
-    for (int k = 0; k < bn; k++) emit_stmt(c, bb[k], pb, 1);
+    for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], pb, 1);
+    if (bn > 0) {
+      int last = bb[bn - 1];
+      TyKind lty = comp_ntype(c, last);
+      if (lty == TY_VOID || lty == TY_UNKNOWN || lty == TY_NIL) {
+        emit_stmt(c, last, pb, 1);
+        buf_puts(pb, "        sp_Ractor_yield(sp_box_nil());\n");
+      } else {
+        Buf pre2 = {0}, vb = {0};
+        Buf *sv2 = g_pre; int sv2i = g_indent;
+        g_pre = &pre2; g_indent = 2;
+        if (lty == TY_POLY) emit_expr(c, last, &vb);
+        else emit_boxed(c, last, &vb);
+        g_pre = sv2; g_indent = sv2i;
+        if (pre2.p) buf_puts(pb, pre2.p);
+        buf_printf(pb, "        sp_Ractor_yield(%s);\n", vb.p ? vb.p : "sp_box_nil()");
+        free(pre2.p); free(vb.p);
+      }
+    } else {
+      buf_puts(pb, "        sp_Ractor_yield(sp_box_nil());\n");
+    }
+  } else {
+    buf_puts(pb, "        sp_Ractor_yield(sp_box_nil());\n");
   }
   buf_puts(pb, "        sp_exc_top--;\n");
   buf_puts(pb, "    } else {\n");

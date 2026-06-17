@@ -899,6 +899,11 @@ else {
       if (cn2 && !strcmp(cn2, "Ractor") && !strcmp(name, "new")) return TY_RACTOR;
       if (cn2 && !strcmp(cn2, "Ractor") && !strcmp(name, "receive")) return TY_POLY;
       if (cn2 && !strcmp(cn2, "Ractor") && !strcmp(name, "yield")) return TY_NIL;
+      /* Ractor.shareable?(x) -> bool; Ractor.make_shareable(x) deep-freezes x
+         and returns it (pass-through type: a frozen value keeps its type). */
+      if (cn2 && !strcmp(cn2, "Ractor") && !strcmp(name, "shareable?")) return TY_BOOL;
+      if (cn2 && !strcmp(cn2, "Ractor") && !strcmp(name, "make_shareable"))
+        return argc >= 1 ? infer_type(c, argv[0]) : TY_POLY;
       /* Random class methods: Random.rand(n)->int / Random.rand->float */
       if (cn2 && !strcmp(cn2, "Random") && !strcmp(name, "rand"))
         return argc >= 1 ? TY_INT : TY_FLOAT;

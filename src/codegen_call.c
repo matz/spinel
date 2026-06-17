@@ -2817,6 +2817,28 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       else { buf_puts(b, "sp_Ractor_yield("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
       return;
     }
+    /* Ractor.shareable?(x): inspect-only predicate over a boxed value. */
+    if (!strcmp(name, "shareable?") && argc == 1) {
+      Buf ab = {0};
+      if (comp_ntype(c, argv[0]) == TY_POLY) emit_expr(c, argv[0], &ab);
+      else emit_boxed(c, argv[0], &ab);
+      buf_printf(b, "(sp_ractor_shareable_p(%s) != 0)", ab.p ? ab.p : "sp_box_nil()");
+      free(ab.p);
+      return;
+    }
+    /* Ractor.make_shareable(x): deep-freeze then return x. The runtime helper
+       works on a boxed value; the result is unboxed back to x's (pass-through)
+       static type so `y = Ractor.make_shareable(arr)` keeps arr's type. */
+    if (!strcmp(name, "make_shareable") && argc >= 1) {
+      Buf ab = {0};
+      if (comp_ntype(c, argv[0]) == TY_POLY) emit_expr(c, argv[0], &ab);
+      else emit_boxed(c, argv[0], &ab);
+      Buf call = {0};
+      buf_printf(&call, "sp_ractor_make_shareable(%s)", ab.p ? ab.p : "sp_box_nil()");
+      emit_unbox_text(c, comp_ntype(c, id), call.p, b);
+      free(call.p); free(ab.p);
+      return;
+    }
   }
 
   /* Process module methods */

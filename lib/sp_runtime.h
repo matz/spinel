@@ -5813,6 +5813,169 @@ static sp_RactorBlob sp_ractor_serialize(sp_RbVal v) {
   sp_RactorBlob out; out.data = b.p; out.len = b.len; return out;
 }
 
+/* ---- Ractor.shareable? / Ractor.make_shareable (#1455) ----
+   A value is *shareable* when it is deeply immutable: an immediate
+   (Integer/Float/true/false/nil/Symbol), a Class, a Ractor::Port (shared by
+   reference), a frozen String, or a frozen Array/Hash/object all of whose
+   reachable values are themselves shareable. shareable? reports this predicate;
+   make_shareable deep-freezes a value (recursively) and returns it -- an
+   immediate is returned unchanged, a String as a frozen heap copy. A value that
+   cannot be made immutable (Proc, Fiber, IO, Method, Range, Time, Exception,
+   and unhandled hash shapes) raises Ractor::Error, matching CRuby's behaviour
+   for unshareable objects.
+
+   The shape coverage matches the message codec above (the two must agree).
+   NOTE: a sent shareable value is still deep-copied at the boundary -- Spinel's
+   per-Ractor private heaps make genuine by-reference sharing a separate, larger
+   change (RFC "frozen-capture sharing"); for immutable data a copy is
+   observationally equivalent (identity is already not preserved across send). */
+static void sp_ractor_not_shareable(void) {
+  sp_raise_cls("Ractor::Error", "Ractor.make_shareable: object cannot be made shareable "
+                                "(only immediates, Symbol, String, Array, Hash and plain "
+                                "objects with shareable contents are supported)");
+}
+
+static int sp_ractor_shareable_p(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_INT: case SP_TAG_FLT: case SP_TAG_BOOL:
+    case SP_TAG_NIL: case SP_TAG_SYM: case SP_TAG_CLASS:
+    case SP_TAG_ENCODING:
+      return 1;
+    case SP_TAG_STR:
+      return sp_str_is_frozen_val(v.v.s) ? 1 : 0;
+    case SP_TAG_OBJ:
+      switch (v.cls_id) {
+        case SP_BUILTIN_RACTOR_PORT: return 1;  /* shared by reference */
+        case SP_BUILTIN_INT_ARRAY:   return ((sp_IntArray *)v.v.p)->frozen ? 1 : 0;
+        case SP_BUILTIN_FLT_ARRAY:   return ((sp_FloatArray *)v.v.p)->frozen ? 1 : 0;
+        case SP_BUILTIN_STR_ARRAY: {
+          sp_StrArray *a = (sp_StrArray *)v.v.p;
+          if (!a->frozen) return 0;
+          for (mrb_int i = 0; i < a->len; i++)
+            if (a->data[i] && !sp_str_is_frozen_val(a->data[i])) return 0;
+          return 1;
+        }
+        case SP_BUILTIN_POLY_ARRAY: {
+          sp_PolyArray *a = (sp_PolyArray *)v.v.p;
+          if (!a->frozen) return 0;
+          for (mrb_int i = 0; i < a->len; i++)
+            if (!sp_ractor_shareable_p(a->data[i])) return 0;
+          return 1;
+        }
+        /* Scalar/string-valued hashes: contents are immutable value-types, so
+           frozen is sufficient. */
+        case SP_BUILTIN_STR_INT_HASH:
+        case SP_BUILTIN_STR_STR_HASH:
+        case SP_BUILTIN_INT_STR_HASH:
+          return sp_gc_is_frozen(v.v.p) ? 1 : 0;
+        case SP_BUILTIN_STR_POLY_HASH: {
+          if (!sp_gc_is_frozen(v.v.p)) return 0;
+          sp_StrPolyHash *h = (sp_StrPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++)
+            if (!sp_ractor_shareable_p(sp_StrPolyHash_get(h, h->order[i]))) return 0;
+          return 1;
+        }
+        case SP_BUILTIN_SYM_POLY_HASH: {
+          if (!sp_gc_is_frozen(v.v.p)) return 0;
+          sp_SymPolyHash *h = (sp_SymPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++)
+            if (!sp_ractor_shareable_p(sp_SymPolyHash_get(h, h->order[i]))) return 0;
+          return 1;
+        }
+        case SP_BUILTIN_POLY_POLY_HASH: {
+          if (!sp_gc_is_frozen(v.v.p)) return 0;
+          sp_PolyPolyHash *h = (sp_PolyPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++) {
+            mrb_int idx = h->order[i];
+            if (!sp_ractor_shareable_p(h->keys[idx])) return 0;
+            if (!sp_ractor_shareable_p(h->vals[idx])) return 0;
+          }
+          return 1;
+        }
+        default:
+          /* User object: GC-frozen with all ivars shareable. */
+          if (v.cls_id >= 0 && sp_ractor_obj_nivars_hook) {
+            if (!sp_gc_is_frozen(v.v.p)) return 0;
+            int n = sp_ractor_obj_nivars_hook(v.cls_id);
+            if (n < 0) return 0;
+            for (int i = 0; i < n; i++)
+              if (!sp_ractor_shareable_p(sp_ractor_obj_getivar_hook(v.v.p, v.cls_id, i))) return 0;
+            return 1;
+          }
+          return 0;
+      }
+  }
+  return 0;
+}
+
+static sp_RbVal sp_ractor_make_shareable(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_INT: case SP_TAG_FLT: case SP_TAG_BOOL:
+    case SP_TAG_NIL: case SP_TAG_SYM: case SP_TAG_CLASS:
+    case SP_TAG_ENCODING:
+      return v;
+    case SP_TAG_STR:
+      return sp_box_str(sp_str_freeze_val(v.v.s));
+    case SP_TAG_OBJ:
+      switch (v.cls_id) {
+        case SP_BUILTIN_RACTOR_PORT: return v;
+        case SP_BUILTIN_INT_ARRAY: ((sp_IntArray *)v.v.p)->frozen = 1; return v;
+        case SP_BUILTIN_FLT_ARRAY: ((sp_FloatArray *)v.v.p)->frozen = 1; return v;
+        case SP_BUILTIN_STR_ARRAY: {
+          sp_StrArray *a = (sp_StrArray *)v.v.p;
+          for (mrb_int i = 0; i < a->len; i++)
+            if (a->data[i]) a->data[i] = sp_str_freeze_val(a->data[i]);
+          a->frozen = 1; return v;
+        }
+        case SP_BUILTIN_POLY_ARRAY: {
+          sp_PolyArray *a = (sp_PolyArray *)v.v.p;
+          for (mrb_int i = 0; i < a->len; i++) a->data[i] = sp_ractor_make_shareable(a->data[i]);
+          a->frozen = 1; return v;
+        }
+        case SP_BUILTIN_STR_INT_HASH:
+        case SP_BUILTIN_STR_STR_HASH:
+        case SP_BUILTIN_INT_STR_HASH:
+          sp_gc_freeze(v.v.p); return v;   /* immutable value-type contents */
+        case SP_BUILTIN_STR_POLY_HASH: {
+          sp_StrPolyHash *h = (sp_StrPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++) {
+            const char *k = h->order[i];
+            sp_StrPolyHash_set(h, k, sp_ractor_make_shareable(sp_StrPolyHash_get(h, k)));
+          }
+          sp_gc_freeze(v.v.p); return v;
+        }
+        case SP_BUILTIN_SYM_POLY_HASH: {
+          sp_SymPolyHash *h = (sp_SymPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++) {
+            sp_sym k = h->order[i];
+            sp_SymPolyHash_set(h, k, sp_ractor_make_shareable(sp_SymPolyHash_get(h, k)));
+          }
+          sp_gc_freeze(v.v.p); return v;
+        }
+        case SP_BUILTIN_POLY_POLY_HASH: {
+          sp_PolyPolyHash *h = (sp_PolyPolyHash *)v.v.p;
+          for (mrb_int i = 0; i < h->len; i++) {
+            mrb_int idx = h->order[i];
+            h->keys[idx] = sp_ractor_make_shareable(h->keys[idx]);
+            h->vals[idx] = sp_ractor_make_shareable(h->vals[idx]);
+          }
+          sp_gc_freeze(v.v.p); return v;
+        }
+        default:
+          if (v.cls_id >= 0 && sp_ractor_obj_nivars_hook && sp_ractor_obj_setivar_hook) {
+            int n = sp_ractor_obj_nivars_hook(v.cls_id);
+            if (n < 0) { sp_ractor_not_shareable(); return v; }
+            for (int i = 0; i < n; i++)
+              sp_ractor_obj_setivar_hook(v.v.p, v.cls_id, i,
+                sp_ractor_make_shareable(sp_ractor_obj_getivar_hook(v.v.p, v.cls_id, i)));
+            sp_gc_freeze(v.v.p); return v;
+          }
+          sp_ractor_not_shareable(); return v;
+      }
+  }
+  sp_ractor_not_shareable(); return v;
+}
+
 typedef struct { const char *p; size_t len, pos; } sp_RacRd;
 static void sp_racrd_read(sp_RacRd *r, void *dst, size_t n) {
   if (r->pos + n > r->len) { sp_raise_cls("Ractor::Error", "truncated Ractor message"); return; }

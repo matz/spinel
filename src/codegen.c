@@ -956,13 +956,18 @@ void emit_ractor_new(Compiler *c, int id, Buf *b) {
   int args_node = nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args_node >= 0 ? nt_arr(nt, args_node, "arguments", &argc) : NULL;
 
-  /* Isolation rule: reject captured outer locals and self. Block params are
-     not captures (they receive the deep-copied spawn args), so skip them. */
+  /* Isolation rule: a Ractor block must be self-contained -- it may not access
+     outer local variables (CRuby raises ArgumentError; we reject at compile
+     time, matching CRuby's "can not isolate a Proc because it accesses outer
+     variables (a, b)" by naming every offender at once). Block params are not
+     captures (they receive the deep-copied spawn args), so skip them. Shareable
+     CONSTANTS remain accessible (shared read-only), like CRuby. */
   NameSet rac_locals = {0};
   if (body >= 0) proc_collect_locals(c, body, &rac_locals);
   NameSet rac_used = {0};
   if (body >= 0) proc_collect_used(c, body, &rac_used);
   if (encl) {
+    char names[512]; names[0] = 0; size_t nlen = 0; int nnames = 0;
     for (int u = 0; u < rac_used.n; u++) {
       const char *nm = rac_used.v[u];
       if (nameset_has(&rac_locals, nm)) continue;
@@ -970,9 +975,18 @@ void emit_ractor_new(Compiler *c, int id, Buf *b) {
       if (is_bp) continue;
       LocalVar *lv = scope_local(encl, nm);
       if (!lv || lv->type == TY_UNKNOWN) continue;
-      unsupported(c, id, "Ractor::IsolationError: block captures outer variable "
-                         "(a Ractor block must be self-contained; pass data as a "
-                         "Ractor.new argument or via send instead)");
+      int n = snprintf(names + nlen, sizeof names - nlen, "%s%s", nnames ? ", " : "", nm);
+      if (n > 0 && (size_t)n < sizeof names - nlen) nlen += (size_t)n;
+      nnames++;
+    }
+    if (nnames) {
+      char msg[700];
+      snprintf(msg, sizeof msg,
+               "Ractor::IsolationError: block accesses outer %s (%s) "
+               "(a Ractor block must be self-contained; pass each value as a "
+               "Ractor.new argument -- Ractor.new(%s) { |...| } -- or send it instead)",
+               nnames == 1 ? "variable" : "variables", names, names);
+      unsupported(c, id, msg);
     }
   }
   free(rac_used.v);

@@ -90,8 +90,20 @@ r.send(21)                # push to r's inbox (also: r << 21)
 puts r.take               # => 42  (pop from r's outbox)
 ```
 
-Default deep-copy semantics; capturing an unshareable outer variable is a
-compile-time `Ractor::IsolationError`.
+Default deep-copy semantics. A Ractor block must be self-contained: accessing
+any outer local variable is a compile-time `Ractor::IsolationError` (CRuby
+raises `ArgumentError` at runtime; the diagnostic names every offending local,
+e.g. `block accesses outer variables (a, b)`). Shareable **constants** remain
+accessible, like CRuby. The block's implicit return value is delivered to the
+first `take`, as a final implicit yield after any explicit `Ractor.yield`.
+
+`Ractor.make_shareable(obj)` deep-freezes a value and returns it;
+`Ractor.shareable?(obj)` reports whether a value is deeply immutable
+(immediates, `Class`, `Ractor::Port`, a frozen `String`, or a frozen
+Array/Hash/object all of whose reachable values are shareable). A sent
+shareable value is still deep-copied at the boundary -- genuine by-reference
+sharing across the private per-Ractor heaps is separate future work; for
+immutable data a copy is observationally equivalent.
 
 ## Implementation map
 
@@ -142,10 +154,15 @@ split across `lib/sp_gc.c`, `lib/sp_fiber.c`, and the header `lib/sp_runtime.h`.
    reflective send (`recv.send("m")` → `recv.m`, a whole-program parser
    behaviour), so send messages via `r << v` or a local (`r.send(v)`); literals
    like `r.send(42)` / `r.send([..])` are unaffected.
-4. **No spawn args / block params** and **no shareable-by-value capture** yet:
-   any captured outer variable or `self` is a compile-time
-   `Ractor::IsolationError`. The block's return value is not delivered to
-   `take` (only explicit `Ractor.yield` is).
+5. **Outer-local captures are rejected, matching CRuby.** A Ractor block may
+   not access any outer local variable (`self` included) -- a compile-time
+   `Ractor::IsolationError` naming every offender. CRuby 3.4 does the same
+   (an `ArgumentError`), even for an `Integer`: shareable *locals* are not
+   auto-captured, only shareable *constants* are accessible. (An earlier RFC
+   draft proposed copying shareable locals by value; that would make Spinel a
+   permissive superset of CRuby, so it was dropped in favour of the faithful
+   rejection.) Spawn args + block params (M3) and the block's return value
+   delivered to `take` (#1453) are the supported ways to get data in and out.
 
 ## Verification
 
@@ -173,9 +190,13 @@ is an unbounded FIFO; `Ractor.new(args){|p|}` spawn arguments are deep-copied in
 (M3a); `@@cvar`/`$gvar` access inside a Ractor is rejected at compile time (M5);
 and **`Ractor::Port`** provides a process-shared channel (`new`/`send`/`receive`/
 `close`), passed across the boundary *by reference* so producers and consumers
-on different Ractors rendezvous through it (M6). Remaining: shareable-by-value
-frozen captures, object-graph cycles in the codec (acyclic assumed today), and
-the Ruby-3.5 Ractor-as-Port API reshaping. None change the core partition.
+on different Ractors rendezvous through it (M6). The block's return value is
+delivered to the first `take` (#1453), and `Ractor.make_shareable` /
+`Ractor.shareable?` provide the deep-freeze + shareability predicate (#1455).
+Remaining: by-reference sharing of shareable values across the private heaps
+(today even a frozen value is deep-copied on `send`), object-graph cycles in the
+codec (acyclic assumed today), and the Ruby-3.5 Ractor-as-Port API reshaping.
+None change the core partition.
 
 ### API sharp edges (operator/method overload collisions)
 

@@ -1526,7 +1526,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             if (kmi < 0) continue;
             TyKind kr = (TyKind)c->scopes[kmi].ret;
             buf_printf(b, " case %d: ", k);
-            if (unified == TY_POLY && (kr == TY_UNKNOWN || kr == TY_VOID || kr == TY_NIL)) {
+            if (unified == TY_POLY && method_is_void(&c->scopes[kmi])) {
               /* void-return (raises): call then fall through with nil */
               emit_method_cname(c, &c->scopes[kmi], b);
               buf_puts(b, "(");
@@ -1559,7 +1559,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           buf_printf(b, " default: ");
           {
             TyKind dr = (TyKind)c->scopes[defmi].ret;
-            if (unified == TY_POLY && (dr == TY_UNKNOWN || dr == TY_VOID || dr == TY_NIL)) {
+            if (unified == TY_POLY && method_is_void(&c->scopes[defmi])) {
               emit_method_cname(c, &c->scopes[defmi], b);
               buf_puts(b, "(");
               emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), "", b);

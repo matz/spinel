@@ -3120,8 +3120,9 @@ else {
     if (kmi < 0) continue;
     TyKind arm_ret = (TyKind)c->scopes[kmi].ret;
     const char *kfn = mc(c->scopes[kmi].name);
-    if (arm_ret == TY_VOID || arm_ret == TY_NIL || arm_ret == TY_UNKNOWN) {
-      /* void-returning override: call it, assign nil/zero to the result temp */
+    if (method_is_void(&c->scopes[kmi])) {
+      /* override emitted as a void C function (method_is_void: VOID/NIL/UNKNOWN
+         ret, or initialize) -- call it, assign nil/zero to the result temp */
       buf_printf(b, " case %d: sp_%s_%s((sp_%s *)%s", k,
                  c->classes[kd].name, kfn, c->classes[kd].name, selfptr);
       for (int a = 0; a < np; a++) buf_printf(b, ", _t%d", atmp[a]);
@@ -3159,7 +3160,7 @@ else {
   }
   /* default arm uses the base-class (defcls) implementation */
   TyKind def_ret = (TyKind)m->ret;
-  if (def_ret == TY_VOID || def_ret == TY_NIL || def_ret == TY_UNKNOWN) {
+  if (method_is_void(m)) {
     buf_printf(b, " default: sp_%s_%s((sp_%s *)%s",
                c->classes[defcls].name, mc(mname), c->classes[defcls].name, selfptr);
     for (int a = 0; a < np; a++) buf_printf(b, ", _t%d", atmp[a]);

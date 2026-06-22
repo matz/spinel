@@ -11,3 +11,8 @@ def digits_of(n, base)
 end
 p digits_of(255, 16)
 p digits_of(1000, 2)
+
+# A base of polymorphic type (here an element of a mixed array) must be
+# unboxed to an integer before reaching the runtime.
+bases = [16, "x"]
+p 255.digits(bases.first)

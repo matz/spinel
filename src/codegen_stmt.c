@@ -2118,8 +2118,10 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   TyKind rt = comp_ntype(c, id);
   /* a void/nil-typed case (arms are writer calls or nil) has no C storage
-     type -- emit_ctype would declare `void _crN` -- so hold it boxed. */
-  if (rt == TY_VOID || rt == TY_NIL) rt = TY_POLY;
+     type -- emit_ctype would declare `void _crN` -- so hold it boxed.
+     TY_UNKNOWN falls through emit_ctype to `void` too; widen it as well,
+     matching the case/in-as-value path in emit_expr. */
+  if (rt == TY_VOID || rt == TY_NIL || rt == TY_UNKNOWN) rt = TY_POLY;
   int pred = nt_ref(nt, id, "predicate");
   int nw = 0;
   const int *whens = nt_arr(nt, id, "conditions", &nw);

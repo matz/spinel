@@ -459,7 +459,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* case/in as a value: declare a result temp, emit the match into g_pre
        with each arm assigning its body value to it, then yield the temp. */
     TyKind rt = comp_ntype(c, id);
-    if (rt == TY_UNKNOWN || rt == TY_VOID) rt = TY_POLY;
+    if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL) rt = TY_POLY;
     int cr = ++g_tmp;
     emit_indent(g_pre, g_indent);
     emit_ctype(c, rt, g_pre);
@@ -1404,6 +1404,11 @@ else {
     const int *eb = else_stmts >= 0 ? nt_arr(nt, else_stmts, "body", &en) : NULL;
     if (tn == 1 && en == 1) {
       TyKind res = comp_ntype(c, id);
+      /* A void/nil-typed if (e.g. an arm that is a writer call, doom's
+         `self.fullscreen = value if respond_to?(...)`) has no C storage
+         type -- emit_ctype would declare `void _tN` -- so hold the result
+         boxed; void arms degrade to nil. */
+      if (res == TY_VOID || res == TY_NIL) res = TY_POLY;
       /* Emit each arm with a CAPTURED prelude: an arm whose sub-expressions
          hoist statements (a rooted call argument, a constructed receiver, ...)
          cannot ride a flat C ternary -- a shared prelude would evaluate BOTH
@@ -1451,6 +1456,8 @@ else {
        Preludes and the if structure go into g_pre; `b` receives only _t<N>. */
     {
       TyKind res = comp_ntype(c, id);
+      /* void/nil result: no C storage type (see the ternary form above). */
+      if (res == TY_VOID || res == TY_NIL) res = TY_POLY;
       int tr = ++g_tmp;
       /* Declare the temp and default-initialize it. */
       emit_indent(g_pre, g_indent);
@@ -1469,7 +1476,7 @@ else {
       if (tn > 0) {
         int last_then = tb[tn - 1];
         TyKind lt = comp_ntype(c, last_then);
-        if (lt == TY_NIL || lt == TY_UNKNOWN) {
+        if (lt == TY_NIL || lt == TY_UNKNOWN || lt == TY_VOID) {
           emit_stmt(c, last_then, g_pre, g_indent + 2);
         }
         else {
@@ -1501,7 +1508,7 @@ else {
           if (en > 0) {
             int last_else = eb[en - 1];
             TyKind lt2 = comp_ntype(c, last_else);
-            if (lt2 == TY_NIL || lt2 == TY_UNKNOWN) {
+            if (lt2 == TY_NIL || lt2 == TY_UNKNOWN || lt2 == TY_VOID) {
               emit_stmt(c, last_else, g_pre, g_indent + 2);
             }
             else {
@@ -1652,6 +1659,10 @@ else {
     /* begin/rescue as an rvalue: hoist the block into g_pre so the temp
        is assigned before the surrounding expression reads it. */
     TyKind rt = comp_ntype(c, id);
+    /* a void/nil-typed begin (its tail is a writer call or another
+       value-less statement) has no C storage type; hold the result boxed
+       and let the value-less tail leave it nil. */
+    if (rt == TY_VOID || rt == TY_NIL) rt = TY_POLY;
     int t = ++g_tmp;
     char rv[32]; snprintf(rv, sizeof rv, "_t%d", t);
     int sp = g_result_poly; g_result_poly = (rt == TY_POLY);

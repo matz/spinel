@@ -2096,6 +2096,16 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   int n = 0;
   const int *bb = stmts >= 0 ? nt_arr(nt, stmts, "body", &n) : NULL;
   for (int k = 0; k < n - 1; k++) emit_stmt(c, bb[k], b, 0);
+  /* a value-less tail (nil/void/unknown -- e.g. an arm that is a writer
+     call): run it as a statement and leave the arm value at the slot
+     default, mirroring the if-as-value emitter. Assigning it would emit
+     `_crN = <void call>` and fail to compile. */
+  TyKind lt2 = n > 0 ? comp_ntype(c, bb[n - 1]) : TY_NIL;
+  if (n > 0 && (lt2 == TY_NIL || lt2 == TY_VOID || lt2 == TY_UNKNOWN)) {
+    emit_stmt(c, bb[n - 1], b, 0);
+    buf_printf(b, "_cr%d = %s; ", cr, rt == TY_POLY ? "sp_box_nil()" : default_value(rt));
+    return;
+  }
   buf_printf(b, "_cr%d = ", cr);
   if (n > 0) { if (rt == TY_POLY) emit_boxed(c, bb[n - 1], b); else emit_expr(c, bb[n - 1], b); }
   else buf_puts(b, rt == TY_POLY ? "sp_box_nil()" : default_value(rt));
@@ -2107,6 +2117,9 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
 void emit_case_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   TyKind rt = comp_ntype(c, id);
+  /* a void/nil-typed case (arms are writer calls or nil) has no C storage
+     type -- emit_ctype would declare `void _crN` -- so hold it boxed. */
+  if (rt == TY_VOID || rt == TY_NIL) rt = TY_POLY;
   int pred = nt_ref(nt, id, "predicate");
   int nw = 0;
   const int *whens = nt_arr(nt, id, "conditions", &nw);

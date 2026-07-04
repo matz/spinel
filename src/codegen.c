@@ -1874,6 +1874,9 @@ void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b) {
     buf_puts(b, "  const char *msg;\n");
     for (int i = 0; i < ci->nivars; i++) {
       TyKind t = ci->ivar_types[i];
+      /* belt and suspenders: analyze widens void/nil ivar slots to poly
+         (they have no C storage type); never declare a `void` field. */
+      if (t == TY_VOID || t == TY_NIL) t = TY_POLY;
       buf_puts(b, "  ");
       emit_ctype(c, t == TY_UNKNOWN ? TY_INT : t, b);
       buf_printf(b, " iv_%s;\n", ci->ivars[i] + 1);
@@ -1887,6 +1890,9 @@ void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_puts(b, "  mrb_int cls_id;\n");  /* runtime class tag for virtual dispatch */
   for (int i = 0; i < ci->nivars; i++) {
     TyKind t = ci->ivar_types[i];
+    /* belt and suspenders: analyze widens void/nil ivar slots to poly
+       (they have no C storage type); never declare a `void` field. */
+    if (t == TY_VOID || t == TY_NIL) t = TY_POLY;
     if (!is_scalar_ret(t) && t != TY_UNKNOWN) { /* ok */ }
     buf_puts(b, "  ");
     emit_ctype(c, t == TY_UNKNOWN ? TY_INT : t, b);

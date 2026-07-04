@@ -7727,10 +7727,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         int unbox_poly_val = (!is_poly_hash && vt == TY_POLY &&
                               (hvt == TY_STRING || hvt == TY_INT || hvt == TY_FLOAT));
         buf_puts(b, "({ ");
-        /* For poly hashes with scalar values, store the scalar and box it for the hash call. */
+        /* For poly hashes with scalar values, store the scalar and box it for the hash call.
+           A nil/void rhs (`return @cache[k] = nil`) has no C storage type --
+           emit_ctype would print `void` -- so hold it boxed. */
+        TyKind vt_eff = (vt == TY_NIL || vt == TY_VOID) ? TY_POLY : vt;
         TyKind decl_type = unbox_poly_val ? hvt
-                         : (is_poly_hash && vt != TY_UNKNOWN && vt != TY_POLY) ? vt
-                         : (vt != TY_UNKNOWN ? vt : TY_POLY);
+                         : (is_poly_hash && vt_eff != TY_UNKNOWN && vt_eff != TY_POLY) ? vt_eff
+                         : (vt_eff != TY_UNKNOWN ? vt_eff : TY_POLY);
         emit_ctype(c, decl_type, b);
         buf_printf(b, " _t%d = ", tv);
         /* When the slot is poly but the rhs has no type yet (e.g. `{}`),
@@ -7747,7 +7750,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else emit_hash_key(c, argv[0], ty_hash_key(rt), b);  /* unbox a poly key to the hash's key type */
         buf_puts(b, ", ");
         char tvn[32]; snprintf(tvn, sizeof tvn, "_t%d", tv);
-        if (is_poly_hash && vt != TY_POLY) {
+        if (is_poly_hash && decl_type != TY_POLY) {
           emit_boxed_text(c, decl_type, tvn, b);
         }
         else {

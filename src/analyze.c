@@ -2931,6 +2931,21 @@ void analyze_program(Compiler *c) {
       ivar_backstop_changed = 1;
     }
   }
+  /* A void/nil-typed ivar slot -- only ever assigned a value-less expression
+     (a writer call, a value-less `if`) or a bare nil that never unified with
+     a concrete type -- has no C storage type: emit_class_struct would declare
+     a `void` field. Widen to poly; such a slot always reads nil at runtime. */
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cl = &c->classes[ci];
+    for (int iv = 0; iv < cl->nivars; iv++) {
+      TyKind ivt = cl->ivar_types[iv];
+      if (ivt != TY_VOID && ivt != TY_NIL) continue;
+      const char *_n = cl->ivars[iv];
+      sp_ivwatch(_n && _n[0] == '@' ? _n + 1 : _n, "void_backstop", ivt, TY_POLY);
+      cl->ivar_types[iv] = TY_POLY;
+      ivar_backstop_changed = 1;
+    }
+  }
   /* An attr_reader/attr_accessor ivar typed via a writer call (scalar type),
      but whose class has no initialize that writes it, starts nil on fresh
      instances. Only widen when there is NO write inside ANY initialize in

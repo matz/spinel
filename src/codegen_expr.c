@@ -191,6 +191,12 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         buf_puts(&conv, "sp_complex_to_s(");
         EMIT_IV(); buf_puts(&conv, ")");
       }
+      else if (t == TY_TIME) {
+        /* Time#to_s semantics (whole seconds, no fractional part) —
+           the same value-taking helper the method-call path uses. */
+        buf_puts(&conv, "sp_time_to_s_v(");
+        EMIT_IV(); buf_puts(&conv, ")");
+      }
       else if (t == TY_REGEX) {
         buf_puts(&conv, "sp_re_to_s_str((void *)(");
         EMIT_IV(); buf_puts(&conv, "))");

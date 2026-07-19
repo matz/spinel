@@ -1,0 +1,5 @@
+[package]
+name = "socket"
+
+# Pre-installed spin package: ships with the compiler, versioned with it.
+# A typed native binding to packages/socket/sp_socket.c (see socket.rb).

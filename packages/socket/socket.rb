@@ -45,15 +45,19 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   # self-touching ops are themselves native (see module-restriction note above)
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -74,13 +78,17 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -93,14 +101,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -115,14 +127,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -141,14 +157,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -162,14 +182,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -184,14 +208,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 
@@ -206,14 +234,18 @@ module SocketPackage
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
+  native_method :bind,      [:string], :int, "sp_Socket_bind_raw"
+  native_method :connect,   [:string], :int, "sp_Socket_connect_raw"
+  native_method :sendto,    [:string, :int, :string], :int, "sp_Socket_sendto_raw"
+  native_method :listen,    [:int],    :int, "sp_Socket_listen_raw"
   native_method :send,         [:string],       :int,    "sp_BasicSocket_send"
   native_method :fileno,       [],              :int,    "sp_BasicSocket_fileno"
   native_method :closed?,      [],              :bool,   "sp_BasicSocket_closed_p"
   native_method :to_i,         [],              :int,    "sp_BasicSocket_fileno"
   native_method :close,          [],        :int, "sp_BasicSocket_close"
-  native_method :recvfrom,       [:int],     :any, "sp_BasicSocket_recvfrom"
+  native_method :recvfrom_raw,    [:int],     :any, "sp_BasicSocket_recvfrom_raw"
   native_method :sendmsg,        [:string],  :int, "sp_BasicSocket_sendmsg"
-  native_method :recvmsg,        [:int],     :any, "sp_BasicSocket_recvmsg"
+  native_method :recvmsg_raw,     [:int],     :any, "sp_BasicSocket_recvmsg_raw"
   native_method :read_nonblock,  [:int],     :string, "sp_BasicSocket_read_nonblock"
   native_method :write_nonblock, [:string],  :int, "sp_BasicSocket_write_nonblock"
 end
@@ -233,6 +265,7 @@ module SocketN
   native_func :sockaddr_un,  [:string],        :string, "sp_Socket_pack_un_wrap"
   native_func :pack_sockaddr_un, [:string],    :string, "sp_Socket_pack_un_wrap"
   native_func :unpack_sockaddr_un, [:string],  :string, "sp_Socket_un_path_wrap"
+  native_func :family_of,         [:string],  :int,    "sp_Socket_family_wrap"
   native_func :getaddrinfo,  [:string, :string, :int, :int, :int, :int], :any, "sp_Socket_getaddrinfo_strings"
   native_func :socketpair,   [:int, :int, :int], :any, "sp_Socket_socketpair_fds"
   native_func :accept_raw,   [:any], :int, "sp_Socket_accept_one_raw"
@@ -253,6 +286,24 @@ class BasicSocket
   # sendmsg/recvmsg/local_address/remote_address are themselves native_methods
   # (see the native_method table above); a user wrapper would clash with the
   # native forward-decl symbol, so no Ruby wrapper is provided here.
+
+  # recvfrom/recvmsg return [mesg, binary_sockaddr] from the native layer; we
+  # wrap the binary sockaddr in a pure-Ruby Addrinfo so accessors work.
+  # NOTE: recvfrom/recvmsg are implemented as Ruby wrappers around the native
+  # recvfrom_raw/recvmsg_raw (which return [mesg, binary_sockaddr]). A native
+  # method and a Ruby method cannot share a name, so the native symbols are
+  # suffixed with _raw. The compiler also does not propagate the caller's
+  # (maxlen, flags) arity into the native call for these (it synthesizes a 2-arg
+  # forward-decl that conflicts with the header), so we call the 1-arg raw form
+  # and ignore the Ruby-level flags (MSG_* flags are out of scope for this pass).
+  def recvfrom(maxlen, flags = 0)
+    mesg, bin = self.recvfrom_raw(maxlen)
+    [mesg, Addrinfo.new(bin)]
+  end
+  def recvmsg(dlen = nil, flags = 0)
+    mesg, bin = self.recvmsg_raw(dlen || 65536)
+    [mesg, Addrinfo.new(bin)]
+  end
 
   def self.do_not_reverse_lookup; false; end
   def self.do_not_reverse_lookup=(v); nil; end
@@ -353,14 +404,14 @@ class TCPServer < TCPSocket
 end
 
 class UDPSocket < IPSocket
-  def connect(host, port)
-    ai = Addrinfo.getaddrinfo(host.to_s, port.to_i, Socket::AF_INET, :DGRAM)[0]
-    self.connect(ai.to_sockaddr); 0
-  end
-  def bind(host, port)
-    ai = Addrinfo.getaddrinfo(host.to_s, port.to_i, Socket::AF_INET, :DGRAM)[0]
-    self.bind(ai.to_sockaddr); 0
-  end
+  # NOTE: UDPSocket#connect(host, port) / #bind(host, port) / #send(mesg, flags,
+  # host, port) sugar is intentionally omitted. The compiler (this first pass)
+  # routes a 1-arg self.bind(sockaddr) call into the 2-arg Ruby method (filling
+  # the missing port with a default), which would re-resolve the host as a
+  # binary sockaddr and fail in getaddrinfo. Callers pass a sockaddr string to
+  # the inherited BasicSocket#bind/#connect (e.g. udp.bind(Socket.sockaddr_in(port, host)))
+  # or use UDPSocket#connect/#bind with an explicit Addrinfo, matching CRuby's
+  # underlying API.
   def send(mesg, flags = 0, *rest)
     if rest.length >= 2
       host, port = rest[0], rest[1]
@@ -370,7 +421,6 @@ class UDPSocket < IPSocket
       self.send(mesg)
     end
   end
-  def recvfrom(maxlen, flags = 0); self.recvfrom(maxlen, flags); end
   def recvfrom_nonblock(len, flag = 0, outbuf = nil, exception: true); self.recvfrom(len, flag); end
   def getsockname_family; Socket::AF_INET; end
 end
@@ -382,7 +432,7 @@ class UNIXSocket < BasicSocket
     [a.ip_address, a.ip_port]
   end
   def peeraddr; [self.remote_address.to_sockaddr]; end
-  def recvfrom(len, flags = 0); self.recvfrom(len, flags); end
+  def recvfrom_nonblock(len, flags = 0); self.recvfrom(len, flags); end
   def send_io(*a); nil; end
   def recv_io(*a); nil; end
   def self.socketpair(type = :STREAM)
@@ -410,10 +460,11 @@ class Addrinfo
   # and Addrinfo.new(binary_sockaddr). The (host, port) array form is built by
   # the .new_from_array / .tcp / .ip / .udp / .unix class helpers below.
   def initialize(family, socktype = nil, protocol = nil, sockaddr = nil)
-    if sockaddr.nil?
-      # Addrinfo.new(binary_sockaddr)
+    if sockaddr.nil? && family.is_a?(String) && family.bytes.length >= 2
+      # Addrinfo.new(binary_sockaddr): the single-arg form. Derive the family
+      # from the binary sockaddr's sa_family.
       sockaddr = family
-      family = Socket::AF_UNSPEC
+      family = SocketN.family_of(sockaddr)
     end
     @family = family
     @socktype = socktype || 0
@@ -440,6 +491,7 @@ class Addrinfo
   def to_sockaddr; @sockaddr; end
   def afamily; @family; end
   def pfamily; @family; end
+  def family; @family; end
   def socktype; @socktype; end
   def protocol; @protocol; end
   def canonname; nil; end
@@ -455,11 +507,26 @@ class Addrinfo
   def getnameinfo(*a); nil; end
 
   def self.getaddrinfo(host, service, family = nil, socktype = nil, protocol = nil, flags = nil)
+    # socktype/protocol may arrive as CRuby symbols (:STREAM/:DGRAM/:RAW); map
+    # them to their integer SOCK_*/IPPROTO_* values before building Addrinfo.
+    st = case socktype
+         when :STREAM then Socket::SOCK_STREAM
+         when :DGRAM  then Socket::SOCK_DGRAM
+         when :RAW    then Socket::SOCK_RAW
+         else (socktype || 0).to_i
+         end
+    pt = case protocol
+         when :TCP then Socket::IPPROTO_TCP
+         when :UDP then Socket::IPPROTO_UDP
+         else (protocol || 0).to_i
+         end
     strs = Socket.getaddrinfo(host, service, family, socktype, protocol, flags)
     out = []
     strs.each do |bin|
-      # derive family from the binary sockaddr's sa_family
-      ai = Addrinfo.new(bin)
+      # The family comes from the binary sockaddr (so 127.0.0.1 -> AF_INET).
+      # Build the canonical 4-arg Addrinfo so accessors report correctly.
+      fam = family || SocketN.family_of(bin)
+      ai = Addrinfo.new(fam, st, pt, bin)
       out.push(ai)
     end
     out

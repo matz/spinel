@@ -12280,6 +12280,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             if (at == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
             else emit_expr(c, argv[ai], b);
           }
+          else if (sp_streq(spec, "int") && at == TY_POLY) {
+            buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
+          else if (sp_streq(spec, "float") && at == TY_POLY) {
+            buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
+          else if (sp_streq(spec, "bool") && at == TY_POLY) {
+            buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

@@ -577,3 +577,81 @@ Status legend: `[x]` done · `[ ]` pending. Last updated after Milestone 1.
 This is the proven pattern; the socket package differs only in that it talks to
 `<sys/socket.h>` instead of an in-memory buffer, and needs the wider method set
 from §8.
+
+---
+
+## 12. Bring-up debug log (Milestone 1–4 completion notes)
+
+All four milestones are now DONE and `require "socket"` works end-to-end
+(TCP server/client, UDP datagram, `Addrinfo`, `Socket.getaddrinfo`,
+`local_address`/`remote_address`, `recvfrom`/`recvmsg`). Key bugs found and
+fixed during the implementation pass (the C/compiler fixes are also recorded
+in `FIXES.md`):
+
+1. **Native method arg-count must match the C signature exactly.** A
+   `native_method :bind, [:string]` emits `sp_Socket_bind_raw(s, sa)` with only
+   the declared args; any *extra* C parameters (e.g. an unused `int len`) are
+   left uninitialized and produce garbage (`bind` → `EINVAL`). Fix: drop unused
+   trailing params in `sp_Socket_bind_raw`/`connect_raw`/`sendto_raw` and derive
+   the sockaddr length from the binary string via `sp_str_byte_len(sa)` inside C.
+   Same for `sp_BasicSocket_recv`/`send`/`sendmsg`/`recvmsg`/`setsockopt`
+   (drop the trailing `flags`/`len` params; they were being passed garbage from
+   the call site, e.g. `recv` got `flags=44` = `MSG_TRUNC`-ish, which zeroed the
+   returned buffer).
+
+2. **`shutdown()` on an unconnected UDP socket raises `ENOTCONN`.** `BasicSocket#close`
+   called `shutdown(SHUT_RDWR)` unconditionally; for a UDP socket this fails.
+   Fix: `sp_socket_shutdown_quiet` ignores the error; `close` uses it.
+
+3. **Binary sockaddr strings contain NUL bytes.** The `string` native type is
+   treated as NUL-terminated (`sp_box_str`/boxing assumes NUL-terminated C
+   strings). A 16-byte `sockaddr_in` packs as `[2,0,0,0,127,...]` — the 2nd byte
+   is NUL, so a NUL-terminated view truncates it. We avoid this by ONLY ever
+   passing the `sp_Str*` pointer (whose `sp_str_byte_len` reads the real length
+   from the header) and never re-deriving length via `strlen` on these values.
+   (`sp_Socket_pack_in_wrap` returns a `sp_str_alloc`+`sp_str_set_len` buffer;
+   the boxed Ruby String keeps the correct length. Confirmed `recvfrom`/`bind`
+   see `len==16`.) Keep sockaddr round-trips binary-safe.
+
+4. **A Ruby method named the same as a native `csym` collides.** The compiler
+   derives the generated C symbol for a Ruby method `recvfrom` on `BasicSocket`
+   as `sp_BasicSocket_recvfrom` — which clashes with the native method's `csym`.
+   Symptom: `conflicting types for 'sp_BasicSocket_recvfrom'` (the header
+   prototype vs. the compiler's synthesized 2-arg forward-decl). Fix: rename the
+   native `csym`s to `_raw` (`sp_BasicSocket_recvfrom_raw`/`recvmsg_raw`) and
+   keep the Ruby wrappers named `recvfrom`/`recvmsg` (they call the `_raw`
+   natives and wrap the binary sockaddr in a pure-Ruby `Addrinfo`). General rule:
+   any native method that needs a Ruby wrapper must use a `csym` distinct from
+   the `sp_<Class>_<method>` form the compiler would generate for that Ruby name.
+
+5. **`Addrinfo` is a pure-Ruby class; C `sp_Addrinfo` objects lack `@sockaddr`.**
+   `local_address`/`remote_address`/`recvfrom`/`recvmsg` return binary sockaddr
+   strings from C, then wrap them in `Addrinfo.new(bin)` (single-arg form, which
+   derives `@family` from `sa_family` via `SocketN.family_of`). The pure-Ruby
+   `Addrinfo` accessors (`ip_address`/`ip_port`/`family`/`socktype`/`protocol`)
+   read the `@sockaddr` ivar, so they work. Added `def family; @family; end`
+   (the compiler returns `nil` for an undefined method instead of raising, so a
+   missing accessor silently yields `nil`).
+
+6. **Symbol→int coercion for `:STREAM`/`:DGRAM`/`:RAW`/`:TCP`/`:UDP`.** CRuby
+   passes these as symbols to `getaddrinfo`/`socktype`. `Socket.getaddrinfo` and
+   `Addrinfo.getaddrinfo` map them to their `SOCK_*`/`IPPROTO_*` ints (the native
+   `getaddrinfo` wrapper expects ints; `:STREAM.to_i` is unsupported in Spinel).
+
+7. **`UDPSocket#bind`/`#connect`/`#send(host,port)` sugar omitted.** The
+   compiler routes a 1-arg `self.bind(sockaddr)` into a 2-arg Ruby method (filling
+   the missing port with a default), re-resolving the host as a binary sockaddr
+   and failing in `getaddrinfo`. Callers pass a sockaddr string to the inherited
+   `BasicSocket#bind`/`#connect` (e.g. `udp.bind(Socket.sockaddr_in(port, host))`),
+   matching CRuby's underlying API. `UDPSocket#send(mesg, flags, host, port)` is
+   kept (it uses `Addrinfo.getaddrinfo` then `sendto`).
+
+8. **Known runtime limitation (not a package bug):** `String == String` is not
+   supported by the Spinel compiler (`unsupported equality`), so tests must avoid
+   `str == str` and instead rely on snapshot `.expected` output. The project's
+   `spin test` snapshot harness is the right way to assert behavior.
+
+Compiler fixes in this pass (also in `FIXES.md`):
+- `src/codegen_call.c`: `native_func` (Path B) `:int`/`:float`/`:bool` poly args
+  now coerced via `sp_poly_to_i`/`sp_poly_to_f` (mirrors the `native_method`/
+  `native_ctor` coercion added earlier).

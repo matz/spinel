@@ -142,3 +142,60 @@ cc -I. -Ilib -Ipackages/socket <app>.c \
 (`build/sp_*.o` are the runtime objects; `lib/libspinel_rt.a` is `SP_RT_LIB`
 and provides regexp/bigint/etc. — linking the loose `build/sp_*.o` WITHOUT
 `lib/libspinel_rt.a` gives `undefined reference to re_*`.)
+
+---
+
+## Fix 5 — `native_func` (Path B) poly args not coerced for `:int`/`:float`/`:bool`
+**File:** `src/codegen_call.c`
+**Function:** the `native_func` dispatch block (≈L12218, after the JSON.parse
+special-case)
+
+The `native_method`/`native_new` emit paths already coerce a `TY_POLY` actual to
+the declared scalar spec (`sp_poly_to_i`/`sp_poly_to_f`/`sp_poly_to_s`), but the
+`native_func` (module-level `Module.func(...)`) path only coerced `:string` poly
+args — `:int`/`:float`/`:bool` polys were emitted raw as `sp_RbVal`, so e.g.
+`Socket.sockaddr_in(port, host)` (where `port` is a runtime int) compiled to a
+call with a `sp_RbVal` where the C symbol expects `mrb_int` →
+`incompatible type for argument 2 of 'sp_Socket_pack_in_wrap'`.
+
+**Fix:** in the `native_func` arg loop, added the same `TY_POLY` coercions as the
+`native_method` path:
+```c
+else if (sp_streq(spec, "int")   && at == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
+else if (sp_streq(spec, "float") && at == TY_POLY) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
+else if (sp_streq(spec, "bool")  && at == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
+```
+
+---
+
+## Package-side bugs fixed during bring-up (recorded in `SOCKET_IMPL.md` §12)
+
+These are `packages/socket/sp_socket.{c,h}` and `socket.rb` correctness fixes,
+not compiler bugs:
+
+- **Native method arg count must equal the C signature.** `bind`/`connect`/
+  `sendto`/`recv`/`send`/`sendmsg`/`recvmsg`/`setsockopt` had trailing C params
+  (`len`, `flags`) not declared in the `native_method` spec; the call site passed
+  only the declared args, leaving the extras uninitialized (garbage). `recv` got
+  `flags=44` (a `MSG_TRUNC`-like flag) which zeroed the returned buffer; `bind`
+  got a garbage `len` → `EINVAL`. Fixed by dropping the extra params and deriving
+  `len` from `sp_str_byte_len(sa)` inside C. (Header prototypes updated to match.)
+- **`close` on a UDP socket raised `ENOTCONN`.** `shutdown(SHUT_RDWR)` fails for
+  an unconnected datagram socket; added `sp_socket_shutdown_quiet` (ignores
+  errors) and `close` now uses it.
+- **Ruby method name colliding with a native `csym`.** A Ruby `def recvfrom` on
+  `BasicSocket` compiles to `sp_BasicSocket_recvfrom`, clashing with the native
+  method's `csym` (`conflicting types`). Renamed the native `csym`s to
+  `sp_BasicSocket_recvfrom_raw`/`recvmsg_raw`; the Ruby wrappers `recvfrom`/
+  `recvmsg` call the `_raw` natives and wrap the binary sockaddr in a pure-Ruby
+  `Addrinfo`. (The compiler generates a C symbol `sp_<Class>_<method>` for a Ruby
+  method of that name, so any native method needing a Ruby wrapper must use a
+  `csym` distinct from that form.)
+- **`Addrinfo` is pure-Ruby; added `def family; @family; end`.** The compiler
+  returns `nil` (instead of raising) for an undefined method, so a missing
+  accessor silently yielded `nil`. Also: `:STREAM`/`:DGRAM`/`:RAW`/`:TCP`/`:UDP`
+  symbols are mapped to their `SOCK_*`/`IPPROTO_*` ints in `Socket.getaddrinfo`
+  and `Addrinfo.getaddrinfo` (the native `getaddrinfo` wrapper expects ints).
+- **`UDPSocket#bind`/`#connect`/`#send(host,port)` sugar omitted** (compiler
+  mis-routes the 1-arg `self.bind(sockaddr)` into the 2-arg Ruby method). Callers
+  pass a sockaddr string to the inherited `BasicSocket#bind`/`#connect`.

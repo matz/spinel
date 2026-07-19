@@ -107,6 +107,12 @@ int sp_socket_shutdown(int fd, int how) {
   if (shutdown(fd, how) < 0) { raise_syserr("shutdown", errno); }
   return 0;
 }
+/* Best-effort shutdown: ignore errors expected for connectionless sockets
+   (e.g. shutdown() on an unconnected UDP socket returns ENOTCONN). Used by
+   #close so a UDP socket can be closed without raising. */
+void sp_socket_shutdown_quiet(int fd, int how) {
+  if (fd >= 0) (void)shutdown(fd, how);
+}
 
 int sp_socket_close(int fd) {
   if (fd >= 0) { int r = close(fd); (void)r; }
@@ -514,14 +520,16 @@ sp_Socket *sp_Socket_from_fd_wrapper(mrb_int cls_id, int fd) {
 }
 
 /* Socket#connect / #bind / #listen / #accept (instance ops). */
-int sp_Socket_connect_raw(sp_Socket *s, const char *sa, int len) {
+int sp_Socket_connect_raw(sp_Socket *s, const char *sa) {
+  int len = sa ? (int)sp_str_byte_len(sa) : 0;
   struct sockaddr_storage ss;
-  if (sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
+  if (!sa || sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
   return sp_socket_connect(s->fd, (struct sockaddr *)&ss, len);
 }
-int sp_Socket_bind_raw(sp_Socket *s, const char *sa, int len) {
+int sp_Socket_bind_raw(sp_Socket *s, const char *sa) {
+  int len = sa ? (int)sp_str_byte_len(sa) : 0;
   struct sockaddr_storage ss;
-  if (sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
+  if (!sa || sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
   return sp_socket_bind(s->fd, (struct sockaddr *)&ss, len);
 }
 int sp_Socket_listen_raw(sp_Socket *s, int backlog) {
@@ -545,9 +553,10 @@ int sp_Socket_send_raw(sp_Socket *s, const char *buf, int flags) {
   return sp_socket_send(s->fd, buf, (int)strlen(buf), flags);
 }
 int sp_Socket_sendto_raw(sp_Socket *s, const char *buf, int flags,
-                          const char *sa, int len) {
+                          const char *sa) {
+  int len = sa ? (int)sp_str_byte_len(sa) : 0;
   struct sockaddr_storage ss;
-  if (sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
+  if (!sa || sp_socket_unpack(sa, len, &ss) < 0) sp_raise_cls("SocketError", "invalid sockaddr");
   return sp_socket_sendto(s->fd, buf, (int)strlen(buf), flags,
                           (struct sockaddr *)&ss, len);
 }
@@ -591,6 +600,12 @@ int sp_Socket_in_port_wrap(const char *sa) {
 const char *sp_Socket_un_path_wrap(const char *sa) {
   return sp_socket_un_path(sa, (int)sp_str_byte_len(sa));
 }
+int sp_Socket_family_wrap(const char *sa) {
+  struct sockaddr_storage ss;
+  int len = sa ? (int)sp_str_byte_len(sa) : 0;
+  if (sp_socket_unpack(sa, len, &ss) < 0) return 0;
+  return (int)ss.ss_family;
+}
 
 sp_Addrinfo *sp_Addrinfo_new_wrapper(mrb_int cls_id, int family, int socktype,
                                      int protocol, const char *bin) {
@@ -631,42 +646,46 @@ static sp_RbVal sp_addrinfo_from_name(mrb_int cls_id, const char *bin, int len) 
 /* BasicSocket#close: shut down both directions then close the fd. */
 int sp_BasicSocket_close(sp_Socket *s) {
   if (s->fd >= 0) {
-    sp_socket_shutdown(s->fd, SHUT_RDWR);
+    sp_socket_shutdown_quiet(s->fd, SHUT_RDWR);
     sp_socket_close(s->fd);
     s->fd = -1;
   }
   return 0;
 }
 
-/* BasicSocket#recvfrom: returns a boxed [mesg_str, Addrinfo] pair. */
-sp_RbVal sp_BasicSocket_recvfrom(sp_Socket *s, int len, int flags) {
+/* BasicSocket#recvfrom_raw: returns a boxed [mesg_str, binary_sockaddr] pair.
+   The caller (Ruby recvfrom wrapper) builds a pure-Ruby Addrinfo from the
+   binary sockaddr so accessors (which read @sockaddr) work. */
+sp_RbVal sp_BasicSocket_recvfrom_raw(sp_Socket *s, int len) {
   char *buf = (char *)malloc((size_t)(len > 0 ? len : 1));
   if (!buf) sp_oom_die();
   struct sockaddr_storage from;
   int fromlen = (int)sizeof from;
-  int n = sp_socket_recvfrom(s->fd, buf, len, flags, (struct sockaddr *)&from, &fromlen);
+  int n = sp_socket_recvfrom(s->fd, buf, len, 0, (struct sockaddr *)&from, &fromlen);
   if (n < 0) { free(buf); return sp_box_nil(); }
   char *mesg = (char *)sp_str_alloc((size_t)n);
   memcpy(mesg, buf, (size_t)n);
   sp_str_set_len(mesg, (size_t)n);
   free(buf);
-  sp_RbVal peer = sp_addrinfo_from_name(s->cls_id, (const char *)&from, fromlen);
+  char *bin = (char *)sp_str_alloc((size_t)fromlen);
+  memcpy(bin, &from, (size_t)fromlen);
+  sp_str_set_len(bin, (size_t)fromlen);
   sp_PolyArray *arr = sp_PolyArray_new();
   SP_GC_ROOT(arr);
   sp_PolyArray_push(arr, sp_box_str(mesg));
-  sp_PolyArray_push(arr, peer);
+  sp_PolyArray_push(arr, sp_box_str(bin));
   return sp_box_poly_array(arr);
 }
 
 /* BasicSocket#sendmsg: behaves like #send (single buffer). */
-int sp_BasicSocket_sendmsg(sp_Socket *s, const char *buf, int flags) {
-  int rr = sp_socket_send(s->fd, buf, (int)strlen(buf), flags);
+int sp_BasicSocket_sendmsg(sp_Socket *s, const char *buf) {
+  int rr = sp_socket_send(s->fd, buf, (int)strlen(buf), 0);
   return rr;
 }
 
-/* BasicSocket#recvmsg: behaves like #recvfrom (returns [mesg, Addrinfo]). */
-sp_RbVal sp_BasicSocket_recvmsg(sp_Socket *s, int len, int flags) {
-  return sp_BasicSocket_recvfrom(s, len, flags);
+/* BasicSocket#recvmsg: behaves like #recvfrom (returns [mesg, sockaddr]). */
+sp_RbVal sp_BasicSocket_recvmsg_raw(sp_Socket *s, int len) {
+  return sp_BasicSocket_recvfrom_raw(s, len);
 }
 
 /* BasicSocket#read_nonblock / write_nonblock: recv/send wrappers. */
@@ -781,7 +800,8 @@ int sp_BasicSocket_shutdown(sp_Socket *s, int how) {
 }
 
 int sp_BasicSocket_setsockopt(sp_Socket *s, int level, int optname,
-                              const char *val, int len) {
+                              const char *val) {
+  int len = val ? (int)sp_str_byte_len(val) : 0;
   return sp_socket_setsockopt(s->fd, level, optname, val, len);
 }
 
@@ -825,17 +845,17 @@ const char *sp_BasicSocket_getpeername(sp_Socket *s) {
 
 /* recv: read up to len bytes, return a binary-safe string. A 0-byte read
    (EOF) returns the empty string; -1 is impossible (raises). */
-const char *sp_BasicSocket_recv(sp_Socket *s, int len, int flags) {
+const char *sp_BasicSocket_recv(sp_Socket *s, int len) {
   if (len < 0) len = 0;
   char *buf = (char *)sp_str_alloc((size_t)len > 0 ? (size_t)len : 1);
-  ssize_t n = recv(s->fd, buf, (size_t)len, flags);
+  ssize_t n = recv(s->fd, buf, (size_t)len, 0);
   if (n < 0) { raise_syserr("recv", errno); }
   sp_str_set_len(buf, (size_t)n);
   return buf;
 }
 
-int sp_BasicSocket_send(sp_Socket *s, const char *buf, int len, int flags) {
-  return sp_socket_send(s->fd, buf, len, flags);
+int sp_BasicSocket_send(sp_Socket *s, const char *buf) {
+  return sp_socket_send(s->fd, buf, (int)strlen(buf), 0);
 }
 
 int sp_BasicSocket_fileno(sp_Socket *s) { return s->fd; }

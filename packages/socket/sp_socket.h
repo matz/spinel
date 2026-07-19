@@ -116,9 +116,9 @@ sp_Addrinfo *sp_Addrinfo_from_bin(mrb_int cls_id, int family, int socktype,
 sp_Addrinfo *sp_Addrinfo_from_bin_auto(mrb_int cls_id, const char *bin, int len);
 sp_Addrinfo *sp_Addrinfo_from_bin_auto_wrapper(mrb_int cls_id, const char *bin);
 int  sp_BasicSocket_close(sp_Socket *s);
-sp_RbVal sp_BasicSocket_recvfrom(sp_Socket *s, int len, int flags);
-int  sp_BasicSocket_sendmsg(sp_Socket *s, const char *buf, int flags);
-sp_RbVal sp_BasicSocket_recvmsg(sp_Socket *s, int len, int flags);
+sp_RbVal sp_BasicSocket_recvfrom_raw(sp_Socket *s, int len);
+int  sp_BasicSocket_sendmsg(sp_Socket *s, const char *buf);
+sp_RbVal sp_BasicSocket_recvmsg_raw(sp_Socket *s, int len);
 const char *sp_BasicSocket_read_nonblock(sp_Socket *s, int len);
 int  sp_BasicSocket_write_nonblock(sp_Socket *s, const char *buf);
 sp_RbVal sp_BasicSocket_local_address(sp_Socket *s);
@@ -129,14 +129,14 @@ int  sp_BasicSocket_close_read(sp_Socket *s);
 int  sp_BasicSocket_close_write(sp_Socket *s);
 int  sp_BasicSocket_shutdown(sp_Socket *s, int how);
 int  sp_BasicSocket_setsockopt(sp_Socket *s, int level, int optname,
-                               const char *val, int len);
+                               const char *val);
 int  sp_BasicSocket_getsockopt_len(sp_Socket *s, int level, int optname);
 const char *sp_BasicSocket_getsockopt(sp_Socket *s, int level, int optname,
                                       int *outlen);
 const char *sp_BasicSocket_getsockname(sp_Socket *s);   /* binary sockaddr */
 const char *sp_BasicSocket_getpeername(sp_Socket *s);   /* binary sockaddr */
-const char *sp_BasicSocket_recv(sp_Socket *s, int len, int flags); /* binary-safe */
-int  sp_BasicSocket_send(sp_Socket *s, const char *buf, int len, int flags);
+const char *sp_BasicSocket_recv(sp_Socket *s, int len); /* binary-safe, flags=0 */
+int  sp_BasicSocket_send(sp_Socket *s, const char *buf); /* len=strlen, flags=0 */
 int  sp_BasicSocket_fileno(sp_Socket *s);
 int  sp_BasicSocket_closed_p(sp_Socket *s);
 int  sp_BasicSocket_getfd(sp_Socket *s);
@@ -151,14 +151,14 @@ int         sp_Socket_getservbyport(int port, const char *proto);
 
 /* ---- Socket instance op wrappers (called from socket.rb) ---- */
 sp_Socket *sp_Socket_from_fd_wrapper(mrb_int cls_id, int fd);
-int  sp_Socket_connect_raw(sp_Socket *s, const char *sa, int len);
-int  sp_Socket_bind_raw(sp_Socket *s, const char *sa, int len);
+int  sp_Socket_connect_raw(sp_Socket *s, const char *sa);
+int  sp_Socket_bind_raw(sp_Socket *s, const char *sa);
 int  sp_Socket_listen_raw(sp_Socket *s, int backlog);
 int  sp_Socket_accept_raw(sp_Socket *s);
 int  sp_Socket_accept_one_raw(sp_RbVal sock_val);
 int  sp_Socket_send_raw(sp_Socket *s, const char *buf, int flags);
 int  sp_Socket_sendto_raw(sp_Socket *s, const char *buf, int flags,
-                           const char *sa, int len);
+                           const char *sa);
 
 /* ---- Addrinfo high-level op wrappers ---- */
 sp_Socket *sp_Addrinfo_connect(sp_Addrinfo *a);
@@ -173,6 +173,7 @@ const char *sp_Socket_pack_un_wrap(const char *path);
 const char *sp_Socket_in_addr_wrap(const char *sa);
 int         sp_Socket_in_port_wrap(const char *sa);
 const char *sp_Socket_un_path_wrap(const char *sa);
+int  sp_Socket_family_wrap(const char *sa);
 sp_Addrinfo *sp_Addrinfo_new_wrapper(mrb_int cls_id, int family, int socktype,
                                      int protocol, const char *bin);
 sp_Addrinfo *sp_Addrinfo_new_canon_wrapper(mrb_int cls_id, int family, int socktype,

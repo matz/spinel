@@ -41,7 +41,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -74,7 +73,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -97,7 +95,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -123,7 +120,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -153,7 +149,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -178,7 +173,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -204,7 +198,6 @@ module SocketPackage
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -226,11 +219,9 @@ module SocketPackage
   # ---- UNIXServer ----
   native_struct "UNIXServer", "sp_Socket", "sp_BasicSocket_free"
   native_new [:string], "sp_UNIXServer_new"   # UNIXServer.new(path)
-  native_method :accept,    [],       :int, "sp_Socket_accept_raw"
   native_method :close_read,   [],              :int,    "sp_BasicSocket_close_read"
   native_method :close_write,  [],              :int,    "sp_BasicSocket_close_write"
   native_method :shutdown,     [:int],          :int,    "sp_BasicSocket_shutdown"
-  native_method :setsockopt,   [:int, :int, :string], :int, "sp_BasicSocket_setsockopt"
   native_method :getsockname,  [],              :string, "sp_BasicSocket_getsockname"
   native_method :getpeername,  [],              :string, "sp_BasicSocket_getpeername"
   native_method :recv,         [:int],          :string, "sp_BasicSocket_recv"
@@ -270,6 +261,8 @@ module SocketN
   native_func :socketpair,   [:int, :int, :int], :any, "sp_Socket_socketpair_fds"
   native_func :accept_raw,   [:any], :int, "sp_Socket_accept_one_raw"
   native_func :unpack_sockaddr_in_port, [:string], :int, "sp_Socket_in_port_wrap"
+  native_func :getsockopt, [:any, :int, :int], :string, "sp_BasicSocket_getsockopt_bin"
+  native_func :setsockopt, [:any, :int, :int, :string], :int, "sp_BasicSocket_setsockopt_native"
 end
 
 # ===========================================================================
@@ -320,6 +313,17 @@ class BasicSocket
   # Addrinfo class expects.
   def local_address; Addrinfo.new(self.getsockname); end
   def remote_address; Addrinfo.new(self.getpeername); end
+  def getsockopt(level, optname)
+    bin = SocketN.getsockopt(self, level, optname)
+    Socket::Option.new(Socket::AF_UNSPEC, level, optname, bin)
+  end
+  def setsockopt(level, optname, val)
+    bin = case val
+          when Integer then [val].pack("i!")
+          else val.to_s
+          end
+    SocketN.setsockopt(self, level, optname, bin)
+  end
 end
 
 class Socket < BasicSocket

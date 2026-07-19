@@ -437,6 +437,10 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {
           tmp[2] = (char)((v >> 16) & 0xff); tmp[3] = (char)((v >> 24) & 0xff);
           pk_append(&buf, &len, &cap, tmp, 4);
           break;
+        case 'i': case 'I':
+          pk_put_int(tmp, v, 4, big);
+          pk_append(&buf, &len, &cap, tmp, 4);
+          break;
         case 's': case 'S':
           pk_put_int(tmp, v, 2, big);
           pk_append(&buf, &len, &cap, tmp, 2);

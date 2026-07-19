@@ -799,8 +799,9 @@ int sp_BasicSocket_shutdown(sp_Socket *s, int how) {
   return sp_socket_shutdown(s->fd, how);
 }
 
-int sp_BasicSocket_setsockopt(sp_Socket *s, int level, int optname,
-                              const char *val) {
+int sp_BasicSocket_setsockopt_native(sp_RbVal self, int level, int optname,
+                                       const char *val) {
+  sp_Socket *s = (sp_Socket *)self.v.p;
   int len = val ? (int)sp_str_byte_len(val) : 0;
   return sp_socket_setsockopt(s->fd, level, optname, val, len);
 }
@@ -820,6 +821,18 @@ const char *sp_BasicSocket_getsockopt(sp_Socket *s, int level, int optname,
   sp_socket_getsockopt(s->fd, level, optname, buf, &len);
   sp_str_set_len(buf, (size_t)len);
   *outlen = len;
+  return buf;
+}
+
+/* Binary-safe getsockopt for the SocketN.getsockopt native_func: returns the
+   raw option value as a binary string (length taken from the kernel result).
+   The first arg is the boxed socket (sp_RbVal) passed via the :any spec. */
+const char *sp_BasicSocket_getsockopt_bin(sp_RbVal self, int level, int optname) {
+  sp_Socket *s = (sp_Socket *)self.v.p;
+  char *buf = (char *)sp_str_alloc(1024);
+  int len = 1024;
+  sp_socket_getsockopt(s->fd, level, optname, buf, &len);
+  sp_str_set_len(buf, (size_t)len);
   return buf;
 }
 

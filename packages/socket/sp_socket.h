@@ -128,11 +128,12 @@ sp_RbVal sp_BasicSocket_remote_address(sp_Socket *s);
 int  sp_BasicSocket_close_read(sp_Socket *s);
 int  sp_BasicSocket_close_write(sp_Socket *s);
 int  sp_BasicSocket_shutdown(sp_Socket *s, int how);
-int  sp_BasicSocket_setsockopt(sp_Socket *s, int level, int optname,
-                               const char *val);
+int  sp_BasicSocket_setsockopt_native(sp_RbVal self, int level, int optname,
+                                     const char *val);
 int  sp_BasicSocket_getsockopt_len(sp_Socket *s, int level, int optname);
 const char *sp_BasicSocket_getsockopt(sp_Socket *s, int level, int optname,
                                       int *outlen);
+const char *sp_BasicSocket_getsockopt_bin(sp_RbVal self, int level, int optname);
 const char *sp_BasicSocket_getsockname(sp_Socket *s);   /* binary sockaddr */
 const char *sp_BasicSocket_getpeername(sp_Socket *s);   /* binary sockaddr */
 const char *sp_BasicSocket_recv(sp_Socket *s, int len); /* binary-safe, flags=0 */

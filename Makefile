@@ -61,7 +61,7 @@ SPINEL = bin/spinel
 # GNU Make expands a rule's prerequisites immediately when the rule is read -- a
 # definition further down would expand to empty in `all`'s prereq list. The
 # build rule + rationale live further below (near the runtime archive).
-BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o
+BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o packages/socket/sp_socket.o
 
 all: regexp $(SPINEL) $(RBS_EXTRACT_TARGET) tools $(BUNDLED_NATIVE_OBJS)
 
@@ -264,6 +264,12 @@ build/sp_format.o: lib/sp_format.c lib/sp_format.h lib/sp_alloc.h lib/sp_gc.h li
 packages/stringio/sp_stringio.o: packages/stringio/sp_stringio.c packages/stringio/sp_stringio.h \
                                  lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/stringio packages/stringio/sp_stringio.c -o $@
+
+# socket is a native-bound spin package: BSD-socket primitives in sp_socket.c,
+# declared to the compiler via the native_* forms in packages/socket/socket.rb.
+packages/socket/sp_socket.o: packages/socket/sp_socket.c packages/socket/sp_socket.h \
+                             lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
+	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/socket packages/socket/sp_socket.c -o $@
 
 # strscan is likewise a native-bound spin package; its regex matching links
 # against the runtime archive's re_exec (a forward extern in the package C).

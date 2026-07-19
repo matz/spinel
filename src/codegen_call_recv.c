@@ -6710,6 +6710,15 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           else if (sp_streq(m->args[ai], "string") && comp_ntype(c, argv[ai]) == TY_POLY) {
             buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
           }
+          else if (sp_streq(m->args[ai], "int") && comp_ntype(c, argv[ai]) == TY_POLY) {
+            buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
+          else if (sp_streq(m->args[ai], "float") && comp_ntype(c, argv[ai]) == TY_POLY) {
+            buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
+          else if (sp_streq(m->args[ai], "bool") && comp_ntype(c, argv[ai]) == TY_POLY) {
+            buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

@@ -1967,7 +1967,9 @@ void register_ffi_decls(Compiler *c) {
       nc->is_native_class = 1;
       free(nc->c_struct); nc->c_struct = strdup(cstruct);
       if (freesym) { free(nc->native_free); nc->native_free = strdup(freesym); }
-      break;
+      /* NOTE: no `break` -- a module may declare many native classes (one
+         native_struct per socket class), and every one must be tagged so
+         codegen routes their constructor/methods to the package. */
     }
     for (int k = 0; k < sn; k++) {
       int s = stmts[k];
@@ -2046,7 +2048,21 @@ void register_ffi_decls(Compiler *c) {
         continue;
       }
       /* native_struct is handled in the pre-scan above; skip it here. */
-      if (sp_streq(dname, "native_struct")) continue;
+      /* native_struct is handled in the pre-scan above, but the pre-scan leaves
+         `native_cid` pinned to the LAST native class it saw -- so without
+         re-resolving here, every native_new/native_method below would bind to
+         that one class instead of its own. Re-derive native_cid from the
+         native_struct's class name (mirroring the pre-scan). */
+      if (sp_streq(dname, "native_struct")) {
+        if (an >= 2) {
+          const char *clsname2 = ffi_arg_str(nt, args[0]);
+          if (clsname2) {
+            int ex2 = comp_class_index(c, clsname2);
+            if (ex2 >= 0) native_cid = ex2;
+          }
+        }
+        continue;
+      }
 
       /* native_obj_reflect: the package consumes the generic object->hash
          reflection (sp_obj_to_hash); codegen installs it when Structs exist. */

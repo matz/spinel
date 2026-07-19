@@ -4940,10 +4940,29 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, ");\n");
     }
     /* forward-declare each native class's package struct (incomplete: the TU
-       holds only pointers) so the method externs below can name it. */
+       holds only pointers) so the method externs below can name it. The struct
+       tag comes from c_struct (the package's C type), but the *type name* the
+       generated code references is the class's own c_name -- when several native
+       classes share one backing struct (e.g. every socket class reuses
+       sp_Socket) their c_names differ, so declare a typedef alias per class.
+       Also cover native classes whose c_name was mangled (u_<Name>) because it
+       collides with a runtime typedef, and classes that are native but whose
+       *user* method forward-decls reference the c_name (the user codegen
+       declares sp_<CName>_<method> taking a `sp_<CName> *` self). */
     for (int nci = 0; nci < cf->nclasses; nci++)
-      if (cf->classes[nci].is_native_class && cf->classes[nci].c_struct)
-        buf_printf(&b, "typedef struct %s_s %s;\n", cf->classes[nci].c_struct, cf->classes[nci].c_struct);
+      if (cf->classes[nci].is_native_class && cf->classes[nci].c_struct) {
+        const char *cs = cf->classes[nci].c_struct;
+        const char *nm = cf->classes[nci].c_name;
+        buf_printf(&b, "typedef struct %s_s %s;\n", cs, cs);
+        if (strcmp(nm, cs))
+          buf_printf(&b, "typedef struct %s_s %s;\n", cs, nm);
+        /* The user-method forward decls emit `sp_<CName>` (not the mangled
+           c_name). Synthesize that alias too so the self pointer type resolves. */
+        char ubuf[64];
+        snprintf(ubuf, sizeof ubuf, "sp_%s", cf->classes[nci].name);
+        if (strcmp(ubuf, cs) && strcmp(ubuf, nm))
+          buf_printf(&b, "typedef struct %s_s %s;\n", cs, ubuf);
+      }
     /* native_method/native_new externs: prototype each C-backed method so the
        generated TU needs no package header. A constructor returns the struct
        pointer and takes cls_id first (the compiler stamps the assigned id); an

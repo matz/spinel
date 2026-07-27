@@ -25,6 +25,7 @@ extern int g_final_bind_pass;
    reports how many contributed, so a caller can tell "no evidence" from
    "evidence not derived yet". Defined in analyze_pass.c. */
 TyKind aset_value_type_ex(Compiler *c, int recv, int *nwrites);
+TyKind local_aset_key_type(Compiler *c, Scope *sc, const char *name, int *nwrites);
 
 /* Run inference over the whole program: register locals, reach a fixpoint
    on their types, and fill the node type cache. */

@@ -8094,9 +8094,23 @@ void analyze_program(Compiler *c) {
     if (lv && !lv->rbs_seeded && lv->type == TY_UNKNOWN &&
         local_all_writes_empty_hash(c, s, nm)) {
       /* a use context on this write's literal (an indexing key, a compared
-         peer) picks the variant; otherwise keep the StrPolyHash default */
+         peer) picks the variant; otherwise the local's own `[]=` keys do.
+         The StrPolyHash default is only safe for a String (or absent) key:
+         codegen reads a StrPolyHash key out of the boxed value as `.v.s`, so
+         defaulting an Integer- or poly-keyed hash to it hands a boxed int to
+         a `const char *` slot and segfaults. The key context pass could not
+         see this key -- it runs during the fixpoint, and a key that is a
+         block's return value has no type yet -- but here, post-fixpoint, it
+         does (#3397). */
       TyKind want = (c->empty_hash_want && v < c->node_cap) ? c->empty_hash_want[v] : TY_UNKNOWN;
-      lv->type = ty_is_hash(want) ? want : TY_STR_POLY_HASH;
+      if (!ty_is_hash(want)) {
+        int nkw = 0;
+        TyKind kt = local_aset_key_type(c, s, nm, &nkw);
+        want = (kt == TY_SYMBOL) ? TY_SYM_POLY_HASH
+             : (kt == TY_STRING || nkw == 0) ? TY_STR_POLY_HASH
+             : TY_POLY_POLY_HASH;
+      }
+      lv->type = want;
     }
   }
   /* Re-narrow a POLY_ARRAY ivar to IntArray when every element source is now

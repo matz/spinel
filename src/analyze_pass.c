@@ -173,6 +173,35 @@ TyKind aset_value_type_ex(Compiler *c, int recv, int *nwrites) {
   return acc;
 }
 
+/* Unified KEY type of every `name[k] = v` write to this local, or TY_UNKNOWN
+   when it has none. Keyed by (scope, name) rather than by a receiver node so a
+   post-fixpoint caller can ask about a local it only holds the WRITE of.
+
+   The key context pass (`mark_empty_hash_key_ctx`) answers the same question
+   during the fixpoint, but it can only see key types that have settled by
+   then; a key that is still open there -- a block's return value, say -- is
+   invisible to it and the local falls through to a default. Post-fixpoint the
+   type is known, so the default can be checked against it (#3397). */
+TyKind local_aset_key_type(Compiler *c, Scope *sc, const char *name, int *nwrites) {
+  const NodeTable *nt = c->nt;
+  if (!sc || !name) return TY_UNKNOWN;
+  TyKind acc = TY_UNKNOWN;
+  for (int id = aw_first(c, name); id >= 0; id = aw_next[id]) {
+    int wrecv = nt_ref(nt, id, "receiver");
+    if (wrecv < 0 || nt_kind(nt, wrecv) != NK_LocalVariableReadNode) continue;
+    const char *wn = nt_str(nt, wrecv, "name");
+    if (!wn || !sp_streq(wn, name)) continue;
+    if (comp_scope_of(c, wrecv) != sc) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an < 2) continue;
+    if (nwrites) (*nwrites)++;
+    acc = ty_unify(acc, infer_type(c, av[0]));
+  }
+  return acc;
+}
+
 /* Seed a hash parameter's value type from its own `param[k] = v` writes. The
    usage-driven hash promotion skips parameters (they are typed from call
    sites), so a param filled internally by `p[s] = int` and read back via

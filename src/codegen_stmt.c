@@ -6445,6 +6445,10 @@ else {
       buf_puts(b, "sp_RbVal ");
       buf_printf(b, "_t%d = ", trecv); emit_expr(c, recv, b); buf_puts(b, ";\n");
       emit_indent(b, indent);
+      /* The temp can be the receiver's only live reference, and a write arm's
+         value expression may allocate: root it for the switch (#3476). */
+      buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d);\n", trecv);
+      emit_indent(b, indent);
       /* Every boxed scalar carries cls_id 0, which aliases the user class at
          index 0 (cf. issue #1576 and emit_poly_dispatch_key): key a non-object
          value to a sentinel matching no case so it lands in the default raise

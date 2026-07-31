@@ -3695,7 +3695,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          fit (#3264, #3276). Only an untyped result becomes poly. */
       if (is_ostruct && (ret == TY_UNKNOWN || ret == TY_VOID || ret == TY_NIL)) ret = TY_POLY;
       int tv = ++g_tmp, tr = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b); buf_puts(b, "; ");
+      /* Root the receiver temp: it can be the only live reference (r += f().m),
+         methods do not root their own self, and an arm's callee may allocate
+         and trigger a collection while it runs (#3476). */
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
       emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
       buf_printf(b, " _t%d = %s; ", tr, is_scalar_ret(ret) ? default_value(ret) : "0");
       /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
@@ -4304,7 +4308,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
       TyKind *atmp_ty = malloc(sizeof(TyKind) * argc);
-      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b); buf_puts(b, "; ");
+      /* Root the receiver temp across the arms, as the zero-arg dispatch does:
+         an arm's callee may allocate and collect the otherwise-unreferenced
+         receiver out from under itself (#3476). */
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
       for (int a = 0; a < pos_argc; a++) {
         atmp[a] = ++g_tmp;
         TyKind at = infer_type(c, argv[a]);

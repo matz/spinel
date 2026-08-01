@@ -508,9 +508,14 @@ const char *sp_float_to_s(mrb_float f) {
 int sp_alloc_report_on = 0;
 static int sp_alloc_sites_on = 0;
 typedef struct { void *key; void *site; unsigned long long count, bytes; } sp_AllocStat;
-#define SP_ALLOC_STATS 2048
+/* Sized for the per-SITE case, which is what fills this table: one entry per
+   (type, site) pair rather than one per type. Strings alone reach into the
+   hundreds of sites on a Rails-scale app, and a full table silently merges
+   into the home slot -- the one failure mode that would quietly misattribute
+   the numbers this feature exists to report. BSS, so the untouched tail costs
+   nothing when the report is off. */
+#define SP_ALLOC_STATS 8192
 static sp_AllocStat sp_alloc_stats[SP_ALLOC_STATS];
-static unsigned long long sp_alloc_str_count, sp_alloc_str_bytes;
 /* Type names live in their own table: one entry per scan fn, independent of
    how many sites allocate it. */
 typedef struct { void *key; const char *name; } sp_AllocName;
@@ -552,12 +557,21 @@ static void *sp_alloc_site_now(void) {
    plain byte buffer) counts under this stand-in key -- which keeps it on the
    per-site path too. */
 #define SP_ALLOC_NOSCAN_KEY ((void *)(uintptr_t)1)
+/* Strings carry no scan fn, so they get a reserved key of their own rather
+   than a pair of standalone counters. Same table means the same per-site
+   path: with SPINEL_ALLOC_SITES off every string lands in one slot (site
+   NULL) and the dump is byte-identical to the old aggregate line, and with
+   it on they split by caller like every other type. Strings are the largest
+   share of allocated bytes in a typical app, so leaving them off the site
+   path left the biggest question the report raises unanswerable. */
+#define SP_ALLOC_STR_KEY ((void *)(uintptr_t)2)
 void sp_alloc_report_count(void *scan, size_t bytes) {
   sp_AllocStat *s = sp_alloc_stat_slot(scan ? scan : SP_ALLOC_NOSCAN_KEY, sp_alloc_site_now());
   s->count++; s->bytes += (unsigned long long)bytes;
 }
 void sp_alloc_report_str(size_t bytes) {
-  sp_alloc_str_count++; sp_alloc_str_bytes += (unsigned long long)bytes;
+  sp_AllocStat *s = sp_alloc_stat_slot(SP_ALLOC_STR_KEY, sp_alloc_site_now());
+  s->count++; s->bytes += (unsigned long long)bytes;
 }
 void sp_alloc_report_tag(void *scan, const char *name) {
   size_t h = ((size_t)(uintptr_t)scan >> 4) % SP_ALLOC_NAMES;
@@ -597,7 +611,6 @@ static void sp_alloc_report_dump(void) {
     FILE *g = fopen(out, "w");
     if (g) { f = g; close_f = 1; }
   }
-  if (sp_alloc_str_count) fprintf(f, "alloc;String %llu\n", sp_alloc_str_count);
   /* Symbolise the sites once, here: `alloc;<site>;<Type> <count>` keeps the
      folded-stack shape a flamegraph consumer wants, with the site as the outer
      frame. Without site tracking the line is the old per-type one. */
@@ -606,7 +619,9 @@ static void sp_alloc_report_dump(void) {
     for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
       sp_AllocStat *s = &sp_alloc_stats[i];
       if (!s->key || !s->count) continue;
-      const char *nm = s->key == SP_ALLOC_NOSCAN_KEY ? "(no-scan)" : sp_alloc_name_of(s->key);
+      const char *nm = s->key == SP_ALLOC_NOSCAN_KEY ? "(no-scan)"
+                     : s->key == SP_ALLOC_STR_KEY    ? "String"
+                     : sp_alloc_name_of(s->key);
       char tybuf[64];
       if (!nm) { snprintf(tybuf, sizeof tybuf, "scan_%p", s->key); nm = tybuf; }
       unsigned long long v = pass ? s->bytes : s->count;
@@ -619,7 +634,6 @@ static void sp_alloc_report_dump(void) {
       else fprintf(f, "%s%s %llu\n", lead, nm, v);
     }
   }
-  if (sp_alloc_str_count) fprintf(f, "# bytes String %llu\n", sp_alloc_str_bytes);
   if (close_f) fclose(f);
 }
 __attribute__((constructor)) static void sp_alloc_report_boot(void) {

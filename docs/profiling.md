@@ -74,7 +74,10 @@ alloc;(no-scan) 100
 buffer — which the collector never has to walk.
 
 Counters key on the object's GC scan callback, which is the de-facto type
-identity, and are bumped inside the allocator itself. Nothing is sampled, so
+identity, and are bumped inside the allocator itself. Strings have no scan
+callback, so they carry a reserved key of their own and otherwise behave like
+any other row — including on the per-site path below, which matters because
+strings are usually the largest share of the bytes. Nothing is sampled, so
 two runs of the same program report the same numbers.
 
 ### Per-site attribution: `SPINEL_ALLOC_SITES`

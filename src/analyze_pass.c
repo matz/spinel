@@ -9068,6 +9068,15 @@ int infer_return_types(Compiler *c) {
         TyKind br = sc->body >= 0 ? infer_type(c, sc->body) : TY_UNKNOWN;
         if (has_ret && has_ret[s]) br = ty_unify(br, ret_acc[s]);
         if (br == TY_STR_POLY_HASH) { sc->ret = TY_STR_POLY_HASH; changed = 1; }
+        /* Same mismatch, one step further out: a body that stayed POLY. A
+           class-level ivar memoizing `{}` never narrows -- its only
+           assignment is the empty literal, and the writes that would give
+           it element types go through the value the reader returns -- so
+           the body is an sp_RbVal while the signature says string-valued.
+           Returning it through a StrStrHash* reinterprets the pointer: the
+           `||=` spelling crashed on the first read and the nil-guard
+           spelling did not compile (#3779). Widen to what the body is. */
+        else if (br == TY_POLY) { sc->ret = TY_POLY; changed = 1; }
       }
       /* Same shape, and the same reason. RBS `Integer` covers both machine
          ints and bignums, so a body that grew a bignum is a valid inhabitant

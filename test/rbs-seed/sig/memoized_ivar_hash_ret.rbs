@@ -1,0 +1,4 @@
+module Registry
+  def self.table: () -> Hash[String, String]
+  def self.other: () -> Hash[String, String]
+end

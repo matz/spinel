@@ -538,10 +538,28 @@ int main(int argc, char **argv) {
      true (#4097). The caret goes with it -- cc draws it from the same column,
      so it points at nothing and pads to that width whatever the location says;
      the source-quote line is cc's only way to carry it and goes too, leaving
-     the file and line the message already names. Both gcc and clang take the
-     flags. */
-  if (debug || line_map)
-    s_add(&cmd, "-fno-show-column -fno-diagnostics-show-caret ");
+     the file and line the message already names. */
+  if (debug || line_map) {
+    s_add(&cmd, "-fno-show-column ");
+    /* clang spells the caret flag -fno-caret-diagnostics and REFUSES the
+       gcc spelling outright: Apple clang 21 answers "unknown argument:
+       '-fno-diagnostics-show-caret'" and stops, so on macOS every build
+       fails -- including spinel's own tools, which it compiles with itself.
+       Its own spelling gives exactly what is wanted here:
+       `e.c:1: error: ...`, no column, no quoted line, no caret.
+
+       Chosen by the compiler that BUILT spinel, since that is the same
+       toolchain it then drives as `cc` wherever the spelling differs. The
+       gcc arm is left exactly as it was, so this cannot regress it. A
+       one-time probe of the configured cc would also cover a build whose
+       CC differs from its host compiler, at the cost of a compile per
+       run. */
+#if defined(__clang__)
+    s_add(&cmd, "-fno-caret-diagnostics ");
+#else
+    s_add(&cmd, "-fno-diagnostics-show-caret ");
+#endif
+  }
   if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
   /* Compile the generated TU with the same threading define as the mt runtime

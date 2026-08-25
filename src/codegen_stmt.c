@@ -1488,12 +1488,32 @@ int static_isa_cond(Compiler *c, int pred) {
   return 0;
 }
 
+/* Does any class expose a GENERATED writer for this ivar? attr_writer /
+   attr_accessor synthesize the setter, so `obj.w = v` is a CallNode against a
+   body that has no AST: the scan below cannot see the value it stores, and an
+   ivar written only as `@w = nil` in the constructor read as "every write is
+   nil" even though the program assigns it an Array from outside. A
+   hand-written `def w=(v); @w = v; end` is unaffected -- its body holds a real
+   InstanceVariableWriteNode that the scan already counts. */
+static int ivar_has_generated_writer(Compiler *c, const char *nm) {
+  const char *base = nm + 1;                  /* skip the '@' */
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    for (int w = 0; w < ci->nwriters; w++)
+      if (ci->writers[w] && sp_streq(ci->writers[w], base)) return 1;
+    for (int w = 0; w < ci->nsg_writers; w++)
+      if (ci->sg_writers[w] && sp_streq(ci->sg_writers[w], base)) return 1;
+  }
+  return 0;
+}
+
 /* Scan every program-wide write to ivar `nm` ("@foo"): returns 0 when at least
    one write exists and all of them assign nil (statically falsy), -1 otherwise
    (no writes seen, a non-nil write, or an opaque write form). */
 static int ivar_all_writes_nil(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
   if (!nm) return -1;
+  if (ivar_has_generated_writer(c, nm)) return -1;
   int saw_write = 0;
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);

@@ -1,0 +1,4 @@
+accessor, reader call: truthy
+writer, direct ivar:   truthy
+hand-written setter:   truthy
+no writer at all:      falsy

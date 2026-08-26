@@ -53,7 +53,6 @@ puts "accepted some first: #{sent > 0}"
 # Draining the far end makes room, and the write resumes -- the caller keeps
 # the remainder and retries, which is the whole point of the contract.
 Net.sp_net_recv_some(afd, 65536)
-Net.sp_net_recv_some(afd, 65536)
 puts "resumes: #{Net.sp_net_write_partial(cfd, 'more', 4) > 0}"
 
 Net.sp_net_close(afd)

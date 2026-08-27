@@ -1,11 +1,8 @@
 # Socket#connect_nonblock 1-arg form: the packed sockaddr path. Mirrors
 # the 2-arg shape: default raises IO::WaitWritable on EINPROGRESS;
-# `exception: false` returns the :wait_writable symbol instead. A
-# second connect_nonblock after the handshake completes sees EISCONN,
-# which raises Errno::EISCONN by default and returns 0 only when
-# `exception: false` is set. Refusal (ECONNREFUSED) raises immediately
-# regardless of the option, because refusal is a hard error, not
-# "in progress".
+# `exception: false` returns the :wait_writable symbol instead.
+# Refusal (ECONNREFUSED) raises immediately regardless of the option,
+# because refusal is a hard error, not "in progress".
 require "socket"
 
 # Pack a 16-byte sockaddr_in for 127.0.0.1:port. Addrinfo#to_sockaddr
@@ -17,7 +14,7 @@ def sockaddr_in(port, host)
     host.split(".").map(&:to_i).pack("C4") + ("\x00" * 8)
 end
 
-# 1) Refused port: ECONNREFUSED comes back synchronously because
+# 1) Refused port. ECONNREFUSED comes back synchronously because
 #    nothing is listening. The exception class is independent of the
 #    `exception` option - it is a hard error, not a "would block".
 s1 = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -30,10 +27,10 @@ refused =
 p refused
 s1.close
 
-# 2) Default exception mode on a live handshake. The first call
-#    either returns 0 (loopback connect already done) or raises
-#    IO::WaitWritable. Both are valid "connected or connecting"
-#    outcomes, so the test asserts the class, not the exact value.
+# 2) Default mode on a live handshake. The first call has two
+#    platform-dependent outcomes: it may return 0 (loopback connect
+#    completed before the syscall returned) or raise IO::WaitWritable
+#    (connect is queued). The test accepts either via rescue.
 srv = TCPServer.new("127.0.0.1", 0)
 port = srv.addr[1]
 t = Thread.new { srv.accept }
@@ -46,8 +43,11 @@ default =
     :wait_writable
   end
 p default
-# Second call after the handshake completes. The kernel now reports
-# EISCONN, which the default mode raises as Errno::EISCONN.
+# Park until the handshake completes, then ask again. The result is
+# 0 (kernel says the socket is connected and the syscall agrees) or
+# Errno::EISCONN (kernel: you already tried this, here is the status).
+# Both are valid "we are connected" answers in the default mode.
+IO.select(nil, [s2])
 begin
   s2.connect_nonblock(sockaddr_in(port, "127.0.0.1"))
   p :ok
@@ -58,11 +58,10 @@ t.value.close rescue nil
 srv.close
 s2.close
 
-# 3) `exception: false` collapses the same two outcomes into
-#    symbol / 0. The first call returns :wait_writable (or 0 if the
-#    loopback handshake is already done); the second returns 0
-#    because the kernel reports EISCONN, which the no_exc path
-#    treats as success.
+# 3) `exception: false` on the same handshake path. The first call
+#    returns the :wait_writable symbol or 0 (immediate success); the
+#    second returns 0 because the no_exc path collapses EISCONN to
+#    success instead of raising.
 srv2 = TCPServer.new("127.0.0.1", 0)
 port2 = srv2.addr[1]
 t2 = Thread.new { srv2.accept }

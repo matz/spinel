@@ -31,7 +31,14 @@ extern void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *));
 extern SP_NORETURN void sp_raise_cls(const char *cls, const char *msg);
 extern const char *sp_sprintf(const char *fmt, ...);
 
-static void sp_File_fin(void *p) { sp_File *f = (sp_File *)p; if (f->fp) { fclose(f->fp); f->fp = NULL; } }
+static void sp_File_fin(void *p) {
+  sp_File *f = (sp_File *)p;
+  /* f->no_autoclose is set by sp_io_for_fd when the user passed
+     autoclose: false. The runtime owns the underlying fd in that case
+     (closing it would surprise the caller, who is wrapping a fd they
+     opened via IO.sysopen or a similar call). Honour the flag. */
+  if (f->fp && !f->no_autoclose) { fclose(f->fp); f->fp = NULL; }
+}
 static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_mark_string(f->path); if (f->mode) sp_mark_string(f->mode); }
 
 /* The two-argument form is the permission form with CRuby's default bits:
@@ -231,7 +238,11 @@ sp_int sp_File_close(sp_File *f) {
   /* never fclose the shared stdout/stderr handles (sp_io_stdout/sp_io_stderr):
      closing the process's standard streams would corrupt the singleton and any
      later write through it. Closing them is a no-op. */
-  if (f && f->fp && f->fp != stdout && f->fp != stderr && f->fp != stdin) { fclose(f->fp); f->fp = NULL; }
+  /* f->no_autoclose is set by sp_io_for_fd when the user passed
+     autoclose: false; the fd is not ours, so io.close must not fclose it. */
+  if (f && f->fp && f->fp != stdout && f->fp != stderr && f->fp != stdin && !f->no_autoclose) {
+    fclose(f->fp); f->fp = NULL;
+  }
   return 0;
 }
 

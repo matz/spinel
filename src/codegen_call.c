@@ -21054,11 +21054,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         const char *lty = nt_type(nt, argv[argc - 1]);
         int kwh = (lty && sp_streq(lty, "KeywordHashNode")) ? argv[argc - 1] : -1;
         int ac = kwh >= 0 ? kwh_lookup(nt, kwh, "autoclose") : -1;
+        /* Detect a user-written string literal in argv[1] by the AST node
+           type (StringNode), not the inferred type. The inference result
+           widens to poly in larger contexts and the old comp_ntype guard
+           misfired; the AST type survives the widening. */
+        int user_string_mode = 0;
+        if (argc >= 2) {
+          const char *aty = nt_type(nt, argv[1]);
+          if (aty && sp_streq(aty, "StringNode")) user_string_mode = 1;
+        }
         buf_puts(b, "sp_io_for_fd(");
         emit_int_expr(c, argv[0], b);
         buf_puts(b, ", ");
-        if (argc >= 2 && comp_ntype(c, argv[1]) == TY_STRING) emit_expr(c, argv[1], b);
-        else buf_puts(b, "\"r\"");
+        if (user_string_mode) emit_expr(c, argv[1], b);
+        else buf_puts(b, "NULL");
         buf_puts(b, ", ");
         if (ac >= 0) { buf_puts(b, "("); emit_expr(c, ac, b); buf_puts(b, ")"); }
         else buf_puts(b, "1");

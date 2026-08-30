@@ -2981,7 +2981,22 @@ sp_PolyArray *sp_io_pipe(void) {
 sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROOT_STR(mode);
   if (fd < 0 || fcntl((int)fd, F_GETFD) < 0)
     sp_raise_cls("Errno::EBADF", "Bad file descriptor");
-  sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : "r", 0);
+  /* When the user did not pass a mode (mode is NULL or ""), CRuby picks a
+     mode that matches the fd's actual open flags via a "first fdopen
+     that does not fail" fallback. Mirror that: probe the fd's flags and
+     pass the closest fopen mode, so wrapping a write-only fd works
+     without forcing the caller to spell the mode. */
+  const char *m;
+  if (mode && *mode) {
+    m = mode;
+  } else {
+    int fl = fcntl((int)fd, F_GETFL);
+    if (fl < 0) m = "r";
+    else if ((fl & O_ACCMODE) == O_WRONLY) m = "w";
+    else if ((fl & O_ACCMODE) == O_RDWR)   m = "r+";
+    else                                   m = "r";
+  }
+  sp_File *f = sp_io_fdopen_ex((int)fd, m, 0);
   if (f && !autoclose) f->no_autoclose = 1;
   return f;
 }

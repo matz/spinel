@@ -9024,6 +9024,27 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
                                    vs ? (int)(vs - c->scopes) : -1, 0);
   return v ? *v : 0;
 }
+/* True when the mutator evidence for local `vn` rests on a name a USER class
+   also defines. The mutator table is keyed on the NAME alone, so `f.replace(x)`
+   reads as String#replace whatever `f` holds; on a slot whose type is still
+   poly/unknown -- an element read out of a heterogeneous container -- that is
+   not evidence the value is a string, and narrowing the slot to the handle
+   applied the builtin's semantics to a user object (#4240). */
+static int strbuf_mut_name_user_owned(Compiler *c, const char *vn, Scope *vs) {
+  const NodeTable *nt = c->nt;
+  if (!vn) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    int ur = nt_ref(nt, u, "receiver");
+    if (ur < 0 || nt_kind(nt, ur) != NK_LocalVariableReadNode) continue;
+    const char *urn = nt_str(nt, ur, "name");
+    if (!urn || !sp_streq(urn, vn) || comp_scope_of(c, ur) != vs) continue;
+    const char *un = nt_str(nt, u, "name");
+    if (!un || !sp_str_mutator(un, SP_MUT_LOCAL)) continue;
+    if (an_user_defines_method(c, un)) return 1;
+  }
+  return 0;
+}
+
 /* In-place mutation status of ivar `nm` of class `cid` (same contract as
    strbuf_mut_kind). The supported set is narrower: the shadow-copy shim
    cannot rename an ivar, so []=/insert/slice!/setbyte disqualify. */
@@ -10042,6 +10063,15 @@ static int promote_shared_stored_strings(Compiler *c) {
        string somewhere before treating the binding as a string alias. */
     if (!strbuf_container_stores_string(c, contn5, conts5)) continue;
     changed |= strbuf_demand_container_stores(c, contn5, conts5);
+    /* An untyped element bound out of a HETEROGENEOUS container, mutated by a
+       name a user class also defines: the name is not evidence that THIS
+       binding is a string, and narrowing the slot ran String#replace on the
+       user object -- its contents became the argument, silently (#4240). The
+       container's own string stores stay handles (the demand above), so a
+       genuine String element still mutates in place; the local keeps its poly
+       type so the call site builds the cls_id dispatch instead. */
+    if ((llv5->type == TY_UNKNOWN || llv5->type == TY_POLY) &&
+        strbuf_mut_name_user_owned(c, lname5, ls5)) continue;
     if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
     if (llv5->type != TY_POLY && (llv5->type != TY_STRBUF || !llv5->str_shared))
       {  llv5->type = TY_STRBUF; llv5->str_shared = 1; changed = 1;  }

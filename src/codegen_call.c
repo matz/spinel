@@ -6005,6 +6005,30 @@ else {
           buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_get((sp_IntArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
         }
       }
+      /* String#replace / Array#replace on a poly value when a user class owns
+         the name: a genuine String or Array reaching this dispatch has no
+         user-class arm, and without one of its own it landed on the raise
+         default -- or, before the dispatch was opened at all, took the
+         builtin's path with the builtin's semantics applied to the user
+         object (#4240). The argument rides its already-materialised temp, as
+         the IO arms below do; the helper is the one the no-user-class path
+         emits. */
+      if (sp_streq(name, "replace") && pos_argc == 1 && kwh < 0) {
+        Buf ab; memset(&ab, 0, sizeof ab);
+        char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
+        if (atmp_ty[0] == TY_POLY) buf_puts(&ab, tn);
+        else emit_boxed_text(c, atmp_ty[0], tn, &ab);
+        buf_printf(b, " case SP_BUILTIN_STRBUF: case SP_BUILTIN_INT_ARRAY:"
+                      " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                      " case SP_BUILTIN_POLY_ARRAY:");
+        if (ret == TY_POLY)
+          buf_printf(b, " _t%d = sp_poly_replace(_t%d, %s); break;", tr, tv,
+                     ab.p ? ab.p : "sp_box_nil()");
+        else
+          buf_printf(b, " sp_poly_replace(_t%d, %s); break;", tv,
+                     ab.p ? ab.p : "sp_box_nil()");
+        free(ab.p);
+      }
       /* IO#write on a poly value when a user class owns the name: a Socket or
          File from Socket.pair/File.open has no user-class arm in the switch,
          but the dispatch was still opened (some other class does define

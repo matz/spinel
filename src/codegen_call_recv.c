@@ -12934,8 +12934,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;
   }
-  /* poly receiver: replace(other) -> runtime dispatch (nullable array). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "replace") && argc == 1) {
+  /* poly receiver: replace(other) -> runtime dispatch (nullable array).
+     Stands down for a user class that defines the name: the arm applied
+     String#replace's semantics to the user object -- the receiver's contents
+     became the argument -- where CRuby entered the user method (#4240). The
+     dispatch below builds the cls_id switch with an arm for the class. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "replace") && argc == 1 &&
+      !user_defines_or_reads(c, name)) {
     buf_puts(b, "sp_poly_replace("); emit_expr(c, recv, b);
     buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
     return 1;

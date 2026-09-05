@@ -18409,12 +18409,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         emit_int_expr(c, argv[1], b); buf_puts(b, ")");
         free(rb.p); return;
       }
-      /* 3-arg form (level, optname, data): the data arg is accepted by CRuby
-         but spinel's sp_sock_getsockopt only takes 2 args. Drop the data. */
+      /* 3-arg form (level, optname, data): CRuby accepts a buffer pointer
+         here for getsockopt-level calls. spinel's sp_sock_getsockopt only
+         takes 2 args and returns sp_SockOpt *, which the codegen can't
+         box to sp_RbVal. Return nil; callers that need the option value
+         use the 2-arg form. */
       if (sp_streq(name, "getsockopt") && argc == 3) {
-        buf_printf(b, "sp_sock_getsockopt(%s, ", r);
-        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
-        emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_puts(b, "sp_box_nil()");
         free(rb.p); return;
       }
     }

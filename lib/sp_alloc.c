@@ -221,23 +221,37 @@ void sp_gc_retune_object(size_t before) {
   else if (live > 0) { sp_gc_threshold = sp_gc_sat_mul(live, 4); if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
   else { sp_gc_threshold = sp_gc_threshold_init; }
 }
-/* `before` is the pre-sweep live bytes; `after` the survivors. The threshold is
-   the PER-WORKER budget (each worker triggers on its own list, so the aggregate
-   heap is bounded by N * threshold). Retune on the per-worker average so the
-   budget tracks a single worker's survivor size and does NOT inflate by N each
-   cycle -- retuning on the aggregate would grow it geometrically for long-lived
-   strings. The single-threaded build works in absolute bytes (N == 1). */
+/* `before` and `after` are both the WHOLE live string set -- young plus old --
+   the way sp_gc_retune_object reads the whole object heap. Sizing from the
+   young generation alone left this budget blind to the old one: a render
+   promotes what it keeps, so `after` read as ~0 however much string data the
+   process was holding, and the trigger fell back to its floor after every
+   sweep. What it gates is a whole-heap stop-the-world, old generation
+   included, so the budget that pays for a collection has to see the bytes the
+   mark walks. Both sides have to move together -- a whole-heap `after` against
+   a young-only `before` reads as an unproductive sweep every time.
+
+   The threshold is the PER-WORKER budget (each worker triggers on its own
+   list, so the aggregate heap is bounded by N * threshold). Retune on the
+   per-worker average so the budget tracks a single worker's share and does NOT
+   inflate by N each cycle -- retuning on the aggregate would grow it
+   geometrically for long-lived strings. The single-threaded build works in
+   absolute bytes (N == 1). */
+static size_t sp_str_gate_old = 0;   /* the old total at the gate, for `before` */
 static void sp_str_retune(size_t before, size_t promoted) {
   if (sp_gc_stress_pin) { sp_str_threshold = sp_str_threshold_init; return; }
 #ifdef SP_THREADS
   int nw = sp_active_workers; if (nw < 1) nw = 1;
-  size_t after = (sp_str_bytes_total() + promoted) / (size_t)nw;
-  before /= (size_t)nw;
+  size_t after = (sp_str_bytes_total() + sp_str_old_total()) / (size_t)nw;
+  before = (before + sp_str_gate_old) / (size_t)nw;
+  (void)promoted;   /* already inside old_total by the time we run */
 #else
-  /* A promoted string is a survivor, not a reclamation: leaving it out of
-     `after` would read as a very productive sweep and shrink the trigger,
-     collecting harder and harder as the old generation grows. */
-  size_t after = sp_str_heap_bytes + promoted;
+  /* sp_str_old_total() already carries what this sweep promoted, so a promoted
+     string is counted once, as the survivor it is: leaving it out would read as
+     a very productive sweep and shrink the trigger, collecting harder and
+     harder as the old generation grows. */
+  size_t after = sp_str_heap_bytes + sp_str_old_total();
+  before += sp_str_gate_old;
 #endif
   size_t freed = before > after ? before - after : 0;   /* saturating; see sp_gc_retune_object */
   if (freed < before / 4) { sp_str_threshold = sp_gc_sat_mul(before, 2); }
@@ -550,6 +564,7 @@ int sp_str_sweep_begin(int *major) {
 #endif
   if (before <= SP_GC_CTR_GET(sp_str_threshold)) return 0;
   sp_str_gate_before = before;
+  sp_str_gate_old = sp_str_old_total();
   /* Walk the old generation only once it has itself grown past a threshold,
      then re-aim that threshold at what survived. Between majors, old strings
      that die are reclaimed late -- the same delayed-reclamation trade this

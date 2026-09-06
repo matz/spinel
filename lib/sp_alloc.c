@@ -218,7 +218,7 @@ void sp_gc_retune_object(size_t before) {
      count that had itself wrapped. */
   size_t freed = before > live ? before - live : 0;
   if (freed < before / 4) { sp_gc_threshold = sp_gc_sat_mul(before, 2); }
-  else if (live > 0) { sp_gc_threshold = sp_gc_sat_mul(live, 4); if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
+  else if (live > 0) { sp_gc_threshold = sp_gc_sat_mul(live, 2); if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
   else { sp_gc_threshold = sp_gc_threshold_init; }
 }
 /* `before` and `after` are both the WHOLE live string set -- young plus old --
@@ -255,7 +255,7 @@ static void sp_str_retune(size_t before, size_t promoted) {
 #endif
   size_t freed = before > after ? before - after : 0;   /* saturating; see sp_gc_retune_object */
   if (freed < before / 4) { sp_str_threshold = sp_gc_sat_mul(before, 2); }
-  else if (after > 0) { sp_str_threshold = sp_gc_sat_mul(after, 4); if (sp_str_threshold < sp_str_threshold_init) sp_str_threshold = sp_str_threshold_init; }
+  else if (after > 0) { sp_str_threshold = sp_gc_sat_mul(after, 2); if (sp_str_threshold < sp_str_threshold_init) sp_str_threshold = sp_str_threshold_init; }
   else { sp_str_threshold = sp_str_threshold_init; }
 }
 

@@ -3424,24 +3424,34 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
-
+  /* The loop below re-reads this temp's length as its bound on every turn and
+     takes the element out of it on every turn, with the block running in
+     between. The array a method call returned has no other holder at all, and
+     one held in a named local loses that holder the moment the block rebinds
+     the local -- the walk still belongs to the array the fold started on. So
+     the hoist is rooted itself, whatever the receiver expression was. No
+     needs_root test here, unlike the accumulator below: this emitter has
+     already returned 0 unless rt is an array kind, and every array kind needs
+     a root and none of them is a value-type object, so the root and its
+     separator are always wanted. */
+  emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " ");
   emit_ctype(c, acc_ty, b); buf_printf(b, " _t%d = ", tacc);
   int start;
   if (init_empty_arr) {
     /* the empty [] would emit as an IntArray without the poly context; the
-       heap accumulator is rooted since block-body pushes may collect. A slot
-       that widened to poly (the block hands the accumulator to a callable,
-       whose result is boxed) takes the boxed form (#3657). */
-    if (acc_ty == TY_POLY) buf_printf(b, "sp_box_poly_array(sp_PolyArray_new()); SP_GC_ROOT_RBVAL(_t%d); ", tacc);
-    else buf_printf(b, "sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tacc);
+       heap accumulator is rooted below, since block-body pushes may collect.
+       A slot that widened to poly (the block hands the accumulator to a
+       callable, whose result is boxed) takes the boxed form (#3657). */
+    if (acc_ty == TY_POLY) buf_puts(b, "sp_box_poly_array(sp_PolyArray_new()); ");
+    else buf_puts(b, "sp_PolyArray_new(); ");
     start = 0;
   }
   else if (init_empty_hash) {
     /* the empty {} would emit as its default variant; force the general
-       boxed-key/value hash so any key type fits, and root it (#2958) */
+       boxed-key/value hash so any key type fits (#2958) */
     if (acc_ty == TY_POLY)
-      buf_printf(b, "sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH); SP_GC_ROOT_RBVAL(_t%d); ", tacc);
-    else buf_printf(b, "sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d); ", tacc);
+      buf_puts(b, "sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH); ");
+    else buf_puts(b, "sp_PolyPolyHash_new(); ");
     start = 0;
   }
   else if (init >= 0) {
@@ -3468,6 +3478,16 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
                     acc_ty == TY_INT ? "SP_INT_NIL" : acc_ty == TY_FLOAT ? "sp_float_nil()"
                     : acc_ty == TY_STRING ? "NULL"
                     : acc_ty == TY_POLY ? "sp_box_nil()" : "0"); start = 1; }
+  /* The loop reassigns this slot from a freshly allocated value on every turn,
+     and the next turn's block reads it back, so it is a root for the whole
+     walk -- as the empty-[] and empty-{} seeds above already were. The root
+     records the slot's address, so one push covers every reassignment. The
+     test is here rather than left to emit_gc_root_tmp because the separator
+     goes with the root: a scalar accumulator gets neither, and neither does a
+     value-type object, which lives in the temp itself. */
+  if (needs_root(acc_ty) && !comp_ty_value_obj(c, acc_ty)) {
+    emit_gc_root_tmp(c, acc_ty, tacc, b); buf_puts(b, " ");
+  }
   /* Temporarily override block param types to match acc_ty/et so the body
      expression uses the correct C types (same pattern as emit_sort_cmp_expr). */
   Scope *rsc = comp_scope_of(c, block);

@@ -1,0 +1,23 @@
+reduce str seed turns=40 len=111 head=a1a2
+reduce array seed turns=40 len=41 sum=829
+reduce empty hash turns=40 len=40 last=v40
+reduce empty array turns=40 len=40 sum=820
+reduce object seed turns=40 n=820
+reduce nil seed turns=40 len=111 head=a1a2
+reduce int seed turns=40 sum=820
+reduce no seed turns=39 len=111 head=a1a2
+reduce no seed boxed turns=39 out="s40"
+reduce nested turns=2 out=[3, 4]
+inject str seed turns=40 len=71 head=1234
+inject no seed turns=39 len=111 head=a1a2
+reduce rebound receiver turns=40 len=111 head=a1a2
+nested folds turns=4 len=4
+fold in a while condition rounds=3
+fiber fold part=8 rest=111
+break out=B8
+next len=18
+return out=R6
+raise out=stop10
+rescue inside len=111
+tail len=111 head=a1a2
+after 60000 exits seen=60000 last=111

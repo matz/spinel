@@ -1342,6 +1342,17 @@ void declare_local(Compiler *c, Buf *b, LocalVar *lv, int vol) {
   if (vol && ptr) buf_puts(b, "volatile ");  /* cty ends with "* "; -> "* volatile " */
   buf_printf(b, " lv_%s = %s;\n", lv->name, init);
   if (t == TY_POLY) buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", lv->name);
+  /* A String range is a by-value struct carrying two GC strings, so the
+     struct's own address is not a root the collector can follow -- it would
+     read the first endpoint as if it were the object. Each endpoint slot is
+     rooted instead, the way a value-type object's string fields below are.
+     Without this both endpoints were collected while the range still named
+     them: `("a#{i}".."z#{i}")` read back wrong on 14 of 400 turns plainly and
+     on all 400 under GC stress (#4353 left this open). */
+  else if (t == TY_STR_RANGE) {
+    buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.first);\n", lv->name);
+    buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.last);\n", lv->name);
+  }
   else if (root && !comp_ty_value_obj(c, t)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
   else if (comp_ty_value_obj(c, t)) {
     /* a value-type local lives on the stack; root each heap-pointer (string)
@@ -1600,6 +1611,10 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
          RBVAL form so the collector reads the boxed pointer, not the
          struct's first word (the tag). */
       if (lv->type == TY_POLY) buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", lv->name);
+      else if (lv->type == TY_STR_RANGE) {   /* two GC strings by value; see emit_local_decl */
+        buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.first);\n", lv->name);
+        buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.last);\n", lv->name);
+      }
       else if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
     }
     else {
@@ -5608,10 +5623,13 @@ void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_puts(b, "};\n");
 }
 
-/* A class needs a GC scan iff any ivar holds a heap reference. */
+/* A class needs a GC scan iff any ivar holds a heap reference. A String range
+   is one without being a pointer: the struct sits in the object by value and
+   carries two GC strings, which needs_root cannot report because the slot
+   itself is not a reference (#4353). */
 int class_needs_scan(ClassInfo *ci) {
   for (int i = 0; i < ci->nivars; i++) {
-    if (needs_root(ci->ivar_types[i])) return 1;
+    if (needs_root(ci->ivar_types[i]) || ci->ivar_types[i] == TY_STR_RANGE) return 1;
   }
   return 0;
 }
@@ -5644,6 +5662,11 @@ void emit_class_scan(Compiler *c, ClassInfo *ci, Buf *b) {
     const char *iv = iv_c(ci->ivars[i] + 1);
     if (t == TY_STRING) buf_printf(b, "  sp_mark_string(o->iv_%s);\n", iv);
     else if (t == TY_POLY) buf_printf(b, "  sp_mark_rbval(o->iv_%s);\n", iv);
+    /* a by-value struct the walker cannot follow: mark what it carries */
+    else if (t == TY_STR_RANGE) {
+      buf_printf(b, "  sp_mark_string(o->iv_%s.first);\n", iv);
+      buf_printf(b, "  sp_mark_string(o->iv_%s.last);\n", iv);
+    }
     else if (needs_root(t))
       buf_printf(b, "  if (o->iv_%s) sp_gc_mark((void *)o->iv_%s);\n", iv, iv);
   }

@@ -1,0 +1,28 @@
+find              turns=40 answer="a40"
+detect            turns=40 answer="a40"
+find_index        turns=40 answer=39
+index             turns=40 answer=39
+rindex            turns=40 answer=0
+count             turns=40 answer=40
+take_while        turns=40 answer=40 last="a40"
+drop_while        answer=30 first="a11" last="a40"
+map!              turns=40 answer=40 last="a40!"
+collect!          turns=40 answer=40 last="a40?"
+poly count        turns=40 answer=35
+poly take_while   turns=40 answer=40 last="a40"
+poly drop_while   answer=29 first="a12" last="a40"
+poly map!         turns=40 answer=40 last="a40"
+poly collect!     turns=40 answer=40 last="a40"
+hash take_while   turns=40 answer=40
+hash drop_while   answer=30 first=["k11", "v11"]
+fill              answer=40 first="f0" last="f39"
+fill span         answer=40 first="a1" last="a40"
+poly fill         answer=40 first=0 last=39
+bsearch           turns=12 answer="z000100"
+bsearch_index     turns=12 answer=99
+bsearch answer    turns=12 answer="z000100"
+poly bsearch answ turns=12 answer="z000100"
+held find         turns=40 answer="a40"
+held map!         turns=40 answer=40 last="a40!"
+held fill         answer=40 first="f0" last="f39"
+held bsearch      turns=12 answer="z000100"

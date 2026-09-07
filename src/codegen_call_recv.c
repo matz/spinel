@@ -1827,7 +1827,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         const char *ip = block_param_name(c, fblk, 0); if (ip) ip = rename_local(ip);
         Buf rb = expr_buf(c, recv);
         emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-        buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
+        buf_printf(g_pre, " _t%d = %s; ", trecv, rb.p ? rb.p : ""); free(rb.p);
+        /* rooted, as the TY_POLY map!/collect! near the top of this file
+           already roots its own hoist: fill stores into the receiver on every
+           turn, and the block never mentions the receiver, so this temporary is
+           the only thing holding it while the block allocates */
+        emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, fk, trecv);
         /* resolve the [start, end) span from the arguments */
@@ -2180,9 +2185,19 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           int trecv = ++g_tmp, tout = ++g_tmp, ti = ++g_tmp;
           Buf rb = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rb.p ? rb.p : ""); free(rb.p);
+          /* rooted, as the each_index hoist above is, and as the TY_POLY arm of
+             this same pair of methods near the top of the file already is: the
+             length is the loop bound, the element comes out of the receiver on
+             every turn, and the block between two turns allocates */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", ek, tout, ek);
+          /* The result array is rooted for the same reason and by the same
+             precedent: the TY_POLY arm of this pair roots its own result
+             beside its receiver. It is built empty here and pushed into on
+             every kept turn, so nothing but this temporary holds it while the
+             block allocates. */
+          buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", ek, tout, ek, tout);
           if (is_drop) {
             emit_indent(g_pre, g_indent);
             buf_puts(g_pre, "{ sp_bool _dropping = 1;\n");
@@ -2436,14 +2451,26 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           int trecv = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp, tres = ++g_tmp, tmid = ++g_tmp;
           Buf rbs = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rbs.p ? rbs.p : "NULL"); free(rbs.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rbs.p ? rbs.p : "NULL"); free(rbs.p);
+          /* rooted, as the poly-array find_index above already roots its own
+             hoist: a halving search still reads its element out of the receiver
+             on every turn, and the block allocates between turns */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_int _t%d = 0, _t%d = sp_%sArray_length(_t%d) - 1;\n", tlo, thi, k, trecv);
           emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", tres,
+          buf_printf(g_pre, " _t%d = %s;", tres,
                      et == TY_INT ? "SP_INT_NIL" :
                      et == TY_FLOAT ? "sp_float_nil()" :
                      et == TY_POLY ? "sp_box_nil()" : "NULL");
+          /* The running answer is lifted OUT of the receiver and held while the
+             search narrows, so rooting the receiver does not cover it: a turn
+             that drops the captured element from the array leaves this
+             temporary as its only holder. The element type picks the macro --
+             an Integer or Float answer roots to nothing, which is why
+             bsearch_index needs none. */
+          if (needs_root(et)) { buf_puts(g_pre, " "); emit_gc_root_tmp(c, et, tres, g_pre); }
+          buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "while (_t%d <= _t%d) {\n", tlo, thi);
           emit_indent(g_pre, g_indent + 1);
@@ -2512,7 +2539,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           int trecv = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp, tres = ++g_tmp, tmid = ++g_tmp;
           Buf rbs = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rbs.p ? rbs.p : "NULL"); free(rbs.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rbs.p ? rbs.p : "NULL"); free(rbs.p);
+          /* rooted, as the poly-array find_index above already roots its own
+             hoist: the element the block judges comes out of the receiver on
+             every turn, and the block allocates between turns. The answer here
+             is an index rather than an element, so it needs no root of its own. */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_int _t%d = 0, _t%d = sp_%sArray_length(_t%d) - 1, _t%d = SP_INT_NIL;\n", tlo, thi, bk, trecv, tres);
           emit_indent(g_pre, g_indent);
@@ -3380,7 +3412,12 @@ else {
           int trecv = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp;
           Buf rfi = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rfi.p ? rfi.p : "NULL"); free(rfi.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rfi.p ? rfi.p : "NULL"); free(rfi.p);
+          /* rooted, as the poly-array find_index above already roots its own
+             hoist. rindex takes its bound once and then counts down, so a
+             collection mid-walk shows up in the elements rather than in the
+             turn count. */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = SP_INT_NIL;\n", tres);
           emit_indent(g_pre, g_indent);
           if (sp_streq(name, "rindex"))
@@ -3460,7 +3497,10 @@ else {
           int trecv = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp;
           Buf rb = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rb.p ? rb.p : ""); free(rb.p);
+          /* rooted, as the find(ifnone) arm above and the poly-array find
+             already are: same loop, same per-turn reads, same allocating block */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre);
           if (et == TY_STRING) buf_printf(g_pre, " _t%d = NULL;\n", tres);
           else if (et == TY_INT) buf_printf(g_pre, " _t%d = SP_INT_NIL;\n", tres);
@@ -3504,7 +3544,12 @@ else {
           int trecv = ++g_tmp, ti = ++g_tmp;
           Buf rb = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rb.p ? rb.p : ""); free(rb.p);
+          /* rooted, as the TY_POLY map!/collect! near the top of this file
+             already roots its own hoist: this loop WRITES the block value back
+             into the receiver on every turn, so an unrooted hoist is a store
+             into freed memory and not only a short walk */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                      ti, ti, k, trecv, ti);
@@ -3662,7 +3707,11 @@ else {
           int trecv = ++g_tmp, tcnt = ++g_tmp, ti = ++g_tmp;
           Buf rb2 = expr_buf(c, recv);
           emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rb2.p ? rb2.p : ""); free(rb2.p);
+          buf_printf(g_pre, " _t%d = %s; ", trecv, rb2.p ? rb2.p : ""); free(rb2.p);
+          /* rooted, as the find(ifnone) arm above already is: the same walk
+             over the same hoist, differing only in what it does with the
+             predicate */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", tcnt);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
@@ -4285,7 +4334,10 @@ else {
           int trecv = ++g_tmp, tcnt = ++g_tmp, ti = ++g_tmp;
           Buf rb2 = expr_buf(c, recv);
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", trecv, rb2.p ? rb2.p : ""); free(rb2.p);
+          buf_printf(g_pre, "sp_PolyArray *_t%d = %s; ", trecv, rb2.p ? rb2.p : ""); free(rb2.p);
+          /* rooted, as the poly find/detect and find_index above already are:
+             the length is the loop bound and the block allocates */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", tcnt);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n",
@@ -4753,7 +4805,11 @@ else {
         if (bn >= 1) {
           int trecv = ++g_tmp, ti = ++g_tmp;
           Buf rb = expr_buf(c, recv);
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
+          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = %s; ", trecv, rb.p ? rb.p : ""); free(rb.p);
+          /* rooted, as the TY_POLY map!/collect! near the top of this file
+             already roots its own hoist: the loop stores into the receiver on
+             every turn, so an unrooted hoist is a write into freed memory */
+          emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n", ti, ti, trecv, ti);
           if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", bp, trecv, ti); }

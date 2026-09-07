@@ -2390,7 +2390,17 @@ static void sp_with_index_gen(sp_Fiber *f) {
 }
 sp_Enumerator *sp_Enumerator_with_index(sp_Enumerator *e, sp_int off) {
   if (e && e->gen) {
+    /* Two allocations, and two things held in nothing but a C local across
+       them. The source enumerator dies at the sp_WiCap allocation below --
+       which is before the cap exists, so rooting the cap cannot cover it --
+       and both `e->size` and `e->source` are then read out of freed memory.
+       The cap dies at the enumerator's own allocation and is not a dead local
+       at that point: it is parked in r->gen_cap, which sp_with_index_gen reads
+       when the fiber first runs and sp_Enumerator_scan walks on every later
+       collection. Rooting either one alone leaves the other. */
+    SP_GC_ROOT(e);
     sp_WiCap *cap = (sp_WiCap *)sp_gc_alloc(sizeof(sp_WiCap), NULL, sp_wi_cap_scan);
+    SP_GC_ROOT(cap);
     cap->src = e; cap->off = off;
     sp_Enumerator *r = sp_Enumerator_new_gen(sp_with_index_gen, cap, e->size);
     r->source = e->source;

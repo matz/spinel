@@ -290,7 +290,21 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     buf_printf(b, "sp_%s %s_t%d = ", c->classes[recv_class].c_name, self_is_val ? "" : "*", st);
     if (g_inline_recv_expr) buf_puts(b, g_inline_recv_expr);  /* pre-hoisted cast (#2448) */
     else emit_expr(c, recv, b);
-    buf_puts(b, ";\n");
+    buf_puts(b, ";");
+    /* Root it: for the whole inlined body this temp is the only handle on the
+       receiver, and every ivar read in the body goes through it. The body
+       allocates and so does the caller block spliced at each yield, so a
+       receiver nothing else holds -- `make_ledger.each { churn }`, `Set#each`
+       on a set the call itself built, or a local the block clears partway
+       through -- was collected while the body still ran, and the walk stopped
+       early: 25 of 200 turns on a plain release build, 1 of 200 under
+       SPINEL_GC_STRESS=1, with no error either way.
+       A value-type receiver is a struct copy that lives in the temp itself
+       rather than behind it, so it must not be rooted; emit_gc_root_tmp
+       declines it on its own account, and the test here is only so that the
+       separating space is not emitted when it does. */
+    if (!self_is_val) { buf_puts(b, " "); emit_gc_root_tmp(c, ty_object(recv_class), st, b); }
+    buf_puts(b, "\n");
     snprintf(selfbuf, sizeof selfbuf, "_t%d", st);
     recv_self_deref = self_is_val ? "." : "->";
   }

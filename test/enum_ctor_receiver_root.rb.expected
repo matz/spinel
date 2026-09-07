@@ -1,0 +1,11 @@
+swept first bad=0
+inspect bad=0 wrong=nil
+StopIteration#result bad=0 wrong=nil
+array inspect bad=0
+endless first bad=0
+endless first offset bad=0
+endless next bad=0
+endless peek bad=0
+endless rewind bad=0
+endless take bad=0
+keep 3000

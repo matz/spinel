@@ -1,0 +1,6 @@
+swept with_index bad=0
+loop.with_index live-expected bad=0
+loop.with_index bad=0
+loop.with_index(5) bad=0
+loop.with_index(2) next bad=0
+loop.with_index reread bad=0

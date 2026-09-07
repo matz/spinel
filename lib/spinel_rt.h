@@ -10501,10 +10501,20 @@ static void sp_endless_range_gen(sp_Fiber *f) {
    Defined out-of-line in sp_cold.c (one linked copy, not per generated TU). */
 sp_Enumerator *sp_loop_enum(void);
 static sp_Enumerator *sp_Enumerator_new_from(sp_RbVal arr) {
+  /* The receiver is the caller's temporary -- `(11..55).each` passes it straight
+     in, unreachable from anywhere else -- and BOTH arms below allocate before
+     they are done with it, then keep it as the enumerator's `source`. Root it
+     for the whole function: the materialized arm reads it back after the
+     enumerator's own allocation, and the endless arm reads `first` and `step`
+     out of it after the capture's. */
+  SP_GC_ROOT_RBVAL(arr);
   if (arr.tag == SP_TAG_OBJ && arr.cls_id == SP_BUILTIN_RANGE && arr.v.p &&
       ((sp_Range *)arr.v.p)->last == INTPTR_MAX) {
     sp_Range *r = (sp_Range *)arr.v.p;
     sp_endless_range_cap *cap = (sp_endless_range_cap *)sp_gc_alloc(sizeof *cap, NULL, NULL);
+    /* The capture is the second slot: it dies inside sp_Enumerator_new_gen and
+       is read later still, when the fiber first runs sp_endless_range_gen. */
+    SP_GC_ROOT(cap);
     cap->first = r->first; cap->step = r->step ? r->step : 1;
     sp_Enumerator *e = sp_Enumerator_new_gen(sp_endless_range_gen, cap, sp_box_nil());
     e->source = arr; e->meth = "each";

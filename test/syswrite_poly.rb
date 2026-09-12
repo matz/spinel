@@ -67,4 +67,19 @@ holder.close
 client.close
 server.close
 
+# syswrite on a regular file: the bytes must be on disk before the call
+# returns, so a read back through a second handle sees them without a
+# flush. A buffered write would not have this property.
+path = "/tmp/syswrite_poly_test"
+w = File.open(path, "wb")
+w.syswrite("buffered?")
+# Read through a second handle -- the stdio buffer of w is bypassed, so
+# the read sees the bytes already.
+r = File.open(path, "rb")
+got = r.read(9)
+r.close
+w.close
+File.unlink(path)
+raise "file saw #{got.inspect}, expected 'buffered?'" unless got == "buffered?"
+
 puts "PASS: syswrite through the poly dispatch works"

@@ -19545,7 +19545,11 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
          header length so an embedded NUL is written rather than truncating
          the write. The sp_poly_to_s arm keeps the plain entry: it can answer
          a static class/symbol name with no marker byte, which _bin would read
-         out of bounds at s[-1]. */
+         out of bounds at s[-1]. syswrite is unbuffered, so it routes through
+         sp_File_syswrite (which writes straight to the descriptor) rather
+         than through the stdio-backed write entries. */
+      int is_sw = sp_streq(name, "syswrite");
+      const char *wfn = is_sw ? "sp_File_syswrite" : (comp_ntype(c, argv[0]) == TY_STRING ? "sp_File_write_bin" : "sp_File_write");
       if (argc == 1) {
         /* An operand whose class is only known at run time picks the entry by
            its TAG, not by its static type: chosen statically it took the plain
@@ -19556,10 +19560,29 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           buf_puts(b, ")");
         }
         else {
-          int sk = comp_ntype(c, argv[0]) == TY_STRING;
-          buf_printf(b, "%s(%s, ", sk ? "sp_File_write_bin" : "sp_File_write", r);
-          emit_to_s_expr(c, argv[0], b);
-          buf_puts(b, ")");
+          if (is_sw) {
+            /* syswrite needs the byte length alongside the pointer:
+               sp_str_byte_len for a String source (embedded NUL survives),
+               strlen for a converted value. */
+            int sl = ++g_tmp;
+            TyKind at = comp_ntype(c, argv[0]);
+            buf_printf(b, "({ const char *_s%d = ", sl);
+            emit_to_s_expr(c, argv[0], b);
+            if (at == TY_STRING)
+              buf_printf(b, "; sp_int _l%d = sp_str_byte_len(_s%d); sp_int _r%d = "
+                         "sp_File_syswrite(%s, _s%d, _l%d); ",
+                         sl, sl, sl, r, sl, sl);
+            else
+              buf_printf(b, "; sp_int _l%d = strlen(_s%d); sp_int _r%d = "
+                         "sp_File_syswrite(%s, _s%d, _l%d); free((void *)_s%d); ",
+                         sl, sl, sl, r, sl, sl, sl);
+            buf_printf(b, "_r%d; })", sl);
+          }
+          else {
+            buf_printf(b, "%s(%s, ", wfn, r);
+            emit_to_s_expr(c, argv[0], b);
+            buf_puts(b, ")");
+          }
         }
       }
       else if (argc >= 2) {
@@ -19583,7 +19606,17 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           g_conv_hold = outer;
           buf_printf(b, " _t%d += ", tw);
           if (hk.n > 0) { buf_puts(b, "({ "); buf_puts(b, hk.b.p); }
-          buf_printf(b, "%s(%s, %s)", sk ? "sp_File_write_bin" : "sp_File_write", r, conv.p ? conv.p : "");
+          if (is_sw) {
+            /* syswrite needs the byte length: sp_str_byte_len for a String
+               source (embedded NUL survives), strlen for a converted value. */
+            buf_printf(b, "({ const char *_s = %s; sp_int _l = %s; "
+                       "_t%d += sp_File_syswrite(%s, _s, _l); })",
+                       conv.p ? conv.p : "",
+                       sk ? "sp_str_byte_len(_s)" : "strlen(_s)",
+                       tw, r);
+          }
+          else
+            buf_printf(b, "%s(%s, %s)", sk ? "sp_File_write_bin" : "sp_File_write", r, conv.p ? conv.p : "");
           if (hk.n > 0) buf_puts(b, "; })");
           buf_puts(b, ";");
           free(conv.p); free(hk.b.p); free(hk.tmp);

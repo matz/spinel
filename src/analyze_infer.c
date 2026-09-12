@@ -4779,7 +4779,8 @@ else {
       if (sp_streq(name, "write_nonblock")) return an_poly_concrete(c, name, TY_INT);
       if (sp_streq(name, "read") || sp_streq(name, "gets") ||
           sp_streq(name, "readline")) return an_poly_concrete(c, name, TY_STRING);
-      if (sp_streq(name, "write")) return an_poly_concrete(c, name, TY_INT);   /* IO#write: the byte count */
+      if (sp_streq(name, "write") || sp_streq(name, "syswrite"))
+        return an_poly_concrete(c, name, TY_INT);   /* IO#write / #syswrite: the byte count */
       if (sp_streq(name, "close") || sp_streq(name, "flush")) return an_poly_concrete(c, name, TY_NIL);
       if (sp_streq(name, "fileno")) return an_poly_concrete(c, name, TY_INT);
       if (sp_streq(name, "synchronize")) {

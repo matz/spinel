@@ -6760,6 +6760,42 @@ else {
           buf_puts(b, "break; }");
         }
       }
+      /* syswrite on a poly value: the same shape as the write arm above --
+         a Socket reaching this dispatch because some user class owns the
+         name had no arm and raised NoMethodError. syswrite takes one
+         String arg and returns the byte count. */
+      if (sp_streq(name, "syswrite") && argc == 1 && kwh < 0) {
+        int wrv = ++g_tmp;
+        if (atmp_ty[0] == TY_STRING) {
+          if (ret == TY_POLY)
+            buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_write_bin("
+                           "(sp_File *)_t%d.v.p, _t%d); "
+                           "_t%d = sp_box_int(_t%d); break; }",
+                       wrv, tv, atmp[0], tr, wrv);
+          else
+            buf_printf(b, " case SP_BUILTIN_IO: _t%d = sp_File_write_bin("
+                           "(sp_File *)_t%d.v.p, _t%d); break;",
+                       tr, tv, atmp[0]);
+        }
+        else {
+          int wrr = ++g_tmp;
+          char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
+          buf_puts(b, " case SP_BUILTIN_IO: { ");
+          if (atmp_ty[0] != TY_POLY) {
+            buf_printf(b, "sp_RbVal _t%d = ", wrr);
+            emit_boxed_text(c, atmp_ty[0], a0n, b);
+            buf_puts(b, "; ");
+          }
+          else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
+          buf_printf(b, "sp_RbVal _t%d = (_t%d.tag == SP_TAG_STR) ? "
+                         "sp_box_int(sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s)) : "
+                         "sp_box_int(sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d))); ",
+                       wrv, wrr, tv, wrr, tv, wrr);
+          if (ret == TY_POLY) buf_printf(b, "_t%d = _t%d; ", tr, wrv);
+          else                buf_printf(b, "_t%d = sp_poly_to_i(_t%d); ", tr, wrv);
+          buf_puts(b, "break; }");
+        }
+      }
       if (is_unshift) {
         /* sp_poly_insert is the kind dispatch for a positional splice, so
            `unshift(a, b)` is a insert at 0 and b insert at 1 -- CRuby's order.

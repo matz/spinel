@@ -6763,22 +6763,26 @@ else {
       /* syswrite on a poly value: the same shape as the write arm above --
          a Socket reaching this dispatch because some user class owns the
          name had no arm and raised NoMethodError. syswrite takes one
-         String arg and returns the byte count. */
+         String arg and returns the byte count. The byte length is sized
+         by the caller and handed to sp_File_syswrite directly: a String
+         source's length (sp_str_byte_len, so an embedded NUL reaches the
+         descriptor) or a converted value's length (strlen of sp_poly_to_s),
+         rather than reading it off a marker byte inside the write core. */
       if (sp_streq(name, "syswrite") && argc == 1 && kwh < 0) {
         int wrv = ++g_tmp;
         if (atmp_ty[0] == TY_STRING) {
           if (ret == TY_POLY)
-            buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_write_bin("
-                           "(sp_File *)_t%d.v.p, _t%d); "
+            buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = sp_File_syswrite("
+                           "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); "
                            "_t%d = sp_box_int(_t%d); break; }",
-                       wrv, tv, atmp[0], tr, wrv);
+                       wrv, tv, atmp[0], atmp[0], tr, wrv);
           else
-            buf_printf(b, " case SP_BUILTIN_IO: _t%d = sp_File_write_bin("
-                           "(sp_File *)_t%d.v.p, _t%d); break;",
-                       tr, tv, atmp[0]);
+            buf_printf(b, " case SP_BUILTIN_IO: _t%d = sp_File_syswrite("
+                           "(sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)); break;",
+                       tr, tv, atmp[0], atmp[0]);
         }
         else {
-          int wrr = ++g_tmp;
+          int wrr = ++g_tmp, slen = ++g_tmp;
           char a0n[24]; snprintf(a0n, sizeof a0n, "_t%d", atmp[0]);
           buf_puts(b, " case SP_BUILTIN_IO: { ");
           if (atmp_ty[0] != TY_POLY) {
@@ -6787,12 +6791,16 @@ else {
             buf_puts(b, "; ");
           }
           else buf_printf(b, "sp_RbVal _t%d = %s; ", wrr, a0n);
-          buf_printf(b, "sp_RbVal _t%d = (_t%d.tag == SP_TAG_STR) ? "
-                         "sp_box_int(sp_File_write_bin((sp_File *)_t%d.v.p, _t%d.v.s)) : "
-                         "sp_box_int(sp_File_write((sp_File *)_t%d.v.p, sp_poly_to_s(_t%d))); ",
-                       wrv, wrr, tv, wrr, tv, wrr);
-          if (ret == TY_POLY) buf_printf(b, "_t%d = _t%d; ", tr, wrv);
-          else                buf_printf(b, "_t%d = sp_poly_to_i(_t%d); ", tr, wrv);
+          /* Resolve the operand to a (pointer, length) pair once: a marked
+             String keeps its header length (binary-safe), anything else is
+             a NUL-terminated C string from sp_poly_to_s and is strlen'd. */
+          buf_printf(b, "const char *_t%d = (_t%d.tag == SP_TAG_STR) ? _t%d.v.s : sp_poly_to_s(_t%d); "
+                     "sp_int _t%d = (_t%d.tag == SP_TAG_STR) ? "
+                     "sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, sp_str_byte_len(_t%d)) : "
+                     "sp_File_syswrite((sp_File *)_t%d.v.p, _t%d, strlen(_t%d)); ",
+                     slen, wrr, wrr, wrr, wrv, wrr, tv, slen, slen, tv, slen, slen);
+          if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_int(_t%d); ", tr, wrv);
+          else                buf_printf(b, "_t%d = _t%d; ", tr, wrv);
           buf_puts(b, "break; }");
         }
       }

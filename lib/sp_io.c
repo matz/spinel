@@ -274,6 +274,19 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
   return sp_File_write_len(f, s, sp_str_byte_len(s));
 }
 
+/* IO#syswrite: the same write core as sp_File_write_bin, but the byte
+   length is passed in by the caller rather than read off the marker byte.
+   The codegen syswrite arm sizes the operand itself -- a String source's
+   length (sp_str_byte_len, so an embedded NUL reaches the descriptor) or a
+   converted value's length (sp_poly_to_s + strlen) -- and hands both the
+   pointer and the count to this entry, which is the single place the
+   socket/pipe/stream routing decision is made. */
+sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  SP_IO_OPEN(f);
+  if (!s) return 0;
+  return sp_File_write_len(f, s, n);
+}
+
 sp_bool sp_File_tty_p(sp_File *f) {
   SP_IO_OPEN(f);
   return isatty(fileno(f->fp)) ? 1 : 0;

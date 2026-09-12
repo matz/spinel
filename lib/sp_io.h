@@ -74,6 +74,7 @@ size_t sp_io_stdio_buffered(FILE *fp);
 const char *sp_slurp_stream_parked(sp_File *f);
 sp_int sp_File_write(sp_File *f, const char *s);
 sp_int sp_File_write_bin(sp_File *f, const char *s);
+sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n);
 sp_int sp_File_close(sp_File *f);
 
 /* Every operation on a handle whose descriptor is gone raises IOError in

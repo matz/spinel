@@ -240,6 +240,26 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
   return (sp_int)n;
 }
 
+/* Direct write to a regular file's descriptor, bypassing the stdio
+   buffer. IO#syswrite is unbuffered: the bytes must reach the file
+   before the next call returns, so there is nothing to flush and no
+   read/write switching hazard on the shared FILE*. Sockets and sync
+   parkable handles keep sp_sock_write, which already writes straight
+   to the descriptor. */
+static sp_int sp_io_write_raw(sp_File *f, const char *s, size_t n) {
+  int fd = fileno(f->fp);
+  size_t off = 0;
+  while (off < n) {
+    ssize_t put = write(fd, s + off, n - off);
+    if (put < 0) {
+      if (errno == EINTR) continue;
+      sp_file_raise_errno("write", "file");
+    }
+    off += (size_t)put;
+  }
+  return (sp_int)n;
+}
+
 /* Shared write core: `n` is the operand byte length (strlen for the
    bare-literal-safe entry, sp_str_byte_len for the binary one). */
 SP_NORETURN SP_COLD void sp_io_raise_closed(void) {
@@ -272,6 +292,25 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
   SP_IO_OPEN(f);
   if (!s) return 0;
   return sp_File_write_len(f, s, sp_str_byte_len(s));
+}
+
+/* IO#syswrite: the same write core as sp_File_write_bin, but the byte
+   length is passed in by the caller rather than read off the marker byte.
+   The codegen syswrite arm sizes the operand itself -- a String source's
+   length (sp_str_byte_len, so an embedded NUL reaches the descriptor) or a
+   converted value's length (sp_poly_to_s + strlen) -- and hands both the
+   pointer and the count to this entry, which is the single place the
+   socket/pipe/stream routing decision is made. A regular file writes
+   straight to the descriptor (sp_io_write_raw), bypassing the stdio
+   buffer: syswrite is unbuffered, so the bytes are on disk before the
+   call returns and a read back through the same or another handle sees
+   them without a flush. */
+sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  SP_IO_OPEN(f);
+  if (!s) return 0;
+  if (f->is_sock) return sp_sock_write(f, s, n);
+  if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
+  return sp_io_write_raw(f, s, n);
 }
 
 sp_bool sp_File_tty_p(sp_File *f) {

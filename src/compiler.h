@@ -27,9 +27,25 @@ void sp_add_feature_root(const char *dir);
 /* Method visibility (see ClassInfo.vis_names). Default/absent is public. */
 enum { SP_VIS_PUBLIC = 0, SP_VIS_PRIVATE = 1, SP_VIS_PROTECTED = 2 };
 
+/* Where a slot's type degraded to untyped: the answer to "why did this
+   widen", which --warn-widen prints as notes under the warning and
+   --emit-types carries as `why`. A poly is born at an expression and a slot
+   only inherits it (#4509), so the record is the NODE whose value made the
+   slot degrade; the node's own origin (Compiler.norigin) leads on from there
+   to the expression the poly was born at. */
+typedef struct {
+  int node;      /* the argument, written value or returned value whose type degraded the slot; -1 = untraced */
+  int other;     /* the node whose value last gave the slot the concrete type it had before; -1 = none */
+  TyKind prev;   /* the slot's type just before it degraded (TY_UNKNOWN: it degraded from nothing) */
+  TyKind then;   /* `node`'s type at that moment (its final type may differ: a transient) */
+  int round;     /* the fixpoint round it happened on */
+} SlotWhy;
+
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
   TyKind type;      /* inferred type */
+  SlotWhy why;      /* how `type` came to be untyped, if it is */
+  int last_src;     /* the node whose value last set `type` while it was concrete; -1 = none */
   int gc_root;      /* scratch during analysis; rooting is type-derived in codegen */
   int is_param;     /* declared as a method parameter (C function param) */
   int is_block_param; /* bound by a block; typed by block-param inference */
@@ -215,6 +231,7 @@ typedef struct {
   int kwrest_idx;   /* index in pnames[] of **kwrest param, -1 if none */
 
   TyKind ret;       /* inferred return type */
+  SlotWhy ret_why;  /* how `ret` came to be untyped, if it is */
   int ret_poly_ctr; /* the return value can be a builtin Array/Hash even
                        though `ret` collapsed to poly (see LocalVar.poly_ctr) */
   int ret_specialized; /* ret was set by specialization (inherited-cls-new copy);
@@ -499,6 +516,10 @@ typedef struct {
 typedef struct {
   const NodeTable *nt;
   TyKind *ntype;    /* [node_cap] node id -> inferred type */
+  int *norigin;     /* [node_cap] node id -> where its degraded type came from: the
+                       child (or the slot's why.node, for a read) that carried the
+                       poly in, itself when the poly was born here, -1 when the
+                       type is not degraded. Set where ntype is, in infer_type. */
   unsigned char *strbuf_box; /* [node_cap] LocalVariableReadNode of a shared-
                           mutable string in a container-store position: the
                           read yields the sp_String* HANDLE (typed TY_STRBUF,
@@ -680,6 +701,15 @@ int    comp_included_method_index(Compiler *c, const char *name);
 
 /* Locals within a scope. */
 LocalVar *scope_local(Scope *s, const char *name);
+
+/* The slot-widening idiom, recorded: unify `t` (the type of `node`'s value)
+   into `lv`, answer whether it changed, and note the why when the slot
+   degrades. slot_set is the same with the merged type already decided. */
+int slot_take(Compiler *c, LocalVar *lv, TyKind t, int node);
+int slot_set(Compiler *c, LocalVar *lv, TyKind merged, TyKind t, int node);
+void why_reset(SlotWhy *w);
+int ty_degraded(TyKind t);   /* poly, or a container of poly */
+extern int g_infer_round;    /* the fixpoint round in progress, for SlotWhy.round */
 LocalVar *scope_local_intern(Scope *s, const char *name);
 
 /* Symbol intern table. comp_sym_intern returns the symbol's id. */

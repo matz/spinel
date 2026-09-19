@@ -95,14 +95,37 @@ unknown or void are left out), in node order.
 
 A plain compile says nothing about a widened slot. `--warn-widen` prints
 the same warnings on stderr during any compile, one per slot at the
-slot, in the form the other warnings take:
+slot, in the form the other warnings take, and under each the *why*:
+the chain from the value that widened the slot to the expression the
+untyped was born at, one `note:` per hop:
 
 ```
 spinel: app.rb:4:13: warning: parameter `o` of `dist2` widened to untyped (boxed poly slow path)
+spinel: app.rb:11:28: note: passed `pts[0]` is untyped
+spinel: app.rb:10:7: note: from `[Point.new(1, 2), Point.new(3, 4)]` is Array[untyped] — born here: no untyped input
 ```
 
 The column is 1-based there, as an editor reads a compiler's warning;
-the JSON's is 0-based.
+the JSON's is 0-based. The same chain is the record's `why`, an array
+of hops `{file, line, col, end_line, end_col, role, rbs, note?}` in
+order from the slot outward. `role` is what the first hop is to the
+slot -- `passed` (an argument), `written` (an assigned value),
+`returned` (a returned value) -- then `from` for each expression the
+untyped came in through, and `and` for the other side of a meeting. A
+chain ends one of five ways, said in the last hop's `note`:
+
+- **born here: no untyped input** -- the expression produced the untyped
+  with no untyped operand (a literal array of objects, a `map` over
+  them, `&.`); the rule is the compiler's, and this is where to look.
+- **two kinds meet** -- the slot held one concrete kind and this value
+  brought another; the `and` hop is the earlier kind's site.
+- **a transient** -- the value is not untyped in the end, but was on the
+  round the slot took it; the fixpoint kept the slot there. A compiler
+  imprecision, and a report worth filing with the program.
+- **never bound** -- no call site gives the parameter a type (on stderr
+  only; the slot is untyped by default).
+- **by construction** -- a `*rest` or `**kwrest` parameter.
+- **untraced** -- a widening this version does not record the source of.
 
 ## `codegen`
 

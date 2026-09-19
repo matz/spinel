@@ -1588,13 +1588,11 @@ int infer_write_types(Compiler *c) {
        of a different type widens them too (e.g. `x = "s"` in an int param's
        body -> poly). Only widen -- never let an unknown RHS reset them. */
     if (lv->is_param) {
-      if (newt != TY_UNKNOWN && !lv->rbs_seeded) {
-        TyKind m2 = ty_unify(lv->type, newt);
-        if (m2 != lv->type) { lv->type = m2; changed = 1; }
-      }
+      if (newt != TY_UNKNOWN && !lv->rbs_seeded)
+        changed |= slot_take(c, lv, newt, nt_ref(nt, id, "value"));
       continue;
     }
-    lv->type = ty_unify(lv->type, newt);
+    slot_take(c, lv, newt, nt_ref(nt, id, "value"));
   }
 
   /* Second targeted pass for `x = recv.instance_eval/exec { ... }` (and
@@ -1630,7 +1628,7 @@ int infer_write_types(Compiler *c) {
     if (newt == TY_NIL) newt = TY_POLY;
     /* see the note at the multi-write arm below: no `changed` for a plain
        local this pass reset. */
-    lv->type = ty_unify(lv->type, newt);
+    slot_take(c, lv, newt, val_id);
   }
 
   /* Multiple assignment `a, b = e0, e1`: each target gets its element's
@@ -3032,8 +3030,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
       LocalVar *p = scope_local(m, m->pnames[k]);
       LocalVar *ep = scope_local(encl, encl->pnames[k]);
       if (!p || p->rbs_seeded || !ep || ep->type == TY_UNKNOWN) continue;
-      TyKind merged = ty_unify(p->type, ep->type);
-      if (merged != p->type) { p->type = merged; changed = 1; }
+      changed |= slot_take(c, p, ep->type, ep->why.node >= 0 ? ep->why.node : argv[0]);
     }
     return changed;
   }
@@ -3070,8 +3067,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
         if (!m->pnames[pk]) continue;
         LocalVar *p = scope_local(m, m->pnames[pk]);
         if (!p || p->rbs_seeded) continue;
-        TyKind merged = ty_unify(p->type, at);
-        if (merged != p->type) { p->type = merged; changed = 1; }
+        changed |= slot_take(c, p, at, argv[k]);
       }
       break;
     }
@@ -3129,7 +3125,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
       merged = TY_POLY_ARRAY;
     else
       merged = ty_unify(p->type, at);
-    if (merged != p->type) { p->type = merged; changed = 1; }
+    changed |= slot_set(c, p, merged, at, argv[k]);
     /* Reverse binding: an empty-`{}`-only local passed to a hash parameter is
        that hash container, filled inside the callee through the reference.
        Type the local as the param's hash so it is constructed (sp_<H>Hash_new)
@@ -3191,8 +3187,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
       if (!p || p->rbs_seeded) continue;
       TyKind at = infer_type(c, argv[ai]);
       if (at == TY_NIL && p->type != TY_UNKNOWN && p->type != TY_NIL && !ty_is_object(p->type)) at = TY_POLY;
-      TyKind merged = ty_unify(p->type, at);
-      if (merged != p->type) { p->type = merged; changed = 1; }
+      changed |= slot_take(c, p, at, argv[ai]);
     }
   }
   /* Keyword arguments: match KeywordHashNode elements to named params. */
@@ -3241,8 +3236,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
         if (!m->pnames[i]) continue;
         LocalVar *p = scope_local(m, m->pnames[i]);
         if (!p || p->rbs_seeded) continue;
-        TyKind merged = ty_unify(p->type, at);
-        if (merged != p->type) { p->type = merged; changed = 1; }
+        changed |= slot_take(c, p, at, kwh);
       }
     }
 else {
@@ -3264,8 +3258,7 @@ else {
         LocalVar *p = scope_local(m, kname);
         if (!p || p->rbs_seeded) continue;
         TyKind at = infer_type(c, val);
-        TyKind merged = ty_unify(p->type, at);
-        if (merged != p->type) { p->type = merged; changed = 1; }
+        changed |= slot_take(c, p, at, val);
         any_kw_bound = 1;
       }
       /* Ruby collapses a trailing braceless hash into a positional hash
@@ -3289,8 +3282,7 @@ else {
         if (p && !p->rbs_seeded) {
           TyKind kwt = infer_type(c, kwh);
           if (!ty_is_hash(kwt)) kwt = TY_SYM_POLY_HASH;
-          TyKind merged = ty_unify(p->type, kwt);
-          if (merged != p->type) { p->type = merged; changed = 1; }
+          changed |= slot_take(c, p, kwt, kwh);
         }
       }
     }
@@ -3788,8 +3780,7 @@ int infer_param_types(Compiler *c) {
       LocalVar *pp = scope_local(ms2, ms2->pnames[0]);
       if (!pp || pp->rbs_seeded) continue;
       TyKind at2 = infer_type(c, val);
-      TyKind mg2 = ty_unify(pp->type, at2);
-      if (mg2 != pp->type) { pp->type = mg2; changed = 1; }
+      changed |= slot_take(c, pp, at2, val);
       continue;
     }
     if (!sp_streq(ty, "CallNode")) continue;
@@ -3815,8 +3806,7 @@ int infer_param_types(Compiler *c) {
             LocalVar *ip = scope_local(&c->scopes[imi], c->scopes[imi].pnames[0]);
             TyKind at = infer_type(c, rav[1]);
             if (ip && !ip->rbs_seeded && at != TY_UNKNOWN) {
-              TyKind m = ty_unify(ip->type, at);
-              if (m != ip->type) { ip->type = m; changed = 1; }
+              changed |= slot_take(c, ip, at, rav[1]);
             }
           }
         }
@@ -3874,8 +3864,7 @@ int infer_param_types(Compiler *c) {
           if (!bp || bp->rbs_seeded) continue;
           TyKind bat = infer_type(c, bav[k]);
           if (bat == TY_VOID || bat == TY_NIL) bat = TY_POLY;
-          TyKind bmg = ty_unify(bp->type, bat);
-          if (bmg != bp->type) { bp->type = bmg; changed = 1; }
+          changed |= slot_take(c, bp, bat, bav[k]);
         }
         continue;
       }
@@ -8241,6 +8230,16 @@ TyKind return_node_type(Compiler *c, int id) {
   return infer_type(c, a[0]);
 }
 
+/* The node a `return` returns: its one argument, else the ReturnNode itself
+   (a bare `return`, or `return a, b`). */
+static int return_value_node(Compiler *c, int id) {
+  int args = nt_ref(c->nt, id, "arguments");
+  if (args < 0) return id;
+  int n = 0;
+  const int *a = nt_arr(c->nt, args, "arguments", &n);
+  return (a && n == 1) ? a[0] : id;
+}
+
 /* Defined in codegen_fold.c (linked in). */
 int is_descendant(Compiler *c, int k, int anc);
 
@@ -8653,7 +8652,32 @@ int infer_return_types(Compiler *c) {
        claims, so a return that re-derives UNKNOWN for any other reason still
        corrects downward. */
     if (r == TY_UNKNOWN && sc->ret == TY_POLY && scope_tail_unresolved_call(c, s)) continue;
-    if (r != sc->ret) { sc->ret = r; changed = 1; }
+    if (r != sc->ret) {
+      if (ty_degraded(r) && !ty_degraded(sc->ret)) {
+        /* the value that degraded the return: the body's tail if its type
+           did, else the first explicit return whose value did, else (two
+           concrete kinds that disagree) the tail, with the first return as
+           the other side */
+        int node = -1, other = -1; TyKind then = TY_UNKNOWN;
+        int tail = (!empty_body && !tail_unreachable && sc->body >= 0) ? sc->body : -1;
+        if (tail >= 0 && tail < c->node_cap && ty_degraded(c->ntype[tail])) { node = tail; then = c->ntype[tail]; }
+        else if (ret_head && ret_next) {
+          for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
+            TyKind rt = return_node_type(c, rid);
+            if (ty_degraded(rt)) { node = return_value_node(c, rid); then = rt; break; }
+          }
+        }
+        if (node < 0) {
+          node = tail >= 0 ? tail : (ret_head && ret_head[s] >= 0 ? return_value_node(c, ret_head[s]) : -1);
+          if (ret_head && ret_head[s] >= 0 && tail >= 0) other = return_value_node(c, ret_head[s]);
+          then = (node >= 0 && node < c->node_cap) ? c->ntype[node] : r;
+        }
+        sc->ret_why.node = node; sc->ret_why.other = other; sc->ret_why.prev = sc->ret;
+        sc->ret_why.then = then; sc->ret_why.round = g_infer_round;
+      }
+      else if (!ty_degraded(r)) why_reset(&sc->ret_why);
+      sc->ret = r; changed = 1;
+    }
     /* For a method with a &block param, record the value type its block yields
        (unified across all call sites). Blocks passed to it are emitted returning
        this common type so the sp_proc_call ABI is consistent. */

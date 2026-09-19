@@ -3344,7 +3344,8 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
           || (lm  != NULL && lm[0]  == '1' && lm[1]  == '\0');
     g_emit_line = on ? 1 : 0;
     const char *et = getenv("SPINEL_EMIT_TYPES");
-    g_emit_end = (on && et && *et) ? 1 : 0;
+    const char *ww = getenv("SPINEL_WARN_WIDEN");
+    g_emit_end = (on && ((et && *et) || (ww && *ww))) ? 1 : 0;
   }
 
   /* Resolve require_relative and plain require */

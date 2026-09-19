@@ -8570,6 +8570,212 @@ static void each_widened_slot(Compiler *c, void (*fn)(Compiler *, const WidenedS
   }
 }
 
+/* ---- why a slot widened: the chain from the slot to the birth ---- */
+
+/* The text of node `id` from its source file, one line, at most 48 chars. */
+static const char *why_slice(Compiler *c, int id, char *out, size_t cap) {
+  static char *cache_path; static char *cache_text;
+  const NodeTable *nt = c->nt;
+  out[0] = '\0';
+  int ln = (int)nt_int(nt, id, "node_line", 0), col = (int)nt_int(nt, id, "node_col", 0);
+  int eln = (int)nt_int(nt, id, "node_end_line", 0), ecol = (int)nt_int(nt, id, "node_end_col", 0);
+  if (ln <= 0) return out;
+  const char *path = emit_file_path(c, (int)nt_int(nt, id, "node_file", 0));
+  if (!cache_path || !sp_streq(cache_path, path)) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return out;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    char *t = malloc((size_t)n + 1);
+    if (!t) { fclose(f); return out; }
+    size_t got = fread(t, 1, (size_t)n, f); t[got] = '\0'; fclose(f);
+    free(cache_path); free(cache_text);
+    cache_path = strdup(path); cache_text = t;
+  }
+  const char *p = cache_text; int at = 1;
+  while (at < ln && *p) { if (*p == '\n') at++; p++; }
+  for (int i = 0; i < col && *p && *p != '\n'; i++) p++;
+  const char *e = p;
+  if (eln == ln && ecol > col) { for (int i = col; i < ecol && *e && *e != '\n'; i++) e++; }
+  else if (eln > ln) { while (*e && *e != '\n') e++; }
+  else { while (*e && *e != '\n') e++; }
+  size_t len = (size_t)(e - p);
+  int cut = 0;
+  if (len > cap - 4) { len = cap - 4; cut = 1; }
+  memcpy(out, p, len); out[len] = '\0';
+  if (cut || eln > ln) strcat(out, "…");
+  return out;
+}
+
+static void why_rbs(Compiler *c, TyKind t, char *out, size_t cap) {
+  Buf b; memset(&b, 0, sizeof b);
+  ty_to_rbs_into(c, t, &b);
+  snprintf(out, cap, "%s", b.p ? b.p : "?");
+  free(b.p);
+}
+
+/* One hop of a why chain, rendered for stderr and for the JSON. */
+typedef struct { Compiler *c; Buf *json; int n; } WhyOut;
+
+static void why_hop(WhyOut *o, int id, const char *role, const char *extra) {
+  Compiler *c = o->c; const NodeTable *nt = c->nt;
+  int ln = (int)nt_int(nt, id, "node_line", 0), col = (int)nt_int(nt, id, "node_col", 0);
+  int fid = (int)nt_int(nt, id, "node_file", 0);
+  char text[64], rbs[128];
+  why_slice(c, id, text, sizeof text);
+  if (id < c->node_cap && c->ntype[id] == TY_UNKNOWN) snprintf(rbs, sizeof rbs, "untyped (no type of its own)");
+  else why_rbs(c, id < c->node_cap ? c->ntype[id] : TY_UNKNOWN, rbs, sizeof rbs);
+  if (!o->json) {
+    fprintf(stderr, "spinel: %s:%d:%d: note: %s `%s` is %s%s\n", emit_file_path(c, fid), ln, col + 1, role, text, rbs, extra ? extra : "");
+  }
+  else {
+    Buf *b = o->json;
+    if (o->n > 0) buf_puts(b, ",");
+    buf_puts(b, "{\"file\":\""); json_escape_into(b, emit_file_path(c, fid));
+    buf_printf(b, "\",\"line\":%d,\"col\":%d", ln, col);
+    { int eln = (int)nt_int(nt, id, "node_end_line", 0);
+      if (eln > 0) buf_printf(b, ",\"end_line\":%d,\"end_col\":%d", eln, (int)nt_int(nt, id, "node_end_col", 0)); }
+    buf_puts(b, ",\"role\":\""); json_escape_into(b, role);
+    buf_puts(b, "\",\"rbs\":\""); json_escape_into(b, rbs);
+    buf_puts(b, "\"");
+    if (extra) { buf_puts(b, ",\"note\":\""); json_escape_into(b, extra); buf_puts(b, "\""); }
+    buf_puts(b, "}");
+  }
+  o->n++;
+}
+
+/* The end of a chain at a slot whose widening value is not untyped in the
+   end: two concrete kinds met, or a transient the fixpoint kept. */
+static void why_slot_end(WhyOut *o, const SlotWhy *w, const char *role) {
+  Compiler *c = o->c;
+  TyKind now = c->ntype[w->node];
+  char extra[160], b[64];
+  int other_ok = w->other >= 0 && w->other < c->node_cap && w->other != w->node;
+  /* two concrete kinds met: the slot held one (prev, from `other`) and this
+     value brought another; or, for a return, the tail and a `return` */
+  int meet = !ty_degraded(w->then) && ((w->prev != TY_UNKNOWN && w->prev != now) || other_ok);
+  if (meet) {
+    int is_ret = sp_streq(role, "returned");
+    if (is_ret && other_ok) why_rbs(c, c->ntype[w->other], b, sizeof b); else why_rbs(c, w->prev != TY_UNKNOWN ? w->prev : c->ntype[w->other], b, sizeof b);
+    snprintf(extra, sizeof extra, ", where %s %s (two kinds meet: untyped)", is_ret ? "a `return` gives" : "the slot was", b);
+  }
+  else if (now == TY_UNKNOWN)
+    snprintf(extra, sizeof extra, " (no type of its own: an empty literal, or nothing typed it); on round %d nothing else had typed the slot and it took untyped (pessimistic)", w->round);
+  else snprintf(extra, sizeof extra, "; on round %d of inference it was still untyped and the slot kept that (a transient)", w->round);
+  why_hop(o, w->node, role, extra);
+  if (meet && other_ok) why_hop(o, w->other, "and", NULL);
+}
+
+/* The return whose recorded value is node `id`, if a def's is: the chain
+   reached a callee's return that met two kinds. */
+static const SlotWhy *why_return_of(Compiler *c, int id) {
+  for (int si = 1; si < c->nscopes; si++)
+    if (c->scopes[si].ret_why.node == id && ty_degraded(c->scopes[si].ret)) return &c->scopes[si].ret_why;
+  return NULL;
+}
+
+/* The slot a read names, if the read's type came from one with a why. */
+static const LocalVar *why_read_slot(Compiler *c, int id) {
+  if (nt_kind(c->nt, id) != NK_LocalVariableReadNode) return NULL;
+  const char *nm = nt_str(c->nt, id, "name");
+  Scope *s = comp_scope_of(c, id);
+  LocalVar *lv = (nm && s) ? scope_local(s, nm) : NULL;
+  return (lv && lv->why.node >= 0) ? lv : NULL;
+}
+
+/* For a read of a block parameter: the call whose block declares it (the
+   tightest block span containing the read), and that call's receiver. -1
+   when none. Structural, at render time: the block-param inference has too
+   many sites to record at each, and the relation is the block's. */
+static int why_block_recv(Compiler *c, int read_id, const char *pname) {
+  const NodeTable *nt = c->nt;
+  int rl = (int)nt_int(nt, read_id, "node_line", 0), rc = (int)nt_int(nt, read_id, "node_col", 0);
+  if (rl <= 0) return -1;
+  int best = -1; long best_len = -1;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    int bl = (int)nt_int(nt, blk, "node_line", 0), bc = (int)nt_int(nt, blk, "node_col", 0);
+    int el = (int)nt_int(nt, blk, "node_end_line", 0), ec = (int)nt_int(nt, blk, "node_end_col", 0);
+    if (bl <= 0 || el <= 0) continue;
+    if (rl < bl || (rl == bl && rc < bc) || rl > el || (rl == el && rc >= ec)) continue;
+    /* declares the name? */
+    int params = nt_ref(nt, blk, "parameters");
+    int pn = params >= 0 ? nt_ref(nt, params, "parameters") : -1;
+    int found = 0;
+    if (pn >= 0) {
+      int n = 0; const int *req = nt_arr(nt, pn, "requireds", &n);
+      for (int i = 0; i < n && !found; i++) { const char *nm = nt_str(nt, req[i], "name"); if (nm && sp_streq(nm, pname)) found = 1; }
+    }
+    if (!found) continue;
+    long len = (long)(el - bl) * 100000 + (ec - bc);
+    if (best < 0 || len < best_len) { best = id; best_len = len; }
+  }
+  return best >= 0 ? nt_ref(nt, best, "receiver") : -1;
+}
+
+/* Follow a slot's why to the expression the poly was born at. `first` is
+   what the slot's node is to the slot: passed, written, returned. */
+static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
+  Compiler *c = o->c;
+  const NodeTable *nt = c->nt;
+  if (w->node < 0 || w->node >= c->node_cap) {
+    if (!o->json) fprintf(stderr, "spinel: note: why: untraced (no record of what widened it)\n");
+    return;
+  }
+  if (!ty_degraded(c->ntype[w->node])) { why_slot_end(o, w, first); return; }
+  int id = w->node, depth = 0;
+  const char *role = first;
+  int seen[16]; int ns = 0;
+  int last_ln = -1, last_col = -1;
+  for (;;) {
+    int next = c->norigin[id];
+    int born = (next == id), lost = (next < 0 || next >= c->node_cap);
+    int cyc = 0; for (int i = 0; i < ns; i++) if (seen[i] == next) cyc = 1;
+    if (ns < 16) seen[ns++] = id;
+    int ln = (int)nt_int(nt, id, "node_line", 0), col = (int)nt_int(nt, id, "node_col", 0);
+    /* not a hop of its own: a synthesized node, a wrapper (a body, an arm,
+       parentheses), or a node whose origin starts at the same place */
+    NodeKind k = nt_kind(nt, id);
+    int wrapper = k == NK_StatementsNode || k == NK_ElseNode || k == NK_ParenthesesNode || k == NK_BeginNode;
+    int silent = ln <= 0 || (ln == last_ln && col == last_col) || (wrapper && !born && !lost && depth > 0);
+    /* a read whose slot's widening value is concrete in the end: the
+       slot's own story ends the chain */
+    const LocalVar *rl = why_read_slot(c, id);
+    const SlotWhy *rs = rl ? &rl->why : NULL;
+    if (rs && !ty_degraded(c->ntype[rs->node])) {
+      if (!silent) why_hop(o, id, role, NULL);
+      why_slot_end(o, rs, rl->is_param ? "passed" : "written");
+      return;
+    }
+    if (born && rs == NULL && nt_kind(nt, id) == NK_LocalVariableReadNode) {
+      /* a block parameter: it takes the receiver's elements */
+      const char *nm = nt_str(nt, id, "name");
+      Scope *sc = comp_scope_of(c, id);
+      LocalVar *lv = (nm && sc) ? scope_local(sc, nm) : NULL;
+      int recv = (lv && lv->is_block_param) ? why_block_recv(c, id, nm) : -1;
+      if (recv >= 0 && recv < c->node_cap && ty_degraded(c->ntype[recv]) && recv != id) {
+        if (!silent) why_hop(o, id, role, " (a parameter of the block on:)");
+        role = "from"; id = recv; last_ln = -1;
+        continue;
+      }
+      why_hop(o, id, role, " — untraced from here (how the local was typed is not recorded)");
+      return;
+    }
+    if (born && k == NK_InstanceVariableReadNode) { why_hop(o, id, role, " — untraced from here: no write of it in this class is untyped (its kind is the writes' meeting, or a rule's)"); return; }
+    if (born) { why_hop(o, id, role, " — born here: no untyped input"); return; }
+    if (lost && !ty_degraded(c->ntype[id])) {
+      /* a concrete value the chain arrived at: a callee's return that met
+         two kinds, else a value the fixpoint saw untyped for a while */
+      const SlotWhy *rw = why_return_of(c, id);
+      if (rw) { why_slot_end(o, rw, role); return; }
+    }
+    if (lost || cyc || depth > 40) { why_hop(o, id, role, " — untraced from here"); return; }
+    if (!silent) { why_hop(o, id, role, NULL); last_ln = ln; last_col = col; role = "from"; }
+    depth++;
+    id = next;
+  }
+}
+
 /* --warn-widen: the widened slots on stderr as `spinel: file:line:col:
    warning: ...` (the other warnings' form, with the column added, 1-based as
    a compiler's warning is read by an editor), one per slot, at the slot. A
@@ -8577,12 +8783,22 @@ static void each_widened_slot(Compiler *c, void (*fn)(Compiler *, const WidenedS
    fact lived only in --emit-types and as a comment in --emit-rbs. */
 static void warn_widened_slot(Compiler *c, const WidenedSlot *w, void *ud) {
   (void)ud;
-  if (w->param)
+  WhyOut o = { c, NULL, 0 };
+  if (w->param) {
     fprintf(stderr, "spinel: %s:%d:%d: warning: parameter `%s` of `%s` widened to untyped (boxed poly slow path)\n",
             emit_file_path(c, w->fid), w->line, w->col + 1, w->param, w->s->name);
-  else
+    LocalVar *p = scope_local(w->s, w->param);
+    int rest = (w->s->rest_idx >= 0 && w->s->pnames[w->s->rest_idx] && sp_streq(w->s->pnames[w->s->rest_idx], w->param)) ||
+               (w->s->kwrest_idx >= 0 && w->s->pnames[w->s->kwrest_idx] && sp_streq(w->s->pnames[w->s->kwrest_idx], w->param));
+    if (rest) fprintf(stderr, "spinel: note: by construction: a splat parameter holds the extra arguments of every call, untyped\n");
+    else if (p && p->type == TY_UNKNOWN) fprintf(stderr, "spinel: note: never bound: no call site gives `%s` a type\n", w->param);
+    else if (p) why_chain(&o, &p->why, "passed");
+  }
+  else {
     fprintf(stderr, "spinel: %s:%d:%d: warning: the return of `%s` widened to untyped (boxed poly slow path)\n",
             emit_file_path(c, w->fid), w->line, w->col + 1, w->s->name);
+    why_chain(&o, &w->s->ret_why, "returned");
+  }
 }
 
 /* The --emit-types record of one widened slot. */
@@ -8605,7 +8821,11 @@ static void json_widened_slot(Compiler *c, const WidenedSlot *w, void *ud) {
   else buf_printf(&msg, "Spinel: the return of `%s` widened to untyped (boxed poly slow path)", w->s->name);
   json_escape_into(b, msg.p ? msg.p : "");
   free(msg.p);
-  buf_puts(b, "\"}");
+  buf_puts(b, "\",\"why\":[");
+  { WhyOut o = { c, b, 0 };
+    if (w->param) { LocalVar *p = scope_local(w->s, w->param); if (p) why_chain(&o, &p->why, "passed"); }
+    else why_chain(&o, &w->s->ret_why, "returned"); }
+  buf_puts(b, "]}");
   j->n++;
 }
 

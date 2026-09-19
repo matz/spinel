@@ -49,6 +49,8 @@ Compiler *comp_new(const NodeTable *nt) {
   c->nt = nt;
   int n = nt->count > 0 ? nt->count : 1;
   c->ntype = calloc((size_t)n, sizeof(TyKind));
+  c->norigin = malloc((size_t)n * sizeof(int));
+  for (int i = 0; i < n; i++) c->norigin[i] = -1;
   c->nilnarrow = calloc((size_t)n, sizeof(TyKind));
   c->strbuf_box = calloc((size_t)n, 1);
   c->strbuf_handle_demand = calloc((size_t)n, 1);
@@ -71,6 +73,7 @@ void comp_grow_node_arrays(Compiler *c) {
   int n = c->nt->count;
   if (n <= c->node_cap) return;
   c->ntype = realloc(c->ntype, sizeof(TyKind) * (size_t)n);
+  c->norigin = realloc(c->norigin, sizeof(int) * (size_t)n);
   c->nilnarrow = realloc(c->nilnarrow, sizeof(TyKind) * (size_t)n);
   c->strbuf_box = realloc(c->strbuf_box, (size_t)n);
   c->strbuf_handle_demand = realloc(c->strbuf_handle_demand, (size_t)n);
@@ -82,7 +85,7 @@ void comp_grow_node_arrays(Compiler *c) {
   c->hash_want = realloc(c->hash_want, sizeof(TyKind) * (size_t)n);
   c->arr_want = realloc(c->arr_want, sizeof(TyKind) * (size_t)n);
   c->poly_builtin_ty = realloc(c->poly_builtin_ty, sizeof(TyKind) * (size_t)n);
-  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->hash_want[i] = TY_UNKNOWN; c->arr_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; c->strbuf_handle_demand[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->norigin[i] = -1; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->hash_want[i] = TY_UNKNOWN; c->arr_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; c->strbuf_handle_demand[i] = 0; }
   c->node_cap = n;
 }
 
@@ -141,6 +144,7 @@ void comp_free(Compiler *c) {
   free(c->ffi_sources);
   free(c->nscope);
   free(c->ntype);
+  free(c->norigin);
   free(c->node_cbody);
   free(c->empty_arr_recv);
   free(c->empty_hash_recv);
@@ -222,8 +226,47 @@ Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {
   s->rest_idx = -1;
   s->kwrest_idx = -1;
   s->ret = TY_UNKNOWN;
+  why_reset(&s->ret_why);
   s->dm_subst_node = -1;
   return s;
+}
+
+int g_infer_round = 0;
+
+int ty_degraded(TyKind t) {
+  return t == TY_POLY || t == TY_POLY_ARRAY || t == TY_POLY_POLY_HASH ||
+         t == TY_SYM_POLY_HASH || t == TY_STR_POLY_HASH;
+}
+
+void why_reset(SlotWhy *w) {
+  w->node = -1; w->other = -1; w->prev = TY_UNKNOWN; w->then = TY_UNKNOWN; w->round = 0;
+}
+
+int slot_set(Compiler *c, LocalVar *lv, TyKind merged, TyKind t, int node) {
+  (void)c;
+  if (merged == lv->type) {
+    if (!ty_degraded(merged) && merged != TY_UNKNOWN && node >= 0) lv->last_src = node;
+    return 0;
+  }
+  if (ty_degraded(merged) && !ty_degraded(lv->type)) {
+    lv->why.node = node;
+    lv->why.other = lv->last_src;
+    lv->why.prev = lv->type;
+    lv->why.then = t;
+    lv->why.round = g_infer_round;
+  }
+  else if (!ty_degraded(merged)) {
+    /* re-derived concrete (the round's reset, or the re-narrow): the old
+       why is stale */
+    why_reset(&lv->why);
+    if (node >= 0) lv->last_src = node;
+  }
+  lv->type = merged;
+  return 1;
+}
+
+int slot_take(Compiler *c, LocalVar *lv, TyKind t, int node) {
+  return slot_set(c, lv, ty_unify(lv->type, t), t, node);
 }
 
 /* Runtime typedefs `sp_<X>` a user class name could redefine. A user class whose
@@ -1277,6 +1320,8 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv = &s->locals[s->nlocals++];
   lv->name = strdup(name);
   lv->type = TY_UNKNOWN;
+  why_reset(&lv->why);
+  lv->last_src = -1;
   lv->gc_root = 0;
   lv->is_param = 0;
   lv->is_block_param = 0;

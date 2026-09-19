@@ -14107,6 +14107,7 @@ void analyze_program(Compiler *c) {
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     if (iter + 1 > g_fixpoint_rounds) g_fixpoint_rounds = iter + 1;
+    g_infer_round = iter + 1;
     int ch = 0;
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */

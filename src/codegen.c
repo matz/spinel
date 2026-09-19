@@ -270,14 +270,16 @@ void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
    code, the raise fires first. Text-matched on the gate's own token, like
    emit_str_expr's sp_raise_nomethod coerce (the node stays TY_UNKNOWN). */
 static int coerce_const_raise(const char *txt, const char *zero, Buf *b) {
-  /* the vcall NameError gate yields a BOXED nil after the raise
-     ((sp_raise_cls(...), sp_box_nil())): an sp_RbVal in a scalar slot fails
-     the same way the sp_Class shape does (#3330) */
-  int cls_shape = strncmp(txt, "(sp_raise_cls(", 14) == 0 && strstr(txt, "(sp_Class)") != NULL;
-  int boxed_shape = strncmp(txt, "(sp_raise_cls(", 14) == 0 &&
-                    strstr(txt, "sp_box_nil())") != NULL;
-  if (!cls_shape && !boxed_shape) return 0;
-  buf_printf(b, "((void)%s, %s)", txt, zero);
+  /* Anything that DIVERGES: every sp_raise_ helper is SP_NORETURN, so an
+     operand whose emission leads with one never yields its value -- discard
+     it and answer the slot's own zero, keeping the call for its raise. The
+     same token test emit_str_expr_ex settled on: this used to name two
+     specific sp_raise_cls shapes (#3330), and the shape it did not name --
+     the poly nomethod gate's bare sp_raise_nomethod(...), an sp_RbVal --
+     landed raw in sp_int_sub's int slot and the C did not build
+     (`io.stat.size - io.pos` on a boxed handle, #NNNN). */
+  if (strncmp(past_open_parens(txt), "sp_raise_", 9) != 0) return 0;
+  buf_printf(b, "((void)(%s), %s)", txt, zero);
   return 1;
 }
 

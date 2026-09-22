@@ -1,0 +1,6 @@
+[package]
+name = "cgi"
+
+# Pre-installed spin package: ships with the compiler, versioned with it.
+# The escape/unescape surface `require "cgi"` defines. See cgi.rb for what
+# is deliberately absent.

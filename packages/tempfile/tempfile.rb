@@ -63,7 +63,7 @@ class Tempfile
       # common case is the name without one.
       counter = i == 0 ? "" : "-#{i}"
       path = "#{parent}/#{prefix}#{date}-#{Process.pid}-" \
-             "#{rand(0x100000000).to_s(36)}#{counter}#{suffix}"
+             "#{random_token}#{counter}#{suffix}"
       begin
         file = File.open(path, mode, perm)
         break
@@ -91,6 +91,17 @@ class Tempfile
         # The block removed or renamed it. Nothing left to do.
       end
     end
+  end
+
+  # 32 bits of `rand` in base 36, drawn as two halves. CRuby writes this
+  # as `rand(0x100000000)`, and that literal does not fit an Integer on
+  # the 32-bit build -- two draws below 2**16 carry the same entropy and
+  # are representable at every width the compiler targets. The rendering
+  # is up to eight base-36 characters where CRuby's is up to seven;
+  # nothing reads the token, and what keeps two callers apart is the
+  # exclusive create rather than the width of this number.
+  def self.random_token
+    rand(0x10000).to_s(36) + rand(0x10000).to_s(36)
   end
 
   # `"probe"` or `%w[probe .img]` -- CRuby accepts either, and the array

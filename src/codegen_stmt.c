@@ -630,7 +630,7 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
   int t = ++g_tmp;
   emit_indent(b, indent);
   buf_printf(b, "{ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", t, t);
-  for (int k = 0; k < argc; k++) {
+  times (k, argc) {
     int a = argv[k];
     /* an argument's hoisted prelude (`st.add(2).size`) must run right before
        its own push, not before the whole array build */
@@ -680,11 +680,11 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   }
   if (sp_streq(name, "puts")) {
     if (argc == 0) { emit_indent(b, indent); buf_puts(b, "putchar('\\n');\n"); return 1; }
-    for (int k = 0; k < argc; k++) emit_puts_one(c, argv[k], b, indent);
+    times (k, argc) emit_puts_one(c, argv[k], b, indent);
     return 1;
   }
-  if (sp_streq(name, "print")) { for (int k = 0; k < argc; k++) emit_print_one(c, argv[k], b, indent); return 1; }
-  if (sp_streq(name, "p") || sp_streq(name, "pp")) { for (int k = 0; k < argc; k++) emit_p_one(c, argv[k], b, indent); return 1; }
+  if (sp_streq(name, "print")) { times (k, argc) emit_print_one(c, argv[k], b, indent); return 1; }
+  if (sp_streq(name, "p") || sp_streq(name, "pp")) { times (k, argc) emit_p_one(c, argv[k], b, indent); return 1; }
   if (sp_streq(name, "putc") && argc == 1) {
     /* Kernel#putc: an int writes (byte & 0xff); a string writes its first char. */
     TyKind at = comp_ntype(c, argv[0]);
@@ -720,12 +720,12 @@ else {
     int ts = ++g_tmp;
     emit_indent(b, indent);
     buf_puts(b, "{ ");
-    for (int k = 0; k < argc; k++) {
+    times (k, argc) {
       buf_printf(b, "const char *_sys_%d_%d = ", ts, k); emit_str_expr(c, argv[k], b);
       buf_printf(b, "; SP_GC_ROOT_STR(_sys_%d_%d); ", ts, k);
     }
     buf_printf(b, "const char *_sys_%d[] = { ", ts);
-    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
+    times (k, argc) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
     buf_printf(b, ", NULL }; sp_system_args(%d, _sys_%d); }\n", argc, ts);
     return 1;
   }
@@ -881,20 +881,19 @@ else {
       const char *lt = nt_type(c->nt, last);
       if (lt && sp_streq(lt, "KeywordHashNode")) {
         kw_idx = argc - 1;
-        int en = 0; const int *elems = nt_arr(c->nt, last, "elements", &en);
-        for (int e = 0; e < en; e++) {
-          const char *ety = nt_type(c->nt, elems[e]);
+        each (e, c->nt, last, elements) {
+          const char *ety = nt_type(c->nt, e);
           if (ety && sp_streq(ety, "AssocSplatNode")) {
-            int val = nt_ref(c->nt, elems[e], "value");
+            int val = nt_ref(c->nt, e, "value");
             if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, val, b); buf_puts(b, ");\n"); }
             continue;
           }
-          int key = nt_ref(c->nt, elems[e], "key");
-          int val = nt_ref(c->nt, elems[e], "value");
+          int key = nt_ref(c->nt, e, "key");
+          int val = nt_ref(c->nt, e, "value");
           const char *kty = key >= 0 ? nt_type(c->nt, key) : NULL;
           const char *kname = (kty && sp_streq(kty, "SymbolNode")) ? nt_str(c->nt, key, "value") : NULL;
           if (kname && sp_streq(kname, "uplevel")) {
-            unsupported(c, elems[e], "warn(uplevel:) caller-location prefix (no runtime source-line stack)");
+            unsupported(c, e, "warn(uplevel:) caller-location prefix (no runtime source-line stack)");
           }
           else if (kname && sp_streq(kname, "category")) {
             /* the category gates printing through the runtime Warning flags
@@ -933,7 +932,7 @@ else {
     char guard[64]; guard[0] = 0;
     if (cat_guard) snprintf(guard, sizeof guard, "sp_warning_enabled(\"%s\")", cat_guard);
     else if (cat_dyn) snprintf(guard, sizeof guard, "sp_warning_aref(_t%d)", cat_dyn);
-    for (int k = 0; k < argc; k++) {
+    times (k, argc) {
       if (k == kw_idx) continue;
       if (bad_cat[0]) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, ");\n"); continue; }
       TyKind at = comp_ntype(c, argv[k]);
@@ -1051,9 +1050,8 @@ static int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b) {
        constructing. An empty one is just the empty array. */
     int t = ++g_tmp;
     buf_printf(b, "({ sp_PtrArray *_t%d = sp_PtrArray_new(); SP_GC_ROOT(_t%d);", t, t);
-    int en = 0; const int *el = nt_arr(c->nt, v, "elements", &en);
-    for (int e = 0; e < en; e++) {
-      buf_printf(b, " sp_PtrArray_push(_t%d, ", t); emit_expr(c, el[e], b); buf_puts(b, ");");
+    each (e, c->nt, v, elements) {
+      buf_printf(b, " sp_PtrArray_push(_t%d, ", t); emit_expr(c, e, b); buf_puts(b, ");");
     }
     buf_printf(b, " _t%d; })", t);
     return 1;
@@ -1361,8 +1359,8 @@ static int cg_subtree_contains(const NodeTable *nt, int root, int id, int depth)
   if (root < 0 || depth > 200) return 0;
   if (root == id) return 1;
   const SpNode *nd = &nt->nodes[root];
-  for (int i = 0; i < nd->nr; i++) if (cg_subtree_contains(nt, nd->r[i].ref, id, depth + 1)) return 1;
-  for (int i = 0; i < nd->na; i++)
+  times (i, nd->nr) if (cg_subtree_contains(nt, nd->r[i].ref, id, depth + 1)) return 1;
+  times (i, nd->na)
     for (int j = 0; j < nd->a[i].n; j++) if (cg_subtree_contains(nt, nd->a[i].ids[j], id, depth + 1)) return 1;
   return 0;
 }
@@ -1921,7 +1919,7 @@ int static_isa_cond(Compiler *c, int pred) {
       (rt == TY_INT || rt == TY_BIGINT || rt == TY_FLOAT || rt == TY_BOOL ||
        rt == TY_SYMBOL || rt == TY_STRING) &&
       target_name && !is_builtin_class_name(target_name)) {
-    for (int k = 0; k < c->nclasses; k++) {
+    times (k, c->nclasses) {
       if (!c->classes[k].name || !is_builtin_class_name(c->classes[k].name)) continue;
       for (int m = 0; m < c->classes[k].nincluded_mods; m++)
         if (c->classes[k].included_mods[m] == target) return -1;
@@ -1944,11 +1942,11 @@ int static_isa_cond(Compiler *c, int pred) {
    affected: its body holds a real write node the scan already counts. */
 static int ivar_has_generated_writer(Compiler *c, const char *nm) {
   const char *base = nm + 1;            /* "@foo" -> "foo" */
-  for (int k = 0; k < c->nclasses; k++) {
+  times (k, c->nclasses) {
     const ClassInfo *ci = &c->classes[k];
-    for (int w = 0; w < ci->nwriters; w++)
+    times (w, ci->nwriters)
       if (ci->writers[w] && sp_streq(ci->writers[w], base)) return 1;
-    for (int w = 0; w < ci->nsg_writers; w++)
+    times (w, ci->nsg_writers)
       if (ci->sg_writers[w] && sp_streq(ci->sg_writers[w], base)) return 1;
   }
   return 0;
@@ -1962,7 +1960,7 @@ static int ivar_all_writes_nil(Compiler *c, const char *nm) {
   if (!nm) return -1;
   if (ivar_has_generated_writer(c, nm)) return -1;
   int saw_write = 0;
-  for (int id = 0; id < nt->count; id++) {
+  times (id, nt->count) {
     const char *ty = nt_type(nt, id);
     if (!ty) continue;
     if (sp_streq(ty, "InstanceVariableWriteNode")) {
@@ -2073,7 +2071,7 @@ static int static_block_given_cond(Compiler *c, int pred) {
        block; a `&block` parameter read cannot, because it does. */
     if (g_block_id < 0) return -1;
     /* A body that ASSIGNS to the name is not asking this question any more. */
-    for (int w = 0; w < nt->count; w++) {
+    times (w, nt->count) {
       NodeKind wk = nt_kind(nt, w);
       if (wk != NK_LocalVariableWriteNode && wk != NK_LocalVariableOperatorWriteNode &&
           wk != NK_LocalVariableOrWriteNode && wk != NK_LocalVariableAndWriteNode) continue;
@@ -2245,7 +2243,7 @@ int emit_poly_class_when(Compiler *c, int cond_id, const char *tmp, Buf *b) {
     if (cid >= 0) {
       buf_printf(b, "(%s.tag == SP_TAG_OBJ && (", tmp);
       int first = 1;
-      for (int k = 0; k < c->nclasses; k++) {
+      times (k, c->nclasses) {
         if (k == cid || is_descendant(c, k, cid)) {
           buf_printf(b, "%s%s.cls_id == %d", first ? "" : " || ", tmp, k);
           first = 0;
@@ -2341,7 +2339,7 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
   arr = pm_arr_name;
   buf_printf(b, "((%s).tag == SP_TAG_OBJ && sp_poly_is_array_kind((%s).cls_id) && sp_poly_length(%s) %s %dLL",
              arr, arr, arr, has_rest ? ">=" : "==", apn + npost);
-  for (int i = 0; i < apn; i++) {
+  times (i, apn) {
     /* the element accessor nests one level per recursion (arr grows), so build
        it in a Buf rather than a fixed buffer that would truncate. */
     Buf e; memset(&e, 0, sizeof e);
@@ -2353,7 +2351,7 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
     free(e.p); free(sub.p);
   }
   /* posts are checked from the tail (post j sits at len - (npost - j)). */
-  for (int j = 0; j < npost; j++) {
+  times (j, npost) {
     Buf e; memset(&e, 0, sizeof e);
     buf_printf(&e, "sp_poly_index_poly(%s, sp_box_int(sp_poly_length(%s) - %lldLL))",
                arr, arr, (long long)(npost - j));
@@ -2395,7 +2393,7 @@ static void emit_pm_hash_cond_poly(Compiler *c, int pat, const char *hexpr, Buf 
   }
   int en = 0, listed = 0;
   const int *elms = nt_arr(nt, pat, "elements", &en);
-  for (int i = 0; i < en; i++) {
+  times (i, en) {
     if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
     int key = nt_ref(nt, elms[i], "key");
     int vpat = nt_ref(nt, elms[i], "value");
@@ -2434,7 +2432,7 @@ static void emit_pm_find_cond_poly(Compiler *c, int pat, const char *aexpr, Buf 
                 "sp_int _t%d = sp_poly_length(_t%d); "
                 "for (sp_int _t%d = 0; _t%d + %dLL <= _t%d; _t%d++) { int _t%d = 1;",
              ta, aexpr, tp, ta, ta, tl, ta, ti, ti, rn, tl, ti, tw);
-  for (int j = 0; j < rn; j++) {
+  times (j, rn) {
     int te = ++g_tmp;
     buf_printf(b, " sp_RbVal _t%d = sp_poly_arr_get(_t%d, _t%d + %dLL); (void)_t%d;",
                te, ta, ti, j, te);
@@ -2538,7 +2536,7 @@ static void emit_pm_deconstruct_keys_arg(Compiler *c, int pat, Buf *b) {
   if (rest >= 0 || !elms) { buf_puts(b, "sp_box_nil()"); return; }
   int tk = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tk, tk);
-  for (int i = 0; i < en; i++) {
+  times (i, en) {
     if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
     int key = nt_ref(nt, elms[i], "key");
     const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
@@ -2614,7 +2612,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
         const char *acc = comp_ty_value_obj(c, pt) ? "." : "->";
         int first = 1;
         buf_puts(b, "(");
-        for (int k = 0; k < c->nclasses; k++) {
+        times (k, c->nclasses) {
           if (k != tcid && !is_descendant(c, k, tcid)) continue;
           if (!first) buf_puts(b, " || ");
           buf_printf(b, "_t%d%scls_id == %d", t, acc, k);
@@ -2786,7 +2784,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
       const char *lo = sp_streq(ak, "Int") ? "int" : (sp_streq(ak, "Float") ? "float" : "str");
       char boxed[64];
       snprintf(boxed, sizeof boxed, "sp_box_%s_array(_t%d)", lo, t);
-      for (int i = 0; i < apn; i++) {
+      times (i, apn) {
         Buf e; memset(&e, 0, sizeof e);
         buf_printf(&e, "sp_poly_index_poly(%s, sp_box_int(%dLL))", boxed, i);
         Buf sub; memset(&sub, 0, sizeof sub);
@@ -2795,7 +2793,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
         }
         free(e.p); free(sub.p);
       }
-      for (int j = 0; j < npost; j++) {
+      times (j, npost) {
         Buf e; memset(&e, 0, sizeof e);
         buf_printf(&e, "sp_poly_index_poly(%s, sp_box_int(sp_poly_length(%s) - %lldLL))",
                    boxed, boxed, (long long)(npost - j));
@@ -2898,7 +2896,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
     int hi = g_pm_hash_sink ? g_pm_hash_sink_indent : g_indent;
     int en = 0;
     const int *elms = nt_arr(nt, pat, "elements", &en);
-    for (int i = 0; i < en; i++) {
+    times (i, en) {
       if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) return 0;
       if (nt_ref(nt, elms[i], "key") < 0) return 0;
       int classpat = pm_hash_value_class(nt, nt_ref(nt, elms[i], "value"));
@@ -2925,7 +2923,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
     }
     int hcond = ++g_tmp;
     emit_indent(hs, hi); buf_printf(hs, "int _t%d = 1;\n", hcond);
-    for (int i = 0; i < en; i++) {
+    times (i, en) {
       int key = nt_ref(nt, elms[i], "key");
       int vchk = nt_ref(nt, elms[i], "value");
       int classpat = pm_hash_value_class(nt, vchk);
@@ -3124,7 +3122,7 @@ static void emit_pm_bind_poly(Compiler *c, int pat, const char *arr, int indent,
   const NodeTable *nt = c->nt;
   int apn = 0;
   const int *reqs = nt_arr(nt, pat, "requireds", &apn);
-  for (int i = 0; i < apn; i++) {
+  times (i, apn) {
     const char *rty = nt_type(nt, reqs[i]);
     if (!rty) continue;
     /* the element accessor nests one level per recursion (arr grows), so build
@@ -3165,7 +3163,7 @@ static void emit_pm_bind_poly(Compiler *c, int pat, const char *arr, int indent,
     }
   }
   /* posts bind from the tail: post j is at index len - (npost - j). */
-  for (int j = 0; j < npost; j++) {
+  times (j, npost) {
     const char *rty = nt_type(nt, posts[j]);
     if (!rty) continue;
     Buf src; memset(&src, 0, sizeof src);
@@ -3205,7 +3203,7 @@ static void emit_pm_bind_hash_poly(Compiler *c, int pat, const char *hexpr, int 
              thd, hexpr, thd, thd, thd, thd, thd);
   char hbuf[24]; snprintf(hbuf, sizeof hbuf, "_t%d", thd);
   hexpr = hbuf;
-  for (int i = 0; i < en; i++) {
+  times (i, en) {
     if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
     int key = nt_ref(nt, elms[i], "key");
     int vpat = nt_ref(nt, elms[i], "value");
@@ -3256,7 +3254,7 @@ static void emit_pm_bind_find_poly(Compiler *c, int pat, const char *aexpr, int 
                 "sp_int _t%d = sp_poly_length(_t%d); "
                 "for (sp_int _t%d = 0; _t%d + %dLL <= _t%d; _t%d++) { int _t%d = 1;",
              ta, ta, tl, ta, ti, ti, rn, tl, ti, tw);
-  for (int j = 0; j < rn; j++) {
+  times (j, rn) {
     int te = ++g_tmp;
     buf_printf(b, " sp_RbVal _t%d = sp_poly_arr_get(_t%d, _t%d + %dLL); (void)_t%d;",
                te, ta, ti, j, te);
@@ -3285,7 +3283,7 @@ static void emit_pm_bind_find_poly(Compiler *c, int pat, const char *aexpr, int 
     emit_pm_typed_assign(sc, snm, ss.p, b, indent + 2);
     free(ss.p);
   }
-  for (int j = 0; j < rn; j++) {
+  times (j, rn) {
     const char *rty = nt_type(nt, reqs[j]);
     if (!rty) continue;
     Buf ge; memset(&ge, 0, sizeof ge);
@@ -3327,7 +3325,7 @@ static void emit_massign_poly_target(Compiler *c, int tgt, const char *val,
     int rn = 0; const int *rights = nt_arr(nt, tgt, "rights", &rn);
     int rest = nt_ref(nt, tgt, "rest");
     int has_rest = (rest >= 0 && nt_type(nt, rest) && sp_streq(nt_type(nt, rest), "SplatNode"));
-    for (int i = 0; i < ln; i++) {
+    times (i, ln) {
       Buf s; memset(&s, 0, sizeof s);
       buf_printf(&s, "sp_poly_index_poly(%s, sp_box_int(%lldLL))", val, (long long)i);
       emit_massign_poly_target(c, lefts[i], s.p, indent, b, sc);
@@ -3346,7 +3344,7 @@ static void emit_massign_poly_target(Compiler *c, int tgt, const char *val,
         }
       }
     }
-    for (int j = 0; j < rn; j++) {
+    times (j, rn) {
       Buf s; memset(&s, 0, sizeof s);
       buf_printf(&s, "sp_poly_index_poly(%s, sp_box_int(sp_poly_length(%s) - %lldLL + %lldLL))",
                  val, val, (long long)rn, (long long)j);
@@ -3425,7 +3423,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
     buf_puts(b, "\n");
   }
 
-  for (int w = 0; w < cn; w++) {
+  times (w, cn) {
     const char *cty = nt_type(nt, conds[w]);
     if (!cty || !sp_streq(cty, "InNode")) continue;
     int pat = nt_ref(nt, conds[w], "pattern");
@@ -3511,7 +3509,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         arm_t = ++g_tmp;
         emit_indent(b, indent + 1);
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", arm_t, arm_t);
-        for (int i = 0; i < sc->nivars; i++) {
+        times (i, sc->nivars) {
           char fb[300];
           if (isv) snprintf(fb, sizeof fb, "(_t%d).iv_%s", t, iv_c(sc->ivars[i] + 1));
           else     snprintf(fb, sizeof fb, "((sp_%s *)_t%d)->iv_%s", sc->c_name, t, iv_c(sc->ivars[i] + 1));
@@ -3548,7 +3546,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         arm_t = ++g_tmp;
         emit_indent(b, indent + 1);
         buf_printf(b, "sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);\n", arm_t, arm_t);
-        for (int i = 0; i < sc->nivars; i++) {
+        times (i, sc->nivars) {
           char fb[300];
           if (isv) snprintf(fb, sizeof fb, "(_t%d).iv_%s", t, iv_c(sc->ivars[i] + 1));
           else     snprintf(fb, sizeof fb, "((sp_%s *)_t%d)->iv_%s", sc->c_name, t, iv_c(sc->ivars[i] + 1));
@@ -3593,7 +3591,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         else         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", arm_t, arm_t);
         emit_indent(b, indent + 1);
         buf_printf(b, "if (_t%d) {\n", poly_class_guard);
-        for (int i = 0; i < sc->nivars; i++) {
+        times (i, sc->nivars) {
           char fb[320];
           if (isv) snprintf(fb, sizeof fb, "((sp_%s *)_t%d.v.p)->iv_%s", sc->c_name, t, iv_c(sc->ivars[i] + 1));
           else     snprintf(fb, sizeof fb, "((sp_%s *)_t%d.v.p)->iv_%s", sc->c_name, t, iv_c(sc->ivars[i] + 1));
@@ -3661,7 +3659,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       buf_printf(b, "for (sp_int _fi = 0; _t%d && _fi + %dLL <= _t%d->len; _fi++) {\n",
                  find_arr, rn, find_arr);
       Buf wb = {NULL, 0, 0};
-      for (int j = 0; j < rn; j++) {
+      times (j, rn) {
         int e = ++g_tmp;
         emit_indent(b, indent + 2);
         emit_ctype(c, elem_t, b);
@@ -3691,7 +3689,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         TyKind hvt = ty_hash_val(arm_pt);
         int en = 0;
         const int *elms = nt_arr(nt, pat, "elements", &en);
-        for (int i = 0; i < en; i++) {
+        times (i, en) {
           if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
           int key = nt_ref(nt, elms[i], "key");
           int vpat = nt_ref(nt, elms[i], "value");
@@ -3757,7 +3755,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
             sp_streq(nt_type(nt, hp_rest), "NoKeywordsParameterNode")) {
           int en2 = 0, listed = 0;
           const int *elms2 = nt_arr(nt, pat, "elements", &en2);
-          for (int i = 0; i < en2; i++)
+          times (i, en2)
             if (nt_type(nt, elms2[i]) && sp_streq(nt_type(nt, elms2[i]), "AssocNode")) listed++;
           emit_indent(b, indent + 1);
           buf_printf(b, "_t%d = _t%d && (_t%d->len == %dLL);\n", hcond, hcond, arm_t, listed);
@@ -3817,7 +3815,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       if (bs >= 0 && nt_type(nt, bs) && sp_streq(nt_type(nt, bs), "StatementsNode")) {
         int bn = 0;
         const int *body = nt_arr(nt, bs, "body", &bn);
-        for (int k = 0; k < bn; k++) {
+        times (k, bn) {
           const char *bty = nt_type(nt, body[k]);
           if (bty && sp_streq(bty, "LocalVariableTargetNode")) {
             const char *lnm = nt_str(nt, body[k], "name");
@@ -3850,7 +3848,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         Scope *hsc = comp_scope_of(c, id);
         int en = 0;
         const int *elms = nt_arr(nt, pat, "elements", &en);
-        for (int i = 0; i < en; i++) {
+        times (i, en) {
           if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
           int key = nt_ref(nt, elms[i], "key");
           int vpat = nt_ref(nt, elms[i], "value");
@@ -3937,7 +3935,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
               buf_printf(b, " _t%d = _t%d->keys[_t%d->order[_t%d]];\n", tk2, arm_t, arm_t, ti2);
             else
               buf_printf(b, " _t%d = _t%d->order[_t%d];\n", tk2, arm_t, ti2);
-            for (int i = 0; i < en; i++) {
+            times (i, en) {
               if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
               int key = nt_ref(nt, elms[i], "key");
               if (key < 0) continue;
@@ -4011,7 +4009,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       int rest_nid = nt_ref(nt, array_pat, "rest");
       int npost = 0;
       const int *posts = nt_arr(nt, array_pat, "posts", &npost);
-      for (int i = 0; i < apn; i++) {
+      times (i, apn) {
         const char *lty2 = nt_type(nt, reqs[i]);
         const char *lnm = NULL;
         if (lty2 && sp_streq(lty2, "LocalVariableTargetNode")) lnm = nt_str(nt, reqs[i], "name");
@@ -4061,7 +4059,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         }
       }
       /* posts bind from the tail: post j is at index len - (npost - j). */
-      for (int j = 0; j < npost; j++) {
+      times (j, npost) {
         const char *pty2 = nt_type(nt, posts[j]);
         const char *lnm = NULL;
         if (pty2 && sp_streq(pty2, "LocalVariableTargetNode")) lnm = nt_str(nt, posts[j], "name");
@@ -4106,7 +4104,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       }
       /* window targets = the matched elements; a `lit => x` capture binds its
          target (the literal was already checked in the window scan). */
-      for (int j = 0; j < rn; j++) {
+      times (j, rn) {
         const char *lty2 = nt_type(nt, reqs[j]);
         if (!lty2) continue;
         char gx[80]; snprintf(gx, sizeof gx, "sp_%sArray_get(_t%d, _t%d + %dLL)", find_k, find_arr, find_pos, j);
@@ -4217,11 +4215,11 @@ static int subtree_has_loop_break(Compiler *c, int root) {
       return 0;
   }
   int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) if (subtree_has_loop_break(c, nt_ref_at(nt, root, i))) return 1;
+  times (i, nr) if (subtree_has_loop_break(c, nt_ref_at(nt, root, i))) return 1;
   int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
+  times (i, na) {
     int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++) if (subtree_has_loop_break(c, el[j])) return 1;
+    times (j, n) if (subtree_has_loop_break(c, el[j])) return 1;
   }
   return 0;
 }
@@ -4287,9 +4285,9 @@ static int emit_when_lambda_inline(Compiler *c, int cond, int t, TyKind pt, Buf 
 static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int nw) {
   const NodeTable *nt = c->nt;
   if (!needs_root(pt) || comp_ty_value_obj(c, pt)) return 0;
-  for (int w = 0; w < nw; w++) {
+  times (w, nw) {
     int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
-    for (int k = 0; k < wc; k++) if (subtree_may_allocate(nt, conds[k])) return 1;
+    times (k, wc) if (subtree_may_allocate(nt, conds[k])) return 1;
   }
   return 0;
 }
@@ -4333,7 +4331,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
     for (int w = 0; w < nw && all_int; w++) {
       int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
       if (wc == 0) { all_int = 0; break; }
-      for (int j = 0; j < wc; j++) {
+      times (j, wc) {
         const char *cty = nt_type(nt, conds[j]);
         if (!cty || !sp_streq(cty, "IntegerNode")) { all_int = 0; break; }
       }
@@ -4348,11 +4346,10 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent);
       if (pt == TY_POLY) buf_printf(b, "switch (sp_poly_to_i(_t%d)) {\n", t);
       else buf_printf(b, "switch (_t%d) {\n", t);
-      for (int w = 0; w < nw; w++) {
-        int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
-        for (int j = 0; j < wc; j++) {
+      times (w, nw) {
+        each (j, nt, whens[w], conditions) {
           emit_indent(b, indent);
-          buf_printf(b, "case %lldLL:\n", (long long)nt_int(nt, conds[j], "value", 0));
+          buf_printf(b, "case %lldLL:\n", (long long)nt_int(nt, j, "value", 0));
         }
         emit_indent(b, indent); buf_puts(b, "{\n");
         emit_stmts(c, nt_ref(nt, whens[w], "statements"), b, indent + 1);
@@ -4369,13 +4366,13 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
     }
   }
 
-  for (int w = 0; w < nw; w++) {
+  times (w, nw) {
     int wn = whens[w];
     int wc = 0;
     const int *conds = nt_arr(nt, wn, "conditions", &wc);
     emit_indent(b, indent);
     buf_puts(b, w == 0 ? "if (" : "else if (");
-    for (int j = 0; j < wc; j++) {
+    times (j, wc) {
       if (j) buf_puts(b, " || ");
       if (pred >= 0) {
         /* `when *arr` -- array membership test */
@@ -4859,19 +4856,19 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
     for (int w = 0; w < nw && all_int; w++) {
       int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
       if (wc == 0) { all_int = 0; break; }
-      for (int j = 0; j < wc; j++) {
+      times (j, wc) {
         const char *cty = nt_type(nt, conds[j]);
         if (!cty || !sp_streq(cty, "IntegerNode")) { all_int = 0; break; }
         long long v = (long long)nt_int(nt, conds[j], "value", 0);
-        for (int d = 0; d < ndup; d++) if (vals[d] == v) { all_int = 0; break; }  /* dup label -> bail */
+        times (d, ndup) if (vals[d] == v) { all_int = 0; break; }  /* dup label -> bail */
         if (all_int && ndup < (int)(sizeof vals / sizeof vals[0])) vals[ndup++] = v;
       }
     }
     if (all_int) {
       buf_printf(b, "switch (_t%d) { ", t);
-      for (int w = 0; w < nw; w++) {
+      times (w, nw) {
         int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
-        for (int j = 0; j < wc; j++)
+        times (j, wc)
           buf_printf(b, "case %lldLL: ", (long long)nt_int(nt, conds[j], "value", 0));
         buf_puts(b, "{ ");
         emit_case_branch_value(c, nt_ref(nt, whens[w], "statements"), rt, cr, b);
@@ -4887,12 +4884,12 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
     }
   }
 
-  for (int w = 0; w < nw; w++) {
+  times (w, nw) {
     int wn = whens[w];
     int wc = 0;
     const int *conds = nt_arr(nt, wn, "conditions", &wc);
     buf_puts(b, w == 0 ? "if (" : "else if (");
-    for (int j = 0; j < wc; j++) {
+    times (j, wc) {
       if (j) buf_puts(b, " || ");
       if (pred >= 0) {
         /* when ClassName / Mod::Klass: Module#=== via is_a? semantics */
@@ -5091,11 +5088,11 @@ static int find_hoistable_strlen(Compiler *c, int root) {
       return recv;
   }
   int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) { int r = find_hoistable_strlen(c, nt_ref_at(nt, root, i)); if (r >= 0) return r; }
+  times (i, nr) { int r = find_hoistable_strlen(c, nt_ref_at(nt, root, i)); if (r >= 0) return r; }
   int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
+  times (i, na) {
     int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++) { int r = find_hoistable_strlen(c, el[j]); if (r >= 0) return r; }
+    times (j, n) { int r = find_hoistable_strlen(c, el[j]); if (r >= 0) return r; }
   }
   return -1;
 }
@@ -5126,11 +5123,11 @@ static int subtree_mutates_local(Compiler *c, int root, const char *name) {
       return 1;
   }
   int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) if (subtree_mutates_local(c, nt_ref_at(nt, root, i), name)) return 1;
+  times (i, nr) if (subtree_mutates_local(c, nt_ref_at(nt, root, i), name)) return 1;
   int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
+  times (i, na) {
     int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++) if (subtree_mutates_local(c, el[j], name)) return 1;
+    times (j, n) if (subtree_mutates_local(c, el[j], name)) return 1;
   }
   return 0;
 }
@@ -5294,7 +5291,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
                    tv, sp_streq(k,"Int")?"int":sp_streq(k,"Float")?"float":"str", k, ta, ti);
       else
         buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);\n", tv, ta, ti);
-      for (int i = 0; i < ln; i++) {
+      times (i, ln) {
         const char *lnm = nt_str(nt, lefts[i], "name");
         if (!lnm) continue;
         TyKind vt = scope_local(comp_scope_of(c, idx), lnm) ?
@@ -5367,7 +5364,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       const int *lefts = nt_arr(nt, idx, "lefts", &ln);
       emit_indent(b, indent + 2);
       buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);\n", tv, ta, ti);
-      for (int i = 0; i < ln; i++) {
+      times (i, ln) {
         const char *lnm = nt_str(nt, lefts[i], "name");
         if (!lnm) continue;
         LocalVar *dlv = scope_local(comp_scope_of(c, idx), lnm);
@@ -5415,7 +5412,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
         const int *lefts = nt_arr(nt, idx, "lefts", &ln);
         emit_indent(b, indent + 2);
         buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);\n", tv, ta, ti);
-        for (int i = 0; i < ln; i++) {
+        times (i, ln) {
           const char *lnm = nt_str(nt, lefts[i], "name");
           if (!lnm) continue;
           TyKind vt2 = scope_local(comp_scope_of(c, idx), lnm) ?
@@ -5783,7 +5780,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
   if (g_proc_toplevel_return) {
     emit_indent(b, indent);
     buf_puts(b, "{ ");
-    for (int k = 0; k < n; k++) { buf_puts(b, "(void)("); emit_boxed(c, a[k], b); buf_puts(b, "); "); }
+    times (k, n) { buf_puts(b, "(void)("); emit_boxed(c, a[k], b); buf_puts(b, "); "); }
     buf_puts(b, "exit(0); }\n");
     return;
   }
@@ -5795,7 +5792,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     if (n > 1) {
       int ta = ++g_tmp;
       buf_printf(b, "{ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-      for (int k = 0; k < n; k++) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
+      times (k, n) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
       buf_printf(b, " sp_proc_return(%s, sp_box_poly_array(_t%d)); }\n", g_proc_return_home, ta);
     }
     else {
@@ -5816,7 +5813,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
       if (n > 1) {
         int ta = ++g_tmp;
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-        for (int k = 0; k < n; k++) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
+        times (k, n) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
         buf_printf(b, " %s = _t%d; ", g_method_pr_var, ta);
       }
       else if (n == 1) {
@@ -5842,7 +5839,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
          inlined in statement position): the value is discarded, but a
          `return <expr>` must still evaluate its argument for side effects
          before jumping to the exit -- matching the void non-inline path below. */
-      for (int k = 0; k < n; k++) {
+      times (k, n) {
         int vn = unwrap_parens(c, a[k]);
         if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr(c, vn, b); buf_puts(b, "); "); }
       }
@@ -5861,7 +5858,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
       if (n > 1) {
         int ta = ++g_tmp;
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
-        for (int k = 0; k < n; k++) {
+        times (k, n) {
           buf_printf(b, "sp_PolyArray_push(_t%d, ", ta);
           emit_boxed(c, a[k], b);
           buf_puts(b, "); ");
@@ -5903,7 +5900,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     else {
       int ta = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-      for (int k = 0; k < n; k++) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
+      times (k, n) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
       buf_printf(b, " sp_box_poly_array(_t%d); })", ta);
     }
     buf_puts(b, "; ");
@@ -5928,7 +5925,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     if (n > 1) {
       int ta = ++g_tmp;
       buf_printf(b, "{ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-      for (int k = 0; k < n; k++) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
+      times (k, n) { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, a[k], b); buf_puts(b, ");"); }
       buf_puts(b, " ");
       emit_frame_unwind(b, 0, NULL);
       buf_printf(b, " return _t%d; }\n", ta);
@@ -5952,7 +5949,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
   if (n > 1) {
     int ta = ++g_tmp;
     buf_printf(b, "{ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-    for (int k = 0; k < n; k++) {
+    times (k, n) {
       buf_printf(b, " sp_PolyArray_push(_t%d, ", ta);
       emit_boxed(c, a[k], b);
       buf_puts(b, ");");
@@ -6052,11 +6049,11 @@ int subtree_has_retry(const NodeTable *nt, int id) {
   if (sp_streq(ty, "DefNode")) return 0;
   if (sp_streq(ty, "RetryNode")) return 1;
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(nt, id, i); if (subtree_has_retry(nt, ch)) return 1; }
+  times (i, nr) { int ch = nt_ref_at(nt, id, i); if (subtree_has_retry(nt, ch)) return 1; }
   int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
+  times (i, na) {
     int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int k = 0; k < n; k++) if (subtree_has_retry(nt, ids[k])) return 1;
+    times (k, n) if (subtree_has_retry(nt, ids[k])) return 1;
   }
   return 0;
 }
@@ -6084,7 +6081,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
      falls through to a later `rescue Exception`. */
   int bare = (nexc == 0);
   int catchall = 0;
-  for (int i = 0; i < nexc; i++) {
+  times (i, nexc) {
     const char *en = nt_type(nt, exc[i]);
     if (en && sp_streq(en, "ConstantReadNode") && rescue_is_catchall_name(nt_str(nt, exc[i], "name")))
       catchall = 1;
@@ -6110,7 +6107,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
     }
     else {
     int first = 1;
-    for (int i = 0; i < nexc; i++) {
+    times (i, nexc) {
       const char *en = nt_type(nt, exc[i]);
       /* `rescue *list`: decide against the list's members at run time, so an
          empty list matches nothing and a non-class member is a TypeError */
@@ -6237,7 +6234,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
            plain name compare (which, like CRuby, never matches a class). */
         buf_printf(b, "(strcmp(_rcls_%d, \"%s\") == 0", rc, ename);
         if (uci >= 0) {
-          for (int k = 0; k < c->nclasses; k++) {
+          times (k, c->nclasses) {
             if (!class_is_exc_subclass(c, k)) continue;
             int inc = 0;
             for (int a = k; a >= 0 && !inc; a = c->classes[a].parent)
@@ -6946,7 +6943,7 @@ static int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b) {
 
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, Buf *b) {
-  for (int k = 0; k < c->nclasses; k++) {
+  times (k, c->nclasses) {
     int wmdc = -1, kmi = -1;
     int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
     if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
@@ -7053,13 +7050,13 @@ static int masgn_reads(const NodeTable *nt, int id, const char *rty, const char 
   if (!ty) return 0;
   if (sp_streq(ty, rty) && nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), name)) return 1;
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
+  times (i, nr)
     if (masgn_reads(nt, nt_ref_at(nt, id, i), rty, name)) return 1;
   int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
+  times (i, na) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++)
+    times (j, n)
       if (masgn_reads(nt, ids[j], rty, name)) return 1;
   }
   return 0;
@@ -7080,7 +7077,7 @@ static int masgn_target_writes(const NodeTable *nt, int t, int id) {
     for (size_t s = 0; s < sizeof SIDES / sizeof SIDES[0]; s++) {
       int n = 0;
       const int *ts = nt_arr(nt, t, SIDES[s], &n);
-      for (int i = 0; i < n; i++) if (masgn_target_writes(nt, ts[i], id)) return 1;
+      times (i, n) if (masgn_target_writes(nt, ts[i], id)) return 1;
     }
     return 0;
   }
@@ -7094,7 +7091,7 @@ static int masgn_target_writes(const NodeTable *nt, int t, int id) {
    what it reads (`i, a[i] = 1, 2`). */
 static int masgn_part_plain(Compiler *c, int id, const int *lefts, int before) {
   if (masgn_part_allocates(c, id) || subtree_has_side_effect(c, id)) return 0;
-  for (int i = 0; i < before; i++) if (masgn_target_writes(c->nt, lefts[i], id)) return 0;
+  times (i, before) if (masgn_target_writes(c->nt, lefts[i], id)) return 0;
   return 1;
 }
 /* A literal that is not built -- rodata, which no sweep touches; a Bignum
@@ -7241,7 +7238,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
         int t = ++g_tmp;
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", t, t);
-        for (int k = 0; k < yac; k++) {
+        times (k, yac) {
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", t); emit_boxed(c, yav[k], g_pre); buf_puts(g_pre, ");\n");
         }
@@ -7373,7 +7370,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
             int vargs = nt_ref(nt, id, "arguments");
             int van = 0;
             const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
-            for (int vi = 0; vi < van; vi++) {
+            times (vi, van) {
               const char *vaty = nt_type(nt, vav[vi]);
               const char *mn = NULL;
               if (vaty && sp_streq(vaty, "SymbolNode")) mn = nt_str(nt, vav[vi], "value");
@@ -7519,7 +7516,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
             else if (comp_method_in_chain(c, ty_object_class(rt), nm, NULL) < 0) {
               /* writer not in chain and no explicit method: try subclass dispatch via cls_id */
               int ncand = 0;
-              for (int k = 0; k < c->nclasses; k++)
+              times (k, c->nclasses)
                 if (comp_is_writer(&c->classes[k], base)) ncand++;
               if (an >= 1 && ncand > 0) {
                 TyKind at = comp_ntype(c, argv[0]);
@@ -7550,7 +7547,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
             int args = nt_ref(nt, id, "arguments");
             int an = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
             int ncand = 0;
-            for (int k = 0; k < c->nclasses; k++)
+            times (k, c->nclasses)
               if (comp_is_writer(&c->classes[k], base)) ncand++;
             if (an >= 1 && ncand > 0) {
               TyKind at = comp_ntype(c, argv[0]);
@@ -7916,9 +7913,8 @@ else {
     else if (ty_is_ptr_array(ivt) && vty && sp_streq(vty, "ArrayNode")) {
       int tpa = ++g_tmp;
       buf_printf(b, "({ sp_PtrArray *_t%d = sp_PtrArray_new(); SP_GC_ROOT(_t%d);", tpa, tpa);
-      int pen = 0; const int *pel = nt_arr(nt, v, "elements", &pen);
-      for (int e = 0; e < pen; e++) {
-        buf_printf(b, " sp_PtrArray_push(_t%d, ", tpa); emit_expr(c, pel[e], b); buf_puts(b, ");");
+      each (e, nt, v, elements) {
+        buf_printf(b, " sp_PtrArray_push(_t%d, ", tpa); emit_expr(c, e, b); buf_puts(b, ");");
       }
       buf_printf(b, " _t%d; })", tpa);
     }
@@ -8201,7 +8197,7 @@ else {
       /* @ivar OP= rhs where ivar is poly (e.g. nil | user_object). Scan for a
          unique user class defining OP and dispatch through .v.p cast. */
       int poly_defcls = -1, poly_mi = -1;
-      for (int _ci = 0; _ci < c->nclasses; _ci++) {
+      times (_ci, c->nclasses) {
         int _di = -1;
         int _mi2 = comp_method_in_chain(c, _ci, op, &_di);
         if (_mi2 >= 0) { poly_mi = _mi2; poly_defcls = _di; break; }
@@ -8516,7 +8512,7 @@ else {
          rather than dereferencing v.p through a wrong cast. */
       buf_printf(b, "switch (_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id : 0x7fffffff) {\n", trecv, trecv);
       int any = 0;
-      for (int k = 0; k < c->nclasses; k++) {
+      times (k, c->nclasses) {
         if (!c->classes[k].instantiated) continue;
         int pdcls = -1;
         /* both accessors, same as the concrete arm: a reader-only class must
@@ -8609,7 +8605,7 @@ else {
         if (bbody >= 0) {
           int bn = 0;
           const int *stmts = nt_arr(nt, bbody, "body", &bn);
-          for (int k = 0; k < bn; k++) {
+          times (k, bn) {
             const char *sty = nt_type(nt, stmts[k]);
             if (sty && sp_streq(sty, "ConstantWriteNode"))
               emit_stmt(c, stmts[k], b, indent);
@@ -8967,7 +8963,7 @@ else {
         emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tobj);
         emit_indent(b, indent);
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tarr, tarr);
-        for (int j = 0; j < sc->nivars; j++) {
+        times (j, sc->nivars) {
           char fb[300]; snprintf(fb, sizeof fb, "_t%d->iv_%s", tobj, iv_c(sc->ivars[j] + 1));
           emit_indent(b, indent);
           buf_printf(b, "sp_PolyArray_push(_t%d, ", tarr);
@@ -9095,7 +9091,7 @@ else {
         emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tobj);
         emit_indent(b, indent);
         buf_printf(b, "sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);\n", thash, thash);
-        for (int j = 0; j < sc->nivars; j++) {
+        times (j, sc->nivars) {
           char fb[300]; snprintf(fb, sizeof fb, "_t%d->iv_%s", tobj, iv_c(sc->ivars[j] + 1));
           emit_indent(b, indent);
           buf_printf(b, "sp_SymPolyHash_set(_t%d, (sp_sym)%d, ", thash, comp_sym_intern(c, sc->ivars[j] + 1));
@@ -9111,7 +9107,7 @@ else {
         else { buf_printf(b, "void *_t%d = (void *)", thash); }
         emit_expr(c, value, b); buf_puts(b, ";\n");
       }
-      for (int i = 0; i < pn; i++) {
+      times (i, pn) {
         const char *ety = nt_type(nt, pelms[i]);
         if (!ety || !sp_streq(ety, "AssocNode")) continue;
         int pkey = nt_ref(nt, pelms[i], "key");
@@ -9167,7 +9163,7 @@ else {
             buf_printf(b, " _t%d = _t%d->keys[_t%d->order[_t%d]];\n", tk2, thash, thash, ti2);
           else
             buf_printf(b, " _t%d = _t%d->order[_t%d];\n", tk2, thash, ti2);
-          for (int i = 0; i < pn; i++) {
+          times (i, pn) {
             if (!nt_type(nt, pelms[i]) || !sp_streq(nt_type(nt, pelms[i]), "AssocNode")) continue;
             int key = nt_ref(nt, pelms[i], "key");
             if (key < 0) continue;
@@ -9251,7 +9247,7 @@ else {
        the runtime-destructure path evaluate the whole ArrayNode (the literal
        emitter splices splats) and slice it. */
     if (els) {
-      for (int i = 0; i < en; i++) {
+      times (i, en) {
         const char *ety0 = nt_type(nt, els[i]);
         if (ety0 && sp_streq(ety0, "SplatNode")) { els = NULL; en = 0; break; }
       }
@@ -9324,7 +9320,7 @@ else {
           emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr0);
           if (ln == 0 && rn == 0) return;
         }
-        for (int i = 0; i < ln; i++) {
+        times (i, ln) {
           const char *lty = nt_type(nt, lefts[i]);
           /* an instance-variable target: the first takes the value, the rest
              nil, in the slot's own representation */
@@ -9364,7 +9360,7 @@ else {
            leaves the single value to fill the rights left-to-right, so the first
            right takes it when no leading target consumed it (ln == 0) and every
            other right is nil (`*a, b, c = 1` -> a=[], b=1, c=nil). */
-        for (int j = 0; j < rn; j++) {
+        times (j, rn) {
           const char *rty2 = nt_type(nt, rights[j]);
           if (!rty2 || !sp_streq(rty2, "LocalVariableTargetNode")) continue;
           const char *rvn = nt_str(nt, rights[j], "name");
@@ -9393,7 +9389,7 @@ else {
         emit_indent(b, indent);
         buf_printf(b, "SP_GC_ROOT(_t%d);\n", tarr);
         Scope *rt_scope = comp_scope_of(c, id);
-        for (int i = 0; i < ln; i++) {
+        times (i, ln) {
           const char *lty = nt_type(nt, lefts[i]);
           if (!lty) continue;
           if (sp_streq(lty, "MultiTargetNode") && sp_streq(k, "Poly")) {
@@ -9522,7 +9518,7 @@ else {
             buf_printf(b, "sp_%sArray_to_poly%s(_t%d);\n", k, sp_streq(k, "Str") ? "_fmt" : "", tr);
           else buf_printf(b, "_t%d;\n", tr);
         }
-        for (int j = 0; j < rn; j++) {
+        times (j, rn) {
           const char *lty = nt_type(nt, rights[j]);
           if (!lty) continue;
           if (sp_streq(lty, "LocalVariableTargetNode")) {
@@ -9602,7 +9598,7 @@ else {
         emit_indent(b, indent);
         buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d);\n", tarr);
         Scope *rt_scope_p = comp_scope_of(c, id);
-        for (int i = 0; i < ln; i++) {
+        times (i, ln) {
           const char *lty = nt_type(nt, lefts[i]);
           if (!lty) continue;
           if (sp_streq(lty, "MultiTargetNode")) {
@@ -9658,7 +9654,7 @@ else {
             emit_indent(b, indent);
             emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr);
           }
-          for (int j = 0; j < rn; j++) {
+          times (j, rn) {
             const char *lty = nt_type(nt, rights[j]);
             if (!lty || !sp_streq(lty, "LocalVariableTargetNode")) continue;
             const char *rlvn = nt_str(nt, rights[j], "name");
@@ -9712,7 +9708,7 @@ else {
     int *ttr = ln > 0 ? alloca(sizeof(int) * (size_t)ln) : NULL;
     int *ttk = ln > 0 ? alloca(sizeof(int) * (size_t)ln) : NULL;
     int hoist = 0;
-    for (int i = 0; i < ln; i++) {
+    times (i, ln) {
       int r, k;
       masgn_target_parts(nt, lefts[i], &r, &k);
       ttr[i] = ttk[i] = -1;
@@ -9720,7 +9716,7 @@ else {
     }
     if (hoist) {
       Buf *hb = g_pre;
-      for (int i = 0; i < ln; i++) {
+      times (i, ln) {
         int r, k;
         masgn_target_parts(nt, lefts[i], &r, &k);
         if (r < 0) continue;
@@ -9758,7 +9754,7 @@ else {
        below can override the element node's inferred type); the assign loop
        must box/unbox from this, not re-derive comp_ntype (#3280). */
     TyKind *tmpts = en > 0 ? alloca(sizeof(TyKind) * (size_t)en) : NULL;
-    for (int i = 0; i < en; i++) {
+    times (i, en) {
       tmps[i] = ++g_tmp;
       emit_indent(b, indent);
       /* A nil (or void) element has no scalar C type; hold it as a boxed poly
@@ -9842,7 +9838,7 @@ else {
       buf_puts(b, "\n");
     }
     /* assign lefts */
-    for (int i = 0; i < ln; i++) {
+    times (i, ln) {
       const char *lty = nt_type(nt, lefts[i]);
       if (i >= en) {
         if (lty && sp_streq(lty, "LocalVariableTargetNode")) {
@@ -9995,7 +9991,7 @@ else {
         const int *inner_lefts = nt_arr(nt, lefts[i], "lefts", &inn2);
         TyKind elemty = sp_streq(k, "Int") ? TY_INT : sp_streq(k, "Float") ? TY_FLOAT
                       : sp_streq(k, "Str") ? TY_STRING : TY_POLY;
-        for (int j = 0; j < inn2; j++) {
+        times (j, inn2) {
           const char *ilty2 = inner_lefts ? nt_type(nt, inner_lefts[j]) : NULL;
           if (!ilty2 || !sp_streq(ilty2, "LocalVariableTargetNode")) { unsupported(c, id, "multiple assignment nested target"); continue; }
           const char *inm = nt_str(nt, inner_lefts[j], "name");
@@ -10191,7 +10187,7 @@ else {
        source index runs off the end lands nil (`a, *b, c, d = [1, 2]` ->
        c=2, d=nil) instead of reusing a leading element. */
     int blen_r = en - ln - rn; if (blen_r < 0) blen_r = 0;
-    for (int j = 0; j < rn; j++) {
+    times (j, rn) {
       int ridx = ln + blen_r + j;
       if (ridx >= en) ridx = -1;
       const char *lty = nt_type(nt, rights[j]);
@@ -10292,7 +10288,7 @@ else {
     int body = nt_ref(nt, id, "body");
     int n = 0;
     const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-    for (int k = 0; k < n; k++) {
+    times (k, n) {
       const char *sty = nt_type(nt, stmts[k]);
       if (!sty) continue;
       if (sp_streq(sty, "DefNode") || sp_streq(sty, "AliasMethodNode") ||
@@ -10359,7 +10355,7 @@ else {
       else {
         int t2 = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t2, t2);
-        for (int k = 0; k < bn2; k++) { buf_printf(b, "sp_PolyArray_push(_t%d, ", t2); emit_boxed(c, bv2[k], b); buf_puts(b, "); "); }
+        times (k, bn2) { buf_printf(b, "sp_PolyArray_push(_t%d, ", t2); emit_boxed(c, bv2[k], b); buf_puts(b, "); "); }
         buf_printf(b, "sp_box_poly_array(_t%d); })", t2);
       }
       buf_puts(b, ");\n");
@@ -10394,7 +10390,7 @@ else {
         /* `break a, b, ...` returns an array of the values */
         int t = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
-        for (int k = 0; k < bvargc; k++) {
+        times (k, bvargc) {
           buf_printf(b, "sp_PolyArray_push(_t%d, ", t); emit_boxed(c, bvargs[k], b); buf_puts(b, "); ");
         }
         buf_printf(b, "sp_box_poly_array(_t%d); })", t);
@@ -10420,7 +10416,7 @@ else {
         else {
           int t = ++g_tmp;
           buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
-          for (int k = 0; k < bvargc; k++) {
+          times (k, bvargc) {
             buf_printf(b, "sp_PolyArray_push(_t%d, ", t); emit_boxed(c, bvargs[k], b); buf_puts(b, "); ");
           }
           buf_printf(b, "sp_box_poly_array(_t%d); })", t);
@@ -10443,7 +10439,7 @@ else {
       else {
         int t = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
-        for (int k = 0; k < bvargc; k++) {
+        times (k, bvargc) {
           buf_printf(b, "sp_PolyArray_push(_t%d, ", t); emit_boxed(c, bvargs[k], b); buf_puts(b, "); ");
         }
         buf_printf(b, "sp_box_poly_array(_t%d); })", t);
@@ -10466,7 +10462,7 @@ else {
          #3297): run each argument for effect before leaving. */
       int bargs = nt_ref(nt, id, "arguments");
       int bvargc = 0; const int *bvargs = bargs >= 0 ? nt_arr(nt, bargs, "arguments", &bvargc) : NULL;
-      for (int k = 0; k < bvargc; k++) {
+      times (k, bvargc) {
         emit_indent(b, indent);
         buf_puts(b, "(void)(");
         emit_boxed(c, bvargs[k], b);
@@ -10579,7 +10575,7 @@ else {
     else {
       int nargs2 = nt_ref(nt, id, "arguments");
       int nvc2 = 0; const int *nv2 = nargs2 >= 0 ? nt_arr(nt, nargs2, "arguments", &nvc2) : NULL;
-      for (int a = 0; a < nvc2; a++) {
+      times (a, nvc2) {
         if (node_is_pure_literal(nt, nv2[a])) continue;
         emit_indent(b, indent);
         buf_puts(b, "(void)("); emit_expr(c, nv2[a], b); buf_puts(b, ");\n");
@@ -10774,7 +10770,7 @@ static int case_arms_all_diverge(Compiler *c, int id) {
   if (!stmts_diverge(c, nt_ref(nt, else_c, "statements"))) return 0;
   int nw = 0; const int *whens = nt_arr(nt, id, "conditions", &nw);
   if (!whens || nw == 0) return 0;
-  for (int w = 0; w < nw; w++) {
+  times (w, nw) {
     /* an `in` pattern arm is a CaseMatchNode's business, not this one */
     const char *wt = nt_type(nt, whens[w]);
     if (!wt || !sp_streq(wt, "WhenNode")) return 0;
@@ -11250,8 +11246,8 @@ void emit_stmts(Compiler *c, int id, Buf *b, int indent) {
   {
     if (!c->blk_body_map) {
       c->blk_body_map = malloc(sizeof(int) * (size_t)c->nt->count);
-      for (int i2 = 0; i2 < c->nt->count; i2++) c->blk_body_map[i2] = -1;
-      for (int i2 = 0; i2 < c->nt->count; i2++) {
+      times (i2, c->nt->count) c->blk_body_map[i2] = -1;
+      times (i2, c->nt->count) {
         const char *t2 = nt_type(c->nt, i2);
         if (t2 && sp_streq(t2, "BlockNode")) {
           int b2 = nt_ref(c->nt, i2, "body");
@@ -11269,7 +11265,7 @@ void emit_stmts(Compiler *c, int id, Buf *b, int indent) {
   if (ty && sp_streq(ty, "StatementsNode")) {
     int n = 0;
     const int *body = nt_arr(nt, id, "body", &n);
-    for (int k = 0; k < n; k++) {
+    times (k, n) {
       emit_stmt(c, body[k], b, indent);
       if (stmt_is_folded_return(c, body[k])) break;
     }
@@ -11286,7 +11282,7 @@ void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent) {
   if (ty && sp_streq(ty, "StatementsNode")) {
     int n = 0;
     const int *body = nt_arr(nt, id, "body", &n);
-    for (int k = 0; k < n; k++) {
+    times (k, n) {
       if (k == n - 1) emit_stmt_tail(c, body[k], b, indent);
       else {
         emit_stmt(c, body[k], b, indent);
@@ -11890,7 +11886,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
        Integer argument appends its codepoint, like `<<`. */
     if (assignable && sp_streq(name, "concat") && argc >= 1) {
       emit_indent(b, indent); buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, ");\n");
-      for (int a = 0; a < argc; a++) {
+      times (a, argc) {
         TyKind at = comp_ntype(c, argv[a]);
         emit_indent(b, indent);
         emit_expr(c, recv, b); buf_puts(b, " = sp_str_concat("); emit_expr(c, recv, b); buf_puts(b, ", ");
@@ -12078,7 +12074,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       return 1;
     }
     if ((sp_streq(name, "push") || sp_streq(name, "<<") || sp_streq(name, "append")) && argc >= 1) {
-      for (int a = 0; a < argc; a++) {
+      times (a, argc) {
         emit_indent(b, indent);
         buf_puts(b, "sp_PolyArray_push("); emit_expr(c, recv, b); buf_puts(b, ", ");
         emit_boxed(c, argv[a], b); buf_puts(b, ");\n");
@@ -12117,10 +12113,10 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
        object, so let it reach the per-class poly dispatch instead of forcing
        the builtin-array append. */
     int has_user = 0;
-    for (int k = 0; k < c->nclasses; k++)
+    times (k, c->nclasses)
       if (comp_poly_arm_defines_n(c, k, name, argc)) { has_user = 1; break; }
     if (!has_user) {
-      for (int a = 0; a < argc; a++) {
+      times (a, argc) {
         emit_indent(b, indent);
         buf_puts(b, "sp_poly_shl("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[a], b); buf_puts(b, ");\n");
       }
@@ -12174,7 +12170,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
        the same array (#3208). A literal splat is pre-expanded upstream, but a
        variable/expression splat arrives as a SplatNode. */
     int has_splat = 0;
-    for (int a = 0; a < argc; a++) {
+    times (a, argc) {
       const char *aty = nt_type(nt, argv[a]);
       if (aty && sp_streq(aty, "SplatNode")) { has_splat = 1; break; }
     }
@@ -12184,7 +12180,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent);
       buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
     }
-    for (int a = 0; a < argc; a++) {
+    times (a, argc) {
       const char *aty = nt_type(nt, argv[a]);
       if (aty && sp_streq(aty, "SplatNode")) {
         int inner = nt_ref(nt, argv[a], "expression");
@@ -12257,7 +12253,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
     TyKind et = ty_array_elem(rt);
     emit_indent(b, indent);
     buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
-    for (int a = 0; a < argc; a++) {
+    times (a, argc) {
       int tn = ++g_tmp, ti = ++g_tmp;
       /* the source array may be a different kind than the receiver (e.g.
          IntArray#concat(PolyArray)); read with the source's kind and coerce

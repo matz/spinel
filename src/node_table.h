@@ -342,4 +342,6 @@ int        nt_ref_at(const NodeTable *nt, int id, int i);   /* ref value, may be
 int        nt_num_arrs(const NodeTable *nt, int id);
 const int *nt_arr_at(const NodeTable *nt, int id, int i, int *out_n);
 
+#include "happy_c.h"
+
 #endif

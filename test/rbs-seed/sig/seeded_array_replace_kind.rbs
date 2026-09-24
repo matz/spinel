@@ -1,0 +1,3 @@
+class SeedReplaceMem
+  @storage: Array[Integer]
+end

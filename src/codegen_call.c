@@ -9679,6 +9679,142 @@ static int struct_nil_fills(const ClassInfo *k) {
   return k->is_struct && !k->is_data && k->kw_init <= 0;
 }
 
+/* A class that defines its own `self.new` is built by it, whatever it
+   answers: `k.new(...)` on a Class value calls that method, as a static
+   `K.new(...)` always has. The `new` dispatches below gave every class a
+   constructor arm, so the user method was never reached -- and when some
+   class defined one, the generic class-method switch took the call instead,
+   with no arm for the classes that construct normally and a result typed
+   from the user methods alone (a String one failed in C). Emits the arm for
+   class `ci` into the switch whose result is the boxed `_t<rt2>`, and
+   returns 1; returns 0 when the class has no `self.new` of its own.
+   `hoisted` says the arguments are already the boxed temps `atmp`, else they
+   are laid out from the call's own argument list (keywords, a splat). */
+static int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp,
+                             int hoisted, int rt2, Buf *b) {
+  int kmi = comp_cmethod_in_chain(c, ci, "new", NULL);
+  if (kmi < 0) return 0;
+  Scope *ks = &c->scopes[kmi];
+  if (!scope_has_callable_symbol(c, kmi)) return 1;   /* no symbol: the default raises */
+  if (ks->yields || (ks->blk_param && ks->blk_param[0]))
+    unsupported(c, id, "`new` on a Class value reaching a user `self.new` that takes a block");
+  /* A sole keyword hash reaches the hoisting emitters (it is the Struct
+     member form there) as one boxed temp; a method declaring keywords binds
+     them from it by name, and its positionals from the rest. */
+  int cargc = 0; const int *cargv = call_args(c->nt, id, &cargc);
+  int kw_temp = -1, pos_argc = argc;
+  if (hoisted && argc > 0 && cargv && cargc == argc &&
+      nt_kind(c->nt, cargv[argc - 1]) == NK_KeywordHashNode) {
+    for (int a = 0; a < ks->nparams; a++)
+      if (ks->pnames && ks->pnames[a] && callee_param_is_declared_kwarg(c, ks, ks->pnames[a]))
+        { kw_temp = atmp[argc - 1]; pos_argc = argc - 1; break; }
+  }
+  if (hoisted && ks->kwrest_idx >= 0 && kw_temp >= 0)
+    unsupported(c, id, "`new` on a Class value reaching a user `self.new` with a keyword rest");
+  if (hoisted) {
+    int req = 0, tot = 0;
+    for (int a = 0; a < ks->nparams; a++) {
+      if (a == ks->rest_idx || a == ks->kwrest_idx) continue;
+      if (!ks->pnames || !ks->pnames[a] || callee_param_is_declared_kwarg(c, ks, ks->pnames[a])) continue;
+      tot++;
+      if (!ks->pdefault || ks->pdefault[a] < 0) req++;
+    }
+    if (pos_argc < req || (ks->rest_idx < 0 && pos_argc > tot)) {
+      char exp[48];
+      if (ks->rest_idx >= 0) snprintf(exp, sizeof exp, "%d+", req);
+      else if (req == tot) snprintf(exp, sizeof exp, "%d", req);
+      else snprintf(exp, sizeof exp, "%d..%d", req, tot);
+      buf_printf(b, "case %d: sp_raise_cls(\"ArgumentError\", \"wrong number of arguments"
+                    " (given %d, expected %s)\"); break; ", ci, pos_argc, exp);
+      return 1;
+    }
+  }
+  Buf cb; memset(&cb, 0, sizeof cb);
+  Buf apre; memset(&apre, 0, sizeof apre);
+  emit_method_cname(c, ks, &cb);
+  buf_puts(&cb, "(");
+  /* the receiving class is the one this arm's case selected (#4217) */
+  const char *lead = emit_cmethod_self_cls_arg(c, kmi, ci, &cb);
+  if (hoisted) {
+    for (int a = 0; a < ks->nparams; a++) {
+      buf_puts(&cb, a ? ", " : lead);
+      LocalVar *pp = ks->pnames && ks->pnames[a] ? scope_local(ks, ks->pnames[a]) : NULL;
+      TyKind pt = pp ? pp->type : TY_POLY;
+      if (pt == TY_UNKNOWN) pt = TY_POLY;
+      const char *pn = ks->pnames ? ks->pnames[a] : NULL;
+      if (pn && callee_param_is_declared_kwarg(c, ks, pn)) {
+        int dflt = ks->pdefault && ks->pdefault[a] >= 0;
+        if (kw_temp < 0) {
+          if (dflt) emit_arg_or_default(c, ks, a, -1, &cb);
+          else buf_printf(&cb, "(sp_raise_cls(\"ArgumentError\", \"missing keyword: :%s\"), %s)",
+                          pn, default_value(pt));
+          continue;
+        }
+        buf_printf(&cb, "({ sp_bool _kwf; sp_RbVal _kwv = sp_poly_hash_probe(_t%d,"
+                        " sp_box_sym(sp_sym_intern(\"%s\")), &_kwf); _kwf ? ", kw_temp, pn);
+        if (pt == TY_POLY) buf_puts(&cb, "_kwv");
+        else emit_unbox_text(c, pt, "_kwv", &cb);
+        buf_puts(&cb, " : ");
+        if (dflt) emit_arg_or_default(c, ks, a, -1, &cb);
+        else buf_printf(&cb, "(sp_raise_cls(\"ArgumentError\", \"missing keyword: :%s\"), %s)",
+                        pn, default_value(pt));
+        buf_puts(&cb, "; })");
+        continue;
+      }
+      /* a *rest takes what the parameters around it leave: those ahead of
+         it fill first, the ones after it from the tail */
+      int slot = arg_slot_for_param(c, ks, a, pos_argc);
+      if (ks->rest_idx >= 0) {
+        int avail = pos_argc - ks->npost_rest;
+        if (a == ks->rest_idx) {
+          int ra = ++g_tmp;
+          Buf rb; memset(&rb, 0, sizeof rb);
+          buf_printf(&rb, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ra, ra);
+          for (int j = ks->rest_idx; j < avail; j++)
+            buf_printf(&rb, " sp_PolyArray_push(_t%d, _t%d);", ra, atmp[j]);
+          buf_printf(&rb, " _t%d; })", ra);
+          if (pt == TY_POLY) emit_boxed_text(c, TY_POLY_ARRAY, rb.p, &cb);
+          else buf_puts(&cb, rb.p);
+          free(rb.p);
+          continue;
+        }
+        slot = a < ks->rest_idx ? (a < avail ? a : -1) : avail + (a - ks->rest_idx - 1);
+      }
+      if (a == ks->kwrest_idx) {   /* no keywords reach it: an empty hash */
+        if (pt == TY_POLY) emit_boxed_text(c, TY_SYM_POLY_HASH, "sp_SymPolyHash_new()", &cb);
+        else buf_puts(&cb, "sp_SymPolyHash_new()");
+        continue;
+      }
+      if (slot >= 0 && slot < pos_argc) {
+        char at[32]; snprintf(at, sizeof at, "_t%d", atmp[slot]);
+        if (pt == TY_POLY) buf_puts(&cb, at);
+        else emit_unbox_text(c, pt, at, &cb);
+      }
+      else emit_arg_or_default(c, ks, a, -1, &cb);
+    }
+  }
+  else {
+    /* the layout's own statements belong to this arm, as in the
+       constructor arms of emit_class_value_new_kw */
+    Buf *sv_pre = g_pre; g_pre = &apre;
+    emit_args_filled(c, kmi, nt_ref(c->nt, id, "arguments"), lead, &cb);
+    g_pre = sv_pre;
+  }
+  buf_puts(&cb, ")");
+  TyKind kr = (TyKind)ks->ret;
+  buf_printf(b, "case %d: { %s", ci, apre.p ? apre.p : "");
+  if (kr == TY_VOID || kr == TY_NIL || method_is_void(ks))
+    buf_printf(b, "%s; _t%d = sp_box_nil(); } break; ", cb.p ? cb.p : "", rt2);
+  else {
+    buf_printf(b, "_t%d = ", rt2);
+    if (kr == TY_POLY || kr == TY_UNKNOWN) buf_puts(b, cb.p ? cb.p : "sp_box_nil()");
+    else emit_boxed_text(c, kr, cb.p ? cb.p : "", b);
+    buf_puts(b, "; } break; ");
+  }
+  free(cb.p); free(apre.p);
+  return 1;
+}
+
 static void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc; const int *argv = call_args(nt, id, &argc);
@@ -9693,6 +9829,7 @@ static void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Bu
   if (argc == 1 && sole_splat < 0 && nt_kind(nt, argv[0]) == NK_SplatNode) sole_splat = argv[0];
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
+    if (emit_user_new_arm(c, id, ci, argc, NULL, 0, rt2, b)) continue;
     int initm = comp_method_in_chain(c, ci, "initialize", NULL);
     /* A Struct or Data class's generated constructor, reached with `*args`:
        the members spread from the array, as a static `S.new(*args)` does. A
@@ -26978,6 +27115,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int recv_is_var9 = class_recv_is_dynamic(c, recv);
       int ncand9 = 0, defmi9 = -1;
       if (!recv_is_var9) goto skip_cls_cmethod9;
+      /* `new` on such a value is a construction, which the `new` dispatches
+         below build with an arm per class -- the user `self.new` ones among
+         them. Taken here, the classes that construct normally had no arm. */
+      if (sp_streq(name, "new") && comp_ntype(c, id) == TY_POLY) goto skip_cls_cmethod9;
       TyKind uret9 = TY_UNKNOWN; int uret_set9 = 0;
       for (int k = 0; k < c->nclasses; k++) {
         if (is_builtin_reopen(c->classes[k].name)) continue;
@@ -27999,6 +28140,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); switch(_t%d.cls_id){", rt2, kt);
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
+      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
@@ -28145,6 +28287,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       { int mdn = c->classes[ci].def_node;
         const char *mdt = mdn >= 0 ? nt_type(nt, mdn) : NULL;
         if (mdt && sp_streq(mdt, "ModuleNode")) continue; }
+      if (emit_user_new_arm(c, id, ci, 0, NULL, 1, rt2, b)) continue;
       /* a zero-arg .new can only construct a class whose initialize takes no
          required args; an arg-requiring ctor would be an ArgumentError in MRI,
          and its C function has parameters -- omit its arm (a runtime cls_id for
@@ -28217,8 +28360,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); switch(_t%d.cls_id){", rt2, kt);
     for (int ci = 0; ci < c->nclasses; ci++) {
-      if (is_builtin_reopen(c->classes[ci].name) ||
-          c->classes[ci].is_native_class || !c->classes[ci].instantiated) continue;
+      if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
+      /* a class built by its own `self.new` may never be instantiated at all */
+      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
+      if (!c->classes[ci].instantiated) continue;
       { int mdn = c->classes[ci].def_node;   /* a module has no `new` (#3965) */
         const char *mdt = mdn >= 0 ? nt_type(nt, mdn) : NULL;
         if (mdt && sp_streq(mdt, "ModuleNode")) continue; }

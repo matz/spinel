@@ -21485,7 +21485,10 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           emit_str_literal(b, "block");
           buf_printf(b, ")));"
                         " sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", tp4);
-          emit_str_literal(b, nt_str(nt, blk4, "name"));
+          /* an anonymous `&` carries a synthetic name (desugar_anon_block_param);
+             CRuby reports it as :& */
+          const char *bnm4 = nt_str(nt, blk4, "name");
+          emit_str_literal(b, sp_streq(bnm4, "__anon_block") ? "&" : bnm4);
           buf_printf(b, ")));"
                         " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d)); }", tr4, tp4);
         }

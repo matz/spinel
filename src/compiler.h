@@ -832,7 +832,7 @@ const char *sym_static_value(Compiler *c, int node);  /* SymbolNode or sole-symb
    added to one and missed in another is exactly how #3307 / #3333 arrived. */
 #define SP_MUT_LOCAL     1u  /* seeds local-slot promotion: every mutator */
 #define SP_MUT_CONTAINER 2u  /* container-read mutation: no `[]=` */
-#define SP_MUT_IVAR      4u  /* ivar slot (no rename): also no insert/slice!/setbyte */
+#define SP_MUT_IVAR      4u  /* ivar slot or a reader call (no rename) */
 #define SP_MUT_NARROW    8u  /* guard-narrowed poly re-route: also no append_as_bytes */
 /* 1 iff `nm` is a String in-place mutator serviceable at every site in `want`. */
 int sp_str_mutator(const char *nm, unsigned want);

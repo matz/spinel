@@ -549,7 +549,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
     if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRBUF &&
-        (sp_streq(nmS, "insert") || sp_streq(nmS, "[]=")) &&
+        (sp_streq(nmS, "slice!") || sp_streq(nmS, "setbyte") ||
+         sp_streq(nmS, "insert") || sp_streq(nmS, "clear") ||
+         sp_streq(nmS, "[]=")) &&
         sb_reader_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
     if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRING &&
         (sp_streq(nmS, "slice!") || sp_streq(nmS, "setbyte") ||
@@ -859,7 +861,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     int sbi = -1;
     for (int j = 0; SBANG[j].bang; j++) if (sp_streq(name, SBANG[j].bang)) { sbi = j; break; }
     if (sbi >= 0) {
-      int lvw = str_mut_var_recv(c, recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
       /* A shared-mutable (STRBUF) local mutates its buffer IN PLACE so every
          alias/container observes it: recompute via the non-bang transform of
          the current contents, then replace the buffer (#3227). */
@@ -979,7 +981,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
     if ((sp_streq(name, "concat") || sp_streq(name, "<<") ||
          sp_streq(name, "prepend")) && argc >= 1) {
-      int lvw = str_mut_var_recv(c, recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
       int tn2 = ++g_tmp, trc = ++g_tmp;
       /* Evaluate the receiver once into a temp: it feeds both the frozen-mutability
          check and the concatenation, and a chained `s << a << b` receiver has a
@@ -1035,7 +1037,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           return 1;
         }
       }
-      int lvw = str_mut_var_recv(c, recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
       int tn2 = ++g_tmp;
       buf_printf(b, "({ sp_str_check_mutable(");   /* frozen -> FrozenError (#3003) */
       emit_expr(c, recv, b);
@@ -1049,7 +1051,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      reassigns the receiver; statement position has its own arm. The
      receiver must be an lvalue (re-read and re-assigned). */
   if (rt == TY_STRING && sp_streq(name, "slice!") && (argc == 1 || argc == 2)) {
-    int sb_asgn = str_mut_var_recv(c, recv);
+    int sb_asgn = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       int tp2 = ++g_tmp;
       buf_printf(b, "({ const char *_t%d = ", tp2); emit_expr(c, argv[0], b);
@@ -1271,7 +1273,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "); sp_String_set_bin(_t%d, _t%d); _t%d; })", tm2, tn3, tn3);
         return 1;
       } }
-    int lvw = str_mut_var_recv(c, recv);
+    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
     int tn2 = ++g_tmp;
     /* in-place mutator: a frozen receiver raises before the splice (#3333) */
     buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
@@ -7008,6 +7010,9 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
+    if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRBUF &&
+        sp_streq(nmS, "setbyte") &&
+        sb_reader_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
     if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRING &&
         sp_streq(nmS, "setbyte")) {
       if (sb_iv_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
@@ -7816,7 +7821,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "setbyte") && argc == 2) {
         /* copy-on-write: rebind an lvalue receiver to the mutated copy
            (a literal's bytes live in static storage, #2029) */
-        int lvw = str_mut_var_recv(c, recv);
+        int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
         int tv2 = ++g_tmp;
         buf_printf(b, "({ sp_int _t%d = ", tv2); emit_int_expr(c, argv[1], b);
         buf_puts(b, "; ");

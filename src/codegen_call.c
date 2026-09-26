@@ -25985,10 +25985,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         emit_method_cname(c, ms, &cb);
         buf_puts(&cb, "(");
         /* a sibling call keeps the receiving class: forward ours when this
-           body has one, else the class it is emitted for */
+           body has one, else the class it is emitted for. A yielding body
+           has no function of its own and is inlined, where no `_sp_cls` is
+           declared: its receiving class is the self the inliner bound
+           (#5092). */
         const char *lead2 = "";
         if (cmethod_takes_self_cls(c, smi)) {
-          if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) { buf_puts(&cb, "_sp_cls"); lead2 = ", "; }
+          if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) {
+            buf_puts(&cb, encl->yields && g_self ? g_self : "_sp_cls");
+            lead2 = ", ";
+          }
           else lead2 = emit_cmethod_self_cls_arg(c, smi, new_cls, &cb);
         }
         emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), lead2, &cb);

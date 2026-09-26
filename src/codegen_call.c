@@ -27159,6 +27159,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         for (int k = 0; k < c->nclasses; k++) {
           if (c->classes[k].parent != scid) continue;   /* defined subclasses, even if never .new'd */
           if (is_builtin_reopen(c->classes[k].name)) continue;
+          /* the class a `def obj.m` synthesizes under the object's class is a
+             singleton class, which Class#subclasses leaves out */
+          if (c->classes[k].is_singleton_of) continue;
           const char *kn = class_ruby_name(c, k); if (!kn) kn = c->classes[k].name;
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, SPL(\"%s\")})));", ta, k, kn);
         }

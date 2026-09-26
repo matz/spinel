@@ -2920,6 +2920,70 @@ static int any_call_passes_block(const NodeTable *nt, const char *name) {
   }
   return 0;
 }
+/* Rewrite the anonymous `&` forwards in one method body into reads of the
+   method's synthetic block param. A nested def/class/module is a scope of its
+   own (its `&` is its own method's); a block or lambda inside the body shares
+   the method's block param. */
+static int anon_block_fwd_rewrite(Compiler *c, int node) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode ||
+      k == NK_SingletonClassNode) return 0;
+  int changed = 0;
+  if (k == NK_BlockArgumentNode && nt_ref(nt, node, "expression") < 0) {
+    int rd = nt_new_node(nt, "LocalVariableReadNode");
+    if (rd >= 0) {
+      nt_node_set_str(nt, rd, "name", "__anon_block");
+      nt_node_set_int(nt, rd, "depth", 0);
+      nt_node_set_ref(nt, node, "expression", rd);
+      comp_grow_node_arrays(c);
+      changed = 1;
+    }
+    return changed;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) changed |= anon_block_fwd_rewrite(c, nt_ref_at(nt, node, i));
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, node, i, &n);
+    /* the array may move when a new node grows the table: walk a copy */
+    int *cp = n > 0 ? (int *)malloc(sizeof(int) * (size_t)n) : NULL;
+    if (n > 0 && !cp) continue;
+    if (n > 0) memcpy(cp, ids, sizeof(int) * (size_t)n);
+    for (int j = 0; j < n; j++) changed |= anon_block_fwd_rewrite(c, cp[j]);
+    free(cp);
+  }
+  return changed;
+}
+
+/* `def m(&) = keep(&)` -> `def m(&__anon_block) = keep(&__anon_block)`.
+   An anonymous `&` had no name, so it was always yield-inlined: the analysis
+   that decides whether a named &blk escapes (and must stay a real sp_Proc *
+   param) reads the param's local reads, and there were none to read. A block
+   handed through it to a method that keeps it was then spliced into the
+   forwarder and materialized there, and its captures of the caller's locals
+   were copied by value -- the writes were lost. Named, the param takes the
+   same path a `&blk` does (mirrors __anon_kwrest for `**`). */
+int desugar_anon_block_param(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_DefNode) continue;
+    int pn = nt_ref(nt, id, "parameters");
+    int bp = pn >= 0 ? nt_ref(nt, pn, "block") : -1;
+    if (bp < 0 || nt_kind(nt, bp) != NK_BlockParameterNode) continue;
+    const char *bn = nt_str(nt, bp, "name");
+    if (bn && bn[0]) continue;
+    nt_node_set_str(nt, bp, "name", "__anon_block");
+    anon_block_fwd_rewrite(c, nt_ref(nt, id, "body"));
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_forwarding_to_rest_callee(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

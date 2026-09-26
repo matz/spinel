@@ -1,0 +1,7 @@
+[:anon, :recorder, 1]
+[:implicit_self, 2]
+[:hub, :recorder, 3]
+[11, 2]
+[:x]
+[[:req, :a], [:block, :&]]
+[true, false]

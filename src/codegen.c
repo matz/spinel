@@ -2064,6 +2064,27 @@ static int iter_each_proc_form(Compiler *c, int k) {
   return pf;
 }
 
+/* The class a pointer to class k is handed to method mi as: the method's
+   own class when it is k or an ancestor of k (an inherited method's C
+   function takes its definer's type), k otherwise (a mixed-in body). */
+static int iter_self_class(Compiler *c, int k, int mi) {
+  int d = c->scopes[mi].class_id;
+  for (int x = k; x >= 0; x = c->classes[x].parent) if (x == d) return d;
+  return k;
+}
+
+/* The receiver argument for class `k`'s arm, in the form method `mi` takes
+   self: the boxed value itself for a method of Object, Array or Numeric
+   (emit_method_signature gives those `sp_RbVal self`), a pointer cast to
+   iter_self_class's answer otherwise. */
+static void emit_iter_recv(Compiler *c, int k, int mi, int tv, Buf *b) {
+  const char *cn = c->classes[iter_self_class(c, k, mi)].c_name;
+  if (sp_streq(cn, "Object") || sp_streq(cn, "Array") || sp_streq(cn, "Numeric"))
+    buf_printf(b, "_t%d", tv);
+  else
+    buf_printf(b, "(sp_%s *)_t%d.v.p", cn, tv);
+}
+
 void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
   Buf arms; memset(&arms, 0, sizeof arms);
   for (int k = 0; k < c->nclasses; k++) {
@@ -2083,8 +2104,12 @@ void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
                         " sp_hashproc_cap_scan, 1, FALSE, 1, NULL, NULL); (void)",
                  k, tv, tv, tv, tv);
       emit_method_cname(c, &c->scopes[pf], &arms);
-      buf_printf(&arms, "((sp_%s *)_t%d.v.p, _ip%d); _t%d = sp_box_poly_array(_ia%d); break; }",
-                 c->classes[k].c_name, tv, tv, tv, tv);
+      /* the receiver as the class that DEFINES #each: a subclass inherits it,
+         and handing the subclass's own pointer type to the definer's function
+         is a C type error (lobsters: Nokogiri's Document classes under Node) */
+      buf_puts(&arms, "(");
+      emit_iter_recv(c, k, pf, tv, &arms);
+      buf_printf(&arms, ", _ip%d); _t%d = sp_box_poly_array(_ia%d); break; }", tv, tv, tv);
       continue;
     }
     TyKind ret = (TyKind)c->scopes[mi].ret;
@@ -2095,7 +2120,9 @@ void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
     if (!box) continue;
     buf_printf(&arms, " case %d: _t%d = %s(", k, tv, box);
     emit_method_cname(c, &c->scopes[mi], &arms);
-    buf_printf(&arms, "((sp_%s *)_t%d.v.p)); break;", c->classes[k].c_name, tv);
+    buf_puts(&arms, "(");
+    emit_iter_recv(c, k, mi, tv, &arms);
+    buf_puts(&arms, ")); break;");
   }
   if (arms.p && arms.p[0])
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0) switch (_t%d.cls_id) {%s }\n",

@@ -11441,10 +11441,11 @@ static void sb_mut_tabs_build(Compiler *c, SbMutTab *lt, SbMutTab *it, int tople
       continue;
     }
     signed char v = 0;
+    /* slice! and setbyte used to count as disqualifying, which kept the ivar
+       a plain string for good, and a mutation through its reader elsewhere
+       (`obj.name << x`) then landed in a copy. */
     if (sp_str_mutator(un, SP_MUT_IVAR)) v = 1;
-    else if (sp_streq(un, "insert") || sp_streq(un, "slice!") ||
-             sp_streq(un, "[]=") || sp_streq(un, "setbyte") ||
-             (ul > 0 && un[ul - 1] == '!')) v = -1;
+    else if (ul > 0 && un[ul - 1] == '!') v = -1;
     else continue;
     int ucid = -1;
     if (us && !us->is_cmethod) ucid = us->class_id >= 0 ? us->class_id : toplevel;
@@ -12371,9 +12372,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (nt_kind(nt, mu) != NK_CallNode) continue;
     const char *mun = nt_str(nt, mu, "name");
     if (!mun) continue;
-    {
-      if (!sp_str_mutator(mun, SP_MUT_IVAR)) continue;
-    }
+    if (!sp_str_mutator(mun, SP_MUT_IVAR)) continue;
     int mrecv = nt_ref(nt, mu, "receiver");
     if (mrecv < 0 || nt_kind(nt, mrecv) != NK_CallNode) continue;
     if (nt_ref(nt, mrecv, "block") >= 0) continue;
@@ -12510,7 +12509,14 @@ static int promote_shared_stored_strings(Compiler *c) {
     char ivbuf[300]; int defc = rcid;
     const char *ivn = an_reader_ivar_of(c, wv, &defc, ivbuf, sizeof ivbuf);
     if (!ivn || defc < 0) continue;
-    if (strbuf_ivar_mut_kind(c, defc, ivn) != 1) continue;
+    /* The ivar's own methods mutating it is one way it becomes a handle; a
+       mutation through the reader elsewhere (`obj.reader << x`, the pass
+       above) is the other, and the alias has to see that one just as well:
+       `x = c.name; c.name << "!"` left x as the old copy. */
+    { int mk = strbuf_ivar_mut_kind(c, defc, ivn);
+      int ivs = comp_ivar_index(&c->classes[defc], ivn);
+      int shared = ivs >= 0 && c->classes[defc].ivar_str_shared[ivs];
+      if (mk < 0 || (mk != 1 && !shared)) continue; }
     const char *lname2 = nt_str(nt, w, "name");
     Scope *ls2 = comp_scope_of(c, w);
     LocalVar *llv2 = (lname2 && ls2) ? scope_local(ls2, lname2) : NULL;

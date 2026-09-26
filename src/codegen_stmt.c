@@ -11402,7 +11402,9 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
   /* The same shim over a READER call that hands out the handle
      (`obj.name[0] = "X"`), whose call node reads as the shadow. */
   if ((rt == TY_STRING || rt == TY_STRBUF) && nt_kind(nt, recv) == NK_CallNode &&
-      (sp_streq(name, "[]=") || sp_streq(name, "insert"))) {
+      (sp_streq(name, "[]=") || sp_streq(name, "insert") ||
+       sp_streq(name, "clear") || sp_streq(name, "slice!") ||
+       sp_streq(name, "setbyte"))) {
     char srefR[1024];
     SbReaderSave svR;
     int tH = sb_reader_shim_open(c, recv, srefR, sizeof srefR, &svR);

@@ -1715,6 +1715,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (!g_infer_ignore_brk && call_breaks(c, id)) return TY_POLY;
 
   TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  /* A read marked to hand out the shared handle (a reader call a mutation
+     reaches through, `c.name.setbyte(0, 90)`) is still a String receiver:
+     the handle is only its storage. Left as TY_STRBUF it matched none of the
+     String rows, and setbyte's Integer answer typed as the receiver. The
+     appenders that answer the receiver itself keep the handle: their value
+     is that same object, and the in-place append arms are chosen on it. */
+  if (rt == TY_STRBUF && !(name && (sp_streq(name, "<<") || sp_streq(name, "concat") ||
+                                    sp_streq(name, "prepend") || sp_streq(name, "replace") ||
+                                    sp_streq(name, "insert") || sp_streq(name, "clear"))))
+    rt = TY_STRING;
   /* A boxed-value hash whose values are all one class: its value reads are
      that class (nil included, as a NULL pointer), and `values` an array of it
      (#4846). */

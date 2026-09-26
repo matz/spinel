@@ -525,17 +525,15 @@ const char *sym_static_value(Compiler *c, int node) {
    ever fused at a forcing site. (#2932) */
 /* See compiler.h for the masks. Every name carries SP_MUT_LOCAL; the
    narrower sites drop the mutators their storage shape cannot serve:
-     slice! / setbyte           have no shim over a reader call in value
-                                position (`[]=` and insert, through a
-                                reader, take codegen_stmt.c's reader shim)
      append_as_bytes            has no guard-narrowed re-route arm
-   The masks reproduce the four lists this table replaced, name for name. */
+   `[]=` insert slice! setbyte reach an ivar, and a reader call handing out
+   its handle, through the shared-mutable shim's shadow (#4363). */
 int sp_str_mutator(const char *nm, unsigned want) {
   static const struct { const char *nm; unsigned mask; } M[] = {
     { "[]=",             SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
     { "insert",          SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
-    { "slice!",          SP_MUT_LOCAL | SP_MUT_CONTAINER },
-    { "setbyte",         SP_MUT_LOCAL | SP_MUT_CONTAINER },
+    { "slice!",          SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
+    { "setbyte",         SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
     { "append_as_bytes", SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
     { "<<",              15u }, { "concat",         15u }, { "prepend",    15u },
     { "replace",         15u }, { "clear",          15u }, { "bytesplice", 15u },

@@ -2052,6 +2052,18 @@ static void emit_iter_collect_proc(void) {
    already does; a `def each; ...yield...; end` has a proc-form clone (#3399). */
 static int iter_each_proc_form(Compiler *c, int k) {
   int mi = comp_method_in_chain(c, k, "each", NULL);
+  /* an #each reopened on Object reaches every instance, but a user class's
+     chain does not name Object: the poly dispatch serves it as its default
+     arm, and the normalization walked the object as an empty container
+     (#5101) */
+  if (mi < 0) {
+    int oc = comp_class_index(c, "Object");
+    int od = -1;
+    if (oc >= 0 && oc != k) {
+      mi = comp_method_in_chain(c, oc, "each", &od);
+      if (od != oc) mi = -1;
+    }
+  }
   if (mi < 0 || c->scopes[mi].is_cmethod || c->scopes[mi].nrequired != 0) return -1;
   int pf = scope_proc_form_of(c, mi);
   if (pf < 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
@@ -2079,6 +2091,9 @@ static int iter_self_class(Compiler *c, int k, int mi) {
    iter_self_class's answer otherwise. */
 static void emit_iter_recv(Compiler *c, int k, int mi, int tv, Buf *b) {
   const char *cn = c->classes[iter_self_class(c, k, mi)].c_name;
+  /* a method of Object reached from outside the class's own chain */
+  const char *dn = c->classes[c->scopes[mi].class_id].c_name;
+  if (sp_streq(dn, "Object")) cn = dn;
   if (sp_streq(cn, "Object") || sp_streq(cn, "Array") || sp_streq(cn, "Numeric"))
     buf_printf(b, "_t%d", tv);
   else

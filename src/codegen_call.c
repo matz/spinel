@@ -6887,7 +6887,47 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (obj_cls >= 0) {
           int obj_def = -1;
           int obj_mi = comp_method_in_chain(c, obj_cls, name, &obj_def);
-          if (obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
+          /* A yielding one is reached with the call's block through its proc
+             form: a user class's chain does not name Object, so without this
+             arm an instance of it took the raise (#5101) */
+          int obj_pf = (obj_mi >= 0 && obj_def == obj_cls && argc == 0 &&
+                        c->scopes[obj_mi].yields && nt_ref(nt, id, "block") >= 0)
+                       ? scope_proc_form_of(c, obj_mi) : -1;
+          if (obj_pf >= 0 && (c->scopes[obj_pf].nparams != 0 || c->scopes[obj_pf].rest_idx >= 0))
+            obj_pf = -1;
+          if (obj_pf >= 0 && blk_tmp0 < 0) {
+            int cblk3 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+            if (cblk3 < 0) obj_pf = -1;
+            else {
+              blk_tmp0 = ++g_tmp;
+              Buf pb3; memset(&pb3, 0, sizeof pb3);
+              if (!emit_forwarded_proc_arg(c, cblk3, &pb3)) emit_proc_literal(c, cblk3, &pb3);
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp0, pb3.p ? pb3.p : "NULL");
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp0);
+              free(pb3.p);
+            }
+          }
+          if (obj_pf >= 0) {
+            Buf oc; memset(&oc, 0, sizeof oc);
+            emit_method_cname(c, &c->scopes[obj_pf], &oc);
+            buf_printf(&oc, "(_t%d, _t%d)", tv, blk_tmp0);
+            TyKind pr = (TyKind)c->scopes[obj_pf].ret;
+            buf_puts(b, " default: ");
+            if (method_is_void(&c->scopes[obj_pf])) buf_puts(b, oc.p);
+            else {
+              buf_printf(b, "_t%d = ", tr);
+              if (ret == TY_POLY && pr != TY_POLY) emit_boxed_text(c, pr, oc.p, b);
+              else if (ret != TY_POLY && pr == TY_POLY)
+                emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, oc.p, b);
+              else buf_puts(b, oc.p);
+            }
+            buf_puts(b, "; break;");
+            free(oc.p);
+            obj_default_done = 1;
+          }
+          else if (obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
               scope_has_callable_symbol(c, obj_mi)) {
             char ocall[160];
             snprintf(ocall, sizeof ocall, "sp_Object_%s(_t%d)", mc(c->scopes[obj_mi].name), tv);

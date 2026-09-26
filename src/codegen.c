@@ -12309,6 +12309,23 @@ char *codegen_program(const NodeTable *nt) {
      it if no arm ends up calling it (#3399). */
   for (int s = 1; s < c->nscopes; s++) { if (c->scopes[s].yields || (!c->scopes[s].reachable && !c->scopes[s].is_proc_form) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); }
 
+  /* A boxed exception carries SP_BUILTIN_EXCEPTION, not its user class's
+     index, so a poly dispatch over a user exception class's own method keys
+     it through this map instead (emit_poly_dispatch_key's exc_cand): its
+     class name to that index, the arm's struct being the exception header
+     followed by the class's ivars (#5093). */
+  { int any_exc = 0;
+    for (int i = 0; i < c->nclasses && !any_exc; i++) any_exc = class_is_exc_subclass(c, i);
+    if (any_exc) {
+      buf_puts(&b, "__attribute__((unused)) static int sp_exc_user_cls_id(sp_RbVal v){\n");
+      buf_puts(&b, "  const char *n = v.v.p ? ((sp_Exception *)v.v.p)->cls_name : NULL;\n  if (!n) return 0x7fffffff;\n");
+      for (int i = 0; i < c->nclasses; i++) {
+        if (!class_is_exc_subclass(c, i) || !c->classes[i].name) continue;
+        buf_printf(&b, "  if (strcmp(n, \"%s\") == 0) return %d;\n", c->classes[i].name, i);
+      }
+      buf_puts(&b, "  return 0x7fffffff;\n}\n");
+    } }
+
   /* User exception #message / #to_s overrides: a cls_name-keyed dispatcher so
      the default message path yields the user-overridden text. Ruby's #message
      calls #to_s, so #to_s uses a user #to_s if defined else the stored message,

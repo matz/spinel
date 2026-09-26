@@ -696,7 +696,25 @@ static int class_is_prim_reopen(Compiler *c, int k) {
          sp_streq(n, "NilClass");
 }
 
-static void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, Buf *b) {
+/* Whether a user exception class answers `name`: the dispatch key then has
+   to map a boxed exception (tagged SP_BUILTIN_EXCEPTION) to its class. */
+static int poly_exc_cand(Compiler *c, const char *name) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_is_exc_subclass(c, k) &&
+        (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)))
+      return 1;
+  return 0;
+}
+
+static void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, int prim_cand, int exc_cand, Buf *b) {
+  if (exc_cand) {
+    /* a boxed exception keys by its user class (sp_exc_user_cls_id); every
+       other value by the rule below */
+    buf_printf(b, "((_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION) ? sp_exc_user_cls_id(_t%d) : ", tv, tv, tv);
+    emit_poly_dispatch_key(c, tv, cls0_cand, prim_cand, 0, b);
+    buf_puts(b, ")");
+    return;
+  }
   /* Every boxed scalar (int/float/str/sym/nil/bool) carries cls_id 0, which
      aliases the first user class (index 0). When class 0 is a candidate of this
      dispatch -- it defines/inherits the method, so it emits a `case 0:` arm --
@@ -6537,7 +6555,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* a genuine String in a slot whose name a user class owns (#4816) */
       emit_poly_str_prearm(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, b);
       buf_puts(b, "switch (");
-      emit_poly_dispatch_key(c, tv, cls0_cand, prim_cand0, b);
+      emit_poly_dispatch_key(c, tv, cls0_cand, prim_cand0, poly_exc_cand(c, name), b);
       buf_puts(b, ") {");
       for (int k = 0; k < c->nclasses; k++) {
         /* A never-instantiated class can't be this poly value's runtime class,
@@ -7718,7 +7736,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* where this switch starts, so its end can tell whether any arm below
          wrote the `default:` label (see the builtin default at the close) */
       size_t sw_start = b->len;
-      emit_poly_dispatch_key(c, tv, cls0_cand2, prim_cand2, b);
+      emit_poly_dispatch_key(c, tv, cls0_cand2, prim_cand2, poly_exc_cand(c, name), b);
       buf_puts(b, ") {");
       for (int k = 0; k < c->nclasses; k++) {
         /* native (C-backed) class arm: a declared method of this arity takes

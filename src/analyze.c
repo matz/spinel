@@ -14676,8 +14676,11 @@ static void mark_nullable_int_locals(Compiler *c) {
           mi = comp_method_in_chain(c, ty_object_class(rt), nt_str(nt, id, "name"), NULL);
         /* `W.new(k)` binds initialize's parameters, and `W.build(k)` a class
            method's: neither receiver is an instance, so the arm above cannot
-           see them and the sentinel stopped at the constructor (#3505). */
-        else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
+           see them and the sentinel stopped at the constructor (#3505). A
+           scoped receiver (`Views::Inbox.label(@page)`) resolves by its leaf
+           name, the key classes are indexed under (#5091). */
+        else if (nt_kind(nt, recv) == NK_ConstantReadNode ||
+                 nt_kind(nt, recv) == NK_ConstantPathNode) {
           const char *cnm = nt_str(nt, id, "name");
           int rci = comp_class_index(c, nt_str(nt, recv, "name"));
           if (rci >= 0)

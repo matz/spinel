@@ -1,0 +1,10 @@
+2
+"NoMethodError"
+14
+"NoMethodError"
+7
+"NoMethodError"
+"NoMethodError"
+[true, "", nil]
+false
+"undefined method 'hats' for nil"

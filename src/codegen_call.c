@@ -17360,9 +17360,49 @@ static int g_setter_value_inner = 0;
    it. The hold runs in front of the call, so emit_operands_in_order binds
    every observable operand first whenever one converts here: CRuby
    evaluates all of a call's arguments before it converts any. */
+/* A user method called on an object-typed parameter some caller passes nil
+   (obj_nilable): nil has no such method, so the call raises NoMethodError
+   where the typed emission would run the method with a NULL self -- and
+   answer, when the method reads no ivar (#5088). The names nil answers
+   itself keep their own emission. 0 when the call needs no guard. */
+static int nil_recv_guard(Compiler *c, int id, int *recv_out) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
+  if (nt_str(nt, id, "call_operator") && sp_streq(nt_str(nt, id, "call_operator"), "&.")) return 0;
+  Scope *sc = comp_scope_of(c, recv);
+  const char *ln = nt_str(nt, recv, "name");
+  LocalVar *lv = sc && ln ? scope_local(sc, ln) : NULL;
+  if (!lv || !lv->is_param || !lv->obj_nilable) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (!ty_is_object(rt) || comp_ty_value_obj(c, rt)) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  static const char *const nil_answers[] = {
+    "nil?", "to_s", "to_a", "to_h", "to_i", "to_f", "inspect", "==", "!=", "!",
+    "===", "=~", "&", "|", "^", "class", "is_a?", "kind_of?", "instance_of?",
+    "respond_to?", "frozen?", "freeze", "object_id", "equal?", "eql?", "hash",
+    "dup", "clone", "itself", "send", "public_send", "__send__", "tap", "then",
+    "instance_variables", "method", "methods", "display", "singleton_class", NULL };
+  for (int i = 0; nil_answers[i]; i++) if (sp_streq(nm, nil_answers[i])) return 0;
+  int cid = ty_object_class(rt);
+  if (comp_method_in_chain(c, cid, nm, NULL) < 0 && !comp_reader_in_chain(c, cid, nm, NULL))
+    return 0;
+  *recv_out = recv;
+  return 1;
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   int nd_saved = g_nd_call_id; g_nd_call_id = id;
+  int grecv = -1;
+  int guard = nil_recv_guard(c, id, &grecv);
+  if (guard) {
+    buf_puts(b, "(("); emit_expr(c, grecv, b);
+    buf_printf(b, ") == NULL ? sp_raise_nomethod(sp_nomethod_msg(\"%s\", sp_box_nil())) : (void)0, ",
+               nt_str(c->nt, id, "name"));
+  }
   emit_call_held(c, id, b);
+  if (guard) buf_puts(b, ")");
   g_nd_call_id = nd_saved;
   /* an emitter that made a switch or reached for the boxed value said so;
      anything else bound the call statically, unless the receiver is a boxed

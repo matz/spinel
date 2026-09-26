@@ -14616,6 +14616,17 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (m->rest_idx >= 0 && k >= m->rest_idx) break;
         LocalVar *p = m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
         if (!p) continue;
+        /* an object parameter handed nil, or handed one that was (#5088) */
+        if (ty_is_object(p->type) && !p->obj_nilable) {
+          int nilarg = nt_kind(nt, av[k]) == NK_NilNode;
+          if (!nilarg && nt_kind(nt, av[k]) == NK_LocalVariableReadNode) {
+            Scope *as = comp_scope_of(c, av[k]);
+            const char *an2 = nt_str(nt, av[k], "name");
+            LocalVar *al = as && an2 ? scope_local(as, an2) : NULL;
+            nilarg = al && al->is_param && al->obj_nilable;
+          }
+          if (nilarg) { p->obj_nilable = 1; changed = 1; }
+        }
         if ((p->type == TY_INT_ARRAY || p->type == TY_FLOAT_ARRAY) && !p->nullable_int_elem &&
             nullable_int_elem_expr(c, av[k], 0)) { p->nullable_int_elem = 1; changed = 1; }
         if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;

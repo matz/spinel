@@ -88,6 +88,9 @@ typedef struct {
   int nullable_int; /* an int local that was assigned a value which can be the
                        nil sentinel (a search miss, a pop off an empty array):
                        boxing it has to yield nil, not INTPTR_MIN */
+  int obj_nilable;  /* an object-typed parameter some call site passes nil:
+                       a user method called on it has to raise NoMethodError
+                       for nil rather than run with a NULL self (#5088) */
   int box_nullable; /* an int parameter bound from an ivar that can be read
                        before anything assigned it: only BOXING it has to
                        yield nil. Kept apart from nullable_int, which also

@@ -5292,6 +5292,23 @@ else {
         if (bt != TY_UNKNOWN && bt != TY_VOID && bt != r) return TY_POLY;
       }
       if (found) return r;
+      /* Every user method of a container-read name is still unsettled -- one
+         in a class nothing constructs never settles, its ivars untyped -- so
+         the builtin surface is the only answer there is. Waiting left the
+         call untyped for good and a genuine Array's pop was dropped for nil
+         (#5099). Poly, so a user answer that settles later still fits and the
+         dispatch keeps its container arm. */
+      if (!an_builtin_only && npc > 0 && recv >= 0 && poly_container_read_p(name) &&
+          nt_ref(nt, id, "block") < 0) {
+        an_builtin_only = 1;
+        TyKind bt = infer_call(c, id);
+        an_builtin_only = 0;
+        if (bt != TY_UNKNOWN && bt != TY_VOID) {
+          if (c->poly_builtin_ty && id < c->node_cap && c->poly_builtin_ty[id] == TY_UNKNOWN)
+            c->poly_builtin_ty[id] = bt;
+          return an_poly_concrete(c, name, TY_POLY);
+        }
+      }
       /* Numeric queries / rounding on a boxed value: the sp_poly_* helpers
          dispatch on the runtime tag (a non-numeric tag raises CRuby's
          NoMethodError). abs keeps the receiver's class and floor/... can

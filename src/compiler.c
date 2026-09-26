@@ -1918,7 +1918,12 @@ int poly_container_read_p(const char *name) {
     "delete", "dig", "values_at",
     /* a blockless each answers an Enumerator over the container; a class
        with a Ruby each in the program left an Array on the raise default */
-    "each", NULL };
+    "each",
+    /* an Array's pop and shift answer through sp_poly_pop / sp_poly_shift,
+       which mutate the container behind the boxed pointer in place: a user
+       class owning the name left the call typed from that method alone, and
+       a genuine Array's answer was dropped or raised (#5099) */
+    "pop", "shift", NULL };
   if (!name) return 0;
   for (int i = 0; N[i]; i++) if (sp_streq(name, N[i])) return 1;
   return 0;

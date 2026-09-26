@@ -9406,6 +9406,15 @@ int infer_return_types(Compiler *c) {
       const char *bn = nt_str(nt, bg, "name");
       if (!bn || !sp_streq(bn, "block_given?")) continue;
       if (nt_ref(nt, id, "subsequent") >= 0) continue;   /* an else arm: not a plain guard */
+      /* only a guard at the method's top level stops every blockless call:
+         one under `if x.nil?` lets the call with an x run on to the body,
+         and typed as the guard's nil it printed nil for a found index
+         (#5097). A nested guard's return is an ordinary return. */
+      Scope *gs = comp_scope_of(c, id);
+      int gn = 0; const int *gb = gs && gs->body >= 0 ? nt_arr(nt, gs->body, "body", &gn) : NULL;
+      int top = 0;
+      for (int k = 0; k < gn && !top; k++) top = gb[k] == id;
+      if (!top) continue;
       int stm = nt_ref(nt, id, "statements");
       int sn = 0; const int *sb = stm >= 0 ? nt_arr(nt, stm, "body", &sn) : NULL;
       for (int k = 0; k < sn; k++) if (nt_kind(nt, sb[k]) == NK_ReturnNode) noblk[sb[k]] = 1;

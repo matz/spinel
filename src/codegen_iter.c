@@ -2042,9 +2042,12 @@ int emit_inline_expr(Compiler *c, int id, Buf *b) {
   if (!is_scalar_ret(rt)) {
     /* A block that always raises leaves the call with no value type at all,
        but the call itself still inlines: hold the (dead) result boxed so the
-       yielding method needs no standalone function (#3716). */
+       yielding method needs no standalone function (#3716). A call with no
+       block has none to fall back to either: a method whose only value is
+       its `return nil unless block_given?` called a symbol never emitted
+       (#5097). */
     if ((rt == TY_VOID || rt == TY_UNKNOWN || rt == TY_NIL) &&
-        nt_ref(c->nt, id, "block") >= 0 && call_targets_yielding_method(c, id)) {
+        call_targets_yielding_method(c, id)) {
       TyKind sv = c->ntype[id];
       c->ntype[id] = TY_POLY;
       int ok = emit_inline_call_x(c, id, b, g_indent + 1, 1);

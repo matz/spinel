@@ -1,0 +1,25 @@
+[1, 2]
+nil
+nil
+{a: 1}
+nil
+"x"
+nil
+"mn"
+7
+1180591620717411303424
+1
+nil
+/x/
+nil
+IO
+nil
+"x"
+nil
+3
+nil
+"AB"
+2
+[[1], nil, 4]
+undefined method 'try_convert' for an instance of Integer
+undefined method 'try_convert' for nil

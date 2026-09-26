@@ -1621,6 +1621,9 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       { *out = TY_STR_ARRAY; return 1; }
     if (argc == 2 && sp_streq(name, "tr_s")) { *out = TY_STRING; return 1; }
     if (argc == 1 && sp_streq(name, "crypt")) { *out = TY_STRING; return 1; }
+    /* try_convert on a class-tagged boxed value: the value or nil, as the
+       constant receiver's rule in analyze_infer.c types it. */
+    if (argc == 1 && sp_streq(name, "try_convert")) { *out = TY_POLY; return 1; }
     /* #slice on a boxed receiver is answered by one emitter for ANY key count:
        it branches at run time between Hash#slice(*keys) and the #[] re-entry,
        and both arms hand back an sp_RbVal. This rule said so only for one or

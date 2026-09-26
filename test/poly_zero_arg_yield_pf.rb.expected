@@ -1,0 +1,8 @@
+"wrong number of arguments (given 0, expected 1)"
+[:blk, :b]
+"wrong number of arguments (given 0, expected 2)"
+"wrong number of arguments (given 0, expected 1..2)"
+"wrong number of arguments (given 0, expected 1+)"
+:f
+"wrong number of arguments (given 0, expected 1)"
+:h

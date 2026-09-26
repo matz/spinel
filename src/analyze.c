@@ -13487,8 +13487,12 @@ int make_yield_proc_forms(Compiler *c) {
            inference touches stays unknown, and an unknown local in a value
            position is emitted as nil: `perform(req)` inside the clone ran
            `perform(nil)` (#4502). The signature spells it sp_RbVal; the
-           local is that from the start. */
-        if (lv->type == TY_UNKNOWN) lv->type = TY_POLY;
+           local is that from the start. It arrives boxed from the dispatch
+           arm, so it also has to survive the re-narrow reset, which clears
+           every poly parameter each round: with no call site to widen it
+           again, a clone reached only by a zero-argument call ended the
+           fixpoint unknown and read its boxed argument as an sp_int. */
+        if (lv->type == TY_UNKNOWN) { lv->type = TY_POLY; lv->poly_dispatch_widened = 1; }
       }
       if (d->blk_param) {
         LocalVar *bl = scope_local_intern(d, d->blk_param);

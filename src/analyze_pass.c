@@ -5981,6 +5981,7 @@ int desugar_block_capture_wrap(Compiler *c) {
     /* a LambdaNode's "parameters" IS the ParametersNode (see a_proc_params_node) */
     nt_node_set_ref(nt, wlam, "parameters", wparams);
     nt_node_set_ref(nt, wlam, "body", body);
+    nt_node_set_int(nt, wlam, "cap_iife", 1);   /* called where made: its cells end with the call */
     nt_node_set_arr(nt, wargs, "arguments", wreads, rn);
     nt_node_set_ref(nt, wcall, "receiver", wlam);
     nt_node_set_str(nt, wcall, "name", "call");

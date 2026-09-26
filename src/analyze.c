@@ -1215,6 +1215,12 @@ void mark_proc_captures(Compiler *c) {
        else here may hold its cells past the call (see LocalVar.cell_outlives) */
     int outlives = !(a_block_is_lifted(c, id) && !is_proc_create(c, id) && !fib_create &&
                      !is_handler_proc_block(c, id) && !a_block_forwarded_to_proc(c, id));
+    /* ...nor does the capture-wrap lambda (desugar_block_capture_wrap): it is
+       called where it is made and returns inside the iteration, so its cells
+       end with the call. Counted as outliving, a parameter it captured lost
+       the by-reference ABI, and every append to lobsters' `io` in show_into
+       landed in a copy the caller never saw (#5087). */
+    if (nt_int(nt, id, "cap_iife", 0)) outlives = 0;
     int body = a_proc_body(c, id);
     if (body < 0) continue;
     int encl = c->nscope[id];

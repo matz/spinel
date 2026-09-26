@@ -7365,6 +7365,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     }
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
+    /* try_convert on a class known only at run time: a constant receiver
+       has its typed emitter, but `[Array, 0][0].try_convert(x)` reached no
+       arm at all and the call lowered to the unresolved-method raise. The
+       runtime answers by the class's name, as the typed emitters answer by
+       the constant's (#2325, #2585). */
+    int is_ctryconv = sp_streq(name, "try_convert") && argc == 1 && !has_splat_arg && kwh < 0 &&
+                      nt_ref(nt, id, "block") < 0 && !diag_user_defines(c, name) &&
+                      comp_ntype(c, id) == TY_POLY;
     /* An Integer-only arithmetic name: force the switch open even when
        no user class is a CANDIDATE AT THIS CALL SITE'S ARITY -- a colliding
        class may define the name with a different arity than this call site
@@ -7376,7 +7384,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     /* see the zero-argument gate's own note: the emitters stand down by
        name, so the dispatch has to open by name too */
     int name_taken2 = user_defines_or_reads(c, name);
-    if (ncand > 0 || name_taken2 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_unshift || is_pjoin || is_ppack || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
+    if (ncand > 0 || name_taken2 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_unshift || is_pjoin || is_ppack || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge || is_ctryconv) {
       /* A splatted argument spreads across each arm's own parameters: its
          temp holds the array, and every arm reads its fixed parameters out of
          it, packs its rest from it and judges the count the array gives. The
@@ -7509,6 +7517,18 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                    tv, tv, tr,
                    ret == TY_POLY ? "sp_box_bool(" : "", tv, ix,
                    ret == TY_POLY ? ")" : "");
+      }
+      /* Klass.try_convert(x) on a class-tagged receiver, checked ahead of
+         the cls_id switch: no user class defines the name, so no arm below
+         answers it, and the default raises for every other receiver. */
+      if (is_ctryconv) {
+        char an[40]; snprintf(an, sizeof an, "_t%d", atmp[0]);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) { _t%d = sp_poly_class_try_convert(_t%d, ", tv, tr, tv);
+        /* a pattern temp has no boxed spelling in emit_boxed_text (it boxes
+           nil there); the node form's sp_box_regexp is the one to use */
+        if (atmp_ty[0] == TY_REGEX) buf_printf(b, "sp_box_regexp(%s)", an);
+        else emit_boxed_text(c, atmp_ty[0], an, b);
+        buf_puts(b, "); }\nelse ");
       }
       /* Integer#gcdlcm on a runtime int receiver (#3234): [gcd, lcm] */
       if (is_gcdlcm) {

@@ -3534,6 +3534,26 @@ static inline int sp_poly_is_hash_kind(int cls_id) {
          cls_id == SP_BUILTIN_INT_STR_HASH || cls_id == SP_BUILTIN_INT_INT_HASH || cls_id == SP_BUILTIN_STR_POLY_HASH ||
          cls_id == SP_BUILTIN_SYM_POLY_HASH || cls_id == SP_BUILTIN_POLY_POLY_HASH;
 }
+/* `try_convert` on a class known only at run time: the argument when it
+   already is one of that class, nil otherwise, which is what the typed
+   emitters answer for a constant receiver; Integer takes a Float through
+   to_int, a Bignum when it is past the Integer range. A class outside that
+   set has no try_convert. The caller has checked the class tag. */
+static sp_RbVal sp_poly_class_try_convert(sp_RbVal k, sp_RbVal x) {
+  const char *n = sp_class_val_name(k);
+  int ok;
+  if (strcmp(n, "Array") == 0) ok = x.tag == SP_TAG_OBJ && sp_poly_is_array_kind(x.cls_id);
+  else if (strcmp(n, "Hash") == 0) ok = x.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(x.cls_id);
+  else if (strcmp(n, "String") == 0) ok = x.tag == SP_TAG_STR || sp_poly_is_strbuf(x);
+  else if (strcmp(n, "Regexp") == 0) ok = x.tag == SP_TAG_OBJ && x.cls_id == SP_BUILTIN_REGEX;
+  else if (strcmp(n, "IO") == 0) ok = x.tag == SP_TAG_OBJ && x.cls_id == SP_BUILTIN_IO;
+  else if (strcmp(n, "Integer") == 0) {
+    if (x.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(x.v.f); return sp_box_f_to_int(x.v.f); }
+    ok = x.tag == SP_TAG_INT || x.tag == SP_TAG_BIGINT;
+  }
+  else return sp_raise_nomethod(sp_nomethod_msg("try_convert", k));
+  return ok ? x : sp_box_nil();
+}
 /* Cross-variant hash equality (defined after every hash type below): hashes
    compare by VALUE across storage variants, like arrays -- Ruby has one Hash
    and the variants are a storage optimization that must not leak into ==

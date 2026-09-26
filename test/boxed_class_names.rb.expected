@@ -1,0 +1,27 @@
+[Kid]
+["Kid"]
+[Leaf]
+[]
+Base
+nil
+nil
+nil
+V
+[:a, :b]
+nil
+true
+false
+#<struct S a=nil, b=nil>
+[:a, :b]
+""
+[]
+{}
+Object
+1
+1
+undefined method 'subclasses' for an instance of Integer
+undefined method 'allocate' for an instance of Integer
+undefined method 'keyword_init?' for an instance of Integer
+undefined method 'subclasses' for an instance of S
+undefined method 'allocate' for an instance of S
+undefined method 'keyword_init?' for an instance of S

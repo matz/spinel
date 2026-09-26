@@ -13288,6 +13288,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       for (int kk = 0; kk < c->nclasses && !has_user_m; kk++)
         if (comp_poly_arm_defines_n(c, kk, "members", argc)) has_user_m = 1;
       if (!has_user_m) {
+        /* a Class read out of the slot answers the class-side members list
+           through the generated sp_cls_members, when the program has it;
+           anything else answers through the instance helper */
+        if (g_gen_cls_answers) {
+          int tm = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _t%d = ", tm);
+          emit_expr(c, recv, b);
+          buf_printf(b, "; _t%d.tag == SP_TAG_CLASS ? sp_cls_members(_t%d)"
+                        " : sp_poly_struct_members(_t%d); })", tm, tm, tm);
+          return 1;
+        }
         buf_puts(b, "sp_poly_struct_members("); emit_expr(c, recv, b); buf_puts(b, ")");
         return 1;
       }

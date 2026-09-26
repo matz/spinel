@@ -7489,6 +7489,98 @@ static int obj_deconstruct_keys_method(Compiler *c, int ci, int *defc) {
   return mi;
 }
 
+/* The class-side names a Class read out of a boxed slot answers, each a
+   switch over the program's classes, since the typed constant's answer is
+   compiled from the class table: `subclasses` lists the classes whose parent
+   the class is, `allocate` builds a bare instance of a class that is not an
+   exception (and the empty value of String, Array, Hash and Object, as the
+   typed constant does), and a Struct class answers `members` and
+   `keyword_init?`. A user class value is boxed by id, or by name once it
+   has passed through a name-carrying box; sp_cls_answers_id reads both,
+   and a builtin class is read by its name. The default arm raises the
+   NoMethodError the call raised before, for a value that is not a class
+   as for a class with no answer. Emitted only for a program that calls
+   one of the names on a receiver typed poly or left unknown
+   (g_gen_cls_answers). */
+static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
+  if (!g_gen_cls_answers) return;
+  /* the temporaries the allocate arms name live in this function alone:
+     hand the counter back so the rest of the program numbers as before */
+  int tmp_saved = g_tmp;
+  buf_puts(b, "static sp_int sp_cls_answers_id(sp_RbVal v) {\n"
+              "  if (v.tag != SP_TAG_CLASS) return -1;\n"
+              "  if (v.cls_id != SP_CLASS_BY_NAME) return v.cls_id;\n"
+              "  if (!v.v.s) return -1;\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    if (is_builtin_reopen(c->classes[i].name)) continue;
+    const char *cn = class_ruby_name(c, i);
+    if (!cn) cn = c->classes[i].name;
+    buf_printf(b, "  if (strcmp(v.v.s, \"%s\") == 0) return %d;\n", cn, i);
+  }
+  buf_puts(b, "  return -1;\n}\n");
+  buf_puts(b, "static sp_PolyArray *sp_cls_subclasses(sp_RbVal v) {\n"
+              "  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);\n"
+              "  switch (sp_cls_answers_id(v)) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    if (is_builtin_reopen(c->classes[i].name)) continue;
+    buf_printf(b, "    case %d:", i);
+    for (int k = 0; k < c->nclasses; k++) {
+      if (c->classes[k].parent != i || is_builtin_reopen(c->classes[k].name)) continue;
+      const char *kn = class_ruby_name(c, k);
+      if (!kn) kn = c->classes[k].name;
+      buf_printf(b, " sp_PolyArray_push(a, sp_box_class(((sp_Class){%d, SPL(\"%s\")})));", k, kn);
+    }
+    buf_puts(b, " return a;\n");
+  }
+  buf_puts(b, "    default: break;\n  }\n"
+              "  sp_raise_nomethod(sp_nomethod_msg(\"subclasses\", v));\n  return a;\n}\n");
+  buf_puts(b, "static sp_RbVal sp_cls_allocate(sp_RbVal v) {\n"
+              "  switch (sp_cls_answers_id(v)) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (is_builtin_reopen(ci->name) || ci->is_native_class || !ci->instantiated ||
+        comp_class_is_module(c, ci) || class_is_exc_subclass(c, i)) continue;
+    Buf ax; memset(&ax, 0, sizeof ax);
+    emit_obj_alloc_expr(c, i, &ax);
+    buf_printf(b, "    case %d: return ", i);
+    emit_boxed_text(c, ty_object(i), ax.p ? ax.p : "0", b);
+    buf_puts(b, ";\n");
+    free(ax.p);
+  }
+  buf_puts(b, "    default: break;\n  }\n"
+              "  if (v.tag == SP_TAG_CLASS) {\n"
+              "    const char *n = sp_class_val_name(v);\n"
+              "    if (strcmp(n, \"String\") == 0) return sp_box_str(sp_str_dup_external((&(\"\\xff\")[1])));\n"
+              "    if (strcmp(n, \"Array\") == 0) return sp_box_poly_array(sp_PolyArray_new());\n"
+              "    if (strcmp(n, \"Hash\") == 0) return sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH);\n"
+              "    if (strcmp(n, \"Object\") == 0) return sp_box_obj(sp_Object_new(), SP_BUILTIN_OBJECT);\n"
+              "  }\n"
+              "  sp_raise_nomethod(sp_nomethod_msg(\"allocate\", v));\n  return sp_box_nil();\n}\n");
+  buf_puts(b, "static sp_PolyArray *sp_cls_members(sp_RbVal v) {\n"
+              "  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);\n"
+              "  switch (sp_cls_answers_id(v)) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (!ci->is_struct || comp_cmethod_in_chain(c, i, "members", NULL) >= 0) continue;
+    buf_printf(b, "    case %d:", i);
+    for (int j = 0; j < ci->nivars; j++)
+      buf_printf(b, " sp_PolyArray_push(a, sp_box_sym(sp_sym_intern(\"%s\")));", ci->ivars[j] + 1);
+    buf_puts(b, " return a;\n");
+  }
+  buf_puts(b, "    default: break;\n  }\n"
+              "  sp_raise_nomethod(sp_nomethod_msg(\"members\", v));\n  return a;\n}\n");
+  buf_puts(b, "static sp_RbVal sp_cls_keyword_init_p(sp_RbVal v) {\n"
+              "  switch (sp_cls_answers_id(v)) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (!ci->is_struct || comp_cmethod_in_chain(c, i, "keyword_init?", NULL) >= 0) continue;
+    buf_printf(b, "    case %d: return %s;\n", i,
+               ci->kw_init == 1 ? "sp_box_bool(TRUE)" : ci->kw_init == -1 ? "sp_box_bool(FALSE)" : "sp_box_nil()");
+  }
+  buf_puts(b, "    default: break;\n  }\n"
+              "  sp_raise_nomethod(sp_nomethod_msg(\"keyword_init?\", v));\n  return sp_box_nil();\n}\n");
+  g_tmp = tmp_saved;
+}
 /* Symbol-keyed Struct/Data #to_h, installed as sp_obj_to_h_fn. Mirrors the
    per-struct inline to_h emitter, but keyed by cls_id so a Struct/Data read out
    of a poly container can answer #to_h at run time (#2906). Data members are
@@ -10626,6 +10718,19 @@ static void scan_prologue_features(Compiler *c) {
     if (!c->classes[i].is_native_class &&
         obj_deconstruct_keys_method(c, i, NULL) >= 0) { g_gen_obj_to_h = 1; break; }
   }
+  /* A class-side name called on a boxed receiver: the sp_cls_* answers are
+     generated for that program only, so every other program's C is as it was. */
+  g_gen_cls_answers = 0;
+  for (int nid = 0; nid < c->nt->count && !g_gen_cls_answers; nid++) {
+    const char *nty = nt_type(c->nt, nid);
+    if (!nty || !sp_streq(nty, "CallNode")) continue;
+    int nrv = nt_ref(c->nt, nid, "receiver");
+    if (nrv < 0 || (comp_ntype(c, nrv) != TY_POLY && comp_ntype(c, nrv) != TY_UNKNOWN)) continue;
+    const char *nnm = nt_str(c->nt, nid, "name");
+    if (nnm && (sp_streq(nnm, "subclasses") || sp_streq(nnm, "allocate") ||
+                sp_streq(nnm, "members") || sp_streq(nnm, "keyword_init?")))
+      g_gen_cls_answers = 1;
+  }
   /* A plain (no custom initialize) instantiated Data gets the poly Data#with
      dispatch; a custom-init Data is skipped there, so don't count it (#2890). */
   g_gen_obj_with = 0;
@@ -12704,6 +12809,13 @@ char *codegen_program(const NodeTable *nt) {
                      g_has_user_global_marks || g_has_user_cmp || g_gen_obj_hash || g_gen_obj_to_h || g_gen_obj_with || g_gen_obj_hashkey ||
                      g_gen_obj_valeq;
 
+  /* the sp_cls_* answers are defined among the dispatches below; a proc body
+     that asks one is spliced ahead of them and reads these */
+  if (g_gen_cls_answers)
+    buf_puts(&b, "static sp_PolyArray *sp_cls_subclasses(sp_RbVal v);\n"
+                 "static sp_RbVal sp_cls_allocate(sp_RbVal v);\n"
+                 "static sp_PolyArray *sp_cls_members(sp_RbVal v);\n"
+                 "static sp_RbVal sp_cls_keyword_init_p(sp_RbVal v);\n");
   /* Constructor defs, method defs, and main go into a separate buffer. Any
      proc literals they contain accumulate static functions into g_procs /
      g_proc_protos; we splice those in ahead of these bodies, since a proc
@@ -12720,6 +12832,7 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_to_json_dispatch(c, body);
   emit_obj_to_h_dispatch(c, body);
   emit_obj_struct_values_dispatch(c, body);
+  emit_cls_answers_dispatch(c, body);
   emit_obj_deconstruct_dispatch(c, body);
   emit_obj_is_data(c, body);
   emit_obj_to_a_dispatch(c, body);

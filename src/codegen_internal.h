@@ -423,6 +423,7 @@ extern int g_gen_obj_hash;
 extern int g_gen_obj_to_json;  /* a package wants obj reflection + >=1 user #to_json */  /* a package wants obj reflection + >=1 struct: emit+install sp_obj_to_hash */
 extern int g_gen_obj_struct_values;  /* >=1 instantiated Struct (not Data): emit+install sp_obj_struct_values (poly member array) */
 extern int g_gen_obj_to_h;  /* >=1 instantiated Struct/Data: emit+install sym-keyed sp_obj_to_h (poly #to_h) */
+extern int g_gen_cls_answers;  /* a class-side name called on a boxed receiver: emit the sp_cls_* answers */
 extern int g_gen_obj_with;  /* >=1 instantiated Data: emit+install sp_obj_with (poly Data#with) */
 extern int g_uses_regex;
 extern int g_uses_argv;

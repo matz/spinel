@@ -6065,7 +6065,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        so iterating an Array of classes and asking the block parameter left the
        call with no arm at all and it reported the method as undefined (#4018). */
     int is_class_reflect = (sp_streq(name, "ancestors") || sp_streq(name, "included_modules") ||
-                            sp_streq(name, "superclass")) && !diag_user_defines(c, name);
+                            sp_streq(name, "superclass") ||
+                            /* the class-side names the generated sp_cls_* answer
+                               (members has its arm in emit_poly_call) */
+                            (g_gen_cls_answers && nt_ref(nt, id, "block") < 0 &&
+                             (sp_streq(name, "subclasses") || sp_streq(name, "allocate") ||
+                              sp_streq(name, "keyword_init?")))) &&
+                           !diag_user_defines(c, name);
     int is_pred = nt_ref(nt, id, "block") < 0 && poly_pred_kind(name, 0);
     /* When ostruct is in the program a bare `obj.reader` on a poly value may be
        an OpenStruct member access (any name) -- read it at runtime (#3197).
@@ -6227,14 +6233,24 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       }
       if (is_class_reflect) {
         /* sp_class_superclass only knows the user chain; a builtin class needs
-           sp_builtin_superclass, exactly as the typed arm does. */
-        const char *cbo = (ret == TY_POLY) ? (sp_streq(name, "superclass") ? "sp_box_class(" : "sp_box_poly_array(") : "";
-        const char *cbc = (ret == TY_POLY) ? ")" : "";
+           sp_builtin_superclass, exactly as the typed arm does. allocate and
+           keyword_init? answer a boxed value already. */
+        int boxed_ans = sp_streq(name, "allocate") || sp_streq(name, "keyword_init?");
+        const char *cbo = (ret == TY_POLY && !boxed_ans)
+                            ? (sp_streq(name, "superclass") ? "sp_box_class(" : "sp_box_poly_array(")
+                            : "";
+        const char *cbc = (ret == TY_POLY && !boxed_ans) ? ")" : "";
         buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %s", tv, tr, cbo);
         if (sp_streq(name, "ancestors"))
           buf_printf(b, "sp_class_ancestors(sp_unbox_class(_t%d))", tv);
         else if (sp_streq(name, "included_modules"))
           buf_printf(b, "sp_class_included_modules(sp_unbox_class(_t%d))", tv);
+        else if (sp_streq(name, "subclasses"))
+          buf_printf(b, "sp_cls_subclasses(_t%d)", tv);
+        else if (sp_streq(name, "allocate"))
+          buf_printf(b, "sp_cls_allocate(_t%d)", tv);
+        else if (sp_streq(name, "keyword_init?"))
+          buf_printf(b, "sp_cls_keyword_init_p(_t%d)", tv);
         else
           buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); _cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d); })",
                      tv, tv, tv, tv, tv);

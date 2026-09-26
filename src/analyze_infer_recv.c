@@ -1583,6 +1583,16 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if (argc == 0 && (sp_streq(name, "ancestors") || sp_streq(name, "included_modules")))
       { *out = TY_POLY_ARRAY; return 1; }
     if (argc == 0 && sp_streq(name, "superclass")) { *out = TY_CLASS; return 1; }
+    /* The class-side names the generated sp_cls_* answer: subclasses a class
+       array; allocate an instance of a class only known at run time, and
+       keyword_init? nil, true or false, boxed values. A class method of the
+       name in the program keeps the type the dispatch joins from it. */
+    if (argc == 0 && (sp_streq(name, "subclasses") || sp_streq(name, "allocate") ||
+                      sp_streq(name, "keyword_init?"))) {
+      int ncc = 0;
+      comp_cmethod_candidates(c, name, &ncc);
+      if (ncc == 0) { *out = sp_streq(name, "subclasses") ? TY_POLY_ARRAY : TY_POLY; return 1; }
+    }
     if (argc == 0 && (sp_streq(name, "hex") || sp_streq(name, "oct"))) { *out = TY_INT; return 1; }
     if (argc == 0 && sp_streq(name, "squeeze")) { *out = TY_STRING; return 1; }
     /* casecmp / casecmp? are nil-or-answer, and which one is decided by the

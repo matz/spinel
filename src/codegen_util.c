@@ -895,6 +895,7 @@ int g_gen_obj_hash = 0;
 int g_gen_obj_to_json = 0;
 int g_gen_obj_to_h = 0;
 int g_gen_obj_struct_values = 0;
+int g_gen_cls_answers = 0;
 int g_gen_obj_with = 0;
 int g_uses_regex = 0;
 int g_uses_argv = 0;

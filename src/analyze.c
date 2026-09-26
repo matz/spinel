@@ -11914,7 +11914,7 @@ static int strbuf_demand_container_stores_here(Compiler *c, const char *contn, S
    did not even agree on the element's C type. A literal argument is its own
    store site: its string elements mark for the handle wrap directly. */
 static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2);
-static int an_new_recv_all_constant(Compiler *c);
+static int an_class_dynamic_new_risk(Compiler *c, int cid);
 static int strbuf_demand_param_container_stores(Compiler *c, const char *pn, Scope *ps, int depth) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -12781,8 +12781,7 @@ static int an_arg_hands_handle(Compiler *c, int node) {
    instead of re-deciding per candidate. The two must agree; the order of the
    two arms is the same (a unique user method named `new` wins over the
    constructor reading). */
-static void an_call_targets_of(Compiler *c, int u, int new_ok,
-                               int out[2], int *nout) {
+static void an_call_targets_of(Compiler *c, int u, int out[2], int *nout) {
   const NodeTable *nt = c->nt;
   *nout = 0;
   const char *un = nt_str(nt, u, "name");
@@ -12798,14 +12797,14 @@ static void an_call_targets_of(Compiler *c, int u, int new_ok,
   if (byname >= 0 && c->scopes[byname].name &&
       sp_streq(c->scopes[byname].name, un)) out[(*nout)++] = byname;
   if (!sp_streq(un, "new")) return;
-  /* `new_ok` is an_new_recv_all_constant, hoisted by the caller: it walks the
-     whole node table, so asking it per call node made the build quadratic. */
-  if (!new_ok) return;
   int rc = nt_ref(nt, u, "receiver");
   if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode) return;
   const char *cn = nt_str(nt, rc, "name");
   int cid = cn ? comp_class_index(c, cn) : -1;
   if (cid < 0) return;
+  /* asked of THIS class, not the whole program: a dynamic `new` elsewhere only
+     matters where its shape could construct this one */
+  if (an_class_dynamic_new_risk(c, cid)) return;
   int mi = comp_method_in_class(c, cid, "initialize");
   if (mi < 0 || mi >= c->nscopes) return;
   Scope *m2 = &c->scopes[mi];
@@ -12882,11 +12881,10 @@ static void handle_arg_tab_init(Compiler *c, HandleArgTab *t) {
   }
   t->ok = 1;
   int ne = 0;
-  int new_ok = an_new_recv_all_constant(c);
   for (int u = 0; u < nt->count; u++) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int tgt[2], ntg = 0;
-    an_call_targets_of(c, u, new_ok, tgt, &ntg);
+    an_call_targets_of(c, u, tgt, &ntg);
     for (int k = 0; k < ntg; k++) {
       int mi = tgt[k];
       if (mi < 0 || mi >= c->nscopes) continue;
@@ -12989,20 +12987,97 @@ static int promote_params_stored_in_shared_ivars(Compiler *c,
    program goes through a receiver that is not a constant, some class is
    instantiated by a class object we cannot pin, and a parameter whose C type
    we are about to change could be reached through it. */
-static int an_new_recv_all_constant(Compiler *c) {
+/* Could a `new` whose receiver cannot be pinned construct class `cid`?
+
+   A dynamic `k.new(...)` is emitted as a switch over the receiver's class id
+   with an arm for every class whose `initialize` accepts the call's shape, and
+   that arm passes each argument in the parameter's own C type. A class the
+   switch can land on therefore has to keep the C type the arm was written
+   against, which is why promoting its parameter to a handle is refused.
+
+   The question used to be asked of the whole PROGRAM: one `new` anywhere with
+   a receiver that is not a constant switched constructor resolution off for
+   every class at once. That is far wider than the hazard. `k.new` with no
+   arguments cannot construct a class whose `initialize` requires one, so a
+   single dynamic no-argument `new` -- of an unrelated class, in an unrelated
+   file -- cost every retained string in the program its handle and silently
+   brought back the copy this machinery exists to prevent.
+
+   Asked per class, an arm can only reach a class whose initialize accepts the
+   shape. An argument list the analyzer cannot count (a splat, or keywords)
+   still puts every class at risk, as before. */
+static int an_class_dynamic_new_risk(Compiler *c, int cid) {
   const NodeTable *nt = c->nt;
-  static int cached = -1, cached_count = -1;
-  if (cached >= 0 && cached_count == nt->count) return cached;
-  int ok = 1;
-  for (int u = 0; u < nt->count && ok; u++) {
-    if (nt_kind(nt, u) != NK_CallNode) continue;
-    const char *un = nt_str(nt, u, "name");
-    if (!un || !sp_streq(un, "new")) continue;
-    int rc = nt_ref(nt, u, "receiver");
-    if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode) ok = 0;
+  static signed char *risk = NULL;
+  static int risk_n = -1, risk_count = -1;
+  if (cid < 0 || cid >= c->nclasses) return 1;
+  if (!risk || risk_n != c->nclasses || risk_count != nt->count) {
+    free(risk);
+    risk = (signed char *)calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+    if (!risk) { risk_n = -1; risk_count = -1; return 1; }
+    risk_n = c->nclasses; risk_count = nt->count;
+    /* The two walks are separate on purpose. Asking every class about every
+       unpinnable `new` is O(calls x classes) with a method lookup inside, and
+       a program with a thousand classes and a thousand such calls paid 1.2x
+       the compile time for an answer that depends only on the SHAPES seen.
+       Collect the shapes first -- there are a handful, whatever the program
+       does -- then ask each class once. */
+    unsigned long long seen = 0;   /* bit k: some unpinnable `new` passes k */
+    int seen_any = 0;              /* a shape we cannot count, or one over 63 */
+    for (int u = 0; u < nt->count; u++) {
+      if (nt_kind(nt, u) != NK_CallNode) continue;
+      const char *un = nt_str(nt, u, "name");
+      if (!un || !sp_streq(un, "new")) continue;
+      int rc = nt_ref(nt, u, "receiver");
+      if (rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) continue;  /* pinned */
+      int argsN = nt_ref(nt, u, "arguments");
+      int argc = 0;
+      const int *argv = argsN >= 0 ? nt_arr(nt, argsN, "arguments", &argc) : NULL;
+      int npos = 0, uncountable = 0;
+      for (int a = 0; a < argc && argv; a++) {
+        NodeKind ak = nt_kind(nt, argv[a]);
+        if (ak == NK_SplatNode || ak == NK_KeywordHashNode) { uncountable = 1; break; }
+        if (ak == NK_BlockArgumentNode) continue;
+        npos++;
+      }
+      if (uncountable || npos >= 64) seen_any = 1;
+      else seen |= 1ULL << npos;
+    }
+    if (seen_any || seen) {
+      for (int ci = 0; ci < c->nclasses; ci++) {
+        if (seen_any) { risk[ci] = 1; continue; }
+        int mi = comp_method_in_class(c, ci, "initialize");
+        if (mi < 0) continue;        /* no initialize: no parameter to protect */
+        int pn = (mi < c->nscopes && c->scopes[mi].def_node >= 0)
+                     ? nt_ref(nt, c->scopes[mi].def_node, "parameters") : -1;
+        int nreq = 0, nopt = 0, npost = 0, rest = -1;
+        if (pn >= 0) {
+          nt_arr(nt, pn, "requireds", &nreq);
+          nt_arr(nt, pn, "optionals", &nopt);
+          /* the required parameters AFTER the optionals -- `def initialize(n = 0, b)`
+             takes 1..2, not 0..1. Counting only the leading requireds put the
+             class out of reach of a two-argument `k.new`, the parameter was
+             promoted, and the arm codegen then wanted no longer matched: the
+             dynamic call fell through to the default and raised NoMethodError
+             where it had merely been wrong before. emit_class_value_new_kw
+             counts all three, and these two have to agree. */
+          nt_arr(nt, pn, "posts", &npost);
+          rest = nt_ref(nt, pn, "rest");
+        }
+        nreq += npost;
+        if (nreq >= 64) continue;              /* no countable shape reaches it */
+        unsigned long long accept;
+        if (rest >= 0) accept = ~0ULL << nreq;  /* nreq or more */
+        else {
+          int hi = nreq + nopt; if (hi > 63) hi = 63;
+          accept = (hi - nreq >= 63) ? (~0ULL << nreq)
+                                     : (((1ULL << (hi - nreq + 1)) - 1) << nreq);
+        }
+        if (seen & accept) risk[ci] = 1;
+      }
+    }
   }
-  cached = ok; cached_count = nt->count;
-  return ok;
+  return risk[cid] != 0;
 }
 static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   const NodeTable *nt = c->nt;
@@ -13011,12 +13086,14 @@ static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   if (sp_streq(un, m2->name) && an_unique_scope_by_name(c, un) == mi2) return 1;
   if (!sp_streq(un, "new") || !sp_streq(m2->name, "initialize")) return 0;
   if (m2->class_id < 0 || m2->is_cmethod) return 0;
-  if (!an_new_recv_all_constant(c)) return 0;
   int rc = nt_ref(nt, u, "receiver");
   if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode) return 0;
   const char *cn = nt_str(nt, rc, "name");
   int cid = cn ? comp_class_index(c, cn) : -1;
   if (cid < 0) return 0;
+  /* the same per-class question an_call_targets_of asks, at the same point:
+     the two answer for the same set or the index and the predicate diverge */
+  if (an_class_dynamic_new_risk(c, cid)) return 0;
   return comp_method_in_class(c, cid, "initialize") == mi2;
 }
 

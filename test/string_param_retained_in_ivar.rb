@@ -274,3 +274,35 @@ pe3 = Peek.new(zz)
 po3 = Poke.new(zz)
 po3.poke(3, 5)
 p [pe3.at(3), zz.getbyte(3)]
+
+# A `new` whose receiver is not a constant makes the class it constructs
+# unpinnable: codegen emits a switch over the receiver's class id, with an arm
+# for every class whose initialize accepts the call's shape, and each arm passes
+# the argument in that parameter's own C type. A class the switch can land on
+# has to keep the type the arm was written against, so its parameter is left
+# alone.
+#
+# That question used to be asked of the whole PROGRAM -- one such `new`
+# anywhere switched constructor resolution off for every class at once. A
+# no-argument `k.new` cannot construct a class whose initialize requires one,
+# so an unrelated dynamic `new` in an unrelated file silently cost every
+# retained string in the program its handle, and brought the copy back.
+class Unrelated
+  def initialize
+    @n = 1
+  end
+  def n
+    @n
+  end
+end
+
+def pick(c)
+  c
+end
+
+u = +"abcd"
+pu = Peek.new(u)
+qu = Poke.new(u)
+qu.poke(0, 8)
+p [pu.at(0), u.getbyte(0)]
+p pick(Unrelated).new.n          # a `new` on a receiver that is not a constant

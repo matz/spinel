@@ -3380,6 +3380,26 @@ else {
         buf_printf(b, "); _t%d; })", t);
         return 1;
       }
+      /* A source of another kind into a receiver that kept its own: only a
+         true --rbs seed (`@storage: Array[Integer]`) pins it, since the
+         mutation otherwise widens the receiver. The source converts to the
+         receiver's kind, the way a seeded store converts it; with no arm the
+         call fell to NoMethodError. nil or a non-Array is Ruby's TypeError. */
+      if (sp_streq(name, "replace") && argc == 1 &&
+          (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY) &&
+          (a0 == TY_POLY || a0 == TY_POLY_ARRAY || (ty_is_array(a0) && a0 != rt))) {
+        int t = ++g_tmp, ts = ++g_tmp, tc = ++g_tmp;
+        buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_recv_rooted(c, recv, t, "SP_GC_ROOT", b);
+        buf_printf(b, "sp_RbVal _t%d = ", ts); emit_boxed(c, argv[0], b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", ts);
+        buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(_t%d.cls_id))"
+                      " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Array\","
+                      " sp_poly_class_name(_t%d))); ", ts, ts, ts);
+        char src[32]; snprintf(src, sizeof src, "_t%d", ts);
+        emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tc); emit_unbox_text(c, rt, src, b);
+        buf_printf(b, "; sp_%sArray_replace(_t%d, _t%d); _t%d; })", k, t, tc, t);
+        return 1;
+      }
       /* concat in VALUE position with a source of another kind (a general
          Array read at run time, another typed kind): the statement emitter
          owns the per-kind element loop, so run it inside a compound whose

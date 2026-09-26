@@ -1872,6 +1872,13 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   if (t == TY_RANGE || t == TY_CLASS || t == TY_COMPLEX || t == TY_RATIONAL || t == TY_TIME) {
     buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 1)"); return;
   }
+  /* a yield no call site gives a block has no value type: reached, it
+     raises LocalJumpError (the yield's own emission), so the test that
+     follows is never read (#5096) */
+  if ((t == TY_UNKNOWN || t == TY_VOID) && nt_kind(c->nt, id) == NK_YieldNode &&
+      g_block_id < 0 && !g_yield_proc_ref) {
+    buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 0)"); return;
+  }
   if (t != TY_BOOL) unsupported(c, id, "condition (non-bool)");
   emit_expr(c, id, b);
 }

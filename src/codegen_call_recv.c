@@ -13505,7 +13505,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         sp_streq(name, "numerator")   ? "sp_poly_numerator" :
         sp_streq(name, "denominator") ? "sp_poly_denominator" :
         sp_streq(name, "begin")       ? "sp_poly_range_begin" :
-        sp_streq(name, "end")         ? "sp_poly_range_end" : NULL;
+        sp_streq(name, "end")         ? "sp_poly_range_end" :
+        sp_streq(name, "exclude_end?") ? "sp_poly_range_exclude_end_p" : NULL;
       if (pfn) {
         int has_user = 0;
         if (!g_poly_builtin_arm)

@@ -3305,6 +3305,16 @@ static sp_RbVal sp_poly_conjugate(sp_RbVal v) {
    poly container): the endpoint as an Integer. */
 static sp_int sp_poly_range_begin(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) return ((sp_Range *)v.v.p)->first; sp_raise_poly_nomethod("begin", v); }
 static sp_int sp_poly_range_end(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) return ((sp_Range *)v.v.p)->last; sp_raise_poly_nomethod("end", v); }
+/* every Range kind carries its own exclude-end flag; a Range read out of a
+   boxed slot answered NoMethodError for it (#5095) */
+static sp_bool sp_poly_range_exclude_end_p(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.v.p) {
+    if (v.cls_id == SP_BUILTIN_RANGE) return ((sp_Range *)v.v.p)->excl != 0;
+    if (v.cls_id == SP_BUILTIN_FLOAT_RANGE) return ((sp_FloatRange *)v.v.p)->excl != 0;
+    if (v.cls_id == SP_BUILTIN_STR_RANGE) return ((sp_StrRange *)v.v.p)->excl != 0;
+  }
+  sp_raise_poly_nomethod("exclude_end?", v);
+}
 static sp_bool sp_poly_positive_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i > 0; if (v.tag == SP_TAG_FLT) return v.v.f > 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) > 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) > 0; sp_raise_poly_nomethod("positive?", v); }
 static sp_bool sp_poly_negative_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i < 0; if (v.tag == SP_TAG_FLT) return v.v.f < 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) < 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) < 0; sp_raise_poly_nomethod("negative?", v); }
 /* abs of a negative int goes through SP_POLY_INT_OP(sub, 0, x): plain -x is

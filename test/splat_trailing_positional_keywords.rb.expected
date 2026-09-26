@@ -1,0 +1,19 @@
+kw(1,2,3)
+kw(2,0,3)
+AE wrong number of arguments (given 3, expected 1..2)
+kw(1,2,7)
+kw(1,2,1)
+rk(1,2,3)
+rk(2,0,3)
+12
+35
+m(y,2)
+m(2,0)
+AE wrong number of arguments (given 3, expected 1..2)
+kw(1,2,3)
+kw(2,0,3)
+12
+m(1,2)
+m(2,0)
+P.m(1,2)
+P.m(2,0)

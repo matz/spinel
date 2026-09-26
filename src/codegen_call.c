@@ -5944,7 +5944,7 @@ static int poly_arm_count(Compiler *c, Scope *m, int kwh, int pos_argc, int spla
      sits in the list, so such an arm keeps the old judgement (a *rest takes
      any surplus); a **kw alone is judged below, surplus positionals
      included */
-  if (opt_before_required(m) && m->rest_idx >= 0)
+  if (opt_before_required(c, m) && m->rest_idx >= 0)
     return pos_argc + fills + named >= m->nrequired ? 1 : 0;
   int given = pos_argc + fills;
   int need = m->nrequired, req = 0, tot = 0, kwd = 0, judged = !m->cs_synth;
@@ -7859,7 +7859,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            through a poly slot took the Cache arm and handed a String to its
            sp_SymPolyHash * (#4492). */
         Scope *ks = &c->scopes[scope_proc_form_of(c, mi) >= 0 ? scope_proc_form_of(c, mi) : mi];
-        int ks_lead = opt_before_required(ks);
+        int ks_lead = opt_before_required(c, ks);
         for (int a = 0; a < ks->nparams && (ks_lead || a < pos_argc); a++) {
           /* a declared keyword param is bound by name from the split-off kwh,
              never by this positional slot -- exclude it from the check */
@@ -8143,7 +8143,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           int src = (r_idx >= 0 && npost > 0 && a > r_idx && a <= r_idx + npost)
                       ? rest_end + (a - r_idx - 1) : a;
           /* with a leading optional the required parameters are funded first */
-          if (opt_before_required(ms)) { src = arg_slot_for_param(c, ms, a, pos_argc); if (src < 0) src = pos_argc; }
+          if (opt_before_required(c, ms)) { src = arg_slot_for_param(c, ms, a, pos_argc); if (src < 0) src = pos_argc; }
           if ((r_idx >= 0 && a < r_idx && src >= rest_end) ||
               (pnm && callee_param_is_declared_kwarg(c, ms, pnm)))
             src = pos_argc;

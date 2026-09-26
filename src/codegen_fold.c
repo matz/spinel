@@ -5297,16 +5297,28 @@ void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b) {
    conventional shape: the rest of the file's reading of a parameter list,
    including Scope's documented "requireds then optionals" order and
    nrequired's index-past-the-last-required meaning, is left exactly as it
-   was. nrequired is what makes the test cheap -- it is the index past the
-   LAST required parameter, so an optional below it is one Ruby funds late. */
-int opt_before_required(Scope *m) {
+   was. Prism files a required parameter after an optional under "posts",
+   so an optional with posts beside it is one Ruby funds late. nrequired --
+   the index past the LAST required parameter -- could not say it: a required
+   KEYWORD counts there too, and `def f(a, b = 0, k:)` read as a leading
+   optional. It is still the answer for a scope with no def's parameter list
+   to read (a synthesized one, a block's). */
+int opt_before_required(Compiler *c, Scope *m) {
+  int pn = m->def_node >= 0 ? nt_ref(c->nt, m->def_node, "parameters") : -1;
+  if (pn >= 0 && nt_kind(c->nt, pn) == NK_ParametersNode) {
+    int on = 0, postn = 0;
+    nt_arr(c->nt, pn, "optionals", &on);
+    nt_arr(c->nt, pn, "posts", &postn);
+    return on > 0 && postn > 0;
+  }
+  if (pn < 0 && m->def_node >= 0 && nt_kind(c->nt, m->def_node) == NK_DefNode) return 0;
   for (int i = 0; i < m->nrequired && i < m->nparams; i++)
     if (m->pdefault && m->pdefault[i] >= 0) return 1;
   return 0;
 }
 int arg_slot_for_param(Compiler *c, Scope *m, int idx, int argc) {
   if (idx < 0 || idx >= m->nparams) return -1;
-  if (!opt_before_required(m)) return idx < argc ? idx : -1;
+  if (!opt_before_required(c, m)) return idx < argc ? idx : -1;
   /* keywords and a **rest sit in pnames too but take no positional
      argument; map over the positional prefix only. A **kw was mapped by
      position once, so `def m(a = 1, b, **kw)` given one argument bound it
@@ -6887,7 +6899,7 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv, int
       /* With a leading optional the shortfall is a count, not a position:
          this parameter may be undefaulted and still funded, because the
          required ones are covered first. */
-      int lead_opt = opt_before_required(m);
+      int lead_opt = opt_before_required(c, m);
       if (lead_opt && arg_slot_for_param(c, m, i, eff_pos) >= 0) continue;
       if (i < eff_pos && !lead_opt) continue;
       if (m->pdefault && m->pdefault[i] >= 0) continue;
@@ -6900,6 +6912,72 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv, int
     }
     if (!raised && emit_unknown_kwarg_raise(c, m, kwh)) raised = 1;
   }
+}
+
+/* Does a call's positional list bind by a count only the run time knows --
+   one splat with positionals after it (`f(*a, 3)`) -- into a parameter list
+   plain enough to bind from one gathered array? No rest, keyword rest or
+   leading optional, and no synthesized parameter. Keyword parameters are
+   fine: they bind by name from the keyword hash, which then has to be
+   keywords rather than one more positional. They and a keyword hash were
+   refused here, so `kw(*[1], 2, k: 3)` on `def kw(a, b = 0, k: 1)` took the
+   layout that assumes the splat fills the gap, and bound b its default. */
+static int splat_gather_applies(Compiler *c, Scope *m, const int *argv, int pos_argc, int kwh) {
+  const NodeTable *nt = c->nt;
+  if (!m || !argv) return 0;
+  int nspl = 0, sk = -1;
+  for (int k = 0; k < pos_argc; k++)
+    if (nt_kind(nt, argv[k]) == NK_SplatNode) { nspl++; sk = k; }
+  if (nspl != 1 || sk >= pos_argc - 1 || m->rest_idx >= 0 || m->kwrest_idx >= 0 ||
+      m->cs_synth || opt_before_required(c, m)) return 0;
+  int nkw = 0;
+  for (int i = 0; i < m->nparams; i++) {
+    if (!m->pnames[i] || (m->pnames[i][0] == '_' && m->pnames[i][1] == '_')) return 0;
+    if (callee_has_kwarg(c, m, m->pnames[i])) nkw++;
+  }
+  if (kwh >= 0 && (nkw == 0 || kwh_positional_slot(c, m, kwh, pos_argc) >= 0)) return 0;
+  return 1;
+}
+
+/* Gather a call's positionals, the splat spread in place, into one rooted
+   PolyArray and refuse a count the parameters cannot take. Returns the temp. */
+static int emit_splat_gather(Compiler *c, Scope *m, const int *argv, int pos_argc) {
+  const NodeTable *nt = c->nt;
+  int ct = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ct, ct);
+  for (int k = 0; k < pos_argc; k++) {
+    Buf ab; memset(&ab, 0, sizeof ab);
+    if (nt_kind(nt, argv[k]) == NK_SplatNode) {
+      int inner = nt_ref(nt, argv[k], "expression");
+      if (inner < 0) {
+        if (!emit_anon_rest_ref(c, argv[k], &ab)) buf_puts(&ab, "sp_PolyArray_new()");
+      }
+      else {
+        buf_puts(&ab, "sp_poly_to_poly_array(sp_splat_to_array(");
+        emit_boxed(c, inner, &ab);
+        buf_puts(&ab, "))");
+      }
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyArray_append_all(_t%d, %s);\n", ct, ab.p ? ab.p : "NULL");
+    }
+    else {
+      emit_boxed(c, argv[k], &ab);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", ct, ab.p ? ab.p : "sp_box_nil()");
+    }
+    free(ab.p);
+  }
+  int pos_required = 0, pos_params = 0;
+  positional_arity(c, m, &pos_required, &pos_params);
+  char expbuf[48];
+  if (pos_required == pos_params) snprintf(expbuf, sizeof expbuf, "expected %d", pos_params);
+  else snprintf(expbuf, sizeof expbuf, "expected %d..%d", pos_required, pos_params);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre,
+             "if (_t%d->len < %d || _t%d->len > %d) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments (given %%lld, %s)\", (long long)_t%d->len));\n",
+             ct, pos_required, ct, pos_params, expbuf, ct);
+  return ct;
 }
 
 void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lead, Buf *out) {
@@ -7000,56 +7078,12 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
      run time knows: which parameter the 3 fills depends on a's length. The
      layout below assumed the splat filled exactly the gap, so `f(*[1, 2], 3)`
      on `def f(a, b)` bound b = 3 and raised nothing, and `g(*[], 1, 2, 3)`
-     bound nils. For a plain positional list (no rest, keyword or leading
-     optional), gather every positional into one array, as CRuby does, then
-     check the count and bind from it. */
+     bound nils. For a plain positional list, gather every positional into
+     one array, as CRuby does, then check the count and bind from it. */
   int splat_all = 0;
-  {
-    int nspl = 0, sk = -1;
-    for (int k = 0; k < pos_argc; k++)
-      if (argv && nt_kind(nt, argv[k]) == NK_SplatNode) { nspl++; sk = k; }
-    int plain = nspl == 1 && sk < pos_argc - 1 && kwh < 0 && m->rest_idx < 0 &&
-                m->kwrest_idx < 0 && !m->cs_synth && !opt_before_required(m);
-    for (int i = 0; i < m->nparams && plain; i++)
-      if (!m->pnames[i] || (m->pnames[i][0] == '_' && m->pnames[i][1] == '_') ||
-          callee_has_kwarg(c, m, m->pnames[i])) plain = 0;
-    if (plain) {
-      int ct = ++g_tmp;
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ct, ct);
-      for (int k = 0; k < pos_argc; k++) {
-        Buf ab; memset(&ab, 0, sizeof ab);
-        if (nt_kind(nt, argv[k]) == NK_SplatNode) {
-          int inner = nt_ref(nt, argv[k], "expression");
-          if (inner < 0) {
-            if (!emit_anon_rest_ref(c, argv[k], &ab)) buf_puts(&ab, "sp_PolyArray_new()");
-          }
-          else {
-            buf_puts(&ab, "sp_poly_to_poly_array(sp_splat_to_array(");
-            emit_boxed(c, inner, &ab);
-            buf_puts(&ab, "))");
-          }
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_PolyArray_append_all(_t%d, %s);\n", ct, ab.p ? ab.p : "NULL");
-        }
-        else {
-          emit_boxed(c, argv[k], &ab);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", ct, ab.p ? ab.p : "sp_box_nil()");
-        }
-        free(ab.p);
-      }
-      int pos_required = 0, pos_params = 0;
-      positional_arity(c, m, &pos_required, &pos_params);
-      char expbuf[48];
-      if (pos_required == pos_params) snprintf(expbuf, sizeof expbuf, "expected %d", pos_params);
-      else snprintf(expbuf, sizeof expbuf, "expected %d..%d", pos_required, pos_params);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre,
-                 "if (_t%d->len < %d || _t%d->len > %d) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments (given %%lld, %s)\", (long long)_t%d->len));\n",
-                 ct, pos_required, ct, pos_params, expbuf, ct);
-      splat_all = 1; splat_idx = 0; splat_tmp = ct; splat_at = TY_POLY_ARRAY;
-    }
+  if (splat_gather_applies(c, m, argv, pos_argc, kwh)) {
+    splat_all = 1; splat_idx = 0; splat_tmp = emit_splat_gather(c, m, argv, pos_argc);
+    splat_at = TY_POLY_ARRAY;
   }
   for (int k = 0; k < pos_argc && !splat_all; k++) {
     if (argv && nt_type(nt, argv[k]) && sp_streq(nt_type(nt, argv[k]), "SplatNode")) {
@@ -7359,8 +7393,10 @@ else if (splat_tmp >= 0 && i >= splat_idx &&
       }
       /* An optional param may fall past the end of a (runtime-sized) splat
          array; the arity check guarantees the required params are present, so
-         guard only the optionals and fall back to their default. */
-      if (i >= m->nrequired) {
+         guard only the optionals and fall back to their default. An optional
+         ahead of a required keyword sits below nrequired, which counts that
+         keyword, so its default says it is one. */
+      if (i >= m->nrequired || (m->pdefault && m->pdefault[i] >= 0)) {
         Buf db; memset(&db, 0, sizeof db);
         emit_arg_or_default(c, m, i, -1, &db);
         TyKind pt = sp ? sp->type : TY_INT;
@@ -7839,7 +7875,14 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
      the rest collection spreads the operand itself. */
   int splat_idx_d = -1, splat_tmp_d = -1; TyKind splat_at_d = TY_UNKNOWN;
   int rest_given_d = -1;   /* the measured count, refused after the arguments run */
-  for (int k = 0; m && k < pos_argc_d; k++) {
+  /* a splat with positionals after it binds from all of them gathered, as
+     in emit_args_filled: `O.new.o(*[1], 3)` bound the 3 nowhere */
+  int splat_all_d = 0;
+  if (m && splat_gather_applies(c, m, argv, pos_argc_d, kwh_d)) {
+    splat_all_d = 1; splat_idx_d = 0; splat_at_d = TY_POLY_ARRAY;
+    splat_tmp_d = emit_splat_gather(c, m, argv, pos_argc_d);
+  }
+  for (int k = 0; m && k < pos_argc_d && !splat_all_d; k++) {
     if (argv && nt_type(nt, argv[k]) && sp_streq(nt_type(nt, argv[k]), "SplatNode") &&
         (m->rest_idx >= 0
            ? (k == 0 && pos_argc_d == 1 && kwh_d < 0 && k < m->rest_idx &&
@@ -8045,9 +8088,16 @@ else {
           emit_boxed_text(c, set, raw.p ? raw.p : "0", &eb); free(raw.p);
         }
         else emit_array_elem_at(splat_at_d, splat_tmp_d, off, &eb);
+        /* the gathered positionals are boxed: a typed parameter unboxes */
+        if (splat_all_d && p && p->type != TY_POLY && p->type != TY_UNKNOWN) {
+          Buf ub; memset(&ub, 0, sizeof ub);
+          emit_unbox_text(c, p->type, eb.p ? eb.p : "sp_box_nil()", &ub);
+          free(eb.p); eb = ub;
+        }
         /* an optional param may fall past the (runtime-sized) array end; the
-           arity check covers required params, so guard only the optionals */
-        if (k >= m->nrequired) {
+           arity check covers required params, so guard only the optionals --
+           by its default, since nrequired also counts a required keyword */
+        if (k >= m->nrequired || (m->pdefault && m->pdefault[k] >= 0)) {
           Buf db; memset(&db, 0, sizeof db);
           emit_arg_or_default(c, m, k, -1, &db);
           TyKind pt = p ? p->type : TY_INT;

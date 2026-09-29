@@ -311,7 +311,7 @@ build/csrc/codegen_util.o: build/csrc/sp_rt_names.h
 
 FORCE:
 
-build/csrc/sp_parse_lib.o: src/spinel_parse.c $(PRISM_LIB) | build/csrc
+build/csrc/sp_parse_lib.o: src/spinel_parse.c src/sp_macro.c $(PRISM_LIB) | build/csrc
 	$(CC) $(CFLAGS) -I$(PRISM_INC) -c src/spinel_parse.c -o $@
 
 # The compiler links the regexp engine so it can compile a literal at build
@@ -1036,6 +1036,12 @@ reject-test: $(SPINEL)
 	  echo "reject-test: FAIL (a const_get with a run-time name on a class value compiled)"; ok=0; \
 	else grep -q "const_get with a name known only at run time" "$$tmp/cg.out" || \
 	  { echo "reject-test: FAIL (a run-time const_get refused without saying why)"; sed -n 1,5p "$$tmp/cg.out"; ok=0; }; fi; \
+	for t in test/reject/macro_*.rb; do \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/mc.c" >"$$tmp/mc.out" 2>&1; then \
+	  echo "reject-test: FAIL ($$t: a macro over state or a name it cannot compute was expanded)"; ok=0; \
+	else grep -qE "unsupported send with a runtime method name|unsupported call: .*CallNode .module_eval.|no class in the program defines" "$$tmp/mc.out" || \
+	  { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/mc.out"; ok=0; }; fi; \
+	done; \
 	t=test/reject/def_delegators_splat.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/dd.c" >"$$tmp/dd.out" 2>&1; then \
 	  echo "reject-test: FAIL (a def_delegators the parser could not rewrite compiled)"; ok=0; \

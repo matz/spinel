@@ -264,6 +264,8 @@ static char *cstr(pm_constant_id_t id) {
   return buf;
 }
 
+#include "sp_macro.c"
+
 /* ---- String escaping ---- */
 static char *escape_str(const uint8_t *src, size_t len) {
   /* Worst case: every char becomes %XX = 3x */
@@ -3939,6 +3941,11 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
   source = sp_splice_builtins(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_extras(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_enumerator(source, argv0, &fsl, &fsl_n);
+
+  /* class-body macro calls (module_eval'd templates, computed
+     attach_function / const_set names) expanded in place; line count kept */
+  { char *mx = sp_expand_class_macros(source);
+    if (mx) { free(source); source = mx; } }
 
   /* Debug: build the buffer-line -> (file, original line) map from the
      marker-annotated buffer *before* syntax-sugar rewriting (which could

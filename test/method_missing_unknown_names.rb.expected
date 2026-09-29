@@ -1,0 +1,3 @@
+"black(10,5)"
+"op avg on black(10,5) with []"
+"op linear on black(10,5) with [1, 2]"

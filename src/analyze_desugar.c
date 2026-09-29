@@ -12039,3 +12039,290 @@ int desugar_singleton_attr(Compiler *c) {
 }
 
 
+
+/* ---- method_missing ----
+ *
+ * A call no definition in the program answers, and no core class answers by
+ * that name either, reaches method_missing when a class defines one (ruby-vips
+ * runs every image operation that way: `Vips::Image.black(10, 5)`,
+ * `image.avg`). The compiler binds names statically, so such a call is
+ * rewritten to the hook itself:
+ *
+ *   K.name(args)   ->  K.method_missing(:name, args)    (K defines self.method_missing)
+ *   recv.name(args) -> recv.method_missing(:name, args) (some class defines it)
+ *   name(args)      -> method_missing(:name, args)      (inside such a class)
+ *
+ * The block, if any, stays on the call. A receiver whose class has no hook
+ * answers NoMethodError, which is what it answered before. */
+
+static void mm_rewrite(NodeTable *nt, int id, const char *name) {
+  int an = nt_ref(nt, id, "arguments");
+  int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  int *nv = malloc(sizeof(int) * (size_t)(ac + 1));
+  if (!nv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  nv[0] = fwd_new_node_like(nt, id, "SymbolNode");
+  nt_node_set_str(nt, nv[0], "value", name);
+  nt_node_set_str(nt, nv[0], "unescaped", name);
+  for (int i = 0; i < ac; i++) nv[i + 1] = av[i];
+  if (an < 0) { an = fwd_new_node_like(nt, id, "ArgumentsNode"); nt_node_set_ref(nt, id, "arguments", an); }
+  nt_node_set_arr(nt, an, "arguments", nv, ac + 1);
+  free(nv);
+  nt_node_set_str(nt, id, "name", "method_missing");
+}
+
+static const char *const MODULE_METHOD_NAMES[] = {
+#include "module_method_names.inc"
+  NULL };
+
+/* `x=`: an attr_writer / attr_accessor of the class chain (the writer
+   registry is keyed by the attribute's name) */
+static int mm_writer_answers(Compiler *c, int k, const char *name) {
+  if (!name_is_plain_setter(name)) return 0;
+  char base[256];
+  size_t l = strlen(name);
+  if (l < 2 || l > sizeof base) return 0;
+  memcpy(base, name, l - 1); base[l - 1] = 0;
+  return comp_writer_in_chain(c, k, base, NULL);
+}
+
+/* Does call `id` of `name` reach a method_missing hook (and nothing else)? */
+static int mm_should_rewrite(Compiler *c, int id, const char *name, int any_inst) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* defined anywhere as an instance or class method, or a reader: a call
+     some class answers; leave it to the ordinary dispatch */
+  int defined = comp_method_index(c, name) >= 0;
+  for (int k = 0; k < c->nclasses && !defined; k++)
+    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL) ||
+        mm_writer_answers(c, k, name) ||
+        comp_cmethod_in_chain(c, k, name, NULL) >= 0) defined = 1;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv >= 0) {
+    NodeKind rk = nt_kind(nt, recv);
+    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+      int ci = comp_class_index(c, nt_str(nt, recv, "name"));
+      if (ci < 0 || comp_cmethod_in_chain(c, ci, name, NULL) >= 0) return 0;
+      if (comp_cmethod_in_chain(c, ci, "method_missing", NULL) < 0) return 0;
+      return 1;
+    }
+    else {
+      if (defined || !any_inst) return 0;
+      return 1;
+    }
+  }
+  else {
+    int sc = id < c->node_cap ? c->nscope[id] : 0;
+    Scope *s = (sc >= 0 && sc < c->nscopes) ? &c->scopes[sc] : NULL;
+    if (!s || s->class_id < 0) return 0;
+    /* self's own chain answers it (a global definition elsewhere, Set#add,
+       is no answer for an Image) */
+    if (s->is_cmethod ? comp_cmethod_in_chain(c, s->class_id, name, NULL) >= 0
+                      : (comp_method_in_chain(c, s->class_id, name, NULL) >= 0 ||
+                         comp_reader_in_chain(c, s->class_id, name, NULL) ||
+                         mm_writer_answers(c, s->class_id, name)))
+      return 0;
+    if (comp_method_index(c, name) >= 0 && !core_method_name(name)) return 0;   /* a top-level def */
+    int hook = s->is_cmethod ? comp_cmethod_in_chain(c, s->class_id, "method_missing", NULL)
+                             : comp_method_in_chain(c, s->class_id, "method_missing", NULL);
+    if (hook < 0) return 0;
+    return 1;
+  }
+  return 0;
+}
+
+int rewrite_method_missing_calls(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int any_inst = 0, any_cls = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_method_in_class(c, k, "method_missing") >= 0) any_inst = 1;
+    if (comp_cmethod_in_class(c, k, "method_missing") >= 0) any_cls = 1;
+  }
+  if (!any_inst && !any_cls) return 0;
+  int n0 = nt->count, first_new = n0, changed = 0;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm0 = nt_str(nt, id, "name");
+    /* Kernel's and Module's own methods (puts, raise, attr_accessor, ...)
+       are every object's or every class body's */
+    if (!nm0 || !*nm0 || name_in_list(MODULE_METHOD_NAMES, nm0)) continue;
+    if (sp_streq(nm0, "method_missing") || strncmp(nm0, "__", 2) == 0) continue;
+    /* a core name on another receiver may be a builtin's method; a
+       receiverless one is self's, decided by self's class chain below */
+    if (core_method_name(nm0) && (nt_ref(nt, id, "receiver") >= 0 || name_in_list(OBJECT_METHOD_NAMES, nm0)))
+      continue;
+    if (strncmp(nm0, "ffi_", 4) == 0 || strncmp(nm0, "native_", 7) == 0) continue;
+    /* a copy: the table grows under the name while the call is rewritten */
+    char *name = strdup(nm0);
+    if (!name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (mm_should_rewrite(c, id, name, any_inst)) { mm_rewrite(nt, id, name); changed = 1; }
+    free(name);
+  }
+  if (changed) {
+    comp_grow_node_arrays(c);
+    for (int id = 0; id < n0; id++) {
+      if (nt_kind(nt, id) != NK_CallNode) continue;
+      int an = nt_ref(nt, id, "arguments");
+      int sc = c->nscope[id];
+      if (an >= first_new) c->nscope[an] = sc;
+      if (an >= 0) {
+        int ac = 0; const int *av = nt_arr(nt, an, "arguments", &ac);
+        for (int j = 0; j < ac; j++) if (av[j] >= first_new) c->nscope[av[j]] = sc;
+      }
+    }
+  }
+  return changed;
+}
+
+/* ---- respond_to? consults respond_to_missing? ----
+ *
+ * A class answering names through method_missing says so with
+ * respond_to_missing?; CRuby's respond_to? asks it after the class's own
+ * methods. When the program defines one, `x.respond_to?(n)` becomes
+ *
+ *   x.respond_to?(n) || x.respond_to_missing?(n, false)
+ *
+ * (`respond_to?(n, all)` passes `all` on). A program defining respond_to?
+ * itself is left alone.
+ * (Object's default answers false, builtins/method_missing.rb). Only for a
+ * receiver and a name read twice without a side effect. */
+static int rtm_pure(const NodeTable *nt, int n) {
+  if (n < 0) return 1;
+  NodeKind k = nt_kind(nt, n);
+  return k == NK_SelfNode || k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_ConstantReadNode || k == NK_SymbolNode || k == NK_StringNode;
+}
+
+/* Does class `cn` (any of its bodies) define `def self.<mname>`? */
+static int rtm_class_hook(const NodeTable *nt, int n0, const char *cn, const char *mname) {
+  for (int m = 0; m < n0; m++) {
+    NodeKind mk = nt_kind(nt, m);
+    if (mk != NK_ClassNode && mk != NK_ModuleNode) continue;
+    int cp = nt_ref(nt, m, "constant_path");
+    const char *mn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    if (!mn || !sp_streq(mn, cn)) continue;
+    int b = nt_ref(nt, m, "body");
+    int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int k = 0; k < bn; k++) {
+      if (nt_kind(nt, bs[k]) != NK_DefNode || nt_ref(nt, bs[k], "receiver") < 0) continue;
+      const char *dn = nt_str(nt, bs[k], "name");
+      if (dn && sp_streq(dn, mname)) return 1;
+    }
+  }
+  return 0;
+}
+
+int desugar_respond_to_missing(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, inst = 0, sing = 0, changed = 0;
+  /* the rewrite leans on Object's default hook, which the parser splices
+     from builtins/method_missing.rb -- not there without the builtins */
+  if (getenv("SPINEL_NO_BUILTINS")) return 0;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (!dn || !sp_streq(dn, "respond_to_missing?")) continue;
+    if (nt_ref(nt, d, "receiver") < 0) inst = 1; else sing = 1;
+  }
+  if (!inst && !sing) return 0;
+  /* The fallback goes through __spinel_rtm, dispatched on the receiver at run
+     time: false on Object (the default hook, builtins/method_missing.rb) and
+     in a class with its own respond_to?, which answers for itself; the
+     class's respond_to_missing? in one that defines that. A class object
+     keeps its singleton hook unless it defines self.respond_to? too. */
+  for (int m = 0; m < n0; m++) {
+    if (nt_kind(nt, m) != NK_ClassNode) continue;
+    int b = nt_ref(nt, m, "body");
+    int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    int own = 0, hook = 0;
+    for (int k = 0; k < bn; k++) {
+      /* a def wrapped in `private` / `protected` / ... counts as one */
+      int dd = fwd_body_def(nt, bs[k]);
+      const char *dn = dd >= 0 && nt_ref(nt, dd, "receiver") < 0 ? nt_str(nt, dd, "name") : NULL;
+      if (dn && sp_streq(dn, "respond_to?")) own = 1;
+      if (dn && sp_streq(dn, "respond_to_missing?")) hook = 1;
+    }
+    if (!own && !hook) continue;
+    int cpn = nt_ref(nt, m, "constant_path");
+    const char *cnm = cpn >= 0 ? nt_str(nt, cpn, "name") : NULL;
+    if (cnm && sp_streq(cnm, "Object")) continue;
+    /* def __spinel_rtm(name, all = false) = false, or
+       = respond_to_missing?(name, all) */
+    int d = fwd_new_node_like(nt, m, "DefNode");
+    int ps = fwd_new_node_like(nt, m, "ParametersNode");
+    int r1 = fwd_new_node_like(nt, m, "RequiredParameterNode");
+    nt_node_set_str(nt, r1, "name", "name");
+    int o1 = fwd_new_node_like(nt, m, "OptionalParameterNode");
+    nt_node_set_str(nt, o1, "name", "all");
+    nt_node_set_ref(nt, o1, "value", fwd_new_node_like(nt, m, "FalseNode"));
+    nt_node_set_arr(nt, ps, "requireds", &r1, 1);
+    nt_node_set_arr(nt, ps, "optionals", &o1, 1);
+    int db = fwd_new_node_like(nt, m, "StatementsNode");
+    int fv;
+    if (own) fv = fwd_new_node_like(nt, m, "FalseNode");
+    else {
+      fv = fwd_new_node_like(nt, m, "CallNode");
+      int fa = fwd_new_node_like(nt, m, "ArgumentsNode");
+      int rd1 = fwd_new_node_like(nt, m, "LocalVariableReadNode");
+      nt_node_set_str(nt, rd1, "name", "name"); nt_node_set_int(nt, rd1, "depth", 0);
+      int rd2 = fwd_new_node_like(nt, m, "LocalVariableReadNode");
+      nt_node_set_str(nt, rd2, "name", "all"); nt_node_set_int(nt, rd2, "depth", 0);
+      int fav[2] = { rd1, rd2 };
+      nt_node_set_arr(nt, fa, "arguments", fav, 2);
+      nt_node_set_str(nt, fv, "name", "respond_to_missing?");
+      nt_node_set_ref(nt, fv, "arguments", fa);
+    }
+    nt_node_set_arr(nt, db, "body", &fv, 1);
+    nt_node_set_str(nt, d, "name", "__spinel_rtm");
+    nt_node_set_ref(nt, d, "parameters", ps);
+    nt_node_set_ref(nt, d, "body", db);
+    int *out = malloc(sizeof(int) * (size_t)(bn + 1));
+    if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    out[0] = d;
+    if (bn) memcpy(out + 1, bs, sizeof(int) * (size_t)bn);
+    nt_node_set_arr(nt, b, "body", out, bn + 1);
+    free(out);
+    changed = 1;
+  }
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "respond_to?") || nt_ref(nt, id, "block") >= 0) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    int an = nt_ref(nt, id, "arguments");
+    int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    if (ac < 1 || ac > 2 || !rtm_pure(nt, recv) || !rtm_pure(nt, av[0])) continue;
+    /* include_all, when given, is passed on (a literal or a local) */
+    if (ac == 2 && !rtm_pure(nt, av[1]) && nt_kind(nt, av[1]) != NK_TrueNode &&
+        nt_kind(nt, av[1]) != NK_FalseNode) continue;
+    /* a class object asks its own singleton hook; anything else the
+       instance ones (Object's default behind them) */
+    const char *hook = "__spinel_rtm";
+    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
+      const char *rc = nt_str(nt, recv, "name");
+      if (!rc || !rtm_class_hook(nt, n0, rc, "respond_to_missing?") ||
+          rtm_class_hook(nt, n0, rc, "respond_to?")) continue;
+      hook = "respond_to_missing?";
+    }
+    else if (!inst) continue;
+    int q = av[0];
+    /* the original call, moved to a fresh node */
+    int orig = fwd_new_node_like(nt, id, "CallNode");
+    int oa = fwd_new_node_like(nt, id, "ArgumentsNode");
+    nt_node_set_arr(nt, oa, "arguments", av, ac);
+    nt_node_set_str(nt, orig, "name", "respond_to?");
+    if (recv >= 0) nt_node_set_ref(nt, orig, "receiver", recv);
+    nt_node_set_ref(nt, orig, "arguments", oa);
+    int miss = fwd_new_node_like(nt, id, "CallNode");
+    int ma = fwd_new_node_like(nt, id, "ArgumentsNode");
+    int mv[2] = { nt_clone_subtree(nt, q),
+                  ac == 2 ? nt_clone_subtree(nt, av[1]) : fwd_new_node_like(nt, id, "FalseNode") };
+    nt_node_set_arr(nt, ma, "arguments", mv, 2);
+    nt_node_set_str(nt, miss, "name", hook);
+    if (recv >= 0) nt_node_set_ref(nt, miss, "receiver", nt_clone_subtree(nt, recv));
+    nt_node_set_ref(nt, miss, "arguments", ma);
+    nt_node_reset(nt, id, "OrNode");
+    nt_node_set_ref(nt, id, "left", orig);
+    nt_node_set_ref(nt, id, "right", miss);
+    changed = 1;
+  }
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}

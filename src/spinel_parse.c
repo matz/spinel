@@ -3527,6 +3527,51 @@ static char *sp_splice_builtin_extra(char *source, const char *exe_path, SpBuilt
   return resolve_plain_requires(ns, exe_path, fsl, fsl_n);
 }
 
+/* `def NAME` / `def self.NAME` / `def T.NAME` (any spacing after def),
+   outside a comment */
+static int sp_src_defines_name(const char *src, const char *word) {
+  size_t wl = strlen(word);
+  for (const char *p = strstr(src, word); p; p = strstr(p + 1, word)) {
+    if (sp_req_ident_char(p[wl]) || (p > src && sp_req_ident_char(p[-1]) && p[-1] != '.')) continue;
+    const char *q = p;
+    /* a receiver: `self.` or a constant path, `def T.method_missing` */
+    if (q > src && q[-1] == '.') {
+      const char *r = q - 1;
+      while (r > src && (sp_req_ident_char(r[-1]) || r[-1] == ':')) r--;
+      if (r < q - 1) q = r;
+    }
+    const char *w = q;
+    while (w > src && (w[-1] == ' ' || w[-1] == '\t')) w--;
+    if (w == q || w - src < 3 || strncmp(w - 3, "def", 3) != 0) continue;
+    if (w - src > 3 && sp_req_ident_char(w[-4])) continue;
+    const char *bol = w - 3;
+    while (bol > src && bol[-1] != '\n') bol--;
+    const char *t = bol; while (*t == ' ' || *t == '\t') t++;
+    if (*t == '#') continue;
+    return 1;
+  }
+  return 0;
+}
+
+/* a hook the default ones stand behind: method_missing or respond_to_missing? */
+static int sp_src_defines_hook(const char *src) {
+  return sp_src_defines_name(src, "method_missing") || sp_src_defines_name(src, "respond_to_missing?");
+}
+
+/* builtins/method_missing.rb (Object#method_missing): a program that defines
+   a method_missing of its own, and not Object's */
+static char *sp_splice_method_missing(char *source, const char *exe_path,
+                                      unsigned char **fsl, size_t *fsl_n) {
+  if (getenv("SPINEL_NO_BUILTINS") || !sp_src_defines_hook(source)) return source;
+  const char *head = "require \"builtins/method_missing\"\n";
+  size_t sl = strlen(source), hl = strlen(head);
+  char *ns = (char *)malloc(sl + hl + 1);
+  if (!ns) return source;
+  memcpy(ns, head, hl); memcpy(ns + hl, source, sl + 1);
+  free(source);
+  return resolve_plain_requires(ns, exe_path, fsl, fsl_n);
+}
+
 static char *sp_splice_builtin_extras(char *source, const char *exe_path,
                                        unsigned char **fsl, size_t *fsl_n) {
   if (getenv("SPINEL_NO_BUILTINS")) return source;
@@ -4586,6 +4631,7 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
   }
   source = sp_splice_builtins(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_extras(source, argv0, &fsl, &fsl_n);
+  source = sp_splice_method_missing(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_enumerator(source, argv0, &fsl, &fsl_n);
 
   /* Debug: build the buffer-line -> (file, original line) map from the

@@ -1,6 +1,5 @@
-# method_missing is not honored as a missing-method hook (spinel resolves every
-# call statically), but a class may still define and call it explicitly like any
-# other method. Defining it emits a compile-time warning to stderr.
+# A class may define method_missing and call it explicitly like any other
+# method (a call nothing defines reaches it too: method_missing_unknown_names).
 class Proxy
   def initialize(label)
     @label = label

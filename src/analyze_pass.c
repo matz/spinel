@@ -6626,9 +6626,10 @@ int infer_param_types(Compiler *c) {
         changed |= struct_super_types_members(c, id, s);
         continue;
       }
-      int p = comp_super_parent(c, s->class_id, 0);
+      int p = comp_super_parent(c, s->class_id, s->is_cmethod);
       if (p < 0) continue;
-      int pmi = comp_method_in_chain(c, p, s->name, NULL);
+      int pmi = s->is_cmethod ? comp_cmethod_in_chain(c, p, s->name, NULL)
+                              : comp_method_in_chain(c, p, s->name, NULL);
       if (pmi < 0) continue;
       if (sp_streq(ty, "ForwardingSuperNode")) changed |= bind_zsuper_params(c, id, s, &c->scopes[pmi]);
       else changed |= bind_call_params(c, id, pmi);

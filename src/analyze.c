@@ -14966,6 +14966,7 @@ static LocalVar *strbuf_poly_gvar(Compiler *c, int node, const char **grn) {
    through the branches of a conditional and the writes of a poly variable
    it reads: a string-valued expression marks for a fresh-handle wrap, an
    eligible string local promotes. */
+static int strbuf_demand_elem_arg(Compiler *c, int an);
 static int strbuf_demand_value_leaves(Compiler *c, int node, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 16) return 0;
@@ -15019,6 +15020,12 @@ static int strbuf_demand_value_leaves(Compiler *c, int node, int depth) {
     }
     default: {
       if (c->strbuf_box[node]) return 0;
+      /* an element read (`v = h[:a]`): the variable names the String the
+         container holds, so the container's Strings become handles */
+      if (infer_type(c, node) == TY_POLY) {
+        int d = strbuf_demand_elem_arg(c, node);
+        return d > 0 ? d : 0;
+      }
       if (infer_type(c, node) != TY_STRING) return 0;
       c->strbuf_box[node] = 1;
       return 1;
@@ -15083,8 +15090,12 @@ static int an_subtree_hands_to_appender(Compiler *c, int node, const char *vn, i
       if (q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j)))
         return 1;
       /* or hands its parameter on to one that does, a few levels deep */
-      if (q && q->is_param && depth < 48 && m->body >= 0 &&
-          an_subtree_hands_to_appender(c, m->body, m->pnames[j], depth + 8)) return 1;
+      if (q && q->is_param && m->body >= 0) {
+        /* past the bound the chain is taken as appending: a String shared
+           that is never appended costs a handle, one not shared loses it */
+        if (depth >= 48) return 1;
+        if (an_subtree_hands_to_appender(c, m->body, m->pnames[j], depth + 8)) return 1;
+      }
     }
   }
   int nr = nt_num_refs(nt, node);
@@ -15274,6 +15285,83 @@ static int promote_local_alias_pair(Compiler *c, Scope *ws, const char *srcn, co
   return changed;
 }
 
+static int dyn_param_appended(Compiler *c, int mi, int j);
+/* Is parameter j of method mi appended to, in place or by a method it is
+   handed on to (a few levels deep)? The hand-on is asked of the body
+   directly: the passes that mark a parameter handed on as appended
+   (convert_byref_handle_params) run after this fixpoint. */
+static int an_param_appended_deep_d(Compiler *c, int mi, int j, int depth) {
+  const NodeTable *nt = c->nt;
+  if (mi < 0 || mi >= c->nscopes) return 0;
+  /* a chain longer than the bound is taken as appending: sharing a String
+     that is never appended costs a handle, missing one loses the append */
+  if (depth > 8) return 1;
+  if (dyn_param_appended(c, mi, j)) return 1;
+  Scope *m = &c->scopes[mi];
+  if (j < 0 || j >= m->nparams || !m->pnames[j] || m->body < 0) return 0;
+  const char *pn = m->pnames[j];
+  LocalVar *q = scope_local(m, pn);
+  if (!q || !q->is_param || q->is_block_param) return 0;
+  if (an_subtree_hands_to_appender(c, m->body, pn, 8)) return 1;
+  /* or a `super` hands it on: a bare one at its own position, one with
+     arguments where it names it */
+  int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
+  if (t < 0) return 0;
+  Scope *tm = &c->scopes[t];
+  for (int pass = 0; pass < 2; pass++) {
+    NodeKind sk = pass ? NK_ForwardingSuperNode : NK_SuperNode;
+    for (int sq = comp_kind_first(c, sk); sq >= 0; sq = comp_kind_next(c, sq)) {
+      if (nt_kind(nt, sq) != sk || comp_scope_of(c, sq) != m) continue;
+      for (int k = 0; k < tm->nparams; k++) {
+        int hit;
+        if (pass) hit = zsuper_param_source(c, m, tm, k) == j;
+        else {
+          int an = arg_layout_param_node(c, tm, sq, k, NULL);
+          hit = an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
+                sp_streq(nt_str(nt, an, "name"), pn);
+        }
+        if (hit && an_param_appended_deep_d(c, t, k, depth + 1)) return 1;
+      }
+    }
+  }
+  return 0;
+}
+static int an_param_appended_deep(Compiler *c, int mi, int j) {
+  return an_param_appended_deep_d(c, mi, j, 0);
+}
+/* An element read handed to a parameter that is appended to (`m(h[:a])`,
+   `m(a[0][1])`, `m(@a[0])`): the container's Strings have to become handles
+   together, or the read stays a copy and the callee appends to it instead of
+   the stored String. The same demand the container-store rules make when a
+   shared String is put IN; here the evidence is what is done to what comes
+   OUT. Answers -1 when `an` is no element read of a container, else whether
+   it changed anything. */
+static int strbuf_demand_elem_arg(Compiler *c, int an) {
+  const NodeTable *nt = c->nt;
+  if (an < 0 || nt_kind(nt, an) != NK_CallNode || !container_elem_read_p(nt, an)) return -1;
+  int rr = nt_ref(nt, an, "receiver");
+  if (rr < 0) return -1;
+  /* a container a variable holds, at the bottom of any element reads: an
+     Array a call answers (`a.map { .. }[0]`) is a fresh one nothing else
+     names, and demanding its sources only widened what they flow into */
+  { int base = rr;
+    for (int k = 0; k < 16 && nt_kind(nt, base) == NK_CallNode && container_elem_read_p(nt, base); k++)
+      base = nt_ref(nt, base, "receiver");
+    if (base < 0 || (nt_kind(nt, base) != NK_LocalVariableReadNode &&
+                     nt_kind(nt, base) != NK_InstanceVariableReadNode)) return -1; }
+  TyKind rt = infer_type(c, rr);
+  if (ty_is_array(rt) || ty_is_hash(rt)) {
+    if (nt_kind(nt, rr) == NK_LocalVariableReadNode) {
+      const char *cn = nt_str(nt, rr, "name");
+      Scope *cs = cn ? comp_scope_of(c, rr) : NULL;
+      return cn && cs ? strbuf_demand_container_stores(c, cn, cs) : 0;
+    }
+  }
+  else if (!container_elem_read_p(nt, rr)) return -1;
+  /* an element of an ivar's container, of another element, of a method's
+     result: the stores that reach it, as for a mutator through one */
+  return strbuf_container_source_walk(c, rr, 0, SB_DEMAND);
+}
 static int promote_shared_stored_strings(Compiler *c) {
   int changed = 0;
   sb_store_valid = 0;   /* this run's store index is built on first use */
@@ -15497,16 +15585,21 @@ static int promote_shared_stored_strings(Compiler *c) {
     /* only a call we can pin to one body: the callee is what says whether the
        argument is mutated, and a receiver we cannot resolve has no single one */
     int curecv = nt_ref(nt, cu, "receiver");
+    int objrecv = 0;
     if (curecv >= 0) {
       NodeKind rk = nt_kind(nt, curecv);
-      if (rk != NK_SelfNode && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
+      /* an object receiver's class names the one body as well (`k.m(h[:a])`) */
+      if (rk != NK_SelfNode && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) {
+        if (!ty_is_object(infer_type(c, curecv))) continue;
+        objrecv = 1;
+      }
     }
     const char *cun = nt_str(nt, cu, "name");
     if (!cun) continue;
-    int cmi = an_any_scope_by_name(c, cun);
+    int cmi = objrecv ? an_call_target_mi(c, cu) : an_any_scope_by_name(c, cun);
     if (cmi < 0) continue;
     for (int j = 0; j < c->scopes[cmi].nparams; j++) {
-      if (!an_param_mutated_in_place(c, cmi, j)) continue;
+      int app5 = an_param_mutated_in_place(c, cmi, j);
       /* the argument parameter j binds, a keyword's by name. One that comes
          out of a splat's or a `**`'s operand is an element read like
          `push(arr[0])` below, with the operand the container: `m(*arr)` and
@@ -15514,8 +15607,21 @@ static int promote_shared_stored_strings(Compiler *c) {
          appends never reached them, nor the local stored there. */
       int spread5 = -1;
       int an5 = arg_layout_param_node(c, &c->scopes[cmi], cu, j, &spread5);
+      /* An element is appended to as surely when the callee hands its
+         parameter on to a method that appends to it: `def m1(s) = m2(s)`
+         called `m1(h[:a])` copied the element as `m2(h[:a])` would have,
+         and the append never reached the Hash. Asked only for an element
+         or a reader argument, the cases below that take it. */
+      if (!app5) {
+        int er5 = an5 >= 0 && nt_kind(nt, an5) == NK_CallNode ? nt_ref(nt, an5, "receiver") : -1;
+        TyKind et5 = er5 >= 0 ? infer_type(c, er5) : TY_UNKNOWN;
+        int elem5 = spread5 >= 0 || ty_is_array(et5) || ty_is_hash(et5) || ty_is_object(et5) ||
+                    (er5 >= 0 && container_elem_read_p(nt, er5));
+        if (!elem5 || !an_param_appended_deep(c, cmi, j)) continue;
+      }
       if (spread5 >= 0) changed |= strbuf_container_source_walk(c, spread5, 0, SB_DEMAND);
       if (an5 < 0) continue;
+      if (!app5 && nt_kind(nt, an5) != NK_CallNode) continue;
       char ivb5[300]; int defc5 = -1; const char *ivn5 = NULL;
       int box_node = -1;
       /* Only a reader CALL. A bare `@buf` argument is an lvalue the caller
@@ -15544,6 +15650,10 @@ static int promote_shared_stored_strings(Compiler *c) {
           if (cn5 && cs5 && strbuf_demand_container_stores(c, cn5, cs5)) changed = 1;
           continue;
         }
+        /* the element of an ivar's container, of another element
+           (`h[:a][:b]`) or of a method's result */
+        { int d5 = strbuf_demand_elem_arg(c, an5);
+          if (d5 >= 0) { changed |= d5; continue; } }
         /* `push(obj.buf)` -- a reader call over an object-typed receiver */
         if (!ty_is_object(rt5)) continue;
         defc5 = ty_object_class(rt5);
@@ -15800,6 +15910,34 @@ static int promote_shared_stored_strings(Compiler *c) {
           !block_yields_param_to_lender(c, blk4, sp4, &cbl)) continue;
       changed |= strbuf_store_leaf(c, recv4, 0, SB_DEMAND);
       if (sv4->type != TY_STRBUF || !sv4->str_shared) { sv4->type = TY_STRBUF; sv4->str_shared = 1; changed = 1; }
+      continue;
+    }
+    /* `h.each_value { |v| v << "!" }`, `h.each { |k, v| ... }`: the value
+       parameter binds the Hash's String, as an Array's element parameter
+       does. Its stores become handles and the parameter binds the box, so
+       the append reaches the String the Hash holds. */
+    else if ((sp_streq(itn, "each_value") ||
+              ((sp_streq(itn, "each") || sp_streq(itn, "each_pair")) && block_param_name(c, blk4, 1))) &&
+             recv4 >= 0 && (nt_kind(nt, recv4) == NK_LocalVariableReadNode ||
+                            nt_kind(nt, recv4) == NK_InstanceVariableReadNode) &&
+             ty_is_hash(infer_type(c, recv4))) {
+      const char *hp4 = block_param_name(c, blk4, sp_streq(itn, "each_value") ? 0 : 1);
+      Scope *hs4 = hp4 ? comp_scope_of(c, blk4) : NULL;
+      LocalVar *hv4 = hs4 ? scope_local(hs4, hp4) : NULL;
+      if (!hv4) continue;
+      if (hv4->type != TY_UNKNOWN && hv4->type != TY_STRING && hv4->type != TY_STRBUF &&
+          hv4->type != TY_POLY) continue;
+      if (strbuf_mut_kind(c, hp4, hs4) != 1 && !cap_wrap_mutates_param(c, blk4, hp4) &&
+          !an_subtree_hands_to_appender(c, nt_ref(nt, blk4, "body"), hp4, 0)) continue;
+      if (nt_kind(nt, recv4) == NK_InstanceVariableReadNode)
+        changed |= strbuf_container_source_walk(c, recv4, 0, SB_DEMAND);
+      else {
+        const char *hn4 = nt_str(nt, recv4, "name");
+        Scope *hcs4 = hn4 ? comp_scope_of(c, recv4) : NULL;
+        if (!hn4 || !hcs4) continue;
+        changed |= strbuf_demand_container_stores(c, hn4, hcs4);
+      }
+      if (hv4->type != TY_POLY) { hv4->type = TY_POLY; changed = 1; }
       continue;
     }
     else if (!strbuf_elem_first_iterator(itn)) continue;
@@ -16079,9 +16217,9 @@ static int promote_shared_stored_strings(Compiler *c) {
       }
       if (cmi < 0) continue;
       for (int j = 0; j < c->scopes[cmi].nparams; j++) {
-        if (!an_param_mutated_in_place(c, cmi, j)) continue;
         int aj = arg_layout_param_node(c, &c->scopes[cmi], u, j, NULL);
         if (aj < 0 || infer_type(c, aj) != TY_POLY) continue;
+        if (!an_param_mutated_in_place(c, cmi, j) && !an_param_appended_deep(c, cmi, j)) continue;
         changed |= strbuf_demand_value_leaves(c, aj, 0);
       }
     }
@@ -20680,6 +20818,15 @@ static int promote_spread_string_args(Compiler *c) {
           changed |= dyn_pull_arg(c, out[i], direct[i]);
           if (!direct[i]) changed |= spread_demand_param_elem(c, av, ac, out[i]);
         }
+        /* an element read the rest gathers (`m(h[:a])` into `def m(*r)`),
+           written ahead of any splat: its container's Strings */
+        if (pj == m->rest_idx)
+          for (int i = pj; i < ac && i - pj < 31; i++) {
+            NodeKind ik = nt_kind(nt, av[i]);
+            if (ik == NK_SplatNode || ik == NK_KeywordHashNode || ik == NK_BlockArgumentNode) break;
+            int d = strbuf_demand_elem_arg(c, av[i]);
+            if (d > 0) changed = 1;
+          }
         if (splat) changed |= spread_lift_poly_elems(c, av, ac, 0);
         if (splat) changed |= spread_demand_ivar_elems(c, av, ac);
         /* a splatted local Array the program changes holds what was stored */
@@ -21117,7 +21264,11 @@ static int promote_forwarded_rest_args(Compiler *c) {
           if (at[e] < 16 && ((bits >> at[e]) & 1u)) changed |= dyn_pull_arg(c, out[e], direct[e]);
         break;
       }
-      if (!((bits >> (k - m->rest_idx)) & 1u) || nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
+      if (!((bits >> (k - m->rest_idx)) & 1u)) continue;
+      /* an element read gathered into the rest: its container's Strings */
+      { int d = strbuf_demand_elem_arg(c, av[k]);
+        if (d >= 0) { changed |= d; continue; } }
+      if (nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
       TyKind at = comp_ntype(c, av[k]);
       if (at != TY_STRING && at != TY_STRBUF) continue;
       changed |= dyn_pull_arg(c, av[k], 1);

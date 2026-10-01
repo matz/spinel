@@ -1775,32 +1775,25 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
   return 1;
 }
 
+static int strbuf_box_ref_as(Compiler *c, int recv, const char *fmt, Buf *b) {
+  char sref[1024];
+  int svm = c->strbuf_box[recv];
+  c->strbuf_box[recv] = 1;
+  int is_sb = strbuf_slot_ref(c, recv, sref, sizeof sref);
+  c->strbuf_box[recv] = (unsigned char)svm;
+  if (!is_sb) return 0;
+  buf_printf(b, fmt, sref);
+  return 1;
+}
+
 /* Emit a shared-mutable string receiver for an operation that only READS its
    bytes: the live buffer, not the whole-buffer copy an ordinary value read
    makes (#3227). Answers 0 when the receiver is not such a slot, so the caller
    falls back to emit_expr. */
-int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
-  char sref[1024];
-  int svm = c->strbuf_box[recv];
-  c->strbuf_box[recv] = 1;
-  int is_sb = strbuf_slot_ref(c, recv, sref, sizeof sref);
-  c->strbuf_box[recv] = (unsigned char)svm;
-  if (!is_sb) return 0;
-  buf_printf(b, "sp_String_cstr(%s)", sref);
-  return 1;
-}
+int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) { return strbuf_box_ref_as(c, recv, "sp_String_cstr(%s)", b); }
 /* The object_id of a String held as a shared sp_String: the handle's address,
    which is what a box of it carries. 0 when `recv` is not one. */
-int strbuf_object_ref(Compiler *c, int recv, Buf *b) {
-  char sref[1024];
-  int svm = c->strbuf_box[recv];
-  c->strbuf_box[recv] = 1;
-  int is_sb = strbuf_slot_ref(c, recv, sref, sizeof sref);
-  c->strbuf_box[recv] = (unsigned char)svm;
-  if (!is_sb) return 0;
-  buf_printf(b, "((sp_int)(uintptr_t)(%s))", sref);
-  return 1;
-}
+int strbuf_object_ref(Compiler *c, int recv, Buf *b) { return strbuf_box_ref_as(c, recv, "((sp_int)(uintptr_t)(%s))", b); }
 /* `cont[k]` where the container hands its elements out BOXED (a poly array, a
    hash): the read is an sp_RbVal, so a shared-handle destination has to unbox
    it rather than wrap it (#3941). */
@@ -2387,11 +2380,13 @@ const char *default_value(TyKind t) {
 /* Ruby truthiness of a slot `ref` of type `t`, as a C condition: the scalar
    kinds hold nil as a sentinel (default_value), which C reads as true. */
 void emit_slot_truthy(TyKind t, const char *ref, Buf *b) {
-  if (t == TY_INT)         buf_printf(b, "(%s != SP_INT_NIL)", ref);
-  else if (t == TY_FLOAT)  buf_printf(b, "(!sp_float_is_nil(%s))", ref);
-  else if (t == TY_SYMBOL) buf_printf(b, "(%s != (sp_sym)-1)", ref);
-  else if (t == TY_POLY)   buf_printf(b, "(sp_poly_truthy(%s))", ref);
-  else                     buf_printf(b, "(%s)", ref);
+  switch (t) {
+  case TY_INT:    buf_printf(b, "(%s != SP_INT_NIL)", ref); break;
+  case TY_FLOAT:  buf_printf(b, "(!sp_float_is_nil(%s))", ref); break;
+  case TY_SYMBOL: buf_printf(b, "(%s != (sp_sym)-1)", ref); break;
+  case TY_POLY:   buf_printf(b, "(sp_poly_truthy(%s))", ref); break;
+  default:        buf_printf(b, "(%s)", ref); break;
+  }
 }
 /* Hold a nullable Integer or Float operand in a fresh temp -- `sp_int _tN =
    <node>; ` -- so a read that has to ask for its sentinel (emit_slot_truthy)
@@ -3540,29 +3535,32 @@ int eq_family(TyKind t) {
 }
 int ty_matches_class(TyKind t, const char *cn, int exact) {
   const char *self_cls = NULL;
-  if (t == TY_STRING || t == TY_STRBUF) self_cls = "String";
-  else if (t == TY_INT || t == TY_BIGINT) self_cls = "Integer";
-  else if (t == TY_FLOAT) self_cls = "Float";
-  else if (t == TY_SYMBOL) self_cls = "Symbol";
-  else if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) self_cls = "Range";
-  else if (ty_is_array(t)) self_cls = "Array";
+  switch (t) {
+  case TY_STRING: case TY_STRBUF: self_cls = "String"; break;
+  case TY_INT: case TY_BIGINT: self_cls = "Integer"; break;
+  case TY_FLOAT: self_cls = "Float"; break;
+  case TY_SYMBOL: self_cls = "Symbol"; break;
+  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: self_cls = "Range"; break;
+  case TY_NIL: self_cls = "NilClass"; break;
+  case TY_BOOL: self_cls = "Boolean"; break; /* true/false split handled at call site */
+  case TY_FIBER: self_cls = "Fiber"; break;
+  case TY_THREAD: self_cls = "Thread"; break;
+  case TY_QUEUE: self_cls = "Queue"; break;
+  case TY_MUTEX: self_cls = "Mutex"; break;
+  case TY_CONDVAR: self_cls = "ConditionVariable"; break;
+  case TY_ENUMERATOR: self_cls = "Enumerator"; break;
+  case TY_TIME: self_cls = "Time"; break;
+  case TY_COMPLEX: self_cls = "Complex"; break;
+  case TY_RATIONAL: self_cls = "Rational"; break;
+  case TY_REGEX: self_cls = "Regexp"; break;
+  case TY_MATCHDATA: self_cls = "MatchData"; break;
+  case TY_PROC: self_cls = "Proc"; break;
+  case TY_RANDOM: self_cls = "Random"; break;
+  case TY_IO: self_cls = "IO"; break;
+  default: break;
+  }
+  if (ty_is_array(t)) self_cls = "Array";
   else if (ty_is_hash(t)) self_cls = "Hash";
-  else if (t == TY_NIL) self_cls = "NilClass";
-  else if (t == TY_BOOL) self_cls = "Boolean"; /* true/false split handled at call site */
-  else if (t == TY_FIBER) self_cls = "Fiber";
-  else if (t == TY_THREAD) self_cls = "Thread";
-  else if (t == TY_QUEUE) self_cls = "Queue";
-  else if (t == TY_MUTEX) self_cls = "Mutex";
-  else if (t == TY_CONDVAR) self_cls = "ConditionVariable";
-  else if (t == TY_ENUMERATOR) self_cls = "Enumerator";
-  else if (t == TY_TIME) self_cls = "Time";
-  else if (t == TY_COMPLEX) self_cls = "Complex";
-  else if (t == TY_RATIONAL) self_cls = "Rational";
-  else if (t == TY_REGEX) self_cls = "Regexp";
-  else if (t == TY_MATCHDATA) self_cls = "MatchData";
-  else if (t == TY_PROC) self_cls = "Proc";
-  else if (t == TY_RANDOM) self_cls = "Random";
-  else if (t == TY_IO) self_cls = "IO";
   if (!self_cls) return -1;
   if (sp_streq(cn, self_cls)) return 1;
   if (exact) return 0;

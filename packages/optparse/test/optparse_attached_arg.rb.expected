@@ -1,0 +1,4 @@
+"bob"
+"amy"
+Usage: tool [OPTIONS]
+    -n, --name=NAME                  Sets the name

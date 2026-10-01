@@ -1,0 +1,6 @@
+"Usage: tool [OPTIONS]\n"
+"      --a-very-long-switch-name=VALUE\n"
+"                       Goes on the next line\n"
+"      --nodesc\n"
+"  -d, --desc           First line\n"
+"                       Second line\n"

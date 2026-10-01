@@ -175,6 +175,7 @@ int desugar_class_body_bare_new(Compiler *c) {
     c->nscope[cr] = c->nscope[id];
     c->node_cbody[cr] = cid;
     nt_node_set_ref(nt, id, "receiver", cr);
+    nt_node_set_int(nt, id, "self_call", 1);
     changed = 1;
   }
   return changed;
@@ -6444,7 +6445,15 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
         ok = 0; break;
       }
       if (sh < 0 || nt_ref(nt, id, "block") >= 0) { ok = 0; break; }
-      if (ncalls && sh != shape) { ok = 0; break; }
+      /* Targets of different shapes (`c ? m(...) : n(...)` into `m(a)` and
+         `n(**kw)`) each take both channels: `...` forwards everything, and
+         each target sorts out what it was handed. Left to the __fwd_N model,
+         which binds one slot per argument a caller passes, n was handed the
+         leading parameter c in place of the keywords. */
+      if (ncalls && sh != shape) {
+        if ((sh | shape) & FWD_BUILTIN) { ok = 0; break; }
+        sh = 3 | ((sh | shape) & 4);
+      }
       shape = sh;
       calls[ncalls++] = id;
     }
@@ -6565,7 +6574,8 @@ static void cdef_path(const NodeTable *nt, int cp, char *p, size_t cap) {
 }
 static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
   NodeKind k = nt_kind(nt, id);
-  if (k == NK_StatementsNode) {
+  switch (k) {
+  case NK_StatementsNode: {
     int bn = 0; const int *b = nt_arr(nt, id, "body", &bn);
     CondDef y = x;
     y.st = id;
@@ -6574,21 +6584,25 @@ static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
       if (x.top < 0) y.top = b[i];
       cdef_walk(nt, b[i], y, v, n);
     }
+    break;
   }
-  else if (k == NK_IfNode || k == NK_UnlessNode || k == NK_ElseNode) {
+  case NK_IfNode: case NK_UnlessNode: case NK_ElseNode:
     x.cond = 1;
     cdef_walk(nt, nt_ref(nt, id, "statements"), x, v, n);
     cdef_walk(nt, nt_ref(nt, id, "subsequent"), x, v, n);
     cdef_walk(nt, nt_ref(nt, id, "else_clause"), x, v, n);
-  }
-  else if (k == NK_ClassNode || k == NK_ModuleNode) {
+    break;
+  case NK_ClassNode: case NK_ModuleNode: {
     char p[1024];
     snprintf(p, sizeof p, "%s", x.path);
     cdef_path(nt, nt_ref(nt, id, "constant_path"), p, sizeof p);
     x.path = p; x.cls = id; x.cm = 0; x.top = -1;
     cdef_walk(nt, nt_ref(nt, id, "body"), x, v, n);
+    break;
   }
-  else if (k == NK_SingletonClassNode && nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) {
+  default: break;
+  }
+  if (k == NK_SingletonClassNode && nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) {
     x.cm = 1; x.top = -1;
     cdef_walk(nt, nt_ref(nt, id, "body"), x, v, n);
   }

@@ -1,0 +1,18 @@
+Foo.new ran
+undefined method 'bar' for an instance of Foo
+Foo.new ran
+undefined method 'bar' for an instance of Foo
+Foo.new ran
+undefined method 'bar' for an instance of Foo
+Foo.new ran
+undefined method 'missing' for an instance of Foo
+[:made]
+Foo.new ran
+n ran
+undefined method 'missing' for an instance of Integer
+Foo.new ran
+s ran
+undefined method 'missing' for an instance of String
+Foo.new ran
+x ran
+undefined method 'missing' for an instance of Float

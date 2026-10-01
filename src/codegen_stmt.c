@@ -1042,11 +1042,13 @@ else {
         /* stringify into a temp, then branch on the live $stderr redirect */
         int wt = ++g_tmp;
         emit_indent(b, indent); buf_printf(b, "const char *_t%d = ", wt);
-        if (at == TY_STRING) emit_expr(c, argv[k], b);
-        else if (at == TY_INT) { buf_puts(b, "sp_int_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-        else if (at == TY_FLOAT) { buf_puts(b, "sp_float_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-        else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-        else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[k], b); buf_puts(b, ")"); }
+        switch (at) {
+        case TY_STRING: emit_expr(c, argv[k], b); break;
+        case TY_INT: buf_puts(b, "sp_int_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); break;
+        case TY_FLOAT: buf_puts(b, "sp_float_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); break;
+        case TY_SYMBOL: buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); break;
+        default: buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[k], b); buf_puts(b, ")"); break;
+        }
         buf_puts(b, ";\n");
         emit_indent(b, indent);
         if (guard[0]) buf_printf(b, "if (%s) {\n", guard);
@@ -5533,26 +5535,28 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
           int inner = nt_ref(nt, conds[j], "expression");
           TyKind at = inner >= 0 ? comp_ntype(c, inner) : TY_UNKNOWN;
           int ta = ++g_tmp;
-          if (at == TY_INT_ARRAY) {
+          switch (at) {
+          case TY_INT_ARRAY:
             buf_printf(b, "({ sp_IntArray *_t%d = ", ta); emit_expr(c, inner, b);
             buf_printf(b, "; _t%d && sp_IntArray_include(_t%d, _t%d); })", ta, ta, t);
-          }
-          else if (at == TY_STR_ARRAY) {
+            break;
+          case TY_STR_ARRAY:
             buf_printf(b, "({ sp_StrArray *_t%d = ", ta); emit_expr(c, inner, b);
             buf_printf(b, "; _t%d && sp_StrArray_include(_t%d, _t%d); })", ta, ta, t);
-          }
-          else if (at == TY_FLOAT_ARRAY) {
+            break;
+          case TY_FLOAT_ARRAY:
             buf_printf(b, "({ sp_FloatArray *_t%d = ", ta); emit_expr(c, inner, b);
             buf_printf(b, "; _t%d && sp_FloatArray_include(_t%d, _t%d); })", ta, ta, t);
-          }
-          else if (at == TY_POLY_ARRAY) {
+            break;
+          case TY_POLY_ARRAY:
             buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, inner, b);
             buf_printf(b, "; _t%d && sp_PolyArray_include(_t%d, ", ta, ta);
             emit_boxed(c, pred, b);
             buf_puts(b, "); })");
-          }
-          else {
+            break;
+          default:
             buf_puts(b, "0 /* unsupported splat type */");
+            break;
           }
         }
         else {
@@ -6884,21 +6888,24 @@ static void emit_unbox_node(Compiler *c, TyKind t, int node, Buf *b) {
      type's zero for a boxed nil, which in these two slots is a real value and
      is what made a nullable return read back as 0 / 0.0. bool has no sentinel
      to land on, so it keeps the plain conversion (#3458). */
-  if (t == TY_INT)                 buf_printf(b, "sp_poly_to_i_or_nil(%s)", v);
-  else if (t == TY_FLOAT)          buf_printf(b, "sp_poly_to_f_or_nil(%s)", v);
-  else if (t == TY_BOOL)           buf_printf(b, "sp_poly_to_i(%s)", v);
+  switch (t) {
+  case TY_INT:      buf_printf(b, "sp_poly_to_i_or_nil(%s)", v); break;
+  case TY_FLOAT:    buf_printf(b, "sp_poly_to_f_or_nil(%s)", v); break;
+  case TY_BOOL:     buf_printf(b, "sp_poly_to_i(%s)", v); break;
   /* A Rational slot is a by-value struct, so it matched neither the scalar
      arms above nor the pointer test below and left with the box still on:
      the generated C returned an sp_RbVal through an sp_Rational signature
      and did not build. `Rational#quo` with an Integer operand is the way in
      -- under promote the parameter widens to poly, the call answers boxed,
      and the return slot stays Rational. */
-  else if (t == TY_RATIONAL)       buf_printf(b, "sp_poly_as_rational(%s)", v);
-  else {
+  case TY_RATIONAL: buf_printf(b, "sp_poly_as_rational(%s)", v); break;
+  default: {
     const char *cn = c_type_name(t);
     if (t == TY_STRING || ty_is_object(t) || (cn && cn[0] && cn[strlen(cn) - 1] == '*'))
       emit_unbox_text(c, t, v, b);
     else buf_puts(b, v);
+    break;
+  }
   }
   free(val.p); free(src.p);
 }
@@ -8455,6 +8462,15 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
     else buf_puts(b, src);
     buf_puts(b, "; break;");
   }
+  /* a real IO in the slot keeps its own writer beside the program's: a Log
+     with `attr_accessor :sync` and $stdout in one slot, `x.sync = v` on the
+     stream raised NoMethodError. Only the truth of v sets the mode. */
+  if (sp_streq(base, "sync")) {
+    buf_printf(b, " case SP_BUILTIN_IO: sp_File_set_sync((sp_File *)%s, sp_poly_truthy(", objp);
+    if (at == TY_POLY || at == TY_UNKNOWN) buf_puts(b, src);
+    else emit_boxed_text(c, at, src, b);
+    buf_puts(b, ")); break;");
+  }
 }
 
 /* The statement that brings a synthesized singleton subclass into being --
@@ -9658,18 +9674,21 @@ else {
       else emit_expr(c, v, &vval);
       g_pre = saved_pre;
     }
-    if (ivt2 == TY_POLY) snprintf(cond2, sizeof cond2, "%ssp_poly_truthy(%s)", is_or ? "!" : "", ref2);
-    else if (ivt2 == TY_BOOL || ivt2 == TY_STRING || ivt2 == TY_STRBUF) snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2);
-    else if (ivt2 == TY_INT) snprintf(cond2, sizeof cond2, "%s %s= SP_INT_NIL", ref2, is_or ? "=" : "!");
-    else if (ivt2 == TY_SYMBOL) snprintf(cond2, sizeof cond2, "%s %s= (sp_sym)-1", ref2, is_or ? "=" : "!");   /* nilable symbol: (sp_sym)-1 is the nil sentinel */
-    else if (ivt2 == TY_CLASS) snprintf(cond2, sizeof cond2, "%ssp_class_nil_p(%s)", is_or ? "" : "!", ref2);
-    else if (ivt2 == TY_FLOAT) snprintf(cond2, sizeof cond2, "%ssp_float_is_nil(%s)", is_or ? "" : "!", ref2);   /* nil is SP_FLOAT_NIL */
+    switch (ivt2) {
+    case TY_POLY: snprintf(cond2, sizeof cond2, "%ssp_poly_truthy(%s)", is_or ? "!" : "", ref2); break;
+    case TY_BOOL: case TY_STRING: case TY_STRBUF: snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2); break;
+    case TY_INT: snprintf(cond2, sizeof cond2, "%s %s= SP_INT_NIL", ref2, is_or ? "=" : "!"); break;
+    case TY_SYMBOL: snprintf(cond2, sizeof cond2, "%s %s= (sp_sym)-1", ref2, is_or ? "=" : "!"); break;   /* nilable symbol: (sp_sym)-1 is the nil sentinel */
+    case TY_CLASS: snprintf(cond2, sizeof cond2, "%ssp_class_nil_p(%s)", is_or ? "" : "!", ref2); break;
+    case TY_FLOAT: snprintf(cond2, sizeof cond2, "%ssp_float_is_nil(%s)", is_or ? "" : "!", ref2); break;   /* nil is SP_FLOAT_NIL */
+    default: break;
+    }
     /* a pointer-backed ivar (fiber/proc/object/array/hash/...) reads falsy
        when NULL, so `@x ||= v` is `if (!@x) @x = v` (e.g. PPU's
        `@fiber ||= Fiber.new { ... }`). Without this the init was dropped. */
-    else if (ty_is_object(ivt2) || ty_is_array(ivt2) || ty_is_hash(ivt2) || ivt2 == TY_BIGINT ||
-             ivt2 == TY_FIBER || ivt2 == TY_THREAD || ivt2 == TY_QUEUE || ivt2 == TY_MUTEX || ivt2 == TY_CONDVAR || ivt2 == TY_PROC || ivt2 == TY_IO ||
-             ivt2 == TY_MATCHDATA || ivt2 == TY_EXCEPTION || ivt2 == TY_REGEX)
+    if (ty_is_object(ivt2) || ty_is_array(ivt2) || ty_is_hash(ivt2) || ivt2 == TY_BIGINT ||
+        ivt2 == TY_FIBER || ivt2 == TY_THREAD || ivt2 == TY_QUEUE || ivt2 == TY_MUTEX || ivt2 == TY_CONDVAR || ivt2 == TY_PROC || ivt2 == TY_IO ||
+        ivt2 == TY_MATCHDATA || ivt2 == TY_EXCEPTION || ivt2 == TY_REGEX)
       snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2);
     if (cond2[0]) {
       emit_indent(b, indent);
@@ -10764,11 +10783,13 @@ else {
       buf_puts(b, "if (");
       if (!is_or) { /* &&= runs when the slot is truthy */ }
       else buf_puts(b, "!(");
-      if (lv->type == TY_INT)          buf_printf(b, "%s != SP_INT_NIL", gref);
-      else if (lv->type == TY_FLOAT)   buf_printf(b, "!sp_float_is_nil(%s)", gref);
-      else if (lv->type == TY_POLY)    buf_printf(b, "sp_poly_truthy(%s)", gref);
-      else if (lv->type == TY_CLASS)   buf_printf(b, "!sp_class_nil_p(%s)", gref);
-      else                             buf_puts(b, gref);
+      switch (lv->type) {
+      case TY_INT:   buf_printf(b, "%s != SP_INT_NIL", gref); break;
+      case TY_FLOAT: buf_printf(b, "!sp_float_is_nil(%s)", gref); break;
+      case TY_POLY:  buf_printf(b, "sp_poly_truthy(%s)", gref); break;
+      case TY_CLASS: buf_printf(b, "!sp_class_nil_p(%s)", gref); break;
+      default:       buf_puts(b, gref); break;
+      }
       if (is_or) buf_puts(b, ")");
       buf_printf(b, ") { gv_%s = ", rn);
       /* a poly slot boxes the value, as the plain write does: `$g ||= nil`
@@ -14035,11 +14056,12 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
           buf_printf(b, "sp_int _t%d = _t%d->len; ", tn, tsrc);
           buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ", ti, ti, tn, ti, k, nil_store_sfx(c, k, NIL_STORE_BOXED), tr);
           char getx[64]; snprintf(getx, sizeof getx, "sp_PolyArray_get(_t%d, _t%d)", tsrc, ti);
-          if (et == TY_POLY) buf_puts(b, getx);
-          else if (et == TY_STRING) buf_printf(b, "sp_poly_elem_s(%s)", getx);
-          else if (et == TY_INT) buf_printf(b, "sp_poly_elem_i(%s)", getx);
-          else if (et == TY_FLOAT) buf_printf(b, "sp_poly_elem_f(%s)", getx);
-          else buf_puts(b, getx);
+          switch (et) {
+          case TY_STRING: buf_printf(b, "sp_poly_elem_s(%s)", getx); break;
+          case TY_INT: buf_printf(b, "sp_poly_elem_i(%s)", getx); break;
+          case TY_FLOAT: buf_printf(b, "sp_poly_elem_f(%s)", getx); break;
+          default: buf_puts(b, getx); break;
+          }
           buf_puts(b, "); }\n");
         }
         continue;
@@ -14582,15 +14604,16 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     buf_puts(b, "; ");
     /* int slots are nil only out of bounds (0 is truthy); ||= writes when
        nil, &&= when present. Compare with == / != to avoid `!x != NIL`. */
-    if (rt == TY_INT_ARRAY)
-      buf_printf(b, "if (sp_IntArray_get(_t%d, _t%d) %s SP_INT_NIL) ", ta, tb, is_or ? "==" : "!=");
-    else if (rt == TY_FLOAT_ARRAY)
-      buf_printf(b, "if (%ssp_float_is_nil(sp_FloatArray_get(_t%d, _t%d))) ", is_or ? "" : "!", ta, tb);
-    else if (rt == TY_STR_ARRAY)
-      buf_printf(b, "if (%ssp_StrArray_get(_t%d, _t%d)) ", is_or ? "!" : "", ta, tb);
-    else if (rt == TY_POLY_ARRAY)
-      buf_printf(b, "if (%ssp_poly_truthy(sp_PolyArray_get(_t%d, _t%d))) ", is_or ? "!" : "", ta, tb);
-    else {
+    switch (rt) {
+    case TY_INT_ARRAY:
+      buf_printf(b, "if (sp_IntArray_get(_t%d, _t%d) %s SP_INT_NIL) ", ta, tb, is_or ? "==" : "!="); break;
+    case TY_FLOAT_ARRAY:
+      buf_printf(b, "if (%ssp_float_is_nil(sp_FloatArray_get(_t%d, _t%d))) ", is_or ? "" : "!", ta, tb); break;
+    case TY_STR_ARRAY:
+      buf_printf(b, "if (%ssp_StrArray_get(_t%d, _t%d)) ", is_or ? "!" : "", ta, tb); break;
+    case TY_POLY_ARRAY:
+      buf_printf(b, "if (%ssp_poly_truthy(sp_PolyArray_get(_t%d, _t%d))) ", is_or ? "!" : "", ta, tb); break;
+    default:
       unsupported(c, id, "index and/or write (array type)"); return;
     }
     int open = 0;

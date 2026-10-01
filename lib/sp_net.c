@@ -572,23 +572,7 @@ static int sp_net_wait_io(int fd, short events) {
 #endif
 }
 
-int sp_net_write_str(int fd, const char *s) {
-    size_t len = strlen(s);
-    size_t off = 0;
-    while (off < len) {
-        ssize_t n = send(fd, s + off, len - off, 0);
-        if (n <= 0) {
-            if (n < 0 && errno == EINTR) continue;
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && sp_net_wait_io(fd, POLLOUT)) continue;
-            return -1;
-        }
-        off += (size_t)n;
-    }
-    return 0;
-}
-
-int sp_net_write_bytes(int fd, const char *data, int n) {
-    size_t total = (n < 0) ? 0 : (size_t)n;
+static int sp_net_send_all(int fd, const char *data, size_t total) {
     size_t off = 0;
     while (off < total) {
         ssize_t w = send(fd, data + off, total - off, 0);
@@ -600,6 +584,14 @@ int sp_net_write_bytes(int fd, const char *data, int n) {
         off += (size_t)w;
     }
     return 0;
+}
+
+int sp_net_write_str(int fd, const char *s) {
+    return sp_net_send_all(fd, s, strlen(s));
+}
+
+int sp_net_write_bytes(int fd, const char *data, int n) {
+    return sp_net_send_all(fd, data, (n < 0) ? 0 : (size_t)n);
 }
 
 /* Write what the socket will take right now and answer how much that was,

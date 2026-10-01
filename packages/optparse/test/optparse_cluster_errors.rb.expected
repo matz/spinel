@@ -1,0 +1,3 @@
+[OptionParser::InvalidOption, "invalid option: -xfoo"]
+[OptionParser::InvalidOption, "invalid option: -xq"]
+[OptionParser::NeedlessArgument, "needless argument: -v=1"]

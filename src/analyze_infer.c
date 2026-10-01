@@ -4321,9 +4321,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (sp_streq(name, "close")) return TY_POLY;      /* nil (#2801) */
     if (sp_streq(name, "print") || sp_streq(name, "puts")) return TY_NIL;
     if (sp_streq(name, "flush") || sp_streq(name, "binmode")) return TY_IO;  /* self (#2799) */
+    /* sync= answers its argument, whatever it is; only its truth sets the mode */
+    if (sp_streq(name, "sync=") && argc >= 1) return infer_type(c, argv[0]);
     if (sp_streq(name, "closed?") || sp_streq(name, "eof?") || sp_streq(name, "eof") ||
         sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
-        sp_streq(name, "sync") || sp_streq(name, "sync=") ||
+        sp_streq(name, "sync") ||
         sp_streq(name, "autoclose?") ||
         /* the File::Stat predicates: a stat is carried as the handle itself */
         sp_streq(name, "file?") || sp_streq(name, "directory?") ||
@@ -4751,7 +4753,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         if (brt != TY_UNKNOWN) {
           /* Temporarily set rt to the built-in type and recursively call infer_call
              is not safe. Instead inline key return types for common method names. */
-          if (brt == TY_STRING) {
+          switch (brt) {
+          case TY_STRING:
             if (sp_streq(name, "upcase") || sp_streq(name, "downcase") ||
                 sp_streq(name, "capitalize") || sp_streq(name, "reverse") || sp_streq(name, "strip") ||
                 sp_streq(name, "lstrip") || sp_streq(name, "rstrip") || sp_streq(name, "chomp") ||
@@ -4779,8 +4782,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
             if (sp_streq(name, "split") || sp_streq(name, "chars") || sp_streq(name, "lines") ||
                 sp_streq(name, "bytes"))
               return TY_STR_ARRAY;
-          }
-          else if (brt == TY_INT) {
+            break;
+          case TY_INT:
             if (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") ||
                 sp_streq(name, "/") || sp_streq(name, "%") || sp_streq(name, "**") ||
                 sp_streq(name, "abs") || sp_streq(name, "succ") || sp_streq(name, "next") ||
@@ -4795,8 +4798,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
                 sp_streq(name, "==") || sp_streq(name, "!=") || sp_streq(name, "<") ||
                 sp_streq(name, "<=") || sp_streq(name, ">") || sp_streq(name, ">="))
               return TY_BOOL;
-          }
-          else if (brt == TY_FLOAT) {
+            break;
+          case TY_FLOAT:
             if (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") ||
                 sp_streq(name, "/") || sp_streq(name, "**") || sp_streq(name, "abs") ||
                 sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "round") ||
@@ -4809,14 +4812,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
                 sp_streq(name, "<") || sp_streq(name, "<=") || sp_streq(name, ">") ||
                 sp_streq(name, ">="))
               return TY_BOOL;
-          }
-          else if (brt == TY_SYMBOL) {
+            break;
+          case TY_SYMBOL:
             if (sp_streq(name, "to_s") || sp_streq(name, "id2name") || sp_streq(name, "inspect"))
               return TY_STRING;
             if (sp_streq(name, "to_sym") || sp_streq(name, "itself")) return TY_SYMBOL;
             if (sp_streq(name, "length") || sp_streq(name, "size")) return TY_INT;
             if (sp_streq(name, "empty?") || sp_streq(name, "==") || sp_streq(name, "!="))
               return TY_BOOL;
+            break;
+          default: break;
           }
         }
       }
@@ -6008,8 +6013,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           (sp_streq(name, "blocking?") && argc == 0) ||
           sp_streq(name, "eof?") || sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
-          sp_streq(name, "sync") || sp_streq(name, "sync="))
+          sp_streq(name, "sync"))
         return an_poly_concrete(c, name, TY_BOOL);
+      /* sync= answers its argument (only its truth sets the mode) */
+      if (sp_streq(name, "sync=") && argc == 1)
+        return an_poly_concrete(c, name, infer_type(c, argv[0]));
       /* IO#winsize on a poly-carried handle: [rows, cols], same as the TY_IO
          arm. Without this the call falls through to a plain poly result and the
          `size[0]` that follows reads it as an untyped value. */
@@ -7179,6 +7187,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       (sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
     return TY_BOOL;
 
+  /* a program's own Object method answers what it returns, whatever its
+     name says: activesupport's Object#acts_like? gives respond_to?'s
+     answer, which a class's own respond_to? may give as any value */
+  if (recv >= 0) {
+    /* a boxed receiver too: the builtin-only answer the poly dispatch's
+       default arm is shaped by is the Object fallback's call */
+    const char *ocls = ty_is_object(rt) || rt == TY_POLY ? "Object" : builtin_class_of_type(rt);
+    TyKind ort;
+    if (ocls && object_reopen_answers(c, ocls, id, &ort)) return ort;
+  }
   size_t nl = strlen(name);
   if (nl > 0 && name[nl - 1] == '?') return TY_BOOL;
 
@@ -7928,16 +7946,9 @@ TyKind infer_uncached(Compiler *c, int id) {
       return (ct == TY_FLOAT || vt == TY_FLOAT) ? TY_FLOAT : TY_INT;
     return ct != TY_UNKNOWN ? ct : vt;
   }
-  if (nk == NK_GlobalVariableWriteNode) {
+  if (nk == NK_GlobalVariableWriteNode || nk == NK_GlobalVariableOrWriteNode || nk == NK_GlobalVariableAndWriteNode) {
     /* `$g = v` evaluates to the stored value, which codegen reads back from
        the slot -- the slot's type, as for the ivar and cvar writes above */
-    const char *nm = nt_str(nt, id, "name");
-    const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
-    LocalVar *lv = rn ? comp_gvar(c, rn) : NULL;
-    TyKind ct = lv ? lv->type : TY_UNKNOWN;
-    return ct != TY_UNKNOWN ? ct : infer_type(c, nt_ref(nt, id, "value"));
-  }
-  if (nk == NK_GlobalVariableOrWriteNode || nk == NK_GlobalVariableAndWriteNode) {
     /* `$g ||= v` evaluates to the slot after the guarded write */
     const char *nm = nt_str(nt, id, "name");
     const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;

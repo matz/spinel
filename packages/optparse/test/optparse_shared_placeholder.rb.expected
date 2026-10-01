@@ -1,0 +1,5 @@
+["bob", "amy", "a/b"]
+["keep"]
+Usage: tool
+    -u, --user NAME                  User
+    -r, --repo REPO                  Repo

@@ -8006,7 +8006,24 @@ void emit_str_pattern_expr(Compiler *c, int node, Buf *b) {
 }
 
 static void emit_strbuf_force_encoding(Compiler *c, const char *name, const char *ref, const int *argv, int argc, Buf *b);
+static int emit_scalar_call_arms(Compiler *c, int id, Buf *b);
+/* The arms evaluate a scalar receiver into text before they look at the
+   method name, and its prelude (`Foo.new` hoisted into a temp for
+   `Foo.new.v.zork`) lands in g_pre then. When no arm takes the call, the
+   arm that does (the NoMethodError gate among them) emits the receiver
+   again, so that prelude is dropped here: left in place it ran the
+   receiver's inner call a second time. */
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
+  Buf *pre = g_pre;
+  size_t pre0 = pre ? pre->len : 0;
+  int done = emit_scalar_call_arms(c, id, b);
+  if (!done && pre && pre == g_pre && pre->len > pre0) {
+    pre->len = pre0;
+    pre->p[pre0] = 0;
+  }
+  return done;
+}
+static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
   {
@@ -12422,40 +12439,43 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       for (int i = 0; hold && i < argc; i++) {
         TyKind kt3 = comp_ntype(c, argv[i]);
         held[i] = ++g_tmp;
-        if (kt3 == TY_SYMBOL) {
+        switch (kt3) {
+        case TY_SYMBOL:
           buf_printf(b, " const char *_t%d = sp_sym_to_s(", held[i]); emit_expr(c, argv[i], b);
           buf_printf(b, "); SP_GC_ROOT_STR(_t%d);", held[i]);
-        }
-        else if (kt3 == TY_STRING) {
+          break;
+        case TY_STRING:
           buf_printf(b, " const char *_t%d = ", held[i]); emit_expr(c, argv[i], b);
           buf_printf(b, "; SP_GC_ROOT_STR(_t%d);", held[i]);
-        }
-        else if (kt3 == TY_RANGE) {
+          break;
+        case TY_RANGE:
           buf_printf(b, " sp_Range _t%d = ", held[i]); emit_expr(c, argv[i], b); buf_puts(b, ";");
-        }
-        else if (kt3 == TY_POLY) {
+          break;
+        case TY_POLY:
           buf_printf(b, " sp_RbVal _t%d = ", held[i]); emit_expr(c, argv[i], b);
           buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", held[i]);
-        }
-        else {
+          break;
+        default:
           buf_printf(b, " sp_int _t%d = ", held[i]); emit_int_expr(c, argv[i], b); buf_puts(b, ";");
+          break;
         }
       }
       for (int i = 0; i < argc; i++) {
         TyKind kt3 = comp_ntype(c, argv[i]);
-        if (kt3 == TY_SYMBOL) {
+        switch (kt3) {
+        case TY_SYMBOL:
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref_name(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[i], b); buf_puts(b, ")"); }
           buf_puts(b, ")));");
-        }
-        else if (kt3 == TY_STRING) {
+          break;
+        case TY_STRING:
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref_name(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else emit_expr(c, argv[i], b);
           buf_puts(b, ")));");
-        }
-        else if (kt3 == TY_RANGE) {
+          break;
+        case TY_RANGE: {
           /* a Range argument selects a run of groups, as Array#values_at does;
              it went into sp_MatchData_aref's sp_int slot as a struct (#3627).
              Its ends resolve against the group count the way CRuby's do: an
@@ -12479,8 +12499,9 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, " for (sp_int _t%d = _t%d; _t%d <= _t%d; _t%d++)"
                         " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, _t%d)));",
                      rj, rlo, rj, rhi, rj, at, mt, rj);
+          break;
         }
-        else if (kt3 == TY_POLY) {
+        case TY_POLY: {
           /* a poly key dispatches at runtime like #[]: a Symbol/String resolves
              by name, anything else is an index. Passing the raw sp_RbVal to
              sp_MatchData_aref (sp_int) would be a C type error. */
@@ -12493,12 +12514,14 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
                         " _t%d.tag == SP_TAG_STR ? sp_MatchData_aref_name(_t%d, _t%d.v.s) :"
                         " sp_MatchData_aref(_t%d, sp_poly_arg_int_chk(_t%d))));",
                      at, kt, mt, kt, kt, mt, kt, mt, kt);
+          break;
         }
-        else {
+        default:
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, ", at, mt);
           if (hold) buf_printf(b, "_t%d", held[i]);
           else emit_int_expr(c, argv[i], b);
           buf_puts(b, ")));");
+          break;
         }
       }
       buf_printf(b, " _t%d; })", at);

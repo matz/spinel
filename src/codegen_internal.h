@@ -644,7 +644,6 @@ int emit_lent_local(LocalVar *lv, const char *vn, Buf *out);
 int zsuper_param_source(Compiler *c, Scope *s, Scope *pm, int j);
 int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *idx, size_t cap,
                          int *npost_out);
-int local_is_handle(Compiler *c, int a);
 extern unsigned g_yield_live_mask;   /* emit_proc_yield: positions whose targets take live bytes */
 void refuse_yield_handle_args(Compiler *c, int id);
 int emit_handle_var_ref(Compiler *c, int a, Buf *b);

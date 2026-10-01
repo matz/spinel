@@ -1308,28 +1308,20 @@ sp_int sp_MatchData_byteend_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(
 sp_IntArray *sp_MatchData_byteoffset_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_byteoffset(m, sp_md_group_by_name(m, name)); }
 /* whole-match string (group 0) -- also MatchData#to_s */
 const char *sp_MatchData_to_s(sp_MatchData *m) {SP_GC_ROOT(m); const char *r = sp_MatchData_aref(m, 0); return r ? r : sp_str_empty; }
+static sp_PolyArray *sp_md_groups_from(sp_MatchData *m, sp_int from) {SP_GC_ROOT(m);
+  sp_PolyArray *r = sp_PolyArray_new();
+  if (!m) return r;
+  SP_GC_ROOT(r);
+  for (sp_int i = from; i < m->ncap; i++) {
+    const char *g = sp_MatchData_aref(m, i);
+    sp_PolyArray_push(r, g ? sp_box_str(g) : sp_box_nil());
+  }
+  return r;
+}
 /* captures: groups 1..n-1 as a poly array (nil for non-participating) */
-sp_PolyArray *sp_MatchData_captures(sp_MatchData *m) {SP_GC_ROOT(m);
-  sp_PolyArray *r = sp_PolyArray_new();
-  if (!m) return r;
-  SP_GC_ROOT(r);
-  for (sp_int i = 1; i < m->ncap; i++) {
-    const char *g = sp_MatchData_aref(m, i);
-    sp_PolyArray_push(r, g ? sp_box_str(g) : sp_box_nil());
-  }
-  return r;
-}
+sp_PolyArray *sp_MatchData_captures(sp_MatchData *m) { return sp_md_groups_from(m, 1); }
 /* to_a: group 0 + captures */
-sp_PolyArray *sp_MatchData_to_a(sp_MatchData *m) {SP_GC_ROOT(m);
-  sp_PolyArray *r = sp_PolyArray_new();
-  if (!m) return r;
-  SP_GC_ROOT(r);
-  for (sp_int i = 0; i < m->ncap; i++) {
-    const char *g = sp_MatchData_aref(m, i);
-    sp_PolyArray_push(r, g ? sp_box_str(g) : sp_box_nil());
-  }
-  return r;
-}
+sp_PolyArray *sp_MatchData_to_a(sp_MatchData *m) { return sp_md_groups_from(m, 0); }
 const char *sp_MatchData_pre_match(sp_MatchData *m) {SP_GC_ROOT(m);
   if (!m) return sp_str_empty;
   int e = m->caps[0];

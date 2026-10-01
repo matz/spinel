@@ -1287,6 +1287,12 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  echo "reject-test: FAIL (a Method of a builtin module function compiled)"; ok=0; \
 	else grep -q "ENV.method(:each) is not supported: a Method object of a builtin module" "$$tmp/mb.out" || \
 	  { echo "reject-test: FAIL (a Method of a builtin module function refused without saying why)"; sed -n 1,5p "$$tmp/mb.out"; ok=0; }; fi; \
+	for t in test/reject/compare_by_identity_chained*.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/cbi.c" >"$$tmp/cbi.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t: a call chained onto compare_by_identity compiled)"; ok=0; \
+	  else grep -q "unsupported Hash#compare_by_identity" "$$tmp/cbi.out" || \
+	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/cbi.out"; ok=0; }; fi; \
+	done; \
 	t=test/reject/dynamic_send_then_refusal.rb; \
 	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ds.c" >"$$tmp/ds.out" 2>&1; st=$$?; \
 	if [ $$st -ne 1 ] || ! grep -q "1 refusal," "$$tmp/ds.out"; then \

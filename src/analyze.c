@@ -1000,6 +1000,15 @@ else {
     if (!const_recv || !const_is_class) {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+      /* A Class value known only at run time dispatches on it to the class
+         methods, which take the block as a real proc the same way */
+      else if (rt == TY_CLASS && class_recv_is_dynamic(c, recv)) {
+        for (int k = 0; k < c->nclasses; k++) {
+          int ck = comp_cmethod_in_chain(c, k, name, NULL);
+          if (ck >= 0 && (c->scopes[ck].yields || (c->scopes[ck].blk_param && c->scopes[ck].blk_param[0])))
+            return 1;
+        }
+      }
       /* A poly receiver dispatches on the runtime class, and the dispatch
          materializes the block as a real proc once, ahead of the switch, for
          any candidate that takes a real &block or is served by a proc-form
@@ -1012,6 +1021,10 @@ else {
         /* not filtered by `instantiated`: that is decided after this runs, and
            a spurious cell is only a missed optimization */
         for (int k = 0; k < c->nclasses; k++) {
+          /* a Class in the union reaches its class method the same way */
+          int ck = comp_cmethod_in_chain(c, k, name, NULL);
+          if (ck >= 0 && (c->scopes[ck].yields || (c->scopes[ck].blk_param && c->scopes[ck].blk_param[0])))
+            return 1;
           int ci2 = comp_method_in_chain(c, k, name, NULL);
           if (ci2 < 0) continue;
           Scope *cm2 = &c->scopes[ci2];
@@ -2209,6 +2222,11 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
     int t = ie_forward_target(c, k / 2, k % 2, nm, 0);
     if (t >= 0) cls = cls == -1 || cls == t ? t : -2 - id;
   }
+  const char *names[64];
+  int nn = rt == TY_POLY && cls >= 0 ? ie_self_call_names(c, ie_block_body(c, blk), names, 0, 64) : 0;
+  for (int i = 0; i < nn; i++)
+    for (int k = 0; k < c->nclasses && !ie_class_answers(c, cls, names[i]) && comp_method_index(c, names[i]) < 0; k++)
+      if (ie_poly_class_ok(c, k) && ie_class_answers(c, k, names[i])) return -1;
   return cls < -1 && !arg && sp_streq(nm, "new") ? -1 : cls;
 }
 
@@ -11838,8 +11856,9 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
     if (an < 1) continue;
     TyKind kt = infer_type(c, av[0]);
     TyKind want = TY_UNKNOWN;
-    if (kt == TY_SYMBOL) want = TY_SYM_POLY_HASH;
-    else if (kt == TY_STRING) {
+    switch (kt) {
+    case TY_SYMBOL: want = TY_SYM_POLY_HASH; break;
+    case TY_STRING: {
       /* The key operations this pass keys off (`key?`, `[]`, `fetch`, `dig`)
          say what the KEY is and nothing about the value, so the poly-valued
          variant was the only answer available here. But the slot's own
@@ -11859,8 +11878,9 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
         if (dn >= 0) wv = ty_unify(wv, hash_default_value_ty(c, dn)); }
       want = (wv == TY_INT || wv == TY_STRING) ? ty_hash_of(TY_STRING, wv)
                                                : TY_STR_POLY_HASH;
+      break;
     }
-    else if (kt == TY_INT) {
+    case TY_INT: {
       /* The same argument the String branch makes: this mark is permanent and
          only ever widens, so pinning the boxed variant throws away a value type
          the slot's own `h[k] = v` writes state right there. `[]=` joined this
@@ -11880,25 +11900,29 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
         if (dn >= 0) wv = ty_unify(wv, hash_default_value_ty(c, dn)); }
       want = (wv == TY_INT || wv == TY_STRING) ? ty_hash_of(TY_INT, wv)
                                                : TY_POLY_POLY_HASH;
+      break;
     }
     /* a boxed key (one call site passes a String, another an Integer) is only
        representable by the poly-keyed variant; the StrPolyHash default would
        hand the boxed value to a const char * slot and segfault */
-    else if (kt == TY_POLY) want = TY_POLY_POLY_HASH;
+    case TY_POLY: want = TY_POLY_POLY_HASH; break;
     /* Every other KNOWN key kind -- an Array, a Float, a user object -- has no
        keyed variant of its own either, so the poly-keyed one is the only
        representation that holds it. Falling through here left the literal at
        the StrPolyHash default and put the key straight into a const char *
        slot, which the C compiler reported against generated code (#4000).
        TY_UNKNOWN still falls through: the key is not settled yet. */
-    else if (kt != TY_UNKNOWN && kt != TY_VOID) want = TY_POLY_POLY_HASH;
-    /* An empty container LITERAL as the key infers no kind at all, but it is
-       still a pointer at emit time (a bare `[]` lowers to an array), so it
-       needs the same widening -- the unresolved kind is what let `{}.fetch []`
-       through to the C compiler. */
-    else if (kt == TY_UNKNOWN &&
-             (nt_kind(nt, av[0]) == NK_ArrayNode || nt_kind(nt, av[0]) == NK_HashNode))
-      want = TY_POLY_POLY_HASH;
+    default:
+      if (kt != TY_UNKNOWN && kt != TY_VOID) want = TY_POLY_POLY_HASH;
+      /* An empty container LITERAL as the key infers no kind at all, but it is
+         still a pointer at emit time (a bare `[]` lowers to an array), so it
+         needs the same widening -- the unresolved kind is what let `{}.fetch []`
+         through to the C compiler. */
+      else if (kt == TY_UNKNOWN &&
+               (nt_kind(nt, av[0]) == NK_ArrayNode || nt_kind(nt, av[0]) == NK_HashNode))
+        want = TY_POLY_POLY_HASH;
+      break;
+    }
     if (!ty_is_hash(want)) continue;
     if (direct) {
       if (c->hash_want[recv] != want) { c->hash_want[recv] = want; changed = 1; }
@@ -17781,6 +17805,11 @@ static int dyn_alias_writes(Compiler *c, int node, Scope *sc, const char *vn, co
   }
   return n;
 }
+static int dyn_lit_params(Compiler *c, int lit) {
+  if (nt_kind(c->nt, lit) != NK_BlockNode) return a_proc_params_node(c, lit);
+  int bp = nt_ref(c->nt, lit, "parameters");
+  return bp >= 0 && nt_kind(c->nt, bp) == NK_BlockParametersNode ? nt_ref(c->nt, bp, "parameters") : -1;
+}
 /* The parameter call position k of a proc literal or a block binds whatever
    the count, or NULL: a required one, or an optional after them unless
    required parameters follow (as dyn_method_nreq counts a method's). The
@@ -17789,12 +17818,7 @@ static const char *dyn_lit_param_name(Compiler *c, int lit, int k) {
   const char *pn = proc_param_name(c, lit, k);
   if (pn) return pn;
   const NodeTable *nt = c->nt;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int rn = 0, on = 0, sn = 0;
   if (pnode < 0) return NULL;
   nt_arr(nt, pnode, "requireds", &rn);
@@ -17816,12 +17840,7 @@ static unsigned dyn_lit_bits(Compiler *c, int lit) {
      that parameter's String when the call omits it, so what the body does
      to it is done to the required one (promote_default_alias_params). */
   const NodeTable *nt = c->nt;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int on = 0; const int *ov = pnode >= 0 ? nt_arr(nt, pnode, "optionals", &on) : NULL;
   for (int o = 0; o < on; o++) {
     int dv = nt_ref(nt, ov[o], "value");
@@ -17863,12 +17882,7 @@ static unsigned dyn_lit_bits(Compiler *c, int lit) {
    arguments (sp_proc_fill's distribution), or NULL. */
 static const char *dyn_lit_post_name(Compiler *c, int lit, int k, int n) {
   const NodeTable *nt = c->nt;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   if (pnode < 0 || k >= n) return NULL;
   int rn = 0, on = 0, sn = 0;
   nt_arr(nt, pnode, "requireds", &rn);
@@ -17894,12 +17908,7 @@ static int dyn_lit_post_app(Compiler *c, int lit) {
   const NodeTable *nt = c->nt;
   if (lit < 0 || lit >= g_dyn.nlit) return 0;
   if (g_dyn.litpost[lit]) return g_dyn.litpost[lit] == 2;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int sn = 0; const int *sv = pnode >= 0 ? nt_arr(nt, pnode, "posts", &sn) : NULL;
   int app = 0;
   for (int i = 0; i < sn && !app; i++) {
@@ -17973,12 +17982,7 @@ static int dyn_kw_name_is(const char *pn, const char *key) {
 }
 static unsigned dyn_lit_kw_bits(Compiler *c, int lit, const char *key) {
   const NodeTable *nt = c->nt;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int kn = 0; const int *kv = pnode >= 0 ? nt_arr(nt, pnode, "keywords", &kn) : NULL;
   for (int i = 0; i < kn; i++) {
     const char *pn[1] = { nt_str(nt, kv[i], "name") };
@@ -18014,12 +18018,7 @@ static unsigned dyn_meth_kw_bits(Compiler *c, int mi, const char *key, int *j_ou
    dyn_any_appender does for a position: a program with none keeps its C. */
 static int dyn_lit_kw_any(Compiler *c, int lit) {
   const NodeTable *nt = c->nt;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int kn = 0; const int *kv = pnode >= 0 ? nt_arr(nt, pnode, "keywords", &kn) : NULL;
   for (int i = 0; i < kn; i++) {
     const char *pn = nt_str(nt, kv[i], "name");
@@ -18334,12 +18333,7 @@ static int dyn_lit_rest_takes(Compiler *c, int lit, int k) {
   const NodeTable *nt = c->nt;
   const char *rn = proc_rest_name(c, lit);
   if (!rn || !rn[0]) return 0;
-  int pnode = -1;
-  if (nt_kind(nt, lit) == NK_BlockNode) {
-    int bp = nt_ref(nt, lit, "parameters");
-    pnode = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
-  }
-  else pnode = a_proc_params_node(c, lit);
+  int pnode = dyn_lit_params(c, lit);
   int rn_req = 0;
   if (pnode >= 0) nt_arr(nt, pnode, "requireds", &rn_req);
   if (k < rn_req) return 0;
@@ -19694,10 +19688,7 @@ static int dyn_pull_site_kw_args(Compiler *c, int n) {
       if (!key || v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode) continue;
       TyKind vt = comp_ntype(c, v);
       if (vt != TY_STRING && vt != TY_STRBUF) continue;
-      const char *vn = nt_str(nt, v, "name");
-      Scope *vs = vn ? comp_scope_of(c, v) : NULL;
-      LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-      if (!(lv && lv->type == TY_STRBUF && lv->str_shared)) {
+      if (!local_is_handle(c, v)) {
         DynReach r;
         dyn_site_kw_reach(c, n, key, &r);
         if (r.unlifted || !r.app) continue;
@@ -19769,10 +19760,7 @@ static int dyn_pull_site_args(Compiler *c, int n) {
     /* A local that is the handle already goes over as the handle at every
        dynamic call, appending target or not: demoted, a read-only call
        would copy the whole String per call. */
-    const char *vn = nt_str(nt, av[k], "name");
-    Scope *vs = vn ? comp_scope_of(c, av[k]) : NULL;
-    LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-    int already = lv && lv->type == TY_STRBUF && lv->str_shared;
+    int already = local_is_handle(c, av[k]);
     if (!already) {
       DynReach r;
       dyn_site_reach(c, n, k, &r);
@@ -19798,13 +19786,6 @@ static int dyn_pull_site_args(Compiler *c, int n) {
    variable bound to it is pulled in (convert_byref_handle_params pulls a
    method's callers, dyn_pull_arg a yield's variables). A program that
    yields no handle into an appending block keeps its C. */
-static int an_local_is_handle(Compiler *c, int a) {
-  if (a < 0 || nt_kind(c->nt, a) != NK_LocalVariableReadNode) return 0;
-  const char *vn = nt_str(c->nt, a, "name");
-  Scope *vs = vn ? comp_scope_of(c, a) : NULL;
-  LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-  return lv && lv->type == TY_STRBUF && lv->str_shared;
-}
 /* A plain String local that another local names too (`z = x; yield z`): the
    lent alias (a `const char **` slot) would grow only the yielded name, so
    such a local counts as a handle here, as an aliased local handed to a lent
@@ -19812,7 +19793,7 @@ static int an_local_is_handle(Compiler *c, int a) {
    parameter takes the handle, the local is pulled in, and the pure-alias
    rule (promote_local_alias_pairs) then takes its other names along. */
 static int an_local_is_handle_or_aliased(Compiler *c, const ALocalAliases *t, int a) {
-  if (an_local_is_handle(c, a)) return 1;
+  if (local_is_handle(c, a)) return 1;
   if (a < 0 || nt_kind(c->nt, a) != NK_LocalVariableReadNode) return 0;
   const char *vn = nt_str(c->nt, a, "name");
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
@@ -19856,7 +19837,7 @@ static int yield_splice_kw_handles(Compiler *c, int mi, int h, int kwh, int pass
     if (!key || v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode) continue;
     TyKind at = comp_ntype(c, v);
     if (at != TY_STRING && at != TY_STRBUF) continue;
-    int is_h = an_local_is_handle(c, v), into_h = 0;
+    int is_h = local_is_handle(c, v), into_h = 0;
     for (int ei = h >= 0 ? g_dyn.bhead[h] : -1; ei >= 0; ei = g_dyn.bnext[ei]) {
       int u = g_dyn.bnode[ei], blk = nt_ref(nt, u, "block");
       if (nt_kind(nt, blk) != NK_BlockNode || an_call_target_mi(c, u) != mi) continue;
@@ -19984,7 +19965,7 @@ static int yield_splice_site(Compiler *c, int y, int pass, ALocalAliases *aliase
       if (pass || !is_h || t->type != TY_STRING || !an_block_param_lent(c, blk, k, call_plain_argc(c, y))) continue;
       t->type = TY_STRBUF; t->str_shared = 1; changed = 1;
     }
-    if (pass && into_h && !an_local_is_handle(c, av[k])) changed |= dyn_pull_arg(c, av[k], 0);
+    if (pass && into_h && !local_is_handle(c, av[k])) changed |= dyn_pull_arg(c, av[k], 0);
     /* a call site handing the method a proc (`run(s, &pr)`,
        `&method(:m)`): the spliced yield calls it, boxing what it yields,
        which carries the handle into a proc that appends to it */
@@ -20051,7 +20032,7 @@ static int yield_splice_handles(Compiler *c) {
       Scope *bs = bp ? comp_scope_of(c, blk) : NULL;
       LocalVar *t = bs ? scope_local(bs, bp) : NULL;
       if (!t || t->is_cell) continue;
-      if (an_local_is_handle(c, av[k])) {
+      if (local_is_handle(c, av[k])) {
         if (t->type == TY_STRING && an_block_param_lent(c, blk, k, call_plain_argc(c, u))) {
           t->type = TY_STRBUF; t->str_shared = 1; changed = 1;
         }
@@ -20160,10 +20141,7 @@ static int promote_dyncall_string_args(Compiler *c) {
       if (nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
       TyKind at = comp_ntype(c, av[k]);
       if (at != TY_STRING && at != TY_STRBUF) continue;
-      const char *vn = nt_str(nt, av[k], "name");
-      Scope *vs = vn ? comp_scope_of(c, av[k]) : NULL;
-      LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-      if (!(lv && lv->type == TY_STRBUF && lv->str_shared)) {
+      if (!local_is_handle(c, av[k])) {
         DynReach r; memset(&r, 0, sizeof r);
         if (shift) dyn_reach_value(c, nt_ref(nt, n, "receiver"), k - shift, 0, &r);
         else r.unknown = 1;
@@ -26945,9 +26923,7 @@ void analyze_program(Compiler *c) {
       const int *args = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
       for (int j = 0; j < an; j++) {
         const char *aty = nt_type(nt, args[j]);
-        const char *mname = NULL;
-        if (aty && sp_streq(aty, "ConstantReadNode")) mname = nt_str(nt, args[j], "name");
-        else if (aty && sp_streq(aty, "ConstantPathNode")) mname = nt_str(nt, args[j], "name");
+        const char *mname = (aty && (sp_streq(aty, "ConstantReadNode") || sp_streq(aty, "ConstantPathNode"))) ? nt_str(nt, args[j], "name") : NULL;
         int ci = mname ? comp_class_index(c, mname) : -1;
         if (ci < 0) continue;
         c->toplevel_includes = realloc(c->toplevel_includes,

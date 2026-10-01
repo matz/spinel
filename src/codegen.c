@@ -100,7 +100,7 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
      it by evaluating for effect and yielding nil, mirroring emit_boxed. Without
      this, the int-boxing fallback below produced sp_box_int(<sp_RbVal>) -- an
      sp_int slot fed a boxed value (the recurring poly-box bug family). */
-  if (t == TY_UNKNOWN || t == TY_VOID || t == TY_REGEX) { buf_printf(b, "(%s, sp_box_nil())", expr); return; }
+  if (t == TY_UNKNOWN || t == TY_VOID) { buf_printf(b, "(%s, sp_box_nil())", expr); return; }
   /* Reference-backed builtins are nilable C pointers -- box NULL as nil (see
      ty_nullable_builtin_id). This also covers TY_PROC/TY_METHOD, which used to
      fall to the sp_box_proc/sp_box_method switch cases below (both wrapped NULL
@@ -2181,13 +2181,17 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
       /* A poly param is an sp_RbVal by value: root through the tagged
          RBVAL form so the collector reads the boxed pointer, not the
          struct's first word (the tag). */
-      if (lv->type == TY_POLY) buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", lv->name);
-      else if (lv->type == TY_STR_RANGE) {   /* two GC strings by value; see emit_local_decl */
+      switch (lv->type) {
+      case TY_POLY: buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", lv->name); break;
+      case TY_STR_RANGE:   /* two GC strings by value; see emit_local_decl */
         buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.first);\n", lv->name);
         buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.last);\n", lv->name);
+        break;
+      case TY_STRING: buf_printf(b, "    SP_GC_ROOT_STR(lv_%s);\n", lv->name); break;   /* see emit_local_decl */
+      default:
+        if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
+        break;
       }
-      else if (lv->type == TY_STRING) buf_printf(b, "    SP_GC_ROOT_STR(lv_%s);\n", lv->name);   /* see emit_local_decl */
-      else if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
     }
     else {
       /* A BLOCK parameter the analyzer never typed still needs storage: the
@@ -4949,6 +4953,8 @@ void proc_collect_locals(Compiler *c, int id, NameSet *locals) {
    flat fiber-body C function it is inlined into. */
 static void collect_block_param_names(Compiler *c, int blk, NameSet *out) {
   const NodeTable *nt = c->nt;
+  const char *spa = nt_str(nt, blk, "sym_proc_arg");
+  if (spa) nameset_add(out, spa);
   int bp_node = nt_ref(nt, blk, "parameters");
   if (bp_node < 0) return;
   int inner = nt_ref(nt, bp_node, "parameters");
@@ -8204,15 +8210,19 @@ void emit_class_scan(Compiler *c, ClassInfo *ci, Buf *b) {
   for (int i = 0; i < ci->nivars; i++) {
     TyKind t = ci->ivar_types[i];
     const char *iv = iv_c(ci->ivars[i] + 1);
-    if (t == TY_STRING) buf_printf(b, "  sp_mark_string(o->iv_%s);\n", iv);
-    else if (t == TY_POLY) buf_printf(b, "  sp_mark_rbval(o->iv_%s);\n", iv);
+    switch (t) {
+    case TY_STRING: buf_printf(b, "  sp_mark_string(o->iv_%s);\n", iv); break;
+    case TY_POLY: buf_printf(b, "  sp_mark_rbval(o->iv_%s);\n", iv); break;
     /* a by-value struct the walker cannot follow: mark what it carries */
-    else if (t == TY_STR_RANGE) {
+    case TY_STR_RANGE:
       buf_printf(b, "  sp_mark_string(o->iv_%s.first);\n", iv);
       buf_printf(b, "  sp_mark_string(o->iv_%s.last);\n", iv);
+      break;
+    default:
+      if (needs_root(t))
+        buf_printf(b, "  if (o->iv_%s) sp_gc_mark((void *)o->iv_%s);\n", iv, iv);
+      break;
     }
-    else if (needs_root(t))
-      buf_printf(b, "  if (o->iv_%s) sp_gc_mark((void *)o->iv_%s);\n", iv, iv);
   }
   buf_puts(b, "}\n");
 }

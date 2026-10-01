@@ -2,3 +2,17 @@
 "y"
 "a"
 "b"
+"rhs-1"
+"rhs-2"
+:statement_tail
+:statement_tail
+[4, 4, 2, "rvwrvrvwrv"]
+"rhs-1"
+"rhs-1"
+"rhs-2"
+"rhs-2"
+:statement_tail
+"rhs-3"
+:statement_tail
+"rhs-4"
+[4, 4, 2, "rvwrvrvwrv"]

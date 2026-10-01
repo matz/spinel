@@ -1,0 +1,58 @@
+Child
+1
+Circle
+1
+Disc
+2
+Circle
+L:Circle
+L:Circle
+Circle
+Circle
+Disc
+L:Disc
+L:Disc
+Disc
+g Disc
+Circle 0
+Disc 5
+1 Circle
+2 Circle
+Circle
+L:Circle
+L:Circle
+Circle
+proc Circle
+proc 1
+proc 2
+Shape
+blk
+Circle
+blk
+Disc
+blk
+Disc
+Disc
+4
+Leaf 2
+Leaf
+Twig 6
+false
+true
+Leaf Leaf
+kind-node
+kind-leaf
+twig!
+Twig
+Twig
+Leaf
+Twig
+kind-leaf
+twig!
+kind-node
+kind-leaf
+kind-leaf
+kind-leaf
+TWIG!
+P:Plain
+P:Fancy

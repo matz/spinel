@@ -3229,6 +3229,21 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+static void emit_dyn_name_sym(Compiler *c, int sym, Buf *b) {
+  TyKind st = comp_ntype(c, sym);
+  if (st == TY_SYMBOL) emit_expr(c, sym, b);
+  else if (st == TY_STRING) { buf_puts(b, "sp_sym_intern("); emit_expr(c, sym, b); buf_puts(b, ")"); }
+  else {
+    /* a boxed Symbol already carries its sp_sym; only a String name is
+       interned, where rendering the Symbol to text and interning it back ran
+       on every call (#4854) */
+    int tn = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tn); emit_boxed(c, sym, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })",
+               tn, tn, tn);
+  }
+}
+
 /* Dynamic `recv.send(name, args)` over a runtime name: desugar_dynamic_send
    stashed one synthesized `recv.m(args)` arm per candidate method name. Emit a
    chain `name == :m1 ? recv.m1(args) : ... : raise NoMethodError`, boxing each
@@ -3253,7 +3268,6 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   if (g_dsend_depth >= 64) return 0;
   g_dsend_active[g_dsend_depth++] = id;
   int sym = argv[0], mo = sp_streq(nt_str(nt, id, "name"), "method");
-  TyKind st = comp_ntype(c, sym);
   int t = ++g_tmp, recv = nt_ref(nt, id, "receiver"), sv_nargov = g_n_argov;
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   buf_puts(b, "({ ");
@@ -3263,17 +3277,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv; snprintf(g_argov_text[g_n_argov++], sizeof g_argov_text[0], "_t%d", tr);
   }
   buf_printf(b, "sp_sym _t%d = ", t);
-  if (st == TY_SYMBOL) emit_expr(c, sym, b);
-  else if (st == TY_STRING) { buf_puts(b, "sp_sym_intern("); emit_expr(c, sym, b); buf_puts(b, ")"); }
-  else {
-    /* a boxed Symbol already carries its sp_sym; only a String name is
-       interned, where rendering the Symbol to text and interning it back ran
-       on every call (#4854) */
-    int tn = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", tn); emit_boxed(c, sym, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })",
-               tn, tn, tn);
-  }
+  emit_dyn_name_sym(c, sym, b);
   buf_printf(b, "; sp_RbVal _r%d; ", t);
   Buf *sv_pre = g_pre;
   for (int k = 0; k < narm; k++) {
@@ -3358,17 +3362,9 @@ static int emit_dynamic_respond_to(Compiler *c, int id, Buf *b) {
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   if (argc < 1 || !argv) return 0;
   int sym = argv[0];
-  TyKind st = comp_ntype(c, sym);
   int t = ++g_tmp;
   buf_printf(b, "({ sp_sym _t%d = ", t);
-  if (st == TY_SYMBOL) emit_expr(c, sym, b);
-  else if (st == TY_STRING) { buf_puts(b, "sp_sym_intern("); emit_expr(c, sym, b); buf_puts(b, ")"); }
-  else {
-    int tn = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", tn); emit_boxed(c, sym, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })",
-               tn, tn, tn);
-  }
+  emit_dyn_name_sym(c, sym, b);
   buf_printf(b, "; sp_bool _r%d = 0; ", t);
   Buf *sv_pre = g_pre;
   for (int k = 0; k < narm; k++) {
@@ -15936,17 +15932,18 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         for (int j = 0; j < sci->nmembers; j++) {
           const char *ivn = iv_c(sci->ivars[j] + 1);   /* skip @, mangle to a C field */
           TyKind ivt = sci->ivar_types[j];
-          if (ivt == TY_INT || ivt == TY_BOOL || ivt == TY_SYMBOL)
-            buf_printf(b, " && _t%d->iv_%s == _t%d->iv_%s", ta, ivn, tb2, ivn);
+          switch (ivt) {
+          case TY_INT: case TY_BOOL: case TY_SYMBOL:
+            buf_printf(b, " && _t%d->iv_%s == _t%d->iv_%s", ta, ivn, tb2, ivn); break;
           /* two nil sentinels are equal though NaN != NaN */
-          else if (ivt == TY_FLOAT)
+          case TY_FLOAT:
             buf_printf(b, " && (_t%d->iv_%s == _t%d->iv_%s || (sp_float_is_nil(_t%d->iv_%s) && sp_float_is_nil(_t%d->iv_%s)))",
-                       ta, ivn, tb2, ivn, ta, ivn, tb2, ivn);
-          else if (ivt == TY_STRING)
-            buf_printf(b, " && sp_str_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn);
-          else if (ivt == TY_POLY)
-            buf_printf(b, " && sp_poly_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn);
-          else {
+                       ta, ivn, tb2, ivn, ta, ivn, tb2, ivn); break;
+          case TY_STRING:
+            buf_printf(b, " && sp_str_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn); break;
+          case TY_POLY:
+            buf_printf(b, " && sp_poly_eq(_t%d->iv_%s, _t%d->iv_%s)", ta, ivn, tb2, ivn); break;
+          default: {
             /* boxed comparison covers arrays/hashes/objects uniformly */
             Buf ba; memset(&ba, 0, sizeof ba);
             char lx[128], rx[128];
@@ -15958,6 +15955,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
             emit_boxed_text(c, ivt, rx, b);
             buf_puts(b, ")");
             free(ba.p);
+            break;
+          }
           }
         }
         buf_puts(b, "); })");
@@ -17983,16 +17982,18 @@ static int emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
       if (lv) p = lv->type;
     }
     char a[16]; snprintf(a, sizeof a, "_a%d", i);
-    if (p == TY_POLY || p == TY_UNKNOWN) {           /* param is sp_RbVal: box it */
+    switch (p) {
+    case TY_POLY: case TY_UNKNOWN:           /* param is sp_RbVal: box it */
       if (sp_streq(spec, "ptr"))                          buf_printf(&call, "sp_box_foreign_ptr((void *)%s)", a);
       else if (sp_streq(spec, "str"))                     buf_printf(&call, "sp_box_str(%s)", a);
       else if (sp_streq(spec, "float") || sp_streq(spec, "double")) buf_printf(&call, "sp_box_float(%s)", a);
       else                                                buf_printf(&call, "sp_box_int((sp_int)%s)", a);
+      break;
+    case TY_INT:    buf_printf(&call, sp_streq(spec, "ptr") ? "(sp_int)(uintptr_t)%s" : "(sp_int)%s", a); break;
+    case TY_STRING: buf_printf(&call, "(const char *)%s", a); break;
+    case TY_FLOAT:  buf_printf(&call, "(sp_float)%s", a); break;
+    default:        buf_printf(&call, "(sp_int)%s", a); break;
     }
-    else if (p == TY_INT)    buf_printf(&call, sp_streq(spec, "ptr") ? "(sp_int)(uintptr_t)%s" : "(sp_int)%s", a);
-    else if (p == TY_STRING) buf_printf(&call, "(const char *)%s", a);
-    else if (p == TY_FLOAT)  buf_printf(&call, "(sp_float)%s", a);
-    else                     buf_printf(&call, "(sp_int)%s", a);
   }
   buf_puts(&call, ")");
   /* convert the result to the callback's return type */
@@ -21408,10 +21409,13 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
       if (check >= 0 && check < ac2 && av2[check] >= 0) {
         NodeKind ak3 = nt_kind(nt, av2[check]);
         if (want_int >= 0) {
-          if (ak3 == NK_StringNode) badcls = "String";
-          else if (ak3 == NK_SymbolNode) badcls = "Symbol";
-          else if (ak3 == NK_ArrayNode) badcls = "Array";
-          else if (ak3 == NK_HashNode) badcls = "Hash";
+          switch (ak3) {
+          case NK_StringNode: badcls = "String"; break;
+          case NK_SymbolNode: badcls = "Symbol"; break;
+          case NK_ArrayNode: badcls = "Array"; break;
+          case NK_HashNode: badcls = "Hash"; break;
+          default: break;
+          }
         }
         else {
           if (ak3 == NK_IntegerNode) badcls = "Integer";
@@ -22803,6 +22807,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
              Integer or a Float that also sees nil) names nil or its class at
              run time: the slot's kind alone cannot say which the value is */
           char gmsg[400];
+          int recv_evaluated = 0;
           {
             int nullable_recv = recv >= 0 && (grt == TY_STRING ||
                 ((grt == TY_INT || grt == TY_FLOAT) && nullable_int_value(c, recv)));
@@ -22820,6 +22825,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
                 free(rx.p);
                 buf_printf(&rvb, "_t%d", rvt);
               }
+              recv_evaluated = 1;
               const char *rv = rvb.p ? rvb.p : "0";
               snprintf(gmsg, sizeof gmsg, "(%s%s%s ? \"undefined method '%s' for nil\" : \"undefined method '%s' for %s\")",
                        grt == TY_FLOAT ? "sp_float_is_nil(" : "(", rv,
@@ -22850,16 +22856,32 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             } \
             else buf_puts(b, gmsg); \
           } while (0)
+          /* A receiver the message could not stage is still evaluated, once,
+             ahead of the raise, as CRuby evaluates it before the method is
+             looked up: `Foo.new.bar` never ran Foo.new, so its side effects
+             were lost, and a receiver that is itself an unresolved call
+             (`f.bar.size`) never raised its own NoMethodError -- the outer
+             one named 'size' on "unknown" instead of 'bar' on Foo. */
+          /* It goes inside the message argument, ahead of the message (whose
+             staged arguments come after it), and not around the raise: the
+             coercion sites recognize the sp_raise_nomethod token by its text. */
+          int recv_effect = recv >= 0 && !recv_stageable && !recv_evaluated;
+          #define EMIT_GATE_RECV_MSG() do { \
+            if (recv_effect) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), "); } \
+            EMIT_GATE_MSG(); \
+            if (recv_effect) buf_puts(b, ")"); \
+          } while (0)
           if (sp_streq(dflt, "sp_box_nil()")) {
             buf_puts(b, "sp_raise_nomethod(");
-            EMIT_GATE_MSG();
+            EMIT_GATE_RECV_MSG();
             buf_puts(b, ")");
           }
           else {
             buf_puts(b, "(sp_raise_cls(\"NoMethodError\", ");
-            EMIT_GATE_MSG();
+            EMIT_GATE_RECV_MSG();
             buf_printf(b, "), %s)", dflt);
           }
+          #undef EMIT_GATE_RECV_MSG
           #undef EMIT_GATE_MSG
           #undef EMIT_GATE_ARGS
         }
@@ -27799,6 +27821,14 @@ static int emit_method_obj_on_constant(Compiler *c, int id, int recv, const char
   emit_expr(c, recv, b);
   buf_puts(b, "), (sp_BoundMethod *)0)");
   return 1;
+}
+
+/* The boxed temp `_t<t>` as a value of the call's own type `want`: kept
+   boxed for a poly slot, else unboxed to it. */
+static void emit_unbox_or_keep(Compiler *c, TyKind want, int t, Buf *b) {
+  char tn[24]; snprintf(tn, sizeof tn, "_t%d", t);
+  if (want == TY_POLY || want == TY_UNKNOWN || want == TY_VOID) buf_puts(b, tn);
+  else emit_unbox_text(c, want, tn, b);
 }
 
 static void emit_call_body(Compiler *c, int id, Buf *b) {
@@ -33124,11 +33154,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       free(rb.p); return;
     }
     if (sp_streq(name, "sync=") && argc >= 1) {
+      /* answers its argument; only its truth sets the mode */
       int ts2 = ++g_tmp;
-      buf_printf(b, "({ sp_bool _t%d = (", ts2);
-      if (comp_ntype(c, argv[0]) == TY_BOOL) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_poly_truthy("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
-      buf_printf(b, "); sp_File_set_sync(%s, _t%d); })", r, ts2);
+      buf_puts(b, "({ sp_RbVal ");
+      buf_printf(b, "_t%d = ", ts2); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; sp_File_set_sync(%s, sp_poly_truthy(_t%d)); ", r, ts2);
+      emit_unbox_or_keep(c, comp_ntype(c, id), ts2, b);
+      buf_puts(b, "; })");
       free(rb.p); return;
     }
     if (sp_streq(name, "flush") || sp_streq(name, "binmode")) {
@@ -33293,6 +33325,12 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
           comp_reader_in_chain(c, k, name, NULL))
         iocand = 1;
+      /* an attr writer answers `x.sync = v` as a reader answers `x.sync` */
+      size_t nl = strlen(name);
+      if (nl > 1 && nl < 256 && name[nl - 1] == '=') {
+        char base[256]; memcpy(base, name, nl - 1); base[nl - 1] = 0;
+        if (comp_writer_in_chain(c, k, base, NULL)) iocand = 1;
+      }
     }
     /* printf: the receiver and every argument, the format included, are
        evaluated and rooted before the handle is unboxed, so a receiver that
@@ -33519,10 +33557,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "sync") && argc == 0)
         buf_printf(b, "sp_File_sync_p(_t%d); })", tio2);
       else if (sp_streq(name, "sync=") && argc >= 1) {
+        /* answers its argument; only its truth sets the mode */
         int ts3 = ++g_tmp;
-        buf_printf(b, "sp_bool _t%d = sp_poly_truthy(", ts3);
+        buf_printf(b, "sp_RbVal _t%d = ", ts3);
         emit_boxed(c, argv[0], b);
-        buf_printf(b, "); sp_File_set_sync(_t%d, _t%d); })", tio2, ts3);
+        buf_printf(b, "; sp_File_set_sync(_t%d, sp_poly_truthy(_t%d)); ", tio2, ts3);
+        emit_unbox_or_keep(c, comp_ntype(c, id), ts3, b);
+        buf_puts(b, "; })");
       }
       /* read_nonblock / write_nonblock, the same answers the typed-receiver
          arms give: `exception: false` answers the wait symbol (read) or nil
@@ -35757,7 +35798,22 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           Buf dcb; memset(&dcb, 0, sizeof dcb);
           emit_method_cname(c, &c->scopes[defmi], &dcb);
           buf_puts(&dcb, "(");
-          { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, &dcb);
+          /* The one implementation still runs with self = the receiver's
+             runtime class: `self.class.label` from a Base method on a Child
+             names Child in the body. Naming the static class (cid) answered
+             Base for every subclass instance. */
+          int rt_cls = cmethod_takes_self_cls(c, defmi) && !comp_ty_value_obj(c, rrt) &&
+                       class_has_subclass(c, cid);
+          if (rt_cls) {
+            int self_recv = sp_streq(rty ? rty : "", "SelfNode");
+            const char *op = objptr.p ? objptr.p : "";
+            buf_puts(&dcb, "((sp_Class){");
+            if (!self_recv) buf_printf(&dcb, "(%s) ? ", op);
+            emit_obj_dispatch_key(c, cid, op, &dcb);
+            if (!self_recv) buf_printf(&dcb, " : %d", cid);
+            buf_puts(&dcb, ", NULL})");
+          }
+          { const char *ld = rt_cls ? ", " : emit_cmethod_self_cls_arg(c, defmi, cid, &dcb);
             emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, &dcb); }
           buf_puts(&dcb, ")");
           TyKind want = comp_ntype(c, id);
@@ -39362,7 +39418,7 @@ else {
       /* the identity is only for path-like values: File.path(nil) raises */
       emit_path_expr(c, argv[0], b); return;
     }
-    if (sp_streq(name, "absolute_path") && (argc == 1 || argc == 2)) {
+    if ((sp_streq(name, "absolute_path") || sp_streq(name, "expand_path")) && (argc == 1 || argc == 2)) {
       buf_puts(b, "sp_file_expand_path("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
       if (argc == 2) emit_path_expr(c, argv[1], b); else buf_puts(b, "(const char *)0");
       buf_puts(b, ")"); return;
@@ -39567,11 +39623,6 @@ else {
     }
     if (sp_streq(name, "size") && argc == 1) {
       buf_puts(b, "sp_file_size("); emit_path_expr(c, argv[0], b); buf_puts(b, ")"); return;
-    }
-    if (sp_streq(name, "expand_path") && (argc == 1 || argc == 2)) {
-      buf_puts(b, "sp_file_expand_path("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-      if (argc == 2) emit_path_expr(c, argv[1], b); else buf_puts(b, "(const char *)0");
-      buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "join")) {
       int has_dyn = 0;

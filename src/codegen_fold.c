@@ -1019,13 +1019,15 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
    (int/float) key. Loop in the statement prelude; value is the best element. */
 /* Emit `src` (a poly sp_RbVal C-expression) coerced to scalar type `dst`. */
 static void flatmap_coerce_from_poly(TyKind dst, const char *src, Buf *out) {
-  if (dst == TY_INT || dst == TY_BOOL) buf_printf(out, "sp_poly_to_i(%s)", src);
-  else if (dst == TY_FLOAT) buf_printf(out, "sp_poly_to_f(%s)", src);
+  switch (dst) {
+  case TY_INT: case TY_BOOL: buf_printf(out, "sp_poly_to_i(%s)", src); break;
+  case TY_FLOAT: buf_printf(out, "sp_poly_to_f(%s)", src); break;
   /* a String / Symbol param unboxes the field directly (matching emit_unbox_text);
      without this a `const char *`/`sp_sym` slot took a raw sp_RbVal (#2929) */
-  else if (dst == TY_STRING) buf_printf(out, "sp_poly_unbox_s(%s)", src);
-  else if (dst == TY_SYMBOL) buf_printf(out, "(sp_sym)(%s).v.i", src);
-  else buf_puts(out, src);  /* poly (or other): pass through */
+  case TY_STRING: buf_printf(out, "sp_poly_unbox_s(%s)", src); break;
+  case TY_SYMBOL: buf_printf(out, "(sp_sym)(%s).v.i", src); break;
+  default: buf_puts(out, src); break;  /* poly (or other): pass through */
+  }
 }
 
 /* CRuby proc auto-splat: bind each of the block's params to a positional element
@@ -3889,11 +3891,13 @@ void emit_block_param_assign(Compiler *c, int scope_id, const char *nm, int tidx
   LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
   int box = lv && lv->type == TY_POLY && et != TY_POLY;
   if (box) {
-    if (et == TY_INT)    buf_printf(b, "lv_%s = sp_box_int(_t%d);", nm, tidx);
-    else if (et == TY_STRING) buf_printf(b, "lv_%s = sp_box_str(_t%d);", nm, tidx);
-    else if (et == TY_FLOAT)  buf_printf(b, "lv_%s = sp_box_float(_t%d);", nm, tidx);
-    else if (et == TY_BOOL)   buf_printf(b, "lv_%s = sp_box_bool(_t%d);", nm, tidx);
-    else buf_printf(b, "lv_%s = _t%d;", nm, tidx);
+    switch (et) {
+    case TY_INT:    buf_printf(b, "lv_%s = sp_box_int(_t%d);", nm, tidx); break;
+    case TY_STRING: buf_printf(b, "lv_%s = sp_box_str(_t%d);", nm, tidx); break;
+    case TY_FLOAT:  buf_printf(b, "lv_%s = sp_box_float(_t%d);", nm, tidx); break;
+    case TY_BOOL:   buf_printf(b, "lv_%s = sp_box_bool(_t%d);", nm, tidx); break;
+    default:        buf_printf(b, "lv_%s = _t%d;", nm, tidx); break;
+    }
   }
 else {
     buf_printf(b, "lv_%s = _t%d;", nm, tidx);
@@ -6961,14 +6965,17 @@ void emit_rest_from_splat_and_argv(int tmp, TyKind at, int from_idx,
   int t = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", t, t);
   /* elements from the splatted array starting at from_idx */
-  if (at == TY_INT_ARRAY)
-    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_t%d->data[_t%d->start+_si]));", tmp, from_idx, tmp, t, tmp, tmp);
-  else if (at == TY_STR_ARRAY)
-    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
-  else if (at == TY_FLOAT_ARRAY)
-    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
-  else if (at == TY_POLY_ARRAY)
-    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, _t%d->data[_si]);", tmp, from_idx, tmp, t, tmp);
+  switch (at) {
+  case TY_INT_ARRAY:
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_t%d->data[_t%d->start+_si]));", tmp, from_idx, tmp, t, tmp, tmp); break;
+  case TY_STR_ARRAY:
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp); break;
+  case TY_FLOAT_ARRAY:
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp); break;
+  case TY_POLY_ARRAY:
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, _t%d->data[_si]);", tmp, from_idx, tmp, t, tmp); break;
+  default: break;
+  }
   /* then suffix args after the splat */
   for (int j = argv_from; j < pos_argc; j++) {
     const char *jty = argv ? nt_type(c->nt, argv[j]) : NULL;

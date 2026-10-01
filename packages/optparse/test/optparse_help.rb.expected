@@ -1,0 +1,17 @@
+Usage: tool scan PRODUCT [OPTIONS]
+      --exclude=NAME,NAME2            Exclude repositories
+      --public-only                   Searches only public repositories
+  -u, --user=NAME                     Sets the user
+
+Other:
+      --max-eol-days-away NUMBER      Sets the maximum number of days away
+  -h, --help                          Show this help message
+--
+Usage: tool scan PRODUCT [OPTIONS]
+      --exclude=NAME,NAME2            Exclude repositories
+      --public-only                   Searches only public repositories
+  -u, --user=NAME                     Sets the user
+
+Other:
+      --max-eol-days-away NUMBER      Sets the maximum number of days away
+  -h, --help                          Show this help message

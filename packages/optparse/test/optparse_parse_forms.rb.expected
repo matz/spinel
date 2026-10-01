@@ -1,0 +1,12 @@
+["v:true", "n:foo", "a+b"]
+["x", "-v", "--zzz"]
+true
+["keep"]
+["-n", "q", "keep"]
+Usage: tool [OPTIONS]
+    -v                               Verbose
+    -n NAME                          Name
+        --list=A,B                   List
+true
+"missing argument: -n"
+"invalid option: -z"

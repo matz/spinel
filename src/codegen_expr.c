@@ -2403,6 +2403,13 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       buf_puts(b, "sp_poly_to_poly_array(self)");
       return;
     }
+    /* An inherited method inlined at a call site (a yielding one, say) binds
+       self to the receiver temp, typed as the receiver's class, while the
+       body's own typing reads self as the defining class: the standalone
+       function takes `sp_Parent *self`. A value use of self (a temp, a local,
+       an argument) is a Parent slot, so spell the upcast C needs (#6769). */
+    if (g_emitting_class_id >= 0 && g_self_deref && sp_streq(g_self_deref, "->"))
+      emit_obj_upcast_prefix(c, comp_ntype(c, id), ty_object(g_emitting_class_id), b);
     buf_puts(b, g_self); return;   /* self is the object reference (pointer) */
   }
   if (sp_streq(ty, "InstanceVariableReadNode")) {

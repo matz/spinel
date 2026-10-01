@@ -1,0 +1,7 @@
+OptionParser::InvalidOption
+"invalid option: --nope"
+"Invalid option: --nope"
+OptionParser::MissingArgument
+"missing argument: --repo"
+OptionParser::NeedlessArgument
+"needless argument: --public-only=x"

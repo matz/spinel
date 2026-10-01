@@ -1,0 +1,5 @@
+["v", "q", "v", "u:bob", "q", "u:amy"]
+["keep"]
+["v"]
+"invalid option: -x"
+"needless argument: -v="

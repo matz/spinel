@@ -3580,11 +3580,13 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
    inside a container, so it never arrives as a typed struct slot. */
 static void emit_block_param_nil(Compiler *c, TyKind pt, Buf *b) {
   (void)c;
-  if (pt == TY_POLY)                      buf_puts(b, "sp_box_nil()");
-  else if (pt == TY_INT || pt == TY_BOOL) buf_puts(b, "SP_INT_NIL");
-  else if (pt == TY_FLOAT)                buf_puts(b, "sp_float_nil()");
-  else if (pt == TY_SYMBOL)               buf_puts(b, "((sp_sym)-1)");
-  else                                    buf_puts(b, "NULL");  /* string / heap ptr */
+  switch (pt) {
+  case TY_POLY:              buf_puts(b, "sp_box_nil()"); break;
+  case TY_INT: case TY_BOOL: buf_puts(b, "SP_INT_NIL"); break;
+  case TY_FLOAT:             buf_puts(b, "sp_float_nil()"); break;
+  case TY_SYMBOL:            buf_puts(b, "((sp_sym)-1)"); break;
+  default:                   buf_puts(b, "NULL"); break;  /* string / heap ptr */
+  }
 }
 
 /* Bind block param `pname` (already renamed) of type `pt` from a boxed

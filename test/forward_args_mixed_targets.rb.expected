@@ -1,0 +1,11 @@
+[:n, {z: 3}]
+[:m, 5]
+[:n2, [1], {z: 3}]
+[:m2, 4]
+[:m3, 1, 2]
+[:m3, 1, 7]
+[:n3, 9]
+[:n3, 0]
+[:m4, 1, :blk]
+[:n4, {q: 1}]
+"wrong number of arguments (given 1, expected 0)"

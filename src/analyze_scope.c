@@ -3449,10 +3449,7 @@ void register_ffi_decls(Compiler *c) {
           const char *spec = ffi_arg_str(nt, elems[ei]);
           arg_specs[ei] = strdup(spec ? spec : "");
         }
-        if (c->n_native_funcs >= c->c_native_funcs) {
-          c->c_native_funcs = c->c_native_funcs ? c->c_native_funcs * 2 : 16;
-          c->native_funcs = realloc(c->native_funcs, sizeof(NativeFunc) * (size_t)c->c_native_funcs);
-        }
+        c->native_funcs = ffi_grow(c->native_funcs, c->n_native_funcs, &c->c_native_funcs, 16, sizeof(NativeFunc));
         int ni = c->n_native_funcs++;
         c->native_funcs[ni].mod  = strdup(mname);
         c->native_funcs[ni].name = strdup(fname);
@@ -3484,10 +3481,7 @@ void register_ffi_decls(Compiler *c) {
           const char *spec = ffi_arg_str(nt, elems[ei]);
           arg_specs[ei] = strdup(spec ? spec : "");
         }
-        if (c->n_native_methods >= c->c_native_methods) {
-          c->c_native_methods = c->c_native_methods ? c->c_native_methods * 2 : 16;
-          c->native_methods = realloc(c->native_methods, sizeof(NativeMethod) * (size_t)c->c_native_methods);
-        }
+        c->native_methods = ffi_grow(c->native_methods, c->n_native_methods, &c->c_native_methods, 16, sizeof(NativeMethod));
         int mi = c->n_native_methods++;
         c->native_methods[mi].class_id = native_cid;
         c->native_methods[mi].kind = is_ctor ? 1 : 0;
@@ -3522,10 +3516,7 @@ void register_ffi_decls(Compiler *c) {
         const char *objp = ffi_arg_str(nt, args[0]);
         for (int k = 0; objp && k < c->n_native_objs; k++) if (sp_streq(c->native_objs[k].path, objp)) objp = NULL;
         if (!objp) continue;
-        if (c->n_native_objs >= c->c_native_objs) {
-          c->c_native_objs = c->c_native_objs ? c->c_native_objs * 2 : 8;
-          c->native_objs = realloc(c->native_objs, sizeof(NativeObj) * (size_t)c->c_native_objs);
-        }
+        c->native_objs = ffi_grow(c->native_objs, c->n_native_objs, &c->c_native_objs, 8, sizeof(NativeObj));
         int oi = c->n_native_objs++;
         c->native_objs[oi].mod  = strdup(mname);
         c->native_objs[oi].path = strdup(objp);
@@ -4798,9 +4789,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     const int *args = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
     for (int j = 0; j < an; j++) {
       const char *aty = nt_type(nt, args[j]);
-      const char *mname = NULL;
-      if (aty && sp_streq(aty, "ConstantReadNode")) mname = nt_str(nt, args[j], "name");
-      else if (aty && sp_streq(aty, "ConstantPathNode")) mname = nt_str(nt, args[j], "name");
+      const char *mname = (aty && (sp_streq(aty, "ConstantReadNode") || sp_streq(aty, "ConstantPathNode"))) ? nt_str(nt, args[j], "name") : NULL;
       int mod_id = mname ? comp_class_index(c, mname) : -1;
       /* `M = ::M` beside the include: a constant that merely ALIASES the
          module names it just as well, and the collision qualifier rewrites
@@ -5416,9 +5405,7 @@ void register_extends(Compiler *c) {
       /* `extend A, B` extends B first, so A ends up in front */
       for (int j = an - 1; j >= 0; j--) {
         const char *aty = nt_type(nt, args[j]);
-        const char *mname = NULL;
-        if (aty && sp_streq(aty, "ConstantReadNode")) mname = nt_str(nt, args[j], "name");
-        else if (aty && sp_streq(aty, "ConstantPathNode")) mname = nt_str(nt, args[j], "name");
+        const char *mname = (aty && (sp_streq(aty, "ConstantReadNode") || sp_streq(aty, "ConstantPathNode"))) ? nt_str(nt, args[j], "name") : NULL;
         int mod_id = mname ? comp_class_index(c, mname) : -1;
         if (mod_id < 0) continue;
         /* extending a module the class already extends is a no-op: it stays
@@ -5974,9 +5961,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
       const int *args = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
       for (int j = 0; j < an; j++) {
         const char *aty = nt_type(nt, args[j]);
-        const char *mname = NULL;
-        if (aty && sp_streq(aty, "ConstantReadNode")) mname = nt_str(nt, args[j], "name");
-        else if (aty && sp_streq(aty, "ConstantPathNode")) mname = nt_str(nt, args[j], "name");
+        const char *mname = (aty && (sp_streq(aty, "ConstantReadNode") || sp_streq(aty, "ConstantPathNode"))) ? nt_str(nt, args[j], "name") : NULL;
         int mod_id = mname ? comp_class_index(c, mname) : -1;
         if (mod_id < 0) continue;
         /* Transplant each instance method of the module into class ci. */

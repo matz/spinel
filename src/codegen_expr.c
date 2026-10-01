@@ -2990,16 +2990,6 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant Integer::%s\"), 0)", nm);
       return;
     }
-    /* FFI const: Module::NAME -> integer literal */
-    if (par_nmc && nm) {
-      for (int fci = 0; fci < c->n_ffi_consts; fci++) {
-        if (sp_streq(c->ffi_consts[fci].mod, par_nmc) &&
-            sp_streq(c->ffi_consts[fci].name, nm)) {
-          buf_printf(b, "((sp_int)%d)", c->ffi_consts[fci].val);
-          return;
-        }
-      }
-    }
     /* Socket::<CONST>: the value is platform-dependent, so the runtime (where
        the system headers are in scope) resolves it by name. */
     if (par_nmc && nm && sp_streq(par_nmc, "Socket") && sp_feature_required("socket")) {

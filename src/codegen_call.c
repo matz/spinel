@@ -11849,6 +11849,17 @@ static void emit_time_in_zone(Compiler *c, int ts, int zone, Buf *b) {
   }
 }
 
+static int time_hhmm_offset(const char *sv, long *off) {
+  if (!sv || strlen(sv) != 6 || (sv[0] != '+' && sv[0] != '-') || sv[3] != ':' ||
+      sv[1] < '0' || sv[1] > '9' || sv[2] < '0' || sv[2] > '9' ||
+      sv[4] < '0' || sv[4] > '9' || sv[5] < '0' || sv[5] > '9')
+    return 0;
+  *off = ((sv[1] - '0') * 10 + (sv[2] - '0')) * 3600 +
+         ((sv[4] - '0') * 10 + (sv[5] - '0')) * 60;
+  if (sv[0] == '-') *off = -*off;
+  return 1;
+}
+
 /* Civil-argument Time constructor forms, shared by `Time.new(...)` (via the
    generic constant-new path) and Time.local/mktime/utc/gm. Up to 6 civil
    fields with CRuby's defaults (month/day 1, rest 0); a 7th positional
@@ -11916,14 +11927,7 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
       long koff = 0; int khave = 0;
       const char *ity = nt_type(nt, inv);
       if (ity && sp_streq(ity, "StringNode")) {
-        const char *sv = nt_str(nt, inv, "content");
-        if (!sv || strlen(sv) != 6 || (sv[0] != '+' && sv[0] != '-') || sv[3] != ':' ||
-            sv[1] < '0' || sv[1] > '9' || sv[2] < '0' || sv[2] > '9' ||
-            sv[4] < '0' || sv[4] > '9' || sv[5] < '0' || sv[5] > '9')
-          return 0;
-        koff = ((sv[1] - '0') * 10 + (sv[2] - '0')) * 3600 +
-               ((sv[4] - '0') * 10 + (sv[5] - '0')) * 60;
-        if (sv[0] == '-') koff = -koff;
+        if (!time_hhmm_offset(nt_str(nt, inv, "content"), &koff)) return 0;
         khave = 1;
       }
       else if (comp_ntype(c, inv) != TY_INT) return 0;
@@ -11956,14 +11960,7 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
     /* utc_offset: an Integer-second expression, or a literal "+HH:MM" */
     const char *oty = nt_type(nt, argv[6]);
     if (oty && sp_streq(oty, "StringNode")) {
-      const char *sv = nt_str(nt, argv[6], "content");
-      if (!sv || strlen(sv) != 6 || (sv[0] != '+' && sv[0] != '-') || sv[3] != ':' ||
-          sv[1] < '0' || sv[1] > '9' || sv[2] < '0' || sv[2] > '9' ||
-          sv[4] < '0' || sv[4] > '9' || sv[5] < '0' || sv[5] > '9')
-        return 0;
-      lit_off = ((sv[1] - '0') * 10 + (sv[2] - '0')) * 3600 +
-                ((sv[4] - '0') * 10 + (sv[5] - '0')) * 60;
-      if (sv[0] == '-') lit_off = -lit_off;
+      if (!time_hhmm_offset(nt_str(nt, argv[6], "content"), &lit_off)) return 0;
       have_lit_off = 1;
     }
 else {
@@ -12393,14 +12390,6 @@ static void emit_stat_handle_only(int th, const char *name, Buf *b) {
    stat is carried in; a field's index is its slot in sp_stat_field. */
 static const char *const boxed_stat_sfield[] = { "uid", "gid", "nlink", "dev", "ino",
                                                  "blksize", "blocks", "rdev", NULL };
-/* Only a stat's handle has these: a File, a pipe or a standard stream
-   raises CRuby's NoMethodError. */
-static void emit_stat_fields_guard(int th, const char *name, Buf *b) {
-  buf_printf(b, "if (!(_t%d->mode && (strcmp(_t%d->mode, \"stat\") == 0 || "
-                "strcmp(_t%d->mode, \"lstat\") == 0))) "
-                "sp_raise_poly_nomethod(\"%s\", sp_box_obj(_t%d, SP_BUILTIN_IO)); ",
-             th, th, th, name, th);
-}
 /* mode or one of those fields */
 static int boxed_stat_name(const char *name) {
   if (sp_streq(name, "mode")) return 1;
@@ -33366,13 +33355,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       /* a stat's mode and fields, answered as the TY_IO arms answer them,
          for a stat's handle only */
       else if (sp_streq(name, "mode")) {
-        emit_stat_fields_guard(tio2, name, b);
+        emit_stat_handle_only(tio2, name, b);
         buf_printf(b, "sp_stat_mode(_t%d); })", tio2);
       }
       else if (boxed_stat_name(name)) {
         int k = 0;
         while (boxed_stat_sfield[k] && !sp_streq(name, boxed_stat_sfield[k])) k++;
-        emit_stat_fields_guard(tio2, name, b);
+        emit_stat_handle_only(tio2, name, b);
         buf_printf(b, "sp_stat_field(_t%d, %d); })", tio2, k);
       }
       else if (sp_streq(name, "path") || sp_streq(name, "to_path"))
@@ -42345,8 +42334,7 @@ else {
          (which may run arbitrary code, and allocate) is evaluated */
       int tpl = ++g_tmp, tpr = ++g_tmp;
       buf_printf(b, "({ sp_Bigint *_t%d = sp_bigint_new_int(", tpl);
-      if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-      else emit_expr(c, recv, b);
+      emit_poly_unboxed(c, recv, rt, "sp_poly_to_i(", b);
       buf_printf(b, "); SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tpl, tpr);
       emit_expr(c, argv[0], b);
       buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tpr,
@@ -42381,8 +42369,7 @@ else {
     if (is_shift && lit_shift &&
         (litc < 0 || litc >= 64 || sp_streq(name, "<<"))) {
       buf_printf(b, "sp_int_%s(", sp_streq(name, "<<") ? "shl" : "shr");
-      if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-      else emit_expr(c, recv, b);
+      emit_poly_unboxed(c, recv, rt, "sp_poly_to_i(", b);
       buf_printf(b, ", %lldLL)", litc);
       return;
     }
@@ -42390,8 +42377,7 @@ else {
       /* a runtime shift count: range-checked (negative shifts the other way,
          past-the-word raises) via a single-compare fast path (#2423) */
       buf_printf(b, "sp_int_%s_ck(", sp_streq(name, "<<") ? "shl" : "shr");
-      if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-      else emit_expr(c, recv, b);
+      emit_poly_unboxed(c, recv, rt, "sp_poly_to_i(", b);
       buf_puts(b, ", ");
       if (at0 == TY_POLY) { buf_puts(b, "sp_poly_bit_operand("); emit_expr(c, argv[0], b); buf_puts(b, ", 1)"); }
       else if (at0 == TY_FLOAT) { buf_puts(b, "(sp_int)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
@@ -42417,8 +42403,7 @@ else {
     int shl_neg_safe = sp_streq(name, "<<");
     buf_puts(b, "(");
     if (shl_neg_safe) buf_puts(b, "(sp_int)((uint64_t)(");
-    if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-    else emit_expr(c, recv, b);
+    emit_poly_unboxed(c, recv, rt, "sp_poly_to_i(", b);
     if (shl_neg_safe) buf_puts(b, ")");
     buf_printf(b, " %s ", name);
     if (at0 == TY_POLY) {

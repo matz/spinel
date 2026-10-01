@@ -1697,14 +1697,17 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   int para = sep && sep[0] == '\0' && sp_str_byte_len(sep) == 0;
   if (para) sep = "\n\n";
   size_t sl = sep ? strlen(sep) : 0;
-  /* fast path: the default "\n" separator with no limit reads via fgets
-     (the byte-wise loop below costs a call per character) */
+  /* fast path: the default "\n" separator with no limit reads via getline
+     (the byte-wise loop below costs a call per character). getline answers
+     the line whole, however long, with its byte count, so a NUL inside it
+     neither ends the line nor drops what follows, and its buffer is on the
+     heap, off the 64KB fiber stack. */
   if (sl == 1 && sep[0] == '\n' && limit <= 0) {
-    /* heap scratch: a 64KB stack local overruns the 64KB fiber stack */
-    char *buf = (char *)malloc(65536);
-    if (!buf) return NULL;
-    if (!fgets(buf, 65536, f->fp)) { free(buf); return NULL; }
-    size_t n = strlen(buf);
+    char *buf = NULL;
+    size_t bcap = 0;
+    ssize_t got = getline(&buf, &bcap, f->fp);
+    if (got < 0) { free(buf); return NULL; }
+    size_t n = (size_t)got;
     /* chomp takes the "\r\n" of a line as well as its "\n" */
     if (chomp && n && buf[n - 1] == '\n') { n--; if (n && buf[n - 1] == '\r') n--; }
     char *r = sp_str_alloc(n);

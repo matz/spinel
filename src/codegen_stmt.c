@@ -5333,6 +5333,11 @@ static void emit_case_int_label(Buf *b, long long v) {
   else buf_printf(b, "%lldLL", v);
 }
 
+void emit_poly_unboxed(Compiler *c, int node, TyKind t, const char *conv, Buf *b) {
+  if (t == TY_POLY) { buf_puts(b, conv); emit_expr(c, node, b); buf_puts(b, ")"); }
+  else emit_expr(c, node, b);
+}
+
 void emit_case(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int pred = nt_ref(nt, id, "predicate");
@@ -5632,8 +5637,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             }
             else {
               buf_printf(b, "sp_str_eq(_t%d, ", t);
-              if (wat == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
-              else emit_expr(c, conds[j], b);
+              emit_poly_unboxed(c, conds[j], wat, "sp_poly_to_s(", b);
               buf_puts(b, ")");
             }
           }
@@ -6012,8 +6016,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
           }
           else {
             buf_printf(b, "sp_str_eq(_t%d, ", t);
-            if (wat2 == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
-            else emit_expr(c, conds[j], b);
+            emit_poly_unboxed(c, conds[j], wat2, "sp_poly_to_s(", b);
             buf_puts(b, ")");
           }
         }
@@ -8653,12 +8656,6 @@ static void masgn_guard_line(Buf *fb, Buf *b, int indent) {
   if (n) { emit_indent(b, indent); buf_printf(b, "%.*s\n", (int)n, fb->p); }
   free(fb->p);
 }
-/* `_t<tmp>` when the part was evaluated into that temp before the values, or
-   the part itself. */
-static void masgn_part(Compiler *c, int node, int tmp, Buf *b) {
-  if (tmp >= 0) buf_printf(b, "_t%d", tmp);
-  else emit_expr(c, node, b);
-}
 /* `val`, a C value of type `vt`, as a slot of type `st` holds it; a NULL
    `val` is Ruby nil. */
 static void masgn_conv(Compiler *c, TyKind st, TyKind vt, const char *val, Buf *b) {
@@ -8783,7 +8780,7 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
       emit_indent(b, indent);
       /* a masgn element is often nil (a short right side): the store notes it */
       buf_printf(b, "sp_%sArray_set%s(", k, nil_store_sfx(c, k, NIL_STORE_BOXED));
-      masgn_part(c, recv, recv_tmp, b); buf_puts(b, ", ");
+      emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
       if (key_tmp >= 0) buf_printf(b, "_t%d", key_tmp); else emit_int_expr(c, argv[0], b);
       buf_puts(b, ", ");
       /* a boxed value a typed array cannot hold is refused, as the single
@@ -8809,12 +8806,12 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
     }
     else if (ty_is_hash(rt) && ty_hash_cname(rt)) {
       emit_indent(b, indent);
-      buf_puts(b, "if (sp_gc_is_frozen("); masgn_part(c, recv, recv_tmp, b);
-      buf_puts(b, ")) sp_raise_frozen_hash_at("); masgn_part(c, recv, recv_tmp, b);
+      buf_puts(b, "if (sp_gc_is_frozen("); emit_node_or_tmp(c, recv, recv_tmp, b);
+      buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv, recv_tmp, b);
       buf_printf(b, ", %s);\n", hash_box_cls(rt));
       emit_indent(b, indent);
       buf_printf(b, "sp_%sHash_set(", ty_hash_cname(rt));
-      masgn_part(c, recv, recv_tmp, b); buf_puts(b, ", ");
+      emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
       if (key_tmp >= 0) buf_printf(b, "_t%d", key_tmp);
       else if (ty_hash_key(rt) == TY_INT) emit_int_expr(c, argv[0], b);
       else if (ty_hash_key(rt) == TY_POLY) emit_boxed(c, argv[0], b);
@@ -8830,7 +8827,7 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
       LocalVar *vp = scope_local(ws, ws->pnames[1]);
       emit_indent(b, indent);
       buf_printf(b, "sp_%s_%s((sp_%s *)", c->classes[cdef].c_name, mc(ws->name), c->classes[cdef].c_name);
-      masgn_part(c, recv, recv_tmp, b); buf_puts(b, ", ");
+      emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
       if (key_tmp >= 0) buf_printf(b, "_t%d", key_tmp);
       else masgn_index_key(c, argv[0], kt, b);
       buf_puts(b, ", ");
@@ -8855,7 +8852,7 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
     if (wmi >= 0 && cdef >= 0) {
       LocalVar *wp = c->scopes[wmi].nparams >= 1 ? scope_local(&c->scopes[wmi], c->scopes[wmi].pnames[0]) : NULL;
       buf_printf(b, "sp_%s_%s((sp_%s *)", c->classes[cdef].c_name, mc(c->scopes[wmi].name), c->classes[cdef].c_name);
-      masgn_part(c, crecv, recv_tmp, b); buf_puts(b, ", ");
+      emit_node_or_tmp(c, crecv, recv_tmp, b); buf_puts(b, ", ");
       masgn_conv(c, wp ? wp->type : vt, vt, val, b);
       buf_puts(b, ");\n");
     }
@@ -8864,7 +8861,7 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
       int ix = comp_ivar_index(&c->classes[crc], ivn);
-      buf_puts(b, "("); masgn_part(c, crecv, recv_tmp, b);
+      buf_puts(b, "("); emit_node_or_tmp(c, crecv, recv_tmp, b);
       buf_printf(b, ")->iv_%s = ", iv_c(base));
       masgn_conv(c, ix >= 0 ? c->classes[crc].ivar_types[ix] : vt, vt, val, b);
       buf_puts(b, ";\n");
@@ -10299,8 +10296,7 @@ else {
       emit_indent(b, indent);
       if (ivt == TY_STRING) {
         buf_printf(b, "_t%d%siv_%s = sp_str_concat(_t%d%siv_%s, ", trecv, acc, iv_c(rn), trecv, acc, iv_c(rn));
-        if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
-        else emit_expr(c, val, b);
+        emit_poly_unboxed(c, val, rhst, "sp_poly_to_s(", b);
         buf_puts(b, ");\n");
       }
       else if (ivt == TY_POLY && cpf) {
@@ -10313,8 +10309,7 @@ else {
         /* bitwise op-assign on a boxed slot: coerce to int, re-box */
         buf_printf(b, "_t%d%siv_%s = sp_box_int((sp_poly_to_i(_t%d%siv_%s) %s (",
                    trecv, acc, iv_c(rn), trecv, acc, iv_c(rn), op);
-        if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
-        else emit_expr(c, val, b);
+        emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
         buf_puts(b, ")));\n");
       }
       else if (ty_is_array(ivt) || ivt == TY_POLY_ARRAY) {
@@ -10378,8 +10373,7 @@ else {
           /* the reader answers a value, so the concat builds a new string and
              the writer stores it -- the same shape the string ivar slot takes */
           buf_printf(b, "%s(_t%d, sp_str_concat(%s(_t%d), ", nwm->csym, trecv, nrm->csym, trecv);
-          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
-          else emit_expr(c, val, b);
+          emit_poly_unboxed(c, val, rhst, "sp_poly_to_s(", b);
           buf_puts(b, "));\n");
         }
         else if (nany && cpf) {
@@ -10390,8 +10384,7 @@ else {
           /* bitwise on a boxed attribute: coerce to int, re-box */
           buf_printf(b, "%s(_t%d, sp_box_int(sp_poly_to_i(%s(_t%d)) %s (",
                      nwm->csym, trecv, nrm->csym, trecv, op);
-          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
-          else emit_expr(c, val, b);
+          emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
           buf_puts(b, ")));\n");
         }
         else if (rhst != TY_POLY && !bitop) {
@@ -10406,11 +10399,7 @@ else {
         }
         else {
           buf_printf(b, "%s(_t%d, %s(_t%d) %s ", nwm->csym, trecv, nrm->csym, trecv, op);
-          if (rhst == TY_POLY) {
-            buf_puts(b, nint ? "sp_poly_to_i(" : "sp_poly_to_f(");
-            emit_expr(c, val, b); buf_puts(b, ")");
-          }
-          else emit_expr(c, val, b);
+          emit_poly_unboxed(c, val, rhst, nint ? "sp_poly_to_i(" : "sp_poly_to_f(", b);
           buf_puts(b, ");\n");
         }
         return;
@@ -10464,8 +10453,7 @@ else {
         if (ivt == TY_STRING) {
           buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn)); buf_puts(b, " = sp_str_concat(_o->iv_"); buf_puts(b, iv_c(rn));
           buf_puts(b, ", ");
-          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
-          else emit_expr(c, val, b);
+          emit_poly_unboxed(c, val, rhst, "sp_poly_to_s(", b);
           buf_puts(b, "); break; }\n");
         }
         else if (ivt == TY_POLY && cpf) {
@@ -10481,8 +10469,7 @@ else {
           /* bitwise op-assign on a boxed slot: coerce to int, re-box */
           buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn));
           buf_printf(b, " = sp_box_int((sp_poly_to_i(_o->iv_%s) %s (", iv_c(rn), op);
-          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
-          else emit_expr(c, val, b);
+          emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
           buf_puts(b, "))); break; }\n");
         }
         else {
@@ -11660,7 +11647,7 @@ else {
         TyKind ivt2 = iv2 >= 0 ? c->classes[defc2 < 0 ? rc2 : defc2].ivar_types[iv2] : TY_UNKNOWN;
         {
           Buf rb; memset(&rb, 0, sizeof rb);
-          masgn_part(c, recv_id2, ttr[i], &rb);
+          emit_node_or_tmp(c, recv_id2, ttr[i], &rb);
           Buf fb; memset(&fb, 0, sizeof fb);
           emit_frozen_obj_guard(c, rc2, rb.p ? rb.p : "", &fb);
           masgn_guard_line(&fb, b, indent);
@@ -11713,7 +11700,7 @@ else {
           const char *k = (recv_t == TY_POLY_ARRAY) ? "Poly" : array_kind(recv_t);
           if (!k) k = "Int";
           buf_printf(b, "sp_%sArray_set%s(", k, nil_store_sfx(c, k, els[i]));
-          masgn_part(c, recv_id, ttr[i], b); buf_puts(b, ", ");
+          emit_node_or_tmp(c, recv_id, ttr[i], b); buf_puts(b, ", ");
           /* the index slot is an sp_int; a POLY index (a widened local, #4204)
              unboxes here, as the boxed-receiver branch below always has */
           if (ttk[i] >= 0) buf_printf(b, "_t%d", ttk[i]); else emit_int_expr(c, idx_argv[0], b);
@@ -11753,12 +11740,12 @@ else {
           /* The sets do not check for a frozen hash; a single store checks
              before its set, and so does this store, after the values, where
              CRuby's assignment raises. */
-          buf_puts(b, "if (sp_gc_is_frozen("); masgn_part(c, recv_id, ttr[i], b);
-          buf_puts(b, ")) sp_raise_frozen_hash_at("); masgn_part(c, recv_id, ttr[i], b);
+          buf_puts(b, "if (sp_gc_is_frozen("); emit_node_or_tmp(c, recv_id, ttr[i], b);
+          buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv_id, ttr[i], b);
           buf_printf(b, ", %s);\n", hash_box_cls(recv_t));
           emit_indent(b, indent);
           buf_printf(b, "sp_%sHash_set(", hn);
-          masgn_part(c, recv_id, ttr[i], b); buf_puts(b, ", ");
+          emit_node_or_tmp(c, recv_id, ttr[i], b); buf_puts(b, ", ");
           if (ttk[i] >= 0) buf_printf(b, "_t%d", ttk[i]);
           else if (ty_hash_key(recv_t) == TY_INT) emit_int_expr(c, idx_argv[0], b);
           else if (ty_hash_key(recv_t) == TY_POLY) emit_boxed(c, idx_argv[0], b);
@@ -13681,8 +13668,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
           buf_puts(b, "sp_int_codepoint_to_str_in("); emit_expr(c, recv, b); buf_puts(b, ", ");
           emit_expr(c, argv[a], b); buf_puts(b, ")");
         }
-        else if (at == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
-        else emit_expr(c, argv[a], b);
+        else emit_poly_unboxed(c, argv[a], at, "sp_poly_to_s(", b);
         buf_puts(b, ");\n");
       }
       return 1;

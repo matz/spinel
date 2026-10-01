@@ -51,8 +51,8 @@ rescue FrozenError
   p :frozen
 end
 
-# A rest query entered while a POLY query is active cannot cache a
-# cycle-cut negative answer for a later query from another entry point.
+# Rest forwarders and POLY entry points preserve the caller's alias when
+# recursion reaches an appender, including entry from both directions.
 def mixed_a(value, n) = mixed_b(n, value)
 def mixed_b(n, *args)
   mixed_a(*args, n - 1) if n > 0

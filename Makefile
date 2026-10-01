@@ -2458,6 +2458,11 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'sp_PolyPolyHash \* iv_traps;' "$$tmp/hos.c" && grep -q 'sp_PolyPolyHash \* iv_hooks;' "$$tmp/hos.c" || { echo "infer-test: FAIL (#4889 an index write into (@h ||= {}) left @h boxed)"; ok=0; }; \
 	grep -q 'sp_OrwMem_poke(sp_OrwMem \*self, sp_int lv_addr, sp_int lv_value)' "$$tmp/hos.c" || { echo "infer-test: FAIL (#4889 a Hash index write widened an unrelated user []=)"; ok=0; }; \
 	SPINEL_SPLIT_STRICT=1 $(SPINEL) --jobs=3 test/dispatch_override_param_list.rb -o "$$tmp/split" >/dev/null 2>&1 && "$$tmp/split" | cmp -s - test/dispatch_override_param_list.rb.expected || { echo "infer-test: FAIL (#4847 --jobs=3 split build)"; ok=0; }; \
+	$(SPINEL) test/infer/file_foreach_block_streams.rb -c --no-line-map -o "$$tmp/ffbs.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (file_foreach_block_streams: -c)"; ok=0; }; \
+	grep -q 'sp_file_readlines(' "$$tmp/ffbs.c" && { echo "infer-test: FAIL (File.foreach with a block reads the whole file through readlines)"; ok=0; }; \
+	$(SPINEL) test/io_each_block_param_typed.rb -c --no-line-map -o "$$tmp/iebp.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (io_each_block_param_typed: -c)"; ok=0; }; \
+	for v in lines viaeach chomped chars; do grep -q "sp_StrArray \* lv_$$v = " "$$tmp/iebp.c" || { echo "infer-test: FAIL (an array a File's each_line/each/each_char block pushes into is not a String array: $$v)"; ok=0; }; done; \
+	for v in bytes cps; do grep -q "sp_IntArray \* lv_$$v = " "$$tmp/iebp.c" || { echo "infer-test: FAIL (an array a File's each_byte/each_codepoint block pushes into is not an Integer array: $$v)"; ok=0; }; done; \
 	$(SPINEL) test/io_buffer_set_value_boxed.rb -c --no-line-map -o "$$tmp/iob.c" >/dev/null 2>&1 && $(CC) -fsyntax-only -Werror=implicit-function-declaration -Ilib "$$tmp/iob.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (the emitted C calls an IO::Buffer function it does not declare)"; ok=0; }; \
 	$(SPINEL) test/poly_array_break_no_setjmp.rb -c --no-line-map -o "$$tmp/pab.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_array_break_no_setjmp: -c)"; ok=0; }; \
 	awk '/^static .*sp_Board_[a-z_]*\(.*\) \{$$/ {b=1} b {print} b && /^}/ {b=0}' "$$tmp/pab.c" > "$$tmp/pab_board.c"; \

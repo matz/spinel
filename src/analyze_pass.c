@@ -9833,6 +9833,35 @@ static int dir_enumerable_name(const char *nm) {
   for (int i = 0; E[i]; i++) if (sp_streq(nm, E[i])) return 1;
   return 0;
 }
+/* Whether File.foreach call `id` can stream (desugar_dir_surface): a literal
+   block, a path, and after it only arguments an IO's each_line takes as they
+   are written -- a separator, a limit, `chomp:`. A splat, a block argument or
+   another keyword (mode:, encoding:) keeps the readlines form. */
+static int file_foreach_streams(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  int args = nt_ref(nt, id, "arguments");
+  int n = 0; const int *a = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+  if (!a || n < 1 || n > 4) return 0;
+  for (int k = 0; k < n; k++) {
+    NodeKind ak = nt_kind(nt, a[k]);
+    if (ak == NK_SplatNode || ak == NK_BlockArgumentNode) return 0;
+    if (ak == NK_KeywordHashNode) {
+      if (k != n - 1 || k == 0) return 0;
+      int en = 0; const int *ev = nt_arr(nt, a[k], "elements", &en);
+      for (int j = 0; j < en; j++) {
+        if (nt_kind(nt, ev[j]) != NK_AssocNode) return 0;
+        int key = nt_ref(nt, ev[j], "key");
+        if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) return 0;
+        const char *kn = nt_str(nt, key, "value");
+        if (!kn || !sp_streq(kn, "chomp")) return 0;
+      }
+    }
+  }
+  return 1;
+}
+
 int desugar_dir_surface(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -9949,6 +9978,63 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_str(nt, recv, "name", "File");
       rn = "File";
       changed = 1;
+    }
+    /* File.foreach(path, *rest){|l|} -> (File.open(path){|f| f.each_line(*rest){|l|}}; nil):
+       the file is read a line at a time and closed however the block leaves.
+       Only for arguments the IO's each_line takes as written -- positional
+       ones and chomp: -- the rest keep the readlines form below. */
+    if (sp_streq(rn, "File") && sp_streq(nm, "foreach") && file_foreach_streams(c, id)) {
+      int fblk = nt_ref(nt, id, "block");
+      int fargs = nt_ref(nt, id, "arguments");
+      int fac = 0; const int *fav = nt_arr(nt, fargs, "arguments", &fac);
+      int base = nt->count;
+      char fnm[48]; snprintf(fnm, sizeof fnm, "__foreach_f_%d", id);
+      int oargs = nt_new_node(nt, "ArgumentsNode");
+      int rargs = fac > 1 ? nt_new_node(nt, "ArgumentsNode") : -1;
+      int fread = nt_new_node(nt, "LocalVariableReadNode");
+      int each = nt_new_node(nt, "CallNode");
+      int ebody = nt_new_node(nt, "StatementsNode");
+      int freq = nt_new_node(nt, "RequiredParameterNode");
+      int fparams = nt_new_node(nt, "ParametersNode");
+      int fbparams = nt_new_node(nt, "BlockParametersNode");
+      int oblk = nt_new_node(nt, "BlockNode");
+      int open = nt_new_node(nt, "CallNode");
+      int nil2 = nt_new_node(nt, "NilNode");
+      int fstmts = nt_new_node(nt, "StatementsNode");
+      int fparen = nt_new_node(nt, "ParenthesesNode");
+      if (oargs < 0 || (fac > 1 && rargs < 0) || fread < 0 || each < 0 || ebody < 0 || freq < 0 ||
+          fparams < 0 || fbparams < 0 || oblk < 0 || open < 0 || nil2 < 0 || fstmts < 0 || fparen < 0) continue;
+      nt_node_set_arr(nt, oargs, "arguments", fav, 1);
+      if (rargs >= 0) nt_node_set_arr(nt, rargs, "arguments", fav + 1, fac - 1);
+      nt_node_set_str(nt, fread, "name", fnm);
+      nt_node_set_str(nt, each, "name", "each_line");
+      nt_node_set_ref(nt, each, "receiver", fread);
+      nt_node_set_ref(nt, each, "arguments", rargs);
+      nt_node_set_ref(nt, each, "block", fblk);
+      nt_node_set_arr(nt, ebody, "body", &each, 1);
+      nt_node_set_str(nt, freq, "name", fnm);
+      nt_node_set_arr(nt, fparams, "requireds", &freq, 1);
+      nt_node_set_ref(nt, fbparams, "parameters", fparams);
+      nt_node_set_ref(nt, oblk, "parameters", fbparams);
+      nt_node_set_ref(nt, oblk, "body", ebody);
+      nt_node_set_str(nt, open, "name", "open");
+      nt_node_set_ref(nt, open, "receiver", recv);
+      nt_node_set_ref(nt, open, "arguments", oargs);
+      nt_node_set_ref(nt, open, "block", oblk);
+      { int items2[2] = { open, nil2 };
+        nt_node_set_arr(nt, fstmts, "body", items2, 2); }
+      nt_node_set_ref(nt, fparen, "body", fstmts);
+      nt_node_set_str(nt, id, "name", "itself");
+      nt_node_set_ref(nt, id, "receiver", fparen);
+      nt_node_set_ref(nt, id, "arguments", -1);
+      nt_node_set_ref(nt, id, "block", -1);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+      { Scope *sc = comp_scope_of(c, id);
+        LocalVar *lv = sc ? scope_local_intern(sc, fnm) : NULL;
+        if (lv) lv->is_block_param = 1; }
+      changed = 1;
+      continue;
     }
     /* File.foreach(path){|l|} -> (File.readlines(path).each{|l|}; nil): the
        block form returns nil, the blockless form an Enumerator (#2777, #2833) */
@@ -12466,6 +12552,16 @@ int infer_block_params(Compiler *c) {
       pt = TY_POLY;
     else if (rt == TY_POLY && sp_streq(name, "each_line"))
       pt = TY_STRING;  /* File/IO object yielding lines */
+    /* a typed File/IO (or ARGF) yields lines and chars as Strings, bytes and
+       codepoints as Integers -- typed here, with the other block params, so
+       the body is inferred against it: set only where infer_type reaches the
+       call, `h << line` had already made `h = []` a PolyArray */
+    else if ((rt == TY_IO || rt == TY_ARGF) &&
+             (sp_streq(name, "each_line") || sp_streq(name, "each") ||
+              (rt == TY_IO && sp_streq(name, "each_char")) || (rt == TY_ARGF && sp_streq(name, "each_string"))))
+      pt = TY_STRING;
+    else if (rt == TY_IO && (sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")))
+      pt = TY_INT;
     else if (rt == TY_POLY && sp_streq(name, "each_byte"))
       pt = TY_INT;
     else if (rt == TY_STRING && (sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "upto") ||

@@ -11918,13 +11918,6 @@ static void ty_to_rbs_into(Compiler *c, TyKind t, Buf *b) {
   }
 }
 
-/* A type that landed on the boxed slow path -- its RBS is `untyped`, so the
-   method line gets a "widened" comment. */
-static int ty_is_degraded(TyKind t) {
-  return t == TY_POLY || t == TY_POLY_ARRAY || t == TY_POLY_POLY_HASH ||
-         t == TY_SYM_POLY_HASH || t == TY_STR_POLY_HASH;
-}
-
 /* Emit one `  <defprefix>: (params) -> ret` RBS line for scope `s`, with a
    degrade comment when any param/return widened to untyped. */
 /* A method's type as RBS, `(Integer, Integer) -> Array[Integer]`. Answers
@@ -11938,7 +11931,7 @@ static int rbs_method_type_into(Compiler *c, Buf *b, Scope *s) {
     TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
     if (j > 0) buf_puts(b, ", ");
     ty_to_rbs_into(c, pt, b);
-    if (ty_is_degraded(pt)) degraded = 1;
+    if (ty_degraded(pt)) degraded = 1;
     j++;
   }
   buf_puts(b, ") -> ");
@@ -11947,7 +11940,7 @@ static int rbs_method_type_into(Compiler *c, Buf *b, Scope *s) {
   }
   else {
     ty_to_rbs_into(c, s->ret, b);
-    if (ty_is_degraded(s->ret)) degraded = 1;
+    if (ty_degraded(s->ret)) degraded = 1;
   }
   return degraded;
 }
@@ -12053,11 +12046,11 @@ static const char *emit_file_path(Compiler *c, int fid) {
 
 /* 1 when scope `s`'s signature widened to the boxed poly slow path. */
 static int scope_sig_degraded(Compiler *c, Scope *s) {
-  if (ty_is_degraded(s->ret)) return 1;
+  if (ty_degraded(s->ret)) return 1;
   for (int i = 0; i < s->nparams; i++) {
     LocalVar *p = scope_local(s, s->pnames[i]);
     TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
-    if (ty_is_degraded(pt)) return 1;
+    if (ty_degraded(pt)) return 1;
   }
   return 0;
 }
@@ -12091,7 +12084,7 @@ static void each_widened_slot(Compiler *c, void (*fn)(Compiler *, const WidenedS
       if (i < s->nparams) {
         LocalVar *p = scope_local(s, s->pnames[i]);
         TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
-        if (!ty_is_degraded(pt) || !s->pnames[i]) continue;
+        if (!ty_degraded(pt) || !s->pnames[i]) continue;
         w.param = s->pnames[i];
         /* the parameter's own node: the one *ParameterNode of this scope
            that carries the name */
@@ -12103,7 +12096,7 @@ static void each_widened_slot(Compiler *c, void (*fn)(Compiler *, const WidenedS
           if (pn && sp_streq(pn, w.param) && nt_int(nt, pid, "node_line", 0) > 0) { at = pid; break; }
         }
       }
-      else if (!ty_is_degraded(s->ret)) continue;
+      else if (!ty_degraded(s->ret)) continue;
       w.line = (int)nt_int(nt, at, "node_line", 0); w.col = (int)nt_int(nt, at, "node_col", 0);
       if (w.line <= 0) { w.line = dln; w.col = dcol; }
       w.end_line = (int)nt_int(nt, at, "node_end_line", 0);

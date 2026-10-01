@@ -1,0 +1,14 @@
+[["épée", "naïve"], ["a, é", "say \"ï\""]]
+[["ü", "ö", nil], [nil, "x"]]
+[["a", "b:c", "d::e"]]
+["a", "é", ""]
+[]
+"\"é\"\"ï\",plain,\"a,b\"\n"
+[["h1", "h2"], ["multi\nline\n\"field\"", "x"], [], ["plain", ""], ["last", "é"]]
+[["h1", "h2"], ["multi\nline\n\"field\"", "x"], ["plain", ""], ["last", "é"]]
+{"h1" => "multi\nline\n\"field\"", "h2" => "x"}
+{"h1" => "plain", "h2" => ""}
+{"h1" => "last", "h2" => "é"}
+[]
+CSV::MalformedCSVError
+[["a", "b"]]

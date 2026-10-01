@@ -1,0 +1,13 @@
+nil
+["one\n", "two\n", "\n", "three;four\n", "five"]
+["one", "two", "", "three;four", "five"]
+["one\ntwo\n\nthree;", "four\nfive"]
+["one\n", "two\n", "\n", "thre", "e;fo", "ur\n", "five"]
+["", "ne", "\nt", "w", "\n\n", "th", "re", "e;", "f", "ur", "\nf", "iv", "e"]
+["one\ntwo\n\n", "three;four\nfive"]
+2
+"three;four\n"
+4
+"x"
+5
+5

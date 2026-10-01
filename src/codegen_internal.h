@@ -1440,6 +1440,7 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
                           int v, int capture, int lhs_nil, Buf *b);
 int emit_poly_op_assign(Compiler *c, const char *lval, const char *op, int v,
                         int capture, Buf *b);
+void emit_poly_unboxed(Compiler *c, int node, TyKind t, const char *conv, Buf *b);
 void emit_cond(Compiler *c, int id, Buf *b);
 int static_isa_cond(Compiler *c, int pred);
 int static_respond_to_cond(Compiler *c, int pred);

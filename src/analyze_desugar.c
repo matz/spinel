@@ -1191,16 +1191,6 @@ int desugar_singleton_class_mixin(Compiler *c) {
    the class. Only the same-name shape, with the value a bare `C` or
    `remove_const(:C)`, and only where the program defines a class or module
    named C. */
-static int cpa_defines_class(const NodeTable *nt, const char *leaf) {
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind k = nt_kind(nt, id);
-    if (k != NK_ClassNode && k != NK_ModuleNode) continue;
-    int cp = nt_ref(nt, id, "constant_path");
-    const char *nm = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
-    if (nm && sp_streq(nm, leaf)) return 1;
-  }
-  return 0;
-}
 int desugar_constant_path_self_alias(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -1226,7 +1216,7 @@ int desugar_constant_path_self_alias(Compiler *c) {
         same = an0 && sp_streq(an0, leaf);
       }
     }
-    if (!same || !cpa_defines_class(nt, leaf)) continue;
+    if (!same || !me_leaf_defined(nt, leaf)) continue;
     nt_node_reset(nt, id, "NilNode");
     changed = 1;
   }
@@ -6803,16 +6793,6 @@ static int bi_kernel_call_name(const char *nm) {
   return 0;
 }
 
-static int bi_subtree_max(const NodeTable *nt, int id) {
-  if (id < 0 || id >= nt->count) return -1;
-  const SpNode *nd = &nt->nodes[id];
-  int mx = id;
-  for (int j = 0; j < nd->nr; j++) { int m = bi_subtree_max(nt, nd->r[j].ref); if (m > mx) mx = m; }
-  for (int j = 0; j < nd->na; j++)
-    for (int k = 0; k < nd->a[j].n; k++) { int m = bi_subtree_max(nt, nd->a[j].ids[k]); if (m > mx) mx = m; }
-  return mx;
-}
-
 /* Retype every node of the subtree at `id` to a NilNode. The generic
    definition is cloned per call site and then left out of the program, but
    the passes that walk the node table by id rather than by tree still saw
@@ -6889,7 +6869,7 @@ int desugar_builtins(Compiler *c) {
       const char *name = nt_str(nt, def, "name");
       int bi = builtin_enum_name_index(name);
       /* the receiver becomes the first required parameter */
-      int hi = bi_subtree_max(nt, def);
+      int hi = fwd_subtree_max(nt, def);
       int pn = nt_ref(nt, def, "parameters");
       if (pn < 0) { pn = nt_new_node(nt, "ParametersNode"); if (pn < 0) break; nt_node_set_ref(nt, def, "parameters", pn); }
       int sp = nt_new_node(nt, "RequiredParameterNode"); if (sp < 0) break;
@@ -7799,7 +7779,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
         int def = bb[k];
         const char *name = nt_str(nt, def, "name");
         int bi = sp_builtin_extra_name_index(bx, name);
-        int hi = bi_subtree_max(nt, def);
+        int hi = fwd_subtree_max(nt, def);
         int pn = nt_ref(nt, def, "parameters");
         if (pn < 0) { pn = nt_new_node(nt, "ParametersNode"); if (pn < 0) break; nt_node_set_ref(nt, def, "parameters", pn); }
         int spself = nt_new_node(nt, "RequiredParameterNode"); if (spself < 0) break;
@@ -7859,7 +7839,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       }
       int clone = nt_clone_subtree(nt, def);
       if (clone < 0) continue;
-      int hi = bi_subtree_max(nt, clone);
+      int hi = fwd_subtree_max(nt, clone);
       int pn = nt_ref(nt, clone, "parameters");
       if (pn < 0) { pn = nt_new_node(nt, "ParametersNode"); if (pn < 0) continue; nt_node_set_ref(nt, clone, "parameters", pn); }
       int spself = nt_new_node(nt, "RequiredParameterNode"); if (spself < 0) continue;

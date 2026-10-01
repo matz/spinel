@@ -45,11 +45,13 @@ class Logger
                  progname: nil, formatter: nil, datetime_format: nil)
     @logdev = nil
     @own = false
+    @filename = nil
     case logdev
     when String
       @logdev = File.open(logdev.to_s, "a")
       @logdev.sync = true
       @own = true
+      @filename = logdev
     when nil
     else
       @logdev = logdev
@@ -133,7 +135,25 @@ class Logger
     @logdev.write(msg) if @logdev
   end
 
+  # Without an argument a logger writing to a file it opened by name opens
+  # that name again, as CRuby's does: the file may have been rotated away.
   def reopen(logdev = nil)
+    logdev = @filename if logdev.nil?
+    return self if @logdev.nil? || logdev.nil?
+
+    if logdev.is_a?(String)
+      new_logdev = File.open(logdev.to_s, "a")
+      new_logdev.sync = true
+      close
+      @logdev = new_logdev
+      @own = true
+      @filename = logdev
+    else
+      close
+      @logdev = logdev
+      @own = false
+      @filename = nil
+    end
     self
   end
 

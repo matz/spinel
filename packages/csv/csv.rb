@@ -208,85 +208,112 @@ class CSV
   # ---- parsing ----
 
   # Split `str` into rows of raw fields. An unquoted empty field is nil; a
-  # quoted one is "". The row terminator is LF or CRLF, and a newline inside a
-  # quoted field belongs to the field.
+  # quoted one is "". The row terminator is LF, CRLF or CR, and a newline inside
+  # a quoted field belongs to the field.
   def self.split_rows(str, col_sep, quote_char, skip_blanks)
     rows = []
+    each_raw_row(str, col_sep, quote_char, skip_blanks) { |r| rows << r }
+    rows
+  end
+
+  # Yields each row of raw fields in `str` as it completes. The scan reads
+  # bytes, not characters: indexing a String by character takes time in
+  # proportion to the index once it holds a non-ASCII character, and a
+  # delimiter matched byte for byte cannot start inside another character
+  # (UTF-8 is self-synchronizing). A field is one byteslice of the input --
+  # of its text, or of the inside of its quotes, with any doubled quote then
+  # undoubled -- and is never appended to in place, so it stays a String the
+  # compiler need not copy into a growable buffer.
+  def self.each_raw_row(str, col_sep, quote_char, skip_blanks)
+    n = str.bytesize
+    sl = col_sep.bytesize
+    sb = sl > 0 ? col_sep.getbyte(0) : -1
+    # a quote_char of other than one character never opens a quoted field
+    ql = quote_char.length == 1 ? quote_char.bytesize : 0
+    qb = ql > 0 ? quote_char.getbyte(0) : -1
     row = []
-    field = String.new
+    field = nil
     quoted = false
-    in_quotes = false
     started = false
-    sep_len = col_sep.length
     i = 0
-    n = str.length
 
     while i < n
-      ch = str[i]
-
-      if in_quotes
-        if ch == quote_char
-          if i + 1 < n && str[i + 1] == quote_char
-            field << quote_char
-            i += 2
-          else
-            in_quotes = false
-            i += 1
-          end
-        else
-          field << ch
-          i += 1
-        end
-        next
+      # up to the next delimiter: a quote, col_sep or a line end
+      j = i
+      while j < n
+        b = str.getbyte(j)
+        break if b == 10 || b == 13
+        break if b == qb && (ql == 1 || bytes_at?(str, j, quote_char, ql))
+        break if b == sb && (sl == 1 || bytes_at?(str, j, col_sep, sl))
+        j += 1
       end
+      if j > i
+        piece = str.byteslice(i, j - i)
+        field = field.nil? ? piece : field + piece
+        started = true
+      end
+      i = j
+      break if i >= n
+      b = str.getbyte(i)
 
-      if ch == quote_char
-        in_quotes = true
+      if b == qb && (ql == 1 || bytes_at?(str, i, quote_char, ql))
         quoted = true
         started = true
-        i += 1
-        next
-      end
-
-      if ch == col_sep[0] && (sep_len == 1 || str[i, sep_len] == col_sep)
-        row << (quoted || field.length > 0 ? field : nil)
-        field = String.new
+        i += ql
+        # up to the quote that closes the field; a doubled quote inside stands
+        # for one literal quote
+        s0 = i
+        doubled = false
+        closed = false
+        while !closed
+          while i < n
+            break if str.getbyte(i) == qb && (ql == 1 || bytes_at?(str, i, quote_char, ql))
+            i += 1
+          end
+          raise MalformedCSVError.new("Unclosed quoted field") if i >= n
+          if i + ql < n && bytes_at?(str, i + ql, quote_char, ql)
+            doubled = true
+            i += ql + ql
+          else
+            closed = true
+          end
+        end
+        piece = str.byteslice(s0, i - s0)
+        piece = piece.gsub(quote_char + quote_char, quote_char) if doubled
+        field = field.nil? ? piece : field + piece
+        i += ql
+      elsif b == sb && (sl == 1 || bytes_at?(str, i, col_sep, sl))
+        row << (field.nil? ? (quoted ? "" : nil) : field)
+        field = nil
         quoted = false
         started = true
-        i += sep_len
-        next
-      end
-
-      if ch == "\n" || ch == "\r"
-        if started || field.length > 0
-          row << (quoted || field.length > 0 ? field : nil)
-        end
-        if !(skip_blanks && row.empty?)
-          rows << row
-        end
+        i += sl
+      else
+        # a line end: LF, CRLF or CR
+        row << (field.nil? ? (quoted ? "" : nil) : field) if started
+        yield row unless skip_blanks && row.empty?
         row = []
-        field = String.new
+        field = nil
         quoted = false
         started = false
-        i += (ch == "\r" && i + 1 < n && str[i + 1] == "\n") ? 2 : 1
-        next
+        i += (b == 13 && i + 1 < n && str.getbyte(i + 1) == 10) ? 2 : 1
       end
-
-      field << ch
-      started = true
-      i += 1
     end
 
-    raise MalformedCSVError.new("Unclosed quoted field") if in_quotes
+    row << (field.nil? ? (quoted ? "" : nil) : field) if started
+    yield row unless row.empty?
+    nil
+  end
 
-    if started || field.length > 0
-      row << (quoted || field.length > 0 ? field : nil)
+  # Whether the bytes of `pat` (pl of them) start at byte i of `str`.
+  def self.bytes_at?(str, i, pat, pl)
+    return false if i + pl > str.bytesize
+    k = 0
+    while k < pl
+      return false if str.getbyte(i + k) != pat.getbyte(k)
+      k += 1
     end
-    if !row.empty? && !(skip_blanks && row.empty?)
-      rows << row
-    end
-
-    rows
+    true
   end
 
   # :numeric / :integer / :float on one field.
@@ -348,15 +375,20 @@ class CSV
     Table.new(rows, hdrs)
   end
 
-  # The first row of `str`, or nil when it holds none.
+  # The first row of `str`, or nil when it holds none. The rest of `str` is
+  # not parsed, as in CRuby.
   def self.parse_line(str, col_sep: ",", quote_char: "\"", headers: false,
                       skip_blanks: false, converters: nil)
-    rows = split_rows(str, col_sep, quote_char, skip_blanks)
-    return nil if rows.empty?
-    if headers.is_a?(Array)
-      return Row.new(headers, convert_row(rows[0], converters))
+    row = nil
+    each_raw_row(str, col_sep, quote_char, skip_blanks) do |r|
+      row = r
+      break
     end
-    convert_row(rows[0], converters)
+    return nil if row.nil?
+    if headers.is_a?(Array)
+      return Row.new(headers, convert_row(row, converters))
+    end
+    convert_row(row, converters)
   end
 
   def self.read(path, col_sep: ",", quote_char: "\"", headers: false,
@@ -371,23 +403,56 @@ class CSV
          skip_blanks: skip_blanks, converters: converters)
   end
 
-  # CSV.foreach(path) { |row| ... } -- the rows of a file, one at a time.
+  # CSV.foreach(path) { |row| ... } -- the rows of a file, one at a time. The
+  # file is read a line at a time, so only the current record is in memory. A
+  # record ends at the first line end with an even count of quote_char before
+  # it: every quote_char opens or closes a quoted field (a doubled one inside
+  # does both), so an odd count means a quoted field runs on into the next line.
   def self.foreach(path, col_sep: ",", quote_char: "\"", headers: false,
                    skip_blanks: false, converters: nil)
-    data = File.read(path)
-    raw = split_rows(data, col_sep, quote_char, skip_blanks)
-    if headers == true
-      hdrs = raw.empty? ? [] : raw[0]
-      i = 1
-      while i < raw.size
-        yield Row.new(hdrs, convert_row(raw[i], converters))
-        i += 1
+    hdrs = headers.is_a?(Array) ? headers : nil
+    want_hdrs = headers == true
+    each_file_record(path, col_sep, quote_char) do |rec|
+      each_raw_row(rec, col_sep, quote_char, skip_blanks) do |r|
+        if want_hdrs
+          hdrs = r
+          want_hdrs = false
+        elsif hdrs.nil?
+          yield convert_row(r, converters)
+        else
+          yield Row.new(hdrs, convert_row(r, converters))
+        end
       end
-    elsif headers.is_a?(Array)
-      raw.each { |r| yield Row.new(headers, convert_row(r, converters)) }
-    else
-      raw.each { |r| yield convert_row(r, converters) }
     end
+    nil
+  end
+
+  # Yields the file at `path` in pieces that each end where a row does. A
+  # col_sep holding a LF makes a line end no row end, so that file is one piece.
+  def self.each_file_record(path, col_sep, quote_char)
+    if col_sep.include?("\n")
+      yield File.read(path)
+      return nil
+    end
+    quoting = quote_char.length == 1
+    # the lines of a record a quoted field carries across line ends
+    held = []
+    open_quotes = 0
+    File.foreach(path) do |line|
+      open_quotes += line.count(quote_char) if quoting
+      if open_quotes.odd?
+        held << line
+      elsif held.empty?
+        yield line
+      else
+        held << line
+        yield held.join
+        held.clear
+        open_quotes = 0
+      end
+    end
+    # the file ended inside a quoted field
+    raise MalformedCSVError.new("Unclosed quoted field") unless held.empty?
     nil
   end
 
@@ -400,17 +465,7 @@ class CSV
            s.include?(col_sep) || s.include?(quote_char) ||
            s.include?("\n") || s.include?("\r")
     return s unless need
-    out = String.new
-    out << quote_char
-    i = 0
-    while i < s.length
-      ch = s[i]
-      out << quote_char if ch == quote_char
-      out << ch
-      i += 1
-    end
-    out << quote_char
-    out
+    quote_char + s.gsub(quote_char, quote_char + quote_char) + quote_char
   end
 
   # One CSV line (with its row separator) for `row`.

@@ -1229,10 +1229,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
            return widened to poly -- one that answers its argument, reached
            once with a boxed one -- pushed the whole struct and the C did not
            compile (#4293). */
-        if (comp_ntype(c, argv[a]) == TY_POLY) {
-          buf_puts(b, "sp_poly_obj_ptr("); emit_expr(c, argv[a], b); buf_puts(b, ")");
-        }
-        else emit_expr(c, argv[a], b);
+        emit_poly_unboxed(c, argv[a], comp_ntype(c, argv[a]), "sp_poly_obj_ptr(", b);
         buf_puts(b, ");");
       }
       buf_printf(b, " _t%d; })", tr);

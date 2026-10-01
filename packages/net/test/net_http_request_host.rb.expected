@@ -1,0 +1,6 @@
+hosts=signed.example.com
+hosts=lower.example.com
+hosts=initheader.example.com
+hosts=helper.example.com
+hosts=default
+hosts=default

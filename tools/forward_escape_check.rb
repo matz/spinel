@@ -1,7 +1,7 @@
-# Independent, one-program-per-case controls for #6782. These are refusals,
-# not tests that accept arbitrary compile errors: the compiler must identify
-# the lost String identity and must not write C. The literal CRuby answers
-# establish that every reduction really mutates the caller and its alias.
+# Independent, one-program-per-case controls for #6782. Unsupported escapes
+# must identify lost String identity and write no C, not fail arbitrarily.
+# Supported box/handle paths must build and match the independently checked
+# CRuby caller/alias answers; a refusal is not a pass for those controls.
 require "open3"
 require "rbconfig"
 require "tmpdir"
@@ -22,11 +22,14 @@ cases = {
   "alias_return" => ["a = t", "result << '!'", "abc!"],
   "ident" => ["ident(t) << '!'", "", "abc!"],
   "ternary" => ["(t.is_a?(String) ? t : nil) << '!'", "", "abc!"],
-  "rest" => ["rest_store(t)", "", "abc!"],
+  "preserved_rest" => ["rest_store(t)", "", "abc!"],
+  "rest_escape" => ["rest_escape(t)", "", "abc!"],
+  "via_rest_escape" => ["via_rest(t)", "", "abc!"],
+  "early_store" => ["a = [t]; a[0] << '!'", "", "abc!", "", nil, "@snapshot = [t];"],
   "post_rest" => ["post_store(t)", "", "abc!"],
-  "yield" => ["yield t", "", "abc!"],
+  "preserved_yield" => ["yield t", "", "abc!"],
   "unless_else" => ["unless t.is_a?(String); nil; else; a = [t]; a[0] << '!'; end", "", "abc!"],
-  "append_and_store" => ["t << 'a'; a = [t]; a[0] << 'b'", "", "abcab"],
+  "preserved_append_and_store" => ["t << 'a'; a = [t]; a[0] << 'b'", "", "abcab"],
   "closure" => ["-> { t.bytesize }", "s << '!'; raise 'stale capture' unless result.call == 4", "abc!"],
   "to_s_alias" => ["a = t.to_s; a << '!'", "", "abc!"],
   "parenthesized" => ["ident((t)) << '!'", "", "abc!"]
@@ -60,6 +63,19 @@ cases["override_bytesize"] = ["t.bytesize; nil", "$held << '!'", "abc!",
                                "$held = nil; class String; def bytesize; $held = self; 0; end; end"]
 cases["override_array_search"] = ["'abc'.split('\n').include?(t); nil", "$held << '!'", "abc!",
                                   "$held = nil; class Array; def include?(value); $held = value; false; end; end"]
+cases["override_element_equality"] = ["['abc'].include?(t); nil", "$held << '!'", "abc!",
+                                      "$held = nil; class String; def ==(value); $held = value; false; end; end"]
+["super", "super(*r)"].each do |forward|
+  cases["post_rest_#{forward}"] = ["Child.new.store(t); nil", "", "abc!", <<~RUBY]
+    class Parent
+      def store(*unused, last); if last.is_a?(String); a = [last]; a[0] << '!'; end; nil; end
+    end
+    class Child < Parent
+      def store(*r); #{forward}; nil; end
+    end
+    Child.new.store(0)
+  RUBY
+end
 cases["poly_receiver_rest"] = ["rest_receiver(t, Holder.new); nil", "", "abc!", <<~RUBY]
   class Holder
     def store(value); if value.is_a?(String); a = [value]; a[0] << '!'; end; nil; end
@@ -79,7 +95,7 @@ cases["readonly_array_search"] = ["'abc'.split('\n').include?(t)", "", "abc"]
 
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
-  cases.each do |name, (body, followup, want, prefix, guard)|
+  cases.each do |name, (body, followup, want, prefix, guard, before)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
     File.write(source, <<~RUBY)
@@ -89,7 +105,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
           return one(data) if #{guard || "data.is_a?(String)"}
           nil
         end
-        def one(t) = two(t)
+        def one(t); #{before} two(t); end
         def two(t) = three(t)
         def three(t) = four(t)
         def four(t) = five(t)
@@ -100,6 +116,9 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
         end
         def ident(t) = t
         def rest_store(*r); r[0] << '!'; nil; end
+        def rest_escape(*r); a = [r[0]]; a[0] << '!'; nil; end
+        def via_rest(*r); rest_sink(*r); nil; end
+        def rest_sink(t); if t.is_a?(String); a = [t]; a[0] << '!'; end; nil; end
         def post_store(*unused, last); a = [last]; a[0] << '!'; nil; end
       end
       reader = Reader.new
@@ -116,15 +135,15 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
       next
     end
-    if name.start_with?("readonly")
+    if name.start_with?("readonly", "preserved")
       executable = File.join(dir, name)
       out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
       unless status.success?
-        failures << "#{name}: readonly control refused: #{out}#{err}"
+        failures << "#{name}: native control refused: #{out}#{err}"
         next
       end
       out, err, status = Open3.capture3(timeout, "30", executable)
-      failures << "#{name}: readonly control differs: #{out.inspect} #{err}" unless status.success? && out == expected
+      failures << "#{name}: native control differs: #{out.inspect} #{err}" unless status.success? && out == expected
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
@@ -135,5 +154,5 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   end
 end
 abort failures.join("\n") unless failures.empty?
-controls = cases.keys.count { |name| name.start_with?("readonly") }
-puts "forward-escape-check: #{cases.length - controls} independent CRuby-validated refusals, #{controls} readonly controls pass"
+controls = cases.keys.count { |name| name.start_with?("readonly", "preserved") }
+puts "forward-escape-check: #{cases.length - controls} independent CRuby-validated refusals, #{controls} native readonly/identity controls pass"

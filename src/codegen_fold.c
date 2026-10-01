@@ -889,10 +889,10 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "double _t%d = _t%d + (_t%d - _t%d) / 2.0;\n", fmid, flo, fhi, flo);
       if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = _t%d;\n", p0, fmid); }
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+      IterStep st; emit_iter_step_open(c, block, 0, g_indent + 1, &st);
       int save = g_indent; g_indent++;
-      Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb); g_indent = save;
-      TyKind bt = comp_ntype(c, bb[bn - 1]);
+      Buf cb; memset(&cb, 0, sizeof cb);
+      TyKind bt = emit_iter_step_tail(c, &st, &cb); g_indent = save;
       if (bt == TY_INT || bt == TY_FLOAT) {
         /* find-any (CRuby: a Numeric block is `target <=> x`): 0 found,
            positive means the target sorts after the probe, negative before.
@@ -966,9 +966,9 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
   snprintf(right, sizeof right, "{ if (_t%d == _t%d) break; _t%d = _t%d + 1; }", tmid, thi, tlo, tmid);
   snprintf(left, sizeof left, "{ if (_t%d == _t%d) break; _t%d = _t%d - 1; }", tmid, tlo, thi, tmid);
   if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = _t%d;\n", p0, tmid); }
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  IterStep st; emit_iter_step_open(c, block, 0, g_indent + 1, &st);
   int save = g_indent; g_indent++;
-  Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb); g_indent = save;
+  Buf cb; memset(&cb, 0, sizeof cb); emit_iter_step_tail(c, &st, &cb); g_indent = save;
   if (find_any) {
     int tcmp = ++g_tmp;
     emit_indent(g_pre, g_indent + 1);
@@ -1055,8 +1055,9 @@ void emit_autosplat_params(Compiler *c, int block, int np, int elem_temp, int in
    `|q, |`), as CRuby's does. Binds those params from the boxed Array
    `tuple_src` (a pure, rooted expression) into `out` and answers 1. Answers 0
    for a block the caller binds whole (one plain parameter, a destructuring
-   one, or none). A rest, an optional or a post-required parameter would take
-   CRuby's full proc distribution, which these emitters do not do: refused. */
+   one, or none). A rest, an optional or a post-required parameter takes
+   CRuby's full proc distribution, which desugar_builtin_iter_block_shapes
+   binds before this runs; one that reaches here is refused. */
 int emit_tuple_block_params(Compiler *c, int id, int block, const char *tuple_src, Buf *out) {
   if (block_opt_name(c, block, 0) || block_post_name(c, block, 0) ||
       (block_rest_marker(c, block) && !block_lead_only(c, block)))
@@ -1179,10 +1180,10 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
       }
       else snprintf(es, sizeof es, "%s", sel);
     }
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, din);
+    IterStep st; emit_iter_step_open(c, block, 1, din, &st);
     int tkey = ++g_tmp, tdup = ++g_tmp, tj = ++g_tmp;
     int save = g_indent; g_indent = din;
-    Buf kb; memset(&kb, 0, sizeof kb); emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
+    Buf kb; memset(&kb, 0, sizeof kb); emit_iter_step_tail(c, &st, &kb); g_indent = save;
     emit_indent(g_pre, din); buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tkey, kb.p ? kb.p : "sp_box_nil()"); free(kb.p);
     emit_indent(g_pre, din);
     buf_printf(g_pre, "int _t%d = 0; for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
@@ -1221,9 +1222,9 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = %s;\n", p0, es);
   }
   int save = g_indent; g_indent++;
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
+  IterStep st; emit_iter_step_open(c, block, 1, g_indent, &st);
   int tkey = ++g_tmp, tdup = ++g_tmp, tj = ++g_tmp;
-  Buf kb; memset(&kb, 0, sizeof kb); emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
+  Buf kb; memset(&kb, 0, sizeof kb); emit_iter_step_tail(c, &st, &kb); g_indent = save;
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tkey, kb.p ? kb.p : "sp_box_nil()"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "int _t%d = 0; for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
@@ -1366,17 +1367,21 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "lv_%s = %ssp_str_substr(_t%d + _t%d, _t%d, _t%d - _t%d)%s;\n",
                p0, box ? "sp_box_str(" : "", ts, tpos, tms, tme, tms, box ? ")" : "");
   }
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  IterStep st; emit_iter_step_open(c, block, 0, g_indent + 1, &st);
   int save = g_indent; g_indent++;
   /* CRuby stringifies a non-string block value (gsub { 2 } -> "2"): box a
      concretely non-string result and render it through sp_poly_to_s. */
-  TyKind gvt = comp_ntype(c, bb[bn - 1]);
+  TyKind gvt = st.slot ? st.slot_ty : comp_ntype(c, bb[bn - 1]);
   Buf vb; memset(&vb, 0, sizeof vb);
-  if (gvt == TY_POLY) { buf_puts(&vb, "sp_poly_to_s("); emit_expr(c, bb[bn - 1], &vb); buf_puts(&vb, ")"); }
+  if (gvt == TY_POLY) { buf_puts(&vb, "sp_poly_to_s("); emit_iter_step_tail(c, &st, &vb); buf_puts(&vb, ")"); }
+  else if (gvt != TY_STRING && gvt != TY_UNKNOWN && st.slot) {
+    Buf sb; memset(&sb, 0, sizeof sb); emit_iter_step_tail(c, &st, &sb);
+    buf_puts(&vb, "sp_poly_to_s("); emit_boxed_text(c, gvt, sb.p, &vb); buf_puts(&vb, ")"); free(sb.p);
+  }
   else if (gvt != TY_STRING && gvt != TY_UNKNOWN) {
     buf_puts(&vb, "sp_poly_to_s("); emit_boxed(c, bb[bn - 1], &vb); buf_puts(&vb, ")");
   }
-  else emit_expr(c, bb[bn - 1], &vb);
+  else emit_iter_step_tail(c, &st, &vb);
   g_indent = save;
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_String_append_bin(_t%d, %s);\n", tout, vb.p ? vb.p : "\"\""); free(vb.p);
   if (once) {
@@ -1448,7 +1453,11 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
     Buf inner; memset(&inner, 0, sizeof inner);
     Buf valb; memset(&valb, 0, sizeof valb);
     Buf *saved_pre = g_pre; g_pre = &inner;
-    emit_boxed(c, bb[bn - 1], &valb);
+    /* the whole body: its leading statements ran nowhere */
+    { int svlm = g_line_map; g_line_map = 0;
+      IterStep st; emit_iter_step_open(c, block, 1, 0, &st);
+      emit_iter_step_tail(c, &st, &valb);
+      g_line_map = svlm; }
     g_pre = saved_pre;
     if (inner.p) buf_puts(b, inner.p);
     buf_printf(b, "_t%d = sp_poly_add(_t%d, %s); }", tacc, tacc, valb.p ? valb.p : "sp_box_nil()");
@@ -1494,6 +1503,10 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
      generic dispatch, which answered NoMethodError instead (#4327). TY_NIL was
      already routed this way for exactly that reason. */
   if (acct != TY_INT && acct != TY_FLOAT && acct != TY_STRING) acct = TY_POLY;
+  /* So does a block with a `next` or a `redo` of its own, whose step answers
+     through a slot (emit_iter_step_value): a bare `next` answers nil, which
+     only the boxed add refuses as CRuby does. */
+  if (iter_step_needs_frame(c, block)) acct = TY_POLY;
   /* A poly block value (e.g. a product of values read out of poly containers,
      as in a range sum redispatched over an int array) accumulates into a boxed
      sp_RbVal via sp_poly_add, like the poly-receiver sum path. An empty range
@@ -1528,10 +1541,12 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
       Buf valb; memset(&valb, 0, sizeof valb);
       Buf *saved_pre = g_pre; g_pre = &inner;
       { int svlm = g_line_map; g_line_map = 0;  /* a #line directive mid stmt-expr is a stray '#' */
-        for (int j = 0; j + 1 < bn; j++) emit_stmt(c, bb[j], &inner, 0);  /* leading stmts */
+        if (bn > 0) {
+          IterStep st; emit_iter_step_open(c, block, 1, 0, &st);
+          emit_iter_step_tail(c, &st, &valb);
+        }
+        else buf_puts(&valb, "sp_box_nil()");
         g_line_map = svlm; }
-      if (bn > 0) emit_boxed(c, bb[bn - 1], &valb);
-      else buf_puts(&valb, "sp_box_nil()");
       g_pre = saved_pre;
       if (inner.p) buf_puts(b, inner.p);
       buf_printf(b, "_t%d = sp_poly_add(_t%d, %s); }", tacc, tacc, valb.p ? valb.p : "sp_box_nil()");
@@ -1634,9 +1649,9 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
     Buf valb; memset(&valb, 0, sizeof valb);
     Buf *saved_pre = g_pre; g_pre = &inner;
     { int svlm = g_line_map; g_line_map = 0;  /* a #line directive mid stmt-expr is a stray '#' */
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], &inner, 0);  /* leading stmts */
+      IterStep st; emit_iter_step_open(c, block, 0, 0, &st);
+      emit_iter_step_tail(c, &st, &valb);
       g_line_map = svlm; }
-    emit_expr(c, bb[bn - 1], &valb);
     g_pre = saved_pre;
     if (inner.p) buf_puts(b, inner.p);
     if (acct == TY_INT) {
@@ -3112,10 +3127,10 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   g_loop_exc_base = g_exc_frame_depth; g_loop_ensure_base = g_ensure_depth;
   g_ie_next_var = nx_acc; g_ie_res_poly = (acc_ty == TY_POLY);
   g_c_loop_depth++;
-  for (int j = 0; j < bn - 1; j++) {
-    emit_stmt(c, bb[j], b, 0);
-    buf_puts(b, " ");
-  }
+  /* block locals are fresh for every step, and a redo re-runs the step
+     after the parameters' setup */
+  emit_block_locals_reset(c, block, b, 0);
+  int rd_lbl = emit_iter_step_stmts(c, nt_ref(nt, block, "body"), b, 0, " ");
   /* The tail's own prelude (a proc call publishing its args to the boxed
      side-channel, a rooted temp) must land INSIDE the loop, before this
      iteration's accumulator assignment: with the enclosing statement's g_pre
@@ -3150,6 +3165,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     buf_printf(b, "_t%d = %s; } } ", tacc, tail.p ? tail.p : "0");
     free(tail.p);
   }
+  if (rd_lbl) g_redo_depth--;
   g_c_loop_depth = sv_cld;
   g_loop_exc_base = sv_lexcf; g_loop_ensure_base = sv_lensf;
   g_ie_next_var = sv_nxv; g_ie_res_poly = sv_nxp;
@@ -3227,6 +3243,137 @@ int emit_block_cond_next(Compiler *c, int block, int indent, Buf *out) {
   g_indent = sv;
   buf_printf(out, "sp_poly_truthy(_t%d)", t);
   return 1;
+}
+
+/* The statements of block body `body` but its tail, into `b` at `indent`
+   (one line each, or, with `sep`, inline, each followed by it), with the
+   body's own `redo` label: a redo re-runs the step without the locals'
+   reset or the parameter rebindings (block_param_rebind_len), so the label
+   goes after them. With no label of its own a redo fell back to
+   `continue`, which left the block as `next` does (or jumped to an
+   enclosing loop's label). Returns the label, pushed on the redo stack,
+   which the caller pops (g_redo_depth--) once the tail is out; 0 when the
+   body has no redo of its own. */
+int emit_iter_step_stmts(Compiler *c, int body, Buf *b, int indent, const char *sep) {
+  const NodeTable *nt = c->nt;
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  int rd_lbl = 0;
+  if (body >= 0 && subtree_has_own_redo(nt, body) &&
+      g_redo_depth < (int)(sizeof g_redo_stack / sizeof g_redo_stack[0])) {
+    rd_lbl = ++g_tmp;
+    g_redo_owner[g_redo_depth] = body;
+    g_redo_stack[g_redo_depth++] = rd_lbl;
+  }
+  int rd_head = rd_lbl ? block_param_rebind_len(nt, body) : 0;
+  for (int j = 0; j <= bn - 1; j++) {
+    if (rd_lbl && j == (rd_head < bn - 1 ? rd_head : bn - 1)) {
+      if (sep) buf_printf(b, "_redo_%d: ; ", rd_lbl);
+      else { emit_indent(b, indent); buf_printf(b, "_redo_%d: ;\n", rd_lbl); }
+    }
+    if (j == bn - 1) break;
+    emit_stmt(c, bb[j], b, indent);
+    if (sep) buf_puts(b, sep);
+  }
+  return rd_lbl;
+}
+
+/* A step's whole body as statements, its answer dropped, inside the
+   iterator's own C loop (a `next` is its `continue`): the block's locals
+   reset, then the body, with its own redo label after that setup. */
+void emit_iter_step_body(Compiler *c, int block, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  int body = nt_ref(nt, block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  emit_block_locals_reset(c, block, b, indent);
+  int rd_lbl = emit_iter_step_stmts(c, body, b, indent, NULL);
+  if (bn > 0) emit_stmt(c, bb[bn - 1], b, indent);
+  if (rd_lbl) g_redo_depth--;
+}
+
+/* A step's body inside the iterator's own C loop, through emit_stmts (the
+   locals' reset, the statements), with the body's own redo label after
+   that setup (g_redo_pending), where it had none. */
+void emit_iter_loop_stmts(Compiler *c, int body, Buf *b, int indent) {
+  int lbl = 0;
+  if (body >= 0 && subtree_has_own_redo(c->nt, body) &&
+      g_redo_depth < (int)(sizeof g_redo_stack / sizeof g_redo_stack[0])) {
+    lbl = ++g_tmp;
+    g_redo_owner[g_redo_depth] = body;
+    g_redo_stack[g_redo_depth++] = lbl;
+    g_redo_pending = lbl;
+  }
+  emit_stmts(c, body, b, indent);
+  if (lbl) g_redo_depth--;
+}
+
+/* Does block `block` need the step's frame: a `next` or a `redo` of its
+   own (emit_iter_step_value)? */
+int iter_step_needs_frame(Compiler *c, int block) {
+  int body = block >= 0 ? nt_ref(c->nt, block, "body") : -1;
+  return body >= 0 && (fold_body_has_next(c, body) || subtree_has_own_redo(c->nt, body));
+}
+
+/* One step of a builtin iterator's block, as a value, in two parts that
+   stand where an emitter read the body as "leading statements, then the
+   tail as the answer": emit_iter_step_open emits the statements into g_pre
+   at `indent`, and emit_iter_step_tail hands back the C expression of the
+   answer, boxed when `want_poly`, with its type.
+
+   A body with a `next` or a `redo` of its own runs whole inside the step's
+   frame (emit_block_value_into), its answer landing in a slot: the next
+   leaves this step with its value, and the redo re-runs it after the
+   parameters' setup. Read the other way, the next was a `continue` that
+   skipped the iterator's own work for the step (a sum dropped the value, a
+   sort or a gsub never advanced) and the redo had no label. Any other body
+   resets the block's locals, which are fresh for every step, then emits its
+   leading statements, and its tail is the answer; g_indent, which the
+   tail's own setup indents by, is the caller's. */
+void emit_iter_step_open(Compiler *c, int block, int want_poly, int indent, IterStep *st) {
+  const NodeTable *nt = c->nt;
+  int body = nt_ref(nt, block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  TyKind tt = bn > 0 ? comp_ntype(c, bb[bn - 1]) : TY_NIL;
+  st->block = block; st->want_poly = want_poly; st->slot = 0; st->slot_ty = TY_UNKNOWN;
+  if (iter_step_needs_frame(c, block)) {
+    /* the slot holds every answer the step can give, a `next`'s too */
+    TyKind vt = want_poly || tt == TY_NIL || tt == TY_UNKNOWN || tt == TY_VOID ? TY_POLY : tt;
+    st->slot = ++g_tmp; st->slot_ty = vt;
+    char dst[32]; snprintf(dst, sizeof dst, "_t%d", st->slot);
+    emit_indent(g_pre, indent); emit_ctype(c, vt, g_pre);
+    buf_printf(g_pre, " %s = %s;\n", dst, vt == TY_POLY ? "sp_box_nil()" : default_value(vt));
+    if (vt == TY_POLY) { emit_indent(g_pre, indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(%s);\n", dst); }
+    emit_block_value_into(c, block, dst, vt == TY_POLY, indent);
+    return;
+  }
+  emit_block_locals_reset(c, block, g_pre, indent);
+  for (int j = 0; j + 1 < bn; j++) emit_stmt(c, bb[j], g_pre, indent);
+}
+
+TyKind emit_iter_step_tail(Compiler *c, const IterStep *st, Buf *vb) {
+  const NodeTable *nt = c->nt;
+  if (st->slot) {
+    buf_printf(vb, "_t%d", st->slot);
+    return st->slot_ty;
+  }
+  int body = nt_ref(nt, st->block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (bn == 0) { buf_puts(vb, "sp_box_nil()"); return TY_POLY; }
+  TyKind tt = comp_ntype(c, bb[bn - 1]);
+  if (st->want_poly) { emit_boxed(c, bb[bn - 1], vb); return TY_POLY; }
+  emit_expr(c, bb[bn - 1], vb);
+  return tt;
+}
+
+/* The answer of a step opened for a condition (want_poly), as a C truth
+   test by Ruby's rules (emit_cond), or, with `raw`, the tail as it is, for
+   the emitters that read a typed tail as the test themselves. */
+void emit_iter_step_cond(Compiler *c, const IterStep *st, int raw, Buf *cb) {
+  if (st->slot) { buf_printf(cb, "sp_poly_truthy(_t%d)", st->slot); return; }
+  int body = nt_ref(c->nt, st->block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(c->nt, body, "body", &bn) : NULL;
+  if (bn == 0) { buf_puts(cb, "0"); return; }
+  if (raw) emit_expr(c, bb[bn - 1], cb);
+  else emit_cond(c, bb[bn - 1], cb);
 }
 
 static int ewi_chain(Compiler *c, int id, int *out_arr, int *out_off) {
@@ -3720,12 +3867,20 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
     emit_autosplat_params(c, block, np_sb, te, g_indent + 1);
   }
   else if (p0) {
+    /* a boxed element into a parameter the analysis typed (the receiver a
+       poly array only here, read back from a box) is unboxed */
+    Scope *sbs = comp_scope_of(c, block);
+    LocalVar *plv = sbs ? scope_local(sbs, p0_orig) : NULL;
+    TyKind pt = plv ? plv->type : TY_UNKNOWN;
+    char src[96]; snprintf(src, sizeof src, "sp_%sArray_get(_t%d, _t%d)", k, trv, ti);
     emit_indent(g_pre, g_indent + 1);
-    buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trv, ti);
+    if (rt == TY_POLY_ARRAY && pt != TY_POLY && pt != TY_UNKNOWN) emit_block_param_from_boxed(c, p0, pt, src, g_pre);
+    else buf_printf(g_pre, "lv_%s = %s;\n", p0, src);
   }
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  IterStep st; emit_iter_step_open(c, block, 0, g_indent + 1, &st);
   int save = g_indent; g_indent += 1;
-  Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb);
+  Buf kb; memset(&kb, 0, sizeof kb);
+  if (emit_iter_step_tail(c, &st, &kb) == TY_POLY) kt = TY_POLY;
   g_indent = save;
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tkeys);
   if (kt == TY_POLY) buf_puts(g_pre, kb.p ? kb.p : "sp_box_nil()");
@@ -3858,8 +4013,8 @@ else {
   if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, ta); }
   if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tb); }
   buf_puts(g_pre, "\n");
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
-  Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
+  IterStep st; emit_iter_step_open(c, block, 0, g_indent, &st);
+  Buf cb; memset(&cb, 0, sizeof cb); emit_iter_step_tail(c, &st, &cb);
   emit_indent(g_pre, g_indent);
   /* take from the left on a tie, so equal elements keep their order */
   buf_printf(g_pre, "sp_int _t%d = %s%s);\n", tc, cmp_o, cb.p ? cb.p : "0"); free(cb.p);
@@ -4020,8 +4175,8 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te); }
   if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tacc); }
   buf_puts(g_pre, "\n");
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
-  Buf cm; memset(&cm, 0, sizeof cm); emit_expr(c, bb[bn - 1], &cm);
+  IterStep st; emit_iter_step_open(c, block, 0, g_indent, &st);
+  Buf cm; memset(&cm, 0, sizeof cm); emit_iter_step_tail(c, &st, &cm);
   g_indent--;
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (%s%s) %c 0) _t%d = _t%d;\n", cmp_o, cm.p ? cm.p : "0", is_min ? '<' : '>', tacc, te); free(cm.p);
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -4076,23 +4231,7 @@ void emit_block_value_into(Compiler *c, int block, const char *dest,
   int bi = indent + 1; g_indent = bi;
   /* fresh block-locals on every invocation (this path bypasses emit_stmts) */
   emit_block_locals_reset(c, block, g_pre, bi);
-  /* A `redo` re-runs the body without that reset or the parameter
-     rebindings (block_param_rebind_len): its label goes after them. With no
-     label of its own, it fell back to `continue`, which left the block as
-     `next` does (or jumped to an enclosing loop's label). */
-  int rd_lbl = 0;
-  if (subtree_has_own_redo(nt, body) &&
-      g_redo_depth < (int)(sizeof g_redo_stack / sizeof g_redo_stack[0])) {
-    rd_lbl = ++g_tmp;
-    g_redo_owner[g_redo_depth] = body;
-    g_redo_stack[g_redo_depth++] = rd_lbl;
-  }
-  int rd_head = rd_lbl ? block_param_rebind_len(nt, body) : 0;
-  for (int j = 0; j + 1 < bn; j++) {
-    if (rd_lbl && j == rd_head) { emit_indent(g_pre, bi); buf_printf(g_pre, "_redo_%d: ;\n", rd_lbl); }
-    emit_stmt(c, bb[j], g_pre, bi);
-  }
-  if (rd_lbl && rd_head >= bn - 1) { emit_indent(g_pre, bi); buf_printf(g_pre, "_redo_%d: ;\n", rd_lbl); }
+  int rd_lbl = emit_iter_step_stmts(c, body, g_pre, bi, NULL);
   if (bn > 0) {
     int tail = bb[bn - 1];
     const char *tty = nt_type(nt, tail);
@@ -4341,11 +4480,10 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
                            p0_ec_r, kec, ta_ec, ti_ec, tn_ec);
               }
             }
-            for (int j = 0; j < bn_ec - 1; j++) emit_stmt(c, bb_ec[j], g_pre, g_indent + 1);
+            IterStep st_ec; emit_iter_step_open(c, block, res_poly_ec, g_indent + 1, &st_ec);
             int saveInd_ec = g_indent; g_indent = g_indent + 1;
             Buf vb_ec; memset(&vb_ec, 0, sizeof vb_ec);
-            if (res_poly_ec) emit_boxed(c, bb_ec[bn_ec - 1], &vb_ec);
-            else emit_expr(c, bb_ec[bn_ec - 1], &vb_ec);
+            emit_iter_step_tail(c, &st_ec, &vb_ec);
             g_indent = saveInd_ec;
             emit_indent(g_pre, g_indent + 1);
             buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", rk_ec, nil_store_sfx(c, rk_ec, bb_ec[bn_ec - 1]), tres_ec, vb_ec.p ? vb_ec.p : "");
@@ -4460,11 +4598,10 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
                   }
                 }
               }
-              for (int j = 0; j < bn_wi - 1; j++) emit_stmt(c, bb_wi[j], g_pre, g_indent + 1);
+              IterStep st_wi; emit_iter_step_open(c, block, res_poly_wi, g_indent + 1, &st_wi);
               int saveInd_wi = g_indent; g_indent = g_indent + 1;
               Buf vb_wi; memset(&vb_wi, 0, sizeof vb_wi);
-              if (res_poly_wi) emit_boxed(c, bb_wi[bn_wi - 1], &vb_wi);
-              else emit_expr(c, bb_wi[bn_wi - 1], &vb_wi);
+              emit_iter_step_tail(c, &st_wi, &vb_wi);
               g_indent = saveInd_wi;
               emit_indent(g_pre, g_indent + 1);
               buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", rk_wi, nil_store_sfx(c, rk_wi, bb_wi[bn_wi - 1]), tres_wi);
@@ -4977,15 +5114,16 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     if (clv1 && clv1->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", p1, tidx);
     else buf_printf(g_pre, "lv_%s = _t%d;\n", p1, tidx);
   }
-  if (is_each) {
-    for (int j = 0; j < bn; j++) emit_stmt(c, bb[j], g_pre, innerIndent);
-  }
+  if (is_each) emit_iter_step_body(c, block, g_pre, innerIndent);
   else {
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, innerIndent);
+    IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);
     int saveInd = g_indent; g_indent = innerIndent;
-    Buf vb; memset(&vb, 0, sizeof vb); emit_expr(c, bb[bn - 1], &vb); g_indent = saveInd;
+    Buf vb; memset(&vb, 0, sizeof vb);
+    TyKind body_ty = TY_UNKNOWN;
+    if (is_map) body_ty = emit_iter_step_tail(c, &st, &vb);
+    else emit_iter_step_cond(c, &st, 1, &vb);
+    g_indent = saveInd;
     if (is_map) {
-      TyKind body_ty = comp_ntype(c, bb[bn - 1]);
       emit_indent(g_pre, innerIndent); buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", rk, nil_store_sfx(c, rk, bb[bn - 1]), tres);
       if (res_poly && body_ty != TY_POLY) {
         Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, body_ty, vb.p ? vb.p : "", &bx);
@@ -5971,6 +6109,14 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
     const char *k = (pt == TY_POLY_ARRAY) ? "Poly" : array_kind(pt);
     if (k) { buf_printf(out, "sp_%sArray_new()", k); return; }
   }
+  /* ...and an omitted `**kwrest` an empty Hash: the same arm handed it
+     NULL, which `o.class`, `o.is_a?(Hash)` and `o.empty?` read as nil. */
+  if (provided < 0 && idx == m->kwrest_idx && (ty_is_hash(pt) || pt == TY_POLY) &&
+      !(p && p->byref_out)) {
+    const char *hcn = ty_is_hash(pt) ? ty_hash_cname(pt) : NULL;
+    if (hcn) { buf_printf(out, "sp_%sHash_new()", hcn); return; }
+    if (pt == TY_POLY) { buf_puts(out, "sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH)"); return; }
+  }
   /* A nil-typed argument (a void call, an always-nil method) into a pointer
      parameter: evaluated for its effects, it passes the pointer's nil. Raw,
      the void call or its sp_int 0 was a C type error (#4930). */
@@ -6482,7 +6628,10 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
            token (`html_escape(obj.details)` on an unknown receiver): emit_str_expr
            passes a real string through and coerces the token to the slot. */
         else if (pt == TY_STRING) emit_str_expr(c, provided, out);
-        else { emit_obj_upcast_prefix(c, pt, at, out); emit_expr(c, provided, out); }
+        else {
+          emit_obj_upcast_prefix(c, pt, at, out);
+          emit_coerce(c, provided, pt, CO_HOLD, "a method argument", out);
+        }
       }
     }
     return;
@@ -6552,13 +6701,15 @@ else if (dty && sp_streq(dty, "NilNode")) {
        expression passes through unchanged. */
     emit_boxed(c, dv, &db);
     const char *dx = db.p ? db.p : "sp_box_nil()";
-    if (pt == TY_INT) buf_printf(out, "sp_poly_to_i_or_nil(%s)", dx);
-    else if (pt == TY_FLOAT) buf_printf(out, "sp_poly_to_f_or_nil(%s)", dx);
-    else if (pt == TY_STRING) buf_printf(out, "sp_poly_to_s_or_nil(%s)", dx);
-    else if (pt == TY_SYMBOL) buf_printf(out, "(sp_sym)sp_poly_to_i(%s)", dx);
-    else if (pt == TY_BOOL) buf_printf(out, "sp_poly_to_i(%s)", dx);
-    else if (pt == TY_BIGINT) buf_printf(out, "sp_poly_as_bigint(%s)", dx);
-    else emit_unbox_text(c, pt, dx, out);
+    switch (pt) {
+    case TY_INT: buf_printf(out, "sp_poly_to_i_or_nil(%s)", dx); break;
+    case TY_FLOAT: buf_printf(out, "sp_poly_to_f_or_nil(%s)", dx); break;
+    case TY_STRING: buf_printf(out, "sp_poly_to_s_or_nil(%s)", dx); break;
+    case TY_SYMBOL: buf_printf(out, "(sp_sym)sp_poly_to_i(%s)", dx); break;
+    case TY_BOOL: buf_printf(out, "sp_poly_to_i(%s)", dx); break;
+    case TY_BIGINT: buf_printf(out, "sp_poly_as_bigint(%s)", dx); break;
+    default: emit_unbox_text(c, pt, dx, out); break;
+    }
     free(db.p);
   }
   /* Same boundary promotion the supplied-argument path does: an int DEFAULT
@@ -6589,7 +6740,7 @@ else if (dty && sp_streq(dty, "NilNode")) {
         if (hn) buf_printf(out, "sp_%sHash_new()", hn);
         else emit_expr(c, dv, out);
       }
-      else emit_expr(c, dv, out);
+      else emit_coerce(c, dv, pt, CO_HOLD, "a parameter default", out);
     }
   }
   g_self = sv_self_dv; g_self_deref = sv_deref_dv;

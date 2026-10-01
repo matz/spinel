@@ -1,0 +1,38 @@
+TypeError: can't convert Symbol into Complex
+TypeError: not a real
+TypeError: can't convert true into Complex
+TypeError: not a real
+TypeError: can't convert false into Complex
+TypeError: not a real
+TypeError: can't convert Array into Complex
+TypeError: not a real
+TypeError: can't convert Hash into Complex
+TypeError: not a real
+TypeError: can't convert Thing into Complex
+TypeError: not a real
+ArgumentError: invalid value for convert(): "abc"
+ArgumentError: invalid value for convert(): "abc"
+TypeError: can't convert nil into Complex
+TypeError: can't convert nil into Complex
+(1+0i)
+(1+1i)
+2.0
+RangeError: can't convert 2+1i into Float
+RangeError: can't convert 2+0.0i into Float
+3.5
+1.0
+true
+false
+true
+false
+true
+true
+false
+true
+false
+true
+:in
+:out
+:in
+:out
+:in

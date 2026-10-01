@@ -32,6 +32,7 @@ module Enumerable
   end
 
   def tally(hash = nil)
+    __no_false(hash, "Hash")
     if hash
       each { |x| hash[x] = hash.fetch(x, 0) + 1 }
       hash
@@ -50,6 +51,7 @@ module Enumerable
     if block_given?
       forever = true
       rounds = 0
+      __no_false(n, "Integer")
       if n
         raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.is_a?(Integer) || n.is_a?(Float)
         forever = false
@@ -108,6 +110,7 @@ module Enumerable
 
   def min_by(n = nil)
     if block_given?
+      __no_false(n, "Integer")
       if n
         raise ArgumentError, "negative size (#{n})" if n < 0
         sort_by { |x| yield x }.first(n)
@@ -142,6 +145,7 @@ module Enumerable
 
   def max_by(n = nil)
     if block_given?
+      __no_false(n, "Integer")
       if n
         raise ArgumentError, "negative size (#{n})" if n < 0
         # descending by key, ties in encounter order: a stable ascending sort
@@ -586,5 +590,12 @@ module Enumerable
       each { |x| out << x unless pattern === x }
     end
     out
+  end
+
+  # An optional argument is absent only when it is nil: false is one, which
+  # CRuby refuses. The test is on truthiness, so an omitted argument folds
+  # it away.
+  def __no_false(opt, what)
+    raise TypeError, "no implicit conversion of false into #{what}" if !opt && !opt.nil?
   end
 end

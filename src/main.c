@@ -344,6 +344,8 @@ static void usage(void) {
     "  --emit-types Dump per-position inferred types + diagnostics as JSON\n"
     "  --warn-widen  Warn, at the slot, for each parameter or return that\n"
     "              widened to untyped (the boxed slow path)\n"
+    "  --check-stores  Warn, at the store, for each value written raw into a\n"
+    "              C slot of another C type (a compiler self-check)\n"
     "  --emit-symbol-map  Dump emitted-symbol -> Ruby-name map as JSON, no binary\n"
     "  -S          Print C to stdout\n"
     "  -E          Run the compiled binary; leftover args become its ARGV\n"
@@ -418,7 +420,7 @@ int main(int argc, char **argv) {
   int print_build = 0;   /* --print-build: emit the build ingredients, run nothing */
   int cc_jobs = 0;       /* --jobs=N: compile the C as N units in parallel (#4847); 0 = auto */
   int emit_rbs = 0, emit_types = 0, emit_symbol_map = 0;
-  int debug = 0, line_map = 1, want_g = 0, profile = 0, warn_widen = 0;
+  int debug = 0, line_map = 1, want_g = 0, profile = 0, warn_widen = 0, check_stores = 0;
   /* Accumulated -e source and the program ARGV after the -E boundary. */
   Str eval_src = {0};
   int eval_used = 0;
@@ -466,6 +468,7 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--no-line-map")) { line_map = 0; i++; }
     else if (sp_streq(a, "--defer-refusals")) { set_env("SPINEL_DEFER_REFUSALS", "1"); i++; }
     else if (sp_streq(a, "--warn-widen"))  { warn_widen = 1; i++; }
+    else if (sp_streq(a, "--check-stores")) { check_stores = 1; i++; }
     /* keep every GC root, so a suspected miscompile can be bisected against
        the same binary rather than against a different build. */
     else if (sp_streq(a, "--no-root-elision")) { g_no_root_elision = 1; i++; }
@@ -687,6 +690,8 @@ int main(int argc, char **argv) {
   /* --warn-widen places each warning at its slot, which needs the parser's
      positions: forced past --no-line-map, as --emit-types forces them. */
   if (warn_widen) { set_env("SPINEL_LINE_MAP", "1"); set_env("SPINEL_WARN_WIDEN", "1"); }
+  /* --check-stores reports each store at its Ruby line, so it needs them too */
+  if (check_stores) { set_env("SPINEL_LINE_MAP", "1"); set_env("SPINEL_CHECK_STORES", "1"); }
 
   /* Analyze-only emit modes write their artifact from inside codegen_program
      and produce an empty translation unit; route the output path via env. */

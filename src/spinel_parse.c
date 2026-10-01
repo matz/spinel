@@ -3420,34 +3420,6 @@ static int sp_src_names_const(const char *src, const char *w) {
   }
   return 0;
 }
-/* builtins/<file> ahead of the program, its lines' pragma entries with it */
-static char *sp_prepend_builtin_file(char *source, const char *exe_path, const char *file,
-                                     unsigned char **fsl, size_t *fsl_n) {
-  char lib_dir[1024], gp[1200];
-  sp_lib_dir(exe_path, lib_dir, sizeof lib_dir);
-  int base_len = (int)strlen(lib_dir);
-  if (base_len >= 4 && strcmp(lib_dir + base_len - 4, "/lib") == 0) base_len -= 4;
-  snprintf(gp, sizeof gp, "%.*s/%s", base_len, lib_dir, file);
-  char *content = read_file(gp);
-  if (!content) { snprintf(gp, sizeof gp, "%.*s/../%s", base_len, lib_dir, file); content = read_file(gp); }
-  if (!content) return source;
-  size_t sl = strlen(source), cl = strlen(content);
-  char *ns = malloc(sl + cl + 2);
-  if (!ns) { free(content); return source; }
-  memcpy(ns, content, cl);
-  if (cl && content[cl - 1] != '\n') ns[cl++] = '\n';
-  memcpy(ns + cl, source, sl + 1);
-  if (fsl && *fsl) {
-    size_t cn = 0;
-    unsigned char *cf = sp_fsl_make(content, 0, &cn);
-    sp_fsl_splice(fsl, fsl_n, 0, 0, cf, cn);
-    free(cf);
-  }
-  free(content);
-  free(source);
-  return ns;
-}
-
 /* Does the source open `kw` ("module Enumerable", "class Set") as written,
    the name ending there? A bare strstr also took ruby/spec's
    `module EnumerableSpecs` or a `class Settings` for it. */
@@ -3484,7 +3456,8 @@ static char *sp_prepend_require(char *source, const char *exe_path, const char *
 static char *sp_splice_named_builtin(char *source, const char *exe_path, const char *cname,
                                      const char *file, unsigned char **fsl, size_t *fsl_n) {
   if (!sp_src_names_const(source, cname) || sp_src_defines_module(source, cname)) return source;
-  return sp_prepend_builtin_file(source, exe_path, file, fsl, fsl_n);
+  char head[96]; snprintf(head, sizeof head, "require \"%s\"\n", file);
+  return sp_prepend_require(source, exe_path, head, fsl, fsl_n);
 }
 
 /* builtins/object_space.rb: the finalizer API. Only for a program that names
@@ -3494,7 +3467,7 @@ static char *sp_splice_object_space(char *source, const char *exe_path,
                                     unsigned char **fsl, size_t *fsl_n) {
   if (!strstr(source, "define_finalizer")) return source;
   if (sp_src_defines_module(source, "ObjectSpace")) return source;
-  return sp_prepend_builtin_file(source, exe_path, "builtins/object_space.rb", fsl, fsl_n);
+  return sp_prepend_require(source, exe_path, "require \"builtins/object_space\"\n", fsl, fsl_n);
 }
 
 static char *sp_splice_builtins(char *source, const char *exe_path,
@@ -4765,8 +4738,8 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
   char *resolved = resolve_requires(source, source_file, &fsl, &fsl_n);
   free(source);
   source = resolve_plain_requires(resolved, argv0, &fsl, &fsl_n);
-  source = sp_splice_named_builtin(source, argv0, "Gem", "builtins/gem.rb", &fsl, &fsl_n);
-  source = sp_splice_named_builtin(source, argv0, "RbConfig", "builtins/rbconfig.rb", &fsl, &fsl_n);
+  source = sp_splice_named_builtin(source, argv0, "Gem", "builtins/gem", &fsl, &fsl_n);
+  source = sp_splice_named_builtin(source, argv0, "RbConfig", "builtins/rbconfig", &fsl, &fsl_n);
   source = sp_splice_object_space(source, argv0, &fsl, &fsl_n);
   /* CRuby provides Set (3.2+) and IO::Buffer without a require wherever
      they are used, in a required file as well (activesupport's

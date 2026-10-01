@@ -161,13 +161,19 @@ typedef struct {
   int const_def_write; /* (consts) has a definite (non-or/and) assignment; an
                           or/and-write-only const is nil-defaulted (poly) so its
                           `||=` truthiness check fires on first use */
-  int or_write_only; /* every write to this local is a `||=`: it has no definite
-                        assignment anywhere in the scope, so it starts as nil
-                        and the or-write's truthiness check must fire on first
-                        use. The slot is declared with its type's nil sentinel
-                        rather than the zero value, so a kind whose zero is a
-                        real value (sp_int 0, 0.0) can still tell the two
-                        apart (mirrors ConstantVar's const_def_write). */
+  int or_written; /* some write to this local is a `||=`, which can run before
+                     any definite assignment (`v ||= 5; v += 2`, a definite
+                     write in one branch only, a block local reset each
+                     iteration), so its truthiness check must be able to see
+                     nil. The slot is declared with its type's nil sentinel
+                     rather than the zero value, so a kind whose zero is a
+                     real value (sp_int 0, 0.0) can still tell the two apart
+                     (mirrors ConstantVar's const_def_write). */
+  int maybe_unset;  /* (Integer / Float) some read can run before any write:
+                       every write to it ahead of the read is conditional (a
+                       modifier `if`, one branch, a loop body), so the read
+                       answers nil, and the slot starts as its nil sentinel
+                       as an or-written one does */
   int str_shared;   /* (TY_STRBUF) a shared-mutable string: it is aliased
                        (`s2 = s1`) AND mutated in place, so the whole alias set
                        holds the one sp_String* handle -- reads hand out the live

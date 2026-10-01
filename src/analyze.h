@@ -77,6 +77,10 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j);
 /* A boxed parameter's argument a literal block appends to through a yield
    (yield_splice_handles): a String variable there must be the handle. */
 int yield_poly_arg_wants_handle(Compiler *c, int a);
+/* A literal block a splat into a yield or instance_exec reaches, whose every
+   parameter it appends to takes the handle the gathered Array holds
+   (block_splat_pull_args). */
+int block_splat_shares(Compiler *c, int blk);
 int fwd_param_appends_at(Compiler *c, int mi, int j);
 int dyn_block_appends(Compiler *c, int blk, int k);
 /* `new` and `raise C, s` into an initialize that appends to a String

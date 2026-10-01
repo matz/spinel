@@ -1647,10 +1647,7 @@ void register_locals(Compiler *c) {
       const char *nm = nt_str(nt, id, "name");
       if (nm) {
         LocalVar *lv = scope_local_intern(comp_scope_of(c, id), nm);
-        /* or_write_only is a two-bit scratch here: 1 = an or-write was seen,
-           2 = a definite write was seen. Normalised to the flag below. */
-        if (sp_streq(ty, "LocalVariableOrWriteNode")) lv->or_write_only |= 1;
-        else if (!sp_streq(ty, "LocalVariableReadNode")) lv->or_write_only |= 2;
+        if (sp_streq(ty, "LocalVariableOrWriteNode")) lv->or_written = 1;
       }
     }
     if (sp_streq(ty, "InstanceVariableWriteNode") ||
@@ -1664,15 +1661,14 @@ void register_locals(Compiler *c) {
       if (nm && s->class_id >= 0) comp_ivar_intern(&c->classes[s->class_id], nm);
     }
   }
-  /* Normalise the scratch: only "an or-write and nothing else" leaves the
-     local without a definite assignment. Parameters are bound on entry, so
-     they are assigned however the scratch reads. */
+  /* Parameters are bound on entry, so their `||=` never sees the slot
+     unassigned. A definite write elsewhere does not settle it: it may come
+     after the `||=`, or in a branch not taken. */
   for (int si = 0; si < c->nscopes; si++) {
     Scope *s = &c->scopes[si];
     for (int li = 0; li < s->nlocals; li++) {
       LocalVar *lv = &s->locals[li];
-      lv->or_write_only = (lv->or_write_only == 1 && !lv->is_param && !lv->is_block_param);
-
+      lv->or_written = lv->or_written && !lv->is_param && !lv->is_block_param;
     }
   }
 }
@@ -4104,7 +4100,12 @@ int infer_global_const_types(Compiler *c) {
       TyKind cur = lv ? lv->type : TY_UNKNOWN;
       TyKind v = infer_type(c, nt_ref(nt, id, "value"));
       if (cur == TY_STRING) vt = TY_STRING;
-      else if (ty_is_numeric(cur) && ty_is_numeric(v)) vt = (cur == TY_FLOAT || v == TY_FLOAT) ? TY_FLOAT : TY_INT;
+      else if (ty_is_numeric(cur) && ty_is_numeric(v))
+        /* an Integer past 64 bits on either side widens the slot to Bignum,
+           as a local's `x -= 2**63` does: kept an Integer, the Bignum operand
+           had no slot to land in */
+        vt = (cur == TY_FLOAT || v == TY_FLOAT) ? TY_FLOAT
+           : (cur == TY_BIGINT || v == TY_BIGINT) ? TY_BIGINT : TY_INT;
       else vt = cur;
     }
     else if (sp_streq(ty, "GlobalVariableOrWriteNode") || sp_streq(ty, "GlobalVariableAndWriteNode")) {

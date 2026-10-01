@@ -42,3 +42,50 @@ module UsesPriv
   def self.bare = PRIV
 end
 p((UsesPriv.via_self rescue $!.class), UsesPriv.bare)
+
+# a private_constant in a later reopening counts too
+class ReopenP
+  RK = 1
+end
+class ReopenP
+  private_constant :RK
+end
+class ReopenC < ReopenP
+  def self.read = self::RK
+end
+p((ReopenC.read rescue $!.class))
+
+# a superclass written with its namespace
+module Outer
+  class QParent
+    QK = 5
+  end
+end
+class QChild < Outer::QParent
+  def self.read = self::QK
+end
+p QChild.read
+
+# the nearest definition decides: a subclass's private one raises for
+# self::NAME, while const_get reads a private constant
+class VBase
+  def self.read = self::VK
+  def self.cg = const_get(:VK)
+end
+class VPriv < VBase
+  VK = 3
+  private_constant :VK
+end
+class VPub < VBase
+  VK = 4
+end
+p((VPriv.read rescue $!.class), VPriv.cg, VPub.read, VPub.cg)
+class GA
+  GK = 1
+  private_constant :GK
+end
+class GB < GA
+  def self.cg = const_get(:GK)
+  def self.read = self::GK
+end
+p(GB.cg, (GB.read rescue $!.class))

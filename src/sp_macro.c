@@ -293,6 +293,7 @@ static MxNames g_mx_poison;  /* ivars something outside the macros writes, or ma
 static int g_mx_poison_all;  /* ... or one named at run time */
 static MxNames g_mx_fixwriters;  /* names of macros that may write however they are called */
 static MxNames g_mx_alias;   /* constant names something besides a class/module statement may bind */
+static MxNames g_mx_alias_path;  /* ... and the full paths of those bound where the scope is known */
 static int g_mx_alias_all;   /* ... or a const_set with a name known only at run time */
 
 static unsigned mx_hash(const char *s) {
@@ -1780,22 +1781,42 @@ static bool mx_poison_visit(const pm_node_t *n, void *data) {
    assigned (`Alias = Calc`), one named by a literal (`const_set(:Alias, ..)`),
    or any, when a const_set outside the macros computes its name. A class body
    under such a name may be another class's: its state is not followed. */
-typedef struct { int in_macro; } MxAliasScan;
+/* `path`: the class/module nesting, as mx_class_visit spells it; `clean`: it
+   is the constant scope of a write here (only plain `class X`/`module X`
+   statements, none named Object, no block, def or singleton class between) */
+typedef struct { int in_macro; const char *path; int clean; } MxAliasScan;
 
 static bool mx_alias_visit(const pm_node_t *n, void *data) {
   MxAliasScan *as = data;
   pm_constant_id_t id = 0;
   switch (PM_NODE_TYPE(n)) {
-  case PM_MODULE_NODE: {
-    pm_node_t *b = ((const pm_module_node_t *)n)->body;
+  case PM_MODULE_NODE: case PM_CLASS_NODE: {
+    int is_mod = PM_NODE_TYPE(n) == PM_MODULE_NODE;
+    pm_node_t *cp = is_mod ? ((const pm_module_node_t *)n)->constant_path : ((const pm_class_node_t *)n)->constant_path;
+    pm_node_t *b = is_mod ? ((const pm_module_node_t *)n)->body : ((const pm_class_node_t *)n)->body;
+    if (!is_mod && ((const pm_class_node_t *)n)->superclass)
+      pm_visit_node(((const pm_class_node_t *)n)->superclass, mx_alias_visit, as);
+    size_t cl = (size_t)(cp->location.end - cp->location.start);
+    char *path = malloc(strlen(as->path) + cl + 3);
+    sprintf(path, "%s::%.*s", as->path, (int)cl, (const char *)cp->location.start);
+    int clean = as->clean && PM_NODE_TYPE(cp) == PM_CONSTANT_READ_NODE &&
+                !(cl == 6 && memcmp(cp->location.start, "Object", 6) == 0);
     if (b && PM_NODE_TYPE(b) == PM_STATEMENTS_NODE) {
       pm_statements_node_t *st = (pm_statements_node_t *)b;
       for (size_t i = 0; i < st->body.size; i++) {
         pm_node_t *s = st->body.nodes[i];
-        MxAliasScan in = { as->in_macro || (PM_NODE_TYPE(s) == PM_DEF_NODE && !((pm_def_node_t *)s)->receiver) };
+        MxAliasScan in = { as->in_macro || (is_mod && PM_NODE_TYPE(s) == PM_DEF_NODE && !((pm_def_node_t *)s)->receiver),
+                           path, clean };
         pm_visit_node(s, mx_alias_visit, &in);
       }
     }
+    else if (b) { MxAliasScan in = { as->in_macro, path, clean }; pm_visit_node(b, mx_alias_visit, &in); }
+    free(path);
+    return false;
+  }
+  case PM_SINGLETON_CLASS_NODE: case PM_BLOCK_NODE: case PM_LAMBDA_NODE: case PM_DEF_NODE: {
+    MxAliasScan in = { as->in_macro, as->path, 0 };
+    pm_visit_child_nodes(n, mx_alias_visit, &in);
     return false;
   }
   case PM_CONSTANT_WRITE_NODE: id = ((const pm_constant_write_node_t *)n)->name; break;
@@ -1825,8 +1846,61 @@ static bool mx_alias_visit(const pm_node_t *n, void *data) {
   }
   default: return true;
   }
-  if (id) { char *s = mx_name(id); mx_names_add(&g_mx_alias, s); free(s); }
+  if (id) {
+    char *s = mx_name(id);
+    int plain = PM_NODE_TYPE(n) == PM_CONSTANT_WRITE_NODE || PM_NODE_TYPE(n) == PM_CONSTANT_OR_WRITE_NODE ||
+                PM_NODE_TYPE(n) == PM_CONSTANT_AND_WRITE_NODE || PM_NODE_TYPE(n) == PM_CONSTANT_OPERATOR_WRITE_NODE ||
+                PM_NODE_TYPE(n) == PM_CONSTANT_TARGET_NODE;
+    /* `X = ..` binds X in the scope of the class body it is in: a class
+       statement elsewhere naming an X does not reach it */
+    if (plain && as->clean) {
+      char *full = malloc(strlen(as->path) + strlen(s) + 3);
+      sprintf(full, "%s::%s", as->path, s);
+      mx_names_add(&g_mx_alias_path, full);
+      free(full);
+    }
+    else mx_names_add(&g_mx_alias, s);
+    free(s);
+  }
   return true;
+}
+
+/* does this path, or a namespace on it, name what an alias may bind? */
+static int mx_path_aliased(const char *path) {
+  for (const char *p = path; *p; ) {
+    while (*p == ':') p++;
+    const char *e = strstr(p, "::");
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    char *seg = strndup(p, len);
+    /* top-level constants are Object's: `class Object; class Calc` reopens ::Calc */
+    int odd = strcmp(seg, "Object") == 0 || mx_names_has(&g_mx_alias, seg);
+    free(seg);
+    if (!odd) {
+      char *pre = strndup(path, (size_t)(p + len - path));
+      odd = mx_names_has(&g_mx_alias_path, pre);
+      free(pre);
+    }
+    if (odd) return 1;
+    p += len;
+  }
+  return 0;
+}
+
+/* An alias bound inside a namespace that is itself reached by another name
+   (`M = N; module M; X = Y; end` binds N::X) is matched by its name alone. */
+static void mx_settle_aliases(void) {
+  for (int changed = 1; changed; ) {
+    changed = 0;
+    for (int i = 0; i < g_mx_alias_path.n; i++) {
+      const char *a = g_mx_alias_path.v[i];
+      const char *last = NULL;
+      for (const char *q = strstr(a, "::"); q; q = strstr(q + 2, "::")) last = q;
+      if (!last || last == a || mx_names_has(&g_mx_alias, last + 2)) continue;
+      char *pre = strndup(a, (size_t)(last - a));
+      if (mx_path_aliased(pre)) { mx_names_add(&g_mx_alias, last + 2); changed = 1; }
+      free(pre);
+    }
+  }
 }
 
 /* A setter attr_writer / attr_accessor (or `attr` with true) makes writes the
@@ -1872,18 +1946,7 @@ static int mx_path_odd(const char *outer, const pm_node_t *cp, const char *path)
   if (g_mx_alias_all) return 1;
   /* `class A::B` inside a namespace: A is looked up from there, not under it */
   if (PM_NODE_TYPE(cp) == PM_CONSTANT_PATH_NODE && outer[0] && cp->location.start[0] != ':') return 1;
-  for (const char *p = path; *p; ) {
-    while (*p == ':') p++;
-    const char *e = strstr(p, "::");
-    size_t len = e ? (size_t)(e - p) : strlen(p);
-    char *seg = strndup(p, len);
-    /* top-level constants are Object's: `class Object; class Calc` reopens ::Calc */
-    int odd = strcmp(seg, "Object") == 0 || mx_names_has(&g_mx_alias, seg);
-    free(seg);
-    if (odd) return 1;
-    p += len;
-  }
-  return 0;
+  return mx_path_aliased(path);
 }
 
 /* Code a macro generates (a module_eval string, a define_singleton_method
@@ -2427,7 +2490,7 @@ static char *sp_expand_class_macros(const char *source) {
     if (g_mx_nmacros > 0 && mx_program_reflects()) g_mx_nmacros = 0;
     /* what may write an ivar, and where the evaluator follows a macro call */
     mx_analyze_writers();
-    { MxAliasScan as = { 0 }; pm_visit_node(root, mx_alias_visit, &as); }
+    { MxAliasScan as = { 0, "", 1 }; pm_visit_node(root, mx_alias_visit, &as); mx_settle_aliases(); }
     { MxEdits none = {0}; MxWalk mw = { &none, "", 1, 0 }; pm_visit_node(root, mx_class_visit, &mw); }
     mx_sort_tracked();
     { MxPoisonScan ps = { 0 }; pm_visit_node(root, mx_poison_visit, &ps); }
@@ -2505,6 +2568,7 @@ static char *sp_expand_class_macros(const char *source) {
     g_mx_poison_all = 0;
     mx_names_free(&g_mx_fixwriters);
     mx_names_free(&g_mx_alias);
+    mx_names_free(&g_mx_alias_path);
     g_mx_alias_all = 0;
     free(g_mx_tracked); g_mx_tracked = NULL; g_mx_ntracked = 0;
   }

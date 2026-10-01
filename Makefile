@@ -50,7 +50,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate check gate-legs gate-test gate-bench gc-phases-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
@@ -930,7 +930,7 @@ test: $(SPINEL_TIMEOUT)
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test backtrace-test gc-minor-test gc-phases-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -1043,6 +1043,22 @@ defer-refusals-test: $(SPINEL)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "defer-refusals-test: pass"; else exit 1; fi
 
+# --check-stores: each value the emitter writes as it is into a C slot of
+# another C type is reported at its Ruby line, and the C is the same as without
+# the flag but for the comments marking those stores. raw_stores.rb holds the
+# stores master still writes raw; clean_stores.rb, stores that convert.
+check-stores-test: $(SPINEL)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-stores.XXXXXX); t=test/check-stores/raw_stores.rb; \
+	$(SPINEL) --check-stores "$$t" -c -o "$$tmp/k.c" >"$$tmp/k.out" 2>&1 || { echo "check-stores-test: FAIL ($$t did not compile)"; ok=0; }; \
+	n=$$(grep -c 'store check' "$$tmp/k.out"); [ "$$n" -le 1 ] || { echo "check-stores-test: FAIL ($$n reports, want at most 1)"; ok=0; }; \
+	$(SPINEL) "$$t" -c -o "$$tmp/p.c" >/dev/null 2>&1; \
+	sed 's|/\* store check: [^*]* \*/||g' "$$tmp/k.c" | cmp -s - "$$tmp/p.c" || { echo "check-stores-test: FAIL (the flag changed the C beyond its comments)"; ok=0; }; \
+	$(SPINEL) --check-stores test/check-stores/clean_stores.rb -c -o "$$tmp/c.c" >"$$tmp/c.out" 2>&1 || \
+	  { echo "check-stores-test: FAIL (clean_stores.rb did not compile)"; sed -n 1,5p "$$tmp/c.out"; ok=0; }; \
+	! grep -q 'store check' "$$tmp/c.out" || { echo "check-stores-test: FAIL (a store that converts was reported)"; grep 'store check' "$$tmp/c.out"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "check-stores-test: pass"; else exit 1; fi
+
 cli-opts-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-cliopts.XXXXXX); \
 	printf 'p ARGV\n' > "$$tmp/p.rb"; \
@@ -1095,26 +1111,51 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \
 	else grep -q "singleton method that needs a self, on a receiver that is not one user-class instance" "$$tmp/r.out" || \
 	  { echo "reject-test: FAIL (rejected without saying why)"; sed -n 1,5p "$$tmp/r.out"; ok=0; }; fi; \
-	t=test/reject/combination_block_two_params.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/cbt.c" >"$$tmp/cbt.out" 2>&1; then \
-	  echo "reject-test: FAIL (a combination block taking two parameters compiled)"; ok=0; \
-	else grep -q "a block taking more than one parameter on combination" "$$tmp/cbt.out" || \
-	  { echo "reject-test: FAIL (a combination block taking two parameters rejected without saying why)"; sed -n 1,5p "$$tmp/cbt.out"; ok=0; }; fi; \
+	t=test/reject/new_receiver_class_method_still_reached.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/nrc.c" >"$$tmp/nrc.out" 2>&1; then \
+	  echo "reject-test: FAIL (a called class method's provable NoMethodError compiled)"; ok=0; \
+	else grep -q "undefined method '\[\]=' for a Class" "$$tmp/nrc.out" || \
+	  { echo "reject-test: FAIL (a called class method's NoMethodError rejected without saying why)"; sed -n 1,5p "$$tmp/nrc.out"; ok=0; }; fi; \
+	t=test/reject/combination_safe_nav_two_params.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/csn.c" >"$$tmp/csn.out" 2>&1; then \
+	  echo "reject-test: FAIL (a combination block taking two parameters through &. compiled)"; ok=0; \
+	else grep -q "a block taking more than one parameter on combination" "$$tmp/csn.out" || \
+	  { echo "reject-test: FAIL (a combination block through &. rejected without saying why)"; sed -n 1,5p "$$tmp/csn.out"; ok=0; }; fi; \
 	t=test/reject/redo_unlabeled_iterator.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/rui.c" >"$$tmp/rui.out" 2>&1; then \
 	  echo "reject-test: FAIL (a redo with no label for it compiled)"; ok=0; \
 	else grep -q "redo in this block" "$$tmp/rui.out" || \
 	  { echo "reject-test: FAIL (a redo with no label rejected without saying why)"; sed -n 1,5p "$$tmp/rui.out"; ok=0; }; fi; \
-	t=test/reject/product_block_rest_param.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/pbr.c" >"$$tmp/pbr.out" 2>&1; then \
-	  echo "reject-test: FAIL (a product block with a rest parameter compiled)"; ok=0; \
-	else grep -q "a block with a rest, optional or post parameter" "$$tmp/pbr.out" || \
-	  { echo "reject-test: FAIL (a product block with a rest parameter rejected without saying why)"; sed -n 1,5p "$$tmp/pbr.out"; ok=0; }; fi; \
+	t=test/reject/instance_exec_default_ivar_write.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/idw.c" >"$$tmp/idw.out" 2>&1; then \
+	  echo "reject-test: FAIL (an ivar written in a block default on a value with no ivars compiled)"; ok=0; \
+	else grep -q "on a value with no instance variable layout" "$$tmp/idw.out" || \
+	  { echo "reject-test: FAIL (an ivar written in a block default rejected without saying why)"; sed -n 1,5p "$$tmp/idw.out"; ok=0; }; fi; \
+	t=test/reject/yield_splat_elem_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/yse.c" >"$$tmp/yse.out" 2>&1; then \
+	  echo "reject-test: FAIL (an Array element splatted into a yield to an appending block compiled)"; ok=0; \
+	else grep -q "from a value that is not a String variable" "$$tmp/yse.out" || \
+	  { echo "reject-test: FAIL (an Array element splatted into a yield rejected without saying why)"; sed -n 1,5p "$$tmp/yse.out"; ok=0; }; fi; \
 	t=test/reject/string_splat_changed_array.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sca.c" >"$$tmp/sca.out" 2>&1; then \
 	  echo "reject-test: FAIL (a global in a changed splatted Array compiled)"; ok=0; \
 	else grep -q "through a splat of an Array the program changes" "$$tmp/sca.out" || \
 	  { echo "reject-test: FAIL (changed splatted Array rejected without saying why)"; sed -n 1,5p "$$tmp/sca.out"; ok=0; }; fi; \
+	t=test/reject/string_mutator_jump_arm.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/mja.c" >"$$tmp/mja.out" 2>&1; then \
+	  echo "reject-test: FAIL (a String mutator on a conditional with a returning arm compiled)"; ok=0; \
+	else grep -q "unsupported expression" "$$tmp/mja.out" || \
+	  { echo "reject-test: FAIL (a returning arm under a String mutator rejected without saying why)"; sed -n 1,5p "$$tmp/mja.out"; ok=0; }; fi; \
+	t=test/reject/string_global_handle_param.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ghp.c" >"$$tmp/ghp.out" 2>&1; then \
+	  echo "reject-test: FAIL (a global run first into a handle parameter compiled)"; ok=0; \
+	else grep -q "parameter .io. through the call, which the method appends to" "$$tmp/ghp.out" || \
+	  { echo "reject-test: FAIL (a global into a handle parameter rejected without saying why)"; sed -n 1,5p "$$tmp/ghp.out"; ok=0; }; fi; \
+	t=test/reject/string_cvar_boxed_param.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/cbp.c" >"$$tmp/cbp.out" 2>&1; then \
+	  echo "reject-test: FAIL (a class variable into a boxed parameter compiled)"; ok=0; \
+	else grep -q "from a class variable into a parameter that boxes it" "$$tmp/cbp.out" || \
+	  { echo "reject-test: FAIL (a class variable into a boxed parameter rejected without saying why)"; sed -n 1,5p "$$tmp/cbp.out"; ok=0; }; fi; \
 	t=test/reject/string_splat_global_toplevel.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sgt.c" >"$$tmp/sgt.out" 2>&1; then \
 	  echo "reject-test: FAIL (a global splatted into a top-level method's appending parameter compiled)"; ok=0; \
@@ -1297,6 +1338,16 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ds.c" >"$$tmp/ds.out" 2>&1; st=$$?; \
 	if [ $$st -ne 1 ] || ! grep -q "1 refusal," "$$tmp/ds.out"; then \
 	  echo "reject-test: FAIL (a refusal after a dynamic send's probed arms did not report cleanly, exit $$st)"; sed -n 1,5p "$$tmp/ds.out"; ok=0; fi; \
+	for spec in "complex_bignum_component:a Complex component given an Integer past 64 bits" \
+	            "rational_pow_bignum:the receiver of a Float \`**\` given a Rational" \
+	            "bignum_div_rational:an Integer operand of a Bignum operation given a Rational" \
+	            "array_push_other_class_temporary:an Array push given a String"; do \
+	  t=test/reject/$${spec%%:*}.rb; why=$${spec#*:}; \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/co.c" >"$$tmp/co.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled: a value no conversion keeps went into its slot)"; ok=0; \
+	  else grep -qF "$$why" "$$tmp/co.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/co.out"; ok=0; }; fi; \
+	done; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "reject-test: pass"; else exit 1; fi
 

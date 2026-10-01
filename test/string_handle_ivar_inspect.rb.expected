@@ -1,0 +1,8 @@
+#<W:0x @buf="abc", @n=1>
+"abc"
+"abc"
+["abc", "abcd"]
+#<V:0x @s=nil>
+#<V:0x @s="xy">
+"xy"
+nil

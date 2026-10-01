@@ -692,6 +692,10 @@ static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;
    carries SP_TAG_STR and fails tag-keyed comparisons -- `defined?(x).should
    == nil` compared STR(NULL) against NIL and answered false. */
 static inline sp_RbVal sp_box_str(const char *v){ sp_RbVal r; if (!v) { r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.s = NULL; return r; } r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = v; return r; }
+/* A String mutator's value from a poly arm, which answers the box or the
+   unboxed String by mutator: boxed either way (a NULL String is nil). */
+static inline sp_RbVal sp_box_same(sp_RbVal v){ return v; }
+#define SP_BOX_STR_OR_POLY(x) _Generic((x), sp_RbVal: sp_box_same, default: sp_box_str)(x)
 static inline sp_RbVal sp_box_float(sp_float v){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = v; return r; }
 /* Write the full union word, not just the narrow `b` member: hash keys and
    poly equality compare bool values through `v.i`, so bytes left

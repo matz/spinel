@@ -54,10 +54,12 @@ t = s
 k = Ctx.new(s, (s = +"q"; 1))
 t << "!"
 p [k.buf, s, t]
-# (d) a variable run first that holds no handle -- lent to a byref slot, so
-# it stays a plain String -- beside an argument that takes a String's handle
-# for itself: the handle parameter binds a fresh String, where it bound the
-# other temp, which its block had already closed (the C build stopped)
+# (d) a variable run first that is also lent to a byref slot, beside an
+# argument that takes a String's handle for itself: the slot's parameter
+# takes the handle too, so the handle parameter binds the variable's own
+# String. While the variable stayed a plain String, the parameter bound a
+# fresh one, and before that the other argument's temp, which its block had
+# already closed (the C build stopped)
 module Helper
   def self.open_into(io) = (io << "<div>"; nil)
 end

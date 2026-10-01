@@ -1,0 +1,26 @@
+nil
+nil
+[3]
+[1]
+[0, nil]
+[1, nil]
+[3, 0, nil]
+[1, 1, nil]
+[3, 1, nil, nil, nil, 9]
+3
+nil
+[0, nil]
+[1, nil]
+[1, nil]
+[2, nil]
+[1, nil]
+[3, nil]
+[1, nil]
+[2, nil]
+["a", nil]
+["b", nil]
+[97, nil]
+[98, nil]
+[5, nil]
+[:a, 1, nil]
+11

@@ -1,0 +1,22 @@
+12297829382473033728
+-12297829382473033728
+[7378697629483821056, 1.0]
+[-7378697629483821056, -1.5]
+[-7378697629483821056, 1.5]
+1.0
+-1.5
+1.0
+1.0
+[0, 1.8446744073709552e+19]
+0
+ZeroDivisionError: divided by 0
+FloatDomainError: NaN
+ZeroDivisionError: divided by 0
+FloatDomainError: NaN
+ZeroDivisionError: divided by 0
+ZeroDivisionError: divided by 0
+FloatDomainError: Infinity
+0
+0
+4611686018427387904
+Integer

@@ -1660,18 +1660,22 @@ static int widen_aliased_array_ivars(Compiler *c, int node, int cls_id) {
     }
     return changed;
   }
-  if (k == NK_IfNode || k == NK_UnlessNode) {
+  switch (k) {
+  case NK_IfNode: case NK_UnlessNode:
     changed |= widen_aliased_array_ivars(c, nt_ref(nt, node, "statements"), cls_id);
     changed |= widen_aliased_array_ivars(c, nt_ref(nt, node,
                  k == NK_UnlessNode ? "else_clause" : "subsequent"), cls_id);
-  }
-  else if (k == NK_ElseNode)
-    changed |= widen_aliased_array_ivars(c, nt_ref(nt, node, "statements"), cls_id);
-  else if (k == NK_ParenthesesNode)
-    changed |= widen_aliased_array_ivars(c, nt_ref(nt, node, "body"), cls_id);
-  else if (k == NK_StatementsNode) {
+    break;
+  case NK_ElseNode:
+    changed |= widen_aliased_array_ivars(c, nt_ref(nt, node, "statements"), cls_id); break;
+  case NK_ParenthesesNode:
+    changed |= widen_aliased_array_ivars(c, nt_ref(nt, node, "body"), cls_id); break;
+  case NK_StatementsNode: {
     int bn = 0; const int *bb = nt_arr(nt, node, "body", &bn);
     if (bb && bn > 0) changed |= widen_aliased_array_ivars(c, bb[bn - 1], cls_id);
+    break;
+  }
+  default: break;
   }
   return changed;
 }
@@ -3438,10 +3442,23 @@ int infer_write_types(Compiler *c) {
            span: the value is element evidence exactly like a splice, so a typed
            array whose elements cannot hold the value widens to a poly array
            (previously the raw bits were stored: [1,2,3].fill(:a) filled the int
-           array with the symbol id). The block form fill([start[, len]]) { |i| }
-           carries no value argument and is not handled here. */
+           array with the symbol id). The block form is the next arm. */
         is_idx_write = 1; is_splice = 1; is_fill = 1; vt = infer_type(c, argv[0]);
         kt = TY_INT;  /* a positional span, never hash evidence */
+      }
+      else if (name && sp_streq(name, "fill") && an <= 2 && nt_ref(nt, id, "block") >= 0 &&
+               nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
+        /* the block form, fill([start[, len]]) { |i| v }: the block's value
+           is what goes into each slot of the span, the same evidence */
+        int fblk = nt_ref(nt, id, "block");
+        int fbody = nt_ref(nt, fblk, "body");
+        int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
+        vt = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
+        TyKind fnx = block_next_value_ty(c, fbody);
+        if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
+        if (vt == TY_VOID) vt = TY_NIL;
+        is_idx_write = 1; is_splice = 1; is_fill = 1;
+        kt = TY_INT;
       }
       else if (name && (sp_streq(name, "fetch") ||
                         (sp_streq(name, "[]") && an == 1)) && an >= 1) {
@@ -8068,14 +8085,18 @@ int infer_catch_block_params(Compiler *c) {
     if (!nm || !sp_streq(nm, "catch") || nt_ref(nt, id, "receiver") >= 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0;
-    if (args >= 0) nt_arr(nt, args, "arguments", &an);
-    if (an > 0) continue;                       /* explicit tag: no block param */
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an > 1) continue;
     int blk = nt_ref(nt, id, "block");
     const char *bp0 = blk >= 0 ? block_param_name(c, blk, 0) : NULL;
     if (!bp0) continue;
     LocalVar *lv = scope_local_intern(comp_scope_of(c, id), bp0);
     lv->is_block_param = 1;   /* survives the write-types reset */
-    if (lv->type != TY_STRING) { lv->type = TY_STRING; changed = 1; }
+    /* an explicit tag is the block's parameter too */
+    TyKind want = an == 1 ? infer_type(c, av[0]) : TY_STRING;
+    if (want == TY_UNKNOWN) continue;
+    if (an == 1 && lv->type != TY_UNKNOWN && lv->type != want) want = TY_POLY;
+    if (lv->type != want) { lv->type = want; changed = 1; }
   }
   return changed;
 }
@@ -9444,6 +9465,25 @@ static int ie_subtree_self_calls(Compiler *c, int root, const char *cls, int dep
   return changed;
 }
 
+/* Does the subtree under `node` read or write an ivar? */
+static int subtree_has_ivar(const NodeTable *nt, int node, int depth) {
+  if (node < 0) return 0;
+  /* past the depth this follows, an ivar may be there: not spliced */
+  if (depth > 200) return 1;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode ||
+      k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode ||
+      k == NK_InstanceVariableOperatorWriteNode || k == NK_InstanceVariableTargetNode) return 1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (subtree_has_ivar(nt, nt_ref_at(nt, node, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
+    for (int j = 0; j < m; j++) if (subtree_has_ivar(nt, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* instance_eval / instance_exec with a block on a BUILTIN receiver: splice the
    body inline with self bound to a temp (#2634). User-object receivers keep
    the dedicated codegen path (ie_direct), which handles their ivars/methods.
@@ -9485,6 +9525,10 @@ int desugar_instance_eval_builtin(Compiler *c) {
     int body = nt_ref(nt, blk, "body");
     if (body < 0) continue;
     if (subtree_has_kind(nt, body, NK_DefNode, 0)) continue;
+    /* the block's ivars are the receiver's, which has none: spliced here
+       they read and wrote the caller's. The codegen path reads them nil
+       and refuses a write (emit_call's non-object instance_exec). */
+    if (subtree_has_ivar(nt, nt_ref(nt, blk, "parameters"), 0) || subtree_has_ivar(nt, body, 0)) continue;
     {
       const char *rcls = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                        : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
@@ -11975,15 +12019,13 @@ int infer_block_params(Compiler *c) {
     if (!rn || !sp_streq(rn, "Hash")) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
-    int pn = nt_ref(nt, blk, "parameters");
-    if (pn < 0) continue;
-    int inner = nt_ref(nt, pn, "parameters");
-    int pnode = inner >= 0 ? inner : pn;
-    int rnp = 0; const int *reqs = nt_arr(nt, pnode, "requireds", &rnp);
+    /* by block_param_name, which names `_1, _2` too: read off the
+       requireds, a numbered block's hash went untyped while the default
+       proc declared it the hash */
     Scope *bs = comp_scope_of(c, blk);
-    for (int k = 0; k < rnp; k++) {
-      const char *p = nt_str(nt, reqs[k], "name");
-      if (!p) continue;
+    for (int k = 0; ; k++) {
+      const char *p = block_param_name(c, blk, k);
+      if (!p) break;
       TyKind want = (k == 0) ? TY_POLY_POLY_HASH : TY_POLY;
       LocalVar *lv = scope_local_intern(bs, p); lv->is_block_param = 1;
       if (lv->type != want) { lv->type = want; changed = 1; }
@@ -12444,7 +12486,11 @@ int infer_block_params(Compiler *c) {
              Struct in the file was enough to change the answer, because every
              Struct defines `each` (#4086). More candidates is a stronger case
              for poly, not a weaker one. */
-          if (ndef > 0 && poly_enum_op_for(name)) {
+          /* Several candidates and none adopted: the call is a dispatch over
+             them, and the builtin rules below must not type the block from
+             the NAME -- a poly `each_line` read as an IO's walk bound the
+             Integer a user each_line yielded into a String slot. */
+          if (ndef > 0 && (poly_enum_op_for(name) || (mi < 0 && rt0 == TY_POLY))) {
             Scope *bs2 = comp_scope_of(c, block);
             for (int k = 0; ; k++) {
               const char *bp2 = block_param_name(c, block, k);
@@ -14055,6 +14101,33 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   if (k0 == NK_CallNode && nm && names[0] == nm && nt_int(nt, id, "dyn_arm", 0) > 0) {
     snprintf(arm_name, sizeof arm_name, "\x02%s", nm);
     names[0] = arm_name;
+  }
+  /* `K.new(...).m`: Class#new answers an instance of K (initialize cannot
+     change that), so the call reaches an instance method and never a class
+     method of the same name. Marking it by bare name kept every `def self.m`
+     alive -- raylib's `Color.new.set(...)` resurrected the never-called
+     `def self.set` whose `self[:r] = ...` is a provable NoMethodError. Only
+     when K is one of the program's classes with no class-side `new` of its
+     own (a user `self.new` may answer anything). */
+  char inst_name[300];
+  if (k0 == NK_CallNode && nm && names[0] == nm) {
+    int r = nt_ref(nt, id, "receiver");
+    if (r >= 0 && nt_kind(nt, r) == NK_CallNode && nt_str(nt, r, "name") &&
+        sp_streq(nt_str(nt, r, "name"), "new")) {
+      int rr = nt_ref(nt, r, "receiver");
+      NodeKind rrk = rr >= 0 ? nt_kind(nt, rr) : NK_NONE;
+      const char *kn = (rrk == NK_ConstantReadNode || rrk == NK_ConstantPathNode) ? nt_str(nt, rr, "name") : NULL;
+      int k = kn ? comp_class_index(c, kn) : -1;
+      /* Class.new / Module.new / Struct.new / Data answer a new CLASS, whose
+         class methods include the ones it inherits */
+      if (k >= 0 && !comp_class_is_module(c, &c->classes[k]) &&
+          !sp_streq(kn, "Class") && !sp_streq(kn, "Module") &&
+          !sp_streq(kn, "Struct") && !sp_streq(kn, "Data") &&
+          comp_cmethod_in_chain(c, k, "new", NULL) < 0) {
+        snprintf(inst_name, sizeof inst_name, "\x03%s", nm);
+        names[0] = inst_name;
+      }
+    }
   }
   if (k0 == NK_IndexOperatorWriteNode || k0 == NK_IndexOrWriteNode || k0 == NK_IndexAndWriteNode) {
     names[1] = "[]"; names[2] = "[]=";

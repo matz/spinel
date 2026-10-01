@@ -975,12 +975,14 @@ static void warn_undefined_constant(Compiler *c, int id, const char *nm) {
    raises afterwards raised where CRuby answered the memo (#4513). The setup
    is spliced inside the conditional. Value form yields the LHS after; the
    statement form ends its line. */
-void emit_orw_guard(Compiler *c, int v, int boxed, const char *cond, const char *lhs,
+void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const char *lhs,
                     int value_form, int indent, Buf *b) {
+  int boxed = slot == TY_POLY;
   Buf vpre; memset(&vpre, 0, sizeof vpre);
   Buf vval; memset(&vval, 0, sizeof vval);
   Buf *saved_pre = g_pre; g_pre = &vpre;
-  if (boxed) emit_boxed(c, v, &vval); else emit_expr(c, v, &vval);
+  if (boxed) emit_boxed(c, v, &vval);
+  else emit_coerce(c, v, slot, CO_HOLD, "a local variable's `||=` or `&&=`", &vval);
   g_pre = saved_pre;
   if (!value_form) emit_indent(b, indent);
   if (value_form) buf_puts(b, "({ ");
@@ -1084,7 +1086,9 @@ void emit_slot_orw_value(Compiler *c, TyKind t, const char *ref, int v, int is_o
     /* a typed array into a general Array slot is rebuilt as one, as a plain
        write does */
     else if (emit_array_into_poly_slot(c, t, v, &vval)) { }
-    else emit_array_store_value(c, t, v, &vval);   /* a seed-pinned kind converts */
+    else if (seeded_array_kind_mismatch(t, comp_ntype(c, v)))
+      emit_array_store_value(c, t, v, &vval);   /* a seed-pinned kind converts */
+    else emit_coerce(c, v, t, CO_HOLD, "a variable's `||=` or `&&=`", &vval);
     g_pre = saved_pre;
     if (t == TY_BOOL || t == TY_STRING)
       snprintf(condb, sizeof condb, "%s%s", is_or ? "!" : "", ref);
@@ -1800,6 +1804,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     /* poly RHS into a scalar/string slot: the same unbox the statement form
        applies (emit_poly_rhs_coerced) */
     else if (lv && emit_poly_rhs_coerced(c, lv->type, v, b)) { }
+    else if (lv) emit_coerce(c, v, lv->type, CO_HOLD, "a local variable write", b);
     else emit_expr(c, v, b);
     buf_puts(b, "; "); emit_local_ref(c, id, nm, b); buf_puts(b, "; })");
     return;
@@ -1828,6 +1833,11 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     /* inside an instance_eval/exec splice the block scope has no class_id, so
        the ivar belongs to the rebound receiver class (g_ie_class_id). */
     int ivcls2 = cid2 >= 0 ? cid2 : g_ie_class_id;
+    /* a top-level ivar's slot is the Toplevel pseudo-class's, the one the
+       store below writes (civ_Toplevel_x): without its kind the value went
+       in as it was, and `y = (@a = [])` put an Integer array into a slot
+       a later write had made a poly array */
+    if (ivcls2 < 0) ivcls2 = comp_class_index(c, "Toplevel");
     TyKind ivt2 = TY_UNKNOWN;
     if (ivcls2 >= 0) {
       int iv2 = comp_ivar_index(&c->classes[ivcls2], nm);
@@ -1865,12 +1875,14 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         if (fz_cid >= 0) emit_frozen_obj_guard(c, fz_cid, g_self ? g_self : "self", b);
         emit_stmt_inner(c, v, b, 0);
         buf_printf(b, "%s = ", ref2e);
-        if (ivt2 == TY_RANGE) buf_puts(b, "(sp_Range){0}");
-        else if (ivt2 == TY_POLY) buf_puts(b, "sp_box_nil()");
-        else if (ivt2 == TY_INT) buf_puts(b, "SP_INT_NIL");
-        else if (ivt2 == TY_FLOAT) buf_puts(b, "sp_float_nil()");
-        else if (ivt2 == TY_STRING) buf_puts(b, "NULL");
-        else buf_puts(b, default_value(ivt2));
+        switch (ivt2) {
+        case TY_RANGE: buf_puts(b, "(sp_Range){0}"); break;
+        case TY_POLY: buf_puts(b, "sp_box_nil()"); break;
+        case TY_INT: buf_puts(b, "SP_INT_NIL"); break;
+        case TY_FLOAT: buf_puts(b, "sp_float_nil()"); break;
+        case TY_STRING: buf_puts(b, "NULL"); break;
+        default: buf_puts(b, default_value(ivt2)); break;
+        }
         buf_printf(b, "; %s; })", ref2e);
         return;
       }
@@ -1929,7 +1941,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     else {
       /* a subclass instance stored into an ancestor-typed ivar slot (#3418) */
       emit_obj_upcast_prefix(c, ivt2, comp_ntype(c, v), b);
-      emit_expr(c, v, b);
+      emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable write", b);
     }
     /* The expression's value is the slot read back, at the node's own type:
        a write retyped for an instance_exec receiver (ie_body_retype) is typed
@@ -1994,16 +2006,16 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     char cond[400];
     if (t == TY_POLY) {
       snprintf(cond, sizeof cond, "%ssp_poly_truthy(%s)", is_or ? "!" : "", lhs);
-      emit_orw_guard(c, v, 1, cond, lhs, 1, 0, b);
+      emit_orw_guard(c, v, t, cond, lhs, 1, 0, b);
     }
     else if (t == TY_BOOL) {
       snprintf(cond, sizeof cond, "%s%s", is_or ? "!" : "", lhs);
-      emit_orw_guard(c, v, 0, cond, lhs, 1, 0, b);
+      emit_orw_guard(c, v, t, cond, lhs, 1, 0, b);
     }
     else if (t == TY_SYMBOL) {
       /* nilable symbol: (sp_sym)-1 is the nil sentinel */
       snprintf(cond, sizeof cond, "%s %s= (sp_sym)-1", lhs, is_or ? "=" : "!");
-      emit_orw_guard(c, v, 0, cond, lhs, 1, 0, b);
+      emit_orw_guard(c, v, t, cond, lhs, 1, 0, b);
     }
     else if (!is_or) {
       /* `x &&= v` assigns only when x is not nil, as the statement form
@@ -2024,7 +2036,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         buf_printf(b, " } %s; })", lhs);
         free(apre.p); free(abody.p);
       }
-      else emit_orw_guard(c, v, 0, NULL, lhs, 1, 0, b);
+      else emit_orw_guard(c, v, t, NULL, lhs, 1, 0, b);
       free(nb.p);
     }
     else {
@@ -2456,9 +2468,20 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       } }
     if (cs && cs->is_cmethod && cs->class_id >= 0)
       buf_printf(b, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));  /* module/class-level ivar */
-    else if (cs && cs->class_id < 0 && g_ie_class_id >= 0)
-      /* inside instance_eval block: access ivar via receiver pointer */
-      buf_printf(b, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
+    else if (cs && cs->class_id < 0 && g_ie_class_id >= 0) {
+      /* inside instance_eval block: access ivar via receiver pointer; one
+         the receiver's class never writes is nil, as on that object (the
+         struct has no field for it) */
+      int has = 0;
+      for (int k = g_ie_class_id; k >= 0 && !has; k = c->classes[k].parent)
+        has = comp_ivar_index(&c->classes[k], nm) >= 0;
+      if (!has) {
+        TyKind it = comp_ntype(c, id);
+        const char *nv = nil_value(it);
+        buf_puts(b, nv ? nv : default_value(it));
+      }
+      else buf_printf(b, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
+    }
     else if (cs && cs->class_id < 0) {
       /* top-level method: ivar stored as file-scope global in Toplevel pseudo-class */
       int tl = comp_class_index(c, "Toplevel");
@@ -2505,7 +2528,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     else if (comp_ntype(c, v) == TY_POLY && ct != TY_UNKNOWN) {
       Buf vb = expr_buf(c, v); emit_unbox_text(c, ct, vb.p ? vb.p : "sp_box_nil()", b); free(vb.p);
     }
-    else emit_expr(c, v, b);
+    else emit_coerce(c, v, ct, CO_HOLD, "a class variable write", b);
     emit_cvar_set_flag_after(c, cid, nm, b);
     buf_puts(b, ")");
     return;
@@ -2529,7 +2552,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     else if (emit_scalar_op_assign_value(c, gref, lv->type, op, v, lv->nullable_int, b)) { }
     else {
       buf_printf(b, "(gv_%s %s= ", rn, op ? op : "+");
-      emit_expr(c, v, b); buf_puts(b, ")");
+      emit_coerce(c, v, lv->type, CO_HOLD, "the operand of an `op=`", b); buf_puts(b, ")");
     }
     return;
   }
@@ -2578,7 +2601,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
                                          idx >= 0 && c->classes[cid].cvar_nullable_int[idx], b)) { }
     else {
       buf_printf(b, "(%s %s= ", ref, op ? op : "+");
-      emit_expr(c, v, b); buf_puts(b, ")");
+      emit_coerce(c, v, ct, CO_HOLD, "the operand of an `op=`", b); buf_puts(b, ")");
     }
     return;
   }
@@ -3449,7 +3472,7 @@ else {
         /* element preludes flow to g_pre first; an untyped element (a raise
            token, a void call) is coerced to the element type */
         if (comp_ntype(c, els[j]) == TY_UNKNOWN) emit_unresolved_coerced(c, els[j], ty_array_elem(at), &el);
-        else emit_expr(c, els[j], &el);
+        else emit_coerce(c, els[j], ty_array_elem(at), CO_HOLD, "an Array literal's element", &el);
         emit_indent(g_pre, g_indent);
         /* an element that can be nil sets the literal's may_nil */
         buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", k, nil_store_sfx(c, k, els[j]), t);
@@ -3541,9 +3564,13 @@ else {
       int key = nt_ref(nt, els[j], "key");
       int val = nt_ref(nt, els[j], "value");
       Buf kb; memset(&kb, 0, sizeof kb);
-      if (poly_poly) emit_boxed(c, key, &kb); else emit_expr(c, key, &kb);
+      if (poly_poly) emit_boxed(c, key, &kb);
+      else if (ty_is_hash(ht)) emit_coerce(c, key, ty_hash_key(ht), CO_HOLD, "a Hash literal's key", &kb);
+      else emit_expr(c, key, &kb);
       Buf vb; memset(&vb, 0, sizeof vb);
-      if (sym_poly || poly_poly) emit_boxed(c, val, &vb); else emit_expr(c, val, &vb);
+      if (sym_poly || poly_poly) emit_boxed(c, val, &vb);
+      else if (ty_is_hash(ht)) emit_coerce(c, val, ty_hash_val(ht), CO_HOLD, "a Hash literal's value", &vb);
+      else emit_expr(c, val, &vb);
       emit_indent(g_pre, g_indent);
       /* A pair's key and value are the set's sibling arguments, as a store's
          are: a key that can allocate goes into a rooted temp ahead of the
@@ -4246,7 +4273,10 @@ else {
       /* inline the write */
       const char *op = nt_str(nt, id, "binary_operator");
       buf_printf(b, "%s %s= ", ref, op ? op : "+");
-      emit_expr(c, nt_ref(nt, id, "value"), b);
+      /* a Float slot's operator converts its operand as Float's does, as
+         the statement form (emit_scalar_op_assign) takes it */
+      emit_coerce(c, nt_ref(nt, id, "value"), vt, vt == TY_FLOAT ? CO_CONVERT : CO_HOLD,
+                  "the operand of an `op=`", b);
       buf_printf(b, "; _t%d = %s; _t%d; })", t, ref, t);
     }
     return;

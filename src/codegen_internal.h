@@ -400,6 +400,7 @@ extern TyKind g_yield_slot_ty_fallback2;
 extern int g_line_map;
 void emit_current_line_directive(Compiler *c, Buf *b);
 extern int g_debug;
+extern int g_check_stores;
 extern int g_gate_raise;  /* SPINEL_GATE_RAISE: raise NoMethodError at the
                              unresolved-call gate instead of a silent default. */
 /* Emit a `#line` directive for node `id` into `b`, deduped against the last
@@ -544,6 +545,16 @@ const char *rename_local(const char *nm);
 void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_slot(Compiler *c, int node, TyKind slot, Buf *b);
 void emit_typed_sink_text(Compiler *c, int node, TyKind slot, const char *text, Buf *b);
+/* The store check (--check-stores): see codegen_util.c. */
+TyKind store_value_kind(Compiler *c, int node);
+int store_fits(Compiler *c, TyKind from, TyKind to);
+void store_check(Compiler *c, int node, TyKind slot, const char *what, Buf *b);
+void store_check_kind(Compiler *c, int node, TyKind from, TyKind slot, const char *what, Buf *b);
+/* How emit_coerce may convert: see codegen_util.c. */
+enum { CO_HOLD, CO_CONVERT };
+void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, Buf *b);
+void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
+                      const char *text, const char *what, Buf *b);
 
 /* ---- forward decls ---- */
 
@@ -701,6 +712,7 @@ int rest_shortfall_required(Compiler *c, Scope *m);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
 int hash_key_misses(Compiler *c, int key, TyKind kt);
+int hash_nil_key_stored(Compiler *c, int key, TyKind kt);
 const char *conv_wrong_cls_name(TyKind t);
 const char *conv_cls_name_of(Compiler *c, TyKind t);
 TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def);
@@ -728,7 +740,7 @@ void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 /* `recv.attr ||= v` / `&&=` where the reader or the writer is a real `def`:
    emits the reader/writer pair as an expression, or answers 0 to leave the
    caller's direct-ivar shapes alone. See codegen_expr.c. */
-void emit_orw_guard(Compiler *c, int v, int boxed, const char *cond, const char *lhs, int value_form, int indent, Buf *b);
+void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const char *lhs, int value_form, int indent, Buf *b);
 void emit_slot_orw_value(Compiler *c, TyKind t, const char *ref, int v, int is_or, Buf *b);
 int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b);
 int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b);
@@ -829,6 +841,7 @@ void nameset_add(NameSet *s, const char *nm);
    writes share this (a cell deref is a valid lvalue). */
 void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b);
 void emit_poly_lift_ref(const char *ref, Buf *b);
+int strbuf_marked_yields_handle(Compiler *c, int v);
 void emit_scope_local_ref(Compiler *c, Scope *s, const char *name, Buf *b);
 void emit_typed_elem_value(Compiler *c, int node, TyKind et, Buf *b);
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
@@ -1126,6 +1139,15 @@ void emit_block_value_into(Compiler *c, int block, const char *dest,
                            int want_poly, int indent);
 int emit_block_cond_next(Compiler *c, int block, int indent, Buf *out);
 int fold_body_has_next(Compiler *c, int node);  /* a `next` of the body's own, not a nested block's */
+int iter_step_needs_frame(Compiler *c, int block);
+int emit_iter_step_stmts(Compiler *c, int body, Buf *b, int indent, const char *sep);
+void emit_iter_step_body(Compiler *c, int block, Buf *b, int indent);
+void emit_iter_loop_stmts(Compiler *c, int body, Buf *b, int indent);
+/* One step of a builtin iterator's block (emit_iter_step_open). */
+typedef struct { int block, want_poly, slot; TyKind slot_ty; } IterStep;
+void emit_iter_step_open(Compiler *c, int block, int want_poly, int indent, IterStep *st);
+TyKind emit_iter_step_tail(Compiler *c, const IterStep *st, Buf *vb);
+void emit_iter_step_cond(Compiler *c, const IterStep *st, int raw, Buf *cb);
 int emit_collect_expr(Compiler *c, int id, Buf *b);
 int emit_with_index_expr(Compiler *c, int id, Buf *b);
 int emit_enum_with_index_expr(Compiler *c, int id, Buf *b);

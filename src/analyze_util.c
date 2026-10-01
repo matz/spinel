@@ -587,13 +587,12 @@ const char *sym_static_value(Compiler *c, int node) {
    narrower sites drop the mutators their storage shape cannot serve:
      append_as_bytes            has no guard-narrowed re-route arm
    `[]=` insert slice! setbyte reach an ivar, and a reader call handing out
-   its handle, through the shared-mutable shim's shadow (#4363). */
+   its handle, through the shared-mutable shim's shadow (#4363), and a
+   guard-narrowed box through its poly arm as the others do. */
 int sp_str_mutator(const char *nm, unsigned want) {
   static const struct { const char *nm; unsigned mask; } M[] = {
-    { "[]=",             SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
-    { "insert",          SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
-    { "slice!",          SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
-    { "setbyte",         SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
+    { "[]=",             15u }, { "insert",         15u }, { "slice!",     15u },
+    { "setbyte",         15u },
     { "append_as_bytes", SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
     { "<<",              15u }, { "concat",         15u }, { "prepend",    15u },
     { "replace",         15u }, { "clear",          15u }, { "bytesplice", 15u },

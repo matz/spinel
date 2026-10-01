@@ -1166,7 +1166,7 @@ void emit_typed_elem_value(Compiler *c, int node, TyKind et, Buf *b) {
   }
   if (et == TY_INT) emit_int_expr_nilable(c, node, b);
   else if (et == TY_FLOAT) emit_float_expr(c, node, b);
-  else emit_expr(c, node, b);
+  else emit_coerce(c, node, et, CO_HOLD, "an Array element", b);
 }
 /* A POLY variable's slot `ref` lifted into the shared handle as it is read
    (sp_poly_strbuf_lift, #6179): the lifted value is taken into a temp first
@@ -1875,6 +1875,20 @@ void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv) {
 const char *g_sb_iv_name = NULL;
 int         g_sb_iv_cid  = -1;
 char        g_sb_iv_repl[64];
+/* Does demand-marked call `v` render as a handle itself? A reader call, a
+   container's element read and a call that answers its receiver (`h << x
+   << y`, `h.freeze`) do. A call on a String that makes a new one -- `+"lit"`,
+   `s.dup`, `s + t` -- renders as that String, which the demand marked to be
+   wrapped as a fresh handle where it is stored. */
+int strbuf_marked_yields_handle(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, v) != NK_CallNode) return 0;
+  int r = nt_ref(nt, v, "receiver");
+  TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
+  if (rt != TY_STRING && rt != TY_STRBUF) return 1;
+  const char *nm = nt_str(nt, v, "name");
+  return nm && (sp_streq(nm, "<<") || sp_streq(nm, "concat") || str_self_call(nt, v));
+}
 int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
   const char *rn = strbuf_local_name(c, recv);
   if (rn) {
@@ -1893,7 +1907,7 @@ int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
      made after the node-type cache is finalized cannot move the type without
      moving the call off the surface that dispatches it (see compiler.h). */
   if (recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode &&
-      ((c->strbuf_box[recv] && comp_ntype(c, recv) == TY_STRBUF) ||
+      ((c->strbuf_box[recv] && comp_ntype(c, recv) == TY_STRBUF && strbuf_marked_yields_handle(c, recv)) ||
        c->strbuf_handle_demand[recv])) {
     Buf rb2; memset(&rb2, 0, sizeof rb2);
     emit_expr(c, recv, &rb2);
@@ -2191,9 +2205,10 @@ const char *ffi_cb_arg_ctype(const char *spec) {
    not "already truthy". Reading it as truthy is what dropped the assignment in
    `text ||= [...].join(" ")` (#3388). */
 /* The initial value of a local's slot: its type's zero, or the type's nil
-   sentinel when the local has no definite assignment anywhere (#3388). */
+   sentinel when a `||=` writes the local or a read can run before any write
+   (#3388). */
 const char *local_init_value(Compiler *c, LocalVar *lv) {
-  if (lv->or_write_only && !lv->is_param && !lv->is_block_param) {
+  if ((lv->or_written || lv->maybe_unset) && !lv->is_param && !lv->is_block_param) {
     const char *nv = nil_value(lv->type);
     if (nv) return nv;
   }
@@ -2222,6 +2237,7 @@ void emit_expr_slot(Compiler *c, int node, TyKind slot, Buf *b) {
       return;
     }
   }
+  store_check(c, node, slot, "a value into a typed slot", b);
   emit_expr(c, node, b);
 }
 /* A value written into a typed scalar slot -- an Integer or Float array's
@@ -2236,15 +2252,260 @@ void emit_typed_sink_text(Compiler *c, int node, TyKind slot, const char *text, 
   if (vt == TY_POLY && slot == TY_INT) buf_printf(b, "sp_poly_to_i(%s)", text);
   else if (vt == TY_POLY && slot == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", text);
   else if (vt == TY_BIGINT && slot == TY_INT) buf_printf(b, "sp_bigint_to_int(%s)", text);
-  else buf_puts(b, text);
+  /* A block's value into a typed element (`fill { ... }`, a collect
+     accumulator) is written as it is: where its class differs from the
+     element's, the answer is the array widened by the inference, not a
+     refusal here. The check reports it. */
+  else {
+    if (node >= 0 && slot != TY_UNKNOWN) store_check(c, node, slot, "a typed element sink", b);
+    buf_puts(b, text);
+  }
+}
+/* ---- The store check (--check-stores) ----
+
+   Every value the emitter writes into a C slot -- a local, a temp, a field,
+   an element, an argument, a return -- has a C type, and so does the slot.
+   Where the two differ the store has to convert (box, unbox, a numeric
+   conversion, a handle wrap), and each emitter decides that for itself. One
+   that writes the value raw into a slot of another C type emits C that does
+   not build, or, between two pointer types, reads one struct's memory as
+   another's. --check-stores reports each such store at its Ruby line, with
+   the two C types and the construct, and marks the spot in the C with a
+   comment; it changes nothing else in the output. The stores report through
+   store_check where they write the value as it is. */
+
+/* The kind of the C value emit_expr renders for `node`: its inferred type --
+   for a `yield`, the type at this call site, since the block spliced here
+   answers its own (yield_site_type) -- except for the untyped nodes the
+   emitter still renders in a definite C type. An empty `[]` with no element
+   type is built as the method's array return kind, else as an Integer array
+   (the ArrayNode arm of emit_expr), and an empty `{}` as a String-keyed
+   boxed-value hash (its HashNode arm). */
+TyKind store_value_kind(Compiler *c, int node) {
+  if (node < 0) return TY_UNKNOWN;
+  TyKind t = yield_site_type(c, node);
+  /* a parenthesized value, `case ({})`, is rendered as its one statement */
+  if (t == TY_UNKNOWN && nt_kind(c->nt, node) == NK_ParenthesesNode) {
+    int in = unwrap_parens(c, node);
+    if (in != node) return store_value_kind(c, in);
+  }
+  NodeKind k = nt_kind(c->nt, node);
+  if (t == TY_UNKNOWN && (k == NK_ArrayNode || k == NK_HashNode)) {
+    int n = 0;
+    nt_arr(c->nt, node, "elements", &n);
+    if (n == 0 && k == NK_HashNode) return TY_STR_POLY_HASH;
+    if (n == 0) return ty_is_array(g_ret_type) && array_kind(g_ret_type) ? g_ret_type : TY_INT_ARRAY;
+  }
+  return t;
+}
+
+/* The C value class of a kind: what C allows between two of them. */
+enum { SC_NONE, SC_ARITH, SC_PTR, SC_STRUCT, SC_BOXED };
+static int store_class(Compiler *c, TyKind t) {
+  switch (t) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_SYMBOL: return SC_ARITH;
+    case TY_POLY: return SC_BOXED;
+    case TY_UNKNOWN: case TY_VOID: case TY_NIL: return SC_NONE;
+    default: break;
+  }
+  if (ty_is_object(t)) return comp_ty_value_obj(c, t) ? SC_STRUCT : SC_PTR;
+  if (ty_is_struct_valued(t)) return SC_STRUCT;
+  return c_type_name(t) ? SC_PTR : SC_NONE;
+}
+
+/* Does a value of kind `from`, written as it is, keep its value in a slot of
+   kind `to`? The same C type does; so does an exact arithmetic widening
+   (an Integer into a Float slot, a boolean into an Integer one), a nil
+   literal's 0 in a pointer slot, which is NULL, and a subclass instance in
+   its ancestor's pointer slot. A nil fits as it is only where it is a
+   literal (store_nil_fits). An untyped value's C type is whatever its
+   emitter chose (a boxed result, the gate's token, a super call's String),
+   which the kind does not say, so it is not checked. A void one fits
+   nothing. */
+/* A nil literal renders as 0, which is a pointer slot's NULL and a boolean's
+   false: it is written as it is there, and into an operand a builtin
+   converts itself (CO_CONVERT), whose nilable forms read the 0 as they
+   always have. Any other nil value -- a call that answers nil, kept for its
+   effect -- and a nil into a variable whose nil is a sentinel (an Integer,
+   a Float, a Symbol) takes the slot's nil. */
+static int store_nil_fits(Compiler *c, int node, TyKind slot, int how) {
+  return node >= 0 && nt_kind(c->nt, node) == NK_NilNode &&
+         (store_class(c, slot) == SC_PTR || slot == TY_BOOL ||
+          (how == CO_CONVERT && store_class(c, slot) == SC_ARITH));
+}
+
+int store_fits(Compiler *c, TyKind from, TyKind to) {
+  if (from == to || to == TY_UNKNOWN || to == TY_VOID || from == TY_UNKNOWN) return 1;
+  int fc = store_class(c, from), tc = store_class(c, to);
+  if (from == TY_NIL) return 0;   /* see store_nil_fits */
+  if (fc == SC_NONE) return 0;
+  if (fc == SC_ARITH && tc == SC_ARITH) return from != TY_FLOAT || to == TY_FLOAT;
+  if (ty_is_object(from) && ty_is_object(to) && fc == SC_PTR && tc == SC_PTR)
+    return is_descendant(c, ty_object_class(from), ty_object_class(to));
+  Buf fb, tb;
+  memset(&fb, 0, sizeof fb); memset(&tb, 0, sizeof tb);
+  emit_ctype(c, from, &fb); emit_ctype(c, to, &tb);
+  int same = fb.p && tb.p && sp_streq(fb.p, tb.p);
+  free(fb.p); free(tb.p);
+  return same;
+}
+
+/* Report the raw store of `node` (rendered as a `from` value) into a slot of
+   kind `slot`, when it does not fit: once per node and site, on stderr at the
+   node's Ruby line, and as a comment in `b` where the value is about to be
+   written. A silent emittability probe's output is thrown away, so it
+   reports nothing. */
+void store_check_kind(Compiler *c, int node, TyKind from, TyKind slot, const char *what, Buf *b) {
+  if (!g_check_stores || g_unsup_probe || store_fits(c, from, slot)) return;
+  /* a nil literal is 0 as it is written: NULL, false or a carrier slot's
+     zero, which no C compiler rejects; only another nil value is reported */
+  if (from == TY_NIL && node >= 0 && nt_kind(c->nt, node) == NK_NilNode &&
+      (store_class(c, slot) == SC_PTR || store_class(c, slot) == SC_ARITH)) return;
+  static int *seen = NULL;
+  static const char **seen_what = NULL;
+  static int nseen = 0, capseen = 0;
+  for (int k = 0; k < nseen; k++)
+    if (seen[k] == node && seen_what[k] == what) goto mark;
+  if (nseen == capseen) {
+    capseen = capseen ? capseen * 2 : 64;
+    seen = realloc(seen, sizeof *seen * (size_t)capseen);
+    seen_what = realloc(seen_what, sizeof *seen_what * (size_t)capseen);
+  }
+  seen[nseen] = node; seen_what[nseen] = what; nseen++;
+  {
+    Buf fb, tb;
+    memset(&fb, 0, sizeof fb); memset(&tb, 0, sizeof tb);
+    emit_ctype(c, from, &fb); emit_ctype(c, slot, &tb);
+    int ln; const char *file = unsup_pos(c, node, &ln);
+    const char *fk = ty_is_object(from) ? class_ruby_name(c, ty_object_class(from)) : ty_name(from);
+    fprintf(stderr, "spinel: %s:%d: warning: store check: %s: %s value (%s, %s) written as it is into a slot of %s\n",
+            file, ln, what, fk ? fk : "?", fb.p ? fb.p : "void", nt_type(c->nt, node), tb.p ? tb.p : "void");
+    free(fb.p); free(tb.p);
+  }
+mark:
+  if (b) buf_printf(b, "/* store check: %s */", what);
+}
+
+void store_check(Compiler *c, int node, TyKind slot, const char *what, Buf *b) {
+  if (!g_check_stores) return;
+  store_check_kind(c, node, store_value_kind(c, node), slot, what, b);
+}
+
+/* ---- emit_coerce: a value into a typed slot ----
+
+   The one place a store whose value may not fit its slot converts it, or
+   refuses the program. A value that fits (store_fits) is written as it is,
+   so a store that was right already emits the C it did. Otherwise the
+   conversion depends on what the slot is to Ruby:
+
+   CO_HOLD     the slot holds the Ruby value itself -- a Complex component,
+               a Rational's numerator, a receiver -- so only its C
+               representation may change (an Integer widens into a
+               Bignum slot), never its class or its value;
+   CO_CONVERT  the slot is a conversion Ruby makes itself -- the Float
+               operand of a Float method, a duration -- so the value
+               converts as Ruby converts it: an Integer past 64 bits or a
+               Rational to its nearest double, any value to its truthiness
+               for a boolean flag.
+
+   A store no conversion keeps right is refused at compile time, naming the
+   construct (`what`), the class it was given and the slot's C type. That is
+   the rule of #6179: what Spinel compiles works, or it is refused; it never
+   emits C that does not build, or a store that reads the wrong value. */
+void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
+                      const char *text, const char *what, Buf *b) {
+  if (store_fits(c, from, slot) || (from == TY_NIL && store_nil_fits(c, node, slot, how))) {
+    buf_puts(b, text);
+    return;
+  }
+  if (slot == TY_POLY) { emit_boxed_text(c, from, text, b); return; }
+  /* A value with no C type of its own -- a call that answers nothing, a
+     raise -- is evaluated for its effect, and the slot takes its nil */
+  if (from == TY_VOID || from == TY_NIL) {
+    buf_printf(b, "((void)(%s), %s)", text, raise_tail_value_c(c, slot));
+    return;
+  }
+  if (slot == TY_BIGINT && from == TY_INT) {
+    int t = ++g_tmp;
+    buf_printf(b, "({ sp_int _t%d = (%s); _t%d == SP_INT_NIL ? NULL : sp_bigint_new_int(_t%d); })",
+               t, text, t, t);
+    return;
+  }
+  const char *fn = NULL;
+  if (how == CO_CONVERT && slot == TY_FLOAT)
+    fn = from == TY_BIGINT ? "sp_bigint_to_double" : from == TY_RATIONAL ? "sp_rational_to_f" : NULL;
+  if (fn) { buf_printf(b, "%s(%s)", fn, text); return; }
+  char msg[512];
+  Buf tb; memset(&tb, 0, sizeof tb);
+  emit_ctype(c, slot, &tb);
+  const char *cn = from == TY_BIGINT ? "an Integer past 64 bits"
+                 : from == TY_RATIONAL ? "a Rational" : from == TY_COMPLEX ? "a Complex"
+                 : from == TY_EXCEPTION ? "an Exception" : from == TY_POLY ? "a value of any class"
+                 : from == TY_BOOL ? "true or false" : NULL;
+  const char *rn = cn ? NULL : conv_cls_name_of(c, from);
+  snprintf(msg, sizeof msg, "%s given %s%s, which no conversion keeps in its %s slot",
+           what, rn ? "a " : "", cn ? cn : rn ? rn : "a value of another class",
+           tb.p ? tb.p : "C");
+  free(tb.p);
+  unsupported_feature(c, node, msg);
+}
+
+void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, Buf *b) {
+  /* A boolean a builtin takes as a flag (`report_on_exception = v`) is the
+     value's truthiness, whatever its class: nil and false are false, 0 and
+     "" are true (emit_cond) */
+  if (how == CO_CONVERT && slot == TY_BOOL) { emit_cond(c, node, b); return; }
+  TyKind from = store_value_kind(c, node);
+  /* An untyped empty container (a bare Array.new / Hash.new) is built at
+     the slot's kind ahead of the fit, which an untyped value always passes:
+     the bare `Array.new` went into a Float array slot as the general Array
+     it renders as */
+  if (from == TY_UNKNOWN && (ty_is_array(slot) || ty_is_hash(slot)) &&
+      emit_empty_literal_as(c, node, slot, b)) return;
+  if (store_fits(c, from, slot) || (from == TY_NIL && store_nil_fits(c, node, slot, how))) {
+    emit_expr(c, node, b);
+    return;
+  }
+  /* A boxed slot takes any value boxed, as it is */
+  if (slot == TY_POLY) { emit_boxed(c, node, b); return; }
+  /* An empty `[]` or `{}` of another kind than the slot's is built at the
+     slot's */
+  if ((ty_is_array(slot) || ty_is_hash(slot)) && emit_empty_literal_as(c, node, slot, b)) return;
+  /* nil literal into a sentinel slot: the slot's nil itself */
+  if (from == TY_NIL && nt_kind(c->nt, node) == NK_NilNode) { buf_puts(b, raise_tail_value_c(c, slot)); return; }
+  /* An Integer into a Bignum slot is the same Ruby value in the wide
+     representation, its nil sentinel kept as nil (emit_bigint_operand) */
+  if (slot == TY_BIGINT && from == TY_INT) { emit_bigint_operand_ext(c, node, b); return; }
+  /* A boxed value into a typed slot is unboxed, as the plain writes unbox
+     it: a scalar or a String through its conversion (emit_poly_rhs_coerced,
+     nil kept as the slot's nil), a container, an object or a Bignum through
+     the checked unbox, which converts or raises for a value of another class
+     rather than reading its memory, and a Class from its boxed form. A
+     struct-valued or other handle slot has no checked unbox, and is refused
+     below. */
+  if (from == TY_POLY && how == CO_HOLD) {
+    if (emit_poly_rhs_coerced(c, slot, node, b)) return;
+    if (ty_is_array(slot) || ty_is_ptr_array(slot) || ty_is_hash(slot) || slot == TY_BIGINT ||
+        slot == TY_STRBUF || slot == TY_CLASS || (ty_is_object(slot) && !comp_ty_value_obj(c, slot))) {
+      Buf vb; memset(&vb, 0, sizeof vb);
+      emit_expr(c, node, &vb);
+      emit_unbox_nilable_text(c, slot, vb.p ? vb.p : "sp_box_nil()", b);
+      free(vb.p);
+      return;
+    }
+  }
+  Buf vb; memset(&vb, 0, sizeof vb);
+  emit_expr(c, node, &vb);
+  emit_coerce_text(c, node, from, slot, how, vb.p ? vb.p : "", what, b);
+  free(vb.p);
 }
 int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out) {
   if (!lv) return 0;
   TyKind t = lv->type;
   /* sp_int 0 and 0.0 are real values, so the slot only distinguishes nil when
      it was declared with the sentinel -- which declare_local does exactly when
-     the local has no definite assignment anywhere. */
-  int nil_init = lv->or_write_only && !lv->is_param && !lv->is_block_param;
+     a `||=` writes the local (or_written). */
+  int nil_init = (lv->or_written || lv->maybe_unset) && !lv->is_param && !lv->is_block_param;
   /* ...or when some write leaves the sentinel in it (`a = nil; a ||= 10`):
      the nil join keeps such a slot an sp_int, and its nil is the sentinel */
   if (lv->nullable_int) nil_init = 1;
@@ -2888,6 +3149,13 @@ int hash_key_misses(Compiler *c, int key, TyKind kt) {
          actual == TY_FLOAT_RANGE || actual == TY_STR_RANGE || actual == TY_TIME ||
          actual == TY_REGEX || ty_is_array(actual) || ty_is_hash(actual) ||
          ty_is_object(actual);
+}
+
+/* nil looked up in an Integer-keyed table: not a miss. A key written from an
+   Integer slot that held nil is stored as the slot's sentinel, which
+   emit_hash_key hands a nil key as, so the lookup finds that entry. */
+int hash_nil_key_stored(Compiler *c, int key, TyKind kt) {
+  return kt == TY_INT && comp_ntype(c, key) == TY_NIL;
 }
 
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b) {

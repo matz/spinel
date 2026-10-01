@@ -36,3 +36,33 @@ module UsesPriv
   def self.dp = defined? self::PRIV
 end
 p UsesPriv.dp
+
+# visibility from any reopening, a qualified superclass, the nearest definition
+class DReopen
+  DK = 1
+end
+class DReopen
+  private_constant :DK
+end
+class DChild < DReopen
+  def self.d = defined?(self::DK)
+end
+module DOuter
+  class DQ
+    DQK = 2
+  end
+end
+class DQChild < DOuter::DQ
+  def self.d = defined?(self::DQK)
+end
+class DBase
+  def self.d = defined?(self::DV)
+end
+class DPriv < DBase
+  DV = 3
+  private_constant :DV
+end
+class DPub < DBase
+  DV = 4
+end
+p DChild.d, DQChild.d, DPriv.d, DPub.d

@@ -476,9 +476,12 @@ unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, co
           (!as || as->class_id < 0 || as->is_cmethod ||
            comp_ty_value_obj(c, ty_object(as->class_id)) || !g_self)) continue;
     }
-    /* a global variable's C global (gv_), as a call lends it */
-    else if (ak == NK_GlobalVariableReadNode) {
-      if (comp_ntype(c, an) != TY_STRING || !gvar_global_slot(c, an, gref, sizeof gref)) continue;
+    /* a global variable's C global (gv_), and a class variable's, as a call
+       lends it */
+    else if (ak == NK_GlobalVariableReadNode || ak == NK_ClassVariableReadNode) {
+      if (comp_ntype(c, an) != TY_STRING ||
+          !(ak == NK_GlobalVariableReadNode ? gvar_global_slot(c, an, gref, sizeof gref)
+                                            : cvar_global_slot(c, an, gref, sizeof gref))) continue;
       gslot = 1;
     }
     /* a String that is the shared handle has no slot to lend: the
@@ -1937,6 +1940,14 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
      block bound in place (bi NULL) is instance_exec's, a method that drops
      an empty `**h` before it yields, so there a `**` alone keeps it on. */
   int autosplat = (ykw < 0 || (!bi && kwh_only_spreads(nt, ykw))) && block_auto_splats(P, O, Q, R);
+  /* ...but only an EMPTY one: a `**h` that spreads keywords turns it off as
+     any keywords do, and only the run time knows which. The values are
+     gathered and the lone Array spread there when every `**` is empty; a
+     non-empty `**h` bound [1, 2] across `|a, b, **kw|`. The `**` values run
+     first, in source order, so the test and the keywords' bind read them
+     once. */
+  int ie_kw = autosplat && ykw >= 0;
+  if (ie_kw) emit_args_before(c, yargs, yc + 1, NULL, 0, g_pre);
   int lone_splat_typed = 0;
   if (yc == 1 && yargs && nt_kind(nt, yargs[0]) == NK_SplatNode) {
     TyKind lt = comp_ntype(c, nt_ref(nt, yargs[0], "expression"));
@@ -1981,15 +1992,23 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
      boxed one gathers as well (sp_enum_items_from), and its lone element
      auto-splats: bound by index, `yield(*x)` bound only the requireds, and
      a post took the splat node itself (a C type error). */
-  else if (yargs && ((call_args_need_spread(nt, yargs, yc) && !lone_splat_typed) || boxed_spread)) {
+  else if (yargs && (ie_kw || (call_args_need_spread(nt, yargs, yc) && !lone_splat_typed) || boxed_spread)) {
     splat_at = TY_POLY_ARRAY;
     splat_tmp = emit_spread_args(c, yargs, yc);
     if (autosplat) {
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "if (_t%d->len == 1) { sp_RbVal _e = sp_PolyArray_get(_t%d, 0); "
+      buf_printf(g_pre, "if (_t%d->len == 1", splat_tmp);
+      int kn = 0; const int *kv = ie_kw ? nt_arr(nt, ykw, "elements", &kn) : NULL;
+      for (int e = 0; kv && e < kn; e++) {
+        Buf hb; memset(&hb, 0, sizeof hb);
+        emit_boxed(c, nt_ref(nt, kv[e], "value"), &hb);
+        buf_printf(g_pre, " && sp_poly_length(%s) == 0", hb.p ? hb.p : "sp_box_nil()");
+        free(hb.p);
+      }
+      buf_printf(g_pre, ") { sp_RbVal _e = sp_PolyArray_get(_t%d, 0); "
                         "if (_e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_e.cls_id)) "
                         "_t%d = sp_poly_to_poly_array(_e); }\n",
-                 splat_tmp, splat_tmp, splat_tmp);
+                 splat_tmp, splat_tmp);
     }
   }
   if (splat_tmp < 0 && yc == 1 && yargs) {
@@ -2081,11 +2100,19 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
        variable: alias the variable itself rather than copy it, so the
        block's append reaches what was yielded. The parameter reads and
        writes through the cell for the rest of this splice. */
+    /* A global's or a class variable's C global is aliased the same way,
+       as a call lends it, unless the block or what it calls can assign the
+       variable meanwhile (refuse_lent_global_rebound). */
+    char gref[256];
+    NodeKind yk = poly_splat_tmp < 0 && splat_tmp < 0 && k < yc ? nt_kind(nt, yargs[k]) : NK__COUNT;
+    int gslot = (yk == NK_GlobalVariableReadNode && gvar_global_slot(c, yargs[k], gref, sizeof gref)) ||
+                (yk == NK_ClassVariableReadNode && cvar_global_slot(c, yargs[k], gref, sizeof gref));
     if (poly_splat_tmp < 0 && splat_tmp < 0 && k < yc &&
-        nt_kind(nt, yargs[k]) == NK_LocalVariableReadNode && !local_is_handle(c, yargs[k]) &&
+        ((yk == NK_LocalVariableReadNode && !local_is_handle(c, yargs[k])) || gslot) &&
         comp_ntype(c, yargs[k]) == TY_STRING && block_param_wants_alias(c, blk, k, -1)) {
       LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
-      if (bl && al) refuse_alias_of_snapshot(c, yargs[k], bp);
+      if (bl && al && !gslot) refuse_alias_of_snapshot(c, yargs[k], bp);
+      if (bl && al && gslot) refuse_lent_global_rebound(c, yargs[k], gref, "a block", bp);
       if (bl && al && al->n < (int)(sizeof al->lv / sizeof al->lv[0])) {
         if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
         buf_printf(b, "const char **_cell_%s = &(", bpr);
@@ -2119,6 +2146,15 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
       TyKind bt = bl ? bl->type : TY_UNKNOWN;
       TyKind et = ty_array_elem(splat_at);
+      /* a parameter that takes the handle (block_splat_pull_args), bound
+         from a gathered Array of plain Strings: no value there was pulled
+         into the handle (`yield(*[a[0]])`), so the block would append to
+         a copy */
+      if (bt == TY_STRBUF && et == TY_STRING)
+        unsupported_feature(c, yargs && yc > 0 ? yargs[0] : blk,
+                            "a String is passed through a splat into a yield to a block parameter the block "
+                            "appends to, from a value that is not a String variable: the block would append "
+                            "to a copy. Return the String from the block and assign it, or append to it in the caller");
       Buf eb; memset(&eb, 0, sizeof eb);
       int sure = k < splat_sure;
       if (sure) emit_array_elem_sure(splat_at, splat_tmp, k, &eb);
@@ -2607,6 +2643,11 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
      rebindings; emit_stmts places it for the last arm. */
   int rd_head = rd_lbl ? block_param_rebind_len(nt, bbody) : 0;
   if (nx_own && as_expr && g_ie_next_var && !nx_tail_stmt && bn3 > 0) {
+    /* the block's locals are fresh on every call, as in the arms below
+       (block_of_body builds the map on first use: read off the compiler
+       before any block body had been emitted, it was not there yet, and a
+       block spliced into an expression kept the previous call's locals) */
+    if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) {
       if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
       emit_stmt(c, bd3[k3], b, 0);
@@ -2655,9 +2696,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
        void, so a block whose value is such a construct (`wrap { if c then a
        else b end }`) produced a void ({...}). Emit the tail value-compound as
        an expression (a bare-expression tail already carries its value). */
-    if (c->blk_body_map && bbody >= 0 && bbody < c->nt->count &&
-        c->blk_body_map[bbody] >= 0)
-      emit_block_locals_reset(c, c->blk_body_map[bbody], b, 0);
+    if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) {
       if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
       emit_stmt(c, bd3[k3], b, 0);
@@ -2699,9 +2738,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
            nt_type(nt, bd3[bn3 - 1]) &&
            !sp_streq(nt_type(nt, bd3[bn3 - 1]), "ReturnNode")) {
     /* concrete-typed bare tail into a poly slot: box it (#3278) */
-    if (c->blk_body_map && bbody >= 0 && bbody < c->nt->count &&
-        c->blk_body_map[bbody] >= 0)
-      emit_block_locals_reset(c, c->blk_body_map[bbody], b, 0);
+    if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) {
       if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
       emit_stmt(c, bd3[k3], b, 0);
@@ -3551,7 +3588,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     g_c_loop_depth++;
     emit_indent(g_pre, din); buf_puts(g_pre, "do {\n");
     int bi = din + 1; g_indent = bi;
-    for (int j = 0; j < bn; j++) emit_stmt(c, bb[j], g_pre, bi);
+    emit_iter_step_body(c, block, g_pre, bi);
     g_indent = din;
     emit_indent(g_pre, din); buf_puts(g_pre, "} while (0);\n");
     g_c_loop_depth--;
@@ -3847,7 +3884,9 @@ static void emit_filter_body(Compiler *c, int body, int tnv, int tk, int is_rej,
   g_ie_next_var = nxbuf; g_ie_res_poly = 1; g_ie_next_ty = TY_UNKNOWN;
   g_loop_exc_base = g_exc_frame_depth; g_loop_ensure_base = g_ensure_depth;
   g_c_loop_depth++;
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], b, indent + 1);
+  /* the step's setup: locals fresh, and a redo's label after them */
+  if (block_of_body(c, body) >= 0) emit_block_locals_reset(c, block_of_body(c, body), b, indent + 1);
+  int rd_lbl = emit_iter_step_stmts(c, body, b, indent + 1, NULL);
   if (sp_streq(nt_type(nt, bb[bn - 1]), "NextNode")) emit_stmt(c, bb[bn - 1], b, indent + 1);
   else {
     /* the predicate in its own buffer: a multi-statement terminal (a block
@@ -3863,6 +3902,7 @@ static void emit_filter_body(Compiler *c, int body, int tnv, int tk, int is_rej,
     buf_printf(b, "_t%d = %s(%s);\n", tk, is_rej ? "!" : "", cexpr.p ? cexpr.p : "0");
     free(cexpr.p);
   }
+  if (rd_lbl) g_redo_depth--;
   g_c_loop_depth--;
   g_loop_exc_base = sv_lexc; g_loop_ensure_base = sv_lens;
   g_ie_next_var = sv_nx; g_ie_res_poly = sv_poly; g_ie_next_ty = sv_nty;
@@ -5429,8 +5469,10 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
 
   /* The arms below bind the tuple to the first parameter only. CRuby
      spreads it across a block taking two or more parameters (or a rest, an
-     optional or a post): `|m, n|` bound m to the whole tuple and n to nil,
-     so such a block is refused rather than answered differently. */
+     optional or a post). desugar_builtin_iter_block_shapes lowers such a
+     block to one parameter; a block it leaves as written (a `&.` call, a
+     destructuring parameter it does not take) would bind m to the whole
+     tuple and n to nil, so it is refused rather than answered differently. */
   if ((sp_streq(name, "combination") || sp_streq(name, "permutation") ||
        sp_streq(name, "repeated_combination") || sp_streq(name, "repeated_permutation")) &&
       (rt == TY_INT_ARRAY || rt == TY_POLY_ARRAY || rt == TY_FLOAT_ARRAY) && block >= 0 &&

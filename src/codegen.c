@@ -734,7 +734,12 @@ static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
                strict == 2 ? "_OF" : "", tn, tn);
     return;
   }
-  emit_scalar_operand(c, node, "0", b);
+  Buf tmp; memset(&tmp, 0, sizeof tmp);
+  emit_expr(c, node, &tmp);
+  if (!coerce_const_raise(tmp.p ? tmp.p : "", "0", b))
+    emit_coerce_text(c, node, store_value_kind(c, node), TY_INT, CO_CONVERT, tmp.p ? tmp.p : "",
+                     "an Integer operand", b);
+  free(tmp.p);
 }
 
 void emit_int_expr(Compiler *c, int node, Buf *b) {
@@ -830,7 +835,8 @@ void emit_float_expr(Compiler *c, int node, Buf *b) {
   emit_expr(c, node, &tmp);
   if (!coerce_const_raise(tmp.p ? tmp.p : "", "0.0", b)) {
     buf_puts(b, "(sp_float)(");
-    buf_puts(b, tmp.p ? tmp.p : "");
+    emit_coerce_text(c, node, store_value_kind(c, node), TY_FLOAT, CO_CONVERT, tmp.p ? tmp.p : "",
+                     "a Float operand", b);
     buf_puts(b, ")");
   }
   free(tmp.p);
@@ -931,7 +937,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
      token that says the expression cannot return. */
   if (strncmp(past_open_parens(txt), "sp_raise_", 9) == 0)
     buf_printf(b, "((void)(%s), (const char *)NULL)", txt);
-  else buf_puts(b, txt);
+  else emit_coerce_text(c, node, store_value_kind(c, node), TY_STRING, CO_HOLD, txt, "a String operand", b);
   free(tmp.p);
 }
 
@@ -1175,12 +1181,14 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
      slot's default instead. */
   int is_cls_tok = strncmp(past_open_parens(txt), "sp_raise_cls(", 13) == 0;
   if (is_tok) {
-    if (target == TY_STRING) buf_printf(b, "sp_poly_to_s(%s)", txt);
-    else if (target == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", txt);
-    else if (target == TY_SYMBOL) buf_printf(b, "(sp_sym)sp_poly_to_i(%s)", txt);
-    else if (target == TY_INT || target == TY_BOOL) buf_printf(b, "sp_poly_to_i(%s)", txt);
-    else if (target == TY_POLY) buf_puts(b, txt);   /* already sp_RbVal */
-    else emit_unbox_text(c, target, txt, b);         /* pointer/object/hash slot */
+    switch (target) {
+    case TY_STRING: buf_printf(b, "sp_poly_to_s(%s)", txt); break;
+    case TY_FLOAT: buf_printf(b, "sp_poly_to_f(%s)", txt); break;
+    case TY_SYMBOL: buf_printf(b, "(sp_sym)sp_poly_to_i(%s)", txt); break;
+    case TY_INT: case TY_BOOL: buf_printf(b, "sp_poly_to_i(%s)", txt); break;
+    case TY_POLY: buf_puts(b, txt); break;               /* already sp_RbVal */
+    default: emit_unbox_text(c, target, txt, b); break;  /* pointer/object/hash slot */
+    }
   }
   else if (is_cls_tok && target != TY_POLY && target != TY_UNKNOWN) {
     buf_printf(b, "({ (void)%s; %s; })", txt, default_value(target));
@@ -1195,7 +1203,10 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
     buf_printf(b, "((void)(%s), %s)", txt, raise_tail_value_c(c, target));
     is_tok = 1;
   }
-  else buf_puts(b, txt);
+  else {
+    store_check(c, node, target, "a store of an untyped value", b);
+    buf_puts(b, txt);
+  }
   free(tmp.p);
   return is_tok;
 }
@@ -1813,12 +1824,13 @@ void declare_local_named(Compiler *c, Buf *b, LocalVar *lv, const char *name, in
         exit(1);
       }
   }
-  /* A local with no definite assignment anywhere starts as Ruby nil, not as
-     its type's zero: `x ||= v` has to be able to tell "never assigned" from
-     "assigned 0". The pointer kinds already start NULL; this is what gives the
+  /* A local a `||=` writes, or one a read can reach before any write
+     (maybe_unset), starts as Ruby nil, not as its type's zero: `x ||= v` has
+     to be able to tell "never assigned" from "assigned 0", and the early read
+     answers nil. The pointer kinds already start NULL; this is what gives the
      sentinel-carrying scalars the same footing (#3388). Block-locals are reset
      to nil_value on every iteration already (emit_block_locals_reset). */
-  if (lv->or_write_only && !lv->is_param && !lv->is_block_param) {
+  if ((lv->or_written || lv->maybe_unset) && !lv->is_param && !lv->is_block_param) {
     const char *nv = nil_value(t);   /* NULL for the kinds with no sentinel */
     if (nv) init = nv;
   }
@@ -8800,6 +8812,8 @@ static int marshal_ivar_type_ok(TyKind t) {
   switch (t) {
     case TY_INT: case TY_FLOAT: case TY_STRING: case TY_BOOL:
     case TY_SYMBOL: case TY_BIGINT: case TY_POLY: case TY_NIL:
+    /* the shared handle (`attr_reader :buf` and `obj.buf << x`) */
+    case TY_STRBUF:
       return 1;
     default:
       /* a nested user object reloads with its real cls_id */
@@ -8833,6 +8847,8 @@ static void emit_marshal_box_ivar(Compiler *c, TyKind t, const char *expr, Buf *
     case TY_INT:    buf_printf(b, "(%s == SP_INT_NIL ? sp_box_nil() : sp_box_int(%s))", expr, expr); break;
     case TY_FLOAT:  buf_printf(b, "sp_box_float_or_nil(%s)", expr); break;
     case TY_STRING: buf_printf(b, "(%s ? sp_box_str(%s) : sp_box_nil())", expr, expr); break;
+    /* the handle's live bytes, as a boxed handle's unbox reads them */
+    case TY_STRBUF: buf_printf(b, "(%s ? sp_box_str(sp_String_cstr(%s)) : sp_box_nil())", expr, expr); break;
     case TY_BOOL:   buf_printf(b, "sp_box_bool(%s)", expr); break;
     case TY_SYMBOL: buf_printf(b, "sp_box_sym(%s)", expr); break;
     case TY_BIGINT: buf_printf(b, "(%s ? sp_box_bigint(%s) : sp_box_nil())", expr, expr); break;
@@ -8855,6 +8871,7 @@ static void emit_marshal_unbox_ivar(Compiler *c, TyKind t, Buf *b) {
     case TY_INT:    buf_puts(b, "(val.tag == SP_TAG_NIL ? SP_INT_NIL : (sp_int)sp_poly_to_i(val))"); break;
     case TY_FLOAT:  buf_puts(b, "(val.tag == SP_TAG_NIL ? sp_float_nil() : (sp_float)sp_poly_to_f(val))"); break;
     case TY_STRING: buf_puts(b, "(val.tag == SP_TAG_STR ? val.v.s : NULL)"); break;
+    case TY_STRBUF: buf_puts(b, "(val.tag == SP_TAG_STR ? sp_String_new_shared(val.v.s) : NULL)"); break;
     case TY_BOOL:   buf_puts(b, "(val.tag == SP_TAG_BOOL ? val.v.b : 0)"); break;
     case TY_SYMBOL: buf_puts(b, "(val.tag == SP_TAG_SYM ? (sp_sym)val.v.i : 0)"); break;
     /* a Bignum whose value fits the inline representation arrives INT-tagged
@@ -8885,13 +8902,15 @@ static void emit_obj_to_hash_dispatch(Compiler *c, Buf *b) {
       const char *iv = ci->ivars[j] + 1;  /* member name, sans @ (hash key) */
       const char *ivf = iv_c(iv);          /* C field id (mangled member) */
       buf_printf(b, "      sp_StrPolyHash_set(h, SPL(\"%s\"), ", iv);
-      if (mt == TY_INT) buf_printf(b, "(o->iv_%s == SP_INT_NIL ? sp_box_nil() : sp_box_int(o->iv_%s))", ivf, ivf);
-      else if (mt == TY_STRING) buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf);
-      else if (mt == TY_FLOAT) buf_printf(b, "sp_box_float_or_nil(o->iv_%s)", ivf);
-      else if (mt == TY_BOOL) buf_printf(b, "sp_box_bool(o->iv_%s)", ivf);
-      else if (mt == TY_SYMBOL) buf_printf(b, "sp_box_sym(o->iv_%s)", ivf);
-      else if (mt == TY_POLY) buf_printf(b, "o->iv_%s", ivf);
-      else buf_puts(b, "sp_box_nil()");
+      switch (mt) {
+      case TY_INT: buf_printf(b, "(o->iv_%s == SP_INT_NIL ? sp_box_nil() : sp_box_int(o->iv_%s))", ivf, ivf); break;
+      case TY_STRING: buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf); break;
+      case TY_FLOAT: buf_printf(b, "sp_box_float_or_nil(o->iv_%s)", ivf); break;
+      case TY_BOOL: buf_printf(b, "sp_box_bool(o->iv_%s)", ivf); break;
+      case TY_SYMBOL: buf_printf(b, "sp_box_sym(o->iv_%s)", ivf); break;
+      case TY_POLY: buf_printf(b, "o->iv_%s", ivf); break;
+      default: buf_puts(b, "sp_box_nil()"); break;
+      }
       buf_puts(b, ");\n");
     }
     buf_puts(b, "      return sp_box_obj(h, SP_BUILTIN_STR_POLY_HASH);\n    }\n");
@@ -9089,16 +9108,19 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
   g_tmp = tmp_saved;
 }
 static void emit_member_boxed(Compiler *c, TyKind mt, const char *ivf, Buf *b) {
-  if (mt == TY_INT) buf_printf(b, "(o->iv_%s == SP_INT_NIL ? sp_box_nil() : sp_box_int(o->iv_%s))", ivf, ivf);
-  else if (mt == TY_STRING) buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf);
-  else if (mt == TY_FLOAT) buf_printf(b, "sp_box_float_or_nil(o->iv_%s)", ivf);
-  else if (mt == TY_BOOL) buf_printf(b, "sp_box_bool(o->iv_%s)", ivf);
-  else if (mt == TY_SYMBOL) buf_printf(b, "sp_box_sym(o->iv_%s)", ivf);
-  else if (mt == TY_POLY) buf_printf(b, "o->iv_%s", ivf);
-  else {
+  switch (mt) {
+  case TY_INT: buf_printf(b, "(o->iv_%s == SP_INT_NIL ? sp_box_nil() : sp_box_int(o->iv_%s))", ivf, ivf); break;
+  case TY_STRING: buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf); break;
+  case TY_FLOAT: buf_printf(b, "sp_box_float_or_nil(o->iv_%s)", ivf); break;
+  case TY_BOOL: buf_printf(b, "sp_box_bool(o->iv_%s)", ivf); break;
+  case TY_SYMBOL: buf_printf(b, "sp_box_sym(o->iv_%s)", ivf); break;
+  case TY_POLY: buf_printf(b, "o->iv_%s", ivf); break;
+  default: {
     char fb[128]; snprintf(fb, sizeof fb, "o->iv_%s", ivf);
     Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, mt, fb, &bx);
     buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p);
+    break;
+  }
   }
 }
 
@@ -12688,11 +12710,25 @@ int class_builtin_parent(Compiler *c, int cid) {
    `superclass` / `===` call, or a builtin class constant used as a value
    (e.g. `puts Integer`, `Integer < Numeric`). Over-approximating is safe (it
    only emits dead helpers); under-approximating would be a hard link error, so
-   the set is deliberately broad. */
+   the set is deliberately broad. The one constant it lets by is the class a
+   receiverless `raise TypeError, msg` names: that raise goes by the class's
+   name (sp_raise_cls), and the builtins raise so. Its message is scanned as
+   any other expression. */
 static int program_needs_class_machinery(Compiler *c) {
   if (c->nclasses > 0) return 1;
   const NodeTable *nt = c->nt;
-  for (int i = 0; i < nt->count; i++) {
+  unsigned char *raised = calloc((size_t)nt->count + 1, 1);
+  for (int i = 0; raised && i < nt->count; i++) {
+    if (nt_kind(nt, i) != NK_CallNode || nt_ref(nt, i, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, i, "name");
+    int ac = 0;
+    const int *av = nm && sp_streq(nm, "raise") ? call_args(nt, i, &ac) : NULL;
+    if (av && (ac == 1 || ac == 2) && av[0] >= 0 && av[0] < nt->count &&
+        nt_kind(nt, av[0]) == NK_ConstantReadNode)
+      raised[av[0]] = 1;
+  }
+  int need = 0;
+  for (int i = 0; i < nt->count && !need; i++) {
     const char *ty = nt_type(nt, i);
     if (!ty) continue;
     if (sp_streq(ty, "CallNode")) {
@@ -12701,14 +12737,15 @@ static int program_needs_class_machinery(Compiler *c) {
                  sp_streq(nm, "kind_of?") || sp_streq(nm, "instance_of?") ||
                  sp_streq(nm, "ancestors") || sp_streq(nm, "superclass") ||
                  sp_streq(nm, "===")))
-        return 1;
+        need = 1;
     }
     else if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
       const char *nm = nt_str(nt, i, "name");
-      if (nm && is_builtin_class_name(nm)) return 1;
+      if (nm && is_builtin_class_name(nm) && !(raised && raised[i])) need = 1;
     }
   }
-  return 0;
+  free(raised);
+  return need;
 }
 
 /* Whole-program scan for the prologue features (see codegen_internal.h). Each
@@ -13624,6 +13661,7 @@ char *codegen_program(const NodeTable *nt) {
      sides so codegen and the AST agree. */
   g_line_map = (getenv("SPINEL_LINE_MAP") || getenv("SPINEL_DEBUG")) ? 1 : 0;
   g_debug = getenv("SPINEL_DEBUG") ? 1 : 0;
+  g_check_stores = getenv("SPINEL_CHECK_STORES") ? 1 : 0;
   /* The unresolved-call gate raises NoMethodError, matching CRuby (a silent
      wrong answer is the worst failure mode). SPINEL_GATE_RAISE=0 restores the
      old silent typed default as a transition escape hatch. */

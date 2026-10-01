@@ -1,0 +1,48 @@
+"axxxx"
+"axxxx"
+nil
+"axxxx"
+"axxxx"
+2
+"axxxx"
+"axxxx"
+[nil, "axxxx"]
+"axxxx"
+"axxxxxxxx"
+"axxxx"
+"axxxx!"
+"axxxx!"
+"qxxxx"
+"qxxxx"
+[" abb\nxxxx", " abb\nxxxx", nil, "Abxxxx", "Abxxxx"]
+["< abb\n", "< abb\n", nil, "<Ab", "<Ab"]
+["zz", "zz", nil, "zz", "zz"]
+["", "", nil, "", ""]
+[" aBB\n", " aBB\n", nil, "AB", "AB"]
+[" aBb\n", " aBb\n", nil, "AB", "AB"]
+[" ABB\n", " ABB\n", nil, "AB", "AB"]
+[nil, " abb\n", nil, "ab", "ab"]
+[nil, " abb\n", nil, nil, "Ab"]
+[" ABB\n", " ABB\n", nil, "aB", "aB"]
+["abb", "abb", nil, nil, "Ab"]
+["abb\n", "abb\n", nil, nil, "Ab"]
+[" abb", " abb", nil, nil, "Ab"]
+[" abb", " abb", nil, nil, "Ab"]
+[" abb", " abb", nil, "A", "A"]
+[" ab\n", " ab\n", nil, nil, "Ab"]
+[" acc\n", " acc\n", nil, "Ac", "Ac"]
+[" a\n", " a\n", nil, "A", "A"]
+[" ac\n", " ac\n", nil, "Ac", "Ac"]
+[nil, " abb\n", nil, nil, "Ab"]
+[nil, " abb\n", nil, "A", "A"]
+["\nbba ", "\nbba ", nil, "bA", "bA"]
+[" abc\n", " abc\n", nil, "Ac", "Ac"]
+[" abc\n", " abc\n", nil, "Ac", "Ac"]
+["Z", "Zabb\n", nil, "Z", "Zb"]
+["< abb\n", "< abb\n", nil, "<Ab", "<Ab"]
+[" ", "abb\n", nil, "A", "b"]
+[65, "Aabb\n", nil, 65, "Ab"]
+[0, "Zabb", 0]
+[0, "< abb", 0]
+[0, "abb", 0]
+[0, "Aabb", 0]

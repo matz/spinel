@@ -323,7 +323,7 @@ static sp_Complex sp_str_to_c_impl(const char *s, int strict) {
   if (!parsed) {
     if (!strict) return (sp_Complex){ 0.0, 0.0 };
     if (sp_convert_soft) { sp_convert_failed = 1; return (sp_Complex){ 0.0, 0.0 }; }
-    sp_raise_cls("ArgumentError", "invalid value for convert(): ");
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid value for convert(): \"%s\"", s ? s : ""));
   }
   return (sp_Complex){ (sp_float)re, (sp_float)im };
 }

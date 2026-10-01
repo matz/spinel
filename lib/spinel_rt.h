@@ -2602,6 +2602,26 @@ static inline sp_Complex sp_poly_as_complex(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) return *(sp_Complex *)v.v.p;
   return (sp_Complex){sp_poly_to_f(v), 0.0, 0};
 }
+/* A boxed argument of Kernel#Complex as a Complex, and whether it is one
+   (*cplx): a Complex as it is, a String parsed whole (Complex("1+2i", 1) is
+   (1+3i)), a real number as its real part, Float-classed when it is a Float
+   or a Rational (Spinel's Complex holds a Rational as its Float, see
+   docs/limitations.md). nil is CRuby's "can't convert nil into Complex";
+   anything else is "can't convert X into Complex" as the lone argument
+   (Complex(:a)) and "not a real" as one of two (Complex(:a, 1)). */
+sp_Complex sp_str_to_c_strict(const char *s);
+static const char *sp_convert_src_name(sp_RbVal v);
+static sp_Complex sp_poly_complex_arg(sp_RbVal v, int *cplx, int lone) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) { *cplx = 1; return *(sp_Complex *)v.v.p; }
+  if (v.tag == SP_TAG_STR) { *cplx = 1; return sp_str_to_c_strict(v.v.s ? v.v.s : sp_str_empty); }
+  if (v.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "can't convert nil into Complex");
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return (sp_Complex){sp_poly_to_f(v), 0.0, 0};
+  if (v.tag == SP_TAG_FLT || (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL)))
+    return (sp_Complex){sp_poly_to_f(v), 0.0, SP_CPLX_RE_F};
+  if (lone) sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Complex", sp_convert_src_name(v)));
+  sp_raise_cls("TypeError", "not a real");
+  return (sp_Complex){0, 0, 0};
+}
 /* Coerce to a C double, understanding boxed Rational (sp_poly_to_f does not).
    Used by the Rational+Float arms, where CRuby yields a Float. */
 static inline sp_float sp_poly_to_f_with_rational(sp_RbVal v) {
@@ -3274,7 +3294,60 @@ static SP_NOINLINE void sp_io_line_args(sp_PolyArray *a, const char **sep, sp_in
   }
 }
 
-static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return sp_time_ns_to_f(_tt.tv_sec, _tt.tv_nsec); } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */
+/* A boxed value where a Float is wanted, by Kernel#Float's rules: a real
+   number converts (a Bignum or a Rational to its nearest double), a Time by
+   its #to_f, a Complex whose imaginary part is an exact zero by its real
+   part; any other value is sp_poly_Float's -- a String parses strictly, a
+   user object converts through its #to_f, and nil, true, false, a Symbol or
+   a container raise TypeError. This answered 0.0 for every kind it did not
+   name, a Symbol's id, a boolean's 0 or 1 and a String's leading digits, all
+   silently: Complex([Complex(1, 2)][0], 1) built (0+1i). An explicit #to_f
+   follows each class's own method instead (sp_poly_to_f_meth). */
+static sp_float sp_poly_Float(sp_RbVal v);
+static sp_float sp_poly_to_f(sp_RbVal v) {
+  if (v.tag == SP_TAG_FLT) return v.v.f;
+  if (v.tag == SP_TAG_INT) return (sp_float)v.v.i;
+  if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return sp_time_ns_to_f(_tt.tv_sec, _tt.tv_nsec); }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) {
+    sp_Complex z = *(sp_Complex *)v.v.p;
+    if (z.im == 0 && !(z.fl & SP_CPLX_IM_F)) return z.re;
+    sp_raise_cls("RangeError", sp_sprintf("can't convert %s into Float", sp_complex_to_s(z)));
+  }
+  return sp_poly_Float(v);
+}
+/* An EXPLICIT `.to_f` on a boxed receiver: the method, by each class's own
+   #to_f. nil answers 0.0 and a String its leading number (String#to_f); a
+   real number, a Time and a Complex convert as sp_poly_to_f does; anything
+   else has no #to_f and is NoMethodError (a user class that defines one has
+   its own arm in the poly dispatch). */
+static sp_float sp_poly_to_f_meth(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL) return 0.0;
+  if (v.tag == SP_TAG_STR) return sp_str_to_f_cruby(v.v.s ? v.v.s : sp_str_empty);
+  if (v.tag == SP_TAG_FLT || v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT ||
+      (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL ||
+                               v.cls_id == SP_BUILTIN_TIME || v.cls_id == SP_BUILTIN_COMPLEX)))
+    return sp_poly_to_f(v);
+  sp_raise_nomethod(sp_nomethod_msg("to_f", v));
+  return 0.0;
+}
+/* Float-range membership of a boxed value (`when 1.0..3.0`, Range#===): a
+   real number is a member by its value, a Complex too when its imaginary
+   part is zero (Complex#<=> compares one, 0.0 included); anything else,
+   nil and a String among them, is not one (CRuby compares, and answers
+   false). */
+static sp_bool sp_frange_cover_poly(sp_FloatRange r, sp_RbVal v) {
+  if (v.tag == SP_TAG_FLT || v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT ||
+      (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL)))
+    return sp_frange_cover(r, sp_poly_to_f(v));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) {
+    sp_Complex z = *(sp_Complex *)v.v.p;
+    return z.im == 0 && sp_frange_cover(r, z.re);
+  }
+  return 0;
+}
 /* The same conversions, but a boxed nil lands on the type's sentinel instead
    of the type's zero. A method whose declared return is `Integer?`/`Float?`
    narrows a boxed body into the unboxed slot here, and the plain conversions
@@ -3608,6 +3681,9 @@ static sp_float sp_poly_Float(sp_RbVal v) {
   /* a Rational is a real number Kernel#Float converts (Float(1/2r) is 0.5);
      without an arm it reached the raise below as "can't convert Rational" */
   if (sp_poly_is_rational(v) || sp_poly_is_brat(v)) return sp_poly_to_f(v);
+  /* a Time by its #to_f, and a Complex by its real part when its imaginary
+     part is an exact zero (RangeError otherwise), as sp_poly_to_f converts */
+  if (v.tag == SP_TAG_OBJ && v.v.p && (v.cls_id == SP_BUILTIN_TIME || v.cls_id == SP_BUILTIN_COMPLEX)) return sp_poly_to_f(v);
   if (v.tag == SP_TAG_STR) return sp_str_to_f_strict(v.v.s ? v.v.s : sp_str_empty);
   /* a user object converts through its own #to_f */
   if (sp_poly_is_user_obj(v)) return sp_poly_Float_ex(v, 1);
@@ -11927,7 +12003,7 @@ static sp_StrArray *sp_caller(sp_int start, sp_bool have_len, sp_int len) {
    ensures it passes over). Declared here, before sp_raise_cls, so a real raise
    can clear it -- an exception raised inside an ensure during an unwind
    supersedes that unwind. The machinery that uses it lives further down. */
-enum { SP_UNWIND_NONE, SP_UNWIND_PROCRET, SP_UNWIND_THROW, SP_UNWIND_BREAK };
+enum { SP_UNWIND_NONE, SP_UNWIND_PROCRET, SP_UNWIND_THROW, SP_UNWIND_BREAK, SP_UNWIND_EXIT };
 struct sp_proc_home;
 static SP_TLS int sp_unwind_kind = SP_UNWIND_NONE, sp_unwind_target = -1, sp_unwind_exc_top = 0;  /* per-worker (see sp_exc_stack) */
 static SP_TLS struct sp_proc_home *sp_unwind_home = NULL;  /* PROCRET target (THROW uses sp_unwind_target) */
@@ -12977,6 +13053,7 @@ static void sp_unwind_resume(void) {
   if (sp_exc_top > sp_unwind_exc_top) { sp_poly_recur_unwind(); longjmp(sp_exc_stack[sp_exc_top - 1], 1); }
   int kind = sp_unwind_kind;
   sp_unwind_kind = SP_UNWIND_NONE;
+  if (kind == SP_UNWIND_EXIT) exit(sp_at_exit_run(0));
   /* the ensures are done; deliver, giving the walk path back the depth the
      target arm recorded (the intervening exception frames restored their own on
      the way here) */
@@ -15544,7 +15621,12 @@ enum {
   SP_PENUM_FIND, SP_PENUM_SORT_BY, SP_PENUM_COUNT, SP_PENUM_SUM,
   SP_PENUM_ANY, SP_PENUM_ALL, SP_PENUM_NONE,
   SP_PENUM_FIND_INDEX,
-  SP_PENUM_EACH_WITH_INDEX
+  SP_PENUM_EACH_WITH_INDEX,
+  /* the Hash-only walks and the reversed one: a user class owning one of
+     these names as a yielding method makes the call a dispatch, and a Hash
+     (or Array) reaching it is served here */
+  SP_PENUM_EACH_PAIR, SP_PENUM_EACH_KEY, SP_PENUM_EACH_VALUE,
+  SP_PENUM_REVERSE_EACH, SP_PENUM_UNIQ
 };
 /* Call `blk` with one element. Both channels are filled, as every other
    proc-driving site does: a poly parameter reads the boxed side-channel, a
@@ -15654,6 +15736,14 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
      values is one packed item; map and the predicates hand a one-param block
      its first value, as CRuby's multi-value yield does, where select, find
      and sort_by hand it the packed Array. */
+  /* each_pair / each_key / each_value are Hash methods: any other receiver
+     reaching the dispatch's builtin arm has no such method */
+  if ((op == SP_PENUM_EACH_PAIR || op == SP_PENUM_EACH_KEY || op == SP_PENUM_EACH_VALUE) &&
+      !(recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id))) {
+    sp_raise_nomethod(sp_nomethod_msg(op == SP_PENUM_EACH_PAIR ? "each_pair" :
+                                      op == SP_PENUM_EACH_KEY ? "each_key" : "each_value", recv));
+    return sp_box_nil();
+  }
   sp_RbVal walk = recv;
   sp_bool first_of_pair = FALSE, spread_pair = FALSE;
   int pair = sp_poly_yields_pair(recv);
@@ -15702,6 +15792,30 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
     case SP_PENUM_EACH_WITH_INDEX:
       for (sp_int i = 0; i < n; i++) sp_penum_call2(blk, src->data[i], sp_box_int(i));
       return recv;
+    case SP_PENUM_EACH_PAIR:
+      for (sp_int i = 0; i < n; i++) sp_penum_call1(blk, src->data[i]);
+      return recv;
+    case SP_PENUM_EACH_KEY: case SP_PENUM_EACH_VALUE:
+      /* a Hash entry is a boxed [k, v] pair (sp_poly_each_elem) */
+      for (sp_int i = 0; i < n; i++)
+        sp_penum_call1(blk, sp_poly_arr_get(src->data[i], op == SP_PENUM_EACH_KEY ? 0 : 1));
+      return recv;
+    case SP_PENUM_REVERSE_EACH:
+      for (sp_int i = n - 1; i >= 0; i--) sp_penum_call1(blk, src->data[i]);
+      return recv;
+    case SP_PENUM_UNIQ: {
+      /* the first element of each block value, in order, compared as the
+         spliced poly uniq loop compares them */
+      sp_PolyArray *seen = sp_PolyArray_new(); SP_GC_ROOT(seen);
+      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      for (sp_int i = 0; i < n; i++) {
+        sp_RbVal k = sp_penum_call1(blk, src->data[i]);
+        sp_bool dup = FALSE;
+        for (sp_int j = 0; j < seen->len; j++) if (sp_poly_eq(seen->data[j], k)) { dup = TRUE; break; }
+        if (!dup) { sp_PolyArray_push(seen, k); sp_PolyArray_push(out, src->data[i]); }
+      }
+      return sp_box_poly_array(out);
+    }
     case SP_PENUM_MAP: {
       sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
       for (sp_int i = 0; i < n; i++) {

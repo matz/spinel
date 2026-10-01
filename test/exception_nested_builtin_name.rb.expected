@@ -1,0 +1,4 @@
+ok plain LoadError
+ok nested Pkg::LoadError
+ok inside Pkg::LoadError
+Pkg::SystemCallError

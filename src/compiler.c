@@ -2080,7 +2080,8 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv->rbs_type = TY_UNKNOWN;
   lv->push_widened = 0;
   lv->poly_dispatch_widened = 0;
-  lv->or_write_only = 0;
+  lv->or_written = 0;
+  lv->maybe_unset = 0;
   lv->str_shared = 0;
   lv->str_append = 0;
   lv->poly_hash_pin = 0;
@@ -2256,7 +2257,15 @@ const char *poly_enum_op_for(const char *name) {
     {"sort_by","SP_PENUM_SORT_BY"},
     {"count","SP_PENUM_COUNT"},
     {"sum","SP_PENUM_SUM"}, {"any?","SP_PENUM_ANY"}, {"all?","SP_PENUM_ALL"},
-    {"none?","SP_PENUM_NONE"}, {NULL,NULL}
+    {"none?","SP_PENUM_NONE"},
+    /* each_entry walks what each walks on every builtin receiver; the rest
+       are the Hash-only walks, the reversed one and uniq. Without them a poly
+       receiver reaching a user class's yielding method of the name was folded
+       to the builtin walk, which reads the object as an empty container and
+       never runs the method. */
+    {"each_entry","SP_PENUM_EACH"}, {"each_pair","SP_PENUM_EACH_PAIR"},
+    {"each_key","SP_PENUM_EACH_KEY"}, {"each_value","SP_PENUM_EACH_VALUE"},
+    {"reverse_each","SP_PENUM_REVERSE_EACH"}, {"uniq","SP_PENUM_UNIQ"}, {NULL,NULL}
   };
   if (!name) return NULL;
   for (int i = 0; PEN[i].nm; i++) if (sp_streq(name, PEN[i].nm)) return PEN[i].op;

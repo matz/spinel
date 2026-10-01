@@ -1,0 +1,4 @@
+method ensure
+inner ensure
+outer ensure
+at_exit

@@ -619,8 +619,37 @@ static TyKind then_next_array_ty(Compiler *c, int node) {
    while `next [v]` over the block parameter (an Integer, not widened) is an
    Integer array, so the slot took the tail's kind and the arm did not build.
    The codegen converts the odd one out at its assignment (#4747). */
+/* Does a `next` binding to this `then` block (not one in a nested loop,
+   block or def) leave with a value the tail's type cannot hold: one of
+   another scalar kind, or a bare `next`'s nil? Its value is the block's,
+   so the slot boxes it. */
+static int then_next_other_scalar(Compiler *c, int node, TyKind tail) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  const char *ty = nt_type(nt, node);
+  if (!ty) return 0;
+  if (sp_streq(ty, "NextNode")) {
+    int a = nt_ref(nt, node, "arguments"); int an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    TyKind t = an == 1 ? infer_type(c, av[0]) : TY_NIL;
+    if (then_array_kind_joins(t) || t == TY_UNKNOWN) return 0;
+    return ty_unify(t, tail) != tail || (t == TY_NIL && tail != TY_NIL && tail != TY_POLY);
+  }
+  if (sp_streq(ty, "WhileNode") || sp_streq(ty, "UntilNode") || sp_streq(ty, "ForNode") ||
+      sp_streq(ty, "BlockNode") || sp_streq(ty, "LambdaNode") || sp_streq(ty, "DefNode") ||
+      sp_streq(ty, "ClassNode") || sp_streq(ty, "ModuleNode")) return 0;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (then_next_other_scalar(c, nt_ref_at(nt, node, i), tail)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int k = 0; k < n; k++) if (then_next_other_scalar(c, ids[k], tail)) return 1;
+  }
+  return 0;
+}
+
 TyKind then_block_value_ty(Compiler *c, int body, TyKind tail) {
-  if (!then_array_kind_joins(tail)) return tail;
+  if (!then_array_kind_joins(tail)) return then_next_other_scalar(c, body, tail) ? TY_POLY : tail;
   TyKind a = then_next_array_ty(c, body);
   if (a == TY_UNKNOWN || a == tail) return tail;
   return TY_POLY_ARRAY;
@@ -7152,6 +7181,12 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (sp_streq(name, "nonzero?") && argc == 0) return TY_POLY;   /* self or nil */
     if (sp_streq(name, "fdiv") && argc == 1) return TY_FLOAT;
     if (sp_streq(name, "pow") && argc == 1) return TY_BIGINT;
+    /* A Float operand divides in floats, as CRuby converts the Bignum to its
+       nearest double: modulo and remainder answer a Float, and div the
+       Integer floor of the Float quotient, which may or may not fit a word */
+    if ((sp_streq(name, "modulo") || sp_streq(name, "%") || sp_streq(name, "remainder")) &&
+        argc == 1 && infer_type(c, argv[0]) == TY_FLOAT) return TY_FLOAT;
+    if (sp_streq(name, "div") && argc == 1 && infer_type(c, argv[0]) == TY_FLOAT) return TY_POLY;
     /* modulo/%/remainder/modular-pow stay Bignum; divmod is a [q, r] pair;
        #[] is a single bit (0/1) (#2594) */
     if ((sp_streq(name, "modulo") || sp_streq(name, "%") || sp_streq(name, "remainder")) &&
@@ -7839,9 +7874,12 @@ TyKind infer_uncached(Compiler *c, int id) {
        ivar belongs to the rebound receiver class (an_ie_class_id). */
     int wcls = s->class_id >= 0 ? s->class_id : an_ie_class_id;
     /* a toplevel method's `@x ||= v` / `@x &&= v` answers the Toplevel slot,
-       which the value alone does not type (`(@a ||= []) << 1`) */
+       which the value alone does not type (`(@a ||= []) << 1`); so does a
+       plain write of an untyped value (`y = (@a = [])`, where a later write
+       made the slot a poly array) */
     if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0 &&
-        (nk == NK_InstanceVariableOrWriteNode || nk == NK_InstanceVariableAndWriteNode)) {
+        (nk == NK_InstanceVariableOrWriteNode || nk == NK_InstanceVariableAndWriteNode ||
+         (nk == NK_InstanceVariableWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_UNKNOWN))) {
       int tl = comp_class_index(c, "Toplevel");
       int tiv = tl >= 0 && nm ? comp_ivar_index(&c->classes[tl], nm) : -1;
       TyKind tt = tiv >= 0 ? ivar_value_ty(&c->classes[tl], tiv) : TY_UNKNOWN;
@@ -8244,7 +8282,14 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (cls_id < 0) return TY_UNKNOWN;
     ClassInfo *ci = &c->classes[cls_id];
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
-    if (iv < 0) return TY_UNKNOWN;
+    if (iv < 0) {
+      /* an instance_eval/exec body reads its receiver's: one the receiver's
+         class never writes is nil there (emit_expr reads it so) */
+      int ie = s->class_id < 0 && (an_ie_class_id >= 0 || ie_class_of(c, id) >= 0);
+      for (int k = ci->parent; ie && nm && k >= 0; k = c->classes[k].parent)
+        if (comp_ivar_index(&c->classes[k], nm) >= 0) ie = 0;
+      return ie && nm ? TY_NIL : TY_UNKNOWN;
+    }
     /* an UNMARKED read of a shared-mutable string slot demotes to the plain
        string type (copy-read), mirroring the local-read demotion (#3227) */
     if (ci->ivar_types[iv] == TY_STRBUF) return TY_STRING;

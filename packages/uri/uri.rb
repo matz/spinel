@@ -373,10 +373,31 @@ module URI
 
   RFC2396_PARSER = RFC2396_Parser.new
 
+  def self.normalize_path(path)
+    trailing_slash = path.end_with?("/") || path.end_with?("/.") || path.end_with?("/..")
+    parts = []
+    path.split("/").each do |part|
+      if part == ".."
+        parts.pop if parts.length > 1
+      elsif part != "."
+        parts << part
+      end
+    end
+    normalized = parts.join("/")
+    normalized << "/" if trailing_slash && !normalized.end_with?("/")
+    normalized
+  end
+
   def self.join(base, rel)
     b = parse(base.to_s)
     r = rel.to_s
     return parse(r) if r.include?("://")
+    q = ""
+    qi = r.index("?")
+    if qi
+      q = r[(qi + 1)..-1].to_s
+      r = r[0, qi]
+    end
     if r.start_with?("/")
       path = r
     else
@@ -385,12 +406,7 @@ module URI
       dir = cut ? dir[0, cut + 1] : "/"
       path = dir + r
     end
-    q = ""
-    qi = path.index("?")
-    if qi
-      q = path[(qi + 1)..-1].to_s
-      path = path[0, qi]
-    end
+    path = normalize_path(path)
     if b.scheme == "https"
       HTTPS.new(b.scheme, b.userinfo, b.host, b.port, path, q, "")
     else

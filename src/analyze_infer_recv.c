@@ -744,6 +744,43 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   }
   return 0;
 }
+/* Can an array of type `rt` hold what `fill` writes into it: its value
+   argument, or the block's value? Only the element type itself fits: an
+   Integer in a Float array reads back as a Float, and a Float in an Integer
+   array is truncated. */
+/* Does this fill take its values from a block? A `&expr` that is not known
+   to be a Proc may be nil, which passes none, and then the first argument is
+   the value, as in CRuby; the emitter fills from it as the value form. */
+static int fill_block(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, call, "block");
+  if (blk < 0) return 0;
+  if (nt_kind(nt, blk) != NK_BlockArgumentNode) return 1;
+  int e = nt_ref(nt, blk, "expression");
+  return e >= 0 && infer_type(c, e) == TY_PROC;
+}
+
+static int fill_value_fits(Compiler *c, int call, TyKind rt) {
+  const NodeTable *nt = c->nt;
+  TyKind fe = ty_array_elem(rt), fv;
+  int blk = fill_block(c, call) ? nt_ref(nt, call, "block") : -1;
+  if (blk >= 0) {
+    if (nt_kind(nt, blk) != NK_BlockNode) return 1;
+    int body = nt_ref(nt, blk, "body");
+    int bn = 0; const int *bs = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    fv = bn > 0 ? infer_type(c, bs[bn - 1]) : TY_NIL;
+    TyKind nx = block_next_value_ty(c, body);
+    if (nx != TY_UNKNOWN) fv = fv == TY_UNKNOWN ? nx : ty_unify(fv, nx);
+  }
+  else {
+    int args = nt_ref(nt, call, "arguments");
+    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an < 1) return 1;
+    fv = infer_type(c, av[0]);
+  }
+  return fe == TY_POLY || fv == TY_UNKNOWN || fv == TY_POLY || fv == TY_VOID || fv == fe;
+}
+
 
 /* Array receivers: the array face of infer_call */
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
@@ -1236,20 +1273,18 @@ int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
         sp_streq(name, "reverse!") || sp_streq(name, "sort!") || sp_streq(name, "shuffle!") ||
 
         sp_streq(name, "rotate!") || sp_streq(name, "rotate") || sp_streq(name, "insert") || sp_streq(name, "unshift") || sp_streq(name, "prepend") || sp_streq(name, "concat") || sp_streq(name, "freeze") ||
-        (sp_streq(name, "fill") && ((block < 0 && argc >= 1 && argc <= 3 &&
-                                     /* a fill VALUE incompatible with the element type
-                                        makes the result a poly array (see below) */
-                                     ({ TyKind _fv = infer_type(c, argv[0]);
-                                        TyKind _fe = ty_array_elem(rt);
-                                        _fe == TY_POLY || _fv == TY_UNKNOWN || _fv == TY_POLY || _fv == _fe ||
-                                        (ty_is_numeric(_fv) && ty_is_numeric(_fe)); })) ||
-                                    (block >= 0 && argc <= 2))) ||
+        /* a fill value (or block value) the element type cannot hold makes
+           the result a poly array (see below) */
+        (sp_streq(name, "fill") && ((!fill_block(c, id) && argc >= 1 && argc <= 3) ||
+                                    (fill_block(c, id) && argc <= 2)) &&
+         fill_value_fits(c, id, rt)) ||
         sp_streq(name, "replace") ||
         sp_streq(name, "values_at") ||
         (sp_streq(name, "fetch_values") && block < 0)) { *out = rt; return 1; }
     /* the block form mixes fallback values in -> poly array (#2368) */
     if (sp_streq(name, "fetch_values") && block >= 0) { *out = TY_POLY_ARRAY; return 1; }
-    if (sp_streq(name, "fill") && block < 0 && argc >= 1 && argc <= 3)
+    if (sp_streq(name, "fill") && ((!fill_block(c, id) && argc >= 1 && argc <= 3) ||
+                                   (fill_block(c, id) && argc <= 2)))
       { *out = TY_POLY_ARRAY; return 1; }   /* the incompatible-value fill fell through above */
     if (sp_streq(name, "zip") && block < 0) { *out = TY_POLY_ARRAY; return 1; }
     if (sp_streq(name, "zip") && block >= 0) { *out = TY_NIL; return 1; }  /* block form returns nil */

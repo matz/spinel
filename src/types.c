@@ -163,6 +163,7 @@ const char *ty_name(TyKind t) {
     case TY_SYMBOL:  return "symbol";
     case TY_BOOL:    return "bool";
     case TY_RANGE:   return "range";
+    case TY_FLOAT_RANGE: return "float_range";
     case TY_TIME:    return "time";
     case TY_COMPLEX: return "complex";
     case TY_RATIONAL: return "rational";
@@ -199,6 +200,7 @@ const char *ty_name(TyKind t) {
     case TY_OPENSTRUCT: return "openstruct";
     case TY_METHOD:  return "method";
     case TY_IO:      return "io";
+    case TY_ARGF:    return "argf";
     case TY_ENUMERATOR: return "enumerator";
     case TY_CLASS:   return "class";
     case TY_POLY:    return "poly";

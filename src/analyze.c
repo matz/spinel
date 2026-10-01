@@ -20828,8 +20828,8 @@ static int fwd_param_appends(Compiler *c, int mi, int j);
 /* The incoming String uses the builtin contract only when a reopen has
    not replaced it. Unrelated classes with the same name do not own this
    dispatch, but String/Object/Kernel overrides and included methods do. */
-static int fwd_string_builtin(Compiler *c, const char *name) {
-  static const char *const owners[] = { "String", "Object", "Kernel", "BasicObject" };
+static int fwd_builtin(Compiler *c, const char *owner, const char *name) {
+  const char *owners[] = { owner, "Object", "Kernel", "BasicObject" };
   for (int i = 0; i < 4; i++) {
     int ci = comp_class_index(c, owners[i]);
     if (ci >= 0 && comp_method_in_chain(c, ci, name, NULL) >= 0) return 0;
@@ -20850,7 +20850,7 @@ static int fwd_alias_of(Compiler *c, int mi, const char *ln, const char *pn, int
     int v = nt_ref(nt, w, "value");
     if (nt_kind(nt, v) == NK_CallNode) {
       const char *nm = nt_str(nt, v, "name");
-      if (nm && fwd_string_builtin(c, nm) && (sp_streq(nm, "to_s") || sp_streq(nm, "itself")))
+      if (nm && fwd_builtin(c, "String", nm) && (sp_streq(nm, "to_s") || sp_streq(nm, "itself")))
         v = nt_ref(nt, v, "receiver");
     }
     if (nt_kind(nt, v) != NK_LocalVariableReadNode || comp_scope_of(c, v) != &c->scopes[mi]) return 0;
@@ -20889,7 +20889,7 @@ static int fwd_string_guard(Compiler *c, int mi, const char *pn, int node, int d
   }
   if (k != NK_CallNode) return 0;
   const char *nm = nt_str(nt, node, "name");
-  if (!nm || !fwd_string_builtin(c, nm)) return 0;
+  if (!nm || !fwd_builtin(c, "String", nm)) return 0;
   int recv = nt_ref(nt, node, "receiver");
   if (nm && sp_streq(nm, "!")) return -fwd_string_guard(c, mi, pn, recv, depth + 1);
   if (!fwd_param_read(c, mi, pn, recv)) return 0;
@@ -20993,7 +20993,7 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, int kep
                sp_streq(nm, "<=") || sp_streq(nm, ">=")));
     int self = nm && (sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze"));
     int mutator = an_str_mutator_name(nm);
-    if (!nm || !fwd_string_builtin(c, nm)) read = self = mutator = 0;
+    if (!nm || !fwd_builtin(c, "String", nm)) read = self = mutator = 0;
     int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
     if (rest) read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?"));
     if (fwd_param_kept(c, mi, pn, recv, read ? 0 : self || mutator ? kept : 1, appended, depth + 1)) return 1;
@@ -21002,6 +21002,10 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, int kep
     ACallTargets targets = {0};
     TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     int bytes = (rt == TY_STRING || rt == TY_STRBUF) && (read || mutator);
+    /* The typed String-array search compares bytes, never stores its
+       needle. Other Array operations/equality dispatch have no such proof. */
+    int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
+                 fwd_builtin(c, "Array", nm);
     if (!bytes) {
       an_call_targets_of(c, node, &targets);
       if (!targets.n) act_add(&targets, fwd_call_target(c, node));
@@ -21027,7 +21031,7 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, int kep
         if (rest && nt_kind(nt, args[i]) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
         forwarded &= matched;
       }
-      int consume = bytes || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p")));
+      int consume = bytes || search || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p")));
       /* Only bare parameter reads have a forwarding edge. Parentheses,
          conversions and ternaries are conservatively retained, not exempted
          merely because their containing argument has a destination. */
@@ -21164,10 +21168,20 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
   for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int p = fwd_splat_start(c, u, rn);
-    int t = p >= 0 ? fwd_call_target(c, u) : -1;
-    for (int i = 0; t >= 0 && i < 16; i++)
-      if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
-    if (t >= 0) bits |= fwd_rest_past(c, t, p);
+    if (p < 0) continue;
+    ACallTargets targets = {0};
+    an_call_targets_of(c, u, &targets);
+    if (!targets.n) act_add(&targets, fwd_call_target(c, u));
+    for (int ti = 0; ti < targets.n; ti++) {
+      int t = targets.v[ti];
+      /* A variable-length splat does not fix which of its elements binds
+         a post parameter. Do not exempt such an unknown destination. */
+      if (g_fwd_codegen && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
+      for (int i = 0; i < 16; i++)
+        if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
+      bits |= fwd_rest_past(c, t, p);
+    }
+    free(targets.v);
   }
   /* `super(*a)`, and a zsuper handing on the rest at its own position */
   for (int pass = 0; pass < 2 && m->class_id >= 0; pass++) {
@@ -21190,14 +21204,16 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
 static int fwd_poly_add(Compiler *c, int mi, int pj) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
-  if (m->rest_idx >= 0 && pj >= m->rest_idx) return fwd_param_appends(c, mi, pj);
+  /* pj names a formal, not an actual position: post/keyword parameters
+     after the rest still have their own bodies and must be visited. */
+  if (m->rest_idx >= 0 && pj == m->rest_idx) return fwd_param_appends(c, mi, pj);
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
   LocalVar *p = scope_local(m, m->pnames[pj]);
   if (!p || !p->is_param || p->is_block_param) return 0;
   if (!g_fwd_codegen && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
   if (p->type != TY_POLY && !(g_fwd_codegen && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
   signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
-  if (*seen) { g_fwd_taint |= 1; return 0; }
+  if (*seen) return 0; /* already queued: its body will still be processed */
   *seen = 1;
   return 0;
 }
@@ -21205,7 +21221,13 @@ static int fwd_poly_add(Compiler *c, int mi, int pj) {
 static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
   const NodeTable *nt = c->nt;
   if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
-  if (!g_fwd_poly_depth) {
+  /* A rest bitmap asks separate questions for separate positions. Give
+     each nested POLY walk its own worklist; a visited vertex is not the
+     answer to a later question reaching that same appender. */
+  SbMutTab outer_seen = g_fwd_poly_seen;
+  int nested = g_fwd_poly_depth != 0;
+  if (nested) memset(&g_fwd_poly_seen, 0, sizeof g_fwd_poly_seen);
+  {
     int np = 0;
     for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
     if (g_fwd_poly_seen.ncap < np) {
@@ -21222,7 +21244,6 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
   int appended = fwd_poly_add(c, mi, pj);
   g_fwd_poly_depth++;
   for (int r = first; r < g_fwd_poly_seen.n; r++) {
-    if (g_fwd_poly_seen.val[r] == 2) continue; /* a nested rest query processed it */
     g_fwd_poly_seen.val[r] = 2;
     mi = g_fwd_poly_seen.key[r];
     Scope *m = &c->scopes[mi];
@@ -21257,9 +21278,24 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
         int an = arg_layout_param_node(c, cm, u, j, NULL);
         if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, ct, j);
       }
+      /* The layout returns formals, not individual rest elements. Follow
+         plain actuals gathered into the rest during promotion too; emission
+         must not assume a String was pulled into a handle when it was not. */
+      int a = nt_ref(nt, u, "arguments"), n = 0;
+      const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+      int plain = 1;
+      while (n > 0 && (nt_kind(nt, args[n - 1]) == NK_KeywordHashNode || nt_kind(nt, args[n - 1]) == NK_BlockArgumentNode)) n--;
+      for (int j = 0; j < n; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
+      if (plain && cm->rest_idx >= 0)
+        for (int j = cm->rest_idx; j < n - cm->npost_rest; j++)
+          if (fwd_param_read(c, mi, pn, args[j])) appended |= fwd_param_appends(c, ct, j);
     }
   }
   g_fwd_poly_depth--;
+  if (nested) {
+    sb_mut_tab_free(&g_fwd_poly_seen);
+    g_fwd_poly_seen = outer_seen;
+  }
   return appended;
 }
 
@@ -21321,10 +21357,16 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   int r = fwd_poly_param_handed_on(c, mi, j);
   if (!r && (g_fwd_taint & 2)) r = -1;
   if (g_fwd_taint & 4) r = -2;
+  int complete = !(g_fwd_taint & 1);
   g_fwd_taint = outer;
-  if (cacheable) {
+  if (cacheable && complete) {
     slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, 1);
     *slot = (signed char)(r + 3);
+    /* A readonly root proves every reachable vertex readonly too. Cache
+       those results so querying all roots of a shared readonly graph does
+       not repeatedly rescan its suffixes. Positive answers are root-only. */
+    if (!r) for (int v = 0; v < g_fwd_poly_seen.n; v++)
+      *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 3;
   }
   return r;
 }

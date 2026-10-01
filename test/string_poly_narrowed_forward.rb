@@ -58,3 +58,36 @@ text = +"a\0bc"
 other = text
 reader.coerce(text)
 p text.bytes, other.bytes
+
+# Both rest positions converge on one appender. A visited parameter is not
+# a cached answer for the next rest position; asymmetric inputs detect a
+# lost second bit and the POLY -> rest promotion must preserve both boxes.
+def rest_grow(value)
+  value << '!' if value.is_a?(String)
+  nil
+end
+def rest_pair(left, right)
+  rest_grow(left)
+  rest_grow(right)
+  nil
+end
+def rest_relay(*r)
+  rest_pair(*r)
+  nil
+end
+def rest_entry(value, other)
+  rest_relay(other, value)
+  nil
+end
+rest_entry(0, 0)
+left = +'x'
+right = +'seed'
+alias_left = left
+alias_right = right
+rest_entry(left, right)
+p left, right, alias_left, alias_right
+begin
+  rest_entry('frozen'.freeze, +'other')
+rescue FrozenError
+  p :rest_frozen
+end

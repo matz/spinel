@@ -23,6 +23,7 @@ cases = {
   "ident" => ["ident(t) << '!'", "", "abc!"],
   "ternary" => ["(t.is_a?(String) ? t : nil) << '!'", "", "abc!"],
   "rest" => ["rest_store(t)", "", "abc!"],
+  "post_rest" => ["post_store(t)", "", "abc!"],
   "yield" => ["yield t", "", "abc!"],
   "unless_else" => ["unless t.is_a?(String); nil; else; a = [t]; a[0] << '!'; end", "", "abc!"],
   "append_and_store" => ["t << 'a'; a = [t]; a[0] << 'b'", "", "abcab"],
@@ -57,8 +58,24 @@ end
 end
 cases["override_bytesize"] = ["t.bytesize; nil", "$held << '!'", "abc!",
                                "$held = nil; class String; def bytesize; $held = self; 0; end; end"]
+cases["override_array_search"] = ["'abc'.split('\n').include?(t); nil", "$held << '!'", "abc!",
+                                  "$held = nil; class Array; def include?(value); $held = value; false; end; end"]
+cases["poly_receiver_rest"] = ["rest_receiver(t, Holder.new); nil", "", "abc!", <<~RUBY]
+  class Holder
+    def store(value); if value.is_a?(String); a = [value]; a[0] << '!'; end; nil; end
+  end
+  class Ignorer
+    def store(value) = nil
+  end
+  class Reader
+    def rest_receiver(value, receiver); rest_send(receiver, value); nil; end
+    def rest_send(receiver, *r); receiver.store(*r); nil; end
+  end
+  Reader.new.rest_receiver(0, Ignorer.new)
+RUBY
 cases["readonly"] = ["t.bytesize", "", "abc"]
 cases["readonly_guard_alias"] = ["return t if t.is_a?(Other); a = t.to_s; a.bytesize", "", "abc", "class Other; end"]
+cases["readonly_array_search"] = ["'abc'.split('\n').include?(t)", "", "abc"]
 
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
@@ -83,6 +100,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
         end
         def ident(t) = t
         def rest_store(*r); r[0] << '!'; nil; end
+        def post_store(*unused, last); a = [last]; a[0] << '!'; nil; end
       end
       reader = Reader.new
       reader.coerce(nil)
@@ -117,4 +135,5 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   end
 end
 abort failures.join("\n") unless failures.empty?
-puts "forward-escape-check: #{cases.length - 2} independent CRuby-validated refusals, 2 readonly controls pass"
+controls = cases.keys.count { |name| name.start_with?("readonly") }
+puts "forward-escape-check: #{cases.length - controls} independent CRuby-validated refusals, #{controls} readonly controls pass"

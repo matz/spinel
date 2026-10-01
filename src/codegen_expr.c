@@ -2432,10 +2432,11 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
        first, as a POLY local's marked read is (poly_strbuf_lift); an
        instance's field store takes its write barrier from gc_wb_insert. */
     if (c->poly_strbuf_lift[id] && !g_ie_nil_ivars && comp_ntype(c, id) == TY_POLY) {
+      unsigned char lift = c->poly_strbuf_lift[id];
       c->poly_strbuf_lift[id] = 0;
       Buf rl; memset(&rl, 0, sizeof rl);
       emit_expr_node(c, id, &rl);
-      c->poly_strbuf_lift[id] = 1;
+      c->poly_strbuf_lift[id] = lift;
       emit_poly_lift_ref(rl.p ? rl.p : "", b);
       free(rl.p);
       return;

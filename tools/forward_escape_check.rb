@@ -127,6 +127,27 @@ cases["root_literal_store"] = ["nil", "", "abc!", <<~RUBY]
     end
   end
 RUBY
+{ "super" => "super", "explicit" => "super(value)" }.each do |shape, call|
+  name = "root_store_#{shape}"
+  cases[name] = ["nil", "", "abc!", <<~RUBY]
+    class BoxParent
+      def initialize = @items = []
+      def store(value); @items.push(value); nil; end
+      def mutate; @items[-1] << '!'; nil; end
+    end
+    class BoxChild < BoxParent
+      def store(value) = #{call}
+    end
+    class Reader
+      def #{name}(data)
+        box = BoxChild.new
+        box.store(data)
+        box.mutate if data.is_a?(String)
+        nil
+      end
+    end
+  RUBY
+end
 
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|

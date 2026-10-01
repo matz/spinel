@@ -44986,6 +44986,10 @@ else {
                          : coerce_unknown_val ? hvt
                          : (is_poly_hash && vt_eff != TY_UNKNOWN && vt_eff != TY_POLY) ? vt_eff
                          : (vt_eff != TY_UNKNOWN ? vt_eff : TY_POLY);
+        /* a String stored as the shared handle (`hh[k] = +"d"` in a Hash's
+           default block, whose value is what the read answers): boxed once,
+           so the store and the expression's value are the one handle */
+        if (is_poly_hash && c->strbuf_box[argv[1]]) decl_type = TY_POLY;
         emit_ctype(c, decl_type, b);
         buf_printf(b, " _t%d = ", tv);
         /* When the slot is poly but the rhs has no type yet (e.g. `{}`),

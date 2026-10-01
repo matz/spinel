@@ -66,3 +66,11 @@ alias_c = c
 mixed_a(c, 2)
 mixed_b(2, c)
 p c.bytesize, alias_c.bytesize
+
+# Explicit keyword values are forwarding edges, not retained Hash elements.
+# Both the positional POLY entry and keyword destination must be examined.
+def keyword_entry(value) = keyword_middle(value)
+def keyword_middle(value) = keyword_leaf(text: value)
+def keyword_leaf(text:) = text.is_a?(String) ? text.bytesize : 0
+keyword_entry(1)
+p keyword_entry(text), text.bytes, other.bytes

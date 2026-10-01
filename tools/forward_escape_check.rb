@@ -92,12 +92,36 @@ RUBY
 cases["readonly"] = ["t.bytesize", "", "abc"]
 cases["readonly_guard_alias"] = ["return t if t.is_a?(Other); a = t.to_s; a.bytesize", "", "abc", "class Other; end"]
 cases["readonly_array_search"] = ["'abc'.split('\n').include?(t)", "", "abc"]
+cases["readonly_keyword"] = ["keyword_read(value: t)", "", "abc"]
+cases["keyword_escape"] = ["keyword_store(value: t)", "", "abc!"]
+cases["keyword_root"] = ["nil", "", "abc!"]
+cases["keyword_expression"] = ["keyword_store(value: (t.is_a?(String) ? t : nil))", "", "abc!"]
+cases["readonly_predicate"] = ["['abc'].any? { |other| other.eql?(t) }", "", "abc"]
+cases["predicate_escape"] = ["['abc'].any? { a = [t]; a[0] << '!' }; nil", "", "abc!"]
+cases["predicate_lambda"] = ["['abc'].any? { $later = -> { t.bytesize }; false }; nil",
+                            "s << '!'; raise 'stale capture' unless $later.call == 4", "abc!"]
+cases["override_predicate"] = ["['abc'].any? { t.bytesize }; nil",
+                              "s << '!'; raise 'stale capture' unless $later.call == 4", "abc!",
+                              "class Array; def any?(&block); $later = block; false; end; end"]
+cases["override_predicate_equality"] = ["['abc'].any? { |other| other.eql?(t) }; nil", "$held << '!'", "abc!",
+                                       "$held = nil; class String; def eql?(value); $held = value; false; end; end"]
+cases["root_literal_store"] = ["nil", "", "abc!", <<~RUBY]
+  class Reader
+    def root_literal_store(data)
+      items = [data]
+      items[0] << '!' if data.is_a?(String)
+      keyword_read(value: data)
+      nil
+    end
+  end
+RUBY
 
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
   cases.each do |name, (body, followup, want, prefix, guard, before)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
+    entry = name == "keyword_root" || name.start_with?("root_") ? name : "coerce"
     File.write(source, <<~RUBY)
       #{prefix}
       class Reader
@@ -120,12 +144,18 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
         def via_rest(*r); rest_sink(*r); nil; end
         def rest_sink(t); if t.is_a?(String); a = [t]; a[0] << '!'; end; nil; end
         def post_store(*unused, last); a = [last]; a[0] << '!'; nil; end
+        def keyword_root(data) = keyword_store(value: data)
+        def keyword_read(value:) = value.is_a?(String) ? value.bytesize : 0
+        def keyword_store(value:)
+          if value.is_a?(String); a = [value]; a[0] << '!'; end
+          nil
+        end
       end
       reader = Reader.new
-      reader.coerce(nil)
+      reader.#{entry}(#{entry == "coerce" ? "nil" : "1"})
       s = +'abc'
       other = s
-      result = reader.coerce(s)
+      result = reader.#{entry}(s)
       #{followup}
       p s, other
     RUBY

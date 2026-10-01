@@ -91,3 +91,19 @@ begin
 rescue FrozenError
   p :rest_frozen
 end
+
+# A raw boxed direct store plus a readonly edge is not a transitive copy
+# escape. Its existing container-handle promotion must still preserve aliases.
+def direct_box_reader(value) = value.is_a?(String) ? value.bytesize : 0
+def direct_box_store(value)
+  items = []
+  items.push(value)
+  items[0] << '!' if value.is_a?(String)
+  direct_box_reader(value)
+  nil
+end
+direct_box_store(1)
+raw = +'raw'
+raw_alias = raw
+direct_box_store(raw)
+p raw, raw_alias

@@ -1143,7 +1143,7 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  printf 'def b%s(x:); a%s(x: x); b%s(x: x); end\n' $$i $$j $$j; \
 	  i=$$j; \
 	done > "$$tmp/diamond.rb"; \
-	printf 'def a24(x:) = x.to_s.size\ndef b24(x:) = x.to_s.size\nh = {x: +"x"}\na0(**h)\n' >> "$$tmp/diamond.rb"; \
+	printf 'def a24(x:) = x.to_s.size\ndef b24(x:) = x.to_s.size\ndef entry(x) = a0(x: x)\nentry(nil)\ns = +"x"\nentry(s)\n' >> "$$tmp/diamond.rb"; \
 	if ! $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10) $(SPINEL) "$$tmp/diamond.rb" -c -o "$$tmp/diamond.c" >"$$tmp/diamond.out" 2>&1; then \
 	  echo "reject-test: FAIL (a read-only forwarding diamond refused or timed out)"; sed -n 1,5p "$$tmp/diamond.out"; ok=0; fi; \
 	t=test/reject/string_rest_splat_yield.rb; \

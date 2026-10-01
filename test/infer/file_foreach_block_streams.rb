@@ -6,5 +6,7 @@ n = 0
 File.foreach(path) { |l| n += l.size }
 File.foreach(path, chomp: true) { |l| n += l.size }
 File.foreach(path, "b", 1) { |l| n += l.size }
+sep = "b"
+File.foreach(path, sep, chomp: true) { |l| n += l.size }
 p n
 File.delete(path)

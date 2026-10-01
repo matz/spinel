@@ -1477,7 +1477,15 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       if (ln - 1 < sizeof base) {
         memcpy(base, name, ln - 1); base[ln - 1] = '\0';
         int wdefc = -1;
-        if (comp_writer_in_chain(c, cid, base, &wdefc) && argc >= 1) {
+        /* only while the attribute's writer is the one the call reaches: an
+           explicit `def x=` at an equal-or-more-derived class wins, as the
+           emitter decides (comp_resolve_member), and its value is the
+           argument as written (the rule below). Typed from the attribute's
+           boxed slot instead, the expression read as poly while the emitter
+           handed back the raw argument (`def x=(v) = super` under
+           --int-overflow=promote). */
+        if (comp_writer_in_chain(c, cid, base, &wdefc) && argc >= 1 &&
+            comp_resolve_member(c, cid, base, 1, NULL, NULL) == SP_MEMBER_ATTR) {
           TyKind rhsk = infer_type(c, argv[0]);
           /* codegen boxes a scalar rhs into a poly ivar slot, so the assignment
              expression's C value is that boxed poly -- report poly to match. */
@@ -1519,6 +1527,21 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) { *out = TY_STRING; return 1; }
   }
   return 0;
+}
+
+/* The blockless map and selecting calls a boxed Array answers an Enumerator
+   for, beside each and its kin. A chained `.each { }` hands them the block
+   (desugared back to the block form, #4331); typed, they stayed unresolved,
+   and `h[:k].map.each { }` reported "undefined method 'each' for unknown". */
+int poly_blockless_enum_name(const char *name) {
+  return sp_streq(name, "map") || sp_streq(name, "collect") || sp_streq(name, "select") ||
+         sp_streq(name, "filter") || sp_streq(name, "find_all") || sp_streq(name, "reject");
+}
+
+/* A call written `recv&.name`. */
+static int call_is_safe_nav(const NodeTable *nt, int id) {
+  const char *op = nt_str(nt, id, "call_operator");
+  return op && sp_streq(op, "&.");
 }
 
 /* Boxed (poly) receivers: the run of poly-face arms of infer_call */
@@ -1830,7 +1853,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      stayed unresolved the same way. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "each") || sp_streq(name, "each_entry") ||
-       sp_streq(name, "reverse_each")) &&
+       sp_streq(name, "reverse_each") ||
+       /* `v&.select` keeps the boxed answer, which holds the nil a nil
+          receiver gives: an Enumerator slot reads it back as one */
+       (poly_blockless_enum_name(name) && !call_is_safe_nav(nt, id))) &&
       !an_user_defines_or_reads(c, name))
     { *out = TY_ENUMERATOR; return 1; }
   /* A blockless each_char / each_line / each_byte / each_codepoint on the same

@@ -18,6 +18,8 @@ __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const ch
 int ie_class_of(Compiler *c, int node);
 int attr_reader_ty(Compiler *c, int cid, const char *name, TyKind *out);
 int ie_poly_classes_at(Compiler *c, int node, int *out, int max);
+/* Does the program make a bare Object (`Object.new`)? (analyze_infer.c) */
+int an_program_news_object(Compiler *c);
 int ie_kernel_global(const char *n);
 
 /* Forward declarations for FFI helpers defined later in this file. */

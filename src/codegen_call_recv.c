@@ -5921,6 +5921,17 @@ else {
   return 0;
 }
 
+static void emit_push_hash_key(TyKind kt, int dest, int th, int ti, Buf *b) {
+  if (kt == TY_SYMBOL)
+    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d->order[_t%d]));", dest, th, ti);
+  else if (kt == TY_STRING)
+    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d->order[_t%d]));", dest, th, ti);
+  else if (kt == TY_INT)
+    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d->order[_t%d]));", dest, th, ti);
+  else
+    buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->keys[_t%d->order[_t%d]]);", dest, th, th, ti);
+}
+
 /* Emit a statement-expression materializing a hash's entries as a PolyArray of
    [key, value] poly pairs in insertion order. The source hash is GC-rooted
    because each pair allocates inside the walk. Shared by Hash#to_a/#entries and
@@ -5933,14 +5944,7 @@ void emit_hash_pairs_expr(Compiler *c, int recv, TyKind rt, const char *hn, Buf 
   buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
   buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);
   buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tp, tp);
-  if (kt == TY_SYMBOL)
-    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d->order[_t%d]));", tp, th, ti);
-  else if (kt == TY_STRING)
-    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d->order[_t%d]));", tp, th, ti);
-  else if (kt == TY_INT)
-    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d->order[_t%d]));", tp, th, ti);
-  else
-    buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->keys[_t%d->order[_t%d]]);", tp, th, th, ti);
+  emit_push_hash_key(kt, tp, th, ti, b);
   if (rt == TY_POLY_POLY_HASH)
     buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->vals[_t%d->order[_t%d]]);", tp, th, th, ti);
   else if (vt == TY_POLY)
@@ -6081,8 +6085,14 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && ty_is_hash(rt)) {
     /* compare_by_identity? is always false for a value-keyed hash; the mutating
        compare_by_identity cannot be honored (keys are compared by value) and is
-       rejected loudly rather than silently no-op'd. */
-    if (sp_streq(name, "compare_by_identity?") && argc == 0) { buf_puts(b, "0"); return 1; }
+       rejected loudly rather than silently no-op'd. The receiver is still
+       evaluated, as CRuby evaluates it: a bare `0` dropped the call, so
+       `g.compare_by_identity?` never ran g -- its side effects and any
+       exception it raised were lost. */
+    if (sp_streq(name, "compare_by_identity?") && argc == 0) {
+      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)");
+      return 1;
+    }
     /* compact!: drop nil-valued pairs in place; self when changed, nil
        when a no-op (only the poly-valued variants can hold nil) */
     if (sp_streq(name, "compact!") && argc == 0 &&
@@ -7529,14 +7539,7 @@ else {
         buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b);
         buf_printf(b, "; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
         buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);
-        if (kt == TY_SYMBOL)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d->order[_t%d]));", tr, th, ti);
-        else if (kt == TY_STRING)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d->order[_t%d]));", tr, th, ti);
-        else if (kt == TY_INT)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d->order[_t%d]));", tr, th, ti);
-        else
-          buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->keys[_t%d->order[_t%d]]);", tr, th, th, ti);
+        emit_push_hash_key(kt, tr, th, ti, b);
         if (vt == TY_POLY)
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_%sHash_get(_t%d, _t%d->order[_t%d]));", tr, hn, th, th, ti);
         else if (vt == TY_INT)
@@ -7687,14 +7690,7 @@ else {
         }
         /* build pair */
         buf_printf(b, " _t%d = sp_PolyArray_new();", tr);
-        if (kt == TY_SYMBOL)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d->order[_t%d]));", tr, th, ti);
-        else if (kt == TY_STRING)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d->order[_t%d]));", tr, th, ti);
-        else if (kt == TY_INT)
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d->order[_t%d]));", tr, th, ti);
-        else
-          buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->keys[_t%d->order[_t%d]]);", tr, th, th, ti);
+        emit_push_hash_key(kt, tr, th, ti, b);
         if (vt == TY_POLY)
           buf_printf(b, " sp_PolyArray_push(_t%d, %s);", tr, vget);
         else if (vt == TY_INT)
@@ -8923,8 +8919,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "squeeze") && argc == 0) buf_printf(b, "sp_str_squeeze(%s)", r);
       else if (sp_streq(name, "squeeze") && argc == 1) { buf_printf(b, "sp_str_squeeze_chars(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if (sp_streq(name, "squeeze") && argc >= 2) {
-        buf_printf(b, "sp_str_squeeze_n(%s, (const char *[]){", r);
+      else if ((sp_streq(name, "squeeze") || sp_streq(name, "delete") || sp_streq(name, "count")) && argc >= 2) {
+        buf_printf(b, "sp_str_%s_n(%s, (const char *[]){", name, r);
         for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
         buf_printf(b, "}, %d)", argc);
       }
@@ -8933,18 +8929,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "delete") && argc == 0) { buf_printf(b, "(%s)", r); return 1; }
       else if (sp_streq(name, "delete") && argc == 1) { buf_printf(b, "sp_str_delete(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if (sp_streq(name, "delete") && argc >= 2) {
-        buf_printf(b, "sp_str_delete_n(%s, (const char *[]){", r);
-        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
-        buf_printf(b, "}, %d)", argc);
-      }
       else if (sp_streq(name, "count") && argc == 0) { buf_printf(b, "(sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into String\"), 0LL)"); return 1; }
       else if (sp_streq(name, "count") && argc == 1) { buf_printf(b, "sp_str_count(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if (sp_streq(name, "count") && argc >= 2) {
-        buf_printf(b, "sp_str_count_n(%s, (const char *[]){", r);
-        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
-        buf_printf(b, "}, %d)", argc);
-      }
       else if (sp_streq(name, "lines") && argc == 0) buf_printf(b, "sp_str_lines(%s)", r);
       else if (sp_streq(name, "lines") && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
         buf_printf(b, "sp_str_lines_sep(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
@@ -14445,6 +14431,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         else emit_unbox_text(c, t, val, b);
         buf_puts(b, "; break;");
       }
+      /* a bare Object keeps its ivars in a table of its own */
+      buf_printf(b, " case SP_BUILTIN_OBJECT: sp_Object_ivar_set((sp_Object *)_t%d.v.p, sp_sym_intern(\"%s\"), _ivs%d); break;",
+                 tv, sym, tv);
       buf_puts(b, " } ");
       if (res != TY_POLY && res != TY_UNKNOWN) {
         char ivn[24]; snprintf(ivn, sizeof ivn, "_ivs%d", tv);
@@ -14487,6 +14476,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         emit_boxed_text(c, t, fld, b);
         buf_puts(b, "; break;");
       }
+      buf_printf(b, " case SP_BUILTIN_OBJECT: _ivg%d = sp_Object_ivar_get((sp_Object *)_t%d.v.p, sp_sym_intern(\"%s\")); break;",
+                 tv, tv, sym);
       buf_puts(b, " } ");
       if (res != TY_POLY && res != TY_UNKNOWN) {
         char ivn[24]; snprintf(ivn, sizeof ivn, "_ivg%d", tv);
@@ -14496,6 +14487,52 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       else buf_printf(b, "_ivg%d; })", tv);
       return 1;
     }
+  }
+
+  /* instance_variable_defined?(:@x) and instance_variables on a POLY
+     receiver: each instantiated class answers from its layout (as the typed
+     forms do), a bare Object from its own table (sp_Object_ivar_defined,
+     sp_Object_ivars), anything else has none. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variable_defined?") && argc == 1 &&
+      nt_ref(nt, id, "block") < 0 && nt_type(nt, argv[0]) &&
+      (sp_streq(nt_type(nt, argv[0]), "SymbolNode") || sp_streq(nt_type(nt, argv[0]), "StringNode"))) {
+    const char *sym = sp_streq(nt_type(nt, argv[0]), "SymbolNode")
+                        ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
+    if (sym && sym[0] == '@') {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+      emit_expr(c, recv, b);
+      buf_printf(b, "; sp_bool _ivd%d = FALSE; if (_t%d.tag == SP_TAG_OBJ) switch (_t%d.cls_id) {", tv, tv, tv);
+      for (int k = 0; k < c->nclasses; k++) {
+        if (!c->classes[k].instantiated) continue;
+        int iv = comp_ivar_index(&c->classes[k], sym);
+        if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) continue;
+        buf_printf(b, " case %d: _ivd%d = TRUE; break;", k, tv);
+      }
+      buf_printf(b, " case SP_BUILTIN_OBJECT: _ivd%d = sp_Object_ivar_defined((sp_Object *)_t%d.v.p, "
+                    "sp_sym_intern(\"%s\")); break; } _ivd%d; })", tv, tv, sym, tv);
+      return 1;
+    }
+  }
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variables") && argc == 0 &&
+      nt_ref(nt, id, "block") < 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_ivl%d = NULL; if (_t%d.tag == SP_TAG_OBJ) switch (_t%d.cls_id) {",
+               tv, tv, tv, tv);
+    for (int k = 0; k < c->nclasses; k++) {
+      ClassInfo *ivc = &c->classes[k];
+      if (!ivc->instantiated) continue;
+      buf_printf(b, " case %d: _ivl%d = sp_PolyArray_new();", k, tv);
+      /* Data/Struct members are NOT @-instance variables in CRuby (#2849) */
+      for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++)
+        buf_printf(b, " sp_PolyArray_push(_ivl%d, sp_box_sym(sp_sym_intern(\"%s\")));", tv, ivc->ivars[ji]);
+      buf_puts(b, " break;");
+    }
+    buf_printf(b, " case SP_BUILTIN_OBJECT: _ivl%d = sp_Object_ivars((sp_Object *)_t%d.v.p); break; }"
+                  " if (!_ivl%d) _ivl%d = sp_PolyArray_new(); _ivl%d; })", tv, tv, tv, tv, tv);
+    return 1;
   }
 
   /* poly receiver `.to_i(base)`: only String#to_i takes a radix. When the value

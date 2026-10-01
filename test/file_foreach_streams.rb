@@ -2,7 +2,8 @@
 # the IO's each_line -- rather than reading every line into an array first, and
 # closes it however the block leaves (break, return, raise). The separator,
 # limit and chomp: arguments mean what they mean to each_line; another keyword
-# (mode:) keeps the readlines form, and so does the blockless Enumerator.
+# (mode:) or an argument that runs code keeps the readlines form, and so does
+# the blockless Enumerator.
 require "tmpdir"
 path = File.join(Dir.tmpdir, "sp_file_foreach_streams_#{Process.pid}.txt")
 File.write(path, "one\ntwo\n\nthree;four\nfive")
@@ -26,4 +27,14 @@ rescue ArgumentError => ex
 end
 p File.foreach(path).to_a.size
 z = []; File.foreach(path, mode: "r") { |l| z << l }; p z.size
+# a separator from a local streams; one an expression computes is evaluated
+# before the file is opened, as in CRuby, even when the open then fails
+sep = ";"; w = []; File.foreach(path, sep, chomp: true) { |l| w << l }; p w
+log = []
+begin
+  File.foreach(path + ".missing", (log << :sep; "\n")) { |l| log << l }
+rescue Errno::ENOENT
+  log << :enoent
+end
+p log
 File.delete(path)

@@ -8,3 +8,11 @@ p s({}).compare_by_identity?
 p s({ "a" => 1 }).compare_by_identity?
 h = {}
 p h.compare_by_identity?
+# The receiver is evaluated before the answer, as CRuby evaluates it: the
+# typed predicate folded to a bare false and dropped the call, side effect and
+# all.
+def g
+  puts "g ran"
+  { "b" => 2 }
+end
+p g.compare_by_identity?

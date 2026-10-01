@@ -6507,6 +6507,14 @@ static int method_bm_ret_kind(Compiler *c, Scope *m, int *out_ret) {
   return 1;
 }
 
+static int method_def_has_keywords(Compiler *c, const Scope *m) {
+  int pn = m->def_node >= 0 ? nt_ref(c->nt, m->def_node, "parameters") : -1;
+  if (pn < 0) return 0;
+  int nk = 0;
+  nt_arr(c->nt, pn, "keywords", &nk);
+  return nk > 0 || nt_ref(c->nt, pn, "keyword_rest") >= 0;
+}
+
 static int method_legacy_int_abi(Compiler *c, int mi, int recv_bound, char *out_sig, size_t sigcap,
                                  int *out_fixed, int *out_rest, int *out_ret) {
   if (sigcap) out_sig[0] = 0;
@@ -6550,18 +6558,10 @@ static int method_legacy_int_abi(Compiler *c, int mi, int recv_bound, char *out_
      the static cast cannot do, so decline every rest parameter (named or
      anonymous). */
   if (m->rest_idx >= 0) return 0;
-  if (m->def_node >= 0) {
-    int pn = nt_ref(c->nt, m->def_node, "parameters");
-    if (pn >= 0) {
-      int nk = 0;
-      nt_arr(c->nt, pn, "keywords", &nk);
-      /* Any keyword parameter (optional or required) is matched by name in
-         CRuby; the positional legacy ABI would feed it a positional argument
-         or nothing. */
-      if (nk > 0) return 0;
-      if (nt_ref(c->nt, pn, "keyword_rest") >= 0) return 0;
-    }
-  }
+  /* Any keyword parameter (optional or required) is matched by name in
+     CRuby; the positional legacy ABI would feed it a positional argument
+     or nothing. */
+  if (method_def_has_keywords(c, m)) return 0;
   /* Classify every fixed parameter against the sp_int register the legacy
      cast writes. All-scalar (int/bool/symbol/nil/untyped) and all-pointer
      (heap object / Proc) targets are each safe for a matching argument list;
@@ -6623,15 +6623,7 @@ static int method_poly_abi(Compiler *c, int mi, int recv_bound, int *out_fixed, 
   if (cmethod_takes_self_cls(c, mi)) return 0;
   if (m->kwrest_idx >= 0 || m->npost_rest > 0) return 0;
   if (m->rest_idx >= 0) return 0;
-  if (m->def_node >= 0) {
-    int pn = nt_ref(c->nt, m->def_node, "parameters");
-    if (pn >= 0) {
-      int nk = 0;
-      nt_arr(c->nt, pn, "keywords", &nk);
-      if (nk > 0) return 0;
-      if (nt_ref(c->nt, pn, "keyword_rest") >= 0) return 0;
-    }
-  }
+  if (method_def_has_keywords(c, m)) return 0;
   int nfixed = m->nparams - pstart;
   if (nfixed > SP_PROC_ARG_SLOTS) return 0;   /* the boxed slots the side channel carries */
   for (int k = pstart; k < pstart + nfixed; k++) {
@@ -21599,6 +21591,18 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
     emit_boxed(c, recv, b); buf_puts(b, ")");
     return 1;
   }
+  /* A blockless map or selecting call there is the same snapshot under its
+     own #inspect name, as the typed array arm below builds it. */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      comp_ntype(c, recv) == TY_POLY && comp_ntype(c, id) == TY_ENUMERATOR &&
+      poly_blockless_enum_name(name)) {
+    int te = ++g_tmp;
+    buf_printf(b, "({ sp_Enumerator *_t%d = sp_poly_blockless_enum(", te);
+    emit_boxed(c, recv, b);
+    buf_printf(b, ", \"%s\"); _t%d->meth = SPL(\"%s\"); _t%d; })", name, te,
+               sp_streq(name, "collect") ? "map" : sp_streq(name, "find_all") ? "select" : name, te);
+    return 1;
+  }
   if (recv >= 0 && argc <= sp_streq(name, "find") && nt_ref(nt, id, "block") < 0 &&
       (ty_is_array(comp_ntype(c, recv)) ||
        /* a bare [] literal types UNKNOWN until pushes promote it */
@@ -24324,27 +24328,14 @@ static int refuse_param_copies_dm(Compiler *c, int mi, int j, int arg) {
   return refuse_param_copies(c, mi, j, arg);
 }
 
-/* A splat of a local Array the program changes after its literal, holding
-   a String the container rule cannot make the handle (a global pushed into
-   it, another Array's contents through `replace`), into a parameter that
-   appends: what lands there is a copy. */
-static void refuse_changed_splat(Compiler *c, int id, const char *name, int recv, int dyn) {
+/* The parameter at or past position p of the method call `id` (`name` on
+   `recv`) binds that the method appends to, for a splat's refusal: *pname
+   and *mname name it, or *pname stays NULL. */
+static void splat_appended_param(Compiler *c, int id, const char *name, int recv, int dyn, int p,
+                                 const char **pname_out, const char **mname_out) {
   const NodeTable *nt = c->nt;
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  int sp = -1, p = 0;
-  for (int k = 0; k < ac && sp < 0; k++) {
-    NodeKind ak = nt_kind(nt, av[k]);
-    if (ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return;
-    if (ak != NK_SplatNode) { p++; continue; }
-    int x = nt_ref(nt, av[k], "expression");
-    if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return;
-    const char *xn = nt_str(nt, x, "name");
-    Scope *xs = xn ? comp_scope_of(c, x) : NULL;
-    if (!xs || !an_local_array_changed_x(c, xn, xs) || !an_local_array_stores_unshared(c, xn, xs)) return;
-    sp = av[k];
-  }
-  if (sp < 0) return;
   const char *pname = NULL, *mname = NULL;
   if (dyn && dyn_call_site(c, id)) {
     for (int j = p; j < 16 && !pname; j++) {
@@ -24375,6 +24366,97 @@ static void refuse_changed_splat(Compiler *c, int id, const char *name, int recv
       }
     }
   }
+  *pname_out = pname; *mname_out = mname;
+}
+
+/* An ivar, global or class variable a call hands over at or past its first
+   splat: an element of a splatted Array literal, or of any Array literal
+   written to the local the splat reads (another write does not clear it:
+   the local may still hold the literal at the call), or an argument written
+   after the splat. Its position is the run time's, so the binder boxes it
+   into the gathered Array as a copy. Only an ivar can be the handle there,
+   and one marked as it goes over as it: a global's or a class variable's
+   marked read boxes a fresh handle of its bytes. Answers the read, or -1. */
+static int splat_nonlocal_string(Compiler *c, const int *av, int ac, int fs, int depth) {
+  const NodeTable *nt = c->nt;
+  if (depth > 4) return -1;
+  for (int k = 0; k < ac; k++) {
+    NodeKind ak = nt_kind(nt, av[k]);
+    if (ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) break;
+    if (ak != NK_SplatNode) {
+      int shared;
+      const char *kind = k >= fs ? strvar_arg(c, av[k], &shared) : NULL;
+      if (kind && ak != NK_LocalVariableReadNode &&
+          (ak != NK_InstanceVariableReadNode || !c->strbuf_box[av[k]])) return av[k];
+      continue;
+    }
+    int x = nt_ref(nt, av[k], "expression"), lits[16], nl = 0;
+    if (x >= 0 && nt_kind(nt, x) == NK_ArrayNode) lits[nl++] = x;
+    else if (x >= 0 && nt_kind(nt, x) == NK_LocalVariableReadNode) {
+      const char *xn = nt_str(nt, x, "name");
+      Scope *xs = xn ? comp_scope_of(c, x) : NULL;
+      for (int w = xs ? comp_lvw_first_sc(c, (int)(xs - c->scopes), xn) : -1; w >= 0 && nl < 16;
+           w = comp_lvw_next_sc(c, w)) {
+        if (comp_scope_of(c, w) != xs || nt_kind(nt, w) != NK_LocalVariableWriteNode ||
+            !sp_streq(nt_str(nt, w, "name"), xn)) continue;
+        int wv = nt_ref(nt, w, "value");
+        if (wv >= 0 && nt_kind(nt, wv) == NK_ArrayNode) lits[nl++] = wv;
+      }
+    }
+    for (int l = 0; l < nl; l++) {
+      int en = 0; const int *ev = nt_arr(nt, lits[l], "elements", &en);
+      int r = splat_nonlocal_string(c, ev, en, 0, depth + 1);
+      if (r >= 0) return r;
+    }
+  }
+  return -1;
+}
+/* `m(*[@v])`, `m(*s)` with `s = [$g]`, `m(*[], @v)` into a parameter the
+   method appends to: the String goes over as a copy, refused as `super`'s
+   is (refuse_super_splat). */
+static void refuse_splat_nonlocal(Compiler *c, int id, const char *name, int recv, int dyn) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  int fs = -1;
+  for (int k = 0; k < ac && fs < 0; k++) {
+    NodeKind ak = nt_kind(nt, av[k]);
+    if (ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return;
+    if (ak == NK_SplatNode) fs = k;
+  }
+  if (fs < 0) return;
+  int sv = splat_nonlocal_string(c, av, ac, fs, 0);
+  if (sv < 0) return;
+  const char *pname = NULL, *mname = NULL;
+  splat_appended_param(c, id, name, recv, dyn, fs, &pname, &mname);
+  if (!pname) return;
+  char mt[96]; if (mname) snprintf(mt, sizeof mt, "`%s`", mname);
+  refuse_string_copy(c, sv, mname ? mt : NULL, pname, "a splat", "through a splat");
+}
+
+/* A splat of a local Array the program changes after its literal, holding
+   a String the container rule cannot make the handle (a global pushed into
+   it, another Array's contents through `replace`), into a parameter that
+   appends: what lands there is a copy. */
+static void refuse_changed_splat(Compiler *c, int id, const char *name, int recv, int dyn) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  int sp = -1, p = 0;
+  for (int k = 0; k < ac && sp < 0; k++) {
+    NodeKind ak = nt_kind(nt, av[k]);
+    if (ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return;
+    if (ak != NK_SplatNode) { p++; continue; }
+    int x = nt_ref(nt, av[k], "expression");
+    if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return;
+    const char *xn = nt_str(nt, x, "name");
+    Scope *xs = xn ? comp_scope_of(c, x) : NULL;
+    if (!xs || !an_local_array_changed_x(c, xn, xs) || !an_local_array_stores_unshared(c, xn, xs)) return;
+    sp = av[k];
+  }
+  if (sp < 0) return;
+  const char *pname = NULL, *mname = NULL;
+  splat_appended_param(c, id, name, recv, dyn, p, &pname, &mname);
   if (!pname) return;
   char mt[96]; if (mname) snprintf(mt, sizeof mt, "`%s`", mname);
   refuse_string_copy(c, sp, mname ? mt : NULL, pname, "a splat of an Array the program changes",
@@ -24423,8 +24505,10 @@ int splat_string_var(Compiler *c, const int *av, int ac, int *fs) {
 }
 
 /* `super(*s)`, `super(*e, v)` into a method that appends to a parameter at
-   or past the splat's position: not shared yet, refused rather than
-   copied. */
+   or past the splat's position: the String variable is pulled into the
+   handle (promote_spread_string_args), but for one that cannot be -- an
+   ivar that is no handle, a global or class variable -- which is refused
+   rather than copied. */
 void refuse_super_splat(Compiler *c, int id, int target) {
   const NodeTable *nt = c->nt;
   if (target < 0 || nt_kind(nt, id) != NK_SuperNode) return;
@@ -24644,6 +24728,7 @@ static void refuse_string_copies(Compiler *c, int id) {
   int dyn = sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]") ||
             sp_streq(name, "yield") || sp_streq(name, "===");
   refuse_changed_splat(c, id, name, recv, dyn);
+  refuse_splat_nonlocal(c, id, name, recv, dyn);
   if (!dyn) refuse_unplaced_lead(c, id, name, recv);
   /* a proc, a lambda or a Method: shared, unless the String is a variable
      the call cannot pull into the handle, or the target is reached through
@@ -26591,6 +26676,21 @@ static void gets_sep_arg_texts(Compiler *c, const int *argv, int argc, int stric
   else buf_puts(lim, "0");
   buf_puts(chomp, gchomp.p ? gchomp.p : "0");
   free(gchomp.p);
+}
+
+/* Do a line reader's arguments come through a splat or a `**`? Their count
+   and kinds are then the run time's, which gets_sep_arg_texts cannot read:
+   it sees one array or hash node, and dropped the separator, the limit and
+   `chomp:` alike. */
+static int io_line_args_spread(const NodeTable *nt, const int *argv, int argc) {
+  for (int k = 0; k < argc; k++) {
+    if (nt_kind(nt, argv[k]) == NK_SplatNode) return 1;
+    if (nt_kind(nt, argv[k]) != NK_KeywordHashNode) continue;
+    int en = 0; const int *els = nt_arr(nt, argv[k], "elements", &en);
+    for (int e = 0; e < en; e++)
+      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) return 1;
+  }
+  return 0;
 }
 
 static void emit_gets_sep_args(Compiler *c, const int *argv, int argc, Buf *b) {
@@ -29564,9 +29664,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
        ((comp_ntype(c, recv) == TY_RATIONAL || comp_ntype(c, recv) == TY_FLOAT ||
          comp_ntype(c, recv) == TY_BIGINT) &&
         sp_streq(name, "step")))) {
+    /* the receiver is read twice, by the loop and as the answer: one that
+       acts (`next_n.times { }`) is bound once */
+    int bound = iter_recv_bind_once(c, recv);
     buf_puts(b, "({ ");
     emit_iteration_stmt(c, id, b, 0);
     emit_expr(c, recv, b); buf_puts(b, "; })");
+    if (bound) g_n_argov--;
     return;
   }
   /* n.times / lo.upto(hi) / hi.downto(lo) without block: produce sp_Range for chaining */
@@ -33049,12 +33153,47 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
          in that slot alone. */
       /* the separator, the limit and `chomp:` (#2810) are evaluated once,
          ahead of the loop, as CRuby evaluates them */
-      Buf esep, elim, echomp; memset(&esep, 0, sizeof esep); memset(&elim, 0, sizeof elim); memset(&echomp, 0, sizeof echomp);
-      gets_sep_arg_texts(c, argv, argc, 1, &esep, &elim, &echomp);
       int ls = ++g_tmp, ll = ++g_tmp, lc = ++g_tmp;
-      buf_printf(b, "const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); sp_int _t%d = %s; sp_bool _t%d = %s;",
-                 ls, esep.p, ls, ll, elim.p, lc, echomp.p);
-      free(esep.p); free(elim.p); free(echomp.p);
+      if (io_line_args_spread(nt, argv, argc)) {
+        /* a splat or a `**` carries them: the positional ones are gathered
+           into a list and read as CRuby reads them (sp_io_line_args), and
+           `chomp:` is looked up in the call's keywords merged in order */
+        int tpa = ++g_tmp, kwh = -1;
+        buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tpa, tpa);
+        if (argc > 0 && nt_kind(nt, argv[argc - 1]) == NK_KeywordHashNode) kwh = argv[argc - 1];
+        emit_push_arg_list(c, argv, kwh >= 0 ? argc - 1 : argc, tpa, b);
+        /* every argument is evaluated before any of them is checked */
+        int th = ++g_tmp, any = kwh >= 0 ? poly_kw_any_key(c, kwh) : 0;
+        if (kwh >= 0) emit_poly_kw_all(c, kwh, th, any, 1, b);
+        buf_printf(b, "const char *_t%d = NULL; SP_GC_ROOT_STR(_t%d); sp_int _t%d = 0; "
+                      "sp_io_line_args(_t%d, &_t%d, &_t%d); sp_bool _t%d = 0; ",
+                   ls, ls, ll, tpa, ls, ll, lc);
+        if (kwh >= 0) {
+          int chs = comp_sym_intern(c, "chomp");
+          if (any)
+            buf_printf(b, "if (sp_PolyPolyHash_has_key(_t%d, sp_box_sym((sp_sym)%d))) "
+                          "_t%d = sp_poly_truthy(sp_PolyPolyHash_get(_t%d, sp_box_sym((sp_sym)%d))); ",
+                       th, chs, lc, th, chs);
+          else
+            buf_printf(b, "if (sp_SymPolyHash_has_key(_t%d, (sp_sym)%d)) "
+                          "_t%d = sp_poly_truthy(sp_SymPolyHash_get(_t%d, (sp_sym)%d)); ",
+                       th, chs, lc, th, chs);
+        }
+      }
+      else {
+        Buf esep, elim, echomp; memset(&esep, 0, sizeof esep); memset(&elim, 0, sizeof elim); memset(&echomp, 0, sizeof echomp);
+        gets_sep_arg_texts(c, argv, argc, 1, &esep, &elim, &echomp);
+        buf_printf(b, "const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); sp_int _t%d = %s; sp_bool _t%d = %s;",
+                   ls, esep.p, ls, ll, elim.p, lc, echomp.p);
+        free(esep.p); free(elim.p); free(echomp.p);
+        /* an Integer argument is the limit (gets_sep_arg_texts), and 0 is
+           CRuby's ArgumentError, where sp_File_gets_sep reads it as none */
+        for (int k = 0; k < argc; k++)
+          if (comp_ntype(c, argv[k]) == TY_INT) {
+            buf_printf(b, " if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"invalid limit: 0 for each_line\");", ll);
+            break;
+          }
+      }
       buf_printf(b, "const char *_t%d = NULL; SP_GC_ROOT_STR(_t%d);"
                     " while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d, _t%d)) != NULL) {",
                  lt, lt, lt, rf, ls, ll, lc);

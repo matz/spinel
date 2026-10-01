@@ -1,0 +1,19 @@
+[:sep, :ch, "one\ntwo\r\nthree", "four\n"]
+[:sep, :ch, :enoent]
+[:path, :lim, :enoent]
+"on"
+"one"
+"one"
+"one\ntwo\r\nthree"
+"four\n"
+"one\ntwo\r\nthree;four\n"
+[1, "one\n"]
+[2, "one\n"]
+"one\n"
+"two\r\n"
+"three;four\n"
+";"
+"one\n"
+"two\r\n"
+"three;four\n"
+"nope"

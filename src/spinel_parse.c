@@ -2102,17 +2102,20 @@ static char **sp_req_feats = NULL;
 static int sp_req_feats_n = 0;
 static int sp_req_feats_cap = 0;
 
+static char **sp_grow_strs(char **a, int n, int *cap, int init) {
+  if (n < *cap) return a;
+  int nc = *cap == 0 ? init : *cap * 2;
+  char **np = (char **)realloc(a, sizeof(char *) * nc);
+  if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  *cap = nc;
+  return np;
+}
+
 void sp_feature_mark(const char *name) {
   if (!name) return;
   for (int i = 0; i < sp_req_feats_n; i++)
     if (strcmp(sp_req_feats[i], name) == 0) return;
-  if (sp_req_feats_n >= sp_req_feats_cap) {
-    int new_cap = sp_req_feats_cap == 0 ? 64 : sp_req_feats_cap * 2;
-    char **np = (char **)realloc(sp_req_feats, sizeof(char *) * new_cap);
-    if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-    sp_req_feats = np;
-    sp_req_feats_cap = new_cap;
-  }
+  sp_req_feats = sp_grow_strs(sp_req_feats, sp_req_feats_n, &sp_req_feats_cap, 64);
   sp_req_feats[sp_req_feats_n++] = strdup(name);
 }
 
@@ -2146,13 +2149,7 @@ static int sp_feature_roots_cap = 0;
 
 void sp_add_feature_root(const char *dir) {
   if (!dir) return;
-  if (sp_feature_roots_n >= sp_feature_roots_cap) {
-    int new_cap = sp_feature_roots_cap == 0 ? 16 : sp_feature_roots_cap * 2;
-    char **np = (char **)realloc(sp_feature_roots, sizeof(char *) * new_cap);
-    if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-    sp_feature_roots = np;
-    sp_feature_roots_cap = new_cap;
-  }
+  sp_feature_roots = sp_grow_strs(sp_feature_roots, sp_feature_roots_n, &sp_feature_roots_cap, 16);
   sp_feature_roots[sp_feature_roots_n++] = strdup(dir);
 }
 
@@ -2186,13 +2183,7 @@ static int sp_path_already_included(const char *canonical) {
 }
 
 static void sp_mark_path_included(const char *canonical) {
-  if (sp_included_count >= sp_included_cap) {
-    int new_cap = sp_included_cap == 0 ? 16 : sp_included_cap * 2;
-    char **np = (char **)realloc(sp_included_paths, sizeof(char *) * new_cap);
-    if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-    sp_included_paths = np;
-    sp_included_cap = new_cap;
-  }
+  sp_included_paths = sp_grow_strs(sp_included_paths, sp_included_count, &sp_included_cap, 16);
   sp_included_paths[sp_included_count++] = strdup(canonical);
 }
 
@@ -2230,12 +2221,7 @@ static int sp_file_count = 0, sp_file_cap = 0;
 static int sp_intern_file(const char *path) {
   for (int i = 0; i < sp_file_count; i++)
     if (strcmp(sp_file_table[i], path) == 0) return i;
-  if (sp_file_count >= sp_file_cap) {
-    int nc = sp_file_cap == 0 ? 8 : sp_file_cap * 2;
-    char **np = (char **)realloc(sp_file_table, sizeof(char *) * nc);
-    if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-    sp_file_table = np; sp_file_cap = nc;
-  }
+  sp_file_table = sp_grow_strs(sp_file_table, sp_file_count, &sp_file_cap, 8);
   char *dup_path = strdup(path);
   if (!dup_path) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
   sp_file_table[sp_file_count] = dup_path;

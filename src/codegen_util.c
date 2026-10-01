@@ -1540,6 +1540,22 @@ int gvar_global_slot(Compiler *c, int node, char *out, size_t cap) {
   free(gb.p);
   return plain;
 }
+/* The C global a class variable read or write `node` names
+   (cvar_<owner>_<name>), by the read emitter's rule: the method's class, or
+   the class body the node is in, or the Toplevel, then the ancestor that
+   owns the class variable. Fills `out` and answers 1, or 0. */
+int cvar_global_slot(Compiler *c, int node, char *out, size_t cap) {
+  const char *nm = nt_str(c->nt, node, "name");
+  Scope *s = comp_scope_of(c, node);
+  if (!nm || nm[0] != '@' || nm[1] != '@' || !s) return 0;
+  int cid = s->class_id;
+  if (cid < 0 && c->node_cbody && node < c->node_cap) cid = c->node_cbody[node];
+  if (cid < 0) cid = comp_class_index(c, "Toplevel");
+  if (cid < 0) return 0;
+  cid = comp_cvar_owner(c, cid, nm);
+  snprintf(out, cap, "cvar_%s_%s", c->classes[cid].name, nm + 2);
+  return 1;
+}
 /* The innermost block or lambda `node` is written in, within its method;
    -1 at the method's own level. */
 int *an_parent_map(const NodeTable *nt);
@@ -1561,8 +1577,9 @@ static int lent_enclosing_closure(Compiler *c, int node) {
   }
   return -1;
 }
-/* A write of the C global `slot` (ivar_global_slot, gvar_global_slot) that
-   can run while a call lent `slot` at `arg` is running: one in another
+/* A write of the C global `slot` (ivar_global_slot, gvar_global_slot,
+   cvar_global_slot) that can run while a call lent `slot` at `arg` is
+   running: one in another
    method, or in a block or lambda other than the one the call is written
    in. The callee holds the slot's address, so after such a write its
    appends land in the new String, where CRuby appends to the one the call
@@ -1578,9 +1595,13 @@ int lent_global_slot_rebound(Compiler *c, int arg, const char *slot) {
   static const NodeKind ik[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
                                  NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode,
                                  NK_InstanceVariableTargetNode };
+  static const NodeKind ck[] = { NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode,
+                                 NK_ClassVariableAndWriteNode, NK_ClassVariableOperatorWriteNode,
+                                 NK_ClassVariableTargetNode };
   const NodeTable *nt = c->nt;
   int is_g = nt_kind(nt, arg) == NK_GlobalVariableReadNode;
-  const NodeKind *ks = is_g ? gk : ik;
+  int is_c = nt_kind(nt, arg) == NK_ClassVariableReadNode;
+  const NodeKind *ks = is_g ? gk : is_c ? ck : ik;
   Scope *as = comp_scope_of(c, arg);
   int ab = lent_enclosing_closure(c, arg);
   for (int k = 0; k < 5; k++)
@@ -1593,7 +1614,7 @@ int lent_global_slot_rebound(Compiler *c, int arg, const char *slot) {
         if (!grn) continue;
         snprintf(ws, sizeof ws, "gv_%s", grn);
       }
-      else if (!ivar_global_slot(c, w, ws, sizeof ws)) continue;
+      else if (is_c ? !cvar_global_slot(c, w, ws, sizeof ws) : !ivar_global_slot(c, w, ws, sizeof ws)) continue;
       if (!sp_streq(ws, slot)) continue;
       /* the program's top level, outside any block or lambda, runs once and
          is never reentered, so it is never running during a call */
@@ -1614,9 +1635,9 @@ void refuse_lent_global_rebound(Compiler *c, int arg, const char *slot, const ch
   snprintf(msg, sizeof msg,
            "`%s` is passed to %s's parameter `%s`, which appends to it, and `%s` is assigned at line %d, "
            "where the assignment can run during the call: the append would then reach the newly "
-           "assigned String instead of the one passed (a String held by a global or a top-level or "
-           "class-level instance variable is not yet shared by reference). Pass a local and assign it "
-           "back after the call.",
+           "assigned String instead of the one passed (a String held by a global, a class variable, or "
+           "a top-level or class-level instance variable is not yet shared by reference). Pass a local "
+           "and assign it back after the call.",
            vn ? vn : "?", target ? target : "a method", pname ? pname : "?", vn ? vn : "?",
            (int)nt_int(c->nt, w, "node_line", 0));
   unsupported_feature(c, arg, msg);

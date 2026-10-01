@@ -4668,11 +4668,22 @@ static TyKind infer_call_inner(Compiler *c, int id) {
           if (uni == TY_UNKNOWN) uni = t;
           else if (uni != t) { uni = TY_POLY; break; }
         }
+        /* a bare Object can hold any value there (sp_Object_ivar_get) */
+        if (uni != TY_UNKNOWN && an_program_news_object(c)) uni = TY_POLY;
         return uni == TY_UNKNOWN ? TY_POLY : uni;
       }
       return TY_POLY;
     }
   }
+  /* instance_variable_defined? and instance_variables on a POLY receiver:
+     answered per class, a bare Object from its own table */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variable_defined?") && argc == 1) {
+    const char *a0ty = nt_type(nt, argv[0]);
+    if (a0ty && (sp_streq(a0ty, "SymbolNode") || sp_streq(a0ty, "StringNode"))) return TY_BOOL;
+  }
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variables") && argc == 0 &&
+      nt_ref(nt, id, "block") < 0)
+    return TY_POLY_ARRAY;
 
   /* instance_variable_set(:@x, v) on a POLY receiver answers v, boxed (the
      codegen twin stores it per class) */
@@ -8994,6 +9005,23 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
     }
   }
   return id;
+}
+
+/* Does the program make a bare Object (`Object.new`)? Asked once. */
+int an_program_news_object(Compiler *c) {
+  static const Compiler *memo_c = NULL;
+  static int memo = -1;
+  if (memo_c == c && memo >= 0) return memo;
+  const NodeTable *nt = c->nt;
+  int found = 0;
+  for (int n = comp_kind_first(c, NK_CallNode); n >= 0 && !found; n = comp_kind_next(c, n)) {
+    if (nt_kind(nt, n) != NK_CallNode || !nt_str(nt, n, "name") || !sp_streq(nt_str(nt, n, "name"), "new")) continue;
+    int r = nt_ref(nt, n, "receiver");
+    found = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") &&
+            sp_streq(nt_str(nt, r, "name"), "Object");
+  }
+  memo_c = c; memo = found;
+  return found;
 }
 
 TyKind infer_type(Compiler *c, int id) {

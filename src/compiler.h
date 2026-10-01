@@ -481,6 +481,8 @@ typedef struct {
   int enum_yield_arity; /* widest `yield` arity in this class's each, so the
                            Enumerable collector packs a multi-value yield into
                            one element and `for` still binds only the first */
+  int enum_yield_packed; /* its yields differ in count (or splat): an element
+                            is the single value itself, several an Array */
   int is_struct;       /* defined via Struct.new(:a, :b): readers[] are the
                           positional members; the constructor takes them in
                           order and there is no user `initialize`. */

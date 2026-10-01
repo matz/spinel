@@ -4762,6 +4762,22 @@ int scope_own_defaults(Compiler *c, int di) {
   return any;
 }
 
+static void intern_scope_ivars(Compiler *c, int ms, int ci) {
+  const NodeTable *nt = c->nt;
+  for (int id2 = 0; id2 < nt->count; id2++) {
+    if (c->nscope[id2] != ms) continue;
+    const char *bty = nt_type(nt, id2);
+    if (!bty) continue;
+    if (sp_streq(bty, "InstanceVariableWriteNode") ||
+        sp_streq(bty, "InstanceVariableReadNode") ||
+        sp_streq(bty, "InstanceVariableOperatorWriteNode") ||
+        sp_streq(bty, "InstanceVariableOrWriteNode")) {
+      const char *ivnm = nt_str(nt, id2, "name");
+      if (ivnm) comp_ivar_intern(&c->classes[ci], ivnm);
+    }
+  }
+}
+
 /* Process include calls in a single class body, creating scope copies for each
    included module method. We copy (not mutate) so multiple classes can include
    the same module independently. */
@@ -4979,18 +4995,7 @@ else {
         src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
         /* Scan source body for ivar accesses and register them in the
            destination class so codegen's struct layout includes them. */
-        for (int id2 = 0; id2 < nt->count; id2++) {
-          if (c->nscope[id2] != ms) continue;
-          const char *bty = nt_type(nt, id2);
-          if (!bty) continue;
-          if (sp_streq(bty, "InstanceVariableWriteNode") ||
-              sp_streq(bty, "InstanceVariableReadNode") ||
-              sp_streq(bty, "InstanceVariableOperatorWriteNode") ||
-              sp_streq(bty, "InstanceVariableOrWriteNode")) {
-            const char *ivnm = nt_str(nt, id2, "name");
-            if (ivnm) comp_ivar_intern(&c->classes[ci], ivnm);
-          }
-        }
+        intern_scope_ivars(c, ms, ci);
       }
     }
   }
@@ -6040,18 +6045,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
             scope_own_defaults(c, dst_i);
             sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
             /* the module body's ivars belong to the prepending class's layout */
-            for (int id2 = 0; id2 < nt->count; id2++) {
-              if (c->nscope[id2] != ms_i) continue;
-              const char *bty = nt_type(nt, id2);
-              if (!bty) continue;
-              if (sp_streq(bty, "InstanceVariableWriteNode") ||
-                  sp_streq(bty, "InstanceVariableReadNode") ||
-                  sp_streq(bty, "InstanceVariableOperatorWriteNode") ||
-                  sp_streq(bty, "InstanceVariableOrWriteNode")) {
-                const char *ivnm = nt_str(nt, id2, "name");
-                if (ivnm) comp_ivar_intern(&c->classes[ci], ivnm);
-              }
-            }
+            intern_scope_ivars(c, ms_i, ci);
             sc = &c->scopes[ms_i];
             sc->is_transplanted_source = 1;
           }

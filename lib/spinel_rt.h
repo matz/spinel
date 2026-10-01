@@ -826,11 +826,14 @@ static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
   _p; \
 }))
 
-/* `Object.new` -- a sentinel object whose only meaningful property is
-   identity. Each call returns a fresh GC-managed allocation, so two
+/* `Object.new` -- a sentinel object whose meaningful properties are
+   identity and the instance variables instance_variable_set gives it,
+   kept in a Symbol-keyed table made on the first one (no class lays them
+   out). Each call returns a fresh GC-managed allocation, so two
    `Object.new` results compare as `!=` via their pointer addresses. */
-typedef struct sp_Object_s { uint8_t _pad; } sp_Object;
-static sp_Object *sp_Object_new(void){return(sp_Object*)sp_gc_alloc(sizeof(sp_Object),NULL,NULL);}
+typedef struct sp_Object_s { struct sp_SymPolyHash *ivars; } sp_Object;
+static void sp_Object_scan(void *p){ sp_Object *o=(sp_Object*)p; if(o->ivars) sp_gc_mark(o->ivars); }
+static sp_Object *sp_Object_new(void){return(sp_Object*)sp_gc_alloc(sizeof(sp_Object),NULL,sp_Object_scan);}
 
 /* Integer#[start, len]: the len-bit field starting at bit `start`, i.e.
    (n >> start) & ((1 << len) - 1) with Ruby's shift semantics (a negative
@@ -3240,6 +3243,35 @@ static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
 static SP_INLINE sp_int sp_poly_arg_perm(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL || (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL)) return SP_INT_NIL;
   return sp_poly_arg_int_chk(v);
+}
+/* IO#each_line's separator and limit read out of an argument list a splat
+   supplied, as CRuby's extract_getline_args reads them: a lone argument is
+   the separator when it is nil or a String, the limit otherwise; a pair is
+   the separator and the limit, either of them nil. A nil separator is NULL
+   (read to the end) and no limit is 0, as sp_File_gets_sep takes them. */
+static SP_NOINLINE void sp_io_line_args(sp_PolyArray *a, const char **sep, sp_int *lim) {
+  sp_int n = a ? a->len : 0;
+  *sep = "\n"; *lim = 0;
+  if (n > 2)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 0..2)", (long long)n));
+  sp_RbVal lv = sp_box_nil();
+  if (n == 1) {
+    sp_RbVal v = a->data[0];
+    if (v.tag == SP_TAG_NIL) *sep = NULL;
+    else if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) *sep = sp_poly_arg_str_chk(v);
+    else { const char *s = sp_poly_check_str(v); if (s) *sep = s; else lv = v; }
+  }
+  else if (n == 2) {
+    *sep = a->data[0].tag == SP_TAG_NIL ? NULL : sp_poly_arg_str_chk(a->data[0]);
+    lv = a->data[1];
+  }
+  /* a String argument is never the NULL that means nil */
+  if (n > 0 && !*sep && a->data[0].tag != SP_TAG_NIL) *sep = sp_str_empty;
+  if (lv.tag != SP_TAG_NIL) {
+    *lim = sp_poly_arg_int_chk(lv);
+    /* CRuby names each_line for IO#each too */
+    if (*lim == 0) sp_raise_cls("ArgumentError", "invalid limit: 0 for each_line");
+  }
 }
 
 static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return sp_time_ns_to_f(_tt.tv_sec, _tt.tv_nsec); } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */
@@ -7863,6 +7895,28 @@ static void sp_kwargs_check(sp_SymPolyHash *h, const char *const *allowed) {
    key from the insertion-order list. Issue #510. */
 static void sp_SymPolyHash_delete(sp_SymPolyHash*h,sp_sym k){ sp_gc_wb((void*)h);sp_int idx=(sp_int)(((sp_int)k)&h->mask);while(h->keys[idx]>=0){if(h->keys[idx]==k){h->keys[idx]=-1;h->vals[idx]=sp_box_nil();h->len--;sp_int j=(idx+1)&h->mask;while(h->keys[j]>=0){sp_int nj=(sp_int)(((sp_int)h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=-1;h->vals[j]=sp_box_nil();idx=j;}j=(j+1)&h->mask;}{sp_int oi=0;while(oi<=h->len){if(h->order[oi]==k){while(oi<h->len){h->order[oi]=h->order[oi+1];oi++;}break;}oi++;}}return;}idx=(idx+1)&h->mask;}}
 static sp_SymPolyHash*sp_SymPolyHash_dup(sp_SymPolyHash*h){sp_SymPolyHash*r=sp_SymPolyHash_new();r->default_v=h->default_v;r->dproc=h->dproc;r->dproc_self=h->dproc_self;for(sp_int i=0;i<h->len;i++)sp_SymPolyHash_set(r,h->order[i],sp_SymPolyHash_get(h,h->order[i]));return r;}
+/* An Object.new instance's instance variables (sp_Object): get answers nil
+   for one never set, set raises FrozenError on a frozen object, as CRuby. */
+static sp_RbVal sp_Object_ivar_get(sp_Object *o, sp_sym k){
+  if(!o||!o->ivars||!sp_SymPolyHash_has_key(o->ivars,k)) return sp_box_nil();
+  return sp_SymPolyHash_get(o->ivars,k);
+}
+static sp_RbVal sp_Object_ivar_set(sp_Object *o, sp_sym k, sp_RbVal v){
+  if(!o) return v;
+  if(sp_gc_is_frozen(o)){ SP_GC_ROOT(o); sp_raise_frozen_obj(sp_box_obj(o,SP_BUILTIN_OBJECT),(&("\xff" "can't modify frozen Object")[1])); }
+  SP_GC_ROOT(o); SP_GC_ROOT_RBVAL(v);
+  if(!o->ivars){ sp_SymPolyHash *t=sp_SymPolyHash_new(); sp_gc_wb((void*)o); o->ivars=t; }
+  sp_SymPolyHash_set(o->ivars,k,v);
+  return v;
+}
+static sp_bool sp_Object_ivar_defined(sp_Object *o, sp_sym k){
+  return o&&o->ivars&&sp_SymPolyHash_has_key(o->ivars,k);
+}
+static sp_PolyArray *sp_Object_ivars(sp_Object *o){
+  sp_PolyArray *a=sp_PolyArray_new(); SP_GC_ROOT(a);
+  for(sp_int i=0;o&&o->ivars&&i<o->ivars->len;i++) sp_PolyArray_push(a,sp_box_sym(o->ivars->order[i]));
+  return a;
+}
 static sp_SymPolyHash*sp_SymPolyHash_replace(sp_SymPolyHash*h,sp_SymPolyHash*o){if(!h)return h;for(sp_int i=0;i<h->cap;i++)h->keys[i]=-1;h->len=0;if(o)for(sp_int i=0;i<o->len;i++)sp_SymPolyHash_set(h,o->order[i],sp_SymPolyHash_get(o,o->order[i]));return h;}
 static void sp_SymPolyHash_clear(sp_SymPolyHash*h){if(!h)return;for(sp_int i=0;i<h->cap;i++)h->keys[i]=-1;h->len=0;}
 static sp_bool sp_SymPolyHash_eq(sp_SymPolyHash*a,sp_SymPolyHash*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(sp_int i=0;i<a->len;i++){sp_sym k=a->order[i];if(!sp_SymPolyHash_has_key(b,k))return FALSE;if(!sp_poly_eq(sp_SymPolyHash_get(a,k),sp_SymPolyHash_get(b,k)))return FALSE;}return TRUE;}
@@ -9719,6 +9773,12 @@ static sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen) {
     SP_GC_ROOT(src);
     void *n = sp_gc_alloc(payload, h->finalize, h->scan);
     memcpy(n, src, payload);
+    /* a bare Object's ivars are its own table: the copy takes a copy */
+    if (v.cls_id == SP_BUILTIN_OBJECT && ((sp_Object *)n)->ivars) {
+      SP_GC_ROOT(n);
+      sp_SymPolyHash *t = sp_SymPolyHash_dup(((sp_Object *)n)->ivars);
+      ((sp_Object *)n)->ivars = t;
+    }
     if (sp_user_init_copy_hook) { SP_GC_ROOT(n); sp_RbVal r = v; r.v.p = n; sp_user_init_copy_hook(r, v); }
     if (keep_frozen && h->frozen)
       ((sp_gc_hdr *)((char *)n - sizeof(sp_gc_hdr)))->frozen = 1;
@@ -14245,6 +14305,15 @@ static sp_Enumerator *sp_poly_enum_for_each(sp_RbVal v) {
   }
   sp_raise_cls("NoMethodError", sp_nomethod_msg("each", v));
   return NULL;
+}
+/* A blockless map, select or reject on a boxed value (emit_blockless_enumerator):
+   a String, Symbol, number, nil or boolean has none of them, CRuby's
+   NoMethodError naming the method as written; an object is enumerated as
+   sp_Enumerator_new_from enumerates it. */
+static sp_Enumerator *sp_poly_blockless_enum(sp_RbVal v, const char *m) {
+  if (v.tag != SP_TAG_OBJ || !v.v.p || v.cls_id == SP_BUILTIN_STRBUF)
+    sp_raise_cls("NoMethodError", sp_nomethod_msg(m, v));
+  return sp_Enumerator_new_from(v);
 }
 static sp_Enumerator *sp_Enumerator_new_from_rev(sp_RbVal arr) {
   SP_GC_ROOT_RBVAL(arr);   /* published into the enumerator below, after several allocations */

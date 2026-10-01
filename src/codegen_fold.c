@@ -6161,6 +6161,14 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
         buf_printf(out, "&%s", gref);
         return;
       }
+      /* a class variable's C global likewise: lent a temp, the callee's
+         appends stayed in the copy */
+      if (aty && sp_streq(aty, "ClassVariableReadNode") && comp_ntype(c, provided) == TY_STRING &&
+          cvar_global_slot(c, provided, gref, sizeof gref)) {
+        refuse_lent_global_rebound(c, provided, gref, m->name, m->pnames[idx]);
+        buf_printf(out, "&%s", gref);
+        return;
+      }
     }
     Buf ab; memset(&ab, 0, sizeof ab);
     p->byref_out = 0;   /* reenter for the plain coerced value */

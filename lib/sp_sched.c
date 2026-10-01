@@ -1689,8 +1689,10 @@ static void *sp_cs_sweeper_main(void *arg) {
   unsigned seen = 0;
   for (;;) {
     pthread_mutex_lock(&g_cs_lock);
-    while (g_cs_gen == seen && !g_shutdown) pthread_cond_wait(&g_cs_go, &g_cs_lock);
-    if (g_shutdown) { pthread_mutex_unlock(&g_cs_lock); break; }
+    /* g_shutdown is set under the sched lock at drain, which this thread
+       does not hold: read it atomically, as the trim thread does */
+    while (g_cs_gen == seen && !SP_ATOMIC_LOAD(&g_shutdown, __ATOMIC_RELAXED)) pthread_cond_wait(&g_cs_go, &g_cs_lock);
+    if (SP_ATOMIC_LOAD(&g_shutdown, __ATOMIC_RELAXED)) { pthread_mutex_unlock(&g_cs_lock); break; }
     seen = g_cs_gen;
     SP_ATOMIC_FETCH_ADD(&g_cs_running, 1, __ATOMIC_RELAXED);
     pthread_mutex_unlock(&g_cs_lock);
@@ -3229,7 +3231,9 @@ void sp_sched_drain(void) {
   SCHED_LOCK();
   sp_sched_pump(NULL, 2);   /* exit drain: runnable work only, not sleepers */
 #ifdef SP_THREADS
-  g_shutdown = 1;
+  /* stored atomically: the sweeper and the trim thread read it without the
+     sched lock (the workers and the monitor read it under it) */
+  SP_ATOMIC_STORE(&g_shutdown, 1, __ATOMIC_RELAXED);
   sched_wake_all_workers(0);
   sp_sysmon_wake();   /* wake the monitor (idle or in poll) so it sees shutdown */
   int sysmon_running = g_sysmon_started;

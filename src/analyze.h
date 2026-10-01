@@ -100,6 +100,10 @@ TyKind infer_type(Compiler *c, int id);
    element: each_with_index, with_index, each_with_object, with_object. */
 int enum_pair_source_call(const NodeTable *nt, int recv);
 
+/* map and the selecting Enumerables, which a boxed Array answers a blockless
+   call of with an Enumerator, as it does each (analyze_infer_recv.c) */
+int poly_blockless_enum_name(const char *name);
+
 /* True when node `id`'s value, held in an unboxed scalar slot, can be the
    reserved nil sentinel (SP_INT_NIL / the float twin). The slot type alone
    cannot say -- an `Integer?` and an `Integer` are both TY_INT -- so codegen

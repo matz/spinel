@@ -7148,6 +7148,24 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
         return;
       }
     }
+    /* A pointer slot reads NULL as nil, and a bare `nil` emits the numeric
+       0, a null pointer constant. A nil-typed EXPRESSION is not one: the
+       block form of File.foreach is `(lines.each { ... }; nil)`, emitted
+       `({ ...; 0; })`, an int, and a method whose block `return`s a String
+       answered it through its `const char *` slot -- the C build stopped.
+       Evaluate it, then spell the slot's NULL. */
+    else if (slot != TY_POLY && slot != TY_UNKNOWN && slot != TY_VOID && slot != TY_NIL &&
+             nt_kind(c->nt, node) != NK_NilNode) {
+      TyKind nvt = comp_ntype(c, node);
+      Buf nb; memset(&nb, 0, sizeof nb);
+      emit_ret_nil(c, slot, &nb);
+      int null_slot = nb.p && sp_streq(nb.p, "NULL");
+      free(nb.p);
+      if (null_slot && (nvt == TY_NIL || nvt == TY_VOID)) {
+        buf_puts(b, "({ (void)("); emit_expr(c, node, b); buf_puts(b, "); NULL; })");
+        return;
+      }
+    }
   }
   /* a case whose value is nil -- each arm returns or answers nil -- is held
      boxed by emit_case_expr (a nil has no C slot of its own); the method's
@@ -12316,6 +12334,22 @@ int tail_iter_receiver(Compiler *c, int id) {
   return r;
 }
 
+/* `n.times { }`, `lo.upto(hi) { }`, `x.step(..) { }` and the rest of the
+   numeric iterators emit_call's value form runs as a loop and answers the
+   receiver of -- the same receiver types it takes. */
+static int num_iter_answers_recv(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int r = nt_ref(nt, id, "receiver");
+  if (!nm || r < 0) return 0;
+  TyKind rt = comp_ntype(c, r);
+  if (sp_streq(nm, "step"))
+    return rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT ||
+           rt == TY_RANGE;
+  return rt == TY_INT &&
+         (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto"));
+}
+
 /* Does this statement list end in something that leaves the function -- a
    `return`, or a bare `raise`/`throw`? Used to decide whether a construct in
    tail position produces a value at all. */
@@ -12654,7 +12688,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
      the method fall through to nil. The value path hoists the receiver into a
      temp before the loop and yields that temp, so route these there. */
   int is_tail_recv_val = sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
-                         iter_value_answers_recv(c, id) && tail_iter_receiver(c, id) < 0;
+                         (iter_value_answers_recv(c, id) || num_iter_answers_recv(c, id)) &&
+                         tail_iter_receiver(c, id) < 0;
   if (!is_tail_loop && !is_tail_valued && !is_tail_recv_val &&
       sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
       !call_breaks(c, id) &&
@@ -12676,10 +12711,24 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       emit_boxed(c, _rr, b);
       buf_puts(b, "; return 0; }\n");
     }
-    else if (_named && comp_ntype(c, id) == g_ret_type &&
-             g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN) {
+    /* The slot is the method's return, or a begin/rescue result variable
+       when there is one: a `return` out of the rescue frame skipped its pop,
+       and an Integer result took the loop counter. */
+    else if (_named && (g_result_var ? g_result_poly : g_ret_type == TY_POLY) &&
+             comp_ntype(c, _rr) != TY_POLY) {
+      /* A poly slot -- the iterator's block `return`s something else, so the
+         method answers either that or the receiver: box the receiver into it,
+         as the value path below does. Without this it fell to the bare
+         expression and the method answered nil (`n.times { return s if c }`). */
       emit_indent(b, indent);
-      buf_puts(b, "return ");
+      emit_tail_lead(b);
+      emit_boxed(c, _rr, b);
+      buf_puts(b, ";\n");
+    }
+    else if (_named && comp_ntype(c, id) == (g_result_var ? g_result_ty : g_ret_type) &&
+             comp_ntype(c, id) != TY_VOID && comp_ntype(c, id) != TY_UNKNOWN) {
+      emit_indent(b, indent);
+      emit_tail_lead(b);
       emit_expr(c, _rr, b);
       buf_puts(b, ";\n");
     }

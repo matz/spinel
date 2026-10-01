@@ -340,6 +340,7 @@ static const char SPC_B64[64] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static SP_TLS char sp_crypto_websocket_accept_buf[29];
+static void sp_crypto_b64_strict(const uint8_t *d, size_t n, char *out);
 
 const char *sp_crypto_websocket_accept(const char *client_key) {
     /* client_key is the 24-char base64 from the request header;
@@ -355,23 +356,7 @@ const char *sp_crypto_websocket_accept(const char *client_key) {
     sp_crypto_sha1((const uint8_t *)in, klen + 36, digest);
     /* base64(20 bytes) = 28 chars: 6 full triplets + 2 leftover bytes
      * -> 3 chars + 1 padding `=`. */
-    int j = 0;
-    for (i = 0; i + 3 <= 20; i += 3) {
-        uint32_t v = ((uint32_t)digest[i] << 16)
-                   | ((uint32_t)digest[i+1] << 8)
-                   |  (uint32_t)digest[i+2];
-        sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >> 18) & 0x3f];
-        sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >> 12) & 0x3f];
-        sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >>  6) & 0x3f];
-        sp_crypto_websocket_accept_buf[j++] = SPC_B64[ v        & 0x3f];
-    }
-    /* 2 leftover bytes -> 3 b64 chars + 1 pad */
-    uint32_t v = ((uint32_t)digest[18] << 16) | ((uint32_t)digest[19] << 8);
-    sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >> 18) & 0x3f];
-    sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >> 12) & 0x3f];
-    sp_crypto_websocket_accept_buf[j++] = SPC_B64[(v >>  6) & 0x3f];
-    sp_crypto_websocket_accept_buf[j++] = '=';
-    sp_crypto_websocket_accept_buf[j]   = '\0';
+    sp_crypto_b64_strict(digest, 20, sp_crypto_websocket_accept_buf);
     return sp_crypto_websocket_accept_buf;
 }
 

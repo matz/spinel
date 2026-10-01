@@ -11,3 +11,5 @@ nil
 "x"
 5
 5
+["one\ntwo\n\nthree", "four\nfive"]
+[:sep, :enoent]

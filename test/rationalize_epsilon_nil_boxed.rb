@@ -1,3 +1,4 @@
+# spinel: int64
 # NilClass#rationalize takes an epsilon of any kind, ignores it and answers
 # (0/1); it is still evaluated. A boxed receiver -- a value read out of a
 # mixed Array, a local that may be nil -- answers rationalize as its kind

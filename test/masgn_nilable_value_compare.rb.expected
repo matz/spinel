@@ -1,0 +1,14 @@
+[nil, 0]
+NoMethodError
+[2, 0]
+true
+NoMethodError
+false
+NoMethodError
+true
+NoMethodError
+true
+[nil, nil]
+NoMethodError
+[4, nil]
+true

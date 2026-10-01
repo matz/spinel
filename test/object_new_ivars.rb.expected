@@ -1,0 +1,18 @@
+nil
+false
+[]
+5
+5
+"two"
+true
+false
+[:@a, :@b]
+[1, 2]
+[1, 2]
+:changed
+"two"
+FrozenError
+1
+["obj", 3]
+[[:@k], [:@k]]
+[true, true]

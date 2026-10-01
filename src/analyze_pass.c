@@ -2591,6 +2591,34 @@ static int masgn_nested_poly(Compiler *c, Scope *ms, int tgt) {
   return changed;
 }
 
+/* Whether local `nm` of scope `sc` names a row of a narrowed table: one of
+   its writes reads an element (`[]`, `at`) of an Integer or Float table, or
+   copies a local that does (`row = @t[k]; al = row`). A copy is the same
+   row, and the direct-alias propagation carries its type back to `row`, so
+   widening the copy made `row` a converted copy as well. */
+static int table_row_alias(Compiler *c, const LWIndex *lw, const char *nm, Scope *sc, int depth) {
+  const NodeTable *nt = c->nt;
+  if (depth > 8) return 0;
+  for (int r = lw_index_first(lw, nm, (int)(sc - c->scopes)); r >= 0; r = lw->next[r]) {
+    int w = lw->node[r];
+    const char *wn = nt_str(nt, w, "name");
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode || !wn || !sp_streq(wn, nm) ||
+        comp_scope_of(c, w) != sc) continue;
+    int wv = nt_ref(nt, w, "value");
+    if (wv >= 0 && nt_kind(nt, wv) == NK_LocalVariableReadNode) {
+      const char *src = nt_str(nt, wv, "name");
+      if (src && !sp_streq(src, nm) && table_row_alias(c, lw, src, sc, depth + 1)) return 1;
+      continue;
+    }
+    const char *wcn = wv >= 0 && nt_kind(nt, wv) == NK_CallNode ? nt_str(nt, wv, "name") : NULL;
+    int wr = wcn ? nt_ref(nt, wv, "receiver") : -1;
+    TyKind wrt = wr >= 0 ? infer_type(c, wr) : TY_UNKNOWN;
+    if (wcn && (sp_streq(wcn, "[]") || sp_streq(wcn, "at")) &&
+        (wrt == TY_INT_ARRAY_ARRAY || wrt == TY_FLOAT_ARRAY_ARRAY)) return 1;
+  }
+  return 0;
+}
+
 int infer_write_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -3758,6 +3786,18 @@ int infer_write_types(Compiler *c) {
         }
         int lit = assigned ? -1 : local_proc_literal_param_of(c, lsc, rnm);
         if (lit >= 0 && !proc_literal_calls_in_sight(c, lit)) { lv->type = TY_POLY; continue; }
+      }
+      /* A row read out of a narrowed table (`row = @t[k]` over an Integer or
+         Float table), or a local copied from one (`al = row`, table_row_alias),
+         is that row, not a copy: a boxed value pushed into it is
+         unboxed as the typed push unboxes one, raising on a foreign element,
+         and a local narrowed from the table keeps its kind the same way (its
+         oa_pin). Widened to the general Array, the read became a converted
+         copy and the pushes never reached the table: under
+         --int-overflow=promote a computed Integer is boxed, so `row << k * 10`
+         filled nothing. */
+      if (is_push && vt == TY_POLY && ty_is_array(lv->type) && lv->type != TY_POLY_ARRAY) {
+        if (table_row_alias(c, &lw_ix, rnm, lsc, 0)) continue;
       }
       slot = &lv->type;
       slot_reset = !lv->is_param && !lv->is_block_param && !lv->rbs_seeded;
@@ -9848,6 +9888,20 @@ static int dir_enumerable_name(const char *nm) {
     "chunk_while", "slice_when", "uniq", "reverse_each", "lazy", NULL };
   return str_in(nm, E);
 }
+/* Whether an argument the streaming File.foreach evaluates after opening the
+   file reads the same as one evaluated before it, as CRuby does: a literal or
+   a local, which nothing in between can run code to change. Any other one is
+   bound to a temp ahead of the open (desugar_dir_surface). */
+static int foreach_arg_inert(const NodeTable *nt, int a) {
+  switch (nt_kind(nt, a)) {
+    case NK_StringNode: case NK_IntegerNode: case NK_NilNode:
+    case NK_TrueNode: case NK_FalseNode: case NK_LocalVariableReadNode:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 /* Whether File.foreach call `id` can stream (desugar_dir_surface): a literal
    block, a path, and after it only arguments an IO's each_line takes as they
    are written -- a separator, a limit, `chomp:`. A splat, a block argument or
@@ -9871,6 +9925,7 @@ static int file_foreach_streams(Compiler *c, int id) {
         if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) return 0;
         const char *kn = nt_str(nt, key, "value");
         if (!kn || !sp_streq(kn, "chomp")) return 0;
+        if (nt_ref(nt, ev[j], "value") < 0) return 0;
       }
     }
   }
@@ -10019,8 +10074,46 @@ int desugar_dir_surface(Compiler *c) {
       int fparen = nt_new_node(nt, "ParenthesesNode");
       if (oargs < 0 || (fac > 1 && rargs < 0) || fread < 0 || each < 0 || ebody < 0 || freq < 0 ||
           fparams < 0 || fbparams < 0 || oblk < 0 || open < 0 || nil2 < 0 || fstmts < 0 || fparen < 0) continue;
-      nt_node_set_arr(nt, oargs, "arguments", fav, 1);
-      if (rargs >= 0) nt_node_set_arr(nt, rargs, "arguments", fav + 1, fac - 1);
+      /* The arguments after the path are read by each_line, after the file
+         is opened; CRuby evaluates them first, and not at all past a missing
+         file's raise. When one runs code, the path and each argument that
+         is not a literal are bound to temps ahead of the open, in order. */
+      int hargs[4] = { fav[0], fac > 1 ? fav[1] : -1, fac > 2 ? fav[2] : -1, fac > 3 ? fav[3] : -1 };
+      int hitems[8 + 2]; int nhi = 0, hoist = 0;
+      for (int k = 1; k < fac; k++) {
+        if (nt_kind(nt, fav[k]) != NK_KeywordHashNode) { if (!foreach_arg_inert(nt, fav[k])) hoist = 1; continue; }
+        int en = 0; const int *ev = nt_arr(nt, fav[k], "elements", &en);
+        for (int j = 0; j < en; j++)
+          if (!foreach_arg_inert(nt, nt_ref(nt, ev[j], "value"))) hoist = 1;
+      }
+      if (hoist) {
+        int hk = 0, bad = 0;
+        for (int k = 0; k < fac && !bad; k++) {
+          int en = 1; const int *ev = NULL;
+          int is_kw = nt_kind(nt, fav[k]) == NK_KeywordHashNode;
+          if (is_kw) ev = nt_arr(nt, fav[k], "elements", &en);
+          for (int j = 0; j < en && !bad; j++) {
+            int v = is_kw ? nt_ref(nt, ev[j], "value") : fav[k];
+            /* a local is bound as well: a later argument may assign it */
+            if (foreach_arg_inert(nt, v) && nt_kind(nt, v) != NK_LocalVariableReadNode) continue;
+            if (hk >= 8) { bad = 1; break; }
+            char tnm[48]; snprintf(tnm, sizeof tnm, "__foreach_a%d_%d", hk++, id);
+            int w = nt_new_node(nt, "LocalVariableWriteNode");
+            int rd = nt_new_node(nt, "LocalVariableReadNode");
+            Scope *sc = comp_scope_of(c, id);
+            if (w < 0 || rd < 0 || !sc || !scope_local_intern(sc, tnm)) { bad = 1; break; }
+            nt_node_set_str(nt, w, "name", tnm);
+            nt_node_set_ref(nt, w, "value", v);
+            nt_node_set_str(nt, rd, "name", tnm);
+            hitems[nhi++] = w;
+            if (is_kw) nt_node_set_ref(nt, (int)ev[j], "value", rd);
+            else hargs[k] = rd;
+          }
+        }
+        if (bad) continue;
+      }
+      nt_node_set_arr(nt, oargs, "arguments", hargs, 1);
+      if (rargs >= 0) nt_node_set_arr(nt, rargs, "arguments", hargs + 1, fac - 1);
       nt_node_set_str(nt, fread, "name", fnm);
       nt_node_set_str(nt, each, "name", "each_line");
       nt_node_set_ref(nt, each, "receiver", fread);
@@ -10036,8 +10129,8 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, open, "receiver", recv);
       nt_node_set_ref(nt, open, "arguments", oargs);
       nt_node_set_ref(nt, open, "block", oblk);
-      { int items2[2] = { open, nil2 };
-        nt_node_set_arr(nt, fstmts, "body", items2, 2); }
+      hitems[nhi++] = open; hitems[nhi++] = nil2;
+      nt_node_set_arr(nt, fstmts, "body", hitems, nhi);
       nt_node_set_ref(nt, fparen, "body", fstmts);
       nt_node_set_str(nt, id, "name", "itself");
       nt_node_set_ref(nt, id, "receiver", fparen);
@@ -11336,18 +11429,6 @@ static void ple_build(Compiler *c) {
   static const NodeKind hash_kinds[] = { NK_HashNode, NK_KeywordHashNode };
   for (int hk = 0; hk < 2; hk++)
   NT_FOREACH_KIND(nt, hash_kinds[hk], id) {
-    int en = 0; const int *el = nt_arr(nt, id, "elements", &en);
-    for (int k = 0; k < en; k++) {
-      if (el[k] < 0 || !nt_type(nt, el[k]) || !sp_streq(nt_type(nt, el[k]), "AssocNode")) continue;
-      ple_mark_escaped(c, nt_ref(nt, el[k], "value"));
-    }
-  }
-  /* ... and as a KEYWORD argument's value: `Logger.new(io, formatter: proc {
-     |sev, time, prog, msg| ... })`. The argument loop above marked the
-     KeywordHashNode itself, never the literal inside it, so the formatter's
-     params kept the int default and a String severity arrived as its
-     pointer. Same rule as a hash literal's values. */
-  NT_FOREACH_KIND(nt, NK_KeywordHashNode, id) {
     int en = 0; const int *el = nt_arr(nt, id, "elements", &en);
     for (int k = 0; k < en; k++) {
       if (el[k] < 0 || !nt_type(nt, el[k]) || !sp_streq(nt_type(nt, el[k]), "AssocNode")) continue;

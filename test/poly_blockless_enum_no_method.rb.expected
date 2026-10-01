@@ -1,0 +1,5 @@
+[1, 2]
+:no_method
+:no_method
+:no_method
+"undefined method 'reject' for an instance of String"

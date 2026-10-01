@@ -1115,6 +1115,11 @@ reject-test: $(SPINEL)
 	  echo "reject-test: FAIL (a global in a changed splatted Array compiled)"; ok=0; \
 	else grep -q "through a splat of an Array the program changes" "$$tmp/sca.out" || \
 	  { echo "reject-test: FAIL (changed splatted Array rejected without saying why)"; sed -n 1,5p "$$tmp/sca.out"; ok=0; }; fi; \
+	t=test/reject/string_splat_global_toplevel.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sgt.c" >"$$tmp/sgt.out" 2>&1; then \
+	  echo "reject-test: FAIL (a global splatted into a top-level method's appending parameter compiled)"; ok=0; \
+	else grep -q "parameter .a. through a splat, which the method appends to" "$$tmp/sgt.out" || \
+	  { echo "reject-test: FAIL (a global splatted into a top-level method rejected without saying why)"; sed -n 1,5p "$$tmp/sgt.out"; ok=0; }; fi; \
 	t=test/reject/string_forward_rest_past16.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/frp.c" >"$$tmp/frp.out" 2>&1; then \
 	  echo "reject-test: FAIL (a String forwarded past 16 positions compiled)"; ok=0; \

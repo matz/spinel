@@ -5854,7 +5854,8 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
      staged as #exit_value, exactly as a proc outliving its home does. */
   const char *sv_prh_fb = g_proc_return_home; int sv_ptr_fb = g_proc_toplevel_return;
   g_proc_return_home = "-1"; g_proc_toplevel_return = 0;
-  g_pre = NULL; g_indent = 1; g_nren = 0; g_block_id = blk; g_block_nren = 0;
+  RenPark ren_sv = ren_park(0);   /* as a proc body: park the caller's renames */
+  g_pre = NULL; g_indent = 1; g_block_id = blk; g_block_nren = 0;
   /* g_block_param_name is the name of the &block a body calls through
      (`blk.call(x)`, `blk[x]`), which is_block_call splices the active block
      for. A Thread.new / Fiber.new block's own first parameter is not that: it
@@ -6095,7 +6096,8 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   g_in_fiber_body--;
 
   /* Restore emission state */
-  g_pre = sv_pre; g_indent = sv_indent; g_nren = sv_nren; g_block_id = sv_block; g_block_nren = sv_bnren;
+  ren_unpark(&ren_sv);
+  g_pre = sv_pre; g_indent = sv_indent; g_block_id = sv_block; g_block_nren = sv_bnren;
   g_block_param_name = sv_bpn; g_self = sv_self; g_ret_type = sv_rt; g_c_ret_void = sv_cv;
   g_proc_return_home = sv_prh_fb; g_proc_toplevel_return = sv_ptr_fb;
   g_self_deref = sv_fbderef;
@@ -7123,7 +7125,10 @@ else if (orecv >= 0 && onm) {
   int sv_ptr = g_proc_toplevel_return;
   g_proc_toplevel_return = (!is_lambda && !is_block_node && !ret_proc &&
                             comp_scope_of(c, create) == &c->scopes[0]);
-  g_pre = NULL; g_indent = 0; g_nren = 0; g_block_id = -1; g_block_nren = 0; g_block_param_name = NULL;
+  /* the body's inlines push their renames from slot 0, over the enclosing
+     method's live entries: park them, not just the count (#3943) */
+  RenPark ren_sv = ren_park(0);
+  g_pre = NULL; g_indent = 0; g_block_id = -1; g_block_nren = 0; g_block_param_name = NULL;
   g_self = "self"; g_result_var = NULL; g_ret_type = ret; g_ensure_depth = 0; g_result_poly = 0;
   int sv_iec = g_ie_class_id, sv_bcls = bs ? bs->class_id : -1, sv_bcm = bs ? bs->is_cmethod : 0;
   if (ie_cls >= 0) g_ie_class_id = ie_cls;
@@ -7760,7 +7765,8 @@ else if (orecv >= 0 && onm) {
   free(proc_body_buf.p);
   g_c_loop_depth = sv_loopd; g_in_proc_body = sv_inproc; g_c_ret_void = sv_cv;
 
-  g_pre = sv_pre; g_indent = sv_indent; g_nren = sv_nren; g_block_id = sv_block; g_block_nren = sv_bnren;
+  ren_unpark(&ren_sv);
+  g_pre = sv_pre; g_indent = sv_indent; g_block_id = sv_block; g_block_nren = sv_bnren;
   g_block_param_name = sv_bpn; g_self = sv_self; g_result_var = sv_rv; g_ret_type = sv_rt;
   g_self_deref = sv_deref;
   g_ie_class_id = sv_iec;
@@ -8279,13 +8285,17 @@ int ctor_init_proc_form(Compiler *c, int cid) {
   return init >= 0 ? scope_proc_form_of(c, init) : -1;
 }
 
+static TyKind scope_param_type(Scope *s, int i) {
+  LocalVar *p = scope_local(s, s->pnames[i]);
+  return (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+}
+
 static void emit_ctor_params(Compiler *c, int init, int init_has_blk, Buf *b) {
   if (init >= 0 && (c->scopes[init].nparams > 0 || init_has_blk)) {
     Scope *s = &c->scopes[init];
     for (int i = 0; i < s->nparams; i++) {
       if (i) buf_puts(b, ", ");
-      LocalVar *p = scope_local(s, s->pnames[i]);
-      TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+      TyKind pt = scope_param_type(s, i);
       emit_ctype(c, pt, b);
       buf_printf(b, " lv_%s", s->pnames[i]);
     }
@@ -8321,8 +8331,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
       if (si->nparams > 0) {
         for (int i = 0; i < si->nparams; i++) {
           if (i) buf_puts(b, ", ");
-          LocalVar *p = scope_local(si, si->pnames[i]);
-          TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+          TyKind pt = scope_param_type(si, i);
           emit_ctype(c, pt, b);
           buf_printf(b, " lv_%s", si->pnames[i]);
         }
@@ -8336,8 +8345,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
          cover this when it lives in a statement expression, whose cleanup pops
          when that expression ends rather than when the call it feeds runs. */
       for (int i = 0; i < si->nparams; i++) {
-        LocalVar *p = scope_local(si, si->pnames[i]);
-        TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+        TyKind pt = scope_param_type(si, i);
         if (comp_ty_value_obj(c, pt)) continue;
         if (pt == TY_STRING)     buf_printf(b, "  SP_GC_ROOT_STR(lv_%s);\n", si->pnames[i]);
         else if (pt == TY_POLY)  buf_printf(b, "  SP_GC_ROOT_RBVAL(lv_%s);\n", si->pnames[i]);
@@ -8621,8 +8629,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   Scope *s = &c->scopes[init], *pf = &c->scopes[init_pf];
   buf_printf(b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
   for (int i = 0; i < s->nparams; i++) {
-    LocalVar *p = scope_local(s, s->pnames[i]);
-    emit_ctype(c, (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY, b);
+    emit_ctype(c, scope_param_type(s, i), b);
     buf_printf(b, " lv_%s, ", s->pnames[i]);
   }
   buf_printf(b, "sp_Proc *_sp_blk) {\n  sp_%s *self = sp_%s_new_noinit(", ci->c_name, ci->c_name);
@@ -8646,8 +8653,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
   for (int i = 0; i < s->nparams; i++) {
     if (i) buf_puts(b, ", ");
-    LocalVar *p = scope_local(s, s->pnames[i]);
-    emit_ctype(c, (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY, b);
+    emit_ctype(c, scope_param_type(s, i), b);
     buf_printf(b, " lv_%s", s->pnames[i]);
   }
   if (s->nparams == 0) buf_puts(b, "void");
@@ -10938,8 +10944,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     Scope *m = &c->scopes[mi];
     if (m->nparams < 1 || m->rest_idx >= 0) continue;     /* need exactly the one operand */
     if (m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT) continue;  /* unusable return -> not-comparable */
-    LocalVar *p = scope_local(m, m->pnames[0]);
-    TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+    TyKind pt = scope_param_type(m, 0);
     const char *dcn = c->classes[defcls].c_name;
     int self_vt = c->classes[defcls].is_value_type;
     int cid = comp_class_index(c, c->classes[k].name);
@@ -11046,8 +11051,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
    parameter's C type. 0 when the parameter's type has no such form. */
 static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
                              char *guard, size_t gsz, char *arg, size_t asz) {
-  LocalVar *p = scope_local(m, m->pnames[pi]);
-  TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+  TyKind pt = scope_param_type(m, pi);
   guard[0] = 0;
   if (ty_is_object(pt)) {
     int pcls = ty_object_class(pt);
@@ -11299,8 +11303,7 @@ static void emit_user_coerce_dispatch(Compiler *c, Buf *b) {
     int mi = comp_method_in_chain(c, k, "coerce", &defcls);
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
-    LocalVar *p = scope_local(m, m->pnames[0]);
-    TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+    TyKind pt = scope_param_type(m, 0);
     /* the parameter takes the boxed numeric receiver; a narrower slot would
        have to be unboxed, and only the poly and numeric shapes can be */
     const char *arg;
@@ -13588,6 +13591,15 @@ static int cmp_int_pair(const void *a, const void *b) {
   return x[1] < y[1] ? -1 : x[1] > y[1];
 }
 
+static int exc_text_method(Compiler *c, int i, int want_message, int *dcls, const char **fn) {
+  int dmsg = -1, dtos = -1;
+  int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
+  int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
+  if (want_message && mi_msg >= 0) { *dcls = dmsg; *fn = "message"; return mi_msg; }
+  if (mi_tos >= 0) { *dcls = dtos; *fn = "to_s"; return mi_tos; }
+  return -1;
+}
+
 char *codegen_program(const NodeTable *nt) {
   Compiler *c = comp_new(nt);
   analyze_program(c);
@@ -14801,16 +14813,8 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, "  if(!e)return (&(\"\\xff\")[1]);\n  const char *cls=e->cls_name;\n");
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
-        int dmsg = -1, dtos = -1;
-        int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
-        int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
-        int mi = -1, dcls = -1;
-        const char *fn = NULL;
-        if (want_message) {
-          if (mi_msg >= 0)      { mi = mi_msg; dcls = dmsg; fn = "message"; }
-          else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
-        }
-        else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
+        int dcls = -1; const char *fn = NULL;
+        int mi = exc_text_method(c, i, want_message, &dcls, &fn);
         if (mi < 0) continue;
         if ((TyKind)c->scopes[mi].ret != TY_STRING) continue;  /* string-returning only */
         /* a reopening's method is picked by the runtime class below */
@@ -14859,16 +14863,8 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, "  if(!e)return sp_box_str((&(\"\\xff\")[1]));\n  const char *cls=e->cls_name;\n");
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
-        int dmsg = -1, dtos = -1;
-        int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
-        int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
-        int mi = -1, dcls = -1;
-        const char *fn = NULL;
-        if (want_message) {
-          if (mi_msg >= 0)      { mi = mi_msg; dcls = dmsg; fn = "message"; }
-          else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
-        }
-        else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
+        int dcls = -1; const char *fn = NULL;
+        int mi = exc_text_method(c, i, want_message, &dcls, &fn);
         if (mi < 0) continue;
         TyKind mret = (TyKind)c->scopes[mi].ret;
         if (mret == TY_UNKNOWN || mret == TY_VOID) continue;
@@ -14912,8 +14908,7 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[scust];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          LocalVar *p = scope_local(s, s->pnames[m]);
-          TyKind pm = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+          TyKind pm = scope_param_type(s, m);
           emit_ctype(c, pm, &b);
         }
         if (s->nparams == 0) buf_puts(&b, "void");
@@ -14941,8 +14936,7 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          LocalVar *p = scope_local(s, s->pnames[m]);
-          TyKind pm = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+          TyKind pm = scope_param_type(s, m);
           emit_ctype(c, pm, &b);
         }
         if (p_has_blk) { if (s->nparams > 0) buf_puts(&b, ", "); buf_puts(&b, "sp_Proc *"); }
@@ -14959,15 +14953,13 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          LocalVar *p = scope_local(s, s->pnames[m]);
-          emit_ctype(c, (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY, &b);
+          emit_ctype(c, scope_param_type(s, m), &b);
         }
         if (s->nparams == 0) buf_puts(&b, "void");
         buf_puts(&b, ");\n");
         buf_printf(&b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
         for (int m = 0; m < s->nparams; m++) {
-          LocalVar *p = scope_local(s, s->pnames[m]);
-          emit_ctype(c, (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY, &b);
+          emit_ctype(c, scope_param_type(s, m), &b);
           buf_puts(&b, ", ");
         }
         buf_puts(&b, "sp_Proc *);\n");

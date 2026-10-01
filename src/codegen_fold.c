@@ -5928,7 +5928,7 @@ int emit_lent_local(LocalVar *lv, const char *vn, Buf *out) {
    An override the call has dropped since (a later call reuses its index)
    is pruned when the next one is taken, so the list is no longer than the
    overrides live at once. */
-typedef struct { int idx, node, t, th; } RanHandle;
+typedef struct { int idx, node, t, th, tb; } RanHandle;
 static RanHandle *g_ran_hnd;
 static int g_n_ran_hnd, g_cap_ran_hnd;
 
@@ -5938,17 +5938,22 @@ static int g_n_ran_hnd, g_cap_ran_hnd;
    declared anywhere in the statement's pending lines, matched another
    String's temp when the variable held no handle: `h((buf.upcase!; 1), d,
    (d = +"q"; 2))` bound the block-scoped temp upcase! took of buf. */
-int ran_first_handle(int node) {
+static RanHandle *ran_first_saved(int node) {
   for (int i = g_n_argov - 1; i >= 0; i--) {
     if (g_argov_node[i] != node) continue;
     int t;
-    if (sscanf(g_argov_text[i], "_t%d", &t) != 1) return -1;
+    if (sscanf(g_argov_text[i], "_t%d", &t) != 1) return NULL;
     for (int j = 0; j < g_n_ran_hnd; j++)
       if (g_ran_hnd[j].idx == i && g_ran_hnd[j].node == node && g_ran_hnd[j].t == t)
-        return g_ran_hnd[j].th;
-    return -1;
+        return &g_ran_hnd[j];
+    return NULL;
   }
-  return -1;
+  return NULL;
+}
+
+int ran_first_handle(int node) {
+  RanHandle *saved = ran_first_saved(node);
+  return saved ? saved->th : -1;
 }
 
 static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provided, Buf *out) {
@@ -6205,7 +6210,28 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
         unsupported_feature(c, provided, msg);
       }
     }
-    if (pt == TY_POLY) emit_boxed(c, provided, out);   /* box into a poly param */
+    if (pt == TY_POLY) {
+      /* Narrowing changes a read, not its POLY slot. Unboxing its String
+         and boxing the bytes again would detach the caller's handle. If
+         a later argument rebinds the local, use the box saved when this
+         argument ran, not the local's new value. */
+      const char *vn = nt_kind(c->nt, provided) == NK_LocalVariableReadNode
+                         ? nt_str(c->nt, provided, "name") : NULL;
+      Scope *vs = vn ? comp_scope_of(c, provided) : NULL;
+      LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
+      if (lv && lv->type == TY_POLY && comp_ntype(c, provided) != TY_POLY) {
+        RanHandle *saved = ran_first_saved(provided);
+        if (saved && saved->tb >= 0) buf_printf(out, "_t%d", saved->tb);
+        else {
+          Buf ref = {0};
+          emit_local_ref(c, provided, vn, &ref);
+          if (c->poly_strbuf_lift[provided]) emit_poly_lift_ref(ref.p, out);
+          else buf_puts(out, ref.p);
+          free(ref.p);
+        }
+      }
+      else emit_boxed(c, provided, out);
+    }
     else {
       TyKind at = comp_ntype(c, provided);
       /* An int argument reaching a bigint parameter is promoted at the
@@ -7380,12 +7406,27 @@ static void emit_arg_temp(Compiler *c, int v) {
      override below (ran_first_handle). */
   char sref[192];
   NodeKind vk = nt_kind(c->nt, v);
-  int th = -1;
+  int th = -1, tb = -1;
   if ((vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode) &&
       strbuf_slot_ref(c, v, sref, sizeof sref)) {
     th = ++g_tmp;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d);\n", th, sref, th);
+  }
+  if (vk == NK_LocalVariableReadNode && at != TY_POLY) {
+    const char *vn = nt_str(c->nt, v, "name");
+    Scope *vs = comp_scope_of(c, v);
+    LocalVar *lv = vn && vs ? scope_local(vs, vn) : NULL;
+    if (lv && lv->type == TY_POLY) {
+      Buf ref = {0}, box = {0};
+      emit_local_ref(c, v, vn, &ref);
+      if (c->poly_strbuf_lift[v]) emit_poly_lift_ref(ref.p, &box);
+      else buf_puts(&box, ref.p);
+      tb = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tb, box.p, tb);
+      free(ref.p); free(box.p);
+    }
   }
   int t = ++g_tmp;
   Buf hb; memset(&hb, 0, sizeof hb);
@@ -7406,14 +7447,14 @@ static void emit_arg_temp(Compiler *c, int v) {
   for (int j = 0; j < g_n_ran_hnd; j++)
     if (g_ran_hnd[j].idx < g_n_argov) g_ran_hnd[k++] = g_ran_hnd[j];
   g_n_ran_hnd = k;
-  if (th >= 0) {
+  if (th >= 0 || tb >= 0) {
     if (g_n_ran_hnd == g_cap_ran_hnd) {
       g_cap_ran_hnd = g_cap_ran_hnd ? g_cap_ran_hnd * 2 : 16;
       RanHandle *nr = realloc(g_ran_hnd, sizeof *g_ran_hnd * (size_t)g_cap_ran_hnd);
       if (!nr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       g_ran_hnd = nr;
     }
-    g_ran_hnd[g_n_ran_hnd++] = (RanHandle){ g_n_argov, v, t, th };
+    g_ran_hnd[g_n_ran_hnd++] = (RanHandle){ g_n_argov, v, t, th, tb };
   }
   g_argov_node[g_n_argov] = v;
   snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", t);

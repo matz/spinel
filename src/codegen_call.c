@@ -24640,7 +24640,7 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
     if (nt_kind(nt, av[k]) == NK_SplatNode) break;
     int shared;
     const char *kind = strvar_arg(c, av[k], &shared);
-    if (!kind || ctor_arg_shared(c, av[k], 0)) continue;
+    if (!kind) continue;
     const char *pn = NULL, *thr = NULL;
     int r, pulled;
     if (m->rest_idx >= 0 && k >= m->rest_idx) {
@@ -24655,6 +24655,19 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       thr = "a parameter it hands on";
       pulled = r > 0;
     }
+    if (r == -2) {
+      TyKind at = comp_ntype(c, av[k]);
+      if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
+        char msg[512];
+        snprintf(msg, sizeof msg,
+                 "a String passed to `%s`'s parameter `%s` through a parameter it hands on escapes: "
+                 "a container, stored field, block or return may hold a copied String. "
+                 "This path cannot preserve the caller's String identity and is refused.", name, pn);
+        unsupported_feature(c, av[k], msg);
+      }
+      continue;
+    }
+    if (ctor_arg_shared(c, av[k], 0)) continue;
     /* a local or a parameter the passes pulled into the handle goes over as
        it; one past the 16 positions, or behind an answer cut short, was not */
     if (nt_kind(nt, av[k]) == NK_LocalVariableReadNode && !sp_streq(kind, "a block's parameter") &&

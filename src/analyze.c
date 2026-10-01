@@ -20817,11 +20817,243 @@ static int fwd_call_target(Compiler *c, int u) {
   return -1;
 }
 
+static int fwd_splat_start(Compiler *c, int u, const char *rn);
+static int fwd_poly_add(Compiler *c, int mi, int pj);
+static int fwd_param_appends(Compiler *c, int mi, int j);
+
+/* The incoming String uses the builtin contract only when a reopen has
+   not replaced it. Unrelated classes with the same name do not own this
+   dispatch, but String/Object/Kernel overrides and included methods do. */
+static int fwd_string_builtin(Compiler *c, const char *name) {
+  static const char *const owners[] = { "String", "Object", "Kernel", "BasicObject" };
+  for (int i = 0; i < 4; i++) {
+    int ci = comp_class_index(c, owners[i]);
+    if (ci >= 0 && comp_method_in_chain(c, ci, name, NULL) >= 0) return 0;
+  }
+  return 1;
+}
+
+/* Under the incoming-String hypothesis, to_s/itself can be aliases even
+   when the slot is POLY. This is a read-only proof, not handle promotion. */
+static int fwd_alias_of(Compiler *c, int mi, const char *ln, const char *pn, int depth) {
+  if (sp_streq(ln, pn)) return 1;
+  if (depth > 3) return 0;
+  const NodeTable *nt = c->nt;
+  int any = 0;
+  for (int w = comp_lvw_first_sc(c, mi, ln); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (c->nscope[w] != mi || !sp_streq(nt_str(nt, w, "name"), ln)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode) return 0;
+    int v = nt_ref(nt, w, "value");
+    if (nt_kind(nt, v) == NK_CallNode) {
+      const char *nm = nt_str(nt, v, "name");
+      if (nm && fwd_string_builtin(c, nm) && (sp_streq(nm, "to_s") || sp_streq(nm, "itself")))
+        v = nt_ref(nt, v, "receiver");
+    }
+    if (nt_kind(nt, v) != NK_LocalVariableReadNode || comp_scope_of(c, v) != &c->scopes[mi]) return 0;
+    const char *vn = nt_str(nt, v, "name");
+    if (!vn || !fwd_alias_of(c, mi, vn, pn, depth + 1)) return 0;
+    any = 1;
+  }
+  return any;
+}
+
+/* A read of this parameter (or a supported pure local alias) can carry
+   the caller's String. A narrowing to Node/Integer/etc. cannot. */
+static int fwd_param_read(Compiler *c, int mi, const char *pn, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_LocalVariableReadNode) return 0;
+  TyKind ty = c->nilnarrow[node] != TY_UNKNOWN ? c->nilnarrow[node] : comp_ntype(c, node);
+  if (ty != TY_POLY && ty != TY_UNKNOWN && ty != TY_STRING && ty != TY_STRBUF &&
+      !(c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]))) return 0;
+  const char *vn = nt_str(nt, node, "name");
+  return vn && comp_scope_of(c, node) == &c->scopes[mi] &&
+         (fwd_alias_of(c, mi, vn, pn, 0) || an_local_pure_alias_of(c, mi, vn, pn, 0));
+}
+
+/* Truth of a guard for the incoming String: -1 false, 1 true, 0 unknown.
+   Never prune using a binding the method can reassign, or an unknown/module
+   constant: a String may include a module. No occurrence types are changed. */
+static int fwd_string_guard(Compiler *c, int mi, const char *pn, int node, int depth) {
+  if (node < 0 || depth > 64) return 0;
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_AndNode || k == NK_OrNode) {
+    int l = fwd_string_guard(c, mi, pn, nt_ref(nt, node, "left"), depth + 1);
+    int r = fwd_string_guard(c, mi, pn, nt_ref(nt, node, "right"), depth + 1);
+    if (k == NK_AndNode) return l < 0 || r < 0 ? -1 : l > 0 && r > 0;
+    return l > 0 || r > 0 ? 1 : l < 0 && r < 0 ? -1 : 0;
+  }
+  if (k != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (!nm || !fwd_string_builtin(c, nm)) return 0;
+  int recv = nt_ref(nt, node, "receiver");
+  if (nm && sp_streq(nm, "!")) return -fwd_string_guard(c, mi, pn, recv, depth + 1);
+  if (!fwd_param_read(c, mi, pn, recv)) return 0;
+  LocalVar *p = scope_local(&c->scopes[mi], pn);
+  if (!p || p->proc_rebinds) return 0;
+  for (int w = comp_lvw_first_sc(c, mi, pn); w >= 0; w = comp_lvw_next_sc(c, w))
+    if (comp_scope_of(c, w) == &c->scopes[mi] && sp_streq(nt_str(nt, w, "name"), pn)) return 0;
+  if (nm && sp_streq(nm, "nil?")) return -1;
+  if (!nm || (!sp_streq(nm, "is_a?") && !sp_streq(nm, "kind_of?"))) return 0;
+  int n = 0, a = nt_ref(nt, node, "arguments");
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  if (n != 1 || (nt_kind(nt, args[0]) != NK_ConstantReadNode && nt_kind(nt, args[0]) != NK_ConstantPathNode)) return 0;
+  const char *cn = nt_str(nt, args[0], "name");
+  if (cn && sp_streq(cn, "String")) return 1;
+  if (isa_narrow_type(cn) != TY_UNKNOWN) return -1;
+  int ci = cn ? comp_class_index(c, cn) : -1;
+  if (ci < 0 || nt_kind(nt, c->classes[ci].def_node) != NK_ClassNode) return 0;
+  /* Object/BasicObject contain String; a subclass of String may itself be
+     the incoming String. Only an unrelated, actual class is disjoint. */
+  if (sp_streq(cn, "Object") || sp_streq(cn, "BasicObject")) return 0;
+  for (int p = ci; p >= 0; p = c->classes[p].parent)
+    if (sp_streq(c->classes[p].name, "String")) return 0;
+  return -1;
+}
+
+/* Trusted native :string inputs are byte consumers, not Ruby box stores.
+   :any/rest arguments do not have that contract. Ruby targets are separately
+   followed; a native return spec is not evidence about its input. */
+static int fwd_native_bytes(Compiler *c, int node, int arg, int argc) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (recv < 0 || !nm) return 0;
+  if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
+    const char *mod = nt_str(nt, recv, "name");
+    int fi = comp_native_find(c, mod, nm);
+    if (fi >= 0 && arg < c->native_funcs[fi].nargs)
+      return sp_streq(c->native_funcs[fi].args[arg], "string");
+    fi = ffi_find_func(c, mod, nm);
+    return fi >= 0 && arg < c->ffi_funcs[fi].nargs && sp_streq(c->ffi_funcs[fi].args[arg], "str");
+  }
+  TyKind rt = comp_ntype(c, recv);
+  if (!ty_is_object(rt)) return 0;
+  int fi = comp_native_method_find(c, ty_object_class(rt), nm, argc, 0);
+  return fi >= 0 && arg < c->native_methods[fi].nargs && sp_streq(c->native_methods[fi].args[arg], "string");
+}
+
+/* Unsupported escapes are not evidence of an append: pulling the input
+   into a handle does not make a container/return copy share that handle.
+   Refuse these paths at emission, independently of known direct appends.
+   Bare, laid-out call arguments are followed by the forwarding walk. */
+static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, int kept, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  /* This bounds source-tree recursion, not the forwarding graph. Beyond
+     it there is no readonly proof: refuse rather than risk the C stack. */
+  if (depth > 128) return 1;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_LocalVariableReadNode) return kept && fwd_param_read(c, mi, pn, node);
+  /* A captured read is a retention even when its immediate use only reads
+     bytes: the closure could observe later mutations through another alias. */
+  if (kept == 2) goto children;
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *body = nt_arr(nt, node, "body", &n);
+    for (int i = 0; i < n; i++)
+      if (fwd_param_kept(c, mi, pn, body[i], i == n - 1 ? kept : 0, appended, depth + 1)) return 1;
+    return 0;
+  }
+  if (k == NK_EmbeddedStatementsNode) kept = 0; /* interpolation copies bytes */
+  if (k == NK_ArrayNode || k == NK_HashNode || k == NK_AssocNode ||
+      k == NK_InstanceVariableWriteNode || k == NK_GlobalVariableWriteNode ||
+      k == NK_ClassVariableWriteNode || k == NK_ConstantWriteNode ||
+      k == NK_ReturnNode || k == NK_YieldNode) kept = 1;
+  if (k == NK_BlockNode || k == NK_LambdaNode) kept = 2;
+  if (k == NK_LocalVariableWriteNode) {
+    const char *wn = nt_str(nt, node, "name");
+    kept = kept || !wn || !fwd_alias_of(c, mi, wn, pn, 0);
+  }
+  if (k == NK_IfNode || k == NK_UnlessNode) {
+    int pred = nt_ref(nt, node, "predicate");
+    if (fwd_param_kept(c, mi, pn, pred, 0, appended, depth + 1)) return 1;
+    int truth = fwd_string_guard(c, mi, pn, pred, 0);
+    if (k == NK_UnlessNode) truth = -truth;
+    return (truth >= 0 && fwd_param_kept(c, mi, pn, nt_ref(nt, node, "statements"), kept, appended, depth + 1)) ||
+           (truth <= 0 && fwd_param_kept(c, mi, pn, nt_ref(nt, node, k == NK_UnlessNode ? "else_clause" : "subsequent"), kept, appended, depth + 1));
+  }
+  if (k == NK_AndNode || k == NK_OrNode) {
+    int left = nt_ref(nt, node, "left");
+    if (fwd_param_kept(c, mi, pn, left, kept, appended, depth + 1)) return 1;
+    int truth = fwd_string_guard(c, mi, pn, left, 0);
+    return (k == NK_AndNode ? truth >= 0 : truth <= 0) &&
+           fwd_param_kept(c, mi, pn, nt_ref(nt, node, "right"), kept, appended, depth + 1);
+  }
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    int recv = nt_ref(nt, node, "receiver");
+    int read = dyn_pure_read_name(nm) || (nm && (sp_streq(nm, "is_a?") ||
+               sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
+               sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
+               sp_streq(nm, "<=") || sp_streq(nm, ">=")));
+    int self = nm && (sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze"));
+    int mutator = an_str_mutator_name(nm);
+    if (!nm || !fwd_string_builtin(c, nm)) read = self = mutator = 0;
+    int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
+    if (rest) read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?"));
+    if (fwd_param_kept(c, mi, pn, recv, read ? 0 : self || mutator ? kept : 1, appended, depth + 1)) return 1;
+    int a = nt_ref(nt, node, "arguments"), n = 0;
+    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+    ACallTargets targets = {0};
+    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+    int bytes = (rt == TY_STRING || rt == TY_STRBUF) && (read || mutator);
+    if (!bytes) {
+      an_call_targets_of(c, node, &targets);
+      if (!targets.n) act_add(&targets, fwd_call_target(c, node));
+    }
+    int printed = recv < 0 && nm && (sp_streq(nm, "p") || sp_streq(nm, "puts") || sp_streq(nm, "print"));
+    for (int i = 0; i < n; i++) {
+      int forwarded = targets.n > 0;
+      for (int ti = 0; ti < targets.n; ti++) {
+        int t = targets.v[ti], matched = 0;
+        Scope *target = &c->scopes[t];
+        for (int j = 0; j < target->nparams; j++) {
+          if (arg_layout_param_node(c, target, node, j, NULL) != args[i]) continue;
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, args[i])) *appended |= fwd_poly_add(c, t, j);
+        }
+        int plain = 1, pos = n;
+        while (pos > 0 && (nt_kind(nt, args[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, args[pos - 1]) == NK_BlockArgumentNode)) pos--;
+        for (int j = 0; j < pos; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
+        if (plain && target->rest_idx >= 0 && i >= target->rest_idx && i < pos - target->npost_rest) {
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, args[i])) *appended |= fwd_param_appends(c, t, i);
+        }
+        if (rest && nt_kind(nt, args[i]) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
+        forwarded &= matched;
+      }
+      int consume = bytes || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p")));
+      /* Only bare parameter reads have a forwarding edge. Parentheses,
+         conversions and ternaries are conservatively retained, not exempted
+         merely because their containing argument has a destination. */
+      if (forwarded && !rest && nt_kind(nt, args[i]) != NK_LocalVariableReadNode) forwarded = 0;
+      if (fwd_param_kept(c, mi, pn, args[i], forwarded || consume ? 0 : 1, appended, depth + 1)) {
+        free(targets.v); return 1;
+      }
+    }
+    free(targets.v);
+    return fwd_param_kept(c, mi, pn, nt_ref(nt, node, "block"), 2, appended, depth + 1);
+  }
+children:;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (fwd_param_kept(c, mi, pn, nt_ref_at(nt, node, i), kept, appended, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (fwd_param_kept(c, mi, pn, ids[j], kept, appended, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 static unsigned fwd_rest_bits(Compiler *c, int mi);
 static SbMutTab g_fwd_poly_seen;
+static SbMutTab g_fwd_poly_cache; /* completed emission queries, result + 3 */
 static int g_fwd_poly_depth;
+static int g_fwd_codegen;
 /* Set when an answer below was cut short, so it is not kept as final: 1 a
-   parameter still being asked (a cycle of forwarders), 2 the rest depth bound. */
+   parameter still being asked, 2 the rest depth bound, 4 an unsupported escape. */
 static int g_fwd_taint;
 /* fwd_rest_bits beside the elements' bits 0-15: an element at offset 16 or
    more, past what the bits and the dynamic masks hold, reaches a parameter
@@ -20829,6 +21061,7 @@ static int g_fwd_taint;
    caller's String cannot be pulled in, and the refusal takes it. */
 #define FWD_REST_PAST 0x10000u
 #define FWD_REST_OPEN 0x20000u
+#define FWD_REST_KEPT 0x40000u
 /* Does method mi append to what its parameter j is bound to: in place, lent,
    the handle, or a POLY parameter or a rest element it hands on? */
 static int fwd_param_appends(Compiler *c, int mi, int j) {
@@ -20839,11 +21072,14 @@ static int fwd_param_appends(Compiler *c, int mi, int j) {
   if (m->rest_idx >= 0 && j >= m->rest_idx) {
     unsigned rb = fwd_rest_bits(c, mi);
     if (rb & FWD_REST_OPEN) g_fwd_taint |= 2;
+    if (rb & FWD_REST_KEPT) g_fwd_taint |= 4;
     return j - m->rest_idx < 16 ? (int)((rb >> (j - m->rest_idx)) & 1u) : (rb & FWD_REST_PAST) != 0;
   }
   if (j >= m->nparams || !m->pnames[j]) return 0;
   LocalVar *q = scope_local(m, m->pnames[j]);
   if (!q || !q->is_param || q->is_block_param) return 0;
+  if (g_fwd_codegen && (q->type == TY_POLY || q->type == TY_STRING || q->type == TY_STRBUF))
+    return fwd_poly_param_handed_on(c, mi, j);
   if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
   if (q->type != TY_POLY) return 0;
   if (an_param_mutated_in_place(c, mi, j)) return 1;
@@ -20876,12 +21112,13 @@ static int fwd_splat_start(Compiler *c, int u, const char *rn) {
    afresh by its own. */
 static unsigned *g_fwd_rest;
 static int g_fwd_n;
+static unsigned g_fwd_version, g_fwd_scope_gen;
 static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn);
 static int g_fwd_rest_depth;   /* forwarders being asked, nested */
 static unsigned fwd_rest_bits(Compiler *c, int mi) {
   if (mi < 0 || mi >= g_fwd_n) return 0;
-  if (g_fwd_rest[mi] & 0x40000000u) return g_fwd_rest[mi] & 0x3ffffu;
-  if (g_fwd_rest[mi] & 0x20000000u) { g_fwd_taint |= 1; return g_fwd_rest[mi] & 0x3ffffu; }
+  if (g_fwd_rest[mi] & 0x40000000u) return g_fwd_rest[mi] & 0x7ffffu;
+  if (g_fwd_rest[mi] & 0x20000000u) { g_fwd_taint |= 1; return g_fwd_rest[mi] & 0x7ffffu; }
   if (g_fwd_rest_depth > 64) { g_fwd_taint |= 2; return FWD_REST_OPEN; }
   Scope *m = &c->scopes[mi];
   const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
@@ -20901,6 +21138,7 @@ static unsigned fwd_rest_bits(Compiler *c, int mi) {
   g_fwd_rest_depth--;
   /* the top of a cycle has its answer; one cut at the bound says so */
   if (tainted & 2) bits |= FWD_REST_OPEN;
+  if (tainted & 4) bits |= FWD_REST_KEPT;
   g_fwd_taint = outer | (top ? 0 : tainted);
   g_fwd_rest[mi] = !top && tainted ? 0 : 0x40000000u | bits;
   return bits;
@@ -20917,7 +21155,8 @@ static unsigned fwd_rest_past(Compiler *c, int t, int p) {
 static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
-  unsigned bits = 0;
+  int appended = 0;
+  unsigned bits = g_fwd_codegen && fwd_param_kept(c, mi, rn, m->body, 1, &appended, 0) ? FWD_REST_KEPT : 0;
   for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int p = fwd_splat_start(c, u, rn);
@@ -20941,18 +21180,27 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
   return bits;
 }
 
-/* Does POLY parameter pj of method mi reach a parameter that appends, by a
-   `super` or a call it is handed to? Visit each (scope, parameter) once per
-   query, so both cycles and converging paths terminate without repeatedly
-   scanning the same body. A read-only chain is not a mutation just because
-   it is long. A revisit cuts an edge: do not cache a rest answer relying on
-   it, since a different query may reach an appender beyond that edge. */
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
-  const NodeTable *nt = c->nt;
+/* The visited records themselves are a worklist: enqueue a parameter once,
+   rather than putting every forwarding edge on the compiler's C stack.
+   Rest queries remain separately bounded and taint a cut edge as before. */
+static int fwd_poly_add(Compiler *c, int mi, int pj) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
+  if (m->rest_idx >= 0 && pj >= m->rest_idx) return fwd_param_appends(c, mi, pj);
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
-  const char *pn = m->pnames[pj];
+  LocalVar *p = scope_local(m, m->pnames[pj]);
+  if (!p || !p->is_param || p->is_block_param) return 0;
+  if (!g_fwd_codegen && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
+  if (p->type != TY_POLY && !(g_fwd_codegen && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
+  signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
+  if (*seen) { g_fwd_taint |= 1; return 0; }
+  *seen = 1;
+  return 0;
+}
+
+static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
+  const NodeTable *nt = c->nt;
+  if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
   if (!g_fwd_poly_depth) {
     int np = 0;
     for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
@@ -20966,40 +21214,47 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
                            (unsigned)(g_fwd_poly_seen.cap - 1)] = -1;
     g_fwd_poly_seen.n = 0;
   }
-  signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, pn, mi, 1);
-  if (*seen) { g_fwd_taint |= 1; return 0; }
-  *seen = 1;
+  int first = g_fwd_poly_seen.n;
+  int appended = fwd_poly_add(c, mi, pj);
   g_fwd_poly_depth++;
-  int appended = 0;
-  int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
-  if (t >= 0) {
-    Scope *tm = &c->scopes[t];
-    for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
-      if (nt_kind(nt, q) != NK_ForwardingSuperNode || comp_scope_of(c, q) != m) continue;
-      for (int j = 0; j < tm->nparams; j++)
-        if (zsuper_param_source(c, m, tm, j) == pj && fwd_param_appends(c, t, j)) { appended = 1; goto done; }
+  for (int r = first; r < g_fwd_poly_seen.n; r++) {
+    if (g_fwd_poly_seen.val[r] == 2) continue; /* a nested rest query processed it */
+    g_fwd_poly_seen.val[r] = 2;
+    mi = g_fwd_poly_seen.key[r];
+    Scope *m = &c->scopes[mi];
+    const char *pn = g_fwd_poly_seen.name[r];
+    for (pj = 0; pj < m->nparams && !sp_streq(m->pnames[pj], pn); pj++) {}
+    LocalVar *p = scope_local(m, pn);
+    if (p->byref_out || (p->type == TY_STRBUF && p->str_shared) || an_param_mutated_in_place(c, mi, pj)) appended = 1;
+    if (g_fwd_codegen && fwd_param_kept(c, mi, pn, m->body, 1, &appended, 0)) g_fwd_taint |= 4;
+    int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
+    if (t >= 0) {
+      Scope *tm = &c->scopes[t];
+      for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
+        if (comp_scope_of(c, q) != m) continue;
+        for (int j = 0; j < tm->nparams; j++)
+          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, t, j);
+      }
+      for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
+        if (comp_scope_of(c, q) != m) continue;
+        for (int j = 0; j < tm->nparams; j++) {
+          int an = arg_layout_param_node(c, tm, q, j, NULL);
+          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, t, j);
+        }
+      }
     }
-    for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
-      if (nt_kind(nt, q) != NK_SuperNode || comp_scope_of(c, q) != m) continue;
-      for (int j = 0; j < tm->nparams; j++) {
-        int an = arg_layout_param_node(c, tm, q, j, NULL);
-        if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-            sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, t, j)) { appended = 1; goto done; }
+    for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
+      if (g_fwd_codegen) break; /* the guard-aware visitor owns call edges */
+      if (nt_kind(nt, u) != NK_CallNode) continue;
+      int ct = fwd_call_target(c, u);
+      if (ct < 0) continue;
+      Scope *cm = &c->scopes[ct];
+      for (int j = 0; j < cm->nparams; j++) {
+        int an = arg_layout_param_node(c, cm, u, j, NULL);
+        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, ct, j);
       }
     }
   }
-  for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
-    if (nt_kind(nt, u) != NK_CallNode) continue;
-    int ct = fwd_call_target(c, u);
-    if (ct < 0) continue;
-    Scope *cm = &c->scopes[ct];
-    for (int j = 0; j < cm->nparams; j++) {
-      int an = arg_layout_param_node(c, cm, u, j, NULL);
-      if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-          sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, ct, j)) { appended = 1; goto done; }
-    }
-  }
-done:
   g_fwd_poly_depth--;
   return appended;
 }
@@ -21007,11 +21262,15 @@ done:
 /* For the emitters' refusal, after the last pass: does method mi forward
    element i of its rest to a parameter that appends, and does it hand its
    POLY parameter j on to one? */
-static int g_fwd_codegen;
 static void fwd_memo_fresh(Compiler *c) {
-  if (g_fwd_codegen && g_fwd_n == c->nscopes) return;
+  unsigned gen = comp_scope_index_gen();
+  if (g_fwd_codegen && g_fwd_n == c->nscopes && g_fwd_version == c->nt->version && g_fwd_scope_gen == gen) return;
   free(g_fwd_rest);
+  sb_mut_tab_free(&g_fwd_poly_cache);
+  memset(&g_fwd_poly_cache, 0, sizeof g_fwd_poly_cache);
   g_fwd_n = c->nscopes;
+  g_fwd_version = c->nt->version;
+  g_fwd_scope_gen = gen;
   g_fwd_rest = (unsigned *)calloc((size_t)g_fwd_n + 1, sizeof(unsigned));
   if (!g_fwd_rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   g_fwd_codegen = 1;
@@ -21023,6 +21282,7 @@ int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return 0;
   fwd_memo_fresh(c);
   unsigned rb = fwd_rest_bits(c, mi);
+  if (rb & FWD_REST_KEPT) return -2;
   if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return 1;
   return rb & FWD_REST_OPEN ? -1 : 0;
 }
@@ -21033,19 +21293,35 @@ int fwd_param_appends_at(Compiler *c, int mi, int j) {
   g_fwd_taint = 0;
   int r = fwd_param_appends(c, mi, j);
   if (!r && (g_fwd_taint & 2)) r = -1;
+  if (g_fwd_taint & 4) r = -2;
   g_fwd_taint = outer;
   return r;
 }
 int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return 0;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
-  if (!q || q->type != TY_POLY || an_param_mutated_in_place(c, mi, j)) return 0;
+  if (!q || q->type != TY_POLY) return 0;
   fwd_memo_fresh(c);
+  /* Only a completed outer query is cached. Nested rest/cycle queries may
+     depend on a cut edge and keep the existing taint/fixpoint treatment. */
+  if (!g_fwd_poly_cache.cap) {
+    int np = 0;
+    for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+    sb_mut_tab_init(&g_fwd_poly_cache, np);
+  }
+  int cacheable = !g_fwd_poly_depth && !g_fwd_rest_depth;
+  signed char *slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, cacheable);
+  if (cacheable && slot && *slot) return *slot - 3;
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
   int r = fwd_poly_param_handed_on(c, mi, j);
   if (!r && (g_fwd_taint & 2)) r = -1;
+  if (g_fwd_taint & 4) r = -2;
   g_fwd_taint = outer;
+  if (cacheable) {
+    slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, 1);
+    *slot = (signed char)(r + 3);
+  }
   return r;
 }
 
@@ -26327,6 +26603,12 @@ static void rewrite_builtin_alias_self_calls(Compiler *c) {
 }
 
 void analyze_program(Compiler *c) {
+  /* The records borrow parameter names from the preceding Compiler. */
+  sb_mut_tab_free(&g_fwd_poly_seen);
+  memset(&g_fwd_poly_seen, 0, sizeof g_fwd_poly_seen);
+  sb_mut_tab_free(&g_fwd_poly_cache);
+  memset(&g_fwd_poly_cache, 0, sizeof g_fwd_poly_cache);
+  g_fwd_poly_depth = g_fwd_rest_depth = g_fwd_taint = g_fwd_codegen = 0;
   comp_poly_candidates_reset();
   comp_descendants_reset();
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */

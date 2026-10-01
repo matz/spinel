@@ -1088,7 +1088,7 @@ cli-opts-test: $(SPINEL)
 	rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "cli-opts-test: pass" || exit 1
 
-reject-test: $(SPINEL)
+reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
 	t=test/reject/singleton_on_untraceable_recv.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
@@ -1135,6 +1135,7 @@ reject-test: $(SPINEL)
 	  echo "reject-test: FAIL (a global through a POLY hand-on to an appender compiled)"; ok=0; \
 	else grep -q "through a parameter it hands on" "$$tmp/fpc.out" || \
 	  { echo "reject-test: FAIL (a global through a POLY hand-on to an appender rejected without saying why)"; sed -n 1,5p "$$tmp/fpc.out"; ok=0; }; fi; \
+	ruby tools/forward_escape_check.rb $(SPINEL) $(SPINEL_TIMEOUT) || ok=0; \
 	: 'A read-only diamond must visit vertices, not enumerate its 2^24 paths'; \
 	i=0; while [ $$i -lt 24 ]; do \
 	  j=$$((i + 1)); \

@@ -70,7 +70,8 @@ void dyn_open_reach(Compiler *c, int n, int k, DynReach *r);
 int dyn_method_appends(Compiler *c, int mi, int j);
 int an_local_array_changed_x(Compiler *c, const char *xn, Scope *xs);
 int an_local_array_stores_unshared(Compiler *c, const char *xn, Scope *xs);
-/* 1 appends, 0 does not, -1 cannot tell (refused as appending) */
+/* 1 appends, 0 does not, -1 cannot tell (refused as appending),
+   -2 unsupported escape (refused even when the input is shared). */
 int fwd_rest_elem_appends(Compiler *c, int mi, int i);
 int fwd_poly_param_appends(Compiler *c, int mi, int j);
 /* A boxed parameter's argument a literal block appends to through a yield

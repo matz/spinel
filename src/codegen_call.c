@@ -24658,47 +24658,56 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   int pos = ac;
   while (pos > 0 && (nt_kind(nt, av[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, av[pos - 1]) == NK_BlockArgumentNode)) pos--;
-  for (int k = 0; k < pos; k++) {
-    if (nt_kind(nt, av[k]) == NK_SplatNode) break;
+  /* Rest elements use actual positions. Named formals, including explicit
+     keywords and post-rest parameters, use the binder's resolved value node. */
+  int rest_pos = pos;
+  for (int i = 0; i < pos; i++) if (nt_kind(nt, av[i]) == NK_SplatNode) { rest_pos = i; break; }
+  for (int slot = 0; slot < rest_pos + m->nparams; slot++) {
+    int rest = slot < rest_pos;
+    int k = rest ? slot : slot - rest_pos;
+    if (rest && (m->rest_idx < 0 || k < m->rest_idx || k >= pos - m->npost_rest)) continue;
+    if (!rest && (k == m->rest_idx || k == m->kwrest_idx)) continue;
+    int arg = rest ? av[k] : arg_layout_param_node(c, m, id, k, NULL);
+    if (arg < 0) continue;
     int shared;
-    const char *kind = strvar_arg(c, av[k], &shared);
+    const char *kind = strvar_arg(c, arg, &shared);
     if (!kind) continue;
     const char *pn = NULL, *thr = NULL;
     int r, pulled;
-    if (m->rest_idx >= 0 && k >= m->rest_idx) {
-      if (k >= pos - m->npost_rest || !(r = fwd_rest_elem_appends(c, t, k - m->rest_idx))) continue;
+    if (rest) {
+      if (!(r = fwd_rest_elem_appends(c, t, k - m->rest_idx))) continue;
       pn = m->pnames[m->rest_idx] && m->pnames[m->rest_idx][0] != '_' ? m->pnames[m->rest_idx] : "*";
       thr = "the rest it hands on";
       pulled = r > 0 && k - m->rest_idx < 16;
     }
     else {
-      if (k >= m->nparams || !(r = fwd_poly_param_appends(c, t, k))) continue;
+      if (!(r = fwd_poly_param_appends(c, t, k))) continue;
       pn = m->pnames[k];
       thr = "a parameter it hands on";
       pulled = r > 0;
     }
     if (r == -2) {
-      TyKind at = comp_ntype(c, av[k]);
+      TyKind at = comp_ntype(c, arg);
       if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
         char msg[512];
         snprintf(msg, sizeof msg,
                  "a String passed to `%s`'s parameter `%s` through a parameter it hands on escapes: "
                  "a container, stored field, block or return may hold a copied String. "
                  "This path cannot preserve the caller's String identity and is refused.", name, pn);
-        unsupported_feature(c, av[k], msg);
+        unsupported_feature(c, arg, msg);
       }
       continue;
     }
-    if (ctor_arg_shared(c, av[k], 0)) continue;
+    if (ctor_arg_shared(c, arg, 0)) continue;
     /* a local or a parameter the passes pulled into the handle goes over as
        it; one past the 16 positions, or behind an answer cut short, was not */
-    if (nt_kind(nt, av[k]) == NK_LocalVariableReadNode && !sp_streq(kind, "a block's parameter") &&
-        !sp_streq(kind, "a variable a block or a proc captures") && (pulled || local_is_handle(c, av[k])))
+    if (nt_kind(nt, arg) == NK_LocalVariableReadNode && !sp_streq(kind, "a block's parameter") &&
+        !sp_streq(kind, "a variable a block or a proc captures") && (pulled || local_is_handle(c, arg)))
       continue;
     char mt[96]; snprintf(mt, sizeof mt, "`%s`", name);
     char why[96]; snprintf(why, sizeof why, "from %s", kind);
     char through[96]; snprintf(through, sizeof through, "%s", thr);
-    refuse_string_copy(c, av[k], mt, pn, through, why);
+    refuse_string_copy(c, arg, mt, pn, through, why);
   }
 }
 

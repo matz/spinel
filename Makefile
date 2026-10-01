@@ -2864,6 +2864,10 @@ SCALE_CODEGEN_LIMIT ?= 6.9
 # scanned per lookup, took 4,798 steps at N=100 against a billion, which no
 # count or clock sees at a test's size.
 CALL_SHAPES_LIMIT ?= 4.5
+# Readonly POLY entry points sharing one suffix: 5.11x without the per-pass
+# promotion cache, 4.83x with it. This bounds the measured regression, not
+# every pass's asymptotic cost; emission still has separate readonly caching.
+POLY_FORWARD_LIMIT ?= 5.0
 # Each count is taken only from a compile that succeeded (sw): spinel-work
 # prints its count from an atexit handler, also when the compile fails, so
 # reading it alone would accept the ratio of a program that did not build.
@@ -2880,6 +2884,9 @@ scale-test: $(SPINEL_WORK)
 	sh test/scale/call_shapes.sh 25 > "$$tmp/s1.rb"; sh test/scale/call_shapes.sh 100 > "$$tmp/s4.rb"; \
 	sa=$$(sw -c -o "$$tmp/s1.c" "$$tmp/s1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	sb=$$(sw -c -o "$$tmp/s4.c" "$$tmp/s4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	sh test/scale/poly_forward_shared.sh 50 > "$$tmp/p1.rb"; sh test/scale/poly_forward_shared.sh 200 > "$$tmp/p4.rb"; \
+	pa=$$(sw -c -o "$$tmp/p1.c" "$$tmp/p1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	pb=$$(sw -c -o "$$tmp/p4.c" "$$tmp/p4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	( ulimit -t 20; $(SPINEL_WORK) -c -o "$$tmp/hls.c" test/scale/hash_literal_sources_fanout.rb ) >/dev/null 2>&1 || \
 	  { rm -rf "$$tmp"; echo "scale-test: FAIL (the hash-literal source walk revisited call sites along every path)"; exit 1; }; \
 	sh test/scale/ie_forward_chain.sh 2 > "$$tmp/f2.rb"; sh test/scale/ie_forward_chain.sh 4 > "$$tmp/f4.rb"; \
@@ -2887,7 +2894,11 @@ scale-test: $(SPINEL_WORK)
 	fb=$$(sw -c -o "$$tmp/f4.c" "$$tmp/f4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || \
-	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
+	   [ -z "$$pa" ] || [ -z "$$pb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	awk -v a="$$pa" -v b="$$pb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: shared POLY suffix work at 4x the entries and suffix is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (readonly POLY promotion rescanned a shared suffix per entry)"; exit 1; }; \
 	awk -v a="$$fa" -v b="$$fb" -v lim="$(IE_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: instance_eval forwarding work at 2x the wrappers is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the instance_eval forwarding walk grew superlinearly in the wrapper classes, see build_ie_map)"; exit 1; }; \

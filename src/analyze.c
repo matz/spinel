@@ -17209,7 +17209,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj);
+static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *readonly);
 static int fwd_builtin(Compiler *c, const char *owner, const char *name);
 static int fwd_array_store_start(Compiler *c, int node, int argc);
 static int convert_byref_handle_params(Compiler *c,
@@ -17221,6 +17221,13 @@ static int convert_byref_handle_params(Compiler *c,
   if (!hat->ok) return 0;
   ALocalAliases aliases;
   an_local_aliases_build(c, &aliases);
+  /* Completed readonly suffixes are shared only within this conversion
+     pass. A promotion restarts the enclosing fixpoint with a fresh cache;
+     emission and nested/rest queries never consume these phase-local facts. */
+  int np = 0;
+  for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+  SbMutTab readonly;
+  sb_mut_tab_init(&readonly, np);
   /* byref -> handle parameter conversion: a shared handle passed into a
      string-mutating (byref) parameter converts that parameter to the handle
      representation -- byref's const char** slot cannot carry the handle, so
@@ -17259,7 +17266,7 @@ static int convert_byref_handle_params(Compiler *c,
       int poly_mut = (pp->is_param && pp->type == TY_POLY &&
                       ((pp->poly_lift & POLY_LIFT_APPENDED) || an_param_mutated_in_place(c, mi2, pj) ||
                        an_poly_param_yielded_lent(c, mi2, pj) ||
-                       fwd_poly_param_handed_on(c, mi2, pj)));
+                       fwd_poly_param_handed_on(c, mi2, pj, &readonly)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
@@ -17521,6 +17528,7 @@ static int convert_byref_handle_params(Compiler *c,
     }
   }
   an_local_aliases_free(&aliases);
+  sb_mut_tab_free(&readonly);
   anh_free(&hnames); free(hbits);
   return changed;
 }
@@ -20817,7 +20825,7 @@ static int fwd_call_target(Compiler *c, int u) {
 }
 
 static int fwd_splat_start(Compiler *c, int u, const char *rn);
-static int fwd_poly_add(Compiler *c, int mi, int pj);
+static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly);
 static int fwd_param_appends(Compiler *c, int mi, int j);
 
 /* The incoming String uses the builtin contract only when a reopen has
@@ -21091,7 +21099,7 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, int kep
           for (int j = 0; j < target->nparams; j++) {
             if (arg_layout_param_node(c, target, node, j, NULL) != arg) continue;
             matched = 1;
-            if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_poly_add(c, t, j);
+            if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_poly_add(c, t, j, NULL);
           }
           int plain = 1, pos = n;
           while (pos > 0 && (nt_kind(nt, args[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, args[pos - 1]) == NK_BlockArgumentNode)) pos--;
@@ -21186,11 +21194,11 @@ static int fwd_param_appends(Compiler *c, int mi, int j) {
   LocalVar *q = scope_local(m, m->pnames[j]);
   if (!q || !q->is_param || q->is_block_param) return 0;
   if (g_fwd_codegen && (q->type == TY_POLY || q->type == TY_STRING || q->type == TY_STRBUF))
-    return fwd_poly_param_handed_on(c, mi, j);
+    return fwd_poly_param_handed_on(c, mi, j, NULL);
   if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
   if (q->type != TY_POLY) return 0;
   if (an_param_mutated_in_place(c, mi, j)) return 1;
-  return fwd_poly_param_handed_on(c, mi, j);
+  return fwd_poly_param_handed_on(c, mi, j, NULL);
 }
 
 /* The position a call or `super`'s splat of local `rn` starts at among the
@@ -21304,7 +21312,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
 /* The visited records themselves are a worklist: enqueue a parameter once,
    rather than putting every forwarding edge on the compiler's C stack.
    Rest queries remain separately bounded and taint a cut edge as before. */
-static int fwd_poly_add(Compiler *c, int mi, int pj) {
+static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
   /* pj names a formal, not an actual position: post/keyword parameters
@@ -21315,6 +21323,8 @@ static int fwd_poly_add(Compiler *c, int mi, int pj) {
   if (!p || !p->is_param || p->is_block_param) return 0;
   if (!g_fwd_codegen && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
   if (p->type != TY_POLY && !(g_fwd_codegen && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
+  signed char *cached = readonly ? sb_mut_tab_slot(readonly, p->name, mi, 0) : NULL;
+  if (cached && *cached) return 0;
   if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 2)) g_fwd_poly_seen.val[0] |= 4;
   signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
   if (*seen) return 0; /* already queued: its body will still be processed */
@@ -21322,9 +21332,12 @@ static int fwd_poly_add(Compiler *c, int mi, int pj) {
   return 0;
 }
 
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
+static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *readonly) {
   const NodeTable *nt = c->nt;
   if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
+  if (g_fwd_codegen || g_fwd_poly_depth || g_fwd_rest_depth) readonly = NULL;
+  signed char *cached = readonly ? sb_mut_tab_slot(readonly, c->scopes[mi].pnames[pj], mi, 0) : NULL;
+  if (cached && *cached) return 0;
   /* A rest bitmap asks separate questions for separate positions. Give
      each nested POLY walk its own worklist; a visited vertex is not the
      answer to a later question reaching that same appender. */
@@ -21333,8 +21346,8 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
   int internal = nested || g_fwd_rest_depth != 0;
   if (nested) memset(&g_fwd_poly_seen, 0, sizeof g_fwd_poly_seen);
   {
-    int np = 0;
-    for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+    int np = readonly ? readonly->ncap : 0;
+    if (!readonly) for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
     if (g_fwd_poly_seen.ncap < np) {
       sb_mut_tab_free(&g_fwd_poly_seen);
       sb_mut_tab_init(&g_fwd_poly_seen, np);
@@ -21346,7 +21359,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
     g_fwd_poly_seen.n = 0;
   }
   int first = g_fwd_poly_seen.n;
-  int appended = fwd_poly_add(c, mi, pj);
+  int appended = fwd_poly_add(c, mi, pj, readonly);
   int root_kept = 0;
   g_fwd_poly_depth++;
   for (int r = first; r < g_fwd_poly_seen.n; r++) {
@@ -21374,13 +21387,13 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
       for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
         if (comp_scope_of(c, q) != m) continue;
         for (int j = 0; j < tm->nparams; j++)
-          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, t, j);
+          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, t, j, readonly);
       }
       for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
         if (comp_scope_of(c, q) != m) continue;
         for (int j = 0; j < tm->nparams; j++) {
           int an = arg_layout_param_node(c, tm, q, j, NULL);
-          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, t, j);
+          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, t, j, readonly);
         }
       }
     }
@@ -21392,7 +21405,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
       Scope *cm = &c->scopes[ct];
       for (int j = 0; j < cm->nparams; j++) {
         int an = arg_layout_param_node(c, cm, u, j, NULL);
-        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, ct, j);
+        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, ct, j, readonly);
       }
       /* The layout returns formals, not individual rest elements. Follow
          plain actuals gathered into the rest during promotion too; emission
@@ -21414,6 +21427,9 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
      root occurrence handed onward, cannot use that exemption. */
   if (root_kept && g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 4) &&
       (appended || (root_kept & FWD_KEEP_COPY))) g_fwd_taint |= 4;
+  if (readonly && !appended && !g_fwd_taint)
+    for (int v = 0; v < g_fwd_poly_seen.n; v++)
+      *sb_mut_tab_slot(readonly, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 1;
   g_fwd_poly_depth--;
   if (nested) {
     sb_mut_tab_free(&g_fwd_poly_seen);
@@ -21480,7 +21496,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (cacheable && slot && *slot) return *slot - 3;
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
-  int r = fwd_poly_param_handed_on(c, mi, j);
+  int r = fwd_poly_param_handed_on(c, mi, j, NULL);
   if (!r && (g_fwd_taint & 3)) r = -1;
   if (g_fwd_taint & 4) r = -2;
   int complete = !(g_fwd_taint & 1);

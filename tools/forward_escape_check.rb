@@ -96,6 +96,18 @@ cases["readonly_keyword"] = ["keyword_read(value: t)", "", "abc"]
 cases["keyword_escape"] = ["keyword_store(value: t)", "", "abc!"]
 cases["keyword_root"] = ["nil", "", "abc!"]
 cases["keyword_expression"] = ["keyword_store(value: (t.is_a?(String) ? t : nil))", "", "abc!"]
+%w[keyword_only keyword_post_rest].each do |shape|
+  signature = shape == "keyword_only" ? "value:" : "*unused, last, value:"
+  [false, true].each do |readonly|
+    name = "#{readonly ? 'readonly' : 'root'}_#{shape}"
+    target = readonly ? "keyword_read" : "keyword_store"
+    cases[name] = ["nil", "", readonly ? "abc" : "abc!", <<~RUBY]
+      class Reader
+        def #{name}(#{signature}) = #{target}(value: value)
+      end
+    RUBY
+  end
+end
 cases["readonly_predicate"] = ["['abc'].any? { |other| other.eql?(t) }", "", "abc"]
 cases["predicate_escape"] = ["['abc'].any? { a = [t]; a[0] << '!' }; nil", "", "abc!"]
 cases["predicate_lambda"] = ["['abc'].any? { $later = -> { t.bytesize }; false }; nil",
@@ -121,7 +133,15 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   cases.each do |name, (body, followup, want, prefix, guard, before)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
-    entry = name == "keyword_root" || name.start_with?("root_") ? name : "coerce"
+    keyword_entry = name.end_with?("keyword_only", "keyword_post_rest")
+    entry = keyword_entry || name == "keyword_root" || name.start_with?("root_") ? name : "coerce"
+    seed = entry == "coerce" ? "nil" : "1"
+    actual = "s"
+    if keyword_entry
+      positional = name.end_with?("keyword_post_rest") ? "99, 7, " : ""
+      seed = "#{positional}value: 1"
+      actual = "#{positional}value: s"
+    end
     File.write(source, <<~RUBY)
       #{prefix}
       class Reader
@@ -152,10 +172,10 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
         end
       end
       reader = Reader.new
-      reader.#{entry}(#{entry == "coerce" ? "nil" : "1"})
+      reader.#{entry}(#{seed})
       s = +'abc'
       other = s
-      result = reader.#{entry}(s)
+      result = reader.#{entry}(#{actual})
       #{followup}
       p s, other
     RUBY

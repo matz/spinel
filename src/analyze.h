@@ -49,6 +49,7 @@ typedef struct {
   const char *unlifted;  /* a target reached through a path not shared yet ("bind", "curry") */
   const char *pname;     /* a parameter it binds, for a diagnostic */
   const char *mname;     /* the method it binds, when the target is one */
+  int argc1;             /* the call's count of plain positional arguments, plus one; 0 if not known */
 } DynReach;
 /* The keyword arm (`f.call(k1: s)`): what the targets do with keyword `key`. */
 void dyn_call_kw_reach(Compiler *c, int n, const char *key, DynReach *r);
@@ -183,7 +184,8 @@ const char *numbered_param_name(Compiler *c, int params_node, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */
 const char *block_rest_name(Compiler *c, int block);
 const char *block_opt_name(Compiler *c, int block, int idx);
-const char *block_lead_param_name(Compiler *c, int block, int idx);
+const char *block_param_at(Compiler *c, int block, int idx, int n);
+int call_plain_argc(Compiler *c, int call);
 const char *block_post_name(Compiler *c, int block, int idx);
 int block_lone_rest(Compiler *c, int block);
 int block_rest_marker(Compiler *c, int block);

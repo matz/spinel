@@ -2788,9 +2788,41 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
   return 1;
 }
 
+/* The primitives whose reopen a call on a typed receiver -- or on self in
+   the reopen -- is dispatched for, and so where an alias may capture the
+   builtin method itself. */
+static int alias_prim_class(const char *cn) {
+  return cn && (sp_streq(cn, "String") || sp_streq(cn, "Integer") || sp_streq(cn, "Float") ||
+                sp_streq(cn, "Symbol") || sp_streq(cn, "Time"));
+}
+/* Did the program define `od` in class cid -- a def, or an alias of that
+   name -- before node `at`? */
+static int alias_target_defined_before(Compiler *c, ClassInfo *cls, int cid, const char *od, int at) {
+  const NodeTable *nt = c->nt;
+  for (int si = 1; si < c->nscopes; si++) {
+    Scope *sc = &c->scopes[si];
+    if (sc->class_id != cid || sc->is_cmethod || sc->def_node < 0 || sc->def_node >= at) continue;
+    const char *dn = nt_kind(nt, sc->def_node) == NK_DefNode ? nt_str(nt, sc->def_node, "name") : NULL;
+    if ((sc->name && sp_streq(sc->name, od)) || (dn && sp_streq(dn, od))) return 1;
+  }
+  for (int i = 0; i < cls->naliases; i++)
+    if (cls->alias_node[i] >= 0 && cls->alias_node[i] < at && sp_streq(cls->alias_new[i], od)) return 1;
+  return 0;
+}
+
 static void alias_register(Compiler *c, ClassInfo *cls, const char *nw, const char *od, int s) {
   if (alias_capture_earlier_def(c, cls, nw, od, s)) return;
   comp_add_alias_from(cls, nw, od, s);
+  /* In a reopened primitive, an alias of a name the program has not defined
+     there yet names the builtin method: it keeps naming it when the class
+     later defines or re-aliases that name (`alias_method :plus_without, :+`
+     ahead of `alias_method :+, :plus_with`). */
+  int cid = cls->name ? comp_class_index(c, cls->name) : -1;
+  if (s >= 0 && cid >= 0 && alias_prim_class(cls->name) &&
+      !alias_target_defined_before(c, cls, cid, od, s)) {
+    for (int i = cls->naliases - 1; i >= 0; i--)
+      if (cls->alias_node[i] == s && sp_streq(cls->alias_new[i], nw)) { cls->alias_builtin[i] = 1; break; }
+  }
 }
 
 void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {

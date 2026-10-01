@@ -17100,15 +17100,13 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; sp_time_sub_t(_t%d, _t%d); })", tt, tu);
       }
       else if (sp_streq(name, "-") && at == TY_POLY) {
-        /* Time - poly: the poly holds a Time at run time (a mixed collection
-           whose element method returns Time). Unbox to sp_Time and subtract;
-           a non-Time value raises TypeError (#2456). */
+        /* Time - poly: a Time held there gives the Float duration (#2456), a
+           number of the tower an earlier Time, anything else a TypeError --
+           the boxed subtraction's own Time arm, answering boxed. The operand
+           may be a fresh box, so it is rooted across the receiver's box. */
         buf_printf(b, "({ sp_Time _t%d = ", tt); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tu); emit_boxed(c, argv[0], b);
-        buf_printf(b, "; if (_t%d.tag != SP_TAG_OBJ || _t%d.cls_id != SP_BUILTIN_TIME)"
-                      " sp_raise_cls(\"TypeError\", \"can't convert to Time\");"
-                      " sp_time_sub_t(_t%d, *(sp_Time *)_t%d.v.p); })",
-                   tu, tu, tt, tu);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_sub(sp_box_time(_t%d), _t%d); })", tu, tt, tu);
       }
       else if (at == TY_FLOAT) {
         buf_printf(b, "({ sp_Time _t%d = ", tt); emit_expr(c, recv, b);
@@ -24236,8 +24234,8 @@ static int ie_splice_aliases(Compiler *c, int id, const char *name, int recv) {
 }
 
 /* Is block `blk`'s parameter k the shared String handle? */
-static int block_param_is_handle(Compiler *c, int blk, int k) {
-  const char *bp = block_lead_param_name(c, blk, k);
+static int block_param_is_handle(Compiler *c, int blk, int k, int n) {
+  const char *bp = block_param_at(c, blk, k, n);
   Scope *bs = bp ? comp_scope_of(c, blk) : NULL;
   LocalVar *t = bs ? scope_local(bs, bp) : NULL;
   return t && t->type == TY_STRBUF && t->str_shared;
@@ -24774,10 +24772,10 @@ static void refuse_string_copies(Compiler *c, int id) {
       int shared;
       const char *kind = strvar_arg(c, av[k], &shared);
       if (!kind) continue;
-      if (spliced && ie_arg_aliases(c, av[k]) && block_param_wants_alias(c, blk, k)) continue;
+      if (spliced && ie_arg_aliases(c, av[k]) && block_param_wants_alias(c, blk, k, call_plain_argc(c, id))) continue;
       /* a parameter that is the shared handle takes the caller's, pulled in
          (yield_splice_handles) */
-      if (spliced && local_is_handle(c, av[k]) && block_param_is_handle(c, blk, k)) continue;
+      if (spliced && local_is_handle(c, av[k]) && block_param_is_handle(c, blk, k, call_plain_argc(c, id))) continue;
       if (dyn_block_appends(c, blk, k)) {
         char thr2[48]; snprintf(thr2, sizeof thr2, "`%s`", name);
         char why2[64]; snprintf(why2, sizeof why2, "through `%s`", name);
@@ -27767,7 +27765,8 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     const NodeTable *ntR = c->nt;
     int recvR = nt_ref(ntR, id, "receiver");
     const char *nmR = nt_str(ntR, id, "name");
-    if (recvR >= 0 && nmR && nt_ref(ntR, id, "block") < 0) {
+    /* an alias that captured the builtin (builtin_only) is the builtin's */
+    if (recvR >= 0 && nmR && nt_ref(ntR, id, "block") < 0 && !nt_int(ntR, id, "builtin_only", 0)) {
       TyKind rtR = comp_ntype(c, recvR);
       const char *ocR = rtR == TY_STRING ? "String"
                       : rtR == TY_INT ? "Integer"
@@ -28207,7 +28206,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     int erecv = nt_ref(c->nt, id, "receiver");
     TyKind ert = erecv >= 0 ? comp_ntype(c, erecv) : TY_VOID;
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
-        nt_ref(c->nt, id, "block") < 0) {
+        nt_ref(c->nt, id, "block") < 0 && !nt_int(c->nt, id, "builtin_only", 0)) {
       const char *ename = nt_str(c->nt, id, "name");
       const char *ecn = ert == TY_RANGE ? "Range" : ert == TY_TIME ? "Time" : "Class";
       int eci = ert == TY_IO ? io_reopen_class(c, ename) : comp_class_index(c, ecn);
@@ -28928,23 +28927,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
 
   /* Fiber[:k] / Fiber.current[:k] -> sp_Fiber_storage_get */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
-    int is_fiber_recv = 0;
-    const char *rty2 = nt_type(nt, recv);
-    if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "Fiber")) is_fiber_recv = 1;
-    }
-    else if (rty2 && sp_streq(rty2, "CallNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      int rr = nt_ref(nt, recv, "receiver");
-      if (rn && sp_streq(rn, "current") && rr >= 0) {
-        const char *rrty = nt_type(nt, rr);
-        const char *rrn = nt_str(nt, rr, "name");
-        if (rrty && sp_streq(rrty, "ConstantReadNode") && rrn && sp_streq(rrn, "Fiber"))
-          is_fiber_recv = 1;
-      }
-    }
-    if (is_fiber_recv) {
+    if (fiber_storage_recv(nt, recv)) {
       buf_puts(b, "sp_Fiber_storage_get(sp_fiber_current, ");
       emit_fiber_storage_key(c, argv[0], b);
       buf_puts(b, ")");
@@ -44637,23 +44620,7 @@ else {
 
   /* Fiber[:k] = v (expression form) */
   if (sp_streq(name, "[]=") && argc == 2 && recv >= 0) {
-    int is_fiber2 = 0;
-    const char *rty3 = nt_type(nt, recv);
-    if (rty3 && sp_streq(rty3, "ConstantReadNode")) {
-      const char *rn3 = nt_str(nt, recv, "name");
-      if (rn3 && sp_streq(rn3, "Fiber")) is_fiber2 = 1;
-    }
-    else if (rty3 && sp_streq(rty3, "CallNode")) {
-      const char *rn3 = nt_str(nt, recv, "name");
-      int rr3 = nt_ref(nt, recv, "receiver");
-      if (rn3 && sp_streq(rn3, "current") && rr3 >= 0) {
-        const char *rrty3 = nt_type(nt, rr3);
-        const char *rrn3 = nt_str(nt, rr3, "name");
-        if (rrty3 && sp_streq(rrty3, "ConstantReadNode") && rrn3 && sp_streq(rrn3, "Fiber"))
-          is_fiber2 = 1;
-      }
-    }
-    if (is_fiber2) {
+    if (fiber_storage_recv(nt, recv)) {
       TyKind fvt = comp_ntype(c, argv[1]);
       /* Fiber storage is poly-valued. A nil/void/untyped value has no scalar
          C slot -- carry it boxed (`void _t = nil` is otherwise a type error). */
@@ -44881,8 +44848,9 @@ else {
     return;
   }
 
-  /* dispatch user-defined methods on reopened built-in types */
-  if (recv >= 0) {
+  /* dispatch user-defined methods on reopened built-in types -- not for an
+     alias that captured the builtin (builtin_only) */
+  if (recv >= 0 && !nt_int(nt, id, "builtin_only", 0)) {
     const char *oc_cn = NULL;
     switch (rt) {
     case TY_STRING: oc_cn = "String"; break;

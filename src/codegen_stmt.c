@@ -5302,6 +5302,71 @@ static void emit_when_splat_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
   buf_puts(b, ")");
 }
 
+static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
+  int reidx = re_lit_index(c, cond);
+  if (reidx >= 0 && pt == TY_STRING) {
+    buf_printf(b, "(sp_re_match(sp_re_pat_%d, _t%d) >= 0)", reidx, t);
+  }
+  else if (reidx >= 0 && pt == TY_POLY) {
+    buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, _t%d)", reidx, t);
+  }
+  else if (reidx >= 0 && pt == TY_SYMBOL) {
+    buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, sp_box_sym(_t%d))", reidx, t);
+  }
+  else if (pt == TY_STRING && emit_when_string_range(c, cond, t, b)) {
+    /* emitted the lexicographic cover check */
+  }
+  /* a numeric Range never covers an Array or a Hash (nor a String):
+     evaluate the arm for its effects and answer false */
+  else if ((comp_ntype(c, cond) == TY_RANGE && (ty_is_array(pt) || ty_is_hash(pt))) ||
+           (comp_ntype(c, cond) == TY_FLOAT_RANGE && (pt == TY_STRING || ty_is_array(pt) || ty_is_hash(pt)))) {
+    buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, cond, b); buf_puts(b, "), 0)");
+  }
+  else if (comp_ntype(c, cond) == TY_RANGE && pt != TY_STRING) {
+    /* `when lo..hi` is range membership, not equality */
+    int tr = ++g_tmp;
+    buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, cond, b);
+    /* A Float scrutinee compares as a Float. A poly one's
+       nil is no number, and read as one it was covered by every
+       range that holds 0 (or, from a sentinel, a beginless one). */
+    if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_range_cover_poly(&_t%d, _t%d); })", t, tr, t);
+    else buf_printf(b, "; sp_range_%s(&_t%d, _t%d); })", pt == TY_FLOAT ? "cover_f" : "include", tr, t);
+  }
+  else if (comp_ntype(c, cond) == TY_FLOAT_RANGE) {
+    /* `when 1.0..3.0`: float range membership via sp_frange_cover */
+    int tr = ++g_tmp;
+    buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, cond, b);
+    if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_frange_cover(_t%d, sp_poly_to_f(_t%d)); })", t, tr, t);
+    else buf_printf(b, "; sp_frange_cover(_t%d, (sp_float)_t%d); })", tr, t);
+  }
+  else if (comp_ntype(c, cond) == TY_CLASS) {
+    /* `when <class value>`: Module#=== is instance membership, tested
+       at run time against whatever class the value holds -- the same
+       shape a variable pattern already uses (#4271). Comparing the
+       subject to the class with `==` did not even compile. */
+    char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
+    buf_puts(b, "sp_poly_is_a_dyn(");
+    if (pt == TY_POLY) buf_puts(b, scref);
+    else emit_boxed_text(c, pt, scref, b);
+    buf_puts(b, ", sp_box_class(");
+    emit_expr(c, cond, b);
+    buf_puts(b, "), 0)");
+  }
+  else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
+    /* a when value of a different comparable family never matches */
+    buf_puts(b, "0");
+  }
+  else if (nt_type(c->nt, cond) && sp_streq(nt_type(c->nt, cond), "SplatNode")) {
+    /* `when *arr`: membership via value equality (see the int-path arm) */
+    emit_when_splat_test(c, cond, t, pt, b);
+  }
+  else if (pt == TY_BIGINT && comp_ntype(c, cond) == TY_BIGINT) {
+    buf_printf(b, "(sp_bigint_cmp(_t%d, ", t); emit_expr(c, cond, b); buf_puts(b, ") == 0)");
+  }
+  else return 0;
+  return 1;
+}
+
 static void emit_when_proc_test(Compiler *c, int cond, int typed_t, TyKind typed_pt, Buf *b) {
   g_needs_proc_poly_argslot = 1;
   char subj[32]; snprintf(subj, sizeof subj, "_t%d", typed_t);
@@ -5566,66 +5631,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             buf_printf(b, "%d", yes > 0 ? 1 : 0);
           }
           else {
-          int reidx = re_lit_index(c, conds[j]);
-          if (reidx >= 0 && pt == TY_STRING) {
-            buf_printf(b, "(sp_re_match(sp_re_pat_%d, _t%d) >= 0)", reidx, t);
-          }
-          else if (reidx >= 0 && pt == TY_POLY) {
-            buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, _t%d)", reidx, t);
-          }
-          else if (reidx >= 0 && pt == TY_SYMBOL) {
-            buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, sp_box_sym(_t%d))", reidx, t);
-          }
-          else if (pt == TY_STRING && emit_when_string_range(c, conds[j], t, b)) {
-            /* emitted the lexicographic cover check */
-          }
-          /* a numeric Range never covers an Array or a Hash (nor a String):
-             evaluate the arm for its effects and answer false */
-          else if ((comp_ntype(c, conds[j]) == TY_RANGE && (ty_is_array(pt) || ty_is_hash(pt))) ||
-                   (comp_ntype(c, conds[j]) == TY_FLOAT_RANGE && (pt == TY_STRING || ty_is_array(pt) || ty_is_hash(pt)))) {
-            buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
-          }
-          else if (comp_ntype(c, conds[j]) == TY_RANGE && pt != TY_STRING) {
-            /* `when lo..hi` is range membership, not equality */
-            int tr = ++g_tmp;
-            buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, conds[j], b);
-            /* A Float scrutinee compares as a Float. A poly one's
-               nil is no number, and read as one it was covered by every
-               range that holds 0 (or, from a sentinel, a beginless one). */
-            if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_range_cover_poly(&_t%d, _t%d); })", t, tr, t);
-            else buf_printf(b, "; sp_range_%s(&_t%d, _t%d); })", pt == TY_FLOAT ? "cover_f" : "include", tr, t);
-          }
-          else if (comp_ntype(c, conds[j]) == TY_FLOAT_RANGE) {
-            /* `when 1.0..3.0`: float range membership via sp_frange_cover */
-            int tr = ++g_tmp;
-            buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, conds[j], b);
-            if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_frange_cover(_t%d, sp_poly_to_f(_t%d)); })", t, tr, t);
-            else buf_printf(b, "; sp_frange_cover(_t%d, (sp_float)_t%d); })", tr, t);
-          }
-          else if (comp_ntype(c, conds[j]) == TY_CLASS) {
-            /* `when <class value>`: Module#=== is instance membership, tested
-               at run time against whatever class the value holds -- the same
-               shape a variable pattern already uses (#4271). Comparing the
-               subject to the class with `==` did not even compile. */
-            char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
-            buf_puts(b, "sp_poly_is_a_dyn(");
-            if (pt == TY_POLY) buf_puts(b, scref);
-            else emit_boxed_text(c, pt, scref, b);
-            buf_puts(b, ", sp_box_class(");
-            emit_expr(c, conds[j], b);
-            buf_puts(b, "), 0)");
-          }
-          else if (eq_family(pt) && eq_family(comp_ntype(c, conds[j])) && eq_family(pt) != eq_family(comp_ntype(c, conds[j]))) {
-            /* a when value of a different comparable family never matches */
-            buf_puts(b, "0");
-          }
-          else if (nt_type(nt, conds[j]) && sp_streq(nt_type(nt, conds[j]), "SplatNode")) {
-            /* `when *arr`: membership via value equality (see the int-path arm) */
-            emit_when_splat_test(c, conds[j], t, pt, b);
-          }
-          else if (pt == TY_BIGINT && comp_ntype(c, conds[j]) == TY_BIGINT) {
-            buf_printf(b, "(sp_bigint_cmp(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ") == 0)");
-          }
+          if (emit_when_typed_test(c, conds[j], t, pt, b)) { }
           else if (pt == TY_STRING) {
             /* An arm of another type can never be `===` a String: `when
                ["foo", "foo"]` is Array#=== , which is ==, and a String is not
@@ -5955,46 +5961,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
         }
         else if (cn2) { int yes = ty_matches_class(pt, cn2, 0); buf_printf(b, "%d", yes > 0 ? 1 : 0); }
         else {
-        int reidx = re_lit_index(c, conds[j]);
-        if (reidx >= 0 && pt == TY_STRING) { buf_printf(b, "(sp_re_match(sp_re_pat_%d, _t%d) >= 0)", reidx, t); }
-        else if (reidx >= 0 && pt == TY_POLY) { buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, _t%d)", reidx, t); }
-        else if (reidx >= 0 && pt == TY_SYMBOL) { buf_printf(b, "sp_re_case_eq(sp_re_pat_%d, sp_box_sym(_t%d))", reidx, t); }
-        else if (pt == TY_STRING && emit_when_string_range(c, conds[j], t, b)) {
-          /* emitted the lexicographic cover check */
-        }
-        else if ((comp_ntype(c, conds[j]) == TY_RANGE && (ty_is_array(pt) || ty_is_hash(pt))) ||
-                 (comp_ntype(c, conds[j]) == TY_FLOAT_RANGE && (pt == TY_STRING || ty_is_array(pt) || ty_is_hash(pt)))) {
-          buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
-        }
-        else if (comp_ntype(c, conds[j]) == TY_RANGE && pt != TY_STRING) {
-          int tr = ++g_tmp;
-          buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, conds[j], b);
-          if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_range_cover_poly(&_t%d, _t%d); })", t, tr, t);
-          else buf_printf(b, "; sp_range_%s(&_t%d, _t%d); })", pt == TY_FLOAT ? "cover_f" : "include", tr, t);
-        }
-        else if (comp_ntype(c, conds[j]) == TY_FLOAT_RANGE) {
-          int tr = ++g_tmp;
-          buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, conds[j], b);
-          if (pt == TY_POLY) buf_printf(b, "; _t%d.tag != SP_TAG_NIL && sp_frange_cover(_t%d, sp_poly_to_f(_t%d)); })", t, tr, t);
-          else buf_printf(b, "; sp_frange_cover(_t%d, (sp_float)_t%d); })", tr, t);
-        }
-        else if (comp_ntype(c, conds[j]) == TY_CLASS) {
-          /* `when <class value>`: membership at run time (#4271), as above */
-          char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
-          buf_puts(b, "sp_poly_is_a_dyn(");
-          if (pt == TY_POLY) buf_puts(b, scref);
-          else emit_boxed_text(c, pt, scref, b);
-          buf_puts(b, ", sp_box_class(");
-          emit_expr(c, conds[j], b);
-          buf_puts(b, "), 0)");
-        }
-        else if (eq_family(pt) && eq_family(comp_ntype(c, conds[j])) && eq_family(pt) != eq_family(comp_ntype(c, conds[j]))) {
-          buf_puts(b, "0");
-        }
-        else if (nt_type(nt, conds[j]) && sp_streq(nt_type(nt, conds[j]), "SplatNode")) emit_when_splat_test(c, conds[j], t, pt, b);
-        else if (pt == TY_BIGINT && comp_ntype(c, conds[j]) == TY_BIGINT) {
-          buf_printf(b, "(sp_bigint_cmp(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ") == 0)");
-        }
+        if (emit_when_typed_test(c, conds[j], t, pt, b)) { }
         else if (comp_ntype(c, conds[j]) == TY_PROC &&
                  emit_when_lambda_inline(c, conds[j], typed_t, typed_pt, b)) { /* literal lambda inlined */ }
         /* a Proc read out of a container arrives boxed: dispatch on the tag so

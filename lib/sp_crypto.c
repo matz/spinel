@@ -632,32 +632,14 @@ static const char SPC_B64U[64] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 static SP_TLS char sp_crypto_hmac_b64url_buf[44];
+static void sp_crypto_b64url_bytes(const uint8_t *src, int n, char *out);
 
 const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[32];
     sp_crypto_hmac_sha256((const uint8_t *)key, sp_str_byte_len(key),
                           (const uint8_t *)msg, sp_str_byte_len(msg),
                           out);
-    int i, j = 0;
-    for (i = 0; i + 3 <= 32; i += 3) {
-        uint32_t v = ((uint32_t)out[i] << 16)
-                   | ((uint32_t)out[i+1] << 8)
-                   | (uint32_t)out[i+2];
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 6)  & 0x3f];
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[v & 0x3f];
-    }
-    if (i < 32) {
-        uint32_t v = ((uint32_t)out[i] << 16)
-                   | (i + 1 < 32 ? ((uint32_t)out[i+1] << 8) : 0);
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        if (i + 1 < 32) {
-            sp_crypto_hmac_b64url_buf[j++] = SPC_B64U[(v >> 6) & 0x3f];
-        }
-    }
-    sp_crypto_hmac_b64url_buf[j] = '\0';
+    sp_crypto_b64url_bytes(out, 32, sp_crypto_hmac_b64url_buf);
     return sp_crypto_hmac_b64url_buf;
 }
 
@@ -904,29 +886,6 @@ const char *sp_crypto_random_b64url(int nbytes) {
     if (nbytes > 64) nbytes = 64;
     uint8_t r[64];
     if (!sp_crypto_entropy(r, nbytes)) return NULL;
-    int i, j = 0;
-    for (i = 0; i + 3 <= nbytes; i += 3) {
-        uint32_t v = ((uint32_t)r[i] << 16)
-                   | ((uint32_t)r[i+1] << 8)
-                   | (uint32_t)r[i+2];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 6)  & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[v & 0x3f];
-    }
-    int rem = nbytes - i;
-    if (rem == 1) {
-        uint32_t v = (uint32_t)r[i] << 16;
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-    }
-else if (rem == 2) {
-        uint32_t v = ((uint32_t)r[i] << 16)
-                   | ((uint32_t)r[i+1] << 8);
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        sp_crypto_random_b64url_buf[j++] = SPC_B64U[(v >> 6) & 0x3f];
-    }
-    sp_crypto_random_b64url_buf[j] = '\0';
+    sp_crypto_b64url_bytes(r, nbytes, sp_crypto_random_b64url_buf);
     return sp_crypto_random_b64url_buf;
 }

@@ -6384,31 +6384,35 @@ static int nested_block_declares(Compiler *c, int id, const char *nm) {
   return 0;
 }
 
+static void emit_cell_alloc(Compiler *c, LocalVar *lv, const char *nm, Buf *b) {
+  const char *vs = cell_value_struct(lv->type);
+  emit_cell_elem_type(c, lv, b);
+  buf_printf(b, " *_cell_%s = (", nm);
+  emit_cell_elem_type(c, lv, b);
+  buf_puts(b, " *)sp_gc_alloc(sizeof(");
+  emit_cell_elem_type(c, lv, b);
+  buf_puts(b, "), NULL, ");
+  if (lv->type == TY_PROC) buf_puts(b, "sp_cell_scan_procint");
+  else if (lv->type == TY_POLY) buf_puts(b, "sp_cell_scan_rbval");
+  else if (vs) buf_puts(b, cell_value_struct_scan(lv->type));
+  else if (lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv)) buf_puts(b, cell_scan_fn(lv->type));
+  else buf_puts(b, "NULL");
+  buf_printf(b, "); SP_GC_ROOT(_cell_%s); *_cell_%s = ", nm, nm);
+  if (lv->type == TY_FLOAT) buf_puts(b, "0.0");
+  else if (lv->type == TY_POLY) buf_puts(b, "sp_box_nil()");
+  else if (vs) buf_puts(b, cell_value_struct_empty(lv->type));
+  else if (lv->type != TY_PROC && cell_is_typed_ptr(c, lv)) buf_puts(b, "NULL");
+  else buf_puts(b, "0");
+  buf_puts(b, ";\n");
+}
+
 /* A cell the proc's own frame owns, allocated in its prologue (#4087). A
    cell over an inlined block's parameter also gets the plain C slot the
    loop binds (LocalVar.cell_shadow). */
 static void emit_proc_owned_cell(Compiler *c, Buf *pb, LocalVar *lv, const char *nm) {
   if (lv->cell_shadow) declare_local_named(c, pb, lv, nm, 0);
-  const char *vs = cell_value_struct(lv->type);
   buf_puts(pb, "    ");
-  emit_cell_elem_type(c, lv, pb);
-  buf_printf(pb, " *_cell_%s = (", nm);
-  emit_cell_elem_type(c, lv, pb);
-  buf_puts(pb, " *)sp_gc_alloc(sizeof(");
-  emit_cell_elem_type(c, lv, pb);
-  buf_puts(pb, "), NULL, ");
-  if (lv->type == TY_PROC) buf_puts(pb, "sp_cell_scan_procint");
-  else if (lv->type == TY_POLY) buf_puts(pb, "sp_cell_scan_rbval");
-  else if (vs) buf_puts(pb, cell_value_struct_scan(lv->type));
-  else if (lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv)) buf_puts(pb, cell_scan_fn(lv->type));
-  else buf_puts(pb, "NULL");
-  buf_printf(pb, "); SP_GC_ROOT(_cell_%s); *_cell_%s = ", nm, nm);
-  if (lv->type == TY_FLOAT) buf_puts(pb, "0.0");
-  else if (lv->type == TY_POLY) buf_puts(pb, "sp_box_nil()");
-  else if (vs) buf_puts(pb, cell_value_struct_empty(lv->type));
-  else if (lv->type != TY_PROC && cell_is_typed_ptr(c, lv)) buf_puts(pb, "NULL");
-  else buf_puts(pb, "0");
-  buf_puts(pb, ";\n");
+  emit_cell_alloc(c, lv, nm, pb);
 }
 
 /* How an inlined method's PARAMETER is spelled as an assignment target, under
@@ -6472,26 +6476,8 @@ void emit_inlined_local_decl(Compiler *c, LocalVar *lv, const char *rn, Buf *b, 
     }
     return;
   }
-  const char *vs = cell_value_struct(lv->type);
   emit_indent(b, din);
-  emit_cell_elem_type(c, lv, b);
-  buf_printf(b, " *_cell_%s = (", rn);
-  emit_cell_elem_type(c, lv, b);
-  buf_puts(b, " *)sp_gc_alloc(sizeof(");
-  emit_cell_elem_type(c, lv, b);
-  buf_puts(b, "), NULL, ");
-  if (lv->type == TY_PROC) buf_puts(b, "sp_cell_scan_procint");
-  else if (lv->type == TY_POLY) buf_puts(b, "sp_cell_scan_rbval");
-  else if (vs) buf_puts(b, cell_value_struct_scan(lv->type));
-  else if (lv->type != TY_FLOAT && cell_is_typed_ptr(c, lv)) buf_puts(b, cell_scan_fn(lv->type));
-  else buf_puts(b, "NULL");
-  buf_printf(b, "); SP_GC_ROOT(_cell_%s); *_cell_%s = ", rn, rn);
-  if (lv->type == TY_FLOAT) buf_puts(b, "0.0");
-  else if (lv->type == TY_POLY) buf_puts(b, "sp_box_nil()");
-  else if (vs) buf_puts(b, cell_value_struct_empty(lv->type));
-  else if (lv->type != TY_PROC && cell_is_typed_ptr(c, lv)) buf_puts(b, "NULL");
-  else buf_puts(b, "0");
-  buf_puts(b, ";\n");
+  emit_cell_alloc(c, lv, rn, b);
 }
 
 void emit_inlined_locals(Compiler *c, Scope *m, int tag, Buf *b, int din) {
@@ -7520,12 +7506,38 @@ else if (orecv >= 0 && onm) {
       buf_printf(pb, "      for (; __k < __hi; __k++) sp_PolyArray_push(lv_%s, _sp_proc_poly_args[__k]); }\n",
                  restn);
     }
+    /* A post binds as an optional does: the boxed value, unboxed into the
+       type the analysis gave the parameter. Declared boxed whatever that
+       type, a post a lowered block's yields typed a String or an Integer
+       (`rec(x, n - 1, &b)` forwarding to `{ |n = 0, t| t.size }`) was
+       read through the boxed value as that type, and the C did not
+       build. */
     for (int j = 0; j < nposts; j++) {
       const char *pp = proc_post_name(c, create, j);
       if (!pp) continue;
-      buf_printf(pb, "    sp_RbVal lv_%s = ({ sp_int __i = _sp_ps + %d;\n", pp, j);
-      buf_puts(pb, "      (__i < argc && __i < 16) ? _sp_proc_poly_args[__i] : sp_box_nil(); });\n");
-      buf_printf(pb, "    (void)lv_%s;\n", pp);
+      LocalVar *plv = scope_local(bs, pp);
+      TyKind lt = plv ? plv->type : TY_POLY;
+      if (lt == TY_POLY || lt == TY_UNKNOWN) {
+        buf_printf(pb, "    sp_RbVal lv_%s = ({ sp_int __i = _sp_ps + %d;\n", pp, j);
+        buf_puts(pb, "      (__i < argc && __i < 16) ? _sp_proc_poly_args[__i] : sp_box_nil(); });\n");
+        buf_printf(pb, "    (void)lv_%s;\n", pp);
+        continue;
+      }
+      buf_printf(pb, "    sp_RbVal _pv_%s = (_sp_ps + %d < argc && _sp_ps + %d < 16) ? _sp_proc_poly_args[_sp_ps + %d]"
+                     " : sp_box_nil(); SP_GC_ROOT_RBVAL(_pv_%s);\n", pp, j, j, j, pp);
+      char src[160];
+      snprintf(src, sizeof src, "_pv_%s", pp);
+      Buf ub = {0};
+      if (plv->nullable_int) emit_unbox_nilable_text(c, lt, src, &ub);
+      /* nil is the NULL handle, not an empty String (#6179) */
+      else if (lt == TY_STRBUF) buf_printf(&ub, "sp_poly_nil_p(%s) ? NULL : sp_poly_as_strbuf(%s)", src, src);
+      else emit_unbox_text(c, lt, src, &ub);
+      buf_puts(pb, "    ");
+      emit_ctype(c, lt, pb);
+      buf_printf(pb, " lv_%s = %s;", pp, ub.p ? ub.p : "0");
+      if (proc_slot_is_ptr(lt)) buf_printf(pb, " SP_GC_ROOT(lv_%s);", pp);
+      buf_printf(pb, " (void)lv_%s;\n", pp);
+      free(ub.p);
     }
   }
   /* Keyword params (`proc { |a:, b: 5| }`): the caller's kwargs arrive as a
@@ -10116,6 +10128,16 @@ static void emit_zsuper_param(Compiler *c, Scope *s, Scope *pm, const ZSuper *z,
   g_nren = sv;
 }
 
+static void emit_zsuper_args(Compiler *c, Scope *s, Scope *pm, const char *sep0, Buf *b) {
+  ZSuper z;
+  zsuper_begin(c, s, pm, &z);
+  for (int i = 0; i < pm->nparams; i++) {
+    buf_puts(b, i == 0 ? sep0 : ", ");
+    emit_zsuper_param(c, s, pm, &z, i, g_nren, g_nren, b);
+  }
+  zsuper_end(&z);
+}
+
 /* A bare `super` in a method taking `*rest`: CRuby passes its positionals
    with the rest spread among them, so how many reach the parent is known only
    at run time. Gather them into one Array rooted in the prelude and refuse a
@@ -10568,14 +10590,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (ty && sp_streq(ty, "ForwardingSuperNode") && smi >= 0) {
       /* laid out over the shadow's parameters as any bare super is: passed
          slot by slot, a `**` went into the shadow's first keyword */
-      Scope *pm = &c->scopes[smi];
-      ZSuper z;
-      zsuper_begin(c, s, pm, &z);
-      for (int i = 0; i < pm->nparams; i++) {
-        buf_puts(b, ", ");
-        emit_zsuper_param(c, s, pm, &z, i, g_nren, g_nren, b);
-      }
-      zsuper_end(&z);
+      emit_zsuper_args(c, s, &c->scopes[smi], ", ", b);
     }
     else if (ty && sp_streq(ty, "ForwardingSuperNode")) {
       for (int i = 0; i < s->nparams; i++) { buf_puts(b, ", "); emit_scope_local_ref(c, s, s->pnames[i], b); }
@@ -10625,16 +10640,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
       buf_printf(b, "%s%s", cmethod_takes_self_cls(c, (int)(s - c->scopes)) ? "_sp_cls" : own,
                  c->scopes[cmi].nparams > 0 ? ", " : "");
     }
-    if (ty && sp_streq(ty, "ForwardingSuperNode")) {
-      Scope *pm = &c->scopes[cmi];
-      ZSuper z;
-      zsuper_begin(c, s, pm, &z);
-      for (int i = 0; i < pm->nparams; i++) {
-        buf_puts(b, i == 0 ? "" : ", ");
-        emit_zsuper_param(c, s, pm, &z, i, g_nren, g_nren, b);
-      }
-      zsuper_end(&z);
-    }
+    if (ty && sp_streq(ty, "ForwardingSuperNode")) emit_zsuper_args(c, s, &c->scopes[cmi], "", b);
     else emit_args_filled(c, cmi, nt_ref(c->nt, id, "arguments"), "", b);
     emit_super_block_arg(c, id, s, &c->scopes[cmi],
                          c->scopes[cmi].nparams > 0 || cmethod_takes_self_cls(c, cmi), b);
@@ -10855,16 +10861,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
           int xm = comp_method_in_chain(c, xr[q], uname, NULL);
           if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
           buf_printf(b, "sp_%s_%s((sp_Exception *)%s", mc_reopen_cls(c, xr[q], uname), mc(uname), g_self);
-          if (ty && sp_streq(ty, "ForwardingSuperNode")) {
-            Scope *pm = &c->scopes[xm];
-            ZSuper z;
-            zsuper_begin(c, s, pm, &z);
-            for (int i = 0; i < pm->nparams; i++) {
-              buf_puts(b, ", ");
-              emit_zsuper_param(c, s, pm, &z, i, g_nren, g_nren, b);
-            }
-            zsuper_end(&z);
-          }
+          if (ty && sp_streq(ty, "ForwardingSuperNode")) emit_zsuper_args(c, s, &c->scopes[xm], ", ", b);
           else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", b);
           buf_puts(b, ")");
           if (q != xn - 1) buf_puts(b, " : ");
@@ -10915,14 +10912,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* The parent may declare more than this method does -- an optional,
        `*rest`, a keyword, `**` -- which a bare super leaves to their defaults
        and empties, as CRuby does (#4852). */
-    Scope *pm = &c->scopes[mi];
-    ZSuper z;
-    zsuper_begin(c, s, pm, &z);
-    for (int i = 0; i < pm->nparams; i++) {
-      buf_puts(b, ", ");
-      emit_zsuper_param(c, s, pm, &z, i, g_nren, g_nren, b);
-    }
-    zsuper_end(&z);
+    emit_zsuper_args(c, s, &c->scopes[mi], ", ", b);
   }
   else {
     emit_args_filled(c, mi, nt_ref(c->nt, id, "arguments"), ", ", b);

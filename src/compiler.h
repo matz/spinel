@@ -474,6 +474,9 @@ typedef struct {
                           even when this class redefines the name), or -1 */
   int   *alias_node;   /* the alias statement's node id, so the pass that runs
                           once superclasses are wired can fill alias_cls */
+  int   *alias_builtin; /* 1: the alias captured the builtin method of a
+                           reopened primitive, which the class had not
+                           defined where the alias appeared */
   int naliases, caliases;
   int enum_yield_arity; /* widest `yield` arity in this class's each, so the
                            Enumerable collector packs a multi-value yield into
@@ -968,6 +971,7 @@ const char *sym_static_value(Compiler *c, int node);  /* SymbolNode or sole-symb
 int sp_str_mutator(const char *nm, unsigned want);
 /* 1 iff call node `id` is a String method whose value is its receiver. */
 int str_self_call(const NodeTable *nt, int id);
+int fiber_storage_recv(const NodeTable *nt, int recv);
 int array_mutator_name(const char *nm);
 /* 1 iff `nm` is a stage that keeps a lazy chain lazy -- the set
    emit_lazy_pipeline_expr can fuse, plus a re-lazy. The recognizer, the
@@ -1132,6 +1136,7 @@ int         comp_resolve_member(Compiler *c, int class_id, const char *name, int
                                 int *def_class, int *method_index);
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
 const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
+const char *comp_resolve_alias_ex(Compiler *c, int class_id, const char *name, int *start_cls, int *builtin);
 
 /* Set by codegen while a block is spliced: answers the type the block being
    inlined RIGHT HERE gives a yield, which the node cache cannot hold (one

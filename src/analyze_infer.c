@@ -1460,8 +1460,7 @@ int poly_builtin_zero_arg_name(const char *m) {
     "pop", "shift", "clear", "dup", "clone", "freeze", "chars", "bytes",
     "strip", "chomp", "chop", "upcase", "downcase", "capitalize", "swapcase",
     "succ", "next", "abs", "round", "floor", "ceil", "arity", "call", NULL };
-  for (int i = 0; B[i]; i++) if (sp_streq(m, B[i])) return 1;
-  return 0;
+  return str_in(m, B);
 }
 /* The return a user class gives `name` at this arity, unified over every class
    that defines it, or TY_UNKNOWN when none does (or none has settled). The
@@ -1884,14 +1883,21 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       int k = si >= 0 ? c->scopes[si].class_id : -1;
       if (k >= 0 && k < c->nclasses && c->classes[k].name &&
           (sp_streq(c->classes[k].name, "String") || sp_streq(c->classes[k].name, "Integer") ||
-           sp_streq(c->classes[k].name, "Float") || sp_streq(c->classes[k].name, "Symbol")))
+           sp_streq(c->classes[k].name, "Float") || sp_streq(c->classes[k].name, "Symbol") ||
+           sp_streq(c->classes[k].name, "Time")))
         aci = k;
     }
-    if (aci >= 0 && c->classes[aci].naliases > 0) {
-      const char *rn = comp_resolve_alias(c, aci, name);
+    /* a call already resolved to a captured builtin keeps it: its name is
+       the builtin's now, which the class may alias to its own method */
+    if (aci >= 0 && c->classes[aci].naliases > 0 && !nt_int(nt, id, "builtin_only", 0)) {
+      int bi = 0;
+      const char *rn = comp_resolve_alias_ex(c, aci, name, NULL, &bi);
       if (rn && !sp_streq(rn, name)) {
         nt_node_set_str((NodeTable *)nt, id, "name", rn);
         name = nt_str(nt, id, "name");
+        /* the alias captured the builtin: the class's own method of that
+           name, defined or aliased after it, is not this call's */
+        if (bi) nt_node_set_int((NodeTable *)nt, id, "builtin_only", 1);
       }
     }
   }
@@ -2119,7 +2125,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      for a name it does not know, which typed `t.stamp` as an int slot around
      a String-returning reopen. The scalar reopens (String, Integer, ...) keep
      their place further down, where their rules have long been ordered. */
-  if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS)) {
+  if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) &&
+      !nt_int(nt, id, "builtin_only", 0)) {
     const char *ecn = rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time" : "Class";
     int eci = rt == TY_IO ? io_reopen_class(c, name) : comp_class_index(c, ecn);
     int emi = eci >= 0 ? comp_method_in_chain(c, eci, name, NULL) : -1;
@@ -4432,10 +4439,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && rt == TY_TIME) {
     if (sp_streq(name, "-") && argc > 0) {
       TyKind at = infer_type(c, argv[0]);
-      /* Time - Time is a Float duration; Time - poly likewise (the poly holds
-         a Time at run time, the common mixed-collection shape, #2456). An
-         int/float offset keeps the Time type via the general `-` arm below. */
-      if (at == TY_TIME || at == TY_POLY) return TY_FLOAT;
+      /* Time - Time is a Float duration. Time - poly is either: a Time held
+         there gives the duration (#2456), a number an earlier Time, which
+         only the run time tells apart. An int/float offset keeps the Time
+         type via the general `-` arm below. */
+      if (at == TY_TIME) return TY_FLOAT;
+      if (at == TY_POLY) return TY_POLY;
+      /* an argument not typed yet (a parameter whose callers are still
+         being read) may turn out poly: answering Time now pins a local
+         that later holds the boxed answer */
+      if (at == TY_UNKNOWN) return TY_UNKNOWN;
     }
     if (sp_streq(name, "utc") || sp_streq(name, "gmtime") || sp_streq(name, "getutc") ||
         sp_streq(name, "getgm") ||
@@ -4607,8 +4620,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (sp_streq(name, "[]=") && argc == 2) return sc->nmembers > 0 ? sc->ivar_types[0] : TY_POLY;
   }
 
-  /* built-in class reopening: look up user-defined methods on scalar built-in types */
-  if (recv >= 0) {
+  /* built-in class reopening: look up user-defined methods on scalar built-in
+     types -- not for an alias that captured the builtin (builtin_only) */
+  if (recv >= 0 && !nt_int(nt, id, "builtin_only", 0)) {
     const char *oc_cn = NULL;
     switch (rt) {
     case TY_STRING: oc_cn = "String"; break;
@@ -5038,43 +5052,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
 
   /* Fiber storage: Fiber[:k] and Fiber.current[:k] -> poly */
-  if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
-    const char *rty = nt_type(nt, recv);
-    if (rty && sp_streq(rty, "ConstantReadNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "Fiber")) return TY_POLY;
-    }
-    if (rty && sp_streq(rty, "CallNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      int rr = nt_ref(nt, recv, "receiver");
-      if (rn && sp_streq(rn, "current") && rr >= 0) {
-        const char *rrty = nt_type(nt, rr);
-        const char *rrn = nt_str(nt, rr, "name");
-        if (rrty && sp_streq(rrty, "ConstantReadNode") && rrn && sp_streq(rrn, "Fiber"))
-          return TY_POLY;
-      }
-    }
-  }
+  if (recv >= 0 && sp_streq(name, "[]") && argc == 1 && fiber_storage_recv(nt, recv)) return TY_POLY;
   /* Fiber[:k] = v -> returns v's type */
-  if (recv >= 0 && sp_streq(name, "[]=") && argc == 2) {
-    const char *rty = nt_type(nt, recv);
-    int is_fiber = 0;
-    if (rty && sp_streq(rty, "ConstantReadNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "Fiber")) is_fiber = 1;
-    }
-    else if (rty && sp_streq(rty, "CallNode")) {
-      const char *rn = nt_str(nt, recv, "name");
-      int rr = nt_ref(nt, recv, "receiver");
-      if (rn && sp_streq(rn, "current") && rr >= 0) {
-        const char *rrty = nt_type(nt, rr);
-        const char *rrn = nt_str(nt, rr, "name");
-        if (rrty && sp_streq(rrty, "ConstantReadNode") && rrn && sp_streq(rrn, "Fiber"))
-          is_fiber = 1;
-      }
-    }
-    if (is_fiber) return infer_type(c, argv[1]);
-  }
+  if (recv >= 0 && sp_streq(name, "[]=") && argc == 2 && fiber_storage_recv(nt, recv)) return infer_type(c, argv[1]);
   /* ENV[key] -> string or nil (use TY_STRING; null means nil). ENV.fetch
      answers its default on a miss, so the call is the union of String with
      the default's type: a String or nil default keeps the nullable string,

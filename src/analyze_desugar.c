@@ -1345,8 +1345,7 @@ static int reopen_kernel_name(const char *nm) {
     "rand", "srand", "sleep", "exit", "exit!", "abort", "at_exit", "catch", "throw",
     "binding", "caller", "gets", "open", "system", "exec", "fork", "spawn",
     "Integer", "Float", "String", "Array", "Hash", "Rational", "Complex", NULL };
-  for (int k = 0; set[k]; k++) if (sp_streq(nm, set[k])) return 1;
-  return 0;
+  return str_in(nm, set);
 }
 
 int desugar_reopen_implicit_self(Compiler *c) {
@@ -1866,8 +1865,7 @@ static int env_enum_method(const char *n) {
     "each_cons", "each_with_index", "each_with_object", "find_index", "grep",
     "chunk", "chunk_while", "slice_when", "collect_concat",
     "reverse_each", "value?", "has_value?", "lazy", NULL };
-  for (int i = 0; M[i]; i++) if (sp_streq(n, M[i])) return 1;
-  return 0;
+  return str_in(n, M);
 }
 
 /* `a !~ b` where a's class defines `=~` (and no `!~` of its own): Object#!~ is
@@ -4461,8 +4459,7 @@ static int fwd_poly_recv_one_param_iter(const char *name) {
     "filter_map", "select", "filter", "reject", "find", "detect", "find_index",
     "any?", "all?", "none?", "sort_by", "min_by", "max_by", "group_by",
     "partition", "count", "sum", "take_while", "drop_while", NULL };
-  for (int k = 0; names[k]; k++) if (sp_streq(name, names[k])) return 1;
-  return 0;
+  return str_in(name, names);
 }
 
 /* Hash's own select, filter, reject and to_h yield the key and the value as
@@ -4480,8 +4477,7 @@ static int enum_pair_spread_iter(const char *name) {
   static const char *const names[] = {
     "map", "collect", "flat_map", "collect_concat", "filter_map", "count", "take_while",
     "find_index", "any?", "all?", "none?", "one?", "each", "uniq", NULL };
-  for (int k = 0; names[k]; k++) if (sp_streq(name, names[k])) return 1;
-  return 0;
+  return str_in(name, names);
 }
 
 /* `e.with_index(off) { }` / `e.with_object(memo) { }`: the element and the
@@ -6789,8 +6785,7 @@ static int bi_kernel_call_name(const char *nm) {
     "respond_to?", "is_a?", "kind_of?", "instance_of?", "equal?", "eql?", "hash",
     "object_id", "dup", "clone", "itself", "then", "tap", "inspect", "to_s", "class",
     "__enum_pairs", NULL };
-  for (int k = 0; ks[k]; k++) if (sp_streq(nm, ks[k])) return 1;
-  return 0;
+  return str_in(nm, ks);
 }
 
 /* Retype every node of the subtree at `id` to a NilNode. The generic
@@ -10856,15 +10851,13 @@ int core_method_name(const char *n) {
 }
 
 static int name_in_list(const char *const *list, const char *n) {
-  for (int i = 0; list[i]; i++) if (sp_streq(list[i], n)) return 1;
-  return 0;
+  return str_in(n, list);
 }
 
 static int rbself_builtin(const char *cn) {
   static const char *const B[] = { "String", "Integer", "Float", "Symbol", "TrueClass",
     "FalseClass", "NilClass", "Array", "Hash", "Time", "Numeric", "Range", "Regexp", NULL };
-  for (int i = 0; B[i]; i++) if (sp_streq(B[i], cn)) return 1;
-  return 0;
+  return str_in(cn, B);
 }
 
 static int rbself_array_method(const char *nm) {
@@ -11140,8 +11133,7 @@ static int cbi_self_changing_block(const NodeTable *nt, int call) {
   static const char *const SC[] = { "class_eval", "module_eval", "class_exec", "module_exec",
     "instance_eval", "instance_exec", "define_method", "define_singleton_method",
     "new", "define", "configure", NULL };
-  for (int q = 0; SC[q]; q++) if (sp_streq(nm, SC[q])) return 1;
-  return 0;
+  return str_in(nm, SC);
 }
 
 /* `@x op= v` / `@x ||= v` / `@x &&= v` spelled as the plain read and write
@@ -12050,8 +12042,7 @@ static int ffi_builtin_type_name(const char *n) {
     "uintptr_t", "ptrdiff_t", "off_t", "time_t", "pid_t", "uid_t", "gid_t", "mode_t",
     "socklen_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t",
     "int32_t", "int64_t", NULL };
-  for (int i = 0; T[i]; i++) if (sp_streq(T[i], n)) return 1;
-  return 0;
+  return str_in(n, T);
 }
 
 /* def self.<mname>(__ffi_a0, ..., [&__ffi_b]) = __ffi_call(:<key>, [__ffi_a0, ...], __ffi_b)
@@ -12244,8 +12235,7 @@ static int ffi_kernel_name(const char *n) {
     "public_method_defined?", "instance_method", "instance_methods", "remove_method", "undef_method",
     "pack", "unpack", "unpack1", "exit_status", "Pathname", "BigDecimal", "URI",
     NULL };
-  for (int i = 0; K[i]; i++) if (sp_streq(K[i], n)) return 1;
-  return 0;
+  return str_in(n, K);
 }
 
 static int ffi_cls_is_lib(Compiler *c, int ci) {
@@ -12919,8 +12909,7 @@ static int sce_name_reflective(const char *nm) {
     "singleton_method_added", "const_added", NULL };
   if (!nm) return 0;
   if (*nm == ':') nm++;
-  for (int i = 0; NAMES[i]; i++) if (sp_streq(nm, NAMES[i])) return 1;
-  return 0;
+  return str_in(nm, NAMES);
 }
 static int sce_program_reflects(const NodeTable *nt) {
   int hit = 0;
@@ -13173,6 +13162,7 @@ static int cbs_walk(Compiler *c, const CbsNames *q, int n, int cls_node, const c
   for (int j = 0; j < nr; j++) changed |= cbs_walk(c, q, refs[j], cls_node, cls);
   for (int j = 0; j < nt->nodes[n].na; j++) {
     int an = nt->nodes[n].a[j].n;
+    if (an <= 0) continue;  /* an empty array's ids may be NULL: memcpy from NULL is UB */
     int *ids = malloc(sizeof(int) * (size_t)(an + 1));
     memcpy(ids, nt->nodes[n].a[j].ids, sizeof(int) * (size_t)an);
     for (int r = 0; r < an; r++) changed |= cbs_walk(c, q, ids[r], cls_node, cls);

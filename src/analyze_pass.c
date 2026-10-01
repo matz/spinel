@@ -4863,8 +4863,7 @@ int is_fresh_array(Compiler *c, int v) {
   TyKind rt = infer_type(c, r);
   if (rt == TY_UNKNOWN || rt == TY_POLY || ty_is_object(rt)) return 0;
   if (sp_streq(nm, "to_a")) return !ty_is_array(rt);
-  for (int k = 0; fresh[k]; k++) if (sp_streq(nm, fresh[k])) return 1;
-  return 0;
+  return str_in(nm, fresh);
 }
 
 /* Collects into out[] the container literals `n` can evaluate to, as far
@@ -5070,8 +5069,7 @@ static int array_answers_receiver(Compiler *c, int v) {
   const char *nm = nt_str(c->nt, v, "name");
   int r = nt_ref(c->nt, v, "receiver");
   if (!nm || r < 0 || !ty_is_array(infer_type(c, r))) return 0;
-  for (int k = 0; self_ret[k]; k++) if (sp_streq(nm, self_ret[k])) return 1;
-  return 0;
+  return str_in(nm, self_ret);
 }
 
 /* The class whose ivar the value `v` reads, with the ivar's name in *ivn:
@@ -6519,8 +6517,7 @@ int is_string_only_method(const char *m) {
     "partition", "rpartition", "succ", "hex", "oct", "codepoints", "scrub",
     "crypt", "delete_prefix", "delete_suffix", "casecmp", "casecmp?",
     "force_encoding", NULL };
-  for (int i = 0; set[i]; i++) if (sp_streq(m, set[i])) return 1;
-  return 0;
+  return str_in(m, set);
 }
 
 /* Infer still-unknown params from ivar hash operations in the method body.
@@ -8127,20 +8124,41 @@ int block_opt_default(Compiler *c, int block, int idx) {
   return -1;
 }
 
-/* The parameter a yield's position idx binds whatever the yield's count: a
-   required one, or an optional after them when no required parameter
-   follows (`|a = 1, b|` hands b the last argument first). A parameter the
-   block appends to binds as an alias of the variable yielded to it at such
-   a position (block_param_wants_alias), an optional as a required one
+/* The parameter position idx of a yield of n plain arguments binds (n < 0:
+   a count not known here): a required one; an optional after them when no
+   post follows, whatever the count (`|a = 1, b|` hands its post b the last
+   argument first); or a post the count lands there (block_fill hands the
+   posts the last values); else NULL. A parameter the block appends to
+   binds as an alias of the variable yielded to it at such a position
+   (block_param_wants_alias), an optional or a post as a required one
    (#6179). */
-const char *block_lead_param_name(Compiler *c, int block, int idx) {
+const char *block_param_at(Compiler *c, int block, int idx, int n) {
   const char *bp = block_param_name(c, block, idx);
-  if (bp || block_post_name(c, block, 0)) return bp;
+  if (bp) return bp;
   int bpn = nt_ref(c->nt, block, "parameters");
   int pn = bpn >= 0 && nt_kind(c->nt, bpn) == NK_BlockParametersNode ? nt_ref(c->nt, bpn, "parameters") : -1;
-  int rn = 0;
-  if (pn >= 0) nt_arr(c->nt, pn, "requireds", &rn);
-  return pn >= 0 && idx >= rn ? block_opt_name(c, block, idx - rn) : NULL;
+  if (pn < 0) return NULL;
+  int rn = 0, on = 0, sn = 0;
+  nt_arr(c->nt, pn, "requireds", &rn);
+  nt_arr(c->nt, pn, "optionals", &on);
+  nt_arr(c->nt, pn, "posts", &sn);
+  if (sn == 0) return idx >= rn ? block_opt_name(c, block, idx - rn) : NULL;
+  if (n < 0 || idx >= n) return NULL;
+  int ot, ps;
+  block_fill(rn, on, sn, block_rest_marker(c, block), n, &ot, &ps);
+  return idx >= ps && idx < ps + sn ? block_post_name(c, block, idx - ps) : NULL;
+}
+/* The count of a call's or a yield's plain positional arguments, or -1 when
+   one is a splat, a keyword hash or a block argument (the count is then
+   the run time's). */
+int call_plain_argc(Compiler *c, int call) {
+  int a = nt_ref(c->nt, call, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++) {
+    NodeKind k = nt_kind(c->nt, av[i]);
+    if (k == NK_SplatNode || k == NK_KeywordHashNode || k == NK_BlockArgumentNode) return -1;
+  }
+  return ac;
 }
 
 /* Name of a block's idx-th post-required parameter (`|a, *b, c|` -> c), or NULL. */
@@ -8801,8 +8819,7 @@ static int block_kept_by_builtin(const char *name) {
     "instance_exec", "instance_eval", "class_exec", "module_exec",
     "class_eval", "module_eval", "to_enum", "enum_for", "at_exit", "trap",
     "define_finalizer", NULL };
-  for (int k = 0; keep[k]; k++) if (sp_streq(name, keep[k])) return 1;
-  return 0;
+  return str_in(name, keep);
 }
 
 /* Where a block handed to scope `si` is bound besides si's own sites: the
@@ -9258,8 +9275,7 @@ int ie_kernel_global(const char *n) {
     "printf", "sprintf", "format", "rand", "srand", "sleep", "exit", "abort",
     "loop", "lambda", "proc", "catch", "throw", "gets", "binding",
     "block_given?", "at_exit", "caller", "freeze", "frozen?", NULL };
-  for (int i = 0; K[i]; i++) if (sp_streq(n, K[i])) return 1;
-  return 0;
+  return str_in(n, K);
 }
 
 /* Repoint self and receiverless calls in an instance_eval body at the bound
@@ -9830,8 +9846,7 @@ static int dir_enumerable_name(const char *nm) {
     "take", "drop", "take_while", "drop_while", "zip", "each_slice",
     "each_cons", "any?", "all?", "none?", "one?", "filter_map", "find_index",
     "chunk_while", "slice_when", "uniq", "reverse_each", "lazy", NULL };
-  for (int i = 0; E[i]; i++) if (sp_streq(nm, E[i])) return 1;
-  return 0;
+  return str_in(nm, E);
 }
 /* Whether File.foreach call `id` can stream (desugar_dir_surface): a literal
    block, a path, and after it only arguments an IO's each_line takes as they
@@ -11778,6 +11793,18 @@ static int bind_method_obj_block_sites(Compiler *c, int ymi, int tmi, int call, 
   return changed;
 }
 
+static int proc_params_poly(const NodeTable *nt, Scope *bs, int pn, const char *field) {
+  int n = 0, changed = 0; const int *ids = nt_arr(nt, pn, field, &n);
+  for (int j = 0; j < n; j++) {
+    const char *pname = nt_str(nt, ids[j], "name");
+    if (!pname) continue;
+    LocalVar *lv = scope_local_intern(bs, pname);
+    lv->is_block_param = 1;
+    if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
+  }
+  return changed;
+}
+
 int infer_block_params(Compiler *c) {
   nn_inference_round(c);
   const NodeTable *nt = c->nt;
@@ -11805,35 +11832,14 @@ int infer_block_params(Compiler *c) {
           lv->is_block_param = 1;
           if (lv->type != TY_POLY_ARRAY) { lv->type = TY_POLY_ARRAY; changed = 1; }
         }
-        int np = 0; const int *posts = nt_arr(nt, pn, "posts", &np);
-        for (int j = 0; j < np; j++) {
-          const char *pname = nt_str(nt, posts[j], "name");
-          if (!pname) continue;
-          LocalVar *lv = scope_local_intern(bs, pname);
-          lv->is_block_param = 1;
-          if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-        }
-        int nop = 0; const int *opts = nt_arr(nt, pn, "optionals", &nop);
-        for (int j = 0; j < nop; j++) {
-          const char *pname = nt_str(nt, opts[j], "name");
-          if (!pname) continue;
-          LocalVar *lv = scope_local_intern(bs, pname);
-          lv->is_block_param = 1;
-          if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-        }
+        changed |= proc_params_poly(nt, bs, pn, "posts");
+        changed |= proc_params_poly(nt, bs, pn, "optionals");
         /* keyword params bind out of the boxed kwargs hash, as the proc and
            lambda-call forms' do below. Left untyped here they turned poly
            only after the fixpoint, so what flowed from them (an ivar and the
            calls on it) was still unknown when the enumerable rewrite ran,
            and `@v.scan(re).filter_map { }` raised NoMethodError. */
-        int nkw = 0; const int *kws = nt_arr(nt, pn, "keywords", &nkw);
-        for (int j = 0; j < nkw; j++) {
-          const char *pname = nt_str(nt, kws[j], "name");
-          if (!pname) continue;
-          LocalVar *lv = scope_local_intern(bs, pname);
-          lv->is_block_param = 1;
-          if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-        }
+        changed |= proc_params_poly(nt, bs, pn, "keywords");
       }
     }
   }
@@ -11853,42 +11859,12 @@ int infer_block_params(Compiler *c) {
       lv->is_block_param = 1;
       if (lv->type != TY_POLY_ARRAY) { lv->type = TY_POLY_ARRAY; changed = 1; }
     }
-    int np = 0; const int *posts = nt_arr(nt, pn, "posts", &np);
-    for (int j = 0; j < np; j++) {
-      const char *pname = nt_str(nt, posts[j], "name");
-      if (!pname) continue;
-      LocalVar *lv = scope_local_intern(bs, pname);
-      lv->is_block_param = 1;
-      if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-    }
-    int nop = 0; const int *opts = nt_arr(nt, pn, "optionals", &nop);
-    for (int j = 0; j < nop; j++) {
-      const char *pname = nt_str(nt, opts[j], "name");
-      if (!pname) continue;
-      LocalVar *lv = scope_local_intern(bs, pname);
-      lv->is_block_param = 1;
-      if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-    }
+    changed |= proc_params_poly(nt, bs, pn, "posts");
+    changed |= proc_params_poly(nt, bs, pn, "optionals");
     /* Keyword params (`proc { |a:, b: 5| }`): the call-site kwargs arrive as a
        boxed hash on the proc ABI, so the param binds a boxed value. */
-    if (a_proc_forwarded_with_amp(c, id)) {
-      int nrq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nrq);
-      for (int j = 0; j < nrq; j++) {
-        const char *pname = nt_str(nt, reqs[j], "name");
-        if (!pname) continue;
-        LocalVar *lv = scope_local_intern(bs, pname);
-        lv->is_block_param = 1;
-        if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-      }
-    }
-    int nkw = 0; const int *kws = nt_arr(nt, pn, "keywords", &nkw);
-    for (int j = 0; j < nkw; j++) {
-      const char *pname = nt_str(nt, kws[j], "name");
-      if (!pname) continue;
-      LocalVar *lv = scope_local_intern(bs, pname);
-      lv->is_block_param = 1;
-      if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
-    }
+    if (a_proc_forwarded_with_amp(c, id)) changed |= proc_params_poly(nt, bs, pn, "requireds");
+    changed |= proc_params_poly(nt, bs, pn, "keywords");
   }
 
   /* `->(x, ...) {}` (LambdaNode): its params live in the enclosing scope (no

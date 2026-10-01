@@ -1127,9 +1127,19 @@ reject-test: $(SPINEL)
 	  { echo "reject-test: FAIL (a global through a boxed parameter's alias rejected without saying why)"; sed -n 1,5p "$$tmp/ypg.out"; ok=0; }; fi; \
 	t=test/reject/string_forward_poly_chain.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/fpc.c" >"$$tmp/fpc.out" 2>&1; then \
-	  echo "reject-test: FAIL (a global through a POLY hand-on past the depth bound compiled)"; ok=0; \
+	  echo "reject-test: FAIL (a global through a POLY hand-on to an appender compiled)"; ok=0; \
 	else grep -q "through a parameter it hands on" "$$tmp/fpc.out" || \
-	  { echo "reject-test: FAIL (a global through a POLY hand-on past the depth bound rejected without saying why)"; sed -n 1,5p "$$tmp/fpc.out"; ok=0; }; fi; \
+	  { echo "reject-test: FAIL (a global through a POLY hand-on to an appender rejected without saying why)"; sed -n 1,5p "$$tmp/fpc.out"; ok=0; }; fi; \
+	: 'A read-only diamond must visit vertices, not enumerate its 2^24 paths'; \
+	i=0; while [ $$i -lt 24 ]; do \
+	  j=$$((i + 1)); \
+	  printf 'def a%s(x:); a%s(x: x); b%s(x: x); end\n' $$i $$j $$j; \
+	  printf 'def b%s(x:); a%s(x: x); b%s(x: x); end\n' $$i $$j $$j; \
+	  i=$$j; \
+	done > "$$tmp/diamond.rb"; \
+	printf 'def a24(x:) = x.to_s.size\ndef b24(x:) = x.to_s.size\nh = {x: +"x"}\na0(**h)\n' >> "$$tmp/diamond.rb"; \
+	if ! $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10) $(SPINEL) "$$tmp/diamond.rb" -c -o "$$tmp/diamond.c" >"$$tmp/diamond.out" 2>&1; then \
+	  echo "reject-test: FAIL (a read-only forwarding diamond refused or timed out)"; sed -n 1,5p "$$tmp/diamond.out"; ok=0; fi; \
 	t=test/reject/string_rest_splat_yield.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/rsy.c" >"$$tmp/rsy.out" 2>&1; then \
 	  echo "reject-test: FAIL (a String gathered into a rest yielded with a splat compiled)"; ok=0; \

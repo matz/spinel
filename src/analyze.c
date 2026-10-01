@@ -17128,7 +17128,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth);
+static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj);
 static int convert_byref_handle_params(Compiler *c,
                                        const HandleArgTab *hat) {
   const NodeTable *nt = c->nt;
@@ -17161,7 +17161,7 @@ static int convert_byref_handle_params(Compiler *c,
       int poly_mut = (pp->is_param && pp->type == TY_POLY &&
                       ((pp->poly_lift & POLY_LIFT_APPENDED) || an_param_mutated_in_place(c, mi2, pj) ||
                        an_poly_param_yielded_lent(c, mi2, pj) ||
-                       fwd_poly_param_handed_on(c, mi2, pj, 0)));
+                       fwd_poly_param_handed_on(c, mi2, pj)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
@@ -20512,8 +20512,10 @@ static int fwd_call_target(Compiler *c, int u) {
 }
 
 static unsigned fwd_rest_bits(Compiler *c, int mi);
+static SbMutTab g_fwd_poly_seen;
+static int g_fwd_poly_depth;
 /* Set when an answer below was cut short, so it is not kept as final: 1 a
-   method still being asked (a cycle of forwarders), 2 the depth bound. */
+   parameter still being asked (a cycle of forwarders), 2 the rest depth bound. */
 static int g_fwd_taint;
 /* fwd_rest_bits beside the elements' bits 0-15: an element at offset 16 or
    more, past what the bits and the dynamic masks hold, reaches a parameter
@@ -20523,12 +20525,11 @@ static int g_fwd_taint;
 #define FWD_REST_OPEN 0x20000u
 /* Does method mi append to what its parameter j is bound to: in place, lent,
    the handle, or a POLY parameter or a rest element it hands on? */
-static int fwd_param_appends(Compiler *c, int mi, int j, int depth) {
+static int fwd_param_appends(Compiler *c, int mi, int j) {
   Scope *m = &c->scopes[mi];
   if (j < 0) return 0;
   /* a rest takes the arguments from its position on; a chain of them is
-     memoized per method (fwd_rest_bits), so it does not count toward the
-     depth, which bounds the POLY hand-ons below */
+     memoized per method (fwd_rest_bits) */
   if (m->rest_idx >= 0 && j >= m->rest_idx) {
     unsigned rb = fwd_rest_bits(c, mi);
     if (rb & FWD_REST_OPEN) g_fwd_taint |= 2;
@@ -20540,8 +20541,7 @@ static int fwd_param_appends(Compiler *c, int mi, int j, int depth) {
   if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
   if (q->type != TY_POLY) return 0;
   if (an_param_mutated_in_place(c, mi, j)) return 1;
-  if (depth > 4) { g_fwd_taint |= 2; return 0; }
-  return fwd_poly_param_handed_on(c, mi, j, depth + 1);
+  return fwd_poly_param_handed_on(c, mi, j);
 }
 
 /* The position a call or `super`'s splat of local `rn` starts at among the
@@ -20580,7 +20580,7 @@ static unsigned fwd_rest_bits(Compiler *c, int mi) {
   Scope *m = &c->scopes[mi];
   const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
   if (!rn) { g_fwd_rest[mi] = 0x40000000u; return 0; }
-  int outer = g_fwd_taint, top = g_fwd_rest_depth == 0;
+  int outer = g_fwd_taint, top = g_fwd_rest_depth == 0 && !g_fwd_poly_depth;
   unsigned bits = 0;
   int tainted;
   g_fwd_rest_depth++;
@@ -20605,7 +20605,7 @@ static unsigned fwd_rest_past(Compiler *c, int t, int p) {
   Scope *tm = &c->scopes[t];
   int end = tm->rest_idx >= 0 ? tm->rest_idx + 17 : tm->nparams;
   for (int j = p + 16; j < end && j < p + 64; j++)
-    if (fwd_param_appends(c, t, j, 0)) return FWD_REST_PAST;
+    if (fwd_param_appends(c, t, j)) return FWD_REST_PAST;
   return 0;
 }
 static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
@@ -20617,7 +20617,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
     int p = fwd_splat_start(c, u, rn);
     int t = p >= 0 ? fwd_call_target(c, u) : -1;
     for (int i = 0; t >= 0 && i < 16; i++)
-      if (fwd_param_appends(c, t, p + i, 0)) bits |= 1u << i;
+      if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
     if (t >= 0) bits |= fwd_rest_past(c, t, p);
   }
   /* `super(*a)`, and a zsuper handing on the rest at its own position */
@@ -20628,7 +20628,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
       int p = pass ? m->rest_idx : fwd_splat_start(c, q, rn);
       int t = p >= 0 ? a_super_target(c, m) : -1;
       for (int i = 0; t >= 0 && i < 16; i++)
-        if (fwd_param_appends(c, t, p + i, 0)) bits |= 1u << i;
+        if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
       if (t >= 0) bits |= fwd_rest_past(c, t, p);
     }
   }
@@ -20636,28 +20636,49 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
 }
 
 /* Does POLY parameter pj of method mi reach a parameter that appends, by a
-   `super` or a call it is handed to? */
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth) {
+   `super` or a call it is handed to? Visit each (scope, parameter) once per
+   query, so both cycles and converging paths terminate without repeatedly
+   scanning the same body. A read-only chain is not a mutation just because
+   it is long. A revisit cuts an edge: do not cache a rest answer relying on
+   it, since a different query may reach an appender beyond that edge. */
+static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj) {
   const NodeTable *nt = c->nt;
-  if (depth > 4) { g_fwd_taint |= 2; return 0; }
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
   const char *pn = m->pnames[pj];
+  if (!g_fwd_poly_depth) {
+    int np = 0;
+    for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+    if (g_fwd_poly_seen.ncap < np) {
+      sb_mut_tab_free(&g_fwd_poly_seen);
+      sb_mut_tab_init(&g_fwd_poly_seen, np);
+    }
+    /* Clear only buckets used by the preceding query, not the whole table. */
+    for (int r = 0; r < g_fwd_poly_seen.n; r++)
+      g_fwd_poly_seen.head[sb_mut_hash(g_fwd_poly_seen.name[r], g_fwd_poly_seen.key[r]) &
+                           (unsigned)(g_fwd_poly_seen.cap - 1)] = -1;
+    g_fwd_poly_seen.n = 0;
+  }
+  signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, pn, mi, 1);
+  if (*seen) { g_fwd_taint |= 1; return 0; }
+  *seen = 1;
+  g_fwd_poly_depth++;
+  int appended = 0;
   int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
   if (t >= 0) {
     Scope *tm = &c->scopes[t];
     for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
       if (nt_kind(nt, q) != NK_ForwardingSuperNode || comp_scope_of(c, q) != m) continue;
       for (int j = 0; j < tm->nparams; j++)
-        if (zsuper_param_source(c, m, tm, j) == pj && fwd_param_appends(c, t, j, depth + 1)) return 1;
+        if (zsuper_param_source(c, m, tm, j) == pj && fwd_param_appends(c, t, j)) { appended = 1; goto done; }
     }
     for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
       if (nt_kind(nt, q) != NK_SuperNode || comp_scope_of(c, q) != m) continue;
       for (int j = 0; j < tm->nparams; j++) {
         int an = arg_layout_param_node(c, tm, q, j, NULL);
         if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-            sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, t, j, depth + 1)) return 1;
+            sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, t, j)) { appended = 1; goto done; }
       }
     }
   }
@@ -20669,10 +20690,12 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth) {
     for (int j = 0; j < cm->nparams; j++) {
       int an = arg_layout_param_node(c, cm, u, j, NULL);
       if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-          sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, ct, j, depth + 1)) return 1;
+          sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, ct, j)) { appended = 1; goto done; }
     }
   }
-  return 0;
+done:
+  g_fwd_poly_depth--;
+  return appended;
 }
 
 /* For the emitters' refusal, after the last pass: does method mi forward
@@ -20688,7 +20711,7 @@ static void fwd_memo_fresh(Compiler *c) {
   g_fwd_codegen = 1;
 }
 /* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
-   tell -- a POLY hand-on past the depth bound -- which the refusal takes as
+   tell -- a rest hand-on past the depth bound -- which the refusal takes as
    appending, so an answer cut short is refused rather than copied. */
 int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return 0;
@@ -20702,7 +20725,7 @@ int fwd_param_appends_at(Compiler *c, int mi, int j) {
   fwd_memo_fresh(c);
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
-  int r = fwd_param_appends(c, mi, j, 0);
+  int r = fwd_param_appends(c, mi, j);
   if (!r && (g_fwd_taint & 2)) r = -1;
   g_fwd_taint = outer;
   return r;
@@ -20714,7 +20737,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   fwd_memo_fresh(c);
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
-  int r = fwd_poly_param_handed_on(c, mi, j, 0);
+  int r = fwd_poly_param_handed_on(c, mi, j);
   if (!r && (g_fwd_taint & 2)) r = -1;
   g_fwd_taint = outer;
   return r;
@@ -20738,7 +20761,7 @@ static int fwd_super_string_params(Compiler *c) {
       Scope *tm = &c->scopes[t];
       for (int j = 0; j < tm->nparams && j < 32; j++) {
         LocalVar *d = tm->pnames[j] ? scope_local(tm, tm->pnames[j]) : NULL;
-        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, t, j, 0)) continue;
+        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, t, j)) continue;
         int src = -1;
         if (pass) src = zsuper_param_source(c, m, tm, j);
         else {

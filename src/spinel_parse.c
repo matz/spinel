@@ -326,6 +326,7 @@ static size_t prism_kind_to_pascal(const char *raw, char *out, size_t out_size) 
 
 /* ---- Forward ---- */
 static int flatten(pm_node_t *node);
+static int sp_in_builtin(const uint8_t *at);   /* a builtins/ splice (below) */
 
 /* ---- Emit helpers ---- */
 static void emit_str(int id, const char *field, const char *val) {
@@ -513,12 +514,33 @@ static int sp_program_guard(pm_node_t *node) {
 }
 
 /* ---- Main flattening ---- */
+/* The builtin node the names invented from the node being flattened count
+   from (`node_bi`, comp_node_ord): its enclosing def, or, outside every def,
+   its top-level statement. -1 outside builtins/. */
+static int g_bi_base = -1;
+static int flatten_node(pm_node_t *node);
 static int flatten(pm_node_t *node) {
+  int saved = g_bi_base;
+  int id = flatten_node(node);
+  g_bi_base = saved;
+  return id;
+}
+
+static int flatten_node(pm_node_t *node) {
   if (!node) return -1;
 
   int id = node_counter++;
   pm_node_type_t t = PM_NODE_TYPE(node);
   const uint8_t *owner = g_owner;
+  /* a node spliced from builtins/ is stamped with the builtin node it counts
+     from (+1); the program node and its statements are the program's even
+     when the source begins with a splice */
+  int in_bi = t != PM_PROGRAM_NODE && !(t == PM_STATEMENTS_NODE && !owner) &&
+              sp_in_builtin(node->location.start);
+  if (in_bi) {
+    if (g_bi_base < 0 || t == PM_DEF_NODE) g_bi_base = id;
+    emit_int(id, "node_bi", g_bi_base + 1);
+  }
   if (g_stmt_next < g_stmt_end && node == *g_stmt_next) {
     int32_t bl = pm_newline_list_line(&g_parser->newline_list, node->location.start, g_parser->start_line);
     int32_t ol = owner ? pm_newline_list_line(&g_parser->newline_list, owner, g_parser->start_line) : 0;
@@ -1329,6 +1351,7 @@ static int flatten(pm_node_t *node) {
         pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)n->parameters;
         int bpid = node_counter++;
         out_add("N %d BlockParametersNode", bpid);
+        if (in_bi) emit_int(bpid, "node_bi", g_bi_base + 1);
         if (bp->parameters) {
           emit_ref(bpid, "parameters", (pm_node_t *)bp->parameters);
         }
@@ -1338,6 +1361,7 @@ else if (PM_NODE_TYPE(n->parameters) == PM_NUMBERED_PARAMETERS_NODE) {
         pm_numbered_parameters_node_t *np = (pm_numbered_parameters_node_t *)n->parameters;
         int npid = node_counter++;
         out_add("N %d NumberedParametersNode", npid);
+        if (in_bi) emit_int(npid, "node_bi", g_bi_base + 1);
         emit_int(npid, "maximum", np->maximum);
         out_add("R %d %s %d", id, "parameters", npid);
       }
@@ -1827,6 +1851,7 @@ else {
     int var_id = flatten(n->variable);
     int stmts_id = node_counter++;
     out_add("N %d StatementsNode", stmts_id);
+    if (in_bi) emit_int(stmts_id, "node_bi", g_bi_base + 1);
     out_add("A %d body %d", stmts_id, var_id);
     out_add("R %d statements %d", id, stmts_id);
     break;
@@ -2214,6 +2239,53 @@ static void sp_includes_free(void) {
 #define SP_PUSH_PREFIX "#<SPINEL_PUSH>"
 #define SP_INSERT_PREFIX "#<SPINEL_INSERT>"
 #define SP_POP_PREFIX "#<SPINEL_POP>"
+
+/* The byte ranges of the final buffer a builtins/ file was spliced into.
+   A node inside one is stamped `node_bi`, so the names the compiler invents
+   from nodes number a builtin's nodes apart from the program's, and each
+   builtin method's apart from the others': a builtin that grows or shrinks
+   then moves only its own names (comp_node_ord).
+   Read off the splice markers, which every build keeps, not off the line
+   map, which only a build with line maps has. */
+static size_t *sp_bi_lo = NULL, *sp_bi_hi = NULL;
+static int sp_bi_n = 0;
+static const char *sp_bi_base = NULL;
+static void sp_find_builtin_ranges(const char *src) {
+  free(sp_bi_lo); free(sp_bi_hi); sp_bi_lo = sp_bi_hi = NULL; sp_bi_n = 0;
+  sp_bi_base = src;
+  size_t stk_lo[64]; int stk_bi[64]; int sp = 0, cap = 0;
+  for (const char *line = src; *line; ) {
+    const char *eol = strchr(line, '\n');
+    size_t len = eol ? (size_t)(eol - line) : strlen(line);
+    size_t pl = !strncmp(line, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) ? strlen(SP_PUSH_PREFIX)
+              : !strncmp(line, SP_INSERT_PREFIX, strlen(SP_INSERT_PREFIX)) ? strlen(SP_INSERT_PREFIX) : 0;
+    if (pl && sp < 64) {
+      int bi = 0;
+      for (size_t k = pl; k + 10 <= len && !bi; k++) if (!strncmp(line + k, "/builtins/", 10)) bi = 1;
+      stk_lo[sp] = (size_t)(line - src); stk_bi[sp] = bi; sp++;
+    }
+    else if (!strncmp(line, SP_POP_PREFIX, strlen(SP_POP_PREFIX)) && sp > 0) {
+      sp--;
+      if (stk_bi[sp]) {
+        if (sp_bi_n == cap) {
+          cap = cap ? cap * 2 : 8;
+          sp_bi_lo = realloc(sp_bi_lo, sizeof(size_t) * (size_t)cap);
+          sp_bi_hi = realloc(sp_bi_hi, sizeof(size_t) * (size_t)cap);
+          if (!sp_bi_lo || !sp_bi_hi) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+        }
+        sp_bi_lo[sp_bi_n] = stk_lo[sp]; sp_bi_hi[sp_bi_n] = (size_t)(line - src); sp_bi_n++;
+      }
+    }
+    if (!eol) break;
+    line = eol + 1;
+  }
+}
+static int sp_in_builtin(const uint8_t *at) {
+  if (!sp_bi_base || !at) return 0;
+  size_t off = (size_t)((const char *)at - sp_bi_base);
+  for (int i = 0; i < sp_bi_n; i++) if (off >= sp_bi_lo[i] && off < sp_bi_hi[i]) return 1;
+  return 0;
+}
 
 static char **sp_file_table = NULL;  /* id -> path (declared above flatten) */
 static int sp_file_count = 0, sp_file_cap = 0;
@@ -4763,6 +4835,7 @@ else {
   }
 
   size_t source_len = strlen(source);
+  sp_find_builtin_ranges(source);
 
   /* Parse with Prism */
   pm_parser_t parser;

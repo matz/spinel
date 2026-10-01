@@ -225,6 +225,11 @@ jobs:
     name: ubuntu-latest / gcc -m32
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # A hung apt-get in the toolchain step held this job for over four
+    # hours on 2026-10-01, and with it the master concurrency group: every
+    # later push waited as the group's pending run. The lane takes about
+    # 20 minutes.
+    timeout-minutes: 60
     env:
       CC: sccache gcc -m32
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
@@ -252,6 +257,7 @@ jobs:
           ruby-version: "4.0"
 
       - name: Install the 32-bit toolchain
+        timeout-minutes: 10
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update

@@ -1,0 +1,9 @@
+[1, 2]
+70
+[0, 1, 2, :inner, :outer, :back]
+:woke
+[:fiber_ensure, :thread_ensure]
+false
+"fiber rescued boom"
+"thread rescued bang"
+:done

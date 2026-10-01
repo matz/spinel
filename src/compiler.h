@@ -827,6 +827,16 @@ typedef struct {
   /* body-node id -> enclosing BlockNode id (lazy; emit_stmts block-local
      resets). Sized nt->count; -1 = not a block body. */
   int *blk_body_map;
+  /* node id -> the number a name invented from the node carries
+     (comp_node_ord), bit 0 set for a builtin's. Extended over appended
+     nodes, never refilled. A builtin node counts within its base, the
+     builtin def (or top-level statement) it was spliced in: per base id, the
+     count so far and the text it is named by. */
+  int *node_ord, *node_base;
+  int node_ord_n, node_ord_prog, node_ord_parsed;
+  int *bi_base_cnt;
+  char **bi_base_key;
+  int bi_base_cap;
 } Compiler;
 
 Compiler *comp_new(const NodeTable *nt);
@@ -834,6 +844,8 @@ void comp_free(Compiler *c);
 
 /* Resize per-node arrays (ntype/nscope) after the node table grew. */
 void comp_grow_node_arrays(Compiler *c);
+int comp_node_ord(Compiler *c, int id, int *builtin);
+const char *comp_node_tag(Compiler *c, int id);
 
 /* If `id` is a ternary `cond ? A : B` -- an IfNode whose then- and else-clauses
    are each a single value expression (the shape the ternary emitter lowers to a

@@ -1499,12 +1499,13 @@ const char *strbuf_local_name(Compiler *c, int recv) {
 }
 /* The owning class slot of an ivar READ node, mirroring the read emitter's
    storage resolution: instance method -> its class; top-level method ->
-   the Toplevel pseudo-class; class-method / instance_eval contexts return
-   -1 (their storage is not a per-instance field). */
+   the Toplevel pseudo-class; a class method -> its class, whose civ_ slot
+   holds it (strbuf_slot_ref); an instance_eval context returns -1 (its
+   storage is not a per-instance field). */
 int strbuf_ivar_owner(Compiler *c, int node) {
   Scope *cs = comp_scope_of(c, node);
   if (!cs) return -1;
-  if (cs->is_cmethod) return -1;
+  if (cs->is_cmethod) return cs->class_id;
   if (cs->class_id >= 0) return cs->class_id;
   if (g_ie_class_id >= 0) return -1;
   return comp_class_index(c, "Toplevel");
@@ -1926,6 +1927,9 @@ int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
   Scope *cs = comp_scope_of(c, recv);
   if (cs && cs->class_id < 0)
     snprintf(out, cap, "civ_Toplevel_%s", iv_c(nm + 1));
+  /* a class method's ivar is its class's C global */
+  else if (cs && cs->is_cmethod)
+    snprintf(out, cap, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));
   else
     snprintf(out, cap, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
   return 1;

@@ -93,7 +93,115 @@ Compiler *comp_new(const NodeTable *nt) {
   c->arr_want = calloc((size_t)n, sizeof(TyKind));
   c->poly_builtin_ty = calloc((size_t)n, sizeof(TyKind));
   c->node_cap = n;
+  comp_node_ord(c, 0, NULL);   /* number the parsed nodes before any rewrite */
+  c->node_ord_parsed = nt->count;
   return c;
+}
+
+/* The number a name the compiler invents from a node carries (`__fwdc_12`,
+   `x__bp12`), in place of the node id. The builtins are spliced into the
+   source ahead of the program, so every node a builtin gained or lost moved
+   the id of every node after it, and with it a name in programs that never
+   call that builtin. A program node is numbered by its place in table order
+   among the program's nodes. A node the parser stamped as spliced from
+   builtins/ (`node_bi`, which a clone carries along) is numbered by its place
+   among the nodes of its base, the builtin method it sits in, so an edit to
+   one builtin method renames nothing outside it. A number once given is
+   kept: the table is extended over the nodes appended since, never refilled,
+   so a node a rewrite resets keeps its number and cannot hand it to another. */
+static void comp_node_base_key(Compiler *c, int b) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, b, "name");
+  if (!nm || !*nm) nm = nt_type(nt, b) ? nt_type(nt, b) : "node";
+  /* a C-safe spelling of at most 24 characters, so the names stay short */
+  char key[40]; size_t o = 0;
+  for (const char *q = nm; *q && o < 24; q++) {
+    if ((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || (*q >= '0' && *q <= '9') || *q == '_')
+      key[o++] = *q;
+    else if (o + 3 <= 24) o += (size_t)snprintf(key + o, 4, "x%02x", (unsigned char)*q);
+    else break;
+  }
+  key[o] = '\0';
+  /* a second base of the same name (a reopened module, a method defined
+     twice) is told apart by how many came before it */
+  int dup = 0;
+  for (int k = 0; k < b; k++)
+    if (c->bi_base_key[k] && !strncmp(c->bi_base_key[k], key, o) &&
+        (c->bi_base_key[k][o] == '\0' || !strncmp(c->bi_base_key[k] + o, "_d", 2))) dup++;
+  if (dup) snprintf(key + o, sizeof key - o, "_d%d", dup);
+  c->bi_base_key[b] = strdup(key);
+}
+
+/* The base a node counts in, or -1 for a program node: its own stamp, or,
+   for a node a rewrite made with none, the builtin method whose copy it
+   was made in. */
+static int comp_node_base(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  int b = (int)nt_int(nt, k, "node_bi", 0) - 1;
+  if (b < 0 && k >= c->node_ord_parsed && c->nscope && k < c->node_cap) {
+    int si = c->nscope[k];
+    int dn = si > 0 && si < c->nscopes ? c->scopes[si].def_node : -1;
+    if (dn >= 0 && dn < nt->count) b = (int)nt_int(nt, dn, "node_bi", 0) - 1;
+  }
+  return b >= 0 && b < nt->count ? b : -1;
+}
+
+static void comp_node_ord_assign(Compiler *c, int k) {
+  int b = comp_node_base(c, k);
+  c->node_base[k] = b;
+  if (b < 0) { c->node_ord[k] = c->node_ord_prog++ << 1; return; }
+  if (b >= c->bi_base_cap) {
+    int cap = c->bi_base_cap ? c->bi_base_cap : 64;
+    while (cap <= b) cap *= 2;
+    int *gc = realloc(c->bi_base_cnt, sizeof(int) * (size_t)cap);
+    char **gk = realloc(c->bi_base_key, sizeof(char *) * (size_t)cap);
+    if (!gc || !gk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int j = c->bi_base_cap; j < cap; j++) { gc[j] = 0; gk[j] = NULL; }
+    c->bi_base_cnt = gc; c->bi_base_key = gk; c->bi_base_cap = cap;
+  }
+  if (!c->bi_base_key[b]) comp_node_base_key(c, b);
+  c->node_ord[k] = (c->bi_base_cnt[b]++ << 1) | 1;
+}
+
+/* The parsed nodes are numbered in table order when the compiler is made. A
+   node a rewrite appends is numbered when a name is first asked of it, in the
+   order the names are asked for: the builtins' rewrites append nodes as
+   well, and counting those in table order moved every later program name. */
+int comp_node_ord(Compiler *c, int id, int *builtin) {
+  const NodeTable *nt = c->nt;
+  if (nt->count > c->node_ord_n) {
+    int *g = realloc(c->node_ord, sizeof(int) * (size_t)nt->count);
+    int *gb = realloc(c->node_base, sizeof(int) * (size_t)nt->count);
+    if (!g || !gb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->node_ord = g; c->node_base = gb;
+    for (int k = c->node_ord_n; k < nt->count; k++) {
+      c->node_ord[k] = -1;
+      if (!c->node_ord_parsed) comp_node_ord_assign(c, k);
+    }
+    c->node_ord_n = nt->count;
+  }
+  if (id < 0 || id >= c->node_ord_n) { if (builtin) *builtin = 0; return 0; }
+  if (c->node_ord[id] < 0) comp_node_ord_assign(c, id);
+  int v = c->node_ord[id];
+  if (builtin) *builtin = v & 1;
+  return v >> 1;
+}
+
+/* comp_node_ord as the text a name carries: "12" for a program node, and
+   for a builtin's "q", its method's name and its number there ("qmin_by_12"),
+   so the two never name the same thing. The text lives until eight more have
+   been asked for. */
+const char *comp_node_tag(Compiler *c, int id) {
+  static char ring[8][200];
+  static int next = 0;
+  char *t = ring[next++ & 7];
+  int b = 0;
+  int ord = comp_node_ord(c, id, &b);
+  int base = b ? c->node_base[id] : -1;
+  if (base >= 0 && base < c->bi_base_cap && c->bi_base_key[base])
+    snprintf(t, sizeof ring[0], "q%s_%d", c->bi_base_key[base], ord);
+  else snprintf(t, sizeof ring[0], "%d", ord);
+  return t;
 }
 
 /* Resize the per-node arrays after the node table grew (e.g. an AST subtree
@@ -127,6 +235,9 @@ void comp_free(Compiler *c) {
   free(c->hash_default_arg_memo);
   c->hash_default_arg_memo = NULL;
   free(c->blk_body_map);
+  free(c->node_ord); free(c->node_base);
+  for (int k = 0; k < c->bi_base_cap; k++) free(c->bi_base_key[k]);
+  free(c->bi_base_key); free(c->bi_base_cnt);
   c->blk_body_map = NULL;
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];

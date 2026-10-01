@@ -36377,7 +36377,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         /* the anon class is registered under a name keyed by the node that
            produced it (analyze_scope), so the receiver node identifies it */
         int acid = -1;
-        { char an[48]; snprintf(an, sizeof an, "StructAnon_%d", recv);
+        { char an[64]; snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, recv));
           int rcid = comp_class_index(c, an);
           if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid; }
         /* the class is just as anonymous when a local holds it (`k =

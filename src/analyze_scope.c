@@ -2036,9 +2036,9 @@ static int sg_chain_link(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   while (orig >= 0 && orig < c->nclasses && c->classes[orig].is_singleton_of)
     orig = c->classes[orig].is_singleton_of - 1;
   const NodeTable *nt = c->nt;
-  char snm[96];
-  snprintf(snm, sizeof snm, "%s__sg_%d_%d",
-           c->classes[orig].name ? c->classes[orig].name : "Obj", wnode, m->seq++);
+  char snm[128];
+  snprintf(snm, sizeof snm, "%s__sg_%s_%d",
+           c->classes[orig].name ? c->classes[orig].name : "Obj", comp_node_tag(c, wnode), m->seq++);
   ClassInfo *sc = comp_class_new(c, snm, wnode);
   int newci = (int)(sc - c->classes);
   sc->parent = prev >= 0 ? prev : orig;
@@ -2061,8 +2061,8 @@ static int sg_get_or_make(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   int cur = sg_map_last(m, wnode);
   if (cur >= 0) return cur;
   const NodeTable *nt = c->nt;
-  char snm[96];
-  snprintf(snm, sizeof snm, "%s__sg_%d", c->classes[parent_ci].name ? c->classes[parent_ci].name : "Obj", wnode);
+  char snm[128];
+  snprintf(snm, sizeof snm, "%s__sg_%s", c->classes[parent_ci].name ? c->classes[parent_ci].name : "Obj", comp_node_tag(c, wnode));
   ClassInfo *sc = comp_class_new(c, snm, wnode);
   int newci = (int)(sc - c->classes);
   sc->parent = parent_ci;
@@ -2405,7 +2405,7 @@ void register_structs(Compiler *c) {
       int val = nt_ref(nt, id, "value");
       if (!is_struct_call(c, val)) continue;
       char an[48];
-      snprintf(an, sizeof an, "StructAnon_%d", id);
+      snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
       ClassInfo *cls = comp_class_new(c, an, id);
       cls->is_anon_struct = 1;
       c->anon_struct_ids_valid = 0;
@@ -2433,7 +2433,7 @@ void register_structs(Compiler *c) {
       }
       if (is_recv || !is_write_value) {
         char an[48];
-        snprintf(an, sizeof an, "StructAnon_%d", id);
+        snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
         ClassInfo *cls = comp_class_new(c, an, id);
         cls->is_anon_struct = 1;
         c->anon_struct_ids_valid = 0;
@@ -2466,7 +2466,7 @@ void fix_struct_block_scopes(Compiler *c) {
        named its class after the write */
     char an[48];
     const char *cname = nt_str(nt, id, "name");
-    if (wk == NK_LocalVariableWriteNode) { snprintf(an, sizeof an, "StructAnon_%d", id); cname = an; }
+    if (wk == NK_LocalVariableWriteNode) { snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id)); cname = an; }
     int ci = cname ? comp_class_index(c, cname) : -1;
     if (ci < 0) continue;
     int bn = 0;
@@ -2777,7 +2777,7 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
   if (sp_streq(c->scopes[before].name, od)) {
     int nw_redef = alias_def_after(c, cid, nw, alias_node) >= 0;
     char hidden[512];
-    snprintf(hidden, sizeof hidden, "%s#%d", od, alias_node);
+    snprintf(hidden, sizeof hidden, "%s#%s", od, comp_node_tag(c, alias_node));
     free(c->scopes[before].name);
     c->scopes[before].name = strdup(nw_redef ? hidden : nw);
     if (!nw_redef) return 1;

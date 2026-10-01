@@ -97,8 +97,10 @@ sp_RbVal sp_Fiber_resume_n(sp_Fiber *f, sp_RbVal val, int argc);
 sp_RbVal sp_Fiber_transfer_n(sp_Fiber *f, sp_RbVal val, int argc);
 sp_RbVal sp_Fiber_transfer(sp_Fiber *f, sp_RbVal val);
 /* Like sp_Fiber_transfer, but captures f's unhandled termination exception into
-   the out-params (for the thread scheduler) instead of re-raising it. */
-sp_RbVal sp_Fiber_transfer_catch(sp_Fiber *f, sp_RbVal val, int *out_raised,
+   the out-params (for the thread scheduler) instead of re-raising it. When
+   f's thread stopped inside a Fiber it resumed, `at` is that fiber and the
+   switch goes there (NULL: to f). */
+sp_RbVal sp_Fiber_transfer_catch(sp_Fiber *f, sp_Fiber *at, sp_RbVal val, int *out_raised,
                                  const char **out_cls, const char **out_msg, void **out_obj);
 /* Fiber#raise: inject an exception at the fiber's suspension point (or at entry
    for an unstarted fiber). cls/msg describe a class+message; obj, when non-NULL,

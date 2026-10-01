@@ -6115,6 +6115,23 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
        slot, read when the callee runs, holds the new String, and CRuby
        binds the one read first. It binds the value the call read, in a temp
        like any other value, as a shared handle binds a fresh one. */
+    /* a class body's ivar, read through its synthesized getter
+       (`C.__spinel_civget_x`, desugar_body_ivars): the class's civ_ C
+       global, lent as a class method's ivar is, also when the getter ran
+       first (it only reads the slot). Lent a temp, the callee's appends
+       stayed in the copy. */
+    if (provided >= 0 && nt_kind(c->nt, provided) == NK_CallNode && comp_ntype(c, provided) == TY_STRING &&
+        nt_str(c->nt, provided, "name") && !strncmp(nt_str(c->nt, provided, "name"), "__spinel_civget_", 16)) {
+      int cr = nt_ref(c->nt, provided, "receiver");
+      const char *crn = cr >= 0 && nt_kind(c->nt, cr) == NK_ConstantReadNode ? nt_str(c->nt, cr, "name") : NULL;
+      int ccid = crn ? comp_class_index(c, crn) : -1;
+      char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", nt_str(c->nt, provided, "name") + 16);
+      int civ = ccid >= 0 ? comp_ivar_index(&c->classes[ccid], ivn) : -1;
+      if (civ >= 0 && c->classes[ccid].ivar_types[civ] == TY_STRING) {
+        buf_printf(out, "&civ_%s_%s", c->classes[ccid].name, iv_c(ivn + 1));
+        return;
+      }
+    }
     if (provided >= 0 && !arg_ran_first(provided, 0)) {
       const char *aty = nt_type(c->nt, provided);
       char gref[256];

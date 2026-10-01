@@ -1710,7 +1710,7 @@ int desugar_int_enum_with_index(Compiler *c) {
          so the value is the int evaluated once. */
       int ircv = nt_ref(nt, recv, "receiver");
       if (ircv < 0) continue;
-      char tmpn[32]; snprintf(tmpn, sizeof tmpn, "_spwi%d", id);
+      char tmpn[64]; snprintf(tmpn, sizeof tmpn, "_spwi%s", comp_node_tag(c, id));
       /* register_locals already ran: intern the temp into the enclosing
          scope now; its type comes from the following inference passes. */
       { int encl0 = c->nscope[id];
@@ -1802,10 +1802,10 @@ int desugar_reduce_proc_arg(Compiler *c) {
     }
 
     int base = nt->count;
-    char pn[2][40]; int reqs[2], reads[2];
+    char pn[2][64]; int reqs[2], reads[2];
     int ok = 1;
     for (int k = 0; k < 2 && ok; k++) {
-      snprintf(pn[k], sizeof pn[k], "__fold_%d_%d", id, k);
+      snprintf(pn[k], sizeof pn[k], "__fold_%s_%d", comp_node_tag(c, id), k);
       reqs[k] = nt_new_node(nt, "RequiredParameterNode");
       reads[k] = nt_new_node(nt, "LocalVariableReadNode");
       if (reqs[k] < 0 || reads[k] < 0) { ok = 0; break; }
@@ -3559,7 +3559,7 @@ int desugar_defined_method_call(Compiler *c) {
       if (pure && i == k - 1) nt_node_set_ref(nt, rto, "receiver", recv);
       else {
         /* (__dfm_ID_i = recv; __dfm_ID_i.respond_to?(:m)) */
-        char tname[48]; snprintf(tname, sizeof tname, "__dfm_%d_%d", id, i);
+        char tname[64]; snprintf(tname, sizeof tname, "__dfm_%s_%d", comp_node_tag(c, id), i);
         int tw = nt_new_node(nt, "LocalVariableWriteNode"), tr = nt_new_node(nt, "LocalVariableReadNode");
         int st = nt_new_node(nt, "StatementsNode");
         ask = nt_new_node(nt, "ParenthesesNode");
@@ -3737,7 +3737,7 @@ int desugar_call_op_write(Compiler *c) {
     char opname[64]; snprintf(opname, sizeof opname, "%s", op);
     if (!simple) {
       /* (__cow_N = recv; __cow_N.attr = __cow_N.attr op value) */
-      char tname[48]; snprintf(tname, sizeof tname, "__cow_%d", id);
+      char tname[48]; snprintf(tname, sizeof tname, "__cow_%s", comp_node_tag(c, id));
       int first = nt->count;
       int tw = nt_new_node(nt, "LocalVariableWriteNode");
       int tr1 = nt_new_node(nt, "LocalVariableReadNode");
@@ -3839,7 +3839,7 @@ int desugar_call_or_write_reopen(Compiler *c) {
       if (comp_method_in_chain(c, q, attr, NULL) >= 0) has_def_reader = 1;
     }
     if (!has_def_writer || !has_def_reader) continue;
-    char tname[48]; snprintf(tname, sizeof tname, "__cow_%d", id);
+    char tname[48]; snprintf(tname, sizeof tname, "__cow_%s", comp_node_tag(c, id));
     int first = nt->count;
     int tw = nt_new_node(nt, "LocalVariableWriteNode");
     int tr1 = nt_new_node(nt, "LocalVariableReadNode");
@@ -4015,8 +4015,8 @@ int desugar_index_op_write_user(Compiler *c) {
     char opname[64]; if (op) snprintf(opname, sizeof opname, "%s", op);
     int key = argv[0];
     char rname[48], kname[48];
-    snprintf(rname, sizeof rname, "__ixr_%d", id);
-    snprintf(kname, sizeof kname, "__ixk_%d", id);
+    snprintf(rname, sizeof rname, "__ixr_%s", comp_node_tag(c, id));
+    snprintf(kname, sizeof kname, "__ixk_%s", comp_node_tag(c, id));
     int first = nt->count;
     int rw = nt_new_node(nt, "LocalVariableWriteNode");
     int kw = nt_new_node(nt, "LocalVariableWriteNode");
@@ -4234,7 +4234,7 @@ int desugar_to_proc_block_arg(Compiler *c) {
     int rd = nt_new_node(nt, "LocalVariableReadNode");
     if (exclone < 0 || tpcall < 0 || wnode < 0 || rd < 0) continue;
     char tpname[48];
-    snprintf(tpname, sizeof tpname, "__tproc_%d", id);
+    snprintf(tpname, sizeof tpname, "__tproc_%s", comp_node_tag(c, id));
     nt_node_set_ref(nt, tpcall, "receiver", exclone);
     nt_node_set_str(nt, tpcall, "name", "to_proc");
     nt_node_set_ref(nt, tpcall, "arguments", -1);
@@ -4291,7 +4291,7 @@ int desugar_proc_expr_block_arg(Compiler *c) {
     int rd = nt_new_node(nt, "LocalVariableReadNode");
     if (wnode < 0 || rd < 0) continue;
     char bname[48];
-    snprintf(bname, sizeof bname, "__blkexpr_%d", id);
+    snprintf(bname, sizeof bname, "__blkexpr_%s", comp_node_tag(c, id));
     nt_node_set_str(nt, wnode, "name", bname);
     nt_node_set_ref(nt, wnode, "value", ex);
     nt_node_set_str(nt, rd, "name", bname);
@@ -4574,7 +4574,7 @@ static int fwd_blk_param_read_elsewhere(Compiler *c, Scope *ms, const char *name
 static void fwd_hoist_callable(Compiler *c, int id, int blk, int *ex) {
   NodeTable *nt = (NodeTable *)c->nt;
   char tn[48];
-  snprintf(tn, sizeof tn, "__fwdc_%d", id);
+  snprintf(tn, sizeof tn, "__fwdc_%s", comp_node_tag(c, id));
   int w = nt_new_node(nt, "LocalVariableWriteNode");
   nt_node_set_str(nt, w, "name", tn);
   nt_node_set_ref(nt, w, "value", *ex);
@@ -4627,7 +4627,7 @@ static int fwd_new_int(NodeTable *nt, int v) {
    pair`, and find for a Proc (a lambda included) that would auto-splat it,
    `q.is_a?(Proc) && (q.arity >= 2 || q.arity < -1) ? ...`. The Proc test is
    left out where the callable is known to be one. */
-static int fwd_arity_pick(NodeTable *nt, int ex, int id, int pair, int find, int proc_test) {
+static int fwd_arity_pick(Compiler *c, NodeTable *nt, int ex, int id, int pair, int find, int proc_test) {
   int ge = fwd_new_call(nt, fwd_new_call(nt, nt_clone_subtree(nt, ex), "arity", -1), ">=", fwd_new_int(nt, 2));
   int lt = fwd_new_call(nt, fwd_new_call(nt, nt_clone_subtree(nt, ex), "arity", -1), "<",
                         fwd_new_int(nt, find ? -1 : -2));
@@ -4643,9 +4643,9 @@ static int fwd_arity_pick(NodeTable *nt, int ex, int id, int pair, int find, int
     cond = both;
   }
   int kv[2];
-  char pn[48];
+  char pn[64];
   for (int k = 0; k < 2; k++) {
-    snprintf(pn, sizeof pn, "__fwd_%d_%d", id, k);
+    snprintf(pn, sizeof pn, "__fwd_%s_%d", comp_node_tag(c, id), k);
     kv[k] = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, kv[k], "name", pn);
   }
@@ -4856,10 +4856,10 @@ int desugar_value_callable_forwards(Compiler *c) {
     if (!anon && proc_clone < 0) continue;
 
     int reqs[4], reads[4];
-    char pn[48];
+    char pn[64];
     int alloc_ok = 1;
     for (int k = 0; k < arity; k++) {
-      snprintf(pn, sizeof pn, "__fwd_%d_%d", id, k);
+      snprintf(pn, sizeof pn, "__fwd_%s_%d", comp_node_tag(c, id), k);
       reqs[k] = nt_new_node(nt, "RequiredParameterNode");
       nt_node_set_str(nt, reqs[k], "name", pn);
       reads[k] = nt_new_node(nt, "LocalVariableReadNode");
@@ -4889,7 +4889,7 @@ int desugar_value_callable_forwards(Compiler *c) {
       nt_node_set_ref(nt, callnode, "arguments", callargs);
     }
     if (spread < 0 && callnode >= 0)
-      callnode = fwd_arity_pick(nt, ex, id, callnode, sp_streq(name, "find") || sp_streq(name, "detect"),
+      callnode = fwd_arity_pick(c, nt, ex, id, callnode, sp_streq(name, "find") || sp_streq(name, "detect"),
                                 find_proc_test);
 
     int body = nt_new_node(nt, "StatementsNode");
@@ -4915,7 +4915,7 @@ int desugar_value_callable_forwards(Compiler *c) {
 
     Scope *bs = comp_scope_of(c, blocknode);
     for (int k = 0; k < arity; k++) {
-      snprintf(pn, sizeof pn, "__fwd_%d_%d", id, k);
+      snprintf(pn, sizeof pn, "__fwd_%s_%d", comp_node_tag(c, id), k);
       LocalVar *lv = scope_local_intern(bs, pn);
       lv->is_block_param = 1;
       lv->type = pty[k];
@@ -4970,7 +4970,7 @@ int desugar_block_implicit_rest(Compiler *c) {
     for (int k = 0; k < rn; k++) copy[k] = reqs[k];
     int p = nt_new_node(nt, "RequiredParameterNode");
     if (p < 0) continue;
-    char nm[32]; snprintf(nm, sizeof nm, "__implicit_rest_%d", id);
+    char nm[64]; snprintf(nm, sizeof nm, "__implicit_rest_%s", comp_node_tag(c, id));
     nt_node_set_str(nt, p, "name", nm);
     copy[rn] = p;
     nt_node_set_arr(nt, pn, "requireds", copy, rn + 1);
@@ -5196,8 +5196,8 @@ int desugar_sort_by_with_index(Compiler *c) {
     int pairs = ewi;
     if (wi_off >= 0) {
       char vn[48], inm[48];
-      snprintf(vn, sizeof vn, "__wi_v_%d", id);
-      snprintf(inm, sizeof inm, "__wi_i_%d", id);
+      snprintf(vn, sizeof vn, "__wi_v_%s", comp_node_tag(c, id));
+      snprintf(inm, sizeof inm, "__wi_i_%s", comp_node_tag(c, id));
       int vreq = nt_new_node(nt, "RequiredParameterNode");
       nt_node_set_str(nt, vreq, "name", vn);
       int ireq = nt_new_node(nt, "RequiredParameterNode");
@@ -5240,7 +5240,7 @@ int desugar_sort_by_with_index(Compiler *c) {
     nt_node_set_ref(nt, sb, "arguments", -1);
     nt_node_set_ref(nt, sb, "block", blk);
     /* .map { |p| p[0] } */
-    char pn[48]; snprintf(pn, sizeof pn, "__wi_pair_%d", id);
+    char pn[48]; snprintf(pn, sizeof pn, "__wi_pair_%s", comp_node_tag(c, id));
     int preq = nt_new_node(nt, "RequiredParameterNode");
     nt_node_set_str(nt, preq, "name", pn);
     int params = nt_new_node(nt, "ParametersNode");
@@ -5976,7 +5976,7 @@ static int dmc_has(const DmcNames *s, const char *nm) {
    own. Unset `rewrite` collects those referenced inside a define_method
    block; set, it retypes every reference to a collected name into the
    body's global. */
-static void dmc_walk(NodeTable *nt, int id, int lvl, int in_dm, int cls,
+static void dmc_walk(NodeTable *nt, int id, int lvl, int in_dm, const char *cls,
                      DmcNames *s, int rewrite) {
   if (id < 0) return;
   NodeKind k = nt_kind(nt, id);
@@ -5994,7 +5994,7 @@ static void dmc_walk(NodeTable *nt, int id, int lvl, int in_dm, int cls,
     }
     else if (rewrite && dmc_has(s, nm)) {
       char gname[256];
-      snprintf(gname, sizeof gname, "$__dmcap%d_%s", cls, nm);
+      snprintf(gname, sizeof gname, "$__dmcap%s_%s", cls, nm);
       nt_node_set_type(nt, id, dmc_kinds[lk].global);
       nt_node_set_str(nt, id, "name", gname);
     }
@@ -6234,9 +6234,11 @@ int desugar_define_method_captures(Compiler *c) {
              ? nt_ref(nt, cls, "body") : -1;
     if (body < 0) continue;
     DmcNames s = { 0 };
-    dmc_walk(nt, body, 0, 0, cls, &s, 0);
+    dmc_walk(nt, body, 0, 0, NULL, &s, 0);
     if (s.n) {
-      dmc_walk(nt, body, 0, 0, cls, &s, 1);
+      /* the global carries the class's stable number, not its node id */
+      char ctag[64]; snprintf(ctag, sizeof ctag, "%s", comp_node_tag(c, cls));
+      dmc_walk(nt, body, 0, 0, ctag, &s, 1);
       changed = 1;
     }
     for (int i = 0; i < s.n; i++) free(s.names[i]);
@@ -6894,13 +6896,20 @@ int desugar_builtins(Compiler *c) {
     changed = 1;
   }
   if (!changed) { free(gdef); free(nb); return 0; }
+  /* the numbers carry on across calls: a second pass's copies must not
+     take names the first pass's already have */
+  static int *site_seq = NULL;
+  if (!site_seq) site_seq = calloc((size_t)sp_builtin_enum_names_n + 1, sizeof(int));
+  if (!site_seq) { free(gdef); free(nb); return 0; }
   /* One copy per call site. A method's parameters are typed by the union of
      its call sites, so one shared definition called on an IntArray here and
      a Hash there would carry a poly receiver and a poly memo everywhere;
      with its own copy each site's parameters take that site's types, and
      the inliner specializes the copy for the receiver it sees, as it does
      for a yielding method the program wrote for one purpose. The copy is
-     named `__enum_<m>__<site>`, recorded on the call, and the call is
+     named `__enum_<m>__<k>`, k counting the sites of `m` in source order
+     (a node id would move whenever a builtin grew or shrank), recorded on
+     the call, and the call is
      rewritten onto it in the fixpoint once the receiver's type says the
      builtin serves it (desugar_builtin_enum_calls). A copy no site ends up
      calling is unreachable and never reaches the generated C. */
@@ -6935,8 +6944,9 @@ int desugar_builtins(Compiler *c) {
     if (bi < 0 || gdef[bi] < 0) continue;
     int copy = nt_clone_subtree(nt, gdef[bi]);
     if (copy < 0) break;
-    char cn[256]; snprintf(cn, sizeof cn, "__enum_%s__%d", sp_builtin_enum_names[bi], id);
+    char cn[256]; snprintf(cn, sizeof cn, "__enum_%s__%d", sp_builtin_enum_names[bi], site_seq[bi]++);
     nt_node_set_str(nt, copy, "name", cn);
+    nt_node_set_int(nt, copy, "enum_site", id);   /* the call it serves (enum_copy_site) */
     nt_node_set_int(nt, id, "enum_copy", copy);
     if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) break; nb = g; }
     nb[nbn++] = copy;
@@ -6984,7 +6994,7 @@ void desugar_stored_enum_each(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     int w = nt_kind(nt, id) == NK_CallNode ? stored_enum_write(c, id, n0) : -1;
     if (w < 0) continue;
-    char hs[48], hp[48]; snprintf(hs, sizeof hs, "__enum_src_%d", w); snprintf(hp, sizeof hp, "__enum_ifn_%d", w);
+    char hs[48], hp[48]; snprintf(hs, sizeof hs, "__enum_src_%s", comp_node_tag(c, w)); snprintf(hp, sizeof hp, "__enum_ifn_%s", comp_node_tag(c, w));
     int v = (int)nt_int(nt, w, "enum_src", nt_ref(nt, w, "value"));
     int an = 0; const int *av = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &an);
     if (nt_int(nt, w, "enum_src", -1) < 0) {
@@ -7558,7 +7568,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
     int recv_read = recv;
     int generic = id;
     if (ndef > 0 || safe_nav) {
-      char rn[64]; snprintf(rn, sizeof rn, "__enumrecv_%d", id);
+      char rn[64]; snprintf(rn, sizeof rn, "__enumrecv_%s", comp_node_tag(c, id));
       int w = nt_new_node(nt, "LocalVariableWriteNode");
       int own = nt_new_node(nt, "CallNode");
       int ownr = nt_new_node(nt, "LocalVariableReadNode");
@@ -7887,6 +7897,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     }
     free(nb); return 0;
   }
+  static char *seq_name[256]; static int seq_n[256]; static int nseq = 0;   /* across calls, as above */
   /* one copy per call site, exactly as desugar_builtins does for
      enumerable.rb (a shared definition would carry the union of every
      call site's argument types onto every site) */
@@ -7904,7 +7915,17 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     if (gd < 0) continue;
     int copy = nt_clone_subtree(nt, gd);
     if (copy < 0) break;
-    char cn[256]; snprintf(cn, sizeof cn, "%s%s__%d", sp_bx_prefix[bx], cn0, id);
+    /* numbered per method in source order, as desugar_builtins numbers its
+       copies, not by the call's node id */
+    char base[224]; snprintf(base, sizeof base, "%s%s", sp_bx_prefix[bx], cn0);
+    int seq = -1, si = 0;
+    for (; si < nseq; si++) if (sp_streq(seq_name[si], base)) { seq = seq_n[si]++; break; }
+    if (seq < 0 && nseq < (int)(sizeof seq_n / sizeof seq_n[0]) && (seq_name[nseq] = strdup(base))) {
+      seq = 0; seq_n[nseq++] = 1;
+    }
+    char cn[256];
+    if (seq >= 0) snprintf(cn, sizeof cn, "%s__%d", base, seq);
+    else snprintf(cn, sizeof cn, "%s__n%s", base, comp_node_tag(c, id));   /* past the table: the node id, still unique */
     nt_node_set_str(nt, copy, "name", cn);
     nt_node_set_int(nt, id, "bx_copy", copy);
     nt_node_set_int(nt, id, "bx_container", bx);
@@ -8744,7 +8765,7 @@ static int bs_strip_keywords(Compiler *c, int blk, int bp, int pn) {
     const char *wn = nt_str(nt, kws[i], "name");
     if (block_param_is_renamed(wn)) { scope_local_intern(bs, wn); continue; }
     char kname[160];
-    block_param_invent_name(nt, kname, sizeof kname, wn, blk);
+    block_param_invent_name(c, kname, sizeof kname, wn, blk);
     blkp_rewrite_refs(c, nbody, nt_str(nt, kws[i], "name"), kname);
     numbered_rename_locals_str(nt, blk, nt_str(nt, kws[i], "name"), kname);
     scope_local_intern(bs, kname);
@@ -8873,11 +8894,11 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
 
     BsB b = { nt, 1 };
     int base = nt->count;
-    char names[2][48];
+    char names[2][64];
     const char *argn[2];
     int reqs[2];
     for (int k = 0; k < m; k++) {
-      snprintf(names[k], sizeof names[k], "__bs%d_%d", k, blk);
+      snprintf(names[k], sizeof names[k], "__bs%d_%s", k, comp_node_tag(c, blk));
       argn[k] = names[k];
       reqs[k] = bs_new(&b, "RequiredParameterNode");
       if (reqs[k] >= 0) nt_node_set_str(nt, reqs[k], "name", argn[k]);
@@ -9094,8 +9115,8 @@ static int desugar_enum_pair_op_sym(Compiler *c, int id, int recv, int blk, cons
                     bs_yield_count(infer_type(c, recv), nm, argc, &elem, &hash_pair) != 2 &&
                     !op_sym_comparator(c, recv, nm)))) return 0;
   char pa[48], pb[48];
-  snprintf(pa, sizeof pa, "__spa_%d", blk);
-  snprintf(pb, sizeof pb, "__spb_%d", blk);
+  snprintf(pa, sizeof pa, "__spa_%s", comp_node_tag(c, blk));
+  snprintf(pb, sizeof pb, "__spb_%s", comp_node_tag(c, blk));
   BsB b = { nt, 1 };
   int base = nt->count;
   int reqs[2] = { bs_new(&b, "RequiredParameterNode"), bs_new(&b, "RequiredParameterNode") };
@@ -9184,7 +9205,7 @@ static int user_block_method(Compiler *c, const char *nm) {
 static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   NodeTable *nt = (NodeTable *)c->nt;
   int pn = nt_ref(nt, nt_ref(nt, blk, "parameters"), "parameters");
-  char rn[48]; snprintf(rn, sizeof rn, "__spr_%d", blk);
+  char rn[48]; snprintf(rn, sizeof rn, "__spr_%s", comp_node_tag(c, blk));
   BsB b = { nt, 1 };
   int base = nt->count;
   int rest = bs_new(&b, "RestParameterNode");
@@ -9227,7 +9248,7 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   int P = 0; const int *pre = nt_arr(nt, pn, "requireds", &P);
   const char *xn = nt_str(nt, pre[0], "name");
   if (!xn) return changed;
-  char an[48]; snprintf(an, sizeof an, "__spy_%d", blk);
+  char an[48]; snprintf(an, sizeof an, "__spy_%s", comp_node_tag(c, blk));
   BsB b = { nt, 1 };
   int base = nt->count;
   int call = sym_proc_call2(&b, xn, mn, bs_read(&b, an));
@@ -9289,7 +9310,7 @@ int desugar_enum_pair_lone_param(Compiler *c) {
     }
     TyKind elem;
     if (!sym_n && bs_enum_yield_count(c, recv, nm, 0, &elem) != 2) continue;
-    char an[48]; snprintf(an, sizeof an, "__spx1_%d", blk);
+    char an[48]; snprintf(an, sizeof an, "__spx1_%s", comp_node_tag(c, blk));
     if (numbered) {
       nt_node_set_int(nt, bp, "maximum", 2);
       nt_node_set_str(nt, bp, "n2", an);
@@ -9302,12 +9323,12 @@ int desugar_enum_pair_lone_param(Compiler *c) {
     BsB b = { nt, 1 };
     int base = nt->count;
     int m = sym_n ? sym_n : 2;
-    char ans[8][48];
+    char ans[8][64];
     int P = 0; const int *pre = nt_arr(nt, pn, "requireds", &P);
     int reqs[8] = { pre[0] }, reads[8];
     for (int k = 1; k < m; k++) {
       if (k == 1) snprintf(ans[k], sizeof ans[k], "%s", an);
-      else snprintf(ans[k], sizeof ans[k], "__spx%d_%d", k, blk);
+      else snprintf(ans[k], sizeof ans[k], "__spx%d_%s", k, comp_node_tag(c, blk));
       reqs[k] = bs_new(&b, "RequiredParameterNode");
       if (reqs[k] < 0) return changed;
       nt_node_set_str(nt, reqs[k], "name", ans[k]);
@@ -9383,7 +9404,7 @@ void enum_hop_yield_view(Compiler *c, int id, int hop) {
   int req = -1;
   if (mn && xn) {
     /* { |__spa| x = __spa[0]; __spa.length > 1 ? x.m(__spa[1]) : x.m } */
-    char an[48]; snprintf(an, sizeof an, "__spa_%d", blk);
+    char an[48]; snprintf(an, sizeof an, "__spa_%s", comp_node_tag(c, blk));
     req = bs_new(&b, "RequiredParameterNode");
     if (req < 0) return;
     nt_node_set_str(nt, req, "name", an);
@@ -11886,7 +11907,7 @@ int desugar_safe_nav_attr_write(Compiler *c) {
     snprintf(tyb, sizeof tyb, "%s", ty);
     snprintf(bopb, sizeof bopb, "%s", bop ? bop : "");
     char rnb[256]; snprintf(rnb, sizeof rnb, "%s", rn);
-    char tname[48]; snprintf(tname, sizeof tname, "__snw_%d", id);
+    char tname[48]; snprintf(tname, sizeof tname, "__snw_%s", comp_node_tag(c, id));
     int w = nt_new_node(nt, "LocalVariableWriteNode");
     int pw = nt_new_node(nt, "ParenthesesNode");
     int pws = nt_new_node(nt, "StatementsNode");

@@ -35,6 +35,8 @@ typedef struct sp_sched_timer sp_sched_timer;
 
 typedef struct sp_thread {
   sp_Fiber         *fiber;       /* the green thread's coroutine; NULL for the main thread (root) */
+  sp_Fiber         *at;          /* the Fiber it resumed and stopped inside, or NULL when it
+                                    stopped in its own: run_thread_once switches back there */
   sp_RbVal          arg;         /* Thread.new(arg) -> the block's first param, on first run */
   sp_RbVal          retval;      /* block result (copied from fiber->yielded_value at death) */
   sp_RbVal          name;        /* #name / #name= (a string or nil) */

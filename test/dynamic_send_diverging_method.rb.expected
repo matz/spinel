@@ -1,0 +1,7 @@
+[:halt, nil]
+[:fail_hard, [RuntimeError, "boom"]]
+[:open, :opened]
+[Gate, :halt, nil]
+[Gate, :open, :opened]
+[Wall, :halt, nil]
+[Wall, :open, :solid]

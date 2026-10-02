@@ -3373,7 +3373,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         }
         buf_printf(b, "sp_%sArray_get(", k);
         emit_expr(c, recv, b); buf_puts(b, ", ");
-        if (infer_type(c, argv[0]) == TY_POLY) {
+        /* a splat is its one element (emit_int_expr_ex), not a boxed index */
+        if (infer_type(c, argv[0]) == TY_POLY && nt_kind(nt, argv[0]) != NK_SplatNode) {
           /* a checked conversion, not a raw `.v.i`: the union read assumed
              the box held an Integer, so a boxed user object indexed by its
              pointer bits and the read answered a wrong element in silence;

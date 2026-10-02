@@ -1,0 +1,118 @@
+"No such file or directory"
+Errno::ENOENT
+2
+"No such file or directory - foo"
+2
+"No such file or directory"
+E3
+2
+"No such file or directory - bar"
+2
+"No such file or directory - x"
+2
+#<SystemCallError: unknown error - m>
+nil
+#<ArgumentError: wrong number of arguments (given 0, expected 1..3)>
+#<Errno::EACCES: Permission denied>
+13
+"Permission denied - zz"
+13
+7
+"No such file or directory - yy"
+2
+"No such file or directory"
+2
+"E6"
+nil
+"No such file or directory - x"
+"No such file or directory"
+2
+"No such file or directory - "
+"No such file or directory"
+"No such file or directory @ b - a"
+"No such file or directory"
+"No such file or directory - u"
+"No such file or directory - q"
+2
+"No such file or directory @ g - x"
+2
+"No such file or directory - pre k"
+"E6"
+nil
+"own"
+"No such file or directory - x"
+"No such file or directory - x"
+"No such file or directory"
+2
+"Permission denied - q"
+13
+7
+"No such file or directory - r"
+2
+["No such file or directory - f", "Permission denied - f", "File exists - f", "Broken pipe - f", "Invalid argument - f", "Not a directory - f", "Is a directory - f"]
+2
+13
+17
+32
+"Resource temporarily unavailable"
+"Resource temporarily unavailable - z"
+"Resource temporarily unavailable - x"
+true
+Errno::ENOENT
+"No such file or directory - x"
+2
+"No such file or directory"
+"unknown error - x"
+nil
+"No such file or directory @ fn - x"
+Errno::ENOENT
+"unknown error"
+nil
+Errno::EACCES
+#<Errno::ENOENT: No such file or directory>
+2
+2.7
+Errno::ENOENT
+#<TypeError: no implicit conversion of Symbol into String>
+#<TypeError: no implicit conversion of Integer into String>
+#<TypeError: no implicit conversion of Symbol into String>
+#<TypeError: no implicit conversion of String into Integer>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..3)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<ArgumentError: wrong number of arguments (given 4, expected 1..3)>
+TypeError
+"no implicit conversion of Module into Integer"
+TypeError
+"no implicit conversion of Module into Integer"
+#<TypeError: no implicit conversion of Module into Integer>
+#<TypeError: no implicit conversion of Module into Integer>
+#<Errno::EACCES: Permission denied - zz>
+13
+#<Errno::EACCES: Permission denied - q>
+[Errno::EPIPE, "Broken pipe - m", 32]
+[E3, "No such file or directory - m", 2]
+[SystemCallError, "unknown error - m", nil]
+#<Errno::EPIPE: Broken pipe - v>
+#<E3: No such file or directory - v>
+#<SystemCallError: unknown error - v>
+#<Errno::ENOENT: No such file or directory>
+2
+"File exists - dyn"
+"No such file or directory - dyn"
+2
+"No such file or directory @ rb_sysopen - /nonexistent/zz"
+2
+Errno::ENOENT
+"No such file or directory @ rb_sysopen - /nonexistent/zz"
+2
+Errno::ENOENT
+"#<Errno::ENOENT: No such file or directory - x>"
+"No such file or directory - x"
+true
+"No such file or directory - x (Errno::ENOENT)"
+"n"
+"zz"
+2
+"No such file or directory - fx"
+2
+Errno::ENOENT

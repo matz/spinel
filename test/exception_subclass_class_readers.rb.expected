@@ -1,0 +1,35 @@
+2
+"No such file or directory - m"
+"#<S: No such file or directory - m>"
+nil
+nil
+true
+"w"
+2
+true
+true
+NoMethodError
+nil
+"m"
+nil
+nil
+"#<L: m>"
+"m"
+true
+true
+"n"
+NoMethodError
+"mine"
+#<ArgumentError: no key is available>
+#<ArgumentError: no receiver is available>
+nil
+#<ArgumentError: no receiver is available>
+NoMethodError
+nil
+nil
+false
+#<ArgumentError: no receiver is available>
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError

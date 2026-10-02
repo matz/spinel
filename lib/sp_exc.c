@@ -130,13 +130,30 @@ int sp_exc_is_standard_error(const char *raised) {
 static const char sp_exc_no_msg_storage[] = "\xff";
 const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
 
+/* SystemCallError#errno reads what SystemCallError#initialize stored: the
+   number of the Errno class the exception descends from. An exception built
+   under a class of that family gets it here, at construction -- the runtime's
+   own raises, a rescue binding rebuilt from a raised class and message, and
+   `.new` with no initialize of the program's own in between. (A program's
+   initialize that never calls super leaves it nil, as in CRuby: its
+   constructor clears it, and the super call sets it.) */
+void sp_exc_syserr_init(sp_Exception *e) {
+  sp_int num = 0;
+  if (e && sp_syserr_kind(e->cls_name, &num) == SP_SYSERR_NUM) e->xkey = sp_box_int(num);
+}
 /* Create an exception for a `rescue => e` binding: like sp_exc_new but
    also looks up the parent class via the user hierarchy callback. */
 sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls, msg);
   if (sp_user_exc_parent_fn) {
     const char *par = sp_user_exc_parent_fn(cls);
-    if (par) e->parent_cls_name = par;
+    if (par) {
+      e->parent_cls_name = par;
+      sp_exc_syserr_init(e);
+      /* the runtime raises no class of the program, so nothing recorded a
+         key or a receiver: KeyError#key raises for one, as in CRuby */
+      e->has_key = 0; e->has_recv = 0;
+    }
   }
   return e;
 }
@@ -154,6 +171,7 @@ void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {if
   e->xkey = sp_box_nil();
   e->xrecv = sp_box_nil();
   if (sp_user_exc_parent_fn) e->parent_cls_name = sp_user_exc_parent_fn(e->cls_name);
+  if (e->parent_cls_name) sp_exc_syserr_init(e);
   /* heap-launder the message (see sp_exc_new); memset left msg NULL, so a GC
      during the copy scans a consistent struct */
   SP_GC_ROOT(e);
@@ -232,6 +250,10 @@ sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {if (msg != sp_e
   e->xkey = (e->cls_name && !strcmp(e->cls_name, "Interrupt"))
               ? sp_box_int((sp_int)SIGINT) : sp_box_nil();
   e->xrecv = sp_box_nil();
+  /* an Errno class's number (#errno); a class of the program reaches its
+     Errno ancestor through sp_exc_new_sub / sp_exc_new_for_catch instead */
+  if (!strncmp(e->cls_name, "Errno::", 7) || !strncmp(e->cls_name, "IO::E", 5))
+    sp_exc_syserr_init(e);
   e->has_recv = 1;   /* cleared by the explicit .new emits that record neither */
   e->has_key = 1;
   /* Launder the message into a GC-heap string: sp_exc_gc_scan marks it via
@@ -261,6 +283,9 @@ sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
 sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls_name, msg);   /* empty msg already fell back to cls_name */
   e->parent_cls_name = parent_cls;
+  sp_exc_syserr_init(e);
+  /* `.new` records no key or receiver (KeyError#key raises for it) */
+  e->has_key = 0; e->has_recv = 0;
   return e;
 }
 /* Exception#dup / #clone: a fresh allocation of the receiver's full
@@ -368,6 +393,273 @@ static const struct { const char *name; int num; } SP_ERRNO_TAB[] = {
 #ifdef EDEADLOCK
   { "Errno::EDEADLOCK", EDEADLOCK },
 #endif
+  /* the rest of CRuby's Errno classes, each where the platform has it: a
+     number with no row here would build a plain SystemCallError where CRuby
+     builds its Errno class (SystemCallError.new(msg, n)) */
+#ifdef ENOTBLK
+  { "Errno::ENOTBLK", ENOTBLK },
+#endif
+#ifdef ETXTBSY
+  { "Errno::ETXTBSY", ETXTBSY },
+#endif
+#ifdef EDESTADDRREQ
+  { "Errno::EDESTADDRREQ", EDESTADDRREQ },
+#endif
+#ifdef ESOCKTNOSUPPORT
+  { "Errno::ESOCKTNOSUPPORT", ESOCKTNOSUPPORT },
+#endif
+#ifdef EPFNOSUPPORT
+  { "Errno::EPFNOSUPPORT", EPFNOSUPPORT },
+#endif
+#ifdef ESHUTDOWN
+  { "Errno::ESHUTDOWN", ESHUTDOWN },
+#endif
+#ifdef ETOOMANYREFS
+  { "Errno::ETOOMANYREFS", ETOOMANYREFS },
+#endif
+#ifdef EHOSTDOWN
+  { "Errno::EHOSTDOWN", EHOSTDOWN },
+#endif
+#ifdef EPROCLIM
+  { "Errno::EPROCLIM", EPROCLIM },
+#endif
+#ifdef EUSERS
+  { "Errno::EUSERS", EUSERS },
+#endif
+#ifdef EREMOTE
+  { "Errno::EREMOTE", EREMOTE },
+#endif
+#ifdef EBADRPC
+  { "Errno::EBADRPC", EBADRPC },
+#endif
+#ifdef ERPCMISMATCH
+  { "Errno::ERPCMISMATCH", ERPCMISMATCH },
+#endif
+#ifdef EPROGUNAVAIL
+  { "Errno::EPROGUNAVAIL", EPROGUNAVAIL },
+#endif
+#ifdef EPROGMISMATCH
+  { "Errno::EPROGMISMATCH", EPROGMISMATCH },
+#endif
+#ifdef EPROCUNAVAIL
+  { "Errno::EPROCUNAVAIL", EPROCUNAVAIL },
+#endif
+#ifdef EFTYPE
+  { "Errno::EFTYPE", EFTYPE },
+#endif
+#ifdef EAUTH
+  { "Errno::EAUTH", EAUTH },
+#endif
+#ifdef ENEEDAUTH
+  { "Errno::ENEEDAUTH", ENEEDAUTH },
+#endif
+#ifdef EPWROFF
+  { "Errno::EPWROFF", EPWROFF },
+#endif
+#ifdef EDEVERR
+  { "Errno::EDEVERR", EDEVERR },
+#endif
+#ifdef EBADEXEC
+  { "Errno::EBADEXEC", EBADEXEC },
+#endif
+#ifdef EBADARCH
+  { "Errno::EBADARCH", EBADARCH },
+#endif
+#ifdef ESHLIBVERS
+  { "Errno::ESHLIBVERS", ESHLIBVERS },
+#endif
+#ifdef EBADMACHO
+  { "Errno::EBADMACHO", EBADMACHO },
+#endif
+#ifdef EIDRM
+  { "Errno::EIDRM", EIDRM },
+#endif
+#ifdef ENOMSG
+  { "Errno::ENOMSG", ENOMSG },
+#endif
+#ifdef ENOATTR
+  { "Errno::ENOATTR", ENOATTR },
+#endif
+#ifdef EBADMSG
+  { "Errno::EBADMSG", EBADMSG },
+#endif
+#ifdef EMULTIHOP
+  { "Errno::EMULTIHOP", EMULTIHOP },
+#endif
+#ifdef ENODATA
+  { "Errno::ENODATA", ENODATA },
+#endif
+#ifdef ENOLINK
+  { "Errno::ENOLINK", ENOLINK },
+#endif
+#ifdef ENOSR
+  { "Errno::ENOSR", ENOSR },
+#endif
+#ifdef ENOSTR
+  { "Errno::ENOSTR", ENOSTR },
+#endif
+#ifdef EPROTO
+  { "Errno::EPROTO", EPROTO },
+#endif
+#ifdef ETIME
+  { "Errno::ETIME", ETIME },
+#endif
+#ifdef ENOPOLICY
+  { "Errno::ENOPOLICY", ENOPOLICY },
+#endif
+#ifdef ENOTRECOVERABLE
+  { "Errno::ENOTRECOVERABLE", ENOTRECOVERABLE },
+#endif
+#ifdef EOWNERDEAD
+  { "Errno::EOWNERDEAD", EOWNERDEAD },
+#endif
+#ifdef EQFULL
+  { "Errno::EQFULL", EQFULL },
+#endif
+#ifdef ECHRNG
+  { "Errno::ECHRNG", ECHRNG },
+#endif
+#ifdef EL2NSYNC
+  { "Errno::EL2NSYNC", EL2NSYNC },
+#endif
+#ifdef EL3HLT
+  { "Errno::EL3HLT", EL3HLT },
+#endif
+#ifdef EL3RST
+  { "Errno::EL3RST", EL3RST },
+#endif
+#ifdef ELNRNG
+  { "Errno::ELNRNG", ELNRNG },
+#endif
+#ifdef EUNATCH
+  { "Errno::EUNATCH", EUNATCH },
+#endif
+#ifdef ENOCSI
+  { "Errno::ENOCSI", ENOCSI },
+#endif
+#ifdef EL2HLT
+  { "Errno::EL2HLT", EL2HLT },
+#endif
+#ifdef EBADE
+  { "Errno::EBADE", EBADE },
+#endif
+#ifdef EBADR
+  { "Errno::EBADR", EBADR },
+#endif
+#ifdef EXFULL
+  { "Errno::EXFULL", EXFULL },
+#endif
+#ifdef ENOANO
+  { "Errno::ENOANO", ENOANO },
+#endif
+#ifdef EBADRQC
+  { "Errno::EBADRQC", EBADRQC },
+#endif
+#ifdef EBADSLT
+  { "Errno::EBADSLT", EBADSLT },
+#endif
+#ifdef EBFONT
+  { "Errno::EBFONT", EBFONT },
+#endif
+#ifdef ENONET
+  { "Errno::ENONET", ENONET },
+#endif
+#ifdef ENOPKG
+  { "Errno::ENOPKG", ENOPKG },
+#endif
+#ifdef EADV
+  { "Errno::EADV", EADV },
+#endif
+#ifdef ESRMNT
+  { "Errno::ESRMNT", ESRMNT },
+#endif
+#ifdef ECOMM
+  { "Errno::ECOMM", ECOMM },
+#endif
+#ifdef EDOTDOT
+  { "Errno::EDOTDOT", EDOTDOT },
+#endif
+#ifdef ENOTUNIQ
+  { "Errno::ENOTUNIQ", ENOTUNIQ },
+#endif
+#ifdef EBADFD
+  { "Errno::EBADFD", EBADFD },
+#endif
+#ifdef EREMCHG
+  { "Errno::EREMCHG", EREMCHG },
+#endif
+#ifdef ELIBACC
+  { "Errno::ELIBACC", ELIBACC },
+#endif
+#ifdef ELIBBAD
+  { "Errno::ELIBBAD", ELIBBAD },
+#endif
+#ifdef ELIBSCN
+  { "Errno::ELIBSCN", ELIBSCN },
+#endif
+#ifdef ELIBMAX
+  { "Errno::ELIBMAX", ELIBMAX },
+#endif
+#ifdef ELIBEXEC
+  { "Errno::ELIBEXEC", ELIBEXEC },
+#endif
+#ifdef ERESTART
+  { "Errno::ERESTART", ERESTART },
+#endif
+#ifdef ESTRPIPE
+  { "Errno::ESTRPIPE", ESTRPIPE },
+#endif
+#ifdef EUCLEAN
+  { "Errno::EUCLEAN", EUCLEAN },
+#endif
+#ifdef ENOTNAM
+  { "Errno::ENOTNAM", ENOTNAM },
+#endif
+#ifdef ENAVAIL
+  { "Errno::ENAVAIL", ENAVAIL },
+#endif
+#ifdef EISNAM
+  { "Errno::EISNAM", EISNAM },
+#endif
+#ifdef EREMOTEIO
+  { "Errno::EREMOTEIO", EREMOTEIO },
+#endif
+#ifdef ENOMEDIUM
+  { "Errno::ENOMEDIUM", ENOMEDIUM },
+#endif
+#ifdef EMEDIUMTYPE
+  { "Errno::EMEDIUMTYPE", EMEDIUMTYPE },
+#endif
+#ifdef ENOKEY
+  { "Errno::ENOKEY", ENOKEY },
+#endif
+#ifdef EKEYEXPIRED
+  { "Errno::EKEYEXPIRED", EKEYEXPIRED },
+#endif
+#ifdef EKEYREVOKED
+  { "Errno::EKEYREVOKED", EKEYREVOKED },
+#endif
+#ifdef EKEYREJECTED
+  { "Errno::EKEYREJECTED", EKEYREJECTED },
+#endif
+#ifdef ERFKILL
+  { "Errno::ERFKILL", ERFKILL },
+#endif
+#ifdef EHWPOISON
+  { "Errno::EHWPOISON", EHWPOISON },
+#endif
+#ifdef EIPSEC
+  { "Errno::EIPSEC", EIPSEC },
+#endif
+#ifdef EDOOFUS
+  { "Errno::EDOOFUS", EDOOFUS },
+#endif
+#ifdef ECAPMODE
+  { "Errno::ECAPMODE", ECAPMODE },
+#endif
+#ifdef ENOTCAPABLE
+  { "Errno::ENOTCAPABLE", ENOTCAPABLE },
+#endif
 };
 const char *sp_errno_class_name(int e) {
   for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
@@ -378,23 +670,54 @@ const char *sp_errno_class_name(int e) {
 sp_int sp_errno_num(const char *cls) {
   for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
     if (!strcmp(SP_ERRNO_TAB[i].name, cls)) return SP_ERRNO_TAB[i].num;
-  return SP_INT_NIL;
+  /* a name the platform has no number for is CRuby's Errno 0 class */
+  return strncmp(cls, "Errno::", 7) ? SP_INT_NIL : 0;
 }
-/* SystemCallError#errno: the number of the Errno:: class the exception is
-   an instance of, nil for a plain SystemCallError; NoMethodError off the
-   family, as CRuby defines the reader on SystemCallError alone. */
+/* Where class `cls` stands in the SystemCallError family, walking its user
+   and builtin parents: SP_SYSERR_NUM when it is (or descends from) an Errno
+   class, whose number goes to *num; SP_SYSERR_BASE for SystemCallError
+   itself; SP_SYSERR_BARE for a class of the program directly under
+   SystemCallError, which has no Errno constant of its own -- CRuby's
+   SystemCallError#initialize reads the constant through the class, finds the
+   Errno MODULE and raises TypeError converting it; SP_SYSERR_NONE off the
+   family. */
+int sp_syserr_kind(const char *cls, sp_int *num) {
+  const char *cn = sp_exc_canonical_name(cls);
+  for (int depth = 0; depth < 30 && cn; depth++) {
+    /* a class of the program named into Errno (`class Errno::Mine <
+       Errno::ENOENT`) reads its parent's number, as CRuby reads the
+       inherited Errno constant */
+    const char *uparent = sp_user_exc_parent_fn ? sp_user_exc_parent_fn(cn) : NULL;
+    if (!strncmp(cn, "Errno::", 7) && !uparent) {
+      /* a name this platform has no number for: CRuby still defines the
+         class, with Errno 0 */
+      sp_int n = sp_errno_num(cn);
+      if (num) *num = n == SP_INT_NIL ? 0 : n;
+      return SP_SYSERR_NUM;
+    }
+    if (!strcmp(cn, "SystemCallError")) return depth == 0 ? SP_SYSERR_BASE : SP_SYSERR_BARE;
+    cn = sp_exc_canonical_name(uparent ? uparent : sp_exc_parent_of_name(cn));
+  }
+  return SP_SYSERR_NONE;
+}
+/* SystemCallError#message as CRuby's rb_syserr_initialize builds it: the
+   C library's text for the number ("unknown error" without one), then
+   " @ func" and " - msg" for the arguments given. strerror is what CRuby
+   asks too, so the text is the platform's own. `msg` is NULL when none was
+   given (nil) -- an empty one is given, and keeps its " - ". */
+const char *sp_syserr_text(int has_num, sp_int num, const char *func, const char *msg) {
+  /* one allocation: the caller holds func and msg */
+  return sp_sprintf("%s%s%s%s%s", has_num ? strerror((int)num) : "unknown error",
+                    func ? " @ " : "", func ? func : "", msg ? " - " : "", msg ? msg : "");
+}
+/* SystemCallError#errno: what SystemCallError#initialize stored -- the
+   number of the Errno class the exception descends from (sp_exc_syserr_init),
+   or what a plain SystemCallError.new(msg, n) was given -- nil when it never
+   ran; NoMethodError off the family, as CRuby defines the reader on
+   SystemCallError alone. */
 sp_RbVal sp_exc_errno_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemCallError", "errno");
-  /* a user subclass of an Errno class (`class E < Errno::ENOENT`) carries
-     the number of the Errno class it descends from */
-  const char *cn = e->cls_name ? e->cls_name : "";
-  for (int depth = 0; depth < 30 && cn; depth++) {
-    for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
-      if (!strcmp(SP_ERRNO_TAB[i].name, cn)) return sp_box_int(SP_ERRNO_TAB[i].num);
-    const char *parent = sp_user_exc_parent_fn ? sp_user_exc_parent_fn(cn) : NULL;
-    cn = parent ? parent : sp_exc_parent_of_name(cn);
-  }
-  return sp_box_nil();
+  return e->xkey;
 }
 /* The builtin exception hierarchy, as {class, direct superclass} pairs. Shared
    by Exception#is_a? and the by-name #superclass lookup (#3031). */
@@ -504,6 +827,12 @@ sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {SP_GC_ROOT(e);
      CRuby raises rather than answering nil -- nil is a legal receiver (#3036) */
   if (e && !e->has_recv) sp_raise_cls("ArgumentError", "no receiver is available");
   return e->xrecv;
+}
+/* LoadError#path: no LoadError the program raises carries one (a require is
+   resolved at compile time), so nil -- what one raised by hand answers */
+sp_RbVal sp_exc_path_acc(sp_Exception *e) {SP_GC_ROOT(e);
+  sp_exc_acc_gate(e, "LoadError", "path");
+  return sp_box_nil();
 }
 sp_RbVal sp_exc_args_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "args");

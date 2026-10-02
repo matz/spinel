@@ -4270,6 +4270,9 @@ static SP_NOINLINE sp_bool sp_poly_eq_slow(sp_RbVal a, sp_RbVal b) {
      other operators now do; the field-wise hook below stays the default for
      a class that does not define one (#3501) */
   { sp_RbVal _u; if (sp_poly_user_cmp("==", a, b, &_u)) return sp_poly_truthy(_u); }
+  { sp_RbVal _u; if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) && sp_poly_is_user_obj(b) && sp_obj_to_ary_fn &&
+                     sp_obj_to_ary_fn((sp_RbVal){ .tag = SP_TAG_OBJ, .cls_id = b.cls_id }).tag == SP_TAG_BOOL &&
+                     sp_poly_user_cmp("==", b, a, &_u)) return sp_poly_truthy(_u); }
   /* shared-mutable string handle (#3227): == is content equality, against
      either another handle or a plain string */
   { const char *_sa = (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_STRBUF) ? sp_String_cstr((sp_String *)a.v.p) : NULL;
@@ -9924,6 +9927,10 @@ static sp_bool sp_poly_eql(sp_RbVal a, sp_RbVal b) {
   int a_int = (a.tag == SP_TAG_INT || a.tag == SP_TAG_BIGINT);
   int b_int = (b.tag == SP_TAG_INT || b.tag == SP_TAG_BIGINT);
   if ((a_int && b.tag == SP_TAG_FLT) || (a.tag == SP_TAG_FLT && b_int)) return FALSE;
+  /* Array#eql? answers false for anything that is not an Array: unlike ==, it
+     does not defer to an operand that answers to_ary */
+  if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) &&
+      !(b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id))) return FALSE;
   /* Array#eql? and Hash#eql? recurse per element / value with eql? (not ==),
      so [1, 2] is not eql? to [1, 2.0], nor {a: 1} to {a: 1.0}, even though
      they are ==. */
@@ -12589,6 +12596,79 @@ static void sp_raise_exc(volatile sp_Exception *ve) {
   sp_raise_cls(e->cls_name, e->msg);
 }
 
+/* SystemCallError#initialize, as CRuby's syserr_initialize runs it for an
+   exception of class `cls` below SystemCallError, taking (msg = nil, func =
+   nil): the Errno number is read through the class first -- a class of the
+   program directly under SystemCallError finds the Errno MODULE there, and
+   converting it is a TypeError -- then the message is the C library's text
+   for that number, with " @ func - msg" when a message is given (func alone
+   is dropped). The message must be a String or nil; func is rendered. */
+static const char *sp_syserr_msg_v(const char *cls, sp_RbVal msg, sp_RbVal func) {
+  SP_GC_ROOT_RBVAL(msg); SP_GC_ROOT_RBVAL(func);
+  sp_int num = 0;
+  int k = sp_syserr_kind(cls, &num);
+  if (k == SP_SYSERR_BARE) sp_raise_cls("TypeError", "no implicit conversion of Module into Integer");
+  const char *m = sp_poly_arg_str_or_null(msg);
+  SP_GC_ROOT(m);
+  const char *f = (m && func.tag != SP_TAG_NIL) ? sp_poly_to_s(func) : NULL;
+  SP_GC_ROOT(f);
+  return sp_syserr_text(k == SP_SYSERR_NUM, num, f, m);
+}
+/* the same from a call's arguments, which a subclass of SystemCallError
+   takes as (msg = nil, func = nil) */
+static const char *sp_syserr_msg_a(const char *cls, sp_int argc, const sp_RbVal *av) {
+  if (argc > 2)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 0..2)",
+                                             (long long)argc));
+  return sp_syserr_msg_v(cls, argc > 0 ? av[0] : sp_box_nil(), argc > 1 ? av[1] : sp_box_nil());
+}
+/* `super(msg, func)` in the initialize of a program's class below
+   SystemCallError: the message above, and the #errno it stores */
+static const char *sp_syserr_super(sp_Exception *self, sp_int argc, const sp_RbVal *av) {
+  SP_GC_ROOT(self);
+  const char *m = sp_syserr_msg_a(self->cls_name, argc, av);
+  sp_gc_wb((void *)self);
+  self->msg = m;
+  self->xkey = sp_box_nil();
+  sp_exc_syserr_init(self);
+  return m;
+}
+/* SystemCallError.new(msg, errno = nil, func = nil): an errno with an Errno
+   class builds an instance of that class (SystemCallError.new("x", 2) is an
+   Errno::ENOENT); #errno answers the errno as given. A lone Integer is the
+   errno, not the message. */
+static sp_Exception *sp_syserr_new_v(sp_int argc, const sp_RbVal *av) {
+  if (argc < 1 || argc > 3)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 1..3)",
+                                             (long long)argc));
+  sp_RbVal msg = av[0], err = argc > 1 ? av[1] : sp_box_nil(), func = argc > 2 ? av[2] : sp_box_nil();
+  if (argc == 1 && msg.tag == SP_TAG_INT) { err = msg; msg = sp_box_nil(); }
+  SP_GC_ROOT_RBVAL(msg); SP_GC_ROOT_RBVAL(err); SP_GC_ROOT_RBVAL(func);
+  const char *cls = "SystemCallError";
+  sp_int num = 0;
+  if (err.tag != SP_TAG_NIL) { num = sp_poly_arg_int_chk(err); cls = sp_errno_class_name((int)num); }
+  const char *m = sp_poly_arg_str_or_null(msg);
+  SP_GC_ROOT(m);
+  const char *f = (m && func.tag != SP_TAG_NIL) ? sp_poly_to_s(func) : NULL;
+  SP_GC_ROOT(f);
+  const char *t = sp_syserr_text(err.tag != SP_TAG_NIL, num, f, m);
+  SP_GC_ROOT(t);
+  sp_Exception *e = sp_exc_new(cls, t);
+  e->xkey = err;
+  return e;
+}
+/* a raise or `.new` through a Class value: the family builds as above */
+static sp_Exception *sp_syserr_build(const char *cls, sp_int argc, const sp_RbVal *av) {
+  if (sp_syserr_kind(cls, NULL) == SP_SYSERR_BASE) return sp_syserr_new_v(argc, av);
+  const char *t = sp_syserr_msg_a(cls, argc, av);
+  SP_GC_ROOT(t);
+  sp_Exception *e = sp_exc_new(cls, t);
+  if (sp_user_exc_parent_fn && sp_user_exc_parent_fn(cls)) {
+    e->parent_cls_name = sp_user_exc_parent_fn(cls);
+    sp_exc_syserr_init(e);
+  }
+  return e;
+}
 /* Kernel#raise with a runtime-typed (poly) operand: a String raises
    RuntimeError with it, a carried exception object re-raises as itself,
    anything else is CRuby's TypeError. */
@@ -12622,8 +12702,12 @@ SP_NORETURN SP_COLD static void sp_raise_poly(sp_RbVal v) {
        instead, which only a registered exception class has. */
     if (cn && *cn && (!strcmp(cn, "Exception") ||
                       (sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn)) ||
-                      sp_exc_parent_of_name(cn)))
+                      sp_exc_parent_of_name(cn))) {
+      /* the SystemCallError family's message is its errno text */
+      if (sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE)
+        sp_raise_cls(cn, sp_syserr_build(cn, 0, NULL)->msg);
       sp_raise_cls(cn, sp_str_empty);
+    }
   }
   sp_raise_cls("TypeError", "exception class/object expected");
 }
@@ -12642,8 +12726,17 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg(sp_RbVal v, sp_RbVal m) {
     const char *cn = sp_class_val_name(v);
     if (cn && *cn && (!strcmp(cn, "Exception") ||
                       (sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn)) ||
-                      sp_exc_parent_of_name(cn)))
+                      sp_exc_parent_of_name(cn))) {
+      if (sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE) {
+        sp_Exception *se = sp_syserr_build(cn, 1, &m);
+        /* a builtin raises as built (SystemCallError, 2 is an Errno::ENOENT);
+           a class of the program by name and message, as its struct may be
+           larger than the one built here */
+        if (!(sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn))) sp_raise_exc(se);
+        sp_raise_cls(cn, se->msg);
+      }
       sp_raise_cls(cn, msg ? msg : sp_str_empty);
+    }
   }
   sp_raise_cls("TypeError", "exception class/object expected");
 }
@@ -15723,6 +15816,8 @@ static sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, 
    exception class, constructed as `RuntimeError.new(msg)` is, or a class
    the program cannot construct through a class value. */
 static sp_RbVal sp_class_value_new_fallback(sp_RbVal cls, const char *cn, sp_int argc, const sp_RbVal *av) {
+  if (cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE)
+    return sp_box_obj(sp_syserr_build(cn, argc, av), SP_BUILTIN_EXCEPTION);
   if (cn && (!strcmp(cn, "Exception") || sp_exc_parent_of_name(cn))) {
     sp_dyn_new_arity(argc, 1);
     const char *msg = sp_str_empty;

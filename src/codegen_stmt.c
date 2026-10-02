@@ -5361,9 +5361,30 @@ static void emit_when_splat_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
   buf_puts(b, ")");
 }
 
+/* `when Integer` / `when NilClass` on an Integer or Float scrutinee: the
+   slot holds nil as its sentinel, which the static type cannot say, so the
+   arm reads it as is_a? does (#7049). The universal classes hold for nil as
+   well and keep the constant (answers 0, nothing emitted). */
+static int emit_when_scalar_class(TyKind pt, const char *cn, int t, Buf *b) {
+  if (pt != TY_INT && pt != TY_FLOAT) return 0;
+  int yes = ty_matches_class(pt, cn, 0);
+  int nilcls = sp_streq(cn, "NilClass");
+  int univ = sp_streq(cn, "Object") || sp_streq(cn, "BasicObject") || sp_streq(cn, "Kernel");
+  if (yes < 0 || (!nilcls && (!yes || univ))) return 0;
+  if (pt == TY_INT) buf_printf(b, "(_t%d %s SP_INT_NIL)", t, nilcls ? "==" : "!=");
+  else buf_printf(b, "(%ssp_float_is_nil(_t%d))", nilcls ? "" : "!", t);
+  return 1;
+}
+
 static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   int reidx = re_lit_index(c, cond);
-  if (reidx >= 0 && pt == TY_STRING) {
+  /* `when nil` on an Integer or Float scrutinee matches its nil sentinel:
+     compared as a number, nil read as 0 and matched a 0 */
+  if (nt_kind(c->nt, cond) == NK_NilNode && (pt == TY_INT || pt == TY_FLOAT)) {
+    if (pt == TY_INT) buf_printf(b, "(_t%d == SP_INT_NIL)", t);
+    else buf_printf(b, "sp_float_is_nil(_t%d)", t);
+  }
+  else if (reidx >= 0 && pt == TY_STRING) {
     buf_printf(b, "(sp_re_match(sp_re_pat_%d, _t%d) >= 0)", reidx, t);
   }
   else if (reidx >= 0 && pt == TY_POLY) {
@@ -5687,6 +5708,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                not decidable from the static TY_BOOL type (#2966) */
             buf_printf(b, "(_t%d %s)", t, sp_streq(cn2, "TrueClass") ? "!= 0" : "== 0");
           }
+          else if (cn2 && emit_when_scalar_class(pt, cn2, t, b)) { }
           else if (cn2) {
             int yes = ty_matches_class(pt, cn2, 0);
             buf_printf(b, "%d", yes > 0 ? 1 : 0);
@@ -6020,6 +6042,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
           /* a boolean's class is a runtime value, not the static TY_BOOL (#2966) */
           buf_printf(b, "(_t%d %s)", t, sp_streq(cn2, "TrueClass") ? "!= 0" : "== 0");
         }
+        else if (cn2 && emit_when_scalar_class(pt, cn2, t, b)) { }
         else if (cn2) { int yes = ty_matches_class(pt, cn2, 0); buf_printf(b, "%d", yes > 0 ? 1 : 0); }
         else {
         if (emit_when_typed_test(c, conds[j], t, pt, b)) { }

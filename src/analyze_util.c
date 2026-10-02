@@ -166,6 +166,14 @@ int is_builtin_exception_name(const char *n) {
      any qualified Errno name is an exception class (#2922 follow-up) */
   return n && strncmp(n, "Errno::", 7) == 0;
 }
+/* The SystemCallError family, by builtin name: SystemCallError, the Errno
+   classes and the IO wait-readiness classes under them. Its #initialize
+   builds the message from the class's errno (syserr_initialize). */
+int is_syserr_family_name(const char *n) {
+  if (!n) return 0;
+  return sp_streq(n, "SystemCallError") || strncmp(n, "Errno::", 7) == 0 ||
+         (strncmp(n, "IO::E", 5) == 0 && strstr(n, "Wait") && is_builtin_exception_name(n));
+}
 /* The Errno:: class a name stands for. CRuby defines one class per errno
    number: a later name whose number an earlier class already has is a
    constant for that class, so on Linux Errno::EOPNOTSUPP *is* Errno::ENOTSUP

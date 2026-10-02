@@ -3204,12 +3204,12 @@ static TyKind infer_call_inner(Compiler *c, int id) {
            candidate with the WRONG ARITY does not: this call cannot reach it,
            so it neither contributes a return type nor vetoes the others
            (#4129). Codegen's cls_arm_takes_argc is the same rule.
-           With a block, a candidate taking it (a yielding one through its
+           A candidate taking a block (a yielding one through its
            proc form) is reached by the poly receiver's class-tag dispatch
            instead, which answers poly. */
-        if (has_blk && c->scopes[kmi].rest_idx < 0 &&
+        if (c->scopes[kmi].rest_idx < 0 &&
             (c->scopes[kmi].yields || (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0]))) {
-          if (argc >= c->scopes[kmi].nrequired && argc <= c->scopes[kmi].nparams) nblk++;
+          if (splat ? argc - splat <= c->scopes[kmi].nparams : argc >= c->scopes[kmi].nrequired && argc <= c->scopes[kmi].nparams) nblk++;
           continue;
         }
         /* a *rest the emitter packs is an arm like any other */
@@ -3477,7 +3477,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
            representation: `String.new` is a String, not a user object (#3109) */
         if (!(cn && is_builtin_reopen(cn))) return ty_object(ci);
       }
-      if (cn && is_builtin_exception_name(cn)) return TY_EXCEPTION;
+      /* a builtin exception by its whole path (Errno::ENOENT.new) */
+      if (cn && (is_builtin_exception_name(cn) || superclass_builtin_exc_name(nt, recv)))
+        return TY_EXCEPTION;
       /* ::Array.new / ::String.new / ::StringIO.new etc. */
       if (cn && sp_streq(cn, "Array") && argc == 2) return ty_array_of(infer_type(c, argv[1]));
       if (cn && sp_streq(cn, "Array")) return TY_POLY_ARRAY;
@@ -5320,8 +5322,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
 
   /* Exception class-level methods: Cls.exception(msg) is Cls.new (#2740);
      Exception.to_tty? answers whether stderr is a terminal (#2757). */
-  if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
-    const char *ecn = nt_str(nt, recv, "name");
+  if (recv >= 0 && nt_type(nt, recv) && (sp_streq(nt_type(nt, recv), "ConstantReadNode") ||
+                                          (sp_streq(nt_type(nt, recv), "ConstantPathNode") &&
+                                           comp_class_index(c, nt_str(nt, recv, "name")) < 0))) {
+    /* by its whole path: Errno::ENOENT.exception */
+    const char *ecn = superclass_builtin_exc_name(nt, recv);
     if (ecn && is_builtin_exception_name(ecn)) {
       if (sp_streq(name, "exception")) return TY_EXCEPTION;
       if (sp_streq(name, "to_tty?")) return TY_BOOL;

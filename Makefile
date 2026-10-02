@@ -1084,6 +1084,9 @@ cli-opts-test: $(SPINEL)
 	$(SPINEL) -g test/debug/ivar_nil_before_setup.rb -o "$$tmp/dbg" >"$$tmp/dbg.out" 2>&1 && \
 	  "$$tmp/dbg" 2>&1 | cmp -s - test/debug/ivar_nil_before_setup.rb.expected || \
 	  { echo "cli-opts-test: FAIL (a -g build did not raise NoMethodError for an unset ivar, #5960)"; ok=0; }; \
+	$(SPINEL) -I test/require_load_path test/require_load_path/main.rb -o "$$tmp/lp" >"$$tmp/lp.out" 2>&1 && \
+	  "$$tmp/lp" 2>&1 | cmp -s - test/require_load_path/main.rb.expected || \
+	  { echo "cli-opts-test: FAIL (a file reached by -I require and by require_relative loaded twice)"; ok=0; }; \
 	links=""; i=0; while [ $$i -lt 70 ]; do links="$$links --link -lm"; i=$$((i + 1)); done; \
 	$(SPINEL) "$$tmp/p.rb" $$links --link -lsp_last_link --print-build 2>/dev/null | grep -q 'lib -lsp_last_link' || \
 	  { echo "cli-opts-test: FAIL (a --link past the 64th was dropped)"; ok=0; }; \
@@ -1121,6 +1124,11 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  echo "reject-test: FAIL (a combination block taking two parameters through &. compiled)"; ok=0; \
 	else grep -q "a block taking more than one parameter on combination" "$$tmp/csn.out" || \
 	  { echo "reject-test: FAIL (a combination block through &. rejected without saying why)"; sed -n 1,5p "$$tmp/csn.out"; ok=0; }; fi; \
+	t=test/reject/new_receiver_class_chain_still_reached.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ncc.c" >"$$tmp/ncc.out" 2>&1; then \
+	  echo "reject-test: FAIL (a called class-side super chain's provable NoMethodError compiled)"; ok=0; \
+	else grep -q "undefined method '\[\]=' for a Class" "$$tmp/ncc.out" || \
+	  { echo "reject-test: FAIL (a called class-side super chain's NoMethodError rejected without saying why)"; sed -n 1,5p "$$tmp/ncc.out"; ok=0; }; fi; \
 	t=test/reject/redo_unlabeled_iterator.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/rui.c" >"$$tmp/rui.out" 2>&1; then \
 	  echo "reject-test: FAIL (a redo with no label for it compiled)"; ok=0; \
@@ -1344,6 +1352,23 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  echo "reject-test: FAIL (a constant of A read bare from a class A::B body compiled)"; ok=0; \
 	else grep -q "uninitialized constant A::B::LIMIT (NameError)" "$$tmp/bcp.out" || \
 	  { echo "reject-test: FAIL (a constant of A read bare from class A::B refused without saying why)"; sed -n 1,5p "$$tmp/bcp.out"; ok=0; }; fi; \
+	for t in test/reject/systemcallerror_subclass_errno_const*.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sce.c" >"$$tmp/sce.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t: an Errno constant in a subclass of SystemCallError compiled)"; ok=0; \
+	  else grep -q "an Errno constant defined in a subclass of SystemCallError" "$$tmp/sce.out" || \
+	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/sce.out"; ok=0; }; fi; \
+	done; \
+	t=test/reject/systemcallerror_zsuper_keyword.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/szk.c" >"$$tmp/szk.out" 2>&1; then \
+	  echo "reject-test: FAIL (a bare super forwarding a keyword to SystemCallError#initialize compiled)"; ok=0; \
+	else grep -q "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize" "$$tmp/szk.out" || \
+	  { echo "reject-test: FAIL (a bare super forwarding a keyword refused without saying why)"; sed -n 1,5p "$$tmp/szk.out"; ok=0; }; fi; \
+	for t in test/reject/object_receiver_include*.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ori.c" >"$$tmp/ori.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t: an include into Object through an explicit receiver compiled)"; ok=0; \
+	  else grep -q "Object.include(...) is not supported by AOT compilation" "$$tmp/ori.out" || \
+	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/ori.out"; ok=0; }; fi; \
+	done; \
 	t=test/reject/dynamic_send_then_refusal.rb; \
 	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ds.c" >"$$tmp/ds.out" 2>&1; st=$$?; \
 	if [ $$st -ne 1 ] || ! grep -q "1 refusal," "$$tmp/ds.out"; then \

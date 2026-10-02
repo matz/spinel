@@ -17584,6 +17584,8 @@ typedef struct {
   int nscopes;
   unsigned version, scope_gen;
   int frozen_reflection;
+  int frozen_operator_fold;
+  ANameHash frozen_operator_writes;
 } FwdMemo;
 typedef struct {
   FwdPhase phase;
@@ -17610,6 +17612,7 @@ void fwd_analysis_free(Compiler *c) {
   if (!f) return;
   sb_mut_tab_free(&f->root.seen);
   sb_mut_tab_free(&f->memo.poly_cache);
+  anh_free(&f->memo.frozen_operator_writes);
   free(f->memo.rest);
   free(f);
   c->fwd_analysis = NULL;
@@ -22236,6 +22239,9 @@ static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   sb_mut_tab_free(&memo->poly_cache);
   memset(&memo->poly_cache, 0, sizeof memo->poly_cache);
   memo->frozen_reflection = 0;
+  memo->frozen_operator_fold = 0;
+  anh_free(&memo->frozen_operator_writes);
+  memset(&memo->frozen_operator_writes, 0, sizeof memo->frozen_operator_writes);
   memo->nscopes = c->nscopes;
   memo->version = c->nt->version;
   memo->scope_gen = gen;
@@ -22442,6 +22448,32 @@ static int fwd_frozen_array_source(Compiler *c, int mi, const char *pn, int each
   return 1;
 }
 
+/* Runtime protocols, operators and setters can be entered without a matching
+   CallNode. Explicit frozen calls cannot close their incoming-value census. */
+static int fwd_frozen_static_name(const char *name, FwdMemo *memo) {
+  return name && *name &&
+         (isalnum((unsigned char)*name) || *name == '_' ||
+          (!memo->frozen_operator_fold && !anh_has(&memo->frozen_operator_writes, name) &&
+           strchr("+-*/%&|^<>", *name))) &&
+         name[strlen(name) - 1] != '=' && !method_name_implicitly_invoked(name);
+}
+static int fwd_frozen_static_entry(Compiler *c, int mi) {
+  Scope *m = &c->scopes[mi];
+  FwdMemo *memo = fwd_analysis(c)->memo;
+  if (!fwd_frozen_static_name(m->name, memo)) return 0;
+  /* Aliases have no scope of their own: a normal name can be the resolved
+     target of a runtime operator, setter, protocol or constructor alias. */
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *cls = &c->classes[k];
+    for (int a = 0; a < cls->naliases; a++) {
+      const char *name = cls->alias_new[a];
+      if (!name || (fwd_frozen_static_name(name, memo) && !sp_streq(name, "initialize"))) continue;
+      if (comp_method_in_chain(c, k, name, NULL) == mi) return 0;
+    }
+  }
+  return 1;
+}
+
 static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int depth, int *work) {
   if (node < 0 || depth > 16 || !*work) return 0;
   --*work;
@@ -22488,6 +22520,10 @@ static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int d
   }
   if (!p->is_param) return found;
   if (found || m->is_ext_entry || m->yields || m->is_lowered_yield || m->dm_subst_name) return 0;
+  if (!fwd_frozen_static_entry(c, mi)) return 0;
+  /* Class-valued .new can enter initialize without appearing in the static
+     caller census. A literal direct call is not an exhaustive frozen proof. */
+  if (sp_streq(m->name, "initialize") && an_class_dynamic_new_risk(c, m->class_id)) return 0;
   int pj = an_param_idx(m, pn);
   if (pj < 0 || pj == m->rest_idx || pj == m->kwrest_idx) return 0;
   /* This optional census does not bind explicit or forwarding super.
@@ -22530,6 +22566,23 @@ int fwd_actual_frozen(Compiler *c, int node) {
         f->memo->frozen_reflection = -1;
         break;
       }
+      /* Symbol folds and sum enter user binary operators through C hooks. */
+      if (sp_streq(nm, "reduce") || sp_streq(nm, "inject")) f->memo->frozen_operator_fold = 1;
+      if (sp_streq(nm, "sum")) anh_add(&f->memo->frozen_operator_writes, "+");
+    }
+    /* Operator writes also bypass CallNode argument binding. Ordinary direct
+       operator calls remain provable when neither hidden entry shape exists. */
+    for (int u = 0; u < c->nt->count; u++) {
+      const char *op = nt_str(c->nt, u, "binary_operator");
+      if (op) anh_add(&f->memo->frozen_operator_writes, op);
+    }
+    /* Numeric coercion dispatches an operator on the pair returned by a user
+       coerce, even when its source CallNode names modulo rather than %. */
+    for (int k = 0; k < c->nclasses; k++) {
+      if (comp_method_in_chain(c, k, "coerce", NULL) < 0) continue;
+      static const char *const ops[] = { "+", "-", "*", "/", "%", "**", "<", ">", NULL };
+      for (int i = 0; ops[i]; i++) anh_add(&f->memo->frozen_operator_writes, ops[i]);
+      break;
     }
   }
   if (f->memo->frozen_reflection < 0) return 0;

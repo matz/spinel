@@ -405,6 +405,23 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     "replaced" => "s = +'abc'; values = ['old']; values[0] = s; collector.gather(values)",
     "aliased" => "s = +'abc'; values = ['old']; alias_values = values; alias_values[0] = s; collector.gather(values)",
     "rest" => "s = +'abc'; collector.rest(s)",
+    "case_conversion_local" => "s = (+'ABC').downcase; collector.accept(s)",
+    "case_conversion_temporary" => "collector.accept((+'AbC').downcase); s = collector.at(1)",
+    "dynamic_constructor" => <<~RUBY,
+      class Box
+        def initialize(values)
+          @items = []
+          hold(7)
+          values.each { |value| hold(value) }
+        end
+        def hold(value); @items.push(value); nil; end
+        def at(index) = @items[index]
+      end
+      Box.new(['seed'])
+      s = +'abc'
+      klass = [Box][0]
+      collector = klass.new([s])
+    RUBY
     "outgoing_super" => <<~RUBY,
       $source = s = +'abc'
       class Collector
@@ -444,6 +461,97 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       collector.gather(['old'])
     RUBY
   }
+  { "comparison" => ["<=>", ""], "comparison_alias" => ["compare", "alias <=> compare"],
+    "index" => ["[]=", ""], "index_alias" => ["put", "alias []= put"] }.each do |name, (method, alias_decl)|
+    comparison = name.start_with?("comparison")
+    boxed_inputs[name] = <<~RUBY
+      class Box
+        include Comparable
+        def initialize = @items = []
+        def hold(value); @items.push(value); nil; end
+        def #{method}(#{comparison ? "value" : "key, value"})
+          hold(value) if value.is_a?(String)
+          #{comparison ? "0" : "nil"}
+        end
+        #{alias_decl}
+        def [](key) = nil
+        def at(index) = @items.last
+      end
+      box = Box.new
+      box.hold(7)
+      #{comparison ? "box <=> 'seed'" : "box[0] = 'seed'"}
+      s = +'abc'
+      #{comparison ? "[box, s].sort" : "candidate = [box, 0][0]; candidate[0] ||= s"}
+      collector = box
+    RUBY
+  end
+  { "coerce_modulo" => "%", "coerce_nonunique_plus" => "+" }.each do |name, operator|
+    boxed_inputs[name] = <<~RUBY
+      class Box
+        def initialize = @items = []
+        def hold(value); @items.push(value); nil; end
+        def #{operator}(value); hold(value) if value.is_a?(String); 0; end
+        def at(index) = @items.last
+      end
+      class OtherBox
+        def +(value) = 0
+      end
+      class Proxy
+        def coerce(value) = [$target, $source]
+      end
+      box = $target = Box.new
+      box.hold(7)
+      box.#{operator}(0)
+      box.#{operator}('seed')
+      s = $source = +'abc'
+      #{operator == '%' ? '1.modulo(Proxy.new)' : '1 + Proxy.new'}
+      collector = box
+    RUBY
+  end
+  %w[upcase downcase capitalize swapcase].each do |method|
+    boxed_inputs["case_conversion_override_#{method}"] = <<~RUBY
+      class String
+        def #{method} = self
+      end
+      s = +'abc'
+      collector.accept(s.#{method})
+    RUBY
+  end
+  { "shift_fold" => "[s].reduce(box, :<<)", "shift_write" => "box <<= s" }.each do |name, call|
+    [false, true].each do |aliased|
+      boxed_inputs["#{name}#{aliased ? '_alias' : ''}"] = <<~RUBY
+        class Box
+          def initialize = @items = []
+          def hold(value); @items.push(value); nil; end
+          def #{aliased ? 'take' : '<<'}(value); hold(value); self; end
+          #{aliased ? 'alias << take' : ''}
+          def at(index) = @items.last
+        end
+        box = Box.new
+        box.hold(7)
+        box << 'seed'
+        s = +'abc'
+        #{call}
+        collector = box
+      RUBY
+    end
+  end
+  boxed_inputs["dynamic_constructor_alias"] = <<~RUBY
+    class Box
+      def setup(values)
+        @items = []
+        hold(7)
+        values.each { |value| hold(value) }
+      end
+      alias initialize setup
+      def hold(value); @items.push(value); nil; end
+      def at(index) = @items[index]
+    end
+    Box.new(['seed'])
+    s = +'abc'
+    klass = [Box][0]
+    collector = klass.new([s])
+  RUBY
   boxed_inputs.each do |name, input|
     source = File.join(dir, "boxed_#{name}.rb")
     cfile = File.join(dir, "boxed_#{name}.c")
@@ -465,6 +573,20 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     out, err, status = Open3.capture3(RbConfig.ruby, source)
     unless status.success? && out == "\"abc!\"\n"
       failures << "boxed_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    # Overrides returning self already use a shared handle; they must preserve
+    # that identity rather than being mistaken for a fresh builtin result.
+    if name.start_with?("case_conversion_override_")
+      executable = File.join(dir, "boxed_#{name}")
+      out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+      unless status.success?
+        failures << "boxed_#{name}: native override control refused: #{out}#{err}"
+        next
+      end
+      out, err, status = Open3.capture3(timeout, "30", executable)
+      failures << "boxed_#{name}: override lost caller identity: #{out.inspect} #{err}" unless status.success? && out == "\"abc!\"\n"
+      native_passes += 1
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)

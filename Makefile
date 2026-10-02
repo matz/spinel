@@ -3129,6 +3129,9 @@ collect-errors-test: $(SPINEL)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "collect-errors-test: pass"; else exit 1; fi
 
+# The signal checks wait for the program (waitfor polls up to 10s, stopping
+# when the program dies) instead of sleeping a second: under the gate's load
+# a new binary can take longer than that to start.
 alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-alloc.XXXXXX); ok=1; \
 	$(SPINEL) test/alloc-report/sites.rb -o "$$tmp/sites" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile)"; exit 1; }; \
@@ -3161,20 +3164,28 @@ alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	sat=$$(awk '/;\(no-scan\) /{print $$NF}' "$$tmp/sm.folded" | head -1); \
 	[ -n "$$full" ] && [ "$$full" = "$$sat" ] || { echo "alloc-report-test: FAIL (a saturated run changed a surviving row: $$full vs $$sat)"; ok=0; }; \
 	$(SPINEL) test/alloc-report/signal_dump.rb -o "$$tmp/sig" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile signal_dump)"; exit 1; }; \
-	SPINEL_ALLOC_REPORT="$$tmp/sig.folded" "$$tmp/sig" >/dev/null 2>&1 & \
-	sigpid=$$!; sleep 1; kill -USR1 $$sigpid 2>/dev/null; sleep 1; \
-	kill -0 $$sigpid 2>/dev/null || { echo "alloc-report-test: FAIL (the signal ended the program instead of dumping)"; ok=0; }; \
-	first=$$(awk '/^alloc;.*String /{print $$NF; exit}' "$$tmp/sig.folded" 2>/dev/null); \
-	[ -n "$$first" ] || { echo "alloc-report-test: FAIL (no report from a running program)"; ok=0; }; \
-	sleep 1; kill -USR1 $$sigpid 2>/dev/null; sleep 1; \
-	second=$$(awk '/^alloc;.*String /{print $$NF; exit}' "$$tmp/sig.folded" 2>/dev/null); \
+	waitfor() { n=0; while [ $$n -lt 100 ]; do eval "$$2" && return 0; kill -0 $$1 2>/dev/null || return 1; sleep 0.1; n=$$((n+1)); done; return 1; }; \
+	strings_in() { awk '/^alloc;.*String /{print $$NF; exit}' "$$1" 2>/dev/null; }; \
+	SPINEL_ALLOC_REPORT="$$tmp/sig.folded" "$$tmp/sig" > "$$tmp/sig.out" 2>&1 & \
+	sigpid=$$!; \
+	if waitfor $$sigpid 'grep -q ready "$$tmp/sig.out" 2>/dev/null'; then \
+	  kill -USR1 $$sigpid 2>/dev/null; waitfor $$sigpid '[ -n "$$(strings_in "$$tmp/sig.folded")" ]'; \
+	  kill -0 $$sigpid 2>/dev/null || { echo "alloc-report-test: FAIL (the signal ended the program instead of dumping)"; ok=0; }; \
+	  first=$$(strings_in "$$tmp/sig.folded"); \
+	  [ -n "$$first" ] || { echo "alloc-report-test: FAIL (no report from a running program)"; ok=0; }; \
+	  kill -USR1 $$sigpid 2>/dev/null; waitfor $$sigpid '[ "$$(strings_in "$$tmp/sig.folded")" -gt "$${first:-0}" ] 2>/dev/null'; \
+	  second=$$(strings_in "$$tmp/sig.folded"); \
+	  [ -n "$$second" ] && [ "$$second" -gt "$${first:-0}" ] || { echo "alloc-report-test: FAIL (the second signal did not re-dump a later table: $$first then $$second)"; ok=0; }; \
+	else echo "alloc-report-test: FAIL (signal_dump did not start within 10s)"; ok=0; fi; \
 	kill -9 $$sigpid 2>/dev/null; wait $$sigpid 2>/dev/null; \
-	[ -n "$$second" ] && [ "$$second" -gt "$${first:-0}" ] || { echo "alloc-report-test: FAIL (the second signal did not re-dump a later table: $$first then $$second)"; ok=0; }; \
 	$(SPINEL) test/alloc-report/signal_dump_idle.rb -o "$$tmp/idle" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile signal_dump_idle)"; exit 1; }; \
-	SPINEL_ALLOC_REPORT="$$tmp/idle.folded" "$$tmp/idle" >/dev/null 2>&1 & \
-	idlepid=$$!; sleep 1; kill -USR1 $$idlepid 2>/dev/null; sleep 1; \
-	kill -0 $$idlepid 2>/dev/null || { echo "alloc-report-test: FAIL (the signal ended the idle program)"; ok=0; }; \
-	grep -qE '^alloc;.*String [0-9]+$$' "$$tmp/idle.folded" 2>/dev/null || { echo "alloc-report-test: FAIL (an idle program did not report when signalled: the dump is waiting for an allocation that will never come)"; ok=0; }; \
+	SPINEL_ALLOC_REPORT="$$tmp/idle.folded" "$$tmp/idle" > "$$tmp/idle.out" 2>&1 & \
+	idlepid=$$!; \
+	if waitfor $$idlepid '[ -s "$$tmp/idle.out" ]'; then \
+	  kill -USR1 $$idlepid 2>/dev/null; waitfor $$idlepid 'grep -qE "^alloc;.*String [0-9]+$$" "$$tmp/idle.folded" 2>/dev/null'; \
+	  kill -0 $$idlepid 2>/dev/null || { echo "alloc-report-test: FAIL (the signal ended the idle program)"; ok=0; }; \
+	  grep -qE '^alloc;.*String [0-9]+$$' "$$tmp/idle.folded" 2>/dev/null || { echo "alloc-report-test: FAIL (an idle program did not report when signalled: the dump is waiting for an allocation that will never come)"; ok=0; }; \
+	else echo "alloc-report-test: FAIL (signal_dump_idle did not start within 10s)"; ok=0; fi; \
 	kill -9 $$idlepid 2>/dev/null; wait $$idlepid 2>/dev/null; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "alloc-report-test: pass"; else exit 1; fi

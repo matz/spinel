@@ -10,6 +10,7 @@ worker = Thread.new do
     i += 1
   end
   puts s.length
+  $stdout.flush   # the Makefile waits for this line before it signals
   sleep 300
 end
 worker.join

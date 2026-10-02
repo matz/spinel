@@ -275,7 +275,7 @@ SPINEL_OBJ  = build/csrc/node_table.o build/csrc/types.o build/csrc/compiler.o \
                build/csrc/ffi_spec.o \
                build/csrc/analyze.o build/csrc/analyze_util.o build/csrc/analyze_infer.o build/csrc/analyze_infer_recv.o \
                build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/analyze_desugar.o build/csrc/codegen.o build/csrc/codegen_util.o \
-               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_ops.o build/csrc/codegen_view.o build/csrc/builtin_ops.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o \
+               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_ops.o build/csrc/codegen_call_concurrency.o build/csrc/codegen_view.o build/csrc/builtin_ops.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o \
                build/csrc/codegen_expr.o build/csrc/codegen_stmt.o build/csrc/csplit.o build/csrc/main.o
 
 build/csrc:

@@ -1180,10 +1180,9 @@ static int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b) {
     return 1;
   }
   if (is_array_new_block(c, v)) {
-    TyKind sv = c->ntype[v];
-    c->ntype[v] = want;
+    int vw = view_push(c, v, want);
     emit_expr(c, v, b);
-    c->ntype[v] = sv;
+    view_pop(c, vw);
     return 1;
   }
   return 0;
@@ -9882,10 +9881,9 @@ else {
         sp_streq(nt_type(nt, nt_ref(nt, v, "receiver")), "ConstantReadNode") &&
         nt_str(nt, nt_ref(nt, v, "receiver"), "name") &&
         sp_streq(nt_str(nt, nt_ref(nt, v, "receiver"), "name"), "Array")) {
-      TyKind sv = c->ntype[v];
-      c->ntype[v] = ivt;
+      int vw = view_push(c, v, ivt);
       emit_expr(c, v, b);
-      c->ntype[v] = sv;
+      view_pop(c, vw);
     }
     else if (ty_is_ptr_array(ivt) && v_empty_array) buf_puts(b, "sp_PtrArray_new()");
     /* `@t = [[..], [..]]` into a narrowed pointer-array ivar: build the
@@ -13315,20 +13313,18 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       Scope *rsN = rnN ? comp_scope_of(c, recv) : NULL;
       LocalVar *rlN = rsN ? scope_local(rsN, rnN) : NULL;
       if (rlN && rlN->type == TY_POLY) {
-        TyKind svN = c->ntype[recv];
         TyKind svNN = c->nilnarrow[recv];
-        TyKind svC = c->ntype[id];
-        c->ntype[recv] = TY_POLY;
+        int vr = view_push(c, recv, TY_POLY);
         c->nilnarrow[recv] = TY_UNKNOWN;
         /* the call's value is the poly arm's too (a String-typed call made
            an arm hold its boxed answer in a String temp) */
-        c->ntype[id] = TY_POLY;
+        int vi = view_push(c, id, TY_POLY);
         emit_indent(b, indent);
         buf_puts(b, "(void)(");
         emit_call(c, id, b);
         buf_puts(b, ");\n");
-        c->ntype[id] = svC;
-        c->ntype[recv] = svN;
+        view_pop(c, vi);
+        view_pop(c, vr);
         c->nilnarrow[recv] = svNN;
         return 1;
       }

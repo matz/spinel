@@ -9,6 +9,7 @@
    array serves it -- and a bare TyKind return could not tell that from
    "declined". */
 #include "analyze_internal.h"
+#include "builtin_ops.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -56,10 +57,6 @@ static int call_is_chain_receiver_with_block(Compiler *c, int id) {
   return 0;
 }
 
-static const char *const range_queries[] = {
-  "cover?", "include?", "member?", "===", "==", "!=", "eql?", "exclude_end?", "frozen?",
-  "nil?", "is_a?", "kind_of?", "instance_of?", "equal?", "respond_to?", NULL };
-
 /* Range receivers: the Float and String range faces, and the Integer-range
    arms that answer without materializing. The redispatch that rewrites `rt`
    to the int array stays in infer_call: it changes the receiver kind for
@@ -80,27 +77,8 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* String range ("a".."e"): the endpoints answer natively; every traversal
      rides the materialized element array (#3064). */
   if (rt == TY_STR_RANGE) {
-    if (sp_streq(name, "begin") || sp_streq(name, "end") ||
-        sp_streq(name, "min") || sp_streq(name, "max") ||
-        sp_streq(name, "to_s") || sp_streq(name, "inspect"))
-      { *out = argc == 0 ? TY_STRING : TY_STR_ARRAY; return 1; }
-    if ((sp_streq(name, "first") || sp_streq(name, "last")))
-      { *out = argc == 0 ? TY_STRING : TY_STR_ARRAY; return 1; }
-    if (str_in(name, range_queries)) { *out = TY_BOOL; return 1; }
-    /* step(n) / %(n): an Enumerator over every nth member (#3671) */
-    if ((sp_streq(name, "step") || sp_streq(name, "%")) && argc == 1 &&
-        nt_ref(nt, id, "block") < 0)
-      { *out = TY_ENUMERATOR; return 1; }
-    if (sp_streq(name, "class")) { *out = TY_CLASS; return 1; }
-    if (sp_streq(name, "hash")) { *out = TY_INT; return 1; }
-    /* Range#size counts INTEGER elements, so a string range has none: nil
-       (CRuby), not the materialized array's length. */
-    if (sp_streq(name, "size") && argc == 0) { *out = TY_NIL; return 1; }
-    if ((sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0)
-      { *out = TY_STR_ARRAY; return 1; }
-    if (sp_streq(name, "freeze") || sp_streq(name, "itself") ||
-        sp_streq(name, "dup") || sp_streq(name, "clone"))
-      { *out = TY_STR_RANGE; return 1; }
+    const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
     /* everything else is served by the element array (see the desugar) */
     { *out = TY_UNKNOWN; return 1; }
   }
@@ -136,33 +114,13 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       }
       { *out = argc == 0 ? TY_FLOAT : TY_POLY; return 1; }   /* first(n)/last(n) raise anyway */
     }
-    if (str_in(name, range_queries)) { *out = TY_BOOL; return 1; }
-    if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) { *out = TY_STRING; return 1; }
-    if (sp_streq(name, "minmax") && argc == 0) { *out = TY_FLOAT_ARRAY; return 1; }  /* the endpoints (#3690) */
-    if (sp_streq(name, "step")) { *out = TY_FLOAT_ARRAY; return 1; }
-    if (sp_streq(name, "bsearch") && nt_ref(nt, id, "block") >= 0) { *out = TY_FLOAT; return 1; }
-    if (sp_streq(name, "class")) { *out = TY_CLASS; return 1; }
-    if (sp_streq(name, "freeze") || sp_streq(name, "itself") ||
-        sp_streq(name, "dup") || sp_streq(name, "clone"))
-      { *out = TY_FLOAT_RANGE; return 1; }
-    /* each/map/sum/to_a/... raise "can't iterate from Float" at run time; a
-       poly result keeps the boxed-nil slot the raise leaves behind valid (and
-       lets respond_to? report these Enumerable methods as present, like CRuby).
-       A name outside this set is genuinely undefined, so leave it UNKNOWN: the
-       respond_to? probe reads that as "not dispatchable" (false), matching an
-       ordinary int range, and a real call errors like any unknown method. */
     {
-      static const char *const iter[] = {
-        "each", "map", "collect", "select", "filter", "reject", "to_a", "to_h",
-        "entries", "find", "detect", "find_index", "count", "sum", "sort",
-        "sort_by", "min_by", "max_by", "reduce", "inject", "each_with_index",
-        "flat_map", "collect_concat", "any?", "all?", "none?", "one?", "take",
-        "drop", "take_while", "drop_while", "filter_map", "partition",
-        "group_by", "each_with_object", "tally", "find_all", "zip", "grep",
-        "grep_v", "uniq", "reverse", "minmax", "join", "index", "size", "lazy",
-        "each_cons", "each_slice", "chunk", "chunk_while", "cycle", NULL };
-      for (int k = 0; iter[k]; k++) if (sp_streq(name, iter[k])) { *out = TY_POLY; return 1; }
+      const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
     }
+    /* A name with no row is genuinely undefined: leave it UNKNOWN. The
+       respond_to? probe reads that as "not dispatchable" (false), matching
+       an ordinary int range, and a real call errors like any unknown method. */
     if (object_reopen_answers(c, "Range", id, out)) return 1;
     { *out = TY_UNKNOWN; return 1; }
   }
@@ -272,38 +230,10 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (rt == TY_RATIONAL && argc == 1 && comp_ntype(c, argv[0]) == TY_COMPLEX &&
       (sp_streq(name, "+") || sp_streq(name, "-") ||
        sp_streq(name, "*") || sp_streq(name, "/"))) { *out = TY_COMPLEX; return 1; }
+  /* Complex: builtin-op rows (builtin_ops.c) */
   if (rt == TY_COMPLEX) {
-    if (sp_streq(name, "arg") || sp_streq(name, "angle") || sp_streq(name, "phase")) { *out = TY_FLOAT; return 1; }
-    /* real/imaginary/abs/abs2 box to poly: each component keeps its CRuby
-       class (Integer or Float) -- the class is a runtime property. */
-    if (sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag") ||
-        sp_streq(name, "abs") || sp_streq(name, "magnitude") || sp_streq(name, "abs2")) { *out = TY_POLY; return 1; }
-    if (sp_streq(name, "polar") || sp_streq(name, "rect") || sp_streq(name, "rectangular"))
-      { *out = TY_POLY_ARRAY; return 1; }
-    if (sp_streq(name, "conjugate") || sp_streq(name, "conj") || sp_streq(name, "to_c") ||
-        sp_streq(name, "-@") || sp_streq(name, "+@") ||
-        sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") ||
-        sp_streq(name, "/") || sp_streq(name, "quo")) { *out = TY_COMPLEX; return 1; }
-    if (sp_streq(name, "**")) { *out = TY_COMPLEX; return 1; }
-    /* Complex is not Comparable and has no modulo: these raise NoMethodError
-       (typed Complex only so the raise expression has a consistent slot) (#2618) */
-    if (sp_streq(name, "%") || sp_streq(name, "modulo")) { *out = TY_COMPLEX; return 1; }
-    if (sp_streq(name, "==") || sp_streq(name, "!=")) { *out = TY_BOOL; return 1; }
-    if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) { *out = TY_STRING; return 1; }
-    if (sp_streq(name, "to_i") || sp_streq(name, "to_int") ||
-        sp_streq(name, "denominator")) { *out = TY_INT; return 1; }
-    if (sp_streq(name, "to_f")) { *out = TY_FLOAT; return 1; }
-    if (sp_streq(name, "to_r")) { *out = TY_RATIONAL; return 1; }
-    if (sp_streq(name, "numerator")) { *out = TY_COMPLEX; return 1; }
-    if (sp_streq(name, "zero?") || sp_streq(name, "real?") ||
-        sp_streq(name, "integer?") || sp_streq(name, "finite?") ||
-        sp_streq(name, "eql?")) { *out = TY_BOOL; return 1; }
-    if (sp_streq(name, "nonzero?")) { *out = TY_POLY; return 1; }   /* self (Complex) or nil */
-    if (sp_streq(name, "infinite?")) { *out = TY_INT; return 1; }      /* 1 or nil (sentinel) */
-    if (sp_streq(name, "<=>") && argc == 1) { *out = TY_INT; return 1; }  /* -1/0/1 or nil (sentinel) */
-    if (sp_streq(name, "rationalize") && (argc == 0 || argc == 1)) { *out = TY_RATIONAL; return 1; }
-    if (sp_streq(name, "fdiv") && argc == 1) { *out = TY_COMPLEX; return 1; }
-    if (sp_streq(name, "coerce") && argc == 1) { *out = TY_POLY_ARRAY; return 1; }
+    const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
   }
   /* Proc#curry and curry application via []. A curried call stays TY_CURRY until
      it reaches the proc's arity, when it realizes to the proc's return type (the
@@ -393,9 +323,11 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       if (nt_ref(nt, id, "block") >= 0) { *out = rt; return 1; }
       { *out = TY_POLY_ARRAY; return 1; }
     }
-    if (sp_streq(name, "numerator") || sp_streq(name, "denominator")) { *out = TY_INT; return 1; }
-    if (sp_streq(name, "to_f") || sp_streq(name, "fdiv")) { *out = TY_FLOAT; return 1; }
-    if (sp_streq(name, "to_i") || sp_streq(name, "to_int") || sp_streq(name, "div")) { *out = TY_INT; return 1; }
+    /* the kinds that do not depend on the arguments: builtin-op rows */
+    {
+      const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+    }
     /* round/truncate: no digits (or a literal <= 0) is an Integer, a literal
        positive precision keeps the Rational, and a non-literal precision boxes
        to poly so the class is chosen from the runtime value. */
@@ -416,25 +348,6 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       }
       { *out = TY_INT; return 1; }   /* no digits -> Integer */
     }
-    if (sp_streq(name, "zero?") || sp_streq(name, "positive?") ||
-        sp_streq(name, "negative?") || sp_streq(name, "finite?") ||
-        sp_streq(name, "integer?") || sp_streq(name, "real?")) { *out = TY_BOOL; return 1; }
-    if (sp_streq(name, "infinite?") || sp_streq(name, "imaginary") ||
-        sp_streq(name, "imag")) { *out = TY_INT; return 1; }
-    if (sp_streq(name, "nonzero?")) { *out = TY_POLY; return 1; }
-    if (sp_streq(name, "arg") || sp_streq(name, "angle") || sp_streq(name, "phase")) { *out = TY_POLY; return 1; }
-    if (sp_streq(name, "to_c")) { *out = TY_COMPLEX; return 1; }
-    /* Rational#i -> Complex(0, self). spinel's Complex holds two floats, so the
-       imaginary part renders as a float where CRuby keeps the exact Rational
-       (see docs/limitations.md). #2706 */
-    if (sp_streq(name, "i") && argc == 0) { *out = TY_COMPLEX; return 1; }
-    if (sp_streq(name, "rectangular") || sp_streq(name, "rect") || sp_streq(name, "polar")) { *out = TY_POLY_ARRAY; return 1; }
-    if (sp_streq(name, "coerce") && argc == 1) { *out = TY_POLY_ARRAY; return 1; }
-    if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) { *out = TY_STRING; return 1; }
-    if (sp_streq(name, "to_r") || sp_streq(name, "rationalize") ||
-        sp_streq(name, "-@") || sp_streq(name, "+@") || sp_streq(name, "abs") ||
-        sp_streq(name, "real") || sp_streq(name, "conjugate") || sp_streq(name, "conj") ||
-        sp_streq(name, "abs2") || sp_streq(name, "magnitude")) { *out = TY_RATIONAL; return 1; }
     TyKind a0r = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
     /* a coercing user object on the right: coerce answers a pair of THAT
        class, so the result is its own operator's return -- the rule the

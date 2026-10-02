@@ -1878,9 +1878,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -1909,9 +1909,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -2097,9 +2097,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -2213,7 +2213,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     /* and pin it for the inference too, the way the hash face does: the cached
        type alone does not survive a safe-navigation guard, whose re-emission
        asks again and re-establishes the receiver as poly -- the array emitters
@@ -2232,7 +2232,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     else emit_call(c, id, b);
     g_poly_redispatch_id = sv_rd;
     an_set_face_node(sv_face, sv_fk);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -12205,15 +12205,8 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       if (mutate) buf_puts(b, ")");
     }
     else if (sp_streq(name, "localtime") || sp_streq(name, "getlocal")) buf_printf(b, "sp_time_localtime(%s)", r);
-    else if (sp_streq(name, "year"))  buf_printf(b, "sp_time_year(%s)", r);
-    else if (sp_streq(name, "mon") || sp_streq(name, "month")) buf_printf(b, "sp_time_mon(%s)", r);
-    else if (sp_streq(name, "day") || sp_streq(name, "mday"))  buf_printf(b, "sp_time_mday(%s)", r);
-    else if (sp_streq(name, "hour")) buf_printf(b, "sp_time_hour(%s)", r);
-    else if (sp_streq(name, "min"))  buf_printf(b, "sp_time_min(%s)", r);
-    else if (sp_streq(name, "sec"))  buf_printf(b, "sp_time_sec(%s)", r);
-    else if (sp_streq(name, "wday")) buf_printf(b, "sp_time_wday(%s)", r);
-    else if (sp_streq(name, "yday")) buf_printf(b, "sp_time_yday(%s)", r);
-    else if (sp_streq(name, "to_i") || sp_streq(name, "tv_sec")) buf_printf(b, "(%s).tv_sec", r);
+    /* the plain readers: builtin-op rows (builtin_ops.c) */
+    else if (emit_builtin_op_text(c, id, recv, rt, name, r, b)) ;
     else if (sp_streq(name, "to_f")) {
       /* hoist the receiver into a temp: emitting `r` twice would evaluate a
          side-effecting receiver (`c.utc`, which mutates the local) twice --
@@ -12228,23 +12221,13 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
                     ": sp_box_rational(sp_rational_new((sp_int)_t%d.tv_nsec, 1000000000)); })",
                  tt, r, tt, tt);
     }
-    else if (sp_streq(name, "tv_usec") || sp_streq(name, "usec")) buf_printf(b, "((sp_int)(%s).tv_nsec / 1000)", r);
-    else if (sp_streq(name, "tv_nsec") || sp_streq(name, "nsec")) buf_printf(b, "((sp_int)(%s).tv_nsec)", r);
-    else if (sp_streq(name, "utc?") || sp_streq(name, "gmt?")) buf_printf(b, "((%s).is_utc == 1)", r);
-    else if (sp_streq(name, "dst?") || sp_streq(name, "isdst")) buf_printf(b, "(sp_time_isdst(%s) != 0)", r);
-    else if (sp_streq(name, "utc_offset") || sp_streq(name, "gmt_offset") || sp_streq(name, "gmtoff")) buf_printf(b, "sp_time_utc_offset(%s)", r);
-    else if (sp_streq(name, "inspect")) buf_printf(b, "sp_time_inspect_v(%s)", r);
-    else if (sp_streq(name, "to_s")) buf_printf(b, "sp_time_to_s_v(%s)", r);
     else if (sp_streq(name, "iso8601") && sp_feature_enabled("time")) {
       if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else buf_printf(b, "sp_time_iso8601(%s)", r);
     }
-    else if (sp_streq(name, "zone")) buf_printf(b, "sp_time_zone(%s)", r);
     else if (sp_streq(name, "httpdate") && sp_feature_enabled("time")) buf_printf(b, "sp_time_httpdate(%s)", r);
     else if ((sp_streq(name, "rfc2822") || sp_streq(name, "rfc822")) && sp_feature_enabled("time"))
       buf_printf(b, "sp_time_rfc2822(%s)", r);
-    else if (sp_streq(name, "class")) buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Time\")})");
-    else if (sp_streq(name, "getgm")) buf_printf(b, "sp_time_utc(%s)", r);  /* alias for getutc */
     else if (sp_streq(name, "xmlschema")) {
       if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else buf_printf(b, "sp_time_iso8601(%s)", r);
@@ -12261,16 +12244,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       else buf_puts(b, "0");
       buf_printf(b, ", %d)", mode);
     }
-    else if (sp_streq(name, "sunday?"))    buf_printf(b, "(sp_time_wday(%s) == 0)", r);
-    else if (sp_streq(name, "monday?"))    buf_printf(b, "(sp_time_wday(%s) == 1)", r);
-    else if (sp_streq(name, "tuesday?"))   buf_printf(b, "(sp_time_wday(%s) == 2)", r);
-    else if (sp_streq(name, "wednesday?")) buf_printf(b, "(sp_time_wday(%s) == 3)", r);
-    else if (sp_streq(name, "thursday?"))  buf_printf(b, "(sp_time_wday(%s) == 4)", r);
-    else if (sp_streq(name, "friday?"))    buf_printf(b, "(sp_time_wday(%s) == 5)", r);
-    else if (sp_streq(name, "saturday?"))  buf_printf(b, "(sp_time_wday(%s) == 6)", r);
-    /* asctime/ctime: the fixed C-style stamp, always in the receiver's own broken-down form */
-    else if (sp_streq(name, "asctime") || sp_streq(name, "ctime"))
-      buf_printf(b, "sp_time_strftime(%s, \"%%a %%b %%e %%H:%%M:%%S %%Y\")", r);
     else if (sp_streq(name, "eql?") && argc == 1) {
       if (comp_ntype(c, argv[0]) == TY_TIME) {
         int tt = ++g_tmp, tu = ++g_tmp;
@@ -12441,7 +12414,9 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_MATCHDATA) {
     Buf rs = expr_buf(c, recv);
     const char *r = rs.p ? rs.p : "";
-    if (sp_streq(name, "[]") && argc == 1 &&
+    /* the plain readers: builtin-op rows (builtin_ops.c) */
+    if (emit_builtin_op_text(c, id, recv, rt, name, r, b)) ;
+    else if (sp_streq(name, "[]") && argc == 1 &&
         (comp_ntype(c, argv[0]) == TY_RANGE ||
          (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "RangeNode")))) {
       /* md[range]: the groups over that index range (#2532) */
@@ -12489,12 +12464,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       emit_native_object_protocol_text(c, name, TY_MATCHDATA, r, comp_ntype(c, argv[0]), as.p ? as.p : "0", b);
       free(as.p);
     }
-    else if (sp_streq(name, "hash") && argc == 0) buf_printf(b, "sp_MatchData_hash(%s)", r);  /* content-based (#3014) */
-    /* a MatchData is a heap instance: frozen? reads the bit freeze sets (#3638
-       answered a flat false, which freeze then contradicted) */
-    else if (sp_streq(name, "frozen?") && argc == 0) buf_printf(b, "sp_gc_is_frozen((void *)(%s))", r);
-    else if (sp_streq(name, "freeze") && argc == 0) buf_printf(b, "((sp_MatchData *)sp_gc_freeze((void *)(%s)))", r);
-    else if (sp_streq(name, "named_captures") && argc == 0) buf_printf(b, "sp_md_named_captures(%s)", r);
     /* named_captures(symbolize_names: true): symbol keys (#2530) */
     else if (sp_streq(name, "named_captures") && argc == 1) {
       /* symbolize_names: FALSE asks for the string keys the no-argument form
@@ -12505,7 +12474,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         if (kvt && sp_streq(kvt, "FalseNode")) sym_on = 0; }
       buf_printf(b, sym_on ? "sp_md_named_captures_sym(%s)" : "sp_md_named_captures(%s)", r);
     }
-    else if (sp_streq(name, "inspect") && argc == 0) buf_printf(b, "sp_MatchData_inspect(%s)", r);   /* #2500 */
     /* MatchData#match(n) is the group substring, #match_length(n) its byte
        length (nil when the group did not participate) (#2501) */
     /* a Symbol or String argument names a group; the integer slot read the
@@ -12524,18 +12492,9 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "match_length") && argc == 1) { buf_printf(b, "sp_MatchData_match_length(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     /* #deconstruct is the captures array; #deconstruct_keys the named captures
        as a symbol-keyed hash (#2503) */
-    else if (sp_streq(name, "deconstruct") && argc == 0) buf_printf(b, "sp_MatchData_captures(%s)", r);
     else if (sp_streq(name, "deconstruct_keys") && argc == 1) {
       buf_printf(b, "sp_md_deconstruct_keys(%s, ", r); emit_boxed(c, argv[0], b); buf_puts(b, ")");  /* filters by keys (#3015) */
     }
-    else if (sp_streq(name, "regexp") && argc == 0) buf_printf(b, "((mrb_regexp_pattern *)(%s)->pat)", r);   /* #2499 */
-    else if (sp_streq(name, "names") && argc == 0) buf_printf(b, "sp_MatchData_names(%s)", r);
-    else if (sp_streq(name, "string") && argc == 0) buf_printf(b, "sp_MatchData_string(%s)", r);
-    else if (sp_streq(name, "pre_match"))  buf_printf(b, "sp_MatchData_pre_match(%s)", r);
-    else if (sp_streq(name, "post_match")) buf_printf(b, "sp_MatchData_post_match(%s)", r);
-    else if (sp_streq(name, "to_s"))       buf_printf(b, "sp_MatchData_to_s(%s)", r);
-    else if ((sp_streq(name, "length") || sp_streq(name, "size")) && argc == 0)
-      buf_printf(b, "sp_MatchData_length(%s)", r);
     /* begin/end/offset/byte* accept a group NAME (String/Symbol) as well as an
        index; route those to the _name variant, which resolves the name like #[].
        A Symbol argument is passed as its interned string. */
@@ -12655,13 +12614,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       }
       buf_printf(b, " _t%d; })", at);
     }
-    /* no arguments selects nothing: an empty Array, as Array#values_at does
-       (#3846) */
-    else if (sp_streq(name, "values_at") && argc == 0)
-      buf_printf(b, "((void)(%s), sp_PolyArray_new())", r);
-    else if (sp_streq(name, "captures"))  buf_printf(b, "sp_MatchData_captures(%s)", r);
-    else if (sp_streq(name, "to_a"))      buf_printf(b, "sp_MatchData_to_a(%s)", r);
-    else if (sp_streq(name, "nil?"))      buf_printf(b, "(%s == 0)", r);
     /* a method the program adds to Object is every MatchData's too (`$~.me`
        under ruby/spec's `$~.should`): leave it to the Object reopening
        dispatch, which boxes the receiver -- a nil $~ included -- instead of
@@ -13576,7 +13528,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     /* find_all on the pair array is Enumerable select (a hash receiver only
        lands here through the redispatch, so the hash-returning Hash#select
        emitter is out of the picture) */
@@ -13591,16 +13543,16 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       emit_call(c, id, &db);
       buf_printf(b, "({ (void)(%s); ", db.p ? db.p : "0");
       free(db.p);
-      c->ntype[recv] = sv;
+      view_pop(c, v);
       g_n_argov--;              /* re-emit the REAL receiver, not the override */
       emit_expr(c, recv, b);
       g_n_argov++;
-      c->ntype[recv] = TY_POLY_ARRAY;
+      v = view_push(c, recv, TY_POLY_ARRAY);
       buf_puts(b, "; })");
     }
     else emit_call(c, id, b);
     if (fa) nt_node_set_str((NodeTable *)c->nt, id, "name", "find_all");
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -13615,9 +13567,9 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_INT_ARRAY;
+    int v = view_push(c, recv, TY_INT_ARRAY);
     emit_call(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return 1;
   }
@@ -13745,7 +13697,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "%s%d", tp, t);
   g_n_argov++;
   TyKind as = ty_poly_face_kind(kind);
-  TyKind sv = c->ntype[recv]; c->ntype[recv] = as;
+  int v = view_push(c, recv, as);
   int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
   an_set_face_node(recv, as);
   TyKind nat = infer_uncached(c, id);
@@ -13761,7 +13713,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   Buf cb; memset(&cb, 0, sizeof cb);
   emit_call(c, id, &cb);
   an_set_face_node(sv_face, sv_fk);
-  c->ntype[recv] = sv;
+  view_pop(c, v);
   g_n_argov--;
   const char *call = cb.p ? cb.p : "0";
   /* A typed emitter that declines the call's argument shape answers the
@@ -14063,11 +14015,11 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, Buf *b) {
   g_argov_node[g_n_argov] = recv;
   snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tob);
   g_n_argov++;
-  TyKind svb = c->ntype[recv]; c->ntype[recv] = TY_STRING;
+  int v = view_push(c, recv, TY_STRING);
   nt_node_set_str((NodeTable *)nt, id, "name", plain);
   Buf nbb; memset(&nbb, 0, sizeof nbb); emit_call(c, id, &nbb);
   nt_node_set_str((NodeTable *)nt, id, "name", bang);
-  c->ntype[recv] = svb;
+  view_pop(c, v);
   g_n_argov--;
   buf_printf(b, "({ const char *_t%d = %s; ", tnb, nbb.p ? nbb.p : "\"\"");
   free(nbb.p);
@@ -14486,9 +14438,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", trx);
       g_n_argov++;
-      TyKind svrx = c->ntype[recv]; c->ntype[recv] = TY_REGEX;
+      int v = view_push(c, recv, TY_REGEX);
       emit_call(c, id, b);
-      c->ntype[recv] = svrx;
+      view_pop(c, v);
       g_n_argov--;
       return 1;
     }
@@ -15336,9 +15288,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
           TyKind rty = comp_ntype(c, id);
           if (rty != TY_FLOAT) return 0;
           Buf pb2; memset(&pb2, 0, sizeof pb2);
-          c->ntype[id] = TY_POLY;
+          int v = view_push(c, id, TY_POLY);
           emit_expr(c, id, &pb2);
-          c->ntype[id] = rty;
+          view_pop(c, v);
           emit_unbox_text(c, TY_FLOAT, pb2.p ? pb2.p : "sp_box_nil()", b);
           free(pb2.p);
           return 1;

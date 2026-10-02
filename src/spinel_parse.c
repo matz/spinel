@@ -3041,21 +3041,81 @@ typedef struct {
   const char *source;
   char *result;
   int dead;
+  int engine;   /* fold RUBY_ENGINE comparisons (the file does not assign the constant) */
 } SpDeadRequire;
 
-static int sp_require_truth(const pm_node_t *node) {
+static int sp_pm_name_is(const pm_parser_t *parser, pm_constant_id_t id, const char *word) {
+  const pm_constant_t *name = pm_constant_pool_id_to_constant(&parser->constant_pool, id);
+  size_t n = strlen(word);
+  return name->length == n && memcmp(name->start, word, n) == 0;
+}
+
+/* The truth of a predicate the splice can settle without the analyzer:
+   1 / 0 for a literal or a settled RUBY_ENGINE comparison, -1 otherwise.
+   RUBY_ENGINE is "spinel" in every program spinel compiles, so
+   `RUBY_ENGINE == "x"` (either operand order), its `!=` and a `!` around
+   either are constants too. The analyzer drops the branch such a check rules
+   out before anything in it is compiled (desugar_engine_branches), but the
+   splice runs first and used to fetch -- or warn about -- a file no one would
+   use: the harness a benchmark keeps for CRuby, a JRuby shim. */
+static int sp_require_truth(const pm_parser_t *parser, const pm_node_t *node, int engine) {
   if (!node) return -1;
   switch (PM_NODE_TYPE(node)) {
     case PM_TRUE_NODE: return 1;
     case PM_FALSE_NODE: case PM_NIL_NODE: return 0;
     case PM_PARENTHESES_NODE:
-      return sp_require_truth(((const pm_parentheses_node_t *)node)->body);
+      return sp_require_truth(parser, ((const pm_parentheses_node_t *)node)->body, engine);
     case PM_STATEMENTS_NODE: {
       const pm_node_list_t *body = &((const pm_statements_node_t *)node)->body;
-      return body->size == 1 ? sp_require_truth(body->nodes[0]) : -1;
+      return body->size == 1 ? sp_require_truth(parser, body->nodes[0], engine) : -1;
+    }
+    case PM_CALL_NODE: {
+      const pm_call_node_t *call = (const pm_call_node_t *)node;
+      if (call->block || !call->receiver) return -1;
+      if (sp_pm_name_is(parser, call->name, "!") && !call->arguments) {
+        int truth = sp_require_truth(parser, call->receiver, engine);
+        return truth < 0 ? -1 : !truth;
+      }
+      int eq = sp_pm_name_is(parser, call->name, "==");
+      if (!engine || (!eq && !sp_pm_name_is(parser, call->name, "!="))) return -1;
+      if (!call->arguments || call->arguments->arguments.size != 1) return -1;
+      const pm_node_t *a = call->receiver, *b = call->arguments->arguments.nodes[0];
+      const pm_node_t *cst, *lit;
+      if (PM_NODE_TYPE(a) == PM_CONSTANT_READ_NODE && PM_NODE_TYPE(b) == PM_STRING_NODE) { cst = a; lit = b; }
+      else if (PM_NODE_TYPE(b) == PM_CONSTANT_READ_NODE && PM_NODE_TYPE(a) == PM_STRING_NODE) { cst = b; lit = a; }
+      else return -1;
+      if (!sp_pm_name_is(parser, ((const pm_constant_read_node_t *)cst)->name, "RUBY_ENGINE")) return -1;
+      const pm_string_t *s = &((const pm_string_node_t *)lit)->unescaped;
+      int same = pm_string_length(s) == 6 && memcmp(pm_string_source(s), "spinel", 6) == 0;
+      return eq ? same : !same;
     }
     default: return -1;
   }
+}
+
+/* Does the source assign RUBY_ENGINE itself (a shim's `RUBY_ENGINE = "jruby"`)?
+   Then a comparison reads that constant, not the engine's, and is left alone --
+   the same rule desugar_engine_branches applies. */
+static int sp_source_writes_engine(const char *source) {
+  for (const char *p = source; (p = strstr(p, "RUBY_ENGINE")); p += 11) {
+    const char *q = p + 11;
+    while (*q == ' ' || *q == '\t') q++;
+    if (*q == '=' && q[1] != '=' && q[1] != '~') return 1;
+    if ((q[0] == '|' && q[1] == '|' && q[2] == '=') || (q[0] == '&' && q[1] == '&' && q[2] == '=')) return 1;
+  }
+  return 0;
+}
+
+/* Blank a statement in a dead branch to `(nil)`, keeping every newline so
+   later line numbers hold (and a multiline call stays grouped, including
+   before a modifier). */
+static void sp_dead_blank(SpDeadRequire *ctx, const pm_node_t *node) {
+  size_t start = (size_t)(node->location.start - (const uint8_t *)ctx->source);
+  size_t end = (size_t)(node->location.end - (const uint8_t *)ctx->source);
+  for (size_t i = start; i < end; i++)
+    if (ctx->result[i] != '\n' && ctx->result[i] != '\r') ctx->result[i] = ' ';
+  memcpy(ctx->result + start, "(nil", 4);
+  ctx->result[end - 1] = ')';
 }
 
 static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
@@ -3072,7 +3132,7 @@ static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
       predicate = n->predicate; body = (const pm_node_t *)n->statements;
       other = n->subsequent;
     }
-    int truth = sp_require_truth(predicate);
+    int truth = sp_require_truth(ctx->parser, predicate, ctx->engine);
     if (truth >= 0) {
       SpDeadRequire branch = *ctx;
       branch.dead = truth == unless;
@@ -3094,15 +3154,23 @@ static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
         /* Heredoc bodies can lie outside the call's span. Match the quoted
            literals the textual require resolver accepts. */
         if (str->opening_loc.start && (*str->opening_loc.start == '\'' || *str->opening_loc.start == '"')) {
-          size_t start = (size_t)(node->location.start - (const uint8_t *)ctx->source);
-          size_t end = (size_t)(node->location.end - (const uint8_t *)ctx->source);
-          for (size_t i = start; i < end; i++)
-            if (ctx->result[i] != '\n' && ctx->result[i] != '\r') ctx->result[i] = ' ';
-          /* Keep a multiline call grouped, including before a modifier. */
-          memcpy(ctx->result + start, "(nil", 4);
-          ctx->result[end - 1] = ')';
+          sp_dead_blank(ctx, node);
           return false;
         }
+      }
+    }
+    /* The `$LOAD_PATH << dir` that goes with a dead branch's require: the
+       load-path pass below would otherwise warn about a statement that
+       never runs, the way it does for a live one. */
+    if (call->receiver && PM_NODE_TYPE(call->receiver) == PM_GLOBAL_VARIABLE_READ_NODE &&
+        call->arguments && call->arguments->arguments.size == 1 && !call->block) {
+      const pm_global_variable_read_node_t *gv = (const pm_global_variable_read_node_t *)call->receiver;
+      if ((sp_pm_name_is(ctx->parser, gv->name, "$LOAD_PATH") || sp_pm_name_is(ctx->parser, gv->name, "$:")) &&
+          (sp_pm_name_is(ctx->parser, call->name, "<<") || sp_pm_name_is(ctx->parser, call->name, "unshift") ||
+           sp_pm_name_is(ctx->parser, call->name, "push") || sp_pm_name_is(ctx->parser, call->name, "append") ||
+           sp_pm_name_is(ctx->parser, call->name, "prepend"))) {
+        sp_dead_blank(ctx, node);
+        return false;
       }
     }
   }
@@ -3116,7 +3184,7 @@ static char *sp_rewrite_dead_requires(const char *source) {
   pm_parser_init(&parser, (const uint8_t *)source, strlen(source), NULL);
   pm_node_t *root = pm_parse(&parser);
   if (parser.error_list.size == 0) {
-    SpDeadRequire ctx = { &parser, source, result, 0 };
+    SpDeadRequire ctx = { &parser, source, result, 0, !sp_source_writes_engine(source) };
     pm_visit_node(root, sp_skip_dead_require, &ctx);
   }
   pm_node_destroy(&parser, root);

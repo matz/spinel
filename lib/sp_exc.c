@@ -385,9 +385,15 @@ sp_int sp_errno_num(const char *cls) {
    family, as CRuby defines the reader on SystemCallError alone. */
 sp_RbVal sp_exc_errno_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemCallError", "errno");
+  /* a user subclass of an Errno class (`class E < Errno::ENOENT`) carries
+     the number of the Errno class it descends from */
   const char *cn = e->cls_name ? e->cls_name : "";
-  for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
-    if (!strcmp(SP_ERRNO_TAB[i].name, cn)) return sp_box_int(SP_ERRNO_TAB[i].num);
+  for (int depth = 0; depth < 30 && cn; depth++) {
+    for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
+      if (!strcmp(SP_ERRNO_TAB[i].name, cn)) return sp_box_int(SP_ERRNO_TAB[i].num);
+    const char *parent = sp_user_exc_parent_fn ? sp_user_exc_parent_fn(cn) : NULL;
+    cn = parent ? parent : sp_exc_parent_of_name(cn);
+  }
   return sp_box_nil();
 }
 /* The builtin exception hierarchy, as {class, direct superclass} pairs. Shared

@@ -536,11 +536,37 @@ static int yield_operator_site_type(const Compiler *c, int id, TyKind *out) {
   return 0;
 }
 
+/* A no-arg builtin method whose return type follows the receiver's type,
+   called on a yield: yield.abs on an Integer block returns Integer; on a
+   Float block, Float.  Unary minus on a String block is the deduplicated
+   frozen String, so a String site answers String for `-@`; a String has no
+   abs, and that site keeps the cached type. Like yield_operator_site_type,
+   only covers the set that analyze_infer.c's YU_RECEIVER arm widens to
+   TY_POLY; extend both in tandem. */
+static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *op = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!op || recv < 0 || nt_kind(nt, recv) != NK_YieldNode) return 0;
+  if (nt_ref(nt, id, "block") >= 0) return 0;
+  int an = nt_ref(nt, id, "arguments"), ac = 0;
+  if (an >= 0) nt_arr(nt, an, "arguments", &ac);
+  if (ac != 0) return 0;
+  if (!sp_streq(op, "abs") && !sp_streq(op, "-@")) return 0;
+  TyKind rt;
+  if (!sp_yield_site_type(c, recv, &rt)) return 0;
+  if (rt != TY_INT && rt != TY_FLOAT && !(rt == TY_STRING && sp_streq(op, "-@"))) return 0;
+  *out = rt;
+  return 1;
+}
+
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
   if (g_block_id < 0 || id < 0) return 0;
   const char *ty = nt_type(c->nt, id);
   if (!ty) return 0;
   if (sp_streq(ty, "CallNode") && yield_operator_site_type(c, id, out)) return 1;
+  if (sp_streq(ty, "CallNode") && yield_builtin_method_site_type(c, id, out)) return 1;
   if (!sp_streq(ty, "YieldNode") &&
       !(sp_streq(ty, "CallNode") && blk_param_call(c, id))) return 0;
   int bbody = nt_ref(c->nt, g_block_id, "body");
@@ -1509,6 +1535,196 @@ int strbuf_ivar_owner(Compiler *c, int node) {
   if (cs->class_id >= 0) return cs->class_id;
   if (g_ie_class_id >= 0) return -1;
   return comp_class_index(c, "Toplevel");
+}
+/* ---- Is an object's ivar set? ----
+   An object lays out every ivar its class can hold, and a slot nothing has
+   written yet reads nil -- which instance_variables, instance_variable_
+   defined?, defined?(@x) and the default inspect answered as set. CRuby
+   lists an ivar only once it is assigned. ivar_set_kind answers, for ivar
+   `ivn` of an object of class `cid`:
+     0 -- always set: the initialize the class runs writes it at its top
+          level, unconditionally (a `super` there runs the parent's);
+     1 -- set exactly when it is not nil: every write the program makes to
+          it stores a value that is never nil, so a nil slot is unset;
+     2 -- neither can be told; reflection lists it as before. */
+static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int cid, int depth);
+static int ivs_init_sets(Compiler *c, int cid, const char *ivn, int depth) {
+  if (cid < 0 || depth > 16) return 0;
+  int mi = comp_method_in_chain(c, cid, "initialize", NULL);
+  if (mi < 0) return 0;
+  Scope *m = &c->scopes[mi];
+  if (m->def_node < 0 || nt_kind(c->nt, m->def_node) != NK_DefNode) return 0;
+  return ivs_writes_toplevel(c, nt_ref(c->nt, m->def_node, "body"), ivn, m->class_id, depth);
+}
+static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int cid, int depth) {
+  const NodeTable *nt = c->nt;
+  if (body < 0) return 0;
+  NodeKind k = nt_kind(nt, body);
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    for (int i = 0; i < n; i++) if (ivs_writes_toplevel(c, st[i], ivn, cid, depth)) return 1;
+    return 0;
+  }
+  if (k == NK_ParenthesesNode || k == NK_BeginNode) {
+    /* a begin with a rescue may stop before the write */
+    if (k == NK_BeginNode && nt_ref(nt, body, "rescue_clause") >= 0) return 0;
+    return ivs_writes_toplevel(c, nt_ref(nt, body, k == NK_BeginNode ? "statements" : "body"), ivn, cid, depth);
+  }
+  if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode)
+    return sp_streq(nt_str(nt, body, "name"), ivn);
+  if (k == NK_MultiWriteNode) {
+    int ln = 0; const int *l = nt_arr(nt, body, "lefts", &ln);
+    for (int i = 0; i < ln; i++)
+      if (nt_kind(nt, l[i]) == NK_InstanceVariableTargetNode && sp_streq(nt_str(nt, l[i], "name"), ivn)) return 1;
+    return 0;
+  }
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode)
+    return ivs_init_sets(c, comp_super_parent(c, cid, 0), ivn, depth + 1);
+  return 0;
+}
+/* A value that is never nil: a literal, a constructor of a class with no
+   `new` of its own, an interpolation, an operator on a builtin number or
+   String (which answers one or raises). */
+static int ivs_never_nil(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  switch (nt_kind(nt, v)) {
+    case NK_StringNode: case NK_InterpolatedStringNode: case NK_XStringNode: case NK_IntegerNode:
+    case NK_FloatNode: case NK_RationalNode: case NK_ImaginaryNode: case NK_SymbolNode:
+    case NK_InterpolatedSymbolNode: case NK_ArrayNode: case NK_HashNode: case NK_RangeNode:
+    case NK_RegularExpressionNode: case NK_InterpolatedRegularExpressionNode: case NK_TrueNode:
+    case NK_FalseNode: case NK_LambdaNode:
+      return 1;
+    case NK_ParenthesesNode: {
+      int b = nt_ref(nt, v, "body"), n = 0;
+      const int *st = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &n) : NULL;
+      return n > 0 && ivs_never_nil(c, st[n - 1]);
+    }
+    case NK_CallNode: {
+      const char *nm = nt_str(nt, v, "name");
+      int r = nt_ref(nt, v, "receiver");
+      if (!nm || r < 0) return 0;
+      if (sp_streq(nm, "new") && nt_kind(nt, r) == NK_ConstantReadNode) {
+        int ci = comp_class_index(c, nt_str(nt, r, "name"));
+        return ci < 0 ? 1 : comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
+      }
+      if (sp_streq(nm, "+@") || sp_streq(nm, "-@")) return nt_kind(nt, r) == NK_StringNode;
+      TyKind rt = comp_ntype(c, r);
+      static const char *const OPS[] = { "+", "-", "*", "/", "%", "**", "<<", "to_s", "to_i", "to_f",
+                                         "to_a", "to_sym", "dup", NULL };
+      if (rt != TY_INT && rt != TY_FLOAT && rt != TY_STRING) return 0;
+      for (int i = 0; OPS[i]; i++) if (sp_streq(nm, OPS[i])) return 1;
+      return 0;
+    }
+    default:
+      return 0;
+  }
+}
+/* Does the subtree under `n` write ivar `ivn`? Past the depth it follows,
+   it answers that it may. */
+static int ivs_subtree_writes(const NodeTable *nt, int n, const char *ivn, int depth) {
+  if (n < 0) return 0;
+  if (depth > 200) return 1;
+  const char *t = nt_type(nt, n);
+  if (t && strncmp(t, "InstanceVariable", 16) == 0 && !strstr(t, "Read") && sp_streq(nt_str(nt, n, "name"), ivn))
+    return 1;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (ivs_subtree_writes(nt, nt_ref_at(nt, n, i), ivn, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (ivs_subtree_writes(nt, ids[j], ivn, depth + 1)) return 1;
+  }
+  return 0;
+}
+/* Is class k one whose objects' slot `cid` describes, or whose methods can
+   write it: cid itself, an ancestor or a descendant? */
+static int ivs_related(Compiler *c, int k, int cid) {
+  return k == cid || is_descendant(c, k, cid) || is_descendant(c, cid, k);
+}
+int ivar_set_kind(Compiler *c, int cid, const char *ivn) {
+  const NodeTable *nt = c->nt;
+  if (cid < 0 || cid >= c->nclasses || !ivn) return 2;
+  static int *memo = NULL, memo_n = -1;
+  ClassInfo *ci = &c->classes[cid];
+  int iv = comp_ivar_index(ci, ivn);
+  if (iv < 0) return 2;
+  if (memo_n != c->nclasses * 64) {
+    free(memo); memo_n = c->nclasses * 64;
+    memo = (int *)malloc(sizeof(int) * (size_t)(memo_n > 0 ? memo_n : 1));
+    if (!memo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < memo_n; i++) memo[i] = -1;
+  }
+  int slot = iv < 64 ? cid * 64 + iv : -1;
+  if (slot >= 0 && memo[slot] >= 0) return memo[slot];
+  int kind;
+  TyKind t = ci->ivar_types[iv];
+  if (ivs_init_sets(c, cid, ivn, 0)) kind = 0;
+  /* a type with no nil of its own cannot tell an unset slot */
+  else if (!(t == TY_INT || t == TY_FLOAT || t == TY_POLY || t == TY_STRING || t == TY_STRBUF ||
+             ty_is_array(t) || ty_is_hash(t) || ty_is_object(t))) kind = 2;
+  else {
+    kind = 1;
+    static const NodeKind WK[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
+                                   NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode,
+                                   NK_InstanceVariableTargetNode };
+    for (int q = 0; q < 5 && kind == 1; q++)
+      NT_FOREACH_KIND(nt, WK[q], w) {
+        if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
+        Scope *ws = comp_scope_of(c, w);
+        if (!ws || ws->is_cmethod) continue;
+        /* a write whose owner this cannot name (a top-level method, an
+           instance_eval body) may be this object's */
+        if (ws->class_id < 0 || !ivs_related(c, ws->class_id, cid)) {
+          if (ws->class_id < 0) { kind = 2; break; }
+          continue;
+        }
+        if (WK[q] == NK_InstanceVariableTargetNode) { kind = 2; break; }
+        if (WK[q] == NK_InstanceVariableOperatorWriteNode) continue;   /* answers a value or raises */
+        if (!ivs_never_nil(c, nt_ref(nt, w, "value"))) { kind = 2; break; }
+      }
+    /* a write from outside: instance_variable_set, a writer, instance_eval */
+    char wr[128]; snprintf(wr, sizeof wr, "%s=", ivn + 1);
+    NT_FOREACH_KIND(nt, NK_CallNode, u) {
+      if (kind != 1) break;
+      const char *un = nt_str(nt, u, "name");
+      if (!un) continue;
+      int a = nt_ref(nt, u, "arguments"), ac = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+      if (sp_streq(un, "instance_variable_set")) {
+        int nmok = ac == 2 && (nt_kind(nt, av[0]) == NK_SymbolNode || nt_kind(nt, av[0]) == NK_StringNode);
+        const char *sn = !nmok ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value")
+                                                                            : nt_str(nt, av[0], "content");
+        if (!nmok || (sn && sp_streq(sn, ivn) && !ivs_never_nil(c, av[1]))) kind = 2;
+      }
+      else if (sp_streq(un, wr) && (ac != 1 || !ivs_never_nil(c, av[0]))) kind = 2;
+      else if ((sp_streq(un, "instance_eval") || sp_streq(un, "instance_exec") || sp_streq(un, "class_eval") ||
+                sp_streq(un, "class_exec")) && nt_ref(nt, u, "block") >= 0) {
+        /* its block writes the receiver's ivars */
+        if (ivs_subtree_writes(nt, nt_ref(nt, u, "block"), ivn, 0)) kind = 2;
+      }
+    }
+    /* `o.x ||= v` and its kin write through the writer too */
+    for (int u = 0; kind == 1 && u < nt->count; u++) {
+      const char *ut = nt_type(nt, u);
+      if (!ut || (!sp_streq(ut, "CallOrWriteNode") && !sp_streq(ut, "CallAndWriteNode") &&
+                  !sp_streq(ut, "CallOperatorWriteNode"))) continue;
+      const char *rn = nt_str(nt, u, "name"), *wn = nt_str(nt, u, "write_name");
+      if ((rn && (sp_streq(rn, ivn + 1) || sp_streq(rn, wr))) || (wn && sp_streq(wn, wr))) kind = 2;
+    }
+  }
+  if (slot >= 0) memo[slot] = kind;
+  return kind;
+}
+/* The C test that ivar `ivn` (of class `cid`, read as `expr`) is set, for
+   an ivar of kind 1; NULL when it is always reported as set. */
+const char *ivar_set_test(Compiler *c, int cid, const char *ivn, const char *expr, char *buf, size_t cap) {
+  if (ivar_set_kind(c, cid, ivn) != 1) return NULL;
+  TyKind t = c->classes[cid].ivar_types[comp_ivar_index(&c->classes[cid], ivn)];
+  if (t == TY_INT) snprintf(buf, cap, "(%s != SP_INT_NIL)", expr);
+  else if (t == TY_FLOAT) snprintf(buf, cap, "(!sp_float_is_nil(%s))", expr);
+  else if (t == TY_POLY) snprintf(buf, cap, "((%s).tag != SP_TAG_NIL)", expr);
+  else snprintf(buf, cap, "(%s != NULL)", expr);
+  return buf;
 }
 /* The C global ivar read `node` lives in, by the read emitter's storage
    rule: a class method's ivar is the class's civ_ slot, a top-level one
@@ -3626,6 +3842,16 @@ void scope_mark_proc_form(Compiler *c, int s) {
 void scope_veto_proc_form(Compiler *c, int s) {
   if (!g_pf_flag || s < 0 || s >= g_pf_cap || s >= c->nscopes) return;
   g_pf_flag[s] = (char *)2;   /* sticky: a later marking pass must not revive it */
+}
+/* Is `node` a read of something that already holds its object (a local, an
+   ivar, self, a constant)? Anything else -- a constructor, a method call --
+   may hand back a fresh object whose only reference is the C temporary the
+   caller keeps it in, and a call on it that allocates must root that
+   temporary first. */
+int expr_is_held_ref(Compiler *c, int node) {
+  NodeKind k = nt_kind(c->nt, node);
+  return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
+         k == NK_SelfNode || k == NK_ConstantReadNode;
 }
 /* The proc-form clone of scope `s`, or -1. Made in analyze (make_yield_proc_forms):
    a second scope named "<name>#pf" on the same class, holding an independently

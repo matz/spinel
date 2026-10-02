@@ -114,6 +114,9 @@ static const BuiltinClass BUILTIN_CLASSES[] = {
   { "Enumerator::Chain",            0,     BC_CLASS },
   { "Enumerator::Lazy",             0,     BC_CLASS },
   { "Enumerator::Product",          0,     BC_CLASS },
+  { "Encoding::CompatibilityError",        0, BC_EXCEPTION },
+  { "Encoding::InvalidByteSequenceError",  0, BC_EXCEPTION },
+  { "Encoding::UndefinedConversionError",  0, BC_EXCEPTION },
   { "Errno::ENOENT",                0,     BC_EXCEPTION },
   { "GC",                           0,     BC_CLASS | BC_MODULE },
   { "IO::EAGAINWaitReadable",       0,     BC_EXCEPTION },
@@ -206,18 +209,52 @@ int builtin_class_id(const char *name) {
   const BuiltinClass *r = builtin_row(name);
   return r ? r->id : 0;
 }
-int class_inherits_builtin_exception(Compiler *c, int ci) {
-  for (int k = ci; k >= 0; k = c->classes[k].parent) {
-    int sc = nt_ref(c->nt, c->classes[k].def_node, "superclass");
-    if (sc < 0) continue;
-    const char *sty = nt_type(c->nt, sc);
-    if (sty && sp_streq(sty, "ConstantReadNode") &&
-        is_builtin_exception_name(nt_str(c->nt, sc, "name")))
-      return 1;
-    if (sty && sp_streq(sty, "ConstantPathNode") &&
-        is_builtin_exception_name(nt_str(c->nt, sc, "name")))
-      return 1;
+/* The builtin exception a class's superclass node `sc` names, or NULL. A
+   path is read whole first: `class E < Errno::ENOENT` names Errno::ENOENT,
+   which its leaf "ENOENT" is not, so the class was taken for a plain object
+   and `raise E` failed. A path whose whole name is no builtin keeps the
+   leaf reading it always had (`::StandardError`, `Mod::RuntimeError`). The
+   result is a stable string: the qualified forms are interned here. */
+const char *superclass_builtin_exc_name(const NodeTable *nt, int sc) {
+  const char *sty = sc >= 0 ? nt_type(nt, sc) : NULL;
+  if (!sty) return NULL;
+  int is_read = sp_streq(sty, "ConstantReadNode"), is_path = sp_streq(sty, "ConstantPathNode");
+  if (!is_read && !is_path) return NULL;
+  const char *leaf = nt_str(nt, sc, "name");
+  if (!leaf) return NULL;
+  if (is_path) {
+    char q[256]; size_t o = strlen(leaf);
+    if (o < sizeof q) {
+      memcpy(q, leaf, o + 1);
+      int ok = 1, any = 0;
+      for (int par = nt_ref(nt, sc, "parent"); par >= 0; par = nt_ref(nt, par, "parent")) {
+        const char *pty = nt_type(nt, par), *pn = nt_str(nt, par, "name");
+        if (!pty || !pn || (!sp_streq(pty, "ConstantReadNode") && !sp_streq(pty, "ConstantPathNode"))) { ok = 0; break; }
+        size_t pl = strlen(pn);
+        if (o + pl + 2 >= sizeof q) { ok = 0; break; }
+        memmove(q + pl + 2, q, o + 1); memcpy(q, pn, pl); q[pl] = ':'; q[pl + 1] = ':';
+        o += pl + 2; any = 1;
+        if (sp_streq(pty, "ConstantReadNode")) break;
+      }
+      if (ok && any && is_builtin_exception_name(q)) {
+        /* grows: a full table would send the name to the leaf reading
+           below, and "ENOENT" alone names no exception */
+        static char **interned; static int ninterned, cap;
+        for (int i = 0; i < ninterned; i++) if (sp_streq(interned[i], q)) return interned[i];
+        if (ninterned == cap) {
+          cap = cap ? cap * 2 : 16;
+          interned = realloc(interned, sizeof *interned * (size_t)cap);
+        }
+        return interned[ninterned++] = strdup(q);
+      }
+    }
   }
+  return is_builtin_exception_name(leaf) ? leaf : NULL;
+}
+int class_inherits_builtin_exception(Compiler *c, int ci) {
+  for (int k = ci; k >= 0; k = c->classes[k].parent)
+    if (superclass_builtin_exc_name(c->nt, nt_ref(c->nt, c->classes[k].def_node, "superclass")))
+      return 1;
   return 0;
 }
 int an_re_has_captures(const char *src) {

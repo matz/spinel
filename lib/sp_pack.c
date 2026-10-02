@@ -314,6 +314,7 @@ static int64_t pk_poly_to_int(sp_RbVal v) {
          bridge); one without the method falls through to CRuby's TypeError */
       if (v.cls_id >= 0 && v.v.p && sp_obj_to_int_fn) {
         int ok = 0;
+        SP_GC_ROOT_RBVAL(v);   /* across the user #to_int */
         int64_t r = sp_obj_to_int_fn((int)v.cls_id, v.v.p, &ok);
         if (ok) return r;
       }

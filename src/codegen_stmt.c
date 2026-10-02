@@ -22,6 +22,9 @@ static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
     emit_indent(g_pre, g_indent); emit_ctype(c, t, g_pre);
     buf_printf(g_pre, " _t%d = ", tt);
     buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
+    /* the temp may be the object's only reference (`puts C.new`), and #to_s
+       allocates before it reads the object's ivars */
+    if (!comp_ty_value_obj(c, t)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tt); }
     buf_printf(b, "_t%d", tt);
   }
   buf_puts(b, "))");
@@ -546,8 +549,12 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
        a NULL pointer is nil (nullable-object convention, e.g. Set#add?) */
     const char *cn = obj_str_cname(c, ty_object_class(t), 1);
     int pv = ++g_tmp;
+    /* rooted: a fresh object (`p mk`) has no other reference while its
+       #inspect allocates */
     buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", cn, pv, cn); emit_expr(c, arg, b);
-    buf_printf(b, "); sp_puts_line(_t%d ? sp_%s_inspect(_t%d) : \"nil\"); }\n", pv, cn, pv);
+    buf_puts(b, "); ");
+    if (!expr_is_held_ref(c, arg)) buf_printf(b, "SP_GC_ROOT(_t%d); ", pv);
+    buf_printf(b, "sp_puts_line(_t%d ? sp_%s_inspect(_t%d) : \"nil\"); }\n", pv, cn, pv);
   }
   else if (t == TY_PROC) {
     buf_puts(b, "{ sp_Proc *_pp = ("); emit_expr(c, arg, b);
@@ -614,10 +621,17 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
        walk renders CRuby's default #<Name:0xADDR @a=..., ...> */
     int cid = ty_object_class(t);
     const char *icn = obj_str_cname(c, cid, 1);
-    if (icn) {
+    if (icn && expr_is_held_ref(c, arg)) {
       buf_printf(b, "{ const char *_pi = sp_%s_inspect((sp_%s *)(", icn, icn);
       emit_expr(c, arg, b);
       buf_puts(b, ")); sp_puts_line(_pi ? _pi : \"nil\"); }\n");
+    }
+    else if (icn) {
+      /* the receiver rooted across its #inspect, as in the arm above */
+      int pv = ++g_tmp;
+      buf_printf(b, "{ sp_%s *_t%d = (sp_%s *)(", icn, pv, icn); emit_expr(c, arg, b);
+      buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_pi = sp_%s_inspect(_t%d);"
+                    " sp_puts_line(_pi ? _pi : \"nil\"); }\n", pv, icn, pv);
     }
     else {
       buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
@@ -8685,8 +8699,10 @@ static void masgn_guard_line(Buf *fb, Buf *b, int indent) {
 static void masgn_conv(Compiler *c, int id, TyKind st, TyKind vt, const char *val, Buf *b) {
   if (!val) { buf_puts(b, nil_sentinel(st == TY_UNKNOWN ? TY_POLY : st)); return; }
   if (st == TY_POLY && vt != TY_POLY) emit_boxed_src(c, vt, val, b);
-  else if (vt == TY_POLY && st == TY_INT) buf_printf(b, "sp_poly_to_i(%s)", val);
-  else if (vt == TY_POLY && st == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", val);
+  /* a boxed nil lands the slot's nil, not the type's zero, as a plain write
+     unboxes it (#3458) */
+  else if (vt == TY_POLY && st == TY_INT) buf_printf(b, "sp_poly_to_i_or_nil(%s)", val);
+  else if (vt == TY_POLY && st == TY_FLOAT) buf_printf(b, "sp_poly_to_f_or_nil(%s)", val);
   else if (vt == TY_POLY && st != TY_POLY && st != TY_UNKNOWN) emit_unbox_text(c, st, val, b);
   else emit_coerce_text(c, id, vt, st, CO_HOLD, val, "a multiple assignment's target", b);
 }
@@ -11623,6 +11639,12 @@ else {
            wrapped, as the single write wraps it (emit_strbuf_value) */
         else if (ltt == TY_STRBUF && valt == TY_STRING) buf_printf(b, "sp_String_new_shared(_t%d)", tmps[i]);
         else if (ltt == TY_STRBUF && valt == TY_POLY) buf_printf(b, "sp_poly_as_strbuf(_t%d)", tmps[i]);
+        /* a boxed element into a typed local: unboxed, as a plain write does
+           (`mk, x = 0, nl` with nl only ever nil) */
+        else if (valt == TY_POLY && ltt != TY_POLY && ltt != TY_UNKNOWN) {
+          char tv[24]; snprintf(tv, sizeof tv, "_t%d", tmps[i]);
+          masgn_conv(c, lefts[i], ltt, valt, tv, b);
+        }
         else buf_printf(b, "_t%d", tmps[i]);
         if (proc_cell) buf_puts(b, ")");
         buf_puts(b, ";\n");
@@ -12454,6 +12476,15 @@ static int case_arms_all_diverge(Compiler *c, int id) {
   }
   return 1;
 }
+/* Is the literal block being spliced for a yield one whose value is boxed:
+   its tail typed poly, with no `next` handing back a value of its own? */
+static int yield_block_value_boxed(Compiler *c) {
+  if (g_block_id < 0 || g_yield_proc_ref) return 0;
+  int bb = nt_ref(c->nt, g_block_id, "body");
+  int bn = 0; const int *bd = bb >= 0 ? nt_arr(c->nt, bb, "body", &bn) : NULL;
+  return bn > 0 && comp_ntype(c, bd[bn - 1]) == TY_POLY && block_next_value_ty(c, bb) == TY_UNKNOWN;
+}
+
 
 void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
@@ -12887,9 +12918,16 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
            emit_empty_container_for_slot(c, id, g_result_ty, b)) { }
   /* A boxed call value feeding a typed result slot (an inlined method whose
      tail forwards its block into a builtin answering boxed) is unboxed into
-     it, as a return slot's is, not dropped for the slot's nil below. */
+     it, as a return slot's is, not dropped for the slot's nil below. So is a
+     boxed yield into a literal block whose own value is boxed: the block's
+     parameter took a boxed value from another path to the yield (a proc
+     form's), and the slot this site's call was typed for takes it. (A block
+     with a concrete value splices it as that type, and a forwarded proc's
+     yield answers the slot's type already.) */
   else if (g_result_var && !g_result_poly && !is_subst && vty == TY_POLY &&
-           sp_streq(ty, "CallNode") && g_result_ty != TY_UNKNOWN &&
+           (sp_streq(ty, "CallNode") ||
+            (sp_streq(ty, "YieldNode") && yield_block_value_boxed(c))) &&
+           g_result_ty != TY_UNKNOWN &&
            g_result_ty != TY_VOID && g_result_ty != TY_NIL)
     emit_unbox_node(c, g_result_ty, id, b);
   /* A void tail value (a rescue arm ending in `puts`, or a void-returning

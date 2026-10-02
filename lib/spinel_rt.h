@@ -512,10 +512,14 @@ sp_PolyArray *sp_process_waitpid2(sp_int pid);
 #  define SP_RUBY_ARCH "i686"
 #elif defined(__arm__)
 #  define SP_RUBY_ARCH "arm"
+#elif defined(__wasm32__)
+#  define SP_RUBY_ARCH "wasm32"
 #else
 #  define SP_RUBY_ARCH "unknown"
 #endif
-#if defined(__linux__)
+#if defined(__wasi__)
+#  define SP_RUBY_OS "wasi"
+#elif defined(__linux__)
 #  define SP_RUBY_OS "linux"
 #elif defined(__APPLE__)
 #  define SP_RUBY_OS "darwin"
@@ -2054,6 +2058,10 @@ static inline const char *sp_poly_to_s(sp_RbVal v) {
                dispatcher; the rest (bare Object.new included) get CRuby's
                default #<Name:0xADDR> */
             if (v.cls_id >= 0 && sp_obj_to_s_fn) {
+              /* rooted across the user #to_s, which allocates: the boxed
+                 copy may be a fresh object's only reference (`puts(k ?
+                 C.new : 1)`), as in sp_poly_check_str_obj */
+              SP_GC_ROOT_RBVAL(v);
               const char *us = sp_obj_to_s_fn(v.cls_id, v.v.p);
               if (us) return us;
             }
@@ -2983,6 +2991,7 @@ static sp_int sp_poly_slot_i(sp_RbVal v) {
 static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
   if (v.v.p && sp_obj_to_int_fn) {
     int ok = 0;
+    SP_GC_ROOT_RBVAL(v);   /* across the user #to_int, as sp_poly_check_str_obj roots it */
     sp_int r = sp_obj_to_int_fn((int)v.cls_id, v.v.p, &ok);
     if (ok) return r;
   }
@@ -2993,6 +3002,7 @@ static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
 }
 static SP_NOINLINE const char *sp_poly_arg_str_obj(sp_RbVal v) {
   if (v.v.p && sp_obj_to_str_fn) {
+    SP_GC_ROOT_RBVAL(v);   /* across the user #to_str, as sp_poly_check_str_obj roots it */
     const char *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
     if (r) return r;
   }
@@ -3119,6 +3129,7 @@ static SP_INLINE const char *sp_poly_arg_str_or_null(sp_RbVal v) {
    Everything else is the strict String slot's protocol, unchanged. */
 static SP_NOINLINE const char *sp_poly_arg_path_slow(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_path_fn) {
+    SP_GC_ROOT_RBVAL(v);   /* across the user #to_path, as sp_poly_check_str_obj roots it */
     const char *r = sp_obj_to_path_fn((int)v.cls_id, v.v.p);
     if (r) return r;
   }
@@ -7507,8 +7518,10 @@ static inline const char *sp_poly_inspect(sp_RbVal v) {
         default:
           /* a user object: the generated per-class ivar walk renders
              #<Name:0x... @a=..., ...> like CRuby's default inspect */
-          if (v.cls_id >= 0 && sp_obj_inspect_fn && v.v.p)
+          if (v.cls_id >= 0 && sp_obj_inspect_fn && v.v.p) {
+            SP_GC_ROOT_RBVAL(v);   /* across the user #inspect or the ivar walk, as for #to_s */
             return sp_obj_inspect_fn(v.cls_id, v.v.p);
+          }
           if (v.cls_id == SP_BUILTIN_OBJECT && v.v.p && v.v.p == sp_main_obj) return SPL("main");
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p)
             return sp_sprintf("#<%s:0x%016llx>", sp_poly_class_name(v),

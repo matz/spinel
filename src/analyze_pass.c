@@ -2179,6 +2179,7 @@ static int ivar_has_array_write(Compiler *c, const LWIndex *ivw, int cls, const 
 static int widen_arg_hash(Compiler *c, int arg);
 static int widen_arg_array(Compiler *c, int arg);
 static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth);
+static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv);
 
 /* Widens the parameters class `cls` assigns `inm` (`@c = a`) to the
    general Array, as a push through the parameter itself would, with its
@@ -3614,6 +3615,14 @@ int infer_write_types(Compiler *c) {
       if (lv && (!lv->is_param || lv->is_block_param) && lv->type == TY_POLY && (is_push || (is_idx_write && (is_splice || kt == TY_INT))) &&
           vt != TY_UNKNOWN && vt != TY_POLY && !concat_scalar && (!is_splice || is_fill || splice_arr))
         changed |= widen_boxed_array_sources(c, recv, (TyKind)vt, 0);
+      /* A proc or lambda literal's boxed parameter written as a Hash
+         (`proc { |t| t[:k] = 2 }`): the Hashes its calls hand it take the
+         key and value, as a method's boxed parameter's callers do */
+      if (lv && lv->is_block_param && lv->type == TY_POLY && is_idx_write && !is_push && !is_splice &&
+          kt != TY_UNKNOWN && kt != TY_POLY && kt != TY_INT && vt != TY_UNKNOWN && !g_infer_optimistic) {
+        int plit = local_proc_literal_param_of(c, lsc, rnm);
+        if (plit >= 0) changed |= widen_proc_call_hash_args(c, plit, rnm, (TyKind)kt, (TyKind)vt);
+      }
       if (!lv || lv->is_block_param) continue;
       /* A parameter is typed from its call sites, not from its uses -- except
          that a push through it MUTATES the caller's own array, so an element
@@ -5530,7 +5539,11 @@ static int widen_arg_array(Compiler *c, int arg) {
     }
     if (local_all_writes_empty_array(c, asc, an)) { al->type = TY_POLY_ARRAY; return 1; }
     if (local_all_writes_fresh_array(c, asc, an)) {
-      al->type = TY_POLY_ARRAY; al->poly_array_pin = 1; return 1;
+      /* the pin is re-asserted each round, where the local re-derives from
+         its writes: only a new pin is a change, or a widening asked every
+         round never settles */
+      int was = al->poly_array_pin;
+      al->type = TY_POLY_ARRAY; al->poly_array_pin = 1; return !was;
     }
     return widen_array_sources(c, arg);
   }
@@ -5635,6 +5648,119 @@ static int leaves_widen_to_poly_array(Compiler *c, const int *lv, int n, int app
    takes it from. A boxed parameter records the element for its callers'
    binding, as a store through it does (boxed_push_elem). What the walk
    cannot follow keeps the run time's answer. Returns 1 on a change. */
+/* The arguments the calls of proc or lambda literal `lit` pass its
+   parameter `pn`, followed as widen_boxed_array_sources follows a value: a
+   call on the literal itself, on a local some write of which is it, or on a
+   method's parameter that a call of the method passes such a local or the
+   literal in (`def fw(f, x) = f.call(x)` with `fw(l, a)`), where the
+   argument is the method's own parameter in turn, whose callers the
+   binding checks (boxed_push_elem). */
+static int proc_lit_carrier(Compiler *c, int v, int lit) {
+  const NodeTable *nt = c->nt;
+  v = unwrap_parens(c, v);
+  if (v == lit) return 1;
+  if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode) return 0;
+  const char *vn = nt_str(nt, v, "name");
+  Scope *vs = vn ? comp_scope_of(c, v) : NULL;
+  int si = vs ? (int)(vs - c->scopes) : -1;
+  /* a local any write of which is the literal may hold it at the call */
+  for (int w = si >= 0 ? comp_lvw_first_sc(c, si, vn) : -1; w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (comp_scope_of(c, w) != vs || !sp_streq(nt_str(nt, w, "name"), vn)) continue;
+    if (nt_kind(nt, w) == NK_LocalVariableWriteNode && unwrap_parens(c, nt_ref(nt, w, "value")) == lit) return 1;
+  }
+  return 0;
+}
+/* What a Hash handed a parameter must hold: a key `hk` and a value `hv`
+   stored through it. A typed Hash that cannot widens to the poly-keyed
+   one; a method's parameter records the store for its own callers'
+   binding (boxed_store_key/val), or widens as a typed one does. */
+static int widen_hash_arg_for_store(Compiler *c, int arg, TyKind hk, TyKind hv) {
+  const NodeTable *nt = c->nt;
+  arg = unwrap_parens(c, arg);
+  TyKind at = infer_type(c, arg);
+  if (nt_kind(nt, arg) == NK_LocalVariableReadNode) {
+    const char *an = nt_str(nt, arg, "name");
+    Scope *asc = an ? comp_scope_of(c, arg) : NULL;
+    LocalVar *al = asc ? scope_local(asc, an) : NULL;
+    if (al && al->is_param && !al->is_block_param && !al->rbs_seeded) {
+      if (al->type == TY_POLY) {
+        int ch = 0;
+        TyKind *ev[2] = { &al->boxed_store_key, &al->boxed_store_val };
+        TyKind got[2] = { hk, hv };
+        for (int e = 0; e < 2; e++) {
+          TyKind was = *ev[e];
+          TyKind now = was == TY_UNKNOWN ? got[e] : (was == got[e] ? was : TY_POLY);
+          if (now != was) { *ev[e] = now; ch = 1; }
+        }
+        return ch;
+      }
+      if (ty_is_hash(al->type) && al->type != TY_POLY_POLY_HASH) {
+        TyKind folded = al->type;
+        if (fold_container_evidence(&folded, 0, 0, hk, hv) && folded == al->type) return 0;
+        al->type = TY_POLY_POLY_HASH; al->push_widened = 1;
+        return 1;
+      }
+      return 0;
+    }
+  }
+  if (!ty_is_hash(at) || at == TY_POLY_POLY_HASH) return 0;
+  TyKind folded = at;
+  if (fold_container_evidence(&folded, 0, 0, hk, hv) && folded == at) return 0;
+  return widen_arg_hash(c, arg);
+}
+static int widen_proc_call_args_m(Compiler *c, int lit, const char *pn, TyKind elem, int depth,
+                                  int hash, TyKind hk, TyKind hv);
+static int widen_proc_call_args(Compiler *c, int lit, const char *pn, TyKind elem, int depth) {
+  return widen_proc_call_args_m(c, lit, pn, elem, depth, 0, TY_UNKNOWN, TY_UNKNOWN);
+}
+static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv) {
+  return widen_proc_call_args_m(c, lit, pn, TY_UNKNOWN, 0, 1, hk, hv);
+}
+static int widen_proc_call_args_m(Compiler *c, int lit, const char *pn, TyKind elem, int depth,
+                                  int hash, TyKind hk, TyKind hv) {
+  const NodeTable *nt = c->nt;
+  int ppn = a_proc_params_node(c, lit), rn = 0;
+  const int *rq = ppn >= 0 ? nt_arr(nt, ppn, "requireds", &rn) : NULL;
+  int k = -1;
+  for (int i = 0; i < rn && k < 0; i++) if (sp_streq(nt_str(nt, rq[i], "name"), pn)) k = i;
+  if (k < 0 || depth > 6) return 0;
+  int ch = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    const char *un = nt_str(nt, u, "name");
+    int r = nt_ref(nt, u, "receiver");
+    if (r < 0 || !proc_call_name(un)) continue;
+    int a = nt_ref(nt, u, "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    if (k >= ac) continue;
+    int plain = 1;
+    for (int q = 0; q <= k && plain; q++)
+      plain = nt_kind(nt, av[q]) != NK_SplatNode && nt_kind(nt, av[q]) != NK_KeywordHashNode;
+    if (!plain) continue;
+    if (proc_lit_carrier(c, r, lit)) {
+      ch |= hash ? widen_hash_arg_for_store(c, av[k], hk, hv) : widen_boxed_array_sources(c, av[k], elem, depth + 1);
+      continue;
+    }
+    /* a method's parameter its callers hand the literal in */
+    if (nt_kind(nt, r) != NK_LocalVariableReadNode) continue;
+    const char *rnm = nt_str(nt, r, "name");
+    Scope *ms = comp_scope_of(c, r);
+    int pj = -1;
+    for (int i = 0; ms && ms->name && i < ms->nparams && pj < 0; i++)
+      if (ms->pnames[i] && sp_streq(ms->pnames[i], rnm)) pj = i;
+    if (pj < 0) continue;
+    int hands = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, u2) {
+      if (hands || backprop_call_target(c, u2) != (int)(ms - c->scopes)) continue;
+      int a2 = nt_ref(nt, u2, "arguments"), ac2 = 0;
+      const int *av2 = a2 >= 0 ? nt_arr(nt, a2, "arguments", &ac2) : NULL;
+      int arg = call_param_arg(c, ms, av2, ac2, pj);
+      hands = arg >= 0 && proc_lit_carrier(c, arg, lit);
+    }
+    if (hands)
+      ch |= hash ? widen_hash_arg_for_store(c, av[k], hk, hv) : widen_boxed_array_sources(c, av[k], elem, depth + 1);
+  }
+  return ch;
+}
 static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   v = unwrap_parens(c, v);
@@ -5686,6 +5812,9 @@ static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth)
           elem_at = 0;
         if (bi == elem_at) ch |= widen_boxed_elem_sources(c, r, elem, depth + 1);
       }
+      /* a proc or lambda literal's parameter: what its calls pass there */
+      int lit = local_proc_literal_param_of(c, sc, nm);
+      if (lit >= 0) ch |= widen_proc_call_args(c, lit, nm, elem, depth + 1);
     }
     /* a `for` variable, bound as a block parameter is */
     NT_FOREACH_KIND(nt, NK_ForNode, f) {
@@ -11312,6 +11441,23 @@ static int cs_type_params(Compiler *c, int create, const int *argv, int argc) {
         !lv->nullable_int) { lv->nullable_int = 1; changed = 1; }
     if (lit && !lv->nil_passed) { lv->nil_passed = 1; changed = 1; }
     if (merged != lv->type) { lv->type = merged; changed = 1; }
+    /* Reverse binding, as a method's (bind_call_params): an empty-`{}`-only
+       local handed to a parameter the body types as a Hash is that Hash,
+       filled through the reference; it takes the parameter's variant rather
+       than the String-keyed default the body's keys do not fit. */
+    if (k < argc && ty_is_hash(lv->type) && nt_kind(nt, argv[k]) == NK_LocalVariableReadNode) {
+      int plain = 1;
+      for (int q = 0; q < k && plain; q++)
+        plain = nt_kind(nt, argv[q]) != NK_SplatNode && nt_kind(nt, argv[q]) != NK_KeywordHashNode;
+      const char *an = plain ? nt_str(nt, argv[k], "name") : NULL;
+      Scope *asc = an ? comp_scope_of(c, argv[k]) : NULL;
+      LocalVar *al = asc ? scope_local(asc, an) : NULL;
+      if (al && !al->is_param && !al->is_block_param && al->type != lv->type &&
+          (al->type == TY_UNKNOWN || al->type == TY_POLY || ty_is_hash(al->type)) &&
+          local_all_writes_empty_hash(c, asc, an)) {
+        al->type = lv->type; changed = 1;
+      }
+    }
   }
   free(pos); free(absent);
   return changed;

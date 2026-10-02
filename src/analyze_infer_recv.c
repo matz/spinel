@@ -451,7 +451,12 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
          operand's runtime class picks the result class, so it stays poly
          (typing it Rational handed an sp_RbVal to sp_rational_inspect) */
       { *out = a0r == TY_FLOAT ? TY_FLOAT : a0r == TY_POLY ? TY_POLY : TY_RATIONAL; return 1; }
-    if (argc == 1 && sp_streq(name, "**")) { *out = a0r == TY_INT ? TY_RATIONAL : TY_FLOAT; return 1; }
+    /* a boxed exponent folds through sp_poly_pow, as the operators above
+       do: the exponent's runtime class picks the result's (a Rational for
+       an Integer or an integer-valued Rational, else a Float), so it stays
+       poly. Typed Float, the boxed answer went into sp_box_float. */
+    if (argc == 1 && sp_streq(name, "**"))
+      { *out = a0r == TY_INT ? TY_RATIONAL : a0r == TY_POLY ? TY_POLY : TY_FLOAT; return 1; }
     if (argc == 1 && (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
                       sp_streq(name, ">=") || sp_streq(name, "==") || sp_streq(name, "!=") ||
                       sp_streq(name, "==="))) { *out = TY_BOOL; return 1; }

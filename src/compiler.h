@@ -557,6 +557,10 @@ typedef struct {
      includes that module. */
   int *included_mods;
   int nincluded_mods, cincluded_mods;
+  /* Modules this class extends (class indices), in the order register_extends
+     meets them: its singleton's ancestors, which `Klass.is_a?(M)` asks. */
+  int *extended_mods;
+  int nextended_mods, cextended_mods;
   /* Modules with no class of their own: a BUILTIN one named through its path,
      `include IO::WaitReadable`. Those carry no index into c->classes, and the
      rescue match compares module NAMES anyway, so the qualified string is
@@ -883,6 +887,8 @@ Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
    each write is still read fresh at every visit. */
 int comp_is_local_write(NodeKind k);
 int comp_lvw_first(Compiler *c, const char *name);
+int comp_class_singleton_has_module(Compiler *c, int ci, int mod);
+int comp_class_extends_any(Compiler *c, int ci);
 int comp_lvw_next(const Compiler *c, int w);
 int comp_lvw_first_sc(Compiler *c, int scope_idx, const char *name);
 int comp_lvw_next_sc(const Compiler *c, int w);

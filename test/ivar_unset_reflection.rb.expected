@@ -1,0 +1,16 @@
+[:@a, :@b]
+false
+nil
+#<B:0x @a=1, @b="b">
+[:@a, :@b, :@x, :@y]
+true
+"instance-variable"
+[:@c]
+false
+[:@c, :@z]
+true
+[:@c, :@w]
+[[:@a], [:@a, :@b], []]
+[false, false, false]
+[true, false, false]
+#<A:0x @a=1>

@@ -1928,11 +1928,36 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                  trecv, tbox, name, trecv);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
+      /* Hash#select and Hash#reject yield the key and the value as two
+         values (find_all yields the pair whole, as Hash#each does): a lone
+         `|k|` takes the key, and a block of any other shape than plain
+         requireds binds the step's values by the proc distribution. */
+      int gather = block_binds_gathered(c, fblock), thash = 0;
+      int lone = !gather && bp && !block_param_name(c, fblock, 1) && !block_rest_marker(c, fblock) &&
+                 !block_param_is_multi(c, fblock, 0);
+      if ((gather || lone) && !pf_fa) {
+        thash = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "int _t%d = _t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id);\n",
+                   thash, tbox, tbox);
+      }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
       char es[64]; snprintf(es, sizeof es, "sp_PolyArray_get(_t%d, _t%d)", trecv, ti);
-      int splat = emit_iter_autosplat(c, fblock, TY_POLY_ARRAY, es, g_indent + 1);
-      if (!splat && bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal lv_%s = %s;\n", bp, es); }
+      int splat = 0;
+      if (gather) {
+        char vals[128];
+        if (thash) snprintf(vals, sizeof vals, "sp_yielded_args(_t%d, %s)", thash, es);
+        else snprintf(vals, sizeof vals, "sp_yielded_args(0, %s)", es);
+        emit_boxed_step_binds(c, fblock, vals, g_pre, g_indent + 1, 0);
+        splat = 1;
+      }
+      else splat = emit_iter_autosplat(c, fblock, TY_POLY_ARRAY, es, g_indent + 1);
+      if (!splat && bp && thash) {
+        emit_indent(g_pre, g_indent + 1);
+        buf_printf(g_pre, "sp_RbVal lv_%s = sp_yielded_first(_t%d, %s);\n", bp, thash, es);
+      }
+      else if (!splat && bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal lv_%s = %s;\n", bp, es); }
       Buf cb = block_cond_buf(c, fblock, fbb, fbn);
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "if (%s(%s)) sp_PolyArray_push(_t%d, %s);\n",
@@ -11589,11 +11614,23 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       if (ivcid >= 0 && ivcid < c->nclasses) {
         ClassInfo *ivc = &c->classes[ivcid];
         int tia = ++g_tmp;
-        buf_printf(b, "({ (void)("); emit_expr(c, recv, b);
-        buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tia, tia);
+        /* an ivar nothing has set yet is not listed (ivar_set_kind): its
+           slot is read off the receiver, held once */
+        int any1 = 0;
+        for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars && !any1; ji++)
+          any1 = ivar_set_kind(c, ivcid, ivc->ivars[ji]) == 1;
+        int tro = any1 ? ++g_tmp : -1;
+        if (any1) { buf_printf(b, "({ sp_%s *_t%d = ", ivc->c_name, tro); emit_expr(c, recv, b); buf_puts(b, ";"); }
+        else { buf_printf(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, ");"); }
+        buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tia, tia);
         /* Data/Struct members are NOT @-instance variables in CRuby (#2849) */
-        for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++)
-            buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(\"%s\"))); ", tia, ivc->ivars[ji]);
+        for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++) {
+          char ex[160], tb[256];
+          snprintf(ex, sizeof ex, "_t%d->iv_%s", tro, iv_c(ivc->ivars[ji] + 1));
+          const char *set = any1 ? ivar_set_test(c, ivcid, ivc->ivars[ji], ex, tb, sizeof tb) : NULL;
+          if (set) buf_printf(b, "if %s ", set);
+          buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(\"%s\"))); ", tia, ivc->ivars[ji]);
+        }
         buf_printf(b, "_t%d; })", tia);
         return 1;
       }
@@ -14112,8 +14149,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      mutator can't take effect; emitting it as a no-op would silently diverge
      (subsequent lookups behave as a value-keyed hash). Reject loudly instead.
      The `compare_by_identity?` predicate is left to report false, which is
-     correct for any hash this mutator never (successfully) ran on. */
-  if (sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
+     correct for any hash this mutator never (successfully) ran on. Only a
+     boxed receiver can be a Hash here (a typed one is refused in
+     emit_hash_call), as every other arm of this function assumes: refused on
+     the name alone, a user class's own compare_by_identity was rejected. */
+  if (recv >= 0 && rt == TY_POLY &&
+      sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
   /* #slice on a boxed receiver is two different methods: Hash#slice(*keys)
      answers a sub-Hash, while String#slice / Array#slice is exactly #[]. Only
@@ -14553,7 +14594,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         if (!c->classes[k].instantiated) continue;
         int iv = comp_ivar_index(&c->classes[k], sym);
         if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) continue;
-        buf_printf(b, " case %d: _ivd%d = TRUE; break;", k, tv);
+        char ex[200], tb[300];
+        snprintf(ex, sizeof ex, "((sp_%s *)_t%d.v.p)->iv_%s", c->classes[k].c_name, tv, iv_c(sym + 1));
+        const char *set = ivar_set_test(c, k, sym, ex, tb, sizeof tb);
+        buf_printf(b, " case %d: _ivd%d = %s; break;", k, tv, set ? set : "TRUE");
       }
       buf_printf(b, " case SP_BUILTIN_OBJECT: _ivd%d = sp_Object_ivar_defined((sp_Object *)_t%d.v.p, "
                     "sp_sym_intern(\"%s\")); break; } _ivd%d; })", tv, tv, sym, tv);
@@ -14572,8 +14616,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       if (!ivc->instantiated) continue;
       buf_printf(b, " case %d: _ivl%d = sp_PolyArray_new();", k, tv);
       /* Data/Struct members are NOT @-instance variables in CRuby (#2849) */
-      for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++)
+      for (int ji = ivc->is_struct ? ivc->nmembers : 0; ji < ivc->nivars; ji++) {
+        char ex[200], tb[300];
+        snprintf(ex, sizeof ex, "((sp_%s *)_t%d.v.p)->iv_%s", ivc->c_name, tv, iv_c(ivc->ivars[ji] + 1));
+        const char *set = ivar_set_test(c, k, ivc->ivars[ji], ex, tb, sizeof tb);
+        if (set) buf_printf(b, " if %s", set);
         buf_printf(b, " sp_PolyArray_push(_ivl%d, sp_box_sym(sp_sym_intern(\"%s\")));", tv, ivc->ivars[ji]);
+      }
       buf_puts(b, " break;");
     }
     buf_printf(b, " case SP_BUILTIN_OBJECT: _ivl%d = sp_Object_ivars((sp_Object *)_t%d.v.p); break; }"

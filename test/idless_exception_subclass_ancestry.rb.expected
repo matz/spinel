@@ -1,0 +1,71 @@
+true
+true
+false
+[MyErr, LoadError, ScriptError, Exception, Object, BasicObject]
+[Deep, MyErr, LoadError, ScriptError]
+true
+LoadError
+ScriptError
+MyErr
+LoadError
+true
+true
+true
+false
+true
+true
+true
+true
+true
+nil
+true
+true
+-1
+1
+nil
+nil
+true
+true
+true
+false
+[:script, MyErr, "m"]
+:load
+NoMemoryError
+Exception
+true
+nil
+true
+true
+true
+SystemCallError
+true
+true
+Errno::ENOENT
+[E3, Errno::ENOENT, SystemCallError, StandardError]
+true
+true
+E3
+2
+IO::EAGAINWaitReadable
+true
+true
+true
+true
+true
+Math::DomainError
+StandardError
+Math::DomainError
+[DE2, DE, Math::DomainError, StandardError]
+true
+true
+true
+[DE2, "dom"]
+Encoding::CompatibilityError
+EncodingError
+true
+true
+CE
+Errno::EILSEQ
+true
+Errno::EPERM
+X64

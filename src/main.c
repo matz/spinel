@@ -38,6 +38,12 @@ extern int g_no_root_elision;
 extern int g_no_root_frame;
 extern int g_opt_level;
 extern int g_require_gate_cli;
+/* RUBY_DESCRIPTION for the compiled program, in the `ruby -v` shape:
+   "spinel <RUBY_VERSION> (<release> revision <rev>)" (codegen appends the
+   platform). The version word is the one RUBY_VERSION and
+   RUBY_ENGINE_VERSION report, so a script that reads the version out of the
+   description gets the same answer; release and revision tell builds apart. */
+extern const char *g_ruby_description;
 extern int g_inline_hot;
 extern int g_no_write_barrier;
 extern const char *g_ext_init_name;
@@ -335,7 +341,7 @@ static void usage(void) {
     "Options:\n"
     "  -o FILE     Output file\n"
     "  --link ARG  Extra link input (object/archive/-lLIB); repeatable\n"
-    "  --version   Print the compiler build revision\n"
+    "  -v, --version  Print the compiler version and build revision\n"
     "  -c          C source only (don't compile)\n"
     "  --force     with -c, overwrite an -o path spinel did not write\n"
     "  -I DIR      Add a feature search root for `require \"name\"` (like ruby -I)\n"
@@ -427,6 +433,8 @@ int main(int argc, char **argv) {
   char **run_args = NULL;
   int n_run_args = 0;
 
+  g_ruby_description = "spinel " SP_RUBY_VERSION " (" SPINEL_RELEASE " revision " SPINEL_BUILD_REV ")";
+
   for (int i = 1; i < argc; ) {
     const char *a = argv[i];
     if (!strncmp(a, "--source=", 9))      { source = a + 9; i++; }
@@ -509,7 +517,10 @@ int main(int argc, char **argv) {
        missing the other half. Reports whatever `--cc=` selected, when that
        flag came first; a compiler that cannot be run leaves the line as it
        was rather than saying anything about it. */
-    else if (sp_streq(a, "--version")) {
+    /* `-v` is the `ruby -v` spelling, so a tool that asks every Ruby it
+       drives for its version the same way (ruby/ruby-bench does) gets
+       an answer instead of the usage text. */
+    else if (sp_streq(a, "--version") || sp_streq(a, "-v")) {
       char ccv[512] = {0};
       char ccq[1024];
       /* Ask the preprocessor what the compiler is rather than `--version`,

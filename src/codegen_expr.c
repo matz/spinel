@@ -300,9 +300,19 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         if (ret_poly) buf_puts(&conv, "sp_poly_to_s(");
         /* a value-type object (single-ivar) has a by-VALUE to_s signature;
            casting its receiver to a pointer is a C type error (#2357) */
-        if (comp_ty_value_obj(c, t)) buf_printf(&conv, "sp_%s_to_s(", cn);
-        else buf_printf(&conv, "sp_%s_to_s((sp_%s *)", cn, cn);
-        EMIT_IV(); buf_puts(&conv, ")");
+        if (comp_ty_value_obj(c, t) || (!vexpr[0] && !iv_pre && expr_is_held_ref(c, expr))) {
+          if (comp_ty_value_obj(c, t)) buf_printf(&conv, "sp_%s_to_s(", cn);
+          else buf_printf(&conv, "sp_%s_to_s((sp_%s *)", cn, cn);
+          EMIT_IV(); buf_puts(&conv, ")");
+        }
+        else {
+          /* rooted: the part may be a fresh object (`"#{C.new}"`) held
+             nowhere else while its #to_s allocates */
+          int to = ++g_tmp;
+          buf_printf(&conv, "({ sp_%s *_t%d = (sp_%s *)(", cn, to, cn);
+          EMIT_IV();
+          buf_printf(&conv, "); SP_GC_ROOT(_t%d); sp_%s_to_s(_t%d); })", to, cn, to);
+        }
         if (ret_poly) buf_puts(&conv, ")");
       }
       else if (ty_is_ptr_array(t) || ty_is_obj_array(t)) {
@@ -2721,7 +2731,18 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       if (sp_streq(nm, "PI")) { buf_puts(b, "M_PI"); return; }
       if (sp_streq(nm, "E"))  { buf_puts(b, "M_E"); return; }
     }
-    if (nm && sp_streq(nm, "RUBY_DESCRIPTION")) { emit_engine_const_str("sp_str_ruby_description", "\"spinel\"", b); return; }
+    if (nm && sp_streq(nm, "RUBY_DESCRIPTION")) {
+      /* The `ruby -v` shape -- engine, version, release and revision,
+         platform -- so a harness that records RUBY_DESCRIPTION can tell two spinel builds
+         apart. The platform comes from the runtime header at C compile
+         time, the same way RUBY_PLATFORM does, so a cross-build names its
+         target rather than the host. */
+      char lit[256];
+      snprintf(lit, sizeof lit, "\"%s [\" SP_RUBY_ARCH \"-\" SP_RUBY_OS \"]\"",
+               g_ruby_description ? g_ruby_description : "spinel " SP_RUBY_VERSION);
+      emit_engine_const_str("sp_str_ruby_description", lit, b);
+      return;
+    }
     if (nm && sp_streq(nm, "RUBY_VERSION"))     { emit_engine_const_str("sp_str_ruby_version", "\"" SP_RUBY_VERSION "\"", b); return; }
     if (nm && sp_streq(nm, "RUBY_ENGINE"))      { emit_engine_const_str("sp_str_ruby_engine", "\"spinel\"", b); return; }
     if (nm && sp_streq(nm, "RUBY_ENGINE_VERSION")) { emit_engine_const_str("sp_str_ruby_engine_version", "\"" SP_RUBY_VERSION "\"", b); return; }
@@ -3080,6 +3101,17 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
           if (kt && sp_streq(kt, "InstanceVariableWriteNode") &&
               inm && nt_str(nt, kk, "name") && sp_streq(nt_str(nt, kk, "name"), inm))
             res = "instance-variable";
+        }
+        /* in an instance method, a slot nothing has set yet is not defined
+           (ivar_set_kind): asked of self at run time */
+        Scope *ds = comp_scope_of(c, v);
+        int dcid = ds && !ds->is_cmethod && ds->class_id >= 0 && g_ie_class_id < 0 ? ds->class_id : -1;
+        if (res && dcid >= 0 && comp_ivar_index(&c->classes[dcid], inm) >= 0 &&
+            ivar_set_kind(c, dcid, inm) == 1) {
+          char ex[200], tb[300];
+          snprintf(ex, sizeof ex, "%s%siv_%s", g_self, g_self_deref, iv_c(inm + 1));
+          buf_printf(b, "(%s ? SPL(\"instance-variable\") : NULL)", ivar_set_test(c, dcid, inm, ex, tb, sizeof tb));
+          return;
         }
       }
       else if (sp_streq(vt, "ClassVariableReadNode")) {
@@ -4256,8 +4288,16 @@ else {
     int sc = comp_scope_of(c, id)->class_id;
     char ref[300];
     Scope *cs = comp_scope_of(c, id);
+    /* the slot is read back as the read of the ivar finds it: a top-level
+       ivar is the Toplevel pseudo-class's file-scope global, where `self`
+       names nothing (`x = (@i += 1)` at the top level, or a min/max block) */
+    int tl = cs && cs->class_id < 0 && g_ie_class_id < 0 ? comp_class_index(c, "Toplevel") : -1;
     if (cs && cs->is_cmethod && cs->class_id >= 0)
       snprintf(ref, sizeof ref, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));
+    else if (tl >= 0) {
+      snprintf(ref, sizeof ref, "civ_Toplevel_%s", iv_c(nm + 1));
+      sc = tl;
+    }
     else
       snprintf(ref, sizeof ref, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
     if (g_pre) {

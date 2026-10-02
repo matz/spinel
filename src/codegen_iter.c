@@ -1805,7 +1805,14 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
         }
       }
       if (!as_expr) emit_indent(b, indent);
-      buf_printf(b, "lv_%s = _t%d;%s", kwrr, tkw, as_expr ? " " : "\n");
+      /* a boxed slot (the walks of a boxed receiver type the parameters
+         they bind poly, emit_boxed_step_binds) takes the Hash boxed */
+      LocalVar *kwl = bsc ? scope_local(bsc, kwr) : NULL;
+      char kwt[32]; snprintf(kwt, sizeof kwt, "_t%d", tkw);
+      buf_printf(b, "lv_%s = ", kwrr);
+      if (kwl && kwl->type == TY_POLY) emit_boxed_text(c, TY_POLY_POLY_HASH, kwt, b);
+      else buf_puts(b, kwt);
+      buf_puts(b, as_expr ? "; " : ";\n");
     }
   }}
 
@@ -1879,6 +1886,237 @@ static int emit_block_post_alias(Compiler *c, int blk, const char *bp, const cha
   al->lv[al->n++] = bl;
   bl->inline_alias++;
   bl->is_cell = 1;
+  return 1;
+}
+
+/* The binds that close every form of emit_block_binds: the keywords, from
+   the yield's keyword hash `ykw` (-1: none), and then the rest parameter
+   `rest_lv`, from the array built into temp `rest_tmp` (-1: none). */
+static void emit_block_binds_close(Compiler *c, int blk, int ykw, Scope *bsc, int rest_tmp, const char *rest_lv,
+                                   Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al) {
+  /* The keywords come last in the call, so they run after every positional
+     (the dropped ones above among them): a missing keyword raised before
+     `yield(lit(1))` into `|k:|` had evaluated its argument. */
+  if (block_no_keywords(c, blk) && ykw >= 0) {
+    /* `|**nil|` refuses keywords, an empty `**h` among them excepted */
+    Buf hb; memset(&hb, 0, sizeof hb);
+    Buf *sv_pre = g_pre; g_pre = b;
+    emit_boxed(c, ykw, &hb);
+    g_pre = sv_pre;
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "if (sp_poly_length(%s) > 0) sp_raise_cls(\"ArgumentError\", \"no keywords accepted\");%s",
+               hb.p ? hb.p : "sp_box_nil()", as_expr ? " " : "\n");
+    free(hb.p);
+  }
+  else emit_block_kw_binds(c, blk, ykw, bsc, b, indent, as_expr, bi, al);
+  if (rest_tmp >= 0) {
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "lv_%s = _t%d;%s", rest_lv, rest_tmp, as_expr ? " " : "\n");
+  }
+}
+
+/* Bind block `blk`'s parameters from values whose count only the run time
+   knows, gathered into one array in temp `_t<t>` of type `at` (its first
+   `sure_n` elements surely there), by the proc distribution sp_proc_fill
+   computes: each leading required takes its element or nil, the optionals
+   what the requireds leave, a rest the middle, the posts the end. `ykw` is
+   the yield's keyword hash for the block's keywords (-1: none), and `site`
+   the node a refusal names. The array
+   is bound as it stands: an auto-splat of a lone Array is the caller's,
+   which knows whether the values allow one. emit_block_binds binds a yield
+   with a splat through here, and the walks of a boxed receiver bind the
+   values of each step (emit_boxed_step_binds). */
+static void emit_block_binds_gathered(Compiler *c, int blk, int t, TyKind at, int sure_n, int ykw, int site,
+                                      Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al) {
+  Scope *bsc = comp_scope_of(c, blk);
+  int P = 0; while (block_param_name(c, blk, P)) P++;
+  int O = 0; while (block_opt_name(c, blk, O)) O++;
+  int Q = 0; while (block_post_name(c, blk, Q)) Q++;
+  int R = block_rest_marker(c, blk);
+  TyKind et = ty_array_elem(at);
+  for (int k = 0; ; k++) {
+    const char *bp = block_param_name(c, blk, k);
+    if (!bp) break;
+    char bprbuf[160];
+    bi_block_side(bi);
+    snprintf(bprbuf, sizeof bprbuf, "%s", rename_local(bp));
+    bi_method_side(bi);
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "lv_%s = ", bprbuf);
+    /* element k of the gathered array, guarded: when the array is shorter
+       than the param list the surplus params bind nil (CRuby auto-splat),
+       using the same per-slot default the non-splat under-fill path does. */
+    LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
+    TyKind bt = bl ? bl->type : TY_UNKNOWN;
+    /* a parameter that takes the handle (block_splat_pull_args), bound
+       from a gathered Array of plain Strings: no value there was pulled
+       into the handle (`yield(*[a[0]])`), so the block would append to
+       a copy */
+    if (bt == TY_STRBUF && et == TY_STRING)
+      unsupported_feature(c, site,
+                          "a String is passed through a splat into a yield to a block parameter the block "
+                          "appends to, from a value that is not a String variable: the block would append "
+                          "to a copy. Return the String from the block and assign it, or append to it in the caller");
+    Buf eb; memset(&eb, 0, sizeof eb);
+    int sure = k < sure_n;
+    if (sure) emit_array_elem_sure(at, t, k, &eb);
+    else {
+      emit_array_elem_at(at, t, k, &eb);
+      buf_printf(b, "(%d < (_t%d ? _t%d->len : 0) ? ", k, t, t);
+    }
+    if (bt == TY_POLY && et != TY_POLY && et != TY_UNKNOWN)
+      emit_boxed_text(c, et, eb.p ? eb.p : "0", b);
+    /* a nil element (`yield(*[1, nil])`) into a nullable Integer or
+       Float is its sentinel, where `.v.i` / `.v.f` read the 0 under the
+       nil tag. Such a parameter holds no other kind: an Integer and a
+       Float element box it (ty_unify). */
+    else if (et == TY_POLY && bt != TY_POLY && bt != TY_UNKNOWN && bl->nullable_int)
+      emit_unbox_nilable_text(c, bt, eb.p ? eb.p : "", b);
+    else if (et == TY_POLY && bt != TY_POLY && bt != TY_UNKNOWN)
+      emit_unbox_text(c, bt, eb.p ? eb.p : "", b);
+    else
+      buf_puts(b, eb.p ? eb.p : "");
+    if (!sure) buf_printf(b, " : %s)", bt == TY_RANGE ? "(sp_Range){0}" : default_value(bt));
+    free(eb.p);
+    buf_puts(b, as_expr ? "; " : ";\n");
+  }
+  /* Distribution counts: the array's length is the run time's, so the
+     optional-take count and the post start index are runtime temps
+     (sp_proc_fill, which a proc's prologue binds by too). */
+  const char *brest = block_rest_name(c, blk);
+  int t_ot = -1, t_ps = -1;
+  if (O > 0 || Q > 0 || brest) {
+    t_ot = ++g_tmp; t_ps = ++g_tmp;
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "sp_int _t%d, _t%d; sp_proc_fill(%d, %d, %d, %d, _t%d ? _t%d->len : 0, &_t%d, &_t%d);%s",
+               t_ot, t_ps, P, O, Q, R, t, t, t_ot, t_ps, as_expr ? " " : "\n");
+  }
+  /* Optional block params (`|a, b=10|`): bind from the args left over after
+     the requireds (pre AND post) are satisfied, else the declared default. */
+  for (int oi = 0; ; oi++) {
+    const char *op = block_opt_name(c, blk, oi);
+    if (!op) break;
+    char oprbuf[160];
+    bi_block_side(bi);
+    snprintf(oprbuf, sizeof oprbuf, "%s", rename_local(op));
+    bi_method_side(bi);
+    LocalVar *ol = bsc ? scope_local(bsc, op) : NULL;
+    TyKind ot = ol ? ol->type : TY_UNKNOWN;
+    int dv = block_opt_default(c, blk, oi);
+    const char *odflt = ot == TY_RANGE ? "(sp_Range){0}" : default_value(ot);
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "lv_%s = ", oprbuf);
+    Buf eb; memset(&eb, 0, sizeof eb);
+    emit_array_elem_at(at, t, P + oi, &eb);
+    buf_printf(b, "(%d < _t%d ? ", oi, t_ot);
+    if (ot == TY_POLY && et != TY_POLY && et != TY_UNKNOWN) emit_boxed_text(c, et, eb.p ? eb.p : "0", b);
+    else if (et == TY_POLY && ot != TY_POLY && ot != TY_UNKNOWN && ol->nullable_int)
+      emit_unbox_nilable_text(c, ot, eb.p ? eb.p : "", b);
+    else if (et == TY_POLY && ot != TY_POLY && ot != TY_UNKNOWN) emit_unbox_text(c, ot, eb.p ? eb.p : "", b);
+    else buf_puts(b, eb.p ? eb.p : "");
+    buf_puts(b, " : ");
+    if (dv >= 0) { bi_block_side(bi); emit_block_arg_coerced(c, dv, ot, b); bi_method_side(bi); }
+    else buf_puts(b, odflt);
+    buf_puts(b, ")");
+    free(eb.p);
+    buf_puts(b, as_expr ? "; " : ";\n");
+  }
+  /* A trailing rest parameter (`|*a|`) collects the leftover middle, past
+     the pre-requireds and the taken optionals, up to the first post's
+     value, into a fresh array, assigned last (see emit_block_binds). */
+  int rest_tmp = -1; char rest_lv[160] = "";
+  if (brest) {
+    bi_block_side(bi);
+    snprintf(rest_lv, sizeof rest_lv, "%s", rename_local(brest));
+    bi_method_side(bi);
+    rest_tmp = ++g_tmp;
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new();%s", rest_tmp, as_expr ? " " : "\n");
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "SP_GC_ROOT(_t%d);%s", rest_tmp, as_expr ? " " : "\n");
+    int jj = ++g_tmp;
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "for (sp_int _t%d = %d + _t%d; _t%d < _t%d; _t%d++) sp_PolyArray_push(_t%d, ",
+               jj, P, t_ot, jj, t_ps, jj, rest_tmp);
+    char acc[96];
+    if (at == TY_POLY_ARRAY) snprintf(acc, sizeof acc, "sp_PolyArray_get(_t%d, _t%d)", t, jj);
+    else snprintf(acc, sizeof acc, "sp_%sArray_get(_t%d, _t%d)", array_kind(at) ? array_kind(at) : "Int", t, jj);
+    if (at == TY_POLY_ARRAY) buf_puts(b, acc);
+    else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, et, acc, &bx); buf_puts(b, bx.p ? bx.p : acc); free(bx.p); }
+    buf_puts(b, as_expr ? "); " : ");\n");
+  }
+  /* Post-required params (`|a, *b, c, d|`): bind from the post start index
+     on, left-to-right; missing positions bind the slot nil. */
+  for (int qi = 0; qi < Q; qi++) {
+    const char *qp = block_post_name(c, blk, qi);
+    if (!qp) continue;   /* anonymous post: consumes a slot, binds nothing */
+    char qprbuf[160];
+    bi_block_side(bi);
+    snprintf(qprbuf, sizeof qprbuf, "%s", rename_local(qp));
+    bi_method_side(bi);
+    LocalVar *ql = bsc ? scope_local(bsc, qp) : NULL;
+    TyKind qt = ql ? ql->type : TY_UNKNOWN;
+    const char *qdflt = qt == TY_RANGE ? "(sp_Range){0}" : default_value(qt);
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "lv_%s = ", qprbuf);
+    int te = ++g_tmp;
+    buf_printf(b, "({ sp_int _t%d = _t%d + %d; (_t%d < (_t%d ? _t%d->len : 0) ? ",
+               te, t_ps, qi, te, t, t);
+    char acc[96];
+    if (at == TY_POLY_ARRAY) snprintf(acc, sizeof acc, "sp_PolyArray_get(_t%d, _t%d)", t, te);
+    else snprintf(acc, sizeof acc, "sp_%sArray_get(_t%d, _t%d)", array_kind(at) ? array_kind(at) : "Int", t, te);
+    if (qt == TY_POLY && et != TY_POLY && et != TY_UNKNOWN) {
+      Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, et, acc, &bx);
+      buf_puts(b, bx.p ? bx.p : acc); free(bx.p);
+    }
+    else if (et == TY_POLY && qt != TY_POLY && qt != TY_UNKNOWN)
+      emit_unbox_text(c, qt, acc, b);
+    else buf_puts(b, acc);
+    buf_printf(b, " : %s); })", qdflt);
+    buf_puts(b, as_expr ? "; " : ";\n");
+  }
+  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv, b, indent, as_expr, bi, al);
+}
+
+/* Does block `blk` take more than plain leading requireds: an optional, a
+   named rest, a post, a keyword or a `**`? A walk over a boxed receiver binds
+   such a block through emit_boxed_step_binds, and a plain one (a trailing
+   comma's implicit rest among them) by its own reads. */
+int block_binds_gathered(Compiler *c, int blk) {
+  if (block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_keyword_name(c, blk, 0))
+    return 1;
+  const char *rest = block_rest_name(c, blk);
+  if (rest && *rest) return 1;
+  int bp = nt_ref(c->nt, blk, "parameters");
+  int pn = bp >= 0 ? nt_ref(c->nt, bp, "parameters") : -1;
+  return pn >= 0 && nt_ref(c->nt, pn, "keyword_rest") >= 0;
+}
+
+/* Bind block `blk`'s parameters from one step of a walk over a boxed
+   receiver. How many values a step yields is the run time's: one for an
+   Array element or a Hash entry's pair, two for the pair Hash#select
+   yields, as many as the step yielded for an Enumerator. `vals` is a C
+   expression answering them as a fresh sp_PolyArray *; they bind by the
+   proc distribution, a lone Array auto-splatted where the block's shape
+   asks for it, as the yield of each value would bind them. Answers 0,
+   binding nothing, for a plain block (block_binds_gathered), which the
+   walks bind by their own reads. */
+int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int indent, int as_expr) {
+  if (!block_binds_gathered(c, blk)) return 0;
+  int P = 0; while (block_param_name(c, blk, P)) P++;
+  int O = 0; while (block_opt_name(c, blk, O)) O++;
+  int Q = 0; while (block_post_name(c, blk, Q)) Q++;
+  int t = ++g_tmp;
+  if (!as_expr) emit_indent(b, indent);
+  buf_printf(b, "sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);%s", t, vals, t, as_expr ? " " : "\n");
+  if (block_auto_splats(P, O, Q, block_rest_marker(c, blk))) {
+    if (!as_expr) emit_indent(b, indent);
+    buf_printf(b, "if (_t%d->len == 1) { sp_RbVal _e = sp_PolyArray_get(_t%d, 0); "
+                  "if (_e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_e.cls_id)) "
+                  "_t%d = sp_poly_to_poly_array(_e); }%s",
+               t, t, t, as_expr ? " " : "\n");
+  }
+  emit_block_binds_gathered(c, blk, t, TY_POLY_ARRAY, 0, -1, blk, b, indent, as_expr, NULL, NULL);
   return 1;
 }
 
@@ -1962,6 +2200,14 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
                      comp_ntype(c, yargs[0]) == TY_POLY && (O > 0 || Q > 0 || block_rest_name(c, blk));
   int poly_splat_tmp = -1;   /* a boxed yielded value splatted at run time */
   TyKind self_ty = TY_UNKNOWN;
+  /* One step of a boxed or Enumerator receiver, which a builtins/ method
+     yields packed as one value where CRuby hands the block every value the
+     step yielded (builtin_yield_self_pair): an optional, a post or a rest
+     binds the values themselves, gathered (sp_yielded_args). Spread as
+     the one value, `count { |*r| }` over each_with_index bound [[3, 0]]. */
+  TyKind step_ty = (ykw < 0 && yc == 1 && yargs && nt_kind(nt, yargs[0]) != NK_SplatNode &&
+                    (O > 0 || Q > 0 || block_rest_name(c, blk)))
+                   ? builtin_yield_self_pair(c, yargs[0]) : TY_UNKNOWN;
   /* A trailing hash made only of `**h` splats, into a block taking no
      keywords, is a positional only when it is non-empty: `yield(1, **{})`
      yields just 1. The count is known at run time, so the arguments are
@@ -1972,6 +2218,26 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     /* instance_exec (bi NULL) drops an empty `**h` before it yields, so
        its auto-splat is the usual one */
     if (yc == 2 && (!bi ? autosplat : block_lead_only(c, blk))) {
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "if (_t%d->len == 1) { sp_RbVal _e = sp_PolyArray_get(_t%d, 0); "
+                        "if (_e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_e.cls_id)) "
+                        "_t%d = sp_poly_to_poly_array(_e); }\n",
+                 splat_tmp, splat_tmp, splat_tmp);
+    }
+  }
+  else if (step_ty != TY_UNKNOWN) {
+    splat_at = TY_POLY_ARRAY;
+    splat_tmp = ++g_tmp;
+    Buf pb2; memset(&pb2, 0, sizeof pb2); emit_boxed(c, yargs[0], &pb2);
+    emit_indent(g_pre, g_indent);
+    if (step_ty == TY_POLY)
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_yielded_args(sp_poly_yields_pair(lv_%s), %s); SP_GC_ROOT(_t%d);\n",
+                 splat_tmp, rename_local("__self"), pb2.p ? pb2.p : "sp_box_nil()", splat_tmp);
+    else
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_yielded_args(lv_%s ? lv_%s->yields_pair : 0, %s); SP_GC_ROOT(_t%d);\n",
+                 splat_tmp, rename_local("__self"), rename_local("__self"), pb2.p ? pb2.p : "sp_box_nil()", splat_tmp);
+    free(pb2.p);
+    if (autosplat) {
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "if (_t%d->len == 1) { sp_RbVal _e = sp_PolyArray_get(_t%d, 0); "
                         "if (_e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_e.cls_id)) "
@@ -2085,6 +2351,11 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       }
     }
   }
+  if (splat_tmp >= 0) {
+    emit_block_binds_gathered(c, blk, splat_tmp, splat_at, splat_sure, ykw, yargs && yc > 0 ? yargs[0] : blk,
+                              b, indent, as_expr, bi, al);
+    return;
+  }
   for (int k = 0; ; k++) {
     const char *bp = block_param_name(c, blk, k);
     if (!bp) break;
@@ -2104,10 +2375,10 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
        as a call lends it, unless the block or what it calls can assign the
        variable meanwhile (refuse_lent_global_rebound). */
     char gref[256];
-    NodeKind yk = poly_splat_tmp < 0 && splat_tmp < 0 && k < yc ? nt_kind(nt, yargs[k]) : NK__COUNT;
+    NodeKind yk = poly_splat_tmp < 0 && k < yc ? nt_kind(nt, yargs[k]) : NK__COUNT;
     int gslot = (yk == NK_GlobalVariableReadNode && gvar_global_slot(c, yargs[k], gref, sizeof gref)) ||
                 (yk == NK_ClassVariableReadNode && cvar_global_slot(c, yargs[k], gref, sizeof gref));
-    if (poly_splat_tmp < 0 && splat_tmp < 0 && k < yc &&
+    if (poly_splat_tmp < 0 && k < yc &&
         ((yk == NK_LocalVariableReadNode && !local_is_handle(c, yargs[k])) || gslot) &&
         comp_ntype(c, yargs[k]) == TY_STRING && block_param_wants_alias(c, blk, k, -1)) {
       LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
@@ -2139,44 +2410,6 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       if (bt == TY_POLY || bt == TY_UNKNOWN) buf_puts(b, psrc);
       else emit_unbox_text(c, bt, psrc, b);
     }
-    else if (splat_tmp >= 0) {
-      /* element k of the splatted array, guarded: when the array is shorter
-         than the param list the surplus params bind nil (CRuby auto-splat),
-         using the same per-slot default the non-splat under-fill path does. */
-      LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
-      TyKind bt = bl ? bl->type : TY_UNKNOWN;
-      TyKind et = ty_array_elem(splat_at);
-      /* a parameter that takes the handle (block_splat_pull_args), bound
-         from a gathered Array of plain Strings: no value there was pulled
-         into the handle (`yield(*[a[0]])`), so the block would append to
-         a copy */
-      if (bt == TY_STRBUF && et == TY_STRING)
-        unsupported_feature(c, yargs && yc > 0 ? yargs[0] : blk,
-                            "a String is passed through a splat into a yield to a block parameter the block "
-                            "appends to, from a value that is not a String variable: the block would append "
-                            "to a copy. Return the String from the block and assign it, or append to it in the caller");
-      Buf eb; memset(&eb, 0, sizeof eb);
-      int sure = k < splat_sure;
-      if (sure) emit_array_elem_sure(splat_at, splat_tmp, k, &eb);
-      else {
-        emit_array_elem_at(splat_at, splat_tmp, k, &eb);
-        buf_printf(b, "(%d < (_t%d ? _t%d->len : 0) ? ", k, splat_tmp, splat_tmp);
-      }
-      if (bt == TY_POLY && et != TY_POLY && et != TY_UNKNOWN)
-        emit_boxed_text(c, et, eb.p ? eb.p : "0", b);
-      /* a nil element (`yield(*[1, nil])`) into a nullable Integer or
-         Float is its sentinel, where `.v.i` / `.v.f` read the 0 under the
-         nil tag. Such a parameter holds no other kind: an Integer and a
-         Float element box it (ty_unify). */
-      else if (et == TY_POLY && bt != TY_POLY && bt != TY_UNKNOWN && bl->nullable_int)
-        emit_unbox_nilable_text(c, bt, eb.p ? eb.p : "", b);
-      else if (et == TY_POLY && bt != TY_POLY && bt != TY_UNKNOWN)
-        emit_unbox_text(c, bt, eb.p ? eb.p : "", b);
-      else
-        buf_puts(b, eb.p ? eb.p : "");
-      if (!sure) buf_printf(b, " : %s)", bt == TY_RANGE ? "(sp_Range){0}" : default_value(bt));
-      free(eb.p);
-    }
     else if (k < yc) {
       /* boxed into a poly slot, unboxed into a typed one, and an empty `[]`
          or `{}` (untyped) given its poly form, as every arm binds a value;
@@ -2199,20 +2432,11 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     }
     buf_puts(b, as_expr ? "; " : ";\n");
   }
-  /* Distribution counts. Direct (non-splat) yields resolve statically from
-     yc; a splatted array's length is runtime, so the optional-take count and
-     the post start index become runtime temps (sp_proc_fill, which a proc's
-     prologue binds by too). */
+  /* Distribution counts: the yields are direct, so they resolve statically
+     from yc (a splat's gather binds by emit_block_binds_gathered). */
   int ot_static = 0, ps_static = 0;
   block_fill(P, O, Q, R, yc, &ot_static, &ps_static);
   const char *brest = block_rest_name(c, blk);
-  int t_ot = -1, t_ps = -1;
-  if (splat_tmp >= 0 && (O > 0 || Q > 0 || brest)) {
-    t_ot = ++g_tmp; t_ps = ++g_tmp;
-    if (!as_expr) emit_indent(b, indent);
-    buf_printf(b, "sp_int _t%d, _t%d; sp_proc_fill(%d, %d, %d, %d, _t%d ? _t%d->len : 0, &_t%d, &_t%d);%s",
-               t_ot, t_ps, P, O, Q, R, splat_tmp, splat_tmp, t_ot, t_ps, as_expr ? " " : "\n");
-  }
   /* Optional block params (`|a, b=10|`): bind from the args left over after
      the requireds (pre AND post) are satisfied, else the declared default. */
   for (int oi = 0; ; oi++) {
@@ -2233,7 +2457,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
        aliased above, or the append lands in the optional's copy (#6179).
        A variable that is the shared handle has no slot to lend, and the
        optional does not take the handle: refused, as a keyword is. */
-    int opt_alias = al && ol && poly_splat_tmp < 0 && splat_tmp < 0 && oi < ot_static && yi < yc &&
+    int opt_alias = al && ol && poly_splat_tmp < 0 && oi < ot_static && yi < yc &&
                     nt_kind(nt, yargs[yi]) == NK_LocalVariableReadNode &&
                     block_local_wants_alias(c, blk, op);
     if (opt_alias && (local_is_handle(c, yargs[yi]) || comp_ntype(c, yargs[yi]) == TY_STRBUF)) {
@@ -2262,23 +2486,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     }
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "lv_%s = ", opr);
-    if (splat_tmp >= 0) {
-      TyKind et = ty_array_elem(splat_at);
-      Buf eb; memset(&eb, 0, sizeof eb);
-      emit_array_elem_at(splat_at, splat_tmp, yi, &eb);
-      buf_printf(b, "(%d < _t%d ? ", oi, t_ot);
-      if (ot == TY_POLY && et != TY_POLY && et != TY_UNKNOWN) emit_boxed_text(c, et, eb.p ? eb.p : "0", b);
-      else if (et == TY_POLY && ot != TY_POLY && ot != TY_UNKNOWN && ol->nullable_int)
-        emit_unbox_nilable_text(c, ot, eb.p ? eb.p : "", b);
-      else if (et == TY_POLY && ot != TY_POLY && ot != TY_UNKNOWN) emit_unbox_text(c, ot, eb.p ? eb.p : "", b);
-      else buf_puts(b, eb.p ? eb.p : "");
-      buf_puts(b, " : ");
-      if (dv >= 0) { bi_block_side(bi); emit_block_arg_coerced(c, dv, ot, b); bi_method_side(bi); }
-      else buf_puts(b, odflt);
-      buf_puts(b, ")");
-      free(eb.p);
-    }
-    else if (oi < ot_static) {
+    if (oi < ot_static) {
       /* an optional that is the shared handle takes a handle yielded to it
          itself (yield_splice_handles), as a required one does */
       if (!(ol && ol->type == TY_STRBUF && ol->str_shared && emit_handle_var_ref(c, yargs[yi], b)))
@@ -2311,22 +2519,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new();%s", trest, as_expr ? " " : "\n");
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "SP_GC_ROOT(_t%d);%s", trest, as_expr ? " " : "\n");
-    if (splat_tmp >= 0) {
-      /* collect the leftover middle: past the pre-requireds and the taken
-         optionals, up to the first post's value */
-      TyKind et = ty_array_elem(splat_at);
-      int jj = ++g_tmp;
-      if (!as_expr) emit_indent(b, indent);
-      buf_printf(b, "for (sp_int _t%d = %d + _t%d; _t%d < _t%d; _t%d++) sp_PolyArray_push(_t%d, ",
-                 jj, P, t_ot, jj, t_ps, jj, trest);
-      char acc[96];
-      if (splat_at == TY_POLY_ARRAY) snprintf(acc, sizeof acc, "sp_PolyArray_get(_t%d, _t%d)", splat_tmp, jj);
-      else snprintf(acc, sizeof acc, "sp_%sArray_get(_t%d, _t%d)", array_kind(splat_at) ? array_kind(splat_at) : "Int", splat_tmp, jj);
-      if (splat_at == TY_POLY_ARRAY) buf_puts(b, acc);
-      else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, et, acc, &bx); buf_puts(b, bx.p ? bx.p : acc); free(bx.p); }
-      buf_puts(b, as_expr ? "); " : ");\n");
-    }
-    else for (int j = P + ot_static; j < yc - Q; j++) {
+    for (int j = P + ot_static; j < yc - Q; j++) {
       if (!as_expr) emit_indent(b, indent);
       buf_printf(b, "sp_PolyArray_push(_t%d, ", trest);
       emit_boxed(c, yargs[j], b);
@@ -2350,36 +2543,17 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       TyKind qt = ql ? ql->type : TY_UNKNOWN;
       const char *qdflt = qt == TY_RANGE ? "(sp_Range){0}" : default_value(qt);
       /* a post the block appends to aliases the variable yielded to it */
-      if (poly_splat_tmp < 0 && splat_tmp < 0 && ps_static + qi < yc &&
+      if (poly_splat_tmp < 0 && ps_static + qi < yc &&
           emit_block_post_alias(c, blk, qp, qpr, ql, yargs[ps_static + qi], b, indent, as_expr, al))
         continue;
       if (!as_expr) emit_indent(b, indent);
       buf_printf(b, "lv_%s = ", qpr);
-      if (splat_tmp >= 0) {
-        TyKind et = ty_array_elem(splat_at);
-        int te = ++g_tmp;
-        buf_printf(b, "({ sp_int _t%d = _t%d + %d; (_t%d < (_t%d ? _t%d->len : 0) ? ",
-                   te, t_ps, qi, te, splat_tmp, splat_tmp);
-        char acc[96];
-        if (splat_at == TY_POLY_ARRAY) snprintf(acc, sizeof acc, "sp_PolyArray_get(_t%d, _t%d)", splat_tmp, te);
-        else snprintf(acc, sizeof acc, "sp_%sArray_get(_t%d, _t%d)", array_kind(splat_at) ? array_kind(splat_at) : "Int", splat_tmp, te);
-        if (qt == TY_POLY && et != TY_POLY && et != TY_UNKNOWN) {
-          Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, et, acc, &bx);
-          buf_puts(b, bx.p ? bx.p : acc); free(bx.p);
-        }
-        else if (et == TY_POLY && qt != TY_POLY && qt != TY_UNKNOWN)
-          emit_unbox_text(c, qt, acc, b);
-        else buf_puts(b, acc);
-        buf_printf(b, " : %s); })", qdflt);
-      }
-      else {
-        int idx = ps_static + qi;
-        /* a post that is the shared handle takes a handle yielded to it
-           itself (yield_splice_handles), as a required one does */
-        if (idx < yc && ql && ql->type == TY_STRBUF && ql->str_shared && emit_handle_var_ref(c, yargs[idx], b)) {}
-        else if (idx < yc) emit_block_arg_coerced(c, yargs[idx], qt, b);
-        else buf_puts(b, qdflt);
-      }
+      int idx = ps_static + qi;
+      /* a post that is the shared handle takes a handle yielded to it
+         itself (yield_splice_handles), as a required one does */
+      if (idx < yc && ql && ql->type == TY_STRBUF && ql->str_shared && emit_handle_var_ref(c, yargs[idx], b)) {}
+      else if (idx < yc) emit_block_arg_coerced(c, yargs[idx], qt, b);
+      else buf_puts(b, qdflt);
       buf_puts(b, as_expr ? "; " : ";\n");
     }
   }
@@ -2389,7 +2563,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
      the bound args; a rest param collects and thereby evaluates the middle, but
      with no rest those dropped middle args would be lost. Evaluate them here for
      effect (#3209). */
-  if (splat_tmp < 0 && !brest) {
+  if (!brest) {
     /* with no rest the posts take the values right after the optionals, so
        the dropped ones are those past the posts: counted back from the end,
        a post's own value ran twice and the last extra never did */
@@ -2400,25 +2574,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       free(vb.p);
     }
   }
-  /* The keywords come last in the call, so they run after every positional
-     (the dropped ones above among them): a missing keyword raised before
-     `yield(lit(1))` into `|k:|` had evaluated its argument. */
-  if (nokw && ykw >= 0) {
-    /* `|**nil|` refuses keywords, an empty `**h` among them excepted */
-    Buf hb; memset(&hb, 0, sizeof hb);
-    Buf *sv_pre = g_pre; g_pre = b;
-    emit_boxed(c, ykw, &hb);
-    g_pre = sv_pre;
-    if (!as_expr) emit_indent(b, indent);
-    buf_printf(b, "if (sp_poly_length(%s) > 0) sp_raise_cls(\"ArgumentError\", \"no keywords accepted\");%s",
-               hb.p ? hb.p : "sp_box_nil()", as_expr ? " " : "\n");
-    free(hb.p);
-  }
-  else emit_block_kw_binds(c, blk, ykw, bsc, b, indent, as_expr, bi, al);
-  if (rest_tmp >= 0) {
-    if (!as_expr) emit_indent(b, indent);
-    buf_printf(b, "lv_%s = _t%d;%s", rest_lv, rest_tmp, as_expr ? " " : "\n");
-  }
+  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv, b, indent, as_expr, bi, al);
 }
 
 void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr,
@@ -5071,12 +5227,13 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        binds x the first of them; the builtins/ walks (`each { |x| yield x }`)
        hand the step on whole */
     int tpair = 0;
+    int gather = block_binds_gathered(c, block);
     {
       Scope *ss = comp_scope_of(c, id);
       const char *sn = ss ? ss->name : NULL;
       const char *rest = block_rest_name(c, block);
       if (sp_streq(name, "each") &&
-          ((p0 && !block_param_name(c, block, 1) && !(rest && *rest)) || block_lone_rest(c, block)) &&
+          ((p0 && !block_param_name(c, block, 1) && !(rest && *rest)) || block_lone_rest(c, block) || gather) &&
           !(sn && strncmp(sn, "__enum", 6) == 0)) {
         tpair = ++g_tmp;
         emit_indent(b, indent); buf_printf(b, "int _t%d = sp_poly_yields_pair(_t%d);\n", tpair, ta);
@@ -5144,7 +5301,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
         buf_puts(b, ";\n");
       }
     }
-    else if (npp_poly >= 2) {
+    else if (npp_poly >= 2 && !gather) {
       int telem = ++g_tmp;
       emit_indent(b, indent + 1);
       buf_printf(b, "sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d);\n", telem, ta, ti);
@@ -5163,6 +5320,26 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
         char rsrc[64]; snprintf(rsrc, sizeof rsrc, "sp_poly_each_elem(_t%d, _t%d)", ta, ti);
         emit_iter_bind_rest(c, block, 0, TY_POLY, rsrc, b, indent + 1);
       }
+    }
+    else if (gather) {
+      /* any other shape binds the step's values by the proc distribution:
+         the element (a Hash entry's [k, v] pair), the half of the pair
+         each_value / each_key yield, or every value an Enumerator's step
+         yielded */
+      char elem[96]; snprintf(elem, sizeof elem, "sp_poly_each_elem(_t%d, _t%d)", ta, ti);
+      if (pv_half >= 0) {
+        int tel = ++g_tmp;
+        emit_indent(b, indent + 1);
+        buf_printf(b, "sp_RbVal _t%d = %s;\n", tel, elem);
+        emit_indent(b, indent + 1);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) _t%d = sp_poly_arr_get(_t%d, %d);\n",
+                   tel, tel, tel, tel, pv_half);
+        snprintf(elem, sizeof elem, "_t%d", tel);
+      }
+      char vals[160];
+      if (tpair) snprintf(vals, sizeof vals, "sp_yielded_args(_t%d, %s)", tpair, elem);
+      else snprintf(vals, sizeof vals, "sp_yielded_args(0, %s)", elem);
+      emit_boxed_step_binds(c, block, vals, b, indent + 1, 0);
     }
     else if (p0 && pv_half >= 0) {
       /* each_value / each_key: the element is a [k, v] pair; bind one half

@@ -35,6 +35,7 @@ extern int g_no_root_elision;
 extern int g_no_root_frame;
 extern int g_inline_hot;
 extern int g_no_write_barrier;
+extern const char *g_ruby_description;
 void buf_printf(Buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 static inline void emit_indent(Buf *b, int n) { for (int i = 0; i < n; i++) buf_puts(b, "  "); }
@@ -117,6 +118,9 @@ int cvar_global_slot(Compiler *c, int node, char *out, size_t cap);
 int lent_global_slot_rebound(Compiler *c, int arg, const char *slot);
 void refuse_lent_global_rebound(Compiler *c, int arg, const char *slot, const char *target, const char *pname);
 int strbuf_ivar_owner(Compiler *c, int node);
+/* Is an object's ivar set: 0 always, 1 when not nil, 2 cannot tell (codegen_util.c) */
+int ivar_set_kind(Compiler *c, int cid, const char *ivn);
+const char *ivar_set_test(Compiler *c, int cid, const char *ivn, const char *expr, char *buf, size_t cap);
 /* The shared-mutable shim (codegen_stmt.c) re-runs a value-semantics mutator
    arm against a plain shadow copy, then swaps the handle's bytes for it. A
    LOCAL receiver is redirected into the shadow by the rename table; an ivar
@@ -924,6 +928,8 @@ int builtin_class_parent_id(int id);   /* analyze_util.c */
 int is_builtin_class_name(const char *n);
 int is_builtin_module_name(const char *n);
 int is_builtin_exception_name(const char *n);
+const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analyze_util.c */
+const char *errno_canonical_name(const char *n);   /* analyze_util.c */
 int class_inherits_builtin_exception(Compiler *c, int ci);  /* analyze_util.c */
 /* The class name a runtime match (is_a?/===/when) should test against: the
    QUALIFIED path name when it names a known builtin (exception) class --
@@ -1075,6 +1081,7 @@ void scope_mark_proc_form(Compiler *c, int s);
 void scope_veto_proc_form(Compiler *c, int s);
 int  scope_needs_proc_form(Compiler *c, int s);
 int  scope_proc_form_of(Compiler *c, int s);
+int  expr_is_held_ref(Compiler *c, int node);   /* a read of a held object: no root needed */
 int  proc_form_live(Compiler *c, int s);
 int  proc_form_source(Compiler *c, int s);
 int  ctor_init_proc_form(Compiler *c, int cid);
@@ -1337,6 +1344,7 @@ void emit_array_elem_sure(TyKind at, int tmp, int elem_idx, Buf *b);
 void emit_rest_from_splat_and_argv(int tmp, TyKind at, int from_idx, Compiler *c, int argv_from, int pos_argc, const int *argv, Buf *b);
 int is_descendant(Compiler *c, int k, int anc);
 int class_builtin_superclass(Compiler *c, int i);   /* codegen.c */
+const char *class_builtin_superclass_name(Compiler *c, int i);   /* codegen.c */
 int class_builtin_parent(Compiler *c, int cid);      /* codegen.c */
 int class_includes_module_named(Compiler *c, int cid, const char *mod_name);
 int class_isa_user(Compiler *c, int k, int cid, const char *cn);  /* codegen_call.c */
@@ -1432,6 +1440,8 @@ int block_param_wants_alias(Compiler *c, int blk, int k, int n);
 int block_kw_wants_alias(Compiler *c, int blk, const char *key);
 void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
                       Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al);
+int block_binds_gathered(Compiler *c, int blk);
+int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int indent, int as_expr);
 void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, int indent, int as_expr);
 int emit_inline_expr(Compiler *c, int id, Buf *b);
 void emit_iter_param_assign(Compiler *c, int block, const char *p0_orig, const char *p0_ren, TyKind src_type, const char *src_expr, Buf *b, int indent);

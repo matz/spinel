@@ -1126,7 +1126,12 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   const char *p0 = block_param_name(c, block, 0); if (p0) p0 = rename_local(p0);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (!p0 || bn < 1) return 0;
+  /* a block of any other shape than plain requireds, over elements known
+     only at run time, binds each by the proc distribution */
+  int gather = (rt == TY_POLY_ARRAY || rt == TY_POLY) && block_binds_gathered(c, block);
+  /* a block that binds nothing (`uniq { 1 }`) keys every element the same */
+  int bare = !p0 && !gather;
+  if ((bare && rt != TY_POLY_ARRAY && rt != TY_POLY) || bn < 1) return 0;
   int bang = sp_streq(name, "uniq!");
 
   /* Typed or poly array receiver (sp_<K>Array): dedup keeping the same element
@@ -1148,7 +1153,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
        element across its params; the survivor pushed is the element */
     char es[64]; snprintf(es, sizeof es, "sp_%sArray_get(_t%d, _t%d)", rk, trecv, ti);
     int np = 0; while (block_param_name(c, block, np)) np++;
-    int splat = rt == TY_POLY_ARRAY && np >= 2 && !block_param_is_multi(c, block, 0);
+    int splat = gather || bare || (rt == TY_POLY_ARRAY && np >= 2 && !block_param_is_multi(c, block, 0));
     int use_shadow = !splat && clv0 && clv0->type != et && et != TY_UNKNOWN;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
     emit_indent(g_pre, g_indent);
@@ -1174,7 +1179,13 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
         snprintf(sel, sizeof sel, "_t%d", tel);
         emit_indent(g_pre, din); buf_printf(g_pre, "sp_RbVal %s = %s; SP_GC_ROOT_RBVAL(%s);\n", sel, es, sel);
       }
-      if (!splat || !emit_iter_autosplat(c, block, rt, sel, din)) {
+      if (gather) {
+        char vals[64]; snprintf(vals, sizeof vals, "sp_yielded_args(0, %s)", sel);
+        emit_boxed_step_binds(c, block, vals, g_pre, din, 0);
+        snprintf(es, sizeof es, "%s", sel);
+      }
+      else if (bare) snprintf(es, sizeof es, "%s", sel);
+      else if (!splat || !emit_iter_autosplat(c, block, rt, sel, din)) {
         splat = 0;
         emit_indent(g_pre, din); buf_printf(g_pre, "lv_%s = %s;\n", p0, es);
       }
@@ -1211,6 +1222,16 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   int trecv = ++g_tmp, tarr = ++g_tmp, tseen = ++g_tmp, tres = ++g_tmp, ti = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", trecv, rb.p ? rb.p : "sp_box_nil()", trecv); free(rb.p);
+  /* uniq hands its block every value one step of an Enumerator yielded,
+     which the walk below reads packed as one item: a lone `|x|` takes the
+     first of them, any other shape but plain requireds all of them */
+  int lone = !gather && p0 && !block_param_name(c, block, 1) && !block_rest_marker(c, block) &&
+             !block_param_is_multi(c, block, 0);
+  int tpair = 0;
+  if (gather || lone) {
+    tpair = ++g_tmp;
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "int _t%d = sp_poly_yields_pair(_t%d);\n", tpair, trecv);
+  }
   emit_indent(g_pre, g_indent);
   if (bang) buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_array_recv(_t%d, \"uniq!\", 1); SP_GC_ROOT(_t%d);\n", tarr, trecv, tarr);
   else buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"uniq\"); SP_GC_ROOT(_t%d);\n", tarr, trecv, tarr);
@@ -1218,7 +1239,12 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tarr, ti);
   char es[64]; snprintf(es, sizeof es, "_t%d->data[_t%d]", tarr, ti);
-  if (!emit_iter_autosplat(c, block, TY_POLY_ARRAY, es, g_indent + 1)) {
+  char vals[96]; snprintf(vals, sizeof vals, "sp_yielded_args(_t%d, %s)", tpair, es);
+  if (gather) emit_boxed_step_binds(c, block, vals, g_pre, g_indent + 1, 0);
+  else if (lone) {
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_yielded_first(_t%d, %s);\n", p0, tpair, es);
+  }
+  else if (p0 && !emit_iter_autosplat(c, block, TY_POLY_ARRAY, es, g_indent + 1)) {
     emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = %s;\n", p0, es);
   }
   int save = g_indent; g_indent++;
@@ -1439,12 +1465,19 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   else buf_puts(b, "sp_box_int(0)");
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
              tacc, ti, ti, tn, ti);
-  if (p0r) buf_printf(b, "sp_RbVal lv_%s = _t%d->data[_t%d]; ", p0r, ta, ti);
+  /* a block of any other shape than plain requireds binds the element by
+     the proc distribution */
+  if (block_binds_gathered(c, block)) {
+    if (p0r) buf_printf(b, "sp_RbVal lv_%s; ", p0r);
+    char vals[96]; snprintf(vals, sizeof vals, "sp_yielded_args(0, _t%d->data[_t%d])", ta, ti);
+    emit_boxed_step_binds(c, block, vals, b, 0, 1);
+  }
+  else if (p0r) buf_printf(b, "sp_RbVal lv_%s = _t%d->data[_t%d]; ", p0r, ta, ti);
   /* A two-param block over a boxed HASH walks [key, value] pairs, so the
      element auto-splats across the params -- binding only the first left the
      second nil, and `h.sum { |k, v| v }` added nil to the accumulator. */
   { const char *p1 = block_param_name(c, block, 1);
-    if (p0r && p1) {
+    if (p0r && p1 && !block_binds_gathered(c, block)) {
       const char *p1r = rename_local(p1);
       buf_printf(b, "sp_RbVal lv_%s = sp_poly_massign_get(lv_%s, 1LL); "
                     "lv_%s = sp_poly_massign_get(lv_%s, 0LL); ", p1r, p0r, p0r, p0r);
@@ -3859,7 +3892,14 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", tidx, tidx);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   int np_sb = 0; while (block_param_name(c, block, np_sb)) np_sb++;
-  if (np_sb >= 2 && rt == TY_POLY_ARRAY && !block_param_is_multi(c, block, 0)) {
+  /* a block of any other shape than plain requireds, over elements known
+     only at run time, binds the element by the proc distribution */
+  if (rt == TY_POLY_ARRAY && block_binds_gathered(c, block)) {
+    char vals[128];
+    snprintf(vals, sizeof vals, "sp_yielded_args(0, sp_PolyArray_get(_t%d, _t%d))", trv, ti);
+    emit_boxed_step_binds(c, block, vals, g_pre, g_indent + 1, 0);
+  }
+  else if (np_sb >= 2 && rt == TY_POLY_ARRAY && !block_param_is_multi(c, block, 0)) {
     /* 2-param auto-splat: |name, age| over a poly array of sub-arrays. */
     int te = ++g_tmp;
     emit_indent(g_pre, g_indent + 1);
@@ -4671,7 +4711,10 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     /* an Enumerator yielding two values gives a lone `|x|` the first and a
        lone `|*r|` both (sp_Enumerator.yields_pair) */
     int tpair2 = 0;
-    if ((np2 == 1 && !has_rest2 && !block_param_is_multi(c, block, 0)) || (np2 == 0 && has_rest2)) {
+    /* a block of any other shape than plain requireds or a lone rest binds
+       the step's values by the proc distribution (emit_boxed_step_binds) */
+    int gather2 = block_binds_gathered(c, block) && !block_lone_rest(c, block);
+    if ((np2 == 1 && !has_rest2 && !block_param_is_multi(c, block, 0)) || (np2 == 0 && has_rest2) || gather2) {
       tpair2 = ++g_tmp;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "int _t%d = sp_poly_yields_pair(_t%d);\n", tpair2, trecv2);
@@ -4699,7 +4742,13 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     if (spair >= 0) infer_type(c, spair);
     emit_indent(g_pre, g_indent + 1);
     buf_puts(g_pre, "{\n");
-    if (p0p && np2 >= 2 && !has_rest2 && !block_param_is_multi(c, block, 0)) {
+    if (gather2) {
+      char vals[160];
+      snprintf(vals, sizeof vals, "sp_yielded_args(_t%d, sp_poly_iter_elem(_t%d, _t%d))", tpair2, trecv2, ti2);
+      if (p0p) { emit_indent(g_pre, g_indent + 2); buf_printf(g_pre, "sp_RbVal lv_%s;\n", p0p); }
+      emit_boxed_step_binds(c, block, vals, g_pre, g_indent + 2, 0);
+    }
+    else if (p0p && np2 >= 2 && !has_rest2 && !block_param_is_multi(c, block, 0)) {
       /* `|k, val|` over a poly hash: each element is a [key, value] pair, so
          auto-splat it across the params (only p0 was bound before, leaving val
          nil and losing every value) (#2873). */
@@ -4738,22 +4787,11 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "sp_RbVal lv__dummy = sp_poly_iter_elem(_t%d, _t%d); (void)lv__dummy;\n",
                  trecv2, ti2);
     }
-    if (has_rest2 && tpair2) {
+    /* a lone rest takes the step's values */
+    if (has_rest2 && !gather2) {
       emit_indent(g_pre, g_indent + 2);
-      buf_printf(g_pre, "lv_%s = sp_yielded_args(_t%d, %s(_t%d, _t%d));\n",
-                 rename_local(restn2), tpair2,
-                 block_lone_rest(c, block) ? "sp_poly_iter_elem" : "sp_poly_arr_get_hash", trecv2, ti2);
-    }
-    else if (has_rest2) {
-      /* |*x|: wrap the whole yielded element into the rest array. A leading
-         required param over a poly element (|a, *r|) would need runtime array
-         distribution (emit_iter_bind_rest returns <0) -- reject loudly rather
-         than binding an empty rest. */
-      int np2 = 0; while (block_param_name(c, block, np2)) np2++;
-      char es2[256];
-      snprintf(es2, sizeof es2, "sp_poly_arr_get_hash(_t%d, _t%d)", trecv2, ti2);
-      if (emit_iter_bind_rest(c, block, np2, TY_POLY, es2, g_pre, g_indent + 2) < 0)
-        unsupported(c, id, "block splat parameter alongside required params over a poly element");
+      buf_printf(g_pre, "lv_%s = sp_yielded_args(_t%d, sp_poly_iter_elem(_t%d, _t%d));\n",
+                 rename_local(restn2), tpair2, trecv2, ti2);
     }
     for (int j2 = 0; j2 < bn2 - 1; j2++) emit_stmt(c, bb2[j2], g_pre, g_indent + 2);
     int saveIndent2 = g_indent; g_indent = g_indent + 2;

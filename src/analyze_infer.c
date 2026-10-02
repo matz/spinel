@@ -7506,7 +7506,7 @@ static int value_arm_is(const NodeTable *nt, int v, int node) {
    rebuilt per fixpoint iteration and when the table grows, like the
    receiver set above, and each node on it is checked as the walk did, so
    one that no longer holds the yield answers no. */
-enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME };
+enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME, YU_BLOCK };
 static const NodeKind yu_write_kinds[] = {
   NK_LocalVariableWriteNode, NK_LocalVariableOperatorWriteNode,
   NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
@@ -7578,6 +7578,9 @@ static int yield_uses(Compiler *c, int y) {
     NT_FOREACH_KIND(nt, NK_CallNode, w) {
       int r = nt_ref(nt, w, "receiver");
       if (r >= 0 && r < nt->count && nt_kind(nt, r) == NK_YieldNode) yu_add(r, w, YU_RECEIVER);
+      int bk = nt_ref(nt, w, "block");
+      if (bk >= 0 && bk < nt->count && nt_kind(nt, bk) == NK_BlockNode)
+        yu_collect(nt, nt_ref(nt, bk, "body"), w, YU_BLOCK);
       int an = nt_ref(nt, w, "arguments");
       if (an < 0) continue;
       int ac = 0; const int *av = nt_arr(nt, an, "arguments", &ac);
@@ -7873,12 +7876,14 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* inside an instance_eval/exec splice the block scope has no class_id; the
        ivar belongs to the rebound receiver class (an_ie_class_id). */
     int wcls = s->class_id >= 0 ? s->class_id : an_ie_class_id;
-    /* a toplevel method's `@x ||= v` / `@x &&= v` answers the Toplevel slot,
-       which the value alone does not type (`(@a ||= []) << 1`); so does a
-       plain write of an untyped value (`y = (@a = [])`, where a later write
-       made the slot a poly array) */
+    /* a toplevel method's `@x ||= v` / `@x &&= v` / `@x += v` answers the
+       Toplevel slot, which the value alone does not type (`(@a ||= []) << 1`,
+       a boxed `@i += 1` read back as the slot); so does a plain write of an
+       untyped value (`y = (@a = [])`, where a later write made the slot a
+       poly array) */
     if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0 &&
         (nk == NK_InstanceVariableOrWriteNode || nk == NK_InstanceVariableAndWriteNode ||
+         nk == NK_InstanceVariableOperatorWriteNode ||
          (nk == NK_InstanceVariableWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_UNKNOWN))) {
       int tl = comp_class_index(c, "Toplevel");
       int tiv = tl >= 0 && nm ? comp_ivar_index(&c->classes[tl], nm) : -1;
@@ -8707,6 +8712,16 @@ TyKind infer_uncached(Compiler *c, int id) {
             if (value_arm_is(nt, av[e], id)) return TY_POLY;
           break;
         }
+        case YU_BLOCK: {
+          /* The value of a block handed to a method the program defines
+             likewise: that method's own yield takes it into a slot typed
+             from the first site, so `def run2(x) = run(x) { |u| yield u }`
+             with an Integer block at one site and a String one at another
+             emitted the String into an sp_int. Poly boxes each site's. */
+          const char *wn = nt_str(nt, w, "name");
+          if (wn && call_may_reach_user_method(c, w, wn)) return TY_POLY;
+          break;
+        }
         case YU_RECEIVER: {
           /* The receiver of a builtin arithmetic operator too: `yield +
              yield` typed its `+`, and the method's return, from the first
@@ -8723,6 +8738,15 @@ TyKind infer_uncached(Compiler *c, int id) {
           if (an >= 0) nt_arr(nt, an, "arguments", &ac);
           if (ac == 1 && op && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") ||
                                 sp_streq(op, "/") || sp_streq(op, "%")))
+            return TY_POLY;
+          /* A no-arg builtin whose return type mirrors the receiver's type
+             (abs, unary -): Integer.abs is Integer, Float.abs is Float.
+             The same mismatch occurs: the slot is typed from the first
+             site's receiver, and the second site's concrete result (a
+             double from fabs, say) is stored into an integer slot.
+             yield_builtin_method_site_type types the call from the
+             per-site block type; only extend this list in tandem. */
+          if (ac == 0 && op && (sp_streq(op, "abs") || sp_streq(op, "-@")))
             return TY_POLY;
           break;
         }

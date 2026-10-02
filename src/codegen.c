@@ -514,6 +514,16 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
           : sp_streq(conv, "to_str") ? "sp_poly_arg_str("
           : NULL;  /* #to_path is wrapped by its own site, not here */
   if (unbox) buf_puts(b, unbox);
+  /* a fresh object (`xs.first(C.new)`) is held by nothing but the argument
+     while its conversion allocates: root it first */
+  if (!comp_ty_value_obj(c, t) && !expr_is_held_ref(c, node)) {
+    int tr = ++g_tmp;
+    buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[def].c_name, tr, c->classes[def].c_name);
+    emit_expr(c, node, b);
+    buf_printf(b, "); SP_GC_ROOT(_t%d); sp_%s_%s(_t%d); })", tr, c->classes[def].c_name, mc(conv), tr);
+    if (unbox) buf_puts(b, ")");
+    return;
+  }
   buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
   if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
   buf_puts(b, "(");
@@ -3544,6 +3554,10 @@ static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
    miscompile can be bisected against the same binary. */
 int g_no_root_elision = 0;
 int g_inline_hot = 1;   /* --no-inline-hot turns off forcing small leaf methods inline */
+/* "spinel <RUBY_VERSION> (<release> revision <rev>)", set by the driver
+   (main.c) from the build stamp; NULL when codegen runs without it, and
+   RUBY_DESCRIPTION says "spinel <RUBY_VERSION>". */
+const char *g_ruby_description = NULL;
 /* The C optimisation level the TU is built at (-O), for the one decision the
    generated program makes from it: an unoptimised build's frames are many
    times -O2's (a 24-column constructor over a poly Hash reserved 51 KB at -O0
@@ -7903,12 +7917,7 @@ int class_is_exc_subclass(Compiler *c, int ci) {
   for (int k = ci, guard = 0; k >= 0 && guard < 256; guard++) {
     int sc = nt_ref(c->nt, c->classes[k].def_node, "superclass");
     const char *sn = sc >= 0 ? nt_str(c->nt, sc, "name") : NULL;
-    if (sc >= 0) {
-      const char *sty = nt_type(c->nt, sc);
-      if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode")) &&
-          is_exc_name(sn))
-        return 1;
-    }
+    if (superclass_builtin_exc_name(c->nt, sc)) return 1;
     int next = c->classes[k].parent;
     /* The parent links are not resolved yet when the rescue-arm specialization
        asks, so a two-level chain (`class B < A; class A < StandardError`) ended
@@ -8058,11 +8067,8 @@ int obj_str_ret_poly(Compiler *c, int cid, int want_inspect) {
 const char *exc_builtin_parent(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int sc = nt_ref(c->nt, c->classes[k].def_node, "superclass");
-    if (sc < 0) continue;
-    const char *sty = nt_type(c->nt, sc);
-    const char *sn = nt_str(c->nt, sc, "name");
-    if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode")) && is_exc_name(sn))
-      return sn;
+    const char *sn = superclass_builtin_exc_name(c->nt, sc);
+    if (sn) return sn;
   }
   return "StandardError";
 }
@@ -9756,6 +9762,11 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     }
     buf_printf(b, "    case %d: {\n", i);
     buf_printf(b, "      sp_%s *o = (sp_%s *)p; (void)o;\n", ci->c_name, ci->c_name);
+    /* The object itself is read after the builder's first allocation, and a
+       caller may hand over a fresh temporary held nowhere else (`p A.new`,
+       `A.new.inspect` boxed): unrooted, a collection there swept it and the
+       walk read whatever reused its slot (#<A:0x @a=26, @x=60>). */
+    if (ci->nivars > 0) buf_puts(b, "      SP_GC_ROOT(o);\n");
     /* An ivar can point back at the object (a tree node's @parent), and the
        walk below renders each ivar through the inspects that come back here.
        CRuby shows the repeated object as #<N:0x... ...>; an object with no
@@ -9775,10 +9786,23 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        ivars has no such walk: it appends one byte, which reallocs off the GC
        heap and cannot collect, so its arm is left as it was. */
     if (ci->nivars > 0) buf_puts(b, "      SP_GC_ROOT(_s);\n");
+    /* an ivar nothing has set yet is not shown (ivar_set_kind): with one
+       such, the separator ahead of each shown ivar is decided at run time */
+    int any1 = 0;
+    for (int j = 0; j < ci->nivars && !any1; j++) any1 = ivar_set_kind(c, i, ci->ivars[j]) == 1;
+    if (any1) buf_puts(b, "      int _ivsep = 0; (void)_ivsep;\n");
     for (int j = 0; j < ci->nivars; j++) {
       char expr[160]; snprintf(expr, sizeof expr, "o->iv_%s", iv_c(ci->ivars[j] + 1));
-      buf_printf(b, "      sp_String_append(_s, \"%s%s=\"); sp_String_append(_s, ",
-                 j ? ", " : " ", ci->ivars[j]);
+      char tb[256];
+      const char *set = any1 ? ivar_set_test(c, i, ci->ivars[j], expr, tb, sizeof tb) : NULL;
+      if (set) buf_printf(b, "      if %s { ", set);
+      else if (any1) buf_puts(b, "      ");
+      if (any1)
+        buf_printf(b, "sp_String_append(_s, _ivsep++ ? \", %s=\" : \" %s=\"); sp_String_append(_s, ",
+                   ci->ivars[j], ci->ivars[j]);
+      else
+        buf_printf(b, "      sp_String_append(_s, \"%s%s=\"); sp_String_append(_s, ",
+                   j ? ", " : " ", ci->ivars[j]);
       TyKind ivt = ci->ivar_types[j];
       /* containers have their own typed inspect; scalars box through the
          marshal helper into sp_poly_inspect; an UNKNOWN (never usefully
@@ -9811,7 +9835,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       }
       else
         buf_puts(b, "\"#<?>\"");
-      buf_puts(b, ");\n");
+      buf_puts(b, set ? "); }\n" : ");\n");
     }
     buf_puts(b, "      sp_String_append(_s, \">\");\n");
     if (ci->nivars > 0) buf_puts(b, "      sp_poly_recur_pop(_rcm);\n");
@@ -10428,8 +10452,9 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     buf_printf(b, " _t%d = %s;\n", rtag, default_value(rt));
     const char *sv_rv = g_result_var; g_result_var = rvbuf;
     int sp = g_result_poly; g_result_poly = (rt == TY_POLY);
+    TyKind srt = g_result_ty; g_result_ty = rt;
     emit_stmts_tail(c, m->body, b, din);
-    g_result_var = sv_rv; g_result_poly = sp;
+    g_result_var = sv_rv; g_result_poly = sp; g_result_ty = srt;
     emit_indent(b, din); buf_printf(b, "_t%d;\n", rtag);
   }
   else emit_stmts(c, m->body, b, din);
@@ -12688,9 +12713,29 @@ int class_builtin_superclass(Compiler *c, int i) {
   if (sc_node >= 0) {
     const char *sc_ty = nt_type(c->nt, sc_node);
     const char *sc_nm = (sc_ty && (sp_streq(sc_ty, "ConstantReadNode") || sp_streq(sc_ty, "ConstantPathNode"))) ? nt_str(c->nt, sc_node, "name") : NULL;
+    /* an exception path is read whole: the leaf of Math::DomainError,
+       "DomainError", has no id, and the class sat under Object */
+    const char *exc_nm = superclass_builtin_exc_name(c->nt, sc_node);
+    if (exc_nm) sc_nm = exc_nm;
     if (sc_nm) { int bid = builtin_class_id(sc_nm); if (bid != 0) builtin_par = bid; }
   }
   return builtin_par;
+}
+
+/* The name of the builtin exception directly above user class `i` when that
+   exception has no builtin cls_id (LoadError, SystemCallError, Errno::*, ...),
+   else NULL. class_builtin_superclass has no id to answer for those and says
+   Object; the runtime knows them by name (sp_exc_parent_of_name carries their
+   chain), so the generated superclass table names them instead, and every
+   walk that goes through it -- #superclass, #ancestors, is_a?, Module#<,
+   Module#=== -- continues up the real exception chain. */
+const char *class_builtin_superclass_name(Compiler *c, int i) {
+  if (c->classes[i].is_struct) return NULL;
+  int sc_node = nt_ref(c->nt, c->classes[i].def_node, "superclass");
+  if (sc_node < 0) return NULL;
+  const char *sc_nm = superclass_builtin_exc_name(c->nt, sc_node);
+  if (!sc_nm || builtin_class_id(sc_nm) != 0) return NULL;
+  return errno_canonical_name(sc_nm);
 }
 
 /* The builtin class above the whole user chain of `cid`: walk the user
@@ -13647,7 +13692,30 @@ static int exc_text_method(Compiler *c, int i, int want_message, int *dcls, cons
   return -1;
 }
 
+/* Does the text call sp_poly_is_a? Its definition and its prototype are
+   not calls. */
+static int calls_poly_is_a(const char *t) {
+  for (const char *q = t ? strstr(t, "sp_poly_is_a(") : NULL; q; q = strstr(q + 1, "sp_poly_is_a(")) {
+    if (q > t && (q[-1] == '_' || isalnum((unsigned char)q[-1]))) continue;
+    if (q - t >= 4 && !strncmp(q - 4, "int ", 4)) continue;
+    return 1;
+  }
+  return 0;
+}
+
+/* Insert `s` into `b` at offset `at`. */
+static void buf_splice(Buf *b, size_t at, const char *s) {
+  char *tail = strdup(b->p + at);
+  b->len = at;
+  b->p[at] = 0;
+  buf_puts(b, s);
+  buf_puts(b, tail);
+  free(tail);
+}
+
 char *codegen_program(const NodeTable *nt) {
+  char *isa_ext = NULL;  /* sp_poly_is_a's class-value arms, and where they go */
+  size_t isa_ext_at = 0;
   Compiler *c = comp_new(nt);
   analyze_program(c);
   g_scopes_settled = 1;   /* scope_is_shadowed may answer from its table now */
@@ -14147,6 +14215,10 @@ char *codegen_program(const NodeTable *nt) {
       if (par >= 0) {
         buf_printf(&b, "  case %d: return ((sp_Class){%d});\n", i, par);
       }
+      else if (class_builtin_superclass_name(c, i)) {
+        buf_printf(&b, "  case %d: return ((sp_Class){-1, SPL(\"%s\")});\n", i,
+                   class_builtin_superclass_name(c, i));
+      }
       else {
         buf_printf(&b, "  case %d: return ((sp_Class){%d});\n", i, class_builtin_superclass(c, i));
       }
@@ -14165,10 +14237,13 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "  sp_Class cur = desc;\n");
     int depth = c->nclasses + 40;
     buf_printf(&b, "  for(int _i=0;_i<%d;_i++){\n", depth);
-    buf_puts(&b, "    if(cur.cls_id==anc.cls_id)return 1;\n");
+    /* sp_class_eq, not the ids: a name-backed class (an id-less builtin
+       exception such as LoadError or Errno::ENOENT) carries cls_id -1 with
+       its name, so every two of them would compare equal by id */
+    buf_puts(&b, "    if(sp_class_eq(cur,anc))return 1;\n");
     buf_puts(&b, "    if(cur.cls_id==-117)break;\n"); /* BasicObject: root */
     buf_puts(&b, "    sp_Class next=cur.cls_id>=0?sp_class_superclass(cur):sp_builtin_superclass(cur);\n");
-    buf_puts(&b, "    if(next.cls_id==cur.cls_id)break;\n");
+    buf_puts(&b, "    if(sp_class_eq(next,cur))break;\n");
     buf_puts(&b, "    cur=next;\n");
     buf_puts(&b, "  }\n");
     buf_puts(&b, "  return 0;\n}\n");
@@ -14183,7 +14258,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "  sp_Class cur = {cls, NULL};\n");
     buf_printf(&b, "  for(int _i=0;_i<%d;_i++){\n", depth);
     buf_puts(&b, "    sp_Class next=cur.cls_id>=0?sp_class_superclass(cur):sp_builtin_superclass(cur);\n");
-    buf_puts(&b, "    if(next.cls_id==cur.cls_id||next.cls_id==-116||next.cls_id==-117)return 0;\n");
+    buf_puts(&b, "    if(sp_class_eq(next,cur)||next.cls_id==-116||next.cls_id==-117)return 0;\n");
     buf_puts(&b, "    const char *s=sp_class_to_s(next);\n");
     buf_puts(&b, "    if(s&&s[0]&&!strcmp(s,cn))return 1;\n");
     buf_puts(&b, "    cur=next;\n");
@@ -14270,7 +14345,7 @@ char *codegen_program(const NodeTable *nt) {
   buf_puts(&b, "  case -117: return SP_CLASS_NIL;\n");
   buf_puts(&b, "  default: return ((sp_Class){-116});\n  }\n}\n");
 
-  buf_puts(&b, "static int sp_class_lt(sp_Class a,sp_Class b){return a.cls_id!=b.cls_id&&sp_class_is_ancestor(b,a);}\n");
+  buf_puts(&b, "static int sp_class_lt(sp_Class a,sp_Class b){return !sp_class_eq(a,b)&&sp_class_is_ancestor(b,a);}\n");
   buf_puts(&b, "static int sp_class_le(sp_Class a,sp_Class b){return sp_class_is_ancestor(b,a);}\n");
   /* the runtime archive's view of the same question, by id (sp_class_le_id_fn) */
   buf_puts(&b, "static int sp_class_le_ids(int a,int b){return sp_class_is_ancestor((sp_Class){b},(sp_Class){a});}\n");
@@ -14287,11 +14362,11 @@ char *codegen_program(const NodeTable *nt) {
      Macros so `sp_class_le` resolves at the call site to whichever version is
      in effect there -- the module-aware sp_class_le_mod when the program mixes
      in modules (Integer < Comparable), the plain chain walk otherwise. */
-  buf_puts(&b, "#define sp_class_lt3(A,B) ({ sp_Class _cx=(A),_cy=(B); _cx.cls_id==_cy.cls_id?sp_box_bool(0):(sp_class_le(_cx,_cy)?sp_box_bool(1):(sp_class_le(_cy,_cx)?sp_box_bool(0):sp_box_nil())); })\n");
+  buf_puts(&b, "#define sp_class_lt3(A,B) ({ sp_Class _cx=(A),_cy=(B); sp_class_eq(_cx,_cy)?sp_box_bool(0):(sp_class_le(_cx,_cy)?sp_box_bool(1):(sp_class_le(_cy,_cx)?sp_box_bool(0):sp_box_nil())); })\n");
   buf_puts(&b, "#define sp_class_le3(A,B) ({ sp_Class _cx=(A),_cy=(B); sp_class_le(_cx,_cy)?sp_box_bool(1):(sp_class_le(_cy,_cx)?sp_box_bool(0):sp_box_nil()); })\n");
   buf_puts(&b, "#define sp_class_gt3(A,B) sp_class_lt3(B,A)\n");
   buf_puts(&b, "#define sp_class_ge3(A,B) sp_class_le3(B,A)\n");
-  buf_puts(&b, "#define sp_class_cmp3(A,B) ({ sp_Class _cx=(A),_cy=(B); _cx.cls_id==_cy.cls_id?sp_box_int(0):(sp_class_le(_cx,_cy)?sp_box_int(-1):(sp_class_le(_cy,_cx)?sp_box_int(1):sp_box_nil())); })\n");
+  buf_puts(&b, "#define sp_class_cmp3(A,B) ({ sp_Class _cx=(A),_cy=(B); sp_class_eq(_cx,_cy)?sp_box_int(0):(sp_class_le(_cx,_cy)?sp_box_int(-1):(sp_class_le(_cy,_cx)?sp_box_int(1):sp_box_nil())); })\n");
   /* module-aware versions (replace after sp_class_ancestors is defined) */
   /* sp_class_includes_<i>: static array of included module cls_ids per class */
   /* Also update sp_class_is_ancestor to walk includes. */
@@ -14443,10 +14518,14 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "        if(cur.cls_id==-104||cur.cls_id==-105||cur.cls_id==-106||cur.cls_id==-144||cur.cls_id==-145) sp_PolyArray_push(a,sp_box_class(((sp_Class){-115})));\n");  /* Array/Hash/Range/Enumerator/Struct->Enumerable */
     buf_puts(&b, "        if(cur.cls_id==-102||cur.cls_id==-103) sp_PolyArray_push(a,sp_box_class(((sp_Class){-114})));\n");  /* String/Symbol->Comparable */
     buf_puts(&b, "        if(cur.cls_id==-116) sp_PolyArray_push(a,sp_box_class(((sp_Class){-119})));\n");  /* Object->Kernel */
+    /* a name-backed exception class's modules (IO::EAGAINWaitReadable
+       includes IO::WaitReadable), as the rescue match reads them */
+    buf_puts(&b, "        if(cur.name){const char*const*_m=sp_exc_modules_of_name(cur.name);"
+                 "for(int _k=0;_m&&_m[_k];_k++)sp_PolyArray_push(a,sp_box_class_name(_m[_k]));}\n");
     buf_puts(&b, "        sp_Class bn=sp_builtin_superclass(cur);\n");
     /* the root (BasicObject) yields the nil class: that terminates the walk.
        Chain end used to be marked by a self-reference, so keep that check too. */
-    buf_puts(&b, "        if(sp_class_nil_p(bn)||bn.cls_id==cur.cls_id)break;\n");
+    buf_puts(&b, "        if(sp_class_nil_p(bn)||sp_class_eq(bn,cur))break;\n");
     buf_puts(&b, "        cur=bn;\n");
     buf_puts(&b, "      }\n");
     buf_puts(&b, "      break;\n    }\n");
@@ -14486,7 +14565,7 @@ char *codegen_program(const NodeTable *nt) {
        BasicObject to both. */
     buf_puts(&b, "    if(sp_class_is_module_val(cur))break;\n");
     buf_puts(&b, "    sp_Class next=sp_class_superclass(cur);\n");
-    buf_puts(&b, "    if(next.cls_id==cur.cls_id)break;\n");
+    buf_puts(&b, "    if(sp_class_eq(next,cur))break;\n");
     buf_puts(&b, "    cur=next;\n");
     buf_puts(&b, "  }\n");
     buf_puts(&b, "  return a;\n}\n\n");
@@ -14509,15 +14588,15 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "  sp_PolyArray *ancs=sp_class_ancestors(a);\n");
     buf_puts(&b, "  for(sp_int _i=0;_i<sp_PolyArray_length(ancs);_i++){\n");
     buf_puts(&b, "    sp_RbVal v=sp_PolyArray_get(ancs,_i);\n");
-    buf_puts(&b, "    if(v.tag==7&&(int)v.cls_id==b.cls_id)return 1;\n");
+    buf_puts(&b, "    if(v.tag==7&&sp_class_eq(sp_unbox_class(v),b))return 1;\n");
     buf_puts(&b, "  }\n");
     /* User-class sp_class_ancestors stops before builtin parents.
        If the target is a builtin, fall back to the chain-walking check. */
     buf_puts(&b, "  if(b.cls_id<0)return sp_class_is_ancestor(b,a);\n");
     buf_puts(&b, "  return 0;\n}\n");
     buf_puts(&b, "#undef sp_class_le\n#define sp_class_le sp_class_le_mod\n");
-    buf_puts(&b, "#undef sp_class_lt\n#define sp_class_lt(a,b) ((a).cls_id!=(b).cls_id&&sp_class_le_mod(a,b))\n");
-    buf_puts(&b, "#undef sp_class_gt\n#define sp_class_gt(a,b) ((a).cls_id!=(b).cls_id&&sp_class_le_mod(b,a))\n");
+    buf_puts(&b, "#undef sp_class_lt\n#define sp_class_lt(a,b) (!sp_class_eq(a,b)&&sp_class_le_mod(a,b))\n");
+    buf_puts(&b, "#undef sp_class_gt\n#define sp_class_gt(a,b) (!sp_class_eq(a,b)&&sp_class_le_mod(b,a))\n");
     buf_puts(&b, "#undef sp_class_ge\n#define sp_class_ge(a,b) sp_class_le_mod(b,a)\n");
     /* sp_poly_get_class: maps a poly value to its sp_Class for dynamic is_a? */
     buf_puts(&b,
@@ -14554,7 +14633,32 @@ char *codegen_program(const NodeTable *nt) {
       "static int sp_poly_is_a(sp_RbVal obj,sp_Class klass){\n"
       "  if (obj.tag == SP_TAG_OBJ && obj.cls_id == SP_BUILTIN_EXCEPTION)\n"
       "    return sp_poly_kind_of_builtin(obj, sp_class_to_s(klass));\n"
-      "  if (klass.name) return sp_poly_is_a_dyn(obj, sp_box_class(klass), 0);\n"
+      "  if (klass.name) return sp_poly_is_a_dyn(obj, sp_box_class(klass), 0);\n");
+    /* a class value is also an instance of the modules it (or a superclass)
+       extends, its singleton's ancestors: one arm per such class. The arms
+       are spliced in here at the end, and only when the program calls
+       sp_poly_is_a: most programs that extend a module never do. */
+    { int any_ext = 0;
+      for (int k = 0; k < c->nclasses && !any_ext; k++) if (comp_class_extends_any(c, k)) any_ext = 1;
+      if (any_ext) {
+        Buf eb; memset(&eb, 0, sizeof eb);
+        buf_puts(&eb, "  if (obj.tag == SP_TAG_CLASS) switch (sp_unbox_class(obj).cls_id) {\n");
+        for (int k = 0; k < c->nclasses; k++) {
+          if (!comp_class_extends_any(c, k)) continue;
+          buf_printf(&eb, "  case %d: if (", k);
+          int any = 0;
+          for (int m = 0; m < c->nclasses; m++)
+            if (comp_class_is_module(c, &c->classes[m]) && comp_class_singleton_has_module(c, k, m)) {
+              buf_printf(&eb, "%sklass.cls_id == %d", any ? " || " : "", m);
+              any = 1;
+            }
+          buf_puts(&eb, any ? ") return 1; break;\n" : "0) return 1; break;\n");
+        }
+        buf_puts(&eb, "  default: break;\n  }\n");
+        isa_ext = eb.p;
+        isa_ext_at = b.len;
+      } }
+    buf_puts(&b,
       "  return sp_class_le(sp_poly_get_class(obj),klass);\n}\n");
     /* Module#< / <= / > / >= / <=> where an operand is boxed: the tri-state
        answer of sp_class_lt3 and friends, TypeError for a non-class operand
@@ -14618,6 +14722,9 @@ char *codegen_program(const NodeTable *nt) {
           const char *sty = nt_type(c->nt, sc);
           if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode")))
             par = nt_str(c->nt, sc, "name");
+          /* a builtin exception by its whole path (Errno::ENOENT) */
+          const char *bpar = superclass_builtin_exc_name(c->nt, sc);
+          if (bpar) par = bpar;
         }
         if (!par && c->classes[i].parent >= 0)
           par = c->classes[c->classes[i].parent].name;
@@ -15508,6 +15615,12 @@ char *codegen_program(const NodeTable *nt) {
   emit_regex_section(c, &b);
   { const char *pdt[3] = { g_procs.p, body->p, b.p };
     pd_emit_used(pdt, 3, &g_pd_protos, &g_pd_defs); }
+  if (isa_ext) {
+    if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
+        calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))
+      buf_splice(&b, isa_ext_at, isa_ext);
+    free(isa_ext);
+  }
   if (g_proc_protos.len) { buf_puts(&b, g_proc_protos.p); buf_puts(&b, "\n"); }
   if (g_pd_protos.len) { buf_puts(&b, g_pd_protos.p); buf_puts(&b, "\n"); }
   if (g_procs.len) { buf_puts(&b, g_procs.p); buf_puts(&b, "\n"); }

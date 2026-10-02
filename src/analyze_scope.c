@@ -5252,8 +5252,32 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited) {
        to an instance pointer (#4648). */
     if (src->class_id != mod_id || (src->is_cmethod && !src->is_module_function) || !src->name) continue;
     int own = comp_cmethod_in_class(c, ci, src->name);
-    if (own >= 0 && (inherited || !c->scopes[own].is_extend_copy)) continue;   /* the class's own */
-    if (own >= 0) {
+    if (own >= 0 && inherited) continue;
+    /* The class's own class method comes first, and a module it extends
+       sits behind it: a super in the own method reaches the module's,
+       copied in under a shadow name, in front of any module extended
+       earlier. With no super there, nothing can reach the copy. */
+    char *own_name = NULL;
+    char behind[256] = "";
+    if (own >= 0 && !c->scopes[own].is_extend_copy) {
+      if (!scope_body_has_super(c, own)) continue;
+      ClassInfo *cif = &c->classes[ci];
+      char key[320];
+      snprintf(behind, sizeof behind, "__inc %d %s", cif->prep_shadow_count++, src->name);
+      snprintf(key, sizeof key, "self.%s", src->name);
+      for (int kk = 0; kk < cif->nprep_chain; kk++)
+        if (sp_streq(cif->prep_from[kk], key)) {
+          free(cif->prep_from[kk]);
+          snprintf(key, sizeof key, "self.%s", behind);
+          cif->prep_from[kk] = strdup(key);
+          break;
+        }
+      comp_cprep_chain_add(cif, src->name, behind);
+      /* aside while the copy takes the name, then back */
+      own_name = c->scopes[own].name;
+      c->scopes[own].name = strdup("\x01own");
+    }
+    else if (own >= 0) {
       /* An earlier extend put this name here. The later module comes first
          among the singleton's ancestors, so it supersedes: the earlier copy
          takes a shadow name, carrying its own super target with it, and a
@@ -5300,7 +5324,12 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited) {
     specialize_cmethod_for(c, ms, mod_id, ci);
     src = &c->scopes[ms];  /* realloc-safe */
     { int cp = comp_cmethod_in_class(c, ci, src->name);
-      if (cp >= 0) c->scopes[cp].is_extend_copy = 1; }
+      if (cp >= 0) c->scopes[cp].is_extend_copy = 1;
+      if (own_name) {
+        if (cp >= 0) { free(c->scopes[cp].name); c->scopes[cp].name = strdup(behind); }
+        free(c->scopes[own].name);
+        c->scopes[own].name = own_name;
+      } }
     did_clone = 1;
     /* a module_function stays callable on the module itself
        (`Coordinates.countdown(1)`), so its source is not dead */
@@ -5420,6 +5449,13 @@ void register_extends(Compiler *c) {
           if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
         }
         seen[nseen++] = mod_id;
+        { ClassInfo *xc = &c->classes[ci];
+          if (xc->nextended_mods == xc->cextended_mods) {
+            xc->cextended_mods = xc->cextended_mods ? xc->cextended_mods * 2 : 4;
+            xc->extended_mods = realloc(xc->extended_mods, sizeof(int) * (size_t)xc->cextended_mods);
+            if (!xc->extended_mods) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          }
+          xc->extended_mods[xc->nextended_mods++] = mod_id; }
         int inherited = 0;
         for (int p = c->classes[ci].parent; p >= 0 && !inherited; p = c->classes[p].parent)
           for (int bj = 0; bj < nbody && !inherited; bj++)
@@ -6970,3 +7006,757 @@ int infer_ivar_types(Compiler *c) {
 
 /* ---- fixpoint passes ---- */
 
+
+/* ---- Bare constant reads CRuby's lookup cannot reach ----
+
+   Classes, modules and constants live in one flat namespace keyed by the leaf
+   name (qualify_colliding_* splits a leaf only when two namespaces both define
+   it), so a bare `X` bound to the one `A::X` the program defines wherever it
+   was written:
+
+     module A; class X; end; end
+     def g = X.new          # CRuby: uninitialized constant X (NameError)
+
+   CRuby resolves a bare name through the cref -- the class/module bodies the
+   reference is written in, innermost first, each consulted for its OWN
+   constants only (`class A::B` does not put A in scope) -- then the ancestors
+   of the innermost one (prepends, itself, includes, superclasses; a module's
+   lookup falls back to Object), Object's own included modules being visible
+   from everywhere. Blocks never change the cref: a method written in
+   `Class.new(Base) do .. end` or a `class_eval do .. end` looks up from where
+   the block is written.
+
+   This pass models that lookup on the source as written (before any desugar
+   moves code between bodies) for every bare name the program defines ONLY
+   inside a namespace, and refuses the program when no definition is
+   reachable: the program either raises NameError there or, behind a
+   `const_missing`, does something spinel cannot see. A `defined?(X)` answers
+   nil instead, as CRuby does. Anything the model cannot follow -- an include
+   of a computed module, an include into an unknown receiver, a builtin
+   ancestor that carries constants of its own, a class written in `class <<`,
+   a namespace reopened through a constant alias -- leaves the reference as it
+   was rather than guess. Names defined at the top level, and the builtins',
+   are never touched: Object is always in the lookup. */
+
+typedef struct { char **k; unsigned cap; int n; } BcSet;
+
+static unsigned bc_slot(const BcSet *s, const char *k) {
+  unsigned m = s->cap - 1, i = sp_strhash(k) & m;
+  while (s->k[i] && !sp_streq(s->k[i], k)) i = (i + 1) & m;
+  return i;
+}
+static int bc_has(const BcSet *s, const char *k) {
+  return s->cap && k && s->k[bc_slot(s, k)] != NULL;
+}
+static void bc_add(BcSet *s, const char *k) {
+  if (!k) return;
+  if ((unsigned)(s->n + 1) * 2 > s->cap) {
+    BcSet o = *s;
+    s->cap = o.cap ? o.cap * 2 : 64;
+    s->k = calloc(s->cap, sizeof(char *));
+    s->n = 0;
+    for (unsigned i = 0; i < o.cap; i++) if (o.k[i]) { s->k[bc_slot(s, o.k[i])] = o.k[i]; s->n++; }
+    free(o.k);
+  }
+  unsigned i = bc_slot(s, k);
+  if (!s->k[i]) { s->k[i] = strdup(k); s->n++; }
+}
+static void bc_set_free(BcSet *s) {
+  for (unsigned i = 0; i < s->cap; i++) free(s->k[i]);
+  free(s->k);
+}
+
+typedef struct {
+  char *name;
+  char *super;          /* resolved superclass; NULL = Object (or none for a module) */
+  int is_module, super_unknown, inc_unknown, ext_unknown, builtin_reopen;
+  int dyn_consts;       /* const_set with a computed name: any constant may be here */
+  char **inc; int ninc;   /* includes and prepends: all are ancestors */
+  char **ext; int next;   /* extends: ancestors of the singleton class */
+} BcMod;
+
+typedef struct {
+  Compiler *c;
+  const NodeTable *nt;
+  BcSet defs;            /* every constant's full name ("A::X", top level "X") */
+  BcSet nested;          /* leaf names defined inside a namespace */
+  BcSet unknown_set;     /* names const_set on a receiver the model cannot name */
+  BcSet unknown_inc;     /* modules included into a receiver the model cannot name */
+  BcSet builtin_held;    /* leaf names the program defines in a builtin class */
+  BcSet written;         /* constants assigned a value other than an anonymous class */
+  BcSet written_leaf;    /* ... the leaf names of those assigned where the cref is unknown */
+  BcMod *mods; int nmods;
+  int *modix; unsigned modcap;
+  int global_unknown;    /* a computed module included into an unknown receiver */
+  int ext_global_unknown;
+  int has_const_missing;
+  int give_up;
+  const char *cref[64]; int ncref;
+  char **strs; int nstrs, cstrs;   /* owned strings the cref stack points at */
+} Bc;
+
+static char *bc_join(const char *p, const char *leaf) {
+  size_t n = strlen(p) + strlen(leaf) + 3;
+  char *s = malloc(n);
+  if (*p) snprintf(s, n, "%s::%s", p, leaf);
+  else snprintf(s, n, "%s", leaf);
+  return s;
+}
+
+/* A name CRuby (or a library spinel provides) answers at the top level. */
+static int bc_toplevel_known(const char *n) {
+  static const char *const names[] = {
+    "ARGF", "ARGV", "ArgumentError", "Array", "BasicObject", "Binding", "Class", "ClosedQueueError",
+    "Comparable", "Complex", "ConditionVariable", "Data", "Dir", "ENV", "EOFError", "Encoding",
+    "EncodingError", "Enumerable", "Enumerator", "Errno", "Exception", "FalseClass", "Fiber", "FiberError",
+    "File", "FileTest", "Float", "FloatDomainError", "FrozenError", "GC", "Hash", "IO",
+    "IOError", "IndexError", "Integer", "Interrupt", "Kernel", "KeyError", "LoadError", "LocalJumpError",
+    "Marshal", "MatchData", "Math", "Method", "Module", "Mutex", "NameError", "NilClass",
+    "NoMatchingPatternError", "NoMatchingPatternKeyError", "NoMemoryError", "NoMethodError", "NotImplementedError", "Numeric", "Object", "ObjectSpace",
+    "Pathname", "Proc", "Process", "Queue", "RUBY_COPYRIGHT", "RUBY_DESCRIPTION", "RUBY_ENGINE", "RUBY_ENGINE_VERSION",
+    "RUBY_PATCHLEVEL", "RUBY_PLATFORM", "RUBY_RELEASE_DATE", "RUBY_REVISION", "RUBY_VERSION", "Ractor", "Random", "Range",
+    "RangeError", "Rational", "Refinement", "Regexp", "RegexpError", "Ruby", "RubyVM", "RuntimeError",
+    "STDERR", "STDIN", "STDOUT", "ScriptError", "SecurityError", "Set", "Signal", "SignalException",
+    "SizedQueue", "StandardError", "StopIteration", "String", "Struct", "Symbol", "SyntaxError", "SystemCallError",
+    "SystemExit", "SystemStackError", "TOPLEVEL_BINDING", "Thread", "ThreadError", "ThreadGroup", "Time", "TracePoint",
+    "TrueClass", "TypeError", "UnboundMethod", "UncaughtThrowError", "UnicodeNormalize", "Warning", "ZeroDivisionError",
+    /* the standard library's top-level names: a program that requires one
+       reaches it from anywhere */
+    "Abbrev", "Addrinfo", "Base64", "BasicSocket", "Benchmark", "BigDecimal", "CGI", "CSV", "Coverage",
+    "DRb", "Date", "DateTime", "DelegateClass", "Delegator", "Digest", "ERB", "English", "Etc", "FFI",
+    "Fcntl", "Fiddle", "FileUtils", "Find", "Forwardable", "Gem", "GetoptLong", "IPAddr", "IPSocket",
+    "JSON", "Logger", "Matrix", "Minitest", "Monitor", "MonitorMixin", "Net", "Observable", "Open3",
+    "OpenSSL", "OpenStruct", "OptionParser", "PP", "PStore", "Prime", "Psych", "RbConfig", "Readline",
+    "Resolv", "Ripper", "SecureRandom", "Shellwords", "SimpleDelegator", "SingleForwardable", "Singleton",
+    "Socket", "StringIO", "StringScanner", "TCPServer", "TCPSocket", "TSort", "Tempfile", "Test", "Timeout",
+    "UDPSocket", "UNIXServer", "UNIXSocket", "URI", "Vector", "WeakRef", "YAML", "Zlib",
+    NULL
+  };
+  if (!n) return 1;
+  for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
+  return builtin_class_id(n) != 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
+         is_builtin_exception_name(n);
+}
+
+/* A builtin ancestor with no constants of its own (CRuby 4.0's
+   `K.constants - Object.constants` is empty): the user's reopenings are all
+   it can contribute. Any other builtin ancestor may answer the name itself. */
+static int bc_builtin_constless(const char *n) {
+  static const char *const names[] = {
+    "Object", "BasicObject", "Kernel", "Comparable", "Enumerable", "Array", "Hash", "String",
+    "Integer", "Numeric", "Struct", "Data", "Symbol", "Proc", "Range", "Module", "Class", "Time",
+    "Rational", "Dir", "Fiber", "Mutex", "Queue", "SizedQueue", "ConditionVariable", "MatchData",
+    "Method", "UnboundMethod", "NilClass", "TrueClass", "FalseClass", "Signal", "Warning", NULL
+  };
+  for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
+  return is_builtin_exception_name(n) && !strchr(n, ':');
+}
+
+/* mods by name: an open-addressed index of b->mods positions */
+static int bc_mod_slot(const Bc *b, const char *name) {
+  unsigned m = b->modcap - 1, i = sp_strhash(name) & m;
+  while (b->modix[i] >= 0 && !sp_streq(b->mods[b->modix[i]].name, name)) i = (i + 1) & m;
+  return (int)i;
+}
+static BcMod *bc_mod(Bc *b, const char *name, int create) {
+  if (b->modcap) {
+    int ix = b->modix[bc_mod_slot(b, name)];
+    if (ix >= 0) return &b->mods[ix];
+  }
+  if (!create) return NULL;
+  if ((unsigned)(b->nmods + 1) * 2 > b->modcap) {
+    free(b->modix);
+    b->modcap = b->modcap ? b->modcap * 2 : 64;
+    b->modix = malloc(sizeof(int) * b->modcap);
+    for (unsigned i = 0; i < b->modcap; i++) b->modix[i] = -1;
+    for (int i = 0; i < b->nmods; i++) b->modix[bc_mod_slot(b, b->mods[i].name)] = i;
+  }
+  b->mods = realloc(b->mods, sizeof(BcMod) * (size_t)(b->nmods + 1));
+  BcMod *m = &b->mods[b->nmods];
+  memset(m, 0, sizeof *m);
+  m->name = strdup(name);
+  m->is_module = -1;
+  b->modix[bc_mod_slot(b, name)] = b->nmods++;
+  return m;
+}
+
+static char *bc_own(Bc *b, char *s) {
+  if (b->nstrs >= b->cstrs) {
+    b->cstrs = b->cstrs ? b->cstrs * 2 : 256;
+    b->strs = realloc(b->strs, sizeof(char *) * (size_t)b->cstrs);
+  }
+  b->strs[b->nstrs++] = s;
+  return s;
+}
+
+static int bc_builtin_module(const char *n) {
+  static const char *const names[] = {
+    "Kernel", "Comparable", "Enumerable", "Math", "Marshal", "FileTest", "Errno", "Warning",
+    "ObjectSpace", "Process", "GC", "Signal", NULL
+  };
+  for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
+  return is_builtin_module_name(n);
+}
+
+/* found: 1, not found: 0, can't tell: -1 */
+#define BC_FOUND 1
+#define BC_UNSURE -1
+static int bc_anc(Bc *b, const char *k, const char *n, BcSet *seen, char **hit, int depth);
+
+static int bc_merge(int a, int r) {
+  if (a == BC_FOUND || r == BC_FOUND) return BC_FOUND;
+  return (a == BC_UNSURE || r == BC_UNSURE) ? BC_UNSURE : 0;
+}
+
+static BcMod *bc_mod(Bc *b, const char *name, int create);
+static int bc_own_table(Bc *b, const char *k, const char *n, char **hit) {
+  char *fn = bc_join(k, n);
+  if (bc_has(&b->defs, fn)) { if (hit && !*hit) *hit = fn; else free(fn); return BC_FOUND; }
+  free(fn);
+  BcMod *m = bc_mod(b, k, 0);
+  return m && m->dyn_consts ? BC_UNSURE : 0;
+}
+
+/* Object's ancestors past Object: what the top level includes, Kernel,
+   BasicObject. */
+static int bc_anc_object(Bc *b, const char *n, BcSet *seen, char **hit, int depth) {
+  int r = bc_anc(b, "Kernel", n, seen, hit, depth + 1);
+  r = bc_merge(r, bc_anc(b, "BasicObject", n, seen, hit, depth + 1));
+  BcMod *o = bc_mod(b, "", 0);
+  if (o) {
+    if (o->inc_unknown) r = bc_merge(r, BC_UNSURE);
+    for (int i = 0; i < o->ninc; i++) r = bc_merge(r, bc_anc(b, o->inc[i], n, seen, hit, depth + 1));
+  }
+  return r;
+}
+
+static int bc_anc(Bc *b, const char *k, const char *n, BcSet *seen, char **hit, int depth) {
+  if (depth > 64) return BC_UNSURE;
+  if (bc_has(seen, k)) return 0;
+  bc_add(seen, k);
+  if (!*k) return bc_anc_object(b, n, seen, hit, depth);
+  if (k[0] == '#') return BC_UNSURE;            /* a singleton class as an ancestor */
+  int r = bc_own_table(b, k, n, hit);
+  BcMod *m = bc_mod(b, k, 0);
+  int builtin = !strchr(k, ':') ? bc_toplevel_known(k) : is_builtin_exception_name(k);
+  if (builtin && !bc_builtin_constless(k)) r = bc_merge(r, BC_UNSURE);
+  if (!m && !builtin) return bc_merge(r, BC_UNSURE);   /* not a namespace the program defines */
+  int is_module = m ? m->is_module == 1 : bc_builtin_module(k);
+  if (m) {
+    if (m->inc_unknown) r = bc_merge(r, BC_UNSURE);
+    for (int i = 0; i < m->ninc; i++) r = bc_merge(r, bc_anc(b, m->inc[i], n, seen, hit, depth + 1));
+    if (m->super_unknown) r = bc_merge(r, BC_UNSURE);
+    else if (m->super) r = bc_merge(r, bc_anc(b, m->super, n, seen, hit, depth + 1));
+  }
+  /* a class with no superclass written (or a builtin one) ends at Object */
+  if (!is_module && !(m && (m->super || m->super_unknown)) && !sp_streq(k, "BasicObject"))
+    r = bc_merge(r, bc_anc(b, "", n, seen, hit, depth + 1));
+  /* a builtin class's own superclass chain is not modelled: a reopened
+     builtin holding the name may sit on it */
+  if (builtin && !is_module && r != BC_FOUND && bc_has(&b->builtin_held, n)) r = bc_merge(r, BC_UNSURE);
+  return r;
+}
+
+/* CRuby's lookup of bare `n` from the current cref. *hit gets the full name
+   found (caller frees). */
+static int bc_lookup(Bc *b, const char *n, char **hit) {
+  *hit = NULL;
+  int lex = 0;
+  for (int i = b->ncref - 1; i >= 1; i--) {
+    const char *e = b->cref[i];
+    if (e[0] == '?') return BC_UNSURE;
+    int o = *e ? bc_own_table(b, e, n, hit) : 0;
+    if (o == BC_FOUND) return BC_FOUND;
+    lex = bc_merge(lex, o);
+  }
+  const char *top = b->cref[b->ncref - 1];
+  BcSet seen = {0};
+  int r;
+  /* a class written inside `class << D` ("#<Class:D>::Foo") is not a
+     singleton: it takes the general branch, where bc_anc leaves it unsure */
+  if (top[0] == '#' && !strstr(top, ">::")) {
+    /* `class << D`: the singleton's ancestors are D's extends, then the
+       singleton classes up D's superclass chain, then Class, Module, Object */
+    r = 0;
+    char inner[512];
+    snprintf(inner, sizeof inner, "%s", top + 8);   /* "#<Class:" */
+    size_t il = strlen(inner);
+    if (il && inner[il - 1] == '>') inner[il - 1] = 0;
+    if (inner[0] == '?') r = BC_UNSURE;
+    if (b->ext_global_unknown) r = bc_merge(r, BC_UNSURE);
+    for (BcMod *m = bc_mod(b, inner, 0); m; ) {
+      if (m->ext_unknown || m->super_unknown) r = bc_merge(r, BC_UNSURE);
+      for (int i = 0; i < m->next; i++) r = bc_merge(r, bc_anc(b, m->ext[i], n, &seen, hit, 1));
+      char sc[600]; snprintf(sc, sizeof sc, "#<Class:%s>", m->name);
+      r = bc_merge(r, bc_own_table(b, sc, n, hit));
+      m = m->super ? bc_mod(b, m->super, 0) : NULL;
+    }
+    r = bc_merge(r, bc_anc(b, "", n, &seen, hit, 1));
+  }
+  else {
+    r = bc_anc(b, top, n, &seen, hit, 0);
+    BcMod *m = *top ? bc_mod(b, top, 0) : NULL;
+    if (m && m->is_module == 1) r = bc_merge(r, bc_anc(b, "", n, &seen, hit, 0));
+  }
+  bc_set_free(&seen);
+  r = bc_merge(r, lex);
+  if (r == BC_FOUND) return r;
+  if (b->global_unknown || bc_has(&b->unknown_set, n)) return BC_UNSURE;
+  /* a module the program includes somewhere it cannot name may bring it */
+  for (unsigned i = 0; i < b->unknown_inc.cap; i++) {
+    if (!b->unknown_inc.k[i]) continue;
+    BcSet s2 = {0}; char *h2 = NULL;
+    int r2 = bc_anc(b, b->unknown_inc.k[i], n, &s2, &h2, 1);
+    bc_set_free(&s2); free(h2);
+    if (r2 != 0) return BC_UNSURE;
+  }
+  return r;
+}
+
+/* The full name a constant expression denotes, or NULL. */
+static char *bc_resolve(Bc *b, int id) {
+  const NodeTable *nt = b->nt;
+  if (id < 0) return NULL;
+  const char *ty = nt_type(nt, id);
+  const char *nm = nt_str(nt, id, "name");
+  if (!ty || !nm) return NULL;
+  char *r = NULL;
+  if (sp_streq(ty, "ConstantReadNode")) {
+    if (sp_streq(nm, "Object")) return strdup("");
+    char *hit = NULL;
+    if (bc_lookup(b, nm, &hit) == BC_FOUND && hit) return hit;
+    free(hit);
+    return strdup(nm);
+  }
+  if (sp_streq(ty, "ConstantPathNode")) {
+    int par = nt_ref(nt, id, "parent");
+    if (par < 0) return sp_streq(nm, "Object") ? strdup("") : strdup(nm);
+    char *p = bc_resolve(b, par);
+    if (!p) return NULL;
+    r = bc_join(p, nm);
+    if (*p && !bc_has(&b->defs, r)) {
+      /* `A::B` also finds B among A's ancestors */
+      BcSet seen = {0}; char *hit = NULL;
+      if (bc_anc(b, p, nm, &seen, &hit, 0) == BC_FOUND && hit) { free(r); r = hit; hit = NULL; }
+      free(hit); bc_set_free(&seen);
+    }
+    free(p);
+    return r;
+  }
+  return NULL;
+}
+
+static void bc_define(Bc *b, const char *full) {
+  if (!full) return;
+  bc_add(&b->defs, full);
+  const char *leaf = strrchr(full, ':');
+  if (!leaf) return;
+  bc_add(&b->nested, leaf + 1);
+  const char *first = strchr(full, ':');
+  if (first == leaf - 1) {
+    char head[256];
+    snprintf(head, sizeof head, "%.*s", (int)(first - full), full);
+    if (bc_toplevel_known(head)) bc_add(&b->builtin_held, leaf + 1);
+  }
+}
+
+static int bc_is_const_node(const NodeTable *nt, int id) {
+  const char *t = id >= 0 ? nt_type(nt, id) : NULL;
+  return t && (sp_streq(t, "ConstantReadNode") || sp_streq(t, "ConstantPathNode"));
+}
+
+static const char *bc_sym_arg(const NodeTable *nt, int arg) {
+  const char *t = arg >= 0 ? nt_type(nt, arg) : NULL;
+  if (!t) return NULL;
+  if (sp_streq(t, "SymbolNode")) return nt_str(nt, arg, "value");
+  if (sp_streq(t, "StringNode")) {
+    const char *s = nt_str(nt, arg, "content");
+    return s ? s : nt_str(nt, arg, "unescaped");
+  }
+  return NULL;
+}
+
+/* `Class.new(..)`, `Module.new`, `Struct.new(..)`, `Data.define(..)` */
+static int bc_anon_class_call(const NodeTable *nt, int id, int *is_module) {
+  const char *t = id >= 0 ? nt_type(nt, id) : NULL;
+  if (!t || !sp_streq(t, "CallNode")) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int rv = nt_ref(nt, id, "receiver");
+  const char *rt = rv >= 0 ? nt_type(nt, rv) : NULL;
+  const char *rn = rt && sp_streq(rt, "ConstantReadNode") ? nt_str(nt, rv, "name") : NULL;
+  if (!nm || !rn) return 0;
+  *is_module = sp_streq(rn, "Module");
+  return (sp_streq(nm, "new") && (sp_streq(rn, "Class") || sp_streq(rn, "Module") || sp_streq(rn, "Struct"))) ||
+         (sp_streq(nm, "define") && sp_streq(rn, "Data"));
+}
+
+/* The superclass an anonymous class expression `v` creates: 1 with *out the
+   resolved name (NULL = Object), 0 when it is not one or cannot be told. */
+static int bc_anon_super(Bc *b, int v, char **out) {
+  const NodeTable *nt = b->nt;
+  int am = 0;
+  *out = NULL;
+  if (!bc_anon_class_call(nt, v, &am) || am) return 0;
+  const char *rn = nt_str(nt, nt_ref(nt, v, "receiver"), "name");
+  if (rn && sp_streq(rn, "Data")) { *out = strdup("Data"); return 1; }
+  if (rn && sp_streq(rn, "Struct")) { *out = strdup("Struct"); return 1; }
+  int args = nt_ref(nt, v, "arguments");
+  int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+  if (ac == 0) return 1;                              /* Class.new: Object */
+  if (ac == 1 && bc_is_const_node(nt, av[0])) { *out = bc_resolve(b, av[0]); return *out != NULL; }
+  return 0;
+}
+
+/* `Al = A::B` then `class Al` / `Al.include M` / `Al::Z = 1`: the body or
+   constant lands in A::B, which the model would credit to Al. A namespace
+   named through an assigned constant (or under one) is not followed: the
+   whole pass gives up. */
+static void bc_check_alias(Bc *b, const char *full) {
+  if (!full || full[0] == '?' || full[0] == '#') return;
+  char buf[600];
+  snprintf(buf, sizeof buf, "%s", full);
+  for (;;) {                                /* buf, then each enclosing prefix */
+    char *cut = NULL;
+    for (char *q = buf; (q = strstr(q, "::")); q += 2) cut = q;
+    if (bc_has(&b->written, buf) || bc_has(&b->written_leaf, cut ? cut + 2 : buf)) { b->give_up = 1; return; }
+    if (!cut) return;
+    *cut = 0;
+  }
+}
+
+static void bc_walk(Bc *b, int id, const char *self, int mode);
+
+static void bc_walk_kids(Bc *b, int id, const char *self, int mode) {
+  const NodeTable *nt = b->nt;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) bc_walk(b, nt_ref_at(nt, id, i), self, mode);
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, id, i, &m);
+    for (int k = 0; k < m; k++) bc_walk(b, ids[k], self, mode);
+  }
+}
+
+static int bc_push(Bc *b, const char *full) {
+  if (b->ncref >= 64) { b->give_up = 1; return 0; }
+  b->cref[b->ncref++] = full;
+  return 1;
+}
+
+/* Mode 2: one bare read */
+static void bc_check(Bc *b, int id, int in_defined) {
+  const NodeTable *nt = b->nt;
+  const char *n = nt_str(nt, id, "name");
+  if (!n || !bc_has(&b->nested, n) || bc_has(&b->defs, n) || bc_toplevel_known(n)) return;
+  char *hit = NULL;
+  int r = bc_lookup(b, n, &hit);
+  free(hit);
+  if (getenv("SPINEL_BCN_REPORT")) {
+    int ln = (int)nt_int(nt, id, "node_line", 0);
+    fprintf(stderr, "BCN %s line %d %s from [%s] -> %s\n", n, ln, in_defined ? "(defined?)" : "",
+            b->cref[b->ncref - 1], r == BC_FOUND ? "found" : r == BC_UNSURE ? "unsure" : "UNREACHABLE");
+    return;
+  }
+  if (r != 0) return;
+  if (in_defined) {
+    /* defined?(X) answers nil, as for a name defined nowhere */
+    nt_set_str((NodeTable *)nt, id, "name", "SpinelNoSuchConstant__");
+    return;
+  }
+  const char *top = b->cref[b->ncref - 1];
+  /* the program's own definitions of the name, for the message */
+  char where[512]; where[0] = 0;
+  for (unsigned i = 0; i < b->defs.cap; i++) {
+    const char *d = b->defs.k[i];
+    if (!d) continue;
+    const char *leaf = strrchr(d, ':');
+    if (!leaf || !sp_streq(leaf + 1, n)) continue;
+    size_t wl = strlen(where);
+    if (wl > 400) break;
+    snprintf(where + wl, sizeof where - wl, "%s%s", wl ? ", " : "", d);
+  }
+  char msg[1400];
+  const char *cm = b->has_const_missing
+    ? "; CRuby then calls const_missing (or raises NameError), which spinel does not follow here" : "";
+  if (*top)
+    snprintf(msg, sizeof msg, "uninitialized constant %s::%s (NameError): the program defines it only as %s, "
+             "which CRuby's lookup from %s (its lexical scope, then its ancestors) does not reach%s",
+             top, n, where, top, cm);
+  else
+    snprintf(msg, sizeof msg, "uninitialized constant %s (NameError): the program defines it only as %s, "
+             "which CRuby's lookup from the top level does not reach%s", n, where, cm);
+  unsupported_feature(b->c, id, msg);
+}
+
+static void bc_walk(Bc *b, int id, const char *self, int mode) {
+  const NodeTable *nt = b->nt;
+  if (id < 0 || b->give_up) return;
+  const char *ty = nt_type(nt, id);
+  if (!ty) return;
+  const char *top = b->cref[b->ncref - 1];
+  if (sp_streq(ty, "ClassNode") || sp_streq(ty, "ModuleNode")) {
+    int is_mod = sp_streq(ty, "ModuleNode");
+    int cp = nt_ref(nt, id, "constant_path");
+    const char *cpt = cp >= 0 ? nt_type(nt, cp) : NULL;
+    char *full = NULL;
+    if (cpt && sp_streq(cpt, "ConstantReadNode")) {
+      const char *nm = nt_str(nt, cp, "name");
+      full = nm ? (top[0] == '?' ? strdup("?") : (sp_streq(nm, "Object") && !*top ? strdup("") : bc_join(top, nm))) : NULL;
+    }
+    else if (cpt && sp_streq(cpt, "ConstantPathNode")) {
+      full = bc_resolve(b, cp);
+      if (mode == 2) bc_walk(b, nt_ref(nt, cp, "parent"), self, mode);
+    }
+    if (!full) full = strdup("?");
+    bc_own(b, full);
+    if (mode == 1) bc_check_alias(b, full);
+    if (full[0] != '?') {
+      if (mode == 0 && *full) {
+        bc_define(b, full);
+        BcMod *m = bc_mod(b, full, 1);
+        m->is_module = is_mod;
+        if (!strchr(full, ':') && bc_toplevel_known(full)) m->builtin_reopen = 1;
+      }
+      int sc = is_mod ? -1 : nt_ref(nt, id, "superclass");
+      if (sc >= 0) {
+        bc_walk(b, sc, self, mode);
+        if (mode == 1 && *full) {
+          BcMod *m = bc_mod(b, full, 1);
+          char *s = NULL;
+          int known = bc_is_const_node(nt, sc) ? (s = bc_resolve(b, sc)) != NULL : bc_anon_super(b, sc, &s);
+          if (!known) m->super_unknown = 1;
+          else if (s && !m->super) m->super = s;
+          else free(s);
+        }
+      }
+    }
+    if (bc_push(b, full)) {
+      bc_walk(b, nt_ref(nt, id, "body"), full, mode);
+      b->ncref--;
+    }
+    return;
+  }
+  if (sp_streq(ty, "SingletonClassNode")) {
+    int ex = nt_ref(nt, id, "expression");
+    bc_walk(b, ex, self, mode);
+    const char *et = ex >= 0 ? nt_type(nt, ex) : NULL;
+    char buf[600];
+    if (et && sp_streq(et, "SelfNode") && self && self[0] != '#' && self[0] != '?')
+      snprintf(buf, sizeof buf, "#<Class:%s>", self);
+    else snprintf(buf, sizeof buf, "#<Class:?>");
+    char *mk = bc_own(b, strdup(buf));
+    if (bc_push(b, mk)) {
+      bc_walk(b, nt_ref(nt, id, "body"), mk, mode);
+      b->ncref--;
+    }
+    return;
+  }
+  if (sp_streq(ty, "DefNode")) {
+    const char *nm = nt_str(nt, id, "name");
+    if (mode == 0 && nm && sp_streq(nm, "const_missing")) b->has_const_missing = 1;
+    int rv = nt_ref(nt, id, "receiver");
+    const char *rt = rv >= 0 ? nt_type(nt, rv) : NULL;
+    const char *ds = (rt && sp_streq(rt, "SelfNode")) ? self : NULL;
+    bc_walk(b, nt_ref(nt, id, "parameters"), ds, mode);
+    bc_walk(b, nt_ref(nt, id, "body"), ds, mode);
+    return;
+  }
+  if (sp_streq(ty, "ConstantWriteNode") || sp_streq(ty, "ConstantOrWriteNode") ||
+      sp_streq(ty, "ConstantAndWriteNode") || sp_streq(ty, "ConstantOperatorWriteNode") ||
+      sp_streq(ty, "ConstantTargetNode")) {
+    const char *nm = nt_str(nt, id, "name");
+    char *full = (nm && top[0] != '?') ? bc_join(top, nm) : NULL;
+    if (mode == 0 && full && *top != '#') bc_define(b, full);
+    else if (mode == 0 && full) bc_add(&b->defs, full);   /* a singleton class's own */
+    int v = nt_ref(nt, id, "value");
+    int am = 0;
+    int anon = bc_anon_class_call(nt, v, &am);
+    if (mode == 0 && !anon) {
+      if (full) bc_add(&b->written, full);
+      else if (nm) bc_add(&b->written_leaf, nm);
+    }
+    if (full && anon) {
+      /* X = Class.new(S) do .. end: the block's self is X (its cref is not) */
+      char *own = bc_own(b, full);
+      full = NULL;
+      if (mode == 1) {
+        BcMod *m = bc_mod(b, own, 1);
+        m->is_module = am;
+        char *s = NULL;
+        if (!am) {
+          if (!bc_anon_super(b, v, &s)) m->super_unknown = 1;
+          else if (s && !m->super) m->super = s;
+          else free(s);
+        }
+      }
+      bc_walk(b, nt_ref(nt, v, "receiver"), self, mode);
+      bc_walk(b, nt_ref(nt, v, "arguments"), self, mode);
+      bc_walk(b, nt_ref(nt, v, "block"), own, mode);
+      return;
+    }
+    free(full);
+    bc_walk_kids(b, id, self, mode);
+    return;
+  }
+  if (strncmp(ty, "ConstantPath", 12) == 0 && !sp_streq(ty, "ConstantPathNode")) {
+    /* A::X = v / A::X ||= v / a ConstantPathTargetNode */
+    int tg = sp_streq(ty, "ConstantPathTargetNode") ? id : nt_ref(nt, id, "target");
+    if (mode != 2 && tg >= 0) {
+      char *full = bc_resolve(b, tg);
+      int vv = tg == id ? -1 : nt_ref(nt, id, "value"), am = 0;
+      if (mode == 0 && full && *full) bc_define(b, full);
+      if (mode == 0 && full && *full && !bc_anon_class_call(nt, vv, &am)) bc_add(&b->written, full);
+      if (mode == 1 && full) {
+        char *par = strdup(full), *cut = NULL;
+        for (char *q = par; (q = strstr(q, "::")); q += 2) cut = q;
+        if (cut) { *cut = 0; bc_check_alias(b, par); }
+        free(par);
+      }
+      free(full);
+    }
+    if (tg == id) { bc_walk(b, nt_ref(nt, id, "parent"), self, mode); return; }
+    if (tg >= 0) bc_walk(b, nt_ref(nt, tg, "parent"), self, mode);
+    bc_walk(b, nt_ref(nt, id, "value"), self, mode);
+    return;
+  }
+  if (sp_streq(ty, "DefinedNode")) {
+    int v = nt_ref(nt, id, "value");
+    const char *vt = v >= 0 ? nt_type(nt, v) : NULL;
+    if (mode == 2 && vt && sp_streq(vt, "ConstantReadNode")) { bc_check(b, v, 1); return; }
+    if (mode == 2 && vt && sp_streq(vt, "ConstantPathNode")) {
+      /* defined?(X::Y) is nil, not NameError, when the head X is unreachable */
+      int head = v;
+      while (head >= 0 && nt_type(nt, head) && sp_streq(nt_type(nt, head), "ConstantPathNode"))
+        head = nt_ref(nt, head, "parent");
+      if (head >= 0 && nt_type(nt, head) && sp_streq(nt_type(nt, head), "ConstantReadNode")) {
+        bc_check(b, head, 1);
+        return;
+      }
+    }
+    bc_walk_kids(b, id, self, mode);
+    return;
+  }
+  if (sp_streq(ty, "ConstantReadNode")) {
+    if (mode == 2) bc_check(b, id, 0);
+    return;
+  }
+  if (sp_streq(ty, "CallNode")) {
+    const char *nm = nt_str(nt, id, "name");
+    int rv = nt_ref(nt, id, "receiver");
+    const char *rt = rv >= 0 ? nt_type(nt, rv) : NULL;
+    int args = nt_ref(nt, id, "arguments");
+    int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    int on_self = rv < 0 || (rt && sp_streq(rt, "SelfNode"));
+    /* the receiver a module-level call (include, const_set) acts on */
+    char *target = NULL; int target_known = 0;
+    if (on_self) { target = self ? strdup(self) : NULL; target_known = self != NULL && self[0] != '?'; }
+    else if (bc_is_const_node(nt, rv) && (mode == 0 || mode == 1)) {
+      target = bc_resolve(b, rv); target_known = target != NULL;
+    }
+    if (target && target[0] == '?') target_known = 0;
+    const char *m2 = nm;
+    int a0 = 0;
+    if (nm && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) && ac >= 1) {
+      m2 = bc_sym_arg(nt, av[0]);
+      a0 = 1;
+    }
+    if (mode == 0 && m2 && sp_streq(m2, "const_set") && ac > a0) {
+      const char *cn = bc_sym_arg(nt, av[a0]);
+      if (cn && target_known) {
+        char *full = bc_join(target, cn);
+        bc_define(b, full);
+        free(full);
+      }
+      else if (cn) bc_add(&b->unknown_set, cn);
+      else if (target_known) bc_mod(b, target, 1)->dyn_consts = 1;
+      else b->global_unknown = 1;
+    }
+    if (mode == 1 && target_known && *target && m2 &&
+        (sp_streq(m2, "include") || sp_streq(m2, "prepend") || sp_streq(m2, "extend") || sp_streq(m2, "const_set") ||
+         sp_streq(m2, "class_eval") || sp_streq(m2, "module_eval") || sp_streq(m2, "class_exec") ||
+         sp_streq(m2, "module_exec")))
+      bc_check_alias(b, target);
+    if (mode == 1 && m2 && (sp_streq(m2, "include") || sp_streq(m2, "prepend") || sp_streq(m2, "extend"))) {
+      int ext = sp_streq(m2, "extend");
+      for (int i = a0; i < ac; i++) {
+        char *mn = bc_is_const_node(nt, av[i]) ? bc_resolve(b, av[i]) : NULL;
+        if (target_known) {
+          int sing = target[0] == '#' && !strstr(target, ">::");
+          char inner[600];
+          snprintf(inner, sizeof inner, "%s", sing ? target + 8 : target);
+          if (sing) { size_t il = strlen(inner); if (il && inner[il - 1] == '>') inner[il - 1] = 0; }
+          if (sing && ext) { free(mn); continue; }   /* a singleton's singleton */
+          BcMod *m = bc_mod(b, inner, 1);
+          if (ext || sing) {
+            if (!mn) m->ext_unknown = 1;
+            else { m->ext = realloc(m->ext, sizeof(char *) * (size_t)(m->next + 1)); m->ext[m->next++] = mn; mn = NULL; }
+          }
+          else {
+            if (!mn) m->inc_unknown = 1;
+            else { m->inc = realloc(m->inc, sizeof(char *) * (size_t)(m->ninc + 1)); m->inc[m->ninc++] = mn; mn = NULL; }
+          }
+        }
+        else if (ext) b->ext_global_unknown = 1;
+        else if (mn) bc_add(&b->unknown_inc, mn);
+        else b->global_unknown = 1;
+        free(mn);
+      }
+    }
+    free(target);
+    /* the block's self: class_eval and its kin rebind it to the receiver,
+       define_method to an instance; any other block may be instance_eval'd
+       by the method it is passed to */
+    const char *bself = NULL;
+    char *bown = NULL;
+    if (nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "class_exec") ||
+               sp_streq(nm, "module_exec") || sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec"))) {
+      if (on_self) bself = self;
+      else if (bc_is_const_node(nt, rv)) { bown = bc_resolve(b, rv); bself = bown ? bc_own(b, bown) : NULL; }
+    }
+    bc_walk(b, rv, self, mode);
+    bc_walk(b, args, self, mode);
+    if (nm && sp_streq(nm, "refine") && on_self) {
+      /* a refine block runs with the refinement pushed onto the cref,
+         whose ancestors are the refined class's: not modelled */
+      if (bc_push(b, "?")) {
+        bc_walk(b, nt_ref(nt, id, "block"), NULL, mode);
+        b->ncref--;
+      }
+      return;
+    }
+    bc_walk(b, nt_ref(nt, id, "block"), bself, mode);
+    return;
+  }
+  bc_walk_kids(b, id, self, mode);
+}
+
+void refuse_unreachable_bare_constants(Compiler *c) {
+  Bc *b = calloc(1, sizeof *b);
+  b->c = c;
+  b->nt = c->nt;
+  b->cref[0] = "";
+  b->ncref = 1;
+  int root = c->nt->root_id;
+  bc_walk(b, root, "", 0);
+  if (b->nested.n > 0 && !b->give_up) {
+    b->ncref = 1;
+    bc_walk(b, root, "", 1);
+    b->ncref = 1;
+    if (!b->give_up) bc_walk(b, root, "", 2);
+  }
+  bc_set_free(&b->defs); bc_set_free(&b->nested);
+  bc_set_free(&b->unknown_set); bc_set_free(&b->unknown_inc); bc_set_free(&b->builtin_held);
+  bc_set_free(&b->written); bc_set_free(&b->written_leaf);
+  for (int i = 0; i < b->nmods; i++) {
+    BcMod *m = &b->mods[i];
+    free(m->name); free(m->super);
+    for (int k = 0; k < m->ninc; k++) free(m->inc[k]);
+    for (int k = 0; k < m->next; k++) free(m->ext[k]);
+    free(m->inc); free(m->ext);
+  }
+  free(b->mods);
+  free(b->modix);
+  for (int i = 0; i < b->nstrs; i++) free(b->strs[i]);
+  free(b->strs);
+  free(b);
+}

@@ -21955,7 +21955,7 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
     if (kept != FWD_MODE_UNKNOWN && p &&
         ((p->type == TY_STRBUF && p->str_shared && c->strbuf_box[node]) ||
         (p->type == TY_POLY && c->strbuf_box[node] && c->poly_strbuf_lift[node]))) return 0;
-    /* A builtin boxed-array store preserves its incoming box, but that
+    /* A builtin boxed-container store preserves its incoming box, but that
        box need not preserve a mutable caller. Discharge this separate
        retention effect against the actual; it is never a readonly proof. */
     if (kept == FWD_MODE_BOX && p && p->type == TY_POLY &&
@@ -22176,6 +22176,12 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
   int index_store = n == 2 && nm &&
                     ((ty_is_hash(rt) && (sp_streq(nm, "[]=") || sp_streq(nm, "store"))) ||
                      ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "[]=")));
+  /* Boxed Hash values keep the original unnarrowed box; keys, typed
+     values and converted expression results do not inherit that contract.
+     store is lowered to []=, so exclude reopens of either spelling. */
+  int hash_box_store = index_store && ty_hash_val(rt) == TY_POLY && fwd_builtin(c, "Hash", "[]=") &&
+                       fwd_builtin(c, "Hash", "store") &&
+                       (kept == FWD_MODE_DISCARD || (kept == FWD_MODE_BOX && comp_ntype(c, node) == TY_POLY));
   /* Object identity comparison retains neither operand. For a user
      receiver, verify its actual chain too, including inherited overrides. */
   const char *identity_owner = ty_is_object(rt) ? c->classes[ty_object_class(rt)].name : "Object";
@@ -22241,10 +22247,13 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
          conversions and ternaries are conservatively retained, not exempted
          merely because their containing argument has a destination. */
       if (forwarded && !rest && nt_kind(nt, arg) != NK_LocalVariableReadNode) forwarded = 0;
-      int part = fwd_param_kept(c, f, mi, pn, arg, forwarded || consume ? FWD_MODE_DISCARD :
-                              !keyword && store_start >= 0 && i >= store_start ?
-                              (rt == TY_POLY_ARRAY && nt_kind(nt, arg) == NK_LocalVariableReadNode ?
-                               FWD_MODE_BOX : FWD_MODE_VALUE) : FWD_MODE_UNKNOWN, appended, depth + 1);
+      FwdKeepMode mode = FWD_MODE_UNKNOWN;
+      if (forwarded || consume) mode = FWD_MODE_DISCARD;
+      else if (!keyword && hash_box_store && i == 1 && nt_kind(nt, arg) == NK_LocalVariableReadNode)
+        mode = FWD_MODE_BOX;
+      else if (!keyword && store_start >= 0 && i >= store_start)
+        mode = rt == TY_POLY_ARRAY && nt_kind(nt, arg) == NK_LocalVariableReadNode ? FWD_MODE_BOX : FWD_MODE_VALUE;
+      int part = fwd_param_kept(c, f, mi, pn, arg, mode, appended, depth + 1);
       retained |= part;
       if (index_store && i == 1 && !keyword && (part & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
     }

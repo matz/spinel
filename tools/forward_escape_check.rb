@@ -430,6 +430,104 @@ def add_io_certificate_cases(certificate_cases)
   certificate_cases
 end
 
+def add_boxed_hash_certificate_cases(certificate_cases)
+  # A boxed-value Hash preserves an unnarrowed incoming box. Its keys and
+  # typed/narrowed values have different copy contracts; check metadata as
+  # well as bytes so a copied frozen String cannot masquerade as preservation.
+  { "string" => ['{"seed" => 0}', '"entry"'],
+    "symbol" => ['{seed: 0}', ':entry'],
+    "mixed" => ['{0 => 0}', ':entry'] }.each do |kind, (initial, key)|
+    %w[aset store].each do |operation|
+      write = operation == "aset" ? "@values[#{key}] = value" : "@values.store(#{key}, value)"
+      holder = <<~RUBY
+        class Holder
+          def initialize = @values = #{initial}
+          def put(value); #{write}; nil; end
+          def get = @values[#{key}]
+        end
+        holder = Holder.new
+        holder.put(1)
+      RUBY
+      certificate_cases["boxed_hash_#{kind}_#{operation}_frozen"] = [holder + <<~RUBY, "true\ntrue\nfrozen\n\"ice\"\n", true]
+        source = "ice"
+        holder.put(source)
+        result = holder.get
+        p result.equal?(source), result.frozen?
+        begin
+          result << "!"
+        rescue FrozenError
+          puts "frozen"
+        end
+        p source
+      RUBY
+      returned = holder.sub("#{write}; nil; end", "#{write}; end")
+      certificate_cases["boxed_hash_#{kind}_#{operation}_returned"] = [returned + <<~RUBY, "true\ntrue\ntrue\nfrozen\n\"ice\"\n", true]
+        source = "ice"
+        result = holder.put(source)
+        p result.equal?(source), result.equal?(holder.get), result.frozen?
+        begin
+          result << "!"
+        rescue FrozenError
+          puts "frozen"
+        end
+        p source
+      RUBY
+      certificate_cases["boxed_hash_#{kind}_#{operation}_mutable"] = [holder + <<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+        source = +"ice"
+        holder.put(source)
+        holder.get << "!"
+        p source, holder.get
+      RUBY
+      # Occurrence-narrowing to String reboxes bytes even in a boxed Hash.
+      narrowed = holder.sub(write, "if value.is_a?(String); #{write}; end")
+      certificate_cases["boxed_hash_#{kind}_#{operation}_narrowed"] = [narrowed + <<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+        source = +"ice"
+        holder.put(source)
+        holder.get << "!"
+        p source, holder.get
+      RUBY
+    end
+  end
+  %w[[]= store].each do |method|
+    certificate_cases["boxed_hash_override_#{method}"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", false]
+      $held = nil
+      class Hash
+        def #{method}(key, value); $held = value; value; end
+      end
+      class Holder
+        def initialize = @values = {seed: 0}
+        def put(value); @values.#{method}(:entry, value); nil; end
+      end
+      holder = Holder.new
+      holder.put(1)
+      source = +"ice"
+      holder.put(source)
+      $held << "!"
+      p source, $held
+    RUBY
+    # A frozen actual would discharge BOX retention. The override's visible
+    # side effect must not be hidden by store-to-[]= lowering or that discharge.
+    certificate_cases["boxed_hash_frozen_override_#{method}"] = [<<~RUBY, "true\ntrue\n\"ice\"\n", :native_or_refusal]
+      $held = nil
+      class Hash
+        def #{method}(key, value); $held = value; value; end
+      end
+      class Holder
+        def initialize = @values = {seed: 0}
+        def put(value); @values.#{method}(:entry, value); nil; end
+      end
+      holder = Holder.new
+      holder.put(1)
+      source = "ice"
+      holder.put(source)
+      p $held.equal?(source), $held.frozen?, source
+    RUBY
+  end
+  path = File.expand_path("../test/boxed_param_value_into_typed_hash_slot.rb", __dir__)
+  certificate_cases["original_boxed_param_value_into_typed_hash_slot"] = [File.read(path), File.binread(path + ".expected"), true]
+  certificate_cases
+end
+
 failures = []
 refusals = 0
 native_passes = 0
@@ -1429,7 +1527,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   certificate_cases["readonly_field_loop_coercion"] = [
     "class Hidden; def coerce(value) = [value, 1]; end\n" + cells, cells_expected, false
   ]
-  add_io_certificate_cases(certificate_cases).each do |name, (input, expected, native)|
+  add_boxed_hash_certificate_cases(add_io_certificate_cases(certificate_cases)).each do |name, (input, expected, native)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
     executable = File.join(dir, name)

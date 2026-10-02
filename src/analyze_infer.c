@@ -1899,10 +1899,13 @@ int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out
   return 1;
 }
 
+/* The analyze twin of codegen's poly_name_user_claimed, readers included: an
+   attr_reader is an arm of the dispatch like a def. */
 static int an_user_poly_arm(Compiler *c, const char *name, int argc) {
   if (an_builtin_only) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (comp_poly_arm_defines_n(c, k, name, argc)) return 1;
+    if (comp_poly_arm_defines_n(c, k, name, argc) ||
+        (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL))) return 1;
   return 0;
 }
 

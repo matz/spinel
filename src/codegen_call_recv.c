@@ -14311,7 +14311,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      (an_to_a_result_mutated): an Array answers itself, not the face's copy */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "to_a") || sp_streq(name, "to_ary")) && comp_ntype(c, id) == TY_POLY) {
-    if (!poly_name_user_claimed(c, name, argc, 0)) {
+    if (!poly_name_user_claimed(c, name, argc)) {
       buf_printf(b, "sp_poly_to_a_self(\"%s\", ", name);
       emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
@@ -14713,7 +14713,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       nt_ref(nt, id, "block") < 0 &&
       nt_type(nt, argv[argc - 1]) &&
       sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode")) {
-    int has_user_kw = poly_name_user_claimed(c, name, argc, 1);
+    int has_user_kw = poly_name_user_claimed(c, name, argc);
     /* Which keywords were written is a compile-time fact for a literal key;
        a `**splat` is read at run time, and a key spelled some other way is
        not read at all -- nothing may be called an unknown keyword on the
@@ -14775,7 +14775,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       (sp_streq(name, "round") || sp_streq(name, "ceil") ||
        sp_streq(name, "floor") || sp_streq(name, "truncate")) &&
       nt_ref(nt, id, "block") < 0) {
-    if (!poly_name_user_claimed(c, name, argc, 1)) {
+    if (!poly_name_user_claimed(c, name, argc)) {
       /* ceil / floor / truncate with a precision had no arm at all and
          raised NoMethodError on a Float (#4532) */
       if (sp_streq(name, "round")) buf_puts(b, "sp_poly_round_n(");
@@ -14851,7 +14851,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      the receiver's own kind at each step (#3509). */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "dig") && argc >= 1 &&
       nt_ref(nt, id, "block") < 0) {
-    int has_user_dig = poly_name_user_claimed(c, name, argc, 1);
+    int has_user_dig = poly_name_user_claimed(c, name, argc);
     /* the receiver is held across the arguments, which may allocate */
     if (!has_user_dig) {
       if (argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode)
@@ -14911,7 +14911,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       sp_streq(name, "coerce")  ? "sp_poly_coerce" :
       sp_streq(name, "quo")     ? "sp_poly_quo" : NULL;
     if (pfn1) {
-      if (!poly_name_user_claimed(c, name, argc, 1)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         buf_printf(b, "%s(", pfn1); emit_expr(c, recv, b);
         buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
         return 1;
@@ -15019,7 +15019,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        hook); for an array/hash it is the elements/pairs. */
     if ((sp_streq(name, "to_a") || sp_streq(name, "deconstruct")) && argc == 0 &&
         nt_ref(nt, id, "block") < 0) {
-      if (!poly_name_user_claimed(c, name, argc, 0)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         /* to_a itself also answers a Time's fields (sp_poly_to_a_call) */
         buf_puts(b, sp_streq(name, "to_a") ? "sp_poly_to_a_call(" : "sp_poly_to_a_arr(");
         emit_expr(c, recv, b); buf_puts(b, ")");
@@ -15031,7 +15031,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        class with a method or a reader of the name wins the dispatch. */
     if (sp_streq(name, "entries") && nt_ref(nt, id, "block") < 0 &&
         comp_ntype(c, id) == TY_POLY_ARRAY) {
-      if (!poly_name_user_claimed(c, name, argc, 1)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         buf_puts(b, "sp_poly_entries("); emit_expr(c, recv, b); buf_puts(b, ")");
         return 1;
       }
@@ -15041,7 +15041,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        the dispatch instead, whose default still answers a Struct's names;
        answered here, `room.members` read out of a Hash was the names. */
     if (sp_streq(name, "members") && argc == 0 && nt_ref(nt, id, "block") < 0) {
-      if (!poly_name_user_claimed(c, "members", argc, 1)) {
+      if (!poly_name_user_claimed(c, "members", argc)) {
         /* a Class read out of the slot answers the class-side members list
            through the generated sp_cls_members, when the program has it;
            anything else answers through the instance helper */
@@ -15060,14 +15060,14 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     /* Hash#keys / #values on a poly value (e.g. an evidence-free empty `{}` that
        stayed poly). Skip when a user class defines keys/values so its method wins. */
     if (sp_streq(name, "keys") || sp_streq(name, "values")) {
-      if (!poly_name_user_claimed(c, name, argc, 0)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         buf_printf(b, "sp_poly_%s(", name); emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
       }
     }
     if (sp_streq(name, "count")) {
       /* count / count(v) / count { |x| } on a boxed array (skip when any
          user class defines count -- same rule as length below) */
-      int has_user_cnt = poly_name_user_claimed(c, "count", argc, 1);
+      int has_user_cnt = poly_name_user_claimed(c, "count", argc);
       int cblk = nt_ref(nt, id, "block");
       if (!has_user_cnt && argc == 0 && cblk >= 0) {
         int cbody = nt_ref(nt, cblk, "body");
@@ -15131,7 +15131,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
          anywhere down the dispatch path, where nothing answers `empty?` --
          so the call became an unconditional raise whatever the receiver was
          (#3805). Defining `length` does not define `empty?` in Ruby either. */
-      int has_user_len = poly_name_user_claimed(c, name, argc, 1);
+      int has_user_len = poly_name_user_claimed(c, name, argc);
       if (!has_user_len) {
         if (sp_streq(name, "empty?")) {
           /* A user object has no #empty? of its own here, and sp_poly_length
@@ -15172,7 +15172,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     /* `to_int` is the same method by its other name (#2317): a boxed
        Rational answered NoMethodError for it while answering to_i fine. */
     if (sp_streq(name, "to_i") || sp_streq(name, "to_int") || sp_streq(name, "to_f")) {
-      if (!poly_name_user_claimed(c, name, argc, 0)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         /* sp_poly_to_i_meth / sp_poly_to_f_meth: this is the METHOD, named by
            the program, so an object without it is NoMethodError rather than
            the conversion protocol's TypeError, and nil.to_f is 0.0 */
@@ -15186,7 +15186,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        container). A user class defining the same name wins via poly dispatch. */
     if ((sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag") ||
          sp_streq(name, "conjugate") || sp_streq(name, "conj")) && argc == 0) {
-      if (!poly_name_user_claimed(c, name, argc, 1)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         const char *pfn = sp_streq(name, "real") ? "sp_poly_real"
                         : (sp_streq(name, "imaginary") || sp_streq(name, "imag")) ? "sp_poly_imaginary"
                         : "sp_poly_conjugate";
@@ -15218,7 +15218,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        OpenStruct member when ostruct is loaded (#3197). */
     int intern_read = sp_streq(name, "intern") && (sp_feature_required("ostruct") || user_defines_or_reads(c, name));
     if (sp_streq(name, "to_sym") || (sp_streq(name, "intern") && !intern_read)) {
-      if (!poly_name_user_claimed(c, name, argc, 0)) {
+      if (!poly_name_user_claimed(c, name, argc)) {
         int t = ++g_tmp;
         /* The arm yields a raw sp_sym. When the call's own slot is poly (a
            case-result carrier, a boxed argument) it must be boxed HERE -- the
@@ -15535,7 +15535,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY &&
       (sp_streq(name, "ljust") || sp_streq(name, "rjust") || sp_streq(name, "center")) &&
       (argc == 1 || argc == 2)) {
-    if (!poly_name_user_claimed(c, name, argc, 0)) {
+    if (!poly_name_user_claimed(c, name, argc)) {
       const char *fn = sp_streq(name, "ljust") ? "sp_str_ljust"
                      : sp_streq(name, "rjust") ? "sp_str_rjust" : "sp_str_center";
       /* unboxed as a String: an Integer or nil in the slot is NoMethodError,
@@ -15638,7 +15638,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      to a copy-update constructor (#2890). */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "with") && argc == 1 &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
-    if (!poly_name_user_claimed(c, "with", argc, 0)) {
+    if (!poly_name_user_claimed(c, "with", argc)) {
       int en = 0; const int *els = nt_arr(nt, argv[0], "elements", &en);
       int th = ++g_tmp;
       emit_indent(g_pre, g_indent);
@@ -15661,7 +15661,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   /* poly receiver: String#getbyte (a non-string tag raises NoMethodError).
      A user method or attr reader with the same name wins. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "getbyte")) {
-    if (!poly_name_user_claimed(c, name, argc, 1)) {
+    if (!poly_name_user_claimed(c, name, argc)) {
       buf_puts(b, "sp_poly_getbyte("); emit_expr(c, recv, b); buf_puts(b, ", ");
       emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;

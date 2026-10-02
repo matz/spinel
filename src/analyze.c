@@ -22181,8 +22181,9 @@ enum { FWD_TAINT_CYCLE = 1, FWD_TAINT_BOUND = 2, FWD_TAINT_ESCAPE = 4,
        FWD_TAINT_CUT = FWD_TAINT_CYCLE | FWD_TAINT_BOUND };
 /* fwd_rest_bits beside the elements' bits 0-15: an element at offset 16 or
    more, past what the bits and the dynamic masks hold, reaches a parameter
-   that appends; and an answer below was cut at the bound. Either way the
-   caller's String cannot be pulled in, and the refusal takes it. */
+   that appends; OPEN means incomplete evidence, either a depth-bound cut or
+   unresolved destination. Neither proves the caller's String can be pulled
+   in safely, so both propagate through the query's incomplete-proof taint. */
 #define FWD_REST_PAST 0x10000u
 #define FWD_REST_OPEN 0x20000u
 #define FWD_REST_KEPT 0x40000u
@@ -22298,6 +22299,10 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
     ACallTargets targets = {0};
     an_call_targets_of(c, u, &targets);
     if (!targets.n) act_add(&targets, fwd_call_target(c, u));
+    /* The rest container preserves its boxes, but an unresolved destination
+       says nothing about how those boxes are used. Do not turn missing
+       dispatch evidence into a preserving-retention certificate. */
+    if (f->phase == FWD_EMISSION && !targets.n) bits |= FWD_REST_OPEN;
     for (int ti = 0; ti < targets.n; ti++) {
       int t = targets.v[ti];
       /* A variable-length splat does not fix which of its elements binds
@@ -22509,9 +22514,9 @@ static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   if (!memo->rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   f->phase = phase;
 }
-/* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
-   tell -- a rest hand-on past the depth bound -- which the refusal takes as
-   appending, so an answer cut short is refused rather than copied. */
+/* Classify a forwarded rest element's mutation and retention. Unresolved
+   dispatch or a depth-bound cut is UNKNOWN, or ESCAPE when boxes are retained:
+   incomplete evidence must never certify a preserving boxed store. */
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return FWD_READONLY;
   FwdQuery *f = fwd_analysis(c);
@@ -23166,6 +23171,9 @@ int fwd_box_retention_safe(Compiler *c, int node, FwdResult effect) {
      frozen state remain observable. Only a preserving boxed store can use
      provenance; arbitrary escapes need the closed-program certificate. */
   if (effect != FWD_RETAINS_BOX) return 0;
+  /* A source literal needs no census of callers. This exemption comes only
+     after the complete preserving-box contract, never for copied escapes. */
+  if (nt_kind(c->nt, node) == NK_StringNode && nt_int(c->nt, node, "fzl", 0)) return 1;
   if (!f->memo->frozen_reflection) {
     f->memo->frozen_reflection = 1; /* closed static entrypoints */
     for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {

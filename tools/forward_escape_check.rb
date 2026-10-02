@@ -873,6 +873,31 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     end
     run
   RUBY
+  # Only an audited preserving store permits literal provenance to bypass
+  # reflection. An unproved return and an unresolved rest destination do not.
+  { "preserving_store" => ["def accept(value); store(value); nil; end", "nil", true],
+    "unproved_return" => ["def accept(value); store(value); nil; end", "value", false],
+    "unresolved_rest" => ["def accept(*items); method(:store).call(*items); nil; end", "nil", false] }.each do |name, (accept, result, native)|
+    certificate_cases["literal_#{name}_with_reflection"] = [<<~RUBY, "true\ntrue\ntrue\ntrue\nfrozen\n", native]
+      class Keep
+        def initialize = @items = []
+        #{accept}
+        def store(value); @items.push(value); @items.push(value); #{result}; end
+        def at(index) = @items[index]
+      end
+      def unrelated = method(:p)
+      k = Keep.new
+      k.accept(1)
+      2.times { k.accept("ice") }
+      p k.at(2).equal?(k.at(3)), k.at(2).equal?(k.at(4))
+      p k.at(2).frozen?, k.at(3).frozen?
+      begin
+        k.at(2) << "!"
+      rescue FrozenError
+        puts "frozen"
+      end
+    RUBY
+  end
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]

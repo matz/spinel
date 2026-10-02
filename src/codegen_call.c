@@ -24790,9 +24790,9 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
         char msg[512];
         snprintf(msg, sizeof msg,
-                 "a String passed to `%s`'s parameter `%s` through a parameter it hands on escapes: "
+                 "a String passed to `%s`'s parameter `%s` through %s escapes: "
                  "a container, stored field, block or return may hold a copied String. "
-                 "This path cannot preserve the caller's String identity and is refused.", name, pn);
+                 "This path cannot preserve the caller's String identity and is refused.", name, pn, thr);
         unsupported_feature(c, arg, msg);
       }
       continue;

@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 # Frozen sources may cross a preserving boxed-array store, without adding
 # any new shared-handle promotion. Identity and FrozenError both survive.
 class FrozenCollector

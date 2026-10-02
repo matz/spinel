@@ -10,6 +10,7 @@ compiler, timeout = ARGV
 abort "usage: ruby tools/forward_escape_check.rb COMPILER TIMEOUT" unless compiler && timeout
 compiler = File.expand_path(compiler)
 timeout = File.expand_path(timeout)
+escape_path = /through (?:a parameter|the rest) it hands on escapes/
 
 cases = {
   "array" => ["a = [t]; a[0] << '!'", "", "abc!"],
@@ -366,7 +367,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
-    unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+    unless status.exitstatus == 1 && (out + err).match?(escape_path) &&
            (out + err).include?("nothing written") && !File.exist?(cfile)
       failures << "#{name}: not an identity refusal (status #{status.exitstatus}): #{out}#{err}"
     end
@@ -585,7 +586,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
-    unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+    unless status.exitstatus == 1 && (out + err).match?(escape_path) &&
            (out + err).include?("nothing written") && !File.exist?(cfile)
       failures << "boxed_#{name}: unsafe box retention admitted: #{out}#{err}"
     end
@@ -674,7 +675,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
         end
         out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
         if status.exitstatus == 1 && name != "dup" &&
-           (out + err).include?("through a parameter it hands on escapes") &&
+           (out + err).match?(escape_path) &&
            (out + err).include?("nothing written") && !File.exist?(cfile)
           refusals += 1
           next
@@ -1015,7 +1016,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
     if !native
-      unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+      unless status.exitstatus == 1 && (out + err).match?(escape_path) &&
              (out + err).include?("nothing written") && !File.exist?(cfile)
         failures << "#{name}: unsafe certificate admitted: #{out}#{err}"
       end
@@ -1058,7 +1059,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
-    if status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+    if status.exitstatus == 1 && (out + err).match?(escape_path) &&
        (out + err).include?("nothing written") && !File.exist?(cfile)
       refusals += 1
       next
@@ -1134,7 +1135,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
     if aliased
-      unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+      unless status.exitstatus == 1 && (out + err).match?(escape_path) &&
              (out + err).include?("nothing written") && !File.exist?(cfile)
         failures << "#{name}: hidden entry inherited a frozen census: #{out}#{err}"
       end

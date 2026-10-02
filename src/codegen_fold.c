@@ -61,6 +61,16 @@ int emit_block_arg_proc(Compiler *c, int fe, Buf *b) {
    `&`. Write that proc expression (or NULL) into b and return 1; return 0
    when blk_node isn't that shape (a literal block, for emit_proc_literal).
    Mirrors the same branch in emit_cmethod_block_arg. */
+/* A `&blk` or an anonymous `&` forwards the block of the body it is
+   written in, which once that body is inlined is its caller's: the literal
+   block or `&expr` the caller passed (resolve_forwarded_block), or the
+   real proc the inline was handed in their place (`fw(&pr)`, a proc form's
+   parameter, g_yield_proc_ref), which this answers when the node resolves
+   to none (blk < 0 for a written blk0). */
+const char *forwarded_real_proc(int blk0, int blk) {
+  return blk0 >= 0 && blk < 0 ? g_yield_proc_ref : NULL;
+}
+
 int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b) {
   const NodeTable *nt = c->nt;
   if (blk_node < 0) return 0;
@@ -10888,8 +10898,17 @@ else {
      When the call site has no block, blk_tmp stays -1 and we pass NULL. */
   int blk_tmp = -1;
   int needs_blk_arg = m && m->blk_param && m->blk_param[0] && !m->yields;
-  if (needs_blk_arg) blk_node = resolve_forwarded_block(c, blk_node);
-  if (needs_blk_arg && blk_node >= 0) blk_tmp = emit_blk_proc_tmp(c, blk_node);
+  if (needs_blk_arg) {
+    int blk0 = blk_node;
+    blk_node = resolve_forwarded_block(c, blk0);
+    const char *fwd = forwarded_real_proc(blk0, blk_node);
+    if (blk_node >= 0) blk_tmp = emit_blk_proc_tmp(c, blk_node);
+    else if (fwd) {
+      blk_tmp = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d);\n", blk_tmp, fwd, blk_tmp);
+    }
+  }
 
   /* The aliased name may differ from the defining method's real name. */
   const char *mname = m ? m->name : name;

@@ -1119,6 +1119,7 @@ int scope_has_callable_symbol(Compiler *c, int s);
 int scope_toplevel_included(Compiler *c, int s);
 int scope_uses_ivars(Compiler *c, int mi);
 int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b);
+const char *forwarded_real_proc(int blk0, int blk);
 int emit_block_arg_proc(Compiler *c, int fe, Buf *b);
 void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b);
 int struct_kwarg_value(Compiler *c, int kwh, const char *name);

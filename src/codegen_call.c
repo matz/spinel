@@ -1269,9 +1269,13 @@ int hoist_block_proc(Compiler *c, int cblk) {
 void emit_trailing_blk_arg(Compiler *c, const Scope *m, int id, int blk_tmp, Buf *b) {
   if (!m->blk_param || !m->blk_param[0] || m->yields) return;
   if (blk_tmp >= 0) { buf_printf(b, ", _t%d", blk_tmp); return; }
-  int cblk = resolve_forwarded_block(c, nt_ref(c->nt, id, "block"));
+  int blk0 = nt_ref(c->nt, id, "block");
+  int cblk = resolve_forwarded_block(c, blk0);
+  /* a `&`/`&blk` in an inlined forwarder whose block is a real proc (a proc
+     form's parameter) passes that proc, as a Method call's does */
+  const char *fwd = forwarded_real_proc(blk0, cblk);
   if (cblk >= 0) buf_printf(b, ", _t%d", hoist_block_proc(c, cblk));
-  else buf_puts(b, ", NULL");
+  else buf_printf(b, ", %s", fwd ? fwd : "NULL");
 }
 /* The call's literal block as one rooted proc temp, ahead of a dispatch whose
    arms share it (only one arm runs), or -1 when there is none to build. A
@@ -23605,9 +23609,7 @@ static int emit_bm_flat_args(Compiler *c, const int *argv, int argc, Buf *b) {
    (blk < 0 for a written blk0). Read as written, the block named a proc
    local the inlined body does not declare, and the C did not compile
    (`def fw(&) = method(:t).call(1, &)`). */
-static const char *forwarded_real_proc(int blk0, int blk) {
-  return blk0 >= 0 && blk < 0 ? g_yield_proc_ref : NULL;
-}
+
 
 /* The block argument a Method call hands a target that keeps a `&blk`
    parameter: the site's literal block as a proc, a Proc passed with `&`, a

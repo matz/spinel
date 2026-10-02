@@ -979,6 +979,24 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     result << "!"
     p s, other, result
   RUBY
+  # No named + target is not a builtin-only proof: String#coerce can publish
+  # the operand without defining an operator, then later observe its mutation.
+  certificate_cases["arithmetic_coercion_publishes_operand"] = [<<~RUBY, "\"ab\"\n3\n0\n\"y!\"\n", false]
+    class String
+      def coerce(other)
+        $saved = self
+        [0, 0]
+      end
+    end
+    def add(a, b) = a + b
+    def relay(a, b) = add(a, b)
+    p relay("a", "b")
+    p relay(1, 2)
+    s = +"y"
+    p relay(1, s)
+    s << "!"
+    p $saved
+  RUBY
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]

@@ -36540,6 +36540,14 @@ else {
       emit_time_in_zone(c, ts, struct_kwarg_value(c, argv[0], "in"), b);
       return;
     }
+    /* Time.at(*args): the runtime reads the list as Time.at's arguments */
+    if (sp_streq(name, "at") && argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode &&
+        nt_ref(nt, argv[0], "expression") >= 0) {
+      buf_puts(b, "sp_time_at_args(");
+      emit_boxed(c, nt_ref(nt, argv[0], "expression"), b);
+      buf_puts(b, ")");
+      return;
+    }
     if (sp_streq(name, "at") && argc == 1) {
       TyKind at = comp_ntype(c, argv[0]);
       if (at == TY_TIME) { emit_expr(c, argv[0], b); return; }  /* value copy */

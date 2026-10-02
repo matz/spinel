@@ -10811,6 +10811,36 @@ static sp_RbVal sp_poly_to_a_m(sp_RbVal v) {
     if (ue) return sp_box_poly_array(ue); }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_a' for %s", sp_poly_class_name(v)));
 }
+/* Time.at(*args): the splatted list is Time.at's argument list -- the
+   seconds (a Time, Integer, Float or Rational), then a subsecond part in
+   microseconds, or in the unit a third argument names. */
+static sp_Time sp_time_at_args(sp_RbVal args) {
+  sp_int n = 0;
+  if (args.tag == SP_TAG_OBJ && sp_poly_is_array_kind(args.cls_id)) n = sp_poly_length(args);
+  else if (args.tag != SP_TAG_NIL) n = 1;
+  if (n < 1 || n > 3)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 1..3)", (long long)n));
+  sp_RbVal sec = args.tag == SP_TAG_OBJ && sp_poly_is_array_kind(args.cls_id) ? sp_poly_arr_get(args, 0) : args;
+  sp_Time t = {0};
+  if (sec.tag == SP_TAG_OBJ && sec.cls_id == SP_BUILTIN_TIME && sec.v.p) t = *(sp_Time *)sec.v.p;
+  else if (sec.tag == SP_TAG_INT) t = sp_time_at_int(sec.v.i);
+  else if (sec.tag == SP_TAG_FLT) t = sp_time_at_float(sec.v.f);
+  else if (sp_poly_is_rational(sec)) { sp_Rational r = sp_poly_as_rational(sec); t = sp_time_at_div(r.num, r.den); }
+  else sp_raise_cls("TypeError", sp_sprintf("can't convert %s into an exact number", sp_poly_class_name(sec)));
+  if (n == 1) return t;
+  long mult = 1000;
+  if (n == 3) {
+    sp_RbVal u = sp_poly_arr_get(args, 2);
+    const char *un = u.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)u.v.i) : NULL;
+    if (un && !strcmp(un, "millisecond")) mult = 1000000;
+    else if (un && (!strcmp(un, "usec") || !strcmp(un, "microsecond"))) mult = 1000;
+    else if (un && (!strcmp(un, "nsec") || !strcmp(un, "nanosecond"))) mult = 1;
+    else sp_raise_cls("ArgumentError", sp_sprintf("unexpected unit: %s", un ? un : sp_poly_class_name(u)));
+  }
+  sp_RbVal sub = sp_poly_arr_get(args, 1);
+  if (sub.tag == SP_TAG_INT) return sp_time_add_nsec(t, (int64_t)sub.v.i * mult);
+  return sp_time_add_nsec(t, (int64_t)(sp_poly_to_f_with_rational(sub) * (double)mult));
+}
 static sp_RbVal sp_poly_to_h_m(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return v;

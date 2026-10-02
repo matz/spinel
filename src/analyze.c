@@ -21578,39 +21578,44 @@ static int fwd_native_bytes(Compiler *c, int node, int arg, int argc) {
 /* A POLY result can still be proven to belong to one object family. Keep
    its boxed ABI, but do not follow unrelated methods through a receiver
    built only from that family. Unknown leaves, cycles and deep call trees
-   lose this optional proof and retain the ordinary all-target refusal. */
-static int fwd_object_base(Compiler *c, int node, int depth) {
-  if (node < 0 || depth > 8) return -1;
+   lose this optional proof and retain the ordinary all-target refusal.
+   A shared work budget bounds branching too: a depth bound alone lets
+   diamond paths repeat the same suffix exponentially. This optional proof
+   may give up rather than add another phase-owned inference cache. */
+enum { FWD_FAMILY_UNKNOWN = -1, FWD_FAMILY_NONE = -2, FWD_FAMILY_WORK = 64 };
+static int fwd_object_base(Compiler *c, int node, int depth, int *work) {
+  if (node < 0 || depth > 8 || !*work) return FWD_FAMILY_UNKNOWN;
+  --*work;
   TyKind ty = comp_ntype(c, node);
   if (ty_is_object(ty)) return ty_object_class(ty);
-  if (ty == TY_NIL || ty == TY_VOID) return -2; /* no object on this exit */
+  if (ty == TY_NIL || ty == TY_VOID) return FWD_FAMILY_NONE;
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "block") >= 0) return -1;
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "block") >= 0) return FWD_FAMILY_UNKNOWN;
   ACallTargets targets = {0};
   an_call_targets_of(c, node, &targets);
-  int base = -2;
-  if (!targets.n) base = -1;
-  for (int t = 0; t < targets.n && base != -1; t++) {
+  int base = FWD_FAMILY_NONE;
+  if (!targets.n) base = FWD_FAMILY_UNKNOWN;
+  for (int t = 0; t < targets.n && base != FWD_FAMILY_UNKNOWN; t++) {
     int mi = targets.v[t];
     int last = scope_body_last(c, mi);
-    int candidate = fwd_object_base(c, last, depth + 1);
+    int candidate = fwd_object_base(c, last, depth + 1, work);
     /* Every explicit return matters, even in a non-tail branch. Nested
        methods/blocks have a different scope and supply no exit here. */
-    for (int r = comp_kind_first(c, NK_ReturnNode); r >= 0 && candidate != -1; r = comp_kind_next(c, r)) {
+    for (int r = comp_kind_first(c, NK_ReturnNode); r >= 0 && candidate != FWD_FAMILY_UNKNOWN; r = comp_kind_next(c, r)) {
       if (comp_scope_of(c, r) != &c->scopes[mi]) continue;
       int a = nt_ref(nt, r, "arguments"), n = 0;
       const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-      int next = n == 0 ? -2 : n == 1 ? fwd_object_base(c, args[0], depth + 1) : -1;
-      if (next == -1) { candidate = -1; break; }
+      int next = n == 0 ? FWD_FAMILY_NONE : n == 1 ? fwd_object_base(c, args[0], depth + 1, work) : FWD_FAMILY_UNKNOWN;
+      if (next == FWD_FAMILY_UNKNOWN) { candidate = FWD_FAMILY_UNKNOWN; break; }
       if (next < 0) continue;
-      if (candidate == -2) candidate = next;
+      if (candidate == FWD_FAMILY_NONE) candidate = next;
       else {
         while (candidate >= 0 && !cr_class_is_ancestor(c, candidate, next)) candidate = c->classes[candidate].parent;
       }
     }
-    if (candidate == -1) { base = -1; break; }
+    if (candidate == FWD_FAMILY_UNKNOWN) { base = FWD_FAMILY_UNKNOWN; break; }
     if (candidate < 0) continue;
-    if (base == -2) base = candidate;
+    if (base == FWD_FAMILY_NONE) base = candidate;
     else {
       while (base >= 0 && !cr_class_is_ancestor(c, base, candidate)) base = c->classes[base].parent;
     }
@@ -21748,7 +21753,8 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeep
       an_call_targets_of(c, node, &targets);
       if (!targets.n) act_add(&targets, fwd_call_target(c, node));
       if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
-        int base = fwd_object_base(c, recv, 0);
+        int work = FWD_FAMILY_WORK;
+        int base = fwd_object_base(c, recv, 0, &work);
         if (base >= 0) {
           act_reset(c, &targets);
           act_add(&targets, comp_method_in_chain(c, base, nm, NULL));

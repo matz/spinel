@@ -204,6 +204,20 @@ cases["return_family_unknown"] = ["document.parse(t); nil", "", "abc", family + 
     end
   end
 RUBY
+[4, 5].each do |levels|
+  methods = (0...levels).map do |i|
+    left = i == levels - 1 ? "LeftDocument.new" : "level#{i + 1}(flag)"
+    right = i == levels - 1 ? "RightDocument.new" : "level#{i + 1}(flag)"
+    "def self.level#{i}(flag); return #{left} if flag; #{right}; end"
+  end.join("\n")
+  name = levels == 4 ? "readonly_family_diamond" : "return_family_budget"
+  cases[name] = ["document.parse(t); nil", "", "abc", family + <<~RUBY]
+    class Factory
+      def self.wrap(flag) = level0(flag)
+      #{methods}
+    end
+  RUBY
+end
 
 # Compilation is an explicit requirement for these controls, not a property
 # inferred from their names. Renaming/removing one without updating this list
@@ -212,7 +226,7 @@ native_controls = %w[
   preserved_rest preserved_yield preserved_append_and_store
   readonly readonly_guard_alias readonly_array_search readonly_keyword
   readonly_keyword_only readonly_keyword_post_rest readonly_predicate
-  preserved_cached_mutator readonly_return_family
+  preserved_cached_mutator readonly_return_family readonly_family_diamond
 ]
 native_controls.each { |name| cases.fetch(name) }
 

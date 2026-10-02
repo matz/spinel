@@ -1474,7 +1474,9 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	done; \
 	t=test/reject/dynamic_send_then_refusal.rb; \
 	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ds.c" >"$$tmp/ds.out" 2>&1; st=$$?; \
-	if [ $$st -ne 1 ] || ! grep -q "1 refusal," "$$tmp/ds.out"; then \
+	if [ $$st -ne 1 ] || [ -f "$$tmp/ds.c" ] || \
+	   ! grep -q 'String#unicode_normalize is not supported' "$$tmp/ds.out" || \
+	   ! grep -Eq '[1-9][0-9]* refusals?, nothing written' "$$tmp/ds.out"; then \
 	  echo "reject-test: FAIL (a refusal after a dynamic send's probed arms did not report cleanly, exit $$st)"; sed -n 1,5p "$$tmp/ds.out"; ok=0; fi; \
 	for spec in "complex_bignum_component:a Complex component given an Integer past 64 bits" \
 	            "rational_pow_bignum:the receiver of a Float \`**\` given a Rational" \

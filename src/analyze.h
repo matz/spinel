@@ -78,6 +78,7 @@ typedef enum {
   FWD_RETAINS_BOX = -3, FWD_ESCAPE = -2, FWD_UNKNOWN = -1, FWD_READONLY = 0, FWD_APPENDS = 1
 } FwdResult;
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i);
+int fwd_rest_print_safe(Compiler *c, int mi, int call, int actual);
 FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j);
 /* Copying escapes require a closed readonly program; frozen provenance
    is sufficient only for a preserving-box retention effect. */

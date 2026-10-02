@@ -762,6 +762,81 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   }
   Dir.mkdir(File.join(dir, "builtins"))
   File.write(File.join(dir, "builtins/helper.rb"), "def unused(value); value << '!'; nil; end\n")
+  rest_return = <<~RUBY
+    class RestBase
+      def result(*items); items; end
+    end
+    class RestChild < RestBase
+      def result(*items) = super
+    end
+    def run
+      p RestChild.new.result(+'ice')
+      nil
+    end
+    run
+  RUBY
+  certificate_cases["rest_discarded_literal"] = [rest_return, "[\"ice\"]\n", true]
+  certificate_cases["rest_named_mutated_before_print"] = [
+    "$text = +'ice'\n" + rest_return.sub("def result(*items); items; end", "def result(*items); $text << '!'; items; end")
+      .sub("result(+'ice')", "result($text)") + "p $text\n",
+    "[\"ice!\"]\n\"ice!\"\n", false
+  ]
+  certificate_cases["rest_retained_literal_result"] = [
+    rest_return.sub("p RestChild.new.result(+'ice')", "saved = RestChild.new.result(+'ice'); saved[0] << '!'; p saved"),
+    "[\"ice!\"]\n", false
+  ]
+  certificate_cases["rest_extra_container_alias"] = [
+    rest_return.sub("def result(*items); items; end", "def result(*items); @saved = items; items; end"),
+    "[\"ice\"]\n", false
+  ]
+  certificate_cases["rest_scalar_intermediate_store"] = [<<~RUBY, "\"ice\"\n", false]
+    class Base
+      def result(value) = value
+    end
+    class Middle < Base
+      def result(value); @left = [value]; @right = [value]; super; end
+    end
+    class Child < Middle
+      def result(*items) = super
+    end
+    def run
+      p Child.new.result(+'ice')
+      nil
+    end
+    run
+  RUBY
+  certificate_cases["rest_different_returned_formal"] = [<<~RUBY, "\"snow\"\n", false]
+    class Base
+      def result(a, b); @left = [a]; @right = [a]; b; end
+    end
+    class Child < Base
+      def result(*items) = super
+    end
+    def run
+      p Child.new.result(+'ice', +'snow')
+      nil
+    end
+    run
+  RUBY
+  certificate_cases["rest_matching_returned_formal"] = [<<~RUBY, "\"ice\"\n", true]
+    class Base
+      def result(a, b) = b
+    end
+    class Child < Base
+      def result(*items) = super
+    end
+    def run
+      p Child.new.result(1, +'ice')
+      nil
+    end
+    run
+  RUBY
+  cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
+  cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
+  certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]
+  certificate_cases["readonly_field_loop_coercion"] = [
+    "class Hidden; def coerce(value) = [value, 1]; end\n" + cells, cells_expected, false
+  ]
   certificate_cases.each do |name, (input, expected, native)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
@@ -805,12 +880,12 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       def round_trip(value, change)
         #{body}
       end
-      round_trip(nil, false)
+      p round_trip(nil, false)
       source = 'ice'
       result = round_trip(source, false)
       p result.frozen?, result.equal?(source)
     RUBY
-    expected = "true\ntrue\n"
+    expected = "nil\ntrue\ntrue\n"
     out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
     unless status.success? && out == expected
       failures << "frozen_return_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"

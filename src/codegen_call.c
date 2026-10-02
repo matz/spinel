@@ -25174,6 +25174,7 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
     }
     /* Freshness alone does not preserve later getter mutations. A retaining
        store needs either immutable input or a closed readonly program. */
+    if (rest && (r == FWD_RETAINS_BOX || r == FWD_ESCAPE) && fwd_rest_print_safe(c, t, id, arg)) continue;
     if ((r == FWD_ESCAPE || r == FWD_RETAINS_BOX) && fwd_box_retention_safe(c, arg, r)) continue;
     if (!kind && r != FWD_ESCAPE && r != FWD_RETAINS_BOX) continue;
     if (r == FWD_ESCAPE || r == FWD_RETAINS_BOX) {
@@ -28734,6 +28735,36 @@ static void emit_handle_inspect(Compiler *c, int recv, TyKind rt, Buf *b) {
   buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)(", hn);
   emit_expr(c, recv, b); buf_puts(b, "))");
 }
+/* A propagated shared-return mark is not the callee's final C return ABI.
+   Boxed returns carry their own handle; byte returns use the side channel. */
+static int emit_shared_return_pickup(Compiler *c, int id, Buf *b) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (!c->strbuf_box[id] || nt_ref(c->nt, id, "block") >= 0 ||
+      (recv < 0 ? implicit_self_reader_cid(c, id) >= 0 : comp_ntype(c, recv) != TY_CLASS)) return 0;
+  const char *name = nt_str(c->nt, id, "name");
+  int target = recv < 0 ? refuse_fwd_target(c, id, name) : -1;
+  if (recv >= 0) {
+    const char *cn = nt_str(c->nt, recv, "name");
+    int ci = cn ? comp_class_index(c, cn) : -1;
+    if (ci >= 0) target = comp_cmethod_in_chain(c, ci, name, NULL);
+  }
+  if (target >= 0 && c->scopes[target].ret == TY_POLY) {
+    Buf inner = {0};
+    c->strbuf_box[id] = 0;
+    emit_call(c, id, &inner);
+    c->strbuf_box[id] = 1;
+    emit_unbox_nilable_text(c, TY_STRBUF, inner.p, b);
+    free(inner.p);
+    return 1;
+  }
+  int tmp = ++g_tmp;
+  buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tmp);
+  c->strbuf_box[id] = 0;
+  emit_call(c, id, b);
+  c->strbuf_box[id] = 1;
+  buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : sp_String_new_shared(_v%d); })", tmp);
+  return 1;
+}
 static void emit_call_body(Compiler *c, int id, Buf *b) {
   /* the class's own method in a builtin's receiver test (`__r.is_a?(K) ?
      __r.m { } : __enum_m(__r) { }`): the test has decided the receiver is
@@ -28777,25 +28808,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       }
     }
   }
-  /* deep-return pickup (#3227 P6): a marked receiverless call to a method
-     whose every return path yields a shared handle -- reset the side
-     channel, run the ordinary call (its shared-slot tail read publishes),
-     then take the handle (falling back to a fresh wrap of the returned
-     copy if a path did not publish). */
-  /* An attr reader has no body to publish from; its implicit-self read hands
-     out the slot itself (emit_implicit_self_member). */
-  if (c->strbuf_box[id] && nt_ref(c->nt, id, "block") < 0 &&
-      (nt_ref(c->nt, id, "receiver") < 0 ? implicit_self_reader_cid(c, id) < 0
-                                         : comp_ntype(c, nt_ref(c->nt, id, "receiver")) == TY_CLASS)) {
-    int tvD = ++g_tmp;
-    buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tvD);
-    c->strbuf_box[id] = 0;
-    emit_call(c, id, b);
-    c->strbuf_box[id] = 1;
-    buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf"
-                  " : sp_String_new_shared(_v%d); })", tvD);
-    return;
-  }
+  if (emit_shared_return_pickup(c, id, b)) return;
 
   /* A program's own reopen of a builtin primitive owns the name, as it does
      in CRuby: `class Integer; def abs; 999; end; end` makes `(-5).abs` answer

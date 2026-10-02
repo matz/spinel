@@ -832,6 +832,33 @@ int comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name) {
   return mi >= 0 && dc == ci && c->scopes[mi].name && sp_streq(c->scopes[mi].name, name) ? mi : -1;
 }
 
+/* Whether any builtin kind's own class is reopened with a method of `name`
+   (comp_builtin_kind_reopen_mi for some kind). A yield site typed per site
+   needs every site's answer once one of them is a reopen's, which the
+   per-site table (ty_recv_builtin_result) does not carry for most names. */
+int comp_builtin_name_reopened(Compiler *c, const char *name) {
+  static const TyKind kinds[] = { TY_INT, TY_FLOAT, TY_STRING, TY_SYMBOL, TY_INT_ARRAY, TY_STR_INT_HASH };
+  if (!name) return 0;
+  for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++)
+    if (comp_builtin_kind_reopen_mi(c, kinds[k], name) >= 0) return 1;
+  return 0;
+}
+
+/* Whether a call on the chain from a yield up to `call` (`yield.size + 1`)
+   names a method some builtin class reopens, an alias that captured the
+   builtin (builtin_only) aside: the chain's sites are then typed one by
+   one. */
+int comp_yield_chain_reopened(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  for (int n = call, depth = 0; n >= 0 && depth < 16; depth++) {
+    if (nt_kind(nt, n) == NK_YieldNode) return 0;
+    if (nt_kind(nt, n) != NK_CallNode) return 0;
+    if (!nt_int(nt, n, "builtin_only", 0) && comp_builtin_name_reopened(c, nt_str(nt, n, "name"))) return 1;
+    n = nt_ref(nt, n, "receiver");
+  }
+  return 0;
+}
+
 static void vis_table_set(char ***names, int **kinds, int *n, int *cap, const char *name, int kind) {
   if (!name) return;
   for (int i = 0; i < *n; i++)

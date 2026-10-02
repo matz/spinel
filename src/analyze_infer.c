@@ -137,6 +137,63 @@ TyKind an_builtin_answer(Compiler *c, int id) {
   return t;
 }
 
+/* What call `id` answers with its receiver pinned to `kind`: the face
+   re-inference (g_face_node) for one call, the way the poly-receiver face
+   table asks it. Nothing is cached for the call itself. A yield's per-site
+   typing asks it for a site the per-site table does not answer, once a
+   reopen answers another site (yield_recv_chain_kind). */
+static TyKind an_call_answer_as(Compiler *c, int id, TyKind kind) {
+  int recv = nt_kind(c->nt, id) == NK_CallNode ? nt_ref(c->nt, id, "receiver") : -1;
+  if (recv < 0) return TY_UNKNOWN;
+  int sv_face = g_face_node; TyKind sv_fk = g_face_kind;
+  an_set_face_node(recv, kind);
+  TyKind t = infer_call(c, id);
+  an_set_face_node(sv_face, sv_fk);
+  return t;
+}
+
+/* What call `id`, on a chain from a yield, answers at a site whose receiver
+   is `kind`, for a site the per-site table (ty_recv_builtin_result) does not
+   answer. The analyzer (yield_recv_chain_kind) and codegen
+   (yield_builtin_method_site_type) both ask it, so the two agree on which
+   sites are typed and how.
+   Once a reopen answers one site (`class Array; def size = "arr"; end`), the
+   other sites need their own answer too, or the yield stays typed as one
+   site and the other sites' values land in that site's slot: an Array block
+   and a String block wrote the String's Integer size into a `const char *`,
+   and an Integer#succ reopen ran for a String block. The builtin surface
+   itself answers them, through the same face re-inference the poly-receiver
+   dispatch uses. Only where a reopen is in play on the chain, so a program
+   without one keeps the narrow typing it had; a link past the reopened one
+   (`yield.size + 1`) is answered the same way, its receiver being typed per
+   site by then.
+   A poly answer that comes from a poly argument is declined: the emitter
+   unboxes the argument and emits the concrete result (String#include? on a
+   boxed argument is typed poly and emitted as a bool), which a poly answer
+   would leave unboxed in the slot. */
+int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out) {
+  const NodeTable *nt = c->nt;
+  /* The pinned re-inference can ask this chain's per-site question again
+     (promote's `+` asks whether its yield receiver is widened), which pinned
+     the same receiver and recursed until the stack ran out; that inner ask
+     is about the pinned kind already, so it declines. */
+  static int busy = 0;
+  if (busy) return 0;
+  if (nt_int(nt, id, "builtin_only", 0) || !comp_yield_chain_reopened(c, id)) return 0;
+  busy = 1;
+  TyKind ft = an_call_answer_as(c, id, kind);
+  busy = 0;
+  if (ft == TY_UNKNOWN || ft == TY_VOID) return 0;
+  if (ft == TY_POLY) {
+    int an = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    for (int k = 0; k < ac && av; k++)
+      if (comp_ntype(c, av[k]) == TY_POLY) return 0;
+  }
+  *out = ft;
+  return 1;
+}
+
 /* Name-keyed answer memo, the same shape (and the same staleness argument) as
    udm_ in an_user_defines_method: the question below crosses every class with
    the ancestor chain, and infer_call asks it for every poly-receiver call node
@@ -1745,7 +1802,8 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
       *out = (rr == TY_UNKNOWN || rr == TY_VOID) ? TY_POLY : rr;
       return 1;
     } }
-  return ty_recv_builtin_result(nt_str(nt, node, "name"), ac, a0, rk, out);
+  if (ty_recv_builtin_result(nt_str(nt, node, "name"), ac, a0, rk, out)) return 1;
+  return an_yield_site_builtin_answer(c, node, rk, out);
 }
 static int yield_recv_builtin_every_site(Compiler *c, int call) {
   const NodeTable *nt = c->nt;

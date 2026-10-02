@@ -1111,6 +1111,61 @@ cli-opts-test: $(SPINEL)
 
 reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
+	for t in test/reject/string_thread_arg.rb test/reject/string_fiber_arg.rb test/reject/string_thread_global_arg.rb test/reject/string_thread_ivar_arg.rb test/reject/string_thread_method_param_arg.rb test/reject/string_fiber_method_param_arg.rb test/reject/string_thread_block_param_arg.rb test/reject/string_thread_arg_in_loop.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled)"; ok=0; \
+	  else grep -q "is not yet shared by reference" "$$tmp/sk.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	done; \
+	for t in test/reject/string_hash_value_variable.rb test/reject/string_hash_pair_variable.rb test/reject/string_hash_values_variable.rb test/reject/string_hash_literal_captured.rb \
+	         test/reject/string_hash_store_value.rb test/reject/string_hash_store_pair.rb \
+	         test/reject/string_hash_store_value_block.rb test/reject/string_hash_store_pair_block.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled)"; ok=0; \
+	  else grep -q "is not yet shared by reference" "$$tmp/sk.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	done; \
+	for t in test/reject/string_yield_captured_param.rb test/reject/string_yield_splat_captured.rb; do \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled)"; ok=0; \
+	  else grep -q "is not yet shared by reference" "$$tmp/sk.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	done; \
+	t=test/reject/string_chained_index_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_chained_index_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (string_chained_index_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/scrub_bang_retained_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (scrub_bang_retained_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (scrub_bang_retained_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/scrub_bang_block.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (scrub_bang_block compiled)"; ok=0; \
+	else grep -q "scrub! with a block" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (scrub_bang_block rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/string_ivar_array_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_ivar_array_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (string_ivar_array_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/string_fresh_array_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_fresh_array_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (string_fresh_array_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/string_tap_fresh_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_tap_fresh_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (string_tap_fresh_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
+	t=test/reject/string_narrowed_element_append.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_narrowed_element_append compiled)"; ok=0; \
+	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (string_narrowed_element_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
 	t=test/reject/singleton_on_untraceable_recv.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
 	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \
@@ -1197,6 +1252,47 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	printf 'def a24(x:) = x.to_s.size\ndef b24(x:) = x.to_s.size\ndef entry(x) = a0(x: x)\nentry(nil)\ns = +"x"\nentry(s)\n' >> "$$tmp/diamond.rb"; \
 	if ! $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10) $(SPINEL) "$$tmp/diamond.rb" -c -o "$$tmp/diamond.c" >"$$tmp/diamond.out" 2>&1; then \
 	  echo "reject-test: FAIL (a read-only forwarding diamond refused or timed out)"; sed -n 1,5p "$$tmp/diamond.out"; ok=0; fi; \
+	for t in test/reject/string_kwsplat_last_dynamic.rb test/reject/string_kwsplat_last_yieldproc.rb test/reject/string_kwsplat_last_yieldblock.rb; do \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/kwlast.c" >"$$tmp/kwlast.out" 2>&1; then \
+	  echo "reject-test: FAIL (a final splat carrying a String variable compiled: $$t)"; ok=0; \
+	else grep -q 'splatted Hash literal' "$$tmp/kwlast.out" || \
+	  { echo "reject-test: FAIL (a final splat rejected without saying why: $$t)"; sed -n 1,5p "$$tmp/kwlast.out"; ok=0; }; fi; \
+	done; \
+	t=test/reject/string_kwsplat_literal_dynamic.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_kwsplat_literal_dynamic compiled)"; ok=0; \
+	else grep -q "through a splatted Hash literal" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_kwsplat_literal_dynamic rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_kwsplat_literal_yield.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_kwsplat_literal_yield compiled)"; ok=0; \
+	else grep -q "through a splatted Hash literal" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_kwsplat_literal_yield rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_nested_masgn_target.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_nested_masgn_target compiled)"; ok=0; \
+	else grep -q "through a nested multiple-assignment target" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_nested_masgn_target rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_nested_masgn_deep.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_nested_masgn_deep compiled)"; ok=0; \
+	else grep -q "through a nested multiple-assignment target" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_nested_masgn_deep rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_ivar_alias_lent_call.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_ivar_alias_lent_call compiled)"; ok=0; \
+	else grep -q "through a lent instance variable written from a local" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_ivar_alias_lent_call rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_ivar_alias_lent_super.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_ivar_alias_lent_super compiled)"; ok=0; \
+	else grep -q "through a lent instance variable written from a local" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_ivar_alias_lent_super rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
+	t=test/reject/string_duplicate_keyword_variable.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
+	  echo "reject-test: FAIL (string_duplicate_keyword_variable compiled)"; ok=0; \
+	else grep -q "through a repeated keyword" "$$tmp/sk.out" || \
+	  { echo "reject-test: FAIL (string_duplicate_keyword_variable rejected without saying why)"; sed -n 1,5p "$$tmp/sk.out"; ok=0; }; fi; \
 	t=test/reject/string_rest_splat_yield.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/rsy.c" >"$$tmp/rsy.out" 2>&1; then \
 	  echo "reject-test: FAIL (a String gathered into a rest yielded with a splat compiled)"; ok=0; \

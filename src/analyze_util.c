@@ -647,7 +647,7 @@ int sp_str_mutator(const char *nm, unsigned want) {
     { "chomp!",          15u }, { "chop!",          15u }, { "squeeze!",   15u },
     { "tr!",             15u }, { "delete!",        15u }, { "tr_s!",      15u },
     { "delete_prefix!",  15u }, { "delete_suffix!", 15u }, { "reverse!",   15u },
-    { "succ!",           15u }, { "next!",          15u },
+    { "succ!",           15u }, { "next!",          15u }, { "scrub!",     15u },
     { NULL, 0 }
   };
   if (!nm) return 0;

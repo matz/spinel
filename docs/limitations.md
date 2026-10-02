@@ -687,6 +687,23 @@ values too.
 
 Not yet shared:
 
+- a String variable in a splatted Hash literal (`**{ k: v }`) at a dynamic call or yield whose key binds an appending keyword parameter;
+
+- a String variable in an Array literal feeding an appended nested multiple-assignment target;
+
+- a bare instance-variable argument written from a local, handed to an appending parameter through a call or `super`, unless the instance variable is already a shared handle;
+
+- a repeated keyword whose later value is a String variable bound to an appending parameter, unless the value is already passed as a shared handle;
+
+- through `Thread.new` or `Fiber#resume`, a String variable handed to a block parameter that appends to it, unless its read already hands over the shared handle or the local is read only as that argument;
+- through a Hash's value block (`each_value`, `each`, `each_pair`, or an element iterator over `values`), a stored String variable when the value parameter appends to it;
+- through `yield` into a capture-wrapper block, a String variable whose captured parameter appends to it without already being the shared handle, including a splatted yield;
+- through an Array's chained index into an appending block;
+
+- through a retained `scrub!` result that is appended to; `scrub!` with a block is also refused because the block would be ignored;
+
+- through an ivar's or a call's Array, a fresh Array literal, a narrowed boxed String element, or a fresh String's `tap`, into an appending block or parameter;
+
 - by keyword, through a curried proc;
 - through `instance_exec`, a String variable in or ahead of a splat
   (`o.instance_exec(s, *rest) { |t, *r| t << "!" }`), and one held by a

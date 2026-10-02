@@ -1628,4 +1628,5 @@ void emit_index_opw_unhoist(void);
 extern const char *g_iow_recv_ref;
 extern const char *g_iow_key_ref;
 
+void refuse_yield_capwrap(Compiler *c, int blk, int yc, const int *yv);
 #endif

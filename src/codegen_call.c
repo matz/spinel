@@ -24490,6 +24490,28 @@ void refuse_yield_string_copies(Compiler *c, int yargc, const int *yargv) {
     if (nt_kind(c->nt, yargv[k]) == NK_KeywordHashNode) {
       int en = 0; const int *el = nt_arr(c->nt, yargv[k], "elements", &en);
       for (int e = 0; e < en; e++) {
+        if (nt_kind(c->nt, el[e]) == NK_AssocSplatNode) {
+          int hash = nt_ref(c->nt, el[e], "value");
+          int hn = 0;
+          const int *he = hash >= 0 && nt_kind(c->nt, hash) == NK_HashNode ? nt_arr(c->nt, hash, "elements", &hn) : NULL;
+          for (int h = 0; h < hn; h++) {
+            int value, shared;
+            const char *key = dyn_kw_elem_key(c, he[h], &value);
+            if (!key || !strvar_arg(c, value, &shared)) continue;
+            int overridden = 0;
+            for (int j = e + 1; j < en; j++) {
+              int later_value;
+              const char *later_key = dyn_kw_elem_key(c, el[j], &later_value);
+              if (later_key && sp_streq(later_key, key)) { overridden = 1; break; }
+            }
+            if (overridden) continue;
+            DynReach r;
+            dyn_value_kw_reach(c, g_yield_proc_expr, key, &r);
+            if (r.app)
+              refuse_string_copy(c, value, NULL, key, "a splatted Hash literal (`**{ k: v }`)",
+                                 "through a splatted Hash literal (`**{ k: v }`)");
+          }
+        }
         int v;
         const char *key = dyn_kw_elem_key(c, el[e], &v);
         if (!key || v < 0 || !strvar_arg(c, v, &shared) || shared || local_is_handle(c, v)) continue;
@@ -24956,9 +24978,27 @@ void refuse_yield_splat(Compiler *c, int blk, int yc, const int *yv) {
     /* past the masks' 16 positions, a parameter the block binds there (or
        its rest) is refused unasked */
     if (k >= 16 && !proc_param_name(c, blk, k) && !proc_has_rest(c, blk)) break;
-    if (k < 16 && !dyn_block_appends(c, blk, k)) continue;
+    if (k < 16 && !dyn_block_appends(c, blk, k) &&
+        (!proc_param_name(c, blk, k) ||
+         !cap_wrap_mutates_param(c, blk, proc_param_name(c, blk, k)))) continue;
     refuse_string_copy(c, sv, "a block", proc_param_name(c, blk, k), "a splat into a yield",
                        "through a splat into a yield");
+  }
+}
+
+/* A capture wrapper appends to a copy of a yielded String unless the
+   block's parameter already takes the shared handle (#7006). */
+void refuse_yield_capwrap(Compiler *c, int blk, int yc, const int *yv) {
+  if (blk < 0 || nt_kind(c->nt, blk) != NK_BlockNode) return;
+  for (int k = 0; k < yc; k++) {
+    NodeKind ak = nt_kind(c->nt, yv[k]);
+    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) break;
+    int shared;
+    const char *bp = block_param_at(c, blk, k, yc);
+    if (!bp || !strvar_arg(c, yv[k], &shared) || block_param_is_handle(c, blk, k, yc) ||
+        !cap_wrap_mutates_param(c, blk, bp)) continue;
+    refuse_string_copy(c, yv[k], "a block", bp, "`yield` into a capture-wrapper block",
+                       "through `yield` into a capture-wrapper block");
   }
 }
 
@@ -25030,7 +25070,10 @@ static void refuse_rest_yield_copies(Compiler *c, int id, int t) {
     int shared;
     if (!strvar_arg(c, av[k], &shared) || shared || local_is_handle(c, av[k])) continue;
     int bk = ys + (k - m->rest_idx);
-    if (bk < 16 ? !dyn_block_appends(c, blk, bk) : !proc_param_name(c, blk, bk) && !proc_has_rest(c, blk)) continue;
+    if (bk < 16 ? !dyn_block_appends(c, blk, bk) &&
+                  (!proc_param_name(c, blk, bk) ||
+                   !cap_wrap_mutates_param(c, blk, proc_param_name(c, blk, bk)))
+                : !proc_param_name(c, blk, bk) && !proc_has_rest(c, blk)) continue;
     refuse_string_copy(c, av[k], "a block", proc_param_name(c, blk, bk), "a splat into a yield",
                        "through a splat into a yield");
   }
@@ -25241,15 +25284,93 @@ static void refuse_nonlocal_param_args(Compiler *c, int id, const char *name) {
   }
 }
 
+/* Does `root`'s subtree hold node `target`? A def is its own scope. */
+static int subtree_holds(const NodeTable *nt, int root, int target) {
+  if (root < 0) return 0;
+  if (root == target) return 1;
+  if (nt_kind(nt, root) == NK_DefNode) return 0;
+  int nr = nt_num_refs(nt, root);
+  for (int i = 0; i < nr; i++) if (subtree_holds(nt, nt_ref_at(nt, root, i), target)) return 1;
+  int na = nt_num_arrs(nt, root);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, root, i, &n);
+    for (int k = 0; k < n; k++) if (subtree_holds(nt, ids[k], target)) return 1;
+  }
+  return 0;
+}
+/* Can the Thread or Fiber argument read `arg` run more than once -- in a
+   loop, or in a block or lambda other than the thread's own (`blk`)? A
+   later run would then see the copy's appends missing. */
+static int thread_arg_runs_again(Compiler *c, int arg, int blk) {
+  const NodeTable *nt = c->nt;
+  for (int n = 0; n < nt->count; n++) {
+    NodeKind k = nt_kind(nt, n);
+    if (n == blk || (k != NK_WhileNode && k != NK_UntilNode && k != NK_ForNode &&
+                     k != NK_BlockNode && k != NK_LambdaNode)) continue;
+    if (subtree_holds(nt, n, arg)) return 1;
+  }
+  return 0;
+}
 static void refuse_string_copies(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return;
   g_refuse_call = id;
   int recv = nt_ref(nt, id, "receiver");
+  if (sp_streq(name, "scrub!") && recv >= 0 &&
+      (comp_recv_type(c, recv) == TY_STRING || comp_recv_type(c, recv) == TY_STRBUF) &&
+      nt_ref(nt, id, "block") >= 0)
+    unsupported_feature(c, id, "String#scrub! with a block is not yet supported: the block would be ignored");
+  int blk = nt_ref(nt, id, "block");
+  if (recv >= 0 && blk >= 0 && dyn_block_appends(c, blk, 0)) {
+    TyKind rt = comp_ntype(c, recv);
+    NodeKind rk = nt_kind(nt, recv);
+    if ((sp_streq(name, "each") || sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
+         sp_streq(name, "map") || sp_streq(name, "collect")) &&
+        (rt == TY_STR_ARRAY || rt == TY_POLY_ARRAY)) {
+      const char *pn = block_param_name(c, blk, 0);
+      LocalVar *pv = pn ? scope_local(comp_scope_of(c, blk), pn) : NULL;
+      if (rk == NK_ArrayNode && pv && (pv->type == TY_STRING || pv->type == TY_STRBUF) && !pv->str_shared)
+        unsupported_feature(c, id, "a String is not yet shared by reference through a fresh Array literal into an appending iterator block");
+    }
+    if (sp_streq(name, "tap") && (rt == TY_STRING || rt == TY_STRBUF) &&
+        rk != NK_LocalVariableReadNode && rk != NK_StringNode && rk != NK_InterpolatedStringNode)
+      unsupported_feature(c, id, "a String is not yet shared by reference through tap on a fresh String");
+  }
   int av[16];
   int dyn = sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]") ||
             sp_streq(name, "yield") || sp_streq(name, "===");
+  int ka = nt_ref(nt, id, "arguments"), kac = 0;
+  const int *kav = ka >= 0 ? nt_arr(nt, ka, "arguments", &kac) : NULL;
+  for (int k = 0; k < kac; k++) {
+    if (nt_kind(nt, kav[k]) != NK_KeywordHashNode) continue;
+    int en = 0; const int *el = nt_arr(nt, kav[k], "elements", &en);
+    for (int e = 1; e < en; e++) {
+      int value, shared;
+      const char *key = dyn_kw_elem_key(c, el[e], &value);
+      if (!key || !strvar_arg(c, value, &shared) || c->strbuf_box[value]) continue;
+      int repeated = 0;
+      for (int h = 0; h < e && !repeated; h++) {
+        int earlier;
+        const char *prev = dyn_kw_elem_key(c, el[h], &earlier);
+        repeated = prev && sp_streq(prev, key);
+      }
+      if (!repeated) continue;
+      int app = 0, j;
+      if (dyn && dyn_call_site(c, id)) {
+        DynReach r;
+        dyn_call_kw_reach(c, id, key, &r);
+        app = r.app;
+      }
+      else {
+        int mi = refuse_static_target(c, id, name);
+        app = mi >= 0 && dyn_method_kw_appends(c, mi, key, &j);
+      }
+      if (app)
+        refuse_string_copy(c, value, NULL, key, "a repeated keyword",
+                           "through a repeated keyword");
+    }
+  }
   refuse_changed_splat(c, id, name, recv, dyn);
   refuse_splat_nonlocal(c, id, name, recv, dyn);
   if (!dyn) refuse_unplaced_lead(c, id, name, recv);
@@ -25287,6 +25408,28 @@ static void refuse_string_copies(Compiler *c, int id) {
       if (nt_kind(nt, kav[k]) != NK_KeywordHashNode) continue;
       int en = 0; const int *el = nt_arr(nt, kav[k], "elements", &en);
       for (int e = 0; e < en; e++) {
+        if (nt_kind(nt, el[e]) == NK_AssocSplatNode) {
+          int hash = nt_ref(nt, el[e], "value");
+          int hn = 0;
+          const int *he = hash >= 0 && nt_kind(nt, hash) == NK_HashNode ? nt_arr(nt, hash, "elements", &hn) : NULL;
+          for (int h = 0; h < hn; h++) {
+            int value, shared;
+            const char *key = dyn_kw_elem_key(c, he[h], &value);
+            if (!key || !strvar_arg(c, value, &shared)) continue;
+            int overridden = 0;
+            for (int j = e + 1; j < en; j++) {
+              int later_value;
+              const char *later_key = dyn_kw_elem_key(c, el[j], &later_value);
+              if (later_key && sp_streq(later_key, key)) { overridden = 1; break; }
+            }
+            if (overridden) continue;
+            DynReach r;
+            dyn_call_kw_reach(c, id, key, &r);
+            if (r.app)
+              refuse_string_copy(c, value, NULL, key, "a splatted Hash literal (`**{ k: v }`)",
+                                 "through a splatted Hash literal (`**{ k: v }`)");
+          }
+        }
         int v, shared;
         const char *key = dyn_kw_elem_key(c, el[e], &v);
         const char *kind = key && v >= 0 ? strvar_arg(c, v, &shared) : NULL;
@@ -25358,6 +25501,37 @@ static void refuse_string_copies(Compiler *c, int id) {
       }
       return;
     } }
+  /* Thread and Fiber arguments bind copies unless the read already boxes
+     the shared handle (#7002). */
+  { int blk = an_thread_arg_block(c, id);
+    int a = blk >= 0 ? nt_ref(nt, id, "arguments") : -1, ac = 0;
+    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    for (int k = 0; k < ac && k < 16; k++) {
+      if (nt_kind(nt, args[k]) == NK_SplatNode || nt_kind(nt, args[k]) == NK_KeywordHashNode) break;
+      int shared;
+      if (!strvar_arg(c, args[k], &shared) || !dyn_block_appends(c, blk, k) ||
+          c->strbuf_box[args[k]] || local_is_handle(c, args[k])) continue;
+      /* A plain local read only here cannot observe the copy; a parameter
+         can still belong to the caller. */
+      if (nt_kind(nt, args[k]) == NK_LocalVariableReadNode) {
+        const char *vn = nt_str(nt, args[k], "name");
+        Scope *vs = comp_scope_of(c, args[k]);
+        LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
+        int reads = 0;
+        for (int rd = 0; rd < nt->count && reads < 2; rd++) {
+          NodeKind rk = nt_kind(nt, rd);
+          if (rk != NK_LocalVariableReadNode && rk != NK_LocalVariableOperatorWriteNode &&
+              rk != NK_LocalVariableOrWriteNode && rk != NK_LocalVariableAndWriteNode) continue;
+          if (comp_scope_of(c, rd) == vs && sp_streq(nt_str(nt, rd, "name"), vn)) reads++;
+        }
+        if (reads == 1 && lv && !lv->is_param && !lv->is_block_param &&
+            !thread_arg_runs_again(c, args[k], blk)) continue;
+      }
+      const char *through = sp_streq(name, "new") ? "`Thread.new`" : "`Fiber#resume`";
+      refuse_string_copy(c, args[k], "a block", proc_param_name(c, blk, k), through,
+                         sp_streq(name, "new") ? "through `Thread.new`" : "through `Fiber#resume`");
+    }
+  }
   /* `C.new(s)`, `k.new(s)`, `new(s)` in a class method and `raise C, s`: an
      initialize's appended String parameter is the handle (ctor_convert_params),
      and the caller's String variable is pulled into it (ctor_pull_args), but

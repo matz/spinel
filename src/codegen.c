@@ -1343,6 +1343,9 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
       if (pbn == 1) { emit_boxed(c, pbd[0], b); return; }
     }
   }
+  if (nt_kind(c->nt, node) == NK_LocalVariableReadNode && comp_ntype(c, node) == TY_STRING &&
+      c->poly_strbuf_lift[node])
+    unsupported_feature(c, node, "a String is not yet shared by reference through a narrowed boxed iterator element into an appending parameter");
   {
     const char *bty0 = nt_type(c->nt, node);
     /* `*x` in a boxed value position (break *x / next *x): Ruby's

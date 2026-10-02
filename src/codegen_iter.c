@@ -1609,7 +1609,35 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
   if (ykw >= 0) {
     int en = 0; const int *els = nt_arr(nt, ykw, "elements", &en);
     for (int e = 0; e < en; e++) {
-      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) ykw_splat = 1;
+      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) {
+        ykw_splat = 1;
+        int hash = nt_ref(nt, els[e], "value"), hn = 0;
+        const int *he = hash >= 0 && nt_kind(nt, hash) == NK_HashNode ? nt_arr(nt, hash, "elements", &hn) : NULL;
+        for (int h = 0; h < hn; h++) {
+          int value;
+          const char *key = dyn_kw_elem_key(c, he[h], &value);
+          if (!key || value < 0) continue;
+          int overridden = 0;
+          for (int j = e + 1; j < en; j++) {
+            int later_value;
+            const char *later_key = dyn_kw_elem_key(c, els[j], &later_value);
+            if (later_key && sp_streq(later_key, key)) { overridden = 1; break; }
+          }
+          if (overridden) continue;
+          NodeKind vk = nt_kind(nt, value);
+          TyKind vt = comp_ntype(c, value);
+          DynReach r;
+          dyn_value_kw_reach(c, blk, key, &r);
+          if ((vt == TY_STRING || vt == TY_STRBUF) &&
+              (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode ||
+               vk == NK_GlobalVariableReadNode || vk == NK_ClassVariableReadNode) &&
+              r.app)
+            unsupported_feature(c, value, "a String variable is passed through a splatted Hash literal "
+                                "(`**{ k: v }`) to a block's appending keyword parameter "
+                                "(a String is not yet shared by reference through a splatted Hash literal "
+                                "(`**{ k: v }`)). Return the String from the block and assign it, or append to it in the caller.");
+        }
+      }
       /* so is one whose key is an expression: what it names is the run
          time's (`yield(key(1) => v)`) */
       int key = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
@@ -2610,6 +2638,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   #define BI_METHOD_SIDE() bi_method_side(&bi)
   BlockAliases al = { .n = 0 };
   refuse_yield_splat(c, blk, yc, yargs);
+  refuse_yield_capwrap(c, blk, yc, yargs);
   if (as_expr) buf_puts(b, "({ ");
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi, &al);
   /* Keep the rename table active for the block body: the block's variable

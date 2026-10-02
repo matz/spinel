@@ -8139,6 +8139,36 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
   }
   return done;
 }
+/* scrub! mutates in place, so a frozen receiver raises -- but only when
+   it would actually replace something: CRuby returns a frozen string
+   with no invalid bytes unchanged (#3333, #3338). The scrubbed text goes
+   back into the receiver, a shared String's buffer (a reader call's
+   handle among them) or an assignable one, as the other bang methods'
+   does; it only answered the scrubbed copy. */
+static int emit_scrub_bang(Compiler *c, int recv, TyKind rt, int argc, const int *argv, Buf *b) {
+  char srefS[1024];
+  int tsc = ++g_tmp;
+  Buf rpl; memset(&rpl, 0, sizeof rpl);
+  if (argc == 1) emit_str_expr_nilable(c, argv[0], &rpl); else buf_puts(&rpl, "0");
+  const char *rp = rpl.p ? rpl.p : "0";
+  int done = 1;
+  if (strbuf_slot_ref(c, recv, srefS, sizeof srefS))
+    buf_printf(b, "({ sp_String *_t%d = %s; const char *_t%dr = sp_str_scrub_bang(sp_String_cstr(_t%d), %s);"
+                  " if (_t%dr != sp_String_cstr(_t%d)) sp_String_set_bin(_t%d, _t%dr); _t%dr; })",
+               tsc, srefS, tsc, tsc, rp, tsc, tsc, tsc, tsc, tsc);
+  else if (rt != TY_STRING) done = 0;
+  else if (str_mut_var_recv(c, recv) || sb_shadowed_reader(recv)) {
+    buf_printf(b, "({ const char *_t%d = sp_str_scrub_bang(", tsc);
+    emit_expr(c, recv, b); buf_printf(b, ", %s); ", rp);
+    emit_expr(c, recv, b); buf_printf(b, " = _t%d; _t%d; })", tsc, tsc);
+  }
+  else {
+    buf_puts(b, "sp_str_scrub_bang("); emit_expr(c, recv, b); buf_printf(b, ", %s)", rp);
+  }
+  free(rpl.p);
+  return done;
+}
+
 static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -8219,6 +8249,9 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
   const int *argv = call_args(nt, id, &argc);
   TyKind rt = comp_recv_type(c, recv);
   TyKind a0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+  if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF) && name &&
+      sp_streq(name, "scrub!") && argc <= 1 && emit_scrub_bang(c, recv, rt, argc, argv, b))
+    return 1;
   /* scalar receiver methods: evaluate the receiver once into rs, then
      splice its text (so a literal/complex receiver isn't rebuilt). */
   if (recv >= 0 && (rt == TY_STRING || rt == TY_INT || rt == TY_FLOAT)) {
@@ -8750,14 +8783,6 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-      /* scrub! mutates in place, so a frozen receiver raises -- but only when
-         it would actually replace something: CRuby returns a frozen string
-         with no invalid bytes unchanged (#3333, #3338). */
-      else if (sp_streq(name, "scrub!") && argc == 0)
-        buf_printf(b, "sp_str_scrub_bang(%s, 0)", r);
-      else if (sp_streq(name, "scrub!") && argc == 1) {
-        buf_printf(b, "sp_str_scrub_bang(%s, ", r); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")");
-      }
       else if (sp_streq(name, "scrub") && argc == 0) buf_printf(b, "sp_str_scrub(%s, 0)", r);
       else if (sp_streq(name, "scrub") && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }
       else if ((sp_streq(name, "[]") || sp_streq(name, "slice")) && argc == 1 && re_lit_index(c, argv[0]) >= 0) {

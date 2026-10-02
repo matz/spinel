@@ -874,9 +874,13 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     run
   RUBY
   # Only an audited preserving store permits literal provenance to bypass
-  # reflection. An unproved return and an unresolved rest destination do not.
+  # reflection. A standalone POLY return keeps that contract; narrowing,
+  # conversion and an unresolved rest destination do not.
   { "preserving_store" => ["def accept(value); store(value); nil; end", "nil", true],
-    "unproved_return" => ["def accept(value); store(value); nil; end", "value", false],
+    "boxed_return" => ["def accept(value) = store(value)", "value", true],
+    "explicit_boxed_return" => ["def accept(value) = store(value)", "return value", true],
+    "narrowed_return" => ["def accept(value); store(value); nil; end", "return value if value.is_a?(String); value", false],
+    "boxed_to_s_result" => ["def accept(value); store(value); nil; end", "!ARGV.empty? ? value : value.to_s", false],
     "unresolved_rest" => ["def accept(*items); method(:store).call(*items); nil; end", "nil", false] }.each do |name, (accept, result, native)|
     certificate_cases["literal_#{name}_with_reflection"] = [<<~RUBY, "true\ntrue\ntrue\ntrue\nfrozen\n", native]
       class Keep
@@ -898,6 +902,83 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       end
     RUBY
   end
+  # Returned values must themselves keep identity, not only the stored
+  # aliases above. Ensure's deferred return and result temp are distinct ABIs.
+  { "implicit" => "value", "explicit" => "return value",
+    "explicit_ensure" => "begin; return value; ensure; puts :ensured; end",
+    "implicit_ensure" => "begin; value; ensure; puts :ensured; end" }.each do |name, body|
+    prefix = name.end_with?("ensure") ? "ensured\nensured\nensured\n" : ""
+    certificate_cases["standalone_boxed_return_#{name}"] = [<<~RUBY, prefix + "true\ntrue\ntrue\nfrozen\n", true]
+      class Echo
+        def tail(value); #{body}; end
+        def hop1(value) = tail(value)
+        def hop2(value) = hop1(value)
+        def hop3(value) = hop2(value)
+        def unrelated = method(:tail)
+      end
+      e = Echo.new
+      e.hop3(1)
+      values = []
+      2.times { values.push(e.hop3("ice")) }
+      p values[0].equal?(values[1])
+      p values[0].frozen?, values[1].frozen?
+      begin
+        values[0] << "!"
+      rescue FrozenError
+        puts "frozen"
+      end
+    RUBY
+  end
+  certificate_cases["discarded_poly_ivar_store"] = [<<~RUBY, "true\ntrue\ntrue\nfrozen\n", true]
+    class Keep
+      attr_reader :held
+      def initialize = @held = nil
+      def store(value); @held = value; nil; end
+      def hop1(value) = store(value)
+      def hop2(value) = hop1(value)
+      def hop3(value) = hop2(value)
+      def unrelated = method(:store)
+    end
+    k = Keep.new
+    k.hop3(1)
+    values = []
+    2.times { k.hop3("ice"); values.push(k.held) }
+    p values[0].equal?(values[1])
+    p values[0].frozen?, values[1].frozen?
+    begin
+      values[0] << "!"
+    rescue FrozenError
+      puts "frozen"
+    end
+  RUBY
+  certificate_cases["yielding_return_is_not_standalone"] = [<<~RUBY, "true\ntrue\n", false]
+    def tail(value); yield; value; end
+    def relay(value) = tail(value) { nil }
+    relay(1)
+    value = relay("ice")
+    p value.frozen?, value == "ice"
+  RUBY
+  # A constructor discards initialize's value, but a normal yielding call can
+  # splice it into a result slot. Treating both as discarded lost the aliases.
+  certificate_cases["yielding_initializer_result"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n\"ice!\"\n", false]
+    class Example
+      def initialize(value = nil)
+        yield if block_given?
+        value
+      end
+      public :initialize
+    end
+    def relay(value)
+      e = Example.new
+      e.initialize(value) { nil }
+    end
+    relay(1)
+    s = +"ice"
+    other = s
+    result = relay(s)
+    result << "!"
+    p s, other, result
+  RUBY
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]

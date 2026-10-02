@@ -21868,6 +21868,14 @@ typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
 } FwdKeepMode;
+/* Certify only standalone POLY returns and discarded initializer results.
+   Check yielding first: even initialize can be called as an ordinary method
+   with a block and splice into a value slot, unlike the constructor path. */
+static FwdKeepMode fwd_return_mode(Scope *m) {
+  if (m->yields) return FWD_MODE_VALUE;
+  if (m->class_id >= 0 && sp_streq(m->name, "initialize")) return FWD_MODE_DISCARD;
+  return m->ret == TY_POLY ? FWD_MODE_BOX : FWD_MODE_VALUE;
+}
 static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
 static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
 /* Bare mapped super arguments have graph edges. Expression wrappers do
@@ -21955,6 +21963,14 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
   /* A captured read is a retention even when its immediate use only reads
      bytes: the closure could observe later mutations through another alias. */
   if (kept == FWD_MODE_CAPTURE) goto children;
+  /* A tail begin/rescue uses its own typed result temp before entering the
+     method's return slot. A non-POLY intermediate is not a box transfer. */
+  if (kept == FWD_MODE_BOX && k == NK_BeginNode && comp_ntype(c, node) != TY_POLY)
+    kept = FWD_MODE_VALUE;
+  if (kept == FWD_MODE_BOX && k == NK_LocalVariableWriteNode) {
+    LocalVar *target = scope_local(comp_scope_of(c, node), nt_str(nt, node, "name"));
+    if (!target || target->type != TY_POLY) kept = FWD_MODE_VALUE;
+  }
   if (k == NK_StatementsNode) {
     int n = 0; const int *body = nt_arr(nt, node, "body", &n);
     int retained = 0;
@@ -21965,10 +21981,20 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
     return retained;
   }
   if (k == NK_EmbeddedStatementsNode) kept = FWD_MODE_DISCARD; /* interpolation copies bytes */
+  if (k == NK_ReturnNode)
+    kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : fwd_return_mode(&c->scopes[mi]);
+  if (k == NK_InstanceVariableWriteNode && kept == FWD_MODE_DISCARD &&
+      comp_scope_of(c, node) == &c->scopes[mi] && c->scopes[mi].class_id >= 0 &&
+      nt_kind(nt, nt_ref(nt, node, "value")) == NK_LocalVariableReadNode) {
+    int cid = c->scopes[mi].class_id;
+    int iv = comp_ivar_index(&c->classes[cid], nt_str(nt, node, "name"));
+    if (iv >= 0 && c->classes[cid].ivar_types[iv] == TY_POLY)
+      return fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "value"), FWD_MODE_BOX, appended, depth + 1);
+  }
   if (k == NK_ArrayNode || k == NK_HashNode || k == NK_AssocNode ||
       k == NK_InstanceVariableWriteNode || k == NK_GlobalVariableWriteNode ||
       k == NK_ClassVariableWriteNode || k == NK_ConstantWriteNode ||
-      k == NK_ReturnNode || k == NK_YieldNode) kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : FWD_MODE_VALUE;
+      k == NK_YieldNode) kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : FWD_MODE_VALUE;
   /* Conditional writes, destructuring and pattern captures also retain
      their input. Operator writes may dispatch to a user-defined mutator;
      none inherits a discarded statement's no-retention contract. */
@@ -22046,7 +22072,9 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
   const char *nm = nt_str(nt, node, "name");
   int recv = nt_ref(nt, node, "receiver");
   int bytes;
-  FwdKeepMode receiver_mode = fwd_string_receiver_mode(c, node, kept, &bytes);
+  /* A boxed result does not imply a boxed receiver: to_s can unbox a handle
+     to bytes and then rebox those bytes. Its receiver remains a value use. */
+  FwdKeepMode receiver_mode = fwd_string_receiver_mode(c, node, kept == FWD_MODE_BOX ? FWD_MODE_VALUE : kept, &bytes);
   int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
   /* A statement mutator also observes identity through its receiver. A
      local alias or ternary can copy a String even when its result is discarded.
@@ -22126,6 +22154,11 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
           if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_param_appends(c, f, t, i);
         }
         if (rest && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
+        /* A standalone POLY return can still be narrowed at this call site.
+           Returning that converted value is not the original box. */
+        if (matched && kept == FWD_MODE_BOX && comp_ntype(c, node) != TY_POLY &&
+            fwd_return_mode(target) == FWD_MODE_BOX && fwd_param_read(c, mi, pn, arg))
+          retained |= FWD_KEEP_COPY;
         forwarded &= matched;
       }
       int consume = !keyword && (bytes || search || identity || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p"))));
@@ -22287,7 +22320,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
   int appended = 0;
-  int retained = f->phase == FWD_EMISSION ? fwd_param_kept(c, f, mi, rn, m->body, FWD_MODE_VALUE, &appended, 0) : 0;
+  int retained = f->phase == FWD_EMISSION ? fwd_param_kept(c, f, mi, rn, m->body, fwd_return_mode(m), &appended, 0) : 0;
   unsigned bits = (retained & FWD_KEEP_BOX ? FWD_REST_BOX : 0) |
                   (retained & ~FWD_KEEP_BOX ? FWD_REST_KEPT : 0);
   if (rest_elems_mutated(c, mi)) bits |= 0xffffu;
@@ -22415,7 +22448,7 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, Sb
     if ((f->phase == FWD_PROMOTION || internal || r > 0) &&
         (p->byref_out || (p->type == TY_STRBUF && p->str_shared) || an_param_mutated_in_place(c, mi, pj))) appended = 1;
     if (f->phase == FWD_EMISSION) {
-      int retained = fwd_param_kept(c, f, mi, pn, m->body, FWD_MODE_VALUE, &appended, 0);
+      int retained = fwd_param_kept(c, f, mi, pn, m->body, fwd_return_mode(m), &appended, 0);
       if (retained & FWD_KEEP_BOX) f->taint |= FWD_TAINT_BOX;
       retained &= ~FWD_KEEP_BOX;
       if (retained) {

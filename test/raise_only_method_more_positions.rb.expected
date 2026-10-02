@@ -1,0 +1,8 @@
+arithmetic: subclass
+comparison: subclass
+method call: subclass
+chain: subclass
+chain interpolated: subclass
+local: subclass
+boxed: subclass
+argument: subclass

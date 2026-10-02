@@ -1,0 +1,26 @@
+[TypeError, "can't convert false into Complex"]
+[TypeError, "can't convert false into Complex"]
+[TypeError, "not a real"]
+[TypeError, "not a real"]
+[TypeError, "can't convert true into Complex"]
+[TypeError, "not a real"]
+[TypeError, "not a real"]
+[TypeError, "can't convert false into Complex"]
+[TypeError, "not a real"]
+[TypeError, "can't convert true into Complex"]
+[TypeError, "not a real"]
+(2+0i)
+(1+2i)
+(2.0+0i)
+(1+2.0i)
+[TypeError, "not a real"]
+["real", "imaginary"]
+String parsed first
+[TypeError, "not a real"]
+[TypeError, "not a real"]
+[TypeError, "not a real"]
+[TypeError, "not a real"]
+[TypeError, "can't convert nil into Complex"]
+[TypeError, "can't convert nil into Complex"]
+[TypeError, "not a real"]
+(2+3i)

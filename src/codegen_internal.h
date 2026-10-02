@@ -1368,10 +1368,24 @@ int recv_is_const(const NodeTable *nt, int recv, const char *name);
 int sp_is_fiber_storage_recv(const NodeTable *nt, int recv);
 int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b);
 void emit_call(Compiler *c, int id, Buf *b);
-/* Receiver table emitters return 1 when handled, 0 to keep falling through. */
-int emit_call_by_recv_type(Compiler *c, int id, int recv, TyKind rt,
-                          const char *name, Buf *b);
-int emit_tms_call(Compiler *c, int id, int recv, const char *name, Buf *b);
+/* A builtin call the builtin-op table covers (codegen_ops.c): 1 when it
+   emitted the call, 0 to keep falling through the chain. */
+struct BuiltinOp;
+typedef struct {
+  int id, recv, argc;
+  TyKind rt;
+  const char *name;
+  const struct BuiltinOp *op;
+} BopCtx;
+int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
+
+/* codegen_view.c: a node's cached type overridden for one nested emission.
+   view_push answers a token for the matching view_pop; a recovery point
+   saves view_depth() and view_unwind()s back to it after a refusal. */
+int view_push(Compiler *c, int id, TyKind t);
+void view_pop(Compiler *c, int tok);
+int view_depth(void);
+void view_unwind(int depth);
 /* Decode a CallNode's positional arguments: sets *argc and returns the argv
    array (NULL when the node has no arguments). Shared by the call emitters. */
 const int *call_args(const NodeTable *nt, int id, int *argc);

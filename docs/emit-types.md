@@ -12,8 +12,9 @@ status is the compile's: a program the compiler refuses exits 1 and the
 JSON still carries the refusals. With `-S` as well
 (`spinel app.rb --emit-types -o app.json -S`) the C of that same compile
 goes to stdout, so a consumer showing both runs the compiler once. It is the surface the out-of-tree
-editor tools read (rubys/spinel-ide); nothing in this tree consumes it
-beyond the gate's own check.
+editor tools read (rubys/spinel-ide); in this tree the gate's own check
+reads it, and `tools/order_probe.rb`, which compiles a program in two
+orders of its definitions and compares the two dumps node by node.
 
 ```json
 {

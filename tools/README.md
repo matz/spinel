@@ -226,6 +226,62 @@ a guard, is never taken) takes about ten minutes at `--jobs 2` with
 bugs, so reduce only a run whose findings are few. Like the other probes it
 is a probe to run by hand, not a gate.
 
+## order_probe
+
+`ruby tools/order_probe.rb [--strategy reverse|rotate|shuffle|swap]..
+[--seed S] [--control null|shift|ids] [--int-overflow promote] [--jobs J]
+[--out DIR] [--timeout SEC] [--keep] [FILE..]` asks whether the types
+spinel settles on follow the order a program's definitions are written in.
+They are not supposed to, and a slot typed in one order and boxed in the
+other prints the same answer from both binaries, so no test of the suite
+sees which it got. The probe takes each FILE (default
+`test/*.rb test/infer/*.rb benchmark/*.rb`), finds the runs of consecutive
+sibling `def`s in the bodies of the program, classes, modules and
+`class << x` (`order_permute.rb`; a `private def` and its five relatives
+count, a bare `private` or any other statement ends a run, and a run is
+left alone when a move could change the program: two definitions of one
+name, a `method_added` hook, a definition sharing its line), writes the
+program again with each run in another order, compiles both orders with
+`--emit-types`, and compares the type of every node through the line map
+(`order_types.rb`). `reverse` (the default), `rotate` and a seeded
+`shuffle` move every run at once; `swap` exchanges two definitions of one
+run at a time, the 40 nearest pairs of a program. What moves between two
+compiles without any type moving is taken out first: the lines the
+compiler puts ahead of a program that uses a builtin, the node ids in the
+names it makes up, the span of a body whose last definition changed. Three
+controls say whether that worked, and have to report nothing: `null` (the
+file order through the same writer), `shift` (a comment line put inside
+every run) and `ids` (a `nil` statement put at the top, which renumbers
+every node); a program whose types move under `ids` is left out of a run's
+findings and listed as id-sensitive. The differences of a program are
+grouped under root slots named without line numbers (`Rng@s0`,
+`Rng#next_u32`, `#f(a)`), and the program is classed by the worst of them:
+`outcome` (one order is refused, or the compiler crashes or does not end),
+`disagreement` (two types, neither a boxed form of the other), `precision`
+(one order boxes what the other types), `shape` (a slot or a parameter one
+order does not have), and, listed without counting against the exit
+status, `representation` (one RBS type, two internal ones) and
+`instantiation` (inside a method that yields, which is typed once per call
+site, as `docs/limitations.md` says). Output, under DIR (default
+`build/order-probe/`): `summary.txt` and for each program with a finding
+`findings/<n>-<program>/` holding `a.rb` (the file order), `b.rb` (the
+other) and `slots.txt` (each root, each differing node under it with both
+types, and the fixpoint's round count in each order). A reverse pass over
+`test/*.rb` on 1d303cb9 compares 2,011 programs in two orders in about 90
+seconds at `--jobs 4`. Exit status 0 with no finding that counts, 1 with one, 4 for
+the tool's own error. Like the other probes it is a CRuby script to run
+by hand (it needs Prism, which Ruby 3.3 and later bundle), not a gate, and
+not one of the tools make builds.
+
+What it does not see: a node the compiler made up has no end position in
+the dump (2,377 of the 2.5 million records of `test/*.rb` on 1d303cb9, most
+of them from desugaring, a few grafted from a `class_eval` string), and some
+of those sit on the line of whichever definition needed them first, which
+follows the order. They are compared without their place, as a count of each
+kind, name and type, so two of them exchanging types go unseen. Keyed by
+where they start instead, the same pass finds no such exchange and reports
+three programs in which only the helper's line moved.
+
 ## Adding a tool
 
 Drop `tools/<name>.rb` (subset Ruby, `require_relative "tool_common"`

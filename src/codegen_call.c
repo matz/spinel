@@ -3350,7 +3350,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
     int sv_probe = g_unsup_probe; g_unsup_probe = 1;
     ConvHold *sv_hold = g_conv_hold;
     int sv_open_defaults = g_open_defaults, sv_arm_argov = g_n_argov;
-    int sv_moves = comp_scope_move_depth();
+    int sv_moves = comp_scope_move_depth(), sv_views = view_depth();
     /* the emitter state an arm repoints while it is emitted -- self, while
        a callee's defaults are spelled with the receiver as self -- is put
        back when the arm is dropped partway, as the unit's own recovery
@@ -3363,7 +3363,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
        back into it after it had returned */
     jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
     if (setjmp(g_unsup_recover) == 0) { emit_expr(c, arm, &body); ok = 1; }
-    else { ok = 0; comp_scope_move_unwind(sv_moves); }
+    else { ok = 0; comp_scope_move_unwind(sv_moves); view_unwind(sv_views); }
     emit_state_release(sv_state, !ok);
     g_conv_hold = sv_hold;  /* a dropped arm may have unwound through emit_call */
     g_open_defaults = sv_open_defaults; g_n_argov = sv_arm_argov;
@@ -3423,7 +3423,7 @@ static int emit_dynamic_respond_to(Compiler *c, int id, Buf *b) {
     int sv_probe = g_unsup_probe; g_unsup_probe = 1;
     ConvHold *sv_hold = g_conv_hold;
     int sv_open_defaults = g_open_defaults;
-    int sv_moves = comp_scope_move_depth();
+    int sv_moves = comp_scope_move_depth(), sv_views = view_depth();
     /* the emitter state an arm repoints while it is emitted -- self, while
        a callee's defaults are spelled with the receiver as self -- is put
        back when the arm is dropped partway, as the unit's own recovery
@@ -3436,7 +3436,7 @@ static int emit_dynamic_respond_to(Compiler *c, int id, Buf *b) {
        back into it after it had returned */
     jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
     if (setjmp(g_unsup_recover) == 0) { emit_expr(c, arm, &body); ok = 1; }
-    else { ok = 0; comp_scope_move_unwind(sv_moves); }
+    else { ok = 0; comp_scope_move_unwind(sv_moves); view_unwind(sv_views); }
     emit_state_release(sv_state, !ok);
     g_conv_hold = sv_hold;
     g_open_defaults = sv_open_defaults;
@@ -3502,7 +3502,7 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     int sv_probe = g_unsup_probe; g_unsup_probe = 1;
     ConvHold *sv_hold = g_conv_hold;
     int sv_open_defaults = g_open_defaults;
-    int sv_moves = comp_scope_move_depth();
+    int sv_moves = comp_scope_move_depth(), sv_views = view_depth();
     /* the emitter state an arm repoints while it is emitted -- self, while
        a callee's defaults are spelled with the receiver as self -- is put
        back when the arm is dropped partway, as the unit's own recovery
@@ -3515,7 +3515,7 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
        back into it after it had returned */
     jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
     if (setjmp(g_unsup_recover) == 0) { emit_expr(c, arm, &body); ok = 1; }
-    else { ok = 0; comp_scope_move_unwind(sv_moves); }
+    else { ok = 0; comp_scope_move_unwind(sv_moves); view_unwind(sv_views); }
     emit_state_release(sv_state, !ok);
     g_conv_hold = sv_hold;
     g_open_defaults = sv_open_defaults;
@@ -4168,6 +4168,27 @@ static int emit_nullable_numeric_convert(Compiler *c, int id, const int *argv, i
   buf_puts(b, "; } _out; })");
   return 1;
 }
+/* Kernel#Complex with a Boolean argument of known type: a Boolean is neither
+   a Complex nor a real component, so TypeError, where the float construction
+   in emit_complex_rational_call read false/true as 0/1. Both arguments run
+   first, and sp_complex_reject_bool picks CRuby's message. The caller skips
+   this under `exception:`, whose false answers nil (the call is typed unboxed
+   there); a call with any other keyword hash, which is not a component, is
+   declined here. Returns 1 when it emitted the raise. */
+static int emit_complex_bool_reject(Compiler *c, int argc, const int *argv, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *kt1 = argc == 2 ? nt_type(nt, argv[1]) : NULL;
+  if (kt1 && sp_streq(kt1, "KeywordHashNode")) return 0;
+  if (comp_ntype(c, argv[0]) != TY_BOOL && !(argc == 2 && comp_ntype(c, argv[1]) == TY_BOOL)) return 0;
+  int tr = ++g_tmp, ti = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, argv[0], b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tr, ti);
+  if (argc == 2) emit_boxed(c, argv[1], b);
+  else buf_puts(b, "sp_box_int(0)");
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_complex_reject_bool(_t%d, _t%d, %d);"
+                " (sp_Complex){0, 0, 0}; })", ti, tr, ti, argc);
+  return 1;
+}
 static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -4249,6 +4270,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
                   " (sp_Complex){0, 0, 0}; })");
       return 1;
     }
+    if (!soft_convert && emit_complex_bool_reject(c, argc, argv, b)) return 1;
     /* A Complex component combines: CRuby's Complex(a, b) is a + b*i when
        either is not real, Complex(a.real, b.real) when both are, and
        Complex(a) is a itself. Which part comes out a Float follows CRuby's
@@ -23955,6 +23977,32 @@ static void emit_utime_arg_bad(Compiler *c, int node, TyKind t, Buf *b) {
   buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into time\");", cn ? cn : "Object");
 }
 
+/* String#% whose operand has no type yet: `[]` and a bare `Array.new`. Only
+   these literal shapes are taken: emit_boxed answers nil for any other untyped
+   node, which would format silently wrong, and `{}` would answer "" for `%c`.
+   The receiver gets the nil check when fck names its temporary. Returns 1 when
+   it emitted the call. */
+static int emit_str_format_untyped_array(Compiler *c, int recv, int a0n, int fck, Buf *b) {
+  const NodeTable *nt = c->nt;
+  NodeKind ak0 = nt_kind(nt, a0n);
+  int lit = ak0 == NK_ArrayNode;
+  if (!lit && ak0 == NK_CallNode && sp_streq(nt_str(nt, a0n, "name"), "new") &&
+      nt_ref(nt, a0n, "block") < 0) {
+    int nr = nt_ref(nt, a0n, "receiver"), nac = 0;
+    call_args(nt, a0n, &nac);
+    lit = nr >= 0 && nt_kind(nt, nr) == NK_ConstantReadNode &&
+          sp_streq(nt_str(nt, nr, "name"), "Array") && nac == 0;
+  }
+  if (!lit) return 0;
+  if (fck >= 0) {
+    buf_printf(b, "sp_str_format_polyarr(({ const char *_t%d = ", fck);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; if (!_t%d) sp_nil_recv(\"%%\"); _t%d; })", fck, fck);
+  }
+  else { buf_puts(b, "sp_str_format_polyarr("); emit_expr(c, recv, b); }
+  buf_puts(b, ", sp_format_args("); emit_boxed(c, a0n, b); buf_puts(b, "))");
+  return 1;
+}
 static void emit_call_body(Compiler *c, int id, Buf *b);
 
 /* Each emitter tried in turn below answers 1 when it took the call. One that
@@ -25639,6 +25687,21 @@ static void emit_poly_enum_for(Compiler *c, const char *val, Buf *b) {
   buf_printf(b, ")) ? sp_Enumerator_new_from(_e%d) : sp_poly_enum_for_each(_e%d); })", t, t);
 }
 void emit_call(Compiler *c, int id, Buf *b) {
+  /* A call on a receiver that never hands back a value (a method whose
+     every path raises): Ruby evaluates the receiver first, it raises, and
+     neither the arguments nor the method run. Evaluate it for effect and
+     answer the call's type's placeholder, as the raise-tail arm does.
+     Every arm below types the receiver from its void, so `m.version + "x"`,
+     `m.version < 3` and `m.version.size` were each refused by the arm for
+     their operator. */
+  { int nr = nt_ref(c->nt, id, "receiver");
+    if (nr >= 0 && call_never_returns(c, nr)) {
+      TyKind t = comp_ntype(c, id);
+      buf_puts(b, "((void)("); emit_expr(c, nr, b); buf_puts(b, ")");
+      if (t != TY_VOID) buf_printf(b, ", %s", raise_tail_value_c(c, t));
+      buf_puts(b, ")");
+      return;
+    } }
   /* Hash.new's `capacity:` value runs after the Hash is built (defined in
      the guards below), whichever arm builds it */
   if (emit_hash_new_capacity_wrap(c, id, b, 0)) return;
@@ -28580,26 +28643,6 @@ static void emit_unbox_or_keep(Compiler *c, TyKind want, int t, Buf *b) {
   else emit_unbox_text(c, want, tn, b);
 }
 
-/* Keep receiver-specific emitters behind one table so another type can move
-   without adding a dispatch chain. Use the caller's receiver type to preserve
-   the original arm's type snapshot and its place among the fallbacks. */
-static const struct {
-  TyKind recv_ty;
-  int (*emit)(Compiler *c, int id, int recv, const char *name, Buf *b);
-} recv_call_emitters[] = {
-  { TY_TMS, emit_tms_call },
-};
-
-int emit_call_by_recv_type(Compiler *c, int id, int recv, TyKind rt,
-                          const char *name, Buf *b) {
-  if (recv < 0) return 0;
-  for (size_t i = 0; i < sizeof recv_call_emitters / sizeof recv_call_emitters[0]; i++) {
-    if (recv_call_emitters[i].recv_ty == rt)
-      return recv_call_emitters[i].emit(c, id, recv, name, b);
-  }
-  return 0;
-}
-
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to
    its proc form with the block as a proc (#5779). `recv_text` is the
@@ -28673,6 +28716,24 @@ static int emit_array_hash_reopen_call(Compiler *c, int id, int recv, TyKind rt,
   return 1;
 }
 
+/* The concurrency handles render as Object's default does, which is what
+   CRuby prints for them: #<Thread::Mutex:0x...>. Without an arm they reached
+   the nil-degrade in emit_call_body and `mutex.inspect` answered "[]" -- a
+   silent wrong answer rather than a gap, and `p mutex` refused to compile at
+   all (#4421). A SizedQueue shares TY_QUEUE with a Queue, so the name is read
+   at run time from the queue's bound (sp_Queue_class_name). Fiber and Thread
+   have their own inspect, with the creation site and status. */
+static void emit_handle_inspect(Compiler *c, int recv, TyKind rt, Buf *b) {
+  if (rt == TY_QUEUE) {
+    int tq = ++g_tmp;
+    buf_printf(b, "({ sp_queue *_t%d = ", tq); emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_sprintf(\"#<%%s:0x%%016llx>\", sp_Queue_class_name(_t%d), (unsigned long long)(uintptr_t)_t%d); })", tq, tq, tq);
+    return;
+  }
+  const char *hn = rt == TY_MUTEX ? "Thread::Mutex" : "Thread::ConditionVariable";
+  buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)(", hn);
+  emit_expr(c, recv, b); buf_puts(b, "))");
+}
 static void emit_call_body(Compiler *c, int id, Buf *b) {
   /* the class's own method in a builtin's receiver test (`__r.is_a?(K) ?
      __r.m { } : __enum_m(__r) { }`): the test has decided the receiver is
@@ -33037,63 +33098,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     }
   }
 
-  /* Socket::Option readers. Spinel carries the integer-valued options only,
-     so #data / #unpack answer through the same int the option holds. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_SOCKOPT && argc <= 1) {
-    Buf ob; memset(&ob, 0, sizeof ob); emit_expr(c, recv, &ob);
-    const char *orr = ob.p ? ob.p : "NULL";
-    if (argc == 0 && sp_streq(name, "int"))     { buf_printf(b, "(%s)->value", orr); free(ob.p); return; }
-    if (argc == 0 && sp_streq(name, "bool"))    { buf_printf(b, "((%s)->value != 0)", orr); free(ob.p); return; }
-    if (argc == 0 && sp_streq(name, "level"))   { buf_printf(b, "(%s)->level", orr); free(ob.p); return; }
-    if (argc == 0 && sp_streq(name, "optname")) { buf_printf(b, "(%s)->optname", orr); free(ob.p); return; }
-    if (argc == 0 && sp_streq(name, "family"))  { buf_printf(b, "(%s)->family", orr); free(ob.p); return; }
-    if (argc == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s"))) {
-      buf_printf(b, "sp_sockopt_inspect(%s)", orr); free(ob.p); return;
-    }
-    free(ob.p);
-  }
-  /* Addrinfo readers: the value is immutable, so each is a field read. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_ADDRINFO && argc == 0) {
-    Buf ab; memset(&ab, 0, sizeof ab); emit_expr(c, recv, &ab);
-    const char *ar = ab.p ? ab.p : "NULL";
-    if (sp_streq(name, "ip_address") || sp_streq(name, "unix_path")) {
-      buf_printf(b, "(%s)->ip", ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "afamily") || sp_streq(name, "pfamily")) {
-      buf_printf(b, "(%s)->afamily", ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "afamily_name")) { buf_printf(b, "(%s)->afname", ar); free(ab.p); return; }
-    if (sp_streq(name, "ip_port")) { buf_printf(b, "(%s)->port", ar); free(ab.p); return; }
-    if (sp_streq(name, "socktype")) { buf_printf(b, "(%s)->socktype", ar); free(ab.p); return; }
-    if (sp_streq(name, "protocol")) { buf_printf(b, "(%s)->protocol", ar); free(ab.p); return; }
-    /* strcmp, not sp_str_eq: sp_str_eq confirms a strcmp hit by comparing
-       byte lengths, and reading the length of a bare C literal means reading
-       its s[-1] marker -- out of bounds, and whatever byte happens to precede
-       it in rodata. Land on 0xfe/0xfc/0xfd/0xf1 there and it takes the bytes
-       BEFORE the literal as an sp_str_hdr, reads a garbage length, and the
-       predicate answers false for two equal strings. The layout decides, so
-       the answer changes with the optimizer. afname is NUL-free, so plain
-       strcmp is both correct and what sp_addrinfo_inspect already uses. */
-    if (sp_streq(name, "ipv4?")) {
-      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_INET\") == 0)", ar, ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "ipv6?")) {
-      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_INET6\") == 0)", ar, ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "unix?")) {
-      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_UNIX\") == 0)", ar, ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "ip?")) {
-      buf_printf(b, "(!((%s)->afname && strcmp((%s)->afname, \"AF_UNIX\") == 0))", ar, ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "to_sockaddr")) {
-      buf_printf(b, "sp_addrinfo_to_sockaddr(%s)", ar); free(ab.p); return;
-    }
-    if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) {
-      buf_printf(b, "sp_addrinfo_inspect(%s)", ar); free(ab.p); return;
-    }
-    free(ab.p);
-  }
+  /* Socket::Option and Addrinfo readers: builtin-op rows (builtin_ops.c) */
+  if (recv >= 0 && (comp_ntype(c, recv) == TY_SOCKOPT || comp_ntype(c, recv) == TY_ADDRINFO) &&
+      emit_builtin_op(c, id, recv, comp_ntype(c, recv), name, b)) return;
   /* TY_IO (File/IO handle) instance methods */
   /* Dir handle instance methods (#2821) */
   if (recv >= 0 && comp_ntype(c, recv) == TY_DIR) {
@@ -42516,6 +42523,7 @@ else {
       buf_puts(b, ", sp_format_args("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
       return;
     }
+    if (at == TY_UNKNOWN && emit_str_format_untyped_array(c, recv, argv[0], fck, b)) return;
     /* a single non-array scalar argument formats as a one-element array
        (nil renders empty for %s; Rational/Complex coerce inside the
        formatter's numeric directives) */
@@ -44394,7 +44402,7 @@ else {
       return;
     }
   }
-  if (emit_call_by_recv_type(c, id, recv, rt, name, b)) return;
+  if (rt == TY_TMS && emit_builtin_op(c, id, recv, rt, name, b)) return;
   /* Symbol#encoding: US-ASCII when the name is pure ASCII, UTF-8 otherwise */
   if (recv >= 0 && rt == TY_SYMBOL && argc == 0 && sp_streq(name, "encoding")) {
     int te = ++g_tmp;
@@ -46041,19 +46049,9 @@ else {
     emit_expr(c, recv, b); buf_puts(b, "))");
     return;
   }
-  /* The concurrency handles render as Object's default does, which is what
-     CRuby prints for them: #<Thread::Mutex:0x...>. Without an arm they reached
-     the nil-degrade below and `mutex.inspect` answered "[]" -- a silent wrong
-     answer rather than a gap, and `p mutex` refused to compile at all (#4421).
-     A SizedQueue shares TY_QUEUE with a Queue and so prints as Thread::Queue;
-     that divergence is in docs/limitations.md. Fiber and Thread have their
-     own inspect, with the creation site and status. */
   if (recv >= 0 && argc == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s")) &&
       (rt == TY_MUTEX || rt == TY_QUEUE || rt == TY_CONDVAR)) {
-    const char *hn = rt == TY_MUTEX ? "Thread::Mutex"
-                   : rt == TY_QUEUE ? "Thread::Queue" : "Thread::ConditionVariable";
-    buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)(", hn);
-    emit_expr(c, recv, b); buf_puts(b, "))");
+    emit_handle_inspect(c, recv, rt, b);
     return;
   }
   if (recv >= 0 && argc == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s")) &&

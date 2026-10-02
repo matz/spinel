@@ -3383,6 +3383,23 @@ static sp_float sp_poly_to_f_opt(sp_RbVal v) { return v.tag == SP_TAG_NIL ? sp_f
 /* sp_str_to_c: moved to lib/sp_cold.c */
 sp_Complex sp_str_to_c(const char *s);
 sp_Complex sp_str_to_c_strict(const char *s);
+/* Boolean rejection is local to Kernel#Complex, not generic Float coercion.
+   In a two-component call Strings are parsed before real-number validation. */
+static SP_NORETURN void sp_complex_reject_bool(sp_RbVal re, sp_RbVal im, int argc) {
+  SP_GC_ROOT_RBVAL(re); SP_GC_ROOT_RBVAL(im);
+  if (re.tag == SP_TAG_NIL || (argc == 2 && im.tag == SP_TAG_NIL))
+    sp_raise_cls("TypeError", "can't convert nil into Complex");
+  if (argc == 2) {
+    if (sp_poly_is_strbuf(re)) re = sp_poly_strbuf_deref(re);
+    if (sp_poly_is_strbuf(im)) im = sp_poly_strbuf_deref(im);
+    if (re.tag == SP_TAG_STR) (void)sp_str_to_c_strict(re.v.s);
+    if (im.tag == SP_TAG_STR) (void)sp_str_to_c_strict(im.v.s);
+    sp_raise_cls("TypeError", "not a real");
+  }
+  sp_raise_cls("TypeError", re.v.b ? "can't convert true into Complex" :
+                                  "can't convert false into Complex");
+}
+
 /* lib/sp_cold.c: while sp_convert_soft is set, an unparseable Complex/Rational
    string sets sp_convert_failed instead of raising (Kernel's exception: false). */
 extern sp_bool sp_convert_soft;
@@ -3909,8 +3926,8 @@ static sp_bool sp_poly_nan_p(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return isnan
    raised for them, whose `args` is the empty list */
 static sp_float sp_poly_next_float(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return nextafter(v.v.f, INFINITY); sp_raise_cls("NoMethodError", sp_nomethod_msg_args("next_float", v, 0, NULL)); return 0.0; }
 static sp_float sp_poly_prev_float(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return nextafter(v.v.f, -INFINITY); sp_raise_cls("NoMethodError", sp_nomethod_msg_args("prev_float", v, 0, NULL)); return 0.0; }
-static sp_bool sp_poly_finite_p(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return isfinite(v.v.f) != 0; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return TRUE; sp_raise_poly_nomethod("finite?", v); }
-static sp_RbVal sp_poly_infinite(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return isinf(v.v.f) ? sp_box_int(v.v.f > 0 ? 1 : -1) : sp_box_nil(); if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return sp_box_nil(); sp_raise_poly_nomethod("infinite?", v); }
+static sp_bool sp_poly_finite_p(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return isfinite(v.v.f) != 0; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT || ((sp_poly_is_rational(v) || sp_poly_is_brat(v)) && v.v.p)) return TRUE; sp_raise_poly_nomethod("finite?", v); }
+static sp_RbVal sp_poly_infinite(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return isinf(v.v.f) ? sp_box_int(v.v.f > 0 ? 1 : -1) : sp_box_nil(); if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT || ((sp_poly_is_rational(v) || sp_poly_is_brat(v)) && v.v.p)) return sp_box_nil(); sp_raise_poly_nomethod("infinite?", v); }
 /* Complex-projection queries on a poly value read out of a container (#2882):
    a Complex yields its stored component (int- or float-classed per its flags),
    and any real number is its own real part with a zero imaginary part. */
@@ -5130,8 +5147,8 @@ sp_PolyArray *sp_math_lgamma(double x);
 static sp_RbVal sp_PolyArray_shift(sp_PolyArray *a) { if (!a || a->len <= 0) return sp_box_nil(); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); } sp_RbVal v = a->data[0]; memmove(a->data, a->data+1, (size_t)(--a->len)*sizeof(sp_RbVal)); return v; }
 static sp_RbVal sp_PolyArray_delete_at(sp_PolyArray *a, sp_int i) {sp_gc_wb((void*)a);  if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); sp_RbVal v = a->data[i]; for (sp_int j = i; j < a->len - 1; j++) a->data[j] = a->data[j+1]; a->len--; return v; }
 static void sp_PolyArray_insert(sp_PolyArray *a, sp_int i, sp_RbVal v) {sp_gc_wb((void*)a);  if (!a) return; if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } sp_int orig = i; if (i < 0) i += a->len + 1; if (i < 0) sp_raise_cls("IndexError", sp_sprintf("index %lld too small for array; minimum: %lld", (long long)orig, (long long)(-(a->len + 1)))); while (i > a->len) sp_PolyArray_push(a, sp_box_nil()); /* CRuby pads with nils past the end */ sp_PolyArray_push(a, sp_box_nil()); for (sp_int j = a->len - 1; j > i; j--) a->data[j] = a->data[j-1]; a->data[i] = v; }
-/* Array#delete(v): removes every element sp_poly_eq to v, returns v (or
-   nil if not found). Was missing for TY_POLY_ARRAY -- only TY_INT_ARRAY/
+/* Array#delete(v): removes every element sp_poly_eq to v, returns the
+   last one (nil if none). Was missing for TY_POLY_ARRAY -- only TY_INT_ARRAY/
    TY_STR_ARRAY had it -- which blocked the array-backed Set package's
    #delete (doom's `@secret_sectors.delete(sector_idx)`). Lives here (not
    sp_array.c, home of sp_IntArray_delete et al) because it needs
@@ -5144,13 +5161,13 @@ static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {sp_gc_wb((void
      mid-loop; a and v may be reachable only through the call expression. */
   SP_GC_ROOT(a); SP_GC_ROOT_RBVAL(v);
   sp_int w = 0;
-  sp_bool found = FALSE;
+  sp_RbVal removed = sp_box_nil(); SP_GC_ROOT_RBVAL(removed);
   for (sp_int i = 0; i < a->len; i++) {
     if (!sp_poly_eq(a->data[i], v)) { a->data[w] = a->data[i]; w++; }
-    else found = TRUE;
+    else removed = a->data[i];
   }
   a->len = w;
-  return found ? v : sp_box_nil();
+  return removed;
 }
 
 /* MatchData -- holds the source string and the per-group byte offsets

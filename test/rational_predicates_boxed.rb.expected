@@ -1,0 +1,17 @@
+[:finite?, TrueClass, true]
+[:infinite?, NilClass, nil]
+[true, nil]
+[true, nil]
+[true, nil]
+[true, nil]
+true
+nil
+[:receiver, :receiver]
+[NoMethodError, "undefined method 'finite?' for nil"]
+[NoMethodError, "undefined method 'finite?' for an instance of String"]
+true
+nil
+true
+nil
+false
+-1

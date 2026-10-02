@@ -1,0 +1,26 @@
+"fresh"
+"value1"
+"call"
+:literal
+"fresh"
+:interpolated
+"value1"
+:call
+"call"
+"fresh"
+"value1"
+"call"
+"fresh"
+"value1"
+"call"
+"local!"
+"local!"
+"local!"
+{literal: "fresh", interpolated: "value1", call: "call"}
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+{k: "frozen"}
+"s!"
+["r"]

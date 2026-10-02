@@ -1,0 +1,9 @@
+1
+undefined method 'bar' for an instance of Foo
+"s"
+undefined method 'upcase' for an instance of Foo
+1
+NoMethodError
+NameError
+{a: 1}
+undefined method 'bar' for an instance of Foo

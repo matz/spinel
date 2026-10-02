@@ -1,0 +1,5 @@
+[true, 0, 1, 0, true, true]
+[true, [:keep, :tail]]
+nil
+[:missing, :fallback]
+[true, [:keep]]

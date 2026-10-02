@@ -12431,39 +12431,8 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     if (done) return 1;
   }
 
-  /* Process::Status instance methods. The boxed receiver is a
-     sp_ProcessStatus *; the runtime helpers take the int status word
-     (or the boxed struct for pid) and return unboxed scalars. The
-     call-site codegen auto-boxes according to the analyze-infer
-     return type. */
-  if (recv >= 0 && rt == TY_PROCESS_STATUS) {
-    Buf rs = expr_buf(c, recv);
-    const char *r = rs.p ? rs.p : "";
-    int done = 1;
-    if (argc == 0) {
-      if (sp_streq(name, "signaled?"))   buf_printf(b, "sp_process_status_signaled_p((%s)->status)", r);
-      else if (sp_streq(name, "exited?"))     buf_printf(b, "sp_process_status_exited_p((%s)->status)", r);
-      else if (sp_streq(name, "coredump?"))   buf_printf(b, "sp_process_status_coredump_p((%s)->status)", r);
-      /* tri-state: -1 is CRuby's nil for a process that did not exit */
-      else if (sp_streq(name, "success?"))
-        { int tsx = ++g_tmp;
-          buf_printf(b, "({ int _t%d = sp_process_status_success_p((%s)->status);"
-                        " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })",
-                     tsx, r, tsx, tsx); }
-      else if (sp_streq(name, "exitstatus"))  buf_printf(b, "sp_process_status_exitstatus((%s)->status)", r);
-      else if (sp_streq(name, "termsig"))     buf_printf(b, "sp_process_status_termsig((%s)->status)", r);
-      else if (sp_streq(name, "pid"))         buf_printf(b, "(%s)->pid", r);
-      else if (sp_streq(name, "to_s"))        buf_printf(b, "sp_process_status_to_s((%s)->status, 0)", r);
-      else if (sp_streq(name, "inspect"))     buf_printf(b, "sp_process_status_to_s((%s)->status, 1)", r);
-      else if (sp_streq(name, "class"))       buf_puts(b, "((sp_Class){(sp_int)-163, NULL})");
-      else if (sp_streq(name, "==") || sp_streq(name, "eql?"))
-        { buf_puts(b, "((void)("); emit_boxed(c, recv, b); buf_puts(b, "), (sp_bool)0)"); }
-      else done = 0;
-    }
-    else done = 0;
-    free(rs.p);
-    if (done) return 1;
-  }
+  /* Process::Status readers: builtin-op rows (builtin_ops.c) */
+  if (recv >= 0 && rt == TY_PROCESS_STATUS && emit_builtin_op(c, id, recv, rt, name, b)) return 1;
 
   /* StringScanner instance methods. String-returning methods may yield NULL
      (nil) on a miss; the NULL-aware string output operators render that. */
@@ -13915,10 +13884,10 @@ static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, in
   int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
   jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
   volatile int ok = 1;
-  int sv_moves = comp_scope_move_depth();
+  int sv_moves = comp_scope_move_depth(), sv_views = view_depth();
   g_pre = pre; g_unsup_probe = 1;
   if (setjmp(g_unsup_recover) == 0) *nat = emit_face_arm(c, id, kind, flags, box, val);
-  else { ok = 0; comp_scope_move_unwind(sv_moves); }
+  else { ok = 0; comp_scope_move_unwind(sv_moves); view_unwind(sv_views); }
   memcpy(g_unsup_recover, sv_jb, sizeof(jmp_buf));
   an_set_face_node(sv_face, sv_fk);
   c->ntype[recv] = sv_ty;

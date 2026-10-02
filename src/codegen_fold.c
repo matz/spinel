@@ -712,9 +712,9 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
      Hash of any keys and values, and box it */
   if (!dhn && dt == TY_POLY) {
     Buf hb; memset(&hb, 0, sizeof hb);
-    c->ntype[id] = TY_POLY_POLY_HASH;
+    int v = view_push(c, id, TY_POLY_POLY_HASH);
     int ok = emit_transform_hash_expr(c, id, &hb);
-    c->ntype[id] = TY_POLY;
+    view_pop(c, v);
     if (ok) emit_boxed_text(c, TY_POLY_POLY_HASH, hb.p ? hb.p : "NULL", b);
     free(hb.p);
     return ok;
@@ -4146,9 +4146,9 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    int v = view_push(c, recv, TY_POLY_ARRAY);
     int handled = emit_minmax_cmp_expr(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return handled;
   }
@@ -4164,9 +4164,9 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_INT_ARRAY;
+    int v = view_push(c, recv, TY_INT_ARRAY);
     int handled = emit_minmax_cmp_expr(c, id, b);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return handled;
   }
@@ -4366,9 +4366,9 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       g_argov_node[g_n_argov] = es_recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
       g_n_argov++;
-      TyKind sv = c->ntype[es_recv]; c->ntype[es_recv] = TY_INT_ARRAY;
+      int v = view_push(c, es_recv, TY_INT_ARRAY);
       int done = emit_collect_expr(c, id, b);
-      c->ntype[es_recv] = sv;
+      view_pop(c, v);
       g_n_argov--;
       return done;
     }

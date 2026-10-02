@@ -16,8 +16,13 @@ grep -E 'Tests:|scale-test|gate:' gate.log
 
 **If `make gate` fails on our side, the pull request goes back to you**
 with a comment naming the failing leg. Please fix it and push again; we do
-not fix a failing gate for you. When `master` has moved and your branch no
-longer merges cleanly, please rebase it.
+not fix a failing gate for you.
+
+**If your branch no longer merges cleanly with `master`, it goes back to
+you too.** We do not resolve merge conflicts on a contributor's behalf:
+please rebase onto the current `master`, run `make gate` again and push.
+Many pull requests touch the same functions, so keep a branch small and
+rebase it early rather than late.
 
 ## What the review checks
 

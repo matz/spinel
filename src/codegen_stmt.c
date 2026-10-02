@@ -614,7 +614,10 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     const char *hn = t == TY_MUTEX ? "Thread::Mutex"
                    : t == TY_QUEUE ? "Thread::Queue" : "Thread::ConditionVariable";
     buf_puts(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
-    buf_printf(b, "); sp_puts_line(_po ? sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)_po) : \"nil\"); }\n", hn);
+    if (t == TY_QUEUE)
+      buf_puts(b, "); sp_puts_line(_po ? sp_sprintf(\"#<%s:0x%016llx>\", sp_Queue_class_name((sp_queue *)_po), (unsigned long long)(uintptr_t)_po) : \"nil\"); }\n");
+    else
+      buf_printf(b, "); sp_puts_line(_po ? sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)_po) : \"nil\"); }\n", hn);
   }
   else if (ty_is_object(t)) {
     /* p obj: a user #inspect wins; otherwise the generated per-class ivar

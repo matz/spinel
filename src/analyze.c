@@ -16260,8 +16260,8 @@ static int promote_shared_stored_strings(Compiler *c) {
       if (sv4->type != TY_STRBUF || !sv4->str_shared) { sv4->type = TY_STRBUF; sv4->str_shared = 1; changed = 1; }
       continue;
     }
-    /* Hash value parameters still bind copies of stored String variables
-       (#7004); refuse the route instead of demanding new handles. */
+    /* Hash value parameters still bind copies of stored Strings
+       (#7004, #7034); refuse the route instead of demanding new handles. */
     else {
       int hr, vi;
       if (an_hash_value_block(c, itn, recv4, &hr, &vi)) {
@@ -16292,13 +16292,11 @@ static int promote_shared_stored_strings(Compiler *c) {
             }
           }
           for (int e = 0; e < ns; e++) {
-            NodeKind sk = nt_kind(nt, stores[e]);
             TyKind st = infer_type(c, stores[e]);
-            if ((st == TY_STRING || st == TY_STRBUF) &&
-                (sk == NK_LocalVariableReadNode || sk == NK_InstanceVariableReadNode ||
-                 sk == NK_GlobalVariableReadNode || sk == NK_ClassVariableReadNode))
+            /* A frozen literal already raises FrozenError on this route. */
+            if ((st == TY_STRING || st == TY_STRBUF) && nt_kind(nt, stores[e]) != NK_StringNode)
               unsupported_feature(c, w ? w : hr,
-                  "a String variable stored in a Hash is passed to an appending value block: "
+                  "a String stored in a Hash is passed to an appending value block: "
                   "a String is not yet shared by reference through a Hash's values. "
                   "Append to the String before storing it in the Hash.");
           }

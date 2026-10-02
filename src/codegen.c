@@ -13144,10 +13144,12 @@ typedef struct EmitUnitState {
   int loop_exc_base, loop_ensure_base, redo_depth;
   TyKind ie_next_ty;
   int move_depth;   /* instance_exec scope moves (comp_scope_move_unwind) */
+  int view_depth;   /* codegen views (view_unwind) */
 } EmitUnitState;
 
 void emit_unit_state_save(EmitUnitState *s) {
   s->move_depth = comp_scope_move_depth();
+  s->view_depth = view_depth();
   s->ret_type = g_ret_type; s->fn_ret_type = g_fn_ret_type; s->result_ty = g_result_ty;
   s->c_ret_void = g_c_ret_void; s->in_proc_body = g_in_proc_body; s->result_poly = g_result_poly;
   s->proc_body_kind = g_proc_body_kind; s->proc_toplevel_return = g_proc_toplevel_return;
@@ -13198,6 +13200,7 @@ void emit_unit_state_save(EmitUnitState *s) {
 
 void emit_unit_state_restore(const EmitUnitState *s) {
   comp_scope_move_unwind(s->move_depth);
+  view_unwind(s->view_depth);
   g_ret_type = s->ret_type; g_fn_ret_type = s->fn_ret_type; g_result_ty = s->result_ty;
   g_c_ret_void = s->c_ret_void; g_in_proc_body = s->in_proc_body; g_result_poly = s->result_poly;
   g_proc_body_kind = s->proc_body_kind; g_proc_toplevel_return = s->proc_toplevel_return;

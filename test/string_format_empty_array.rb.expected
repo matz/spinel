@@ -1,0 +1,10 @@
+"x"
+"%"
+"local"
+"CHAIN"
+"x:2"
+[ArgumentError, "too few arguments"]
+[ArgumentError, "too few arguments"]
+A"effects"
+"ok"
+NoMethodError

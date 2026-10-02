@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
@@ -269,13 +269,13 @@ build/rbs/%.o: $(RBS_DIR)/src/%.c
 # `spinel` is the single binary: it emits C and then drives cc to link it.
 # (SPINEL itself is defined above, just before the `all` target.)
 
-SPINEL_HDRS = src/node_table.h src/codegen.h src/codegen_internal.h src/types.h src/compiler.h src/analyze.h src/analyze_internal.h src/ffi_spec.h src/csplit.h
+SPINEL_HDRS = src/builtin_ops.h src/node_table.h src/codegen.h src/codegen_internal.h src/types.h src/compiler.h src/analyze.h src/analyze_internal.h src/ffi_spec.h src/csplit.h
 build/csrc/analyze_desugar.o build/csrc-work/analyze_desugar.o build/csrc/codegen_call.o build/csrc-work/codegen_call.o: $(wildcard src/*_method_names.inc)
 SPINEL_OBJ  = build/csrc/node_table.o build/csrc/types.o build/csrc/compiler.o \
                build/csrc/ffi_spec.o \
                build/csrc/analyze.o build/csrc/analyze_util.o build/csrc/analyze_infer.o build/csrc/analyze_infer_recv.o \
                build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/analyze_desugar.o build/csrc/codegen.o build/csrc/codegen_util.o \
-               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_call_tms.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o \
+               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_ops.o build/csrc/codegen_view.o build/csrc/builtin_ops.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o \
                build/csrc/codegen_expr.o build/csrc/codegen_stmt.o build/csrc/csplit.o build/csrc/main.o
 
 build/csrc:
@@ -1119,7 +1119,17 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	done; \
 	for t in test/reject/string_hash_value_variable.rb test/reject/string_hash_pair_variable.rb test/reject/string_hash_values_variable.rb test/reject/string_hash_literal_captured.rb \
 	         test/reject/string_hash_store_value.rb test/reject/string_hash_store_pair.rb \
-	         test/reject/string_hash_store_value_block.rb test/reject/string_hash_store_pair_block.rb; do \
+	         test/reject/string_hash_store_value_block.rb test/reject/string_hash_store_pair_block.rb \
+	         test/reject/string_hash_fresh.rb \
+	         test/reject/string_hash_fresh_each.rb \
+	         test/reject/string_hash_fresh_pair.rb \
+	         test/reject/string_hash_fresh_values.rb \
+	         test/reject/string_hash_interpolated.rb \
+	         test/reject/string_hash_call.rb \
+	         test/reject/string_hash_fresh_store.rb \
+	         test/reject/string_hash_fresh_store_block.rb \
+	         test/reject/string_hash_fresh_index.rb \
+	         test/reject/string_hash_fresh_literal.rb; do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
 	    echo "reject-test: FAIL ($$t compiled)"; ok=0; \
 	  else grep -q "is not yet shared by reference" "$$tmp/sk.out" || \
@@ -3177,6 +3187,13 @@ alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 
 # spin end-to-end: scaffold/path-dep/git-dep/lock/vendor/offline/test,
 # hermetic under a mktemp dir (tools/spin_e2e.sh).
+# cident: every corpus program's C is byte-identical to <REF>'s (#7100's
+# restructuring keeps this at 0 differing for every commit). The reference
+# C is cached under build/cident/<sha>/.  Usage: make cident REF=HEAD~1
+REF ?= HEAD~1
+cident: $(SPINEL)
+	@tools/cident.sh $(REF)
+
 spin-check: bin/spin
 	@tools/spin_e2e.sh bin/spin
 

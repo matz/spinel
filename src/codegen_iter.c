@@ -2940,6 +2940,31 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
       free(tb.p); }
     buf_puts(b, "; ");
   }
+  else if (as_expr && !nx_own && bn3 > 0 &&
+           want_ty != TY_POLY && want_ty != TY_UNKNOWN && want_ty != TY_VOID && want_ty != TY_NIL &&
+           nt_kind(nt, unwrap_parens(c, bd3[bn3 - 1])) == NK_CallNode &&
+           comp_ntype(c, unwrap_parens(c, bd3[bn3 - 1])) == TY_UNKNOWN) {
+    /* An untyped call tail (a method no class answers) lowers to the gate's
+       NoMethodError raise, an sp_RbVal; spliced bare, it became the value of
+       a statement expression read into the yield's typed slot, and the C did
+       not compile when another site's block typed that slot (`try { 1 }` then
+       `try { obj.missing }`). The raise never returns, so coerce it to the
+       slot as emit_unresolved_coerced does for any typed store; the `next`
+       arm above drops the same tail for the same reason. */
+    if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
+    for (int k3 = 0; k3 < bn3 - 1; k3++) {
+      if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
+      emit_stmt(c, bd3[k3], b, 0);
+    }
+    if (rd_lbl && rd_head >= bn3 - 1) buf_printf(b, "_redo_%d: ; ", rd_lbl);
+    { Buf tb; memset(&tb, 0, sizeof tb);
+      Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
+      emit_unresolved_coerced(c, bd3[bn3 - 1], want_ty, &tb);
+      g_pre = svp3; g_indent = svi3;
+      if (tb.p) buf_puts(b, tb.p);
+      free(tb.p); }
+    buf_puts(b, "; ");
+  }
   else {
     if (rd_lbl && block_of_body(c, bbody) >= 0) g_redo_pending = rd_lbl;
     else if (rd_lbl && as_expr) buf_printf(b, "_redo_%d: ; ", rd_lbl);
@@ -3136,7 +3161,6 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
   buf_printf(&sw, "switch (_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id : 0x7fffffff) {\n", trecv, trecv);
   const char *sv_expr = g_inline_recv_expr;
   int sv_class = g_inline_recv_class;
-  TyKind sv_cache = c->ntype[recv];
   for (int i = 0; i < nc; i++) {
     int k = cand[i];
     emit_indent(&sw, indent);
@@ -3148,13 +3172,13 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
              c->classes[k].is_value_type ? "*" : "", c->classes[k].c_name, trecv);
     g_inline_recv_expr = castbuf;
     g_inline_recv_class = k;
-    c->ntype[recv] = ty_object(k);  /* so the inline entry classifies the receiver */
+    int v = view_push(c, recv, ty_object(k));  /* so the inline entry classifies the receiver */
     size_t before = sw.len;
     int armed = emit_inline_call(c, id, &sw, indent + 1);
     int empty = !armed || sw.len == before;
     g_inline_recv_expr = sv_expr;
     g_inline_recv_class = sv_class;
-    c->ntype[recv] = sv_cache;
+    view_pop(c, v);
     if (empty) { free(sw.p); return 0; }
     emit_indent(&sw, indent + 1); buf_puts(&sw, "break;\n");
     emit_indent(&sw, indent); buf_puts(&sw, "}\n");
@@ -3225,10 +3249,9 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
     Buf fb; memset(&fb, 0, sizeof fb);
     int slot = g_n_argov++;
     g_argov_node[slot] = recv;
-    TyKind sv_rt = c->ntype[recv];
     if (str_iter) {
       snprintf(g_argov_text[slot], sizeof g_argov_text[0], "_t%d", ts);
-      c->ntype[recv] = TY_STRING;
+      int v = view_push(c, recv, TY_STRING);
       /* analysis renames a String's each_grapheme_cluster to each_char (the
          two agree over the text spinel carries); this receiver was not a
          String then, so the arm takes the same spelling for its emission */
@@ -3239,13 +3262,14 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
         nt_node_set_str((NodeTable *)nt, id, "name", "each_grapheme_cluster");
         name = nt_str(nt, id, "name");   /* the set replaced the string name read */
       }
+      view_pop(c, v);
     }
     if (io_iter) {
       snprintf(g_argov_text[slot], sizeof g_argov_text[0], "_t%d", tf);
-      c->ntype[recv] = TY_IO;
+      int v = view_push(c, recv, TY_IO);
       emit_stmt(c, id, &fb, indent + 2);
+      view_pop(c, v);
     }
-    c->ntype[recv] = sv_rt;
     g_n_argov--;
     int str_arm = ab.p && !strstr(ab.p, "sp_raise_nomethod(");
     int io_arm = fb.p && !strstr(fb.p, "sp_raise_nomethod(");
@@ -3431,10 +3455,9 @@ int emit_inline_expr(Compiler *c, int id, Buf *b) {
        (#5097). */
     if ((rt == TY_VOID || rt == TY_UNKNOWN || rt == TY_NIL) &&
         call_targets_yielding_method(c, id)) {
-      TyKind sv = c->ntype[id];
-      c->ntype[id] = TY_POLY;
+      int v = view_push(c, id, TY_POLY);
       int ok = emit_inline_call_x(c, id, b, g_indent + 1, 1);
-      c->ntype[id] = sv;
+      view_pop(c, v);
       if (ok) return 1;
     }
     /* a block-driving call to a yielding method that can't be inlined here (a
@@ -4655,9 +4678,9 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     g_argov_node[g_n_argov] = recv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
-    TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_INT_ARRAY;
+    int v = view_push(c, recv, TY_INT_ARRAY);
     int done = emit_iteration_stmt(c, id, b, indent);
-    c->ntype[recv] = sv;
+    view_pop(c, v);
     g_n_argov--;
     return done;
   }

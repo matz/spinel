@@ -1,4 +1,5 @@
 #include "analyze_internal.h"
+#include "builtin_ops.h"
 #include <stdint.h>
 #include <limits.h>
 
@@ -1727,18 +1728,17 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   TyKind a0 = ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
   /* The table names the builtin's answer, and a program that reopened the
-     kind's class with its own method of the name runs that one instead. A
-     scalar's reopen is what codegen calls for such a site, so the site
-     answers its return type. An Array's or Hash's is not reached for a name
-     a builtin arm takes, so no answer would describe the site: decline it.
-     Typing it from the table read `class Array; def first = 9; end`'s
-     yield.first back as the element, a wrong value where the program had
-     failed to build. */
+     kind's class with its own method of the name runs that one instead.
+     That reopen is what codegen calls for such a site, so the site answers
+     its return type. An Array's or Hash's reopen of a builtin name is
+     dispatched too since #7078; declining it here, as before that, left the
+     yield typed as one site, and `yield.first` over a Hash reopen and an
+     Array block wrote the Array's element into the reopen's Symbol slot (a
+     C compile error). */
   { const char *rn = nt_str(nt, node, "name");
     /* a call an alias captured the builtin for (builtin_only) runs the builtin */
     int rmi = nt_int(nt, node, "builtin_only", 0) ? -1 : comp_builtin_kind_reopen_mi(c, rk, rn);
     if (rmi >= 0) {
-      if (ty_is_array(rk) || ty_is_obj_array(rk) || ty_is_hash(rk)) return 0;
       /* still settling in an early round is not a reason to decline: the
          site is answered by the reopen either way, and codegen reads the
          settled return */
@@ -4185,27 +4185,16 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) return TY_CONDVAR;
   }
 
-  /* Process::Tms accessors: four cumulative CPU times, all Float (#3044) */
-  if (recv >= 0 && rt == TY_TMS && argc == 0 &&
-      (sp_streq(name, "utime") || sp_streq(name, "stime") ||
-       sp_streq(name, "cutime") || sp_streq(name, "cstime"))) return TY_FLOAT;
-  /* Process::Status accessors. The runtime returns sp_int (with -1 for
-     the nil-or-false slot on exitstatus/termsig); the analyze pass keeps
-     Integer here and the codegen wraps -1 in sp_box_nil for those two.
-     Boolean predicates are TY_BOOL; the accessors that can be nil are
-     TY_INT (so `result[1].termsig.nil?` is well-typed). */
-  if (recv >= 0 && rt == TY_PROCESS_STATUS && argc == 0) {
-    if (sp_streq(name, "signaled?") || sp_streq(name, "exited?") ||
-        sp_streq(name, "coredump?"))
-      return TY_BOOL;
-    /* success? is nil, not false, when the process did not exit normally */
-    if (sp_streq(name, "success?")) return TY_POLY;
-    if (sp_streq(name, "exitstatus") || sp_streq(name, "termsig") ||
-        sp_streq(name, "pid"))
-      return TY_INT;
-    if (sp_streq(name, "to_s") || sp_streq(name, "inspect") ||
-        sp_streq(name, "class")) return TY_STRING;
-    if (sp_streq(name, "==")) return TY_BOOL;
+  /* Process::Tms: builtin-op rows (builtin_ops.c), looked up where its
+     rule sat, so the rules above still claim first */
+  if (recv >= 0 && rt == TY_TMS) {
+    const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) return op->result;
+  }
+  /* Process::Status readers: builtin-op rows (builtin_ops.c) */
+  if (recv >= 0 && rt == TY_PROCESS_STATUS) {
+    const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) return op->result;
   }
   /* The same names on a BOXED status -- which is how one normally arrives,
      since waitpid2 answers an Array and its second element is read out of a
@@ -4416,24 +4405,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     }
   }
 
-  /* TY_IO (File/IO handle) instance methods */
-  if (recv >= 0 && rt == TY_SOCKOPT && argc == 0) {
-    if (sp_streq(name, "int") || sp_streq(name, "level") ||
-        sp_streq(name, "optname") || sp_streq(name, "family")) return TY_INT;
-    if (sp_streq(name, "bool")) return TY_BOOL;
-    if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
-    if (sp_streq(name, "class")) return TY_CLASS;
-  }
-  if (recv >= 0 && rt == TY_ADDRINFO && argc == 0) {
-    if (sp_streq(name, "ip_address") || sp_streq(name, "unix_path") ||
-        sp_streq(name, "afamily_name") || sp_streq(name, "to_sockaddr") ||
-        sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
-    if (sp_streq(name, "ip_port") || sp_streq(name, "socktype") ||
-        sp_streq(name, "protocol") ||
-        sp_streq(name, "afamily") || sp_streq(name, "pfamily")) return TY_INT;
-    if (sp_streq(name, "class")) return TY_CLASS;
-    if (sp_streq(name, "ipv4?") || sp_streq(name, "ipv6?") ||
-        sp_streq(name, "unix?") || sp_streq(name, "ip?")) return TY_BOOL;
+  /* Socket::Option and Addrinfo readers: builtin-op rows */
+  if (recv >= 0 && (rt == TY_SOCKOPT || rt == TY_ADDRINFO)) {
+    const BuiltinOp *op = bop_find(rt, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) return op->result;
   }
   if (recv >= 0 && rt == TY_IO) {
     /* answered true or false, whatever the name (the catch-all below is poly) */

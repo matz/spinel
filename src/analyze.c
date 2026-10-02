@@ -22491,7 +22491,11 @@ FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
 FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return FWD_READONLY;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
-  if (!q || (q->type != TY_POLY && q->type != TY_STRING && q->type != TY_STRBUF)) return FWD_READONLY;
+  /* String+nil can settle into a nullable pointer rather than POLY. Keep
+     that union in the boxed-forwarding checks, not every concrete String
+     formal: monomorphic byte-consuming calls retain their existing ABI. */
+  if (!q || (q->type != TY_POLY &&
+      !((q->type == TY_STRING || q->type == TY_STRBUF) && q->obj_nilable))) return FWD_READONLY;
   FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   /* Only a completed outer query is cached. Nested rest/cycle queries may
@@ -22736,6 +22740,9 @@ static int fwd_frozen_prepare(Compiler *c) {
     if (!indexed) memo->frozen_blocked[mi] = 1;
   }
   free(targets.v);
+  int nparams = 0;
+  for (int mi = 0; mi < c->nscopes; mi++) nparams += c->scopes[mi].nparams;
+  sb_mut_tab_init(&memo->frozen_params, nparams);
   memo->frozen_ready = 1;
   return 1;
 }

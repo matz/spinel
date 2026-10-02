@@ -30,9 +30,10 @@ if frozen_forward
       def size = @values.size
     end
     box = FrozenBox.new
+    box.store(0)
   RUBY
   k.times do |i|
-    puts "def relay#{i}(box, value); box.store(value); nil; end"
+    puts "def relay#{i}(box, value); box.store(value) if value.is_a?(String); nil; end"
     puts "def noise#{i}(value) = value + #{i}"
     puts "relay#{i}(box, 0); relay#{i}(box, 'value#{i}'); noise#{i}(#{i})"
   end

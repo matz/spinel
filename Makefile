@@ -3293,6 +3293,9 @@ scale-test: $(SPINEL_WORK)
 	sh test/scale/poly_forward_shared.sh 50 > "$$tmp/p1.rb"; sh test/scale/poly_forward_shared.sh 200 > "$$tmp/p4.rb"; \
 	pa=$$(sw -c -o "$$tmp/p1.c" "$$tmp/p1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	pb=$$(sw -c -o "$$tmp/p4.c" "$$tmp/p4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ruby tools/compile_scale_gen.rb --frozen-forward 25 > "$$tmp/i1.rb"; ruby tools/compile_scale_gen.rb --frozen-forward 100 > "$$tmp/i4.rb"; \
+	ia=$$(sw -c -o "$$tmp/i1.c" "$$tmp/i1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ib=$$(sw -c -o "$$tmp/i4.c" "$$tmp/i4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	( ulimit -t 20; $(SPINEL_WORK) -c -o "$$tmp/hls.c" test/scale/hash_literal_sources_fanout.rb ) >/dev/null 2>&1 || \
 	  { rm -rf "$$tmp"; echo "scale-test: FAIL (the hash-literal source walk revisited call sites along every path)"; exit 1; }; \
 	sh test/scale/ie_forward_chain.sh 2 > "$$tmp/f2.rb"; sh test/scale/ie_forward_chain.sh 4 > "$$tmp/f4.rb"; \
@@ -3301,7 +3304,10 @@ scale-test: $(SPINEL_WORK)
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || \
 	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
-	   [ -z "$$pa" ] || [ -z "$$pb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	   [ -z "$$pa" ] || [ -z "$$pb" ] || [ -z "$$ia" ] || [ -z "$$ib" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	awk -v a="$$ia" -v b="$$ib" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: immutable caller work at 4x the formals and noise is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (immutable provenance rescanned a global caller census per formal)"; exit 1; }; \
 	awk -v a="$$pa" -v b="$$pb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: shared POLY suffix work at 4x the entries and suffix is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (readonly POLY promotion or emission rescanned a shared suffix per entry)"; exit 1; }; \

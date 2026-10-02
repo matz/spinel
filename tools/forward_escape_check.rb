@@ -832,6 +832,84 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     native_passes += 1
   end
 
+  # A concrete String ABI is not a boxed escape. This previously correct
+  # tool-shaped chain must consume bytes without activating the POLY policy.
+  source = File.join(dir, "concrete_file_join.rb")
+  executable = File.join(dir, "concrete_file_join")
+  File.write(source, <<~RUBY)
+    def leaf(dir, name) = File.join(dir, name)
+    def entry(name) = leaf('base', name)
+    p entry('ice')
+    text = +'tool'
+    other = text
+    p entry(text), text, other
+  RUBY
+  expected = "\"base/ice\"\n\"base/tool\"\n\"tool\"\n\"tool\"\n"
+  out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+  if !status.success? || out != expected
+    failures << "concrete_file_join: invalid CRuby control: #{out.inspect} #{err}"
+  else
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+    out, err, status = Open3.capture3(timeout, "30", executable) if status.success?
+    unless status.success? && out == expected
+      failures << "concrete_file_join: required native result differs: #{out.inspect} #{err}"
+    end
+    native_passes += 1
+  end
+
+  # Hidden singleton aliases invalidate a scalar-formal caller census too,
+  # even when its explicit direct calls happen to pass only frozen values.
+  [false, true].each do |aliased|
+    name = "frozen_class_formal#{aliased ? '_alias' : ''}"
+    source = File.join(dir, "#{name}.rb")
+    cfile = File.join(dir, "#{name}.c")
+    executable = File.join(dir, name)
+    File.write(source, <<~RUBY)
+      # frozen_string_literal: true
+      class Collector
+        def initialize = @items = []
+        def store(value); @items.push(value); nil; end
+        def at(index) = @items[index]
+      end
+      class Entry
+        def self.take(key, value)
+          $collector.store(value) if value.is_a?(String)
+          nil
+        end
+        #{aliased ? 'class << self; alias []= take; end' : ''}
+      end
+      $collector = Collector.new
+      $collector.store(17)
+      Entry.take(0, 0)
+      text = 'ice'
+      Entry.take(0, text)
+      p $collector.at(1).frozen?, $collector.at(1).equal?(text)
+    RUBY
+    expected = "true\ntrue\n"
+    out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+    unless status.success? && out == expected
+      failures << "#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    if aliased
+      unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+             (out + err).include?("nothing written") && !File.exist?(cfile)
+        failures << "#{name}: hidden entry inherited a frozen census: #{out}#{err}"
+      end
+      refusals += 1
+      next
+    end
+    if status.success?
+      out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+      out, err, status = Open3.capture3(timeout, "30", executable) if status.success?
+    end
+    unless status.success? && out == expected
+      failures << "#{name}: required native frozen result differs: #{out.inspect} #{err}"
+    end
+    native_passes += 1
+  end
+
   source = File.expand_path("../test/reject/string_poly_stored_rebind.rb", __dir__)
   expected = File.binread(source + ".expected")
   out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)

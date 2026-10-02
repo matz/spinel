@@ -1,0 +1,8 @@
+[TypeError, "no implicit conversion of Range into Integer"]
+[TypeError, "no implicit conversion of Range into Integer"]
+[TypeError, "no implicit conversion of Range into Integer"]
+receiver
+value
+range
+length
+[TypeError, "no implicit conversion of Range into Integer"]

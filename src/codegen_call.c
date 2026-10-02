@@ -19505,10 +19505,12 @@ static int g_operand_order_node = -1;
    text-matches the token at the head of the expression -- the node itself stays
    UNKNOWN. Wrapping it in a statement expression hides the token from that
    match, and the raise's boxed value then lands in a `const char *` slot.
-   Matched on the tokens here, the way the coercions themselves are. */
+   Matched at the head, the way the coercions themselves match: a raise
+   inside the text (`Array#fetch`'s IndexError arm) is no such token. */
 static int text_is_raise_token(const char *txt) {
   if (!txt) return 0;
-  return strstr(txt, "sp_raise_nomethod") != NULL || strstr(txt, "sp_raise_cls(") != NULL;
+  while (*txt == '(' || *txt == ' ') txt++;
+  return strncmp(txt, "sp_raise_nomethod", 17) == 0 || strncmp(txt, "sp_raise_cls(", 13) == 0;
 }
 
 /* Is this call a reader the emitter lowers to a plain field read -- an
@@ -19772,6 +19774,34 @@ static int emit_operands_before_unbound(Compiler *c, int id, const int *operand,
   return 1;
 }
 
+/* One operand of emit_operands_in_order rendered into `out`, with the
+   statements its emission hoists caught in `pre` rather than the enclosing
+   statement's prelude: there they ran ahead of every operand, the ones to
+   its left included (`new(a: r.int, b: f(NAMES.fetch(r.int)))` read the
+   second int first), so they are placed before this operand's binding. */
+static void render_operand(Compiler *c, int node, Buf *out, Buf *pre) {
+  memset(out, 0, sizeof *out);
+  memset(pre, 0, sizeof *pre);
+  Buf *sv = g_pre;
+  g_pre = pre;
+  emit_expr(c, node, out);
+  g_pre = sv;
+}
+/* Does what operand `node` hoists run code of its own -- a call in its
+   receiver or arguments, below the operand's own call? Only then can its
+   place against the operands to its left be seen; a hoisted read of
+   `node.right` stays in the prelude, where it roots into the frame. */
+static int operand_hoists_effect(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) != NK_CallNode) return !subtree_is_pure_read(c, node);
+  int recv = nt_ref(nt, node, "receiver");
+  if (recv >= 0 && !subtree_is_pure_read(c, recv)) return 1;
+  int a = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++) if (!subtree_is_pure_read(c, av[i])) return 1;
+  return 0;
+}
+
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   if (id == g_operand_order_node) return 0;
@@ -19797,7 +19827,22 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   TyKind ty[8];
   int operand[9], nop = 0;
   if (recv >= 0) operand[nop++] = recv;
-  for (int i = 0; i < argc && nop < 9; i++) operand[nop++] = argv[i];
+  for (int i = 0; i < argc && nop < 9; i++) {
+    /* keyword arguments are operands one value at a time, in the order
+       written: `new(a: r.int, b: f(r.int))` runs a's call first, however
+       the callee's emitter lays the values out. A `**` operand or a
+       computed key keeps the hash whole. */
+    int nk = 0;
+    const int *els = nt_kind(nt, argv[i]) == NK_KeywordHashNode ? nt_arr(nt, argv[i], "elements", &nk) : NULL;
+    int plain = els != NULL;
+    for (int k = 0; k < nk && plain; k++)
+      plain = nt_kind(nt, els[k]) == NK_AssocNode && nt_kind(nt, nt_ref(nt, els[k], "key")) == NK_SymbolNode;
+    if (!plain) { operand[nop++] = argv[i]; continue; }
+    for (int k = 0; k < nk && nop < 9; k++) {
+      int v = nt_ref(nt, els[k], "value");
+      if (v >= 0) operand[nop++] = v;
+    }
+  }
   /* A bare read of an ivar, class variable or global is no effect of its own,
      but a sibling that runs code can reassign it: `@data[swap(i)]`, with
      `swap` storing a new array, read the NEW array when C evaluated the
@@ -19868,7 +19913,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
 
   size_t pre_mark = g_pre->len;
   int saved_tmp = g_tmp;
-  Buf opb[8];
+  Buf opb[8], opp[8];
   int rendered = 0, ok = 1;
   /* A lone observable operand is kept only when the call converts, which the
      call's own emission tells; render the operand after that, so a declined
@@ -19877,8 +19922,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      chain (#4925). */
   int operands_last = observable < 2;
   for (; !operands_last && rendered < nb && ok; rendered++) {
-    memset(&opb[rendered], 0, sizeof opb[0]);
-    emit_expr(c, node[rendered], &opb[rendered]);
+    render_operand(c, node[rendered], &opb[rendered], &opp[rendered]);
     if (text_is_raise_token(opb[rendered].p)) ok = 0;
   }
   Buf ob; memset(&ob, 0, sizeof ob);
@@ -19911,24 +19955,36 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                text_uses_tmp(g_pre->p + pre_mark, tmp[i])) ok = 0;
     }
     for (; operands_last && rendered < nb && ok; rendered++) {
-      memset(&opb[rendered], 0, sizeof opb[0]);
-      emit_expr(c, node[rendered], &opb[rendered]);
+      render_operand(c, node[rendered], &opb[rendered], &opp[rendered]);
       if (text_is_raise_token(opb[rendered].p)) ok = 0;
     }
   }
   if (!ok) {
-    for (int i = 0; i < rendered; i++) free(opb[i].p);
+    for (int i = 0; i < rendered; i++) { free(opb[i].p); free(opp[i].p); }
     free(ob.p);
     g_pre->len = pre_mark;
     if (g_pre->p) g_pre->p[pre_mark] = '\0';
     g_tmp = saved_tmp;
     return 0;
   }
+  /* an operand's hoisted statements stay ahead of the call unless they run
+     code an operand to their left must precede */
+  for (int i = 0; i < nb; i++) {
+    if (!opp[i].p) continue;
+    int inl = i > 0 && operand_hoists_effect(c, node[i]);
+    if (!inl) { buf_puts(g_pre, opp[i].p); free(opp[i].p); opp[i].p = NULL; }
+  }
   buf_puts(b, "({ ");
   for (int i = 0; i < nb; i++) {
+    if (opp[i].p) buf_puts(b, opp[i].p);
+    free(opp[i].p);
     emit_ctype(c, ty[i], b);
     buf_printf(b, " _t%d = %s; ", tmp[i], opb[i].p ? opb[i].p : default_value(ty[i]));
-    if (ty[i] == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tmp[i]);
+    /* a by-value object carries its Strings in the temp itself */
+    if (comp_ty_value_obj(c, ty[i])) {
+      if (ty_gc_holds_refs(c, ty[i])) { emit_gc_root_tmp_refs(c, ty[i], tmp[i], b); buf_puts(b, " "); }
+    }
+    else if (ty[i] == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tmp[i]);
     else if (needs_root(ty[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
     free(opb[i].p);
   }

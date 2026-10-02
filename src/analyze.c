@@ -17578,33 +17578,44 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
 typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
-typedef struct FwdAnalysis {
-  FwdPhase phase;
-  SbMutTab seen, poly_cache;
+typedef struct {
+  SbMutTab poly_cache;
   unsigned *rest;
-  int nscopes, poly_depth, rest_depth, taint;
+  int nscopes;
   unsigned version, scope_gen;
+  int frozen_reflection;
+} FwdMemo;
+typedef struct {
+  FwdPhase phase;
+  FwdMemo *memo; /* borrowed; only the compiler-owned analysis frees it */
+  SbMutTab seen; /* owned by this query, never shared with nested queries */
+  int poly_depth, rest_depth, taint;
+} FwdQuery;
+typedef struct FwdAnalysis {
+  FwdMemo memo;
+  FwdQuery root;
 } FwdAnalysis;
-/* The top-level compiler owns reusable caches. Recursive queries receive
-   this context explicitly and give nested POLY walks their own worklist. */
-static FwdAnalysis *fwd_analysis(Compiler *c) {
+/* Compiler ownership is separate from per-query recursion/worklist state.
+   A nested query borrows one memo pointer, not copies of owning tables. */
+static FwdQuery *fwd_analysis(Compiler *c) {
   if (!c->fwd_analysis) {
     c->fwd_analysis = calloc(1, sizeof(FwdAnalysis));
     if (!c->fwd_analysis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->fwd_analysis->root.memo = &c->fwd_analysis->memo;
   }
-  return c->fwd_analysis;
+  return &c->fwd_analysis->root;
 }
 void fwd_analysis_free(Compiler *c) {
   FwdAnalysis *f = c->fwd_analysis;
   if (!f) return;
-  sb_mut_tab_free(&f->seen);
-  sb_mut_tab_free(&f->poly_cache);
-  free(f->rest);
+  sb_mut_tab_free(&f->root.seen);
+  sb_mut_tab_free(&f->memo.poly_cache);
+  free(f->memo.rest);
   free(f);
   c->fwd_analysis = NULL;
 }
-static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly);
-static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase);
+static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly);
+static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase);
 static int fwd_builtin(Compiler *c, const char *owner, const char *name);
 static int fwd_array_store_start(Compiler *c, int node, int argc);
 /* Local `vn` of scope `vs` lent to byref slots by calls in that scope: each
@@ -17643,7 +17654,7 @@ static int convert_byref_handle_params(Compiler *c,
   /* the call-site chain is what makes this pass affordable; with no table
      there is nothing to walk, and promoting nothing is the safe answer */
   if (!hat->ok) return 0;
-  FwdAnalysis *f = fwd_analysis(c);
+  FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_PROMOTION);
   ALocalAliases aliases;
   an_local_aliases_build(c, &aliases);
@@ -21457,8 +21468,8 @@ static int fwd_call_target(Compiler *c, int u) {
 }
 
 static int fwd_splat_start(Compiler *c, int u, const char *rn);
-static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly);
-static int fwd_param_appends(Compiler *c, FwdAnalysis *f, int mi, int j);
+static int fwd_poly_add(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly);
+static int fwd_param_appends(Compiler *c, FwdQuery *f, int mi, int j);
 
 /* The incoming String uses the builtin contract only when a reopen has
    not replaced it. Unrelated classes with the same name do not own this
@@ -21666,11 +21677,11 @@ typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
 } FwdKeepMode;
-static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
-static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
 /* Bare mapped super arguments have graph edges. Expression wrappers do
    not: inspect those as retained rather than discarding their inner reads. */
-static int fwd_super_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, int *appended, int depth) {
+static int fwd_super_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   int target = a_super_target(c, &c->scopes[mi]);
   int a = nt_ref(nt, node, "arguments"), n = 0, retained = 0;
@@ -21694,7 +21705,7 @@ static int fwd_super_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, i
   return retained | fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "block"),
                                     FWD_MODE_CAPTURE, appended, depth + 1);
 }
-static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
   /* This bounds source-tree recursion, not the forwarding graph. Beyond
@@ -21795,7 +21806,7 @@ static FwdKeepMode fwd_string_receiver_mode(Compiler *c, int node, FwdKeepMode k
 
 /* A call owns its target/layout proof and the retention contract of its
    receiver, arguments and block. The AST walker handles structural uses. */
-static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, node, "name");
   int recv = nt_ref(nt, node, "receiver");
@@ -21911,7 +21922,7 @@ static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, in
                                   synchronous ? FWD_MODE_DISCARD : FWD_MODE_CAPTURE, appended, depth + 1);
 }
 
-static unsigned fwd_rest_bits(Compiler *c, FwdAnalysis *f, int mi);
+static unsigned fwd_rest_bits(Compiler *c, FwdQuery *f, int mi);
 /* The worklist carries traversal flags; the separate emission table carries
    completed proof states. Neither table's byte encoding is used by the other. */
 enum { FWD_VISIT_QUEUED = 1, FWD_VISIT_PROCESSED = 2,
@@ -21936,7 +21947,7 @@ enum { FWD_TAINT_CYCLE = 1, FWD_TAINT_BOUND = 2, FWD_TAINT_ESCAPE = 4,
 #define FWD_REST_ANSWERED 0x40000000u
 /* Does method mi append to what its parameter j is bound to: in place, lent,
    the handle, or a POLY parameter or a rest element it hands on? */
-static int fwd_param_appends(Compiler *c, FwdAnalysis *f, int mi, int j) {
+static int fwd_param_appends(Compiler *c, FwdQuery *f, int mi, int j) {
   Scope *m = &c->scopes[mi];
   if (j < 0) return 0;
   if (f->seen.n && (f->seen.val[0] & FWD_VISIT_PROCESSED))
@@ -21984,21 +21995,22 @@ static int fwd_splat_start(Compiler *c, int u, const char *rn) {
    the outermost query of a cycle of forwarders asks again with what it found
    until that stops growing, and a forwarder a deeper query reached is asked
    afresh by its own. */
-static unsigned fwd_rest_bits_once(Compiler *c, FwdAnalysis *f, int mi, const char *rn);
-static unsigned fwd_rest_bits(Compiler *c, FwdAnalysis *f, int mi) {
-  if (mi < 0 || mi >= f->nscopes) return 0;
-  if (f->rest[mi] & FWD_REST_ANSWERED) return f->rest[mi] & FWD_REST_DATA;
-  if (f->rest[mi] & FWD_REST_ASKING) { f->taint |= FWD_TAINT_CYCLE; return f->rest[mi] & FWD_REST_DATA; }
+static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char *rn);
+static unsigned fwd_rest_bits(Compiler *c, FwdQuery *f, int mi) {
+  FwdMemo *memo = f->memo;
+  if (mi < 0 || mi >= memo->nscopes) return 0;
+  if (memo->rest[mi] & FWD_REST_ANSWERED) return memo->rest[mi] & FWD_REST_DATA;
+  if (memo->rest[mi] & FWD_REST_ASKING) { f->taint |= FWD_TAINT_CYCLE; return memo->rest[mi] & FWD_REST_DATA; }
   if (f->rest_depth > 64) { f->taint |= FWD_TAINT_BOUND; return FWD_REST_OPEN; }
   Scope *m = &c->scopes[mi];
   const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
-  if (!rn) { f->rest[mi] = FWD_REST_ANSWERED; return 0; }
+  if (!rn) { memo->rest[mi] = FWD_REST_ANSWERED; return 0; }
   int outer = f->taint, top = f->rest_depth == 0 && !f->poly_depth;
   unsigned bits = 0;
   int tainted;
   f->rest_depth++;
   for (int round = 0; ; round++) {
-    f->rest[mi] = FWD_REST_ASKING | bits;
+    memo->rest[mi] = FWD_REST_ASKING | bits;
     f->taint = 0;
     unsigned got = bits | fwd_rest_bits_once(c, f, mi, rn);
     tainted = f->taint;
@@ -22010,19 +22022,19 @@ static unsigned fwd_rest_bits(Compiler *c, FwdAnalysis *f, int mi) {
   if (tainted & FWD_TAINT_BOUND) bits |= FWD_REST_OPEN;
   if (tainted & (FWD_TAINT_ESCAPE | FWD_TAINT_BOX)) bits |= FWD_REST_KEPT;
   f->taint = outer | (top ? 0 : tainted);
-  f->rest[mi] = (!top && tainted) || (tainted & (FWD_TAINT_ESCAPE | FWD_TAINT_BOX)) ? 0 : FWD_REST_ANSWERED | bits;
+  memo->rest[mi] = (!top && tainted) || (tainted & (FWD_TAINT_ESCAPE | FWD_TAINT_BOX)) ? 0 : FWD_REST_ANSWERED | bits;
   return bits;
 }
 /* Does target t, its parameters laid from position p on, append to one at
    offset 16 or more: one of its own, or (a rest) one it forwards that far? */
-static unsigned fwd_rest_past(Compiler *c, FwdAnalysis *f, int t, int p) {
+static unsigned fwd_rest_past(Compiler *c, FwdQuery *f, int t, int p) {
   Scope *tm = &c->scopes[t];
   int end = tm->rest_idx >= 0 ? tm->rest_idx + 17 : tm->nparams;
   for (int j = p + 16; j < end && j < p + 64; j++)
     if (fwd_param_appends(c, f, t, j)) return FWD_REST_PAST;
   return 0;
 }
-static unsigned fwd_rest_bits_once(Compiler *c, FwdAnalysis *f, int mi, const char *rn) {
+static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char *rn) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
   int appended = 0;
@@ -22067,7 +22079,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdAnalysis *f, int mi, const ch
 /* The visited records themselves are a worklist: enqueue a parameter once,
    rather than putting every forwarding edge on the compiler's C stack.
    Rest queries remain separately bounded and taint a cut edge as before. */
-static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly) {
+static int fwd_poly_add(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
   /* pj names a formal, not an actual position: post/keyword parameters
@@ -22085,8 +22097,8 @@ static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *r
   /* Only a strict completed proof can prune a reached emission vertex.
      An ordinary root-only zero can exempt direct mutation or retention.
      Record the forwarding edge first, even when the suffix is cached. */
-  if (f->phase == FWD_EMISSION && f->poly_cache.cap) {
-    signed char *done = sb_mut_tab_slot(&f->poly_cache, p->name, mi, 0);
+  if (f->phase == FWD_EMISSION && f->memo->poly_cache.cap) {
+    signed char *done = sb_mut_tab_slot(&f->memo->poly_cache, p->name, mi, 0);
     if (done && *done == FWD_CACHE_STRICT_READONLY) return 0;
   }
   signed char *seen = sb_mut_tab_slot(&f->seen, m->pnames[pj], mi, 1);
@@ -22095,7 +22107,7 @@ static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *r
   return 0;
 }
 
-static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly) {
+static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly) {
   const NodeTable *nt = c->nt;
   if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
   if (f->phase == FWD_EMISSION || f->poly_depth || f->rest_depth) readonly = NULL;
@@ -22104,14 +22116,14 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj,
   /* A rest bitmap asks separate questions for separate positions. Give
      each nested POLY walk its own worklist; a visited vertex is not the
      answer to a later question reaching that same appender. */
-  FwdAnalysis *parent = f, child;
+  FwdQuery *parent = f, child;
   int nested = f->poly_depth != 0;
   int internal = nested || f->rest_depth != 0;
   if (nested) {
     /* Borrow the phase's caches, but never replace the parent's worklist.
        Only the nested query's taint propagates back to its caller. */
-    child = *f;
-    memset(&child.seen, 0, sizeof child.seen);
+    child = (FwdQuery){ .phase = f->phase, .memo = f->memo,
+                        .poly_depth = f->poly_depth, .rest_depth = f->rest_depth, .taint = f->taint };
     f = &child;
   }
   {
@@ -22213,20 +22225,22 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj,
 /* For the emitters' refusal, after the last pass: does method mi forward
    element i of its rest to a parameter that appends, and does it hand its
    POLY parameter j on to one? */
-static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase) {
+static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   unsigned gen = comp_scope_index_gen();
+  FwdMemo *memo = f->memo;
   /* Promotion facts are rebuilt for every fixpoint pass. Emission owns its
      cache only after analysis has finalized types and mutation metadata. */
-  if (phase == FWD_EMISSION && f->phase == FWD_EMISSION && f->nscopes == c->nscopes &&
-      f->version == c->nt->version && f->scope_gen == gen) return;
-  free(f->rest);
-  sb_mut_tab_free(&f->poly_cache);
-  memset(&f->poly_cache, 0, sizeof f->poly_cache);
-  f->nscopes = c->nscopes;
-  f->version = c->nt->version;
-  f->scope_gen = gen;
-  f->rest = (unsigned *)calloc((size_t)f->nscopes + 1, sizeof(unsigned));
-  if (!f->rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (phase == FWD_EMISSION && f->phase == FWD_EMISSION && memo->nscopes == c->nscopes &&
+      memo->version == c->nt->version && memo->scope_gen == gen) return;
+  free(memo->rest);
+  sb_mut_tab_free(&memo->poly_cache);
+  memset(&memo->poly_cache, 0, sizeof memo->poly_cache);
+  memo->frozen_reflection = 0;
+  memo->nscopes = c->nscopes;
+  memo->version = c->nt->version;
+  memo->scope_gen = gen;
+  memo->rest = (unsigned *)calloc((size_t)memo->nscopes + 1, sizeof(unsigned));
+  if (!memo->rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   f->phase = phase;
 }
 /* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
@@ -22234,7 +22248,7 @@ static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase) {
    appending, so an answer cut short is refused rather than copied. */
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return FWD_READONLY;
-  FwdAnalysis *f = fwd_analysis(c);
+  FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   unsigned rb = fwd_rest_bits(c, f, mi);
   /* Direct rest stores/iteration have their existing emission/promotion
@@ -22246,7 +22260,7 @@ FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
 }
 FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0) return FWD_READONLY;
-  FwdAnalysis *f = fwd_analysis(c);
+  FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   int outer = f->taint;
   f->taint = 0;
@@ -22260,17 +22274,17 @@ FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return FWD_READONLY;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
   if (!q || q->type != TY_POLY) return FWD_READONLY;
-  FwdAnalysis *f = fwd_analysis(c);
+  FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   /* Only a completed outer query is cached. Nested rest/cycle queries may
      depend on a cut edge and keep the existing taint/fixpoint treatment. */
-  if (!f->poly_cache.cap) {
+  if (!f->memo->poly_cache.cap) {
     int np = 0;
     for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
-    sb_mut_tab_init(&f->poly_cache, np);
+    sb_mut_tab_init(&f->memo->poly_cache, np);
   }
   int cacheable = !f->poly_depth && !f->rest_depth;
-  signed char *slot = sb_mut_tab_slot(&f->poly_cache, q->name, mi, cacheable);
+  signed char *slot = sb_mut_tab_slot(&f->memo->poly_cache, q->name, mi, cacheable);
   if (cacheable && slot) {
     switch ((FwdCacheResult)*slot) {
       case FWD_CACHE_ESCAPE: return FWD_ESCAPE;
@@ -22291,7 +22305,7 @@ FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
   int complete = !(f->taint & FWD_TAINT_CYCLE);
   f->taint = outer;
   if (cacheable && complete) {
-    slot = sb_mut_tab_slot(&f->poly_cache, q->name, mi, 1);
+    slot = sb_mut_tab_slot(&f->memo->poly_cache, q->name, mi, 1);
     *slot = r > 0 ? FWD_CACHE_APPENDS : r == FWD_ESCAPE ? FWD_CACHE_ESCAPE :
             r == FWD_RETAINS_BOX ? FWD_CACHE_RETAINS_BOX :
             r < 0 ? FWD_CACHE_UNKNOWN : FWD_CACHE_ROOT_READONLY;
@@ -22301,7 +22315,7 @@ FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
     if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j) &&
         !(f->seen.n && (f->seen.val[0] & FWD_VISIT_ROOT_KEPT)))
       for (int v = 0; v < f->seen.n; v++)
-        *sb_mut_tab_slot(&f->poly_cache, f->seen.name[v], f->seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
+        *sb_mut_tab_slot(&f->memo->poly_cache, f->seen.name[v], f->seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
   }
   return r;
 }
@@ -22505,11 +22519,20 @@ static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int d
 }
 int fwd_actual_frozen(Compiler *c, int node) {
   /* Method/Proc entrypoints are not an exhaustive static caller census. */
-  for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
-    const char *nm = nt_str(c->nt, u, "name");
-    if (sp_streq(nm, "method") || sp_streq(nm, "instance_method") || sp_streq(nm, "to_proc") ||
-        sp_streq(nm, "send") || sp_streq(nm, "public_send")) return 0;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  if (!f->memo->frozen_reflection) {
+    f->memo->frozen_reflection = 1; /* closed static entrypoints */
+    for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
+      const char *nm = nt_str(c->nt, u, "name");
+      if (sp_streq(nm, "method") || sp_streq(nm, "instance_method") || sp_streq(nm, "to_proc") ||
+          sp_streq(nm, "send") || sp_streq(nm, "public_send")) {
+        f->memo->frozen_reflection = -1;
+        break;
+      }
+    }
   }
+  if (f->memo->frozen_reflection < 0) return 0;
   int work = 1024;
   return fwd_frozen_value(c, node, 0, -1, 0, &work);
 }
@@ -22519,7 +22542,7 @@ int fwd_actual_frozen(Compiler *c, int node) {
    the child's to (the zsuper gathers it, a child's `**o` beside it). Such a
    parameter takes the handle, which the gather boxes, and its callers are
    pulled in as a handle method's are. Answers 1 when it changed anything. */
-static int fwd_super_string_params(Compiler *c, FwdAnalysis *f) {
+static int fwd_super_string_params(Compiler *c, FwdQuery *f) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   for (int pass = 0; pass < 2; pass++) {
@@ -22596,7 +22619,7 @@ static int fwd_splat_lit_reads(Compiler *c, int splat, int p, int *out, int *at,
 static int promote_forwarded_rest_args(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  FwdAnalysis *f = fwd_analysis(c);
+  FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_PROMOTION);
   changed |= fwd_super_string_params(c, f);
   for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {

@@ -12,6 +12,8 @@
 #ifndef SP_RE_SHIM_MRUBY_H
 #define SP_RE_SHIM_MRUBY_H
 
+#include "sp_re_names.h"
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>

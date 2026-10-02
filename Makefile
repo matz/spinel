@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident plan-check-test repr-check-test traits-check-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident plan-check-test repr-check-test traits-check-test re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
@@ -932,7 +932,7 @@ test: $(SPINEL_TIMEOUT)
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -1108,6 +1108,28 @@ cli-opts-test: $(SPINEL)
 	  echo "cli-opts-test: FAIL (String#crypt does not link libcrypt)"; ok=0; fi; \
 	rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "cli-opts-test: pass" || exit 1
+
+# A program that also links mruby (libmruby.a) gets mruby's own mrb_malloc,
+# mrb_str_new, ... The regexp engine must not define those names. If it does,
+# the link fails (GNU ld), or the engine calls mruby's copy and crashes (ld64).
+# test/link-names/foreign_mrb.c defines the names and aborts if one is called.
+link-names-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-linknames.XXXXXX); t=test/link-names/regexp_program.rb; \
+	for a in $(SP_RT_LIB) $(SP_RT_MT_LIB); do \
+	  s=$$(nm -gP --defined-only "$$a") || { echo "link-names-test: FAIL (nm could not read $$a)"; ok=0; continue; }; \
+	  n=$$(echo "$$s" | awk '$$1 ~ /^_?mrb_/ { print $$1 }' | sort -u); \
+	  [ -z "$$n" ] || { echo "link-names-test: FAIL ($$a defines mruby names: $$(echo $$n | tr '\n' ' '))"; ok=0; }; \
+	done; \
+	$(CC) -c test/link-names/foreign_mrb.c -o "$$tmp/foreign_mrb.o" || ok=0; \
+	if $(SPINEL) "$$t" --link "$$tmp/foreign_mrb.o" -o "$$tmp/p" >"$$tmp/b.out" 2>&1; then \
+	  ! grep -qE 'duplicate symbol|multiple definition' "$$tmp/b.out" || \
+	    { echo "link-names-test: FAIL (the link saw two definitions of a name)"; grep -E 'duplicate symbol|multiple definition' "$$tmp/b.out" | sort -u | sed -n 1,5p; ok=0; }; \
+	  "$$tmp/p" >"$$tmp/r.out" 2>&1; rc=$$?; \
+	  [ $$rc -eq 0 ] && cmp -s "$$tmp/r.out" "$$t.expected" || \
+	    { echo "link-names-test: FAIL (the program exited $$rc or printed other output)"; sed -n 1,5p "$$tmp/r.out"; ok=0; }; \
+	else echo "link-names-test: FAIL (the program did not build next to mruby's names)"; sed -n 1,5p "$$tmp/b.out"; ok=0; fi; \
+	rm -rf "$$tmp"; \
+	[ $$ok = 1 ] && echo "link-names-test: pass" || exit 1
 
 reject-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \

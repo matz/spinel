@@ -21571,6 +21571,50 @@ static int fwd_native_bytes(Compiler *c, int node, int arg, int argc) {
   return fi >= 0 && arg < c->native_methods[fi].nargs && sp_streq(c->native_methods[fi].args[arg], "string");
 }
 
+/* A POLY result can still be proven to belong to one object family. Keep
+   its boxed ABI, but do not follow unrelated methods through a receiver
+   built only from that family. Unknown leaves, cycles and deep call trees
+   lose this optional proof and retain the ordinary all-target refusal. */
+static int fwd_object_base(Compiler *c, int node, int depth) {
+  if (node < 0 || depth > 8) return -1;
+  TyKind ty = comp_ntype(c, node);
+  if (ty_is_object(ty)) return ty_object_class(ty);
+  if (ty == TY_NIL || ty == TY_VOID) return -2; /* no object on this exit */
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "block") >= 0) return -1;
+  ACallTargets targets = {0};
+  an_call_targets_of(c, node, &targets);
+  int base = -2;
+  if (!targets.n) base = -1;
+  for (int t = 0; t < targets.n && base != -1; t++) {
+    int mi = targets.v[t];
+    int last = scope_body_last(c, mi);
+    int candidate = fwd_object_base(c, last, depth + 1);
+    /* Every explicit return matters, even in a non-tail branch. Nested
+       methods/blocks have a different scope and supply no exit here. */
+    for (int r = comp_kind_first(c, NK_ReturnNode); r >= 0 && candidate != -1; r = comp_kind_next(c, r)) {
+      if (comp_scope_of(c, r) != &c->scopes[mi]) continue;
+      int a = nt_ref(nt, r, "arguments"), n = 0;
+      const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+      int next = n == 0 ? -2 : n == 1 ? fwd_object_base(c, args[0], depth + 1) : -1;
+      if (next == -1) { candidate = -1; break; }
+      if (next < 0) continue;
+      if (candidate == -2) candidate = next;
+      else {
+        while (candidate >= 0 && !cr_class_is_ancestor(c, candidate, next)) candidate = c->classes[candidate].parent;
+      }
+    }
+    if (candidate == -1) { base = -1; break; }
+    if (candidate < 0) continue;
+    if (base == -2) base = candidate;
+    else {
+      while (base >= 0 && !cr_class_is_ancestor(c, base, candidate)) base = c->classes[base].parent;
+    }
+  }
+  free(targets.v);
+  return base;
+}
+
 /* Stop a statements walk only at a return proven to run under the incoming
    String hypothesis. Unknown guards and reassigned bindings do not prune. */
 static int fwd_string_returns(Compiler *c, int mi, const char *pn, int node, int depth) {
@@ -21699,6 +21743,14 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeep
     if (!bytes) {
       an_call_targets_of(c, node, &targets);
       if (!targets.n) act_add(&targets, fwd_call_target(c, node));
+      if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
+        int base = fwd_object_base(c, recv, 0);
+        if (base >= 0) {
+          act_reset(c, &targets);
+          act_add(&targets, comp_method_in_chain(c, base, nm, NULL));
+          act_add_overrides(c, &targets, base, nm, 0);
+        }
+      }
     }
     identity &= targets.n == 0;
     int printed = recv < 0 && nm && (sp_streq(nm, "p") || sp_streq(nm, "puts") || sp_streq(nm, "print"));

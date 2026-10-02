@@ -160,6 +160,51 @@ cases["preserved_cached_mutator"] = ["t << '!'; nil", "", "abc!", "", warm]
 cases["cached_readonly_early_store"] = ["t.bytesize", "", "abc", "", nil,
                                       "keyword_read(value: 'warm'); @snapshot = [t];"]
 
+# A boxed receiver returned through a constructor union has an object-family
+# proof, not permission to ignore actual descendant overrides or unknown
+# leaves. A foreign parse method must not poison the proven readonly family.
+family = <<~RUBY
+  class Document
+    def parse(t) = t.bytesize
+  end
+  class LeftDocument < Document; end
+  class RightDocument < Document; end
+  class ForeignParser
+    def parse(t)
+      if t.is_a?(String); a = [t]; a[0] << '!'; end
+      nil
+    end
+  end
+  ForeignParser.new.parse(nil)
+  class Factory
+    def self.wrap(flag)
+      return LeftDocument.new if flag
+      RightDocument.new
+    end
+  end
+  class Reader
+    def document = Factory.wrap(false)
+  end
+RUBY
+cases["readonly_return_family"] = ["document.parse(t); nil", "", "abc", family]
+cases["return_family_override"] = ["document.parse(t); nil", "", "abc!", family + <<~RUBY]
+  class RightDocument
+    def parse(t)
+      if t.is_a?(String); a = [t]; a[0] << '!'; end
+      nil
+    end
+  end
+  RightDocument.new.parse(nil)
+RUBY
+cases["return_family_unknown"] = ["document.parse(t); nil", "", "abc", family + <<~RUBY]
+  class Factory
+    def self.wrap(flag)
+      options = [RightDocument.new, ForeignParser.new]
+      options[0]
+    end
+  end
+RUBY
+
 # Compilation is an explicit requirement for these controls, not a property
 # inferred from their names. Renaming/removing one without updating this list
 # fails immediately; every other case must produce the identity refusal.
@@ -167,7 +212,7 @@ native_controls = %w[
   preserved_rest preserved_yield preserved_append_and_store
   readonly readonly_guard_alias readonly_array_search readonly_keyword
   readonly_keyword_only readonly_keyword_post_rest readonly_predicate
-  preserved_cached_mutator
+  preserved_cached_mutator readonly_return_family
 ]
 native_controls.each { |name| cases.fetch(name) }
 
@@ -245,6 +290,38 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "#{name}: not an identity refusal (status #{status.exitstatus}): #{out}#{err}"
     end
   end
+  # A discarded writer can share a handle. Returning that assignment needs
+  # a separate caller alias proof: do not admit a copied result that mutates
+  # independently of the two fields. Test implicit and explicit exits alone.
+  ["other.notice = @notice", "return other.notice = @notice"].each_with_index do |tail, i|
+    source = File.join(dir, "writer_return_#{i}.rb")
+    cfile = File.join(dir, "writer_return_#{i}.c")
+    File.write(source, <<~RUBY)
+      class Notices
+        attr_accessor :notice
+        def initialize(text) = @notice = text
+        def assign(other)
+          #{tail}
+        end
+      end
+      first = Notices.new(+'notice')
+      other = Notices.new(nil)
+      first.notice << '!'
+      returned = first.assign(other)
+      returned << '#'
+      p first.notice, other.notice, returned
+    RUBY
+    out, err, status = Open3.capture3(RbConfig.ruby, source)
+    unless status.success? && out == "\"notice!#\"\n" * 3
+      failures << "writer_return_#{i}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    unless status.exitstatus == 1 && (out + err).include?("an attribute writer given a String") &&
+           (out + err).include?("nothing written") && !File.exist?(cfile)
+      failures << "writer_return_#{i}: unsafe value writer admitted: #{out}#{err}"
+    end
+  end
 end
 abort failures.join("\n") unless failures.empty?
-puts "forward-escape-check: #{cases.length - native_controls.length} independent CRuby-validated refusals, #{native_controls.length} native readonly/identity controls pass"
+puts "forward-escape-check: #{cases.length - native_controls.length + 2} independent CRuby-validated refusals, #{native_controls.length} native readonly/identity controls pass"

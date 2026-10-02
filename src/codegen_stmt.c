@@ -2183,6 +2183,27 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
             (subtree_writes_local(c, v, nm) || (celled && subtree_has_side_effect(c, v)));
   char rtn[32];
 
+  if (t == TY_STRBUF && sp_streq(op, "+")) {
+    /* += rebinds to a fresh String. Hold the original receiver before the
+       RHS, but read its live bytes afterwards: the RHS may rebind the local
+       or mutate the same object through another alias. Keep RHS setup here
+       rather than hoisting it ahead of the saved receiver. */
+    int left = ++g_tmp, right = ++g_tmp;
+    Buf pre = {0}, rhs = {0};
+    Buf *saved_pre = g_pre; g_pre = &pre;
+    if (comp_ntype(c, v) == TY_POLY) {
+      buf_puts(&rhs, "sp_poly_arg_str_chk("); emit_expr(c, v, &rhs); buf_puts(&rhs, ")");
+    }
+    else emit_str_expr(c, v, &rhs);
+    g_pre = saved_pre;
+    buf_printf(b, "%s = ({ sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", lval, left, lval, left);
+    if (pre.p) buf_puts(b, pre.p);
+    buf_printf(b, "const char *_t%d = %s; SP_GC_ROOT(_t%d); ", right, rhs.p ? rhs.p : "NULL", right);
+    buf_printf(b, "if (!_t%d) sp_raise_poly_nomethod(\"+\", sp_box_nil()); ", left);
+    buf_printf(b, "sp_String_new_shared(sp_str_concat(sp_String_cstr(_t%d), _t%d)); });\n", left, right);
+    free(pre.p); free(rhs.p);
+    return;
+  }
   if (t == TY_STRING && sp_streq(op, "+")) {
     buf_printf(b, "%s = sp_str_concat(%s, ", lval, lv_op_assign_src(c, lval, t, cap, rtn, sizeof rtn));
     /* a poly RHS (a destructured `[Int, String]` element bound poly) is an
@@ -9379,6 +9400,22 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                 int defc = -1; comp_writer_in_chain(c, rc, base, &defc);
                 int iv = comp_ivar_index(&c->classes[defc < 0 ? rc : defc], ivn);
                 TyKind ivt = iv >= 0 ? c->classes[defc < 0 ? rc : defc].ivar_types[iv] : TY_UNKNOWN;
+                /* A discarded writer assignment can store an existing
+                   handle behind a String read face. Value-position writers
+                   still need a return-alias proof and remain refused. Bare
+                   receivers cannot change the RHS slot before this read;
+                   a hoisted RHS must use its saved handle, never a reread. */
+                char held[1024]; int holds_handle = 0;
+                NodeKind rk = nt_kind(nt, recv), vk = nt_kind(nt, argv[0]);
+                if (ivt == TY_STRBUF && store_value_kind(c, argv[0]) == TY_STRING &&
+                    (rk == NK_LocalVariableReadNode || rk == NK_SelfNode) &&
+                    (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode)) {
+                  int saved = ran_first_handle(argv[0]), overridden = 0;
+                  for (int o = 0; o < g_n_argov; o++)
+                    if (g_argov_node[o] == argv[0]) overridden = 1;
+                  if (saved >= 0) { snprintf(held, sizeof held, "_t%d", saved); holds_handle = 1; }
+                  else if (!overridden) holds_handle = strbuf_slot_ref(c, argv[0], held, sizeof held);
+                }
                 emit_indent(b, indent);
                 int fo = rc >= 0 && rc < c->nclasses &&
                          c->classes[rc].freeze_observed && !c->classes[rc].is_value_type;
@@ -9393,7 +9430,8 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                 else {
                   buf_puts(b, "("); emit_expr(c, recv, b); buf_printf(b, ")->iv_%s = ", iv_c(base));
                 }
-                if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
+                if (holds_handle) buf_puts(b, held);
+                else if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
                 /* nil into a scalar slot is that slot's sentinel, as `@x = nil` writes it */
                 else if (nt_kind(nt, argv[0]) == NK_NilNode && (ivt == TY_FLOAT || ivt == TY_INT))
                   buf_puts(b, ivt == TY_FLOAT ? "sp_float_nil()" : "SP_INT_NIL");

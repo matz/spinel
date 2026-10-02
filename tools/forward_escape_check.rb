@@ -127,6 +127,18 @@ cases["root_literal_store"] = ["nil", "", "abc!", <<~RUBY]
     end
   end
 RUBY
+cases["root_direct_box_store"] = ["nil", "", "abc!", <<~RUBY]
+  class Reader
+    def direct_box_reader(value) = value.is_a?(String) ? value.bytesize : 0
+    def root_direct_box_store(value)
+      items = []
+      items.push(value)
+      items[0] << '!' if value.is_a?(String)
+      direct_box_reader(value)
+      nil
+    end
+  end
+RUBY
 { "super" => "super", "explicit" => "super(value)" }.each do |shape, call|
   name = "root_store_#{shape}"
   cases[name] = ["nil", "", "abc!", <<~RUBY]

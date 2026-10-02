@@ -12,6 +12,9 @@
 
 #define SP_RUBY_VERSION "4.0.7"
 
+/* Release the compiler-owned, scope/name-borrowing forwarding proofs. */
+void fwd_analysis_free(Compiler *c);
+
 /* Set by main.c from --int-overflow=promote. In promote mode the analyzer is
    free to widen accumulating int locals to bigint more aggressively (e.g. block
    iteration loops, not just `while`), since the overflow-raising int macros are

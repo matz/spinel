@@ -89,6 +89,35 @@ cases["poly_receiver_rest"] = ["rest_receiver(t, Holder.new); nil", "", "abc!", 
   end
   Reader.new.rest_receiver(0, Ignorer.new)
 RUBY
+{ "parentheses" => "(value)", "to_s" => "value.to_s",
+  "ternary" => "value.is_a?(String) ? value : nil" }.each do |shape, expression|
+  cases["super_expression_#{shape}"] = ["Child.new.store(t); nil", "", "abc!", <<~RUBY]
+    class Parent
+      def store(value)
+        if value.is_a?(String); items = [value]; items[0] << '!'; end
+        nil
+      end
+    end
+    class Child < Parent
+      def store(value) = super(#{expression})
+    end
+    Child.new.store(0)
+  RUBY
+end
+%w[each_byte each_char each_line].each do |method|
+  cases["iterator_return_#{method}"] = ["t.#{method} { |element| element }", "result << '!'", "abc!"]
+end
+cases["readonly_iterator"] = ["t.each_byte { |element| element }; nil", "", "abc"]
+cases["root_poly_actual"] = ["if t.is_a?(String); items = [t]; items[0] << '!'; end; nil", "", "abc!", <<~RUBY]
+  class Reader
+    def root_poly_actual(value) = one(value)
+  end
+RUBY
+cases["root_poly_readonly"] = ["t.is_a?(String) ? t.bytesize : 0", "", "abc", <<~RUBY]
+  class Reader
+    def root_poly_readonly(value) = one(value)
+  end
+RUBY
 cases["readonly"] = ["t.bytesize", "", "abc"]
 cases["readonly_guard_alias"] = ["return t if t.is_a?(Other); a = t.to_s; a.bytesize", "", "abc", "class Other; end"]
 cases["readonly_array_search"] = ["'abc'.split('\n').include?(t)", "", "abc"]
@@ -236,9 +265,9 @@ end
 # fails immediately; every other case must produce the identity refusal.
 native_controls = %w[
   preserved_rest preserved_yield preserved_append_and_store
-  readonly readonly_guard_alias readonly_array_search readonly_keyword
+  readonly readonly_iterator readonly_guard_alias readonly_array_search readonly_keyword
   readonly_keyword_only readonly_keyword_post_rest readonly_predicate
-  preserved_cached_mutator readonly_return_family readonly_family_diamond
+  preserved_cached_mutator readonly_return_family readonly_family_diamond root_poly_readonly
 ]
 native_controls.each { |name| cases.fetch(name) }
 
@@ -251,6 +280,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     entry = keyword_entry || name == "keyword_root" || name.start_with?("root_") ? name : "coerce"
     seed = entry == "coerce" ? "nil" : "1"
     actual = "s"
+    actual = "[s, 0][ARGV.length]" if name.start_with?("root_poly_")
     if keyword_entry
       positional = name.end_with?("keyword_post_rest") ? "99, 7, " : ""
       seed = "#{positional}value: 1"

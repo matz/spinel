@@ -647,6 +647,7 @@ static inline int native_takes(const NativeMethod *m, int argc) {
 
 typedef struct {
   const NodeTable *nt;
+  struct FwdAnalysis *fwd_analysis; /* owned forwarding proofs, freed with this compiler */
   TyKind *ntype;    /* [node_cap] node id -> inferred type */
   int *norigin;     /* [node_cap] node id -> where its degraded type came from: the
                        child (or the slot's why.node, for a read) that carried the

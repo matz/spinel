@@ -17578,7 +17578,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
 typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
-typedef struct {
+typedef struct FwdAnalysis {
   FwdPhase phase;
   SbMutTab seen, poly_cache;
   unsigned *rest;
@@ -17587,7 +17587,22 @@ typedef struct {
 } FwdAnalysis;
 /* The top-level compiler owns reusable caches. Recursive queries receive
    this context explicitly and give nested POLY walks their own worklist. */
-static FwdAnalysis g_fwd_analysis;
+static FwdAnalysis *fwd_analysis(Compiler *c) {
+  if (!c->fwd_analysis) {
+    c->fwd_analysis = calloc(1, sizeof(FwdAnalysis));
+    if (!c->fwd_analysis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  return c->fwd_analysis;
+}
+void fwd_analysis_free(Compiler *c) {
+  FwdAnalysis *f = c->fwd_analysis;
+  if (!f) return;
+  sb_mut_tab_free(&f->seen);
+  sb_mut_tab_free(&f->poly_cache);
+  free(f->rest);
+  free(f);
+  c->fwd_analysis = NULL;
+}
 static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly);
 static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase);
 static int fwd_builtin(Compiler *c, const char *owner, const char *name);
@@ -17628,7 +17643,8 @@ static int convert_byref_handle_params(Compiler *c,
   /* the call-site chain is what makes this pass affordable; with no table
      there is nothing to walk, and promoting nothing is the safe answer */
   if (!hat->ok) return 0;
-  fwd_memo_fresh(c, &g_fwd_analysis, FWD_PROMOTION);
+  FwdAnalysis *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_PROMOTION);
   ALocalAliases aliases;
   an_local_aliases_build(c, &aliases);
   /* Completed readonly suffixes are shared only within this conversion
@@ -17661,7 +17677,7 @@ static int convert_byref_handle_params(Compiler *c,
       int poly_mut = (pp->is_param && pp->type == TY_POLY &&
                       ((pp->poly_lift & POLY_LIFT_APPENDED) || an_param_mutated_in_place(c, mi2, pj) ||
                        an_poly_param_yielded_lent(c, mi2, pj) ||
-                       fwd_poly_param_handed_on(c, &g_fwd_analysis, mi2, pj, &readonly)));
+                       fwd_poly_param_handed_on(c, f, mi2, pj, &readonly)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
@@ -21650,7 +21666,33 @@ typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS
 } FwdKeepMode;
+static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
 static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+/* Bare mapped super arguments have graph edges. Expression wrappers do
+   not: inspect those as retained rather than discarding their inner reads. */
+static int fwd_super_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  int target = a_super_target(c, &c->scopes[mi]);
+  int a = nt_ref(nt, node, "arguments"), n = 0, retained = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    int keyword = nt_kind(nt, args[i]) == NK_KeywordHashNode, en = 1;
+    const int *elements = keyword ? nt_arr(nt, args[i], "elements", &en) : &args[i];
+    for (int e = 0; e < en; e++) {
+      int arg = elements[e], forwarded = 0;
+      if (keyword && nt_kind(nt, arg) == NK_AssocNode) {
+        retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, arg, "key"), FWD_MODE_UNKNOWN, appended, depth + 1);
+        arg = nt_ref(nt, arg, "value");
+      }
+      if (target >= 0 && fwd_param_read(c, mi, pn, arg))
+        for (int j = 0; j < c->scopes[target].nparams; j++)
+          if (arg_layout_param_node(c, &c->scopes[target], node, j, NULL) == arg) forwarded = 1;
+      if (target >= 0 && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) forwarded = 1;
+      retained |= fwd_param_kept(c, f, mi, pn, arg, forwarded ? FWD_MODE_DISCARD : FWD_MODE_UNKNOWN, appended, depth + 1);
+    }
+  }
+  return retained;
+}
 static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
@@ -21690,7 +21732,8 @@ static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, i
       k == NK_ClassVariableWriteNode || k == NK_ConstantWriteNode ||
       k == NK_ReturnNode || k == NK_YieldNode) kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : FWD_MODE_VALUE;
   if (k == NK_BlockNode || k == NK_LambdaNode) kept = FWD_MODE_CAPTURE;
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) kept = FWD_MODE_DISCARD; /* separately followed edges */
+  if (k == NK_SuperNode) return fwd_super_kept(c, f, mi, pn, node, appended, depth);
+  if (k == NK_ForwardingSuperNode) kept = FWD_MODE_DISCARD; /* separately followed formal edges */
   if (k == NK_LocalVariableWriteNode) {
     const char *wn = nt_str(nt, node, "name");
     if (!kept && (!wn || !fwd_alias_of(c, mi, wn, pn, 0))) kept = FWD_MODE_ALIAS;
@@ -21724,31 +21767,47 @@ children:;
   return retained;
 }
 
+/* Byte-reading and receiver-aliasing are separate contracts. Block String
+   iterators return self; their blockless enumerators also retain self. */
+static FwdKeepMode fwd_string_receiver_mode(Compiler *c, int node, FwdKeepMode kept, int *bytes) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  *bytes = 0;
+  if (!nm || !fwd_builtin(c, "String", nm)) return FWD_MODE_UNKNOWN;
+  int iterator = sp_streq(nm, "each_byte") || sp_streq(nm, "each_char") || sp_streq(nm, "each_line");
+  int read = !iterator && (dyn_pure_read_name(nm) || sp_streq(nm, "is_a?") ||
+             sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
+             sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
+             sp_streq(nm, "<=") || sp_streq(nm, ">="));
+  int mutator = an_str_mutator_name(nm);
+  *bytes = read || mutator;
+  if (read) return FWD_MODE_DISCARD;
+  if (mutator || sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze") ||
+      (iterator && nt_ref(nt, node, "block") >= 0)) return kept;
+  return FWD_MODE_UNKNOWN;
+}
+
 /* A call owns its target/layout proof and the retention contract of its
    receiver, arguments and block. The AST walker handles structural uses. */
 static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, node, "name");
   int recv = nt_ref(nt, node, "receiver");
-  int read = dyn_pure_read_name(nm) || (nm && (sp_streq(nm, "is_a?") ||
-             sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
-             sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
-             sp_streq(nm, "<=") || sp_streq(nm, ">=")));
-  int self = nm && (sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze"));
-  int mutator = an_str_mutator_name(nm);
-  if (!nm || !fwd_builtin(c, "String", nm)) read = self = mutator = 0;
+  int bytes;
+  FwdKeepMode receiver_mode = fwd_string_receiver_mode(c, node, kept, &bytes);
   int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
   int retained = 0;
   if (rest) {
-    read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?") || sp_streq(nm, "[]"));
+    int read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?") || sp_streq(nm, "[]"));
+    if (read) receiver_mode = FWD_MODE_DISCARD;
     if (kept && nm && sp_streq(nm, "[]") && fwd_param_read(c, mi, pn, recv)) retained = FWD_KEEP_LOCAL;
   }
-  retained |= fwd_param_kept(c, f, mi, pn, recv, read ? FWD_MODE_DISCARD : self || mutator ? kept : FWD_MODE_UNKNOWN, appended, depth + 1);
+  retained |= fwd_param_kept(c, f, mi, pn, recv, receiver_mode, appended, depth + 1);
   int a = nt_ref(nt, node, "arguments"), n = 0;
   const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
   ACallTargets targets = {0};
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
-  int bytes = (rt == TY_STRING || rt == TY_STRBUF) && (read || mutator);
+  bytes &= rt == TY_STRING || rt == TY_STRBUF;
   /* The typed String-array search compares bytes, never stores its
      needle. Other Array operations/equality dispatch have no such proof. */
   int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
@@ -22164,7 +22223,7 @@ static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase) {
    appending, so an answer cut short is refused rather than copied. */
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return FWD_READONLY;
-  FwdAnalysis *f = &g_fwd_analysis;
+  FwdAnalysis *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   unsigned rb = fwd_rest_bits(c, f, mi);
   /* Direct rest stores/iteration have their existing emission/promotion
@@ -22176,7 +22235,7 @@ FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
 }
 FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0) return FWD_READONLY;
-  FwdAnalysis *f = &g_fwd_analysis;
+  FwdAnalysis *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   int outer = f->taint;
   f->taint = 0;
@@ -22190,7 +22249,7 @@ FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return FWD_READONLY;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
   if (!q || q->type != TY_POLY) return FWD_READONLY;
-  FwdAnalysis *f = &g_fwd_analysis;
+  FwdAnalysis *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
   /* Only a completed outer query is cached. Nested rest/cycle queries may
      depend on a cut edge and keep the existing taint/fixpoint treatment. */
@@ -22315,7 +22374,7 @@ static int fwd_splat_lit_reads(Compiler *c, int splat, int p, int *out, int *at,
 static int promote_forwarded_rest_args(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  FwdAnalysis *f = &g_fwd_analysis;
+  FwdAnalysis *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_PROMOTION);
   changed |= fwd_super_string_params(c, f);
   for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
@@ -27946,18 +28005,15 @@ static void rewrite_builtin_alias_self_calls(Compiler *c) {
 }
 
 /* Invalidate compiler-borrowed records before a new analysis owns them. */
-static void analyze_caches_reset(void) {
-  sb_mut_tab_free(&g_fwd_analysis.seen);
-  sb_mut_tab_free(&g_fwd_analysis.poly_cache);
-  free(g_fwd_analysis.rest);
-  memset(&g_fwd_analysis, 0, sizeof g_fwd_analysis);
+static void analyze_caches_reset(Compiler *c) {
+  fwd_analysis_free(c);
   comp_poly_candidates_reset();
   comp_descendants_reset();
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
 }
 
 void analyze_program(Compiler *c) {
-  analyze_caches_reset();
+  analyze_caches_reset(c);
   /* scope 0 = top level */
   Scope *top = comp_scope_new(c, NULL, -1);
   top->body = nt_ref(c->nt, c->nt->root_id, "statements");

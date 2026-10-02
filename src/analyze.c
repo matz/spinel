@@ -21784,8 +21784,16 @@ children:;
 
 static unsigned fwd_rest_bits(Compiler *c, int mi);
 static SbMutTab g_fwd_poly_seen;
-static SbMutTab g_fwd_poly_cache; /* completed emission queries, result + 3 or strict readonly */
-enum { FWD_POLY_READONLY = 5, FWD_POLY_ROOT_KEPT = 8 };
+/* The worklist carries traversal flags; the separate emission table carries
+   completed proof states. Neither table's byte encoding is used by the other. */
+enum { FWD_VISIT_QUEUED = 1, FWD_VISIT_PROCESSED = 2,
+       FWD_VISIT_FORWARDED = 4, FWD_VISIT_ROOT_KEPT = 8 };
+typedef enum {
+  FWD_CACHE_NONE, FWD_CACHE_ESCAPE, FWD_CACHE_UNKNOWN,
+  FWD_CACHE_ROOT_READONLY, FWD_CACHE_APPENDS, FWD_CACHE_STRICT_READONLY
+} FwdCacheResult;
+typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
+static SbMutTab g_fwd_poly_cache; /* completed emission FwdCacheResult values */
 static int g_fwd_poly_depth;
 static int g_fwd_codegen;
 /* Set when an answer below was cut short, so it is not kept as final: 1 a
@@ -21804,7 +21812,8 @@ static int g_fwd_taint;
 static int fwd_param_appends(Compiler *c, int mi, int j) {
   Scope *m = &c->scopes[mi];
   if (j < 0) return 0;
-  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 2)) g_fwd_poly_seen.val[0] |= 4;
+  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_PROCESSED))
+    g_fwd_poly_seen.val[0] |= FWD_VISIT_FORWARDED;
   /* a rest takes the arguments from its position on; a chain of them is
      memoized per method (fwd_rest_bits) */
   if (m->rest_idx >= 0 && j >= m->rest_idx) {
@@ -21948,17 +21957,18 @@ static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly) {
   if (p->type != TY_POLY && !(g_fwd_codegen && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
   signed char *cached = readonly ? sb_mut_tab_slot(readonly, p->name, mi, 0) : NULL;
   if (cached && *cached) return 0;
-  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 2)) g_fwd_poly_seen.val[0] |= 4;
+  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_PROCESSED))
+    g_fwd_poly_seen.val[0] |= FWD_VISIT_FORWARDED;
   /* Only a strict completed proof can prune a reached emission vertex.
      An ordinary root-only zero can exempt direct mutation or retention.
      Record the forwarding edge first, even when the suffix is cached. */
   if (g_fwd_codegen && g_fwd_poly_cache.cap) {
     signed char *done = sb_mut_tab_slot(&g_fwd_poly_cache, p->name, mi, 0);
-    if (done && *done == FWD_POLY_READONLY) return 0;
+    if (done && *done == FWD_CACHE_STRICT_READONLY) return 0;
   }
   signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
   if (*seen) return 0; /* already queued: its body will still be processed */
-  *seen = 1;
+  *seen = FWD_VISIT_QUEUED;
   return 0;
 }
 
@@ -21993,7 +22003,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
   int root_kept = 0;
   g_fwd_poly_depth++;
   for (int r = first; r < g_fwd_poly_seen.n; r++) {
-    g_fwd_poly_seen.val[r] = 2;
+    g_fwd_poly_seen.val[r] = FWD_VISIT_PROCESSED;
     mi = g_fwd_poly_seen.key[r];
     Scope *m = &c->scopes[mi];
     const char *pn = g_fwd_poly_seen.name[r];
@@ -22050,14 +22060,14 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
           if (fwd_param_read(c, mi, pn, args[j])) appended |= fwd_param_appends(c, ct, j);
     }
   }
-  /* Root bit 4 records an actual forwarding edge, including self-edges
-     and separately-owned rest queries, not merely a second vertex. */
+  /* FORWARDED records an actual edge, including self-edges and separately
+     owned rest queries, not merely a second vertex. */
   /* Raw boxed local assignments keep the existing direct-root contract
      when the completed suffix is readonly. A reached appender, or a copied
      root occurrence handed onward, cannot use that exemption. */
-  if (root_kept && g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 4) &&
+  if (root_kept && g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_FORWARDED) &&
       (appended || (root_kept & FWD_KEEP_COPY))) g_fwd_taint |= 4;
-  if (root_kept && g_fwd_poly_seen.n) g_fwd_poly_seen.val[0] |= FWD_POLY_ROOT_KEPT;
+  if (root_kept && g_fwd_poly_seen.n) g_fwd_poly_seen.val[0] |= FWD_VISIT_ROOT_KEPT;
   if (readonly && !appended && !g_fwd_taint)
     for (int v = 0; v < g_fwd_poly_seen.n; v++)
       *sb_mut_tab_slot(readonly, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 1;
@@ -22072,9 +22082,12 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
 /* For the emitters' refusal, after the last pass: does method mi forward
    element i of its rest to a parameter that appends, and does it hand its
    POLY parameter j on to one? */
-static void fwd_memo_fresh(Compiler *c) {
+static void fwd_memo_fresh(Compiler *c, FwdPhase phase) {
   unsigned gen = comp_scope_index_gen();
-  if (g_fwd_codegen && g_fwd_n == c->nscopes && g_fwd_version == c->nt->version && g_fwd_scope_gen == gen) return;
+  /* Promotion facts are rebuilt for every fixpoint pass. Emission owns its
+     cache only after analysis has finalized types and mutation metadata. */
+  if (phase == FWD_EMISSION && g_fwd_codegen && g_fwd_n == c->nscopes &&
+      g_fwd_version == c->nt->version && g_fwd_scope_gen == gen) return;
   free(g_fwd_rest);
   sb_mut_tab_free(&g_fwd_poly_cache);
   memset(&g_fwd_poly_cache, 0, sizeof g_fwd_poly_cache);
@@ -22083,14 +22096,14 @@ static void fwd_memo_fresh(Compiler *c) {
   g_fwd_scope_gen = gen;
   g_fwd_rest = (unsigned *)calloc((size_t)g_fwd_n + 1, sizeof(unsigned));
   if (!g_fwd_rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  g_fwd_codegen = 1;
+  g_fwd_codegen = phase == FWD_EMISSION;
 }
 /* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
    tell -- a rest hand-on past the depth bound -- which the refusal takes as
    appending, so an answer cut short is refused rather than copied. */
 int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return 0;
-  fwd_memo_fresh(c);
+  fwd_memo_fresh(c, FWD_EMISSION);
   unsigned rb = fwd_rest_bits(c, mi);
   /* Direct rest stores/iteration have their existing emission/promotion
      rules. This public refusal asks about a rest the method hands onward. */
@@ -22101,7 +22114,7 @@ int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
 }
 int fwd_param_appends_at(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0) return 0;
-  fwd_memo_fresh(c);
+  fwd_memo_fresh(c, FWD_EMISSION);
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
   int r = fwd_param_appends(c, mi, j);
@@ -22114,7 +22127,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return 0;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
   if (!q || q->type != TY_POLY) return 0;
-  fwd_memo_fresh(c);
+  fwd_memo_fresh(c, FWD_EMISSION);
   /* Only a completed outer query is cached. Nested rest/cycle queries may
      depend on a cut edge and keep the existing taint/fixpoint treatment. */
   if (!g_fwd_poly_cache.cap) {
@@ -22124,7 +22137,16 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   }
   int cacheable = !g_fwd_poly_depth && !g_fwd_rest_depth;
   signed char *slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, cacheable);
-  if (cacheable && slot && *slot) return *slot == FWD_POLY_READONLY ? 0 : *slot - 3;
+  if (cacheable && slot) {
+    switch ((FwdCacheResult)*slot) {
+      case FWD_CACHE_ESCAPE: return -2;
+      case FWD_CACHE_UNKNOWN: return -1;
+      case FWD_CACHE_APPENDS: return 1;
+      case FWD_CACHE_ROOT_READONLY:
+      case FWD_CACHE_STRICT_READONLY: return 0;
+      case FWD_CACHE_NONE: break;
+    }
+  }
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
   int r = fwd_poly_param_handed_on(c, mi, j, NULL);
@@ -22134,14 +22156,15 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   g_fwd_taint = outer;
   if (cacheable && complete) {
     slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, 1);
-    *slot = (signed char)(r + 3);
+    *slot = r > 0 ? FWD_CACHE_APPENDS : r == -2 ? FWD_CACHE_ESCAPE :
+            r < 0 ? FWD_CACHE_UNKNOWN : FWD_CACHE_ROOT_READONLY;
     /* An entirely readonly root proves every reachable vertex readonly too.
        A root exemption disqualifies the whole walk: a suffix could cycle
        back to that root. Other completed answers remain root-only. */
     if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j) &&
-        !(g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_POLY_ROOT_KEPT)))
+        !(g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_ROOT_KEPT)))
       for (int v = 0; v < g_fwd_poly_seen.n; v++)
-        *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = FWD_POLY_READONLY;
+        *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
   }
   return r;
 }
@@ -22228,9 +22251,7 @@ static int fwd_splat_lit_reads(Compiler *c, int splat, int p, int *out, int *at,
 static int promote_forwarded_rest_args(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  g_fwd_codegen = 0;
-  fwd_memo_fresh(c);
-  g_fwd_codegen = 0;
+  fwd_memo_fresh(c, FWD_PROMOTION);
   changed |= fwd_super_string_params(c);
   for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;

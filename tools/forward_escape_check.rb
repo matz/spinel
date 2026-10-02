@@ -160,6 +160,17 @@ cases["preserved_cached_mutator"] = ["t << '!'; nil", "", "abc!", "", warm]
 cases["cached_readonly_early_store"] = ["t.bytesize", "", "abc", "", nil,
                                       "keyword_read(value: 'warm'); @snapshot = [t];"]
 
+# Compilation is an explicit requirement for these controls, not a property
+# inferred from their names. Renaming/removing one without updating this list
+# fails immediately; every other case must produce the identity refusal.
+native_controls = %w[
+  preserved_rest preserved_yield preserved_append_and_store
+  readonly readonly_guard_alias readonly_array_search readonly_keyword
+  readonly_keyword_only readonly_keyword_post_rest readonly_predicate
+  preserved_cached_mutator
+]
+native_controls.each { |name| cases.fetch(name) }
+
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
   cases.each do |name, (body, followup, want, prefix, guard, before)|
@@ -217,7 +228,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
       next
     end
-    if name.start_with?("readonly", "preserved")
+    if native_controls.include?(name)
       executable = File.join(dir, name)
       out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
       unless status.success?
@@ -236,5 +247,4 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   end
 end
 abort failures.join("\n") unless failures.empty?
-controls = cases.keys.count { |name| name.start_with?("readonly", "preserved") }
-puts "forward-escape-check: #{cases.length - controls} independent CRuby-validated refusals, #{controls} native readonly/identity controls pass"
+puts "forward-escape-check: #{cases.length - native_controls.length} independent CRuby-validated refusals, #{native_controls.length} native readonly/identity controls pass"

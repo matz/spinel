@@ -6700,7 +6700,7 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         if (excl_r)
           buf_puts(b, " sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\");");
         buf_printf(b, " if (_t%d && _t%d && sp_str_cmp_bytes(_t%d, _t%d) > 0)"
-                      " sp_raise_cls(\"ArgumentError\", \"min argument must be smaller than max argument\");",
+                      " sp_raise_cls(\"ArgumentError\", \"min argument must be less than or equal to max argument\");",
                    tlo, thi, tlo, thi);
         /* a one-sided Range clamps on the side it has (#3593) */
         buf_printf(b, " (_t%d && sp_str_cmp_bytes(_t%d, _t%d) < 0) ? _t%d :"
@@ -7690,7 +7690,7 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; %s _t%d = ", hi_f2 ? "double" : "sp_int", thi2);
         emit_expr(c, argv[1], b);
         buf_printf(b, "; if ((double)_t%d > (double)_t%d)"
-                      " sp_raise_cls(\"ArgumentError\", \"min argument must be smaller than max argument\");"
+                      " sp_raise_cls(\"ArgumentError\", \"min argument must be less than or equal to max argument\");"
                       " (_t%d < (double)_t%d) ? %s(_t%d)"
                       " : (_t%d > (double)_t%d) ? %s(_t%d)"
                       " : sp_box_float(_t%d); })",

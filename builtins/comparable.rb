@@ -110,7 +110,7 @@ module Comparable
       # a STRICT ordering violation only: equal bounds are a valid (empty)
       # range, and `clamp` answers the receiver or that shared bound.
       if c > 0
-        raise ArgumentError, "min argument must be smaller than max argument"
+        raise ArgumentError, "min argument must be less than or equal to max argument"
       end
     end
     unless lo.nil?

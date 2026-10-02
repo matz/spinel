@@ -18,7 +18,7 @@ true
 3
 10
 5
-min argument must be smaller than max argument
+min argument must be less than or equal to max argument
 comparison of String with 10 failed
 comparison of Integer with String failed
 comparison of Integer with String failed

@@ -1,8 +1,8 @@
 int ok: 5
-int min>max: ArgumentError: min argument must be smaller than max argument
-int range bad: ArgumentError: min argument must be smaller than max argument
+int min>max: ArgumentError: min argument must be less than or equal to max argument
+int range bad: ArgumentError: min argument must be less than or equal to max argument
 float ok: 3.5
-float min>max: ArgumentError: min argument must be smaller than max argument
+float min>max: ArgumentError: min argument must be less than or equal to max argument
 float recv nan: ArgumentError: comparison of Float with 1.0 failed
 float lo nan: ArgumentError: comparison of Float with 2.0 failed
 float hi nan: ArgumentError: comparison of Float with NaN failed

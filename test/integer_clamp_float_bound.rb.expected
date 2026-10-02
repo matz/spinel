@@ -9,7 +9,7 @@
 Float
 Integer
 Integer
-ArgumentError: min argument must be smaller than max argument
+ArgumentError: min argument must be less than or equal to max argument
 ArgumentError: comparison of Float with 2.0 failed
 ArgumentError: comparison of Float with NaN failed
 ArgumentError: comparison of Integer with NaN failed

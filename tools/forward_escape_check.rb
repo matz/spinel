@@ -294,6 +294,137 @@ native_controls = %w[
 ]
 native_controls.each { |name| cases.fetch(name) }
 
+def add_io_certificate_cases(certificate_cases)
+  # IO's literal block is synchronous, but its separator lives across block
+  # invocations. Frozen separators can use the retaining-box contract; a
+  # mutable separator or an overridden/escaping call cannot borrow it.
+  io_setup = <<~RUBY
+    require "tmpdir"
+    path = File.join(Dir.tmpdir, "spinel_forward_io_#{'#{Process.pid}'}")
+    File.write(path, "one|two|tail")
+  RUBY
+  %w[each_line each].each do |method|
+    certificate_cases["io_#{method}_frozen_rest"] = [io_setup + <<~RUBY, "[\"one\", \"two\", \"tail\"]\n[\"on\", \"e\", \"tw\", \"o\", \"ta\", \"il\"]\nzero limit\n", true]
+      def read_lines(path, *args, **keywords)
+        out = []
+        File.open(path) do |file|
+          file.#{method}(*args, **keywords) { |line| out << line }
+        end
+        out
+      end
+      p read_lines(path, "|", chomp: true)
+      p read_lines(path, "|", 2, chomp: true)
+      begin
+        read_lines(path, "|", 0)
+      rescue ArgumentError
+        puts "zero limit"
+      end
+      File.delete(path)
+    RUBY
+  end
+  certificate_cases["io_mutable_separator_callback"] = [io_setup + <<~RUBY, "\"|!!\"\n\"|!!\"\n", :native_or_refusal]
+    def read_lines(path, *args)
+      File.open(path) do |file|
+        file.each_line(*args) { |line| args[0] << "!" }
+      end
+      nil
+    end
+    separator = +"|"
+    other = separator
+    read_lines(path, separator)
+    p separator, other
+    File.delete(path)
+  RUBY
+  certificate_cases["io_blockless_rest"] = [io_setup + <<~RUBY, "\"|!\"\n", false]
+    def enumerate(file, *args)
+      file.each_line(*args)
+      nil
+    end
+    separator = +"|"
+    File.open(path) { |file| enumerate(file, separator) }
+    separator << "!"
+    p separator
+    File.delete(path)
+  RUBY
+  certificate_cases["io_escaping_nested_block"] = [io_setup + <<~RUBY, "\"|!\"\n", false]
+    def read_lines(path, *args)
+      File.open(path) do |file|
+        file.each_line(*args) { |line| $reader = -> { args[0] } }
+      end
+      nil
+    end
+    separator = +"|"
+    read_lines(path, separator)
+    $reader.call << "!"
+    p separator
+    File.delete(path)
+  RUBY
+  %w[IO File].product(%w[each_line each]).each do |owner, method|
+    certificate_cases["io_override_#{owner}_#{method}"] = [io_setup + <<~RUBY, "\"|!\"\n", false]
+      class #{owner}
+        def #{method}(*args)
+          $saved = args[0]
+          yield "line"
+          self
+        end
+      end
+      def read_lines(path, *args)
+        File.open(path) { |file| file.#{method}(*args) { |line| nil } }
+        nil
+      end
+      separator = +"|"
+      read_lines(path, separator)
+      $saved << "!"
+      p separator
+      File.delete(path)
+    RUBY
+  end
+  # A break value, unlike an ordinary each_line block result, is the call's
+  # result. Both a nested loop break and a non-tail File.open break must keep
+  # the old capture proof until break-value flow is modeled independently.
+  { "each_line" => "file.each_line { break value }",
+    "open" => "break value; nil" }.each do |name, body|
+    certificate_cases["io_break_value_#{name}"] = [io_setup + <<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+      def leak(path, value)
+        File.open(path) { |file| #{body} }
+      end
+      leak(path, 1)
+      text = +"ice"
+      other = text
+      leak(path, text) << "!"
+      p text, other
+      File.delete(path)
+    RUBY
+  end
+  certificate_cases["io_block_optional_default"] = [io_setup + <<~RUBY, "\"|!\"\n", :native_or_refusal]
+    def read_lines(path, *args)
+      File.open(path) do |file, copy = args[0]|
+        file.each_line(*args) { |line| $saved = copy }
+      end
+      nil
+    end
+    separator = +"|"
+    read_lines(path, separator)
+    $saved << "!"
+    p separator
+    File.delete(path)
+  RUBY
+  certificate_cases["io_frozen_block_optional_default"] = [io_setup + <<~RUBY, "\"|\"\ntrue\n", :native_or_refusal]
+    def read_lines(path, *args)
+      File.open(path) do |file, copy = args[0]|
+        file.each_line(*args) { |line| $saved = copy }
+      end
+      nil
+    end
+    read_lines(path, "|")
+    p $saved, $saved.frozen?
+    File.delete(path)
+  RUBY
+  path = File.expand_path("../test/io_each_line_splat_args.rb", __dir__)
+  certificate_cases["original_io_each_line_splat_args"] = [File.read(path), File.binread(path + ".expected"), true]
+  certificate_cases
+end
+
 failures = []
 refusals = 0
 native_passes = 0
@@ -1293,7 +1424,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
   certificate_cases["readonly_field_loop_coercion"] = [
     "class Hidden; def coerce(value) = [value, 1]; end\n" + cells, cells_expected, false
   ]
-  certificate_cases.each do |name, (input, expected, native)|
+  add_io_certificate_cases(certificate_cases).each do |name, (input, expected, native)|
     source = File.join(dir, "#{name}.rb")
     cfile = File.join(dir, "#{name}.c")
     executable = File.join(dir, name)

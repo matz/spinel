@@ -21865,7 +21865,8 @@ static int fwd_string_returns(Compiler *c, int mi, const char *pn, int node, int
    Refuse these paths at emission, independently of known direct appends.
    Bare, laid-out call arguments are followed by the forwarding walk. */
 enum { FWD_KEEP_LOCAL = 1, FWD_KEEP_COPY = 2, FWD_KEEP_INCOMPLETE = 4,
-       FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16, FWD_KEEP_INDEX_COPY = 32 };
+       FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16, FWD_KEEP_INDEX_COPY = 32,
+       FWD_KEEP_CAPTURE_COPY = 64 };
 typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
@@ -21960,6 +21961,7 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
     if (kept == FWD_MODE_BOX && p && p->type == TY_POLY &&
         c->nilnarrow[node] == TY_UNKNOWN && comp_ntype(c, node) == TY_POLY)
       return FWD_KEEP_BOX;
+    if (kept == FWD_MODE_CAPTURE) return FWD_KEEP_COPY | FWD_KEEP_CAPTURE_COPY;
     return kept == FWD_MODE_ALIAS && comp_ntype(c, node) == TY_POLY ? FWD_KEEP_LOCAL : FWD_KEEP_COPY;
   }
   /* A captured read is a retention even when its immediate use only reads
@@ -22073,6 +22075,21 @@ static FwdKeepMode fwd_string_receiver_mode(Compiler *c, int node, FwdKeepMode k
   if (mutator || sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze") ||
       (iterator && nt_ref(nt, node, "block") >= 0)) return kept;
   return FWD_MODE_UNKNOWN;
+}
+
+/* The IO loop retains separator bytes across callbacks. Its argument list
+   preserves boxes, not mutable String identity: this is a BOX destination,
+   never a blanket readonly exemption. Reopenings and break wrappers have
+   different dispatch/return contracts. */
+static int fwd_io_line_block(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, node, "name");
+  int block = nt_ref(nt, node, "block"), owner;
+  return name && (sp_streq(name, "each_line") || sp_streq(name, "each")) &&
+         comp_ntype(c, nt_ref(nt, node, "receiver")) == TY_IO &&
+         nt_kind(nt, block) == NK_BlockNode && !call_breaks(c, node) &&
+         block_opt_default(c, block, 0) < 0 &&
+         fwd_builtin(c, "IO", name) && !io_reopen_defs(c, name, 0, &owner, 1);
 }
 
 /* Codegen drops unresolved dynamic arms unless a same-name body diverges.
@@ -22257,8 +22274,27 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
   /* A builtin predicate consumes a literal block's result as truthiness;
      it does not retain the block. Stores/unknown calls/nested lambdas in
      that body are still visited normally and can retain the input. */
-  return retained | fwd_param_kept(c, f, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
-                                  synchronous ? FWD_MODE_DISCARD : FWD_MODE_CAPTURE, appended, depth + 1);
+  FwdKeepMode block_mode = FWD_MODE_DISCARD;
+  int unknown_defaults = 0;
+  if (fwd_io_line_block(c, node)) synchronous = 1;
+  if (nt_kind(nt, block) == NK_BlockNode && !call_breaks(c, node) && nm && sp_streq(nm, "open") &&
+      nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_str(nt, recv, "name"), "File")) {
+    int owner = comp_class_index(c, "File");
+    if (owner < 0 || comp_cmethod_in_chain(c, owner, nm, NULL) < 0) {
+      /* This builtin binds only its required block parameter. Do not use
+         the synchronous proof for optional defaults the emitter omits. */
+      unknown_defaults = block_opt_default(c, block, 0) >= 0;
+      synchronous = !unknown_defaults;
+      block_mode = kept; /* File.open returns the block's value, unlike IO#each. */
+    }
+  }
+  if (synchronous)
+    retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, block, "parameters"),
+                               FWD_MODE_UNKNOWN, appended, depth + 1);
+  int captured = fwd_param_kept(c, f, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
+                                 synchronous ? block_mode : FWD_MODE_CAPTURE, appended, depth + 1);
+  if (captured && unknown_defaults) captured |= FWD_KEEP_INCOMPLETE;
+  return retained | captured;
 }
 
 /* Defaults execute before the body and bind their result to another formal.
@@ -22408,6 +22444,10 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
           (comp_ntype(c, u) == TY_UNKNOWN || comp_ntype(c, u) == TY_VOID)) bits |= FWD_REST_OPEN;
     }
     bits |= FWD_REST_HANDED;
+    if (f->phase == FWD_EMISSION && fwd_io_line_block(c, u)) {
+      bits |= FWD_REST_BOX;
+      continue;
+    }
     ACallTargets targets = {0};
     an_call_targets_of(c, u, &targets);
     if (!targets.n) act_add(&targets, fwd_call_target(c, u));
@@ -22581,11 +22621,11 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, Sb
   }
   /* FORWARDED records an actual edge, including self-edges and separately
      owned rest queries, not merely a second vertex. */
-  /* Direct-root retention keeps its existing emitter contract. A copied
-     alias receiver that mutates is unsafe even without a forwarding edge;
-     an unproved index store can retain a nested alias even at the root;
-     a copied root handed onward is unsafe through that edge as before. */
-  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY)) ||
+  /* Direct-root retention keeps its existing emitter contract. Copied
+     mutator receivers, indexed values and captures are unsafe even without
+     a forwarding edge; captures also cover a break wrapper's return value.
+     A copied root handed onward is unsafe through that edge as before. */
+  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY | FWD_KEEP_CAPTURE_COPY)) ||
       ((f->seen.val[0] & FWD_VISIT_FORWARDED) && (appended || (root_kept & FWD_KEEP_COPY)))))
     f->taint |= FWD_TAINT_ESCAPE;
   if (root_kept && f->seen.n) f->seen.val[0] |= FWD_VISIT_ROOT_KEPT;

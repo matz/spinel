@@ -998,6 +998,184 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     s << "!"
     p $saved
   RUBY
+  # The send's method-name operand must not shift the splat's destination.
+  # A real prefix and keyword make the correct layout asymmetric.
+  %w[send __send__ public_send].each do |dispatch|
+    certificate_cases["dynamic_readonly_#{dispatch}"] = [<<~RUBY, "\"17:ice:z\"\n\"17:fire:y\"\n", true]
+      class Sink
+        def render(prefix, value, tag: :z) = "#{'#{prefix}:#{value}:#{tag}'}"
+      end
+      class Relay
+        def initialize = @sink = Sink.new
+        def go(name, *args, **kwargs) = @sink.#{dispatch}(name, 17, *args, **kwargs)
+      end
+      r = Relay.new
+      p r.go(:render, "ice")
+      p r.go(:render, "fire", tag: :y)
+    RUBY
+  end
+  certificate_cases["dynamic_readonly_inherited_alias"] = [<<~RUBY, "\"17:ice\"\n", true]
+    class Parent
+      def render(prefix, value) = "#{'#{prefix}:#{value}'}"
+    end
+    class Sink < Parent
+      alias deliver render
+    end
+    class Relay
+      def initialize = @sink = Sink.new
+      def go(name, *args) = @sink.send(name, 17, *args)
+    end
+    p Relay.new.go(:deliver, "ice")
+  RUBY
+  certificate_cases["forward_default_retention"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", false]
+    class Reader
+      def entry(value); leaf(value); nil; end
+      def leaf(value, saved = ($held = value)); nil; end
+    end
+    r = Reader.new
+    r.entry(0)
+    source = +"ice"
+    r.entry(source)
+    source << "!"
+    p source, $held
+  RUBY
+  certificate_cases["inline_class_method_namesake"] = [<<~RUBY, "3\nice!\n", true]
+    def stash(value); $held = value; nil; end
+    def deliver(value); stash(value); nil; end
+    deliver(1)
+    deliver(false)
+    class Reader
+      def self.deliver(value); puts value.length; yield; nil; end
+      def self.run(value); deliver(value) {}; nil; end
+    end
+    source = +"ice"
+    Reader.run(source)
+    source << "!"
+    puts source
+  RUBY
+  certificate_cases["inline_class_method_retention"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", false]
+    class Reader
+      def self.stash(value); $held = value; nil; end
+      def self.deliver(value); stash(value); yield; nil; end
+    end
+    Reader.deliver(1) {}
+    source = +"ice"
+    Reader.deliver(source) {}
+    source << "!"
+    p source, $held
+  RUBY
+  certificate_cases["dynamic_prefixed_append"] = [<<~RUBY, "frozen\n", false]
+    class Sink
+      def leaf(prefix, value, unused = nil); value << "!"; nil; end
+    end
+    class Relay
+      def initialize = @sink = Sink.new
+      def go(name, *args) = @sink.send(name, 17, *args)
+    end
+    begin
+      Relay.new.go(:leaf, "ice")
+    rescue FrozenError
+      puts "frozen"
+    end
+  RUBY
+  certificate_cases["dynamic_mixed_arms"] = [<<~RUBY, "\"17:ice\"\nfrozen\n", false]
+    class Sink
+      def render(prefix, value) = "#{'#{prefix}:#{value}'}"
+      def append(prefix, value); value << "!"; nil; end
+    end
+    class Relay
+      def initialize = @sink = Sink.new
+      def go(name, *args) = @sink.send(name, 17, *args)
+    end
+    r = Relay.new
+    p r.go(:render, "ice")
+    begin
+      r.go(:append, "fire")
+    rescue FrozenError
+      puts "frozen"
+    end
+  RUBY
+  # Resolving an arm is not permission to copy a retained/appended String.
+  # Each reduction runs alone so an unsafe arm cannot hide behind another.
+  {
+    "literal_append" => ["def leaf(value); value << '!'; nil; end", <<~RUBY, "frozen\n"],
+      begin
+        r.go(:leaf, "ice")
+      rescue FrozenError
+        puts "frozen"
+      end
+    RUBY
+    "mutable_append" => ["def leaf(value); value << '!'; nil; end", <<~RUBY, "\"ice!\"\n\"ice!\"\n"],
+      source = +"ice"
+      other = source
+      r.go(:leaf, source)
+      p source, other
+    RUBY
+    "stored_alias" => ["attr_reader :held; def leaf(value); @held = value; nil; end", <<~RUBY, "\"ice!\"\n\"ice!\"\n"],
+      r.go(:leaf, 1)
+      source = +"ice"
+      r.go(:leaf, source)
+      r.sink.held << "!"
+      p source, r.sink.held
+    RUBY
+    "returned_alias" => ["def leaf(value) = value", <<~RUBY, "\"ice!\"\n\"ice!\"\n"],
+      r.go(:leaf, 1)
+      source = +"ice"
+      result = r.go(:leaf, source)
+      result << "!"
+      p source, result
+    RUBY
+    "yielded_alias" => ["def leaf(value); yield value; nil; end", <<~RUBY, "frozen\n"],
+      r.go(:leaf, 1) { |value| nil }
+      begin
+        r.go(:leaf, "ice") { |value| value << "!" }
+      rescue FrozenError
+        puts "frozen"
+      end
+    RUBY
+    "post_rest" => ["def leaf(*unused, value); value << '!'; nil; end", <<~RUBY, "frozen\n"]
+      begin
+        r.go(:leaf, "ice")
+      rescue FrozenError
+        puts "frozen"
+      end
+    RUBY
+  }.each do |name, (definition, calls, expected)|
+    certificate_cases["dynamic_#{name}"] = [<<~RUBY, expected, false]
+      class Sink
+        #{definition}
+      end
+      class Relay
+        attr_reader :sink
+        def initialize = @sink = Sink.new
+        def go(name, *args, &block) = @sink.send(name, *args, &block)
+      end
+      r = Relay.new
+      #{calls}
+    RUBY
+  end
+  certificate_cases["dynamic_capped_names"] = [<<~RUBY, "\"ice\"\n", false]
+    class Sink
+      def leaf(value) = "#{'#{value}'}"
+    end
+    class Relay
+      def initialize = @sink = Sink.new
+      def go(name, *args) = @sink.send(name, *args)
+    end
+    [#{270.times.map { |i| "\"unused_#{i}\"" }.join(', ')}]
+    p Relay.new.go(:leaf, "ice")
+  RUBY
+  certificate_cases["dynamic_unresolved_builtin"] = [<<~RUBY, "frozen\n", false]
+    class Relay
+      def initialize = @receiver = "ice"
+      def go(name, *args) = @receiver.send(name, *args)
+    end
+    begin
+      Relay.new.go(:concat, "!")
+    rescue FrozenError
+      puts "frozen"
+    end
+  RUBY
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]

@@ -1107,6 +1107,8 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
         sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode")) pargc = argc - 1;
     arg_layout(c, m, argv, pargc, pargc < argc ? argv[pargc] : -1, 1, &L);
     refuse_yield_handle_args(c, id);
+    /* Statement/yield inlining bypasses emit_call's copy guards. */
+    refuse_forwarded_args(c, id, mi, name);
     alias_mask = inline_alias_params(c, mi, argv, pargc, &L, nt_ref(nt, id, "block"));
   }
 

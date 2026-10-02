@@ -22065,12 +22065,58 @@ static FwdKeepMode fwd_string_receiver_mode(Compiler *c, int node, FwdKeepMode k
   return FWD_MODE_UNKNOWN;
 }
 
+/* Codegen drops unresolved dynamic arms unless a same-name body diverges.
+   No such body is a cheap sufficient proof; other UNKNOWN arms stay open. */
+static int fwd_dead_dynamic_arm(Compiler *c, int node) {
+  if (!nt_int(c->nt, node, "dyn_arm", 0)) return 0;
+  TyKind type = comp_ntype(c, node);
+  const char *name = nt_str(c->nt, node, "dyn_name");
+  return (type == TY_UNKNOWN || type == TY_VOID) && name && an_any_scope_by_name(c, name) < 0;
+}
+
+/* A lowered, uncapped send with an actual destination owns its arms' layouts.
+   Empty/dropped dispatches and a splatted name are not forwarding evidence. */
+static const int *fwd_dynamic_send_arms(Compiler *c, int node, const char *pn, int *count) {
+  const char *name = nt_str(c->nt, node, "name");
+  const int *arms = nt_arr(c->nt, node, "dyn_send_arms", count);
+  if (!*count || nt_int(c->nt, node, "dyn_send_truncated", 0) || !name ||
+      (!sp_streq(name, "send") && !sp_streq(name, "__send__") && !sp_streq(name, "public_send")) ||
+      fwd_splat_start(c, node, pn) <= 0) return NULL;
+  int live = 0;
+  for (int i = 0; i < *count; i++) {
+    if (fwd_dead_dynamic_arm(c, arms[i])) continue;
+    TyKind type = comp_ntype(c, arms[i]);
+    int recv = nt_ref(c->nt, arms[i], "receiver");
+    TyKind rt = comp_ntype(c, recv);
+    const char *method = nt_str(c->nt, arms[i], "name");
+    /* A namesake elsewhere is not evidence for builtin/unknown dispatch. */
+    if (type == TY_UNKNOWN || type == TY_VOID || !ty_is_object(rt) || !method ||
+        comp_method_in_chain(c, ty_object_class(rt), method, NULL) < 0) return NULL;
+    live = 1;
+  }
+  return live ? arms : NULL;
+}
+
 /* A call owns its target/layout proof and the retention contract of its
    receiver, arguments and block. The AST walker handles structural uses. */
 static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, node, "name");
   int recv = nt_ref(nt, node, "receiver");
+  if (fwd_dead_dynamic_arm(c, node)) return 0;
+  int narm = 0;
+  const int *arms = fwd_dynamic_send_arms(c, node, pn, &narm);
+  if (arms) {
+    /* Arms have the real argument layout, without the send's name operand.
+       The receiver and name themselves are still evaluated by the sender. */
+    int a = nt_ref(nt, node, "arguments"), argc = 0;
+    const int *args = nt_arr(nt, a, "arguments", &argc);
+    int retained = fwd_param_kept(c, f, mi, pn, recv, FWD_MODE_UNKNOWN, appended, depth + 1);
+    if (argc) retained |= fwd_param_kept(c, f, mi, pn, args[0], FWD_MODE_UNKNOWN, appended, depth + 1);
+    for (int i = 0; i < narm; i++)
+      retained |= fwd_param_kept(c, f, mi, pn, arms[i], kept, appended, depth + 1);
+    return retained;
+  }
   int bytes;
   /* A boxed result does not imply a boxed receiver: to_s can unbox a handle
      to bytes and then rebox those bytes. Its receiver remains a value use. */
@@ -22200,6 +22246,16 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
                                   synchronous ? FWD_MODE_DISCARD : FWD_MODE_CAPTURE, appended, depth + 1);
 }
 
+/* Defaults execute before the body and bind their result to another formal.
+   A default that reads the input is not a discarded readonly expression. */
+static int fwd_scope_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int *appended) {
+  Scope *m = &c->scopes[mi];
+  int kept = fwd_param_kept(c, f, mi, pn, m->body, fwd_return_mode(m), appended, 0);
+  for (int j = 0; j < m->nparams; j++)
+    kept |= fwd_param_kept(c, f, mi, pn, m->pdefault[j], FWD_MODE_UNKNOWN, appended, 0);
+  return kept;
+}
+
 static unsigned fwd_rest_bits(Compiler *c, FwdQuery *f, int mi);
 /* The worklist carries traversal flags; the separate emission table carries
    completed proof states. Neither table's byte encoding is used by the other. */
@@ -22320,7 +22376,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
   int appended = 0;
-  int retained = f->phase == FWD_EMISSION ? fwd_param_kept(c, f, mi, rn, m->body, fwd_return_mode(m), &appended, 0) : 0;
+  int retained = f->phase == FWD_EMISSION ? fwd_scope_kept(c, f, mi, rn, &appended) : 0;
   unsigned bits = (retained & FWD_KEEP_BOX ? FWD_REST_BOX : 0) |
                   (retained & ~FWD_KEEP_BOX ? FWD_REST_KEPT : 0);
   if (rest_elems_mutated(c, mi)) bits |= 0xffffu;
@@ -22328,6 +22384,14 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int p = fwd_splat_start(c, u, rn);
     if (p < 0) continue;
+    if (f->phase == FWD_EMISSION) {
+      if (fwd_dead_dynamic_arm(c, u)) continue;
+      int narm = 0;
+      if (fwd_dynamic_send_arms(c, u, rn, &narm))
+        continue; /* synthesized arms are in this same scope's call index */
+      if (nt_int(nt, u, "dyn_arm", 0) &&
+          (comp_ntype(c, u) == TY_UNKNOWN || comp_ntype(c, u) == TY_VOID)) bits |= FWD_REST_OPEN;
+    }
     bits |= FWD_REST_HANDED;
     ACallTargets targets = {0};
     an_call_targets_of(c, u, &targets);
@@ -22341,9 +22405,14 @@ static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char 
       /* A variable-length splat does not fix which of its elements binds
          a post parameter. Do not exempt such an unknown destination. */
       if (f->phase == FWD_EMISSION && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
+      unsigned mutated = 0;
       for (int i = 0; i < 16; i++)
-        if (fwd_param_appends(c, f, t, p + i)) bits |= 1u << i;
-      bits |= fwd_rest_past(c, f, t, p);
+        if (fwd_param_appends(c, f, t, p + i)) mutated |= 1u << i;
+      mutated |= fwd_rest_past(c, f, t, p);
+      bits |= mutated;
+      /* A dynamic arm may convert the spread box into a String formal.
+         Appending is not a preserving readonly certificate for that copy. */
+      if (mutated && f->phase == FWD_EMISSION && nt_int(nt, u, "dyn_arm", 0)) bits |= FWD_REST_KEPT;
     }
     free(targets.v);
   }
@@ -22448,7 +22517,7 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, Sb
     if ((f->phase == FWD_PROMOTION || internal || r > 0) &&
         (p->byref_out || (p->type == TY_STRBUF && p->str_shared) || an_param_mutated_in_place(c, mi, pj))) appended = 1;
     if (f->phase == FWD_EMISSION) {
-      int retained = fwd_param_kept(c, f, mi, pn, m->body, fwd_return_mode(m), &appended, 0);
+      int retained = fwd_scope_kept(c, f, mi, pn, &appended);
       if (retained & FWD_KEEP_BOX) f->taint |= FWD_TAINT_BOX;
       retained &= ~FWD_KEEP_BOX;
       if (retained) {

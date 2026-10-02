@@ -24741,9 +24741,8 @@ static void refuse_rest_yield_copies(Compiler *c, int id, int t) {
    into the handle (promote_forwarded_rest_args, convert_byref_handle_params),
    but for one that cannot be -- a block's parameter, an ivar that is no
    handle, a global or class variable -- which goes over as a copy. */
-static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
+void refuse_forwarded_args(Compiler *c, int id, int t, const char *name) {
   const NodeTable *nt = c->nt;
-  int t = refuse_fwd_target(c, id, name);
   if (t < 0) return;
   Scope *m = &c->scopes[t];
   int a = nt_ref(nt, id, "arguments"), ac = 0;
@@ -25248,7 +25247,7 @@ static void refuse_string_copies(Compiler *c, int id) {
     return;
   }
   if (!dyn) refuse_yield_handle_args(c, id);
-  if (!dyn) refuse_forwarded_args(c, id, name);
+  if (!dyn) refuse_forwarded_args(c, id, refuse_fwd_target(c, id, name), name);
   if (!dyn) refuse_nonlocal_param_args(c, id, name);
   /* a method `define_method` defines takes an appended String as the handle
      (dyn_convert_params), and its callers are pulled in as a handle

@@ -9423,22 +9423,6 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                 int defc = -1; comp_writer_in_chain(c, rc, base, &defc);
                 int iv = comp_ivar_index(&c->classes[defc < 0 ? rc : defc], ivn);
                 TyKind ivt = iv >= 0 ? c->classes[defc < 0 ? rc : defc].ivar_types[iv] : TY_UNKNOWN;
-                /* A discarded writer assignment can store an existing
-                   handle behind a String read face. Value-position writers
-                   still need a return-alias proof and remain refused. Bare
-                   receivers cannot change the RHS slot before this read;
-                   a hoisted RHS must use its saved handle, never a reread. */
-                char held[1024]; int holds_handle = 0;
-                NodeKind rk = nt_kind(nt, recv), vk = nt_kind(nt, argv[0]);
-                if (ivt == TY_STRBUF && store_value_kind(c, argv[0]) == TY_STRING &&
-                    (rk == NK_LocalVariableReadNode || rk == NK_SelfNode) &&
-                    (vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode)) {
-                  int saved = ran_first_handle(argv[0]), overridden = 0;
-                  for (int o = 0; o < g_n_argov; o++)
-                    if (g_argov_node[o] == argv[0]) overridden = 1;
-                  if (saved >= 0) { snprintf(held, sizeof held, "_t%d", saved); holds_handle = 1; }
-                  else if (!overridden) holds_handle = strbuf_slot_ref(c, argv[0], held, sizeof held);
-                }
                 emit_indent(b, indent);
                 int fo = rc >= 0 && rc < c->nclasses &&
                          c->classes[rc].freeze_observed && !c->classes[rc].is_value_type;
@@ -9453,8 +9437,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                 else {
                   buf_puts(b, "("); emit_expr(c, recv, b); buf_printf(b, ")->iv_%s = ", iv_c(base));
                 }
-                if (holds_handle) buf_puts(b, held);
-                else if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
+                if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
                 /* nil into a scalar slot is that slot's sentinel, as `@x = nil` writes it */
                 else if (nt_kind(nt, argv[0]) == NK_NilNode && (ivt == TY_FLOAT || ivt == TY_INT))
                   buf_puts(b, ivt == TY_FLOAT ? "sp_float_nil()" : "SP_INT_NIL");

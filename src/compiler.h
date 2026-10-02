@@ -194,9 +194,7 @@ typedef struct {
                        (convert_byref_handle_params). POLY_LIFT_ZSUPER: a
                        bare `super` hands it to such a parameter and it can
                        hold a String, so the super lifts it as a marked read
-                       is (emit_zsuper_arg). POLY_LIFT_STORED: retained by a
-                       supported box store; demand identity, not mutation.
-                       (#6179) */
+                       is (emit_zsuper_arg). (#6179) */
   int str_append;   /* (TY_STRBUF) an append accumulator: appended to inside a
                        loop and never read inside one, so the growable handle
                        makes each `<<` amortized O(1) instead of copying the
@@ -244,7 +242,6 @@ typedef struct {
 } LocalVar;
 #define POLY_LIFT_APPENDED 1
 #define POLY_LIFT_ZSUPER   2
-#define POLY_LIFT_STORED   4
 
 typedef struct {
   char *name;       /* method name; NULL for the top-level scope */
@@ -682,9 +679,8 @@ typedef struct {
                           stored back before it is passed, so the callee's
                           append and the caller's variable are one String
                           (sp_poly_strbuf_lift). The node's TYPE is
-                          unchanged. Bits POLY_LIFT_APPENDED/STORED preserve
-                          the reason through alias propagation; emission
-                          tests nonzero for either identity demand. */
+                          unchanged. POLY_LIFT_APPENDED preserves this demand
+                          through alias propagation. */
   TyKind *nilnarrow; /* [node_cap] param-read narrowed by a `return .. if p.nil?`
                         guard: the read's non-nil type (codegen unboxes the poly
                         slot at the read site); TY_UNKNOWN = not narrowed */

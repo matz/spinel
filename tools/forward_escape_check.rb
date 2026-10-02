@@ -304,10 +304,9 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "#{name}: not an identity refusal (status #{status.exitstatus}): #{out}#{err}"
     end
   end
-  # A discarded writer can share a handle. Returning that assignment needs
-  # a separate caller alias proof: do not admit a copied result that mutates
-  # independently of the two fields. Test implicit and explicit exits alone.
-  ["other.notice = @notice", "return other.notice = @notice"].each_with_index do |tail, i|
+  # Shared-field writes need an alias proof even when their result is
+  # discarded. Do not add a per-route sharing exception for these stores.
+  ["other.notice = @notice", "return other.notice = @notice", "other.notice = @notice; nil"].each_with_index do |tail, i|
     source = File.join(dir, "writer_return_#{i}.rb")
     cfile = File.join(dir, "writer_return_#{i}.c")
     File.write(source, <<~RUBY)
@@ -322,20 +321,62 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       other = Notices.new(nil)
       first.notice << '!'
       returned = first.assign(other)
-      returned << '#'
+      #{i == 2 ? "other.notice" : "returned"} << '#'
       p first.notice, other.notice, returned
     RUBY
     out, err, status = Open3.capture3(RbConfig.ruby, source)
-    unless status.success? && out == "\"notice!#\"\n" * 3
+    expected = "\"notice!#\"\n" * 2 + (i == 2 ? "nil\n" : "\"notice!#\"\n")
+    unless status.success? && out == expected
       failures << "writer_return_#{i}: invalid CRuby reduction: #{out.inspect} #{err}"
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
     unless status.exitstatus == 1 && (out + err).include?("an attribute writer given a String") &&
            (out + err).include?("nothing written") && !File.exist?(cfile)
-      failures << "writer_return_#{i}: unsafe value writer admitted: #{out}#{err}"
+      failures << "writer_return_#{i}: unsafe writer admitted: #{out}#{err}"
+    end
+  end
+  # An RBS-seeded Hash must not enter an unrelated shared-String setter arm.
+  # Keep valid String and nil calls too: excluding every arm is not a fix.
+  source = File.join(dir, "shared_hash_arm.rb")
+  signature = File.join(dir, "shared_hash_arm.rbs")
+  executable = File.join(dir, "shared_hash_arm")
+  File.write(signature, "class StringSink\n  def []=: (Symbol key, String? value) -> void\nend\n")
+  File.write(source, <<~RUBY)
+    class StringSink
+      attr_reader :value
+      def initialize = @value = nil
+      def []=(key, value)
+        @value = value
+        value << "!" unless value.nil?
+        nil
+      end
+    end
+    def receiver(flag) = flag ? {} : StringSink.new
+    hash = receiver(true)
+    hash[:payload] = { "nested" => 37 }
+    p hash[:payload]["nested"]
+    sink = receiver(false)
+    text = +"abc"
+    alias_text = text
+    sink[:value] = text
+    p sink.value, text, alias_text
+    sink[:value] = nil
+    p sink.value
+  RUBY
+  expected = "37\n" + "\"abc!\"\n" * 3 + "nil\n"
+  out, err, status = Open3.capture3(RbConfig.ruby, source)
+  if !status.success? || out != expected
+    failures << "shared_hash_arm: invalid CRuby reduction: #{out.inspect} #{err}"
+  else
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "--rbs", signature, "-o", executable)
+    if !status.success?
+      failures << "shared_hash_arm: native control refused: #{out}#{err}"
+    else
+      out, err, status = Open3.capture3(timeout, "30", executable)
+      failures << "shared_hash_arm: native control differs: #{out.inspect} #{err}" unless status.success? && out == expected
     end
   end
 end
 abort failures.join("\n") unless failures.empty?
-puts "forward-escape-check: #{cases.length - native_controls.length + 2} independent CRuby-validated refusals, #{native_controls.length} native readonly/identity controls pass"
+puts "forward-escape-check: #{cases.length - native_controls.length + 3} independent CRuby-validated refusals, #{native_controls.length + 1} native readonly/identity controls pass"

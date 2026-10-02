@@ -17437,17 +17437,16 @@ static int poly_var_may_hold_string(Compiler *c, const HandleArgTab *hat,
   return 0;
 }
 
-/* Why a POLY variable needs its identity lifted: mutation and storage
-   propagate through aliases independently; storage is not an append. */
-static int poly_var_lift_reason(Compiler *c, SbMutTab *lifted, const char *vn, Scope *vs) {
-  int why = strbuf_any_str_mut(c, vn, vs) ? POLY_LIFT_APPENDED : 0;
+/* Is POLY variable `vn` of scope `vs` appended to in place, directly or
+   through a lifted read handed to an appending parameter? */
+static int poly_var_appended(Compiler *c, SbMutTab *lifted, const char *vn, Scope *vs) {
+  if (strbuf_any_str_mut(c, vn, vs)) return 1;
   signed char *v = sb_mut_tab_slot(lifted, vn, (int)(vs - c->scopes), 0);
-  return why | (v ? *v : 0);
+  return v && *v == 1;
 }
 /* Lift read `a` of a POLY variable that can hold a String (poly_strbuf_lift);
-   why distinguishes a retained identity from an append. Either demands the
-   caller's handle, but only an append makes dynamic block targets mutators. */
-static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted, int a, int why) {
+   its parameter's callers must hand over the same handle on the next round. */
+static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted, int a) {
   const NodeTable *nt = c->nt;
   if (a < 0) return 0;
   /* A POLY ivar is lifted the same way, its slot stored back (emit_expr's
@@ -17457,8 +17456,8 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
     Scope *as = comp_scope_of(c, a);
     if (!as || comp_ntype(c, a) != TY_POLY) return 0;
     if (as->class_id >= 0 && !as->is_cmethod && comp_ty_value_obj(c, ty_object(as->class_id))) return 0;
-    int changed = (c->poly_strbuf_lift[a] & why) != why;
-    c->poly_strbuf_lift[a] |= why;
+    int changed = !c->poly_strbuf_lift[a];
+    c->poly_strbuf_lift[a] = 1;
     return changed;
   }
   if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
@@ -17466,11 +17465,11 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
   if (!lv || lv->type != TY_POLY || !poly_var_may_hold_string(c, hat, vn, vs, 0)) return 0;
-  int changed = (c->poly_strbuf_lift[a] & why) != why;
-  c->poly_strbuf_lift[a] |= why;
-  if (lifted) *sb_mut_tab_slot(lifted, vn, (int)(vs - c->scopes), 1) |= why;
-  if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0 && (lv->poly_lift & why) != why) {
-    lv->poly_lift |= why;
+  int changed = !c->poly_strbuf_lift[a];
+  c->poly_strbuf_lift[a] = 1;
+  if (lifted) sb_mut_tab_note(lifted, vn, (int)(vs - c->scopes), 1);
+  if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0 && !(lv->poly_lift & POLY_LIFT_APPENDED)) {
+    lv->poly_lift |= POLY_LIFT_APPENDED;
     changed = 1;
   }
   return changed;
@@ -17508,7 +17507,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
     if (!c->poly_strbuf_lift[r]) continue;
     const char *rn = nt_str(nt, r, "name");
     Scope *rs = rn ? comp_scope_of(c, r) : NULL;
-    if (rs) *sb_mut_tab_slot(&lifted, rn, (int)(rs - c->scopes), 1) |= c->poly_strbuf_lift[r];
+    if (rs) sb_mut_tab_note(&lifted, rn, (int)(rs - c->scopes), 1);
   }
   static const NodeKind wkinds[3] = { NK_LocalVariableWriteNode, NK_LocalVariableOrWriteNode,
                                        NK_LocalVariableAndWriteNode };
@@ -17517,7 +17516,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
     /* `y = x`, `y ||= x`, and a chain `z = y = x`, whose every name holds
        the value of the innermost read */
     for (int wk = 0; wk < 3; wk++) NT_FOREACH_KIND(nt, wkinds[wk], w) {
-      int v = w, why = 0, poly = 1;
+      int v = w, app = 0, poly = 1;
       while (poly && v >= 0) {
         NodeKind vk = nt_kind(nt, v);
         if (vk == NK_ParenthesesNode) {
@@ -17535,12 +17534,12 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
         Scope *vs = vn ? comp_scope_of(c, v) : NULL;
         LocalVar *vl = vs ? scope_local(vs, vn) : NULL;
         poly = vl && vl->type == TY_POLY;
-        if (poly) why |= poly_var_lift_reason(c, &lifted, vn, vs);
+        if (poly && poly_var_appended(c, &lifted, vn, vs)) app = 1;
         if (vk == NK_LocalVariableReadNode) break;
         v = nt_ref(nt, v, "value");
       }
-      if (!poly || !why || v < 0 || v == w) continue;
-      if (lift_poly_read(c, hat, &lifted, v, why)) round = changed = 1;
+      if (!poly || !app || v < 0 || v == w) continue;
+      if (lift_poly_read(c, hat, &lifted, v)) round = changed = 1;
     }
     /* `def yl(v) = yield(v)` called `yl(x) { |t| t << s }`: the block's
        parameter is another name for the caller's variable. A `b.call(v)` on
@@ -17565,9 +17564,8 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
           const char *bp = block_param_name(c, blk, k);
           Scope *bs = bp ? comp_scope_of(c, blk) : NULL;
           LocalVar *t = bs ? scope_local(bs, bp) : NULL;
-          int why = t && t->type == TY_POLY ? poly_var_lift_reason(c, &lifted, bp, bs) : 0;
-          if (!why) continue;
-          if (lift_poly_read(c, hat, &lifted, arg_layout_param_node(c, m, u, pj, NULL), why))
+          if (!t || t->type != TY_POLY || !poly_var_appended(c, &lifted, bp, bs)) continue;
+          if (lift_poly_read(c, hat, &lifted, arg_layout_param_node(c, m, u, pj, NULL)))
             round = changed = 1;
         }
       }
@@ -17640,21 +17638,6 @@ static int convert_byref_handle_params(Compiler *c,
       if (!m2->pnames[pj]) continue;
       LocalVar *pp = scope_local(m2, m2->pnames[pj]);
       if (!pp) continue;
-      /* A bare POLY box retained by an Array store must carry the caller's
-         handle too. Lift before the store and propagate the same existing
-         parameter/call-site contract; narrowed byte reads are not boxes. */
-      if (pp->is_param && pp->type == TY_POLY) {
-        for (int u = comp_scall_first(c, mi2); u >= 0; u = comp_scall_next(c, u)) {
-          int n = 0, a = nt_ref(nt, u, "arguments");
-          const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-          int start = fwd_array_store_start(c, u, n);
-          for (int i = start; i >= 0 && i < n; i++) {
-            if (nt_kind(nt, args[i]) != NK_LocalVariableReadNode || comp_ntype(c, args[i]) != TY_POLY ||
-                comp_scope_of(c, args[i]) != m2 || !sp_streq(nt_str(nt, args[i], "name"), pp->name)) continue;
-            if (lift_poly_read(c, hat, NULL, args[i], POLY_LIFT_STORED)) changed = 1;
-          }
-        }
-      }
       int is_handle = (pp->is_param && pp->type == TY_STRBUF && pp->str_shared);
       /* A POLY parameter the callee mutates in place takes the same pull: the
          call sites disagreed on the argument's shape (a reader here, a hash
@@ -17667,7 +17650,6 @@ static int convert_byref_handle_params(Compiler *c,
                        an_poly_param_yielded_lent(c, mi2, pj) ||
                        fwd_poly_param_handed_on(c, mi2, pj, &readonly)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
-      int poly_stored = pp->is_param && pp->type == TY_POLY && (pp->poly_lift & POLY_LIFT_STORED);
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
          never passed through the byref ABI this pass converts, so it is
@@ -17675,7 +17657,7 @@ static int convert_byref_handle_params(Compiler *c,
          keyword's handle stayed in the callee's. */
       int strbuf_mut = (pp->is_param && pp->type == TY_STRBUF && !pp->str_shared &&
                         an_param_mutated_in_place(c, mi2, pj));
-      if (!pp->byref_out && !is_handle && !poly_mut && !poly_stored && !strbuf_mut) continue;
+      if (!pp->byref_out && !is_handle && !poly_mut && !strbuf_mut) continue;
       /* one pass over this method's call sites: detect a handle arg, and
          (once converted) pull plain-local args into the shared set */
       /* A POLY parameter the callee mutates in place boxes whatever it is
@@ -17683,7 +17665,7 @@ static int convert_byref_handle_params(Compiler *c,
          local has to hand the handle over, whether or not another already
          does -- `m(v)` into `def m(p) = p << "x"` widened by `m([])`, or by
          the boxed elements `m(*[], v)` gathers, lost the append. */
-      int saw_handle = is_handle || poly_mut || poly_stored;
+      int saw_handle = is_handle || poly_mut;
       for (int e = hat->head[mi2]; e >= 0; e = hat->enext[e]) {
         int u = hat->enode[e];
         int ua = arg_layout_param_node(c, m2, u, pj, NULL);
@@ -17745,8 +17727,7 @@ static int convert_byref_handle_params(Compiler *c,
              much as one it appends to itself, so its callers are pulled in
              on the next round (poly_lift). */
           if (alv && alv->type == TY_POLY) {
-            int why = poly_stored && !poly_mut ? POLY_LIFT_STORED : POLY_LIFT_APPENDED;
-            if (lift_poly_read(c, hat, NULL, an2, why)) changed = 1;
+            if (lift_poly_read(c, hat, NULL, an2)) changed = 1;
             continue;
           }
           /* The argument is this method's OWN parameter, being passed on:
@@ -17786,7 +17767,7 @@ static int convert_byref_handle_params(Compiler *c,
         else if (nt_kind(nt, an2) == NK_InstanceVariableReadNode && comp_ntype(c, an2) == TY_POLY) {
           /* a POLY ivar boxes a plain String as a copy too: its read is
              lifted as a POLY local's is */
-          if (lift_poly_read(c, hat, NULL, an2, poly_stored && !poly_mut ? POLY_LIFT_STORED : POLY_LIFT_APPENDED)) changed = 1;
+          if (lift_poly_read(c, hat, NULL, an2)) changed = 1;
         }
         else if (nt_kind(nt, an2) == NK_InstanceVariableReadNode) {
           const char *vn2 = nt_str(nt, an2, "name");
@@ -20042,7 +20023,7 @@ static int dyn_lift_poly_arg(Compiler *c, int n, int k, int a) {
     DynReach r; memset(&r, 0, sizeof r);
     dyn_reach_value(c, nt_ref(nt, n, "receiver"), k, 0, &r);
     if (r.unlifted || (!r.app && !(r.unknown && dyn_any_appender(c)))) return 0;
-    return lift_poly_read(c, NULL, NULL, a, POLY_LIFT_APPENDED);
+    return lift_poly_read(c, NULL, NULL, a);
   }
   const char *vn = nt_str(nt, a, "name");
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
@@ -20373,8 +20354,8 @@ static int yield_splice_site(Compiler *c, int y, int pass, ALocalAliases *aliase
         yield_poly_need_mark(c, ua);
         /* a POLY variable there is lifted into the handle, as at a call
            appending to it (lift_poly_alias_reads), and a POLY ivar too */
-        if (nt_kind(nt, ua) == NK_LocalVariableReadNode) changed |= dyn_pull_arg(c, ua, 1) | lift_poly_read(c, NULL, NULL, ua, POLY_LIFT_APPENDED);
-        else if (lift_poly_read(c, NULL, NULL, ua, POLY_LIFT_APPENDED)) changed = 1;
+        if (nt_kind(nt, ua) == NK_LocalVariableReadNode) changed |= dyn_pull_arg(c, ua, 1) | lift_poly_read(c, NULL, NULL, ua);
+        else if (lift_poly_read(c, NULL, NULL, ua)) changed = 1;
         /* a String value written in the call (`w(+"s") { ... }`) is boxed
            as a fresh handle, so the block's append grows the value the
            method goes on to read */
@@ -20583,7 +20564,7 @@ static int splat_pull_items(Compiler *c, const int *iv, int n, int inl, int dept
       TyKind at = ak == NK_LocalVariableReadNode ? comp_ntype(c, iv[k]) : TY_UNKNOWN;
       if (at == TY_STRING || at == TY_STRBUF) changed |= dyn_pull_arg(c, iv[k], inl);
       /* a POLY one is lifted, and a parameter pulls its callers in */
-      else if (at == TY_POLY) changed |= lift_poly_read(c, NULL, NULL, iv[k], POLY_LIFT_APPENDED);
+      else if (at == TY_POLY) changed |= lift_poly_read(c, NULL, NULL, iv[k]);
       continue;
     }
     int x = nt_ref(nt, iv[k], "expression");
@@ -21673,7 +21654,7 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeep
        occurrence-narrowed String read still copies bytes into a container. */
     if (p && ((p->type == TY_STRBUF && p->str_shared && c->strbuf_box[node]) ||
         (p->type == TY_POLY && ((comp_ntype(c, node) == TY_POLY &&
-         (p->str_shared || (p->poly_lift & (POLY_LIFT_APPENDED | POLY_LIFT_STORED)))) ||
+         (p->str_shared || (p->poly_lift & POLY_LIFT_APPENDED))) ||
          (c->strbuf_box[node] && c->poly_strbuf_lift[node]))))) return 0;
     return kept == FWD_MODE_ALIAS && comp_ntype(c, node) == TY_POLY ? FWD_KEEP_LOCAL : FWD_KEEP_COPY;
   }

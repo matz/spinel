@@ -26102,6 +26102,16 @@ int splat_local_sure_lit(Compiler *c, int x) {
   }
   return reads == seen ? lit : -1;
 }
+/* A binary operator takes its one operand whatever the receiver, and no
+   block moves that count. A splat into one -- `a.==(*rest)`, an operator
+   arm of `public_send(*args, &block)` -- passed the array itself as the
+   operand: == answered false and + raised TypeError. */
+static int splat_binary_operator(const char *name) {
+  static const char *const ops[] = { "==", "!=", "eql?", "equal?", "===", "=~", "<=>",
+    "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", NULL };
+  for (int i = 0; ops[i]; i++) if (sp_streq(name, ops[i])) return 1;
+  return 0;
+}
 /* How many arguments the builtin requires, for a splat whose length only the
    run time knows and that splat_dispatch_on_length declined (a block, `&.`, a
    user method of the name that cannot take every count). Only the required
@@ -26129,6 +26139,7 @@ static int splat_builtin_arity(const char *name) {
   };
   for (int i = 0; tab[i].name; i++)
     if (sp_streq(name, tab[i].name)) return tab[i].arity;
+  if (splat_binary_operator(name)) return 1;
   return -1;
 }
 /* Whether some user method of this name could not take `n` positional
@@ -26194,6 +26205,12 @@ static int splat_builtin_range(const char *name, int *lo, int *hi, int *variadic
       if (variadic) *variadic = tab[i].variadic;
       return 1;
     }
+  if (splat_binary_operator(name)) {
+    if (lo) *lo = 1;
+    if (hi) *hi = 1;
+    if (variadic) *variadic = 0;
+    return 1;
+  }
   return 0;
 }
 /* A node that can be copied into each arm of the dispatch without being
@@ -26228,7 +26245,10 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   const char *cnm = nt_str(nt, id, "name");
   int lo, hi, variadic;
   if (!cnm || !splat_builtin_range(cnm, &lo, &hi, &variadic)) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
+  /* a block stays with the call: an operator's one arm takes it as it
+     stands, which no other name's several arms can share */
+  int oblk = nt_ref(nt, id, "block");
+  if (oblk >= 0 && !splat_binary_operator(cnm)) return 0;
   /* insert(i, *objs) spreads at run time (emit_array_splat_mutator) */
   if (sp_streq(cnm, "insert") && sp_at > 0) return 0;
   const char *cop = nt_str(nt, id, "call_operator");
@@ -26264,6 +26284,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     }
     if (hi > 8) return 0;
   }
+  if (oblk >= 0 && lo != hi) return 0;
   int fixed = argc - 1;
   int base = nt->count;
   int encl = c->nscope[id];
@@ -26435,7 +26456,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     if (nt_str(nt, id, "vis_enforce")) nt_node_set_str(nt, cl, "vis_enforce", "1");
     nt_node_set_int(nt, cl, "dyn_arm", nt_int(nt, id, "dyn_arm", 0));
     nt_node_set_ref(nt, cl, "receiver", nt_clone_subtree(nt, recv));
-    nt_node_set_ref(nt, cl, "block", -1);
+    nt_node_set_ref(nt, cl, "block", oblk);
     int an = -1;
     if (m > 0) {
       an = nt_new_node(nt, "ArgumentsNode");
@@ -26525,6 +26546,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     int listed = 0;
     for (int j = 0; fixed_arity_builtins[j]; j++)
       if (sp_streq(cnm, fixed_arity_builtins[j])) { listed = 1; break; }
+    if (splat_binary_operator(cnm)) listed = 1;
     if (!listed && !splat_builtin_range(cnm, NULL, NULL, NULL)) continue;
     /* ...but the name has to BE the builtin. A receiverless call to a
        top-level `def count(*args)` is the user's own variadic method, and
@@ -26579,7 +26601,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
       if (sp_streq(cnm, "insert") && sp_at > 0) continue;
       /* A block moves the required count (`sub(pat) { .. }` takes one
          argument, not two), so leave those alone. */
-      n =nt_ref(nt, id, "block") >= 0 ? -1 : splat_builtin_arity(cnm);
+      n = nt_ref(nt, id, "block") >= 0 && !splat_binary_operator(cnm) ? -1 : splat_builtin_arity(cnm);
       /* slice has no arity to expand to on purpose (see the table). Leave the
          splat as it stands rather than refusing the program: Hash#slice's
          emitter iterates it, which is what the call means. */

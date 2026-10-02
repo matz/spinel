@@ -21866,7 +21866,7 @@ static int fwd_string_returns(Compiler *c, int mi, const char *pn, int node, int
    Bare, laid-out call arguments are followed by the forwarding walk. */
 enum { FWD_KEEP_LOCAL = 1, FWD_KEEP_COPY = 2, FWD_KEEP_INCOMPLETE = 4,
        FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16, FWD_KEEP_INDEX_COPY = 32,
-       FWD_KEEP_CAPTURE_COPY = 64 };
+       FWD_KEEP_BREAK_COPY = 64 };
 typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
@@ -21961,7 +21961,6 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
     if (kept == FWD_MODE_BOX && p && p->type == TY_POLY &&
         c->nilnarrow[node] == TY_UNKNOWN && comp_ntype(c, node) == TY_POLY)
       return FWD_KEEP_BOX;
-    if (kept == FWD_MODE_CAPTURE) return FWD_KEEP_COPY | FWD_KEEP_CAPTURE_COPY;
     return kept == FWD_MODE_ALIAS && comp_ntype(c, node) == TY_POLY ? FWD_KEEP_LOCAL : FWD_KEEP_COPY;
   }
   /* A captured read is a retention even when its immediate use only reads
@@ -22268,7 +22267,8 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
     }
     synchronous = predicate && (sp_streq(predicate, "any?") || sp_streq(predicate, "all?") ||
                   sp_streq(predicate, "none?") || sp_streq(predicate, "one?")) &&
-                  ty_is_array(comp_ntype(c, receiver)) && fwd_builtin(c, "Array", predicate);
+                  ty_is_array(comp_ntype(c, receiver)) && fwd_builtin(c, "Array", predicate) &&
+                  !call_breaks(c, node);
   }
   free(targets.v);
   /* A builtin predicate consumes a literal block's result as truthiness;
@@ -22294,6 +22294,7 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
   int captured = fwd_param_kept(c, f, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
                                  synchronous ? block_mode : FWD_MODE_CAPTURE, appended, depth + 1);
   if (captured && unknown_defaults) captured |= FWD_KEEP_INCOMPLETE;
+  if ((captured & FWD_KEEP_COPY) && call_breaks(c, node)) captured |= FWD_KEEP_BREAK_COPY;
   return retained | captured;
 }
 
@@ -22622,10 +22623,10 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, Sb
   /* FORWARDED records an actual edge, including self-edges and separately
      owned rest queries, not merely a second vertex. */
   /* Direct-root retention keeps its existing emitter contract. Copied
-     mutator receivers, indexed values and captures are unsafe even without
-     a forwarding edge; captures also cover a break wrapper's return value.
+     mutator receivers, indexed values and break-wrapper results are unsafe
+     even without a forwarding edge.
      A copied root handed onward is unsafe through that edge as before. */
-  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY | FWD_KEEP_CAPTURE_COPY)) ||
+  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY | FWD_KEEP_BREAK_COPY)) ||
       ((f->seen.val[0] & FWD_VISIT_FORWARDED) && (appended || (root_kept & FWD_KEEP_COPY)))))
     f->taint |= FWD_TAINT_ESCAPE;
   if (root_kept && f->seen.n) f->seen.val[0] |= FWD_VISIT_ROOT_KEPT;

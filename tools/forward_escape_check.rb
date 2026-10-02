@@ -382,16 +382,21 @@ def add_io_certificate_cases(certificate_cases)
   # A break value, unlike an ordinary each_line block result, is the call's
   # result. Both a nested loop break and a non-tail File.open break must keep
   # the old capture proof until break-value flow is modeled independently.
-  { "each_line" => "file.each_line { break value }",
-    "open" => "break value; nil" }.each do |name, body|
+  breaks = { "each_line" => "file.each_line { break value }", "open" => "break value; nil" }
+  %w[any? all? none? one?].each do |method|
+    breaks["predicate_#{method}"] = "[0].#{method} { break value; true }"
+  end
+  breaks.each do |name, body|
+    entry = name.start_with?("predicate_") ? "relay" : "leak"
     certificate_cases["io_break_value_#{name}"] = [io_setup + <<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
       def leak(path, value)
         File.open(path) { |file| #{body} }
       end
-      leak(path, 1)
+      def relay(path, value) = leak(path, value)
+      #{entry}(path, 1)
       text = +"ice"
       other = text
-      leak(path, text) << "!"
+      #{entry}(path, text) << "!"
       p text, other
       File.delete(path)
     RUBY

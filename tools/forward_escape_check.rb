@@ -1192,6 +1192,41 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     h[:k][0] << "!"
     p s, other, h[:k][0]
   RUBY
+  { "plain" => ["{}", "h[:k] = [value]"],
+    "store" => ["{}", "h.store(:k, [value])"],
+    "or" => ["{}", "h[:k] ||= [value]"],
+    "and" => ["{ k: [] }", "h[:k] &&= [value]"],
+    "literal" => ["{ k: [value] }", "nil"] }.each do |name, (initial, write)|
+    certificate_cases["hash_#{name}_nested_alias"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n\"ice!\"\n", false]
+      def stash(value)
+        h = #{initial}
+        #{write}
+        h
+      end
+      stash(1)
+      s = +"ice"
+      other = s
+      h = stash(s)
+      h[:k][0] << "!"
+      p s, other, h[:k][0]
+    RUBY
+  end
+  # Hash duplicates mutable String keys. That is correct Ruby semantics, not
+  # copied-value retention: the stored-value rule must not reject a key read.
+  { "literal" => "h = { key => [] }", "plain" => "h = {}; h[key] = []",
+    "or" => "h = {}; h[key] ||= []" }.each do |name, body|
+    certificate_cases["hash_mutable_key_#{name}"] = [<<~RUBY, "\"ice!\"\n\"ice\"\n", true]
+      def stash(key)
+        #{body}
+        h
+      end
+      stash(1)
+      key = +"ice"
+      h = stash(key)
+      key << "!"
+      p key, h.keys[0]
+    RUBY
+  end
   # An Integer operand does not make String#<< readonly. Mixed Hash values
   # must invalidate the non-String fact even when the container arm is safe.
   certificate_cases["hash_boxed_integer_append"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]

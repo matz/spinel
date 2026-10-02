@@ -22035,18 +22035,22 @@ static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int 
   if (k == NK_CallNode) return fwd_call_kept(c, f, mi, pn, node, kept, appended, depth);
 children:;
   int retained = 0;
+  /* Only the stored value creates this indexed alias. Hash keys have their
+     own builtin copy/freeze contract; the receiver is not the stored input. */
+  int stored = (k == NK_AssocNode || k == NK_IndexOrWriteNode ||
+                k == NK_IndexAndWriteNode || k == NK_IndexOperatorWriteNode) ? nt_ref(nt, node, "value") : -1;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++)
-    retained |= fwd_param_kept(c, f, mi, pn, nt_ref_at(nt, node, i), kept, appended, depth + 1);
+  for (int i = 0; i < nr; i++) {
+    int child = nt_ref_at(nt, node, i);
+    int part = fwd_param_kept(c, f, mi, pn, child, kept, appended, depth + 1);
+    retained |= part;
+    if (child == stored && (part & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
+  }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
     for (int j = 0; j < n; j++) retained |= fwd_param_kept(c, f, mi, pn, ids[j], kept, appended, depth + 1);
   }
-  /* An indexed store can hide the copied input in a nested container. Unlike
-     an ordinary local alias, this needs proof even at a direct query root. */
-  if ((k == NK_HashNode || k == NK_IndexOrWriteNode || k == NK_IndexAndWriteNode || k == NK_IndexOperatorWriteNode) &&
-      (retained & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
   return retained;
 }
 
@@ -22153,6 +22157,9 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
   int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
                fwd_builtin(c, "Array", nm) && fwd_builtin(c, "String", "==");
   int store_start = fwd_array_store_start(c, node, n);
+  int index_store = n == 2 && nm &&
+                    ((ty_is_hash(rt) && (sp_streq(nm, "[]=") || sp_streq(nm, "store"))) ||
+                     ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "[]=")));
   /* Object identity comparison retains neither operand. For a user
      receiver, verify its actual chain too, including inherited overrides. */
   const char *identity_owner = ty_is_object(rt) ? c->classes[ty_object_class(rt)].name : "Object";
@@ -22218,10 +22225,12 @@ static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int n
          conversions and ternaries are conservatively retained, not exempted
          merely because their containing argument has a destination. */
       if (forwarded && !rest && nt_kind(nt, arg) != NK_LocalVariableReadNode) forwarded = 0;
-      retained |= fwd_param_kept(c, f, mi, pn, arg, forwarded || consume ? FWD_MODE_DISCARD :
-                                !keyword && store_start >= 0 && i >= store_start ?
-                                (rt == TY_POLY_ARRAY && nt_kind(nt, arg) == NK_LocalVariableReadNode ?
-                                 FWD_MODE_BOX : FWD_MODE_VALUE) : FWD_MODE_UNKNOWN, appended, depth + 1);
+      int part = fwd_param_kept(c, f, mi, pn, arg, forwarded || consume ? FWD_MODE_DISCARD :
+                              !keyword && store_start >= 0 && i >= store_start ?
+                              (rt == TY_POLY_ARRAY && nt_kind(nt, arg) == NK_LocalVariableReadNode ?
+                               FWD_MODE_BOX : FWD_MODE_VALUE) : FWD_MODE_UNKNOWN, appended, depth + 1);
+      retained |= part;
+      if (index_store && i == 1 && !keyword && (part & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
     }
   }
   int block = nt_ref(nt, node, "block"), synchronous = 0;

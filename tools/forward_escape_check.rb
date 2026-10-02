@@ -104,6 +104,19 @@ RUBY
     Child.new.store(0)
   RUBY
 end
+cases["super_block_escape"] = ["Child.new.store(t); nil", "", "abc!", <<~RUBY]
+  class Parent
+    def store(unused)
+      items = yield
+      items[0] << '!' if items[0].is_a?(String)
+      nil
+    end
+  end
+  class Child < Parent
+    def store(value) = super(0) { [value] }
+  end
+  Child.new.store(0)
+RUBY
 %w[each_byte each_char each_line].each do |method|
   cases["iterator_return_#{method}"] = ["t.#{method} { |element| element }", "result << '!'", "abc!"]
 end

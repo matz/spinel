@@ -21691,7 +21691,8 @@ static int fwd_super_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, i
       retained |= fwd_param_kept(c, f, mi, pn, arg, forwarded ? FWD_MODE_DISCARD : FWD_MODE_UNKNOWN, appended, depth + 1);
     }
   }
-  return retained;
+  return retained | fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "block"),
+                                    FWD_MODE_CAPTURE, appended, depth + 1);
 }
 static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;

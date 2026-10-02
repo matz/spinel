@@ -24933,10 +24933,9 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
     if (arg < 0) continue;
     int shared;
     const char *kind = strvar_arg(c, arg, &shared);
-    TyKind at = comp_ntype(c, arg);
-    /* A box can still contain a String. Escape proofs precede the older
-       concrete-variable diagnostic/shared-input exemptions. */
-    if (!kind && at != TY_POLY && at != TY_UNKNOWN) continue;
+    /* Already-POLY actuals pass their box, not copied String bytes. A
+       String-narrowed POLY local does qualify through its occurrence type. */
+    if (!kind) continue;
     const char *pn = NULL, *thr = NULL;
     int r, pulled;
     if (rest) {
@@ -24952,6 +24951,7 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       pulled = r > 0;
     }
     if (r == FWD_ESCAPE) {
+      TyKind at = comp_ntype(c, arg);
       if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
         char msg[512];
         snprintf(msg, sizeof msg,
@@ -24962,7 +24962,6 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       }
       continue;
     }
-    if (!kind) continue;
     if (ctor_arg_shared(c, arg, 0)) continue;
     /* a local or a parameter the passes pulled into the handle goes over as
        it; one past the 16 positions, or behind an answer cut short, was not */

@@ -25066,7 +25066,7 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
     const char *kind = strvar_arg(c, arg, &shared);
     /* Already-POLY actuals pass their box, not copied String bytes. A
        String-narrowed POLY local does qualify through its occurrence type. */
-    if (!kind) continue;
+    if (!kind && comp_ntype(c, arg) != TY_STRING) continue;
     const char *pn = NULL, *thr = NULL;
     int r, pulled;
     if (rest) {
@@ -25081,6 +25081,10 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       thr = "a parameter it hands on";
       pulled = r > 0;
     }
+    /* A String-valued expression can create the same mutable plain box as a
+       variable. A preserving store still needs immutable input; freshness
+       alone does not preserve later mutations through container reads. */
+    if (!kind && r != FWD_RETAINS_BOX) continue;
     if (r == FWD_RETAINS_BOX && fwd_actual_frozen(c, arg)) continue;
     if (r == FWD_ESCAPE || r == FWD_RETAINS_BOX) {
       TyKind at = comp_ntype(c, arg);

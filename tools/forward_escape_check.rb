@@ -575,20 +575,6 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "boxed_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
       next
     end
-    # Overrides returning self already use a shared handle; they must preserve
-    # that identity rather than being mistaken for a fresh builtin result.
-    if name.start_with?("case_conversion_override_")
-      executable = File.join(dir, "boxed_#{name}")
-      out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
-      unless status.success?
-        failures << "boxed_#{name}: native override control refused: #{out}#{err}"
-        next
-      end
-      out, err, status = Open3.capture3(timeout, "30", executable)
-      failures << "boxed_#{name}: override lost caller identity: #{out.inspect} #{err}" unless status.success? && out == "\"abc!\"\n"
-      native_passes += 1
-      next
-    end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
     unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
            (out + err).include?("nothing written") && !File.exist?(cfile)

@@ -35,6 +35,15 @@ cases = {
   "parenthesized" => ["ident((t)) << '!'", "", "abc!"]
 }
 
+# Non-plain writes must retain their input even in statement position.
+{ "ivar_or_write" => "@held ||= t; @held << '!'",
+  "global_or_write" => "$held ||= t; $held << '!'",
+  "index_or_write" => "h = {}; h[:k] ||= t; h[:k] << '!'",
+  "multi_write" => "a, b = t; a << '!'",
+  "pattern_capture" => "case t; in String => a; a << '!'; end" }.each do |name, body|
+  cases[name] = [body, "", "abc!"]
+end
+
 # The same stores with mutators that previously produced bad C in a narrowed
 # body. Keeping them in separate programs prevents one rejection hiding another.
 { "assign" => "[0] = '!'", "concat" => ".concat('!')", "insert" => ".insert(3, '!')",
@@ -623,6 +632,219 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       failures << "shared_hash_arm: native control differs: #{out.inspect} #{err}" unless status.success? && out == expected
       native_passes += 1
     end
+  end
+
+  # Matz's three alias shapes at depth 0, 3 and 7. Seed with both nil and
+  # Integer: the former can infer nullable String rather than POLY. Every
+  # accepted program must preserve BOTH caller aliases; only the explicit
+  # identity refusal (and no C) is an alternative. dup is always native.
+  shapes = {
+    "local_alias" => ["u = t; u << '!'", "abc!"],
+    "indirect_alias" => ["u = t; v = u; v.replace('Z')", "Z"],
+    "ternary_alias" => ["c = ARGV.empty?; (c ? t : t) << '!'", "abc!"],
+    "dup" => ["copy = t.dup << '!'; p copy", "abc"]
+  }
+  shapes.each do |name, (body, want)|
+    [0, 3, 7].each do |depth|
+      %w[nil 1].each do |seed|
+        label = "#{name}_depth#{depth}_seed#{seed}"
+        source = File.join(dir, "#{label}.rb")
+        cfile = File.join(dir, "#{label}.c")
+        executable = File.join(dir, label)
+        methods = (0...depth).map { |i| "def hop#{i}(t) = #{i + 1 == depth ? 'terminal' : "hop#{i + 1}"}(t)" }
+        entry = depth.zero? ? "terminal" : "hop0"
+        File.write(source, <<~RUBY)
+          def terminal(t)
+            return nil unless t.is_a?(String)
+            #{body}
+            nil
+          end
+          #{methods.join("\n")}
+          #{entry}(#{seed})
+          text = +'abc'
+          other = text
+          #{entry}(text)
+          p text, other
+        RUBY
+        expected = (name == "dup" ? "\"abc!\"\n" : "") + "#{want.inspect}\n" * 2
+        out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+        unless status.success? && out == expected
+          failures << "#{label}: invalid CRuby reduction: #{out.inspect} #{err}"
+          next
+        end
+        out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+        if status.exitstatus == 1 && name != "dup" &&
+           (out + err).include?("through a parameter it hands on escapes") &&
+           (out + err).include?("nothing written") && !File.exist?(cfile)
+          refusals += 1
+          next
+        end
+        unless status.success? && File.exist?(cfile)
+          failures << "#{label}: neither correct native path nor identity refusal: #{out}#{err}"
+          next
+        end
+        out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+        if status.success?
+          out, err, status = Open3.capture3(timeout, "30", executable)
+          if status.success? && out == expected
+            native_passes += 1
+            next
+          end
+        end
+        failures << "#{label}: native alias/copy result differs: #{out.inspect} #{err}"
+      end
+    end
+  end
+
+  # Shared += needs a rebinding proof, not an in-place append. These isolated
+  # shapes test the actual statement arm, without an earlier Array refusal.
+  { "plain" => ["'!'", "oldx!", "oldx"],
+    "rhs_rebind" => ["(text = +'new'; '!')", "oldx!", "oldx"],
+    "rhs_mutate" => ["(text << '?'; '!')", "oldx?!", "oldx?"] }.each do |name, (rhs, result, caller)|
+    source = File.join(dir, "shared_rebind_#{name}.rb")
+    cfile = File.join(dir, "shared_rebind_#{name}.c")
+    File.write(source, <<~RUBY)
+      def mutate(text)
+        text << 'x'
+        text += #{rhs}
+        p text
+      end
+      text = +'old'
+      other = text
+      mutate(text)
+      p text, other
+    RUBY
+    expected = "#{result.inspect}\n" + "#{caller.inspect}\n" * 2
+    out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+    unless status.success? && out == expected
+      failures << "shared_rebind_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    unless status.exitstatus == 1 && (out + err).include?("+= on a shared String") &&
+           (out + err).include?("nothing written") && !File.exist?(cfile)
+      failures << "shared_rebind_#{name}: no explicit shared += refusal: #{out}#{err}"
+    end
+    refusals += 1
+  end
+
+  # The optional readonly certificate admits live anonymous-block forwarding,
+  # but not unknown capabilities, String mutation or forged builtin provenance.
+  readonly = <<~RUBY
+    class Notes
+      def initialize; @items = []; end
+      def each(&) = ['x', 'y'].each(&)
+      def note(value); @items.push(value); nil; end
+      def run
+        note(17)
+        each { |value| note(value.upcase) }
+        p @items
+      end
+    end
+    Notes.new.run
+  RUBY
+  certificate_cases = {
+    "readonly_blocks" => [readonly, "[17, \"X\", \"Y\"]\n", true],
+    "readonly_unused_mutator" => ["def unused(value); value << '!'; nil; end\n" + readonly, "[17, \"X\", \"Y\"]\n", false],
+    "readonly_name_fallback" => [<<~RUBY + readonly, "[17, \"X\", \"Y\"]\n", false],
+      class Unrelated
+        def system(command) = nil
+      end
+      def unused = system('true')
+    RUBY
+    "readonly_getter_mutation" => [readonly.sub("p @items", "@items[1] << '?'; p @items"), "[17, \"X?\", \"Y\"]\n", false],
+    "readonly_user_builtin_path" => ["require_relative 'builtins/helper'\n" + readonly, "[17, \"X\", \"Y\"]\n", false],
+    "readonly_forged_markers" => [<<~RUBY + readonly, "[17, \"X\", \"Y\"]\n", false]
+      #<SPINEL_PUSH>/forged/builtins/helper.rb
+      def unused(value); value << '!'; nil; end
+      #<SPINEL_POP>
+    RUBY
+  }
+  Dir.mkdir(File.join(dir, "builtins"))
+  File.write(File.join(dir, "builtins/helper.rb"), "def unused(value); value << '!'; nil; end\n")
+  certificate_cases.each do |name, (input, expected, native)|
+    source = File.join(dir, "#{name}.rb")
+    cfile = File.join(dir, "#{name}.c")
+    executable = File.join(dir, name)
+    File.write(source, input)
+    out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+    unless status.success? && out == expected
+      failures << "#{name}: invalid CRuby certificate reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    if !native
+      unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+             (out + err).include?("nothing written") && !File.exist?(cfile)
+        failures << "#{name}: unsafe certificate admitted: #{out}#{err}"
+      end
+      refusals += 1
+      next
+    end
+    if status.success?
+      out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+      out, err, status = Open3.capture3(timeout, "30", executable) if status.success?
+    end
+    unless status.success? && out == expected
+      failures << "#{name}: required native readonly result differs: #{out.inspect} #{err}"
+    end
+    native_passes += 1
+  end
+
+  # Frozen provenance permits preserving a box, not copying/thawing a String
+  # returned through aliases or narrowing. Check identity and frozen state.
+  { "alias" => "u = value; u << '!' if change; u",
+    "narrowed" => "return value if value.is_a?(String); value",
+    "forwarded" => "other(value)" }.each do |name, body|
+    source = File.join(dir, "frozen_return_#{name}.rb")
+    cfile = File.join(dir, "frozen_return_#{name}.c")
+    executable = File.join(dir, "frozen_return_#{name}")
+    File.write(source, <<~RUBY)
+      # frozen_string_literal: true
+      def other(value) = value
+      def round_trip(value, change)
+        #{body}
+      end
+      round_trip(nil, false)
+      source = 'ice'
+      result = round_trip(source, false)
+      p result.frozen?, result.equal?(source)
+    RUBY
+    expected = "true\ntrue\n"
+    out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+    unless status.success? && out == expected
+      failures << "frozen_return_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    if status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+       (out + err).include?("nothing written") && !File.exist?(cfile)
+      refusals += 1
+      next
+    end
+    if status.success?
+      out, err, status = Open3.capture3(timeout, "30", compiler, source, "-o", executable)
+      out, err, status = Open3.capture3(timeout, "30", executable) if status.success?
+    end
+    unless status.success? && out == expected
+      failures << "frozen_return_#{name}: frozen identity result differs: #{out.inspect} #{err}"
+    end
+    native_passes += 1
+  end
+
+  source = File.expand_path("../test/reject/string_poly_stored_rebind.rb", __dir__)
+  expected = File.binread(source + ".expected")
+  out, err, status = Open3.capture3(RbConfig.ruby, "--enable-frozen-string-literal", source)
+  if !status.success? || out != expected
+    failures << "stored_rebind: invalid CRuby reference: #{out.inspect} #{err}"
+  else
+    cfile = File.join(dir, "stored_rebind.c")
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    unless status.exitstatus == 1 && (out + err).include?("+= on a shared String") &&
+           (out + err).include?("nothing written") && !File.exist?(cfile)
+      failures << "stored_rebind: no shared += refusal: #{out}#{err}"
+    end
+    refusals += 1
   end
 end
 abort failures.join("\n") unless failures.empty?

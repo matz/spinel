@@ -1945,6 +1945,13 @@ else {
 }
 
 /* ---- require_relative resolution ---- */
+/* node_bi is a stable-name stamp, not by itself trusted code provenance.
+   The optional readonly certificate may skip those nodes only when every
+   stamped range came from the compiler's builtin search and raw source
+   contained no user-supplied splice markers. */
+static int sp_bi_provenance_safe;
+static char **sp_trusted_bi_files;
+static int sp_trusted_bi_n, sp_trusted_bi_cap;
 static char *read_file(const char *path) {
   FILE *f = fopen(path, "rb");
   if (!f) return NULL;
@@ -1963,6 +1970,8 @@ static char *read_file(const char *path) {
   if (nread != (size_t)len) { free(buf); fclose(f); return NULL; }
   buf[nread] = '\0';
   fclose(f);
+  if (strstr(buf, "#<SPINEL_PUSH>") || strstr(buf, "#<SPINEL_INSERT>") || strstr(buf, "#<SPINEL_POP>"))
+    sp_bi_provenance_safe = 0;
   return buf;
 }
 
@@ -2263,6 +2272,13 @@ static void sp_find_builtin_ranges(const char *src) {
     if (pl && sp < 64) {
       int bi = 0;
       for (size_t k = pl; k + 10 <= len && !bi; k++) if (!strncmp(line + k, "/builtins/", 10)) bi = 1;
+      if (bi) {
+        int trusted = 0;
+        for (int i = 0; i < sp_trusted_bi_n; i++)
+          if (strlen(sp_trusted_bi_files[i]) == len - pl &&
+              !memcmp(line + pl, sp_trusted_bi_files[i], len - pl)) trusted = 1;
+        if (!trusted) sp_bi_provenance_safe = 0;
+      }
       stk_lo[sp] = (size_t)(line - src); stk_bi[sp] = bi; sp++;
     }
     else if (!strncmp(line, SP_POP_PREFIX, strlen(SP_POP_PREFIX)) && sp > 0) {
@@ -2280,6 +2296,9 @@ static void sp_find_builtin_ranges(const char *src) {
     if (!eol) break;
     line = eol + 1;
   }
+  for (int i = 0; i < sp_trusted_bi_n; i++) free(sp_trusted_bi_files[i]);
+  free(sp_trusted_bi_files);
+  sp_trusted_bi_files = NULL; sp_trusted_bi_n = sp_trusted_bi_cap = 0;
 }
 static int sp_in_builtin(const uint8_t *at) {
   if (!sp_bi_base || !at) return 0;
@@ -3833,6 +3852,12 @@ else {
             snprintf(gp, sizeof(gp), "%.*s/../%s.rb", base_len, lib_dir, lib_name);
             content = read_file(gp);
           }
+          if (content && !strchr(lib_name + 9, '/') && !strchr(lib_name + 9, '\\')) {
+            sp_trusted_bi_files = sp_grow_strs(sp_trusted_bi_files, sp_trusted_bi_n, &sp_trusted_bi_cap, 8);
+            char *path = strdup(gp);
+            if (!path) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+            sp_trusted_bi_files[sp_trusted_bi_n++] = path;
+          }
         }
         if (!content) snprintf(gp, sizeof(gp), "%.*s/packages/%s/%s.rb", base_len, lib_dir, first, lib_name);
         if (!content) content = read_file(gp);
@@ -4771,6 +4796,7 @@ else {
    Returns 0 on success, 1 on read/parse error. This is the library copy
    (the in-process lib API; no standalone CLI main). */
 static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *out) {
+  sp_bi_provenance_safe = 1;
   char *source = read_file(source_file);
   if (!source) {
     fprintf(stderr, "spinel_parse: cannot open '%s'\n", source_file);
@@ -4954,6 +4980,7 @@ else {
   node_counter = 0;
 
   int root_id = flatten(root);
+  emit_int(root_id, "builtin_provenance_safe", sp_bi_provenance_safe);
 
   /* Output */
   sb_printf(out, "ROOT %d\n", root_id);

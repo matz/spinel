@@ -25126,8 +25126,8 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
     }
     /* Freshness alone does not preserve later getter mutations. A retaining
        store needs either immutable input or a closed readonly program. */
-    if (!kind && r != FWD_RETAINS_BOX) continue;
-    if (r == FWD_RETAINS_BOX && fwd_box_retention_safe(c, arg)) continue;
+    if ((r == FWD_ESCAPE || r == FWD_RETAINS_BOX) && fwd_box_retention_safe(c, arg, r)) continue;
+    if (!kind && r != FWD_ESCAPE && r != FWD_RETAINS_BOX) continue;
     if (r == FWD_ESCAPE || r == FWD_RETAINS_BOX) {
       TyKind at = comp_ntype(c, arg);
       if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {

@@ -1,5 +1,5 @@
-# A bare POLY Array store needs identity, not mutation. The String local
-# reaching it may use a handle, but += must replace that handle, not append.
+# CRuby reference for retained mutation and shared += rebinding. These routes
+# must refuse until share-by-default, not acquire new per-route sharing.
 class StoredStrings
   def initialize
     @items = []

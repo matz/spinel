@@ -22,17 +22,19 @@ k = Integer(ARGV[0] || 10)
 
 if frozen_forward
   puts <<~RUBY
+    # Force the immutable caller census, not the closed readonly certificate.
+    def unused_mutator(value); value << '!'; nil; end
     class FrozenBox
       def initialize = @values = []
-      def relay(value); store(value); nil; end
       def store(value); @values.push(value); nil; end
       def size = @values.size
     end
     box = FrozenBox.new
-    box.relay(0)
   RUBY
   k.times do |i|
-    puts "text#{i} = 'value#{i}'; box.relay(text#{i})"
+    puts "def relay#{i}(box, value); box.store(value); nil; end"
+    puts "def noise#{i}(value) = value + #{i}"
+    puts "relay#{i}(box, 0); relay#{i}(box, 'value#{i}'); noise#{i}(#{i})"
   end
   puts "puts box.size"
   exit

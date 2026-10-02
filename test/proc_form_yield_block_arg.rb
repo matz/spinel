@@ -8,13 +8,7 @@ end
 
 class Out
   def initialize = @buf = []
-  # Retaining a POLY String via an alias is not mutating that String.
-  # The identity demand must not turn this readonly callback into an appender.
-  def <<(s)
-    s = s
-    @buf.push(s)
-    self
-  end
+  def <<(s) = (@buf.push(s); self)
   def text = @buf.join
 end
 

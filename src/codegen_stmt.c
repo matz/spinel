@@ -2184,24 +2184,7 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
   char rtn[32];
 
   if (t == TY_STRBUF && sp_streq(op, "+")) {
-    /* += rebinds to a fresh String. Hold the original receiver before the
-       RHS, but read its live bytes afterwards: the RHS may rebind the local
-       or mutate the same object through another alias. Keep RHS setup here
-       rather than hoisting it ahead of the saved receiver. */
-    int left = ++g_tmp, right = ++g_tmp;
-    Buf pre = {0}, rhs = {0};
-    Buf *saved_pre = g_pre; g_pre = &pre;
-    if (comp_ntype(c, v) == TY_POLY) {
-      buf_puts(&rhs, "sp_poly_arg_str_chk("); emit_expr(c, v, &rhs); buf_puts(&rhs, ")");
-    }
-    else emit_str_expr(c, v, &rhs);
-    g_pre = saved_pre;
-    buf_printf(b, "%s = ({ sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", lval, left, lval, left);
-    if (pre.p) buf_puts(b, pre.p);
-    buf_printf(b, "const char *_t%d = %s; SP_GC_ROOT(_t%d); ", right, rhs.p ? rhs.p : "NULL", right);
-    buf_printf(b, "if (!_t%d) sp_raise_poly_nomethod(\"+\", sp_box_nil()); ", left);
-    buf_printf(b, "sp_String_new_shared(sp_str_concat(sp_String_cstr(_t%d), _t%d)); });\n", left, right);
-    free(pre.p); free(rhs.p);
+    unsupported_feature(c, id, "+= on a shared String cannot preserve rebinding identity; refused while share-by-default is in progress");
     return;
   }
   if (t == TY_STRING && sp_streq(op, "+")) {

@@ -17727,6 +17727,7 @@ typedef struct {
   int frozen_reflection;
   int frozen_operator_fold;
   int readonly_strings;
+  int readonly_hash_nonstring;
   ANameHash frozen_operator_writes;
   HandleArgTab frozen_callers;
   SbMutTab frozen_params;
@@ -21863,7 +21864,7 @@ static int fwd_string_returns(Compiler *c, int mi, const char *pn, int node, int
    Refuse these paths at emission, independently of known direct appends.
    Bare, laid-out call arguments are followed by the forwarding walk. */
 enum { FWD_KEEP_LOCAL = 1, FWD_KEEP_COPY = 2, FWD_KEEP_INCOMPLETE = 4,
-       FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16 };
+       FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16, FWD_KEEP_INDEX_COPY = 32 };
 typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
@@ -22041,6 +22042,10 @@ children:;
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
     for (int j = 0; j < n; j++) retained |= fwd_param_kept(c, f, mi, pn, ids[j], kept, appended, depth + 1);
   }
+  /* An indexed store can hide the copied input in a nested container. Unlike
+     an ordinary local alias, this needs proof even at a direct query root. */
+  if ((k == NK_HashNode || k == NK_IndexOrWriteNode || k == NK_IndexAndWriteNode || k == NK_IndexOperatorWriteNode) &&
+      (retained & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
   return retained;
 }
 
@@ -22568,8 +22573,9 @@ static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, Sb
      owned rest queries, not merely a second vertex. */
   /* Direct-root retention keeps its existing emitter contract. A copied
      alias receiver that mutates is unsafe even without a forwarding edge;
+     an unproved index store can retain a nested alias even at the root;
      a copied root handed onward is unsafe through that edge as before. */
-  if (root_kept && f->seen.n && ((root_kept & FWD_KEEP_MUTATOR) ||
+  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY)) ||
       ((f->seen.val[0] & FWD_VISIT_FORWARDED) && (appended || (root_kept & FWD_KEEP_COPY)))))
     f->taint |= FWD_TAINT_ESCAPE;
   if (root_kept && f->seen.n) f->seen.val[0] |= FWD_VISIT_ROOT_KEPT;
@@ -22600,6 +22606,7 @@ static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   memo->frozen_reflection = 0;
   memo->frozen_operator_fold = 0;
   memo->readonly_strings = 0;
+  memo->readonly_hash_nonstring = 0;
   free(memo->print_parent); memo->print_parent = NULL;
   memo->print_contract = 0;
   anh_free(&memo->frozen_operator_writes);
@@ -23108,6 +23115,62 @@ static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int d
   return fwd_frozen_formal(c, mi, pj, elements, each, depth, work);
 }
 
+/* Optional evidence for << on a boxed Hash element: every literal/store in
+   the closed subset must exclude String values. Hash constructors/default
+   setters, opaque stores and user operators are not admitted by the caller.
+   This deliberately considers unrelated hashes too, and gives up at a small
+   work bound. The result is cached per emission generation below. */
+static int fwd_hash_values_nonstring_compute(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int work = 128;
+  static const NodeKind kinds[] = {
+    NK_HashNode, NK_KeywordHashNode, NK_CallNode, NK_IndexOrWriteNode,
+    NK_IndexAndWriteNode, NK_IndexOperatorWriteNode
+  };
+  for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
+    for (int node = comp_kind_first(c, kinds[k]); node >= 0; node = comp_kind_next(c, node)) {
+      Scope *owner = comp_scope_of(c, node);
+      if (nt_int(nt, node, "node_bi", 0) || (owner && nt_int(nt, owner->def_node, "node_bi", 0))) continue;
+      if (!work--) return 0;
+      int value = -1;
+      if (kinds[k] == NK_HashNode || kinds[k] == NK_KeywordHashNode) {
+        int n = 0; const int *els = nt_arr(nt, node, "elements", &n);
+        for (int i = 0; i < n; i++) {
+          if (!work-- || nt_kind(nt, els[i]) != NK_AssocNode) return 0;
+          int val = nt_ref(nt, els[i], "value");
+          if (nt_kind(nt, val) == NK_ArrayNode || nt_kind(nt, val) == NK_HashNode) continue;
+          TyKind ty = comp_ntype(c, val);
+          if (ty == TY_STRING || ty == TY_STRBUF || ty == TY_POLY || ty == TY_UNKNOWN) return 0;
+        }
+        continue;
+      }
+      TyKind rt = comp_ntype(c, nt_ref(nt, node, "receiver"));
+      if (!ty_is_hash(rt)) continue;
+      if (ty_hash_val(rt) == TY_STRING) return 0;
+      if (kinds[k] == NK_CallNode) {
+        const char *name = nt_str(nt, node, "name");
+        if (!name || (!sp_streq(name, "[]=") && !sp_streq(name, "store"))) continue;
+        int a = nt_ref(nt, node, "arguments"), n = 0;
+        const int *args = nt_arr(nt, a, "arguments", &n);
+        if (n != 2) return 0;
+        value = args[1];
+      }
+      else value = nt_ref(nt, node, "value");
+      if (nt_kind(nt, value) == NK_ArrayNode || nt_kind(nt, value) == NK_HashNode) continue;
+      TyKind ty = comp_ntype(c, value);
+      if (value < 0 || ty == TY_STRING || ty == TY_STRBUF || ty == TY_POLY || ty == TY_UNKNOWN) return 0;
+    }
+  }
+  return 1;
+}
+
+static int fwd_hash_values_nonstring(Compiler *c) {
+  FwdMemo *memo = fwd_analysis(c)->memo;
+  if (!memo->readonly_hash_nonstring)
+    memo->readonly_hash_nonstring = fwd_hash_values_nonstring_compute(c) ? 1 : -1;
+  return memo->readonly_hash_nonstring > 0;
+}
+
 /* An optional closed-program certificate, not a mutation-name blacklist.
    All Ruby bodies are checked, including unused bodies and literal blocks.
    Compiler builtin templates are admitted only through the small primitive
@@ -23115,7 +23178,7 @@ static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int d
    No identity observers, state-changing String operations, external code or
    hidden user protocols can execute in this subset. Thus a retained plain
    String box remains observationally equivalent without adding sharing. */
-static int fwd_readonly_call(Compiler *c, int node) {
+static int fwd_readonly_dispatch(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, node, "name");
   int recv = nt_ref(nt, node, "receiver");
@@ -23123,11 +23186,38 @@ static int fwd_readonly_call(Compiler *c, int node) {
   const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
   int block = nt_ref(nt, node, "block");
   if (!nm || (block >= 0 && nt_kind(nt, block) != NK_BlockNode)) return 0;
+  if (fwd_dead_dynamic_arm(c, node)) return 1;
   TyKind rt = comp_ntype(c, recv);
   Scope *owner = comp_scope_of(c, node);
+  if (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) {
+    int n = 0, live = 0;
+    const int *arms = nt_arr(nt, node, "dyn_send_arms", &n);
+    if (!n || nt_int(nt, node, "dyn_send_truncated", 0)) return 0;
+    /* Only the existing uncapped user-name dispatch, whose default raises.
+       No builtin-name arm, observer or arbitrary runtime send is admitted.
+       The walk checks every live arm and every user body independently. */
+    for (int i = 0; i < n; i++) {
+      if (fwd_dead_dynamic_arm(c, arms[i])) continue;
+      const char *name = nt_str(nt, arms[i], "name");
+      if (!name || core_method_name(name) || builtin_object_method_known(name) ||
+          an_any_scope_by_name(c, name) < 0) return 0;
+      live = 1;
+    }
+    return live;
+  }
   /* Named and anonymous block forwarding lower to a call of this method's
      own block. Every supplying literal block is checked by the same walk. */
   if (block < 0 && owner && owner->yields && poly_spliced_block_call(c, owner, node)) return 1;
+  /* A Method may enter through a container without a per-call target.
+     Its origin must still be a checked Ruby body, never a builtin adapter,
+     foreign function or computed method name. All scope bodies are roots. */
+  if (is_method_obj_call(c, node) && argc == 1 && block < 0) {
+    int mi = method_obj_target_mi(c, node);
+    if (mi < 0) return 0;
+    Scope *m = &c->scopes[mi];
+    return m->body >= 0 && !m->cs_synth && !m->is_ext_entry &&
+           !nt_int(nt, m->def_node, "node_bi", 0) && !nt_str(nt, m->def_node, "bam_sym");
+  }
   /* A possible same-name target is not proof of actual dispatch. */
   int target = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? comp_self_call_mi(c, node, nm) : fwd_call_target(c, node);
   if (recv < 0) {
@@ -23143,21 +23233,79 @@ static int fwd_readonly_call(Compiler *c, int node) {
   if (target >= 0 && !nt_int(nt, c->scopes[target].def_node, "node_bi", 0) &&
       !c->scopes[target].cs_synth && !c->scopes[target].is_ext_entry &&
       (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || ty_is_object(rt) ||
+       (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) &&
+        c->scopes[target].is_cmethod) ||
        (sp_streq(nm, "new") && nt_kind(nt, recv) == NK_ConstantReadNode))) return 1;
+  /* A non-core name cannot select an unexamined String/builtin operation.
+     All user bodies are roots, even if this boxed receiver cannot be pinned. */
+  if (rt == TY_POLY && !core_method_name(nm) && !builtin_object_method_known(nm)) {
+    int mi = an_any_scope_by_name(c, nm);
+    if (mi >= 0 && !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0) &&
+        !c->scopes[mi].cs_synth && !c->scopes[mi].is_ext_entry) return 1;
+  }
+  /* A user class with no initialize body just allocates its empty instance.
+     User new/protocol overrides and builtin reopenings fail the root checks. */
+  if (block < 0 && !argc && sp_streq(nm, "new") && nt_kind(nt, recv) == NK_ConstantReadNode) {
+    const char *name = nt_str(nt, recv, "name");
+    int ci = name ? comp_class_index(c, name) : -1;
+    if (ci >= 0 && !is_builtin_class_name(name) && !is_builtin_module_name(name) &&
+        !is_builtin_exception_name(name) && comp_method_in_chain(c, ci, "initialize", NULL) < 0) return 1;
+  }
+  return 0;
+}
+
+/* Primitive effects in the closed subset. User-target closure is handled
+   separately above; the root walk excludes builtin overrides and protocols. */
+static int fwd_readonly_primitive(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  int a = nt_ref(nt, node, "arguments"), argc = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
+  int block = nt_ref(nt, node, "block");
+  if (!nm || (block >= 0 && nt_kind(nt, block) != NK_BlockNode)) return 0;
+  TyKind rt = comp_ntype(c, recv);
   if (recv < 0) {
     if (attr_decl_call(c, node)) return 1;
     if ((sp_streq(nm, "p") || sp_streq(nm, "puts")) && block < 0) return 1;
     return sp_streq(nm, "private") && !argc && block < 0;
   }
+  /* Within this globally closed subset, indirect invocation executes only
+     checked Ruby bodies. [] also slices builtin Strings/Arrays or reads a
+     Hash; conversion/hash protocols and external callable origins are barred.
+     This is not a forwarding/retention exemption outside the certificate. */
+  if (block < 0 && (rt == TY_POLY || rt == TY_METHOD || rt == TY_PROC || rt == TY_CURRY)) {
+    if (sp_streq(nm, "call")) return 1;
+    if (sp_streq(nm, "[]") && (argc == 1 || argc == 2)) return 1;
+  }
+  /* These scalar operations do not change Strings. A user operator's body
+     is checked independently; every implicit coerce/conversion is barred. */
+  if (block < 0 && argc == 1 && (rt == TY_POLY || rt == TY_INT || rt == TY_FLOAT) &&
+      (sp_streq(nm, "+") || sp_streq(nm, "*") || sp_streq(nm, "==") || sp_streq(nm, "<="))) return 1;
+  if (block < 0 && !argc && (rt == TY_INT || rt == TY_FLOAT) && sp_streq(nm, "zero?")) return 1;
+  if (block < 0 && argc == 1 && rt == TY_POLY && sp_streq(nm, "<<") &&
+      comp_ntype(c, args[0]) == TY_INT &&
+      nt_kind(nt, recv) == NK_CallNode && sp_streq(nt_str(nt, recv, "name"), "[]") &&
+      ty_is_hash(comp_ntype(c, nt_ref(nt, recv, "receiver"))) && fwd_hash_values_nonstring(c)) return 1;
+  if (block < 0 && argc == 2 && rt == TY_POLY && sp_streq(nm, "[]=") &&
+      nt_kind(nt, recv) == NK_CallNode && sp_streq(nt_str(nt, recv, "name"), "[]") &&
+      ty_is_hash(comp_ntype(c, nt_ref(nt, recv, "receiver"))) &&
+      comp_ntype(c, args[1]) == TY_INT && fwd_hash_values_nonstring(c)) return 1;
+  if (block < 0 && argc == 1 && nt_kind(nt, args[0]) == NK_StringNode) {
+    const char *format = method_sym_arg(c, node);
+    if (format && ((rt == TY_INT_ARRAY && sp_streq(nm, "pack") && sp_streq(format, "V")) ||
+                   (rt == TY_STRING && sp_streq(nm, "unpack1") && sp_streq(format, "e")))) return 1;
+  }
   if (!argc && block < 0 && (sp_streq(nm, "to_s") || sp_streq(nm, "inspect"))) return 1;
   if (!argc && block < 0 && sp_streq(nm, "upcase"))
-    return rt == TY_STRING || rt == TY_STRBUF;
+    return rt == TY_STRING || rt == TY_STRBUF || rt == TY_POLY;
   if (!argc && block < 0 && (sp_streq(nm, "size") || sp_streq(nm, "length")))
     return ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF;
   if (argc == 1 && block < 0 && (sp_streq(nm, "is_a?") || sp_streq(nm, "kind_of?")) &&
       nt_kind(nt, args[0]) == NK_ConstantReadNode) {
     const char *name = nt_str(nt, args[0], "name");
-    return name && (sp_streq(name, "String") || sp_streq(name, "Integer") || sp_streq(name, "Array"));
+    return name && (sp_streq(name, "String") || sp_streq(name, "Integer") ||
+                    sp_streq(name, "Array") || sp_streq(name, "Hash"));
   }
   if (argc == 1 && block < 0 && rt == TY_INT && comp_ntype(c, args[0]) == TY_INT &&
       (sp_streq(nm, "+") || sp_streq(nm, "<"))) return fwd_builtin(c, "Integer", nm);
@@ -23171,6 +23319,16 @@ static int fwd_readonly_call(Compiler *c, int node) {
       return fwd_builtin(c, "Array", nm);
     if (!argc && (sp_streq(nm, "each") || sp_streq(nm, "each_with_index") || sp_streq(nm, "map"))) return 1;
   }
+  /* Hash indexing may keep an input but cannot change its String bytes.
+     Default blocks and every user operator body are checked by the same
+     closed-program walk; hash/eql?/conversion overrides invalidate it. */
+  if (ty_is_hash(rt) && block < 0 &&
+      ((argc == 1 && sp_streq(nm, "[]")) || (argc == 2 && sp_streq(nm, "[]="))))
+    return fwd_builtin(c, "Hash", nm);
+  if (ty_is_hash(rt) && block < 0 && (argc == 1 || argc == 2) && sp_streq(nm, "fetch"))
+    return fwd_builtin(c, "Hash", nm);
+  if (ty_is_hash(rt) && block < 0 && !argc && (sp_streq(nm, "keys") || sp_streq(nm, "values")))
+    return fwd_builtin(c, "Hash", nm);
   if (ty_is_hash(rt) && !argc && (sp_streq(nm, "each") || sp_streq(nm, "each_pair") || sp_streq(nm, "each_key"))) return 1;
   return sp_streq(nm, "*") && argc == 1 && block < 0 && rt == TY_INT && comp_ntype(c, args[0]) == TY_INT;
 }
@@ -23179,7 +23337,9 @@ static int fwd_readonly_node(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   switch (nt_kind(nt, node)) {
       case NK_NONE:
-        if (!sp_streq(nt_type(nt, node), "ProgramNode") && !sp_streq(nt_type(nt, node), "ArgumentsNode")) return 0;
+        if (!sp_streq(nt_type(nt, node), "ProgramNode") && !sp_streq(nt_type(nt, node), "ArgumentsNode") &&
+            !sp_streq(nt_type(nt, node), "RequiredKeywordParameterNode") &&
+            !sp_streq(nt_type(nt, node), "ForwardingParameterNode")) return 0;
         break;
       case NK_ClassNode: {
         int path = nt_ref(nt, node, "constant_path");
@@ -23190,7 +23350,10 @@ static int fwd_readonly_node(Compiler *c, int node) {
       }
       case NK_DefNode: {
         const char *name = nt_str(nt, node, "name");
-        if (!name || !isalnum((unsigned char)*name) || nt_ref(nt, node, "receiver") >= 0) return 0;
+        int recv = nt_ref(nt, node, "receiver");
+        if (!name || (!isalnum((unsigned char)*name) && !sp_streq(name, "[]") && !sp_streq(name, "[]=")) ||
+            (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode &&
+             nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) return 0;
         static const char *const protocols[] = {
           "to_s", "inspect", "to_str", "to_int", "to_ary", "to_a", "to_hash", "to_f", "to_r", "to_c",
           "coerce", "to_proc", "to_io", "to_path", "hash", "eql?", "initialize_copy", "initialize_dup", "initialize_clone",
@@ -23199,10 +23362,22 @@ static int fwd_readonly_node(Compiler *c, int node) {
         for (int i = 0; protocols[i]; i++) if (sp_streq(name, protocols[i])) return 0;
         break;
       }
-      case NK_CallNode: if (!fwd_readonly_call(c, node)) return 0; break;
+      case NK_CallNode:
+        if (!fwd_readonly_dispatch(c, node) && !fwd_readonly_primitive(c, node)) return 0;
+        break;
+      case NK_IndexOrWriteNode: case NK_IndexAndWriteNode: case NK_IndexOperatorWriteNode:
+        if (!ty_is_hash(comp_ntype(c, nt_ref(nt, node, "receiver"))) ||
+            !fwd_builtin(c, "Hash", "[]") || !fwd_builtin(c, "Hash", "[]=") ||
+            (nt_kind(nt, node) == NK_IndexOperatorWriteNode &&
+             (!sp_streq(nt_str(nt, node, "binary_operator"), "+") ||
+              comp_ntype(c, nt_ref(nt, node, "value")) != TY_INT))) return 0;
+        break;
       case NK_BlockArgumentNode: if (nt_ref(nt, node, "expression") >= 0) return 0; break;
       case NK_StatementsNode: case NK_ParametersNode: case NK_RequiredParameterNode:
       case NK_BlockParameterNode: case NK_BlockParametersNode: case NK_BlockNode:
+      case NK_OptionalParameterNode: case NK_OptionalKeywordParameterNode:
+      case NK_RestParameterNode: case NK_KeywordRestParameterNode:
+      case NK_SplatNode: case NK_KeywordHashNode: case NK_AssocSplatNode: case NK_LambdaNode:
       case NK_ArrayNode: case NK_HashNode: case NK_AssocNode:
       case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
       case NK_InterpolatedStringNode: case NK_EmbeddedStatementsNode: case NK_ConstantReadNode:
@@ -23219,6 +23394,7 @@ static int fwd_readonly_node(Compiler *c, int node) {
 static int fwd_readonly_program(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!nt_int(nt, nt->root_id, "builtin_provenance_safe", 0)) return 0;
+  if (g_ext_entries || g_ext_init_name || g_ext_target) return 0;
   if (c->n_native_funcs || c->n_native_objs || c->n_native_methods ||
       c->n_ffi_funcs || c->n_ffi_consts || c->n_ffi_bufs || c->n_ffi_readers ||
       c->n_ffi_callbacks || c->n_ffi_structs || c->n_ffi_writers || c->n_ffi_sources ||
@@ -23232,9 +23408,21 @@ static int fwd_readonly_program(Compiler *c) {
      is not call-reachability pruning: every checked Ruby body is included. */
   for (int i = 0; i < c->nscopes; i++) {
     Scope *m = &c->scopes[i];
-    if (nt_int(nt, m->def_node, "node_bi", 0) || m->body < 0 || seen[m->body]) continue;
-    seen[m->body] = 1;
-    todo[n++] = m->body;
+    if (nt_int(nt, m->def_node, "node_bi", 0)) continue;
+    const char *cls = m->class_id >= 0 ? c->classes[m->class_id].name : NULL;
+    if (m->is_ext_entry || m->cs_synth ||
+        (cls && (is_builtin_class_name(cls) || is_builtin_module_name(cls) || is_builtin_exception_name(cls))) ||
+        (m->def_node >= 0 && !fwd_readonly_node(c, m->def_node))) { ok = 0; break; }
+    if (m->body >= 0 && !seen[m->body]) {
+      seen[m->body] = 1;
+      todo[n++] = m->body;
+    }
+    /* Defaults can be detached from the live definition after lowering.
+       They remain executable and cannot inherit a harmless body's proof. */
+    for (int j = 0; j < m->nparams; j++) {
+      int node = m->pdefault[j];
+      if (node >= 0 && !seen[node]) { seen[node] = 1; todo[n++] = node; }
+    }
   }
   while (n && ok) {
     int node = todo[--n];

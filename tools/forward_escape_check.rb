@@ -1176,6 +1176,82 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       puts "frozen"
     end
   RUBY
+  # The readonly certificate must not mistake a Hash's container-valued slot
+  # for scalar-only storage. Mutate through the returned alias, not the input:
+  # the direct-root retention exemption printed three "ice"s instead.
+  certificate_cases["hash_op_write_nested_alias"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n\"ice!\"\n", false]
+    def stash(value)
+      h = { k: [] }
+      h[:k] += [value]
+      h
+    end
+    stash(1)
+    s = +"ice"
+    other = s
+    h = stash(s)
+    h[:k][0] << "!"
+    p s, other, h[:k][0]
+  RUBY
+  # An Integer operand does not make String#<< readonly. Mixed Hash values
+  # must invalidate the non-String fact even when the container arm is safe.
+  certificate_cases["hash_boxed_integer_append"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+    def stash(value)
+      h = { k: value }
+      h[:k] << 33
+      nil
+    end
+    stash([])
+    s = +"ice"
+    other = s
+    stash(s)
+    p s, other
+  RUBY
+  certificate_cases["indirect_builtin_method_mutation"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+    def relay(value)
+      [value.method(:<<)][0].call("!")
+      nil
+    end
+    def entry(value) = relay(value)
+    entry([])
+    s = +"ice"
+    other = s
+    entry(s)
+    p s, other
+  RUBY
+  certificate_cases["mutating_optional_default"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+    def leaf(value, ignored = (value.is_a?(String) ? value << "!" : nil)) = nil
+    def relay(value); leaf(value); nil; end
+    relay(1)
+    s = +"ice"
+    other = s
+    relay(s)
+    p s, other
+  RUBY
+  certificate_cases["mutating_optional_keyword_default"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", :native_or_refusal]
+    def leaf(value, ignored: (value.is_a?(String) ? value << "!" : nil)) = nil
+    def relay(value); leaf(value); nil; end
+    relay(1)
+    s = +"ice"
+    other = s
+    relay(s)
+    p s, other
+  RUBY
+  # Owner metadata, not just class-block syntax, must exclude builtin reopenings.
+  certificate_cases["builtin_singleton_owner"] = [<<~RUBY, "\"ice\"\n", :native_or_refusal]
+    def String.harmless = nil
+    def leaf(value) = [value]
+    def relay(value) = leaf(value)
+    relay(1)
+    p relay("ice")[0]
+  RUBY
+  # Keep the original compatibility fixtures and their independently derived
+  # expected outputs unchanged. Each runs alone so another program's mutation
+  # or hidden protocol cannot disguise a certificate/dispatch regression.
+  %w[method_capture_untyped_param_poly method_splat_float_arg
+     poly_user_two_arg_aref hash_index_or_write_key_variant poly_dispatch_kwsplat].each do |name|
+    path = File.expand_path("../test/#{name}.rb", __dir__)
+    certificate_cases["original_#{name}"] = [File.read(path), File.binread(path + ".expected"), true]
+  end
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]
@@ -1193,6 +1269,14 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    # Exclusion from an optional certificate does not require refusal when
+    # the existing handle path already preserves the CRuby result. Exercise
+    # the native output rather than treating mere C generation as safety.
+    if native == :native_or_refusal && status.exitstatus == 1 &&
+       (out + err).match?(escape_path) && (out + err).include?("nothing written") && !File.exist?(cfile)
+      refusals += 1
+      next
+    end
     if !native
       unless status.exitstatus == 1 && (out + err).match?(escape_path) &&
              (out + err).include?("nothing written") && !File.exist?(cfile)

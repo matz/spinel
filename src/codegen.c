@@ -11004,6 +11004,18 @@ void emit_super(Compiler *c, int id, Buf *b) {
       free(mb.p);
       return;
     }
+    /* `super` in a freeze override no ancestor defines is Object's: the
+       object frozen, and answered */
+    if (uname && sp_streq(uname, "freeze") && !s->is_cmethod && s->class_id >= 0) {
+      TyKind rt = comp_ntype(c, id);
+      if (ty_is_object(rt))
+        buf_printf(b, "((sp_%s *)sp_gc_freeze(%s))", c->classes[ty_object_class(rt)].c_name, g_self);
+      else if (rt == TY_POLY)
+        buf_printf(b, "({ void *_fz = sp_gc_freeze(%s); sp_box_nullable_obj(_fz, (int)*(sp_int *)_fz); })", g_self);
+      else
+        buf_printf(b, "((void)sp_gc_freeze(%s), 0)", g_self);
+      return;
+    }
     /* `super` in a respond_to? override no ancestor defines is Object's:
        the object's method-table answer for a runtime name */
     if (uname && sp_streq(uname, "respond_to?") && emit_super_respond_to(c, id, s, b)) return;

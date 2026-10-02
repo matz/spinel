@@ -8809,6 +8809,14 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* `super` in a respond_to? override no ancestor defines is Object's
        respond_to?: a boolean (see emit_super_respond_to) */
     int rto_super = !s->is_cmethod && uname && sp_streq(uname, "respond_to?");
+    /* `super` in a freeze override no ancestor defines is Object's: the
+       object itself (emit_super), boxed when a descendant can be self */
+    if (!s->is_cmethod && uname && sp_streq(uname, "freeze") &&
+        (p < 0 || comp_method_in_chain(c, p, uname, NULL) < 0)) {
+      for (int k = 0; k < c->nclasses; k++)
+        if (k != s->class_id && is_descendant(c, k, s->class_id)) return TY_POLY;
+      return ty_object(s->class_id);
+    }
     if (p < 0) return rto_super ? TY_BOOL : TY_UNKNOWN;
     /* super inside a class method resolves through the parent's CLASS-method
        chain (the instance chain would miss `def self.x` entirely). */

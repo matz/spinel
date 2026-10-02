@@ -106,7 +106,14 @@ module SpinelHashBase
   # frozen with its Hash, which then refuses every store
   def freeze
     @__spinel_base.freeze
-    self
+    super
+  end
+
+  # Enumerable#sum, which a boxed object of the class reaches through its
+  # own arm
+  def sum(init = 0)
+    return @__spinel_base.sum(init) unless block_given?
+    @__spinel_base.sum(init) { |k, v| yield k, v }
   end
 
   def frozen? = @__spinel_base.frozen?

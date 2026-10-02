@@ -47,3 +47,37 @@ nb["a"] = 1
 nb["b"] = 2
 p nb.each_with_index.to_a, nb.each_with_index { |(k, v), i| }.class
 p nb.kind_of?(Enumerable), nb.is_a?(Hash), Nb.included_modules.include?(Enumerable)
+
+# freeze reaches Object's through super (the object too), and a boxed object sums
+class Fz2 < Hash
+end
+hz = Fz2.new
+hz["a"] = 1
+hz.freeze
+p hz.frozen?
+begin
+  hz.instance_variable_set(:@x, 1)
+rescue => e
+  p e.class
+end
+class Su
+  def sum(*a, &b) = :u
+end
+Su.new.sum(1) { }
+w = [Fz2.new.tap { |x| x["a"] = 3; x["b"] = 4 }, Su.new][0]
+p w.sum(0) { |k, v| v }
+
+class Pf
+  def freeze
+    @x = 1
+    super
+  end
+end
+class Pg
+  def freeze
+    r = super
+    r
+  end
+end
+a = [Pf.new, Pg.new, 1]
+p a[0].freeze.frozen?, a[1].freeze.class, Pf.new.freeze.frozen?

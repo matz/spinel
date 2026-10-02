@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include "analyze_internal.h"
+#include "repr.h"
 
 
 static int narrow_int_table_ivars(Compiler *c);  /* declared early: the fixpoint calls it */
@@ -33425,4 +33426,6 @@ void analyze_program(Compiler *c) {
   if (getenv("SP_FIXPOINT_LOG"))
     fprintf(stderr, "[fp] rounds=%d%s\n", g_fixpoint_rounds,
             g_fixpoint_rounds >= 128 ? " (CAP -- did not converge)" : "");
+  /* the representation flags are final from here (repr.h) */
+  repr_seal(c);
 }

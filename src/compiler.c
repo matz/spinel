@@ -94,6 +94,7 @@ Compiler *comp_new(const NodeTable *nt) {
   c->arr_want = calloc((size_t)n, sizeof(TyKind));
   c->poly_builtin_ty = calloc((size_t)n, sizeof(TyKind));
   c->bop_inf = calloc((size_t)n, sizeof *c->bop_inf);
+  c->ucall_inf = calloc((size_t)n, sizeof *c->ucall_inf);
   c->node_cap = n;
   comp_node_ord(c, 0, NULL);   /* number the parsed nodes before any rewrite */
   c->node_ord_parsed = nt->count;
@@ -230,6 +231,8 @@ void comp_grow_node_arrays(Compiler *c) {
   c->poly_builtin_ty = realloc(c->poly_builtin_ty, sizeof(TyKind) * (size_t)n);
   c->bop_inf = realloc(c->bop_inf, sizeof *c->bop_inf * (size_t)n);
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
+  c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
+  memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
   for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->norigin[i] = -1; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; c->hash_want[i] = TY_UNKNOWN; c->arr_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; }
   c->node_cap = n;
 }
@@ -303,6 +306,7 @@ void comp_free(Compiler *c) {
   free(c->arr_want);
   free(c->poly_builtin_ty);
   free(c->bop_inf);
+  free(c->ucall_inf);
   free(c);
 }
 

@@ -1671,7 +1671,7 @@ static TyKind infer_call_inner(Compiler *c, int id);
    the method's return unified with every descendant's direct override,
    since codegen's dispatch switches over them all. */
 static TyKind an_self_call_ret(Compiler *c, Scope *self, const char *name, int mi, int id) {
-  TyKind r = method_call_ret(c, mi, id);
+  TyKind r = an_user_call(c, id, mi, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, self->class_id);
   int nd = 0; const int *ds = comp_descendants(c, self->class_id, &nd);
   for (int di = 0; di < nd; di++) {
     int k = ds[di];
@@ -1895,7 +1895,7 @@ int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out
   /* a yielding one given a block answers what its proc form does, a boxed
      value (#5779), as the general Object fallback says */
   *out = c->scopes[omi].yields && nt_ref(c->nt, call_id, "block") >= 0
-         ? TY_POLY : method_call_ret(c, omi, call_id);
+         ? TY_POLY : an_user_call(c, call_id, omi, UC_REOPEN, oci);
   return 1;
 }
 
@@ -1906,17 +1906,36 @@ static int an_user_poly_arm(Compiler *c, const char *name, int argc) {
   return 0;
 }
 
+void an_user_call_record(Compiler *c, int id, int mi, int via, int owner_ci) {
+  if (!g_plan_check || an_builtin_only || id < 0 || id >= c->node_cap) return;
+  c->ucall_inf[id].mi = mi;
+  c->ucall_inf[id].owner_ci = (short)owner_ci;
+  c->ucall_inf[id].via = (unsigned char)via;
+}
+
+TyKind an_user_call(Compiler *c, int id, int mi, int via, int owner_ci) {
+  an_user_call_record(c, id, mi, via, owner_ci);
+  return method_call_ret(c, mi, id);
+}
+
 const BuiltinOp *an_bop_find(Compiler *c, int id, TyKind rt, const char *name,
                              int argc, int has_block) {
   const BuiltinOp *op = bop_find(rt, name, argc, has_block);
-  if (g_plan_check && op && op->result != TY_UNKNOWN && id >= 0 && id < c->node_cap)
+  if (g_plan_check && !an_builtin_only && op && op->result != TY_UNKNOWN &&
+      id >= 0 && id < c->node_cap)
     c->bop_inf[id] = op;
   return op;
 }
 
 static TyKind infer_call_inner(Compiler *c, int id) {
   /* the call is inferred afresh: only the row this pass answers with counts */
-  if (g_plan_check && id >= 0 && id < c->node_cap) c->bop_inf[id] = NULL;
+  /* the builtin-only re-derivation (an_builtin_answer) asks what the call
+     would be with no user method: not the call's answer, so it neither
+     clears nor makes the call's records */
+  if (g_plan_check && !an_builtin_only && id >= 0 && id < c->node_cap) {
+    c->bop_inf[id] = NULL;
+    c->ucall_inf[id].via = UC_NONE;
+  }
 
   /* a yielder push (`y << v` inside an Enumerator.new generator) lowers to a
      Fiber.yield, whose value is boxed -- never the array append it looks like */
@@ -2025,7 +2044,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     int fold_ci = comp_sg_reader_const(c, recv);
     if (fold_ci >= 0) {
       int mi = comp_cmethod_in_chain(c, fold_ci, name, NULL);
-      if (mi >= 0) return method_call_ret(c, mi, id);
+      if (mi >= 0) return an_user_call(c, id, mi, UC_CMETH, fold_ci);
     }
     /* Stage-2: accessor holds one of several constants; unify their cmethod returns. */
     int cand[32];
@@ -2079,7 +2098,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       int owns = ty_is_object(srt) &&
                  (comp_method_in_chain(c, ty_object_class(srt), name, NULL) >= 0 ||
                   comp_reader_in_chain(c, ty_object_class(srt), name, NULL));
-      if (!owns) return method_call_ret(c, smi, id);
+      if (!owns) return an_user_call(c, id, smi, UC_SEND_BLIND, -1);
     }
   }
 
@@ -2093,8 +2112,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
       !nt_str(nt, id, "vis_enforce")) {
-    int bmi = comp_method_index(c, name);
-    if (bmi < 0) bmi = comp_included_method_index(c, name, id);
+    int bmi = comp_method_index(c, name), bvia = UC_TOP;
+    if (bmi < 0) { bmi = comp_included_method_index(c, name, id); bvia = UC_INCLUDED; }
     if (bmi >= 0) {
       Scope *bsc = comp_scope_of(c, id);
       int bcls = bsc ? bsc->class_id : -1;
@@ -2107,7 +2126,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
          which the arm below is what establishes: answering here left the call
          site and the definition disagreeing about the signature. */
       if (!shadowed && !(bmi < c->nscopes && c->scopes[bmi].yields))
-        return method_call_ret(c, bmi, id);
+        return an_user_call(c, id, bmi, bvia, bvia == UC_TOP ? -1 : c->scopes[bmi].class_id);
     }
     /* ...and the first part of that sentence, which only the per-arm
        `!an_bare_call_class_owned` guards said, one name at a time: the
@@ -2194,6 +2213,19 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (!g_infer_ignore_brk && call_breaks(c, id)) return TY_POLY;
 
   TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  /* --plan-check: a boxed receiver's call is dispatched over every user
+     class's method of the name; the first candidate stands for that union
+     (an arm below that binds one method records it instead) */
+  if (g_plan_check && recv >= 0 && rt == TY_POLY && name && !an_builtin_only) {
+    int npc = 0;
+    const PolyCand *pcs = comp_poly_candidates(c, name, &npc);
+    for (int pi = 0; pi < npc; pi++) {
+      if (c->classes[pcs[pi].cls].is_native_class) continue;
+      /* a reader candidate written as a method (`def x = @x`) is that method */
+      int pmi = pcs[pi].mi >= 0 ? pcs[pi].mi : comp_method_in_chain(c, pcs[pi].cls, name, NULL);
+      if (pmi >= 0) { an_user_call_record(c, id, pmi, UC_POLY, pcs[pi].cls); break; }
+    }
+  }
   /* respond_to? on a boxed receiver is the compile-time fold
      (emit_call_body) unless a class that can be the value overrides it
      (respond_to_user_defined: an instantiated class with respond_to? in its
@@ -2250,7 +2282,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     /* a kind no reopening serves gets the builtin's answer: boxed when the
        two answer different types */
     if (emi >= 0 && rt == TY_IO && io_reopen_leaves_builtin(c, name)) {
-      TyKind ur = method_call_ret(c, emi, id);
+      TyKind ur = an_user_call(c, id, emi, UC_REOPEN, eci);
       int sv_skip = g_io_skip_reopen, sv_skip_node = g_io_skip_node;
       g_io_skip_reopen = 1; g_io_skip_node = id;
       TyKind bt = an_builtin_answer(c, id);
@@ -2258,7 +2290,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (bt != TY_UNKNOWN && ur != TY_UNKNOWN && bt != ur) return TY_POLY;
       return ur;
     }
-    if (emi >= 0) return method_call_ret(c, emi, id);
+    if (emi >= 0) return an_user_call(c, id, emi, UC_REOPEN, eci);
   }
   /* An Array or Hash reopen that defines a builtin's name owns it, as the
      scalar reopens do: `class Array; def first = "arr"; end` makes
@@ -2273,7 +2305,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     /* the reopen's own method under this very name: an alias taken before the
        reopen (`alias orig_first first`) still names the builtin */
     if (ami >= 0 && adc == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, name))
-      return method_call_ret(c, ami, id);
+      return an_user_call(c, id, ami, UC_REOPEN, aci);
   }
   /* A boxed-value hash whose values are all one class: its value reads are
      that class (nil included, as a NULL pointer), and `values` an array of it
@@ -4376,10 +4408,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       int ci = sci >= 0 ? sci : comp_class_index(c, nt_str(nt, recv, "name"));
       if (ci >= 0) {
         int mi = comp_cmethod_in_chain(c, ci, name, NULL);
-        if (mi >= 0) return method_call_ret(c, mi, id);
+        if (mi >= 0) return an_user_call(c, id, mi, UC_CMETH, ci);
       }
       int rmi = class_reopen_cmethod(c, recv, name);
-      if (rmi >= 0) return method_call_ret(c, rmi, id);
+      if (rmi >= 0) return an_user_call(c, id, rmi, UC_CMETH, c->scopes[rmi].class_id);
     }
     /* obj.class.cmeth(...) -> unify class method return types across hierarchy */
     if (rty && sp_streq(rty, "CallNode") &&
@@ -4520,7 +4552,24 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (oc_ci >= 0) {
         int oc_mi = comp_method_in_chain(c, oc_ci, name, NULL);
         if (oc_mi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) return TY_POLY;
-        if (oc_mi >= 0) return method_call_ret(c, oc_mi, id);
+        if (oc_mi >= 0) return an_user_call(c, id, oc_mi, UC_REOPEN, oc_ci);
+      }
+    }
+    /* ...and a nil receiver's NilClass reopen, an Integer or Float
+       receiver's Numeric reopen, ahead of Object's: the emitter's reopened-
+       builtin dispatch calls them for a name the receiver's own class does
+       not define, as CRuby's ancestry does. Answered by Object's method, the
+       call was typed from a method it never ran (`3.kind_tag` a String slot
+       around Numeric's Float). A name the builtin surface knows stays the
+       builtin's, where the emitter's earlier arms keep it. */
+    if (rt == TY_NIL || rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
+      const char *own = rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer";
+      const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
+      if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
+        int aci = comp_class_index(c, anc);
+        int ami = aci >= 0 ? comp_method_in_chain(c, aci, name, NULL) : -1;
+        if (ami >= 0 && c->scopes[ami].class_id == aci)
+          return an_user_call(c, id, ami, UC_REOPEN, aci);
       }
     }
   }
@@ -4588,6 +4637,14 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv < 0) {
     Scope *self = comp_scope_of(c, id);
     if (self->class_id >= 0 && ie_class_of(c, id) < 0) {
+      /* inside a class method self is the class, so its class methods come
+         first, as comp_self_call_mi and the inline splice resolve the call:
+         an instance method or reader of the same name stood in for
+         `def self.go` and typed the call by the wrong body */
+      if (self->is_cmethod && !sp_streq(name, "new")) {
+        int cmi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
+        if (cmi >= 0) return an_self_call_ret(c, self, name, cmi, id);
+      }
       { int rdcls2 = -1;
         if (comp_reader_in_chain(c, self->class_id, name, &rdcls2)) {
           const char *rname2 = comp_resolve_alias(c, self->class_id, name);
@@ -4742,7 +4799,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (cbody < 0) cbody = g_cbody_class_id;
     if (cbody >= 0) {
       int smi = comp_cmethod_in_chain(c, cbody, name, NULL);
-      if (smi >= 0) return method_call_ret(c, smi, id);
+      if (smi >= 0) return an_user_call(c, id, smi, UC_CMETH, cbody);
     }
   }
   /* bare call inside an instance_eval/exec block: dispatch on receiver class */
@@ -4750,7 +4807,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     int iec = ie_class_of(c, id);
     if (iec >= 0) {
       int imi = comp_method_in_chain(c, iec, name, NULL);
-      if (imi >= 0) return method_call_ret(c, imi, id);
+      if (imi >= 0) return an_user_call(c, id, imi, UC_IE, iec);
       TyKind at;
       if (argc == 0 && attr_reader_ty(c, iec, name, &at)) return at;
     }
@@ -4820,9 +4877,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
 
   /* user-defined free-function call (no receiver) */
   if (recv < 0) {
-    int mi = comp_method_index(c, name);
-    if (mi < 0) mi = comp_included_method_index(c, name, id);
-    if (mi >= 0) return method_call_ret(c, mi, id);
+    int mi = comp_method_index(c, name), fvia = UC_TOP;
+    if (mi < 0) { mi = comp_included_method_index(c, name, id); fvia = UC_INCLUDED; }
+    if (mi >= 0) return an_user_call(c, id, mi, fvia, fvia == UC_TOP ? -1 : c->scopes[mi].class_id);
     /* Kernel conversions */
     if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
       if (g_promote_mode && infer_type(c, argv[0]) == TY_FLOAT) return TY_POLY;   /* see above (#4688) */
@@ -5192,7 +5249,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     int xr[8];
     int xn = exc_reopen_definers(c, name, xr, 8);
     if (xn > 0) {
-      TyKind xt = method_call_ret(c, comp_method_in_chain(c, xr[0], name, NULL), id);
+      TyKind xt = an_user_call(c, id, comp_method_in_chain(c, xr[0], name, NULL), UC_REOPEN, xr[0]);
       for (int q = 1; q < xn; q++)
         if (method_call_ret(c, comp_method_in_chain(c, xr[q], name, NULL), id) != xt) return TY_POLY;
       return xt;
@@ -5629,7 +5686,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
            candidate skipped the builtin answer for the name applies, and once
            the method's return does settle it unifies in on a later round. */
         if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN) continue;
-        if (mi >= 0) { r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1; continue; }
+        if (mi >= 0) {
+          if (!found) an_user_call_record(c, id, mi, UC_POLY, k);
+          r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1; continue;
+        }
         int rdcls = pcs[pi].rdcls;
         if (rdcls >= 0) {
           /* resolve alias so `alias_method :required?, :required` reads the
@@ -8497,6 +8557,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     return yield_value_type(c, ymi);
   }
   if (nk == NK_SuperNode || nk == NK_ForwardingSuperNode) {
+    if (g_plan_check && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
     Scope *s = comp_scope_of(c, id);
     if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
     const char *shadow = comp_super_shadow(c, s);
@@ -8505,6 +8566,7 @@ TyKind infer_uncached(Compiler *c, int id) {
                          : comp_method_in_class(c, s->class_id, shadow);
       if (mi < 0) return TY_UNKNOWN;
       /* a yielding shadow is spliced as a parent is */
+      an_user_call_record(c, id, mi, UC_SUPER, s->class_id);
       return super_target_ret(c, s, mi, id);
     }
     /* Class#new: an instance of the receiving class, which is this one or,
@@ -8525,6 +8587,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     int mi = s->is_cmethod ? comp_cmethod_in_chain(c, p, uname, NULL)
                            : comp_method_in_chain(c, p, uname, NULL);
     if (mi < 0) return rto_super ? TY_BOOL : TY_UNKNOWN;
+    an_user_call_record(c, id, mi, UC_SUPER, p);
     return super_target_ret(c, s, mi, id);
   }
   if (nk == NK_AndNode || nk == NK_OrNode) {

@@ -1,0 +1,13 @@
+[:inst, 1]
+[:inst, 2]
+[:cls, 3]
+[:cls, 4]
+[:cls, "five"]
+[:cls, "again"]
+[:cls, 6]
+[:cls, "seven"]
+[:cls, "again"]
+"one"
+"x"
+:y
+[:top, 8]

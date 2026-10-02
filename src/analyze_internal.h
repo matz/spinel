@@ -303,6 +303,12 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);
 struct BuiltinOp;
 const struct BuiltinOp *an_bop_find(Compiler *c, int id, TyKind rt, const char *name,
                                     int argc, int has_block);
+/* method_call_ret(c, mi, id) for a call an arm of infer_call bound to the
+   user method mi, recording the binding (via UC_*, the class owner_ci whose
+   chain was searched) under --plan-check */
+TyKind an_user_call(Compiler *c, int id, int mi, int via, int owner_ci);
+/* the record alone, for an arm that answers the bound call another way */
+void an_user_call_record(Compiler *c, int id, int mi, int via, int owner_ci);
 int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out);
 /* The array a map-shaped call answers from its block's tail (analyze_infer_recv.c). */
 TyKind infer_map_block_ty(Compiler *c, int id, int block);

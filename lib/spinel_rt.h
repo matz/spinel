@@ -148,6 +148,7 @@ static inline void sp_builtin_cls_ids_distinct(int id) {
     case SP_BUILTIN_COMPLEX: case SP_BUILTIN_RATIONAL:
     case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_FLOAT_RANGE:
     case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_OPENSTRUCT:
+    case SP_BUILTIN_RANDOM: case SP_BUILTIN_ARGF:
     case SP_BUILTIN_PROCESS_STATUS:   /* agentwm/dvtm: Process.waitpid2's boxed
                                           return value, dispatches signaled?/exited?/
                                           termsig/... via runtime type tag. */
@@ -2182,6 +2183,8 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_SOCKOPT: return SPL("Socket::Option");
         case SP_BUILTIN_PROCESS_STATUS: return SPL("Process::Status");
         case SP_BUILTIN_YIELDER: return SPL("Enumerator::Yielder");
+        case SP_BUILTIN_RANDOM: return SPL("Random");
+        case SP_BUILTIN_ARGF: return SPL("ARGF.class");
         case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
         default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
       }
@@ -7536,6 +7539,7 @@ static inline const char *sp_poly_inspect(sp_RbVal v) {
         }
         case SP_BUILTIN_FIBER:  return sp_Fiber_inspect((sp_Fiber *)v.v.p);
         case SP_BUILTIN_THREAD: return sp_Thread_inspect((sp_thread *)v.v.p);
+        case SP_BUILTIN_ARGF:   return SPL("ARGF");
         default:
           /* a user object: the generated per-class ivar walk renders
              #<Name:0x... @a=..., ...> like CRuby's default inspect */

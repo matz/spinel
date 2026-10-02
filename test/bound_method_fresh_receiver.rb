@@ -50,12 +50,14 @@ puts pick_plus(true).unbind.name
 puts pick_plus(true).parameters.length
 
 # The generic Method#to_proc fallback allocates the proc while the receiver
-# Method is otherwise unreachable (target unresolved). Storing the proc forces
+# Method is otherwise unreachable (target unresolved: self.class names no one
+# class, as FreshClassValue has a subclass). Storing the proc forces
 # the allocation to happen with GC stress on.
 class FreshClassValue
   def self.cm(a) = a
   def go = self.class.method(:cm).to_proc
 end
+class FreshClassSub < FreshClassValue; end
 kept = []
 300.times { kept << [FreshClassValue.new.go] }
 puts "ok"

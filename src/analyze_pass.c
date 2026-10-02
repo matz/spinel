@@ -12418,11 +12418,7 @@ int infer_block_params(Compiler *c) {
       int tmi = bx >= 0 && nt_kind(nt, bx) == NK_CallNode ? method_obj_target_mi(c, bx) : -1;
       int ymi = -1;
       if (tmi >= 0 && !method_call_param_shift(c, bx, tmi)) {
-        if (recv < 0) {
-          Scope *self = comp_scope_of(c, id);
-          if (self && self->class_id >= 0) ymi = comp_method_in_chain(c, self->class_id, name, NULL);
-          if (ymi < 0) ymi = comp_method_index(c, name);
-        }
+        if (recv < 0) ymi = comp_self_call_mi(c, id, name);
         else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                            nt_kind(nt, recv) == NK_ConstantPathNode)) {
           int cid = nt_str(nt, recv, "name") ? comp_class_index(c, nt_str(nt, recv, "name")) : -1;
@@ -12547,18 +12543,12 @@ int infer_block_params(Compiler *c) {
     {
       int mi = -1;
       if (recv < 0) {
+        /* the class body's own class methods, then self's: the class
+           methods first in a class method, the instance chain, and a
+           top-level def last (comp_self_call_mi), as the splice resolves
+           the call */
         mi = comp_cbody_call_mi(c, id, name);
-        if (mi < 0) mi = comp_method_index(c, name);
-        if (mi < 0) {
-          Scope *self = comp_scope_of(c, id);
-          if (self->class_id >= 0) {
-            mi = comp_method_in_chain(c, self->class_id, name, NULL);
-            /* inside a class method, a bare call also reaches sibling class
-               methods (self is the class there) */
-            if (mi < 0 && self->is_cmethod)
-              mi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
-          }
-        }
+        if (mi < 0) mi = comp_self_call_mi(c, id, name);
       }
       else {
         TyKind rt0 = infer_type(c, recv);
@@ -13670,15 +13660,9 @@ int backprop_call_target(Compiler *c, int call_id) {
   if (!name || sp_streq(name, "new")) return -1;  /* constructors bind elsewhere */
   int recv = nt_ref(nt, call_id, "receiver");
   if (recv < 0) {
-    int mi = comp_method_index(c, name);
-    if (mi < 0) {
-      Scope *self = comp_scope_of(c, call_id);
-      if (self && self->class_id >= 0) {
-        mi = comp_method_in_chain(c, self->class_id, name, NULL);
-        if (mi < 0 && self->is_cmethod)
-          mi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
-      }
-    }
+    /* self's class methods first in a class method, then its instance
+       chain, then a top-level def, as inference resolves the call */
+    int mi = comp_self_call_mi(c, call_id, name);
     if (mi < 0) mi = comp_included_method_index(c, name, call_id);
     return mi;
   }

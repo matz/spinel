@@ -451,7 +451,7 @@ expect_nome("toproc_req_kw")   { KwProc.new.method(:req).to_proc.call(1, c: 9) }
 expect_nome("toproc_req_nokw") { KwProc.new.method(:req).to_proc.call(1) }
 
 # A class value that is not a statically-known constant
-# (`self.class.method(:m)`) resolves no target, so the bind site stamps a NULL
+# (`self.class.method(:m)` in a class with a subclass) resolves no target, so the bind site stamps a NULL
 # fn. Invoking it -- directly, through a poly slot, or through #to_proc -- must
 # decline with NoMethodError rather than jump through NULL. CRuby answers this
 # specific shape, so the decline is a documented limitation; the guarantee
@@ -463,6 +463,7 @@ class ClassValueTarget
   def poly = (a = [self.class.method(:cm)]; a[0].call(3))
   def poly_proc = (a = [self.class.method(:cm)]; a[0].to_proc.call(3))
 end
+class ClassValueSub < ClassValueTarget; end
 expect_nome("class_value_call")     { ClassValueTarget.new.direct }
 expect_nome("class_value_toproc")   { ClassValueTarget.new.direct_proc }
 expect_nome("class_value_poly")     { ClassValueTarget.new.poly }

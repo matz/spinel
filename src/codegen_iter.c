@@ -62,6 +62,7 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
    the cap means unbounded self-recursion -- report it instead of looping (#2908). */
 #define SP_INLINE_DEPTH_MAX 64
 static int g_inline_depth = 0;
+int inline_splice_depth(void) { return g_inline_depth; }
 
 /* --- inline parameter aliasing ------------------------------------------
    An inlined (yielding) method's String parameter that the body APPENDS to
@@ -696,6 +697,7 @@ void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, i
 }
 
 int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
+  if (g_plan_check) ucall_emitted(id);
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -899,6 +901,9 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   int tag = ++g_tmp;
   if (g_inline_depth >= SP_INLINE_DEPTH_MAX)
     unsupported_feature(c, id, "a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)");
+  /* --plan-check: the call is spliced from mi (observed at the call's own
+     depth, before the body's) */
+  if (g_plan_check) ucall_observe(c, id, mi, recv_class >= 0 ? recv_class : cm_class, 0);
   g_inline_depth++;
   int saved_nren = g_nren, saved_block = g_block_id;
   int saved_bnren = g_block_nren, saved_yfbn = g_yield_block_fallback_nren;
@@ -3413,15 +3418,22 @@ static int call_targets_yielding_method(Compiler *c, int id) {
   int recv = nt_ref(nt, id, "receiver");
   int mi = -1;
   if (recv < 0) {
+    /* emit_inline_call_x's order: the instance_exec class, then the
+       enclosing class chain (its class methods first in a class method),
+       then the class body, and only then the top level. Looking at the top
+       level first took a top-level def that does not yield for a class's
+       own yielding method of the same name, so the call was left to a plain
+       call of a function a yielding method never has; and in a class method
+       the instance chain was asked before the class methods. */
     Scope *encl = comp_scope_of(c, id);
     if (g_ie_class_id >= 0) mi = comp_method_in_chain(c, g_ie_class_id, name, NULL);
-    if (mi < 0 && (!encl || encl->class_id < 0) && g_class_body_id >= 0)
+    if (mi < 0 && encl && encl->class_id >= 0) {
+      if (encl->is_cmethod) mi = comp_cmethod_in_chain(c, encl->class_id, name, NULL);
+      if (mi < 0) mi = comp_method_in_chain(c, encl->class_id, name, NULL);
+    }
+    else if (mi < 0 && g_class_body_id >= 0)
       mi = comp_cmethod_in_chain(c, g_class_body_id, name, NULL);
     if (mi < 0) mi = comp_method_index(c, name);
-    if (mi < 0 && encl && encl->class_id >= 0) {
-      mi = comp_method_in_chain(c, encl->class_id, name, NULL);
-      if (mi < 0 && encl->is_cmethod) mi = comp_cmethod_in_chain(c, encl->class_id, name, NULL);
-    }
     /* A bare call to a method of a module included at the top level, which
        emit_inline_call_x splices under the same condition. Missed here, a
        block whose tail is such a call took the statement form, and the

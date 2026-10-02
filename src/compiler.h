@@ -645,6 +645,15 @@ static inline int native_takes(const NativeMethod *m, int argc) {
   return m->nargs == argc || (m->rest && argc > m->nargs);
 }
 
+/* A user-method call as inference bound it (--plan-check, #7100): the
+   method scope, the class whose chain the binding arm searched (-1 for a
+   top-level def), and which arm bound it. via 0 (UC_NONE): no binding. */
+enum { UC_NONE, UC_TOP, UC_INST, UC_CMETH, UC_SUPER, UC_SEND_BLIND, UC_IE,
+       UC_INCLUDED, UC_REOPEN,
+       UC_POLY };   /* a boxed receiver's dispatch: the first user candidate
+                       stands for the union the call was typed over */
+typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
+
 typedef struct {
   const NodeTable *nt;
   struct FwdAnalysis *fwd_analysis; /* owned forwarding proofs, freed with this compiler */
@@ -710,6 +719,8 @@ typedef struct {
                               alone would give, so codegen can shape its arm (#3459) */
   const struct BuiltinOp **bop_inf; /* [node_cap] the builtin-op row inference
                                        answered the call with (--plan-check only) */
+  UCallInf *ucall_inf; /* [node_cap] the user method inference bound the call
+                          to (--plan-check only) */
   int *hash_default_arg_memo; /* [node_cap] hash_new_default_arg(node) memo; INT_MIN = uncomputed */
   unsigned hash_default_arg_memo_gen; /* scope-index generation the memo was built for */
   int hash_default_arg_memo_cap;      /* allocated length of hash_default_arg_memo */

@@ -53,7 +53,9 @@ if [ ! -f "$REFDIR/.done" ]; then
   # together with their lengths. A reference tree at a path of the same
   # length as this one lets a plain rename make those bytes equal.
   L=${#ROOT}
-  WT=$(printf "/tmp/cident-%s%0100d" "$SHA" 0 | cut -c1-"$L")
+  # the process id keeps two runs against the same revision (from two
+  # checkouts whose paths have the same length) out of each other's tree
+  WT=$(printf "/tmp/cident-%s-%s%0100d" "$$" "$SHA" 0 | cut -c1-"$L")
   [ "$L" -ge 20 ] && [ ${#WT} -eq "$L" ] || { echo "cident: cannot place a reference tree beside $ROOT" >&2; exit 2; }
   git worktree remove --force "$WT" >/dev/null 2>&1; rm -rf "$WT"
   git worktree add --detach "$WT" "$SHA" >/dev/null 2>&1 || { echo "cident: cannot check out $REV" >&2; exit 2; }

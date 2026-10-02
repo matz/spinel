@@ -21,6 +21,7 @@
 #include "spinel_rev.h"
 #include "codegen.h"
 #include "analyze.h"
+#include "repr.h"
 #include "csplit.h"
 
 #include <stdio.h>
@@ -510,6 +511,7 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--emit-rbs"))    { emit_rbs = 1; i++; }
     else if (sp_streq(a, "--emit-types"))  { emit_types = 1; i++; }
     else if (sp_streq(a, "--plan-check"))  { g_plan_check = 1; i++; }
+    else if (sp_streq(a, "--repr-check"))  { g_repr_check = 1; i++; }
     else if (sp_streq(a, "--emit-symbol-map")) { emit_symbol_map = 1; i++; }
     else if (sp_streq(a, "--dump-ast"))    { dump_ast = 1; i++; }
     else if (sp_streq(a, "-h") || sp_streq(a, "--help")) { usage(); return 0; }

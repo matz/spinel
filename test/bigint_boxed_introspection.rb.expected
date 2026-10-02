@@ -1,0 +1,17 @@
+[:bit_length, Integer, 101]
+[:size, Integer, 13]
+[:numerator, Integer, 1267650600228229401496703205376]
+[:denominator, Integer, 1]
+[:nonzero?, Integer, 1267650600228229401496703205376]
+[:digits, Array, 31]
+[true, true]
+[0, 1, nil]
+[7, 1, 7]
+[-7, 1, -7]
+[:custom, :custom, :custom]
+[1267650600228229401496703205376, 1, 1267650600228229401496703205376]
+nil
+1.5
+(1/2)
+(1+2i)
+nil

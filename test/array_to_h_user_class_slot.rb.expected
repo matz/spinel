@@ -1,0 +1,4 @@
+{pairs: 1}
+[ArgumentError, "wrong array length at 0 (expected 2, was 3)"]
+[TypeError, "wrong element type Integer at 0 (expected array)"]
+{1 => 2}

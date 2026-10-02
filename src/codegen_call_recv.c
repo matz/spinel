@@ -858,6 +858,12 @@ static void emit_find_loop_head(Compiler *c, int id, const char *k, int ti, int 
     buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
 }
 
+/* The inspect label of a blockless combinator's Enumerator, CRuby's
+   `combination(2)` or an argless `permutation`; `tn` holds the count. */
+static void emit_combinator_enum_label(const char *name, int argc, int tn, Buf *b) {
+  if (argc == 1) buf_printf(b, "sp_sprintf(\"%s(%%lld)\", (long long)_t%d)", name, tn);
+  else buf_printf(b, "SPL(\"%s\")", name);
+}
 static Buf block_cond_buf(Compiler *c, int block, const int *bb, int bn) {
   Buf cb; memset(&cb, 0, sizeof cb);
   (void)bb; (void)bn;
@@ -865,6 +871,21 @@ static Buf block_cond_buf(Compiler *c, int block, const int *bb, int bn) {
   int sv = g_indent; g_indent++;
   emit_iter_step_cond(c, &st, 0, &cb); g_indent = sv;
   return cb;
+}
+
+/* to_h on an Array of Integers, Floats or Strings: no element is a pair, so
+   the call raises CRuby's TypeError, or answers {} when the Array is empty.
+   A program with a def, alias or define_method of to_h in a class or module
+   keeps the path it had. */
+static int emit_scalar_array_to_h(Compiler *c, int id, int recv, TyKind rt,
+                                  const char *name, int argc, Buf *b) {
+  if (!(rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY) ||
+      !sp_streq(name, "to_h") || argc != 0 || nt_ref(c->nt, id, "block") >= 0 ||
+      an_user_recv_defines_method(c, "to_h"))
+    return 0;
+  buf_puts(b, "((sp_PolyPolyHash *)sp_poly_to_h_val(");
+  emit_boxed(c, recv, b); buf_puts(b, ").v.p)");
+  return 1;
 }
 
 int emit_array_call(Compiler *c, int id, Buf *b) {
@@ -2216,6 +2237,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv >= 0 && ty_is_array(rt)) {
+    if (emit_scalar_array_to_h(c, id, recv, rt, name, argc, b)) return 1;
     /* a nil / true / false OPERAND to the Array-expecting family is CRuby's
        TypeError ("no implicit conversion of nil into Array") -- concat fell
        to NoMethodError, product answered [] -- with every argument still
@@ -2467,10 +2489,13 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                         " sp_int _ix = _t%d < 0 ? _t%d + _len : _t%d;"
                         " if (_ix < 0 || _ix >= _len) { ",
                      an, tr, ti, ti, ti);
-          if (fp0r) buf_printf(b, "lv_%s = _t%d; ", fp0r, ti);
-          for (int j = 0; j + 1 < fbn; j++) emit_stmt(c, fbb[j], b, 0);
+          Buf bind; memset(&bind, 0, sizeof bind);
+          if (fp0r) buf_printf(&bind, "lv_%s = _t%d; ", fp0r, ti);
           buf_printf(b, "sp_PolyArray_push(_t%d, ", to);
-          if (fbn > 0) emit_boxed(c, fbb[fbn - 1], b); else buf_puts(b, "sp_box_nil()");
+          /* Build the fallback value after binding the missing index; its
+             literal setup must stay inside this out-of-range branch. */
+          emit_fallback_block_value(c, fbb, fbn, bind.p, 1, "sp_box_nil()", 1, b);
+          free(bind.p);
           buf_puts(b, "); }\nelse { ");
           { char getx[96]; snprintf(getx, sizeof getx, "sp_%sArray_get(_t%d, _ix)", an, tr);
             buf_printf(b, "sp_PolyArray_push(_t%d, ", to);
@@ -3919,10 +3944,12 @@ else {
                            : sp_streq(name, "repeated_permutation") ? "sp_IntArray_repeated_permutation"
                            : "sp_IntArray_repeated_combination";
         int ta = ++g_tmp, tc = ++g_tmp, tout = ++g_tmp, ti = ++g_tmp;
+        int tn = ++g_tmp, te = ++g_tmp;
         buf_printf(b, "({ sp_IntArray *_t%d = ", ta); emit_recv_rooted(c, recv, ta, "SP_GC_ROOT", b);
-        buf_printf(b, "sp_PtrArray *_t%d = %s(_t%d, ", tc, combfn, ta);
+        buf_printf(b, "sp_int _t%d = ", tn);
         if (argc == 1) emit_int_expr(c, argv[0], b);
         else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);   /* argless permutation: full length */
+        buf_printf(b, "; sp_PtrArray *_t%d = %s(_t%d, _t%d", tc, combfn, ta, tn);
         /* the combinations are only in this temp until the loop below boxes
            them, and the array it boxes them into allocates first */
         buf_printf(b, "); SP_GC_ROOT(_t%d);", tc);
@@ -3930,7 +3957,10 @@ else {
         buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++)", ti, ti, tc, ti);
         buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int_array(_t%d->data[_t%d]));", tout, tc, ti);
         /* blockless: an Enumerator over those tuples (#3614) */
-        buf_printf(b, " sp_Enumerator_new_from(sp_box_poly_array(_t%d)); })", tout);
+        buf_printf(b, " sp_Enumerator *_t%d = sp_Enumerator_new_from(sp_box_poly_array(_t%d)); SP_GC_ROOT(_t%d);", te, tout, te);
+        buf_printf(b, " sp_enum_with_src(_t%d, sp_box_int_array(_t%d), ", te, ta);
+        emit_combinator_enum_label(name, argc, tn, b);
+        buf_puts(b, "); })");
         return 1;
       }
       if ((sp_streq(name, "repeated_combination") || sp_streq(name, "combination") ||
@@ -3942,15 +3972,19 @@ else {
                            : sp_streq(name, "permutation") ? "sp_PolyArray_permutation"
                            : sp_streq(name, "repeated_permutation") ? "sp_PolyArray_repeated_permutation"
                            : "sp_PolyArray_repeated_combination";
-        int ta = ++g_tmp;
-        buf_printf(b, "({ sp_PolyArray *_t%d = sp_poly_to_poly_array(", ta);
+        int ta = ++g_tmp, ts = ++g_tmp, tn = ++g_tmp, te = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = ", ts);
         emit_boxed(c, recv, b);
-        buf_printf(b, "); SP_GC_ROOT(_t%d); ", ta);
-        buf_puts(b, "sp_Enumerator_new_from(sp_box_poly_array(");
-        buf_printf(b, "%s(_t%d, ", combfn, ta);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = sp_poly_to_poly_array(_t%d); SP_GC_ROOT(_t%d); sp_int _t%d = ", ts, ta, ts, ta, tn);
         if (argc == 1) emit_expr(c, argv[0], b);
         else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);
+        buf_printf(b, "; sp_Enumerator *_t%d = ", te);
+        buf_puts(b, "sp_Enumerator_new_from(sp_box_poly_array(");
+        buf_printf(b, "%s(_t%d, _t%d", combfn, ta, tn);
         buf_puts(b, ")))");
+        buf_printf(b, "; SP_GC_ROOT(_t%d); sp_enum_with_src(_t%d, _t%d, ", te, te, ts);
+        emit_combinator_enum_label(name, argc, tn, b);
+        buf_puts(b, ")");
         buf_puts(b, "; })");
         return 1;
       }
@@ -15235,6 +15269,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         sp_streq(name, "finite?")   ? "sp_poly_finite_p" :
         sp_streq(name, "infinite?") ? "sp_poly_infinite" :
         sp_streq(name, "zero?")     ? "sp_poly_zero_p" :
+        sp_streq(name, "nonzero?")  ? "sp_poly_nonzero" :
         sp_streq(name, "positive?") ? "sp_poly_positive_p" :
         sp_streq(name, "negative?") ? "sp_poly_negative_p" :
         sp_streq(name, "real?")     ? "sp_poly_real_p" :

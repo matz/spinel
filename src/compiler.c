@@ -2289,7 +2289,8 @@ const char *poly_enum_op_for(const char *name) {
    boxed answer read as that object, and the program segfaulted (#4012). */
 int poly_numeric_read_p(const char *name) {
   static const char *const N[] = {
-    "abs", "round", "succ", "next", "pred", "ceil", "floor", "truncate", NULL };
+    "abs", "round", "succ", "next", "pred", "ceil", "floor", "truncate",
+    "numerator", "denominator", "nonzero?", NULL };
   if (!name) return 0;
   for (int i = 0; N[i]; i++) if (sp_streq(name, N[i])) return 1;
   return 0;

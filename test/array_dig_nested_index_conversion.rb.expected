@@ -1,0 +1,13 @@
+[TypeError, "no implicit conversion of Symbol into Integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+[TypeError, "no implicit conversion of false into Integer"]
+2
+2
+3
+4
+nil
+nil
+[TypeError, "no implicit conversion of Symbol into Integer"]
+I9

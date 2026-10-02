@@ -4123,6 +4123,43 @@ static void emit_voided_operands(Compiler *c, int recv, int arg, int v, Buf *b) 
   emit_boxed(c, arg, b); buf_printf(b, "), %d)", v);
 }
 
+/* Rational(x, exception: f) / Complex(x, exception: f) whose operand may be
+   nil, when the inference typed the call poly: a nil operand answers nil only
+   when the flag is false. Keeps operand order and keyword validation,
+   including for a boxed nil value. Answers 0 (nothing emitted) for any other
+   shape, which keeps the path it had. */
+static int emit_nullable_numeric_convert(Compiler *c, int id, const int *argv, int exc,
+                                         const char *klass, Buf *b) {
+  TyKind at = comp_ntype(c, argv[0]);
+  if (nt_kind(c->nt, argv[1]) != NK_KeywordHashNode || comp_ntype(c, id) != TY_POLY ||
+      !(at == TY_NIL || at == TY_POLY ||
+        ((at == TY_INT || at == TY_FLOAT) && nullable_int_value(c, argv[0]))))
+    return 0;
+  int arg = argv[0];
+  int tv = ++g_tmp, te = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tv, te);
+  emit_boxed(c, exc, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);"
+                " if (_t%d.tag != SP_TAG_BOOL) sp_raise_cls(\"ArgumentError\","
+                " sp_str_concat(SPL(\"expected true or false as exception: \"), sp_poly_inspect(_t%d)));"
+                " sp_RbVal _out; if (_t%d.tag == SP_TAG_NIL) {"
+                " if (_t%d.v.b) sp_raise_cls(\"TypeError\", \"can't convert nil into %s\");"
+                " _out = sp_box_nil(); }\nelse { _out = ", te, te, te, tv, te, klass);
+  /* Preserve the existing non-nil single-argument conversion paths. */
+  if (sp_streq(klass, "Rational"))
+    buf_printf(b, "sp_box_rational(sp_poly_kernel_rational(_t%d))", tv);
+  else {
+    /* the one-argument form's conversion: a boxed Complex keeps its
+       imaginary part */
+    int tf = ++g_tmp, tc = ++g_tmp;
+    buf_printf(b, "({ int _t%d = 0; sp_Complex _t%d = sp_poly_complex_arg(_t%d, &_t%d, 1);"
+                  " sp_box_complex(sp_complex_convert2(_t%d, _t%d, (sp_Complex){0, 0, 0}, 0)); })",
+               tf, tc, tv, tf, tc, tf);
+  }
+  buf_puts(b, "; } _out; })");
+  return 1;
+}
 static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -4157,12 +4194,9 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Complex") && argc >= 1) {
-    int soft_convert = 0;
-    /* `exception: false` asks for nil instead of a raise on an unparseable
-       argument. The keyword hash counted as a second positional, so the
-       String form was skipped and the parse read the string as a float
-       (#3869). spinel's Complex() never raises, so the flag only has to not
-       break the call. */
+    int soft_convert = 0, exception_node = -1;
+    /* The exception keyword is not an imaginary component (#3869).
+       String parsing and nullable conversion handle it below. */
     if (argc == 2 && nt_type(nt, argv[1]) &&
         (sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") ||
          sp_streq(nt_type(nt, argv[1]), "HashNode"))) {
@@ -4174,9 +4208,11 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         const char *kt = key >= 0 ? nt_type(nt, key) : NULL;
         const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
         if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
+        else exception_node = nt_ref(nt, els[e], "value");
       }
       if (only_exc) { argc = 1; soft_convert = 1; }
     }
+    if (soft_convert && emit_nullable_numeric_convert(c, id, argv, exception_node, "Complex", b)) return 1;
     /* Complex(str, exception: false): nil rather than a raise when the string
        does not parse (#3893) */
     if (soft_convert && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
@@ -4305,11 +4341,9 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) {
-    int soft_convert_r = 0;
-    /* `exception: false` asks for nil rather than a raise; the keyword hash
-       counted as the denominator and the result was built from its address
-       (#3869). spinel's Rational() does not raise, so dropping the keyword is
-       the whole of it. */
+    int soft_convert_r = 0, exception_node = -1;
+    /* The exception keyword is not a denominator (#3869).
+       String parsing and nullable conversion handle it below. */
     if (argc == 2 && nt_type(nt, argv[1]) &&
         (sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") ||
          sp_streq(nt_type(nt, argv[1]), "HashNode"))) {
@@ -4320,9 +4354,11 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         const char *kt = key >= 0 ? nt_type(nt, key) : NULL;
         const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
         if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
+        else exception_node = nt_ref(nt, els[e], "value");
       }
       if (only_exc) { argc = 1; soft_convert_r = 1; }
     }
+    if (soft_convert_r && emit_nullable_numeric_convert(c, id, argv, exception_node, "Rational", b)) return 1;
     /* Rational(str, exception: false): nil rather than a raise (#3893) */
     if (soft_convert_r && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       int tr9 = ++g_tmp;
@@ -9520,22 +9556,22 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            sp_streq(name, "pred") || sp_streq(name, "ceil") ||
            sp_streq(name, "floor") || sp_streq(name, "truncate") ||
            /* the value-answering numeric queries a user class can shadow the
-              same way: abs2 and infinite? answer boxed, numerator and
-              denominator a machine int (#4651). bit_length is the same
-              shape: a machine int, and the runtime helper is
+              same way: abs2, infinite?, numerator and denominator answer
+              boxed values. bit_length answers a machine int, and its helper is
               already named to match `sp_poly_%s` below. */
            sp_streq(name, "abs2") || sp_streq(name, "infinite?") ||
            sp_streq(name, "numerator") || sp_streq(name, "denominator") ||
-           sp_streq(name, "bit_length"))) {
+           sp_streq(name, "nonzero?") || sp_streq(name, "bit_length"))) {
         char nv[96];
-        int int_valued = sp_streq(name, "numerator") || sp_streq(name, "denominator") ||
-                         sp_streq(name, "bit_length");
+        int int_valued = sp_streq(name, "bit_length");
         if (sp_streq(name, "succ") || sp_streq(name, "next"))
           snprintf(nv, sizeof nv, "sp_poly_succ_m(_t%d, %d)", tv, sp_streq(name, "next") ? 1 : 0);
         else if (sp_streq(name, "pred"))
           snprintf(nv, sizeof nv, "sp_poly_sub(_t%d, sp_box_int(1))", tv);
         else if (sp_streq(name, "infinite?"))
           snprintf(nv, sizeof nv, "sp_poly_infinite(_t%d)", tv);
+        else if (sp_streq(name, "nonzero?"))
+          snprintf(nv, sizeof nv, "sp_poly_nonzero(_t%d)", tv);
         else
           snprintf(nv, sizeof nv, "sp_poly_%s(_t%d)", name, tv);
         buf_printf(b, " default: _t%d = ", tr);
@@ -21422,6 +21458,12 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         else { buf_puts(b, "({ (void)("); emit_expr(c, ir, b); buf_puts(b, "); "); }
         if (sp_streq(badc, "nil"))
           buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\"); ");
+        else if (sp_streq(badc, "Boolean")) {
+          /* The Bool type contains two Ruby values. Evaluate the index and
+             let the scalar conversion name the actual true/false value. */
+          int bic = 0; const int *biv = call_args(nt, id, &bic);
+          buf_puts(b, "(void)("); emit_int_expr(c, biv[0], b); buf_puts(b, "); ");
+        }
         else
           buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ", badc);
         buf_printf(b, "%s; })", dv5 ? dv5 : "0");

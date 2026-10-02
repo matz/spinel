@@ -1,0 +1,28 @@
+[nil, nil]
+nil
+nil
+[TypeError, "can't convert nil into Rational"]
+[TypeError, "can't convert nil into Complex"]
+[TypeError, "can't convert nil into Rational"]
+[TypeError, "can't convert nil into Complex"]
+[ArgumentError, "expected true or false as exception: nil"]
+[ArgumentError, "expected true or false as exception: 0"]
+arg
+flag
+nil
+arg
+flag
+nil
+nil
+nil
+(2/1)
+(2+0i)
+[TypeError, "can't convert nil into Rational"]
+[TypeError, "can't convert nil into Complex"]
+nil
+nil
+(2/1)
+(2+0i)
+(3/1)
+(2.5+0i)
+(1+2i)

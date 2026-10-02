@@ -4137,8 +4137,9 @@ static sp_int sp_brat_part_i(sp_Bigint *b) {
   sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
   return 0;
 }
-static sp_int sp_poly_numerator(sp_RbVal v) { if (sp_poly_is_rational(v)) return sp_poly_as_rational(v).num; if (sp_poly_is_brat(v) && v.v.p) return sp_brat_part_i(((sp_BigRational *)v.v.p)->num); if (v.tag == SP_TAG_INT) return v.v.i; sp_raise_poly_nomethod("numerator", v); }
-static sp_int sp_poly_denominator(sp_RbVal v) { if (sp_poly_is_rational(v)) return sp_poly_as_rational(v).den; if (sp_poly_is_brat(v) && v.v.p) return sp_brat_part_i(((sp_BigRational *)v.v.p)->den); if (v.tag == SP_TAG_INT) return 1; sp_raise_poly_nomethod("denominator", v); }
+static sp_RbVal sp_poly_numerator(sp_RbVal v) { if (v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_INT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_poly_as_rational(v).num); if (sp_poly_is_brat(v) && v.v.p) return sp_box_int(sp_brat_part_i(((sp_BigRational *)v.v.p)->num)); sp_raise_poly_nomethod("numerator", v); }
+static sp_RbVal sp_poly_denominator(sp_RbVal v) { if (v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_INT) return sp_box_int(1); if (sp_poly_is_rational(v)) return sp_box_int(sp_poly_as_rational(v).den); if (sp_poly_is_brat(v) && v.v.p) return sp_box_int(sp_brat_part_i(((sp_BigRational *)v.v.p)->den)); sp_raise_poly_nomethod("denominator", v); }
+static sp_RbVal sp_poly_nonzero(sp_RbVal v) { if (!sp_poly_tower_p(v)) sp_raise_poly_nomethod("nonzero?", v); return sp_poly_zero_p(v) ? sp_box_nil() : v; }
 /* String#getbyte on a poly value; nil (not 0) for an out-of-range index, per
    CRuby, so the result is boxed. */
 static sp_RbVal sp_poly_getbyte(sp_RbVal v, sp_int i) { v = sp_poly_strbuf_deref(v); if (v.tag != SP_TAG_STR) sp_raise_poly_nomethod("getbyte", v); const char *s = v.v.s; if (!s) return sp_box_nil(); sp_int bl = (sp_int)sp_str_byte_len(s); if (i < 0) i += bl; if (i < 0 || i >= bl) return sp_box_nil(); return sp_box_int((sp_int)(unsigned char)s[i]); }
@@ -9429,13 +9430,22 @@ static sp_RbVal sp_poly_dig_step(sp_RbVal a, sp_int i) {
    refused, and a String/Symbol key reached the offset slot as a pointer
    (#3574/#3575). */
 static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx);
+/* A dig into an Array always converts its key as an Integer index, even
+   when the Array and key reached this step through boxed containers. */
+static sp_RbVal sp_poly_dig_index(sp_RbVal recv, sp_RbVal key) {
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(key);
+    return sp_poly_arr_get(recv, sp_poly_arg_int_chk(key));
+  }
+  return sp_poly_index_poly(recv, key);
+}
 static sp_RbVal sp_poly_dig_step_key(sp_RbVal a, sp_RbVal k) {
   if (a.tag == SP_TAG_NIL) return sp_box_nil();
   if (a.tag == SP_TAG_OBJ && a.v.p &&
       (sp_poly_is_array_kind(a.cls_id) || sp_poly_is_hash_kind(a.cls_id) ||
        (a.cls_id >= 0 && sp_obj_to_h_fn &&
         !(sp_obj_is_data_fn && sp_obj_is_data_fn(a.cls_id)))))   /* Data has no #dig (#3919) */
-    return sp_poly_index_poly(a, k);
+    return sp_poly_dig_index(a, k);
   sp_raise_cls("TypeError",
                sp_sprintf("%s does not have #dig method", sp_poly_class_name(a)));
   return sp_box_nil();
@@ -9449,7 +9459,7 @@ static sp_RbVal sp_poly_dig_list(sp_RbVal recv, sp_PolyArray *keys) {
   sp_RbVal cur = recv;
   for (sp_int i = 0; i < keys->len; i++) {
     if (cur.tag == SP_TAG_NIL) return sp_box_nil();
-    cur = sp_poly_index_poly(cur, keys->data[i]);
+    cur = sp_poly_dig_index(cur, keys->data[i]);
   }
   return cur;
 }
@@ -9713,7 +9723,7 @@ static sp_RbVal sp_poly_dig_n(sp_RbVal recv, sp_int n, const sp_RbVal *keys) {
     if (!sp_poly_diggable(cur))
       sp_raise_cls("TypeError", sp_sprintf("%s does not have #dig method",
                                            sp_poly_class_name(cur)));
-    cur = sp_poly_index_poly(cur, keys[i]);
+    cur = sp_poly_dig_index(cur, keys[i]);
   }
   return cur;
 }
@@ -10792,8 +10802,13 @@ static sp_RbVal sp_poly_to_h_m(sp_RbVal v) {
     int all_sym = 1;
     for (sp_int i = 0; i < n && all_sym; i++) {
       sp_RbVal pair = sp_poly_arr_get(v, i);
-      if (!(pair.tag == SP_TAG_OBJ && sp_poly_is_array_kind(pair.cls_id) && sp_poly_length(pair) == 2))
-        sp_raise_cls("TypeError", "wrong element type (expected a [key, value] pair)");
+      /* CRuby's messages, as sp_poly_to_h_val raises them */
+      if (!(pair.tag == SP_TAG_OBJ && sp_poly_is_array_kind(pair.cls_id)))
+        sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
+                                          sp_poly_class_name(pair), (long long)i));
+      if (sp_poly_length(pair) != 2)
+        sp_raise_cls("ArgumentError", sp_sprintf("wrong array length at %lld (expected 2, was %lld)",
+                                              (long long)i, (long long)sp_poly_length(pair)));
       if (sp_poly_arr_get(pair, 0).tag != SP_TAG_SYM) all_sym = 0;
     }
     if (!all_sym) {
@@ -13838,11 +13853,13 @@ static sp_RbVal sp_poly_to_h_val(sp_RbVal v) {
     sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
     for (sp_int i = 0; a && i < a->len; i++) {
       sp_RbVal e = a->data[i];
-      if (e.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(e.cls_id) ||
-          sp_poly_length(e) != 2) {
-        sp_raise_cls("TypeError", "wrong element type (expected array of size 2)");
-        return sp_box_nil();
-      }
+      if (e.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(e.cls_id))
+        sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
+                                          sp_poly_class_name(e), (long long)i));
+      sp_int n = sp_poly_length(e);
+      if (n != 2)
+        sp_raise_cls("ArgumentError", sp_sprintf("wrong array length at %lld (expected 2, was %lld)",
+                                              (long long)i, (long long)n));
       sp_PolyPolyHash_set(out, sp_poly_arr_get(e, 0), sp_poly_arr_get(e, 1));
     }
     return sp_box_obj(out, SP_BUILTIN_POLY_POLY_HASH);
@@ -14742,7 +14759,9 @@ static sp_Enumerator *sp_Enumerator_new_cycle(sp_RbVal arr, sp_int n) {
   sp_int len = items ? items->len : 0;
   for (sp_int r = 0; r < n; r++)
     for (sp_int i = 0; i < len; i++) sp_PolyArray_push(out, items->data[i]);
-  { sp_Enumerator *e = sp_Enumerator_new_from_items(out); e->source = arr; return e; }
+  { sp_Enumerator *e = sp_Enumerator_new_from_items(out); SP_GC_ROOT(e);
+    sp_gc_wb((void*)e); e->source = arr;
+    e->meth = sp_sprintf("cycle(%lld)", (long long)n); return e; }
 }
 /* blockless cycle(n) on a boxed receiver: an Array's, a Hash's, an Integer
    or String Range's or an Enumerator's items repeated n times, the

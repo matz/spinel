@@ -1337,7 +1337,7 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
   SP_GC_ROOT(rows);
   if (!rows || rows->len == 0) return sp_PolyArray_new();
   sp_int nrows = rows->len;
-  /* Determine column count and element kind from first non-empty row. */
+  /* Keep typed columns only when all rows have the same representation. */
   sp_int ncols = -1;   /* -1 until the first row fixes it; ragged rows raise (#2979) */
   int16_t kind = 0; /* 0=unknown, SP_BUILTIN_INT_ARRAY, SP_BUILTIN_FLT_ARRAY, SP_BUILTIN_STR_ARRAY */
   /* an Integer column holds nil where a row may (its may_nil) or where a row
@@ -1355,6 +1355,8 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
     else if (rv.cls_id == SP_BUILTIN_STR_ARRAY) { rlen = ((sp_StrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_STR_ARRAY; int_col_nil = 1; }
     else if (rv.cls_id == SP_BUILTIN_POLY_ARRAY) { rlen = ((sp_PolyArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; int_col_nil = 1; }
     else if (rv.cls_id == SP_BUILTIN_PTR_ARRAY) { rlen = ((sp_PtrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; int_col_nil = 1; }   /* a row of rows or objects reads generically (#4486) */
+    else if (rv.cls_id == SP_BUILTIN_SYM_ARRAY) { rlen = ((sp_IntArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; }
+    if (kind != rv.cls_id) kind = SP_BUILTIN_POLY_ARRAY;
     if (ncols < 0) ncols = rlen;
     else if (rlen != ncols)
       sp_raise_cls("IndexError", sp_sprintf("element size differs (%lld should be %lld)",
@@ -1373,7 +1375,7 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
         sp_int val = SP_INT_NIL;
         if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_INT_ARRAY) {
           sp_IntArray *row = (sp_IntArray *)rv.v.p;
-          if (c < row->len) val = row->data[c];
+          if (c < row->len) val = sp_IntArray_get(row, c);
         }
         sp_IntArray_push(col, val);
       }
@@ -1408,8 +1410,8 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
       cv.tag = SP_TAG_OBJ; cv.cls_id = SP_BUILTIN_STR_ARRAY; cv.v.p = col;
     }
     else if (kind == SP_BUILTIN_POLY_ARRAY) {
-      /* rows are poly arrays (e.g. `map(&:reverse)` yields boxed poly arrays):
-         read each element generically, one column a fresh poly array (#2921). */
+      /* Mixed row kinds need boxed columns; read each row in its own
+         representation, preserving nils and pointer-array elements. */
       sp_PolyArray *col = sp_PolyArray_new();
       SP_GC_ROOT(col);
       for (sp_int r = 0; r < nrows; r++) {
@@ -1419,6 +1421,14 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
           sp_PolyArray *row = (sp_PolyArray *)rv.v.p;
           if (c < row->len) val = row->data[c];
         }
+        else if (rv.cls_id == SP_BUILTIN_INT_ARRAY)
+          val = sp_box_int_or_nil(sp_IntArray_get((sp_IntArray *)rv.v.p, c));
+        else if (rv.cls_id == SP_BUILTIN_SYM_ARRAY)
+          val = sp_box_sym((sp_sym)sp_IntArray_get((sp_IntArray *)rv.v.p, c));
+        else if (rv.cls_id == SP_BUILTIN_FLT_ARRAY)
+          val = sp_box_float_or_nil(sp_FloatArray_get((sp_FloatArray *)rv.v.p, c));
+        else if (rv.cls_id == SP_BUILTIN_STR_ARRAY)
+          val = sp_box_str(sp_StrArray_get((sp_StrArray *)rv.v.p, c));
         else if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_PTR_ARRAY)
           val = sp_PtrArray_get_box((sp_PtrArray *)rv.v.p, c);
         sp_PolyArray_push(col, val);
@@ -2615,8 +2625,18 @@ sp_Enumerator *sp_enum_as_gen(sp_Enumerator *e) {
   e->gen_label = TRUE;
   return e;
 }
+/* Recognize the annotated materialized walks in the existing return
+   dispatch; an inspect label must not turn a supported walk into an error. */
+static int sp_enum_returns_source(sp_Enumerator *e) {
+  const char *m = e->meth;
+  return m && (strcmp(m, "each") == 0 || strcmp(m, "each_with_index") == 0 ||
+               strncmp(m, "cycle(", 6) == 0 || strncmp(m, "combination(", 12) == 0 ||
+               strcmp(m, "permutation") == 0 || strncmp(m, "permutation(", 12) == 0 ||
+               strncmp(m, "repeated_combination(", 21) == 0 ||
+               strncmp(m, "repeated_permutation(", 21) == 0);
+}
 sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {SP_GC_ROOT(e);
-  if (e->meth && (strcmp(e->meth, "each") == 0 || strcmp(e->meth, "each_with_index") == 0))
+  if (sp_enum_returns_source(e))
     return e->source;
   sp_raise_cls("NotImplementedError",
                sp_sprintf("Enumerator#with_index return value for a stored %s enumerator",
@@ -2626,7 +2646,7 @@ sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {SP_GC_ROOT(e);
 sp_RbVal sp_enum_with_index_result(sp_Enumerator *e, sp_PolyArray *mapped) {SP_GC_ROOT(e);
   if (e->meth && (strcmp(e->meth, "map") == 0 || strcmp(e->meth, "collect") == 0))
     return sp_box_poly_array(mapped);
-  if (e->meth && (strcmp(e->meth, "each") == 0 || strcmp(e->meth, "each_with_index") == 0))
+  if (sp_enum_returns_source(e))
     return e->source;
   sp_raise_cls("NotImplementedError",
                sp_sprintf("Enumerator#with_index return value for a stored %s enumerator",

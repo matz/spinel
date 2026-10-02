@@ -1,0 +1,7 @@
+[TypeError, "wrong element type Integer at 0 (expected array)"]
+[TypeError, "wrong element type Float at 0 (expected array)"]
+[TypeError, "wrong element type String at 0 (expected array)"]
+[ArgumentError, "wrong array length at 0 (expected 2, was 3)"]
+{}
+{a: 1}
+{1 => :b}

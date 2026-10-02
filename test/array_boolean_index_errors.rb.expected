@@ -1,0 +1,7 @@
+[TypeError, "no implicit conversion of true into Integer"]
+[TypeError, "no implicit conversion of false into Integer"]
+RK[TypeError, "no implicit conversion of false into Integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+[TypeError, "no implicit conversion of false into Integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+[TypeError, "no implicit conversion of false into Integer"]

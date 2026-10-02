@@ -5662,6 +5662,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
           return an_poly_concrete(c, name, TY_COMPLEX);
         }
       }
+      /* to_h with a block (a proc argument too): the pairs it answers, boxed */
+      if (argc == 0 && sp_streq(name, "to_h") && nt_ref(nt, id, "block") >= 0 &&
+          !an_user_poly_arm(c, name, argc))
+        return an_poly_concrete(c, name, TY_POLY);
       if (argc == 1 && sp_streq(name, "===")) {
         int has_user = an_user_poly_arm(c, name, argc);
         /* A boxed receiver can be a Proc, whose #=== answers the proc's

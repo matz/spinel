@@ -2050,6 +2050,15 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "iso8601") || sp_streq(name, "xmlschema")) &&
       sp_feature_enabled("time"))
     { *out = TY_STRING; return 1; }
+  /* merge!/update with a block on a poly value: the receiver, boxed
+     (emit_unresolved_call) */
+  if (recv >= 0 && rt == TY_POLY && argc >= 1 && nt_ref(nt, id, "block") >= 0 &&
+      !an_user_recv_defines_method(c, name) && (sp_streq(name, "merge!") || sp_streq(name, "update")))
+    { *out = TY_POLY; return 1; }
+  /* to_hash on a poly value: the Hash itself, boxed (emit_unresolved_call) */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      !an_user_recv_defines_method(c, name) && sp_streq(name, "to_hash"))
+    { *out = TY_POLY; return 1; }
   /* Range#to_a on a poly value: its element array. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       !an_user_recv_defines_method(c, name) && sp_streq(name, "to_a"))

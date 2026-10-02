@@ -6078,9 +6078,8 @@ static void emit_blk_value_as(Compiler *c, int blk, TyKind vt, Buf *b) {
 /* Hash#merge(other) { |key, old, new| } built as the general boxed hash:
    walk the other hash's pairs into a boxed copy of the receiver, consulting
    the block on a collision. Answers 0 for an empty block. */
-static int emit_merge_block_boxed(Compiler *c, int id, int recv, int arg, Buf *b) {
+static int emit_merge_block_boxed(Compiler *c, int id, int recv, int arg, int mblk, Buf *b) {
   const NodeTable *nt = c->nt;
-  int mblk = nt_ref(nt, id, "block");
   int mbody = nt_ref(nt, mblk, "body");
   int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
   if (mbn > 0) {
@@ -6139,6 +6138,44 @@ static int emit_merge_block_boxed(Compiler *c, int id, int recv, int arg, Buf *b
     return 1;
   }
   return 0;
+}
+
+/* Hash#merge(other) with any block on a boxed or cross-layout receiver: a
+   literal block, a method's own block passed on (`&block`, the caller's
+   block where the method is spliced in), a proc at run time (a caller's
+   `&pr`, a `&pr` at the call), or none, which merges plainly. Answers 0 when
+   it emits nothing. */
+static int emit_merge_any_block_boxed(Compiler *c, int id, int recv, int arg, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int mblk = nt_ref(nt, id, "block");
+  if (nt_kind(nt, mblk) == NK_BlockArgumentNode) {
+    int rb = resolve_forwarded_block(c, mblk);
+    if (rb >= 0 && rb != mblk && nt_kind(nt, rb) == NK_BlockNode) mblk = rb;
+    else if (rb < 0 || rb == mblk) {
+      /* no literal block to splice: rb < 0 is the method's own block
+         forwarded in a splice, which runs under the caller's `&pr` when it
+         has one; rb == mblk is a `&x` value at the call */
+      Buf pb; memset(&pb, 0, sizeof pb);
+      if (rb >= 0) emit_forwarded_proc_arg(c, mblk, &pb);
+      else if (g_yield_proc_ref) buf_puts(&pb, g_yield_proc_ref);
+      if (!pb.p || sp_streq(pb.p, "NULL")) {
+        buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b);
+        buf_puts(b, ", "); emit_boxed(c, arg, b); buf_puts(b, ")");
+        free(pb.p);
+        return 1;
+      }
+      /* a copy of the receiver, merged through the proc */
+      int th = ++g_tmp, to = ++g_tmp, tp = ++g_tmp;
+      buf_printf(b, "({ sp_PolyPolyHash *_t%d = sp_poly_hash_merge(", th); emit_boxed(c, recv, b);
+      buf_printf(b, ", sp_box_nil()); SP_GC_ROOT(_t%d); sp_RbVal _t%d = ", th, to); emit_boxed(c, arg, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); ", to, tp, pb.p, tp);
+      buf_printf(b, "sp_poly_hash_merge_blk(sp_box_nullable_obj((void *)_t%d, SP_BUILTIN_POLY_POLY_HASH), _t%d, _t%d, \"merge\"); _t%d; })",
+                 th, to, tp, th);
+      free(pb.p);
+      return 1;
+    }
+  }
+  return nt_kind(nt, mblk) == NK_BlockNode && emit_merge_block_boxed(c, id, recv, arg, mblk, b);
 }
 
 int emit_hash_call(Compiler *c, int id, Buf *b) {
@@ -7301,7 +7338,7 @@ else {
          a user class defines or reads `merge`. */
       if (sp_streq(name, "merge") && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
           comp_ntype(c, id) == TY_POLY_POLY_HASH && rt != TY_POLY_POLY_HASH &&
-          emit_merge_block_boxed(c, id, recv, argv[0], b))
+          emit_merge_block_boxed(c, id, recv, argv[0], nt_ref(nt, id, "block"), b))
         return 1;
       /* merge with a block, typed as the receiver's own variant */
       if (sp_streq(name, "merge") && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
@@ -15543,7 +15580,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && (rt == TY_POLY || (ty_is_hash(rt) && rt != TY_POLY_POLY_HASH)) &&
       sp_streq(name, "merge") && argc == 1 &&
       nt_ref(nt, id, "block") >= 0 && !user_defines_or_reads(c, "merge")) {
-    if (emit_merge_block_boxed(c, id, recv, argv[0], b)) return 1;
+    if (emit_merge_any_block_boxed(c, id, recv, argv[0], b)) return 1;
   }
   /* poly.ljust/rjust/center(width[, pad]): a String read from a container
      widened to poly. Pad via sp_poly_to_s and re-box (#3222). Outside the

@@ -11020,9 +11020,14 @@ void emit_super(Compiler *c, int id, Buf *b) {
                uname, scn, raise_tail_value_c(c, comp_ntype(c, id)));
     return;
   }
-  if (sp_streq(c->classes[defcls].name, "Object")) {
-    /* Object's methods take self boxed: any value can be the receiver */
-    buf_printf(b, "sp_Object_%s(", mc(uname));
+  if (sp_streq(c->classes[defcls].name, "Object") || sp_streq(c->classes[defcls].name, "Array") ||
+      sp_streq(c->classes[defcls].name, "Hash") || sp_streq(c->classes[defcls].name, "Numeric")) {
+    /* Object's methods take self boxed: any value can be the receiver. So
+       do an Array, Hash or Numeric reopening's (emit_method_signature),
+       which a program class deriving from it reaches by super --
+       activesupport's HashWithIndifferentAccess#reverse_merge -- and which
+       have no struct to cast self to. */
+    buf_printf(b, "sp_%s_%s(", c->classes[defcls].c_name, mc(uname));
     emit_boxed_text(c, ty_object(s->class_id), g_self, b);
   }
   /* a user exception subclass's super reaching its builtin parent's

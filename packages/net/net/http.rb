@@ -71,8 +71,19 @@ module Net
       nil
     end
 
+    # The media type alone, as CRuby answers it: `text/html; charset=utf-8`
+    # reads `text/html`. The whole header made a type check written against
+    # CRuby (`res.content_type == "text/html"`) fail for nearly every real
+    # server, which sends the charset. Case is kept, as CRuby keeps it, and
+    # so is CRuby's main_type/sub_type split: a third `/` part is dropped and
+    # an empty subtype leaves the main type alone (`text/` reads `text`).
     def content_type
-      @headers["content-type"]
+      v = @headers["content-type"]
+      return nil if v.nil?
+      parts = v.split(";", 2)[0].to_s.split("/")
+      main = parts[0].to_s.strip
+      return main if parts.length < 2
+      main + "/" + parts[1].to_s.strip
     end
   end
 

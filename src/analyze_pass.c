@@ -12636,7 +12636,12 @@ int infer_block_params(Compiler *c) {
              them, and the builtin rules below must not type the block from
              the NAME -- a poly `each_line` read as an IO's walk bound the
              Integer a user each_line yielded into a String slot. */
-          if (ndef > 0 && (poly_enum_op_for(name) || (mi < 0 && rt0 == TY_POLY))) {
+          /* the same for a boxed receiver's names whose dispatch default
+             hands the block to the builtin (fetch, delete, merge!, update) */
+          int bdflt = rt0 == TY_POLY &&
+                      (sp_streq(name, "fetch") || sp_streq(name, "delete") ||
+                       sp_streq(name, "merge!") || sp_streq(name, "update"));
+          if (ndef > 0 && (poly_enum_op_for(name) || bdflt || (mi < 0 && rt0 == TY_POLY))) {
             Scope *bs2 = comp_scope_of(c, block);
             for (int k = 0; ; k++) {
               const char *bp2 = block_param_name(c, block, k);

@@ -15751,7 +15751,17 @@ enum {
      these names as a yielding method makes the call a dispatch, and a Hash
      (or Array) reaching it is served here */
   SP_PENUM_EACH_PAIR, SP_PENUM_EACH_KEY, SP_PENUM_EACH_VALUE,
-  SP_PENUM_REVERSE_EACH, SP_PENUM_UNIQ
+  SP_PENUM_REVERSE_EACH, SP_PENUM_UNIQ,
+  /* to_h with a block: the block's pairs, as a Hash */
+  SP_PENUM_TO_H,
+  /* a Hash's keys or values through the block, into a new Hash or (bang)
+     back into the receiver */
+  SP_PENUM_TRANSFORM_KEYS, SP_PENUM_TRANSFORM_VALUES,
+  SP_PENUM_TRANSFORM_KEYS_BANG, SP_PENUM_TRANSFORM_VALUES_BANG,
+  /* the in-place filters of a Hash or an Array: select!/filter! and reject!
+     answer nil when nothing went, keep_if and delete_if the receiver */
+  SP_PENUM_SELECT_BANG, SP_PENUM_REJECT_BANG, SP_PENUM_KEEP_IF, SP_PENUM_DELETE_IF,
+  SP_PENUM_FILTER_BANG   /* select! by its other name, for the error */
 };
 /* Call `blk` with one element. Both channels are filled, as every other
    proc-driving site does: a poly parameter reads the boxed side-channel, a
@@ -15783,6 +15793,85 @@ static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w) {
   _sp_proc_poly_ret = sp_box_nil();
   sp_proc_call(blk, 2, a);
   return _sp_proc_poly_ret;
+}
+static sp_RbVal sp_penum_call1(sp_Proc *blk, sp_RbVal v);
+/* delete(key) { |k| } on a boxed Hash or Array: the block answers a key
+   that was not there */
+static sp_RbVal sp_poly_delete_key_blk(sp_RbVal recv, sp_RbVal key, sp_Proc *blk) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(key); SP_GC_ROOT(blk);
+  sp_int before = sp_poly_length(recv);
+  sp_RbVal r = sp_poly_delete_key(recv, key);
+  if (sp_poly_length(recv) < before || !blk) return r;
+  return sp_penum_call1(blk, key);
+}
+static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk);
+/* fetch(key) { |k| } on a boxed Hash or Array: the block answers a key (or
+   an index) that is not there; anything else raises as fetch does */
+static sp_RbVal sp_poly_fetch(sp_RbVal recv, sp_RbVal key, int has_dflt, sp_RbVal dflt);
+static sp_RbVal sp_poly_fetch_blk(sp_RbVal recv, sp_RbVal key, sp_Proc *blk) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(key); SP_GC_ROOT(blk);
+  if (!blk) return sp_poly_fetch(recv, key, 0, sp_box_nil());   /* `&b` with b nil */
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id)) {
+    if (sp_poly_has_key(recv, key)) return sp_poly_index_poly(recv, key);
+    return sp_penum_call1(blk, key);
+  }
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
+    /* any Integer-convertible index, as the blockless fetch takes it; the
+       block gets the index as given */
+    sp_int n = sp_poly_length(recv), i = sp_poly_arg_int_chk(key);
+    if (i < 0) i += n;
+    if (i >= 0 && i < n) return sp_poly_arr_get(recv, i);
+    return sp_penum_call1(blk, key);
+  }
+  return sp_poly_fetch(recv, key, 0, sp_box_nil());
+}
+/* merge!/update(other) { |k, old, new| } on a boxed Hash */
+static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val);
+static sp_RbVal sp_poly_hash_merge_blk(sp_RbVal recv, sp_RbVal other, sp_Proc *blk, const char *name) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(other); SP_GC_ROOT(blk);
+  if (recv.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(recv.cls_id)) {
+    sp_raise_nomethod(sp_nomethod_msg(name, recv));
+    return sp_box_nil();
+  }
+  if (other.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(other.cls_id))
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Hash", sp_convert_src_name(other)));
+  if (sp_gc_is_frozen(recv.v.p)) sp_raise_frozen_hash_at(recv.v.p, recv.cls_id);
+  sp_int n = sp_poly_length(other);
+  for (sp_int i = 0; i < n; i++) {
+    sp_RbVal k, v;
+    sp_poly_hash_pair(other, i, &k, &v);
+    SP_GC_ROOT_RBVAL(k); SP_GC_ROOT_RBVAL(v);
+    if (blk && sp_poly_has_key(recv, k)) {   /* no block (`&b` with b nil): the new value */
+      sp_RbVal old = sp_poly_index_poly(recv, k);
+      SP_GC_ROOT_RBVAL(old);
+      sp_int a[16] = {0};
+      a[0] = (k.tag == SP_TAG_OBJ || k.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)k.v.p : sp_poly_to_i(k);
+      a[1] = (old.tag == SP_TAG_OBJ || old.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)old.v.p : sp_poly_to_i(old);
+      a[2] = (v.tag == SP_TAG_OBJ || v.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)v.v.p : sp_poly_to_i(v);
+      _sp_proc_poly_args[0] = k; _sp_proc_poly_args[1] = old; _sp_proc_poly_args[2] = v;
+      _sp_proc_poly_ret = sp_box_nil();
+      sp_proc_call(blk, 3, a);
+      v = _sp_proc_poly_ret;
+    }
+    sp_poly_set_poly(recv, k, v);
+  }
+  return recv;
+}
+/* sum(init) { } on a boxed Array, Hash or Range: init plus each answer */
+static sp_RbVal sp_poly_sum_init_proc(sp_RbVal recv, sp_RbVal init, sp_Proc *blk) {
+  SP_GC_ROOT(blk); SP_GC_ROOT_RBVAL(init);
+  if (!(recv.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(recv.cls_id) || sp_poly_is_hash_kind(recv.cls_id) ||
+        recv.cls_id == SP_BUILTIN_RANGE || recv.cls_id == SP_BUILTIN_ENUMERATOR))) {
+    sp_raise_nomethod(sp_nomethod_msg("sum", recv));
+    return sp_box_nil();
+  }
+  sp_RbVal vals = sp_poly_enum_proc(recv, SP_PENUM_MAP, blk);
+  SP_GC_ROOT_RBVAL(vals);
+  sp_RbVal acc = init;
+  SP_GC_ROOT_RBVAL(acc);
+  sp_int n = sp_poly_length(vals);
+  for (sp_int i = 0; i < n; i++) acc = sp_poly_add(acc, sp_poly_arr_get(vals, i));
+  return acc;
 }
 /* `new` on a Class value that turns out at run time to be String, Array,
    Hash or Object (`kind` 'S', 'A', 'H', 'O'), with the call's arguments
@@ -15849,7 +15938,87 @@ static sp_RbVal sp_class_value_new_fallback(sp_RbVal cls, const char *cn, sp_int
 }
 static void sp_proc_call_spread(sp_Proc *p, sp_RbVal arr, int kwpos);
 static void sp_proc_call_spread_blk(sp_Proc *p, sp_Proc *blk, sp_RbVal arr, int kwpos);
+static sp_RbVal sp_poly_to_h_val(sp_RbVal v);
+static sp_RbVal sp_poly_hash_replace(sp_RbVal recv, sp_RbVal src, int keep_default);
+static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key);
+static sp_RbVal sp_poly_delete_at(sp_RbVal v, sp_int i);
 static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
+  if (op >= SP_PENUM_SELECT_BANG && op <= SP_PENUM_FILTER_BANG) {
+    const char *opname = op == SP_PENUM_SELECT_BANG ? "select!" : op == SP_PENUM_FILTER_BANG ? "filter!" :
+                         op == SP_PENUM_REJECT_BANG ? "reject!" : op == SP_PENUM_KEEP_IF ? "keep_if" : "delete_if";
+    if (op == SP_PENUM_FILTER_BANG) op = SP_PENUM_SELECT_BANG;
+    int keep = op == SP_PENUM_SELECT_BANG || op == SP_PENUM_KEEP_IF;   /* the block says keep */
+    int nil_if_same = op == SP_PENUM_SELECT_BANG || op == SP_PENUM_REJECT_BANG;
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT(blk);
+    int is_hash = recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id);
+    if (!is_hash && !(recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id))) {
+      sp_raise_nomethod(sp_nomethod_msg(opname, recv));
+      return sp_box_nil();
+    }
+    /* frozen is refused before the block runs */
+    if (is_hash && sp_gc_is_frozen(recv.v.p)) sp_raise_frozen_hash_at(recv.v.p, recv.cls_id);
+    if (!is_hash && sp_poly_array_frozen(recv)) sp_raise_frozen_array_at(recv.v.p, recv.cls_id);
+    /* walk a copy of the entries and remove as the block decides, so a
+       break keeps what went before it and the block may change the
+       receiver without the walk reading past its end */
+    sp_PolyArray *snap = sp_PolyArray_new(); SP_GC_ROOT(snap);
+    sp_int n = sp_poly_length(recv);
+    for (sp_int i = 0; i < n; i++) {
+      if (is_hash) {
+        sp_RbVal k, v;
+        sp_poly_hash_pair(recv, i, &k, &v);
+        sp_PolyArray_push(snap, k);
+        sp_PolyArray_push(snap, v);
+      }
+      else sp_PolyArray_push(snap, sp_poly_arr_get(recv, i));
+    }
+    sp_int removed = 0;
+    if (is_hash) {
+      for (sp_int i = 0; i + 1 < snap->len; i += 2) {
+        sp_RbVal ans = sp_penum_call2(blk, snap->data[i], snap->data[i + 1]);
+        if (sp_poly_truthy(ans) != keep && sp_poly_has_key(recv, snap->data[i])) {
+          sp_poly_delete_key(recv, snap->data[i]);
+          removed++;
+        }
+      }
+    }
+    else {
+      for (sp_int i = 0; i < snap->len; i++) {
+        sp_RbVal ans = sp_penum_call1(blk, snap->data[i]);
+        if (sp_poly_truthy(ans) != keep && i - removed < sp_poly_length(recv)) {
+          sp_poly_delete_at(recv, i - removed);
+          removed++;
+        }
+      }
+    }
+    return (nil_if_same && removed == 0) ? sp_box_nil() : recv;
+  }
+  if (op >= SP_PENUM_TRANSFORM_KEYS && op <= SP_PENUM_TRANSFORM_VALUES_BANG) {
+    int keys = op == SP_PENUM_TRANSFORM_KEYS || op == SP_PENUM_TRANSFORM_KEYS_BANG;
+    int bang = op == SP_PENUM_TRANSFORM_KEYS_BANG || op == SP_PENUM_TRANSFORM_VALUES_BANG;
+    if (recv.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(recv.cls_id)) {
+      sp_raise_nomethod(sp_nomethod_msg(keys ? (bang ? "transform_keys!" : "transform_keys")
+                                             : (bang ? "transform_values!" : "transform_values"), recv));
+      return sp_box_nil();
+    }
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT(blk);
+    if (bang && sp_gc_is_frozen(recv.v.p)) sp_raise_frozen_hash_at(recv.v.p, recv.cls_id);
+    sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
+    for (sp_int i = 0; i < sp_poly_length(recv); i++) {   /* the block may change it */
+      sp_RbVal k, v;
+      sp_poly_hash_pair(recv, i, &k, &v);
+      SP_GC_ROOT_RBVAL(k); SP_GC_ROOT_RBVAL(v);
+      if (keys) sp_PolyPolyHash_set(out, sp_penum_call1(blk, k), v);
+      else sp_PolyPolyHash_set(out, k, sp_penum_call1(blk, v));
+    }
+    sp_RbVal r = sp_box_obj(out, SP_BUILTIN_POLY_POLY_HASH);
+    return bang ? sp_poly_hash_replace(recv, r, 1) : r;
+  }
+  if (op == SP_PENUM_TO_H) {
+    sp_RbVal pairs = sp_poly_enum_proc(recv, SP_PENUM_MAP, blk);
+    SP_GC_ROOT_RBVAL(pairs);
+    return sp_poly_to_h_val(pairs);
+  }
   SP_GC_ROOT_RBVAL(recv);
   /* The block is this loop's only handle on its own captures: the caller's
      temp holding it can be dead by now, and everything the block

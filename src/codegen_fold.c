@@ -708,6 +708,17 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   if (!shn) return 0;
   TyKind dt = comp_ntype(c, id);
   const char *dhn = ty_hash_cname(dt);
+  /* a call typed boxed (a dispatch's builtin arm asks this way): build the
+     Hash of any keys and values, and box it */
+  if (!dhn && dt == TY_POLY) {
+    Buf hb; memset(&hb, 0, sizeof hb);
+    c->ntype[id] = TY_POLY_POLY_HASH;
+    int ok = emit_transform_hash_expr(c, id, &hb);
+    c->ntype[id] = TY_POLY;
+    if (ok) emit_boxed_text(c, TY_POLY_POLY_HASH, hb.p ? hb.p : "NULL", b);
+    free(hb.p);
+    return ok;
+  }
   if (!dhn) return 0;
   const char *p0_orig = block_param_name(c, block, 0);
   const char *p0 = p0_orig ? rename_local(p0_orig) : NULL;

@@ -17727,6 +17727,7 @@ typedef struct {
   unsigned version, scope_gen;
   int frozen_reflection;
   int frozen_operator_fold;
+  int readonly_strings;
   ANameHash frozen_operator_writes;
 } FwdMemo;
 typedef struct {
@@ -22416,6 +22417,7 @@ static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   memset(&memo->poly_cache, 0, sizeof memo->poly_cache);
   memo->frozen_reflection = 0;
   memo->frozen_operator_fold = 0;
+  memo->readonly_strings = 0;
   anh_free(&memo->frozen_operator_writes);
   memset(&memo->frozen_operator_writes, 0, sizeof memo->frozen_operator_writes);
   memo->nscopes = c->nscopes;
@@ -22729,10 +22731,100 @@ static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int d
   }
   return found;
 }
-int fwd_actual_frozen(Compiler *c, int node) {
+
+/* An optional closed-program certificate, not a mutation-name blacklist.
+   All Ruby bodies are checked, including unused bodies and literal blocks.
+   Compiler builtin templates are admitted only through the small primitive
+   contracts below; arbitrary calls into those templates are not admitted.
+   No identity observers, state-changing String operations, external code or
+   hidden user protocols can execute in this subset. Thus a retained plain
+   String box remains observationally equivalent without adding sharing. */
+static int fwd_readonly_call(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  int a = nt_ref(nt, node, "arguments"), argc = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
+  int block = nt_ref(nt, node, "block");
+  if (!nm || (block >= 0 && nt_kind(nt, block) != NK_BlockNode)) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  int target = fwd_call_target(c, node);
+  if (target >= 0 && !nt_int(nt, c->scopes[target].def_node, "node_bi", 0) &&
+      !c->scopes[target].cs_synth && !c->scopes[target].is_ext_entry &&
+      (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || ty_is_object(rt) ||
+       (sp_streq(nm, "new") && nt_kind(nt, recv) == NK_ConstantReadNode))) return 1;
+  if (recv < 0) {
+    if ((sp_streq(nm, "p") || sp_streq(nm, "puts")) && block < 0) return 1;
+    return sp_streq(nm, "private") && !argc && block < 0;
+  }
+  if (!argc && block < 0 && (sp_streq(nm, "to_s") || sp_streq(nm, "inspect"))) return 1;
+  if (!argc && block < 0 && sp_streq(nm, "upcase"))
+    return rt == TY_STRING || rt == TY_STRBUF;
+  if (!argc && block < 0 && (sp_streq(nm, "size") || sp_streq(nm, "length")))
+    return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF;
+  if (ty_is_array(rt)) {
+    if (block < 0 && ((sp_streq(nm, "<<") && argc == 1) || sp_streq(nm, "push"))) return 1;
+    if (!argc && (sp_streq(nm, "each") || sp_streq(nm, "each_with_index") || sp_streq(nm, "map"))) return 1;
+  }
+  if (ty_is_hash(rt) && !argc && (sp_streq(nm, "each") || sp_streq(nm, "each_pair") || sp_streq(nm, "each_key"))) return 1;
+  return sp_streq(nm, "*") && argc == 1 && block < 0 && rt == TY_INT && comp_ntype(c, args[0]) == TY_INT;
+}
+
+static int fwd_readonly_program(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (c->n_native_funcs || c->n_native_objs || c->n_native_methods ||
+      c->n_ffi_funcs || c->n_ffi_consts || c->n_ffi_bufs || c->n_ffi_readers ||
+      c->n_ffi_callbacks || c->n_ffi_structs || c->n_ffi_writers || c->n_ffi_sources ||
+      c->n_ffi_libs || c->n_ffi_cflags) return 0;
+  for (int node = 0; node < nt->count; node++) {
+    if (!nt_type(nt, node) || nt_int(nt, node, "node_bi", 0)) continue;
+    Scope *m = comp_scope_of(c, node);
+    if (node >= c->node_ord_parsed && m && nt_int(nt, m->def_node, "node_bi", 0)) continue;
+    switch (nt_kind(nt, node)) {
+      case NK_NONE:
+        if (!sp_streq(nt_type(nt, node), "ProgramNode") && !sp_streq(nt_type(nt, node), "ArgumentsNode")) return 0;
+        break;
+      case NK_ClassNode: {
+        int path = nt_ref(nt, node, "constant_path");
+        const char *name = nt_str(nt, path, "name");
+        if (nt_kind(nt, path) != NK_ConstantReadNode || nt_ref(nt, node, "superclass") >= 0 ||
+            !name || is_builtin_class_name(name) || is_builtin_module_name(name) || is_builtin_exception_name(name)) return 0;
+        break;
+      }
+      case NK_DefNode: {
+        const char *name = nt_str(nt, node, "name");
+        if (!name || !isalnum((unsigned char)*name) || nt_ref(nt, node, "receiver") >= 0) return 0;
+        static const char *const protocols[] = {
+          "to_s", "inspect", "to_str", "to_int", "to_ary", "to_a", "to_hash", "to_f", "to_r", "to_c",
+          "coerce", "to_proc", "to_io", "to_path", "hash", "eql?", "initialize_copy", "initialize_dup", "initialize_clone",
+          "method_missing", "respond_to_missing?", "method_added", "singleton_method_added", "inherited", "new", "allocate", NULL
+        };
+        for (int i = 0; protocols[i]; i++) if (sp_streq(name, protocols[i])) return 0;
+        break;
+      }
+      case NK_CallNode: if (!fwd_readonly_call(c, node)) return 0; break;
+      case NK_BlockArgumentNode: if (nt_ref(nt, node, "expression") >= 0) return 0; break;
+      case NK_StatementsNode: case NK_ParametersNode: case NK_RequiredParameterNode:
+      case NK_BlockParameterNode: case NK_BlockParametersNode: case NK_BlockNode:
+      case NK_ArrayNode: case NK_HashNode: case NK_AssocNode:
+      case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
+      case NK_InterpolatedStringNode: case NK_EmbeddedStatementsNode: case NK_ConstantReadNode:
+      case NK_LocalVariableReadNode: case NK_LocalVariableWriteNode:
+      case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode:
+      case NK_SelfNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+      case NK_ParenthesesNode: case NK_ReturnNode: case NK_YieldNode: break;
+      default: return 0;
+    }
+  }
+  return 1;
+}
+
+int fwd_box_retention_safe(Compiler *c, int node) {
   /* Method/Proc entrypoints are not an exhaustive static caller census. */
   FwdQuery *f = fwd_analysis(c);
   fwd_memo_fresh(c, f, FWD_EMISSION);
+  if (!f->memo->readonly_strings) f->memo->readonly_strings = fwd_readonly_program(c) ? 1 : -1;
+  if (f->memo->readonly_strings > 0) return 1;
   if (!f->memo->frozen_reflection) {
     f->memo->frozen_reflection = 1; /* closed static entrypoints */
     for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {

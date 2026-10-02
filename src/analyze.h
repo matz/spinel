@@ -80,7 +80,7 @@ typedef enum {
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i);
 FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j);
 /* Optional proof for preserving-box retention, not for copying escapes. */
-int fwd_actual_frozen(Compiler *c, int node);
+int fwd_box_retention_safe(Compiler *c, int node);
 /* A boxed parameter's argument a literal block appends to through a yield
    (yield_splice_handles): a String variable there must be the handle. */
 int yield_poly_arg_wants_handle(Compiler *c, int a);

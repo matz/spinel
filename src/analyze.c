@@ -17731,6 +17731,8 @@ typedef struct {
   SbMutTab frozen_params;
   unsigned char *frozen_blocked;
   int frozen_ready;
+  int *print_parent;
+  int print_contract;
 } FwdMemo;
 typedef struct {
   FwdPhase phase;
@@ -17762,12 +17764,14 @@ void fwd_analysis_free(Compiler *c) {
   sb_mut_tab_free(&f->memo.frozen_params);
   free(f->memo.frozen_blocked);
   free(f->memo.rest);
+  free(f->memo.print_parent);
   free(f);
   c->fwd_analysis = NULL;
 }
 static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly);
 static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase);
 static int fwd_builtin(Compiler *c, const char *owner, const char *name);
+static int *du_parent_map(const NodeTable *nt);
 static int fwd_array_store_start(Compiler *c, int node, int argc);
 /* Local `vn` of scope `vs` lent to byref slots by calls in that scope: each
    such parameter, with every method of its name, takes the shared handle
@@ -22488,6 +22492,8 @@ static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
   memo->frozen_reflection = 0;
   memo->frozen_operator_fold = 0;
   memo->readonly_strings = 0;
+  free(memo->print_parent); memo->print_parent = NULL;
+  memo->print_contract = 0;
   anh_free(&memo->frozen_operator_writes);
   memset(&memo->frozen_operator_writes, 0, sizeof memo->frozen_operator_writes);
   handle_arg_tab_free(&memo->frozen_callers);
@@ -22519,15 +22525,48 @@ FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
   if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return FWD_APPENDS;
   return rb & FWD_REST_OPEN ? FWD_UNKNOWN : FWD_READONLY;
 }
-/* A return-only rest suffix can copy its existing boxes when this exact
-   call result is immediately printed and discarded. No caller-held result,
-   second rest use, opaque callee or unmapped post can use this certificate. */
+/* Bound the optional certificate's body work independently of program size.
+   Defaults are separate roots; nested captures and anonymous forwarding do
+   not get to hide a use of the input or a change to the zsuper layout. */
+static int fwd_rest_input_only(const NodeTable *nt, int node, const char *pn,
+                               const char *rest, int tail, int depth, int *work) {
+  if (node < 0) return 1;
+  if (depth > 32 || !*work) return 0;
+  --*work;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) {
+    const char *name = nt_str(nt, node, "name");
+    if ((sp_streq(name, pn) || (rest && sp_streq(name, rest))) &&
+        (k != NK_LocalVariableReadNode || node != tail)) return 0;
+  }
+  if (k == NK_ForwardingSuperNode && node != tail) return 0;
+  if (k == NK_SuperNode || (k == NK_SplatNode && nt_ref(nt, node, "expression") < 0)) return 0;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (!fwd_rest_input_only(nt, nt_ref_at(nt, node, i), pn, rest, tail, depth + 1, work)) return 0;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++)
+      if (!fwd_rest_input_only(nt, ids[j], pn, rest, tail, depth + 1, work)) return 0;
+  }
+  return 1;
+}
+/* Only fresh primitive inputs in a discarded builtin p result can borrow
+   this certificate. Bind the queried actual, not the returned formal: a
+   post can receive it, or the terminal may leave its rest entirely unused. */
 static int fwd_rest_return_only(Compiler *c, int mi, int position, int argc, int depth) {
   if (mi < 0 || depth > 16) return 0;
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
-  if (m->body < 0 || m->is_ext_entry || m->yields) return 0;
-  const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
+  if (m->body < 0 || m->is_ext_entry || m->yields || nt_int(nt, m->def_node, "rest_rebound", 0)) return 0;
+  int pj = -1;
+  for (int j = 0; j < m->nparams; j++)
+    if (j != m->rest_idx && j != m->kwrest_idx && arg_layout_plain_arg(c, m, argc, j) == position) pj = j;
+  if (pj < 0 && m->rest_idx >= 0 && position >= m->rest_idx && position < argc - m->npost_rest) pj = m->rest_idx;
+  const char *rn = pj >= 0 ? m->pnames[pj] : NULL;
+  if (!rn) return 0;
   int tail = m->body;
   for (int n = 0; n < 16; n++) {
     if (tail < 0) return 0;
@@ -22540,21 +22579,13 @@ static int fwd_rest_return_only(Compiler *c, int mi, int position, int argc, int
     else break;
   }
   if (tail < 0) return 0;
-  if (!rn && nt_kind(nt, tail) == NK_LocalVariableReadNode) {
-    const char *name = nt_str(nt, tail, "name");
-    LocalVar *p = name ? scope_local(m, name) : NULL;
-    int pj = name ? an_param_idx(m, name) : -1;
-    if (p && p->is_param && !p->is_block_param && pj >= 0 &&
-        arg_layout_plain_arg(c, m, argc, pj) == position) rn = name;
-  }
-  if (!rn) return 0; /* no untracked scalar intermediate or different returned formal */
-  if (m->rest_idx >= 0 && (position < m->rest_idx || position >= argc - m->npost_rest)) return 0;
-  int direct = rn && nt_kind(nt, tail) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, tail, "name"), rn);
+  int direct = nt_kind(nt, tail) == NK_LocalVariableReadNode && an_param_idx(m, nt_str(nt, tail, "name")) >= 0;
   if (!direct && nt_kind(nt, tail) != NK_ForwardingSuperNode) return 0;
-  for (int r = comp_kind_first(c, NK_LocalVariableReadNode); r >= 0; r = comp_kind_next(c, r))
-    if (rn && comp_scope_of(c, r) == m && sp_streq(nt_str(nt, r, "name"), rn) && r != tail) return 0;
-  for (int r = comp_kind_first(c, NK_ForwardingSuperNode); r >= 0; r = comp_kind_next(c, r))
-    if (comp_scope_of(c, r) == m && r != tail) return 0;
+  const char *rest = !direct && m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
+  int work = 2048;
+  if (!fwd_rest_input_only(nt, m->body, rn, rest, tail, 0, &work)) return 0;
+  for (int j = 0; j < m->nparams; j++)
+    if (!fwd_rest_input_only(nt, m->pdefault[j], rn, rest, -1, 0, &work)) return 0;
   if (direct) return 1;
   /* A rest-bearing zsuper with no defaults/keywords preserves both the
      positional count and this element's index. Anything else needs a
@@ -22566,6 +22597,27 @@ static int fwd_rest_return_only(Compiler *c, int mi, int position, int argc, int
 }
 int fwd_rest_print_safe(Compiler *c, int mi, int call, int actual) {
   const NodeTable *nt = c->nt;
+  /* Reject ordinary callers before building indexes or walking a suffix. */
+  int literal = actual;
+  if (nt_kind(nt, literal) == NK_CallNode && sp_streq(nt_str(nt, literal, "name"), "+@") &&
+      fwd_builtin(c, "String", "+@") && nt_ref(nt, literal, "arguments") < 0 && nt_ref(nt, literal, "block") < 0)
+    literal = nt_ref(nt, literal, "receiver");
+  if (literal < 0 || nt_kind(nt, literal) != NK_StringNode) return 0;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  FwdMemo *memo = f->memo;
+  if (!memo->print_parent) memo->print_parent = du_parent_map(nt);
+  if (!memo->print_parent) return 0;
+  int pa = memo->print_parent[call];
+  if (pa < 0 || !sp_streq(nt_type(nt, pa), "ArgumentsNode")) return 0;
+  int printed = memo->print_parent[pa];
+  if (printed < 0 || nt_kind(nt, printed) != NK_CallNode ||
+      !sp_streq(nt_str(nt, printed, "name"), "p") || nt_ref(nt, printed, "receiver") >= 0 ||
+      nt_ref(nt, printed, "block") >= 0 || comp_self_call_mi(c, printed, "p") >= 0) return 0;
+  int st = memo->print_parent[printed];
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  int count = 0; const int *body = nt_arr(nt, st, "body", &count);
+  if (!count || body[count - 1] == printed) return 0;
   int a = nt_ref(nt, call, "arguments"), argc = 0, position = -1;
   const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
   for (int i = 0; i < argc; i++) {
@@ -22574,38 +22626,17 @@ int fwd_rest_print_safe(Compiler *c, int mi, int call, int actual) {
     if (args[i] == actual) position = i;
   }
   if (position < 0) return 0;
-  FwdQuery *f = fwd_analysis(c);
-  fwd_memo_fresh(c, f, FWD_EMISSION);
-  if (fwd_rest_bits(c, f, mi) & FWD_REST_OPEN) return 0;
-  if (!fwd_rest_return_only(c, mi, position, argc, 0) || !fwd_builtin(c, "Object", "p") ||
-      !fwd_builtin(c, "String", "inspect") || !fwd_builtin(c, "Array", "inspect")) return 0;
-  /* The input must have no pre-existing alias: returning and immediately
-     printing a fresh primitive literal cannot observe a mutation of some
-     caller-held String while the method runs. This does not admit named
-     inputs, arbitrary producers, retained results or intermediate stores. */
-  int literal = actual;
-  if (nt_kind(nt, literal) == NK_CallNode && sp_streq(nt_str(nt, literal, "name"), "+@") &&
-      fwd_builtin(c, "String", "+@") && nt_ref(nt, literal, "arguments") < 0 && nt_ref(nt, literal, "block") < 0)
-    literal = nt_ref(nt, literal, "receiver");
-  if (literal < 0 || nt_kind(nt, literal) != NK_StringNode) return 0;
-  Scope *caller = comp_scope_of(c, call);
-  if (!caller) return 0;
-  if (c->n_native_funcs || c->n_native_objs || c->n_native_methods || c->n_ffi_funcs) return 0;
-  for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && sp_streq(c->scopes[s].name, "inspect") && !nt_int(nt, c->scopes[s].def_node, "node_bi", 0)) return 0;
-  for (int u = comp_scall_first(c, (int)(caller - c->scopes)); u >= 0; u = comp_scall_next(c, u)) {
-    const char *name = nt_str(nt, u, "name");
-    if (nt_kind(nt, u) != NK_CallNode || !name || nt_ref(nt, u, "receiver") >= 0 || !sp_streq(name, "p") || nt_ref(nt, u, "block") >= 0) continue;
-    if (comp_self_call_mi(c, u, "p") >= 0) continue;
-    int a = nt_ref(nt, u, "arguments"), n = 0;
-    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-    if (n != 1 || args[0] != call) continue;
-    for (int s = comp_kind_first(c, NK_StatementsNode); s >= 0; s = comp_kind_next(c, s)) {
-      int count = 0; const int *body = nt_arr(nt, s, "body", &count);
-      for (int j = 0; j + 1 < count; j++) if (body[j] == u) return 1;
-    }
+  if (!memo->print_contract) {
+    int safe = !c->n_native_funcs && !c->n_native_objs && !c->n_native_methods && !c->n_ffi_funcs &&
+      fwd_builtin(c, "Object", "p") && fwd_builtin(c, "String", "inspect") && fwd_builtin(c, "Array", "inspect");
+    /* Other objects' inspect callbacks cannot access this fresh input: the
+       chain proves no publication. Overrides on the String or its returned
+       rest Array itself are excluded above. */
+    memo->print_contract = safe ? 1 : -1;
   }
-  return 0;
+  if (memo->print_contract < 0) return 0;
+  if (fwd_rest_bits(c, f, mi) & FWD_REST_OPEN) return 0;
+  return fwd_rest_return_only(c, mi, position, argc, 0);
 }
 FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
   if (mi < 0 || mi >= c->nscopes || j < 0) return FWD_READONLY;

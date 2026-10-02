@@ -18,7 +18,28 @@
 # 11% of blog's C, 36% of campfire's, 46% of lobsters'.
 
 frozen_forward = ARGV.delete("--frozen-forward")
+rest_print = ARGV.delete("--rest-print")
 k = Integer(ARGV[0] || 10)
+
+if rest_print
+  puts <<~RUBY
+    def unused_mutator(value); value << '!'; nil; end
+    class PrintBase
+      def result(*items) = items
+    end
+    class PrintChild < PrintBase
+      def result(*items) = super
+    end
+    child = PrintChild.new
+  RUBY
+  k.times do |i|
+    puts "def noise#{i}(value) = value + #{i}"
+    puts "p child.result(+'value#{i}')"
+    puts "noise#{i}(#{i})"
+  end
+  puts "nil"
+  exit
+end
 
 if frozen_forward
   puts <<~RUBY

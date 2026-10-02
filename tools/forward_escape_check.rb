@@ -831,6 +831,48 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     end
     run
   RUBY
+  certificate_cases["rest_post_and_unused_multiple_print"] = [<<~RUBY, "\"ice\"\n:post\n\"snow\"\n", true]
+    class Base
+      def result(a, *items, last) = last
+    end
+    class Child < Base
+      def result(a, *items) = super
+    end
+    def run
+      p Child.new.result(1, +'ice'), Child.new.result(1, +'unused', :post), Child.new.result(1, +'snow')
+      nil
+    end
+    run
+  RUBY
+  certificate_cases["rest_reassigned_layout"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", false]
+    class Base
+      def result(a, b, *items); $saved = b; b; end
+    end
+    class Middle < Base
+      def result(a, *items, last); items = []; super; end
+    end
+    class Child < Middle
+      def result(a, *items) = super
+    end
+    def run
+      p Child.new.result(1, :padding, +'ice'), ($saved << '!')
+      nil
+    end
+    run
+  RUBY
+  certificate_cases["rest_terminal_default_escape"] = [<<~RUBY, "\"ice!\"\n\"ice!\"\n", false]
+    class Base
+      def result(a, value, spare = ($saved = value)) = value
+    end
+    class Child < Base
+      def result(a, *items) = super
+    end
+    def run
+      p Child.new.result(1, +'ice'), ($saved << '!')
+      nil
+    end
+    run
+  RUBY
   cells = File.read(File.expand_path("../benchmark/bm_poly_cells.rb", __dir__))
   cells_expected = "count: 5\nhello\n42\n[3 items]\nworld\n99\n"
   certificate_cases["readonly_field_loop"] = [cells, cells_expected, true]

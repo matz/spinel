@@ -568,6 +568,9 @@ int desugar_rest_param_writes(Compiler *c) {
     int body = nt_ref(nt, id, "body");
     if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     if (bpw_walk(nt, body, rp, NULL) == 0) continue;
+    /* Renaming removes the original write from the live body. Preserve it
+       for proofs that require bare super's positional layout unchanged. */
+    nt_node_set_int(nt, id, "rest_rebound", 1);
     char nn[300]; snprintf(nn, sizeof nn, "__rpv_%s", rp);
     /* The usual shape writes it once, as a statement of the body itself
        (`args = args.first`), with no write before it: the statements before

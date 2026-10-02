@@ -3298,6 +3298,9 @@ scale-test: $(SPINEL_WORK)
 	ruby tools/compile_scale_gen.rb --frozen-forward 25 > "$$tmp/i1.rb"; ruby tools/compile_scale_gen.rb --frozen-forward 100 > "$$tmp/i4.rb"; \
 	ia=$$(sw -c -o "$$tmp/i1.c" "$$tmp/i1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ib=$$(sw -c -o "$$tmp/i4.c" "$$tmp/i4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ruby tools/compile_scale_gen.rb --rest-print 25 > "$$tmp/r1.rb"; ruby tools/compile_scale_gen.rb --rest-print 100 > "$$tmp/r4.rb"; \
+	ra=$$(sw -c -o "$$tmp/r1.c" "$$tmp/r1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	rb=$$(sw -c -o "$$tmp/r4.c" "$$tmp/r4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	( ulimit -t 20; $(SPINEL_WORK) -c -o "$$tmp/hls.c" test/scale/hash_literal_sources_fanout.rb ) >/dev/null 2>&1 || \
 	  { rm -rf "$$tmp"; echo "scale-test: FAIL (the hash-literal source walk revisited call sites along every path)"; exit 1; }; \
 	sh test/scale/ie_forward_chain.sh 2 > "$$tmp/f2.rb"; sh test/scale/ie_forward_chain.sh 4 > "$$tmp/f4.rb"; \
@@ -3306,7 +3309,11 @@ scale-test: $(SPINEL_WORK)
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || \
 	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
-	   [ -z "$$pa" ] || [ -z "$$pb" ] || [ -z "$$ia" ] || [ -z "$$ib" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	   [ -z "$$pa" ] || [ -z "$$pb" ] || [ -z "$$ia" ] || [ -z "$$ib" ] || \
+	   [ -z "$$ra" ] || [ -z "$$rb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	awk -v a="$$ra" -v b="$$rb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: discarded rest print work at 4x the callers and noise is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the rest print proof rescanned global bodies per caller)"; exit 1; }; \
 	awk -v a="$$ia" -v b="$$ib" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: immutable caller work at 4x the formals and noise is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (immutable provenance rescanned a global caller census per formal)"; exit 1; }; \

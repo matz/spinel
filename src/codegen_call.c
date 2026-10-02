@@ -10844,6 +10844,13 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
     emit_expr(c, recv, b);
     return 1;
   }
+  /* Hash[*args]: the runtime reads the list as Hash[]'s arguments */
+  if (recv >= 0 && sp_streq(name, "__hash_brackets_splat")) {
+    buf_puts(b, "sp_hash_brackets_splat(");
+    emit_boxed(c, recv, b);
+    buf_puts(b, ")");
+    return 1;
+  }
   /* Hash[] with no arguments constructs an empty hash. */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 0 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&

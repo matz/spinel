@@ -5535,6 +5535,18 @@ static void desugar_enum_chain_shapes(Compiler *c) {
           nt_node_set_int(nt, id, "hash_brackets", 1);
           continue;
         }
+        /* Hash[*args]: the splatted list is the argument list, so whether it
+           is one Hash or pair list or alternating keys and values is known
+           only at run time -- reading it as the pairs (the rewrite below)
+           took the list itself for them */
+        if (an == 1 && nt_type(nt, av0[0]) &&
+            sp_streq(nt_type(nt, av0[0]), "SplatNode") &&
+            nt_ref(nt, av0[0], "expression") >= 0) {
+          nt_node_set_str(nt, id, "name", "__hash_brackets_splat");
+          nt_node_set_ref(nt, id, "receiver", nt_ref(nt, av0[0], "expression"));
+          nt_node_set_ref(nt, id, "arguments", -1);
+          continue;
+        }
         /* Hash[arg] with any single non-literal argument: the same pairs.to_h
            rewrite (this desugar runs pre-type, so no array check is possible;
            to_h itself raises on a non-convertible receiver, as Hash[] does). */

@@ -1,0 +1,8 @@
+{a: 1, b: 2}
+{a: 1, b: 2}
+{c: 3}
+{"x" => 1}
+{}
+{d: 4}
+{d: 4, e: 5}
+"odd number of arguments for Hash"

@@ -3045,6 +3045,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       infer_type(c, argv[0]) == TY_BIGINT) return TY_BIGINT;
   /* Hash[k: v] desugared to a bare hash literal: transparent passthrough */
   if (recv >= 0 && sp_streq(name, "__hash_brackets_kw")) return infer_type(c, recv);
+  /* Hash[*args]: a hash of whatever kind the list builds at run time */
+  if (recv >= 0 && sp_streq(name, "__hash_brackets_splat")) return TY_POLY;
   /* Hash[] with no arguments: an empty hash (same C type as a bare {}) */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 0 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&

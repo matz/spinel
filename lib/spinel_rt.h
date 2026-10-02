@@ -10863,6 +10863,34 @@ static sp_RbVal sp_poly_to_h_m(sp_RbVal v) {
   }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_h' for %s", sp_poly_class_name(v)));
 }
+/* Hash[*args]: the splatted list is Hash[]'s argument list. One argument is
+   a Hash (copied) or a list of pairs; an even count alternates keys and
+   values, which pair up into the list sp_poly_to_h_m reads. */
+static sp_RbVal sp_hash_brackets_splat(sp_RbVal args) {
+  SP_GC_ROOT_RBVAL(args);
+  sp_PolyArray *av;
+  if (args.tag == SP_TAG_NIL) av = sp_PolyArray_new();
+  else if (args.tag == SP_TAG_OBJ && sp_poly_is_array_kind(args.cls_id)) av = sp_poly_to_poly_array(args);
+  else { av = sp_PolyArray_new(); SP_GC_ROOT(av); sp_PolyArray_push(av, args); }
+  SP_GC_ROOT(av);
+  sp_int n = av->len;
+  if (n == 1) {
+    sp_RbVal a = av->data[0];
+    if (a.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(a.cls_id)) return sp_poly_dup(a, 0);
+    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_h_m(a);
+  }
+  if (n % 2 != 0) sp_raise_cls("ArgumentError", "odd number of arguments for Hash");
+  sp_PolyArray *pairs = sp_PolyArray_new();
+  SP_GC_ROOT(pairs);
+  for (sp_int i = 0; i < n; i += 2) {
+    /* rooted through the list before it is filled */
+    sp_PolyArray *pair = sp_PolyArray_new();
+    sp_PolyArray_push(pairs, sp_box_poly_array(pair));
+    sp_PolyArray_push(pair, av->data[i]);
+    sp_PolyArray_push(pair, av->data[i + 1]);
+  }
+  return sp_poly_to_h_m(sp_box_poly_array(pairs));
+}
 /* Data#with on a poly receiver (a Data read out of a container): dispatch by
    cls_id to a copy-update constructor, `ov` a symbol-keyed hash of the members
    to override (#2890). */

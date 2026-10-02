@@ -1481,6 +1481,22 @@ reject-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	  else grep -qF "$$why" "$$tmp/co.out" || \
 	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/co.out"; ok=0; }; fi; \
 	done; \
+	for spec in "subclass_array:class Stack < Array: subclassing Array is not supported yet" \
+	            "subclass_hash:class Registry < Hash: subclassing Hash is not supported yet" \
+	            "subclass_string:class Name < String: subclassing String is not supported yet" \
+	            "subclass_hash_own_methods_only:class Opts < Hash: subclassing Hash" \
+	            "subclass_array_toplevel_path:class Points < Array: subclassing Array" \
+	            "subclass_hash_class_new:Class.new(Hash): subclassing Hash" \
+	            "subclass_hash_class_new_block:class Registry < Hash: subclassing Hash" \
+	            "subclass_range:class Span < Range: subclassing Range" \
+	            "subclass_thread_queue:class Jobs < Queue: subclassing Queue" \
+	            "subclass_stringio:class Buffer < StringIO: subclassing StringIO"; do \
+	  t=test/reject/$${spec%%:*}.rb; why=$${spec#*:}; \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sb.c" >"$$tmp/sb.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled: a subclass of a builtin has none of its parent's methods)"; ok=0; \
+	  else grep -qF "$$why" "$$tmp/sb.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/sb.out"; ok=0; }; fi; \
+	done; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "reject-test: pass"; else exit 1; fi
 

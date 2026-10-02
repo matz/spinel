@@ -1,4 +1,5 @@
-"opts X:Opts"
-"list y/List"
+"money X~Money"
+"cents y~Cents"
 "h:Hash"
 "a/Array"
+"n~Integer"

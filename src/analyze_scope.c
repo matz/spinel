@@ -4535,10 +4535,115 @@ static void check_unrewritten_delegators(Compiler *c) {
   }
 }
 
+/* The builtin class a superclass expression names, when instances of that
+   builtin carry a representation of their own that a program class cannot
+   take on, else NULL. A subclass of one is built as a plain object: none of
+   the parent's methods reach it, its constructor takes none of the parent's
+   arguments, and p / to_s / == / respond_to? answer as for an Object (#7075).
+   `::Hash` and `Thread::Queue` name the builtin too; any other path is a
+   namespace of the program's own. A bare name that some class of the
+   program's own nests under a namespace (`M::Queue`) is left alone: the
+   lexical lookup may well find that class instead. Object, BasicObject, the
+   exceptions, Struct / Data, Numeric, and package classes written in Ruby
+   (Set, Date, ...) are absent: a subclass of those works. OpenStruct is a
+   type of the runtime's own here, so it is listed with the builtins. */
+static const char *refused_builtin_superclass(Compiler *c, int sc) {
+  static const char *const refused[] = {
+    "Array", "Hash", "String", "Range", "Proc", "Method", "UnboundMethod",
+    "Integer", "Float", "Symbol", "Rational", "Complex",
+    "NilClass", "TrueClass", "FalseClass", "Regexp", "MatchData", "Time",
+    "Random", "Enumerator", "IO", "File", "Dir", "Thread", "Fiber", "Mutex",
+    "Queue", "SizedQueue", "ConditionVariable", "OpenStruct", NULL };
+  const NodeTable *nt = c->nt;
+  if (sc < 0) return NULL;
+  NodeKind k = nt_kind(nt, sc);
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return NULL;
+  const char *nm = nt_str(nt, sc, "name");
+  if (!nm || !str_in(nm, refused)) return NULL;
+  if (k == NK_ConstantPathNode) {
+    int par = nt_ref(nt, sc, "parent");
+    if (par >= 0) {
+      const char *pn = nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
+      if (!pn || !sp_streq(pn, "Thread") ||
+          !(sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") ||
+            sp_streq(nm, "Mutex") || sp_streq(nm, "ConditionVariable")))
+        return NULL;
+    }
+    return nm;
+  }
+  for (int i = 0; i < c->nclasses; i++) {
+    if (!c->classes[i].name || !sp_streq(c->classes[i].name, nm)) continue;
+    const char *rn = class_ruby_name(c, i);
+    if (rn && !sp_streq(rn, nm)) return NULL;
+  }
+  return nm;
+}
+
+/* A program class whose superclass is a builtin of that kind, or a class a
+   package binds to C (StringIO), is refused where it is declared: it would
+   build and then answer differently from CRuby (#7075). The fix is a real
+   subclass -- an instance that IS an Array with the subclass's methods
+   dispatched on it -- which spinel does not have yet; rewriting the class
+   into one that delegates to a wrapped value answers differently too
+   (`is_a?`, `==`, `p`), so wrapping is left to the program. `Class.new(Hash)`
+   without a block is the same class spelled as a call (the block form
+   arrives here already rewritten into a ClassNode). */
+static void refuse_builtin_subclass(Compiler *c, int at, const char *what, const char *par) {
+  char msg[512];
+  snprintf(msg, sizeof msg,
+           "%s: subclassing %s is not supported yet (a subclass would answer "
+           "differently from CRuby); wrap a%s %s in an instance variable instead",
+           what, par,
+           strchr("AEIOU", par[0]) ? "n" : "",
+           par);
+  unsupported_feature(c, at, msg);
+}
+
+static void check_builtin_subclasses(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_ClassNode, id) {
+    int sc = nt_ref(nt, id, "superclass");
+    if (sc < 0) continue;
+    int cp = nt_ref(nt, id, "constant_path");
+    const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    const char *par = refused_builtin_superclass(c, sc);
+    if (!par) {
+      NodeKind sk = nt_kind(nt, sc);
+      if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) continue;
+      int p = comp_class_index(c, nt_str(nt, sc, "name"));
+      if (p < 0 || !c->classes[p].is_native_class) continue;
+      par = c->classes[p].name;
+    }
+    char what[300];
+    snprintf(what, sizeof what, "class %s < %s", cn ? cn : "?", par);
+    /* the superclass node: a ClassNode rewritten from `Foo = Class.new(Hash)
+       do ... end` carries no position of its own */
+    refuse_builtin_subclass(c, sc, what, par);
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "new") || nt_ref(nt, id, "block") >= 0) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
+    const char *rn = nt_str(nt, recv, "name");
+    if (!rn || !sp_streq(rn, "Class")) continue;
+    int args = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    if (!av || ac != 1) continue;
+    const char *par = refused_builtin_superclass(c, av[0]);
+    if (par) {
+      char what[64];
+      snprintf(what, sizeof what, "Class.new(%s)", par);
+      refuse_builtin_subclass(c, id, what, par);
+    }
+  }
+}
+
 void resolve_parents(Compiler *c) {
   check_class_redeclarations(c);
   check_blk_param_writes(c);
   check_unrewritten_delegators(c);
+  check_builtin_subclasses(c);
   const NodeTable *nt = c->nt;
   for (int i = 0; i < c->nclasses; i++) {
     int sc = nt_ref(nt, c->classes[i].def_node, "superclass");

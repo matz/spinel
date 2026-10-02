@@ -1,6 +1,6 @@
 # A builtin class `===` a user object answers false (or true up its class chain) instead of raising
 class Pt; end
-class MyA < Array; end
+class MyA < Pt; end   # (a subclass of Array is refused, #7075)
 S = Struct.new(:a)
 D = Data.define(:x)
 class Sub < S; end
@@ -12,7 +12,7 @@ p Numeric === o, Range === o, Proc === o, Time === o, Struct === o, Data === o
 r = case o when Integer then :i when String then :s else :other end
 p r
 
-p Array === MyA.new, Hash === MyA.new
+p Array === MyA.new, Pt === MyA.new
 p Struct === S.new(1), Struct === Sub.new(2), Integer === S.new(3), Data === S.new(4)
 p Data === D.new(x: 1), Struct === D.new(x: 2)
 

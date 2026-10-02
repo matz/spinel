@@ -24906,7 +24906,7 @@ static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
       thr = "a parameter it hands on";
       pulled = r > 0;
     }
-    if (r == -2) {
+    if (r == FWD_ESCAPE) {
       TyKind at = comp_ntype(c, arg);
       if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
         char msg[512];

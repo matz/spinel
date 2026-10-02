@@ -17577,7 +17577,19 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *readonly);
+typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
+typedef struct {
+  FwdPhase phase;
+  SbMutTab seen, poly_cache;
+  unsigned *rest;
+  int nscopes, poly_depth, rest_depth, taint;
+  unsigned version, scope_gen;
+} FwdAnalysis;
+/* The top-level compiler owns reusable caches. Recursive queries receive
+   this context explicitly and give nested POLY walks their own worklist. */
+static FwdAnalysis g_fwd_analysis;
+static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly);
+static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase);
 static int fwd_builtin(Compiler *c, const char *owner, const char *name);
 static int fwd_array_store_start(Compiler *c, int node, int argc);
 /* Local `vn` of scope `vs` lent to byref slots by calls in that scope: each
@@ -17616,6 +17628,7 @@ static int convert_byref_handle_params(Compiler *c,
   /* the call-site chain is what makes this pass affordable; with no table
      there is nothing to walk, and promoting nothing is the safe answer */
   if (!hat->ok) return 0;
+  fwd_memo_fresh(c, &g_fwd_analysis, FWD_PROMOTION);
   ALocalAliases aliases;
   an_local_aliases_build(c, &aliases);
   /* Completed readonly suffixes are shared only within this conversion
@@ -17648,7 +17661,7 @@ static int convert_byref_handle_params(Compiler *c,
       int poly_mut = (pp->is_param && pp->type == TY_POLY &&
                       ((pp->poly_lift & POLY_LIFT_APPENDED) || an_param_mutated_in_place(c, mi2, pj) ||
                        an_poly_param_yielded_lent(c, mi2, pj) ||
-                       fwd_poly_param_handed_on(c, mi2, pj, &readonly)));
+                       fwd_poly_param_handed_on(c, &g_fwd_analysis, mi2, pj, &readonly)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
@@ -21428,8 +21441,8 @@ static int fwd_call_target(Compiler *c, int u) {
 }
 
 static int fwd_splat_start(Compiler *c, int u, const char *rn);
-static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly);
-static int fwd_param_appends(Compiler *c, int mi, int j);
+static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly);
+static int fwd_param_appends(Compiler *c, FwdAnalysis *f, int mi, int j);
 
 /* The incoming String uses the builtin contract only when a reopen has
    not replaced it. Unrelated classes with the same name do not own this
@@ -21637,7 +21650,8 @@ typedef enum {
   FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
   FWD_MODE_UNKNOWN, FWD_MODE_ALIAS
 } FwdKeepMode;
-static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+static int fwd_param_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
   /* This bounds source-tree recursion, not the forwarding graph. Beyond
@@ -21665,7 +21679,7 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeep
     int n = 0; const int *body = nt_arr(nt, node, "body", &n);
     int retained = 0;
     for (int i = 0; i < n; i++) {
-      retained |= fwd_param_kept(c, mi, pn, body[i], i == n - 1 ? kept : FWD_MODE_DISCARD, appended, depth + 1);
+      retained |= fwd_param_kept(c, f, mi, pn, body[i], i == n - 1 ? kept : FWD_MODE_DISCARD, appended, depth + 1);
       if (fwd_string_returns(c, mi, pn, body[i], 0)) break;
     }
     return retained;
@@ -21683,150 +21697,154 @@ static int fwd_param_kept(Compiler *c, int mi, const char *pn, int node, FwdKeep
   }
   if (k == NK_IfNode || k == NK_UnlessNode) {
     int pred = nt_ref(nt, node, "predicate");
-    int retained = fwd_param_kept(c, mi, pn, pred, FWD_MODE_DISCARD, appended, depth + 1);
+    int retained = fwd_param_kept(c, f, mi, pn, pred, FWD_MODE_DISCARD, appended, depth + 1);
     int truth = fwd_string_guard(c, mi, pn, pred, 0);
     if (k == NK_UnlessNode) truth = -truth;
-    return retained | (truth >= 0 ? fwd_param_kept(c, mi, pn, nt_ref(nt, node, "statements"), kept, appended, depth + 1) : 0) |
-           (truth <= 0 ? fwd_param_kept(c, mi, pn, nt_ref(nt, node, k == NK_UnlessNode ? "else_clause" : "subsequent"), kept, appended, depth + 1) : 0);
+    return retained | (truth >= 0 ? fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "statements"), kept, appended, depth + 1) : 0) |
+           (truth <= 0 ? fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, k == NK_UnlessNode ? "else_clause" : "subsequent"), kept, appended, depth + 1) : 0);
   }
   if (k == NK_AndNode || k == NK_OrNode) {
     int left = nt_ref(nt, node, "left");
-    int retained = fwd_param_kept(c, mi, pn, left, kept, appended, depth + 1);
+    int retained = fwd_param_kept(c, f, mi, pn, left, kept, appended, depth + 1);
     int truth = fwd_string_guard(c, mi, pn, left, 0);
     return retained | ((k == NK_AndNode ? truth >= 0 : truth <= 0) ?
-           fwd_param_kept(c, mi, pn, nt_ref(nt, node, "right"), kept, appended, depth + 1) : 0);
+           fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "right"), kept, appended, depth + 1) : 0);
   }
-  if (k == NK_CallNode) {
-    const char *nm = nt_str(nt, node, "name");
-    int recv = nt_ref(nt, node, "receiver");
-    int read = dyn_pure_read_name(nm) || (nm && (sp_streq(nm, "is_a?") ||
-               sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
-               sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
-               sp_streq(nm, "<=") || sp_streq(nm, ">=")));
-    int self = nm && (sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze"));
-    int mutator = an_str_mutator_name(nm);
-    if (!nm || !fwd_builtin(c, "String", nm)) read = self = mutator = 0;
-    int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
-    int retained = 0;
-    if (rest) {
-      read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?") || sp_streq(nm, "[]"));
-      if (kept && nm && sp_streq(nm, "[]") && fwd_param_read(c, mi, pn, recv)) retained = FWD_KEEP_LOCAL;
-    }
-    retained |= fwd_param_kept(c, mi, pn, recv, read ? FWD_MODE_DISCARD : self || mutator ? kept : FWD_MODE_UNKNOWN, appended, depth + 1);
-    int a = nt_ref(nt, node, "arguments"), n = 0;
-    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-    ACallTargets targets = {0};
-    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
-    int bytes = (rt == TY_STRING || rt == TY_STRBUF) && (read || mutator);
-    /* The typed String-array search compares bytes, never stores its
-       needle. Other Array operations/equality dispatch have no such proof. */
-    int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
-                 fwd_builtin(c, "Array", nm) && fwd_builtin(c, "String", "==");
-    int store_start = fwd_array_store_start(c, node, n);
-    /* Object identity comparison retains neither operand. For a user
-       receiver, verify its actual chain too, including inherited overrides. */
-    const char *identity_owner = ty_is_object(rt) ? c->classes[ty_object_class(rt)].name : "Object";
-    int identity = n == 1 && nm && sp_streq(nm, "equal?") && rt != TY_POLY && rt != TY_UNKNOWN &&
-                   (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_native_class) &&
-                   fwd_builtin(c, identity_owner, nm) && fwd_builtin(c, "String", nm) &&
-                   (!ty_is_array(rt) || fwd_builtin(c, "Array", nm));
-    if (!bytes) {
-      an_call_targets_of(c, node, &targets);
-      if (!targets.n) act_add(&targets, fwd_call_target(c, node));
-      if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
-        int work = FWD_FAMILY_WORK;
-        int base = fwd_object_base(c, recv, 0, &work);
-        if (base >= 0) {
-          act_reset(c, &targets);
-          act_add(&targets, comp_method_in_chain(c, base, nm, NULL));
-          act_add_overrides(c, &targets, base, nm, 0);
-        }
-      }
-    }
-    identity &= targets.n == 0;
-    int printed = recv < 0 && nm && (sp_streq(nm, "p") || sp_streq(nm, "puts") || sp_streq(nm, "print"));
-    for (int i = 0; i < n; i++) {
-      /* Explicit keyword values have their own laid-out formal. The hash
-         wrapper is not a stored Ruby Hash, but unresolved ** values and
-         expression arguments still have no bare-read forwarding proof. */
-      int keyword = nt_kind(nt, args[i]) == NK_KeywordHashNode, en = 1;
-      const int *elements = keyword ? nt_arr(nt, args[i], "elements", &en) : &args[i];
-      for (int e = 0; e < en; e++) {
-        int arg = elements[e];
-        if (keyword && nt_kind(nt, arg) == NK_AssocNode) {
-          retained |= fwd_param_kept(c, mi, pn, nt_ref(nt, arg, "key"), FWD_MODE_VALUE, appended, depth + 1);
-          arg = nt_ref(nt, arg, "value");
-        }
-        int forwarded = targets.n > 0;
-        for (int ti = 0; ti < targets.n; ti++) {
-          int t = targets.v[ti], matched = 0;
-          Scope *target = &c->scopes[t];
-          for (int j = 0; j < target->nparams; j++) {
-            if (arg_layout_param_node(c, target, node, j, NULL) != arg) continue;
-            matched = 1;
-            if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_poly_add(c, t, j, NULL);
-          }
-          int plain = 1, pos = n;
-          while (pos > 0 && (nt_kind(nt, args[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, args[pos - 1]) == NK_BlockArgumentNode)) pos--;
-          for (int j = 0; j < pos; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
-          if (!keyword && plain && target->rest_idx >= 0 && i >= target->rest_idx && i < pos - target->npost_rest) {
-            matched = 1;
-            if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_param_appends(c, t, i);
-          }
-          if (rest && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
-          forwarded &= matched;
-        }
-        int consume = !keyword && (bytes || search || identity || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p"))));
-        /* Only bare parameter reads have a forwarding edge. Parentheses,
-           conversions and ternaries are conservatively retained, not exempted
-           merely because their containing argument has a destination. */
-        if (forwarded && !rest && nt_kind(nt, arg) != NK_LocalVariableReadNode) forwarded = 0;
-        retained |= fwd_param_kept(c, mi, pn, arg, forwarded || consume ? FWD_MODE_DISCARD :
-                                  !keyword && store_start >= 0 && i >= store_start ? FWD_MODE_VALUE : FWD_MODE_UNKNOWN, appended, depth + 1);
-      }
-    }
-    int block = nt_ref(nt, node, "block"), synchronous = 0;
-    if (block >= 0 && nt_kind(nt, block) == NK_BlockNode) {
-      const char *predicate = nm;
-      int receiver = recv;
-      char original[16];
-      /* Enumerable lowering records the genuine per-site builtin copy.
-         Do not trust a user's method merely bearing an internal-looking name. */
-      if (targets.n == 1 && nt_int(nt, c->scopes[targets.v[0]].def_node, "enum_site", -1) == node &&
-          nm && strncmp(nm, "__enum_", 7) == 0) {
-        const char *end = strstr(nm + 7, "__");
-        if (end && end - nm - 7 < (int)sizeof original) {
-          memcpy(original, nm + 7, (size_t)(end - nm - 7)); original[end - nm - 7] = 0;
-          predicate = original;
-          receiver = n ? args[0] : -1;
-        }
-      }
-      synchronous = predicate && (sp_streq(predicate, "any?") || sp_streq(predicate, "all?") ||
-                    sp_streq(predicate, "none?") || sp_streq(predicate, "one?")) &&
-                    ty_is_array(comp_ntype(c, receiver)) && fwd_builtin(c, "Array", predicate);
-    }
-    free(targets.v);
-    /* A builtin predicate consumes a literal block's result as truthiness;
-       it does not retain the block. Stores/unknown calls/nested lambdas in
-       that body are still visited normally and can retain the input. */
-    return retained | fwd_param_kept(c, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
-                                    synchronous ? FWD_MODE_DISCARD : FWD_MODE_CAPTURE, appended, depth + 1);
-  }
+  if (k == NK_CallNode) return fwd_call_kept(c, f, mi, pn, node, kept, appended, depth);
 children:;
   int retained = 0;
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++)
-    retained |= fwd_param_kept(c, mi, pn, nt_ref_at(nt, node, i), kept, appended, depth + 1);
+    retained |= fwd_param_kept(c, f, mi, pn, nt_ref_at(nt, node, i), kept, appended, depth + 1);
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
-    for (int j = 0; j < n; j++) retained |= fwd_param_kept(c, mi, pn, ids[j], kept, appended, depth + 1);
+    for (int j = 0; j < n; j++) retained |= fwd_param_kept(c, f, mi, pn, ids[j], kept, appended, depth + 1);
   }
   return retained;
 }
 
-static unsigned fwd_rest_bits(Compiler *c, int mi);
-static SbMutTab g_fwd_poly_seen;
+/* A call owns its target/layout proof and the retention contract of its
+   receiver, arguments and block. The AST walker handles structural uses. */
+static int fwd_call_kept(Compiler *c, FwdAnalysis *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  int read = dyn_pure_read_name(nm) || (nm && (sp_streq(nm, "is_a?") ||
+             sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
+             sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
+             sp_streq(nm, "<=") || sp_streq(nm, ">=")));
+  int self = nm && (sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze"));
+  int mutator = an_str_mutator_name(nm);
+  if (!nm || !fwd_builtin(c, "String", nm)) read = self = mutator = 0;
+  int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
+  int retained = 0;
+  if (rest) {
+    read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?") || sp_streq(nm, "[]"));
+    if (kept && nm && sp_streq(nm, "[]") && fwd_param_read(c, mi, pn, recv)) retained = FWD_KEEP_LOCAL;
+  }
+  retained |= fwd_param_kept(c, f, mi, pn, recv, read ? FWD_MODE_DISCARD : self || mutator ? kept : FWD_MODE_UNKNOWN, appended, depth + 1);
+  int a = nt_ref(nt, node, "arguments"), n = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  ACallTargets targets = {0};
+  TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  int bytes = (rt == TY_STRING || rt == TY_STRBUF) && (read || mutator);
+  /* The typed String-array search compares bytes, never stores its
+     needle. Other Array operations/equality dispatch have no such proof. */
+  int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
+               fwd_builtin(c, "Array", nm) && fwd_builtin(c, "String", "==");
+  int store_start = fwd_array_store_start(c, node, n);
+  /* Object identity comparison retains neither operand. For a user
+     receiver, verify its actual chain too, including inherited overrides. */
+  const char *identity_owner = ty_is_object(rt) ? c->classes[ty_object_class(rt)].name : "Object";
+  int identity = n == 1 && nm && sp_streq(nm, "equal?") && rt != TY_POLY && rt != TY_UNKNOWN &&
+                 (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_native_class) &&
+                 fwd_builtin(c, identity_owner, nm) && fwd_builtin(c, "String", nm) &&
+                 (!ty_is_array(rt) || fwd_builtin(c, "Array", nm));
+  if (!bytes) {
+    an_call_targets_of(c, node, &targets);
+    if (!targets.n) act_add(&targets, fwd_call_target(c, node));
+    if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
+      int work = FWD_FAMILY_WORK;
+      int base = fwd_object_base(c, recv, 0, &work);
+      if (base >= 0) {
+        act_reset(c, &targets);
+        act_add(&targets, comp_method_in_chain(c, base, nm, NULL));
+        act_add_overrides(c, &targets, base, nm, 0);
+      }
+    }
+  }
+  identity &= targets.n == 0;
+  int printed = recv < 0 && nm && (sp_streq(nm, "p") || sp_streq(nm, "puts") || sp_streq(nm, "print"));
+  for (int i = 0; i < n; i++) {
+    /* Explicit keyword values have their own laid-out formal. The hash
+       wrapper is not a stored Ruby Hash, but unresolved ** values and
+       expression arguments still have no bare-read forwarding proof. */
+    int keyword = nt_kind(nt, args[i]) == NK_KeywordHashNode, en = 1;
+    const int *elements = keyword ? nt_arr(nt, args[i], "elements", &en) : &args[i];
+    for (int e = 0; e < en; e++) {
+      int arg = elements[e];
+      if (keyword && nt_kind(nt, arg) == NK_AssocNode) {
+        retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, arg, "key"), FWD_MODE_VALUE, appended, depth + 1);
+        arg = nt_ref(nt, arg, "value");
+      }
+      int forwarded = targets.n > 0;
+      for (int ti = 0; ti < targets.n; ti++) {
+        int t = targets.v[ti], matched = 0;
+        Scope *target = &c->scopes[t];
+        for (int j = 0; j < target->nparams; j++) {
+          if (arg_layout_param_node(c, target, node, j, NULL) != arg) continue;
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_poly_add(c, f, t, j, NULL);
+        }
+        int plain = 1, pos = n;
+        while (pos > 0 && (nt_kind(nt, args[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, args[pos - 1]) == NK_BlockArgumentNode)) pos--;
+        for (int j = 0; j < pos; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
+        if (!keyword && plain && target->rest_idx >= 0 && i >= target->rest_idx && i < pos - target->npost_rest) {
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_param_appends(c, f, t, i);
+        }
+        if (rest && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
+        forwarded &= matched;
+      }
+      int consume = !keyword && (bytes || search || identity || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p"))));
+      /* Only bare parameter reads have a forwarding edge. Parentheses,
+         conversions and ternaries are conservatively retained, not exempted
+         merely because their containing argument has a destination. */
+      if (forwarded && !rest && nt_kind(nt, arg) != NK_LocalVariableReadNode) forwarded = 0;
+      retained |= fwd_param_kept(c, f, mi, pn, arg, forwarded || consume ? FWD_MODE_DISCARD :
+                                !keyword && store_start >= 0 && i >= store_start ? FWD_MODE_VALUE : FWD_MODE_UNKNOWN, appended, depth + 1);
+    }
+  }
+  int block = nt_ref(nt, node, "block"), synchronous = 0;
+  if (block >= 0 && nt_kind(nt, block) == NK_BlockNode) {
+    const char *predicate = nm;
+    int receiver = recv;
+    char original[16];
+    /* Enumerable lowering records the genuine per-site builtin copy.
+       Do not trust a user's method merely bearing an internal-looking name. */
+    if (targets.n == 1 && nt_int(nt, c->scopes[targets.v[0]].def_node, "enum_site", -1) == node &&
+        nm && strncmp(nm, "__enum_", 7) == 0) {
+      const char *end = strstr(nm + 7, "__");
+      if (end && end - nm - 7 < (int)sizeof original) {
+        memcpy(original, nm + 7, (size_t)(end - nm - 7)); original[end - nm - 7] = 0;
+        predicate = original;
+        receiver = n ? args[0] : -1;
+      }
+    }
+    synchronous = predicate && (sp_streq(predicate, "any?") || sp_streq(predicate, "all?") ||
+                  sp_streq(predicate, "none?") || sp_streq(predicate, "one?")) &&
+                  ty_is_array(comp_ntype(c, receiver)) && fwd_builtin(c, "Array", predicate);
+  }
+  free(targets.v);
+  /* A builtin predicate consumes a literal block's result as truthiness;
+     it does not retain the block. Stores/unknown calls/nested lambdas in
+     that body are still visited normally and can retain the input. */
+  return retained | fwd_param_kept(c, f, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
+                                  synchronous ? FWD_MODE_DISCARD : FWD_MODE_CAPTURE, appended, depth + 1);
+}
+
+static unsigned fwd_rest_bits(Compiler *c, FwdAnalysis *f, int mi);
 /* The worklist carries traversal flags; the separate emission table carries
    completed proof states. Neither table's byte encoding is used by the other. */
 enum { FWD_VISIT_QUEUED = 1, FWD_VISIT_PROCESSED = 2,
@@ -21835,13 +21853,8 @@ typedef enum {
   FWD_CACHE_NONE, FWD_CACHE_ESCAPE, FWD_CACHE_UNKNOWN,
   FWD_CACHE_ROOT_READONLY, FWD_CACHE_APPENDS, FWD_CACHE_STRICT_READONLY
 } FwdCacheResult;
-typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
-static SbMutTab g_fwd_poly_cache; /* completed emission FwdCacheResult values */
-static int g_fwd_poly_depth;
-static int g_fwd_codegen;
-/* Set when an answer below was cut short, so it is not kept as final: 1 a
-   parameter still being asked, 2 the rest depth bound, 4 an unsupported escape. */
-static int g_fwd_taint;
+enum { FWD_TAINT_CYCLE = 1, FWD_TAINT_BOUND = 2, FWD_TAINT_ESCAPE = 4,
+       FWD_TAINT_CUT = FWD_TAINT_CYCLE | FWD_TAINT_BOUND };
 /* fwd_rest_bits beside the elements' bits 0-15: an element at offset 16 or
    more, past what the bits and the dynamic masks hold, reaches a parameter
    that appends; and an answer below was cut at the bound. Either way the
@@ -21850,30 +21863,33 @@ static int g_fwd_taint;
 #define FWD_REST_OPEN 0x20000u
 #define FWD_REST_KEPT 0x40000u
 #define FWD_REST_HANDED 0x80000u
+#define FWD_REST_DATA 0xfffffu
+#define FWD_REST_ASKING 0x20000000u
+#define FWD_REST_ANSWERED 0x40000000u
 /* Does method mi append to what its parameter j is bound to: in place, lent,
    the handle, or a POLY parameter or a rest element it hands on? */
-static int fwd_param_appends(Compiler *c, int mi, int j) {
+static int fwd_param_appends(Compiler *c, FwdAnalysis *f, int mi, int j) {
   Scope *m = &c->scopes[mi];
   if (j < 0) return 0;
-  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_PROCESSED))
-    g_fwd_poly_seen.val[0] |= FWD_VISIT_FORWARDED;
+  if (f->seen.n && (f->seen.val[0] & FWD_VISIT_PROCESSED))
+    f->seen.val[0] |= FWD_VISIT_FORWARDED;
   /* a rest takes the arguments from its position on; a chain of them is
      memoized per method (fwd_rest_bits) */
   if (m->rest_idx >= 0 && j >= m->rest_idx) {
-    unsigned rb = fwd_rest_bits(c, mi);
-    if (rb & FWD_REST_OPEN) g_fwd_taint |= 2;
-    if (rb & FWD_REST_KEPT) g_fwd_taint |= 4;
+    unsigned rb = fwd_rest_bits(c, f, mi);
+    if (rb & FWD_REST_OPEN) f->taint |= FWD_TAINT_BOUND;
+    if (rb & FWD_REST_KEPT) f->taint |= FWD_TAINT_ESCAPE;
     return j - m->rest_idx < 16 ? (int)((rb >> (j - m->rest_idx)) & 1u) : (rb & FWD_REST_PAST) != 0;
   }
   if (j >= m->nparams || !m->pnames[j]) return 0;
   LocalVar *q = scope_local(m, m->pnames[j]);
   if (!q || !q->is_param || q->is_block_param) return 0;
-  if (g_fwd_codegen && (q->type == TY_POLY || q->type == TY_STRING || q->type == TY_STRBUF))
-    return fwd_poly_param_handed_on(c, mi, j, NULL);
+  if (f->phase == FWD_EMISSION && (q->type == TY_POLY || q->type == TY_STRING || q->type == TY_STRBUF))
+    return fwd_poly_param_handed_on(c, f, mi, j, NULL);
   if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
   if (q->type != TY_POLY) return 0;
   if (an_param_mutated_in_place(c, mi, j)) return 1;
-  return fwd_poly_param_handed_on(c, mi, j, NULL);
+  return fwd_poly_param_handed_on(c, f, mi, j, NULL);
 }
 
 /* The position a call or `super`'s splat of local `rn` starts at among the
@@ -21900,53 +21916,49 @@ static int fwd_splat_start(Compiler *c, int u, const char *rn) {
    the outermost query of a cycle of forwarders asks again with what it found
    until that stops growing, and a forwarder a deeper query reached is asked
    afresh by its own. */
-static unsigned *g_fwd_rest;
-static int g_fwd_n;
-static unsigned g_fwd_version, g_fwd_scope_gen;
-static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn);
-static int g_fwd_rest_depth;   /* forwarders being asked, nested */
-static unsigned fwd_rest_bits(Compiler *c, int mi) {
-  if (mi < 0 || mi >= g_fwd_n) return 0;
-  if (g_fwd_rest[mi] & 0x40000000u) return g_fwd_rest[mi] & 0xfffffu;
-  if (g_fwd_rest[mi] & 0x20000000u) { g_fwd_taint |= 1; return g_fwd_rest[mi] & 0xfffffu; }
-  if (g_fwd_rest_depth > 64) { g_fwd_taint |= 2; return FWD_REST_OPEN; }
+static unsigned fwd_rest_bits_once(Compiler *c, FwdAnalysis *f, int mi, const char *rn);
+static unsigned fwd_rest_bits(Compiler *c, FwdAnalysis *f, int mi) {
+  if (mi < 0 || mi >= f->nscopes) return 0;
+  if (f->rest[mi] & FWD_REST_ANSWERED) return f->rest[mi] & FWD_REST_DATA;
+  if (f->rest[mi] & FWD_REST_ASKING) { f->taint |= FWD_TAINT_CYCLE; return f->rest[mi] & FWD_REST_DATA; }
+  if (f->rest_depth > 64) { f->taint |= FWD_TAINT_BOUND; return FWD_REST_OPEN; }
   Scope *m = &c->scopes[mi];
   const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
-  if (!rn) { g_fwd_rest[mi] = 0x40000000u; return 0; }
-  int outer = g_fwd_taint, top = g_fwd_rest_depth == 0 && !g_fwd_poly_depth;
+  if (!rn) { f->rest[mi] = FWD_REST_ANSWERED; return 0; }
+  int outer = f->taint, top = f->rest_depth == 0 && !f->poly_depth;
   unsigned bits = 0;
   int tainted;
-  g_fwd_rest_depth++;
+  f->rest_depth++;
   for (int round = 0; ; round++) {
-    g_fwd_rest[mi] = 0x20000000u | bits;
-    g_fwd_taint = 0;
-    unsigned got = bits | fwd_rest_bits_once(c, mi, rn);
-    tainted = g_fwd_taint;
+    f->rest[mi] = FWD_REST_ASKING | bits;
+    f->taint = 0;
+    unsigned got = bits | fwd_rest_bits_once(c, f, mi, rn);
+    tainted = f->taint;
     if (got == bits || !top || round >= 16) { bits = got; break; }
     bits = got;
   }
-  g_fwd_rest_depth--;
+  f->rest_depth--;
   /* the top of a cycle has its answer; one cut at the bound says so */
-  if (tainted & 2) bits |= FWD_REST_OPEN;
-  if (tainted & 4) bits |= FWD_REST_KEPT;
-  g_fwd_taint = outer | (top ? 0 : tainted);
-  g_fwd_rest[mi] = (!top && tainted) || (tainted & 4) ? 0 : 0x40000000u | bits;
+  if (tainted & FWD_TAINT_BOUND) bits |= FWD_REST_OPEN;
+  if (tainted & FWD_TAINT_ESCAPE) bits |= FWD_REST_KEPT;
+  f->taint = outer | (top ? 0 : tainted);
+  f->rest[mi] = (!top && tainted) || (tainted & FWD_TAINT_ESCAPE) ? 0 : FWD_REST_ANSWERED | bits;
   return bits;
 }
 /* Does target t, its parameters laid from position p on, append to one at
    offset 16 or more: one of its own, or (a rest) one it forwards that far? */
-static unsigned fwd_rest_past(Compiler *c, int t, int p) {
+static unsigned fwd_rest_past(Compiler *c, FwdAnalysis *f, int t, int p) {
   Scope *tm = &c->scopes[t];
   int end = tm->rest_idx >= 0 ? tm->rest_idx + 17 : tm->nparams;
   for (int j = p + 16; j < end && j < p + 64; j++)
-    if (fwd_param_appends(c, t, j)) return FWD_REST_PAST;
+    if (fwd_param_appends(c, f, t, j)) return FWD_REST_PAST;
   return 0;
 }
-static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
+static unsigned fwd_rest_bits_once(Compiler *c, FwdAnalysis *f, int mi, const char *rn) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
   int appended = 0;
-  unsigned bits = g_fwd_codegen && fwd_param_kept(c, mi, rn, m->body, FWD_MODE_VALUE, &appended, 0) ? FWD_REST_KEPT : 0;
+  unsigned bits = f->phase == FWD_EMISSION && fwd_param_kept(c, f, mi, rn, m->body, FWD_MODE_VALUE, &appended, 0) ? FWD_REST_KEPT : 0;
   if (rest_elems_mutated(c, mi)) bits |= 0xffffu;
   for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
@@ -21960,10 +21972,10 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
       int t = targets.v[ti];
       /* A variable-length splat does not fix which of its elements binds
          a post parameter. Do not exempt such an unknown destination. */
-      if (g_fwd_codegen && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
+      if (f->phase == FWD_EMISSION && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
       for (int i = 0; i < 16; i++)
-        if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
-      bits |= fwd_rest_past(c, t, p);
+        if (fwd_param_appends(c, f, t, p + i)) bits |= 1u << i;
+      bits |= fwd_rest_past(c, f, t, p);
     }
     free(targets.v);
   }
@@ -21975,10 +21987,10 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
       int p = pass ? m->rest_idx : fwd_splat_start(c, q, rn);
       int t = p >= 0 ? a_super_target(c, m) : -1;
       if (t >= 0) bits |= FWD_REST_HANDED;
-      if (t >= 0 && g_fwd_codegen && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
+      if (t >= 0 && f->phase == FWD_EMISSION && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
       for (int i = 0; t >= 0 && i < 16; i++)
-        if (fwd_param_appends(c, t, p + i)) bits |= 1u << i;
-      if (t >= 0) bits |= fwd_rest_past(c, t, p);
+        if (fwd_param_appends(c, f, t, p + i)) bits |= 1u << i;
+      if (t >= 0) bits |= fwd_rest_past(c, f, t, p);
     }
   }
   return bits;
@@ -21987,80 +21999,86 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
 /* The visited records themselves are a worklist: enqueue a parameter once,
    rather than putting every forwarding edge on the compiler's C stack.
    Rest queries remain separately bounded and taint a cut edge as before. */
-static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly) {
+static int fwd_poly_add(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
   /* pj names a formal, not an actual position: post/keyword parameters
      after the rest still have their own bodies and must be visited. */
-  if (m->rest_idx >= 0 && pj == m->rest_idx) return fwd_param_appends(c, mi, pj);
+  if (m->rest_idx >= 0 && pj == m->rest_idx) return fwd_param_appends(c, f, mi, pj);
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
   LocalVar *p = scope_local(m, m->pnames[pj]);
   if (!p || !p->is_param || p->is_block_param) return 0;
-  if (!g_fwd_codegen && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
-  if (p->type != TY_POLY && !(g_fwd_codegen && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
+  if (f->phase == FWD_PROMOTION && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
+  if (p->type != TY_POLY && !(f->phase == FWD_EMISSION && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
   signed char *cached = readonly ? sb_mut_tab_slot(readonly, p->name, mi, 0) : NULL;
   if (cached && *cached) return 0;
-  if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_PROCESSED))
-    g_fwd_poly_seen.val[0] |= FWD_VISIT_FORWARDED;
+  if (f->seen.n && (f->seen.val[0] & FWD_VISIT_PROCESSED))
+    f->seen.val[0] |= FWD_VISIT_FORWARDED;
   /* Only a strict completed proof can prune a reached emission vertex.
      An ordinary root-only zero can exempt direct mutation or retention.
      Record the forwarding edge first, even when the suffix is cached. */
-  if (g_fwd_codegen && g_fwd_poly_cache.cap) {
-    signed char *done = sb_mut_tab_slot(&g_fwd_poly_cache, p->name, mi, 0);
+  if (f->phase == FWD_EMISSION && f->poly_cache.cap) {
+    signed char *done = sb_mut_tab_slot(&f->poly_cache, p->name, mi, 0);
     if (done && *done == FWD_CACHE_STRICT_READONLY) return 0;
   }
-  signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
+  signed char *seen = sb_mut_tab_slot(&f->seen, m->pnames[pj], mi, 1);
   if (*seen) return 0; /* already queued: its body will still be processed */
   *seen = FWD_VISIT_QUEUED;
   return 0;
 }
 
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *readonly) {
+static int fwd_poly_param_handed_on(Compiler *c, FwdAnalysis *f, int mi, int pj, SbMutTab *readonly) {
   const NodeTable *nt = c->nt;
   if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
-  if (g_fwd_codegen || g_fwd_poly_depth || g_fwd_rest_depth) readonly = NULL;
+  if (f->phase == FWD_EMISSION || f->poly_depth || f->rest_depth) readonly = NULL;
   signed char *cached = readonly ? sb_mut_tab_slot(readonly, c->scopes[mi].pnames[pj], mi, 0) : NULL;
   if (cached && *cached) return 0;
   /* A rest bitmap asks separate questions for separate positions. Give
      each nested POLY walk its own worklist; a visited vertex is not the
      answer to a later question reaching that same appender. */
-  SbMutTab outer_seen = g_fwd_poly_seen;
-  int nested = g_fwd_poly_depth != 0;
-  int internal = nested || g_fwd_rest_depth != 0;
-  if (nested) memset(&g_fwd_poly_seen, 0, sizeof g_fwd_poly_seen);
+  FwdAnalysis *parent = f, child;
+  int nested = f->poly_depth != 0;
+  int internal = nested || f->rest_depth != 0;
+  if (nested) {
+    /* Borrow the phase's caches, but never replace the parent's worklist.
+       Only the nested query's taint propagates back to its caller. */
+    child = *f;
+    memset(&child.seen, 0, sizeof child.seen);
+    f = &child;
+  }
   {
     int np = readonly ? readonly->ncap : 0;
     if (!readonly) for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
-    if (g_fwd_poly_seen.ncap < np) {
-      sb_mut_tab_free(&g_fwd_poly_seen);
-      sb_mut_tab_init(&g_fwd_poly_seen, np);
+    if (f->seen.ncap < np) {
+      sb_mut_tab_free(&f->seen);
+      sb_mut_tab_init(&f->seen, np);
     }
     /* Clear only buckets used by the preceding query, not the whole table. */
-    for (int r = 0; r < g_fwd_poly_seen.n; r++)
-      g_fwd_poly_seen.head[sb_mut_hash(g_fwd_poly_seen.name[r], g_fwd_poly_seen.key[r]) &
-                           (unsigned)(g_fwd_poly_seen.cap - 1)] = -1;
-    g_fwd_poly_seen.n = 0;
+    for (int r = 0; r < f->seen.n; r++)
+      f->seen.head[sb_mut_hash(f->seen.name[r], f->seen.key[r]) &
+                   (unsigned)(f->seen.cap - 1)] = -1;
+    f->seen.n = 0;
   }
-  int first = g_fwd_poly_seen.n;
-  int appended = fwd_poly_add(c, mi, pj, readonly);
+  int first = f->seen.n;
+  int appended = fwd_poly_add(c, f, mi, pj, readonly);
   int root_kept = 0;
-  g_fwd_poly_depth++;
-  for (int r = first; r < g_fwd_poly_seen.n; r++) {
-    g_fwd_poly_seen.val[r] = FWD_VISIT_PROCESSED;
-    mi = g_fwd_poly_seen.key[r];
+  f->poly_depth++;
+  for (int r = first; r < f->seen.n; r++) {
+    f->seen.val[r] = FWD_VISIT_PROCESSED;
+    mi = f->seen.key[r];
     Scope *m = &c->scopes[mi];
-    const char *pn = g_fwd_poly_seen.name[r];
+    const char *pn = f->seen.name[r];
     for (pj = 0; pj < m->nparams && !sp_streq(m->pnames[pj], pn); pj++) {}
     LocalVar *p = scope_local(m, pn);
     /* Direct mutation of the queried root has its existing emitter checks.
        This query checks mutations reached by forwarding, not a second,
        broader refusal of already-supported direct calls/block parameters. */
-    if ((!g_fwd_codegen || internal || r > 0) &&
+    if ((f->phase == FWD_PROMOTION || internal || r > 0) &&
         (p->byref_out || (p->type == TY_STRBUF && p->str_shared) || an_param_mutated_in_place(c, mi, pj))) appended = 1;
-    if (g_fwd_codegen) {
-      int retained = fwd_param_kept(c, mi, pn, m->body, FWD_MODE_VALUE, &appended, 0);
+    if (f->phase == FWD_EMISSION) {
+      int retained = fwd_param_kept(c, f, mi, pn, m->body, FWD_MODE_VALUE, &appended, 0);
       if (retained) {
-        if (internal || r > 0 || (retained & FWD_KEEP_INCOMPLETE)) g_fwd_taint |= 4;
+        if (internal || r > 0 || (retained & FWD_KEEP_INCOMPLETE)) f->taint |= FWD_TAINT_ESCAPE;
         else root_kept |= retained;
       }
     }
@@ -22070,25 +22088,25 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
       for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
         if (comp_scope_of(c, q) != m) continue;
         for (int j = 0; j < tm->nparams; j++)
-          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, t, j, readonly);
+          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, f, t, j, readonly);
       }
       for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
         if (comp_scope_of(c, q) != m) continue;
         for (int j = 0; j < tm->nparams; j++) {
           int an = arg_layout_param_node(c, tm, q, j, NULL);
-          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, t, j, readonly);
+          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, f, t, j, readonly);
         }
       }
     }
     for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
-      if (g_fwd_codegen) break; /* the guard-aware visitor owns call edges */
+      if (f->phase == FWD_EMISSION) break; /* the guard-aware visitor owns call edges */
       if (nt_kind(nt, u) != NK_CallNode) continue;
       int ct = fwd_call_target(c, u);
       if (ct < 0) continue;
       Scope *cm = &c->scopes[ct];
       for (int j = 0; j < cm->nparams; j++) {
         int an = arg_layout_param_node(c, cm, u, j, NULL);
-        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, ct, j, readonly);
+        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, f, ct, j, readonly);
       }
       /* The layout returns formals, not individual rest elements. Follow
          plain actuals gathered into the rest during promotion too; emission
@@ -22100,7 +22118,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
       for (int j = 0; j < n; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
       if (plain && cm->rest_idx >= 0)
         for (int j = cm->rest_idx; j < n - cm->npost_rest; j++)
-          if (fwd_param_read(c, mi, pn, args[j])) appended |= fwd_param_appends(c, ct, j);
+          if (fwd_param_read(c, mi, pn, args[j])) appended |= fwd_param_appends(c, f, ct, j);
     }
   }
   /* FORWARDED records an actual edge, including self-edges and separately
@@ -22108,16 +22126,16 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
   /* Raw boxed local assignments keep the existing direct-root contract
      when the completed suffix is readonly. A reached appender, or a copied
      root occurrence handed onward, cannot use that exemption. */
-  if (root_kept && g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_FORWARDED) &&
-      (appended || (root_kept & FWD_KEEP_COPY))) g_fwd_taint |= 4;
-  if (root_kept && g_fwd_poly_seen.n) g_fwd_poly_seen.val[0] |= FWD_VISIT_ROOT_KEPT;
-  if (readonly && !appended && !g_fwd_taint)
-    for (int v = 0; v < g_fwd_poly_seen.n; v++)
-      *sb_mut_tab_slot(readonly, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 1;
-  g_fwd_poly_depth--;
+  if (root_kept && f->seen.n && (f->seen.val[0] & FWD_VISIT_FORWARDED) &&
+      (appended || (root_kept & FWD_KEEP_COPY))) f->taint |= FWD_TAINT_ESCAPE;
+  if (root_kept && f->seen.n) f->seen.val[0] |= FWD_VISIT_ROOT_KEPT;
+  if (readonly && !appended && !f->taint)
+    for (int v = 0; v < f->seen.n; v++)
+      *sb_mut_tab_slot(readonly, f->seen.name[v], f->seen.key[v], 1) = 1;
+  f->poly_depth--;
   if (nested) {
-    sb_mut_tab_free(&g_fwd_poly_seen);
-    g_fwd_poly_seen = outer_seen;
+    parent->taint = f->taint;
+    sb_mut_tab_free(&f->seen);
   }
   return appended;
 }
@@ -22125,89 +22143,92 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
 /* For the emitters' refusal, after the last pass: does method mi forward
    element i of its rest to a parameter that appends, and does it hand its
    POLY parameter j on to one? */
-static void fwd_memo_fresh(Compiler *c, FwdPhase phase) {
+static void fwd_memo_fresh(Compiler *c, FwdAnalysis *f, FwdPhase phase) {
   unsigned gen = comp_scope_index_gen();
   /* Promotion facts are rebuilt for every fixpoint pass. Emission owns its
      cache only after analysis has finalized types and mutation metadata. */
-  if (phase == FWD_EMISSION && g_fwd_codegen && g_fwd_n == c->nscopes &&
-      g_fwd_version == c->nt->version && g_fwd_scope_gen == gen) return;
-  free(g_fwd_rest);
-  sb_mut_tab_free(&g_fwd_poly_cache);
-  memset(&g_fwd_poly_cache, 0, sizeof g_fwd_poly_cache);
-  g_fwd_n = c->nscopes;
-  g_fwd_version = c->nt->version;
-  g_fwd_scope_gen = gen;
-  g_fwd_rest = (unsigned *)calloc((size_t)g_fwd_n + 1, sizeof(unsigned));
-  if (!g_fwd_rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  g_fwd_codegen = phase == FWD_EMISSION;
+  if (phase == FWD_EMISSION && f->phase == FWD_EMISSION && f->nscopes == c->nscopes &&
+      f->version == c->nt->version && f->scope_gen == gen) return;
+  free(f->rest);
+  sb_mut_tab_free(&f->poly_cache);
+  memset(&f->poly_cache, 0, sizeof f->poly_cache);
+  f->nscopes = c->nscopes;
+  f->version = c->nt->version;
+  f->scope_gen = gen;
+  f->rest = (unsigned *)calloc((size_t)f->nscopes + 1, sizeof(unsigned));
+  if (!f->rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  f->phase = phase;
 }
 /* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
    tell -- a rest hand-on past the depth bound -- which the refusal takes as
    appending, so an answer cut short is refused rather than copied. */
-int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
-  if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return 0;
-  fwd_memo_fresh(c, FWD_EMISSION);
-  unsigned rb = fwd_rest_bits(c, mi);
+FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
+  if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return FWD_READONLY;
+  FwdAnalysis *f = &g_fwd_analysis;
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  unsigned rb = fwd_rest_bits(c, f, mi);
   /* Direct rest stores/iteration have their existing emission/promotion
      rules. This public refusal asks about a rest the method hands onward. */
-  if (!(rb & FWD_REST_HANDED)) return 0;
-  if (rb & FWD_REST_KEPT) return -2;
-  if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return 1;
-  return rb & FWD_REST_OPEN ? -1 : 0;
+  if (!(rb & FWD_REST_HANDED)) return FWD_READONLY;
+  if (rb & FWD_REST_KEPT) return FWD_ESCAPE;
+  if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return FWD_APPENDS;
+  return rb & FWD_REST_OPEN ? FWD_UNKNOWN : FWD_READONLY;
 }
-int fwd_param_appends_at(Compiler *c, int mi, int j) {
-  if (mi < 0 || mi >= c->nscopes || j < 0) return 0;
-  fwd_memo_fresh(c, FWD_EMISSION);
-  int outer = g_fwd_taint;
-  g_fwd_taint = 0;
-  int r = fwd_param_appends(c, mi, j);
-  if (!r && (g_fwd_taint & 3)) r = -1;
-  if (g_fwd_taint & 4) r = -2;
-  g_fwd_taint = outer;
+FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
+  if (mi < 0 || mi >= c->nscopes || j < 0) return FWD_READONLY;
+  FwdAnalysis *f = &g_fwd_analysis;
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  int outer = f->taint;
+  f->taint = 0;
+  FwdResult r = fwd_param_appends(c, f, mi, j) ? FWD_APPENDS : FWD_READONLY;
+  if (!r && (f->taint & FWD_TAINT_CUT)) r = FWD_UNKNOWN;
+  if (f->taint & FWD_TAINT_ESCAPE) r = FWD_ESCAPE;
+  f->taint = outer;
   return r;
 }
-int fwd_poly_param_appends(Compiler *c, int mi, int j) {
-  if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return 0;
+FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
+  if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return FWD_READONLY;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
-  if (!q || q->type != TY_POLY) return 0;
-  fwd_memo_fresh(c, FWD_EMISSION);
+  if (!q || q->type != TY_POLY) return FWD_READONLY;
+  FwdAnalysis *f = &g_fwd_analysis;
+  fwd_memo_fresh(c, f, FWD_EMISSION);
   /* Only a completed outer query is cached. Nested rest/cycle queries may
      depend on a cut edge and keep the existing taint/fixpoint treatment. */
-  if (!g_fwd_poly_cache.cap) {
+  if (!f->poly_cache.cap) {
     int np = 0;
     for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
-    sb_mut_tab_init(&g_fwd_poly_cache, np);
+    sb_mut_tab_init(&f->poly_cache, np);
   }
-  int cacheable = !g_fwd_poly_depth && !g_fwd_rest_depth;
-  signed char *slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, cacheable);
+  int cacheable = !f->poly_depth && !f->rest_depth;
+  signed char *slot = sb_mut_tab_slot(&f->poly_cache, q->name, mi, cacheable);
   if (cacheable && slot) {
     switch ((FwdCacheResult)*slot) {
-      case FWD_CACHE_ESCAPE: return -2;
-      case FWD_CACHE_UNKNOWN: return -1;
-      case FWD_CACHE_APPENDS: return 1;
+      case FWD_CACHE_ESCAPE: return FWD_ESCAPE;
+      case FWD_CACHE_UNKNOWN: return FWD_UNKNOWN;
+      case FWD_CACHE_APPENDS: return FWD_APPENDS;
       case FWD_CACHE_ROOT_READONLY:
-      case FWD_CACHE_STRICT_READONLY: return 0;
+      case FWD_CACHE_STRICT_READONLY: return FWD_READONLY;
       case FWD_CACHE_NONE: break;
     }
   }
-  int outer = g_fwd_taint;
-  g_fwd_taint = 0;
-  int r = fwd_poly_param_handed_on(c, mi, j, NULL);
-  if (!r && (g_fwd_taint & 3)) r = -1;
-  if (g_fwd_taint & 4) r = -2;
-  int complete = !(g_fwd_taint & 1);
-  g_fwd_taint = outer;
+  int outer = f->taint;
+  f->taint = 0;
+  FwdResult r = fwd_poly_param_handed_on(c, f, mi, j, NULL) ? FWD_APPENDS : FWD_READONLY;
+  if (!r && (f->taint & FWD_TAINT_CUT)) r = FWD_UNKNOWN;
+  if (f->taint & FWD_TAINT_ESCAPE) r = FWD_ESCAPE;
+  int complete = !(f->taint & FWD_TAINT_CYCLE);
+  f->taint = outer;
   if (cacheable && complete) {
-    slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, 1);
-    *slot = r > 0 ? FWD_CACHE_APPENDS : r == -2 ? FWD_CACHE_ESCAPE :
+    slot = sb_mut_tab_slot(&f->poly_cache, q->name, mi, 1);
+    *slot = r > 0 ? FWD_CACHE_APPENDS : r == FWD_ESCAPE ? FWD_CACHE_ESCAPE :
             r < 0 ? FWD_CACHE_UNKNOWN : FWD_CACHE_ROOT_READONLY;
     /* An entirely readonly root proves every reachable vertex readonly too.
        A root exemption disqualifies the whole walk: a suffix could cycle
        back to that root. Other completed answers remain root-only. */
     if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j) &&
-        !(g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_VISIT_ROOT_KEPT)))
-      for (int v = 0; v < g_fwd_poly_seen.n; v++)
-        *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
+        !(f->seen.n && (f->seen.val[0] & FWD_VISIT_ROOT_KEPT)))
+      for (int v = 0; v < f->seen.n; v++)
+        *sb_mut_tab_slot(&f->poly_cache, f->seen.name[v], f->seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
   }
   return r;
 }
@@ -22217,7 +22238,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
    the child's to (the zsuper gathers it, a child's `**o` beside it). Such a
    parameter takes the handle, which the gather boxes, and its callers are
    pulled in as a handle method's are. Answers 1 when it changed anything. */
-static int fwd_super_string_params(Compiler *c) {
+static int fwd_super_string_params(Compiler *c, FwdAnalysis *f) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   for (int pass = 0; pass < 2; pass++) {
@@ -22230,7 +22251,7 @@ static int fwd_super_string_params(Compiler *c) {
       Scope *tm = &c->scopes[t];
       for (int j = 0; j < tm->nparams && j < 32; j++) {
         LocalVar *d = tm->pnames[j] ? scope_local(tm, tm->pnames[j]) : NULL;
-        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, t, j)) continue;
+        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, f, t, j)) continue;
         int src = -1;
         if (pass) src = zsuper_param_source(c, m, tm, j);
         else {
@@ -22294,15 +22315,16 @@ static int fwd_splat_lit_reads(Compiler *c, int splat, int p, int *out, int *at,
 static int promote_forwarded_rest_args(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  fwd_memo_fresh(c, FWD_PROMOTION);
-  changed |= fwd_super_string_params(c);
+  FwdAnalysis *f = &g_fwd_analysis;
+  fwd_memo_fresh(c, f, FWD_PROMOTION);
+  changed |= fwd_super_string_params(c, f);
   for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int a = nt_ref(nt, u, "arguments");
     if (a < 0) continue;
     int t = fwd_call_target(c, u);
     if (t < 0 || c->scopes[t].rest_idx < 0) continue;
-    unsigned bits = fwd_rest_bits(c, t);
+    unsigned bits = fwd_rest_bits(c, f, t);
     if (!bits) continue;
     Scope *m = &c->scopes[t];
     int ac = 0; const int *av = nt_arr(nt, a, "arguments", &ac);
@@ -27923,16 +27945,19 @@ static void rewrite_builtin_alias_self_calls(Compiler *c) {
   }
 }
 
-void analyze_program(Compiler *c) {
-  /* The records borrow parameter names from the preceding Compiler. */
-  sb_mut_tab_free(&g_fwd_poly_seen);
-  memset(&g_fwd_poly_seen, 0, sizeof g_fwd_poly_seen);
-  sb_mut_tab_free(&g_fwd_poly_cache);
-  memset(&g_fwd_poly_cache, 0, sizeof g_fwd_poly_cache);
-  g_fwd_poly_depth = g_fwd_rest_depth = g_fwd_taint = g_fwd_codegen = 0;
+/* Invalidate compiler-borrowed records before a new analysis owns them. */
+static void analyze_caches_reset(void) {
+  sb_mut_tab_free(&g_fwd_analysis.seen);
+  sb_mut_tab_free(&g_fwd_analysis.poly_cache);
+  free(g_fwd_analysis.rest);
+  memset(&g_fwd_analysis, 0, sizeof g_fwd_analysis);
   comp_poly_candidates_reset();
   comp_descendants_reset();
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
+}
+
+void analyze_program(Compiler *c) {
+  analyze_caches_reset();
   /* scope 0 = top level */
   Scope *top = comp_scope_new(c, NULL, -1);
   top->body = nt_ref(c->nt, c->nt->root_id, "statements");

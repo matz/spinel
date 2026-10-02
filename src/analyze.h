@@ -70,10 +70,12 @@ void dyn_open_reach(Compiler *c, int n, int k, DynReach *r);
 int dyn_method_appends(Compiler *c, int mi, int j);
 int an_local_array_changed_x(Compiler *c, const char *xn, Scope *xs);
 int an_local_array_stores_unshared(Compiler *c, const char *xn, Scope *xs);
-/* 1 appends, 0 does not, -1 cannot tell (refused as appending),
-   -2 unsupported escape (refused even when the input is shared). */
-int fwd_rest_elem_appends(Compiler *c, int mi, int i);
-int fwd_poly_param_appends(Compiler *c, int mi, int j);
+/* Unknown paths require a shared input; escapes refuse even a shared one. */
+typedef enum {
+  FWD_ESCAPE = -2, FWD_UNKNOWN = -1, FWD_READONLY = 0, FWD_APPENDS = 1
+} FwdResult;
+FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i);
+FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j);
 /* A boxed parameter's argument a literal block appends to through a yield
    (yield_splice_handles): a String variable there must be the handle. */
 int yield_poly_arg_wants_handle(Compiler *c, int a);
@@ -81,7 +83,7 @@ int yield_poly_arg_wants_handle(Compiler *c, int a);
    parameter it appends to takes the handle the gathered Array holds
    (block_splat_pull_args). */
 int block_splat_shares(Compiler *c, int blk);
-int fwd_param_appends_at(Compiler *c, int mi, int j);
+FwdResult fwd_param_appends_at(Compiler *c, int mi, int j);
 int dyn_block_appends(Compiler *c, int blk, int k);
 /* `new` and `raise C, s` into an initialize that appends to a String
    parameter (#6179): the initialize methods a call reaches, the argument

@@ -128,6 +128,7 @@ int an_builtin_only_p(void) { return an_builtin_only; }
    receiver that is itself a poly call (`newest(subs).attributes`) lost its
    user answers and left the builtin one unknown (#5116). */
 static int an_bo_recv = -1;
+int builtin_method_known(const char *cls, const char *m);
 TyKind an_builtin_answer(Compiler *c, int id) {
   int was = an_builtin_only, was_recv = an_bo_recv;
   an_builtin_only = 1;
@@ -2256,8 +2257,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      element type, and codegen, which reached the reopen only for a name no
      builtin arm takes, called the builtin. Only a method the reopen itself
      defines: an Object reopen's `first` does not displace Array#first. */
+  /* With a block too, for a name the builtin does not have at all (a
+     reopen's own `each_twice`): no builtin row types that call */
   if (recv >= 0 && name && (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt)) &&
-      nt_ref(nt, id, "block") < 0 && !nt_int(nt, id, "builtin_only", 0)) {
+      (nt_ref(nt, id, "block") < 0 || !builtin_method_known(ty_is_hash(rt) ? "Hash" : "Array", name)) &&
+      !nt_int(nt, id, "builtin_only", 0)) {
     int aci = comp_class_index(c, ty_is_hash(rt) ? "Hash" : "Array");
     int adc = -1, ami = aci >= 0 ? comp_method_in_chain(c, aci, name, &adc) : -1;
     /* the reopen's own method under this very name: an alias taken before the

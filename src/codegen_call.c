@@ -1279,6 +1279,20 @@ static int hoist_block_proc(Compiler *c, int cblk) {
   free(pb.p);
   return t;
 }
+/* The block a dispatch's arms share, as one rooted proc temp: the call's
+   resolved block (cblk), or, when a written `&b` resolved to none inside an
+   inline that was handed a real proc (`g(&l)` inlining `@h.two(&b)`), that
+   proc. -1 when there is neither. */
+static int hoist_dispatch_blk_proc(Compiler *c, int id, int cblk) {
+  if (cblk >= 0) return hoist_block_proc(c, cblk);
+  if (nt_ref(c->nt, id, "block") < 0 || !g_yield_proc_ref) return -1;
+  int t = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", t, g_yield_proc_ref);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
+  return t;
+}
 /* The trailing block parameter of a method that takes its block as one --
    a yielding method lowered to `__yblk__`, or a `&block` -- at a fallback
    call that spelled only its arguments: the call's block (`blk_tmp`, or
@@ -8664,12 +8678,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          class-method cascade, which already does this. */
       int blk_tmp0 = -1;
       { int cblk0 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-        if (cblk0 >= 0) {
+        if (cblk0 >= 0 || (nt_ref(nt, id, "block") >= 0 && g_yield_proc_ref)) {
           int npc0 = 0;
           const PolyCand *pc0 = comp_poly_candidates(c, name, &npc0);   /* (#4966) */
           for (int ki = 0; ki < npc0 && blk_tmp0 < 0; ki++) {
             int k = pc0[ki].cls;
-            if (!c->classes[k].instantiated) continue;
+            /* a reopened builtin (Hash, Array, String...) is never `.new`ed, and its arm runs too */
+            if (!c->classes[k].instantiated && !class_is_prim_reopen(c, k)) continue;
             int mi0 = pc0[ki].mi;
             if (mi0 < 0) continue;
             Scope *cm0 = &c->scopes[mi0];
@@ -8680,7 +8695,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               /* `&blk` that survived the forwarding resolution names a REAL
                  proc (this function's own block param), not a literal to
                  materialize: write the proc expression itself. */
-              blk_tmp0 = hoist_block_proc(c, cblk0);
+              blk_tmp0 = hoist_dispatch_blk_proc(c, id, cblk0);
             }
           }
         } }
@@ -10165,9 +10180,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* Same shared-proc materialization the zero-arg dispatch does (#3399). */
       int blk_tmp2 = -1;
       { int cblk2 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-        if (cblk2 >= 0) {
+        if (cblk2 >= 0 || (nt_ref(nt, id, "block") >= 0 && g_yield_proc_ref)) {
           for (int k = 0; k < c->nclasses && blk_tmp2 < 0; k++) {
-            if (!c->classes[k].instantiated) continue;
+            /* a reopened builtin (Hash, Array, String...) is never `.new`ed, and its arm runs too */
+            if (!c->classes[k].instantiated && !class_is_prim_reopen(c, k)) continue;
             int mi2 = comp_method_in_chain(c, k, name, NULL);
             if (mi2 < 0) continue;
             Scope *cm2 = &c->scopes[mi2];
@@ -10176,7 +10192,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                 scope_needs_proc_form(c, mi2)) {
               /* a forwarded &blk / anonymous & is a live proc, not a literal
                  to lower -- the same guard the other dispatch arms carry */
-              blk_tmp2 = hoist_block_proc(c, cblk2);
+              blk_tmp2 = hoist_dispatch_blk_proc(c, id, cblk2);
             }
           }
         } }

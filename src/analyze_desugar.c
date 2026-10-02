@@ -7052,7 +7052,9 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
        __fwd_N model binds into slots it hands nowhere, so `w(1)` and
        `w(*[], **{"s" => 1})` into `def m()` answered where CRuby raises
        a wrong count */
-    if (ok && shape == 0) shape = 3;
+    /* ...and so does one that takes only a block (`def y = yield 1`):
+       its shape says the block and nothing else */
+    if (ok && !(shape & (3 | FWD_BUILTIN))) shape |= 3;
     if (!ok || !ncalls || nfwd_args != ncalls || !(shape & (3 | FWD_BUILTIN))) continue;
     /* the block rides along as an anonymous `&` */
     int fwd_block = (shape & 4) || any_call_passes_block(nt, dname);

@@ -16961,6 +16961,102 @@ static void handle_arg_tab_free(HandleArgTab *t) {
   t->enext = NULL; t->enode = NULL; t->ok = 0;
 }
 
+/* Qualifiers flow in the opposite direction to byref inference: from a
+   setjmp-live caller slot into the parameter borrowing it. Codegen seeds
+   the slots using its existing selective volatility policy. Reuse the
+   resolved call-site chains, including keywords, overrides and splices. */
+static int lend_volatile_slot(Compiler *c, int arg, LocalVar *dst) {
+  if (!dst || dst->type != TY_STRING || dst->borrowed_volatile ||
+      arg < 0 || nt_kind(c->nt, arg) != NK_LocalVariableReadNode) return 0;
+  Scope *s = comp_scope_of(c, arg);
+  LocalVar *src = s ? scope_local(s, nt_str(c->nt, arg, "name")) : NULL;
+  if (!src || !src->borrowed_volatile) return 0;
+  dst->borrowed_volatile = 1;
+  return 1;
+}
+
+void propagate_borrowed_volatile(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  HandleArgTab sites; handle_arg_tab_init(c, &sites);
+  if (!sites.ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  ACallerBlocks blocks = {0}; an_caller_blocks_build(c, &blocks);
+  int changed = 1;
+  while (changed) {
+    changed = 0;
+    for (int mi = 1; mi < c->nscopes; mi++) {
+      Scope *m = &c->scopes[mi];
+      for (int j = 0; j < m->nparams; j++) {
+        LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
+        if (!p || p->type != TY_STRING) continue;
+        for (int e = sites.head[mi]; e >= 0; e = sites.enext[e]) {
+          int u = sites.enode[e], blk = nt_ref(nt, u, "block");
+          if (!p->byref_out && !(m->yields && an_inline_param_lent(c, mi, j, blk))) continue;
+          changed |= lend_volatile_slot(c, arg_layout_param_node(c, m, u, j, NULL), p);
+        }
+        /* Byref signatures agree per name group, including override arms. */
+        if (p->byref_out && p->borrowed_volatile)
+          for (int k = an_any_scope_by_name(c, m->name); k >= 0; k = an_same_name_next(c, k)) {
+            Scope *other = &c->scopes[k];
+            LocalVar *q = j < other->nparams && other->pnames[j] ? scope_local(other, other->pnames[j]) : NULL;
+            if (q && q->byref_out && !q->borrowed_volatile) { q->borrowed_volatile = 1; changed = 1; }
+          }
+      }
+    }
+    for (int u = 0; u < nt->count; u++) {
+      NodeKind kind = nt_kind(nt, u);
+      Scope *s = comp_scope_of(c, u);
+      if (!s) continue;
+      if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) {
+        int mi = a_super_target(c, s);
+        if (mi < 0) continue;
+        Scope *m = &c->scopes[mi];
+        for (int j = 0; j < m->nparams; j++) {
+          LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
+          if (!p || !p->byref_out) continue;
+          if (kind == NK_SuperNode) changed |= lend_volatile_slot(c, arg_layout_param_node(c, m, u, j, NULL), p);
+          else {
+            int k = zsuper_param_source(c, s, m, j);
+            LocalVar *src = k >= 0 ? scope_local(s, s->pnames[k]) : NULL;
+            if (src && src->borrowed_volatile && !p->borrowed_volatile) { p->borrowed_volatile = 1; changed = 1; }
+          }
+        }
+        continue;
+      }
+      int exec = kind == NK_CallNode && nt_str(nt, u, "name") && sp_streq(nt_str(nt, u, "name"), "instance_exec");
+      if (kind != NK_YieldNode && !exec && !(kind == NK_CallNode && an_yield_like(c, u, s))) continue;
+      int aa = nt_ref(nt, u, "arguments"), ac = 0;
+      const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &ac) : NULL;
+      int si = (int)(s - c->scopes);
+      for (int e = exec ? -1 : blocks.head[si]; exec || e >= 0; e = blocks.next[e]) {
+        int blk = exec ? nt_ref(nt, u, "block") : blocks.blk[e];
+        if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
+          Scope *bs = comp_scope_of(c, blk);
+          for (int k = 0; k < ac; k++) {
+            if (nt_kind(nt, av[k]) == NK_SplatNode) break;
+            if (nt_kind(nt, av[k]) == NK_KeywordHashNode) {
+              int en = 0; const int *el = nt_arr(nt, av[k], "elements", &en);
+              for (int i = 0; i < en; i++) {
+                int v; const char *key = dyn_kw_elem_key(c, el[i], &v);
+                const char *kp = key ? an_block_kw_param(c, blk, key) : NULL;
+                LocalVar *p = kp && bs ? scope_local(bs, kp) : NULL;
+                if (key && an_block_kw_lent(c, blk, key)) changed |= lend_volatile_slot(c, v, p);
+              }
+            }
+            else {
+              const char *bp = block_param_at(c, blk, k, call_plain_argc(c, u));
+              LocalVar *p = bp && bs ? scope_local(bs, bp) : NULL;
+              if (an_block_param_lent(c, blk, k, call_plain_argc(c, u))) changed |= lend_volatile_slot(c, av[k], p);
+            }
+          }
+        }
+        if (exec) break;
+      }
+    }
+  }
+  an_caller_blocks_free(&blocks);
+  handle_arg_tab_free(&sites);
+}
+
 static int handle_arg_tab_get(const HandleArgTab *t, int mi, int pj) {
   if (!t->ok || !t->bit || mi < 0 || pj < 0 || t->off[mi] < 0) return 0;
   return t->bit[t->off[mi] + pj] != 0;

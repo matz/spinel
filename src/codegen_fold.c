@@ -6119,10 +6119,9 @@ int emit_lent_local(LocalVar *lv, const char *vn, Buf *out) {
     buf_printf(out, "_cell_%s", rename_local(vn));
     return 1;
   }
-  /* The cast drops the `volatile` a local live across a rescue's
-     setjmp is declared with (`const char *volatile lv_x`), as the GC
-     root macros do for the same slot. */
-  buf_printf(out, "(const char **)&lv_%s", rename_local(vn));
+  /* Keep a borrowed slot's volatile qualifier through the callee's stores:
+     the caller may read it after a setjmp/longjmp. */
+  buf_printf(out, "&lv_%s", rename_local(vn));
   return 1;
 }
 
@@ -9925,7 +9924,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
       /* A lent parameter's hoist is the LENT ADDRESS, not a copy of the
          string. emit_arg_or_default has already produced whichever of the
          four call-site forms this argument takes (`&lv_x`, `_cell_x`, a
-         capture slot, `&_tN` for a default), all of them `const char **`,
+         capture slot, `&_tN` for a default), all borrowing a String slot,
          so declaring it with the parameter's plain type gave
          `const char *lv__pdN_0 = &lv_s;`. And a sibling default that READS
          the parameter emits the cell spelling through the same rename map,
@@ -9933,7 +9932,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
          `_cell_<uniq>` makes the two meet, and it needs no root of its own:
          it points at a slot the caller already roots. */
       if (byref) {
-        buf_printf(g_pre, "const char **_cell_%s = %s;\n", uniq, vb.p ? vb.p : "NULL");
+        buf_printf(g_pre, "%s *_cell_%s = %s;\n", borrowed_string_type(plv), uniq, vb.p ? vb.p : "NULL");
       }
       else {
         emit_ctype(c, pt, g_pre);
@@ -10829,17 +10828,18 @@ else {
       if (p && att == TY_UNKNOWN) att = TY_POLY;  /* poly in the callee signature */
       atmp_ty[k] = att;
       /* A byref out-param takes the SLOT's address, so its temp is a
-         `const char **`, not the parameter's own type. */
+         pointer to a possibly volatile String slot, not the parameter's
+         own type. */
       if (p && p->byref_out) {
         emit_indent(g_pre, g_indent);
-        emit_ctype(c, att, g_pre);
+        buf_puts(g_pre, borrowed_string_type(p));
         buf_printf(g_pre, " *_t%d = ", atmp[k]);
         buf_puts(g_pre, ab.p ? ab.p : ""); buf_puts(g_pre, ";\n");
         free(ab.p);
         if (pd_active && pm->pnames[k] && g_nren < MAX_RENAME) {
           /* the lent address under the cell spelling a reading default emits */
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "const char **_cell__pd%d_%d = _t%d;\n", pd_uid, k, atmp[k]);
+          buf_printf(g_pre, "%s *_cell__pd%d_%d = _t%d;\n", borrowed_string_type(p), pd_uid, k, atmp[k]);
           snprintf(g_ren_from[g_nren], sizeof g_ren_from[0], "%s", pm->pnames[k]);
           snprintf(g_ren_to[g_nren], sizeof g_ren_to[0], "_pd%d_%d", pd_uid, k);
           g_nren++;

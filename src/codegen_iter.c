@@ -512,7 +512,7 @@ void inline_alias_release(Scope *m, unsigned alias_mask) {
   }
 }
 /* Declare inlined method `mi`'s locals under renamed names, all but the
-   aliased parameters: the alias is declared at the binding, and a
+   aliased parameters: the alias is initialized at the binding, and a
    parameter the body also rebinds gets the private local the rebind
    repoints the cell at. */
 void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mask, Buf *b, int din) {
@@ -528,10 +528,18 @@ void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mas
       int pi = -1;
       for (int k = 0; k < m->nparams; k++) if (m->pnames[k] && sp_streq(m->pnames[k], lv->name)) { pi = k; break; }
       if (pi >= 0 && (alias_mask & (1u << pi))) {
+        int vol = inlined_local_needs_volatile(c, lv);
         if (inline_param_rebound(c, mi, lv->name) == 1) {
           emit_indent(b, din);
-          buf_printf(b, "const char *lv_%s = NULL; SP_GC_ROOT_STR(lv_%s);\n", rn, rn);
+          buf_printf(b, "const char *%s lv_%s = NULL; SP_GC_ROOT_STR(lv_%s);\n",
+                     vol ? " volatile" : "", rn, rn);
         }
+        /* A rebind changes both the private slot and its selector. Preserve
+           both across the same setjmp as ordinary inline locals (#6552).
+           Nested inlines must also retain the borrowed slot's qualifier. */
+        emit_indent(b, din);
+        buf_printf(b, "%s *%s _cell_%s = NULL;\n",
+                   borrowed_string_type(lv), vol ? " volatile" : "", rn);
         continue;
       }
     }
@@ -625,7 +633,7 @@ void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, i
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
     int aliased = i < 32 && (alias_mask & (1u << i));
-    if (aliased) buf_printf(b, "const char **_cell__y%d_%s = &(", tag, m->pnames[i]);
+    if (aliased) buf_printf(b, "_cell__y%d_%s = &(", tag, m->pnames[i]);
     else { char rn[128]; snprintf(rn, sizeof rn, "_y%d_%s", tag, m->pnames[i]);
       emit_inlined_param_target(c, m, m->pnames[i], rn, b); }
     /* hide THIS inline's renames only: args are call-site expressions,
@@ -1886,7 +1894,7 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
     if (kw_alias && al->n < (int)(sizeof al->lv / sizeof al->lv[0])) {
       if (!as_expr) emit_indent(b, indent);
       if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "const char **_cell_%s = &(", kpr);
+      buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(kl), kpr);
       emit_expr(c, vn, b);
       buf_puts(b, ")");
       buf_puts(b, as_expr ? "; " : ";\n");
@@ -2046,7 +2054,7 @@ static int emit_block_post_alias(Compiler *c, int blk, const char *bp, const cha
   refuse_alias_of_snapshot(c, yarg, bp);
   if (!as_expr) emit_indent(b, indent);
   if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-  buf_printf(b, "const char **_cell_%s = &(", bpr);
+  buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(bl), bpr);
   emit_expr(c, yarg, b);
   buf_puts(b, ")");
   buf_puts(b, as_expr ? "; " : ";\n");
@@ -2553,7 +2561,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       if (bl && al && gslot) refuse_lent_global_rebound(c, yargs[k], gref, "a block", bp);
       if (bl && al && al->n < (int)(sizeof al->lv / sizeof al->lv[0])) {
         if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-        buf_printf(b, "const char **_cell_%s = &(", bpr);
+        buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(bl), bpr);
         emit_expr(c, yargs[k], b);
         buf_puts(b, ")");
         buf_puts(b, as_expr ? "; " : ";\n");
@@ -2642,7 +2650,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       refuse_alias_of_snapshot(c, yargs[yi], op);
       if (!as_expr) emit_indent(b, indent);
       if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "const char **_cell_%s = &(", opr);
+      buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(ol), opr);
       emit_expr(c, yargs[yi], b);
       buf_puts(b, ")");
       buf_puts(b, as_expr ? "; " : ";\n");
@@ -6491,4 +6499,3 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
 }
 
 /* ---- interpolation ---- */
-

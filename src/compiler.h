@@ -76,6 +76,8 @@ typedef struct {
                        shared-object semantics. Implies is_cell (body reads and
                        writes go through *_cell_<name>), but the cell is the
                        caller's slot -- no heap cell is allocated on entry. */
+  int borrowed_volatile; /* codegen: this String slot, or a slot borrowed here,
+                           is live across setjmp; propagate through lending */
   int inline_alias; /* (params of a yielding method, codegen only) how many
                        inline expansions currently in progress bind this
                        parameter as an ALIAS of the caller's variable rather
@@ -1057,6 +1059,8 @@ int        comp_cvar_owner(const Compiler *c, int cid, const char *name); /* the
 /* 1 iff method m's param idx is a byref string out-param (LocalVar.byref_out):
    passed as const char** so callee mutation lands in the caller's variable. */
 int        comp_byref_param(Compiler *c, Scope *m, int idx);
+/* Propagate codegen's setjmp-slot qualifiers through borrowed String calls. */
+void       propagate_borrowed_volatile(Compiler *c);
 /* Find the instance-method scope index for class_id + method name, or -1. */
 int        comp_method_in_class(Compiler *c, int class_id, const char *name);
 /* The instance_exec emission runs a method's block as an instance method of

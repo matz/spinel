@@ -6510,6 +6510,8 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             buf_printf(b, "; for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {", ti, ti, ts, ti);
             buf_printf(b, " %s _t%d = ", c_type_name(kt), tk);
             if (kt == TY_STRING) buf_printf(b, "sp_poly_to_s(sp_PolyArray_get(_t%d, _t%d));", ts, ti);
+            /* a poly-keyed table takes the element boxed, as it is (#7051) */
+            else if (kt == TY_POLY) buf_printf(b, "sp_PolyArray_get(_t%d, _t%d);", ts, ti);
             else buf_printf(b, "(%s)sp_poly_to_i(sp_PolyArray_get(_t%d, _t%d));", c_type_name(kt), ts, ti);
           }
           else if (hash_key_misses(c, argv[a], kt) &&

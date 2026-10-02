@@ -7338,12 +7338,24 @@ static int emit_poly_builtin_default(Compiler *c, int id, int recv, const char *
   if (nt_ref(nt, id, "block") >= 0 && argc == 0) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
-  /* a splat is one temp holding the whole list, which no builtin emitter
-     reads as its arguments */
-  for (int a = 0; a < argc; a++)
-    if (nt_kind(nt, argv[a]) == NK_SplatNode ||
-        (subtree_has_side_effect(c, argv[a]) && comp_ntype(c, argv[a]) != atmp_ty[a]))
+  /* a splat's temp is the flattened list, which no builtin emitter reads
+     as its arguments. The key-list readers below spread a splatted operand
+     themselves, so their arm spreads it again, as the ordinary call would
+     (#7051); that is sound only where reading the operand twice reads the
+     same value -- a constant, a local -- so one with a side effect still
+     declines. Any other emitter takes a splat as one boxed argument
+     (`pop(*a)` handed the whole PolyArray), and declines too. */
+  static const char *const splat_keyed[] = {
+    "slice", "values_at", "fetch_values", "dig", "except", "delete", NULL };
+  int splat_ok = 0;
+  for (int k = 0; splat_keyed[k]; k++) if (sp_streq(name, splat_keyed[k])) splat_ok = 1;
+  for (int a = 0; a < argc; a++) {
+    int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
+    if (is_splat && !splat_ok) return 0;
+    if (subtree_has_side_effect(c, argv[a]) &&
+        (is_splat || comp_ntype(c, argv[a]) != atmp_ty[a]))
       return 0;
+  }
   TyKind bt = (c->poly_builtin_ty && id < c->node_cap)
                 ? c->poly_builtin_ty[id] : TY_UNKNOWN;
   /* `to_s` / `inspect` answer a String on every builtin receiver, with or

@@ -4546,6 +4546,14 @@ void resolve_parents(Compiler *c) {
        same way as an unqualified ConstantReadNode superclass. */
     if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode"))) {
       int p = comp_class_index(c, nt_str(nt, sc, "name"));
+      /* a Hash subclass is not a reopened Hash's: it keeps its Hash beside
+         it (X__SpinelHashBase, builtins/hash_base.rb), and the reopening's
+         methods reach that Hash */
+      if (p >= 0 && sp_streq(nt_str(nt, sc, "name"), "Hash")) {
+        char mb[300];
+        snprintf(mb, sizeof mb, "%s__SpinelHashBase", c->classes[i].name);
+        if (comp_class_index(c, mb) >= 0) p = -1;
+      }
       if (p >= 0 && p != i) c->classes[i].parent = p;
     }
   }

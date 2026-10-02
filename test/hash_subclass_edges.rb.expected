@@ -1,0 +1,22 @@
+class Foo < Hash
+end
+{k: 1}
+{"x" => 2}
+Rack::Headers2
+1
+nil
+20
+nil
+1
+true
+true
+FrozenError
+"can't modify frozen Fz: {\"a\" => 1}"
+FrozenError
+{"a" => 1}
+false
+[[["a", 1], 0], [["b", 2], 1]]
+Nb
+true
+true
+true

@@ -8648,6 +8648,14 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
      int ivar's nil is SP_INT_NIL, so seed them before initialize runs
      (read-only ivars stay nil; written ones are overwritten). */
   emit_ivar_nil_inits(b, ci, "self->", "  ", ";\n");
+  /* a class whose superclass is Hash keeps its Hash in @__spinel_base
+     (builtins/hash_base.rb): it exists before initialize runs, as the Hash
+     part of such an object does in CRuby, whether or not initialize calls
+     super */
+  { int bx = comp_ivar_index(ci, "@__spinel_base");
+    if (bx >= 0 && ty_is_hash(ci->ivar_types[bx]) && ty_hash_cname(ci->ivar_types[bx]))
+      buf_printf(b, "  self->iv_%s = sp_%sHash_new();\n", iv_c("__spinel_base"),
+                 ty_hash_cname(ci->ivar_types[bx])); }
   } /* close else (non-exception subclass allocation) */
   if (comp_class_is_module(c, ci)) {
     /* see the value-type branch above: a module has no `new`, and no
@@ -13736,6 +13744,14 @@ static int cmp_int_pair(const void *a, const void *b) {
   return x[1] < y[1] ? -1 : x[1] > y[1];
 }
 
+/* The module that carries a Hash subclass's Hash methods (X__SpinelHashBase,
+   builtins/hash_base.rb) is not among the class's ancestors in CRuby: Hash
+   is, after the class. */
+static int is_hash_base_module(const char *name) {
+  size_t n = name ? strlen(name) : 0;
+  return n > 16 && strcmp(name + n - 16, "__SpinelHashBase") == 0;
+}
+
 static int exc_text_method(Compiler *c, int i, int want_message, int *dcls, const char **fn) {
   int dmsg = -1, dtos = -1;
   int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
@@ -14504,6 +14520,7 @@ char *codegen_program(const NodeTable *nt) {
             const char *aty2 = nt_type(c->nt, aargs[j2]);
             const char *mname2 = (aty2 && sp_streq(aty2, "ConstantReadNode")) ? nt_str(c->nt, aargs[j2], "name") : NULL;
             if (!mname2 && aty2 && sp_streq(aty2, "ConstantPathNode")) mname2 = nt_str(c->nt, aargs[j2], "name");
+            if (mname2 && is_hash_base_module(mname2)) continue;
             int mid2 = mname2 ? comp_class_index(c, mname2) : -1;
             int is_builtin_mod = 0;
             /* a builtin module (Enumerable/Comparable/Kernel/Math) has no user
@@ -14538,6 +14555,7 @@ char *codegen_program(const NodeTable *nt) {
       for (int m = 0; m < mci->nincluded_mods; m++) {
         int mid3 = mci->included_mods[m];
         if (mid3 < 0 || mid3 >= c->nclasses) continue;
+        if (is_hash_base_module(c->classes[mid3].name)) continue;
         int seen3 = 0;
         for (int q = 0; q < cls_nincs[ci]; q++) if (cls_incs[ci][q] == mid3) { seen3 = 1; break; }
         if (seen3) continue;

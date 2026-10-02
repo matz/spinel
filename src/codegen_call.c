@@ -44027,6 +44027,11 @@ else {
     if (acn && (sp_streq(acn, "Comparable") || sp_streq(acn, "Enumerable") ||
                 sp_streq(acn, "Math")) && comp_class_index(c, acn) < 0) {
       int yes = class_includes_module_named(c, ty_object_class(rt), acn);
+      /* a subclass of Hash or Array is Enumerable as its superclass is */
+      if (!yes && sp_streq(acn, "Enumerable")) {
+        int bp = class_builtin_superclass(c, ty_object_class(rt));
+        yes = bp == -105 || bp == -104;
+      }
       buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes);
       return;
     }

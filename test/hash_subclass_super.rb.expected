@@ -1,0 +1,19 @@
+"text/html"
+true
+"text/html"
+"d"
+"nope"
+{"content-type" => "text/html", "x-custom" => "1"}
+2
+Headers
+true
+Headers
+{"content-type" => "text/html", "cache-control" => "no-cache"}
+1
+"text/html+a"
+{"a" => 1, "b" => 2}
+Headers
+{"text/html+a" => "content-type"}
+["text/html+a", nil]
+Hash
+content-type: text/html+a

@@ -3539,6 +3539,118 @@ static char *sp_splice_object_space(char *source, const char *exe_path,
   return sp_prepend_require(source, exe_path, "require \"builtins/object_space\"\n", fsl, fsl_n);
 }
 
+/* `class X < Hash`: X keeps its Hash in an instance variable, and the
+   methods of builtins/hash_base.rb forward Hash's to it. Each such class
+   gets a module of its own, X__SpinelHashBase, from that file, defined and
+   included on the class's own line (no newline is added, so every line
+   number stays where it is). An override's super reaches the module's
+   method. The classes are found by parsing, so the same words in a string,
+   a heredoc or a comment are left alone. */
+typedef struct {
+  const char *src;
+  size_t *at;       /* pairs: offset of `class`, offset just past the superclass */
+  size_t *name_at;  /* pairs: the constant path's start and length */
+  int n, cap;
+} SpHashSubclasses;
+
+static bool sp_find_hash_subclass(const pm_node_t *node, void *data) {
+  SpHashSubclasses *hs = (SpHashSubclasses *)data;
+  if (PM_NODE_TYPE(node) == PM_CLASS_NODE) {
+    const pm_class_node_t *cn = (const pm_class_node_t *)node;
+    const pm_node_t *sup = cn->superclass;
+    if (sup && (PM_NODE_TYPE(sup) == PM_CONSTANT_READ_NODE || PM_NODE_TYPE(sup) == PM_CONSTANT_PATH_NODE)) {
+      const char *ss = (const char *)sup->location.start;
+      size_t sl = (size_t)(sup->location.end - sup->location.start);
+      if ((sl == 4 && strncmp(ss, "Hash", 4) == 0) || (sl == 6 && strncmp(ss, "::Hash", 6) == 0)) {
+        if (hs->n == hs->cap) {
+          hs->cap = hs->cap ? hs->cap * 2 : 8;
+          hs->at = realloc(hs->at, sizeof(size_t) * 2 * (size_t)hs->cap);
+          hs->name_at = realloc(hs->name_at, sizeof(size_t) * 2 * (size_t)hs->cap);
+        }
+        hs->at[2 * hs->n] = (size_t)((const char *)cn->class_keyword_loc.start - hs->src);
+        hs->at[2 * hs->n + 1] = (size_t)((const char *)sup->location.end - hs->src);
+        hs->name_at[2 * hs->n] = (size_t)((const char *)cn->constant_path->location.start - hs->src);
+        hs->name_at[2 * hs->n + 1] = (size_t)(cn->constant_path->location.end - cn->constant_path->location.start);
+        hs->n++;
+      }
+    }
+  }
+  return true;
+}
+
+/* The module body of builtins/hash_base.rb on one line: comments and blank
+   lines dropped, statements joined by "; ". */
+static char *sp_hash_base_one_line(const char *content) {
+  const char *m = strstr(content, "module SpinelHashBase\n");
+  if (!m) return NULL;
+  const char *p = m + strlen("module SpinelHashBase\n");
+  const char *last = strstr(p, "\nend");
+  const char *e;
+  while (last && (e = strstr(last + 1, "\nend")) != NULL) last = e;
+  if (!last) return NULL;
+  SpStrBuf b; memset(&b, 0, sizeof b);
+  while (p < last) {
+    const char *eol = memchr(p, '\n', (size_t)(last - p));
+    if (!eol) eol = last;
+    const char *s = p;
+    while (s < eol && (*s == ' ' || *s == '\t')) s++;
+    if (s < eol && *s != '#') {
+      if (b.len) sb_puts(&b, "; ");
+      sb_printf(&b, "%.*s", (int)(eol - s), s);
+    }
+    p = eol + 1;
+  }
+  return b.data;
+}
+
+static char *sp_splice_hash_subclasses(char *source, const char *exe_path) {
+  if (!strstr(source, "Hash")) return source;
+  SpHashSubclasses hs = { source, NULL, NULL, 0, 0 };
+  pm_parser_t parser;
+  pm_parser_init(&parser, (const uint8_t *)source, strlen(source), NULL);
+  pm_node_t *root = pm_parse(&parser);
+  if (parser.error_list.size == 0) pm_visit_node(root, sp_find_hash_subclass, &hs);
+  pm_node_destroy(&parser, root);
+  pm_parser_free(&parser);
+  if (hs.n == 0) { free(hs.at); free(hs.name_at); return source; }
+  char lib_dir[1024], gp[1200];
+  sp_lib_dir(exe_path, lib_dir, sizeof lib_dir);
+  int base_len = (int)strlen(lib_dir);
+  if (base_len >= 4 && strcmp(lib_dir + base_len - 4, "/lib") == 0) base_len -= 4;
+  snprintf(gp, sizeof gp, "%.*s/builtins/hash_base.rb", base_len, lib_dir);
+  char *content = read_file(gp);
+  if (!content) { snprintf(gp, sizeof gp, "%.*s/../builtins/hash_base.rb", base_len, lib_dir); content = read_file(gp); }
+  if (!content) {
+    fprintf(stderr, "spinel: builtins/hash_base.rb not found beside the compiler (looked under %.*s and its parent)\n",
+            base_len, lib_dir);
+    exit(1);
+  }
+  char *body = sp_hash_base_one_line(content);
+  free(content);
+  if (!body) {
+    fprintf(stderr, "spinel: builtins/hash_base.rb has no `module SpinelHashBase` body to splice (%s)\n", gp);
+    exit(1);
+  }
+  /* the visit is in source order: copy the text between the classes, and
+     around each class line the module before `class` and the include after
+     the superclass */
+  SpStrBuf out; memset(&out, 0, sizeof out);
+  size_t pos = 0;
+  for (int k = 0; k < hs.n; k++) {
+    size_t cls = hs.at[2 * k], sup_end = hs.at[2 * k + 1];
+    const char *nm = source + hs.name_at[2 * k];
+    int nl = (int)hs.name_at[2 * k + 1];
+    if (cls < pos) continue;
+    sb_printf(&out, "%.*s", (int)(cls - pos), source + pos);
+    sb_printf(&out, "module %.*s__SpinelHashBase; %s; end; ", nl, nm, body);
+    sb_printf(&out, "%.*s; include %.*s__SpinelHashBase", (int)(sup_end - cls), source + cls, nl, nm);
+    pos = sup_end;
+  }
+  sb_puts(&out, source + pos);
+  free(hs.at); free(hs.name_at); free(body); free(source);
+  return out.data;
+}
+
 static char *sp_splice_builtins(char *source, const char *exe_path,
                                 unsigned char **fsl, size_t *fsl_n) {
   if (getenv("SPINEL_NO_BUILTINS")) return source;   /* the A/B switch: the C emitters alone */
@@ -4834,6 +4946,7 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
   source = sp_splice_builtins(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_extras(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_enumerator(source, argv0, &fsl, &fsl_n);
+  source = sp_splice_hash_subclasses(source, argv0);
 
   /* class-body macro calls (module_eval'd templates, computed
      attach_function / const_set names) expanded in place; line count kept */

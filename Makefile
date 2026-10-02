@@ -2892,13 +2892,11 @@ gate-test:
 # NOT in the pre-push one, so the full gate was not a superset of the quick one
 # and a representation regression could pass every leg of it. infer-test caught
 # an Int-keyed hash losing its typed variant; nothing else did, for weeks.
+# The property tests are independent, so one make runs them side by side
+# under the gate's job server (they took 181 s one after another, the
+# longest of the gate's legs; spin-check alone is 72 s).
 gate-props:
-	+@$(MAKE) --no-print-directory alloc-report-test
-	+@$(MAKE) --no-print-directory infer-test
-	+@$(MAKE) --no-print-directory collect-errors-test
-	+@$(MAKE) --no-print-directory spin-check
-	+@$(MAKE) --no-print-directory diff-test
-	+@$(MAKE) --no-print-directory scale-test
+	+@$(MAKE) --no-print-directory alloc-report-test infer-test collect-errors-test spin-check diff-test scale-test
 
 # The front end's scaling, measured as work rather than time: the counting
 # compiler analyzes one generated program at K units and at 4K, and the ratio

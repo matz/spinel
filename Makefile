@@ -2915,9 +2915,9 @@ SCALE_CODEGEN_LIMIT ?= 6.9
 # scanned per lookup, took 4,798 steps at N=100 against a billion, which no
 # count or clock sees at a test's size.
 CALL_SHAPES_LIMIT ?= 4.5
-# Readonly POLY entry points sharing one suffix: 5.11x without the per-pass
-# promotion cache, 4.83x with it. This bounds the measured regression, not
-# every pass's asymptotic cost; emission still has separate readonly caching.
+# Readonly POLY entry points sharing one suffix: phase-local promotion and
+# strict completed emission proofs avoid rescanning that suffix per entry.
+# This bounds the measured regression, not every pass's asymptotic cost.
 POLY_FORWARD_LIMIT ?= 5.0
 # Each count is taken only from a compile that succeeded (sw): spinel-work
 # prints its count from an atexit handler, also when the compile fails, so
@@ -2949,7 +2949,7 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$pa" ] || [ -z "$$pb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$pa" -v b="$$pb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: shared POLY suffix work at 4x the entries and suffix is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (readonly POLY promotion rescanned a shared suffix per entry)"; exit 1; }; \
+	  { echo "scale-test: FAIL (readonly POLY promotion or emission rescanned a shared suffix per entry)"; exit 1; }; \
 	awk -v a="$$fa" -v b="$$fb" -v lim="$(IE_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: instance_eval forwarding work at 2x the wrappers is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the instance_eval forwarding walk grew superlinearly in the wrapper classes, see build_ie_map)"; exit 1; }; \

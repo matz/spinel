@@ -149,6 +149,17 @@ RUBY
   RUBY
 end
 
+# Query a terminal directly before reaching it through a POLY chain. A
+# root-only zero must not become a reusable proof for a retained suffix.
+warm = "(terminal(+'warm'); data.is_a?(String))"
+cases["cached_return"] = ["t", "result << '!'", "abc!", "", warm]
+cases["cached_local_retention"] = ["a = t; a = 0; t.bytesize", "", "abc", "", warm]
+cases["preserved_cached_mutator"] = ["t << '!'; nil", "", "abc!", "", warm]
+# Even a genuinely readonly cached suffix is still a forwarding edge from
+# a copied root occurrence; it must not hide that root's unsupported store.
+cases["cached_readonly_early_store"] = ["t.bytesize", "", "abc", "", nil,
+                                      "keyword_read(value: 'warm'); @snapshot = [t];"]
+
 failures = []
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
   cases.each do |name, (body, followup, want, prefix, guard, before)|

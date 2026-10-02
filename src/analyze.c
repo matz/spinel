@@ -21662,7 +21662,8 @@ children:;
 
 static unsigned fwd_rest_bits(Compiler *c, int mi);
 static SbMutTab g_fwd_poly_seen;
-static SbMutTab g_fwd_poly_cache; /* completed emission queries, result + 3 */
+static SbMutTab g_fwd_poly_cache; /* completed emission queries, result + 3 or strict readonly */
+enum { FWD_POLY_READONLY = 5, FWD_POLY_ROOT_KEPT = 8 };
 static int g_fwd_poly_depth;
 static int g_fwd_codegen;
 /* Set when an answer below was cut short, so it is not kept as final: 1 a
@@ -21826,6 +21827,13 @@ static int fwd_poly_add(Compiler *c, int mi, int pj, SbMutTab *readonly) {
   signed char *cached = readonly ? sb_mut_tab_slot(readonly, p->name, mi, 0) : NULL;
   if (cached && *cached) return 0;
   if (g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 2)) g_fwd_poly_seen.val[0] |= 4;
+  /* Only a strict completed proof can prune a reached emission vertex.
+     An ordinary root-only zero can exempt direct mutation or retention.
+     Record the forwarding edge first, even when the suffix is cached. */
+  if (g_fwd_codegen && g_fwd_poly_cache.cap) {
+    signed char *done = sb_mut_tab_slot(&g_fwd_poly_cache, p->name, mi, 0);
+    if (done && *done == FWD_POLY_READONLY) return 0;
+  }
   signed char *seen = sb_mut_tab_slot(&g_fwd_poly_seen, m->pnames[pj], mi, 1);
   if (*seen) return 0; /* already queued: its body will still be processed */
   *seen = 1;
@@ -21927,6 +21935,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, SbMutTab *reado
      root occurrence handed onward, cannot use that exemption. */
   if (root_kept && g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & 4) &&
       (appended || (root_kept & FWD_KEEP_COPY))) g_fwd_taint |= 4;
+  if (root_kept && g_fwd_poly_seen.n) g_fwd_poly_seen.val[0] |= FWD_POLY_ROOT_KEPT;
   if (readonly && !appended && !g_fwd_taint)
     for (int v = 0; v < g_fwd_poly_seen.n; v++)
       *sb_mut_tab_slot(readonly, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 1;
@@ -21993,7 +22002,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   }
   int cacheable = !g_fwd_poly_depth && !g_fwd_rest_depth;
   signed char *slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, cacheable);
-  if (cacheable && slot && *slot) return *slot - 3;
+  if (cacheable && slot && *slot) return *slot == FWD_POLY_READONLY ? 0 : *slot - 3;
   int outer = g_fwd_taint;
   g_fwd_taint = 0;
   int r = fwd_poly_param_handed_on(c, mi, j, NULL);
@@ -22004,12 +22013,13 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
   if (cacheable && complete) {
     slot = sb_mut_tab_slot(&g_fwd_poly_cache, q->name, mi, 1);
     *slot = (signed char)(r + 3);
-    /* A readonly root proves every reachable vertex readonly too. Cache
-       those results so querying all roots of a shared readonly graph does
-       not repeatedly rescan its suffixes. Positive answers are root-only. */
-    if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j))
+    /* An entirely readonly root proves every reachable vertex readonly too.
+       A root exemption disqualifies the whole walk: a suffix could cycle
+       back to that root. Other completed answers remain root-only. */
+    if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j) &&
+        !(g_fwd_poly_seen.n && (g_fwd_poly_seen.val[0] & FWD_POLY_ROOT_KEPT)))
       for (int v = 0; v < g_fwd_poly_seen.n; v++)
-        *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = 3;
+        *sb_mut_tab_slot(&g_fwd_poly_cache, g_fwd_poly_seen.name[v], g_fwd_poly_seen.key[v], 1) = FWD_POLY_READONLY;
   }
   return r;
 }

@@ -13158,6 +13158,20 @@ int infer_block_params(Compiler *c) {
           continue;
         }
       }
+      /* hash.each_value.with_index { |v, i| }: a value and its index. Left
+         to the body, the value's `<<` typed it a String Array, and the
+         stored String was read as one */
+      if (inner && sp_streq(inner, "each_value") && nt_ref(nt, recv, "arguments") < 0) {
+        int h_recv = nt_ref(nt, recv, "receiver");
+        TyKind h_t = h_recv >= 0 ? infer_type(c, h_recv) : TY_UNKNOWN;
+        if (ty_is_hash(h_t)) {
+          Scope *wis = comp_scope_of(c, block);
+          if (p0 && bp_widen(wis, p0, ty_hash_val(h_t))) changed = 1;
+          const char *idx_p = block_param_name(c, block, 1);
+          if (idx_p && bp_widen(wis, idx_p, TY_INT)) changed = 1;
+          continue;
+        }
+      }
     }
 
     /* array.combination(k)/permutation(k) { |c| } binds the k-element sub-array */

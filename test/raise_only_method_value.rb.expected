@@ -1,0 +1,15 @@
+lines: subclass
+has?: subclass
+other?: subclass
+typed: subclass
+bare ==: top
+bare interpolation: top
+argument skipped
+said
+true
+logged
+true
+logged
+xy
+info
+true

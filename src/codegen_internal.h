@@ -1002,6 +1002,7 @@ const char *array_kind(TyKind t);
    a nested numeric table (sp_PtrArray of row pointers). */
 const char *array_iter_kind(TyKind t);
 const char *array_to_poly_fn(TyKind t);
+int call_never_returns(Compiler *c, int id);
 /* comp_ntype for a fold seed, with an empty `[]` / `{}` literal resolved to
    its container kind rather than left TY_UNKNOWN (see types.c). */
 TyKind fold_seed_ntype(Compiler *c, int node);
@@ -1367,6 +1368,10 @@ int recv_is_const(const NodeTable *nt, int recv, const char *name);
 int sp_is_fiber_storage_recv(const NodeTable *nt, int recv);
 int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b);
 void emit_call(Compiler *c, int id, Buf *b);
+/* Receiver table emitters return 1 when handled, 0 to keep falling through. */
+int emit_call_by_recv_type(Compiler *c, int id, int recv, TyKind rt,
+                          const char *name, Buf *b);
+int emit_tms_call(Compiler *c, int id, int recv, const char *name, Buf *b);
 /* Decode a CallNode's positional arguments: sets *argc and returns the argv
    array (NULL when the node has no arguments). Shared by the call emitters. */
 const int *call_args(const NodeTable *nt, int id, int *argc);

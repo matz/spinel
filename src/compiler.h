@@ -1074,6 +1074,7 @@ int        io_family_descends(Compiler *c, int k, int owner);
 /* Like comp_method_in_class but walks the superclass chain. On success,
    *def_class (if non-NULL) is set to the class that defines the method. */
 int        comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
+int        comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name);
 /* Record method `name`'s visibility on a class (overwrite-or-append). */
 void       comp_method_vis_set(ClassInfo *ci, const char *name, int kind);
 /* Record class method `name`'s visibility on a class (overwrite-or-append). */

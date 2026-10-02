@@ -3274,10 +3274,10 @@ static void dsend_add_name(char ***names, int *n, int *cap, ANameHash *seen, con
    an instance of any subclass (`self` in a base-class method that sends
    "on_#{ev}" to a hook only the subclass defines), so with `subclasses`
    set every descendant's methods, readers, writers and aliases count too. */
+static const char *const object_methods[] = { "to_s", "inspect", "class", "hash", "frozen?", "nil?",
+  "==", "!=", "equal?", "eql?", "respond_to?", "is_a?", "kind_of?", "instance_of?", "freeze", "dup",
+  "itself", "object_id", NULL };
 static int dsend_receiver_names(Compiler *c, int cls, int subclasses, char ***out) {
-  static const char *const object_methods[] = { "to_s", "inspect", "class", "hash", "frozen?", "nil?",
-    "==", "!=", "equal?", "eql?", "respond_to?", "is_a?", "kind_of?", "instance_of?", "freeze", "dup",
-    "itself", "object_id", NULL };
   char **names = NULL; int n = 0, cap = 0;
   ANameHash seen; memset(&seen, 0, sizeof seen);
   for (int d = 0; d < c->nclasses; d++) {
@@ -3550,6 +3550,7 @@ int desugar_dynamic_send(Compiler *c) {
     char **use = cand; int nuse = ncand;
     char **own = NULL; int nown = 0;
     int computed = an_send_name_is_computed(c, argv[0]);
+    int builtin_recv = 0;   /* the arms are a builtin class's methods */
     /* A name that is not computed -- a variable, a parameter, a table read
        (`send(type, ...)`, `send(*DISPATCH[op])`) -- holds one of the names
        the program spells, so its arms are the literals alone. The methods it
@@ -3599,6 +3600,57 @@ int desugar_dynamic_send(Compiler *c) {
         }
         for (int k = 0; k < ncand && k < 256; k++) dsend_add_name(&own, &nown, &cap, &seen, cand[k]);
         anh_free(&seen);
+      }
+      else if (rt != TY_CLASS && builtin_class_of_type(rt)) {
+        /* a receiver known to be a builtin answers its class's own methods
+           (`io.public_send("#{k}=", v)`); the shape filter below keeps the
+           ones the name can spell. Not a Class value, whose own singleton
+           methods -- what such a send in a class body means -- are not
+           Class's. */
+        static const char *const enumerable_methods[] = { "all?", "any?", "chain", "chunk",
+          "chunk_while", "collect", "collect_concat", "compact", "count", "cycle", "detect", "drop",
+          "drop_while", "each_cons", "each_entry", "each_slice", "each_with_index", "each_with_object",
+          "entries", "filter", "filter_map", "find", "find_all", "find_index", "first", "flat_map",
+          "grep", "grep_v", "group_by", "include?", "inject", "lazy", "map", "max", "max_by",
+          "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?", "partition", "reduce",
+          "reject", "reverse_each", "select", "slice_after", "slice_before", "slice_when", "sort",
+          "sort_by", "sum", "take", "take_while", "tally", "to_a", "to_h", "to_set", "uniq", "zip", NULL };
+        static const char *const comparable_methods[] = { "<", "<=", "==", ">", ">=", "between?",
+          "clamp", NULL };
+        static const char *const numeric_methods[] = { "+@", "abs2", "angle", "arg", "clone", "conj",
+          "conjugate", "dup", "eql?", "finite?", "i", "imag", "imaginary", "infinite?", "negative?",
+          "nonzero?", "phase", "polar", "positive?", "quo", "real", "real?", "rect", "rectangular",
+          "step", "to_c", NULL };
+        const char *bcls = builtin_class_of_type(rt);
+        builtin_recv = 1;
+        const char *bnames[512];
+        int cap = 0; ANameHash seen; memset(&seen, 0, sizeof seen);
+        /* the class's own rows, then what it inherits -- the methods every
+           object answers and the modules it includes -- which a name the
+           program computes reaches as well (`s.public_send("#{q}?")` with q
+           "frozen", `a.public_send("#{q}_by")` with q "min") */
+        int nb = builtin_method_names(bcls, bnames, 512);
+        for (int k = 0; k < nb; k++) dsend_add_name(&own, &nown, &cap, &seen, bnames[k]);
+        for (int k = 0; object_methods[k]; k++) dsend_add_name(&own, &nown, &cap, &seen, object_methods[k]);
+        int is_enum = sp_streq(bcls, "Array") || sp_streq(bcls, "Hash") || sp_streq(bcls, "Range") ||
+                      sp_streq(bcls, "File");
+        int is_num = sp_streq(bcls, "Integer") || sp_streq(bcls, "Float");
+        int is_cmp = is_num || sp_streq(bcls, "String") || sp_streq(bcls, "Symbol") || sp_streq(bcls, "Time");
+        for (int k = 0; is_enum && enumerable_methods[k]; k++) dsend_add_name(&own, &nown, &cap, &seen, enumerable_methods[k]);
+        for (int k = 0; is_cmp && comparable_methods[k]; k++) dsend_add_name(&own, &nown, &cap, &seen, comparable_methods[k]);
+        for (int k = 0; is_num && numeric_methods[k]; k++) dsend_add_name(&own, &nown, &cap, &seen, numeric_methods[k]);
+        /* and the program's own methods there: a reopen of the class
+           (`class String; def shout? ...`), of Object, of Numeric */
+        const char *pcls[] = { bcls, "Object", is_num ? "Numeric" : NULL };
+        for (int r = 0; r < 3; r++) {
+          int pci = pcls[r] ? comp_class_index(c, pcls[r]) : -1;
+          if (pci < 0) continue;
+          char **kn = NULL; int nk = dsend_receiver_names(c, pci, 0, &kn);
+          for (int j = 0; j < nk; j++) { dsend_add_name(&own, &nown, &cap, &seen, kn[j]); free(kn[j]); }
+          free(kn);
+        }
+        anh_free(&seen);
+        if (nown == 0) continue;
       }
       else continue;
       /* An interpolated name fixes part of itself -- `"#{name}="` ends in
@@ -3685,7 +3737,9 @@ int desugar_dynamic_send(Compiler *c) {
          fixpoint types such a call anyway, and its arm was emitted -- and
          one naming the enclosing method itself, which the block-carrying
          inline expands at the arm, expanded without end. */
-      if (splat_src < 0 && !rest_variadic && dsend_defined_arity_excludes(c, use[k], nrest)) continue;
+      /* not for a builtin receiver's arms: another class's `empty?(x)` says
+         nothing about String#empty? */
+      if (splat_src < 0 && !rest_variadic && !builtin_recv && dsend_defined_arity_excludes(c, use[k], nrest)) continue;
       int na = nt_new_node(nt, "ArgumentsNode"); if (na < 0) break;
       if (nrest) nt_node_set_arr(nt, na, "arguments", rest, nrest);
       int call = nt_new_node(nt, "CallNode"); if (call < 0) break;

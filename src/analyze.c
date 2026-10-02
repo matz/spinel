@@ -22562,6 +22562,16 @@ static int pf_wanted(Compiler *c, const char *name) {
     if (recv >= 0 && infer_type(c, recv) == TY_POLY) return 1;
     /* a Class value known only at run time dispatches the same way */
     if (recv >= 0 && infer_type(c, recv) == TY_CLASS && class_recv_is_dynamic(c, recv)) return 1;
+    /* an Array, Hash or Numeric reopening's method on a receiver of that
+       kind is called, not spliced: the reopen fallback reaches it through
+       the clone */
+    if (recv >= 0) {
+      TyKind rt = infer_type(c, recv);
+      const char *rcn = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
+                      : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
+      int rci = rcn ? comp_class_index(c, rcn) : -1;
+      if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;
+    }
     /* a method the program adds to Object, called with a block on an object
        whose class chain stops short of Object (#5779): the call reaches it
        through the clone, since it cannot be spliced in on that class */

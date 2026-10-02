@@ -2787,9 +2787,13 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
 /* The primitives whose reopen a call on a typed receiver -- or on self in
    the reopen -- is dispatched for, and so where an alias may capture the
    builtin method itself. */
+/* Array and Hash too, since their reopens own a builtin name for a concrete
+   receiver: `alias orig_first first` ahead of `def first` keeps naming the
+   builtin, where it otherwise resolved to the reopen's own `first`. */
 static int alias_prim_class(const char *cn) {
   return cn && (sp_streq(cn, "String") || sp_streq(cn, "Integer") || sp_streq(cn, "Float") ||
-                sp_streq(cn, "Symbol") || sp_streq(cn, "Time"));
+                sp_streq(cn, "Symbol") || sp_streq(cn, "Time") ||
+                sp_streq(cn, "Array") || sp_streq(cn, "Hash"));
 }
 /* Did the program define `od` in class cid -- a def, or an alias of that
    name -- before node `at`? */

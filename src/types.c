@@ -293,6 +293,65 @@ TyKind ty_array_elem(TyKind arr) {
       return TY_POLY;
   }
 }
+
+/* A builtin whose result follows its receiver's kind, called on a yield
+   whose block answers different kinds at different call sites
+   (`def w = yield.first` with an Integer Array block at one site and a
+   String Array one at another). The inlined call is lowered per site from
+   that site's receiver, so it emits an sp_int at one and a const char * at
+   the other, while the slot it lands in was typed from one site only: the C
+   did not compile, or a Float site's 1.5 was stored into an sp_int as 1.
+   This names, per receiver kind, what that lowering produces -- the same
+   type the analyzer answers for the call on a receiver of that kind alone
+   (`[1.5].first` is a Float, `["a"].sort` a String Array) -- for the kinds
+   whose lowering is a plain value of one kind. Two families: the element
+   readers answer the array's element, and the copies and reorderings answer
+   the receiver's own kind. A pair left out here keeps the yield's single
+   typing, as before. Some builtins look like they belong and do not: an
+   Integer's succ and an Integer Array's sum answer a Bignum under
+   --int-overflow=promote, so their type is the mode's and not the
+   receiver's, and a String Array's sum raises CRuby's TypeError through a
+   boxed path. dig's answer depends on how many indices it is given, and
+   under promote even an Integer Array's dig(0) is boxed. */
+static int ty_recv_is_plain_array(TyKind t) {
+  return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY || t == TY_STR_ARRAY;
+}
+int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv, TyKind *out) {
+  if (!name) return 0;
+  if (argc == 0) {
+    if (!strcmp(name, "abs") || !strcmp(name, "magnitude")) {
+      if (recv != TY_INT && recv != TY_FLOAT) return 0;
+      *out = recv; return 1;
+    }
+    /* String#-@ is the deduplicated frozen String, so a String site belongs
+       here too; a String has no abs or magnitude. */
+    if (!strcmp(name, "-@")) {
+      if (recv != TY_INT && recv != TY_FLOAT && recv != TY_STRING) return 0;
+      *out = recv; return 1;
+    }
+    if (!strcmp(name, "itself") || !strcmp(name, "dup") || !strcmp(name, "clone") ||
+        !strcmp(name, "freeze")) {
+      if (recv != TY_INT && recv != TY_FLOAT && recv != TY_STRING && recv != TY_SYMBOL &&
+          !ty_recv_is_plain_array(recv)) return 0;
+      *out = recv; return 1;
+    }
+    if (!strcmp(name, "sort") || !strcmp(name, "reverse") || !strcmp(name, "uniq") ||
+        !strcmp(name, "compact") || !strcmp(name, "to_a")) {
+      if (!ty_recv_is_plain_array(recv)) return 0;
+      *out = recv; return 1;
+    }
+    if (!strcmp(name, "first") || !strcmp(name, "last") || !strcmp(name, "min") ||
+        !strcmp(name, "max") || !strcmp(name, "pop") || !strcmp(name, "shift")) {
+      if (!ty_recv_is_plain_array(recv)) return 0;
+      *out = ty_array_elem(recv); return 1;
+    }
+    return 0;
+  }
+  if (argc == 1 && !strcmp(name, "[]") && arg0 == TY_INT && ty_recv_is_plain_array(recv)) {
+    *out = ty_array_elem(recv); return 1;
+  }
+  return 0;
+}
 /* ty_array_of deliberately does NOT map TY_INT_ARRAY -> TY_INT_ARRAY_ARRAY, nor
    TY_FLOAT_ARRAY -> TY_FLOAT_ARRAY_ARRAY: like TY_OBJ_ARRAY, the nested types are
    produced only by the post-fixpoint narrow pass, never by forward inference (a

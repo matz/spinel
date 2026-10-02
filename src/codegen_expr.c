@@ -206,7 +206,10 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         if (vexpr[0]) buf_puts(&ivp, vexpr);
         else { emit_expr(c, expr, &ivp); ivp_emitted = 1; }
         const char *ivt = ivp.p ? ivp.p : "";
-        if (strncmp(past_open_parens(ivt), "sp_raise_", 9) == 0) {
+        /* a call to a method that always raises diverges the same way, and
+           its void C form has no arm to take (it was refused) */
+        if (strncmp(past_open_parens(ivt), "sp_raise_", 9) == 0 ||
+            (!vexpr[0] && call_never_returns(c, expr))) {
           buf_printf(&conv, "((void)(%s), sp_str_empty)", ivt);
           free(ivp.p);
           goto iv_done;

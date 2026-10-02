@@ -818,6 +818,22 @@ int comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_c
   return -1;
 }
 
+/* The method a program's reopen of a builtin kind's own class defines under
+   `name` (`class Array; def first ...`), or -1: the class itself, not an
+   ancestor, since an Object reopen does not displace Array#first. */
+int comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name) {
+  const char *cn = t == TY_INT ? "Integer" : t == TY_FLOAT ? "Float"
+                 : t == TY_STRING ? "String" : t == TY_SYMBOL ? "Symbol"
+                 : (ty_is_array(t) || ty_is_obj_array(t)) ? "Array"
+                 : ty_is_hash(t) ? "Hash" : NULL;
+  if (!cn || !name) return -1;
+  int ci = comp_class_index(c, cn);
+  if (ci < 0) return -1;
+  int dc = -1, mi = comp_method_in_chain(c, ci, name, &dc);
+  /* under the name itself: an alias resolving to the reopen's name is not it */
+  return mi >= 0 && dc == ci && c->scopes[mi].name && sp_streq(c->scopes[mi].name, name) ? mi : -1;
+}
+
 static void vis_table_set(char ***names, int **kinds, int *n, int *cap, const char *name, int kind) {
   if (!name) return;
   for (int i = 0; i < *n; i++)

@@ -20,6 +20,11 @@
 #   RUBYSPEC_GATE=1       skip the CRuby oracle (gate runs re-check examples
 #                         already known oracle-clean; CRuby need not be present)
 #   RUBYSPEC_JOBS=<n>     parallelism (default: nproc-2, min 1)
+#   GATE_CACHE=0          compile and run every example: by default an example
+#                         whose generated C, source and build inputs are those
+#                         of an earlier PASS reuses that PASS (the result
+#                         cache, tools/result_cache.sh; the Makefile's comment
+#                         above RUN_ONE_TEST has the reasoning)
 set -u
 DIR="${1:?usage: run.sh EXTRACTED_DIR [out.tsv]}"
 OUT="${2:-$DIR/results.tsv}"
@@ -33,6 +38,21 @@ fi
 TDIR=$(mktemp -d /tmp/rubyspec-run.XXXXXX)
 trap 'rm -rf "$TDIR"' EXIT
 
+# The result cache. An example's key is its generated C and source plus RC_FP:
+# what the driver links against (the runtime archives and package objects
+# beside the spinel it runs), the headers the C includes, the driver's own
+# source (src/main.c assembles the cc line, src/csplit.c splits a large unit),
+# the C compiler it calls (`cc`) and RC_HARNESS, bumped when this file's
+# classification changes. Only a PASS is stored.
+RC="$(cd "$(dirname "$0")/.." && pwd)/result_cache.sh"
+RC_HARNESS=1
+RC_FP=
+if [ "${GATE_CACHE:-1}" != 0 ]; then
+  RC_ROOT=$(cd "$(dirname "$SPINEL")/.." && pwd)
+  RC_FP=$(cd "$RC_ROOT" && RC_CC=cc "$RC" fp lib/libspinel_rt.a lib/libspinel_rt_mt.a packages/*/*.o \
+    src/main.c src/csplit.c -- "rubyspec $RC_HARNESS $GATE")
+fi
+
 # classify_one FILE: write the example's TSV row to $TDIR/rows/<bn>.
 # Runs in a parallel worker, so it writes its own file (no shared append).
 classify_one() {
@@ -45,6 +65,18 @@ classify_one() {
     local cr; cr=$(timeout 10 ruby "$f" 2>/dev/null | tail -1)
     if ! grep -q "fail=0" <<<"$cr"; then
       echo -e "$bn\tHARNESS-SKEW\t${cr:-crash}" > "$row"; return
+    fi
+  fi
+  # spinel runs every time: its C says whether the example changed. A hit
+  # skips the C compile and the run; a miss builds as before, through the
+  # driver, so a reject or a cc failure reads exactly as it did.
+  local ckey=""
+  if [ -n "$RC_FP" ] && "$SPINEL" "$f" -c -o "$TDIR/c-$bn.c" >/dev/null 2>&1; then
+    ckey=$("$RC" key "$f" "$TDIR/c-$bn.c" "$RC_FP")
+    rm -f "$TDIR/c-$bn.c"
+    local hit
+    if [ -n "$ckey" ] && hit=$("$RC" get "$ckey") && [ "${hit%%$'\t'*}" = PASS ]; then
+      printf '%s\t%s\n' "$bn" "$hit" > "$row"; return
     fi
   fi
   local diag; diag=$("$SPINEL" "$f" -o "$bin" 2>&1 >/dev/null)
@@ -80,12 +112,13 @@ classify_one() {
     printf '%s\tERROR\trc=%s %s\n' "$bn" "$rc" "${last:0:200}" > "$row"
   elif grep -q "fail=0" <<<"$last"; then
     echo -e "$bn\tPASS\t$last" > "$row"
+    [ -n "$ckey" ] && echo -e "PASS\t$last" | "$RC" put "$ckey"
   else
     echo -e "$bn\tFAIL\t$last" > "$row"
   fi
 }
 export -f classify_one
-export TDIR SPINEL GATE
+export TDIR SPINEL GATE RC RC_FP
 
 mkdir -p "$TDIR/rows"
 if [ -n "$ONLY" ]; then

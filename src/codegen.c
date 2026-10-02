@@ -13404,8 +13404,10 @@ static void reject_runtime_send(Compiler *c) {
        program's literals AND the methods it defines: a computed name (an
        interpolated `"#{name}="`, a concatenation) resolves there too, and a
        name outside that set raises NoMethodError at the dispatch -- loud at
-       run time rather than here. A builtin method reached only through a
-       computed name is the one shape that set does not cover. */
+       run time rather than here. On a receiver known to be a builtin the
+       set is that class's own methods; a builtin method reached through a
+       computed name on a receiver of no known class is the one shape it
+       does not cover. */
     { int dn = 0; nt_arr(nt, id, "dyn_send_arms", &dn);
       if (dn > 0 && (!an_send_name_is_computed(c, av[0]) || nt_int(nt, id, "dyn_send_complete", 0) > 0)) continue; }
     /* Only diagnose a send that codegen will actually emit. A send in a dead

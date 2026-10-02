@@ -1699,6 +1699,74 @@ static int boxed_struct_aref_may_construct(Compiler *c, int id) {
   return 0;
 }
 
+/* Whether `call`, a builtin on a yield of a method inlined per call site,
+   has an answer in ty_recv_builtin_result for every site's block kind: the
+   condition under which the yield is widened to poly (YU_RECEIVER below) and
+   each site's call is typed from that table at codegen
+   (yield_builtin_method_site_type). A proc-form or lowered method runs one
+   body for every site, with no per-site typing to lean on. */
+/* The yield at the root of a chain of such builtins (`yield.reverse.first`),
+   or -1. Each link must be a block-less call. */
+static int yield_recv_chain_root(const NodeTable *nt, int call) {
+  int depth = 0;
+  for (int n = call; n >= 0 && depth < 16; depth++) {
+    if (nt_kind(nt, n) == NK_YieldNode) return n;
+    if (nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "block") >= 0) return -1;
+    n = nt_ref(nt, n, "receiver");
+  }
+  return -1;
+}
+/* What the chain from the yield up to `node` answers at a site whose block
+   answers `bt`, by ty_recv_builtin_result one link at a time. */
+static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) == NK_YieldNode) { *out = bt; return 1; }
+  TyKind rk;
+  if (!yield_recv_chain_kind(c, nt_ref(nt, node, "receiver"), bt, &rk)) return 0;
+  int an = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  TyKind a0 = ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+  /* The table names the builtin's answer, and a program that reopened the
+     kind's class with its own method of the name runs that one instead. A
+     scalar's reopen is what codegen calls for such a site, so the site
+     answers its return type. An Array's or Hash's is not reached for a name
+     a builtin arm takes, so no answer would describe the site: decline it.
+     Typing it from the table read `class Array; def first = 9; end`'s
+     yield.first back as the element, a wrong value where the program had
+     failed to build. */
+  { const char *rn = nt_str(nt, node, "name");
+    /* a call an alias captured the builtin for (builtin_only) runs the builtin */
+    int rmi = nt_int(nt, node, "builtin_only", 0) ? -1 : comp_builtin_kind_reopen_mi(c, rk, rn);
+    if (rmi >= 0) {
+      if (ty_is_array(rk) || ty_is_obj_array(rk) || ty_is_hash(rk)) return 0;
+      /* still settling in an early round is not a reason to decline: the
+         site is answered by the reopen either way, and codegen reads the
+         settled return */
+      TyKind rr = method_call_ret(c, rmi, node);
+      *out = (rr == TY_UNKNOWN || rr == TY_VOID) ? TY_POLY : rr;
+      return 1;
+    } }
+  return ty_recv_builtin_result(nt_str(nt, node, "name"), ac, a0, rk, out);
+}
+static int yield_recv_builtin_every_site(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, call) != NK_CallNode) return 0;
+  int y = yield_recv_chain_root(nt, call);
+  if (y < 0 || y == call) return 0;
+  Scope *ys = comp_scope_of(c, y);
+  if (!ys || ys->is_proc_form || ys->is_lowered_yield) return 0;
+  int ymi = (int)(ys - c->scopes);
+  int tails[32], any = 0;
+  int nsite = yield_block_tails(c, ymi, tails, 32);
+  for (int s = 0; s < nsite; s++) {
+    TyKind bt = tails[s] >= 0 ? infer_type(c, tails[s]) : TY_NIL, rr;
+    if (bt == TY_UNKNOWN) continue;
+    any = 1;
+    if (!yield_recv_chain_kind(c, call, bt, &rr)) return 0;
+  }
+  return any;
+}
+
 TyKind infer_call(Compiler *c, int id) {
   /* the class arm of a builtin's receiver test (`__r.is_a?(K) ? __r.m { }
      : ...`, enum_own) answers what the classes' own methods answer, as the
@@ -2129,6 +2197,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (c->classes[k].instantiated && comp_method_in_chain(c, k, name, NULL) >= 0) own = 1;
     if (!own) return TY_BOOL;
   }
+  /* The call on that widened yield is a boxed carrier too, whatever the
+     builtin answers on a poly receiver: each site emits its own kind's
+     result (an sp_IntArray from one site's sort, an sp_StrArray from the
+     other's) and boxes it. Left to the poly-receiver rows, `yield.sort` typed
+     an sp_PolyArray slot, which neither site's array fits, and the tail was
+     dropped for the slot's nil. */
+  if (rt == TY_POLY && yield_recv_builtin_every_site(c, id)) return TY_POLY;
   /* A read marked to hand out the shared handle (a reader call a mutation
      reaches through, `c.name.setbyte(0, 90)`) is still a String receiver:
      the handle is only its storage. Left as TY_STRBUF it matched none of the
@@ -2174,6 +2249,21 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       return ur;
     }
     if (emi >= 0) return method_call_ret(c, emi, id);
+  }
+  /* An Array or Hash reopen that defines a builtin's name owns it, as the
+     scalar reopens do: `class Array; def first = "arr"; end` makes
+     `[1, 2].first` answer "arr" in CRuby. The builtin rows below answered the
+     element type, and codegen, which reached the reopen only for a name no
+     builtin arm takes, called the builtin. Only a method the reopen itself
+     defines: an Object reopen's `first` does not displace Array#first. */
+  if (recv >= 0 && name && (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt)) &&
+      nt_ref(nt, id, "block") < 0 && !nt_int(nt, id, "builtin_only", 0)) {
+    int aci = comp_class_index(c, ty_is_hash(rt) ? "Hash" : "Array");
+    int adc = -1, ami = aci >= 0 ? comp_method_in_chain(c, aci, name, &adc) : -1;
+    /* the reopen's own method under this very name: an alias taken before the
+       reopen (`alias orig_first first`) still names the builtin */
+    if (ami >= 0 && adc == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, name))
+      return method_call_ret(c, ami, id);
   }
   /* A boxed-value hash whose values are all one class: its value reads are
      that class (nil included, as a NULL pointer), and `values` an array of it
@@ -8751,15 +8841,17 @@ TyKind infer_uncached(Compiler *c, int id) {
           if (ac == 1 && op && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") ||
                                 sp_streq(op, "/") || sp_streq(op, "%")))
             return TY_POLY;
-          /* A no-arg builtin whose return type mirrors the receiver's type
-             (abs, unary -): Integer.abs is Integer, Float.abs is Float.
-             The same mismatch occurs: the slot is typed from the first
-             site's receiver, and the second site's concrete result (a
-             double from fabs, say) is stored into an integer slot.
-             yield_builtin_method_site_type types the call from the
-             per-site block type; only extend this list in tandem. */
-          if (ac == 0 && op && (sp_streq(op, "abs") || sp_streq(op, "-@")))
-            return TY_POLY;
+          /* A builtin whose result follows the receiver's kind (yield.abs,
+             yield.first, yield.dup): the same mismatch, the slot typed from
+             the first site's receiver and the other site's concrete result
+             (a double from fabs, a const char * from a String Array's first)
+             stored into it. yield_builtin_method_site_type types each site's
+             call from ty_recv_builtin_result, so widen only where that table
+             answers every site's block kind: a site it does not answer would
+             emit its concrete value into the poly slot unboxed, which turned
+             a wrong value into C that does not compile when this arm widened
+             every method. */
+          if (yield_recv_builtin_every_site(c, w)) return TY_POLY;
           break;
         }
         case YU_FRAME: {

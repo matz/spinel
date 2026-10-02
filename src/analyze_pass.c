@@ -2505,6 +2505,18 @@ int masgn_tuple_rhs(const NodeTable *nt, int value) {
 
 /* Unify elem into each local / ivar / constant target of a multi-write's
    lefts or rights. Returns 1 when an ivar or constant slot moved. */
+/* A local named among a multiple assignment's targets takes `t`. A plain
+   local was reset at the top of infer_write_types, so re-deriving it is not
+   news and reports nothing. A parameter is not reset: it is widened as a
+   plain `x = v` in the body widens it, and that is a real change. Skipping
+   it left `mk, x = 0, nil` storing a boxed nil into an Integer `x`. */
+static int masgn_local_take(Compiler *c, LocalVar *lv, TyKind t, int node) {
+  if (!lv || lv->is_block_param) return 0;
+  if (lv->is_param) return t != TY_UNKNOWN && !lv->rbs_seeded ? slot_take(c, lv, t, node) : 0;
+  lv->type = ty_unify(lv->type, t);
+  return 0;
+}
+
 static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKind elem) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -2513,8 +2525,7 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
     if (sp_streq(lty_ms, "LocalVariableTargetNode")) {
       const char *lnm = nt_str(nt, tgts[i], "name");
       LocalVar *lv = lnm ? scope_local(ms, lnm) : NULL;
-      if (!lv || lv->is_param || lv->is_block_param) continue;
-      lv->type = ty_unify(lv->type, elem);
+      changed |= masgn_local_take(c, lv, elem, tgts[i]);
     }
     else if (sp_streq(lty_ms, "InstanceVariableTargetNode") && ms) {
       /* outside a method: the class body's slot, or the top level's */
@@ -2913,13 +2924,12 @@ int infer_write_types(Compiler *c) {
           if (sp_streq(lty_mr, "LocalVariableTargetNode")) {
             const char *lnm = nt_str(nt, lefts[i], "name");
             LocalVar *lv = lnm ? scope_local(ms_mr, lnm) : NULL;
-            if (!lv || lv->is_param || lv->is_block_param) continue;
-            /* No `changed` here: this pass reset every plain local to UNKNOWN at
+            /* No `changed` for a plain local: this pass reset every one to UNKNOWN at
    the top, so re-deriving one is not news -- reporting it would make
    the enclosing fixpoint see a change on every single iteration and
    never converge. The stash comparison at the end of this function is
    the change detector for these slots (same rule as slot_reset). */
-            lv->type = ty_unify(lv->type, elems[i]);
+            changed |= masgn_local_take(c, lv, elems[i], value);
           }
           else if (sp_streq(lty_mr, "InstanceVariableTargetNode") &&
                    ms_mr && ms_mr->class_id >= 0) {
@@ -2968,8 +2978,7 @@ int infer_write_types(Compiler *c) {
             if (!sp_streq(lty_s, "LocalVariableTargetNode")) continue;
             const char *lnm = nt_str(nt, lefts[i], "name");
             LocalVar *lv = lnm ? scope_local(comp_scope_of(c, id), lnm) : NULL;
-            if (!lv || lv->is_param || lv->is_block_param) continue;
-            lv->type = ty_unify(lv->type, st);
+            changed |= masgn_local_take(c, lv, st, value);
           }
           /* a target after the splat takes the scalar when no target before
              it did (`*r, C = 1`), else nil */
@@ -2997,12 +3006,9 @@ int infer_write_types(Compiler *c) {
                 sp_streq(nt_type(nt, rin_ms), "LocalVariableTargetNode")) {
               const char *rnm_ms = nt_str(nt, rin_ms, "name");
               LocalVar *rlv_ms = rnm_ms ? scope_local(comp_scope_of(c, id), rnm_ms) : NULL;
-              if (rlv_ms && !rlv_ms->is_param && !rlv_ms->is_block_param) {
-                TyKind rat = ty_array_of(st);
-                if (rat == TY_UNKNOWN) rat = TY_POLY_ARRAY;
-                TyKind mg_r = ty_unify(rlv_ms->type, rat);
-                rlv_ms->type = mg_r;
-              }
+              TyKind rat = ty_array_of(st);
+              if (rat == TY_UNKNOWN) rat = TY_POLY_ARRAY;
+              changed |= masgn_local_take(c, rlv_ms, rat, value);
             }
           }
         }
@@ -3021,7 +3027,8 @@ int infer_write_types(Compiler *c) {
             if (sp_streq(lty_p, "LocalVariableTargetNode")) {
               const char *lnm_p = nt_str(nt, lefts[i], "name");
               LocalVar *lv_p = lnm_p ? scope_local(ms_poly, lnm_p) : NULL;
-              if (!lv_p || lv_p->is_param || lv_p->is_block_param) continue;
+              if (!lv_p || lv_p->is_block_param) continue;
+              if (lv_p->is_param) { changed |= masgn_local_take(c, lv_p, TY_POLY, value); continue; }
               TyKind mg_p = ty_unify(lv_p->type, TY_POLY);
               /* plain locals are reset+recomputed each iteration; net change
                  is detected by the end-of-pass stash compare. Reporting the
@@ -3066,8 +3073,7 @@ int infer_write_types(Compiler *c) {
                 sp_streq(nt_type(nt, inner2), "LocalVariableTargetNode")) {
               const char *rnm3 = nt_str(nt, inner2, "name");
               LocalVar *lv3 = rnm3 ? scope_local(comp_scope_of(c, id), rnm3) : NULL;
-              if (lv3 && !lv3->is_param && !lv3->is_block_param)
-                lv3->type = ty_unify(lv3->type, st);
+              changed |= masgn_local_take(c, lv3, st, value);
             }
             else if (inner2 >= 0 && nt_type(nt, inner2))
               changed |= masgn_unify_elem(c, ms_arr, &inner2, 1, st);
@@ -3087,8 +3093,7 @@ int infer_write_types(Compiler *c) {
         /* a nil element widens its target, as `x = nil` does */
         if (et == TY_NIL) et = TY_POLY;
         LocalVar *lv = lnm ? scope_local(comp_scope_of(c, id), lnm) : NULL;
-        if (!lv || lv->is_param || lv->is_block_param) continue;
-        lv->type = ty_unify(lv->type, et);
+        changed |= masgn_local_take(c, lv, et, els[i]);
       }
       else if (sp_streq(lty, "ConstantTargetNode") || sp_streq(lty, "ConstantPathTargetNode")) {
         const char *cnm = nt_str(nt, lefts[i], "name");
@@ -3130,10 +3135,10 @@ int infer_write_types(Compiler *c) {
           if (!ilty || !sp_streq(ilty, "LocalVariableTargetNode")) continue;
           const char *lnm2 = nt_str(nt, inner_lefts[j], "name");
           TyKind et2 = infer_type(c, inner_els[j]);
-          if (et2 == TY_NIL) continue;
           LocalVar *lv2 = lnm2 ? scope_local(comp_scope_of(c, id), lnm2) : NULL;
-          if (!lv2 || lv2->is_param || lv2->is_block_param) continue;
-          lv2->type = ty_unify(lv2->type, et2);
+          /* a nil element boxes a parameter; a plain local takes it later */
+          if (et2 == TY_NIL && !(lv2 && lv2->is_param)) continue;
+          changed |= masgn_local_take(c, lv2, et2 == TY_NIL ? TY_POLY : et2, inner_els[j]);
         }
       }
     }
@@ -3149,9 +3154,7 @@ int infer_write_types(Compiler *c) {
       if (!lty) continue;
       const char *lnm = nt_str(nt, lefts[i], "name");
       LocalVar *lv = lnm ? scope_local(usc, lnm) : NULL;
-      if (!lv || lv->is_param || lv->is_block_param) continue;
-      TyKind mg = ty_unify(lv->type, TY_POLY);
-      if (mg != lv->type) lv->type = mg;
+      changed |= masgn_local_take(c, lv, TY_POLY, value);
     }
     /* rights targets (post-splat fixed targets) */
     int rn = 0;
@@ -3174,8 +3177,7 @@ int infer_write_types(Compiler *c) {
       if (sp_streq(rty3, "LocalVariableTargetNode")) {
         const char *rnm2 = nt_str(nt, rights[j], "name");
         LocalVar *lv = rnm2 ? scope_local(comp_scope_of(c, id), rnm2) : NULL;
-        if (!lv || lv->is_param || lv->is_block_param) continue;
-        lv->type = ty_unify(lv->type, et);
+        changed |= masgn_local_take(c, lv, et, ridx < en ? els[ridx] : value);
       }
       else if (sp_streq(rty3, "ConstantTargetNode") || sp_streq(rty3, "ConstantPathTargetNode")) {
         const char *cnm2 = nt_str(nt, rights[j], "name");
@@ -3219,8 +3221,7 @@ int infer_write_types(Compiler *c) {
         for (int i = 0; i < en; i++)
           if (nt_kind(nt, els[i]) == NK_SplatNode) { rest_arr = infer_type(c, value); break; }
         LocalVar *lv = rnm ? scope_local(comp_scope_of(c, id), rnm) : NULL;
-        if (lv && !lv->is_param && !lv->is_block_param)
-          lv->type = ty_unify(lv->type, rest_arr);
+        changed |= masgn_local_take(c, lv, rest_arr, value);
       }
       /* an instance or class variable or a constant takes the same array */
       else if (inner >= 0 && nt_type(nt, inner) &&

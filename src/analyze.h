@@ -75,10 +75,12 @@ int an_local_array_changed_x(Compiler *c, const char *xn, Scope *xs);
 int an_local_array_stores_unshared(Compiler *c, const char *xn, Scope *xs);
 /* Unknown paths require a shared input; escapes refuse even a shared one. */
 typedef enum {
-  FWD_ESCAPE = -2, FWD_UNKNOWN = -1, FWD_READONLY = 0, FWD_APPENDS = 1
+  FWD_RETAINS_BOX = -3, FWD_ESCAPE = -2, FWD_UNKNOWN = -1, FWD_READONLY = 0, FWD_APPENDS = 1
 } FwdResult;
 FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i);
 FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j);
+/* Optional proof for preserving-box retention, not for copying escapes. */
+int fwd_actual_frozen(Compiler *c, int node);
 /* A boxed parameter's argument a literal block appends to through a yield
    (yield_splice_handles): a String variable there must be the handle. */
 int yield_poly_arg_wants_handle(Compiler *c, int a);

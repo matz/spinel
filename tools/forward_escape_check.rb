@@ -285,6 +285,8 @@ native_controls = %w[
 native_controls.each { |name| cases.fetch(name) }
 
 failures = []
+refusals = 0
+native_passes = 0
 Dir.mktmpdir("spinel-forward-escapes") do |dir|
   cases.each do |name, (body, followup, want, prefix, guard, before)|
     source = File.join(dir, "#{name}.rb")
@@ -351,6 +353,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
       end
       out, err, status = Open3.capture3(timeout, "30", executable)
       failures << "#{name}: native control differs: #{out.inspect} #{err}" unless status.success? && out == expected
+      native_passes += 1
       next
     end
     out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
@@ -358,6 +361,7 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
            (out + err).include?("nothing written") && !File.exist?(cfile)
       failures << "#{name}: not an identity refusal (status #{status.exitstatus}): #{out}#{err}"
     end
+    refusals += 1
   end
   # Shared-field writes need an alias proof even when their result is
   # discarded. Do not add a per-route sharing exception for these stores.
@@ -390,6 +394,85 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
            (out + err).include?("nothing written") && !File.exist?(cfile)
       failures << "writer_return_#{i}: unsafe writer admitted: #{out}#{err}"
     end
+    refusals += 1
+  end
+  # Preserving an incoming box is conditional, not a readonly suffix.
+  # Mutable scalar/array inputs and replaced or aliased array elements
+  # must still refuse, including when a rest forwards to that same store.
+  boxed_inputs = {
+    "scalar" => "s = +'abc'; collector.accept(s)",
+    "array" => "s = +'abc'; collector.gather([s])",
+    "replaced" => "s = +'abc'; values = ['old']; values[0] = s; collector.gather(values)",
+    "aliased" => "s = +'abc'; values = ['old']; alias_values = values; alias_values[0] = s; collector.gather(values)",
+    "rest" => "s = +'abc'; collector.rest(s)",
+    "outgoing_super" => <<~RUBY,
+      $source = s = +'abc'
+      class Collector
+        def gather(values); values[0] = $source; nil; end
+      end
+      class DerivedCollector < Collector
+        def gather(values); super; values.to_a.each { |value| store(value) }; nil; end
+      end
+      collector = DerivedCollector.new
+      collector.accept(7)
+      collector.gather(['old'])
+    RUBY
+    "helper_super" => <<~RUBY,
+      $source = s = +'abc'
+      class Collector
+        def check(values); values[0] = $source; nil; end
+      end
+      class DerivedCollector < Collector
+        def check(values); super; nil; end
+        def gather(values); check(values); values.to_a.each { |value| store(value) }; nil; end
+      end
+      collector = DerivedCollector.new
+      collector.accept(7)
+      collector.gather(['old'])
+    RUBY
+    "helper_override" => <<~RUBY
+      $source = s = +'abc'
+      class Collector
+        def check(values) = values.length
+        def gather(values); check(values); values.to_a.each { |value| store(value) }; nil; end
+      end
+      class DerivedCollector < Collector
+        def check(values); values[0] = $source; nil; end
+      end
+      collector = DerivedCollector.new
+      collector.accept(7)
+      collector.gather(['old'])
+    RUBY
+  }
+  boxed_inputs.each do |name, input|
+    source = File.join(dir, "boxed_#{name}.rb")
+    cfile = File.join(dir, "boxed_#{name}.c")
+    File.write(source, <<~RUBY)
+      class Collector
+        def initialize = @items = []
+        def accept(value); store(value); nil; end
+        def rest(*values); store(*values); nil; end
+        def store(value); @items.push(value); nil; end
+        def gather(values); values.to_a.each { |value| store(value) }; nil; end
+        def at(index) = @items[index]
+      end
+      collector = Collector.new
+      collector.accept(7)
+      #{input}
+      collector.at(1) << '!'
+      p s
+    RUBY
+    out, err, status = Open3.capture3(RbConfig.ruby, source)
+    unless status.success? && out == "\"abc!\"\n"
+      failures << "boxed_#{name}: invalid CRuby reduction: #{out.inspect} #{err}"
+      next
+    end
+    out, err, status = Open3.capture3(timeout, "30", compiler, source, "-c", "-o", cfile)
+    unless status.exitstatus == 1 && (out + err).include?("through a parameter it hands on escapes") &&
+           (out + err).include?("nothing written") && !File.exist?(cfile)
+      failures << "boxed_#{name}: unsafe box retention admitted: #{out}#{err}"
+    end
+    refusals += 1
   end
   # An RBS-seeded Hash must not enter an unrelated shared-String setter arm.
   # Keep valid String and nil calls too: excluding every arm is not a fix.
@@ -430,8 +513,9 @@ Dir.mktmpdir("spinel-forward-escapes") do |dir|
     else
       out, err, status = Open3.capture3(timeout, "30", executable)
       failures << "shared_hash_arm: native control differs: #{out.inspect} #{err}" unless status.success? && out == expected
+      native_passes += 1
     end
   end
 end
 abort failures.join("\n") unless failures.empty?
-puts "forward-escape-check: #{cases.length - native_controls.length + 3} independent CRuby-validated refusals, #{native_controls.length + 1} native readonly/identity controls pass"
+puts "forward-escape-check: #{refusals} independent CRuby-validated refusals, #{native_passes} native readonly/identity controls pass"

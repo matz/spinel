@@ -26120,6 +26120,16 @@ int splat_local_sure_lit(Compiler *c, int x) {
   }
   return reads == seen ? lit : -1;
 }
+/* A binary operator takes its one operand whatever the receiver, and no
+   block moves that count. A splat into one -- `a.==(*rest)`, an operator
+   arm of `public_send(*args, &block)` -- passed the array itself as the
+   operand: == answered false and + raised TypeError. */
+static int splat_binary_operator(const char *name) {
+  static const char *const ops[] = { "==", "!=", "eql?", "equal?", "===", "=~", "<=>",
+    "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", NULL };
+  for (int i = 0; ops[i]; i++) if (sp_streq(name, ops[i])) return 1;
+  return 0;
+}
 /* How many arguments the builtin requires, for a splat whose length only the
    run time knows and that splat_dispatch_on_length declined (a block, `&.`, a
    user method of the name that cannot take every count). Only the required
@@ -26147,6 +26157,7 @@ static int splat_builtin_arity(const char *name) {
   };
   for (int i = 0; tab[i].name; i++)
     if (sp_streq(name, tab[i].name)) return tab[i].arity;
+  if (splat_binary_operator(name)) return 1;
   return -1;
 }
 /* Whether some user method of this name could not take `n` positional
@@ -26212,7 +26223,30 @@ static int splat_builtin_range(const char *name, int *lo, int *hi, int *variadic
       if (variadic) *variadic = tab[i].variadic;
       return 1;
     }
+  if (splat_binary_operator(name)) {
+    if (lo) *lo = 1;
+    if (hi) *hi = 1;
+    if (variadic) *variadic = 0;
+    return 1;
+  }
   return 0;
+}
+/* An arm of a dynamic send (`public_send(*args)`) on a receiver whose class
+   only the run time knows takes the rest of the list into whatever builtin
+   its name is: the counts come from CRuby's arity tables, over every class
+   with the name, so the arm dispatches on the length as the names above do.
+   A name taking any number is dispatched up to a cap. */
+static int splat_dyn_arm_range(Compiler *c, int id, const char *name, int with_block,
+                               int *lo, int *hi, int *variadic) {
+  if (!nt_int((NodeTable *)c->nt, id, "dyn_arm", 0)) return 0;
+  int l, h;
+  if (!builtin_name_arity_span(name, with_block, &l, &h)) return 0;
+  int v = 0;
+  if (h < 0 || h > l + 3) { h = l + 3; v = 1; }
+  if (lo) *lo = l;
+  if (hi) *hi = h;
+  if (variadic) *variadic = v;
+  return 1;
 }
 /* A node that can be copied into each arm of the dispatch without being
    evaluated more than once, or out of order, in the arm that runs. */
@@ -26245,8 +26279,19 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cnm = nt_str(nt, id, "name");
   int lo, hi, variadic;
-  if (!cnm || !splat_builtin_range(cnm, &lo, &hi, &variadic)) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
+  if (!cnm) return 0;
+  int oblk = nt_ref(nt, id, "block");
+  /* counts from CRuby's tables are the block-carrying call's where there
+     is a block, so a dynamic send's arm keeps it: its arms already share
+     their one block node, and its length arms may as well */
+  int odyn = 0;
+  if (!splat_builtin_range(cnm, &lo, &hi, &variadic)) {
+    if (!splat_dyn_arm_range(c, id, cnm, oblk >= 0, &lo, &hi, &variadic)) return 0;
+    odyn = 1;
+  }
+  /* a block stays with the call there, and with an operator's one arm; it
+     moves the counts of the names listed above (`sub(pat) { }`) */
+  if (oblk >= 0 && !splat_binary_operator(cnm) && !odyn) return 0;
   /* insert(i, *objs) spreads at run time (emit_array_splat_mutator) */
   if (sp_streq(cnm, "insert") && sp_at > 0) return 0;
   const char *cop = nt_str(nt, id, "call_operator");
@@ -26282,6 +26327,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     }
     if (hi > 8) return 0;
   }
+  if (oblk >= 0 && lo != hi && !odyn) return 0;
   int fixed = argc - 1;
   int base = nt->count;
   int encl = c->nscope[id];
@@ -26453,7 +26499,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     if (nt_str(nt, id, "vis_enforce")) nt_node_set_str(nt, cl, "vis_enforce", "1");
     nt_node_set_int(nt, cl, "dyn_arm", nt_int(nt, id, "dyn_arm", 0));
     nt_node_set_ref(nt, cl, "receiver", nt_clone_subtree(nt, recv));
-    nt_node_set_ref(nt, cl, "block", -1);
+    nt_node_set_ref(nt, cl, "block", oblk);
     int an = -1;
     if (m > 0) {
       an = nt_new_node(nt, "ArgumentsNode");
@@ -26543,7 +26589,9 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     int listed = 0;
     for (int j = 0; fixed_arity_builtins[j]; j++)
       if (sp_streq(cnm, fixed_arity_builtins[j])) { listed = 1; break; }
-    if (!listed && !splat_builtin_range(cnm, NULL, NULL, NULL)) continue;
+    if (splat_binary_operator(cnm)) listed = 1;
+    if (!listed && !splat_builtin_range(cnm, NULL, NULL, NULL) &&
+        !splat_dyn_arm_range(c, id, cnm, nt_ref(nt, id, "block") >= 0, NULL, NULL, NULL)) continue;
     /* ...but the name has to BE the builtin. A receiverless call to a
        top-level `def count(*args)` is the user's own variadic method, and
        expanding its splat to the builtin's arity handed it one element where
@@ -26597,7 +26645,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
       if (sp_streq(cnm, "insert") && sp_at > 0) continue;
       /* A block moves the required count (`sub(pat) { .. }` takes one
          argument, not two), so leave those alone. */
-      n =nt_ref(nt, id, "block") >= 0 ? -1 : splat_builtin_arity(cnm);
+      n = nt_ref(nt, id, "block") >= 0 && !splat_binary_operator(cnm) ? -1 : splat_builtin_arity(cnm);
       /* slice has no arity to expand to on purpose (see the table). Leave the
          splat as it stands rather than refusing the program: Hash#slice's
          emitter iterates it, which is what the call means. */

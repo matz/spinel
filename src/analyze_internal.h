@@ -85,6 +85,7 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analy
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int builtin_method_known(const char *cls, const char *m);
 int builtin_method_names(const char *cls, const char **out, int cap);
+int builtin_name_arity_span(const char *name, int with_block, int *lo, int *hi);
 int builtin_arity_violation(Compiler *c, int id);
 int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);

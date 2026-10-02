@@ -1,0 +1,14 @@
+true
+false
+7
+"ab"
+true
+true
+7
+"wrong number of arguments (given 0, expected 1)"
+-1
+[1, 2]
+true
+7
+true
+3

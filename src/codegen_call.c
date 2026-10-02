@@ -19995,6 +19995,36 @@ static int io_builtin_name(const char *m) {
    table's and the argument-count table's rows, which cover different
    classes (IO's are only in the second): the names a send on a receiver of
    that class can reach (desugar_dynamic_send). May repeat a name. */
+/* The argument counts a builtin method of this name takes, over every
+   class that has one, as CRuby's tables above give them -- the
+   block-carrying call's counts `with_block` -- and *hi is -1 where one
+   takes any number. A spec row the probe could not prove says nothing.
+   Answers whether any class has the name. */
+int builtin_name_arity_span(const char *name, int with_block, int *lo, int *hi) {
+  int found = 0, l = 0, h = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    int n = pass ? (int)(sizeof sp_builtin_arity_spec_tbl / sizeof sp_builtin_arity_spec_tbl[0])
+                 : (int)(sizeof sp_builtin_arity_tbl / sizeof sp_builtin_arity_tbl[0]);
+    for (int i = 0; i < n; i++) {
+      int rl, rh;
+      if (pass) {
+        const SpAritySpec *r = &sp_builtin_arity_spec_tbl[i];
+        if (!r->m || !sp_streq(r->m, name)) continue;
+        rl = with_block ? r->blk_min : r->min; rh = with_block ? r->blk_max : r->max;
+        if (rl < 0) continue;
+      } else {
+        if (!sp_builtin_arity_tbl[i].m || !sp_streq(sp_builtin_arity_tbl[i].m, name)) continue;
+        int a = sp_builtin_arity_tbl[i].a;
+        rl = a >= 0 ? a : -a - 1; rh = a >= 0 ? a : -1;
+      }
+      if (!found) { l = rl; h = rh; found = 1; continue; }
+      if (rl < l) l = rl;
+      if (h >= 0 && (rh < 0 || rh > h)) h = rh;
+    }
+  }
+  if (found) { *lo = l; *hi = h; }
+  return found;
+}
 int builtin_method_names(const char *cls, const char **out, int cap) {
   int n = 0;
   for (int i = 0; sp_builtin_arity_tbl[i].cls && n < cap; i++)

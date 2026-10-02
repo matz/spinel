@@ -41710,17 +41710,10 @@ else {
       int oc_ci3 = comp_class_index(c, "Object");
       if (oc_ci3 >= 0) {
         int oc_mi3 = comp_method_in_chain(c, oc_ci3, name, NULL);
-        /* a yielding one takes the call's block through its proc form
-           (#5779): it has no symbol of its own, being spliced where it can */
-        int pf3 = oc_mi3 >= 0 && c->scopes[oc_mi3].yields ? scope_proc_form_of(c, oc_mi3) : -1;
-        int cblk3 = pf3 >= 0 && nt_ref(nt, id, "block") >= 0
-                    ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
-        if (cblk3 >= 0) {
-          Buf rb3; memset(&rb3, 0, sizeof rb3); emit_boxed(c, recv, &rb3);
-          emit_reopen_pf_call(c, id, pf3, cblk3, rb3.p ? rb3.p : "sp_box_nil()", b);
-          free(rb3.p);
-          return;
-        }
+        /* a yielding one goes through its proc form (#5779), with the
+           call's block or without one: it has no symbol of its own, being
+           spliced where it can */
+        if (oc_mi3 >= 0 && emit_reopen_block_call(c, id, recv, oc_mi3, NULL, b)) return;
         if (oc_mi3 >= 0) {
           /* a method with no value (it raises, or ends in a void call) where
              the site's slot wants one: nil in that slot's type */

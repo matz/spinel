@@ -708,6 +708,8 @@ typedef struct {
   TyKind *poly_builtin_ty; /* [node_cap] for a container read on a poly receiver a
                               user class also owns: the type the builtin surface
                               alone would give, so codegen can shape its arm (#3459) */
+  const struct BuiltinOp **bop_inf; /* [node_cap] the builtin-op row inference
+                                       answered the call with (--plan-check only) */
   int *hash_default_arg_memo; /* [node_cap] hash_new_default_arg(node) memo; INT_MIN = uncomputed */
   unsigned hash_default_arg_memo_gen; /* scope-index generation the memo was built for */
   int hash_default_arg_memo_cap;      /* allocated length of hash_default_arg_memo */

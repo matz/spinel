@@ -299,6 +299,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);
+/* bop_find for the call `id`, recording the row under --plan-check */
+struct BuiltinOp;
+const struct BuiltinOp *an_bop_find(Compiler *c, int id, TyKind rt, const char *name,
+                                    int argc, int has_block);
 int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out);
 /* The array a map-shaped call answers from its block's tail (analyze_infer_recv.c). */
 TyKind infer_map_block_ty(Compiler *c, int id, int block);

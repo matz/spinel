@@ -12207,20 +12207,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "localtime") || sp_streq(name, "getlocal")) buf_printf(b, "sp_time_localtime(%s)", r);
     /* the plain readers: builtin-op rows (builtin_ops.c) */
     else if (emit_builtin_op_text(c, id, recv, rt, name, r, b)) ;
-    else if (sp_streq(name, "to_f")) {
-      /* hoist the receiver into a temp: emitting `r` twice would evaluate a
-         side-effecting receiver (`c.utc`, which mutates the local) twice --
-         unsequenced modification (#2865). */
-      int tf = ++g_tmp;
-      buf_printf(b, "({ sp_Time _t%d = (%s); sp_time_ns_to_f(_t%d.tv_sec, _t%d.tv_nsec); })", tf, r, tf, tf);
-    }
-    else if (sp_streq(name, "subsec")) {
-      /* CRuby: Integer 0 for a whole second, else the exact Rational */
-      int tt = ++g_tmp;
-      buf_printf(b, "({ sp_Time _t%d = %s; _t%d.tv_nsec == 0 ? sp_box_int(0) "
-                    ": sp_box_rational(sp_rational_new((sp_int)_t%d.tv_nsec, 1000000000)); })",
-                 tt, r, tt, tt);
-    }
     else if (sp_streq(name, "iso8601") && sp_feature_enabled("time")) {
       if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else buf_printf(b, "sp_time_iso8601(%s)", r);
@@ -12228,22 +12214,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "httpdate") && sp_feature_enabled("time")) buf_printf(b, "sp_time_httpdate(%s)", r);
     else if ((sp_streq(name, "rfc2822") || sp_streq(name, "rfc822")) && sp_feature_enabled("time"))
       buf_printf(b, "sp_time_rfc2822(%s)", r);
-    else if (sp_streq(name, "xmlschema")) {
-      if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else buf_printf(b, "sp_time_iso8601(%s)", r);
-    }
-    else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "round")) &&
-             argc <= 1) {
-      /* The subsecond part to `ndigits` decimal places (#3089); no argument is
-         ndigits 0, whole seconds. A negative count is CRuby's ArgumentError
-         rather than a clamp to zero (#3700). The arithmetic lives in the
-         runtime so the boxed receiver answers exactly the same (#4109). */
-      int mode = sp_streq(name, "floor") ? 0 : sp_streq(name, "ceil") ? 1 : 2;
-      buf_printf(b, "sp_time_round_to(%s, ", r);
-      if (argc == 1) emit_int_expr(c, argv[0], b);
-      else buf_puts(b, "0");
-      buf_printf(b, ", %d)", mode);
-    }
     else if (sp_streq(name, "eql?") && argc == 1) {
       if (comp_ntype(c, argv[0]) == TY_TIME) {
         int tt = ++g_tmp, tu = ++g_tmp;
@@ -12274,11 +12244,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_bool(sp_time_isdst(_t%d) != 0));", ta, tt);
       buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(sp_time_zone(_t%d)));", ta, tt);
       buf_printf(b, " _t%d; })", ta);
-    }
-    else if (sp_streq(name, "to_r") && argc == 0) {
-      int tt = ++g_tmp;
-      buf_printf(b, "({ sp_Time _t%d = %s; sp_rational_new_i64((int64_t)_t%d.tv_sec * 1000000000LL + _t%d.tv_nsec, 1000000000); })",
-                 tt, r, tt, tt);
     }
     else if (sp_streq(name, "deconstruct_keys") && argc == 1) {
       /* a Hash of the requested keys (or all when the argument is nil). Each
@@ -12325,7 +12290,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       #undef SG_EMIT_KEY
       buf_printf(b, " sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); })", th);
     }
-    else if (sp_streq(name, "strftime") && argc == 1) { buf_printf(b, "sp_time_strftime(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
     /* Comparable#between? / #clamp compare a Time with a Time; CRuby raises
        ArgumentError ("comparison of Time with 1 failed") for anything else,
        where reading the operand as an sp_Time did not compile (#3865). */
@@ -12352,10 +12316,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; sp_Time _t%d = ", tb2); emit_expr(c, argv[1], b);
       buf_printf(b, "; sp_time_cmp(_t%d, _t%d) < 0 ? _t%d : (sp_time_cmp(_t%d, _t%d) > 0 ? _t%d : _t%d); })",
                  tt, ta, ta, tt, tb2, tb2, tt);
-    }
-    else if ((sp_streq(name, "+") || sp_streq(name, "-")) && argc == 1) {
-      buf_printf(b, "sp_time_add(%s, %s(sp_float)(", r, name[0] == '-' ? "-" : "");
-      emit_expr(c, argv[0], b); buf_puts(b, "))");
     }
     else if ((sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
               sp_streq(name, ">=") || sp_streq(name, "==") || sp_streq(name, "!=")) && argc == 1 &&
@@ -12452,12 +12412,6 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_MatchData_aref_len(%s, ", r); emit_int_expr(c, argv[0], b);
       buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
     }
-    /* MatchData#== / #eql?: structural equality (#2529) */
-    else if ((sp_streq(name, "==") || sp_streq(name, "eql?")) && argc == 1) {
-      TyKind at = comp_ntype(c, argv[0]);
-      if (at == TY_MATCHDATA) { buf_printf(b, "sp_MatchData_eq(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else { buf_printf(b, "((void)(%s), (void)(", r); emit_boxed(c, argv[0], b); buf_puts(b, "), 0)"); }
-    }
     /* MatchData#=== is Object's: == (structural, above); #equal? is identity */
     else if ((sp_streq(name, "===") || sp_streq(name, "equal?")) && argc == 1) {
       Buf as = expr_buf(c, argv[0]);
@@ -12474,41 +12428,8 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         if (kvt && sp_streq(kvt, "FalseNode")) sym_on = 0; }
       buf_printf(b, sym_on ? "sp_md_named_captures_sym(%s)" : "sp_md_named_captures(%s)", r);
     }
-    /* MatchData#match(n) is the group substring, #match_length(n) its byte
-       length (nil when the group did not participate) (#2501) */
-    /* a Symbol or String argument names a group; the integer slot read the
-       symbol's id as an index (#3630) */
-    else if ((sp_streq(name, "match") || sp_streq(name, "match_length")) && argc == 1 &&
-             (comp_ntype(c, argv[0]) == TY_SYMBOL || comp_ntype(c, argv[0]) == TY_STRING)) {
-      buf_printf(b, "sp_MatchData_%s(%s, ",
-                 sp_streq(name, "match") ? "aref_name" : "match_length_name", r);
-      if (comp_ntype(c, argv[0]) == TY_SYMBOL) {
-        buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")");
-      }
-      else emit_expr(c, argv[0], b);
-      buf_puts(b, ")");
-    }
-    else if (sp_streq(name, "match") && argc == 1) { buf_printf(b, "sp_MatchData_aref(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-    else if (sp_streq(name, "match_length") && argc == 1) { buf_printf(b, "sp_MatchData_match_length(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     /* #deconstruct is the captures array; #deconstruct_keys the named captures
        as a symbol-keyed hash (#2503) */
-    else if (sp_streq(name, "deconstruct_keys") && argc == 1) {
-      buf_printf(b, "sp_md_deconstruct_keys(%s, ", r); emit_boxed(c, argv[0], b); buf_puts(b, ")");  /* filters by keys (#3015) */
-    }
-    /* begin/end/offset/byte* accept a group NAME (String/Symbol) as well as an
-       index; route those to the _name variant, which resolves the name like #[].
-       A Symbol argument is passed as its interned string. */
-    else if ((sp_streq(name, "begin") || sp_streq(name, "end") || sp_streq(name, "offset") ||
-              sp_streq(name, "bytebegin") || sp_streq(name, "byteend") || sp_streq(name, "byteoffset")) &&
-             argc == 1) {
-      TyKind kt2 = comp_ntype(c, argv[0]);
-      int by_name = (kt2 == TY_STRING || kt2 == TY_SYMBOL);
-      buf_printf(b, "sp_MatchData_%s%s(%s, ", name, by_name ? "_name" : "", r);
-      if (kt2 == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if (by_name) emit_expr(c, argv[0], b);
-      else emit_int_expr(c, argv[0], b);
-      buf_puts(b, ")");
-    }
     else if (sp_streq(name, "values_at") && argc >= 1) {
       /* values_at(i, ...) / values_at(:name, ...) -> a poly array of the
          selected groups (nil when a group did not participate). A Symbol/String

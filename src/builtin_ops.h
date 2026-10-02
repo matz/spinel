@@ -58,6 +58,18 @@ typedef struct BuiltinOp {
    types the call with the row's result (bop_find_boxed). */
 #define BOPF_BOXED 1
 
+/* A row's recv may name a family of kinds rather than one; a caller looks
+   the family up with the family's value. Not a TyKind any value has. */
+#define BOP_ANY_HASH  ((TyKind)-2)   /* every Hash kind (ty_is_hash) */
+#define BOP_ANY_ARRAY ((TyKind)-3)   /* every Array kind (ty_is_array) */
+
+/* A row's result may be derived from the receiver's kind (bop_result). */
+#define BOPR_SELF       ((TyKind)-10)   /* the receiver's own kind */
+#define BOPR_HASH_VAL   ((TyKind)-11)   /* a Hash's value kind */
+#define BOPR_HASH_KEYS  ((TyKind)-12)   /* an Array of a Hash's keys */
+#define BOPR_HASH_VALS  ((TyKind)-13)   /* an Array of a Hash's values */
+#define BOPR_ELEM       ((TyKind)-14)   /* an Array's element kind */
+
 /* argc_max of a row that takes any number of arguments */
 #define BOP_ARGC_ANY 127
 
@@ -83,6 +95,10 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
    before reading the call's arguments, so receivers no row covers cost
    nothing. */
 int bop_covers(TyKind rt);
+
+/* What the call answers on a receiver of kind rt: the row's result, with a
+   derived result (BOPR_*) worked out from rt. */
+TyKind bop_result(const BuiltinOp *op, TyKind rt);
 
 /* The BOPF_BOXED row of kind rt for `name`, or NULL. */
 const BuiltinOp *bop_find_boxed(TyKind rt, const char *name, int argc, int has_block);

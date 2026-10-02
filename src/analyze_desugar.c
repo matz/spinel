@@ -6357,21 +6357,6 @@ static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super
   }
   return fwd_class_value_new_shape(nt);
 }
-/* whether a def of `name` takes a *rest or **rest: a forward to it wants the
-   splat channels, where the direct model (one synthesized parameter per
-   forwarded argument) binds the first argument to the rest slot */
-static int def_has_rest_by_name(const NodeTable *nt, const char *name) {
-  for (int id = 0; id < nt->count; id++) {
-    if (!fwd_node_is(nt, id, "DefNode")) continue;
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, name)) continue;
-    int pn = nt_ref(nt, id, "parameters");
-    if (pn < 0) continue;
-    if (fwd_node_is(nt, nt_ref(nt, pn, "rest"), "RestParameterNode") ||
-        fwd_node_is(nt, nt_ref(nt, pn, "keyword_rest"), "KeywordRestParameterNode")) return 1;
-  }
-  return 0;
-}
 static int fwd_new_node_like(NodeTable *nt, int like, const char *ty) {
   int id = nt_new_node(nt, ty);
   if (id < 0) return -1;
@@ -11056,9 +11041,6 @@ int desugar_class_new_blocks(Compiler *c) {
  * The hook method itself stays on M for anything that calls it by name. */
 static int incl_find_hook_named(const NodeTable *nt, const char *mn, int n0, const char **param,
                                 const char *hook_name);
-static int incl_find_hook(const NodeTable *nt, const char *mn, int n0, const char **param) {
-  return incl_find_hook_named(nt, mn, n0, param, "included");
-}
 static int incl_find_hook_named(const NodeTable *nt, const char *mn, int n0, const char **param,
                                 const char *hook_name) {
   for (int m = 0; m < n0; m++) {
@@ -12379,19 +12361,6 @@ static int mo_params_sig(const NodeTable *nt, int def, char *out, size_t cap) {
     o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s=%s;", R[r], x >= 0 ? (pn ? pn : "_") : "-");
   }
   return o < cap;
-}
-
-/* is_a?(K), or `self == true` / `self == false` for the booleans */
-static int mo_override_pred(NodeTable *nt, int like, const char *cn) {
-  if (!sp_streq(cn, "TrueClass") && !sp_streq(cn, "FalseClass")) return mo_guard_pred(nt, like, cn);
-  int call = fwd_new_node_like(nt, like, "CallNode");
-  int args = fwd_new_node_like(nt, like, "ArgumentsNode");
-  nt_node_set_ref(nt, call, "receiver", fwd_new_node_like(nt, like, "SelfNode"));
-  nt_node_set_str(nt, call, "name", "==");
-  int arg = fwd_new_node_like(nt, like, sp_streq(cn, "TrueClass") ? "TrueNode" : "FalseNode");
-  nt_node_set_arr(nt, args, "arguments", &arg, 1);
-  nt_node_set_ref(nt, call, "arguments", args);
-  return call;
 }
 
 int desugar_object_method_builtin_overrides(Compiler *c) {

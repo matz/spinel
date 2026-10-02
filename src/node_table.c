@@ -411,14 +411,6 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   if (type) node_set_type(nd, type, strlen(type));
 }
 
-void nt_node_set_content(NodeTable *nt, int id, const char *val) {
-  SpNode *nd = (SpNode *)node_at(nt, id);
-  if (!nd) return;
-  nt->version++;
-  free(nd->content);
-  nd->content = dup_n(val, strlen(val));
-}
-
 void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;

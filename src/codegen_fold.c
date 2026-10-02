@@ -686,11 +686,6 @@ int patch_lv_read_ntype(Compiler *c, int scope_idx, const char *name,
   return n;
 }
 
-void restore_lv_read_ntype(Compiler *c, int *saved_ids, TyKind *saved_tys, int n) {
-  for (int i = 0; i < n; i++) c->ntype[saved_ids[i]] = saved_tys[i];
-  free(saved_ids); free(saved_tys);
-}
-
 /* hash.transform_keys { |k| nk } / transform_values { |v| nv }: rebuild the
    hash applying the block to every key (or value), keeping the other half.
    Returns 1 if handled. */
@@ -4090,26 +4085,6 @@ else {
   return 1;
 }
 
-/* Emit "lv_<nm> = _t<tidx>" with boxing if the outer local is TY_POLY
-   but the element type et is scalar (string, int, float, bool). */
-void emit_block_param_assign(Compiler *c, int scope_id, const char *nm, int tidx, TyKind et, Buf *b) {
-  Scope *sc = comp_scope_of(c, scope_id);
-  LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
-  int box = lv && lv->type == TY_POLY && et != TY_POLY;
-  if (box) {
-    switch (et) {
-    case TY_INT:    buf_printf(b, "lv_%s = sp_box_int(_t%d);", nm, tidx); break;
-    case TY_STRING: buf_printf(b, "lv_%s = sp_box_str(_t%d);", nm, tidx); break;
-    case TY_FLOAT:  buf_printf(b, "lv_%s = sp_box_float(_t%d);", nm, tidx); break;
-    case TY_BOOL:   buf_printf(b, "lv_%s = sp_box_bool(_t%d);", nm, tidx); break;
-    default:        buf_printf(b, "lv_%s = _t%d;", nm, tidx); break;
-    }
-  }
-else {
-    buf_printf(b, "lv_%s = _t%d;", nm, tidx);
-  }
-}
-
 /* min / max { |a, b| a <=> b } as an expression: a single scan tracking the
    extreme under the comparator block. minmax's own block form is written in
    Ruby (builtins/enumerable.rb): every receiver desugar_builtin_enum_calls
@@ -6971,12 +6946,9 @@ static int kwh_consumed_by_kwparam(Compiler *c, Scope *m, int kwh) {
   return P.role == KWH_KEYWORDS || P.role == KWH_REFUSED;
 }
 
-void emit_rest_pack(Compiler *c, int from, int pos_argc, const int *argv, Buf *b) {
-  emit_rest_pack_kwh(c, from, pos_argc, argv, -1, b);
-}
-
-/* Like emit_rest_pack, but appends `kwh` (an unconsumed keyword hash that
-   degrades to one positional hash argument) as the trailing element. */
+/* Pack argv[from..pos_argc) into a rest Array, with `kwh` (an unconsumed
+   keyword hash that degrades to one positional hash argument) as the
+   trailing element; a negative `kwh` appends none. */
 void emit_rest_pack_kwh(Compiler *c, int from, int pos_argc, const int *argv, int kwh, Buf *b) {
   const NodeTable *nt = c->nt;
   /* Optimize: single pure-splat → direct conversion */

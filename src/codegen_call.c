@@ -2210,7 +2210,7 @@ int diagnose_eval_call(Compiler *c, int id) {
 }
 
 /* Unbox the boxed proc result (_sp_proc_poly_ret, an sp_RbVal) to the call's
-   statically-inferred return type. Inverse of emit_box_open: every first-class
+   statically-inferred return type. The inverse of boxing: every first-class
    proc now publishes its result boxed in the slot (the universal return ABI),
    so a `.call` reads it back through here. sp_poly_to_i/f coerce defensively
    (matching the historical float arm); pointer kinds read the union member the

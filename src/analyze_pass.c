@@ -551,11 +551,6 @@ typedef struct {
   int cap;     /* bucket count (power of two) */
 } LWIndex;
 
-static int lw_is_write_kind(NodeKind k) {
-  return k == NK_LocalVariableWriteNode || k == NK_LocalVariableOrWriteNode ||
-         k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableOperatorWriteNode;
-}
-
 static unsigned lw_hash(const char *name, int scope) {
   unsigned h = 2166136261u ^ (unsigned)scope;
   for (const char *p = name; p && *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }

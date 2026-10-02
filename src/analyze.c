@@ -2572,33 +2572,6 @@ static void blkp_stamp_subtree(const NodeTable *nt, int node, int *stamp, int ge
   for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(nt, node, i, &n); for (int k = 0; k < n; k++) blkp_stamp_subtree(nt, ids[k], stamp, gen); }
 }
 
-/* A block/lambda parameter is interned into the enclosing (flat) scope, so two
-   blocks reusing a name -- or a block param sharing a name with an enclosing
-   local -- collapse onto one LocalVar and one type. The rename pass below splits
-   them, but only for nodes this predicate accepts. We accept any block owned by
-   a call: the collision check in rename_shadowing_block_params is the real
-   filter (it fires only when the name is actually shared), and codegen reads
-   every param name through block_param_name + rename_local, so a renamed slot
-   stays consistent in the inliner, the standalone-proc lowering, and the
-   instance_eval/exec splice path alike. Returns 1 if `L` is such a node. */
-int blkp_needs_rename(Compiler *c, int L) {
-  const NodeTable *nt = c->nt;
-  const char *ty = nt_type(nt, L);
-  if (ty && sp_streq(ty, "LambdaNode")) return 1;
-  if (!ty || !sp_streq(ty, "BlockNode")) return 0;
-  /* A block owned by a call is renameable. Ordinary iteration blocks
-     (each/map/select/...) were once excluded on the assumption the inliner's
-     save/restore made them shadow-safe; that holds for the element-typed shadow
-     path but not when sibling blocks of divergent element types share a name
-     (e.g. `arr.map{|x| x+0.5}.map{|x| x.floor}` -- the poly-array map leg writes
-     the shared poly slot), so they go through the collision gate too. */
-  for (int id = 0; id < nt->count; id++) {
-    if (nt_ref(nt, id, "block") != L) continue;
-    return nt_str(nt, id, "name") != NULL;
-  }
-  return 0;
-}
-
 /* ---- Colliding nested-constant qualification --------------------------
  * Constants live in a flat cst_<NAME> namespace, so `RootNS::Mid::LEAF` and
  * `Lex::RootNS::Mid::LEAF` collide. When the same constant name is written
@@ -3563,8 +3536,8 @@ void rename_shadowing_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = nt->count;
   /* Reverse map block-node -> owning node (the node whose "block" ref is it),
-     built in one O(n) pass. blkp_needs_rename otherwise rescans all n nodes per
-     block, making this whole pass O(blocks*n) on large inputs (a flattened
+     built in one O(n) pass. Finding a block's owner by scanning all n nodes
+     per block made this whole pass O(blocks*n) on large inputs (a flattened
      runtime is ~500k nodes). */
   int *owner = malloc((size_t)n * sizeof(int));
   if (!owner) return;
@@ -3595,8 +3568,8 @@ void rename_shadowing_block_params(Compiler *c) {
     if (!ty) continue;
     int is_lambda = sp_streq(ty, "LambdaNode");
     if (!is_lambda && !sp_streq(ty, "BlockNode")) continue;
-    /* renameable: a lambda, or a block owned by a named call (see
-       blkp_needs_rename) -- resolved in O(1) through the owner index. */
+    /* renameable: a lambda, or a block owned by a named call -- resolved in
+       O(1) through the owner index. */
     if (!is_lambda) {
       int o = owner[L];
       if (o < 0 || nt_str(nt, o, "name") == NULL) continue;
@@ -8880,10 +8853,6 @@ static int oa_find(OAS *sl, int n, int sidx, LocalVar *lv) {
     const OAS *e = &sl[g_oa_ix.tab[h]];
     if (e->sidx == sidx && e->lv == lv) return g_oa_ix.tab[h];
   }
-  return -1;
-}
-static int oa_find_iv(OAS *sl, int n, int ici, int iiv) {
-  for (int i = 0; i < n; i++) if (sl[i].ici == ici && sl[i].iiv == iiv) return i;
   return -1;
 }
 static int oa_uf_find(OAS *sl, int i) {

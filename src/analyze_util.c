@@ -564,35 +564,6 @@ int class_recv_static_ci(Compiler *c, int node) {
   return class_var_static_ci(c, node);
 }
 
-/* A local variable that statically holds exactly one BUILTIN class constant
-   (every write in its scope assigns the same builtin class name): that name,
-   or NULL. The user-class analogue is class_var_static_ci; builtins have no
-   class index, so this resolves by name (#2715). */
-const char *builtin_class_var_static_name(Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  if (node < 0 || nt_kind(nt, node) != NK_LocalVariableReadNode) return NULL;
-  const char *vn = nt_str(nt, node, "name");
-  if (!vn) return NULL;
-  Scope *sc = comp_scope_of(c, node);
-  const char *found = NULL;
-  for (int w = comp_lvw_first(c, vn); w >= 0; w = comp_lvw_next(c, w)) {
-    const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
-    if (!local_write_binds_value(nt_kind(nt, w))) return NULL;
-    int val = nt_ref(nt, w, "value");
-    const char *cn = (val >= 0 && nt_kind(nt, val) == NK_ConstantReadNode)
-                     ? nt_str(nt, val, "name") : NULL;
-    /* a USER class constant qualifies too: the retargeted receiver then rides
-       every ConstantReadNode dispatch arm (method_defined?, subclasses,
-       class_eval, ...), not just the sites class_var_static_ci was wired into
-       (#2717, #2721) */
-    if (!cn || !(is_builtin_class_name(cn) || comp_class_index(c, cn) >= 0)) return NULL;
-    if (found && !sp_streq(found, cn)) return NULL;   /* two classes: dynamic */
-    found = cn;
-  }
-  return found;
-}
-
 /* The literal symbol behind a symbol-typed expression: a SymbolNode itself,
    or a local variable whose only write (in its scope, plain write) is one.
    Lets inject(:op)-style operator selection see through `s = :+; a.inject(s)`.

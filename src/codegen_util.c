@@ -1084,11 +1084,6 @@ const char *re_lit_src(Compiler *c, int nid) {
   nid = re_lit_node(c, nid);
   return nid < 0 ? NULL : nt_str(c->nt, nid, "unescaped");
 }
-/* Prism flags of a statically resolvable regexp (-1 if `nid` is not one). */
-int re_lit_flags(Compiler *c, int nid) {
-  nid = re_lit_node(c, nid);
-  return nid < 0 ? -1 : (int)nt_int(c->nt, nid, "flags", 0);
-}
 void emit_interp(Compiler *c, int id, Buf *b);  /* forward */
 int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n, Buf *b, int indent);
 
@@ -2983,57 +2978,6 @@ const char *ptr_array_stamp(Compiler *c, TyKind t) {
   snprintf(buf, sizeof buf, "SP_PTR_ELEM_OBJ, %d", ty_obj_array_class(t));
   return buf;
 }
-void emit_box_open(Compiler *c, TyKind t, Buf *b) {
-  switch (t) {
-  case TY_INT:      buf_puts(b, "sp_box_int("); return;
-  case TY_STRING:   buf_puts(b, "sp_box_str("); return;
-  case TY_FLOAT:    buf_puts(b, "sp_box_float("); return;
-  case TY_BOOL:     buf_puts(b, "sp_box_bool("); return;
-  case TY_NIL:      buf_puts(b, "sp_box_nil(); (void)("); return;
-  case TY_SYMBOL:   buf_puts(b, "sp_box_sym("); return;
-  /* Array slots are nilable C pointers (a nil-defaulting param, `[x] if cond`
-     in value position): box NULL as a proper nil, not a truthy OBJ wrapping
-     NULL that passes truthy checks and then segfaults on the first access
-     (#3275). Matches emit_boxed_text's array cases. */
-  case TY_INT_ARRAY: case TY_FLOAT_ARRAY: case TY_STR_ARRAY: case TY_POLY_ARRAY:
-    buf_puts(b, "sp_box_nullable_obj((void *)("); return;
-  /* A shared-mutable string boxes as the handle, the SP_BUILTIN_STRBUF object
-     the poly operators deref (sp_poly_is_strbuf). Without an arm of its own it
-     fell to TY_STRING's sp_box_str, which takes a `const char *` and was
-     handed an `sp_String *`: the C build stopped. emit_boxed_text has had the
-     handle arm; this is its open/close twin. */
-  case TY_STRBUF:   buf_puts(b, "sp_box_obj("); return;
-  case TY_CLASS:    buf_puts(b, "sp_box_class("); return;
-  case TY_COMPLEX:  buf_puts(b, "sp_box_complex("); return;
-  case TY_RATIONAL: buf_puts(b, "sp_box_rational("); return;
-  default: break;
-  }
-  if (ty_is_ptr_array(t))  buf_puts(b, "sp_box_ptr_array_k((void *)(");   /* by reference, stamped (#4486) */
-  /* Reference-backed builtins are nilable C pointers: box NULL as nil. */
-  else if (ty_nullable_builtin_id(t)) buf_puts(b, "sp_box_nullable_obj((void *)(");
-  else if (ty_is_object(t)) {
-    int cid = ty_object_class(t);
-    /* the struct typedef is sp_<c_name>; a bare `(<Name> *)` would never
-       have compiled, so this arm was effectively unreachable as written */
-    buf_printf(b, "sp_box_obj((%s *)( ", class_ctype(c, cid));
-  }
-  /* TY_POLY: already sp_RbVal, no prefix */
-}
-void emit_box_close(Compiler *c, TyKind t, Buf *b) {
-  (void)c;
-  if (t == TY_POLY || t == TY_UNKNOWN) return; /* no-op: already sp_RbVal */
-  { const char *nbid = ty_nullable_builtin_id(t);
-    if (nbid) { buf_printf(b, "), %s)", nbid); return; } }
-  if (t == TY_STRBUF)         { buf_puts(b, ", SP_BUILTIN_STRBUF)"); return; }
-  if (ty_is_object(t))        { buf_printf(b, "), %d)", ty_object_class(t)); return; }
-  /* array open used sp_box_nullable_obj((void *)( ... -- close with the kind. */
-  if (t == TY_INT_ARRAY)   { buf_puts(b, "), SP_BUILTIN_INT_ARRAY)"); return; }
-  if (t == TY_FLOAT_ARRAY) { buf_puts(b, "), SP_BUILTIN_FLT_ARRAY)"); return; }
-  if (t == TY_STR_ARRAY)   { buf_puts(b, "), SP_BUILTIN_STR_ARRAY)"); return; }
-  if (t == TY_POLY_ARRAY)  { buf_puts(b, "), SP_BUILTIN_POLY_ARRAY)"); return; }
-  if (ty_is_ptr_array(t))  { buf_printf(b, "), %s)", ptr_array_stamp(c, t)); return; }
-  buf_puts(b, ")");
-}
 /* comp_ntype through fold_seed_kind, which owns the rule (see types.c). */
 TyKind fold_seed_ntype(Compiler *c, int node) {
   return fold_seed_kind(comp_ntype(c, node), nt_type(c->nt, node));
@@ -3868,35 +3812,13 @@ static int scope_is_shadowed_scan(Compiler *c, int s) {
    site (no symbol exists), and a pruned/shadowed/transplanted method is never
    defined. A dispatch arm that targets a scope failing this test references an
    undefined symbol (issues #1583 yields, #1576 pruned). */
-/* ---- proc-form emission for yielding methods (#3399) ----
+/* ---- proc forms of yielding methods (#3399) ----
    A yielding method has no symbol: it is inlined at each call site with the
-   block spliced in. A poly dispatch has no call site to splice into, so for the
-   methods it names we emit a SECOND definition -- an ordinary function taking
-   the block as an sp_Proc * -- and point the dispatch at that. Marked during
-   dispatch emission (scope_mark_proc_form), emitted afterwards.
+   block spliced in. A poly dispatch has no call site to splice into, so the
+   methods it names get a SECOND definition -- an ordinary function taking the
+   block as an sp_Proc * -- and the dispatch points at that. The analyzer makes
+   it (make_yield_proc_forms) as a clone scope; the helpers below find it. */
 
-   The emission reuses the existing non-yielding shape rather than adding a
-   mode: with `yields` cleared the signature already grows the sp_Proc* param
-   and roots it, and with g_yield_proc_ref set every `yield` in the body already
-   lowers to a call on that proc. begin/end swap those in and back. */
-static char **g_pf_flag = NULL;
-static int g_pf_cap = 0;
-static char g_pf_synth[SP_MAX_PROC_FORM][32];
-
-void scope_mark_proc_form(Compiler *c, int s) {
-  if (s < 0 || s >= c->nscopes) return;
-  if (!g_pf_flag || g_pf_cap < c->nscopes) {
-    char **n = (char **)realloc(g_pf_flag, sizeof(char *) * (size_t)c->nscopes);
-    if (!n) return;
-    for (int i = g_pf_cap; i < c->nscopes; i++) n[i] = NULL;
-    g_pf_flag = n; g_pf_cap = c->nscopes;
-  }
-  if (g_pf_flag[s] != (char *)2) g_pf_flag[s] = (char *)1;
-}
-void scope_veto_proc_form(Compiler *c, int s) {
-  if (!g_pf_flag || s < 0 || s >= g_pf_cap || s >= c->nscopes) return;
-  g_pf_flag[s] = (char *)2;   /* sticky: a later marking pass must not revive it */
-}
 /* Is `node` a read of something that already holds its object (a local, an
    ivar, self, a constant)? Anything else -- a constructor, a method call --
    may hand back a fresh object whose only reference is the C temporary the
@@ -3949,51 +3871,6 @@ int proc_form_source(Compiler *c, int s) {
 }
 int scope_needs_proc_form(Compiler *c, int s) {
   return scope_proc_form_of(c, s) >= 0;
-}
-static int g_pf_saved_yields;
-static char *g_pf_saved_blk;
-static const char *g_pf_saved_ypr;
-static TyKind g_pf_saved_slot;
-static TyKind g_pf_saved_ret;
-static char g_pf_ref[64];
-int g_pf_emitting = 0;
-void scope_proc_form_begin(Compiler *c, int s) {
-  Scope *sc = &c->scopes[s];
-  g_pf_saved_yields = sc->yields;
-  g_pf_saved_blk = sc->blk_param;
-  g_pf_saved_ypr = g_yield_proc_ref;
-  g_pf_saved_slot = g_yield_slot_ty;
-  if (!sc->blk_param || !sc->blk_param[0]) {
-    /* a bare `yield` names no block: give the parameter a name of its own */
-    int idx = s < SP_MAX_PROC_FORM ? s : 0;
-    snprintf(g_pf_synth[idx], sizeof g_pf_synth[0], "__pf_blk");
-    sc->blk_param = g_pf_synth[idx];
-  }
-  sc->yields = 0;
-  snprintf(g_pf_ref, sizeof g_pf_ref, "lv_%s", sc->blk_param);
-  g_yield_proc_ref = g_pf_ref;
-  /* The proc form returns POLY, and it has to: the same yielding method
-     inlined at two call sites produces two different C types (an sp_int at
-     one, a const char * at the other), because each site is monomorphised
-     with its own block. One shared function cannot carry a per-call-site
-     return type, so it carries the boxed one and the dispatch unboxes into
-     its slot. sp_proc_call already answers through _sp_proc_poly_ret, so
-     asking for TY_POLY here is what makes each yield yield a value at all --
-     with the method's own (void, since it never needed one) the result was
-     computed and dropped. */
-  g_pf_saved_ret = sc->ret;
-  sc->ret = TY_POLY;
-  g_yield_slot_ty = TY_POLY;
-  g_pf_emitting = 1;
-}
-void scope_proc_form_end(Compiler *c, int s) {
-  Scope *sc = &c->scopes[s];
-  sc->yields = g_pf_saved_yields;
-  sc->blk_param = g_pf_saved_blk;
-  sc->ret = g_pf_saved_ret;
-  g_yield_proc_ref = g_pf_saved_ypr;
-  g_yield_slot_ty = g_pf_saved_slot;
-  g_pf_emitting = 0;
 }
 /* A module whose instance methods a TOP-LEVEL `include` makes callable: the
    bare-call path emits a direct call to the module's own function, so that

@@ -834,7 +834,6 @@ void cg_memo_put(CgMemo *m, const char *key, int tag, int val);
 /* The unescaped source of a regex literal or a constant bound to one (for
    capture detection). Returns NULL when nid is not a resolvable regex. */
 const char *re_lit_src(Compiler *c, int nid);
-int re_lit_flags(Compiler *c, int nid);
 void emit_interp(Compiler *c, int id, Buf *b);
 int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
@@ -991,11 +990,7 @@ int emit_native_splat_call(Compiler *c, int id, int cid, const char *name, int r
 int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, int kind,
                                int recv, int argc, const int *argv, Buf *b);
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
-/* Emit the boxing prefix/suffix to convert a typed value to sp_RbVal.
-   Call as: emit_box_open(t, b); emit_expr(c, node, b); emit_box_close(t, b). */
-void emit_box_open(Compiler *c, TyKind t, Buf *b);
 const char *ptr_array_stamp(Compiler *c, TyKind t);   /* "SP_PTR_ELEM_x, cls" for sp_box_ptr_array_k (#4486) */
-void emit_box_close(Compiler *c, TyKind t, Buf *b);
 /* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
 /* "Poly" / "Ptr" / array_kind, for a loop that walks the container. "Ptr" is
@@ -1080,18 +1075,12 @@ const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3
    where the last definition wins, matching comp_method_in_class. A top-level
    `def` is shadowed by a later top-level `def` of the same name. */
 int scope_is_shadowed(Compiler *c, int s);
-#define SP_MAX_PROC_FORM 4096
-extern int g_pf_emitting;   /* inside a proc-form body (#3399) */
-void scope_mark_proc_form(Compiler *c, int s);
-void scope_veto_proc_form(Compiler *c, int s);
 int  scope_needs_proc_form(Compiler *c, int s);
 int  scope_proc_form_of(Compiler *c, int s);
 int  expr_is_held_ref(Compiler *c, int node);   /* a read of a held object: no root needed */
 int  proc_form_live(Compiler *c, int s);
 int  proc_form_source(Compiler *c, int s);
 int  ctor_init_proc_form(Compiler *c, int cid);
-void scope_proc_form_begin(Compiler *c, int s);
-void scope_proc_form_end(Compiler *c, int s);
 int scope_has_callable_symbol(Compiler *c, int s);
 int scope_toplevel_included(Compiler *c, int s);
 int scope_uses_ivars(Compiler *c, int mi);
@@ -1118,7 +1107,6 @@ int resolve_forwarded_block(Compiler *c, int block);
 int emit_hash_collect_expr(Compiler *c, int id, Buf *b);
 int patch_lv_reads(Compiler *c, int id, const char *nm, TyKind ty, int *ids_out, TyKind *ty_out, int cap);
 int patch_lv_read_ntype(Compiler *c, int scope_idx, const char *name, TyKind new_ty, int min_id, int **saved_ids, TyKind **saved_tys);
-void restore_lv_read_ntype(Compiler *c, int *saved_ids, TyKind *saved_tys, int n);
 int emit_iter_autosplat(Compiler *c, int block, TyKind rt, const char *elem_src, int indent);
 int block_tail_is_unresolved(Compiler *c, int node);
 int emit_iter_value_expr(Compiler *c, int id, Buf *b);
@@ -1140,7 +1128,6 @@ int emit_inject_expr(Compiler *c, int id, Buf *b);
 int emit_reduce_block_expr(Compiler *c, int id, Buf *b);
 int emit_sortby_expr(Compiler *c, int id, Buf *b);
 int emit_sort_cmp_expr(Compiler *c, int id, Buf *b);
-void emit_block_param_assign(Compiler *c, int scope_id, const char *nm, int tidx, TyKind et, Buf *b);
 int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b);
 int emit_lazy_class_expr(Compiler *c, int id, Buf *b);
 int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b);
@@ -1331,7 +1318,6 @@ TyKind ffi_spec_to_ty(const char *spec);
 int local_sole_range_node(Compiler *c, int recv);
 int range_float_begin(Compiler *c, int recv);
 void emit_block_param_from_boxed(Compiler *c, const char *pname, TyKind pt, const char *src, Buf *b);
-void emit_rest_pack(Compiler *c, int from, int pos_argc, const int *argv, Buf *b);
 void emit_rest_pack_kwh(Compiler *c, int from, int pos_argc, const int *argv, int kwh, Buf *b);
 int rest_kwh_tail(Compiler *c, Scope *m, int kwh, int pos_argc);
 int rest_bind_argc(Compiler *c, Scope *m, int kwh, int pos_argc);

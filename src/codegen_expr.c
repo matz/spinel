@@ -2314,7 +2314,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
            `h[yield(x)] ||= []` as the hash the method returns. */
         TyKind _ynt = comp_ntype(c, id);
         int _ytail = 1;
-        if (_ynt == TY_POLY && !g_pf_emitting) {
+        if (_ynt == TY_POLY) {
           Scope *_ys = comp_scope_of(c, id);
           int _last = _ys ? scope_body_last(c, (int)(_ys - c->scopes)) : -1;
           if (_last >= 0 && _last != id) {
@@ -2329,7 +2329,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
           }
         }
         emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
-                             (g_pf_emitting || (_ynt != TY_UNKNOWN && _ynt != TY_POLY) || (_ynt == TY_POLY && !_ytail))
+                             ((_ynt != TY_UNKNOWN && _ynt != TY_POLY) || (_ynt == TY_POLY && !_ytail))
                                ? _ynt : g_yield_slot_ty,
                              b, 0, 1); }
       return;
@@ -2398,7 +2398,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
            into a map wants the element (boxed) form -- unboxing to the
            method's array type did not build (#3886). */
         emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
-                             (g_pf_emitting || _ynt != TY_UNKNOWN)
+                             _ynt != TY_UNKNOWN
                                ? _ynt : g_yield_slot_ty,
                              b, 0, 1); }
     else if (nt_str(nt, id, "call_operator") && sp_streq(nt_str(nt, id, "call_operator"), "&.")) {

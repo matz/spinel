@@ -355,7 +355,6 @@ static inline const int *nt_arr(const NodeTable *nt, int id, const char *key, in
   return NULL;
 }
 const char *nt_content(const NodeTable *nt, int id);
-void nt_node_set_content(NodeTable *nt, int id, const char *val);       /* NULL */
 
 /* Generic child iteration (for structural walks that don't know field
    names). Ref fields and array-field elements are the node's children. */

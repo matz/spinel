@@ -1,0 +1,63 @@
+0
+10
+2
+7
+1
+1
+nil
+"s"
+1.5
+:big
+[10, :after, -1, :after, 30, :after]
+[101, 100, 103]
+5
+ensure
+8
+5
+1
+7
+:done
+[101, 100, 109]
+2
+4
+[6, 1, :end]
+[0, 2, :end]
+[5, :proc_end]
+[8, :lambda_end]
+0
+6
+:s
+5
+3
+nil
+[1, 0, 3]
+30
+-1
+method ensure
+method ensure
+1
+4
+"neg"
+"pos"
+0
+9
+:big
+"a"
+"a big"
+"b big"
+10
+20
+"xx"
+"y"
+"yyy"
+2
+0
+2
+1
+20
+["x", "y"]
+turn 1: 1 0
+turn 2: 0 0
+101
+3
+-4

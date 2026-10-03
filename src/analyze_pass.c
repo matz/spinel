@@ -9638,6 +9638,181 @@ static int ie_subtree_self_calls(Compiler *c, int root, const char *cls, int dep
   return changed;
 }
 
+/* The first jump of kind `k` in the subtree that binds to the block `node`
+   is the body of, or -1. One in a nested loop, block, lambda or def binds
+   there. */
+static int once_block_jump(const NodeTable *nt, int node, NodeKind k, int depth) {
+  if (node < 0 || node >= nt->count || depth > 200) return -1;
+  NodeKind nk = nt_kind(nt, node);
+  if (nk == k) return node;
+  if (nk == NK_WhileNode || nk == NK_UntilNode || nk == NK_ForNode || nk == NK_BlockNode ||
+      nk == NK_LambdaNode || nk == NK_DefNode || nk == NK_ClassNode || nk == NK_ModuleNode) return -1;
+  const SpNode *nd = &nt->nodes[node];
+  for (int i = 0; i < nd->nr; i++) {
+    int f = once_block_jump(nt, nd->r[i].ref, k, depth + 1);
+    if (f >= 0) return f;
+  }
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++) {
+      int f = once_block_jump(nt, nd->a[i].ids[j], k, depth + 1);
+      if (f >= 0) return f;
+    }
+  return -1;
+}
+
+/* The block of Class.new or Module.new is a ClassNode's body by now
+   (desugar_class_new_blocks), and the block of Struct.new or Data.define is
+   read as one where it stands. A `next` in it stops the body there, and the
+   definitions after it are not made; which methods a class has is settled
+   at compile time, so that is refused. Written in a `class` body it is a
+   SyntaxError, so only those blocks bring one here. */
+static void refuse_class_body_next(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int body = -1;
+    if (k == NK_ClassNode || k == NK_ModuleNode) body = nt_ref(nt, id, "body");
+    else if (k == NK_CallNode && is_struct_call(c, id)) {
+      int blk = nt_ref(nt, id, "block");
+      if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) body = nt_ref(nt, blk, "body");
+    }
+    int nx = once_block_jump(nt, body, NK_NextNode, 0);
+    if (nx >= 0)
+      unsupported_feature(c, nx, "next in a block that is a class body (the block of Class.new, "
+                                 "Module.new, Struct.new or Data.define): the definitions after it "
+                                 "would be made or not at run time");
+  }
+}
+
+static int program_defines(const Compiler *c, const char *name) {
+  for (int k = 0; k < c->nscopes; k++)
+    if (c->scopes[k].name && sp_streq(c->scopes[k].name, name)) return 1;
+  return 0;
+}
+
+/* Is `id` a call whose literal block runs once, where it is written, with no
+   loop of its own: instance_eval or instance_exec on anything but a user
+   object, or Kernel#catch? A user object's instance_exec is spliced inside a
+   loop already (emit_call's ie_direct) and a receiverless one is self's, so
+   both keep their form. A receiver whose type is not known yet is asked
+   again on a later round. */
+static int runs_block_once_unlooped(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  if (sp_streq(nm, "catch")) return recv < 0 && !program_defines(c, "catch");
+  if (sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")) {
+    if (recv < 0) return 0;
+    TyKind rt = infer_type(c, recv);
+    return rt != TY_UNKNOWN && !ty_is_object(rt);
+  }
+  return 0;
+}
+
+/* Is `id` the generated to_h of a Struct, the one whose block is unrolled
+   into one store per member with no loop (emit_call's struct methods)? */
+static int struct_to_h_with_block(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || !sp_streq(nm, "to_h") || recv < 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
+  TyKind rt = infer_type(c, recv);
+  if (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_struct) return 0;
+  return comp_resolve_member(c, ty_object_class(rt), nm, 0, NULL, NULL) == SP_MEMBER_NONE;
+}
+
+/* A CallNode at the source position of `like`. */
+static int once_new_call_like(NodeTable *nt, int like) {
+  int id = nt_new_node(nt, "CallNode");
+  if (id < 0) return -1;
+  nt_node_set_int(nt, id, "node_line", nt_int(nt, like, "node_line", 0));
+  nt_node_set_int(nt, id, "node_file", nt_int(nt, like, "node_file", 0));
+  nt_node_set_int(nt, id, "node_col", nt_int(nt, like, "node_col", 0));
+  return id;
+}
+
+/* A `next` in a block that runs once where it is written leaves that block
+   with its value, which is what `then` does with its own block:
+
+     5.instance_eval { next 0 if c; self * 2 }
+       ->  5.instance_eval { true.then { next 0 if c; self * 2 } }
+
+   The splices of these blocks put no loop around the body, so the `next`
+   came out as a C `continue` with nothing to continue. Inside `then` it has
+   the `do { } while (0)` and the value slot of emit_block_value_into, and
+   the block's type joins the `next` values (then_block_value_ty). A body
+   with a `break` or `redo` of its own stays as it is: either would bind to
+   the `then`. So does every body of a program with a `then` of its own.
+
+   A Struct's to_h is unrolled into one store per member, the pair read off
+   the block's last statement, so there the members go into a Hash first:
+
+     s.to_h { |k, v| next [k, 0] if c; [k, v] }
+       ->  s.to_h.to_h { |k, v| next [k, 0] if c; [k, v] } */
+static int desugar_once_block_next(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  if (comp_kind_first(c, NK_NextNode) < 0) return 0;
+  refuse_class_body_next(c);
+  int user_then = program_defines(c, "then");
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    if (nt_int(nt, blk, "next_wrapped", 0)) continue;   /* fixpoint: wrap once */
+    int body = nt_ref(nt, blk, "body");
+    if (body < 0 || once_block_jump(nt, body, NK_NextNode, 0) < 0) continue;
+    if (struct_to_h_with_block(c, id)) {
+      /* the Hash's to_h runs its block in a loop, where a `next` hands in
+         the pair for that member */
+      int base = nt->count;
+      int h = once_new_call_like(nt, id);
+      if (h < 0) continue;
+      nt_node_set_ref(nt, h, "receiver", nt_ref(nt, id, "receiver"));
+      nt_node_set_str(nt, h, "name", "to_h");
+      nt_node_set_ref(nt, h, "arguments", -1);
+      nt_node_set_ref(nt, h, "block", -1);
+      nt_node_set_ref(nt, id, "receiver", h);
+      nt_node_set_int(nt, blk, "next_wrapped", 1);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+      changed = 1;
+      continue;
+    }
+    if (once_block_jump(nt, body, NK_BreakNode, 0) >= 0 || once_block_jump(nt, body, NK_RedoNode, 0) >= 0) continue;
+    { int bp = nt_ref(nt, blk, "parameters");
+      NodeKind bpk = bp >= 0 ? nt_kind(nt, bp) : NK_BlockParametersNode;
+      if (bpk != NK_BlockParametersNode) continue; }   /* _1 / it name the block they are read in */
+    if (user_then || !runs_block_once_unlooped(c, id)) continue;
+
+    int base = nt->count;
+    int inner = nt_new_node(nt, "BlockNode");
+    int on = nt_new_node(nt, "TrueNode");
+    int call = once_new_call_like(nt, id);
+    int outer = nt_new_node(nt, "StatementsNode");
+    int ibody = nt_kind(nt, body) == NK_StatementsNode ? body : nt_new_node(nt, "StatementsNode");
+    if (inner < 0 || on < 0 || call < 0 || outer < 0 || ibody < 0) continue;
+    if (ibody != body) nt_node_set_arr(nt, ibody, "body", &body, 1);   /* a begin/rescue body */
+    nt_node_set_ref(nt, inner, "parameters", -1);
+    nt_node_set_ref(nt, inner, "body", ibody);
+    nt_node_set_ref(nt, call, "receiver", on);
+    nt_node_set_str(nt, call, "name", "then");
+    nt_node_set_ref(nt, call, "arguments", -1);
+    nt_node_set_ref(nt, call, "block", inner);
+    nt_node_set_arr(nt, outer, "body", &call, 1);
+    nt_node_set_ref(nt, blk, "body", outer);
+    nt_node_set_int(nt, blk, "next_wrapped", 1);
+
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+    changed = 1;
+  }
+  return changed;
+}
+
 /* Does the subtree under `node` read or write an ivar? */
 static int subtree_has_ivar(const NodeTable *nt, int node, int depth) {
   if (node < 0) return 0;
@@ -9668,7 +9843,8 @@ static int subtree_has_ivar(const NodeTable *nt, int node, int depth) {
    are singleton definitions and stay out (the documented dsm limit). */
 int desugar_instance_eval_builtin(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
+  /* first, so that a body with a `next` is spliced with its `then` around it */
+  int changed = desugar_once_block_next(c);
   int n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;

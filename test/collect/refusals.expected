@@ -36,6 +36,10 @@ spinel: 1 refusal, nothing written
 == test/reject/bind_call_class_value_block_target.rb [promote] rc=1
 spinel: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
 spinel: 1 refusal, nothing written
+== test/reject/class_body_block_next.rb [default] rc=1
+spinel: next in a block that is a class body (the block of Class.new, Module.new, Struct.new or Data.define): the definitions after it would be made or not at run time
+== test/reject/class_body_block_next.rb [promote] rc=1
+spinel: next in a block that is a class body (the block of Class.new, Module.new, Struct.new or Data.define): the definitions after it would be made or not at run time
 == test/reject/class_eval_on_class_in_method.rb [default] rc=1
 spinel: Class.class_eval is not supported here: methods are added to Class only by a top-level `class Class` or `Class.class_eval { ... }`
 == test/reject/class_eval_on_class_in_method.rb [promote] rc=1

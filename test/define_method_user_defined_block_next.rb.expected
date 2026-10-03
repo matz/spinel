@@ -1,0 +1,7 @@
+[[:a, 1], :after]
+["s", :after]
+3
+[:d, 5]
+[[:h, 11], :late]
+[[:f, 7], :away]
+[[:g, 9], :helper]

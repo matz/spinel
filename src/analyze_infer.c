@@ -6260,6 +6260,27 @@ static int infer_constant_query_call(Compiler *c, int id, const NodeTable *nt, c
   return 0;
 }
 
+static int infer_send_blind(Compiler *c, int id, int recv, const char *name, TyKind *out) {
+  const NodeTable *nt = c->nt;
+  /* A retargeted `x.send(:m)` depends on the program's method ancestry and
+     yielding scopes, not just the builtin receiver and argument kinds. */
+  if (nt_str(nt, id, "send_blind") && recv >= 0 && nt_ref(nt, id, "block") < 0) {
+    int smi = comp_method_index(c, name);
+    if (smi >= 0 && !(smi < c->nscopes && c->scopes[smi].yields)) {
+      TyKind srt = infer_type(c, recv);
+      if (!send_blind_recv_owns(c, recv, srt, name)) { *out = an_user_call(c, id, smi, UC_SEND_BLIND, -1); return 1; }
+      /* a boxed receiver answers by its class, the dispatch or the
+         top-level def: boxed, as codegen's split hands either back */
+      if (srt == TY_POLY) {
+        an_user_call_record(c, id, smi, UC_POLY, -1);
+        *out = TY_POLY; return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
 static TyKind infer_call_inner(Compiler *c, int id) {
   /* the call is inferred afresh: only the row this pass answers with counts */
   /* the builtin-only re-derivation (an_builtin_answer) asks what the call
@@ -6423,14 +6444,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       return TY_POLY;
   }
 
-  /* A retargeted `x.send(:m)` reaching a top-level def: see the codegen twin. */
-  if (nt_str(nt, id, "send_blind") && recv >= 0 && nt_ref(nt, id, "block") < 0) {
-    int smi = comp_method_index(c, name);
-    if (smi >= 0 && !(smi < c->nscopes && c->scopes[smi].yields)) {
-      if (!send_blind_recv_owns(c, recv, infer_type(c, recv), name))
-        return an_user_call(c, id, smi, UC_SEND_BLIND, -1);
-    }
-  }
+  TyKind send_ret;
+  if (infer_send_blind(c, id, recv, name, &send_ret)) return send_ret;
 
   /* A call with NO receiver resolves the way CRuby's ancestry does: the
      enclosing scope's own chain first, then Object -- where a top-level `def`

@@ -36,6 +36,7 @@ int cplan_dispatch_form(Compiler *c, int cid, const char *name, int has_base) {
 }
 
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
+  p->send_fallback = -1;
   p->mi = mi; p->owner_ci = (short)owner;
   p->via = (unsigned char)via; p->dispatch = (unsigned char)dispatch;
   p->by_name = 0;
@@ -278,11 +279,23 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);
-  else if (k == NK_CallNode) cplan_resolve_call(c, id, p);
+  else if (k == NK_CallNode) {
+    cplan_resolve_call(c, id, p);
+    int recv = nt_ref(c->nt, id, "receiver");
+    const char *name = nt_str(c->nt, id, "name");
+    if (recv >= 0 && comp_ntype(c, recv) == TY_POLY &&
+        nt_str(c->nt, id, "send_blind") && nt_ref(c->nt, id, "block") < 0 && name &&
+        send_blind_recv_owns(c, recv, TY_POLY, name)) {
+      int mi = comp_method_index(c, name);
+      if (mi >= 0 && !c->scopes[mi].yields) p->send_fallback = mi;
+    }
+  }
 }
 
 int cplan_virtual_member(Compiler *c, int id, const CallPlan *p, int mi) {
-  if (p->mi < 0 || mi < 0) return 0;
+  if (mi < 0) return 0;
+  if (p->send_fallback == mi) return 1;
+  if (p->mi < 0) return 0;
   if (p->mi == mi) return 1;
   if (p->dispatch < CP_SWITCH) return 0;
   const char *name = nt_str(c->nt, id, "name");

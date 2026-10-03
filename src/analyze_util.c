@@ -1,4 +1,5 @@
 #include "analyze_internal.h"
+#include "builtin_names.h"
 #include <errno.h>
 #include <limits.h>
 
@@ -2350,7 +2351,17 @@ int send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name) {
   NodeKind rk = nt_kind(c->nt, recv);
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
            ? comp_class_index(c, nt_str(c->nt, recv, "name")) : self_class_static_ci(c, recv);
-  return ci >= 0 && comp_cmethod_in_chain(c, ci, name, NULL) >= 0;
+  if (ci >= 0 && comp_cmethod_in_chain(c, ci, name, NULL) >= 0) return 1;
+  if (srt == TY_POLY) {
+    for (int k = 0; k < c->nclasses; k++)
+      if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
+    return 0;
+  }
+  const char *bc = srt == TY_INT ? "Integer" : srt == TY_FLOAT ? "Float"
+                 : (srt == TY_STRING || srt == TY_STRBUF) ? "String" : srt == TY_SYMBOL ? "Symbol"
+                 : ty_is_array(srt) ? "Array" : ty_is_hash(srt) ? "Hash"
+                 : srt == TY_RANGE ? "Range" : srt == TY_PROC ? "Proc" : srt == TY_TIME ? "Time" : NULL;
+  return bc && (builtin_method_known(bc, name) || builtin_module_owns(bc, name));
 }
 
 /* A receiverless call directly in a class body is sent to the class. */

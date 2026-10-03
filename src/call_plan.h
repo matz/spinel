@@ -52,6 +52,7 @@ typedef enum {
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
+  int send_fallback;       /* boxed send: top-level def if no class arm, or -1 */
   short owner_ci;          /* the class whose chain was searched, or -1 */
   unsigned char via;       /* UC_* */
   unsigned char dispatch;  /* CplanDispatch */

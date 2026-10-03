@@ -4,6 +4,7 @@
    (codegen_call_arms.h). */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
@@ -1714,7 +1715,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       /* #name also names a Class and an Encoding, #receiver an exception's:
          take this arm only where the result slot is the boxed one those other
          readings do not use */
-      comp_ntype(c, id) == TY_POLY &&
+      repr_of(c, id).kind == RK_BOXED &&
       (!sp_streq(name, "name") || !sp_feature_required("ostruct"))) {
     /* A user READER owns the name just as a user method does: `attr_accessor
        :name` on a class this receiver could be makes the builtin arm the wrong
@@ -2071,5 +2072,54 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       emit_proc_literal(c, id, b); return 1;
     }
   }
+  return 0;
+}
+
+int emit_send_blind(Compiler *c, int id, Buf *b) {
+  if (nt_str(c->nt, id, "send_blind")) {
+    const CallPlan *plan = cplan_user(c, id);
+    if (plan->via == UC_SEND_BLIND) { emit_method_call(c, id, b); return 1; }
+    int smi = plan->send_fallback;
+    if (smi >= 0) {
+      int srcv = nt_ref(c->nt, id, "receiver");
+      /* A boxed receiver answers by its class at run time: one whose class
+         defines the name takes the dispatch, any other reaches the top-level
+         def, Object's (the call is typed boxed for the two). The receiver
+         runs once, into a temp both arms read, and the arguments that could
+         run twice are run ahead of them. */
+      if (g_arm.send_split != id && g_n_argov < MAX_ARG_OVERRIDE &&
+          repr_of(c, id).kind == RK_BOXED) {
+        int tv = ++g_tmp;
+        Buf rb; memset(&rb, 0, sizeof rb);
+        emit_boxed(c, srcv, &rb);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tv, rb.p ? rb.p : "sp_box_nil()", tv);
+        free(rb.p);
+        int sac = 0; const int *sav = call_args(c->nt, id, &sac);
+        int sv_argov = g_n_argov;
+        view_bind(srcv, "_t%d", tv);
+        if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
+        buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
+        const PolyPlan *arms = cplan_poly_arms(c, id);
+        for (int k = 0; k < arms->n; k++)
+          if (arms->arm[k].key >= 0 && arms->arm[k].key < c->nclasses)
+            buf_printf(b, " || _t%d.cls_id == %d", tv, arms->arm[k].key);
+        buf_puts(b, "))) ? (");
+        int sv_split = view_push_arm(g_pd_skip, g_prbd_skip, g_poly_builtin_arm);
+        g_arm.send_split = id;
+        emit_expr(c, id, b);
+        view_pop(c, sv_split);
+        buf_puts(b, ") : (");
+        Buf mb; memset(&mb, 0, sizeof mb);
+        emit_method_call(c, id, &mb);
+        emit_boxed_text(c, c->scopes[smi].ret, mb.p ? mb.p : "0", b);
+        free(mb.p);
+        buf_puts(b, "))");
+        view_unbind(sv_argov);
+        return 1;
+      }
+    }
+  }
+
   return 0;
 }

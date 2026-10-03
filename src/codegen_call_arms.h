@@ -251,4 +251,6 @@ int emit_implicit_self_member(Compiler *c, int id, Buf *b);
 int emit_reopen_own_call(Compiler *c, int id, int dispatch_cid, Buf *b);
 int implicit_self_plan_mi(Compiler *c, int id, int dispatch_cid);
 
+int emit_send_blind(Compiler *c, int id, Buf *b);
+
 #endif

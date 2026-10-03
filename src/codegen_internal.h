@@ -1434,8 +1434,9 @@ int view_mark(void);
    pushed and popped like a view (view_push_arm / view_pop) and put back by
    view_unwind: the node whose dispatch declines its own re-entry (the
    method dispatch's g_pd_skip, the block dispatch's g_prbd_skip), and
-   g_poly_builtin_arm, under which no user class owns a name. */
-typedef struct { int pd_skip, prbd_skip, builtin_arm; } ArmCtx;
+   g_poly_builtin_arm, under which no user class owns a name. send_split
+   prevents a boxed send's class arm from splitting the same call again. */
+typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)

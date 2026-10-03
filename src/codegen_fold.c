@@ -104,8 +104,8 @@ void emit_method_call(Compiler *c, int id, Buf *b) {
      names another method than the by-name lookup. */
   const CallPlan *pl = cplan_user(c, id);
   int mi;
-  if (pl->mi >= 0 && (pl->via == UC_TOP || pl->via == UC_SEND_BLIND)) {
-    mi = pl->mi;
+  if (pl->send_fallback >= 0 || (pl->mi >= 0 && (pl->via == UC_TOP || pl->via == UC_SEND_BLIND))) {
+    mi = pl->send_fallback >= 0 ? pl->send_fallback : pl->mi;
     if (g_plan_check) cplan_served("emit_method_call");
     if (g_plan_check && mi != comp_method_index(c, name))
       fprintf(stderr, "plan-check: cplan-conflict: emit_method_call node %d %s: plan %d, by name %d\n",

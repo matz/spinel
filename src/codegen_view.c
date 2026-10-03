@@ -48,7 +48,7 @@ static int view_sp;
 static int view_nodes;   /* the entries that view a node (all but VK_ARM) */
 static unsigned view_epoch_n;
 
-ArmCtx g_arm = { -1, -1, 0 };
+ArmCtx g_arm = { -1, -1, 0, -1 };
 
 /* Argument-hoist overrides: emit_args_filled pre-evaluates GC-hazardous
    call arguments into rooted temps; emit_expr then substitutes the temp

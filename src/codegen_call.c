@@ -24754,15 +24754,7 @@ void emit_call_body(Compiler *c, int id, Buf *b) {
   /* A retargeted `x.send(:m)`: send ignores visibility, and a top-level `def`
      is Object's private instance method -- reachable this way and no other.
      The receiver's own class answers first when it defines the name. */
-  if (nt_str(c->nt, id, "send_blind") && nt_ref(c->nt, id, "receiver") >= 0 &&
-      nt_ref(c->nt, id, "block") < 0) {
-    const char *sn = nt_str(c->nt, id, "name");
-    int smi = sn ? comp_method_index(c, sn) : -1;
-    if (smi >= 0 && !(smi < c->nscopes && c->scopes[smi].yields)) {
-      int srecv = nt_ref(c->nt, id, "receiver");
-      if (!send_blind_recv_owns(c, srecv, comp_ntype(c, srecv), sn)) { emit_method_call(c, id, b); return; }
-    }
-  }
+  if (emit_send_blind(c, id, b)) return;
 
   /* A bare call resolves the way CRuby's ancestry does: the enclosing class's
      own chain, then Object -- where a top-level `def` lands -- and only then a

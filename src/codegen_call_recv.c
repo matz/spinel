@@ -3379,40 +3379,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "_t%d; })", tn2);
       { *out = 1; return 1; }
     }
-    if ((sp_streq(name, "concat") || sp_streq(name, "<<") ||
-         sp_streq(name, "prepend")) && argc >= 1) {
-      /* a STRBUF-promoted local (repeated `<<`) appends in place: the read
-         form sp_String_cstr(lv) is not an lvalue, so the generic write-back
-         below would emit an invalid assignment (#2020). prepend replaces the
-         buffer with args-then-contents, keeping the handle stable (#3227). */
-      { char sref0[1024];
-        if (strbuf_slot_ref(c, recv, sref0, sizeof sref0)) {
-          int tb2 = ++g_tmp;
-          buf_printf(b, "({ sp_String *_t%d = %s;", tb2, sref0);
-          if (sp_streq(name, "prepend")) {
-            int tp3 = ++g_tmp;
-            buf_printf(b, " const char *_t%d = ", tp3);
-            for (int j = 0; j < argc; j++) buf_puts(b, "sp_str_concat(");
-            emit_str_expr(c, argv[0], b);
-            for (int j = 1; j < argc; j++) { buf_puts(b, ", "); emit_str_expr(c, argv[j], b); buf_puts(b, ")"); }
-            buf_printf(b, ", sp_String_cstr(_t%d)); sp_String_set_bin(_t%d, _t%d);", tb2, tb2, tp3);
-          }
-          else {
-            for (int j = 0; j < argc; j++) {
-              buf_printf(b, " sp_String_append(_t%d, ", tb2);
-              { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb2);
-                emit_str_append_arg(c, argv[j], rt, b); }
-              buf_puts(b, ");");
-            }
-          }
-          /* an append marked to hand out the handle (`r = obj.buf << x`)
-             answers the receiver itself; otherwise its String read */
-          if (c->strbuf_box[id]) buf_printf(b, " _t%d; })", tb2);
-          else buf_printf(b, " sp_String_cstr(_t%d); })", tb2);
-          { *out = 1; return 1; }
-        }
-      }
-    }
+    if (emit_string_handle_append(c, id, b, name, recv, argc, argv)) { *out = 1; return 1; }
     /* chained append in value position (`t = s << a << b`): the generic form
        below writes back only when the receiver is a direct lvalue read, so a
        chain's outer links never reach the base -- `s` kept just the first

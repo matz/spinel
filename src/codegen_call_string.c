@@ -4,6 +4,7 @@
    (codegen_call_arms.h). */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
@@ -982,6 +983,102 @@ int emit_call_symbol_misc_arms(Compiler *c, Buf *b, const char *name, int recv, 
     buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == (");
     emit_expr(c, argv[0], b); buf_puts(b, "))");
     return 1;
+  }
+  return 0;
+}
+
+/* An append chain over an existing handle must hand that handle to the
+   next link. Mark its receiver links before operand ordering can bind a
+   String read into a const char * temp, and restore their emission types
+   afterwards. No slot becomes shared here. */
+int emit_str_append_chain_handle(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  if (!name || !is_string_append(name)) return 0;
+  int recv = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments"), argc = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &argc);
+  if (recv < 0 || argc < 1 || nt_ref(nt, id, "block") >= 0) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (rt != TY_STRING && rt != TY_STRBUF) return 0;
+  int first = unwrap_parens(c, recv);
+  Repr rp = repr_of(c, first);
+  if (rp.handle && rp.kind == RK_STRBUF) return 0;
+  int links[64], nlinks = 0, cur = recv, calls = 0;
+  while (cur >= 0 && nlinks < 64) {
+    if (nt_kind(nt, cur) == NK_ParenthesesNode) {
+      int body = nt_ref(nt, cur, "body"), n = 0;
+      const int *bb = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+      if (n != 1) break;
+      links[nlinks++] = cur; cur = bb[0]; continue;
+    }
+    if (nt_kind(nt, cur) != NK_CallNode) break;
+    const char *nm = nt_str(nt, cur, "name");
+    int ca = nt_ref(nt, cur, "arguments"), ac = 0;
+    if (ca >= 0) nt_arr(nt, ca, "arguments", &ac);
+    if (!nm || !is_string_append(nm) ||
+        ac < 1 || nt_ref(nt, cur, "block") >= 0) break;
+    links[nlinks++] = cur; calls++;
+    cur = nt_ref(nt, cur, "receiver");
+  }
+  char ref[1024];
+  if (!calls || cur < 0 ||
+      (nt_kind(nt, cur) != NK_LocalVariableReadNode &&
+       nt_kind(nt, cur) != NK_InstanceVariableReadNode) ||
+      !strbuf_slot_ref(c, cur, ref, sizeof ref)) return 0;
+  int sv[64], st[64];
+  for (int i = 0; i < nlinks; i++) {
+    sv[i] = view_push_repr(c, links[i], VR_STRBUF_BOX, 1);
+    st[i] = view_push(c, links[i], TY_STRBUF);
+  }
+  emit_call(c, id, b);
+  for (int i = nlinks - 1; i >= 0; i--) {
+    view_pop(c, st[i]);
+    view_pop(c, sv[i]);
+  }
+  return 1;
+}
+
+int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int recv, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  if (is_string_append_or_prepend(name) && argc >= 1) {
+    /* a STRBUF-promoted local (repeated `<<`) appends in place: the read
+       form sp_String_cstr(lv) is not an lvalue, so the generic write-back
+       below would emit an invalid assignment (#2020). prepend replaces the
+       buffer with args-then-contents, keeping the handle stable (#3227). */
+    { char sref0[1024];
+      int sr = unwrap_parens(c, recv);
+      const char *sn = nt_kind(nt, sr) == NK_CallNode ? nt_str(nt, sr, "name") : NULL;
+      Repr rp = repr_of(c, sr);
+      int chain_handle = sn && is_string_append(sn) && rp.handle && rp.kind == RK_STRBUF;
+      if (chain_handle || strbuf_slot_ref(c, sr, sref0, sizeof sref0)) {
+        int tb2 = ++g_tmp;
+        buf_printf(b, "({ sp_String *_t%d = ", tb2);
+        if (chain_handle) emit_expr(c, sr, b);
+        else buf_puts(b, sref0);
+        buf_puts(b, ";");
+        if (!is_string_append(name)) {
+          int tp3 = ++g_tmp;
+          buf_printf(b, " const char *_t%d = ", tp3);
+          for (int j = 0; j < argc; j++) buf_puts(b, "sp_str_concat(");
+          emit_str_expr(c, argv[0], b);
+          for (int j = 1; j < argc; j++) { buf_puts(b, ", "); emit_str_expr(c, argv[j], b); buf_puts(b, ")"); }
+          buf_printf(b, ", sp_String_cstr(_t%d)); sp_String_set_bin(_t%d, _t%d);", tb2, tb2, tp3);
+        }
+        else {
+          for (int j = 0; j < argc; j++) {
+            buf_printf(b, " sp_String_append(_t%d, ", tb2);
+            { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb2);
+              emit_str_append_arg(c, argv[j], rt, b); }
+            buf_puts(b, ");");
+          }
+        }
+        /* an append marked to hand out the handle (`r = obj.buf << x`)
+           answers the receiver itself; otherwise its String read */
+        if (repr_of(c, id).handle) buf_printf(b, " _t%d; })", tb2);
+        else buf_printf(b, " sp_String_cstr(_t%d); })", tb2);
+        return 1;
+      }
+    }
   }
   return 0;
 }

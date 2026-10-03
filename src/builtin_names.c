@@ -126,3 +126,11 @@ int is_add_sub_mul(const char *n) {
 int is_int_bit_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^") || sp_streq(n, "<<") || sp_streq(n, ">>");
 }
+
+int is_string_append(const char *n) {
+  return sp_streq(n, "<<") || sp_streq(n, "concat");
+}
+
+int is_string_append_or_prepend(const char *n) {
+  return is_string_append(n) || sp_streq(n, "prepend");
+}

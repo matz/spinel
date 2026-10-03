@@ -12626,6 +12626,21 @@ static void sp_raise_stack_overflow(void) {
   sp_poly_recur_unwind();
   longjmp(sp_exc_stack[sp_exc_top-1], 1);
 }
+/* Whether `obj` is on the cause chain that starts at `c` (c itself
+   included). The walk stops at a cycle that does not pass through `obj`. */
+static int sp_exc_cause_chain_reaches(sp_Exception *c, void *obj) {
+  sp_Exception *slow = c;
+  while (c) {
+    if ((void *)c == obj) return 1;
+    c = c->cause;
+    if (!c) return 0;
+    if ((void *)c == obj) return 1;
+    c = c->cause;
+    slow = slow->cause;
+    if (c == slow) return 0;
+  }
+  return 0;
+}
 SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* Launder the message onto the string heap and root the copy before anything
      below allocates. `msg` is the caller's own pointer and comes in one of two
@@ -12679,6 +12694,20 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (sp_pending_exc_flags && msg && cls && sp_exc_top > 0)
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);
   sp_pending_exc_flags = 0;
+  /* An explicit `cause:` replaces the cause the raised object already
+     carries, as CRuby's does: a rescue clause fills only an empty cause, so
+     it never saw the new one. A frozen exception is raised as a copy that
+     takes the cause, as in CRuby. A cause whose chain leads back to the
+     object is dropped rather than closing a cycle (CRuby refuses it with
+     ArgumentError). */
+  if (sp_exc_top > 0 && sp_explicit_cause_set && sp_explicit_cause && sp_pending_exc_obj) {
+    if (sp_exc_cause_chain_reaches((sp_Exception *)sp_explicit_cause, sp_pending_exc_obj)) sp_explicit_cause = NULL;
+    else {
+      if (sp_gc_is_frozen(sp_pending_exc_obj)) sp_pending_exc_obj = sp_exc_dup((sp_Exception *)sp_pending_exc_obj);
+      sp_gc_wb(sp_pending_exc_obj);
+      ((sp_Exception *)sp_pending_exc_obj)->cause = (sp_Exception *)sp_explicit_cause;
+    }
+  }
   /* The slot takes the laundered copy made at the top of this function (or the
      bare-raise sentinel, or NULL) as it stands: it is already a string-heap
      one with a marker byte, so sp_mark_in_flight_exceptions can mark it from

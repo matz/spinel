@@ -1,0 +1,13 @@
+42
+[1, 5, [], 0]
+[1, 2, [3], 4]
+51
+ArgumentError: no keywords accepted
+3
+ArgumentError: wrong number of arguments (given 1, expected 0)
+[:z0]
+[1, 5, 2]
+[1, 2, 3]
+[:Par, [1], [[:z, 2]]]
+[:Plain, [1]]
+[:Fwd, [1], [[:z, 2]]]

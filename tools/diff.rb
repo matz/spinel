@@ -41,11 +41,6 @@ def signal_name(n)
   n2 ? n2 : "signal " + n.to_s
 end
 
-# `s` as one shell word.
-def shell_word(s)
-  "'" + s.gsub("'", "'\\''") + "'"
-end
-
 # Run `argv` (a command and its arguments) with stdin closed and stdout /
 # stderr captured to files, under the time limit. Answers a DiffRun. The
 # command goes through `sh -c 'exec ...'`, so the pid the watchdog kills is

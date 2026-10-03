@@ -1,0 +1,39 @@
+nn-read
+app.rb:12:5:x
+root-elide
+Lut#load:@lut
+main
+Count#to_int
+Lut#load
+app.rb:12
+main
+Lut.load
+main
+["a@K#m", "c@K#m:@x"]
+["b", "a", "c"]
+["b@1", "b@2", "c@1"]
+["b@1", "b@2"]
+1 x 1: found within 1
+1 x 5: found within 4
+2 x 1: found within 2
+2 x 5: found within 5
+64 x 1: found within 7
+64 x 5: found within 10
+1000 x 1: found within 11
+1000 x 5: found within 14
+["nn-read@app.rb:3:1", "nn-read@app.rb:17:1"]
+["root-frame@app.rb:9:1", "nn-read@app.rb:17:1"]
+["root-frame@Lut#load", "gc-save@Lut#load"]
+true
+true
+["nn-read@app.rb:5:1"]
+true
+true
+1
+1
+0
+0
+1
+["no-alloc@app.rb:3:1", "root-frame@app.rb:6:1"]
+["no-alloc", "root-frame"]
+["no-alloc@app.rb:3:1", "root-frame@app.rb:6:1"]

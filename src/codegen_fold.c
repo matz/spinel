@@ -10113,8 +10113,10 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
                   sp_streq(aty, "SelfNode") || sp_streq(aty, "NilNode") ||
                   sp_streq(aty, "StringNode"))) root = 0;
       /* only a fresh allocation needs protecting; a non-allocating heap
-         expression (e.g. a ternary over two already-live reads) does not. */
-      else if (!subtree_may_allocate(nt, argv[k])) root = 0;
+         expression (e.g. a ternary over two already-live reads) does not.
+         Asked without the decision registry: a global or a class variable
+         is lent as its slot, and a temp here would be a copy of it. */
+      else if (!subtree_allocates(nt, argv[k])) root = 0;
       if (!root && !seq) continue;
       int ht = ++g_tmp;
       /* Evaluate into a side buffer first: the expression may push its own

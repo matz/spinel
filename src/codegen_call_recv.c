@@ -666,6 +666,7 @@ static void emit_fetch_blk_param(Compiler *c, int id, int blk, TyKind kt, int tk
 }
 
 static int emit_blk_value_via_next(Compiler *c, int blk, TyKind vt, Buf *b);
+static void emit_blk_value_as(Compiler *c, int blk, TyKind vt, Buf *b);
 
 /* An operand whose evaluation cannot allocate: a local's read or a scalar
    literal. */
@@ -673,7 +674,7 @@ static int fetch_operand_is_inert(Compiler *c, int n) {
   switch (nt_kind(c->nt, n)) {
     case NK_LocalVariableReadNode: case NK_IntegerNode: case NK_FloatNode:
     case NK_SymbolNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
-      return 1;
+      return decide_node(c->nt, n, "fetch-inert", NULL);
     default:
       return 0;
   }
@@ -1019,21 +1020,12 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_puts(b, " "); emit_boxed(c, argv[1], b); buf_puts(b, "; })");
     }
     else if (blk >= 0) {
-      int bbody = nt_ref(nt, blk, "body");
-      int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
-      int bval = bn > 0 ? bb[bn - 1] : -1;
       buf_puts(b, " ({ ");
       emit_fetch_blk_param(c, id, blk, TY_INT, ti, b);
-      if (emit_blk_value_via_next(c, blk, TY_POLY, b)) {
-        buf_puts(b, "; }); })");
-        { *out = 1; return 1; }
-      }
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], b, 0);
-      if (bval >= 0) {
-        if (comp_ntype(c, bval) != TY_POLY) emit_boxed(c, bval, b);
-        else emit_expr(c, bval, b);
-      }
-      else buf_puts(b, "sp_box_nil()");
+      /* The value with its setup, after the parameter is bound: left in
+         g_pre the setup ran ahead of the whole call, on the nil the
+         parameter starts as. */
+      emit_blk_value_as(c, blk, TY_POLY, b);
       buf_puts(b, "; }); })");
     }
     else {
@@ -1797,22 +1789,10 @@ else {
     else if (blk >= 0) {
       /* fetch(i) { |i| default }: an out-of-bounds index yields the
          (original) index to the block; its value is the result */
-      int bbody = nt_ref(nt, blk, "body");
-      int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
-      int bval = bn > 0 ? bb[bn - 1] : -1;
       buf_puts(b, " ({ ");
       emit_fetch_blk_param(c, id, blk, TY_INT, ti, b);
-      /* a `next <v>` answers the block's value, as in the Hash arm */
-      if (emit_blk_value_via_next(c, blk, boxed ? TY_POLY : et, b)) {
-        buf_puts(b, "; }); })");
-        { *out = 1; return 1; }
-      }
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], b, 0);
-      if (bval >= 0) {
-        if (boxed && comp_ntype(c, bval) != TY_POLY) emit_boxed(c, bval, b);
-        else emit_expr(c, bval, b);
-      }
-      else buf_puts(b, boxed ? "sp_box_nil()" : default_value_from_compiler(c, et));
+      /* the value with its setup after the parameter is bound, as above */
+      emit_blk_value_as(c, blk, boxed ? TY_POLY : et, b);
       buf_puts(b, "; }); })");
     }
     else {
@@ -2767,16 +2747,16 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         if (fit == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", ip, ti);
         else buf_printf(g_pre, "lv_%s = _t%d;\n", ip, ti);
       }
-      IterStep st; emit_iter_step_open(c, fblk, 0, g_indent + 1, &st);
-      Buf vb; memset(&vb, 0, sizeof vb);
-      TyKind fvt = emit_iter_step_tail(c, &st, &vb);
+      /* A poly value is boxed by the step, once: boxed again here, with
+         the store begun, its setup lines landed inside the call. */
+      TyKind vt = comp_ntype(c, fbb[fbn - 1]);
+      IterStep st; emit_iter_step_open(c, fblk, sp_streq(fk, "Poly") && (vt == TY_POLY || vt == TY_UNKNOWN), g_indent + 1, &st);
+      Buf vb; memset(&vb, 0, sizeof vb); vt = emit_iter_step_tail(c, &st, &vb);
       emit_indent(g_pre, g_indent + 1);
       if (sp_streq(fk, "Poly")) {
-        TyKind vt = fvt;
         buf_printf(g_pre, "sp_PolyArray_set(_t%d, _t%d, ", trecv, ti);
         if (vt != TY_POLY && vt != TY_UNKNOWN) emit_boxed_text(c, vt, vb.p ? vb.p : "sp_box_nil()", g_pre);
-        else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, fbb[fbn - 1], &bx);
-               buf_puts(g_pre, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
+        else buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
         buf_puts(g_pre, ");\n");
       }
       else {
@@ -9485,7 +9465,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
              this read is typically in a loop: `ctx.buf.getbyte(i)` over a
              200 KB buffer copied the whole string once per row. Same type,
              same const char * -- the live buffer rather than a snapshot. */
-          else if (c->strbuf_read_raw[id])
+          else if (c->strbuf_read_raw[id] && decide_node(c->nt, id, "strbuf-raw", NULL))
             buf_printf(b, "_t%d ? sp_String_cstr(_t%d) : NULL; })", tvR, tvR);
           else
             buf_printf(b, "_t%d ? sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1])) : NULL; })",
@@ -12216,7 +12196,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
            call behind it are dead code on this read. analyze established the
            proof for the GC root elision; this is the same fact paying twice. */
         buf_puts(b, at != TY_INT ? "sp_poly_index_poly("
-                    : expr_is_arr_or_nil(c, recv) ? "sp_poly_arr_get_aon("
+                    : expr_is_arr_or_nil(c, recv) && decide_node(c->nt, recv, "aon-get", NULL) ? "sp_poly_arr_get_aon("
                                                   : "sp_poly_arr_get_hash(");
         emit_expr(c, recv, b);
         buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");

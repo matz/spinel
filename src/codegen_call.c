@@ -6297,7 +6297,7 @@ static int pd_lookup_or_add(const char *key, int *is_new) {
   return pd_tab[j].fn;
 }
 
-static int pd_hoist(Compiler *c, Buf *b, size_t from, int tr, TyKind rct,
+static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, int tr, TyKind rct,
                     const int *pid, const TyKind *pty, int np) {
   if (pd_disabled() || !b->p || b->len <= from) return 0;
   const char *r = b->p + from;
@@ -6378,7 +6378,7 @@ static int pd_hoist(Compiler *c, Buf *b, size_t from, int tr, TyKind rct,
   }
   int tr_canon = -1;
   for (int k = 0; k < nt; k++) if (tnum[k] == tr) tr_canon = canon[k];
-  if (tr_canon < 0) { free(tnum); free(tdecl); free(canon); return 0; }
+  if (tr_canon < 0 || !decide_node(c->nt, id, "pd-hoist", name)) { free(tnum); free(tdecl); free(canon); return 0; }
   Buf body; memset(&body, 0, sizeof body);
   for (size_t i = 0; i < rn; ) {
     char ch = r[i];
@@ -7468,7 +7468,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) pa_end(c, pa_frame0, cplan_poly(c, id));
       { int pid0[2] = { tv, blk_tmp0 };
         TyKind pty0[2] = { TY_POLY, TY_PROC };   /* the block's proc, when one was built */
-        if (pd_hoist(c, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid0, pty0, blk_tmp0 >= 0 ? 2 : 1))
+        if (pd_hoist(c, id, name, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid0, pty0, blk_tmp0 >= 0 ? 2 : 1))
           buf_printf(b, " _t%d; })", tr);
         else buf_printf(b, " } _t%d; })", tr); }
       return 1;
@@ -7785,7 +7785,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         for (int e = 0; e < kwn; e++) { pid[n] = kwtmp[e]; pty[n++] = kwty[e]; }
         if (stk >= 0) { pid[n] = stk; pty[n++] = TY_POLY_ARRAY; }
         if (blk_tmp2 >= 0) { pid[n] = blk_tmp2; pty[n++] = TY_PROC; }   /* the block's proc */
-        pd_done = pd_hoist(c, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid, pty, n);
+        pd_done = pd_hoist(c, id, name, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid, pty, n);
         free(pid); free(pty);
       }
       if (pd_done) buf_printf(b, " _t%d; })", tr);
@@ -19432,7 +19432,8 @@ int call_is_field_read(Compiler *c, int id, int *allocates) {
   ClassInfo *owner = &c->classes[rdc >= 0 ? rdc : cid];
   int iv = comp_ivar_index(owner, ivn);
   if (iv >= 0 && owner->ivar_types[iv] == TY_STRBUF &&
-      !c->strbuf_box[id] && !c->strbuf_handle_demand[id] && !c->strbuf_read_raw[id])
+      !c->strbuf_box[id] && !c->strbuf_handle_demand[id] &&
+      !(c->strbuf_read_raw[id] && decide_node(c->nt, id, "strbuf-raw", NULL)))
     *allocates = 1;
   return 1;
 }
@@ -23073,7 +23074,7 @@ int push_recv_in_slot(Compiler *c, int recv, int argc, const int *argv, TyKind a
   if (!push_arg_var_read(c->nt, recv)) return 0;
   for (int a = 0; a < argc; a++)
     if (!push_arg_keeps_slot(c, argv[a], art)) return 0;
-  return 1;
+  return decide_node(c->nt, recv, "push-slot", NULL);
 }
 
 /* The receiver of a poly `<<`, `&`, `|`, `^` or `>>`, hoisted into a rooted

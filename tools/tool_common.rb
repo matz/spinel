@@ -13,9 +13,15 @@ def sh(cmd)
   out
 end
 
+# `s` as one shell word.
+def shell_word(s)
+  "'" + s.gsub("'", "'\\''") + "'"
+end
+
 # Locate the spinel compiler binary. Resolution order: $SPINEL (explicit path),
-# $SPINEL_DIR/spinel, then `spinel` on PATH. Exits 2 if none resolve.
-def find_spinel
+# $SPINEL_DIR/spinel, then `spinel` on PATH. Exits `miss` (2, unless the
+# tool's contract gives that status another meaning) if none resolve.
+def find_spinel(miss = 2)
   e = ENV["SPINEL"]
   return e if e && e.length > 0 && File.exist?(e)
   d = ENV["SPINEL_DIR"]
@@ -27,7 +33,7 @@ def find_spinel
   return w if w.length > 0
   $stderr.puts "spinel-tool: cannot find the spinel compiler."
   $stderr.puts "  set SPINEL=/path/to/spinel, or SPINEL_DIR, or put spinel on PATH."
-  exit(2)
+  exit(miss)
 end
 
 # Is `name` an executable on PATH?

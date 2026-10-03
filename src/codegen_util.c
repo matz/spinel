@@ -560,7 +560,7 @@ int  g_cls_tag_skip = -1;
    interpolation, or a read of the last match qualifies -- `$~` builds its
    MatchData, $` and $' their String; $& and $+ are reads, counted with
    them. */
-int subtree_may_allocate(const NodeTable *nt, int id) {
+int subtree_allocates(const NodeTable *nt, int id) {
   if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   if (!ty) return 0;
@@ -589,15 +589,24 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_may_allocate(nt, nt_ref_at(nt, id, i))) return 1;
+    if (subtree_allocates(nt, nt_ref_at(nt, id, i))) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_may_allocate(nt, ids[j])) return 1;
+      if (subtree_allocates(nt, ids[j])) return 1;
   }
   return 0;
+}
+/* The same question as the callers ask it. "Cannot allocate" is what lets a
+   caller leave a sibling temp unrooted, so that answer is a decision
+   (src/decide.c), keyed at the operand: a refused one is treated as
+   allocating, which every caller answers with the root or the ordered temp
+   it gives an operand that does allocate. */
+int subtree_may_allocate(const NodeTable *nt, int id) {
+  if (subtree_allocates(nt, id)) return 1;
+  return id >= 0 && !decide_node(nt, id, "no-alloc", NULL);
 }
 /* subtree_may_allocate, plus the one allocation the node table cannot show:
    an ordinary read of a shared-mutable String slot (a TY_STRBUF local or

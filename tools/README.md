@@ -11,6 +11,7 @@ spinel-doctor app.rb
 spinel-reduce app.rb
 spinel-flatten app.rb
 spinel diff app.rb        # = spinel-diff app.rb; the compiler dispatches it
+spinel bisect app.rb      # = spinel-bisect app.rb, likewise
 ```
 
 They locate the compiler at run time via, in order: `$SPINEL` (an
@@ -316,3 +317,93 @@ Exit status: 0 same, 1 a difference (`output-diff`, `exception-diff`,
 yet. Not normalized on purpose: Hash order (the language defines it),
 `object_id` values (indistinguishable from data) and `rand` (Spinel's
 generator is not CRuby's).
+
+## spinel bisect
+
+Names the compiler decisions behind a wrong answer. Each optimization
+that is a miscompile when its legality check is wrong asks the decision
+registry (`src/decide.c`) before it is applied, under a key,
+`kind@site`:
+
+```
+nn-read@app.rb:12:5:x        at a node: file, line, column, a name
+root-elide@Lut#load:@lut     in a method (`C.m` a class method, `#m` a
+root-frame@main              top-level def, `main` the top-level body)
+no-alloc@-                   a node the parser gave no position
+```
+
+A method's class is the name the compiler knows it by: its last constant,
+or the path joined with `__` (`A__Foo#go`) when two classes share one.
+
+`--decisions-log=FILE` (`SPINEL_DECISIONS_LOG`) writes the keys a compile
+took, each once; it replaces an earlier log and refuses a file that does
+not open with a key (`--force` to replace one). `--decisions=FILE` (`SPINEL_DECISIONS`) is an allow-list
+in the same format, `#` starting a comment line: a decision whose key is
+not listed is not taken, so an empty file denies them all and a compile
+given its own log is the compile that wrote it. With neither, the compiler
+emits what it did before. `spinel bisect` builds the program under subsets
+of its log and searches (QuickXplain, with delta debugging behind it, in
+`bisect_search.rb`) for a smallest set that is wrong on its own:
+
+```
+spinel bisect FILE.rb [--expected FILE | --cruby | --oracle-cmd CMD]
+                      [--timeout SEC] [--keep-tmp] [-- COMPILER-FLAGS...]
+```
+
+Right is, by option: stdout equal to a file and exit status 0; no
+difference under `spinel diff`; or a command that exits 0, with `{}` for
+the built binary, 125 for cannot tell and anything else for wrong, as for
+`git bisect run` (a command without `{}` is run as it is, with
+`SPINEL_DECISIONS` set, and builds for itself). With none of them the
+reference is the program itself with every keyed decision denied, so the
+tool needs to be told nothing: it names the decisions that change what the
+program prints or how it exits. That says which decisions the two builds
+differ by, not which build is right: the path a denied decision falls back
+to can be the wrong one, and `--expected` or `--cruby` tells. The
+environment passes through, and `SPINEL_GC_STRESS=1 spinel bisect app.rb`
+is how a root that was wrongly dropped is bisected, since only a
+collection at the wrong moment shows it. A program past `--timeout` is
+wrong; an oracle command past it could not tell, and is killed with what
+it started. A program that does not do the same twice (it prints the
+time, its pid) cannot be compared with itself, and the answer is exit 3.
+One culprit among N keys takes about log2 N + 4 builds; two decisions that
+are only wrong together are found as a pair, in a few builds more when
+they are about one method and in about twice as many when they are not.
+
+Exit status: 0 localized (one `key ...` line per decision, after the
+report), 1 no keyed decision changes the answer, 2 nothing to bisect (the
+unrestricted build is right), 3 inconclusive (the subsets that would
+decide it do not build or cannot be judged), 4 the tool's own error (no
+file, no compiler, a bad option). This is a contract.
+
+| kind | the decision, and what the compiler does when it is denied |
+|---|---|
+| `nn-read` | a read of an Integer or Float local is proved non-nil (#6481); denied, the read keeps its nil test |
+| `nn-inb` | an index read is proved in bounds, so its value is not nil; denied, likewise |
+| `root-elide` | a local or a container ivar's temp takes no GC root (`--no-root-elision` for all of them); denied, it is rooted |
+| `gc-save` | a method whose roots are all elided drops its root-stack save and restore; denied, it keeps them |
+| `root-frame` | a method, proc, Fiber or END body roots through one frame (`--no-root-frame`); denied, each root is pushed |
+| `inline-force` | a hot small method is forced inline (`--no-inline-hot`); denied, the C compiler decides |
+| `pd-hoist` | a poly dispatch's switch is moved out of line, into a function its call sites share (`SPINEL_NO_PD_HOIST`); denied, it stays inline at the call |
+| `strbuf-raw` | a reader hands out a string buffer's bytes without a copy; denied, it copies |
+| `no-alloc` | an operand is taken not to allocate, so what was evaluated before it needs no temp or root; denied, it is treated as allocating |
+| `case-root` | a `case` subject is not rooted across its `when` tests; denied, it is |
+| `masgn-root` | a multiple assignment's part is not rooted across the others; denied, it is |
+| `fetch-inert` | a Hash#fetch key or default is a local or a scalar literal, so the receiver takes no root and the default is evaluated up front; denied, the receiver is rooted and the default waits for a miss |
+| `push-slot` | the temp holding the receiver of `a << x` (and of unshift, prepend) takes no root, the receiver's own slot keeping it; denied, it is rooted |
+| `aon-get` | an index read whose receiver is proved a poly array or nil skips the dispatch on its type; denied, it dispatches |
+
+Not keyed, because the other answer is not simply the slower one: the
+write barrier (a build-wide protocol; `--no-write-barrier`), a call
+argument's root (`arg_wants_root`: hoisting a bare read ahead of a
+sequence expression changes what it reads), the choice of a typed array
+and the sharing of a String handle (each changes types the rest of the
+compile is built on), and the splice of a yielding method. A wrong answer
+from one of these bisects to exit 1. A key names its site by position, so
+either switch turns the line map on, past `--no-line-map`, as
+`--warn-widen` does.
+The legs are `make decisions-test` (the registry: the log, the allow-list,
+each kind denied) and `make bisect-test` (the tool and its exit statuses);
+`test/tools_bisect_search.rb` tests the search alone. A new kind is one
+`decide_node`/`decide_fn` call after the optimization's own check, a row
+here, and its name in `DECISION_KINDS` in the Makefile.

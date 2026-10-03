@@ -13,6 +13,7 @@
 #include "codegen.h"
 #include "compiler.h"
 #include "analyze.h"
+#include "decide.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,7 +186,11 @@ void argov_reserve(void);
 extern int  g_setter_stmt_id;
 extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
 extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
+/* Ask subtree_may_allocate before leaving something unrooted across `id`:
+   its "no" is a keyed decision (src/decide.c). subtree_allocates is the
+   bare fact, for a caller whose answer licenses no such omission. */
 int subtree_may_allocate(const NodeTable *nt, int id);
+int subtree_allocates(const NodeTable *nt, int id);
 int subtree_has_side_effect(Compiler *c, int id);
 int loop_has_valued_break(Compiler *c, int root);
 /* Can evaluating the subtree store into an ivar, class variable or global? A

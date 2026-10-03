@@ -3369,10 +3369,14 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(&sw, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti2, ti2, tw, ti2);
       emit_indent(&sw, indent + 2);
       buf_printf(&sw, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", dp0r, tw, ti2);
-      for (int j2 = 0; j2 + 1 < dbn; j2++) emit_stmt(c, dbb[j2], b, indent + 2);
-      { int svi = g_indent; g_indent = indent + 2;
+      /* The block's statements and its value's preludes belong to this
+         arm's loop. The statements went to the caller's buffer and the
+         preludes to g_pre, so both ran once, ahead of the switch, with the
+         block parameter not yet bound. */
+      for (int j2 = 0; j2 + 1 < dbn; j2++) emit_stmt(c, dbb[j2], &sw, indent + 2);
+      { int svi = g_indent; Buf *svp = g_pre; g_indent = indent + 2; g_pre = &sw;
         Buf vb2; memset(&vb2, 0, sizeof vb2); emit_boxed(c, dbb[dbn - 1], &vb2);
-        g_indent = svi;
+        g_indent = svi; g_pre = svp;
         emit_indent(&sw, indent + 2);
         buf_printf(&sw, "_t%d->data[_t%d] = %s;\n", tw, ti2, vb2.p ? vb2.p : "sp_box_nil()");
         free(vb2.p); }

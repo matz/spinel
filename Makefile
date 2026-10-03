@@ -1880,7 +1880,8 @@ GC_MINOR_TESTS := test/gc_minor_thread_local_slot.rb \
                   test/iter_block_string_share.rb \
                   test/string_handle_ivar_in_container.rb \
                   test/string_handle_yield_paths.rb \
-                  test/string_handle_keyword_dyn_sites.rb
+                  test/string_handle_keyword_dyn_sites.rb \
+                  test/gc_minor_never_young_store.rb
 
 # Each program runs with the minor mark off and on and must answer the same;
 # then once more under the generational verifier with stress on (every
@@ -1888,7 +1889,8 @@ GC_MINOR_TESTS := test/gc_minor_thread_local_slot.rb \
 # the write barrier did not record -- the failure the two answers alone can
 # only expose by luck.
 GC_MINOR_RESULTS := $(patsubst test/%.rb,build/gc-minor-results/%.res,$(GC_MINOR_TESTS)) \
-                    build/gc-minor-results/byref_param_store.chk
+                    build/gc-minor-results/byref_param_store.chk \
+                    build/gc-minor-results/never_young_store.chk
 gc-minor-test: $(GC_MINOR_RESULTS)
 	@ok=1; for r in $(GC_MINOR_RESULTS); do [ "$$(cat $$r)" = 1 ] || ok=0; done; \
 	if [ $$ok -eq 1 ]; then echo "gc-minor-test: pass"; else exit 1; fi
@@ -1929,6 +1931,16 @@ build/gc-minor-results/byref_param_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB) $(S
 	sed -n '/^[^ ].* sp_emit(const char \* \*_cell_io) {$$/,/^}$$/p' "$$tmp/bp.c" > "$$tmp/bp.emit"; \
 	if [ ! -s "$$tmp/bp.emit" ] || grep -q sp_gc_wb "$$tmp/bp.emit"; then \
 	  echo "gc-minor-test: FAIL (a by-reference parameter's store took a cell barrier: it reads a header off the caller's stack)"; ok=0; fi; \
+	rm -rf "$$tmp"; echo $$ok > $@
+build/gc-minor-results/never_young_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@mkdir -p $(@D); tmp=$$(mktemp -d /tmp/spinel-gcminor.XXXXXX); ok=1; \
+	$(SPINEL) test/gc_minor_never_young_store.rb --no-line-map -c -o "$$tmp/ny.c" >/dev/null 2>&1; \
+	sed -n '/^[^ ].* sp_Node_initialize(.*) {$$/,/^}$$/p' "$$tmp/ny.c" > "$$tmp/ny.init"; \
+	sed -n '/^[^ ].* sp_grow(.*) {$$/,/^}$$/p' "$$tmp/ny.c" > "$$tmp/ny.grow"; \
+	if [ ! -s "$$tmp/ny.init" ] || grep -q 'sp_gc_wb\|SP_WBO' "$$tmp/ny.init"; then \
+	  echo "gc-minor-test: FAIL (a store of nil or of a string literal took a barrier: neither is ever a young object)"; ok=0; fi; \
+	if [ "$$(grep -c sp_gc_wb "$$tmp/ny.grow")" != 3 ]; then \
+	  echo "gc-minor-test: FAIL (a store of a fresh object or string lost its barrier)"; ok=0; fi; \
 	rm -rf "$$tmp"; echo $$ok > $@
 
 # ---- Rescued-exception backtrace (#4310) ----

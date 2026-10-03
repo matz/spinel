@@ -6,6 +6,10 @@
 # and digest forms. The incremental Digest::SHA256.new/update object API is
 # not modelled.
 module Digest
+  # Digest.hexencode, the module function CRuby's digest extension defines:
+  # a String's bytes as lowercase hex, two digits a byte.
+  def self.hexencode(string) = string.unpack1("H*")
+
   module SHA256
     native_lib "digest"
     # :cstring return: sp_crypto's static-buffer contract (the next call

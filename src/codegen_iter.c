@@ -4620,6 +4620,24 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent);
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   return emit_ivar_nil_guarded(c, id, b, indent, emit_iteration_stmt_body);
 }
+/* Combinatorial rows are boxed PolyArrays even when the parameter keeps
+   the element-array type inferred from a yield-set receiver. Convert that
+   row to the parameter's array representation before binding it. */
+static void emit_poly_combination_param(Compiler *c, int block, const char *pn,
+                                        int tc, int ti, int indent, Buf *b) {
+  Scope *sc = comp_scope_of(c, block);
+  LocalVar *lv = sc ? scope_local(sc, pn) : NULL;
+  TyKind pt = lv ? lv->type : TY_UNKNOWN;
+  emit_indent(b, indent);
+  if (pt == TY_POLY_ARRAY)
+    buf_printf(b, "lv_%s = (sp_PolyArray *)sp_PolyArray_get(_t%d, _t%d).v.p;\n", pn, tc, ti);
+  else if (ty_is_array(pt)) {
+    char src[80]; snprintf(src, sizeof src, "sp_PolyArray_get(_t%d, _t%d)", tc, ti);
+    emit_block_param_from_boxed(c, pn, pt, src, b);
+  }
+  else buf_printf(b, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", pn, tc, ti);
+}
+
 /* Block parameter pj of an each_slice / each_cons row: element pj of the
    row that starts at `_t<ti>` of the array `_t<ta>` (of kind k and type rt)
    and is `_t<tn>` long (`lit` when the size is written out, else 0). A
@@ -5940,16 +5958,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     if (ac == 1) emit_int_expr(c, av[0], b); else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);
     buf_puts(b, "); SP_GC_ROOT(_t"); buf_printf(b, "%d);\n", tc);
     emit_indent(b, indent + 1); buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tc, ti);
-    if (p0) {
-      Scope *cbsc = comp_scope_of(c, block);
-      LocalVar *clv = cbsc ? scope_local(cbsc, p0) : NULL;
-      TyKind cpt = clv ? clv->type : TY_UNKNOWN;
-      emit_indent(b, indent + 2);
-      if (cpt == TY_POLY_ARRAY)
-        buf_printf(b, "lv_%s = (sp_PolyArray *)sp_PolyArray_get(_t%d, _t%d).v.p;\n", p0, tc, ti);
-      else
-        buf_printf(b, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", p0, tc, ti);
-    }
+    if (p0) emit_poly_combination_param(c, block, p0, tc, ti, indent + 2, b);
     emit_loop_body(c, body, b, indent + 2);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");

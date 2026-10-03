@@ -13313,8 +13313,172 @@ static void emit_sb_shim_swap(Buf *b, int indent, int tH, char *arm) {
   buf_puts(b, "}\n");
 }
 
+/* The writes of @iv under `id`. With `own`, only those a method body makes
+   itself: a block or a lambda written in it runs whenever it is called. */
+static int ivar_direct_writes(const NodeTable *nt, int id, const char *iv, int own) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (own && (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode ||
+              k == NK_ModuleNode || k == NK_SingletonClassNode)) return 0;
+  int n = (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
+           k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
+           k == NK_InstanceVariableTargetNode) && sp_streq(nt_str(nt, id, "name"), iv);
+  for (int i = 0; i < nt_num_refs(nt, id); i++) n += ivar_direct_writes(nt, nt_ref_at(nt, id, i), iv, own);
+  for (int i = 0; i < nt_num_arrs(nt, id); i++) {
+    int m = 0;
+    const int *ids = nt_arr_at(nt, id, i, &m);
+    for (int j = 0; j < m; j++) n += ivar_direct_writes(nt, ids[j], iv, own);
+  }
+  return n;
+}
+/* A name that runs a constructor again or assigns an ivar by its name. */
+static int ctor_or_ivar_set_name(const char *nm) {
+  return nm && (sp_streq(nm, "initialize") || sp_streq(nm, "instance_variable_set") ||
+                sp_streq(nm, "remove_instance_variable"));
+}
+static int ivar_set_only_by_ctor_touch(Compiler *c, int id) {
+  NodeKind k = nt_kind(c->nt, id);
+  if (k == NK_CallNode) return ctor_or_ivar_set_name(nt_str(c->nt, id, "name"));
+  if (k == NK_SymbolNode) return ctor_or_ivar_set_name(nt_str(c->nt, id, "value"));
+  return k == NK_DefNode || ivar_write_or_set(c, id);
+}
+static int ivar_set_only_by_ctor_scan(Compiler *c, const char *iv) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind WK[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
+                                 NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode,
+                                 NK_InstanceVariableTargetNode };
+  int all = 0, ctor = 0;
+  for (int q = 0; q < 5; q++)
+    NT_FOREACH_KIND(nt, WK[q], w) all += sp_streq(nt_str(nt, w, "name"), iv);
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    if (!sp_streq(nt_str(nt, d, "name"), "initialize") || nt_ref(nt, d, "receiver") >= 0) continue;
+    ctor += ivar_direct_writes(nt, nt_ref(nt, d, "parameters"), iv, 1) +
+            ivar_direct_writes(nt, nt_ref(nt, d, "body"), iv, 1);
+  }
+  if (all != ctor || ivar_has_generated_writer(c, iv)) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, u) if (ctor_or_ivar_set_name(nt_str(nt, u, "name"))) return 0;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y) if (ctor_or_ivar_set_name(nt_str(nt, y, "value"))) return 0;
+  return 1;
+}
+/* Is @iv assigned nowhere but straight in an `initialize`: no write of it in
+   another method or in a block, no writer, no instance_variable_set, and no
+   constructor called, sent or aliased by name? Then it names one object from
+   `new`'s return on, and nothing a later operand runs changes what a read of
+   it gives. Asked per push; the answer is fixed per name. */
+static int ivar_set_only_by_ctor(Compiler *c, const char *iv) {
+  static CgMemo memo = { .touches = ivar_set_only_by_ctor_touch };
+  int got;
+  if (cg_memo_get(c, &memo, iv, 0, &got)) return got;
+  got = ivar_set_only_by_ctor_scan(c, iv);
+  cg_memo_put(&memo, iv, 0, got);
+  return got;
+}
+
+/* `Math.sqrt(x)`, `Process.clock_gettime(id)`: the runtime's own C over
+   its arguments. */
+static int call_is_math_or_clock(const NodeTable *nt, int id) {
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
+  const char *mod = nt_str(nt, recv, "name");
+  if (!mod) return 0;
+  return sp_streq(mod, "Math") ||
+         (sp_streq(mod, "Process") && (sp_streq(nm, "clock_gettime") || sp_streq(nm, "clock_getres")));
+}
+/* Does this only compute over numbers: literals, constants and numeric
+   reads, arithmetic on them, a function of Math's, a clock read? Then it
+   runs no code of the program's, and so assigns nothing. A whitelist: a
+   class method (`Deck.cut`) or an operand that is an object (`1.0 + deg`,
+   which runs its coerce) is not on it. */
+static int subtree_only_computes(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 1;
+  switch (nt_kind(nt, id)) {
+    case NK_IntegerNode: case NK_FloatNode: case NK_SymbolNode:
+    case NK_ConstantReadNode: case NK_ConstantPathNode:
+      return 1;
+    case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: {
+      TyKind t = comp_ntype(c, id);
+      return t == TY_INT || t == TY_FLOAT;
+    }
+    case NK_ParenthesesNode: case NK_StatementsNode:
+      break;
+    case NK_CallNode:
+      if (!call_is_scalar_op(c, id) && !call_is_math_or_clock(nt, id)) return 0;
+      break;
+    default: {
+      /* a call's argument list has no kind of its own */
+      const char *ty = nt_type(nt, id);
+      if (!ty || !sp_streq(ty, "ArgumentsNode")) return 0;
+      break;
+    }
+  }
+  for (int i = 0; i < nt_num_refs(nt, id); i++)
+    if (!subtree_only_computes(c, nt_ref_at(nt, id, i))) return 0;
+  for (int i = 0; i < nt_num_arrs(nt, id); i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (!subtree_only_computes(c, ids[j])) return 0;
+  }
+  return 1;
+}
+
+/* An Array push whose value goes nowhere -- `recv << v`, `recv.push(v)`,
+   `recv.append(v)` as a statement -- is written below as one C call per
+   argument, the receiver and the value its sibling arguments, and C orders
+   those as it likes. Under gcc
+
+     a << t(1) << t(2)
+
+   ran t(2) first, `out << nxt.call << nxt.call` stored the two tokens
+   swapped, and `live << C.new(i) << C.new(-i)` built the second object
+   first and held it nowhere while the first push allocated. The value form
+   has none of this: emit_operands_in_order binds the operands in order,
+   each rooted, and the arm it leaves alone reads the receiver into a temp
+   ahead of the arguments. So the statement is that form, its value dropped,
+   wherever the order can show: an argument can store into the variable the
+   receiver reads (read_rebound_by: `@a << swap` and `v << (v = [5]; 6)`
+   pushed onto the Array just assigned, not the one the receiver named),
+   several arguments follow a receiver that runs code (written once per
+   argument, it ran once per argument), or two of the operands run code and
+   are not all plain reads (subtree_is_pure_read). Every other push keeps
+   its single call. So do two that read_rebound_by takes for the first
+   kind, since to it a call on anything but self runs any code:
+   `@buf << src.next` when nothing but a constructor ever assigns @buf
+   (ivar_set_only_by_ctor), and `@times << Process.clock_gettime(id)`,
+   whose argument runs no code of the program's
+   (subtree_only_computes). No code can give either read another Array,
+   and the value form's root on the receiver is 13 instructions a push. */
+static int push_stmt_takes_value_form(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0) return 0;
+  if (!sp_streq(nm, "<<") && !sp_streq(nm, "push") && !sp_streq(nm, "append")) return 0;
+  /* the kinds whose push the statement arm writes */
+  TyKind rt = comp_ntype(c, recv);
+  if (rt != TY_POLY_ARRAY && !array_kind(rt)) return 0;
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  if (read_rebound_by(c, recv, args)) {
+    const char *iv = nt_kind(nt, recv) == NK_InstanceVariableReadNode ? nt_str(nt, recv, "name") : NULL;
+    if (!iv || ivar_direct_writes(nt, args, iv, 0)) return 1;
+    if (!subtree_only_computes(c, args) && !ivar_set_only_by_ctor(c, iv)) return 1;
+  }
+  int run = subtree_has_side_effect(c, recv);
+  int pure = !run || subtree_is_pure_read(c, recv);
+  if (!pure && argc > 1) return 1;
+  for (int a = 0; a < argc; a++) {
+    if (!subtree_has_side_effect(c, argv[a])) continue;
+    run++;
+    pure = pure && subtree_is_pure_read(c, argv[a]);
+  }
+  return run > 1 && !pure;
+}
+
 static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent);
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
+  if (push_stmt_takes_value_form(c, id)) return 0;
   return emit_ivar_nil_guarded(c, id, b, indent, emit_array_mutate_stmt_body);
 }
 static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) {

@@ -1,0 +1,81 @@
+-- Integer Array
+t1
+t2
+ia
+t3
+ia
+t4
+t5
+ia
+t6
+ia
+t7
+t8
+t9
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+-- String Array
+s1
+s2
+sa
+s3
+sa
+s4
+sa
+s5
+["x", "s1", "s2", "s3", "s4", "s5"]
+-- Float Array
+f1
+f2
+fa
+f3
+fa
+f4
+[0.5, 1.5, 2.5, 3.5, 4.5]
+-- Array of anything
+t1
+s2
+pa
+s3
+pa
+t4
+pa
+s5
+mk6
+mk7
+9
+6
+7
+-- a closure that advances
+["a", "b", "c"]
+-- several arguments
+ia
+ia
+t3
+t4
+[0, 1, 2, 3, 4, 5, 5]
+-- a receiver the argument reassigns
+[5]
+[1, 6]
+["z"]
+["a", "b"]
+[100]
+[1, 5]
+[1, 5]
+[100]
+[1, "x", :sym]
+[nil, 2]
+[100, 1, 1]
+[1, 3]
+[7]
+-- an ivar a call on another object reassigns
+[1, 7]
+[600]
+[[1, 2], [1, 1], [1, 3], [1, 4], [1, 5], [1, 6]]
+[[100], [200], [500], [300], [400], [1, 6]]
+-- an ivar a method assigns, pushed a number
+[[1.0, 8.0], [1.0, 2.0], [1.0, 11.0], [1.0, 3.0], [false, true]]
+[[1.0, 8.0], [100.0], [200.0], [300.0], [nil]]
+2
+true
+-- fresh objects, each held while the next is built
+180300

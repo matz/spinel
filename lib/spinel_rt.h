@@ -10196,8 +10196,16 @@ static sp_RbVal sp_poly_dig_n(sp_RbVal recv, sp_int n, const sp_RbVal *keys) {
   }
   return cur;
 }
+static sp_RbVal sp_poly_arr_values_at(sp_RbVal v, sp_PolyArray *idx);
 static sp_RbVal sp_poly_values_at_n(sp_RbVal recv, sp_int n, const sp_RbVal *keys) {
   SP_GC_ROOT_RBVAL(recv);   /* read per key, and sp_poly_index_poly can allocate */
+  /* an Array selects by offset, a Range the run it covers (sp_poly_arr_values_at):
+     read as `[]`, a Range answered the slice inside the result */
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
+    sp_PolyArray *ix = sp_PolyArray_new(); SP_GC_ROOT(ix);
+    for (sp_int i = 0; i < n; i++) sp_PolyArray_push(ix, keys[i]);
+    return sp_poly_arr_values_at(recv, ix);
+  }
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
   for (sp_int i = 0; i < n; i++) sp_PolyArray_push(out, sp_poly_index_poly(recv, keys[i]));
   return sp_box_poly_array(out);
@@ -11697,6 +11705,18 @@ static sp_RbVal sp_poly_arr_values_at(sp_RbVal v, sp_PolyArray *idx) {
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
   for (sp_int i = 0; idx && i < idx->len; i++) {
     if (is_hash) { sp_PolyArray_push(out, sp_poly_index_poly(v, idx->data[i])); continue; }
+    /* a Range selects the run it covers, as the typed values_at does: an
+       end past the array reads nil, an endless one stops at the last, and a
+       start before the front is CRuby's RangeError. It read as the index 0. */
+    if (idx->data[i].tag == SP_TAG_OBJ && idx->data[i].cls_id == SP_BUILTIN_RANGE) {
+      sp_Range r = *(sp_Range *)idx->data[i].v.p;
+      sp_int f = r.first == INTPTR_MIN ? 0 : r.first;
+      if (f < 0) f += alen;
+      if (f < 0) sp_raise_cls("RangeError", sp_sprintf("%s out of range", sp_poly_inspect(idx->data[i])));
+      sp_int l = r.last == INTPTR_MAX ? alen - 1 : ((r.last < 0 ? r.last + alen : r.last) - (r.excl ? 1 : 0));
+      for (sp_int k = f; k <= l; k++) sp_PolyArray_push(out, k < alen ? sp_poly_arr_get(v, k) : sp_box_nil());
+      continue;
+    }
     sp_int k = sp_poly_to_i(idx->data[i]);
     if (k < 0) k += alen;
     sp_PolyArray_push(out, (k < 0 || k >= alen) ? sp_box_nil() : sp_poly_arr_get(v, k));

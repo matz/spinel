@@ -1,0 +1,19 @@
+TypeError: no implicit conversion of nil into Array
+TypeError: no implicit conversion of Integer into Array
+TypeError: no implicit conversion of String into Array
+TypeError: no implicit conversion of Float into Array
+TypeError: no implicit conversion of Symbol into Array
+TypeError: no implicit conversion of true into Array
+TypeError: no implicit conversion of false into Array
+TypeError: no implicit conversion of Range into Array
+TypeError: no implicit conversion of Hash into Array
+TypeError: no implicit conversion of Integer into Array
+TypeError: no implicit conversion of nil into Array
+TypeError: no implicit conversion of Integer into Array
+TypeError: no implicit conversion of nil into Array
+TypeError: no implicit conversion of Float into Array
+TypeError: no implicit conversion of nil into Array
+TypeError: no implicit conversion of String into Array
+TypeError: no implicit conversion of nil into Array
+[1, 2, 3]
+[1]

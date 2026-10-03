@@ -187,6 +187,55 @@ int emit_op_array_slice_bang_range(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* Array#+ / - / & / | with an operand that can never be an Array (nil, a
+   boolean, or a builtin with no #to_ary): CRuby raises TypeError "no implicit
+   conversion of X into Array". The arms below take only an Array, so the call
+   fell through to the unresolved gate and raised NoMethodError for a method
+   Array has. Both sides are evaluated first, as CRuby does; a boolean's class
+   is read at run time. A boxed operand keeps the runtime check, and a user
+   object its #to_ary path, as concat's arm leaves them (codegen_call_recv.c). */
+static int emit_array_operand_type_error(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  if (argc != 1) return 0;
+  TyKind at = comp_ntype(c, argv[0]);
+  if (at != TY_NIL && at != TY_BOOL && !conv_to_ary_impossible(at)) return 0;
+  /* an Integer or Float slot that can hold its nil sentinel (a parameter one
+     call site passes nil) names nil or its class by the value it holds */
+  int nil_rt = (at == TY_INT || at == TY_FLOAT) && nullable_int_value(c, argv[0]);
+  /* and a String slot's nil is NULL */
+  int str_rt = at == TY_STRING;
+  int tb = ++g_tmp;
+  buf_puts(b, "({ (void)("); emit_expr(c, x->recv, b); buf_puts(b, "); ");
+  if (at == TY_BOOL || nil_rt || str_rt) {
+    buf_printf(b, "%s _t%d = (", at == TY_BOOL ? "int" : at == TY_INT ? "sp_int" :
+                                 at == TY_FLOAT ? "sp_float" : "const char *", tb);
+    emit_expr(c, argv[0], b); buf_puts(b, "); ");
+  }
+  else { buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); "); }
+  if (at == TY_NIL)
+    buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");");
+  else if (at == TY_BOOL)
+    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+                  " ? \"no implicit conversion of true into Array\""
+                  " : \"no implicit conversion of false into Array\");", tb);
+  else if (str_rt)
+    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d == NULL"
+                  " ? \"no implicit conversion of nil into Array\""
+                  " : \"no implicit conversion of String into Array\");", tb);
+  else if (nil_rt)
+    buf_printf(b, "sp_raise_cls(\"TypeError\", %s%d%s"
+                  " ? \"no implicit conversion of nil into Array\""
+                  " : \"no implicit conversion of %s into Array\");",
+               at == TY_INT ? "_t" : "sp_float_is_nil(_t", tb, at == TY_INT ? " == SP_INT_NIL" : ")",
+               conv_builtin_class_name(at));
+  else
+    buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Array\");",
+               conv_builtin_class_name(at));
+  buf_printf(b, " %s; })", raise_tail_value(comp_ntype(c, x->id)));
+  return 1;
+}
+
 /* Array#+: the same kind concatenates; another kind boxes both sides into a poly array */
 int emit_op_array_plus(Compiler *c, const BopCtx *x, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -198,6 +247,7 @@ int emit_op_array_plus(Compiler *c, const BopCtx *x, Buf *b) {
   const char *k = array_kind(rt);
   int block = nt_ref(nt, id, "block");
   (void)name; (void)a0; (void)k; (void)block; (void)argv;
+  if (emit_array_operand_type_error(c, x, b)) return 1;
   if (rt == TY_POLY_ARRAY) {
     if (sp_streq(name, "+") && argc == 1 && a0 == TY_POLY_ARRAY) {
       /* Spill the receiver: evaluating the operand can allocate, and until
@@ -298,6 +348,7 @@ int emit_op_array_setop(Compiler *c, const BopCtx *x, Buf *b) {
   const char *k = array_kind(rt);
   int block = nt_ref(nt, id, "block");
   (void)name; (void)a0; (void)k; (void)block; (void)argv;
+  if (emit_array_operand_type_error(c, x, b)) return 1;
   if (rt == TY_POLY_ARRAY) {
     if (is_set_op(name) && argc == 1 && (a0 == TY_POLY_ARRAY || a0 == TY_UNKNOWN)) {
       const char *fn = (sp_streq(name, "&") || sp_streq(name, "intersection")) ? "intersect" : (sp_streq(name, "|") || sp_streq(name, "union") ? "union" : "difference");

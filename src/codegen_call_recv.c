@@ -407,7 +407,7 @@ static TyKind emit_product_operand(Compiler *c, int node, TyKind at, Buf *b) {
 
 /* The class a builtin type answers to #class, for a "no implicit conversion of
    X into Array" message. Only the kinds conv_to_ary_impossible admits. */
-static const char *conv_builtin_class_name(TyKind t) {
+const char *conv_builtin_class_name(TyKind t) {
   if (t == TY_STRING || t == TY_STRBUF) return "String";
   if (t == TY_INT || t == TY_BIGINT) return "Integer";
   if (t == TY_FLOAT) return "Float";
@@ -423,7 +423,7 @@ static const char *conv_builtin_class_name(TyKind t) {
    an arm that cannot serve it. Deliberately excludes TY_POLY / TY_UNKNOWN (may
    be an array at run time) and every OBJECT type (a user class may define
    #to_ary, which CRuby honours). */
-static int conv_to_ary_impossible(TyKind t) {
+int conv_to_ary_impossible(TyKind t) {
   return t == TY_STRING || t == TY_STRBUF || t == TY_INT || t == TY_BIGINT ||
          t == TY_FLOAT || t == TY_SYMBOL || t == TY_PROC || t == TY_TIME ||
          t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE ||

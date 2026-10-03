@@ -3439,6 +3439,86 @@ static void sp_builtin_names_from(const char *content) {
   sp_builtin_names_from_into(content, &sp_builtin_enum_names, &sp_builtin_enum_names_n);
 }
 
+/* ---- what prism's lexer says of the text the builtin splices ask about ----
+   The splices below are decided before the parse, from the resolved text,
+   and the text alone cannot say where code stops: a `#` starts a comment
+   only where the lexer is reading code. In a string literal, a heredoc
+   body, a regexp or a %-literal it is a character, and as `#{` it opens
+   code. Nor can it say whether a word is a token or part of a string. So
+   those two questions go to prism, once per text and only when a splice has
+   to ask: the comments it found, and whether `break` and `define_finalizer`
+   were lexed as the keyword and an identifier (inside an interpolation too).
+   A program that evaluates a string has code prism lexed as text (a
+   class_eval template), so there a word counts wherever it is spelled, as
+   it did before; so does one prism could not parse. */
+typedef struct {
+  const char *src;            /* the text this was read from, NULL for none */
+  size_t *com; int com_n;     /* each comment's start and end offset, in order */
+  int brk, fin, evals;
+} SpSrcLex;
+static SpSrcLex sp_src_lex;
+
+static int sp_src_tok_is(const pm_token_t *tok, const char *word) {
+  size_t wl = strlen(word);
+  return (size_t)(tok->end - tok->start) == wl && memcmp(tok->start, word, wl) == 0;
+}
+
+static void sp_src_lex_token(void *data, pm_parser_t *parser, pm_token_t *tok) {
+  SpSrcLex *lx = (SpSrcLex *)data;
+  (void)parser;
+  if (tok->type == PM_TOKEN_KEYWORD_BREAK) lx->brk = 1;
+  if (tok->type != PM_TOKEN_IDENTIFIER) return;
+  if (sp_src_tok_is(tok, "define_finalizer")) lx->fin = 1;
+  if (sp_src_tok_is(tok, "eval") || sp_src_tok_is(tok, "class_eval") ||
+      sp_src_tok_is(tok, "module_eval") || sp_src_tok_is(tok, "instance_eval")) lx->evals = 1;
+}
+
+/* The text is about to be freed or replaced: what was read from it goes. */
+static void sp_src_lex_drop(void) {
+  free(sp_src_lex.com);
+  memset(&sp_src_lex, 0, sizeof sp_src_lex);
+}
+
+static SpSrcLex *sp_src_lex_of(const char *source) {
+  SpSrcLex *lx = &sp_src_lex;
+  if (lx->src == source) return lx;
+  sp_src_lex_drop();
+  lx->src = source;
+  pm_parser_t parser;
+  pm_lex_callback_t cb = { lx, sp_src_lex_token };
+  pm_parser_init(&parser, (const uint8_t *)source, strlen(source), NULL);
+  parser.lex_callback = &cb;
+  pm_node_t *root = pm_parse(&parser);
+  int cap = 0;
+  for (pm_comment_t *c = (pm_comment_t *)parser.comment_list.head; c; c = (pm_comment_t *)c->node.next) {
+    if (lx->com_n + 2 > cap) {
+      cap = cap ? cap * 2 : 64;
+      lx->com = (size_t *)realloc(lx->com, sizeof(size_t) * (size_t)cap);
+      if (!lx->com) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+    }
+    lx->com[lx->com_n++] = (size_t)(c->location.start - (const uint8_t *)source);
+    lx->com[lx->com_n++] = (size_t)(c->location.end - (const uint8_t *)source);
+  }
+  if (parser.error_list.size > 0) lx->evals = 1;
+  pm_node_destroy(&parser, root);
+  pm_parser_free(&parser);
+  return lx;
+}
+
+/* Is the byte at `at` inside a comment of `source`? */
+static int sp_src_in_comment(const char *source, const char *at) {
+  SpSrcLex *lx = sp_src_lex_of(source);
+  size_t off = (size_t)(at - source);
+  int lo = 0, hi = lx->com_n / 2;
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    if (off < lx->com[mid * 2]) hi = mid;
+    else if (off >= lx->com[mid * 2 + 1]) lo = mid + 1;
+    else return 1;
+  }
+  return 0;
+}
+
 /* Does the source mention `name` as a method: `.name` or a bare `name`
    followed by `(`, ` {`, ` do` or an argument, outside a comment? A textual
    test, as the Set splice's is: a false positive costs the parse of a small
@@ -3454,11 +3534,13 @@ static int sp_source_mentions_method(const char *src, const char *name) {
     int word_start = !((bc >= 'a' && bc <= 'z') || (bc >= 'A' && bc <= 'Z') || (bc >= '0' && bc <= '9') || bc == '_' || bc == '@' || bc == '$' || bc == ':');
     p = after;
     if (!word_end || !word_start) continue;
-    /* not in a comment: no `#` between the line start and the name */
+    /* not in a comment: a `#` between the line start and the name is asked
+       of the lexer, since one in a string literal or opening `#{` hides
+       nothing (`puts "issue #12"; p a.partition { ... }`) */
     const char *ls = p - nl;
     while (ls > src && ls[-1] != '\n') ls--;
     int in_comment = 0;
-    for (const char *k = ls; k < p - nl; k++) if (*k == '#') { in_comment = 1; break; }
+    for (const char *k = ls; k < p - nl; k++) if (*k == '#') { in_comment = sp_src_in_comment(src, p - nl); break; }
     if (in_comment) continue;
     if (bc == '.') return 1;
     if (ac == '(' || ac == ' ' || ac == '\n') return 1;
@@ -3512,6 +3594,7 @@ static char *sp_prepend_require(char *source, const char *exe_path, const char *
   char *ns = (char *)malloc(sl + hl + 1);
   if (!ns) return source;
   memcpy(ns, head, hl); memcpy(ns + hl, source, sl + 1);
+  sp_src_lex_drop();
   free(source);
   ns = resolve_plain_requires(ns, exe_path, fsl, fsl_n);
   size_t pl = strlen(SP_PUSH_PREFIX), il = strlen(SP_INSERT_PREFIX), nl = strlen(ns);
@@ -3531,10 +3614,13 @@ static char *sp_splice_named_builtin(char *source, const char *exe_path, const c
 
 /* builtins/object_space.rb: the finalizer API. Only for a program that names
    it -- the rest of ObjectSpace stays the refusal it is
-   (docs/limitations.md). */
+   (docs/limitations.md). Names it in code, that is: the file holds procs in
+   a table and calls them, which the whole-program analysis answers for, so a
+   program that only prints the word was refused for what it never did. */
 static char *sp_splice_object_space(char *source, const char *exe_path,
                                     unsigned char **fsl, size_t *fsl_n) {
   if (!strstr(source, "define_finalizer")) return source;
+  { SpSrcLex *lx = sp_src_lex_of(source); if (!lx->fin && !lx->evals) return source; }
   if (sp_src_defines_module(source, "ObjectSpace")) return source;
   return sp_prepend_require(source, exe_path, "require \"builtins/object_space\"\n", fsl, fsl_n);
 }
@@ -3598,6 +3684,8 @@ static char *sp_splice_builtin_enumerator(char *source, const char *exe_path,
   int any = 0;
   for (int i = 0; names[i] && !any; i++) if (sp_source_mentions_method(source, names[i])) any = 1;
   if (!any) return source;
+  /* the keyword, not the word in a string or a comment */
+  { SpSrcLex *lx = sp_src_lex_of(source); if (!lx->brk && !lx->evals) return source; }
   char lib_dir[1024], gp[1200];
   sp_lib_dir(exe_path, lib_dir, sizeof lib_dir);
   int base_len = (int)strlen(lib_dir);
@@ -4834,6 +4922,7 @@ static int sp_parse_emit(const char *source_file, const char *argv0, SpStrBuf *o
   source = sp_splice_builtins(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_extras(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_enumerator(source, argv0, &fsl, &fsl_n);
+  sp_src_lex_drop();
 
   /* class-body macro calls (module_eval'd templates, computed
      attach_function / const_set names) expanded in place; line count kept */

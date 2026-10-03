@@ -1,0 +1,4 @@
+this program does not call define_finalizer
+["PATH_INFO=/a", "X="]
+nil
+["!"]

@@ -103,6 +103,7 @@ typedef enum {
   BOPE_ARRAY_SLICE_GROUPS, /* Array#slice_before / slice_after without a block (stage 3) */
   BOPE_ARRAY_JOIN_STR,    /* Array#* with a String (stage 4) */
   BOPE_ARRAY_PRED_CLASS,  /* Array#any? / all? / none? / one? with a Class (stage 5) */
+  BOPE_STRING_SLICE,     /* String#slice!: lvalue and pattern-dependent */
   BOPE__COUNT
 } BopEmit;
 

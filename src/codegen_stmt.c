@@ -1,4 +1,6 @@
 #include "codegen_internal.h"
+#include "repr.h"
+#include "builtin_ops.h"
 
 /* an object arg's #to_s as a C string expression (the puts/print arms) */
 static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
@@ -13314,8 +13316,24 @@ static void emit_sb_shim_swap(Buf *b, int indent, int tH, char *arm) {
 }
 
 static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent);
+static int emit_array_mutate_stmt_dispatch(Compiler *c, int id, Buf *b, int indent) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  const char *name = nt_str(c->nt, id, "name");
+  int args = nt_ref(c->nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
+  const BuiltinOp *op = bop_find_stage(TY_STRING, name, argc,
+                                      nt_ref(c->nt, id, "block") >= 0, NULL, NULL, 6);
+  if (recv >= 0 && op && op->emit == BOPE_STRING_SLICE && argc == 1 &&
+      (comp_ntype(c, recv) == TY_STRING || comp_ntype(c, recv) == TY_STRBUF) &&
+      repr_of(c, argv[0]).kind == RK_BOXED) {
+    emit_indent(b, indent); buf_puts(b, "(void)(");
+    emit_array_call(c, id, b); buf_puts(b, ");\n");
+    return 1;
+  }
+  return emit_array_mutate_stmt_body(c, id, b, indent);
+}
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
-  return emit_ivar_nil_guarded(c, id, b, indent, emit_array_mutate_stmt_body);
+  return emit_ivar_nil_guarded(c, id, b, indent, emit_array_mutate_stmt_dispatch);
 }
 static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;

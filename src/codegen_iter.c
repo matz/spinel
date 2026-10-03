@@ -4641,10 +4641,17 @@ static void emit_row_param_bind(Compiler *c, int block, int pj, const char *k, T
     snprintf(get, sizeof get, "%s(sp_PolyArray_get(_t%d, _t%d + %d))",
              pt == TY_INT ? "sp_poly_to_i_or_nil" : "sp_poly_to_f_or_nil", ta, ti, pj);
   else snprintf(get, sizeof get, "sp_%sArray_get(_t%d, _t%d + %d)", k, ta, ti, pj);
+  /* A typed row can feed a boxed parameter. Keep missed reads nil when
+     boxing the element, including the short final slice. */
+  Buf boxed; memset(&boxed, 0, sizeof boxed);
+  if (pt == TY_POLY && rt != TY_POLY_ARRAY)
+    emit_boxed_text(c, ty_array_elem(rt), get, &boxed);
+  const char *value = boxed.p ? boxed.p : get;
   const char *nil = pt == TY_UNKNOWN ? NULL : nil_value(pt) ? nil_value(pt) : default_value_from_compiler(c, pt);
   emit_indent(b, indent);
-  if (pj == 0 || pj < lit || !nil) buf_printf(b, "lv_%s = %s;\n", rpn, get);
-  else buf_printf(b, "lv_%s = %d < _t%d ? %s : %s;\n", rpn, pj, tn, get, nil);
+  if (pj == 0 || pj < lit || !nil) buf_printf(b, "lv_%s = %s;\n", rpn, value);
+  else buf_printf(b, "lv_%s = %d < _t%d ? %s : %s;\n", rpn, pj, tn, value, nil);
+  free(boxed.p);
 }
 
 static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {

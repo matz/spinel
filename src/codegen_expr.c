@@ -3701,6 +3701,19 @@ static int emit_range_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   return 0;
 }
 
+/* The tail of a multi-statement `(a; b)`, and the type its C value has. An
+   empty `[]` / `{}` tail of a sequence the analysis typed poly is built
+   boxed: its own type reads UNKNOWN, and the raw IntArray / StrPolyHash it
+   emits for that was dropped by the consumer's box. */
+static TyKind emit_paren_tail(Compiler *c, int paren, int tail, Buf *b) {
+  TyKind tt = comp_ntype(c, tail);
+  if (tt == TY_UNKNOWN && comp_ntype(c, paren) == TY_POLY && an_empty_container_kind(c, tail)) {
+    emit_boxed(c, tail, b);
+    return TY_POLY;
+  }
+  emit_expr(c, tail, b);
+  return tt;
+}
 static void emit_expr_node(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -4242,7 +4255,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       Buf cap; memset(&cap, 0, sizeof cap);
       Buf vb; memset(&vb, 0, sizeof vb);
       Buf *sv_pre = g_pre; g_pre = &cap;
-      emit_expr(c, bd[n - 1], &vb);
+      TyKind pvt = emit_paren_tail(c, id, bd[n - 1], &vb);
       g_pre = sv_pre;
       if (!(cap.p && cap.p[0])) {
         buf_puts(b, "({ ");
@@ -4255,7 +4268,6 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       else {
         for (int j = 0; j < n - 1; j++) emit_stmt(c, bd[j], g_pre, g_indent);
         buf_puts(g_pre, cap.p);
-        TyKind pvt = comp_ntype(c, bd[n - 1]);
         if (is_scalar_ret(pvt) && pvt != TY_VOID && pvt != TY_NIL && pvt != TY_UNKNOWN) {
           int tpv = ++g_tmp;
           emit_indent(g_pre, g_indent); emit_ctype(c, pvt, g_pre);

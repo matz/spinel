@@ -7496,6 +7496,23 @@ int an_empty_container_kind(Compiler *c, int b) {
   }
   return 0;
 }
+/* `(a; b)` is its last statement. An empty `[]` / `{}` there reads UNKNOWN
+   for want of an element type, and unlike `([])` a sequence is not looked
+   through by the slot that takes it: nothing settled a type, the consumer
+   took the boxed slot and boxed "no value" into it, so `x = (1; [])`
+   assigned nil. It carries a value, as the same tail of a `begin` does:
+   poly. */
+static TyKind an_paren_ty(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int body = nt_ref(nt, id, "body");
+  if (body < 0) return TY_NIL;
+  int n = 0;
+  const int *b = nt_arr(nt, body, "body", &n);
+  if (n <= 0) return TY_NIL;
+  TyKind r = infer_type(c, b[n - 1]);
+  if (r == TY_UNKNOWN && n > 1 && an_empty_container_kind(c, b[n - 1])) return TY_POLY;
+  return r;
+}
 /* `x || {}` / `x || Hash.new` with a nil (or not yet typed) left: the nil-guard
    fallback, whose value is the empty hash on the right. That producer, else
    -1. */
@@ -8301,13 +8318,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (ty_is_hash(rt)) return ty_hash_val(rt);
     return TY_POLY;
   }
-  if (nk == NK_ParenthesesNode) {
-    int body = nt_ref(nt, id, "body");
-    if (body < 0) return TY_NIL;
-    int n = 0;
-    const int *b = nt_arr(nt, body, "body", &n);
-    return n > 0 ? infer_type(c, b[n - 1]) : TY_NIL;
-  }
+  if (nk == NK_ParenthesesNode) return an_paren_ty(c, id);
   if (nk == NK_StatementsNode) {
     int n = 0;
     const int *b = nt_arr(nt, id, "body", &n);

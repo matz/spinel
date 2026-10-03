@@ -1353,6 +1353,7 @@ int class_def_body(Compiler *c, int def_node);
 int class_body_list(Compiler *c, int **out_ci, int **out_body);
 TyKind an_builtin_answer(Compiler *c, int id);
 int node_is_empty_container(const NodeTable *nt, int node);
+int an_empty_container_kind(Compiler *c, int b);
 TyKind ffi_spec_to_ty(const char *spec);
 int local_sole_range_node(Compiler *c, int recv);
 int range_float_begin(Compiler *c, int recv);

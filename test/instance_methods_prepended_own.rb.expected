@@ -1,0 +1,8 @@
+"BAK"
+0
+[:greet, :plain, :tick]
+[:greet, :plain, :tick]
+[:hush]
+true
+[:other]
+[:greet]

@@ -13724,10 +13724,19 @@ void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
   for (int si = 0; si < c->nscopes; si++) {
     Scope *s = &c->scopes[si];
     if (s->class_id != ci || s->is_cmethod || !s->name || !s->name[0]) continue;
-    if (strncmp(s->name, "__prep_", 7) == 0) continue;
-    if (name_is_synth_method(c, s->name) || scope_is_struct_synth(c, si)) continue;
+    /* A prepended module that defines a method the class defines too renames
+       the class's own body to `__prep_<n>_<name>`, so the module's copy can
+       super into it. The class still defines <name>: list it under that name.
+       A renamed module copy (a second prepend over the first) stays out. */
+    const char *nm = s->name;
+    if (strncmp(nm, "__prep_", 7) == 0) {
+      if (s->origin_module_ci > 0) continue;
+      nm = comp_prep_user_name(nm);
+      if (nm == s->name) continue;
+    }
+    if (name_is_synth_method(c, nm) || scope_is_struct_synth(c, si)) continue;
     if (s->origin_module_ci > 0 && !with_modules) continue;
-    refl_note(r, s->name, refl_vis_wanted(refl_own_vis(c, ci, si, s->name), pub, prot, priv));
+    refl_note(r, nm, refl_vis_wanted(refl_own_vis(c, ci, si, nm), pub, prot, priv));
   }
   for (int i = 0; i < k->naliases; i++) {
     const char *an = k->alias_new[i];

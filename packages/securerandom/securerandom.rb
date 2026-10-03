@@ -14,7 +14,9 @@
 # the kernel.
 #
 # Subset. Present: random_bytes/bytes, hex, base64, urlsafe_base64, uuid
-# (and its uuid_v4 alias), alphanumeric. Not modelled: `random_number`,
+# (and its uuid_v4 alias), alphanumeric, and `random_number` for a positive
+# Integer bound. Not modelled: `random_number`'s Float forms (no argument,
+# a bound below 1, a Float or a Range),
 # `uuid_v7` (needs a millisecond clock and a monotonic counter), `base36`,
 # `choose`, and the `chars:` keyword on `alphanumeric` -- all of which are
 # renderings a program can write for itself over `random_bytes`, which the
@@ -143,6 +145,38 @@ module SecureRandom
       end
     end
     out
+  end
+
+  # A uniform Integer in 0...n, for a positive Integer n (a one-time code:
+  # `random_number(10**6)`). UNBIASED, which `bytes % n` alone is not: the
+  # draw takes just enough bytes for n - 1, masks the top byte down to its
+  # bit length, and is rejected and repeated when it lands at n or above --
+  # fewer than two draws on average. A code drawn with a modulo bias would
+  # still look random and would still be measurably easier to guess. The
+  # value never passes 2**bit_length(n - 1), so it stays inside the
+  # Integer on a 32-bit target too; a Bignum bound is served under
+  # --int-overflow=promote, as any Bignum arithmetic is, and raises
+  # RangeError under raise.
+  # CRuby's Float forms (no argument, 0 or a negative bound, a Float, a
+  # Range) are not modelled; a bound below 1 raises NotImplementedError
+  # rather than answer an Integer where CRuby answers a Float.
+  def self.random_number(n)
+    raise NotImplementedError, "SecureRandom.random_number answers a Float for a bound below 1, which is not modelled" if n < 1
+    bits = (n - 1).bit_length
+    size = (bits + 7) / 8
+    top_mask = (1 << (bits - 8 * (size - 1))) - 1
+    while true
+      bytes = SecureRandom.random_bytes(size)
+      value = 0
+      i = 0
+      while i < size
+        b = bytes.getbyte(i)
+        b &= top_mask if i == 0
+        value = value * 256 + b
+        i += 1
+      end
+      return value if value < n
+    end
   end
 
   # Base64 over an explicit alphabet, so the standard and URL-safe forms are

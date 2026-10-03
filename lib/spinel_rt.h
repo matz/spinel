@@ -824,7 +824,7 @@ static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
     if (sp_alloc_report_on) sp_alloc_report_count((void *)(SCAN), sizeof(sp_##CLS)); \
   } \
   else if (sp_slab_on > 0) { \
-    _p = (sp_##CLS *)sp_gc_alloc(sizeof(sp_##CLS), NULL, SCAN); \
+    _p = (sp_##CLS *)sp_gc_alloc_sized(sizeof(sp_##CLS), SCAN); \
   } \
   else { \
     _p = (sp_##CLS *)sp_gc_alloc_pool(sizeof(sp_##CLS), SCAN, sp_##CLS##_pool_recycle); \

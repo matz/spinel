@@ -337,6 +337,13 @@ static void sp_slab_init(void) {
     while (c < SP_SLAB_NCLS - 1 && sp_slab_csize[c] < i * 16) c++;
     sp_slab_cls_of[i] = (uint8_t)c;
   }
+  /* sp_gc_alloc_sized (sp_alloc.h) and the fronts it picks take a block of
+     256 bytes or less to be in the class of its size rounded up to 16, the
+     first of them 32: the table has to say the same */
+  for (unsigned i = 0; i <= 16; i++) {
+    unsigned k = i <= 2 ? 0 : i - 2;
+    if (sp_slab_cls_of[i] != k || sp_slab_csize[k] != 32 + 16 * k) { fputs("spinel: the slab's size classes moved; sp_gc_alloc_sized follows them by arithmetic\n", stderr); abort(); }
+  }
   for (int k = 0; k < SP_SLAB_NCLS; k++) {
     unsigned cs = sp_slab_csize[k];
     sp_slab_nslots_of[k] = (uint16_t)(SP_SLAB_CHUNK / cs);
@@ -694,6 +701,41 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   sp_gc_bytes_add(need);
   return p + sizeof(sp_gc_hdr);
 }
+/* The lean front once more, for a caller that knows the size at compile time
+   and has no finalizer, which a constructor does: sizeof its class. One
+   function per size class (sp_gc_alloc_sized, sp_alloc.h, picks it), so the
+   class and the slot size are constants where sp_gc_alloc reads two tables,
+   the finalizer test goes, and the zeroing is that many stores with no jump
+   into them. Whatever sp_gc_alloc hands to the full form, this does too. */
+static SP_INLINE void *sp_gc_alloc_lean(size_t need, void (*scn)(void *), unsigned csize) {
+  int cls = (int)(csize - 32) >> 4;
+  if (SP_EXPECT(!sp_gc_alloc_fast_ok, 0)) return sp_gc_alloc_full(need - sizeof(sp_gc_hdr), NULL, scn);
+  if (SP_EXPECT(SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold), 0)) return sp_gc_alloc_full(need - sizeof(sp_gc_hdr), NULL, scn);
+  sp_slab_worker *wk = &sp_slab_wk[SP_SLAB_WID()];
+  char *p = wk->rnext[0][cls];
+  if (SP_EXPECT(p == wk->rend[0][cls], 0)) return sp_gc_alloc_full(need - sizeof(sp_gc_hdr), NULL, scn);
+  wk->rnext[0][cls] = p + csize;
+  sp_slab_zero_small(p, csize);
+  sp_gc_hdr *h = (sp_gc_hdr *)p;
+  h->scan = scn; h->size = need;
+  sp_gc_bytes_add(need);
+  return p + sizeof(sp_gc_hdr);
+}
+void *sp_gc_alloc_32(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 32); }
+void *sp_gc_alloc_48(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 48); }
+void *sp_gc_alloc_64(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 64); }
+void *sp_gc_alloc_80(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 80); }
+void *sp_gc_alloc_96(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 96); }
+void *sp_gc_alloc_112(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 112); }
+void *sp_gc_alloc_128(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 128); }
+void *sp_gc_alloc_144(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 144); }
+void *sp_gc_alloc_160(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 160); }
+void *sp_gc_alloc_176(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 176); }
+void *sp_gc_alloc_192(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 192); }
+void *sp_gc_alloc_208(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 208); }
+void *sp_gc_alloc_224(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 224); }
+void *sp_gc_alloc_240(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 240); }
+void *sp_gc_alloc_256(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 256); }
 static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
 #ifdef SP_THREADS
   /* Lock-free fast path: the list push is a CAS (SP_GC_HEAP_PUSH) and the live-

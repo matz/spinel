@@ -1812,6 +1812,8 @@ threaded-render-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 
 GC_MINOR_TESTS := test/gc_minor_thread_local_slot.rb \
                   test/gc_minor_thread_retval.rb \
+                  test/gc_alloc_front_sizes.rb \
+                  test/gc_alloc_front_threads.rb \
                   test/str_fresh_recv_rooted.rb \
                   test/gc_minor_thread_tls_first_write.rb \
                   test/proc_cell_capture_marked.rb \

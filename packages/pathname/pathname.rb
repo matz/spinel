@@ -204,9 +204,15 @@ class Pathname
     raise ArgumentError, "different prefix" if absolute? != b.start_with?(SEPARATOR)
 
     mine = Pathname.split_str(Pathname.clean_str(@path))
-    theirs = Pathname.split_str(Pathname.clean_str(b))
+    cleaned_base = Pathname.clean_str(b)
+    theirs = Pathname.split_str(cleaned_base)
     i = 0
     i += 1 while i < mine.length && i < theirs.length && mine[i] == theirs[i]
+    j = i
+    while j < theirs.length
+      raise ArgumentError, "base_directory has ..: #{cleaned_base.inspect}" if theirs[j] == ".."
+      j += 1
+    end
     out = []
     (theirs.length - i).times { out.push("..") }
     j = i

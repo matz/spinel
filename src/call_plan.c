@@ -872,7 +872,10 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
         cpoly_add(p, &cap, PA_ARITY, k, mi, TY_UNKNOWN, PC_VOID);
         continue;
       } }
+    /* comp_resolve_member ranks a def and a reader by which class defines
+       them nearer; the reader below takes the arm when it wins (#7248). */
     if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
+        comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_ATTR &&
         (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi)) &&
         !(c->classes[defcls].name && sp_streq(c->classes[defcls].name, "Class"))) {
       int pfi = scope_proc_form_of(c, mi);

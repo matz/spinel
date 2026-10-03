@@ -244,6 +244,7 @@ static int poly_user_arm0_decide(Compiler *c, int id, const char *name, int argc
       return 1;
     } }
   if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
+      comp_resolve_member(c, k, name, 0, NULL, NULL) != SP_MEMBER_ATTR &&
       (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi)) &&
       !(c->classes[defcls].name && sp_streq(c->classes[defcls].name, "Class"))) {
     /* A proc form is a separately inferred clone, so its own return type

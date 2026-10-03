@@ -4790,6 +4790,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
     case TY_TIME:   oc_cn = "Time"; break;
     case TY_THREAD: oc_cn = "Thread"; break;
     case TY_FIBER:  oc_cn = "Fiber"; break;
+    case TY_RANDOM: oc_cn = "Random"; break;
     case TY_IO:     oc_cn = "File"; break;
     case TY_CLASS:  oc_cn = "Class"; break;
     default: break;
@@ -7864,6 +7865,33 @@ static int infer_yield_node(Compiler *c, int id, const NodeTable *nt, NodeKind n
   return 0;
 }
 
+static TyKind infer_builtin_self(Compiler *c, int self_cls) {
+  const char *cn = c->classes[self_cls].name;
+  if (sp_streq(cn, "String"))  return TY_STRING;
+  if (sp_streq(cn, "Integer")) return TY_INT;
+  if (sp_streq(cn, "Float"))   return TY_FLOAT;
+  if (sp_streq(cn, "Symbol"))  return TY_SYMBOL;
+  if (sp_streq(cn, "TrueClass") || sp_streq(cn, "FalseClass") || sp_streq(cn, "NilClass")) return TY_BOOL;
+  /* an Array / Hash reopen takes self boxed (sp_RbVal): the receiver may
+     be any element kind. Typing it as the unboxed poly array handed
+     sp_PolyArray_length an sp_RbVal (#blank.rb) */
+  if (sp_streq(cn, "Array"))   return TY_POLY;
+  if (sp_streq(cn, "Hash"))    return TY_POLY;
+  if (sp_streq(cn, "Object"))  return TY_POLY;  /* dynamic: called on any receiver type */
+  /* a Numeric reopen is called on any number -- an Integer, a Float --
+     and takes self boxed, the arithmetic on it dispatching on the value */
+  if (sp_streq(cn, "Numeric")) return TY_POLY;
+  if (sp_streq(cn, "Range"))   return TY_RANGE;
+  if (sp_streq(cn, "Time"))    return TY_TIME;
+  if (sp_streq(cn, "Thread"))  return TY_THREAD;
+  if (sp_streq(cn, "Fiber"))   return TY_FIBER;
+  if (sp_streq(cn, "Random"))  return TY_RANDOM;
+  if (io_family_class(c, self_cls)) return TY_IO;   /* File, IO, the sockets: one handle type */
+  if (sp_streq(cn, "Class"))   return TY_CLASS;
+  if (is_builtin_exception_name(cn)) return TY_EXCEPTION;
+  return ty_object(self_cls);
+}
+
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -8198,29 +8226,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* a statement of a class or module body: the class object itself */
     if (self_cls < 0 && self_class_body(c, id) >= 0) return TY_CLASS;
     if (self_cls < 0) return TY_POLY;   /* main, a boxed Object (#4926), or a boxed receiver */
-    const char *cn = c->classes[self_cls].name;
-    if (sp_streq(cn, "String"))  return TY_STRING;
-    if (sp_streq(cn, "Integer")) return TY_INT;
-    if (sp_streq(cn, "Float"))   return TY_FLOAT;
-    if (sp_streq(cn, "Symbol"))  return TY_SYMBOL;
-    if (sp_streq(cn, "TrueClass") || sp_streq(cn, "FalseClass") || sp_streq(cn, "NilClass")) return TY_BOOL;
-    /* an Array / Hash reopen takes self boxed (sp_RbVal): the receiver may
-       be any element kind. Typing it as the unboxed poly array handed
-       sp_PolyArray_length an sp_RbVal (#blank.rb) */
-    if (sp_streq(cn, "Array"))   return TY_POLY;
-    if (sp_streq(cn, "Hash"))    return TY_POLY;
-    if (sp_streq(cn, "Object"))  return TY_POLY;  /* dynamic: called on any receiver type */
-    /* a Numeric reopen is called on any number -- an Integer, a Float --
-       and takes self boxed, the arithmetic on it dispatching on the value */
-    if (sp_streq(cn, "Numeric")) return TY_POLY;
-    if (sp_streq(cn, "Range"))   return TY_RANGE;
-    if (sp_streq(cn, "Time"))    return TY_TIME;
-    if (sp_streq(cn, "Thread"))  return TY_THREAD;
-    if (sp_streq(cn, "Fiber"))   return TY_FIBER;
-    if (io_family_class(c, self_cls)) return TY_IO;   /* File, IO, the sockets: one handle type */
-    if (sp_streq(cn, "Class"))   return TY_CLASS;
-    if (is_builtin_exception_name(cn)) return TY_EXCEPTION;
-    return ty_object(self_cls);
+    return infer_builtin_self(c, self_cls);
   }
   if (nk == NK_InstanceVariableReadNode) {
     const char *nm = nt_str(nt, id, "name");

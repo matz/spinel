@@ -1,0 +1,7 @@
+:t
+true
+:t
+42
+true
+true
+NoMethodError

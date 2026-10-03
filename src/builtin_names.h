@@ -39,4 +39,6 @@ int is_quantifier_or_count(const char *n);  /* all? any? none? one? count: is_qu
 int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's names and unshift */
 int is_len_alias(const char *n);      /* length size */
 
+int is_builtin_reopen_name(const char *name);
+
 #endif

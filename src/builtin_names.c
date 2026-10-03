@@ -126,3 +126,25 @@ int is_add_sub_mul(const char *n) {
 int is_int_bit_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^") || sp_streq(n, "<<") || sp_streq(n, ">>");
 }
+
+/* Classes whose reopenings keep the runtime value instead of a user struct. */
+int is_builtin_reopen_name(const char *name) {
+  return sp_streq(name, "Toplevel") ||
+         sp_streq(name, "String")    || sp_streq(name, "Integer") ||
+         sp_streq(name, "Float")     || sp_streq(name, "Symbol")  ||
+         sp_streq(name, "TrueClass") || sp_streq(name, "FalseClass") ||
+         sp_streq(name, "NilClass")  || sp_streq(name, "Array")   ||
+         sp_streq(name, "Object")    || sp_streq(name, "Numeric") ||
+         sp_streq(name, "Dir")       ||
+         /* runtime value types with a typedef of their own (sp_Range, sp_Time,
+            sp_File, sp_Class): a user struct under that name was a C-level
+            typedef collision before any call was reached (activesupport's
+            blank.rb reopens Range and Time) */
+         sp_streq(name, "Range")     || sp_streq(name, "Time") ||
+         sp_streq(name, "File")      || sp_streq(name, "Class") ||
+         sp_streq(name, "Hash")      ||
+         /* a thread and a fiber are runtime handles too (activesupport's
+            IsolatedExecutionState gives both an accessor) */
+         sp_streq(name, "Thread")    || sp_streq(name, "Fiber") ||
+         sp_streq(name, "Random");
+}

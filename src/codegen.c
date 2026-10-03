@@ -3433,6 +3433,9 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
     else if (sp_streq(cn, "Time"))    { buf_puts(b, "sp_Time self"); }
     else if (sp_streq(cn, "Thread"))  { buf_puts(b, "sp_thread *self"); }
     else if (sp_streq(cn, "Fiber"))   { buf_puts(b, "sp_Fiber *self"); }
+    /* the runtime's generator: a reopening's self is its handle (the class's
+       C name is u_Random, clear of the runtime's own sp_Random) */
+    else if (sp_streq(c->classes[s->class_id].name, "Random")) { emit_ctype(c, TY_RANDOM, b); buf_puts(b, "self"); }
     else if (is_exc_name(c->classes[s->class_id].name)) { buf_puts(b, "sp_Exception *self"); }
     else if (io_family_class(c, s->class_id)) { buf_puts(b, "sp_File *self"); }
     else if (sp_streq(cn, "Class"))   { buf_puts(b, "sp_Class self"); }
@@ -7917,26 +7920,7 @@ else if (orecv >= 0 && onm) {
 /* Emit the struct + the constructor (sp_<Class>_new) for one class. */
 /* Returns 1 if the class name shadows a built-in runtime type (no struct/new to emit). */
 int is_builtin_reopen(const char *name) {
-  return sp_streq(name, "Toplevel") ||
-         sp_streq(name, "String")    || sp_streq(name, "Integer") ||
-         sp_streq(name, "Float")     || sp_streq(name, "Symbol")  ||
-         sp_streq(name, "TrueClass") || sp_streq(name, "FalseClass") ||
-         sp_streq(name, "NilClass")  || sp_streq(name, "Array")   ||
-         sp_streq(name, "Object")    || sp_streq(name, "Numeric") ||
-         sp_streq(name, "Dir")       ||
-         /* runtime value types with a typedef of their own (sp_Range, sp_Time,
-            sp_File, sp_Class): a user struct under that name was a C-level
-            typedef collision before any call was reached (activesupport's
-            blank.rb reopens Range and Time) */
-         sp_streq(name, "Range")     || sp_streq(name, "Time") ||
-         sp_streq(name, "File")      || sp_streq(name, "Class") ||
-         sp_streq(name, "Hash")      || io_family_name(name) ||
-         /* a thread and a fiber are runtime handles too (activesupport's
-            IsolatedExecutionState gives both an accessor) */
-         sp_streq(name, "Thread")    || sp_streq(name, "Fiber") ||
-         /* a builtin exception's reopening (`class LoadError; def is_missing?`)
-            adds methods to the runtime's class: the value stays the runtime's
-            sp_Exception, raised, rescued and constructed by name as before */
+  return is_builtin_reopen_name(name) || io_family_name(name) ||
          is_builtin_exception_name(name);
 }
 

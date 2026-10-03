@@ -750,12 +750,6 @@ spinel: 1 refusal, nothing written
 == test/reject/string_mutator_jump_arm.rb [promote] rc=1
 spinel: unsupported expression: node N (ReturnNode)
 spinel: 1 refusal, nothing written
-== test/reject/string_narrowed_element_append.rb [default] rc=1
-spinel: a String is not yet shared by reference through a narrowed boxed iterator element into an appending parameter
-spinel: 1 refusal, nothing written
-== test/reject/string_narrowed_element_append.rb [promote] rc=1
-spinel: a String is not yet shared by reference through a narrowed boxed iterator element into an appending parameter
-spinel: 1 refusal, nothing written
 == test/reject/string_nested_masgn_deep.rb [default] rc=1
 spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
 == test/reject/string_nested_masgn_deep.rb [promote] rc=1
@@ -764,6 +758,12 @@ spinel: a nested multiple-assignment target appends to a String variable from an
 spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
 == test/reject/string_nested_masgn_target.rb [promote] rc=1
 spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
+== test/reject/string_poly_stored_rebind.rb [default] rc=1
+spinel: += on a shared String cannot preserve rebinding identity; refused while share-by-default is in progress
+spinel: 1 refusal, nothing written
+== test/reject/string_poly_stored_rebind.rb [promote] rc=1
+spinel: += on a shared String cannot preserve rebinding identity; refused while share-by-default is in progress
+spinel: 1 refusal, nothing written
 == test/reject/string_rest_splat_yield.rb [default] rc=1
 spinel: a String is passed to a block's parameter `b` through a splat into a yield, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat into a yield). Return the String from the proc and assign it, or append to it in the caller.
 spinel: 1 refusal, nothing written

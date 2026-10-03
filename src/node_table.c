@@ -131,15 +131,18 @@ static int split_line(const char *line, size_t len, Tok parts[3], const char **v
   return np;
 }
 
+/* The digits gather unsigned: the smallest Integer's are one past what a
+   long long holds until its sign is applied. */
 static long long parse_ll(const char *s, size_t len) {
-  long long sign = 1, v = 0;
+  int neg = 0;
+  unsigned long long v = 0;
   size_t i = 0;
-  if (i < len && (s[i] == '-' || s[i] == '+')) { if (s[i] == '-') sign = -1; i++; }
+  if (i < len && (s[i] == '-' || s[i] == '+')) { neg = s[i] == '-'; i++; }
   for (; i < len; i++) {
     if (s[i] < '0' || s[i] > '9') break;
-    v = (v * 10) + (s[i] - '0');
+    v = (v * 10) + (unsigned long long)(s[i] - '0');
   }
-  return v * sign;
+  return (long long)(neg ? 0ULL - v : v);
 }
 
 /* Parse a comma-separated id list into a malloc'd int array. */

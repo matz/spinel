@@ -430,7 +430,7 @@ else {
   }
 
   if (integer->negative) {
-    if (overflow || val >= max_negative) return -(long long)max_negative;
+    if (overflow || val >= max_negative) return -(long long)max_positive - 1;
     return -(long long)val;
   }
   if (overflow || val > max_positive) return (long long)max_positive;

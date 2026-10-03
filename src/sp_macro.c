@@ -1673,7 +1673,7 @@ static int mx_ptr_cmp(const void *a, const void *b) {
   const pm_node_t *x = *(const pm_node_t *const *)a, *y = *(const pm_node_t *const *)b;
   return x < y ? -1 : x > y;
 }
-static void mx_sort_tracked(void) { qsort(g_mx_tracked, (size_t)g_mx_ntracked, sizeof *g_mx_tracked, mx_ptr_cmp); }
+static void mx_sort_tracked(void) { if (g_mx_ntracked) qsort(g_mx_tracked, (size_t)g_mx_ntracked, sizeof *g_mx_tracked, mx_ptr_cmp); }
 static int mx_is_tracked(const pm_node_t *n) {
   return g_mx_ntracked && bsearch(&n, g_mx_tracked, (size_t)g_mx_ntracked, sizeof *g_mx_tracked, mx_ptr_cmp) != NULL;
 }

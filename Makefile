@@ -390,6 +390,32 @@ build/csrc-work/codegen_util.o: build/csrc/sp_rt_names.h
 $(SPINEL_WORK): $(SPINEL_WORK_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB)
 	$(CC) $(CFLAGS) $(SPINEL_WORK_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) -lm $(LDFLAGS) -o $@
 
+# The compiler again under AddressSanitizer and UndefinedBehaviorSanitizer,
+# for `make san-check` (tools/san_check.sh): every program of the corpus
+# compiled to C by it, and a report from either sanitizer fails. A memo that
+# still points into a table a pass has since edited reads freed memory and
+# the compile finishes all the same, so no test sees it; here it stops. The
+# parser's side (spinel_parse.c, sp_macro.c) is instrumented too; prism and
+# the regexp engine are linked as they are. Not built by default and not a
+# gate leg: the build takes minutes and so does the pass.
+SPINEL_SAN = build/spinel-san
+SAN_FLAGS = -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+SPINEL_SAN_OBJ = $(patsubst build/csrc/%.o,build/csrc-san/%.o,$(SPINEL_OBJ))
+build/csrc-san/%.o: src/%.c $(SPINEL_HDRS) | build/csrc
+	@mkdir -p build/csrc-san
+	$(CC) $(CFLAGS) $(SAN_FLAGS) -Isrc -Ibuild/csrc -c $< -o $@
+build/csrc-san/main.o: build/csrc/spinel_rev.h
+build/csrc-san/codegen_util.o: build/csrc/sp_rt_names.h
+build/csrc-san/sp_parse_lib.o: src/spinel_parse.c src/sp_macro.c $(PRISM_LIB) | build/csrc
+	@mkdir -p build/csrc-san
+	$(CC) $(CFLAGS) $(SAN_FLAGS) -I$(PRISM_INC) -c src/spinel_parse.c -o $@
+$(SPINEL_SAN): $(SPINEL_SAN_OBJ) build/csrc-san/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(SPINEL_SAN_OBJ) build/csrc-san/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) -lm $(LDFLAGS) -o $@
+
+.PHONY: san-check
+san-check: $(SPINEL_SAN)
+	@tools/san_check.sh
+
 # Wrapper around the system `timeout` that always returns GNU coreutils'
 # exit code (124 on timeout), regardless of which `timeout` is on PATH.
 # The bench target keys on 124 to mark a run as SKIP; busybox uses 143

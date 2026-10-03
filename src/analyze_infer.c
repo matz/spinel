@@ -349,8 +349,10 @@ static int node_is_container_elem(Compiler *c, int id) {
      - every read of it is the receiver of one of the operations below;
      - every `[]=` / `store` into it writes an object of one class (never nil);
      - for an ivar, no module method, class method or class body names it.
-   Computed once per fixpoint round, over the whole table. */
-typedef struct { int kind, owner; const char *name; int cls; int bad; int writes; } HvSlot;
+   Computed once per fixpoint round, over the whole table. A slot keeps its
+   own copy of the name: the node's string is freed when a pass renames the
+   local (subtree_rename_local) before the round ends. */
+typedef struct { int kind, owner; char *name; int cls; int bad; int writes; } HvSlot;
 static HvSlot *g_hv = NULL;
 static int g_hv_n = 0, g_hv_cap = 0;
 static unsigned g_hv_gen = 0;
@@ -397,7 +399,8 @@ static HvSlot *hv_find(int kind, int owner, const char *name, int create) {
     if (!g_hv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
   HvSlot *h = &g_hv[g_hv_n++];
-  h->kind = kind; h->owner = owner; h->name = name; h->cls = -1; h->bad = 0; h->writes = 0;
+  h->kind = kind; h->owner = owner; h->name = strdup(name); h->cls = -1; h->bad = 0; h->writes = 0;
+  if (!h->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   return h;
 }
 /* The hash operations a slot may be the receiver of, with their argument and
@@ -430,6 +433,7 @@ static int hv_is_poly_hash(TyKind t) {
 static void hv_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   g_hv_building = 1;
+  for (int i = 0; i < g_hv_n; i++) free(g_hv[i].name);
   g_hv_n = 0;
   int n = nt->count;
   unsigned char *ok = calloc((size_t)(n > 0 ? n : 1), 1);

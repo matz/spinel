@@ -427,6 +427,7 @@ int desugar_mutator_receiver_value(Compiler *c);
 int desugar_method_curry(Compiler *c);
 int desugar_curry_arity_to_int(Compiler *c);
 int desugar_int_enum_with_index(Compiler *c);
+int desugar_hash_iter_with_index(Compiler *c);
 int widen_shared_cmp_params(Compiler *c);
 int desugar_reduce_proc_arg(Compiler *c);
 int desugar_block_capture_wrap(Compiler *c);

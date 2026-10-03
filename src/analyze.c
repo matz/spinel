@@ -28646,6 +28646,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= desugar_method_curry(c);             /* meth.curry -> meth.to_proc.curry */
     ch |= desugar_curry_arity_to_int(c);       /* proc.curry(obj) -> proc.curry(obj.to_int) */
     ch |= desugar_int_enum_with_index(c);      /* n.times.with_index -> n.times.each.with_index */
+    ch |= desugar_hash_iter_with_index(c);     /* h.select.with_index { } -> h.select { } with a counter */
     ch |= widen_shared_cmp_params(c);          /* multi-class <=> takes its operand boxed */
     ch |= desugar_reduce_proc_arg(c);          /* reduce(&pr) -> reduce { |a,b| pr.call(a,b) } */
     ch |= desugar_block_capture_wrap(c);       /* { |i| ->{i} } -> { |i| (->(i){ ->{i} }).call(i) } */

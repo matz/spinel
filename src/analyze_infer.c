@@ -4836,7 +4836,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
         for (int ci = 0; ci < c->nclasses; ci++) {
           if (!c->classes[ci].instantiated) continue;
           int iv = comp_ivar_index(&c->classes[ci], sym);
-          if (iv < 0) continue;
+          if (iv < 0 || (c->classes[ci].is_struct && iv < c->classes[ci].nmembers)) continue;
           TyKind t = c->classes[ci].ivar_types[iv];
           if (uni == TY_UNKNOWN) uni = t;
           else if (uni != t) { uni = TY_POLY; break; }

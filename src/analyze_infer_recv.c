@@ -1226,8 +1226,12 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
                             ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
         /* A name in the layout yields its declared type; an undefined-but-valid
            `@`-name reads as nil and a bad name (no `@`) raises NameError -- both poly. */
-        /* Data/Struct members are not @-ivars in CRuby: read as nil (#2849) */
-        int iv = (sym && sym[0] == '@' && !cls->is_struct) ? comp_ivar_index(cls, sym) : -1;
+        /* Data/Struct members are not @-ivars in CRuby: read as nil (#2849).
+           The members alone: a Struct's own ivar past them (`@z`, set by
+           instance_variable_set) is a field like any class's, which the
+           codegen reads unboxed */
+        int iv = (sym && sym[0] == '@') ? comp_ivar_index(cls, sym) : -1;
+        if (iv >= 0 && cls->is_struct && iv < cls->nmembers) iv = -1;
         if (iv >= 0) { *out = ivar_value_ty(cls, iv); return 1; }
         { *out = TY_POLY; return 1; }
       }

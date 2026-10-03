@@ -4,6 +4,7 @@
 
 #include "codegen_internal.h"
 #include "call_plan.h"
+#include "repr.h"
 
 /* The value of the block a `fetch` or `delete` runs when it finds nothing, as
    `({ bind; leading statements; setup; value; })`. `bind` sets the block's
@@ -9325,119 +9326,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
          sp_streq(name, "singleton_methods")) &&
         emit_object_methods_reflection(c, recv, ty_object_class(rt), name, b))
       return 1;
-    if ((sp_streq(name, "instance_variable_get") || sp_streq(name, "instance_variable_set")) &&
-        argc >= 1 && nt_type(nt, argv[0]) &&
-        (sp_streq(nt_type(nt, argv[0]), "SymbolNode") || sp_streq(nt_type(nt, argv[0]), "StringNode"))) {
-      const char *a0ty = nt_type(nt, argv[0]);
-      const char *sym = sp_streq(a0ty, "SymbolNode")
-                          ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
-      int is_set = sp_streq(name, "instance_variable_set");
-      /* Arity is statically known: get takes just the name, set the name and a
-         value. A wrong count is a clear diagnostic rather than falling through to
-         the misleading by-value-receiver message below. */
-      if (is_set && argc != 2) { unsupported(c, id, "instance_variable_set takes exactly 2 arguments"); return 1; }
-      if (!is_set && argc != 1) { unsupported(c, id, "instance_variable_get takes exactly 1 argument"); return 1; }
-      int is_val = comp_ty_value_obj(c, rt);
-      const char *rty = nt_type(nt, recv);
-      int recv_lvalue = rty && (sp_streq(rty, "LocalVariableReadNode") ||
-                                sp_streq(rty, "InstanceVariableReadNode") || sp_streq(rty, "SelfNode"));
-      /* A name without a leading `@` is never a valid ivar name: raise NameError
-         at runtime (evaluating the receiver first for its side effects). */
-      if (!sym || sym[0] != '@') {
-        if (recv >= 0) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), "); }
-        else buf_puts(b, "(");
-        buf_printf(b, "sp_raise_cls(\"NameError\", \"'%s' is not allowed as an instance variable name\"), sp_box_nil())",
-                   sym ? sym : "");
-        return 1;
-      }
-      int mi = -1;
-      /* Data/Struct members live in the layout but are NOT @-instance
-         variables in CRuby: a get answers nil, not the member (#2849) */
-      for (int i = c->classes[cid].is_struct ? c->classes[cid].nmembers : 0; i < c->classes[cid].nivars; i++)
-        if (sp_streq(c->classes[cid].ivars[i], sym)) { mi = i; break; }
-      if (mi >= 0) {
-        /* A value object is passed by value, so a field write only sticks when
-           the receiver is an lvalue (a local / ivar / self); a pointer object
-           can be mutated through any reference. */
-        if (is_set && is_val && !recv_lvalue) {
-          unsupported(c, id, "instance_variable_set on a by-value object requires an lvalue receiver");
-          return 1;
-        }
-        TyKind mt = c->classes[cid].ivar_types[mi];
-        const char *acc = is_val ? "." : "->";
-        if (is_set) {
-          /* the write is a mutation like any other: a frozen receiver raises
-             FrozenError rather than taking it (#3872) */
-          if (!is_val && c->classes[cid].freeze_observed) {
-            int tf9 = ++g_tmp;
-            Buf rbf; memset(&rbf, 0, sizeof rbf); emit_expr(c, recv, &rbf);
-            buf_printf(b, "({ sp_%s *_t%d = %s; ", c->classes[cid].c_name, tf9,
-                       rbf.p ? rbf.p : "NULL");
-            free(rbf.p);
-            char selft[32]; snprintf(selft, sizeof selft, "_t%d", tf9);
-            emit_frozen_obj_guard(c, cid, selft, b);
-            buf_printf(b, "_t%d->iv_%s = ", tf9, iv_c(sym + 1));
-            if (mt == TY_POLY) emit_boxed(c, argv[1], b);
-            else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));
-            else if (emit_array_into_poly_slot(c, mt, argv[1], b)) { }
-            else emit_expr(c, argv[1], b);
-            buf_puts(b, "; })");
-            return 1;
-          }
-          buf_puts(b, "(("); emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s = ", acc, iv_c(sym + 1));
-          if (mt == TY_POLY) emit_boxed(c, argv[1], b);
-          else if (mt == TY_STRBUF) {
-            char srefIS[1024];
-            if (strbuf_slot_ref(c, argv[1], srefIS, sizeof srefIS)) buf_puts(b, srefIS);
-            else {
-              buf_puts(b, "sp_String_new_shared(");
-              emit_str_expr(c, argv[1], b);
-              buf_puts(b, ")");
-            }
-          }
-          /* nil into a scalar slot is its in-band nil (SP_INT_NIL, NaN), not
-             the zero value the literal emits as */
-          else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));
-          /* a typed array into the general Array slot, rebuilt as an
-             `@x = v` write does */
-          else if (emit_array_into_poly_slot(c, mt, argv[1], b)) { }
-          else emit_expr(c, argv[1], b);
-          buf_puts(b, ")");
-        }
-        else if (mt == TY_STRBUF && c->strbuf_handle_demand[id]) {
-          /* the caller asked for the HANDLE, not a reading of it. The
-             out-of-line reader answers the same way for the same demand;
-             inlined, it copied regardless, so `obj.reader.equal?(x)` compared
-             two fresh copies and answered false for one object (#4363). */
-          buf_puts(b, "("); emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s", acc, iv_c(sym + 1));
-        }
-        else if (mt == TY_STRBUF) {
-          /* a shared-mutable slot reads out as a GC copy; the raw handle
-             must not leak into a plain string context (#3227) */
-          int tvG = ++g_tmp;
-          buf_printf(b, "({ sp_String *_t%d = (", tvG);
-          emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s; _t%d ? sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1])) : NULL; })",
-                     acc, iv_c(sym + 1), tvG, tvG);
-        }
-        else {
-          buf_puts(b, "("); emit_expr(c, recv, b);
-          buf_printf(b, ")%siv_%s", acc, iv_c(sym + 1));
-        }
-        return 1;
-      }
-      /* A valid `@`-name not in the layout: get reads as nil (CRuby returns nil
-         for an unset ivar); set has no field to write under the fixed layout. */
-      if (is_set) {
-        unsupported(c, id, "instance_variable_set to an ivar absent from the fixed object layout");
-        return 1;
-      }
-      if (recv >= 0) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), sp_box_nil())"); }
-      else buf_puts(b, "sp_box_nil()");
-      return 1;
-    }
+    if (emit_object_ivar_call(c, id, name, recv, rt, cid, argc, argv, b)) return 1;
     /* remove_instance_variable(:@x) returns the removed value. The fixed object
        layout can't truly undefine a slot, so a later read still sees the field;
        an undefined name raises NameError, matching CRuby (#3020). */
@@ -12308,7 +12197,16 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
     const char *sym = sp_streq(a0ty, "SymbolNode")
                         ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
     if (sym && sym[0] == '@') {
-      TyKind res = comp_ntype(c, id);
+      /* a Struct member's name: CRuby keeps such an ivar beside the member,
+         and Spinel has one slot for both, as the typed form refuses */
+      for (int k = 0; k < c->nclasses; k++) {
+        ClassInfo *sk = &c->classes[k];
+        int miv = sk->instantiated && sk->is_struct && !sk->is_data ? comp_ivar_index(sk, sym) : -1;
+        if (miv >= 0 && miv < sk->nmembers)
+          unsupported(c, id, "instance_variable_set to an ivar absent from the fixed object layout");
+      }
+      Repr rp = repr_of(c, id);
+      TyKind res = rp.as_ty;
       int tv = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv);
       emit_expr(c, recv, b);
@@ -12316,10 +12214,17 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       emit_boxed(c, argv[1], b);
       buf_printf(b, "; if (_t%d.tag == SP_TAG_OBJ) switch (_t%d.cls_id) {", tv, tv);
       for (int k = 0; k < c->nclasses; k++) {
-        if (!c->classes[k].instantiated || c->classes[k].is_struct) continue;
+        /* a Data instance is frozen: the write raises, as in CRuby */
+        if (c->classes[k].instantiated && c->classes[k].is_data) {
+          buf_printf(b, " case %d: sp_raise_frozen_obj(_t%d, (&(\"\\xff\" \"can't modify frozen %s\")[1])); break;",
+                     k, tv, class_ruby_name(c, k) ? class_ruby_name(c, k) : c->classes[k].name);
+          continue;
+        }
+        if (!c->classes[k].instantiated) continue;
         if (comp_ty_value_obj(c, ty_object(k))) continue;   /* by value: no reference to write through */
         int iv = comp_ivar_index(&c->classes[k], sym);
-        if (iv < 0) continue;
+        /* a Struct member is no ivar (#2849) */
+        if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) continue;
         TyKind t = c->classes[k].ivar_types[iv];
         if (t == TY_STRBUF) continue;
         char val[48]; snprintf(val, sizeof val, "_ivs%d", tv);
@@ -12338,7 +12243,7 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_printf(b, " case SP_BUILTIN_OBJECT: sp_Object_ivar_set((sp_Object *)_t%d.v.p, sp_sym_intern(\"%s\"), _ivs%d); break;",
                  tv, sym, tv);
       buf_puts(b, " } ");
-      if (res != TY_POLY && res != TY_UNKNOWN) {
+      if (rp.kind != RK_BOXED && rp.kind != RK_NONE) {
         char ivn[24]; snprintf(ivn, sizeof ivn, "_ivs%d", tv);
         emit_unbox_text(c, res, ivn, b);
         buf_puts(b, "; })");
@@ -12362,7 +12267,8 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
     const char *sym = sp_streq(a0ty, "SymbolNode")
                         ? nt_str(nt, argv[0], "value") : nt_str(nt, argv[0], "content");
     if (sym && sym[0] == '@') {
-      TyKind res = comp_ntype(c, id);
+      Repr rp = repr_of(c, id);
+      TyKind res = rp.as_ty;
       int tv = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv);
       emit_expr(c, recv, b);
@@ -12371,7 +12277,8 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].instantiated) continue;
         int iv = comp_ivar_index(&c->classes[k], sym);
-        if (iv < 0) continue;
+        /* a Struct member is no ivar: it reads nil (#2849) */
+        if (iv < 0 || (c->classes[k].is_struct && iv < c->classes[k].nmembers)) continue;
         TyKind t = c->classes[k].ivar_types[iv];
         char fld[320];
         snprintf(fld, sizeof fld, "((sp_%s *)_t%d.v.p)->iv_%s", c->classes[k].c_name, tv, iv_c(sym + 1));
@@ -12382,9 +12289,12 @@ static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_printf(b, " case SP_BUILTIN_OBJECT: _ivg%d = sp_Object_ivar_get((sp_Object *)_t%d.v.p, sp_sym_intern(\"%s\")); break;",
                  tv, tv, sym);
       buf_puts(b, " } ");
-      if (res != TY_POLY && res != TY_UNKNOWN) {
+      if (rp.kind != RK_BOXED && rp.kind != RK_NONE) {
+        /* a receiver whose class lacks the slot answers nil: an Integer or
+           Float answer takes its nil sentinel */
         char ivn[24]; snprintf(ivn, sizeof ivn, "_ivg%d", tv);
-        emit_unbox_text(c, res, ivn, b);
+        if (res == TY_INT || res == TY_FLOAT) emit_unbox_nilable_text(c, res, ivn, b);
+        else emit_unbox_text(c, res, ivn, b);
         buf_puts(b, "; })");
       }
       else buf_printf(b, "_ivg%d; })", tv);

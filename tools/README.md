@@ -282,6 +282,87 @@ kind, name and type, so two of them exchanging types go unseen. Keyed by
 where they start instead, the same pass finds no such exchange and reports
 three programs in which only the helper's line moved.
 
+## operand_probe
+
+`ruby tools/operand_probe.rb [--int-overflow promote] [--jobs J] [--out DIR]
+[--timeout SEC] [--keep] [FILE..]` asks whether the operands of a call run
+as Ruby runs them: the receiver, then the arguments left to right, each
+once, and then the call. Spinel hands the operands of most calls to one C
+call, whose order C leaves open, and binds them in order first where it
+sees that the order shows (`emit_operands_in_order`, and the arms that do
+it by hand). An arm that does neither answers wrong only for a program
+whose operands have effects, and few programs of the suite have two in one
+call, so the suite does not say which arms are left. The probe gives every
+operand an effect. It writes each FILE (default `test/*.rb`) again with
+every operand `e` of every call spelled `__opN(e)`, where `def __opN(v)`
+logs N to stderr and answers `v` (a user method called with one argument,
+which is all the compiler sees of it), runs that program under ruby and
+under spinel, and reads the two logs call by call. An operand is the
+receiver or a positional argument; one the compiler reads by its spelling
+is left as written (a constant, `self`, a symbol, `nil`, `true`, `false`, a
+range, regexp, hash or lambda literal), and so is the whole call when it
+has fewer than two operands left, only literals, a splat or keywords, or a
+name the compiler resolves from the arguments (`send`, `respond_to?`,
+`require` and the others of `AS_WRITTEN`). The body of a block, a lambda or
+a `def` is asked on its own: it runs when it is called.
+
+A call is a finding, classed: `count` (one of its operands ran another
+number of times than the others, against ruby's counts: an operand dropped,
+or run twice, or never reached because a later one raised first), `order`
+(an operand was logged while the one before it had still to run) and
+`nested` (an operand of a call written inside one of its operands was
+logged before the operand ahead of that one: `f(a(x)) + g(b(y))` running
+`b` before `f`). Each call is read by its own operands, so a call that
+recurses, or that two calls of a block interleave, is read as it nests,
+and a builtin that calls its block in another sequence than ruby's does,
+which ruby does not promise, is no finding; two logs that differ with no
+such call are listed as `sequence` and not counted. A call ruby's own log
+shows out of order (a `retry`, a `throw` out of an operand) is not read.
+
+The instrumented program has to print under ruby what the program prints
+(its `.expected` file, or ruby's answer for the file as written), which
+also leaves out a program that reads a file beside itself; one whose
+threads write the log at once is left out too. When spinel refuses the
+instrumented program, does not build it, or runs it to another answer, the
+question was not asked: the program is listed under what happened and not
+counted, though the wrap is a valid program and each of those is a wrong
+answer or a refusal of its own. The first three programs of every class
+and method are asked again with only the operands of that one call
+wrapped, and the summary says for how many the call is still a finding.
+Output, under DIR (default `build/operand-probe/`): `summary.txt` (the
+findings by class and method, then by program) and for each program with a
+finding `findings/<n>-<program>/` holding `probe.rb` (the program as it was
+asked), `calls.txt` (each call, its class, and its operands in the order
+each log has them) and `alone-<line>-<column>.rb` for a call asked alone.
+The first 100,000 operands a run logs are read. Exit status 0 with no
+finding, 1 with one, 4 for the tool's own error. Like the other probes it
+is a CRuby script to run by hand (it needs Prism, which Ruby 3.3 and later
+bundle), not a gate, and not one of the tools make builds; the answers are
+compared as they print, so the reference is the `ruby` whose wording Spinel
+follows (4.0). The programs run from the repository's root, as `make test`
+runs them, so one that stops early can leave a file it made there.
+
+On 2e243ba7, with gcc 13.3 and ruby 3.3.6 (which does not print the
+`.expected` of 778 of the programs, so those are left out), a run over
+`test/*.rb` asks 2,968 programs, 22,505 calls and 47,894 operands, in 53
+minutes at `--jobs 3`. It finds 1,712 calls in 670 programs: 1,259 `order`,
+281 `nested`, 172 `count`, in 212 families of class and method, the
+largest `recv << arg` (674 calls in 308 programs), `push`, `[]=` and
+`first`. Of the 356 calls asked alone, 351 are still findings. 67 programs
+are a `sequence`, and 533 were not asked: 229 answer otherwise once
+instrumented (among them programs that append to a String the wrap handed
+on, which Spinel copies: #6179), 187 raise, 95 are refused, 17 do not
+build, 4 run out of time and 1 crashes.
+
+What it does not see: the order of anything that is not a call's operand
+(the elements of an Array literal, the parts of an interpolation, keyword
+arguments, the operands of `super` and `yield`), an operand with an effect
+the compiler can see and a wrapped one cannot (a write to a local a
+sibling reads), and what a call does when its operands are not calls: the
+wrap makes every operand a call of a user method, so a finding says that
+the call, given such operands, runs them out of order, not that the
+program as written answers wrong.
+
 ## Adding a tool
 
 Drop `tools/<name>.rb` (subset Ruby, `require_relative "tool_common"`

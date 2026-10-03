@@ -7114,6 +7114,21 @@ static void emit_ret_nil(Compiler *c, TyKind t, Buf *b) {
   }
 }
 
+/* An inlined body or begin has its own result slot; its Hash variant can
+   differ from the enclosing method's return type. */
+static int emit_hash_tail_conversion(Compiler *c, int node, Buf *b) {
+  TyKind slot = (g_result_var && g_result_ty != TY_UNKNOWN) ? g_result_ty : g_ret_type;
+  TyKind value = comp_ntype(c, node);
+  if (!ty_is_hash(slot) || !ty_is_hash(value) || slot == value ||
+      !(slot == TY_POLY_POLY_HASH || slot == TY_SYM_POLY_HASH || slot == TY_STR_POLY_HASH))
+    return 0;
+  const char *hconv = slot == TY_POLY_POLY_HASH ? "sp_poly_as_poly_poly_hash"
+                     : slot == TY_SYM_POLY_HASH ? "sp_poly_as_sym_poly_hash"
+                     : "sp_poly_as_str_poly_hash";
+  buf_printf(b, "%s(", hconv); emit_boxed(c, node, b); buf_puts(b, ")");
+  return 1;
+}
+
 /* Emit a tail/return value expression into a non-poly return slot. A call that
    resolves to nil through a nil/unresolved receiver is typed `-> Integer` (etc.)
    per RBS but emits the poly box `sp_box_nil()`; returning that raw from a
@@ -7264,16 +7279,7 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
      writes widened its variant -- and the conversion is the one the assignment
      side already makes (#4089), through the boxed form the converting entries
      take. */
-  if (ty_is_hash(g_ret_type) && ty_is_hash(comp_ntype(c, node)) &&
-      g_ret_type != comp_ntype(c, node) &&
-      (g_ret_type == TY_POLY_POLY_HASH || g_ret_type == TY_SYM_POLY_HASH ||
-       g_ret_type == TY_STR_POLY_HASH)) {
-    const char *hconv = g_ret_type == TY_POLY_POLY_HASH ? "sp_poly_as_poly_poly_hash"
-                      : g_ret_type == TY_SYM_POLY_HASH  ? "sp_poly_as_sym_poly_hash"
-                      : "sp_poly_as_str_poly_hash";
-    buf_printf(b, "%s(", hconv); emit_boxed(c, node, b); buf_puts(b, ")");
-    return;
-  }
+  if (emit_hash_tail_conversion(c, node, b)) return;
   /* A bare `nil` returned through an int or float slot. emit_expr renders
      NilNode as the numeric default 0, which in those two slots is a real
      value -- the caller reads 0 / 0.0 where the method said nil. Both have a

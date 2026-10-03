@@ -4244,33 +4244,23 @@ int desugar_array_at(Compiler *c) {
   return changed;
 }
 
-/* Is `target` what `node` answers: the node itself, the last statement of a
-   body, or the end of an if/unless branch or a parenthesized group? */
-static int cow_in_tail(const NodeTable *nt, int node, int target) {
-  if (node < 0) return 0;
-  if (node == target) return 1;
-  switch (nt_kind(nt, node)) {
-  case NK_StatementsNode: {
-    int n = 0;
-    const int *st = nt_arr(nt, node, "body", &n);
-    return st && n > 0 && cow_in_tail(nt, st[n - 1], target);
-  }
-  case NK_ParenthesesNode: return cow_in_tail(nt, nt_ref(nt, node, "body"), target);
-  case NK_ElseNode: return cow_in_tail(nt, nt_ref(nt, node, "statements"), target);
-  case NK_IfNode:
-    return cow_in_tail(nt, nt_ref(nt, node, "statements"), target) ||
-           cow_in_tail(nt, nt_ref(nt, node, "subsequent"), target);
-  case NK_UnlessNode:
-    return cow_in_tail(nt, nt_ref(nt, node, "statements"), target) ||
-           cow_in_tail(nt, nt_ref(nt, node, "else_clause"), target);
-  default: return 0;
-  }
-}
-
-/* The op-assign is what its method returns: its value is used. */
-static int cow_is_method_value(Compiler *c, int id) {
-  for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].def_node >= 0 && cow_in_tail(c->nt, c->scopes[s].body, id)) return 1;
+/* The last statement of a block whose call any user class defines (a
+   user `each`): an_value_dropped reads only the call's name, but that
+   method can answer the block's value. */
+static int cow_user_block_value(Compiler *c, const int *parent, int id) {
+  const NodeTable *nt = c->nt;
+  int st = parent[id];
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  int sn = 0;
+  const int *sb = nt_arr(nt, st, "body", &sn);
+  if (sn <= 0 || sb[sn - 1] != id) return 0;
+  int blk = parent[st];
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  int call = parent[blk];
+  const char *bn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  if (!bn) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, bn, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -4291,6 +4281,7 @@ int desugar_call_op_write(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  int *parent = NULL;
   for (int id = 0; id < n0; id++) {
     const char *ty = nt_type(nt, id);
     if (!ty || !sp_streq(ty, "CallOperatorWriteNode")) continue;
@@ -4309,9 +4300,15 @@ int desugar_call_op_write(Compiler *c) {
     for (int k = 0; k < c->nclasses && !has_def_writer; k++)
       if (comp_method_in_chain(c, k, wname, NULL) >= 0 || comp_method_in_chain(c, k, attr, NULL) >= 0) has_def_writer = 1;
     char aname[300]; snprintf(aname, sizeof aname, "%s", attr);
-    /* attr_writer: keep the store, unless the method answers the op-assign's
-       value, which the writer call carries and the store does not */
-    if (!has_def_writer && !cow_is_method_value(c, id)) continue;
+    /* attr_writer: keep the store, unless something reads the op-assign's
+       value (a method's tail, `x = (w.n += 1)`, a block's last statement,
+       also in the block of a user `each`), which the writer call carries
+       and the store does not */
+    if (!has_def_writer) {
+      if (!parent) parent = an_parent_map(nt);
+      if (!parent) continue;
+      if (an_value_dropped(nt, parent, id) && !cow_user_block_value(c, parent, id)) continue;
+    }
     char opname[64]; snprintf(opname, sizeof opname, "%s", op);
     if (!simple) {
       /* (__cow_N = recv; __cow_N.attr = __cow_N.attr op value) */
@@ -4380,6 +4377,7 @@ int desugar_call_op_write(Compiler *c) {
     (void)base;
     changed = 1;
   }
+  free(parent);
   return changed;
 }
 

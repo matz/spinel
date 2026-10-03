@@ -26922,6 +26922,121 @@ static void desugar_block_arg_order(Compiler *c) {
   }
 }
 
+/* Does the subtree under `n` write the variable a read of type-name prefix
+   `pfx` ("LocalVariable", "InstanceVariable", ...) and name `name` reads? A
+   def's body runs when called, under its own locals. */
+static int rr_writes_var(const NodeTable *nt, int n, const char *pfx, const char *name) {
+  if (n < 0) return 0;
+  const char *ty = nt_type(nt, n);
+  if (!ty || sp_streq(ty, "DefNode")) return 0;
+  if (!strncmp(ty, pfx, strlen(pfx)) && (strstr(ty, "Write") || strstr(ty, "Target")) &&
+      nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), name))
+    return 1;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++)
+    if (rr_writes_var(nt, nt_ref_at(nt, n, i), pfx, name)) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (rr_writes_var(nt, ids[j], pfx, name)) return 1;
+  }
+  return 0;
+}
+/* `v << (v = +"b")`: Ruby evaluates the receiver before the arguments, so the
+   String the call mutates and answers is the one v held then, and the
+   argument's write stands -- `r = v << (v = +"b")` gives r "ab" and v "b".
+   The String mutators read their receiver's variable again after the
+   arguments, to write the result back or to hand its handle on, so they
+   mutated or answered the String the argument bound, and a value-semantics
+   write-back undid the argument's write. When an argument or the block of
+   such a call, or of an append it chains onto (`v << x << (v = y)`), writes
+   the variable its receiver chain starts from, the call becomes
+     (__rr_N = v; __rr_N << (v = +"b"))
+   so the mutation and the value follow the String the receiver read, and the
+   write stands. The node itself becomes the parentheses, keeping its id,
+   line and scope. This runs after the type fixpoint converges; a rewrite
+   resumes inference so the new temporary takes its receiver's type. */
+static int desugar_mutator_recv_rebind(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !is_string_rebind_mutator(nm)) continue;
+    /* the variable the receiver chain starts from, through the appends
+       that answer their receiver */
+    int base = nt_ref(nt, id, "receiver");
+    while (base >= 0 && nt_kind(nt, base) == NK_CallNode && nt_ref(nt, base, "receiver") >= 0 &&
+           nt_str(nt, base, "name") &&
+           is_string_append(nt_str(nt, base, "name")))
+      base = nt_ref(nt, base, "receiver");
+    const char *pfx = NULL;
+    switch (nt_kind(nt, base)) {
+      case NK_LocalVariableReadNode: pfx = "LocalVariable"; break;
+      case NK_InstanceVariableReadNode: pfx = "InstanceVariable"; break;
+      case NK_GlobalVariableReadNode: pfx = "GlobalVariable"; break;
+      case NK_ClassVariableReadNode: pfx = "ClassVariable"; break;
+      default: continue;
+    }
+    const char *vn = nt_str(nt, base, "name");
+    if (!vn) continue;
+    int hit = 0;
+    for (int cur = id; cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
+      hit = rr_writes_var(nt, nt_ref(nt, cur, "arguments"), pfx, vn) ||
+            rr_writes_var(nt, nt_ref(nt, cur, "block"), pfx, vn);
+    if (!hit) continue;
+    /* These names also belong to Arrays, Hashes and user objects. Only a
+       String receiver needs the String emitters' receiver snapshot. */
+    TyKind rt = infer_type(c, base);
+    if (rt != TY_STRING && rt != TY_STRBUF) continue;
+    Scope *sc = comp_scope_of(c, id);
+    if (!sc) continue;
+    int first = nt->count;
+    char tn[64];
+    snprintf(tn, sizeof tn, "__rr_%s", comp_node_tag(c, id));
+    /* `__rr_N = v`, its value a fresh read of v; the chain's base becomes
+       the read of __rr_N */
+    char vty[48], vnm[256];
+    snprintf(vty, sizeof vty, "%sReadNode", pfx);
+    snprintf(vnm, sizeof vnm, "%s", vn);
+    int w = nt_new_node(nt, "LocalVariableWriteNode");
+    int vr = nt_new_node(nt, vty);
+    if (w < 0 || vr < 0) continue;
+    nt_node_set_str(nt, vr, "name", vnm);
+    if (pfx[0] == 'L') nt_node_set_int(nt, vr, "depth", nt_int(nt, base, "depth", 0));
+    nt_node_set_str(nt, w, "name", tn);
+    nt_node_set_ref(nt, w, "value", vr);
+    long long bl = nt_int(nt, base, "node_line", 0), bf = nt_int(nt, base, "node_file", 0),
+              bc = nt_int(nt, base, "node_col", 0);
+    nt_node_reset(nt, base, "LocalVariableReadNode");
+    nt_node_set_str(nt, base, "name", tn);
+    nt_node_set_int(nt, base, "node_line", bl);
+    nt_node_set_int(nt, base, "node_file", bf);
+    nt_node_set_int(nt, base, "node_col", bc);
+    nt_node_set_int(nt, vr, "node_line", bl);
+    nt_node_set_int(nt, vr, "node_file", bf);
+    nt_node_set_int(nt, vr, "node_col", bc);
+    scope_local_intern(sc, tn);
+    int nc = bo_shallow_copy(nt, id);
+    if (nc < 0) continue;
+    int stm[2] = { w, nc };
+    int stmts = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, stmts, "body", stm, 2);
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
+              col = nt_int(nt, id, "node_col", 0);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+    nt_node_set_int(nt, id, "node_col", col);
+    nt_node_set_ref(nt, id, "body", stmts);
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = first; j < nt->count; j++) c->nscope[j] = encl;
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `m(&v)` where v is a boxed value that can be a Symbol: `&:name` is lowered
    to the block `{ |_spx| _spx.name }` before parsing, but a Symbol that a poly
    value holds is known only at run time, and sp_poly_to_block refused it with
@@ -28657,7 +28772,7 @@ void analyze_program(Compiler *c) {
         ch = infer_param_types(c);
         g_final_bind_pass = 0;
       }
-      if (!ch) break;
+      if (!ch && !desugar_mutator_recv_rebind(c)) break;
     }
   }
   g_infer_optimistic = 0;

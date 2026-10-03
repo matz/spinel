@@ -1,0 +1,27 @@
+["ab", "b"]
+["ab", "b"]
+["ba", "b"]
+"c"
+["ab", "b"]
+"q"
+["a", "zz"]
+"zz"
+["q", "qb"]
+["qab", "q", "qab"]
+["axb", "b", "axb"]
+["abq", "q"]
+["abz", "abz"]
+["zb", "q"]
+["abz", "q"]
+["abz", "q", 1]
+["abxq", "q"]
+FrozenError
+"q"
+["ab", "b"]
+["abq", "q"]
+"abq"
+"b2"
+["abq", "q"]
+["abq", "q"]
+["abq", "q"]
+["ab", "b"]

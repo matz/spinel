@@ -1,6 +1,7 @@
 /* builtin_names.c -- the families of builtin method names (builtin_names.h).
    Each family is spelled once here; the order is the order its compares run
    in, the one most of the replaced chains used. */
+#include <stddef.h>
 #include "types.h"
 #include "builtin_names.h"
 
@@ -125,4 +126,18 @@ int is_add_sub_mul(const char *n) {
 
 int is_int_bit_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^") || sp_streq(n, "<<") || sp_streq(n, ">>");
+}
+
+int is_string_append(const char *n) {
+  return sp_streq(n, "<<") || sp_streq(n, "concat");
+}
+
+int is_string_rebind_mutator(const char *n) {
+  static const char *const MUT[] = {
+    "<<", "concat", "prepend", "insert", "replace", "[]=", "slice!", "setbyte", "bytesplice",
+    "sub!", "gsub!", "tr!", "tr_s!", "delete!", "squeeze!", "delete_prefix!", "delete_suffix!",
+    "append_as_bytes", "force_encoding", "encode!", "unicode_normalize!", NULL };
+  for (int i = 0; MUT[i]; i++)
+    if (sp_streq(n, MUT[i])) return 1;
+  return 0;
 }

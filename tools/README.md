@@ -282,6 +282,86 @@ kind, name and type, so two of them exchanging types go unseen. Keyed by
 where they start instead, the same pass finds no such exchange and reports
 three programs in which only the helper's line moved.
 
+## literal_probe
+
+`ruby tools/literal_probe.rb [--plant body|operand] [--needle own|searched]
+[--form string|symbol|interp].. [--bytes N] [--control] [--no-reduce]
+[--jobs J] [--out DIR] [--timeout SEC] [--keep] [FILE..]` asks whether the
+text of a string literal steers the compiler. It is not supposed to: a
+literal is data. But the write barrier, the root elision and the root frame
+are passes over the generated C as text, the call emitters search an arm's C
+for a name (`sp_raise_nomethod(`, `SP_GC_ROOT`, a temporary's `_t21`), and
+the parser searches the Ruby source for what a program mentions (`break`,
+`define_finalizer`, a builtin's name), so a literal that spells what one of
+them looks for is read as code, and the corpus has almost no such literal.
+The probe takes each FILE (default `test/*.rb`) and plants a string literal
+in void position at each site: with `--plant body` (the default) at the head
+of every method, block and lambda body and of the top level, with `--plant
+operand` around every receiver and argument that is a variable or a call, as
+`("..."; x)`. A first compile, with a marker in each literal, says which C
+function each lands in, and then each literal is given a needle. With
+`--needle own` (the default) it is that function's own lines (one of each
+shape, `--bytes` of them at most, 4000 by default): whatever a pass looks
+for in the C of this program, the program now also says as a string, in the
+function where it is looked for. With `--needle searched` it is every string
+spinel's sources search a text for, the literal arguments of the `strstr`,
+`strncmp` and `memcmp` calls under `src/`, read when the probe starts (214
+of them on 5204e5af): what a function's C does not say, and a pass asks
+whether it says. Then two compiles are compared, the needle and a control of
+the same bytes with every character but blanks, quotes and backslashes
+turned to `x`. The two C files have to be equal outside the planted
+literals, and each planted literal has to read back, through C's escapes, as
+the text that was written. Every compile plants every site, so only text
+changes between two of them; nothing is run and CRuby is not asked. `--form`
+names the literal: `string` (the default), `symbol` (`:"..."`, which lands
+in the symbol table) and `interp` (`"...#{nil}"`, whose text is copied by
+length); several take the sites in turn. A program that differs is reduced
+by delta debugging, over the sites and then over the words and the
+characters of the needle, to the shortest literal that still differs, its
+trigger; the places the needles spell it are then turned to control text and
+the program is asked again, so one program gives each of its triggers,
+twelve at most. Triggers alike but for the program's own names, its numbers
+and its one-letter words are one family (`->iv_NAME=`, `_tN`, `x(`). A
+family met in one program is asked about first in the next, by planting its
+trigger alone wherever the needles spell it, and only the smallest program
+of a family is reduced, which is what makes a pass over the corpus
+affordable. A finding is `literal` (the planted literal reads back as other
+text: the program holds a string it did not write), `code` (the C outside
+the literal changed: a barrier, a root, a branch or a builtin added or
+dropped), `control` (the control itself reads back as other text, or does
+not compile: text that spells nothing was cut) or `outcome` (the needle is
+refused, or crashes the compiler, where the control compiles). Twenty
+programs of each family, spread by size, are then built and run in both
+versions, and the summary says how many did not do the same. `--control`
+compiles the control twice and has to report nothing but the class
+`control`, which the control shows alone. Output, under DIR
+(default `build/literal-probe/`): `summary.txt` and for each family
+`findings/<n>-<class>/` holding `a.rb` (the control) and `b.rb` (the needle)
+of its smallest program, `note.txt` (the trigger, the first difference, what
+the builds did) and `programs.txt` (every program of the family, what its
+needles spell and, if it was run, what the two builds did). On 5204e5af at
+`--jobs 4`, over the 5,404 programs of `test/*.rb` it can compare (43,792
+literals), a pass with the programs' own C takes 9 minutes and one with the
+searched strings 34; an operand pass (5,073 programs, 130,272 literals)
+takes 18. Exit status 0 with no finding, 1 with one, 4 for the tool's own
+error. Like the other probes it is a CRuby script to run by hand (it needs
+Prism, which Ruby 3.3 and later bundle), not a gate, and not one of the
+tools make builds.
+
+What it does not see: a literal is planted where a statement or an operand
+stands, not inside an interpolation, a heredoc, a hash key or a `when`. The
+searched needle holds what the sources hand to three C functions, so a pass
+that walks the text by hand (the scan that takes a `#` for a comment) or
+reads its names from a table at run time (the builtins' own names) is met
+only where the program's C happens to spell its trigger. A family is named
+by its shortest trigger, so two passes that look for one text are one
+family. A program that is refused once a literal is planted is left out and
+counted (a planted body is no longer the one-line reader spinel knows by its
+shape), and so is one that reads a file beside itself, since the compiles
+are made from a scratch directory. And a difference is a finding whether or
+not the two builds do the same: most families only add code or keep a root,
+which the runs say and the classes do not.
+
 ## Adding a tool
 
 Drop `tools/<name>.rb` (subset Ruby, `require_relative "tool_common"`

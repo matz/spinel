@@ -6267,6 +6267,22 @@ static int sp_rbval_is_array(sp_RbVal v) {
    no nil-fill (start <= len). Otherwise the array is promoted to a poly array
    (boxing its elements) and spliced there. Returns the possibly-new boxed array
    so the caller stores it back into the receiver's slot. */
+/* Can sp_poly_arr_writeback store every element of `work` into typed array
+   `orig` without raising? The same tests it makes. */
+static int sp_poly_arr_fits_kind(sp_RbVal orig, const sp_PolyArray *work) {
+  if (orig.tag != SP_TAG_OBJ || !work) return 0;
+  for (sp_int i = 0; i < work->len; i++) {
+    sp_RbVal e = work->data[i];
+    switch (orig.cls_id) {
+      case SP_BUILTIN_INT_ARRAY: if (e.tag != SP_TAG_INT && e.tag != SP_TAG_NIL) return 0; break;
+      case SP_BUILTIN_FLT_ARRAY:
+        if (e.tag != SP_TAG_FLT && e.tag != SP_TAG_INT && e.tag != SP_TAG_NIL) return 0; break;
+      case SP_BUILTIN_STR_ARRAY: if (e.tag != SP_TAG_STR && !sp_poly_is_strbuf(e)) return 0; break;
+      default: return 0;
+    }
+  }
+  return 1;
+}
 static sp_RbVal sp_poly_splice(sp_RbVal recv, sp_int start, sp_int len, sp_RbVal src) {
   /* `s[start, len] = v` through a poly receiver: spinel strings splice into a
      fresh buffer, so a plain string box answers the new value for the caller to
@@ -6348,9 +6364,10 @@ static sp_RbVal sp_poly_splice(sp_RbVal recv, sp_int start, sp_int len, sp_RbVal
     }
     default: return recv;
   }
-  /* promote to poly and splice there (handles nil / heterogeneous / nil-fill).
-     Index/length/frozen were validated up front, so nothing below raises; the
-     GC roots are pushed only around the actual allocation and pop normally. */
+  /* splice a poly copy (handles nil / heterogeneous / nil-fill / a boxed
+     source). Index/length/frozen were validated up front, so nothing below
+     raises; the GC roots are pushed only around the actual allocation and pop
+     normally. */
   SP_GC_ROOT_RBVAL(src);
   /* recv is read element-by-element inside the conversion's push loop, each of
      which can collect; a temporary receiver held by no rooted container would
@@ -6359,6 +6376,13 @@ static sp_RbVal sp_poly_splice(sp_RbVal recv, sp_int start, sp_int len, sp_RbVal
   sp_PolyArray *p = sp_poly_to_poly_array(recv);
   SP_GC_ROOT(p);
   sp_PolyArray_splice(p, start, len, src);
+  /* Every element still fits the receiver's kind -- a poly Array of
+     Integers spliced into an Integer array: write it back, so the array
+     keeps its identity, as Array#[]= does. Answered as a new array, the
+     store back landed in whatever slot the call site named (a parameter),
+     and the caller's array never changed. Only an element the kind cannot
+     hold promotes it. */
+  if (sp_poly_arr_fits_kind(recv, p)) { sp_poly_arr_writeback(recv, p); return recv; }
   return sp_box_poly_array(p);
 }
 /* `arr[range] = src` on a poly receiver: resolve beginless (INTPTR_MIN -> 0) and

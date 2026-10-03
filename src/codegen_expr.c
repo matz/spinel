@@ -1304,6 +1304,34 @@ static int emit_poly_op_assign_value(Compiler *c, const char *ref, TyKind t,
 
 static void emit_expr_node(Compiler *c, int id, Buf *b);
 
+/* `next v` in value position -- the tail of a proc/block body, as in
+   `proc { next 5 }`. Leaving the block with a value IS the body's value
+   there, so the expression is just v (a bare `next` yields nil). The
+   early-exit forms are handled by the statement emitter (#3026).
+
+   A `next` an expression holds anywhere else -- `x = (c ? (next 5) : 7)`,
+   `c && (next)` ahead of more statements, an argument, an element -- leaves
+   the block from there: the statement emitter's lowering inside a statement
+   expression, which a `continue`, a `return` or a `goto` may leave. The
+   value after it is never reached and gives the expression the C type it
+   had. Answers 0 for a tail `next` with several values, which the caller
+   refuses as before. */
+static int emit_next_expr(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int nargs = nt_ref(nt, id, "arguments");
+  int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
+  if (!next_is_block_value(c, id)) {
+    buf_puts(b, "({\n");
+    emit_stmt(c, id, b, g_indent + 1);
+    emit_indent(b, g_indent + 1);
+    buf_printf(b, "%s; })", nvc == 0 ? "sp_box_nil()" : default_value_from_compiler(c, comp_ntype(c, id)));
+    return 1;
+  }
+  if (nvc == 1) { emit_expr(c, nv[0], b); return 1; }
+  if (nvc == 0) { buf_puts(b, "sp_box_nil()"); return 1; }
+  return 0;
+}
+
 /* How many expressions enclose the one being emitted: a call nested in an
    argument sits deeper than the call that takes the argument. */
 int g_expr_depth = 0;
@@ -4492,16 +4520,7 @@ else {
     else unsupported(c, id, "retry (outside rescue)");
     return;
   }
-  /* `next v` in value position -- the tail of a proc/block body, as in
-     `proc { next 5 }`. Leaving the block with a value IS the body's value
-     there, so the expression is just v (a bare `next` yields nil). The
-     early-exit forms are handled by the statement emitter (#3026). */
-  if (sp_streq(ty, "NextNode")) {
-    int nargs = nt_ref(nt, id, "arguments");
-    int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
-    if (nvc == 1) { emit_expr(c, nv[0], b); return; }
-    if (nvc == 0) { buf_puts(b, "sp_box_nil()"); return; }
-  }
+  if (sp_streq(ty, "NextNode") && emit_next_expr(c, id, b)) return;
 
   unsupported(c, id, "expression");
 }

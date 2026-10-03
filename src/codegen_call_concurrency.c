@@ -388,8 +388,8 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            statement-side copy of this funnel (codegen_stmt.c) has had the
            branch; this one did not, so `Mutex#synchronize` inside a proc body
            emitted it (#3383). */
-        if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
-          buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, g_result_var, eid);
+        if (has_retval && g_ret_type == TY_POLY && proc_ret_slot())
+          buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, proc_ret_slot(), eid);
         /* a fiber body is `static void`: see g_c_ret_void */
         else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
         else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);

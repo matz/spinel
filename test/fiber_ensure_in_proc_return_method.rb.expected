@@ -1,0 +1,26 @@
+e
+3
+fiber ensure
+2
+fiber ensure
+-1
+thread ensure
+t1
+thread ensure
+early
+enum ensure
+[1, 2]
+enum ensure
+[]
+ensure 0
+:quiet
+ensure 1
+"boom"
+ensure 9
+:early
+ensure 0
+:stayed
+ensure 1
+:left
+ensure 9
+:early

@@ -1106,6 +1106,10 @@ TyKind g_ret_type = TY_UNKNOWN;
    expressions type. `return <value>` emitted into it is a C constraint
    violation, and GCC 14 rejects it. */
 int g_c_ret_void = 0;
+/* The body of the Fiber.new / Thread.new / Enumerator.new block whose C
+   function is being emitted, or -1. A `next` this body owns leaves that
+   function (emit_next_leaving_body). */
+int g_fiber_body = -1;
 /* Mirror of the REAL enclosing function's return funnel: yield-method inlining
    overrides g_method_pr_label/-_var/g_ret_type with a per-inline funnel, and a
    spliced block body (which lexically belongs to the real function, so its
@@ -1114,6 +1118,16 @@ int g_c_ret_void = 0;
 const char *g_fn_pr_label = NULL;
 const char *g_fn_pr_var = NULL;
 TyKind g_fn_ret_type = TY_UNKNOWN;
+/* The slot the proc body being emitted answers through, or NULL when the C
+   function being emitted is not a value-carrying proc's (a method, a fiber
+   body, a proc whose value is nil). An exit that leaves the proc writes
+   here: a `next`, a lambda's `return`, either one deferred through an
+   `ensure`. g_result_var does not name it for them: a `begin`, an `if` or a
+   `case` in value position inside the body puts its own temp there while
+   its arms are emitted. */
+const char *proc_ret_slot(void) {
+  return g_in_proc_body && !g_c_ret_void && g_fn_ret_type == TY_POLY ? "_sp_proc_poly_ret" : NULL;
+}
 int g_current_scope_is_lowered = 0;
 /* the scope being emitted has an --rbs-seeded return type (#3412) */
 int g_ret_seeded = 0;

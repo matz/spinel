@@ -7344,6 +7344,38 @@ static int emit_return_values(Compiler *c, const int *a, int n, const char *open
   return ta;
 }
 
+/* Inside a begin..ensure body: defer the return until ensure runs. The value
+   waits in the innermost region's _retvN, and the region's tail hands it on,
+   out through every enclosing ensure and then out of the C function. A
+   proc's `next` leaves its function the same way (emit_next_leaving_body). */
+static void emit_return_deferred(Compiler *c, const int *a, int n, Buf *b, int indent) {
+  EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
+  emit_indent(b, indent);
+  buf_puts(b, "{ ");
+  if (ctx->has_retval) {
+    if (n > 1) {
+      int ta = emit_return_values(c, a, n, "", b);
+      /* a frame slot holding other values too takes the Array boxed */
+      buf_printf(b, ctx->retv_ty == TY_POLY ? " _retv%d = sp_box_poly_array(_t%d); " : " _retv%d = _t%d; ",
+                 ctx->lid, ta);
+    }
+    else if (n > 0) {
+      buf_printf(b, "_retv%d = ", ctx->lid);
+      /* the FRAME's slot type, not g_ret_type: see EnsureCtx.retv_ty */
+      if (ctx->retv_ty == TY_POLY && comp_ntype(c, a[0]) != TY_POLY) emit_boxed(c, a[0], b);
+      else emit_coerce(c, a[0], ctx->retv_ty, CO_HOLD, "a return through ensure", b);
+      buf_puts(b, "; ");
+    }
+  }
+  /* inside a rescue/else clause the region's frame is already popped, so
+     0 is a valid count; popping one anyway takes a caller's handler */
+  int pops = g_exc_frame_depth - ctx->exc_base;
+  if (pops < 0) pops = 0;
+  emit_cur_exc_restore(b, ctx->exc_base);
+  buf_printf(b, "_retf%d = 1; sp_exc_top -= %d; goto _ensure%d; }\n",
+             ctx->lid, pops, ctx->lid);
+}
+
 void emit_return(Compiler *c, int id, Buf *b, int indent) {
   int args = nt_ref(c->nt, id, "arguments");
   int n = 0;
@@ -7419,37 +7451,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     return;
   }
 
-  if (g_ensure_depth > 0) {
-    /* Inside a begin..ensure body: defer the return until ensure runs. */
-    EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
-    emit_indent(b, indent);
-    buf_puts(b, "{ ");
-    if (ctx->has_retval) {
-      if (n > 1) {
-        int ta = emit_return_values(c, a, n, "", b);
-        /* a frame slot holding other values too takes the Array boxed */
-        buf_printf(b, ctx->retv_ty == TY_POLY ? " _retv%d = sp_box_poly_array(_t%d); " : " _retv%d = _t%d; ",
-                   ctx->lid, ta);
-      }
-      else if (n > 0) {
-        buf_printf(b, "_retv%d = ", ctx->lid);
-        /* the FRAME's slot type, not g_ret_type: see EnsureCtx.retv_ty */
-        if (ctx->retv_ty == TY_POLY && comp_ntype(c, a[0]) != TY_POLY) emit_boxed(c, a[0], b);
-        else emit_coerce(c, a[0], ctx->retv_ty, CO_HOLD, "a return through ensure", b);
-        buf_puts(b, "; ");
-      }
-    }
-    {
-      /* inside a rescue/else clause the region's frame is already popped, so
-         0 is a valid count; popping one anyway takes a caller's handler */
-      int pops = g_exc_frame_depth - ctx->exc_base;
-      if (pops < 0) pops = 0;
-      emit_cur_exc_restore(b, ctx->exc_base);
-      buf_printf(b, "_retf%d = 1; sp_exc_top -= %d; goto _ensure%d; }\n",
-                 ctx->lid, pops, ctx->lid);
-    }
-    return;
-  }
+  if (g_ensure_depth > 0) { emit_return_deferred(c, a, n, b, indent); return; }
 
   /* Inside a first-class proc body whose return rides the boxed slot (the
      universal proc return ABI): an explicit `return <v>` writes the boxed value
@@ -7458,9 +7460,9 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
      frames are still open (a raising value must unwind into them), then pop the
      frames and return 0. Non-local proc `return` (g_proc_return_home) and the
      in-ensure deferral are handled above and return early before here. */
-  if (g_in_proc_body && g_result_var && g_result_poly) {
+  if (proc_ret_slot()) {
     emit_indent(b, indent);
-    buf_printf(b, "{ %s = ", g_result_var);
+    buf_printf(b, "{ %s = ", proc_ret_slot());
     if (n == 0) buf_puts(b, "sp_box_nil()");
     else if (n == 1) emit_boxed(c, a[0], b);
     else {
@@ -8239,8 +8241,8 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       /* inside a first-class proc body routing returns through the boxed slot
          (the universal proc return ABI) the deferred value returns through the
          slot, not a raw C return of an sp_RbVal from an sp_int function */
-      else if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
-        buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; }\n", eid, g_result_var, eid);
+      else if (has_retval && g_ret_type == TY_POLY && proc_ret_slot())
+        buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; }\n", eid, proc_ret_slot(), eid);
       /* a proc body with a typed result publishes through the same boxed
          slot: `lambda do ... :l ensure ... end` returned its sp_RbVal from
          the sp_int proc function and did not compile (found under #4547) */
@@ -9065,6 +9067,72 @@ static void emit_break_value(Compiler *c, int id, Buf *b) {
     }
     buf_printf(b, "sp_box_poly_array(_t%d); })", t);
   }
+}
+
+/* A `next` that leaves the C function its block was compiled into, where
+   there is no C loop for a `continue` to answer. Answers 0 for every other
+   `next`, which the statement emitter then lowers itself.
+
+   A Fiber.new, Thread.new or Enumerator.new block is `static void
+   _fiber_body_N(sp_Fiber *)` and its value is what the body leaves in
+   _fb->yielded_value, so a `next` the block owns stores its value there and
+   returns. Ownership is by the source (subtree_owns_next), not by the C loop
+   depth: a `next` in a `while` or in an iterator's block inside the body is
+   that loop's. An `ensure` between the `next` and the body runs first,
+   through the deferred-return chain, whose tail in a void function is a bare
+   `return`.
+
+   A `next` at C-loop depth 0 inside a _proc_N function is the proc's own
+   return (Ruby block semantics: next leaves the block with its value). Route
+   it through the proc's return ABI: the poly slot when one is active, else
+   the direct sp_int carrier. An `ensure` the proc's body opened runs first,
+   the value waiting in the region's slot as a lambda's `return` waits there;
+   and a begin/rescue the `next` leaves has its handler frame popped, the
+   value computed while the frame is still live. */
+static int emit_next_leaving_body(Compiler *c, int id, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  if (g_fiber_body >= 0 && subtree_owns_next(nt, g_fiber_body, id)) {
+    emit_indent(b, indent); buf_puts(b, "{ _fb->yielded_value = ");
+    emit_break_value(c, id, b);
+    buf_puts(b, "; ");
+    if (g_ensure_depth > 0) {
+      EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
+      int pops = g_exc_frame_depth - ctx->exc_base;
+      if (pops < 0) pops = 0;   /* see emit_return */
+      emit_cur_exc_restore(b, ctx->exc_base);
+      buf_printf(b, "_retf%d = 1; sp_exc_top -= %d; goto _ensure%d; }\n", ctx->lid, pops, ctx->lid);
+      return 1;
+    }
+    emit_frame_unwind(b, 0, NULL);
+    buf_puts(b, "return; }\n");
+    return 1;
+  }
+  if (!g_in_proc_body || g_c_loop_depth != 0) return 0;
+  int nargs = nt_ref(nt, id, "arguments");
+  int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
+  if (g_ensure_depth > 0) { emit_return_deferred(c, nv, nvc, b, indent); return 1; }
+  if (proc_ret_slot()) {
+    emit_indent(b, indent); buf_printf(b, "%s = ", proc_ret_slot());
+    if (nvc > 0) emit_boxed(c, nv[0], b); else buf_puts(b, "sp_box_nil()");
+    buf_puts(b, ";\n");
+    emit_indent(b, indent); emit_frame_unwind(b, 0, NULL); buf_puts(b, "return 0;\n");
+  }
+  else if (nvc > 0 && (g_ret_type == TY_INT || g_ret_type == TY_BOOL || g_ret_type == TY_SYMBOL)) {
+    emit_indent(b, indent); buf_puts(b, "return ");
+    emit_expr(c, nv[0], b); buf_puts(b, ";\n");
+  }
+  else if (nvc > 0 && proc_slot_is_ptr(g_ret_type)) {
+    emit_indent(b, indent); buf_puts(b, "return (sp_int)(uintptr_t)(");
+    emit_expr(c, nv[0], b); buf_puts(b, ");\n");
+  }
+  else if (nvc > 0) {
+    /* untypable slot: evaluate for effects, return nil */
+    emit_indent(b, indent); buf_puts(b, "(void)(");
+    emit_expr(c, nv[0], b); buf_puts(b, ");\n");
+    emit_indent(b, indent); emit_frame_unwind(b, 0, NULL); buf_puts(b, "return 0;\n");
+  }
+  else { emit_indent(b, indent); emit_frame_unwind(b, 0, NULL); buf_puts(b, "return 0;\n"); }
+  return 1;
 }
 
 /* Run a class body's side-effecting statements at the definition site
@@ -12230,37 +12298,7 @@ else {
     buf_puts(b, "break;\n"); return;
   }
   if (sp_streq(ty, "NextNode")) {
-    /* `next` at C-loop depth 0 inside a _proc_N function is the proc's own
-       return (Ruby block semantics: next leaves the block with its value),
-       not a loop continue -- there is no enclosing C loop, and emitting
-       `continue` there is invalid C. Route it through the proc's return ABI:
-       the poly slot when one is active, else the direct sp_int carrier. */
-    if (g_in_proc_body && g_c_loop_depth == 0) {
-      int nargs = nt_ref(nt, id, "arguments");
-      int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
-      if (g_result_var && g_result_poly) {
-        emit_indent(b, indent); buf_printf(b, "%s = ", g_result_var);
-        if (nvc > 0) emit_boxed(c, nv[0], b); else buf_puts(b, "sp_box_nil()");
-        buf_puts(b, ";\n");
-        emit_indent(b, indent); buf_puts(b, "return 0;\n");
-      }
-      else if (nvc > 0 && (g_ret_type == TY_INT || g_ret_type == TY_BOOL || g_ret_type == TY_SYMBOL)) {
-        emit_indent(b, indent); buf_puts(b, "return ");
-        emit_expr(c, nv[0], b); buf_puts(b, ";\n");
-      }
-      else if (nvc > 0 && proc_slot_is_ptr(g_ret_type)) {
-        emit_indent(b, indent); buf_puts(b, "return (sp_int)(uintptr_t)(");
-        emit_expr(c, nv[0], b); buf_puts(b, ");\n");
-      }
-      else if (nvc > 0) {
-        /* untypable slot: evaluate for effects, return nil */
-        emit_indent(b, indent); buf_puts(b, "(void)(");
-        emit_expr(c, nv[0], b); buf_puts(b, ");\n");
-        emit_indent(b, indent); buf_puts(b, "return 0;\n");
-      }
-      else { emit_indent(b, indent); buf_puts(b, "return 0;\n"); }
-      return;
-    }
+    if (emit_next_leaving_body(c, id, b, indent)) return;
     if (g_ie_next_var) {
       int nargs = nt_ref(nt, id, "arguments");
       int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
@@ -12868,7 +12906,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
        to receivers that are a plain read. */
     int _rr = tail_iter_receiver(c, id);
     int _named = _rr >= 0;
-    if (_named && g_in_proc_body && g_result_var && g_result_poly) {
+    if (_named && g_result_var && proc_ret_slot() && !strcmp(g_result_var, proc_ret_slot())) {
       /* a proc answers through the boxed slot, not through its carrier */
       emit_indent(b, indent);
       buf_printf(b, "{ %s = ", g_result_var);

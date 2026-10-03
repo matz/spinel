@@ -367,6 +367,7 @@ extern int g_block_brk_exc_base;
 extern TyKind g_ret_type;
 extern int g_c_ret_void;   /* the C function returns void (a fiber body) */
 extern int g_c_ret_void;   /* the C function returns void (a fiber body) */
+extern int g_fiber_body;   /* that fiber body's statements, or -1 */
 extern const char *g_fn_pr_label;   /* real function's return funnel (see codegen_util.c) */
 extern const char *g_fn_pr_var;
 extern TyKind g_fn_ret_type;
@@ -596,6 +597,7 @@ int  emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent);
 int  subtree_has_own_redo(const NodeTable *nt, int id);
 int  subtree_has_own_next(const NodeTable *nt, int id);
+int  subtree_owns_next(const NodeTable *nt, int body, int next);
 int  subtree_reads_local(const NodeTable *nt, int id, const char *name);
 int  emit_inline_call(Compiler *c, int id, Buf *b, int indent);
 int  emit_inline_expr(Compiler *c, int id, Buf *b);

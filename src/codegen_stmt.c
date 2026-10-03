@@ -9067,6 +9067,68 @@ static void emit_break_value(Compiler *c, int id, Buf *b) {
   }
 }
 
+/* A `next` that leaves the C function its block was compiled into, where
+   there is no C loop for a `continue` to answer. Answers 0 for every other
+   `next`, which the statement emitter then lowers itself.
+
+   A Fiber.new, Thread.new or Enumerator.new block is `static void
+   _fiber_body_N(sp_Fiber *)` and its value is what the body leaves in
+   _fb->yielded_value, so a `next` the block owns stores its value there and
+   returns. Ownership is by the source (subtree_owns_next), not by the C loop
+   depth: a `next` in a `while` or in an iterator's block inside the body is
+   that loop's. An `ensure` between the `next` and the body runs first,
+   through the deferred-return chain, whose tail in a void function is a bare
+   `return`.
+
+   A `next` at C-loop depth 0 inside a _proc_N function is the proc's own
+   return (Ruby block semantics: next leaves the block with its value). Route
+   it through the proc's return ABI: the poly slot when one is active, else
+   the direct sp_int carrier. */
+static int emit_next_leaving_body(Compiler *c, int id, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  if (g_fiber_body >= 0 && subtree_owns_next(nt, g_fiber_body, id)) {
+    emit_indent(b, indent); buf_puts(b, "{ _fb->yielded_value = ");
+    emit_break_value(c, id, b);
+    buf_puts(b, "; ");
+    if (g_ensure_depth > 0) {
+      EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
+      int pops = g_exc_frame_depth - ctx->exc_base;
+      if (pops < 0) pops = 0;   /* see emit_return */
+      emit_cur_exc_restore(b, ctx->exc_base);
+      buf_printf(b, "_retf%d = 1; sp_exc_top -= %d; goto _ensure%d; }\n", ctx->lid, pops, ctx->lid);
+      return 1;
+    }
+    emit_frame_unwind(b, 0, NULL);
+    buf_puts(b, "return; }\n");
+    return 1;
+  }
+  if (!g_in_proc_body || g_c_loop_depth != 0) return 0;
+  int nargs = nt_ref(nt, id, "arguments");
+  int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
+  if (g_result_var && g_result_poly) {
+    emit_indent(b, indent); buf_printf(b, "%s = ", g_result_var);
+    if (nvc > 0) emit_boxed(c, nv[0], b); else buf_puts(b, "sp_box_nil()");
+    buf_puts(b, ";\n");
+    emit_indent(b, indent); buf_puts(b, "return 0;\n");
+  }
+  else if (nvc > 0 && (g_ret_type == TY_INT || g_ret_type == TY_BOOL || g_ret_type == TY_SYMBOL)) {
+    emit_indent(b, indent); buf_puts(b, "return ");
+    emit_expr(c, nv[0], b); buf_puts(b, ";\n");
+  }
+  else if (nvc > 0 && proc_slot_is_ptr(g_ret_type)) {
+    emit_indent(b, indent); buf_puts(b, "return (sp_int)(uintptr_t)(");
+    emit_expr(c, nv[0], b); buf_puts(b, ");\n");
+  }
+  else if (nvc > 0) {
+    /* untypable slot: evaluate for effects, return nil */
+    emit_indent(b, indent); buf_puts(b, "(void)(");
+    emit_expr(c, nv[0], b); buf_puts(b, ");\n");
+    emit_indent(b, indent); buf_puts(b, "return 0;\n");
+  }
+  else { emit_indent(b, indent); buf_puts(b, "return 0;\n"); }
+  return 1;
+}
+
 /* Run a class body's side-effecting statements at the definition site
    (top-to-bottom, like CRuby), with g_class_body_id set to `ci`. Method/attr/
    alias declarations are handled elsewhere; everything else (puts, constant
@@ -12230,37 +12292,7 @@ else {
     buf_puts(b, "break;\n"); return;
   }
   if (sp_streq(ty, "NextNode")) {
-    /* `next` at C-loop depth 0 inside a _proc_N function is the proc's own
-       return (Ruby block semantics: next leaves the block with its value),
-       not a loop continue -- there is no enclosing C loop, and emitting
-       `continue` there is invalid C. Route it through the proc's return ABI:
-       the poly slot when one is active, else the direct sp_int carrier. */
-    if (g_in_proc_body && g_c_loop_depth == 0) {
-      int nargs = nt_ref(nt, id, "arguments");
-      int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
-      if (g_result_var && g_result_poly) {
-        emit_indent(b, indent); buf_printf(b, "%s = ", g_result_var);
-        if (nvc > 0) emit_boxed(c, nv[0], b); else buf_puts(b, "sp_box_nil()");
-        buf_puts(b, ";\n");
-        emit_indent(b, indent); buf_puts(b, "return 0;\n");
-      }
-      else if (nvc > 0 && (g_ret_type == TY_INT || g_ret_type == TY_BOOL || g_ret_type == TY_SYMBOL)) {
-        emit_indent(b, indent); buf_puts(b, "return ");
-        emit_expr(c, nv[0], b); buf_puts(b, ";\n");
-      }
-      else if (nvc > 0 && proc_slot_is_ptr(g_ret_type)) {
-        emit_indent(b, indent); buf_puts(b, "return (sp_int)(uintptr_t)(");
-        emit_expr(c, nv[0], b); buf_puts(b, ");\n");
-      }
-      else if (nvc > 0) {
-        /* untypable slot: evaluate for effects, return nil */
-        emit_indent(b, indent); buf_puts(b, "(void)(");
-        emit_expr(c, nv[0], b); buf_puts(b, ");\n");
-        emit_indent(b, indent); buf_puts(b, "return 0;\n");
-      }
-      else { emit_indent(b, indent); buf_puts(b, "return 0;\n"); }
-      return;
-    }
+    if (emit_next_leaving_body(c, id, b, indent)) return;
     if (g_ie_next_var) {
       int nargs = nt_ref(nt, id, "arguments");
       int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;

@@ -5959,6 +5959,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
      (sp_brk_seq starts at 1), taking sp_brk_throw's not-found tail: CRuby's
      LocalJumpError "break from proc-closure", value staged as #exit_value. */
   int sv_fbcld = g_c_loop_depth; g_c_loop_depth = 0;
+  int sv_fbbody = g_fiber_body; g_fiber_body = body;
   int sv_fbskip = g_brk_skip_id; g_brk_skip_id = -1;
   int sv_fbexcd = g_exc_frame_depth, sv_fbprexcd = g_method_pr_exc_depth;
   int sv_fbrsd = g_rescue_save_depth;
@@ -6175,7 +6176,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   g_fn_pr_label = sv_fn_prl2; g_fn_pr_var = sv_fn_prv2; g_fn_ret_type = sv_fn_rt2;
   g_brk_ser_var = sv_fbser; g_brk_skip_id = sv_fbskip;
   g_cap_struct = sv_fbcap; g_cap_names = sv_fbcapn;
-  g_c_loop_depth = sv_fbcld;
+  g_c_loop_depth = sv_fbcld; g_fiber_body = sv_fbbody;
   g_exc_frame_depth = sv_fbexcd; g_method_pr_exc_depth = sv_fbprexcd;
   g_rescue_save_depth = sv_fbrsd;
 

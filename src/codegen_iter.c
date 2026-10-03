@@ -3747,25 +3747,43 @@ int subtree_owns_redo(const NodeTable *nt, int body, int redo) {
 
 /* Does the subtree contain a `next` that belongs to THIS block, i.e. one not
    nested inside a deeper loop/block/def (which would own it instead)? Same
-   ownership rule as subtree_has_own_redo. */
-int subtree_has_own_next(const NodeTable *nt, int id) {
+   ownership rule as subtree_has_own_redo. With `next` >= 0 the answer is for
+   that one node, and it is also looked for where a nested iteration is
+   evaluated in this block: the receiver, the arguments and a `&blk` of a
+   call with a block, and the collection of a `for`. The any-`next` form
+   does not look there: its callers pick by the answer how a block spliced
+   in place is written, and emit_fallback_block_value leaves the leading
+   statements out of a block that has one. */
+static int subtree_has_own_next_ex(const NodeTable *nt, int id, int next) {
   if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   if (!ty) return 0;
-  if (sp_streq(ty, "NextNode")) return 1;
+  if (sp_streq(ty, "NextNode")) return next < 0 || id == next;
   if (sp_streq(ty, "DefNode") || sp_streq(ty, "ClassNode") || sp_streq(ty, "ModuleNode") ||
-      sp_streq(ty, "WhileNode") || sp_streq(ty, "UntilNode") || sp_streq(ty, "ForNode") ||
-      sp_streq(ty, "LambdaNode"))
+      sp_streq(ty, "WhileNode") || sp_streq(ty, "UntilNode") || sp_streq(ty, "LambdaNode"))
     return 0;
-  if (sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0) return 0;
+  if (sp_streq(ty, "ForNode"))
+    return next >= 0 && subtree_has_own_next_ex(nt, nt_ref(nt, id, "collection"), next);
+  int blk = sp_streq(ty, "CallNode") ? nt_ref(nt, id, "block") : -1;
+  if (blk >= 0) {
+    if (next < 0) return 0;
+    const char *bty = nt_type(nt, blk);
+    return subtree_has_own_next_ex(nt, nt_ref(nt, id, "receiver"), next) ||
+           subtree_has_own_next_ex(nt, nt_ref(nt, id, "arguments"), next) ||
+           (bty && sp_streq(bty, "BlockArgumentNode") && subtree_has_own_next_ex(nt, blk, next));
+  }
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) if (subtree_has_own_next(nt, nt_ref_at(nt, id, i))) return 1;
+  for (int i = 0; i < nr; i++) if (subtree_has_own_next_ex(nt, nt_ref_at(nt, id, i), next)) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int k = 0; k < n; k++) if (subtree_has_own_next(nt, ids[k])) return 1;
+    for (int k = 0; k < n; k++) if (subtree_has_own_next_ex(nt, ids[k], next)) return 1;
   }
   return 0;
+}
+int subtree_has_own_next(const NodeTable *nt, int id) { return subtree_has_own_next_ex(nt, id, -1); }
+int subtree_owns_next(const NodeTable *nt, int body, int next) {
+  return next >= 0 && subtree_has_own_next_ex(nt, body, next);
 }
 
 /* Emit a loop body, prefixing a `_redo_N:` label (and pushing it on the redo

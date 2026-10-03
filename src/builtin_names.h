@@ -9,6 +9,7 @@
 #ifndef SPINEL_BUILTIN_NAMES_H
 #define SPINEL_BUILTIN_NAMES_H
 
+int is_zip_name(const char *n);       /* zip: tuple-yielding iteration */
 int is_call_alias(const char *n);     /* call () []: a Proc/Method's invocation */
 int is_kind_query(const char *n);     /* is_a? kind_of? instance_of? */
 int is_round_family(const char *n);   /* round ceil floor truncate */

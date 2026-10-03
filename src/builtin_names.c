@@ -4,6 +4,10 @@
 #include "types.h"
 #include "builtin_names.h"
 
+int is_zip_name(const char *n) {
+  return sp_streq(n, "zip");
+}
+
 int is_call_alias(const char *n) {
   return sp_streq(n, "call") || sp_streq(n, "()") || sp_streq(n, "[]");
 }

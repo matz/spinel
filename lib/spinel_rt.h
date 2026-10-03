@@ -15276,6 +15276,25 @@ static sp_PolyArray *sp_zip_arg(sp_RbVal v) {
                                        sp_poly_class_name(v)));
   return sp_PolyArray_new();
 }
+/* Block zip snapshots Array operands and bounds Enumerator preparation by
+   the initial receiver length. A Range is read one element at a time. */
+static sp_RbVal sp_zip_block_arg(sp_RbVal v, sp_int n) {
+  SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) return v;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR)
+    return sp_box_poly_array(sp_Enumerator_take((sp_Enumerator *)v.v.p, n));
+  return sp_box_poly_array(sp_PolyArray_slice(sp_zip_arg(v), 0, n));
+}
+static sp_RbVal sp_zip_block_row(sp_RbVal recv, sp_PolyArray *ops, sp_int i, sp_int n) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT(ops);
+  sp_PolyArray *row = sp_PolyArray_new(); SP_GC_ROOT(row);
+  sp_PolyArray_push(row, sp_poly_arr_get(recv, i));
+  for (sp_int j = 0; j < ops->len; j++) {
+    sp_RbVal v = ops->data[j];
+    sp_PolyArray_push(row, i < n && i < sp_poly_arr_len_ex(v) ? sp_poly_each_elem(v, i) : sp_box_nil());
+  }
+  return sp_box_poly_array(row);
+}
 /* The boxed-receiver entry points the poly surface above forwards to: an
    Enumerator read out of a container answers #to_a / #next like the typed
    receiver does. Separate thunks because sp_Enumerator is only a type from

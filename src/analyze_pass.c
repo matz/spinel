@@ -12118,6 +12118,34 @@ static int proc_params_poly(const NodeTable *nt, Scope *bs, int pn, const char *
   return changed;
 }
 
+static int infer_zip_block_params(Compiler *c, int id, int block, const char *p0, TyKind rt) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  int za = nt_ref(nt, id, "arguments"), zn = 0;
+  const int *zv = za >= 0 ? nt_arr(nt, za, "arguments", &zn) : NULL;
+  if (zn != 1 || (zv && nt_kind(nt, zv[0]) == NK_SplatNode)) {
+    Scope *zs = comp_scope_of(c, block);
+    for (int j = 0; block_param_name(c, block, j); j++)
+      if (bp_widen(zs, block_param_name(c, block, j), TY_POLY)) changed = 1;
+    return changed;
+  }
+  Scope *zs = comp_scope_of(c, block);
+  const char *zp1s = block_param_name(c, block, 1);
+  LocalVar *ep0 = scope_local_intern(zs, p0); ep0->is_block_param = 1;
+  /* a SOLO param receives the boxed TUPLE ([e1, e2]); two params
+     auto-splat it */
+  if (lv_widen(ep0, zp1s ? ty_array_elem(rt) : TY_POLY)) changed = 1;
+  const char *zp1 = zp1s;
+  if (zp1) {
+    int zargs = nt_ref(nt, id, "arguments");
+    int zargc = 0; const int *zargv = zargs >= 0 ? nt_arr(nt, zargs, "arguments", &zargc) : NULL;
+    TyKind et2 = (zargc > 0 && zargv && ty_is_array(infer_type(c, zargv[0])))
+                 ? ty_array_elem(infer_type(c, zargv[0])) : ty_array_elem(rt);
+    if (bp_widen(zs, zp1, et2)) changed = 1;
+  }
+  return changed;
+}
+
 int infer_block_params(Compiler *c) {
   nn_inference_round(c);
   const NodeTable *nt = c->nt;
@@ -13304,21 +13332,8 @@ int infer_block_params(Compiler *c) {
         continue;
       }
     }
-    if (sp_streq(name, "zip") && ty_is_array(rt)) {
-      Scope *zs = comp_scope_of(c, block);
-      const char *zp1s = block_param_name(c, block, 1);
-      LocalVar *ep0 = scope_local_intern(zs, p0); ep0->is_block_param = 1;
-      /* a SOLO param receives the boxed TUPLE ([e1, e2]); two params
-         auto-splat it */
-      if (lv_widen(ep0, zp1s ? ty_array_elem(rt) : TY_POLY)) changed = 1;
-      const char *zp1 = zp1s;
-      if (zp1) {
-        int zargs = nt_ref(nt, id, "arguments");
-        int zargc = 0; const int *zargv = zargs >= 0 ? nt_arr(nt, zargs, "arguments", &zargc) : NULL;
-        TyKind et2 = (zargc > 0 && zargv && ty_is_array(infer_type(c, zargv[0])))
-                     ? ty_array_elem(infer_type(c, zargv[0])) : ty_array_elem(rt);
-        if (bp_widen(zs, zp1, et2)) changed = 1;
-      }
+    if (is_zip_name(name) && ty_is_array(rt)) {
+      changed |= infer_zip_block_params(c, id, block, p0, rt);
       continue;
     }
 

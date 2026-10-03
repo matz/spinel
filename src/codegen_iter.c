@@ -2,6 +2,7 @@
    lowering, split out of codegen_call.c. Pure code movement, no logic change. */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "call_plan.h"
 
 /* A fused loop names the receiver expression twice: once in the bound check
@@ -4616,6 +4617,178 @@ static int emit_shadow_save(Compiler *c, TyKind t, const char *name, Buf *b, int
   return ts;
 }
 
+/* Zip yields one freshly built row at a time. Bind complex parameter
+   shapes through the same distribution as other boxed iterator steps. */
+static void emit_zip_many_block(Compiler *c, int recv, int block, int body,
+                                const int *zargv, int zargc, const char *p0,
+                                Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  int tr = ++g_tmp, to = ++g_tmp, ti = ++g_tmp, te = ++g_tmp;
+  emit_indent(b, indent); buf_printf(b, "sp_RbVal _t%d = ", tr);
+  emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);\n", tr);
+  if (repr_of(c, recv).kind == RK_BOXED) {
+    emit_indent(b, indent);
+    buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) sp_raise_poly_nomethod(\"zip\", _t%d);\n", tr, tr, tr);
+  }
+  emit_indent(b, indent);
+  buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", to, to);
+  for (int j = 0; j < zargc; j++) {
+    emit_indent(b, indent);
+    if (nt_kind(nt, zargv[j]) == NK_SplatNode) {
+      int ts = ++g_tmp, tj = ++g_tmp;
+      buf_printf(b, "{ sp_RbVal _t%d = sp_splat_to_array(", ts);
+      emit_boxed(c, nt_ref(nt, zargv[j], "expression"), b);
+      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(_t%d); _t%d++)"
+                    " sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _t%d)); }\n",
+                 ts, tj, tj, ts, tj, to, ts, tj);
+    }
+    else {
+      buf_printf(b, "sp_PolyArray_push(_t%d, ", to);
+      emit_boxed(c, zargv[j], b); buf_puts(b, ");\n");
+    }
+  }
+  /* Operands are captured before yielding. The receiver is read again
+     per row, so the block can change its later elements. */
+  int tj = ++g_tmp, tn = ++g_tmp;
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _t%d = sp_poly_arr_len(_t%d);\n", tn, tr);
+  emit_indent(b, indent);
+  buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++)"
+                " sp_PolyArray_set(_t%d, _t%d, sp_zip_block_arg(_t%d->data[_t%d], _t%d));\n",
+             tj, tj, to, tj, to, tj, to, tj, tn);
+  emit_indent(b, indent);
+  buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(_t%d); _t%d++) {\n", ti, ti, tr, ti);
+  emit_indent(b, indent + 1);
+  buf_printf(b, "sp_RbVal _t%d = sp_zip_block_row(_t%d, _t%d, _t%d, _t%d); SP_GC_ROOT_RBVAL(_t%d);\n",
+             te, tr, to, ti, tn, te);
+  if (block_lone_rest(c, block)) {
+    char src[32]; snprintf(src, sizeof src, "_t%d", te);
+    emit_iter_bind_rest(c, block, 0, TY_POLY, src, b, indent + 1);
+  }
+  else if (block_binds_gathered(c, block)) {
+    char vals[64]; snprintf(vals, sizeof vals, "sp_yielded_args(0, _t%d)", te);
+    emit_boxed_step_binds(c, block, vals, b, indent + 1, 0);
+  }
+  else if (block_lead_only(c, block) || (p0 && block_rest_marker(c, block)))
+    emit_poly_auto_splat(c, block, te, b, indent);
+  else if (p0) {
+    Scope *zs = comp_scope_of(c, block);
+    LocalVar *lv = zs ? scope_local(zs, block_param_name(c, block, 0)) : NULL;
+    if (lv) {
+      char src[32]; snprintf(src, sizeof src, "_t%d", te);
+      emit_indent(b, indent + 1);
+      emit_block_param_from_boxed(c, p0, lv->type, src, b);
+    }
+  }
+  emit_loop_body(c, body, b, indent + 1);
+  emit_indent(b, indent); buf_puts(b, "}\n");
+}
+
+static int emit_zip_block(Compiler *c, int id, int recv, int block, int body,
+                           TyKind rt, const char *p0, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  /* array.zip(other) { |a, b| ... } -- block form, returns nil */
+  if ((ty_is_array(rt) || rt == TY_POLY) && block >= 0) {
+    int zargs_n = nt_ref(nt, id, "arguments");
+    int zargc = 0; const int *zargv = zargs_n >= 0 ? nt_arr(nt, zargs_n, "arguments", &zargc) : NULL;
+    /* The receiver, too, can be an array only at run time (a row read out of a
+       poly table): walk it through the boxed accessors. Without this the call
+       fell to the runtime dispatch, which has no zip arm at all. */
+    int recv_poly = !ty_is_array(rt);
+    const char *k = recv_poly ? "Poly" : array_iter_kind(rt);
+    int zsplat = 0;
+    for (int j = 0; j < zargc; j++) if (nt_kind(nt, zargv[j]) == NK_SplatNode) zsplat = 1;
+    if (k && (zargc != 1 || zsplat)) {
+      emit_zip_many_block(c, recv, block, body, zargv, zargc, p0, b, indent);
+      return 1;
+    }
+    if (k && zargc == 1 && zargv) {
+      TyKind a0t = repr_of(c, zargv[0]).as_ty;
+      const char *k2 = ty_is_array(a0t) ? array_iter_kind(a0t) : NULL;
+      /* The other operand may be an array only at run time (a poly element of
+         a table of rows). Read it through the boxed accessor rather than
+         handing an sp_RbVal to the typed one. */
+      int arg_poly = (k2 == NULL);
+      if (!k2) k2 = k;
+      TyKind et = recv_poly ? TY_POLY : ty_array_elem(rt);
+      TyKind et2 = ty_is_array(a0t) ? ty_array_elem(a0t) : (arg_poly ? TY_POLY : et);
+      const char *p1n = block_param_name(c, block, 1); if (p1n) p1n = rename_local(p1n);
+      int t = ++g_tmp;
+      Buf rb; memset(&rb, 0, sizeof rb);
+      if (recv_poly) emit_boxed(c, recv, &rb); else emit_expr(c, recv, &rb);
+      Buf ob; memset(&ob, 0, sizeof ob);
+      if (arg_poly) emit_boxed(c, zargv[0], &ob); else emit_expr(c, zargv[0], &ob);
+      if (recv_poly) {
+        int trz = ++g_tmp;
+        emit_indent(b, indent);
+        buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", trz, rb.p ? rb.p : "sp_box_nil()", trz);
+        emit_indent(b, indent);
+        buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) sp_raise_poly_nomethod(\"zip\", _t%d);\n", trz, trz, trz);
+        free(rb.p); memset(&rb, 0, sizeof rb);
+        buf_printf(&rb, "_t%d", trz);
+      }
+      else hoist_loop_recv(c, rt, &rb, b, indent);
+      if (ty_is_array(a0t)) hoist_loop_recv(c, a0t, &ob, b, indent);
+      Scope *zs = comp_scope_of(c, id);
+      LocalVar *zlv0 = (p0 && zs) ? scope_local(zs, p0) : NULL;
+      LocalVar *zlv1 = (p1n && zs) ? scope_local(zs, p1n) : NULL;
+      int zs0 = 0, zs1 = 0;
+      if (p0 && zlv0) zs0 = emit_shadow_save(c, zlv0->type, p0, b, indent);
+      if (p1n && zlv1) zs1 = emit_shadow_save(c, zlv1->type, p1n, b, indent);
+      emit_indent(b, indent);
+      if (recv_poly)
+        buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(%s); _t%d++) {\n",
+                   t, t, rb.p ? rb.p : "sp_box_nil()", t);
+      else
+        buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(%s); _t%d++) {\n",
+                   t, t, k, rb.p ? rb.p : "NULL", t);
+      if (p0 && zlv0 && !p1n) {
+        /* SOLO param: the boxed [e1, e2] tuple (two params auto-splat it) */
+        int tpz = ++g_tmp;
+        char s1[512], s2[512];
+        if (recv_poly) snprintf(s1, sizeof s1, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
+        else snprintf(s1, sizeof s1, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        if (arg_poly) snprintf(s2, sizeof s2, "sp_poly_arr_get(%s, _t%d)", ob.p ? ob.p : "sp_box_nil()", t);
+        else snprintf(s2, sizeof s2, "sp_%sArray_get(%s, _t%d)", k2, ob.p ? ob.p : "NULL", t);
+        emit_indent(b, indent + 1);
+        buf_printf(b, "lv_%s = ({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", p0, tpz, tpz);
+        Buf bx; memset(&bx, 0, sizeof bx);
+        emit_boxed_text(c, et, s1, &bx);
+        buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpz, bx.p ? bx.p : ""); free(bx.p);
+        memset(&bx, 0, sizeof bx);
+        emit_boxed_text(c, et2, s2, &bx);
+        buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpz, bx.p ? bx.p : ""); free(bx.p);
+        buf_printf(b, "sp_box_poly_array(_t%d); });\n", tpz);
+      }
+      else if (p0 && zlv0) {
+        char src[512];
+        if (recv_poly) snprintf(src, sizeof src, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
+        else snprintf(src, sizeof src, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p0);
+        emit_zip_block_param(c, zlv0->type, et, src, b);
+        buf_puts(b, ";\n");
+      }
+      if (p1n && zlv1 && ob.p) {
+        char src2[512];
+        if (arg_poly) snprintf(src2, sizeof src2, "sp_poly_arr_get(%s, _t%d)", ob.p, t);
+        else snprintf(src2, sizeof src2, "sp_%sArray_get(%s, _t%d)", k2, ob.p, t);
+        emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p1n);
+        emit_zip_block_param(c, zlv1->type, et2, src2, b);
+        buf_puts(b, ";\n");
+      }
+      emit_loop_body(c, body, b, indent + 1);
+      emit_indent(b, indent); buf_puts(b, "}\n");
+      if (p0 && zs0 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p0, zs0); }
+      if (p1n && zs1 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p1n, zs1); }
+      free(rb.p); free(ob.p);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent);
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   return emit_ivar_nil_guarded(c, id, b, indent, emit_iteration_stmt_body);
@@ -5348,95 +5521,8 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     return 1;
   }
 
-  /* array.zip(other) { |a, b| ... } -- block form, returns nil */
-  if (sp_streq(name, "zip") && (ty_is_array(rt) || rt == TY_POLY) && block >= 0) {
-    int zargs_n = nt_ref(nt, id, "arguments");
-    int zargc = 0; const int *zargv = zargs_n >= 0 ? nt_arr(nt, zargs_n, "arguments", &zargc) : NULL;
-    /* The receiver, too, can be an array only at run time (a row read out of a
-       poly table): walk it through the boxed accessors. Without this the call
-       fell to the runtime dispatch, which has no zip arm at all. */
-    int recv_poly = !ty_is_array(rt);
-    const char *k = recv_poly ? "Poly" : array_iter_kind(rt);
-    if (k && zargc == 1 && zargv) {
-      TyKind a0t = comp_ntype(c, zargv[0]);
-      const char *k2 = ty_is_array(a0t) ? array_iter_kind(a0t) : NULL;
-      /* The other operand may be an array only at run time (a poly element of
-         a table of rows). Read it through the boxed accessor rather than
-         handing an sp_RbVal to the typed one. */
-      int arg_poly = (k2 == NULL);
-      if (!k2) k2 = k;
-      TyKind et = recv_poly ? TY_POLY : ty_array_elem(rt);
-      TyKind et2 = ty_is_array(a0t) ? ty_array_elem(a0t) : (arg_poly ? TY_POLY : et);
-      const char *p1n = block_param_name(c, block, 1); if (p1n) p1n = rename_local(p1n);
-      int t = ++g_tmp;
-      Buf rb; memset(&rb, 0, sizeof rb);
-      if (recv_poly) emit_boxed(c, recv, &rb); else emit_expr(c, recv, &rb);
-      Buf ob; memset(&ob, 0, sizeof ob);
-      if (arg_poly) emit_boxed(c, zargv[0], &ob); else emit_expr(c, zargv[0], &ob);
-      if (recv_poly) {
-        int trz = ++g_tmp;
-        emit_indent(b, indent);
-        buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", trz, rb.p ? rb.p : "sp_box_nil()", trz);
-        free(rb.p); memset(&rb, 0, sizeof rb);
-        buf_printf(&rb, "_t%d", trz);
-      }
-      else hoist_loop_recv(c, rt, &rb, b, indent);
-      if (ty_is_array(a0t)) hoist_loop_recv(c, a0t, &ob, b, indent);
-      Scope *zs = comp_scope_of(c, id);
-      LocalVar *zlv0 = (p0 && zs) ? scope_local(zs, p0) : NULL;
-      LocalVar *zlv1 = (p1n && zs) ? scope_local(zs, p1n) : NULL;
-      int zs0 = 0, zs1 = 0;
-      if (p0 && zlv0) zs0 = emit_shadow_save(c, zlv0->type, p0, b, indent);
-      if (p1n && zlv1) zs1 = emit_shadow_save(c, zlv1->type, p1n, b, indent);
-      emit_indent(b, indent);
-      if (recv_poly)
-        buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(%s); _t%d++) {\n",
-                   t, t, rb.p ? rb.p : "sp_box_nil()", t);
-      else
-        buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(%s); _t%d++) {\n",
-                   t, t, k, rb.p ? rb.p : "NULL", t);
-      if (p0 && zlv0 && !p1n) {
-        /* SOLO param: the boxed [e1, e2] tuple (two params auto-splat it) */
-        int tpz = ++g_tmp;
-        char s1[512], s2[512];
-        if (recv_poly) snprintf(s1, sizeof s1, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
-        else snprintf(s1, sizeof s1, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
-        if (arg_poly) snprintf(s2, sizeof s2, "sp_poly_arr_get(%s, _t%d)", ob.p ? ob.p : "sp_box_nil()", t);
-        else snprintf(s2, sizeof s2, "sp_%sArray_get(%s, _t%d)", k2, ob.p ? ob.p : "NULL", t);
-        emit_indent(b, indent + 1);
-        buf_printf(b, "lv_%s = ({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", p0, tpz, tpz);
-        Buf bx; memset(&bx, 0, sizeof bx);
-        emit_boxed_text(c, et, s1, &bx);
-        buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpz, bx.p ? bx.p : ""); free(bx.p);
-        memset(&bx, 0, sizeof bx);
-        emit_boxed_text(c, et2, s2, &bx);
-        buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", tpz, bx.p ? bx.p : ""); free(bx.p);
-        buf_printf(b, "sp_box_poly_array(_t%d); });\n", tpz);
-      }
-      else if (p0 && zlv0) {
-        char src[512];
-        if (recv_poly) snprintf(src, sizeof src, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
-        else snprintf(src, sizeof src, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
-        emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p0);
-        emit_zip_block_param(c, zlv0->type, et, src, b);
-        buf_puts(b, ";\n");
-      }
-      if (p1n && zlv1 && ob.p) {
-        char src2[512];
-        if (arg_poly) snprintf(src2, sizeof src2, "sp_poly_arr_get(%s, _t%d)", ob.p, t);
-        else snprintf(src2, sizeof src2, "sp_%sArray_get(%s, _t%d)", k2, ob.p, t);
-        emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p1n);
-        emit_zip_block_param(c, zlv1->type, et2, src2, b);
-        buf_puts(b, ";\n");
-      }
-      emit_loop_body(c, body, b, indent + 1);
-      emit_indent(b, indent); buf_puts(b, "}\n");
-      if (p0 && zs0 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p0, zs0); }
-      if (p1n && zs1 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p1n, zs1); }
-      free(rb.p); free(ob.p);
-      return 1;
-    }
-  }
+  if (is_zip_name(name) && emit_zip_block(c, id, recv, block, body, rt, p0, b, indent))
+    return 1;
 
   /* poly_val.each { |v| ... }: runtime-dispatch over a boxed array or hash */
   if ((sp_streq(name, "each") || sp_streq(name, "each_pair") ||

@@ -39,4 +39,7 @@ int is_quantifier_or_count(const char *n);  /* all? any? none? one? count: is_qu
 int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's names and unshift */
 int is_len_alias(const char *n);      /* length size */
 
+int is_gated_exception_accessor(const char *n); /* accessors owned by specific exception classes */
+int is_symbol_exception_accessor(const char *n); /* exception accessors that can return a Symbol */
+
 #endif

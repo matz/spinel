@@ -799,6 +799,28 @@ const char *sp_exc_parent_of_name(const char *cls) {
   if (!strncmp(cls, "Errno::", 7)) return SPL("SystemCallError");
   return NULL;
 }
+/* Does the exception's class have the class-gated accessor `acc` at all?
+   The same classes the accessors' own gates admit. A program that adds a
+   method of that name to Object reaches it on every other exception, as
+   CRuby's lookup does. */
+sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc) {
+  if (!e || !acc) return 0;
+  const char *c = e->cls_name;
+  if (!strcmp(acc, "receiver"))
+    return sp_exc_cls_matches(c, "NameError") || sp_exc_cls_matches(c, "KeyError") ||
+           sp_exc_cls_matches(c, "FrozenError");
+  static const char *const OWN[][2] = {
+    {"key", "KeyError"}, {"args", "NoMethodError"}, {"private_call?", "NoMethodError"},
+    {"reason", "LocalJumpError"}, {"exit_value", "LocalJumpError"},
+    {"tag", "UncaughtThrowError"}, {"value", "UncaughtThrowError"},
+    {"status", "SystemExit"}, {"success?", "SystemExit"},
+    {"signo", "SignalException"}, {"signm", "SignalException"},
+    {"name", "NameError"}, {"errno", "SystemCallError"}, {"result", "StopIteration"},
+  };
+  for (size_t i = 0; i < sizeof OWN / sizeof OWN[0]; i++)
+    if (!strcmp(acc, OWN[i][0])) return sp_exc_cls_matches(c, OWN[i][1]);
+  return 0;
+}
 /* NameError#name (NoMethodError inherits it): the carried missing name.
    Any other exception class raises CRuby's NoMethodError -- the receiver
    type is class-erased at compile time, so the check is a runtime one. */

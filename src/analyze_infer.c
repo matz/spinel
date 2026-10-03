@@ -1,5 +1,6 @@
 #include "analyze_internal.h"
 #include "builtin_ops.h"
+#include "call_plan.h"
 #include <stdint.h>
 #include <limits.h>
 
@@ -5472,6 +5473,13 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
     if (sp_streq(name, "class")) { *out = TY_CLASS; return 1; }  /* a Class object, carried by name */
     if (sp_streq(name, "backtrace")) { *out = TY_STR_ARRAY; return 1; }  /* empty: no frames captured */
     if (sp_streq(name, "cause")) { *out = TY_EXCEPTION; return 1; }      /* the threaded cause, nil if none */
+    /* A gated accessor can fall through to the program's Object method. */
+    if (rt == TY_EXCEPTION && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+        cplan_exc_object_method(c, name) >= 0) { *out = TY_POLY; return 1; }
+    if (rt == TY_EXCEPTION) {
+      const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
+      if (op) { *out = bop_result(op, rt); return 1; }
+    }
     if (sp_streq(name, "result")) { *out = TY_POLY; return 1; }          /* StopIteration#result, nil otherwise */
     if (sp_streq(name, "errno")) { *out = TY_POLY; return 1; }           /* SystemCallError#errno: the Errno:: class's number, nil for the parent (#4560) */
     if (sp_streq(name, "name")) { *out = TY_POLY; return 1; }            /* NameError#name, nil otherwise */

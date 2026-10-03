@@ -3,6 +3,7 @@
    in, the one most of the replaced chains used. */
 #include "types.h"
 #include "builtin_names.h"
+#include <stddef.h>
 
 int is_call_alias(const char *n) {
   return sp_streq(n, "call") || sp_streq(n, "()") || sp_streq(n, "[]");
@@ -125,4 +126,17 @@ int is_add_sub_mul(const char *n) {
 
 int is_int_bit_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^") || sp_streq(n, "<<") || sp_streq(n, ">>");
+}
+
+int is_gated_exception_accessor(const char *n) {
+  static const char *const names[] = {
+    "key", "receiver", "args", "private_call?", "reason", "exit_value", "tag",
+    "value", "status", "success?", "signo", "signm", "name", "errno", "result", NULL };
+  if (!n) return 0;
+  for (int i = 0; names[i]; i++) if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
+
+int is_symbol_exception_accessor(const char *n) {
+  return sp_streq(n, "reason") || sp_streq(n, "tag") || sp_streq(n, "key") || sp_streq(n, "name");
 }

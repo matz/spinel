@@ -4,10 +4,49 @@
    (codegen_call_arms.h). */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
+
+static int emit_exception_object_accessor(Compiler *c, int id, int recv, const char *name,
+                                           int argc, Buf *b) {
+  const NodeTable *nt = c->nt;
+  /* A class-gated accessor's name that the program also gave Object
+     (`class Object; def tag`): the classes owning the accessor answer it,
+     every other exception the Object method, as CRuby's lookup reaches
+     Object for them. Both answers ride boxed. The accessor alone raised
+     NoMethodError for a RuntimeError. */
+  int xom = argc == 0 && nt_ref(nt, id, "block") < 0 ? cplan_exc_object_method(c, name) : -1;
+  if (xom >= 0) {
+    int xt = ++g_tmp;
+    const BuiltinOp *op = bop_find(TY_EXCEPTION, name, argc, 0);
+    if (is_symbol_exception_accessor(name)) g_uses_symbols = 1;
+    char xv[32]; snprintf(xv, sizeof xv, "_t%d", xt);
+    Buf ab; memset(&ab, 0, sizeof ab);
+    emit_builtin_op_text(c, id, recv, TY_EXCEPTION, name, xv, &ab);
+    Buf ob; memset(&ob, 0, sizeof ob);
+    buf_printf(&ob, "sp_Object_%s(", mc(c->scopes[xom].name));
+    emit_boxed_text(c, TY_EXCEPTION, xv, &ob);
+    buf_puts(&ob, ")");
+    Repr rp = repr_of(c, id);
+    TyKind slot = rp.kind == RK_BOXED ? TY_POLY : rp.as_ty;
+    TyKind omr = (TyKind)c->scopes[xom].ret;
+    buf_printf(b, "({ sp_Exception *_t%d = ", xt);
+    emit_coerce(c, recv, TY_EXCEPTION, CO_HOLD, "an exception accessor receiver", b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_exc_has_acc(_t%d, \"%s\") ? ", xt, xt, name);
+    emit_coerce_text(c, id, bop_result(op, TY_EXCEPTION), slot, CO_HOLD, ab.p,
+                     "an exception accessor result", b);
+    buf_puts(b, " : ");
+    if (method_is_void(&c->scopes[xom])) buf_printf(b, "(%s, sp_box_nil())", ob.p);
+    else emit_coerce_text(c, id, omr, slot, CO_HOLD, ob.p, "an Object method result", b);
+    buf_puts(b, "; })");
+    free(ab.p); free(ob.p);
+    return 1;
+  }
+  return 0;
+}
 
 /* the methods of an exception object: message, full_message, backtrace, set_backtrace, cause, ==, and the rest of TY_EXCEPTION */
 int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
@@ -334,6 +373,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     }
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_EXCEPTION) {
+    if (emit_exception_object_accessor(c, id, recv, name, argc, b)) return 1;
     /* equal? and eql? are pointer identity; == and === are CRuby's value
        equality (same class and message): Object's protocol arm, which also
        unwraps a poly operand and stands down for a user subclass's own

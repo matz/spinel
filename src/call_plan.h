@@ -68,6 +68,8 @@ typedef struct {
 } CallPlan;
 
 const CallPlan *cplan_user(Compiler *c, int id);
+/* Object fallback behind a class-gated exception accessor, or -1. */
+int cplan_exc_object_method(Compiler *c, const char *name);
 
 /* ---- CP_REFUSE: a call the compiler refuses ----
    Whether codegen refuses the call node id, and in which words, decided

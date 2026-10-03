@@ -69,6 +69,18 @@ static void cplan_object_reopen(Compiler *c, const char *name, CallPlan *p) {
   if (omi >= 0) cplan_set(p, omi, oci, UC_REOPEN, CP_DIRECT);
 }
 
+/* A method the program adds to Object under the name of a class-gated
+   exception accessor (UncaughtThrowError#tag, KeyError#key, ...): every
+   exception but those classes answers it, as CRuby's lookup reaches Object.
+   Its scope, or -1 (none, or one taking arguments or a block). */
+int cplan_exc_object_method(Compiler *c, const char *name) {
+  if (!is_gated_exception_accessor(name)) return -1;
+  int oc = comp_class_index(c, "Object");
+  int mi = oc >= 0 ? comp_method_in_class(c, oc, name) : -1;
+  if (mi < 0 || comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PRIVATE ||
+      c->scopes[mi].nparams != 0 || c->scopes[mi].yields) return -1;
+  return mi;
+}
 /* the reopenings of builtin exception classes that define name: the first
    stands for them, picked among at run time by the class name */
 static void cplan_exc_reopen(Compiler *c, const char *name, CallPlan *p) {

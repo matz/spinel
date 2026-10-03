@@ -63,6 +63,7 @@ extern SP_TLS sp_RbVal sp_pending_exc_recv, sp_pending_exc_key, sp_pending_exc_v
 extern SP_TLS unsigned char sp_pending_exc_flags;
 
 int sp_exc_cls_matches(const char *raised, const char *target);
+sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc);   /* has the class-gated accessor */
 int sp_exc_nearest_cls(const char *raised, const char *const *targets, int n);
 SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc);
 int sp_exc_is_standard_error(const char *raised);

@@ -27567,6 +27567,14 @@ static void refuse_lent_ivar_copies(Compiler *c) {
 }
 }
 
+/* A literal block belongs to this super, not to its caller's block. */
+static int super_forwards_caller_block(Compiler *c, int id) {
+  NodeKind kind = nt_kind(c->nt, id);
+  if (kind != NK_SuperNode && kind != NK_ForwardingSuperNode) return 0;
+  int block = nt_ref(c->nt, id, "block");
+  return block < 0 || nt_kind(c->nt, block) != NK_BlockNode;
+}
+
 void analyze_program(Compiler *c) {
   comp_poly_candidates_reset();
   comp_descendants_reset();
@@ -27882,8 +27890,7 @@ void analyze_program(Compiler *c) {
     char *has_super = (char *)calloc(ns > 0 ? (size_t)ns : 1, 1);
     if (has_super) {
       for (int id = 0; id < c->nt->count; id++) {
-        const char *ty = nt_type(c->nt, id);
-        if (!ty || (!sp_streq(ty, "SuperNode") && !sp_streq(ty, "ForwardingSuperNode"))) continue;
+        if (!super_forwards_caller_block(c, id)) continue;
         Scope *sc = comp_scope_of(c, id);
         if (!sc) continue;
         int idx = (int)(sc - c->scopes);

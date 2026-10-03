@@ -7527,12 +7527,15 @@ static TyKind super_target_ret(Compiler *c, Scope *s, int mi, int id) {
   /* A yielding parent's return is whatever its yield produces, decided per
      call site, so its own `ret` stays unknown. The block reaching it is the
      one this method is called with, so take that value's type. */
-  if ((sret == TY_UNKNOWN || sret == TY_VOID) && c->scopes[mi].yields) {
+  /* A parent that also leaves through `return` answers those values or its
+     yield's, so the two join. */
+  int has_ret = c->scopes[mi].yields && sret != TY_UNKNOWN && sret != TY_VOID && scope_has_return(c, mi);
+  if (((sret == TY_UNKNOWN || sret == TY_VOID) || has_ret) && c->scopes[mi].yields) {
     int smi = (int)(s - c->scopes);
     TyKind yt = yield_value_type(c, smi);
     /* a middle link in a super chain has no call sites of its own */
     if (yt == TY_UNKNOWN || yt == TY_VOID) yt = yield_value_type_via_super(c, smi);
-    if (yt != TY_UNKNOWN && yt != TY_VOID) return yt;
+    if (yt != TY_UNKNOWN && yt != TY_VOID) return has_ret ? ty_unify(sret, yt) : yt;
   }
   return sret;
 }

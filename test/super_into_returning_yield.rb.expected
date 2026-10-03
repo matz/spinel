@@ -1,0 +1,13 @@
+8
+-1
+30
+:neg
+:big
+:early
+:after
+:after
+[3, [1, 2]]
+[:done, [1]]
+[:r, 6]
+[:r, :neg]
+:end

@@ -10397,7 +10397,11 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
-  if (!m->yields || scope_has_return(c, mi)) return 0;
+  if (!m->yields) return 0;
+  /* a `return` in the parent leaves the inlined body through an exit label of
+     its own, as the yield inliner's does; bailing fell to a call of a
+     function a yielding method never has, which did not link */
+  int m_has_ret = scope_has_return(c, mi);
   if (g_nren + m->nlocals >= MAX_RENAME) return 0;
   for (int i = 0; i < m->nlocals; i++) {
     LocalVar *lv = &m->locals[i];
@@ -10522,6 +10526,10 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (is_forwarding) zsuper_end(&z);
   inl_dflt_leave(sv_dflt);
 
+  const char *sv_prl = g_method_pr_label, *sv_prv = g_method_pr_var;
+  TyKind sv_prt = g_ret_type;
+  int sv_prexc = g_method_pr_exc_depth, sv_prens = g_method_pr_ensure_depth;
+  char inl_lbl[32]; snprintf(inl_lbl, sizeof inl_lbl, "_sret%d", tag);
   if (as_expr) {
     TyKind rt = comp_ntype(c, id);
     int rtag = ++g_tmp;
@@ -10531,11 +10539,37 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     const char *sv_rv = g_result_var; g_result_var = rvbuf;
     int sp = g_result_poly; g_result_poly = (rt == TY_POLY);
     TyKind srt = g_result_ty; g_result_ty = rt;
-    emit_stmts_tail(c, m->body, b, din);
+    if (m_has_ret) {
+      g_method_pr_label = inl_lbl; g_method_pr_var = rvbuf; g_ret_type = rt;
+      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_ensure_depth = g_ensure_depth;
+      emit_indent(b, din); buf_puts(b, "{\n");
+    }
+    emit_stmts_tail(c, m->body, b, m_has_ret ? din + 1 : din);
+    if (m_has_ret) {
+      g_method_pr_label = sv_prl; g_method_pr_var = sv_prv; g_ret_type = sv_prt;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens;
+      emit_indent(b, din); buf_puts(b, "}\n");
+      emit_indent(b, din); buf_printf(b, "%s: ;\n", inl_lbl);
+    }
     g_result_var = sv_rv; g_result_poly = sp; g_result_ty = srt;
     emit_indent(b, din); buf_printf(b, "_t%d;\n", rtag);
   }
-  else emit_stmts(c, m->body, b, din);
+  else {
+    if (m_has_ret) {
+      g_method_pr_label = inl_lbl; g_method_pr_var = NULL;
+      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_ensure_depth = g_ensure_depth;
+      emit_indent(b, din); buf_puts(b, "{\n");
+    }
+    emit_stmts(c, m->body, b, m_has_ret ? din + 1 : din);
+    if (m_has_ret) {
+      g_method_pr_label = sv_prl; g_method_pr_var = sv_prv;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens;
+      emit_indent(b, din); buf_puts(b, "}\n");
+      emit_indent(b, din); buf_printf(b, "%s: ;\n", inl_lbl);
+    }
+  }
 
   if (as_expr) { emit_indent(b, indent); buf_puts(b, "})"); }
   else { emit_indent(b, indent); buf_puts(b, "}\n"); }

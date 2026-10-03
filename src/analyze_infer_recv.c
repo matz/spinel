@@ -218,18 +218,17 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      (emit_int_operand_fail), so the call answers only where the receiver
      is nil: nil's own boolean (`x & true` of a nil x is false) */
   if (rt == TY_INT && argc == 1 && recv >= 0 &&
-      (sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^"))) {
+      is_bit_op(name)) {
     TyKind at = infer_type(c, argv[0]);
     if (at == TY_FLOAT || at == TY_STRING || at == TY_NIL || at == TY_SYMBOL || at == TY_BOOL ||
         ty_is_array(at) || ty_is_hash(at)) { *out = TY_BOOL; return 1; }
   }
   if ((rt == TY_INT || rt == TY_FLOAT) && argc == 1 && comp_ntype(c, argv[0]) == TY_COMPLEX) {
-    if (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") || sp_streq(name, "/")) { *out = TY_COMPLEX; return 1; }
+    if (is_basic_arith(name)) { *out = TY_COMPLEX; return 1; }
     if (sp_streq(name, "==") || sp_streq(name, "!=")) { *out = TY_BOOL; return 1; }
   }
   if (rt == TY_RATIONAL && argc == 1 && comp_ntype(c, argv[0]) == TY_COMPLEX &&
-      (sp_streq(name, "+") || sp_streq(name, "-") ||
-       sp_streq(name, "*") || sp_streq(name, "/"))) { *out = TY_COMPLEX; return 1; }
+      is_basic_arith(name)) { *out = TY_COMPLEX; return 1; }
   /* Complex: builtin-op rows (builtin_ops.c) */
   if (rt == TY_COMPLEX) {
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
@@ -240,7 +239,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      runtime accumulates int args, so completion typing covers int-returning
      procs; partial applications and other returns remain TY_CURRY). */
   if (rt == TY_PROC && sp_streq(name, "curry")) { *out = TY_CURRY; return 1; }
-  if (rt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()"))) {
+  if (rt == TY_CURRY && is_call_alias(name)) {
     int complete = 0; TyKind cret = TY_UNKNOWN;
     int traced = curry_apply_info(c, id, &complete, &cret);
     /* an untraceable base saturates (or not) at RUN time, so the call answers
@@ -259,11 +258,6 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      bound unchanged, boxed to preserve its class (#2588). */
   if ((rt == TY_INT || rt == TY_FLOAT) && sp_streq(name, "clamp") && argc == 2 &&
       (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[1]) == TY_NIL))
-    { *out = TY_POLY; return 1; }
-  /* clamp(lo, hi) with a Rational bound: the applied bound decides the result
-     class at runtime, so the result is boxed (#3232). */
-  if ((rt == TY_INT || rt == TY_FLOAT) && sp_streq(name, "clamp") && argc == 2 &&
-      (infer_type(c, argv[0]) == TY_RATIONAL || infer_type(c, argv[1]) == TY_RATIONAL))
     { *out = TY_POLY; return 1; }
   if (rt == TY_INT && sp_streq(name, "clamp") && argc == 1 &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "RangeNode") &&
@@ -308,7 +302,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* Integer <op> Rational coerces the Integer to Rational (result Rational for
      arithmetic, Bool/Int for comparisons). */
   if (rt == TY_INT && argc == 1 && comp_ntype(c, argv[0]) == TY_RATIONAL) {
-    if (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") || sp_streq(name, "/")) { *out = TY_RATIONAL; return 1; }
+    if (is_basic_arith(name)) { *out = TY_RATIONAL; return 1; }
     if (sp_streq(name, "%") || sp_streq(name, "modulo") || sp_streq(name, "remainder")) { *out = TY_RATIONAL; return 1; }
     if (sp_streq(name, "divmod")) { *out = TY_POLY_ARRAY; return 1; }
     if (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") || sp_streq(name, ">=") ||
@@ -331,8 +325,7 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     /* round/truncate: no digits (or a literal <= 0) is an Integer, a literal
        positive precision keeps the Rational, and a non-literal precision boxes
        to poly so the class is chosen from the runtime value. */
-    if (sp_streq(name, "round") || sp_streq(name, "truncate") ||
-        sp_streq(name, "floor") || sp_streq(name, "ceil")) {
+    if (is_round_family(name)) {
       /* a trailing `half:` keyword only picks the tie-break mode; peel it off
          the positional count for the class choice, as the Float rule does.
          Read as a positional argument it made `r.round(1, half: :even)` an
@@ -723,7 +716,7 @@ int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       { *out = TY_POLY; return 1; }
     }
     /* index returns nil on a miss -> poly (int-or-nil) */
-    if ((sp_streq(name, "index") || sp_streq(name, "find_index") || sp_streq(name, "rindex")) &&
+    if (is_index_query(name) &&
         (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)) { *out = TY_POLY; return 1; }
     if (sp_streq(name, "index") || sp_streq(name, "find_index")) { *out = TY_INT; return 1; }
     if (sp_streq(name, "sum")) {
@@ -893,8 +886,7 @@ int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
             else if (rbn == 0 && ty_is_numeric(it)) {
               const char *sop = fold_seed_op_sym(c, id, argc, argv);
               TyKind et = ty_array_elem(rt);
-              int arith = sop && (sp_streq(sop, "+") || sp_streq(sop, "-") || sp_streq(sop, "*") ||
-                                  sp_streq(sop, "/") || sp_streq(sop, "%") || sp_streq(sop, "**"));
+              int arith = sop && is_arith_op(sop);
               /* A seed of another class is not an accumulator this element type
                  can hold at all: `[1, 2, 3].reduce(0.5, :+)` accumulates Float
                  and a Bignum seed does not fit an sp_int. Those fold boxed, and
@@ -1282,18 +1274,11 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     int mi = comp_method_in_chain(c, cid, name, NULL);
     if (mi >= 0) {
       TyKind r = an_user_call(c, id, mi, UC_INST, cid);
-      /* Unify with descendant direct overrides: codegen dispatch emits a
-         cls_id switch over all overrides, so the result type must cover all. */
-      int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
-      for (int di = 0; di < nd; di++) {
-        int k = ds[di];
-        int dmi = comp_method_in_class(c, k, name);
-        /* a yielding override answers this call's block, not its last splice's */
-        if (dmi >= 0)
-          r = ty_unify(r, c->scopes[dmi].yields ? method_call_ret(c, dmi, id)
-                                                : (TyKind)c->scopes[dmi].ret);
-      }
-      { *out = r; return 1; }
+      /* codegen's dispatch switches over every implementation in the
+         subtree, so the result covers them all (a yielding one answers this
+         call's block, not its last splice's) */
+      *out = dispatch_ret_over(c, cid, name, 0, mi, r, id);
+      return 1;
     }
     if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) { *out = TY_STRING; return 1; }
   }
@@ -1489,12 +1474,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* The String value-form mutators on a boxed receiver answer the mutated
      string (NULL for the no-change bang contract), like the typed path. */
   if (recv >= 0 && rt == TY_POLY && !an_user_defines_or_reads(c, name)) {
-    static const char *const PBANGN[] = {
-      "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-      "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!", "tr!",
-      "delete!", "tr_s!", "delete_prefix!", "delete_suffix!", "succ!", "next!",
-      NULL };
-    for (int i = 0; PBANGN[i]; i++) if (sp_streq(name, PBANGN[i])) { *out = TY_STRING; return 1; }
+    if (ty_str_bang_flags(name)) { *out = TY_STRING; return 1; }
   }
   /* The names Regexp alone owns, on a boxed receiver: the emitter unboxes the
      pattern and dispatches through the typed emitter, so the answer is the
@@ -1532,7 +1512,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if ((sp_streq(name, "ceildiv") || sp_streq(name, "gcd") || sp_streq(name, "lcm")) && argc == 1)
       { *out = TY_POLY; return 1; }
     if (sp_streq(name, "pow") && (argc == 1 || argc == 2)) { *out = TY_POLY; return 1; }
-    if ((sp_streq(name, "allbits?") || sp_streq(name, "anybits?") || sp_streq(name, "nobits?")) && argc == 1)
+    if (is_bits_query(name) && argc == 1)
       { *out = TY_BOOL; return 1; }
   }
   /* The Enumerable names a boxed receiver shares with Array: the emitter
@@ -1542,8 +1522,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     int has_blk = nt_ref(nt, id, "block") >= 0;
     if (!has_blk && argc == 0 && sp_streq(name, "minmax")) { *out = TY_POLY_ARRAY; return 1; }
     if (!has_blk && sp_streq(name, "product")) { *out = TY_POLY_ARRAY; return 1; }
-    if (!has_blk && (sp_streq(name, "combination") || sp_streq(name, "permutation") ||
-                     sp_streq(name, "repeated_combination") || sp_streq(name, "repeated_permutation")))
+    if (!has_blk && is_combination_family(name))
       { *out = TY_POLY_ARRAY; return 1; }
     /* the repeated pair's block form answers the receiver, which the
        re-dispatch hands back boxed */
@@ -1599,7 +1578,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
                  : ((argc == 1 ||
                      (argc == 2 && !sp_streq(name, "find_index"))) &&
                     nt_ref(nt, id, "block") < 0)) &&
-      (sp_streq(name, "find_index") || sp_streq(name, "index") || sp_streq(name, "rindex")) &&
+      is_index_query(name) &&
       !an_user_defines_or_reads(c, name))
     { *out = TY_POLY; return 1; }
   /* String#chars on a poly value (a String read out of a container / pair):
@@ -1623,8 +1602,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      `reverse_each` is the same Enumerator over the elements reversed, and
      stayed unresolved the same way. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      (sp_streq(name, "each") || sp_streq(name, "each_entry") ||
-       sp_streq(name, "reverse_each") ||
+      (is_each_walk(name) ||
        /* `v&.select` keeps the boxed answer, which holds the nil a nil
           receiver gives: an Enumerator slot reads it back as one */
        (poly_blockless_enum_name(name) && !call_is_safe_nav(nt, id))) &&
@@ -1838,18 +1816,6 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "replace") || sp_streq(name, "prepend") ||
        sp_streq(name, "concat")))
     { *out = TY_POLY; return 1; }
-  /* in-place string mutators on a poly value: self (boxed) or nil */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
-      !an_user_recv_defines_method(c, name) && name[0] && strlen(name) > 1 &&
-      name[strlen(name) - 1] == '!') {
-    static const char *const PBN[] = {
-      "upcase!","downcase!","capitalize!","swapcase!","strip!","lstrip!",
-      "rstrip!","chomp!","chop!","squeeze!","reverse!","succ!","next!",
-      "delete_prefix!","delete_suffix!","delete!","gsub!","sub!","tr!","tr_s!",
-      NULL };
-    for (int q = 0; PBN[q]; q++)
-      if (sp_streq(name, PBN[q])) { *out = TY_POLY; return 1; }
-  }
   /* Array#delete_at on a poly value: the removed element, boxed. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
       !an_user_recv_defines_method(c, name) && sp_streq(name, "delete_at"))

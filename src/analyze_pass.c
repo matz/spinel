@@ -4349,10 +4349,6 @@ static void mark_body_self(const NodeTable *nt, int id, int owner, int *body_sel
   }
 }
 
-static int name_in(const char *n, const char *const *set) {
-  for (int i = 0; n && set[i]; i++) if (sp_streq(n, set[i])) return 1;
-  return 0;
-}
 
 /* Is the value of node `u` handed on -- stored, passed, returned -- rather
    than only consumed where it stands? Consumed: the receiver of a call that
@@ -4412,13 +4408,13 @@ static int value_handed_on(const NodeTable *nt, const int *parent, int u) {
        (taken as one, every class with a class method escaped, #5272) */
     if (pk == NK_DefNode && nt_ref(nt, p, "receiver") == u) return 0;
     if (pk == NK_CallNode) {
-      if (nt_ref(nt, p, "receiver") == u) return chosen || name_in(nt_str(nt, p, "name"), passes_recv);
+      if (nt_ref(nt, p, "receiver") == u) return chosen || str_in(nt_str(nt, p, "name"), passes_recv);
       return 1;
     }
     if (pt && sp_streq(pt, "ArgumentsNode")) {
       int call = parent[p];
       if (call >= 0 && nt_kind(nt, call) == NK_CallNode &&
-          name_in(nt_str(nt, call, "name"), consumes_args)) return 0;
+          str_in(nt_str(nt, call, "name"), consumes_args)) return 0;
       return 1;
     }
     return 1;
@@ -4524,7 +4520,7 @@ int class_value_escapes(Compiler *c, int cid) {
   int all = 0;
   for (int u = 0; u < nt->count && !all; u++) {
     NodeKind k = nt_kind(nt, u);
-    if (k == NK_CallNode && name_in(nt_str(nt, u, "name"), reflective)) {
+    if (k == NK_CallNode && str_in(nt_str(nt, u, "name"), reflective)) {
       /* `const_get(:Get)` / `const_get("A::Get")` names the one class it
          hands out: only that class escapes. Taken as any class, one
          literal lookup anywhere bound every `k.new(x)` into every class's
@@ -7010,8 +7006,7 @@ int bind_coerce_operator_params(Compiler *c) {
      something else. */
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    int isa = nm && (sp_streq(nm, "is_a?") || sp_streq(nm, "kind_of?") ||
-                     sp_streq(nm, "instance_of?"));
+    int isa = nm && is_kind_query(nm);
     int rtq = nm && sp_streq(nm, "respond_to?");
     if (!isa && !rtq) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -7677,7 +7672,7 @@ int infer_param_types(Compiler *c) {
     /* <method>.to_proc stored as a Proc: its .call sites are likewise the
        only way the target method is reached, so bind their arg types to the
        target's params (the emitted trampoline calls the real C signature). */
-    if (recv >= 0 && name && (sp_streq(name, "call") || sp_streq(name, "[]") || sp_streq(name, "()")) &&
+    if (recv >= 0 && name && is_call_alias(name) &&
         infer_type(c, recv) == TY_PROC) {
       int *mns, bound = 0;
       int nmn = proc_to_proc_method_nodes(c, recv, &mns);
@@ -8008,8 +8003,7 @@ int infer_param_types(Compiler *c) {
       int mi3 = comp_method_in_chain(c, cid3, name, NULL);
       /* Comparable: `a < b` etc. on an object with `<=>` but no direct `<`
          bind the argument to `<=>` param instead. */
-      if (mi3 < 0 && (sp_streq(name, "<") || sp_streq(name, ">") ||
-                      sp_streq(name, "<=") || sp_streq(name, ">=")))
+      if (mi3 < 0 && is_cmp_op(name))
         mi3 = comp_method_in_chain(c, cid3, "<=>", NULL);
       /* a method the program adds to Object, which the class's chain stops
          short of: the call reaches it (codegen's Object fallback), so its
@@ -9373,8 +9367,7 @@ int desugar_class_eval_value(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || (!sp_streq(nm, "class_eval") && !sp_streq(nm, "class_exec") &&
-                !sp_streq(nm, "module_eval") && !sp_streq(nm, "module_exec"))) continue;
+    if (!nm || !is_class_eval_family(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
     const char *cname = nt_str(nt, recv, "name");
@@ -10832,6 +10825,8 @@ int narrow_empty_array_args_by_yield(Compiler *c) {
       if (a < 0 || a >= c->node_cap || nt_kind(nt, a) != NK_ArrayNode) continue;
       int en = 0; nt_arr(nt, a, "elements", &en);
       if (en == 0 && c->arr_want[a] == TY_UNKNOWN) any_empty = 1;
+      /* a non-empty literal the block may push another kind into */
+      if (en > 0 && blk >= 0 && c->arr_want[a] != TY_POLY_ARRAY) any_empty = 1;
     }
     if (!any_empty) continue;
     /* with a block: an inlinable yielding method; without: a receiverless
@@ -10847,7 +10842,8 @@ int narrow_empty_array_args_by_yield(Compiler *c) {
       int a = call_param_arg(c, m, av, an, j);
       if (a < 0 || a >= c->node_cap || nt_kind(nt, a) != NK_ArrayNode) continue;
       int en = 0; nt_arr(nt, a, "elements", &en);
-      if (en != 0 || c->arr_want[a] != TY_UNKNOWN) continue;
+      int seeded = en > 0 && blk >= 0 && c->arr_want[a] != TY_POLY_ARRAY;
+      if (!seeded && (en != 0 || c->arr_want[a] != TY_UNKNOWN)) continue;
       const char *pn = m->pnames[j];
       if (!pn) continue;
       TyKind acc = TY_UNKNOWN; int open = 0;
@@ -10866,6 +10862,18 @@ int narrow_empty_array_args_by_yield(Compiler *c) {
           const char *bp = block_param_name(c, blk, q);
           if (bp) yarg_scan_pushes(c, bbody, bp, &acc, &open);
         }
+      }
+      if (seeded) {
+        /* A literal with elements of its own, `each_with_object([1]) { |e, acc|
+           acc << e }`, keeps its kind while every push fits it; a push of
+           another kind widens it to the general Array, as a local's literal
+           widens (#7100). It ran as an sp_IntArray and raised "cannot store
+           ... into an Array[Integer]" at the push, or was refused. */
+        TyKind lt = infer_type(c, a);
+        if (!open && acc != TY_UNKNOWN && ty_is_array(lt) && lt != TY_POLY_ARRAY &&
+            acc != ty_array_elem(lt))
+          changed |= widen_arg_array(c, a);
+        continue;
       }
       if (!open && (acc == TY_INT || acc == TY_FLOAT || acc == TY_STRING)) {
         c->arr_want[a] = ty_array_of(acc);
@@ -11004,7 +11012,7 @@ static int curry_chain(Compiler *c, int node, int *applied, int *arity, TyKind *
       *applied = 0;
       return 1;
     }
-    if (sp_streq(nm, "[]") || sp_streq(nm, "call") || sp_streq(nm, "()")) {
+    if (is_call_alias(nm)) {
       if (!curry_chain(c, recv, applied, arity, ret, depth + 1)) return 0;
       /* one application per argument: curry[a, b] applies two */
       int a2 = nt_ref(nt, node, "arguments");
@@ -12190,8 +12198,7 @@ int infer_block_params(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) continue;
     TyKind rt = infer_type(c, recv);
-    int yields_self = sp_streq(cname, "tap") || sp_streq(cname, "then") ||
-                      sp_streq(cname, "yield_self");
+    int yields_self = is_tap_alias(cname);
     /* An untyped receiver leaves the param untyped too -- body usage is what
        types it there (`[].tap { |a| a << 1 }` gets its array kind from the
        push). The SLOT still has to exist: codegen binds the param whether or
@@ -12323,7 +12330,7 @@ int infer_block_params(Compiler *c) {
      to the proc's params (e.g. `t` gets TY_SYMBOL instead of the default TY_INT). */
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cname = nt_str(nt, id, "name");
-    if (!cname || (!sp_streq(cname, "call") && !sp_streq(cname, "()") && !sp_streq(cname, "[]"))) continue;
+    if (!cname || !is_call_alias(cname)) continue;
     if (nt_int(nt, id, "rt_probe", 0)) continue;  /* analysis-only respond_to? probe */
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || infer_type(c, recv) != TY_PROC) continue;
@@ -12784,8 +12791,7 @@ int infer_block_params(Compiler *c) {
     }
     else if (sp_streq(name, "step") && (rt == TY_RATIONAL || rt == TY_BIGINT))
       pt = TY_POLY;  /* yields boxed Rational/Integer values (#2566); a Bignum receiver walks boxed too (#4779) */
-    else if ((sp_streq(name, "times") || sp_streq(name, "upto") ||
-         sp_streq(name, "downto")) && rt == TY_INT)
+    else if (is_int_step(name) && rt == TY_INT)
       pt = TY_INT;
     /* on a boxed receiver the block runs through the dispatch with its
        argument boxed; typed during inference, not only when emitted, so what
@@ -12934,8 +12940,7 @@ int infer_block_params(Compiler *c) {
               /* the index-finding family binds the element exactly as its
                  siblings do; it was left off, so a block param that no other
                  site typed stayed unknown and got no declaration (#3409) */
-              sp_streq(name, "find_index") || sp_streq(name, "index") ||
-              sp_streq(name, "rindex") ||
+              is_index_query(name) ||
               /* Same binding, same omission: every remaining sibling that
                  yields one element (or, for the pairwise ones, two). A param
                  no other site typed stayed unknown and got no declaration, so
@@ -13388,9 +13393,7 @@ int infer_block_params(Compiler *c) {
                          sp_streq(name, "group_by") || sp_streq(name, "sum") ||
                          /* Enumerable predicates/counters: a solo param is the
                             [k, v] pair, not the key (#2339) */
-                         sp_streq(name, "any?") || sp_streq(name, "all?") ||
-                         sp_streq(name, "none?") || sp_streq(name, "one?") ||
-                         sp_streq(name, "count"));
+                         is_quantifier_or_count(name));
         if (p0) {
           if (bp_widen(hs, p0, pair_solo ? TY_POLY : ty_hash_key(rt))) changed = 1;
         }
@@ -13760,8 +13763,7 @@ int infer_return_types(Compiler *c) {
       const char *pty = pred >= 0 ? nt_type(nt, pred) : NULL;
       if (!pty || !sp_streq(pty, "CallNode")) continue;
       const char *pn = nt_str(nt, pred, "name");
-      if (!pn || (!sp_streq(pn, "is_a?") && !sp_streq(pn, "kind_of?") &&
-                  !sp_streq(pn, "instance_of?"))) continue;
+      if (!pn || !is_kind_query(pn)) continue;
       int prec = nt_ref(nt, pred, "receiver");
       if (prec < 0 || !nt_type(nt, prec) ||
           !sp_streq(nt_type(nt, prec), "LocalVariableReadNode")) continue;

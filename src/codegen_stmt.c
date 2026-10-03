@@ -595,6 +595,13 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
                   " printf(\"#<Dir:%%s>\\n\", _dp ? _dp : \"\"); }"
                   " else fputs(\"nil\\n\", stdout); }\n", dv, dv);
   }
+  else if (t == TY_PROCESS_STATUS) {
+    /* `$?` is nil (NULL) until a child has been waited for */
+    int sv = ++g_tmp;
+    buf_printf(b, "{ sp_ProcessStatus *_t%d = (", sv); emit_expr(c, arg, b);
+    buf_printf(b, "); sp_puts_line(_t%d ? sp_process_status_to_s(_t%d->pid, _t%d->status, 1) : \"nil\"); }\n",
+               sv, sv, sv);
+  }
   else if (t == TY_OPENSTRUCT) {
     buf_puts(b, "{ sp_OpenStruct *_po = ("); emit_expr(c, arg, b);
     buf_puts(b, "); sp_puts_line(_po ? sp_OpenStruct_inspect(_po) : \"nil\"); }\n");
@@ -755,7 +762,7 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "; if (_t%d && *_t%d) putchar((unsigned char)_t%d[0]); }\n", ts, ts, ts);
     }
 else if (at == TY_POLY) {
-      buf_puts(b, "putchar((int)(sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
+      buf_puts(b, "putchar((int)(sp_poly_arg_i("); emit_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
     }
 else {
       buf_puts(b, "putchar((int)(("); emit_int_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
@@ -857,7 +864,7 @@ else {
       /* a poly status (e.g. a widened attr read or poly-hash get) must be
          unboxed -- (int)(sp_RbVal) is a struct cast, a cc error. */
       TyKind xt = comp_ntype(c, argv[0]);
-      if (xt == TY_POLY) { buf_printf(b, "%s((int)sp_poly_to_i(", xfn); emit_expr(c, argv[0], b); buf_puts(b, "));\n"); }
+      if (xt == TY_POLY) { buf_printf(b, "%s((int)sp_poly_arg_i(", xfn); emit_expr(c, argv[0], b); buf_puts(b, "));\n"); }
       else if (xt == TY_BOOL) { buf_printf(b, "%s((", xfn); emit_expr(c, argv[0], b); buf_puts(b, ") ? 0 : 1);\n"); }
       else { buf_printf(b, "%s((int)(", xfn); emit_int_expr(c, argv[0], b); buf_puts(b, "));\n"); }
     }
@@ -1033,8 +1040,7 @@ else {
         emit_gc_root_tmp(c, ft, t, b);
         buf_puts(b, "\n");
         free(fb.p);
-        snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", t);
-        g_argov_node[g_n_argov++] = first;
+        view_bind(first, "_t%d", t);
         up_held = 1;
       }
     }
@@ -1097,7 +1103,7 @@ else {
       emit_str_literal(b, bad_cat);
       buf_puts(b, "));\n");
     }
-    if (up_held) g_n_argov--;
+    if (up_held) view_unbind(g_n_argov - 1);
     return 1;
   }
   return 0;
@@ -1393,12 +1399,11 @@ static void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     emit_expr(c, v, b);
   }
   else if (comp_ntype(c, v) == TY_STRBUF) {
-    unsigned char sv = c->strbuf_box[v];
-    c->strbuf_box[v] = 0;
+    int sv = view_push_repr(c, v, VR_STRBUF_BOX, 0);
     buf_puts(b, "sp_String_new_shared(");
     emit_str_expr(c, v, b);
     buf_puts(b, ")");
-    c->strbuf_box[v] = sv;
+    view_pop(c, sv);
   }
   else if (comp_ntype(c, v) == TY_POLY || strbuf_boxed_elem_read(c, v)) {
     /* a container element read hands out the element's BOXED handle: take the
@@ -1539,7 +1544,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
        ty_unify), not the truthy 0 default_value gives every other place */
     if (lv->type == TY_RANGE) buf_puts(b, "(sp_Range){0}");
     else if (lv->type == TY_INT || lv->type == TY_FLOAT) buf_puts(b, nil_sentinel(lv->type));
-    else buf_puts(b, default_value(lv->type));
+    else buf_puts(b, default_value_from_compiler(c, lv->type));
   }
   else if (lv && lv->type == TY_STRBUF) {
     emit_strbuf_value(c, lv, v, b);
@@ -1990,11 +1995,8 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
   TyKind vt = comp_ntype(c, v);
   const char *fn = t == TY_INT ? int_arith_fn(op)
                  : t == TY_BIGINT ? bigint_arith_fn(op) : NULL;
-  int bitop = t == TY_INT && (sp_streq(op, "<<") || sp_streq(op, ">>") ||
-                              sp_streq(op, "|") || sp_streq(op, "&") || sp_streq(op, "^"));
-  int fop = t == TY_FLOAT && (sp_streq(op, "+") || sp_streq(op, "-") ||
-                              sp_streq(op, "*") || sp_streq(op, "/") ||
-                              sp_streq(op, "%") || sp_streq(op, "**"));
+  int bitop = t == TY_INT && is_int_bit_op(op);
+  int fop = t == TY_FLOAT && is_arith_op(op);
   /* Float `%` and `**` have no C operator: they take the helpers the binary
      form uses (floored modulo, a raising pow for a Complex result) */
   const char *ffn = !fop ? NULL
@@ -2018,7 +2020,7 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
   /* a boxed rhs of a Float op is kept boxed for the nil test below */
   else if (vt == TY_POLY && fop) emit_expr(c, v, &rb);
   else if (vt == TY_POLY) {
-    buf_puts(&rb, t == TY_FLOAT ? "sp_poly_to_f(" : t == TY_BIGINT ? "sp_poly_as_bigint(" : "sp_poly_to_i(");
+    buf_puts(&rb, t == TY_FLOAT ? "sp_poly_opnd_f(" : t == TY_BIGINT ? "sp_poly_as_bigint(" : op_assign_int_conv(t, op));
     emit_expr(c, v, &rb); buf_puts(&rb, ")");
   }
   else if (t == TY_BIGINT && vt == TY_INT) {
@@ -2220,8 +2222,7 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
      helpers the binary path uses. Only an Integer/Rational rhs keeps the result
      a Rational; a Float rhs would change the local's type (CRuby returns a
      Float) and falls through to the loud reject. */
-  if (t == TY_RATIONAL && (sp_streq(op, "+") || sp_streq(op, "-") ||
-                           sp_streq(op, "*") || sp_streq(op, "/"))) {
+  if (t == TY_RATIONAL && is_basic_arith(op)) {
     TyKind vt = comp_ntype(c, v);
     if (vt == TY_RATIONAL || vt == TY_INT) {
       const char *fn = op[0] == '+' ? "add" : op[0] == '-' ? "sub" : op[0] == '*' ? "mul" : "div";
@@ -2451,7 +2452,7 @@ int static_isa_cond(Compiler *c, int pred) {
   const NodeTable *nt = c->nt;
   if (pred < 0 || !nt_type(nt, pred) || !sp_streq(nt_type(nt, pred), "CallNode")) return -1;
   const char *nm = nt_str(nt, pred, "name");
-  if (!nm || (!sp_streq(nm, "is_a?") && !sp_streq(nm, "kind_of?") && !sp_streq(nm, "instance_of?"))) return -1;
+  if (!nm || !is_kind_query(nm)) return -1;
   int recv = nt_ref(nt, pred, "receiver");
   if (recv < 0) return -1;
   TyKind rt = comp_ntype(c, recv);
@@ -2473,8 +2474,7 @@ int static_isa_cond(Compiler *c, int pred) {
        slot's nil (see the is_a? fold in codegen_call.c). Object and its
        ancestors hold for nil as well, so those stay folded. */
     if ((rt == TY_STRING || ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv))) &&
-        !sp_streq(target_name, "Object") && !sp_streq(target_name, "BasicObject") &&
-        !sp_streq(target_name, "Kernel")) {
+        !is_object_root(target_name)) {
       int ans = ty_matches_class(rt, target_name, sp_streq(nm, "instance_of?"));
       if (ans == 1 || sp_streq(target_name, "NilClass")) return -1;
       return ans;
@@ -3504,8 +3504,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
     /* a scalar subject holding its nil sentinel is a NilClass, and is not
        the Integer or Float its slot is; Object and its ancestors hold for
        nil too, as in the is_a? fold */
-    if (t == g_pm_sentinel_t && !sp_streq(cn2, "Object") && !sp_streq(cn2, "BasicObject") &&
-        !sp_streq(cn2, "Kernel") && (yes > 0 || sp_streq(cn2, "NilClass"))) {
+    if (t == g_pm_sentinel_t && !is_object_root(cn2) && (yes > 0 || sp_streq(cn2, "NilClass"))) {
       char ref[24]; snprintf(ref, sizeof ref, "_t%d", t);
       if (!sp_streq(cn2, "NilClass")) emit_slot_truthy(pt, ref, b);
       else { buf_puts(b, "!"); emit_slot_truthy(pt, ref, b); }
@@ -3908,7 +3907,7 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
      it is for a poly result and for a case whose only value is nil */
   if (n <= 0) {
     emit_indent(b, indent);
-    buf_printf(b, "_t%d = %s;\n", cr, rt == TY_POLY || rt == TY_NIL ? "sp_box_nil()" : default_value(rt));
+    buf_printf(b, "_t%d = %s;\n", cr, rt == TY_POLY || rt == TY_NIL ? "sp_box_nil()" : default_value_from_compiler(c, rt));
     return;
   }
   int last = bb[n - 1];
@@ -3951,7 +3950,7 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
        its side effect, then default the result, nil boxed as above */
     emit_stmt(c, last, b, indent);
     emit_indent(b, indent);
-    buf_printf(b, "_t%d = %s;\n", cr, rt == TY_POLY || rt == TY_NIL ? "sp_box_nil()" : default_value(rt));
+    buf_printf(b, "_t%d = %s;\n", cr, rt == TY_POLY || rt == TY_NIL ? "sp_box_nil()" : default_value_from_compiler(c, rt));
     return;
   }
   Buf le; memset(&le, 0, sizeof le);
@@ -3961,7 +3960,7 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
   g_indent = saved_gi;
   emit_indent(b, indent);
   buf_printf(b, "_t%d = ", cr);
-  buf_puts(b, le.p ? le.p : default_value(rt));
+  buf_puts(b, le.p ? le.p : default_value_from_compiler(c, rt));
   buf_puts(b, ";\n");
   free(le.p);
 }
@@ -3977,8 +3976,9 @@ static void emit_pm_typed_assign(Compiler *c, Scope *sc, const char *lnm,
   TyKind ty = lv ? lv->type : TY_POLY;
   emit_indent(b, indent); buf_printf(b, "lv_%s = ", rename_local(lnm));
   switch (ty) {
-  case TY_INT: case TY_BOOL:     buf_printf(b, "sp_poly_to_i(%s)", boxed); break;
-  case TY_FLOAT:                 buf_printf(b, "sp_poly_to_f(%s)", boxed); break;
+  case TY_INT:                   buf_printf(b, "sp_poly_to_i_or_nil(%s)", boxed); break;   /* nil is the slot's sentinel */
+  case TY_BOOL:                  buf_printf(b, "sp_poly_to_i(%s)", boxed); break;
+  case TY_FLOAT:                 buf_printf(b, "sp_poly_to_f_or_nil(%s)", boxed); break;
   case TY_INT_ARRAY:             buf_printf(b, "(sp_IntArray *)(%s).v.p", boxed); break;
   case TY_FLOAT_ARRAY:           buf_printf(b, "(sp_FloatArray *)(%s).v.p", boxed); break;
   case TY_STR_ARRAY:             buf_printf(b, "(sp_StrArray *)(%s).v.p", boxed); break;
@@ -4286,7 +4286,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
        temp (an empty `[]` the temp holds boxed) converts into it */
     emit_coerce_text(c, pred, store_value_kind(c, pred), pt, CO_HOLD, sb.p ? sb.p : "", "a case/in subject", b);
   }
-  else buf_puts(b, sb.p ? sb.p : default_value(pt));
+  else buf_puts(b, sb.p ? sb.p : default_value_from_compiler(c, pt));
   free(sb.p);
   buf_puts(b, ";\n");
   if (needs_root(pt)) {
@@ -5354,7 +5354,7 @@ static int emit_when_scalar_class(TyKind pt, const char *cn, int t, Buf *b) {
   if (pt != TY_INT && pt != TY_FLOAT) return 0;
   int yes = ty_matches_class(pt, cn, 0);
   int nilcls = sp_streq(cn, "NilClass");
-  int univ = sp_streq(cn, "Object") || sp_streq(cn, "BasicObject") || sp_streq(cn, "Kernel");
+  int univ = is_object_root(cn);
   if (yes < 0 || (!nilcls && (!yes || univ))) return 0;
   if (pt == TY_INT) buf_printf(b, "(_t%d %s SP_INT_NIL)", t, nilcls ? "==" : "!=");
   else buf_printf(b, "(%ssp_float_is_nil(_t%d))", nilcls ? "" : "!", t);
@@ -5461,6 +5461,16 @@ static int subjless_cond_raw(Compiler *c, int cond) {
 static void emit_case_int_label(Buf *b, long long v) {
   if (v == INT64_MIN) buf_puts(b, "(-9223372036854775807LL - 1)");
   else buf_printf(b, "%lldLL", v);
+}
+
+/* The conversion of a boxed right operand of an op-assign into an Integer
+   (or boolean) slot: nil is CRuby's TypeError -- the coercion one for an
+   arithmetic or bitwise operator, the conversion one for a shift count. A
+   boolean slot keeps the plain conversion (true | nil is true). */
+const char *op_assign_int_conv(TyKind slot, const char *op) {
+  if (slot == TY_BOOL) return "sp_poly_to_i(";
+  if (op && (sp_streq(op, "<<") || sp_streq(op, ">>"))) return "sp_poly_arg_i_of(";
+  return "sp_poly_opnd_i(";
 }
 
 void emit_poly_unboxed(Compiler *c, int node, TyKind t, const char *conv, Buf *b) {
@@ -5807,8 +5817,8 @@ static int emit_when_lambda_inline(Compiler *c, int cond, int t, TyKind pt, Buf 
     TyKind lt = plv ? plv->type : TY_UNKNOWN;
     char tt[24]; snprintf(tt, sizeof tt, "_t%d", t);
     buf_printf(b, "lv_%s = ", rename_local(lpnm));
-    if (pt == TY_POLY && lt == TY_INT) buf_printf(b, "sp_poly_to_i(%s)", tt);
-    else if (pt == TY_POLY && lt == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", tt);
+    if (pt == TY_POLY && lt == TY_INT) buf_printf(b, "sp_poly_to_i_or_nil(%s)", tt);
+    else if (pt == TY_POLY && lt == TY_FLOAT) buf_printf(b, "sp_poly_to_f_or_nil(%s)", tt);
     else if (pt != TY_POLY && pt != TY_UNKNOWN && lt == TY_POLY) emit_boxed_text(c, pt, tt, b);
     else buf_puts(b, tt);
     buf_puts(b, "; ");
@@ -5875,7 +5885,7 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
      through emit_expr, which has no expression form for it. */
   if (n > 0 && (lt == TY_NIL || lt == TY_VOID || lt == TY_UNKNOWN)) {
     emit_stmt(c, bb[n - 1], b, 0);
-    buf_printf(b, "_cr%d = %s; ", cr, rt == TY_POLY ? "sp_box_nil()" : default_value(rt));
+    buf_printf(b, "_cr%d = %s; ", cr, rt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, rt));
     return;
   }
   /* Emit the tail value with a CAPTURED prelude: a tail whose lowering hoists
@@ -5894,7 +5904,7 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   if (n > 0 && rt == TY_BIGINT && comp_ntype(c, bb[n - 1]) != TY_BIGINT)
     emit_bigint_operand_ext(c, bb[n - 1], &val);
   else if (n > 0) { if (rt == TY_POLY) emit_boxed(c, bb[n - 1], &val); else emit_expr(c, bb[n - 1], &val); }
-  else buf_puts(&val, rt == TY_POLY ? "sp_box_nil()" : default_value(rt));
+  else buf_puts(&val, rt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, rt));
   g_pre = sv_pre;
   if (pre.p) buf_puts(b, pre.p);
   buf_printf(b, "_cr%d = ", cr);
@@ -5920,7 +5930,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
   int cr = ++g_tmp;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b);
-  buf_printf(b, " _cr%d = %s; ", cr, rt == TY_RANGE ? "(sp_Range){0}" : default_value(rt));
+  buf_printf(b, " _cr%d = %s; ", cr, rt == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, rt));
   int t = -1;
   TyKind pt = TY_UNKNOWN;
   if (pred >= 0) {
@@ -6097,7 +6107,7 @@ static int find_hoistable_strlen(Compiler *c, int root) {
     int recv = nt_ref(nt, root, "receiver");
     int args = nt_ref(nt, root, "arguments");
     int an = 0; if (args >= 0) nt_arr(nt, args, "arguments", &an);
-    if (nm && (sp_streq(nm, "length") || sp_streq(nm, "size")) && an == 0 && recv >= 0 &&
+    if (nm && is_len_alias(nm) && an == 0 && recv >= 0 &&
         nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "LocalVariableReadNode") &&
         nt_str(nt, recv, "name") && comp_ntype(c, recv) == TY_STRING)
       return recv;
@@ -6114,7 +6124,7 @@ static int find_hoistable_strlen(Compiler *c, int root) {
 
 /* Whether `root`'s subtree mutates the local `name` (reassignment or an
    in-place mutating method on it). Mirrors legacy body_mutates_var?. */
-static int subtree_mutates_local(Compiler *c, int root, const char *name) {
+static int subtree_changes_local(Compiler *c, int root, const char *name) {
   if (root < 0) return 0;
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, root);
@@ -6138,11 +6148,11 @@ static int subtree_mutates_local(Compiler *c, int root, const char *name) {
       return 1;
   }
   int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) if (subtree_mutates_local(c, nt_ref_at(nt, root, i), name)) return 1;
+  for (int i = 0; i < nr; i++) if (subtree_changes_local(c, nt_ref_at(nt, root, i), name)) return 1;
   int na = nt_num_arrs(nt, root);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++) if (subtree_mutates_local(c, el[j], name)) return 1;
+    for (int j = 0; j < n; j++) if (subtree_changes_local(c, el[j], name)) return 1;
   }
   return 0;
 }
@@ -6197,7 +6207,7 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
   if (sp_streq(nm, "[]=") && ac == 2 && stmt && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
       comp_ntype(c, av[0]) == TY_INT && comp_ntype(c, av[1]) == ty_array_elem(rt)) return 1;
   if (sp_streq(nm, "getbyte") && ac == 1 && rt == TY_STRING && comp_ntype(c, av[0]) == TY_INT) return 1;
-  if ((sp_streq(nm, "length") || sp_streq(nm, "size")) && ac == 0 && (ty_is_array(rt) || rt == TY_STRING))
+  if (is_len_alias(nm) && ac == 0 && (ty_is_array(rt) || rt == TY_STRING))
     return 1;
   int alloc = 0;
   if (ac == 0 && call_is_field_read(c, id, &alloc) && !alloc) return 1;
@@ -6212,7 +6222,7 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
   if (rt == TY_INT || rt == TY_FLOAT) {
     if (ac == 0 && sp_streq(nm, "nil?")) return 1;
     if (ac == 1 && nt_kind(nt, av[0]) == NK_ConstantReadNode &&
-        (sp_streq(nm, "is_a?") || sp_streq(nm, "kind_of?") || sp_streq(nm, "instance_of?")))
+        is_kind_query(nm))
       return 1;
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
@@ -6415,7 +6425,7 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
   int av = nt_ref(nt, len, "receiver");
   int la = nt_ref(nt, len, "arguments"), lac = 0;
   if (la >= 0) nt_arr(nt, la, "arguments", &lac);
-  if (!ln || (!sp_streq(ln, "length") && !sp_streq(ln, "size")) || lac != 0 || av < 0 ||
+  if (!ln || !is_len_alias(ln) || lac != 0 || av < 0 ||
       nt_kind(nt, av) != NK_LocalVariableReadNode) return;
   const char *an = nt_str(nt, av, "name");
   TyKind at = comp_ntype(c, av);
@@ -6436,8 +6446,8 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
       !sp_streq(nt_str(nt, inc, "binary_operator"), "+")) return;
   int one = nt_ref(nt, inc, "value");
   if (one < 0 || nt_kind(nt, one) != NK_IntegerNode || nt_int(nt, one, "value", 0) != 1) return;
-  for (int k = 0; k < bn - 1; k++) if (subtree_mutates_local(c, bs[k], in)) return;
-  if (subtree_mutates_local(c, pred, in)) return;
+  for (int k = 0; k < bn - 1; k++) if (subtree_changes_local(c, bs[k], in)) return;
+  if (subtree_changes_local(c, pred, in)) return;
   snprintf(r->bi, sizeof r->bi, "%s", in);
   snprintf(r->ba, sizeof r->ba, "%s", an);
 }
@@ -6560,7 +6570,7 @@ void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until) {
   int hr = find_hoistable_strlen(c, pred);
   if (hr >= 0) {
     const char *hn = nt_str(nt, hr, "name");
-    if (hn && !subtree_mutates_local(c, body, hn) && !subtree_mutates_local(c, pred, hn)) {
+    if (hn && !subtree_changes_local(c, body, hn) && !subtree_changes_local(c, pred, hn)) {
       int ht = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "sp_int _t%d = sp_str_length_m(", ht); emit_expr(c, hr, b); buf_puts(b, ");\n");
@@ -7028,7 +7038,7 @@ static void emit_ret_nil(Compiler *c, TyKind t, Buf *b) {
   else {
     const char *cn = c_type_name(t);
     if (cn && cn[0] && cn[strlen(cn) - 1] == '*') buf_puts(b, "NULL");
-    else buf_puts(b, default_value(t));
+    else buf_puts(b, default_value_from_compiler(c, t));
   }
 }
 
@@ -7270,7 +7280,7 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
   else if ((strncmp(txt, "(sp_raise_cls(", 14) == 0 ||
             strncmp(txt, "(sp_exc_stage_key(", 18) == 0) &&
            g_ret_type != TY_POLY && g_ret_type != TY_UNKNOWN)
-    buf_printf(b, "({ (void)%s; %s; })", txt, default_value(g_ret_type));
+    buf_printf(b, "({ (void)%s; %s; })", txt, default_value_from_compiler(c, g_ret_type));
   else buf_puts(b, txt);
   free(tmp.p);
 }
@@ -7362,7 +7372,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
         const char *nilv = g_ret_type == TY_POLY ? "sp_box_nil()"
                          : g_ret_type == TY_INT ? "SP_INT_NIL"
                          : g_ret_type == TY_FLOAT ? "sp_float_nil()"
-                         : g_ret_type == TY_STRING ? "NULL" : default_value(g_ret_type);
+                         : g_ret_type == TY_STRING ? "NULL" : default_value_from_compiler(c, g_ret_type);
         buf_printf(b, "%s = %s; ", g_method_pr_var, nilv);
       }
     }
@@ -7536,7 +7546,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
   else if (g_ret_type == TY_INT) buf_puts(b, "return SP_INT_NIL;\n");
   else if (g_ret_type == TY_FLOAT) buf_puts(b, "return sp_float_nil();\n");
   else if (g_ret_type == TY_STRING) buf_puts(b, "return NULL;\n");
-  else buf_printf(b, "return %s;\n", default_value(g_ret_type));
+  else buf_printf(b, "return %s;\n", default_value_from_compiler(c, g_ret_type));
 }
 
 /* An empty `[]` / `{}` literal, possibly wrapped in a freeze. Such a literal
@@ -7999,7 +8009,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       if (ty_is_object(g_ret_type) && comp_ty_value_obj(c, g_ret_type))
         buf_printf(b, " _retv%d = (sp_%s){0};", eid, c->classes[ty_object_class(g_ret_type)].c_name);
       else
-        buf_printf(b, " _retv%d = %s;", eid, default_value(g_ret_type));
+        buf_printf(b, " _retv%d = %s;", eid, default_value_from_compiler(c, g_ret_type));
       /* the deferred value waits in the slot while the ensure body runs,
          which may allocate */
       if (ty_gc_rootable(c, g_ret_type)) {
@@ -8048,7 +8058,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       /* an empty else clause is still the begin's value: nil */
       TyKind bt = comp_ntype(c, id);
       emit_indent(b, indent + 1);
-      buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value(bt));
+      buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bt));
     }
     emit_indent(b, indent); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "else {\n");
@@ -8261,7 +8271,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     /* an empty else clause is still the begin's value: nil */
     TyKind bt = comp_ntype(c, id);
     emit_indent(b, indent + 1);
-    buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value(bt));
+    buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bt));
   }
 
   if (ensure_stmts >= 0) emit_stmts(c, ensure_stmts, b, indent + 1);
@@ -8877,7 +8887,9 @@ static int masgn_store(Compiler *c, int id, int tgt, const char *val, TyKind vt,
       emit_indent(b, indent);
       buf_puts(b, "if (sp_gc_is_frozen("); emit_node_or_tmp(c, recv, recv_tmp, b);
       buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv, recv_tmp, b);
-      buf_printf(b, ", %s);\n", hash_box_cls(rt));
+      /* every hash kind ty_hash_cname names has a box id */
+      const char *hbc = hash_box_cls(rt);
+      buf_printf(b, ", %s);\n", hbc ? hbc : "0");
       emit_indent(b, indent);
       buf_printf(b, "sp_%sHash_set(", ty_hash_cname(rt));
       emit_node_or_tmp(c, recv, recv_tmp, b); buf_puts(b, ", ");
@@ -9282,7 +9294,7 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
         /* These are class-body declarations handled at analysis time; skip.
            Exception: a visibility call naming a method the class does not
            define raises NameError when the body executes, per CRuby. */
-        if (sp_streq(nm, "private") || sp_streq(nm, "protected") || sp_streq(nm, "public")) {
+        if (is_visibility_name(nm)) {
           int vcid = g_class_body_id >= 0 ? g_class_body_id
                    : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
           if (vcid >= 0) {
@@ -9907,7 +9919,7 @@ else {
       case TY_INT: buf_puts(b, "SP_INT_NIL"); break;
       case TY_FLOAT: buf_puts(b, "sp_float_nil()"); break;
       case TY_STRING: buf_puts(b, "NULL"); break;
-      default: buf_puts(b, default_value(ivt)); break;
+      default: buf_puts(b, default_value_from_compiler(c, ivt)); break;
       }
     }
     else if ((v_empty_array || v_empty_hash) && emit_empty_literal_as(c, v, ivt, b)) {
@@ -10114,7 +10126,7 @@ else {
     /* A bigint ivar has no C operator: `@n += 1` emitted pointer arithmetic on
        an incomplete struct. Route it through the bigint helpers, promoting an
        int operand at the boundary like every other bigint slot. */
-    if (vt == TY_BIGINT && op && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*"))) {
+    if (vt == TY_BIGINT && op && is_add_sub_mul(op)) {
       const char *fn = sp_streq(op, "+") ? "sp_bigint_add"
                      : sp_streq(op, "-") ? "sp_bigint_sub" : "sp_bigint_mul";
       buf_printf(b, "%s = %s(%s, ", ref, fn, ref);
@@ -10304,10 +10316,10 @@ else {
       /* a poly RHS feeding an int/float ivar op-assign needs coercing to the
          scalar before the C operator (e.g. `@bg_pattern |= chr_mem[i] * 256`). */
       if (rhst == TY_POLY && (vt == TY_INT || vt == TY_BOOL)) {
-        buf_puts(b, "sp_poly_to_i("); emit_expr(c, ival, b); buf_puts(b, ")");
+        buf_puts(b, op_assign_int_conv(vt, op)); emit_expr(c, ival, b); buf_puts(b, ")");
       }
       else if (rhst == TY_POLY && vt == TY_FLOAT) {
-        buf_puts(b, "sp_poly_to_f("); emit_expr(c, ival, b); buf_puts(b, ")");
+        buf_puts(b, "sp_poly_opnd_f("); emit_expr(c, ival, b); buf_puts(b, ")");
       }
       else emit_coerce(c, ival, vt, CO_HOLD, "the operand of an `op=`", b);
       buf_puts(b, ";\n");
@@ -10339,8 +10351,7 @@ else {
                     : op && sp_streq(op, "/") ? "sp_poly_div"
                     : op && sp_streq(op, "%") ? "sp_poly_mod"
                     : op && sp_streq(op, "**") ? "sp_poly_pow" : NULL;
-    int bitop = op && (sp_streq(op, "<<") || sp_streq(op, ">>") ||
-                       sp_streq(op, "|") || sp_streq(op, "&") || sp_streq(op, "^"));
+    int bitop = op && is_int_bit_op(op);
     int rdcls = -1;
     /* Ruby desugars `recv.attr op= v` into a reader call AND a writer call;
        an attr_reader-only attribute raises NoMethodError for `attr=`, so a
@@ -10390,9 +10401,9 @@ else {
       }
       else if (ivt == TY_POLY) {
         /* bitwise op-assign on a boxed slot: coerce to int, re-box */
-        buf_printf(b, "_t%d%siv_%s = sp_box_int((sp_poly_to_i(_t%d%siv_%s) %s (",
-                   trecv, acc, iv_c(rn), trecv, acc, iv_c(rn), op);
-        emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
+        buf_printf(b, "_t%d%siv_%s = sp_box_int((sp_poly_recv_i(\"%s\", _t%d%siv_%s) %s (",
+                   trecv, acc, iv_c(rn), op, trecv, acc, iv_c(rn), op);
+        emit_poly_unboxed(c, val, rhst, op_assign_int_conv(TY_INT, op), b);
         buf_puts(b, ")));\n");
       }
       else if (ty_is_array(ivt) || ivt == TY_POLY_ARRAY) {
@@ -10406,10 +10417,10 @@ else {
         if (emit_scalar_op_assign(c, lval, ivt, op, val, 1, c->classes[rdcls].ivar_nullable_int[ivx], b)) return;
         buf_printf(b, "_t%d%siv_%s = _t%d%siv_%s %s ", trecv, acc, iv_c(rn), trecv, acc, iv_c(rn), op ? op : "+");
         if (rhst == TY_POLY && (ivt == TY_INT || ivt == TY_BOOL)) {
-          buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")");
+          buf_puts(b, op_assign_int_conv(ivt, op)); emit_expr(c, val, b); buf_puts(b, ")");
         }
         else if (rhst == TY_POLY && ivt == TY_FLOAT) {
-          buf_puts(b, "sp_poly_to_f("); emit_expr(c, val, b); buf_puts(b, ")");
+          buf_puts(b, "sp_poly_opnd_f("); emit_expr(c, val, b); buf_puts(b, ")");
         }
         else emit_expr(c, val, b);
         buf_puts(b, ";\n");
@@ -10465,9 +10476,9 @@ else {
         }
         else if (nany) {
           /* bitwise on a boxed attribute: coerce to int, re-box */
-          buf_printf(b, "%s(_t%d, sp_box_int(sp_poly_to_i(%s(_t%d)) %s (",
-                     nwm->csym, trecv, nrm->csym, trecv, op);
-          emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
+          buf_printf(b, "%s(_t%d, sp_box_int(sp_poly_recv_i(\"%s\", %s(_t%d)) %s (",
+                     nwm->csym, trecv, op, nrm->csym, trecv, op);
+          emit_poly_unboxed(c, val, rhst, op_assign_int_conv(TY_INT, op), b);
           buf_puts(b, ")));\n");
         }
         else if (rhst != TY_POLY && !bitop) {
@@ -10482,7 +10493,7 @@ else {
         }
         else {
           buf_printf(b, "%s(_t%d, %s(_t%d) %s ", nwm->csym, trecv, nrm->csym, trecv, op);
-          emit_poly_unboxed(c, val, rhst, nint ? "sp_poly_to_i(" : "sp_poly_to_f(", b);
+          emit_poly_unboxed(c, val, rhst, nint ? op_assign_int_conv(TY_INT, op) : "sp_poly_opnd_f(", b);
           buf_puts(b, ");\n");
         }
         return;
@@ -10551,8 +10562,8 @@ else {
         else if (ivt == TY_POLY) {
           /* bitwise op-assign on a boxed slot: coerce to int, re-box */
           buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn));
-          buf_printf(b, " = sp_box_int((sp_poly_to_i(_o->iv_%s) %s (", iv_c(rn), op);
-          emit_poly_unboxed(c, val, rhst, "sp_poly_to_i(", b);
+          buf_printf(b, " = sp_box_int((sp_poly_recv_i(\"%s\", _o->iv_%s) %s (", op, iv_c(rn), op);
+          emit_poly_unboxed(c, val, rhst, op_assign_int_conv(TY_INT, op), b);
           buf_puts(b, "))); break; }\n");
         }
         else {
@@ -10564,10 +10575,10 @@ else {
           buf_puts(b, "_o->iv_"); buf_puts(b, iv_c(rn)); buf_puts(b, " = _o->iv_"); buf_puts(b, iv_c(rn));
           buf_printf(b, " %s ", op ? op : "+");
           if (rhst == TY_POLY && (ivt == TY_INT || ivt == TY_BOOL)) {
-            buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")");
+            buf_puts(b, op_assign_int_conv(ivt, op)); emit_expr(c, val, b); buf_puts(b, ")");
           }
           else if (rhst == TY_POLY && ivt == TY_FLOAT) {
-            buf_puts(b, "sp_poly_to_f("); emit_expr(c, val, b); buf_puts(b, ")");
+            buf_puts(b, "sp_poly_opnd_f("); emit_expr(c, val, b); buf_puts(b, ")");
           }
           else emit_expr(c, val, b);
           buf_puts(b, "; break; }\n");
@@ -10734,7 +10745,7 @@ else {
     emit_indent(b, indent);
     buf_printf(b, "cst_%s = ", nm);
     if (vty && sp_streq(vty, "NilNode"))
-      buf_puts(b, cv->type == TY_RANGE ? "(sp_Range){0}" : default_value(cv->type));
+      buf_puts(b, cv->type == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, cv->type));
     else if (v_empty_arr && cv->type == TY_POLY_ARRAY) {
       if (v_lit_frozen) { int _ft = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
@@ -11860,8 +11871,8 @@ else {
                at the sink, as the single store does (#4733) */
             TyKind valt = tmpts ? tmpts[i] : comp_ntype(c, els[i]);
             TyKind hv = ty_hash_val(recv_t);
-            if (valt == TY_POLY && hv == TY_INT) buf_printf(b, "sp_poly_to_i(_t%d)", tmps[i]);
-            else if (valt == TY_POLY && hv == TY_FLOAT) buf_printf(b, "sp_poly_to_f(_t%d)", tmps[i]);
+            if (valt == TY_POLY && hv == TY_INT) buf_printf(b, "sp_poly_to_i_or_nil(_t%d)", tmps[i]);
+            else if (valt == TY_POLY && hv == TY_FLOAT) buf_printf(b, "sp_poly_to_f_or_nil(_t%d)", tmps[i]);
             else buf_printf(b, "_t%d", tmps[i]);
           }
           buf_puts(b, ");\n");
@@ -11965,8 +11976,8 @@ else {
         else {
           buf_printf(b, "lv_%s = ", rename_local(rnm_j));
           TyKind tt = comp_ntype(c, rights[j]);
-          if (rjpoly) emit_boxed_src(c, tt, default_value(tt), b);
-          else buf_puts(b, default_value(tt));
+          if (rjpoly) emit_boxed_src(c, tt, default_value_from_compiler(c, tt), b);
+          else buf_puts(b, default_value_from_compiler(c, tt));
           buf_puts(b, ";\n");
         }
       }
@@ -11982,7 +11993,7 @@ else {
           if (ivt2 == TY_POLY && valt2 != TY_POLY) emit_boxed_tmp(c, valt2, tmps[ridx], b);
           else buf_printf(b, "_t%d", tmps[ridx]);
         }
-        else buf_puts(b, default_value(ivt2 != TY_UNKNOWN ? ivt2 : TY_INT));
+        else buf_puts(b, default_value_from_compiler(c, ivt2 != TY_UNKNOWN ? ivt2 : TY_INT));
         buf_puts(b, ";\n");
       }
       else {
@@ -12463,7 +12474,7 @@ static int num_iter_answers_recv(Compiler *c, int id) {
     return rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT ||
            rt == TY_RANGE;
   return rt == TY_INT &&
-         (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto"));
+         is_int_step(nm);
 }
 
 /* Does this statement list end in something that leaves the function -- a
@@ -12566,7 +12577,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       if (comp_ty_value_obj(c, rt))
         buf_printf(b, " _t%d = (sp_%s){0};", t, c->classes[ty_object_class(rt)].c_name);
       else
-        buf_printf(b, " _t%d = %s;", t, rt == TY_RANGE ? "(sp_Range){0}" : default_value(rt));
+        buf_printf(b, " _t%d = %s;", t, rt == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, rt));
       /* the value sits in the temp while the ensure body runs, which may
          allocate; the root goes in front of the region so the landing's
          watermark restore keeps it. An empty ensure clause runs nothing between
@@ -12996,10 +13007,10 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, ", %s)", raise_tail_value_c(c, g_result_ty));
     else if (g_result_ty != TY_UNKNOWN && !ty_is_numeric(g_result_ty) &&
              g_result_ty != TY_BOOL && g_result_ty != TY_SYMBOL &&
-             default_value(g_result_ty) && default_value(g_result_ty)[0] == '(')
-      buf_printf(b, ", %s)", default_value(g_result_ty));
+             default_value_from_compiler(c, g_result_ty) && default_value_from_compiler(c, g_result_ty)[0] == '(')
+      buf_printf(b, ", %s)", default_value_from_compiler(c, g_result_ty));
     else if (g_result_ty == TY_INT || g_result_ty == TY_FLOAT)
-      buf_printf(b, ", %s)", default_value(g_result_ty));   /* the nil sentinel */
+      buf_printf(b, ", %s)", default_value_from_compiler(c, g_result_ty));   /* the nil sentinel */
     else buf_printf(b, ", (__typeof__(%s))0)", g_result_var);
   }
   else {
@@ -13184,22 +13195,20 @@ void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent) {
 /* ---- declarations ---- */
 
 /* Heap-managed types need a GC root for their local slot. */
-int needs_root(TyKind t) { return t == TY_STRING || t == TY_STRBUF || t == TY_BIGINT || ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || ty_is_object(t) || t == TY_EXCEPTION || t == TY_POLY || t == TY_PROC || t == TY_CURRY || t == TY_METHOD || t == TY_IO || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR || t == TY_ENUMERATOR || t == TY_RANDOM || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT || t == TY_OPENSTRUCT || t == TY_MATCHDATA; }
+int needs_root(TyKind t) {
+  /* a builtin kind's slot is a GC root when its ty_traits row says so
+     (types.c); a user object and an object array always are */
+  const TyTraits *tr = ty_traits_of(t);
+  return tr ? tr->needs_root : (ty_is_object(t) || ty_is_obj_array(t));
+}
 
 /* Emit `node` boxed into an sp_RbVal. Idempotent: an already-poly value is
    passed through unboxed (double-boxing is a classic silent-corruption bug). */
 /* Box a C-text expression `expr` of static type `t` into an sp_RbVal. */
 const char *hash_box_cls(TyKind t) {
-  switch (t) {
-    case TY_STR_INT_HASH:   return "SP_BUILTIN_STR_INT_HASH";
-    case TY_STR_STR_HASH:   return "SP_BUILTIN_STR_STR_HASH";
-    case TY_INT_STR_HASH:   return "SP_BUILTIN_INT_STR_HASH";
-    case TY_INT_INT_HASH:   return "SP_BUILTIN_INT_INT_HASH";
-    case TY_STR_POLY_HASH:  return "SP_BUILTIN_STR_POLY_HASH";
-    case TY_SYM_POLY_HASH:  return "SP_BUILTIN_SYM_POLY_HASH";
-    case TY_POLY_POLY_HASH: return "SP_BUILTIN_POLY_POLY_HASH";
-    default:                return NULL;
-  }
+  /* a Hash variant's boxed class id is its ty_traits row's (types.c) */
+  const TyTraits *tr = ty_traits_of(t);
+  return tr ? tr->hash_id : NULL;
 }
 
 /* The key and the value at position `_t<ti>` of the iteration order of the
@@ -13313,9 +13322,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       Scope *rsN = rnN ? comp_scope_of(c, recv) : NULL;
       LocalVar *rlN = rsN ? scope_local(rsN, rnN) : NULL;
       if (rlN && rlN->type == TY_POLY) {
-        TyKind svNN = c->nilnarrow[recv];
         int vr = view_push(c, recv, TY_POLY);
-        c->nilnarrow[recv] = TY_UNKNOWN;
+        int vn = view_push_repr(c, recv, VR_NILNARROW, TY_UNKNOWN);
         /* the call's value is the poly arm's too (a String-typed call made
            an arm hold its boxed answer in a String temp) */
         int vi = view_push(c, id, TY_POLY);
@@ -13324,8 +13332,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         emit_call(c, id, b);
         buf_puts(b, ");\n");
         view_pop(c, vi);
+        view_pop(c, vn);
         view_pop(c, vr);
-        c->nilnarrow[recv] = svNN;
         return 1;
       }
     }
@@ -13560,18 +13568,17 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     } \
   } while (0)
   if ((rt == TY_STRING || rt == TY_STRBUF) && argc == 0) {
+    /* a String bang that takes no argument (ty_str_typed_bang_flags), but
+       not the face table's self-answering ones (succ!, next!), which this
+       transform does not cover; a bang that needs an argument (delete!,
+       gsub!) keeps its ArgumentError */
     const char *base = NULL;
-    if      (sp_streq(name, "chomp!"))      base = "chomp";
-    else if (sp_streq(name, "chop!"))       base = "chop";
-    else if (sp_streq(name, "upcase!"))     base = "upcase";
-    else if (sp_streq(name, "downcase!"))   base = "downcase";
-    else if (sp_streq(name, "capitalize!")) base = "capitalize";
-    else if (sp_streq(name, "swapcase!"))   base = "swapcase";
-    else if (sp_streq(name, "strip!"))      base = "strip";
-    else if (sp_streq(name, "lstrip!"))     base = "lstrip";
-    else if (sp_streq(name, "rstrip!"))     base = "rstrip";
-    else if (sp_streq(name, "reverse!"))    base = "reverse";
-    else if (sp_streq(name, "squeeze!"))    base = "squeeze";
+    char st_plain[64];
+    if (ty_str_typed_bang_flags(name) && !(ty_str_bang_flags(name) & PF_STR_SELF) &&
+        builtin_arity_admits("String", name, 0)) {
+      str_bang_plain(name, st_plain, sizeof st_plain);
+      base = st_plain;
+    }
     if (base) {
       const char *rty = nt_type(nt, recv);
       /* shared-mutable local: transform + replace the buffer in place (#3227) */
@@ -14014,7 +14021,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_boxed(c, argv[1], b); buf_puts(b, ");\n");
       return 1;
     }
-    if ((sp_streq(name, "push") || sp_streq(name, "<<") || sp_streq(name, "append")) && argc >= 1) {
+    if (is_push_alias(name) && argc >= 1) {
       for (int a = 0; a < argc; a++) {
         emit_indent(b, indent);
         buf_puts(b, "sp_PolyArray_push("); emit_expr(c, recv, b); buf_puts(b, ", ");
@@ -14031,7 +14038,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   }
 
   if (rt == TY_POLY &&
-      (sp_streq(name, "<<") || sp_streq(name, "push") || sp_streq(name, "append")) && argc >= 1) {
+      is_push_alias(name) && argc >= 1) {
     /* A poly value that holds an array at runtime appends via sp_poly_shl.
        `<<` takes one arg; push/append take any number (each boxed in turn).
        A `<<` whose receiver is an ASSIGNABLE slot REBINDS the result: a
@@ -14135,7 +14142,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     buf_printf(b, ")%s;\n", hc_mark());
     return 1;
   }
-  if ((sp_streq(name, "push") || sp_streq(name, "<<") || sp_streq(name, "append")) && argc >= 1) {
+  if (is_push_alias(name) && argc >= 1) {
     TyKind et = ty_array_elem(rt);
     /* Any splat arg (`arr.push(*other)`) spreads its array's elements at
        runtime; materialize the receiver once so the per-element loop pushes into
@@ -14614,7 +14621,7 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "%s(%s(%s(%s), %s))", unbox, pf, box, slot, rhs);
     }
     /* shift/bitwise on an int slot with a poly RHS: unbox the RHS */
-    else if (vt == TY_POLY) buf_printf(b, "%s %s sp_poly_to_i(%s)", slot, op, rhs);
+    else if (vt == TY_POLY) buf_printf(b, "%s %s %s%s)", slot, op, op_assign_int_conv(TY_INT, op), rhs);
     else if (iow_scalar_fold(ty_array_elem(rt), op, vt, slot, rhs, b)) { }
     else buf_printf(b, "%s %s (%s)", slot, op, rhs);
     free(rhs);

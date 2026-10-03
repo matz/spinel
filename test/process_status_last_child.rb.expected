@@ -1,0 +1,31 @@
+nil
+true
+NilClass
+true
+[NoMethodError, :exitstatus, nil]
+[NoMethodError, :success?, nil]
+[NoMethodError, :pid, nil]
+["", "nil", 0, false, true]
+false
+"#<Process::Status: pid N exit 2>"
+"pid N exit 2"
+2
+[2]
+Process::Status
+[true, 0, true, 0]
+true
+true
+[false, 3, 3]
+true
+true
+"hi\n"
+[true, 0]
+[false, 4, true]
+[true, true, 0]
+[true, 0, true]
+false
+[0, 5]
+[Process::Status, Process::Status]
+"status 5"
+[true, true, false]
+[false, true, 1]

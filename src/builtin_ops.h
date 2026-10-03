@@ -174,6 +174,9 @@ typedef struct BuiltinOp {
    a row with an argument guard before the unguarded row of its arity. A
    row with an argument guard never fits here: bop_find_arg checks the
    guard. */
+/* the rows, in order, for a check that walks them (builtin_ops_arity_check) */
+int bop_row_count(void);
+const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
 
 /* bop_find, with arg_of(ud, i) answering argument i's kind for the rows

@@ -1244,12 +1244,13 @@ int comp_is_nested_int_array_literal(Compiler *c, int node) {
   return 1;
 }
 
-static int name_in(char **list, int n, const char *name) {
+int name_list_has(char **list, int n, const char *name) {
+  if (!name) return 0;
   for (int i = 0; i < n; i++) if (sp_streq(list[i], name)) return 1;
   return 0;
 }
 static void name_add(char ***list, int *n, int *cap, const char *name) {
-  if (name_in(*list, *n, name)) return;
+  if (name_list_has(*list, *n, name)) return;
   if (*n >= *cap) {
     *cap = *cap ? *cap * 2 : 4;
     *list = realloc(*list, sizeof(char *) * (size_t)*cap);
@@ -1264,8 +1265,8 @@ void comp_add_reader(ClassInfo *ci, const char *name) {
 void comp_add_writer(ClassInfo *ci, const char *name) {
   name_add(&ci->writers, &ci->nwriters, &ci->cwriters, name);
 }
-int comp_is_reader(ClassInfo *ci, const char *name) { return name_in(ci->readers, ci->nreaders, name); }
-int comp_is_writer(ClassInfo *ci, const char *name) { return name_in(ci->writers, ci->nwriters, name); }
+int comp_is_reader(ClassInfo *ci, const char *name) { return name_list_has(ci->readers, ci->nreaders, name); }
+int comp_is_writer(ClassInfo *ci, const char *name) { return name_list_has(ci->writers, ci->nwriters, name); }
 
 /* A plain setter name: `x=`, but not the operators that also end in `=`
    (`==`, `!=`, `<=`, `>=`, `===`) and not `[]=`, whose value form is its own. */
@@ -1318,7 +1319,7 @@ void comp_add_undef(ClassInfo *ci, const char *name) {
 }
 int comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name) {
   for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
-    if (name_in(c->classes[cid].undefs, c->classes[cid].nundefs, name)) return 1;
+    if (name_list_has(c->classes[cid].undefs, c->classes[cid].nundefs, name)) return 1;
     if (comp_method_in_class(c, cid, name) >= 0) return 0;
   }
   return 0;
@@ -1332,18 +1333,18 @@ void comp_add_sg_writer(ClassInfo *ci, const char *name) {
 void comp_add_sg_civ(ClassInfo *ci, const char *name) {
   if (name) name_add(&ci->sg_civ, &ci->nsg_civ, &ci->csg_civ, name);
 }
-int comp_is_sg_civ(ClassInfo *ci, const char *name) { return name_in(ci->sg_civ, ci->nsg_civ, name); }
-int comp_is_sg_inh(ClassInfo *ci, const char *name) { return name_in(ci->sg_inh, ci->nsg_inh, name); }
+int comp_is_sg_civ(ClassInfo *ci, const char *name) { return name_list_has(ci->sg_civ, ci->nsg_civ, name); }
+int comp_is_sg_inh(ClassInfo *ci, const char *name) { return name_list_has(ci->sg_inh, ci->nsg_inh, name); }
 void comp_add_sg_inh(ClassInfo *ci, const char *name) {
-  if (name_in(ci->sg_inh, ci->nsg_inh, name)) return;
+  if (name_list_has(ci->sg_inh, ci->nsg_inh, name)) return;
   if (ci->nsg_inh >= ci->csg_inh) {
     ci->csg_inh = ci->csg_inh ? ci->csg_inh * 2 : 4;
     ci->sg_inh = realloc(ci->sg_inh, sizeof(char *) * (size_t)ci->csg_inh);
   }
   ci->sg_inh[ci->nsg_inh++] = strdup(name);
 }
-int comp_is_sg_reader(ClassInfo *ci, const char *name) { return name_in(ci->sg_readers, ci->nsg_readers, name); }
-int comp_is_sg_writer(ClassInfo *ci, const char *name) { return name_in(ci->sg_writers, ci->nsg_writers, name); }
+int comp_is_sg_reader(ClassInfo *ci, const char *name) { return name_list_has(ci->sg_readers, ci->nsg_readers, name); }
+int comp_is_sg_writer(ClassInfo *ci, const char *name) { return name_list_has(ci->sg_writers, ci->nsg_writers, name); }
 
 void comp_add_alias_from(ClassInfo *ci, const char *new_name, const char *old_name, int alias_node) {
   comp_table_gen++;

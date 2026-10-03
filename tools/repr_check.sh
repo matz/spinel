@@ -8,16 +8,16 @@
 #   view           an override of the node's type is active
 #   yield-site     a yield boxed by the block of its call site
 #   transplant     a module's ivar read boxed by the including class's field
-#   syntactic-nil  a nil-aware Integer/Float box chosen by a builtin's name
-#                  or a builtin's own scope, not by an analysis flag
-#   promote        --int-overflow=promote boxes every Integer nil-aware
 #   ran-first      an argument that already ran: the handle it read then
 #   late-slot      a block parameter codegen marked nilable while binding it
 #   literal        an empty literal, Hash.new or a splat, boxed by its shape
 #   text-vs-node   boxed through emit_boxed_text with a type not the node's
 #   conflict       none of the above: repr_box_form and the boxer disagree
-# The counts are reported and the commonest conflict shapes listed; the run
-# does not fail on them yet. It does fail when the C differs with the flag.
+# and for each store emit_coerce makes, its form against repr_coerce_form:
+#   coerce-view    an override of the node's type is active
+#   coerce-conflict  the store and the prediction disagree
+# The counts are reported and the commonest conflict shapes listed. The run
+# fails on a conflict, and when the C differs with the flag.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
@@ -51,9 +51,18 @@ grep ': repr-check: conflict:' "$OUT" |
   sed -E 's/.*: node [0-9]+ ([A-Za-z]+) ([^:]+): emitted ([A-Z_]+), predicted ([A-Z_]+)$/\1 \2 \3 \4/' |
   sort | uniq -c | sort -rn | head -15
 echo "repr-check: $(count conflict) conflicts, $(count view) view, $(count yield-site) yield-site," \
-     "$(count transplant) transplant, $(count syntactic-nil) syntactic-nil, $(count promote) promote," \
+     "$(count transplant) transplant," \
      "$(count ran-first) ran-first, $(count late-slot) late-slot, $(count literal) literal," \
      "$(count text-vs-node) text-vs-node"
+echo "repr-check: top coerce conflict shapes (node kind, from->slot, emitted, predicted):"
+grep ': repr-check: coerce-conflict:' "$OUT" |
+  sed -E 's/.*: node [0-9]+ ([A-Za-z?]+) ([^:]+): emitted ([A-Z_0-9]+), predicted ([A-Z_0-9]+)$/\1 \2 \3 \4/' |
+  sort | uniq -c | sort -rn | head -15
+echo "repr-check: stores: $(count coerce-conflict) coerce-conflicts, $(count coerce-view) coerce-view"
 echo "repr-check: $ndiff programs whose C differs with the flag"
+nconf=$(count conflict)
+ncc=$(count coerce-conflict)
+grep ': repr-check: conflict:' "$OUT" | head -20
+grep ': repr-check: coerce-conflict:' "$OUT" | head -20
 rm -f "$OUT"
-[ "$ndiff" -eq 0 ]
+[ "$ndiff" -eq 0 ] && [ "$nconf" -eq 0 ] && [ "$ncc" -eq 0 ]

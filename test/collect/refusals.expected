@@ -1,0 +1,938 @@
+== test/collect/gap_inside_capturing_proc.rb [default] rc=1
+spinel: unsupported class variable read (no class scope): node N (ClassVariableReadNode)
+spinel: 1 refusal, nothing written
+== test/collect/gap_inside_capturing_proc.rb [promote] rc=1
+spinel: unsupported class variable read (no class scope): node N (ClassVariableReadNode)
+spinel: 1 refusal, nothing written
+== test/reject/array_push_other_class_temporary.rb [default] rc=1
+spinel: an Array push given a String, which no conversion keeps in its sp_int slot
+spinel: 1 refusal, nothing written
+== test/reject/array_push_other_class_temporary.rb [promote] rc=1
+spinel: an Array push given a String, which no conversion keeps in its sp_int slot
+spinel: 1 refusal, nothing written
+== test/reject/bare_const_compact_class_path.rb [default] rc=1
+spinel: uninitialized constant A::B::LIMIT (NameError): the program defines it only as A::LIMIT, which CRuby's lookup from A::B (its lexical scope, then its ancestors) does not reach
+== test/reject/bare_const_compact_class_path.rb [promote] rc=1
+spinel: uninitialized constant A::B::LIMIT (NameError): the program defines it only as A::LIMIT, which CRuby's lookup from A::B (its lexical scope, then its ancestors) does not reach
+== test/reject/bare_const_nested_unreachable.rb [default] rc=1
+spinel: uninitialized constant X (NameError): the program defines it only as A::X, which CRuby's lookup from the top level does not reach
+== test/reject/bare_const_nested_unreachable.rb [promote] rc=1
+spinel: uninitialized constant X (NameError): the program defines it only as A::X, which CRuby's lookup from the top level does not reach
+== test/reject/basicobject_toplevel_include_call.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/basicobject_toplevel_include_call.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `hello`) recv=-/ty-1 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/bignum_div_rational.rb [default] rc=1
+spinel: an Integer operand of a Bignum operation given a Rational, which no conversion keeps in its sp_int slot
+spinel: 1 refusal, nothing written
+== test/reject/bignum_div_rational.rb [promote] rc=1
+spinel: an Integer operand of a Bignum operation given a Rational, which no conversion keeps in its sp_int slot
+spinel: 1 refusal, nothing written
+== test/reject/bind_call_class_value_block_target.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
+spinel: 1 refusal, nothing written
+== test/reject/bind_call_class_value_block_target.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `bind_call`) recv=CallNode/ty0 argc=1 arg0ty1001
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_on_class_in_method.rb [default] rc=1
+spinel: Class.class_eval is not supported here: methods are added to Class only by a top-level `class Class` or `Class.class_eval { ... }`
+== test/reject/class_eval_on_class_in_method.rb [promote] rc=1
+spinel: Class.class_eval is not supported here: methods are added to Class only by a top-level `class Class` or `Class.class_eval { ... }`
+== test/reject/class_eval_on_class_with_params.rb [default] rc=1
+spinel: Class.class_eval adds methods to Class only with a literal block and no block parameters or arguments
+== test/reject/class_eval_on_class_with_params.rb [promote] rc=1
+spinel: Class.class_eval adds methods to Class only with a literal block and no block parameters or arguments
+== test/reject/class_eval_static_const_inherited.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_const_inherited.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_const_mutated.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_const_mutated.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_dynamic_file_arg.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=2 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_dynamic_file_arg.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=2 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_method_added_hook.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_method_added_hook.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_non_ascii_upcase.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_non_ascii_upcase.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_private_before.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_private_before.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_private_inside.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_private_inside.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_reads_local.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_reads_local.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_singleton_hook.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_singleton_hook.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_source_line.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_static_source_line.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/class_reopen_reserved_name.rb [default] rc=1
+spinel: the constant name Class__reopen is reserved by the compiler
+== test/reject/class_reopen_reserved_name.rb [promote] rc=1
+spinel: the constant name Class__reopen is reserved by the compiler
+== test/reject/class_then_module.rb [default] rc=1
+spinel: Thing is not a module (the first declaration, at line 0, is a class)
+== test/reject/class_then_module.rb [promote] rc=1
+spinel: Thing is not a module (the first declaration, at line 0, is a class)
+== test/reject/combination_safe_nav_two_params.rb [default] rc=1
+spinel: a block taking more than one parameter on combination, permutation or their repeated forms
+spinel: 1 refusal, nothing written
+== test/reject/combination_safe_nav_two_params.rb [promote] rc=1
+spinel: a block taking more than one parameter on combination, permutation or their repeated forms
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained.rb [default] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=LocalVariableReadNode/ty28 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained.rb [promote] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=LocalVariableReadNode/ty28 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained_aset.rb [default] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=LocalVariableReadNode/ty28 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained_aset.rb [promote] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=LocalVariableReadNode/ty28 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained_boxed.rb [default] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=CallNode/ty50 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/compare_by_identity_chained_boxed.rb [promote] rc=1
+spinel: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=CallNode/ty50 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/complex_bignum_component.rb [default] rc=1
+spinel: a Complex component given an Integer past 64 bits, which no conversion keeps in its sp_float slot
+spinel: 1 refusal, nothing written
+== test/reject/complex_bignum_component.rb [promote] rc=1
+spinel: a Complex component given an Integer past 64 bits, which no conversion keeps in its sp_float slot
+spinel: 1 refusal, nothing written
+== test/reject/const_get_runtime_name.rb [default] rc=1
+spinel: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
+== test/reject/const_get_runtime_name.rb [promote] rc=1
+spinel: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
+== test/reject/const_value_not_a_class.rb [default] rc=1
+spinel: A is not a class: it is assigned a value on line 0, and declared with class on line 0
+== test/reject/const_value_not_a_class.rb [promote] rc=1
+spinel: A is not a class: it is assigned a value on line 0, and declared with class on line 0
+== test/reject/const_value_not_a_module.rb [default] rc=1
+spinel: B is not a module: it is assigned a value on line 0, and declared with module on line 0
+== test/reject/const_value_not_a_module.rb [promote] rc=1
+spinel: B is not a module: it is assigned a value on line 0, and declared with module on line 0
+== test/reject/def_delegators_splat.rb [default] rc=1
+spinel: def_delegators with arguments other than a literal symbol list is not supported (write the names as symbols: `def_delegators :@target, :name, ...`)
+== test/reject/def_delegators_splat.rb [promote] rc=1
+spinel: def_delegators with arguments other than a literal symbol list is not supported (write the names as symbols: `def_delegators :@target, :name, ...`)
+== test/reject/dynamic_send_then_refusal.rb [default] rc=1
+spinel: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/dynamic_send_then_refusal.rb [promote] rc=1
+spinel: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/ffi_ptr_ruby_object.rb [default] rc=1
+spinel: unsupported ffi pointer argument (a Ruby object has no C address; pass an IO::Buffer, a String or a :ptr value): node 23 (CallNode `new`) recv=ConstantReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/ffi_ptr_ruby_object.rb [promote] rc=1
+spinel: unsupported ffi pointer argument (a Ruby object has no C address; pass an IO::Buffer, a String or a :ptr value): node 23 (CallNode `new`) recv=ConstantReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/forwarding_builtin_uneven_calls.rb [default] rc=1
+spinel: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/forwarding_builtin_uneven_calls.rb [promote] rc=1
+spinel: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/forwarding_super_yielding_optional.rb [default] rc=1
+spinel: `super(...)` into a method that yields and takes an optional or *rest parameter: the forwarded arguments cannot leave one out
+spinel: 1 refusal, nothing written
+== test/reject/forwarding_super_yielding_optional.rb [promote] rc=1
+spinel: `super(...)` into a method that yields and takes an optional or *rest parameter: the forwarded arguments cannot leave one out
+spinel: 1 refusal, nothing written
+== test/reject/instance_exec_default_ivar_write.rb [default] rc=1
+spinel: an instance variable written in a block that instance_exec or instance_eval runs on a value with no instance variable layout (nil, a builtin value, Object.new): the value has no slot to hold it at run time
+spinel: 1 refusal, nothing written
+== test/reject/instance_exec_default_ivar_write.rb [promote] rc=1
+spinel: an instance variable written in a block that instance_exec or instance_eval runs on a value with no instance variable layout (nil, a builtin value, Object.new): the value has no slot to hold it at run time
+spinel: 1 refusal, nothing written
+== test/reject/instance_exec_refusal_moved_scope.rb [default] rc=1
+spinel: ObjectSpace is not supported by AOT compilation: there is no class-keyed allocation registry to walk -- the GC tracks bytes, not a live-object index (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/instance_exec_refusal_moved_scope.rb [promote] rc=1
+spinel: ObjectSpace is not supported by AOT compilation: there is no class-keyed allocation registry to walk -- the GC tracks bytes, not a live-object index (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/io_reopen_yielding_call.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `twice`) recv=GlobalVariableReadNode/ty46 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/io_reopen_yielding_call.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `twice`) recv=GlobalVariableReadNode/ty46 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/macro_alias_in_aliased_namespace.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_alias_in_aliased_namespace.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_alias_in_block.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_alias_in_block.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_argument_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_argument_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_attr_writer_state.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_attr_writer_state.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_block_param_receiver.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_block_param_receiver.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_block_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_block_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_case_call.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_case_call.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_conditional_class_body.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_conditional_class_body.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_conditional_state.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_conditional_state.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_const_added_hook.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_const_added_hook.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_const_alias_reopen.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_const_alias_reopen.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_constant_receiver_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_constant_receiver_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_empty_branch.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_empty_branch.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_eval_string_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_eval_string_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_eval_writer.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_eval_writer.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_extend_in_branch.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty50
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_extend_in_branch.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty50
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_generated_call.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_generated_call.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_generated_writer.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_generated_writer.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_guarded_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_guarded_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_guarded_writer.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_guarded_writer.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_hidden_alias.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_hidden_alias.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_hidden_define.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty50
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty8
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 2 refusals, nothing written
+== test/reject/macro_hidden_define.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty50
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty8
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 2 refusals, nothing written
+== test/reject/macro_hook_send.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_hook_send.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_included_hook.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_included_hook.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_int_overflow.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_int_overflow.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_ivar_read.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_ivar_read.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_lambda_assign.rb [default] rc=1
+spinel: undefined method 'k' for a Class: no class in the program defines a class method 'k' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/macro_lambda_assign.rb [promote] rc=1
+spinel: undefined method 'k' for a Class: no class in the program defines a class method 'k' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/macro_local_mutated.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_local_mutated.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_local_receiver.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_local_receiver.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_long_elsif_state.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_long_elsif_state.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_lowercase_heredoc.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: undefined method 'hello' for a Class: no class in the program defines a class method 'hello' (NoMethodError)
+spinel: 2 refusals, nothing written
+== test/reject/macro_lowercase_heredoc.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: undefined method 'hello' for a Class: no class in the program defines a class method 'hello' (NoMethodError)
+spinel: 2 refusals, nothing written
+== test/reject/macro_mention_send.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_mention_send.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_module_attr_writer.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_module_attr_writer.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_multiline_literal.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: undefined method 'hello' for a Class: no class in the program defines a class method 'hello' (NoMethodError)
+spinel: 2 refusals, nothing written
+== test/reject/macro_multiline_literal.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: undefined method 'hello' for a Class: no class in the program defines a class method 'hello' (NoMethodError)
+spinel: 2 refusals, nothing written
+== test/reject/macro_named_by_string.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_named_by_string.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_body_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_body_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_compound_reopen.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_compound_reopen.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_join.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_nested_join.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_non_ascii.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_non_ascii.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_not_extended.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_not_extended.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_object_reopen.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_object_reopen.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_outside_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_outside_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_own_class_method.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty8
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_own_class_method.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty8
+spinel: warning: uninitialized constant Calc::SIZE: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_prim_override.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_prim_override.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_private_before.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_private_before.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_receiver_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_receiver_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_refused_inner_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_refused_inner_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_residual_value.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_residual_value.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_runtime_name_send.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_runtime_name_send.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_self_def_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_self_def_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_send_ivar_set.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_send_ivar_set.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_send_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_send_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_setter_send.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=2 arg0ty6
+== test/reject/macro_setter_send.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=2 arg0ty6
+== test/reject/macro_source_line.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_source_line.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_template_top_write.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_template_top_write.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_text_local.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: warning: uninitialized constant Box::Y: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_text_local.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: warning: uninitialized constant Box::Y: defined nowhere in the program (raises NameError when reached)
+spinel: 1 refusal, nothing written
+== test/reject/macro_text_private.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_text_private.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_text_source_line.rb [default] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_text_source_line.rb [promote] rc=1
+spinel: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=3 arg0ty6
+spinel: 1 refusal, nothing written
+== test/reject/macro_two_modules.rb [default] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/macro_two_modules.rb [promote] rc=1
+spinel: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
+== test/reject/method_of_builtin_module.rb [default] rc=1
+spinel: ENV.method(:each) is not supported: a Method object of a builtin module or class function has no compiled function to bind. Call ENV.each directly, or wrap it in a lambda
+spinel: 1 refusal, nothing written
+== test/reject/method_of_builtin_module.rb [promote] rc=1
+spinel: ENV.method(:each) is not supported: a Method object of a builtin module or class function has no compiled function to bind. Call ENV.each directly, or wrap it in a lambda
+spinel: 1 refusal, nothing written
+== test/reject/new_receiver_class_chain_still_reached.rb [default] rc=1
+spinel: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/new_receiver_class_chain_still_reached.rb [promote] rc=1
+spinel: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/new_receiver_class_method_still_reached.rb [default] rc=1
+spinel: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/new_receiver_class_method_still_reached.rb [promote] rc=1
+spinel: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include.rb [default] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include.rb [promote] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include_alias.rb [default] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include_alias.rb [promote] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include_unrelated_def.rb [default] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/object_receiver_include_unrelated_def.rb [promote] rc=1
+spinel: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/rational_pow_bignum.rb [default] rc=1
+spinel: the receiver of a Float `**` given a Rational, which no conversion keeps in its sp_float slot
+spinel: 1 refusal, nothing written
+== test/reject/rational_pow_bignum.rb [promote] rc=1
+spinel: the receiver of a Float `**` given a Rational, which no conversion keeps in its sp_float slot
+spinel: 1 refusal, nothing written
+== test/reject/recursive_default_reads_block.rb [default] rc=1
+spinel: unsupported default of `m`'s parameter `y` that calls `m` again with that argument omitted (one reading the caller's block or `super` cannot be moved into a method of its own): node N (ParenthesesNode)
+spinel: 1 refusal, nothing written
+== test/reject/recursive_default_reads_block.rb [promote] rc=1
+spinel: unsupported default of `m`'s parameter `y` that calls `m` again with that argument omitted (one reading the caller's block or `super` cannot be moved into a method of its own): node N (ParenthesesNode)
+spinel: 1 refusal, nothing written
+== test/reject/redo_unlabeled_iterator.rb [default] rc=1
+spinel: redo in this block (its iterator cannot re-run the body)
+spinel: 1 refusal, nothing written
+== test/reject/redo_unlabeled_iterator.rb [promote] rc=1
+spinel: redo in this block (its iterator cannot re-run the body)
+spinel: 1 refusal, nothing written
+== test/reject/scrub_bang_block.rb [default] rc=1
+spinel: String#scrub! with a block is not yet supported: the block would be ignored
+spinel: 1 refusal, nothing written
+== test/reject/scrub_bang_block.rb [promote] rc=1
+spinel: String#scrub! with a block is not yet supported: the block would be ignored
+spinel: 1 refusal, nothing written
+== test/reject/scrub_bang_retained_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through a retained scrub! result that is appended to
+== test/reject/scrub_bang_retained_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through a retained scrub! result that is appended to
+== test/reject/singleton_on_untraceable_recv.rb [default] rc=1
+spinel: singleton method that needs a self, on a receiver that is not one user-class instance
+== test/reject/singleton_on_untraceable_recv.rb [promote] rc=1
+spinel: singleton method that needs a self, on a receiver that is not one user-class instance
+== test/reject/string_append_through_kept_block_index.rb [default] rc=1
+spinel: a String is passed through `b[]`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a block's parameter). Return the String from the proc or Method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_append_through_kept_block_index.rb [promote] rc=1
+spinel: a String is passed through `b[]`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a block's parameter). Return the String from the proc or Method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_append_through_new_global.rb [default] rc=1
+spinel: a String is passed to `initialize`'s parameter `s` through `Box.new`, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_append_through_new_global.rb [promote] rc=1
+spinel: a String is passed to `initialize`'s parameter `s` through `Box.new`, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_append_through_proc_keyword.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `k` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a block's parameter). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_append_through_proc_keyword.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `k` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a block's parameter). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_chained_index_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through an Array's chained index into an appending block
+== test/reject/string_chained_index_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through an Array's chained index into an appending block
+== test/reject/string_cvar_boxed_param.rb [default] rc=1
+spinel: a String is passed to `poly`'s parameter `io` through the call, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a class variable into a parameter that boxes it). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_cvar_boxed_param.rb [promote] rc=1
+spinel: a String is passed to `poly`'s parameter `io` through the call, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a class variable into a parameter that boxes it). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_duplicate_keyword_variable.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `k` through a repeated keyword, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a repeated keyword). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_duplicate_keyword_variable.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `k` through a repeated keyword, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a repeated keyword). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_fiber_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Fiber#resume`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Fiber#resume`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_fiber_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Fiber#resume`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Fiber#resume`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_fiber_method_param_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Fiber#resume`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Fiber#resume`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_fiber_method_param_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Fiber#resume`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Fiber#resume`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_forward_poly_chain.rb [default] rc=1
+spinel: a String is passed to `m`'s parameter `p` through a parameter it hands on, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_forward_poly_chain.rb [promote] rc=1
+spinel: a String is passed to `m`'s parameter `p` through a parameter it hands on, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_forward_rest_past16.rb [default] rc=1
+spinel: a String is passed to `w`'s parameter `r` through the rest it hands on, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a local variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_forward_rest_past16.rb [promote] rc=1
+spinel: a String is passed to `w`'s parameter `r` through the rest it hands on, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a local variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_fresh_array_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through a fresh Array literal into an appending iterator block
+spinel: 1 refusal, nothing written
+== test/reject/string_fresh_array_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through a fresh Array literal into an appending iterator block
+spinel: 1 refusal, nothing written
+== test/reject/string_gather_short_splat_lead.rb [default] rc=1
+spinel: a String is passed to `g`'s parameter `a` through a call that gathers its arguments, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a local variable ahead of a splat whose length decides which parameter takes it). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_gather_short_splat_lead.rb [promote] rc=1
+spinel: a String is passed to `g`'s parameter `a` through a call that gathers its arguments, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a local variable ahead of a splat whose length decides which parameter takes it). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_global_handle_param.rb [default] rc=1
+spinel: a String is passed to `h`'s parameter `io` through the call, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable into a parameter that takes its handle). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_global_handle_param.rb [promote] rc=1
+spinel: a String is passed to `h`'s parameter `io` through the call, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable into a parameter that takes its handle). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_hash_call.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_call.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_each.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_each.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_index.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_index.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_literal.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_literal.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_pair.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_pair.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_store.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_store.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_store_block.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_store_block.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_values.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_fresh_values.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_interpolated.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_interpolated.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_literal_captured.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_literal_captured.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_pair_variable.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_pair_variable.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_pair.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_pair.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_pair_block.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_pair_block.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_value.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_value.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_value_block.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_store_value_block.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_value_variable.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_value_variable.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_values_variable.rb [default] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_values_variable.rb [promote] rc=1
+spinel: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_ivar_alias_lent_call.rb [default] rc=1
+spinel: a String instance variable written from a local is passed to an appending parameter (a String is not yet shared by reference through a lent instance variable written from a local). Return the String from the method and assign it, or append to it in the caller.
+== test/reject/string_ivar_alias_lent_call.rb [promote] rc=1
+spinel: a String instance variable written from a local is passed to an appending parameter (a String is not yet shared by reference through a lent instance variable written from a local). Return the String from the method and assign it, or append to it in the caller.
+== test/reject/string_ivar_alias_lent_super.rb [default] rc=1
+spinel: a String instance variable written from a local is passed to an appending parameter (a String is not yet shared by reference through a lent instance variable written from a local). Return the String from the method and assign it, or append to it in the caller.
+== test/reject/string_ivar_alias_lent_super.rb [promote] rc=1
+spinel: a String instance variable written from a local is passed to an appending parameter (a String is not yet shared by reference through a lent instance variable written from a local). Return the String from the method and assign it, or append to it in the caller.
+== test/reject/string_ivar_array_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through an ivar's or a call's Array into an appending iterator block
+== test/reject/string_ivar_array_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through an ivar's or a call's Array into an appending iterator block
+== test/reject/string_kwsplat_last_dynamic.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `k` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_last_dynamic.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `k` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_last_yieldblock.rb [default] rc=1
+spinel: a String variable is passed through a splatted Hash literal (`**{ k: v }`) to a block's appending keyword parameter (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the block and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_last_yieldblock.rb [promote] rc=1
+spinel: a String variable is passed through a splatted Hash literal (`**{ k: v }`) to a block's appending keyword parameter (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the block and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_last_yieldproc.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `k` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_last_yieldproc.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `k` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_literal_dynamic.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `k1` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_literal_dynamic.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `k1` through a splatted Hash literal (`**{ k: v }`), which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_literal_yield.rb [default] rc=1
+spinel: a String variable is passed through a splatted Hash literal (`**{ k: v }`) to a block's appending keyword parameter (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the block and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_kwsplat_literal_yield.rb [promote] rc=1
+spinel: a String variable is passed through a splatted Hash literal (`**{ k: v }`) to a block's appending keyword parameter (a String is not yet shared by reference through a splatted Hash literal (`**{ k: v }`)). Return the String from the block and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_global_rebound.rb [default] rc=1
+spinel: `$g` is passed to gr2's parameter `v`, which appends to it, and `$g` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_global_rebound.rb [promote] rc=1
+spinel: `$g` is passed to gr2's parameter `v`, which appends to it, and `$g` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_global_rebound_block.rb [default] rc=1
+spinel: `$z` is passed to yl's parameter `v`, which appends to it, and `$z` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_global_rebound_block.rb [promote] rc=1
+spinel: `$z` is passed to yl's parameter `v`, which appends to it, and `$z` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_ivar_rebound.rb [default] rc=1
+spinel: `@x` is passed to gri's parameter `v`, which appends to it, and `@x` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_lent_ivar_rebound.rb [promote] rc=1
+spinel: `@x` is passed to gri's parameter `v`, which appends to it, and `@x` is assigned at line 0, where the assignment can run during the call: the append would then reach the newly assigned String instead of the one passed (a String held by a global, a class variable, or a top-level or class-level instance variable is not yet shared by reference). Pass a local and assign it back after the call.
+spinel: 1 refusal, nothing written
+== test/reject/string_mutator_jump_arm.rb [default] rc=1
+spinel: unsupported expression: node N (ReturnNode)
+spinel: 1 refusal, nothing written
+== test/reject/string_mutator_jump_arm.rb [promote] rc=1
+spinel: unsupported expression: node N (ReturnNode)
+spinel: 1 refusal, nothing written
+== test/reject/string_narrowed_element_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through a narrowed boxed iterator element into an appending parameter
+spinel: 1 refusal, nothing written
+== test/reject/string_narrowed_element_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through a narrowed boxed iterator element into an appending parameter
+spinel: 1 refusal, nothing written
+== test/reject/string_nested_masgn_deep.rb [default] rc=1
+spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
+== test/reject/string_nested_masgn_deep.rb [promote] rc=1
+spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
+== test/reject/string_nested_masgn_target.rb [default] rc=1
+spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
+== test/reject/string_nested_masgn_target.rb [promote] rc=1
+spinel: a nested multiple-assignment target appends to a String variable from an Array literal (a String is not yet shared by reference through a nested multiple-assignment target). Append to the source String instead.
+== test/reject/string_rest_splat_yield.rb [default] rc=1
+spinel: a String is passed to a block's parameter `b` through a splat into a yield, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat into a yield). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_rest_splat_yield.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `b` through a splat into a yield, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat into a yield). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_splat_changed_array.rb [default] rc=1
+spinel: a String is passed to a proc's parameter `y` through a splat of an Array the program changes, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat of an Array that holds a copy). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_splat_changed_array.rb [promote] rc=1
+spinel: a String is passed to a proc's parameter `y` through a splat of an Array the program changes, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat of an Array that holds a copy). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_splat_global_toplevel.rb [default] rc=1
+spinel: a String is passed to `app`'s parameter `a` through a splat, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_splat_global_toplevel.rb [promote] rc=1
+spinel: a String is passed to `app`'s parameter `a` through a splat, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_tap_fresh_append.rb [default] rc=1
+spinel: a String is not yet shared by reference through tap on a fresh String
+spinel: 1 refusal, nothing written
+== test/reject/string_tap_fresh_append.rb [promote] rc=1
+spinel: a String is not yet shared by reference through tap on a fresh String
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_arg_in_loop.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_arg_in_loop.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_block_param_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_block_param_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_global_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_global_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_ivar_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_ivar_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_method_param_arg.rb [default] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_thread_method_param_arg.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `t` through `Thread.new`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `Thread.new`). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_captured_param.rb [default] rc=1
+spinel: a String is passed to a block's parameter `q` through `yield` into a capture-wrapper block, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `yield` into a capture-wrapper block). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_captured_param.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `q` through `yield` into a capture-wrapper block, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through `yield` into a capture-wrapper block). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_poly_param_global.rb [default] rc=1
+spinel: a String is passed to `w`'s parameter `x` through a yield into a block argument, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_poly_param_global.rb [promote] rc=1
+spinel: a String is passed to `w`'s parameter `x` through a yield into a block argument, which the method appends to: this call hands the method a copy, so the append would not reach the caller's String (a String is not yet shared by reference from a global variable). Return the String from the method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_splat_captured.rb [default] rc=1
+spinel: a String is passed to a block's parameter `q` through a splat into a yield, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat into a yield). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/string_yield_splat_captured.rb [promote] rc=1
+spinel: a String is passed to a block's parameter `q` through a splat into a yield, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference through a splat into a yield). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/subclass_array.rb [default] rc=1
+spinel: class Stack < Array: subclassing Array is not supported yet (a subclass would answer differently from CRuby); wrap an Array in an instance variable instead
+== test/reject/subclass_array.rb [promote] rc=1
+spinel: class Stack < Array: subclassing Array is not supported yet (a subclass would answer differently from CRuby); wrap an Array in an instance variable instead
+== test/reject/subclass_array_toplevel_path.rb [default] rc=1
+spinel: class Points < Array: subclassing Array is not supported yet (a subclass would answer differently from CRuby); wrap an Array in an instance variable instead
+== test/reject/subclass_array_toplevel_path.rb [promote] rc=1
+spinel: class Points < Array: subclassing Array is not supported yet (a subclass would answer differently from CRuby); wrap an Array in an instance variable instead
+== test/reject/subclass_hash.rb [default] rc=1
+spinel: class Registry < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash.rb [promote] rc=1
+spinel: class Registry < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_class_new.rb [default] rc=1
+spinel: Class.new(Hash): subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_class_new.rb [promote] rc=1
+spinel: Class.new(Hash): subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_class_new_block.rb [default] rc=1
+spinel: class Registry < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_class_new_block.rb [promote] rc=1
+spinel: class Registry < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_own_methods_only.rb [default] rc=1
+spinel: class Opts < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_hash_own_methods_only.rb [promote] rc=1
+spinel: class Opts < Hash: subclassing Hash is not supported yet (a subclass would answer differently from CRuby); wrap a Hash in an instance variable instead
+== test/reject/subclass_range.rb [default] rc=1
+spinel: class Span < Range: subclassing Range is not supported yet (a subclass would answer differently from CRuby); wrap a Range in an instance variable instead
+== test/reject/subclass_range.rb [promote] rc=1
+spinel: class Span < Range: subclassing Range is not supported yet (a subclass would answer differently from CRuby); wrap a Range in an instance variable instead
+== test/reject/subclass_string.rb [default] rc=1
+spinel: class Name < String: subclassing String is not supported yet (a subclass would answer differently from CRuby); wrap a String in an instance variable instead
+== test/reject/subclass_string.rb [promote] rc=1
+spinel: class Name < String: subclassing String is not supported yet (a subclass would answer differently from CRuby); wrap a String in an instance variable instead
+== test/reject/subclass_stringio.rb [default] rc=1
+spinel: class Buffer < StringIO: subclassing StringIO is not supported yet (a subclass would answer differently from CRuby); wrap a StringIO in an instance variable instead
+== test/reject/subclass_stringio.rb [promote] rc=1
+spinel: class Buffer < StringIO: subclassing StringIO is not supported yet (a subclass would answer differently from CRuby); wrap a StringIO in an instance variable instead
+== test/reject/subclass_thread_queue.rb [default] rc=1
+spinel: class Jobs < Queue: subclassing Queue is not supported yet (a subclass would answer differently from CRuby); wrap a Queue in an instance variable instead
+== test/reject/subclass_thread_queue.rb [promote] rc=1
+spinel: class Jobs < Queue: subclassing Queue is not supported yet (a subclass would answer differently from CRuby); wrap a Queue in an instance variable instead
+== test/reject/super_init_value.rb [default] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/super_init_value.rb [promote] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/super_init_value_begin.rb [default] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/super_init_value_begin.rb [promote] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/super_init_value_if.rb [default] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/super_init_value_if.rb [promote] rc=1
+spinel: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
+== test/reject/superclass_mismatch.rb [default] rc=1
+spinel: superclass mismatch for class Thing (B here, A at line 0)
+== test/reject/superclass_mismatch.rb [promote] rc=1
+spinel: superclass mismatch for class Thing (B here, A at line 0)
+== test/reject/systemcallerror_subclass_errno_const.rb [default] rc=1
+spinel: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
+== test/reject/systemcallerror_subclass_errno_const.rb [promote] rc=1
+spinel: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
+== test/reject/systemcallerror_subclass_errno_const_nested.rb [default] rc=1
+spinel: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
+== test/reject/systemcallerror_subclass_errno_const_nested.rb [promote] rc=1
+spinel: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
+== test/reject/systemcallerror_zsuper_keyword.rb [default] rc=1
+spinel: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
+== test/reject/systemcallerror_zsuper_keyword.rb [promote] rc=1
+spinel: unsupported a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize: node N (ForwardingSuperNode)
+spinel: 1 refusal, nothing written
+== test/reject/toplevel_include_yield_ivar_target.rb [default] rc=1
+spinel: unsupported top-level include of a module method that uses instance variables: node N (CallNode `pair`) recv=-/ty-1 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/toplevel_include_yield_ivar_target.rb [promote] rc=1
+spinel: unsupported top-level include of a module method that uses instance variables: node N (CallNode `pair`) recv=-/ty-1 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [default] rc=1
+spinel: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
+spinel: 1 refusal, nothing written
+== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [promote] rc=1
+spinel: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
+spinel: 1 refusal, nothing written
+== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [default] rc=1
+spinel: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
+spinel: 1 refusal, nothing written
+== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [promote] rc=1
+spinel: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
+spinel: 1 refusal, nothing written
+== test/reject/yield_splat_elem_append.rb [default] rc=1
+spinel: a String is passed through a splat into a yield to a block parameter the block appends to, from a value that is not a String variable: the block would append to a copy. Return the String from the block and assign it, or append to it in the caller
+spinel: 1 refusal, nothing written
+== test/reject/yield_splat_elem_append.rb [promote] rc=1
+spinel: a String is passed through a splat into a yield to a block parameter the block appends to, from a value that is not a String variable: the block would append to a copy. Return the String from the block and assign it, or append to it in the caller
+spinel: 1 refusal, nothing written

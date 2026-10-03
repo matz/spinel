@@ -21,6 +21,7 @@ typedef int sp_bool;
 #endif
 
 int sp_last_status = 0;
+int sp_last_pid = 0;
 
 
 int sp_system_args(int argc, const char *const *argv) {
@@ -54,5 +55,6 @@ int sp_system_args(int argc, const char *const *argv) {
     if (sp_sched_wait_child((int)pid, &status) < 0) { sp_last_status = -1; return FALSE; }
   }
   sp_last_status = status;
+  sp_last_pid = (int)pid;
   return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? TRUE : FALSE;
 }

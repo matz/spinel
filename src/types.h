@@ -94,6 +94,14 @@ unsigned ty_poly_face_owner_flags(const char *name, int argc, int has_blk, int p
 /* Does the read-only Hash face answer `name` in some form? The face sites
    ask by name alone, before the call's shape is known. */
 int ty_poly_hash_face_name(const char *nm);
+/* A String value-form bang -- a PF_STR_BANG row of the face table, the one
+   list of them: its PF_STR_BANG and PF_STR_SELF flags, or 0 for any other
+   name. Its plain name is the bang without the '!' (str_bang_plain). */
+unsigned ty_str_bang_flags(const char *name);
+/* ty_str_bang_flags for a receiver known to be a String, which reverse!
+   joins */
+unsigned ty_str_typed_bang_flags(const char *name);
+void str_bang_plain(const char *bang, char *out, int n);
 
 typedef enum {
   TY_UNKNOWN = 0,  /* not yet inferred, or an unsupported construct */
@@ -322,6 +330,44 @@ static inline const char *ty_ptr_array_elem_ctype(TyKind t) {
   if (t == TY_INT_ARRAY_ARRAY)   return "sp_IntArray";
   if (t == TY_FLOAT_ARRAY_ARRAY) return "sp_FloatArray";
   return 0;   /* types.h has no stddef.h; NULL is not in scope here */
+}
+
+/* ---- ty_traits: a builtin kind's spellings (R7, #7100) ----
+   One row per builtin TyKind, one column per spelling the compiler writes
+   for a value of that kind, each read off one existing function (named
+   beside it); where two functions spell the same thing differently, each
+   has its own column. A user object's kind (TY_OBJECT_BASE + class) has no
+   row: its spellings depend on its class. ty_traits_check.c compares every
+   cell with its function (spinel --check-traits). In the renderings, $e is
+   the expression and $t the first temp the form takes. */
+typedef struct {
+  const char *ctype;          /* c_type_name */
+  const char *zero;           /* default_value */
+  const char *zero_tail;      /* raise_tail_value: an untyped slot's dead value */
+  const char *nil;            /* nil_value */
+  const char *box;            /* ty_box_fn: emit_boxed, a value that is never nil */
+  const char *box_nil;        /* ty_box_nil_fn: emit_boxed, a slot that holds nil */
+  const char *box_text;       /* emit_boxed_text's rendering, or NULL: no box */
+  const char *box_id;         /* ty_nullable_builtin_id */
+  const char *hash_id;        /* hash_box_cls */
+  const char *unbox;          /* emit_unbox_text's rendering */
+  const char *unbox_nil;      /* emit_unbox_nilable_text's rendering */
+  const char *unbox_rhs;      /* poly_rhs_unbox_fn: emit_poly_rhs_coerced */
+  const char *unbox_sink;     /* poly_sink_unbox_fn: emit_typed_sink_text */
+  const char *unbox_token;    /* token_unbox_fmt: emit_unresolved_coerced */
+  const char *nil_test_local; /* local_nil_test for a slot with no flags, or NULL */
+  unsigned char null_is_nil;  /* ty_null_is_nil */
+  unsigned char needs_root;   /* needs_root */
+  unsigned char struct_valued;/* ty_is_struct_valued */
+  unsigned char scalar_ret;   /* is_scalar_ret */
+  unsigned char store_class;  /* repr_store_class (SC_*) */
+  unsigned char box_form;     /* the form --repr-check records for box_text (RF_*) */
+} TyTraits;
+#define TY_TRAITS_N ((int)TY_FLOAT_ARRAY_ARRAY + 1)
+extern const TyTraits ty_traits[TY_TRAITS_N];
+/* the row of builtin kind t, or NULL (a user object's kind) */
+static inline const TyTraits *ty_traits_of(TyKind t) {
+  return (int)t >= 0 && (int)t < TY_TRAITS_N ? &ty_traits[t] : (const TyTraits *)0;
 }
 
 #endif

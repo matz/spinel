@@ -6,6 +6,7 @@
 
 #include "codegen_internal.h"
 #include "builtin_ops.h"
+#include "codegen_call_arms.h"
 
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
@@ -272,4 +273,140 @@ int emit_op_fiber_raise(Compiler *c, const BopCtx *x, Buf *b) {
   emit_concurrency_raise(c, rb.p ? rb.p : "NULL", argc, argv, "sp_Fiber", 'f', "sp_Fiber_raise", b);
   free(rb.p);
   return 1;
+}
+
+/* Mutex/Monitor#synchronize { block }: the block run inline */
+int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv) {
+  /* Mutex/Monitor#synchronize { block }: run block inline (single-threaded) */
+  if (sp_streq(name, "synchronize") && nt_ref(nt, id, "block") >= 0) {
+    int blk = nt_ref(nt, id, "block");
+    int bdy = nt_ref(nt, blk, "body");
+    int bbn = 0; const int *bbb = bdy >= 0 ? nt_arr(nt, bdy, "body", &bbn) : NULL;
+    TyKind res = comp_ntype(c, id);
+    int scalar = is_scalar_ret(res) && res != TY_VOID && res != TY_NIL && res != TY_UNKNOWN;
+    int rv = ++g_tmp;
+    /* A real Mutex#synchronize takes the lock around the block and releases it
+       with ensure semantics: the unlock runs on normal completion, on an
+       exception in the block (then re-raised), and on a non-local unwind passing
+       through it (proc-return / throw, then resumed). A receiver of any other
+       static type keeps the inline no-op behaviour. (A bare `return` -- a C return out of the
+       inlined body -- is not yet covered; it would need deferred-return plumbing
+       like begin..ensure.) */
+    /* Full ensure semantics for a Mutex receiver: the unlock runs on normal
+       completion, on a `return` out of the block (deferred via the begin..ensure
+       g_ensure_stack mechanism), on an exception (then re-raised), and on a
+       non-local unwind passing through (proc-return / throw, then resumed). The
+       eid names the deferred-return/exception slots that emit_return targets. */
+    /* A poly receiver (`LOCKS[i].synchronize { }`, a Mutex read out of a
+       container) takes the same lock/ensure shape through a runtime check of
+       the boxed value: the inline no-op left the critical section unlocked
+       whenever the static type could not see the Mutex (campfire's fragment
+       cache shards, a hash corrupted under concurrent writes). The check
+       raises CRuby's NoMethodError for a value that is not a Mutex. */
+    TyKind rty = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+    int is_mx = recv >= 0 && (rty == TY_MUTEX || rty == TY_POLY) && g_ensure_depth < MAX_ENSURE_DEPTH;
+    int mtmp = 0, eid = 0, has_retval = 0;
+    buf_puts(b, "({ ");
+    /* result temp is declared before the setjmp so it survives the block scope;
+       the body assigns into it. */
+    if (scalar) { emit_ctype(c, res, b); buf_printf(b, " _t%d = %s; ", rv, default_value_from_compiler(c, res)); }
+    if (is_mx) {
+      mtmp = ++g_tmp; eid = ++g_tmp;
+      has_retval = (g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN);
+      buf_printf(b, "sp_mutex *_t%d = ", mtmp);
+      if (rty == TY_POLY) { buf_puts(b, "sp_poly_mutex_recv("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
+      else emit_expr(c, recv, b);
+      buf_printf(b, "; sp_Mutex_lock(_t%d); ", mtmp);
+      buf_printf(b, "int _retf%d = 0; int _excf%d = 0; const char *_excmsg%d = NULL, *_exccls%d = NULL; ",
+                 eid, eid, eid, eid);
+      if (has_retval) { emit_ctype(c, g_ret_type, b); buf_printf(b, " _retv%d = %s; ", eid, default_value_from_compiler(c, g_ret_type)); }
+      g_ensure_stack[g_ensure_depth++] = (EnsureCtx){ eid, has_retval, g_exc_frame_depth, g_ret_type };
+      buf_puts(b, "sp_exc_check_depth(); sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; ");
+      buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++; if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) { ");
+      g_exc_frame_depth++;
+    }
+    for (int k = 0; k < bbn - 1; k++) emit_stmt(c, bbb[k], b, 0);
+    if (bbn > 0) {
+      TyKind lty = comp_ntype(c, bbb[bbn-1]);
+      const char *lnty = nt_type(nt, bbb[bbn-1]);
+      int nil_lit = (lty == TY_NIL && lnty && sp_streq(lnty, "NilNode"));
+      int can_expr = (lty != TY_VOID && lty != TY_UNKNOWN && (lty != TY_NIL || nil_lit));
+      if (scalar && can_expr) {
+        /* The tail is emitted as an EXPRESSION, and an expression's
+           statement-shaped setup goes to g_pre -- which at this point is the
+           buffer for the whole `lock.synchronize { ... }` line, i.e. OUTSIDE
+           the lock. `h[k] += 1` puts its read-modify-write there and leaves
+           only the read inside, so concurrent increments lost updates while
+           the same thing written as two statements did not (#3387). Catch the
+           prelude in a local buffer and flush it inside the critical section,
+           where it belongs. */
+        Buf tpre; memset(&tpre, 0, sizeof tpre);
+        Buf tval; memset(&tval, 0, sizeof tval);
+        Buf *sv_pre = g_pre; int sv_ind = g_indent;
+        g_pre = &tpre; g_indent = 0;
+        if (res == TY_POLY && lty != TY_POLY) emit_boxed(c, bbb[bbn-1], &tval);
+        else emit_expr(c, bbb[bbn-1], &tval);
+        g_pre = sv_pre; g_indent = sv_ind;
+        if (tpre.p) buf_puts(b, tpre.p);
+        buf_printf(b, "_t%d = ", rv);
+        buf_puts(b, tval.p ? tval.p : "0");
+        buf_puts(b, "; ");
+        free(tpre.p); free(tval.p);
+      }
+      else {
+        emit_stmt(c, bbb[bbn-1], b, 0);  /* scalar default already set at rv decl */
+      }
+    }
+    if (is_mx) {
+      g_ensure_depth--;
+      g_exc_frame_depth--;
+      buf_printf(b, "sp_exc_top--; }\nelse { sp_exc_top--; sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; if (sp_unwind_kind == SP_UNWIND_NONE) { _excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; } } ",
+                 eid, eid, eid);
+      buf_printf(b, "_ensure%d: ; sp_Mutex_unlock(_t%d); ", eid, mtmp);
+      buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume(); ");
+      if (g_ensure_depth > 0) {
+        /* nested inside another begin..ensure / synchronize: hand the deferred
+           return and unhandled exception to the enclosing ensure. */
+        EnsureCtx *outer = &g_ensure_stack[g_ensure_depth - 1];
+        if (has_retval && outer->has_retval)
+          buf_printf(b, "if (_retf%d) { _retv%d = _retv%d; _retf%d = 1; sp_exc_top--; goto _ensure%d; } ",
+                     eid, outer->lid, eid, outer->lid, outer->lid);
+        else
+          buf_printf(b, "if (_retf%d) { _retf%d = 1; sp_exc_top--; goto _ensure%d; } ", eid, outer->lid, outer->lid);
+        buf_printf(b, "if (_excf%d) { _excf%d = 1; _excmsg%d = _excmsg%d; _exccls%d = _exccls%d; sp_exc_top--; goto _ensure%d; } ",
+                   eid, outer->lid, outer->lid, eid, outer->lid, eid, outer->lid);
+      }
+      else {
+        /* the deferred return leaves through every enclosing live begin
+           frame: pop them (see the begin..ensure epilogue in codegen_stmt.c),
+           and pop the sp_rescue_sp handler for each rescue body it leaves */
+        { char g[24]; snprintf(g, sizeof g, "_retf%d", eid);
+          if (emit_frame_unwind(b, 0, g)) buf_puts(b, " "); }
+        /* Inside a first-class proc body whose returns route through the boxed
+           slot, the deferred value leaves through the slot -- a raw C return
+           of an sp_RbVal from an sp_int function does not compile. The
+           statement-side copy of this funnel (codegen_stmt.c) has had the
+           branch; this one did not, so `Mutex#synchronize` inside a proc body
+           emitted it (#3383). */
+        if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
+          buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, g_result_var, eid);
+        /* a fiber body is `static void`: see g_c_ret_void */
+        else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
+        else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
+        else if (g_in_proc_body && g_result_var && g_result_poly)
+          buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; } ", eid, g_result_var);
+        else if (g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
+        else if (g_ret_type == TY_POLY) buf_printf(b, "if (_retf%d) return sp_box_nil(); ", eid);
+        else if (g_ret_type == TY_UNKNOWN) buf_printf(b, "if (_retf%d) return 0; ", eid);
+        /* a proc body returns sp_int: see the sibling in codegen_iter.c */
+        else if (g_in_proc_body) buf_printf(b, "if (_retf%d) return 0; ", eid);
+        else buf_printf(b, "if (_retf%d) return; ", eid);
+        buf_printf(b, "if (_excf%d) sp_raise_cls(_exccls%d, _excmsg%d); ", eid, eid, eid);
+      }
+    }
+    if (scalar) buf_printf(b, "_t%d; })", rv);
+    else buf_puts(b, "0; })");
+    return 1;
+  }
+  return 0;
 }

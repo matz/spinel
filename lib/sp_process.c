@@ -370,7 +370,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       do { r = waitpid(pid, &st, 0); } while (r < 0 && errno == EINTR);
       /* the reaped child is the last one waited for, so $? reads its
          exit 127, as it does under CRuby */
-      if (r == pid) sp_last_status = st; }
+      if (r == pid) { sp_last_status = st; sp_last_pid = (int)pid; } }
     errno = fail[0];
     sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
                  errno == EACCES ? "Errno::EACCES" :
@@ -384,6 +384,23 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
    waitpid answers for the OS worker, and a started green thread is pinned to
    its worker, so blocking here stalls the thread that may have to drain this
    child's output before it can exit (#4381). */
+/* Process.wait / waitpid: the same wait as waitpid2, answering only the
+   pid; the status goes to $? */
+sp_int sp_process_waitpid(sp_int pid) {
+  extern int sp_sched_wait_child(int pid, int *status);
+  int status = 0;
+  pid_t r = (pid_t)sp_sched_wait_child((int)pid, &status);
+  if (r < 0) {
+    if (errno == ECHILD) {
+      sp_raise_cls("Errno::ECHILD", "No child processes");
+    }
+    sp_raise_cls("SystemCallError", sp_errf_errno("waitpid failed", errno));
+  }
+  sp_last_status = status;
+  sp_last_pid = (int)r;
+  return (sp_int)r;
+}
+
 sp_PolyArray *sp_process_waitpid2(sp_int pid) {
   extern int sp_sched_wait_child(int pid, int *status);   /* see the note at the top on this TU's includes */
   int status = 0;
@@ -398,6 +415,7 @@ sp_PolyArray *sp_process_waitpid2(sp_int pid) {
      and a backtick; before this a waitpid2 left $? at whatever the last
      system call or backtick stored. */
   sp_last_status = status;
+  sp_last_pid = (int)r;
   sp_PolyArray *pa = sp_PolyArray_new(); SP_GC_ROOT(pa);   /* the status object below is an allocation */
   sp_PolyArray_push(pa, sp_box_int((sp_int)r));
   /* Second element is a Process::Status instance wrapping (pid, status),

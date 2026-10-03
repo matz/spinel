@@ -839,8 +839,7 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
   const char *ty = nt_type(nt, id);
   if (!ty || !sp_streq(ty, "CallNode")) return -1;
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || (!sp_streq(nm, "class_eval") && !sp_streq(nm, "module_eval") &&
-              !sp_streq(nm, "class_exec") && !sp_streq(nm, "module_exec"))) return -1;
+  if (!nm || !is_class_eval_family(nm)) return -1;
   int blk = nt_ref(nt, id, "block");
   if (blk < 0) return -1;
   int recv = nt_ref(nt, id, "receiver");
@@ -897,8 +896,7 @@ int class_reopen_cmethod(Compiler *c, int recv, const char *name) {
 }
 
 static int is_class_eval_name(const char *nm) {
-  return nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") ||
-                sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec"));
+  return nm && is_class_eval_family(nm);
 }
 
 void desugar_class_reopen(Compiler *c) {
@@ -984,7 +982,7 @@ static void sclass_walk_stmt(Compiler *c, int s, int scope_idx, int target_class
     const char *vn = nt_str(nt, s, "name");
     int va = nt_ref(nt, s, "arguments");
     int vc = 0; const int *vv = va >= 0 ? nt_arr(nt, va, "arguments", &vc) : NULL;
-    if (vn && (sp_streq(vn, "private") || sp_streq(vn, "protected") || sp_streq(vn, "public")) &&
+    if (vn && is_visibility_name(vn) &&
         vc == 1 && nt_kind(nt, vv[0]) == NK_DefNode && nt_ref(nt, vv[0], "receiver") < 0) {
       c->nscope[s] = scope_idx;
       c->node_cbody[s] = g_cbody_class_id;
@@ -2496,7 +2494,7 @@ void fix_struct_block_scopes(Compiler *c) {
         const char *vn = nt_str(nt, dn, "name");
         int va = nt_ref(nt, dn, "arguments");
         int vc = 0; const int *vv = va >= 0 ? nt_arr(nt, va, "arguments", &vc) : NULL;
-        if (vn && (sp_streq(vn, "private") || sp_streq(vn, "protected") || sp_streq(vn, "public")) &&
+        if (vn && is_visibility_name(vn) &&
             vc == 1 && nt_kind(nt, vv[0]) == NK_DefNode && nt_ref(nt, vv[0], "receiver") < 0)
           dn = vv[0];
       }
@@ -2597,7 +2595,7 @@ void register_attrs_body(Compiler *c, ClassInfo *cls, int body) {
          call's argument is the attr call (#4922) */
       const char *vn = nt_str(nt, s, "name");
       if (vn && nt_ref(nt, s, "receiver") < 0 &&
-          (sp_streq(vn, "private") || sp_streq(vn, "protected") || sp_streq(vn, "public"))) {
+          is_visibility_name(vn)) {
         int va = nt_ref(nt, s, "arguments");
         int vc = 0; const int *vv = va >= 0 ? nt_arr(nt, va, "arguments", &vc) : NULL;
         for (int q = 0; q < vc; q++)
@@ -2844,7 +2842,7 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
       const char *nm = nt_str(nt, s, "name");
       /* `private alias_method :a, :b` defines the alias it wraps */
       if (nm && nt_ref(nt, s, "receiver") < 0 &&
-          (sp_streq(nm, "private") || sp_streq(nm, "protected") || sp_streq(nm, "public"))) {
+          is_visibility_name(nm)) {
         int pa = nt_ref(nt, s, "arguments");
         int pn = 0;
         const int *pv = pa >= 0 ? nt_arr(nt, pa, "arguments", &pn) : NULL;
@@ -4210,7 +4208,7 @@ int infer_global_const_types(Compiler *c) {
          the receiver is a direct ConstantReadNode. */
       const char *cnm = nt_str(nt, id, "name");
       if (!cnm) continue;
-      int is_push = (sp_streq(cnm, "<<") || sp_streq(cnm, "push") || sp_streq(cnm, "append"));
+      int is_push = is_push_alias(cnm);
       /* `CONST[i] = v` is the other way a constant bound to an empty literal
          gets filled -- the table-building shape (`DISPATCH[opcode] = args`).
          Without it the constant stayed UNKNOWN, which reads as "defined
@@ -6910,7 +6908,7 @@ int infer_ivar_types(Compiler *c) {
       if (sp_streq(ty, "InstanceVariableOperatorWriteNode") && ci->ivar_types[iv] == TY_UNKNOWN &&
           !class_ivar_pinned(ci, nm)) {
         const char *bo = nt_str(nt, id, "binary_operator");
-        if (bo && (sp_streq(bo, "|") || sp_streq(bo, "&") || sp_streq(bo, "^"))) vt = TY_POLY;
+        if (bo && is_bit_op(bo)) vt = TY_POLY;
       }
       /* For operator-write (@b += rhs), vt is the RHS type, not the result type.
          When the slot holds a user object, the result is the method's return type. */
@@ -7765,7 +7763,7 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
     if (target && target[0] == '?') target_known = 0;
     const char *m2 = nm;
     int a0 = 0;
-    if (nm && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) && ac >= 1) {
+    if (nm && is_send_family(nm) && ac >= 1) {
       m2 = bc_sym_arg(nt, av[0]);
       a0 = 1;
     }

@@ -8,6 +8,7 @@
 
 #include "codegen_internal.h"
 #include "builtin_ops.h"
+#include "codegen_call_arms.h"
 
 /* any?(pattern) / none? / one? / count with one argument and no block:
    compare each [key, value] pair by == (sp_poly_eq covers array-vs-array
@@ -338,7 +339,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "; sp_exc_stage_recv(");
     emit_boxed_text(c, rt, htmp, b);
     buf_printf(b, "); sp_raise_key_not_found(_t%d); %s; })", tk,
-               vt == TY_POLY ? "sp_box_nil()" : default_value(vt));
+               vt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, vt));
     return 1;
   }
   buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tk); emit_hash_key(c, argv[0], ty_hash_key(rt), b);
@@ -348,7 +349,7 @@ int emit_op_hash_fetch(Compiler *c, const BopCtx *x, Buf *b) {
   emit_boxed_text(c, rt, htmp, b);
   buf_puts(b, "), sp_raise_key_not_found(");
   emit_boxed_text(c, ty_hash_key(rt), keytmp, b);
-  buf_printf(b, "), %s); })", vt == TY_POLY ? "sp_box_nil()" : default_value(vt));
+  buf_printf(b, "), %s); })", vt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, vt));
   return 1;
 }
 
@@ -581,7 +582,7 @@ int emit_op_hash_delete(Compiler *c, const BopCtx *x, Buf *b) {
      read as a deleted value of zero (#4531) */
   buf_printf(b, "; %s _t%d = sp_%sHash_has_key(_t%d, _t%d) ? sp_%sHash_get(_t%d, _t%d) : %s;",
              c_type_name(vt), tv, hn, th, tk, hn, th, tk,
-             vt == TY_POLY ? "sp_box_nil()" : vt == TY_INT ? "SP_INT_NIL" : vt == TY_STRING ? "NULL" : default_value(vt));
+             vt == TY_POLY ? "sp_box_nil()" : vt == TY_INT ? "SP_INT_NIL" : vt == TY_STRING ? "NULL" : default_value_from_compiler(c, vt));
   buf_printf(b, " sp_%sHash_delete(_t%d, _t%d); _t%d; })", hn, th, tk, tv);
   return 1;
 }
@@ -837,4 +838,194 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " _t%d; })", tr);
   }
   return 1;
+}
+
+/* an OpenStruct's methods (the TY_OPENSTRUCT arm): [] / []=, to_h, respond_to?, to_s / inspect,
+   freeze / frozen?, dup / clone, instance_of? */
+int emit_call_openstruct_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  /* OpenStruct: a dynamic member bag (#3135). `o.k` / `o[:k]` read a boxed
+     value (nil when absent), `o.k = v` / `o[:k] = v` write, plus a small
+     fixed method surface. Any other bare name is a member access; a handful
+     of Object/Kernel names fall through to their generic handlers. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_OPENSTRUCT) {
+    if (sp_streq(name, "to_h") && argc == 0) {
+      buf_puts(b, "sp_OpenStruct_to_h("); emit_expr(c, recv, b); buf_puts(b, ")");
+      return 1;
+    }
+    /* dup / clone copy the member table. The generic identity shortcut handed
+       back the receiver itself, so a write through the copy landed in the
+       original. */
+    if ((sp_streq(name, "dup") || sp_streq(name, "clone")) && argc == 0) {
+      buf_puts(b, "sp_OpenStruct_dup("); emit_expr(c, recv, b);
+      buf_printf(b, ", %d)", sp_streq(name, "clone") ? 1 : 0);
+      return 1;
+    }
+    if (sp_streq(name, "inspect") || (sp_streq(name, "to_s") && argc == 0)) {
+      /* inspect/to_s is a TY_STRING (const char*); wrapping it in sp_String_new
+         produced an sp_String* that was then cast straight to const char*, so
+         puts printed the struct's raw bytes (#3270). Return the const char*.
+         A slot left nil is NULL: nil.inspect is "nil", a new String on each
+         call, and nil.to_s is the one shared empty String. */
+      int ov = ++g_tmp;
+      buf_printf(b, "({ sp_OpenStruct *_t%d = ", ov); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d ? sp_OpenStruct_inspect(_t%d) : %s; })", ov, ov,
+                 sp_streq(name, "inspect") ? "sp_str_from_bytes(\"nil\", 3)" : "sp_str_empty");
+      return 1;
+    }
+    if (sp_streq(name, "respond_to?") && argc >= 1) {
+      buf_puts(b, "(sp_OpenStruct_has("); emit_expr(c, recv, b); buf_puts(b, ", ");
+      if (comp_ntype(c, argv[0]) == TY_SYMBOL) emit_expr(c, argv[0], b);
+      else { buf_puts(b, "sp_sym_intern("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_puts(b, ") ? 1 : 0)");
+      return 1;
+    }
+    /* == / != / === / eql? / equal?: Object's protocol arm -- members for
+       == and ===, the table's eql? for eql?, identity for equal?, a poly
+       operand unwrapped in place */
+    if (argc == 1 && emit_native_object_protocol(c, id, b)) return 1;
+    if (is_kind_query(name) && argc == 1 &&
+        nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ConstantReadNode")) {
+      const char *tcn = nt_str(nt, argv[0], "name");
+      int yes;
+      if (sp_streq(name, "instance_of?")) yes = tcn && sp_streq(tcn, "OpenStruct");
+      else yes = tcn && (sp_streq(tcn, "OpenStruct") || sp_streq(tcn, "Object") ||
+                         sp_streq(tcn, "Kernel") || sp_streq(tcn, "BasicObject"));
+      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes ? 1 : 0);
+      return 1;
+    }
+    if (sp_streq(name, "[]") && argc == 1) {
+      buf_puts(b, "sp_OpenStruct_get("); emit_expr(c, recv, b); buf_puts(b, ", ");
+      if (comp_ntype(c, argv[0]) == TY_SYMBOL) emit_expr(c, argv[0], b);
+      else { buf_puts(b, "sp_sym_intern("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_puts(b, ")");
+      return 1;
+    }
+    if (sp_streq(name, "[]=") && argc == 2) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _v%d = ", tv); emit_boxed(c, argv[1], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_v%d); sp_OpenStruct_set(", tv); emit_expr(c, recv, b); buf_puts(b, ", ");
+      if (comp_ntype(c, argv[0]) == TY_SYMBOL) emit_expr(c, argv[0], b);
+      else { buf_puts(b, "sp_sym_intern("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_printf(b, ", _v%d); _v%d; })", tv, tv);
+      return 1;
+    }
+    /* a member writer `o.k = v` (parsed as name "k=") */
+    {
+      size_t nl = strlen(name);
+      if (nl > 1 && name[nl - 1] == '=' && argc == 1 &&
+          name[0] != '=' && name[0] != '<' && name[0] != '>' && name[0] != '!') {
+        char mem[256];
+        if (nl - 1 < sizeof mem) {
+          memcpy(mem, name, nl - 1); mem[nl - 1] = 0;
+          int tv = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _v%d = ", tv); emit_boxed(c, argv[0], b);
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_v%d); sp_OpenStruct_set(", tv); emit_expr(c, recv, b);
+          buf_printf(b, ", sp_sym_intern(\"%s\"), _v%d); _v%d; })", mem, tv, tv);
+          return 1;
+        }
+      }
+    }
+    /* freeze / frozen? carry the GC-header frozen bit, like the container and
+       plain-object freeze paths -- a subsequent member write then raises
+       FrozenError (checked in sp_OpenStruct_set) (#3272). */
+    if (sp_streq(name, "freeze") && argc == 0) {
+      buf_puts(b, "((sp_OpenStruct *)sp_gc_freeze("); emit_expr(c, recv, b); buf_puts(b, "))");
+      return 1;
+    }
+    if (sp_streq(name, "frozen?") && argc == 0) {
+      buf_puts(b, "sp_gc_is_frozen("); emit_expr(c, recv, b); buf_puts(b, ")");
+      return 1;
+    }
+    /* a bare member read `o.k`, unless it is an Object/Kernel method that must
+       keep its normal behaviour */
+    if (argc == 0) {
+      static const char *const OS_METHODS[] = {
+        "class", "nil?", "frozen?", "freeze", "dup", "clone", "hash",
+        "object_id", "itself", "tap", "then", "yield_self", "inspect",
+        "to_s", "to_h", "members", "each_pair", "send", "__send__",
+        "instance_variables", "methods", "is_a?", "kind_of?", NULL };
+      int reserved = 0;
+      for (int mi = 0; OS_METHODS[mi]; mi++)
+        if (sp_streq(name, OS_METHODS[mi])) { reserved = 1; break; }
+      if (!reserved) {
+        buf_puts(b, "sp_OpenStruct_get("); emit_expr(c, recv, b);
+        buf_printf(b, ", sp_sym_intern(\"%s\"))", name);
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+/* a Hash receiver: a literal Hash.new(d) that never narrowed (default, values_at, []), default= / default / default_proc on a receiver not typed a hash, then the Hash emitters (emit_hash_call) */
+int emit_call_hash_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+  /* hash value methods */
+  /* A literal Hash.new(d) receiver that never narrowed: .default and []
+     both fold to the default value (no write can have reached the hash);
+     the key/receiver still evaluate for their side effects. */
+  if (recv >= 0 && (rt == TY_UNKNOWN || rt == TY_POLY) &&
+      ((sp_streq(name, "default") && argc <= 1) ||   /* default(key) too (#2409) */
+       (sp_streq(name, "values_at") && argc >= 1) || /* all keys miss -> defaults (#2408) */
+       (sp_streq(name, "[]") && argc == 1))) {
+    int dn = hash_new_default_arg(c, recv);
+    if (dn >= 0) {
+      TyKind dt = comp_ntype(c, dn);
+      int t = ++g_tmp;
+      buf_puts(b, "({ ");
+      emit_ctype(c, dt, b);
+      buf_printf(b, " _t%d = ", t);
+      emit_expr(c, dn, b);
+      buf_puts(b, "; ");
+      if (sp_streq(name, "values_at")) {
+        int ta = ++g_tmp;
+        buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
+        for (int a = 0; a < argc; a++) {
+          buf_puts(b, "(void)("); emit_boxed(c, argv[a], b); buf_puts(b, "); ");
+          char dv[24]; snprintf(dv, sizeof dv, "_t%d", t);
+          buf_printf(b, "sp_PolyArray_push(_t%d, ", ta);
+          if (dt == TY_POLY) buf_puts(b, dv); else emit_boxed_text(c, dt, dv, b);
+          buf_puts(b, "); ");
+        }
+        buf_printf(b, "_t%d; })", ta);
+        return 1;
+      }
+      if (argc == 1) { buf_puts(b, "(void)("); emit_boxed(c, argv[0], b); buf_puts(b, "); "); }
+      buf_printf(b, "_t%d; })", t);
+      return 1;
+    }
+  }
+  /* h.default = v in value position: store when the receiver is a typed
+     hash lvalue; a literal {} receiver just yields the value. */
+  if (recv >= 0 && sp_streq(name, "default=") && argc == 1 && !ty_is_hash(rt) &&
+      nt_type(nt, recv) &&
+      (sp_streq(nt_type(nt, recv), "HashNode") || sp_streq(nt_type(nt, recv), "KeywordHashNode"))) {
+    TyKind vt = comp_ntype(c, argv[0]);
+    int t = ++g_tmp;
+    buf_puts(b, "({ ");
+    emit_ctype(c, vt, b);
+    buf_printf(b, " _t%d = ", t);
+    emit_expr(c, argv[0], b);
+    buf_printf(b, "; _t%d; })", t);
+    return 1;
+  }
+  /* {}.default (empty hash literal with unknown type) always returns nil; a
+     boxed hash answers through its face row below, from the copy's default */
+  if (recv >= 0 && sp_streq(name, "default") && argc == 0 && !ty_is_hash(rt) && rt != TY_POLY) {
+    buf_puts(b, "sp_box_nil()");
+    return 1;
+  }
+  /* default_proc on a hash that never narrowed to a variant: a blockless
+     Hash.new (and the empty literal) has no default block, so nil (#3568) */
+  if (recv >= 0 && sp_streq(name, "default_proc") && argc == 0 && !ty_is_hash(rt) &&
+      hash_new_blockless(c, recv)) {
+    /* the hash itself has no C value here (it never narrowed), so evaluate
+       only a default argument the receiver may carry, for its effect */
+    int dn = hash_new_default_arg(c, recv);
+    buf_puts(b, "(");
+    if (dn >= 0) { buf_puts(b, "(void)("); emit_expr(c, dn, b); buf_puts(b, "), "); }
+    buf_puts(b, "(sp_Proc *)NULL)");
+    return 1;
+  }
+  if (emit_or_take_back(c, id, b, emit_hash_call)) return 1;
+  return 0;
 }

@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident plan-check-test repr-check-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident plan-check-test repr-check-test traits-check-test bop-arity-check-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
@@ -269,20 +269,23 @@ build/rbs/%.o: $(RBS_DIR)/src/%.c
 # `spinel` is the single binary: it emits C and then drives cc to link it.
 # (SPINEL itself is defined above, just before the `all` target.)
 
-SPINEL_HDRS = src/builtin_ops.h src/call_plan.h src/repr.h src/node_table.h src/codegen.h src/codegen_internal.h src/types.h src/compiler.h src/analyze.h src/analyze_internal.h src/ffi_spec.h src/csplit.h
+SPINEL_HDRS = src/builtin_ops.h src/codegen_call_arms.h src/builtin_names.h src/ty_traits.inc src/call_plan.h src/codegen_poly.h src/repr.h src/node_table.h src/codegen.h src/codegen_internal.h src/types.h src/compiler.h src/analyze.h src/analyze_internal.h src/ffi_spec.h src/csplit.h
 build/csrc/analyze_desugar.o build/csrc-work/analyze_desugar.o build/csrc/codegen_call.o build/csrc-work/codegen_call.o: $(wildcard src/*_method_names.inc)
 SPINEL_OBJ  = build/csrc/node_table.o build/csrc/types.o build/csrc/compiler.o \
                build/csrc/ffi_spec.o \
                build/csrc/analyze.o build/csrc/analyze_util.o build/csrc/analyze_infer.o build/csrc/analyze_infer_recv.o \
-               build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/analyze_desugar.o build/csrc/repr.o build/csrc/codegen.o build/csrc/codegen_util.o \
-               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_ops.o build/csrc/codegen_call_concurrency.o build/csrc/codegen_call_numeric.o build/csrc/codegen_call_hash.o build/csrc/codegen_call_array.o build/csrc/codegen_view.o build/csrc/builtin_ops.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o build/csrc/call_plan.o \
+               build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/analyze_desugar.o build/csrc/repr.o build/csrc/codegen.o build/csrc/codegen_util.o build/csrc/ty_traits_check.o \
+               build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_call_poly.o build/csrc/codegen_call_method.o build/csrc/codegen_call_io.o build/csrc/codegen_call_kernel.o build/csrc/codegen_call_exception.o build/csrc/codegen_call_module.o build/csrc/codegen_call_string.o build/csrc/codegen_call_class.o build/csrc/codegen_call_operator.o build/csrc/codegen_call_object.o build/csrc/codegen_ops.o build/csrc/codegen_call_concurrency.o build/csrc/codegen_call_numeric.o build/csrc/codegen_call_hash.o build/csrc/codegen_call_array.o build/csrc/codegen_view.o build/csrc/builtin_ops.o build/csrc/builtin_names.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o build/csrc/call_plan.o build/csrc/codegen_poly_plan.o \
                build/csrc/codegen_expr.o build/csrc/codegen_stmt.o build/csrc/csplit.o build/csrc/main.o
 
 build/csrc:
 	@mkdir -p build/csrc
 
+# -Werror=return-type: a compiler function that falls off its end returns
+# garbage under -O2, and the CFLAGS this is built with may turn the warning
+# off (-Wno-all); a moved rule once lost its last return this way.
 build/csrc/%.o: src/%.c $(SPINEL_HDRS) | build/csrc
-	$(CC) $(CFLAGS) -Isrc -Ibuild/csrc -c $< -o $@
+	$(CC) $(CFLAGS) -Werror=return-type -Isrc -Ibuild/csrc -c $< -o $@
 
 # Build revision, embedded in `spinel --version` (and spin's probe records).
 # cmp-guarded so only a HEAD move recompiles main.o, not every build.
@@ -3109,7 +3112,9 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 # missed pointed INTO that unit's stack frame, so the next unit's emission read
 # a dead frame: a SIGSEGV whose site moved with the optimization level, and,
 # short of that, a later method silently emitted with the wrong return
-# convention. Both are checked here (#4141).
+# convention. Both are checked here (#4141). tools/refusals.sh then compares
+# every message test/reject/ and test/collect/ print, in both overflow modes,
+# with test/collect/refusals.expected.
 collect-errors-test: $(SPINEL)
 	@tmp=$$(mktemp -d /tmp/spinel-collect.XXXXXX); ok=1; \
 	src=test/collect/gap_inside_capturing_proc.rb; \
@@ -3135,7 +3140,14 @@ collect-errors-test: $(SPINEL)
 	[ ! -f "$$tmp/g2.c" ] || { echo "collect-errors-test: FAIL (a refused program's C was written)"; ok=0; }; \
 	grep -q 'refusal, nothing written' "$$tmp/g2.err" || { echo "collect-errors-test: FAIL (the run did not close with the refusal count)"; ok=0; }; \
 	rm -rf "$$tmp"; \
+	tools/refusals.sh || ok=0; \
 	if [ $$ok -eq 1 ]; then echo "collect-errors-test: pass"; else exit 1; fi
+
+# The refusals the corpus prints (tools/refusals.sh --corpus): only the
+# programs that refuse are listed. It compiles the whole corpus twice, so it
+# is its own target rather than part of collect-errors-test.
+refusals-corpus-test: $(SPINEL)
+	@tools/refusals.sh --corpus
 
 alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-alloc.XXXXXX); ok=1; \
@@ -3226,7 +3238,18 @@ gate-test:
 # under the gate's job server (they took 181 s one after another, the
 # longest of the gate's legs; spin-check alone is 72 s).
 gate-props:
-	+@$(MAKE) --no-print-directory alloc-report-test infer-test collect-errors-test spin-check diff-test scale-test
+	+@$(MAKE) --no-print-directory alloc-report-test infer-test collect-errors-test spin-check diff-test scale-test traits-check-test bop-arity-check-test
+
+# The ty_traits table (types.c) against the functions each column names,
+# for every builtin kind, in both integer-overflow modes.
+# Each builtin-op row with a count range of its own against CRuby's accepted
+# counts for its class and name (the arity table, codegen_call.c).
+bop-arity-check-test: $(SPINEL)
+	@$(SPINEL) --check-bop-arity
+
+traits-check-test: $(SPINEL)
+	@$(SPINEL) --check-traits -c test/box_random_argf.rb -o /dev/null && \
+	 $(SPINEL) --check-traits --int-overflow=promote -c test/box_random_argf.rb -o /dev/null
 
 # The front end's scaling, measured as work rather than time: the counting
 # compiler analyzes one generated program at K units and at 4K, and the ratio

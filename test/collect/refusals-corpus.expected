@@ -1,0 +1,25 @@
+== test/array_op_assign_reads_slot_first.rb [promote] rc=1
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: 3 refusals, nothing written
+== test/cvar_gc_root.rb [promote] rc=1
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: 1 refusal, nothing written
+== test/cvar_gvar_array_op_assign_value.rb [promote] rc=1
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: 6 refusals, nothing written
+== test/ivar_array_op_assign.rb [promote] rc=1
+spinel: the operand of an `op=` given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: 1 refusal, nothing written
+== test/poly_dispatch_default_reads_param.rb [promote] rc=1
+spinel: a parameter default given a Array, which no conversion keeps in its sp_IntArray * slot
+spinel: 1 refusal, nothing written
+== test/time_operator_assignment.rb [promote] rc=1
+spinel: the operand of an `op=` given a value of any class, which no conversion keeps in its sp_Time slot
+spinel: 1 refusal, nothing written

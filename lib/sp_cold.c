@@ -1231,6 +1231,7 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
     if (sp_sched_wait_child((int)pid, &st) < 0) st = -1; }
   /* the same wait-status layout sp_system_args leaves in $? */
   sp_last_status = st;
+  sp_last_pid = (int)pid;
   char *r = sp_str_alloc(len);
   if (len) memcpy(r, buf, len);
   r[len] = 0;

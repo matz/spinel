@@ -15,6 +15,10 @@
 # 0 differing and 0 refusal changes at every commit. Renumbered temps
 # (_tN) count as a difference: they mean the emission order changed.
 #
+# CIDENT_FLAGS adds compiler flags to both sides (e.g.
+# CIDENT_FLAGS=--int-overflow=promote); the reference cache is kept per
+# flag set.
+#
 # Exit status: 0 identical, 1 some file differs, 2 infrastructure error.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -42,12 +46,15 @@ emit() {
   list | xargs -P "$JOBS" -I{} sh -c '
     f="$1"; sp="$2"; tree="$3"; out="$4"
     key=$(printf "%s" "$f" | tr "/" "_")
-    if (cd "$tree" && "$sp" -c --no-line-map "$f" -o "$out/$key.c" >/dev/null 2>&1); then :
+    if (cd "$tree" && "$sp" -c --no-line-map $CIDENT_FLAGS "$f" -o "$out/$key.c" >/dev/null 2>&1); then :
     else rm -f "$out/$key.c"; : > "$out/$key.refused"; fi
   ' _ {} "$sp" "$tree" "$out"
 }
 
-REFDIR=$ROOT/build/cident/$SHA
+CIDENT_FLAGS=${CIDENT_FLAGS-}
+export CIDENT_FLAGS
+FLAGKEY=$(printf "%s" "$CIDENT_FLAGS" | tr -c 'A-Za-z0-9=' '_')
+REFDIR=$ROOT/build/cident/$SHA${FLAGKEY:+-$FLAGKEY}
 if [ ! -f "$REFDIR/.done" ]; then
   # The C embeds the compiler's own tree path in a few string literals,
   # together with their lengths. A reference tree at a path of the same

@@ -1,0 +1,8 @@
+sort: ArgumentError
+sort!: ArgumentError
+max: ArgumentError
+min: ArgumentError
+strs: ArgumentError
+ok sort: [1, 2, 3]
+ok poly: [3, 2, 1]
+ok max: 3

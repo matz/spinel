@@ -136,7 +136,9 @@ int operand_may_allocate(Compiler *c, int id);
 /* The same shim over a READER call that hands out the handle
    (`obj.name[0] = "X"`): no name to rename and no ivar node, so the call node
    itself reads as the shadow through the argument-override table. */
-typedef struct { unsigned char box, demand; TyKind ty; } SbReaderSave;
+/* what sb_reader_shim_open lifted: the node's marks and type as they were,
+   and the views (ntok of them from tok) that hold the lifted ones */
+typedef struct { unsigned char box, demand; TyKind ty; int tok, ntok; } SbReaderSave;
 int sb_reader_shim_open(Compiler *c, int recv, char *sref, size_t cap, SbReaderSave *sv);
 void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv);
 int sb_shadowed_reader(int node);
@@ -182,7 +184,6 @@ void argov_reserve(void);
    so emit_object_call leaves the value temp out (see setter_value_open). */
 extern int  g_setter_stmt_id;
 extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
-extern int  g_pd_skip;
 extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 int subtree_may_allocate(const NodeTable *nt, int id);
 int subtree_has_side_effect(Compiler *c, int id);
@@ -723,6 +724,8 @@ const char *conv_cls_name_of(Compiler *c, TyKind t);
 TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def);
 void emit_str_pattern_expr(Compiler *c, int node, Buf *b);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
+/* the form --repr-check records when emit_boxed_text boxes a kind t (RF_*) */
+int emit_boxed_text_form(Compiler *c, TyKind t);
 int hold_recv_open(Compiler *c, int recv, int boxed, const char *ctype, const char *rootm,
                    Buf *b, Buf *rb);
 void emit_yielder_yield(Compiler *c, int id, const char *cn, Buf *b);
@@ -734,6 +737,14 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b);
 const char *ty_nullable_builtin_id(TyKind t);
 /* 1 iff a value of type t is a C pointer whose NULL is nil. */
 int ty_null_is_nil(TyKind t);
+void ty_traits_dump(Compiler *c);
+int ty_traits_check(Compiler *c);
+/* the per-kind spellings the boxers and the unboxers write (see ty_traits) */
+const char *ty_box_fn(TyKind t);
+const char *ty_box_nil_fn(TyKind t);
+const char *poly_rhs_unbox_fn(TyKind slot);
+const char *poly_sink_unbox_fn(TyKind slot);
+const char *token_unbox_fmt(TyKind target);
 /* A node of such a type may hold NULL: not a literal, not self. */
 int node_may_be_null_nil(Compiler *c, int node);
 /* `fn(recv)` with recv evaluated once, answering nil_c for a NULL recv. */
@@ -923,6 +934,8 @@ void emit_str_cmp_prologue(Compiler *c, const char *rtxt, int operand,
 int prog_has_conv_method(Compiler *c, const char *conv, TyKind want);
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
+int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg, size_t cap);
+void refuse_from_plan(Compiler *c, int id, int from, const char *site);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
 
 /* Compile a regexp literal with the engine and throw the result away, to
@@ -983,6 +996,7 @@ int enum_builtin_node(Compiler *c, int node);
 int typed_array_lit_flag_free(Compiler *c, int node);
 void emit_may_nil_text(Compiler *c, int node, TyKind t, const char *arr, Buf *b);
 const char *raise_tail_value(TyKind t);
+void ty_traits_render(const char *cell, const char *expr, Buf *b);
 const char *raise_tail_value_c(Compiler *c, TyKind t);
 const char *array_times_type_error(TyKind at);
 void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
@@ -1007,11 +1021,7 @@ int emit_native_splat_call(Compiler *c, int id, int cid, const char *name, int r
 int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, int kind,
                                int recv, int argc, const int *argv, Buf *b);
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
-/* Emit the boxing prefix/suffix to convert a typed value to sp_RbVal.
-   Call as: emit_box_open(t, b); emit_expr(c, node, b); emit_box_close(t, b). */
-void emit_box_open(Compiler *c, TyKind t, Buf *b);
 const char *ptr_array_stamp(Compiler *c, TyKind t);   /* "SP_PTR_ELEM_x, cls" for sp_box_ptr_array_k (#4486) */
-void emit_box_close(Compiler *c, TyKind t, Buf *b);
 /* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
 /* "Poly" / "Ptr" / array_kind, for a loop that walks the container. "Ptr" is
@@ -1339,6 +1349,7 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
 /* analyze-side helpers also called from codegen (defined in analyze_util.c /
    analyze_scope.c; canonical declarations live in analyze_internal.h) */
 int is_arith_op(const char *op);
+int is_cmp_op(const char *op);
 int class_def_body(Compiler *c, int def_node);
 int class_body_list(Compiler *c, int **out_ci, int **out_body);
 TyKind an_builtin_answer(Compiler *c, int id);
@@ -1370,6 +1381,9 @@ int class_builtin_parent(Compiler *c, int cid);      /* codegen.c */
 int class_includes_module_named(Compiler *c, int cid, const char *mod_name);
 int class_isa_user(Compiler *c, int k, int cid, const char *cn);  /* codegen_call.c */
 int dispatch_impl_count(Compiler *c, int cid, const char *name);
+/* do a dispatch switch's arms bind the call's arguments differently (each
+   arm then lays them out itself)? the plan's CP_PER_ARM */
+int dispatch_arms_disagree(Compiler *c, int cid, const char *name);
 /* Can running the node `id` assign self's instance variable `iv`, self an
    instance of class `cls` (-1: none known) or of one below it? `depth`
    counts the self calls followed into their methods (0 at the call site);
@@ -1411,11 +1425,40 @@ int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *
 
 /* codegen_view.c: a node's cached type overridden for one nested emission.
    view_push answers a token for the matching view_pop; a recovery point
-   saves view_depth() and view_unwind()s back to it after a refusal. */
+   saves view_mark() and view_unwind()s back to it after a refusal.
+   view_depth() counts the views of nodes open. */
 int view_push(Compiler *c, int id, TyKind t);
 void view_pop(Compiler *c, int tok);
 int view_depth(void);
-void view_unwind(int depth);
+int view_mark(void);
+/* The arm context a poly dispatch's builtin arm re-enters the call under,
+   pushed and popped like a view (view_push_arm / view_pop) and put back by
+   view_unwind: the node whose dispatch declines its own re-entry (the
+   method dispatch's g_pd_skip, the block dispatch's g_prbd_skip), and
+   g_poly_builtin_arm, under which no user class owns a name. */
+typedef struct { int pd_skip, prbd_skip, builtin_arm; } ArmCtx;
+extern ArmCtx g_arm;
+#define g_pd_skip (g_arm.pd_skip)
+#define g_prbd_skip (g_arm.prbd_skip)
+#define g_poly_builtin_arm (g_arm.builtin_arm)
+int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
+/* A node pinned to one face kind for the inference asked under it,
+   pushed and popped like a view (view_pop) and put back by view_unwind
+   (face_of, analyze.h). */
+int view_push_face(int node, TyKind kind);
+/* A node bound to the text emit_expr writes for it instead (g_argov_*):
+   view_bind answers the binding's slot; view_unbind(n) drops every binding
+   from slot n up. */
+int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void view_unbind(int n);
+/* One representation flag of node id seen as v for one nested emission,
+   restored by view_pop (or view_unwind on a refusal) like a type view. */
+enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW };
+int view_push_repr(Compiler *c, int id, int flag, int v);
+/* bumped by every view push, pop and unwind: a per-node memo of a decision
+   that reads the flags or the type keys on it */
+unsigned view_epoch(void);
+void view_unwind(int mark);   /* back to a view_mark(): views, arm contexts and bindings */
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_raise(Compiler *c, const BopCtx *x, Buf *b);
@@ -1550,8 +1593,15 @@ int recv_user_defines(Compiler *c, const char *name);
 int user_defines_or_reads(Compiler *c, const char *name);
 int native_class_defines(Compiler *c, const char *name);
 const char *array_index_bad_class(Compiler *c, int id);
-extern int g_poly_builtin_arm;  /* emitting a poly dispatch's builtin arm */
+/* the poly dispatch helpers other files read; the rest of its helpers
+   are in codegen_poly.h */
+int  poly_block_dispatch_cands(Compiler *c, int id, int *cand, int max);
+int  poly_redispatch_kind(Compiler *c, int id, const char *name, int argc);
+int  face_arg_misfit(Compiler *c, unsigned kind, int arg);
 int poly_name_user_claimed(Compiler *c, const char *name, int argc, int readers);
+/* Does CRuby take argc arguments to cls#name, by the instance arity table
+   (sp_builtin_arity_spec_tbl)? 1 for a name the table has no row for. */
+int builtin_arity_admits(const char *cls, const char *name, int argc);
 void emit_complex_coerce(Compiler *c, int node, Buf *b);
 int emit_complex_real_args(Compiler *c, const int *argv, int argc, int polar, Buf *b);
 void emit_brk_wrapped_call(Compiler *c, int id, Buf *b);
@@ -1619,6 +1669,7 @@ int emit_scalar_op_assign(Compiler *c, const char *lval, TyKind t, const char *o
 int emit_poly_op_assign(Compiler *c, const char *lval, const char *op, int v,
                         int capture, Buf *b);
 void emit_poly_unboxed(Compiler *c, int node, TyKind t, const char *conv, Buf *b);
+const char *op_assign_int_conv(TyKind slot, const char *op);
 void emit_cond(Compiler *c, int id, Buf *b);
 int static_isa_cond(Compiler *c, int pred);
 int static_respond_to_cond(Compiler *c, int pred);

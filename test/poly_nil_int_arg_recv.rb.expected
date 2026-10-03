@@ -1,0 +1,12 @@
+index: TypeError
+~: NoMethodError
+even?: NoMethodError
+odd?: NoMethodError
+chr: NoMethodError
+str.index: TypeError
+Time.new: 1
+Time.utc: 1
+Time.local: 1
+Time.utc year: TypeError
+ok: nil
+exit: TypeError

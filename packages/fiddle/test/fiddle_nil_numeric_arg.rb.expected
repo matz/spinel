@@ -1,0 +1,4 @@
+3
+TypeError: no implicit conversion from nil to integer
+2.5
+TypeError: no implicit conversion to float from nil

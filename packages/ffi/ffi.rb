@@ -160,14 +160,21 @@ module FFI
     def pointer? = @kind == K_PTR
     def void? = @kind == K_VOID
 
+    # nil converts to no number: the ffi gem's NUM2INT / NUM2DBL raise, where
+    # nil.to_i / nil.to_f would pass 0 / 0.0 to C
     def self.int_arg(v)
       if v.is_a?(Integer) then v
+      elsif v.nil? then raise ::TypeError, "no implicit conversion from nil to integer"
       elsif v == true then 1
       elsif v == false then 0
       elsif v.is_a?(Float) then v.to_i
       elsif v.respond_to?(:to_int) then v.to_int
       else raise ::TypeError, "no implicit conversion of #{v.class} into Integer"
       end
+    end
+    def self.float_arg(v)
+      raise ::TypeError, "no implicit conversion to float from nil" if v.nil?
+      v.to_f
     end
 
     # Store `v` as this type's native representation at `addr`. `keep` collects
@@ -177,7 +184,7 @@ module FFI
       if integer?
         Native.put_int(addr, @kind, Type.int_arg(v))
       elsif float?
-        Native.put_float(addr, @kind, v.to_f)
+        Native.put_float(addr, @kind, Type.float_arg(v))
       elsif pointer?
         Native.put_int(addr, K_PTR, FFI.pointer_address(v, keep))
       end

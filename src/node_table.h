@@ -295,6 +295,7 @@ void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val);
 void nt_node_set_int(NodeTable *nt, int id, const char *key, long long val);
 void nt_node_set_ref(NodeTable *nt, int id, const char *key, int child);
 void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int n);
+int  nt_new_int(NodeTable *nt, long long v);                     /* a new IntegerNode */
 
 /* Accessors. id must be in [0, nt->count). Out-of-range ids return the
    given defaults so callers can walk freely without bounds checks. */

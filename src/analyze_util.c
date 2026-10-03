@@ -1173,7 +1173,7 @@ int is_blk_param_call(Compiler *c, int node, int mi) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node) || !sp_streq(nt_type(nt, node), "CallNode")) return 0;
   const char *nm = nt_str(nt, node, "name");
-  if (!nm || (!sp_streq(nm, "call") && !sp_streq(nm, "()") && !sp_streq(nm, "[]"))) return 0;
+  if (!nm || !is_call_alias(nm)) return 0;
   int recv = nt_ref(nt, node, "receiver");
   if (recv < 0 || !nt_type(nt, recv) || !sp_streq(nt_type(nt, recv), "LocalVariableReadNode")) return 0;
   const char *rn = nt_str(nt, recv, "name");
@@ -1977,6 +1977,20 @@ static int method_block_presence(Compiler *c, int mi) {
   return with ? 1 : 0;
 }
 
+TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
+                         int call_id) {
+  int nd = 0;
+  const int *ds = comp_descendants(c, cid, &nd);
+  for (int i = 0; i < nd; i++) {
+    int kmi = cmeth ? comp_cmethod_in_chain(c, ds[i], name, NULL)
+                    : comp_method_in_chain(c, ds[i], name, NULL);
+    if (kmi < 0 || kmi == base_mi) continue;
+    r = ty_unify(r, call_id >= 0 && c->scopes[kmi].yields ? method_call_ret(c, kmi, call_id)
+                                                          : (TyKind)c->scopes[kmi].ret);
+  }
+  return r;
+}
+
 TyKind method_call_ret(Compiler *c, int mi, int call_id) {
   int last = scope_body_last(c, mi);
   /* `if block_given? ... yield ... else ... end`: the call with a block
@@ -2175,9 +2189,7 @@ int is_handler_proc_block(Compiler *c, int id) {
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "ENV") &&
-      (sp_streq(name, "delete_if") || sp_streq(name, "reject!") ||
-       sp_streq(name, "keep_if") || sp_streq(name, "select!") ||
-       sp_streq(name, "filter!")))
+      is_select_bang(name))
     return 1;
   return 0;
 }
@@ -2327,6 +2339,18 @@ int comp_self_call_mi(Compiler *c, int id, const char *name) {
   }
   if (mi < 0) mi = comp_method_index(c, name);
   return mi;
+}
+
+int send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name) {
+  if (ty_is_object(srt))
+    return comp_method_in_chain(c, ty_object_class(srt), name, NULL) >= 0 ||
+           comp_reader_in_chain(c, ty_object_class(srt), name, NULL);
+  /* a class named by a constant (or `self.class`): its own class methods
+     come before Object's private top-level def */
+  NodeKind rk = nt_kind(c->nt, recv);
+  int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
+           ? comp_class_index(c, nt_str(c->nt, recv, "name")) : self_class_static_ci(c, recv);
+  return ci >= 0 && comp_cmethod_in_chain(c, ci, name, NULL) >= 0;
 }
 
 /* A receiverless call directly in a class body is sent to the class. */

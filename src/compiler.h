@@ -11,6 +11,7 @@
 
 #include "node_table.h"
 #include "types.h"
+#include "builtin_names.h"
 
 /* require-gate (defined in spinel_parse.c). sp_feature_enabled(name) is 1 when
    feature `name` may be provided: always when the gate is off (g_require_gate
@@ -866,6 +867,8 @@ typedef struct {
 
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
+/* Is `name` one of the n strings in `list`? (0 for a NULL name) */
+int name_list_has(char **list, int n, const char *name);
 
 /* Resize per-node arrays (ntype/nscope) after the node table grew. */
 void comp_grow_node_arrays(Compiler *c);
@@ -913,6 +916,18 @@ int    comp_method_index(Compiler *c, const char *name); /* -1 if none */
    as the fallback. See analyze_util.c. */
 int    comp_self_call_mi(Compiler *c, int call_node, const char *name);
 int    comp_cbody_call_mi(Compiler *c, int call_node, const char *name);
+/* Does the receiver of a retargeted `recv.send(:name)` (send_blind) answer
+   name itself -- an instance's method or reader, a class constant's class
+   method -- rather than through a top-level def? srt is recv's type. */
+int    send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name);
+/* What a dispatch of `name` over cid's subtree answers: r (the base method
+   base_mi's answer) unified with the return of every other implementation a
+   class in the subtree runs -- its chain's, so a module a subclass includes
+   counts -- class methods when cmeth. A yielding one answers call_id's
+   block (method_call_ret) when call_id >= 0. Inference's object and
+   implicit-self calls and codegen's dispatch switch share it. */
+TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
+                         int call_id);
 /* 1 iff `node` is a constant path naming an `ffi_const` declaration, with its
    value in *out. Such a name is a VALUE, not a class, wherever the two are
    told apart. */
@@ -1200,6 +1215,10 @@ static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
   return old;
 }
 
+/* repr.c: the representation decisions the inline readers below defer to */
+TyKind repr_stored_type(const Compiler *c, int id, TyKind t);
+int repr_value_obj(const Compiler *c, TyKind t);
+
 /* Node type cache. */
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
@@ -1213,21 +1232,15 @@ static inline TyKind comp_ntype(const Compiler *c, int id) {
      Exception: a read marked strbuf_box yields the live HANDLE, so the
      mutation is observable through the container it is stored in (#3227). */
   TyKind t = c->ntype[id];
-  if (t == TY_STRBUF) return c->strbuf_box[id] ? TY_STRBUF : TY_STRING;
-  /* A node under a handle demand STORES as the handle -- a temp spilled from
-     it has to be an sp_String *, not a const char * -- while still dispatching
-     as a String, which comp_recv_type answers for. That split is the whole
-     point of the second array (#4363). */
-  if (c->strbuf_handle_demand[id]) return TY_STRBUF;
+  /* the String-handle refinement is repr.c's (repr_stored_type) */
+  if (t == TY_STRBUF || c->strbuf_handle_demand[id]) return repr_stored_type(c, id, t);
   return t;
 }
 
 /* 1 iff t is a user-object type whose class is represented by value (sp_X,
    not a heap pointer). See detect_value_types / reference_legacy_value_type_logic. */
 static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
-  if (!ty_is_object(t)) return 0;
-  int cid = ty_object_class(t);
-  return cid >= 0 && cid < c->nclasses && c->classes[cid].is_value_type;
+  return repr_value_obj(c, t);   /* repr.c */
 }
 
 /* The sp_poly_enum_proc op for a block-carrying Enumerable name, or NULL.

@@ -152,7 +152,7 @@ CLASS_TARGETS = {
   "Math"    => %w[sqrt cbrt sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh
                   atanh log log2 log10 exp hypot ldexp frexp erf erfc gamma lgamma],
   "Process" => %w[getpriority setpriority getsid kill clock_gettime clock_getres pid ppid
-                  uid gid euid egid setproctitle times spawn waitpid2],
+                  uid gid euid egid setproctitle times spawn waitpid2 wait2 wait waitpid],
   "Regexp"  => %w[new escape quote union],
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],

@@ -18,8 +18,10 @@ SP=$ROOT/bin/spinel
 JOBS=${PLAN_CHECK_JOBS:-$(nproc)}
 OUT=$(mktemp "${TMPDIR:-/tmp}/spinel-plan-check.XXXXXX")
 PARTS=$(mktemp -d "${TMPDIR:-/tmp}/spinel-plan-check-parts.XXXXXX")
-# one file per program: the parallel jobs' lines must not interleave
-{ ls test/*.rb benchmark/*.rb packages/*/test/*.rb 2>/dev/null
+# one file per program: the parallel jobs' lines must not interleave. The
+# refused programs (test/reject, test/collect) are compiled too, for the
+# refusal shadow (refuse-*)
+{ ls test/*.rb benchmark/*.rb packages/*/test/*.rb test/reject/*.rb test/collect/*.rb 2>/dev/null
   [ -f build/optcarrot-single.rb ] && echo build/optcarrot-single.rb; } |
   xargs -P "$JOBS" -I{} sh -c '
     "$2" -c --no-line-map --plan-check "$1" -o /dev/null 2>&1 | grep "^plan-check:" | sed "s|^|$1: |" \
@@ -38,6 +40,10 @@ uo=$(grep -c ': plan-check: ucall-unobserved:' "$OUT")
 ue=$(grep -c ': plan-check: ucall-unemitted:' "$OUT")
 uf=$(grep -c ': plan-check: ucall-refused:' "$OUT")
 ud=$(grep -c ': plan-check: ucall-dynamic:' "$OUT")
+# codegen sites that read the plan: a plan naming another method than the
+# site's own lookup is a conflict; a plan that cannot serve the site falls back
+pc=$(grep -c ': plan-check: cplan-conflict:' "$OUT")
+pf=$(grep -c ': plan-check: cplan-fallback:' "$OUT")
 # the resolver's per-program counts, summed
 rsum=$(grep ': plan-check: ucall-resolver: ' "$OUT" | sed 's/.*ucall-resolver: //' |
   awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) s[i] += $i }
@@ -46,8 +52,33 @@ rsum=$(grep ': plan-check: ucall-resolver: ' "$OUT" | sed 's/.*ucall-resolver: /
 [ "${1-}" = "-v" ] && cat "$OUT"
 grep ': plan-check: conflict:' "$OUT" | head -20
 grep ': plan-check: ucall-conflict:' "$OUT" | head -20
-rm -f "$OUT"
+grep ': plan-check: cplan-conflict:' "$OUT" | head -20
 echo "plan-check: $nc conflicts, $nu unrecorded, $nr respecialized"
 echo "plan-check: resolver: $rsum"
+echo "plan-check: plan readers: $pc conflicts, $pf fallbacks"
+# per site: the calls each took from the plan, and the ones it fell back on
+for site in $(grep ': plan-check: cplan-served: ' "$OUT" | awk '{print $4}' | sort -u); do
+  sv=$(grep ": plan-check: cplan-served: $site " "$OUT" | awk '{ s += $5 } END { print s + 0 }')
+  fb=$(grep -c ": plan-check: cplan-fallback: $site " "$OUT")
+  echo "plan-check:   $site: $sv served, $fb fallbacks"
+done
 echo "plan-check: user methods: $uc ucall-conflicts, $ur ucall-respecialized, $uv ucall-virtual, $uu ucall-unrecorded, $uo ucall-unobserved, $ue ucall-unemitted, $uf ucall-refused, $ud ucall-dynamic"
-[ "$nc" -eq 0 ] && [ "$uc" -eq 0 ]
+# poly dispatch arms: the switch codegen wrote against the resolver's arms
+psum=$(grep ': plan-check: poly-arms: ' "$OUT" | sed 's/.*poly-arms: //' |
+  awk '{ s += $1; a += $3; x += $5; m += $7; e += $9; k += $11; d += $14 }
+       END { printf "%d switches, %d arms, %d poly-conflicts, %d poly-missing, %d poly-extra; trials %d kept, %d dropped",
+             s, a, x, m, e, k, d }')
+grep ': plan-check: poly-conflict:' "$OUT" | head -20
+echo "plan-check: poly arms: $psum"
+ppc=$(grep -c ': plan-check: poly-conflict:' "$OUT")
+# refusals: the ones codegen reports against the plan's (CP_REFUSE); the
+# ones only codegen decides are counted by what is left (codegen_util.c)
+rfsum=$(grep ': plan-check: refuse: ' "$OUT" | sed 's/.*refuse: //' | tr -d '(),' |
+  awk '{ ok += $1; w += $3; cg += $5; a += $7; s += $9; n += $11; sc += $13; f += $15; u += $17 }
+       END { printf "%d refuse-ok, %d refuse-wrong, %d refuse-codegen (%d call, %d shape, %d nomethod, %d string-copy, %d feature), %d refuse-unreached",
+             ok, w, cg, a, s, n, sc, f, u }')
+grep ': plan-check: refuse-wrong:' "$OUT" | head -20
+echo "plan-check: refusals: $rfsum"
+rfw=$(grep -c ': plan-check: refuse-wrong:' "$OUT")
+rm -f "$OUT"
+[ "$nc" -eq 0 ] && [ "$uc" -eq 0 ] && [ "$pc" -eq 0 ] && [ "$ppc" -eq 0 ] && [ "$rfw" -eq 0 ]

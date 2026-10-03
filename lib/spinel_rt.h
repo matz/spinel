@@ -477,6 +477,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);
 int sp_process_open_redirect(const char *path, int slot, int *owned);
 SP_NORETURN void sp_process_spawn_fail(int *owned, const char *cls, const char *msg);
 sp_PolyArray *sp_process_waitpid2(sp_int pid);
+sp_int sp_process_waitpid(sp_int pid);   /* Process.wait / waitpid: the pid reaped */
 
 
 /* `recycle`: optional sweep hook. If non-NULL, sp_gc_collect calls
@@ -3370,6 +3371,45 @@ static sp_bool sp_frange_cover_poly(sp_FloatRange r, sp_RbVal v) {
    nullable int/float already tests for (#3458). */
 static sp_int sp_poly_to_i_or_nil(sp_RbVal v) { return v.tag == SP_TAG_NIL ? SP_INT_NIL : sp_poly_to_i(v); }
 static sp_float sp_poly_to_f_or_nil(sp_RbVal v) { return v.tag == SP_TAG_NIL ? sp_float_nil() : sp_poly_to_f(v); }
+/* An FFI argument or callback return that C takes as an integer or a
+   double: nil is no number there, and the ffi gem's NUM2INT / NUM2DBL raise
+   TypeError for it. A boxed nil, an Integer slot's SP_INT_NIL and a Float
+   slot's nil NaN all are that nil; anything else passes as before. */
+static SP_NOINLINE SP_COLD void sp_ffi_nil_int_raise(void) { sp_raise_cls("TypeError", "no implicit conversion from nil to integer"); }
+static SP_NOINLINE SP_COLD void sp_ffi_nil_dbl_raise(void) { sp_raise_cls("TypeError", "no implicit conversion to float from nil"); }
+/* A boxed value read as an Integer ARGUMENT (an index, a count, a length, a
+   status) or an Integer RECEIVER (`~x`, `x.even?`): nil is neither, and CRuby
+   raises -- the conversion TypeError for the argument, NoMethodError for the
+   receiver. Anything else converts as sp_poly_to_i does. */
+static SP_UNUSED sp_int sp_poly_arg_i(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_nil_to_int(0); return sp_poly_to_i(v); }
+static SP_UNUSED sp_int sp_poly_arg_i_msg(sp_RbVal v, const char *msg) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_cls("TypeError", msg); return sp_poly_to_i(v); }
+/* The right operand of an Integer or Float op-assign read out of a box:
+   `x += nil` is the coercion TypeError ("nil can't be coerced into
+   Integer"), and a shift count the conversion one, as CRuby raises. */
+static SP_UNUSED sp_int sp_poly_opnd_i(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_nil_int_op(0, SP_INT_NIL, ""); return sp_poly_to_i(v); }
+static SP_UNUSED sp_float sp_poly_opnd_f(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_nil_float_op(0, ""); return sp_poly_to_f(v); }
+static SP_UNUSED sp_int sp_poly_arg_i_of(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_nil_to_int(1); return sp_poly_to_i(v); }
+/* A sort / min / max block's boxed answer: a nil one says the two elements
+   do not compare, which CRuby reports as "comparison of A with b failed". */
+static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
+  if (SP_UNLIKELY(r.tag == SP_TAG_NIL))
+    sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a), sp_cmperr_desc(b)));
+  return sp_poly_to_i(r);
+}
+static SP_UNUSED sp_int sp_poly_recv_i(const char *m, sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_raise_nomethod(sp_nomethod_msg(m, v)); return sp_poly_to_i(v); }
+/* Time.new / Time.utc / Time.local field `i` read out of a box: a nil month
+   or day is 1 and a nil hour, minute or second 0, as CRuby defaults them; a
+   nil year is the conversion TypeError. */
+static SP_UNUSED sp_int sp_poly_time_field(sp_RbVal v, int i) {
+  if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) { if (i == 0) sp_raise_nil_to_int(1); return (i == 1 || i == 2) ? 1 : 0; }
+  return sp_poly_to_i(v);
+}
+static SP_UNUSED sp_int sp_ffi_int_of(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_ffi_nil_int_raise(); return v.v.i; }
+static SP_UNUSED sp_int sp_ffi_int_of_i(sp_int v) { if (SP_UNLIKELY(v == SP_INT_NIL)) sp_ffi_nil_int_raise(); return v; }
+static SP_UNUSED sp_float sp_ffi_dbl_of(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_ffi_nil_dbl_raise(); return v.v.f; }
+static SP_UNUSED sp_float sp_ffi_dbl_of_f(sp_float v) { if (SP_UNLIKELY(sp_float_is_nil(v))) sp_ffi_nil_dbl_raise(); return v; }
+static SP_UNUSED sp_int sp_ffi_dbl_of_i(sp_int v) { if (SP_UNLIKELY(v == SP_INT_NIL)) sp_ffi_nil_dbl_raise(); return v; }
+static SP_UNUSED sp_float sp_ffi_int_of_f(sp_float v) { if (SP_UNLIKELY(sp_float_is_nil(v))) sp_ffi_nil_int_raise(); return v; }
 /* an Integer slot's nil, the sentinel, into a Float slot: the float sentinel,
    not the sentinel's numeric value */
 static inline sp_float sp_int_to_f_or_nil(sp_int i) { return i == SP_INT_NIL ? sp_float_nil() : (sp_float)i; }
@@ -4291,6 +4331,16 @@ static SP_NOINLINE sp_bool sp_poly_eq_slow(sp_RbVal a, sp_RbVal b) {
      other operators now do; the field-wise hook below stays the default for
      a class that does not define one (#3501) */
   { sp_RbVal _u; if (sp_poly_user_cmp("==", a, b, &_u)) return sp_poly_truthy(_u); }
+  /* Ruby 3.2's Process::Status#== compares the status word (to_i) with the
+     other side, and Integer#== hands a non-number back to it, so `$? == 0`
+     and `0 == $?` both read the word; two statuses compare their words */
+  { int _pa = a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_PROCESS_STATUS && a.v.p;
+    int _pb = b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_PROCESS_STATUS && b.v.p;
+    if (_pa || _pb) {
+      sp_RbVal _x = _pa ? sp_box_int(((sp_ProcessStatus *)a.v.p)->status) : a;
+      sp_RbVal _y = _pb ? sp_box_int(((sp_ProcessStatus *)b.v.p)->status) : b;
+      return sp_poly_eq(_x, _y);
+    } }
   { sp_RbVal _u; if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) && sp_poly_is_user_obj(b) && sp_obj_to_ary_fn &&
                      sp_obj_to_ary_fn((sp_RbVal){ .tag = SP_TAG_OBJ, .cls_id = b.cls_id }).tag == SP_TAG_BOOL &&
                      sp_poly_user_cmp("==", b, a, &_u)) return sp_poly_truthy(_u); }

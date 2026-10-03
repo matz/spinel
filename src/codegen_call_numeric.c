@@ -6,6 +6,7 @@
 
 #include "codegen_internal.h"
 #include "builtin_ops.h"
+#include "codegen_call_arms.h"
 
 /* Rational#round / #floor / #ceil / #truncate with a digit count, a
    `half:` keyword, or both. The arm reads the shape of the arguments (a
@@ -25,8 +26,7 @@ int emit_op_rational_round(Compiler *c, const BopCtx *x, Buf *b) {
      the mode reaches the runtime as the value it was written as. */
   if ((argc == 1 || argc == 2) && nt_type(nt, argv[argc - 1]) &&
       sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode") &&
-      (sp_streq(name, "round") || sp_streq(name, "floor") ||
-       sp_streq(name, "ceil") || sp_streq(name, "truncate"))) {
+      is_round_family(name)) {
     RoundKw kw; round_kw_read(c, argv[argc - 1], &kw);
     /* the class the call answers, chosen exactly as infer_type's Rational
        rule chooses it once the keyword hash is peeled off */
@@ -72,8 +72,7 @@ int emit_op_rational_round(Compiler *c, const BopCtx *x, Buf *b) {
   }
   /* round/truncate/floor/ceil with a literal precision: nd > 0 keeps a
      Rational, nd <= 0 realizes the Integer value (.num of the den-1 result). */
-  if ((sp_streq(name, "round") || sp_streq(name, "truncate") ||
-       sp_streq(name, "floor") || sp_streq(name, "ceil")) && argc == 1 &&
+  if (is_round_family(name) && argc == 1 &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "IntegerNode")) {
     long long nd = nt_int(nt, argv[0], "value", 0);
     const char *fn = name[0] == 'r' ? "round"
@@ -87,8 +86,7 @@ int emit_op_rational_round(Compiler *c, const BopCtx *x, Buf *b) {
   /* Non-literal precision: the result class depends on the runtime value
      (Rational for nd > 0, Integer otherwise), so box to poly and choose at
      runtime. Both operands are value types -- nothing to GC-root. */
-  if ((sp_streq(name, "round") || sp_streq(name, "truncate") ||
-       sp_streq(name, "floor") || sp_streq(name, "ceil")) && argc == 1) {
+  if (is_round_family(name) && argc == 1) {
     const char *fn = name[0] == 'r' ? "round" : name[0] == 't' ? "truncate"
                    : name[0] == 'f' ? "floor" : "ceil";
     int tr = ++g_tmp, tn = ++g_tmp;
@@ -102,6 +100,340 @@ int emit_op_rational_round(Compiler *c, const BopCtx *x, Buf *b) {
                   " : sp_box_int(sp_rational_%s_prec(_t%d, _t%d).num); })",
                tn, fn, tr, tn, fn, tr, tn);
     return 1;
+  }
+  return 0;
+}
+
+/* a Bignum receiver's methods */
+int emit_call_bigint_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+  /* bigint methods */
+  if (recv >= 0 && rt == TY_BIGINT) {
+    Buf rs = expr_buf(c, recv);
+    const char *r = rs.p ? rs.p : "";
+    if ((sp_streq(name, "to_s") || sp_streq(name, "inspect")) && argc == 0) {
+      /* NULL is this slot's nil: #to_s answers "" and #inspect "nil", the
+         way they do for every other nullable pointer type (#4800). */
+      int tsv = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = %s; _t%d ? sp_bigint_to_s(_t%d) : %s; })",
+                 tsv, r, tsv, tsv,
+                 sp_streq(name, "inspect") ? "(&(\"\\xff\" \"nil\")[1])" : "sp_str_empty");
+      free(rs.p); return 1;
+    }
+    /* to_i / to_int on a Bignum is self -- returning the full value, not the
+       64-bit-truncated sp_bigint_to_int (#2319) */
+    if ((sp_streq(name, "to_i") || sp_streq(name, "to_int")) && argc == 0) {
+      buf_printf(b, "(%s)", r); free(rs.p); return 1;
+    }
+    if ((sp_streq(name, "magnitude") || sp_streq(name, "abs")) && argc == 0) {
+      buf_printf(b, "sp_bigint_abs_v(%s)", r); free(rs.p); return 1;   /* (#2418) */
+    }
+    if (sp_streq(name, "abs2") && argc == 0) {
+      buf_printf(b, "sp_bigint_mul(%s, %s)", r, r); free(rs.p); return 1;   /* (#2424) */
+    }
+    /* Bignum#downto(hi)/#upto(hi) with no block: materialize the Bignum sequence
+       as a poly array (a Bignum range has no lazy Enumerator type) (#2305). */
+    if ((sp_streq(name, "downto") || sp_streq(name, "upto")) && argc == 1 &&
+        nt_ref(nt, id, "block") < 0) {
+      int up = sp_streq(name, "upto");
+      buf_printf(b, "sp_bigint_range_array(%s, ", r);
+      TyKind at = comp_ntype(c, argv[0]);
+      if (at == TY_BIGINT) emit_expr(c, argv[0], b);
+      else { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_printf(b, ", %d)", up);
+      free(rs.p); return 1;
+    }
+    /* Integer query / reflection on a Bignum receiver (#2318) */
+    if (sp_streq(name, "zero?") && argc == 0) {
+      buf_printf(b, "(sp_bigint_sign(%s) == 0)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "positive?") && argc == 0) {
+      buf_printf(b, "(sp_bigint_sign(%s) > 0)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "negative?") && argc == 0) {
+      buf_printf(b, "(sp_bigint_sign(%s) < 0)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "integer?") && argc == 0) {
+      buf_printf(b, "((void)(%s), TRUE)", r); free(rs.p); return 1;
+    }
+    if ((sp_streq(name, "succ") || sp_streq(name, "next")) && argc == 0) {
+      buf_printf(b, "sp_bigint_add(%s, sp_bigint_new_int(1))", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "pred") && argc == 0) {
+      buf_printf(b, "sp_bigint_sub(%s, sp_bigint_new_int(1))", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "class") && argc == 0) {
+      /* NULL is the slot's nil */
+      if (node_may_be_null_nil(c, recv))
+        buf_printf(b, "((sp_Class){(%s) ? -100 : %d})", r, builtin_class_id("NilClass"));
+      else buf_printf(b, "((void)(%s), ((sp_Class){-100}))", r);  /* Integer */
+      free(rs.p); return 1;
+    }
+    /* coerce(n): [n, self], both boxed (#3129) */
+    if (sp_streq(name, "coerce") && argc == 1) {
+      int tca = ++g_tmp;
+      buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                    " sp_PolyArray_push(_t%d, ", tca, tca, tca);
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, "); sp_PolyArray_push(_t%d, sp_box_bigint(%s)); _t%d; })", tca, r, tca);
+      free(rs.p); return 1;
+    }
+    /* clamp(lo, hi): compare in bigint; an sp_int bound promotes (#3129) */
+    if (sp_streq(name, "clamp") && argc == 2) {
+      int tcl = ++g_tmp, tch = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = ", tcl); emit_bigint_operand(c, argv[0], b);
+      buf_printf(b, "; sp_Bigint *_t%d = ", tch); emit_bigint_operand(c, argv[1], b);
+      buf_printf(b, "; sp_bigint_cmp(%s, _t%d) < 0 ? _t%d"
+                    " : sp_bigint_cmp(%s, _t%d) > 0 ? _t%d : (%s); })",
+                 r, tcl, tcl, r, tch, tch, r);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "bit_length") && argc == 0) {
+      buf_printf(b, "sp_bigint_bit_length(%s)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "even?") && argc == 0) {
+      buf_printf(b, "sp_bigint_even_p(%s)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "odd?") && argc == 0) {
+      buf_printf(b, "(!sp_bigint_even_p(%s))", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "abs") && argc == 0) {
+      buf_printf(b, "sp_bigint_abs_v(%s)", r); free(rs.p); return 1;
+    }
+    /* round/ceil/floor: no precision -> self; a precision arg rounds to
+       10^(-ndigits) (a positive precision is a no-op on an integer) (#2303) */
+    if ((sp_streq(name, "round") || sp_streq(name, "ceil") || sp_streq(name, "floor")) && argc == 0) {
+      buf_printf(b, "(%s)", r); free(rs.p); return 1;
+    }
+    if ((sp_streq(name, "round") || sp_streq(name, "ceil") || sp_streq(name, "floor")) && argc == 1) {
+      int mode = sp_streq(name, "floor") ? 1 : sp_streq(name, "ceil") ? 2 : 0;
+      /* a precision past a C int is a RangeError, as on a Fixnum (#6702) */
+      buf_printf(b, "sp_bigint_round_prec(%s, ({ sp_int _rnd = ", r); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; sp_int_round_check_ndigits(_rnd); _rnd; }), %d)", mode); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "to_s") && argc == 1) {
+      buf_printf(b, "sp_str_dup_external(sp_bigint_to_s_base(%s, ", r);
+      emit_int_expr(c, argv[0], b); buf_puts(b, "))"); free(rs.p); return 1;
+    }
+    /* digits: kept only for the poly "face table" re-entry, not reached by
+       any static concrete call site any more -- see the matching comment
+       in codegen_call_recv.c and desugar_builtin_scalar_calls. */
+    if (sp_streq(name, "digits") && argc <= 1) {
+      /* least-significant first via repeated divmod -- any radix >= 2
+         (the to_s(base) text path stops at 36) */
+      int td = ++g_tmp, tb2 = ++g_tmp, tn2 = ++g_tmp, ti2 = ++g_tmp;
+      buf_printf(b, "({ sp_int _t%d = ", tb2);
+      if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "10");
+      buf_printf(b, "; if (_t%d < 2) sp_raise_cls(\"ArgumentError\", \"invalid radix\");", tb2);
+      buf_printf(b, " sp_int *_t%d = NULL; sp_int _t%d = sp_bigint_digits_buf(%s, _t%d, &_t%d);", ti2, tn2, r, tb2, ti2);
+      buf_printf(b, " if (_t%d < 0) sp_raise_cls(\"Math::DomainError\", \"out of domain\");", tn2);
+      buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", td, td);
+      buf_printf(b, " for (sp_int _i = 0; _i < _t%d; _i++) sp_IntArray_push(_t%d, _t%d[_i]);", tn2, td, ti2);
+      buf_printf(b, " free(_t%d); _t%d; })", ti2, td);
+      return 1;
+    }
+    if (sp_streq(name, "to_f") && argc == 0) {
+      buf_printf(b, "sp_bigint_to_double(%s)", r); free(rs.p); return 1;
+    }
+    /* Bignum-receiver methods that return an Integer/Float/bool without a
+       Rational (those need a bigint-backed Rational and stay unsupported)
+       (#2469). */
+    if (sp_streq(name, "~") && argc == 0) { buf_printf(b, "sp_bigint_not(%s)", r); free(rs.p); return 1; }
+    /* numerator/ord of an Integer is the value itself; denominator is 1 */
+    if ((sp_streq(name, "numerator") || sp_streq(name, "ord")) && argc == 0) {
+      buf_printf(b, "(%s)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "denominator") && argc == 0) {
+      buf_printf(b, "((void)(%s), (sp_int)1)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "size") && argc == 0) {
+      /* Integer#size is ceil(bit_length / 8); sp_bigint_byte_len rounds up to
+         whole limbs, which overcounts (2**100 -> 16 not 13). */
+      buf_printf(b, "((sp_bigint_bit_length(%s) + 7) / 8)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "nonzero?") && argc == 0) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = %s; sp_bigint_sign(_t%d) != 0 ? sp_box_bigint(_t%d) : sp_box_nil(); })", t, r, t, t);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "fdiv") && argc == 1) {
+      TyKind at = comp_ntype(c, argv[0]);
+      buf_printf(b, "(sp_bigint_to_double(%s) / ", r);
+      if (at == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (at == TY_FLOAT) { buf_puts(b, "("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_puts(b, "(double)("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_puts(b, ")"); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "pow") && argc == 1) {
+      buf_printf(b, "sp_bigint_pow(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    /* A Float operand: CRuby divides in floats, converting the Bignum to its
+       nearest double. modulo and remainder answer a Float; div answers the
+       quotient truncated toward zero, as CRuby's rb_dbl2big takes it (so
+       (-2**64).div(2.0**65) is 0, not -1), and divmod CRuby's flodivmod pair;
+       each quotient an Integer of whatever width (sp_box_f_to_int, which
+       raises FloatDomainError for a NaN or an infinite one). The Bignum arms below
+       took the Float through sp_bigint_new_int, which truncated it:
+       (2**64).div(1.5) divided by 1. */
+    if (argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT &&
+        (sp_streq(name, "modulo") || sp_streq(name, "%") || sp_streq(name, "remainder") ||
+         sp_streq(name, "div") || sp_streq(name, "divmod"))) {
+      if (sp_streq(name, "div")) {
+        int tx = ++g_tmp, ty = ++g_tmp;
+        buf_printf(b, "({ sp_float _t%d = sp_bigint_to_double(%s); sp_float _t%d = ", tx, r, ty);
+        emit_expr(c, argv[0], b);
+        buf_printf(b, "; if (_t%d == 0.0) sp_raise_cls(\"ZeroDivisionError\", \"divided by 0\");"
+                      " sp_box_f_to_int(_t%d / _t%d); })", ty, tx, ty);
+      }
+      else if (sp_streq(name, "divmod")) {
+        int tx = ++g_tmp, ty = ++g_tmp, td = ++g_tmp, tm = ++g_tmp, tq = ++g_tmp, tp = ++g_tmp;
+        buf_printf(b, "({ sp_float _t%d = sp_bigint_to_double(%s); sp_float _t%d = ", tx, r, ty);
+        emit_expr(c, argv[0], b);
+        buf_printf(b, "; sp_float _t%d, _t%d;"
+                      " if (isnan(_t%d)) _t%d = _t%d = _t%d;"
+                      " else { if (_t%d == 0.0) sp_raise_cls(\"ZeroDivisionError\", \"divided by 0\");"
+                      " _t%d = (_t%d == 0.0 || (isinf(_t%d) && !isinf(_t%d))) ? _t%d : fmod(_t%d, _t%d);"
+                      " _t%d = (isinf(_t%d) && !isinf(_t%d)) ? _t%d : round((_t%d - _t%d) / _t%d);"
+                      " if (_t%d * _t%d < 0) { _t%d += _t%d; _t%d -= 1.0; } }"
+                      " sp_RbVal _t%d = sp_box_f_to_int(_t%d); SP_GC_ROOT_RBVAL(_t%d);"
+                      " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                      " sp_PolyArray_push(_t%d, _t%d); sp_PolyArray_push(_t%d, sp_box_float(_t%d)); _t%d; })",
+                   td, tm,
+                   ty, td, tm, ty,
+                   ty,
+                   tm, tx, ty, tx, tx, tx, ty,
+                   td, tx, ty, tx, tx, tm, ty,
+                   ty, tm, tm, ty, td,
+                   tq, td, tq,
+                   tp, tp,
+                   tp, tq, tp, tm, tp);
+      }
+      else {
+        buf_printf(b, "%s(sp_bigint_to_double(%s), ", name[0] == 'r' ? "sp_fremainder" : "sp_fmod", r);
+        emit_expr(c, argv[0], b);
+        buf_puts(b, ")");
+      }
+      free(rs.p); return 1;
+    }
+    /* Bignum modulo/%/remainder/divmod/#[]/modular-pow (#2594) */
+    if ((sp_streq(name, "modulo") || sp_streq(name, "%")) && argc == 1) {
+      buf_printf(b, "sp_bigint_mod(%s, ", r); emit_bigint_operand(c, argv[0], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "remainder") && argc == 1) {
+      buf_printf(b, "sp_bigint_remainder(%s, ", r); emit_bigint_operand(c, argv[0], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "divmod") && argc == 1) {
+      int td = ++g_tmp, tb2 = ++g_tmp, to2 = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = %s; sp_Bigint *_t%d = ", td, r, tb2);
+      emit_bigint_operand(c, argv[0], b);
+      buf_printf(b, "; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                    " sp_PolyArray_push(_t%d, sp_box_bigint(sp_bigint_div(_t%d, _t%d)));"
+                    " sp_PolyArray_push(_t%d, sp_box_bigint(sp_bigint_mod(_t%d, _t%d))); _t%d; })",
+                 to2, to2, to2, td, tb2, to2, td, tb2, to2);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "[]") && argc == 1 && comp_ntype(c, argv[0]) == TY_RANGE) {
+      /* Bignum bit-slice n[lo..hi]: shift down by lo, mask hi-lo+1 bits (or
+         keep everything above lo for an endless range). Mirrors the int-
+         receiver Range arm but over bigint ops (#3156). The slice may not fit
+         sp_int for a very wide range; that truncates, like the int arm. */
+      int tr = ++g_tmp, ts = ++g_tmp;
+      buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, argv[0], b);
+      buf_printf(b, "; sp_int _lo%d = _t%d.first == INTPTR_MIN"
+                    " ? (sp_raise_cls(\"ArgumentError\","
+                    " \"The beginless range for Integer#[] results in infinity\"), 0)"
+                    " : _t%d.first;"
+                    " sp_Bigint *_t%d = sp_bigint_shr(%s, (int64_t)_lo%d);"
+                    " _t%d.last == INTPTR_MAX ? sp_bigint_to_int(_t%d)"
+                    " : sp_bigint_to_int(sp_bigint_and(_t%d,"
+                    " sp_bigint_sub(sp_bigint_shl(sp_bigint_new_int(1),"
+                    " (int64_t)(_t%d.last - _lo%d + (_t%d.excl ? 0 : 1))), sp_bigint_new_int(1)))); })",
+                 tr, tr, tr,
+                 ts, r, tr,
+                 tr, ts,
+                 ts,
+                 tr, tr, tr);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "[]") && argc == 1) {
+      int tn = ++g_tmp;
+      buf_printf(b, "({ sp_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; _t%d < 0 ? (sp_int)0"
+                    " : sp_bigint_to_int(sp_bigint_and(sp_bigint_shr(%s, _t%d), sp_bigint_new_int(1))); })",
+                 tn, r, tn);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "[]") && argc == 2) {
+      /* Bignum n[start, len]: the len-bit field starting at bit `start`. */
+      int tst = ++g_tmp, tln = ++g_tmp, tsh = ++g_tmp;
+      buf_printf(b, "({ sp_int _t%d = ", tst); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; sp_int _t%d = ", tln); emit_int_expr(c, argv[1], b);
+      buf_printf(b, "; sp_Bigint *_t%d = sp_bigint_shr(%s, (int64_t)_t%d);"
+                    " (_t%d < 0 || _t%d < 0) ? (sp_int)0"
+                    " : sp_bigint_to_int(sp_bigint_and(_t%d,"
+                    " sp_bigint_sub(sp_bigint_shl(sp_bigint_new_int(1), (int64_t)_t%d), sp_bigint_new_int(1)))); })",
+                 tsh, r, tst,
+                 tst, tln,
+                 tsh, tln);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "pow") && argc == 2) {
+      buf_printf(b, "sp_bigint_powmod(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+      emit_bigint_operand(c, argv[1], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    if ((sp_streq(name, "div") || sp_streq(name, "gcd") || sp_streq(name, "lcm")) && argc == 1) {
+      const char *fn = sp_streq(name, "div") ? "div" : name;
+      buf_printf(b, "sp_bigint_%s(%s, ", fn, r);
+      emit_bigint_operand(c, argv[0], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "ceildiv") && argc == 1) {
+      /* ceil division = -((-a) div b); div is floor division */
+      buf_printf(b, "sp_bigint_sub(sp_bigint_new_int(0), sp_bigint_div(sp_bigint_sub(sp_bigint_new_int(0), %s), ", r);
+      emit_bigint_operand(c, argv[0], b); buf_puts(b, "))");
+      free(rs.p); return 1;
+    }
+    if (is_bits_query(name) && argc == 1) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = ", t); emit_bigint_operand(c, argv[0], b);
+      /* the receiver expression below is unsequenced with this operand and can
+         allocate; no reproducer, the rule (#4049) is the reason */
+      buf_printf(b, "; SP_GC_ROOT(_t%d); ", t);
+      if (sp_streq(name, "allbits?"))
+        buf_printf(b, "(sp_bigint_cmp(sp_bigint_and(%s, _t%d), _t%d) == 0); })", r, t, t);
+      else if (sp_streq(name, "anybits?"))
+        buf_printf(b, "(sp_bigint_sign(sp_bigint_and(%s, _t%d)) != 0); })", r, t);
+      else
+        buf_printf(b, "(sp_bigint_sign(sp_bigint_and(%s, _t%d)) == 0); })", r, t);
+      free(rs.p); return 1;
+    }
+    if (sp_streq(name, "gcdlcm") && argc == 1) {
+      int t = ++g_tmp, ta = ++g_tmp, tr = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = %s; SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tr, r, tr, t);
+      emit_bigint_operand(c, argv[0], b);
+      /* both operands are read after the array allocation below, and both are
+         fresh bigints held by nothing else: unrooted they were swept and the
+         pair came back as [0, 0]. The gcd arm above already roots its two. */
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                    " sp_PolyArray_push(_t%d, sp_box_bigint(sp_bigint_gcd(_t%d, _t%d)));"
+                    " sp_PolyArray_push(_t%d, sp_box_bigint(sp_bigint_lcm(_t%d, _t%d))); _t%d; })",
+                 t, ta, ta, ta, tr, t, ta, tr, t, ta);
+      free(rs.p); return 1;
+    }
+    /* to_r / rationalize on a Bignum -> Rational(self, 1); quo -> Rational(self,
+       arg). The numerator exceeds sp_int, so these produce a boxed big
+       Rational (poly) rather than the by-value int Rational (#2469). */
+    if ((sp_streq(name, "to_r") || sp_streq(name, "rationalize")) && argc == 0) {
+      buf_printf(b, "sp_brat_from_bigint(%s)", r); free(rs.p); return 1;
+    }
+    if (sp_streq(name, "quo") && argc == 1) {
+      buf_printf(b, "sp_box_brat(%s, ", r); emit_bigint_operand(c, argv[0], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
+    free(rs.p);
   }
   return 0;
 }

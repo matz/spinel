@@ -128,7 +128,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
 static int emit_op_pstatus_success(Compiler *c, const BopCtx *x, Buf *b) {
   char *r = op_recv_text(c, x);
   int t = ++g_tmp;
-  buf_printf(b, "({ int _t%d = sp_process_status_success_p((%s)->status);"
+  buf_printf(b, "({ int _t%d = sp_process_status_success_p(sp_process_status_recv(%s, \"success?\")->status);"
                 " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })", t, r, t, t);
   free(r);
   return 1;

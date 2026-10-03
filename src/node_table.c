@@ -389,6 +389,11 @@ int nt_new_node(NodeTable *nt, const char *type) {
   if (type) node_set_type(nd, type, strlen(type));
   return id;
 }
+int nt_new_int(NodeTable *nt, long long v) {
+  int n = nt_new_node(nt, "IntegerNode");
+  nt_node_set_int(nt, n, "value", v);
+  return n;
+}
 
 /* Turn an existing node INTO a node of another type, dropping every field it
    carried. A desugar that rewrites one construct as another needs the result

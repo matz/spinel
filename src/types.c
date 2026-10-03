@@ -143,6 +143,29 @@ unsigned ty_poly_face_owner_flags(const char *name, int argc, int has_blk, int p
   }
   return fl;
 }
+unsigned ty_str_bang_flags(const char *name) {
+  if (!name) return 0;
+  for (const PolyFace *r = ty_poly_face_tbl; r->name; r++)
+    if ((r->flags & PF_STR_BANG) && sp_streq(name, r->name))
+      return r->flags & (PF_STR_BANG | PF_STR_SELF);
+  return 0;
+}
+unsigned ty_str_typed_bang_flags(const char *name) {
+  unsigned fl = ty_str_bang_flags(name);
+  /* reverse! is a String bang too, answering self, but its face rows are
+     the mutator kind's (PF_MUT | PF_VAL_SELF): Array has it as well, so a
+     boxed receiver's reverse! is either, and answers poly */
+  if (!fl && name && sp_streq(name, "reverse!")) fl = PF_STR_BANG | PF_STR_SELF;
+  return fl;
+}
+void str_bang_plain(const char *bang, char *out, int n) {
+  size_t len = bang ? strlen(bang) : 0;
+  if (len && bang[len - 1] == '!') len--;
+  if (n <= 0) return;
+  if (len >= (size_t)n) len = (size_t)n - 1;
+  if (len) memcpy(out, bang, len);
+  out[len] = 0;
+}
 int ty_poly_hash_face_name(const char *nm) {
   if (!nm) return 0;
   for (const PolyFace *r = ty_poly_face_tbl; r->name; r++)
@@ -514,7 +537,7 @@ int ty_block_yield(TyKind recv, const char *name, TyKind *out, int max) {
     return 0;
   }
   if (recv == TY_INT) {
-    if (sp_streq(name, "times") || sp_streq(name, "upto") || sp_streq(name, "downto")) {
+    if (is_int_step(name)) {
       BY_PUT(0, TY_INT); return 1;
     }
     return 0;
@@ -607,3 +630,9 @@ int ty_object_protocol_answers(TyKind rt, TyKind at, const char *name, int argc)
   if (kind == 2 && is_equal) return 0;
   return 1;
 }
+
+/* ty_traits (types.h): generated from the functions each column names by
+   spinel --dump-traits, and checked against them by --check-traits. */
+const TyTraits ty_traits[TY_TRAITS_N] = {
+#include "ty_traits.inc"
+};

@@ -4181,9 +4181,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
            A candidate taking a block (a yielding one through its
            proc form) is reached by the poly receiver's class-tag dispatch
            instead, which answers poly. */
-        if (c->scopes[kmi].rest_idx < 0 &&
+        if ((c->scopes[kmi].rest_idx < 0 || rest_packable_arm(c, &c->scopes[kmi])) &&
             (c->scopes[kmi].yields || (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0]))) {
-          if (splat ? argc - splat <= c->scopes[kmi].nparams : argc >= c->scopes[kmi].nrequired && argc <= c->scopes[kmi].nparams) nblk++;
+          if (c->scopes[kmi].rest_idx >= 0 || (splat ? argc - splat <= c->scopes[kmi].nparams : argc >= c->scopes[kmi].nrequired && argc <= c->scopes[kmi].nparams)) nblk++;
           continue;
         }
         /* a *rest the emitter packs is an arm like any other */

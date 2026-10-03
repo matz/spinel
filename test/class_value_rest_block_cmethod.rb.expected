@@ -1,0 +1,6 @@
+"Child"
+"Integer"
+["Child", [:a, :b]]
+2
+["Child", [:var]]
+2

@@ -1281,6 +1281,8 @@ end
 
 # --- staleness (newest input mtime vs output mtime) --------------------------
 
+# Return the newest source/configuration mtime, excluding generated, vendored,
+# and hidden directories from the recursive project scan.
 def newest_mtime(dir, newest)
   Dir.children(dir).each do |e|
     next if e.start_with?(".")   # .git and friends
@@ -1296,11 +1298,35 @@ def newest_mtime(dir, newest)
   newest
 end
 
+# Resolve the compiler and available runtime archives in driver search order.
+# These are shared prerequisites for cached outputs and external build systems.
+def toolchain_deps
+  sb = spinel_bin
+  found = which(sb)
+  sb = File.realpath(found) if found != ""
+  deps = [sb]
+  # Match the compiler driver's installed and checkout layouts, in that
+  # order: <compiler-dir>/lib, then <compiler-dir>/../lib.
+  dir = File.expand_path("..", sb)
+  rt = File.join(dir, "lib")
+  rt = File.expand_path("../lib", dir) unless File.file?(File.join(rt, "libspinel_rt.a"))
+  ["libspinel_rt.a", "libspinel_rt_mt.a"].each do |name|
+    path = File.join(rt, name)
+    deps << path if File.file?(path)
+  end
+  deps
+end
+
+# Return the newest project, dependency, compiler, or runtime archive mtime
+# so build and test caches invalidate after runtime-only toolchain updates.
 def inputs_mtime(prj)
   newest = newest_mtime(prj.root, 0)
   prj.dep_paths.each { |d| newest = newest_mtime(d, newest) }
-  sb = spinel_bin
-  newest = File.mtime(sb).to_i if File.exist?(sb) && File.mtime(sb).to_i > newest
+  # Runtime-only changes relink the archives without changing the compiler.
+  # Use the same prerequisites we hand external builds through flags --deps.
+  toolchain_deps.each do |path|
+    newest = File.mtime(path).to_i if File.file?(path) && File.mtime(path).to_i > newest
+  end
   newest
 end
 
@@ -2532,13 +2558,7 @@ when "flags"
   root = find_root(Dir.pwd)
   spin_die("no spin.toml found") if root == ""
   if rest.include?("--deps")
-    out = spinel_bin
-    dir = File.expand_path("..", File.expand_path("..", spinel_bin))
-    ["lib/libspinel_rt.a", "lib/libspinel_rt_mt.a"].each do |rel|
-      p2 = File.join(dir, rel)
-      out += " " + p2 if File.exist?(p2)
-    end
-    puts out
+    puts toolchain_deps.join(" ")
   else
     puts spin_flags(Project.new(root))
   end

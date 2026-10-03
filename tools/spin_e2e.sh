@@ -161,6 +161,46 @@ esac
 expect "test via an empty PATH component" "1/1 passed" "$(echo "$OUT" | tail -1)"
 cd "$WORK/app"; rm -rf "$WORK/stale" "$WORK/decoy"
 
+# A runtime archive can change while bin/spinel and every Ruby input stay
+# untouched. Use a private toolchain copy: changing a shared install's mtimes
+# would race with the other gate legs. Only the selected archive is newer
+# than each backdated application/test binary.
+for layout in checkout installed; do
+cd "$WORK"
+"$SPIN" new runtime_stale >/dev/null
+cd runtime_stale
+printf 'puts "runtime test"\n' > test/runtime_test.rb
+DEPS=$("$SPIN" flags --deps)
+COMPILER=${DEPS%% *}
+TOOLCHAIN=$(dirname "$COMPILER")
+[ -f "$TOOLCHAIN/lib/libspinel_rt.a" ] || TOOLCHAIN=$(dirname "$TOOLCHAIN")
+PRIVATE_BIN="$WORK/runtime-toolchain"
+[ "$layout" = installed ] || PRIVATE_BIN="$PRIVATE_BIN/bin"
+mkdir -p "$PRIVATE_BIN"
+cp "$SPIN" "$PRIVATE_BIN/spin"
+cp "$COMPILER" "$PRIVATE_BIN/spinel"
+cp -R "$TOOLCHAIN/lib" "$WORK/runtime-toolchain/lib"
+cp -R "$TOOLCHAIN/builtins" "$WORK/runtime-toolchain/builtins"
+ISOLATED="$PRIVATE_BIN/spin"
+find "$WORK/runtime-toolchain" -type f -exec touch -t 200001010000 {} +
+"$ISOLATED" build >/dev/null 2>&1 || fail "runtime freshness: initial build"
+"$ISOLATED" test --regen >/dev/null 2>&1 || fail "runtime freshness: initial test"
+find . -path ./build -prune -o -type f -exec touch -t 200001010000 {} +
+for archive in libspinel_rt.a libspinel_rt_mt.a; do
+  touch -t 200001010000 "$WORK/runtime-toolchain/lib/"libspinel_rt*.a
+  touch -t 200001010001 build/bin/runtime_stale
+  touch -t 200001010002 "$WORK/runtime-toolchain/lib/$archive"
+  OUT=$("$ISOLATED" build 2>&1) || fail "runtime freshness: build after $archive"
+  case "$OUT" in *"(up to date)"*) fail "build reused a binary older than $archive" ;; esac
+  expect "runtime freshness: rebuilt answer" "Hello from runtime_stale" "$(build/bin/runtime_stale)"
+  find build/test -type f ! -name '*.expected' -exec touch -t 200001010001 {} +
+  OUT=$("$ISOLATED" test 2>&1) || fail "runtime freshness: test after $archive"
+  case "$OUT" in *"(cached)"*) fail "test reused a binary older than $archive" ;; esac
+done
+cd "$WORK/app"
+rm -rf "$WORK/runtime_stale" "$WORK/runtime-toolchain"
+done
+
 # a build that FAILS must not be reported ok by the run phase: a failed compile
 # leaves the previous binary where it was, and File.exist? read that as "it
 # built", so `spin test` printed the parse error and then ran the executable an

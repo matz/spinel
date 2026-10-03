@@ -14,7 +14,9 @@ JSON still carries the refusals. With `-S` as well
 goes to stdout, so a consumer showing both runs the compiler once. It is the surface the out-of-tree
 editor tools read (rubys/spinel-ide); in this tree the gate's own check
 reads it, and `tools/order_probe.rb`, which compiles a program in two
-orders of its definitions and compares the two dumps node by node.
+orders of its definitions and compares the two dumps node by node, and
+`tools/dead_code_probe.rb`, which names the type a slot had before an
+edit that never runs boxed it.
 
 ```json
 {

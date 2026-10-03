@@ -291,13 +291,14 @@ module ProbeCommon
   # answers true. Answers [status, timed out]; a stopped run raises Stopped.
   # A run that does not end is killed with what it started: it runs in a
   # process group of its own, since spinel runs the C compiler through a
-  # shell, and killing spinel alone left the compiler running.
-  def run_timed(argv, timeout, out_path, err_path, stop = nil)
+  # shell, and killing spinel alone left the compiler running. It reads
+  # `input`, nothing unless a file is named.
+  def run_timed(argv, timeout, out_path, err_path, stop = nil, input: File::NULL)
     raise Stopped if stop&.call
     # one path for both streams is opened once: two opens keep two offsets,
     # and each stream writes over the other's lines
     redirect = out_path == err_path ? { [:out, :err] => out_path } : { out: out_path, err: err_path }
-    pid = Process.spawn(*argv, in: File::NULL, pgroup: true, **redirect)
+    pid = Process.spawn(*argv, in: input, pgroup: true, **redirect)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     loop do
       got, status = Process.waitpid2(pid, Process::WNOHANG)

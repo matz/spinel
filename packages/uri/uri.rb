@@ -159,7 +159,18 @@ module URI
   def self.encode_www_form(pairs)
     parts = []
     pairs.each do |k, v|
-      parts << "#{encode_www_form_component(k)}=#{encode_www_form_component(v)}"
+      key = encode_www_form_component(k)
+      if v.nil?
+        parts << key
+      elsif v.respond_to?(:to_ary)
+        values = []
+        v.to_ary.each do |item|
+          values << (item.nil? ? key : "#{key}=#{encode_www_form_component(item)}")
+        end
+        parts << values.join("&")
+      else
+        parts << "#{key}=#{encode_www_form_component(v)}"
+      end
     end
     parts.join("&")
   end

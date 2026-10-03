@@ -502,7 +502,7 @@ extern int g_bigl_n;
 int bigl_intern(const char *v);
 /* Whole-program feature presence, computed once before main is emitted, so the
    main() prologue can skip setup a trivial program never needs:
-   g_uses_symbols -> sp_tu_init sets sp_sym_name_fn; g_uses_regex -> sp_tu_init
+   g_emit_sym_rt -> sp_tu_init sets sp_sym_name_fn; g_uses_regex -> sp_tu_init
    wires the regex error handler; g_uses_argv -> the sp_argv copy loop runs.
    g_re_init_needed is the OR of the
    conditions that give sp_tu_init a body (symbols/regex/class-machinery/user

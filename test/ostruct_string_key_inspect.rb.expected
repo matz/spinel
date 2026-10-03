@@ -1,0 +1,18 @@
+#<OpenStruct a=2, name="x">
+{a: 2, name: "x"}
+[:a, :name]
+{a: 2, name: "x"}
+{a: 2, name: "x"}
+[{a: 2, name: "x"}, 1]
+{"outer" => {a: 2, name: "x"}}
+"a"
+1
+{b: 1}
+{k: "v", n: [1, 2]}
+"v"
+[1, 2]
+[:alpha, :mid, :zeta]
+:zeta
+true
+"by name"
+"uncaught throw :zeta"

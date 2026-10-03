@@ -11862,7 +11862,13 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_printf(b, "    sp_alloc_report_tag((void *)sp_%s__gc_scan, \"%s\");\n", ci->c_name, rn);
   }
   buf_puts(b, "  }\n");
-  if (g_uses_symbols)
+  /* The runtime archive names a Symbol through this hook (a Hash's `k: v`
+     keys in inspect, a boxed Symbol's to_s and length, among others), so it
+     goes in wherever the symbol runtime is emitted, as sp_json_sym_intern_fn
+     does below, not only where the compiler interned a Symbol name of its own:
+     `o["a"] = 1` on an OpenStruct interns :a at run time, and without the
+     hook `o.to_h` printed {"": 1}. */
+  if (g_emit_sym_rt)
     buf_puts(b, "  sp_sym_name_fn = sp_sym_to_s;\n");
   /* A C stack that ran out becomes a catchable SystemStackError: the fault
      handler in the runtime archive cannot reach this TU's exception stack,

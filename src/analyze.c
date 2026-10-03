@@ -18288,6 +18288,64 @@ static int dyn_call_hands_on(Compiler *c, int call, const char *un, int ur, int 
     if (dyn_scope_appends_arg(c, m, call, arg)) return 1;
   return 0;
 }
+/* An index assignment (`x[i] = v`) that cannot be a String's. `[]=` is on the
+   String-mutator table because `s[0] = "a"` rewrites a String, but the name is
+   every container's too, and a block parameter carries no type to ask: a
+   kept block doing `acc[:k] = 1` on a Hash was counted as "appends to the
+   String it is handed", and from then on every unresolved String `yield` in
+   the program was refused -- including ones in the bundled net/http -- for a
+   String nothing ever touched. String#[]= takes an Integer, Range, String or
+   Regexp index and a String value, so a Symbol index, or a value that is
+   written as a literal of another class, says the receiver is not a String. */
+static int dyn_index_write_not_string(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  if (ac < 2) return 0;
+  for (int i = 0; i < ac - 1; i++)
+    if (nt_kind(nt, av[i]) == NK_SymbolNode) return 1;
+  switch (nt_kind(nt, av[ac - 1])) {
+  case NK_IntegerNode: case NK_FloatNode: case NK_SymbolNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_NilNode:
+  case NK_ArrayNode: case NK_HashNode:
+    return 1;
+  default:
+    break;
+  }
+  /* a value the inference already settled as a non-String scalar */
+  TyKind vt = comp_ntype(c, av[ac - 1]);
+  if (vt == TY_INT || vt == TY_FLOAT || vt == TY_BOOL) return 1;
+  /* the receiver itself, when the inference knows it for a container: the
+     memo of `each_with_object({}) { |pair, result| result[k] = v }` is a
+     Hash whatever `k` and `v` are */
+  int ur = nt_ref(nt, node, "receiver");
+  TyKind rt = ur >= 0 ? comp_ntype(c, ur) : TY_UNKNOWN;
+  return ty_is_hash(rt) || ty_is_array(rt);
+}
+
+/* `recv.each_with_object(<memo>)` whose memo is spelled as a container: a
+   Hash or Array literal, or `Hash.new` / `Array.new` (with or without
+   arguments or a default block). */
+static int dyn_memo_is_container(Compiler *c, int call, const char *nm) {
+  const NodeTable *nt = c->nt;
+  /* by the time this runs the call may already be the Enumerable desugar
+     (`__enum_each_with_object__N(recv, memo)`); the memo is the last
+     argument either way */
+  if (!nm || (!sp_streq(nm, "each_with_object") && strncmp(nm, "__enum_each_with_object", 23) != 0)) return 0;
+  int a = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  if (ac < 1) return 0;
+  int memo = av[ac - 1];
+  NodeKind k = nt_kind(nt, memo);
+  if (k == NK_HashNode || k == NK_ArrayNode) return 1;
+  if (k != NK_CallNode) return 0;
+  const char *mn = nt_str(nt, memo, "name");
+  int r = nt_ref(nt, memo, "receiver");
+  if (!mn || !sp_streq(mn, "new") || r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
+  const char *cn = nt_str(nt, r, "name");
+  return cn && (sp_streq(cn, "Hash") || sp_streq(cn, "Array"));
+}
+
 static void dyn_body_scan(Compiler *c, int node, const char **pn, int np, unsigned *app, unsigned *kept) {
   const NodeTable *nt = c->nt;
   if (node < 0) return;
@@ -18311,7 +18369,8 @@ static void dyn_body_scan(Compiler *c, int node, const char **pn, int np, unsign
     int ur = nt_ref(nt, node, "receiver");
     int j = ur >= 0 && nt_kind(nt, ur) == NK_LocalVariableReadNode
               ? dyn_name_at(pn, np, nt_str(nt, ur, "name")) : -1;
-    if (j >= 0 && un && an_str_mutator_name(un)) { *app |= 1u << j; skip_recv = ur; }
+    if (j >= 0 && un && sp_streq(un, "[]=") && dyn_index_write_not_string(c, node)) skip_recv = ur;
+    else if (j >= 0 && un && an_str_mutator_name(un)) { *app |= 1u << j; skip_recv = ur; }
     else if (j >= 0 && dyn_pure_read_name(un)) skip_recv = ur;
     int a = nt_ref(nt, node, "arguments"), ac = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
@@ -18831,7 +18890,12 @@ static int dyn_any_appender(Compiler *c) {
     if (dyn_is_proc_literal(c, n)) { if ((dyn_lit_bits(c, b) & 0xffffu) || dyn_lit_post_app(c, b)) g_dyn.any = 1; continue; }
     if (b >= 0 && nt_kind(nt, b) == NK_BlockNode) {
       /* a block handed to a method that keeps it */
-      if (!(dyn_lit_bits(c, b) & 0xffffu) && !dyn_lit_post_app(c, b)) continue;
+      unsigned bits = dyn_lit_bits(c, b) & 0xffffu;
+      /* `each_with_object({}) { |x, memo| memo[k] = v }`: the block's second
+         parameter IS the memo the call names, so when that is written as a
+         Hash or Array it is no String, whatever `k` and `v` turn out to be */
+      if (dyn_memo_is_container(c, n, nm)) bits &= ~2u;
+      if (!bits && !dyn_lit_post_app(c, b)) continue;
       int nk = dyn_block_targets(c, n, tg);
       for (int e = 0; e < nk && !g_dyn.any; e++) {
         Scope *m = &c->scopes[tg[e]];

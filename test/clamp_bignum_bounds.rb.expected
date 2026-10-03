@@ -17,6 +17,6 @@
 1.5
 9223372036854775808
 2
-min argument must be smaller than max argument
+min argument must be less than or equal to max argument
 comparison of Integer with NaN failed
 comparison of Float with 0 failed

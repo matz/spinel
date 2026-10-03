@@ -1,4 +1,4 @@
-min argument must be smaller than max argument
+min argument must be less than or equal to max argument
 10
 3
 5

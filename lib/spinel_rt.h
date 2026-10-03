@@ -893,12 +893,12 @@ static inline sp_int sp_int_bit(sp_int n, sp_int i) {
    each bound (so a NaN receiver names min); a non-NaN min>max is the
    ordinary ArgumentError. */
 static inline sp_int sp_int_clamp_ck(sp_int v,sp_int lo,sp_int hi){
-  if(lo>hi)sp_raise_cls("ArgumentError","min argument must be smaller than max argument");
+  if(lo>hi)sp_raise_cls("ArgumentError","min argument must be less than or equal to max argument");
   return sp_int_clamp(v,lo,hi);
 }
 static inline sp_float sp_float_clamp_ck(sp_float v,sp_float lo,sp_float hi){
   if(lo!=lo||hi!=hi)sp_raise_cls("ArgumentError",sp_sprintf("comparison of Float with %s failed",sp_float_to_s(hi)));
-  if(lo>hi)sp_raise_cls("ArgumentError","min argument must be smaller than max argument");
+  if(lo>hi)sp_raise_cls("ArgumentError","min argument must be less than or equal to max argument");
   if(v!=v)sp_raise_cls("ArgumentError",sp_sprintf("comparison of Float with %s failed",sp_float_to_s(lo)));
   return sp_float_clamp(v,lo,hi);
 }
@@ -4647,7 +4647,7 @@ static sp_RbVal sp_obj_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
      the first lo<=>hi comparison, lo/hi across the later ones. */
   SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lo); SP_GC_ROOT_RBVAL(hi);
   if (lo.tag != SP_TAG_NIL && hi.tag != SP_TAG_NIL && sp_poly_cmp_ck(lo, hi) > 0)
-    sp_raise_cls("ArgumentError", "min argument must be smaller than max argument");
+    sp_raise_cls("ArgumentError", "min argument must be less than or equal to max argument");
   if (lo.tag != SP_TAG_NIL) {
     sp_int c1 = sp_poly_cmp_ck(v, lo);
     if (c1 == 0) return v;
@@ -4915,7 +4915,7 @@ static sp_RbVal sp_num_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
        opposite; corrected here to match CRuby's own exact message,
        though the `> 0` check below was already the correct boundary. */
     if (lh > 0)
-      sp_raise_cls("ArgumentError", "min argument must be smaller than max argument");
+      sp_raise_cls("ArgumentError", "min argument must be less than or equal to max argument");
   }
   if (has_lo) {
     sp_int vl = sp_poly_cmp(v, lo, &ok);

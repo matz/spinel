@@ -163,7 +163,7 @@ int builtin_method_known(const char *cls, const char *m);
 int builtin_arity_violation(Compiler *c, int id);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
-int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, Buf *b);
+int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, int all, Buf *b);
 int scope_reads_callee(Compiler *c, int si);
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
 TyKind block_next_value_ntype(const Compiler *c, int node);

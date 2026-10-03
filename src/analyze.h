@@ -247,6 +247,7 @@ int an_user_recv_defines_method(Compiler *c, const char *name);
 /* obj.methods / public_methods / singleton_methods on an instance of `cid`
    fold to a static symbol list */
 int an_object_methods_listable(Compiler *c, int cid, const char *name);
+int an_object_methods_all_arg(Compiler *c, int cid, int argc, const int *argv);
 int an_class_singleton_methods_listable(Compiler *c, int cid);
 int ewo_memo_passed_to_callable_at(Compiler *c, int callid, int pidx);
 

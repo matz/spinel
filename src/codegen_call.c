@@ -13870,15 +13870,19 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
 
 /* obj.methods / obj.public_methods / obj.singleton_methods on a typed user
    object: the class chain is static, so the list is too. The receiver is
-   evaluated for its effects. */
-int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, Buf *b) {
+   evaluated for its effects. `all` is 0 for a literal `false` argument on an
+   object with no singleton methods (an_object_methods_all_arg): `methods` and
+   `singleton_methods` then answer none, and `public_methods` the class's own
+   public instance methods. */
+int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, int all, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
   if (sp_streq(name, "methods")) prot = 1;
   else if (sp_streq(name, "singleton_methods")) { prot = 1; sg = 1; }
   else if (!sp_streq(name, "public_methods")) return 0;
   if (!an_object_methods_listable(c, cid, name)) return 0;
   ReflNames r = {0};
-  refl_object_methods(c, cid, pub, prot, sg, &r);
+  if (all) refl_object_methods(c, cid, pub, prot, sg, &r);
+  else if (sp_streq(name, "public_methods")) refl_own_instance_methods(c, cid, 1, 0, 0, 0, &r);
   buf_puts(b, "({ (void)(");
   emit_expr(c, recv, b);
   buf_puts(b, "); ");

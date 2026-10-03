@@ -9224,10 +9224,12 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
     }
-    if (argc == 0 && ty_is_object(rt) &&
+    if (ty_is_object(rt) &&
         (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
          sp_streq(name, "singleton_methods")) &&
-        emit_object_methods_reflection(c, recv, ty_object_class(rt), name, b))
+        an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
+        emit_object_methods_reflection(c, recv, ty_object_class(rt), name,
+                                       an_object_methods_all_arg(c, ty_object_class(rt), argc, argv), b))
       return 1;
     if ((sp_streq(name, "instance_variable_get") || sp_streq(name, "instance_variable_set")) &&
         argc >= 1 && nt_type(nt, argv[0]) &&

@@ -1436,6 +1436,21 @@ int an_object_methods_listable(Compiler *c, int cid, const char *name) {
   return 1;
 }
 
+/* The argument of obj.methods / public_methods / singleton_methods on an
+   instance of `cid`: 1 for none or a literal `true` (the whole list), 0 for a
+   literal `false` on an object with no singleton methods of its own, -1 for
+   anything else (left to the call's other paths). With `false`, `methods` and
+   `singleton_methods` answer the object's own singleton methods (none here)
+   and `public_methods` its class's own public instance methods. */
+int an_object_methods_all_arg(Compiler *c, int cid, int argc, const int *argv) {
+  if (argc == 0) return 1;
+  if (argc != 1 || !argv) return -1;
+  if (nt_kind(c->nt, argv[0]) == NK_TrueNode) return 1;
+  if (nt_kind(c->nt, argv[0]) == NK_FalseNode && cid >= 0 && cid < c->nclasses &&
+      !c->classes[cid].is_singleton_of) return 0;
+  return -1;
+}
+
 /* Klass.singleton_methods: listable ahead of time when the class does not
    define the name itself and every ancestor is a user class spinel knows the
    class methods of -- not a Struct/Data (whose generated class methods are
@@ -7005,9 +7020,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && ty_is_object(rt) && argc == 0 &&
       sp_streq(name, "instance_variables"))
     return TY_POLY_ARRAY;
-  if (recv >= 0 && ty_is_object(rt) && argc == 0 &&
+  if (recv >= 0 && ty_is_object(rt) &&
       (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
        sp_streq(name, "singleton_methods")) &&
+      an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
       an_object_methods_listable(c, ty_object_class(rt), name))
     return TY_POLY_ARRAY;
 

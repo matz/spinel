@@ -358,6 +358,13 @@ statement should fail the way an unresolvable dependency does -- quietly
 building something slower than what was asked for is how one machine's binary
 comes to differ from another's without anyone noticing.
 
+Installed but outside the linker's default directories is a different case:
+Homebrew on Apple Silicon puts jemalloc in `/opt/homebrew/lib`, which Apple's
+linker does not search. When `pkg-config` knows the library, `spin` puts the
+directories it reports on `LIBRARY_PATH` for the build, so such a library links
+without any setup. `spin pack` writes no host path into what it packs; the
+build host's own linker and `LIBRARY_PATH` find it there.
+
 On two Rails-derived applications compiled by spinel, `"jemalloc"` was worth
 +58% on one OS worker and +25% on twelve for a 420 KB page, and +22% and +59%
 for a 6 KB one. It is the same reason Rails ships jemalloc in its production

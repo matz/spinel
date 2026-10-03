@@ -260,10 +260,11 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
    values -- so the plain unbox turns nil into zero, silently: the C is
    well-formed and nothing downstream can tell the two apart (#3412).
 
-   Only int and float need the guard. A pointer-backed slot takes NULL from the
-   zeroed payload, which IS its nil; bool and symbol have no nil inhabitant at
-   all, so a slot that must hold nil is never given those types (see
-   parse_seed_type). Use this wherever a poly whose nil-ness is not already
+   Integers, floats and mutable Strings need a guard: the String conversion
+   otherwise creates an empty handle for nil. Other pointer-backed slots take
+   NULL from the zeroed payload, which IS their nil; bool and symbol have no
+   nil inhabitant at all, so a slot that must hold nil is never given those
+   types (see parse_seed_type). Use this wherever a poly whose nil-ness is not already
    ruled out is narrowed to a concrete slot; emit_unbox_text stays the
    unguarded form for the many sites that have, except for Integer and
    Float, whose unbox is the guarded one on every path. */
@@ -15840,4 +15841,3 @@ char *codegen_program(const NodeTable *nt) {
     if (types_out && !(keep && *keep)) return strdup(""); }
   return b.p;
 }
-

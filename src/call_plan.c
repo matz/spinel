@@ -923,7 +923,8 @@ int cplan_arm_args_fit(Compiler *c, Scope *ks, const ArgLayout *L, int pos_argc,
     int pc = pt0 != TY_POLY && pt0 != TY_UNKNOWN && pt0 != TY_NIL && pt0 != TY_VOID;
     int ac = at0 != TY_POLY && at0 != TY_UNKNOWN && at0 != TY_NIL && at0 != TY_VOID;
     if (pc && ac && pt0 != at0 &&
-        (pt0 == TY_STRING || at0 == TY_STRING || needs_root(pt0) != needs_root(at0) ||
+        (pt0 == TY_STRING || at0 == TY_STRING || pt0 == TY_STRBUF || at0 == TY_STRBUF ||
+         needs_root(pt0) != needs_root(at0) ||
          ty_is_object(pt0) != ty_is_object(at0) ||
          (ty_is_object(pt0) && ty_is_object(at0) &&
           obj_class_unrelated(c, ty_object_class(pt0), ty_object_class(at0))) ||

@@ -550,8 +550,10 @@ int scope_proc_form_of(Compiler *c, int s);
    positional argument after `pos_argc` others, or -1. */
 int kwh_arg_param(Compiler *c, Scope *m, int pos_argc);
 
-/* --ext-entry designations (see codegen_internal.h / ext-design.md) */
+/* Extension emission is not a closed Ruby program (ext-design.md). */
 extern const char *g_ext_entries;
+extern const char *g_ext_init_name;
+extern const char *g_ext_target;
 
 /* the class every value of a boxed-value hash slot holds, or -1 (#4846) */
 int hv_value_class(Compiler *c, int recv);
@@ -561,4 +563,3 @@ char **dsend_candidates(Compiler *c, int *out_n);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 
 #endif
-

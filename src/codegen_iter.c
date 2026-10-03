@@ -1246,6 +1246,8 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
         sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode")) pargc = argc - 1;
     arg_layout(c, m, argv, pargc, pargc < argc ? argv[pargc] : -1, 1, &L);
     refuse_yield_handle_args(c, id);
+    /* Statement/yield inlining bypasses emit_call's copy guards. */
+    refuse_forwarded_args(c, id, mi, name);
     alias_mask = inline_alias_params(c, mi, argv, pargc, &L, nt_ref(nt, id, "block"));
   }
 
@@ -3671,6 +3673,8 @@ void emit_iter_param_assign(Compiler *c, int block, const char *p0_orig,
      parameter, and an unbound name cannot be read. */
   if (!lv || lv->type == TY_UNKNOWN) return;
   TyKind pt = lv->type;
+  if (pt == TY_STRBUF && lv->str_shared && src_type == TY_STRING)
+    unsupported(c, block, "a shared String block parameter whose iterator supplies copied bytes, not its original handle");
   emit_indent(b, indent);
   if (pt == TY_POLY && src_type != TY_POLY) {
     Buf bx; memset(&bx, 0, sizeof bx);
@@ -5156,33 +5160,23 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       /* The param may be poly (a name shared across hashes of differing element
          types); box a concrete key into the poly slot. */
       const char *raw0 = block_param_name(c, block, 0);
-      LocalVar *pv0 = raw0 ? scope_local(comp_scope_of(c, block), raw0) : NULL;
       TyKind want0 = ty_hash_key(rt);
-      int box0 = pv0 && pv0->type == TY_POLY && want0 != TY_POLY;
       char src0[256];
       if (rt == TY_POLY_POLY_HASH)
         snprintf(src0, sizeof src0, "%s->keys[%s->order[_t%d]]", rb.p, rb.p, t);
       else
         snprintf(src0, sizeof src0, "%s->order[_t%d]", rb.p, t);
-      emit_indent(b, indent + 1);
-      buf_printf(b, "lv_%s = ", p0);
-      if (box0) emit_boxed_text(c, want0, src0, b); else buf_puts(b, src0);
-      buf_puts(b, ";\n");
+      emit_iter_param_assign(c, block, raw0, p0, want0, src0, b, indent + 1);
     }
     if (p1) {
       const char *raw1 = block_param_name(c, block, 1);
-      LocalVar *pv1 = raw1 ? scope_local(comp_scope_of(c, block), raw1) : NULL;
       TyKind want1 = ty_hash_val(rt);
-      int box1 = pv1 && pv1->type == TY_POLY && want1 != TY_POLY;
       char src1[256];
       if (rt == TY_POLY_POLY_HASH)
         snprintf(src1, sizeof src1, "%s->vals[%s->order[_t%d]]", rb.p, rb.p, t);
       else
         snprintf(src1, sizeof src1, "sp_%sHash_get(%s, %s->order[_t%d])", hn, rb.p, rb.p, t);
-      emit_indent(b, indent + 1);
-      buf_printf(b, "lv_%s = ", p1);
-      if (box1) emit_boxed_text(c, want1, src1, b); else buf_puts(b, src1);
-      buf_puts(b, ";\n");
+      emit_iter_param_assign(c, block, raw1, p1, want1, src1, b, indent + 1);
     }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
@@ -6491,4 +6485,3 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
 }
 
 /* ---- interpolation ---- */
-

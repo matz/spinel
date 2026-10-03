@@ -1,4 +1,5 @@
 #include "compiler.h"
+#include "analyze.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,6 +239,7 @@ void comp_grow_node_arrays(Compiler *c) {
 
 void comp_free(Compiler *c) {
   if (!c) return;
+  fwd_analysis_free(c);
   free(c->hash_default_arg_memo);
   c->hash_default_arg_memo = NULL;
   free(c->blk_body_map);

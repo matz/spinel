@@ -21027,43 +21027,71 @@ static void refuse_rest_yield_copies(Compiler *c, int id, int t) {
    into the handle (promote_forwarded_rest_args, convert_byref_handle_params),
    but for one that cannot be -- a block's parameter, an ivar that is no
    handle, a global or class variable -- which goes over as a copy. */
-static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
+void refuse_forwarded_args(Compiler *c, int id, int t, const char *name) {
   const NodeTable *nt = c->nt;
-  int t = refuse_fwd_target(c, id, name);
   if (t < 0) return;
   Scope *m = &c->scopes[t];
   int a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   int pos = ac;
   while (pos > 0 && (nt_kind(nt, av[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, av[pos - 1]) == NK_BlockArgumentNode)) pos--;
-  for (int k = 0; k < pos; k++) {
-    if (nt_kind(nt, av[k]) == NK_SplatNode) break;
+  /* Rest elements use actual positions. Named formals, including explicit
+     keywords and post-rest parameters, use the binder's resolved value node. */
+  int rest_pos = pos;
+  for (int i = 0; i < pos; i++) if (nt_kind(nt, av[i]) == NK_SplatNode) { rest_pos = i; break; }
+  for (int slot = 0; slot < rest_pos + m->nparams; slot++) {
+    int rest = slot < rest_pos;
+    int k = rest ? slot : slot - rest_pos;
+    if (rest && (m->rest_idx < 0 || k < m->rest_idx || k >= pos - m->npost_rest)) continue;
+    if (!rest && (k == m->rest_idx || k == m->kwrest_idx)) continue;
+    int arg = rest ? av[k] : arg_layout_param_node(c, m, id, k, NULL);
+    if (arg < 0) continue;
     int shared;
-    const char *kind = strvar_arg(c, av[k], &shared);
-    if (!kind || ctor_arg_shared(c, av[k], 0)) continue;
+    const char *kind = strvar_arg(c, arg, &shared);
+    /* Already-POLY actuals pass their box, not copied String bytes. A
+       String-narrowed POLY local does qualify through its occurrence type. */
+    if (!kind && comp_ntype(c, arg) != TY_STRING) continue;
     const char *pn = NULL, *thr = NULL;
     int r, pulled;
-    if (m->rest_idx >= 0 && k >= m->rest_idx) {
-      if (k >= pos - m->npost_rest || !(r = fwd_rest_elem_appends(c, t, k - m->rest_idx))) continue;
+    if (rest) {
+      if (!(r = fwd_rest_elem_appends(c, t, k - m->rest_idx))) continue;
       pn = m->pnames[m->rest_idx] && m->pnames[m->rest_idx][0] != '_' ? m->pnames[m->rest_idx] : "*";
       thr = "the rest it hands on";
       pulled = r > 0 && k - m->rest_idx < 16;
     }
     else {
-      if (k >= m->nparams || !(r = fwd_poly_param_appends(c, t, k))) continue;
+      if (!(r = fwd_poly_param_appends(c, t, k))) continue;
       pn = m->pnames[k];
       thr = "a parameter it hands on";
       pulled = r > 0;
     }
+    /* Freshness alone does not preserve later getter mutations. A retaining
+       store needs either immutable input or a closed readonly program. */
+    if (rest && (r == FWD_RETAINS_BOX || r == FWD_ESCAPE) && fwd_rest_print_safe(c, t, id, arg)) continue;
+    if ((r == FWD_ESCAPE || r == FWD_RETAINS_BOX) && fwd_box_retention_safe(c, arg, r)) continue;
+    if (!kind && r != FWD_ESCAPE && r != FWD_RETAINS_BOX) continue;
+    if (r == FWD_ESCAPE || r == FWD_RETAINS_BOX) {
+      TyKind at = comp_ntype(c, arg);
+      if (at == TY_STRING || at == TY_STRBUF || at == TY_POLY || at == TY_UNKNOWN) {
+        char msg[512];
+        snprintf(msg, sizeof msg,
+                 "a String passed to `%s`'s parameter `%s` through %s escapes: "
+                 "a container, stored field, block or return may hold a copied String. "
+                 "This path cannot preserve the caller's String identity and is refused.", name, pn, thr);
+        unsupported_feature(c, arg, msg);
+      }
+      continue;
+    }
+    if (ctor_arg_shared(c, arg, 0)) continue;
     /* a local or a parameter the passes pulled into the handle goes over as
        it; one past the 16 positions, or behind an answer cut short, was not */
-    if (nt_kind(nt, av[k]) == NK_LocalVariableReadNode && !sp_streq(kind, "a block's parameter") &&
-        !sp_streq(kind, "a variable a block or a proc captures") && (pulled || local_is_handle(c, av[k])))
+    if (nt_kind(nt, arg) == NK_LocalVariableReadNode && !sp_streq(kind, "a block's parameter") &&
+        !sp_streq(kind, "a variable a block or a proc captures") && (pulled || local_is_handle(c, arg)))
       continue;
     char mt[96]; snprintf(mt, sizeof mt, "`%s`", name);
     char why[96]; snprintf(why, sizeof why, "from %s", kind);
     char through[96]; snprintf(through, sizeof through, "%s", thr);
-    refuse_string_copy(c, av[k], mt, pn, through, why);
+    refuse_string_copy(c, arg, mt, pn, through, why);
   }
 }
 
@@ -21505,7 +21533,7 @@ static void refuse_string_copies(Compiler *c, int id) {
     return;
   }
   if (!dyn) refuse_yield_handle_args(c, id);
-  if (!dyn) refuse_forwarded_args(c, id, name);
+  if (!dyn) refuse_forwarded_args(c, id, refuse_fwd_target(c, id, name), name);
   if (!dyn) refuse_nonlocal_param_args(c, id, name);
   /* a method `define_method` defines takes an appended String as the handle
      (dyn_convert_params), and its callers are pulled in as a handle
@@ -24615,6 +24643,35 @@ void emit_handle_inspect(Compiler *c, int recv, TyKind rt, Buf *b) {
   buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", (unsigned long long)(uintptr_t)(", hn);
   emit_expr(c, recv, b); buf_puts(b, "))");
 }
+/* A propagated shared-return mark is not the callee's final C return ABI.
+   Boxed returns carry their own handle; byte returns use the side channel. */
+static int emit_shared_return_pickup(Compiler *c, int id, Buf *b) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (!c->strbuf_box[id] || nt_ref(c->nt, id, "block") >= 0 ||
+      (recv < 0 ? implicit_self_reader_cid(c, id) >= 0 : comp_ntype(c, recv) != TY_CLASS)) return 0;
+  const char *name = nt_str(c->nt, id, "name");
+  int target = recv < 0 ? refuse_fwd_target(c, id, name) : -1;
+  if (recv >= 0) {
+    const char *cn = nt_str(c->nt, recv, "name");
+    int ci = cn ? comp_class_index(c, cn) : -1;
+    if (ci >= 0) target = comp_cmethod_in_chain(c, ci, name, NULL);
+  }
+  Buf inner = {0};
+  int view = view_push_repr(c, id, VR_STRBUF_BOX, 0);
+  if (target >= 0 && c->scopes[target].ret == TY_POLY) {
+    emit_call(c, id, &inner);
+    view_pop(c, view);
+    emit_unbox_nilable_text(c, TY_STRBUF, inner.p, b);
+    free(inner.p);
+    return 1;
+  }
+  int tmp = ++g_tmp;
+  buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tmp);
+  emit_call(c, id, b);
+  view_pop(c, view);
+  buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : sp_String_new_shared(_v%d); })", tmp);
+  return 1;
+}
 void emit_call_body(Compiler *c, int id, Buf *b) {
   /* the class's own method in a builtin's receiver test (`__r.is_a?(K) ?
      __r.m { } : __enum_m(__r) { }`): the test has decided the receiver is
@@ -24657,25 +24714,7 @@ void emit_call_body(Compiler *c, int id, Buf *b) {
       }
     }
   }
-  /* deep-return pickup (#3227 P6): a marked receiverless call to a method
-     whose every return path yields a shared handle -- reset the side
-     channel, run the ordinary call (its shared-slot tail read publishes),
-     then take the handle (falling back to a fresh wrap of the returned
-     copy if a path did not publish). */
-  /* An attr reader has no body to publish from; its implicit-self read hands
-     out the slot itself (emit_implicit_self_member). */
-  if (c->strbuf_box[id] && nt_ref(c->nt, id, "block") < 0 &&
-      (nt_ref(c->nt, id, "receiver") < 0 ? implicit_self_reader_cid(c, id) < 0
-                                         : comp_ntype(c, nt_ref(c->nt, id, "receiver")) == TY_CLASS)) {
-    int tvD = ++g_tmp;
-    buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tvD);
-    int vs = view_push_repr(c, id, VR_STRBUF_BOX, 0);
-    emit_call(c, id, b);
-    view_pop(c, vs);
-    buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf"
-                  " : sp_String_new_shared(_v%d); })", tvD);
-    return;
-  }
+  if (emit_shared_return_pickup(c, id, b)) return;
 
   /* A program's own reopen of a builtin primitive owns the name, as it does
      in CRuby: `class Integer; def abs; 999; end; end` makes `(-5).abs` answer

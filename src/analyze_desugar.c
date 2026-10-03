@@ -568,6 +568,9 @@ int desugar_rest_param_writes(Compiler *c) {
     int body = nt_ref(nt, id, "body");
     if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     if (bpw_walk(nt, body, rp, NULL) == 0) continue;
+    /* Renaming removes the original write from the live body. Preserve it
+       for proofs that require bare super's positional layout unchanged. */
+    nt_node_set_int(nt, id, "rest_rebound", 1);
     char nn[300]; snprintf(nn, sizeof nn, "__rpv_%s", rp);
     /* The usual shape writes it once, as a statement of the body itself
        (`args = args.first`), with no write before it: the statements before
@@ -3539,6 +3542,7 @@ int desugar_dynamic_send(Compiler *c) {
     char **use = cand; int nuse = ncand;
     char **own = NULL; int nown = 0;
     int computed = an_send_name_is_computed(c, argv[0]);
+    int truncated = 0;
     int builtin_recv = 0;   /* the arms are a builtin class's methods */
     /* A name that is not computed -- a variable, a parameter, a table read
        (`send(type, ...)`, `send(*DISPATCH[op])`) -- holds one of the names
@@ -3588,6 +3592,7 @@ int desugar_dynamic_send(Compiler *c) {
           free(kn);
         }
         for (int k = 0; k < ncand && k < 256; k++) dsend_add_name(&own, &nown, &cap, &seen, cand[k]);
+        if (ncand > 256) truncated = 1;
         anh_free(&seen);
       }
       else if (rt != TY_CLASS && builtin_class_of_type(rt)) {
@@ -3749,6 +3754,9 @@ int desugar_dynamic_send(Compiler *c) {
     }
     nt_node_set_arr(nt, id, "dyn_send_arms", arms, narm);
     free(arms);
+    /* The emitter keeps its existing capped dispatch. Optional forwarding
+       proofs must not treat that selected subset as exhaustive evidence. */
+    if (truncated || (!computed && nuse < nlit)) nt_node_set_int(nt, id, "dyn_send_truncated", 1);
     if (computed) nt_node_set_int(nt, id, "dyn_send_complete", 1);
     for (int k = 0; k < nown; k++) free(own[k]);
     free(own);

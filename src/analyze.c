@@ -17570,20 +17570,18 @@ static int poly_var_may_hold_string(Compiler *c, const HandleArgTab *hat,
   return 0;
 }
 
-/* Is POLY variable `vn` of scope `vs` appended to in place: the receiver of
-   a String mutator, or read where it is lifted into the handle for a
-   parameter appended to (poly_strbuf_lift, the reads `lifted` collects)? */
+/* Is POLY variable `vn` of scope `vs` appended to in place, directly or
+   through a lifted read handed to an appending parameter? */
 static int poly_var_appended(Compiler *c, SbMutTab *lifted, const char *vn, Scope *vs) {
   if (strbuf_any_str_mut(c, vn, vs)) return 1;
   signed char *v = sb_mut_tab_slot(lifted, vn, (int)(vs - c->scopes), 0);
   return v && *v == 1;
 }
 /* Lift read `a` of a POLY variable that can hold a String (poly_strbuf_lift);
-   a method's own parameter read so is appended to as well, and its callers
-   are pulled in on the next round (convert_byref_handle_params). */
+   its parameter's callers must hand over the same handle on the next round. */
 static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted, int a) {
   const NodeTable *nt = c->nt;
-  if (a < 0 || c->poly_strbuf_lift[a]) return 0;
+  if (a < 0) return 0;
   /* A POLY ivar is lifted the same way, its slot stored back (emit_expr's
      ivar read); a value type's ivar is a field of a struct copy, with no
      slot the caller would see */
@@ -17591,19 +17589,23 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
     Scope *as = comp_scope_of(c, a);
     if (!as || comp_ntype(c, a) != TY_POLY) return 0;
     if (as->class_id >= 0 && !as->is_cmethod && comp_ty_value_obj(c, ty_object(as->class_id))) return 0;
+    int changed = !c->poly_strbuf_lift[a];
     c->poly_strbuf_lift[a] = 1;
-    return 1;
+    return changed;
   }
   if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
   const char *vn = nt_str(nt, a, "name");
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
   if (!lv || lv->type != TY_POLY || !poly_var_may_hold_string(c, hat, vn, vs, 0)) return 0;
+  int changed = !c->poly_strbuf_lift[a];
   c->poly_strbuf_lift[a] = 1;
   if (lifted) sb_mut_tab_note(lifted, vn, (int)(vs - c->scopes), 1);
-  if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0)
+  if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0 && !(lv->poly_lift & POLY_LIFT_APPENDED)) {
     lv->poly_lift |= POLY_LIFT_APPENDED;
-  return 1;
+    changed = 1;
+  }
+  return changed;
 }
 /* Is call `n` in yielding method `m` a call of the method's own `&b`
    (`b.call(v)`, `b.(v)`, `b[v]`, `b.yield(v)`), which is spliced as a
@@ -17708,7 +17710,63 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth);
+typedef enum { FWD_PROMOTION, FWD_EMISSION } FwdPhase;
+typedef struct {
+  SbMutTab poly_cache;
+  unsigned *rest;
+  int nscopes;
+  unsigned version, scope_gen;
+  int frozen_reflection;
+  int frozen_operator_fold;
+  int readonly_strings;
+  int readonly_hash_nonstring;
+  ANameHash frozen_operator_writes;
+  HandleArgTab frozen_callers;
+  SbMutTab frozen_params;
+  unsigned char *frozen_blocked;
+  int frozen_ready;
+  int *print_parent;
+  int print_contract;
+} FwdMemo;
+typedef struct {
+  FwdPhase phase;
+  FwdMemo *memo; /* borrowed; only the compiler-owned analysis frees it */
+  SbMutTab seen; /* owned by this query, never shared with nested queries */
+  int poly_depth, rest_depth, taint;
+} FwdQuery;
+typedef struct FwdAnalysis {
+  FwdMemo memo;
+  FwdQuery root;
+} FwdAnalysis;
+/* Compiler ownership is separate from per-query recursion/worklist state.
+   A nested query borrows one memo pointer, not copies of owning tables. */
+static FwdQuery *fwd_analysis(Compiler *c) {
+  if (!c->fwd_analysis) {
+    c->fwd_analysis = calloc(1, sizeof(FwdAnalysis));
+    if (!c->fwd_analysis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->fwd_analysis->root.memo = &c->fwd_analysis->memo;
+  }
+  return &c->fwd_analysis->root;
+}
+void fwd_analysis_free(Compiler *c) {
+  FwdAnalysis *f = c->fwd_analysis;
+  if (!f) return;
+  sb_mut_tab_free(&f->root.seen);
+  sb_mut_tab_free(&f->memo.poly_cache);
+  anh_free(&f->memo.frozen_operator_writes);
+  handle_arg_tab_free(&f->memo.frozen_callers);
+  sb_mut_tab_free(&f->memo.frozen_params);
+  free(f->memo.frozen_blocked);
+  free(f->memo.rest);
+  free(f->memo.print_parent);
+  free(f);
+  c->fwd_analysis = NULL;
+}
+static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly);
+static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase);
+static int fwd_builtin(Compiler *c, const char *owner, const char *name);
+static int *du_parent_map(const NodeTable *nt);
+static int fwd_array_store_start(Compiler *c, int node, int argc);
 /* Local `vn` of scope `vs` lent to byref slots by calls in that scope: each
    such parameter, with every method of its name, takes the shared handle
    instead (a slot cannot carry it). Answers 1 when it changed any. */
@@ -17745,8 +17803,17 @@ static int convert_byref_handle_params(Compiler *c,
   /* the call-site chain is what makes this pass affordable; with no table
      there is nothing to walk, and promoting nothing is the safe answer */
   if (!hat->ok) return 0;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_PROMOTION);
   ALocalAliases aliases;
   an_local_aliases_build(c, &aliases);
+  /* Completed readonly suffixes are shared only within this conversion
+     pass. A promotion restarts the enclosing fixpoint with a fresh cache;
+     emission and nested/rest queries never consume these phase-local facts. */
+  int np = 0;
+  for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+  SbMutTab readonly;
+  sb_mut_tab_init(&readonly, np);
   /* byref -> handle parameter conversion: a shared handle passed into a
      string-mutating (byref) parameter converts that parameter to the handle
      representation -- byref's const char** slot cannot carry the handle, so
@@ -17770,7 +17837,7 @@ static int convert_byref_handle_params(Compiler *c,
       int poly_mut = (pp->is_param && pp->type == TY_POLY &&
                       ((pp->poly_lift & POLY_LIFT_APPENDED) || an_param_mutated_in_place(c, mi2, pj) ||
                        an_poly_param_yielded_lent(c, mi2, pj) ||
-                       fwd_poly_param_handed_on(c, mi2, pj, 0)));
+                       fwd_poly_param_handed_on(c, f, mi2, pj, &readonly)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
       /* A String parameter the callee mutates that inference typed from a
          handle argument (the copy-on-read refinement, not the handle): it
@@ -17849,12 +17916,7 @@ static int convert_byref_handle_params(Compiler *c,
              much as one it appends to itself, so its callers are pulled in
              on the next round (poly_lift). */
           if (alv && alv->type == TY_POLY) {
-            if (c->poly_strbuf_lift[an2] || !poly_var_may_hold_string(c, hat, vn2, vs2, 0)) continue;
-            c->poly_strbuf_lift[an2] = 1; changed = 1;
-            if (alv->is_param && !alv->is_block_param && an_param_idx(vs2, vn2) >= 0 &&
-                !(alv->poly_lift & POLY_LIFT_APPENDED)) {
-              alv->poly_lift |= POLY_LIFT_APPENDED; changed = 1;
-            }
+            if (lift_poly_read(c, hat, NULL, an2)) changed = 1;
             continue;
           }
           /* The argument is this method's OWN parameter, being passed on:
@@ -18048,6 +18110,7 @@ static int convert_byref_handle_params(Compiler *c,
     }
   }
   an_local_aliases_free(&aliases);
+  sb_mut_tab_free(&readonly);
   anh_free(&hnames); free(hbits);
   return changed;
 }
@@ -21587,37 +21650,714 @@ static int fwd_call_target(Compiler *c, int u) {
   return -1;
 }
 
-static unsigned fwd_rest_bits(Compiler *c, int mi);
-/* Set when an answer below was cut short, so it is not kept as final: 1 a
-   method still being asked (a cycle of forwarders), 2 the depth bound. */
-static int g_fwd_taint;
+static int fwd_splat_start(Compiler *c, int u, const char *rn);
+static int fwd_poly_add(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly);
+static int fwd_param_appends(Compiler *c, FwdQuery *f, int mi, int j);
+
+/* The incoming String uses the builtin contract only when a reopen has
+   not replaced it. Unrelated classes with the same name do not own this
+   dispatch, but String/Object/Kernel overrides and included methods do. */
+static int fwd_builtin(Compiler *c, const char *owner, const char *name) {
+  const char *owners[] = { owner, "Object", "Kernel", "BasicObject" };
+  for (int i = 0; i < 4; i++) {
+    int ci = comp_class_index(c, owners[i]);
+    if (ci >= 0 && comp_method_in_chain(c, ci, name, NULL) >= 0) return 0;
+  }
+  return 1;
+}
+
+/* Array value stores share one contract in promotion and retention analysis.
+   Indices/positions are not stored values; overridden methods are unknown. */
+static int fwd_array_store_start(Compiler *c, int node, int argc) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (!name || !ty_is_array(comp_ntype(c, recv)) || !fwd_builtin(c, "Array", name)) return -1;
+  if (sp_streq(name, "push") || sp_streq(name, "append") || sp_streq(name, "<<") || sp_streq(name, "unshift")) return 0;
+  if (sp_streq(name, "insert")) return argc > 1 ? 1 : -1;
+  if (sp_streq(name, "[]=")) return argc > 1 ? argc - 1 : -1;
+  return -1;
+}
+
+/* Under the incoming-String hypothesis, to_s/itself can be aliases even
+   when the slot is POLY. This is a read-only proof, not handle promotion. */
+static int fwd_alias_of(Compiler *c, int mi, const char *ln, const char *pn, int depth) {
+  if (sp_streq(ln, pn)) return 1;
+  if (depth > 3) return 0;
+  const NodeTable *nt = c->nt;
+  int any = 0;
+  for (int w = comp_lvw_first_sc(c, mi, ln); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (c->nscope[w] != mi || !sp_streq(nt_str(nt, w, "name"), ln)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode) return 0;
+    int v = nt_ref(nt, w, "value");
+    if (nt_kind(nt, v) == NK_CallNode) {
+      const char *nm = nt_str(nt, v, "name");
+      if (nm && fwd_builtin(c, "String", nm) && (sp_streq(nm, "to_s") || sp_streq(nm, "itself")))
+        v = nt_ref(nt, v, "receiver");
+    }
+    if (nt_kind(nt, v) != NK_LocalVariableReadNode || comp_scope_of(c, v) != &c->scopes[mi]) return 0;
+    const char *vn = nt_str(nt, v, "name");
+    if (!vn || !fwd_alias_of(c, mi, vn, pn, depth + 1)) return 0;
+    any = 1;
+  }
+  return any;
+}
+
+/* A read of this parameter (or a supported pure local alias) can carry
+   the caller's String. A narrowing to Node/Integer/etc. cannot. */
+static int fwd_param_read(Compiler *c, int mi, const char *pn, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_LocalVariableReadNode) return 0;
+  TyKind ty = c->nilnarrow[node] != TY_UNKNOWN ? c->nilnarrow[node] : comp_ntype(c, node);
+  if (ty != TY_POLY && ty != TY_UNKNOWN && ty != TY_STRING && ty != TY_STRBUF &&
+      !(c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]))) return 0;
+  const char *vn = nt_str(nt, node, "name");
+  return vn && comp_scope_of(c, node) == &c->scopes[mi] &&
+         (fwd_alias_of(c, mi, vn, pn, 0) || an_local_pure_alias_of(c, mi, vn, pn, 0));
+}
+
+/* Truth of a guard for the incoming String: -1 false, 1 true, 0 unknown.
+   Never prune using a binding the method can reassign, or an unknown/module
+   constant: a String may include a module. No occurrence types are changed. */
+static int fwd_string_guard(Compiler *c, int mi, const char *pn, int node, int depth) {
+  if (node < 0 || depth > 64) return 0;
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_AndNode || k == NK_OrNode) {
+    int l = fwd_string_guard(c, mi, pn, nt_ref(nt, node, "left"), depth + 1);
+    int r = fwd_string_guard(c, mi, pn, nt_ref(nt, node, "right"), depth + 1);
+    if (k == NK_AndNode) return l < 0 || r < 0 ? -1 : l > 0 && r > 0;
+    return l > 0 || r > 0 ? 1 : l < 0 && r < 0 ? -1 : 0;
+  }
+  if (k != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (!nm || !fwd_builtin(c, "String", nm)) return 0;
+  int recv = nt_ref(nt, node, "receiver");
+  if (nm && sp_streq(nm, "!")) return -fwd_string_guard(c, mi, pn, recv, depth + 1);
+  if (!fwd_param_read(c, mi, pn, recv)) return 0;
+  LocalVar *p = scope_local(&c->scopes[mi], pn);
+  if (!p || p->proc_rebinds) return 0;
+  for (int w = comp_lvw_first_sc(c, mi, pn); w >= 0; w = comp_lvw_next_sc(c, w))
+    if (comp_scope_of(c, w) == &c->scopes[mi] && sp_streq(nt_str(nt, w, "name"), pn)) return 0;
+  if (nm && sp_streq(nm, "nil?")) return -1;
+  if (!nm || (!sp_streq(nm, "is_a?") && !sp_streq(nm, "kind_of?"))) return 0;
+  int n = 0, a = nt_ref(nt, node, "arguments");
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  if (n != 1 || (nt_kind(nt, args[0]) != NK_ConstantReadNode && nt_kind(nt, args[0]) != NK_ConstantPathNode)) return 0;
+  const char *cn = nt_str(nt, args[0], "name");
+  if (cn && sp_streq(cn, "String")) return 1;
+  if (isa_narrow_type(cn) != TY_UNKNOWN) return -1;
+  int ci = cn ? comp_class_index(c, cn) : -1;
+  if (ci < 0 || nt_kind(nt, c->classes[ci].def_node) != NK_ClassNode) return 0;
+  /* Object/BasicObject contain String; a subclass of String may itself be
+     the incoming String. Only an unrelated, actual class is disjoint. */
+  if (sp_streq(cn, "Object") || sp_streq(cn, "BasicObject")) return 0;
+  for (int p = ci; p >= 0; p = c->classes[p].parent)
+    if (sp_streq(c->classes[p].name, "String")) return 0;
+  return -1;
+}
+
+/* Trusted native :string inputs are byte consumers, not Ruby box stores.
+   :any/rest arguments do not have that contract. Ruby targets are separately
+   followed; a native return spec is not evidence about its input. */
+static int fwd_native_bytes(Compiler *c, int node, int arg, int argc) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (recv < 0 || !nm) return 0;
+  if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
+    const char *mod = nt_str(nt, recv, "name");
+    int fi = comp_native_find(c, mod, nm);
+    if (fi >= 0 && arg < c->native_funcs[fi].nargs)
+      return sp_streq(c->native_funcs[fi].args[arg], "string");
+    fi = ffi_find_func(c, mod, nm);
+    return fi >= 0 && arg < c->ffi_funcs[fi].nargs && sp_streq(c->ffi_funcs[fi].args[arg], "str");
+  }
+  TyKind rt = comp_ntype(c, recv);
+  if (!ty_is_object(rt)) return 0;
+  int fi = comp_native_method_find(c, ty_object_class(rt), nm, argc, 0);
+  return fi >= 0 && arg < c->native_methods[fi].nargs && sp_streq(c->native_methods[fi].args[arg], "string");
+}
+
+/* A POLY result can still be proven to belong to one object family. Keep
+   its boxed ABI, but do not follow unrelated methods through a receiver
+   built only from that family. Unknown leaves, cycles and deep call trees
+   lose this optional proof and retain the ordinary all-target refusal.
+   A shared work budget bounds branching too: a depth bound alone lets
+   diamond paths repeat the same suffix exponentially. This optional proof
+   may give up rather than add another phase-owned inference cache. */
+enum { FWD_FAMILY_UNKNOWN = -1, FWD_FAMILY_NONE = -2, FWD_FAMILY_WORK = 64 };
+static int fwd_object_base(Compiler *c, int node, int depth, int *work) {
+  if (node < 0 || depth > 8 || !*work) return FWD_FAMILY_UNKNOWN;
+  --*work;
+  TyKind ty = comp_ntype(c, node);
+  if (ty_is_object(ty)) return ty_object_class(ty);
+  if (ty == TY_NIL || ty == TY_VOID) return FWD_FAMILY_NONE;
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "block") >= 0) return FWD_FAMILY_UNKNOWN;
+  ACallTargets targets = {0};
+  an_call_targets_of(c, node, &targets);
+  int base = FWD_FAMILY_NONE;
+  if (!targets.n) base = FWD_FAMILY_UNKNOWN;
+  for (int t = 0; t < targets.n && base != FWD_FAMILY_UNKNOWN; t++) {
+    int mi = targets.v[t];
+    int last = scope_body_last(c, mi);
+    int candidate = fwd_object_base(c, last, depth + 1, work);
+    /* Every explicit return matters, even in a non-tail branch. Nested
+       methods/blocks have a different scope and supply no exit here. */
+    for (int r = comp_kind_first(c, NK_ReturnNode); r >= 0 && candidate != FWD_FAMILY_UNKNOWN; r = comp_kind_next(c, r)) {
+      if (comp_scope_of(c, r) != &c->scopes[mi]) continue;
+      int a = nt_ref(nt, r, "arguments"), n = 0;
+      const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+      int next = n == 0 ? FWD_FAMILY_NONE : n == 1 ? fwd_object_base(c, args[0], depth + 1, work) : FWD_FAMILY_UNKNOWN;
+      if (next == FWD_FAMILY_UNKNOWN) { candidate = FWD_FAMILY_UNKNOWN; break; }
+      if (next < 0) continue;
+      if (candidate == FWD_FAMILY_NONE) candidate = next;
+      else {
+        while (candidate >= 0 && !cr_class_is_ancestor(c, candidate, next)) candidate = c->classes[candidate].parent;
+      }
+    }
+    if (candidate == FWD_FAMILY_UNKNOWN) { base = FWD_FAMILY_UNKNOWN; break; }
+    if (candidate < 0) continue;
+    if (base == FWD_FAMILY_NONE) base = candidate;
+    else {
+      while (base >= 0 && !cr_class_is_ancestor(c, base, candidate)) base = c->classes[base].parent;
+    }
+  }
+  free(targets.v);
+  return base;
+}
+
+/* Stop a statements walk only at a return proven to run under the incoming
+   String hypothesis. Unknown guards and reassigned bindings do not prune. */
+static int fwd_string_returns(Compiler *c, int mi, const char *pn, int node, int depth) {
+  if (node < 0 || depth > 64) return 0;
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_ReturnNode) return 1;
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *body = nt_arr(nt, node, "body", &n);
+    for (int i = 0; i < n; i++)
+      if (fwd_string_returns(c, mi, pn, body[i], depth + 1)) return 1;
+  }
+  if (k == NK_ElseNode) return fwd_string_returns(c, mi, pn, nt_ref(nt, node, "statements"), depth + 1);
+  if (k == NK_IfNode || k == NK_UnlessNode) {
+    int truth = fwd_string_guard(c, mi, pn, nt_ref(nt, node, "predicate"), 0);
+    if (k == NK_UnlessNode) truth = -truth;
+    int yes = fwd_string_returns(c, mi, pn, nt_ref(nt, node, "statements"), depth + 1);
+    int no = fwd_string_returns(c, mi, pn, nt_ref(nt, node, k == NK_UnlessNode ? "else_clause" : "subsequent"), depth + 1);
+    return truth > 0 ? yes : truth < 0 ? no : yes && no;
+  }
+  return 0;
+}
+
+/* Unsupported escapes are not evidence of an append: pulling the input
+   into a handle does not make a container/return copy share that handle.
+   Refuse these paths at emission, independently of known direct appends.
+   Bare, laid-out call arguments are followed by the forwarding walk. */
+enum { FWD_KEEP_LOCAL = 1, FWD_KEEP_COPY = 2, FWD_KEEP_INCOMPLETE = 4,
+       FWD_KEEP_BOX = 8, FWD_KEEP_MUTATOR = 16, FWD_KEEP_INDEX_COPY = 32,
+       FWD_KEEP_BREAK_COPY = 64 };
+typedef enum {
+  FWD_MODE_DISCARD, FWD_MODE_VALUE, FWD_MODE_CAPTURE,
+  FWD_MODE_UNKNOWN, FWD_MODE_ALIAS, FWD_MODE_BOX
+} FwdKeepMode;
+/* Certify only standalone POLY returns and discarded initializer results.
+   Check yielding first: even initialize can be called as an ordinary method
+   with a block and splice into a value slot, unlike the constructor path. */
+static FwdKeepMode fwd_return_mode(Scope *m) {
+  if (m->yields) return FWD_MODE_VALUE;
+  if (m->class_id >= 0 && sp_streq(m->name, "initialize")) return FWD_MODE_DISCARD;
+  return m->ret == TY_POLY ? FWD_MODE_BOX : FWD_MODE_VALUE;
+}
+static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth);
+/* Bare mapped super arguments have graph edges. Expression wrappers do
+   not: inspect those as retained rather than discarding their inner reads. */
+static int fwd_super_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  int target = a_super_target(c, &c->scopes[mi]);
+  int a = nt_ref(nt, node, "arguments"), n = 0, retained = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    int keyword = nt_kind(nt, args[i]) == NK_KeywordHashNode, en = 1;
+    const int *elements = keyword ? nt_arr(nt, args[i], "elements", &en) : &args[i];
+    for (int e = 0; e < en; e++) {
+      int arg = elements[e], forwarded = 0;
+      if (keyword && nt_kind(nt, arg) == NK_AssocNode) {
+        retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, arg, "key"), FWD_MODE_UNKNOWN, appended, depth + 1);
+        arg = nt_ref(nt, arg, "value");
+      }
+      if (target >= 0 && fwd_param_read(c, mi, pn, arg))
+        for (int j = 0; j < c->scopes[target].nparams; j++)
+          if (arg_layout_param_node(c, &c->scopes[target], node, j, NULL) == arg) forwarded = 1;
+      if (target >= 0 && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) forwarded = 1;
+      retained |= fwd_param_kept(c, f, mi, pn, arg, forwarded ? FWD_MODE_DISCARD : FWD_MODE_UNKNOWN, appended, depth + 1);
+    }
+  }
+  return retained | fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "block"),
+                                    FWD_MODE_CAPTURE, appended, depth + 1);
+}
+/* A POLY alias need not carry the source read's lift marker itself. Follow
+   its assignments: only an un-narrowed, actually lifted source read proves
+   that the copied box already contains the caller's shared handle. */
+static int fwd_alias_handle(Compiler *c, int mi, int node, int depth) {
+  const NodeTable *nt = c->nt;
+  if (depth > 8 || nt_kind(nt, node) != NK_LocalVariableReadNode ||
+      comp_scope_of(c, node) != &c->scopes[mi] ||
+      c->nilnarrow[node] != TY_UNKNOWN || comp_ntype(c, node) != TY_POLY) return 0;
+  const char *name = nt_str(nt, node, "name");
+  LocalVar *p = name ? scope_local(&c->scopes[mi], name) : NULL;
+  if (!p || p->type != TY_POLY) return 0;
+  if (c->poly_strbuf_lift[node] || p->str_shared || (p->poly_lift & POLY_LIFT_APPENDED)) return 1;
+  if (p->is_param) return 0;
+  int any = 0;
+  for (int w = comp_lvw_first_sc(c, mi, name); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode ||
+        !fwd_alias_handle(c, mi, nt_ref(nt, w, "value"), depth + 1)) return 0;
+    any = 1;
+  }
+  return any;
+}
+static int fwd_param_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  /* This bounds source-tree recursion, not the forwarding graph. Beyond
+     it there is no readonly proof: refuse rather than risk the C stack. */
+  if (depth > 128) return FWD_KEEP_INCOMPLETE;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_LocalVariableReadNode) {
+    if (!kept || !fwd_param_read(c, mi, pn, node)) return 0;
+    const char *rn = nt_str(nt, node, "name");
+    LocalVar *p = scope_local(comp_scope_of(c, node), rn);
+    /* A bare rest-array read transfers its container of existing boxes,
+       not byte copies of its String elements. Element reads have their own
+       retention contract in fwd_call_kept. */
+    if (c->scopes[mi].rest_idx >= 0 &&
+        sp_streq(rn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]) &&
+        (comp_ntype(c, node) == TY_POLY_ARRAY || comp_ntype(c, node) == TY_POLY))
+      return FWD_KEEP_BOX;
+    if (fwd_alias_handle(c, mi, node, 0)) return 0;
+    /* An un-narrowed, already lifted POLY read carries the original box.
+       A splat's demanded, lifted alias also packs that handle. A merely
+       occurrence-narrowed String read still copies bytes into a container.
+       Unknown expression/alias uses do not have a preserving-box contract. */
+    if (kept != FWD_MODE_UNKNOWN && p &&
+        ((p->type == TY_STRBUF && p->str_shared && c->strbuf_box[node]) ||
+        (p->type == TY_POLY && c->strbuf_box[node] && c->poly_strbuf_lift[node]))) return 0;
+    /* A builtin boxed-container store preserves its incoming box, but that
+       box need not preserve a mutable caller. Discharge this separate
+       retention effect against the actual; it is never a readonly proof. */
+    if (kept == FWD_MODE_BOX && p && p->type == TY_POLY &&
+        c->nilnarrow[node] == TY_UNKNOWN && comp_ntype(c, node) == TY_POLY)
+      return FWD_KEEP_BOX;
+    return kept == FWD_MODE_ALIAS && comp_ntype(c, node) == TY_POLY ? FWD_KEEP_LOCAL : FWD_KEEP_COPY;
+  }
+  /* A captured read is a retention even when its immediate use only reads
+     bytes: the closure could observe later mutations through another alias. */
+  if (kept == FWD_MODE_CAPTURE) goto children;
+  /* A tail begin/rescue uses its own typed result temp before entering the
+     method's return slot. A non-POLY intermediate is not a box transfer. */
+  if (kept == FWD_MODE_BOX && k == NK_BeginNode && comp_ntype(c, node) != TY_POLY)
+    kept = FWD_MODE_VALUE;
+  if (kept == FWD_MODE_BOX && k == NK_LocalVariableWriteNode) {
+    LocalVar *target = scope_local(comp_scope_of(c, node), nt_str(nt, node, "name"));
+    if (!target || target->type != TY_POLY) kept = FWD_MODE_VALUE;
+  }
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *body = nt_arr(nt, node, "body", &n);
+    int retained = 0;
+    for (int i = 0; i < n; i++) {
+      retained |= fwd_param_kept(c, f, mi, pn, body[i], i == n - 1 ? kept : FWD_MODE_DISCARD, appended, depth + 1);
+      if (fwd_string_returns(c, mi, pn, body[i], 0)) break;
+    }
+    return retained;
+  }
+  if (k == NK_EmbeddedStatementsNode) kept = FWD_MODE_DISCARD; /* interpolation copies bytes */
+  if (k == NK_ReturnNode)
+    kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : fwd_return_mode(&c->scopes[mi]);
+  if (k == NK_InstanceVariableWriteNode && kept == FWD_MODE_DISCARD &&
+      comp_scope_of(c, node) == &c->scopes[mi] && c->scopes[mi].class_id >= 0 &&
+      nt_kind(nt, nt_ref(nt, node, "value")) == NK_LocalVariableReadNode) {
+    int cid = c->scopes[mi].class_id;
+    int iv = comp_ivar_index(&c->classes[cid], nt_str(nt, node, "name"));
+    if (iv >= 0 && c->classes[cid].ivar_types[iv] == TY_POLY)
+      return fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "value"), FWD_MODE_BOX, appended, depth + 1);
+  }
+  if (k == NK_ArrayNode || k == NK_HashNode || k == NK_AssocNode ||
+      k == NK_InstanceVariableWriteNode || k == NK_GlobalVariableWriteNode ||
+      k == NK_ClassVariableWriteNode || k == NK_ConstantWriteNode ||
+      k == NK_YieldNode) kept = kept == FWD_MODE_UNKNOWN ? FWD_MODE_UNKNOWN : FWD_MODE_VALUE;
+  /* Conditional writes, destructuring and pattern captures also retain
+     their input. Operator writes may dispatch to a user-defined mutator;
+     none inherits a discarded statement's no-retention contract. */
+  if (k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode ||
+      k == NK_GlobalVariableOrWriteNode || k == NK_GlobalVariableAndWriteNode ||
+      k == NK_ClassVariableOrWriteNode || k == NK_ClassVariableAndWriteNode ||
+      k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+      k == NK_IndexOrWriteNode || k == NK_IndexAndWriteNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
+      k == NK_GlobalVariableOperatorWriteNode || k == NK_ClassVariableOperatorWriteNode ||
+      k == NK_ConstantOperatorWriteNode || k == NK_IndexOperatorWriteNode ||
+      k == NK_MultiWriteNode || k == NK_CaseMatchNode ||
+      k == NK_MatchRequiredNode || k == NK_MatchPredicateNode) kept = FWD_MODE_UNKNOWN;
+  if (k == NK_BlockNode || k == NK_LambdaNode) kept = FWD_MODE_CAPTURE;
+  if (k == NK_SuperNode) return fwd_super_kept(c, f, mi, pn, node, appended, depth);
+  if (k == NK_ForwardingSuperNode) kept = FWD_MODE_DISCARD; /* separately followed formal edges */
+  if (k == NK_LocalVariableWriteNode) {
+    const char *wn = nt_str(nt, node, "name");
+    if (!kept && (!wn || !fwd_alias_of(c, mi, wn, pn, 0))) kept = FWD_MODE_ALIAS;
+  }
+  if (k == NK_IfNode || k == NK_UnlessNode) {
+    int pred = nt_ref(nt, node, "predicate");
+    int retained = fwd_param_kept(c, f, mi, pn, pred, FWD_MODE_DISCARD, appended, depth + 1);
+    int truth = fwd_string_guard(c, mi, pn, pred, 0);
+    if (k == NK_UnlessNode) truth = -truth;
+    return retained | (truth >= 0 ? fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "statements"), kept, appended, depth + 1) : 0) |
+           (truth <= 0 ? fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, k == NK_UnlessNode ? "else_clause" : "subsequent"), kept, appended, depth + 1) : 0);
+  }
+  if (k == NK_AndNode || k == NK_OrNode) {
+    int left = nt_ref(nt, node, "left");
+    int retained = fwd_param_kept(c, f, mi, pn, left, kept, appended, depth + 1);
+    int truth = fwd_string_guard(c, mi, pn, left, 0);
+    return retained | ((k == NK_AndNode ? truth >= 0 : truth <= 0) ?
+           fwd_param_kept(c, f, mi, pn, nt_ref(nt, node, "right"), kept, appended, depth + 1) : 0);
+  }
+  if (k == NK_CallNode) return fwd_call_kept(c, f, mi, pn, node, kept, appended, depth);
+children:;
+  int retained = 0;
+  /* Only the stored value creates this indexed alias. Hash keys have their
+     own builtin copy/freeze contract; the receiver is not the stored input. */
+  int stored = (k == NK_AssocNode || k == NK_IndexOrWriteNode ||
+                k == NK_IndexAndWriteNode || k == NK_IndexOperatorWriteNode) ? nt_ref(nt, node, "value") : -1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int child = nt_ref_at(nt, node, i);
+    int part = fwd_param_kept(c, f, mi, pn, child, kept, appended, depth + 1);
+    retained |= part;
+    if (child == stored && (part & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) retained |= fwd_param_kept(c, f, mi, pn, ids[j], kept, appended, depth + 1);
+  }
+  return retained;
+}
+
+/* Byte-reading and receiver-aliasing are separate contracts. Block String
+   iterators return self; their blockless enumerators also retain self. */
+static FwdKeepMode fwd_string_receiver_mode(Compiler *c, int node, FwdKeepMode kept, int *bytes) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  *bytes = 0;
+  if (!nm || !fwd_builtin(c, "String", nm)) return FWD_MODE_UNKNOWN;
+  int iterator = sp_streq(nm, "each_byte") || sp_streq(nm, "each_char") || sp_streq(nm, "each_line");
+  int read = !iterator && (dyn_pure_read_name(nm) || sp_streq(nm, "is_a?") ||
+             sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") || sp_streq(nm, "class") ||
+             sp_streq(nm, "dup") ||
+             sp_streq(nm, "-") || sp_streq(nm, "/") || sp_streq(nm, "<") || sp_streq(nm, ">") ||
+             sp_streq(nm, "<=") || sp_streq(nm, ">="));
+  int mutator = an_str_mutator_name(nm);
+  *bytes = read || mutator;
+  if (read) return FWD_MODE_DISCARD;
+  if (mutator || sp_streq(nm, "to_s") || sp_streq(nm, "itself") || sp_streq(nm, "freeze") ||
+      (iterator && nt_ref(nt, node, "block") >= 0)) return kept;
+  return FWD_MODE_UNKNOWN;
+}
+
+/* The IO loop retains separator bytes across callbacks. Its argument list
+   preserves boxes, not mutable String identity: this is a BOX destination,
+   never a blanket readonly exemption. Reopenings and break wrappers have
+   different dispatch/return contracts. */
+static int fwd_io_line_block(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, node, "name");
+  int block = nt_ref(nt, node, "block"), owner;
+  return name && (sp_streq(name, "each_line") || sp_streq(name, "each")) &&
+         comp_ntype(c, nt_ref(nt, node, "receiver")) == TY_IO &&
+         nt_kind(nt, block) == NK_BlockNode && !call_breaks(c, node) &&
+         block_opt_default(c, block, 0) < 0 &&
+         fwd_builtin(c, "IO", name) && !io_reopen_defs(c, name, 0, &owner, 1);
+}
+
+/* Codegen drops unresolved dynamic arms unless a same-name body diverges.
+   No such body is a cheap sufficient proof; other UNKNOWN arms stay open. */
+static int fwd_dead_dynamic_arm(Compiler *c, int node) {
+  if (!nt_int(c->nt, node, "dyn_arm", 0)) return 0;
+  TyKind type = comp_ntype(c, node);
+  const char *name = nt_str(c->nt, node, "dyn_name");
+  return (type == TY_UNKNOWN || type == TY_VOID) && name && an_any_scope_by_name(c, name) < 0;
+}
+
+/* A lowered, uncapped send with an actual destination owns its arms' layouts.
+   Empty/dropped dispatches and a splatted name are not forwarding evidence. */
+static const int *fwd_dynamic_send_arms(Compiler *c, int node, const char *pn, int *count) {
+  const char *name = nt_str(c->nt, node, "name");
+  const int *arms = nt_arr(c->nt, node, "dyn_send_arms", count);
+  if (!*count || nt_int(c->nt, node, "dyn_send_truncated", 0) || !name ||
+      (!sp_streq(name, "send") && !sp_streq(name, "__send__") && !sp_streq(name, "public_send")) ||
+      fwd_splat_start(c, node, pn) <= 0) return NULL;
+  int live = 0;
+  for (int i = 0; i < *count; i++) {
+    if (fwd_dead_dynamic_arm(c, arms[i])) continue;
+    TyKind type = comp_ntype(c, arms[i]);
+    int recv = nt_ref(c->nt, arms[i], "receiver");
+    TyKind rt = comp_ntype(c, recv);
+    const char *method = nt_str(c->nt, arms[i], "name");
+    /* A namesake elsewhere is not evidence for builtin/unknown dispatch. */
+    if (type == TY_UNKNOWN || type == TY_VOID || !ty_is_object(rt) || !method ||
+        comp_method_in_chain(c, ty_object_class(rt), method, NULL) < 0) return NULL;
+    live = 1;
+  }
+  return live ? arms : NULL;
+}
+
+/* A call owns its target/layout proof and the retention contract of its
+   receiver, arguments and block. The AST walker handles structural uses. */
+static int fwd_call_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int node, FwdKeepMode kept, int *appended, int depth) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (fwd_dead_dynamic_arm(c, node)) return 0;
+  int narm = 0;
+  const int *arms = fwd_dynamic_send_arms(c, node, pn, &narm);
+  if (arms) {
+    /* Arms have the real argument layout, without the send's name operand.
+       The receiver and name themselves are still evaluated by the sender. */
+    int a = nt_ref(nt, node, "arguments"), argc = 0;
+    const int *args = nt_arr(nt, a, "arguments", &argc);
+    int retained = fwd_param_kept(c, f, mi, pn, recv, FWD_MODE_UNKNOWN, appended, depth + 1);
+    if (argc) retained |= fwd_param_kept(c, f, mi, pn, args[0], FWD_MODE_UNKNOWN, appended, depth + 1);
+    for (int i = 0; i < narm; i++)
+      retained |= fwd_param_kept(c, f, mi, pn, arms[i], kept, appended, depth + 1);
+    return retained;
+  }
+  int bytes;
+  /* A boxed result does not imply a boxed receiver: to_s can unbox a handle
+     to bytes and then rebox those bytes. Its receiver remains a value use. */
+  FwdKeepMode receiver_mode = fwd_string_receiver_mode(c, node, kept == FWD_MODE_BOX ? FWD_MODE_VALUE : kept, &bytes);
+  int rest = c->scopes[mi].rest_idx >= 0 && sp_streq(pn, c->scopes[mi].pnames[c->scopes[mi].rest_idx]);
+  /* A statement mutator also observes identity through its receiver. A
+     local alias or ternary can copy a String even when its result is discarded.
+     Only the bare formal and existing rest handles use direct emitter rules. */
+  int alias_mutator = !rest && an_str_mutator_name(nm) &&
+      (nt_kind(nt, recv) != NK_LocalVariableReadNode || !sp_streq(nt_str(nt, recv, "name"), pn));
+  if (!receiver_mode && alias_mutator)
+    receiver_mode = FWD_MODE_UNKNOWN;
+  int retained = 0;
+  if (rest) {
+    int read = nm && (sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?") || sp_streq(nm, "[]"));
+    if (read) receiver_mode = FWD_MODE_DISCARD;
+    if (kept && nm && sp_streq(nm, "[]") && fwd_param_read(c, mi, pn, recv)) retained = FWD_KEEP_LOCAL;
+  }
+  retained |= fwd_param_kept(c, f, mi, pn, recv, receiver_mode, appended, depth + 1);
+  if (alias_mutator && (retained & FWD_KEEP_COPY)) retained |= FWD_KEEP_MUTATOR;
+  int a = nt_ref(nt, node, "arguments"), n = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+  ACallTargets targets = {0};
+  TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  bytes &= rt == TY_STRING || rt == TY_STRBUF;
+  /* The typed String-array search compares bytes, never stores its
+     needle. Other Array operations/equality dispatch have no such proof. */
+  int search = rt == TY_STR_ARRAY && n == 1 && nm && sp_streq(nm, "include?") &&
+               fwd_builtin(c, "Array", nm) && fwd_builtin(c, "String", "==");
+  int store_start = fwd_array_store_start(c, node, n);
+  int index_store = n == 2 && nm &&
+                    ((ty_is_hash(rt) && (sp_streq(nm, "[]=") || sp_streq(nm, "store"))) ||
+                     ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "[]=")));
+  /* Boxed Hash values keep the original unnarrowed box; keys, typed
+     values and converted expression results do not inherit that contract.
+     store is lowered to []=, so exclude reopens of either spelling. */
+  int hash_box_store = index_store && ty_hash_val(rt) == TY_POLY && fwd_builtin(c, "Hash", "[]=") &&
+                       fwd_builtin(c, "Hash", "store") &&
+                       (kept == FWD_MODE_DISCARD || (kept == FWD_MODE_BOX && comp_ntype(c, node) == TY_POLY));
+  /* Object identity comparison retains neither operand. For a user
+     receiver, verify its actual chain too, including inherited overrides. */
+  const char *identity_owner = ty_is_object(rt) ? c->classes[ty_object_class(rt)].name : "Object";
+  int identity = n == 1 && nm && sp_streq(nm, "equal?") && rt != TY_POLY && rt != TY_UNKNOWN &&
+                 (!ty_is_object(rt) || !c->classes[ty_object_class(rt)].is_native_class) &&
+                 fwd_builtin(c, identity_owner, nm) && fwd_builtin(c, "String", nm) &&
+                 (!ty_is_array(rt) || fwd_builtin(c, "Array", nm));
+  if (!bytes) {
+    an_call_targets_of(c, node, &targets);
+    if (!targets.n) act_add(&targets, fwd_call_target(c, node));
+    if (recv >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN)) {
+      int work = FWD_FAMILY_WORK;
+      int base = fwd_object_base(c, recv, 0, &work);
+      if (base >= 0) {
+        act_reset(c, &targets);
+        act_add(&targets, comp_method_in_chain(c, base, nm, NULL));
+        act_add_overrides(c, &targets, base, nm, 0);
+      }
+    }
+  }
+  identity &= targets.n == 0;
+  int printed = recv < 0 && nm && (sp_streq(nm, "p") || sp_streq(nm, "puts") || sp_streq(nm, "print"));
+  printed &= nm && fwd_builtin(c, "Object", nm) &&
+             fwd_builtin(c, "String", sp_streq(nm, "p") ? "inspect" : "to_s");
+  for (int i = 0; i < n; i++) {
+    /* Explicit keyword values have their own laid-out formal. The hash
+       wrapper is not a stored Ruby Hash, but unresolved ** values and
+       expression arguments still have no bare-read forwarding proof. */
+    int keyword = nt_kind(nt, args[i]) == NK_KeywordHashNode, en = 1;
+    const int *elements = keyword ? nt_arr(nt, args[i], "elements", &en) : &args[i];
+    for (int e = 0; e < en; e++) {
+      int arg = elements[e];
+      if (keyword && nt_kind(nt, arg) == NK_AssocNode) {
+        retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, arg, "key"), FWD_MODE_VALUE, appended, depth + 1);
+        arg = nt_ref(nt, arg, "value");
+      }
+      int forwarded = targets.n > 0;
+      for (int ti = 0; ti < targets.n; ti++) {
+        int t = targets.v[ti], matched = 0;
+        Scope *target = &c->scopes[t];
+        for (int j = 0; j < target->nparams; j++) {
+          if (arg_layout_param_node(c, target, node, j, NULL) != arg) continue;
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_poly_add(c, f, t, j, NULL);
+        }
+        int plain = 1, pos = n;
+        while (pos > 0 && (nt_kind(nt, args[pos - 1]) == NK_KeywordHashNode || nt_kind(nt, args[pos - 1]) == NK_BlockArgumentNode)) pos--;
+        for (int j = 0; j < pos; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
+        if (!keyword && plain && target->rest_idx >= 0 && i >= target->rest_idx && i < pos - target->npost_rest) {
+          matched = 1;
+          if (fwd_param_read(c, mi, pn, arg)) *appended |= fwd_param_appends(c, f, t, i);
+        }
+        if (rest && nt_kind(nt, arg) == NK_SplatNode && fwd_splat_start(c, node, pn) >= 0) matched = 1;
+        /* A standalone POLY return can still be narrowed at this call site.
+           Returning that converted value is not the original box. */
+        if (matched && kept == FWD_MODE_BOX && comp_ntype(c, node) != TY_POLY &&
+            fwd_return_mode(target) == FWD_MODE_BOX && fwd_param_read(c, mi, pn, arg))
+          retained |= FWD_KEEP_COPY;
+        forwarded &= matched;
+      }
+      int consume = !keyword && (bytes || search || identity || fwd_native_bytes(c, node, i, n) || (printed && (!kept || !sp_streq(nm, "p"))));
+      /* Only bare parameter reads have a forwarding edge. Parentheses,
+         conversions and ternaries are conservatively retained, not exempted
+         merely because their containing argument has a destination. */
+      if (forwarded && !rest && nt_kind(nt, arg) != NK_LocalVariableReadNode) forwarded = 0;
+      FwdKeepMode mode = FWD_MODE_UNKNOWN;
+      if (forwarded || consume) mode = FWD_MODE_DISCARD;
+      else if (!keyword && hash_box_store && i == 1 && nt_kind(nt, arg) == NK_LocalVariableReadNode)
+        mode = FWD_MODE_BOX;
+      else if (!keyword && store_start >= 0 && i >= store_start)
+        mode = rt == TY_POLY_ARRAY && nt_kind(nt, arg) == NK_LocalVariableReadNode ? FWD_MODE_BOX : FWD_MODE_VALUE;
+      int part = fwd_param_kept(c, f, mi, pn, arg, mode, appended, depth + 1);
+      retained |= part;
+      if (index_store && i == 1 && !keyword && (part & FWD_KEEP_COPY)) retained |= FWD_KEEP_INDEX_COPY;
+    }
+  }
+  int block = nt_ref(nt, node, "block"), synchronous = 0;
+  if (block >= 0 && nt_kind(nt, block) == NK_BlockNode) {
+    const char *predicate = nm;
+    int receiver = recv;
+    char original[16];
+    /* Enumerable lowering records the genuine per-site builtin copy.
+       Do not trust a user's method merely bearing an internal-looking name. */
+    if (targets.n == 1 && nt_int(nt, c->scopes[targets.v[0]].def_node, "enum_site", -1) == node &&
+        nm && strncmp(nm, "__enum_", 7) == 0) {
+      const char *end = strstr(nm + 7, "__");
+      if (end && end - nm - 7 < (int)sizeof original) {
+        memcpy(original, nm + 7, (size_t)(end - nm - 7)); original[end - nm - 7] = 0;
+        predicate = original;
+        receiver = n ? args[0] : -1;
+      }
+    }
+    synchronous = predicate && (sp_streq(predicate, "any?") || sp_streq(predicate, "all?") ||
+                  sp_streq(predicate, "none?") || sp_streq(predicate, "one?")) &&
+                  ty_is_array(comp_ntype(c, receiver)) && fwd_builtin(c, "Array", predicate) &&
+                  !call_breaks(c, node);
+  }
+  free(targets.v);
+  /* A builtin predicate consumes a literal block's result as truthiness;
+     it does not retain the block. Stores/unknown calls/nested lambdas in
+     that body are still visited normally and can retain the input. */
+  FwdKeepMode block_mode = FWD_MODE_DISCARD;
+  int unknown_defaults = 0;
+  if (fwd_io_line_block(c, node)) synchronous = 1;
+  if (nt_kind(nt, block) == NK_BlockNode && !call_breaks(c, node) && nm && sp_streq(nm, "open") &&
+      nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_str(nt, recv, "name"), "File")) {
+    int owner = comp_class_index(c, "File");
+    if (owner < 0 || comp_cmethod_in_chain(c, owner, nm, NULL) < 0) {
+      /* This builtin binds only its required block parameter. Do not use
+         the synchronous proof for optional defaults the emitter omits. */
+      unknown_defaults = block_opt_default(c, block, 0) >= 0;
+      synchronous = !unknown_defaults;
+      block_mode = kept; /* File.open returns the block's value, unlike IO#each. */
+    }
+  }
+  if (synchronous)
+    retained |= fwd_param_kept(c, f, mi, pn, nt_ref(nt, block, "parameters"),
+                               FWD_MODE_UNKNOWN, appended, depth + 1);
+  int captured = fwd_param_kept(c, f, mi, pn, synchronous ? nt_ref(nt, block, "body") : block,
+                                 synchronous ? block_mode : FWD_MODE_CAPTURE, appended, depth + 1);
+  if (captured && unknown_defaults) captured |= FWD_KEEP_INCOMPLETE;
+  if ((captured & FWD_KEEP_COPY) && call_breaks(c, node)) captured |= FWD_KEEP_BREAK_COPY;
+  return retained | captured;
+}
+
+/* Defaults execute before the body and bind their result to another formal.
+   A default that reads the input is not a discarded readonly expression. */
+static int fwd_scope_kept(Compiler *c, FwdQuery *f, int mi, const char *pn, int *appended) {
+  Scope *m = &c->scopes[mi];
+  int kept = fwd_param_kept(c, f, mi, pn, m->body, fwd_return_mode(m), appended, 0);
+  for (int j = 0; j < m->nparams; j++)
+    kept |= fwd_param_kept(c, f, mi, pn, m->pdefault[j], FWD_MODE_UNKNOWN, appended, 0);
+  return kept;
+}
+
+static unsigned fwd_rest_bits(Compiler *c, FwdQuery *f, int mi);
+/* The worklist carries traversal flags; the separate emission table carries
+   completed proof states. Neither table's byte encoding is used by the other. */
+enum { FWD_VISIT_QUEUED = 1, FWD_VISIT_PROCESSED = 2,
+       FWD_VISIT_FORWARDED = 4, FWD_VISIT_ROOT_KEPT = 8 };
+typedef enum {
+  FWD_CACHE_NONE, FWD_CACHE_ESCAPE, FWD_CACHE_UNKNOWN,
+  FWD_CACHE_ROOT_READONLY, FWD_CACHE_APPENDS, FWD_CACHE_STRICT_READONLY, FWD_CACHE_RETAINS_BOX
+} FwdCacheResult;
+enum { FWD_TAINT_CYCLE = 1, FWD_TAINT_BOUND = 2, FWD_TAINT_ESCAPE = 4,
+       FWD_TAINT_BOX = 8,
+       FWD_TAINT_CUT = FWD_TAINT_CYCLE | FWD_TAINT_BOUND };
 /* fwd_rest_bits beside the elements' bits 0-15: an element at offset 16 or
    more, past what the bits and the dynamic masks hold, reaches a parameter
-   that appends; and an answer below was cut at the bound. Either way the
-   caller's String cannot be pulled in, and the refusal takes it. */
+   that appends; OPEN means incomplete evidence, either a depth-bound cut or
+   unresolved destination. Neither proves the caller's String can be pulled
+   in safely, so both propagate through the query's incomplete-proof taint. */
 #define FWD_REST_PAST 0x10000u
 #define FWD_REST_OPEN 0x20000u
+#define FWD_REST_KEPT 0x40000u
+#define FWD_REST_HANDED 0x80000u
+#define FWD_REST_BOX 0x100000u
+#define FWD_REST_DATA 0x1fffffu
+#define FWD_REST_ASKING 0x20000000u
+#define FWD_REST_ANSWERED 0x40000000u
 /* Does method mi append to what its parameter j is bound to: in place, lent,
    the handle, or a POLY parameter or a rest element it hands on? */
-static int fwd_param_appends(Compiler *c, int mi, int j, int depth) {
+static int fwd_param_appends(Compiler *c, FwdQuery *f, int mi, int j) {
   Scope *m = &c->scopes[mi];
   if (j < 0) return 0;
+  if (f->seen.n && (f->seen.val[0] & FWD_VISIT_PROCESSED))
+    f->seen.val[0] |= FWD_VISIT_FORWARDED;
   /* a rest takes the arguments from its position on; a chain of them is
-     memoized per method (fwd_rest_bits), so it does not count toward the
-     depth, which bounds the POLY hand-ons below */
+     memoized per method (fwd_rest_bits) */
   if (m->rest_idx >= 0 && j >= m->rest_idx) {
-    unsigned rb = fwd_rest_bits(c, mi);
-    if (rb & FWD_REST_OPEN) g_fwd_taint |= 2;
+    unsigned rb = fwd_rest_bits(c, f, mi);
+    if (rb & FWD_REST_OPEN) f->taint |= FWD_TAINT_BOUND;
+    if (rb & FWD_REST_KEPT) f->taint |= FWD_TAINT_ESCAPE;
+    if (rb & FWD_REST_BOX) f->taint |= FWD_TAINT_BOX;
     return j - m->rest_idx < 16 ? (int)((rb >> (j - m->rest_idx)) & 1u) : (rb & FWD_REST_PAST) != 0;
   }
   if (j >= m->nparams || !m->pnames[j]) return 0;
   LocalVar *q = scope_local(m, m->pnames[j]);
   if (!q || !q->is_param || q->is_block_param) return 0;
+  if (f->phase == FWD_EMISSION && (q->type == TY_POLY || q->type == TY_STRING || q->type == TY_STRBUF))
+    return fwd_poly_param_handed_on(c, f, mi, j, NULL);
   if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
   if (q->type != TY_POLY) return 0;
   if (an_param_mutated_in_place(c, mi, j)) return 1;
-  if (depth > 4) { g_fwd_taint |= 2; return 0; }
-  return fwd_poly_param_handed_on(c, mi, j, depth + 1);
+  return fwd_poly_param_handed_on(c, f, mi, j, NULL);
 }
 
 /* The position a call or `super`'s splat of local `rn` starts at among the
@@ -21644,57 +22384,93 @@ static int fwd_splat_start(Compiler *c, int u, const char *rn) {
    the outermost query of a cycle of forwarders asks again with what it found
    until that stops growing, and a forwarder a deeper query reached is asked
    afresh by its own. */
-static unsigned *g_fwd_rest;
-static int g_fwd_n;
-static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn);
-static int g_fwd_rest_depth;   /* forwarders being asked, nested */
-static unsigned fwd_rest_bits(Compiler *c, int mi) {
-  if (mi < 0 || mi >= g_fwd_n) return 0;
-  if (g_fwd_rest[mi] & 0x40000000u) return g_fwd_rest[mi] & 0x3ffffu;
-  if (g_fwd_rest[mi] & 0x20000000u) { g_fwd_taint |= 1; return g_fwd_rest[mi] & 0x3ffffu; }
-  if (g_fwd_rest_depth > 64) { g_fwd_taint |= 2; return FWD_REST_OPEN; }
+static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char *rn);
+static unsigned fwd_rest_bits(Compiler *c, FwdQuery *f, int mi) {
+  FwdMemo *memo = f->memo;
+  if (mi < 0 || mi >= memo->nscopes) return 0;
+  if (memo->rest[mi] & FWD_REST_ANSWERED) return memo->rest[mi] & FWD_REST_DATA;
+  if (memo->rest[mi] & FWD_REST_ASKING) { f->taint |= FWD_TAINT_CYCLE; return memo->rest[mi] & FWD_REST_DATA; }
+  if (f->rest_depth > 64) { f->taint |= FWD_TAINT_BOUND; return FWD_REST_OPEN; }
   Scope *m = &c->scopes[mi];
   const char *rn = m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
-  if (!rn) { g_fwd_rest[mi] = 0x40000000u; return 0; }
-  int outer = g_fwd_taint, top = g_fwd_rest_depth == 0;
+  if (!rn) { memo->rest[mi] = FWD_REST_ANSWERED; return 0; }
+  int outer = f->taint, top = f->rest_depth == 0 && !f->poly_depth;
   unsigned bits = 0;
   int tainted;
-  g_fwd_rest_depth++;
+  f->rest_depth++;
   for (int round = 0; ; round++) {
-    g_fwd_rest[mi] = 0x20000000u | bits;
-    g_fwd_taint = 0;
-    unsigned got = bits | fwd_rest_bits_once(c, mi, rn);
-    tainted = g_fwd_taint;
+    memo->rest[mi] = FWD_REST_ASKING | bits;
+    f->taint = 0;
+    unsigned got = bits | fwd_rest_bits_once(c, f, mi, rn);
+    tainted = f->taint;
     if (got == bits || !top || round >= 16) { bits = got; break; }
     bits = got;
   }
-  g_fwd_rest_depth--;
+  f->rest_depth--;
   /* the top of a cycle has its answer; one cut at the bound says so */
-  if (tainted & 2) bits |= FWD_REST_OPEN;
-  g_fwd_taint = outer | (top ? 0 : tainted);
-  g_fwd_rest[mi] = !top && tainted ? 0 : 0x40000000u | bits;
+  if (tainted & FWD_TAINT_BOUND) bits |= FWD_REST_OPEN;
+  if (tainted & FWD_TAINT_ESCAPE) bits |= FWD_REST_KEPT;
+  if (tainted & FWD_TAINT_BOX) bits |= FWD_REST_BOX;
+  f->taint = outer | (top ? 0 : tainted);
+  memo->rest[mi] = (!top && tainted) || (tainted & (FWD_TAINT_ESCAPE | FWD_TAINT_BOX)) ? 0 : FWD_REST_ANSWERED | bits;
   return bits;
 }
 /* Does target t, its parameters laid from position p on, append to one at
    offset 16 or more: one of its own, or (a rest) one it forwards that far? */
-static unsigned fwd_rest_past(Compiler *c, int t, int p) {
+static unsigned fwd_rest_past(Compiler *c, FwdQuery *f, int t, int p) {
   Scope *tm = &c->scopes[t];
   int end = tm->rest_idx >= 0 ? tm->rest_idx + 17 : tm->nparams;
   for (int j = p + 16; j < end && j < p + 64; j++)
-    if (fwd_param_appends(c, t, j, 0)) return FWD_REST_PAST;
+    if (fwd_param_appends(c, f, t, j)) return FWD_REST_PAST;
   return 0;
 }
-static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
+static unsigned fwd_rest_bits_once(Compiler *c, FwdQuery *f, int mi, const char *rn) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
-  unsigned bits = 0;
+  int appended = 0;
+  int retained = f->phase == FWD_EMISSION ? fwd_scope_kept(c, f, mi, rn, &appended) : 0;
+  unsigned bits = (retained & FWD_KEEP_BOX ? FWD_REST_BOX : 0) |
+                  (retained & ~FWD_KEEP_BOX ? FWD_REST_KEPT : 0);
+  if (rest_elems_mutated(c, mi)) bits |= 0xffffu;
   for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int p = fwd_splat_start(c, u, rn);
-    int t = p >= 0 ? fwd_call_target(c, u) : -1;
-    for (int i = 0; t >= 0 && i < 16; i++)
-      if (fwd_param_appends(c, t, p + i, 0)) bits |= 1u << i;
-    if (t >= 0) bits |= fwd_rest_past(c, t, p);
+    if (p < 0) continue;
+    if (f->phase == FWD_EMISSION) {
+      if (fwd_dead_dynamic_arm(c, u)) continue;
+      int narm = 0;
+      if (fwd_dynamic_send_arms(c, u, rn, &narm))
+        continue; /* synthesized arms are in this same scope's call index */
+      if (nt_int(nt, u, "dyn_arm", 0) &&
+          (comp_ntype(c, u) == TY_UNKNOWN || comp_ntype(c, u) == TY_VOID)) bits |= FWD_REST_OPEN;
+    }
+    bits |= FWD_REST_HANDED;
+    if (f->phase == FWD_EMISSION && fwd_io_line_block(c, u)) {
+      bits |= FWD_REST_BOX;
+      continue;
+    }
+    ACallTargets targets = {0};
+    an_call_targets_of(c, u, &targets);
+    if (!targets.n) act_add(&targets, fwd_call_target(c, u));
+    /* The rest container preserves its boxes, but an unresolved destination
+       says nothing about how those boxes are used. Do not turn missing
+       dispatch evidence into a preserving-retention certificate. */
+    if (f->phase == FWD_EMISSION && !targets.n) bits |= FWD_REST_OPEN;
+    for (int ti = 0; ti < targets.n; ti++) {
+      int t = targets.v[ti];
+      /* A variable-length splat does not fix which of its elements binds
+         a post parameter. Do not exempt such an unknown destination. */
+      if (f->phase == FWD_EMISSION && c->scopes[t].npost_rest) bits |= FWD_REST_KEPT;
+      unsigned mutated = 0;
+      for (int i = 0; i < 16; i++)
+        if (fwd_param_appends(c, f, t, p + i)) mutated |= 1u << i;
+      mutated |= fwd_rest_past(c, f, t, p);
+      bits |= mutated;
+      /* A dynamic arm may convert the spread box into a String formal.
+         Appending is not a preserving readonly certificate for that copy. */
+      if (mutated && f->phase == FWD_EMISSION && nt_int(nt, u, "dyn_arm", 0)) bits |= FWD_REST_KEPT;
+    }
+    free(targets.v);
   }
   /* `super(*a)`, and a zsuper handing on the rest at its own position */
   for (int pass = 0; pass < 2 && m->class_id >= 0; pass++) {
@@ -21703,97 +22479,1074 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
       if (nt_kind(nt, q) != sk || comp_scope_of(c, q) != m) continue;
       int p = pass ? m->rest_idx : fwd_splat_start(c, q, rn);
       int t = p >= 0 ? a_super_target(c, m) : -1;
+      if (t >= 0) bits |= FWD_REST_HANDED;
+      if (t >= 0 && f->phase == FWD_EMISSION && c->scopes[t].npost_rest) {
+        Scope *tm = &c->scopes[t];
+        for (int j = tm->rest_idx + 1; j <= tm->rest_idx + tm->npost_rest; j++)
+          if (!pass || zsuper_param_source(c, m, tm, j) < 0) bits |= FWD_REST_KEPT;
+      }
       for (int i = 0; t >= 0 && i < 16; i++)
-        if (fwd_param_appends(c, t, p + i, 0)) bits |= 1u << i;
-      if (t >= 0) bits |= fwd_rest_past(c, t, p);
+        if (fwd_param_appends(c, f, t, p + i)) bits |= 1u << i;
+      if (t >= 0) bits |= fwd_rest_past(c, f, t, p);
     }
   }
   return bits;
 }
 
-/* Does POLY parameter pj of method mi reach a parameter that appends, by a
-   `super` or a call it is handed to? */
-static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth) {
-  const NodeTable *nt = c->nt;
-  if (depth > 4) { g_fwd_taint |= 2; return 0; }
+/* The visited records themselves are a worklist: enqueue a parameter once,
+   rather than putting every forwarding edge on the compiler's C stack.
+   Rest queries remain separately bounded and taint a cut edge as before. */
+static int fwd_poly_add(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
+  /* pj names a formal, not an actual position: post/keyword parameters
+     after the rest still have their own bodies and must be visited. */
+  if (m->rest_idx >= 0 && pj == m->rest_idx) return fwd_param_appends(c, f, mi, pj);
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
-  const char *pn = m->pnames[pj];
-  int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
-  if (t >= 0) {
-    Scope *tm = &c->scopes[t];
-    for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
-      if (nt_kind(nt, q) != NK_ForwardingSuperNode || comp_scope_of(c, q) != m) continue;
-      for (int j = 0; j < tm->nparams; j++)
-        if (zsuper_param_source(c, m, tm, j) == pj && fwd_param_appends(c, t, j, depth + 1)) return 1;
+  LocalVar *p = scope_local(m, m->pnames[pj]);
+  if (!p || !p->is_param || p->is_block_param) return 0;
+  if (f->phase == FWD_PROMOTION && (p->byref_out || (p->type == TY_STRBUF && p->str_shared))) return 1;
+  if (p->type != TY_POLY && !(f->phase == FWD_EMISSION && (p->type == TY_STRING || p->type == TY_STRBUF))) return 0;
+  signed char *cached = readonly ? sb_mut_tab_slot(readonly, p->name, mi, 0) : NULL;
+  if (cached && *cached) return 0;
+  if (f->seen.n && (f->seen.val[0] & FWD_VISIT_PROCESSED))
+    f->seen.val[0] |= FWD_VISIT_FORWARDED;
+  /* Only a strict completed proof can prune a reached emission vertex.
+     An ordinary root-only zero can exempt direct mutation or retention.
+     Record the forwarding edge first, even when the suffix is cached. */
+  if (f->phase == FWD_EMISSION && f->memo->poly_cache.cap) {
+    signed char *done = sb_mut_tab_slot(&f->memo->poly_cache, p->name, mi, 0);
+    if (done && *done == FWD_CACHE_STRICT_READONLY) return 0;
+  }
+  signed char *seen = sb_mut_tab_slot(&f->seen, m->pnames[pj], mi, 1);
+  if (*seen) return 0; /* already queued: its body will still be processed */
+  *seen = FWD_VISIT_QUEUED;
+  return 0;
+}
+
+static int fwd_poly_param_handed_on(Compiler *c, FwdQuery *f, int mi, int pj, SbMutTab *readonly) {
+  const NodeTable *nt = c->nt;
+  if (mi < 0 || mi >= c->nscopes || pj < 0 || pj >= c->scopes[mi].nparams) return 0;
+  if (f->phase == FWD_EMISSION || f->poly_depth || f->rest_depth) readonly = NULL;
+  signed char *cached = readonly ? sb_mut_tab_slot(readonly, c->scopes[mi].pnames[pj], mi, 0) : NULL;
+  if (cached && *cached) return 0;
+  /* A rest bitmap asks separate questions for separate positions. Give
+     each nested POLY walk its own worklist; a visited vertex is not the
+     answer to a later question reaching that same appender. */
+  FwdQuery *parent = f, child;
+  int nested = f->poly_depth != 0;
+  int internal = nested || f->rest_depth != 0;
+  if (nested) {
+    /* Borrow the phase's caches, but never replace the parent's worklist.
+       Only the nested query's taint propagates back to its caller. */
+    child = (FwdQuery){ .phase = f->phase, .memo = f->memo,
+                        .poly_depth = f->poly_depth, .rest_depth = f->rest_depth, .taint = f->taint };
+    f = &child;
+  }
+  {
+    int np = readonly ? readonly->ncap : 0;
+    if (!readonly) for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+    if (f->seen.ncap < np) {
+      sb_mut_tab_free(&f->seen);
+      sb_mut_tab_init(&f->seen, np);
     }
-    for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
-      if (nt_kind(nt, q) != NK_SuperNode || comp_scope_of(c, q) != m) continue;
-      for (int j = 0; j < tm->nparams; j++) {
-        int an = arg_layout_param_node(c, tm, q, j, NULL);
-        if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-            sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, t, j, depth + 1)) return 1;
+    /* Clear only buckets used by the preceding query, not the whole table. */
+    for (int r = 0; r < f->seen.n; r++)
+      f->seen.head[sb_mut_hash(f->seen.name[r], f->seen.key[r]) &
+                   (unsigned)(f->seen.cap - 1)] = -1;
+    f->seen.n = 0;
+  }
+  int first = f->seen.n;
+  int appended = fwd_poly_add(c, f, mi, pj, readonly);
+  int root_kept = 0;
+  f->poly_depth++;
+  for (int r = first; r < f->seen.n; r++) {
+    f->seen.val[r] = FWD_VISIT_PROCESSED;
+    mi = f->seen.key[r];
+    Scope *m = &c->scopes[mi];
+    const char *pn = f->seen.name[r];
+    for (pj = 0; pj < m->nparams && !sp_streq(m->pnames[pj], pn); pj++) {}
+    LocalVar *p = scope_local(m, pn);
+    /* Direct mutation of the queried root has its existing emitter checks.
+       This query checks mutations reached by forwarding, not a second,
+       broader refusal of already-supported direct calls/block parameters. */
+    if ((f->phase == FWD_PROMOTION || internal || r > 0) &&
+        (p->byref_out || (p->type == TY_STRBUF && p->str_shared) || an_param_mutated_in_place(c, mi, pj))) appended = 1;
+    if (f->phase == FWD_EMISSION) {
+      int retained = fwd_scope_kept(c, f, mi, pn, &appended);
+      if (retained & FWD_KEEP_BOX) f->taint |= FWD_TAINT_BOX;
+      retained &= ~FWD_KEEP_BOX;
+      if (retained) {
+        if (internal || r > 0 || (retained & FWD_KEEP_INCOMPLETE)) f->taint |= FWD_TAINT_ESCAPE;
+        else root_kept |= retained;
       }
     }
-  }
-  for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
-    if (nt_kind(nt, u) != NK_CallNode) continue;
-    int ct = fwd_call_target(c, u);
-    if (ct < 0) continue;
-    Scope *cm = &c->scopes[ct];
-    for (int j = 0; j < cm->nparams; j++) {
-      int an = arg_layout_param_node(c, cm, u, j, NULL);
-      if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode && nt_str(nt, an, "name") &&
-          sp_streq(nt_str(nt, an, "name"), pn) && fwd_param_appends(c, ct, j, depth + 1)) return 1;
+    int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
+    if (t >= 0) {
+      Scope *tm = &c->scopes[t];
+      for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
+        if (comp_scope_of(c, q) != m) continue;
+        for (int j = 0; j < tm->nparams; j++)
+          if (zsuper_param_source(c, m, tm, j) == pj) appended |= fwd_poly_add(c, f, t, j, readonly);
+      }
+      for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
+        if (comp_scope_of(c, q) != m) continue;
+        for (int j = 0; j < tm->nparams; j++) {
+          int an = arg_layout_param_node(c, tm, q, j, NULL);
+          if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, f, t, j, readonly);
+        }
+      }
+    }
+    for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
+      if (f->phase == FWD_EMISSION) break; /* the guard-aware visitor owns call edges */
+      if (nt_kind(nt, u) != NK_CallNode) continue;
+      int ct = fwd_call_target(c, u);
+      if (ct < 0) continue;
+      Scope *cm = &c->scopes[ct];
+      for (int j = 0; j < cm->nparams; j++) {
+        int an = arg_layout_param_node(c, cm, u, j, NULL);
+        if (fwd_param_read(c, mi, pn, an)) appended |= fwd_poly_add(c, f, ct, j, readonly);
+      }
+      /* The layout returns formals, not individual rest elements. Follow
+         plain actuals gathered into the rest during promotion too; emission
+         must not assume a String was pulled into a handle when it was not. */
+      int a = nt_ref(nt, u, "arguments"), n = 0;
+      const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+      int plain = 1;
+      while (n > 0 && (nt_kind(nt, args[n - 1]) == NK_KeywordHashNode || nt_kind(nt, args[n - 1]) == NK_BlockArgumentNode)) n--;
+      for (int j = 0; j < n; j++) if (nt_kind(nt, args[j]) == NK_SplatNode) plain = 0;
+      if (plain && cm->rest_idx >= 0)
+        for (int j = cm->rest_idx; j < n - cm->npost_rest; j++)
+          if (fwd_param_read(c, mi, pn, args[j])) appended |= fwd_param_appends(c, f, ct, j);
     }
   }
-  return 0;
+  /* FORWARDED records an actual edge, including self-edges and separately
+     owned rest queries, not merely a second vertex. */
+  /* Direct-root retention keeps its existing emitter contract. Copied
+     mutator receivers, indexed values and break-wrapper results are unsafe
+     even without a forwarding edge.
+     A copied root handed onward is unsafe through that edge as before. */
+  if (root_kept && f->seen.n && ((root_kept & (FWD_KEEP_MUTATOR | FWD_KEEP_INDEX_COPY | FWD_KEEP_BREAK_COPY)) ||
+      ((f->seen.val[0] & FWD_VISIT_FORWARDED) && (appended || (root_kept & FWD_KEEP_COPY)))))
+    f->taint |= FWD_TAINT_ESCAPE;
+  if (root_kept && f->seen.n) f->seen.val[0] |= FWD_VISIT_ROOT_KEPT;
+  if (readonly && !appended && !f->taint)
+    for (int v = 0; v < f->seen.n; v++)
+      *sb_mut_tab_slot(readonly, f->seen.name[v], f->seen.key[v], 1) = 1;
+  f->poly_depth--;
+  if (nested) {
+    parent->taint = f->taint;
+    sb_mut_tab_free(&f->seen);
+  }
+  return appended;
 }
 
 /* For the emitters' refusal, after the last pass: does method mi forward
    element i of its rest to a parameter that appends, and does it hand its
    POLY parameter j on to one? */
-static int g_fwd_codegen;
-static void fwd_memo_fresh(Compiler *c) {
-  if (g_fwd_codegen && g_fwd_n == c->nscopes) return;
-  free(g_fwd_rest);
-  g_fwd_n = c->nscopes;
-  g_fwd_rest = (unsigned *)calloc((size_t)g_fwd_n + 1, sizeof(unsigned));
-  if (!g_fwd_rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  g_fwd_codegen = 1;
+static void fwd_memo_fresh(Compiler *c, FwdQuery *f, FwdPhase phase) {
+  unsigned gen = comp_scope_index_gen();
+  FwdMemo *memo = f->memo;
+  /* Promotion facts are rebuilt for every fixpoint pass. Emission owns its
+     cache only after analysis has finalized types and mutation metadata. */
+  if (phase == FWD_EMISSION && f->phase == FWD_EMISSION && memo->nscopes == c->nscopes &&
+      memo->version == c->nt->version && memo->scope_gen == gen) return;
+  free(memo->rest);
+  sb_mut_tab_free(&memo->poly_cache);
+  memset(&memo->poly_cache, 0, sizeof memo->poly_cache);
+  memo->frozen_reflection = 0;
+  memo->frozen_operator_fold = 0;
+  memo->readonly_strings = 0;
+  memo->readonly_hash_nonstring = 0;
+  free(memo->print_parent); memo->print_parent = NULL;
+  memo->print_contract = 0;
+  anh_free(&memo->frozen_operator_writes);
+  memset(&memo->frozen_operator_writes, 0, sizeof memo->frozen_operator_writes);
+  handle_arg_tab_free(&memo->frozen_callers);
+  sb_mut_tab_free(&memo->frozen_params);
+  memset(&memo->frozen_params, 0, sizeof memo->frozen_params);
+  free(memo->frozen_blocked); memo->frozen_blocked = NULL;
+  memo->frozen_ready = 0;
+  memo->nscopes = c->nscopes;
+  memo->version = c->nt->version;
+  memo->scope_gen = gen;
+  memo->rest = (unsigned *)calloc((size_t)memo->nscopes + 1, sizeof(unsigned));
+  if (!memo->rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  f->phase = phase;
 }
-/* Each answers 1 when it appends, 0 when it does not, and -1 when it cannot
-   tell -- a POLY hand-on past the depth bound -- which the refusal takes as
-   appending, so an answer cut short is refused rather than copied. */
-int fwd_rest_elem_appends(Compiler *c, int mi, int i) {
-  if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return 0;
-  fwd_memo_fresh(c);
-  unsigned rb = fwd_rest_bits(c, mi);
-  if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return 1;
-  return rb & FWD_REST_OPEN ? -1 : 0;
+/* Classify a forwarded rest element's mutation and retention. Unresolved
+   dispatch or a depth-bound cut is UNKNOWN, or ESCAPE when boxes are retained:
+   incomplete evidence must never certify a preserving boxed store. */
+FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i) {
+  if (mi < 0 || mi >= c->nscopes || i < 0 || c->scopes[mi].rest_idx < 0) return FWD_READONLY;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  unsigned rb = fwd_rest_bits(c, f, mi);
+  /* Direct rest stores/iteration have their existing emission/promotion
+     rules. This public refusal asks about a rest the method hands onward. */
+  if (!(rb & FWD_REST_HANDED)) return FWD_READONLY;
+  if (rb & FWD_REST_KEPT) return FWD_ESCAPE;
+  int appends = i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0;
+  if (rb & FWD_REST_BOX) return appends || (rb & FWD_REST_OPEN) ? FWD_ESCAPE : FWD_RETAINS_BOX;
+  if (i < 16 ? (rb >> i) & 1u : (rb & FWD_REST_PAST) != 0) return FWD_APPENDS;
+  return rb & FWD_REST_OPEN ? FWD_UNKNOWN : FWD_READONLY;
 }
-int fwd_param_appends_at(Compiler *c, int mi, int j) {
-  if (mi < 0 || mi >= c->nscopes || j < 0) return 0;
-  fwd_memo_fresh(c);
-  int outer = g_fwd_taint;
-  g_fwd_taint = 0;
-  int r = fwd_param_appends(c, mi, j, 0);
-  if (!r && (g_fwd_taint & 2)) r = -1;
-  g_fwd_taint = outer;
+/* Bound the optional certificate's body work independently of program size.
+   Defaults are separate roots; nested captures and anonymous forwarding do
+   not get to hide a use of the input or a change to the zsuper layout. */
+static int fwd_rest_input_only(const NodeTable *nt, int node, const char *pn,
+                               const char *rest, int tail, int depth, int *work) {
+  if (node < 0) return 1;
+  if (depth > 32 || !*work) return 0;
+  --*work;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) {
+    const char *name = nt_str(nt, node, "name");
+    if ((sp_streq(name, pn) || (rest && sp_streq(name, rest))) &&
+        (k != NK_LocalVariableReadNode || node != tail)) return 0;
+  }
+  if (k == NK_ForwardingSuperNode && node != tail) return 0;
+  if (k == NK_SuperNode || (k == NK_SplatNode && nt_ref(nt, node, "expression") < 0)) return 0;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (!fwd_rest_input_only(nt, nt_ref_at(nt, node, i), pn, rest, tail, depth + 1, work)) return 0;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++)
+      if (!fwd_rest_input_only(nt, ids[j], pn, rest, tail, depth + 1, work)) return 0;
+  }
+  return 1;
+}
+/* Only fresh primitive inputs in a discarded builtin p result can borrow
+   this certificate. Bind the queried actual, not the returned formal: a
+   post can receive it, or the terminal may leave its rest entirely unused. */
+static int fwd_rest_return_only(Compiler *c, int mi, int position, int argc, int depth) {
+  if (mi < 0 || depth > 16) return 0;
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  if (m->body < 0 || m->is_ext_entry || m->yields || nt_int(nt, m->def_node, "rest_rebound", 0)) return 0;
+  int pj = -1;
+  for (int j = 0; j < m->nparams; j++)
+    if (j != m->rest_idx && j != m->kwrest_idx && arg_layout_plain_arg(c, m, argc, j) == position) pj = j;
+  if (pj < 0 && m->rest_idx >= 0 && position >= m->rest_idx && position < argc - m->npost_rest) pj = m->rest_idx;
+  const char *rn = pj >= 0 ? m->pnames[pj] : NULL;
+  if (!rn) return 0;
+  int tail = m->body;
+  for (int n = 0; n < 16; n++) {
+    if (tail < 0) return 0;
+    NodeKind k = nt_kind(nt, tail);
+    if (k == NK_ParenthesesNode) tail = nt_ref(nt, tail, "body");
+    else if (k == NK_StatementsNode) {
+      int count = 0; const int *body = nt_arr(nt, tail, "body", &count);
+      tail = count ? body[count - 1] : -1;
+    }
+    else break;
+  }
+  if (tail < 0) return 0;
+  int direct = nt_kind(nt, tail) == NK_LocalVariableReadNode && an_param_idx(m, nt_str(nt, tail, "name")) >= 0;
+  if (!direct && nt_kind(nt, tail) != NK_ForwardingSuperNode) return 0;
+  const char *rest = !direct && m->rest_idx >= 0 ? m->pnames[m->rest_idx] : NULL;
+  int work = 2048;
+  if (!fwd_rest_input_only(nt, m->body, rn, rest, tail, 0, &work)) return 0;
+  for (int j = 0; j < m->nparams; j++)
+    if (!fwd_rest_input_only(nt, m->pdefault[j], rn, rest, -1, 0, &work)) return 0;
+  if (direct) return 1;
+  /* A rest-bearing zsuper with no defaults/keywords preserves both the
+     positional count and this element's index. Anything else needs a
+     different binding proof and cannot borrow the returned formal's proof. */
+  if (m->rest_idx < 0 || m->kwrest_idx >= 0 || callee_declares_kwargs(c, m)) return 0;
+  for (int j = 0; j < m->nparams; j++) if (m->pdefault[j] >= 0) return 0;
+  int target = a_super_target(c, m);
+  return target >= 0 && fwd_rest_return_only(c, target, position, argc, depth + 1);
+}
+int fwd_rest_print_safe(Compiler *c, int mi, int call, int actual) {
+  const NodeTable *nt = c->nt;
+  /* Reject ordinary callers before building indexes or walking a suffix. */
+  int literal = actual;
+  if (nt_kind(nt, literal) == NK_CallNode && sp_streq(nt_str(nt, literal, "name"), "+@") &&
+      fwd_builtin(c, "String", "+@") && nt_ref(nt, literal, "arguments") < 0 && nt_ref(nt, literal, "block") < 0)
+    literal = nt_ref(nt, literal, "receiver");
+  if (literal < 0 || nt_kind(nt, literal) != NK_StringNode) return 0;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  FwdMemo *memo = f->memo;
+  if (!memo->print_parent) memo->print_parent = du_parent_map(nt);
+  if (!memo->print_parent) return 0;
+  int pa = memo->print_parent[call];
+  if (pa < 0 || !sp_streq(nt_type(nt, pa), "ArgumentsNode")) return 0;
+  int printed = memo->print_parent[pa];
+  if (printed < 0 || nt_kind(nt, printed) != NK_CallNode ||
+      !sp_streq(nt_str(nt, printed, "name"), "p") || nt_ref(nt, printed, "receiver") >= 0 ||
+      nt_ref(nt, printed, "block") >= 0 || comp_self_call_mi(c, printed, "p") >= 0) return 0;
+  int st = memo->print_parent[printed];
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  int count = 0; const int *body = nt_arr(nt, st, "body", &count);
+  if (!count || body[count - 1] == printed) return 0;
+  int a = nt_ref(nt, call, "arguments"), argc = 0, position = -1;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
+  for (int i = 0; i < argc; i++) {
+    NodeKind k = nt_kind(nt, args[i]);
+    if (k == NK_SplatNode || k == NK_KeywordHashNode || k == NK_BlockArgumentNode) return 0;
+    if (args[i] == actual) position = i;
+  }
+  if (position < 0) return 0;
+  if (!memo->print_contract) {
+    int safe = !c->n_native_funcs && !c->n_native_objs && !c->n_native_methods && !c->n_ffi_funcs &&
+      fwd_builtin(c, "Object", "p") && fwd_builtin(c, "String", "inspect") && fwd_builtin(c, "Array", "inspect");
+    /* Other objects' inspect callbacks cannot access this fresh input: the
+       chain proves no publication. Overrides on the String or its returned
+       rest Array itself are excluded above. */
+    memo->print_contract = safe ? 1 : -1;
+  }
+  if (memo->print_contract < 0) return 0;
+  if (fwd_rest_bits(c, f, mi) & FWD_REST_OPEN) return 0;
+  return fwd_rest_return_only(c, mi, position, argc, 0);
+}
+FwdResult fwd_param_appends_at(Compiler *c, int mi, int j) {
+  if (mi < 0 || mi >= c->nscopes || j < 0) return FWD_READONLY;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  int outer = f->taint;
+  f->taint = 0;
+  FwdResult r = fwd_param_appends(c, f, mi, j) ? FWD_APPENDS : FWD_READONLY;
+  if (!r && (f->taint & FWD_TAINT_CUT)) r = FWD_UNKNOWN;
+  if (f->taint & (FWD_TAINT_ESCAPE | FWD_TAINT_BOX)) r = FWD_ESCAPE;
+  f->taint = outer;
   return r;
 }
-int fwd_poly_param_appends(Compiler *c, int mi, int j) {
-  if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return 0;
+FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j) {
+  if (mi < 0 || mi >= c->nscopes || j < 0 || j >= c->scopes[mi].nparams) return FWD_READONLY;
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
-  if (!q || q->type != TY_POLY || an_param_mutated_in_place(c, mi, j)) return 0;
-  fwd_memo_fresh(c);
-  int outer = g_fwd_taint;
-  g_fwd_taint = 0;
-  int r = fwd_poly_param_handed_on(c, mi, j, 0);
-  if (!r && (g_fwd_taint & 2)) r = -1;
-  g_fwd_taint = outer;
+  /* String+nil can settle into a nullable pointer rather than POLY. Keep
+     that union in the boxed-forwarding checks, not every concrete String
+     formal: monomorphic byte-consuming calls retain their existing ABI. */
+  if (!q || (q->type != TY_POLY &&
+      !((q->type == TY_STRING || q->type == TY_STRBUF) && q->obj_nilable))) return FWD_READONLY;
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  /* Only a completed outer query is cached. Nested rest/cycle queries may
+     depend on a cut edge and keep the existing taint/fixpoint treatment. */
+  if (!f->memo->poly_cache.cap) {
+    int np = 0;
+    for (int s = 0; s < c->nscopes; s++) np += c->scopes[s].nparams;
+    sb_mut_tab_init(&f->memo->poly_cache, np);
+  }
+  int cacheable = !f->poly_depth && !f->rest_depth;
+  signed char *slot = sb_mut_tab_slot(&f->memo->poly_cache, q->name, mi, cacheable);
+  if (cacheable && slot) {
+    switch ((FwdCacheResult)*slot) {
+      case FWD_CACHE_ESCAPE: return FWD_ESCAPE;
+      case FWD_CACHE_RETAINS_BOX: return FWD_RETAINS_BOX;
+      case FWD_CACHE_UNKNOWN: return FWD_UNKNOWN;
+      case FWD_CACHE_APPENDS: return FWD_APPENDS;
+      case FWD_CACHE_ROOT_READONLY:
+      case FWD_CACHE_STRICT_READONLY: return FWD_READONLY;
+      case FWD_CACHE_NONE: break;
+    }
+  }
+  int outer = f->taint;
+  f->taint = 0;
+  FwdResult r = fwd_poly_param_handed_on(c, f, mi, j, NULL) ? FWD_APPENDS : FWD_READONLY;
+  if (!r && (f->taint & FWD_TAINT_CUT)) r = FWD_UNKNOWN;
+  if (f->taint & FWD_TAINT_BOX) r = r == FWD_READONLY ? FWD_RETAINS_BOX : FWD_ESCAPE;
+  if (f->taint & FWD_TAINT_ESCAPE) r = FWD_ESCAPE;
+  int complete = !(f->taint & FWD_TAINT_CYCLE);
+  f->taint = outer;
+  if (cacheable && complete) {
+    slot = sb_mut_tab_slot(&f->memo->poly_cache, q->name, mi, 1);
+    *slot = r > 0 ? FWD_CACHE_APPENDS : r == FWD_ESCAPE ? FWD_CACHE_ESCAPE :
+            r == FWD_RETAINS_BOX ? FWD_CACHE_RETAINS_BOX :
+            r < 0 ? FWD_CACHE_UNKNOWN : FWD_CACHE_ROOT_READONLY;
+    /* An entirely readonly root proves every reachable vertex readonly too.
+       A root exemption disqualifies the whole walk: a suffix could cycle
+       back to that root. Other completed answers remain root-only. */
+    if (!r && !q->byref_out && !q->str_shared && !an_param_mutated_in_place(c, mi, j) &&
+        !(f->seen.n && (f->seen.val[0] & FWD_VISIT_ROOT_KEPT)))
+      for (int v = 0; v < f->seen.n; v++)
+        *sb_mut_tab_slot(&f->memo->poly_cache, f->seen.name[v], f->seen.key[v], 1) = FWD_CACHE_STRICT_READONLY;
+  }
   return r;
+}
+
+/* Frozen provenance is optional, bounded, and never promotes storage.
+   In particular, a String type or a POLY box alone is not frozen evidence.
+   Array sources must not escape into aliases that could replace elements. */
+static int fwd_frozen_step(int *work) {
+  if (!*work) return 0;
+  --*work;
+  return 1;
+}
+static int fwd_frozen_local(Compiler *c, int mi, const char *pn, int node) {
+  return node >= 0 && nt_kind(c->nt, node) == NK_LocalVariableReadNode &&
+         comp_scope_of(c, node) == &c->scopes[mi] && sp_streq(nt_str(c->nt, node, "name"), pn);
+}
+static int fwd_frozen_array_uses(Compiler *c, int mi, const char *pn, int node,
+                                 int tail, int depth, int *work) {
+  if (node < 0) return 1;
+  if (depth > 32 || !*work) return 0;
+  --*work;
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 1;
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 0;
+  if (k == NK_LocalVariableReadNode)
+    return !fwd_frozen_local(c, mi, pn, node) || tail;
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *body = nt_arr(nt, node, "body", &n);
+    for (int i = 0; i < n; i++)
+      if (!fwd_frozen_array_uses(c, mi, pn, body[i], tail && i == n - 1, depth + 1, work)) return 0;
+    return 1;
+  }
+  if (k == NK_ReturnNode) {
+    int a = nt_ref(nt, node, "arguments"), n = 0;
+    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+    return n == 1 && fwd_frozen_array_uses(c, mi, pn, args[0], tail, depth + 1, work);
+  }
+  if (k == NK_CallNode) {
+    int recv = nt_ref(nt, node, "receiver");
+    const char *nm = nt_str(nt, node, "name");
+    if (fwd_frozen_local(c, mi, pn, recv)) {
+      int read = nm && (sp_streq(nm, "respond_to?") || sp_streq(nm, "is_a?") ||
+                 sp_streq(nm, "kind_of?") || sp_streq(nm, "nil?") ||
+                 sp_streq(nm, "length") || sp_streq(nm, "size") || sp_streq(nm, "empty?"));
+      if (!read || !fwd_builtin(c, "Array", nm)) return 0;
+      recv = -1;
+    }
+    if (!fwd_frozen_array_uses(c, mi, pn, recv, 0, depth + 1, work)) return 0;
+    int a = nt_ref(nt, node, "arguments"), n = 0;
+    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+    for (int i = 0; i < n; i++)
+      if (!fwd_frozen_array_uses(c, mi, pn, args[i], 0, depth + 1, work)) return 0;
+    return fwd_frozen_array_uses(c, mi, pn, nt_ref(nt, node, "block"), 0, depth + 1, work);
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (!fwd_frozen_array_uses(c, mi, pn, nt_ref_at(nt, node, i), 0, depth + 1, work)) return 0;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++)
+      if (!fwd_frozen_array_uses(c, mi, pn, ids[j], 0, depth + 1, work)) return 0;
+  }
+  return 1;
+}
+
+/* Recognize only an isolated literal-array iteration: every other use of
+   the source must be a readonly receiver or a discarded, verified reader.
+   Returning/storing/aliasing it would invalidate its literal elements. */
+static int fwd_frozen_array_source(Compiler *c, int mi, const char *pn, int each, int *work) {
+  const NodeTable *nt = c->nt;
+  for (int pass = 0; pass < 2; pass++) {
+    NodeKind kind = pass ? NK_ForwardingSuperNode : NK_SuperNode;
+    for (int u = comp_kind_first(c, kind); u >= 0; u = comp_kind_next(c, u)) {
+      if (!fwd_frozen_step(work)) return 0;
+      if (comp_scope_of(c, u) == &c->scopes[mi]) return 0;
+    }
+  }
+  for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
+    if (!fwd_frozen_step(work)) return 0;
+    if (u == each || nt_kind(nt, u) != NK_CallNode) continue;
+    int recv = nt_ref(nt, u, "receiver");
+    if (fwd_frozen_local(c, mi, pn, recv)) {
+      /* The each receiver's builtin to_a is the one allowed alias. */
+      if (recv == nt_ref(nt, nt_ref(nt, each, "receiver"), "receiver")) continue;
+      const char *nm = nt_str(nt, u, "name");
+      if (!nm || (!sp_streq(nm, "respond_to?") && !sp_streq(nm, "is_a?") &&
+          !sp_streq(nm, "kind_of?") && !sp_streq(nm, "nil?")) || !fwd_builtin(c, "Array", nm)) return 0;
+    }
+    int a = nt_ref(nt, u, "arguments"), n = 0;
+    const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+    for (int i = 0; i < n; i++) {
+      if (!fwd_frozen_step(work)) return 0;
+      if (!fwd_frozen_local(c, mi, pn, args[i])) continue;
+      int discarded = 0;
+      for (int s = comp_kind_first(c, NK_StatementsNode); s >= 0; s = comp_kind_next(c, s)) {
+        if (!fwd_frozen_step(work)) return 0;
+        int bn = 0; const int *body = nt_arr(nt, s, "body", &bn);
+        for (int b = 0; b + 1 < bn; b++) {
+          if (!fwd_frozen_step(work)) return 0;
+          if (body[b] == u) discarded = 1;
+        }
+      }
+      if (!discarded) return 0;
+      ACallTargets targets = {0};
+      an_call_targets_of(c, u, &targets);
+      if (!targets.n) act_add(&targets, fwd_call_target(c, u));
+      int verified = targets.n > 0;
+      for (int t = 0; t < targets.n && verified; t++) {
+        int target = targets.v[t];
+        Scope *m = &c->scopes[target];
+        int pj = -1;
+        for (int j = 0; j < m->nparams; j++) {
+          if (!fwd_frozen_step(work)) break;
+          if (arg_layout_param_node(c, m, u, j, NULL) == args[i]) pj = j;
+        }
+        verified = *work && pj >= 0 && m->body >= 0 && !m->is_ext_entry && !m->cs_synth &&
+                   !m->yields && !m->is_lowered_yield && !m->dm_subst_name &&
+                   fwd_frozen_array_uses(c, target, m->pnames[pj], m->body, 1, 0, work);
+      }
+      free(targets.v);
+      if (!verified) return 0;
+    }
+  }
+  /* Any bare read outside the handled receiver/argument positions is an
+     alias or an escape. Count the owned occurrences, not just calls. */
+  for (int u = comp_kind_first(c, NK_LocalVariableReadNode); u >= 0; u = comp_kind_next(c, u)) {
+    if (!fwd_frozen_step(work)) return 0;
+    if (!fwd_frozen_local(c, mi, pn, u)) continue;
+    int owned = 0;
+    for (int v = comp_scall_first(c, mi); v >= 0; v = comp_scall_next(c, v)) {
+      if (!fwd_frozen_step(work)) return 0;
+      if (nt_ref(nt, v, "receiver") == u) owned = 1;
+      int a = nt_ref(nt, v, "arguments"), n = 0;
+      const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+      for (int j = 0; j < n; j++) {
+        if (!fwd_frozen_step(work)) return 0;
+        if (args[j] == u) owned = 1;
+      }
+    }
+    if (!owned) return 0;
+  }
+  return 1;
+}
+
+/* Runtime protocols, operators and setters can be entered without a matching
+   CallNode. Explicit frozen calls cannot close their incoming-value census. */
+static int fwd_frozen_static_name(const char *name, FwdMemo *memo) {
+  return name && *name &&
+         (isalnum((unsigned char)*name) || *name == '_' ||
+          (!memo->frozen_operator_fold && !anh_has(&memo->frozen_operator_writes, name) &&
+           strchr("+-*/%&|^<>", *name))) &&
+         name[strlen(name) - 1] != '=' && !method_name_implicitly_invoked(name);
+}
+/* Reuse the existing conservative reverse caller index once per emission
+   generation. Supers and hidden alias entries invalidate whole formals. */
+static int fwd_frozen_prepare(Compiler *c) {
+  FwdMemo *memo = fwd_analysis(c)->memo;
+  if (memo->frozen_ready) return memo->frozen_ready > 0;
+  memo->frozen_ready = -1;
+  handle_arg_tab_init(c, &memo->frozen_callers);
+  if (!memo->frozen_callers.ok) return 0;
+  memo->frozen_blocked = calloc((size_t)c->nscopes, 1);
+  if (!memo->frozen_blocked) return 0;
+  for (int mi = 0; mi < c->nscopes; mi++)
+    if (!fwd_frozen_static_name(c->scopes[mi].name, memo)) memo->frozen_blocked[mi] = 1;
+  /* Aliases have no scope of their own: a normal name can be the resolved
+     target of a runtime operator, setter, protocol or constructor alias. */
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *cls = &c->classes[k];
+    for (int a = 0; a < cls->naliases; a++) {
+      const char *name = cls->alias_new[a];
+      if (!name || (fwd_frozen_static_name(name, memo) && !sp_streq(name, "initialize"))) continue;
+      int mi = comp_method_in_chain(c, k, name, NULL);
+      if (mi >= 0) memo->frozen_blocked[mi] = 1;
+      mi = comp_cmethod_in_chain(c, k, name, NULL);
+      if (mi >= 0) memo->frozen_blocked[mi] = 1;
+    }
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    NodeKind kind = pass ? NK_ForwardingSuperNode : NK_SuperNode;
+    for (int u = comp_kind_first(c, kind); u >= 0; u = comp_kind_next(c, u)) {
+      Scope *caller = comp_scope_of(c, u);
+      int mi = caller ? a_super_target(c, caller) : -1;
+      if (mi >= 0) memo->frozen_blocked[mi] = 1;
+    }
+  }
+  /* The former census also included a name-only fallback. If the shared
+     index has no such edge, decline that formal rather than narrow the
+     incoming-value proof. This compatibility check is one preparation pass,
+     not another global scan for every queried parameter. */
+  ACallTargets targets = {0};
+  for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
+    int mi = fwd_call_target(c, u);
+    if (mi < 0) continue;
+    an_call_targets_of(c, u, &targets);
+    int indexed = 0;
+    for (int i = 0; i < targets.n; i++) if (targets.v[i] == mi) indexed = 1;
+    if (!indexed) memo->frozen_blocked[mi] = 1;
+  }
+  free(targets.v);
+  int nparams = 0;
+  for (int mi = 0; mi < c->nscopes; mi++) nparams += c->scopes[mi].nparams;
+  sb_mut_tab_init(&memo->frozen_params, nparams);
+  memo->frozen_ready = 1;
+  return 1;
+}
+
+static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int depth, int *work);
+enum { FWD_FROZEN_VISITING = 1, FWD_FROZEN_UNPROVEN, FWD_FROZEN_PROVEN };
+static int fwd_frozen_formal(Compiler *c, int mi, int pj, int elements, int each, int depth, int *work) {
+  Scope *m = &c->scopes[mi];
+  if (!fwd_frozen_prepare(c)) return 0;
+  FwdMemo *memo = fwd_analysis(c)->memo;
+  if (memo->frozen_blocked[mi]) return 0;
+  const char *pn = m->pnames[pj];
+  /* Array-element proofs depend on their consuming `each` and stay uncached.
+     Scalar formal facts are context-free; cycles/cutoffs fail closed. */
+  if (!elements) {
+    unsigned char *slot = sb_mut_tab_slot(&memo->frozen_params, pn, mi, 1);
+    if (*slot) return *slot == FWD_FROZEN_PROVEN;
+    *slot = FWD_FROZEN_VISITING;
+  }
+  int found = 0, ok = 1;
+  for (int e = memo->frozen_callers.head[mi]; e >= 0; e = memo->frozen_callers.enext[e]) {
+    if (!*work) { ok = 0; break; }
+    --*work;
+    int u = memo->frozen_callers.enode[e];
+    Scope *caller = comp_scope_of(c, u);
+    if (caller && caller->name && !caller->reachable) continue;
+    int recv = nt_ref(c->nt, u, "receiver");
+    if (ty_is_array(comp_ntype(c, recv)) && fwd_builtin(c, "Array", nt_str(c->nt, u, "name"))) continue;
+    if (!fwd_frozen_value(c, arg_layout_param_node(c, m, u, pj, NULL), elements, each, depth + 1, work)) {
+      ok = 0; break;
+    }
+    found = 1;
+  }
+  ok &= found;
+  if (!elements)
+    *sb_mut_tab_slot(&memo->frozen_params, pn, mi, 1) = ok ? FWD_FROZEN_PROVEN : FWD_FROZEN_UNPROVEN;
+  return ok;
+}
+
+static int fwd_frozen_value(Compiler *c, int node, int elements, int each, int depth, int *work) {
+  if (node < 0 || depth > 16 || !*work) return 0;
+  --*work;
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, node);
+  if (!elements) {
+    if (k == NK_StringNode) return nt_int(nt, node, "fzl", 0) != 0;
+    if (k == NK_IntegerNode || k == NK_FloatNode || k == NK_NilNode ||
+        k == NK_TrueNode || k == NK_FalseNode || k == NK_SymbolNode) return 1;
+  }
+  if (elements && k == NK_ArrayNode) {
+    int n = 0; const int *ids = nt_arr(nt, node, "elements", &n);
+    for (int i = 0; i < n; i++)
+      if (!fwd_frozen_value(c, ids[i], 0, -1, depth + 1, work)) return 0;
+    return 1;
+  }
+  if (elements && k == NK_CallNode && sp_streq(nt_str(nt, node, "name"), "to_a") &&
+      fwd_builtin(c, "Array", "to_a") && ty_is_array(comp_ntype(c, nt_ref(nt, node, "receiver"))))
+    return fwd_frozen_value(c, nt_ref(nt, node, "receiver"), 1, each, depth + 1, work);
+  if (k != NK_LocalVariableReadNode) return 0;
+  const char *pn = nt_str(nt, node, "name");
+  Scope *m = pn ? comp_scope_of(c, node) : NULL;
+  LocalVar *p = m ? scope_local(m, pn) : NULL;
+  if (!p || p->proc_rebinds || p->byref_out || (p->type == TY_STRBUF && p->str_shared)) return 0;
+  int mi = (int)(m - c->scopes), found = 0;
+  for (int w = comp_lvw_first_sc(c, mi, pn); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (!fwd_frozen_step(work)) return 0;
+    if (comp_scope_of(c, w) != m || !sp_streq(nt_str(nt, w, "name"), pn)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode ||
+        !fwd_frozen_value(c, nt_ref(nt, w, "value"), elements, each, depth + 1, work)) return 0;
+    found = 1;
+  }
+  if (elements && (each < 0 || !fwd_frozen_array_source(c, mi, pn, each, work))) return 0;
+  if (p->is_block_param) {
+    if (elements || found) return 0;
+    for (int u = comp_scall_first(c, mi); u >= 0; u = comp_scall_next(c, u)) {
+      if (!fwd_frozen_step(work)) return 0;
+      int block = nt_ref(nt, u, "block");
+      if (block < 0 || !sp_streq(block_param_name(c, block, 0), pn)) continue;
+      if (!sp_streq(nt_str(nt, u, "name"), "each") || !fwd_builtin(c, "Array", "each") ||
+          !ty_is_array(comp_ntype(c, nt_ref(nt, u, "receiver"))) ||
+          !fwd_frozen_value(c, nt_ref(nt, u, "receiver"), 1, u, depth + 1, work)) return 0;
+      found = 1;
+    }
+    return found;
+  }
+  if (!p->is_param) return found;
+  if (found || m->is_ext_entry || m->yields || m->is_lowered_yield || m->dm_subst_name) return 0;
+  /* Class-valued .new can enter initialize without appearing in the static
+     caller census. A literal direct call is not an exhaustive frozen proof. */
+  if (sp_streq(m->name, "initialize") && an_class_dynamic_new_risk(c, m->class_id)) return 0;
+  int pj = an_param_idx(m, pn);
+  if (pj < 0 || pj == m->rest_idx || pj == m->kwrest_idx) return 0;
+  return fwd_frozen_formal(c, mi, pj, elements, each, depth, work);
+}
+
+/* Optional evidence for << on a boxed Hash element: every literal/store in
+   the closed subset must exclude String values. Hash constructors/default
+   setters, opaque stores and user operators are not admitted by the caller.
+   This deliberately considers unrelated hashes too, and gives up at a small
+   work bound. The result is cached per emission generation below. */
+static int fwd_hash_values_nonstring_compute(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int work = 128;
+  static const NodeKind kinds[] = {
+    NK_HashNode, NK_KeywordHashNode, NK_CallNode, NK_IndexOrWriteNode,
+    NK_IndexAndWriteNode, NK_IndexOperatorWriteNode
+  };
+  for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
+    for (int node = comp_kind_first(c, kinds[k]); node >= 0; node = comp_kind_next(c, node)) {
+      Scope *owner = comp_scope_of(c, node);
+      if (nt_int(nt, node, "node_bi", 0) || (owner && nt_int(nt, owner->def_node, "node_bi", 0))) continue;
+      if (!work--) return 0;
+      int value = -1;
+      if (kinds[k] == NK_HashNode || kinds[k] == NK_KeywordHashNode) {
+        int n = 0; const int *els = nt_arr(nt, node, "elements", &n);
+        for (int i = 0; i < n; i++) {
+          if (!work-- || nt_kind(nt, els[i]) != NK_AssocNode) return 0;
+          int val = nt_ref(nt, els[i], "value");
+          if (nt_kind(nt, val) == NK_ArrayNode || nt_kind(nt, val) == NK_HashNode) continue;
+          TyKind ty = comp_ntype(c, val);
+          if (ty == TY_STRING || ty == TY_STRBUF || ty == TY_POLY || ty == TY_UNKNOWN) return 0;
+        }
+        continue;
+      }
+      TyKind rt = comp_ntype(c, nt_ref(nt, node, "receiver"));
+      if (!ty_is_hash(rt)) continue;
+      if (ty_hash_val(rt) == TY_STRING) return 0;
+      if (kinds[k] == NK_CallNode) {
+        const char *name = nt_str(nt, node, "name");
+        if (!name || (!sp_streq(name, "[]=") && !sp_streq(name, "store"))) continue;
+        int a = nt_ref(nt, node, "arguments"), n = 0;
+        const int *args = nt_arr(nt, a, "arguments", &n);
+        if (n != 2) return 0;
+        value = args[1];
+      }
+      else value = nt_ref(nt, node, "value");
+      if (nt_kind(nt, value) == NK_ArrayNode || nt_kind(nt, value) == NK_HashNode) continue;
+      TyKind ty = comp_ntype(c, value);
+      if (value < 0 || ty == TY_STRING || ty == TY_STRBUF || ty == TY_POLY || ty == TY_UNKNOWN) return 0;
+    }
+  }
+  return 1;
+}
+
+static int fwd_hash_values_nonstring(Compiler *c) {
+  FwdMemo *memo = fwd_analysis(c)->memo;
+  if (!memo->readonly_hash_nonstring)
+    memo->readonly_hash_nonstring = fwd_hash_values_nonstring_compute(c) ? 1 : -1;
+  return memo->readonly_hash_nonstring > 0;
+}
+
+/* An optional closed-program certificate, not a mutation-name blacklist.
+   All Ruby bodies are checked, including unused bodies and literal blocks.
+   Compiler builtin templates are admitted only through the small primitive
+   contracts below; arbitrary calls into those templates are not admitted.
+   No identity observers, state-changing String operations, external code or
+   hidden user protocols can execute in this subset. Thus a retained plain
+   String box remains observationally equivalent without adding sharing. */
+static int fwd_readonly_dispatch(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  int a = nt_ref(nt, node, "arguments"), argc = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
+  int block = nt_ref(nt, node, "block");
+  if (!nm || (block >= 0 && nt_kind(nt, block) != NK_BlockNode)) return 0;
+  if (fwd_dead_dynamic_arm(c, node)) return 1;
+  TyKind rt = comp_ntype(c, recv);
+  Scope *owner = comp_scope_of(c, node);
+  if (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) {
+    int n = 0, live = 0;
+    const int *arms = nt_arr(nt, node, "dyn_send_arms", &n);
+    if (!n || nt_int(nt, node, "dyn_send_truncated", 0)) return 0;
+    /* Only the existing uncapped user-name dispatch, whose default raises.
+       No builtin-name arm, observer or arbitrary runtime send is admitted.
+       The walk checks every live arm and every user body independently. */
+    for (int i = 0; i < n; i++) {
+      if (fwd_dead_dynamic_arm(c, arms[i])) continue;
+      const char *name = nt_str(nt, arms[i], "name");
+      if (!name || core_method_name(name) || builtin_object_method_known(name) ||
+          an_any_scope_by_name(c, name) < 0) return 0;
+      live = 1;
+    }
+    return live;
+  }
+  /* Named and anonymous block forwarding lower to a call of this method's
+     own block. Every supplying literal block is checked by the same walk. */
+  if (block < 0 && owner && owner->yields && poly_spliced_block_call(c, owner, node)) return 1;
+  /* A Method may enter through a container without a per-call target.
+     Its origin must still be a checked Ruby body, never a builtin adapter,
+     foreign function or computed method name. All scope bodies are roots. */
+  if (is_method_obj_call(c, node) && argc == 1 && block < 0) {
+    int mi = method_obj_target_mi(c, node);
+    if (mi < 0) return 0;
+    Scope *m = &c->scopes[mi];
+    return m->body >= 0 && !m->cs_synth && !m->is_ext_entry &&
+           !nt_int(nt, m->def_node, "node_bi", 0) && !nt_str(nt, m->def_node, "bam_sym");
+  }
+  /* A possible same-name target is not proof of actual dispatch. */
+  int target = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? comp_self_call_mi(c, node, nm) : fwd_call_target(c, node);
+  if (recv < 0) {
+    int body_target = comp_cbody_call_mi(c, node, nm);
+    if (body_target >= 0) target = body_target;
+  }
+  int copy = (int)nt_int(nt, node, "enum_copy", -1);
+  /* each_with_index is lowered onto a trusted per-site Enumerable clone.
+     Admit only that typed Array primitive, not arbitrary internal names. */
+  if (recv < 0 && argc == 1 && block >= 0 && target >= 0 && copy >= 0 &&
+      c->scopes[target].def_node == copy && nt_int(nt, copy, "node_bi", 0) &&
+      strncmp(nm, "__enum_each_with_index__", 24) == 0 && ty_is_array(comp_ntype(c, args[0]))) return 1;
+  if (target >= 0 && !nt_int(nt, c->scopes[target].def_node, "node_bi", 0) &&
+      !c->scopes[target].cs_synth && !c->scopes[target].is_ext_entry &&
+      (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || ty_is_object(rt) ||
+       (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) &&
+        c->scopes[target].is_cmethod) ||
+       (sp_streq(nm, "new") && nt_kind(nt, recv) == NK_ConstantReadNode))) return 1;
+  /* A non-core name cannot select an unexamined String/builtin operation.
+     All user bodies are roots, even if this boxed receiver cannot be pinned. */
+  if (rt == TY_POLY && !core_method_name(nm) && !builtin_object_method_known(nm)) {
+    int mi = an_any_scope_by_name(c, nm);
+    if (mi >= 0 && !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0) &&
+        !c->scopes[mi].cs_synth && !c->scopes[mi].is_ext_entry) return 1;
+  }
+  /* A user class with no initialize body just allocates its empty instance.
+     User new/protocol overrides and builtin reopenings fail the root checks. */
+  if (block < 0 && !argc && sp_streq(nm, "new") && nt_kind(nt, recv) == NK_ConstantReadNode) {
+    const char *name = nt_str(nt, recv, "name");
+    int ci = name ? comp_class_index(c, name) : -1;
+    if (ci >= 0 && !is_builtin_class_name(name) && !is_builtin_module_name(name) &&
+        !is_builtin_exception_name(name) && comp_method_in_chain(c, ci, "initialize", NULL) < 0) return 1;
+  }
+  return 0;
+}
+
+/* Primitive effects in the closed subset. User-target closure is handled
+   separately above; the root walk excludes builtin overrides and protocols. */
+static int fwd_readonly_primitive(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  int a = nt_ref(nt, node, "arguments"), argc = 0;
+  const int *args = a >= 0 ? nt_arr(nt, a, "arguments", &argc) : NULL;
+  int block = nt_ref(nt, node, "block");
+  if (!nm || (block >= 0 && nt_kind(nt, block) != NK_BlockNode)) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (recv < 0) {
+    if (attr_decl_call(c, node)) return 1;
+    if ((sp_streq(nm, "p") || sp_streq(nm, "puts")) && block < 0) return 1;
+    return sp_streq(nm, "private") && !argc && block < 0;
+  }
+  /* Within this globally closed subset, indirect invocation executes only
+     checked Ruby bodies. [] also slices builtin Strings/Arrays or reads a
+     Hash; conversion/hash protocols and external callable origins are barred.
+     This is not a forwarding/retention exemption outside the certificate. */
+  if (block < 0 && (rt == TY_POLY || rt == TY_METHOD || rt == TY_PROC || rt == TY_CURRY)) {
+    if (sp_streq(nm, "call")) return 1;
+    if (sp_streq(nm, "[]") && (argc == 1 || argc == 2)) return 1;
+  }
+  /* These scalar operations do not change Strings. A user operator's body
+     is checked independently; every implicit coerce/conversion is barred. */
+  if (block < 0 && argc == 1 && (rt == TY_POLY || rt == TY_INT || rt == TY_FLOAT) &&
+      (sp_streq(nm, "+") || sp_streq(nm, "*") || sp_streq(nm, "==") || sp_streq(nm, "<="))) return 1;
+  if (block < 0 && !argc && (rt == TY_INT || rt == TY_FLOAT) && sp_streq(nm, "zero?")) return 1;
+  if (block < 0 && argc == 1 && rt == TY_POLY && sp_streq(nm, "<<") &&
+      comp_ntype(c, args[0]) == TY_INT &&
+      nt_kind(nt, recv) == NK_CallNode && sp_streq(nt_str(nt, recv, "name"), "[]") &&
+      ty_is_hash(comp_ntype(c, nt_ref(nt, recv, "receiver"))) && fwd_hash_values_nonstring(c)) return 1;
+  if (block < 0 && argc == 2 && rt == TY_POLY && sp_streq(nm, "[]=") &&
+      nt_kind(nt, recv) == NK_CallNode && sp_streq(nt_str(nt, recv, "name"), "[]") &&
+      ty_is_hash(comp_ntype(c, nt_ref(nt, recv, "receiver"))) &&
+      comp_ntype(c, args[1]) == TY_INT && fwd_hash_values_nonstring(c)) return 1;
+  if (block < 0 && argc == 1 && nt_kind(nt, args[0]) == NK_StringNode) {
+    const char *format = method_sym_arg(c, node);
+    if (format && ((rt == TY_INT_ARRAY && sp_streq(nm, "pack") && sp_streq(format, "V")) ||
+                   (rt == TY_STRING && sp_streq(nm, "unpack1") && sp_streq(format, "e")))) return 1;
+  }
+  if (!argc && block < 0 && (sp_streq(nm, "to_s") || sp_streq(nm, "inspect"))) return 1;
+  if (!argc && block < 0 && sp_streq(nm, "upcase"))
+    return rt == TY_STRING || rt == TY_STRBUF || rt == TY_POLY;
+  if (!argc && block < 0 && (sp_streq(nm, "size") || sp_streq(nm, "length")))
+    return ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF;
+  if (argc == 1 && block < 0 && (sp_streq(nm, "is_a?") || sp_streq(nm, "kind_of?")) &&
+      nt_kind(nt, args[0]) == NK_ConstantReadNode) {
+    const char *name = nt_str(nt, args[0], "name");
+    return name && (sp_streq(name, "String") || sp_streq(name, "Integer") ||
+                    sp_streq(name, "Array") || sp_streq(name, "Hash"));
+  }
+  if (argc == 1 && block < 0 && rt == TY_INT && comp_ntype(c, args[0]) == TY_INT &&
+      (sp_streq(nm, "+") || sp_streq(nm, "<"))) return fwd_builtin(c, "Integer", nm);
+  if (argc == 1 && block < 0 && sp_streq(nm, "+") &&
+      (rt == TY_STRING || rt == TY_STRBUF) &&
+      (comp_ntype(c, args[0]) == TY_STRING || comp_ntype(c, args[0]) == TY_STRBUF))
+    return fwd_builtin(c, "String", nm);
+  if (ty_is_array(rt) || ty_is_obj_array(rt)) {
+    if (block < 0 && ((sp_streq(nm, "<<") && argc == 1) || sp_streq(nm, "push"))) return 1;
+    if (block < 0 && sp_streq(nm, "[]") && argc == 1 && comp_ntype(c, args[0]) == TY_INT)
+      return fwd_builtin(c, "Array", nm);
+    if (!argc && (sp_streq(nm, "each") || sp_streq(nm, "each_with_index") || sp_streq(nm, "map"))) return 1;
+  }
+  /* Hash indexing may keep an input but cannot change its String bytes.
+     Default blocks and every user operator body are checked by the same
+     closed-program walk; hash/eql?/conversion overrides invalidate it. */
+  if (ty_is_hash(rt) && block < 0 &&
+      ((argc == 1 && sp_streq(nm, "[]")) || (argc == 2 && sp_streq(nm, "[]="))))
+    return fwd_builtin(c, "Hash", nm);
+  if (ty_is_hash(rt) && block < 0 && (argc == 1 || argc == 2) && sp_streq(nm, "fetch"))
+    return fwd_builtin(c, "Hash", nm);
+  if (ty_is_hash(rt) && block < 0 && !argc && (sp_streq(nm, "keys") || sp_streq(nm, "values")))
+    return fwd_builtin(c, "Hash", nm);
+  if (ty_is_hash(rt) && !argc && (sp_streq(nm, "each") || sp_streq(nm, "each_pair") || sp_streq(nm, "each_key"))) return 1;
+  return sp_streq(nm, "*") && argc == 1 && block < 0 && rt == TY_INT && comp_ntype(c, args[0]) == TY_INT;
+}
+
+static int fwd_readonly_node(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  switch (nt_kind(nt, node)) {
+      case NK_NONE:
+        if (!sp_streq(nt_type(nt, node), "ProgramNode") && !sp_streq(nt_type(nt, node), "ArgumentsNode") &&
+            !sp_streq(nt_type(nt, node), "RequiredKeywordParameterNode") &&
+            !sp_streq(nt_type(nt, node), "ForwardingParameterNode")) return 0;
+        break;
+      case NK_ClassNode: {
+        int path = nt_ref(nt, node, "constant_path");
+        const char *name = nt_str(nt, path, "name");
+        if (nt_kind(nt, path) != NK_ConstantReadNode || nt_ref(nt, node, "superclass") >= 0 ||
+            !name || is_builtin_class_name(name) || is_builtin_module_name(name) || is_builtin_exception_name(name)) return 0;
+        break;
+      }
+      case NK_DefNode: {
+        const char *name = nt_str(nt, node, "name");
+        int recv = nt_ref(nt, node, "receiver");
+        if (!name || (!isalnum((unsigned char)*name) && !sp_streq(name, "[]") && !sp_streq(name, "[]=")) ||
+            (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode &&
+             nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) return 0;
+        static const char *const protocols[] = {
+          "to_s", "inspect", "to_str", "to_int", "to_ary", "to_a", "to_hash", "to_f", "to_r", "to_c",
+          "coerce", "to_proc", "to_io", "to_path", "hash", "eql?", "initialize_copy", "initialize_dup", "initialize_clone",
+          "method_missing", "respond_to_missing?", "method_added", "singleton_method_added", "inherited", "new", "allocate", NULL
+        };
+        for (int i = 0; protocols[i]; i++) if (sp_streq(name, protocols[i])) return 0;
+        break;
+      }
+      case NK_CallNode:
+        if (!fwd_readonly_dispatch(c, node) && !fwd_readonly_primitive(c, node)) return 0;
+        break;
+      case NK_IndexOrWriteNode: case NK_IndexAndWriteNode: case NK_IndexOperatorWriteNode:
+        if (!ty_is_hash(comp_ntype(c, nt_ref(nt, node, "receiver"))) ||
+            !fwd_builtin(c, "Hash", "[]") || !fwd_builtin(c, "Hash", "[]=") ||
+            (nt_kind(nt, node) == NK_IndexOperatorWriteNode &&
+             (!sp_streq(nt_str(nt, node, "binary_operator"), "+") ||
+              comp_ntype(c, nt_ref(nt, node, "value")) != TY_INT))) return 0;
+        break;
+      case NK_BlockArgumentNode: if (nt_ref(nt, node, "expression") >= 0) return 0; break;
+      case NK_StatementsNode: case NK_ParametersNode: case NK_RequiredParameterNode:
+      case NK_BlockParameterNode: case NK_BlockParametersNode: case NK_BlockNode:
+      case NK_OptionalParameterNode: case NK_OptionalKeywordParameterNode:
+      case NK_RestParameterNode: case NK_KeywordRestParameterNode:
+      case NK_SplatNode: case NK_KeywordHashNode: case NK_AssocSplatNode: case NK_LambdaNode:
+      case NK_ArrayNode: case NK_HashNode: case NK_AssocNode:
+      case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
+      case NK_InterpolatedStringNode: case NK_EmbeddedStatementsNode: case NK_ConstantReadNode:
+      case NK_LocalVariableReadNode: case NK_LocalVariableWriteNode:
+      case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode:
+      case NK_IfNode: case NK_UnlessNode: case NK_ElseNode: case NK_WhileNode:
+      case NK_SelfNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+      case NK_ParenthesesNode: case NK_ReturnNode: case NK_YieldNode: break;
+      default: return 0;
+  }
+  return 1;
+}
+
+static int fwd_readonly_program(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (!nt_int(nt, nt->root_id, "builtin_provenance_safe", 0)) return 0;
+  if (g_ext_entries || g_ext_init_name || g_ext_target) return 0;
+  if (c->n_native_funcs || c->n_native_objs || c->n_native_methods ||
+      c->n_ffi_funcs || c->n_ffi_consts || c->n_ffi_bufs || c->n_ffi_readers ||
+      c->n_ffi_callbacks || c->n_ffi_structs || c->n_ffi_writers || c->n_ffi_sources ||
+      c->n_ffi_libs || c->n_ffi_cflags) return 0;
+  unsigned char *seen = calloc((size_t)nt->count, 1);
+  int *todo = malloc(sizeof(int) * (size_t)nt->count);
+  if (!seen || !todo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = 0, ok = 1;
+  /* Scope bodies, including unused Ruby methods, are roots. Walk their live
+     structural AST edges, not orphaned nodes left by block desugaring. This
+     is not call-reachability pruning: every checked Ruby body is included. */
+  for (int i = 0; i < c->nscopes; i++) {
+    Scope *m = &c->scopes[i];
+    if (nt_int(nt, m->def_node, "node_bi", 0)) continue;
+    const char *cls = m->class_id >= 0 ? c->classes[m->class_id].name : NULL;
+    if (m->is_ext_entry || m->cs_synth ||
+        (cls && (is_builtin_class_name(cls) || is_builtin_module_name(cls) || is_builtin_exception_name(cls))) ||
+        (m->def_node >= 0 && !fwd_readonly_node(c, m->def_node))) { ok = 0; break; }
+    if (m->body >= 0 && !seen[m->body]) {
+      seen[m->body] = 1;
+      todo[n++] = m->body;
+    }
+    /* Defaults can be detached from the live definition after lowering.
+       They remain executable and cannot inherit a harmless body's proof. */
+    for (int j = 0; j < m->nparams; j++) {
+      int node = m->pdefault[j];
+      if (node >= 0 && !seen[node]) { seen[node] = 1; todo[n++] = node; }
+    }
+  }
+  while (n && ok) {
+    int node = todo[--n];
+    if (nt_int(nt, node, "node_bi", 0)) continue;
+    if (!fwd_readonly_node(c, node)) { ok = 0; break; }
+    int nr = nt_num_refs(nt, node);
+    for (int i = 0; i < nr; i++) {
+      int child = nt_ref_at(nt, node, i);
+      if (child < 0 || seen[child]) continue;
+      seen[child] = 1;
+      todo[n++] = child;
+    }
+    int na = nt_num_arrs(nt, node);
+    for (int i = 0; i < na; i++) {
+      int nc = 0; const int *children = nt_arr_at(nt, node, i, &nc);
+      for (int j = 0; j < nc; j++) {
+        int child = children[j];
+        if (child < 0 || seen[child]) continue;
+        seen[child] = 1;
+        todo[n++] = child;
+      }
+    }
+  }
+  free(todo);
+  free(seen);
+  return ok;
+}
+
+int fwd_box_retention_safe(Compiler *c, int node, FwdResult effect) {
+  /* Method/Proc entrypoints are not an exhaustive static caller census. */
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_EMISSION);
+  if (!f->memo->readonly_strings) f->memo->readonly_strings = fwd_readonly_program(c) ? 1 : -1;
+  if (f->memo->readonly_strings > 0) return 1;
+  /* Frozen input does not justify copying the String object: identity and
+     frozen state remain observable. Only a preserving boxed store can use
+     provenance; arbitrary escapes need the closed-program certificate. */
+  if (effect != FWD_RETAINS_BOX) return 0;
+  /* A source literal needs no census of callers. This exemption comes only
+     after the complete preserving-box contract, never for copied escapes. */
+  if (nt_kind(c->nt, node) == NK_StringNode && nt_int(c->nt, node, "fzl", 0)) return 1;
+  if (!f->memo->frozen_reflection) {
+    f->memo->frozen_reflection = 1; /* closed static entrypoints */
+    for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
+      const char *nm = nt_str(c->nt, u, "name");
+      if (sp_streq(nm, "method") || sp_streq(nm, "instance_method") || sp_streq(nm, "to_proc") ||
+          sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send") ||
+          sp_streq(nm, "public_method") || sp_streq(nm, "singleton_method") || sp_streq(nm, "define_method")) {
+        f->memo->frozen_reflection = -1;
+        break;
+      }
+      /* Symbol folds and sum enter user binary operators through C hooks. */
+      if (sp_streq(nm, "reduce") || sp_streq(nm, "inject")) f->memo->frozen_operator_fold = 1;
+      if (sp_streq(nm, "sum")) anh_add(&f->memo->frozen_operator_writes, "+");
+    }
+    /* Operator writes also bypass CallNode argument binding. Ordinary direct
+       operator calls remain provable when neither hidden entry shape exists. */
+    for (int u = 0; u < c->nt->count; u++) {
+      const char *op = nt_str(c->nt, u, "binary_operator");
+      if (op) anh_add(&f->memo->frozen_operator_writes, op);
+    }
+    /* Numeric coercion dispatches an operator on the pair returned by a user
+       coerce, even when its source CallNode names modulo rather than %. */
+    for (int k = 0; k < c->nclasses; k++) {
+      if (comp_method_in_chain(c, k, "coerce", NULL) < 0) continue;
+      static const char *const ops[] = { "+", "-", "*", "/", "%", "**", "<", ">", NULL };
+      for (int i = 0; ops[i]; i++) anh_add(&f->memo->frozen_operator_writes, ops[i]);
+      break;
+    }
+  }
+  if (f->memo->frozen_reflection < 0) return 0;
+  int work = 1024;
+  return fwd_frozen_value(c, node, 0, -1, 0, &work);
 }
 
 /* A String parameter a `super` hands on to a parameter that appends: one
@@ -21801,7 +23554,7 @@ int fwd_poly_param_appends(Compiler *c, int mi, int j) {
    the child's to (the zsuper gathers it, a child's `**o` beside it). Such a
    parameter takes the handle, which the gather boxes, and its callers are
    pulled in as a handle method's are. Answers 1 when it changed anything. */
-static int fwd_super_string_params(Compiler *c) {
+static int fwd_super_string_params(Compiler *c, FwdQuery *f) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   for (int pass = 0; pass < 2; pass++) {
@@ -21814,7 +23567,7 @@ static int fwd_super_string_params(Compiler *c) {
       Scope *tm = &c->scopes[t];
       for (int j = 0; j < tm->nparams && j < 32; j++) {
         LocalVar *d = tm->pnames[j] ? scope_local(tm, tm->pnames[j]) : NULL;
-        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, t, j, 0)) continue;
+        if (!d || !d->is_param || d->is_block_param || !fwd_param_appends(c, f, t, j)) continue;
         int src = -1;
         if (pass) src = zsuper_param_source(c, m, tm, j);
         else {
@@ -21878,17 +23631,16 @@ static int fwd_splat_lit_reads(Compiler *c, int splat, int p, int *out, int *at,
 static int promote_forwarded_rest_args(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  g_fwd_codegen = 0;
-  fwd_memo_fresh(c);
-  g_fwd_codegen = 0;
-  changed |= fwd_super_string_params(c);
+  FwdQuery *f = fwd_analysis(c);
+  fwd_memo_fresh(c, f, FWD_PROMOTION);
+  changed |= fwd_super_string_params(c, f);
   for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     int a = nt_ref(nt, u, "arguments");
     if (a < 0) continue;
     int t = fwd_call_target(c, u);
     if (t < 0 || c->scopes[t].rest_idx < 0) continue;
-    unsigned bits = fwd_rest_bits(c, t);
+    unsigned bits = fwd_rest_bits(c, f, t);
     if (!bits) continue;
     Scope *m = &c->scopes[t];
     int ac = 0; const int *av = nt_arr(nt, a, "arguments", &ac);
@@ -27567,10 +29319,16 @@ static void refuse_lent_ivar_copies(Compiler *c) {
 }
 }
 
-void analyze_program(Compiler *c) {
+/* Invalidate compiler-borrowed records before a new analysis owns them. */
+static void analyze_caches_reset(Compiler *c) {
+  fwd_analysis_free(c);
   comp_poly_candidates_reset();
   comp_descendants_reset();
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
+}
+
+void analyze_program(Compiler *c) {
+  analyze_caches_reset(c);
   /* scope 0 = top level */
   Scope *top = comp_scope_new(c, NULL, -1);
   top->body = nt_ref(c->nt, c->nt->root_id, "statements");

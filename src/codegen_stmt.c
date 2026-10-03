@@ -2187,6 +2187,10 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
             (subtree_writes_local(c, v, nm) || (celled && subtree_has_side_effect(c, v)));
   char rtn[32];
 
+  if (t == TY_STRBUF && sp_streq(op, "+")) {
+    unsupported_feature(c, id, "+= on a shared String cannot preserve rebinding identity; refused while share-by-default is in progress");
+    return;
+  }
   if (t == TY_STRING && sp_streq(op, "+")) {
     buf_printf(b, "%s = sp_str_concat(%s, ", lval, lv_op_assign_src(c, lval, t, cap, rtn, sizeof rtn));
     /* a poly RHS (a destructured `[Int, String]` element bound poly) is an

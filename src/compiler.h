@@ -657,6 +657,7 @@ typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
 
 typedef struct {
   const NodeTable *nt;
+  struct FwdAnalysis *fwd_analysis; /* owned forwarding proofs, freed with this compiler */
   TyKind *ntype;    /* [node_cap] node id -> inferred type */
   int *norigin;     /* [node_cap] node id -> where its degraded type came from: the
                        child (or the slot's why.node, for a read) that carried the
@@ -689,7 +690,8 @@ typedef struct {
                           stored back before it is passed, so the callee's
                           append and the caller's variable are one String
                           (sp_poly_strbuf_lift). The node's TYPE is
-                          unchanged. */
+                          unchanged. POLY_LIFT_APPENDED preserves this demand
+                          through alias propagation. */
   TyKind *nilnarrow; /* [node_cap] param-read narrowed by a `return .. if p.nil?`
                         guard: the read's non-nil type (codegen unboxes the poly
                         slot at the read site); TY_UNKNOWN = not narrowed */

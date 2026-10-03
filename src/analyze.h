@@ -12,6 +12,9 @@
 
 #define SP_RUBY_VERSION "4.0.7"
 
+/* Release the compiler-owned, scope/name-borrowing forwarding proofs. */
+void fwd_analysis_free(Compiler *c);
+
 /* Set by main.c from --int-overflow=promote. In promote mode the analyzer is
    free to widen accumulating int locals to bigint more aggressively (e.g. block
    iteration loops, not just `while`), since the overflow-raising int macros are
@@ -78,9 +81,16 @@ void dyn_open_reach(Compiler *c, int n, int k, DynReach *r);
 int dyn_method_appends(Compiler *c, int mi, int j);
 int an_local_array_changed_x(Compiler *c, const char *xn, Scope *xs);
 int an_local_array_stores_unshared(Compiler *c, const char *xn, Scope *xs);
-/* 1 appends, 0 does not, -1 cannot tell (refused as appending) */
-int fwd_rest_elem_appends(Compiler *c, int mi, int i);
-int fwd_poly_param_appends(Compiler *c, int mi, int j);
+/* Unknown paths require a shared input; escapes refuse even a shared one. */
+typedef enum {
+  FWD_RETAINS_BOX = -3, FWD_ESCAPE = -2, FWD_UNKNOWN = -1, FWD_READONLY = 0, FWD_APPENDS = 1
+} FwdResult;
+FwdResult fwd_rest_elem_appends(Compiler *c, int mi, int i);
+int fwd_rest_print_safe(Compiler *c, int mi, int call, int actual);
+FwdResult fwd_poly_param_appends(Compiler *c, int mi, int j);
+/* Copying escapes require a closed readonly program; frozen provenance
+   is sufficient only for a preserving-box retention effect. */
+int fwd_box_retention_safe(Compiler *c, int node, FwdResult effect);
 /* A boxed parameter's argument a literal block appends to through a yield
    (yield_splice_handles): a String variable there must be the handle. */
 int yield_poly_arg_wants_handle(Compiler *c, int a);
@@ -88,7 +98,7 @@ int yield_poly_arg_wants_handle(Compiler *c, int a);
    parameter it appends to takes the handle the gathered Array holds
    (block_splat_pull_args). */
 int block_splat_shares(Compiler *c, int blk);
-int fwd_param_appends_at(Compiler *c, int mi, int j);
+FwdResult fwd_param_appends_at(Compiler *c, int mi, int j);
 int dyn_block_appends(Compiler *c, int blk, int k);
 /* `new` and `raise C, s` into an initialize that appends to a String
    parameter (#6179): the initialize methods a call reaches, the argument

@@ -713,7 +713,7 @@ static int poly_user_arm_n_replay(Compiler *c, int id, const char *name, const P
     int pc = pt0 != TY_POLY && pt0 != TY_UNKNOWN && pt0 != TY_NIL && pt0 != TY_VOID;
     int ac = at0 != TY_POLY && at0 != TY_UNKNOWN && at0 != TY_NIL && at0 != TY_VOID;
     if (pc && ac && pt0 != at0 &&
-        (pt0 == TY_STRING || at0 == TY_STRING ||
+        (pt0 == TY_STRING || at0 == TY_STRING || pt0 == TY_STRBUF || at0 == TY_STRBUF ||
          /* a heap pointer against a scalar, whatever the kinds: a mutable
             String (sp_String *) reaching an Integer-seeded `[]=` value
             slot was passed raw (#4929) */

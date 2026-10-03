@@ -1112,7 +1112,7 @@ cli-opts-test: $(SPINEL)
 	rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "cli-opts-test: pass" || exit 1
 
-reject-test: $(SPINEL)
+reject-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
 	for t in test/reject/string_thread_arg.rb test/reject/string_fiber_arg.rb test/reject/string_thread_global_arg.rb test/reject/string_thread_ivar_arg.rb test/reject/string_thread_method_param_arg.rb test/reject/string_fiber_method_param_arg.rb test/reject/string_thread_block_param_arg.rb test/reject/string_thread_arg_in_loop.rb; do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
@@ -1174,11 +1174,6 @@ reject-test: $(SPINEL)
 	  echo "reject-test: FAIL (string_tap_fresh_append compiled)"; ok=0; \
 	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
 	  { echo "reject-test: FAIL (string_tap_fresh_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
-	t=test/reject/string_narrowed_element_append.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
-	  echo "reject-test: FAIL (string_narrowed_element_append compiled)"; ok=0; \
-	else grep -q "is not yet shared by reference" "$$tmp/r.out" || \
-	  { echo "reject-test: FAIL (string_narrowed_element_append rejected without saying why)"; head -5 "$$tmp/r.out"; ok=0; }; fi; \
 	t=test/reject/singleton_on_untraceable_recv.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
 	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \
@@ -1251,9 +1246,20 @@ reject-test: $(SPINEL)
 	  { echo "reject-test: FAIL (a global through a boxed parameter's alias rejected without saying why)"; sed -n 1,5p "$$tmp/ypg.out"; ok=0; }; fi; \
 	t=test/reject/string_forward_poly_chain.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/fpc.c" >"$$tmp/fpc.out" 2>&1; then \
-	  echo "reject-test: FAIL (a global through a POLY hand-on past the depth bound compiled)"; ok=0; \
+	  echo "reject-test: FAIL (a global through a POLY hand-on to an appender compiled)"; ok=0; \
 	else grep -q "through a parameter it hands on" "$$tmp/fpc.out" || \
-	  { echo "reject-test: FAIL (a global through a POLY hand-on past the depth bound rejected without saying why)"; sed -n 1,5p "$$tmp/fpc.out"; ok=0; }; fi; \
+	  { echo "reject-test: FAIL (a global through a POLY hand-on to an appender rejected without saying why)"; sed -n 1,5p "$$tmp/fpc.out"; ok=0; }; fi; \
+	ruby tools/forward_escape_check.rb $(SPINEL) $(SPINEL_TIMEOUT) || ok=0; \
+	: 'A read-only diamond must visit vertices, not enumerate its 2^24 paths'; \
+	i=0; while [ $$i -lt 24 ]; do \
+	  j=$$((i + 1)); \
+	  printf 'def a%s(x:); a%s(x: x); b%s(x: x); end\n' $$i $$j $$j; \
+	  printf 'def b%s(x:); a%s(x: x); b%s(x: x); end\n' $$i $$j $$j; \
+	  i=$$j; \
+	done > "$$tmp/diamond.rb"; \
+	printf 'def a24(x:) = x.to_s.size\ndef b24(x:) = x.to_s.size\ndef entry(x) = a0(x: x)\nentry(nil)\ns = +"x"\nentry(s)\n' >> "$$tmp/diamond.rb"; \
+	if ! $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10) $(SPINEL) "$$tmp/diamond.rb" -c -o "$$tmp/diamond.c" >"$$tmp/diamond.out" 2>&1; then \
+	  echo "reject-test: FAIL (a read-only forwarding diamond refused or timed out)"; sed -n 1,5p "$$tmp/diamond.out"; ok=0; fi; \
 	for t in test/reject/string_kwsplat_last_dynamic.rb test/reject/string_kwsplat_last_yieldproc.rb test/reject/string_kwsplat_last_yieldblock.rb; do \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/kwlast.c" >"$$tmp/kwlast.out" 2>&1; then \
 	  echo "reject-test: FAIL (a final splat carrying a String variable compiled: $$t)"; ok=0; \
@@ -1471,7 +1477,9 @@ reject-test: $(SPINEL)
 	done; \
 	t=test/reject/dynamic_send_then_refusal.rb; \
 	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ds.c" >"$$tmp/ds.out" 2>&1; st=$$?; \
-	if [ $$st -ne 1 ] || ! grep -q "1 refusal," "$$tmp/ds.out"; then \
+	if [ $$st -ne 1 ] || [ -f "$$tmp/ds.c" ] || \
+	   ! grep -q 'String#unicode_normalize is not supported' "$$tmp/ds.out" || \
+	   ! grep -Eq '[1-9][0-9]* refusals?, nothing written' "$$tmp/ds.out"; then \
 	  echo "reject-test: FAIL (a refusal after a dynamic send's probed arms did not report cleanly, exit $$st)"; sed -n 1,5p "$$tmp/ds.out"; ok=0; fi; \
 	for spec in "complex_bignum_component:a Complex component given an Integer past 64 bits" \
 	            "rational_pow_bignum:the receiver of a Float \`**\` given a Rational" \
@@ -3293,6 +3301,10 @@ SCALE_CODEGEN_LIMIT ?= 6.9
 # scanned per lookup, took 4,798 steps at N=100 against a billion, which no
 # count or clock sees at a test's size.
 CALL_SHAPES_LIMIT ?= 4.5
+# Readonly POLY entry points sharing one suffix: phase-local promotion and
+# strict completed emission proofs avoid rescanning that suffix per entry.
+# This bounds the measured regression, not every pass's asymptotic cost.
+POLY_FORWARD_LIMIT ?= 5.0
 # Each count is taken only from a compile that succeeded (sw): spinel-work
 # prints its count from an atexit handler, also when the compile fails, so
 # reading it alone would accept the ratio of a program that did not build.
@@ -3309,6 +3321,15 @@ scale-test: $(SPINEL_WORK)
 	sh test/scale/call_shapes.sh 25 > "$$tmp/s1.rb"; sh test/scale/call_shapes.sh 100 > "$$tmp/s4.rb"; \
 	sa=$$(sw -c -o "$$tmp/s1.c" "$$tmp/s1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	sb=$$(sw -c -o "$$tmp/s4.c" "$$tmp/s4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	sh test/scale/poly_forward_shared.sh 50 > "$$tmp/p1.rb"; sh test/scale/poly_forward_shared.sh 200 > "$$tmp/p4.rb"; \
+	pa=$$(sw -c -o "$$tmp/p1.c" "$$tmp/p1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	pb=$$(sw -c -o "$$tmp/p4.c" "$$tmp/p4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ruby tools/compile_scale_gen.rb --frozen-forward 25 > "$$tmp/i1.rb"; ruby tools/compile_scale_gen.rb --frozen-forward 100 > "$$tmp/i4.rb"; \
+	ia=$$(sw -c -o "$$tmp/i1.c" "$$tmp/i1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ib=$$(sw -c -o "$$tmp/i4.c" "$$tmp/i4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ruby tools/compile_scale_gen.rb --rest-print 25 > "$$tmp/r1.rb"; ruby tools/compile_scale_gen.rb --rest-print 100 > "$$tmp/r4.rb"; \
+	ra=$$(sw -c -o "$$tmp/r1.c" "$$tmp/r1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	rb=$$(sw -c -o "$$tmp/r4.c" "$$tmp/r4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	( ulimit -t 20; $(SPINEL_WORK) -c -o "$$tmp/hls.c" test/scale/hash_literal_sources_fanout.rb ) >/dev/null 2>&1 || \
 	  { rm -rf "$$tmp"; echo "scale-test: FAIL (the hash-literal source walk revisited call sites along every path)"; exit 1; }; \
 	sh test/scale/ie_forward_chain.sh 2 > "$$tmp/f2.rb"; sh test/scale/ie_forward_chain.sh 4 > "$$tmp/f4.rb"; \
@@ -3316,7 +3337,18 @@ scale-test: $(SPINEL_WORK)
 	fb=$$(sw -c -o "$$tmp/f4.c" "$$tmp/f4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || \
-	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	   [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
+	   [ -z "$$pa" ] || [ -z "$$pb" ] || [ -z "$$ia" ] || [ -z "$$ib" ] || \
+	   [ -z "$$ra" ] || [ -z "$$rb" ]; then echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
+	awk -v a="$$ra" -v b="$$rb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: discarded rest print work at 4x the callers and noise is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the rest print proof rescanned global bodies per caller)"; exit 1; }; \
+	awk -v a="$$ia" -v b="$$ib" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: immutable caller work at 4x the formals and noise is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (immutable provenance rescanned a global caller census per formal)"; exit 1; }; \
+	awk -v a="$$pa" -v b="$$pb" -v lim="$(POLY_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: shared POLY suffix work at 4x the entries and suffix is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (readonly POLY promotion or emission rescanned a shared suffix per entry)"; exit 1; }; \
 	awk -v a="$$fa" -v b="$$fb" -v lim="$(IE_FORWARD_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: instance_eval forwarding work at 2x the wrappers is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the instance_eval forwarding walk grew superlinearly in the wrapper classes, see build_ie_map)"; exit 1; }; \

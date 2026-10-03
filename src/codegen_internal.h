@@ -662,6 +662,7 @@ int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *id
                          int *npost_out);
 extern unsigned g_yield_live_mask;   /* emit_proc_yield: positions whose targets take live bytes */
 void refuse_yield_handle_args(Compiler *c, int id);
+void refuse_forwarded_args(Compiler *c, int id, int target, const char *name);
 int emit_handle_var_ref(Compiler *c, int a, Buf *b);
 unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, const ArgLayout *L, int blk);
 void inline_alias_release(Scope *m, unsigned alias_mask);

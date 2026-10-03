@@ -14438,6 +14438,8 @@ static int strbuf_container_store_values(Compiler *c, int w, const char *contn, 
       for (int e = 0; e < an && nst < 64; e++) stores[nst++] = av[e];
     }
     else if (sp_streq(wcn, "[]=") && an >= 2) stores[nst++] = av[an - 1];
+    else if (sp_streq(wcn, "fill") && an >= 1 && an <= 3 &&
+             nt_ref(nt, w, "block") < 0) stores[nst++] = av[0];
   }
   return nst;
 }
@@ -15776,6 +15778,13 @@ static int promote_shared_stored_strings(Compiler *c) {
           int an3 = 0; const int *av3 = a3 >= 0 ? nt_arr(nt, a3, "arguments", &an3) : NULL;
           for (int e3 = 0; e3 < an3 && nc3 < 64; e3++) cand3[nc3++] = av3[e3];
         }
+      }
+      else if (cn3 && recv3 >= 0 && sp_streq(cn3, "fill") &&
+               (ty_is_array(rt3) || rt3 == TY_POLY) && nt_ref(nt, w, "block") < 0) {
+        /* fill stores its value by reference just as an element assignment does. */
+        int a3 = nt_ref(nt, w, "arguments");
+        int an3 = 0; const int *av3 = a3 >= 0 ? nt_arr(nt, a3, "arguments", &an3) : NULL;
+        if (an3 >= 1 && an3 <= 3) cand3[nc3++] = av3[0];
       }
       else if (cn3 && recv3 >= 0 && sp_streq(cn3, "[]=") &&
                (ty_is_array(rt3) || ty_is_hash(rt3))) {

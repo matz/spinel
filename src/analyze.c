@@ -4,7 +4,7 @@
 #include "repr.h"
 
 
-static int narrow_int_table_ivars(Compiler *c);  /* declared early: the fixpoint calls it */
+static int narrow_int_table_ivars(Compiler *c, int in_round);  /* declared early: the fixpoint calls it */
 int callee_param_is_declared_kwarg(Compiler *c, Scope *m, const char *name);
 
 /* --int-overflow=promote flag; see analyze.h. Default off. */
@@ -9267,7 +9267,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
    TY_INT_ARRAY_ARRAY with the write's TY_POLY_ARRAY -- two array kinds,
    which unify to the plain poly scalar -- and the slot would come out
    WORSE than it went in. */
-static int narrow_int_table_ivars(Compiler *c) {
+static int narrow_int_table_ivars(Compiler *c, int in_round) {
   int narrowed = 0;
   /* Re-assert first. The slot's own write still reads TY_POLY_ARRAY and ~90
      sites derive an ivar type from one, so something re-derives this one on
@@ -9295,7 +9295,18 @@ static int narrow_int_table_ivars(Compiler *c) {
   for (int ci = 0; ci < c->nclasses; ci++) {
     ClassInfo *cl = &c->classes[ci];
     for (int iv = 0; iv < cl->nivars; iv++) {
-      if (cl->ivar_int_table[iv]) continue;   /* already narrowed and pinned */
+      /* A table this pass pinned is vetted again on every round: what it
+         was pinned on can change. `@banks[0] = a1` pinned @banks while a1,
+         through a chain of methods written below their callees, still
+         answered the int array an append on a receiver not typed yet makes;
+         a1 then settled boxed, and the boxed row was read back as a bare
+         sp_IntArray *. narrow_object_arrays' own pin (ivar_oa_type) is
+         decided again by that pass. The call after the fixpoint keeps a
+         pinned table: a local that only ever held nil has been declared
+         boxed by then, and `x = nil; @t[i] = x` would read as a boxed row,
+         with no round left to retype what was read out of the table. */
+      int pinned = cl->ivar_int_table[iv];
+      if (pinned && (!in_round || cl->ivar_oa_type[iv] != TY_UNKNOWN)) continue;
       if (!ivl) {
         ivl = malloc(sizeof(int) * (size_t)(nt->count + 1));
         if (!ivl) return narrowed;
@@ -9328,7 +9339,7 @@ static int narrow_int_table_ivars(Compiler *c) {
           if (r >= 0 && r < nt->count) first_call[r] = u;
         }
       }
-      if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
+      if (!pinned && cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
       const char *ivn = cl->ivars[iv];
       if (!ivn || !ivn[0]) continue;
       if (class_ivar_pinned(cl, ivn)) continue;         /* an --rbs seed owns it */
@@ -9436,6 +9447,13 @@ static int narrow_int_table_ivars(Compiler *c) {
       if (ok && saw_table) {
         cl->ivar_types[iv] = TY_INT_ARRAY_ARRAY;
         cl->ivar_int_table[iv] = 1;
+        if (!pinned) narrowed = 1;
+      }
+      else if (pinned) {
+        /* back on the poly array its write reads, for the evidence of the
+           rounds to come */
+        cl->ivar_types[iv] = TY_POLY_ARRAY;
+        cl->ivar_int_table[iv] = 0;
         narrowed = 1;
       }
     }
@@ -28583,7 +28601,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
        infer_write_types to have given the ivar its poly-array type first, and
        the locals read out of it (`row = @t[r]`) need one more write pass to
        re-derive from the narrowed type before the binding below sees them. */
-    if (narrow_int_table_ivars(c)) ch |= infer_write_types(c);
+    if (narrow_int_table_ivars(c, 1)) ch |= infer_write_types(c);
     /* The same timing argument for a table held in a LOCAL, or one that
        crosses a call: the helper reading `row = t[i]` binds its parameter on
        the round the call is first seen, and a parameter only ever widens. Run
@@ -30270,7 +30288,7 @@ static void an_phase_late_widen(Compiler *c) {
   /* narrow monomorphic object arrays (POLY_ARRAY -> obj-pointer array) before
      the node cache is finalized so the rebuild below propagates the new element
      types to every `arr[i]` / `arr[i].field` site. */
-  narrow_int_table_ivars(c);
+  narrow_int_table_ivars(c, 0);
   narrow_object_arrays(c);
   narrow_locals_from_arrays(c);
   /* after the locals: a parameter can be fed an element the local rule has

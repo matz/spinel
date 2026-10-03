@@ -284,6 +284,18 @@ void sp_alloc_floors_from_env(void) {
      the string old list (#4407). This sets the floor under the growth backstop,
      and is the control that lets the cadence be measured against a pinned one. */
   sp_alloc_floor_from_env("SPINEL_GC_STR_MAJOR_KB", &sp_str_old_threshold, &sp_str_old_threshold_init);
+  /* SPINEL_GC_STRESS=2 last, over any floor above: the two thresholds are
+     pinned at zero, so every allocation that can collect does. Here because
+     both callers must end on it -- a floor read after it put the trigger
+     back, and the level then collected as seldom as the floor said -- and
+     marked as checked, so the allocators' own one-shot (2048) does not run
+     after it. */
+  { const char *st = getenv("SPINEL_GC_STRESS");
+    if (st && atoi(st) >= 2) {
+      SP_GC_CTR_SET(sp_gc_threshold, 0); sp_gc_threshold_init = 0;
+      SP_GC_CTR_SET(sp_str_threshold, 0); sp_str_threshold_init = 0;
+      sp_gc_stress_pin = 1; sp_gc_stress_checked = 1; sp_str_stress_checked = 1;
+    } }
 }
 #ifdef SP_THREADS
 void sp_alloc_worker_tune(int workers) {

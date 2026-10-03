@@ -54,7 +54,7 @@ RBS_LIB      = build/librbs.a
 
 .PHONY: all regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test rbs-seed-extractor cident plan-check-test repr-check-test traits-check-test bop-arity-check-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
-        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
+        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
 
 # `make all` includes the RBS extractor when vendor/rbs has been fetched
@@ -935,7 +935,7 @@ test: $(SPINEL_TIMEOUT)
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: rbs-test rbs-seed-test re-lit-test reject-test cli-opts-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -1536,6 +1536,52 @@ gc-phases-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  echo "gc-phases-test: FAIL (no [gcph] mark split with the flag set)"; ok=0; fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-phases-test: pass"; else exit 1; fi
+
+# SPINEL_GC_STRESS=2 collects at every allocation, poisons what dies and keeps
+# it out of reuse, so an object the roots lost reads back as 0xdb and stops the
+# next mark instead of answering right by luck. The host loses an object and a
+# string on purpose: it must run to the end without the level and at level 1,
+# and at level 2 print the poison and abort naming the root phase, with a
+# threshold floor asked for beside it too: the level is over the floors. Then the
+# other half of the contract: programs that root what they use answer the same
+# at level 2, alone and beside the full verifier, on both runtimes.
+GC_STRESS_TESTS := test/gc_root_frame_slots.rb \
+                   test/gc_minor_byref_lent_slot.rb \
+                   test/proc_cell_capture_marked.rb \
+                   test/poly_array_intersect.rb \
+                   test/thread_new_args_rooted_across_fiber_alloc.rb
+gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
+	@tmp=$$(mktemp -d /tmp/spinel-gcstress.XXXXXX); ok=1; \
+	if $(CC) -O1 -w -Ilib test/gc-stress/lost.c $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/lost" 2>"$$tmp/cc.err"; then \
+	  for lv in 0 1; do \
+	    SPINEL_GC_STRESS=$$lv $(TIMEOUT60) "$$tmp/lost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    if [ $$rc -ne 0 ] || ! cmp -s "$$tmp/out" test/gc-stress/expected; then \
+	      echo "gc-stress-test: FAIL (SPINEL_GC_STRESS=$$lv: the host did not run to the end, exit $$rc)"; \
+	      diff -u test/gc-stress/expected "$$tmp/out" | head -10; ok=0; fi; \
+	  done; \
+	  for kb in 0 64; do \
+	    SPINEL_GC_THRESHOLD_KB=$$kb SPINEL_GC_STRESS=2 $(TIMEOUT60) "$$tmp/lost" > "$$tmp/out" 2> "$$tmp/err"; rc=$$?; \
+	    if [ $$rc -eq 0 ]; then echo "gc-stress-test: FAIL (the mark took a freed object, SPINEL_GC_THRESHOLD_KB=$$kb)"; ok=0; fi; \
+	    if ! cmp -s "$$tmp/out" test/gc-stress/expected_stress; then \
+	      echo "gc-stress-test: FAIL (a freed object or string read back unpoisoned, SPINEL_GC_THRESHOLD_KB=$$kb)"; \
+	      diff -u test/gc-stress/expected_stress "$$tmp/out" | head -10; ok=0; fi; \
+	    if ! grep -q 'SPINEL_GC_STRESS: the mark reached a freed slot' "$$tmp/err" || ! grep -q 'phase = root' "$$tmp/err"; then \
+	      echo "gc-stress-test: FAIL (no report naming the root phase, SPINEL_GC_THRESHOLD_KB=$$kb)"; head -5 "$$tmp/err"; ok=0; fi; \
+	  done; \
+	else echo "gc-stress-test: FAIL (host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	for src in $(GC_STRESS_TESTS); do \
+	  bn=$$(basename "$$src" .rb); \
+	  if ! $(SPINEL) "$$src" -o "$$tmp/$$bn" >/dev/null 2>&1; then \
+	    echo "gc-stress-test: FAIL ($$bn: compile)"; ok=0; continue; fi; \
+	  for v in 0 1; do \
+	    SPINEL_GC_STRESS=2 SPINEL_GC_VERIFY=$$v $(TIMEOUT60) "$$tmp/$$bn" > "$$tmp/out" 2> "$$tmp/err"; rc=$$?; \
+	    if [ $$rc -ne 0 ] || ! cmp -s "$$tmp/out" "$$src.expected"; then \
+	      echo "gc-stress-test: FAIL ($$bn: SPINEL_GC_STRESS=2 SPINEL_GC_VERIFY=$$v, exit $$rc)"; \
+	      diff -u "$$src.expected" "$$tmp/out" | head -10; head -4 "$$tmp/err"; ok=0; fi; \
+	  done; \
+	done; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "gc-stress-test: pass"; else exit 1; fi
 
 # The two per-heap collection floors move ONE trigger each, which is the whole
 # point of having them: moving both together cannot say which heap paces the

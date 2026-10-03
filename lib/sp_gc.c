@@ -114,7 +114,7 @@ int sp_gc_conc_promote = 0;      /* this cycle's mark promotes what it marks (th
 size_t sp_gc_mk_bytes = 0, sp_gc_mk_young_bytes = 0;   /* bytes the mark reached, and of those the young ones */
 SP_TLS int sp_gc_in_sweeper = 0; /* a sweeper thread: finalizers skip the per-worker byte accounting */
 /* ---- Collector-private globals ---- */
-static int sp_gc_verify = 0;
+static int sp_gc_verify = 0;      /* 1: SPINEL_GC_VERIFY; 2: only its membership test on the mark path (SPINEL_GC_STRESS=2) */
 static sp_gc_hdr *sp_gc_old_heap = NULL;
 /* The mark stack grows on demand: overflowing it used to drop the walk into
    recursive scanning, and a live set of a few hundred thousand containers
@@ -201,6 +201,24 @@ int sp_gc_verify_on(void) { return sp_gc_verify; }
 const char *sp_gc_dbg_phase = "?";
 void *sp_gc_dbg_ctx = NULL;
 static void sp_gc_verify_fail(void *obj, sp_gc_hdr *h){
+  /* SPINEL_GC_STRESS=2: the slot was freed and the quarantine still holds
+     it, so the reference outlived a collection that could not see it. ctx is
+     the root-stack entry in the root phase, and the object whose scan found
+     the reference in the scan, remembered and pinned phases. */
+  if (sp_slab_is_quarantined(h)) {
+    const char *ph = sp_gc_dbg_phase;
+    fprintf(stderr, "\n*** SPINEL_GC_STRESS: the mark reached a freed slot ***\n"
+      "  obj = %p   phase = %s   ctx = %p\n", obj, ph, sp_gc_dbg_ctx);
+    sp_slab_describe(h);
+    if (sp_gc_verify == 1) sp_slab_history(h);
+    if (!sp_slab_is_str(h)) fprintf(stderr, "  freed: scan=%p size=%zu\n", (void *)(uintptr_t)h->scan, (size_t)h->size);
+    if (sp_gc_dbg_ctx && (ph[0] == 's' || ph[0] == 'p' || (ph[0] == 'r' && ph[1] == 'e'))) {
+      sp_gc_hdr *hc = (sp_gc_hdr *)((char *)sp_gc_dbg_ctx - sizeof(sp_gc_hdr));
+      fprintf(stderr, "  holder: scan=%p size=%zu old=%d\n", (void *)(uintptr_t)hc->scan, (size_t)hc->size, (int)hc->old);
+    }
+    fflush(stderr);
+    abort();
+  }
   fprintf(stderr, "  [phase=%s ctx=%p]\n", sp_gc_dbg_phase, sp_gc_dbg_ctx);
   sp_slab_describe(h);
   if (sp_gc_dbg_ctx) sp_slab_describe((char*)sp_gc_dbg_ctx - sizeof(sp_gc_hdr));
@@ -245,11 +263,23 @@ static void sp_gc_fault_report(int sig) {
   const char *m4 = "\n  The slot's value is the pointer the collector could not read.\n";
   for (const char *p = m4; *p; p++) buf[o++] = *p;
   ssize_t wr = write(2, buf, o); (void)wr;
+  if (sp_slab_quar_on) {
+    static const char q[] = "  SPINEL_GC_STRESS=2: with phase = ? the fault is the program's own, and a\n"
+                            "  pointer read out of a freed slot is all 0xdb bytes.\n";
+    wr = write(2, q, sizeof q - 1); (void)wr;
+  }
   signal(sig, SIG_DFL);
   raise(sig);
 }
 SP_CONSTRUCTOR static void sp_gc_debug_env(void){
   const char *v=getenv("SPINEL_GC_VERIFY"); sp_gc_verify=(v&&*v&&*v!='0');
+  /* SPINEL_GC_STRESS=2 keeps what a sweep frees poisoned and out of reuse
+     (lib/sp_slab.c), and what stops a mark that reaches such a slot is the
+     verifier's membership test. Only that: the verifier's walks of the whole
+     heap (the bitmaps, the remembered set) are per collection, and here a
+     collection is per allocation; SPINEL_GC_VERIFY=1 beside it adds them.
+     The thresholds are sp_alloc.c's to set. */
+  { const char *st=getenv("SPINEL_GC_STRESS"); if(st&&atoi(st)>=2){ if(!sp_gc_verify)sp_gc_verify=2; sp_slab_quar_on=1; } }
   { const char *ph=getenv("SPINEL_GC_PHASES"); sp_gc_ph_on=(ph&&*ph&&*ph!='0'); }
   { const char *fi=getenv("SPINEL_GC_FULL_INTERVAL");
     if(fi&&*fi){ int n=atoi(fi); if(n>0&&n<=4096){ sp_gc_full_interval=n; sp_gc_full_interval_fixed=1; } } }
@@ -1198,6 +1228,7 @@ void sp_gc_collect(void){
   /* the slab's workers hold slots claimed ahead of use: unclaimed before
      anything here reads the young bits (they would name garbage) */
   sp_slab_runs_release();
+  sp_slab_quarantine_trim();
   size_t ob_before = sp_gc_bytes;
   double stat_t0 = sp_gc_stat_now();
   double ph_t = stat_t0;
@@ -1259,7 +1290,7 @@ void sp_gc_collect(void){
   sp_gc_mk_str_bytes = 0; sp_gc_mk_str_young_bytes = 0; sp_gc_mk_promo_bytes = 0;
   /* the closed epoch is what the sweep frees from; everything allocated from
      here on is in the other parity and untouched by it (lib/sp_slab.c) */
-  if(sp_gc_verify)sp_slab_verify_all();
+  if(sp_gc_verify==1)sp_slab_verify_all();
   sp_slab_epoch_flip();
   /* This thread's string-length cache: the list sweep dropped each freed
      string from it one by one, and the bitmap sweep touches no string. Every
@@ -1569,7 +1600,7 @@ void sp_gc_collect(void){
   }
   /* Under SPINEL_GC_VERIFY: the remembered set's invariant, dirty <=> listed,
      holds for every old object once the array is not overflowed. */
-  if(sp_gc_verify&&!sp_gc_rem_overflow){
+  if(sp_gc_verify==1&&!sp_gc_rem_overflow){
     sp_slab_each_object(0,1,sp_gc_rem_invariant_cb,&full);
     for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
       void *o=(char*)h+sizeof(sp_gc_hdr); int listed=0;

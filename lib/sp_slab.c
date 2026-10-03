@@ -802,6 +802,64 @@ void sp_slab_relive(void *h) {
   bm_and(&l.bm->pin[l.w], ~l.bit);
   if (sp_slab_verify_on) sp_slab_note(h, 5 + 10 * (int)(sp_slab_epoch & 1));
 }
+/* ---- SPINEL_GC_STRESS=2: the quarantine ----
+   A slot a sweep frees is the next slot its class hands out, and until then
+   it keeps the dead object's bytes: the sweep reads the bitmaps and never
+   the slot. So a reference the collector was never told about reads the
+   object it lost, intact, or a live object of the same size in its place,
+   and the program answers right by luck. Here a freed slot is filled with
+   0xdb and kept out of reuse: pinned, so no sweep and no allocation touches
+   it, and named in a bitmap of its own, which is what tells it from a
+   payload. An object keeps its header, and a string its header, marker byte
+   and length, so a report can say what the slot was; the bytes after are
+   poison. sp_slab_is_live answers no for such a slot, so the verifier's
+   membership test (sp_gc_mark) stops a mark that reaches one and names the
+   root or the holder, and a read by the program gets 0xdb: an Integer field
+   is -2604246222170760229, a pointer field faults, a string is its own
+   length of \xDB.
+   The quarantine holds SP_SLAB_QUAR_MAX bytes and is then let go whole, at
+   the next barrier: every chunk with a slot in it is one more for each
+   sweep to walk, and with a collection at every allocation that walk is the
+   run's cost. A slot let go keeps its poison until a claim zeroes it.
+   Blocks past the largest class are malloc's, as before. */
+int sp_slab_quar_on = 0;                 /* asked for, before main (lib/sp_gc.c) */
+static uint64_t *sp_slab_quar = NULL;    /* SP_SLAB_NW words a chunk, over the reservation; mapped at the first barrier */
+static size_t sp_slab_quar_bytes = 0;
+#ifndef SP_SLAB_QUAR_MAX
+#define SP_SLAB_QUAR_MAX ((size_t)1 << 20)
+#endif
+#define SP_SLAB_POISON 0xdb
+static inline uint64_t *sp_slab_quar_of(sp_slab_chunk *ch) {
+  return sp_slab_quar + ((uintptr_t)sp_slab_chunk_base(ch) - sp_slab_base) / SP_SLAB_CHUNK * SP_SLAB_NW;
+}
+/* the slots of one bitmap word a sweep found dead (`strs`: which of them are
+   strings), or the one slot of an explicit free (`whole`: no header to keep) */
+static SP_NOINLINE void sp_slab_quarantine(sp_slab_chunk *ch, sp_slab_bm *bm, unsigned w, uint64_t dead, uint64_t strs, int whole) {
+  unsigned csize = sp_slab_csize[ch->cls];
+  bm_or(&bm->pin[w], dead);
+  bm_or(&sp_slab_quar_of(ch)[w], dead);
+  for (uint64_t v = dead; v; v &= v - 1) {
+    unsigned b = (unsigned)SP_CTZ64(v);
+    char *slot = sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize;
+    if (whole) memset(slot, SP_SLAB_POISON, csize);
+    else if ((strs >> b) & 1) {
+      size_t room = csize - sizeof(sp_str_hdr) - 2, len = ((sp_str_hdr *)slot)->len;
+      memset(slot + sizeof(sp_str_hdr) + 1, SP_SLAB_POISON, len < room ? len : room);
+    }
+    else memset(slot + sizeof(sp_gc_hdr), SP_SLAB_POISON, csize - sizeof(sp_gc_hdr));
+  }
+#ifdef SP_THREADS
+  SP_ATOMIC_FETCH_ADD(&sp_slab_quar_bytes, (size_t)SP_POPCOUNT64(dead) * csize, __ATOMIC_RELAXED);
+#else
+  sp_slab_quar_bytes += (size_t)SP_POPCOUNT64(dead) * csize;
+#endif
+}
+int sp_slab_is_quarantined(const void *p) {
+  if (!sp_slab_quar || !sp_slab_owns(p)) return 0;
+  sp_slab_loc l; sp_slab_locate(p, &l);
+  return (bm_load(&sp_slab_quar_of(l.ch)[l.w]) & l.bit) != 0;
+}
+
 int sp_slab_is_str(const void *p) {
   sp_slab_loc l; sp_slab_locate(p, &l);
   return (l.bm->str[l.w] & l.bit) != 0;
@@ -888,6 +946,7 @@ void sp_slab_verify_all(void) {
 int sp_slab_is_live(const void *p) {
   if (sp_slab_on <= 0 || !sp_slab_owns(p)) return 0;
   sp_slab_loc l; sp_slab_locate(p, &l);
+  if (SP_EXPECT(sp_slab_quar != NULL, 0) && (sp_slab_quar_of(l.ch)[l.w] & l.bit)) return 0;   /* pinned, and freed */
   return ((l.bm->young[0][l.w] | l.bm->young[1][l.w] | l.bm->old[l.w] | l.bm->pin[l.w]) & l.bit) != 0;
 }
 int sp_slab_is_old(const void *p) {
@@ -938,6 +997,7 @@ void sp_slab_free(void *p) {
   SP_SLAB_CLEAR(l.bm->str[l.w]);
   SP_SLAB_CLEAR(l.bm->mark[l.w]);
   SP_SLAB_CLEAR(l.bm->old[l.w]);
+  if (SP_EXPECT(sp_slab_quar != NULL, 0)) { sp_slab_frees++; if (sp_slab_verify_on) sp_slab_note(p, 6); sp_slab_quarantine(l.ch, l.bm, l.w, l.bit, 0, 1); return; }
   SP_SLAB_CLEAR(l.bm->pin[l.w]);
 #undef SP_SLAB_CLEAR
   sp_slab_frees++;
@@ -1019,6 +1079,33 @@ void sp_slab_runs_release(void) {
       wk->wmask[c] = 0;
     }
   }
+}
+/* Under the barrier, at the start of a collection, before any sweep or free
+   can race it: the map is made at the first one, and a quarantine past its
+   size is let go whole. */
+void sp_slab_quarantine_trim(void) {
+  if (!sp_slab_quar) {
+    if (!sp_slab_quar_on || sp_slab_on <= 0) return;
+    void *m = mmap(NULL, sp_slab_cap / SP_SLAB_CHUNK * SP_SLAB_NW * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (m == MAP_FAILED) { sp_slab_quar_on = 0; return; }
+    sp_slab_quar = (uint64_t *)m;
+  }
+  if (sp_slab_quar_bytes <= SP_SLAB_QUAR_MAX) return;
+  for (uintptr_t a = sp_slab_base; a < sp_slab_brk; a += SP_SLAB_ARENA) {
+    sp_slab_arena *ar = (sp_slab_arena *)a;
+    for (int i = SP_SLAB_FIRST; i < (int)SP_SLAB_NCHUNK; i++) {
+      sp_slab_chunk *ch = &ar->ch[i];
+      if (!ch->in_use) continue;
+      sp_slab_bm *bm = sp_slab_bm_of(ch);
+      uint64_t *q = sp_slab_quar_of(ch), any = 0;
+      for (unsigned w = 0; w < (ch->nslots + 63u) >> 6; w++) {
+        if (!q[w]) continue;
+        bm_and(&bm->pin[w], ~q[w]); any |= q[w]; q[w] = 0;
+      }
+      if (any) sp_slab_avail_push(ch);
+    }
+  }
+  sp_slab_quar_bytes = 0;
 }
 void sp_slab_epoch_flip(void) {
   sp_slab_runs_release();
@@ -1107,6 +1194,7 @@ void sp_slab_sweep_worker(int wid, int full, int aging, int (*die)(void *hdr), s
         if (full && (ov & dead)) bm_and(&bm->old[w], ~dead);
         freed += (size_t)SP_POPCOUNT64(dead);
         if (sp_slab_verify_on) { uint64_t v = dead; while (v) { unsigned b = (unsigned)SP_CTZ64(v); v &= v - 1; sp_slab_note(sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize, 7); } }
+        if (SP_EXPECT(sp_slab_quar != NULL, 0)) sp_slab_quarantine(ch, bm, w, dead, sd, 0);
       }
       /* the epoch's word is spent: dead, promoted or carried, every bit is
          accounted for. So are the marks: the next cycle starts clean. */

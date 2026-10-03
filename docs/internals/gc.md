@@ -157,6 +157,9 @@ gated one level further, on a threshold of its own.
 | String (young)        | 256 KB  | 2048 B                   |
 | String (old)          | 1 MB    | unchanged                |
 
+`SPINEL_GC_STRESS=2` pins the first two at 0 instead, over any
+`SPINEL_GC_THRESHOLD_*KB` floor: every allocation after the first collects.
+
 After each collection the threshold is retuned from what the sweep actually
 recovered:
 
@@ -220,10 +223,88 @@ Environment variables:
 | Variable              | Effect                                                                 |
 |-----------------------|------------------------------------------------------------------------|
 | `SPINEL_GC_STRESS`    | drops the thresholds to 2048 B, so nearly every allocation collects     |
+| `SPINEL_GC_STRESS=2`  | collects at every allocation, poisons what dies and keeps it out of reuse; see "A lost object, made visible" |
 | `SPINEL_GC_VERIFY`    | registry check on every mark, plus a SIGSEGV/SIGBUS reporter naming the phase and object |
 | `SPINEL_GC_PHASES`    | adds two `[gcph]` lines: collector time split into mark / old sweep / slot sweep / remembered clear / string sweep / trim, and the mark split again into roots / fibers / globals / scan. Named as the collector's own comments and `sp_gc_dbg_phase` name them; arms the reporter on its own |
 | `SPINEL_GC_MINOR`     | generational MARK: a non-full cycle walks the young objects and the remembered set instead of the whole live graph. Opt-in; see below |
 | `SPINEL_MAX_HEAP_MB`  | RSS ceiling, checked at GC trigger points against `/proc/self/statm`; Linux only, off by default |
+
+## A lost object, made visible
+
+An object the roots lost -- held in a C temporary across an allocation, or by
+an old object the write barrier did not record -- is freed by the first
+collection that runs while it is lost. The program usually answers right
+anyway, for three reasons, and `SPINEL_GC_STRESS=1` leaves all three standing:
+
+- **Nothing collected in the window.** Level 1 collects at every object
+  allocation only once 2 KB of objects are live, and once per 2 KB of young
+  strings. A short test never gets there.
+- **A freed slot keeps its bytes.** The sweep clears bitmap bits and writes
+  nothing, so a read through the lost reference returns what was there.
+- **A freed slot is reused.** The next allocation of its size class takes it,
+  the lost reference names a live object again, and `SPINEL_GC_VERIFY` has
+  nothing to say: the registry check passes, and the program reads or writes a
+  stranger's fields.
+
+`SPINEL_GC_STRESS=2` takes the three away:
+
+- both thresholds are 0, so every allocation after the first collects;
+- what a sweep or an explicit free (`sp_slab_free`) releases is filled with
+  `0xdb` and quarantined: its pin bit keeps the allocator off the slot, and a
+  bitmap of its own makes `sp_slab_is_live` answer no;
+- the verifier's registry check runs on every mark. Its walks of the whole
+  heap do not, since a collection here is per allocation; `SPINEL_GC_VERIFY=1`
+  beside it adds them, and the slot's history to the report.
+
+A lost object then shows in one of three ways, each of them a failure rather
+than a chance:
+
+- the mark reaches it, through the root registered too late or the holder the
+  barrier missed, and the collection stops with the phase and the holder:
+
+  ```
+  *** SPINEL_GC_STRESS: the mark reached a freed slot ***
+    obj = 0x7fe913020070   phase = root   ctx = 0x7ffce5ad8880
+    slab: chunk wid=0 cls=2 (64 B) in_use=1 slot=1 epoch=3 ... pin=1
+    freed: scan=(nil) size=56
+  ```
+
+  A swept object keeps its `sp_gc_hdr` so that this can name its scan hook
+  and size, and a swept string its header, marker byte and length; a block
+  freed explicitly is poison throughout;
+- the program reads a pointer out of it and faults on an address of `0xdb`
+  bytes (the reporter says `phase = ?`: the fault is the program's, not the
+  mark's), or copies that pointer into a live object, where the next mark
+  faults on it with `phase = scan`;
+- the program reads a number or a string out of it and prints `0xdb` bytes
+  where the answer was, which a test's expected output catches.
+
+A block the allocator hands out unzeroed (a string, a raw payload) holds
+`0xdb` too where it used to hold a dead block's bytes, so a read of memory
+nobody wrote shows the same way.
+
+Any test runs under it as it is, and so does the corpus:
+
+```
+SPINEL_GC_STRESS=2 ./a.out
+SPINEL_GC_STRESS=2 make test-corpus GATE_CACHE=0
+```
+
+What it costs is a collection per allocation: a program that allocates N times
+collects N times, and a threaded one stops the world each time. It is for test
+programs, and one with a long allocating loop needs more than the harness's
+ten seconds. The quarantine holds 1 MB (`SP_SLAB_QUAR_MAX`) and is let go
+whole at the next collection once it is over, so a slot is reused only after
+its whole neighbourhood has been swept again. A run without the variable pays
+one not-taken branch per bitmap word the sweep frees from and one per explicit
+free; no inline allocation path changed.
+
+What it does not see: a block larger than the largest size class (2 KB) is
+malloc's, and neither poisoned nor kept; so is every block under
+`SPINEL_GC_SLAB=0`. A reference that outlives the quarantine is back to luck.
+`gc-stress-test` holds the level to both halves of this: a host that loses an
+object and a string on purpose must print the poison and stop in the root
+phase, and programs that root what they use must answer the same under it.
 
 ## The generational mark, and why it is opt-in
 

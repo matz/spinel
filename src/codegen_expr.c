@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "repr.h"
 
 /* defined? support: does this subtree reference a constant the compiler
    cannot resolve? Any such reference makes the whole defined? answer nil
@@ -1302,6 +1303,30 @@ static int emit_poly_op_assign_value(Compiler *c, const char *ref, TyKind t,
   return ok;
 }
 
+/* A write's nil result uses the expression's representation, not its
+   receiver's field representation. In a rebound block these can differ:
+   a caller's String slot types the result while the receiver stores an
+   Integer sentinel. The store above still uses the receiver's own kind. */
+static void emit_ivar_write_result(Compiler *c, int id, int value, TyKind slot,
+                                   const char *ref, Buf *b) {
+  Repr result = repr_of(c, id);
+  TyKind wt = result.as_ty;
+  if (nt_kind(c->nt, value) == NK_NilNode && ie_class_of(c, id) >= 0 && nil_value(wt)) {
+    buf_printf(b, "; %s; })", nil_value(wt));
+    return;
+  }
+  /* A boxed slot can feed a concrete expression, as in a retyped
+     instance_exec body whose assignment answers a Symbol. */
+  if (slot == TY_POLY && wt != TY_POLY && wt != TY_UNKNOWN && wt != TY_VOID && wt != TY_NIL &&
+      is_scalar_ret(wt)) {
+    buf_puts(b, "; ");
+    emit_unbox_text(c, wt, ref, b);
+    buf_puts(b, "; })");
+    return;
+  }
+  buf_printf(b, "; %s; })", ref);
+}
+
 static void emit_expr_node(Compiler *c, int id, Buf *b);
 
 /* How many expressions enclose the one being emitted: a call nested in an
@@ -1879,7 +1904,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     if (!nm || v < 0) { buf_puts(b, "0"); return; }
     /* inside an instance_eval/exec splice the block scope has no class_id, so
        the ivar belongs to the rebound receiver class (g_ie_class_id). */
-    int ivcls2 = cid2 >= 0 ? cid2 : g_ie_class_id;
+    int ivcls2 = ie_class_of(c, id) >= 0 ? ie_class_of(c, id) : cid2 >= 0 ? cid2 : g_ie_class_id;
     /* a top-level ivar's slot is the Toplevel pseudo-class's, the one the
        store below writes (civ_Toplevel_x): without its kind the value went
        in as it was, and `y = (@a = [])` put an Integer array into a slot
@@ -1990,18 +2015,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       emit_obj_upcast_prefix(c, ivt2, comp_ntype(c, v), b);
       emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable write", b);
     }
-    /* The expression's value is the slot read back, at the node's own type:
-       a write retyped for an instance_exec receiver (ie_body_retype) is typed
-       by its value, `:sym`, while a poly slot reads back boxed. */
-    { TyKind wt = comp_ntype(c, id);
-      if (ivt2 == TY_POLY && wt != TY_POLY && wt != TY_UNKNOWN && wt != TY_VOID && wt != TY_NIL &&
-          is_scalar_ret(wt)) {
-        buf_puts(b, "; ");
-        emit_unbox_text(c, wt, ref2e, b);
-        buf_puts(b, "; })");
-        return;
-      } }
-    buf_printf(b, "; %s; })", ref2e);
+    emit_ivar_write_result(c, id, v, ivt2, ref2e, b);
     return;
   }
   if (sp_streq(ty, "InstanceVariableOrWriteNode") || sp_streq(ty, "InstanceVariableAndWriteNode")) {

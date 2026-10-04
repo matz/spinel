@@ -4886,6 +4886,12 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
       nt_ref(nt, id, "block") < 0)
     { *out = TY_POLY_ARRAY; return 1; }
 
+  /* The row supplies the answer, except a set which answers its value. */
+  if (recv >= 0 && ty_builtin_ivar_less(rt)) {
+    const BuiltinOp *op = an_bop_find(c, id, BOP_IVAR_LESS, name, argc, nt_ref(nt, id, "block") >= 0);
+    if (op) { *out = op->result == TY_UNKNOWN ? infer_type(c, argv[1]) : bop_result(op, rt); return 1; }
+  }
+
   /* instance_variable_set(:@x, v) on a POLY receiver answers v, boxed (the
      codegen twin stores it per class) */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "instance_variable_set") && argc == 2) {

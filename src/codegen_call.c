@@ -25269,7 +25269,7 @@ void emit_call_body(Compiler *c, int id, Buf *b) {
   if (emit_call_compare_arms(c, id, b, nt, name, recv, argc, argv, rt)) return;
   if (rt == TY_TMS && emit_builtin_op(c, id, recv, rt, name, b)) return;
   if (emit_call_symbol_misc_arms(c, b, name, recv, argc, argv, rt)) return;
-  if (emit_call_display_ivar_arms(c, b, nt, name, recv, argc, argv, rt)) return;
+  if (emit_call_display_ivar_arms(c, id, b, nt, name, recv, argc, argv, rt)) return;
 
   if (emit_or_take_back(c, id, b, emit_poly_call)) return;
 

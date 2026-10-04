@@ -1461,6 +1461,7 @@ int view_push_repr(Compiler *c, int id, int flag, int v);
    that reads the flags or the type keys on it */
 unsigned view_epoch(void);
 void view_unwind(int mark);   /* back to a view_mark(): views, arm contexts and bindings */
+int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b);
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_raise(Compiler *c, const BopCtx *x, Buf *b);

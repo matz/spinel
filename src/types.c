@@ -646,3 +646,10 @@ int ty_object_protocol_answers(TyKind rt, TyKind at, const char *name, int argc)
 const TyTraits ty_traits[TY_TRAITS_N] = {
 #include "ty_traits.inc"
 };
+
+/* A builtin value's type, which lays out no instance variables: a String,
+   a number, true, false, nil, a Symbol, a Range, an Array or a Hash. */
+int ty_builtin_ivar_less(TyKind t) {
+  return t == TY_STRING || t == TY_STRBUF || t == TY_INT || t == TY_FLOAT || t == TY_BOOL || t == TY_NIL ||
+         t == TY_SYMBOL || t == TY_BIGINT || t == TY_RANGE || ty_is_array(t) || ty_is_hash(t);
+}

@@ -1,0 +1,19 @@
+nil
+[]
+false
+nil
+[]
+false
+[]
+nil
+[]
+[]
+[]
+[]
+nil
+[]
+nil
+false
+FrozenError
+"can't modify frozen NilClass: nil"
+NameError

@@ -4,6 +4,7 @@
    (codegen_call_arms.h). */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
@@ -1968,8 +1969,45 @@ int emit_call_print_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *n
   return 0;
 }
 
+int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int id = x->id, recv = x->recv, argc;
+  const int *argv = call_args(nt, id, &argc);
+  TyKind rt = repr_of(c, recv).ty;
+  /* A set raises on a frozen kind, or is refused where no ivar slot exists.
+     The receiver and arguments run first, including before a bad name. */
+  int is_set = x->op->arg[0] == 's';
+  int frozen_kind = rt == TY_INT || rt == TY_FLOAT || rt == TY_BOOL || rt == TY_NIL || rt == TY_SYMBOL ||
+                    rt == TY_BIGINT || rt == TY_RANGE;
+  if (is_set && !frozen_kind)
+    unsupported_feature(c, id, "instance_variable_set on a String, an Array or a Hash: Spinel lays out no "
+                               "instance variables for a builtin value, so the variable has no slot to live in");
+  const char *a0ty = argc >= 1 ? nt_type(nt, argv[0]) : NULL;
+  const char *sym = a0ty && sp_streq(a0ty, "SymbolNode") ? nt_str(nt, argv[0], "value")
+                  : a0ty && sp_streq(a0ty, "StringNode") ? nt_str(nt, argv[0], "content") : NULL;
+  int tv = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+  /* a literal name with no `@` is NameError before anything else */
+  if (argc >= 1 && sym && sym[0] != '@')
+    buf_printf(b, "sp_raise_cls(\"NameError\", \"'%s' is not allowed as an instance variable name\"); ", sym);
+  if (is_set)
+    buf_printf(b, "sp_raise_frozen_obj(_t%d, sp_str_concat((&(\"\\xff\" \"can't modify frozen \")[1]), "
+                  "sp_poly_class_name(_t%d))); ", tv, tv);
+  if (x->op->arg[0] == 'l') buf_puts(b, "sp_PolyArray_new(); })");
+  else if (x->op->arg[0] == 'd') buf_puts(b, "(sp_bool)0; })");
+  else {
+    /* A raising set still needs the settled result's C representation. */
+    Repr rp = repr_of(c, id);
+    const char *nv = nil_value(rp.as_ty);
+    buf_printf(b, "%s; })", nv ? nv : default_value(rp.as_ty));
+  }
+  return 1;
+}
+
 /* Kernel#display (to_s with no newline, answering nil), and instance_variable_defined? on a statically typed object, answered from its layout */
-int emit_call_display_ivar_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* Kernel#display prints to_s with no newline, returns nil */
   if (recv >= 0 && sp_streq(name, "display") && argc == 0 &&
       /* a generated READER of the name owns it, as in CRuby (#4190) */
@@ -1992,6 +2030,8 @@ int emit_call_display_ivar_arms(Compiler *c, Buf *b, const NodeTable *nt, const 
     buf_puts(b, "), stdout))");
     return 1;
   }
+  if (recv >= 0 && ty_builtin_ivar_less(rt) &&
+      emit_builtin_op(c, id, recv, BOP_IVAR_LESS, name, b)) return 1;
   /* instance_variable_defined?(:@x / '@x') on a statically-typed object:
      the layout answers at compile time */
   if (recv >= 0 && sp_streq(name, "instance_variable_defined?") && argc == 1 &&

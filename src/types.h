@@ -193,6 +193,7 @@ static inline TyKind ty_poly_face_kind(unsigned owner) {
 }
 
 const char *ty_name(TyKind t);         /* legacy string tag, for diagnostics */
+int ty_builtin_ivar_less(TyKind t);    /* a builtin value that lays out no ivars */
 int ty_is_numeric(TyKind t);           /* INT or FLOAT */
 int ty_never_callable(TyKind t);       /* kind can never answer #call */
 TyKind ty_promote_numeric(TyKind a, TyKind b); /* fold-accumulator numeric promotion */

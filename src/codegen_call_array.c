@@ -921,6 +921,18 @@ int emit_op_array_transpose(Compiler *c, const BopCtx *x, Buf *b) {
   const char *k = array_kind(rt);
   int block = nt_ref(nt, id, "block");
   (void)name; (void)a0; (void)k; (void)block; (void)argv;
+  /* transpose of an Array of Integers, Floats or Strings: CRuby converts
+     each element to an Array, which a scalar cannot -- TypeError, and an
+     empty one answers [] */
+  if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY) {
+    const char *k = array_kind(rt);
+    int t = ++g_tmp;
+    const char *en = rt == TY_INT_ARRAY ? "Integer" : rt == TY_FLOAT_ARRAY ? "Float" : "String";
+    buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b);
+    buf_printf(b, "; if (_t%d && sp_%sArray_length(_t%d) > 0) sp_raise_cls(\"TypeError\","
+                  " \"no implicit conversion of %s into Array\"); sp_%sArray_new(); })", t, k, t, en, k);
+    return 1;
+  }
   if (rt != TY_POLY_ARRAY) return 0;
   if (sp_streq(name, "transpose") && argc == 0) {
     buf_puts(b, "sp_int_array_transpose("); emit_expr(c, recv, b); buf_puts(b, ")");
@@ -1895,4 +1907,15 @@ int emit_call_untyped_array_arms(Buf *b, const NodeTable *nt, const char *name, 
     }
   }
   return 0;
+}
+
+/* The scalar case precedes the structural Array arms, as it did before
+   joining the transpose row's emitter. */
+int emit_scalar_array_transpose(Compiler *c, int id, int recv, TyKind rt,
+                                const char *name, int argc, Buf *b) {
+  if (rt != TY_INT_ARRAY && rt != TY_FLOAT_ARRAY && rt != TY_STR_ARRAY) return 0;
+  const BuiltinOp *op = bop_find(BOP_ANY_ARRAY, name, argc, nt_ref(c->nt, id, "block") >= 0);
+  if (!op || op->emit != BOPE_ARRAY_TRANSPOSE) return 0;
+  BopCtx x = { id, recv, argc, rt, name, op, NULL, 0 };
+  return emit_op_array_transpose(c, &x, b);
 }

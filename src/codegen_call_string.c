@@ -4,6 +4,7 @@
    (codegen_call_arms.h). */
 
 #include "codegen_internal.h"
+#include "repr.h"
 #include "codegen_poly.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
@@ -996,4 +997,17 @@ int emit_call_symbol_misc_arms(Compiler *c, Buf *b, const char *name, int recv, 
     return 1;
   }
   return 0;
+}
+
+/* Invalid and boxed patterns share the runtime check; analysis has already
+   settled whether each match is a String or a captures array. */
+int emit_op_string_scan_checked(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  TyKind t = comp_ntype(c, argv[0]);
+  if (t == TY_STRING || t == TY_STRBUF || t == TY_REGEX || t == TY_UNKNOWN) return 0;
+  buf_printf(b, "%s(%s, ", repr_of(c, x->id).as_ty == TY_POLY_ARRAY ? "sp_scan_boxed_poly" : "sp_scan_boxed", x->rtext);
+  emit_boxed(c, argv[0], b);
+  buf_puts(b, ")");
+  return 1;
 }

@@ -1,0 +1,9 @@
+[TypeError, "wrong argument type Integer (expected Regexp)"]
+[TypeError, "wrong argument type Symbol (expected Regexp)"]
+[TypeError, "no implicit conversion of Integer into Array"]
+[TypeError, "no implicit conversion of String into Array"]
+[]
+[[1, 3], [2, 4]]
+[NoMethodError, "undefined method 'abs' for an instance of String"]
+(5/2)
+RangeError

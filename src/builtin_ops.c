@@ -510,6 +510,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_RATIONAL, "quo", 1, 1, BF_ANY, TY_UNKNOWN, BOPE_TEMPLATE, "sp_rational_div($r, $q0)", RAT_IR },
   /* fdiv: float division whatever the operand; div: floor division to an
      Integer (Numeric#div) */
+  /* fdiv(Complex) takes the quotient's Float, raising RangeError for a
+     nonzero imaginary part. */
+  { TY_RATIONAL, "fdiv",        1,   1, BF_ANY, TY_FLOAT,      BOPE_TEMPLATE,
+    "sp_complex_to_f(sp_complex_div(((sp_Complex){sp_rational_to_f($r), 0, 1}), $e0))", BOP_K(TY_COMPLEX) },
   { TY_RATIONAL, "fdiv",        1,   1, BF_ANY, TY_FLOAT,      BOPE_TEMPLATE, "(sp_rational_to_f($r) / sp_rational_to_f($e0))", BOP_K(TY_RATIONAL) },
   { TY_RATIONAL, "fdiv",        1,   1, BF_ANY, TY_FLOAT,      BOPE_TEMPLATE, "(sp_rational_to_f($r) / $f0)", BOP_K(TY_INT) | BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "fdiv",        0, 127, BF_ANY, TY_FLOAT,      BOPE_NONE },
@@ -1440,6 +1444,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT, "denominator", 0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "sp_float_to_rational($r).den" },
   { TY_FLOAT, "to_r",        0,   0, BF_ANY,      TY_RATIONAL,    BOPE_TEMPLATE, "sp_float_to_rational($r)" },
   { TY_FLOAT, "rationalize", 0,   0, BF_ANY,      TY_RATIONAL,    BOPE_TEMPLATE, "sp_float_rationalize0($r)" },
+  { TY_FLOAT, "rationalize", 1, 1, BF_ANY, TY_RATIONAL, BOPE_FLOAT_RATIONALIZE },
   { TY_FLOAT, "rationalize", 0,   1, BF_ANY,      TY_RATIONAL,    BOPE_NONE },
   { TY_FLOAT, "eql?",        1,   1, BF_ANY,      TY_BOOL,        BOPE_NONE },
 
@@ -1487,6 +1492,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "delete",          2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0 },
   { TY_STRING, "delete",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete($r, $s0)", 0 },
   { TY_STRING, "delete",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
+  /* Pattern analysis determines the result's element shape. */
+  { TY_STRING, "scan", 1, 1, BF_NONE, TY_UNKNOWN, BOPE_STRING_SCAN_CHECKED },
   { TY_STRING, "slice!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },  /* removed part, or nil */
   { TY_STRING, "[]",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "slice",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },

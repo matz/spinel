@@ -1153,10 +1153,15 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           }
           if (at != TY_UNKNOWN && at != TY_VOID) {
             Scope *esc = comp_scope_of(c, id);
+            int saved0_arg = argv[0];
             if (esc) {
               char svn[32]; snprintf(svn, sizeof svn, "__sv%d", ++g_tmp);
               LocalVar *lv = scope_local_intern(esc, svn);
               lv->type = at;
+              /* the temporary holds the argument's value, nil included: an
+                 Integer one that can be nil (`r.x = h[k]&.to_i`) keeps the
+                 slot's nil, or the setter's -2^63 check reads it as -2^63 */
+              lv->nullable_int = (at == TY_INT || at == TY_FLOAT) && nullable_int_value(c, saved0_arg);
               int rd = nt_new_node((NodeTable *)nt, "LocalVariableReadNode");
               nt_node_set_str((NodeTable *)nt, rd, "name", svn);
               comp_grow_node_arrays(c);

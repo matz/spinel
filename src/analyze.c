@@ -11918,9 +11918,26 @@ static int hash_literal_sources(Compiler *c, int val, int depth, int *out, int c
   if (sp_streq(vt, "HashNode")) { out[n++] = val; return n; }
   if (sp_streq(vt, "CallNode")) {
     const char *cn = nt_str(nt, val, "name");
+    int recv = nt_ref(nt, val, "receiver");
+    /* an element of an Array literal, by a constant index (`[x, 1][0]`),
+       that names a variable: a literal written there directly is boxed by
+       its context and takes the general hash already */
+    if (cn && sp_streq(cn, "[]") && recv >= 0 && nt_kind(nt, recv) == NK_ArrayNode &&
+        nt_ref(nt, val, "block") < 0) {
+      int a = nt_ref(nt, val, "arguments"), ac = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+      int en = 0; const int *el = nt_arr(nt, recv, "elements", &en);
+      if (ac != 1 || nt_kind(nt, av[0]) != NK_IntegerNode) return n;
+      long long i = nt_int(nt, av[0], "value", -1);
+      if (i < 0) i += en;
+      if (i < 0 || i >= en) return n;
+      for (int e = 0; e <= i; e++) if (nt_kind(nt, el[e]) == NK_SplatNode) return n;
+      if (nt_kind(nt, el[i]) != NK_LocalVariableReadNode) return n;
+      return hash_literal_sources(c, el[i], depth + 1, out, cap, n);
+    }
     if (!cn || (!sp_streq(cn, "dup") && !sp_streq(cn, "clone"))) return n;
     if (nt_ref(nt, val, "arguments") >= 0 || nt_ref(nt, val, "block") >= 0) return n;
-    return hash_literal_sources(c, nt_ref(nt, val, "receiver"), depth + 1, out, cap, n);
+    return hash_literal_sources(c, recv, depth + 1, out, cap, n);
   }
   if (sp_streq(vt, "LocalVariableReadNode")) {
     const char *ln = nt_str(nt, val, "name");
@@ -11942,7 +11959,10 @@ static int hash_literal_sources(Compiler *c, int val, int depth, int *out, int c
       }
       return n;
     }
-    for (int w = 0; w < nt->count && n < cap; w++) {
+    /* the local's writes through the (scope, name) index, not a walk of
+       the whole table per read */
+    int lsi = (int)(ls - c->scopes);
+    for (int w = comp_lvw_first_sc(c, lsi, ln); w >= 0 && n < cap; w = comp_lvw_next_sc(c, w)) {
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != ls) continue;
@@ -12312,6 +12332,24 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
         }
       }
       if (!all_empty) break;
+    }
+    /* Another name for the hash (`y = x`, `y = [x, 1][0]`): the key
+       operation says the same about the empty literal it was copied from,
+       which hash_literal_sources follows back. Without it the literal kept
+       the String-keyed default and a Symbol key stored through the alias
+       raised, or went into a `const char *` slot. */
+    /* A parameter stands for every call's argument, which the binding
+       answers for: following it here walked the calls once per key site. */
+    int is_param = 0;
+    for (int pi = 0; pi < sc->nparams && !is_param; pi++) is_param = sc->pnames[pi] && sp_streq(sc->pnames[pi], ln);
+    if (!all_empty && !is_param) {
+      int srcs[32], ns = hash_literal_sources(c, recv, 0, srcs, 32, 0);
+      for (int q = 0; q < ns; q++) {
+        int en = 0; nt_arr(nt, srcs[q], "elements", &en);
+        if (en != 0 || srcs[q] >= c->node_cap || ty_is_hash(c->hash_want[srcs[q]])) continue;
+        c->hash_want[srcs[q]] = want;
+        changed = 1;
+      }
     }
   }
   free((void *)tp_name);

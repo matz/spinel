@@ -5020,12 +5020,37 @@ void proc_collect_locals(Compiler *c, int id, NameSet *locals) {
 /* Collect the parameter names declared by a block/lambda node (requireds,
    optionals, posts, rest). Used to declare a nested block's params in the
    flat fiber-body C function it is inlined into. */
+/* The numbered or `it` parameter reads of a block's own body (a nested
+   block's are its own): `_1`, `it`, and the per-block names the analysis
+   renames them to (`_1__b11`). */
+static void collect_numbered_reads(Compiler *c, int id, NameSet *out) {
+  if (id < 0) return;
+  NodeKind k = nt_kind(c->nt, id);
+  if (k == NK_BlockNode || k == NK_LambdaNode) return;
+  if (k == NK_LocalVariableReadNode || (nt_type(c->nt, id) && sp_streq(nt_type(c->nt, id), "ItLocalVariableReadNode"))) {
+    const char *nm = nt_str(c->nt, id, "name");
+    if (nm && ((nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' && (!nm[2] || nm[2] == '_')) ||
+               (nm[0] == 'i' && nm[1] == 't' && (!nm[2] || nm[2] == '_'))))
+      nameset_add(out, nm);
+  }
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) collect_numbered_reads(c, ch, out); }
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int j = 0; j < n; j++) if (ids[j] >= 0) collect_numbered_reads(c, ids[j], out); }
+}
 static void collect_block_param_names(Compiler *c, int blk, NameSet *out) {
   const NodeTable *nt = c->nt;
   const char *spa = nt_str(nt, blk, "sym_proc_arg");
   if (spa) nameset_add(out, spa);
   int bp_node = nt_ref(nt, blk, "parameters");
-  if (bp_node < 0) return;
+  /* a numbered-parameter or `it` block has no names to read off its node --
+     a `-> { _1 }` has no node at all: they are the ones its body reads (an
+     enclosing block's cannot be read there, as Ruby refuses it) */
+  if (bp_node < 0 || nt_kind(nt, bp_node) == NK_NumberedParametersNode ||
+      (nt_type(nt, bp_node) && sp_streq(nt_type(nt, bp_node), "ItParametersNode"))) {
+    collect_numbered_reads(c, nt_ref(nt, blk, "body"), out);
+    return;
+  }
   int inner = nt_ref(nt, bp_node, "parameters");
   int pn = inner >= 0 ? inner : bp_node;
   if (pn < 0) return;
@@ -5326,6 +5351,19 @@ const char *proc_post_name(Compiler *c, int create, int idx) {
    with no parameters node at all, so the classifier must derive them from the
    used-name set. Returns the highest _N used (0 when none). Only meaningful
    when the proc declares no explicit parameters (Ruby forbids mixing). */
+/* The names the proc's OWN body reads, leaving out nested blocks and
+   lambdas: a `_1` in `-> { xs.map { _1 } }` is the inner block's parameter,
+   and counting it made the lambda demand an argument it does not take. */
+static void proc_collect_used_shallow(Compiler *c, int id, NameSet *out) {
+  if (id < 0) return;
+  NodeKind k = nt_kind(c->nt, id);
+  if (k == NK_BlockNode || k == NK_LambdaNode) return;
+  if (k == NK_LocalVariableReadNode) nameset_add(out, nt_str(c->nt, id, "name"));
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) proc_collect_used_shallow(c, ch, out); }
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int j = 0; j < n; j++) if (ids[j] >= 0) proc_collect_used_shallow(c, ids[j], out); }
+}
 int proc_numbered_max(const NameSet *used) {
   int mx = 0;
   for (int i = 0; i < used->n; i++) {
@@ -6721,7 +6759,10 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
          names surface as plain local reads -- so the count comes from the
          body, and the names are the literal ones (nothing renames a block
          with no node to record the new name on). */
-      nnumbered = proc_numbered_max(&used);
+      { NameSet own = {0};
+        proc_collect_used_shallow(c, body, &own);
+        nnumbered = proc_numbered_max(&own);
+        free(own.v); }
       for (int k = 1; k <= nnumbered; k++) {
         /* NameSet stores the POINTER: use the scope-interned stable name, not
            a stack buffer. The analyze pass interned _k on this scope already. */

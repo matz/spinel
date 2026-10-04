@@ -5432,6 +5432,11 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited) {
     src = &c->scopes[ms];  /* realloc-safe */
     { int cp = comp_cmethod_in_class(c, ci, src->name);
       if (cp >= 0) c->scopes[cp].is_extend_copy = 1;
+      /* The copy keeps the module's visibility, and a later extend wins. A
+         copy behind the class's own method is out of reach of a call. */
+      if (cp >= 0 && !own_name)
+        comp_cmethod_extend_vis_set(&c->classes[ci], src->name, src->is_module_function && ci != mod_id
+                                    ? SP_VIS_PRIVATE : comp_method_vis(&c->classes[mod_id], src->name));
       if (own_name) {
         if (cp >= 0) { free(c->scopes[cp].name); c->scopes[cp].name = strdup(behind); }
         free(c->scopes[own].name);

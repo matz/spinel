@@ -1,0 +1,8 @@
+[:ok, 42]
+[:err, "negative"]
+true
+false
+[:ok, "direct"]
+"<t>"
+"<H>"
+"DIRECT"

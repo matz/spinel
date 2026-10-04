@@ -459,6 +459,11 @@ typedef struct {
   char **cm_vis_names;
   int  *cm_vis_kinds;
   int ncm_vis, ccm_vis;
+  /* The visibility an `extend` copy brings from its module. The class body's
+     own entry above wins over it, whichever comes first. */
+  char **xcm_vis_names;
+  int  *xcm_vis_kinds;
+  int nxcm_vis, cxcm_vis;
   /* class << self attr_accessor/reader/writer: singleton-level accessors
      stored in static globals (cst_<Class>_<field>), not in per-instance ivars */
   char **sg_readers;   /* singleton reader names */
@@ -1111,6 +1116,8 @@ int        comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name);
 void       comp_method_vis_set(ClassInfo *ci, const char *name, int kind);
 /* Record class method `name`'s visibility on a class (overwrite-or-append). */
 void       comp_cmethod_vis_set(ClassInfo *ci, const char *name, int kind);
+/* The same for a class method an `extend` copies in; a later extend overwrites. */
+void       comp_cmethod_extend_vis_set(ClassInfo *ci, const char *name, int kind);
 /* Visibility of class method `name` up class_id's superclass chain; the
    declaring class goes to *at. SP_VIS_PUBLIC when none records it. */
 int        comp_cmethod_vis_declared(Compiler *c, int class_id, const char *name, int *at);

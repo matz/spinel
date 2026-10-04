@@ -1,0 +1,24 @@
+"shown secret"
+"secret"
+private method 'secret' called for module Plain
+"shown secret"
+"secret"
+private method 'secret' called for module Both
+"via 1"
+protected method 'guarded' called for class Base
+protected method 'guarded' called for class Sub
+false
+"own secret"
+"own secret"
+"public"
+private method 'secret' called for class PubThenPriv
+"secret"
+"secret2"
+private method 'secret' called for class MadePrivate
+1
+private method 'secret' called for class OtherDeclared
+"own"
+"own secret"
+"own"
+"helper"
+private method 'helper' called for class UsesFn

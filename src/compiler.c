@@ -864,12 +864,22 @@ void comp_cmethod_vis_set(ClassInfo *ci, const char *name, int kind) {
   vis_table_set(&ci->cm_vis_names, &ci->cm_vis_kinds, &ci->ncm_vis, &ci->ccm_vis, name, kind);
 }
 
+void comp_cmethod_extend_vis_set(ClassInfo *ci, const char *name, int kind) {
+  vis_table_set(&ci->xcm_vis_names, &ci->xcm_vis_kinds, &ci->nxcm_vis, &ci->cxcm_vis, name, kind);
+}
+
+/* On each class, the class body's entry comes before an extend copy's. The
+   walk stops at the nearest class that defines the method: a parent's entry
+   does not reach past a subclass's own `def self.name`. */
 int comp_cmethod_vis_declared(Compiler *c, int class_id, const char *name, int *at) {
   if (!name) return SP_VIS_PUBLIC;
   for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
     ClassInfo *ci = &c->classes[cid];
     for (int i = 0; i < ci->ncm_vis; i++)
       if (sp_streq(ci->cm_vis_names[i], name)) { if (at) *at = cid; return ci->cm_vis_kinds[i]; }
+    for (int i = 0; i < ci->nxcm_vis; i++)
+      if (sp_streq(ci->xcm_vis_names[i], name)) { if (at) *at = cid; return ci->xcm_vis_kinds[i]; }
+    if (comp_cmethod_in_class(c, cid, name) >= 0) break;
   }
   return SP_VIS_PUBLIC;
 }

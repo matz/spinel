@@ -981,9 +981,10 @@ int desugar_body_self_call(Compiler *c) {
    before or after the defs, and in any reopening of the module: it extends
    the module object, so every method of the module counts, wherever its body
    was reopened (Inflector's transliterate.rb, loaded before the methods.rb
-   that carries the `extend self`, defines parameterize). activesupport's
-   Inflector is the shape, reached from its autoloader as
-   `Inflector.underscore(full)`. */
+   that carries the `extend self`, defines parameterize). An `include M` that
+   is a direct statement of the body gets an `extend M` beside it, so the
+   included methods are the module's own too. activesupport's Inflector is
+   the shape, reached from its autoloader as `Inflector.underscore(full)`. */
 static void fwd_ns_key(const NodeTable *nt, int id, char *key, size_t cap);
 static void fwd_key_add(char *key, size_t cap, const char *seg);
 static int xs_is_extend_self(const NodeTable *nt, int st) {
@@ -999,6 +1000,12 @@ static void xs_module_key(const NodeTable *nt, int mod, char *key, size_t cap) {
   key[0] = 0;
   fwd_ns_key(nt, mod, key, cap);
   fwd_key_add(key, cap, nt_str(nt, nt_ref(nt, mod, "constant_path"), "name"));
+}
+static int xs_is_include(const NodeTable *nt, int st) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  return nm && sp_streq(nm, "include") && nt_ref(nt, st, "block") < 0 &&
+         nt_ref(nt, st, "arguments") >= 0;
 }
 static int xs_body_extends_self(const NodeTable *nt, int mod) {
   int body = nt_ref(nt, mod, "body");
@@ -1039,6 +1046,13 @@ int desugar_extend_self(Compiler *c) {
       int st = old[i];
       if (xs_is_extend_self(nt, st)) continue;   /* dropped: the clones are what it meant */
       nb[nbn++] = st;
+      if (xs_is_include(nt, st)) {
+        int ext = nt_clone_subtree(nt, st);
+        if (ext < 0) continue;
+        nt_node_set_str(nt, ext, "name", "extend");
+        nb[nbn++] = ext;
+        continue;
+      }
       if (nt_kind(nt, st) != NK_DefNode || nt_ref(nt, st, "receiver") >= 0) continue;
       int clone = nt_clone_subtree(nt, st);
       if (clone < 0) continue;

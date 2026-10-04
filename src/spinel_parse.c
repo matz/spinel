@@ -267,6 +267,8 @@ static char *cstr(pm_constant_id_t id) {
   return buf;
 }
 
+static void sp_find_builtin_ranges(const char *src);
+static int sp_in_builtin(const uint8_t *at);
 #include "sp_macro.c"
 
 /* ---- String escaping ---- */
@@ -2249,6 +2251,24 @@ static void sp_includes_free(void) {
    Read off the splice markers, which every build keeps, not off the line
    map, which only a build with line maps has. */
 static size_t *sp_bi_lo = NULL, *sp_bi_hi = NULL;
+/* The files the require resolver took from the compiler's own builtins/
+   directory: a splice is a builtin's by where it came from, not by a
+   "/builtins/" somewhere in its path -- a program's own lib/builtins/x.rb
+   is the program's. */
+static char **sp_bi_paths = NULL;
+static int sp_bi_npaths = 0;
+static void sp_note_builtin_path(const char *path) {
+  for (int i = 0; i < sp_bi_npaths; i++) if (!strcmp(sp_bi_paths[i], path)) return;
+  char **np = realloc(sp_bi_paths, sizeof(char *) * (size_t)(sp_bi_npaths + 1));
+  if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  sp_bi_paths = np;
+  sp_bi_paths[sp_bi_npaths++] = strdup(path);
+}
+static int sp_is_builtin_path(const char *p, size_t n) {
+  for (int i = 0; i < sp_bi_npaths; i++)
+    if (strlen(sp_bi_paths[i]) == n && !strncmp(sp_bi_paths[i], p, n)) return 1;
+  return 0;
+}
 static int sp_bi_n = 0;
 static const char *sp_bi_base = NULL;
 static void sp_find_builtin_ranges(const char *src) {
@@ -2261,8 +2281,7 @@ static void sp_find_builtin_ranges(const char *src) {
     size_t pl = !strncmp(line, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) ? strlen(SP_PUSH_PREFIX)
               : !strncmp(line, SP_INSERT_PREFIX, strlen(SP_INSERT_PREFIX)) ? strlen(SP_INSERT_PREFIX) : 0;
     if (pl && sp < 64) {
-      int bi = 0;
-      for (size_t k = pl; k + 10 <= len && !bi; k++) if (!strncmp(line + k, "/builtins/", 10)) bi = 1;
+      int bi = sp_is_builtin_path(line + pl, len - pl);
       stk_lo[sp] = (size_t)(line - src); stk_bi[sp] = bi; sp++;
     }
     else if (!strncmp(line, SP_POP_PREFIX, strlen(SP_POP_PREFIX)) && sp > 0) {
@@ -3833,6 +3852,7 @@ else {
             snprintf(gp, sizeof(gp), "%.*s/../%s.rb", base_len, lib_dir, lib_name);
             content = read_file(gp);
           }
+          if (content) sp_note_builtin_path(gp);
         }
         if (!content) snprintf(gp, sizeof(gp), "%.*s/packages/%s/%s.rb", base_len, lib_dir, first, lib_name);
         if (!content) content = read_file(gp);

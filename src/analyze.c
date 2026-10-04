@@ -26913,7 +26913,11 @@ static void desugar_block_arg_order(Compiler *c) {
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
     int be = nt_ref(nt, blk, "expression");
-    if (!bo_may_act(nt, be)) continue;
+    int pb = nt_kind(nt, be) == NK_ParenthesesNode ? nt_ref(nt, be, "body") : -1;
+    int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+    int seq = ps && pn >= 2 &&
+              (nt_kind(nt, ps[pn - 1]) == NK_LambdaNode || is_proc_create(c, ps[pn - 1]));
+    if (!seq && !bo_may_act(nt, be)) continue;
     int recv = nt_ref(nt, id, "receiver");
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av0 = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
@@ -26931,7 +26935,7 @@ static void desugar_block_arg_order(Compiler *c) {
       }
       else ahead |= bo_may_act(nt, av0[k]);
     }
-    if (!plain || !ahead) continue;
+    if (!plain || (!ahead && !seq)) continue;
     Scope *sc = comp_scope_of(c, id);
     if (!sc) continue;
     int *av = an > 0 ? malloc(sizeof(int) * (size_t)an) : NULL;
@@ -26941,13 +26945,15 @@ static void desugar_block_arg_order(Compiler *c) {
     int stm[256]; int ns = 0, serial = 0;
     char tn[64];
     /* one `__bo_<id>_<k> = e` statement; answers the read that replaces e */
-    #define BO_HOIST(E) ({ int _e = (E), _r = _e; if (ns < 255 && bo_may_act(nt, _e)) { \
+    #define BO_HOIST(E) ({ int _e = (E), _r = _e; if (ns < 255 && _e >= 0 && (seq || bo_may_act(nt, _e))) { \
         snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(c, id), serial++); \
         int _w = nt_new_node(nt, "LocalVariableWriteNode"); \
         int _rd = nt_new_node(nt, "LocalVariableReadNode"); \
         nt_node_set_str(nt, _w, "name", tn); nt_node_set_ref(nt, _w, "value", _e); \
         nt_node_set_str(nt, _rd, "name", tn); \
         stm[ns++] = _w; scope_local_intern(sc, tn); _r = _rd; } _r; })
+    /* A sequence can reassign even a plain read. Capture its receiver and
+       arguments before it, inside the call's own evaluation site. */
     int nrecv = BO_HOIST(recv);
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
@@ -26968,6 +26974,19 @@ static void desugar_block_arg_order(Compiler *c) {
         free(el);
       }
       else av[k] = BO_HOIST(av[k]);
+    }
+    /* `&(log; proc { ... })`: the sequence's statements run here, in turn,
+       and the proc literal they end in is the block itself -- hoisted whole,
+       the literal sat inside a temp's parentheses where nothing bound its
+       parameters, and they read the elements as Integers */
+    if (nt_kind(nt, be) == NK_ParenthesesNode) {
+      int pb = nt_ref(nt, be, "body");
+      int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+      if (ps && pn >= 2 && ns + pn < 255 &&
+          (nt_kind(nt, ps[pn - 1]) == NK_LambdaNode || is_proc_create(c, ps[pn - 1]))) {
+        for (int k = 0; k < pn - 1; k++) stm[ns++] = ps[k];
+        be = ps[pn - 1];
+      }
     }
     int nbe = BO_HOIST(be);
     #undef BO_HOIST

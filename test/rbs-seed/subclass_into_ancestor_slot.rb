@@ -44,6 +44,16 @@ class Holder
     return Gadget.new(9) if f
     Base.new(1)
   end
+
+  # the same return out of a begin..rescue, which computes the value
+  # before popping the rescue's frame
+  def pick_rescued(f)
+    begin
+      return Gadget.new(8) if f
+    rescue
+    end
+    Base.new(2)
+  end
 end
 
 class Box
@@ -73,6 +83,8 @@ puts h.swap(Gadget.new(2)).rec.n
 # explicit return
 puts h.pick(true).n
 puts h.pick(false).n
+puts h.pick_rescued(true).n
+puts h.pick_rescued(false).n
 
 # free-method return
 puts make.n

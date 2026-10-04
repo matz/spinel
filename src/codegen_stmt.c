@@ -7624,7 +7624,11 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
         else if (emit_ret_hash_widen_conv(c, g_ret_type, r0, a[0], b)) { }
         else if (emit_ret_poly_array_conv(c, g_ret_type, r0, a[0], b)) { }
     else if (tail_needs_unbox(r0, g_ret_type)) emit_unbox_node(c, g_ret_type, a[0], b);
-    else emit_tail_value(c, a[0], b);
+    else {
+      /* a subclass through an ancestor-typed slot, as in the flat form (#3418) */
+      emit_obj_upcast_prefix(c, g_ret_type, r0, b);
+      emit_tail_value(c, a[0], b);
+    }
     buf_puts(b, "; ");
     emit_frame_unwind(b, 0, NULL);
     buf_printf(b, "return _t%d; }\n", tr);

@@ -12237,7 +12237,9 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
     /* `class << obj` on a statically-traceable instance: the inner defs were
        reattached to a synthesized singleton subclass (register_singleton_defs)
        and are emitted from the method list, so the block is compile-time. */
-    if (exty && (sp_streq(exty, "ConstantReadNode") || sp_streq(exty, "LocalVariableReadNode"))) {
+    if (exty && (sp_streq(exty, "ConstantReadNode") || sp_streq(exty, "LocalVariableReadNode") ||
+                 sp_streq(exty, "InstanceVariableReadNode") || sp_streq(exty, "ClassVariableReadNode") ||
+                 sp_streq(exty, "GlobalVariableReadNode"))) {
       TyKind et = comp_ntype(c, sexpr);
       if (ty_is_object(et) && c->classes[ty_object_class(et)].is_singleton_of) {
         emit_sg_activate(c, id, sexpr, b, indent);

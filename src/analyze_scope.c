@@ -1192,12 +1192,14 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id) {
       else if (dsm_rty && sp_streq(dsm_rty, "SelfNode")) dm_cls = class_id;
       else dm_cls = -1;
       dm_ok = dm_cls >= 0;
-      /* A const/local receiver that is NOT a class is an object singleton
-         method: still create the scope (as an instance method, class_id
-         deferred to -1), so register_singleton_defs can reattach it to the
-         synthesized subclass. */
+      /* A const or variable receiver that is NOT a class is an object
+         singleton method: still create the scope (as an instance method,
+         class_id deferred to -1), so register_singleton_defs can reattach it
+         to the synthesized subclass. */
       if (!dm_ok && dm_recv >= 0 && dsm_rty &&
-          (sp_streq(dsm_rty, "ConstantReadNode") || sp_streq(dsm_rty, "LocalVariableReadNode"))) {
+          (sp_streq(dsm_rty, "ConstantReadNode") || sp_streq(dsm_rty, "LocalVariableReadNode") ||
+           sp_streq(dsm_rty, "InstanceVariableReadNode") || sp_streq(dsm_rty, "ClassVariableReadNode") ||
+           sp_streq(dsm_rty, "GlobalVariableReadNode"))) {
         dm_ok = 1; dm_defer = 1; dm_cmethod = 0; dm_cls = -1;
       }
     }
@@ -1968,8 +1970,11 @@ static int sg_new_class_ci(Compiler *c, int val) {
   const char *nm = nt_str(nt, val, "name");
   if (!nm || !sp_streq(nm, "new")) return -1;
   int recv = nt_ref(nt, val, "receiver");
-  if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return -1;
-  int ci = comp_class_index(c, nt_str(nt, recv, "name"));
+  if (recv < 0) return -1;
+  /* `K.new`, or `k.new` with a local holding one class (an anonymous
+     `k = Class.new { }` is such a local, of the class it became) */
+  int ci = nt_kind(nt, recv) == NK_ConstantReadNode ? comp_class_index(c, nt_str(nt, recv, "name"))
+         : nt_kind(nt, recv) == NK_LocalVariableReadNode ? class_var_static_ci(c, recv) : -1;
   if (ci < 0) return -1;
   /* Only a plain user class can be subclassed here: Object/BasicObject use an
      opaque base struct with no cls_id field, and native/exception/struct
@@ -1981,28 +1986,71 @@ static int sg_new_class_ci(Compiler *c, int val) {
   return ci;
 }
 
-/* The single defining write of a constant/local `name` (in scope `owner_scope`
-   for locals; -1 = a constant). Returns the write node if there is exactly one
-   and its value is `<UserClass>.new(...)`, else -1; *out_ci gets the class. */
-static int sg_single_new_write(Compiler *c, const char *name, int is_const,
+/* What a singleton node's receiver names: a local, a constant, an instance,
+   class or global variable. */
+enum { SG_LOCAL, SG_CONST, SG_IVAR, SG_CVAR, SG_GVAR };
+
+/* Every kind of write to a binding of kind `bk`, for the variables whose
+   writes all count; the plain write is the one that can define it. */
+static int sg_var_write_kind(int bk, NodeKind k) {
+  if (bk == SG_IVAR)
+    return k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
+           k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
+           k == NK_InstanceVariableTargetNode;
+  if (bk == SG_CVAR)
+    return k == NK_ClassVariableWriteNode || k == NK_ClassVariableOrWriteNode ||
+           k == NK_ClassVariableAndWriteNode || k == NK_ClassVariableOperatorWriteNode ||
+           k == NK_ClassVariableTargetNode;
+  return k == NK_GlobalVariableWriteNode || k == NK_GlobalVariableOrWriteNode ||
+         k == NK_GlobalVariableAndWriteNode || k == NK_GlobalVariableOperatorWriteNode ||
+         k == NK_GlobalVariableTargetNode;
+}
+
+/* The single defining write of a binding `name` of kind `bk`: a local of scope
+   `owner_scope`, a constant, an instance variable of `owner_scope`'s class, or
+   a class variable or a global of that name anywhere (for the variables every
+   kind of write counts, so an `||=` or a multiple assignment makes it more
+   than one). Returns the write node if there is exactly one and
+   its value is `<UserClass>.new(...)`, else -1; *out_ci gets the class. */
+static int sg_single_new_write(Compiler *c, const char *name, int bk,
                                Scope *owner_scope, int *out_ci) {
   const NodeTable *nt = c->nt;
   int write = -1, ci = -1, count = 0;
   for (int w = 0; w < nt->count; w++) {
     NodeKind k = nt_kind(nt, w);
-    if (is_const) { if (k != NK_ConstantWriteNode) continue; }
+    if (bk == SG_CONST) { if (k != NK_ConstantWriteNode) continue; }
+    else if (bk != SG_LOCAL) { if (!sg_var_write_kind(bk, k)) continue; }
     else if (k != NK_LocalVariableWriteNode) continue;
     const char *wn = nt_str(nt, w, "name");
     if (!wn || !sp_streq(wn, name)) continue;
-    if (!is_const && comp_scope_of(c, w) != owner_scope) continue;
+    if (bk == SG_LOCAL && comp_scope_of(c, w) != owner_scope) continue;
+    if (bk == SG_IVAR && comp_scope_of(c, w)->class_id != owner_scope->class_id) continue;
     count++;
     write = w;
   }
   if (count != 1) return -1;
+  if (bk == SG_IVAR && nt_kind(nt, write) != NK_InstanceVariableWriteNode) return -1;
+  if (bk == SG_CVAR && nt_kind(nt, write) != NK_ClassVariableWriteNode) return -1;
+  if (bk == SG_GVAR && nt_kind(nt, write) != NK_GlobalVariableWriteNode) return -1;
   ci = sg_new_class_ci(c, nt_ref(nt, write, "value"));
   if (ci < 0) return -1;
   *out_ci = ci;
   return write;
+}
+
+/* Point the `= <Class>.new(...)` of write `wnode` at class `snm`, so the
+   binding's type becomes it and `.new` builds it. A local receiver becomes
+   the constant: it held that class's parent and nothing else. */
+static void sg_retarget(Compiler *c, int wnode, const char *snm) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int wrecv = nt_ref(nt, nt_ref(nt, wnode, "value"), "receiver");
+  if (nt_kind(nt, wrecv) != NK_ConstantReadNode) {
+    long long line = nt_int(nt, wrecv, "node_line", 0), file = nt_int(nt, wrecv, "node_file", 0);
+    nt_node_reset(nt, wrecv, "ConstantReadNode");
+    nt_node_set_int(nt, wrecv, "node_line", line);
+    nt_node_set_int(nt, wrecv, "node_file", file);
+  }
+  nt_node_set_str(nt, wrecv, "name", snm);
 }
 
 /* wnode -> synthesized subclass index map, so every singleton def/extend on
@@ -2038,9 +2086,7 @@ static int sg_chain_link(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   sc->parent = prev >= 0 ? prev : orig;
   sc->is_singleton_of = orig + 1;
   /* the binding's type is the LAST link: retarget on every addition */
-  { int wval = nt_ref(nt, wnode, "value");
-    int wrecv = nt_ref(nt, wval, "receiver");
-    nt_node_set_str((NodeTable *)nt, wrecv, "name", snm); }
+  sg_retarget(c, wnode, snm);
   for (int i = 0; i < m->n; i++) if (m->wkey[i] == wnode) { m->wci[i] = newci; return newci; }
   if (m->n >= m->cap) {
     m->cap = m->cap ? m->cap * 2 : 8;
@@ -2063,28 +2109,30 @@ static int sg_get_or_make(Compiler *c, SgMap *m, int wnode, int parent_ci) {
   sc->is_singleton_of = parent_ci + 1;
   /* retarget the `= Parent.new(...)` receiver to the synthesized class so the
      binding's type becomes ty_object(newci) and .new builds it. */
-  int wval = nt_ref(nt, wnode, "value");
-  int wrecv = nt_ref(nt, wval, "receiver");
-  nt_node_set_str((NodeTable *)nt, wrecv, "name", snm);
+  sg_retarget(c, wnode, snm);
   if (m->n >= m->cap) { m->cap = m->cap ? m->cap * 2 : 8; m->wkey = realloc(m->wkey, sizeof(int) * (size_t)m->cap); m->wci = realloc(m->wci, sizeof(int) * (size_t)m->cap); }
   m->wkey[m->n] = wnode; m->wci[m->n] = newci; m->n++;
   return newci;
 }
 
-/* The binding a singleton node targets: fills *is_const / *rn / *owner (the
-   enclosing scope, for a local) and returns the receiver node, or -1. */
-static int sg_binding(Compiler *c, int id, int recv, int *is_const, const char **rn, Scope **owner) {
+/* The binding a singleton node targets: fills *bk / *rn / *owner (the
+   enclosing scope, but for a constant) and returns the receiver node, or -1. */
+static int sg_binding(Compiler *c, int id, int recv, int *bk, const char **rn, Scope **owner) {
   const NodeTable *nt = c->nt;
   if (recv < 0) return -1;
   NodeKind rk = nt_kind(nt, recv);
-  if (rk != NK_ConstantReadNode && rk != NK_LocalVariableReadNode) return -1;
-  *is_const = (rk == NK_ConstantReadNode);
+  if (rk == NK_ConstantReadNode) *bk = SG_CONST;
+  else if (rk == NK_LocalVariableReadNode) *bk = SG_LOCAL;
+  else if (rk == NK_InstanceVariableReadNode) *bk = SG_IVAR;
+  else if (rk == NK_ClassVariableReadNode) *bk = SG_CVAR;
+  else if (rk == NK_GlobalVariableReadNode) *bk = SG_GVAR;
+  else return -1;
   *rn = nt_str(nt, recv, "name");
   if (!*rn) return -1;
-  if (*is_const && comp_class_index(c, *rn) >= 0) return -1;  /* class method */
+  if (*bk == SG_CONST && comp_class_index(c, *rn) >= 0) return -1;  /* class method */
   /* the local's binding scope is the node's ENCLOSING scope (the receiver read
      is walked under the method/call scope, so its own nscope is wrong). */
-  *owner = *is_const ? NULL : comp_scope_of(c, id);
+  *owner = *bk == SG_CONST ? NULL : comp_scope_of(c, id);
   return recv;
 }
 
@@ -2240,10 +2288,10 @@ void register_singleton_defs(Compiler *c) {
     }
     else continue;
 
-    int is_const = 0; const char *rn = NULL; Scope *owner = NULL;
-    if (sg_binding(c, id, recv, &is_const, &rn, &owner) < 0) continue;
+    int bk = SG_LOCAL; const char *rn = NULL; Scope *owner = NULL;
+    if (sg_binding(c, id, recv, &bk, &rn, &owner) < 0) continue;
     int parent_ci = -1;
-    int wnode = sg_single_new_write(c, rn, is_const, owner, &parent_ci);
+    int wnode = sg_single_new_write(c, rn, bk, owner, &parent_ci);
     if (wnode < 0) {
       /* Not traceable to one `new` of a user class, so there is no subclass to
          synthesize. A `def <recv>.m` then fell through to the ordinary def
@@ -2258,6 +2306,10 @@ void register_singleton_defs(Compiler *c) {
                                    "receiver that is not one user-class instance");
       continue;   /* not statically traceable: leave as today */
     }
+    /* `def @a.m` / `def @@a.m`: the receiver is read where the def stands,
+       as the activation reads it, not in the method the walk put it under,
+       whose class is now the singleton */
+    if ((bk == SG_IVAR || bk == SG_CVAR) && recv < c->node_cap) c->nscope[recv] = c->nscope[id];
     /* a user-defined method of the singleton name is that method, not the
        machinery (#2652). */
     if (is_dsm && comp_method_in_chain(c, parent_ci, "define_singleton_method", NULL) >= 0) continue;

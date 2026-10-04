@@ -779,6 +779,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_ENUMERATOR, "freeze",          0, 127, BF_ANY,      TY_ENUMERATOR,  BOPE_NONE },
   { TY_ENUMERATOR, "itself",          0,   0, BF_ANY,      TY_ENUMERATOR,  BOPE_TEMPLATE, "$r", 0 },
   { TY_ENUMERATOR, "itself",          0, 127, BF_ANY,      TY_ENUMERATOR,  BOPE_NONE },
+  { TY_ENUMERATOR, "each",            0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "$r", 0 },  /* blockless #each answers self */
   { TY_ENUMERATOR, "feed",            1,   1, BF_ANY,      TY_NIL,         BOPE_TEMPLATE, "sp_Enumerator_feed($r, $b0)" },
   { TY_ENUMERATOR, "with_index",      0,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_NONE },  /* over [element, index] pairs */
   { TY_ENUMERATOR, "each_with_index", 0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_NONE },  /* #2487 */

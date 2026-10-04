@@ -109,26 +109,29 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "puts(sp_sym_to_s("); emit_expr(c, arg, b); buf_puts(b, "));\n");
   }
   else if (ty_is_array(t) && array_kind(t)) {
-    /* puts [a,b,c] prints each element on its own line (empty array: blank) */
+    /* puts [a,b,c] prints each element on its own line, and an empty array
+       prints nothing, as CRuby's does. The array is evaluated once into a
+       temporary: spliced into the length test and into every element read,
+       a call answering the array ran once per element (#7197). The temporary
+       is rooted for the loop, since a Float element's render allocates. */
     const char *k = array_kind(t);
     Buf ab; memset(&ab, 0, sizeof ab); emit_expr(c, arg, &ab);
-    const char *a = ab.p ? ab.p : "";
-    int ti = ++g_tmp;
-    buf_printf(b, "if (sp_%sArray_length(%s) == 0) putchar('\\n');\n", k, a);
+    int ta = ++g_tmp, ti = ++g_tmp;
+    buf_printf(b, "{ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", k, ta, ab.p ? ab.p : "", ta);
     emit_indent(b, indent);
-    buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(%s); _t%d++) ", ti, ti, k, a, ti);
+    buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) ", ti, ti, k, ta, ti);
     /* an element that can be nil (the slot's sentinel) prints puts nil's
        empty line. Any Integer or Float array can hold one -- a write past
        the end fills its gap with nil where analyze cannot see it -- and the
        test is nothing beside the print. */
     if (t == TY_INT_ARRAY)
-      buf_printf(b, "{ sp_int _e = sp_IntArray_get(%s, _t%d); if (_e == SP_INT_NIL) putchar('\\n');"
-                    " else printf(\"%%lld\\n\", (long long)_e); }\n", a, ti);
+      buf_printf(b, "{ sp_int _e = sp_IntArray_get(_t%d, _t%d); if (_e == SP_INT_NIL) putchar('\\n');"
+                    " else printf(\"%%lld\\n\", (long long)_e); } }\n", ta, ti);
     else if (t == TY_FLOAT_ARRAY)
-      buf_printf(b, "{ const char *_fs = sp_float_opt_to_s(sp_FloatArray_get(%s, _t%d)); sp_puts_line(_fs); }\n",
-                 a, ti);
+      buf_printf(b, "{ const char *_fs = sp_float_opt_to_s(sp_FloatArray_get(_t%d, _t%d)); sp_puts_line(_fs); } }\n",
+                 ta, ti);
     else /* str */
-      buf_printf(b, "{ const char *_ps = sp_StrArray_get(%s, _t%d); sp_puts_str_line(_ps); }\n", a, ti);
+      buf_printf(b, "{ const char *_ps = sp_StrArray_get(_t%d, _t%d); sp_puts_str_line(_ps); } }\n", ta, ti);
     free(ab.p);
   }
   else if (t == TY_EXCEPTION) {

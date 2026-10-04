@@ -5996,6 +5996,12 @@ static int infer_block_iter_call(Compiler *c, int id, const NodeTable *nt, const
     int orecv = nt_ref(nt, recv, "receiver");
     if (orecv >= 0) { *out = infer_type(c, orecv); return 1; }
   }
+  /* A forwarded proc takes the receiver-valued runtime path. Keep this
+     structural rule here: builtin rows cannot distinguish a block argument
+     from a literal block. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "each") &&
+      nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockArgumentNode)
+    { *out = TY_POLY; return 1; }
   /* A block each-family call returns its receiver (each, each_value/each_key/
      each_pair, each_with_index, reverse_each), so the value form composes:
      r = arr.each { }; arr.each { }.map { }. Gated to receivers that define

@@ -3567,7 +3567,6 @@ static char *sp_splice_builtins(char *source, const char *exe_path,
     sp_builtin_names_from(content); free(content);
     if (sp_builtin_enum_names_n == 0) return source;
   }
-  if (sp_src_opens(source, "module Enumerable")) return source;   /* the program reopens it itself: leave that alone for now */
   int any = 0;
   for (int i = 0; i < sp_builtin_enum_names_n && !any; i++)
     if (sp_source_mentions_method(source, sp_builtin_enum_names[i])) any = 1;

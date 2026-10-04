@@ -19189,11 +19189,25 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             }
             else snprintf(gmsg, sizeof gmsg, "\"undefined method '%s' for %s\"", nm ? nm : "?", rdesc);
           }
+          /* A receiver that is not side-effect-free still runs, first, as
+             CRuby runs it before it finds no method: `Styler.new(rows).render`
+             raised NoMethodError for render where `rows` raises NameError.
+             Held in a boxed temp, it is the error's receiver as a staged one
+             is. Keep the temp inside the message so coercion sites still
+             recognize the leading sp_raise_nomethod token. A nullable
+             receiver already evaluated for its message must not run again. */
+          int recv_run = recv >= 0 && !recv_stageable && !recv_evaluated;
+          int rrt = recv_run ? ++g_tmp : -1;
+          if (recv_run) recv_stageable = 1;
           #define EMIT_GATE_MSG() do { \
+            if (recv_run) { \
+              buf_printf(b, "({ sp_RbVal _t%d = ", rrt); emit_boxed(c, recv, b); \
+              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", rrt); \
+            } \
             const char *_stagefn = gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg"; \
             if (recv_stageable) { \
               buf_printf(b, "%s(%s, ", _stagefn, gmsg); \
-              emit_boxed(c, recv, b); \
+              if (recv_run) buf_printf(b, "_t%d", rrt); else emit_boxed(c, recv, b); \
               if (gstage) { \
                 buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
                 for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
@@ -19209,6 +19223,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
               buf_puts(b, "})"); \
             } \
             else buf_puts(b, gmsg); \
+            if (recv_run) buf_puts(b, "; })"); \
           } while (0)
           /* A receiver the message could not stage is still evaluated, once,
              ahead of the raise, as CRuby evaluates it before the method is

@@ -1,0 +1,11 @@
+[2021, 1, 1, 0, 0]
+[ArgumentError, "year must be 4 or more digits: 12"]
+[21, 1, 1, 0, 0]
+[20210, 1, 1, 0, 0]
+[ArgumentError, "year must be 4 or more digits: 123"]
+[1999, 1, 1, 0, 0]
+[-2021, 1, 1, 0, 0]
+[2021, 1, 1, 0, 0]
+[99999, 1, 1, 0, 0]
+true
+3

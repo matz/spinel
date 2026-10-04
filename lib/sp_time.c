@@ -333,6 +333,19 @@ sp_Time sp_time_with_usec_f(sp_Time t, double usec) {
 sp_Time sp_time_parse(const char *s) {SP_GC_ROOT_STR(s);
   const char *sp_sprintf(const char *fmt, ...);  /* generated TU */
   int y, mo, d, h, mi, sec, n = 0;
+  /* a year alone ("2021", "-44", "+12345") is Time.new(year), as CRuby
+     reads it: four digits at least, local midnight of January 1 */
+  { const char *q = s + (*s == '+' || *s == '-');
+    size_t nd = 0;
+    while (q[nd] >= '0' && q[nd] <= '9') nd++;
+    if (nd > 0 && q[nd] == 0) {
+      if (nd < 4) sp_raise_cls("ArgumentError", sp_sprintf("year must be 4 or more digits: %s", s));
+      int64_t yy = 0;
+      for (size_t i = 0; i < nd && i < 18; i++) yy = yy * 10 + (q[i] - '0');
+      if (*s == '-') yy = -yy;
+      return sp_time_new(yy, 1, 1, 0, 0, 0);
+    }
+  }
   if (sscanf(s, "%4d-%2d-%2d%n", &y, &mo, &d, &n) != 3 || n == 0)
     sp_raise_cls("ArgumentError", sp_sprintf("can't parse: \"%s\"", s));
   const char *p = s + n;

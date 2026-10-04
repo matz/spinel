@@ -7521,6 +7521,18 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     }
     return 1;
   }
+  if (nm && sp_streq(nm, "each_codepoint") && nt_ref(nt, id, "arguments") < 0 &&
+      nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
+    /* each_codepoint with a block is the codepoints walk: the same
+       characters, the same ordinals, and the receiver as its value. The
+       blockless form stays, an Enumerator of its own (#7198). */
+    int crc = nt_ref(nt, id, "receiver");
+    if (crc >= 0 && infer_type(c, crc) == TY_STRING) {
+      nt_node_set_str(nt, id, "name", "codepoints");
+      *changed = 1;
+      return 1;
+    }
+  }
   if (nm && (sp_streq(nm, "grapheme_clusters") || sp_streq(nm, "each_grapheme_cluster"))) {
     /* grapheme clusters == characters over the supported text domain (no
        combining sequences): alias to the chars/each_char machinery */

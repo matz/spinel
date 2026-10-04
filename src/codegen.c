@@ -1810,7 +1810,16 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     RC(RF_PTR_ARRAY, RW_NONE);
     return;
   }
-  /* a pointer kind with no box: evaluate for side-effects, yield nil */
+  /* A pointer kind with no boxed form must not silently become nil.
+     Kindless values keep their effect-only fallback above. */
+  if (t != TY_UNKNOWN && t != TY_VOID && c_type_name(t)) {
+    char msg[160];
+    const char *tn = ty_name(t);
+    snprintf(msg, sizeof msg, "a %c%s in a slot that holds values of several kinds (it has no boxed form)",
+             tn && tn[0] >= 'a' && tn[0] <= 'z' ? tn[0] - 32 : (tn ? tn[0] : '?'), tn && tn[0] ? tn + 1 : "");
+    unsupported_feature(c, node, msg);
+  }
+  /* A kind with no C value still evaluates for side effects. */
   buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE);
 }
 /* emit_boxed: the boxing of node `node`'s value (emit_boxed_impl); under

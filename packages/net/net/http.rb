@@ -203,6 +203,13 @@ module Net
       @headers.key?(name.to_s.downcase)
     end
 
+    # Whether this kind of request carries a body, CRuby's REQUEST_HAS_BODY.
+    # Decided by the method rather than per class, since `Net::HTTP#post` and
+    # `Net::HTTP.post_form` build a plain HTTPRequest with the method name.
+    def request_body_permitted?
+      @method == "POST" || @method == "PUT"
+    end
+
     # Yields the spelling the caller wrote, not the downcased key: for a
     # request that is what goes out on the wire.
     def each_header
@@ -557,7 +564,9 @@ module Net
         out << "#{k}: #{v}\r\n"
       end
       body = req.body.to_s
-      out << "Content-Length: #{body.bytesize}\r\n" if !have_len && !body.empty?
+      # A request that carries a body states its length even when it is
+      # zero, as CRuby's does; some servers answer 411 without it.
+      out << "Content-Length: #{body.bytesize}\r\n" if !have_len && (req.request_body_permitted? || !body.empty?)
       out << "Connection: close\r\n"
       out << "\r\n"
       out << body

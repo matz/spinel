@@ -9,6 +9,26 @@
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 
+static void emit_exc_own_render(Compiler *c, int id, int recv, int xcm, int own, Buf *b) {
+  int defc = xcm;
+  (void)comp_method_in_chain(c, xcm, c->scopes[own].name, &defc);
+  if (g_plan_check) ucall_observe(c, id, own, defc, 0);
+  if (expr_is_held_ref(c, recv)) {
+    buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[defc].c_name,
+               mc(c->scopes[own].name), c->classes[defc].c_name);
+    emit_expr(c, recv, b); buf_puts(b, "))");
+  }
+  else {
+    /* rooted: a fresh exception (`E.new.to_s`) held by nothing else
+       while its own #to_s allocates */
+    int tex = ++g_tmp;
+    buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[defc].c_name, tex, c->classes[defc].c_name);
+    emit_expr(c, recv, b);
+    buf_printf(b, "); SP_GC_ROOT(_t%d); sp_%s_%s(_t%d); })", tex, c->classes[defc].c_name,
+               mc(c->scopes[own].name), tex);
+  }
+}
+
 /* the methods of an exception object: message, full_message, backtrace, set_backtrace, cause, ==, and the rest of TY_EXCEPTION */
 int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* A specialized rescue var (`rescue MyError => e`, MyError carrying ivars)
@@ -133,12 +153,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         if (sub_str && !sub_other) own = -1;
       }
       if (own >= 0) {
-        int defc = xcm;
-        (void)comp_method_in_chain(c, xcm, c->scopes[own].name, &defc);
-        if (g_plan_check) ucall_observe(c, id, own, defc, 0);
-        buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[defc].c_name,
-                   mc(c->scopes[own].name), c->classes[defc].c_name);
-        emit_expr(c, recv, b); buf_puts(b, "))");
+        emit_exc_own_render(c, id, recv, xcm, own, b);
         return 1;
       }
       const char *fn = exc_has_user_msg_override(c)

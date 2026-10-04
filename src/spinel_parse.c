@@ -2123,6 +2123,8 @@ static int source_references_io_buffer(const char *src) {
    headers); declared extern in compiler.h. */
 int g_require_gate = 0;
 int g_require_gate_cli = 0;   /* --require-gate */
+int g_req_unread = 0;    /* requires of a library spinel did not read: ignored, or provided natively */
+int g_req_hoisted = 0;   /* files a require loaded ahead of the statement that holds it */
 static char **sp_req_feats = NULL;
 static int sp_req_feats_n = 0;
 static int sp_req_feats_cap = 0;
@@ -2678,6 +2680,7 @@ static void sp_req_hoist_splice(char **result, unsigned char **fsl, size_t *fsl_
   size_t ins_line = 0;
   for (size_t i = 0; i < ins; i++) if ((*result)[i] == '\n') ins_line++;
   sp_fsl_splice(fsl, fsl_n, ins_line, 0, cfsl, cfsl_n);
+  if (strcmp(value, "true") == 0) g_req_hoisted++;   /* this require loaded the file */
   /* The caller's statement survives this splice. Only its included file's
      outer marker changes: nested requires retain their own accounting. */
   size_t skip = strncmp(content, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) == 0
@@ -3890,6 +3893,7 @@ else {
              harmless no-op, so don't warn. The require-gate still records it
              so the C-native feature (e.g. io/console) becomes available. */
           sp_feature_mark(lib_name);
+          g_req_unread++;
           content = strdup("# require provided by Spinel runtime");
           req_val = "false";   /* already there: nothing was loaded */
         }
@@ -3913,6 +3917,7 @@ else {
           fprintf(stderr,
                   "warning: '%s' is not available in Spinel; the require is ignored and code using it will fail\n",
                   lib_name);
+          g_req_unread++;
           content = strdup("# require not resolved");
         }
       }

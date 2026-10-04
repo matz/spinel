@@ -1499,6 +1499,26 @@ reject-test: $(SPINEL)
 	  else grep -qF "$$why" "$$tmp/sb.out" || \
 	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/sb.out"; ok=0; }; fi; \
 	done; \
+	for spec in "class_paren_superclass_call:class Widget < (...): a superclass in parentheses is supported only as a constant" \
+	            "class_paren_superclass_defined_later:is not defined before this class" \
+	            "class_paren_superclass_library_name:spinel cannot tell from the program whether the constant" \
+	            "class_paren_superclass_conditional:at a place that always runs" \
+	            "class_paren_superclass_ancestor:an ancestor or a constant assignment can define it" \
+	            "class_paren_superclass_include:an ancestor or a constant assignment can define it" \
+	            "class_paren_superclass_cruby_name:an ancestor or a constant assignment can define it" \
+	            "class_paren_superclass_ignored_require:a require loads a library that spinel does not read" \
+	            "class_paren_superclass_const_missing:can define, remove or hide a constant at run time" \
+	            "class_paren_superclass_private_constant:can define, remove or hide a constant at run time" \
+	            "class_paren_superclass_kernel_require:can define, remove or hide a constant at run time" \
+	            "class_paren_superclass_top_return:outside a method can stop the program or a required file" \
+	            "class_paren_superclass_begin:block runs before the rest of the program" \
+	            "class_paren_superclass_basic_object:an ancestor or a constant assignment can define it"; do \
+	  t=test/reject/$${spec%%:*}.rb; why=$${spec#*:}; \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ps.c" >"$$tmp/ps.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled: a superclass in parentheses spinel cannot resolve became Object)"; ok=0; \
+	  else grep -qF "$$why" "$$tmp/ps.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/ps.out"; ok=0; }; fi; \
+	done; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "reject-test: pass"; else exit 1; fi
 

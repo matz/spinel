@@ -7202,6 +7202,11 @@ typedef struct {
   int give_up;
   const char *cref[64]; int ncref;
   char **strs; int nstrs, cstrs;   /* owned strings the cref stack points at */
+  /* a query from one node (bc_superclass_const): the cref the walk had at
+     node `at`, and the full name of each class and module node */
+  int at, at_ncref;
+  const char *at_cref[64];
+  const char **node_full;
 } Bc;
 
 static char *bc_join(const char *p, const char *leaf) {
@@ -7603,6 +7608,10 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
   const char *ty = nt_type(nt, id);
   if (!ty) return;
   const char *top = b->cref[b->ncref - 1];
+  if (mode == 1 && id == b->at) {
+    b->at_ncref = b->ncref;
+    memcpy(b->at_cref, b->cref, sizeof(b->cref[0]) * (size_t)b->ncref);
+  }
   if (sp_streq(ty, "ClassNode") || sp_streq(ty, "ModuleNode")) {
     int is_mod = sp_streq(ty, "ModuleNode");
     int cp = nt_ref(nt, id, "constant_path");
@@ -7618,6 +7627,7 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
     }
     if (!full) full = strdup("?");
     bc_own(b, full);
+    if (mode == 1 && b->node_full) b->node_full[id] = full;
     if (mode == 1) bc_check_alias(b, full);
     if (full[0] != '?') {
       if (mode == 0 && *full) {
@@ -7839,20 +7849,17 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
   bc_walk_kids(b, id, self, mode);
 }
 
-void refuse_unreachable_bare_constants(Compiler *c) {
+static Bc *bc_new(Compiler *c) {
   Bc *b = calloc(1, sizeof *b);
   b->c = c;
   b->nt = c->nt;
   b->cref[0] = "";
   b->ncref = 1;
-  int root = c->nt->root_id;
-  bc_walk(b, root, "", 0);
-  if (b->nested.n > 0 && !b->give_up) {
-    b->ncref = 1;
-    bc_walk(b, root, "", 1);
-    b->ncref = 1;
-    if (!b->give_up) bc_walk(b, root, "", 2);
-  }
+  b->at = -1;
+  return b;
+}
+
+static void bc_free(Bc *b) {
   bc_set_free(&b->defs); bc_set_free(&b->nested);
   bc_set_free(&b->unknown_set); bc_set_free(&b->unknown_inc); bc_set_free(&b->builtin_held);
   bc_set_free(&b->written); bc_set_free(&b->written_leaf);
@@ -7867,5 +7874,163 @@ void refuse_unreachable_bare_constants(Compiler *c) {
   free(b->modix);
   for (int i = 0; i < b->nstrs; i++) free(b->strs[i]);
   free(b->strs);
+  free(b->node_full);
   free(b);
+}
+
+void refuse_unreachable_bare_constants(Compiler *c) {
+  Bc *b = bc_new(c);
+  int root = c->nt->root_id;
+  bc_walk(b, root, "", 0);
+  if (b->nested.n > 0 && !b->give_up) {
+    b->ncref = 1;
+    bc_walk(b, root, "", 1);
+    b->ncref = 1;
+    if (!b->give_up) bc_walk(b, root, "", 2);
+  }
+  bc_free(b);
+}
+
+/* CRuby's top-level names that bc_toplevel_known leaves out: RubyGems loads
+   them at startup, and the first `pp` call loads PrettyPrint. */
+static int bc_toplevel_more(const char *n) {
+  static const char *const names[] = {
+    "CROSS_COMPILING", "DidYouMean", "ErrorHighlight", "PrettyPrint", "RUBYGEMS_ACTIVATION_MONITOR",
+    "SyntaxSuggest", NULL
+  };
+  for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
+  return 0;
+}
+
+/* 1 when `hit` is `n` in one of the cref's own namespaces (lexical scope),
+   not a constant that an ancestor gives */
+static int bc_lexical_hit(const Bc *b, const char *n, const char *hit) {
+  for (int i = b->ncref - 1; i >= 1; i--) {
+    char *fn = bc_join(b->cref[i], n);
+    int same = sp_streq(fn, hit);
+    free(fn);
+    if (same) return 1;
+  }
+  return 0;
+}
+
+/* 1 when CRuby's lookup from the current cref reaches Object: the top level,
+   a module, a singleton class, or a class whose superclass chain does not
+   end at BasicObject. 0 when the chain ends at BasicObject, BC_UNSURE when
+   the chain is not known. */
+static int bc_reaches_object(Bc *b) {
+  const char *k = b->cref[b->ncref - 1];
+  for (int depth = 0; depth < 64; depth++) {
+    if (!*k) return 1;
+    if (k[0] == '?') return BC_UNSURE;
+    if (k[0] == '#') return strstr(k, ">::") ? BC_UNSURE : 1;
+    if (sp_streq(k, "BasicObject")) return 0;
+    BcMod *m = bc_mod(b, k, 0);
+    if (!m) {
+      int builtin = !strchr(k, ':') ? bc_toplevel_known(k) : is_builtin_exception_name(k);
+      return builtin ? 1 : BC_UNSURE;
+    }
+    if (m->is_module == 1) return 1;
+    if (m->super_unknown) return BC_UNSURE;
+    if (!m->super) return 1;
+    k = m->super;
+  }
+  return BC_UNSURE;
+}
+
+/* The full name the constant `x` names by CRuby's lookup from the current
+   cref, read only from namespaces' own constants: BC_FOUND with *full (the
+   caller frees it), 0 when no constant answers it, BC_UNSURE when an
+   ancestor, a builtin or a computed constant can answer it. An ancestor is
+   not followed: the program can give it after this point. */
+static int bc_direct(Bc *b, int x, char **full) {
+  const NodeTable *nt = b->nt;
+  const char *ty = x >= 0 ? nt_type(nt, x) : NULL;
+  const char *nm = x >= 0 ? nt_str(nt, x, "name") : NULL;
+  *full = NULL;
+  if (!ty || !nm) return BC_UNSURE;
+  int path = sp_streq(ty, "ConstantPathNode"), par = path ? nt_ref(nt, x, "parent") : -1;
+  if (par >= 0) {
+    char *p = NULL;
+    int r = bc_direct(b, par, &p);
+    if (r != BC_FOUND) return r;
+    r = bc_own_table(b, p, nm, NULL);
+    if (r == 0) {
+      BcSet seen = {0};
+      char *hit = NULL;
+      r = bc_anc(b, p, nm, &seen, &hit, 0) == 0 ? 0 : BC_UNSURE;
+      free(hit);
+      bc_set_free(&seen);
+    }
+    if (r == BC_FOUND) *full = bc_join(p, nm);
+    free(p);
+    return r;
+  }
+  char *hit = NULL;
+  int r;
+  if (path) {                                   /* `::X`: Object's ancestors */
+    BcSet seen = {0};
+    r = bc_anc_object(b, nm, &seen, &hit, 0);
+    bc_set_free(&seen);
+  }
+  else r = bc_lookup(b, nm, &hit);
+  if (r == BC_FOUND && (path || !hit || !bc_lexical_hit(b, nm, hit))) r = BC_UNSURE;
+  if (r == BC_FOUND) { *full = hit; return r; }
+  free(hit);
+  if (r != 0) return r;
+  /* what is left are Object's constants. A class under BasicObject does not
+     see them, but an earlier pass retypes `::X` to a bare `X`, so here the
+     two spellings look the same: refuse rather than guess. */
+  if (!path && bc_reaches_object(b) != 1) return BC_UNSURE;
+  if (bc_has(&b->defs, nm)) { *full = strdup(nm); return BC_FOUND; }   /* Object's own */
+  return bc_toplevel_known(nm) || bc_toplevel_more(nm) ? BC_UNSURE : 0;
+}
+
+/* 1 when a class or module named `leaf` sits in a namespace the model
+   cannot name */
+static int bc_unknown_def(const Bc *b, const char *leaf) {
+  const NodeTable *nt = b->nt;
+  for (int id = 0; id < nt->count; id++) {
+    const char *fn = b->node_full[id];
+    if (!fn || fn[0] != '?') continue;
+    const char *nm = nt_str(nt, nt_ref(nt, id, "constant_path"), "name");
+    if (nm && sp_streq(nm, leaf)) return 1;
+  }
+  return 0;
+}
+
+/* CRuby's lookup of the constant `x` written in node `at`, the superclass
+   of a class, by the program's own definitions. 1: `x` names the full name
+   the program defines, and (*defs)[0..*ndefs) are the class and module nodes
+   that define it (the caller frees *defs). 0: no constant answers `x`. -1:
+   the program does not decide it (an ancestor, a builtin, a library, or a
+   module included where the model cannot follow). The caller checks
+   constant assignments of the name and calls such as const_set. */
+int bc_superclass_const(Compiler *c, int at, int x, int **defs, int *ndefs) {
+  const NodeTable *nt = c->nt;
+  Bc *b = bc_new(c);
+  *defs = NULL;
+  *ndefs = 0;
+  b->at = at;
+  b->node_full = calloc((size_t)nt->count + 1, sizeof(char *));
+  bc_walk(b, nt->root_id, "", 0);
+  b->ncref = 1;
+  if (!b->give_up) bc_walk(b, nt->root_id, "", 1);
+  int r = BC_UNSURE;
+  const char *leaf = nt_str(nt, x, "name");
+  if (!b->give_up && b->at_ncref > 0 && leaf) {
+    char *full = NULL;
+    b->ncref = b->at_ncref;
+    memcpy(b->cref, b->at_cref, sizeof(b->cref[0]) * (size_t)b->ncref);
+    r = bc_direct(b, x, &full);
+    if (b->global_unknown || bc_unknown_def(b, leaf)) r = BC_UNSURE;
+    if (r == BC_FOUND) {
+      *defs = malloc(sizeof(int) * ((size_t)nt->count + 1));
+      for (int id = 0; *defs && id < nt->count; id++)
+        if (b->node_full[id] && sp_streq(b->node_full[id], full)) (*defs)[(*ndefs)++] = id;
+    }
+    free(full);
+  }
+  bc_free(b);
+  return r == BC_FOUND ? 1 : r == 0 ? 0 : -1;
 }

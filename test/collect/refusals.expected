@@ -104,6 +104,62 @@ spinel: 1 refusal, nothing written
 == test/reject/class_eval_static_source_line.rb [promote] rc=1
 spinel: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=3 arg0ty6
 spinel: 1 refusal, nothing written
+== test/reject/class_paren_superclass_ancestor.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_ancestor.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_basic_object.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_basic_object.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_begin.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a `BEGIN` block runs before the rest of the program; write the superclass as a constant
+== test/reject/class_paren_superclass_begin.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a `BEGIN` block runs before the rest of the program; write the superclass as a constant
+== test/reject/class_paren_superclass_call.rb [default] rc=1
+spinel: class Widget < (...): a superclass in parentheses is supported only as a constant or as `Constant rescue Superclass`; write the superclass as a constant
+== test/reject/class_paren_superclass_call.rb [promote] rc=1
+spinel: class Widget < (...): a superclass in parentheses is supported only as a constant or as `Constant rescue Superclass`; write the superclass as a constant
+== test/reject/class_paren_superclass_conditional.rb [default] rc=1
+spinel: class Widget < (...): the constant before `rescue` is not defined before this class as a class, at a place that always runs; write the superclass as a constant
+== test/reject/class_paren_superclass_conditional.rb [promote] rc=1
+spinel: class Widget < (...): the constant before `rescue` is not defined before this class as a class, at a place that always runs; write the superclass as a constant
+== test/reject/class_paren_superclass_const_missing.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_const_missing.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_cruby_name.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_cruby_name.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_defined_later.rb [default] rc=1
+spinel: class Widget < (...): the constant before `rescue` is not defined before this class as a class, at a place that always runs; write the superclass as a constant
+== test/reject/class_paren_superclass_defined_later.rb [promote] rc=1
+spinel: class Widget < (...): the constant before `rescue` is not defined before this class as a class, at a place that always runs; write the superclass as a constant
+== test/reject/class_paren_superclass_ignored_require.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a require loads a library that spinel does not read, which can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_ignored_require.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a require loads a library that spinel does not read, which can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_include.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_include.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_kernel_require.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_kernel_require.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_library_name.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_library_name.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: CRuby, a library, an ancestor or a constant assignment can define it; write the superclass as a constant
+== test/reject/class_paren_superclass_private_constant.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_private_constant.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: the program can define, remove or hide a constant at run time (const_set, remove_const, const_missing, autoload, private_constant, a string eval or a computed require); write the superclass as a constant
+== test/reject/class_paren_superclass_top_return.rb [default] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a `return` outside a method can stop the program or a required file before its definition; write the superclass as a constant
+== test/reject/class_paren_superclass_top_return.rb [promote] rc=1
+spinel: class Widget < (...): spinel cannot tell from the program whether the constant before `rescue` is defined here: a `return` outside a method can stop the program or a required file before its definition; write the superclass as a constant
 == test/reject/class_reopen_reserved_name.rb [default] rc=1
 spinel: the constant name Class__reopen is reserved by the compiler
 == test/reject/class_reopen_reserved_name.rb [promote] rc=1

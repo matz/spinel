@@ -1,0 +1,2 @@
+class Gadget
+end

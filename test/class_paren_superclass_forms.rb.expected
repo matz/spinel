@@ -1,0 +1,7 @@
+A < Base: hello
+B < Base: hello
+C < Mod::Inner: inner
+D < Mod::Inner: inner
+E < Base: hello
+F < Other: other
+Outer::G < Outer: outer

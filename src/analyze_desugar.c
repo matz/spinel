@@ -14202,16 +14202,211 @@ int desugar_class_body_self_calls(Compiler *c) {
   return changed;
 }
 
+/* ---- `class A < (expr)` ----------------------------------------------------
+   Every reader of a class's superclass takes a constant node, so a class
+   whose superclass is in parentheses became a subclass of Object. The
+   parentheses are resolved here to the constant they name, by the program's
+   text. `(Base)` names Base. `(X rescue Y)` names X when CRuby's lookup of X
+   from the class's nesting reaches a class that the program defines before
+   the class, at a place that always runs. It names Y when no constant can
+   answer X (gosu-examples: `class Tutorial < (Example rescue Gosu::Window)`).
+   Any other form, and any X that the program's text does not decide, is
+   refused. */
+
+/* Marks the nodes where a definition runs each time the program reaches it:
+   the program's statements, and the bodies of the classes and modules among
+   them. A branch, a loop, a block, a method or a `begin` is not followed. */
+static void ps_mark_sure(const NodeTable *nt, int id, char *sure) {
+  if (id < 0 || id >= nt->count || sure[id]) return;
+  sure[id] = 1;
+  NodeKind k = nt_kind(nt, id);
+  if (id == nt->root_id) ps_mark_sure(nt, nt_ref(nt, id, "statements"), sure);
+  else if (k == NK_ClassNode || k == NK_ModuleNode) ps_mark_sure(nt, nt_ref(nt, id, "body"), sure);
+  else if (k == NK_StatementsNode) {
+    int n = 0;
+    const int *body = nt_arr(nt, id, "body", &n);
+    for (int i = 0; i < n; i++) ps_mark_sure(nt, body[i], sure);
+  }
+}
+
+/* 1 when one of the definitions defs[0..n) is a class node that runs before
+   class node `cls` each time `cls` runs: it is at a place that always runs,
+   and before `cls` in the source. Node ids follow the source, so an
+   enclosing class counts. */
+static int ps_defined_before(const NodeTable *nt, const int *defs, int n, int cls) {
+  char *sure = calloc((size_t)nt->count + 1, 1);
+  int ok = 0;
+  if (sure) ps_mark_sure(nt, nt->root_id, sure);
+  for (int i = 0; sure && i < n && !ok; i++)
+    ok = defs[i] < cls && sure[defs[i]] && nt_kind(nt, defs[i]) == NK_ClassNode;
+  free(sure);
+  return ok;
+}
+
+/* 1 when the program can define, remove or hide a constant in a way its text
+   does not show: const_set, remove_const, const_missing, autoload or
+   private_constant named as a call, a method, a symbol or a string (so
+   `send(:const_set, ..)` and `define_method(:const_missing)` count), a string
+   eval, or a require that names its file only at run time. A require, a
+   require_relative or a load counts with any receiver (`Kernel.require`), and
+   as a symbol or a string (`send(:require, ..)`). */
+static int ps_dynamic_consts(const NodeTable *nt) {
+  static const char *const names[] = { "const_set", "remove_const", "const_missing", "autoload",
+                                       "private_constant", NULL };
+  static const char *const evals[] = { "eval", "instance_eval", "class_eval", "module_eval", NULL };
+  static const char *const loads[] = { "require", "require_relative", "load", NULL };
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const char *s = k == NK_CallNode || k == NK_DefNode ? nt_str(nt, id, "name")
+                  : k == NK_SymbolNode ? nt_str(nt, id, "value")
+                  : k == NK_StringNode ? nt_str(nt, id, "content") : NULL;
+    if (!s) continue;
+    for (int i = 0; names[i]; i++) if (sp_streq(s, names[i])) return 1;
+    if (k == NK_DefNode) continue;
+    int args = k == NK_CallNode && nt_ref(nt, id, "arguments") >= 0;
+    for (int i = 0; loads[i] && (args || k != NK_CallNode); i++) if (sp_streq(s, loads[i])) return 1;
+    if (!args) continue;
+    for (int i = 0; evals[i]; i++) if (sp_streq(s, evals[i])) return 1;
+  }
+  return 0;
+}
+
+/* 1 when the subtree `id` holds a `return` that can stop the program or the
+   required file it is in: one outside a method and a lambda. A required file
+   is spliced into the program's statements, so its `return` is there. */
+static int ps_top_return(const NodeTable *nt, int id) {
+  if (id < 0 || id >= nt->count) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+  if (k == NK_ReturnNode) return 1;
+  for (int j = 0; j < nt_num_refs(nt, id); j++) if (ps_top_return(nt, nt_ref_at(nt, id, j))) return 1;
+  for (int j = 0; j < nt_num_arrs(nt, id); j++) {
+    int an = 0;
+    const int *ids = nt_arr_at(nt, id, j, &an);
+    for (int i = 0; i < an; i++) if (ps_top_return(nt, ids[i])) return 1;
+  }
+  return 0;
+}
+
+/* 1 when the program has a `BEGIN { }`: it runs before the rest of the
+   program, so the order of the source does not give the order of the run. */
+static int ps_has_begin(const NodeTable *nt) {
+  for (int id = 0; id < nt->count; id++) if (nt_kind(nt, id) == NK_PreExecutionNode) return 1;
+  return 0;
+}
+
+/* 1 when the program assigns a constant named `leaf` anywhere (`X = v`,
+   `A::X ||= v`, `A::X, b = v, w`): the constant lookup model does not
+   follow every assignment target. */
+static int ps_const_written(const NodeTable *nt, const char *leaf) {
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const char *ty = nt_type(nt, id);
+    if (!ty || strncmp(ty, "Constant", 8) != 0 || k == NK_ConstantReadNode || k == NK_ConstantPathNode)
+      continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) nm = nt_str(nt, nt_ref(nt, id, "target"), "name");   /* A::X = v */
+    if (nm && sp_streq(nm, leaf)) return 1;
+  }
+  return 0;
+}
+
+/* Whether the constant `x` before `rescue` in the superclass `sc` of class
+   node `cls` is defined when the class runs: 1 yes, 0 no (the rescue gives
+   the superclass), -1 with *why set when the program does not decide it. */
+static int ps_rescue_const(Compiler *c, int cls, int sc, int x, const char **why) {
+  const NodeTable *nt = c->nt;
+  if (ps_dynamic_consts(nt)) {
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "the program can define, remove or hide a constant at run time (const_set, remove_const, "
+           "const_missing, autoload, private_constant, a string eval or a computed require)";
+    return -1;
+  }
+  if (ps_has_begin(nt)) {
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "a `BEGIN` block runs before the rest of the program";
+    return -1;
+  }
+  int *defs = NULL, ndefs = 0;
+  int r = ps_const_written(nt, me_const_leaf(nt, x)) ? -1 : bc_superclass_const(c, sc, x, &defs, &ndefs);
+  int before = r == 1 && ps_defined_before(nt, defs, ndefs, cls);
+  free(defs);
+  if (r == 1 && g_req_hoisted > 0)
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "a require in a method, a block or an expression loads a file, which runs only when CRuby reaches it";
+  else if (r == 1 && ps_top_return(nt, nt->root_id))
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "a `return` outside a method can stop the program or a required file before its definition";
+  else if (r == 1 && !before)
+    *why = "the constant before `rescue` is not defined before this class as a class, at a place that always runs";
+  else if (r == 0 && g_req_unread > 0)
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "a require loads a library that spinel does not read, which can define it";
+  else if (r < 0)
+    *why = "spinel cannot tell from the program whether the constant before `rescue` is defined here: "
+           "CRuby, a library, an ancestor or a constant assignment can define it";
+  else
+    return r;
+  return -1;
+}
+
+/* The constant node the parenthesized superclass `sc` of class node `cls`
+   names, or -1 with *why set when the program's text does not decide it. */
+static int ps_resolve(Compiler *c, int cls, int sc, const char **why) {
+  const NodeTable *nt = c->nt;
+  int e = sc;
+  *why = "a superclass in parentheses is supported only as a constant or as `Constant rescue Superclass`";
+  for (int depth = 0; depth < 16; depth++) {
+    e = unwrap_parens(c, e);
+    if (e < 0) return -1;
+    if (me_const_leaf(nt, e)) return e;
+    if (nt_kind(nt, e) != NK_RescueModifierNode) return -1;
+    int x = unwrap_parens(c, nt_ref(nt, e, "expression"));
+    if (!me_const_leaf(nt, x)) return -1;
+    int r = ps_rescue_const(c, cls, sc, x, why);
+    if (r != 0) return r > 0 ? x : -1;
+    e = nt_ref(nt, e, "rescue_expression");
+  }
+  return -1;
+}
+
+static int desugar_paren_superclass(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int n = 0; n < n0; n++) {
+    if (nt_kind(nt, n) != NK_ClassNode) continue;
+    int sc = nt_ref(nt, n, "superclass");
+    if (sc < 0 || nt_kind(nt, sc) != NK_ParenthesesNode) continue;
+    const char *why = NULL;
+    int r = ps_resolve(c, n, sc, &why), cp = -1;
+    if (r >= 0) { why = "out of memory"; cp = nt_clone_subtree(nt, r); }
+    if (cp < 0) {
+      const char *cn = me_const_leaf(nt, nt_ref(nt, n, "constant_path"));
+      char msg[512];
+      snprintf(msg, sizeof msg, "class %s < (...): %s; write the superclass as a constant",
+               cn ? cn : "?", why);
+      unsupported_feature(c, sc, msg);
+      continue;
+    }
+    comp_grow_node_arrays(c);
+    cn_neutralize(nt, sc);
+    nt_node_set_ref(nt, n, "superclass", cp);
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `class Rational < Numeric` -- a builtin reopened with its own superclass
    named, as the bigdecimal gem's util.rb writes it -- is the reopening
    `class Rational` is: Ruby accepts the superclass because it is the one the
    class already has. Left in, it made a user class of the builtin's name,
    whose struct the runtime's own type already took. The superclass is
    dropped when it is the builtin's own (not for the exception classes,
-   whose chain the runtime answers). */
+   whose chain the runtime answers). A superclass in parentheses is first
+   resolved to the constant it names. */
 int desugar_builtin_reopen_named_superclass(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
+  int changed = desugar_paren_superclass(c);
   for (int n = 0; n < nt->count; n++) {
     if (nt_kind(nt, n) != NK_ClassNode) continue;
     int cp = nt_ref(nt, n, "constant_path"), sc = nt_ref(nt, n, "superclass");

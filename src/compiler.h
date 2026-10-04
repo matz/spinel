@@ -22,6 +22,9 @@ extern int g_require_gate;
 void sp_feature_mark(const char *name);
 int sp_feature_enabled(const char *name);
 int        sp_feature_required(const char *name); /* require was actually written (gate-independent) */
+/* requires whose library spinel did not read (ignored, or provided natively),
+   and files a require loaded ahead of the statement that holds it */
+extern int g_req_unread, g_req_hoisted;
 /* Add a `-I <dir>` feature search root (see resolve_plain_requires). */
 void sp_add_feature_root(const char *dir);
 

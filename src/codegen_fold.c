@@ -6099,12 +6099,15 @@ static int emit_strbuf_local_write_handle(Compiler *c, int node, Buf *out) {
 /* A parameter a closure in its method captures is a heap cell, and a default
    that builds such a closure (`b: -> { a }`) captures the hoisted alias through
    its cell spelling: give the alias `lv_<uniq>` that cell too. */
-static void emit_pd_cell_alias(Compiler *c, LocalVar *plv, const char *uniq) {
+void emit_pd_cell_alias_into(Compiler *c, LocalVar *plv, const char *uniq, Buf *b, int indent) {
   if (!plv || !plv->is_cell || plv->byref_out) return;
-  emit_inlined_local_decl(c, plv, uniq, g_pre, g_indent);
-  emit_indent(g_pre, g_indent);
-  if (plv->type == TY_PROC) buf_printf(g_pre, "*_cell_%s = (sp_int)(uintptr_t)lv_%s;\n", uniq, uniq);
-  else buf_printf(g_pre, "*_cell_%s = lv_%s;\n", uniq, uniq);
+  emit_inlined_local_decl(c, plv, uniq, b, indent);
+  emit_indent(b, indent);
+  if (plv->type == TY_PROC) buf_printf(b, "*_cell_%s = (sp_int)(uintptr_t)lv_%s;\n", uniq, uniq);
+  else buf_printf(b, "*_cell_%s = lv_%s;\n", uniq, uniq);
+}
+static void emit_pd_cell_alias(Compiler *c, LocalVar *plv, const char *uniq) {
+  emit_pd_cell_alias_into(c, plv, uniq, g_pre, g_indent);
 }
 
 /* A default of a method spliced in place (see g_inl_dflt_scope) is callee

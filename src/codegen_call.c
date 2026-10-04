@@ -6992,6 +6992,9 @@ void emit_poly_arm_args(Compiler *c, Scope *m, Scope *ms, const ArgLayout *L,
         if (needs_root(pt))
           buf_printf(pre, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(lv__pd%d_%d); " : "SP_GC_ROOT(lv__pd%d_%d); ", pd_uid, a);
         buf_printf(cb, "lv__pd%d_%d", pd_uid, a);
+        /* a captured parameter is read by a later default through its cell */
+        char pdn[48]; snprintf(pdn, sizeof pdn, "_pd%d_%d", pd_uid, a);
+        emit_pd_cell_alias_into(c, pv, pdn, pre, 0);
       }
       /* registered AFTER the binding so only a LATER default reads it */
       snprintf(g_ren_from[g_nren], sizeof g_ren_from[0], "%s", pnm);
@@ -8188,6 +8191,9 @@ void ctor_arm_arg(Compiler *c, Scope *is, int j, const char *val, int pd_uid,
     buf_printf(pdpre, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(lv__pd%d_%d); " : "SP_GC_ROOT(lv__pd%d_%d); ",
                pd_uid, j);
   buf_printf(args, "lv__pd%d_%d", pd_uid, j);
+  /* a captured parameter is read by a later default through its cell */
+  char pdn[48]; snprintf(pdn, sizeof pdn, "_pd%d_%d", pd_uid, j);
+  emit_pd_cell_alias_into(c, pv, pdn, pdpre, 0);
   snprintf(g_ren_from[g_nren], sizeof g_ren_from[0], "%s", pn);
   snprintf(g_ren_to[g_nren], sizeof g_ren_to[0], "_pd%d_%d", pd_uid, j);
   g_nren++;

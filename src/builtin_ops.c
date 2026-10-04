@@ -8,6 +8,24 @@
 /* Rows grouped by receiver kind. Within a kind the order does not matter:
    lookups go through the sorted index below. */
 static const BuiltinOp bop_rows[] = {
+  { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },
+  { TY_POLY, "downcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_poly_case_conv($r, sp_str_downcase, \"downcase\")", 0, 0, 0, 1 },
+  { TY_POLY, "capitalize", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_poly_case_conv($r, sp_str_capitalize, \"capitalize\")", 0, 0, 0, 1 },
+  { TY_POLY, "swapcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_poly_case_conv($r, sp_str_swapcase, \"swapcase\")", 0, 0, 0, 1 },
+  /* Boxed String transforms; stage 1 retains the zero-argument dispatch position. */
+  { TY_POLY, "dump", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_box_str(sp_str_dump(sp_poly_recv_s($r, \"dump\")))", 0, 0, 0, 1 },
+  { TY_POLY, "undump", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
+    "sp_box_str(sp_str_undump(sp_poly_recv_s($r, \"undump\")))", 0, 0, 0, 1 },
+  { TY_POLY, "upcase", 1, 2, BF_NONE, TY_POLY, BOPE_POLY_CASE_OPTIONS, "0" },
+  { TY_POLY, "downcase", 1, 2, BF_NONE, TY_POLY, BOPE_POLY_CASE_OPTIONS, "1" },
+  { TY_POLY, "capitalize", 1, 2, BF_NONE, TY_POLY, BOPE_POLY_CASE_OPTIONS, "0" },
+  { TY_POLY, "swapcase", 1, 2, BF_NONE, TY_POLY, BOPE_POLY_CASE_OPTIONS, "0" },
+
   /* Process::Tms: four cumulative CPU times, all Float (#3044), fields of
      the by-value struct */
   { TY_TMS, "utime",  0, 0, BF_ANY, TY_FLOAT, BOPE_TEMPLATE, "($r).utime", 0, 0, BOPF_BOXED },

@@ -997,3 +997,38 @@ int emit_call_symbol_misc_arms(Compiler *c, Buf *b, const char *name, int recv, 
   }
   return 0;
 }
+
+int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int recv = x->recv;
+  const char *name = x->name;
+  const NodeTable *nt = c->nt;
+  /* upcase / downcase / capitalize / swapcase given options, on a boxed
+     String or Symbol: the arms below map it as they do with none, and the
+     options are checked as on a typed receiver (emit_case_opts_guard) -- a
+     literal :ascii alone picks the ASCII mapping and needs no check. With no
+     arm the call raised NoMethodError naming String. */
+  if (!user_defines_or_reads(c, name)) {
+    int plain_args = 1;
+    for (int i = 0; i < argc; i++) {
+      NodeKind ak = nt_kind(nt, argv[i]);
+      if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) plain_args = 0;
+    }
+    if (plain_args) {
+      const char *sfx = argc == 1 ? case_map_suffix(c, argc, argv) : "";
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+      if (!*sfx) {
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_SYM || sp_poly_is_strbuf(_t%d)) "
+                      "sp_case_opts_check(%d, (sp_RbVal[]){", tv, tv, tv, argc);
+        for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); emit_boxed(c, argv[i], b); }
+        buf_printf(b, "}, %s, _t%d); ", x->op->arg, tv);
+      }
+      buf_printf(b, "sp_poly_case_conv(_t%d, sp_str_%s%s, \"%s\"); })", tv, name, sfx, name);
+      return 1;
+    }
+  }
+  return 0;
+}

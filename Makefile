@@ -1810,7 +1810,8 @@ threaded-render-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "threaded-render-test: pass"; else exit 1; fi
 
-GC_MINOR_TESTS := test/gc_minor_thread_local_slot.rb \
+GC_MINOR_TESTS := test/poly_string_dump_case_options.rb \
+                  test/gc_minor_thread_local_slot.rb \
                   test/gc_minor_thread_retval.rb \
                   test/str_fresh_recv_rooted.rb \
                   test/gc_minor_thread_tls_first_write.rb \

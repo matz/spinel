@@ -2151,13 +2151,15 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (argc == 1 && sp_streq(name, "chr") && nt_type(nt, argv[0]) &&
           sp_streq(nt_type(nt, argv[0]), "ConstantPathNode"))
         { *out = an_poly_concrete(c, name, TY_POLY); return 1; }
+      {
+        const BuiltinOp *op = an_bop_find(c, id, TY_POLY, name, argc, nt_ref(nt, id, "block") >= 0);
+        if (op) { *out = an_poly_concrete(c, name, bop_result(op, rt)); return 1; }
+      }
       /* String transforms on a boxed value: emit_poly_call routes these
          through sp_poly_to_s and re-boxes the result, so the value stays
          poly (mirrors the codegen list in codegen_call_recv.c). */
       if (argc == 0 &&
-          (sp_streq(name, "upcase") || sp_streq(name, "downcase") ||
-           sp_streq(name, "capitalize") || sp_streq(name, "swapcase") ||
-           sp_streq(name, "strip") || sp_streq(name, "reverse") ||
+          (sp_streq(name, "strip") || sp_streq(name, "reverse") ||
            sp_streq(name, "chomp") || sp_streq(name, "chop") ||
            sp_streq(name, "succ") || sp_streq(name, "next") ||
            sp_streq(name, "chr") ||

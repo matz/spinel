@@ -1,0 +1,18 @@
+"AB"
+"ab"
+"Ab"
+"AB"
+"AB"
+"ab"
+"AB"
+ArgumentError
+"invalid option"
+ArgumentError
+"too many options"
+:AB
+:AB
+"undefined method 'upcase' for an instance of Integer"
+"undefined method 'upcase' for an instance of Integer"
+"\"h\\u00E9\\n\\\"\""
+true
+RuntimeError

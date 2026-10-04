@@ -39,6 +39,7 @@ typedef enum {
   /* Complex and Rational (codegen_call_numeric.c) */
   BOPE_RATIONAL_ROUND,    /* Rational#round/floor/ceil/truncate with digits or half: */
   /* String (codegen_call_recv.c) */
+  BOPE_POLY_CASE_OPTIONS, /* boxed String/Symbol case mapping with options */
   BOPE_STR_SET_N,         /* String#squeeze / #delete / #count over several sets */
   BOPE_STR_AFFIX_ANY,     /* String#start_with? / #end_with? over several candidates */
   /* Hash (codegen_call_hash.c) */

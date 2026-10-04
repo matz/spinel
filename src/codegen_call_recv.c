@@ -5745,7 +5745,7 @@ else {
 /* String#upcase and friends take an optional casemap symbol. `:ascii`
    restricts folding to A-Z/a-z; return the "_ascii" runtime suffix for it so
    non-ASCII bytes pass through. Full-Unicode folding (no arg) returns "". */
-static const char *case_map_suffix(Compiler *c, int argc, const int *argv) {
+const char *case_map_suffix(Compiler *c, int argc, const int *argv) {
   if (argc >= 1 && nt_type(c->nt, argv[0]) &&
       sp_streq(nt_type(c->nt, argv[0]), "SymbolNode") &&
       nt_str(c->nt, argv[0], "value") &&
@@ -11888,10 +11888,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     buf_printf(b, ", %d)", sp_streq(name, "next") ? 1 : 0);
     { *out = 1; return 1; }
   }
-  if (sp_streq(name, "upcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_upcase, \"upcase\")"); { *out = 1; return 1; } }
-  if (sp_streq(name, "downcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_downcase, \"downcase\")"); { *out = 1; return 1; } }
-  if (sp_streq(name, "capitalize"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_capitalize, \"capitalize\")"); { *out = 1; return 1; } }
-  if (sp_streq(name, "swapcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_swapcase, \"swapcase\")"); { *out = 1; return 1; } }
+  if (emit_builtin_op_stage(c, id, recv, rt, name, 1, b)) { *out = 1; return 1; }
   if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"strip\")))"); { *out = 1; return 1; } }
   /* `strip` had an arm and its one-sided siblings did not, which is the
      shape of most of what follows: a String reaching the dispatch through a
@@ -13185,6 +13182,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, " } _t%d; })", ts);
     return 1;
   }
+  if (rt == TY_POLY && emit_builtin_op(c, id, recv, rt, name, b)) return 1;
   { int r; if (emit_poly_call0_arms(c, id, b, nt, name, recv, argc, argv, rt, &r)) return r; }
   /* blockless cycle(n) on a poly value: the Enumerator over its items
      repeated n times that the typed arms build (sp_poly_cycle_n), the

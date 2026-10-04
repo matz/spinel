@@ -194,6 +194,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_FIBER_TRANSFER] = emit_op_fiber_transfer,
   [BOPE_FIBER_RAISE] = emit_op_fiber_raise,
   [BOPE_RATIONAL_ROUND] = emit_op_rational_round,
+  [BOPE_POLY_CASE_OPTIONS] = emit_op_poly_case_options,
   [BOPE_STR_SET_N] = emit_op_str_set_n,
   [BOPE_STR_AFFIX_ANY] = emit_op_str_affix_any,
   [BOPE_HASH_PATTERN] = emit_op_hash_pattern,

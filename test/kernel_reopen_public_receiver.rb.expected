@@ -1,0 +1,17 @@
+5
+"s"
+[1]
+Object
+Object
+nil
+Q
+Q
+6
+[4, 4]
+2
+:h
+:h
+NoMethodError
+#<RuntimeError: x>
+1..2
+:s

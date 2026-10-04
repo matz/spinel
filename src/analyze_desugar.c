@@ -1096,7 +1096,8 @@ int desugar_kernel_reopen(Compiler *c) {
   enum { KR_MAX = 256 };
   const char *names[KR_MAX]; int nn = 0;
   int *tb = (int *)malloc(sizeof(int) * (size_t)tn);
-  int *nb = (int *)malloc(sizeof(int) * (size_t)(tn + hoisted));
+  /* room for each reopening's Object class beside its hoisted defs */
+  int *nb = (int *)malloc(sizeof(int) * (size_t)(2 * tn + hoisted));
   if (!tb || !nb) { free(tb); free(nb); return 0; }
   memcpy(tb, tb0, sizeof(int) * (size_t)tn);
   int nbn = 0;
@@ -1110,15 +1111,43 @@ int desugar_kernel_reopen(Compiler *c) {
     int *rest = (int *)malloc(sizeof(int) * (size_t)(bn + 1));
     if (!rest) { nb[nbn++] = st; continue; }
     int nrest = 0;
+    /* a def no marker has made private (module_function makes its methods
+       private instance methods) is a public method of every object:
+       `5.me` reaches it as well as a bare `me`. It is also put in a
+       reopening of Object, which the explicit-receiver calls resolve
+       through. */
+    int pub = 1;
+    int *objd = (int *)malloc(sizeof(int) * (size_t)(bn + 1));
+    int nobj = 0;
     for (int k = 0; k < bn; k++) {
       int d = bb0[k];
       if (nt_kind(nt, d) == NK_DefNode && nt_ref(nt, d, "receiver") < 0) {
         nb[nbn++] = d;
         if (nn < KR_MAX && nt_str(nt, d, "name")) names[nn++] = nt_str(nt, d, "name");
+        if (pub && objd) { int cl = nt_clone_subtree(nt, d); if (cl >= 0) objd[nobj++] = cl; }
       }
-      else if (!kr_is_visibility_marker(nt, d)) rest[nrest++] = d;
+      else if (kr_is_visibility_marker(nt, d)) {
+        const char *vm = nt_str(nt, d, "name");
+        pub = vm && sp_streq(vm, "public");
+      }
+      else rest[nrest++] = d;
     }
     if (nrest) { nt_node_set_arr(nt, body, "body", rest, nrest); nb[nbn++] = st; }
+    if (nobj) {
+      int oc = nt_new_node(nt, "ClassNode");
+      int ocp = nt_new_node(nt, "ConstantReadNode");
+      int ob = nt_new_node(nt, "StatementsNode");
+      if (oc >= 0 && ocp >= 0 && ob >= 0) {
+        nt_node_set_int(nt, oc, "node_line", nt_int(nt, st, "node_line", 0));
+        nt_node_set_int(nt, oc, "node_file", nt_int(nt, st, "node_file", 0));
+        nt_node_set_str(nt, ocp, "name", "Object");
+        nt_node_set_ref(nt, oc, "constant_path", ocp);
+        nt_node_set_arr(nt, ob, "body", objd, nobj);
+        nt_node_set_ref(nt, oc, "body", ob);
+        nb[nbn++] = oc;
+      }
+    }
+    free(objd);
     free(rest);
   }
   nt_node_set_arr(nt, top, "body", nb, nbn);

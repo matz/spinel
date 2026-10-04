@@ -24789,6 +24789,14 @@ int nullable_int_value(Compiler *c, int v) {
     if (nn_index_inbounds(v)) return 0;
     if (nullable_int_call_name(nt_str(nt, v, "name"))) return 1;
     if (nn_call_unboxes_nil(c, v)) return 1;
+    /* A setter assignment answers its RHS, not the writer's return. Its
+       nullable scalar must survive when the assignment itself is boxed.
+       The check above already accounts for a safe-navigation receiver. */
+    if (call_is_setter_assign(nt, v)) {
+      int ca = nt_ref(nt, v, "arguments"), an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      if (an == 1) return nullable_int_value(c, av[0]);
+    }
     /* a missed element read is the sentinel in an int slot; only boxing is
        affected, typed reads keep their inline arms */
     if (elem_miss_call(c, v)) return 1;

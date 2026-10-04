@@ -90,6 +90,7 @@ int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);
 int builtin_class_parent_id(int id);
 int desugar_builtin_reopen_named_superclass(Compiler *c);
+int desugar_builtin_reopen_self_class(Compiler *c);
 const char *class_ruby_name(Compiler *c, int ci); /* codegen.c */
 int builtin_object_method_known(const char *m);
 int core_method_name(const char *n);   /* analyze_desugar.c: a core class's public method */

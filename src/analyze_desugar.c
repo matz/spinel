@@ -9118,6 +9118,20 @@ static int bs_yield_count(TyKind rt, const char *nm, int argc, TyKind *elem, int
     if ((sp_streq(nm, "each_key") || sp_streq(nm, "each_value")) && argc == 0) {
       *elem = TY_POLY; return 1;
     }
+    /* a slice or a window is one Array, of whatever a step of any receiver
+       yields, and the receivers of the in-place map (an Array, a Set) and
+       of each_index and fill (an Array) yield one value a step, the last
+       two an index. Left alone, `|*qs|` was never bound and read nil, and
+       `|a, b|` took a whole element. */
+    if ((sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons")) && argc == 1) {
+      *elem = TY_POLY_ARRAY; return 1;
+    }
+    if ((sp_streq(nm, "map!") || sp_streq(nm, "collect!")) && argc == 0) {
+      *elem = TY_POLY; return 1;
+    }
+    if ((sp_streq(nm, "each_index") && argc == 0) || (sp_streq(nm, "fill") && argc <= 2)) {
+      *elem = TY_INT; return 1;
+    }
     return 0;
   }
   if (rt == TY_INT) {

@@ -4379,6 +4379,24 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
   emit_indent(b, indent + 1);
   buf_printf(b, "_t%d = _t%d->len; _t%d = -1; _t%d = sp_box_nil(); _t%d = %s;\n",
              tn, t, tk, tnv, tkey, hash_order_key(rt, t, ti));
+  /* A rest, an optional or a post reaches here only over a boxed receiver,
+     whose Hash arm this is (emit_array_filter_loop's Array arm says why):
+     the key and the value bind from the two values the step yields, as
+     CRuby's block binds them; by name alone, `|*kv|` read nil. */
+  if (block_binds_gathered(c, block)) {
+    int tp = ++g_tmp;
+    char ks[32]; snprintf(ks, sizeof ks, "_t%d", tkey);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tp, tp);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_PolyArray_push(_t%d, ", tp); emit_boxed_text(c, hkt, ks, b); buf_puts(b, ");\n");
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_PolyArray_push(_t%d, ", tp); emit_boxed_text(c, hvt, hash_order_val(rt, t, ti), b);
+    buf_puts(b, ");\n");
+    char vals[32]; snprintf(vals, sizeof vals, "_t%d", tp);
+    emit_boxed_step_binds(c, block, vals, b, indent + 1, 0);
+    kp = vp = NULL;
+  }
   /* a key or a value the block holds outlives its pair when the block drops
      the pair itself, or is reassigned, and then allocates, so a collectable
      one is rooted, as the each loop's are */
@@ -4507,7 +4525,30 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
              tk, tw, ti, kk, t, tw, te, tw, ti);
   emit_indent(b, li + 1);
   buf_printf(b, "_t%d = -1; _t%d = sp_box_nil(); _t%d = sp_%sArray_get(_t%d, _t%d);\n", tk, tnv, te, kk, t, ti);
-  if (bp) {
+  /* A rest, an optional or a post, or plain requireds an Array element
+     spreads across, reach here only over a boxed receiver, whose Array arm
+     this is: desugar_builtin_iter_block_shapes lowers them for a typed
+     receiver, and leaves a box alone, whose Hash arm takes a pair instead.
+     They bind from the step's one value as CRuby's block binds it. Bound by
+     the first name alone, `|*qs|` was never bound and read nil, and
+     `|a, b|` took the whole element. */
+  char es[32]; snprintf(es, sizeof es, "_t%d", te);
+  if (block_binds_gathered(c, block)) {
+    Buf eb; memset(&eb, 0, sizeof eb);
+    if (et == TY_POLY) buf_puts(&eb, es);
+    else emit_boxed_text(c, et, es, &eb);
+    Buf vals; memset(&vals, 0, sizeof vals);
+    buf_printf(&vals, "sp_yielded_args(0, %s)", eb.p ? eb.p : es);
+    emit_boxed_step_binds(c, block, vals.p, b, li + 1, 0);
+    free(eb.p); free(vals.p);
+  }
+  else if (et == TY_POLY && block_lead_only(c, block) && !block_param_is_multi(c, block, 0)) {
+    Buf pb; memset(&pb, 0, sizeof pb);
+    emit_tuple_block_params(c, block, block, es, &pb);
+    if (pb.p) { emit_indent(b, li + 1); buf_printf(b, "%s\n", pb.p + (pb.p[0] == ' ')); }
+    free(pb.p);
+  }
+  else if (bp) {
     /* a poly parameter is the hoisted local, rooted where it is declared; a
        typed one shadows it at the element type, and a String is rooted */
     emit_indent(b, li + 1);

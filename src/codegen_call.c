@@ -9697,41 +9697,63 @@ static void emit_super_new_forward(Compiler *c, int id, int ci, Scope *s,
   Scope *is = &c->scopes[initm];
   const char *restn = s->rest_idx >= 0 ? s->pnames[s->rest_idx] : NULL;
   const char *kwn = s->kwrest_idx >= 0 ? s->pnames[s->kwrest_idx] : NULL;
-  buf_printf(b, "sp_%s_new(", k->c_name);
-  int pos = 0;
+  /* The wrapper's own rest and keyword-rest, spelled before any of the
+     renames below can shadow them. */
+  char rest_c[128] = "", kw_c[128] = "";
+  if (restn) snprintf(rest_c, sizeof rest_c, "%s", rename_local(restn));
+  if (kwn) snprintf(kw_c, sizeof kw_c, "%s", rename_local(kwn));
+  /* Each parameter is bound in order, as a call binds them, so a default
+     that reads an earlier one -- `message: "#{old_const} is deprecated!"`,
+     activesupport's DeprecatedConstantProxy -- reads that value. Spelled
+     straight into the constructor call, the default named the callee's own
+     parameter, which the wrapper has no local for. */
+  int uid = ++g_tmp, ren_base = g_nren;
+  buf_puts(b, "({ ");
   for (int i = 0; i < is->nparams; i++) {
-    if (i) buf_puts(b, ", ");
     const char *pn = is->pnames ? is->pnames[i] : NULL;
     LocalVar *dv = pn ? scope_local(is, pn) : NULL;
     TyKind dt = dv ? dv->type : TY_POLY;
     if (dt == TY_UNKNOWN) dt = TY_POLY;
-    if (pn && callee_param_is_declared_kwarg(c, is, pn)) {
-      if (!kwn) { emit_arg_or_default(c, is, i, -1, b); continue; }
-      buf_puts(b, "({ sp_bool _kwh; sp_RbVal _kwr = sp_poly_hash_probe(sp_box_obj(lv_");
-      buf_printf(b, "%s, %s), sp_box_sym(sp_sym_intern(\"%s\")), &_kwh); _kwh ? ", rename_local(kwn),
-                 kwrest_any_key(c, s) ? "SP_BUILTIN_POLY_POLY_HASH" : "SP_BUILTIN_SYM_POLY_HASH", pn);
-      if (dt == TY_POLY) buf_puts(b, "_kwr");
-      else emit_unbox_text(c, dt, "_kwr", b);
-      buf_puts(b, " : ");
-      emit_arg_or_default(c, is, i, -1, b);
-      buf_puts(b, "; })");
-      continue;
-    }
-    if (!restn) { emit_arg_or_default(c, is, i, -1, b); continue; }
-    char elem[256];
-    snprintf(elem, sizeof elem, "sp_PolyArray_get(lv_%s, %d)", rename_local(restn), pos);
-    char guarded[640];
-    Buf db; memset(&db, 0, sizeof db);
-    emit_arg_or_default(c, is, i, -1, &db);
     Buf vb; memset(&vb, 0, sizeof vb);
-    if (dt == TY_POLY) buf_puts(&vb, elem);
-    else emit_unbox_text(c, dt, elem, &vb);
-    snprintf(guarded, sizeof guarded, "(sp_PolyArray_length(lv_%s) > %d ? %s : %s)",
-             rename_local(restn), pos, vb.p ? vb.p : "sp_box_nil()", db.p ? db.p : "0");
-    buf_puts(b, guarded);
-    free(db.p); free(vb.p);
-    pos++;
+    if (pn && callee_param_is_declared_kwarg(c, is, pn) && kwn) {
+      buf_puts(&vb, "({ sp_bool _kwh; sp_RbVal _kwr = sp_poly_hash_probe(sp_box_obj(lv_");
+      buf_printf(&vb, "%s, %s), sp_box_sym(sp_sym_intern(\"%s\")), &_kwh); _kwh ? ", kw_c,
+                 kwrest_any_key(c, s) ? "SP_BUILTIN_POLY_POLY_HASH" : "SP_BUILTIN_SYM_POLY_HASH", pn);
+      if (dt == TY_POLY) buf_puts(&vb, "_kwr");
+      else emit_unbox_text(c, dt, "_kwr", &vb);
+      buf_puts(&vb, " : ");
+      emit_arg_or_default(c, is, i, -1, &vb);
+      buf_puts(&vb, "; })");
+    }
+    else if ((pn && callee_param_is_declared_kwarg(c, is, pn)) || !restn) {
+      emit_arg_or_default(c, is, i, -1, &vb);
+    }
+    else {
+      int pos = 0;
+      for (int j = 0; j < i; j++)
+        if (!(is->pnames && is->pnames[j] && callee_param_is_declared_kwarg(c, is, is->pnames[j]))) pos++;
+      char elem[256];
+      snprintf(elem, sizeof elem, "sp_PolyArray_get(lv_%s, %d)", rest_c, pos);
+      Buf db; memset(&db, 0, sizeof db);
+      emit_arg_or_default(c, is, i, -1, &db);
+      Buf eb; memset(&eb, 0, sizeof eb);
+      if (dt == TY_POLY) buf_puts(&eb, elem);
+      else emit_unbox_text(c, dt, elem, &eb);
+      buf_printf(&vb, "(sp_PolyArray_length(lv_%s) > %d ? %s : %s)",
+                 rest_c, pos, eb.p ? eb.p : "sp_box_nil()", db.p ? db.p : "0");
+      free(db.p); free(eb.p);
+    }
+    emit_ctype(c, dt, b);
+    buf_printf(b, " lv__sn%d_%d = %s; ", uid, i, vb.p ? vb.p : "0");
+    free(vb.p);
+    if (pn && g_nren < MAX_RENAME) {
+      snprintf(g_ren_from[g_nren], sizeof g_ren_from[0], "%s", pn);
+      snprintf(g_ren_to[g_nren++], sizeof g_ren_to[0], "_sn%d_%d", uid, i);
+    }
   }
+  g_nren = ren_base;
+  buf_printf(b, "sp_%s_new(", k->c_name);
+  for (int i = 0; i < is->nparams; i++) buf_printf(b, "%slv__sn%d_%d", i ? ", " : "", uid, i);
   /* the wrapper's own `&blk`, which a bare super forwards; emit_ctor_block_slot
      reads the CALL's block node and a ForwardingSuperNode has none */
   if (is->blk_param && is->blk_param[0] && !is->yields) {
@@ -9739,7 +9761,7 @@ static void emit_super_new_forward(Compiler *c, int id, int ci, Scope *s,
     if (s->blk_param && s->blk_param[0]) buf_printf(b, "lv_%s", rename_local(s->blk_param));
     else buf_puts(b, "NULL");
   }
-  buf_puts(b, ")");
+  buf_puts(b, "); })");
 }
 
 static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {

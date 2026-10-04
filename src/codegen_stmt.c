@@ -1429,8 +1429,18 @@ static void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     }
     else {
       /* otherwise a mutable-string local wraps the (const char*) RHS in a
-         fresh sp_String so later `<<` appends are amortized O(1). */
-      buf_puts(b, "sp_String_new_shared("); emit_expr(c, v, b); buf_puts(b, ")");
+         fresh sp_String so later `<<` appends are amortized O(1). An RHS
+         that diverges (the unresolved-call gate's sp_raise_nomethod(...),
+         an sp_RbVal; the node stays TY_UNKNOWN) has no String to wrap:
+         keep the raise and answer a NULL handle, as emit_str_expr does for
+         its const char* slot. Wrapped, the C did not build. */
+      Buf rv; memset(&rv, 0, sizeof rv);
+      emit_expr(c, v, &rv);
+      const char *rtxt = rv.p ? rv.p : "";
+      if (strncmp(past_open_parens(rtxt), "sp_raise_", 9) == 0)
+        buf_printf(b, "((void)(%s), (sp_String *)NULL)", rtxt);
+      else buf_printf(b, "sp_String_new_shared(%s)", rtxt);
+      free(rv.p);
     }
   }
 }

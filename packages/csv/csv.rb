@@ -458,25 +458,26 @@ class CSV
 
   # ---- generating ----
 
-  def self.quote_field(value, col_sep, quote_char, force_quotes)
-    return "" if value.nil?
-    s = value.to_s
+  def self.quote_field(value, col_sep, quote_char, force_quotes, quote_empty)
+    return "" if value.nil? && !force_quotes
+    s = value.nil? ? "" : value.to_s
     need = force_quotes ||
            s.include?(col_sep) || s.include?(quote_char) ||
-           s.include?("\n") || s.include?("\r")
+           s.include?("\n") || s.include?("\r") ||
+           (s.empty? && quote_empty)
     return s unless need
     quote_char + s.gsub(quote_char, quote_char + quote_char) + quote_char
   end
 
   # One CSV line (with its row separator) for `row`.
   def self.generate_line(row, col_sep: ",", quote_char: "\"", row_sep: "\n",
-                         force_quotes: false)
+                         force_quotes: false, quote_empty: true)
     fields = row.is_a?(Row) ? row.fields : row
     out = String.new
     i = 0
     while i < fields.size
       out << col_sep if i > 0
-      out << quote_field(fields[i], col_sep, quote_char, force_quotes)
+      out << quote_field(fields[i], col_sep, quote_char, force_quotes, quote_empty)
       i += 1
     end
     out << row_sep
@@ -485,22 +486,22 @@ class CSV
 
   # CSV.generate { |csv| csv << row } -- the accumulated string.
   def self.generate(str = "", col_sep: ",", quote_char: "\"", row_sep: "\n",
-                    force_quotes: false)
+                    force_quotes: false, quote_empty: true)
     csv = new(String.new(str), col_sep: col_sep, quote_char: quote_char,
-              row_sep: row_sep, force_quotes: force_quotes)
+              row_sep: row_sep, force_quotes: force_quotes, quote_empty: quote_empty)
     yield csv
     csv.string
   end
 
   # CSV.open(path, "w") { |csv| csv << row } / CSV.open(path) { |csv| csv.each }
   def self.open(path, mode = "r", col_sep: ",", quote_char: "\"", row_sep: "\n",
-                force_quotes: false, headers: false, skip_blanks: false,
-                converters: nil)
+                force_quotes: false, quote_empty: true, headers: false,
+                skip_blanks: false, converters: nil)
     reading = mode.start_with?("r")
     data = reading ? File.read(path) : String.new
     csv = new(data, col_sep: col_sep, quote_char: quote_char,
-              row_sep: row_sep, force_quotes: force_quotes, headers: headers,
-              skip_blanks: skip_blanks, converters: converters)
+              row_sep: row_sep, force_quotes: force_quotes, quote_empty: quote_empty,
+              headers: headers, skip_blanks: skip_blanks, converters: converters)
     result = yield csv
     File.write(path, csv.string) unless reading
     result
@@ -510,13 +511,14 @@ class CSV
 
   # A reader over `data` (a String), and a writer accumulating into it.
   def initialize(data = "", col_sep: ",", quote_char: "\"", row_sep: "\n",
-                 force_quotes: false, headers: false, skip_blanks: false,
-                 converters: nil)
+                 force_quotes: false, quote_empty: true, headers: false,
+                 skip_blanks: false, converters: nil)
     @string = String.new(data)
     @col_sep = col_sep
     @quote_char = quote_char
     @row_sep = row_sep
     @force_quotes = force_quotes
+    @quote_empty = quote_empty
     @headers = headers
     @skip_blanks = skip_blanks
     @converters = converters
@@ -606,7 +608,8 @@ class CSV
 
   def <<(row)
     @string << CSV.generate_line(row, col_sep: @col_sep, quote_char: @quote_char,
-                                 row_sep: @row_sep, force_quotes: @force_quotes)
+                                 row_sep: @row_sep, force_quotes: @force_quotes,
+                                 quote_empty: @quote_empty)
     @rows = nil
     self
   end

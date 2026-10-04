@@ -559,6 +559,11 @@ static int mx_eval_call(MxCtx *c, pm_call_node_t *n, Mv *out) {
       for (int i = 0; i < r.n; i++) if (r.a[i].k != MV_NIL) v.a[v.n++] = r.a[i];
       *out = v; ok = 1;
     }
+    else if (strcmp(name, "reverse") == 0 && r.k == MV_ARR) {
+      Mv v = r; v.a = calloc(r.n + 1, sizeof(Mv));
+      for (int i = 0; i < r.n; i++) v.a[i] = r.a[r.n - i - 1];
+      *out = v; ok = 1;
+    }
     else if ((strcmp(name, "size") == 0 || strcmp(name, "length") == 0) && r.k != MV_NIL) {
       *out = mv_nil(); out->k = MV_INT;
       out->i = r.k == MV_ARR ? r.n : (r.k == MV_STR || r.k == MV_SYM) ? (long long)strlen(r.s) : 0;

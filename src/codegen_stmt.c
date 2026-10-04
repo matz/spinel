@@ -7607,7 +7607,12 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
      crosses frames, compute the value into a temp first, then pop, then return
      it. With no frames to pop the order is immaterial -- keep the flat form. */
   int ret_has_frames = (g_exc_frame_depth > 0) || (rescues_crossed(0) > 0);
-  if (ret_has_frames && n >= 1 && !(n == 1 && g_ret_type == TY_VOID)) {
+  /* A valueless return -- a void function's, or a nil-valued proc's, whose
+     type has no C value either -- has no temp to compute into. It evaluates
+     its value for effect while the frames are still live, then leaves as a
+     bare `return` does. */
+  int valueless = n == 1 && (g_ret_type == TY_VOID || g_ret_type == TY_NIL);
+  if (ret_has_frames && n >= 1 && !valueless) {
     if (n > 1) {
       int ta = emit_return_values(c, a, n, "{ ", b);
       buf_puts(b, " ");
@@ -7629,6 +7634,11 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     emit_frame_unwind(b, 0, NULL);
     buf_printf(b, "return _t%d; }\n", tr);
     return;
+  }
+  if (ret_has_frames && valueless) {
+    int vn = unwrap_parens(c, a[0]);
+    if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr(c, vn, b); buf_puts(b, "); "); }
+    n = 0;
   }
   emit_frame_unwind(b, 0, NULL);
   if (n > 1) {

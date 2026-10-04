@@ -1,0 +1,73 @@
+PublicNil
+"#<PublicNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+PublicOtherNil
+nil
+"#<PublicOtherNil:ADDR @x=7, @y=nil>"
+[7, nil, false, true]
+0
+9
+SendComputedNil
+nil
+"#<SendComputedNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+SendLiteralNil
+nil
+"#<SendLiteralNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+SetNil
+nil
+"#<SetNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+MethodNil
+nil
+"#<MethodNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+EvalNil
+nil
+"#<EvalNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+EvalStatementNil
+"#<EvalStatementNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+ExecNil
+nil
+"#<ExecNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+DirectWriterNil
+nil
+"#<DirectWriterNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+EffectNil
+nil argument
+nil
+"#<EffectNil:ADDR @x=nil, @y=8>"
+[nil, 8, true, false]
+0
+9
+NestedEvalWriter
+"outer"
+nil
+true
+:done
+"outer"
+nil
+true

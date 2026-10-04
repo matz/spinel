@@ -10800,7 +10800,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
       }
     }
     const char *vty = nt_type(nt, v);
-    int sc = cws ? cws->class_id : -1;
+    int sc = g_ie_class_id >= 0 ? g_ie_class_id : (cws ? cws->class_id : -1);
     if (sc < 0 && g_class_body_id >= 0) sc = g_class_body_id;
     if (sc < 0) sc = comp_class_index(c, "Toplevel");
     TyKind ivt = TY_INT;

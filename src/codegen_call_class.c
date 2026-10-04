@@ -9,6 +9,27 @@
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 
+static void emit_attr_writer_converted(Compiler *c, int arg, TyKind ivt, int tmp,
+                                       const char *name, Buf *b) {
+  TyKind avk = store_value_kind(c, arg);
+  /* A nil-valued argument has no C type for a temporary. Keep its
+     effects, store the slot's nil, and answer nil as the writer
+     does rather than reading the slot as an ordinary number. */
+  if (avk == TY_NIL || avk == TY_VOID) {
+    buf_printf(b, "_t%d->iv_%s = ", tmp, iv_c(name));
+    emit_coerce(c, arg, ivt, CO_HOLD, "an attribute writer", b);
+    buf_puts(b, "; 0; })");
+    return;
+  }
+  int tv = ++g_tmp;
+  char tn[32]; snprintf(tn, sizeof tn, "_t%d", tv);
+  emit_ctype(c, avk, b); buf_printf(b, " %s = ", tn); emit_expr(c, arg, b);
+  buf_printf(b, "; _t%d->iv_%s = ", tmp, iv_c(name));
+  emit_coerce_text(c, arg, avk, ivt, CO_HOLD, tn, "an attribute writer", b);
+  buf_printf(b, "; %s; })", tn);
+  return;
+}
+
 /* respond_to?, method_defined? and its kin, const_set / const_get / const_defined? */
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
@@ -1103,13 +1124,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           if (argc >= 1 && _aivt != TY_POLY && _aivt != TY_UNKNOWN &&
               comp_ntype(c, argv[0]) != TY_UNKNOWN &&
               !store_fits(c, store_value_kind(c, argv[0]), _aivt)) {
-            TyKind _avk = store_value_kind(c, argv[0]);
-            int _tvv = ++g_tmp;
-            char _tvn[32]; snprintf(_tvn, sizeof _tvn, "_t%d", _tvv);
-            emit_ctype(c, _avk, b); buf_printf(b, " %s = ", _tvn); emit_expr(c, argv[0], b);
-            buf_printf(b, "; _t%d->iv_%s = ", _atmp, iv_c(_abase));
-            emit_coerce_text(c, argv[0], _avk, _aivt, CO_HOLD, _tvn, "an attribute writer", b);
-            buf_printf(b, "; %s; })", _tvn);
+            emit_attr_writer_converted(c, argv[0], _aivt, _atmp, _abase, b);
             return 1;
           }
           buf_printf(b, "_t%d->iv_%s = ", _atmp, iv_c(_abase));

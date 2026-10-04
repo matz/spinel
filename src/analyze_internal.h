@@ -270,6 +270,7 @@ void seed_unsupplied_nil_defaults(Compiler *c);
 int infer_container_flow(Compiler *c);
 int an_builtin_only_p(void);
 TyKind an_builtin_answer(Compiler *c, int id);
+int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out);
 int poly_expr_flows_container(Compiler *c, int node);
 int reconcile_locals_reading_ivars(Compiler *c);
 int widen_object_locals_from_poly_writes(Compiler *c);

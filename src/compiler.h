@@ -1107,6 +1107,8 @@ int        io_family_descends(Compiler *c, int k, int owner);
    *def_class (if non-NULL) is set to the class that defines the method. */
 int        comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
 int        comp_builtin_kind_reopen_mi(Compiler *c, TyKind t, const char *name);
+int        comp_builtin_name_reopened(Compiler *c, const char *name);
+int        comp_yield_chain_reopened(Compiler *c, int call);
 /* Record method `name`'s visibility on a class (overwrite-or-append). */
 void       comp_method_vis_set(ClassInfo *ci, const char *name, int kind);
 /* Record class method `name`'s visibility on a class (overwrite-or-append). */

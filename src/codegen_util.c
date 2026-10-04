@@ -872,7 +872,10 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
       *out = rr;
       return 1;
     } }
-  return ty_recv_builtin_result(op, ac, ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN, rt, out);
+  if (ty_recv_builtin_result(op, ac, ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN, rt, out)) return 1;
+  /* a site the table does not answer, beside a reopen on the chain: the
+     analyzer's own answer for this site's kind */
+  return an_yield_site_builtin_answer((Compiler *)c, id, rt, out);
 }
 
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {

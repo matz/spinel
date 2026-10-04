@@ -3363,13 +3363,8 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(&sw, indent + 1);
       buf_printf(&sw, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"map!\"); SP_GC_ROOT(_t%d);\n",
                  tw, trecv, tw);
-      /* The loop below stores into the array's elements directly rather than
-         through a runtime mutator, so it carries its own write barrier: the
-         receiver may be an old array taking references to values this loop
-         has just made. Once before the loop is enough -- the remembered set
-         dedupes on the object, not the store. */
-      emit_indent(&sw, indent + 1);
-      buf_printf(&sw, "sp_gc_wb((void *)_t%d);\n", tw);
+      /* The block can collect between stores, so each store needs the
+         runtime setter's barrier, not a single barrier before the loop. */
       emit_indent(&sw, indent + 1);
       buf_printf(&sw, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti2, ti2, tw, ti2);
       emit_indent(&sw, indent + 2);
@@ -3379,7 +3374,7 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
         Buf vb2; memset(&vb2, 0, sizeof vb2); emit_boxed(c, dbb[dbn - 1], &vb2);
         g_indent = svi;
         emit_indent(&sw, indent + 2);
-        buf_printf(&sw, "_t%d->data[_t%d] = %s;\n", tw, ti2, vb2.p ? vb2.p : "sp_box_nil()");
+        buf_printf(&sw, "sp_PolyArray_set(_t%d, _t%d, %s);\n", tw, ti2, vb2.p ? vb2.p : "sp_box_nil()");
         free(vb2.p); }
       emit_indent(&sw, indent + 1); buf_puts(&sw, "}\n");
       emit_indent(&sw, indent + 1);

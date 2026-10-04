@@ -336,12 +336,15 @@ static double pk_poly_to_flt(sp_RbVal v) {
   }
 }
 
-static const char *pk_poly_to_str(sp_RbVal v) {
-  switch (v.tag) {
-    case SP_TAG_STR: return v.v.s ? v.v.s : "";
-    case SP_TAG_NIL: return "";
-    default:         return "";
-  }
+/* A string element's bytes and their length. The length comes from
+   sp_str_byte_len, as the m/M directives read theirs, so a String carrying a
+   NUL (packed bytes, a binary key) keeps every byte; strlen stopped at the
+   first one. Only a String has the header sp_str_byte_len reads, so anything
+   else answers the empty literal with length 0. */
+static const char *pk_poly_to_str(sp_RbVal v, size_t *n) {
+  if (v.tag == SP_TAG_STR && v.v.s) { *n = sp_str_byte_len(v.v.s); return v.v.s; }
+  *n = 0;
+  return "";
 }
 
 /* ---------- Base64 (`m`) and quoted-printable (`M`) encoders ---------- */
@@ -640,9 +643,9 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
       continue;
     }
     if (spec == 'a' || spec == 'A' || spec == 'Z') {
-      const char *s = (idx < arr->len) ? pk_poly_to_str(arr->data[idx]) : "";
+      size_t sl = 0;
+      const char *s = (idx < arr->len) ? pk_poly_to_str(arr->data[idx], &sl) : "";
       idx++;
-      size_t sl = strlen(s);
       size_t want = (count < 0) ? sl : (size_t)count;
       if (spec == 'Z' && count < 0) want = sl + 1;
       size_t take = sl < want ? sl : want;
@@ -665,8 +668,9 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
     }
     /* H/h (hex), B/b (bit), u (uuencode): consume one string element. */
     if (spec == 'H' || spec == 'h' || spec == 'B' || spec == 'b' || spec == 'u') {
-      const char *s = (idx < arr->len) ? pk_poly_to_str(arr->data[idx]) : ""; idx++;
-      pk_str_bytes_directive(spec, count, s, strlen(s), &buf, &len, &cap);
+      size_t sl = 0;
+      const char *s = (idx < arr->len) ? pk_poly_to_str(arr->data[idx], &sl) : ""; idx++;
+      pk_str_bytes_directive(spec, count, s, sl, &buf, &len, &cap);
       continue;
     }
     /* w: BER-compressed integers (base-128, high bit = continuation). */

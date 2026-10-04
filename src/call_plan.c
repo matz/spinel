@@ -604,6 +604,10 @@ static const char *cplan_runtime_send_what(Compiler *c, int id) {
   const char *nm = nt_str(nt, id, "name");
   if (!nm || !is_send_family(nm))
     return NULL;
+  /* a socket's send(data, flags) is the datagram write, not Object#send
+     (#7193): the IO arm emits it, whatever holds the payload */
+  { int rr = nt_ref(nt, id, "receiver");
+    if (rr >= 0 && sp_streq(nm, "send") && infer_type(c, rr) == TY_IO && sp_feature_required("socket")) return NULL; }
   if (nt_int(nt, id, "rt_probe", 0)) return NULL;  /* analysis-only respond_to? probe */
   int args = nt_ref(nt, id, "arguments");
   if (args < 0) return NULL;

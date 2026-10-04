@@ -3504,6 +3504,11 @@ int desugar_dynamic_send(Compiler *c) {
       recv = sn;
       changed = 1;
     }
+    /* A socket's send(data, flags) is the datagram write, not Object#send.
+       The literal-name retarget above already leaves it alone (#2922); a
+       payload held in a variable reached here and became a dispatch over the
+       program's method names on the payload's bytes (#7193). */
+    if (sp_streq(nm, "send") && recv >= 0 && infer_type(c, recv) == TY_IO && sp_feature_required("socket")) continue;
     { int dn = 0; nt_arr(nt, id, "dyn_send_arms", &dn); if (dn > 0) continue; }  /* already lowered */
     int args = nt_ref(nt, id, "arguments");
     if (args < 0) continue;

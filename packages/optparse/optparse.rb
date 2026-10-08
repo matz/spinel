@@ -4,7 +4,7 @@
 #   - OptionParser.new(banner, width, indent) { |opts| ... }
 #   - on / on_tail with any number of switch names ("-nNAME" declares -n with
 #     a value), any number of description lines and an optional value type
-#     (String, Array, Integer or Float), in any order
+#     (String, Array, Integer, Float, TrueClass or FalseClass), in any order
 #   - separator, banner=, summary_width, summary_indent, to_s (help text)
 #   - parse! with --long=VALUE, --long VALUE, -s VALUE, -sVALUE, clustered
 #     short switches (-vq, -vuNAME) and "--"
@@ -21,11 +21,17 @@
 #   - String refuses an empty value with OptionParser::InvalidArgument, and
 #     Array passes nil for an empty item ("a,,b"); without a type an empty
 #     value passes as it is
+#   - TrueClass and FalseClass read yes, true and + as true, and no, false,
+#     - and nil as false, each word shortened as far as it stays clear ("y",
+#     "n"). Without a value, TrueClass passes true and FalseClass false
 #   - OptionParser::InvalidOption, OptionParser::AmbiguousOption,
-#     OptionParser::MissingArgument, OptionParser::NeedlessArgument and
-#     OptionParser::InvalidArgument, all subclasses of OptionParser::ParseError
+#     OptionParser::MissingArgument, OptionParser::NeedlessArgument,
+#     OptionParser::InvalidArgument and its subclass
+#     OptionParser::AmbiguousArgument, all subclasses of
+#     OptionParser::ParseError
 #
-# Not supported: other value types than String, Array, Integer and Float.
+# Not supported: other value types than String, Array, Integer, Float,
+# TrueClass and FalseClass.
 
 class OptionParser
   class ParseError < StandardError
@@ -45,6 +51,16 @@ class OptionParser
 
   class InvalidArgument < ParseError
   end
+
+  class AmbiguousArgument < InvalidArgument
+  end
+
+  # The classes on takes as a switch's value type.
+  VALUE_TYPES = [String, Array, Integer, Float, TrueClass, FalseClass]
+
+  # The words a TrueClass or a FalseClass switch reads, and their values.
+  BOOLEANS = { "+" => true, "-" => false, "yes" => true, "no" => false,
+               "true" => true, "false" => false, "nil" => false }
 
   # The words an Integer or a Float switch accepts. radix is a leading 0
   # with an octal, binary (0b) or hexadecimal (0x) number.
@@ -193,7 +209,7 @@ class OptionParser
         (a[1] == "-" ? longs : shorts).push(a[0, cut])
       elsif a.is_a?(String)
         descriptions.push(a)
-      elsif a == String || a == Array || a == Integer || a == Float
+      elsif VALUE_TYPES.include?(a)
         type = a
       end
     end
@@ -219,13 +235,20 @@ class OptionParser
   end
 
   # Passes the value to the block in the switch's type. An empty String or
-  # a word that is not an Integer or a Float raises InvalidArgument naming
-  # it as given (shown). Object is the type of a switch declared without one.
+  # a word that is not an Integer, a Float or a boolean raises
+  # InvalidArgument naming it as given (shown). Object is the type of a
+  # switch declared without one. A boolean switch with "[=VALUE]" and no
+  # value passes its own default.
   def invoke(sw, value, shown)
     handler = sw.handler
     type = sw.type
-    if value.nil? || type == Object
+    boolean = type == TrueClass || type == FalseClass
+    if value.nil? && boolean && sw.optional_value?
+      handler.call(type == TrueClass) if handler
+    elsif value.nil? || type == Object
       handler.call(value) if handler
+    elsif boolean
+      handler.call(complete_value(value, BOOLEANS, shown)) if handler
     elsif type == String
       raise invalid_argument(shown) if value.empty?
       handler.call(value) if handler
@@ -249,9 +272,29 @@ class OptionParser
     InvalidArgument.new("invalid argument: " + shown)
   end
 
+  # A FalseClass flag passes false in both of its forms.
   def invoke_flag(sw, value)
     handler = sw.handler
-    handler.call(value) if handler
+    handler.call(value && sw.type != FalseClass) if handler
+  end
+
+  # Returns the value of the key of choices that word names, completed like
+  # a long switch name ("y" is "yes") but with case counting. An exact key
+  # wins. Keys with the same value never conflict, and the shortest key wins
+  # if it starts all the others; otherwise raises AmbiguousArgument. Raises
+  # InvalidArgument when no key matches.
+  def complete_value(word, choices, shown)
+    return choices[word] if choices.key?(word)
+    pattern = Regexp.new("\\A" + Regexp.quote(word).gsub(/\w+\b/, "\\&\\w*"))
+    found = choices.keys.select { |key| key.match?(pattern) }.sort_by(&:length)
+    raise invalid_argument(shown) if found.empty?
+    best = found[0]
+    value = choices[best]
+    found.each do |key|
+      next if choices[key] == value || key.start_with?(best)
+      raise AmbiguousArgument.new("ambiguous argument: " + shown)
+    end
+    value
   end
 
   # Returns the next word as the value of a switch with no attached value.

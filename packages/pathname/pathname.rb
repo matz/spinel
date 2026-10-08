@@ -13,9 +13,8 @@
 # This covers the surface a program actually reaches for rather than every
 # CRuby corner. Not modelled: the Find/FileUtils-backed corners (#find is here
 # but #each_entry, #chown, #lchmod are not), #opendir, #sysopen, #make_link /
-# #make_symlink, #birthtime, and the mixed-in Kernel#Pathname() constructor,
-# which cannot be spelled in Spinel yet (a toplevel method named after a class
-# collides with the class's own symbol) -- use Pathname.new.
+# #make_symlink and #birthtime. Kernel#Pathname() is the toplevel method at
+# the end of this file, spelled the way BigDecimal() and URI() are.
 
 class Pathname
   include Comparable
@@ -510,4 +509,11 @@ class Pathname
 
     body == "" ? "." : body
   end
+end
+
+# Kernel#Pathname(path): the conversion function CRuby mixes into Kernel.
+# A Pathname comes back as itself; anything else goes through Pathname.new.
+def Pathname(path)
+  return path if path.is_a?(Pathname)
+  Pathname.new(path)
 end

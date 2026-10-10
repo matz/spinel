@@ -28844,21 +28844,72 @@ static int method_answers_nil(const Scope *m) {
    defines the name. Ask whether ANY of those targets can answer nil.
    Over-marking here only costs the boxing branch; missing one is the
    silent-wrong hash key of #3505, so the conservative direction is `yes`. */
+/* The scopes named `cn` and the classes with a reader `cn` in their chain,
+   per name: both are fixed once the program's methods and classes are, and
+   a poly call asked for its nil scanned every scope and class per call --
+   quadratic in the program, in codegen as well as in the rounds (scale-test). */
+typedef struct { char *name; int *sc; int nsc; int *cls; int ncl; } PdnEnt;
+static PdnEnt *pdn_tab = NULL;
+static int pdn_cap = 0, pdn_used = 0, pdn_nscopes = -1, pdn_nclasses = -1;
+static const Compiler *pdn_owner = NULL;
+static unsigned pdn_hash(const char *s) { unsigned h = 2166136261u; while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; } return h; }
+static void pdn_reset(void) {
+  for (int i = 0; i < pdn_cap; i++) if (pdn_tab[i].name) { free(pdn_tab[i].name); free(pdn_tab[i].sc); free(pdn_tab[i].cls); }
+  free(pdn_tab); pdn_tab = NULL; pdn_cap = pdn_used = 0;
+}
+static PdnEnt *pdn_slot(PdnEnt *tab, int cap, const char *cn) {
+  unsigned i = pdn_hash(cn) & (unsigned)(cap - 1);
+  while (tab[i].name && strcmp(tab[i].name, cn) != 0) i = (i + 1) & (unsigned)(cap - 1);
+  return &tab[i];
+}
+static const PdnEnt *pdn_lookup(Compiler *c, const char *cn) {
+  if (pdn_owner != c || pdn_nscopes != c->nscopes || pdn_nclasses != c->nclasses) {
+    pdn_reset(); pdn_owner = c; pdn_nscopes = c->nscopes; pdn_nclasses = c->nclasses;
+  }
+  if (pdn_used * 2 >= pdn_cap) {
+    int ncap = pdn_cap ? pdn_cap * 2 : 256;
+    PdnEnt *nt2 = calloc((size_t)ncap, sizeof *nt2);
+    if (!nt2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < pdn_cap; i++) if (pdn_tab[i].name) *pdn_slot(nt2, ncap, pdn_tab[i].name) = pdn_tab[i];
+    free(pdn_tab); pdn_tab = nt2; pdn_cap = ncap;
+  }
+  PdnEnt *e = pdn_slot(pdn_tab, pdn_cap, cn);
+  if (e->name) return e;
+  e->name = strdup(cn);
+  if (!e->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  pdn_used++;
+  for (int si = 1; si < c->nscopes; si++)
+    if (c->scopes[si].name && sp_streq(c->scopes[si].name, cn)) {
+      int *g = realloc(e->sc, sizeof(int) * (size_t)(e->nsc + 1));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      e->sc = g; e->sc[e->nsc++] = si;
+    }
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (comp_reader_in_chain(c, ci, cn, NULL)) {
+      int *g = realloc(e->cls, sizeof(int) * (size_t)(e->ncl + 1));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      e->cls = g; e->cls[e->ncl++] = ci;
+    }
+  return e;
+}
+
 static int poly_dispatch_nullable(Compiler *c, int v, const char *cn) {
   if (!cn) return 0;
   /* a target whose value is nil rides in the call's scalar slot as its nil
      too, when the call is typed Integer or Float (or nil) */
   TyKind vt = infer_type(c, v);
   int nil_rides = vt == TY_INT || vt == TY_FLOAT || vt == TY_NIL;
-  for (int si = 1; si < c->nscopes; si++)
-    if (c->scopes[si].name && sp_streq(c->scopes[si].name, cn) &&
-        (nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int)) return 1;
+  const PdnEnt *pe = pdn_lookup(c, cn);
+  for (int k = 0; k < pe->nsc; k++) {
+    int si = pe->sc[k];
+    if (nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int) return 1;
+  }
   /* an attr_reader over a scalar ivar: those slots start nil, their nil
      byte set (emit_ivar_nil_inits_from), so the read can answer nil like a
      `return nil` would -- the resolved-receiver twin of this lives in codegen's
      call_returns_nullable_int */
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    if (!comp_reader_in_chain(c, ci, cn, NULL)) continue;
+  for (int k = 0; k < pe->ncl; k++) {
+    int ci = pe->cls[k];
     char ivb[300];
     snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, ci, cn));
     int iv = comp_ivar_index(&c->classes[ci], ivb);

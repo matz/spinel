@@ -8162,8 +8162,9 @@ static int subtree_changes_local(Compiler *c, int root, const char *name) {
    writes, `getbyte`, `length`/`size`, plain field reads, the pure scalar
    methods and Math functions, class tests and `!` on a scalar, and control
    flow (a `return` only leaves the loop; through an ensure it is a goto to
-   the ensure, outside the loop). A call to anything else, a block, a nested
-   loop or a rescue leaves the loop as it was. An array is cached when it is read through a local, an
+   the ensure, outside the loop), a nested while (which takes this loop's
+   headers). A call to anything else, a block, another kind of loop or a rescue leaves
+   the loop as it was. An array is cached when it is read through a local, an
    ivar, or a field read of a local, where the loop assigns neither the local
    nor the ivar. */
 enum { HC_INT, HC_FLOAT, HC_STR };
@@ -8224,6 +8225,39 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
 /* Can the loop keep its arrays' headers across iterations? Collects the locals
    and ivars it assigns, which no cached expression may read. `stmt` is set for
    a node in statement position, where a write's value is unused. */
+static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r);
+/* An Integer block loop the header cache covers as it does a while:
+   `n.times { }`, `a.upto(b) { }` / downto, `n.step(...) { }`, an Integer
+   Range's `each { }` -- each a plain C `for` around the block's body */
+static int hc_block_loop(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+  if (!nm || recv < 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (rt == TY_INT && (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto") || sp_streq(nm, "step")))
+    return 1;
+  return rt == TY_RANGE && sp_streq(nm, "each");
+}
+/* ...and can its region keep the headers: the receiver and arguments as
+   expressions, the body as statements, the block's parameters as locals
+   the loop writes */
+static int hc_block_loop_ok(Compiler *c, int id, HcRegion *r) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (block_param_is_multi(c, blk, 0)) return 0;
+  for (int k = 0; ; k++) {
+    const char *pn = block_param_name(c, blk, k);
+    if (!pn) break;
+    nameset_add(&r->wl, pn);
+  }
+  if (!hc_node_ok(c, nt_ref(nt, id, "receiver"), 0, r)) return 0;
+  int a = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  for (int i = 0; i < an; i++) if (!hc_node_ok(c, av[i], 0, r)) return 0;
+  return hc_node_ok(c, nt_ref(nt, blk, "body"), 1, r);
+}
 static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 1;
@@ -8237,7 +8271,12 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       return 1;
     case NK_StatementsNode: kids_stmt = 1; break;
     case NK_ParenthesesNode: kids_stmt = stmt; break;
-    case NK_CallNode: if (!hc_call_ok(c, id, stmt)) return 0; break;
+    case NK_CallNode:
+      /* a nested Integer block loop runs inside this region, as a nested
+         while does */
+      if (stmt && hc_block_loop(c, id)) return hc_block_loop_ok(c, id, r);
+      if (!hc_call_ok(c, id, stmt)) return 0;
+      break;
     case NK_IndexOperatorWriteNode: {
       int rv = nt_ref(nt, id, "receiver");
       TyKind rt = rv >= 0 ? comp_ntype(c, rv) : TY_UNKNOWN;
@@ -8259,6 +8298,10 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
           sp_streq(ty, "AndNode") || sp_streq(ty, "OrNode") || sp_streq(ty, "BreakNode") ||
           sp_streq(ty, "NextNode") || sp_streq(ty, "ReturnNode") || sp_streq(ty, "ArgumentsNode"))
         break;
+      /* a nested while / until: it runs inside this loop's region (it opens
+         none of its own while g_hc is set), so its reads take this header
+         and its slow paths refresh it; its own nodes must qualify too */
+      if ((sp_streq(ty, "WhileNode") || sp_streq(ty, "UntilNode")) && stmt) break;
       return 0;
     }
   }
@@ -8721,6 +8764,33 @@ void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until) {
   }
   free(hcr.wl.v); free(hcr.wi.v);
   g_hoist_len_var = sv_hvar; g_hoist_len_recv = sv_hrecv;
+}
+
+/* An Integer block loop in statement position (emit_iteration_stmt) keeps
+   its arrays' headers as a while loop does: the loop is emitted into the
+   region's own buffer, and hc_iter_end puts the cache in front of it. NULL
+   when there is no region (one is open already, or the loop cannot keep
+   them); *bp then stays the caller's buffer. */
+typedef struct { HcRegion r; Buf buf; Buf *out; } HcIter;
+void *hc_iter_begin(Compiler *c, int id, Buf **bp) {
+  if (g_hc || !hc_block_loop(c, id)) return NULL;
+  HcIter *h = calloc(1, sizeof *h);
+  if (!h) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!hc_block_loop_ok(c, id, &h->r)) { free(h->r.wl.v); free(h->r.wi.v); free(h); return NULL; }
+  h->r.id = ++g_hc_seq;
+  snprintf(h->r.mark, sizeof h->r.mark, "/*@HCR%d@*/", h->r.id);
+  h->out = *bp;
+  g_hc = &h->r; *bp = &h->buf;
+  return h;
+}
+/* `keep`: the loop was emitted (else what it wrote is dropped, as the
+   caller declined) */
+void hc_iter_end(void *hv, Buf **bp, int indent, int keep) {
+  if (!hv) return;
+  HcIter *h = hv;
+  g_hc = NULL; *bp = h->out;
+  if (keep) hc_close(&h->r, h->buf.p ? h->buf.p : "", *bp, indent);
+  free(h->buf.p); free(h->r.wl.v); free(h->r.wi.v); free(h);
 }
 
 static void emit_for_poly_lefts(Compiler *c, int idx, int tv, int indent, Buf *b) {

@@ -5380,7 +5380,11 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int r = emit_iteration_stmt_sn(c, id, b, indent);
     if (r >= 0) return r;
   }
-  return emit_ivar_nil_guarded(c, id, b, indent, emit_iteration_stmt_body);
+  /* an Integer block loop keeps its arrays' headers as a while does */
+  void *hc = hc_iter_begin(c, id, &b);
+  int r = emit_ivar_nil_guarded(c, id, b, indent, emit_iteration_stmt_body);
+  hc_iter_end(hc, &b, indent, r);
+  return r;
 }
 /* Block parameter pj of an each_slice / each_cons row: element pj of the
    row that starts at `_t<ti>` of the array `_t<ta>` (of kind k and type rt)

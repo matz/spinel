@@ -146,8 +146,23 @@ put)
   tmp="$RC_DIR/.tmp.$$.$2"
   cat > "$tmp" && mv -f "$tmp" "$RC_DIR/$2"
   ;;
+claim)
+  mkdir -p "$RC_DIR"
+  mkdir "$RC_DIR/.busy.$2" 2>/dev/null
+  ;;
+release)
+  rmdir "$RC_DIR/.busy.$2" 2>/dev/null
+  exit 0
+  ;;
+await)
+  n=0
+  while [ -d "$RC_DIR/.busy.$2" ] && [ $n -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -f "$RC_DIR/$2" ] || exit 1
+  cat "$RC_DIR/$2"
+  ;;
 prune)
   [ -d "$RC_DIR" ] && find "$RC_DIR" -type f -mtime +"${2:-14}" -delete 2>/dev/null
+  [ -d "$RC_DIR" ] && find "$RC_DIR" -maxdepth 1 -type d -name '.busy.*' -mmin +60 -exec rmdir {} + 2>/dev/null
   exit 0
   ;;
 *)

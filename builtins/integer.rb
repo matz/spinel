@@ -19,19 +19,6 @@
 
 class Integer
   def digits(base = 10)
-    # The receiver's SLOT can carry the SP_INT_NIL / NaN nullable-scalar
-    # sentinel even where its static type is a plain Integer -- an ivar or a
-    # reader over one, a hash miss, `index`, `bsearch`. The C emitters these
-    # definitions replaced tested for it unconditionally; a Ruby body has no
-    # way to see it except by asking, and without the ask the sentinel was
-    # treated as an ordinary number: the receiver's own first operation
-    # raised naming ITS method ("undefined method '<' for nil") and `fdiv`
-    # answered 0.0 where CRuby raises. `.nil?` on a concrete Integer compiles
-    # to exactly that sentinel test, which is what nil's own dispatch would
-    # have done (test/nil_recv_integer_builtin.rb).
-    if self.nil?
-      raise NoMethodError, "undefined method 'digits' for nil"
-    end
     # CRuby's C implementation coerces `base` up front (rb_to_int), raising
     # this exact TypeError for anything that is not already an Integer,
     # before ever comparing it; a plain `base < 0` here would instead ask
@@ -58,10 +45,6 @@ class Integer
   end
 
   def bit_length
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'bit_length' for nil"
-    end
     # A linear shift-and-count loop measured 5x the cost of the C emitter's
     # binary-search reduction (a 200,000,000-call bench, well past the
     # ~10% bound); a first attempt at the same doubling technique
@@ -96,10 +79,6 @@ class Integer
   end
 
   def gcd(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'gcd' for nil"
-    end
     # CRuby rejects anything but an Integer here, Float included (even a
     # whole one), with this exact message, no interpolated class name.
     # The if/else form matters, not just style: a guard-clause shape
@@ -125,10 +104,6 @@ class Integer
   end
 
   def lcm(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'lcm' for nil"
-    end
     if other.is_a?(Integer)
       if self == 0 || other == 0
         0
@@ -144,10 +119,6 @@ class Integer
   end
 
   def gcdlcm(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'gcdlcm' for nil"
-    end
     if other.is_a?(Integer)
       [gcd(other), lcm(other)]
     else
@@ -156,10 +127,6 @@ class Integer
   end
 
   def ceildiv(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'ceildiv' for nil"
-    end
     # CRuby's own algorithm (found by black-box probing a coerce-tracing
     # stub, since there is no source to read here): negate `other` FIRST
     # (a real call to its own unary `-@`, which is why a receiver lacking
@@ -198,10 +165,6 @@ class Integer
   end
 
   def remainder(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'remainder' for nil"
-    end
     # The sign follows the RECEIVER, not the divisor (`%`/modulo's own
     # rule) -- (-7).remainder(3) is -1, (-7) % 3 is 2. `%` already floors
     # correctly for Integer/Float/Bignum/Rational, and correctly runs the
@@ -260,10 +223,6 @@ class Integer
   end
 
   def fdiv(other)
-    # the nullable-scalar sentinel, as in #digits above
-    if self.nil?
-      raise NoMethodError, "undefined method 'fdiv' for nil"
-    end
     # Always a Float, never raising (7.fdiv(0) is Infinity, matching
     # IEEE754 float division, not ZeroDivisionError): `to_f / other`
     # converts the receiver once (a Bignum receiver loses precision the

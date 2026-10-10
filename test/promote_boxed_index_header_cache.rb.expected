@@ -1,0 +1,8 @@
+25
+[0, 10, 20, 30, 40, 50]
+[5, 6, nil, 8]
+nil
+3
+1
+TypeError: no implicit conversion from nil to integer
+[0, 1, 4, 9, 16]

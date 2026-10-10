@@ -228,7 +228,7 @@ typedef enum {
   PC_VOID,        /* no value (a void method, a raise) */
   PC_NUM,         /* a Bignum converted into an Integer or Float result */
   PC_COPY,        /* a shared-mutable String copied into a String result */
-  PC_BOX_OR_NIL,  /* an Integer ivar boxed with its nil sentinel */
+  PC_BOX_OR_NIL,  /* an Integer ivar boxed with its nil (its nil byte) */
   PC_BOX_HANDLE   /* emission observation: PC_BOX retains the String handle */
 } PolyConv;
 

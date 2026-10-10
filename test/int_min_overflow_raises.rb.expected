@@ -1,0 +1,9 @@
+abs: RangeError
+neg: RangeError
+sub: RangeError
+sub n: RangeError
+mul: RangeError
+mul n: RangeError
+add: RangeError
+value: -9223372036854775808
+value nil?: false

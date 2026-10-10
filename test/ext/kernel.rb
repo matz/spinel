@@ -38,6 +38,22 @@ module ExtKernel
     sleep(delay)
     total(arr)
   end
+
+  # A nullable Integer parameter and a nullable Integer return cross the
+  # boundary as sp_oint: nil is the flag beside the word, so every sp_int bit
+  # pattern, INT64_MIN included, is a value.
+  def self.opt_inc(n)
+    n.nil? ? -1 : n + 1
+  end
+
+  def self.find_pos(arr, v)
+    i = 0
+    while i < arr.length
+      return i if arr[i] == v
+      i += 1
+    end
+    nil
+  end
 end
 
 TOPLEVEL_NOTE = "toplevel ran"
@@ -49,4 +65,8 @@ if __FILE__ == $0
   p ExtKernel.must_pos(9)
   p ExtKernel.pair_sum(["ab", "c"], ["def"])
   p ExtKernel.pause_total([1, 2, 3], 0.001)
+  p ExtKernel.opt_inc(nil)
+  p ExtKernel.opt_inc(5)
+  p ExtKernel.find_pos([1, 2], 2)
+  p ExtKernel.find_pos([1, 2], 9)
 end

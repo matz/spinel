@@ -1172,7 +1172,7 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
       for (sp_int i = 0; i < els->len; i++) {
         sp_RbVal e = els->data[i];
         if (e.tag == SP_TAG_INT) sp_IntArray_push(st, e.v.i);
-        else if (e.tag == SP_TAG_NIL) { sp_IntArray_push(st, SP_INT_NIL); sp_IntArray_note_nil(st); }
+        else if (e.tag == SP_TAG_NIL) sp_IntArray_push_nil(st);
         else sp_typed_replace_elem_error(e, "Integer");
       }
       sp_IntArray_replace((sp_IntArray *)recv.v.p, st);
@@ -1184,7 +1184,7 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
         sp_RbVal e = els->data[i];
         if (e.tag == SP_TAG_FLT) sp_FloatArray_push(st, e.v.f);
         else if (e.tag == SP_TAG_INT) sp_FloatArray_push(st, (sp_float)e.v.i);
-        else if (e.tag == SP_TAG_NIL) { sp_FloatArray_push(st, sp_float_nil()); sp_FloatArray_note_nil(st); }
+        else if (e.tag == SP_TAG_NIL) sp_FloatArray_push_nil(st);
         else sp_typed_replace_elem_error(e, "Float");
       }
       sp_FloatArray_replace((sp_FloatArray *)recv.v.p, st);
@@ -1254,8 +1254,8 @@ sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {SP_GC_ROOT_RBVAL(recv);SP
     sp_PolyArray *d = (sp_PolyArray *)recv.v.p;
     d->len = 0;
     switch (src.cls_id) {
-      case SP_BUILTIN_INT_ARRAY: { sp_IntArray *s = (sp_IntArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_box_int_or_nil(s->data[s->start + i])); break; }
-      case SP_BUILTIN_FLT_ARRAY: { sp_FloatArray *s = (sp_FloatArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_box_float_or_nil(s->data[i])); break; }
+      case SP_BUILTIN_INT_ARRAY: { sp_IntArray *s = (sp_IntArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_IntArray_box_elem(s, i)); break; }
+      case SP_BUILTIN_FLT_ARRAY: { sp_FloatArray *s = (sp_FloatArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_FloatArray_box_elem(s, i)); break; }
       case SP_BUILTIN_STR_ARRAY: { sp_StrArray *s = (sp_StrArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_box_str(s->data[i])); break; }
       case SP_BUILTIN_POLY_ARRAY: { sp_PolyArray *s = (sp_PolyArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, s->data[i]); break; }
       case SP_BUILTIN_PTR_ARRAY: { sp_PtrArray *s = (sp_PtrArray *)src.v.p; for (sp_int i = 0; i < s->len; i++) sp_PolyArray_push(d, sp_PtrArray_elem_box(s, s->data[i])); break; }
@@ -1551,19 +1551,17 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
   int16_t kind = 0; /* 0=unknown, SP_BUILTIN_INT_ARRAY, SP_BUILTIN_FLT_ARRAY, SP_BUILTIN_STR_ARRAY */
   /* an Integer column holds nil where a row may (its may_nil) or where a row
      of another kind leaves the slot's nil: decided once per call */
-  unsigned int_col_nil = 0;
-  unsigned flt_col_nil = 0;   /* the same for a Float column, from its Float rows */
   for (sp_int r = 0; r < nrows; r++) {
     sp_RbVal rv = rows->data[r];
     /* a row that is no Array is CRuby's TypeError, not a row of nothing */
     if (!sp_transpose_row_p(rv))
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", sp_transpose_row_class(rv)));
     sp_int rlen = 0;
-    if (rv.cls_id == SP_BUILTIN_INT_ARRAY)  { rlen = ((sp_IntArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_INT_ARRAY; int_col_nil |= SP_MAY_NIL((sp_IntArray *)rv.v.p); }
-    else if (rv.cls_id == SP_BUILTIN_FLT_ARRAY) { rlen = ((sp_FloatArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_FLT_ARRAY; int_col_nil = 1; flt_col_nil |= SP_MAY_NIL((sp_FloatArray *)rv.v.p); }
-    else if (rv.cls_id == SP_BUILTIN_STR_ARRAY) { rlen = ((sp_StrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_STR_ARRAY; int_col_nil = 1; }
-    else if (rv.cls_id == SP_BUILTIN_POLY_ARRAY) { rlen = ((sp_PolyArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; int_col_nil = 1; }
-    else if (rv.cls_id == SP_BUILTIN_PTR_ARRAY) { rlen = ((sp_PtrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; int_col_nil = 1; }   /* a row of rows or objects reads generically (#4486) */
+    if (rv.cls_id == SP_BUILTIN_INT_ARRAY)  { rlen = ((sp_IntArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_INT_ARRAY; }
+    else if (rv.cls_id == SP_BUILTIN_FLT_ARRAY) { rlen = ((sp_FloatArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_FLT_ARRAY; }
+    else if (rv.cls_id == SP_BUILTIN_STR_ARRAY) { rlen = ((sp_StrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_STR_ARRAY; }
+    else if (rv.cls_id == SP_BUILTIN_POLY_ARRAY) { rlen = ((sp_PolyArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; }
+    else if (rv.cls_id == SP_BUILTIN_PTR_ARRAY) { rlen = ((sp_PtrArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; }   /* a row of rows or objects reads generically (#4486) */
     else if (rv.cls_id == SP_BUILTIN_SYM_ARRAY) { rlen = ((sp_IntArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_POLY_ARRAY; }
     if (kind != rv.cls_id) kind = SP_BUILTIN_POLY_ARRAY;
     if (ncols < 0) ncols = rlen;
@@ -1581,12 +1579,12 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
       SP_GC_ROOT(col);
       for (sp_int r = 0; r < nrows; r++) {
         sp_RbVal rv = rows->data[r];
-        sp_int val = SP_INT_NIL;
+        sp_oint val = sp_oint_nil();
         if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_INT_ARRAY) {
           sp_IntArray *row = (sp_IntArray *)rv.v.p;
-          if (c < row->len) val = sp_IntArray_get(row, c);
+          if (c < row->len) val = sp_IntArray_oget(row, c);
         }
-        sp_IntArray_push(col, val);
+        sp_IntArray_push_o(col, val);
       }
       cv.tag = SP_TAG_OBJ; cv.cls_id = SP_BUILTIN_INT_ARRAY; cv.v.p = col;
     }
@@ -1595,12 +1593,12 @@ else if (kind == SP_BUILTIN_FLT_ARRAY) {
       SP_GC_ROOT(col);
       for (sp_int r = 0; r < nrows; r++) {
         sp_RbVal rv = rows->data[r];
-        sp_float val = 0.0;
+        sp_ofloat val = sp_ofloat_nil();
         if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_FLT_ARRAY) {
           sp_FloatArray *row = (sp_FloatArray *)rv.v.p;
-          if (c < row->len) val = row->data[c];
+          if (c < row->len) val = sp_FloatArray_oget(row, c);
         }
-        sp_FloatArray_push(col, val);
+        sp_FloatArray_push_o(col, val);
       }
       cv.tag = SP_TAG_OBJ; cv.cls_id = SP_BUILTIN_FLT_ARRAY; cv.v.p = col;
     }
@@ -1631,11 +1629,11 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
           if (c < row->len) val = row->data[c];
         }
         else if (rv.cls_id == SP_BUILTIN_INT_ARRAY)
-          val = sp_box_int_or_nil(sp_IntArray_get((sp_IntArray *)rv.v.p, c));
+          val = sp_box_oint(sp_IntArray_oget((sp_IntArray *)rv.v.p, c));
         else if (rv.cls_id == SP_BUILTIN_SYM_ARRAY)
           val = sp_box_sym((sp_sym)sp_IntArray_get((sp_IntArray *)rv.v.p, c));
         else if (rv.cls_id == SP_BUILTIN_FLT_ARRAY)
-          val = sp_box_float_or_nil(sp_FloatArray_get((sp_FloatArray *)rv.v.p, c));
+          val = sp_box_ofloat(sp_FloatArray_oget((sp_FloatArray *)rv.v.p, c));
         else if (rv.cls_id == SP_BUILTIN_STR_ARRAY)
           val = sp_box_str(sp_StrArray_get((sp_StrArray *)rv.v.p, c));
         else if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_PTR_ARRAY)
@@ -1646,12 +1644,6 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
     }
     sp_PolyArray_push(result, cv);
   }
-  /* the columns take the rows' nils: marked after the build, so the column
-     loop (65,536 of them in optcarrot's tile table) pays nothing */
-  if (SP_UNLIKELY(int_col_nil) && kind == SP_BUILTIN_INT_ARRAY)
-    for (sp_int c = 0; c < result->len; c++) SP_MAY_NIL((sp_IntArray *)result->data[c].v.p) = 1;
-  if (SP_UNLIKELY(flt_col_nil) && kind == SP_BUILTIN_FLT_ARRAY)
-    for (sp_int c = 0; c < result->len; c++) SP_MAY_NIL((sp_FloatArray *)result->data[c].v.p) = 1;
   return result;
 }
 
@@ -1898,7 +1890,7 @@ sp_StrArray *sp_file_readlines_sep(const char *path, const char *sep, sp_bool ch
 const char *sp_File_readline_sep(sp_File *f, const char *sep, sp_int limit, sp_bool chomp);
 const char *sp_File_getc(sp_File *f);
 const char *sp_File_readchar(sp_File *f);
-sp_int sp_File_getbyte(sp_File *f);
+sp_oint sp_File_getbyte(sp_File *f);
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v);
 const char *sp_File_readpartial(sp_File *f, sp_int n);
 sp_int sp_File_sysseek(sp_File *f, sp_int off, sp_int whence);
@@ -1921,7 +1913,7 @@ const char *sp_sockopt_inspect(sp_SockOpt *o);
 sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose);
 sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind);
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout);
-sp_int sp_file_size_q(const char *path);
+sp_oint sp_file_size_q(const char *path);
 sp_bool sp_file_pipe(const char *path);
 sp_bool sp_file_identical(const char *a, const char *b);
 const char *sp_file_realpath(const char *path);
@@ -1931,7 +1923,7 @@ sp_int sp_file_truncate(const char *path, sp_int n);
 sp_int sp_file_write_at(const char *path, const char *data, sp_int off);
 sp_int sp_file_write_mode(const char *path, const char *data, const char *mode);
 sp_File *sp_File_open_flags(const char *path, sp_int fl);
-sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm);
+sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_oint perm);
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
 sp_int sp_file_stat_mode(const char *path);
@@ -2109,11 +2101,11 @@ const char *sp_File_readchar(sp_File *f) {SP_GC_ROOT(f);
   if (!r) sp_raise_cls("EOFError", "end of file reached");
   return r;
 }
-sp_int sp_File_getbyte(sp_File *f) {
+sp_oint sp_File_getbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
   int ch = fgetc(f->fp);
-  return ch == EOF ? SP_INT_NIL : (sp_int)ch;
+  return ch == EOF ? sp_oint_nil() : sp_oint_of((sp_int)ch);
 }
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
   SP_IO_OPEN(f);
@@ -2199,10 +2191,10 @@ sp_bool sp_file_executable(const char *path) {SP_GC_ROOT_STR(path); return sp_fi
 sp_bool sp_file_readable_real(const char *path)   { return access(path ? path : "", R_OK) == 0; }
 sp_bool sp_file_writable_real(const char *path)   { return access(path ? path : "", W_OK) == 0; }
 sp_bool sp_file_executable_real(const char *path) { return access(path ? path : "", X_OK) == 0; }
-sp_int sp_file_size_q(const char *path) {   /* Integer size, or nil for missing/empty */
+sp_oint sp_file_size_q(const char *path) {   /* Integer size, or nil for missing/empty */
   struct stat st;
-  if (stat(path ? path : "", &st) != 0 || st.st_size == 0) return SP_INT_NIL;
-  return (sp_int)st.st_size;
+  if (stat(path ? path : "", &st) != 0 || st.st_size == 0) return sp_oint_nil();
+  return sp_oint_of((sp_int)st.st_size);
 }
 sp_bool sp_file_pipe(const char *path) {
   struct stat st;
@@ -2346,9 +2338,8 @@ static int sp_open_fifo_aware(const char *path, int fl, mode_t perm) {
     { struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000; nanosleep(&ts, NULL); }
   }
 }
-sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm) {SP_GC_ROOT_STR(path);
-  if (perm == SP_INT_NIL) perm = 0666;
-  int fd = sp_open_fifo_aware(path ? path : "", (int)fl | O_CLOEXEC, (mode_t)perm);
+sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_oint perm) {SP_GC_ROOT_STR(path);
+  int fd = sp_open_fifo_aware(path ? path : "", (int)fl | O_CLOEXEC, (mode_t)(perm.nil ? 0666 : perm.v));
   if (fd < 0) sp_file_open_raise(path);
   int acc = (int)fl & O_ACCMODE;
   const char *m = (acc == O_RDONLY) ? "r"
@@ -2360,15 +2351,15 @@ sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm) {SP_G
   return f;
 }
 sp_File *sp_File_open_flags(const char *path, sp_int fl) {
-  return sp_File_open_flags_perm(path, fl, 0666);
+  return sp_File_open_flags_perm(path, fl, sp_oint_of(0666));
 }
 /* File.open(path, "w", perm): the mode string selects the open(2) flags the
    way fopen(3) reads it -- `+` for read-write, `x` for exclusive creation --
    so the permission bits reach the syscall as they do for the flag-word
    form. The mode is checked before the file is opened, so a bad one raises
-   CRuby's ArgumentError and leaves no descriptor behind. A nil perm (SP_INT_NIL)
-   is CRuby's default, 0666. */
-sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
+   CRuby's ArgumentError and leaves no descriptor behind. A nil perm is
+   CRuby's default, 0666. */
+sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
   const char *m = mode && mode[0] ? mode : "r";
   int fl;
   switch (m[0]) {
@@ -2384,8 +2375,7 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm) {SP_
       sp_raise_cls("ArgumentError", sp_sprintf("invalid access mode %s", m)); return NULL;
     }
   }
-  if (perm == SP_INT_NIL) perm = 0666;
-  int fd = sp_open_fifo_aware(path ? path : "", fl | O_CLOEXEC, (mode_t)perm);
+  int fd = sp_open_fifo_aware(path ? path : "", fl | O_CLOEXEC, (mode_t)(perm.nil ? 0666 : perm.v));
   if (fd < 0) sp_file_open_raise(path);
   /* fdopen reads its own mode grammar ("wx+" is write-only to it): hand it
      the access mode the flag word says, as the flags form does */
@@ -2514,8 +2504,10 @@ sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
 }
 /* One stat(2) field by index, so File::Stat's numeric accessors need one
    runtime entry rather than a dozen. 0=uid 1=gid 2=nlink 3=dev 4=ino
-   5=blksize 6=blocks 7=rdev. SP_INT_NIL when the stat itself fails. */
-sp_int sp_stat_field(sp_File *f, sp_int which) {SP_GC_ROOT(f);
+   5=blksize 6=blocks 7=rdev. nil when the stat itself fails. */
+static sp_int sp_stat_field_n(sp_File *f, sp_int which, int *ok);
+sp_oint sp_stat_field(sp_File *f, sp_int which) {SP_GC_ROOT(f); int ok = 1; sp_int n = sp_stat_field_n(f, which, &ok); return ok ? sp_oint_of(n) : sp_oint_nil(); }
+static sp_int sp_stat_field_n(sp_File *f, sp_int which, int *ok) {SP_GC_ROOT(f);
   struct stat st;
   int r;
   if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
@@ -2523,7 +2515,7 @@ sp_int sp_stat_field(sp_File *f, sp_int which) {SP_GC_ROOT(f);
     const char *p = (f && f->path) ? f->path : "";
     r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   }
-  if (r != 0) return SP_INT_NIL;
+  if (r != 0) { *ok = 0; return 0; }
   switch (which) {
     case 0: return (sp_int)st.st_uid;
     case 1: return (sp_int)st.st_gid;
@@ -2601,7 +2593,7 @@ sp_int sp_stat_pred(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
     const char *p = (f && f->path) ? f->path : "";
     r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   }
-  if (r != 0) return kind == 7 ? SP_INT_NIL : 0;
+  if (r != 0) return 0;
   switch (kind) {
     case 0: return S_ISFIFO(st.st_mode) ? 1 : 0;
     case 1: return st.st_size == 0 ? 1 : 0;
@@ -2610,8 +2602,14 @@ sp_int sp_stat_pred(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
     case 4: return (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ? 1 : 0;
     case 5: return S_ISBLK(st.st_mode) ? 1 : 0;
     case 6: return S_ISCHR(st.st_mode) ? 1 : 0;
-    default: return st.st_size == 0 ? SP_INT_NIL : (sp_int)st.st_size;
+    default: return 0;
   }
+}
+/* File::Stat#size?: the size when the stat succeeds and it is not 0, else nil (was kind 7) */
+sp_oint sp_stat_size(sp_File *f);
+sp_oint sp_stat_size_q(sp_File *f) {SP_GC_ROOT(f);
+  sp_oint n = sp_stat_size(f);
+  return (n.nil || n.v == 0) ? sp_oint_nil() : n;
 }
 /* File#truncate(n): ftruncate(2) on the open descriptor, which is what CRuby
    does -- the class-method form truncates by path and cannot serve a handle
@@ -2638,13 +2636,13 @@ sp_int sp_File_truncate(sp_File *f, sp_int n) {SP_GC_ROOT(f);
     sp_raise_cls("Errno::EINVAL", "Invalid argument @ rb_file_truncate");
   return 0;
 }
-sp_int sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
+sp_oint sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
   if (sp_stat_pathless(f))
-    return fstat(fileno(f->fp), &st) == 0 ? (sp_int)st.st_size : SP_INT_NIL;
+    return fstat(fileno(f->fp), &st) == 0 ? sp_oint_of((sp_int)st.st_size) : sp_oint_nil();
   const char *p = (f && f->path) ? f->path : "";
   int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
-  return r == 0 ? (sp_int)st.st_size : SP_INT_NIL;
+  return r == 0 ? sp_oint_of((sp_int)st.st_size) : sp_oint_nil();
 }
 sp_int sp_stat_mode(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
@@ -3201,12 +3199,12 @@ sp_int sp_io_copy_stream(const char *src, const char *dst) {SP_GC_ROOT_STR(src);
 
 /* Array#combination / permutation over an int array (lib-only; the recursion
    helpers stay file-static, the four entry points are declared in spinel_rt.h). */
-static void sp_int_combination_recur(sp_IntArray*src,sp_int start,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_MAY_NIL(cp)=SP_MAY_NIL(src);for(sp_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(sp_int i=start;i<=src->len-k;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_combination_recur(src,i+1,k-1,acc,out);acc->len--;}}
+static void sp_int_combination_recur(sp_IntArray*src,sp_int start,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(sp_int i=0;i<acc->len;i++)sp_IntArray_push_o(cp,sp_IntArray_oget(acc,i));sp_PtrArray_push(out,cp);return;}for(sp_int i=start;i<=src->len-k;i++){sp_IntArray_push_o(acc,sp_IntArray_oget(src,i));sp_int_combination_recur(src,i+1,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_combination(sp_IntArray*a,sp_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_combination_recur(a,0,k,acc,out);return out;}
-static void sp_int_repeated_combination_recur(sp_IntArray*src,sp_int start,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_MAY_NIL(cp)=SP_MAY_NIL(src);for(sp_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(sp_int i=start;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_combination_recur(src,i,k-1,acc,out);acc->len--;}}
+static void sp_int_repeated_combination_recur(sp_IntArray*src,sp_int start,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(sp_int i=0;i<acc->len;i++)sp_IntArray_push_o(cp,sp_IntArray_oget(acc,i));sp_PtrArray_push(out,cp);return;}for(sp_int i=start;i<src->len;i++){sp_IntArray_push_o(acc,sp_IntArray_oget(src,i));sp_int_repeated_combination_recur(src,i,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_combination(sp_IntArray*a,sp_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_combination_recur(a,0,k,acc,out);return out;}
-static void sp_int_permutation_recur(sp_IntArray*src,sp_int k,sp_IntArray*used,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(used);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_MAY_NIL(cp)=SP_MAY_NIL(src);for(sp_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(sp_int i=0;i<src->len;i++){if(used->data[used->start+i])continue;used->data[used->start+i]=1;sp_IntArray_push(acc,src->data[src->start+i]);sp_int_permutation_recur(src,k-1,used,acc,out);acc->len--;used->data[used->start+i]=0;}}
-static void sp_int_repeated_permutation_recur(sp_IntArray*src,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_MAY_NIL(cp)=SP_MAY_NIL(src);SP_GC_ROOT(cp);for(sp_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(sp_int i=0;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
+static void sp_int_permutation_recur(sp_IntArray*src,sp_int k,sp_IntArray*used,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(used);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(sp_int i=0;i<acc->len;i++)sp_IntArray_push_o(cp,sp_IntArray_oget(acc,i));sp_PtrArray_push(out,cp);return;}for(sp_int i=0;i<src->len;i++){if(used->data[used->start+i])continue;used->data[used->start+i]=1;sp_IntArray_push_o(acc,sp_IntArray_oget(src,i));sp_int_permutation_recur(src,k-1,used,acc,out);acc->len--;used->data[used->start+i]=0;}}
+static void sp_int_repeated_permutation_recur(sp_IntArray*src,sp_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_GC_ROOT(cp);for(sp_int i=0;i<acc->len;i++)sp_IntArray_push_o(cp,sp_IntArray_oget(acc,i));sp_PtrArray_push(out,cp);return;}for(sp_int i=0;i<src->len;i++){sp_IntArray_push_o(acc,sp_IntArray_oget(src,i));sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_permutation(sp_IntArray*a,sp_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_permutation_recur(a,k,acc,out);return out;}
 sp_PtrArray*sp_IntArray_permutation(sp_IntArray*a,sp_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*used=sp_IntArray_new();SP_GC_ROOT(used);for(sp_int i=0;i<a->len;i++)sp_IntArray_push(used,0);sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_permutation_recur(a,k,used,acc,out);return out;}
 sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) {SP_GC_ROOT(e); sp_gc_wb((void*)e);
@@ -3674,25 +3672,30 @@ sp_bool sp_range_frozen(sp_RbVal v) {
    exclusive range stops one short of `last`, so the upper bound is
    `last - excl` (excl is 0 or 1). */
 sp_bool sp_range_include(sp_Range *r, sp_int x){SP_GC_ROOT(r);
-  /* beginless/endless sentinels (INTPTR_MIN/MAX) clamp one side open */
-  if (r->first == INTPTR_MIN || r->last == INTPTR_MAX) {
-    if (r->first != INTPTR_MIN && x < r->first) return 0;
-    if (r->last != INTPTR_MAX && (r->excl ? x >= r->last : x > r->last)) return 0;
+  /* a beginless/endless side (nobeg/noend) clamps one side open */
+  if (r->nobeg || r->noend) {
+    if (r->nobeg == 0 && x < r->first) return 0;
+    if (r->noend == 0 && (r->excl ? x >= r->last : x > r->last)) return 0;
     return 1;
   }
   /* a Float end: an Integer is in it when the walk reaches it */
   if (r->fe) return x >= r->first && (r->excl ? x < r->last : x <= r->last);
-  sp_int lo=sp_range_min_v(*r),hi=sp_range_max_v(*r);
-  return sp_range_count(*r)>0 && lo<=x && x<=hi;
+  /* a plain (step 1) range compares x against its bounds directly: its
+     count overflows the word for a span past 2**63 ((-2**63..0) has
+     2**63 + 1 members), and the empty-range test read that as empty */
+  if (r->step == 0 || r->step == 1) return x >= r->first && (r->excl ? x < r->last : x <= r->last);
+  if(sp_range_count(*r)<=0)return FALSE;
+  sp_oint lo=sp_range_min_v(*r),hi=sp_range_max_v(*r);
+  return !lo.nil && !hi.nil && lo.v<=x && x<=hi.v;
 }
 /* A Float is compared against the bounds as a Float, never truncated: 2.5 is
    not in 1..2. The sentinels leave their side open, as in sp_range_include. */
 sp_bool sp_range_cover_f(sp_Range *r, sp_float x){
   if (x != x) return 0;   /* NaN is in no range */
   /* an Integer bound against x exactly (#7505): a double past 2^53 rounds */
-  if (r->first!=INTPTR_MIN && sp_int_flt_cmp(r->first, x) > 0) return 0;
+  if (r->nobeg == 0 && sp_int_flt_cmp(r->first, x) > 0) return 0;
   if (r->fe) return r->fe==2?x<r->fend:x<=r->fend;
-  if (r->last==INTPTR_MAX) return 1;
+  if (r->noend) return 1;
   int c = sp_int_flt_cmp(r->last, x);
   return r->excl ? c > 0 : c >= 0;}
 sp_Range sp_range_new_fend(sp_int f, sp_float e, sp_int x) {
@@ -3720,16 +3723,16 @@ void sp_range_fend_max_raise(sp_Range r) {
 /* Range#inspect: as #to_s, except that a range with NO bound at either end
    names them -- CRuby prints "nil..nil", not ".." (#3670). */
 const char *sp_range_inspect(sp_Range r) {
-  if (r.first == INTPTR_MIN && r.last == INTPTR_MAX)
+  if (r.nobeg && r.noend)
     return r.excl ? (&("\xff" "nil...nil")[1]) : (&("\xff" "nil..nil")[1]);
   return sp_range_str(r);
 }
 const char *sp_range_str(sp_Range r) {
   if (r.fe) return sp_sprintf("%lld%s%s", (long long)r.first, r.fe == 2 ? "..." : "..", sp_float_to_s(r.fend));
   const char *dots = r.excl ? "..." : "..";
-  if (r.first == INTPTR_MIN && r.last == INTPTR_MAX) return dots;
-  if (r.first == INTPTR_MIN) return sp_sprintf("%s%lld", dots, (long long)r.last);
-  if (r.last == INTPTR_MAX)  return sp_sprintf("%lld%s", (long long)r.first, dots);
+  if (r.nobeg && r.noend) return dots;
+  if (r.nobeg) return sp_sprintf("%s%lld", dots, (long long)r.last);
+  if (r.noend)  return sp_sprintf("%lld%s", (long long)r.first, dots);
   return sp_sprintf("%lld%s%lld", (long long)r.first, dots, (long long)r.last);
 }
 
@@ -3805,10 +3808,10 @@ sp_int sp_int_bit_range(sp_int n, sp_int start, sp_int len) {
   return (sp_int)((uint64_t)shifted & mask);
 }
 /* sp_int_to_s / sp_float_to_s moved to sp_alloc.h (shared so lib/sp_json.c can
-   format numbers). String-interpolation of an int slot: a nil sentinel renders
+   format numbers). String-interpolation of a nullable int slot: nil renders
    as the empty string (CRuby interpolates nil as ""), every other value as its
    decimal. */
-const char*sp_int_interp(sp_int n){return n==SP_INT_NIL?sp_str_empty:sp_int_to_s(n);}
+const char*sp_int_interp(sp_oint n){return n.nil?sp_str_empty:sp_int_to_s(n.v);}
 const char*sp_int_to_s_base(sp_int n,sp_int base){if(base<2||base>36)sp_raise_cls("ArgumentError",sp_sprintf("invalid radix %lld",(long long)base));char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}
 else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}
 else{while(u>0){sp_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;sp_str_set_len(b,(size_t)j);return b;}
@@ -3816,15 +3819,9 @@ else{while(u>0){sp_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;i
    nil: `nil.to_s` is "" while `nil.inspect` is "nil". For a real
    integer they agree (Integer#to_s and #inspect are both the decimal
    form). Two wrappers keep call-site emit local. */
-const char *sp_int_opt_inspect(sp_int v) { return sp_int_is_nil(v) ? "nil" : sp_int_to_s(v); }
-const char *sp_int_opt_to_s(sp_int v)    { return sp_int_is_nil(v) ? "" : sp_int_to_s(v); }
-SP_NORETURN void sp_raise_nil_int_op(sp_int a, sp_int b, const char *op);
+const char *sp_int_opt_inspect(sp_oint v) { return v.nil ? "nil" : sp_int_to_s(v.v); }
+const char *sp_int_opt_to_s(sp_oint v)    { return v.nil ? "" : sp_int_to_s(v.v); }
 sp_int sp_int_pow(sp_int base, sp_int exp) {
-  /* A nil operand (the SP_INT_NIL sentinel, INTPTR_MIN) raises as it does for
-     the other operators (SP_INT_NIL_CK, which sp_idiv and sp_imod run): ahead
-     of the exponent's sign, since the sentinel is negative, so `3 ** nil`
-     answered RangeError "negative exponent" and `nil ** 2` an overflow. */
-  if (SP_UNLIKELY(base == SP_INT_NIL || exp == SP_INT_NIL)) sp_raise_nil_int_op(base, exp, "**");
   if (exp < 0) sp_raise_cls("RangeError", "negative exponent");
   /* Exact square-and-multiply (the old pow(double) round-trip lost precision
      above 2^53 and saturated on overflow). Overflow follows the +/-/* mode:
@@ -4114,14 +4111,14 @@ sp_RbVal sp_box_srange(sp_StrRange v) {
 
 /* ---- Float leaf ops (opt_inspect/opt_to_s/denominator/numerator/
    to_i_checked) -- relocated from spinel_rt.h. 0 optcarrot uses; reach
-   only lib-visible sp_float_is_nil (sp_types.h)/sp_float_to_s (sp_alloc.h)/
+   only lib-visible sp_float_to_s (sp_alloc.h)/
    sp_float_to_rational (sp_format.h)/sp_raise_cls/sp_sprintf. ---- */
 
 /* float? (nullable float) counterparts: a non-nil value formats exactly
    like a plain Float (delegates to sp_float_to_s), nil renders "nil"
    (inspect) / "" (to_s). */
-const char *sp_float_opt_inspect(sp_float v) { return sp_float_is_nil(v) ? "nil" : sp_float_to_s(v); }
-const char *sp_float_opt_to_s(sp_float v)    { return sp_float_is_nil(v) ? "" : sp_float_to_s(v); }
+const char *sp_float_opt_inspect(sp_ofloat v) { return v.nil ? "nil" : sp_float_to_s(v.v); }
+const char *sp_float_opt_to_s(sp_ofloat v)    { return v.nil ? "" : sp_float_to_s(v.v); }
 /* Float#numerator / #denominator. A non-finite Float has no rational form, so
    CRuby answers the value itself and 1 rather than converting (#3011). */
 sp_int sp_float_denominator(sp_float f) {
@@ -4151,15 +4148,6 @@ void sp_float_arg_range_error(sp_float f) {
 
 /* ---- Box helpers (0 optcarrot uses) -- relocated from spinel_rt.h. ---- */
 
-/* An element read back out of a TYPED array boxes at the runtime read, which
-   has no room for the sentinel check the hot path cannot afford. Where analyze
-   knows a particular receiver's elements can hold one, it wraps that read in
-   this: the correction is paid at the marked site only (#3505). */
-sp_RbVal sp_unsentinel(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
-  if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL) return sp_box_nil();
-  if (v.tag == SP_TAG_FLT && sp_float_is_nil(v.v.f)) return sp_box_nil();
-  return v;
-}
 /* box a sp_Bigint* into a poly slot (heterogeneous container element, or a
    promote-mode overflow result). */
 extern int sp_bigint_mag_u64(sp_Bigint *b, uint64_t *out);   /* 1 iff |b| < 2^64 */
@@ -4188,7 +4176,7 @@ int64_t sp_unbox_i64(sp_RbVal v) {
   return 0;
 }
 sp_RbVal sp_box_i64(int64_t v) {
-  if (v >= (int64_t)INTPTR_MIN && v <= (int64_t)INTPTR_MAX && (sp_int)v != SP_INT_NIL) return sp_box_int((sp_int)v);
+  if (v >= (int64_t)INTPTR_MIN && v <= (int64_t)INTPTR_MAX) return sp_box_int((sp_int)v);
   return sp_box_bigint(sp_bigint_new_int(v));
 }
 sp_RbVal sp_box_encoding(sp_Encoding e) { sp_RbVal r; r.tag = SP_TAG_ENCODING; r.cls_id = 0; r.v.s = sp_encoding_name(e); return r; }
@@ -5162,30 +5150,16 @@ sp_Class sp_unbox_class(sp_RbVal v) {
   { sp_Class c = {(sp_int)v.cls_id}; return c; }
 }
 
-/* Arithmetic reached an int slot still holding the nil sentinel -- a container
-   read that missed. That value is nil, so CRuby's NoMethodError is the answer,
-   not a computation on INTPTR_MIN. */
-SP_NORETURN void sp_raise_nil_int_op(sp_int a, sp_int b, const char *op) {SP_GC_ROOT_STR(op);
-  (void)b;
-  if (a == SP_INT_NIL)
-    sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for nil", op));
-  /* nil on the RIGHT is the coercion failure CRuby reports from Integer#+ */
-  sp_raise_cls("TypeError", "nil can't be coerced into Integer");
-}
-
+/* The nil of a nullable slot on the RIGHT of an arithmetic operator: the
+   coercion failure CRuby reports from Integer#+ / Float#+ (the left side's
+   nil is NoMethodError, raised by sp_nil_recv through sp_oint_val). */
 SP_NORETURN void sp_raise_nil_opnd(const char *cls) {SP_GC_ROOT_STR(cls);
   sp_raise_cls("TypeError", sp_sprintf("nil can't be coerced into %s", cls));
 }
 
-SP_NORETURN void sp_raise_nil_to_float(void) {
-  sp_raise_cls("TypeError", "can't convert nil into Float");
-}
-
-/* A comparison whose operand is the int or float nil sentinel: nil on the
-   LEFT has no `<`, and nil on the right is the Comparable failure CRuby
-   reports from Integer#< / Float#<. The sentinel compared as a number
-   before, so `nil > 0` on a nullable Integer slot answered false where
-   every arithmetic operator already raised (#4567). */
+/* A comparison whose operand is nil: nil on the LEFT has no `<`, and nil on
+   the right is the Comparable failure CRuby reports from Integer#< /
+   Float#< (#4567). */
 SP_NORETURN void sp_raise_nil_cmp(int left_nil, const char *op, const char *cls) {SP_GC_ROOT_STR(op);SP_GC_ROOT_STR(cls);
   if (left_nil)
     sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for nil", op));
@@ -5205,10 +5179,9 @@ SP_NORETURN void sp_raise_nil_to_int(int of_wording) {
                                          : "no implicit conversion from nil to integer");
 }
 
-/* A real -2^63 headed for a slot that can also hold nil: the slot's nil is
-   that very word (SP_INT_NIL), so the store would read back as nil. */
-SP_NORETURN void sp_raise_int_min_slot(void) {
-  sp_raise_cls("RangeError", "integer -9223372036854775808 collides with the nil of a nullable Integer slot");
+/* A nil that reached a strict Float argument slot */
+SP_NORETURN void sp_raise_nil_to_float(void) {
+  sp_raise_cls("TypeError", "can't convert nil into Float");
 }
 
 SP_NORETURN void sp_raise_nil_float_op(int left_nil, const char *op) {SP_GC_ROOT_STR(op);

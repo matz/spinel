@@ -1,0 +1,19 @@
+hash key :one
+hash nil key :none
+array 6
+array nil key TypeError: no implicit conversion from nil to integer
+nil receiver, nil key NoMethodError: undefined method '[]' for nil
+put hash nil key {1 => :one, nil => :n}
+put array [1, 9, 3]
+put array nil key TypeError: no implicit conversion from nil to integer
+put nil receiver, nil key NoMethodError: undefined method '[]=' for nil
+bump [1, 3, 3]
+bump nil key TypeError: no implicit conversion from nil to integer
+bump nil receiver, nil key NoMethodError: undefined method '[]' for nil
+memo hash nil key 7
+memo array nil key TypeError: no implicit conversion from nil to integer
+loop 40
+loop nil key TypeError: no implicit conversion from nil to integer
+loop nil receiver NoMethodError: undefined method '[]' for nil
+loop nil receiver, nil key NoMethodError: undefined method '[]' for nil
+loop no pass 0

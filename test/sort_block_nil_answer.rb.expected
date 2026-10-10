@@ -1,0 +1,9 @@
+sort [1, 3, 2, 0]
+sort nan ArgumentError: comparison of Integer with 1 failed
+min 1
+max 0
+max nan ArgumentError: comparison of Integer with 0 failed
+sort nil answer ArgumentError: comparison of Integer with 2 failed
+min nil answer ArgumentError: comparison of Integer with 3 failed
+float sort [0.5, 1.5, 2.5]
+float sort nan ArgumentError: comparison of Float with NaN failed

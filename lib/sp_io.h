@@ -80,7 +80,7 @@ int sp_io_make_pipe(int fds[2]);
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File. */
 sp_File *sp_io_fdopen(int fd, const char *mode);
 sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);
-sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm);
+sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   /* a nil perm is CRuby's default, 0666 */
 /* Wrap a connected/listening socket fd. Reads stay on the buffered FILE* so
    #gets and friends work; writes bypass stdio straight to write(2), matching
    CRuby sockets' sync = true. `kind` labels the handle ("tcp", "tcpserver",
@@ -131,11 +131,12 @@ const char *sp_io_kind_name(sp_File *f);
 sp_File *sp_sock_accept(sp_File *f);
 sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc);
 const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv, sp_bool *eof);
-sp_int sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc);
-sp_int sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc);
-sp_int sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc);
+/* the byte count, or nil when the call would block (exception: false) */
+sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc);
+sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc);
+sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc);
 /* Addrinfo-form connect_nonblock (already-resolved endpoint) */
-sp_int sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen,
+sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen,
                                  sp_bool exc);
 sp_bool sp_io_is_a(sp_File *f, const char *cls);
 /* Of the reopened IO classes names[] (NULL-ended), the one nearest the
@@ -223,8 +224,8 @@ sp_bool sp_file_sticky(const char *path);
 sp_bool sp_file_socket(const char *path);
 sp_bool sp_file_blockdev(const char *path);
 sp_bool sp_file_chardev(const char *path);
-sp_int sp_file_world_readable(const char *path);
-sp_int sp_file_world_writable(const char *path);
+sp_oint sp_file_world_readable(const char *path);
+sp_oint sp_file_world_writable(const char *path);
 sp_int sp_file_do_symlink(const char *oldp, const char *newp);
 sp_int sp_file_do_link(const char *oldp, const char *newp);
 sp_int sp_file_umask(sp_int mask, int have_arg);

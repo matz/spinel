@@ -312,7 +312,7 @@ static int poly_user_arm0_decide(Compiler *c, int id, const char *name, int argc
 void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b) {
   if (!repr_share_rule(c) || m->ret != TY_STRING ||
       (!m->ret_handle && !(m->ret_fresh && share_node_shares(c, id) && !share_node_transient(c, id)))) {
-    emit_boxed_text(c, m->ret, call, b);
+    emit_boxed_ret_call(c, m, call, b);   /* an oint return boxes with its nil */
     return;
   }
   Buf hb; memset(&hb, 0, sizeof hb);
@@ -330,9 +330,18 @@ void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b)
 /* One user-class arm of a zero-argument poly dispatch, as the plan (or the
    decision above) gives it: `case k:` writing the result temp _t<tr> from
    receiver _t<tv>, the arm's value fitted to the call's type ret. */
+/* The zero-argument dispatch's result slot holds its nil beside the value
+   (an sp_oint / sp_ofloat, declared so by the dispatcher) where the call's
+   consumer wants that form: an arm's plain value is wrapped as never nil,
+   a boxed one unboxed with its nil, an oint one assigned as it is. */
+static int plan_slot_oint(Compiler *c, int id, TyKind ret) { return is_scalar_ret(ret) && oint_kind(ret) && node_is_oint(c, id); }
+static void plan_put_plain(int so, TyKind ret, const char *text, Buf *b) { if (so) buf_printf(b, "%s(%s)", oint_of(ret), text); else buf_puts(b, text); }
+static void plan_put_boxed(Compiler *c, int so, TyKind slotty, const char *text, Buf *b) { if (so) buf_printf(b, "%s(%s)", oint_unbox(slotty), text); else emit_unbox_text(c, slotty, text, b); }
+
 static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind ret, int tv, int tr,
                                 int blk_tmp0, const PolyArm *a, Buf *b) {
   int k = a->key, mi = a->mi;
+  int so = plan_slot_oint(c, id, ret);
   if (a->kind == PA_NATIVE || (a->kind == PA_ARITY && mi < 0)) {
     int nmi = comp_native_method_find(c, k, name, 0, 0);
     if (a->kind == PA_NATIVE) {
@@ -351,10 +360,11 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
         buf_printf(b, "_t%d = ", tr);
         if (ret == TY_POLY && mret != TY_POLY) { emit_boxed_text(c, mret, nbuf, b); pconv = PC_BOX; }
         else if (ret != TY_POLY && mret == TY_POLY) {
-          emit_unbox_poly_ret(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
+          if (so) buf_printf(b, "%s(%s)", oint_unbox(ret), nbuf);
+          else emit_unbox_poly_ret(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
           pconv = PC_UNBOX;
         }
-        else buf_puts(b, nbuf);
+        else plan_put_plain(so, ret, nbuf, b);
       }
       buf_puts(b, "; break;");
       if (g_plan_check) pa_observe(PA_NATIVE, k, -1, mret, pconv);
@@ -508,13 +518,21 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
       }
       /* The slot is scalar (e.g. a length dispatch fixed to sp_int) but
          this class's method widened its return to poly: coerce down. */
-      else if (ret != TY_POLY && cret9 == TY_POLY) { emit_unbox_poly_ret(c, slotty, call, b); pconv = PC_UNBOX; }
+      else if (ret != TY_POLY && cret9 == TY_POLY) {
+        if (so) buf_printf(b, "%s(%s)", oint_unbox(slotty), call);
+        else emit_unbox_poly_ret(c, slotty, call, b);
+        pconv = PC_UNBOX;
+      }
       /* Two classes own the name and answer different types (one an
          Integer, another a Bignum): the slot took one of them, so the
          odd arm converts into it rather than emitting a type error. */
-      else if (slotty == TY_INT && cret9 == TY_BIGINT) { buf_printf(b, "sp_bigint_to_int(%s)", call); pconv = PC_NUM; }
-      else if (slotty == TY_FLOAT && cret9 == TY_BIGINT) { buf_printf(b, "sp_bigint_to_double(%s)", call); pconv = PC_NUM; }
-      else buf_puts(b, call);
+      else if (slotty == TY_INT && cret9 == TY_BIGINT) { if (so) buf_puts(b, "sp_oint_of("); buf_printf(b, "sp_bigint_to_int(%s)", call); if (so) buf_puts(b, ")"); pconv = PC_NUM; }
+      else if (slotty == TY_FLOAT && cret9 == TY_BIGINT) { if (so) buf_puts(b, "sp_ofloat_of("); buf_printf(b, "sp_bigint_to_double(%s)", call); if (so) buf_puts(b, ")"); pconv = PC_NUM; }
+      /* a callee that answers its nil beside the value hands the slot its own form */
+      else if (so && method_ret_is_oint(&c->scopes[pf9 ? pfi9 : mi])) buf_puts(b, call);
+      /* an oint answer into a plain slot: unwrapped */
+      else if (method_ret_is_oint(&c->scopes[pf9 ? pfi9 : mi])) buf_printf(b, "%s(%s)", oint_arg(cret9), call);
+      else plan_put_plain(so, ret, call, b);
     }
     buf_puts(b, "; break;");
     free(cb.p);
@@ -531,17 +549,26 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
   TyKind ivt = ivx >= 0 ? c->classes[rdcls].ivar_types[ivx] : TY_INT;
   buf_printf(b, " case %d: _t%d = ", k, tr);
   int pconv = PC_SAME;
-  /* an int ivar is SP_INT_NIL-defaulted: box the sentinel as nil
-     (#3288); or_nil is a no-op on a real int */
-  if (ret == TY_POLY && ivt == TY_INT) {
-    buf_printf(b, "sp_box_int_or_nil(%s)", fld);
+  /* an Integer / Float ivar with a nil bit boxes as nil where its bit is
+     set (#3288); a plain one boxes its value */
+  if (ret == TY_POLY && oint_kind(ivt) && ivx >= 0 && ivar_has_nilbit(c, rdcls, ivx)) {
+    char objp[200]; snprintf(objp, sizeof objp, "((sp_%s *)_t%d.v.p)->", c->classes[rdcls].c_name, tv);
+    char bit[400]; ivar_nilbit_test(c, rdcls, ivx, objp, bit, sizeof bit);
+    buf_printf(b, "(%s ? sp_box_nil() : %s(%s))", bit, ivt == TY_INT ? "sp_box_int" : "sp_box_float", fld);
+    pconv = PC_BOX_OR_NIL;
+  }
+  /* an oint slot takes the field with its bit: nil where the bit is set */
+  else if (so && oint_kind(ivt) && ivx >= 0 && ivar_has_nilbit(c, rdcls, ivx)) {
+    char objp[200]; snprintf(objp, sizeof objp, "((sp_%s *)_t%d.v.p)->", c->classes[rdcls].c_name, tv);
+    char bit[400]; ivar_nilbit_test(c, rdcls, ivx, objp, bit, sizeof bit);
+    buf_printf(b, "(%s ? %s : %s(%s))", bit, oint_nil(ret), oint_of(ret), fld);
     pconv = PC_BOX_OR_NIL;
   }
   else if (ret == TY_POLY && ivt != TY_POLY) { emit_boxed_text(c, ivt, fld, b); pconv = PC_BOX; }
   /* The slot is scalar (e.g. a length dispatch fixed to sp_int) but
      this class's ivar widened to poly: coerce down. */
   else if (ret != TY_POLY && ivt == TY_POLY) {
-    emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, fld, b);
+    plan_put_boxed(c, so, is_scalar_ret(ret) ? ret : TY_INT, fld, b);
     pconv = PC_UNBOX;
   }
   /* shared-mutable ivar read into a plain string slot: the safe
@@ -550,7 +577,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
     buf_printf(b, "sp_strbuf_read(%s)", fld);
     pconv = PC_COPY;
   }
-  else buf_puts(b, fld);
+  else plan_put_plain(so, ret, fld, b);
   buf_puts(b, "; break;");
   if (g_plan_check) pa_observe(PA_READER, k, -1, ivt, pconv);
 }
@@ -955,7 +982,7 @@ static int poly_user_arm_n_replay(Compiler *c, int id, const char *name, const P
   int pf8 = pfi8 >= 0;
   TyKind mret8 = pf8 ? c->scopes[pfi8].ret : mret;
   int pconv = emit_poly_user_arm_n(c, id, k, cb.p, mret8, &c->scopes[pf8 ? pfi8 : mi], ret, tr,
-                                   is_setter_val, b);
+                                   plan_slot_oint(c, id, ret), is_setter_val, b);
   free(cb.p);
   if (g_plan_check) pa_observe(pf8 ? PA_PROC_FORM : PA_USER, k, mi, mret8, pconv);
   return 1;
@@ -1112,7 +1139,7 @@ static void emit_poly_user_arm_n_plan(Compiler *c, int id, const char *name, con
   int pf8 = pfi8 >= 0;
   TyKind mret8 = pf8 ? c->scopes[pfi8].ret : mret;
   int pconv = emit_poly_user_arm_n(c, id, k, cb.p, mret8, &c->scopes[pf8 ? pfi8 : mi], ret, tr,
-                                   is_setter_val, b);
+                                   plan_slot_oint(c, id, ret), is_setter_val, b);
   free(cb.p);
   if (g_plan_check) pa_observe(pf8 ? PA_PROC_FORM : PA_USER, k, mi, mret8, pconv);
 }
@@ -1242,7 +1269,7 @@ void emit_poly_user_arms_n(Compiler *c, int id, const char *name, const PolyUser
    result temp _t<tr> as the call's type ret takes it. The conversion
    applied (PolyConv). */
 int emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mret, Scope *ms, TyKind ret,
-                         int tr, int is_setter_val, Buf *b) {
+                         int tr, int so, int is_setter_val, Buf *b) {
   int conv = PC_SAME;
   buf_printf(b, " case %d: ", k);
   if (is_setter_val || mret == TY_VOID || mret == TY_NIL || method_is_void(ms)) {
@@ -1257,10 +1284,14 @@ int emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mr
     buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY && mret != TY_POLY) { emit_poly_user_box(c, id, ms, call, b); conv = PC_BOX; }
     else if (ret != TY_POLY && mret == TY_POLY) {
-      emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, call, b);
+      plan_put_boxed(c, so, is_scalar_ret(ret) ? ret : TY_INT, call, b);
       conv = PC_UNBOX;
     }
-    else buf_puts(b, call);
+    /* so: the result slot is an sp_oint / sp_ofloat (plan_slot_oint) */
+    else if (ms && ms->ret == mret && method_ret_is_oint(ms)) {
+      if (so) buf_puts(b, call); else buf_printf(b, "%s(%s)", oint_arg(mret), call);
+    }
+    else plan_put_plain(so, ret, call, b);
   }
   buf_puts(b, "; break;");
   return conv;
@@ -1268,17 +1299,19 @@ int emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mr
 
 /* The builtin array arms of a poly `x[i]`: the element at index expression
    idxref, into the result temp. */
-void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, Buf *b) {
+void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int so, Buf *b) {
   if (ret == TY_POLY) {
     /* An Integer or Float array answers a nil element, and any index
-       past its end, with its sentinel: the _or_nil box reads that as
-       nil. The plain box made `x[9]` the sentinel as a number -- nil?
-       false, and NaN for a Float array. */
-    buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_box_int_or_nil(sp_IntArray_get((sp_IntArray *)_t%d.v.p, %s)); break;", tr, tv, idxref);
+       past its end, as nil: the _oget read, boxed */
+    buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_box_oint(sp_IntArray_oget((sp_IntArray *)_t%d.v.p, %s)); break;", tr, tv, idxref);
     buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = sp_box_str(sp_StrArray_get((sp_StrArray *)_t%d.v.p, %s)); break;", tr, tv, idxref);
-    buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = sp_box_float_or_nil(sp_FloatArray_get((sp_FloatArray *)_t%d.v.p, %s)); break;", tr, tv, idxref);
+    buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = sp_box_ofloat(sp_FloatArray_oget((sp_FloatArray *)_t%d.v.p, %s)); break;", tr, tv, idxref);
     buf_printf(b, " case SP_BUILTIN_POLY_ARRAY: _t%d = sp_PolyArray_get((sp_PolyArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
     buf_printf(b, " case SP_BUILTIN_PTR_ARRAY: _t%d = sp_PtrArray_get_box((sp_PtrArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
+  }
+  /* so: the result slot is an sp_oint, which takes a nil element and a miss */
+  else if (so) {
+    buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_oget((sp_IntArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
   }
   else {
     buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_get((sp_IntArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
@@ -1430,14 +1463,16 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
         if (method_is_void(&c->scopes[obj_pf])) { buf_puts(b, oc.p); pconv = PC_VOID; }
         else {
           buf_printf(b, "_t%d = ", tr);
+          int so = plan_slot_oint(c, id, ret);
           if (ret == TY_POLY && pr != TY_POLY) {
             emit_poly_user_box(c, id, &c->scopes[obj_pf], oc.p, b); pconv = PC_BOX;
           }
           else if (ret != TY_POLY && pr == TY_POLY) {
-            emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, oc.p, b);
+            plan_put_boxed(c, so, is_scalar_ret(ret) ? ret : TY_INT, oc.p, b);
             pconv = PC_UNBOX;
           }
-          else buf_puts(b, oc.p);
+          else if (so && method_ret_is_oint(&c->scopes[obj_pf])) buf_puts(b, oc.p);
+          else plan_put_plain(so, ret, oc.p, b);
         }
         buf_puts(b, "; break;");
         free(oc.p);
@@ -1465,16 +1500,19 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
         if (method_is_void(&c->scopes[obj_mi])) { buf_puts(b, ocall); pconv = PC_VOID; }
         else {
           TyKind oslot = is_scalar_ret(ret) ? ret : TY_INT;
+          int so = plan_slot_oint(c, id, ret);
           buf_printf(b, "_t%d = ", tr);
           if (ret == TY_POLY && c->scopes[obj_mi].ret != TY_POLY) {
             emit_poly_user_box(c, id, &c->scopes[obj_mi], ocall, b);
             pconv = PC_BOX;
           }
           else if (ret != TY_POLY && c->scopes[obj_mi].ret == TY_POLY) {
-            emit_unbox_text(c, oslot, ocall, b);
+            plan_put_boxed(c, so, oslot, ocall, b);
             pconv = PC_UNBOX;
           }
-          else buf_puts(b, ocall);
+          else if (so && method_ret_is_oint(&c->scopes[obj_mi])) buf_puts(b, ocall);
+          else if (method_ret_is_oint(&c->scopes[obj_mi])) buf_printf(b, "%s(%s)", oint_arg(c->scopes[obj_mi].ret), ocall);
+          else plan_put_plain(so, ret, ocall, b);
         }
         buf_puts(b, "; break;");
         free(ob.p);
@@ -1558,8 +1596,10 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   int is_io_rewind = ps->io_rewind;
   /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
      length-like answer is boxed */
-  const char *bopen = (ret == TY_POLY) ? "sp_box_int(" : "";
-  const char *bclose = (ret == TY_POLY) ? ")" : "";
+  /* ...and an oint result slot (plan_slot_oint) takes it lifted */
+  int lso = ret == TY_INT && plan_slot_oint(c, id, ret);
+  const char *bopen = (ret == TY_POLY) ? "sp_box_int(" : lso ? "sp_oint_of(" : "";
+  const char *bclose = (ret == TY_POLY || lso) ? ")" : "";
   const char *ebopen = (ret == TY_POLY) ? "sp_box_bool(" : "";
   const char *ebclose = (ret == TY_POLY) ? ")" : "";
   /* string/symbol-tagged poly values answer length/size directly */
@@ -1572,9 +1612,13 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
        NoMethodError). This chain is built when a user class owns the
        name too, and its default arm raised for the File the same
        program keeps beside those objects in one Hash (#4734). */
-    if (sp_streq(name, "size"))
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO) _t%d = %ssp_poly_size(_t%d)%s; else ",
-                 tv, tv, tr, bopen, tv, bclose);
+    if (sp_streq(name, "size")) {
+      /* sp_poly_size answers an sp_oint: boxed with its nil, bare into an
+         oint slot, unwrapped (TypeError for nil) into a plain one */
+      const char *so = ret == TY_POLY ? "sp_box_oint(" : plan_slot_oint(c, id, ret) ? "(" : "sp_oint_arg(";
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO) _t%d = %ssp_poly_size(_t%d)); else ",
+                 tv, tv, tr, so, tv);
+    }
   }
   /* a string/symbol-tagged poly value answers empty? directly (#1438) */
   if (is_empty) {
@@ -1711,7 +1755,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   if (argc == 0 && nt_ref(nt, id, "block") < 0) {
     /* the readers answer what the typed receiver's arms answer: gets and
        getc a nil-able String (NULL boxes to nil), getbyte an Integer or
-       the nil sentinel, readline/readchar/readbyte raise EOFError */
+       nil (an oint), readline/readchar/readbyte raise EOFError */
     const BuiltinZeroOp *io_op = bop_zero_find(TY_IO, name);
     /* a bare puts writes the newline and answers nil (#6158) */
     if (sp_streq(name, "puts")) {
@@ -1732,7 +1776,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
          it, an exactly matching concrete slot takes it raw, anything else
          keeps the call for its effect and leaves the seed */
       if (ret == TY_POLY && sp_streq(name, "getbyte"))
-        buf_printf(b, "_t%d = sp_box_int_or_nil(%s)", tr, ioex);
+        buf_printf(b, "_t%d = sp_box_oint(%s)", tr, ioex);
       else if (ret == TY_POLY && io_op->result != TY_VOID) {
         buf_printf(b, "_t%d = ", tr);
         emit_boxed_text(c, io_op->result, ioex, b);
@@ -1950,8 +1994,10 @@ void emit_poly_cases0(Compiler *c, int id, int recv, const char *name, const Pol
                       TyKind ret, int tv, int tr, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc = 0, is_empty = ps->empty;
-  const char *bopen = (ret == TY_POLY) ? "sp_box_int(" : "";
-  const char *bclose = (ret == TY_POLY) ? ")" : "";
+  /* ...and an oint result slot (plan_slot_oint) takes it lifted */
+  int lso = ret == TY_INT && plan_slot_oint(c, id, ret);
+  const char *bopen = (ret == TY_POLY) ? "sp_box_int(" : lso ? "sp_oint_of(" : "";
+  const char *bclose = (ret == TY_POLY || lso) ? ")" : "";
   const char *ebopen = (ret == TY_POLY) ? "sp_box_bool(" : "";
   const char *ebclose = (ret == TY_POLY) ? ")" : "";
   /* built-in array receivers reaching a length-like poly dispatch */
@@ -2364,7 +2410,7 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
       snprintf(qv, sizeof qv, qf, tv, tv);
       buf_printf(b, " case SP_BUILTIN_QUEUE: _t%d = ", tr);
       if (ret == TY_POLY) buf_puts(b, qv);
-      else emit_unbox_text(c, ret, qv, b);
+      else plan_put_boxed(c, plan_slot_oint(c, id, ret), is_scalar_ret(ret) ? ret : TY_INT, qv, b);
       buf_puts(b, "; break;");
     }
   }
@@ -3232,7 +3278,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   int is_pjoin = ps->pjoin, is_include = ps->include, is_arr_index = ps->arr_index;
   int is_intersect = ps->intersect, is_strftime = ps->strftime, is_pred = ps->pred;
   if (is_index) {
-    emit_poly_index_cases(ret, tr, tv, idxref, b);
+    emit_poly_index_cases(ret, tr, tv, idxref, plan_slot_oint(c, id, ret), b);
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_INDEX_CASES, -1, TY_UNKNOWN, PC_SAME);
   }
   /* IO#write on a poly value when a user class owns the name: a Socket or
@@ -3699,20 +3745,19 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
          reaches these; a mismatched tag is simply not a member). */
       buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = %ssp_range_cover_poly((sp_Range *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
       buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = %ssp_frange_cover_poly(*(sp_FloatRange *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
-      /* a boxed nil is the typed array's sentinel, which the search
-         finds wherever a nil was stored */
+      /* a boxed nil finds the typed array's nil elements */
       buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %s(_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_NIL) &&"
-                    " sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d.tag == SP_TAG_NIL ? SP_INT_NIL : _t%d.v.i)%s; break;",
-                 tr, ibo, atmp[0], atmp[0], tv, atmp[0], atmp[0], ibc);
+                    " sp_IntArray_include_o((sp_IntArray *)_t%d.v.p, sp_poly_as_int_or_nil(_t%d))%s; break;",
+                 tr, ibo, atmp[0], atmp[0], tv, atmp[0], ibc);
       buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = %s(_t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_NIL) &&"
-                    " sp_FloatArray_include((sp_FloatArray *)_t%d.v.p, _t%d.tag == SP_TAG_NIL ? sp_float_nil() : _t%d.v.f)%s; break;",
-                 tr, ibo, atmp[0], atmp[0], tv, atmp[0], atmp[0], ibc);
+                    " sp_FloatArray_include_o((sp_FloatArray *)_t%d.v.p, sp_poly_as_float_or_nil(_t%d))%s; break;",
+                 tr, ibo, atmp[0], atmp[0], tv, atmp[0], ibc);
       buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %s_t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
       break;
     case TY_NIL:
-      /* an Integer or Float array holds nil as its sentinel */
-      buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, SP_INT_NIL)%s; break;", tr, ibo, tv, ibc);
-      buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = %ssp_FloatArray_include((sp_FloatArray *)_t%d.v.p, sp_float_nil())%s; break;", tr, ibo, tv, ibc);
+      /* is there a nil element */
+      buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %ssp_IntArray_has_nil((sp_IntArray *)_t%d.v.p)%s; break;", tr, ibo, tv, ibc);
+      buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = %ssp_FloatArray_has_nil((sp_FloatArray *)_t%d.v.p)%s; break;", tr, ibo, tv, ibc);
       break;
     default: break;
     }
@@ -3755,19 +3800,19 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
                 " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
                 " case SP_BUILTIN_POLY_ARRAY: case SP_BUILTIN_PTR_ARRAY: {");
-    buf_printf(b, " sp_int _t%d = sp_poly_arr_index_val(_t%d, %s, %d); _t%d = ",
+    buf_printf(b, " sp_oint _t%d = sp_poly_arr_index_val(_t%d, %s, %d); _t%d = ",
                tix, tv, ab4.p ? ab4.p : "sp_box_nil()",
                sp_streq(name, "rindex") ? 1 : 0, tr);
-    if (ret == TY_INT) buf_printf(b, "_t%d", tix);
-    else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tix, tix);
+    if (ret == TY_INT) buf_printf(b, "%s_t%d%s", node_is_oint(c, id) ? "" : "sp_oint_arg(", tix, node_is_oint(c, id) ? "" : ")");
+    else buf_printf(b, "sp_box_oint(_t%d)", tix);
     buf_puts(b, "; break; }");
     /* an Enumerator's find_index walks it only as far as the hit */
     if (sp_streq(name, "find_index")) {
       int tix2 = ++g_tmp;
-      buf_printf(b, " case SP_BUILTIN_ENUMERATOR: { sp_int _t%d = sp_enum_find_index_val(_t%d, %s); _t%d = ",
+      buf_printf(b, " case SP_BUILTIN_ENUMERATOR: { sp_oint _t%d = sp_enum_find_index_val(_t%d, %s); _t%d = ",
                  tix2, tv, ab4.p ? ab4.p : "sp_box_nil()", tr);
-      if (ret == TY_INT) buf_printf(b, "_t%d", tix2);
-      else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tix2, tix2);
+      if (ret == TY_INT) buf_printf(b, "%s_t%d%s", node_is_oint(c, id) ? "" : "sp_oint_arg(", tix2, node_is_oint(c, id) ? "" : ")");
+      else buf_printf(b, "sp_box_oint(_t%d)", tix2);
       buf_puts(b, "; break; }");
     }
     free(ab4.p);
@@ -3880,8 +3925,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     buf_printf(b, " case SP_BUILTIN_SYM_POLY_HASH: _t%d = sp_SymPolyHash_has_key((sp_SymPolyHash *)_t%d.v.p, _t%d) ? ", tr, tv, atmp[0]);
     if (ret == TY_POLY) buf_puts(b, getx);
     else if (trt == TY_STRING) buf_printf(b, "sp_poly_to_s(%s)", getx);
-    else if (trt == TY_FLOAT) buf_printf(b, "sp_poly_to_f_or_nil(%s)", getx);
-    else if (trt == TY_INT) buf_printf(b, "sp_poly_to_i_or_nil(%s)", getx);
+    else if (trt == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", getx);
+    else if (trt == TY_INT) buf_printf(b, "sp_poly_to_i(%s)", getx);
     else buf_printf(b, "sp_poly_to_i(%s)", getx);
     buf_puts(b, " : ");
     if (is_fetch) emit_poly_fetch_absent(c, argc, atmp, argc == 2 ? atmp_ty[1] : TY_UNKNOWN, argv[0], ret, trt, b);
@@ -4199,23 +4244,22 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
           emit_boxed_text(c, atmp_ty[1], on, &ob);
           snprintf(sx, sizeof sx, "sp_poly_arg_int_chk(%s)", ob.p ? ob.p : "sp_box_nil()"); free(ob.p); }
         buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
-                      " sp_int _t%d = sp_poly_str_index_from_val(_t%d, %s, %s, %d); _t%d = ",
+                      " sp_oint _t%d = sp_poly_str_index_from_val(_t%d, %s, %s, %d); _t%d = ",
                    tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()", sx,
                    sp_streq(name, "rindex") ? 1 : 0, tr);
-        /* the result slot carries whatever the call was inferred as: the
-           nullable int rides raw (SP_INT_NIL is its nil), a poly slot boxes */
-        if (ret == TY_POLY)
-          buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
-        else buf_printf(b, "_t%d", tsi);
+        /* the result slot carries whatever the call was inferred as: a
+           nullable Integer rides as its oint, a poly slot boxes */
+        if (ret == TY_POLY) buf_printf(b, "sp_box_oint(_t%d)", tsi);
+        else buf_printf(b, "%s_t%d%s", node_is_oint(c, id) ? "" : "sp_oint_arg(", tsi, node_is_oint(c, id) ? "" : ")");
         buf_puts(b, "; break; }");
       }
       else {
         buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
-                      " sp_int _t%d = sp_poly_str_index_val(_t%d, %s, %d); _t%d = ",
+                      " sp_oint _t%d = sp_poly_str_index_val(_t%d, %s, %d); _t%d = ",
                    tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()",
                    sp_streq(name, "rindex") ? 1 : 0, tr);
-        if (ret == TY_INT) buf_printf(b, "_t%d", tsi);
-        else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
+        if (ret == TY_INT) buf_printf(b, "%s_t%d%s", node_is_oint(c, id) ? "" : "sp_oint_arg(", tsi, node_is_oint(c, id) ? "" : ")");
+        else buf_printf(b, "sp_box_oint(_t%d)", tsi);
         buf_puts(b, "; break; }");
       }
       free(ab5.p);
@@ -4230,10 +4274,10 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
       { char tn7[32]; snprintf(tn7, sizeof tn7, "_t%d", atmp[0]);
         if (atmp_ty[0] == TY_POLY) buf_puts(&ab7, tn7);
         else emit_boxed_text(c, atmp_ty[0], tn7, &ab7); }
-      buf_printf(b, " { sp_int _t%d; if (sp_poly_enum_find_index_val(_t%d, %s, &_t%d)) { _t%d = ",
+      buf_printf(b, " { sp_oint _t%d; if (sp_poly_enum_find_index_val(_t%d, %s, &_t%d)) { _t%d = ",
                  tsi, tv, ab7.p ? ab7.p : "sp_box_nil()", tsi, tr);
-      if (ret == TY_INT) buf_printf(b, "_t%d", tsi);
-      else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
+      if (ret == TY_INT) buf_printf(b, "%s_t%d%s", node_is_oint(c, id) ? "" : "sp_oint_arg(", tsi, node_is_oint(c, id) ? "" : ")");
+      else buf_printf(b, "sp_box_oint(_t%d)", tsi);
       buf_puts(b, "; break; } }");
       free(ab7.p);
     }

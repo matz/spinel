@@ -98,41 +98,18 @@ int repr_dyn_cls(const Compiler *c, TyKind t) {
   return 0;
 }
 
-/* An Integer or Float node whose box has to test for the nil sentinel, as
-   emit_boxed decides it: the analysis's answer for the node
-   (nullable_int_value, through call_returns_nullable_int, which also reads
-   a local's slot and a builtin's name), an Integer ivar read (every one is
-   nil-initialized), a parameter bound from such an ivar (box_nullable_arg),
-   a node in a Ruby-defined builtin (enum_builtin_node), and every Integer
-   under --int-overflow=promote.
-   nullable_int_value re-derives a receiver's type (infer_type), so the
-   questions are asked as a pure read (an_pure_read_begin): nothing derived
-   is recorded, and asking changes nothing codegen reads next. */
-/* An Integer literal, or an Integer operator's answer, is never nil: its
-   box does not test for the sentinel, which is -2^63 and so an Integer
-   promote mode answers (`-9223372036854775807 - 1` boxed as nil). */
-static int int_never_nil(const Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_IntegerNode) return 1;
-  if (k != NK_CallNode || nt_ref(nt, node, "receiver") < 0) return 0;
-  const char *nm = nt_str(nt, node, "name");
-  int argc = 0;
-  call_args(nt, node, &argc);
-  return nm && argc == 1 && (is_int_arith_op(nm) || is_int_bit_op(nm));
-}
+/* An Integer or Float node whose box has to test for nil, as emit_boxed
+   decides it: the node has an oint form (node_has_oint_form), the value
+   carrying its nil beside it.
+   The analysis re-derives a receiver's type (infer_type) to answer, so the
+   question is asked as a pure read (an_pure_read_begin): nothing derived is
+   recorded, and asking changes nothing codegen reads next. */
 
 int repr_nil_scalar(const Compiler *c, int node, TyKind t) {
   Compiler *mc = (Compiler *)c;
   int r = 0;
   an_pure_read_begin();
-  if (t == TY_INT)
-    r = (g_promote_mode && !int_never_nil(c, node)) || call_returns_nullable_int(mc, node) ||
-        nt_kind(c->nt, node) == NK_InstanceVariableReadNode ||
-        box_nullable_arg(mc, node) || enum_builtin_node(mc, node);
-  else if (t == TY_FLOAT)
-    r = call_returns_nullable_int(mc, node) || box_nullable_arg(mc, node) ||
-        enum_builtin_node(mc, node);
+  if (t == TY_INT || t == TY_FLOAT) r = node_has_oint_form(mc, node);
   an_pure_read_end();
   return r;
 }
@@ -444,8 +421,8 @@ int repr_box_nullable_arg(Compiler *c, int v) {
   return 0;
 }
 
-/* A local that was assigned a nilable Integer result carries the sentinel
-   just as the call did: `i = s.index("z")` then `i == nil` has to answer
+/* A local that was assigned a nilable Integer result holds its nil as the
+   call's answer did: `i = s.index("z")` then `i == nil` has to answer
    true. The analysis marks the local (call_returns_nullable_int's local
    arm). */
 int repr_local_nullable_int(Compiler *c, int node) {
@@ -493,7 +470,7 @@ Repr repr_of(const Compiler *c, int node) {
   r.kind = (unsigned char)repr_kind_of_type(c, kt);
   r.dyn_cls = repr_dyn_cls(c, kt);
   if (repr_nil_scalar(c, node, kt)) {
-    r.kind = RK_SENTINEL;
+    r.kind = RK_OPT;
     r.may_nil = r.nil_scalar = 1;
   }
   r.strbuf_src = (unsigned char)repr_strbuf_src(c, node, kt);
@@ -528,7 +505,7 @@ ReprForm repr_box_form(const Compiler *c, Repr r) {
   switch ((ReprKind)r.kind) {
   case RK_NONE:     return RF_NIL_EFFECT;
   case RK_BOXED:    return RF_PASS;
-  case RK_SENTINEL: return t == TY_FLOAT ? RF_FLT_NIL : RF_INT_NIL;
+  case RK_OPT: return t == TY_FLOAT ? RF_FLT_NIL : RF_INT_NIL;
   case RK_STRUCT:   return RF_STRUCT;
   case RK_VOBJ:     return RF_VOBJ;
   case RK_STRBUF:
@@ -591,8 +568,8 @@ int repr_store_class(const Compiler *c, TyKind t) {
    false: it is written as it is there, and into an operand a builtin
    converts itself (CO_CONVERT), whose nilable forms read the 0 as they
    always have. Any other nil value -- a call that answers nil, kept for its
-   effect -- and a nil into a variable whose nil is a sentinel (an Integer,
-   a Float, a Symbol) takes the slot's nil. */
+   effect -- and a nil into a variable whose nil is not a 0 (an Integer or
+   a Float, its nil beside the value; a Symbol) takes the slot's nil. */
 int repr_store_nil_fits(Compiler *c, int node, TyKind slot, int how) {
   return node >= 0 && nt_kind(c->nt, node) == NK_NilNode &&
          (repr_store_class(c, slot) == SC_PTR || slot == TY_BOOL ||
@@ -888,13 +865,8 @@ void repr_channel_free(Compiler *c) {
 
 ReprKind repr_slot_kind(const Compiler *c, const LocalVar *lv) {
   if (!lv) return RK_NONE;
-  /* an Integer or Float slot some write leaves nil in: its sentinel; under
-     --int-overflow=promote every Integer can be the sentinel, as every
-     Integer read is (repr_nil_scalar) */
-  if ((lv->type == TY_INT || lv->type == TY_FLOAT) &&
-      (lv->nullable_int || lv->box_nullable || lv->maybe_unset ||
-       (lv->type == TY_INT && g_promote_mode)))
-    return RK_SENTINEL;
+  /* an Integer or Float slot that holds its nil beside the value */
+  if (slot_is_oint(lv)) return RK_OPT;
   return repr_kind_of_type(c, lv->type);
 }
 Repr repr_of_slot(const Compiler *c, const LocalVar *lv) {
@@ -907,9 +879,7 @@ Repr repr_of_slot(const Compiler *c, const LocalVar *lv) {
   r.ty = r.as_ty = lv->type;
   repr_layout(&r, lv->type);
   ReprKind k = repr_slot_kind(c, lv);
-  /* a sentinel slot's box tests for it, as a read of it does
-     (repr_nil_scalar) */
-  if (k == RK_SENTINEL) r.may_nil = r.nil_scalar = 1;
+  if (k == RK_OPT) r.may_nil = r.nil_scalar = 1;
   /* a `||=` can read the slot before any write: nil until then */
   if (lv->or_written) r.may_nil = 1;
   /* a pointer slot that can hold nil (repr_may_nil) */
@@ -1319,15 +1289,15 @@ int g_dump_repr = 0;
 
 static const char *repr_kind_name(int k) {
   static const char *const names[] = {
-    "none", "scalar", "sentinel", "struct", "vobj", "ptr", "strbuf", "boxed",
+    "none", "scalar", "opt", "struct", "vobj", "ptr", "strbuf", "boxed",
   };
   return k >= 0 && k <= RK_BOXED ? names[k] : "?";
 }
 
-/* an ivar's slot: every Integer ivar reads nil until written, as
-   repr_nil_scalar answers for its reads; a Float one when some write can
-   leave the sentinel, or when initialize does not write it (a Struct
-   member among them), which its reads box nil-aware (box_nullable_arg) */
+/* an ivar's slot: an Integer or Float one keeps its nil in its nil byte
+   (ivar_has_nilbit) when some write can leave nil in it, or when it can be
+   read before any write (initialize does not write it, Class#allocate
+   makes the object), which its reads box nil-aware (box_nullable_arg) */
 Repr repr_of_ivar(const Compiler *c, int cid, int iv) {
   const ClassInfo *ci = &c->classes[cid];
   Repr r;
@@ -1336,10 +1306,8 @@ Repr repr_of_ivar(const Compiler *c, int cid, int iv) {
   r.narrowed = TY_UNKNOWN;
   repr_layout(&r, r.ty);
   r.kind = (unsigned char)repr_kind_of_type(c, r.ty);
-  if (r.ty == TY_INT ||
-      (r.ty == TY_FLOAT && (ci->ivar_nullable_int[iv] ||
-                            !ivar_assigned_in_initialize((Compiler *)c, cid, ci->ivars[iv])))) {
-    r.kind = RK_SENTINEL;
+  if (ivar_has_nilbit((Compiler *)c, cid, iv)) {
+    r.kind = RK_OPT;
     r.may_nil = r.nil_scalar = 1;
   }
   if (repr_may_nil(r.ty, nil_fact_ivar(c, cid, ci->ivars[iv]))) r.may_nil = 1;
@@ -1362,13 +1330,11 @@ Repr repr_of_ivar(const Compiler *c, int cid, int iv) {
 }
 
 /* a class variable's slot, as an ivar's: an Integer or Float one some
-   write leaves nil in holds the sentinel, and under --int-overflow=promote
-   every Integer one, as every Integer read is (repr_nil_scalar) */
+   write leaves nil in is an oint (cvar_is_oint) */
 ReprKind repr_cvar_kind(const Compiler *c, int cid, int idx) {
   const ClassInfo *ci = &c->classes[cid];
   TyKind t = ci->cvar_types[idx];
-  if ((t == TY_INT || t == TY_FLOAT) && (ci->cvar_nullable_int[idx] || (t == TY_INT && g_promote_mode)))
-    return RK_SENTINEL;
+  if (cvar_is_oint((Compiler *)c, cid, idx)) return RK_OPT;
   return repr_kind_of_type(c, t);
 }
 /* Only the rule makes a class variable the shared handle
@@ -1383,7 +1349,7 @@ Repr repr_of_cvar(const Compiler *c, int cid, int idx) {
   r.narrowed = r.elem = r.key = r.val = TY_UNKNOWN;
   repr_layout(&r, r.ty);
   r.kind = (unsigned char)repr_cvar_kind(c, cid, idx);
-  if (r.kind == RK_SENTINEL) r.may_nil = r.nil_scalar = 1;
+  if (r.kind == RK_OPT) r.may_nil = r.nil_scalar = 1;
   if (repr_may_nil(r.ty, 1)) r.may_nil = 1;
   if (r.ty == TY_STRBUF && ci->cvar_str_shared[idx]) r.handle = 1;
   r.share = r.handle && c->share_strings;
@@ -1392,8 +1358,8 @@ Repr repr_of_cvar(const Compiler *c, int cid, int idx) {
   return r;
 }
 
-/* a method's value: its nilable scalar is the sentinel, and under
-   --int-overflow=promote every Integer, as every Integer read is */
+/* a method's value: its nilable scalar (ret_nullable_int, or an RBS
+   signature's `?`) is an oint */
 Repr repr_of_ret(const Compiler *c, const Scope *sc) {
   Repr r;
   memset(&r, 0, sizeof r);
@@ -1401,9 +1367,8 @@ Repr repr_of_ret(const Compiler *c, const Scope *sc) {
   r.narrowed = TY_UNKNOWN;
   repr_layout(&r, r.ty);
   r.kind = (unsigned char)repr_kind_of_type(c, r.ty);
-  if ((r.ty == TY_INT || r.ty == TY_FLOAT) &&
-      (sc->ret_nullable_int || sc->ret_rbs_nilable || (r.ty == TY_INT && g_promote_mode))) {
-    r.kind = RK_SENTINEL;
+  if ((r.ty == TY_INT || r.ty == TY_FLOAT) && (sc->ret_nullable_int || sc->ret_rbs_nilable)) {
+    r.kind = RK_OPT;
     r.may_nil = r.nil_scalar = 1;
   }
   if (repr_may_nil(r.ty, sc->ret_obj_may_nil)) r.may_nil = 1;

@@ -1,4 +1,5 @@
 #include "analyze_internal.h"
+#include "builtin_ops.h"
 #include "call_plan.h"
 #include "repr.h"
 int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
@@ -6761,7 +6762,7 @@ static TyKind bound_source_type(Compiler *c, int src, const LocalVar *p) {
    callees, and their parameters are not bound from it. A splat, a `...` or a
    keyword hash a method without keywords takes as a positional leave the
    count open, and a method that may take it is kept. */
-static int method_takes_call_args(Compiler *c, Scope *m, int call_id) {
+int method_takes_call_args(Compiler *c, Scope *m, int call_id) {
   const NodeTable *nt = c->nt;
   int args = nt_ref(nt, call_id, "arguments");
   int n = 0;
@@ -6909,7 +6910,7 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
     if (at == TY_VOID) at = TY_POLY;
     /* A nil arg narrows against an object param (NULL encodes nil), and
        against a String, Integer or Float one, whose slots carry nil the same
-       way (NULL, SP_INT_NIL, the float sentinel: ty_unify's nil joins). Any
+       way (NULL, the nil flag of an sp_oint / sp_ofloat: ty_unify's nil joins). Any
        other non-object param widens to poly. */
     if (at == TY_NIL && p->type != TY_UNKNOWN && p->type != TY_NIL && !ty_is_object(p->type) &&
         p->type != TY_STRING && p->type != TY_INT && p->type != TY_FLOAT) at = TY_POLY;
@@ -8983,6 +8984,21 @@ static int infer_param_types_ex(Compiler *c, int settle) {
         }
       }
     }
+    /* A builtin-typed receiver (an Integer, a Symbol, a String, ...) calling
+       a method the program adds to Object that no builtin row serves:
+       codegen's Object fallback reaches it, so the call's arguments type its
+       parameters -- a nil among them included (`12.enc(nil)` into a plain
+       Integer parameter was refused at the store). */
+    if (name && !ty_is_object(rt) && rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_VOID && rt != TY_NIL) {
+      int oci4 = comp_class_index(c, "Object");
+      int mi4 = oci4 >= 0 ? comp_method_in_class(c, oci4, name) : -1;
+      if (mi4 >= 0) {
+        int a4 = nt_ref(nt, id, "arguments"); int ac4 = 0;
+        if (a4 >= 0) nt_arr(nt, a4, "arguments", &ac4);
+        if (!bop_find(rt, name, ac4, nt_ref(nt, id, "block") >= 0))
+          changed |= bind_call_params(c, id, mi4);
+      }
+    }
     if (ty_is_object(rt)) {
       int cid3 = ty_object_class(rt);
       int mi3 = comp_method_in_chain(c, cid3, name, NULL);
@@ -9138,7 +9154,7 @@ static TyKind for_local_other_writes(Compiler *c, LocalVar *lv, const char *vn, 
     }
     if (wt == TY_UNKNOWN || wt == TY_VOID) continue;
     TyKind u = ty_unify(et, wt);
-    /* a nullable scalar needs the nil-sentinel marking a plain local gets */
+    /* a nullable scalar needs the nil marking a plain local gets */
     if (wt == TY_NIL && (u == TY_INT || u == TY_FLOAT)) u = TY_POLY;
     et = u;
   }
@@ -9812,7 +9828,7 @@ static TyKind bs_value(Compiler *c, int v) {
 
 /* One more value `v` into a positional's type `a`. A literal nil is the
    exception to bs_join's box: a positional's binders write an Integer
-   slot's own nil (SP_INT_NIL) for it, as they do for a missing value, so it
+   slot's own nil (the sp_oint's flag) for it, as they do for a missing value, so it
    only records BS_NIL in *flags, for the parameter's settling to judge
    whether the slot can hold it (block_settle_types, cs_type_params). Only a
    literal: a value typed nil this round, an ivar nothing but the
@@ -9820,12 +9836,17 @@ static TyKind bs_value(Compiler *c, int v) {
    Integer parameter settled beside it stayed one after the box it took.
    An Integer or a Float value that may be nil (nullable_int_value: `i == 0
    ? nil : i`, a missed element read) records BS_NIL beside its type: it is
-   emitted as the slot's sentinel when it is nil, which the binders hand
-   through as they do a literal's. */
+   emitted as the slot's nil (the oint's flag) when it is nil, which the
+   binders hand through as they do a literal's. */
+int promote_boxed_var_read(Compiler *c, int v);   /* analyze.c */
 static TyKind bs_join_val(Compiler *c, TyKind a, int v, char *flags) {
   if (v >= 0 && nt_kind(c->nt, v) == NK_NilNode) { *flags |= BS_NIL; return a; }
   TyKind t = bs_value(c, v);
   if ((t == TY_INT || t == TY_FLOAT) && nullable_int_value(c, v)) *flags |= BS_NIL;
+  /* under promote an Integer member or ivar is boxed, and its nil reaches
+     the parameter as the box's (Struct#each yielding a member left nil) */
+  else if (g_promote_mode && (t == TY_POLY || t == TY_INT || t == TY_FLOAT) && promote_boxed_var_read(c, v))
+    *flags |= BS_NIL;
   return bs_join(a, t);
 }
 
@@ -12596,7 +12617,7 @@ int desugar_for_nonlocal_index(Compiler *c) {
    leave without a value reads the slot's own nil, so it takes a type that
    has one. A literal nil passed at one call and an Integer or a Float at
    another keep the Integer or the Float, since the prologue reads a nil
-   off the boxed side channel's tag as the slot's sentinel (anything under
+   off the boxed side channel's tag as the slot's nil (anything under
    promote takes the box), and nil_passed then keeps the nil from
    overriding an Integer as it does the bare-int guess. Either is marked
    nullable here, where the marking pass sees it and marks a local copied
@@ -12989,10 +13010,10 @@ static int pure_block_param(Compiler *c, Scope *s, const char *name) {
    a value is nil, which only the box holds for every type. A leading
    required or an optional every site binds an Integer, a literal nil or
    nothing (`yield(*xs)` of a run-time length, `yield 1; yield nil`, a
-   `= nil` default) is the exception: its binders write the sentinel for a
-   missing value (default_value) and for a nil one, so it stays an sp_int
-   marked nullable, the mark every read that boxes or tests it for nil
-   goes by. A Float does the same with its own sentinel (sp_float_nil). A
+   `= nil` default) is the exception: its binders write the nil for a
+   missing value (default_value) and for a nil one, so it stays an Integer
+   marked nullable (an sp_oint slot), the mark every read that boxes or
+   tests it for nil goes by. A Float does the same (an sp_ofloat). A
    post and a keyword still take the box for a nil, and so does either
    under promote, where an Integer is boxed anyway. A value not typed yet
    says nothing this round: boxed then, the parameter stayed boxed for
@@ -13528,10 +13549,16 @@ static int infer_block_params_container_arms(Compiler *c, const NodeTable *nt, i
     if (bp_widen(afs, p0, TY_INT)) changed = 1;
     return changed | 2;
   }
-  /* hash.fetch(key) { |k| } binds the looked-up key */
+  /* hash.fetch(key) { |k| } binds the looked-up key -- the key as it was
+     given: a boxed one (nil, or another class than the table's keys, which
+     misses) is handed over boxed */
   if (sp_streq(name, "fetch") && ty_is_hash(rt)) {
     Scope *fs = comp_scope_of(c, block);
-    if (bp_widen(fs, p0, ty_hash_key(rt))) changed = 1;
+    int fa = nt_ref(c->nt, id, "arguments"), fn = 0;
+    const int *fav = fa >= 0 ? nt_arr(c->nt, fa, "arguments", &fn) : NULL;
+    TyKind want = ty_hash_key(rt);
+    if (fn >= 1 && want != TY_POLY && infer_type(c, fav[0]) == TY_POLY) want = TY_POLY;
+    if (bp_widen(fs, p0, want)) changed = 1;
     return changed | 2;
   }
   /* A boxed receiver's fetch(key) { |k| } binds that key too. A read such

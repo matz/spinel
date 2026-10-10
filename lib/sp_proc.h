@@ -211,13 +211,10 @@ static inline sp_bool sp_bm_thunk_ok(sp_BoundMethod *m, sp_int argc) {
    box their own kind; a typed array adapter that returns self (push) or a
    laundered element (StrArray get/set) boxes the real value instead of
    mis-tagging the pointer as an Integer (#4395). A Bigint pointer boxes into
-   its Ruby value. SP_BM_RET_INT
-   goes through sp_box_int_or_nil: an IntArray
-   `[]` out of range answers the nullable SP_INT_NIL sentinel (INTPTR_MIN),
-   which sp_box_int would hand back as a truthy Integer instead of nil, and a
-   regular TY_INT method uses the same reserved sentinel for nil (see
-   sp_poly_as_int_or_nil / sp_box_int_or_nil in sp_alloc.h) so boxing it as nil
-   is the documented invariant. */
+   its Ruby value. SP_BM_RET_INT is a plain Integer: a method whose return
+   is a nullable Integer answers an sp_oint, two registers, which this
+   one-register ABI cannot carry -- such a method is bound through the boxed
+   (sp_RbVal) ABI instead. */
 static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
   sp_int r = m ? m->legacy_ret : SP_BM_RET_INT;
   switch (SP_BM_RET_KIND(r)) {
@@ -230,7 +227,7 @@ static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
     case SP_BM_RET_OBJ:       return sp_box_nullable_obj((void *)(uintptr_t)raw, (int)(r >> 8));
     case SP_BM_RET_OBJ_DYN:   return sp_box_nullable_obj_dyn((void *)(uintptr_t)raw, 0);
     case SP_BM_RET_BIGINT:    return raw ? sp_box_bigint((sp_Bigint *)(uintptr_t)raw) : sp_box_nil();
-    default:                  return sp_box_int_or_nil(raw);
+    default:                  return sp_box_int(raw);
   }
 }
 /* The raw register as the trampoline hands it back untouched to a typed

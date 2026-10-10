@@ -1,0 +1,48 @@
+1 + nil: TypeError: nil can't be coerced into Integer
+1 - nil: TypeError: nil can't be coerced into Integer
+2 * nil: TypeError: nil can't be coerced into Integer
+1 / nil: TypeError: nil can't be coerced into Integer
+1 % nil: TypeError: nil can't be coerced into Integer
+2 ** nil: TypeError: nil can't be coerced into Integer
+1 < nil: ArgumentError: comparison of Integer with nil failed
+1 <= nil: ArgumentError: comparison of Integer with nil failed
+1 > nil: ArgumentError: comparison of Integer with nil failed
+1 >= nil: ArgumentError: comparison of Integer with nil failed
+1 == nil: false
+1 != nil: true
+1 <=> nil: nil
+1.eql? nil: false
+1 & nil: TypeError: nil can't be coerced into Integer
+1 << nil: TypeError: no implicit conversion of nil into Integer
+1.0 + nil: TypeError: nil can't be coerced into Float
+1.0 * nil: TypeError: nil can't be coerced into Float
+1.0 < nil: ArgumentError: comparison of Float with nil failed
+1.0 == nil: false
+1.0 <=> nil: nil
+n + nil: TypeError: nil can't be coerced into Integer
+n < nil: ArgumentError: comparison of Integer with nil failed
+1.between?(nil, 5): ArgumentError: comparison of Integer with nil failed
+1 + fnil: TypeError: nil can't be coerced into Integer
+1 < fnil: ArgumentError: comparison of Integer with nil failed
+1.0 + fnil: TypeError: nil can't be coerced into Float
+1.0 < fnil: ArgumentError: comparison of Float with nil failed
+1.0 == fnil: false
+1 + min: -9223372036854775807
+1 * min: -9223372036854775808
+1 / min: -1
+1 % min: -9223372036854775807
+1 < min: false
+1 <= min: false
+1 > min: true
+1 >= min: true
+1 == min: false
+1 <=> min: 1
+1 & min: 0
+1 | min: -9223372036854775807
+1.0 + min: -9.223372036854776e+18
+1.0 < min: false
+1.0 == min: false
+n + min: -9223372036854775808
+n < min: false
+1.between?(min, 5): true
+1.clamp(min, 5): 1

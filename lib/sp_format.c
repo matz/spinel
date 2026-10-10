@@ -5,6 +5,7 @@
 #include "sp_alloc.h"   /* sp_str_alloc_raw, sp_raise_cls, <math.h> for cos/sin/sqrt */
 #include "sp_dtoa.h"    /* sp_format_float (locale-independent %g) */
 #include <stdio.h>
+#include <limits.h>    /* LLONG_MIN */
 #include <string.h>
 #include "sp_time.h"   /* sp_time_inspect_v / sp_time_to_s_v */
 #include "sp_range.h"  /* sp_range_inspect */
@@ -81,7 +82,7 @@ const char *sp_rational_to_s(sp_Rational r) {
 }
 
 /* A boxed Range renders as the typed one does: an open side is left out
-   ("..3", "1.."), where the sentinel printed as -9223372036854775808. */
+   ("..3", "1.."). */
 const char *sp_Range_inspect(sp_Range *r) {
   return sp_range_inspect(*r);
 }
@@ -263,8 +264,10 @@ typedef long long sp_rat_wide;
 # define SP_RAT_ADD(a, b) ((a) + (b))
 # define SP_RAT_SUB(a, b) ((a) - (b))
 #endif
+/* -2**63 fits (a numerator or an answer of exactly that value, as CRuby);
+   the negations below raise for it rather than overflow */
 static sp_int sp_rat_fit(sp_rat_wide v) {
-  if (v > (sp_rat_wide)INTPTR_MAX || v < (sp_rat_wide)(-INTPTR_MAX))
+  if (v > (sp_rat_wide)INTPTR_MAX || v < (sp_rat_wide)INTPTR_MIN)
     sp_raise_cls("RangeError", "Rational out of sp_int range");
   return (sp_int)v;
 }
@@ -275,13 +278,17 @@ static sp_int sp_rat_fit(sp_rat_wide v) {
 sp_Rational sp_rational_new_i64(int64_t n, int64_t d);
 static sp_Rational sp_rational_new_wide(sp_rat_wide n, sp_rat_wide d) {
   if (d == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
-  if (d < 0) { n = -n; d = -d; }
-  sp_rat_wide a = n < 0 ? -n : n, b = d;
-  while (b) { sp_rat_wide t = b; b = a % b; a = t; }
-  if (a <= 0) a = 1;
+  if (d < 0) {
+    if (n == LLONG_MIN || d == LLONG_MIN) sp_raise_cls("RangeError", "Rational out of sp_int range");
+    n = -n; d = -d;
+  }
+  /* the gcd over magnitudes taken unsigned: |-2**63| is no sp_rat_wide */
+  unsigned long long a = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n, b = (unsigned long long)d;
+  while (b) { unsigned long long t = b; b = a % b; a = t; }
+  if (a == 0) a = 1;
   sp_Rational r;
-  r.num = sp_rat_fit(n / a);
-  r.den = sp_rat_fit(d / a);
+  r.num = sp_rat_fit(n / (sp_rat_wide)a);
+  r.den = sp_rat_fit(d / (sp_rat_wide)a);
   return r;
 }
 sp_Rational sp_rational_new_i64(int64_t n, int64_t d) { return sp_rational_new_wide((sp_rat_wide)n, (sp_rat_wide)d); }
@@ -456,8 +463,8 @@ sp_Rational sp_rational_div(sp_Rational a, sp_Rational b) {
   if (b.num == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
   return sp_rational_new_wide(SP_RAT_MUL(a.num, b.den), SP_RAT_MUL(a.den, b.num));
 }
-sp_Rational sp_rational_neg(sp_Rational a) { a.num = -a.num; return a; }
-sp_Rational sp_rational_abs(sp_Rational a) { if (a.num < 0) a.num = -a.num; return a; }
+sp_Rational sp_rational_neg(sp_Rational a) { if (a.num == INTPTR_MIN) sp_raise_cls("RangeError", "Rational out of sp_int range"); a.num = -a.num; return a; }
+sp_Rational sp_rational_abs(sp_Rational a) { if (a.num == INTPTR_MIN) sp_raise_cls("RangeError", "Rational out of sp_int range"); if (a.num < 0) a.num = -a.num; return a; }
 sp_int sp_rational_cmp(sp_Rational a, sp_Rational b) {
   sp_rat_wide l = SP_RAT_MUL(a.num, b.den), r = SP_RAT_MUL(b.num, a.den);
   return l < r ? -1 : (l > r ? 1 : 0);

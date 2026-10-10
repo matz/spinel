@@ -97,9 +97,10 @@ typedef struct {
                        during the init raise NameError (uninitialized constant) */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
-  int nullable_int; /* an int local that was assigned a value which can be the
-                       nil sentinel (a search miss, a pop off an empty array):
-                       boxing it has to yield nil, not INTPTR_MIN */
+  int nullable_int; /* an int local that was assigned a value which can be
+                       nil (a search miss, a pop off an empty array): its
+                       slot holds its nil beside the value, and boxing it
+                       has to yield nil, not the number */
   int nil_passed;   /* (proc params) some call passes a literal nil: an
                        Integer another call passes keeps the param an
                        Integer, which the nil then no longer overrides as it
@@ -140,9 +141,9 @@ typedef struct {
                        is what lets its GC root be elided: the value stays
                        reachable from the container it was read out of. */
   int nullable_int_elem; /* the same, one level in: an int/float ARRAY local
-                       some element of which can be the sentinel, so reading an
-                       element or binding a block parameter from it carries it
-                       out (#3505) */
+                       some element of which can be nil (its nil bit), so
+                       reading an element or binding a block parameter from
+                       it carries the nil out (#3505) */
   int bounded_counter; /* (codegen, lazily) 1: an Integer local that only ever
                           takes a small literal or `+= / -= <small literal>`
                           inside iterator blocks over containers (never a
@@ -208,15 +209,16 @@ typedef struct {
                      any definite assignment (`v ||= 5; v += 2`, a definite
                      write in one branch only, a block local reset each
                      iteration), so its truthiness check must be able to see
-                     nil. The slot is declared with its type's nil sentinel
-                     rather than the zero value, so a kind whose zero is a
-                     real value (sp_int 0, 0.0) can still tell the two apart
-                     (mirrors ConstantVar's const_def_write). */
+                     nil. The slot starts as its type's nil (an Integer or
+                     Float one an oint with its nil flag set) rather than the
+                     zero value, so a kind whose zero is a real value (sp_int
+                     0, 0.0) can still tell the two apart (mirrors
+                     ConstantVar's const_def_write). */
   int maybe_unset;  /* (Integer / Float) some read can run before any write:
                        every write to it ahead of the read is conditional (a
                        modifier `if`, one branch, a loop body), so the read
-                       answers nil, and the slot starts as its nil sentinel
-                       as an or-written one does */
+                       answers nil, and the slot starts nil as an
+                       or-written one does */
   int elems_shared; /* --share-strings: a String container whose elements
                        the rule shares settled in its poly form, and its
                        elements are boxed handles (repr_of_slot's
@@ -292,7 +294,7 @@ typedef struct {
                        made inside the arm sees the handle (sb_shim_lift). */
   int shim_lift;    /* how many sb_shim_lift calls hold the local at shim_ty */
   unsigned char plain_int; /* (TY_INT) int_value_plain's memo: 0 not asked, 1 being
-                       asked, 2 never holds the nil sentinel, 3 may */
+                       asked, 2 never holds nil, 3 may */
   TyKind body_write; /* (parameter) the join of what its own body assigns it, as
                         infer_write_types last folded the writes; TY_UNKNOWN when
                         nothing does */
@@ -406,11 +408,11 @@ typedef struct {
                           channel (emit_tail_value), so the caller wraps it */
   int ret_rbs_nilable; /* that seed was RBS's nilable form (`Integer?`), and the
                           pinned kind is an unboxed scalar: the return can be
-                          the reserved sentinel, so a caller boxing it has to
-                          answer nil rather than the raw number (#3493) */
+                          nil (an oint), so a caller boxing it has to answer
+                          nil rather than the raw number (#3493) */
   int ret_nullable_int; /* the same property, INFERRED rather than seeded: this
-                           method's scalar return can be the reserved sentinel
-                           because its own return expression can be. Seeded from
+                           method's scalar return can be nil because its own
+                           return expression can be. Seeded from
                            ret_rbs_nilable, then propagated through pass-through
                            methods (`def pass(x) = x.p_`) and methods whose value
                            is their block's (`def key_of(x) = yield x`), which no
@@ -471,18 +473,18 @@ typedef struct {
                                        holds its Strings as handles, as a
                                        LocalVar's elems_shared */
   unsigned char *ivar_nullable_int; /* the slot holds a nilable scalar: some
-                                     write to it can leave the nil sentinel, so
-                                     a read of it (or of its attr_reader) has to
-                                     box as nil rather than as the number. Set
-                                     by the marking fixpoint, alongside
-                                     LocalVar.nullable_int and
+                                     write to it can leave nil (its nil byte),
+                                     so a read of it (or of its attr_reader)
+                                     has to box as nil rather than as the
+                                     number. Set by the marking fixpoint,
+                                     alongside LocalVar.nullable_int and
                                      Scope.ret_nullable_int (#3505). */
   unsigned char *ivar_arr_elem_arr_or_nil; /* every element of this container
                                      slot is a poly array or nil (see
                                      LocalVar.arr_or_nil) */
   unsigned char *ivar_nullable_int_elem; /* the same one level in: an int/float
                                      ARRAY slot some element of which can be
-                                     the sentinel */
+                                     nil (its nil bit) */
   TyKind *ivar_oa_type;  /* the homogeneous pointer-array type narrow_object_arrays
                             gave the slot (a table of int arrays or an array of one
                             user class), TY_UNKNOWN when it made no decision. Set
@@ -536,7 +538,7 @@ typedef struct {
   char **cvars;        /* class variable names, incl. leading '@@' */
   TyKind *cvar_types;
   unsigned char *cvar_nullable_int; /* the Integer or Float class variable can
-                                       hold the nil sentinel, as
+                                       hold nil (an oint), as
                                        ivar_nullable_int for an ivar */
   unsigned char *cvar_str_shared;   /* --share-strings: the TY_STRBUF slot is
                                        the shared handle, as ivar_str_shared */
@@ -1026,6 +1028,9 @@ typedef struct {
   int *toplevel_includes;  /* class indices of modules included at top level */
   int ntoplevel_includes;
   int has_include_math;    /* program has `include Math`: expose bare PI/E/fns */
+  /* some store in the program can put a nil VALUE into a typed Hash of this
+     Integer-valued kind (hash_vals_nullable, DESIGN.md D3b-ii) */
+  unsigned char hash_vnil_str_int, hash_vnil_int_int;
 
   /* FFI registry: ffi_func declarations */
   FfiFunc *ffi_funcs;

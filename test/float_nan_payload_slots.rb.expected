@@ -1,0 +1,44 @@
+NaN
+true
+nil
+NaN
+false
+true
+nil
+NaN
+false
+1
+f=0.0 o=
+[false, true, false, nil]
+f=NaN o=NaN
+[false, false, true, true]
+true
+true
+false
+[0.0, NaN]
+true
+false
+[false, true]
+1
+true
+NaN
+true
+false
+true
+[false, true]
+[nil, NaN, nil]
+true
+true
+1
+NaN
+false
+true
+"set"
+NaN
+false
+false
+true
+true
+false
+NaN
+true

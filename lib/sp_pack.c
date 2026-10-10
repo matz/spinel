@@ -681,9 +681,8 @@ static inline int pk_cursor_directive(char spec, int64_t count, char **buf, size
   return 0;
 }
 
-/* A typed array's nil is the slot's sentinel (SP_INT_NIL, the Float NaN
-   payload), and nil converts to neither number: CRuby raises the
-   conversion's TypeError where these packed the sentinel's bits. */
+/* A typed array's nil element (its bit in the array's bitmap) converts to
+   neither number: CRuby raises the conversion's TypeError. */
 static int pk_int_directive_consumes(char spec) {
   return spec && strchr("CcnNvVsSlLqQiIjJU", spec) != NULL;   /* the ones pk_int_directive packs */
 }
@@ -727,11 +726,10 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     int64_t count = pk_parse_count_mods(&p, &big);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a String directive converts the element as CRuby does: an Integer
-       is no String (TypeError), the nil sentinel is nil */
+       is no String (TypeError), a nil element (its bit) is nil */
     if (pk_is_str_spec(spec)) {
       int have = idx < arr->len;
-      sp_int v = have ? arr->data[arr->start + idx] : 0;
-      pk_str_spec(spec, count, v == SP_INT_NIL ? sp_box_nil() : sp_box_int(v), have, &buf, &len, &cap);
+      pk_str_spec(spec, count, have ? sp_IntArray_box_elem(arr, idx) : sp_box_int(0), have, &buf, &len, &cap);
       idx++;
       continue;
     }
@@ -739,8 +737,8 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     if (spec == 'w') {
       int64_t wc = count < 0 ? arr->len - idx : count;
       for (int64_t k = 0; k < wc; k++) {
+        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(0);
         int64_t sv = (idx < arr->len) ? arr->data[arr->start + idx] : (pk_too_few(buf), 0); idx++;
-        if (sv == SP_INT_NIL) pk_nil_elem(0);
         pk_ber_int(sv, &buf, &len, &cap);
       }
       continue;
@@ -749,7 +747,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     if (count < 0) count = 0;
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
-        if (idx < arr->len && arr->data[arr->start + idx] == SP_INT_NIL) pk_nil_elem(1);
+        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(1);
         double dv = (idx < arr->len) ? (double)arr->data[arr->start + idx] : (pk_too_few(buf), 0.0);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
@@ -758,7 +756,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     }
     for (int64_t k = 0; k < count; k++) {
       int64_t v = (idx < arr->len) ? arr->data[arr->start + idx] : pk_missing_int(spec, buf);
-      if (idx < arr->len && v == SP_INT_NIL && pk_int_directive_consumes(spec)) pk_nil_elem(0);
+      if (idx < arr->len && sp_IntArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0);
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
     }
@@ -795,11 +793,10 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
     int64_t count = pk_parse_count_mods(&p, &big);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a String directive converts the element as CRuby does: a Float is no
-       String (TypeError), the nil sentinel is nil */
+       String (TypeError), a nil element (its bit) is nil */
     if (pk_is_str_spec(spec)) {
       int have = idx < arr->len;
-      sp_float v = have ? arr->data[idx] : 0.0;
-      pk_str_spec(spec, count, sp_float_is_nil(v) ? sp_box_nil() : sp_box_float(v), have, &buf, &len, &cap);
+      pk_str_spec(spec, count, have ? sp_FloatArray_box_elem(arr, idx) : sp_box_float(0.0), have, &buf, &len, &cap);
       idx++;
       continue;
     }
@@ -807,8 +804,8 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
       int64_t wc = count < 0 ? arr->len - idx : count;
       for (int64_t k = 0; k < wc; k++) {
         if (idx >= arr->len) pk_too_few(buf);
+        if (sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(0);
         sp_float v = arr->data[idx++];
-        if (sp_float_is_nil(v)) pk_nil_elem(0);
         pk_ber_poly(sp_box_float(v), &buf, &len, &cap);
       }
       continue;
@@ -818,14 +815,14 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
         double dv = (idx < arr->len) ? arr->data[idx] : (pk_too_few(buf), 0.0);
-        if (idx < arr->len && sp_float_is_nil(dv)) pk_nil_elem(1);
+        if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(1);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
       }
       continue;
     }
     for (int64_t k = 0; k < count; k++) {
-      if (idx < arr->len && sp_float_is_nil(arr->data[idx]) && pk_int_directive_consumes(spec)) pk_nil_elem(0);
+      if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0);
       int64_t v = (idx < arr->len) ? pk_flt_to_int(arr->data[idx]) : pk_missing_int(spec, buf);
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
@@ -876,7 +873,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
         /* a poly array's nil is a tagged one, which pk_poly_to_flt reads as
-           0.0; it raises here as a typed array's sentinel does */
+           0.0; it raises here as a typed array's nil bit does */
         if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1);
         double dv = (idx < arr->len) ? pk_poly_to_flt(arr->data[idx]) : (pk_too_few(buf), 0.0);
         idx++;
@@ -887,7 +884,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
     for (int64_t k = 0; k < count; k++) {
       /* converted only for a directive that takes the element: `x` packs a
          NUL and leaves it, so a nil under it (`[1, nil].pack("qx")`) is not
-         converted, as the typed arrays' sentinel check already skips it */
+         converted, as the typed arrays' nil-bit check already skips it */
       int64_t v = pk_int_directive_consumes(spec)
                   ? (idx < arr->len ? pk_poly_to_int(arr->data[idx]) : (pk_too_few(buf), 0)) : 0;
       idx++;
@@ -941,7 +938,7 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
         /* a poly array's nil is a tagged one, which pk_poly_to_flt reads as
-           0.0; it raises here as a typed array's sentinel does */
+           0.0; it raises here as a typed array's nil bit does */
         if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1);
         double dv = (idx < arr->len) ? pk_poly_to_flt(arr->data[idx]) : (pk_too_few(buf), 0.0);
         idx++;
@@ -952,7 +949,7 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
     for (int64_t k = 0; k < count; k++) {
       /* converted only for a directive that takes the element: `x` packs a
          NUL and leaves it, so a nil under it (`[1, nil].pack("qx")`) is not
-         converted, as the typed arrays' sentinel check already skips it */
+         converted, as the typed arrays' nil-bit check already skips it */
       int64_t v = pk_int_directive_consumes(spec)
                   ? (idx < arr->len ? pk_poly_to_int(arr->data[idx]) : (pk_too_few(buf), 0)) : 0;
       idx++;

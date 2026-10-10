@@ -34,6 +34,43 @@ static void emit_attr_writer_converted(Compiler *c, int arg, TyKind ivt, int tmp
   return;
 }
 
+/* An Integer or Float field with a nil bit (a writer called with nil, by
+   name or through send): the store keeps the bit in step, and the
+   assignment's value is the field read back with its bit: boxed, the oint,
+   or the field for a plain consumer (a discarded value must not raise
+   on the nil it stored). Answers 0 for any other field. */
+static int emit_attr_writer_nilbit(Compiler *c, int id, int cid, int iv, int tmp,
+                                   const char *name, int arg, Buf *b) {
+  if (iv < 0) return 0;
+  TyKind t = c->classes[cid].ivar_types[iv];
+  if (!oint_kind(t) || !ivar_has_nilbit(c, cid, iv)) return 0;
+  char pfx[40]; snprintf(pfx, sizeof pfx, "_t%d->", tmp);
+  buf_printf(b, "_t%d->iv_%s = ", tmp, iv_c(name));
+  emit_ivar_value_nilbit(c, cid, iv, pfx, arg, b);
+  char bt[320]; ivar_nilbit_test(c, cid, iv, pfx, bt, sizeof bt);
+  char ov[700]; snprintf(ov, sizeof ov, "((%s) ? %s : %s(_t%d->iv_%s))", bt, oint_nil(t), oint_of(t), tmp, iv_c(name));
+  buf_puts(b, "; ");
+  if (repr_of(c, id).kind == RK_BOXED) buf_printf(b, "%s(%s)", oint_box(t), ov);
+  else if (node_is_oint(c, id)) buf_puts(b, ov);
+  else buf_printf(b, "_t%d->iv_%s", tmp, iv_c(name));   /* a plain consumer (or none): the field */
+  buf_puts(b, "; })");
+  return 1;
+}
+
+/* A user class method's call where the method answers its nil beside the
+   value (method_ret_is_oint) and the consumer takes the plain value, or the
+   other way: unwrapped (TypeError for nil) or lifted. w: the consumer takes
+   the oint. */
+static void cm_ret_open(const Scope *s, int w, Buf *b) {
+  if (!oint_kind(s->ret)) return;
+  int m = method_ret_is_oint(s);
+  if (m && !w) buf_printf(b, "%s(", oint_arg(s->ret));
+  else if (!m && w) buf_printf(b, "%s(", oint_of(s->ret));
+}
+static void cm_ret_close(const Scope *s, int w, Buf *b) {
+  if (oint_kind(s->ret) && method_ret_is_oint(s) != (w != 0)) buf_puts(b, ")");
+}
+
 /* respond_to?, method_defined? and its kin, const_set / const_get / const_defined? */
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
@@ -71,8 +108,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (ans && !nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") != NULL)"); return 1; }
         if (!ans && nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)"); return 1; }
       }
-      /* the answer is the slot kind's; a nullable Integer or Float holding
-         its sentinel is nil, which answers its own, smaller surface */
+      /* the answer is the slot kind's; a nullable Integer or Float whose
+         nil flag is set is nil, which answers its own, smaller surface */
       if (ans >= 0 && recv >= 0 && (rt == TY_INT || rt == TY_FLOAT) &&
           call_returns_nullable_int(c, recv)) {
         char ref[24];
@@ -999,8 +1036,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             }
           }
           else if (sp_streq(spec, "float") || sp_streq(spec, "double")) {
-            /* nil is no double: a boxed nil, or a slot holding its kind's nil
-               sentinel, raises TypeError as the ffi gem's NUM2DBL does */
+            /* nil is no double: a boxed nil, or a slot holding its kind's
+               nil, raises TypeError as the ffi gem's NUM2DBL does */
             emit_ffi_num_arg(c, argv[ai], at, spec, 1, &call_buf);
           }
           else if (sp_streq(spec, "int_array")) {
@@ -1336,6 +1373,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           char _amsp[304]; snprintf(_amsp, sizeof _amsp, "%s%s", _am ? _am : "", _am ? " " : "");
           buf_printf(b, "({ sp_%s *_t%d = ", c->classes[_arc].c_name, _atmp); emit_expr(c, recv, b); buf_puts(b, "; ");
           emit_frozen_obj_guard(c, _arc, _aself, b);
+          if (argc >= 1 && emit_attr_writer_nilbit(c, id, _adefc < 0 ? _arc : _adefc, _aiv, _atmp, _abase, argv[0], b))
+            return 1;
           /* a typed slot (an --rbs seed pins one) given a boxed value: the
              slot takes it unboxed, and the assignment's value is still the
              right-hand side, boxed as it came. Stored raw, an sp_RbVal went
@@ -1458,11 +1497,16 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                  ahead of the declaration, not into the middle of it */
               Buf apre; memset(&apre, 0, sizeof apre);
               Buf aval; memset(&aval, 0, sizeof aval);
-              { Buf *sv_pre = g_pre; g_pre = &apre; emit_one_arg(c, saved0, 0, &aval); g_pre = sv_pre; }
+              /* a temporary that can hold nil takes the argument's oint form */
+              int sv_oint = slot_is_oint(lv);
+              { Buf *sv_pre = g_pre; g_pre = &apre;
+                if (sv_oint) emit_oint_expr(c, saved0, at, &aval); else emit_one_arg(c, saved0, 0, &aval);
+                g_pre = sv_pre; }
               if (!g_pre) buf_puts(b, "({ ");
               if (apre.p) buf_puts(decl, apre.p);
               if (g_pre) emit_indent(g_pre, g_indent);
-              emit_ctype(c, at, decl); buf_printf(decl, " lv_%s = %s; ", svn, aval.p ? aval.p : "0");
+              if (sv_oint) buf_puts(decl, oint_ctype(at)); else emit_ctype(c, at, decl);
+              buf_printf(decl, " lv_%s = %s; ", svn, aval.p ? aval.p : "0");
               free(apre.p); free(aval.p);
               /* a poly temporary is an sp_RbVal, and its root is the RbVal
                  kind -- needs_root() answers yes for TY_POLY too, so that
@@ -1477,7 +1521,11 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
               buf_puts(b, "); ");
               int back[1] = { saved0 };
               nt_node_set_arr((NodeTable *)nt, argsn, "arguments", back, 1);
-              buf_printf(b, "lv_%s; })", svn);
+              /* the assignment's value is the argument as written, nil
+                 included: its oint where the consumer takes one */
+              if (sv_oint && !(node_is_oint(c, id) || repr_of(c, id).kind == RK_OPT))
+                buf_printf(b, "%s(lv_%s); })", oint_arg(at), svn);
+              else buf_printf(b, "lv_%s; })", svn);
               for (int k = esc->nlocals - 1; k >= 0; k--)
                 if (sp_streq(esc->locals[k].name, svn)) {
                   memmove(&esc->locals[k], &esc->locals[k + 1], sizeof(LocalVar) * (size_t)(esc->nlocals - k - 1));
@@ -1501,11 +1549,14 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int mi = comp_cmethod_in_chain(c, fold_ci, name, &defcls);
       if (mi >= 0) {
         nd_callee(c, id, mi, defcls, 0);
+        int w0 = node_is_oint(c, id);
+        cm_ret_open(&c->scopes[mi], w0, b);
         buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
         const char *lead0 = emit_cmethod_self_cls_arg(c, mi, fold_ci, b);
         emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), lead0, b);
         emit_cmethod_block_arg(c, id, &c->scopes[mi], -1, b);
         buf_puts(b, ")");
+        cm_ret_close(&c->scopes[mi], w0, b);
         return 1;
       }
     }
@@ -1563,7 +1614,10 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           buf_printf(b, "0; })");
           return 1;
         }
-        emit_ctype(c, res, b); buf_printf(b, " _t%d_r = %s; ", tcid, default_value_from_compiler(c, res));
+        /* the result slot holds its nil where the consumer takes the oint */
+        int wr = oint_kind(res) && node_is_oint(c, id);
+        if (wr) buf_printf(b, "%s _t%d_r = %s; ", oint_ctype(res), tcid, oint_nil(res));
+        else { emit_ctype(c, res, b); buf_printf(b, " _t%d_r = %s; ", tcid, default_value_from_compiler(c, res)); }
         for (int k = 0; k < ncand; k++) {
           int defcls = -1;
           int mi = comp_cmethod_in_chain(c, cand[k], name, &defcls);
@@ -1580,11 +1634,13 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             free(cb.p);
           }
           else {
+            cm_ret_open(&c->scopes[mi], wr, b);
             buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
             { const char *leadc = emit_cmethod_self_cls_arg(c, mi, cand[k], b);
               emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), leadc, b); }
             emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp, b);
             buf_puts(b, ")");
+            cm_ret_close(&c->scopes[mi], wr, b);
           }
           buf_puts(b, "; ");
         }
@@ -1637,6 +1693,8 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       if (mi >= 0) {
         nd_callee(c, id, mi, defcls, 0);
+        int w1 = node_is_oint(c, id);
+        cm_ret_open(&c->scopes[mi], w1, b);
         buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
         const char *lead1 = emit_cmethod_self_cls_arg(c, mi, ci, b);
         emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), lead1, b);
@@ -1645,6 +1703,7 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
            paths already do this; a module/class-method call must too. */
         emit_cmethod_block_arg(c, id, &c->scopes[mi], -1, b);
         buf_puts(b, ")");
+        cm_ret_close(&c->scopes[mi], w1, b);
         return 1;
       }
     }
@@ -2407,19 +2466,20 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                    ? _cidx : builtin_class_id("NilClass"));
       return 1;
     }
-    if (cn && rt == TY_INT) {
-      /* an int slot can hold the nil sentinel (a nil-returning <=>, a
-         missing key): report NilClass then, matching how p prints it */
-      int tcv = ++g_tmp;
-      buf_printf(b, "({ sp_int _t%d = ", tcv); emit_expr(c, recv, b);
-      buf_printf(b, "; ((sp_Class){(sp_int)-1, _t%d == SP_INT_NIL ? SPL(\"NilClass\") : SPL(\"Integer\")}); })", tcv);
-      return 1;
-    }
-    if (cn && rt == TY_FLOAT) {
-      /* same for the float nil sentinel (NaN-boxed nil) */
-      int tcv = ++g_tmp;
-      buf_printf(b, "({ sp_float _t%d = ", tcv); emit_expr(c, recv, b);
-      buf_printf(b, "; ((sp_Class){(sp_int)-1, sp_float_is_nil(_t%d) ? SPL(\"NilClass\") : SPL(\"Float\")}); })", tcv);
+    if (cn && (rt == TY_INT || rt == TY_FLOAT)) {
+      /* a nullable Integer / Float slot (a nil-returning <=>, a missing key)
+         reports NilClass when it holds nil, matching how p prints it; a plain
+         one is never nil */
+      const char *cls = rt == TY_INT ? "Integer" : "Float";
+      if (node_has_oint_form(c, recv)) {
+        int tcv = ++g_tmp;
+        buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tcv); emit_oint_expr(c, recv, rt, b);
+        buf_printf(b, "; ((sp_Class){(sp_int)-1, _t%d.nil ? SPL(\"NilClass\") : SPL(\"%s\")}); })", tcv, cls);
+      }
+      else {
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+        buf_printf(b, "); ((sp_Class){(sp_int)-1, SPL(\"%s\")}); })", cls);
+      }
       return 1;
     }
     if (cn && ty_null_is_nil(rt) && node_may_be_null_nil(c, recv)) {
@@ -3173,66 +3233,11 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            inside a `def self.default`/`self.initial` factory emitted an empty
            `sp_Klass_new()`, dropping every argument. */
         if (ncls->is_struct && initm < 0) {
+          /* the same construction as the receiver path (`Klass.new(...)`):
+             its early checks, keyword hash, `**` merge and member coercions,
+             and the nil bit of a member the argument leaves nil */
           int sargc; const int *sargv = call_args(nt, id, &sargc);
-          int kwh = (sargc == 1 && nt_type(nt, sargv[0]) &&
-                     sp_streq(nt_type(nt, sargv[0]), "KeywordHashNode")) ? sargv[0] : -1;
-          /* a call CRuby refuses raises its ArgumentError, and a positional
-             `*` spreads across the members, as in the receiver path: these
-             took the arguments as they stood, dropping a key that names no
-             member and an argument past the last, and leaving nil a Data
-             member none names */
-          int nunk, late;
-          if (emit_struct_new_early(c, new_cls, sargc, sargv,
-                                    ncls->kw_init == -1 && !kwh_has_splat(nt, kwh) ? -1 : kwh,
-                                    &nunk, &late, b)) return 1;
-          /* a keyword_init: false Struct takes the keywords as one positional
-             Hash, its first member: with a `**` they merge into it, nil when
-             none came, as in the receiver path */
-          int kwf_mh = -1;
-          if (kwh >= 0 && ncls->kw_init == -1) {
-            TyKind mty;
-            if (kwh_has_splat(nt, kwh)) kwf_mh = emit_ds_hash_merge(c, kwh, 1, &mty);
-            kwh = -1;
-          }
-          /* keywords beside a `**`, or binding late, merge into one hash the
-             members read and the run-time check judges, as in the receiver
-             path */
-          int kw_ht = -1;
-          if (kwh >= 0 && (kwh_has_splat(nt, kwh) || late)) {
-            kw_ht = emit_struct_kw_hash(c, kwh);
-            emit_struct_kw_check(c, ncls, kw_ht, -1);
-          }
-          buf_printf(b, "sp_%s_new(", ncls->c_name);
-          for (int a = 0; a < ncls->nmembers; a++) {
-            if (a) buf_puts(b, ", ");
-            int vnode = -1;
-            if (kwh >= 0) vnode = struct_kwarg_value(c, kwh, ncls->ivars[a] + 1);
-            else if (a < sargc) vnode = sargv[a];
-            if (kwf_mh >= 0) {
-              char hv[160];
-              snprintf(hv, sizeof hv, "(sp_PolyPolyHash_length(_t%d) ? sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH) : sp_box_nil())",
-                       kwf_mh, kwf_mh);
-              if (a == 0) emit_unbox_text(c, ncls->ivar_types[a], hv, b);
-              else buf_puts(b, default_value_from_compiler(c, ncls->ivar_types[a]));
-            }
-            else if (kw_ht >= 0) emit_struct_kw_member(c, ncls, a, kw_ht, b);
-            else if (vnode >= 0) {
-              if (ncls->ivar_types[a] == TY_POLY && repr_of(c, vnode).kind != RK_BOXED) emit_boxed(c, vnode, b);
-              /* and the reverse: a poly value into a concrete member slot
-                 (#4348), the same coercion the receiver path does */
-              else if (ncls->ivar_types[a] != TY_POLY && ncls->ivar_types[a] != TY_UNKNOWN &&
-                       repr_of(c, vnode).kind == RK_BOXED) {
-                Buf pv2; memset(&pv2, 0, sizeof pv2);
-                emit_expr(c, vnode, &pv2);
-                emit_unbox_text(c, ncls->ivar_types[a], pv2.p ? pv2.p : "sp_box_nil()", b);
-                free(pv2.p);
-              }
-              else emit_expr(c, vnode, b);
-            }
-            else buf_puts(b, default_value_from_compiler(c, ncls->ivar_types[a]));
-          }
-          buf_puts(b, ")");
-          return 1;
+          if (emit_struct_new_call(c, id, new_cls, sargc, sargv, b)) return 1;
         }
         /* yielding initialize: inline its body at the call site exactly as
            the Klass.new receiver path does -- the emitted constructor only

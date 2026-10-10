@@ -73,16 +73,6 @@
 # already-correct C emitter is a strictly safer trade than either.
 module Comparable
   def between?(min, max)
-    # self can carry the SP_INT_NIL/NaN nullable-scalar sentinel (an ivar
-    # or a reader whose slot is sometimes genuinely nil) even though its
-    # STATIC type is a plain Integer/Float here: `self <=> min` would
-    # compile the sentinel as an ordinary number and answer a wrong
-    # comparison or exception, where nil itself simply has no such method
-    # (test/nil_recv_compare_nomethod.rb). `.nil?` on a concrete
-    # Integer/Float already compiles to exactly this sentinel check.
-    if self.nil?
-      raise NoMethodError, "undefined method 'between?' for nil"
-    end
     c1 = self <=> min
     if c1.nil?
       raise ArgumentError, "comparison of #{self.class} with #{__cmp_repr(min)} failed"
@@ -95,11 +85,6 @@ module Comparable
   end
 
   def clamp(lo, hi)
-    # see between?'s own comment: self can carry the nullable-scalar
-    # sentinel even at a plain Integer/Float static type.
-    if self.nil?
-      raise NoMethodError, "undefined method 'clamp' for nil"
-    end
     # a nil bound is an open (unbounded) side on that end, so it takes no
     # part in the ordering check or in either comparison against self.
     if !lo.nil? && !hi.nil?

@@ -50,11 +50,10 @@ Use a tree of its own for it: the objects differ, and make does not rebuild on
 a change of flags. For a program of your own, compile the generated C and the
 runtime with `-DSP_PORTABLE`.
 
-Two things keep the extension under `SP_PORTABLE`, because the program needs
-them to be correct rather than fast. The threaded runtime (`SP_THREADS`) keeps
+One thing keeps the extension under `SP_PORTABLE`, because the program needs
+it to be correct rather than fast: the threaded runtime (`SP_THREADS`) keeps
 the `__atomic` builtins; C11 atomics would need the shared variables declared
-`_Atomic`. `SP_FLOAT_NIL_CONST` keeps `__builtin_nan("0x1")`, the nil
-sentinel of a `Float?` slot, which has to be a constant expression.
+`_Atomic`.
 
 `SP_PORTABLE` costs speed. optcarrot runs about 25% slower, 21 points of it
 from losing the forced inlining of the generated C; the benchmarks that run

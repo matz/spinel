@@ -42,7 +42,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
 int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
-int emit_call_store_value_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt);
+int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt);
 int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt);
 int emit_array_random_kw(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt);
 int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
@@ -243,6 +243,7 @@ char adapter_arg_kind(TyKind arr, int is_push, int is_set, int pos);
 int bam_binop_wrapper(const Scope *tm);
 int bm_call_needs_layout(const NodeTable *nt, int id, const int *argv, int argc);
 const char *bm_self_ctype(Scope *tm, int shift);
+void emit_bm_self_arg(const char *sct, const char *self, Buf *b);
 int call_arg_sig(Compiler *c, const int *argv, int argc, char *out, size_t cap);
 void emit_adapter_arg_boxed(const char *v, char kind, Buf *out);
 void emit_adapter_arg_static(Compiler *c, int node, char kind, Buf *out);

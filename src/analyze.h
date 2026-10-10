@@ -212,6 +212,8 @@ TyKind infer_type(Compiler *c, int id);
    builtin_only, kept for the inference asking). So asking cannot change
    what codegen reads next. They nest. */
 void an_pure_read_begin(void);
+/* pin one node against infer_type recording its answer; returns the previous pin */
+int an_pin_node(int id);
 void an_pure_read_end(void);
 
 /* String#lines' argument shapes besides none: (sep), (chomp: ...) and
@@ -228,17 +230,20 @@ int enum_pair_source_call(const NodeTable *nt, int recv);
 int poly_blockless_enum_name(const char *name);
 
 /* True when node `id`'s value, held in an unboxed scalar slot, can be the
-   reserved nil sentinel (SP_INT_NIL / the float twin). The slot type alone
+   nil it carries beside the value (an sp_oint / sp_ofloat). The slot type alone
    cannot say -- an `Integer?` and an `Integer` are both TY_INT -- so codegen
-   asks this before choosing between sp_box_int and sp_box_int_or_nil at a poly
+   asks this before choosing between sp_box_int and sp_box_oint at a poly
    boundary. Valid only after analyze_program has settled the marking. */
 int nullable_int_value(Compiler *c, int id);
+/* 1: the typed Integer-valued Hash `node` evaluates to (TY_STR_INT_HASH /
+   TY_INT_INT_HASH) may hold a nil VALUE; 0 for every other kind and for
+   node < 0 (DESIGN.md D3b-ii) */
+int hash_vals_nullable(Compiler *c, int node);
 /* The same, asked of the variable rather than of the read: what it can hold
    anywhere, the nil narrowing's facts left out. */
 int nullable_int_value_raw(Compiler *c, int id);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);
 int nullable_scalar_nil_only_call(Compiler *c, int id);
-int nullable_int_elem_read(Compiler *c, int call);
 int nullable_int_elem_array(Compiler *c, int node);
 TyKind tuple_elem_read_type(Compiler *c, int node);
 TyKind tuple_elem_read_unboxed(Compiler *c, int node);
@@ -316,6 +321,7 @@ int an_face_pinned(int node);
 int view_face_top(int *node, TyKind *kind);   /* codegen_view.c */
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx);
+int native_call_ret_plain_num(Compiler *c, int v);   /* a native method declared :int / :float */
 int block_param_used_up(Compiler *c, int blk, const char *nm, int value);
 /* The name of a numbered block parameter (`_1`..`_9`) on this parameters node.
    Per BLOCK where a scope holds more than one such block; see

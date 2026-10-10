@@ -505,7 +505,9 @@ static int pm_int_overflows(pm_integer_t *integer) {
   }
   uint64_t max_positive = pm_int_max_positive();
   uint64_t max_negative = max_positive + 1ULL;
-  if (integer->negative) return overflow || val >= max_negative;
+  /* -2**63 (-2**31 on a 32-bit target) is an sp_int: no bit pattern of the
+     word is reserved for nil any more */
+  if (integer->negative) return overflow || val > max_negative;
   return overflow || val > max_positive;
 }
 

@@ -588,8 +588,9 @@ static inline void sp_u64_write_back(char *end, uint64_t u) {
   if (u >= 10) { end -= 2; end[0] = d2[2 * u]; end[1] = d2[2 * u + 1]; }
   else *--end = (char)('0' + u);
 }
-/* An Integer the program knows is never the nil sentinel (the analysis says
-   no nil reaches it): INTPTR_MIN is that number here, not "" (#7612). */
+/* An Integer the program knows is never nil (the analysis says no nil
+   reaches it). A nil is written through sp_w_oint, so this is sp_w_int:
+   INTPTR_MIN is that number here, not "" (#7612). */
 static inline char *sp_w_int_plain(char *p, sp_int n) {
   uint64_t u;
   if (n < 0) { *p++ = '-'; u = (uint64_t)(-(n + 1)) + 1; }
@@ -599,7 +600,6 @@ static inline char *sp_w_int_plain(char *p, sp_int n) {
   return p;
 }
 static inline char *sp_w_int(char *p, sp_int n) {
-  if (n == SP_INT_NIL) return p;  /* a nil int slot interpolates as "" */
   uint64_t u;
   if (n < 0) { *p++ = '-'; u = (uint64_t)(-(n + 1)) + 1; }
   else u = (uint64_t)n;
@@ -773,20 +773,18 @@ static inline sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_
 static inline sp_RbVal sp_box_sym(sp_sym v)     { if (v == (sp_sym)-1) { sp_RbVal n; n.tag = SP_TAG_NIL; n.cls_id = 0; n.v.i = 0; return n; } sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (sp_int)v; return r; }  /* (sp_sym)-1 is the nilable-symbol sentinel: box it as nil, never as :"" */
 static inline sp_RbVal sp_box_poly_array(void *p) { return sp_box_obj(p, SP_BUILTIN_POLY_ARRAY); }
 
-/* The inverse of sp_box_int_or_nil / the float sentinel: unbox a poly into a
-   flat int / float slot that may hold nil. Reading `.v.i` straight off a
-   nil-tagged value yields the payload underneath the tag -- 0, an ordinary
-   Integer -- so nil silently becomes 0 (or 0.0). These map the nil tag to the
-   slot's reserved sentinel instead, which is what every nil? / to_s / boxing
-   site on a nullable int or float already tests for. */
-static inline sp_int sp_poly_as_int_or_nil(sp_RbVal v) {
-  return v.tag == SP_TAG_NIL ? SP_INT_NIL : v.v.i;
-}
-static inline sp_float sp_poly_as_float_or_nil(sp_RbVal v) {
-  return v.tag == SP_TAG_NIL ? sp_float_nil() : v.v.f;
-}
 /* ---- Nullable Integer / Float in flight (sp_oint / sp_ofloat, sp_types.h) ---- */
-/* Boxed: nil boxes as nil, a value as itself. Inline because every
+/* A boxed value into a nullable slot, unchecked: the nil tag is the slot's
+   nil, any other tag reads its payload as the slot's kind (the caller has
+   settled the tag). Reading `.v.i` straight off a nil-tagged value would
+   yield the payload underneath the tag -- 0, an ordinary Integer. */
+static inline sp_oint sp_poly_as_int_or_nil(sp_RbVal v) {
+  return v.tag == SP_TAG_NIL ? sp_oint_nil() : sp_oint_of(v.v.i);
+}
+static inline sp_ofloat sp_poly_as_float_or_nil(sp_RbVal v) {
+  return v.tag == SP_TAG_NIL ? sp_ofloat_nil() : sp_ofloat_of(v.v.f);
+}
+/* ... and out: nil boxes as nil, a value as itself. Inline because every
    boxed element read goes through here. */
 static inline sp_RbVal sp_box_oint(sp_oint o)     { return o.nil ? sp_box_nil() : sp_box_int(o.v); }
 static inline sp_RbVal sp_box_ofloat(sp_ofloat o) { return o.nil ? sp_box_nil() : sp_box_float(o.v); }
@@ -1052,15 +1050,15 @@ const char *sp_int_codepoint_to_str_in(const char *recv, sp_int n);
 sp_IntArray *sp_int_digits(sp_int n, sp_int base);
 sp_int sp_int_bit_length(sp_int n);
 sp_int sp_int_bit_range(sp_int n, sp_int start, sp_int len);
-const char *sp_int_interp(sp_int n);
+const char *sp_int_interp(sp_oint n);   /* interpolation: nil is "" */
 const char *sp_int_to_s_base(sp_int n, sp_int base);
-const char *sp_int_opt_inspect(sp_int v);
-const char *sp_int_opt_to_s(sp_int v);
+const char *sp_int_opt_inspect(sp_oint v);   /* "nil" for nil */
+const char *sp_int_opt_to_s(sp_oint v);      /* "" for nil */
 sp_int sp_int_pow(sp_int base, sp_int exp);
 
 /* ---- Float leaf-op prototypes (bodies relocated to lib/sp_cold.c). ---- */
-const char *sp_float_opt_inspect(sp_float v);
-const char *sp_float_opt_to_s(sp_float v);
+const char *sp_float_opt_inspect(sp_ofloat v);
+const char *sp_float_opt_to_s(sp_ofloat v);
 sp_int sp_float_denominator(sp_float f);
 sp_RbVal sp_float_numerator(sp_float f);
 /* Float#to_i: an in-range, non-NaN value is a C truncation, done inline;
@@ -1150,16 +1148,13 @@ static inline const char*sp_encoding_inspect(sp_Encoding e){return sp_encoding_i
 static inline sp_bool sp_encoding_eq(sp_Encoding a,sp_Encoding b){const char*an=sp_encoding_name(a);const char*bn=sp_encoding_name(b);return strcmp(an,bn)==0;}
 
 /* ---- Box helper prototypes (0 optcarrot uses; bodies in lib/sp_cold.c). ---- */
-/* An int? / float? value crossing into a poly slot: the sentinel is nil, never
-   a number. Inline because every boxed element read goes through here. */
-static inline sp_RbVal sp_box_int_or_nil(sp_int v) { return v == SP_INT_NIL ? sp_box_nil() : sp_box_int(v); }
-static inline sp_RbVal sp_box_float_or_nil(sp_float v) { return sp_float_is_nil(v) ? sp_box_nil() : sp_box_float(v); }
-/* An element of an Integer or Float array boxed for a poly container: `nf` is
-   the array's may_nil, read once ahead of the loop, so an array that cannot
-   hold nil boxes its elements as they are. */
-#define sp_box_int_nf(nf, v) ((nf) ? sp_box_int_or_nil(v) : sp_box_int(v))
-#define sp_box_float_nf(nf, v) ((nf) ? sp_box_float_or_nil(v) : sp_box_float(v))
-sp_RbVal sp_unsentinel(sp_RbVal v);
+/* An element of an Integer or Float array boxed for a poly container: the
+   element, or nil where the array's bitmap says so. `nf` is the array's
+   nilbits pointer read once ahead of the loop (SP_MAY_NIL), so an array that
+   never held a nil boxes its elements as they are; `pi` is the PHYSICAL slot
+   (start + i for an IntArray). */
+#define sp_box_int_nf(nf, pi, v) ((nf) && sp_nilbit_get((nf), (pi)) ? sp_box_nil() : sp_box_int(v))
+#define sp_box_float_nf(nf, pi, v) ((nf) && sp_nilbit_get((nf), (pi)) ? sp_box_nil() : sp_box_float(v))
 sp_RbVal sp_box_bigint(sp_Bigint *b);
 /* A bigint slot's nil is NULL (the compiler's nil_value for TY_BIGINT), so a
    nilable bigint boxes as nil rather than as a truthy Integer printing 0. */
@@ -1168,9 +1163,9 @@ static inline sp_RbVal sp_box_bigint_or_nil(sp_Bigint *b) { return b ? sp_box_bi
    it does not (a checksum, an unpacked quad, a parsed literal on a 32-bit
    sp_int). What a package answers as :any for a value that may be wide. */
 sp_RbVal sp_box_i64(int64_t v);
-/* A proven Integer owns the minimum word too. Keep ordinary boxing inline;
-   only the word a nullable scalar reserves for nil needs the full-width box. */
-static inline sp_RbVal sp_box_int_nn(sp_int v) { return SP_UNLIKELY(v == SP_INT_NIL) ? sp_box_i64(v) : sp_box_int(v); }
+/* A proven Integer: its own box. A nil is out of band (sp_oint), so no word
+   of an sp_int is reserved for it and the minimum word boxes as any other. */
+static inline sp_RbVal sp_box_int_nn(sp_int v) { return sp_box_int(v); }
 /* the inverse: a boxed Integer (or Float) as a 64-bit value, a Bignum through
    its low 64 bits, for a package parameter that may be wider than sp_int */
 int64_t sp_unbox_i64(sp_RbVal v);

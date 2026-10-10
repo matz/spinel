@@ -1,0 +1,6 @@
+2
+NoMethodError: undefined method '+' for nil
+ZeroDivisionError: divided by 0
+ZeroDivisionError: divided by 0
+NoMethodError: undefined method '*' for nil
+NoMethodError: undefined method '+' for nil

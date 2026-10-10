@@ -3815,6 +3815,11 @@ char **dsend_candidates(Compiler *c, int *out_n) {
     else if (ty && sp_streq(ty, "StringNode")) v = nt_str(nt, id, "content");
     if (!v || !*v || !dsend_method_name_shaped(v)) continue;
     int skip = is_send_family(v);  /* avoid send-of-send recursion */
+    /* the name of a `x.method(:sym)` wrapper, which the Method's own
+       `method(:__bam_N)` spells: no method of the program's, and an arm
+       calling it bound the send's arguments to the wrapper's receiver
+       parameter (a nil there made the receiver slot hold its nil) */
+    if (!skip && strncmp(v, "__bam_", 6) == 0) skip = 1;
     if (!skip && anh_has(&cand_set, v)) skip = 1;
     if (skip) continue;
     if (ncand == candcap) { candcap = candcap ? candcap * 2 : 16; cand = (char **)realloc(cand, sizeof(char *) * candcap); }

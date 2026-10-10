@@ -402,11 +402,11 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       if (perm < 0 && kw_mode < 0 && argc >= 3 &&
           !(nt_type(nt, argv[2]) && sp_streq(nt_type(nt, argv[2]), "KeywordHashNode")))
         perm = argv[2];
-      /* a nil perm is CRuby's default; the runtime reads SP_INT_NIL as 0666 */
+      /* a nil perm is CRuby's default; the runtime reads a nil sp_oint as 0666 */
       if (perm >= 0 && comp_ntype(c, perm) == TY_NIL) perm = -1;
       #define emit_perm_expr(c, n, b) do { \
         if (yield_site_type(c, n) == TY_POLY) { buf_puts(b, "sp_poly_arg_perm("); emit_expr(c, n, b); buf_puts(b, ")"); } \
-        else emit_int_expr_nilable(c, n, b); \
+        else emit_oint_expr(c, n, TY_INT, b); \
       } while (0)
       /* A mode the analysis cannot classify (a boxed read, a computed flags
          word in a poly slot) is decided at run time rather than assumed to be
@@ -419,7 +419,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           buf_puts(b, "sp_File_open_val("); \
           emit_path_expr(c, argv[0], b); buf_puts(b, ", "); \
           emit_boxed(c, mnode, b); buf_puts(b, ", "); \
-          if (perm >= 0) emit_perm_expr(c, perm, b); else buf_puts(b, "SP_INT_NIL"); \
+          if (perm >= 0) emit_perm_expr(c, perm, b); else buf_puts(b, "sp_oint_nil()"); \
           buf_puts(b, ")"); \
         } \
         else if (int_mode) { \
@@ -1820,12 +1820,14 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        answers too */
     if (sp_streq(name, "find_index") && argc == 1 && nt_ref(nt, id, "block") < 0) {
       int t = ++g_tmp;
-      buf_printf(b, "({ sp_int _t%d = sp_enum_find_index_val(sp_box_obj(", t);
+      int as_int = repr_of(c, id).as_ty == TY_INT;
+      if (as_int && !node_is_oint(c, id)) buf_puts(b, "sp_oint_arg(");
+      buf_printf(b, "({ sp_oint _t%d = sp_enum_find_index_val(sp_box_obj(", t);
       emit_expr(c, recv, b);
       buf_puts(b, ", SP_BUILTIN_ENUMERATOR), ");
       emit_boxed(c, argv[0], b);
-      if (repr_of(c, id).as_ty == TY_INT) buf_printf(b, "); _t%d; })", t);
-      else buf_printf(b, "); _t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d); })", t, t);
+      if (as_int) buf_printf(b, "); _t%d; })%s", t, node_is_oint(c, id) ? "" : ")");
+      else buf_printf(b, "); sp_box_oint(_t%d); })", t);
       return 1;
     }
     /* Enumerator#+ chains two enumerators (#2481): the concatenation of their

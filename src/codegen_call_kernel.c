@@ -12,6 +12,14 @@
 #include "share.h"
 #include "codegen_call_arms.h"
 
+/* ---- nil out of band: an emitter whose C result is an sp_oint / sp_ofloat
+   leaves it bare when the node is one (node_is_oint: the dispatcher's
+   consumer takes the oint) and otherwise reads it as the plain scalar through
+   sp_oint_arg (TypeError for nil) -- the same wrap the dispatcher applies to an
+   oint producer, applied here because this emitter decides the form. */
+static void oint_open(Compiler *c, int id, TyKind t, Buf *b) { if (!node_is_oint(c, id)) buf_printf(b, "%s(", oint_arg(t)); }
+static void oint_close(Compiler *c, int id, Buf *b) { if (!node_is_oint(c, id)) buf_puts(b, ")"); }
+
 /* the Kernel calls without a receiver: __dir__, at_exit, attr_* declarations, block_given?,
    the conversion functions (Integer, Float, String, Array, Hash, Rational, Complex), sleep,
    exit / exit! / abort, puts / print, p / pp, warn */
@@ -295,33 +303,42 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       TyKind at0 = comp_ntype(c, av[0]);
       if (at0 == TY_STRING) {
         int promo = repr_of(c, id).kind == RK_BOXED;   /* promote mode: a Bignum past sp_int */
+        if (!promo) oint_open(c, id, TY_INT, b);
         buf_puts(b, promo ? "sp_str_to_i_promote(" : "sp_str_to_i_lenient_base("); emit_expr(c, av[0], b); buf_puts(b, ", ");
         if (ac == 2) emit_int_expr(c, av[1], b); else buf_puts(b, "0");
         buf_puts(b, promo ? ", 2)" : ")");
+        if (!promo) oint_close(c, id, b);
         return 1;
       }
       /* with a base only a String converts, so a number is nil here */
-      if (at0 == TY_INT && ac == 1) { emit_expr(c, av[0], b); return 1; }
+      /* (an Integer that can be nil hands its nil on: Integer(nil, exception: false) is nil) */
+      if (at0 == TY_INT && ac == 1) { oint_open(c, id, TY_INT, b); emit_oint_expr(c, av[0], TY_INT, b); oint_close(c, id, b); return 1; }
       /* a user object, a boxed value that may hold one, or a Float (NaN and
          Infinity are nil, CRuby's FloatDomainError swallowed) converts
          through the runtime's Kernel#Integer path, nil for every failure */
       if (ty_is_object(at0) || at0 == TY_POLY || (at0 == TY_FLOAT && ac == 1)) {
+        /* the runtime answers an sp_oint for an Integer-typed call */
+        int ko = comp_ntype(c, id) == TY_INT;
+        if (ko) oint_open(c, id, TY_INT, b);
         emit_kconv_call(c, id, av, ac, 0, b);
+        if (ko) oint_close(c, id, b);
         return 1;
       }
-      buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), SP_INT_NIL)");
+      oint_open(c, id, TY_INT, b); buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_oint_nil())"); oint_close(c, id, b);
       return 1;
     }
     if (kconv_noraise && sp_streq(name, "Float") && ac == 1) {
       TyKind at0 = comp_ntype(c, av[0]);
-      if (at0 == TY_STRING) { buf_puts(b, "sp_str_to_f_lenient("); emit_expr(c, av[0], b); buf_puts(b, ")"); return 1; }
-      if (at0 == TY_INT) { buf_puts(b, "((sp_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); return 1; }
-      if (at0 == TY_FLOAT) { emit_expr(c, av[0], b); return 1; }
-      if (ty_is_object(at0) || at0 == TY_POLY) {
+      /* every arm answers an sp_ofloat: nil for a rejected value */
+      oint_open(c, id, TY_FLOAT, b);
+      if (at0 == TY_STRING) { buf_puts(b, "sp_str_to_f_lenient("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else if (at0 == TY_INT) { buf_puts(b, "sp_ofloat_of((sp_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
+      else if (at0 == TY_FLOAT) { buf_puts(b, "sp_ofloat_of("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else if (ty_is_object(at0) || at0 == TY_POLY) {
         buf_puts(b, "sp_poly_Float_ex("); emit_boxed(c, av[0], b); buf_puts(b, ", 0)");
-        return 1;
       }
-      buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_float_nil())");
+      else { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_ofloat_nil())"); }
+      oint_close(c, id, b);
       return 1;
     }
     if (sp_streq(name, "Integer") && ac == 1) {
@@ -332,9 +349,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       { NodeKind ek = nt_kind(nt, av[0]);
         if (at == TY_UNKNOWN && (ek == NK_HashNode || ek == NK_KeywordHashNode || ek == NK_ArrayNode))
           at = TY_POLY_ARRAY; }
-      /* A nullable Integer or Float holding its sentinel is nil, and nil does
-         not convert: CRuby's TypeError, where the sentinel passed through as
-         a number (or, as a Float, raised FloatDomainError on its NaN). */
+      /* A nullable Integer or Float whose nil flag is set is nil, and nil
+         does not convert: CRuby's TypeError, where the nil passed through as
+         a number (or, as a Float, raised FloatDomainError on the NaN that
+         held it). */
       /* Under --int-overflow=promote the call answers a box (a Float past
          sp_int is a Bignum), and the guard boxes its answer the same way. */
       TyKind rt9 = repr_of(c, id).as_ty;
@@ -344,9 +362,9 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         buf_puts(b, "({ "); emit_sentinel_bind(c, at, av[0], ref, sizeof ref, b);
         buf_puts(b, "if (!"); emit_slot_truthy(at, ref, b);
         buf_puts(b, ") sp_raise_cls(\"TypeError\", \"can't convert nil into Integer\"); ");
-        if (at == TY_INT) buf_printf(b, rt9 == TY_POLY ? "sp_box_int(%s); })" : "%s; })", ref);
-        else buf_printf(b, rt9 == TY_POLY ? "sp_poly_flo_domain_ck(%s); sp_box_f_to_int(%s); })"
-                                          : "sp_poly_flo_domain_ck(%s); sp_float_fit_i(%s); })", ref, ref);
+        if (at == TY_INT) buf_printf(b, rt9 == TY_POLY ? "sp_box_int(%s.v); })" : "%s.v; })", ref);
+        else buf_printf(b, rt9 == TY_POLY ? "sp_poly_flo_domain_ck(%s.v); sp_box_f_to_int(%s.v); })"
+                                          : "sp_poly_flo_domain_ck(%s.v); sp_float_fit_i(%s.v); })", ref, ref);
       }
       else if (at == TY_STRING && repr_of(c, id).kind == RK_BOXED) {   /* promote mode: a Bignum past sp_int */
         buf_puts(b, "sp_str_to_i_promote("); emit_expr(c, av[0], b); buf_puts(b, ", 0, 1)");
@@ -373,7 +391,11 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
          each answer judged by the runtime as CRuby judges it; a class whose
          #to_int or #to_i answers a Bignum types the call as one */
       else if (ty_is_object(at)) {
+        /* the strict form never answers nil: its sp_oint unwrapped */
+        int ko = comp_ntype(c, id) == TY_INT;
+        if (ko) buf_puts(b, "sp_oint_arg(");
         emit_kconv_call(c, id, av, ac, 1, b);
+        if (ko) buf_puts(b, ")");
       }
       else {
         /* an Array, Hash, Range or Symbol has no to_int: CRuby's TypeError,
@@ -399,7 +421,12 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
          user object is one -- a plain String, a shared handle, an object's
          #to_str -- the runtime decides, raising CRuby's ArgumentError for
          anything else (#2515) */
-      else emit_kconv_call(c, id, av, ac, 1, b);
+      else {
+        int ko = comp_ntype(c, id) == TY_INT;
+        if (ko) buf_puts(b, "sp_oint_arg(");
+        emit_kconv_call(c, id, av, ac, 1, b);
+        if (ko) buf_puts(b, ")");
+      }
       return 1;
     }
     if (sp_streq(name, "Float") && ac == 1) {
@@ -412,7 +439,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         char ref[24];
         buf_puts(b, "({ "); emit_sentinel_bind(c, at, av[0], ref, sizeof ref, b);
         buf_puts(b, "if (!"); emit_slot_truthy(at, ref, b);
-        buf_printf(b, ") sp_raise_cls(\"TypeError\", \"can't convert nil into Float\"); (sp_float)%s; })", ref);
+        buf_printf(b, ") sp_raise_cls(\"TypeError\", \"can't convert nil into Float\"); (sp_float)%s.v; })", ref);
       }
       else if (at == TY_STRING) { buf_puts(b, "sp_str_to_f_strict("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_INT) { buf_puts(b, "((sp_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
@@ -433,7 +460,11 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       /* a user object converts through its own #to_f, the answer judged by
          the runtime as CRuby judges it */
       else if (ty_is_object(at)) {
+        /* the strict form never answers nil: its sp_ofloat unwrapped */
+        int fo = comp_ntype(c, id) == TY_FLOAT;
+        if (fo) buf_puts(b, "sp_ofloat_arg(");
         buf_puts(b, "sp_poly_Float_ex("); emit_boxed(c, av[0], b); buf_puts(b, ", 1)");
+        if (fo) buf_puts(b, ")");
       }
       else {
         /* a Boolean, Symbol, Array or Hash has no #to_f: CRuby's TypeError,
@@ -453,7 +484,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, av[0], b);
         buf_printf(b, "; _t%d ? _t%d : sp_str_frozen_empty; })", ts, ts);
       }
-      /* a nullable Integer or Float holding its sentinel is nil, whose
+      /* a nullable Integer or Float whose nil flag is set is nil, whose
          String is "": box it, as nil where it is one */
       else if ((at == TY_INT || at == TY_FLOAT) && call_returns_nullable_int(c, av[0])) {
         buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[0], b); buf_puts(b, ")");
@@ -525,14 +556,14 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else if (at == TY_INT || at == TY_FLOAT || at == TY_STRING) {
         const char *ak = at == TY_INT ? "Int" : at == TY_FLOAT ? "Float" : "Str";
         int t = ++g_tmp;
-        /* a nullable Integer or Float holding its sentinel is nil, and
+        /* a nullable Integer or Float whose nil flag is set is nil, and
            Array(nil) is empty: the element goes in only when it is one */
         if (at != TY_STRING && call_returns_nullable_int(c, av[0])) {
           char ref[24];
           buf_puts(b, "({ "); emit_sentinel_bind(c, at, av[0], ref, sizeof ref, b);
           buf_printf(b, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d); if (", ak, t, ak, t);
           emit_slot_truthy(at, ref, b);
-          buf_printf(b, ") sp_%sArray_push(_t%d, %s); _t%d; })", ak, t, ref, t);
+          buf_printf(b, ") sp_%sArray_push(_t%d, %s.v); _t%d; })", ak, t, ref, t);
           return 1;
         }
         buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d); sp_%sArray_push(_t%d, ", ak, t, ak, t, ak, t);
@@ -878,7 +909,9 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     buf_printf(b, "sp_puts_line(sp_poly_inspect(_t%d)); %s", t,
                sp_streq(name, "p") ? "fflush(stdout); " : "");   /* p flushes, as CRuby's does */
     char tv[16]; snprintf(tv, sizeof tv, "_t%d", t);
-    emit_unbox_text(c, at, tv, b);
+    /* a nullable number printed and handed on answers its oint */
+    if (oint_kind(at) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_unbox(at), tv);
+    else emit_unbox_text(c, at, tv, b);
     buf_puts(b, "; })");
     return 1;
   }
@@ -1063,11 +1096,17 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (blk >= 0) {
       TyKind bt = repr_of(c, id).as_ty;
       /* NIL: a body whose tail is a break-less loop; ride the int slot (0). */
-      if (bt == TY_UNKNOWN || bt == TY_VOID || bt == TY_NIL) bt = TY_INT;
+      int was_nil_typed = bt == TY_UNKNOWN || bt == TY_VOID || bt == TY_NIL;
+      if (was_nil_typed) bt = TY_INT;
       int ptr = proc_slot_is_ptr(bt);
       int t = ++g_tmp;
-      emit_indent(g_pre, g_indent); emit_ctype(c, bt, g_pre);
-      buf_printf(g_pre, " _t%d = %s;\n", t, default_value_from_compiler(c, bt));
+      /* a number answer that can be nil (a thrown nil, a nullable tail, a
+         bare `throw` into a nil-typed catch riding the int slot) is held
+         with its nil beside the value */
+      int c_oint = oint_kind(bt) && (was_nil_typed || node_is_oint(c, id));
+      emit_indent(g_pre, g_indent);
+      if (c_oint) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(bt), t, oint_nil(bt));
+      else { emit_ctype(c, bt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", t, default_value_from_compiler(c, bt)); }
       /* the temp holds the value until the surrounding expression reads it,
          past whatever an operand after this one hoists (the begin value's
          temp, emit_expr); in front of the catch, so the landing's watermark
@@ -1163,6 +1202,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           Buf cvb; memset(&cvb, 0, sizeof cvb);
           int sv_ind = g_indent; g_indent = g_indent + 1;
           if (bt == TY_POLY && lr.kind != RK_BOXED) emit_boxed(c, last, &cvb);
+          else if (c_oint) emit_oint_expr(c, last, bt, &cvb);
           else emit_expr(c, last, &cvb);
           g_indent = sv_ind;
           emit_indent(g_pre, g_indent + 1);
@@ -1188,13 +1228,19 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       else if (bt == TY_POLY) {
         buf_printf(g_pre, "_t%d = sp_catch_val[sp_catch_top];\n", t);
       }
+      else if (c_oint) {
+        buf_printf(g_pre, "_t%d = %s(sp_catch_val[sp_catch_top]);\n", t, oint_unbox(bt));
+      }
       else {
         buf_printf(g_pre, "_t%d = ", t);
         emit_unbox_text(c, bt, "sp_catch_val[sp_catch_top]", g_pre);
         buf_puts(g_pre, ";\n");
       }
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-      buf_printf(b, "_t%d", t);
+      /* a nil-typed catch held its slot as the oint only to take a bare
+         throw's nil: its consumer reads the int slot as before */
+      if (c_oint && !node_is_oint(c, id)) buf_printf(b, "_t%d.v", t);
+      else buf_printf(b, "_t%d", t);
       return 1;
     }
   }

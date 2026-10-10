@@ -130,6 +130,16 @@ int emit_op_condvar_wait(Compiler *c, const BopCtx *x, Buf *b) {
                       ": sp_CondVar_wait_timeout(_t%d, _m%d, sp_poly_to_f_with_rational(_timeout%d)); })",
                    timeout, t, m, t, m, timeout);
       }
+      /* an Integer or Float timeout that can be nil: nil waits with no
+         timeout, as a boxed nil does */
+      else if (oint_kind(comp_ntype(c, to_arg)) && node_has_oint_form(c, to_arg)) {
+        int timeout = ++g_tmp;
+        TyKind tk = comp_ntype(c, to_arg);
+        buf_printf(b, "; %s _timeout%d = ", oint_ctype(tk), timeout); emit_oint_expr(c, to_arg, tk, b);
+        buf_printf(b, "; _timeout%d.nil ? sp_CondVar_wait(_t%d, _m%d) "
+                      ": sp_CondVar_wait_timeout(_t%d, _m%d, (double)_timeout%d.v); })",
+                   timeout, t, m, t, m, timeout);
+      }
       else {
         int timeout = ++g_tmp;
         buf_printf(b, "; double _timeout%d = ", timeout); emit_float_expr(c, to_arg, b);
@@ -334,8 +344,14 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          epilogue named fields this frame did not have (#7342) */
       buf_printf(b, "int _nxtf%d = 0; (void)_nxtf%d; void *_excobj%d = NULL; ", eid, eid, eid);
       if (g_c_loop_depth > 0) buf_printf(b, "int _brkf%d = 0; (void)_brkf%d; ", eid, eid);
-      if (has_retval) { emit_ctype(c, g_ret_type, b); buf_printf(b, " _retv%d = %s; ", eid, default_value_from_compiler(c, g_ret_type)); }
-      g_ensure_stack[g_ensure_depth++] = (EnsureCtx){ eid, has_retval, g_exc_frame_depth, g_ret_type, g_rescue_save_depth };
+      if (has_retval) {
+        /* a number slot holding its nil beside the value is the oint */
+        if (oint_kind(g_ret_type) && g_ret_oint) buf_printf(b, "%s _retv%d = %s; ", oint_ctype(g_ret_type), eid, oint_nil(g_ret_type));
+        else { emit_ctype(c, g_ret_type, b); buf_printf(b, " _retv%d = %s; ", eid, default_value_from_compiler(c, g_ret_type)); }
+      }
+      g_ensure_stack[g_ensure_depth++] = (EnsureCtx){ .lid = eid, .has_retval = has_retval, .exc_base = g_exc_frame_depth,
+                                                      .retv_ty = g_ret_type, .rescue_base = g_rescue_save_depth,
+                                                      .retv_o = g_ret_oint };
       buf_puts(b, "sp_exc_check_depth(); sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; ");
       buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++; if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) { ");
       g_exc_frame_depth++;

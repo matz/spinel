@@ -10,20 +10,4 @@ test/poly_int_overflow_raises.rb
 # Gaps found when the lane began, at bcce09575: arithmetic on a nil
 # Integer wraps its sentinel instead of raising NoMethodError, and a
 # SystemStackError is not raised. A gap leaves this list with its fix.
-test/block_param_nullable_int.rb
-test/block_param_nullable_nil.rb
-test/block_param_table_rows.rb
-test/cached_index_nil_cold.rb
-test/float_elem_opassign_nil.rb
-test/index_opassign_fused.rb
-test/int_unbox_nil_ops.rb
-test/int_unbox_nil_sentinel.rb
-test/nil_from_int_container_arithmetic.rb
-test/nil_narrowing.rb
-test/nil_narrowing_operands.rb
-test/nullable_scalar_carriers.rb
-test/scalar_local_read_before_write.rb
-test/stack_overflow_rescued.rb
 test/stack_overflow_unhandled.rb
-test/sum_block_compensated.rb
-test/then_tap_nil_receiver.rb

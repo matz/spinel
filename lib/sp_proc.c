@@ -65,8 +65,6 @@ sp_Curry *sp_curry_new(sp_Proc *p) {
    (an optional widens it, a rest lifts it), so the call site passes it in --
    max < 0 means unlimited-or-unknown, and the message then says "min+". */
 sp_Curry *sp_curry_new_n(sp_Proc *p, sp_int n, sp_int max) {
-  /* an int-typed slot's nil sentinel is CRuby's nil count: no count at all */
-  if (n == SP_INT_NIL) return sp_curry_new(p);
   if (p && p->lambda_p) {
     sp_int min = p->arity < 0 ? -p->arity - 1 : p->arity;
     sp_int mx = max >= 0 ? max : (p->arity >= 0 ? p->arity : -1);

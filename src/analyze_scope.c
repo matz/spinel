@@ -4395,8 +4395,16 @@ static TyKind slot_hash_variant_from_writes(Compiler *c, NodeKind rk, const char
     int wa = nt_ref(nt, w, "arguments");
     int wan = 0; const int *wav = wa >= 0 ? nt_arr(nt, wa, "arguments", &wan) : NULL;
     if (wan < (is_owr ? 1 : 2)) continue;
-    kt = ty_unify(kt, infer_type(c, wav[0]));
-    if (!is_owr) vt = ty_unify(vt, infer_type(c, wav[1]));
+    /* an Integer or Float key or value that can be nil widens the slot to
+       the boxed kind: a typed key or value slot has no nil (nil out of band) */
+    { TyKind wkt = infer_type(c, wav[0]);
+      if ((wkt == TY_INT || wkt == TY_FLOAT) && nullable_int_value(c, wav[0])) wkt = TY_POLY;
+      kt = ty_unify(kt, wkt); }
+    if (!is_owr) {
+      TyKind wvt = infer_type(c, wav[1]);
+      if ((wvt == TY_INT || wvt == TY_FLOAT) && nullable_int_value(c, wav[1])) wvt = TY_POLY;
+      vt = ty_unify(vt, wvt);
+    }
     saw = 1;
   }
   /* The default is a value the hash answers, so it is part of the value type:
@@ -4471,12 +4479,13 @@ static TyKind empty_container_write(Compiler *c, int vnode, TyKind vt, TyKind sl
 }
 
 /* The type a slot holding `cur` takes when it is also written nil. A slot
-   whose C form has a nil of its own (NULL, or the Integer/Float sentinel)
-   keeps its type; a bool, a Symbol, a Class, a Rational and a Complex have no
-   spare value, so the nil boxes the slot -- the join ty_unify gives a local
-   written both. The ivar, cvar and gvar write passes skipped every nil write,
-   so such a slot kept the bare type and its nil read back as false (or the
-   zero Symbol): `@v.nil?` folded to false and `p @v` printed false. */
+   whose C form has a nil of its own (NULL, or an Integer/Float slot's nil
+   beside the value) keeps its type; a bool, a Symbol, a Class, a Rational
+   and a Complex have no spare value, so the nil boxes the slot -- the join
+   ty_unify gives a local written both. The ivar, cvar and gvar write passes
+   skipped every nil write, so such a slot kept the bare type and its nil
+   read back as false (or the zero Symbol): `@v.nil?` folded to false and
+   `p @v` printed false. */
 /* 1 iff a write of `vt` leaves a slot typed `cur` as it is: a slot an element
    write widened to the general Array takes any array written into it as one
    (the write converts it), where the join of two array kinds is the scalar
@@ -7117,8 +7126,14 @@ static TyKind cvar_hash_variant_from_writes(Compiler *c, const char *cvname, int
     int wa = nt_ref(nt, w, "arguments");
     int wan = 0; const int *wav = wa >= 0 ? nt_arr(nt, wa, "arguments", &wan) : NULL;
     if (opw ? wan != 1 : wan < 2) continue;
-    kt = ty_unify(kt, infer_type(c, wav[0]));
-    vt = ty_unify(vt, infer_type(c, opw ? nt_ref(nt, w, "value") : wav[1]));
+    /* a key or value that can be nil widens to the boxed kind, as a global's */
+    { TyKind wkt = infer_type(c, wav[0]);
+      if ((wkt == TY_INT || wkt == TY_FLOAT) && nullable_int_value(c, wav[0])) wkt = TY_POLY;
+      kt = ty_unify(kt, wkt);
+      int wv = opw ? nt_ref(nt, w, "value") : wav[1];
+      TyKind wvt = infer_type(c, wv);
+      if ((wvt == TY_INT || wvt == TY_FLOAT) && nullable_int_value(c, wv)) wvt = TY_POLY;
+      vt = ty_unify(vt, wvt); }
     saw = 1;
   }
   /* the default is a value the hash answers, as for a global's */
@@ -7348,12 +7363,12 @@ static void dn_build(Compiler *c) {
 }
 
 /* `@iv = cond ? nil : <int>` (a literal-nil ternary arm) pins the ivar as a
-   nullable int -- the SP_INT_NIL sentinel in an unboxed int slot, the same
+   nullable int -- its nil beside the value in an sp_oint slot, the same
    representation a direct `@iv = nil` / `@iv = <int>` pair already yields
    (a bare `@iv = nil` is skipped below, leaving the int writes) -- rather than
    widening to poly. Scoped to the ivar write so the nullable value never
    escapes as a bare ternary expression, where a non-ivar consumer would not be
-   sentinel-aware. Returns TY_INT for that shape, else TY_UNKNOWN. */
+   nil-aware. Returns TY_INT for that shape, else TY_UNKNOWN. */
 static TyKind ivar_nullable_int_ternary(Compiler *c, int vnode) {
   int tn, en;
   if (!comp_ternary_arms(c->nt, vnode, &tn, &en)) return TY_UNKNOWN;

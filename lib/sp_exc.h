@@ -146,7 +146,7 @@ enum { SP_SYSERR_NONE, SP_SYSERR_NUM, SP_SYSERR_BASE, SP_SYSERR_BARE };
 int sp_syserr_kind(const char *cls, sp_int *num);   /* where cls stands in the SystemCallError family */
 const char *sp_syserr_text(int has_num, sp_int num, const char *func, const char *msg);
 void sp_exc_syserr_init(sp_Exception *e);   /* #errno from the class's Errno ancestor */
-sp_int sp_errno_num(const char *cls);   /* Errno::ENOENT::Errno */
+sp_int sp_errno_num(const char *cls);   /* Errno::ENOENT::Errno; -1 for a name outside Errno:: */
 const char *sp_exc_parent_of_name(const char *cls);
 sp_RbVal sp_exc_name_acc(sp_Exception *e);
 sp_RbVal sp_exc_key_acc(sp_Exception *e);

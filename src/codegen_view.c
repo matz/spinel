@@ -71,8 +71,10 @@ ArmCtx g_arm = { -1, -1, 0, -1 };
    with, so only a call of more arguments than that grows it. */
 static int  argov_node0[2 * MAX_ARG_OVERRIDE];
 static char argov_text0[2 * MAX_ARG_OVERRIDE][ARGOV_TEXT_LEN];
+static unsigned char argov_oint0[2 * MAX_ARG_OVERRIDE];
 int  *g_argov_node = argov_node0;
 char (*g_argov_text)[ARGOV_TEXT_LEN] = argov_text0;
+unsigned char *g_argov_oint = argov_oint0;   /* the bound text is an sp_oint / sp_ofloat (view_bind_o) */
 static int g_argov_cap = 2 * MAX_ARG_OVERRIDE;
 int  g_n_argov = 0;
 /* See codegen_internal.h. */
@@ -84,14 +86,36 @@ void argov_reserve(void) {
   if (!nodes || !texts) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memcpy(nodes, g_argov_node, sizeof *nodes * (size_t)g_n_argov);
   memcpy(texts, g_argov_text, sizeof *texts * (size_t)g_n_argov);
-  if (g_argov_node != argov_node0) { free(g_argov_node); free(g_argov_text); }
-  g_argov_node = nodes; g_argov_text = texts; g_argov_cap = cap;
+  unsigned char *oints = calloc((size_t)cap, 1);
+  if (!oints) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(oints, g_argov_oint, (size_t)g_n_argov);
+  if (g_argov_node != argov_node0) { free(g_argov_node); free(g_argov_text); free(g_argov_oint); }
+  g_argov_node = nodes; g_argov_text = texts; g_argov_oint = oints; g_argov_cap = cap;
 }
 
 int view_bind(int node, const char *fmt, ...) {
   if (g_n_argov + 1 > g_argov_cap) argov_reserve();
   int slot = g_n_argov++;
   g_argov_node[slot] = node;
+  g_argov_oint[slot] = 0;
+  va_list ap; va_start(ap, fmt);
+  int n = vsnprintf(g_argov_text[slot], sizeof g_argov_text[0], fmt, ap);
+  va_end(ap);
+  if (n < 0 || (size_t)n >= sizeof g_argov_text[0]) {
+    fprintf(stderr, "spinel: internal error: a bound node's text is %d bytes, over the %d a slot holds (ARGOV_TEXT_LEN): %.40s...\n",
+            n, ARGOV_TEXT_LEN - 1, g_argov_text[slot]);
+    abort();
+  }
+  return slot;
+}
+/* As view_bind, for a temp holding an Integer / Float with its nil beside
+   the value: the node reads as that oint (the dispatcher wraps it as any
+   oint producer). */
+int view_bind_o(int node, const char *fmt, ...) {
+  if (g_n_argov + 1 > g_argov_cap) argov_reserve();
+  int slot = g_n_argov++;
+  g_argov_node[slot] = node;
+  g_argov_oint[slot] = 1;
   va_list ap; va_start(ap, fmt);
   int n;
   if (g_share_check) {

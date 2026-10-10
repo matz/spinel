@@ -47,12 +47,11 @@ int sp_process_status_coredump_p(sp_int s);
 int sp_process_status_success_p(sp_int s);
 
 /* Accessors. CRuby semantics: exited? -> exitstatus, signaled? -> termsig;
-   the un-applicable accessor answers nil, carried as SP_INT_NIL -- the
-   nullable-Integer sentinel the rest of the runtime uses, so `p st.termsig`
+   the un-applicable accessor answers nil (an sp_oint), so `p st.termsig`
    renders nil and `st.termsig.nil?` is true. */
 sp_int sp_process_status_pid(sp_int s);
-sp_int sp_process_status_exitstatus(sp_int s);
-sp_int sp_process_status_termsig(sp_int s);
+sp_oint sp_process_status_exitstatus(sp_int s);
+sp_oint sp_process_status_termsig(sp_int s);
 
 /* Render the status to a string for to_s / inspect. The result lives
    in a static buffer; the runtime copies it to a GC-heap string for

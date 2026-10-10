@@ -113,7 +113,21 @@ Recognized type specs:
 
 All integer types collapse to `sp_int` (int64) inside Spinel and are
 cast to the declared C type at the call boundary. Floats collapse to
-`double` the same way.
+`double` the same way. A nullable Integer passed where a C integer type
+is declared goes through `sp_oint_arg`, which raises the
+`no implicit conversion from nil to integer` TypeError for nil and passes
+every other value, `INT64_MIN` included.
+
+The other direction, the C contract header `--ext-entry` emits for a
+kernel's exported methods (see [spin.md](spin.md)), spells a nullable
+Integer or Float -- a parameter the kernel is also called with `nil`, a
+return that can be `nil` -- as `sp_oint` / `sp_ofloat` rather than
+`sp_int` / `sp_float`: a struct of the machine word and a nil flag
+(`{ sp_int v; sp_bool nil; }`), built with `sp_oint_of(v)` or
+`sp_oint_nil()` and read through `.nil` and `.v`. No bit pattern of the
+word means nil, so `INT64_MIN` and a NaN of any payload cross the
+boundary as values. A parameter or return the analysis never sees `nil`
+reach stays a plain `sp_int` / `sp_float`.
 
 The function's `extern` is built from these C types and declared under a
 private name that an asm label binds to the real symbol, so it can't

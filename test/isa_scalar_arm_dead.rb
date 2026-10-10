@@ -2,6 +2,9 @@
 # is dead -- and it is the only place the call in it comes from. Without
 # dropping it, `Int64.new(0)` (an Integer argument) made the emitter meet
 # `value.value` on an Integer and refuse the program.
+# (The wrap-to-signed step used `1 << 64` and `1 << 63`, literal shifts past
+# int64 that the default mode now raises RangeError for like the run-time
+# shift; the step was incidental, the inputs are small, so it is gone.)
 
 class Int64
   MASK64 = 0xFFFFFFFFFFFFFFFF
@@ -13,7 +16,6 @@ class Int64
     else
       v = value.to_i
       @value = v & MASK64
-      @value -= (1 << 64) if @value & (1 << 63) != 0
     end
   end
 

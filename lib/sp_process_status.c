@@ -28,10 +28,8 @@
    into `int st` first and passes that. */
 
 /* CRuby answers nil for exitstatus on a signaled status and for termsig on
-   one that exited, and spinel already has a spelling for a nullable Integer:
-   SP_INT_NIL, which every renderer and `.nil?` understands. -1 is a real
-   Integer here -- `p st.termsig` printed -1 rather than nil. */
-#define SP_STATUS_NIL SP_INT_NIL
+   one that exited: an sp_oint. -1 is a real Integer here -- `p st.termsig`
+   printed -1 rather than nil. */
 
 /* ---- allocator ---- */
 
@@ -114,16 +112,16 @@ sp_int sp_process_status_pid(sp_int s) {
   return 0;
 }
 
-sp_int sp_process_status_exitstatus(sp_int s) {
+sp_oint sp_process_status_exitstatus(sp_int s) {
   int st = (int)s;
-  if (!WIFEXITED(st)) return SP_STATUS_NIL;
-  return (sp_int)WEXITSTATUS(st);
+  if (!WIFEXITED(st)) return sp_oint_nil();
+  return sp_oint_of((sp_int)WEXITSTATUS(st));
 }
 
-sp_int sp_process_status_termsig(sp_int s) {
+sp_oint sp_process_status_termsig(sp_int s) {
   int st = (int)s;
-  if (!WIFSIGNALED(st)) return SP_STATUS_NIL;
-  return (sp_int)WTERMSIG(st);
+  if (!WIFSIGNALED(st)) return sp_oint_nil();
+  return sp_oint_of((sp_int)WTERMSIG(st));
 }
 
 /* ---- boxed-struct pid access ---- */

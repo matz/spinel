@@ -862,7 +862,7 @@ sp_int sp_errno_num(const char *cls) {
   for (size_t i = 0; i < sizeof SP_ERRNO_TAB / sizeof SP_ERRNO_TAB[0]; i++)
     if (!strcmp(SP_ERRNO_TAB[i].name, cls)) return SP_ERRNO_TAB[i].num;
   /* a name the platform has no number for is CRuby's Errno 0 class */
-  return strncmp(cls, "Errno::", 7) ? SP_INT_NIL : 0;
+  return strncmp(cls, "Errno::", 7) ? -1 : 0;
 }
 /* Where class `cls` stands in the SystemCallError family, walking its user
    and builtin parents: SP_SYSERR_NUM when it is (or descends from) an Errno
@@ -883,7 +883,7 @@ int sp_syserr_kind(const char *cls, sp_int *num) {
       /* a name this platform has no number for: CRuby still defines the
          class, with Errno 0 */
       sp_int n = sp_errno_num(cn);
-      if (num) *num = n == SP_INT_NIL ? 0 : n;
+      if (num) *num = n < 0 ? 0 : n;
       return SP_SYSERR_NUM;
     }
     if (!strcmp(cn, "SystemCallError")) return depth == 0 ? SP_SYSERR_BASE : SP_SYSERR_BARE;

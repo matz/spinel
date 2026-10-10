@@ -399,7 +399,7 @@ int emit_call_bigint_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
                     " _t%d.last == INTPTR_MAX ? sp_bigint_to_int(_t%d)"
                     " : sp_bigint_to_int(sp_bigint_and(_t%d,"
                     " sp_bigint_sub(sp_bigint_shl(sp_bigint_new_int(1),"
-                    " (int64_t)(_t%d.last - _lo%d + (_t%d.excl ? 0 : 1))), sp_bigint_new_int(1)))); })",
+                    " (int64_t)((uintptr_t)_t%d.last - (uintptr_t)_lo%d + (_t%d.excl ? 0 : 1))), sp_bigint_new_int(1)))); })",
                  tr, tr, tr,
                  ts, r, tr,
                  tr, ts,

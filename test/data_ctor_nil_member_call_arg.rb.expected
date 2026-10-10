@@ -1,0 +1,5 @@
+#<data D a=nil, b=1>
+#<data D a=2, b=3>
+#<data D a=nil, b=5>
+[5, nil]
+#<struct S x=1, y=nil>

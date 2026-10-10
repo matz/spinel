@@ -12,7 +12,7 @@ rescue ArgumentError, NoMemoryError => e
   puts "center 2^40: #{e.class}: #{e.message}"
 end
 begin
-  "ab".ljust((1 << 63) - 1)
+  "ab".ljust(9223372036854775807)
 rescue ArgumentError, NoMemoryError => e
   puts "ljust max: #{e.class}: #{e.message}"
 end

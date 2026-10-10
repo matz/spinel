@@ -80,7 +80,7 @@ static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_m
    the same mode scan (which refuses "rx"), O_CLOEXEC, and the errno-named
    error, rather than fopen's looser mode and a flat ENOENT. */
 sp_File *sp_File_open(const char *path, const char *mode) {
-  return sp_File_open_perm(path, mode ? mode : "r", SP_INT_NIL);
+  return sp_File_open_perm(path, mode ? mode : "r", sp_oint_nil());
 }
 
 /* Returns 0 on success, -1 on error. */
@@ -1249,35 +1249,35 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
   }
   sp_file_raise_errno("read", "");
 }
-/* write_nonblock -> the byte count, or SP_INT_NIL when it would block.
+/* write_nonblock -> the byte count, or nil when it would block.
    Paired like sp_File_write: the _bin entry sizes with the header length and
    is emitted only for a String value; this one stays strlen for bare
    literals (a poly operand reaches it through sp_poly_to_s, which answers
    static class/symbol names with no marker byte). */
-static sp_int sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
+static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   ssize_t n;
   int saved = sp_io_nb_begin(f);
   do { n = write(fileno(f->fp), data ? data : "", len); } while (n < 0 && errno == EINTR);
   int we = errno;
   sp_io_nb_end(f, saved);
   errno = we;
-  if (n >= 0) return (sp_int)n;
+  if (n >= 0) return sp_oint_of((sp_int)n);
   if (sp_sock_would_block()) {
-    if (!exc) return SP_INT_NIL;
+    if (!exc) return sp_oint_nil();
     sp_sock_raise_wait(1, "write");
   }
   sp_file_raise_errno("write", "");
 }
-sp_int sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
+sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   SP_IO_OPEN(f);
   return sp_sock_write_nb_len(f, data, data ? strlen(data) : 0, exc);
 }
-sp_int sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
+sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   SP_IO_OPEN(f);
   return sp_sock_write_nb_len(f, data, data ? sp_str_byte_len(data) : 0, exc);
 }
 /* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */
-sp_int sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
+sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_connect(int fd, const char *host, int port);
   sp_sock_nb_prepare(f, "connect_nonblock");
   int saved = sp_io_nb_begin(f);
@@ -1285,19 +1285,19 @@ sp_int sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc
   int ce = errno;
   sp_io_nb_end(f, saved);
   errno = ce;
-  if (rc == 0) return 0;
+  if (rc == 0) return sp_oint_of(0);
   if (errno == EINPROGRESS || errno == EALREADY) {
-    if (!exc) return SP_INT_NIL;
+    if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  if (errno == EISCONN) return 0;
+  if (errno == EISCONN) return sp_oint_of(0);
   sp_file_raise_errno("connect", host ? host : "");
 }
 /* connect_nonblock(sockaddr). The peer is already resolved into a packed
    struct sockaddr (the binary String returned by Socket.sockaddr_in or
    #to_sockaddr on an Addrinfo). connect(2) takes the raw bytes; we just
    pass them through. Same nonblocking lifecycle as sp_sock_connect_nb. */
-sp_int sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sa);
+sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sa);
   /* sp_sock_nb_prepare runs first: it checks the closed-socket and
      wrong-class guards and raises the matching exception (e.g. IOError
      "closed stream") before we touch the address. The sa/salen guard
@@ -1313,17 +1313,17 @@ sp_int sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool e
   int ce = errno;
   sp_io_nb_end(f, saved);
   errno = ce;
-  if (rc == 0) return 0;
+  if (rc == 0) return sp_oint_of(0);
   if (errno == EINPROGRESS || errno == EALREADY) {
-    if (!exc) return SP_INT_NIL;
+    if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
   /* Already connected answers 0, the same as the two-argument form above and
      the same as CRuby answers here -- measured on both, in both exception
      modes, including a second connect to a different address. */
-  if (errno == EISCONN) return 0;
+  if (errno == EISCONN) return sp_oint_of(0);
   sp_file_raise_errno("connect", "");
-  return -1;
+  return sp_oint_of(-1);
 }
 
 /* TCPServer#accept: park cooperatively for a pending connection first -- a
@@ -1488,16 +1488,16 @@ sp_bool sp_file_chardev(const char *path) {
   return path && stat(path, &st) == 0 && S_ISCHR(st.st_mode);
 }
 /* world_readable? / world_writable?: the permission bits (0..0777) when the
-   other-read / other-write bit is set, else nil (SP_INT_NIL) (#3005) */
-sp_int sp_file_world_readable(const char *path) {
+   other-read / other-write bit is set, else nil (#3005) */
+sp_oint sp_file_world_readable(const char *path) {
   struct stat st;
-  if (!(path && stat(path, &st) == 0 && (st.st_mode & S_IROTH))) return SP_INT_NIL;
-  return (sp_int)(st.st_mode & 0777);
+  if (!(path && stat(path, &st) == 0 && (st.st_mode & S_IROTH))) return sp_oint_nil();
+  return sp_oint_of((sp_int)(st.st_mode & 0777));
 }
-sp_int sp_file_world_writable(const char *path) {
+sp_oint sp_file_world_writable(const char *path) {
   struct stat st;
-  if (!(path && stat(path, &st) == 0 && (st.st_mode & S_IWOTH))) return SP_INT_NIL;
-  return (sp_int)(st.st_mode & 0777);
+  if (!(path && stat(path, &st) == 0 && (st.st_mode & S_IWOTH))) return sp_oint_nil();
+  return sp_oint_of((sp_int)(st.st_mode & 0777));
 }
 sp_int sp_file_do_symlink(const char *oldp, const char *newp) {SP_GC_ROOT_STR(newp);
   if (symlink(oldp, newp) != 0) sp_file_raise_errno("symlink", newp);

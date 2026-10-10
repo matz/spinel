@@ -1414,6 +1414,9 @@ static int yvt_callee_index(Compiler *c, int cid) {
   int rmi = -1;
   if (crecv < 0) {
     rmi = comp_cbody_call_mi(c, cid, cn);
+    /* resolved as emission resolves it: a class method's own chain before
+       a top-level def of the same name */
+    if (rmi < 0 && cn) rmi = comp_self_call_mi(c, cid, cn);
     if (rmi < 0) rmi = comp_method_index(c, cn);
     if (rmi < 0) {
       Scope *cs = comp_scope_of(c, cid);
@@ -1700,13 +1703,35 @@ TyKind yield_value_type(Compiler *c, int mi) {
    This is yield_value_type's call-site scan answering with NODES instead of a
    unified type, because nilability is a property of the producing EXPRESSION,
    not of the type it settles on -- an `Integer?` and an `Integer` both arrive
-   as TY_INT, so the type alone cannot say whether the value can be the
-   reserved scalar nil sentinel (#3505). A forwarded block (`m(&b)` / `m(...)`)
-   has no literal of its own and delegates to the enclosing method's tails.
+   as TY_INT, so the type alone cannot say whether the value can be nil
+   (#3505). A forwarded block (`m(&b)` / `m(...)`) has no literal of its own
+   and delegates to the enclosing method's tails.
    Unlike yield_value_type this collects EVERY site rather than stopping at the
    first concrete one: the caller ORs the results, and a single nilable block
    anywhere is enough to make the slot nilable. Writes at most `max` ids and
    returns how many. */
+/* With yield_block_tails_next set, a literal block's `next v` (and a bare
+   `next`) is one of its values too: the NextNode ids follow its tail (the
+   nested blocks', lambdas', defs' and loops' own `next` excluded). Only the
+   nil question asks for them (nullable_int_value). */
+int yield_block_tails_next = 0;
+static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int depth) {
+  if (id < 0 || max <= 0 || depth > 200) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_NextNode) { out[0] = id; return 1; }
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_WhileNode ||
+      k == NK_UntilNode || k == NK_LambdaNode || k == NK_ForNode || k == NK_BlockNode) return 0;
+  int n = 0;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr && n < max; i++) n += ybt_collect_next(nt, nt_ref_at(nt, id, i), out + n, max - n, depth + 1);
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na && n < max; i++) {
+    int an = 0; const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an && n < max; j++) n += ybt_collect_next(nt, ids[j], out + n, max - n, depth + 1);
+  }
+  return n;
+}
+
 int yield_block_tails(Compiler *c, int mi, int *out, int max) {
   if (max <= 0) return 0;
   for (int i = 0; i < g_yvt_depth; i++)
@@ -1728,7 +1753,7 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
     const char *blkty = blk >= 0 ? nt_type(nt, blk) : NULL;
     if (fwd_args || (blkty && sp_streq(blkty, "BlockArgumentNode"))) {
       /* a proc value of the call's own: a literal's tail, as a literal
-         block's; any other arrives boxed, with no sentinel to carry */
+         block's; any other arrives boxed, with no scalar nil to carry */
       if (!call_forwards_own_block(c, cid)) {
         int pbody = yvt_proc_arg_body(c, blk);
         int pn = 0; const int *pd = pbody >= 0 ? nt_arr(nt, pbody, "body", &pn) : NULL;
@@ -1743,6 +1768,7 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
     int bb = nt_ref(nt, blk, "body");
     int bn = 0; const int *bd = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
     if (bd && bn > 0) out[n++] = bd[bn - 1];
+    if (yield_block_tails_next && bb >= 0 && n < max) n += ybt_collect_next(nt, bb, out + n, max - n, 0);
   }
   g_yvt_depth--;
   return n;

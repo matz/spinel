@@ -5,7 +5,8 @@
  * spinel_rt.h (which includes this near the top) and libspinel_rt.a
  * sources can include it to see the layouts without pulling in the
  * header's static/inline function bodies. Pure type/macro definitions
- * only -- no function definitions, no global state.
+ * only (plus the sp_oint / sp_ofloat constructors, which are the types'
+ * literals) -- no other function definitions, no global state.
  *
  * Reorganisation step toward slimming spinel_rt.h; sp_RbVal, the poly
  * containers, and the conditional Proc/Fiber/etc. types still live in
@@ -96,48 +97,6 @@ typedef bool sp_bool;
 #define SP_FALSE_OBJECT_ID 0
 #define SP_TRUE_OBJECT_ID 20
 
-/* Sentinel value reserved by the int? (scalar-nullable int) type. An
-   int? slot is bit-compatible with sp_int; SP_INT_NIL marks the
-   "nil" inhabitant. The pattern is INTPTR_MIN -- INT64_MIN on 64-bit
-   (unchanged), INT32_MIN on 32-bit.
-   `sp_int_is_nil(v)` is the canonical predicate; treat any int? value
-   produced by runtime helpers as opaque outside this macro.
-
-   KNOWN LIMITATION (32-bit builds only). The reservation is a single
-   bit pattern, so a *genuine* integer equal to the sentinel is
-   indistinguishable from nil. On 64-bit, INT64_MIN is effectively
-   unreachable in practice (CRuby would have promoted it to Bignum), so
-   this never bites. On 32-bit, INT32_MIN (-2147483648) is an ordinary
-   reachable Integer, so a real -2147483648 flowing into an int? slot
-   reads back as nil -- e.g. `[-2147483648].pop` yields nil instead of
-   the value. This affects ONLY int? (nullable-int) slots; a plain
-   (non-nullable) int holding -2147483648 is fine, since it never
-   consults sp_int_is_nil. The integer-overflow helpers deliberately do
-   NOT reserve this value (checking every add/sub/mul result against it
-   would cost the hot path the embedded build is trying to save). Code that
-   must store -2147483648 nullably on 32-bit should box it (poly) rather
-   than use a flat int? slot. */
-#define SP_INT_NIL ((sp_int)INTPTR_MIN)
-#define sp_int_is_nil(v) ((v) == SP_INT_NIL)
-
-/* Nullable float (float?) sentinel: a quiet NaN with a reserved payload.
-   NaN != NaN, so nil is detected by bit pattern, not ==. The payload is
-   chosen so the canonical NaN (0x7FF8000000000000) and ordinary
-   arithmetic NaNs don't collide; a real Float element with this exact
-   bit pattern reads back as nil -- the same documented compromise
-   SP_INT_NIL makes for INTPTR_MIN. sp_float is double (8 bytes). */
-#define SP_FLOAT_NIL_BITS ((uint64_t)0x7FF8000000000001ULL)
-static inline sp_float sp_float_nil(void) {
-  union { uint64_t u; sp_float d; } x; x.u = SP_FLOAT_NIL_BITS; return x.d;
-}
-/* The same value as a CONSTANT expression, for a file-scope initializer
-   (a static ivar, a global) where the union read above is not one. The
-   payload argument is the low mantissa bits, so "0x1" is exactly
-   SP_FLOAT_NIL_BITS on gcc and clang, 32-bit lanes included. */
-#define SP_FLOAT_NIL_CONST (__builtin_nan("0x1"))
-static inline int sp_float_is_nil(sp_float v) {
-  union { sp_float d; uint64_t u; } x; x.d = v; return x.u == SP_FLOAT_NIL_BITS;
-}
 /* A nullable Integer or Float in flight (a local, a parameter, a return, a
    temp, a container read that can miss): the value and its nil live side by
    side. No bit pattern of sp_int or sp_float means nil -- -2**63 and every
@@ -185,7 +144,15 @@ typedef sp_int sp_sym;
    All three Range kinds default to frozen; dup sets their unfrozen flag.
    Store it beside a byte-sized flag (fe 0..2, omitted 0..63, excl 0..1)
    in the existing trailing word, keeping the by-value layouts the same size. */
-typedef struct{sp_int first;sp_int last;sp_int excl;sp_int step;sp_float fend;unsigned char fe;unsigned char unfrozen;}sp_Range;
+/* An Integer Range's open sides are the flags `nobeg` / `noend` (a beginless
+   `..5`, an endless `1..`), not a pattern of the bound: a begin of exactly
+   -2**63 is a begin. An open side still STORES the extreme bound
+   (SP_RANGE_NO_BEGIN / SP_RANGE_NO_END) so a walk that clamps against the
+   bounds reads the same number it always did; only the flag says whether
+   the side is there. */
+typedef struct{sp_int first;sp_int last;sp_int excl;sp_int step;sp_float fend;unsigned char fe;unsigned char unfrozen;unsigned char nobeg;unsigned char noend;}sp_Range;
+#define SP_RANGE_NO_BEGIN ((sp_int)INTPTR_MIN)
+#define SP_RANGE_NO_END   ((sp_int)INTPTR_MAX)
 /* A Float range (1.0..3.0): endpoints kept as sp_float so cover?/include?/begin/
    end are exact (an int-backed sp_Range truncated them). Iteration is a TypeError
    in Ruby (only #step traverses a Float range), so no step/iteration state here.
@@ -219,8 +186,9 @@ typedef struct{const char *first;const char *last;unsigned char excl;unsigned ch
    takes precedence over cls_id for to_s / boxing / equality. */
 typedef struct{sp_int cls_id;const char *name;}sp_Class;
 /* The nil-class sentinel: a TY_CLASS value can be nil (BasicObject#superclass),
-   carried in-band via a reserved cls_id with no name -- the same nullable-scalar
-   convention as SP_INT_NIL for int?. It is distinct from every real class id
+   carried in-band via a reserved cls_id with no name (a spare pattern of the
+   class-id space; Integer and Float have no spare pattern, hence sp_oint /
+   sp_ofloat above). It is distinct from every real class id
    (user >= 0, builtins -100..-146, SP_CLASS_BY_NAME 0x7F000000). It MUST stay
    negative: the class-chain walks route a non-negative cls_id to the user-class
    table (`cur.cls_id>=0 ? sp_class_superclass : sp_builtin_superclass`), so a
@@ -283,19 +251,24 @@ typedef struct sp_str_hdr { struct sp_str_hdr *next; uint32_t size; uint32_t len
 
 /* ---- Typed arrays ---- */
 #define SP_STRARR_INLINE 4
-/* may_nil: the array may hold a nil analyze did not see, carried as the
-   slot's sentinel (SP_INT_NIL, the Float NaN payload). Set where the runtime
-   puts one -- a gap filled past the end, a converted boxed nil, an element a
-   builtin copies -- and carried to copies, so the whole-array reads of an
-   array analyze did not mark (sum, min, max, sort, include?(nil), the boxing
-   into a mixed array) ask one flag; a marked array scans, as its stores set
-   none. Only compact!, delete(nil) and replace drop it. It follows `frozen`,
-   which the push / [] / []= paths read, so their code is unchanged; the
-   IntArray block stays in its slab class. */
-typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;sp_int frozen;int may_nil;}sp_IntArray;
-typedef struct{sp_float*data;sp_int len;sp_int cap;sp_int frozen;int may_nil;}sp_FloatArray;
-#define SP_MAY_NIL(a) ((a)->may_nil)
-/* a nil bitmap: one bit per slot, sp_nilbits_words(cap) words */
+/* nilbits: which elements are nil, one bit per PHYSICAL slot of `data` (bit
+   start+i for element i of an IntArray, bit i of a FloatArray), NULL until
+   the first nil is stored. When non-NULL it spans `cap` bits (the slot
+   allocators resize it with `data`), and every bit outside the live window
+   [start, start+len) is clear, so a push needs no bitmap write and a plain
+   store into a slot that was never nil needs none either. Set where a nil
+   lands -- a gap filled past the end, Array.new(n), a converted boxed nil, an
+   element a builtin copies -- and carried to copies. A whole-array read that
+   must know (sum, min, max, sort, include?(nil), the boxing into a mixed
+   array) asks the pointer first: an array that never held a nil pays one
+   NULL test. compact!, delete(nil), clear and replace drop it. It follows
+   `frozen`, which the push / [] / []= paths read, in the same word the
+   may_nil flag used, so the IntArray block stays in its slab class. */
+typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;sp_int frozen;uint64_t*nilbits;}sp_IntArray;
+typedef struct{sp_float*data;sp_int len;sp_int cap;sp_int frozen;uint64_t*nilbits;}sp_FloatArray;
+/* the array may hold a nil (the fast whole-array test; exact bits are read
+   per element through sp_IntArray_elem_nil / sp_FloatArray_elem_nil) */
+#define SP_MAY_NIL(a) ((a)->nilbits != NULL)
 #define sp_nilbits_words(cap) ((size_t)(((cap) + 63) >> 6))
 #define sp_nilbit_get(bits, i) ((int)(((bits)[(size_t)(i) >> 6] >> ((i) & 63)) & 1u))
 #define sp_nilbit_set(bits, i) ((bits)[(size_t)(i) >> 6] |= (uint64_t)1 << ((i) & 63))
@@ -311,10 +284,16 @@ typedef struct{void**data;sp_int len;sp_int cap;void(*scan_elem)(void*);sp_int f
 typedef struct{const char**data;sp_int len;sp_int cap;sp_int frozen;const char*inline_data[SP_STRARR_INLINE];}sp_StrArray;
 
 /* ---- Non-poly typed hashes ---- */
-typedef struct{const char**keys;sp_int*vals;const char**order;sp_int len;sp_int cap;sp_int mask;sp_int default_v;}sp_StrIntHash;
+/* An Integer-valued hash's miss answers its default: `default_nil` set is a
+   hash with no default ({} / {k=>v}), whose miss is nil; clear, default_v is
+   Hash.new(N)'s N. Keys are never nil in a typed hash (a hash that stores
+   one is poly). A nil VALUE is a bit in `vnil`, one per slot (the
+   open-addressing index), NULL until the first nil value is stored; the
+   slot's vals word is 0 then (DESIGN.md D3b-ii). */
+typedef struct{const char**keys;sp_int*vals;const char**order;sp_int len;sp_int cap;sp_int mask;sp_int default_v;sp_bool default_nil;uint64_t*vnil;}sp_StrIntHash;
 typedef struct{const char**keys;const char**vals;const char**order;sp_int len;sp_int cap;sp_int mask;const char*default_v;}sp_StrStrHash;
 typedef struct{sp_int*keys;const char**vals;sp_int*order;sp_bool*used;sp_int len;sp_int cap;sp_int mask;const char*default_v;}sp_IntStrHash;
-typedef struct{sp_int*keys;sp_int*vals;sp_int*order;sp_bool*used;sp_int len;sp_int cap;sp_int mask;sp_int default_v;}sp_IntIntHash;
+typedef struct{sp_int*keys;sp_int*vals;sp_int*order;sp_bool*used;sp_int len;sp_int cap;sp_int mask;sp_int default_v;sp_bool default_nil;uint64_t*vnil;}sp_IntIntHash;
 
 /* Signal table bound (0..64): shared by the trap state in the generated TU
    and the trap machinery in lib/sp_cold.c. */

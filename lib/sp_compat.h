@@ -413,7 +413,6 @@ static inline uint64_t sp_atomic_and_fallback(uint64_t *p, uint64_t v) { uint64_
    - __attribute__((cleanup)) on the GC root and regexp frame guards
      (SP_GC_SAVE / SP_GC_ROOT*, sp_re_frame), which pop at every scope exit;
    - __COUNTER__ in the guard names, and __typeof__ in a few spliced temps;
-   - SP_FLOAT_NIL_CONST, a NaN with a payload as a constant expression;
    - __attribute__((constructor)) hooks (SP_CONSTRUCTOR above);
    - an asm label (`__asm__("sym")`) on --ffi declarations;
    - the fiber context switch, written in asm per architecture. */

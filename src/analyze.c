@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include "analyze_internal.h"
+#include "builtin_ops.h"
 #include "repr.h"
 #include "decide.h"
 #include "call_plan.h"
@@ -2011,6 +2012,23 @@ void propagate_bigint_cascade(Compiler *c) {
    receiver's class during inference (codegen mirrors this via an_ie_class_id). */
 int *g_ie_node_class = NULL;
 static int g_ie_node_class_cap = 0;
+/* nodes inside an instance_eval / exec block over a receiver of no class
+   of the program's (nil, a number, a String): its ivars are nil there.
+   Sized as g_ie_node_class. */
+static unsigned char *g_ie_nonobj = NULL;
+static void mark_ie_nonobj(Compiler *c, int node) {
+  if (node < 0 || node >= g_ie_node_class_cap) return;
+  NodeKind k = nt_kind(c->nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return;
+  g_ie_nonobj[node] = 1;
+  int nr = nt_num_refs(c->nt, node);
+  for (int i = 0; i < nr; i++) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
+  int na = nt_num_arrs(c->nt, node);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int j = 0; j < n; j++) mark_ie_nonobj(c, ids[j]); }
+}
+int ie_nonobj_node(int node) {
+  return g_ie_nonobj && node >= 0 && node < g_ie_node_class_cap && g_ie_nonobj[node];
+}
 
 void mark_ie_subtree(Compiler *c, int node, int cls) {
   if (node < 0) return;
@@ -2697,9 +2715,13 @@ void build_ie_map(Compiler *c) {
   if (g_ie_node_class_cap < nt->count) {
     int *grown = realloc(g_ie_node_class, sizeof(int) * (size_t)nt->count);
     if (!grown) return;  /* OOM: keep the old map rather than leak/deref NULL */
+    unsigned char *gn = realloc(g_ie_nonobj, (size_t)nt->count);
+    if (!gn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     g_ie_node_class = grown;
+    g_ie_nonobj = gn;
     g_ie_node_class_cap = nt->count;
   }
+  memset(g_ie_nonobj, 0, (size_t)g_ie_node_class_cap);
   int *pend = malloc(sizeof(int) * (size_t)nt->count);
   if (!pend) return;
   ie_forward_memo_reset();
@@ -2726,6 +2748,14 @@ void build_ie_map(Compiler *c) {
       TyKind rt = infer_type(c, recv);
       cls = ty_is_object(rt) ? ty_object_class(rt) : ie_poly_mark(c, id, rt);
       if (cls == -1 && !ty_is_object(rt)) cls = ie_class_value_target(c, id, recv, rt, blk);
+      /* (a boxed receiver no class of the program's can be -- Object.new --
+         counts too: ie_poly_mark found none, or found the self rebound with
+         no class it must be, -2 - id; either way its ivars can read nil.
+         The mark is the nil question's alone, so it only widens.) */
+      if (cls < 0 && pass && rt != TY_UNKNOWN && !ty_is_object(rt) &&
+          (sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")) &&
+          nt_kind(nt, blk) == NK_BlockNode)
+        mark_ie_nonobj(c, blk);
       if (cls == -1) continue;
       if (ty_is_object(rt) && !sp_streq(nm, "instance_eval") && !sp_streq(nm, "instance_exec")) {
         /* not a direct instance_eval/exec: maybe a trampoline method on `cls`? */
@@ -4215,9 +4245,10 @@ void rename_shadowing_block_params(Compiler *c) {
 static int seed_class_index(Compiler *c, const char *name);
 
 /* Set by parse_seed_type when the token carried RBS's trailing `?`. An int or
-   float pin keeps the unboxed kind and spells nil with its reserved sentinel,
-   so every site that BOXES such a slot has to know -- otherwise the sentinel
-   goes out as an ordinary number (a Hash key that misses a literal nil, #3493).
+   float pin keeps the unboxed kind and holds its nil beside the value (an
+   oint), so every site that BOXES such a slot has to know -- otherwise the
+   nil goes out as an ordinary number (a Hash key that misses a literal nil,
+   #3493).
    Recorded here because the '?' is gone by the time the type is returned. */
 static int g_seed_nilable;
 static TyKind parse_seed_type(Compiler *c, const char *tok) {
@@ -4228,13 +4259,13 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
   if (n >= sizeof buf) return TY_UNKNOWN;
   memcpy(buf, tok, n + 1);
   /* A trailing '?' is RBS's nilable form (`Integer?`, `bool?`). Pinning it to
-     the base type is right only where that type's C slot still has an
-     inhabitant left to spell nil with: a pointer kind uses NULL, and int /
-     float / string carry a reserved sentinel every nil? / to_s / boxing site
-     already tests for. `sp_bool` and `sp_sym` have none -- 0 is `false`, and
-     symbol 0 is a real symbol -- so a `bool?` / `Symbol?` pin has nowhere to
-     put nil and collapses it onto false / :"" (#3412). Those pin to the tagged
-     union, which is what `bool | nil` means anyway. */
+     the base type is right only where that type's C slot still has a way
+     to spell nil: a pointer kind (string too) uses NULL, and int / float
+     hold a nil flag beside the value (an oint) every nil? / to_s / boxing
+     site already tests for. `sp_bool` and `sp_sym` have none -- 0 is
+     `false`, and symbol 0 is a real symbol -- so a `bool?` / `Symbol?` pin
+     has nowhere to put nil and collapses it onto false / :"" (#3412). Those
+     pin to the tagged union, which is what `bool | nil` means anyway. */
   int nilable = 0;
   if (n > 0 && buf[n - 1] == '?') { buf[--n] = '\0'; nilable = 1; g_seed_nilable = 1; }
   if (sp_streq(buf, "int"))    return TY_INT;
@@ -4596,8 +4627,8 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
       LocalVar *lv = scope_local(s, s->pnames[pi]);
       if (lv) {
         lv->type = pt; lv->rbs_seeded = 1; lv->rbs_type = pt;
-        /* a nilable int parameter holds the sentinel like any other: mark it
-           so boxing it answers nil rather than INTPTR_MIN */
+        /* a nilable int parameter can hold nil like any other: mark it so
+           it is an oint and boxing it answers nil rather than a number */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
       }
     }
@@ -10484,7 +10515,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
          exactly like an instance method does, and was the one caller shape
          this resolution missed -- the pushed element was stored as the int
          array's own kind, or dropped (#4213; the same arm #3505 added to
-         the sentinel-marking loop). */
+         the nil-marking loop). */
       else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
         int rci = comp_class_index(c, nt_str(nt, recv, "name"));
         if (rci >= 0)
@@ -10828,7 +10859,7 @@ static int narrow_locals_from_arrays(Compiler *c) {
         TyKind rt = infer_type(c, crecv);
         /* element type of a narrowed obj-array OR the new int-array-array */
         /* a scalar-element array yields its element type; an out-of-range
-           read is that type's nil (SP_INT_NIL / NULL), which it models */
+           read is that type's nil (the sp_oint's flag / NULL), which it models */
         TyKind ec = ty_is_obj_array(rt) ? ty_object(ty_obj_array_class(rt))
                   : (rt == TY_INT_ARRAY_ARRAY) ? TY_INT_ARRAY
                   : (rt == TY_FLOAT_ARRAY_ARRAY) ? TY_FLOAT_ARRAY
@@ -28666,19 +28697,95 @@ static int reassert_rbs_param_seeds(Compiler *c) {
 }
 
 /* Names whose miss answers nil while the type stays TY_INT (a search index, a
-   pop off an empty array): the value they leave in the slot is the sentinel. */
+   pop off an empty array): the slot they leave holds nil. */
+/* A File::Stat field on an IO (or a boxed value the call reaches one
+   through) and `File.size?` answer nil where the stat fails or the file is
+   empty: the runtime's sp_stat_field / sp_file_size_q answer an sp_oint. */
+int file_stat_nil_call(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, v, "name");
+  int rc = nt_ref(nt, v, "receiver");
+  if (!nm || rc < 0) return 0;
+  int args = nt_ref(nt, v, "arguments"), argc = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &argc);
+  if (sp_streq(nm, "size?") && argc == 1 && nt_kind(nt, rc) == NK_ConstantReadNode) {
+    const char *cn = nt_str(nt, rc, "name");
+    return cn && (sp_streq(cn, "File") || sp_streq(cn, "FileTest"));
+  }
+  /* `size` on a boxed value: a Range of non-numbers answers nil (sp_poly_size) */
+  if (sp_streq(nm, "size") && argc == 0 && infer_type(c, rc) == TY_POLY) return 1;
+  static const char *const F[] = { "uid", "gid", "nlink", "dev", "ino", "blksize", "blocks", "rdev", "size?", NULL };
+  if (argc != 0 || !str_in(nm, F)) return 0;
+  TyKind rt = infer_type(c, rc);
+  if (rt == TY_IO) return 1;
+  if (rt != TY_POLY) return 0;
+  /* a boxed receiver: only where no class of the program answers the name
+     (its dispatch is the IO's) */
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL)) return 0;
+  return 1;
+}
+
+/* The classes a `new` receiver can be: a local holding one class, a
+   constant, or a class value chosen at run time -- each branch of a `?:` or
+   an `if`, a parenthesized one, or an element of a literal Array of them
+   (`[A, B][i]`). Up to cap of them, in *out; answers the count. */
+static int new_recv_classes(Compiler *c, int recv, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || cap <= 0) return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk == NK_LocalVariableReadNode) { int k = class_var_static_ci(c, recv); if (k < 0) return 0; out[0] = k; return 1; }
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    int k = comp_class_index(c, nt_str(nt, recv, "name"));
+    if (k < 0) return 0;
+    out[0] = k; return 1;
+  }
+  if (rk == NK_ParenthesesNode) {
+    int b = nt_ref(nt, recv, "body"), n = 0;
+    const int *st = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &n) : NULL;
+    return st && n == 1 ? new_recv_classes(c, st[0], out, cap) : 0;
+  }
+  if (rk == NK_IfNode || rk == NK_ElseNode || rk == NK_StatementsNode) {
+    int n = 0;
+    if (rk == NK_StatementsNode) {
+      const int *st = nt_arr(nt, recv, "body", &n);
+      return n > 0 ? new_recv_classes(c, st[n - 1], out, cap) : 0;
+    }
+    n = new_recv_classes(c, nt_ref(nt, recv, "statements"), out, cap);
+    if (rk == NK_IfNode) {
+      int e = nt_ref(nt, recv, "subsequent");
+      if (e < 0) e = nt_ref(nt, recv, "consequent");
+      n += new_recv_classes(c, e, out + n, cap - n);
+    }
+    return n;
+  }
+  /* `[A, B][i]`: every element of the literal */
+  if (rk == NK_CallNode && nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "[]")) {
+    int ar = nt_ref(nt, recv, "receiver");
+    if (ar < 0 || nt_kind(nt, ar) != NK_ArrayNode) return 0;
+    int en = 0; const int *ev = nt_arr(nt, ar, "elements", &en);
+    int n = 0;
+    for (int e = 0; e < en && n < cap; e++) n += new_recv_classes(c, ev[e], out + n, cap - n);
+    return n;
+  }
+  return 0;
+}
+
 static int nullable_int_call_name(const char *nm) {
   if (!nm) return 0;
   static const char *const N[] = {
     "index", "rindex", "byteindex", "byterindex", "delete_at", "slice!", "pop", "shift",
-    "delete", "nonzero?", "infinite?", "getbyte", "bsearch", "bsearch_index",
+    "delete", "nonzero?", "infinite?", "getbyte", "bsearch", "bsearch_index", "unpack1",
+    /* Process::Status: nil when the process did not exit / was not signaled */
+    "exitstatus", "termsig", "stopsig",
     /* `a <=> b` answers nil when the two are not comparable, and the poly
-       helper spells that with the sentinel like every other nullable int */
+       helper spells that with the nil flag like every other nullable int */
     "<=>", NULL };
   return str_in(nm, N);
 }
 /* Calls whose Integer or Float answer is a boxed value unboxed into the
-   slot, and which can answer nil: the unbox makes that nil the sentinel, so
+   slot, and which can answer nil: the unbox sets the slot's nil flag, so
    the value is a nullable one. `r&.m` is nil when r is; `p x` hands back x
    (and a bare `p`, nil); a `catch` answers what a `throw` carried, nil by
    default; a Proc's call answers its body's value, which arrives boxed. */
@@ -28700,10 +28807,11 @@ static int nn_call_unboxes_nil(Compiler *c, int v) {
     return 0;
   }
   if (is_proc_invoke(nm) && infer_type(c, rcv) == TY_PROC) return 1;
-  /* Reflection reads the same sentinel-backed slot as an ivar reader.
+  /* Reflection reads the same slot, and its nil byte, as an ivar reader.
      A boxed receiver can also lack the slot altogether. Keep that nil
-     through boxing, scalar operations and assignments to other locals. */
-  if (sp_streq(nm, "instance_variable_get")) {
+     through boxing, scalar operations and assignments to other locals.
+     remove_instance_variable answers the field it removes: the same read. */
+  if (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "remove_instance_variable")) {
     int ca = nt_ref(nt, v, "arguments"), an = 0;
     const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
     if (an != 1) return 0;
@@ -28725,29 +28833,29 @@ static int nn_call_unboxes_nil(Compiler *c, int v) {
   return 0;
 }
 
-/* A method's own answer can be the sentinel in an Integer or Float slot: its
-   value is nil (`def m = nil`), or its scalar return can be the sentinel. */
+/* A method's own answer can be nil in an Integer or Float slot: its value is
+   nil (`def m = nil`), or its scalar return can hold nil. */
 static int method_answers_nil(const Scope *m) {
   return m->ret == TY_NIL || m->ret_nullable_int;
 }
 
 /* A scalar slot on a class the fixpoint could not pin to a receiver still
    dispatches at runtime: codegen emits a cls_id switch over every class that
-   defines the name. Ask whether ANY of those targets can answer the sentinel.
+   defines the name. Ask whether ANY of those targets can answer nil.
    Over-marking here only costs the boxing branch; missing one is the
    silent-wrong hash key of #3505, so the conservative direction is `yes`. */
 static int poly_dispatch_nullable(Compiler *c, int v, const char *cn) {
   if (!cn) return 0;
-  /* a target whose value is nil rides in the call's scalar slot as the
-     sentinel too, when the call is typed Integer or Float (or nil) */
+  /* a target whose value is nil rides in the call's scalar slot as its nil
+     too, when the call is typed Integer or Float (or nil) */
   TyKind vt = infer_type(c, v);
   int nil_rides = vt == TY_INT || vt == TY_FLOAT || vt == TY_NIL;
   for (int si = 1; si < c->nscopes; si++)
     if (c->scopes[si].name && sp_streq(c->scopes[si].name, cn) &&
         (nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int)) return 1;
-  /* an attr_reader over a scalar ivar: those slots are sentinel-defaulted
-     (ivar_scalar_nil_init), so the read carries the sentinel like a `return
-     nil` would -- the resolved-receiver twin of this lives in codegen's
+  /* an attr_reader over a scalar ivar: those slots start nil, their nil
+     byte set (emit_ivar_nil_inits_from), so the read can answer nil like a
+     `return nil` would -- the resolved-receiver twin of this lives in codegen's
      call_returns_nullable_int */
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (!comp_reader_in_chain(c, ci, cn, NULL)) continue;
@@ -28763,7 +28871,7 @@ static int poly_dispatch_nullable(Compiler *c, int v, const char *cn) {
 /* A call on class `cid` dispatches over the method `name` resolves to there
    and every descendant's override, which is how inference typed it
    (dispatch_ret_over): a nil-answering target among them rides in the call's
-   scalar slot as the sentinel. Only the method the name resolved to was
+   scalar slot as its nil. Only the method the name resolved to was
    asked, and only for a scalar return, so a nil method beside an Integer one
    (`def nop = nil` in C, `def nop = 7` in D, or `c ? z : 1` over `def z =
    nil`) left the value unmarked, and nil's own methods (`to_a`, `to_h`,
@@ -28854,12 +28962,13 @@ static int call_block_tail(Compiler *c, int call) {
   return st && n > 0 ? st[n - 1] : -1;
 }
 
-/* Can an ELEMENT of this array-valued expression be the sentinel? A slot
+/* Can an ELEMENT of this array-valued expression be nil? A slot
    answers from its own marking; an expression that builds or forwards an array
    answers from what it was built out of, which is what lets a chain with no
    local in it (`[r].map { |x| x.p_ }[0]`) be seen at all (#3505). */
 static int nullable_int_elem_expr(Compiler *c, int v, int depth);
 
+static int struct_member_slot(Compiler *c, int cid, const char *name, ClassInfo **out);
 /* What an object call (`k.arr`) hands out: *mi is the method the receiver's
    class chain resolves, whose tail decides, or else the answer is the ivar an
    attr_reader reads, found by its alias-resolved name in the class that
@@ -28871,15 +28980,29 @@ static int object_call_ivar(Compiler *c, int call, ClassInfo **out, int *mi) {
   const char *nm = nt_str(nt, call, "name");
   int rc = nt_ref(nt, call, "receiver");
   *mi = -1;
-  if (!nm || rc < 0 || !ty_is_object(infer_type(c, rc))) return -1;
-  int cid = ty_object_class(infer_type(c, rc)), defc = -1;
+  int cid = -1, defc = -1;
+  if (!nm) return -1;
+  if (rc >= 0 && ty_is_object(infer_type(c, rc))) cid = ty_object_class(infer_type(c, rc));
+  else if (rc < 0) {
+    /* a receiverless reader in an instance method: self's class (`bottom[x] = v`
+       inside the Struct's own method marks the member) */
+    Scope *cs = comp_scope_of(c, call);
+    if (cs && cs->class_id >= 0 && !cs->is_cmethod) cid = cs->class_id;
+  }
+  if (cid < 0) return -1;
   *mi = comp_method_in_chain(c, cid, nm, NULL);
   if (*mi > 0) {
     int tail = scope_body_last(c, *mi);
     return tail >= 0 && nt_kind(nt, tail) == NK_InstanceVariableReadNode ?
            nullable_elem_ivar(c, tail, out) : -1;
   }
-  if (!comp_reader_in_chain(c, cid, nm, &defc) || defc < 0) return -1;
+  if (!comp_reader_in_chain(c, cid, nm, &defc) || defc < 0) {
+    /* a Struct / Data member's reader */
+    ClassInfo *sci = NULL;
+    int siv = struct_member_slot(c, cid, nm, &sci);
+    if (siv >= 0 && sci) { *out = sci; return siv; }
+    return -1;
+  }
   char ivb[300];
   snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, nm));
   return nullable_elem_ivar_in(c, defc, ivb, out);
@@ -28893,7 +29016,7 @@ static int self_mutator_call(const char *nm) {
 }
 
 /* An index write that can land past the end, where CRuby fills the gap with
-   nil and the typed array with the sentinel: `a[a.size + k] = v` for a
+   nil and the typed array sets nil bits: `a[a.size + k] = v` for a
    literal k >= 1, or a literal index beyond the shortest array literal the
    local receiver is ever assigned (`a = [1, 2]; a[5] = v`). Only what can be
    shown: an index computed some other way is taken as in range, or every
@@ -28955,7 +29078,7 @@ static int reads_own_size(Compiler *c, int recv, int n) {
    below 0 (a negative start counts from the end and raises past the front),
    or the receiver's own size (`a[a.size, 0] = v` appends) or less
    (`a.size - k`). Anything else may land past the end, where the runtime
-   pads with the sentinel, so the array has to be marked (#6208). */
+   pads with nil, so the array has to be marked (#6208). */
 static int index_write_in_range(Compiler *c, int call, int ix) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, call, "receiver");
@@ -29072,14 +29195,17 @@ int array_mutation_stores(Compiler *c, int call, int strict, int *from, int *to,
   return 0;
 }
 
-/* An array mutation that can leave the sentinel in its receiver: `<<`,
+/* An array mutation that can leave a nil in its receiver: `<<`,
    push, append, unshift, prepend, insert (past its index), `[]=` and a
    blockless fill given a value that can be nil, or concat and a slice's
    `[]=` given an array whose elements can be. */
 static int nullable_elem_mutation(Compiler *c, int call, int depth) {
   const NodeTable *nt = c->nt;
   int from, to, elems;
-  int g = array_mutation_stores(c, call, 0, &from, &to, &elems);
+  /* strict: a one-index write the in-range proof does not cover can leave
+     a nil gap, which a plain slot reading it would see as a silent 0 (nil
+     out of band) */
+  int g = array_mutation_stores(c, call, 1, &from, &to, &elems);
   if (g) return g > 0;
   int ca = nt_ref(nt, call, "arguments"); int an = 0;
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
@@ -29102,8 +29228,8 @@ int mutated_array(Compiler *c, int recv) {
   return recv;
 }
 
-/* One level further in: can an element of a container HELD BY `v` be the
-   sentinel? `v` is the outer container -- an array of arrays, a hash whose
+/* One level further in: can an element of a container HELD BY `v` be nil?
+   `v` is the outer container -- an array of arrays, a hash whose
    values are arrays, or a slot holding one -- so `v[k][j]` reaches the scalar. */
 static int nested_elem_nilable(Compiler *c, int v, int depth) {
   const NodeTable *nt = c->nt;
@@ -29191,6 +29317,10 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
                             sp_streq(nm, "flat_map") || sp_streq(nm, "collect_concat")))
       return nullable_int_value(c, tail);
     int rc = nt_ref(nt, v, "receiver");
+    /* the values of a typed Integer-valued Hash that may hold a nil (D3b-ii) */
+    if (nm && (sp_streq(nm, "values") || sp_streq(nm, "values_at") || sp_streq(nm, "fetch_values")) &&
+        hash_vals_nullable(c, rc))
+      return 1;
     /* `Array.new(n) { ... }` / `Array.new(n, v)` builds its elements here */
     if (nm && sp_streq(nm, "new") && rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, rc, "name");
@@ -29246,25 +29376,180 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
   return 0;
 }
 
-/* An index read whose RECEIVER is an array that can hold the sentinel. The
-   value comes back already boxed by the runtime read, so codegen corrects it
-   there; asked receiver-first on purpose, since the general predicate resolves
-   a bare `[]` by name across the whole program and would wrap hot reads that
-   can never carry one. */
-int nullable_int_elem_read(Compiler *c, int call) {
-  const NodeTable *nt = c->nt;
-  if (call < 0 || nt_kind(nt, call) != NK_CallNode) return 0;
-  int recv = nt_ref(nt, call, "receiver");
-  return recv >= 0 && elem_returning_call(nt_str(nt, call, "name")) &&
-         nullable_int_elem_expr(c, recv, 0);
-}
-
 /* The receiver-side question for codegen: did analyze see a nil stored into
    this Integer or Float array expression? A marked array's whole-array reads
-   scan for the sentinel, as its stores set no flag; an unmarked one asks its
-   run-time may_nil for the nils only the runtime sees (a gap, a conversion). */
+   take the path that reads each slot's nil bit outright; an unmarked one asks
+   its run-time may_nil (whether it has a nil bitmap at all) for the nils only
+   the runtime sees (a gap, a conversion). */
 int nullable_int_elem_array(Compiler *c, int node) {
   return nullable_int_elem_expr(c, node, 0);
+}
+
+/* ---- constant arrays of a known length ----
+   A constant bound to an Array literal with no splat (`LUT = [4, 8, 16]`,
+   also `[..].freeze` and `[..].map { }`) that nothing can change has the
+   literal's length: a read at an index proven below it is no miss, and a
+   multiple assignment from it fills that many targets. Constants are
+   interned by their last name (`DMC::LUT` and a `LUT` elsewhere share one),
+   so every definition of the name is asked, and every read of the name must
+   be the receiver of a call that leaves the array as it is, or the value a
+   multiple assignment takes apart (through `?:`). */
+typedef struct { const char *name; int len; int nlit; int lit[8]; int blk[8]; } CArr;
+static CArr *carr_tab; static int carr_n, carr_cap, carr_count = -1;
+static int carr_lit(const NodeTable *nt, int v, int *blk) {
+  *blk = -1;
+  if (v >= 0 && nt_kind(nt, v) == NK_CallNode && nt_str(nt, v, "name") && nt_ref(nt, v, "arguments") < 0) {
+    const char *nm = nt_str(nt, v, "name");
+    int b = nt_ref(nt, v, "block");
+    if (sp_streq(nm, "freeze") && b < 0) v = nt_ref(nt, v, "receiver");
+    else if ((sp_streq(nm, "map") || sp_streq(nm, "collect")) && b >= 0 && nt_kind(nt, b) == NK_BlockNode) {
+      *blk = b; v = nt_ref(nt, v, "receiver");
+    }
+  }
+  if (v < 0 || nt_kind(nt, v) != NK_ArrayNode) return -1;
+  int en = 0; const int *ev = nt_arr(nt, v, "elements", &en);
+  for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return -1;
+  return v;
+}
+static int carr_is_read(const NodeTable *nt, int n, const char *name) {
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) && nt_str(nt, n, "name") &&
+         sp_streq(nt_str(nt, n, "name"), name);
+}
+/* the reads a multiple assignment's value takes apart, through `?:` */
+static void carr_mark_masgn_value(const NodeTable *nt, int v, const char *name, unsigned char *ok) {
+  while (v >= 0 && nt_kind(nt, v) == NK_ParenthesesNode) {
+    int b = nt_ref(nt, v, "body"), n = 0;
+    const int *st = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &n) : NULL;
+    v = st && n == 1 ? st[0] : -1;
+  }
+  if (v < 0) return;
+  if (carr_is_read(nt, v, name)) { ok[v] = 1; return; }
+  if (nt_kind(nt, v) == NK_IfNode) {
+    int t = nt_ref(nt, v, "statements"), e = nt_ref(nt, v, "subsequent");
+    if (e < 0) e = nt_ref(nt, v, "consequent");
+    int n = 0; const int *st = t >= 0 ? nt_arr(nt, t, "body", &n) : NULL;
+    if (st && n == 1) carr_mark_masgn_value(nt, st[0], name, ok);
+    if (e >= 0 && nt_kind(nt, e) == NK_ElseNode) {
+      int es = nt_ref(nt, e, "statements"), en = 0;
+      const int *ev = es >= 0 ? nt_arr(nt, es, "body", &en) : NULL;
+      if (ev && en == 1) carr_mark_masgn_value(nt, ev[0], name, ok);
+    }
+  }
+}
+static int carr_keeps(const char *nm) {
+  static const char *const K[] = {
+    "[]", "at", "slice", "first", "last", "size", "length", "count", "empty?", "any?", "all?", "none?",
+    "include?", "index", "find_index", "each", "each_with_index", "each_index", "map", "collect", "select",
+    "filter", "reject", "find", "detect", "min", "max", "sum", "inject", "reduce", "sort", "sort_by",
+    "reverse", "each_slice", "each_cons", "zip", "join", "inspect", "to_s", "hash", "==", "!=", "eql?",
+    "frozen?", "dig", "fetch", "values_at", "take", "drop", "uniq", "flatten", "+", "-", "*", "&", "|", NULL };
+  return str_in(nm, K);
+}
+static const CArr *const_array(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  if (!name) return NULL;
+  if (carr_count != nt->count) { carr_n = 0; carr_count = nt->count; }
+  for (int i = 0; i < carr_n; i++) if (sp_streq(carr_tab[i].name, name)) return carr_tab[i].len >= 0 ? &carr_tab[i] : NULL;
+  CArr r; memset(&r, 0, sizeof r); r.name = name; r.len = -1;
+  int len = -1, bad = 0;
+  for (int id = 0; id < nt->count && !bad; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const char *wn = NULL; int v = -1;
+    if (k == NK_ConstantWriteNode) { wn = nt_str(nt, id, "name"); v = nt_ref(nt, id, "value"); }
+    else if (k == NK_ConstantPathWriteNode) { int tg = nt_ref(nt, id, "target"); wn = tg >= 0 ? nt_str(nt, tg, "name") : NULL; v = nt_ref(nt, id, "value"); }
+    else if (k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode || k == NK_ConstantOperatorWriteNode ||
+             k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) wn = nt_str(nt, id, "name");
+    else if (k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode || k == NK_ConstantPathOperatorWriteNode) {
+      int tg = nt_ref(nt, id, "target"); wn = tg >= 0 ? nt_str(nt, tg, "name") : NULL;
+    }
+    else if (k == NK_CallNode && nt_str(nt, id, "name") &&
+             (sp_streq(nt_str(nt, id, "name"), "const_set") || sp_streq(nt_str(nt, id, "name"), "remove_const"))) bad = 1;
+    if (!wn || !sp_streq(wn, name)) continue;
+    int blk, lit = (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode) ? carr_lit(nt, v, &blk) : -1;
+    if (lit < 0 || r.nlit >= 8) { bad = 1; break; }
+    int en = 0; nt_arr(nt, lit, "elements", &en);
+    if (len < 0 || en < len) len = en;
+    r.lit[r.nlit] = lit; r.blk[r.nlit] = blk; r.nlit++;
+  }
+  if (!bad && r.nlit > 0) {
+    unsigned char *ok = calloc((size_t)nt->count + 1, 1);
+    if (!ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    NT_FOREACH_KIND(nt, NK_CallNode, cl) {
+      int rc = nt_ref(nt, cl, "receiver");
+      if (carr_is_read(nt, rc, name) && nt_str(nt, cl, "name") && carr_keeps(nt_str(nt, cl, "name")) &&
+          !(nt_ref(nt, cl, "block") >= 0 && nt_kind(nt, nt_ref(nt, cl, "block")) == NK_BlockArgumentNode)) ok[rc] = 1;
+    }
+    NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) carr_mark_masgn_value(nt, nt_ref(nt, mw, "value"), name, ok);
+    for (int id = 0; id < nt->count && !bad; id++)
+      if (carr_is_read(nt, id, name) && !ok[id]) bad = 1;
+    free(ok);
+  }
+  if (!bad && r.nlit > 0) r.len = len;
+  if (carr_n == carr_cap) { carr_cap = carr_cap ? carr_cap * 2 : 16; carr_tab = realloc(carr_tab, sizeof(CArr) * (size_t)carr_cap);
+    if (!carr_tab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
+  carr_tab[carr_n++] = r;
+  return r.len >= 0 ? &carr_tab[carr_n - 1] : NULL;
+}
+/* `CONST[i]` with i proven in 0...len (or -len...0): a literal, or `x & K`
+   with 0 <= K < len */
+static int const_array_index_in_range(Compiler *c, int recv, int idx) {
+  const NodeTable *nt = c->nt;
+  if (!carr_is_read(nt, recv, nt_str(nt, recv, "name"))) return 0;
+  const CArr *ca = const_array(c, nt_str(nt, recv, "name"));
+  if (!ca || idx < 0) return 0;
+  if (nt_kind(nt, idx) == NK_IntegerNode && !nt_str(nt, idx, "bigval")) {
+    long long k = (long long)nt_int(nt, idx, "value", 0);
+    return k < ca->len && k >= -(long long)ca->len;
+  }
+  if (nt_kind(nt, idx) == NK_CallNode && nt_str(nt, idx, "name") && sp_streq(nt_str(nt, idx, "name"), "&") &&
+      infer_type(c, nt_ref(nt, idx, "receiver")) == TY_INT) {
+    int a = nt_ref(nt, idx, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an == 1 && nt_kind(nt, av[0]) == NK_IntegerNode && !nt_str(nt, av[0], "bigval")) {
+      long long k = (long long)nt_int(nt, av[0], "value", 0);
+      return k >= 0 && k < ca->len;
+    }
+  }
+  return 0;
+}
+
+/* Can position `pos` of a multiple assignment's value be nil, where the
+   value is a constant Array of a known length or a `?:` of such (1 when it
+   is anything else)? An element past the length is nil; one within it is
+   the literal's element, or the value the `map` block gives it. */
+static int masgn_const_pos_may_nil(Compiler *c, int v, int pos) {
+  const NodeTable *nt = c->nt;
+  while (v >= 0 && nt_kind(nt, v) == NK_ParenthesesNode) {
+    int b = nt_ref(nt, v, "body"), n = 0;
+    const int *st = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &n) : NULL;
+    v = st && n == 1 ? st[0] : -1;
+  }
+  if (v < 0) return 1;
+  if (nt_kind(nt, v) == NK_IfNode) {
+    int t = nt_ref(nt, v, "statements"), e = nt_ref(nt, v, "subsequent");
+    if (e < 0) e = nt_ref(nt, v, "consequent");
+    int n = 0; const int *st = t >= 0 ? nt_arr(nt, t, "body", &n) : NULL;
+    if (!st || n != 1 || e < 0 || nt_kind(nt, e) != NK_ElseNode) return 1;
+    int es = nt_ref(nt, e, "statements"), en = 0;
+    const int *ev = es >= 0 ? nt_arr(nt, es, "body", &en) : NULL;
+    if (!ev || en != 1) return 1;
+    return masgn_const_pos_may_nil(c, st[0], pos) || masgn_const_pos_may_nil(c, ev[0], pos);
+  }
+  if (!carr_is_read(nt, v, nt_str(nt, v, "name"))) return 1;
+  const CArr *ca = const_array(c, nt_str(nt, v, "name"));
+  if (!ca || pos >= ca->len) return 1;
+  for (int i = 0; i < ca->nlit; i++) {
+    if (ca->blk[i] >= 0) {
+      int bd = nt_ref(nt, ca->blk[i], "body"), bn = 0;
+      const int *bs = bd >= 0 ? nt_arr(nt, bd, "body", &bn) : NULL;
+      if (!bs || bn == 0 || nt_kind(nt, bs[bn - 1]) == NK_NilNode || nullable_int_value(c, bs[bn - 1])) return 1;
+      continue;
+    }
+    int en = 0; const int *ev = nt_arr(nt, ca->lit[i], "elements", &en);
+    if (pos >= en || nt_kind(nt, ev[pos]) == NK_NilNode || nullable_int_value(c, ev[pos])) return 1;
+  }
+  return 0;
 }
 
 /* A call that answers one element of its receiver, or nil when there is none
@@ -29286,7 +29571,10 @@ static int elem_miss_call(Compiler *c, int v) {
      only as type evidence (desugar_masgn_store_evidence): it is no more a
      miss there than it is for the assignment's local and ivar targets */
   if (nt_int(nt, v, "masgn_elem", LLONG_MIN) != LLONG_MIN) return 0;
-  if (sp_streq(nm, "[]") || sp_streq(nm, "at") || sp_streq(nm, "slice")) return argc == 1 && blk < 0;
+  /* Integer#[] reads a bit (0 or 1), never nil */
+  if (sp_streq(nm, "[]")) { TyKind brt = infer_type(c, recv); if (brt == TY_INT || brt == TY_BIGINT) return 0; }
+  if (sp_streq(nm, "[]") || sp_streq(nm, "at") || sp_streq(nm, "slice"))
+    return argc == 1 && blk < 0 && !const_array_index_in_range(c, recv, argv[0]);
   if (sp_streq(nm, "dig")) return argc >= 1;
   if (is_element_pick(nm))
     return argc == 0 && blk < 0;
@@ -29301,7 +29589,7 @@ static int elem_miss_call(Compiler *c, int v) {
 /* A call of one of the names nil answers and neither Integer nor Float has,
    on a receiver of type rt: to_a, to_h and =~ (with !~, which is =~
    negated), and on a Float the boolean operators &, | and ^. On a slot that
-   can hold the nil sentinel it has a value -- CRuby's [], {}, nil and a
+   can hold nil it has a value -- CRuby's [], {}, nil and a
    boolean -- rather than only the NoMethodError the receiver's class gives,
    so it is typed boxed. Integer's own &, | and ^ are typed Integer, a slot
    nil's boolean cannot ride in, so they are not here. */
@@ -29326,18 +29614,19 @@ int scalar_nil_only_call(Compiler *c, int id, TyKind rt) {
   return hit;
 }
 
-/* ... on a receiver that can hold the sentinel: the call answers nil's value */
+/* ... on a receiver that can hold nil: the call answers nil's value */
 int nullable_scalar_nil_only_call(Compiler *c, int id) {
   int recv = id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_ref(c->nt, id, "receiver") : -1;
   return recv >= 0 && scalar_nil_only_call(c, id, c->ntype[recv]) && nullable_int_value(c, recv);
 }
 
-/* Can this expression leave the sentinel in an int slot? */
+/* Can this expression leave nil in an int slot? */
 /* Whether an unconditional write of ivar `ivn` is among the top-level
    statements of class k's initialize, or of the initialize it inherits. */
 int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
   const NodeTable *nt = c->nt;
-  int mi = comp_method_in_chain(c, k, "initialize", NULL);
+  int defcls = -1;
+  int mi = comp_method_in_chain(c, k, "initialize", &defcls);
   if (mi < 0 || !ivn) return 0;
   int body = c->scopes[mi].body;
   if (body < 0) return 0;
@@ -29350,6 +29639,10 @@ int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
       const char *wn = nt_str(nt, x, "name");
       if (wn && sp_streq(wn, ivn)) return 1;
     }
+    /* a `super` statement runs the parent's initialize, every path of it */
+    if ((nt_kind(nt, w) == NK_SuperNode || nt_kind(nt, w) == NK_ForwardingSuperNode) &&
+        defcls >= 0 && c->classes[defcls].parent >= 0 && c->classes[defcls].parent != defcls &&
+        ivar_assigned_in_initialize(c, c->classes[defcls].parent, ivn)) return 1;
     if (nt_kind(nt, w) == NK_MultiWriteNode) {
       int ln = 0; const int *ls = nt_arr(nt, w, "lefts", &ln);
       for (int j = 0; j < ln; j++)
@@ -29399,8 +29692,8 @@ static int struct_member_slot(Compiler *c, int cid, const char *name, ClassInfo 
 /* Nil narrowing: flow-sensitive non-nil facts for single reads.
 
    A local is typed once for its whole life, so one nil written to it anywhere
-   makes LocalVar.nullable_int 1, and every read of it then pays the sentinel's
-   compare test, its `_or_nil` boxing, its arm in a type test -- and hands the
+   makes LocalVar.nullable_int 1, and every read of it then pays the nil
+   flag's test, its `_or_nil` boxing, its arm in a type test -- and hands the
    mark on to every local, parameter and block parameter it is copied into.
    This pass proves single READS non-nil, and nullable_int_value answers 0 for
    them, so every consumer of that question follows.
@@ -29859,7 +30152,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx);
 /* The value is an Integer or a Float the marks call non-nil. A value of
    another static type gets no mark to ask: a parameter or a local that only
    nil is ever written to is typed nil, not Integer-or-nil, and written to an
-   Integer local it is the sentinel. */
+   Integer local it is that local's nil. */
 static int nn_nonnil_value(Compiler *c, int v) {
   return v >= 0 && nn_numeric(comp_ntype(c, v)) && !nullable_int_value(c, v);
 }
@@ -30862,23 +31155,56 @@ void nn_inference_round(Compiler *c) {
   nn_epoch++;
 }
 
+extern int yield_block_tails_next;   /* analyze_util.c */
+/* a String operand that is never nil: a literal */
+static int nn_str_literal(const NodeTable *nt, int n) {
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  return k == NK_StringNode || k == NK_InterpolatedStringNode;
+}
+
+/* Is call v a native class's method (a package's native_method) declared
+   to answer a plain Integer or Float? */
+int native_call_ret_plain_num(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
+  int r = nt_ref(nt, v, "receiver");
+  const char *nm = nt_str(nt, v, "name");
+  if (r < 0 || !nm) return 0;
+  TyKind rt = comp_ntype(c, r);
+  if (!ty_is_object(rt)) return 0;
+  int cid = ty_object_class(rt);
+  if (cid < 0 || cid >= c->nclasses || !c->classes[cid].is_native_class) return 0;
+  int a = nt_ref(nt, v, "arguments"), an = 0;
+  if (a >= 0) nt_arr(nt, a, "arguments", &an);
+  int nmi = comp_native_method_find(c, cid, nm, an, 0);
+  if (nmi < 0 || !c->native_methods[nmi].ret) return 0;
+  return sp_streq(c->native_methods[nmi].ret, "int") || sp_streq(c->native_methods[nmi].ret, "float");
+}
+
 int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0) return 0;
   if (nt_kind(nt, v) == NK_NilNode) return 1;
+  /* `next v` hands the block's caller v; a bare `next`, nil */
+  if (nt_kind(nt, v) == NK_NextNode) {
+    int na = nt_ref(nt, v, "arguments");
+    int nn = 0; const int *nav = na >= 0 ? nt_arr(nt, na, "arguments", &nn) : NULL;
+    if (nn == 0) return 1;
+    return nav && nn == 1 ? nullable_int_value(c, nav[0]) : 0;
+  }
   /* `return e` / `(e)` carry their inner value unchanged; a block tail can be
      either, and so can a method's own tail statement. A bare `return` answers
-     nil, which an Integer or Float return carries as the sentinel. */
+     nil, which an Integer or Float return carries as its nil. */
   if (nt_kind(nt, v) == NK_ReturnNode) {
     int rv = nt_ref(nt, v, "arguments");
     int rn = 0; const int *ra = rv >= 0 ? nt_arr(nt, rv, "arguments", &rn) : NULL;
     if (rn == 0) return 1;
     return ra && rn == 1 ? nullable_int_value(c, ra[0]) : 0;
   }
-  /* A conditional's value is one of its arms, so it carries the sentinel if any
-     arm can. A ternary, an `if`/`unless` or `case` used as an expression, a
+  /* A conditional's value is one of its arms, so it can be nil if any arm
+     can. A ternary, an `if`/`unless` or `case` used as an expression, a
      begin/rescue and `a || b` all reach a Hash key this way (#3505). An arm
-     that is absent yields nil, which is the sentinel in an int slot. */
+     that is absent yields nil, which an int slot holds as its nil. */
   if (nt_kind(nt, v) == NK_StatementsNode) {
     int n = 0; const int *st = nt_arr(nt, v, "body", &n);
     return st && n > 0 ? nullable_int_value(c, st[n - 1]) : 1;   /* an empty body is nil */
@@ -30907,40 +31233,69 @@ int nullable_int_value(Compiler *c, int v) {
     for (int rs = nt_ref(nt, v, "rescue_clause"); rs >= 0; rs = nt_ref(nt, rs, "subsequent"))
       if (nullable_int_value(c, nt_ref(nt, rs, "statements"))) return 1;
     int els = nt_ref(nt, v, "else_clause");
-    return els >= 0 && nullable_int_value(c, nt_ref(nt, els, "statements"));
+    /* an else with no statements answers nil */
+    return els >= 0 && (nt_ref(nt, els, "statements") < 0 || nullable_int_value(c, nt_ref(nt, els, "statements")));
   }
   if (nt_kind(nt, v) == NK_RescueModifierNode)
     return nullable_int_value(c, nt_ref(nt, v, "expression")) ||
            nullable_int_value(c, nt_ref(nt, v, "rescue_expression"));
-  if (nt_kind(nt, v) == NK_OrNode || nt_kind(nt, v) == NK_AndNode)
-    return nullable_int_value(c, nt_ref(nt, v, "left")) ||
-           nullable_int_value(c, nt_ref(nt, v, "right"));
-  /* Reading a slot some write left the sentinel in: the reader method a caller
+  /* `a && b` / `a || b` answers one of its operands: nil where one is nil
+     (`nil && 2`, `false || nil`), not only where one is a number that can be */
+  if (nt_kind(nt, v) == NK_OrNode || nt_kind(nt, v) == NK_AndNode) {
+    int l = nt_ref(nt, v, "left"), r = nt_ref(nt, v, "right");
+    /* `a || b` answers a only when a is no nil: nil only through b
+       (`@ram[i] || 0` never is) */
+    if (nt_kind(nt, v) == NK_OrNode && r >= 0) {
+      TyKind rt2 = infer_type(c, r);
+      return nt_kind(nt, r) == NK_NilNode || rt2 == TY_NIL || rt2 == TY_VOID || nullable_int_value(c, r);
+    }
+    for (int s = 0; s < 2; s++) {
+      int o = s ? r : l;
+      if (o < 0) continue;
+      TyKind ot = infer_type(c, o);
+      if (nt_kind(nt, o) == NK_NilNode || ot == TY_NIL || ot == TY_VOID) return 1;
+    }
+    return nullable_int_value(c, l) || nullable_int_value(c, r);
+  }
+  /* Reading a slot some write left nil in: the reader method a caller
      resolves to is this read, so its callers box through it too. */
   if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
     Scope *s = comp_scope_of(c, v);
     int cid = s ? s->class_id : -1;
+    /* inside an instance_eval / exec splice the ivar is the receiver's;
+       a receiver of no class of the program's has none: nil */
+    if (ie_nonobj_node(v)) return 1;
+    if (ie_class_of(c, v) >= 0) cid = ie_class_of(c, v);
     if (cid < 0) cid = comp_class_index(c, "Toplevel");
     if (cid < 0 || cid >= c->nclasses) return 0;
     ClassInfo *ci = &c->classes[cid];
     int iv = comp_ivar_index(ci, nt_str(nt, v, "name"));
-    return iv >= 0 && ci->ivar_nullable_int[iv];
+    /* a splice's receiver class that never writes the ivar reads it nil */
+    if (iv < 0 && ie_class_of(c, v) >= 0) {
+      int has = 0;
+      for (int k = cid, hop = 0; k >= 0 && !has && hop < 64; k = c->classes[k].parent, hop++)
+        has = comp_ivar_index(&c->classes[k], nt_str(nt, v, "name")) >= 0;
+      if (!has) return 1;
+    }
+    /* a boxed ivar (a promote-widened member) can hold nil too */
+    return iv >= 0 && (ci->ivar_nullable_int[iv] || ci->ivar_types[iv] == TY_POLY);
   }
-  /* A class variable some write left the sentinel in, as an ivar: `def
+  /* A class variable some write left nil in, as an ivar: `def
      self.b = (@@x = nil)` beside `@@x = 1` read back 0 */
   if (nt_kind(nt, v) == NK_ClassVariableReadNode) {
     ClassInfo *ci = NULL;
     int cv = cvar_slot(c, v, &ci);
-    return cv >= 0 && ci->cvar_nullable_int[cv];
+    /* a boxed one (a promote-widened member) can hold nil too, as an ivar */
+    return cv >= 0 && (ci->cvar_nullable_int[cv] || ci->cvar_types[cv] == TY_POLY);
   }
-  /* A Float global is declared holding the sentinel, which it keeps until its
-     first assignment; and any scalar global some write left the sentinel in
-     holds it after (marked below, as a local is). */
+  /* A Float global is declared holding nil, which it keeps until its first
+     assignment; and any scalar global some write left nil in holds it after
+     (marked below, as a local is). */
   if (nt_kind(nt, v) == NK_GlobalVariableReadNode) {
     const char *gn = nt_str(nt, v, "name");
     const char *rn = gn ? comp_resolve_gvar(c, gn + 1) : NULL;
     LocalVar *g = rn ? comp_gvar(c, rn) : NULL;
-    if (g && g->nullable_int) return 1;
+    if (g && (g->nullable_int || g->type == TY_POLY)) return 1;
     return g && g->type == TY_FLOAT && !gvar_seeded_before_read(c, rn);
   }
   /* `(e)` is e, and a parenthesized sequence `(y = a[i]; y)` is its last
@@ -30958,16 +31313,102 @@ int nullable_int_value(Compiler *c, int v) {
     Scope *ys = comp_scope_of(c, v);
     int ymi = ys ? (int)(ys - c->scopes) : -1;
     if (ymi < 0) return 0;
-    int tails[32];
+    int tails[64];
+    /* a block's `next v` is one of its values too */
+    int sv_ybn = yield_block_tails_next; yield_block_tails_next = 1;
     int n = yield_block_tails(c, ymi, tails, (int)(sizeof tails / sizeof tails[0]));
+    yield_block_tails_next = sv_ybn;
     /* no literal block in sight (an escaping &blk called through the proc ABI):
-       its value arrives boxed, so nothing unboxed carries a sentinel */
+       its value arrives boxed, so nothing unboxed carries a nil */
     for (int i = 0; i < n; i++) if (nullable_int_value(c, tails[i])) return 1;
     return 0;
   }
+  /* `super` answers the ancestor's method, and a yielding one answers its
+     block's value: a block written at the super (`super { nil }`,
+     `super(&proc { nil })`) with a nil-capable tail */
+  if (nt_kind(nt, v) == NK_SuperNode || nt_kind(nt, v) == NK_ForwardingSuperNode) {
+    Scope *ss = comp_scope_of(c, v);
+    int tmi = ss ? a_super_target(c, ss) : -1;
+    if (tmi >= 0 && c->scopes[tmi].ret_nullable_int) return 1;
+    int blk = nt_ref(nt, v, "block"), bb = -1;
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) bb = nt_ref(nt, blk, "body");
+    else if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) {
+      int e = nt_ref(nt, blk, "expression");
+      if (e >= 0 && nt_kind(nt, e) == NK_LambdaNode) bb = nt_ref(nt, e, "body");
+      else if (e >= 0 && nt_kind(nt, e) == NK_CallNode && nt_ref(nt, e, "receiver") < 0 &&
+               nt_str(nt, e, "name") && (sp_streq(nt_str(nt, e, "name"), "proc") || sp_streq(nt_str(nt, e, "name"), "lambda"))) {
+        int pb = nt_ref(nt, e, "block");
+        if (pb >= 0 && nt_kind(nt, pb) == NK_BlockNode) bb = nt_ref(nt, pb, "body");
+      }
+    }
+    if (bb >= 0 && tmi >= 0 && c->scopes[tmi].yields) {
+      int n = 0; const int *st = nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &n) : &bb;
+      if (nt_kind(nt, bb) != NK_StatementsNode) n = 1;
+      if (n <= 0) return 1;
+      int tl = st[n - 1];
+      if (nt_kind(nt, tl) == NK_NilNode || nullable_int_value(c, tl)) return 1;
+    }
+    return 0;
+  }
   if (nt_kind(nt, v) == NK_CallNode) {
+    /* `a[i] = v` answers v: a nil, or a boxed value that can be one */
+    { const char *sn = nt_str(nt, v, "name");
+      int sa = nt_ref(nt, v, "arguments"), san = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+      if (sn && sp_streq(sn, "[]=") && san >= 2 && nt_ref(nt, v, "receiver") >= 0) {
+        int sv2 = sav[san - 1];
+        TyKind st2 = infer_type(c, sv2);
+        return nt_kind(nt, sv2) == NK_NilNode || st2 == TY_POLY || st2 == TY_NIL || nullable_int_value(c, sv2);
+      }
+      /* a present entry of a typed Integer-valued Hash that may hold a nil
+         value is that nil (D3b-ii): `[]`, fetch / dig / delete in every form */
+      if (sn && (sp_streq(sn, "[]") || sp_streq(sn, "fetch") || sp_streq(sn, "dig") || sp_streq(sn, "delete")) &&
+          hash_vals_nullable(c, nt_ref(nt, v, "receiver")))
+        return 1; }
     if (nn_index_inbounds(c, v)) return 0;
+    /* a call that answers nothing (`$stdout.puts(x)`) is nil */
+    { TyKind cvt = infer_type(c, v); if (cvt == TY_NIL || cvt == TY_VOID) return 1; }
+    /* a native class's method declared to answer an Integer or a Float
+       (IO::Buffer#<=>) answers one */
+    if (native_call_ret_plain_num(c, v)) return 0;
+    /* `<=>` over two numbers (or two Strings, two Symbols) always answers:
+       only a pairing of other kinds can be nil */
+    if (sp_streq(nt_str(nt, v, "name"), "<=>")) {
+      int cr = nt_ref(nt, v, "receiver"), ca = nt_ref(nt, v, "arguments"), can = 0;
+      const int *cav = ca >= 0 ? nt_arr(nt, ca, "arguments", &can) : NULL;
+      if (cr >= 0 && cav && can == 1) {
+        TyKind lt = infer_type(c, cr), at = infer_type(c, cav[0]);
+        /* a Float side can be NaN, which compares to nothing; a String
+           side other than a literal can be the nil a String slot holds */
+        int num_l = lt == TY_INT || lt == TY_FLOAT || lt == TY_BIGINT || lt == TY_RATIONAL;
+        int num_r = at == TY_INT || at == TY_FLOAT || at == TY_BIGINT || at == TY_RATIONAL;
+        int flo = lt == TY_FLOAT || at == TY_FLOAT;
+        int str_lit = nn_str_literal(nt, cr) && nn_str_literal(nt, cav[0]);
+        /* ... and a nil number on either side answers nil */
+        if (num_l && num_r && (nullable_int_value(c, cr) || nullable_int_value(c, cav[0]))) return 1;
+        if ((num_l && num_r && !flo) || (lt == TY_STRING && at == TY_STRING && str_lit) ||
+            (lt == TY_SYMBOL && at == TY_SYMBOL) || (lt == TY_TIME && at == TY_TIME)) return 0;
+      }
+      return 1;
+    }
     if (nullable_int_call_name(nt_str(nt, v, "name"))) return 1;
+    /* `o.instance_variable_set(:@x, v)` answers v */
+    if (sp_streq(nt_str(nt, v, "name"), "instance_variable_set") && nt_ref(nt, v, "receiver") >= 0) {
+      int sa = nt_ref(nt, v, "arguments"), sn = 0;
+      const int *sv = sa >= 0 ? nt_arr(nt, sa, "arguments", &sn) : NULL;
+      if (sn == 2 && (nt_kind(nt, sv[1]) == NK_NilNode || nullable_int_value(c, sv[1]))) return 1;
+    }
+    if (file_stat_nil_call(c, v)) return 1;
+    /* a Range's omitted bound is nil: (1.0..).end, (..2).begin. A literal
+       with both ends has both */
+    { const char *bn = nt_str(nt, v, "name"); int br = nt_ref(nt, v, "receiver");
+      if (br >= 0 && bn && nt_ref(nt, v, "arguments") < 0 && (sp_streq(bn, "begin") || sp_streq(bn, "end"))) {
+        TyKind brt = infer_type(c, br);
+        int lit = an_unparen(nt, br);
+        int both = lit >= 0 && nt_kind(nt, lit) == NK_RangeNode && nt_ref(nt, lit, "left") >= 0 && nt_ref(nt, lit, "right") >= 0;
+        if ((brt == TY_RANGE || brt == TY_FLOAT_RANGE) && !both) return 1;
+      }
+    }
     if (nn_call_unboxes_nil(c, v)) return 1;
     /* A setter assignment answers its RHS, not the writer's return. Its
        nullable scalar must survive when the assignment itself is boxed.
@@ -30977,17 +31418,26 @@ int nullable_int_value(Compiler *c, int v) {
       const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
       if (an == 1) return nullable_int_value(c, av[0]);
     }
-    /* a missed element read is the sentinel in an int slot; only boxing is
+    /* a missed element read is nil in an int slot; only boxing is
        affected, typed reads keep their inline arms */
     if (elem_miss_call(c, v)) return 1;
     /* a method whose --rbs signature pins `Integer?`, or whose own return
-       expression can be the sentinel: either way its nil is the sentinel and a
-       caller that boxes the value has to answer nil. Resolved the way emission
-       resolves it. */
+       expression can be nil: either way it answers its nil beside the value
+       and a caller that boxes the value has to answer nil. Resolved the way
+       emission resolves it. */
     const char *cn = nt_str(nt, v, "name");
     int rcv0 = nt_ref(nt, v, "receiver");
-    /* an element read out of an array some element of which is the sentinel */
+    /* an element read out of an array some element of which is nil */
     if (rcv0 >= 0 && elem_returning_call(cn) && nullable_int_elem_expr(c, rcv0, 0)) return 1;
+    /* Array#fetch answers its default argument, or its block's value, for
+       an index out of range: either can be nil */
+    if (rcv0 >= 0 && cn && sp_streq(cn, "fetch") && ty_is_array(infer_type(c, rcv0))) {
+      int fa = nt_ref(nt, v, "arguments"), fn = 0;
+      const int *fav = fa >= 0 ? nt_arr(nt, fa, "arguments", &fn) : NULL;
+      if (fn == 2 && (nt_kind(nt, fav[1]) == NK_NilNode || nullable_int_value(c, fav[1]))) return 1;
+      int ft = call_block_tail(c, v);
+      if (fn == 1 && ft >= 0 && (nt_kind(nt, ft) == NK_NilNode || nullable_int_value(c, ft))) return 1;
+    }
     /* a fold's value is its block's, and `find`/`detect` hand back an element */
     if (cn && (is_reduce_alias(cn))) {
       int ft = call_block_tail(c, v);
@@ -31002,11 +31452,10 @@ int nullable_int_value(Compiler *c, int v) {
     if (mi < 0 && cn) {
       if (rcv >= 0) {
         TyKind rt = infer_type(c, rcv);
-        /* an attr reader answers its ivar, whose nil is the sentinel: an
-           Integer or Float one some write left nil, or a Float one
-           initialize need not assign (an Integer's boxing checks its
-           sentinel anyway). Only the Float was asked, so `A.new(nil).x > 0`
-           of an Integer ivar compared the sentinel. */
+        /* an attr reader answers its ivar, nil included: an Integer or
+           Float one some write left nil, or a Float one initialize need not
+           assign. Asking only the Float once let `A.new(nil).x > 0` of an
+           Integer ivar compare its nil as a number. */
         int rdc = -1;
         if (ty_is_object(rt) && comp_reader_in_chain(c, ty_object_class(rt), cn, &rdc)) {
           int k = rdc >= 0 ? rdc : ty_object_class(rt);
@@ -31067,6 +31516,29 @@ int nullable_int_value(Compiler *c, int v) {
   }
   if (nt_kind(nt, v) == NK_LocalVariableOrWriteNode)
     return nullable_int_value(c, nt_ref(nt, v, "value"));
+  /* `@x &&= v` answers @x's nil when it is nil (unset); `@x ||= v` answers v
+     where it assigns */
+  if (nt_kind(nt, v) == NK_InstanceVariableAndWriteNode) return 1;
+  if (nt_kind(nt, v) == NK_InstanceVariableOrWriteNode) return nullable_int_value(c, nt_ref(nt, v, "value"));
+  /* `h[k] &&= v` answers the element when it is nil (a miss); `h[k] ||= v`
+     answers v when it assigns */
+  if (nt_kind(nt, v) == NK_IndexAndWriteNode) return 1;
+  if (nt_kind(nt, v) == NK_IndexOrWriteNode) return nullable_int_value(c, nt_ref(nt, v, "value"));
+  /* ... and `o.x &&= v` / `o.x ||= v` the same of the attribute */
+  if (nt_kind(nt, v) == NK_CallAndWriteNode) return 1;
+  if (nt_kind(nt, v) == NK_CallOrWriteNode) {
+    int ov = nt_ref(nt, v, "value");
+    return ov < 0 || nt_kind(nt, ov) == NK_NilNode || nullable_int_value(c, ov);
+  }
+  /* `x = v` answers v: `s0 = s1 = nil` hands s0 the inner write's nil */
+  if (nt_kind(nt, v) == NK_LocalVariableWriteNode)
+    return nullable_int_value(c, nt_ref(nt, v, "value"));
+  /* ... and so do `@@x = v`, `@x = v`, `$x = v` (`def self.b = (@@x = nil)`) */
+  if (nt_kind(nt, v) == NK_ClassVariableWriteNode || nt_kind(nt, v) == NK_InstanceVariableWriteNode ||
+      nt_kind(nt, v) == NK_GlobalVariableWriteNode) {
+    int wv = nt_ref(nt, v, "value");
+    return wv >= 0 && (nt_kind(nt, wv) == NK_NilNode || nullable_int_value(c, wv));
+  }
   return 0;
 }
 
@@ -31308,6 +31780,25 @@ static void mark_array_or_nil_slots(Compiler *c) {
 /* Can one of the values a block site passes be an Integer's or a Float's
    nil? Asked of every site before its block is typed again below, so the
    common program -- no site passes one -- pays for this walk alone. */
+/* Under --int-overflow=promote an Integer variable that can hold nil is
+   widened to the box (an ivar, a local, a parameter, a global, a class
+   variable): such a read handed to a block parameter, which keeps its
+   Integer type, can be nil. */
+int promote_boxed_var_read(Compiler *c, int v) {
+  if (v < 0) return 0;
+  switch (nt_kind(c->nt, v)) {
+  case NK_InstanceVariableReadNode: case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
+    return c->ntype[v] == TY_POLY;
+  case NK_LocalVariableReadNode: {
+    const char *nm = nt_str(c->nt, v, "name");
+    Scope *s = nm ? comp_scope_of(c, v) : NULL;
+    LocalVar *lv = s ? scope_local(s, nm) : NULL;
+    return (lv && lv->type == TY_POLY) || c->ntype[v] == TY_POLY;
+  }
+  default: return 0;
+  }
+}
+
 static int site_args_may_be_nil(Compiler *c, const int *av, int an) {
   const NodeTable *nt = c->nt;
   for (int k = 0; k < an; k++) {
@@ -31320,15 +31811,29 @@ static int site_args_may_be_nil(Compiler *c, const int *av, int an) {
     }
     TyKind t = v >= 0 ? c->ntype[v] : TY_UNKNOWN;
     if ((t == TY_INT || t == TY_FLOAT) && nullable_int_value(c, v)) return 1;
+    /* under promote a boxed ivar (an Integer member) can hand its nil too */
+    if (g_promote_mode && promote_boxed_var_read(c, v)) return 1;
   }
   return 0;
 }
 
 /* The marks a call's arguments hand the parameters of method `mi` it binds:
-   an object parameter handed nil, an array one handed an array holding the
-   sentinel, an Integer or Float one handed a value that can be it -- a
+   an object parameter handed nil, an array one handed an array holding a
+   nil, an Integer or Float one handed a value that can be nil -- a
    keyword parameter by the value its key names (`k: nil`). Returns 1 if any
    mark was set. */
+/* Is argument `a` a read of a parameter whose default is nil (`port: nil`)?
+   The value it hands on can be that nil. */
+static int arg_reads_nil_default_param(Compiler *c, int a) {
+  const NodeTable *nt = c->nt;
+  if (a < 0 || nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
+  const char *n = nt_str(nt, a, "name");
+  Scope *s = comp_scope_of(c, a);
+  for (int k = 0; n && s && s->pdefault && k < s->nparams; k++)
+    if (s->pnames[k] && sp_streq(s->pnames[k], n))
+      return s->pdefault[k] >= 0 && nt_kind(nt, s->pdefault[k]) == NK_NilNode;
+  return 0;
+}
 static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -31355,7 +31860,7 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
     if ((p->type == TY_INT_ARRAY || p->type == TY_FLOAT_ARRAY) && !p->nullable_int_elem &&
         nullable_int_elem_expr(c, a, 0)) { p->nullable_int_elem = 1; changed = 1; }
     if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
-    if (nullable_int_value(c, a)) { p->nullable_int = 1; changed = 1; continue; }
+    if (nullable_int_value(c, a) || arg_reads_nil_default_param(c, a)) { p->nullable_int = 1; changed = 1; continue; }
     /* an ivar that can be read before anything assigned it, or a parameter
        already carrying one: boxing the parameter has to answer nil (#5085) */
     if (!p->box_nullable && box_nullable_arg(c, a)) { p->box_nullable = 1; changed = 1; }
@@ -31373,14 +31878,14 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
   return changed;
 }
 
-/* Mark the int locals that can hold that sentinel, so codegen boxes them as
-   nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
-   ~8% on optcarrot -- every pixel goes through it -- so the marking is static
-   and the hot path keeps the plain box. */
+/* Mark the int locals that can hold nil, so codegen gives them a nil flag (an
+   oint) and boxes them as nil rather than as a number. Boxing every int
+   through the nil check costs ~8% on optcarrot -- every pixel goes through
+   it -- so the marking is static and the hot path keeps the plain box. */
 /* The locals a program only ever writes nil to (`nl = nil`), boxed, as the
    marking below asks of a value: written to an Integer or Float local, such
-   a read is the sentinel there (the write unboxes it through
-   sp_poly_to_i_or_nil), but nullable_int_value answers no for it, since it
+   a read is that local's nil (the write unboxes it through sp_unbox_oint),
+   but nullable_int_value answers no for it, since it
    is no number that may be nil. A parameter is left out: its value comes
    from the call. */
 typedef struct { LocalVar **v; int n, cap; } NilOnlyLocals;
@@ -31730,6 +32235,473 @@ static int named_method_first(const NamedMethod *v, int n, const char *name) {
   return lo;
 }
 
+/* A5: a Hash literal whose Integer or Float key or value can be nil is
+   the boxed-keyed / boxed-valued kind, as a literal nil makes it. The nil
+   marks settle after the types, so the literal (and a local it is written
+   to, with that local's reads) widens here; a typed key or value slot has no
+   nil (nil out of band). */
+void infer_subtree(Compiler *c, int id);   /* analyze_infer.c */
+static int wnh_bodies[4096], wnh_n;
+static void wnh_note(int body) {
+  for (int i = 0; i < wnh_n; i++) if (wnh_bodies[i] == body) return;
+  if (wnh_n < 4096) wnh_bodies[wnh_n++] = body;
+}
+/* Does a read of local `name` in scope sc hand the hash on whole -- a
+   statement list's last value (a method's or block's answer), a `return`,
+   another variable's write, an argument of a call other than an output one?
+   Its type then reaches slots the late widening cannot retype. */
+static int wnh_last_stmt(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_StatementsNode, st) {
+    int n = 0; const int *b = nt_arr(nt, st, "body", &n);
+    for (int k = 0; k < n; k++) if (b[k] == id) return k == n - 1;
+  }
+  return 1;   /* not a statement: its value is used */
+}
+/* Is node n method mi's answer: its body's last statement, or the last
+   statement of an `if` / `unless` / `else` arm in that place? */
+static int wnh_answer_in(Compiler *c, int at, int n, int depth) {
+  const NodeTable *nt = c->nt;
+  at = an_unparen(nt, at);
+  if (at < 0 || depth > 32) return 0;
+  if (at == n) return 1;
+  switch (nt_kind(nt, at)) {
+    case NK_StatementsNode: {
+      int k = 0; const int *b = nt_arr(nt, at, "body", &k);
+      return k > 0 && wnh_answer_in(c, b[k - 1], n, depth + 1);
+    }
+    case NK_IfNode: case NK_UnlessNode:
+      return wnh_answer_in(c, nt_ref(nt, at, "statements"), n, depth + 1) ||
+             wnh_answer_in(c, nt_ref(nt, at, nt_kind(nt, at) == NK_IfNode ? "subsequent" : "else_clause"), n, depth + 1);
+    case NK_ElseNode:
+      return wnh_answer_in(c, nt_ref(nt, at, "statements"), n, depth + 1);
+    case NK_BeginNode: {   /* its statements answer, or its `else` when it has one */
+      int el = nt_ref(nt, at, "else_clause");
+      return wnh_answer_in(c, el >= 0 ? el : nt_ref(nt, at, "statements"), n, depth + 1);
+    }
+    default: return 0;
+  }
+}
+static int wnh_is_answer(Compiler *c, Scope *sc, int n) {
+  if (!sc || sc->def_node < 0 || sc->body < 0) return 0;
+  return wnh_answer_in(c, sc->body, n, 0);
+}
+/* `answered`, when given, lets a read that is sc's own answer (the method's
+   last value, wnh_is_answer; a `return` still escapes) pass, and reports
+   that one did: the caller then widens the method's return with the local */
+static int wnh_local_escapes_ex(Compiler *c, Scope *sc, const char *name, int *answered) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_StatementsNode, st) {
+    int n = 0; const int *b = nt_arr(nt, st, "body", &n);
+    if (n <= 0 || nt_kind(nt, b[n - 1]) != NK_LocalVariableReadNode) continue;
+    const char *rn = nt_str(nt, b[n - 1], "name");
+    if (!rn || !sp_streq(rn, name) || comp_scope_of(c, b[n - 1]) != sc) continue;
+    if (answered && wnh_is_answer(c, sc, b[n - 1])) { *answered = 1; continue; }
+    return 1;
+  }
+  static const NodeKind wk[] = { NK_ReturnNode, NK_LocalVariableWriteNode, NK_InstanceVariableWriteNode,
+                                 NK_GlobalVariableWriteNode, NK_ClassVariableWriteNode, NK_CallNode };
+  for (size_t q = 0; q < sizeof wk / sizeof wk[0]; q++) {
+    NT_FOREACH_KIND(nt, wk[q], w) {
+      const int *av = NULL; int an = 0;
+      if (wk[q] == NK_ReturnNode || wk[q] == NK_CallNode) {
+        if (wk[q] == NK_CallNode) {
+          const char *cn = nt_str(nt, w, "name");
+          if (cn && (sp_streq(cn, "puts") || sp_streq(cn, "print"))) continue;
+          /* `p` and `pp` answer their argument: a statement's, but not a
+             method's or block's answer (its last statement) */
+          if (cn && (sp_streq(cn, "p") || sp_streq(cn, "pp")) && !wnh_last_stmt(c, w)) continue;
+        }
+        int a = nt_ref(nt, w, "arguments");
+        av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      }
+      else { int v = nt_ref(nt, w, "value"); an = 0;
+        if (v >= 0 && nt_kind(nt, v) == NK_LocalVariableReadNode) {
+          const char *rn = nt_str(nt, v, "name");
+          if (rn && sp_streq(rn, name) && comp_scope_of(c, v) == sc) return 1;
+        }
+      }
+      for (int k = 0; k < an; k++)
+        if (nt_kind(nt, av[k]) == NK_LocalVariableReadNode) {
+          const char *rn = nt_str(nt, av[k], "name");
+          if (rn && sp_streq(rn, name) && comp_scope_of(c, av[k]) == sc) return 1;
+        }
+    }
+  }
+  return 0;
+}
+static int wnh_local_escapes(Compiler *c, Scope *sc, const char *name) {
+  return wnh_local_escapes_ex(c, sc, name, NULL);
+}
+/* The block parameters of a key/value iteration over a local the widening
+   retyped (`g.each { |k, v| }`) were bound from the typed kind: a key or
+   value that can be nil is now boxed, so is the parameter */
+static void wnh_widen_block_params(Compiler *c, Scope *sc, const char *ln, int kn, int vn) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    int r = nt_ref(nt, call, "receiver"), blk = nt_ref(nt, call, "block");
+    if (r < 0 || blk < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode || nt_kind(nt, blk) != NK_BlockNode) continue;
+    const char *rn = nt_str(nt, r, "name"), *nm = nt_str(nt, call, "name");
+    if (!rn || !nm || !sp_streq(rn, ln) || comp_scope_of(c, r) != sc) continue;
+    int pk = -1, pv = -1;
+    if (sp_streq(nm, "each_key")) pk = 0;
+    else if (sp_streq(nm, "each_value")) pv = 0;
+    else if (sp_streq(nm, "each") || sp_streq(nm, "each_pair") || sp_streq(nm, "select") || sp_streq(nm, "filter") ||
+             sp_streq(nm, "reject") || sp_streq(nm, "map") || sp_streq(nm, "collect") || sp_streq(nm, "any?") ||
+             sp_streq(nm, "all?") || sp_streq(nm, "none?") || sp_streq(nm, "count") || sp_streq(nm, "delete_if") ||
+             sp_streq(nm, "keep_if") || sp_streq(nm, "select!") || sp_streq(nm, "reject!") || sp_streq(nm, "filter!")) {
+      if (!block_param_name(c, blk, 1)) continue;   /* a solo parameter is the boxed pair */
+      pk = 0; pv = 1;
+    }
+    else continue;
+    Scope *bs = comp_scope_of(c, blk);
+    for (int w = 0; w < 2; w++) {
+      int idx = w == 0 ? pk : pv;
+      if (idx < 0 || !(w == 0 ? kn : vn)) continue;
+      const char *pn = block_param_name(c, blk, idx);
+      LocalVar *plv = pn && bs ? scope_local(bs, pn) : NULL;
+      if (plv && (plv->type == TY_INT || plv->type == TY_FLOAT)) plv->type = TY_POLY;
+    }
+    if (bs && bs->body >= 0) wnh_note(bs->body);
+  }
+}
+/* The method a call resolves to statically, or -1 (a boxed receiver: -2) */
+static int wnh_call_target(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, call, "name");
+  int r = nt_ref(nt, call, "receiver");
+  if (!cn) return -1;
+  if (r < 0) return comp_self_call_mi(c, call, cn);
+  if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {
+    int rc = comp_class_index(c, nt_str(nt, r, "name"));
+    return rc >= 0 ? comp_cmethod_in_chain(c, rc, cn, NULL) : -1;
+  }
+  TyKind rt = infer_type(c, r);
+  if (rt == TY_POLY || rt == TY_UNKNOWN) return -2;
+  return ty_is_object(rt) ? comp_method_in_chain(c, ty_object_class(rt), cn, NULL) : -1;
+}
+/* Can method mi's return widen with the literal it answers? Every call of
+   it must resolve to it, and its value be read only where the reader
+   re-derives the kind: a builtin's receiver or argument (`f(v) == h`,
+   `p f(v)`), or dropped. One that lands in a slot (a variable, a return, a
+   program method's argument, a literal's element) keeps the typed kind and
+   its store refuses, as before. */
+static int wnh_ret_widenable(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  const char *nm = c->scopes[mi].name;
+  if (!nm) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    if (!cn || !sp_streq(cn, nm)) continue;
+    int t = wnh_call_target(c, call);
+    if (t == -2) return 0;
+    if (t != mi) continue;
+    if (comp_value_dropped(c, call)) continue;
+    int rp = comp_recv_parent(c, call);
+    if (rp >= 0) { if (wnh_call_target(c, rp) >= 0) return 0; continue; }
+    /* an argument of a builtin call */
+    int found = 0, owner = -1;
+    for (int pc = 0; pc < nt->count && !found; pc++) {
+      if (nt_kind(nt, pc) != NK_CallNode) continue;
+      int a = nt_ref(nt, pc, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      for (int i = 0; i < an && !found; i++) if (an_unparen(nt, av[i]) == call) { found = 1; owner = pc; }
+    }
+    if (found && wnh_call_target(c, owner) >= 0) return 0;
+    if (!found) return 0;
+  }
+  return 1;
+}
+/* Widen method mi's return to hash kind `want`, and each call of it, when
+   wnh_ret_widenable allows; 1 when done */
+static int wnh_widen_ret(Compiler *c, int mi, TyKind want) {
+  const NodeTable *nt = c->nt;
+  if (!wnh_ret_widenable(c, mi)) return 0;
+  c->scopes[mi].ret = want;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    if (wnh_call_target(c, call) != mi) continue;
+    c->ntype[call] = want;
+    Scope *cs = comp_scope_of(c, call); if (cs && cs->body >= 0) wnh_note(cs->body);
+  }
+  return 1;
+}
+static void widen_nullable_keyed_hash_literals(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_HashNode, id) {
+    TyKind ht = c->ntype[id];
+    if (!ty_is_hash(ht)) continue;
+    TyKind kt = ty_hash_key(ht), vt = ty_hash_val(ht);
+    int kn = 0, vn = 0;
+    int n = 0; const int *els = nt_arr(nt, id, "elements", &n);
+    for (int j = 0; j < n; j++) {
+      if (nt_kind(nt, els[j]) != NK_AssocNode) continue;
+      int k = nt_ref(nt, els[j], "key"), v = nt_ref(nt, els[j], "value");
+      /* (a boxed key or value -- a promote-widened local -- can be nil too) */
+      if ((kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, k) || (k >= 0 && c->ntype[k] == TY_POLY))) kn = 1;
+      if ((vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, v) || (v >= 0 && c->ntype[v] == TY_POLY))) vn = 1;
+    }
+    if (!kn && !vn) continue;
+    TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
+    TyKind want = nk == TY_SYMBOL ? TY_SYM_POLY_HASH : ty_hash_of(nk, nv);
+    if (!ty_is_hash(want)) want = nk == TY_STRING ? TY_STR_POLY_HASH : TY_POLY_POLY_HASH;
+    if (want == ht) continue;
+    c->ntype[id] = want;
+    { Scope *ls = comp_scope_of(c, id); if (ls && ls->body >= 0) wnh_note(ls->body); }
+    /* the literal a method answers (`def f(v) = { "k" => v }`): the
+       method's return widens with it, and each call of it, where its value
+       is read only by builtins that re-derive the kind; else it stays typed */
+    { Scope *ms = comp_scope_of(c, id);
+      int mi = ms ? (int)(ms - c->scopes) : -1;
+      if (ms && ms->def_node >= 0 && ms->ret == ht && an_unparen(nt, scope_body_last(c, mi)) == id) {
+        if (!wnh_widen_ret(c, mi, want)) { c->ntype[id] = ht; continue; }
+      }
+    }
+    /* the local it is written to, and that local's reads */
+    NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+      if (nt_ref(nt, w, "value") != id) continue;
+      const char *wn = nt_str(nt, w, "name");
+      Scope *sc = comp_scope_of(c, w);
+      LocalVar *lv = wn && sc ? scope_local(sc, wn) : NULL;
+      if (!lv || lv->type != ht) continue;
+      if (wnh_local_escapes(c, sc, wn)) { c->ntype[id] = ht; break; }   /* left typed: the store refuses */
+      lv->type = want;
+      c->ntype[w] = want;
+      wnh_widen_block_params(c, sc, wn, kn, vn);
+      NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, r) {
+        const char *rn = nt_str(nt, r, "name");
+        if (rn && sp_streq(rn, wn) && comp_scope_of(c, r) == sc) c->ntype[r] = want;
+      }
+    }
+  }
+  /* A method answering a Hash literal of a boxed kind its declared return
+     is not (a parameter boxed by --int-overflow=promote after the types
+     settled): the return follows the literal, as above */
+  for (int mi = 1; mi < c->nscopes; mi++) {
+    Scope *ms = &c->scopes[mi];
+    if (ms->def_node < 0 || !ty_is_hash(ms->ret)) continue;
+    int last = an_unparen(nt, scope_body_last(c, mi));
+    if (last < 0 || nt_kind(nt, last) != NK_HashNode || comp_scope_of(c, last) != ms) continue;
+    TyKind lt = c->ntype[last];
+    if (!ty_is_hash(lt) || lt == ms->ret || ty_hash_val(lt) != TY_POLY || ty_hash_val(ms->ret) == TY_POLY) continue;
+    if (ty_hash_key(lt) != ty_hash_key(ms->ret) && ty_hash_key(lt) != TY_POLY) continue;
+    if (wnh_widen_ret(c, mi, lt) && ms->body >= 0) wnh_note(ms->body);
+  }
+  /* ... and a local Hash a `[]=` / `store` stores such a key or value into
+     (`h = Hash.new; h["k"] = a[1]`): the local, its reads, and its writes
+     whose value is an empty literal or a bare Hash.new built at its kind */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
+    int r = nt_ref(nt, id, "receiver");
+    if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode) continue;
+    TyKind ht = c->ntype[r];
+    if (!ty_is_hash(ht)) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (!av || an != 2) continue;
+    TyKind kt = ty_hash_key(ht), vt = ty_hash_val(ht);
+    int kn = (kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, av[0]) || c->ntype[av[0]] == TY_POLY);
+    int vn = (vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, av[1]) || c->ntype[av[1]] == TY_POLY);
+    if (!kn && !vn) continue;
+    TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
+    TyKind want = nk == TY_SYMBOL ? TY_SYM_POLY_HASH : ty_hash_of(nk, nv);
+    if (!ty_is_hash(want)) want = nk == TY_STRING ? TY_STR_POLY_HASH : TY_POLY_POLY_HASH;
+    if (want == ht) continue;
+    const char *ln = nt_str(nt, r, "name");
+    Scope *sc = comp_scope_of(c, r);
+    LocalVar *lv = ln && sc ? scope_local(sc, ln) : NULL;
+    if (!lv || lv->type != ht || lv->is_param || lv->rbs_seeded) continue;
+    int answered = 0;
+    if (wnh_local_escapes_ex(c, sc, ln, &answered)) continue;
+    /* every write must be one the widening can rebuild */
+    int ok = 1;
+    NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != sc) continue;
+      int v = nt_ref(nt, w, "value");
+      NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NilNode;
+      int en = 0;
+      if (vk == NK_HashNode) nt_arr(nt, v, "elements", &en);
+      int bare_new = vk == NK_CallNode && sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "arguments") < 0 &&
+                     nt_ref(nt, v, "block") < 0;
+      if (!((vk == NK_HashNode && en == 0) || bare_new)) { ok = 0; break; }
+    }
+    if (!ok) continue;
+    /* the method answers the local (`counts = {}; ...; counts`, tally in
+       builtins/): its return widens with it, and each call of it, where
+       wnh_ret_widenable allows; else the local stays typed and the store
+       refuses, as before */
+    if (answered) {
+      /* only for a key that can be nil: a nil value is the typed hash's own
+         (its per-entry value nil bits), not a reason to widen the return */
+      if (!kn) continue;
+      if (vn) {
+        want = ty_hash_of(TY_POLY, vt);
+        if (!ty_is_hash(want)) want = TY_POLY_POLY_HASH;
+        vn = 0;
+      }
+      int mi = (int)(sc - c->scopes);
+      if (sc->ret != ht || !wnh_widen_ret(c, mi, want)) continue;
+    }
+    lv->type = want;
+    wnh_widen_block_params(c, sc, ln, kn, vn);
+    NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != sc) continue;
+      c->ntype[w] = want;
+      int v = nt_ref(nt, w, "value");
+      if (v >= 0) {
+        c->ntype[v] = want;
+        if (nt_kind(nt, v) == NK_HashNode && c->hash_want && v < c->node_cap) c->hash_want[v] = want;
+      }
+    }
+    NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, rr) {
+      const char *rn = nt_str(nt, rr, "name");
+      if (rn && sp_streq(rn, ln) && comp_scope_of(c, rr) == sc) c->ntype[rr] = want;
+    }
+    if (sc->body >= 0) wnh_note(sc->body);
+  }
+  /* A constant written from an Integer / Float that can be nil (`X =
+     define_method(:c) { next 3 if f; 4 }` over a method answering its proc's
+     value) holds it boxed: a constant has no nil flag of its own. Its reads,
+     anywhere, re-infer against the box. */
+  int const_widened = 0;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    int v = nt_ref(nt, id, "value");
+    LocalVar *cv = cn ? comp_const(c, cn) : NULL;
+    if (!cv || v < 0 || (cv->type != TY_INT && cv->type != TY_FLOAT)) continue;
+    if (!nullable_int_value(c, v)) continue;
+    cv->type = TY_POLY; const_widened = 1;
+    c->ntype[id] = TY_POLY;
+  }
+  if (const_widened)
+    for (int si = 0; si < c->nscopes; si++) if (c->scopes[si].body >= 0) wnh_note(c->scopes[si].body);
+  /* the expressions over a widened hash (its reads' `[]`, a call it is an
+     argument of) re-infer against it */
+  for (int i = 0; i < wnh_n; i++) infer_subtree(c, wnh_bodies[i]);
+  wnh_n = 0;
+}
+
+/* A block or lambda reads its enclosing scope's variable through one cell
+   (or a copy of it): the slot is one, so whether it holds a nil is one
+   property -- the enclosing local's and the body's same-named local agree
+   (the cell's C type is the owner's, the reads in the body ask theirs). */
+static void sync_captured_nullable(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int round = 0; round < 8; round++) {
+    int changed = 0;
+    static const NodeKind pk[] = { NK_LambdaNode, NK_BlockNode };
+    for (int q = 0; q < 2; q++) {
+      NT_FOREACH_KIND(nt, pk[q], id) {
+        int body = nt_ref(nt, id, "body");
+        if (body < 0) continue;
+        Scope *bs = comp_scope_of(c, body), *encl = comp_scope_of(c, id);
+        if (!bs || !encl || bs == encl) continue;
+        for (int i = 0; i < bs->nlocals; i++) {
+          LocalVar *in = &bs->locals[i];
+          if (!in->name || in->is_param || in->is_block_param) continue;
+          LocalVar *out = scope_local(encl, in->name);
+          if (!out || out == in || out->type != in->type) continue;
+          if (in->type != TY_INT && in->type != TY_FLOAT) continue;
+          if (in->nullable_int != out->nullable_int) { in->nullable_int = out->nullable_int = 1; changed = 1; }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+}
+
+/* The per-kind flag of a typed Integer-valued Hash kind, or NULL */
+static unsigned char *hash_vnil_flag(Compiler *c, TyKind t) {
+  return t == TY_STR_INT_HASH ? &c->hash_vnil_str_int : t == TY_INT_INT_HASH ? &c->hash_vnil_int_int : NULL;
+}
+int hash_vals_nullable(Compiler *c, int node) {
+  if (node < 0) return 0;
+  TyKind t = c->ntype && node < c->node_cap && c->ntype[node] != TY_UNKNOWN ? c->ntype[node] : infer_type(c, node);
+  unsigned char *f = hash_vnil_flag(c, t);
+  return f && *f;
+}
+/* A value a store hands an Integer-valued typed Hash that can be nil: a nil
+   literal, an Integer that can be nil, or a boxed value (the store unboxes
+   it with its nil) */
+static int hash_store_val_may_nil(Compiler *c, int v) {
+  if (v < 0) return 0;
+  if (nt_kind(c->nt, an_unparen(c->nt, v)) == NK_NilNode) return 1;
+  return nullable_int_value(c, v) || infer_type(c, v) == TY_POLY;
+}
+/* The block parameters a walk over a Hash binds its key and value to (-1:
+   none), as `each { |k, v| }` / `each_value { |v| }`; 0 for a call that is
+   no such walk, or binds the pair as one boxed parameter */
+static int hash_walk_params(Compiler *c, int call, int *pk, int *pv) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, call, "name");
+  int blk = nt_ref(nt, call, "block");
+  *pk = *pv = -1;
+  if (!nm || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  if (sp_streq(nm, "each_key")) { *pk = 0; return 1; }
+  if (sp_streq(nm, "each_value") || sp_streq(nm, "transform_values") || sp_streq(nm, "transform_values!")) { *pv = 0; return 1; }
+  static const char *const two[] = {
+    "each", "each_pair", "select", "filter", "reject", "map", "collect", "flat_map", "filter_map", "any?", "all?",
+    "none?", "count", "delete_if", "keep_if", "select!", "reject!", "filter!", "find", "detect", "find_all",
+    "partition", "group_by", "sum", "sort_by", "min_by", "max_by", "to_h", "each_with_index"
+  };
+  for (size_t i = 0; i < sizeof two / sizeof two[0]; i++) {
+    if (!sp_streq(nm, two[i])) continue;
+    if (!block_param_name(c, blk, 1)) return 0;   /* a solo parameter is the boxed pair */
+    if (sp_streq(nm, "each_with_index")) return 0;   /* |(k, v), i|: the pair is destructured */
+    *pk = 0; *pv = 1;
+    return 1;
+  }
+  return 0;
+}
+/* D3b-ii, W2: a store that can put a nil value into a typed Integer-valued
+   Hash marks that kind program-wide (a first cut: per kind, not per slot),
+   and every walk over a Hash of a marked kind binds its value parameter with
+   the nil (an oint slot). 1 when something changed. */
+static int mark_hash_nil_values(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
+    unsigned char *f = hash_vnil_flag(c, infer_type(c, nt_ref(nt, id, "receiver")));
+    if (!f || *f) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (av && an == 2 && hash_store_val_may_nil(c, av[1])) { *f = 1; changed = 1; }
+  }
+  /* `h[k] ||= v` / `h[k] &&= v` store v (an op-write stores the op's Integer) */
+  for (int q = 0; q < 2; q++) {
+    NodeKind wk = q ? NK_IndexAndWriteNode : NK_IndexOrWriteNode;
+    NT_FOREACH_KIND(nt, wk, id) {
+      unsigned char *f = hash_vnil_flag(c, infer_type(c, nt_ref(nt, id, "receiver")));
+      if (f && !*f && hash_store_val_may_nil(c, nt_ref(nt, id, "value"))) { *f = 1; changed = 1; }
+    }
+  }
+  if (!c->hash_vnil_str_int && !c->hash_vnil_int_int) return changed;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int recv = nt_ref(nt, id, "receiver"), pk, pv;
+    if (recv < 0 || !hash_vals_nullable(c, recv)) continue;
+    int blk = nt_ref(nt, id, "block");
+    int pis[2] = { -1, -1 };
+    const char *nm = nt_str(nt, id, "name");
+    /* merge / update with a block: |key, old, new| are both hashes' values */
+    if (nm && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+        (sp_streq(nm, "merge") || sp_streq(nm, "merge!") || sp_streq(nm, "update"))) { pis[0] = 1; pis[1] = 2; }
+    else if (hash_walk_params(c, id, &pk, &pv) && pv >= 0) pis[0] = pv;
+    else continue;
+    Scope *bs = comp_scope_of(c, blk);
+    for (int q = 0; q < 2; q++) {
+      const char *pn = pis[q] >= 0 ? block_param_name(c, blk, pis[q]) : NULL;
+      LocalVar *plv = pn && bs ? scope_local(bs, pn) : NULL;
+      if (!plv || plv->type != TY_INT || plv->nullable_int) continue;
+      plv->nullable_int = 1; changed = 1;
+    }
+  }
+  return changed;
+}
+
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* A scalar local a read can reach before any write starts as its nil and
@@ -31766,20 +32738,28 @@ static void mark_nullable_int_locals(Compiler *c) {
   /* An --rbs `Integer?` return is the seeded form of the same property the
      rounds below infer, so start the propagation from it. */
   for (int mi = 1; mi < c->nscopes; mi++)
-    /* nullable_int is the SCALAR-sentinel property; a nilable string is
-       recorded by ret_rbs_nilable alone (its nil is NULL, not a reserved
-       number), so it must not seed this flag. */
+    /* nullable_int is the SCALAR nil-flag property; a nilable string is
+       recorded by ret_rbs_nilable alone (its nil is NULL, not a nil flag),
+       so it must not seed this flag. */
     if (c->scopes[mi].ret_rbs_nilable &&
         (c->scopes[mi].ret == TY_INT || c->scopes[mi].ret == TY_FLOAT))
       c->scopes[mi].ret_nullable_int = 1;
   /* A Float ivar initialize need not assign holds the constructor's nil seed
-     (emit_ivar_nil_inits) until its first write, so a local copied from it
-     carries the sentinel too. An int's boxing checks its sentinel anyway. */
+     (its nil byte, emit_ivar_nil_inits) until its first write, so a local
+     copied from it can hold nil too. */
+  int toplevel_cid = comp_class_index(c, "Toplevel");
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_struct) continue;
+    /* the top level has no initialize: its ivars are statics whose reads
+       the nil marks of their writes decide */
+    int is_toplevel = k == toplevel_cid;
     for (int iv = 0; iv < ci->nivars; iv++)
-      if (ci->ivar_types[iv] == TY_FLOAT && !ivar_assigned_in_initialize(c, k, ci->ivars[iv]))
+      /* an Integer one too: nil out of band, its read is nil until the
+         first write (the nil bit), and "assigned in initialize" means on
+         every path (a top-level statement of initialize) */
+      if ((ci->ivar_types[iv] == TY_FLOAT || (ci->ivar_types[iv] == TY_INT && !is_toplevel)) &&
+          !ivar_assigned_in_initialize(c, k, ci->ivars[iv]))
         ci->ivar_nullable_int[iv] = 1;
   }
   /* Method returns propagate through this fixpoint too (a pass-through method
@@ -31810,14 +32790,19 @@ static void mark_nullable_int_locals(Compiler *c) {
   for (long round = 0; round < rounds_max; round++) {
     int changed = 0;
     nn_compute(c, (int)round);
-    /* A method whose own return expression can be the sentinel hands it to
-       every caller. Without this, only an --rbs-seeded signature made a method
-       nilable, so `def pass(x) = x.p_` silently laundered the sentinel into a
+    /* A method whose own return expression can be nil hands it to every
+       caller. Without this, only an --rbs-seeded signature made a method
+       nilable, so `def pass(x) = x.p_` silently laundered the nil into a
        plain int at the caller (#3505). */
     for (int mi = 1; mi < c->nscopes; mi++) {
       Scope *s = &c->scopes[mi];
-      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT)) continue;
+      /* (a yielding method's boxed or untyped return too: a call site
+         narrows it to a number, its block's, and asks this mark) */
+      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT &&
+          !((s->ret == TY_POLY || s->ret == TY_UNKNOWN) && s->yields))) continue;
       int tail = scope_body_last(c, mi);
+      /* a body with rescue / else / ensure clauses: any arm's value */
+      if (tail < 0 && s->body >= 0 && nt_kind(nt, s->body) == NK_BeginNode) tail = s->body;
       if (tail >= 0 && nullable_int_value(c, tail)) { s->ret_nullable_int = 1; changed = 1; }
     }
     /* an explicit `return e` exits the method just as its tail does. Blocks
@@ -31828,7 +32813,8 @@ static void mark_nullable_int_locals(Compiler *c) {
       int rmi = rs ? (int)(rs - c->scopes) : -1;
       if (rmi < 1 || rmi >= c->nscopes) continue;
       Scope *s = &c->scopes[rmi];
-      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT)) continue;
+      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT &&
+          !((s->ret == TY_POLY || s->ret == TY_UNKNOWN) && s->yields))) continue;
       if (nullable_int_value(c, id)) { s->ret_nullable_int = 1; changed = 1; }
     }
     for (int id = 0; id < nt->count; id++) {
@@ -31842,10 +32828,26 @@ static void mark_nullable_int_locals(Compiler *c) {
       LocalVar *lv = sc ? scope_local(sc, ln) : NULL;
       if (!lv || (lv->type != TY_INT && lv->type != TY_FLOAT) || lv->nullable_int) continue;
       /* An outright `i = nil` on a slot the other writes make an int leaves
-         the sentinel in it just as a search miss does, and so does a local
-         only nil is written to, here or through `&&=` / `||=` */
-      if (nullable_int_value(c, v) || nil_only_read(c, &nilonly, v)) {
+         nil in it just as a search miss does, and so does a local
+         only nil is written to, here or through `&&=` / `||=`; a boxed value
+         (`z = f(nil)` answering poly) can be nil too, and unboxes into the
+         slot with it */
+      if (nullable_int_value(c, v) || nil_only_read(c, &nilonly, v) || infer_type(c, v) == TY_POLY) {
         lv->nullable_int = 1; changed = 1;
+      }
+    }
+    /* A proc's Integer / Float parameter: a call with fewer arguments, or a
+       nil one, binds nil, so the slot holds its nil beside the value (the
+       proc function binds `(argc > k) ? ... : nil`). */
+    for (int id = 0; id < nt->count; id++) {
+      if (!is_proc_create(c, id)) continue;
+      Scope *ps = comp_scope_of(c, id);
+      for (int k = 0; k < 16; k++) {
+        const char *pn = proc_param_name(c, id, k);
+        if (!pn) break;
+        LocalVar *plv = ps ? scope_local(ps, pn) : NULL;
+        if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;
+        plv->nullable_int = 1; changed = 1;
       }
     }
     /* A global written from such a value carries it to every reader, just as
@@ -31857,13 +32859,13 @@ static void mark_nullable_int_locals(Compiler *c) {
       const char *rn = gn ? comp_resolve_gvar(c, gn + 1) : NULL;
       LocalVar *g = rn ? comp_gvar(c, rn) : NULL;
       if (v < 0 || !g || (g->type != TY_INT && g->type != TY_FLOAT) || g->nullable_int) continue;
-      if (nullable_int_value(c, v)) { g->nullable_int = 1; changed = 1; }
+      if (nullable_int_value(c, v) || infer_type(c, v) == TY_POLY) { g->nullable_int = 1; changed = 1; }
     }
-    /* A PARAMETER whose DEFAULT is the nil literal carries the sentinel on
+    /* A PARAMETER whose DEFAULT is the nil literal carries nil on
        every defaulted call even when each explicit call site passes a real
        number -- the number is what narrowed the slot to sp_int, and the
        call-site propagation below never sees the default. `of(path,
-       line = nil)` stored SP_INT_NIL boxed as an Integer: truthy, non-nil?,
+       line = nil)` stored the old nil sentinel boxed as an Integer: truthy, non-nil?,
        class Integer, while inspect still said nil (#4212). Only the boxing
        has to know, as everywhere in this family. */
     for (int si2 = 1; si2 < c->nscopes; si2++) {
@@ -31871,10 +32873,29 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (!sc2->pdefault) continue;
       for (int pk2 = 0; pk2 < sc2->nparams; pk2++) {
         int dv2 = sc2->pdefault[pk2];
-        if (dv2 < 0 || nt_kind(nt, dv2) != NK_NilNode) continue;
+        if (dv2 < 0) continue;
         LocalVar *p2 = sc2->pnames[pk2] ? scope_local(sc2, sc2->pnames[pk2]) : NULL;
         if (!p2 || (p2->type != TY_INT && p2->type != TY_FLOAT) || p2->nullable_int) continue;
+        /* ... and so does any default that can be nil (`b = xs.first`, an
+           ivar initialize never assigns): the slot holds its nil beside the value */
+        if (nt_kind(nt, dv2) != NK_NilNode && !nullable_int_value(c, dv2)) continue;
         p2->nullable_int = 1; changed = 1;
+      }
+    }
+    /* A block's optional or keyword parameter whose default can be nil
+       (`|k: @d|` under an instance_exec whose receiver has no @d) binds
+       that nil whenever the call leaves it out */
+    for (int q = 0; q < 2; q++) {
+      NodeKind pk = q ? NK_OptionalKeywordParameterNode : NK_OptionalParameterNode;
+      NT_FOREACH_KIND(nt, pk, id) {
+        int dv = nt_ref(nt, id, "value");
+        const char *pn = nt_str(nt, id, "name");
+        if (dv < 0 || !pn) continue;
+        Scope *ps = comp_scope_of(c, id);
+        LocalVar *pv = ps ? scope_local(ps, pn) : NULL;
+        if (!pv || (pv->type != TY_INT && pv->type != TY_FLOAT) || pv->nullable_int) continue;
+        if (nt_kind(nt, dv) != NK_NilNode && !nullable_int_value(c, dv)) continue;
+        pv->nullable_int = 1; changed = 1;
       }
     }
     /* An int/float ARRAY local holding such a value hands it to every element
@@ -31933,10 +32954,13 @@ static void mark_nullable_int_locals(Compiler *c) {
         plv->nullable_int = 1; changed = 1;
       }
     }
+    /* a nil value stored into a typed Integer-valued Hash, and the walks that
+       bind it (D3b-ii) */
+    if (mark_hash_nil_values(c)) changed = 1;
     /* `x.then { |y| }`, `x.tap { |y| }`: the block parameter IS the receiver,
        nil included. A boxed receiver (every Integer local under
-       --int-overflow=promote) is unboxed into it with its nil kept as the
-       sentinel (emit_tap_then_expr), so it can leave one there too. */
+       --int-overflow=promote) is unboxed into it with its nil kept in the
+       nil flag (emit_tap_then_expr), so it can leave one there too. */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *tn = nt_str(nt, id, "name");
       int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
@@ -31986,21 +33010,157 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (any_nil || past_n || (pk > 0 && !full_rows)) { plv->nullable_int = 1; changed = 1; }
       }
     }
-    /* An IVAR written from such a value hands the sentinel to every reader,
+    /* `[[1, 2], [3]].each { |a, b| }`: a literal table whose row is shorter
+       than the block's parameters (or is no literal row) leaves the
+       parameters past it nil */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *rn2 = nt_str(nt, id, "name");
+      int recv = nt_ref(nt, id, "receiver");
+      int blk = nt_ref(nt, id, "block");
+      if (!rn2 || recv < 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_kind(nt, recv) != NK_ArrayNode) continue;
+      if (!sp_streq(rn2, "each") && !sp_streq(rn2, "each_entry") && !sp_streq(rn2, "map") &&
+          !sp_streq(rn2, "collect") && !sp_streq(rn2, "flat_map") && !sp_streq(rn2, "select") &&
+          !sp_streq(rn2, "filter") && !sp_streq(rn2, "reject") && !sp_streq(rn2, "each_with_object") &&
+          !sp_streq(rn2, "filter_map") && !sp_streq(rn2, "sum") && !sp_streq(rn2, "count")) continue;
+      int bp = nt_ref(nt, blk, "parameters");
+      int params = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+      int pn = 0; const int *reqs = params >= 0 ? nt_arr(nt, params, "requireds", &pn) : NULL;
+      if (!reqs || pn < 2) continue;
+      int en = 0; const int *els = nt_arr(nt, recv, "elements", &en);
+      int minlen = 1 << 30;
+      for (int e = 0; els && e < en; e++) {
+        if (nt_kind(nt, els[e]) != NK_ArrayNode) { minlen = 0; break; }
+        int rl = 0; const int *rel = nt_arr(nt, els[e], "elements", &rl);
+        for (int q = 0; rel && q < rl; q++) if (nt_kind(nt, rel[q]) == NK_SplatNode) rl = 0;
+        if (rl < minlen) minlen = rl;
+      }
+      if (minlen >= pn) continue;
+      Scope *bsc = comp_scope_of(c, blk);
+      for (int pk = minlen; pk < pn; pk++) {
+        const char *pnm = nt_kind(nt, reqs[pk]) == NK_RequiredParameterNode ? nt_str(nt, reqs[pk], "name") : NULL;
+        LocalVar *plv = pnm && bsc ? scope_local(bsc, pnm) : NULL;
+        if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;
+        plv->nullable_int = 1; changed = 1;
+      }
+    }
+    /* An IVAR written from such a value hands its nil to every reader,
        including the attr_reader a caller goes through (`W.new(r.p_).v`). The
-       slot keeps its scalar C type, so only the boxing has to know (#3505). */
+       slot keeps its scalar C type, its nil in its nil byte, so only the
+       boxing has to know (#3505). */
     NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
       int v = nt_ref(nt, id, "value");
       if (v < 0) continue;
       Scope *s = comp_scope_of(c, id);
       int cid = s ? s->class_id : -1;
+      /* inside `r.instance_eval { @x = nil }` the ivar is the receiver's */
+      if (ie_class_of(c, id) >= 0) cid = ie_class_of(c, id);
       if (cid < 0) cid = comp_class_index(c, "Toplevel");
       if (cid < 0 || cid >= c->nclasses) continue;
       ClassInfo *ci = &c->classes[cid];
       int iv = comp_ivar_index(ci, nt_str(nt, id, "name"));
       if (iv < 0 || ci->ivar_nullable_int[iv]) continue;
       if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
-      if (nullable_int_value(c, v)) { ci->ivar_nullable_int[iv] = 1; changed = 1; }
+      if (nullable_int_value(c, v) || infer_type(c, v) == TY_POLY) { ci->ivar_nullable_int[iv] = 1; changed = 1; }
+    }
+    /* ... and through a multiple assignment: a target the right side can
+       leave nil (`@@g, @@h = 7`, `bx.v, bx.w = nil, 6`, `o.x, o.y = 3`)
+       holds that nil -- a class variable, an ivar, an attribute's ivar */
+    NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
+      int mv = nt_ref(nt, mw, "value");
+      int ln = 0; const int *ls = nt_arr(nt, mw, "lefts", &ln);
+      int rn2 = 0; const int *rs2 = nt_arr(nt, mw, "rights", &rn2);
+      int mrest = nt_ref(nt, mw, "rest");
+      int lit = mv >= 0 && nt_kind(nt, mv) == NK_ArrayNode;
+      int en = 0; const int *ev = lit ? nt_arr(nt, mv, "elements", &en) : NULL;
+      int has_splat = 0;
+      for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) has_splat = 1;
+      TyKind mvt = mv >= 0 ? infer_type(c, mv) : TY_UNKNOWN;
+      int scalar_rhs = !lit && mv >= 0 && !ty_is_array(mvt) && mvt != TY_POLY && mvt != TY_UNKNOWN;
+      for (int pass = 0; pass < 2; pass++) {
+        int n = pass ? rn2 : ln; const int *tg = pass ? rs2 : ls;
+        for (int j = 0; j < n; j++) {
+          int t = tg[j];
+          NodeKind tk = nt_kind(nt, t);
+          if (tk != NK_ClassVariableTargetNode && tk != NK_InstanceVariableTargetNode && tk != NK_CallTargetNode) continue;
+          /* can this position be nil */
+          int may_nil;
+          if (lit && !has_splat) {
+            /* a left takes element j; a right after the rest counts from the
+               end, and an element the lefts took leaves it nil */
+            int pos = pass ? (en - rn2 + j) : j;
+            may_nil = (pos < 0 || pos >= en || (pass && pos < ln)) ? 1 : nullable_int_value(c, ev[pos]);
+          }
+          else if (scalar_rhs) may_nil = pass || j > 0 || nullable_int_value(c, mv);
+          /* a constant Array of a known length (through `?:`): a left
+             within it takes that element of each literal the constant
+             can be */
+          else if (!pass && mrest < 0) may_nil = masgn_const_pos_may_nil(c, mv, j);
+          else may_nil = 1;   /* an array of unknown length, or a boxed value */
+          if (!may_nil) continue;
+          ClassInfo *ci = NULL; int iv = -1, is_cv = 0;
+          if (tk == NK_ClassVariableTargetNode) { iv = cvar_slot(c, t, &ci); is_cv = 1; }
+          else if (tk == NK_InstanceVariableTargetNode) {
+            Scope *s = comp_scope_of(c, t);
+            int cid = s ? s->class_id : -1;
+            if (ie_class_of(c, t) >= 0) cid = ie_class_of(c, t);
+            if (cid < 0) cid = comp_class_index(c, "Toplevel");
+            if (cid >= 0 && cid < c->nclasses) { ci = &c->classes[cid]; iv = comp_ivar_index(ci, nt_str(nt, t, "name")); }
+          }
+          else {
+            int trc = nt_ref(nt, t, "receiver");
+            const char *wn = nt_str(nt, t, "name");
+            size_t wl = wn ? strlen(wn) : 0;
+            TyKind rt = trc >= 0 ? infer_type(c, trc) : TY_UNKNOWN;
+            if (!ty_is_object(rt) || wl < 2 || wl > 255) continue;
+            int cid = ty_object_class(rt), defc = -1;
+            char base[256]; memcpy(base, wn, wn[wl - 1] == '=' ? wl - 1 : wl); base[wn[wl - 1] == '=' ? wl - 1 : wl] = '\0';
+            if (comp_writer_in_chain(c, cid, base, &defc)) {
+              char ivb[300];
+              snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, base));
+              ci = &c->classes[defc >= 0 ? defc : cid];
+              iv = comp_ivar_index(ci, ivb);
+            }
+            else iv = struct_member_slot(c, cid, base, &ci);
+          }
+          if (iv < 0 || !ci) continue;
+          if (is_cv) {
+            if (ci->cvar_nullable_int[iv]) continue;
+            if (ci->cvar_types[iv] != TY_INT && ci->cvar_types[iv] != TY_FLOAT) continue;
+            ci->cvar_nullable_int[iv] = 1; changed = 1;
+          }
+          else {
+            if (ci->ivar_nullable_int[iv]) continue;
+            if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
+            ci->ivar_nullable_int[iv] = 1; changed = 1;
+          }
+        }
+      }
+    }
+    /* ... and `o.send(:x=, v)`: the attr writer's ivar takes v */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *sn = nt_str(nt, id, "name");
+      if (!sn || (!sp_streq(sn, "send") && !sp_streq(sn, "public_send") && !sp_streq(sn, "__send__"))) continue;
+      int recv = nt_ref(nt, id, "receiver");
+      int ca = nt_ref(nt, id, "arguments");
+      int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      if (recv < 0 || an != 2 || nt_kind(nt, av[0]) != NK_SymbolNode) continue;
+      const char *wn = nt_str(nt, av[0], "value");
+      size_t wl = wn ? strlen(wn) : 0;
+      if (wl < 2 || wl > 255 || wn[wl - 1] != '=') continue;
+      TyKind rt = infer_type(c, recv);
+      if (!ty_is_object(rt)) continue;
+      int cid = ty_object_class(rt), defc = -1;
+      char base[256]; memcpy(base, wn, wl - 1); base[wl - 1] = '\0';
+      ClassInfo *ci = NULL; int iv = -1;
+      if (comp_writer_in_chain(c, cid, base, &defc)) {
+        char ivb[300];
+        snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, cid, base));
+        ci = &c->classes[defc >= 0 ? defc : cid];
+        iv = comp_ivar_index(ci, ivb);
+      }
+      if (iv < 0 || !ci || ci->ivar_nullable_int[iv]) continue;
+      if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
+      if (nullable_int_value(c, av[1])) { ci->ivar_nullable_int[iv] = 1; changed = 1; }
     }
     /* ... and through a setter that is no ivar write in the program: an
        attr_writer's or a Struct member's `o.x = v` */
@@ -32008,7 +33168,11 @@ static void mark_nullable_int_locals(Compiler *c) {
       const char *wn = nt_str(nt, id, "name");
       int recv = nt_ref(nt, id, "receiver");
       size_t wl = wn ? strlen(wn) : 0;
-      if (recv < 0 || wl < 2 || wl > 255 || wn[wl - 1] != '=' || !call_is_setter_assign(nt, id)) continue;
+      /* a writer called by name (`o.send(:x=, v)` desugars to it) as well
+         as the assignment syntax; the comparison operators are no writers */
+      if (recv < 0 || wl < 2 || wl > 255 || wn[wl - 1] != '=' ||
+          sp_streq(wn, "==") || sp_streq(wn, "!=") || sp_streq(wn, "<=") || sp_streq(wn, ">=") || sp_streq(wn, "===") ||
+          sp_streq(wn, "[]=")) continue;
       int ca = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
       TyKind rt = infer_type(c, recv);
@@ -32027,18 +33191,121 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
       if (nullable_int_value(c, av[0])) { ci->ivar_nullable_int[iv] = 1; changed = 1; }
     }
+    /* A Struct's or Data's custom initialize forwarding its parameters
+       through `super`: a parameter that can hold nil (a `song: nil`
+       default) reaches the member of its name, or of its position */
+    for (int si = 1; si < c->nscopes; si++) {
+      Scope *is = &c->scopes[si];
+      if (!is->name || !sp_streq(is->name, "initialize") || is->is_cmethod || is->class_id < 0) continue;
+      int k = is->class_id, sc = -1;
+      for (int hop = 0; k >= 0 && hop < 64; k = c->classes[k].parent, hop++)
+        if (c->classes[k].is_struct || c->classes[k].is_data) { sc = k; break; }
+      if (sc < 0) continue;
+      ClassInfo *sci = &c->classes[sc];
+      for (int pi = 0; pi < is->nparams; pi++) {
+        const char *pn = is->pnames ? is->pnames[pi] : NULL;
+        LocalVar *pv = pn ? scope_local(is, pn) : NULL;
+        if (!pv || !pv->nullable_int) continue;
+        char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", pn);
+        int m = comp_ivar_index(sci, ivb);
+        if (m < 0 || m >= sci->nmembers) m = pi < sci->nmembers ? pi : -1;
+        if (m < 0 || sci->ivar_nullable_int[m]) continue;
+        if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
+        sci->ivar_nullable_int[m] = 1; changed = 1;
+      }
+    }
+    /* `s[:x] = v` / `s["x"] = v` / `s[0] = v` on a Struct (or a boxed value
+       that can be one): the member takes v, nil included */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *sn = nt_str(nt, id, "name");
+      int srecv = nt_ref(nt, id, "receiver");
+      if (!sn || !sp_streq(sn, "[]=") || srecv < 0) continue;
+      int sa = nt_ref(nt, id, "arguments"); int san = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+      if (san != 2) continue;
+      if (nt_kind(nt, sav[1]) != NK_NilNode && !nullable_int_value(c, sav[1])) continue;
+      NodeKind kk = nt_kind(nt, sav[0]);
+      if (kk != NK_SymbolNode && kk != NK_StringNode && kk != NK_IntegerNode) continue;
+      TyKind srt = infer_type(c, srecv);
+      int only = ty_is_object(srt) ? ty_object_class(srt) : -1;
+      if (only < 0 && srt != TY_POLY) continue;
+      for (int k = 0; k < c->nclasses; k++) {
+        if (only >= 0 && k != only) continue;
+        ClassInfo *sci = &c->classes[k];
+        if (!sci->is_struct || sci->nmembers <= 0) continue;
+        int m = -1;
+        if (kk == NK_IntegerNode) {
+          long long ix = nt_int(nt, sav[0], "value", 0);
+          if (ix < 0) ix += sci->nmembers;
+          if (ix >= 0 && ix < sci->nmembers) m = (int)ix;
+        }
+        else {
+          const char *mn = kk == NK_SymbolNode ? nt_str(nt, sav[0], "value") : nt_str(nt, sav[0], "content");
+          char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", mn ? mn : "");
+          int iv = mn ? comp_ivar_index(sci, ivb) : -1;
+          if (iv >= 0 && iv < sci->nmembers) m = iv;
+        }
+        if (m < 0 || sci->ivar_nullable_int[m]) continue;
+        if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
+        sci->ivar_nullable_int[m] = 1; changed = 1;
+      }
+    }
+    /* `o.instance_variable_set(:@x, v)` with a nil, or a nullable number,
+       stores it in the ivar as a plain write would. */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *sn = nt_str(nt, id, "name");
+      int srecv = nt_ref(nt, id, "receiver");
+      if (!sn || !sp_streq(sn, "instance_variable_set") || srecv < 0) continue;
+      int sa = nt_ref(nt, id, "arguments"); int san = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+      if (san != 2 || nt_kind(nt, sav[0]) != NK_SymbolNode) continue;
+      TyKind srt = infer_type(c, srecv);
+      int scid = ty_is_object(srt) ? ty_object_class(srt) : -1;
+      if (scid < 0 && nt_kind(nt, srecv) == NK_SelfNode) { Scope *ss = comp_scope_of(c, id); scid = ss ? ss->class_id : -1; }
+      const char *ivn0 = nt_str(nt, sav[0], "value");
+      if (!ivn0 || !ivn0[0]) continue;
+      char ivn[300]; snprintf(ivn, sizeof ivn, "%s%s", ivn0[0] == '@' ? "" : "@", ivn0);   /* the symbol's text, with or without its `@` */
+      /* a boxed receiver can be an instance of any class: every class with
+         an Integer or Float ivar of that name can be handed the nil */
+      if (scid < 0 && srt == TY_POLY && (nt_kind(nt, sav[1]) == NK_NilNode || nullable_int_value(c, sav[1]))) {
+        for (int k = 0; k < c->nclasses; k++) {
+          ClassInfo *pci = &c->classes[k];
+          int piv = comp_ivar_index(pci, ivn);
+          if (piv < 0 || pci->ivar_nullable_int[piv]) continue;
+          if (pci->ivar_types[piv] != TY_INT && pci->ivar_types[piv] != TY_FLOAT) continue;
+          pci->ivar_nullable_int[piv] = 1; changed = 1;
+        }
+        continue;
+      }
+      if (scid < 0 || scid >= c->nclasses) continue;
+      ClassInfo *sci = NULL; int siv = -1;
+      for (int k = scid; k >= 0 && siv < 0; k = c->classes[k].parent) { sci = &c->classes[k]; siv = comp_ivar_index(sci, ivn); }
+      if (siv < 0 || sci->ivar_nullable_int[siv]) continue;
+      if (sci->ivar_types[siv] != TY_INT && sci->ivar_types[siv] != TY_FLOAT) continue;
+      if (nt_kind(nt, sav[1]) == NK_NilNode || nullable_int_value(c, sav[1])) { sci->ivar_nullable_int[siv] = 1; changed = 1; }
+    }
     /* A Struct's generated constructor sets its members: from a nil
        argument, or to nil when the construction does not supply one
        (`S.new(1)` of two members; a Data raises instead). */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *cn = nt_str(nt, id, "name");
       int recv = nt_ref(nt, id, "receiver");
-      if (!cn || !sp_streq(cn, "new") || recv < 0) continue;
-      NodeKind rk = nt_kind(nt, recv);
-      int k = rk == NK_LocalVariableReadNode ? class_var_static_ci(c, recv)
-            : rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? comp_class_index(c, nt_str(nt, recv, "name"))
-            : -1;
-      if (k < 0 || !c->classes[k].is_struct || comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+      if (!cn || !sp_streq(cn, "new")) continue;
+      NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+      /* the classes the receiver can be: a class value chosen at run time
+         (`(c ? A : B).new`, `[A, B][i].new`) is each of them */
+      int ks[8], nk = 0;
+      if (rk == NK_SelfNode) {
+        /* `new(...)` / `self.new(...)` in a class method of the Struct / Data
+           itself (`def self.of(path, line = nil) = new(path:, line:)`) */
+        Scope *ns = comp_scope_of(c, id);
+        if (ns && ns->is_cmethod && ns->class_id >= 0) ks[nk++] = ns->class_id;
+      }
+      else nk = new_recv_classes(c, recv, ks, 8);
+      for (int q = 0; q < nk; q++) {
+      int k = ks[q];
+      if (k < 0 || !(c->classes[k].is_struct || c->classes[k].is_data) ||
+          comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
       ClassInfo *ci = &c->classes[k];
       int ca = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
@@ -32062,6 +33329,7 @@ static void mark_nullable_int_locals(Compiler *c) {
           ci->ivar_nullable_int[m] = 1; changed = 1;
         }
       }
+      }
     }
     /* ... and through a class variable */
     NT_FOREACH_KIND(nt, NK_ClassVariableWriteNode, id) {
@@ -32072,7 +33340,23 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (ci->cvar_types[cv] != TY_INT && ci->cvar_types[cv] != TY_FLOAT) continue;
       if (nullable_int_value(c, v)) { ci->cvar_nullable_int[cv] = 1; changed = 1; }
     }
-    /* A PARAMETER bound from such a value carries the sentinel into the callee,
+    /* `@@x ||= v` reads the slot before any write set it: that read is nil,
+       so the slot holds a nil (the `||=` / `&&=` test is on it) */
+    NT_FOREACH_KIND(nt, NK_ClassVariableOrWriteNode, id) {
+      ClassInfo *ci = NULL;
+      int cv = cvar_slot(c, id, &ci);
+      if (cv < 0 || ci->cvar_nullable_int[cv]) continue;
+      if (ci->cvar_types[cv] != TY_INT && ci->cvar_types[cv] != TY_FLOAT) continue;
+      ci->cvar_nullable_int[cv] = 1; changed = 1;
+    }
+    NT_FOREACH_KIND(nt, NK_ClassVariableAndWriteNode, id) {
+      ClassInfo *ci = NULL;
+      int cv = cvar_slot(c, id, &ci);
+      if (cv < 0 || ci->cvar_nullable_int[cv]) continue;
+      if (ci->cvar_types[cv] != TY_INT && ci->cvar_types[cv] != TY_FLOAT) continue;
+      ci->cvar_nullable_int[cv] = 1; changed = 1;
+    }
+    /* A PARAMETER bound from such a value carries nil into the callee,
        where boxing it (`other.inspect`, `x == other`) has the same problem the
        local marking exists to prevent. */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -32083,9 +33367,29 @@ static void mark_nullable_int_locals(Compiler *c) {
         TyKind rt = infer_type(c, recv);
         if (ty_is_object(rt))
           mi = comp_method_in_chain(c, ty_object_class(rt), nt_str(nt, id, "name"), NULL);
+        /* a builtin-typed receiver calling a method the program adds to
+           Object that no builtin row serves: codegen's Object fallback
+           reaches it, so the nil its arguments carry marks it (`12.enc(nil)`) */
+        else if (rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_VOID && rt != TY_NIL &&
+                 nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode &&
+                 nt_str(nt, id, "name")) {
+          int oci = comp_class_index(c, "Object");
+          int omi = oci >= 0 ? comp_method_in_class(c, oci, nt_str(nt, id, "name")) : -1;
+          int ba = nt_ref(nt, id, "arguments"); int bac = 0;
+          if (ba >= 0) nt_arr(nt, ba, "arguments", &bac);
+          if (omi >= 0 && !bop_find(rt, nt_str(nt, id, "name"), bac, nt_ref(nt, id, "block") >= 0)) mi = omi;
+          /* ... and a method the program defines on the builtin class itself
+             (`class Float; def <(other)`): the reopen answers the call, so
+             the nil an argument can be reaches its parameter, which holds it
+             beside the value */
+          const char *bcn = builtin_class_of_type(rt);
+          int bci = bcn ? comp_class_index(c, bcn) : -1;
+          int bmi = bci >= 0 ? comp_method_in_class(c, bci, nt_str(nt, id, "name")) : -1;
+          if (bmi >= 0) mi = bmi;
+        }
         /* `W.new(k)` binds initialize's parameters, and `W.build(k)` a class
            method's: neither receiver is an instance, so the arm above cannot
-           see them and the sentinel stopped at the constructor (#3505). A
+           see them and the nil stopped at the constructor (#3505). A
            scoped receiver (`Views::Inbox.label(@page)`) resolves by its leaf
            name, the key classes are indexed under (#5091). */
         else if (nt_kind(nt, recv) == NK_ConstantReadNode ||
@@ -32111,10 +33415,20 @@ static void mark_nullable_int_locals(Compiler *c) {
         /* a call with no arguments hands no parameter a nil, and a name no
            instance method has reaches no arm */
         for (int k = kf; k < nimeth && sp_streq(imeth[k].name, cn); k++)
-          changed |= mark_nullable_params_of_call(c, id, imeth[k].mi);
+          if (method_takes_call_args(c, &c->scopes[imeth[k].mi], id))   /* only a method that takes the call's arguments is its callee */
+            changed |= mark_nullable_params_of_call(c, id, imeth[k].mi);
       }
       else if (mi >= 0) changed |= mark_nullable_params_of_call(c, id, mi);
-      else if (recv >= 0 && cn && is_call_alias(cn)) {
+      /* a class value, boxed or not (`[Q, R].each { |o| o.cm(k: nil) }`),
+         binds the class method of the name any class has */
+      else if (recv >= 0 && cn && nt_ref(nt, id, "arguments") >= 0 &&
+               (infer_type(c, recv) == TY_CLASS || infer_type(c, recv) == TY_POLY)) {
+        for (int k = 0; k < c->nclasses; k++) {
+          int cmi = comp_cmethod_in_class(c, k, cn);   /* an inherited one is its definer's */
+          if (cmi >= 0) changed |= mark_nullable_params_of_call(c, id, cmi);
+        }
+      }
+      if (recv >= 0 && cn && is_call_alias(cn) && mi < 0) {
         TyKind rt = infer_type(c, recv);
         int *mns = NULL;
         int nmn = rt == TY_METHOD ? method_recv_nodes(c, recv, &mns)
@@ -32127,12 +33441,22 @@ static void mark_nullable_int_locals(Compiler *c) {
         free(mns);
       }
     }
+    /* ... and a `super` with arguments binds the method it reaches */
+    NT_FOREACH_KIND(nt, NK_SuperNode, id) {
+      Scope *ss = comp_scope_of(c, id);
+      if (!ss || ss->class_id < 0 || !ss->name || comp_super_is_class_new(c, id)) continue;
+      int sp = comp_super_parent(c, ss->class_id, ss->is_cmethod);
+      const char *sn = sp >= 0 ? comp_super_name(c, sp, ss->name, ss->is_cmethod) : NULL;
+      if (!sn) continue;
+      int smi = ss->is_cmethod ? comp_cmethod_in_chain(c, sp, sn, NULL) : comp_method_in_chain(c, sp, sn, NULL);
+      if (smi >= 0) changed |= mark_nullable_params_of_call(c, id, smi);
+    }
     /* A BLOCK parameter bound from such a value: the sites that bind the
        block -- each yield of the method the call reaches, or an
        instance_exec's own arguments -- typed again by the binding plan
        (block_site_types), which records a value that may be nil as BS_NIL.
        An Integer or a Float required or optional stays that type, its
-       binders handing the sentinel through, so it is marked here as
+       binders handing the nil through, so it is marked here as
        block_settle_types marks one during inference: a value the rounds above
        made nilable since (a local copied from a missed read) was not one yet
        then, and `yield(i == 0 ? nil : i)` left `Integer === a` true. */
@@ -32163,7 +33487,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         BlockSig bsig;
         block_sig(c, nt_ref(nt, blk, "parameters"), 0, &bsig);
         int np = bsig.P + bsig.O + bsig.Q;
-        if (!bs || bsig.P + bsig.O == 0) continue;
+        if (!bs || (np == 0 && bsig.nk == 0)) continue;
         TyKind *pos = calloc((size_t)(np + bsig.nk + 1), sizeof(TyKind));
         char *absent = calloc((size_t)np + 1, 1);
         if (iex) block_site_types(c, &bsig, iav, ian, pos, absent, pos + np);
@@ -32177,10 +33501,21 @@ static void mark_nullable_int_locals(Compiler *c) {
             block_site_types(c, &bsig, av, an, pos, absent, pos + np);
           }
         }
-        for (int i = 0; i < bsig.P + bsig.O; i++) {
+        /* the posts after a splat too: `|a, *r, b|` binds b from the last
+           argument */
+        for (int i = 0; i < np; i++) {
           if (!(absent[i] & BS_NIL)) continue;
           const char *pnm = block_sig_name(c, &bsig, i);
           LocalVar *pv = pnm ? scope_local(bs, pnm) : NULL;
+          if (!pv || (pv->type != TY_INT && pv->type != TY_FLOAT) || pv->nullable_int) continue;
+          pv->nullable_int = 1; changed = 1;
+        }
+        /* a keyword the sites bind (`yield(k: a)`) from arguments that may
+           be nil: the binding plan keeps no per-key nil, so the slot holds
+           its nil beside the value whenever a site may pass one */
+        for (int ki = 0; ki < bsig.nk; ki++) {
+          const char *kn = block_keyword_name(c, blk, ki);
+          LocalVar *pv = kn ? scope_local(bs, kn) : NULL;
           if (!pv || (pv->type != TY_INT && pv->type != TY_FLOAT) || pv->nullable_int) continue;
           pv->nullable_int = 1; changed = 1;
         }
@@ -32190,7 +33525,7 @@ static void mark_nullable_int_locals(Compiler *c) {
     }
     /* A destructuring target the right side cannot supply gets nil, through a
        target node rather than a write node of its own -- `a, b, *c, d, e = 1`
-       leaves the sentinel in every int slot after the first. */
+       leaves nil in every int slot after the first. */
     NT_FOREACH_KIND(nt, NK_MultiWriteNode, id) {
       int v = nt_ref(nt, id, "value");
       /* how many values the right side statically supplies: an array literal
@@ -32204,7 +33539,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       for (int k = 0; tv2 && k < tn2; k++) {
         if (nt_kind(nt, tv2[k]) != NK_LocalVariableTargetNode) continue;
         /* A target the right side supplies takes that value, which can be
-           the sentinel as a plain write's can: `a, b = z, 0` with z an
+           nil as a plain write's can: `a, b = z, 0` with z an
            Integer that may be nil left `a >= 0` comparing it as a number. */
         if (k < supply) {
           int sv2 = ev2 ? (k < en2 ? ev2[k] : -1) : v;
@@ -32228,7 +33563,7 @@ static void mark_nullable_int_locals(Compiler *c) {
     }
     if (!changed) { converged = 1; break; }
   }
-  /* Running out of rounds means some slot that CAN hold the sentinel is still
+  /* Running out of rounds means some slot that CAN hold nil is still
      unmarked, and codegen would box it as an ordinary number -- a Hash key no
      literal nil matches, with no error at compile or run time (#3505). That is
      the exact silent-wrong-output this pass exists to prevent, so refuse to
@@ -32240,8 +33575,8 @@ static void mark_nullable_int_locals(Compiler *c) {
   free(imeth);
   if (!converged) {
     fprintf(stderr, "spinel: internal: nilable-scalar marking did not converge in "
-                    "%ld rounds; refusing to emit (a nil sentinel would box as an "
-                    "ordinary number). Please report this with the source.\n",
+                    "%ld rounds; refusing to emit (a slot that can hold nil would be "
+                    "read as a plain number). Please report this with the source.\n",
             rounds_max);
     exit(1);
   }
@@ -38712,7 +40047,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
       if (class_ivar_pinned(cl, ivname)) continue;  /* --rbs seed pins the type */
       TyKind t = cl->ivar_types[iv];
       /* TY_INT is exempt: the generated constructor already seeds int ivars
-         with SP_INT_NIL (emit_ivar_nil_inits), so a pre-write read is nil
+         with their nil bit set (emit_ivar_nil_inits), so a pre-write read is nil
          through the nullable-int machinery without widening to poly. */
       if (t != TY_FLOAT && t != TY_STRING &&
           t != TY_SYMBOL && t != TY_BOOL) continue;
@@ -41740,6 +43075,8 @@ static void an_phase_reconcile_check(Compiler *c) {
   /* An --rbs seed the settled types statically contradict is a compile error,
      not something to emit a reinterpretation for. */
   mark_nullable_int_locals(c);
+  sync_captured_nullable(c);
+  widen_nullable_keyed_hash_literals(c);
   mark_array_or_nil_slots(c);
   /* A local's array KIND has to agree with what its writes actually build. A
      value whose type widens to a poly array LATE -- a map whose block value

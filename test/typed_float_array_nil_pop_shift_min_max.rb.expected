@@ -1,0 +1,40 @@
+a: [1.5, nil, nil, NaN]
+pop: NaN
+pop nan?: true
+pop nil: nil
+shift: 1.5
+shift nil: nil
+a: []
+pop empty: nil
+min nil: ArgumentError: comparison of NilClass with 2.5 failed
+max nil: ArgumentError: comparison of NilClass with 2.5 failed
+compact min: 2.5
+[nil].min: nil
+[].max: nil
+sample 1: 2.5
+sample nil: nil
+delete: 2.5
+c: [nil]
+delete nil: nil
+c: []
+delete_at: NaN
+delete_at nil: nil
+delete_at oob: nil
+first: nil
+last: nil
+compact first: 2.5
+index nil: 0
+count nil: 2
+compact: [2.5]
+sum: 2.5
+nan in: [true, "nil"]
+nan min: true
+nan max: true
+nan pop: true
+nan shift: true
+nan sample: true
+nan delete: 1.0
+nan first: true
+nan last: true
+nan compact: 1
+nan nil?: false

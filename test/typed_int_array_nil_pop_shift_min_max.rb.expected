@@ -1,0 +1,53 @@
+a: [5, nil, nil, -9223372036854775808]
+pop: -9223372036854775808
+pop nil: nil
+a: [5, nil]
+shift: 5
+shift nil: nil
+a: []
+pop empty: nil
+shift empty: nil
+min nil: ArgumentError: comparison of NilClass with 5 failed
+max nil: ArgumentError: comparison of NilClass with 5 failed
+compact min: 5
+compact max: 5
+[nil].min: nil
+[nil].max: nil
+[].min: nil
+sample 1: 5
+sample nil: nil
+sample empty: nil
+delete m: -9223372036854775808
+c: [nil]
+delete nil: nil
+c: []
+delete missing: nil
+delete_at: -9223372036854775808
+delete_at nil: nil
+delete_at oob: nil
+delete_if: [-9223372036854775808]
+minmax: [-9223372036854775808, 1]
+min 2: [-9223372036854775808, 1]
+sort nil: ArgumentError: comparison of NilClass with 5 failed
+sort_by: [nil, nil, 5]
+first: nil
+last: nil
+compact first: 5
+compact last: 5
+[].first: nil
+index nil: 0
+index m: nil
+rindex nil: 2
+uniq: [nil, 5]
+sum: 5
+count nil: 2
+insert: [nil, nil, 5, nil]
+unshift: [nil, nil, 5, nil]
+push: [nil, 5, nil, nil, -9223372036854775808]
+reverse: [nil, 5, nil]
+rotate: [5, nil, nil]
+slice: [5, nil]
+concat: [nil, 5, nil, nil, -9223372036854775808]
+flatten: [nil, 5, nil, nil]
+zip: [[nil, nil], [5, 5], [nil, nil]]
+sum nil: TypeError: nil can't be coerced into Integer

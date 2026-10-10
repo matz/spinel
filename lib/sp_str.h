@@ -171,11 +171,12 @@ const char*sp_str_gsub(const char*s,const char*pat,const char*rep);
 sp_int sp_str_index(const char*s,const char*sub);
 sp_int sp_str_index_from(const char*s,const char*sub,sp_int start);
 sp_int sp_str_rindex(const char*s,const char*sub);
-sp_int sp_str_rindex_from(const char*s,const char*sub,sp_int pos);
-sp_int sp_str_byteindex(const char*s,const char*sub);
-sp_int sp_str_byteindex_from(const char*s,const char*sub,sp_int start);
-sp_int sp_str_byterindex(const char*s,const char*sub);
-sp_int sp_str_byterindex_from(const char*s,const char*sub,sp_int pos);
+/* the position, nil on a miss */
+sp_oint sp_str_rindex_from(const char*s,const char*sub,sp_int pos);
+sp_oint sp_str_byteindex(const char*s,const char*sub);
+sp_oint sp_str_byteindex_from(const char*s,const char*sub,sp_int start);
+sp_oint sp_str_byterindex(const char*s,const char*sub);
+sp_oint sp_str_byterindex_from(const char*s,const char*sub,sp_int pos);
 const char*sp_str_sub_range(const char*s,sp_int start,sp_int len);
 const char*sp_str_char_at_or_nil(const char*s,sp_int i);
 const char*sp_str_sub_range_len(const char*s,sp_int cl,sp_int start,sp_int len);
@@ -210,9 +211,9 @@ const char*sp_str_center(const char*s,sp_int w);
 const char*sp_str_ljust2(const char*s,sp_int w,const char*pad);
 const char*sp_str_rjust2(const char*s,sp_int w,const char*pad);
 const char*sp_str_center2(const char*s,sp_int w,const char*pad);
-sp_int sp_str_index_opt(const char *s, const char *sub);
-sp_int sp_str_index_from_opt(const char *s, const char *sub, sp_int start);
-sp_int sp_str_rindex_opt(const char *s, const char *sub);
+sp_oint sp_str_index_opt(const char *s, const char *sub);
+sp_oint sp_str_index_from_opt(const char *s, const char *sub, sp_int start);
+sp_oint sp_str_rindex_opt(const char *s, const char *sub);
 
 /* ---- relocated from spinel_rt.h: hash key primitives (sp_str_hash /
    sp_str_eq / _sp_istr_idx) used by lib/sp_hash.c's StrInt/StrStr/IntStr/

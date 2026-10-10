@@ -155,6 +155,10 @@ int an_builtin_only_p(void) { return an_builtin_only; }
    mark it builtin_only (infer_call_inner): a pure read keeps both for its
    own inference and leaves the node as the analysis left it. */
 static int an_pure_reads = 0;
+/* a node codegen has pinned to a type for a re-entered emission
+   (emit_poly_builtin_default_at): its recomputed answer is not recorded */
+static int an_pinned_node = -1;
+int an_pin_node(int id) { int sv = an_pinned_node; an_pinned_node = id; return sv; }
 void an_pure_read_begin(void) { an_pure_reads++; }
 void an_pure_read_end(void) { an_pure_reads--; }
 /* What call `id` would be typed if no user class owned the name: the
@@ -874,12 +878,11 @@ static TyKind an_unpack1_lit_type(const NodeTable *nt, int arg) {
   while (*p >= '0' && *p <= '9') p++;
   if (*p == '*') p++;
   if (*p) return TY_POLY;  /* further directives: not this one's type */
-  /* The 64-bit pair is the exception: `Q` above 2**63-1 is a Bignum, and
-     `q`'s INT64_MIN is the value an sp_int slot spells as nil. An sp_int
-     slot holds neither, so they keep the boxed answer the runtime already
-     hands back -- typed int, the Bignum truncated and the INT64_MIN read
-     back as nil (#4588). The narrower directives all fit. */
-  if (strchr("cCsSlLnNvV", d)) return TY_INT;
+  /* `Q` above 2**63-1 is a Bignum, which an sp_int slot cannot hold, so it
+     keeps the boxed answer the runtime hands back (#4588); `q` and the
+     narrower directives all fit (INT64_MIN included: no pattern of the word
+     is nil). */
+  if (strchr("cCsSlLnNvVq", d)) return TY_INT;
   if (strchr("dDfFeEgG", d)) return TY_FLOAT;
   return TY_POLY;
 }
@@ -1420,7 +1423,16 @@ static int infer_int_shl_overflows(long long base, long long amount) {
   if (base == 0 || amount <= 0) return 0;
   long long r = base;
   for (long long i = 0; i < amount; i++)
-    if (__builtin_mul_overflow(r, 2, &r)) return 1;
+    if (__builtin_mul_overflow(r, 2, &r)) {
+      /* a product that lands exactly on 2**63 (`1 << 63`, `3 << 62`'s does
+         not) has the bit pattern of -2**63, which is an sp_int: in raise
+         mode the runtime helper raises its RangeError, in wrap mode the
+         value is -2**63. Only promote mode keeps the Bignum. */
+      if (!g_promote_mode && amount < 64 && base > 0 &&
+          (unsigned long long)base == (1ULL << (63 - amount)))
+        return 0;
+      return 1;
+    }
   return 0;
 }
 
@@ -1847,10 +1859,11 @@ int an_chunk_family_to_a(Compiler *c, int id) {
   return 0;
 }
 
-/* Can this type's C slot hold a nil of its own? Integer and Float have their
-   sentinels; String, the arrays and every reference object have NULL. A bool, a
-   Symbol, a Class, a Rational, a Complex, and the by-value Range and Time
-   structs have no such value, so a nil in one of those slots has to be boxed.
+/* Can this type's C slot hold a nil of its own? Integer and Float hold theirs
+   beside the value (a nil flag, byte or bit); String, the arrays and every
+   reference object have NULL. A bool, a Symbol, a Class, a Rational, a
+   Complex, and the by-value Range and Time structs have no such value, so a
+   nil in one of those slots has to be boxed.
    Stated once: the `&.` widening below asks the same question, and the two
    copies would drift. */
 int an_ty_holds_nil(TyKind t) {
@@ -3840,8 +3853,9 @@ static int infer_range_lazy_call(Compiler *c, int id, const NodeTable *nt, const
       { *out = (sfloat || bfloat) ? TY_FLOAT_ARRAY : TY_INT_ARRAY; return 1; }
     }
     if (is_quantifier(name)) { *out = TY_BOOL; return 1; }
+    /* an endless one cannot materialize: walked as it is read, like step */
     if (sp_streq(name, "each") && nt_ref(nt, id, "block") < 0)
-      { *out = range_each_is_external(c, id) ? TY_ENUMERATOR : TY_INT_ARRAY; return 1; }
+      { *out = (range_each_is_external(c, id) || range_lit_endless(c, recv)) ? TY_ENUMERATOR : TY_INT_ARRAY; return 1; }
     if ((is_each_window(name)) &&
         argc == 1 && nt_ref(nt, id, "block") < 0) { *out = TY_ENUMERATOR; return 1; }
     if ((is_endpoint_query(name)) && argc == 1) { *out = TY_INT_ARRAY; return 1; }
@@ -4095,7 +4109,7 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
     }
     if (sp_streq(name, "unpack1") && (argc == 1 || argc == 2)) { *out = an_unpack1_lit_type(nt, argv[0]); return 1; }
     /* byteindex/byterindex over a String or Regexp needle -> byte offset or
-       nil (SP_INT_NIL). */
+       nil. */
     if ((sp_streq(name, "byteindex") || sp_streq(name, "byterindex")) &&
         (argc == 1 || argc == 2) &&
         (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_REGEX))
@@ -4196,6 +4210,26 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
       if (is_divmod_name(name)) { *out = TY_POLY_ARRAY; return 1; }
       if (is_modulo_name(name)) { *out = TY_POLY; return 1; }
     }
+    /* --int-overflow=promote: succ / next / pred and abs / magnitude leave
+       the word at its bounds (2**63 - 1 + 1, |-2**63|): a receiver that is
+       not a known constant inside them promotes (the boxed helpers), as
+       `+ 1` and `0 - x` do */
+    if (g_promote_mode && argc == 0 && (sp_streq(name, "succ") || sp_streq(name, "next") ||
+                                        sp_streq(name, "pred") || sp_streq(name, "abs") ||
+                                        sp_streq(name, "magnitude"))) {
+      long long pr;
+      int exact = infer_const_int_node(nt, recv, &pr) &&
+                  ((sp_streq(name, "pred") || sp_streq(name, "abs") || sp_streq(name, "magnitude"))
+                     ? pr != (long long)INTPTR_MIN : pr != (long long)INTPTR_MAX);
+      if (!exact) { *out = TY_POLY; return 1; }
+    }
+    /* --int-overflow=promote: -2**63.divmod(-1) is [2**63, 0], past the
+       word, so a divmod whose divisor is not a constant other than -1 is
+       the boxed pair (sp_poly_divmod promotes its quotient) */
+    if (g_promote_mode && sp_streq(name, "divmod") && argc == 1 && infer_type(c, argv[0]) == TY_INT) {
+      long long pb;
+      if (!(infer_const_int_node(nt, argv[0], &pb) && pb != -1)) { *out = TY_POLY_ARRAY; return 1; }
+    }
     {
       const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
       if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
@@ -4205,6 +4239,15 @@ static int infer_int_float_recv_call(Compiler *c, int id, const NodeTable *nt, c
         sp_streq(nt_type(nt, argv[0]), "IntegerNode") &&
         nt_int(nt, argv[0], "value", 0) < 0) { *out = TY_RATIONAL; return 1; }
     if (sp_streq(name, "pow") && argc == 1 && infer_type(c, argv[0]) == TY_FLOAT) { *out = TY_FLOAT; return 1; }
+    /* --int-overflow=promote: pow(n) is `**`: a pair that is not both known
+       constants can leave the word and promotes (sp_poly_int_pow); a
+       constant pair that overflows is the Bignum, the rest an sp_int */
+    if (g_promote_mode && sp_streq(name, "pow") && argc == 1 &&
+        (infer_type(c, argv[0]) == TY_INT || infer_type(c, argv[0]) == TY_POLY)) {
+      long long pb, pe;
+      if (!(infer_const_int_node(nt, recv, &pb) && infer_const_int_node(nt, argv[0], &pe))) { *out = TY_POLY; return 1; }
+      if (pe >= 0 && infer_int_pow_overflows(pb, pe)) { *out = TY_BIGINT; return 1; }
+    }
     if (sp_streq(name, "pow") && argc >= 1) { *out = TY_INT; return 1; }
     /* clamp keeps the applied operand's class: a Float bound can be returned, so
        the mixed int-receiver/float-bound form is poly; pure-int stays Integer. */
@@ -4345,12 +4388,21 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
          and a value that never passes through one -- a block parameter, an
          element read, a size -- was typed sp_int at the expression and took
          the raising int helper in the mode whose contract is to promote
-         (#4681). `/` and `%` cannot leave the word. */
+         (#4681). `%` cannot leave the word; `/` and `div` only at
+         -2**63 / -1, which the rule below keys on. */
       if (g_promote_mode && rt == TY_INT && a0 == TY_INT &&
-          is_add_sub_mul(name)) {
+          (is_add_sub_mul(name) || sp_streq(name, "/") || sp_streq(name, "div"))) {
         long long pa, pb;
+        /* a quotient leaves the word only at -2**63 / -1: a divisor the
+           program wrote as any other constant keeps the quotient an sp_int */
+        if ((sp_streq(name, "/") || sp_streq(name, "div")) &&
+            infer_const_int_node(nt, argv[0], &pb) && pb != -1) { *out = TY_INT; return 1; }
         if (!(infer_const_int_node(nt, recv, &pa) && infer_const_int_node(nt, argv[0], &pb)))
           { *out = TY_POLY; return 1; }
+        if (sp_streq(name, "/") || sp_streq(name, "div")) {
+          if (pb == -1 && pa == (long long)INTPTR_MIN) { *out = TY_POLY; return 1; }
+          *out = TY_INT; return 1;
+        }
         /* Two constants escape the word too when their result does: `max + 1`
            was typed sp_int and took the raising helper (#4968). Judged in
            intptr_t, sp_int's own type in the compiler that emits for it. */
@@ -6914,6 +6966,79 @@ static TyKind infer_symbol_call(Compiler *c, int id, const NodeTable *nt, const 
   return TY_UNKNOWN;
 }
 
+/* --int-overflow=promote: an Integer Array's or Range's sum, and its
+   inject / reduce with :+ or :*, can leave the word, and CRuby answers the
+   Bignum. Typed poly (the boxed fold promotes) unless every operand is a
+   constant the program wrote and the exact result fits an sp_int. */
+static int promote_red_const(const NodeTable *nt, int n, long long *v) {
+  return n >= 0 && nt_kind(nt, n) == NK_IntegerNode && infer_const_int_node(nt, n, v);
+}
+static int promote_red_fits(Compiler *c, int recv, int is_mul, int seed, int has_seed) {
+  const NodeTable *nt = c->nt;
+  int rn = an_unparen(nt, recv);
+  __int128 acc = has_seed ? 0 : (is_mul ? 1 : 0);
+  if (has_seed) { long long sv; if (!promote_red_const(nt, seed, &sv)) return 0; acc = sv; }
+  if (rn >= 0 && nt_kind(nt, rn) == NK_ArrayNode) {
+    int en = 0; const int *el = nt_arr(nt, rn, "elements", &en);
+    int first = !has_seed;
+    for (int i = 0; i < en; i++) {
+      long long v; if (!promote_red_const(nt, el[i], &v)) return 0;
+      if (first) { acc = v; first = 0; }
+      else acc = is_mul ? acc * v : acc + v;
+      if (acc > (__int128)INTPTR_MAX || acc < (__int128)INTPTR_MIN) return 0;
+    }
+    return 1;
+  }
+  if (rn >= 0 && nt_kind(nt, rn) == NK_RangeNode && !is_mul) {
+    long long lo, hi;
+    if (!promote_red_const(nt, nt_ref(nt, rn, "left"), &lo) ||
+        !promote_red_const(nt, nt_ref(nt, rn, "right"), &hi)) return 0;
+    if (nt_int(nt, rn, "flags", 0) & 4) hi--;
+    if (hi >= lo) acc += ((__int128)lo + hi) * ((__int128)hi - lo + 1) / 2;
+    return acc <= (__int128)INTPTR_MAX && acc >= (__int128)INTPTR_MIN;
+  }
+  return 0;
+}
+static int infer_promote_reducer(Compiler *c, int id, TyKind rt, TyKind *out) {
+  if (!g_promote_mode || (rt != TY_INT_ARRAY && rt != TY_RANGE)) return 0;
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  if (!name || nt_ref(nt, id, "block") >= 0) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  int is_mul = 0, seed = -1;
+  /* a Range's count / size: 2**63 + 1 for (-2**63..0) */
+  if (rt == TY_RANGE && argc == 0 && (sp_streq(name, "count") || sp_streq(name, "size"))) {
+    int rn = an_unparen(nt, recv);
+    long long lo, hi;
+    if (rn >= 0 && nt_kind(nt, rn) == NK_RangeNode &&
+        promote_red_const(nt, nt_ref(nt, rn, "left"), &lo) &&
+        promote_red_const(nt, nt_ref(nt, rn, "right"), &hi) &&
+        (__int128)hi - lo + 1 <= (__int128)INTPTR_MAX) return 0;
+    /* an endless literal's count is Infinity, typed by the Range rules */
+    if (rn >= 0 && nt_kind(nt, rn) == NK_RangeNode &&
+        (nt_ref(nt, rn, "left") < 0 || nt_ref(nt, rn, "right") < 0)) return 0;
+    *out = TY_POLY;
+    return 1;
+  }
+  if (sp_streq(name, "sum")) {
+    if (argc > 1) return 0;
+    if (argc == 1) { if (infer_type(c, argv[0]) != TY_INT) return 0; seed = argv[0]; }
+  }
+  else if (is_reduce_alias(name)) {
+    if (argc < 1 || argc > 2 || nt_kind(nt, argv[argc - 1]) != NK_SymbolNode) return 0;
+    const char *op = nt_str(nt, argv[argc - 1], "value");
+    if (!op || !(sp_streq(op, "+") || sp_streq(op, "*"))) return 0;
+    is_mul = sp_streq(op, "*");
+    if (argc == 2) { if (infer_type(c, argv[0]) != TY_INT) return 0; seed = argv[0]; }
+  }
+  else return 0;
+  if (promote_red_fits(c, recv, is_mul, seed, seed >= 0)) return 0;
+  *out = TY_POLY;
+  return 1;
+}
+
 static TyKind infer_call_inner(Compiler *c, int id) {
   /* the call is inferred afresh: only the row this pass answers with counts */
   /* the builtin-only re-derivation (an_builtin_answer) asks what the call
@@ -7360,6 +7485,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (ymi >= 0 && c->scopes[ymi].yields) return TY_POLY;
     }
   }
+  /* promote: a reducer whose total can leave the word (above) */
+  { TyKind pr; if (infer_promote_reducer(c, id, rt, &pr)) return pr; }
   /* Range receivers (analyze_infer_recv.c). */
   { TyKind rr; if (infer_range_call(c, id, rt, &rr)) return rr; }
   /* A Range Enumerable method spinel serves by materializing to an int array:
@@ -9337,12 +9464,18 @@ TyKind infer_uncached(Compiler *c, int id) {
       }
       if (!aty || !sp_streq(aty, "AssocNode")) return TY_UNKNOWN;
       {
-        TyKind kt_elem = infer_type(c, nt_ref(nt, els[k], "key"));
+        int knode = nt_ref(nt, els[k], "key");
+        TyKind kt_elem = infer_type(c, knode);
         if (kt_elem == TY_NIL) kt_elem = TY_POLY;   /* a nil key keeps the hash poly-keyed (see the value below) */
+        /* so does an Integer or Float key that can be nil (nil out of band:
+           a typed key slot has no nil) */
+        if ((kt_elem == TY_INT || kt_elem == TY_FLOAT) && nullable_int_value(c, knode)) kt_elem = TY_POLY;
         kt = ty_unify(kt, kt_elem);
       }
       int vnode = nt_ref(nt, els[k], "value");
       TyKind vt_elem = infer_type(c, vnode);
+      /* an Integer or Float value that can be nil keeps the hash poly-valued */
+      if ((vt_elem == TY_INT || vt_elem == TY_FLOAT) && nullable_int_value(c, vnode)) vt_elem = TY_POLY;
       /* A nested hash/array literal whose element kind is unresolved (a bare
          `{}` or `[]`) is still a non-scalar value; treat it as poly so the
          outer hash promotes to a poly-valued variant rather than erasing the
@@ -9805,11 +9938,12 @@ TyKind infer_type(Compiler *c, int id) {
      by POSITION in the inference chain, so a name resolved before them
      (`class`, `to_sym`) never reached one; this one runs after every arm and
      asks the property that actually decides it: can the answer's C type hold
-     a nil? Integer and Float have their sentinels, String and the arrays and
-     the reference objects have NULL, so those keep their concrete type and
-     the guard uses that nil (the array trio of #3461 is this same rule).
+     a nil? Integer and Float hold theirs beside the value, String and the
+     arrays and the reference objects have NULL, so those keep their
+     concrete type and the guard uses that nil (the array trio of #3461 is
+     this same rule).
      The receiver's type does not narrow this. A miss on a specialized
-     container is the element type's C nil -- a NULL string, SP_INT_NIL --
+     container is the element type's C nil -- a NULL string, a nil bit --
      not a poly nil, so `h["zz"]&.empty?` reached the guard with a concrete
      receiver and answered `false` where CRuby answers nil (#4070). `&.` is
      the program saying nil is possible; the answer has to be able to hold
@@ -9821,7 +9955,7 @@ TyKind infer_type(Compiler *c, int id) {
   }
   /* Nor is a pure read's answer recorded (an_pure_reads): it is asked after
      the analysis, under whatever view codegen has open. */
-  if (!an_builtin_only && !an_pure_reads) {
+  if (!an_builtin_only && !an_pure_reads && id != an_pinned_node) {
     c->ntype[id] = t;
     /* the origin only when a consumer asked (--warn-widen, --emit-types):
        its ivar arm walks the program's ivar writes per read and its call

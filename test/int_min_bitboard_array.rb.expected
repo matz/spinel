@@ -1,0 +1,12 @@
+black king on 63: in check = false
+black king bitboard: -9223372036854775808
+attacked squares counted: 42
+[1, 16, -9223372036854775808]
+[false, false, false]
+3
+-9223372036854775808
+2
+-9223372036854775791
+[false, false, false]
+[-9223372036854775808]
+true

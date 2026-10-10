@@ -119,7 +119,7 @@ static void sp_mar_w_hash(sp_mar_buf *b, sp_RbVal v) {
 /* A Range (Integer, Float or String), as CRuby writes one: an `o` record of
    class Range with its exclude-end flag and its two ends, in that order. An
    absent end (beginless, endless) is nil. Each kind reads its own layout:
-   an Integer Range keeps INTPTR_MIN / INTPTR_MAX for an absent end and a
+   an Integer Range flags an absent end (nobeg / noend) and keeps a
    Float end beside an Integer begin in fend; a Float Range records which
    ends it was written without, or as Integers (sp_types.h); a String Range
    holds NULL for an absent end and, when it keeps handles, writes those. */
@@ -147,9 +147,9 @@ static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
   }
   else {
     sp_Range *q = (sp_Range *)v.v.p;
-    if (q->first != INTPTR_MIN) bg = mk_int(q->first);
+    if (!q->nobeg) bg = mk_int(q->first);
     if (q->fe) ed = mk_float(q->fend);
-    else if (q->last != INTPTR_MAX) ed = mk_int(q->last);
+    else if (!q->noend) ed = mk_int(q->last);
     excl = sp_range_excl_end(*q) != 0;
   }
   sp_mar_b(b, 'o'); sp_mar_sym(b, "Range"); sp_mar_long(b, 3);
@@ -421,7 +421,7 @@ static sp_RbVal sp_mar_r_range(sp_mar_rd *r) {
                                          ef ? ed.v.f : ei ? (sp_float)ed.v.i : HUGE_VAL, excl, om));
   }
   if ((bi || bn) && (ei || en))
-    return sp_box_range(sp_range_new(bi ? bg.v.i : INTPTR_MIN, ei ? ed.v.i : INTPTR_MAX, excl));
+    return sp_box_range(sp_range_new_o(bi ? sp_oint_of(bg.v.i) : sp_oint_nil(), ei ? sp_oint_of(ed.v.i) : sp_oint_nil(), excl));
   mar_raise("ArgumentError", "unsupported Range ends in Marshal.load");
   return mk_nil();
 }
@@ -517,14 +517,13 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
       free(buf);
       /* CRuby loads a Bignum record whose value fits a Fixnum as that Fixnum
          (it also writes one past its 31-bit marshal Fixnum), so a value that
-         fits an Integer here is an Integer, not a Bignum box (but for the
-         value Integer nil is held as, which stays a Bignum) */
+         fits an Integer here is an Integer, not a Bignum box */
       uint64_t m;
       if (sp_bigint_mag_u64(bn, &m)) {
         int neg = sign == '-';
         if (neg ? m <= (uint64_t)INT64_MAX + 1 : m <= (uint64_t)INT64_MAX) {
           int64_t w = neg ? (int64_t)(0 - m) : (int64_t)m;
-          if ((int64_t)(sp_int)w == w && (sp_int)w != SP_INT_NIL) { sp_RbVal iv = mk_int((sp_int)w); r->objs[id] = iv; return iv; }
+          if ((int64_t)(sp_int)w == w) { sp_RbVal iv = mk_int((sp_int)w); r->objs[id] = iv; return iv; }
         }
       }
       sp_RbVal v = mk_bigint(bn); r->objs[id] = v; return v;

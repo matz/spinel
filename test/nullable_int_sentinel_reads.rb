@@ -1,5 +1,5 @@
-# A nullable Integer or Float local holds nil as its sentinel (SP_INT_NIL, or
-# the Float's NaN payload), and nil? / == nil / inspect all honour it. These
+# A nullable Integer or Float local carries its nil beside the value (the
+# sp_oint / sp_ofloat flag), and nil? / == nil / inspect all honour it. These
 # reads decided from the slot's kind instead: a case subject took `when
 # Integer` and missed `when nil` and `in nil`, `Integer === x` and
 # `x.eql?(nil)` folded, a Hash keyed by it printed -9223372036854775808,

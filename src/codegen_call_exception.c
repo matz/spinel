@@ -396,15 +396,18 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     const char *sop = nt_str(c->nt, id, "call_operator");
     int sn = sop && sp_streq(sop, "&.");
     int sv_sn = g_sn_skip;
+    TyKind at = repr_of(c, id).as_ty;
+    /* an Integer / Float answer is the `&.`'s oint, nil where it stops */
+    int so = sn && oint_kind(at) && node_is_oint(c, id);
     if (sn) {
-      TyKind at = repr_of(c, id).as_ty;
       const char *nv = nil_value(at);
-      buf_printf(b, "_t%d.tag == SP_TAG_NIL ? %s : ", tv, nv ? nv : default_value_from_compiler(c, at));
+      buf_printf(b, "_t%d.tag == SP_TAG_NIL ? %s : ", tv, so ? oint_nil(at) : nv ? nv : default_value_from_compiler(c, at));
       g_sn_skip = id;
       /* past the test the call is a plain one on the boxed exception */
       nt_node_set_str((NodeTable *)c->nt, id, "call_operator", ".");
     }
-    emit_expr(c, id, b);
+    if (so) emit_oint_expr(c, id, at, b);
+    else emit_expr(c, id, b);
     if (sn) nt_node_set_str((NodeTable *)c->nt, id, "call_operator", "&.");
     g_sn_skip = sv_sn;
     exc_um_skip = sv_skip;

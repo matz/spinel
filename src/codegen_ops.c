@@ -23,6 +23,19 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $r   the receiver, emitted at its first occurrence (or the text the
           caller rendered, x->rtext); a later $r repeats the same text
      $R   the receiver emitted again, for an arm that emitted it twice
+     $N   an Integer or Float receiver with its nil beside the value (an
+          sp_oint / sp_ofloat, emit_oint_expr): a receiver that can be nil
+          hands the row its flag, one that cannot is wrapped as never nil.
+          Emitted at its first occurrence, repeated after, as $r is. The
+          caller's x->rtext is the plain rendering, so a receiver with an
+          oint form is rendered again from the node (as the nil? arm does)
+     $O   "_o" for an Integer or Float array receiver, "" for the other
+          kinds: the runtime's `_o` twin answers those elements with their
+          nil (sp_$AArray_pop$O)
+     $<   open and $> close an unwrap of the row's sp_oint / sp_ofloat
+          answer where the call's consumer wants it plain (sp_oint_arg, by
+          node_is_oint of the call); nothing where it takes the oint. The
+          kind is the row's result, or the call's type when the row has none
      $h   the receiver held across the arguments (hold_recv_open, rooted
           in a temp of its C type): the hold opens before anything else is
           emitted or any temp is taken, and closes after the row's text
@@ -48,10 +61,10 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $sN  argument N as a String (emit_str_expr)
      $cN  argument N as an sp_Complex (emit_complex_coerce)
      $qN  argument N as an sp_Rational (emit_rat_coerce) */
-/* The template of an Integer row for a receiver that can never be the nil
-   sentinel: the row's own C text asks the sentinel first (an Integer slot
-   some write leaves nil in), and a plain Integer that is INTPTR_MIN is that
-   number (#7612). NULL: the row has no such variant. */
+/* The template of an Integer row for a receiver that can never be nil: the
+   row's own C text asks for its nil first (an Integer slot some write
+   leaves nil in), and a plain Integer needs no such test (#7612). NULL: the
+   row has no such variant. */
 static const char *int_plain_template(const char *name) {
   static const struct { const char *name, *arg; } rows[] = {
     { "to_s",      "sp_int_to_s($r)" },
@@ -92,9 +105,19 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     char pat[3] = { '$', tnames[k], 0 };
     if (strstr(tmpl, pat)) tn[k] = ++g_tmp;
   }
-  char *r = NULL;
+  char *r = NULL, *o = NULL;
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
+  /* a length row (length, size, count: a plain Integer, never nil) where
+     the call's slot holds its nil (a site of a call another receiver of
+     which can answer nil): the whole text lifted. Only these names: a row
+     can call a C helper that answers the oint itself (IO#getbyte), which
+     its text does not show. */
+  int tlift = x->op->result == TY_INT && x->op->name &&
+              (is_len_alias(x->op->name) || sp_streq(x->op->name, "count")) && node_is_oint(c, x->id) &&
+              !strstr(tmpl, "$[") && !strstr(tmpl, "$<") && !strstr(tmpl, "$O") && !strstr(tmpl, "$N") &&
+              !strstr(tmpl, "oint") && !strstr(tmpl, "_o(") && !strstr(tmpl, "_opt");
+  if (tlift) buf_printf(b, "%s(", oint_of(x->op->result));
   for (const char *p = tmpl; *p; p++) {
     const char *tk = p[0] == '$' && p[1] ? strchr(tnames, p[1]) : NULL;
     if (p[0] == '$' && p[1] == 'r') {
@@ -105,6 +128,33 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
         r = strndup(b->p ? b->p + mark : "", b->len - mark);
       }
       else buf_puts(b, r);
+      p++;
+    }
+    else if (p[0] == '$' && p[1] == 'N') {
+      /* a receiver already rendered (rtext) is reused, never emitted again:
+         its hoisted preludes and side effects ran once. An unwrapped oint
+         (`sp_oint_arg(<x>)`) is <x> itself; a plain value is lifted. */
+      if (!o && x->rtext) {
+        const char *rt = x->rtext, *ua = oint_arg(x->rt);
+        size_t ul = strlen(ua), rl = strlen(rt);
+        Buf ob; memset(&ob, 0, sizeof ob);
+        int bal = 0, outer = rl > ul + 1 && strncmp(rt, ua, ul) == 0 && rt[ul] == '(' && rt[rl - 1] == ')';
+        /* the parenthesis after the name must close at the very end */
+        for (size_t q = ul; outer && q < rl; q++) {
+          if (rt[q] == '(') bal++;
+          else if (rt[q] == ')' && --bal == 0 && q != rl - 1) outer = 0;
+        }
+        if (outer) buf_printf(&ob, "%.*s", (int)(rl - ul - 2), rt + ul + 1);
+        else buf_printf(&ob, "%s(%s)", oint_of(x->rt), rt);
+        o = ob.p ? ob.p : strdup("");
+        buf_puts(b, o);
+      }
+      else if (!o) {
+        size_t mark = b->len;
+        emit_oint_expr(c, x->recv, x->rt, b);
+        o = strndup(b->p ? b->p + mark : "", b->len - mark);
+      }
+      else buf_puts(b, o);
       p++;
     }
     else if (p[0] == '$' && p[1] == 'h') {
@@ -122,6 +172,24 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     else if (p[0] == '$' && p[1] == 'A') {
       const char *ak = x->rt == TY_POLY_ARRAY ? "Poly" : array_kind(x->rt);
       buf_puts(b, ak ? ak : "");
+      p++;
+    }
+    else if (p[0] == '$' && p[1] == 'O') {
+      if (ty_is_array(x->rt) && oint_kind(ty_array_elem(x->rt))) buf_puts(b, "_o");
+      p++;
+    }
+    else if (p[0] == '$' && (p[1] == '<' || p[1] == '>')) {
+      TyKind rk = bop_result(x->op, x->rt);
+      if (!oint_kind(rk)) rk = comp_ntype(c, x->id);
+      if (oint_kind(rk) && !node_is_oint(c, x->id)) buf_printf(b, p[1] == '<' ? "%s(" : ")", oint_arg(rk));
+      p++;
+    }
+    /* `$[` ... `$]`: a row answering the plain value, lifted (sp_oint_of)
+       where the consumer takes the oint (node_is_oint) */
+    else if (p[0] == '$' && (p[1] == '[' || p[1] == ']')) {
+      TyKind rk = bop_result(x->op, x->rt);
+      if (!oint_kind(rk)) rk = comp_ntype(c, x->id);
+      if (oint_kind(rk) && node_is_oint(c, x->id)) buf_printf(b, p[1] == '[' ? "%s(" : ")", oint_of(rk));
       p++;
     }
     else if (p[0] == '$' && p[1] == 'K') {
@@ -158,9 +226,45 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     }
     else { char ch[2] = { *p, 0 }; buf_puts(b, ch); }
   }
-  free(r);
+  free(r); free(o);
+  if (tlift) buf_puts(b, ")");
   if (held) buf_puts(b, "; })");
   free(hb.p);
+  return 1;
+}
+
+/* Array#first with no count: the element, which for an Integer or Float
+   array is read with its nil (an empty array, a nil element) and unwrapped
+   where the call's consumer wants it plain. */
+static int emit_op_array_first(Compiler *c, const BopCtx *x, Buf *b) {
+  char *r = op_recv_text(c, x);
+  const char *ak = x->rt == TY_POLY_ARRAY ? "Poly" : array_kind(x->rt);
+  TyKind et = ty_array_elem(x->rt);
+  if (oint_kind(et)) {
+    if (!node_is_oint(c, x->id)) buf_printf(b, "%s(", oint_arg(et));
+    buf_printf(b, "sp_%sArray_oget(%s, 0)", ak ? ak : "", r);
+    if (!node_is_oint(c, x->id)) buf_puts(b, ")");
+  }
+  else buf_printf(b, "sp_%sArray_get(%s, 0)", ak ? ak : "", r);
+  free(r);
+  return 1;
+}
+
+/* Array#pop / #shift with no count: the element, nil when the array is
+   empty -- an sp_oint / sp_ofloat from the _o runtime call for an Integer
+   or Float array (unwrapped where the consumer wants it plain), NULL or a
+   boxed nil from the plain call for the other kinds. */
+static int emit_op_array_pop_shift(Compiler *c, const BopCtx *x, Buf *b) {
+  char *r = op_recv_text(c, x);
+  const char *ak = x->rt == TY_POLY_ARRAY ? "Poly" : array_kind(x->rt);
+  TyKind et = ty_array_elem(x->rt);
+  if (oint_kind(et)) {
+    if (!node_is_oint(c, x->id)) buf_printf(b, "%s(", oint_arg(et));
+    buf_printf(b, "sp_%sArray_%s_o(%s)", ak ? ak : "", x->name, r);
+    if (!node_is_oint(c, x->id)) buf_puts(b, ")");
+  }
+  else buf_printf(b, "sp_%sArray_%s(%s)", ak ? ak : "", x->name, r);
+  free(r);
   return 1;
 }
 
@@ -274,6 +378,8 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_ARRAY_SHIFT_N] = emit_op_array_shift_n,
   [BOPE_ARRAY_CYCLE_N] = emit_op_array_cycle_n,
   [BOPE_ARRAY_LAST] = emit_op_array_last,
+  [BOPE_ARRAY_FIRST] = emit_op_array_first,
+  [BOPE_ARRAY_POP_SHIFT] = emit_op_array_pop_shift,
   [BOPE_ARRAY_JOIN] = emit_op_array_join,
   [BOPE_ARRAY_PACK_BUFFER] = emit_op_array_pack_buffer,
   [BOPE_ARRAY_SORT_BANG] = emit_op_array_sort_bang,

@@ -311,6 +311,8 @@ extern int  *g_argov_node;
    the C did not build (#7604). view_bind checks the length now. */
 #define ARGOV_TEXT_LEN 160
 extern char (*g_argov_text)[ARGOV_TEXT_LEN];
+extern unsigned char *g_argov_oint;   /* the bound text is an oint (view_bind_o) */
+int view_bind_o(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 extern int  g_n_argov;
 /* Room for one more override whatever the fill, for a site that must run
    every argument of a call ahead of it, however many there are
@@ -367,6 +369,7 @@ int implicit_self_is_field_read(Compiler *c, int id);
    hc_mark is the text a write's or a safepoint's slow path appends, after
    which the cached headers are read again ("" outside such a loop). */
 int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, size_t cap);
+void hc_read_len(const char *hd, char *out, size_t cap);
 int hc_index_in_range(Compiler *c, int recv, int idx);
 extern int g_loop_polls_in_cond;   /* the next emit_loop_body leaves its polls to the loop's condition */
 int hc_string(Compiler *c, int recv, char *d, char *l, size_t cap);
@@ -601,7 +604,8 @@ void emit_line_directive(Compiler *c, int id, Buf *b);
    yield then defers a `return` belonging to the OUTER method into it. Reading
    g_ret_type at the store site therefore asked the wrong function whether to
    box, and a String went into an sp_RbVal slot unboxed. */
-typedef struct { int lid; int has_retval; int exc_base; TyKind retv_ty; int rescue_base; int catches; } EnsureCtx;
+typedef struct { int lid; int has_retval; int exc_base; TyKind retv_ty; int rescue_base; int catches;
+                 int retv_o;   /* the frame's slot holds its nil beside the value (sp_oint) */ } EnsureCtx;
 extern EnsureCtx g_ensure_stack[MAX_ENSURE_DEPTH];
 extern int       g_ensure_depth;
 
@@ -952,6 +956,12 @@ void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
 const char *env_key_open(const NodeTable *nt, int n);
 const char *env_key_close(const NodeTable *nt, int n);
 int hash_key_misses(Compiler *c, int key, TyKind kt);
+int hash_okey_miss(Compiler *c, int key, TyKind kt);
+int hash_okey_form(Compiler *c, int key, TyKind kt);
+void emit_hash_okey(Compiler *c, int key, Buf *b);
+const char *hash_key_ctype(Compiler *c, int key, TyKind kt);
+const char *hash_okey_sfx(Compiler *c, int key, TyKind kt);
+void emit_hash_key_o(Compiler *c, int key, TyKind kt, Buf *b);
 int hash_nil_key_stored(Compiler *c, int key, TyKind kt);
 const char *conv_wrong_cls_name(TyKind t);
 const char *conv_cls_name_of(Compiler *c, TyKind t);
@@ -990,7 +1000,8 @@ int stored_value_may_be_nil(Compiler *c, int v);
 void emit_null_guarded_call(Compiler *c, int recv, TyKind rt, const char *fn, const char *nil_c, Buf *b);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 /* emit_unbox_text, but a nil-tagged poly lands on the slot's own nil (an int?
-   or float? sentinel) instead of the zero payload under the tag (#3412). */
+   or float? oint's nil flag) instead of the zero payload under the tag
+   (#3412). */
 void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 /* `recv.attr ||= v` / `&&=` where the reader or the writer is a real `def`:
    emits the reader/writer pair as an expression, or answers 0 to leave the
@@ -998,6 +1009,18 @@ void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_orw_guard(Compiler *c, int v, TyKind slot, const char *cond, const char *lhs, int value_form, int indent, Buf *b);
 void emit_slot_orw_value(Compiler *c, TyKind t, int elems_handle, const char *ref, int v, int is_or,
                          const char *mark, Buf *b);
+/* the same for an Integer / Float slot that holds its nil: `niltest` (its
+   nil's C test, NULL = never nil), and a field's class / ivar / prefix so
+   the store keeps the nil bit (codegen_expr.c) */
+void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *ref, int v, int is_or,
+                           const char *niltest, int cid, int iv, const char *pfx, const char *mark, Buf *b);
+/* `@x ||= v` at write node id; `obj.x ||= v` through the field (codegen_util.c);
+   `mark` as emit_slot_orw_value's */
+void emit_ivar_orw_value(Compiler *c, int id, TyKind t, int elems_handle, const char *ref, int v, int is_or,
+                         const char *mark, Buf *b);
+void emit_attr_orw_value(Compiler *c, int cid, int iv, const char *pfx, TyKind t, int elems_handle,
+                         const char *ref, int v, int is_or, const char *mark, Buf *b);
+int ivar_orw_niltest(Compiler *c, int id, const char *ref, char *out, size_t cap, int *cid, int *iv, char *pfx, size_t pcap);
 int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b);
 int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b);
 /* Wrap a boxed expression in the --rbs seed assertion (a no-op macro without
@@ -1658,7 +1681,7 @@ void emit_kw_splat_conv_temp(Compiler *c, const char *tmp);
    the temp holding the operand roots. */
 int kw_splat_user_to_hash(Compiler *c);
 /* A `**` operand of a kind that is no Hash but can still be nil at run time
-   -- a nilable Integer or Float slot's sentinel, a pointer-backed kind's
+   -- a nilable Integer or Float slot's nil, a pointer-backed kind's
    NULL -- or that is true or false, which CRuby's TypeError names by value:
    its conversion is checked on the boxed value, as a boxed one is. */
 int kw_splat_checked_boxed(Compiler *c, int node);
@@ -1677,7 +1700,6 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
    analyze_scope.c; canonical declarations live in analyze_internal.h) */
 int is_arith_op(const char *op);
 int is_cmp_op(const char *op);
-int int_slot_store_needs_ck(Compiler *c, int v, TyKind slot_ty, int slot_nullable);
 const char *int_shift_fn(Compiler *c, const char *op, int v);
 int class_def_body(Compiler *c, int def_node);
 int class_body_list(Compiler *c, int **out_ci, int **out_body);
@@ -1937,10 +1959,10 @@ int emit_op_array_slice_groups(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_join_str(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_pred_class(Compiler *c, const BopCtx *x, Buf *b);
 /* A typed array receiver of a compare (`ck` "cmp") or a blockless sum (`ck`
-   "sum"), wrapped in the runtime's nil check where the array can hold the
-   sentinel (codegen_call_recv.c) */
+   "sum"), wrapped in the runtime's nil check where the array can hold nil
+   (codegen_call_recv.c) */
 void emit_nil_ck_recv(Compiler *c, int recv, TyKind rt, const char *ck, int float_seed, Buf *b);
-/* whether an Integer or Float array receiver can hold the nil sentinel, and
+/* whether an Integer or Float array receiver can hold nil, and
    whether analyze marked it so (codegen_call_recv.c) */
 int elem_nil_sentinel(Compiler *c, int recv, TyKind rt);
 int elem_nil_marked(Compiler *c, int recv, TyKind rt);
@@ -1976,7 +1998,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b);
 int emit_object_call(Compiler *c, int id, Buf *b);
 int emit_native_object_protocol(Compiler *c, int id, Buf *b);
 /* The C test for "temp _t<tmp> of kind t holds nil" (want_nil) or "holds a
-   non-nil value" (!want_nil), spelled per kind: the int/float sentinels, a
+   non-nil value" (!want_nil), spelled per kind: the int/float nil flag, a
    NULL pointer, a poly tag. Shared by the index-or/and-write forms. */
 void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf *b);
 int emit_native_case_eq(Compiler *c, int cond, TyKind subj_t, const char *subj_ref, Buf *b);
@@ -1991,7 +2013,7 @@ int diagnose_unsupported_call(Compiler *c, int id);
 int diag_user_defines(Compiler *c, const char *name);
 int recv_user_defines(Compiler *c, const char *name);
 int emit_object_ivar_list(Compiler *c, int recv, int cid, Buf *b);
-void emit_object_ivar_remove(Compiler *c, int recv, TyKind rt, int cid, const char *sym, Buf *b);
+void emit_object_ivar_remove(Compiler *c, int id, int recv, TyKind rt, int cid, const char *sym, Buf *b);
 int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKind rt,
                           int cid, int argc, const int *argv, Buf *b);
 const char *case_map_suffix(Compiler *c, int argc, const int *argv);
@@ -2075,7 +2097,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent);
 int emit_output_call(Compiler *c, int id, Buf *b, int indent);
 void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc);
 int emit_system_splat(Compiler *c, const int *argv, int argc, Buf *b);
-int int_value_plain(Compiler *c, int node);   /* an Integer that can never be the nil sentinel */
+int int_value_plain(Compiler *c, int node);   /* an Integer that can never be nil */
 int int_value_plain_promote(Compiler *c, int node);
 int int_local_plain(Compiler *c, LocalVar *lv, const char *name);
 int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv, Buf *b, int indent);
@@ -2141,6 +2163,7 @@ void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b);
 const char *hash_box_cls(TyKind t);
 const char *hash_order_key(TyKind t, int tr, int ti);
 const char *hash_order_val(TyKind t, int tr, int ti);
+const char *hash_order_oval(TyKind t, int tr, int ti);
 int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const char *name,
                           const char *rs, Buf *b, int indent, int *tr, int *torig, int *twp);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
@@ -2259,6 +2282,141 @@ extern const char *g_iow_recv_ref;
 extern const char *g_iow_key_ref;
 
 void refuse_yield_capwrap(Compiler *c, int blk, int yc, const int *yv);
+
+/* ---- nil out of band: sp_oint / sp_ofloat (codegen_util.c) ----
+   No bit pattern of an sp_int or an sp_float means nil. A nullable Integer
+   or Float is carried as an sp_oint / sp_ofloat (value + nil flag) in a
+   local, a parameter, a return, a temp, a static; an instance ivar keeps its
+   sp_int field and a byte in the object's iv__nilb. One predicate decides
+   a node's C value (node_is_oint); emit_expr always yields the plain scalar
+   and emit_oint_expr the oint form. */
+/* the C spellings for the Integer (TY_INT) or Float (TY_FLOAT) kind */
+const char *oint_ctype(TyKind t);   /* "sp_oint" / "sp_ofloat" */
+const char *oint_nil(TyKind t);     /* "sp_oint_nil()" / "sp_ofloat_nil()" */
+const char *oint_of(TyKind t);      /* "sp_oint_of" / "sp_ofloat_of" */
+const char *oint_val(TyKind t);     /* "sp_oint_val" / "sp_ofloat_val" (NoMethodError for nil) */
+const char *oint_arg(TyKind t);     /* "sp_oint_arg" / "sp_ofloat_arg" (TypeError for nil) */
+const char *oint_box(TyKind t);     /* "sp_box_oint" / "sp_box_ofloat" */
+const char *oint_unbox(TyKind t);   /* "sp_unbox_oint" / "sp_unbox_ofloat" */
+/* is t an Integer or a Float kind */
+int oint_kind(TyKind t);
+/* a local's / parameter's slot is an sp_oint / sp_ofloat */
+int slot_is_oint(const LocalVar *lv);
+/* the C type of a local's slot: the oint type, or emit_ctype's */
+void emit_slot_ctype(Compiler *c, const LocalVar *lv, Buf *b);
+/* instance ivar iv of class cid has a nil byte in iv__nilb; its index;
+   the number of bytes the class's iv__nilb has (0: none), one length for
+   its whole class family */
+int ivar_has_nilbit(Compiler *c, int cid, int iv);
+int ivar_nilbit_index(Compiler *c, int cid, int iv);
+int class_nilbyte_count(Compiler *c, int cid);
+/* the C text of the nil: the `((o)->iv__nilb[k])` test, and the set
+   (`= 1`) / clear (`= 0`) stores, for the receiver text `obj`
+   ("self->", "_t3->", "o." ...: the prefix up to the field) */
+void ivar_nilbit_test(Compiler *c, int cid, int iv, const char *obj, char *out, size_t cap);
+void ivar_nilbit_set(Compiler *c, int cid, int iv, const char *obj, char *out, size_t cap);
+void ivar_nilbit_clear(Compiler *c, int cid, int iv, const char *obj, char *out, size_t cap);
+void ivar_nilbit_assign(Compiler *c, int cid, int iv, const char *obj, const char *nil, char *out, size_t cap);
+/* the ivar slot a read / write node names: 1 the object's field (cid, iv),
+   2 the class-level or top-level static civ_C_x, 0 none; whether a read's
+   slot is an oint (a field with a nil bit, an oint static) */
+int ivar_node_slot(Compiler *c, int node, int *cid, int *iv);
+int ivar_read_slot_is_oint(Compiler *c, int node);
+/* an Integer literal as a C constant (INT64_MIN spelled as an expression) */
+void emit_int_lit(Buf *b, long long v);
+/* a value emitted only for its effects: a nil read there is no unwrap (codegen_util.c) */
+extern int g_value_discarded;
+/* the caller declared emit_block_value_into's `dest` as its oint (codegen_fold.c) */
+extern int g_bv_dest_oint;
+/* can a `next` of this block body (not a nested block's) hand the slot a
+   nil: a bare `next`, `next nil`, a value that can be nil (codegen_call.c) */
+int block_next_may_be_nil(Compiler *c, int id, int depth);
+/* Struct.new / Data.new of class ci with call id's arguments: the members,
+   and the nil bits of members left nil (codegen_call.c) */
+int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+/* member i of class ci read as `expr` through `objprefix` ("_t3->"), boxed
+   with its nil: an Integer / Float member by its nil bit (codegen.c) */
+void emit_member_boxed_text(Compiler *c, ClassInfo *ci, int i, const char *objprefix, const char *expr, Buf *b);
+/* the head of a Range walk that stops at the ends of sp_int (see codegen_util.c) */
+void emit_range_walk_head(Buf *b, int indent, const char *var, int decl, const char *first,
+                          const char *step, const char *last);
+/* a global's / class-level ivar's / cvar's static is an sp_oint */
+int gvar_is_oint(Compiler *c, const LocalVar *g);
+int civ_is_oint(Compiler *c, int cid, int iv);
+int cvar_is_oint(Compiler *c, int cid, int idx);
+/* The node's natural C expression is an sp_oint / sp_ofloat (an Integer or
+   Float node only): a nullable read no guard narrowed, a call answering an
+   oint, a nil literal, a conditional with a nullable arm. */
+int node_is_oint(Compiler *c, int node);
+/* node_is_oint, or a leaf read of a slot that is an oint (a nil guard may
+   have narrowed the read): emit_oint_expr yields the bare oint for it, and
+   its box reads the nil */
+int node_has_oint_form(Compiler *c, int node);
+/* node as an sp_oint / sp_ofloat: the bare producer, a plain value wrapped
+   in sp_oint_of, nil as sp_oint_nil(); a slot read as its slot's own oint */
+void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b);
+/* set by emit_oint_expr for the one node it is about to emit: emit_expr
+   consumes it (leaves the oint producer bare) before any child is emitted */
+extern int g_want_oint;
+/* an element read whose oint is unwrapped at once emits the checked plain
+   read (codegen_util.c emit_scalar_operand_op, emit_expr's sp_oint_arg) */
+/* a boxed field whose writes may store nil starts with the unset mark
+   (codegen_util.c); the mark is a nil's cls_id no box carries */
+#define SP_IVAR_UNSET_MARK 0x5e70
+int poly_ivar_unset_marked(Compiler *c, int cid, int iv);
+extern const char g_ck_opnd[];
+/* the leaf slot read emit_expr is rendering is wanted as its own oint
+   (codegen_expr.c) */
+extern int g_oint_read;
+/* the yield in value position wants its oint (codegen_iter.c); the `next`
+   slot of the block being spliced is an oint */
+extern int g_yield_want_oint;
+extern int g_ie_next_oint;
+/* A slot of kind t known to hold nil, read where a value of that kind is
+   wanted: the kind's nil for the kinds that have one (NULL, a boxed nil),
+   and for an Integer or Float, whose plain scalar has no nil, the TypeError
+   a nil raises where an Integer is wanted (sp_oint_arg(sp_oint_nil())). */
+void emit_slot_nil_read(Compiler *c, TyKind t, Buf *b);
+/* the method being emitted answers an oint (set beside g_ret_type); the
+   result slot a tail fills does (beside g_result_ty) */
+extern int g_ret_oint;
+extern int g_result_oint;
+/* a conditional's result slot holds its nil (node_is_oint of it): its C
+   type and dead value */
+int cond_res_oint(Compiler *c, int id, TyKind res);
+void emit_res_ctype(Compiler *c, TyKind res, int res_o, Buf *b);
+const char *res_zero(Compiler *c, TyKind res, int res_o);
+/* a store's right-hand side into an ivar with a nil bit, the bit kept in
+   step (codegen_util.c): from node v, or from an sp_oint text */
+void emit_ivar_value_nilbit(Compiler *c, int cid, int iv, const char *obj, int v, Buf *b);
+void emit_ivar_text_nilbit(Compiler *c, int cid, int iv, const char *obj, const char *otext, Buf *b);
+/* the right-hand side of `@x = nil` on an Integer / Float ivar */
+void emit_ivar_nil_store(Compiler *c, int id, TyKind t, Buf *b);
+/* the backstop: a nil into a plain Integer / Float slot is refused at compile time */
+__attribute__((noreturn)) void refuse_nil_store(Compiler *c, int node, TyKind t, const char *where);
+int node_may_be_nil(Compiler *c, int node);
+int call_names_only_void_methods(Compiler *c, int node);   /* codegen_stmt.c */
+/* node as a plain scalar through its oint form: `sp_oint_val(<oint>, op)`
+   when the node may be nil (cmp_operand_may_be_nil), else emit_expr */
+void emit_oint_unwrap_ck(Compiler *c, int node, TyKind t, const char *op, Buf *b);
+int poly_int_key_boxed(Compiler *c, int key);
+void emit_scalar_operand_op(Compiler *c, int node, const char *op, Buf *b);
+/* Ruby truthiness of an Integer / Float node as a C condition: `!o.nil`
+   for one with an oint form, else always true (the node evaluated) */
+void emit_oint_truthy(Compiler *c, int node, TyKind t, Buf *b);
+/* the value of a typed Array store as nil_store_sfx's store takes it */
+void emit_elem_store_value(Compiler *c, const char *k, int node, Buf *b);
+/* an op-assign on an Integer / Float field with a nil bit: the field's
+   nil test (NoMethodError for nil at the operator) and the bit's clear
+   after the store (codegen_stmt.c emit_scalar_op_assign reads them) */
+extern const char *g_opa_niltest, *g_opa_clear;
+/* a method's Integer / Float return that can be nil is an sp_oint /
+   sp_ofloat (codegen.c): the C return type, the dead value where control
+   never arrives, and a C call of it boxed */
+int method_ret_is_oint(const Scope *s);
+void emit_method_ret_ctype(Compiler *c, const Scope *s, Buf *b);
+const char *method_ret_zero(Compiler *c, const Scope *s);
+void emit_boxed_ret_call(Compiler *c, const Scope *s, const char *call, Buf *b);
 int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b);
 /* Is value v's String one no other name can see a copy of (codegen_stmt.c)?
    share_value_needs_handle asks it. */

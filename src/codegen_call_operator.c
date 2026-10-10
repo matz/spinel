@@ -11,10 +11,25 @@
 #include "codegen_call_arms.h"
 #include "holder.h"
 
+/* ---- nil out of band: an emitter whose C result is an sp_oint / sp_ofloat
+   leaves it bare when the node is one (node_is_oint: the dispatcher's
+   consumer takes the oint) and otherwise reads it as the plain scalar through
+   sp_oint_arg (TypeError for nil) -- the same wrap the dispatcher applies to an
+   oint producer, applied here because this emitter decides the form. */
+/* A call the analysis typed nil or void (`:s <=> 3`) has no number to
+   unwrap: its oint is left bare, discarded or boxed as nil by the consumer. */
+static int oint_unwrap_wanted(Compiler *c, int id) { return !node_is_oint(c, id) && oint_kind(comp_ntype(c, id)); }
+static void oint_open(Compiler *c, int id, TyKind t, Buf *b) { if (oint_unwrap_wanted(c, id)) buf_printf(b, "%s(", oint_arg(t)); }
+static void oint_close(Compiler *c, int id, Buf *b) { if (oint_unwrap_wanted(c, id)) buf_puts(b, ")"); }
+/* A plain answer where the call's consumer wants its oint form (the
+   analysis marks the call nullable): wrapped as never nil. */
+static void oint_lift_open(Compiler *c, int id, TyKind t, Buf *b) { if (node_is_oint(c, id)) buf_printf(b, "%s(", oint_of(t)); }
+static void oint_lift_close(Compiler *c, int id, Buf *b) { if (node_is_oint(c, id)) buf_puts(b, ")"); }
+
 /* The receiver of an Integer bit operator. For a shift, an Integer slot
-   that can hold its nil sentinel (cmp_operand_may_be_nil) is tested first:
-   nil has no << or >>, and the sentinel shifted read as a number (`>> 1` of
-   a nil attribute answered -4611686018427387904). & | ^ are left as they
+   that can hold nil (cmp_operand_may_be_nil) is tested first: nil has no
+   << or >>, and a nil shifted as a number answered one (`>> 1` of a nil
+   attribute answered -4611686018427387904). & | ^ are left as they
    were: the marking counts every typed array element read, and the test
    cost the bit-twiddling loops (nqueens) a branch per operand. */
 static void emit_int_bit_recv(Compiler *c, int recv, TyKind rt, const char *conv,
@@ -23,10 +38,8 @@ static void emit_int_bit_recv(Compiler *c, int recv, TyKind rt, const char *conv
     emit_poly_unboxed(c, recv, rt, conv, b);
     return;
   }
-  int tn = ++g_tmp;
-  buf_printf(b, "({ sp_int _t%d = ", tn);
-  emit_expr(c, recv, b);
-  buf_printf(b, "; if (SP_UNLIKELY(_t%d == SP_INT_NIL)) sp_nil_recv(\"%s\"); _t%d; })", tn, name, tn);
+  (void)conv;
+  emit_scalar_operand_op(c, recv, name, b);   /* NoMethodError for nil */
 }
 
 /* Is `v` an operand of a String identity comparison that is a handle where
@@ -79,16 +92,18 @@ static int cmp_operand_cannot_raise(Compiler *c, int id) {
 }
 
 /* `recv OP arg` on two Integer or two Float values, at least one of which can
-   carry its nil sentinel: each side that can is tested before the compare,
-   unless the nil narrowing proved it non-nil (narl/narr).
+   be nil: each side that can is unwrapped where it is read, the left as the
+   receiver (NoMethodError for nil), the right as the comparison's operand
+   (the Comparable ArgumentError), unless the nil narrowing proved it non-nil
+   (narl/narr).
 
    A Float element of an array the loop holds the header of reads nil-free in
-   range instead, as under `+ - * /` (emit_nilfree_cmp_operand), and drops
-   its half of the test: only its out-of-range read raises, with the
-   comparison's error. The left one raises before the right one is
-   evaluated, so only against a right operand that cannot raise. The right
-   one tests a left that may be nil first, so a nil on the left raises
-   NoMethodError, as CRuby's dispatch does. */
+   range instead, as under `+ - * /` (emit_nilfree_cmp_operand): only its
+   out-of-range read unwraps, with the comparison's error. The left one
+   raises before the right one is evaluated, so only against a right operand
+   that cannot raise. The right one is evaluated after the left one has been
+   unwrapped, so a nil on the left raises NoMethodError, as CRuby's dispatch
+   does. */
 static void emit_guarded_cmp(Compiler *c, int recv, int arg, const char *name, TyKind rt, TyKind cat,
                              int rawl, int rawr, int narl, int narr, Buf *b) {
   int tg = ++g_tmp;
@@ -97,15 +112,31 @@ static void emit_guarded_cmp(Compiler *c, int recv, int arg, const char *name, T
   Buf rnf; memset(&rnf, 0, sizeof rnf);
   int fl = 0, fr = 0;
   if (rt == TY_FLOAT && cat == TY_FLOAT) {
-    char lhs[32];
-    snprintf(lhs, sizeof lhs, "_t%d", tg);
     if (rawl && !narl && cmp_operand_cannot_raise(c, arg) && emit_nilfree_cmp_operand(c, recv, name, 1, NULL, &lnf))
       fl = 1;
-    if (rawr && !narr && emit_nilfree_cmp_operand(c, arg, name, 0, rawl && !narl && !fl ? lhs : NULL, &rnf))
+    if (rawr && !narr && emit_nilfree_cmp_operand(c, arg, name, 0, NULL, &rnf))
       fr = 1;
+  }
+  /* a left that may be nil against a right that can raise: CRuby evaluates
+     both before it dispatches, so each is held with its nil and unwrapped
+     after both ran, the left first (NoMethodError), then the right (the
+     Comparable ArgumentError) */
+  if (!fl && !narl && cmp_operand_may_be_nil(c, recv) && !cmp_operand_cannot_raise(c, arg) && cat == rt) {
+    int ro = !narr && cmp_operand_may_be_nil(c, arg);
+    const char *ot = rt == TY_FLOAT ? "sp_ofloat" : "sp_oint", *pt = rt == TY_FLOAT ? "sp_float" : "sp_int";
+    buf_printf(b, "({ %s _t%do = ", ot, tg); emit_oint_expr(c, recv, rt, b);
+    if (ro) { buf_printf(b, "; %s _t%dro = ", ot, tg); emit_oint_expr(c, arg, rt, b); }
+    else { buf_printf(b, "; %s _t%d_r = ", pt, tg); emit_expr(c, arg, b); }
+    buf_printf(b, "; %s _t%d = %s(_t%do, \"%s\");", pt, tg, rt == TY_FLOAT ? "sp_ofloat_val" : "sp_oint_val", tg, name);
+    if (ro) buf_printf(b, " %s _t%d_r = %s(_t%dro, \"%s\", \"%s\");", pt, tg,
+                       rt == TY_FLOAT ? "sp_ofloat_cmp_opnd" : "sp_oint_cmp_opnd", tg, name, rt == TY_FLOAT ? "Float" : "Integer");
+    buf_printf(b, " _t%d %s _t%d_r; })", tg, name, tg);
+    free(lnf.p); free(rnf.p);
+    return;
   }
   buf_printf(b, "({ %s _t%d = ", rt == TY_FLOAT ? "sp_float" : "sp_int", tg);
   if (fl) buf_puts(b, lnf.p);
+  else if (!narl && cmp_operand_may_be_nil(c, recv)) emit_scalar_operand_op(c, recv, name, b);
   else emit_expr(c, recv, b);
   buf_printf(b, ", _t%d_r = ", tg);
   if (fr) buf_puts(b, rnf.p);
@@ -113,19 +144,15 @@ static void emit_guarded_cmp(Compiler *c, int recv, int arg, const char *name, T
     buf_printf(b, "%s(", rht == TY_FLOAT ? "sp_poly_to_f" : "sp_poly_to_i");
     emit_expr(c, arg, b); buf_puts(b, ")");
   }
+  else if (!narr && cmp_operand_may_be_nil(c, arg)) {
+    buf_printf(b, "%s(", rt == TY_FLOAT ? "sp_ofloat_cmp_opnd" : "sp_oint_cmp_opnd");
+    emit_oint_expr(c, arg, rt, b);
+    buf_printf(b, ", \"%s\", \"%s\")", name, rt == TY_FLOAT ? "Float" : "Integer");
+  }
   else emit_expr(c, arg, b);
   free(lnf.p);
   free(rnf.p);
-  int dl = narl || fl, dr = narr || fr;
-  if (dl && dr) {
-    buf_printf(b, "; _t%d %s _t%d_r; })", tg, name, tg);
-    return;
-  }
-  char l[32], r[32];
-  if (dl) snprintf(l, sizeof l, "%s", rt == TY_FLOAT ? "0.0" : "0"); else snprintf(l, sizeof l, "_t%d", tg);
-  if (dr) snprintf(r, sizeof r, "%s", rt == TY_FLOAT ? "0.0" : "0"); else snprintf(r, sizeof r, "_t%d_r", tg);
-  buf_printf(b, "; %s(%s, %s, \"%s\"); _t%d %s _t%d_r; })",
-             rt == TY_FLOAT ? "SP_FLOAT_NIL_CMP_CK" : "SP_INT_NIL_CMP_CK", l, r, name, tg, name, tg);
+  buf_printf(b, "; _t%d %s _t%d_r; })", tg, name, tg);
 }
 
 /* The C test that boxed value `v` belongs to a builtin class on which the
@@ -154,7 +181,46 @@ static int poly_cmp_reopen_test(Compiler *c, const char *v, char *out, size_t ca
 static int g_cmp_reopen_id = -1;
 
 /* Integer shifts, <=>, the comparison and equality operators, and is_a? on a poly receiver */
-int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+/* `==` / `!=` where either side is an Integer or Float that can be nil:
+   nil's own equality, as CRuby's (nil == x only for a nil x), where the
+   plain compare unwrapped the nil and raised. Two numbers of one kind
+   compare their values through sp_oint_eq / sp_ofloat_eq; an Integer
+   against a Float through sp_int_flt_cmp, exact for every value; a boxed
+   operand through sp_poly_eq. Any other operand kind is left to the
+   general arm. Answers 1 when it emitted. */
+static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv, int argc, const int *argv, TyKind rt, Buf *b) {
+  if (recv < 0 || argc != 1 || !(sp_streq(name, "==") || sp_streq(name, "!="))) return 0;
+  if (!oint_kind(rt)) return 0;
+  TyKind at = comp_ntype(c, argv[0]);
+  int a_num = oint_kind(at), a_poly = at == TY_POLY || at == TY_UNKNOWN;
+  if (!a_num && !a_poly) return 0;
+  if (!node_has_oint_form(c, recv) && !(a_num && node_has_oint_form(c, argv[0]))) return 0;
+  int ne = name[0] == '!';
+  int tl = ++g_tmp, tr = ++g_tmp;
+  buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tl); emit_oint_expr(c, recv, rt, b);
+  if (a_poly) {
+    buf_printf(b, "; sp_RbVal _t%d = ", tr); emit_boxed(c, argv[0], b);
+    buf_printf(b, "; %s(_t%d.nil ? sp_poly_nil_p(_t%d) : sp_poly_eq(%s(_t%d.v), _t%d)); })",
+               ne ? "!" : "", tl, tr, rt == TY_FLOAT ? "sp_box_float" : "sp_box_int", tl, tr);
+    return 1;
+  }
+  buf_printf(b, "; %s _t%d = ", oint_ctype(at), tr); emit_oint_expr(c, argv[0], at, b);
+  if (rt == at)
+    buf_printf(b, "; %s%s(_t%d, _t%d); })", ne ? "!" : "", rt == TY_FLOAT ? "sp_ofloat_eq" : "sp_oint_eq", tl, tr);
+  else if (rt == TY_INT)
+    buf_printf(b, "; %s(_t%d.nil ? _t%d.nil : (!_t%d.nil && sp_int_flt_cmp(_t%d.v, _t%d.v) == 0)); })",
+               ne ? "!" : "", tl, tr, tr, tl, tr);
+  else
+    buf_printf(b, "; %s(_t%d.nil ? _t%d.nil : (!_t%d.nil && sp_int_flt_cmp(_t%d.v, _t%d.v) == 0)); })",
+               ne ? "!" : "", tl, tr, tr, tr, tl);
+  return 1;
+}
+
+/* The equality arms ahead of emit_call_compare_arms' own: a nil-aware
+   Integer or Float ==, and the String identity arms (a nullable String's
+   NULL, a call's shared String answer) */
+static int emit_compare_lead_arms(Compiler *c, int id, const char *name, int recv, int argc, const int *argv, TyKind rt, Buf *b) {
+  if (emit_nil_aware_num_eq(c, id, name, recv, argc, argv, rt, b)) return 1;
   /* A nullable String's NULL is nil, whether held as text or a handle.
      The ordinary String arms assume a String even against nil or a box. */
   if (recv >= 0 && argc == 1 && is_identity_query(name) && is_equality_name(name) &&
@@ -174,6 +240,91 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     emit_string_identity(c, recv, argv[0], b);
     return 1;
   }
+  return 0;
+}
+
+/* `<=>` on a boxed receiver of a class whose <=> the program defines takes
+   the program's method (poly_cmp_reopen_test); the call is emitted again
+   for that arm with this one skipped (g_cmp_reopen_id), which reaches the
+   boxed method dispatch. The dispatch goes first, with the receiver bound
+   to the held box: where it declines (no program method takes this
+   argument), the runtime's compare stands, as before. Answers 0 when it
+   emitted nothing. */
+static int emit_cmp_reopen_arm(Compiler *c, int id, int recv, const int *argv, Buf *b) {
+  char rtest[640], rv[32];
+  int rt0 = ++g_tmp;
+  snprintf(rv, sizeof rv, "_t%d", rt0);
+  if (g_cmp_reopen_id == id || g_n_argov >= MAX_ARG_OVERRIDE || !poly_cmp_reopen_test(c, rv, rtest, sizeof rtest))
+    return 0;
+  int mk = view_bind(recv, "%s", rv);
+  int sv = g_cmp_reopen_id; g_cmp_reopen_id = id;
+  Buf db; memset(&db, 0, sizeof db);
+  Buf *svp = g_pre; Buf dpre; memset(&dpre, 0, sizeof dpre); g_pre = &dpre;
+  int ok = emit_poly_method_dispatch(c, id, &db);
+  g_pre = svp;
+  g_cmp_reopen_id = sv;
+  view_unbind(mk);
+  if (ok && !(dpre.p && dpre.p[0])) {
+    int cmp_poly = repr_of(c, id).kind == RK_BOXED;
+    buf_printf(b, "({ sp_RbVal %s = ", rv); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(%s); (%s) ? (%s) : ", rv, rtest, db.p ? db.p : "0");
+    if (cmp_poly) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
+    buf_printf(b, "sp_poly_spaceship(%s, ", rv); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+    if (cmp_poly) buf_puts(b, ")"); else oint_close(c, id, b);
+    buf_puts(b, "; })");
+    free(db.p); free(dpre.p);
+    return 1;
+  }
+  free(db.p); free(dpre.p);
+  return 0;
+}
+
+/* is_a? / kind_of? / instance_of? against a class the static type cannot
+   tell apart from its sibling, asked of the runtime object: Queue and
+   SizedQueue (its bound), Enumerator::Chain and ::Product (its flag). 1 when
+   it emitted. Kept out of emit_call_compare_arms for its length. */
+static int emit_isa_runtime_flag_class(Compiler *c, const NodeTable *nt, const char *name, TyKind eff_rt,
+                                       int recv, const int *argv, Buf *b) {
+  /* Queue and SizedQueue are one runtime object told apart by its bound, so
+     these two cannot be answered statically from TY_QUEUE alone -- a
+     SizedQueue reported false for its own class (#3466). */
+  { const char *qcn = nt_str(nt, argv[0], "name");
+    if (eff_rt == TY_QUEUE && qcn &&
+        (is_queue_class_name(qcn))) {
+      int tq3 = ++g_tmp;
+      int want_sized = sp_streq(qcn, "SizedQueue");
+      buf_printf(b, "({ sp_queue *_t%d = ", tq3); emit_expr(c, recv, b);
+      /* is_a?(Queue) is true for both (SizedQueue < Queue); instance_of? and
+         is_a?(SizedQueue) read the bound. */
+      if (!want_sized && !sp_streq(name, "instance_of?"))
+        buf_printf(b, "; (void)_t%d; (sp_bool)1; })", tq3);
+      else
+        buf_printf(b, "; (sp_bool)((sp_Queue_max(_t%d) > 0) == %d); })", tq3, want_sized ? 1 : 0);
+      return 1;
+    } }
+  /* A chain and a product are one Enumerator object told apart by a flag
+     (is_chain / is_product), as #class reads it, so is_a?(Enumerator::Chain)
+     and is_a?(Enumerator::Product) are asked at run time; from TY_ENUMERATOR
+     alone they folded to false. Both classes are leaves under Enumerator,
+     so instance_of? asks the same. */
+  if (eff_rt == TY_ENUMERATOR && nt_kind(nt, argv[0]) == NK_ConstantPathNode) {
+    int epar = nt_ref(nt, argv[0], "parent");
+    const char *ecn = nt_str(nt, argv[0], "name");
+    if (epar >= 0 && nt_kind(nt, epar) == NK_ConstantReadNode && ecn &&
+        nt_str(nt, epar, "name") && sp_streq(nt_str(nt, epar, "name"), "Enumerator") &&
+        (sp_streq(ecn, "Chain") || sp_streq(ecn, "Product"))) {
+      int te = ++g_tmp;
+      buf_printf(b, "({ sp_Enumerator *_t%d = ", te); emit_expr(c, recv, b);
+      buf_printf(b, "; (sp_bool)(_t%d && _t%d->%s); })", te, te,
+                 sp_streq(ecn, "Chain") ? "is_chain" : "is_product");
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
+  if (emit_compare_lead_arms(c, id, name, recv, argc, argv, rt, b)) return 1;
   /* a literal `<<` whose result overflowed int64 (`1 << 64`): the node is typed
      bigint, but the int receiver would otherwise emit a UB C `1LL << 64LL`.
      Promote to a bigint shift. */
@@ -224,8 +375,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   if (recv >= 0 && argc == 1 &&
       ((rt == TY_INT && is_int_bit_op(name)) ||
        (rt == TY_POLY && sp_streq(name, ">>")))) {
-    Repr a0r = repr_of(c, argv[0]);
-    TyKind at0 = a0r.as_ty;
+    Repr a0r = repr_of(c, argv[0]); TyKind at0 = a0r.as_ty;
     /* A `<<`/`>>` by a NEGATIVE (or >= word width) count is UB as a bare C shift
        -- Ruby shifts the other way for a negative count. Only a constant literal
        in that range takes the sp_int_shl/shr path; a non-constant count stays a
@@ -378,39 +528,42 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   if (recv >= 0 && argc == 1 && sp_streq(name, "<=>")) {
     /* the receiver's own settled type where the dispatch type is poly */
     TyKind lrt = (rt == TY_POLY || rt == TY_UNKNOWN) ? comp_ntype(c, recv) : rt;
-    Repr latr = repr_of(c, argv[0]);
-    TyKind lat = latr.as_ty;
+    Repr latr = repr_of(c, argv[0]); TyKind lat = latr.as_ty;
     /* NULL in a String slot is nil, including nil <=> nil == 0. */
     if (lrt == TY_STRING && (lat == TY_STRING || lat == TY_NIL) &&
         !(nt_kind(nt, recv) == NK_StringNode && nt_kind(nt, argv[0]) == NK_StringNode)) {
       int tr = ++g_tmp, ta = ++g_tmp;
       int boxed = repr_of(c, id).kind == RK_BOXED;
-      if (boxed) buf_puts(b, "sp_box_int_or_nil(");
+      if (boxed) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
       buf_printf(b, "({ const char *_t%d = ", tr); emit_coerce(c, recv, TY_STRING, CO_HOLD, "a comparison operand", b);
       buf_puts(b, "; ");
       if (operand_may_allocate(c, argv[0])) buf_printf(b, "SP_GC_ROOT_STR(_t%d); ", tr);
       buf_printf(b, "const char *_t%d = ", ta);
       emit_coerce(c, argv[0], TY_STRING, CO_HOLD, "a comparison operand", b);
-      buf_printf(b, "; !_t%d || !_t%d ? (_t%d == _t%d ? (sp_int)0 : SP_INT_NIL)"
-                    " : (sp_int)sp_str_cmp_bytes(_t%d, _t%d); })", tr, ta, tr, ta, tr, ta);
-      if (boxed) buf_puts(b, ")");
+      buf_printf(b, "; !_t%d || !_t%d ? (_t%d == _t%d ? sp_oint_of(0) : sp_oint_nil())"
+                    " : sp_oint_of((sp_int)sp_str_cmp_bytes(_t%d, _t%d)); })", tr, ta, tr, ta, tr, ta);
+      if (boxed) buf_puts(b, ")"); else oint_close(c, id, b);
       return 1;
     }
     /* nil <=> nil is 0; nil <=> anything-else is nil (#2383) */
     if (lrt == TY_NIL) {
+      oint_open(c, id, TY_INT, b);
       buf_puts(b, "((void)("); emit_expr(c, recv, b);
       buf_puts(b, "), (void)("); emit_boxed(c, argv[0], b);
-      buf_printf(b, "), %s)", lat == TY_NIL ? "(sp_int)0" : "SP_INT_NIL");
+      buf_printf(b, "), %s)", lat == TY_NIL ? "sp_oint_of(0)" : "sp_oint_nil()");
+      oint_close(c, id, b);
       return 1;
     }
     /* Float <=> Rational: compare by float value, agreeing with the operators
        (<, <=, ...) that already coerce (#2596). The reverse direction works. */
     if (lrt == TY_FLOAT && lat == TY_RATIONAL) {
       int ta = ++g_tmp, tb = ++g_tmp;
+      oint_open(c, id, TY_INT, b);
       buf_printf(b, "({ double _t%d = ", ta); emit_expr(c, recv, b);
       buf_printf(b, "; double _t%d = sp_rational_to_f(", tb); emit_expr(c, argv[0], b);
-      buf_printf(b, "); isnan(_t%d) ? SP_INT_NIL : (sp_int)((_t%d > _t%d) - (_t%d < _t%d)); })",
+      buf_printf(b, "); isnan(_t%d) ? sp_oint_nil() : sp_oint_of((sp_int)((_t%d > _t%d) - (_t%d < _t%d))); })",
                  ta, ta, tb, ta, tb);
+      oint_close(c, id, b);
       return 1;
     }
     /* Float <=> Bignum (either side): compared by value, exactly
@@ -419,11 +572,13 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        every Float within half an ulp of it. A NaN answers nil. */
     if ((lrt == TY_FLOAT && latr.big) || (lrt == TY_BIGINT && lat == TY_FLOAT)) {
       int tc = ++g_tmp;
+      oint_open(c, id, TY_INT, b);
       buf_printf(b, "({ int _t%d = sp_bigint_cmp_f(", tc);
       emit_expr(c, lrt == TY_BIGINT ? recv : argv[0], b);
       buf_puts(b, ", ");
       emit_expr(c, lrt == TY_BIGINT ? argv[0] : recv, b);
-      buf_printf(b, "); _t%d == 2 ? SP_INT_NIL : (sp_int)(%s_t%d); })", tc, lrt == TY_BIGINT ? "" : "-", tc);
+      buf_printf(b, "); _t%d == 2 ? sp_oint_nil() : sp_oint_of((sp_int)(%s_t%d)); })", tc, lrt == TY_BIGINT ? "" : "-", tc);
+      oint_close(c, id, b);
       return 1;
     }
     /* Bignum <=> (either side): compare by value, not the pointer identity a
@@ -431,6 +586,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if ((lrt == TY_BIGINT || latr.big) &&
         (lrt == TY_INT || lrt == TY_BIGINT) && (lat == TY_INT || latr.big)) {
       int tc = ++g_tmp;
+      oint_lift_open(c, id, TY_INT, b);
       buf_printf(b, "({ int _t%d = sp_bigint_cmp(", tc);
       if (lrt == TY_BIGINT) emit_expr(c, recv, b);
       else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, recv, b); buf_puts(b, ")"); }
@@ -438,30 +594,42 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       if (latr.big) emit_expr(c, argv[0], b);
       else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       buf_printf(b, "); (sp_int)((_t%d > 0) - (_t%d < 0)); })", tc, tc);
+      oint_lift_close(c, id, b);
       return 1;
     }
     if (ty_is_numeric(lrt) && ty_is_numeric(lat)) {
       int ta = ++g_tmp, tb = ++g_tmp;
-      buf_puts(b, "({ "); emit_ctype(c, lrt, b); buf_printf(b, " _t%d = ", ta); emit_expr(c, recv, b);
-      buf_puts(b, "; "); emit_ctype(c, lat, b); buf_printf(b, " _t%d = ", tb); emit_expr(c, argv[0], b);
+      /* a nullable side: nil <=> n and n <=> nil are nil, nil <=> nil is 0
+         (#4567). Both sides are read as their oint, each a number only
+         where its flag is clear. */
+      int nl = cmp_operand_may_be_nil(c, recv), nr = cmp_operand_may_be_nil(c, argv[0]);
+      oint_open(c, id, TY_INT, b);
+      buf_puts(b, "({ ");
+      if (nl) { buf_printf(b, "%s _o%d = ", oint_ctype(lrt), ta); emit_oint_expr(c, recv, lrt, b); buf_puts(b, "; "); }
+      if (nr) { buf_printf(b, "%s _o%d = ", oint_ctype(lat), tb); emit_oint_expr(c, argv[0], lat, b); buf_puts(b, "; "); }
+      emit_ctype(c, lrt, b); buf_printf(b, " _t%d = ", ta);
+      if (nl) buf_printf(b, "_o%d.v", ta); else emit_expr(c, recv, b);
+      buf_puts(b, "; "); emit_ctype(c, lat, b); buf_printf(b, " _t%d = ", tb);
+      if (nr) buf_printf(b, "_o%d.v", tb); else emit_expr(c, argv[0], b);
+      buf_puts(b, "; ");
+      if (nl || nr) {
+        char lnil[24], rnil[24];
+        if (nl) snprintf(lnil, sizeof lnil, "_o%d.nil", ta); else snprintf(lnil, sizeof lnil, "0");
+        if (nr) snprintf(rnil, sizeof rnil, "_o%d.nil", tb); else snprintf(rnil, sizeof rnil, "0");
+        buf_printf(b, "(%s || %s) ? ((%s && %s) ? sp_oint_of(0) : sp_oint_nil()) : ", lnil, rnil, lnil, rnil);
+      }
       /* an Integer against a Float compares exactly (#7505); a NaN answers 2 */
       if ((lrt == TY_INT && lat == TY_FLOAT) || (lrt == TY_FLOAT && lat == TY_INT)) {
-        int tc = ++g_tmp;
-        buf_printf(b, "; int _t%d = sp_int_flt_cmp(_t%d, _t%d); _t%d == 2 ? SP_INT_NIL : (sp_int)%s_t%d; })",
-                   tc, lrt == TY_INT ? ta : tb, lrt == TY_INT ? tb : ta, tc, lrt == TY_INT ? "" : "-", tc);
+        buf_printf(b, "({ int _c = sp_int_flt_cmp(_t%d, _t%d); _c == 2 ? sp_oint_nil() : sp_oint_of((sp_int)%s_c); }); })",
+                   lrt == TY_INT ? ta : tb, lrt == TY_INT ? tb : ta, lrt == TY_INT ? "" : "-");
       }
       /* a NaN operand makes <=> nil, not 0 (#2315); only floats can be NaN */
       else if (lrt == TY_FLOAT || lat == TY_FLOAT)
-        buf_printf(b, "; (isnan((double)_t%d) || isnan((double)_t%d)) ? SP_INT_NIL"
-                      " : (sp_int)((_t%d > _t%d) - (_t%d < _t%d)); })", ta, tb, ta, tb, ta, tb);
-      /* an Integer slot's nil sentinel on either side: nil <=> n and n <=> nil
-         are nil, as the NaN test above answers for a Float (#4567) */
-      else if (lrt == TY_INT && lat == TY_INT &&
-               (cmp_operand_may_be_nil(c, recv) || cmp_operand_may_be_nil(c, argv[0])))
-        buf_printf(b, "; (_t%d == SP_INT_NIL || _t%d == SP_INT_NIL) ? SP_INT_NIL"
-                      " : (_t%d > _t%d) - (_t%d < _t%d); })", ta, tb, ta, tb, ta, tb);
+        buf_printf(b, "(isnan((double)_t%d) || isnan((double)_t%d)) ? sp_oint_nil()"
+                      " : sp_oint_of((sp_int)((_t%d > _t%d) - (_t%d < _t%d))); })", ta, tb, ta, tb, ta, tb);
       else
-        buf_printf(b, "; (_t%d > _t%d) - (_t%d < _t%d); })", ta, tb, ta, tb);
+        buf_printf(b, "sp_oint_of((_t%d > _t%d) - (_t%d < _t%d)); })", ta, tb, ta, tb);
+      oint_close(c, id, b);
       return 1;
     }
     /* Symbol#<=> is defined only between Symbols; a String (or any other
@@ -470,9 +638,11 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        ask the receiver's own type rather than trusting lrt alone. */
     if ((lrt == TY_SYMBOL || comp_ntype(c, recv) == TY_SYMBOL) &&
         lat != TY_SYMBOL && lat != TY_POLY && !latr.untyped) {
+      oint_open(c, id, TY_INT, b);
       buf_puts(b, "((void)("); emit_expr(c, recv, b);
       buf_puts(b, "), (void)("); emit_expr(c, argv[0], b);
-      buf_puts(b, "), SP_INT_NIL)");
+      buf_puts(b, "), sp_oint_nil())");
+      oint_close(c, id, b);
       return 1;
     }
     /* CRuby's String#<=> asks a non-String operand for #to_str
@@ -495,12 +665,12 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int tr, to, ts, tc = ++g_tmp;
       int boxed_out = repr_of(c, id).kind == RK_BOXED;
       Buf rb = expr_buf(c, recv);
-      if (boxed_out) buf_puts(b, "sp_box_int_or_nil(");
+      if (boxed_out) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
       emit_str_cmp_prologue(c, rb.p ? rb.p : "", argv[0], &tr, &to, &ts, b);
       buf_printf(b, "({ int _t%d = sp_str_cmp_bytes(_t%d, _t%d);"
-                    " (sp_int)((_t%d > 0) - (_t%d < 0)); }) : SP_INT_NIL; })",
+                    " sp_oint_of((sp_int)((_t%d > 0) - (_t%d < 0))); }) : sp_oint_nil(); })",
                  tc, tr, ts, tc, tc);
-      if (boxed_out) buf_puts(b, ")");
+      if (boxed_out) buf_puts(b, ")"); else oint_close(c, id, b);
       free(rb.p);
       return 1;
     }
@@ -538,16 +708,18 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         !str_cmp_conv_shape(c, argv[0]) &&
         (ty_is_object(lat) || lat == TY_POLY || lat == TY_UNKNOWN)) {
       int boxed_out = repr_of(c, id).kind == RK_BOXED;
-      if (boxed_out) buf_puts(b, "sp_box_int_or_nil(");
+      if (boxed_out) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
       buf_puts(b, "sp_str_cmp_obj("); emit_expr(c, recv, b);
       buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
-      if (boxed_out) buf_puts(b, ")");
+      if (boxed_out) buf_puts(b, ")"); else oint_close(c, id, b);
       return 1;
     } }
     if (lrt == TY_STRING && lat == TY_STRING) {
       int tc = ++g_tmp;
+      oint_lift_open(c, id, TY_INT, b);
       buf_printf(b, "({ int _t%d = sp_str_cmp_bytes(", tc); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
-      buf_printf(b, "); (_t%d > 0) - (_t%d < 0); })", tc, tc);
+      buf_printf(b, "); (sp_int)((_t%d > 0) - (_t%d < 0)); })", tc, tc);
+      oint_lift_close(c, id, b);
       return 1;
     }
     if (lrt == TY_SYMBOL && lat == TY_SYMBOL) {
@@ -590,73 +762,45 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if ((ty_is_array(lrt) || (rlit0 && lrt == TY_UNKNOWN)) &&
         (ty_is_array(lat) || (alit0 && latr.untyped))) {
       int ta = ++g_tmp, tb = ++g_tmp, tk = ++g_tmp, tr = ++g_tmp;
+      oint_open(c, id, TY_INT, b);
       buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
       buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b);
       buf_printf(b, "; sp_bool _t%d; sp_int _t%d = sp_poly_arr_cmp(_t%d, _t%d, &_t%d);"
-                    " _t%d ? _t%d : SP_INT_NIL; })", tk, tr, ta, tb, tk, tk, tr);
+                    " _t%d ? sp_oint_of(_t%d) : sp_oint_nil(); })", tk, tr, ta, tb, tk, tk, tr);
+      oint_close(c, id, b);
       return 1;
     }
-    /* Poly operands (e.g. `@n <=> other.n` with int ivars widened to poly in
-       promote mode): tag-dispatch via sp_poly_cmp rather than falling through
-       to the object-receiver path, which would misread a boxed int's payload
-       as a user-class pointer and recurse into this same `<=>`. */
-    /* a boxed receiver of a class whose <=> the program defines takes the
-       program's method (poly_cmp_reopen_test); the call is emitted again
-       for that arm with this one skipped (g_cmp_reopen_id), which reaches
-       the boxed method dispatch */
-    char rtest[640], rv[32];
-    int rt0 = ++g_tmp;
-    snprintf(rv, sizeof rv, "_t%d", rt0);
-    if (lrt == TY_POLY && g_cmp_reopen_id != id && g_n_argov < MAX_ARG_OVERRIDE &&
-        poly_cmp_reopen_test(c, rv, rtest, sizeof rtest)) {
-      /* the dispatch first, with the receiver bound to the held box: where
-         it declines (no program method takes this argument), the runtime's
-         compare below stands, as before */
-      int mk = view_bind(recv, "%s", rv);
-      int sv = g_cmp_reopen_id; g_cmp_reopen_id = id;
-      Buf db; memset(&db, 0, sizeof db);
-      Buf *svp = g_pre; Buf dpre; memset(&dpre, 0, sizeof dpre); g_pre = &dpre;
-      int ok = emit_poly_method_dispatch(c, id, &db);
-      g_pre = svp;
-      g_cmp_reopen_id = sv;
-      view_unbind(mk);
-      if (ok && !(dpre.p && dpre.p[0])) {
-        int cmp_poly = repr_of(c, id).kind == RK_BOXED;
-        buf_printf(b, "({ sp_RbVal %s = ", rv); emit_boxed(c, recv, b);
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(%s); (%s) ? (%s) : ", rv, rtest, db.p ? db.p : "0");
-        if (cmp_poly) buf_puts(b, "sp_box_int_or_nil(");
-        buf_printf(b, "sp_poly_spaceship(%s, ", rv); emit_boxed(c, argv[0], b); buf_puts(b, ")");
-        if (cmp_poly) buf_puts(b, ")");
-        buf_puts(b, "; })");
-        free(db.p); free(dpre.p);
-        return 1;
-      }
-      free(db.p); free(dpre.p);
-    }
+    /* Poly operands (`@n <=> other.n` with int ivars widened to poly in promote
+       mode): tag-dispatch via sp_poly_cmp, not the object-receiver path, which
+       would misread a boxed int as a user-class pointer and recurse here. */
+    if (lrt == TY_POLY && emit_cmp_reopen_arm(c, id, recv, argv, b)) return 1;
     if (lrt == TY_POLY || lat == TY_POLY) {
-      /* sp_poly_spaceship answers nil for incomparable runtime operands (the
-         int-nil sentinel) but 0 for identical singletons -- `nil <=> nil` is 0
-         even though the two are not "comparable" in the Comparable sense. */
-      /* The helper answers an sp_int (the sentinel for nil). Where the
-         expression's own type is poly -- a `<=>` whose method has a `return
-         nil` guard, so the slot is sp_RbVal -- box it, or the raw compare goes
-         out through an sp_RbVal signature and the build fails (#3498). */
+      /* sp_poly_spaceship answers nil for incomparable runtime operands (an
+         oint with its nil flag set) but 0 for identical singletons --
+         `nil <=> nil` is 0 even though the two are not "comparable" in the
+         Comparable sense. */
+      /* The helper answers an sp_oint. Where the expression's own type is
+         poly -- a `<=>` whose method has a `return nil` guard, so the slot is
+         sp_RbVal -- box it, or the raw compare goes out through an sp_RbVal
+         signature and the build fails (#3498). */
       int cmp_poly = repr_of(c, id).kind == RK_BOXED;
-      if (cmp_poly) buf_puts(b, "sp_box_int_or_nil(");
+      if (cmp_poly) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
       emit_poly_cmp_ordered(c, "sp_poly_spaceship", recv, argv[0], b);
-      if (cmp_poly) buf_puts(b, ")");
+      if (cmp_poly) buf_puts(b, ")"); else oint_close(c, id, b);
       return 1;
     }
     /* Statically incomparable concrete operands (1 <=> "a"): Ruby answers
        nil. User objects fall through to their own #<=> dispatch. A nullable
-       Integer or Float receiver against nil is the exception: holding its
-       sentinel it is nil, and nil <=> nil is 0. */
+       Integer or Float receiver against nil is the exception: with its nil
+       flag set it is nil, and nil <=> nil is 0. */
     if ((lrt == TY_INT || lrt == TY_FLOAT) && lat == TY_NIL && call_returns_nullable_int(c, recv)) {
       char ref[24];
+      oint_open(c, id, TY_INT, b);
       buf_puts(b, "({ "); emit_sentinel_bind(c, lrt, recv, ref, sizeof ref, b);
       buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
       emit_slot_truthy(lrt, ref, b);
-      buf_puts(b, " ? SP_INT_NIL : (sp_int)0; })");
+      buf_puts(b, " ? sp_oint_nil() : sp_oint_of(0); })");
+      oint_close(c, id, b);
       return 1;
     }
     /* A Hash has no <=> of its own: Object#<=> answers 0 for the same object or
@@ -667,7 +811,9 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       nt_node_set_str((NodeTable *)nt, id, "name", "==");
       emit_expr(c, id, &eqb);
       nt_node_set_str((NodeTable *)nt, id, "name", "<=>");
-      buf_printf(b, "((%s) ? (sp_int)0 : SP_INT_NIL)", eqb.p ? eqb.p : "0");
+      oint_open(c, id, TY_INT, b);
+      buf_printf(b, "((%s) ? sp_oint_of(0) : sp_oint_nil())", eqb.p ? eqb.p : "0");
+      oint_close(c, id, b);
       free(eqb.p);
       return 1;
     }
@@ -682,29 +828,35 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         !(lrt == TY_EXCEPTION && exc_subclass_defines_cmp(c))) {
       int exc_inst = lrt == TY_EXCEPTION && ty_is_object(lat) && class_is_exc_subclass(c, ty_object_class(lat));
       if (lat != lrt && !exc_inst) {
+        oint_open(c, id, TY_INT, b);
         buf_puts(b, "((void)("); emit_expr(c, recv, b);
         buf_puts(b, "), (void)("); emit_expr(c, argv[0], b);
-        buf_puts(b, "), SP_INT_NIL)");
+        buf_puts(b, "), sp_oint_nil())");
+        oint_close(c, id, b);
         return 1;
       }
       int ta = ++g_tmp, tb = ++g_tmp;
       const char *ct = c_type_name(lrt);
+      oint_open(c, id, TY_INT, b);
       buf_printf(b, "({ %s_t%d = ", ct, ta); emit_expr(c, recv, b);
       buf_printf(b, "; SP_GC_ROOT(_t%d); ", ta);
       buf_printf(b, "%s_t%d = ", exc_inst ? "void *" : ct, tb);
       if (exc_inst) buf_puts(b, "(void *)(");
       emit_expr(c, argv[0], b);
       if (exc_inst) buf_puts(b, ")");
-      buf_printf(b, "; (void *)_t%d == (void *)_t%d ? (sp_int)0 : SP_INT_NIL; })", ta, tb);
+      buf_printf(b, "; (void *)_t%d == (void *)_t%d ? sp_oint_of(0) : sp_oint_nil(); })", ta, tb);
+      oint_close(c, id, b);
       return 1;
     }
     if (lrt != TY_UNKNOWN && !latr.untyped &&
         !ty_is_object(lrt) && !ty_is_object(lat)) {
+      oint_open(c, id, TY_INT, b);
       buf_puts(b, "((void)(");
       emit_expr(c, recv, b);
       buf_puts(b, "), (void)(");
       emit_expr(c, argv[0], b);
-      buf_puts(b, "), SP_INT_NIL)");
+      buf_puts(b, "), sp_oint_nil())");
+      oint_close(c, id, b);
       return 1;
     }
   }
@@ -737,11 +889,11 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         return 1;
       }
       TyKind rht9 = (rt == TY_FLOAT || rt == TY_RATIONAL) ? TY_FLOAT : TY_INT;
-      /* An Integer or Float slot can hold its nil sentinel (an ivar written
-         nil, a `--rbs` `Integer?`, a hash read). Every arithmetic helper
-         tests for it, but the comparison compared it as a number: `nil > 0`
-         answered false where CRuby raises. The test is emitted only when an
-         operand can carry the sentinel: a literal, an arithmetic result (its
+      /* An Integer or Float slot can hold nil (an ivar written nil, a
+         `--rbs` `Integer?`, a hash read). Every arithmetic helper tests for
+         it, but the comparison compared it as a number: `nil > 0` answered
+         false where CRuby raises. The test is emitted only when an operand
+         can carry nil: a literal, an arithmetic result (its
          helper raised already) and a length never do, which keeps a loop's
          `i < n` as it was when `i` counts from a literal (#4567). */
       /* A read the nil narrowing proves non-nil drops only its own half of
@@ -758,27 +910,28 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                    !((narl9 || nt_kind(c->nt, recv) == NK_IntegerNode || nt_kind(c->nt, recv) == NK_FloatNode) &&
                      (narr9 || nt_kind(c->nt, argv[0]) == NK_IntegerNode || nt_kind(c->nt, argv[0]) == NK_FloatNode));
       /* An Integer against a Float compares as C does, each side its own
-         kind, so each is tested by its own sentinel: `nil > 1` on a Float
+         kind, so each is tested for its own nil: `nil > 1` on a Float
          slot, `nil < 2.0` on an Integer one, answered as numbers. */
       int mixed9 = (rt == TY_INT && cat == TY_FLOAT) || (rt == TY_FLOAT && cat == TY_INT);
       int mln = mixed9 && cmp_operand_may_be_nil(c, recv);
       int mrn = mixed9 && cmp_operand_may_be_nil(c, argv[0]);
       if (mln || mrn) {
         int tg = ++g_tmp;
-        char lv[32], rv[32], ln[64] = "0", rn[64] = "0";
+        char lv[32], rv[32];
         snprintf(lv, sizeof lv, "_t%d", tg);
         snprintf(rv, sizeof rv, "_t%d_r", tg);
-        if (mln) scalar_nil_test(rt, lv, ln, sizeof ln);
-        if (mrn) scalar_nil_test(cat, rv, rn, sizeof rn);
         Buf ap; memset(&ap, 0, sizeof ap);
         Buf av; memset(&av, 0, sizeof av);
         emit_split_pre(c, argv[0], emit_expr, &ap, &av);
+        /* a nil left side has no `<` (NoMethodError), a nil right side is
+           Comparable's ArgumentError naming the left class */
         buf_printf(b, "({ %s %s = ", rt == TY_FLOAT ? "sp_float" : "sp_int", lv);
-        emit_expr(c, recv, b);
-        buf_printf(b, "; %s%s %s = %s", ap.p ? ap.p : "", cat == TY_FLOAT ? "sp_float" : "sp_int", rv, av.p ? av.p : "0");
+        if (mln) emit_scalar_operand_op(c, recv, name, b); else emit_expr(c, recv, b);
+        buf_printf(b, "; %s%s %s = ", ap.p ? ap.p : "", cat == TY_FLOAT ? "sp_float" : "sp_int", rv);
+        if (mrn) { buf_printf(b, "%s(", cat == TY_FLOAT ? "sp_ofloat_cmp_opnd" : "sp_oint_cmp_opnd"); emit_oint_expr(c, argv[0], cat, b); buf_printf(b, ", \"%s\", \"%s\")", name, rt == TY_FLOAT ? "Float" : "Integer"); }
+        else buf_puts(b, av.p ? av.p : "0");
         free(ap.p); free(av.p);
-        buf_printf(b, "; if (SP_UNLIKELY(%s || %s)) sp_raise_nil_cmp(%s, \"%s\", \"%s\"); ",
-                   ln, rn, ln, name, rt == TY_FLOAT ? "Float" : "Integer");
+        buf_puts(b, "; ");
         emit_int_flt_rel(b, rt == TY_INT ? lv : rv, rt == TY_INT ? rv : lv, rt == TY_INT, name);
         buf_puts(b, "; })");
         return 1;
@@ -954,49 +1107,25 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         return 1;
       }
     }
-    /* Queue and SizedQueue are one runtime object told apart by its bound, so
-       these two cannot be answered statically from TY_QUEUE alone -- a
-       SizedQueue reported false for its own class (#3466). */
-    { const char *qcn = nt_str(nt, argv[0], "name");
-      if (eff_rt == TY_QUEUE && qcn &&
-          (is_queue_class_name(qcn))) {
-        int tq3 = ++g_tmp;
-        int want_sized = sp_streq(qcn, "SizedQueue");
-        buf_printf(b, "({ sp_queue *_t%d = ", tq3); emit_expr(c, recv, b);
-        /* is_a?(Queue) is true for both (SizedQueue < Queue); instance_of? and
-           is_a?(SizedQueue) read the bound. */
-        if (!want_sized && !sp_streq(name, "instance_of?"))
-          buf_printf(b, "; (void)_t%d; (sp_bool)1; })", tq3);
-        else
-          buf_printf(b, "; (sp_bool)((sp_Queue_max(_t%d) > 0) == %d); })", tq3, want_sized ? 1 : 0);
-        return 1;
-      } }
-    /* A chain and a product are one Enumerator object told apart by a flag
-       (is_chain / is_product), as #class reads it, so is_a?(Enumerator::Chain)
-       and is_a?(Enumerator::Product) are asked at run time; from TY_ENUMERATOR
-       alone they folded to false. Both classes are leaves under Enumerator,
-       so instance_of? asks the same. */
-    if (eff_rt == TY_ENUMERATOR && nt_kind(nt, argv[0]) == NK_ConstantPathNode) {
-      int epar = nt_ref(nt, argv[0], "parent");
-      const char *ecn = nt_str(nt, argv[0], "name");
-      if (epar >= 0 && nt_kind(nt, epar) == NK_ConstantReadNode && ecn &&
-          nt_str(nt, epar, "name") && sp_streq(nt_str(nt, epar, "name"), "Enumerator") &&
-          (sp_streq(ecn, "Chain") || sp_streq(ecn, "Product"))) {
-        int te = ++g_tmp;
-        buf_printf(b, "({ sp_Enumerator *_t%d = ", te); emit_expr(c, recv, b);
-        buf_printf(b, "; (sp_bool)(_t%d && _t%d->%s); })", te, te,
-                   sp_streq(ecn, "Chain") ? "is_chain" : "is_product");
-        return 1;
-      }
-    }
+    if (emit_isa_runtime_flag_class(c, nt, name, eff_rt, recv, argv, b)) return 1;
     int yes = ty_matches_class(eff_rt, nt_str(nt, argv[0], "name"), sp_streq(name, "instance_of?"));
-    /* an Integer or a Float reads its nil sentinel at run time, as nil?
+    /* an Integer or a Float reads its nil flag at run time, as nil?
        does: the nullable-value analysis does not see every way nil reaches
        one (a method's parameter only nil is passed to, a splat of a boxed
        Array), and folded, a nil answered true to is_a?(Integer). A nullable
        String slot holds nil as NULL and answers the same way. */
     if (emit_scalar_class_test(c, recv, eff_rt, nt_str(nt, argv[0], "name"),
                                sp_streq(name, "instance_of?"), b)) return 1;
+    if (yes >= 0 && oint_kind(eff_rt) && node_has_oint_form(c, recv)) {
+      /* a number that can be nil: nil's own answer where it is one
+         (`Integer === nil` false, `nil.is_a?(Object)` true) */
+      int nilyes = ty_matches_class(TY_NIL, nt_str(nt, argv[0], "name"), sp_streq(name, "instance_of?"));
+      if (nilyes < 0) nilyes = 0;
+      int tq = ++g_tmp;
+      buf_printf(b, "({ %s _t%d = ", oint_ctype(eff_rt), tq); emit_oint_expr(c, recv, eff_rt, b);
+      buf_printf(b, "; _t%d.nil ? %d : %d; })", tq, nilyes, yes);
+      return 1;
+    }
     if (yes >= 0) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes); return 1; }
   }
 
@@ -1169,6 +1298,62 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   return 0;
 }
 
+/* `x + y` on a boxed x where the program reopens Integer or Float with
+   that operator (`class Integer; alias_method :+, :plus_tenfold; end`): a
+   value of the reopened class calls the program's method, any other the
+   runtime helper, which knows only the builtin operator. Answers 0 when no
+   Integer / Float reopening defines the name. */
+static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int recv, int arg, Buf *b) {
+  const char *pfn = sp_streq(name, "+") ? "sp_poly_add" : sp_streq(name, "-") ? "sp_poly_sub" :
+                    sp_streq(name, "*") ? "sp_poly_mul" : sp_streq(name, "/") ? "sp_poly_div" :
+                    sp_streq(name, "%") ? "sp_poly_mod" : NULL;
+  if (!pfn) return 0;
+  int mis[2] = { -1, -1 };
+  const char *cn[2] = { "Integer", "Float" };
+  for (int i = 0; i < 2; i++) {
+    int k = comp_class_index(c, cn[i]);
+    if (k < 0 || !class_is_prim_reopen(c, k)) continue;
+    int def = -1, mi = comp_method_in_chain(c, k, name, &def);
+    if (mi < 0 || def != k || c->scopes[mi].nparams != 1 || c->scopes[mi].rest_idx >= 0) continue;
+    mis[i] = mi;
+  }
+  if (mis[0] < 0 && mis[1] < 0) return 0;
+  int ta = ++g_tmp, tb = ++g_tmp, tr = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, arg, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d; ", tb, tr);
+  for (int i = 0; i < 2; i++) {
+    if (mis[i] < 0) continue;
+    Scope *ks = &c->scopes[mis[i]];
+    buf_printf(b, "if (_t%d.tag == %s) { ", ta, i == 0 ? "SP_TAG_INT" : "SP_TAG_FLT");
+    Buf cb; memset(&cb, 0, sizeof cb);
+    emit_method_cname(c, ks, &cb);
+    buf_printf(&cb, "(_t%d.v.%s, ", ta, i == 0 ? "i" : "f");
+    LocalVar *pv = ks->pnames && ks->pnames[0] ? scope_local(ks, ks->pnames[0]) : NULL;
+    TyKind pt = pv ? pv->type : TY_POLY;
+    char tbn[24]; snprintf(tbn, sizeof tbn, "_t%d", tb);
+    if (pt == TY_POLY || pt == TY_UNKNOWN) buf_puts(&cb, tbn);
+    else if (oint_kind(pt) && slot_is_oint(pv)) buf_printf(&cb, "%s(%s)", oint_unbox(pt), tbn);
+    else emit_unbox_text(c, pt, tbn, &cb);
+    buf_puts(&cb, ")");
+    buf_printf(b, "_t%d = ", tr);
+    if (method_is_void(ks)) buf_printf(b, "(%s, sp_box_nil())", cb.p ? cb.p : "");
+    else if ((TyKind)ks->ret == TY_POLY) buf_puts(b, cb.p ? cb.p : "");
+    else emit_boxed_ret_call(c, ks, cb.p ? cb.p : "", b);
+    free(cb.p);
+    buf_puts(b, "; } else ");
+  }
+  buf_printf(b, "_t%d = %s(_t%d, _t%d); ", tr, pfn, ta, tb);
+  /* the consumer's form: the boxed value, or unboxed into its slot */
+  TyKind want = repr_of(c, id).as_ty;
+  char trn[24]; snprintf(trn, sizeof trn, "_t%d", tr);
+  if (want == TY_POLY || want == TY_UNKNOWN) buf_puts(b, trn);
+  else if (oint_kind(want) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_unbox(want), trn);
+  else emit_unbox_text(c, want, trn, b);
+  buf_puts(b, "; })");
+  return 1;
+}
+
 /* String concatenation, unary -@ +@ ~ !, element stores and the arithmetic on a poly operand */
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* String#concat with no arguments returns the receiver unchanged (#2309):
@@ -1271,15 +1456,22 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          the common `-x` keeps its tight spelling (#4008). */
       Buf ub; memset(&ub, 0, sizeof ub); emit_expr(c, recv, &ub);
       const char *ut = ub.p ? ub.p : "";
-      /* a nullable Integer or Float slot's nil has no -@: negating the Float
-         sentinel flipped its sign bit into a NaN that was no longer nil, and
-         the int sentinel is INTPTR_MIN, whose negation overflows */
-      if (name[0] == '-' && (rt == TY_FLOAT || rt == TY_INT) && cmp_operand_may_be_nil(c, recv)) {
-        int tn = ++g_tmp;
-        buf_printf(b, "({ %s _t%d = %s; if (SP_UNLIKELY(%s(_t%d))) sp_nil_recv(\"%s\"); %c_t%d; })",
-                   rt == TY_FLOAT ? "sp_float" : "sp_int", tn, ut,
-                   rt == TY_FLOAT ? "sp_float_is_nil" : "SP_INT_NIL ==", tn, name, name[0], tn);
+      /* +@ is the receiver itself: a value that can be nil passes through
+         as its oint where the call's consumer takes one (unwrapped, nil's
+         TypeError, otherwise) */
+      if (name[0] == '+' && (rt == TY_FLOAT || rt == TY_INT) && node_has_oint_form(c, recv)) {
+        oint_open(c, id, rt, b); emit_oint_expr(c, recv, rt, b); oint_close(c, id, b);
       }
+      /* a nullable Integer or Float slot's nil has no -@ */
+      /* an Integer's -@ is the mode's checked negation: -(-2**63) leaves
+         the word (RangeError in raise mode) */
+      else if (name[0] == '-' && rt == TY_INT && cmp_operand_may_be_nil(c, recv)) {
+        buf_puts(b, "sp_int_neg("); emit_scalar_operand_op(c, recv, name, b); buf_puts(b, ")");
+      }
+      else if (name[0] == '-' && rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv)) {
+        buf_printf(b, "(%c", name[0]); emit_scalar_operand_op(c, recv, name, b); buf_puts(b, ")");
+      }
+      else if (name[0] == '-' && rt == TY_INT) buf_printf(b, "sp_int_neg(%s)", ut);
       else buf_printf(b, "(%c%s%s)", name[0], ut[0] == name[0] ? " " : "", ut);
       free(ub.p); }
     return 1;
@@ -1445,8 +1637,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     if (rt == TY_BOOL) { buf_puts(b, "(!"); emit_expr(c, recv, b); buf_puts(b, ")"); }
     else if (rt == TY_NIL) { buf_puts(b, "1"); }
     else if (rt == TY_POLY) { buf_puts(b, "(!sp_poly_truthy("); emit_expr(c, recv, b); buf_puts(b, "))"); }
-    else if (rt == TY_INT) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == SP_INT_NIL)"); }
-    else if (rt == TY_FLOAT) { buf_puts(b, "sp_float_is_nil("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+    else if (oint_kind(rt)) { buf_puts(b, "(!"); emit_oint_truthy(c, recv, rt, b); buf_puts(b, ")"); }
     else if (rt == TY_CLASS) { buf_puts(b, "sp_class_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); }
     /* a by-value object has no pointer to null-check and is never falsy (#2633) */
     else if (ty_is_object(rt) && comp_ty_value_obj(c, rt)) {
@@ -1502,6 +1693,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          has no array case and answered "no implicit conversion of Array into
          Array" on two real Arrays (#3475) */
       !((ty_is_array(rt) || rt == TY_POLY_ARRAY) && sp_streq(name, "-"))) {
+    if (rt == TY_POLY && emit_poly_reopened_binop(c, id, name, recv, argv[0], b)) return 1;
     const char *pfn = NULL;
     if (sp_streq(name, "+")) pfn = "sp_poly_add";
     else if (sp_streq(name, "-")) pfn = "sp_poly_sub";

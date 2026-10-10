@@ -487,7 +487,10 @@ still works.
   tree. A literal `nil` inside an array or hash literal keeps the
   container boxed, as before. `nil` meeting an Integer, Float or bool
   still widens to untyped: the nullable Integer and Float slots that exist
-  (an ivar written nil, an `Integer?` seed) carry a sentinel, and a
+  (an ivar written nil, an `Integer?` seed, a container read that can
+  miss) carry their nil beside the value -- `sp_oint` / `sp_ofloat`, the
+  machine word and a flag -- so every bit pattern of the word is a number,
+  -2**63 and a NaN of any payload included, and a
   comparison on one raises as CRuby does (`nil > 0` is NoMethodError,
   `1 > nil` the Comparable ArgumentError, `nil <=> 1` nil), as does one
   reaching a strict Integer argument -- an index, a count, a width --
@@ -579,48 +582,29 @@ agree, if a chain that deep needs both.
 #### A `nil` read out of an Integer container
 
 A missing key on an Integer-valued Hash, or an out-of-range index on an
-Integer array, answers `nil`. Spinel represents that `nil` as a sentinel
-value inside the int slot, so the value is `nil` for `nil?`, `inspect`,
-`class` and `||`, and every consumer that can see it raises the way CRuby's
-`nil` does: arithmetic (`+`, `-`, `*`, `/`, `%`, `abs`) is `NoMethodError`
-or the coercion `TypeError`, comparisons and the numeric predicates
-(`<`, `>`, `<=>`, `zero?`, `positive?`, ...) are `NoMethodError` or the
-Comparable `ArgumentError` (#4567), and a strict Integer argument -- an
-index, a count, a width -- is `no implicit conversion from nil to integer`
-(#4896). The test is emitted only where the analysis says the value can
-carry the sentinel, so a loop counting from a literal keeps its bare
-compare and its bare index.
+Integer array, answers `nil`. Spinel carries that `nil` out of band: the
+read answers the machine word plus a nil flag (`sp_oint`; a Float read,
+`sp_ofloat`), and an Integer or Float array that holds nils keeps a bitmap
+beside its words. The value is `nil` for `nil?`, `inspect`, `class` and
+`||`, and every consumer that can see it raises the way CRuby's `nil` does:
+arithmetic (`+`, `-`, `*`, `/`, `%`, `abs`) is `NoMethodError` or the
+coercion `TypeError`, comparisons and the numeric predicates (`<`, `>`,
+`<=>`, `zero?`, `positive?`, ...) are `NoMethodError` or the Comparable
+`ArgumentError` (#4567), and a strict Integer argument -- an index, a count,
+a width -- is `no implicit conversion from nil to integer` (#4896). The flag
+is carried only where the analysis says the value can be nil, so a loop
+counting from a literal keeps its bare compare and its bare index, and a
+plain Integer slot is a bare word with no test at all.
 
-What is left is the sentinel reaching a slot through a shape the analysis
-does not mark: a `Range` VALUE built from one (`r = (h[k]..); s[r]`) still
-slices from the raw sentinel rather than reading as the beginless Range a
-literal `s[h[k]..]` does. A genuine `-9223372036854775808` stored in such a
-slot is indistinguishable from nil, which is the price of the
-representation.
-
-That holds in every `--int-overflow` mode (#7612): an Integer that is exactly
--2**63 -- `-9223372036854775807 - 1` computed without overflowing, a wrapping
-`+ - *`, `~0x7fffffffffffffff`, a bitboard's `1 << 63` in wrap mode -- is the
-sentinel's word, so where it is printed, tested for nil or truthiness, or
-computed on it can read as `nil`, and no mode raises for it. **Not where the
-compiler can see that no nil reaches the value:** a literal, the result of an
-arithmetic or bitwise operator, `||` / `&&` / `?:` of such values, and a local
-whose every write is one of those are plain Integers, and printing,
-interpolating, `to_s` / `inspect` / `to_i` / `to_f`, `nil?`, `zero?` /
-`even?` / `positive?` and the like, and a condition test them for nothing
-(test/int_min_plain_locals.rb, in raise and wrap). An `+ - * / %` whose two
-operands are plain uses the helper without the nil test of its operands
-(`sp_int_add_nn` ...), so -2**63 is a number there in raise mode too, and the
-test is not paid. Parameters, return values,
-instance variables and elements of Arrays and Hashes are not seen that way
-yet: a bitboard that travels through them still reads as `nil` at the
-sentinel's word. This is deliberate: checking the result of every `+ - *` costs
-10 to 37% of the run time on integer-heavy programs (measured on `bm_tarai`,
-`bm_tak`, `bm_sudoku`, `bm_structaref` and `bm_throw`), and an error where the
-word was a real nil (a nil the analysis did not mark) would be wrong the other
-way. The literal `-9223372036854775808` is not affected, and neither is a
-value that travels as a Bignum (promote mode). A program that really uses
--2**63 as a number (a sentinel of its own, a hash seed) differs from CRuby.
+No bit pattern of the word means nil. An Integer that is exactly -2**63 --
+`-9223372036854775807 - 1` computed without overflowing, `~0x7fffffffffffffff`,
+a wrapping `+ - *` or `1 << 63` under `--int-overflow=wrap`, a `q` unpack,
+an `IO::Buffer` `:s64` read -- is that Integer in every slot (a local, a
+parameter, a return, an ivar, an array element, a Hash value or key) and in
+every `--int-overflow` mode, printed, tested for nil or truthiness and
+computed on as CRuby does; so is a `Float` NaN of any payload. The price is
+the flag beside the word: two registers for a nullable parameter or return,
+one bit per nullable scalar ivar, the bitmap on an array that holds nils.
 
 #### `Integer#**` with a negative exponent
 

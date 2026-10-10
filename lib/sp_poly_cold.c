@@ -147,8 +147,7 @@ void sp_poly_puts(sp_RbVal v)
 const char *sp_poly_to_s(sp_RbVal v)
 {
   switch (v.tag) {
-    /* int-typed nil (SP_INT_NIL) is Ruby nil; nil.to_s is "" -- match it. */
-    case SP_TAG_INT: return v.v.i == SP_INT_NIL ? sp_str_frozen_empty : sp_int_to_s(v.v.i);
+    case SP_TAG_INT: return sp_int_to_s(v.v.i);
     case SP_TAG_STR: return v.v.s ? v.v.s : sp_str_frozen_empty;
     case SP_TAG_FLT: return sp_float_to_s(v.v.f);
     case SP_TAG_BOOL: return v.v.b ? sp_str_frozen_true : sp_str_frozen_false;
@@ -318,11 +317,8 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
      `start` -- the two-argument form of the bit read, which the typed arms
      have had all along. A boxed receiver fell past this to the nil default
      below, so `[255, nil][0][0, 4]` was nil where CRuby says 15, and the
-     value went on being used as a number (#4742). The int-typed nil keeps
-     the default: `nil[0, 4]` is a missing method, not a bit field. */
+     value went on being used as a number (#4742). */
   if (a.tag == SP_TAG_INT) {
-    /* the sentinel IS nil, and nil has no `[]` */
-    if (a.v.i == SP_INT_NIL) sp_raise_poly_nomethod("[]", sp_box_nil());
     return sp_box_int(sp_int_bit_range(a.v.i, start, len));
   }
   if (a.tag == SP_TAG_BIGINT) {
@@ -431,9 +427,7 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
 const char *sp_poly_inspect(sp_RbVal v)
 {
   switch (v.tag) {
-    /* An int-typed nil (unfilled int block param, nullable-int miss) carries
-       the SP_INT_NIL sentinel; render it as nil, not the raw INT64_MIN. */
-    case SP_TAG_INT:  return v.v.i == SP_INT_NIL ? SPL("nil") : sp_int_to_s(v.v.i);
+    case SP_TAG_INT:  return sp_int_to_s(v.v.i);
     case SP_TAG_STR:  return sp_str_inspect(v.v.s);
     case SP_TAG_FLT:  return sp_float_to_s(v.v.f);
     /* true.inspect is true.to_s, the frozen one; nil.inspect is a new "nil" */
@@ -699,8 +693,8 @@ sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen)
       case SP_BUILTIN_INT_ARRAY: {
         sp_IntArray *a = (sp_IntArray *)v.v.p; SP_GC_ROOT(a);
         sp_IntArray *r = sp_IntArray_new();
-        for (sp_int i = 0; i < a->len; i++) sp_IntArray_push(r, a->data[a->start + i]);
-        SP_MAY_NIL(r) = SP_MAY_NIL(a);
+        SP_GC_ROOT(r);
+        for (sp_int i = 0; i < a->len; i++) sp_IntArray_push_o(r, sp_IntArray_oget(a, i));
         if (keep_frozen && a->frozen) r->frozen = 1;
         v.v.p = r; break;
       }
@@ -714,8 +708,8 @@ sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen)
       case SP_BUILTIN_FLT_ARRAY: {
         sp_FloatArray *a = (sp_FloatArray *)v.v.p; SP_GC_ROOT(a);
         sp_FloatArray *r = sp_FloatArray_new();
-        for (sp_int i = 0; i < a->len; i++) sp_FloatArray_push(r, a->data[i]);
-        SP_MAY_NIL(r) = SP_MAY_NIL(a);
+        SP_GC_ROOT(r);
+        for (sp_int i = 0; i < a->len; i++) sp_FloatArray_push_o(r, sp_FloatArray_oget(a, i));
         if (keep_frozen && a->frozen) r->frozen = 1;
         v.v.p = r; break;
       }
@@ -809,11 +803,15 @@ void sp_poly_hash_merge_into(sp_RbVal dst, sp_RbVal src)
       case SP_BUILTIN_STR_INT_HASH:
         if (k.tag == SP_TAG_STR && v.tag == SP_TAG_INT)
           sp_StrIntHash_set((sp_StrIntHash *)dst.v.p, k.v.s, v.v.i);
+        else if (k.tag == SP_TAG_STR && v.tag == SP_TAG_NIL)   /* a nil value is kept (D3b-ii) */
+          sp_StrIntHash_set_nil((sp_StrIntHash *)dst.v.p, k.v.s);
         else sp_poly_typed_hash_store_miss(k, v, "String", "Integer");
         break;
       case SP_BUILTIN_INT_INT_HASH:
         if (k.tag == SP_TAG_INT && v.tag == SP_TAG_INT)
           sp_IntIntHash_set((sp_IntIntHash *)dst.v.p, k.v.i, v.v.i);
+        else if (k.tag == SP_TAG_INT && v.tag == SP_TAG_NIL)   /* a nil value is kept (D3b-ii) */
+          sp_IntIntHash_set_nil((sp_IntIntHash *)dst.v.p, k.v.i);
         else sp_poly_typed_hash_store_miss(k, v, "Integer", "Integer");
         break;
       case SP_BUILTIN_INT_STR_HASH:
@@ -1034,10 +1032,10 @@ sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b)
   /* merge inherits the receiver's default; cross-layout receivers arrive boxed */
   if (a.tag == SP_TAG_OBJ && a.v.p) {
     switch (a.cls_id) {
-      case SP_BUILTIN_STR_INT_HASH: r->default_v = sp_box_int_or_nil(((sp_StrIntHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h = (sp_StrIntHash *)a.v.p; r->default_v = h->default_nil ? sp_box_nil() : sp_box_int(h->default_v); break; }
       case SP_BUILTIN_STR_STR_HASH: r->default_v = sp_box_nullable_str(((sp_StrStrHash *)a.v.p)->default_v); break;
       case SP_BUILTIN_INT_STR_HASH: r->default_v = sp_box_nullable_str(((sp_IntStrHash *)a.v.p)->default_v); break;
-      case SP_BUILTIN_INT_INT_HASH: r->default_v = sp_box_int_or_nil(((sp_IntIntHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_INT_INT_HASH: { sp_IntIntHash *h = (sp_IntIntHash *)a.v.p; r->default_v = h->default_nil ? sp_box_nil() : sp_box_int(h->default_v); break; }
       case SP_BUILTIN_STR_POLY_HASH: r->default_v = ((sp_StrPolyHash *)a.v.p)->default_v; break;
       case SP_BUILTIN_SYM_POLY_HASH: r->default_v = ((sp_SymPolyHash *)a.v.p)->default_v; break;
       case SP_BUILTIN_POLY_POLY_HASH: r->default_v = ((sp_PolyPolyHash *)a.v.p)->default_v; break;
@@ -1097,7 +1095,7 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
     sp_int j = work->order[i];
     sp_RbVal k = work->keys[j], v = work->vals[j];
     switch (orig.cls_id) {
-      case SP_BUILTIN_STR_INT_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;
+      case SP_BUILTIN_STR_INT_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;   /* a nil value is kept (D3b-ii) */
       case SP_BUILTIN_STR_STR_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
       case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
       case SP_BUILTIN_INT_INT_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;
@@ -1129,10 +1127,10 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
     case SP_BUILTIN_STR_INT_HASH: {
       sp_StrIntHash *h = (sp_StrIntHash *)orig.v.p;
       sp_StrIntHash_clear(h);
-      if (with_default) h->default_v = sp_poly_to_i_or_nil(work->default_v);
+      if (with_default) { h->default_nil = work->default_v.tag == SP_TAG_NIL; h->default_v = h->default_nil ? 0 : sp_poly_to_i(work->default_v); }
       for (sp_int i = 0; i < work->len; i++) {
         sp_int j = work->order[i];
-        sp_StrIntHash_set(h, sp_poly_to_s(work->keys[j]), sp_poly_to_i_or_nil(work->vals[j]));
+        sp_StrIntHash_oset(h, sp_poly_to_s(work->keys[j]), sp_poly_hval_oi(work->vals[j]));
       }
       return;
     }
@@ -1159,10 +1157,10 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
     case SP_BUILTIN_INT_INT_HASH: {
       sp_IntIntHash *h = (sp_IntIntHash *)orig.v.p;
       sp_IntIntHash_clear(h);
-      if (with_default) h->default_v = sp_poly_to_i_or_nil(work->default_v);
+      if (with_default) { h->default_nil = work->default_v.tag == SP_TAG_NIL; h->default_v = h->default_nil ? 0 : sp_poly_to_i(work->default_v); }
       for (sp_int i = 0; i < work->len; i++) {
         sp_int j = work->order[i];
-        sp_IntIntHash_set(h, sp_poly_to_i(work->keys[j]), sp_poly_to_i_or_nil(work->vals[j]));
+        sp_IntIntHash_oset(h, sp_poly_to_i(work->keys[j]), sp_poly_hval_oi(work->vals[j]));
       }
       return;
     }

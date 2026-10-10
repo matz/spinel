@@ -348,18 +348,19 @@ type's C slot still has an inhabitant left to spell nil with:
 
 | Token                         | Pinned to        | nil is        |
 |-------------------------------|------------------|---------------|
-| `int?`                        | `sp_int`        | `SP_INT_NIL`  |
-| `float?`                      | `sp_float`      | a NaN payload |
+| `int?`                        | `sp_oint`       | the `nil` flag beside the word |
+| `float?`                      | `sp_ofloat`     | the `nil` flag beside the word |
 | `string?`, `obj_X?`, `*_array?`, `*_hash?` | the pointer | `NULL`   |
 | `bool?`, `symbol?`            | `sp_RbVal`       | `SP_TAG_NIL`  |
 
-`sp_bool` and `sp_sym` have no spare inhabitant -- `0` is `false`, and
-symbol `0` is a real symbol -- so `bool?` and `Symbol?` pin to the boxed
+`sp_int` and `sp_float` keep every bit pattern as a value (`INT64_MIN`, a
+NaN of any payload), so `int?` and `float?` carry their nil out of band in
+a flag. `sp_bool` and `sp_sym` have no spare inhabitant -- `0` is `false`,
+and symbol `0` is a real symbol -- so `bool?` and `Symbol?` pin to the boxed
 tagged union rather than collapsing nil onto `false` / `:""` (#3412).
-A poly value narrowed into one of the sentinel-carrying slots goes
-through `sp_poly_as_int_or_nil` / `sp_poly_as_float_or_nil`, which map
-the nil tag to the sentinel instead of reading the zero payload beneath
-it.
+A poly value narrowed into a flagged slot goes through `sp_unbox_oint`
+(and its Float counterpart), which maps the nil tag to the flag instead of
+reading the zero payload beneath it.
 
 ## Follow-up
 

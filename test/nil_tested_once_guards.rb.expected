@@ -1,0 +1,22 @@
+[true, true]
+NoMethodError: undefined method '<' for nil
+[4, false]
+[nil, true]
+[false, true]
+NoMethodError: undefined method '<' for nil
+true
+NoMethodError: undefined method '<' for nil
+[true, true]
+[false, true]
+NoMethodError: undefined method '<' for nil
+NoMethodError: undefined method '<' for nil
+[true, true]
+NoMethodError: undefined method '<' for nil
+[false, true]
+NoMethodError: undefined method '<' for nil
+true
+NoMethodError: undefined method '<' for nil
+[true, true]
+[false, true]
+NoMethodError: undefined method '<' for nil
+NoMethodError: undefined method '<' for nil

@@ -1832,12 +1832,11 @@ int comp_iob_sym_type(const char *name) {
 }
 int comp_iob_ty_is_float(int t) { return t >= 14 && t <= 17; }
 /* the 64-bit integer types stay BOXED through the fold: u64 values above
-   2^63-1 are Bignums, and an s64 load of INT64_MIN would collide with the
-   runtime's SP_INT_NIL sentinel in an unboxed slot */
+   2^63-1 are Bignums, and the signed ones take the same path */
 int comp_iob_ty_is_64(int t) {
   extern int sp_target_int_bits;
   /* on a 32-bit target the 32-bit types are in the same position: a U32
-     above 2**31-1 is a Bignum there, an S32 of INT32_MIN the sentinel (#4647) */
+     above 2**31-1 is a Bignum there (#4647) */
   if (sp_target_int_bits == 32 && t >= 6 && t <= 9) return 1;   /* u32/s32/U32/S32 */
   return t >= 10 && t <= 13;    /* u64/s64/U64/S64 */
 }

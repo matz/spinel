@@ -63,8 +63,8 @@ int  obj_class_unrelated(Compiler *c, int a, int b);
 int  poly_native_arm_fits(Compiler *c, int k, const char *name, int n, const int *argv,
                           const TyKind *atmp_ty, TyKind *mret);
 int  emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mret, Scope *ms, TyKind ret,
-                          int tr, int is_setter_val, Buf *b);
-void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, Buf *b);
+                          int tr, int so, int is_setter_val, Buf *b);
+void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int so, Buf *b);
 int  poly_pred_kind(const char *name, int argc);
 int  poly_exc_cand(Compiler *c, const char *name);
 int  hoist_block_proc(Compiler *c, int cblk);

@@ -1,0 +1,20 @@
+["a", 1]
+["b", nil]
+["c", 3]
+a=1
+b=nil
+c=3
+1
+nil
+3
+["a", 1]
+["b", nil]
+["c", 3]
+[1, nil, 3]
+nil
+true
+NoMethodError undefined method '+' for nil
+{"a" => 2, "c" => 3}
+10
+nil
+{1 => 10, 2 => nil}

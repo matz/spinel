@@ -153,8 +153,10 @@ static const char *sp_int_head(const char *p, sp_int *base, int *neg) {
 
 /* Accumulates digits of `base` into *v, consuming `_` only between
    digits; *any is set once a digit is read. Returns the stop position,
-   or NULL on sp_int overflow. */
-static const char *sp_int_scan(const char *p, sp_int base, sp_int *v, int *any) {
+   or NULL on sp_int overflow. A negative number (neg) accumulates its
+   signed value, as sp_str_to_i_cruby does: -2**63 fits sp_int where its
+   magnitude does not. */
+static const char *sp_int_scan(const char *p, sp_int base, int neg, sp_int *v, int *any) {
   *v = 0;
   *any = 0;
   for (;; p++) {
@@ -168,7 +170,7 @@ static const char *sp_int_scan(const char *p, sp_int base, sp_int *v, int *any) 
     }
     sp_int t;
     if (sp_ckd_mul_iptr(*v, base, &t) ||
-        sp_ckd_add_iptr(t, (sp_int)d, v)) return NULL;
+        sp_ckd_add_iptr(t, neg ? -(sp_int)d : (sp_int)d, v)) return NULL;
     *any = 1;
   }
 }
@@ -183,7 +185,7 @@ int sp_str_int_overflows(const char *s, intptr_t base) {
   sp_int v, b = base;
   const char *p = sp_int_head(s, &b, &neg);
   if (b < 2 || b > 36) return 0;
-  return sp_int_scan(p, b, &v, &any) == NULL;
+  return sp_int_scan(p, b, neg, &v, &any) == NULL;
 }
 
 /* ...and the digits as the Bignum parser wants them: a '-' for a negative
@@ -227,10 +229,10 @@ sp_int sp_str_to_i_base(const char *s, sp_int base) {SP_GC_ROOT_STR(s);
   int neg, any;
   sp_int v;
   const char *p = sp_int_head(s, &base, &neg);
-  if (!sp_int_scan(p, base, &v, &any))
+  if (!sp_int_scan(p, base, neg, &v, &any))
     sp_raise_cls("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
   if (!any) return 0;
-  return neg ? -v : v;
+  return v;
 }
 
 /* CRuby's `Integer(s)` raises ArgumentError for unparseable input
@@ -256,9 +258,9 @@ sp_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
    prefix recognition (0x / 0b / 0o when the base matches). Raises
    ArgumentError on invalid input or unsupported base. Issue #887. */
 /* The shared body. `lenient` is Kernel#Integer's `exception: false`: every
-   rejection answers nil (SP_INT_NIL) instead of raising (#3718). */
-static sp_int sp_str_to_i_base_impl(const char *s, sp_int base, int lenient) {SP_GC_ROOT_STR(s);
-#define SP_INT_REJECT(cls, msg) do { if (lenient) return SP_INT_NIL; sp_raise_cls(cls, msg); } while (0)
+   rejection answers nil instead of raising (#3718); `*none` says so. */
+static sp_int sp_str_to_i_base_impl(const char *s, sp_int base, int lenient, int *none) {SP_GC_ROOT_STR(s);
+#define SP_INT_REJECT(cls, msg) do { if (lenient) { *none = 1; return 0; } sp_raise_cls(cls, msg); } while (0)
   if (!s) SP_INT_REJECT("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
      rejects it, a C-string scan would silently parse the prefix. */
@@ -269,20 +271,23 @@ static sp_int sp_str_to_i_base_impl(const char *s, sp_int base, int lenient) {SP
   const char *p = sp_int_head(s, &base, &neg);
   if (base < 2 || base > 36) SP_INT_REJECT("ArgumentError", sp_sprintf("invalid radix %lld", (long long)base));
   if (*p == '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
-  p = sp_int_scan(p, base, &v, &any);
+  p = sp_int_scan(p, base, neg, &v, &any);
   if (!p) SP_INT_REJECT("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
   if (!any) SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   while (isspace((unsigned char)*p)) p++;
   if (*p != '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
-  return neg ? -v : v;
+  return v;
 #undef SP_INT_REJECT
 }
 sp_int sp_str_to_i_strict_base(const char *s, sp_int base) {
-  return sp_str_to_i_base_impl(s, base, 0);
+  int none = 0;
+  return sp_str_to_i_base_impl(s, base, 0, &none);
 }
 /* Kernel#Integer(s[, base], exception: false) */
-sp_int sp_str_to_i_lenient_base(const char *s, sp_int base) {
-  return sp_str_to_i_base_impl(s, base, 1);
+sp_oint sp_str_to_i_lenient_base(const char *s, sp_int base) {
+  int none = 0;
+  sp_int n = sp_str_to_i_base_impl(s, base, 1, &none);
+  return none ? sp_oint_nil() : sp_oint_of(n);
 }
 
 /* The decimal text Float() accepts once its underscores are stripped: an
@@ -308,8 +313,8 @@ static int sp_float_text_shape_ok(const char *p) {
    on its own would silently return 0.0 for "abc" or empty input;
    match MRI semantics by validating at-least-one-digit + no-trailing-
    junk. Whitespace flanking is fine. Issue #888. */
-static sp_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s);
-  if (!s) { if (lenient) return sp_float_nil(); sp_raise_cls("ArgumentError", "invalid value for Float(): nil"); }
+static sp_float sp_str_to_f_impl(const char *s, int lenient, int *none) {SP_GC_ROOT_STR(s);
+  if (!s) { if (lenient) { *none = 1; return 0.0; } sp_raise_cls("ArgumentError", "invalid value for Float(): nil"); }
   /* embedded NUL: the Ruby string extends past its C prefix -- reject rather
      than silently parsing the prefix ("1\\0" is not a float in CRuby). */
   size_t blen = sp_str_byte_len(s);
@@ -408,12 +413,12 @@ static sp_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s);
   }
 bad0:
   /* Kernel#Float(s, exception: false) answers nil for everything this rejects */
-  if (lenient) return sp_float_nil();
+  if (lenient) { *none = 1; return 0.0; }
   sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Float(): \"%s\"", s));
   return 0.0;  /* unreachable */
 }
-sp_float sp_str_to_f_strict(const char *s)  { return sp_str_to_f_impl(s, 0); }
-sp_float sp_str_to_f_lenient(const char *s) { return sp_str_to_f_impl(s, 1); }
+sp_float sp_str_to_f_strict(const char *s)  { int none = 0; return sp_str_to_f_impl(s, 0, &none); }
+sp_ofloat sp_str_to_f_lenient(const char *s) { int none = 0; sp_float f = sp_str_to_f_impl(s, 1, &none); return none ? sp_ofloat_nil() : sp_ofloat_of(f); }
 
 /* Kernel#sprintf's float directives (%f/%e/%g/%a with width/flags) are emitted
    by faithfully delegating to libc snprintf, which is locale-sensitive for the

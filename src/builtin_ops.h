@@ -104,6 +104,8 @@ typedef enum {
   BOPE_ARRAY_SHIFT_N,     /* Array#shift(n) / #pop(n) */
   BOPE_ARRAY_CYCLE_N,     /* Array#cycle(n) without a block, materialized */
   BOPE_ARRAY_LAST,        /* Array#last */
+  BOPE_ARRAY_FIRST,       /* Array#first (no count) */
+  BOPE_ARRAY_POP_SHIFT,   /* Array#pop / #shift (no count) */
   BOPE_ARRAY_JOIN,        /* Array#join, with or without a separator */
   BOPE_ARRAY_PACK_BUFFER, /* Array#pack(format, buffer: string) */
   BOPE_ARRAY_SORT_BANG,   /* Array#sort! */

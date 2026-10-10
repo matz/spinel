@@ -10,6 +10,14 @@
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 
+/* ---- nil out of band: an emitter whose C result is an sp_oint / sp_ofloat
+   leaves it bare when the node is one (node_is_oint: the dispatcher's
+   consumer takes the oint) and otherwise reads it as the plain scalar through
+   sp_oint_arg (TypeError for nil) -- the same wrap the dispatcher applies to an
+   oint producer, applied here because this emitter decides the form. */
+static void oint_open(Compiler *c, int id, TyKind t, Buf *b) { if (!node_is_oint(c, id)) buf_printf(b, "%s(", oint_arg(t)); }
+static void oint_close(Compiler *c, int id, Buf *b) { if (!node_is_oint(c, id)) buf_puts(b, ")"); }
+
 /* The parameters of an initialize_copy hook after the original it is handed
    (`def initialize_copy(o, opts = nil)`): each optional one its default,
    run with the copy as self as a dispatch arm runs it, a rest an empty
@@ -197,12 +205,9 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     }
     if (ty_is_numeric(rt)) {
       int tv = ++g_tmp;
-      buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tv); emit_expr(c, recv, b);
-      /* a receiver that can hold the nil sentinel has no between? (#4567) */
-      if (rt == TY_INT && cmp_operand_may_be_nil(c, recv))
-        buf_printf(b, "; if (SP_UNLIKELY(_t%d == SP_INT_NIL)) sp_nil_recv(\"between?\")", tv);
-      else if (rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv))
-        buf_printf(b, "; if (SP_UNLIKELY(sp_float_is_nil(_t%d))) sp_nil_recv(\"between?\")", tv);
+      buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tv);
+      /* a nullable receiver has no between? when it is nil (#4567) */
+      if (oint_kind(rt)) emit_scalar_operand_op(c, recv, "between?", b); else emit_expr(c, recv, b);
       buf_printf(b, "; (_t%d >= ", tv); emit_expr(c, argv[0], b);
       buf_printf(b, " && _t%d <= ", tv); emit_expr(c, argv[1], b); buf_puts(b, "); })");
       return 1;
@@ -292,14 +297,14 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          which the inference already typed (#4190) */
       !(ty_is_object(rt) &&
         comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR)) {
-    /* a nullable Integer or Float holding its sentinel is nil, whose id
+    /* a nullable Integer or Float whose nil flag is set is nil, whose id
        is nil's */
     if ((rt == TY_INT || rt == TY_FLOAT) && call_returns_nullable_int(c, recv)) {
       char ref[24];
       buf_puts(b, "({ "); emit_sentinel_bind(c, rt, recv, ref, sizeof ref, b);
       emit_slot_truthy(rt, ref, b);
-      if (rt == TY_INT) buf_printf(b, " ? 2*%s+1 : SP_NIL_OBJECT_ID; })", ref);
-      else buf_printf(b, " ? sp_rbval_hash_key(sp_box_float(%s)) : SP_NIL_OBJECT_ID; })", ref);
+      if (rt == TY_INT) buf_printf(b, " ? 2*%s.v+1 : SP_NIL_OBJECT_ID; })", ref);
+      else buf_printf(b, " ? sp_rbval_hash_key(sp_box_float(%s.v)) : SP_NIL_OBJECT_ID; })", ref);
     }
     else if (rt == TY_INT) { buf_puts(b, "(2*("); emit_expr(c, recv, b); buf_puts(b, ")+1)"); }
     else if (rt == TY_SYMBOL) { buf_puts(b, "((sp_int)("); emit_expr(c, recv, b); buf_puts(b, ")*2)"); }
@@ -367,23 +372,17 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     return 1;
   }
 
-  /* nil? on an integer: a nullable int carries the SP_INT_NIL sentinel
-     (e.g. an int-valued hash miss). A plain int is never the sentinel, so
-     `5.nil?` constant-folds to false; a missing-key value reads true. */
-  if (recv >= 0 && rt == TY_INT && sp_streq(name, "nil?") && argc == 0) {
-    if (int_value_plain(c, recv)) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), FALSE)"); return 1; }
-    buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == SP_INT_NIL)");
+  /* nil? on an Integer or Float: a nullable one (an int-valued hash miss)
+     asks its oint's flag; a plain one is never nil, so `5.nil?` folds to
+     false (the receiver still evaluated). */
+  if (recv >= 0 && oint_kind(rt) && sp_streq(name, "nil?") && argc == 0) {
+    if (node_has_oint_form(c, recv)) { buf_puts(b, "(("); emit_oint_expr(c, recv, rt, b); buf_puts(b, ").nil)"); }
+    else { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)"); }
     return 1;
   }
   /* nil? on a string: a nullable string carries NULL (e.g. a scan miss);
      a stage-2 builtin-op row (builtin_ops.c) */
   if (recv >= 0 && rt == TY_STRING && emit_builtin_op_stage(c, id, recv, rt, name, 2, b)) return 1;
-  /* nil? on a float: a nullable float carries the NaN sentinel (e.g. first/
-     last of an empty float array). A real float is never the sentinel. */
-  if (recv >= 0 && rt == TY_FLOAT && sp_streq(name, "nil?") && argc == 0) {
-    buf_puts(b, "sp_float_is_nil("); emit_expr(c, recv, b); buf_puts(b, ")");
-    return 1;
-  }
   /* nil? on an array/hash: a nil container is a NULL pointer */
   if (recv >= 0 && (ty_is_array(rt) || ty_is_hash(rt)) && sp_streq(name, "nil?") && argc == 0) {
     buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
@@ -487,8 +486,9 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *cn = isa_match_name(nt, recv, rq, sizeof rq);
     if (cn) {
       TyKind at2 = comp_ntype(c, argv[0]);
-      /* An Integer, Float or String argument is nil where it holds its
-         sentinel, which the scalar type cannot say: `Integer === x` answered
+      /* An Integer, Float or String argument is nil where its nil flag is
+         set (a String's NULL), which the scalar type cannot say:
+         `Integer === x` answered
          true and `NilClass === x` false for a nil x (emit_scalar_class_test). */
       if (emit_scalar_class_test(c, argv[0], at2, cn, 0, b)) return 1;
       /* TrueClass/FalseClass/NilClass === <literal/typed value>: decide
@@ -666,7 +666,20 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         g_ie_nil_ivars = sv_nil_ie;
         return 1;
       }
-      if (nscalar) {
+      /* an Integer or Float tail the consumer takes with its nil (a
+         receiver without the ivar reads it nil): held as the oint */
+      if (nscalar && oint_kind(nbt) && (node_is_oint(c, id) || nbox)) {
+        int tr = ++g_tmp;
+        Buf vb; memset(&vb, 0, sizeof vb);
+        emit_oint_expr(c, nbb[nbn - 1], nbt, &vb);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(nbt), tr, vb.p ? vb.p : oint_nil(nbt)); free(vb.p);
+        ie_body_restore(c, nsnap);
+        g_self = sv_self; g_self_deref = sv_deref;
+        if (nbox) buf_printf(b, "%s(_t%d)", oint_box(nbt), tr);
+        else buf_printf(b, "_t%d", tr);
+      }
+      else if (nscalar) {
         int tr = ++g_tmp;
         Buf vb = expr_buf(c, nbb[nbn - 1]);
         emit_indent(g_pre, g_indent); emit_ctype(c, nbt, g_pre);
@@ -754,6 +767,11 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       if (bn_ty != TY_UNKNOWN)
         body_ty = (body_ty == TY_NIL || body_ty == TY_UNKNOWN) ? bn_ty : ty_unify(body_ty, bn_ty);
       int scalar_res = is_scalar_ret(body_ty) && body_ty != TY_VOID && body_ty != TY_NIL && body_ty != TY_UNKNOWN;
+      /* a number result that can be nil (the tail's own form: a nil-bit
+         ivar write, a nullable read) is held as its oint, which the call
+         answers (node_is_oint follows the tail) */
+      int res_oint = scalar_res && oint_kind(body_ty) &&
+                     ((ie_bn > 0 && node_is_oint(c, ie_bb[ie_bn - 1])) || node_is_oint(c, id));
       int tr = ++g_tmp, tres = ++g_tmp;
       int self_is_val = c->classes[cls_id].is_value_type;
       Buf rb; memset(&rb, 0, sizeof rb);
@@ -767,7 +785,11 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                  self_is_val ? "" : "*", tr,
                  rb.p ? rb.p : (self_is_val ? "{0}" : "NULL"));
       free(rb.p);
-      if (scalar_res) {
+      if (res_oint) {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(body_ty), tres, oint_nil(body_ty));
+      }
+      else if (scalar_res) {
         emit_indent(g_pre, g_indent); emit_ctype(c, body_ty, g_pre);
         buf_printf(g_pre, " _t%d;\n", tres);
       }
@@ -912,8 +934,9 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         /* the splice body's break binds to the do/while(0) below, never to an
            enclosing valued-break scope */
         const char *sv_bser = g_brk_ser_var; g_brk_ser_var = NULL;
-        int sv_iep = g_ie_res_poly;
+        int sv_iep = g_ie_res_poly, sv_ieo = g_ie_next_oint;
         g_ie_res_poly = (scalar_res && body_ty == TY_POLY);
+        g_ie_next_oint = res_oint;   /* a `next v` stores the slot's form */
         char bvbuf[32];
         int sv_lexc2 = g_loop_exc_base, sv_lexc2_rb = g_loop_rescue_base, sv_lens2 = g_loop_ensure_base;
         if (ie_bn_wrap) {
@@ -930,6 +953,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           /* The last expression feeds the (possibly poly-widened) result slot;
              box it when the slot is poly but this expression is scalar. */
           if (scalar_res && body_ty == TY_POLY) emit_boxed(c, ie_bb[ie_bn - 1], &vb);
+          else if (res_oint) emit_oint_expr(c, ie_bb[ie_bn - 1], body_ty, &vb);
           else emit_expr(c, ie_bb[ie_bn - 1], &vb);
           emit_indent(g_pre, g_indent);
           if (!scalar_res) {
@@ -946,7 +970,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           g_indent--; emit_indent(g_pre, g_indent); buf_puts(g_pre, "} while (0);\n");
         }
         g_loop_exc_base = sv_lexc2; g_loop_rescue_base = sv_lexc2_rb; g_loop_ensure_base = sv_lens2;
-        g_ie_res_poly = sv_iep;
+        g_ie_res_poly = sv_iep; g_ie_next_oint = sv_ieo;
         g_brk_ser_var = sv_bser;
         g_ie_discard_value = saved_discard;
       }
@@ -1558,7 +1582,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         /* an array-typed result lowers to a C pointer, whose NULL is nil */
         /* Whether the answer can hold a nil in its own C slot, in which case
            both arms share that slot unboxed. Integer and Float have their
-           sentinels, String and the arrays have NULL -- and so does every
+           nil flag, String and the arrays have NULL -- and so does every
            other GC pointer (an Enumerator, a Hash, a user object), which the
            list had stopped short of, so `v&.chunk_while { }` declared an
            sp_RbVal slot while its consumers read an sp_Enumerator *. */
@@ -1566,8 +1590,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                        !ty_is_array(ret2) && !ty_is_struct_valued(ret2);
         int sn_ptr = (ret2 == TY_INT || ret2 == TY_FLOAT || ret2 == TY_STRING ||
                       ty_is_array(ret2) || sn_gcptr);
-        if (ret2 == TY_INT) buf_puts(b, "SP_INT_NIL");
-        else if (ret2 == TY_FLOAT) buf_puts(b, "sp_float_nil()");
+        if (oint_kind(ret2)) buf_puts(b, oint_nil(ret2));
         else if (ret2 == TY_STRING) buf_puts(b, "((const char *)NULL)");
         else if (ty_is_array(ret2)) {
           const char *ak = (ret2 == TY_POLY_ARRAY) ? "Poly" : array_kind(ret2);
@@ -1598,7 +1621,10 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           }
           int gbox = (!sn_ptr && ret2 == TY_POLY && natg != TY_POLY &&
                       natg != TY_UNKNOWN && natg != TY_VOID);
-          if (sn_ptr) emit_expr(c, id, b);
+          /* an Integer / Float answer: the call's own oint, or its plain
+             value wrapped (the re-entry sees the inner call's form) */
+          if (oint_kind(ret2)) emit_oint_expr(c, id, ret2, b);
+          else if (sn_ptr) emit_expr(c, id, b);
           else if (gbox) {
             Buf gvb; memset(&gvb, 0, sizeof gvb);
             int vw = view_push(c, id, natg);
@@ -1625,7 +1651,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
              the holding slot is sp_RbVal then -- not ret2, which names what the
              value would be before boxing (a poly-hash answer declared its slot
              sp_PolyPolyHash * and took sp_box_nil()). */
-          if (sn_ptr) emit_ctype(c, ret2, g_pre);
+          if (oint_kind(ret2)) buf_puts(g_pre, oint_ctype(ret2));
+          else if (sn_ptr) emit_ctype(c, ret2, g_pre);
           else buf_puts(g_pre, "sp_RbVal");
           buf_printf(g_pre, " _snr%d = %s;\n", rsv, nb.p ? nb.p : "sp_box_nil()");
           emit_indent(g_pre, g_indent);
@@ -1654,10 +1681,11 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          on re-entry. */
       int sn_obj = ty_is_object(rrt) && rrr.kind != RK_VOBJ;
       /* A specialized container answers a miss with the ELEMENT type's own C
-         nil -- a NULL string, SP_INT_NIL -- so `h["zz"]&.empty?` reaches the
-         guard with a concrete receiver, not a poly one. Guard those too, or
-         the miss takes the result type's zero and `&.` answers false (#4070). */
-      int sn_scalar = (rrt == TY_INT || rrt == TY_FLOAT);
+         nil -- a NULL string, an sp_oint's flag -- so `h["zz"]&.empty?` reaches
+         the guard with a concrete receiver, not a poly one. Guard those too, or
+         the miss takes the result type's zero and `&.` answers false (#4070).
+         An Integer / Float receiver with no oint form is never nil. */
+      int sn_scalar = oint_kind(rrt) && node_has_oint_form(c, recv);
       /* a typed array or hash is a pointer too, and a slice past the end
          (`a[4..]&.size`) or a container miss hands it NULL (#4524) */
       int sn_cont = needs_root(rrt) && rrt != TY_POLY && rrt != TY_STRING && !ty_is_object(rrt);
@@ -1668,16 +1696,20 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
            the re-entered dispatch hoists its (substituted) receiver into
            g_pre too, which lands before the statement and must still see
            the temp. Rooted: the guarded call's args may allocate. */
-        Buf rsn = expr_buf(c, recv);
+        /* a scalar receiver is read as its oint: the guard asks the flag, and
+           the re-entered call reads the receiver through the override text --
+           the oint temp where the receiver node is an oint (the dispatcher
+           unwraps it), its plain value otherwise */
+        Buf rsn; memset(&rsn, 0, sizeof rsn);
+        if (sn_scalar) emit_oint_expr(c, recv, rrt, &rsn); else rsn = expr_buf(c, recv);
         emit_indent(g_pre, g_indent);
         if (sn_obj)
           buf_printf(g_pre, "sp_%s *_sn%d = %s; SP_GC_ROOT(_sn%d);\n",
                      c->classes[ty_object_class(rrt)].c_name, tsn2,
                      rsn.p ? rsn.p : "NULL", tsn2);
-        else if (rrt == TY_INT)
-          buf_printf(g_pre, "sp_int _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "SP_INT_NIL");
-        else if (rrt == TY_FLOAT)
-          buf_printf(g_pre, "sp_float _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "sp_float_nil()");
+        else if (sn_scalar)
+          buf_printf(g_pre, "%s _sn%d = %s; %s _snv%d = _sn%d.v;\n", oint_ctype(rrt), tsn2,
+                     rsn.p ? rsn.p : oint_nil(rrt), c_type_name(rrt), tsn2, tsn2);
         else if (sn_cont) {
           emit_ctype(c, rrt, g_pre);
           buf_printf(g_pre, " _sn%d = %s; SP_GC_ROOT(_sn%d);\n", tsn2, rsn.p ? rsn.p : "NULL", tsn2);
@@ -1687,13 +1719,11 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                      tsn2, rsn.p ? rsn.p : "NULL", tsn2);
         free(rsn.p);
         char nilt[64];
-        if (rrt == TY_INT)        snprintf(nilt, sizeof nilt, "_sn%d == SP_INT_NIL", tsn2);
-        else if (rrt == TY_FLOAT) snprintf(nilt, sizeof nilt, "sp_float_is_nil(_sn%d)", tsn2);
-        else                      snprintf(nilt, sizeof nilt, "_sn%d == NULL", tsn2);
+        if (sn_scalar) snprintf(nilt, sizeof nilt, "_sn%d.nil", tsn2);
+        else           snprintf(nilt, sizeof nilt, "_sn%d == NULL", tsn2);
         const char *nilv;
         if (ret2 == TY_POLY) nilv = "sp_box_nil()";
-        else if (ret2 == TY_INT) nilv = "SP_INT_NIL";
-        else if (ret2 == TY_FLOAT) nilv = "sp_float_nil()";
+        else if (oint_kind(ret2)) nilv = oint_nil(ret2);
         else if (ret2 == TY_STRING) nilv = "((const char *)NULL)";  /* string nil, not "" */
         else nilv = default_value_from_compiler(c, ret2) ? default_value_from_compiler(c, ret2) : "0";
         /* The value arm is emitted with g_pre redirected, as the boxed arm
@@ -1705,7 +1735,9 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         Buf *sv_pre2 = g_pre;
         g_pre = &preb2;
         if (g_n_argov < MAX_ARG_OVERRIDE) {
-          int slot2 = view_bind(recv, "_sn%d", tsn2);
+          /* the guard proved the scalar non-nil: the re-entry reads its plain
+             value (a view-bound node takes no oint wrapper either way) */
+          int slot2 = sn_scalar ? view_bind(recv, "_snv%d", tsn2) : view_bind(recv, "_sn%d", tsn2);
           int sv_skip = g_sn_skip; g_sn_skip = id;
           /* infer_type widened a C bool answer to poly so the nil arm has
              somewhere to live; the value arm still renders the bool. Emit it
@@ -1715,7 +1747,9 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                         nat2 != TY_UNKNOWN && nat2 != TY_VOID);
           int vw = sn_box ? view_push(c, id, nat2) : -1;
           Buf vb; memset(&vb, 0, sizeof vb);
-          emit_expr(c, id, &vb);
+          /* an Integer / Float answer is the `&.`'s oint: the inner call's own
+             form, or its plain value wrapped (the re-entry sees which) */
+          if (oint_kind(ret2)) emit_oint_expr(c, id, ret2, &vb); else emit_expr(c, id, &vb);
           if (vw >= 0) view_pop(c, vw);
           g_sn_skip = sv_skip;
           view_unbind(g_n_argov - 1);
@@ -1730,7 +1764,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else {
           int rsv = ++g_tmp;
           emit_indent(g_pre, g_indent);
-          emit_ctype(c, ret2, g_pre);
+          if (oint_kind(ret2)) buf_puts(g_pre, oint_ctype(ret2)); else emit_ctype(c, ret2, g_pre);
           buf_printf(g_pre, " _snr%d = %s;\n", rsv, nilv);
           emit_indent(g_pre, g_indent);
           if (ret2 == TY_POLY) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_snr%d);\n", rsv);
@@ -2092,7 +2126,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
       /* a boxed operand can hold the same singleton: `false <=> key`, the
          key a boxed false, is 0. A NULL String operand is nil too. */
       if (at0 == TY_POLY || at0 == TY_UNKNOWN || (rt0 == TY_NIL && at0 == TY_STRING)) {
-        buf_puts(b, "sp_box_int_or_nil(");
+        buf_puts(b, "sp_box_oint(");
         emit_poly_cmp_ordered(c, "sp_poly_spaceship", rv0, av0[0], b);
         buf_puts(b, ")");
         return 1;
@@ -2392,7 +2426,8 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int dcid = ty_object_class(rt);
     int have = ivn && ivn[0] == '@' && comp_ivar_index(&c->classes[dcid], ivn) >= 0;
     /* one nothing has set yet is not defined (ivar_set_kind) */
-    if (have && (ivar_set_kind(c, dcid, ivn) & 1)) {
+    if (have && ((ivar_set_kind(c, dcid, ivn) & 1) ||
+                 poly_ivar_unset_marked(c, dcid, comp_ivar_index(&c->classes[dcid], ivn)))) {
       int tro = ++g_tmp;
       char ex[160], tb[256];
       snprintf(ex, sizeof ex, "_t%d->iv_%s", tro, iv_c(ivn + 1));
@@ -2540,16 +2575,34 @@ int emit_object_ivar_list(Compiler *c, int recv, int ivcid, Buf *b) {
    cid: the value it held. Where presence is known (ivar_set_kind 1 or 3)
    an ivar never assigned raises NameError, as CRuby's does, and the
    removed one reads nil and unassigned after; elsewhere the slot cannot be
-   undefined and keeps its value. */
-void emit_object_ivar_remove(Compiler *c, int recv, TyKind rt, int cid, const char *sym, Buf *b) {
+   undefined and keeps its value. An Integer or Float field with a nil byte
+   answers its value with its nil (as node id's form takes it), and a
+   removal sets the byte. */
+static void ivar_remove_oint_result(Compiler *c, int id, TyKind t, int tv, Buf *b) {
+  if (id >= 0 && repr_of(c, id).kind == RK_BOXED) buf_printf(b, "%s(_t%d); })", oint_box(t), tv);
+  else if (id >= 0 && node_is_oint(c, id)) buf_printf(b, "_t%d; })", tv);
+  else buf_printf(b, "%s(_t%d); })", oint_arg(t), tv);
+}
+void emit_object_ivar_remove(Compiler *c, int id, int recv, TyKind rt, int cid, const char *sym, Buf *b) {
   int val = comp_ty_value_obj(c, rt);
   int kind = val ? 2 : ivar_set_kind(c, cid, sym);
+  int iv = comp_ivar_index(&c->classes[cid], sym);
+  TyKind t = c->classes[cid].ivar_types[iv];
+  int nb = !val && oint_kind(t) && ivar_has_nilbit(c, cid, iv);
   if (kind != 1 && kind != 3) {
+    if (nb) {
+      int to = ++g_tmp, tv = ++g_tmp;
+      char objp[40]; snprintf(objp, sizeof objp, "_t%d->", to);
+      char bt[320]; ivar_nilbit_test(c, cid, iv, objp, bt, sizeof bt);
+      buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, to); emit_expr(c, recv, b);
+      buf_printf(b, "; %s _t%d = ((%s){ _t%d->iv_%s, (%s) != 0 }); ", oint_ctype(t), tv, oint_ctype(t), to, iv_c(sym + 1), bt);
+      ivar_remove_oint_result(c, id, t, tv, b);
+      return;
+    }
     buf_puts(b, "("); emit_expr(c, recv, b);
     buf_printf(b, ")%siv_%s", val ? "." : "->", iv_c(sym + 1));
     return;
   }
-  TyKind t = c->classes[cid].ivar_types[comp_ivar_index(&c->classes[cid], sym)];
   const char *nilv = nil_value(t) ? nil_value(t) : default_value_from_compiler(c, t);
   int tr = ++g_tmp, tv = ++g_tmp;
   char obj[32], ex[160], tb[256];
@@ -2559,10 +2612,20 @@ void emit_object_ivar_remove(Compiler *c, int recv, TyKind rt, int cid, const ch
   emit_frozen_obj_guard(c, cid, obj, b);
   buf_printf(b, "if (!%s) sp_raise_cls(\"NameError\", \"instance variable %s not defined\"); ",
              ivar_set_test(c, cid, sym, ex, tb, sizeof tb), sym);
-  emit_ctype(c, t, b);
-  buf_printf(b, " _t%d = %s; %s = %s; ", tv, ex, ex, nilv);
+  if (nb) {
+    char objp[40]; snprintf(objp, sizeof objp, "_t%d->", tr);
+    char bt[320], bs[320];
+    ivar_nilbit_test(c, cid, iv, objp, bt, sizeof bt);
+    ivar_nilbit_set(c, cid, iv, objp, bs, sizeof bs);
+    buf_printf(b, "%s _t%d = ((%s){ %s, (%s) != 0 }); %s = 0; %s; ", oint_ctype(t), tv, oint_ctype(t), ex, bt, ex, bs);
+  }
+  else {
+    emit_ctype(c, t, b);
+    buf_printf(b, " _t%d = %s; %s = %s; ", tv, ex, ex, nilv);
+  }
   if (kind == 3) buf_printf(b, "_t%d->_sp_set_%s = FALSE; ", tr, iv_c(sym + 1));
-  buf_printf(b, "_t%d; })", tv);
+  if (nb) ivar_remove_oint_result(c, id, t, tv, b);
+  else buf_printf(b, "_t%d; })", tv);
 }
 
 static int emit_data_ivar_set(Compiler *c, int id, int recv, int value, int cid, Buf *b) {
@@ -2601,8 +2664,12 @@ static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int 
   if (is_val) buf_puts(b, ")");
   buf_puts(b, "; ");
   if (!is_val) buf_printf(b, "SP_GC_ROOT(_t%d); ", tr);
-  emit_ctype(c, mt, b); buf_printf(b, " _t%d = ", tv);
-  if (emit_array_into_poly_slot(c, mt, value, b)) { }
+  /* a number field with a nil bit takes the value with its nil */
+  int iv = comp_ivar_index(&c->classes[cid], sym);
+  int nb = oint_kind(mt) && iv >= 0 && ivar_has_nilbit(c, cid, iv);
+  if (nb) buf_printf(b, "%s _t%d = ", oint_ctype(mt), tv); else { emit_ctype(c, mt, b); buf_printf(b, " _t%d = ", tv); }
+  if (nb) emit_oint_expr(c, value, mt, b);
+  else if (emit_array_into_poly_slot(c, mt, value, b)) { }
   else emit_coerce(c, value, mt, CO_HOLD, "an instance variable write", b);
   buf_puts(b, "; ");
   char obj[32], val[32];
@@ -2612,11 +2679,39 @@ static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int 
   emit_frozen_obj_guard(c, cid, obj, b);
   char mk[300];
   const char *mark = ivar_set_mark(c, cid, sym, obj, "->", mk, sizeof mk);
-  buf_printf(b, "%s->iv_%s = %s; %s ", obj, iv_c(sym + 1), val, mark ? mark : "");
+  if (nb) {
+    char objp[40]; snprintf(objp, sizeof objp, "%s->", obj);
+    /* the helper answers the value and keeps the bit; the field takes it */
+    buf_printf(b, "%s->iv_%s = ", obj, iv_c(sym + 1));
+    emit_ivar_text_nilbit(c, cid, iv, objp, val, b);
+    buf_printf(b, "; %s ", mark ? mark : "");
+  }
+  else buf_printf(b, "%s->iv_%s = %s; %s ", obj, iv_c(sym + 1), val, mark ? mark : "");
   Repr rp = repr_of(c, id);
-  if (ivar_set_slot_read(c, id, mt)) emit_strbuf_node_read(c, id, val, b);
+  /* the call answers the value: with its nil where the consumer takes the
+     oint, boxed with it, or unwrapped */
+  if (nb && rp.kind == RK_BOXED) buf_printf(b, "%s(%s)", oint_box(mt), val);
+  else if (nb) { oint_open(c, id, mt, b); buf_puts(b, val); oint_close(c, id, b); }
+  else if (ivar_set_slot_read(c, id, mt)) emit_strbuf_node_read(c, id, val, b);
   else if (mt == TY_STRBUF && rp.as_ty == TY_STRING && rp.kind != RK_BOXED && repr_share_rule(c)) buf_puts(b, val);
   else emit_coerce_text(c, id, mt, rp.as_ty, CO_HOLD, val, "an instance variable write result", b);
+  buf_puts(b, "; })");
+}
+
+/* After a store into a number field with a nil bit (objp: the receiver
+   text up to the field): the call's value is the field read back with its
+   bit, boxed or as the oint, or the field for a plain consumer (a discarded
+   value must not raise on the nil it stored); closes the
+   statement expression. */
+static void emit_nilbit_store_answer(Compiler *c, int id, int cid, int iv, const char *objp, Buf *b) {
+  TyKind t = c->classes[cid].ivar_types[iv];
+  char bt[320]; ivar_nilbit_test(c, cid, iv, objp, bt, sizeof bt);
+  char ov[800]; snprintf(ov, sizeof ov, "((%s) ? %s : %s(%siv_%s))", bt, oint_nil(t), oint_of(t), objp,
+                         iv_c(c->classes[cid].ivars[iv] + 1));
+  buf_puts(b, "; ");
+  if (repr_of(c, id).kind == RK_BOXED) buf_printf(b, "%s(%s)", oint_box(t), ov);
+  else if (node_is_oint(c, id)) buf_puts(b, ov);
+  else buf_printf(b, "%siv_%s", objp, iv_c(c->classes[cid].ivars[iv] + 1));   /* a plain consumer (or none) */
   buf_puts(b, "; })");
 }
 
@@ -2683,6 +2778,13 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           int rdf = ivar_set_slot_read(c, id, mt);
           if (rdf) buf_printf(b, "SP_GC_ROOT(_t%d); ", tf9);
           emit_frozen_obj_guard(c, cid, selft, b);
+          if (oint_kind(mt) && ivar_has_nilbit(c, cid, mi)) {
+            char objp[40]; snprintf(objp, sizeof objp, "_t%d->", tf9);
+            buf_printf(b, "%siv_%s = ", objp, iv_c(c->classes[cid].ivars[mi] + 1));
+            emit_ivar_value_nilbit(c, cid, mi, objp, argv[1], b);
+            emit_nilbit_store_answer(c, id, cid, mi, objp, b);
+            return 1;
+          }
           /* the value is built before the store: the barrier the
              write-barrier pass puts on the store goes ahead of it, and a
              collection the value's allocation runs would clear that record
@@ -2700,6 +2802,17 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
             buf_puts(b, "; ");
           }
           buf_puts(b, "})");
+          return 1;
+        }
+        if (oint_kind(mt) && ivar_has_nilbit(c, cid, mi) && !is_val) {
+          /* the bit beside the field: the receiver held in a temp for the two writes */
+          int tfo = ++g_tmp;
+          buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, tfo); emit_expr(c, recv, b);
+          buf_printf(b, "; char objp_unused_%d = 0; (void)objp_unused_%d; ", tfo, tfo);
+          char objp[40]; snprintf(objp, sizeof objp, "_t%d->", tfo);
+          buf_printf(b, "%siv_%s = ", objp, iv_c(c->classes[cid].ivars[mi] + 1));
+          emit_ivar_value_nilbit(c, cid, mi, objp, argv[1], b);
+          emit_nilbit_store_answer(c, id, cid, mi, objp, b);
           return 1;
         }
         /* A value asked as a String makes the store a statement of its own
@@ -2727,6 +2840,10 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           buf_printf(b, ")%siv_%s = ", acc, iv_c(sym + 1));
         }
         if (mt == TY_POLY) emit_boxed(c, argv[1], b);
+        else if (oint_kind(mt) && nt_kind(nt, argv[1]) == NK_NilNode) {
+          /* nil into a plain Integer / Float field (no nil bit): the slot cannot hold it */
+          buf_printf(b, "%s(%s)", oint_arg(mt), oint_nil(mt));
+        }
         else if (mt == TY_STRBUF) {
           char srefIS[1024];
           if (strbuf_slot_ref(c, argv[1], srefIS, sizeof srefIS)) buf_puts(b, srefIS);
@@ -2736,7 +2853,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
             buf_puts(b, ")");
           }
         }
-        /* nil into a scalar slot is its in-band nil (SP_INT_NIL, NaN), not
+        /* nil into a scalar slot is the nil it holds beside the value, not
            the zero value the literal emits as */
         else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));
         /* a typed array into the general Array slot, rebuilt as an
@@ -2769,6 +2886,19 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
         buf_printf(b, "({ sp_String *_t%d = (", tvG);
         emit_expr(c, recv, b);
         buf_printf(b, ")%siv_%s; sp_strbuf_read(_t%d); })", acc, iv_c(sym + 1), tvG);
+      }
+      /* a number field with a nil bit reads with it: the oint where the
+         call's consumer takes one, boxed nil, or unwrapped */
+      else if (oint_kind(mt) && ivar_has_nilbit(c, cid, comp_ivar_index(&c->classes[cid], sym))) {
+        int iv9 = comp_ivar_index(&c->classes[cid], sym), tg = ++g_tmp;
+        char objp[48]; snprintf(objp, sizeof objp, "_t%d%s", tg, acc);
+        char bit[400]; ivar_nilbit_test(c, cid, iv9, objp, bit, sizeof bit);
+        Repr rg = repr_of(c, id);
+        buf_printf(b, "({ sp_%s %s_t%d = %s(", c->classes[cid].c_name, is_val ? "" : "*", tg, is_val ? "" : "");
+        emit_expr(c, recv, b);
+        buf_printf(b, "); %s _o%d = { %siv_%s, (%s) != 0 }; ", oint_ctype(mt), tg, objp, iv_c(sym + 1), bit);
+        if (rg.kind == RK_BOXED) buf_printf(b, "%s(_o%d); })", oint_box(mt), tg);
+        else { oint_open(c, id, mt, b); buf_printf(b, "_o%d", tg); oint_close(c, id, b); buf_puts(b, "; })"); }
       }
       else {
         buf_puts(b, "("); emit_expr(c, recv, b);

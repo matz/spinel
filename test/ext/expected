@@ -3,3 +3,8 @@ HEY!
 42
 raised ArgumentError: needs a positive number
 ok 7
+-1
+42
+-9223372036854775807
+1
+nil

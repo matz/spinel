@@ -264,8 +264,12 @@ typedef struct sp_str_hdr { struct sp_str_hdr *next; uint32_t size; uint32_t len
    NULL test. compact!, delete(nil), clear and replace drop it. It follows
    `frozen`, which the push / [] / []= paths read, in the same word the
    may_nil flag used, so the IntArray block stays in its slab class. */
-typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;sp_int frozen;uint64_t*nilbits;}sp_IntArray;
-typedef struct{sp_float*data;sp_int len;sp_int cap;sp_int frozen;uint64_t*nilbits;}sp_FloatArray;
+/* frozen is a flag (32 bits); nil_lo shares its word: the lowest physical
+   slot that can hold a nil while nilbits is set (SP_NILBITS_NEW_A, sp_array.h) */
+typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;int32_t frozen;uint32_t nil_lo;uint64_t*nilbits;}sp_IntArray;
+typedef struct{sp_float*data;sp_int len;sp_int cap;int32_t frozen;uint32_t nil_lo;uint64_t*nilbits;}sp_FloatArray;
+_Static_assert(sizeof(void *) != 8 || (sizeof(sp_IntArray) == 48 && sizeof(sp_FloatArray) == 40),
+               "the Int / Float array blocks keep their slab class");
 /* the array may hold a nil (the fast whole-array test; exact bits are read
    per element through sp_IntArray_elem_nil / sp_FloatArray_elem_nil) */
 #define SP_MAY_NIL(a) ((a)->nilbits != NULL)

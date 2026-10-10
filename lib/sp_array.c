@@ -32,10 +32,10 @@ sp_IntArray*sp_IntArray_from_range(sp_int s,sp_int e){sp_IntArray*a=sp_IntArray_
    bits of a copied span follow it (ia_bits_copy), or -- for the ops that
    permute or filter in place -- the window is read out as (value, nil)
    pairs, worked on, and written back with its bits (ia_pack / ia_unpack). */
-static void ia_bits_copy(sp_IntArray*d,sp_int dpos,sp_IntArray*s,sp_int spos,sp_int n){if(!s||!s->nilbits||!sp_nilbits_any(s->nilbits,s->start+spos,s->start+spos+n))return;if(!d->nilbits)d->nilbits=sp_nilbits_new(d,d->cap);for(sp_int i=0;i<n;i++)if(sp_nilbit_get(s->nilbits,s->start+spos+i))sp_nilbit_set(d->nilbits,d->start+dpos+i);}
+static void ia_bits_copy(sp_IntArray*d,sp_int dpos,sp_IntArray*s,sp_int spos,sp_int n){if(!s||!s->nilbits||!sp_nilbits_any(s->nilbits,s->start+spos,s->start+spos+n))return;if(!d->nilbits)SP_NILBITS_NEW_A(d);for(sp_int i=0;i<n;i++)if(sp_nilbit_get(s->nilbits,s->start+spos+i))SP_NILBIT_SET_A(d, d->start+dpos+i);}
 static sp_oint*ia_pack(sp_IntArray*a){sp_oint*p=(sp_oint*)sp_pl_alloc(sizeof(sp_oint)*(size_t)(a->len>0?a->len:1));if(!p)sp_oom_die();for(sp_int i=0;i<a->len;i++)p[i]=sp_IntArray_oget(a,i);return p;}
 /* n <= the window's length: the pairs become the window, the rest of the old window is dropped */
-static void ia_unpack(sp_IntArray*a,sp_oint*p,sp_int n){if(a->nilbits)sp_nilbits_clear_range(a->nilbits,a->start,a->start+a->len);for(sp_int i=0;i<n;i++){a->data[a->start+i]=p[i].v;if(p[i].nil){if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);sp_nilbit_set(a->nilbits,a->start+i);}}a->len=n;sp_pl_free(p);}
+static void ia_unpack(sp_IntArray*a,sp_oint*p,sp_int n){if(a->nilbits)sp_nilbits_clear_range(a->nilbits,a->start,a->start+a->len);for(sp_int i=0;i<n;i++){a->data[a->start+i]=p[i].v;if(p[i].nil){if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, a->start+i);}}a->len=n;sp_pl_free(p);}
 static sp_ofloat*fa_pack(sp_FloatArray*a){sp_ofloat*p=(sp_ofloat*)sp_pl_alloc(sizeof(sp_ofloat)*(size_t)(a->len>0?a->len:1));if(!p)sp_oom_die();for(sp_int i=0;i<a->len;i++)p[i]=sp_FloatArray_oget(a,i);return p;}
 static int ia_oeq(sp_oint x,sp_oint y){return x.nil?y.nil:(!y.nil&&x.v==y.v);}
 static sp_bool ia_include_o(sp_IntArray*a,sp_oint o){return o.nil?sp_IntArray_has_nil(a):sp_IntArray_include(a,o.v);}
@@ -158,7 +158,7 @@ void sp_IntArray_splice(sp_IntArray*a,sp_int start,sp_int len,const sp_int*src,s
   a->len=s;
   for(sp_int i=0;i<srcn;i++)sp_IntArray_push(a,sb[i]);
   for(sp_int i=0;i<tail_n;i++)sp_IntArray_push(a,tb[i]);
-  if(to){for(sp_int i=0;i<tail_n;i++)if(to[i].nil)sp_nilbit_set(a->nilbits,a->start+s+srcn+i);sp_pl_free(to-tail_from);}
+  if(to){for(sp_int i=0;i<tail_n;i++)if(to[i].nil)SP_NILBIT_SET_A(a, a->start+s+srcn+i);sp_pl_free(to-tail_from);}
   sp_pl_free(sb);sp_pl_free(tb);
 }
 /* the splice of a whole typed array, whose nil elements come along */
@@ -170,7 +170,7 @@ void sp_IntArray_splice_o(sp_IntArray*a,sp_int start,sp_int len,sp_IntArray*src)
   for(sp_int i=0;i<n;i++)vals[i]=p[i].v;
   sp_int alen=a?a->len:0,s=start;if(s<0)s+=alen;
   sp_IntArray_splice(a,start,len,vals,n);
-  if(a&&!a->frozen&&s>=0){if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);for(sp_int i=0;i<n;i++)if(p[i].nil)sp_nilbit_set(a->nilbits,a->start+s+i);}
+  if(a&&!a->frozen&&s>=0){if(!a->nilbits)SP_NILBITS_NEW_A(a);for(sp_int i=0;i<n;i++)if(p[i].nil)SP_NILBIT_SET_A(a, a->start+s+i);}
   sp_pl_free(vals);sp_pl_free(p);
 }
 void sp_FloatArray_splice(sp_FloatArray*a,sp_int start,sp_int len,const sp_float*src,sp_int srcn){
@@ -194,7 +194,7 @@ void sp_FloatArray_splice(sp_FloatArray*a,sp_int start,sp_int len,const sp_float
   a->len=s;
   for(sp_int i=0;i<srcn;i++)sp_FloatArray_push(a,sb[i]);
   for(sp_int i=0;i<tail_n;i++)sp_FloatArray_push(a,tb[i]);
-  if(to){for(sp_int i=0;i<tail_n;i++)if(to[i].nil)sp_nilbit_set(a->nilbits,s+srcn+i);sp_pl_free(to-tail_from);}
+  if(to){for(sp_int i=0;i<tail_n;i++)if(to[i].nil)SP_NILBIT_SET_A(a, s+srcn+i);sp_pl_free(to-tail_from);}
   sp_pl_free(sb);sp_pl_free(tb);
 }
 void sp_FloatArray_splice_o(sp_FloatArray*a,sp_int start,sp_int len,sp_FloatArray*src){
@@ -205,7 +205,7 @@ void sp_FloatArray_splice_o(sp_FloatArray*a,sp_int start,sp_int len,sp_FloatArra
   for(sp_int i=0;i<n;i++)vals[i]=p[i].v;
   sp_int alen=a?a->len:0,s=start;if(s<0)s+=alen;
   sp_FloatArray_splice(a,start,len,vals,n);
-  if(a&&!a->frozen&&s>=0){if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);for(sp_int i=0;i<n;i++)if(p[i].nil)sp_nilbit_set(a->nilbits,s+i);}
+  if(a&&!a->frozen&&s>=0){if(!a->nilbits)SP_NILBITS_NEW_A(a);for(sp_int i=0;i<n;i++)if(p[i].nil)SP_NILBIT_SET_A(a, s+i);}
   sp_pl_free(vals);sp_pl_free(p);
 }
 /* A String array's nil is NULL, as a past-the-end `a[i] = s` pads it. The
@@ -457,13 +457,13 @@ sp_int sp_IntArray_sum(sp_IntArray*a,sp_int init){sp_int s=init;for(sp_int i=0;i
 sp_bool sp_IntArray_include(sp_IntArray*a,sp_int v){if(!a)return FALSE;for(sp_int i=0;i<a->len;i++)if(a->data[a->start+i]==v&&!sp_IntArray_elem_nil(a,i))return TRUE;return FALSE;}
 sp_int sp_IntArray_index(sp_IntArray*a,sp_int v){for(sp_int i=0;i<a->len;i++)if(a->data[a->start+i]==v&&!sp_IntArray_elem_nil(a,i))return i;return -1;}
 sp_int sp_IntArray_rindex(sp_IntArray*a,sp_int v){for(sp_int i=a->len-1;i>=0;i--)if(a->data[a->start+i]==v&&!sp_IntArray_elem_nil(a,i))return i;return -1;}
-sp_oint sp_IntArray_delete_at_o(sp_IntArray*a,sp_int i){SP_GC_ROOT(a);if(!a)return sp_oint_nil();if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return sp_oint_nil();}if(i<0)i+=a->len;if(i<0||i>=a->len)return sp_oint_nil();sp_oint v=sp_IntArray_oget(a,i);for(sp_int j=i;j<a->len-1;j++)a->data[a->start+j]=a->data[a->start+j+1];if(SP_UNLIKELY(a->nilbits)){sp_nilbit_clr(a->nilbits,a->start+i);sp_nilbits_move(a->nilbits,a->cap,a->start+i+1,a->start+i,a->len-i-1);}a->len--;return v;}
+sp_oint sp_IntArray_delete_at_o(sp_IntArray*a,sp_int i){SP_GC_ROOT(a);if(!a)return sp_oint_nil();if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return sp_oint_nil();}if(i<0)i+=a->len;if(i<0||i>=a->len)return sp_oint_nil();sp_oint v=sp_IntArray_oget(a,i);for(sp_int j=i;j<a->len-1;j++)a->data[a->start+j]=a->data[a->start+j+1];if(SP_UNLIKELY(a->nilbits)){sp_nilbit_clr(a->nilbits,a->start+i);SP_NILBITS_MOVE_A(a, a->cap, a->start+i+1, a->start+i, a->len-i-1);}a->len--;return v;}
 sp_oint sp_IntArray_delete_o(sp_IntArray*a,sp_int v){SP_GC_ROOT(a);if(!a)return sp_oint_nil();if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return sp_oint_nil();}sp_int w=0;if(SP_UNLIKELY(a->nilbits)){sp_oint*p=ia_pack(a);for(sp_int i=0;i<a->len;i++)if(p[i].nil||p[i].v!=v)p[w++]=p[i];sp_int d=a->len-w;ia_unpack(a,p,w);return d>0?sp_oint_of(v):sp_oint_nil();}for(sp_int i=0;i<a->len;i++){if(a->data[a->start+i]!=v){a->data[a->start+w]=a->data[a->start+i];w++;}}sp_int d=a->len-w;a->len=w;return d>0?sp_oint_of(v):sp_oint_nil();}  /* CRuby: nil when absent */
 sp_bool sp_IntArray_delete_nil(sp_IntArray*a){SP_GC_ROOT(a);if(!a||!a->nilbits)return FALSE;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return FALSE;}sp_oint*p=ia_pack(a);sp_int w=0;for(sp_int i=0;i<a->len;i++)if(!p[i].nil)p[w++]=p[i];sp_bool ch=w!=a->len;ia_unpack(a,p,w);sp_IntArray_drop_nilbits(a);return ch;}
 /* Issue #788: clamp i so a very-negative index doesn't underflow past
    a->start and write into the array's GC header. */
-void sp_IntArray_insert(sp_IntArray*a,sp_int i,sp_int v){SP_GC_ROOT(a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_IntArray_push_nil(a);/* CRuby pads with nils past the end */sp_IntArray_push(a,0);for(sp_int j=a->len-1;j>i;j--)a->data[a->start+j]=a->data[a->start+j-1];if(SP_UNLIKELY(a->nilbits))sp_nilbits_move(a->nilbits,a->cap,a->start+i,a->start+i+1,a->len-1-i);a->data[a->start+i]=v;}
-void sp_IntArray_insert_nil(sp_IntArray*a,sp_int i){SP_GC_ROOT(a);if(!a)return;sp_int j=i<0?i+a->len+1:i;sp_IntArray_insert(a,i,0);if(a->frozen||j<0)return;if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);sp_nilbit_set(a->nilbits,a->start+j);}
+void sp_IntArray_insert(sp_IntArray*a,sp_int i,sp_int v){SP_GC_ROOT(a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_IntArray_push_nil(a);/* CRuby pads with nils past the end */sp_IntArray_push(a,0);for(sp_int j=a->len-1;j>i;j--)a->data[a->start+j]=a->data[a->start+j-1];if(SP_UNLIKELY(a->nilbits))SP_NILBITS_MOVE_A(a, a->cap, a->start+i, a->start+i+1, a->len-1-i);a->data[a->start+i]=v;}
+void sp_IntArray_insert_nil(sp_IntArray*a,sp_int i){SP_GC_ROOT(a);if(!a)return;sp_int j=i<0?i+a->len+1:i;sp_IntArray_insert(a,i,0);if(a->frozen||j<0)return;if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, a->start+j);}
 /* The set operations below hash past SP_SETOP_LINEAR elements; an array
    carrying nil bits takes the element-wise sp_oint scan instead (nil is not
    a value the sp_iset can hold apart from 0). */
@@ -519,8 +519,8 @@ sp_IntArray*sp_IntArray_difference(sp_IntArray*a,sp_IntArray*b){SP_GC_ROOT(a);SP
   else for(sp_int i=0;i<a->len;i++){sp_int v=a->data[a->start+i];if(!sp_IntArray_include(b,v))sp_IntArray_push(r,v);}
   return r;}
 void sp_IntArray_unshift(sp_IntArray*a,sp_int v){SP_GC_ROOT(a);if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(a->start>0){a->start--;a->data[a->start]=v;a->len++;}
-else{sp_int e=a->len+1;if(e>a->cap)sp_IntArray_set_cap(a,a->cap*2+1);memmove(a->data+1,a->data,sizeof(sp_int)*a->len);if(SP_UNLIKELY(a->nilbits))sp_nilbits_move(a->nilbits,a->cap,0,1,a->len);a->data[0]=v;a->len++;}}
-void sp_IntArray_unshift_nil(sp_IntArray*a){SP_GC_ROOT(a);if(!a)return;sp_IntArray_unshift(a,0);if(a->frozen)return;if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);sp_nilbit_set(a->nilbits,a->start);}
+else{sp_int e=a->len+1;if(e>a->cap)sp_IntArray_set_cap(a,a->cap*2+1);memmove(a->data+1,a->data,sizeof(sp_int)*a->len);if(SP_UNLIKELY(a->nilbits))SP_NILBITS_MOVE_A(a, a->cap, 0, 1, a->len);a->data[0]=v;a->len++;}}
+void sp_IntArray_unshift_nil(sp_IntArray*a){SP_GC_ROOT(a);if(!a)return;sp_IntArray_unshift(a,0);if(a->frozen)return;if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, a->start);}
 /* A nil element joins as nil.to_s, the empty string, the way the Array's
    inspect renders it as nil. */
 const char*sp_IntArray_join(sp_IntArray*a,const char*sep){if(!sep)sep="";size_t sl=sp_str_byte_len(sep),cap=256;char*buf=(char*)sp_pl_alloc(cap);size_t len=0;for(sp_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}char tmp[32];sp_int v=a->data[a->start+i];int n=sp_IntArray_elem_nil(a,i)?0:snprintf(tmp,32,"%lld",(long long)v);if(len+n>=cap){cap*=2;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,tmp,n);len+=n;}buf[len]=0;char*r=sp_str_alloc(len);memcpy(r,buf,len);sp_str_set_len(r,len);sp_pl_free(buf);return r;}
@@ -532,13 +532,13 @@ sp_bool sp_IntArray_eq(sp_IntArray*a,sp_IntArray*b){if(!a||!b)return a==b;if(a->
 sp_oint sp_IntArray_cmp_o(sp_IntArray*a,sp_IntArray*b){if(!a||!b)return sp_oint_of(a==b?0:(a?1:-1));sp_int n=a->len<b->len?a->len:b->len;for(sp_int i=0;i<n;i++){sp_oint av=sp_IntArray_oget(a,i),bv=sp_IntArray_oget(b,i);if(av.nil||bv.nil){if(av.nil&&bv.nil)continue;return sp_oint_nil();}if(av.v<bv.v)return sp_oint_of(-1);if(av.v>bv.v)return sp_oint_of(1);}if(a->len<b->len)return sp_oint_of(-1);if(a->len>b->len)return sp_oint_of(1);return sp_oint_of(0);}
 
 /* ============================ sp_FloatArray ============================ */
-static void fa_bits_copy(sp_FloatArray*d,sp_int dpos,sp_FloatArray*s,sp_int spos,sp_int n){if(!s||!s->nilbits||!sp_nilbits_any(s->nilbits,spos,spos+n))return;if(!d->nilbits)d->nilbits=sp_nilbits_new(d,d->cap);for(sp_int i=0;i<n;i++)if(sp_nilbit_get(s->nilbits,spos+i))sp_nilbit_set(d->nilbits,dpos+i);}
-static void fa_unpack(sp_FloatArray*a,sp_ofloat*p,sp_int n){if(a->nilbits)sp_nilbits_clear_range(a->nilbits,0,a->len);for(sp_int i=0;i<n;i++){a->data[i]=p[i].v;if(p[i].nil){if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);sp_nilbit_set(a->nilbits,i);}}a->len=n;sp_pl_free(p);}
+static void fa_bits_copy(sp_FloatArray*d,sp_int dpos,sp_FloatArray*s,sp_int spos,sp_int n){if(!s||!s->nilbits||!sp_nilbits_any(s->nilbits,spos,spos+n))return;if(!d->nilbits)SP_NILBITS_NEW_A(d);for(sp_int i=0;i<n;i++)if(sp_nilbit_get(s->nilbits,spos+i))SP_NILBIT_SET_A(d, dpos+i);}
+static void fa_unpack(sp_FloatArray*a,sp_ofloat*p,sp_int n){if(a->nilbits)sp_nilbits_clear_range(a->nilbits,0,a->len);for(sp_int i=0;i<n;i++){a->data[i]=p[i].v;if(p[i].nil){if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, i);}}a->len=n;sp_pl_free(p);}
 static int fa_feq(sp_float x,sp_float v){return x==v||(v!=v&&x!=x&&memcmp(&x,&v,sizeof v)==0);}   /* == with the NaN identity fallback (#3650) */
 static int fa_oeq(sp_ofloat x,sp_ofloat y){return x.nil?y.nil:(!y.nil&&fa_feq(x.v,y.v));}
 static sp_bool fa_include_o(sp_FloatArray*a,sp_ofloat o){return o.nil?sp_FloatArray_has_nil(a):sp_FloatArray_include(a,o.v);}
-void sp_FloatArray_unshift(sp_FloatArray*a,sp_float v){SP_GC_ROOT(a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_FloatArray_push(a,0.0);if(a->len>1)memmove(&a->data[1],&a->data[0],(size_t)(a->len-1)*sizeof(sp_float));if(SP_UNLIKELY(a->nilbits))sp_nilbits_move(a->nilbits,a->cap,0,1,a->len-1);a->data[0]=v;}
-void sp_FloatArray_unshift_nil(sp_FloatArray*a){SP_GC_ROOT(a);if(!a)return;sp_FloatArray_unshift(a,0.0);if(a->frozen)return;if(!a->nilbits)a->nilbits=sp_nilbits_new(a,a->cap);sp_nilbit_set(a->nilbits,0);}
+void sp_FloatArray_unshift(sp_FloatArray*a,sp_float v){SP_GC_ROOT(a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_FloatArray_push(a,0.0);if(a->len>1)memmove(&a->data[1],&a->data[0],(size_t)(a->len-1)*sizeof(sp_float));if(SP_UNLIKELY(a->nilbits))SP_NILBITS_MOVE_A(a, a->cap, 0, 1, a->len-1);a->data[0]=v;}
+void sp_FloatArray_unshift_nil(sp_FloatArray*a){SP_GC_ROOT(a);if(!a)return;sp_FloatArray_unshift(a,0.0);if(a->frozen)return;if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, 0);}
 /* CRuby's ruby_float_step_size: how many values beg.step(end, unit) yields,
    floored with an epsilon so float drift never drops or adds one. NaN
    anywhere answers NaN, which a `i < n` walk treats as none. */
@@ -664,8 +664,8 @@ void sp_FloatArray_insert_nil(sp_FloatArray *a, sp_int i) {
   sp_int j = i < 0 ? i + a->len + 1 : i;
   sp_FloatArray_insert(a, i, 0.0);
   if (a->frozen || j < 0) return;
-  if (!a->nilbits) a->nilbits = sp_nilbits_new(a, a->cap);
-  sp_nilbit_set(a->nilbits, j);
+  if (!a->nilbits) SP_NILBITS_NEW_A(a);
+  SP_NILBIT_SET_A(a, j);
 }
 /* uniq! in place, matching elements the way sp_FloatArray_uniq does */
 void sp_FloatArray_uniq_bang(sp_FloatArray *a) {
@@ -1067,7 +1067,7 @@ sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, sp_int from, sp_int n) {SP_G
   }
 else {
     for (sp_int i = from; i + n < a->len; i++) a->data[a->start + i] = a->data[a->start + i + n];
-    if (SP_UNLIKELY(a->nilbits)) { sp_nilbits_move(a->nilbits, a->cap, a->start + from + n, a->start + from, a->len - from - n); sp_nilbits_clear_range(a->nilbits, a->start + a->len - n, a->start + a->len); }
+    if (SP_UNLIKELY(a->nilbits)) { SP_NILBITS_MOVE_A(a, a->cap, a->start + from + n, a->start + from, a->len - from - n); sp_nilbits_clear_range(a->nilbits, a->start + a->len - n, a->start + a->len); }
     a->len -= n;
   }
   return r;
@@ -1085,7 +1085,7 @@ sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, sp_int from, sp_int n)
   SP_GC_ROOT(r);
   for (sp_int i = 0; i < n; i++) sp_FloatArray_push_o(r, sp_FloatArray_oget(a, from + i));
   for (sp_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
-  if (SP_UNLIKELY(a->nilbits)) { sp_nilbits_move(a->nilbits, a->cap, from + n, from, a->len - from - n); sp_nilbits_clear_range(a->nilbits, a->len - n, a->len); }
+  if (SP_UNLIKELY(a->nilbits)) { SP_NILBITS_MOVE_A(a, a->cap, from + n, from, a->len - from - n); sp_nilbits_clear_range(a->nilbits, a->len - n, a->len); }
   a->len -= n;
   return r;
 }

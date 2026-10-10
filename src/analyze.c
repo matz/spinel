@@ -6928,6 +6928,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     if (ty_is_array(rt) && sp_streq(sym, "push")) continue;
     if (comp_method_index(c, sym) >= 0) continue;     /* a same-named top-level def wins */
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
+    int num_only = 0;   /* a Numeric method Integer or Float inherits */
     /* an undefined name must reach codegen's immediate NameError, not become
        a wrapper whose body call aborts the build (#2752) */
     {
@@ -6939,13 +6940,15 @@ static int desugar_builtin_method_obj(Compiler *c) {
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
-      /* Comparable's methods (between?, clamp) are the class's through the
-         module, which the class's own table leaves out */
+      /* Comparable's methods (between?, clamp) and Numeric's (abs2, quo,
+         positive?) are the class's through the module or the superclass,
+         which the class's own table leaves out */
       if (bcls && !bool_op &&
           !builtin_method_known(bcls, sym) && !builtin_comparable_owns(bcls, sym) &&
-          !builtin_object_method_known(sym))
+          !builtin_numeric_owns(bcls, sym) && !builtin_object_method_known(sym))
         continue;
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
+      num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
     }
     char wname[48];
     snprintf(wname, sizeof wname, "__bam_%s", comp_node_tag(c, id));
@@ -6999,6 +7002,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* its Method#arity is Comparable's, which a boxed self reads off the
        Method at run time (method_scope_arity) */
     if (cmp_only) nt_node_set_int(nt, def, "bam_cmp", 1);
+    if (num_only) nt_node_set_int(nt, def, "bam_num", 1);
     Scope *ws = comp_scope_new(c, wname, def);
     ws->class_id = -1;
     ws->body = body;

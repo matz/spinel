@@ -262,6 +262,8 @@ int builtin_method_arity(const char *cls, const char *m, int *out);
 int builtin_method_known(const char *cls, const char *m);
 int builtin_comparable_owns(const char *cls, const char *m);
 int builtin_comparable_arity(const char *m);
+int builtin_numeric_owns(const char *cls, const char *m);
+int builtin_numeric_arity(const char *m, int *out);
 void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, Buf *b);
 void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *sym, const int *argv, int argc, Buf *b);
 void emit_bm_abi_args(Buf *b, const char *rb, int abi, const char *sig, int fixed, int rest, int ret, int poly, int pfixed, const char *thunk, int tmin, int tmax);

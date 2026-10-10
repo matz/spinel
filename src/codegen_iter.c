@@ -259,6 +259,47 @@ static void yield_target_enter(int fe) {
    as the inliner hands it to g_block_id -- caller code at the depth before
    the inline's renames. Answers whether an entry was pushed; the caller
    keeps g_ytgt_cur to hand back to yield_target_pop. */
+/* Where a literal block's `return` goes. The block's code belongs to the
+   method being emitted where the block is written: when that method is
+   itself spliced into its caller (a yielding method), its return funnel is
+   the inline's `_yretN`, not the real function's. Recorded per block node
+   while the call holding the block is spliced, and given back after (the
+   splices nest, so the recording does too). */
+typedef struct { const char *label, *var; TyKind rt; int exc, ens, set; } BlockRetHome;
+static BlockRetHome *g_blk_ret_home; static int g_blk_ret_cap;
+
+BlockRetHome block_ret_home_enter(int block, int saved_block) {
+  BlockRetHome none; memset(&none, 0, sizeof none);
+  if (block < 0 || block == saved_block) return none;   /* a forwarded block keeps its own */
+  if (block >= g_blk_ret_cap) {
+    int nc = block + 64;
+    g_blk_ret_home = realloc(g_blk_ret_home, sizeof(BlockRetHome) * (size_t)nc);
+    memset(g_blk_ret_home + g_blk_ret_cap, 0, sizeof(BlockRetHome) * (size_t)(nc - g_blk_ret_cap));
+    g_blk_ret_cap = nc;
+  }
+  BlockRetHome old = g_blk_ret_home[block];
+  BlockRetHome h; memset(&h, 0, sizeof h);
+  /* only an inline's funnel (the inliners name it `_yretN`); otherwise the
+     block's return is the real function's, as before */
+  if (g_method_pr_label && strncmp(g_method_pr_label, "_yret", 5) == 0) {
+    h.label = g_method_pr_label; h.var = g_method_pr_var; h.rt = g_ret_type;
+    h.exc = g_method_pr_exc_depth; h.ens = g_method_pr_ensure_depth; h.set = 1;
+  }
+  g_blk_ret_home[block] = h;
+  old.set |= 2;   /* a slot to give back */
+  return old;
+}
+
+void block_ret_home_leave(int block, BlockRetHome old) {
+  if (!(old.set & 2)) return;
+  old.set &= 1;
+  g_blk_ret_home[block] = old;
+}
+
+static const BlockRetHome *block_ret_home(int block) {
+  return block >= 0 && block < g_blk_ret_cap && g_blk_ret_home[block].set ? &g_blk_ret_home[block] : NULL;
+}
+
 int yield_target_push(int block, int saved_block, const char *owner, int nren,
                       const char *brk, int brk_ebase) {
   if (block >= 0 && block != saved_block && g_nytgt <= SP_INLINE_DEPTH_MAX) {
@@ -1360,6 +1401,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   /* the METHOD BODY's own breaks (a while inside m) never target the caller */
   g_brk_ser_var = NULL;
   g_block_param_name = m->blk_param;
+  BlockRetHome saved_brh = block_ret_home_enter(block, saved_block);
 
   if (as_expr) buf_puts(b, "({\n");
   else { emit_indent(b, indent); buf_puts(b, "{\n"); }
@@ -1560,6 +1602,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   g_yield_slot_ty = saved_yslot;
   g_block_brk_var = saved_bbv; g_yield_blk_brk_fallback = saved_yfbv;
   g_block_brk_ebase = saved_bbe; g_yield_blk_brk_efallback = saved_yfbe;
+  block_ret_home_leave(block, saved_brh);
   g_block_brk_exc_base = saved_bbexc; g_brk_exc_base = saved_bexc;
   g_block_brk_rescue_base = saved_bbres; g_brk_rescue_base = saved_bres;
   g_brk_ser_var = saved_ser; g_brk_ensure_base = saved_ebase;
@@ -3108,6 +3151,13 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   g_ret_type = g_fn_ret_type;
   g_method_pr_exc_depth = 0;   /* the real function's funnel sits at depth 0 */
   g_method_pr_ensure_depth = 0;
+  /* ... unless the block was written in a method body that is itself
+     spliced: its `return` leaves that inline */
+  { const BlockRetHome *h = block_ret_home(blk);
+    if (h) {
+      g_method_pr_label = h->label; g_method_pr_var = h->var; g_ret_type = h->rt;
+      g_method_pr_exc_depth = h->exc; g_method_pr_ensure_depth = h->ens;
+    } }
   /* likewise, the block body's `self` is the CALLER's (an ivar read inside
      the block must not resolve against the inlined method's receiver) -- and
      so is the block body's emitting-class, so an implicit-self *call* in the

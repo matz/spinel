@@ -1897,6 +1897,19 @@ static const PolyPlan *cplan_poly_level(Compiler *c, int id, int full) {
   return p;
 }
 
+const PolyPlan *cplan_poly_fresh(Compiler *c, int id) {
+  static PolyPlan fresh;
+  if (id < 0 || id >= c->node_cap) { free(fresh.arm); fresh.arm = NULL; fresh.n = 0; return &fresh; }
+#ifndef NDEBUG
+  int tmp0 = g_tmp;
+#endif
+  cpoly_resolve(c, id, &fresh, 1);
+#ifndef NDEBUG
+  assert(g_tmp == tmp0);   /* resolving emits nothing */
+#endif
+  return &fresh;
+}
+
 const PolyPlan *cplan_poly_block(Compiler *c, int id) {
   static PolyPlan bp;
   free(bp.arm);

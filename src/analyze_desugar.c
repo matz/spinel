@@ -6052,6 +6052,22 @@ static void fwd_hoist_callable(Compiler *c, int id, int blk, int *ex) {
   if (nt_int(nt, id, "enum_self_result", -1) == recv) nt_node_set_int(nt, id, "enum_self_result", paren);
 }
 
+/* The count a builtin's Method passed as a block takes, when its wrapper
+   is a lambda of a fixed count (bam_lambda: the builtin's arity), else -1.
+   The method() call names the wrapper once the desugar has bound it. */
+static int fwd_bam_lambda_count(Compiler *c, int ex) {
+  const NodeTable *nt = c->nt;
+  int *mns, nmn = method_recv_nodes(c, ex, &mns), f = -1;
+  int mn = nmn == 1 ? mns[0] : nmn == 0 && nt_kind(nt, ex) == NK_CallNode ? ex : -1;
+  free(mns);
+  const char *w = mn >= 0 ? method_sym_arg(c, mn) : NULL;
+  int mi = w && strncmp(w, "__bam_", 6) == 0 ? comp_method_index(c, w) : -1;
+  if (mi >= 0 && c->scopes[mi].def_node >= 0 && c->scopes[mi].rest_idx < 0 &&
+      nt_int(nt, c->scopes[mi].def_node, "bam_lambda", 0))
+    f = c->scopes[mi].nparams - 1;
+  return f;
+}
+
 /* `recv.name(arg)` (no argument for -1), for the forwards built below */
 static int fwd_new_call(NodeTable *nt, int recv, const char *name, int arg) {
   int call = nt_new_node(nt, "CallNode");
@@ -6416,6 +6432,25 @@ int desugar_value_callable_forwards(Compiler *c) {
     if (spread < 0 && callnode >= 0)
       callnode = fwd_arity_pick(c, nt, ex, id, callnode, is_find_alias(name),
                                 find_proc_test);
+    /* A builtin's Method passed as a block is a lambda of the builtin's
+       arity: yielded another count, it raises CRuby's ArgumentError, where
+       the wrapper took the leading values and dropped the rest
+       (`[1].map(&5.method(:abs))` answered [5]). The block raises in place
+       of the call, which would also have typed the wrapper's parameters
+       from values it never takes. */
+    int lam = anon || spread < 0 ? -1 : fwd_bam_lambda_count(c, ex);
+    int given = wrap_pair ? 1 : arity;
+    if (lam >= 0 && lam != given && callnode >= 0) {
+      char msg[80];
+      snprintf(msg, sizeof msg, "wrong number of arguments (given %d, expected %d)", given, lam);
+      int ec = nt_new_node(nt, "ConstantReadNode"), em = nt_new_node(nt, "StringNode");
+      nt_node_set_str(nt, ec, "name", "ArgumentError");
+      nt_node_set_str(nt, em, "content", msg);
+      int ea[2] = { ec, em }, eargs = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, eargs, "arguments", ea, 2);
+      callnode = fwd_new_call(nt, -1, "raise", -1);
+      nt_node_set_ref(nt, callnode, "arguments", eargs);
+    }
 
     int body = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, body, "body", &callnode, 1);

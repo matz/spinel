@@ -1,0 +1,33 @@
+25
+0
+Numeric
+:abs2
+(5/2)
+1
+Numeric
+true
+true
+nil
+true
+(5+0i)
+[5, 0]
+-1
+Numeric
+Integer
+0
+6.25
+0
+Numeric
+2
+0.5
+false
+"wrong number of arguments (given 0, expected 1)"
+Numeric
+-1
+5
+Numeric
+0
+2.5
+Numeric
+1
+true

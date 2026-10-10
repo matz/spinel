@@ -1,0 +1,2 @@
+[true, true]
+NoMethodError: undefined method '>' for nil

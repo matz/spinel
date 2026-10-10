@@ -2894,6 +2894,10 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
     if (sc >= 2) emit_boxed(c, sv[1], b); else buf_puts(b, "sp_box_int(1)");
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tss);
     buf_printf(b, " if (sp_poly_cmp_ck(_t%d, sp_box_int(0)) == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", tss);
+    /* a span past 2**30 steps raises as the sp_int form below does, rather
+       than pushing until memory runs out */
+    buf_printf(b, " if (sp_poly_cmp_ck(sp_poly_div(sp_poly_sub(_t%d, _t%d), _t%d), sp_box_int(1LL << 30)) >= 0)"
+                  " sp_raise_cls(\"RangeError\", \"range too large to materialize\");", tll, tcc, tss);
     buf_printf(b, " sp_bool _t%d = sp_poly_cmp_ck(_t%d, sp_box_int(0)) > 0;", tdd, tss);
     buf_printf(b, " for (; _t%d ? sp_poly_le(_t%d, _t%d) : sp_poly_ge(_t%d, _t%d); _t%d = sp_poly_add(_t%d, _t%d)) sp_PolyArray_push(_t%d, _t%d);",
                tdd, tcc, tll, tcc, tll, tcc, tcc, tss, trr, tcc);
@@ -2904,19 +2908,16 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
                  (sc >= 2 && comp_ntype(c, sv[1]) == TY_FLOAT);
   int tr = ++g_tmp, tl = ++g_tmp, ts = ++g_tmp, ti = ++g_tmp;
   if (!is_float) {
-    buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d); sp_int _t%d = ", tr, tr, tl);
+    buf_printf(b, "({ sp_int _t%d = ", tl);
     emit_int_expr(c, sv[0], b); buf_printf(b, "; sp_int _t%d = ", ts);
     if (sc >= 2) emit_int_expr(c, sv[1], b); else buf_puts(b, "1");
     /* a zero step never advances, so CRuby rejects it outright (#3648) */
     buf_printf(b, "; if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", ts);
-    /* the limit is the last value: step only while the next one is within
-       it (sp_int_loop_next), so a limit near 2**63-1 ends the array where
-       `_t += step` went past it and round forever */
-    int tg = ++g_tmp;
-    buf_printf(b, " for (sp_int _t%d = ", ti); emit_expr(c, recv, b);
-    buf_printf(b, ", _t%d = _t%d >= 0 ? _t%d <= _t%d : _t%d >= _t%d; _t%d; _t%d = sp_int_loop_next(&_t%d, _t%d, _t%d))"
-                  " sp_IntArray_push(_t%d, _t%d); _t%d; })",
-               tg, ts, ti, tl, ti, tl, tg, tg, ti, tl, ts, tr, ti, tr);
+    /* built as Range#step builds its array: the limit is the last value,
+       and a span past 2**30 elements is CRuby's lazy sequence, which
+       raises rather than pushing until memory runs out */
+    buf_puts(b, " sp_IntArray_from_range_step("); emit_expr(c, recv, b);
+    buf_printf(b, ", _t%d, _t%d, 0); })", tl, ts);
     return 1;
   }
   int tb = ++g_tmp, tn = ++g_tmp;

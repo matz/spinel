@@ -14525,17 +14525,18 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
                ts, ts, bcon, k, ta, k, ts, ta);
     if (elem == TY_INT) buf_printf(b, "_sa%d->data + _sa%d->start", ta, ta);
     else buf_printf(b, "_sa%d->data", ta);
-    /* optcarrot's per-tile @bg_pixels splice: splice_o answers the plain
-       splice at once when the source has no nil bits */
+    /* optcarrot's per-tile @bg_pixels splice: a source with no nil bits is
+       the plain splice from its data, inline; only one with bits goes
+       through splice_o */
     buf_printf(b, "; _srcn%d = _sa%d->len; ", ta, ta);
-    if (onum) buf_printf(b, "_so%d = _sa%d; ", ta, ta);
+    if (onum) buf_printf(b, "if (SP_UNLIKELY(_sa%d->nilbits != NULL)) _so%d = _sa%d; ", ta, ta, ta);
     buf_puts(b, "}\n");
     buf_printf(b, "else if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) { _ca%d = sp_%sArray_from_elems(_t%d); _src%d = ",
                ts, ts, ta, k, ts, ta);
     if (elem == TY_INT) buf_printf(b, "_ca%d->data + _ca%d->start", ta, ta);
     else buf_printf(b, "_ca%d->data", ta);
     buf_printf(b, "; _srcn%d = _ca%d->len; ", ta, ta);
-    if (onum) buf_printf(b, "_so%d = _ca%d; ", ta, ta);
+    if (onum) buf_printf(b, "if (_ca%d->nilbits) _so%d = _ca%d; ", ta, ta, ta);
     buf_puts(b, "}\n");
     /* a nil scalar is spliced in as a one-element array holding nil */
     if (onum)
@@ -14561,8 +14562,12 @@ void emit_array_splice(Compiler *c, int id, int recv, TyKind rt,
   /* the spliced-in values carry their nils: an Integer or Float source
      array goes through splice_o, which takes its bits along (and is the
      plain splice when it has none) */
-  if (onum && (rhs_is_arr || tam_src))
-    buf_printf(b, "sp_%sArray_splice_o(_t%d, _s%d, _l%d, _t%d); ", k, ta, ta, ta, ts);
+  if (onum && (rhs_is_arr || tam_src)) {
+    buf_printf(b, "if (SP_UNLIKELY(_t%d && _t%d->nilbits)) sp_%sArray_splice_o(_t%d, _s%d, _l%d, _t%d); ", ts, ts, k, ta, ta, ta, ts);
+    buf_printf(b, "else sp_%sArray_splice(_t%d, _s%d, _l%d, _t%d ? _t%d->data", k, ta, ta, ta, ts, ts);
+    if (elem == TY_INT) buf_printf(b, " + _t%d->start", ts);
+    buf_printf(b, " : NULL, _t%d ? _t%d->len : 0); ", ts, ts);
+  }
   else if (poly_so)
     buf_printf(b, "if (_so%d) sp_%sArray_splice_o(_t%d, _s%d, _l%d, _so%d); else sp_%sArray_splice(_t%d, _s%d, _l%d, _src%d, _srcn%d); ",
                ta, k, ta, ta, ta, ta, k, ta, ta, ta, ta, ta);

@@ -145,7 +145,9 @@ void sp_IntArray_splice(sp_IntArray*a,sp_int start,sp_int len,const sp_int*src,s
      buffer (self-splice). This is the hot shape (optcarrot's per-tile
      `@bg_pixels[x, 8] = <8-elem row>`); the general path below allocates.
      The source holds no nil (it is plain values), so the span's bits clear. */
-  if(len==srcn){if(srcn>0)memmove(a->data+a->start+s,src,sizeof(sp_int)*(size_t)srcn);if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,a->start+s,a->start+s+srcn);return;}
+  /* The span's bits clear first, so the memmove stays the tail call it is
+     without a bitmap (one test before it, nothing after: master's code). */
+  if(len==srcn){if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,a->start+s,a->start+s+srcn);if(srcn>0)memmove(a->data+a->start+s,src,sizeof(sp_int)*(size_t)srcn);return;}
   SP_GC_ROOT(a);
   sp_int*sb=NULL;
   if(srcn>0){sb=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(sp_int)*(size_t)srcn);}
@@ -163,8 +165,9 @@ void sp_IntArray_splice(sp_IntArray*a,sp_int start,sp_int len,const sp_int*src,s
 }
 /* the splice of a whole typed array, whose nil elements come along */
 void sp_IntArray_splice_o(sp_IntArray*a,sp_int start,sp_int len,sp_IntArray*src){
-  SP_GC_ROOT(a);SP_GC_ROOT(src);
+  /* a source with no bits is the plain splice, which roots what it needs */
   if(!src||!src->nilbits){sp_IntArray_splice(a,start,len,src?src->data+src->start:NULL,src?src->len:0);return;}
+  SP_GC_ROOT(a);SP_GC_ROOT(src);
   sp_oint*p=ia_pack(src);sp_int n=src->len;
   sp_int*vals=(sp_int*)sp_pl_alloc(sizeof(sp_int)*(size_t)(n>0?n:1));if(!vals)sp_oom_die();
   for(sp_int i=0;i<n;i++)vals[i]=p[i].v;
@@ -182,7 +185,7 @@ void sp_FloatArray_splice(sp_FloatArray*a,sp_int start,sp_int len,const sp_float
   if(s<0){sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)start,(long long)-alen));return;}
   if(s>alen){sp_FloatArray_splice_gap(a,s,src,srcn);return;}
   if(s+len>alen)len=alen-s;
-  if(len==srcn){if(srcn>0)memmove(a->data+s,src,sizeof(sp_float)*(size_t)srcn);if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,s,s+srcn);return;}  /* see the int form */
+  if(len==srcn){if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,s,s+srcn);if(srcn>0)memmove(a->data+s,src,sizeof(sp_float)*(size_t)srcn);return;}  /* see the int form */
   SP_GC_ROOT(a);
   sp_float*sb=NULL;
   if(srcn>0){sb=(sp_float*)sp_pl_alloc(sizeof(sp_float)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(sp_float)*(size_t)srcn);}
@@ -198,8 +201,9 @@ void sp_FloatArray_splice(sp_FloatArray*a,sp_int start,sp_int len,const sp_float
   sp_pl_free(sb);sp_pl_free(tb);
 }
 void sp_FloatArray_splice_o(sp_FloatArray*a,sp_int start,sp_int len,sp_FloatArray*src){
-  SP_GC_ROOT(a);SP_GC_ROOT(src);
+  /* a source with no bits is the plain splice, which roots what it needs */
   if(!src||!src->nilbits){sp_FloatArray_splice(a,start,len,src?src->data:NULL,src?src->len:0);return;}
+  SP_GC_ROOT(a);SP_GC_ROOT(src);
   sp_ofloat*p=fa_pack(src);sp_int n=src->len;
   sp_float*vals=(sp_float*)sp_pl_alloc(sizeof(sp_float)*(size_t)(n>0?n:1));if(!vals)sp_oom_die();
   for(sp_int i=0;i<n;i++)vals[i]=p[i].v;

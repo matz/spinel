@@ -221,6 +221,31 @@ static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv
   NodeKind ak = nt_kind(c->nt, argv[0]);
   if (rt == at && !node_has_oint_form(c, argv[0]) &&
       ((rt == TY_INT && ak == NK_IntegerNode) || (rt == TY_FLOAT && ak == NK_FloatNode))) {
+    /* an element of an array a loop holds the header of (`flags[i] == 1`):
+       below the nil-free length the slot itself is compared with the
+       literal, which no nil equals; the rest reads it with its nil */
+    const NodeTable *nt = c->nt;
+    int er = nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "[]")
+             && nt_ref(nt, recv, "block") < 0 ? nt_ref(nt, recv, "receiver") : -1;
+    int ea = nt_ref(nt, recv, "arguments"), ean = 0;
+    const int *eav = er >= 0 && ea >= 0 ? nt_arr(nt, ea, "arguments", &ean) : NULL;
+    TyKind ert = er >= 0 ? comp_ntype(c, er) : TY_UNKNOWN;
+    char hd[48], hl[48], hw[48];
+    if (eav && ean == 1 && ert == (rt == TY_INT ? TY_INT_ARRAY : TY_FLOAT_ARRAY) &&
+        comp_ntype(c, eav[0]) == TY_INT && !node_has_oint_form(c, eav[0]) && !repr_of(c, er).nil_cold &&
+        hc_array(c, er, rt == TY_FLOAT, hd, hl, hw, sizeof hd)) {
+      char hr[48]; hc_read_len(hd, hr, sizeof hr);
+      const char *eq = ne ? "!=" : "==";
+      buf_printf(b, "({ sp_int _t%d = ", tl); (void)emit_int_index_raw(c, eav[0], b);
+      buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? (%s[_t%d] %s ", tl, hr, hd, tl, eq);
+      emit_expr(c, argv[0], b);
+      buf_printf(b, ") : ({ %s _t%d = sp_%sArray_oget(", oint_ctype(rt), tr, rt == TY_INT ? "Int" : "Float");
+      emit_expr(c, er, b);
+      buf_printf(b, ", _t%d); %s_t%d.nil %s _t%d.v %s ", tl, ne ? "" : "!", tr, ne ? "||" : "&&", tr, eq);
+      emit_expr(c, argv[0], b);
+      buf_puts(b, "; }); })");
+      return 1;
+    }
     buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tl); emit_oint_expr(c, recv, rt, b);
     buf_printf(b, "; %s_t%d.nil %s _t%d.v %s ", ne ? "" : "!", tl, ne ? "||" : "&&", tl, ne ? "!=" : "==");
     emit_expr(c, argv[0], b);

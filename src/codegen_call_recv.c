@@ -2065,8 +2065,8 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
         /* an oint read below the header's nil-free length (_hcr) is the
            element, with no test of its own; the rest take the oget */
         char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        if (oread) buf_printf(b, "; %s(unsigned long long)_t%d < (unsigned long long)%s ? %s(%s[_t%d]) : ({ ", inil, tk, hr, oint_of(ek), hd, tk);
-        else buf_printf(b, "; %s(unsigned long long)_t%d < (unsigned long long)%s ? %s[_t%d] : ({ ", inil, tk, hl, hd, tk);
+        if (oread) buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s(%s[_t%d]) : ({ ", inil, tk, hr, oint_of(ek), hd, tk);
+        else buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : ({ ", inil, tk, hl, hd, tk);
         emit_nil_cold_test(c, id, recv, b);
         buf_puts(b, " ");
         buf_printf(b, "sp_%sArray_%s(", k, oread ? "oget" : "get");
@@ -2082,7 +2082,7 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
          element, else the checked read raising the unwrap's error */
       if (oread && g_ck_node == id) {
         char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        buf_printf(b, "; (unsigned long long)_t%d < (unsigned long long)%s ? %s[_t%d] : sp_%sArray_get_%s(",
+        buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get_%s(",
                    tk, hr, hd, tk, k, g_ck_op == g_ck_opnd ? "opnd" : g_ck_op ? "ck" : "arg");
         emit_expr(c, recv, b);
         if (g_ck_op && g_ck_op != g_ck_opnd) buf_printf(b, ", _t%d, \"%s\"); })", tk, g_ck_op);
@@ -2092,9 +2092,9 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       }
       if (oread) {
         char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        buf_printf(b, "; (unsigned long long)_t%d < (unsigned long long)%s ? %s(%s[_t%d]) : ", tk, hr, oint_of(ek), hd, tk);
+        buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s(%s[_t%d]) : ", tk, hr, oint_of(ek), hd, tk);
       }
-      else buf_printf(b, "; (unsigned long long)_t%d < (unsigned long long)%s ? %s[_t%d] : ", tk, hl, hd, tk);
+      else buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : ", tk, hl, hd, tk);
       buf_printf(b, "sp_%sArray_%s(", k, oread ? "oget" : "get");
       emit_expr(c, recv, b);
       buf_printf(b, ", _t%d); })", tk);
@@ -7642,7 +7642,7 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
     if (hc_string(c, recv, hd, hl, sizeof hd)) {
       int tk = ++g_tmp;
       buf_printf(b, "({ sp_int _t%d = ", tk); emit_int_expr(c, argv[0], b);
-      buf_printf(b, "; (unsigned long long)_t%d < (unsigned long long)%s ? sp_oint_of((sp_int)(unsigned char)%s[_t%d]) : sp_str_getbyte_opt(%s, _t%d); })",
+      buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? sp_oint_of((sp_int)(unsigned char)%s[_t%d]) : sp_str_getbyte_opt(%s, _t%d); })",
                  tk, hl, hd, tk, r, tk);
     }
     else { buf_printf(b, "sp_str_getbyte_opt(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }

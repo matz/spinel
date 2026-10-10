@@ -3439,7 +3439,7 @@ static int nilfree_operand(Compiler *c, int v, const char *op, int left, const c
   int tk = ++g_tmp;
   buf_printf(b, "({ sp_int _t%d = ", tk);
   emit_int_expr(c, vav[0], b);
-  buf_printf(b, "; (unsigned long long)_t%d < (unsigned long long)%s ? %s[_t%d] : ", tk, hn, hd, tk);
+  buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : ", tk, hn, hd, tk);
   if (nilr) { buf_puts(b, "({ "); emit_nil_cold_test(c, v, vr, b); buf_puts(b, " "); }
   /* out of the nil-free range the element is read with its nil: the
      operator's receiver raises NoMethodError for it (a comparison's too),
@@ -8548,11 +8548,11 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
       emit_indent(b, indent + 1);
       buf_printf(b, "%s *_hcd%d_%d; sp_int _hcl%d_%d;", et, r->id, i, r->id, i);
       /* _hcw: a store may write the cached element -- not into a frozen
-         array, nor one with a nil bitmap, whose store clears the element's
-         bit (sp_IntArray_set). _hcr: the length a read can take the cached
-         element below -- 0
-         while the array has a nil bitmap, so a read below it meets no nil
-         and needs no test of its own; any other read takes the slow path */
+         array. _hcr: the nil-free length, below the array's lowest possible
+         nil (SP_*_NILFREE_LEN, its nil_lo): a read below it meets no nil and
+         needs no test of its own, and a store below it has no bit to clear;
+         anything at or past it takes the slow path. An array with a nil far
+         out (a gap past its end) keeps the fast path below the gap */
       if (r->e[i].kind != HC_STR) buf_printf(b, " int _hcw%d_%d; sp_int _hcr%d_%d;", r->id, i, r->id, i);
       if (r->e[i].nf) buf_printf(b, " sp_int _hcn%d_%d;", r->id, i);
       buf_puts(b, "\n");
@@ -8564,11 +8564,13 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
         buf_printf(b, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
                    rv, r->id, i, r->id, i);
       else {
-        buf_printf(b, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcw%d_%d = _a && !_a->frozen && !_a->nilbits; _hcr%d_%d = _a && !_a->nilbits ? _a->len : 0; ",
+        buf_printf(b, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcw%d_%d = _a && !_a->frozen; _hcr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; ",
                    r->e[i].kind == HC_INT ? "Int" : "Float", rv, r->id, i,
-                   r->e[i].kind == HC_INT ? " + _a->start" : "", r->id, i, r->id, i, r->id, i);
+                   r->e[i].kind == HC_INT ? " + _a->start" : "", r->id, i, r->id, i, r->id, i,
+                   r->e[i].kind == HC_INT ? "INT" : "FLOAT");
         if (r->e[i].nf)
-          buf_printf(b, "_hcn%d_%d = _a && !SP_MAY_NIL(_a)%s ? _a->len : 0; ", r->id, i, r->e[i].guard);
+          buf_printf(b, "_hcn%d_%d = _a%s ? SP_%s_NILFREE_LEN(_a) : 0; ", r->id, i, r->e[i].guard,
+                     r->e[i].kind == HC_INT ? "INT" : "FLOAT");
         buf_puts(b, "} ");
       }
     }
@@ -18214,7 +18216,9 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_printf(b, "{ sp_int _t%d = ", tk);
       emit_int_expr(c, argv[0], b);
       buf_printf(b, "; %s _t%d = ", c_type_name(et), tv); emit_expr(c, argv[1], b);
-      buf_printf(b, "; if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) ", hw, tk, hl);
+      /* below the nil-free length: no nil bit to clear */
+      char hr[48]; hc_read_len(hd, hr, sizeof hr);
+      buf_printf(b, "; if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) ", hw, tk, hr);
       buf_printf(b, "%s[_t%d] = _t%d;", hd, tk, tv);
       buf_puts(b, " else ");
       buf_printf(b, "sp_%sArray_set(", k);
@@ -18809,7 +18813,8 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
            assign zeroes the nil-free length while it is nil: the fold
            below it then needs no test of its own */
         if (fnil) hc_array_nilfree(c, recv, -1, hd, hn, sizeof hd);
-        buf_printf(b, "if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) { ", hw, tb, fnil ? hn : hl);
+        char hr[48]; hc_read_len(hd, hr, sizeof hr);
+        buf_printf(b, "if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) { ", hw, tb, fnil ? hn : hr);
         buf_printf(b, "%s *_t%d = &%s[_t%d]; *_t%d = ", c_type_name(et), tp, hd, tb, tp);
       }
       else {

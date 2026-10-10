@@ -11167,6 +11167,78 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
   emit_args_filled_argv(c, callee_idx, argv, argc, argsNode, lead, out);
 }
 
+/* A strict parameter (param_strict) takes its argument plain: a value
+   that can be nil raises at the call the error the callee's first use would
+   have raised. Every positional runs first, in source order, into a temp;
+   then each strict one is checked in the callee's order (ord); each is bound
+   (view_bind) to what the binder below reads. Without a prelude to run them
+   in, each strict argument is checked where it is passed. */
+static void emit_strict_args(Compiler *c, int mi, const int *argv, int pos_argc, int kwh, const ArgLayout *L) {
+  Scope *m = &c->scopes[mi];
+  int sj[16], sn = 0;
+  for (int j = 0; kwh < 0 && j < m->nparams && j < 16 && j < L->n; j++)
+    if (L->from[j] == ARG_NODE && L->arg[j] >= 0 && L->arg[j] < pos_argc &&
+        param_strict(c, mi, j, NULL, NULL) &&
+        (node_has_oint_form(c, argv[L->arg[j]]) || repr_of(c, argv[L->arg[j]]).kind == RK_BOXED ||
+         comp_ntype(c, argv[L->arg[j]]) == TY_POLY)) sj[sn++] = j;
+  if (sn == 0) return;
+  /* the checks in the callee's order */
+  for (int a = 1; a < sn; a++)
+    for (int b = a; b > 0; b--) {
+      int oa = 0, ob = 0;
+      param_strict(c, mi, sj[b - 1], NULL, &oa); param_strict(c, mi, sj[b], NULL, &ob);
+      if (oa > ob) { int t = sj[b]; sj[b] = sj[b - 1]; sj[b - 1] = t; }
+    }
+  Buf *pre = g_pre;
+  int held[16];
+  for (int i = 0; i < 16; i++) held[i] = -1;
+  if (pre && pos_argc <= 16) {
+    for (int i = 0; i < pos_argc; i++) {
+      int v = argv[i], strict = -1;
+      for (int q = 0; q < sn; q++) if (L->arg[sj[q]] == i) strict = sj[q];
+      TyKind vt = comp_ntype(c, v);
+      /* a boxed argument is held as the parameter's oint: unboxed, its nil kept */
+      if (strict >= 0 && !oint_kind(vt)) { LocalVar *pl = scope_local(m, m->pnames[strict]); vt = pl ? pl->type : TY_INT; }
+      int t = ++g_tmp; held[i] = t;
+      Buf vb; memset(&vb, 0, sizeof vb);
+      Buf *sv = g_pre; g_pre = pre;
+      if (strict >= 0) emit_oint_expr(c, v, vt, &vb); else emit_expr(c, v, &vb);
+      g_pre = sv;
+      emit_indent(pre, g_indent);
+      if (strict >= 0) buf_printf(pre, "%s _t%d = %s;\n", oint_ctype(vt), t, vb.p ? vb.p : oint_nil(vt));
+      else {
+        buf_printf(pre, "__typeof__(%s) _t%d = %s;", vb.p ? vb.p : "0", t, vb.p ? vb.p : "0");
+        if (vt == TY_POLY) buf_printf(pre, " SP_GC_ROOT_RBVAL(_t%d);", t);
+        else if (vt == TY_STRING) buf_printf(pre, " SP_GC_ROOT_STR(_t%d);", t);
+        else if (needs_root(vt)) buf_printf(pre, " SP_GC_ROOT(_t%d);", t);
+        buf_puts(pre, "\n");
+        view_bind(v, "_t%d", t);
+      }
+      free(vb.p);
+    }
+  }
+  for (int q = 0; q < sn; q++) {
+    int i = L->arg[sj[q]], v = argv[i];
+    const char *what = NULL;
+    int kd = param_strict(c, mi, sj[q], &what, NULL);
+    LocalVar *pl = scope_local(m, m->pnames[sj[q]]);
+    TyKind vt = oint_kind(comp_ntype(c, v)) ? comp_ntype(c, v) : (pl ? pl->type : TY_INT);
+    const char *fn = kd == 1 ? (vt == TY_FLOAT ? "sp_ofloat_val" : "sp_oint_val")
+                             : (vt == TY_FLOAT ? "sp_ofloat_opnd_in" : "sp_oint_opnd_in");
+    if (held[i] >= 0) {
+      int tv = ++g_tmp;
+      emit_indent(pre, g_indent);
+      buf_printf(pre, "%s _t%d = %s(_t%d, \"%s\");\n", c_type_name(vt), tv, fn, held[i], what ? what : "");
+      view_bind(v, "_t%d", tv);
+    }
+    else {
+      Buf ob; memset(&ob, 0, sizeof ob); emit_oint_expr(c, v, vt, &ob);
+      view_bind(v, "%s(%s, \"%s\")", fn, ob.p ? ob.p : oint_nil(vt), what ? what : "");
+      free(ob.p);
+    }
+  }
+}
+
 /* See codegen_internal.h. */
 void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int argc, int argsNode,
                            const char *lead, Buf *out) {
@@ -11229,6 +11301,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
   int rest_argc = L.rest_argc;
   int argov_saved = g_n_argov;
   emit_call_arity_check(c, m, argc, argv);
+  emit_strict_args(c, callee_idx, argv, pos_argc, kwh, &L);
 
   /* Detect double-splat (**hash) inside kwh: AssocSplatNode wrapping a hash expr.
      Pre-evaluate the hash to a temp so we can do per-param lookups. */
@@ -12281,6 +12354,10 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
   int pd_ren_base = g_nren, pd_uid = 0;
   int pd_active = pm && (splat_tmp_d < 0 || L.gather) && default_refs_earlier_param(c, pm);
   if (pd_active) pd_uid = ++g_tmp;
+  /* a strict parameter's argument that can be nil (param_strict): held as
+     its oint here, checked once every argument has run (below) */
+  int pmi = pm ? (int)(pm - c->scopes) : -1;
+  char strict_pend[16] = {0};
   for (int k = 0; k < np; k++) {
     atmp[k] = ++g_tmp;
     Buf ab; memset(&ab, 0, sizeof ab);
@@ -12423,6 +12500,11 @@ else {
            or a coercion from, so the argument is the caller's expression as
            written (#4514) */
         if (!pm) { if (provided >= 0) emit_expr(c, provided, &ab); else buf_puts(&ab, "0"); }
+        else if (provided >= 0 && k < 16 && p && oint_kind(p->type) && param_strict(c, pmi, k, NULL, NULL) &&
+                 (node_may_be_nil(c, provided) || repr_of(c, provided).kind == RK_BOXED)) {
+          emit_oint_expr(c, provided, p->type, &ab);
+          strict_pend[k] = 1;
+        }
         else emit_arg_or_default(c, pm, k, provided, &ab);
         if (provided >= 0) ren_unhide(&pd_h);
         g_self = saved_self;
@@ -12461,6 +12543,7 @@ else {
         /* an Integer / Float parameter holding its nil beside the value is
            bound as its oint, and the temp is declared the same */
         if (p && oint_kind(att) && slot_is_oint(p)) { buf_puts(g_pre, oint_ctype(att)); atmp_o[k] = 1; }
+        else if (k < 16 && strict_pend[k]) buf_puts(g_pre, oint_ctype(att));
         else emit_ctype(c, att, g_pre);
         buf_printf(g_pre, " _t%d = ", atmp[k]);
         buf_puts(g_pre, ab.p ? ab.p : ""); buf_puts(g_pre, ";\n");
@@ -12497,6 +12580,23 @@ else {
   }
   g_nren = pd_ren_base;   /* the renames served the defaults only */
   view_unbind(argov_saved_d);
+  /* the strict parameters' checks, in the callee's order: each nil raises
+     the error the callee's first use would have, and the parameter takes
+     the plain value */
+  for (int pass = 0; pass < 16; pass++)
+    for (int k = 0; k < np && k < 16; k++) {
+      int ord = -1;
+      if (!strict_pend[k] || !param_strict(c, pmi, k, NULL, &ord) || ord != pass) continue;
+      const char *what = NULL;
+      int kd = param_strict(c, pmi, k, &what, NULL);
+      TyKind pt = atmp_ty[k];
+      const char *fn = kd == 1 ? (pt == TY_FLOAT ? "sp_ofloat_val" : "sp_oint_val")
+                               : (pt == TY_FLOAT ? "sp_ofloat_opnd_in" : "sp_oint_opnd_in");
+      int tv = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "%s _t%d = %s(_t%d, \"%s\");\n", c_type_name(pt), tv, fn, atmp[k], what ? what : "");
+      atmp[k] = tv;
+    }
 
   /* a trailing splat's count, refused once every argument has run */
   if (given_d >= 0) {

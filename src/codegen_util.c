@@ -4006,6 +4006,15 @@ void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, 
      boxed value unboxed, and the conversions emit_coerce_text makes or
      refuses. */
   TyKind from = TY_UNKNOWN;
+  /* a node bound to a plain hoisted temp of the slot's kind is that temp:
+     a strict parameter's argument, its nil raised at the call already
+     (emit_strict_args) */
+  if (oint_kind(slot))
+    for (int i = g_n_argov - 1; i >= 0; i--)
+      if (g_argov_node[i] == node) {
+        if (!g_argov_oint[i] && nt_kind(c->nt, node) == NK_NilNode) { emit_expr(c, node, b); return; }
+        break;
+      }
   if (oint_kind(slot) && node_may_be_nil(c, node)) refuse_nil_store(c, node, slot, what);
   int plan = repr_coerce_plan(c, node, slot, how, &from);
   switch (plan) {
@@ -7299,6 +7308,13 @@ __attribute__((noreturn)) void refuse_nil_store(Compiler *c, int node, TyKind t,
    unless the node is bound to a hoisted plain temp). */
 int node_may_be_nil(Compiler *c, int node) {
   if (node < 0) return 0;
+  /* a node bound to a hoisted temp is that temp: a plain one holds no nil
+     (a strict parameter's argument, checked at the call: emit_strict_args) */
+  for (int i = g_n_argov - 1; i >= 0; i--)
+    if (g_argov_node[i] == node) {
+      if (!g_argov_oint[i]) return 0;
+      break;
+    }
   if (nt_kind(c->nt, node) == NK_NilNode) return 1;
   TyKind t = comp_ntype(c, node);
   if (t == TY_NIL) return 1;

@@ -31961,6 +31961,251 @@ static int site_args_may_be_nil(Compiler *c, const int *av, int an) {
    nil, an Integer or Float one handed a value that can be nil -- a
    keyword parameter by the value its key names (`k: nil`). Returns 1 if any
    mark was set. */
+/* ---- strict parameters ----
+
+   A parameter is strict when the method's first evaluated statement raises
+   on it being nil before anything observable runs: the receiver of an
+   arithmetic or ordering operator (NoMethodError "undefined method 'op' for
+   nil"), or the operand of an arithmetic one on an Integer / Float receiver
+   (TypeError "nil can't be coerced into Integer"). Its slot is then plain:
+   a caller handing a value that can be nil evaluates every argument, then
+   raises that same error in the callee's order (param_strict's ord) where
+   the value is nil. Nothing is trusted that a wrong answer could hide: a nil
+   still raises its own error, at the call rather than in the callee.
+   Refused: a method reached other than by a plain positional call resolved
+   to it (a boxed receiver, a Symbol or String naming it, a splat, a
+   keyword, a block argument), one redefined, overridden or aliased,
+   method_missing / respond_to_missing? anywhere, a first use under a rescue
+   or ensure, and an operator the program reopens on nil or the number. */
+typedef struct { signed char kind[16]; const char *what[16]; signed char ord[16]; int done; } PStrict;
+static PStrict *g_pstrict = NULL;
+static int g_pstrict_n = 0;
+static const NodeTable *g_pstrict_nt = NULL;
+static int ps_pure(Compiler *c, Scope *m, int n) {
+  const NodeTable *nt = c->nt;
+  switch (nt_kind(nt, n)) {
+    case NK_IntegerNode: case NK_FloatNode: case NK_LocalVariableReadNode: case NK_SelfNode:
+    case NK_TrueNode: case NK_FalseNode: case NK_NilNode: return 1;
+    case NK_ConstantReadNode: { LocalVar *cv = comp_const(c, nt_str(nt, n, "name")); return cv != NULL; }
+    default: (void)m; return 0;
+  }
+}
+static int ps_param_index(Compiler *c, Scope *m, int n) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, n) != NK_LocalVariableReadNode || comp_scope_of(c, n) != m) return -1;
+  const char *nm = nt_str(nt, n, "name");
+  for (int k = 0; nm && k < m->nparams && k < 16; k++) if (m->pnames[k] && sp_streq(m->pnames[k], nm)) return k;
+  return -1;
+}
+static int ps_op_reopened(Compiler *c, const char *op) {
+  int nc = comp_class_index(c, "NilClass");
+  if (nc >= 0 && comp_method_in_chain(c, nc, op, NULL) >= 0) return 1;
+  return comp_builtin_kind_reopen_mi(c, TY_INT, op) >= 0 || comp_builtin_kind_reopen_mi(c, TY_FLOAT, op) >= 0;
+}
+/* Walk n in evaluation order, recording each parameter's first use; 0 once
+   something not understood is reached (every parameter not yet seen is
+   then not strict) */
+static int ps_walk(Compiler *c, Scope *m, int n, PStrict *ps, char *seen, int *ord) {
+  const NodeTable *nt = c->nt;
+  if (n < 0) return 1;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ParenthesesNode) {
+    /* `(expr)`: its one expression; a sequence stops at its first */
+    int b = nt_ref(nt, n, "body");
+    if (b < 0) return 0;
+    if (nt_kind(nt, b) != NK_StatementsNode) return ps_walk(c, m, b, ps, seen, ord);
+    int bn = 0; const int *bs = nt_arr(nt, b, "body", &bn);
+    if (bn == 1) return ps_walk(c, m, bs[0], ps, seen, ord);
+    if (bn > 1) (void)ps_walk(c, m, bs[0], ps, seen, ord);
+    return 0;
+  }
+  if (k == NK_StatementsNode) {
+    /* the method's body: its first statement, then no further */
+    int bn = 0; const int *bs = nt_arr(nt, n, "body", &bn);
+    if (bn >= 1) (void)ps_walk(c, m, bs[0], ps, seen, ord);
+    return 0;
+  }
+  int pi = ps_param_index(c, m, n);
+  if (pi >= 0) { seen[pi] = 1; return 1; }   /* a bare use: not strict */
+  if (ps_pure(c, m, n)) return 1;
+  if (k != NK_CallNode) return 0;
+  const char *op = nt_str(nt, n, "name");
+  int r = nt_ref(nt, n, "receiver"), a = nt_ref(nt, n, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (!op || r < 0 || an != 1 || nt_ref(nt, n, "block") >= 0) return 0;
+  static const char *const RECV_OPS[] = { "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "<<", ">>", NULL };
+  static const char *const ARG_OPS[] = { "+", "-", "*", "/", "%", "**", NULL };
+  if (!str_in(op, RECV_OPS) || ps_op_reopened(c, op)) return 0;
+  TyKind rt = comp_ntype(c, r);
+  if (rt != TY_INT && rt != TY_FLOAT) return 0;
+  /* the receiver evaluates first, then the argument, then the operator
+     raises for a nil receiver: the argument must run nothing */
+  int rp = ps_param_index(c, m, r);
+  if (rp >= 0) {
+    if (!ps_pure(c, m, av[0]) && ps_param_index(c, m, av[0]) < 0) return 0;
+    if (!seen[rp]) { seen[rp] = 1; ps->kind[rp] = 1; ps->what[rp] = op; ps->ord[rp] = (signed char)(*ord)++; }
+  }
+  else if (!ps_walk(c, m, r, ps, seen, ord)) return 0;
+  int ap = ps_param_index(c, m, av[0]);
+  if (ap >= 0) {
+    if (!seen[ap]) {
+      seen[ap] = 1;
+      TyKind at = comp_ntype(c, av[0]);
+      if (str_in(op, ARG_OPS) && (at == TY_INT || at == TY_FLOAT)) {
+        ps->kind[ap] = 2; ps->what[ap] = rt == TY_FLOAT ? "Float" : "Integer"; ps->ord[ap] = (signed char)(*ord)++;
+      }
+    }
+    return 1;
+  }
+  return ps_walk(c, m, av[0], ps, seen, ord);
+}
+/* The program's names, sorted once so each method looks its own up rather
+   than rescanning the program: the scopes by name, the Symbol / String values,
+   and the calls by name (in node order within a name). */
+typedef struct { const char *name; int id; } PsName;
+static PsName *g_ps_scopes, *g_ps_lits, *g_ps_calls;
+static int g_ps_nscopes, g_ps_nlits, g_ps_ncalls, g_ps_mm, g_ps_ncount = -1;
+static int ps_name_cmp(const void *a, const void *b) {
+  const PsName *x = a, *y = b;
+  int r = strcmp(x->name, y->name);
+  return r ? r : x->id - y->id;
+}
+/* the first entry of v (sorted) named name, or n */
+static int ps_name_first(const PsName *v, int n, const char *name) {
+  int lo = 0, hi = n;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (strcmp(v[mid].name, name) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+static PsName *ps_names_alloc(int n) {
+  PsName *v = malloc(sizeof *v * (size_t)(n > 0 ? n : 1));
+  if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  return v;
+}
+static void ps_index_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  free(g_ps_scopes); free(g_ps_lits); free(g_ps_calls);
+  g_ps_ncount = nt->count;
+  g_ps_scopes = ps_names_alloc(c->nscopes);
+  g_ps_nscopes = 0; g_ps_mm = 0;
+  for (int k = 0; k < c->nscopes; k++) {
+    const char *sn = c->scopes[k].name;
+    if (!sn) continue;
+    /* method_missing / respond_to_missing? anywhere: a call can land anywhere */
+    if (sp_streq(sn, "method_missing") || sp_streq(sn, "respond_to_missing?")) g_ps_mm = 1;
+    g_ps_scopes[g_ps_nscopes++] = (PsName){ sn, k };
+  }
+  int nl = 0, ncall = 0;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, id) { (void)id; nl++; }
+  NT_FOREACH_KIND(nt, NK_StringNode, id) { (void)id; nl++; }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) { (void)id; ncall++; }
+  g_ps_lits = ps_names_alloc(nl);
+  g_ps_calls = ps_names_alloc(ncall);
+  g_ps_nlits = 0; g_ps_ncalls = 0;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, id) {
+    const char *v = nt_str(nt, id, "value");
+    if (v && g_ps_nlits < nl) g_ps_lits[g_ps_nlits++] = (PsName){ v, id };
+  }
+  NT_FOREACH_KIND(nt, NK_StringNode, id) {
+    const char *v = nt_str(nt, id, "unescaped");
+    if (!v) v = nt_content(nt, id);
+    if (v && g_ps_nlits < nl) g_ps_lits[g_ps_nlits++] = (PsName){ v, id };
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (cn && g_ps_ncalls < ncall) g_ps_calls[g_ps_ncalls++] = (PsName){ cn, id };
+  }
+  qsort(g_ps_scopes, (size_t)g_ps_nscopes, sizeof *g_ps_scopes, ps_name_cmp);
+  qsort(g_ps_lits, (size_t)g_ps_nlits, sizeof *g_ps_lits, ps_name_cmp);
+  qsort(g_ps_calls, (size_t)g_ps_ncalls, sizeof *g_ps_calls, ps_name_cmp);
+}
+/* Can method mi be reached only by plain positional calls resolved to it? */
+static int ps_reached_plainly(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  const char *nm = m->name;
+  if (!nm || g_ps_mm) return 0;
+  /* redefined in its class, or overridden in a subclass */
+  for (int i = ps_name_first(g_ps_scopes, g_ps_nscopes, nm); i < g_ps_nscopes && sp_streq(g_ps_scopes[i].name, nm); i++) {
+    int k = g_ps_scopes[i].id;
+    if (k != mi && c->scopes[k].is_cmethod == m->is_cmethod && c->scopes[k].class_id >= 0 &&
+        m->class_id >= 0 && (c->scopes[k].class_id == m->class_id || is_descendant(c, c->scopes[k].class_id, m->class_id)))
+      return 0;
+  }
+  /* named by a Symbol or String (send, method, alias, define_method) */
+  int li = ps_name_first(g_ps_lits, g_ps_nlits, nm);
+  if (li < g_ps_nlits && sp_streq(g_ps_lits[li].name, nm)) return 0;
+  for (int i = ps_name_first(g_ps_calls, g_ps_ncalls, nm); i < g_ps_ncalls && sp_streq(g_ps_calls[i].name, nm); i++) {
+    int id = g_ps_calls[i].id;
+    const char *cn = g_ps_calls[i].name;
+    int r = nt_ref(nt, id, "receiver");
+    int t = -1;
+    if (r < 0) t = comp_self_call_mi(c, id, cn);
+    else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {
+      int rc = comp_class_index(c, nt_str(nt, r, "name"));
+      t = rc >= 0 ? comp_cmethod_in_chain(c, rc, cn, NULL) : -1;
+    }
+    else {
+      TyKind rt = infer_type(c, r);
+      if (rt == TY_POLY || rt == TY_UNKNOWN) return 0;
+      if (ty_is_object(rt)) t = comp_method_in_chain(c, ty_object_class(rt), cn, NULL);
+      else continue;   /* a builtin's own method of the name */
+    }
+    if (t < 0 && r >= 0 && ty_is_object(infer_type(c, r))) return 0;
+    if (t != mi) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an != m->nparams || nt_ref(nt, id, "block") >= 0) return 0;
+    for (int j = 0; j < an; j++) {
+      NodeKind ak = nt_kind(nt, av[j]);
+      if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) return 0;
+    }
+  }
+  return 1;
+}
+static void ps_compute(Compiler *c, int mi) {
+  PStrict *ps = &g_pstrict[mi];
+  ps->done = 1;
+  Scope *m = &c->scopes[mi];
+  if (m->def_node < 0 || m->nparams <= 0 || m->nparams > 16 || m->rest_idx >= 0 || m->kwrest_idx >= 0 ||
+      (m->blk_param && m->blk_param[0]) || m->yields) return;
+  for (int k = 0; k < m->nparams; k++) {
+    if (!m->pnames[k] || (m->pdefault && m->pdefault[k] >= 0) || callee_param_is_declared_kwarg(c, m, m->pnames[k])) return;
+  }
+  int body = m->body;
+  /* a method-level rescue / ensure would catch what the call raises */
+  if (body < 0 || nt_kind(c->nt, body) == NK_BeginNode) return;
+  if (!ps_reached_plainly(c, mi)) return;
+  char seen[16] = {0}; int ord = 0;
+  (void)ps_walk(c, m, body, ps, seen, &ord);
+  /* only a number parameter's nil is decided this way */
+  for (int k = 0; k < m->nparams; k++) {
+    LocalVar *lv = scope_local(m, m->pnames[k]);
+    if (!lv || (lv->type != TY_INT && lv->type != TY_FLOAT) || lv->is_cell) ps->kind[k] = 0;
+  }
+}
+/* Parameter k of method mi is strict: 1 (receiver of `what`), 2 (operand,
+   coerced into `what`), else 0; *ord its place among the checks */
+int param_strict(Compiler *c, int mi, int k, const char **what, int *ord) {
+  if (mi < 0 || mi >= c->nscopes || k < 0 || k >= 16) return 0;
+  if (!g_pstrict || g_pstrict_n < c->nscopes || g_pstrict_nt != c->nt) {
+    free(g_pstrict);
+    g_pstrict = calloc((size_t)c->nscopes + 1, sizeof *g_pstrict);
+    if (!g_pstrict) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_pstrict_n = c->nscopes; g_pstrict_nt = c->nt;
+    ps_index_build(c);
+  }
+  else if (g_ps_ncount != c->nt->count) ps_index_build(c);   /* nodes cloned since */
+  PStrict *ps = &g_pstrict[mi];
+  if (!ps->done) ps_compute(c, mi);
+  if (what) *what = ps->what[k];
+  if (ord) *ord = ps->ord[k];
+  return ps->kind[k];
+}
+
 /* Is argument `a` a read of a parameter whose default is nil (`port: nil`)?
    The value it hands on can be that nil. */
 static int arg_reads_nil_default_param(Compiler *c, int a) {
@@ -31999,6 +32244,8 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
     if ((p->type == TY_INT_ARRAY || p->type == TY_FLOAT_ARRAY) && !p->nullable_int_elem &&
         nullable_int_elem_expr(c, a, 0)) { p->nullable_int_elem = 1; changed = 1; }
     if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
+    /* a strict parameter's nil raises at the call: its slot stays plain */
+    if (param_strict(c, mi, k, NULL, NULL)) continue;
     if (nullable_int_value(c, a) || arg_reads_nil_default_param(c, a)) { p->nullable_int = 1; changed = 1; continue; }
     /* an ivar that can be read before anything assigned it, or a parameter
        already carrying one: boxing the parameter has to answer nil (#5085) */

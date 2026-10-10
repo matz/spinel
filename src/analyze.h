@@ -322,6 +322,7 @@ int view_face_top(int *node, TyKind *kind);   /* codegen_view.c */
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx);
 int native_call_ret_plain_num(Compiler *c, int v);   /* a native method declared :int / :float */
+int param_strict(Compiler *c, int mi, int k, const char **what, int *ord);   /* a parameter whose nil raises at its first use */
 int block_param_used_up(Compiler *c, int blk, const char *nm, int value);
 /* The name of a numbered block parameter (`_1`..`_9`) on this parameters node.
    Per BLOCK where a scope holds more than one such block; see

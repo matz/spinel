@@ -7643,6 +7643,15 @@ static void emit_proc_param_slot(Compiler *c, Scope *bs, LocalVar *lv, Buf *pb, 
   free(dpre.p); free(dval.p);
 }
 
+/* The C name of `self` inside a proc written in class method `bs`: the
+   receiving class the capture struct carries in (cap_cls) when the method
+   takes one, so a subclass's call sees itself; else the method's own class. */
+static const char *proc_cmethod_self(Compiler *c, Scope *bs, char *out, size_t n) {
+  if (cmethod_takes_self_cls(c, (int)(bs - c->scopes))) return "_sp_cls";
+  snprintf(out, n, "((sp_Class){%d})", bs->class_id);
+  return out;
+}
+
 static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *cty = nt_type(nt, create);
@@ -8222,11 +8231,8 @@ else if (orecv >= 0 && onm) {
   /* a block written in a class method reads `self` as the class object, as
      the method's own body does: the proc function has no `self` (#7166) */
   char cm_self_p[32];
-  if (ie_cls < 0 && bs && bs->class_id >= 0 && bs->is_cmethod &&
-      !cmethod_takes_self_cls(c, (int)(bs - c->scopes))) {
-    snprintf(cm_self_p, sizeof cm_self_p, "((sp_Class){%d})", bs->class_id);
-    g_self = cm_self_p;
-  }
+  if (ie_cls < 0 && bs && bs->class_id >= 0 && bs->is_cmethod)
+    g_self = proc_cmethod_self(c, bs, cm_self_p, sizeof cm_self_p);
   if (ie_cls >= 0) g_ie_class_id = ie_cls;
   int bs_moved = ie_cls >= 0 && sv_bcls >= 0;
   if (bs_moved) { comp_scope_move_begin(c, (int)(bs - c->scopes)); bs->class_id = ie_cls; bs->is_cmethod = 0; }

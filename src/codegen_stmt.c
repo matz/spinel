@@ -18467,6 +18467,23 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_printf(b, ", _t%d, _t%d)%s; }\n", tk, tv, hc_mark());
       return 1;
     }
+    /* a value that can be nil into a cached header's array: a non-nil one
+       in range below the nil-free length is stored where it is (no nil bit
+       there to clear), and only the rest -- a nil, past the nil-free span,
+       a frozen array -- takes the _nilable set and the header reload */
+    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && *nsfx && vt == et &&
+        (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
+        hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) {
+      int tk = ++g_tmp, tv = ++g_tmp;
+      char hr[48]; hc_read_len(hd, hr, sizeof hr);
+      buf_printf(b, "{ sp_int _t%d = ", tk); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; %s _t%d = ", oint_ctype(et), tv); emit_elem_store_value(c, k, argv[1], b);
+      buf_printf(b, "; if (SP_LIKELY(%s && !_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
+                 hw, tv, tk, hr, hd, tk, tv);
+      buf_printf(b, " else sp_%sArray_set_nilable(", k); emit_expr(c, recv, b);
+      buf_printf(b, ", _t%d, _t%d)%s; }\n", tk, tv, hc_mark());
+      return 1;
+    }
     /* a plain value in range of a cached header is stored where it is; a
        value that can be nil takes the _nilable set below (the bit) */
     if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vt == et && !*nsfx &&

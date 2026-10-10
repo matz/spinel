@@ -3910,6 +3910,24 @@ char **dsend_candidates(Compiler *c, int *out_n) {
   return cand;
 }
 
+static void dsend_param_literals(Compiler *c, int name, ANameHash *out) {
+  const NodeTable *nt = c->nt;
+  const char *vn = nt_kind(nt, name) == NK_LocalVariableReadNode ? nt_str(nt, name, "name") : NULL;
+  Scope *sc = comp_scope_of(c, name);
+  int pi = -1;
+  for (int k = 0; vn && sc->name && k < sc->nparams && (sc->rest_idx < 0 || k < sc->rest_idx); k++)
+    if (sc->pnames[k] && sp_streq(sc->pnames[k], vn)) pi = k;
+  if (pi < 0) return;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !sp_streq(cn, sc->name)) continue;
+    int a = nt_ref(nt, id, "arguments");
+    int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    NodeKind k = pi < ac ? nt_kind(nt, av[pi]) : NK_NONE;
+    const char *v = k == NK_SymbolNode ? nt_str(nt, av[pi], "value") : k == NK_StringNode ? nt_str(nt, av[pi], "content") : NULL;
+    if (v && !anh_has(out, v)) anh_add(out, strdup(v));
+  }
+}
 
 int desugar_dynamic_send(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -4028,22 +4046,20 @@ int desugar_dynamic_send(Compiler *c) {
          kept, so a program's other literals can't crowd its own names out. */
       int npick = 0;
       TyKind rt = infer_type(c, recv);
-      if (ty_is_object(rt) || rt == TY_POLY || rt == TY_UNKNOWN) {
-        ANameHash answers; memset(&answers, 0, sizeof answers);
-        for (int d = 0; d < c->nclasses; d++) {
-          if (ty_is_object(rt) ? d != ty_object_class(rt) : comp_class_is_module(c, &c->classes[d])) continue;
-          char **rn = NULL; int nrn = dsend_receiver_names(c, d, ty_is_object(rt), &rn);
-          for (int k = 0; k < nrn; k++) { if (!anh_has(&answers, rn[k])) anh_add(&answers, rn[k]); else free(rn[k]); }
-          free(rn);
-        }
-        for (int k = 0; k < nlit; k++)
-          if (anh_has(&answers, lits[k])) picked[npick++] = lits[k];
-        for (int k = 0; k < nlit && npick < 256; k++)
-          if (!anh_has(&answers, lits[k])) picked[npick++] = lits[k];
-        for (int k = 0; k < answers.n; k++) free((char *)answers.key[k]);
-        anh_free(&answers);
+      ANameHash answers; memset(&answers, 0, sizeof answers);
+      dsend_param_literals(c, argv[0], &answers);
+      for (int d = 0; d < c->nclasses && (ty_is_object(rt) || rt == TY_POLY || rt == TY_UNKNOWN); d++) {
+        if (ty_is_object(rt) ? d != ty_object_class(rt) : comp_class_is_module(c, &c->classes[d])) continue;
+        char **rn = NULL; int nrn = dsend_receiver_names(c, d, ty_is_object(rt), &rn);
+        for (int k = 0; k < nrn; k++) { if (!anh_has(&answers, rn[k])) anh_add(&answers, rn[k]); else free(rn[k]); }
+        free(rn);
       }
-      else for (; npick < 256; npick++) picked[npick] = lits[npick];
+      for (int k = 0; k < nlit; k++)
+        if (anh_has(&answers, lits[k])) picked[npick++] = lits[k];
+      for (int k = 0; k < nlit && npick < 256; k++)
+        if (!anh_has(&answers, lits[k])) picked[npick++] = lits[k];
+      for (int k = 0; k < answers.n; k++) free((char *)answers.key[k]);
+      anh_free(&answers);
       use = picked; nuse = npick;
     }
     if (computed) {

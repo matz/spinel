@@ -785,6 +785,45 @@ static inline sp_int sp_poly_as_int_or_nil(sp_RbVal v) {
 static inline sp_float sp_poly_as_float_or_nil(sp_RbVal v) {
   return v.tag == SP_TAG_NIL ? sp_float_nil() : v.v.f;
 }
+/* ---- Nullable Integer / Float in flight (sp_oint / sp_ofloat, sp_types.h) ---- */
+/* Boxed: nil boxes as nil, a value as itself. Inline because every
+   boxed element read goes through here. */
+static inline sp_RbVal sp_box_oint(sp_oint o)     { return o.nil ? sp_box_nil() : sp_box_int(o.v); }
+static inline sp_RbVal sp_box_ofloat(sp_ofloat o) { return o.nil ? sp_box_nil() : sp_box_float(o.v); }
+/* The value of a nullable slot used where CRuby's nil would raise. The three
+   raisers live in lib/sp_str.c and lib/sp_cold.c; SP_COLD, so a check in a
+   hot function keeps its raise path out of the way (optcarrot's CPU#fetch
+   lost 40% of its frame rate to a warm one). */
+SP_NORETURN SP_COLD void sp_nil_recv(const char *meth);          /* NoMethodError "undefined method 'meth' for nil" */
+SP_NORETURN SP_COLD void sp_raise_nil_to_int(int of_wording);    /* TypeError "no implicit conversion from nil to integer" (1: "of nil into Integer") */
+SP_NORETURN SP_COLD void sp_raise_nil_opnd(const char *cls);     /* TypeError "nil can't be coerced into <cls>" */
+SP_NORETURN SP_COLD void sp_raise_nil_cmp(int left_nil, const char *op, const char *cls);  /* ArgumentError "comparison of <cls> with nil failed" (left_nil: NoMethodError) */
+/* the RECEIVER of `op` (`x + 1`, `x.abs`, `x < y`): NoMethodError for nil */
+static inline sp_int    sp_oint_val(sp_oint o, const char *op)     { if (SP_UNLIKELY(o.nil)) sp_nil_recv(op); return o.v; }
+static inline sp_float  sp_ofloat_val(sp_ofloat o, const char *op) { if (SP_UNLIKELY(o.nil)) sp_nil_recv(op); return o.v; }
+/* a strict Integer ARGUMENT (an index, a count, a width): the conversion TypeError */
+static inline sp_int    sp_oint_arg(sp_oint o)                     { if (SP_UNLIKELY(o.nil)) sp_raise_nil_to_int(0); return o.v; }
+static inline sp_int    sp_oint_arg_of(sp_oint o)                  { if (SP_UNLIKELY(o.nil)) sp_raise_nil_to_int(1); return o.v; }
+static inline sp_int    sp_oint_arg_offt(sp_oint o)                { if (SP_UNLIKELY(o.nil)) sp_raise_nil_to_int(2); return o.v; }   /* an off_t argument's wording */
+/* a strict Float argument: TypeError "can't convert nil into Float" */
+SP_NORETURN SP_COLD void sp_raise_nil_to_float(void);
+static inline sp_float  sp_ofloat_arg(sp_ofloat o)                 { if (SP_UNLIKELY(o.nil)) sp_raise_nil_to_float(); return o.v; }
+/* the RIGHT operand of an arithmetic operator (`1 + x`): the coercion TypeError */
+static inline sp_int    sp_oint_opnd(sp_oint o)                    { if (SP_UNLIKELY(o.nil)) sp_raise_nil_opnd("Integer"); return o.v; }
+static inline sp_float  sp_ofloat_opnd(sp_ofloat o)                { if (SP_UNLIKELY(o.nil)) sp_raise_nil_opnd("Float"); return o.v; }
+/* ...whose LEFT operand is of class lcls (`1 + f`: "nil can't be coerced into Integer") */
+static inline sp_float  sp_ofloat_opnd_in(sp_ofloat o, const char *lcls) { if (SP_UNLIKELY(o.nil)) sp_raise_nil_opnd(lcls); return o.v; }
+static inline sp_int    sp_oint_opnd_in(sp_oint o, const char *lcls)     { if (SP_UNLIKELY(o.nil)) sp_raise_nil_opnd(lcls); return o.v; }   /* `1.0 * b`: "into Float" */
+/* the RIGHT operand of a comparison (`1 < x`, `x.clamp(0, y)`): Comparable's
+   ArgumentError, naming the LEFT operand's class */
+static inline sp_int    sp_oint_cmp_opnd(sp_oint o, const char *op, const char *lcls)     { if (SP_UNLIKELY(o.nil)) sp_raise_nil_cmp(0, op, lcls); return o.v; }
+static inline sp_float  sp_ofloat_cmp_opnd(sp_ofloat o, const char *op, const char *lcls) { if (SP_UNLIKELY(o.nil)) sp_raise_nil_cmp(0, op, lcls); return o.v; }
+/* `x == y` / `x.eql?(y)` / `x <=> y` with a nullable side: nil equals only
+   nil, and <=> against nil is nil */
+static inline sp_bool sp_oint_eq(sp_oint a, sp_oint b)     { return a.nil ? b.nil : (!b.nil && a.v == b.v); }
+static inline sp_bool sp_ofloat_eq(sp_ofloat a, sp_ofloat b) { return a.nil ? b.nil : (!b.nil && a.v == b.v); }
+/* interpolation: nil is "" */
+static inline char *sp_w_oint(char *p, sp_oint o) { return o.nil ? p : sp_w_int(p, o.v); }
 
 /* GC object allocator. The threshold/stress state is extern (defined in
    sp_alloc.c) so every TU shares it -- the same model as sp_gc_heap/bytes.

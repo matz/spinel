@@ -5173,6 +5173,14 @@ SP_NORETURN void sp_raise_nil_int_op(sp_int a, sp_int b, const char *op) {SP_GC_
   sp_raise_cls("TypeError", "nil can't be coerced into Integer");
 }
 
+SP_NORETURN void sp_raise_nil_opnd(const char *cls) {SP_GC_ROOT_STR(cls);
+  sp_raise_cls("TypeError", sp_sprintf("nil can't be coerced into %s", cls));
+}
+
+SP_NORETURN void sp_raise_nil_to_float(void) {
+  sp_raise_cls("TypeError", "can't convert nil into Float");
+}
+
 /* A comparison whose operand is the int or float nil sentinel: nil on the
    LEFT has no `<`, and nil on the right is the Comparable failure CRuby
    reports from Integer#< / Float#<. The sentinel compared as a number

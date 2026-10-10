@@ -138,6 +138,28 @@ static inline sp_float sp_float_nil(void) {
 static inline int sp_float_is_nil(sp_float v) {
   union { sp_float d; uint64_t u; } x; x.d = v; return x.u == SP_FLOAT_NIL_BITS;
 }
+/* A nullable Integer or Float in flight (a local, a parameter, a return, a
+   temp, a container read that can miss): the value and its nil live side by
+   side. No bit pattern of sp_int or sp_float means nil -- -2**63 and every
+   NaN payload are ordinary values in every --int-overflow mode. A slot that
+   holds many of them (an Integer Array, an ivar set) keeps the nil beside
+   the values as a bit (nilbits below) rather than widening each one.
+   `nil` is 0 or 1; `v` is 0 / 0.0 when nil is set, so a zero-initialized
+   pair is the Integer 0, not nil. */
+typedef struct { sp_int   v; sp_bool nil; } sp_oint;
+typedef struct { sp_float v; sp_bool nil; } sp_ofloat;
+static inline sp_oint   sp_oint_of(sp_int v)     { sp_oint o = { v, 0 }; return o; }
+static inline sp_oint   sp_oint_nil(void)        { sp_oint o = { 0, 1 }; return o; }
+static inline sp_ofloat sp_ofloat_of(sp_float v) { sp_ofloat o = { v, 0 }; return o; }
+static inline sp_ofloat sp_ofloat_nil(void)      { sp_ofloat o = { 0.0, 1 }; return o; }
+/* The constant forms, for a file-scope initializer (a static ivar, a global). */
+#define SP_OINT_OF(v)   { (v), 0 }
+#define SP_OINT_NIL     { 0, 1 }
+#define SP_OFLOAT_OF(v) { (v), 0 }
+#define SP_OFLOAT_NIL   { 0.0, 1 }
+/* The nil of an Integer out of a Float slot and back: the value converts, the
+   nil carries. */
+static inline sp_ofloat sp_oint_to_ofloat(sp_oint o) { sp_ofloat r = { o.nil ? 0.0 : (sp_float)o.v, o.nil }; return r; }
 
 /* sp_sym is defined per-program in emit_sym_runtime, but poly helpers
    below need to reference it by forward declaration. */
@@ -273,6 +295,11 @@ typedef struct sp_str_hdr { struct sp_str_hdr *next; uint32_t size; uint32_t len
 typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;sp_int frozen;int may_nil;}sp_IntArray;
 typedef struct{sp_float*data;sp_int len;sp_int cap;sp_int frozen;int may_nil;}sp_FloatArray;
 #define SP_MAY_NIL(a) ((a)->may_nil)
+/* a nil bitmap: one bit per slot, sp_nilbits_words(cap) words */
+#define sp_nilbits_words(cap) ((size_t)(((cap) + 63) >> 6))
+#define sp_nilbit_get(bits, i) ((int)(((bits)[(size_t)(i) >> 6] >> ((i) & 63)) & 1u))
+#define sp_nilbit_set(bits, i) ((bits)[(size_t)(i) >> 6] |= (uint64_t)1 << ((i) & 63))
+#define sp_nilbit_clr(bits, i) ((bits)[(size_t)(i) >> 6] &= ~((uint64_t)1 << ((i) & 63)))
 /* elem_kind/elem_cls: what the pointers are, stamped when the array is boxed by
    reference (the one cls_id for pointer arrays is type-erased, #4486). 0 until
    then; a stamp never changes since a typed array holds one kind. */

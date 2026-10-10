@@ -1126,6 +1126,10 @@ spinel: test/reject/string_global_hash_element_mutation.rb:8: an element of a gl
 spinel: test/reject/string_global_identity_after_mutations.rb:6: a String variable assigned from or to a global variable is mutated in place (a String is not yet shared by reference through a global variable). Mutate the String through the global, or assign the global again after the mutation.
 == test/reject/string_global_identity_after_mutations.rb [promote] rc=1
 spinel: test/reject/string_global_identity_after_mutations.rb:6: a String variable assigned from or to a global variable is mutated in place (a String is not yet shared by reference through a global variable). Mutate the String through the global, or assign the global again after the mutation.
+== test/reject/string_hash_alias_block_param_store.rb [default] rc=1
+spinel: test/reject/string_hash_alias_block_param_store.rb:11: a String held by a block parameter no element iterator binds (a proc's, a lambda's, a yielding method's block, `each_char`'s) is stored into a container and mutated in place through it (a String is not yet shared by reference through a stored block parameter). Mutate the String before storing it, or store it where the caller holds it.
+== test/reject/string_hash_alias_block_param_store.rb [promote] rc=1
+spinel: test/reject/string_hash_alias_block_param_store.rb:11: a String held by a block parameter no element iterator binds (a proc's, a lambda's, a yielding method's block, `each_char`'s) is stored into a container and mutated in place through it (a String is not yet shared by reference through a stored block parameter). Mutate the String before storing it, or store it where the caller holds it.
 == test/reject/string_hash_call.rb [default] rc=1
 spinel: test/reject/string_hash_call.rb:5: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
 == test/reject/string_hash_call.rb [promote] rc=1
@@ -1174,6 +1178,10 @@ spinel: test/reject/string_hash_fresh_values.rb:4: a String stored in a Hash is 
 spinel: test/reject/string_hash_interpolated.rb:5: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
 == test/reject/string_hash_interpolated.rb [promote] rc=1
 spinel: test/reject/string_hash_interpolated.rb:5: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
+== test/reject/string_hash_key_block_param_store.rb [default] rc=1
+spinel: test/reject/string_hash_key_block_param_store.rb:10: a String held by a block parameter no element iterator binds (a proc's, a lambda's, a yielding method's block, `each_char`'s) is stored into a container and mutated in place through it (a String is not yet shared by reference through a stored block parameter). Mutate the String before storing it, or store it where the caller holds it.
+== test/reject/string_hash_key_block_param_store.rb [promote] rc=1
+spinel: test/reject/string_hash_key_block_param_store.rb:10: a String held by a block parameter no element iterator binds (a proc's, a lambda's, a yielding method's block, `each_char`'s) is stored into a container and mutated in place through it (a String is not yet shared by reference through a stored block parameter). Mutate the String before storing it, or store it where the caller holds it.
 == test/reject/string_hash_literal_captured.rb [default] rc=1
 spinel: test/reject/string_hash_literal_captured.rb:5: a String stored in a Hash is passed to an appending value block: a String is not yet shared by reference through a Hash's values. Append to the String before storing it in the Hash.
 == test/reject/string_hash_literal_captured.rb [promote] rc=1

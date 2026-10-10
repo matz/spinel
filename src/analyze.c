@@ -17017,6 +17017,182 @@ static int strbuf_demand_local_container(Compiler *c, const char *vn, Scope *vs,
 static int strbuf_demand_container_stores(Compiler *c, const char *contn, Scope *conts) {
   return strbuf_demand_local_container(c, contn, conts, 0, SB_DEMAND);
 }
+/* The literal Symbol key a Hash element read or store names (`h[:k]`,
+   `h.fetch(:k)`, `h[:k] = v`, `h.store(:k, v)`, `h[:k] ||= v`), or NULL. */
+static const char *hash_literal_sym_key(const NodeTable *nt, int id) {
+  NodeKind k = nt_kind(nt, id);
+  if (k != NK_CallNode && k != NK_IndexOrWriteNode) return NULL;
+  int a = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, id, "name");
+    int want = !nm ? 0 : sp_streq(nm, "[]") || sp_streq(nm, "fetch") ? 1 : is_store_alias(nm) ? 2 : 0;
+    if (!want || an != want || nt_ref(nt, id, "block") >= 0) return NULL;
+  }
+  else if (an != 1) return NULL;
+  return nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+}
+/* Is v never a String: a literal of another class, or of a type that is
+   none? */
+static int hash_value_no_string(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  v = an_unparen(nt, v);
+  if (v < 0) return 0;
+  switch (nt_kind(nt, v)) {
+    case NK_ArrayNode: case NK_HashNode: case NK_IntegerNode: case NK_FloatNode: case NK_SymbolNode:
+    case NK_TrueNode: case NK_FalseNode: case NK_NilNode:
+      return 1;
+    default: break;
+  }
+  TyKind t = infer_type(c, v);
+  return t != TY_UNKNOWN && t != TY_POLY && t != TY_STRING && t != TY_STRBUF;
+}
+static int hash_local_key_no_string(Compiler *c, const char *vn, Scope *vs, const char *key, int depth);
+/* Is v a new Hash no other name holds, with no String under `key` or under
+   a key that is no literal Symbol: a literal, a bare `Hash.new`, or what a
+   call to one user method answers when each of its values is one, or a
+   local of it that holds none there? */
+static int hash_new_no_string_at(Compiler *c, int v, const char *key, int depth) {
+  const NodeTable *nt = c->nt;
+  v = an_unparen(nt, v);
+  NodeKind k = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  if (k == NK_HashNode) {
+    int en = 0;
+    const int *el = nt_arr(nt, v, "elements", &en);
+    for (int e = 0; e < en; e++) {
+      if (nt_kind(nt, el[e]) != NK_AssocNode) return 0;   /* `**opts` */
+      int ek = nt_ref(nt, el[e], "key");
+      const char *sk = nt_kind(nt, ek) == NK_SymbolNode ? nt_str(nt, ek, "value") : NULL;
+      if (sk && !sp_streq(sk, key)) continue;
+      if (!hash_value_no_string(c, nt_ref(nt, el[e], "value"))) return 0;
+    }
+    return 1;
+  }
+  if (k != NK_CallNode || depth > 4) return 0;
+  int r = nt_ref(nt, v, "receiver");
+  if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(nt_str(nt, r, "name"), "Hash"))
+    return sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") < 0;
+  const CallPlan *p = cplan_user_fresh(c, v);
+  int mi = p->dispatch == CP_DIRECT ? p->mi : -1;
+  if (mi < 0 || mi >= c->nscopes) return 0;
+  Scope *m = &c->scopes[mi];
+  int out[32];
+  int n = method_value_leaves_or_nil(c, mi, out, 32);
+  if (n <= 0) return 0;
+  for (int i = 0; i < n; i++) {
+    int l = an_unparen(nt, out[i]);
+    int ok = nt_kind(nt, l) == NK_LocalVariableReadNode && comp_scope_of(c, l) == m
+           ? hash_local_key_no_string(c, nt_str(nt, l, "name"), m, key, depth + 1)
+           : hash_new_no_string_at(c, l, key, depth + 1);
+    if (!ok) return 0;
+  }
+  return 1;
+}
+/* Is read r of a local a value method scope si answers: its body's tail
+   (through a begin/rescue body), or one of its values? */
+static int scope_answers_read(Compiler *c, int si, int r) {
+  const NodeTable *nt = c->nt;
+  for (int n = c->scopes[si].body, d = 0; n >= 0 && d < 16; d++) {
+    n = an_unparen(nt, n);
+    if (n == r) return 1;
+    NodeKind k = nt_kind(nt, n);
+    if (k == NK_StatementsNode) {
+      int bn = 0; const int *bb = nt_arr(nt, n, "body", &bn);
+      n = bn > 0 ? bb[bn - 1] : -1;
+    }
+    else if (k == NK_BeginNode) n = nt_ref(nt, n, "statements");
+    else break;
+  }
+  int out[32];
+  int n = method_value_leaves_or_nil(c, si, out, 32);
+  for (int i = 0; i < n; i++) if (an_unparen(nt, out[i]) == r) return 1;
+  return 0;
+}
+/* Is read r of a local an argument of `p r` (`pp`, `puts`, `print`) whose
+   value is dropped or its method's, which hands the value on no further
+   than answering it does? */
+static int scope_prints_read(Compiler *c, int si, int r) {
+  const NodeTable *nt = c->nt;
+  for (int u = comp_scall_first(c, si); u >= 0; u = comp_scall_next(c, u)) {
+    const char *un = nt_ref(nt, u, "receiver") < 0 ? nt_str(nt, u, "name") : NULL;
+    if (!un || !(sp_streq(un, "p") || sp_streq(un, "pp") || sp_streq(un, "puts") || sp_streq(un, "print")) ||
+        an_user_defines_method(c, un) || !(comp_value_dropped(c, u) || scope_answers_read(c, si, u))) continue;
+    int ua = nt_ref(nt, u, "arguments"), uc = 0;
+    const int *uv = ua >= 0 ? nt_arr(nt, ua, "arguments", &uc) : NULL;
+    for (int k = 0; k < uc; k++) if (an_unparen(nt, uv[k]) == r) return 1;
+  }
+  return 0;
+}
+/* Does Hash local (vn, vs) never hold a String under literal Symbol key
+   `key`? Each value it stores there, or under a key that is no literal
+   Symbol, is none (hash_value_no_string), and no String moves there from
+   another key out of sight: no other name holds the Hash. Each write is a
+   statement storing a new Hash (hash_new_no_string_at); each read is a
+   store's receiver, the receiver of a call that hands out no Hash and moves
+   no value, an argument `p` prints, or a value its method answers. A value
+   another key hands out (`h[:k] = h[:j]`) is a stored value like any other,
+   and a possible String. */
+static int hash_local_key_no_string(Compiler *c, const char *vn, Scope *vs, const char *key, int depth) {
+  static const char *const keep[] = {
+    "[]", "fetch", "dig", "key?", "has_key?", "include?", "member?", "delete", "size", "length",
+    "empty?", "any?", "keys", "values", "values_at", "fetch_values", "inspect", "to_s", "==", "frozen?", NULL };
+  const NodeTable *nt = c->nt;
+  LocalVar *lv = vn ? scope_local(vs, vn) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || depth > 4) return 0;
+  int si = (int)(vs - c->scopes), saw = 0;
+  for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (w >= c->node_cap || c->nscope[w] != si || !wn || !sp_streq(wn, vn)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode || !comp_value_dropped(c, w) ||
+        !hash_new_no_string_at(c, nt_ref(nt, w, "value"), key, depth)) return 0;
+    saw = 1;
+  }
+  if (!saw) return 0;
+  for (int e = comp_vsite_first(c, VS_READ, NK_LocalVariableReadNode, vn, si); e >= 0; e = comp_vsite_next(c, e)) {
+    int r = comp_vsite_var(c, e);
+    if (nt_kind(nt, r) != NK_LocalVariableReadNode || comp_scope_of(c, r) != vs ||
+        !sp_streq(nt_str(nt, r, "name"), vn)) continue;
+    int p = comp_recv_parent(c, r);
+    /* comp_recv_parent indexes calls: `h[:k] ||= v`'s receiver is looked up */
+    for (int u = p < 0 ? comp_kind_first(c, NK_IndexOrWriteNode) : -1; u >= 0 && p < 0; u = comp_kind_next(c, u))
+      if (an_unparen(nt, nt_ref(nt, u, "receiver")) == r) p = u;
+    NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
+    const char *pn = pk == NK_CallNode ? nt_str(nt, p, "name") : NULL;
+    if (pk == NK_IndexOrWriteNode || (pn && is_store_alias(pn))) {
+      const char *sk = hash_literal_sym_key(nt, p);
+      if (sk && !sp_streq(sk, key)) continue;
+      int a = nt_ref(nt, p, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      int v = pk == NK_IndexOrWriteNode ? nt_ref(nt, p, "value") : an == 2 ? av[1] : -1;
+      if (!hash_value_no_string(c, v)) return 0;
+      continue;
+    }
+    if (pn && str_in(pn, keep)) continue;
+    if (p < 0 && (scope_prints_read(c, si, r) || scope_answers_read(c, si, r))) continue;
+    return 0;
+  }
+  return 1;
+}
+/* Is element read `er` of local `cont` (`h[:dirs]`, `h.fetch(:dirs)`) never
+   a String, `cont` a Hash that holds none under that literal Symbol key
+   (hash_local_key_no_string)? A mutator through it (`h[:dirs] << d`) is
+   then no String's, and the Strings the Hash holds under other keys stay
+   copies. */
+static int hash_element_no_string(Compiler *c, int er, int cont) {
+  const NodeTable *nt = c->nt;
+  const char *key = hash_literal_sym_key(nt, er);
+  if (!key || nt_kind(nt, er) != NK_CallNode || is_store_alias(nt_str(nt, er, "name"))) return 0;
+  const char *cn = nt_kind(nt, cont) == NK_LocalVariableReadNode ? nt_str(nt, cont, "name") : NULL;
+  Scope *cs = cn ? comp_scope_of(c, cont) : NULL;
+  LocalVar *lv = cs ? scope_local(cs, cn) : NULL;
+  return lv && ty_is_hash(lv->type) && hash_local_key_no_string(c, cn, cs, key, 0);
+}
+/* A mutator through element read `er` of local container `cont` (contn,
+   conts): every String stored into the container is demanded, but none for
+   a Hash element under a key that never holds one (`h[:dirs] << d`). */
+static int strbuf_demand_elem_read_stores(Compiler *c, int er, int cont, const char *contn, Scope *conts) {
+  return hash_element_no_string(c, er, cont) ? 0 : strbuf_demand_container_stores(c, contn, conts);
+}
 
 /* The values stored into container ivar (cid, ivn): what is written to it,
    and what is pushed or []='d into it. */
@@ -20319,7 +20495,7 @@ static int promote_shared_stored_strings_pass(Compiler *c) {
        stores are walked to the container they name */
     if (!contv || (!ty_is_array(contv->type) && !ty_is_hash(contv->type) &&
                    contv->type != TY_UNKNOWN && contv->type != TY_POLY)) continue;
-    changed |= strbuf_demand_container_stores(c, contn, conts);
+    changed |= strbuf_demand_elem_read_stores(c, mrecv, cont, contn, conts);
   }
 
   /* External reader mutation (`expr.reader << x`): the mutator reaches the
@@ -36339,7 +36515,7 @@ static void refuse_string_read_copies(Compiler *c) {
       continue;
     int cont = nt_ref(nt, r, "receiver");
     const char *cn = cont >= 0 && nt_kind(nt, cont) == NK_LocalVariableReadNode ? nt_str(nt, cont, "name") : NULL;
-    if (!cn) continue;
+    if (!cn || hash_element_no_string(c, r, cont)) continue;
     int ns = 0;
     const int *sn = sb_store_nodes(c, cn, comp_scope_of(c, cont), &ns);
     for (int i = 0; i < ns; i++) {

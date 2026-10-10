@@ -1,0 +1,2 @@
+{dirs: ["a", "/x"], name: "/x", width: 72, all: "/x"}
+{dirs: ["A", "/X"], all: false, name: "/x"}

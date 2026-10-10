@@ -933,6 +933,9 @@ endif
 endif
 TEST_RESULT_DIR ?= build/test-results
 TEST_TARGETS := $(patsubst test/%.rb,$(TEST_RESULT_DIR)/%.ok,$(TESTS))
+ifeq ($(TEST_REVERSE),1)
+TEST_TARGETS := $(patsubst test/%.rb,$(TEST_RESULT_DIR)/%.ok,$(filter $(TESTS),$(shell ls -r test/*.rb)))
+endif
 
 # Bundled spin packages carry their own test/*.rb (the same snapshot contract,
 # runnable with `spin test` inside the package). The compiler gate runs them
@@ -3439,7 +3442,7 @@ if [ -f "$<.args" ]; then args=$$(cat "$<.args"); fi; \
 stdinf=/dev/null; \
 if [ -f "$<.stdin" ]; then stdinf="$<.stdin"; fi; \
 rm -f "$@.diff" "$@.cached"; \
-ckey=""; hit=0; \
+ckey=""; hit=0; own=0; \
 $(SPINEL) "$<" $(SP_OV_FLAG) -c --no-line-map -o "$$cfile" 2>/dev/null && \
 { pchuse="$(PCH_USE_PLAIN)"; pchf="$(PCH_PLAIN)"; \
   if head -2 "$$cfile" | grep -q SP_TU_NO_POLY_RENDER; then pchuse="$(PCH_USE_NOPOLY)"; pchf="$(PCH_NOPOLY)"; fi; \
@@ -3454,9 +3457,13 @@ $(SPINEL) "$<" $(SP_OV_FLAG) -c --no-line-map -o "$$cfile" 2>/dev/null && \
   fi; \
   if [ -f "$<.expected" ]; then \
     ckey=$$(RC_CC="$(CC)" tools/result_cache.sh key "$<" "$$cfile" \
-      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)|share=$(SPINEL_SHARE_STRINGS)" \
+      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
       "$<.expected" "$<.err.expected" "$<.args" "$<.stdin"); \
-    if [ -n "$$ckey" ] && tools/result_cache.sh get "$$ckey" 2>/dev/null | grep -qx PASS; then hit=1; fi; \
+    if [ -n "$$ckey" ]; then \
+      if tools/result_cache.sh get "$$ckey" 2>/dev/null | grep -qx PASS; then hit=1; \
+      elif tools/result_cache.sh claim "$$ckey"; then own=1; \
+      elif tools/result_cache.sh await "$$ckey" 2>/dev/null | grep -qx PASS; then hit=1; fi; \
+    fi; \
   fi; \
   if [ $$hit = 1 ]; then \
     :; \
@@ -3504,6 +3511,7 @@ else \
   echo ERR > "$@"; \
   if [ -t 1 ]; then printf E; fi; \
 fi; \
+if [ $$own = 1 ]; then tools/result_cache.sh release "$$ckey"; fi; \
 rm -f "$$cfile" "$$cfile.o"; \
 rm -rf "$$tmpdir"
 endef
@@ -4412,7 +4420,7 @@ gate-test:
 # infer-test and reject-test keep their default-build expectations.
 gate-test-shared:
 	+@$(MAKE) --no-print-directory clean-test-results TEST_RESULT_DIR=build/test-results-shared
-	+@$(MAKE) $(TEST_JOBS) --no-print-directory test-corpus-shared-summary OPT=-O1 SPINEL_SHARE_STRINGS=1 TEST_RESULT_DIR=build/test-results-shared
+	+@$(MAKE) $(TEST_JOBS) --no-print-directory test-corpus-shared-summary OPT=-O1 SPINEL_SHARE_STRINGS=1 TEST_REVERSE=1 TEST_RESULT_DIR=build/test-results-shared
 
 test-corpus-shared-summary: test-corpus-results
 	@awk -f tools/shared_test_results.awk test/share/known-failures.txt $(TEST_RESULT_DIR)/*.ok

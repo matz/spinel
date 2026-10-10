@@ -29731,8 +29731,11 @@ static int nn_index_in_range(Compiler *c, int id, const NNF *f, int set) {
    raises (the comparison's ArgumentError, the arithmetic's TypeError), as
    `x op= v` raised on a nil. `==` answers false for a nil and `&.` answers
    nil, so neither proves anything, and a program that reopens a class the
-   operator could come from may answer for a nil too. */
-static void nn_operands_nonnil(Compiler *c, int id, NNF *f) {
+   operator could come from may answer for a nil too. The receiver was read
+   before the argument ran, so a local the argument wrote since
+   (`x + (x = nil; 1)`), or a call in it may have, is not the value read:
+   the kill log from amark on tells. */
+static void nn_operands_nonnil(Compiler *c, int id, NNF *f, int ctx, int amark) {
   const NodeTable *nt = c->nt;
   static const char *const ops[] = { "<", "<=", ">", ">=", "+", "-", "*", "/", NULL };
   const char *nm = nt_str(nt, id, "name");
@@ -29745,7 +29748,13 @@ static void nn_operands_nonnil(Compiler *c, int id, NNF *f) {
     return;
   TyKind rt = comp_ntype(c, recv), at = comp_ntype(c, av[0]);
   if (rt != TY_INT && rt != TY_FLOAT) return;
-  if (nt_kind(nt, recv) == NK_LocalVariableReadNode) nn_add(f, nn_local_of(c, recv));
+  LocalVar *rl = nt_kind(nt, recv) == NK_LocalVariableReadNode ? nn_local_of(c, recv) : NULL;
+  int k = nn_var(rl);
+  for (int i = amark; rl && i < nn_nlog; i++)
+    if ((nn_log[i].kind == NN_LOG_VAR && nn_log[i].lv == rl) ||
+        (nn_log[i].kind == NN_LOG_CALL && k >= 0 && nn_exposed(k, ctx)))
+      rl = NULL;
+  if (rl) nn_add(f, rl);
   if ((at == TY_INT || at == TY_FLOAT) && nt_kind(nt, av[0]) == NK_LocalVariableReadNode)
     nn_add(f, nn_local_of(c, av[0]));
 }
@@ -30007,6 +30016,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   case NK_CallNode: {
     nn_visit(c, nt_ref(nt, id, "receiver"), f, ctx);
+    int amark = nn_nlog;
     nn_visit_args(c, nt_ref(nt, id, "arguments"), f, ctx);
     if (!nn_dry) {
       int s = nn_index_in_range(c, id, f, 0);
@@ -30019,7 +30029,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
       nn_visit(c, nt_ref(nt, blk, "parameters"), &e, blk);
       nn_visit(c, nt_ref(nt, blk, "body"), &e, blk);
     } else if (blk >= 0) nn_visit_children_generic(c, blk, f, ctx);
-    nn_operands_nonnil(c, id, f);
+    nn_operands_nonnil(c, id, f, ctx, amark);
     if (!nn_pure_call(c, id)) { nn_call_kill(f, ctx, 0); nn_logpush(NN_LOG_CALL, NULL, -1, 0); }
     /* Kernel's raise, exit and abort do not come back */
     const char *nm = nt_str(nt, id, "name");

@@ -3,8 +3,8 @@
 # is a NoMethodError, a nil argument the number's ArgumentError or
 # TypeError -- so a later read of the local needs no nil test, as after
 # `x op= v`. Each shape has a twin where the read must keep it: `==` and
-# `&.` answer for a nil, and a rescued raise or an arm that did not run
-# goes on with the local still nil.
+# `&.` answer for a nil, and a rescued raise, an arm that did not run or
+# an argument that wrote the receiver's local goes on with it nil.
 def try
   yield
 rescue NoMethodError, ArgumentError, TypeError => e
@@ -66,6 +66,13 @@ def rescued(a, i)             # a rescued raise
   x < 10
 end
 
+def reassign(a, i)            # the argument writes the receiver's local
+  x = a[i]
+  y = x + (x = nil; 1)
+  s = x < 10
+  [y, s]
+end
+
 def cond(a, i, b)             # only the arm that compared
   x = a[i]
   t = b && x < 5
@@ -89,6 +96,7 @@ p safe(ints, 0)
 try { p safe(ints, 9) }
 p rescued(ints, 0)
 try { p rescued(ints, 9) }
+try { p reassign(ints, 0) }
 p cond(ints, 0, true), cond(ints, 1, false)
 try { p cond(ints, 9, false) }
 try { p cond(ints, 9, true) }

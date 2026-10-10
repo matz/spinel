@@ -1876,6 +1876,8 @@ int method_scope_arity(Compiler *c, int target, int *out) {
        pass, which is not the method's arity (clamp takes one or two) */
     const char *cs = nt_str(nt, c->scopes[target].def_node, "bam_sym");
     if (cs && nt_int(nt, c->scopes[target].def_node, "bam_cmp", 0)) { *out = builtin_comparable_arity(cs); return 1; }
+    /* ...and a Numeric method's (step takes none to two) */
+    if (cs && nt_int(nt, c->scopes[target].def_node, "bam_num", 0) && builtin_numeric_arity(cs, out)) return 1;
   }
   int pn = nt_ref(nt, c->scopes[target].def_node, "parameters");
   int n_req = 0, n_opt = 0, n_post = 0;
@@ -15902,6 +15904,23 @@ sp_builtin_arity_spec_tbl[] = {
 #undef BAM
 #undef BAS
 #undef BAC
+/* Method#arity of a Numeric method that Integer and Float inherit (abs2,
+   quo, +@, step): the Method#arity rows are each class's own methods, so
+   these have only the counts the class accepts. One count is the arity, a
+   range -(min + 1), as CRuby gives a method with optional parameters. The
+   two classes agree on every name both have. */
+int builtin_numeric_arity(const char *m, int *out) {
+  if (!builtin_numeric_owns("Integer", m)) return 0;
+  /* clone and dup have no row for either class: clone takes only the
+     keyword `freeze:`, so CRuby gives it -1, and dup takes nothing */
+  if (sp_streq(m, "clone") || sp_streq(m, "dup")) { *out = sp_streq(m, "clone") ? -1 : 0; return 1; }
+  for (const SpAritySpec *r = sp_builtin_arity_spec_tbl; r->cls; r++)
+    if (is_numeric_class_name(r->cls) && sp_streq(r->m, m) && r->min >= 0) {
+      *out = r->max == r->min ? r->min : -(r->min + 1);
+      return 1;
+    }
+  return 0;
+}
 /* Is `m` a method the builtin File (IO and its Enumerable included) has? */
 static int io_builtin_name(const char *m) {
   for (const SpAritySpec *r = sp_builtin_arity_spec_tbl; r->cls; r++)

@@ -1,0 +1,17 @@
+5
+0
+Numeric
+:+@
+-5
+0
+Integer
+-8
+0
+Integer
+-2.5
+2.5
+Float
+Numeric
+"ab"
+false
+"wrong number of arguments (given 1, expected 0)"

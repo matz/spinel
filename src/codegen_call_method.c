@@ -1540,6 +1540,9 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           const char *osym = is_bam ? bam_builtin_sym(c, target, NULL) : method_sym_arg(c, mn);
           if (osym && builtin_comparable_owns(mcls, osym) && !builtin_method_known(mcls, osym))
             mcls = "Comparable";
+          /* and Numeric's that Integer and Float inherit: Integer#abs2 */
+          else if (osym && builtin_numeric_owns(mcls, osym) && !builtin_method_known(mcls, osym))
+            mcls = "Numeric";
           buf_printf(b, "((void)("); emit_expr(c, recv, b);
           buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", mcls);
           return 1;
@@ -1625,6 +1628,8 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         ba = builtin_comparable_arity(msym);
         have_ba = 1;
       }
+      /* ...and Numeric's, which Integer's and Float's leave out */
+      else if (msym && mcls && builtin_numeric_owns(mcls, msym) && builtin_numeric_arity(msym, &ba)) have_ba = 1;
       /* A receiverless Kernel wrapper (`method(:String)`) has no receiver
          class; the builtin's real arity is keyed under "Kernel" (#4395). */
       else if (is_bam && mrecv < 0 && msym && builtin_method_arity("Kernel", msym, &ba)) have_ba = 1;

@@ -6875,16 +6875,19 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     const char *sym = method_sym_arg(c, id);
     if (!sym || !sym[0] || sym[0] == '_') continue;   /* already rewritten / internal */
-    /* a binary operator method (5.method(:+)) gets a 2-param wrapper below;
-       other non-letter syms have no wrapper shape */
+    /* a binary operator method (5.method(:+)) gets a 2-param wrapper below,
+       a unary one (5.method(:-@)) the 1-param wrapper of a method that takes
+       no argument; other non-letter syms have no wrapper shape */
     static const char *const BAM_BINOPS[] = { "+", "-", "*", "/", "%", "**",
                                               "&", "|", "^", "<<", ">>", "<=>",
                                               "==", "!=", "<", "<=", ">", ">=",
                                               "=~", "[]", NULL };
-    int binop = 0;
+    static const char *const BAM_UNOPS[] = { "+@", "-@", "~", NULL };
+    int binop = 0, unop = 0;
     if (!(sym[0] >= 'a' && sym[0] <= 'z')) {
       for (int k = 0; BAM_BINOPS[k]; k++) if (sp_streq(sym, BAM_BINOPS[k])) { binop = 1; break; }
-      if (!binop) continue;
+      for (int k = 0; !binop && BAM_UNOPS[k]; k++) if (sp_streq(sym, BAM_UNOPS[k])) { unop = 1; break; }
+      if (!binop && !unop) continue;
     }
     TyKind rt = infer_type(c, recv);
     /* A user-object receiver whose sym is an attr/struct accessor with NO real
@@ -6928,6 +6931,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     if (ty_is_array(rt) && sp_streq(sym, "push")) continue;
     if (comp_method_index(c, sym) >= 0) continue;     /* a same-named top-level def wins */
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
+    int num_only = 0;   /* a Numeric method Integer or Float inherits */
     /* an undefined name must reach codegen's immediate NameError, not become
        a wrapper whose body call aborts the build (#2752) */
     {
@@ -6939,13 +6943,15 @@ static int desugar_builtin_method_obj(Compiler *c) {
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
-      /* Comparable's methods (between?, clamp) are the class's through the
-         module, which the class's own table leaves out */
+      /* Comparable's methods (between?, clamp) and Numeric's (abs2, quo,
+         positive?) are the class's through the module or the superclass,
+         which the class's own table leaves out */
       if (bcls && !bool_op &&
           !builtin_method_known(bcls, sym) && !builtin_comparable_owns(bcls, sym) &&
-          !builtin_object_method_known(sym))
+          !builtin_numeric_owns(bcls, sym) && !builtin_object_method_known(sym))
         continue;
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
+      num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
     }
     char wname[48];
     snprintf(wname, sizeof wname, "__bam_%s", comp_node_tag(c, id));
@@ -6999,6 +7005,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* its Method#arity is Comparable's, which a boxed self reads off the
        Method at run time (method_scope_arity) */
     if (cmp_only) nt_node_set_int(nt, def, "bam_cmp", 1);
+    if (num_only) nt_node_set_int(nt, def, "bam_num", 1);
     Scope *ws = comp_scope_new(c, wname, def);
     ws->class_id = -1;
     ws->body = body;

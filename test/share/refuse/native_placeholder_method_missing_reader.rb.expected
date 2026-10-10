@@ -1,0 +1,1 @@
+spinel: test/share/refuse/native_placeholder_method_missing_reader.rb:13: under --share-strings, the String the value of `freshness_probe_token` hands on as a variable's write is shared with another name and changed in place, and that route cannot carry the shared handle yet: it would hand on a copy (#6765)

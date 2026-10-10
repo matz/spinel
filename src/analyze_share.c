@@ -54,6 +54,18 @@ enum { SHU_STMT = 1, SHU_TAIL = 2, SHU_SPLIT = 4, SHU_PEEK = 8 };
 /* per-node answers built from the flows (ShareFacts.into) */
 enum { SHI_INTO = 1, SHI_MUTATED = 2, SHI_LITOUT = 4 };
 
+/* The builtin side of a mixed boxed String call can be fresh even when its
+   joined user result is not. Keep the exact selected row and call-shape fact
+   from the share walk so the later return-tail proof can revalidate it without
+   replaying sh_builtin's effects. */
+typedef struct {
+  int call, share, family, container, recv_type, result_type, plan_ret;
+  int argc, ntg;
+  const BuiltinOp *row;
+  int *arg_types;
+  int *targets;
+} ShBoxedFreshFact;
+
 typedef struct ShareFacts {
   int n, cap;
   /* key: per element, the keys a Hash's lookups ask for, which its default
@@ -145,6 +157,13 @@ typedef struct ShareFacts {
      new Strings (`s.scan(re)`, `s.split`), whose value is a class of its
      own (sh_builtin) */
   unsigned char *fresh_cont;
+  /* mixed boxed-String calls whose selected builtin row actually answered
+     with no carried identity (`sh_builtin` returned -1), alongside the
+     selected row and input signature used to revalidate the proof */
+  ShBoxedFreshFact *boxed_fresh;
+  int nboxed_fresh, cboxed_fresh;
+  /* lazily allocated per-node index into boxed_fresh (stored as index + 1) */
+  int *boxed_fresh_index;
   /* `break v` and `next v` (sh_jumps): per node, the value the breaks out
      of a call's block or a loop hand the call or the loop, or the nexts of
      a block hand the block (-1 none); and the nodes the walk that finds
@@ -175,6 +194,8 @@ typedef struct ShareFacts {
   int exc;
   int ostruct;         /* the program names OpenStruct, whose fields a poly
                           receiver's call may read */
+  int singleton_accessors; /* some class has singleton readers/writers whose
+                               class-side holder edges are not in this graph */
   int closed;          /* unions with UNKNOWN are dropped (the stats' second build) */
   int union_stack_cap;
   int *union_stack;
@@ -1332,6 +1353,10 @@ static void sh_settle_peeks(ShareFacts *F, Compiler *c) {
     if (c->scopes[mi].def_node >= 0 && !F->mread[mi]) sh_mark_unused(F, nt, c->scopes[mi].body, SHU_TAIL);
   for (int i = 0; i < F->npk; i++) {
     int n = F->pk[i] < 0 ? -F->pk[i] - 1 : F->pk[i];
+    /* A builtin's pure/argument peek describes only that dispatch arm. A
+       same-named user arm can retain these values, so its flows take
+       precedence over the builtin-only no-retention fact. */
+    if (sh_has_targets(c, n)) continue;
     if (F->pk[i] < 0) {
       if (!F->unused[n]) continue;
       F->unused[n] |= SHU_PEEK;
@@ -1679,6 +1704,227 @@ static int sh_container_default(ShareFacts *F, Compiler *c, int n, int rv, int b
     sh_union(F, rv, sh_block_val(F, c, blk));
   }
   return sh_join(F, rv, sh_elem(F, rv));
+}
+
+/* The row the no-user boxed-call path already uses for a receiver whose
+   type is poly/unknown. Keep its precedence in one place so a user-target
+   call can compose that same row beside the user returns when its dispatch
+   plan proves that those are the only returning arms. */
+static int sh_boxed_builtin_row(ShareFacts *F, Compiler *c, int n,
+                                int *share_out, int *family_out, int *container_out) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, n, "name");
+  int args = nt_ref(nt, n, "arguments"), argc = 0;
+  if (!name) return 0;
+  if (args >= 0) (void)nt_arr(nt, args, "arguments", &argc);
+  int blk = nt_ref(nt, n, "block");
+  int s = 0, family = 0, container = 1;
+  /* A separator form of String#partition is the String row; Array's
+     block-form Enumerable row is a different call shape. */
+  if (argc == 1 && blk < 0 && is_partition_family(name)) {
+    s = bop_share_boxed(TY_STRING, name);
+    if (s) family = TY_STRING;
+  }
+  if (!s) { s = bop_share_named(BOP_ANY_ARRAY, name); if (s) family = BOP_ANY_ARRAY; }
+  if (!s) { s = bop_share_named(BOP_ANY_HASH, name); if (s) family = BOP_ANY_HASH; }
+  if (!s) { s = bop_share_named(BOP_ANY_RECV, name); if (s) family = BOP_ANY_RECV; }
+  if (!s && !F->ostruct) { s = bop_share_named(TY_CLASS, name); if (s) family = TY_CLASS; }
+  /* A String-only operation answering a new String Array keeps that fact
+     even when its receiver is boxed: it is no container's row. */
+  if (!s && !F->ostruct && blk < 0 && c->ntype[n] == TY_STR_ARRAY) {
+    const IterRow *ir = iter_row(TY_STRING, name, argc, 0);
+    if (ir && ir->nyield == 1 && ir->yield[0] == YS_FRESH && ir->answer == IA_RECV) {
+      s = BSH_PURE; family = TY_STRING; container = 0;
+    }
+  }
+  if (!s && !F->ostruct) { s = bop_share_boxed(TY_STRING, name); if (s) family = TY_STRING; }
+  /* Explicit IO rows describe boxed arms too. User targets and OpenStruct
+     fields stay above; an IO's wildcard cannot prove this. */
+  if (!s && !F->ostruct) { s = bop_share_boxed(TY_IO, name); if (s) family = TY_IO; }
+  if (!s) return 0;
+  *share_out = s;
+  if (family_out) *family_out = family;
+  *container_out = container;
+  return 1;
+}
+
+static int sh_plan_target_has(const int *tg, int ntg, int mi) {
+  for (int i = 0; i < ntg; i++) if (tg[i] == mi) return 1;
+  return 0;
+}
+
+static int sh_bop_shape_fits(const BuiltinOp *op, const char *name, int argc, int has_block) {
+  if (!op || !op->name || !sp_streq(op->name, name) || argc < op->argc_min || argc > op->argc_max) return 0;
+  if ((op->block == BF_NONE && has_block) || (op->block == BF_REQUIRED && !has_block)) return 0;
+  return 1;
+}
+
+typedef struct {
+  Compiler *c;
+  const int *argv;
+  int argc;
+} ShBopArgs;
+
+static TyKind sh_bop_arg_type(const void *ud, int i) {
+  const ShBopArgs *a = ud;
+  return i >= 0 && i < a->argc ? a->c->ntype[a->argv[i]] : TY_UNKNOWN;
+}
+
+static int sh_has_method_missing_candidate(Compiler *c);
+
+/* A boxed String row can replace the container default only when the
+   selected typed row describes this call shape and the dispatch plan and
+   builtin ownership tables account for the other routes. The plan may offer
+   PT_STR directly, or pair PB_ND_GENERIC with PT_GENERIC_TAIL for the
+   generic builtin re-entry. Gather the plan facts before calling sh_builtin,
+   which can recurse through arguments and invalidate memoized plan storage. */
+static int sh_boxed_string_row_composable(ShareFacts *F, Compiler *c, int n,
+                                          int ntg, const int *tg, int share,
+                                          int family, int container,
+                                          const BuiltinOp **row_out, TyKind *plan_ret_out) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, n, "name");
+  int blk = nt_ref(nt, n, "block");
+  int argc = 0, args = nt_ref(nt, n, "arguments");
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* A user arm may reach a helper that reads a published singleton-accessor
+     value even when that accessor is not in this call's dispatch plan. */
+  if (!name || family != TY_STRING || F->ostruct || F->singleton_accessors || blk >= 0 ||
+      !poly_string_read_p(name) ||
+      container != 1 || share != bop_share_boxed(TY_STRING, name) ||
+      !nt_call_args_plain(nt, n)) return 0;
+
+  /* String readers that are also a different builtin face need that face's
+     result too. The name-only reader table covers the boxed scalar/container
+     surfaces; the exact typed rows below cover the remaining BOP owners. */
+  if (bop_name_has_reader(name, BOP_READ_NUMERIC | BOP_READ_CONTAINER)) return 0;
+  unsigned faces = ty_poly_face_owners(name, argc, 0, nt_call_args_plain(nt, n), 1);
+  if ((faces & PF_OWNERS) & ~PF_STRING) return 0;
+  ShBopArgs bop_args = { c, argv, argc };
+  const BuiltinOp *op = bop_find_arg(TY_STRING, name, argc, 0,
+                                     sh_bop_arg_type, &bop_args);
+  if (!op || op->emit == BOPE_NONE || op->result != TY_STRING) return 0;
+  int has_other_builtin = 0;
+  for (int i = 0; i < bop_row_count(); i++) {
+    const BuiltinOp *row = bop_row(i);
+    if (row && row->recv != TY_STRING && row->recv != TY_STRBUF &&
+        sh_bop_shape_fits(row, name, argc, 0)) { has_other_builtin = 1; break; }
+  }
+  if (has_other_builtin || bop_share_named(BOP_ANY_RECV, name)) return 0;
+
+  /* Match the existing boxed-freshness exclusions for Object and dynamic
+     lookup. These routes can answer without being an ordinary user target. */
+  if (object_public_method_name(name) || comp_method_index(c, "method_missing") >= 0) return 0;
+  if (sh_has_method_missing_candidate(c)) return 0;
+  int missing = 0;
+  comp_cmethod_candidates(c, "method_missing", &missing);
+  if (missing) return 0;
+
+  const PolyPlan *p = cplan_poly_fresh(c, n);
+  if (!p || (p->ret != TY_STRING && p->ret != TY_POLY)) return 0;
+  int has_str = 0, has_generic_tail = 0, has_generic_default = 0, ok = p->n > 0;
+  for (int i = 0; ok && i < p->n; i++) {
+    const PolyArm *a = &p->arm[i];
+    if (a->kind == PA_USER || a->kind == PA_PROC_FORM) {
+      if (a->mi < 0 || a->mi >= c->nscopes || !sh_plan_target_has(tg, ntg, a->mi)) ok = 0;
+    }
+    else if (a->kind == PA_ARITY) {
+      /* The arm raises ArgumentError and has no return value to join. */
+    }
+    else if (a->kind == PA_TRIAL) {
+      if (a->key == PA_KEY_TRIAL + PT_STR) has_str = 1;
+      else if (a->key == PA_KEY_TRIAL + PT_GENERIC_TAIL) has_generic_tail = 1;
+      else ok = 0;
+    }
+    else if (a->kind == PA_BUILTIN) {
+      if (a->key == PA_KEY_BUILTIN + PB_ND_GENERIC) has_generic_default = 1;
+      else ok = 0;
+    }
+    else ok = 0;
+  }
+  int generic_tail = has_generic_tail && has_generic_default;
+  int partial_generic_tail = has_generic_tail != has_generic_default;
+  if (!ok || partial_generic_tail || (!has_str && !generic_tail)) return 0;
+  if (row_out) *row_out = op;
+  if (plan_ret_out) *plan_ret_out = p->ret;
+  return 1;
+}
+
+static void sh_record_boxed_fresh(ShareFacts *F, Compiler *c, int n,
+                                  int share, int family, int container,
+                                  const BuiltinOp *row, TyKind plan_ret,
+                                  int ntg, const int *tg) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || n >= F->nnodes) return;
+  if (!F->boxed_fresh_index) {
+    F->boxed_fresh_index = calloc((size_t)(F->nnodes > 0 ? F->nnodes : 1),
+                                  sizeof(*F->boxed_fresh_index));
+    if (!F->boxed_fresh_index) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  int args = nt_ref(nt, n, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  int recv = nt_ref(nt, n, "receiver");
+  if (F->nboxed_fresh >= F->cboxed_fresh) {
+    F->cboxed_fresh = F->cboxed_fresh ? F->cboxed_fresh * 2 : 8;
+    F->boxed_fresh = realloc(F->boxed_fresh,
+                             sizeof(*F->boxed_fresh) * (size_t)F->cboxed_fresh);
+    if (!F->boxed_fresh) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  ShBoxedFreshFact fact = {
+    .call = n, .share = share, .family = family, .container = container,
+    .recv_type = recv >= 0 ? c->ntype[recv] : TY_UNKNOWN,
+    .result_type = c->ntype[n], .plan_ret = plan_ret,
+    .argc = argc, .ntg = ntg, .row = row
+  };
+  fact.arg_types = argc ? malloc(sizeof(*fact.arg_types) * (size_t)argc) : NULL;
+  fact.targets = ntg ? malloc(sizeof(*fact.targets) * (size_t)ntg) : NULL;
+  if ((argc && !fact.arg_types) || (ntg && !fact.targets)) {
+    free(fact.arg_types); free(fact.targets);
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  for (int i = 0; i < argc; i++) fact.arg_types[i] = c->ntype[argv[i]];
+  for (int i = 0; i < ntg; i++) fact.targets[i] = tg[i];
+  int old = F->boxed_fresh_index[n] - 1;
+  if (old >= 0 && old < F->nboxed_fresh) {
+    free(F->boxed_fresh[old].arg_types);
+    free(F->boxed_fresh[old].targets);
+    F->boxed_fresh[old] = fact;
+    return;
+  }
+  int at = F->nboxed_fresh++;
+  F->boxed_fresh[at] = fact;
+  F->boxed_fresh_index[n] = at + 1;
+}
+
+/* Revalidate the selected builtin row and dispatch shape against the exact
+   effect signature captured by sh_builtin in the sharing walk. */
+static int sh_boxed_fresh_recorded(Compiler *c, int n) {
+  ShareFacts *F = c->share;
+  if (!F) return 0;
+  const ShBoxedFreshFact *fact = NULL;
+  int at = n >= 0 && n < F->nnodes && F->boxed_fresh_index
+    ? F->boxed_fresh_index[n] - 1 : -1;
+  if (at >= 0 && at < F->nboxed_fresh) fact = &F->boxed_fresh[at];
+  if (!fact || fact->call != n) return 0;
+
+  int tg[CPT_MAX], ntg = cplan_targets(c, n, tg, CPT_MAX);
+  int share = 0, family = 0, container = 1;
+  const BuiltinOp *row = NULL;
+  TyKind plan_ret = TY_UNKNOWN;
+  if (ntg < 0 || !sh_boxed_builtin_row(F, c, n, &share, &family, &container) ||
+      !sh_boxed_string_row_composable(F, c, n, ntg, tg, share, family, container,
+                                      &row, &plan_ret)) return 0;
+  const NodeTable *nt = c->nt;
+  int args = nt_ref(nt, n, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  int recv = nt_ref(nt, n, "receiver");
+  int recv_type = recv >= 0 ? c->ntype[recv] : TY_UNKNOWN;
+  if (share != fact->share || family != fact->family || container != fact->container ||
+      row != fact->row || plan_ret != fact->plan_ret || c->ntype[n] != fact->result_type ||
+      recv_type != fact->recv_type || argc != fact->argc || ntg != fact->ntg) return 0;
+  for (int i = 0; i < argc; i++) if (c->ntype[argv[i]] != fact->arg_types[i]) return 0;
+  for (int i = 0; i < ntg; i++) if (tg[i] != fact->targets[i]) return 0;
+  return 1;
 }
 
 /* A call the walk does not follow: what it is handed and what it answers
@@ -2306,6 +2552,19 @@ static int sh_call(ShareFacts *F, Compiler *c, int n) {
     if (argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode &&
         bop_share_named(BOP_ANY_ARRAY, name) == BSH_PACK)
       r = sh_join(F, r, sh_builtin(F, c, n, BSH_PACK, rv, blk, 1));
+    int share = 0, family = 0, container = 1;
+    const BuiltinOp *row = NULL;
+    TyKind plan_ret = TY_UNKNOWN;
+    if (sh_boxed_builtin_row(F, c, n, &share, &family, &container) &&
+        sh_boxed_string_row_composable(F, c, n, ntg, tg, share, family, container,
+                                       &row, &plan_ret)) {
+      int builtin = sh_builtin(F, c, n, share, rv, blk, container);
+      /* This records only the builtin arm's lack of carried identity; r
+         still contains every reachable user arm's return holder. */
+      if (builtin == -1)
+        sh_record_boxed_fresh(F, c, n, share, family, container, row, plan_ret, ntg, tg);
+      return sh_join(F, r, builtin);
+    }
     return sh_join(F, r, sh_container_default(F, c, n, rv, blk));
   }
 
@@ -2389,27 +2648,9 @@ static int sh_call(ShareFacts *F, Compiler *c, int n) {
     }
     /* any receiver it may be: an Array's or a Hash's row (a String's keeps
        its arguments least), or the container default */
-    /* The separator form is String's; Array partition takes a block. */
-    int s = argc == 1 && blk < 0 && is_partition_family(name)
-              ? bop_share_boxed(TY_STRING, name) : 0;
-    if (!s) s = bop_share_named(BOP_ANY_ARRAY, name);
-    if (!s) s = bop_share_named(BOP_ANY_HASH, name);
-    if (!s) s = bop_share_named(BOP_ANY_RECV, name);
-    /* a Module's name (no OpenStruct field of the name in the program); a
-       name only a String answers, the String's row */
-    if (!s && !F->ostruct) s = bop_share_named(TY_CLASS, name);
-    /* A String-only operation answering a new String Array keeps that
-       fact even when its receiver is boxed: it is no container's row. */
-    if (!s && !F->ostruct && blk < 0 && c->ntype[n] == TY_STR_ARRAY) {
-      const IterRow *ir = iter_row(TY_STRING, name, argc, 0);
-      if (ir && ir->nyield == 1 && ir->yield[0] == YS_FRESH && ir->answer == IA_RECV)
-        return sh_builtin(F, c, n, BSH_PURE, rv, blk, 0);
-    }
-    if (!s && !F->ostruct) s = bop_share_boxed(TY_STRING, name);
-    /* Explicit IO rows describe the boxed arms too. User targets and
-       OpenStruct fields stay above; an IO's wildcard cannot prove this. */
-    if (!s && !F->ostruct) s = bop_share_boxed(TY_IO, name);
-    if (s) return sh_builtin(F, c, n, s, rv, blk, 1);
+    int s = 0, container = 1;
+    if (sh_boxed_builtin_row(F, c, n, &s, NULL, &container))
+      return sh_builtin(F, c, n, s, rv, blk, container);
     return sh_container_default(F, c, n, rv, blk);
   }
   if (rt == TY_OPENSTRUCT) return sh_ostruct_call(F, c, n, name, rv, blk);
@@ -3160,6 +3401,12 @@ static void sh_free(ShareFacts *F) {
   free(F->any_new_blk); free(F->attr_r); free(F->attr_w); free(F->blkp);
   free(F->jump); free(F->jseen); free(F->fgen);
   free(F->key); free(F->lk_c); free(F->lk_k); free(F->lk_done);
+  for (int i = 0; i < F->nboxed_fresh; i++) {
+    free(F->boxed_fresh[i].arg_types);
+    free(F->boxed_fresh[i].targets);
+  }
+  free(F->boxed_fresh);
+  free(F->boxed_fresh_index);
   free(F);
 }
 
@@ -3583,6 +3830,14 @@ static ShareFacts *sh_build(Compiler *c, int closed) {
   F->closed = closed;
   F->unknown = sh_new(F, SHK_UNKNOWN);
   F->exc = -1;
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (c->classes[ci].nsg_readers || c->classes[ci].nsg_writers) {
+      /* Singleton accessors can publish values through class-side storage
+         that the share holder graph does not connect to those readers. Keep
+         the previous boxed-container effects for this program. */
+      F->singleton_accessors = 1;
+      break;
+    }
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, cr)
     if (!F->ostruct && nt_str(nt, cr, "name") && sp_streq(nt_str(nt, cr, "name"), "OpenStruct")) F->ostruct = 1;
   F->flags[F->unknown] = SHF_UNKNOWN;
@@ -3911,6 +4166,23 @@ int share_method_blocks(const Compiler *c, int mi, const int **blocks) {
   *blocks = F->mb_blk + F->mb_start[mi];
   return F->mb_start[mi + 1] - F->mb_start[mi];
 }
+/* Native classes can appear in comp_poly_candidates as placeholders even
+   when they have no binding. Skip only those empty native rows; preserve
+   every Ruby candidate and every real native binding conservatively. The
+   non-arity registry query keeps real bindings regardless of signature. */
+static int sh_native_placeholder(Compiler *c, const PolyCand *p, const char *name) {
+  if (!p->native || p->mi >= 0 || p->rdcls >= 0) return 0;
+  if (comp_reader_in_chain(c, p->cls, name, NULL)) return 0;
+  return !comp_poly_arm_defines(c, p->cls, name);
+}
+static int sh_has_method_missing_candidate(Compiler *c) {
+  int n = 0;
+  const PolyCand *p = comp_poly_candidates(c, "method_missing", &n);
+  for (int i = 0; i < n; i++)
+    if (!sh_native_placeholder(c, &p[i], "method_missing")) return 1;
+  return 0;
+}
+
 /* A boxed call's builtin arms answer a value of their own when the
    any-receiver row says so. String's receiver conversions are the
    exception to Object's row: to_s can hand its String back unchanged. */
@@ -3927,9 +4199,8 @@ static int sh_builtin_fresh(Compiler *c, int call, int ostruct) {
      method_missing can answer a name with no ordinary target too. */
   if (object_public_method_name(name)) return 0;
   if (comp_method_index(c, "method_missing") >= 0) return 0;
+  if (sh_has_method_missing_candidate(c)) return 0;
   int missing = 0;
-  comp_poly_candidates(c, "method_missing", &missing);
-  if (missing) return 0;
   comp_cmethod_candidates(c, "method_missing", &missing);
   if (missing) return 0;
   /* With no builtin face or dynamic fields, only the user methods can
@@ -3941,13 +4212,19 @@ static int sh_builtin_fresh(Compiler *c, int call, int ostruct) {
     /* The walk has no settled dispatch plan yet. Its candidate index
        still exposes aliases the same-named target set can miss. */
     int tg[CPT_MAX], ntg = cplan_targets(c, call, tg, CPT_MAX);
-    int i = 0;
-    for (; i < n && p[i].mi >= 0 && !p[i].native; i++) {
+    int user_methods = 0;
+    for (int i = 0; i < n; i++) {
+      if (p[i].native) {
+        if (!sh_native_placeholder(c, &p[i], name)) return 0;
+        continue;
+      }
+      if (p[i].mi < 0 || p[i].rdcls >= 0) return 0;
+      user_methods++;
       int found = 0;
       for (int j = 0; j < ntg; j++) if (tg[j] == p[i].mi) { found = 1; break; }
       if (!found) return 0;
     }
-    if (i == n && i > 0) return 1;
+    if (user_methods > 0) return 1;
   }
   return 0;
 }
@@ -3965,13 +4242,17 @@ static int sh_arm_io_read_fresh(Compiler *c, int call, const PolyArm *a) {
 int share_builtin_fresh(Compiler *c, int call) {
   const char *name = nt_str(c->nt, call, "name");
   if (bop_share_named(BOP_ANY_RECV, name) == BSH_PURE && !is_receiver_conversion(name)) return 1;
+  /* A mixed boxed call may have a fresh builtin String arm beside user
+     returns. Use only the effect recorded after sh_builtin actually returned
+     no carried identity, with the same row and full plan proof revalidated. */
+  if (sh_boxed_fresh_recorded(c, call)) return 1;
   /* The share walk's builtin surfaces exclude typed-only methods such
      as Thread#value; the settled plan below still checks every arm. */
   if (!sh_builtin_fresh(c, call, !c->share || c->share->ostruct)) return 0;
   /* A scope-name lookup can miss an alias's method. Every returning user
      arm must occur in the target set whose return identities we check. */
   int tg[CPT_MAX], n = cplan_targets(c, call, tg, CPT_MAX);
-  const PolyPlan *p = cplan_poly(c, call);
+  const PolyPlan *p = cplan_poly_fresh(c, call);
   for (int i = 0; i < p->n; i++) {
     const PolyArm *a = &p->arm[i];
     if (a->kind != PA_USER && a->kind != PA_PROC_FORM) continue;

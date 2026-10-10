@@ -1,0 +1,1 @@
+spinel: test/share/refuse/native_placeholder_inherited_method_missing.rb:7: warning: method_missing is defined but spinel does not dispatch undefined-method calls to it; such calls raise NoMethodError (method_missing can still be called explicitly)

@@ -290,6 +290,10 @@ const PolyPlan *cplan_poly(Compiler *c, int id);
    receiver form). Cheaper: the builtin families and trials, which only the
    --plan-check shadow compares, are left out. */
 const PolyPlan *cplan_poly_arms(Compiler *c, int id);
+/* Resolve the complete plan without reading or writing the per-node memo.
+   Use while inference facts are still moving; the scratch plan is overwritten
+   by the next fresh resolve, so finish reading it before another planner call. */
+const PolyPlan *cplan_poly_fresh(Compiler *c, int id);
 int cplan_struct_aset(Compiler *c, int cid, const char *name, int argc);
 /* A plan the caller keeps across emissions that may resolve others (a
    resolve outside the memo reuses one buffer); cplan_poly_free drops it. */

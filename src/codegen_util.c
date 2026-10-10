@@ -7513,18 +7513,34 @@ void emit_oint_truthy(Compiler *c, int node, TyKind t, Buf *b) {
   else { buf_puts(b, "(("); emit_expr(c, node, b); buf_puts(b, "), 1)"); }
 }
 
-/* emit_oint_unwrap_ck's op naming an arithmetic operator's right operand:
-   sp_oint_opnd's coercion TypeError */
+/* A typed element read (`a[j]`) whose oint is unwrapped at once: the read
+   emits the checked plain form itself (sp_*Array_get_ck(a, j, op) for an
+   operator's receiver, sp_*Array_get_arg(a, j) for a plain consumer), which
+   raises the unwrap's own error at the read -- the same observable point,
+   since nothing runs between them. g_ck_node names the node, g_ck_op the
+   operator (NULL: the plain consumer's TypeError); the emitter sets
+   g_ck_done when it took the offer. */
+int g_ck_node = -1;
+const char *g_ck_op = NULL;
+/* g_ck_op naming an arithmetic operator's right operand: sp_oint_opnd's
+   coercion TypeError (sp_*Array_get_opnd) */
 const char g_ck_opnd[] = "(operand)";
+int g_ck_done = 0;
 
 /* The oint of `node` unwrapped at once: an operator's receiver (`op`,
    sp_oint_val's NoMethodError), a strict argument (op NULL, sp_oint_arg's
    TypeError) or an operator's right operand (g_ck_opnd, sp_oint_opnd's
-   "nil can't be coerced"): the unwrap around its oint. */
+   "nil can't be coerced"). An element read takes the offer and renders the checked plain
+   read; anything else is the unwrap around its oint. */
 void emit_oint_unwrap_ck(Compiler *c, int node, TyKind t, const char *op, Buf *b) {
   Buf side; memset(&side, 0, sizeof side);
+  int sv_n = g_ck_node, sv_d = g_ck_done; const char *sv_o = g_ck_op;
+  g_ck_node = node; g_ck_op = op; g_ck_done = 0;
   emit_oint_expr(c, node, t, &side);
-  if (op == g_ck_opnd) buf_printf(b, "%s(%s)", t == TY_FLOAT ? "sp_ofloat_opnd" : "sp_oint_opnd", side.p ? side.p : "");
+  int done = g_ck_done;
+  g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d;
+  if (done) buf_puts(b, side.p ? side.p : "0");
+  else if (op == g_ck_opnd) buf_printf(b, "%s(%s)", t == TY_FLOAT ? "sp_ofloat_opnd" : "sp_oint_opnd", side.p ? side.p : "");
   else if (op) buf_printf(b, "%s(%s, \"%s\")", oint_val(t), side.p ? side.p : "", op);
   else buf_printf(b, "%s(%s)", oint_arg(t), side.p ? side.p : "");
   free(side.p);

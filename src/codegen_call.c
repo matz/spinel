@@ -15019,8 +15019,8 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         if (rin || rfn) {
           Buf ov; memset(&ov, 0, sizeof ov);
           Buf *svp = g_pre; g_pre = &ap;
-          /* the same class on both sides: the coercion error is
-             sp_oint_opnd's */
+          /* the same class on both sides: the element read may unwrap
+             itself (sp_*Array_get_opnd) */
           if (rgt9 == lft9) emit_oint_unwrap_ck(c, argv[0], rgt9, g_ck_opnd, &av);
           else emit_oint_expr(c, argv[0], rgt9, &ov);
           g_pre = svp;

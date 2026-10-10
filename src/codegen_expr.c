@@ -1561,7 +1561,19 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     emit_expr_node(c, id, ob);
     buf_puts(ob, ")");
   }
-  else emit_expr_node(c, id, ob);
+  else {
+    /* a plain consumer of an element read: the read may unwrap itself */
+    int sv_n = g_ck_node, sv_d = g_ck_done; const char *sv_o = g_ck_op;
+    if (wrap_arg) { g_ck_node = id; g_ck_op = NULL; g_ck_done = 0; }
+    emit_expr_node(c, id, ob);
+    if (wrap_arg && g_ck_done && ob == &side) {
+      buf_puts(b, side.p ? side.p : "0"); free(side.p);
+      g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d;
+      g_oint_read = 0; g_expr_depth--;
+      return;
+    }
+    if (wrap_arg) { g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d; }
+  }
   if (ob == &side) {
     /* a diverging text (a raise token) carries the plain default: it is
        never unwrapped (sp_oint_arg would not take it), and wrapped as the

@@ -2364,7 +2364,10 @@ extern int g_want_oint;
    (codegen_util.c); the mark is a nil's cls_id no box carries */
 #define SP_IVAR_UNSET_MARK 0x5e70
 int poly_ivar_unset_marked(Compiler *c, int cid, int iv);
+extern int g_ck_node;
+extern const char *g_ck_op;
 extern const char g_ck_opnd[];
+extern int g_ck_done;
 /* the leaf slot read emit_expr is rendering is wanted as its own oint
    (codegen_expr.c) */
 extern int g_oint_read;

@@ -4202,8 +4202,10 @@ static int gc_elide_call_ok(const char *id, size_t n, const char *lvname) {
     "sp_oint_val", "sp_ofloat_val", "sp_oint_arg", "sp_oint_arg_of", "sp_ofloat_arg",
     "sp_oint_opnd", "sp_ofloat_opnd", "sp_oint_cmp_opnd", "sp_ofloat_cmp_opnd",
     "sp_oint_of", "sp_oint_nil", "sp_ofloat_of", "sp_ofloat_nil",
-    /* the element reads with their nil: a bounds compare and a bitmap test */
+    /* the element reads with their nil, and the checked plain reads: a
+       bounds compare and a bitmap test, a raise on nil (nil out of band) */
     "sp_IntArray_oget", "sp_FloatArray_oget", "sp_IntArray_elem_nil", "sp_FloatArray_elem_nil",
+    "sp_IntArray_get_ck", "sp_FloatArray_get_ck", "sp_IntArray_get_arg", "sp_FloatArray_get_arg",
     "sp_oint_eq", "sp_ofloat_eq", "sp_poly_to_i_or_nil", "sp_poly_to_f_or_nil",
     /* a destructured element into a typed ivar slot: a tag test, and on a
        mismatch a raise that leaves the local's live range for good */

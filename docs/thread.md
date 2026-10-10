@@ -157,7 +157,7 @@ These are deliberate consequences of real parallelism, listed in
 | `SPINEL_GC_THRESHOLD_OBJ_KB` | the same budget for the OBJECT heap alone, overriding the pair above |
 | `SPINEL_GC_THRESHOLD_STR_KB` | the same for the STRING heap alone |
 | `SPINEL_GC_OBJ_BUDGET` | the default GATES the widening on what the last collection cost. `obj` pins it off (the object heap alone, as spinel did before 2026-09-09), `walk` pins it on (everything a mark walks). `fixed` is a separate axis: it stops re-aiming the budget after each collection and holds it at its floor |
-| `SPINEL_GC_STR_BUDGET` | `fixed` does the same for the STRING budget |
+| `SPINEL_GC_STR_BUDGET` | by default the string budget also carries a share of the object old generation, gated by the same `mark share`. `str` pins that off (the string heap alone, as spinel did before the share). `fixed` does for the STRING budget what it does for the object one |
 | `SPINEL_GC_SLAB` | `0` turns the slab allocator off: every object and heap string is then its own malloc, which is what ASAN needs to see a use-after-free (the slab hides one). On by default whatever the process's malloc. It used to default off under jemalloc (linked or preloaded), whose thread caches did what the slab's free lists did and beside which the free-list slab measured 8% slower; the bitmap sweep is what jemalloc's caches cannot do, and with it the slab under jemalloc answers the same requests a second on 17% less CPU and 13% less memory |
 | `SPINEL_SLAB_HUGE` | `0` stops the slab asking for transparent huge pages on its arenas (`madvise(MADV_HUGEPAGE)`, effective where `transparent_hugepage` is `madvise` or `always`). On by default: an arena faults in as two 2 MB pages instead of a thousand 4 KB ones, and a list benchmark spent a third of its time in those faults |
 | `SPINEL_GC_CONC` | `0` sweeps under the stop-the-world barrier instead of beside the program, which is also what the verifiers (`SPINEL_GC_VERIFY`, `SPINEL_GC_VERIFY_GEN`) and aging (`SPINEL_GC_AGE`) do on their own, since they read the heap the sweep is rewriting. `SPINEL_GC_VERIFY` also checks the slab's bitmaps against their invariants at every barrier and after every chunk's sweep |
@@ -273,6 +273,55 @@ they sit at -- about 64 serially, about 4 in parallel -- the answer barely
 moves: on the pair of programs that motivated the gate the measured
 coefficients give 0.012 and 0.57, the orders give 0.016 and 0.55. The decision
 was never close enough for the precision to be worth claiming.
+
+The STRING budget is priced the same way from the other side. What it pays
+for is a whole collection too, and a program that keeps OBJECTS and throws its
+strings away -- a parser appending records to an Array -- has a string live
+set near zero however large its object heap grows. Priced off the string heap
+alone, its budget stayed at the 256 KB floor while every collection that
+bought cost more: a minor cycle re-reads each old container written since the
+last one from end to end, and one string sweep in eight is a major, which
+makes the cycle full. The collections grew with the work and each of them with
+the heap.
+
+So the string budget carries a share of the object OLD generation: one eighth
+of it, times the same `alpha`. `SPINEL_GC_STATS=1` reports what that put into
+the trigger as `old obj in str trigger` on the `[gc]` line.
+`SPINEL_GC_STR_BUDGET=str` pins the share off and `walk` pins it on, the two
+ends `SPINEL_GC_OBJ_BUDGET` has.
+
+Wall time and peak resident set on one laptop core, the same binary with
+`str` and without:
+
+| program | `str` | default |
+|---|---|---|
+| parse 1M / 2M / 4M lines into records appended to one Array | 1.9 / 8.5 / 31.8 s, 90 / 176 / 350 MB | 0.24 / 0.45 / 0.94 s, 119 / 240 / 474 MB |
+| the same into a Hash, 1M | 15.1 s, 175 MB | 0.99 s, 199 MB |
+| `benchmark/bm_csv_build.rb` | 1.11 s, 95 MB | 0.24 s, 130 MB |
+| 1M old records in an Array, swap two a turn and drop a String, 6M turns | 24.5 s, 74 MB | 0.57 s, 92 MB |
+| the same heap never written, drop an object and a String a turn | 1.03 s, 75 MB | 0.20 s, 116 MB |
+
+The first four are the shape it is for, and they stop being quadratic: the
+collections no longer grow with the work (745, 1,494 and 2,996 on the first
+row against 56, 63 and 70). The last row is the shape it is not for -- nothing
+is re-read there and only the scheduled full mark was being paid -- and shows
+the price next to the gain.
+
+What it costs is memory: dead strings may reach a quarter of the object old
+generation between collections, and with fewer collections the object heap
+fills to its own budget where the string trigger used to fire first. A heap
+that no collection has to re-read pays that for little: the last row of the
+table, and `test/gc_str_budget_still.rb`, which peaks at 56 MB instead of 26
+for the same wall time -- the gate declines the share there except on the
+cycle after a full mark, and the scheduled string major makes one cycle in
+eight full. One eighth is where the measurements put the knee. From the whole old generation down to an eighth of it the Array rows do
+not move and their resident set falls by 27 to 40%; past an eighth their time
+climbs back. The whole of it also made `benchmark/bm_str_readonly_param.rb`
+hold 98 MB instead of 34 for no time at all, which an eighth does not. The
+Hash row is the one that would take more -- a Hash costs more to re-read, and
+it runs 1.4 times faster with the whole old generation in its budget. And an
+eighth is the order of the major's cadence, which is how often a string sweep
+buys the full mark.
 
 ### A note on allocation-heavy threads
 

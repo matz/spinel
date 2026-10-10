@@ -276,6 +276,8 @@ static void sp_gc_fault_report(int sig) {
   signal(sig, SIG_DFL);
   raise(sig);
 }
+/* The collector's boot-time modes, read from the environment once, before
+   main. */
 SP_CONSTRUCTOR static void sp_gc_debug_env(void){
   const char *v=getenv("SPINEL_GC_VERIFY"); sp_gc_verify=(v&&*v&&*v!='0');
   /* SPINEL_GC_STRESS=2 keeps what a sweep frees poisoned and out of reuse
@@ -322,6 +324,13 @@ SP_CONSTRUCTOR static void sp_gc_debug_env(void){
     sp_gc_obj_budget_fixed = (ob && strcmp(ob, "fixed") == 0);
     const char *sb = getenv("SPINEL_GC_STR_BUDGET");
     sp_gc_str_budget_fixed = (sb && strcmp(sb, "fixed") == 0);
+    /* The share of the object heap is gated by DEFAULT, as the object
+       budget's widening is, and for the same reason both ends are kept: `str`
+       is the way back to a string budget that sees the string heap alone,
+       `walk` carries the share whatever the last collection cost. */
+    sp_gc_str_budget_mode = (sb && strcmp(sb, "str") == 0)  ? 0
+                          : (sb && strcmp(sb, "walk") == 0) ? 1
+                          : 2;
     /* The schedule is the DEFAULT. `size` is the escape hatch back to the gate
        that shipped before it -- a size test re-aimed from its own leftover --
        for anyone the change costs more than it saves. `fixed` pins both the

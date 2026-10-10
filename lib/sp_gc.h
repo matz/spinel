@@ -192,6 +192,7 @@ extern int sp_gc_str_major_sched;
 extern size_t sp_gc_str_majors;
 extern int sp_gc_obj_budget_fixed;
 extern int sp_gc_str_budget_fixed;
+extern int sp_gc_str_budget_mode;   /* 0 str, 1 walk, 2 gated (default) */
 /* Set for the duration of the string sweep hook on a minor cycle: only the
    young string list may be swept, because the mark that just ran did not
    walk old objects and so did not reach the strings they hold. */

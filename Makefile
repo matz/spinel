@@ -54,7 +54,7 @@ RBS_LIB      = build/librbs.a
 
 .PHONY: int-min-test all hooks share-strings-test gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test timing-test shadow-check signal-default-test source-marker-test repr-check-test nil-check-test traits-check-test poly-cold-test bop-arity-check-test bop-share-check-test share-spec-check arity-spec-check re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
-        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-test-shared gate-bench gc-phases-test gc-stress-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
+        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-test-shared gate-bench gc-phases-test gc-stress-test gc-str-major-test gc-str-budget-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot scale-test clean install uninstall deps tools
 
 # `make all` includes the RBS extractor when vendor/rbs has been fetched
@@ -1200,7 +1200,7 @@ test: $(SPINEL_TIMEOUT) cext-header-test cext-gc-test cext-exceptions-test cext-
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: int-min-test timing-test signal-default-test source-marker-test rbs-test rbs-seed-test inline-rbs-test re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-obj-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: int-min-test timing-test signal-default-test source-marker-test rbs-test rbs-seed-test inline-rbs-test re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-obj-budget-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -2158,6 +2158,64 @@ gc-obj-budget-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	  { echo "gc-obj-budget-test: FAIL (the gate fell short of walk on a mark-bound program: $$mg vs walk $$mw)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-obj-budget-test: pass"; else exit 1; fi
+
+# The string budget carries a share of the object old generation, gated on
+# what the last collection cost; SPINEL_GC_STR_BUDGET=str pins the share off
+# and `walk` pins it on. Three arms of the SAME binary on two programs at the
+# two ends of the gate, as gc-obj-budget-test does for the object budget.
+# gc_str_budget_objects keeps objects and throws its strings away: the share is
+# read as a WITHIN-RUN invariant -- the figure the `[gc]` line reports against
+# the object live set on that same line -- and has to sit between an eighth and
+# a half of it, so the leg fails with the share gone and with the whole heap in
+# it. gc_str_budget_still holds a heap its collections do not walk: there the
+# gate has to decline, which is read against `walk`. The collection counts are
+# compared across arms: they are counts, so a busy machine gives the same
+# answer as an idle one.
+gc-str-budget-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@tmp=$$(mktemp -d /tmp/spinel-gcstr.XXXXXX); ok=1; \
+	for prog in gc_str_budget_objects gc_str_budget_still; do \
+	  $(SPINEL) test/$$prog.rb -o "$$tmp/$$prog" >"$$tmp/cc.out" 2>&1; rc=$$?; \
+	  [ $$rc -eq 0 ] || \
+	    { echo "gc-str-budget-test: FAIL ($$prog: compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; ok=0; continue; }; \
+	  for mode in default walk str; do \
+	    if [ "$$mode" = default ]; then unset SPINEL_GC_STR_BUDGET; \
+	    else SPINEL_GC_STR_BUDGET=$$mode; export SPINEL_GC_STR_BUDGET; fi; \
+	    SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/$$prog" > "$$tmp/$$prog.$$mode.out" 2> "$$tmp/$$prog.$$mode.err"; \
+	    cmp -s "$$tmp/$$prog.$$mode.out" test/$$prog.rb.expected || \
+	      { echo "gc-str-budget-test: FAIL ($$prog: $$mode changed the answer)"; ok=0; }; \
+	  done; \
+	  unset SPINEL_GC_STR_BUDGET; \
+	done; \
+	n_of() { sed -n 's/^\[gc\] \([0-9]*\) collections.*/\1/p' "$$1" | tail -1; }; \
+	obj_of() { sed -n 's/.*live \([0-9.]*\) MB obj.*/\1/p' "$$1" | tail -1; }; \
+	share_of() { sed -n 's/.*old obj in str trigger \([0-9.]*\) MB.*/\1/p' "$$1" | tail -1; }; \
+	on=$$(n_of "$$tmp/gc_str_budget_objects.default.err"); \
+	ow=$$(n_of "$$tmp/gc_str_budget_objects.walk.err"); \
+	os=$$(n_of "$$tmp/gc_str_budget_objects.str.err"); \
+	ol=$$(obj_of "$$tmp/gc_str_budget_objects.default.err"); \
+	oh=$$(share_of "$$tmp/gc_str_budget_objects.default.err"); \
+	sh=$$(share_of "$$tmp/gc_str_budget_objects.str.err"); \
+	gn=$$(n_of "$$tmp/gc_str_budget_still.default.err"); \
+	gw=$$(n_of "$$tmp/gc_str_budget_still.walk.err"); \
+	for v in "$$on" "$$ow" "$$os" "$$ol" "$$oh" "$$sh" "$$gn" "$$gw"; do \
+	  [ -n "$$v" ] || { echo "gc-str-budget-test: FAIL (no [gc] line with the share on it)"; ok=0; break; }; \
+	done; \
+	awk -v s="$$sh" 'BEGIN{exit !(s == 0)}' || \
+	  { echo "gc-str-budget-test: FAIL (str still carried the object heap: $$sh MB)"; ok=0; }; \
+	awk -v s="$$oh" -v o="$$ol" 'BEGIN{exit !(s > o / 8)}' || \
+	  { echo "gc-str-budget-test: FAIL (the string budget did not see the object heap: $$oh MB against $$ol MB live)"; ok=0; }; \
+	awk -v s="$$oh" -v o="$$ol" 'BEGIN{exit !(s < o / 2)}' || \
+	  { echo "gc-str-budget-test: FAIL (the string budget carried more than a share of the object heap: $$oh MB against $$ol MB live)"; ok=0; }; \
+	awk -v d="$$on" 'BEGIN{exit !(d >= 8)}' || \
+	  { echo "gc-str-budget-test: FAIL (only $$on collections: the program no longer exercises the budget)"; ok=0; }; \
+	awk -v d="$$on" -v s="$$os" 'BEGIN{exit !(d * 2 < s)}' || \
+	  { echo "gc-str-budget-test: FAIL (the share did not buy fewer collections: $$os -> $$on)"; ok=0; }; \
+	awk -v d="$$on" -v w="$$ow" 'BEGIN{exit !(d * 4 <= w * 5)}' || \
+	  { echo "gc-str-budget-test: FAIL (the gate fell short of walk on a mark-bound program: $$on collections vs walk $$ow)"; ok=0; }; \
+	awk -v d="$$gn" -v w="$$gw" 'BEGIN{exit !(d * 2 > w * 3)}' || \
+	  { echo "gc-str-budget-test: FAIL (the gate carried the share on a sweep-bound program: $$gn collections vs walk $$gw)"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "gc-str-budget-test: pass"; else exit 1; fi
 
 # A byref String parameter that a lifted proc also captures: the capture holds
 # the CALLER's slot, which for the stack shape is not a GC object, and marking

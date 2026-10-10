@@ -257,10 +257,26 @@ static void sp_slab_reserve(void) {
 #ifdef __wasi__
   /* wasm has one linear memory that only grows: nothing to reserve, trim or
      give back. 64 MB is taken as one aligned block (an engine commits its
-     pages as they are touched); past it every block is a malloc. */
+     pages as they are touched); past it every block is a malloc.
+     SPINEL_GC_SLAB_MB=N takes N MB instead, rounded down to the 4 MB arena:
+     a host may count the whole memory, touched or not, against a limit, and
+     a small program needs little of the 64. Below one arena, or a value
+     that is not a number, the slab is off, as with SPINEL_GC_SLAB=0. A size
+     the memory cannot hold is halved until it fits, as on a native host. */
   { size_t want = (size_t)64 << 20; void *m = NULL;
-    if (posix_memalign(&m, SP_SLAB_ARENA, want) == 0) { sp_slab_base = sp_slab_brk = (uintptr_t)m; sp_slab_cap = want; }
-    else sp_slab_on = 0;
+    const char *e = getenv("SPINEL_GC_SLAB_MB");
+    if (e && *e) {
+      /* strtol, not atol: long is 32 bits here, and atol's overflow is
+         undefined (4294967304 came out as 8); strtol saturates */
+      char *end;
+      long mb = strtol(e, &end, 10);
+      if (*end != '\0' || mb < 0) mb = 0;   /* "8MB", "0x40": not a number */
+      if (mb > 2048) mb = 2048;   /* half the 4 GB a wasm32 memory can reach */
+      want = ((size_t)mb << 20) & ~(SP_SLAB_ARENA - 1);
+    }
+    for (; want >= SP_SLAB_ARENA; want = (want >> 1) & ~(SP_SLAB_ARENA - 1))
+      if (posix_memalign(&m, SP_SLAB_ARENA, want) == 0) { sp_slab_base = sp_slab_brk = (uintptr_t)m; sp_slab_cap = want; return; }
+    sp_slab_on = 0;
     return; }
 #endif
   /* 16 GB of address space on a 64-bit host; a 32-bit one has 2 to 3 GB

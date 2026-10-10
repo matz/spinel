@@ -64,7 +64,17 @@ runtime archive built for the target, and the module is written to
   its own 8 MB; raise it with `wasmtime run -W max-wasm-stack=16777216`.
 - **The GC.** The runtime's slab allocator takes 64 MB of linear memory
   once and gives none of it back (wasm memory only grows); past that every
-  block is a `malloc`.
+  block is a `malloc`. `SPINEL_GC_SLAB_MB=N` in the module's environment
+  takes N MB instead, rounded down to a multiple of 4; below 4, or a value
+  that is not a number, the slab is off, as with `SPINEL_GC_SLAB=0`. The
+  size matters where a host counts the whole memory against a limit,
+  touched or not: the slab's size is added to the memory the module needs
+  with the slab off, so a module of 13 MB with the slab off is 77 MB with
+  the default and 21 MB with `SPINEL_GC_SLAB_MB=8`. The cost shows when the
+  live heap outgrows the slab: an allocation then tries the slab before its
+  `malloc`, and a program allocating 150 MB ran 1.5 times as long with 8 or
+  16 MB as with 64, and about as long with the slab off as with 64. Size it
+  to the heap, or turn it off.
 - **Function size.** wasm engines cap a single function's body (wasmtime:
   7.6 MB). The `setjmp` lowering keeps every live local in memory around
   every call in a function that contains a `rescue`, so a very large

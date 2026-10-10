@@ -4599,11 +4599,19 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
    raised at its coercion), and is the sign as it is. */
 static void emit_cmp_block_sign(Compiler *c, int tail, TyKind cmp_ty, int boxed, const char *ans,
                                 TyKind et, const char *ea, const char *eb, Buf *out) {
-  (void)tail; (void)cmp_ty;
+  (void)tail;
   if (!boxed) { buf_printf(out, "(%s)", ans); return; }
   Buf ba; memset(&ba, 0, sizeof ba); emit_boxed_text(c, et, ea, &ba);
   Buf bb; memset(&bb, 0, sizeof bb); emit_boxed_text(c, et, eb, &bb);
-  buf_printf(out, "sp_poly_cmp_ans(%s, %s, %s)", ans, ba.p ? ba.p : "sp_box_nil()", bb.p ? bb.p : "sp_box_nil()");
+  /* an Integer answer that can be nil arrives as its oint (cmp_ty
+     TY_INT, `boxed` 2): the sign as it is, and the failure only on nil,
+     where the two elements are boxed for its message */
+  if (boxed == 2 && cmp_ty == TY_INT) {
+    int tr = ++g_tmp;
+    buf_printf(out, "({ sp_oint _t%d = %s; SP_UNLIKELY(_t%d.nil) ? sp_poly_cmp_ans(sp_box_nil(), %s, %s) : _t%d.v; })",
+               tr, ans, tr, ba.p ? ba.p : "sp_box_nil()", bb.p ? bb.p : "sp_box_nil()", tr);
+  }
+  else buf_printf(out, "sp_poly_cmp_ans(%s, %s, %s)", ans, ba.p ? ba.p : "sp_box_nil()", bb.p ? bb.p : "sp_box_nil()");
   free(ba.p); free(bb.p);
 }
 
@@ -4726,8 +4734,12 @@ else {
     else buf_printf(g_pre, " lv_%s = _t%d; ", pn, pi ? tb : ta);
   }
   buf_puts(g_pre, "\n");
-  IterStep st; emit_iter_step_open(c, block, nil_cmp, g_indent, &st);
-  Buf cb; memset(&cb, 0, sizeof cb); emit_iter_step_tail(c, &st, &cb);
+  /* an Integer answer that can be nil stays unboxed, as its oint */
+  int ans_o = nil_cmp && cmp_ty == TY_INT;
+  IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
+  Buf cb; memset(&cb, 0, sizeof cb);
+  if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cb)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cb); }
+  else if (!ans_o) emit_iter_step_tail(c, &st, &cb);
   emit_indent(g_pre, g_indent);
   /* take from the left on a tie, so equal elements keep their order */
   char ea[48], eb[48];
@@ -4737,7 +4749,7 @@ else {
   }
   else { snprintf(ea, sizeof ea, "_t%d", ta); snprintf(eb, sizeof eb, "_t%d", tb); }
   Buf sg; memset(&sg, 0, sizeof sg);
-  emit_cmp_block_sign(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, cmp_boxed, cb.p ? cb.p : "sp_box_nil()", ono ? TY_POLY : et, ea, eb, &sg);
+  emit_cmp_block_sign(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, ans_o ? 2 : cmp_boxed, cb.p ? cb.p : "sp_box_nil()", ono ? TY_POLY : et, ea, eb, &sg);
   buf_printf(g_pre, "sp_int _t%d = %s;\n", tc, sg.p);
   free(sg.p);
   free(cb.p);
@@ -4880,13 +4892,17 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te); }
   if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tacc); }
   buf_puts(g_pre, "\n");
-  IterStep st; emit_iter_step_open(c, block, nil_cmp, g_indent, &st);
-  Buf cm; memset(&cm, 0, sizeof cm); emit_iter_step_tail(c, &st, &cm);
+  /* an Integer answer that can be nil stays unboxed, as its oint */
+  int ans_o = nil_cmp && cmp_ty == TY_INT;
+  IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
+  Buf cm; memset(&cm, 0, sizeof cm);
+  if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cm)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cm); }
+  else if (!ans_o) emit_iter_step_tail(c, &st, &cm);
   g_indent--;
   emit_indent(g_pre, g_indent);
   char ea[32], eb[32]; snprintf(ea, sizeof ea, "_t%d", te); snprintf(eb, sizeof eb, "_t%d", tacc);
   Buf sg; memset(&sg, 0, sizeof sg);
-  emit_cmp_block_sign(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, cmp_boxed, cm.p ? cm.p : "sp_box_nil()", et, ea, eb, &sg);
+  emit_cmp_block_sign(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, ans_o ? 2 : cmp_boxed, cm.p ? cm.p : "sp_box_nil()", et, ea, eb, &sg);
   buf_printf(g_pre, "if (%s %c 0) _t%d = _t%d;\n", sg.p, is_min ? '<' : '>', tacc, te);
   free(sg.p);
   free(cm.p);

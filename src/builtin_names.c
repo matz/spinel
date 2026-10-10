@@ -1039,13 +1039,18 @@ int builtin_comparable_arity(const char *m) {
   return sp_streq(m, "between?") ? 2 : sp_streq(m, "clamp") ? -1 : 1;
 }
 
-int builtin_module_owns(const char *cls, const char *m) {
+/* Numeric's own methods on Integer and Float, which inherit them */
+int builtin_numeric_owns(const char *cls, const char *m) {
   static const char *const num[] = {
     "%", "+@", "-@", "<=>", "abs", "abs2", "angle", "arg", "ceil", "clone", "coerce", "conj",
     "conjugate", "denominator", "div", "divmod", "dup", "eql?", "fdiv", "finite?", "floor", "i",
     "imag", "imaginary", "infinite?", "integer?", "magnitude", "modulo", "negative?", "nonzero?",
     "numerator", "phase", "polar", "positive?", "quo", "real", "real?", "rect", "rectangular",
     "remainder", "round", "step", "to_c", "to_int", "truncate", "zero?", NULL };
+  return is_numeric_class_name(cls) && builtin_name_in(m, num);
+}
+
+int builtin_module_owns(const char *cls, const char *m) {
   static const char *const enm[] = {
     "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat", "compact",
     "count", "cycle", "detect", "drop", "drop_while", "each_cons", "each_entry", "each_slice",
@@ -1055,9 +1060,8 @@ int builtin_module_owns(const char *cls, const char *m) {
     "partition", "reduce", "reject", "reverse_each", "select", "slice_after", "slice_before",
     "slice_when", "sort", "sort_by", "sum", "take", "take_while", "tally", "to_a", "to_h", "to_set",
     "uniq", "zip", NULL };
-  int numeric = is_numeric_class_name(cls);
   if (builtin_comparable_owns(cls, m)) return 1;
-  if (numeric && builtin_name_in(m, num)) return 1;
+  if (builtin_numeric_owns(cls, m)) return 1;
   if ((sp_streq(cls, "Array") || sp_streq(cls, "Hash") || sp_streq(cls, "Range")) && builtin_name_in(m, enm)) return 1;
   return 0;
 }

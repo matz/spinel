@@ -7,7 +7,7 @@ module Gate
   IMAGE = "spinel-gate"
   CONTAINER = <<~'SH'
     tar -x -C /src && cd /src
-    cache="vendor/prism vendor/rbs build/rubyspec build/optcarrot"
+    cache="vendor/prism vendor/rbs build/rubyspec build/optcarrot build/rubyboy"
     for d in $cache; do [ -d /cache/$d ] && mkdir -p $(dirname $d) && cp -a /cache/$d $d; done
     chown -R gate:gate /src
     runuser -u gate -- env HOME=/home/gate PATH="$PATH" bash -c 'cd /src && git init -q && git add -A &&

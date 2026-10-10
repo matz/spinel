@@ -6,6 +6,7 @@
 #   make bench        Run benchmarks vs CRuby
 #   make bench-compile  Time analysis/emission on a synthetic program at K=100, 200
 #   make optcarrot    End-to-end optcarrot integration test
+#   make rubyboy      End-to-end Rubyboy integration test
 #   make check        Fast pre-commit: rebuild + tests
 #   make gate         Full pre-push: test || bench || optcarrot (reuses the
 #                     passes of unchanged programs, see RUN_ONE_TEST)
@@ -55,7 +56,7 @@ RBS_LIB      = build/librbs.a
 .PHONY: int-min-test all hooks share-strings-test gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test timing-test shadow-check signal-default-test source-marker-test repr-check-test nil-check-test traits-check-test poly-cold-test bop-arity-check-test bop-share-check-test share-spec-check arity-spec-check re-lit-test reject-test cli-opts-test link-names-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-test-shared gate-bench gc-phases-test gc-stress-test gc-str-major-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
-        gate-optcarrot scale-test clean install uninstall deps tools
+        gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
 
 # `make all` includes the RBS extractor when vendor/rbs has been fetched
 # (via `make deps`); without it the extractor is silently omitted. Built under
@@ -3784,6 +3785,28 @@ optcarrot: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	  exit 1; \
 	fi
 
+# ---- Rubyboy integration test ----
+# Rubyboy is a Game Boy emulator. Its headless benchmark prints the checksum of
+# the final frame, which CRuby prints too for the same number of frames.
+RUBYBOY_DIR  := build/rubyboy
+RUBYBOY_REPO := https://github.com/sacckey/rubyboy.git
+RUBYBOY_TAG  := v1.7.1
+RUBYBOY_CHECKSUM := 661048662
+
+rubyboy: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@if [ ! -d $(RUBYBOY_DIR) ]; then \
+	  git clone --depth=1 --branch=$(RUBYBOY_TAG) $(RUBYBOY_REPO) $(RUBYBOY_DIR); \
+	fi
+	@$(SPINEL) -I $(RUBYBOY_DIR)/lib $(RUBYBOY_DIR)/exe/rubyboy-bench -o build/rubyboy-bench
+	@out=$$($(TIMEOUT60) ./build/rubyboy-bench --frames 600 --count 3 2>&1); \
+	echo "$$out"; \
+	if echo "$$out" | grep -q "^Checksum: $(RUBYBOY_CHECKSUM)$$"; then \
+	  echo "Rubyboy: OK"; \
+	else \
+	  echo "Rubyboy: FAIL -- expected 'Checksum: $(RUBYBOY_CHECKSUM)'"; \
+	  exit 1; \
+	fi
+
 # ---- Developer gates ----
 .PHONY: cext-header-test
 cext-header-test:
@@ -4404,7 +4427,7 @@ gate-tool-test:
 gate-full:
 	+@$(MAKE) --no-print-directory gate GATE_CACHE=0
 
-gate-legs: gate-test gate-test-shared gate-bench gate-optcarrot gate-rubyspec gate-props
+gate-legs: gate-test gate-test-shared gate-bench gate-optcarrot gate-rubyboy gate-rubyspec gate-props
 # Both corpus sub-makes use the same -O1 PCH files. Build them once before
 # either leg starts so one cannot read a PCH while the other writes it.
 .PHONY: gate-pch
@@ -4676,6 +4699,8 @@ gate-bench:
 	+@$(MAKE) --no-print-directory bench
 gate-optcarrot:
 	+@$(MAKE) --no-print-directory optcarrot
+gate-rubyboy:
+	+@$(MAKE) --no-print-directory rubyboy
 gate-rubyspec:
 	+@$(MAKE) --no-print-directory rubyspec-gate
 

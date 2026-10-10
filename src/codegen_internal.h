@@ -380,6 +380,9 @@ int hc_string(Compiler *c, int recv, char *d, char *l, size_t cap);
    while `guard` (a Float local the loop does not assign; -1 for none) is
    nil. Answers 2 when it took the guard. */
 int hc_array_nilfree(Compiler *c, int recv, int guard, char *d, char *n, size_t cap);
+/* under --int-overflow=promote: node is a boxed (or typed) Integer or nil a
+   cached loop can see through; always 0 in the other modes */
+int hc_promoted_int(Compiler *c, int n);
 const char *hc_mark(void);
 /* recv is read in the loop being emitted the way hc_array caches it: no
    code runs between two of its reads in one pass, so they agree */

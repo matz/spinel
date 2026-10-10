@@ -232,7 +232,8 @@ static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv
     TyKind ert = er >= 0 ? comp_ntype(c, er) : TY_UNKNOWN;
     char hd[48], hl[48], hw[48];
     if (eav && ean == 1 && ert == (rt == TY_INT ? TY_INT_ARRAY : TY_FLOAT_ARRAY) &&
-        comp_ntype(c, eav[0]) == TY_INT && !node_has_oint_form(c, eav[0]) && !repr_of(c, er).nil_cold &&
+        (comp_ntype(c, eav[0]) == TY_INT || hc_promoted_int(c, eav[0])) && !node_has_oint_form(c, eav[0]) &&
+        !repr_of(c, er).nil_cold &&
         hc_array(c, er, rt == TY_FLOAT, hd, hl, hw, sizeof hd)) {
       char hr[48]; hc_read_len(hd, hr, sizeof hr);
       const char *eq = ne ? "!=" : "==";

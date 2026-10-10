@@ -2028,7 +2028,7 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     /* an array whose header the loop being emitted holds (hc_array):
        in range, read the element there; anything else, the get */
     char hd[48], hl[48], hw[48];
-    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && comp_ntype(c, argv[0]) == TY_INT &&
+    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) {
       /* a read that can miss or meet a nil element is an oint (_oget); one
          the analysis proved in range and non-nil reads the plain element */

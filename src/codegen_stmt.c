@@ -8177,6 +8177,172 @@ static HcRegion *g_hc = NULL;
    after a loop that qualifies and then caches nothing */
 static int g_hc_seq = 0;
 
+/* ---- Under --int-overflow=promote: the Integers the header cache can see through ----
+
+   Promote boxes every Integer an operation can widen, so a loop's index and
+   counters are sp_RbVal values and their operators are sp_poly_* calls, and the
+   header cache above never took such a loop. An sp_poly_* operator over an
+   Integer and an Integer (or nil, which raises) runs no program code, takes no
+   poll, and moves no array: the one thing it can do is allocate a Bignum, and
+   an allocation's collection neither moves an object (the heap does not
+   compact) nor runs a finalizer (it queues it for the poll) nor lets another
+   green thread run on this worker (a stop-the-world collection parks on a
+   condition variable). So the cache can hold across one, as across C's
+   arithmetic, provided the program defines no operator a nil or an Integer
+   could reach instead (Integer, NilClass and their ancestors), and the value is
+   proven an Integer or nil.
+
+   That proof is hcp_compute: the greatest fixpoint over every local of
+   "each write stores an Integer or nil" -- an Integer literal, nil, a typed
+   Integer, a read of such a local, or one of the operators below over such
+   operands. A parameter takes it only from a method defined at the top level
+   whose every call names it receiverless with such arguments, in a program
+   that never calls a method by name at run time. Anything else (a block
+   parameter, a multiple assignment's target, a rescue binding) is unproven. */
+/* the operators that answer an Integer for Integer operands, and the
+   comparisons, which answer a bool */
+static const char *const HCP_ARITH[] = { "+", "-", "*", "|", "&", "^", "<<", ">>", NULL };
+static const char *const HCP_CMP[] = { "<", "<=", ">", ">=", "==", "!=", NULL };
+static int hcp_in(const char *const *l, const char *nm) {
+  for (int i = 0; nm && l[i]; i++) if (sp_streq(nm, l[i])) return 1;
+  return 0;
+}
+static int hcp_op(const char *nm) { return hcp_in(HCP_ARITH, nm) || hcp_in(HCP_CMP, nm); }
+static int g_hcp_state = 0;   /* 0 not computed, 1 on, -1 off for this program */
+static int hcp_val(Compiler *c, int n, int depth) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || depth > 32) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_IntegerNode || k == NK_NilNode) return 1;
+  TyKind t = comp_ntype(c, n);
+  if (t == TY_INT) return 1;   /* a typed Integer, its nil beside it or not */
+  if (t != TY_POLY) return 0;
+  if (k == NK_ParenthesesNode) return hcp_val(c, nt_ref(nt, n, "body"), depth + 1);
+  if (k == NK_StatementsNode) {
+    int m = 0; const int *b = nt_arr(nt, n, "body", &m);
+    return m > 0 && hcp_val(c, b[m - 1], depth + 1);
+  }
+  if (k == NK_LocalVariableReadNode) {
+    const char *nm = nt_str(nt, n, "name");
+    Scope *s = nm ? comp_scope_of(c, n) : NULL;
+    LocalVar *lv = s ? scope_local(s, nm) : NULL;
+    return lv && lv->hcp_int >= 0;
+  }
+  if (k == NK_CallNode && nt_ref(nt, n, "block") < 0) {
+    const char *nm = nt_str(nt, n, "name");
+    int r = nt_ref(nt, n, "receiver"), a = nt_ref(nt, n, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (r < 0) return 0;
+    if (an == 0 && nm && sp_streq(nm, "-@")) return hcp_val(c, r, depth + 1);
+    /* an arithmetic or bit operator answers an Integer (a comparison a bool) */
+    return an == 1 && hcp_in(HCP_ARITH, nm) && hcp_val(c, r, depth + 1) && hcp_val(c, av[0], depth + 1);
+  }
+  return 0;
+}
+/* No operator of the program's can stand in for the builtin one on an Integer
+   or a nil: none defined on Integer, NilClass or a class or module they reach,
+   nor at the top level (Object's) */
+static int hcp_program_ok(Compiler *c) {
+  static const char *const CLS[] = { "Integer", "NilClass", "Numeric", "Comparable", "Object", "Kernel",
+                                     "BasicObject", NULL };
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!hcp_in(CLS, c->classes[k].name)) continue;
+    for (int i = 0; HCP_ARITH[i]; i++) if (comp_method_in_chain(c, k, HCP_ARITH[i], NULL) >= 0) return 0;
+    for (int i = 0; HCP_CMP[i]; i++) if (comp_method_in_chain(c, k, HCP_CMP[i], NULL) >= 0) return 0;
+    if (comp_method_in_chain(c, k, "-@", NULL) >= 0 || comp_method_in_chain(c, k, "coerce", NULL) >= 0) return 0;
+  }
+  for (int s = 1; s < c->nscopes; s++)
+    if (c->scopes[s].class_id < 0 && c->scopes[s].name && (hcp_op(c->scopes[s].name) || sp_streq(c->scopes[s].name, "-@")))
+      return 0;
+  return 1;
+}
+/* A method that takes its parameters' proof from its calls: defined at the top
+   level, no rest / keyword / forwarding parameter, and no other method of its
+   name anywhere (an override could be the one a call reaches) */
+static int hcp_param_method(Compiler *c, int mi) {
+  Scope *s = &c->scopes[mi];
+  if (!s->name || s->class_id >= 0 || s->is_cmethod || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->fwd_target1)
+    return 0;
+  for (int o = 1; o < c->nscopes; o++)
+    if (o != mi && c->scopes[o].name && sp_streq(c->scopes[o].name, s->name)) return 0;
+  return 1;
+}
+static LocalVar *hcp_write_lv(Compiler *c, int w) {
+  const char *nm = nt_str(c->nt, w, "name");
+  Scope *s = nm ? comp_scope_of(c, w) : NULL;
+  return s ? scope_local(s, nm) : NULL;
+}
+static void hcp_compute(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  g_hcp_state = hcp_program_ok(c) ? 1 : -1;
+  if (g_hcp_state < 0) return;
+  /* a method called by a name built at run time takes arguments no call shows */
+  static const char *const DYN[] = { "send", "__send__", "public_send", "method", "public_method",
+                                     "instance_method", "define_method", "method_missing", NULL };
+  int dyn = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) if (hcp_in(DYN, nt_str(nt, id, "name"))) dyn = 1;
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    int pm = !dyn && hcp_param_method(c, s);
+    for (int j = 0; j < sc->nlocals; j++) {
+      LocalVar *lv = &sc->locals[j];
+      int ok = (lv->type == TY_POLY || lv->type == TY_INT) && !lv->is_block_param && (!lv->is_param || pm);
+      lv->hcp_int = ok ? 0 : -1;   /* 0: still a candidate */
+    }
+  }
+  static const NodeKind WK[] = { NK_LocalVariableWriteNode, NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
+                                 NK_LocalVariableOperatorWriteNode, NK_LocalVariableTargetNode };
+  for (int changed = 1; changed; ) {
+    changed = 0;
+    for (size_t q = 0; q < sizeof WK / sizeof WK[0]; q++) {
+      NT_FOREACH_KIND(nt, WK[q], w) {
+        LocalVar *lv = hcp_write_lv(c, w);
+        if (!lv || lv->hcp_int < 0) continue;
+        int good;
+        if (WK[q] == NK_LocalVariableTargetNode) good = 0;
+        else if (WK[q] == NK_LocalVariableOperatorWriteNode)
+          good = hcp_in(HCP_ARITH, nt_str(nt, w, "binary_operator")) && hcp_val(c, nt_ref(nt, w, "value"), 0);
+        else good = hcp_val(c, nt_ref(nt, w, "value"), 0);
+        if (!good) { lv->hcp_int = -1; changed = 1; }
+      }
+    }
+    /* a parameter: every call of its method passes such a value (or its default does) */
+    NT_FOREACH_KIND(nt, NK_CallNode, call) {
+      const char *nm = nt_str(nt, call, "name");
+      if (!nm) continue;
+      for (int mi = 1; mi < c->nscopes; mi++) {
+        Scope *ms = &c->scopes[mi];
+        if (!ms->name || !sp_streq(ms->name, nm) || ms->nparams == 0) continue;
+        int r = nt_ref(nt, call, "receiver");
+        int a = nt_ref(nt, call, "arguments"), an = 0;
+        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+        int plain = (r < 0 || nt_kind(nt, r) == NK_SelfNode) && comp_self_call_mi(c, call, nm) == mi;
+        for (int i = 0; plain && i < an; i++) {
+          const char *at = nt_type(nt, av[i]);
+          if (!at || sp_streq(at, "SplatNode") || sp_streq(at, "KeywordHashNode") || sp_streq(at, "BlockArgumentNode"))
+            plain = 0;
+        }
+        for (int p = 0; p < ms->nparams; p++) {
+          LocalVar *lv = ms->pnames[p] ? scope_local(ms, ms->pnames[p]) : NULL;
+          if (!lv || lv->hcp_int < 0) continue;
+          int v = p < an ? av[p] : (ms->pdefault ? ms->pdefault[p] : -1);
+          if (!plain || v < 0 || !hcp_val(c, v, 0)) { lv->hcp_int = -1; changed = 1; }
+        }
+      }
+    }
+  }
+  for (int s = 0; s < c->nscopes; s++)
+    for (int j = 0; j < c->scopes[s].nlocals; j++)
+      if (c->scopes[s].locals[j].hcp_int == 0) c->scopes[s].locals[j].hcp_int = 1;
+}
+/* Is node n an Integer or nil the cache can see through under promote? Always
+   0 in the other modes, which leaves their loops exactly as they were. */
+int hc_promoted_int(Compiler *c, int n) {
+  if (!g_promote_mode) return 0;
+  if (!g_hcp_state) hcp_compute(c);
+  return g_hcp_state > 0 && hcp_val(c, n, 0);
+}
+
 static int hc_call_ok(Compiler *c, int id, int stmt) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -8190,10 +8356,15 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
         sp_streq(at, "BlockArgumentNode")) return 0;
   }
   if (call_is_scalar_op(c, id)) return 1;
+  /* under promote, a boxed Integer's operator (hc_promoted_int) */
+  if (recv >= 0 && ((ac == 1 && hcp_op(nm) && hc_promoted_int(c, recv) && hc_promoted_int(c, av[0])) ||
+                    (ac == 0 && sp_streq(nm, "-@") && hc_promoted_int(c, recv))))
+    return 1;
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
-  if (sp_streq(nm, "[]") && ac == 1 && ty_is_array(rt) && comp_ntype(c, av[0]) == TY_INT) return 1;
-  if (sp_streq(nm, "[]=") && ac == 2 && stmt && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
-      comp_ntype(c, av[0]) == TY_INT && comp_ntype(c, av[1]) == ty_array_elem(rt)) return 1;
+  int ix_ok = ac >= 1 && (comp_ntype(c, av[0]) == TY_INT || hc_promoted_int(c, av[0]));
+  if (sp_streq(nm, "[]") && ac == 1 && ty_is_array(rt) && ix_ok) return 1;
+  if (sp_streq(nm, "[]=") && ac == 2 && stmt && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && ix_ok &&
+      (comp_ntype(c, av[1]) == ty_array_elem(rt) || (rt == TY_INT_ARRAY && hc_promoted_int(c, av[1])))) return 1;
   if (sp_streq(nm, "getbyte") && ac == 1 && rt == TY_STRING && comp_ntype(c, av[0]) == TY_INT) return 1;
   if (is_len_alias(nm) && ac == 0 && (ty_is_array(rt) || rt == TY_STRING))
     return 1;
@@ -18278,9 +18449,28 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     /* a value that can be nil sets the array's may_nil on its way in: the
        in-range store below tests it, the rest take the _nilable set */
     const char *nsfx = nil_store_sfx(c, k, argv[1]);
+    /* under promote, a boxed Integer (hc_promoted_int) into an Integer array
+       a cached header holds: unboxed with its nil once; a non-nil value in
+       range below the nil-free length is stored in place (no nil bit there to
+       clear), anything else takes the _nilable set and the loop reads the
+       headers again */
+    if (rt == TY_INT_ARRAY && vt == TY_POLY && hc_promoted_int(c, argv[1]) &&
+        (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
+        hc_array(c, recv, 0, hd, hl, hw, sizeof hd)) {
+      int tk = ++g_tmp, tv = ++g_tmp;
+      char hr[48]; hc_read_len(hd, hr, sizeof hr);
+      buf_printf(b, "{ sp_int _t%d = ", tk); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; sp_oint _t%d = sp_poly_elem_i(", tv); emit_expr(c, argv[1], b);
+      buf_printf(b, "); if (SP_LIKELY(%s && !_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
+                 hw, tv, tk, hr, hd, tk, tv);
+      buf_puts(b, " else sp_IntArray_set_nilable("); emit_expr(c, recv, b);
+      buf_printf(b, ", _t%d, _t%d)%s; }\n", tk, tv, hc_mark());
+      return 1;
+    }
     /* a plain value in range of a cached header is stored where it is; a
        value that can be nil takes the _nilable set below (the bit) */
-    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vt == et && !*nsfx && comp_ntype(c, argv[0]) == TY_INT &&
+    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vt == et && !*nsfx &&
+        (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) {
       int tk = ++g_tmp, tv = ++g_tmp;
       buf_printf(b, "{ sp_int _t%d = ", tk);

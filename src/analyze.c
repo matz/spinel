@@ -29674,34 +29674,122 @@ int nullable_scalar_nil_only_call(Compiler *c, int id) {
 /* Can this expression leave nil in an int slot? */
 /* Whether an unconditional write of ivar `ivn` is among the top-level
    statements of class k's initialize, or of the initialize it inherits. */
-int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
+/* Does the subtree at `n` read `ivn` (a nested def or class excluded)? */
+static int ivs_subtree_reads(const NodeTable *nt, int n, const char *ivn, int depth) {
+  if (n < 0 || depth > 400) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if ((k == NK_InstanceVariableReadNode || k == NK_InstanceVariableOrWriteNode ||
+       k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode) &&
+      nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), ivn)) return 1;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (ivs_subtree_reads(nt, nt_ref_at(nt, n, i), ivn, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *ids = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) if (ivs_subtree_reads(nt, ids[j], ivn, depth + 1)) return 1;
+  }
+  return 0;
+}
+
+/* Statement `w` of a body the constructor runs on every path writes `ivn`
+   (1), certainly does not let anything read it first (0), or may read it
+   before any write (-1): a write, `super` into a parent initialize that
+   writes it, or a call to one of the class's own methods (`reset`) whose
+   own body writes it before reading it. */
+static int ivs_body_writes(Compiler *c, int k, int defcls, int body, const char *ivn, int depth);
+static int ivs_stmt_writes(Compiler *c, int k, int defcls, int w, const char *ivn, int depth) {
   const NodeTable *nt = c->nt;
-  int defcls = -1;
-  int mi = comp_method_in_chain(c, k, "initialize", &defcls);
-  if (mi < 0 || !ivn) return 0;
-  int body = c->scopes[mi].body;
+  /* `def initialize = (@v = 7; ...)`: the parenthesized sequence, in order */
+  if (nt_kind(nt, w) == NK_ParenthesesNode) return ivs_body_writes(c, k, defcls, nt_ref(nt, w, "body"), ivn, depth);
+  /* `@a = @b = 0` assigns both */
+  for (int x = w; x >= 0 && nt_kind(nt, x) == NK_InstanceVariableWriteNode; x = nt_ref(nt, x, "value")) {
+    const char *wn = nt_str(nt, x, "name");
+    if (wn && sp_streq(wn, ivn)) return 1;
+  }
+  /* a `super` statement runs the parent's initialize, every path of it */
+  if ((nt_kind(nt, w) == NK_SuperNode || nt_kind(nt, w) == NK_ForwardingSuperNode) &&
+      defcls >= 0 && c->classes[defcls].parent >= 0 && c->classes[defcls].parent != defcls &&
+      ivar_assigned_in_initialize(c, c->classes[defcls].parent, ivn)) return 1;
+  if (nt_kind(nt, w) == NK_MultiWriteNode) {
+    int ln = 0; const int *ls = nt_arr(nt, w, "lefts", &ln);
+    for (int j = 0; j < ln; j++)
+      if (nt_kind(nt, ls[j]) == NK_InstanceVariableTargetNode &&
+          nt_str(nt, ls[j], "name") && sp_streq(nt_str(nt, ls[j], "name"), ivn)) return 1;
+  }
+  /* an unconditional call of the object's own method (`reset`, `self.reset`)
+     with no block: its body, as this class resolves the name */
+  if (nt_kind(nt, w) == NK_CallNode && nt_ref(nt, w, "block") < 0 && depth < 4) {
+    int r = nt_ref(nt, w, "receiver");
+    const char *nm = nt_str(nt, w, "name");
+    if (nm && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && !sp_streq(nm, "initialize")) {
+      int ca = nt_ref(nt, w, "arguments");
+      int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      for (int j = 0; av && j < an; j++) if (ivs_subtree_reads(nt, av[j], ivn, 0)) return -1;
+      int mdef = -1;
+      int mi = comp_method_in_chain(c, k, nm, &mdef);
+      if (mi >= 0 && !c->scopes[mi].is_cmethod && c->scopes[mi].body >= 0)
+        return ivs_body_writes(c, k, mdef, c->scopes[mi].body, ivn, depth + 1);
+    }
+  }
+  return 0;
+}
+static int ivs_body_writes(Compiler *c, int k, int defcls, int body, const char *ivn, int depth) {
+  const NodeTable *nt = c->nt;
   if (body < 0) return 0;
   int n = 0; const int *st = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : &body;
   if (nt_kind(nt, body) != NK_StatementsNode) n = 1;
   for (int i = 0; i < n; i++) {
-    int w = st[i];
-    /* `@a = @b = 0` assigns both */
-    for (int x = w; x >= 0 && nt_kind(nt, x) == NK_InstanceVariableWriteNode; x = nt_ref(nt, x, "value")) {
-      const char *wn = nt_str(nt, x, "name");
-      if (wn && sp_streq(wn, ivn)) return 1;
-    }
-    /* a `super` statement runs the parent's initialize, every path of it */
-    if ((nt_kind(nt, w) == NK_SuperNode || nt_kind(nt, w) == NK_ForwardingSuperNode) &&
-        defcls >= 0 && c->classes[defcls].parent >= 0 && c->classes[defcls].parent != defcls &&
-        ivar_assigned_in_initialize(c, c->classes[defcls].parent, ivn)) return 1;
-    if (nt_kind(nt, w) == NK_MultiWriteNode) {
-      int ln = 0; const int *ls = nt_arr(nt, w, "lefts", &ln);
-      for (int j = 0; j < ln; j++)
-        if (nt_kind(nt, ls[j]) == NK_InstanceVariableTargetNode &&
-            nt_str(nt, ls[j], "name") && sp_streq(nt_str(nt, ls[j], "name"), ivn)) return 1;
-    }
+    int r = ivs_stmt_writes(c, k, defcls, st[i], ivn, depth);
+    if (r != 0) return r;
+    /* inside a called method only: a statement that reads the ivar (or
+       whose effect is unknown) ahead of its write sees the nil */
+    if (depth > 0 && ivs_subtree_reads(nt, st[i], ivn, 0)) return -1;
   }
   return 0;
+}
+
+/* Memo per (class, ivar name): the walk follows calls into methods. */
+static struct { int k; char *ivn; int v; } *iai_memo = NULL;
+static int iai_cap = 0, iai_used = 0, iai_ncls = -1, iai_nsc = -1;
+static const Compiler *iai_owner = NULL;
+
+int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn) {
+  if (!ivn) return 0;
+  if (iai_owner != c || iai_ncls != c->nclasses || iai_nsc != c->nscopes) {
+    for (int i = 0; i < iai_cap; i++) free(iai_memo[i].ivn);
+    free(iai_memo); iai_memo = NULL; iai_cap = iai_used = 0;
+    iai_owner = c; iai_ncls = c->nclasses; iai_nsc = c->nscopes;
+  }
+  unsigned h = (unsigned)k * 2654435761u;
+  for (const char *p = ivn; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+  if (iai_cap) {
+    for (unsigned i = h & (unsigned)(iai_cap - 1); iai_memo[i].ivn; i = (i + 1) & (unsigned)(iai_cap - 1))
+      if (iai_memo[i].k == k && strcmp(iai_memo[i].ivn, ivn) == 0) return iai_memo[i].v;
+  }
+  int defcls = -1;
+  int mi = comp_method_in_chain(c, k, "initialize", &defcls);
+  int v = mi >= 0 && ivs_body_writes(c, k, defcls, c->scopes[mi].body, ivn, 0) == 1;
+  if (iai_used * 2 >= iai_cap) {
+    int ncap = iai_cap ? iai_cap * 2 : 256;
+    void *nm2 = calloc((size_t)ncap, sizeof *iai_memo);
+    if (!nm2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    __typeof__(iai_memo) nt2 = nm2;
+    for (int i = 0; i < iai_cap; i++) if (iai_memo[i].ivn) {
+      unsigned hh = (unsigned)iai_memo[i].k * 2654435761u;
+      for (const char *p = iai_memo[i].ivn; *p; p++) hh = (hh ^ (unsigned char)*p) * 16777619u;
+      unsigned j = hh & (unsigned)(ncap - 1);
+      while (nt2[j].ivn) j = (j + 1) & (unsigned)(ncap - 1);
+      nt2[j] = iai_memo[i];
+    }
+    free(iai_memo); iai_memo = nt2; iai_cap = ncap;
+  }
+  unsigned i = h & (unsigned)(iai_cap - 1);
+  while (iai_memo[i].ivn) i = (i + 1) & (unsigned)(iai_cap - 1);
+  iai_memo[i].k = k; iai_memo[i].ivn = strdup(ivn); iai_memo[i].v = v;
+  if (!iai_memo[i].ivn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  iai_used++;
+  return v;
 }
 
 /* An argument whose boxing must allow nil though its typed reads need no

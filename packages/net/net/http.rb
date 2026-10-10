@@ -19,9 +19,10 @@
 # * no proxy support, no cookie jar, no automatic redirect following
 #   (#get_response hands back the 3xx and its Location, as CRuby's does)
 # * no streaming body block on #request; the body is read whole
-# * chunked transfer decoding is here; content-encoding (gzip) is not
+# * a gzip or deflate body is inflated whole once it is read; not streamed
 require "socket"
 require "uri"
+require "zlib"
 
 module Timeout
   # CRuby's base for both of the timeouts below, so `rescue Timeout::Error`
@@ -185,7 +186,7 @@ module Net
   # A request. CRuby builds these as Net::HTTP::Get.new(path) and friends;
   # the same shape is here so the same code compiles.
   class HTTPRequest
-    attr_reader :method, :path
+    attr_reader :method, :path, :decode_content
     attr_accessor :body
 
     # `path` is a request path, or a URI -- CRuby takes either, and
@@ -208,6 +209,7 @@ module Net
       @headers = {}
       @header_names = {}
       @body = ""
+      @decode_content = false
       # CRuby's initheader half strips the value before it looks at it, and
       # so raises NoMethodError for anything without `strip`; this package
       # strips a String and lets the other shapes through to `#[]=`, as it
@@ -223,9 +225,18 @@ module Net
           self[k] = v
         end
       end
+      # A caller's Accept-Encoding or Range, even set to nil, leaves the body
+      # as it comes. Otherwise the request asks for gzip and deflate and
+      # decodes them.
+      explicit_encoding = initheader && initheader.keys.any? do |k|
+        name = k.to_s.downcase
+        name == "accept-encoding" || name == "range"
+      end
+      unless explicit_encoding
+        self["Accept-Encoding"] = "gzip;q=1.0,deflate;q=0.6,identity;q=0.3"
+        @decode_content = @method != "HEAD"
+      end
       # The two headers CRuby's request carries unless the caller set them.
-      # CRuby also asks for gzip; this package does not decode a compressed
-      # body (see the top of the file), so it does not ask.
       self["Accept"] = "*/*" unless key?("accept")
       self["User-Agent"] = "Ruby" unless key?("user-agent")
     end
@@ -243,6 +254,8 @@ module Net
     # used to do, sending both and leaving the server to pick.
     def []=(name, value)
       k = name.to_s.downcase
+      # An Accept-Encoding set later also leaves the body to the caller.
+      @decode_content = false if k == "accept-encoding"
       # nil removes the header, as CRuby's Net::HTTPHeader#[]= does: a Host
       # set to nil lets the default one go out again instead of an empty one.
       if value.nil?
@@ -560,21 +573,18 @@ module Net
     end
 
     def get(path, headers = nil)
-      req = HTTPRequest.new("GET", path)
-      headers.each { |k, v| req[k] = v } unless headers.nil?
+      req = HTTPRequest.new("GET", path, headers)
       request(req)
     end
 
     def head(path, headers = nil)
-      req = HTTPRequest.new("HEAD", path)
-      headers.each { |k, v| req[k] = v } unless headers.nil?
+      req = HTTPRequest.new("HEAD", path, headers)
       request(req)
     end
 
     def post(path, body, headers = nil)
-      req = HTTPRequest.new("POST", path)
+      req = HTTPRequest.new("POST", path, headers)
       req.body = body
-      headers.each { |k, v| req[k] = v } unless headers.nil?
       request(req)
     end
 
@@ -639,7 +649,7 @@ module Net
       # rather than keep-alive; what it is not is a failure on the second one.
       begin_transport(req)
       write_request(req)
-      read_response(req.method)
+      read_response(req.method, req.decode_content)
     end
 
     def begin_transport(req)
@@ -704,7 +714,7 @@ module Net
       wire_write(out)
     end
 
-    def read_response(method)
+    def read_response(method, decode_content)
       wait_for_response
       version = ""
       code = ""
@@ -751,7 +761,31 @@ module Net
           wire_read_all.to_s
         end
 
+      body = decode_body(headers, body) if decode_content && !bodyless
       build_response(version, code, message, headers, body)
+    end
+
+    # Inflates a gzip or deflate body once it is read whole. A Content-Range
+    # answer is a slice of the encoded body, so it stays as it came.
+    def decode_body(headers, body)
+      return body if headers.key?("content-range")
+      encoding = headers["content-encoding"].to_s.downcase
+      case encoding
+      when "gzip", "x-gzip", "deflate"
+        unless body.empty?
+          inflater = Zlib::Inflate.new(32 + Zlib::MAX_WBITS)
+          begin
+            body = inflater.inflate(body)
+          ensure
+            inflater.close
+          end
+        end
+        headers.delete("content-encoding")
+        headers["content-length"] = body.bytesize.to_s if headers.key?("content-length")
+      when "identity", "none"
+        headers.delete("content-encoding")
+      end
+      body
     end
 
     # The class a status code names. Specific first, then the family by its

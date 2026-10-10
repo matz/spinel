@@ -79,9 +79,14 @@ request per connection -- a second request inside one `Net::HTTP.start` block
 reconnects transparently, as CRuby does, rather than failing, but the
 connection is not reused: no keep-alive, no pipelining, no HTTP/2, no proxy,
 no cookie jar and no automatic redirect following (a 3xx comes back as the
-response it is, with its Location). Chunked transfer decoding is there;
-content-encoding is not. `URI` parses http, https and a bare form; there is no
-URI::FTP or the scheme registry behind it. An https request needs the
+response it is, with its Location). Chunked transfer decoding and automatic
+gzip/deflate content decoding are there. Content decoding reads the whole body
+before inflating it with the bundled one-shot zlib codec; it is not streaming.
+The codec can reject incomplete streams or trailing bytes with `Zlib::DataError`
+where CRuby's streaming inflater returns a body. An explicit Accept-Encoding
+disables automatic decoding, and Content-Range responses retain their wire
+bytes. `URI` parses http, https and a bare form; there is no URI::FTP or the
+scheme registry behind it. An https request needs the
 `openssl` package below.
 
 **TLS / `openssl`.** The `openssl` package binds the system libssl and

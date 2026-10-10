@@ -1,0 +1,12 @@
+["gzip;q=1.0,deflate;q=0.6,identity;q=0.3", true]
+["gzip;q=1.0,deflate;q=0.6,identity;q=0.3", true]
+["gzip;q=1.0,deflate;q=0.6,identity;q=0.3", false]
+["gzip", false]
+[nil, false]
+[nil, false]
+[nil, false]
+["gzip", false]
+[nil, false]
+["gzip;q=1.0,deflate;q=0.6,identity;q=0.3", true]
+{"X-Client" => "mine"}
+["gzip;q=1.0,deflate;q=0.6,identity;q=0.3", true]

@@ -2068,8 +2068,11 @@ const char *sp_poly_to_s(sp_RbVal v);
    name has no marker byte, and the _bin entry would read s[-1] out of bounds.
    The typed-receiver arm chose by the operand's STATIC type, so a poly operand
    took the plain entry and a NUL truncated the write; the poly-receiver arm
-   already tested the tag, and now both do. */
+   already tested the tag, and now both do. A shared String reaches here as
+   its handle under --share-strings, so it is unwrapped first. */
+static inline sp_RbVal sp_poly_strbuf_deref(sp_RbVal v);
 static SP_INLINE sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
+  v = sp_poly_strbuf_deref(v);
   if (v.tag == SP_TAG_STR) return sp_File_write_bin(f, v.v.s);
   return sp_File_write(f, sp_poly_to_s(v));
 }
@@ -15944,6 +15947,7 @@ const char *sp_stat_ftype(sp_File *f);
 sp_int sp_file_stat_mode(const char *path);
 /* IO#puts with an Array argument: one element per line, recursively (#2813) */
 static void sp_File_puts_val(sp_File *f, sp_RbVal v) {
+  v = sp_poly_strbuf_deref(v);
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     sp_int n = sp_poly_length(v);
     for (sp_int i = 0; i < n; i++) sp_File_puts_val(f, sp_poly_arr_get(v, i));

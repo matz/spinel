@@ -1,0 +1,7 @@
+[false, true, "gzip"]
+[true, false, "gzip"]
+[false, true, "gzip"]
+[false, true, "gzip"]
+[true, false, "gzip"]
+[false, true, "gzip"]
+[nil, nil, nil, nil, nil, nil]

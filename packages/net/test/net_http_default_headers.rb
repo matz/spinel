@@ -1,8 +1,8 @@
 # A request carries Accept: */* and User-Agent: Ruby unless the caller sets
 # them, as CRuby's does: the defaults are on the request from its creation,
 # a header the caller passes or sets replaces them, and setting one to nil
-# leaves it out. The test does not look at Accept-Encoding: CRuby asks for
-# gzip, and this package, which does not decode a compressed body, does not.
+# leaves it out. The test does not look at Accept-Encoding;
+# net_http_accept_encoding.rb does.
 require "net/http"
 
 server = TCPServer.new("127.0.0.1", 0)

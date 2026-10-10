@@ -197,6 +197,17 @@ static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv
   if (!node_has_oint_form(c, recv) && !(a_num && node_has_oint_form(c, argv[0]))) return 0;
   int ne = name[0] == '!';
   int tl = ++g_tmp, tr = ++g_tmp;
+  /* against a number literal of the same kind: the flag and the value,
+     with no oint built for the literal */
+  NodeKind ak = nt_kind(c->nt, argv[0]);
+  if (rt == at && !node_has_oint_form(c, argv[0]) &&
+      ((rt == TY_INT && ak == NK_IntegerNode) || (rt == TY_FLOAT && ak == NK_FloatNode))) {
+    buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tl); emit_oint_expr(c, recv, rt, b);
+    buf_printf(b, "; %s_t%d.nil %s _t%d.v %s ", ne ? "" : "!", tl, ne ? "||" : "&&", tl, ne ? "!=" : "==");
+    emit_expr(c, argv[0], b);
+    buf_puts(b, "; })");
+    return 1;
+  }
   buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tl); emit_oint_expr(c, recv, rt, b);
   if (a_poly) {
     buf_printf(b, "; sp_RbVal _t%d = ", tr); emit_boxed(c, argv[0], b);

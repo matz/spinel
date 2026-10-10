@@ -9498,6 +9498,12 @@ TyKind infer_uncached(Compiler *c, int id) {
     int vsrc = else_st >= 0 ? else_st : body;
     TyKind r = vsrc >= 0 ? infer_type(c, vsrc) : TY_NIL;
     if (else_c >= 0 && else_st < 0) r = TY_NIL;   /* an empty else is the value: nil */
+    /* a value source whose last statement is a `return` leaves the method:
+       the begin has no value of its own (not an unsettled one) */
+    if (vsrc >= 0) {
+      int rn = 0; const int *rb = nt_arr(nt, vsrc, "body", &rn);
+      if (rb && rn > 0 && nt_kind(nt, rb[rn - 1]) == NK_ReturnNode) r = TY_VOID;
+    }
     TyKind body_t = r;
     /* a body whose last statement is a bare raise diverges: the begin's value
        comes from the rescue arms alone, so their type must not widen (#2739) */

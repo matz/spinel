@@ -155,6 +155,25 @@ static void emit_guarded_cmp(Compiler *c, int recv, int arg, const char *name, T
   buf_printf(b, "; _t%d %s _t%d_r; })", tg, name, tg);
 }
 
+/* An element read `a[i]` of an Integer or Float array -- a plain call of
+   [] with one argument -- whose oint a `<=>` reads: answers its receiver
+   and index nodes, or 0. */
+static int cmp_elem_read(Compiler *c, int node, TyKind t, int *arr, int *idx) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (!nm || !sp_streq(nm, "[]")) return 0;
+  int r = nt_ref(nt, node, "receiver"), ac = 0;
+  int an = nt_ref(nt, node, "arguments");
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  if (r < 0 || ac != 1 || comp_ntype(c, av[0]) != TY_INT) return 0;
+  TyKind rt = comp_ntype(c, r);
+  if (!(t == TY_FLOAT ? rt == TY_FLOAT_ARRAY : rt == TY_INT_ARRAY)) return 0;
+  if (repr_of(c, r).kind == RK_BOXED || cplan_user(c, node)->dispatch != CP_NONE) return 0;
+  *arr = r; *idx = av[0];
+  return 1;
+}
+
 /* The C test that boxed value `v` belongs to a builtin class on which the
    program defines its own <=> (`class Integer; def <=>(o) = ...; end`), or
    0 when it defines none: such a value takes the program's method through
@@ -288,6 +307,59 @@ static int emit_cmp_reopen_arm(Compiler *c, int id, int recv, const int *argv, B
   }
   free(db.p); free(dpre.p);
   return 0;
+}
+
+/* `<=>` of two element reads of arrays of one kind (a comparator's
+   `keys[a] <=> keys[b]`): each array and index is held once, and where both
+   arrays hold no nil and both indices are in range the two elements are
+   loaded and compared plain, with no nil flag; any other case reads each
+   with its nil (oget). Answers 0, emitting nothing, for other operands. */
+static int emit_cmp_two_elem_reads(Compiler *c, int id, int recv, int arg, TyKind lrt, TyKind lat, int ta, int tb, Buf *b) {
+  int la, li, ra, ri;
+  if (!(lrt == lat && (lrt == TY_INT || lrt == TY_FLOAT) &&
+        cmp_elem_read(c, recv, lrt, &la, &li) && cmp_elem_read(c, arg, lat, &ra, &ri)))
+    return 0;
+  const char *k = lrt == TY_FLOAT ? "Float" : "Int";
+  const char *off = lrt == TY_FLOAT ? "" : "->start";
+  oint_open(c, id, TY_INT, b);
+  buf_printf(b, "({ sp_%sArray *_a%d = ", k, ta); emit_expr(c, la, b);
+  buf_printf(b, "; sp_int _i%d = ", ta); emit_int_expr(c, li, b);
+  buf_printf(b, "; sp_%sArray *_a%d = ", k, tb); emit_expr(c, ra, b);
+  buf_printf(b, "; sp_int _i%d = ", tb); emit_int_expr(c, ri, b);
+  buf_printf(b, "; SP_LIKELY(_a%d && !_a%d->nilbits && (unsigned long long)_i%d < (unsigned long long)_a%d->len &&"
+                " _a%d && !_a%d->nilbits && (unsigned long long)_i%d < (unsigned long long)_a%d->len) ? ",
+             ta, ta, ta, ta, tb, tb, tb, tb);
+  char la_t[64], lb_t[64];
+  if (*off) {
+    snprintf(la_t, sizeof la_t, "_a%d->data[_a%d->start + _i%d]", ta, ta, ta);
+    snprintf(lb_t, sizeof lb_t, "_a%d->data[_a%d->start + _i%d]", tb, tb, tb);
+  }
+  else {
+    snprintf(la_t, sizeof la_t, "_a%d->data[_i%d]", ta, ta);
+    snprintf(lb_t, sizeof lb_t, "_a%d->data[_i%d]", tb, tb);
+  }
+  if (lrt == TY_FLOAT)
+    buf_printf(b, "({ sp_float _x%d = %s, _y%d = %s; (isnan((double)_x%d) || isnan((double)_y%d)) ? sp_oint_nil()"
+                  " : sp_oint_of((sp_int)((_x%d > _y%d) - (_x%d < _y%d))); })",
+               ta, la_t, ta, lb_t, ta, ta, ta, ta, ta, ta);
+  else
+    buf_printf(b, "({ sp_int _x%d = %s, _y%d = %s; sp_oint_of((_x%d > _y%d) - (_x%d < _y%d)); })",
+               ta, la_t, ta, lb_t, ta, ta, ta, ta);
+  /* the rest: each element with its nil, nil <=> nil 0, a nil and a
+     number nil */
+  const char *ot = oint_ctype(lrt);
+  buf_printf(b, " : ({ %s _o%d = sp_%sArray_oget(_a%d, _i%d), _o%d = sp_%sArray_oget(_a%d, _i%d);",
+             ot, ta, k, ta, ta, tb, k, tb, tb);
+  buf_printf(b, " (_o%d.nil || _o%d.nil) ? ((_o%d.nil && _o%d.nil) ? sp_oint_of(0) : sp_oint_nil()) : ",
+             ta, tb, ta, tb);
+  if (lrt == TY_FLOAT)
+    buf_printf(b, "(isnan((double)_o%d.v) || isnan((double)_o%d.v)) ? sp_oint_nil()"
+                  " : sp_oint_of((sp_int)((_o%d.v > _o%d.v) - (_o%d.v < _o%d.v))); }); })",
+               ta, tb, ta, tb, ta, tb);
+  else
+    buf_printf(b, "sp_oint_of((_o%d.v > _o%d.v) - (_o%d.v < _o%d.v)); }); })", ta, tb, ta, tb);
+  oint_close(c, id, b);
+  return 1;
 }
 
 /* is_a? / kind_of? / instance_of? against a class the static type cannot
@@ -614,6 +686,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          (#4567). Both sides are read as their oint, each a number only
          where its flag is clear. */
       int nl = cmp_operand_may_be_nil(c, recv), nr = cmp_operand_may_be_nil(c, argv[0]);
+      if (nl && nr && emit_cmp_two_elem_reads(c, id, recv, argv[0], lrt, lat, ta, tb, b)) return 1;
       oint_open(c, id, TY_INT, b);
       buf_puts(b, "({ ");
       if (nl) { buf_printf(b, "%s _o%d = ", oint_ctype(lrt), ta); emit_oint_expr(c, recv, lrt, b); buf_puts(b, "; "); }

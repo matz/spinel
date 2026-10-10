@@ -4617,7 +4617,7 @@ SP_COLD static const char *sp_nomethod_msg(const char *m, sp_RbVal v) {
    Integer (#3843). */
 static sp_RbVal sp_enum_next_boxed(sp_RbVal v);      /* defined below, after sp_enum.h */
 static sp_RbVal sp_poly_succ_m(sp_RbVal v, sp_bool allow_enum) {
-  if (v.tag == SP_TAG_INT) return sp_box_int(v.v.i + 1);
+  if (v.tag == SP_TAG_INT) return SP_POLY_INT_OP(add, v.v.i, (sp_int)1);
   if (v.tag == SP_TAG_BIGINT) return sp_box_bigint(sp_bigint_add((sp_Bigint *)v.v.p,
                                                                  sp_bigint_new_int(1)));
   if (v.tag == SP_TAG_STR) return sp_box_str(sp_str_succ(v.v.s));

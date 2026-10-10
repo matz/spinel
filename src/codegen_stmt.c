@@ -9101,9 +9101,35 @@ static int emit_hash_tail_conversion(Compiler *c, int node, Buf *b) {
    C void function (a value the program never gets back)? A call whose
    type is merely unknown -- a builtin's, a reopened class's -- answers a
    value and is not this. */
+/* An implicit-self call in an instance method runs a method of the class the
+   body is emitted for, or of a subclass: only those definitions decide.
+   Answers -1 when that set cannot be told (no class, or a module whose
+   includers hold their own copies of its methods). */
+static int self_call_only_void(Compiler *c, int node, const char *nm) {
+  int recv = nt_ref(c->nt, node, "receiver");
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return -1;
+  Scope *self = comp_scope_of(c, node);
+  if (!self || self->is_cmethod || self->class_id < 0) return -1;
+  int cid = self->class_id;
+  for (int k = 0; k < c->nclasses; k++)
+    for (int i = 0; i < c->classes[k].nincluded_mods; i++)
+      if (c->classes[k].included_mods[i] == cid) return -1;
+  int any = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int a = k;
+    while (a >= 0 && a != cid) a = c->classes[a].parent;
+    if (a != cid) continue;
+    int mi = comp_method_in_chain(c, k, nm, NULL);
+    if (mi < 0 || c->scopes[mi].def_node < 0 || !method_is_void(&c->scopes[mi])) return 0;
+    any = 1;
+  }
+  return any;
+}
 static int call_names_only_void_methods(Compiler *c, int node) {
   const char *nm = nt_str(c->nt, node, "name");
   if (!nm || sp_streq(nm, "initialize")) return 0;
+  int own = self_call_only_void(c, node, nm);
+  if (own >= 0) return own;
   int any = 0;
   for (int s = 1; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];

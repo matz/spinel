@@ -2055,7 +2055,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     /* an Integer or Float field with a nil bit, or an oint static */
     if (wk2 == 1 && ivar_has_nilbit(c, wcid2, wiv2)) {
       char wpfx2[128]; snprintf(wpfx2, sizeof wpfx2, "%s%s", g_self, g_self_deref);
-      emit_ivar_value_nilbit(c, wcid2, wiv2, wpfx2, v, b);
+      emit_ivar_write_nilbit(c, id, wcid2, wiv2, wpfx2, v, b);
     }
     else if (wk2 == 2 && civ_is_oint(c, wcid2, wiv2)) emit_oint_expr(c, v, ivt2, b);
     else if (oint_kind(ivt2) && node_may_be_nil(c, v)) refuse_nil_store(c, v, ivt2, "an instance variable write");

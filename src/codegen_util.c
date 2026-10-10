@@ -6844,11 +6844,18 @@ static int node_is_oint_asked(Compiler *c, int node) {
     LocalVar *lv = s ? scope_local(s, ln) : NULL;
     return lv && slot_is_oint(lv);
   }
-  case NK_InstanceVariableWriteNode:
+  case NK_InstanceVariableWriteNode: {
     /* `@x = v` as an expression answers the slot it wrote: its oint where
-       the field carries a nil bit (or the static is an oint); the `||=` /
-       `&&=` / `op=` value forms answer by the analysis (default) */
-    return ivar_read_slot_is_oint(c, node);
+       the field carries a nil bit (or the static is an oint), unless v is
+       a plain value, which clears the bit (emit_ivar_value_nilbit) and is
+       the answer; the `||=` / `&&=` / `op=` value forms answer by the
+       analysis (default) */
+    if (!ivar_read_slot_is_oint(c, node)) return 0;
+    int wcid, wiv, v = nt_ref(nt, node, "value");
+    if (ivar_node_slot(c, node, &wcid, &wiv) == 1 && v >= 0 && nt_kind(nt, v) != NK_NilNode &&
+        !ivar_value_carries_nil(c, c->classes[wcid].ivar_types[wiv], v)) return 0;
+    return 1;
+  }
   case NK_GlobalVariableWriteNode:
   case NK_GlobalVariableOrWriteNode:
   case NK_GlobalVariableAndWriteNode:
@@ -7228,6 +7235,14 @@ static int leaf_slot_is_oint(Compiler *c, int node) {
    of its scope; set beside g_ret_type) */
 int g_ret_oint = 0;
 
+/* Value v stored into a field of type t takes its nil along (an oint form,
+   a boxed value, a nil); otherwise it is a plain value that clears the bit */
+int ivar_value_carries_nil(Compiler *c, TyKind t, int v) {
+  Repr r = repr_of(c, v);
+  return node_has_oint_form(c, v) || r.kind == RK_BOXED || r.as_ty == TY_NIL || r.as_ty == TY_VOID ||
+         r.as_ty == TY_UNKNOWN || (oint_kind(r.as_ty) && r.as_ty != t);
+}
+
 /* The right-hand side of a store into ivar iv of class cid (an object
    field with a nil bit; `obj` is the receiver prefix, "self->") from node
    v, with the bit kept in step: a value that can be nil (an oint form, a
@@ -7242,8 +7257,7 @@ void emit_ivar_value_nilbit(Compiler *c, int cid, int iv, const char *obj, int v
   int to = ++g_tmp;
   if (v < 0 || nt_kind(c->nt, v) == NK_NilNode) { buf_printf(b, "({ %s; (%s)0; })", bs, c_type_name(t)); return; }
   Repr r = repr_of(c, v);
-  if (node_has_oint_form(c, v) || r.kind == RK_BOXED || r.as_ty == TY_NIL || r.as_ty == TY_VOID ||
-      r.as_ty == TY_UNKNOWN || (oint_kind(r.as_ty) && r.as_ty != t)) {
+  if (ivar_value_carries_nil(c, t, v)) {
     buf_printf(b, "({ %s _t%d = ", oint_ctype(t), to);
     /* a boxed value into a slot an --rbs seed pins: the seed's assertion
        (nil passes) before the narrowing, as the plain slot's write has it */
@@ -7266,6 +7280,20 @@ void emit_ivar_value_nilbit(Compiler *c, int cid, int iv, const char *obj, int v
   buf_printf(b, "({ %s _t%d = ", c_type_name(t), to);
   emit_coerce(c, v, t, CO_HOLD, "an instance variable write", b);
   buf_printf(b, "; %s; _t%d; })", bc, to);
+}
+/* The same for `@x = v`, write node wid: where the analysis knows @x was
+   non-nil before it and v is one (nn_ivar_write_keeps_clear), the bit is
+   clear and stays so, and the store is the value's alone */
+void emit_ivar_write_nilbit(Compiler *c, int wid, int cid, int iv, const char *obj, int v, Buf *b) {
+  TyKind t = c->classes[cid].ivar_types[iv];
+  if (v >= 0 && nt_kind(c->nt, v) != NK_NilNode && !ivar_value_carries_nil(c, t, v) &&
+      nn_ivar_write_keeps_clear(c, wid)) {
+    buf_puts(b, "(");
+    emit_coerce(c, v, t, CO_HOLD, "an instance variable write", b);
+    buf_puts(b, ")");
+    return;
+  }
+  emit_ivar_value_nilbit(c, cid, iv, obj, v, b);
 }
 /* the same for a value already rendered as an sp_oint / sp_ofloat text */
 void emit_ivar_text_nilbit(Compiler *c, int cid, int iv, const char *obj, const char *otext, Buf *b) {

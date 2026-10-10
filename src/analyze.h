@@ -242,6 +242,8 @@ int hash_vals_nullable(Compiler *c, int node);
 /* The same, asked of the variable rather than of the read: what it can hold
    anywhere, the nil narrowing's facts left out. */
 int nullable_int_value_raw(Compiler *c, int id);
+/* `@x = v` at write node id leaves @x's nil bit clear, as it already was */
+int nn_ivar_write_keeps_clear(Compiler *c, int id);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);
 int nullable_scalar_nil_only_call(Compiler *c, int id);
 int nullable_int_elem_array(Compiler *c, int node);

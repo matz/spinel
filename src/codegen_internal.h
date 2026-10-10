@@ -2389,6 +2389,8 @@ const char *res_zero(Compiler *c, TyKind res, int res_o);
 /* a store's right-hand side into an ivar with a nil bit, the bit kept in
    step (codegen_util.c): from node v, or from an sp_oint text */
 void emit_ivar_value_nilbit(Compiler *c, int cid, int iv, const char *obj, int v, Buf *b);
+void emit_ivar_write_nilbit(Compiler *c, int wid, int cid, int iv, const char *obj, int v, Buf *b);
+int ivar_value_carries_nil(Compiler *c, TyKind t, int v);
 void emit_ivar_text_nilbit(Compiler *c, int cid, int iv, const char *obj, const char *otext, Buf *b);
 /* the right-hand side of `@x = nil` on an Integer / Float ivar */
 void emit_ivar_nil_store(Compiler *c, int id, TyKind t, Buf *b);

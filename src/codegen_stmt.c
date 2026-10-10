@@ -13803,7 +13803,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
        through the bit; an oint static (class-level, top-level) the oint */
     if (wk == 1 && ivar_has_nilbit(c, wcid, wiv)) {
       char wpfx[128]; snprintf(wpfx, sizeof wpfx, "%s%s", g_self, g_self_deref);
-      emit_ivar_value_nilbit(c, wcid, wiv, wpfx, v, b);
+      emit_ivar_write_nilbit(c, id, wcid, wiv, wpfx, v, b);
     }
     else if (wk == 2 && civ_is_oint(c, wcid, wiv)) emit_oint_expr(c, v, ivt, b);
     else if (oint_kind(ivt) && node_may_be_nil(c, v)) refuse_nil_store(c, v, ivt, "an instance variable write");

@@ -29869,6 +29869,7 @@ typedef struct {
   int n; LocalVar *v[NN_MAXF];         /* locals known non-nil */
   int nn; LocalVar *nonneg[NN_MAXF];   /* integer locals known >= 0 */
   int nr; NNRel r[NN_MAXR];
+  int ni; int iv[NN_MAXF];             /* self's ivars (nn_ivar) known non-nil */
 } NNF;
 
 static Compiler *nn_c;
@@ -29876,6 +29877,7 @@ static unsigned char *nn_nonnil;   /* per node: a local read proven non-nil */
 static unsigned char *nn_inb;      /* per node: an `a[i]` proven to read an element */
 static int *nn_cand;               /* per node: an in-bounds `a[i]`, slot + 1 */
 static unsigned char *nn_wrok;     /* per node: an `a[i] = v` whose index is in range */
+static unsigned char *nn_ivwok;    /* per node: an `@x = v` of a non-nil v where @x was non-nil */
 static int nn_cap;
 static int nn_ready;               /* the bitmaps describe the current state */
 static int nn_busy;                /* the facts are being recomputed */
@@ -29906,6 +29908,17 @@ static int nn_read_nonnil(Compiler *c, int id, const char *name) {
 static int nn_index_inbounds(Compiler *c, int id) {
   return id >= 0 && nn_fresh() && id < nn_cap && nn_inb[id] &&
          decide_node(c->nt, id, "nn-inb", NULL);
+}
+/* An ivar read after a use that raised on its nil, with no write of it and
+   no call that could make one between (nn_visit): its nil was tested */
+static int nn_ivar_read_nonnil(Compiler *c, int id) {
+  return id >= 0 && nn_fresh() && id < nn_cap && nn_nonnil[id] &&
+         decide_node(c->nt, id, "nn-ivread", nt_str(c->nt, id, "name"));
+}
+/* `@x = v`: v is non-nil and so was @x, so its nil byte is already clear */
+int nn_ivar_write_keeps_clear(Compiler *c, int id) {
+  return id >= 0 && nn_fresh() && id < nn_cap && nn_ivwok[id] &&
+         decide_node(c->nt, id, "nn-ivwok", nt_str(c->nt, id, "name"));
 }
 /* nullable_int_value as the slot's own marks answer it, without the facts:
    what the variable can hold anywhere, rather than at this read. */
@@ -29961,6 +29974,7 @@ static unsigned char *nn_defbody;  /* a method's body: 1, initialize's: 2 */
 static const char **nn_attrs; static int nn_nattrs, nn_cattrs;   /* names attr_* hands out */
 static int nn_seqc;
 static int nn_no_ivar_slots;     /* reflection or a reopened Array: no ivar is nil-free */
+static int nn_no_ivar_facts;     /* ... or code that can run between two statements: no ivar fact */
 static int nn_no_local_slots;    /* binding's local_variable_set, or a reopened Array */
 static int nn_numeric_reopened;  /* a class a number's or nil's operator may come from is reopened */
 static unsigned nn_user_named;   /* bits of nn_named[] the program defines a method for */
@@ -30180,6 +30194,19 @@ static void nn_addnn(NNF *f, LocalVar *lv) {
   if (f->bot || !lv || nn_hasnn(f, lv) || f->nn == NN_MAXF) return;
   f->nonneg[f->nn++] = lv;
 }
+static int nn_hasiv(const NNF *f, int iv) {
+  if (f->bot) return 1;
+  for (int i = 0; i < f->ni; i++) if (f->iv[i] == iv) return 1;
+  return 0;
+}
+static void nn_addiv(NNF *f, int iv) {
+  if (f->bot || iv < 0 || nn_no_ivar_facts || nn_hasiv(f, iv) || f->ni == NN_MAXF) return;
+  f->iv[f->ni++] = iv;
+}
+static void nn_killiv(NNF *f, int iv) {
+  if (f->bot) return;
+  for (int i = 0; i < f->ni; i++) if (f->iv[i] == iv) { f->iv[i] = f->iv[--f->ni]; break; }
+}
 static void nn_kill_rel_slot(NNF *f, int slot) {
   for (int i = 0; i < f->nr; ) { if (f->r[i].slot == slot) f->r[i] = f->r[--f->nr]; else i++; }
 }
@@ -30197,6 +30224,7 @@ static void nn_meet(NNF *a, const NNF *b) {
   if (a->bot) { *a = *b; return; }
   for (int i = 0; i < a->n; ) { if (!nn_has(b, a->v[i])) a->v[i] = a->v[--a->n]; else i++; }
   for (int i = 0; i < a->nn; ) { if (!nn_hasnn(b, a->nonneg[i])) a->nonneg[i] = a->nonneg[--a->nn]; else i++; }
+  for (int i = 0; i < a->ni; ) { if (!nn_hasiv(b, a->iv[i])) a->iv[i] = a->iv[--a->ni]; else i++; }
   for (int i = 0; i < a->nr; ) {
     int keep = 0;
     for (int j = 0; j < b->nr; j++) if (b->r[j].i == a->r[i].i && b->r[j].slot == a->r[i].slot) keep = 1;
@@ -30227,8 +30255,9 @@ static void nn_call_kill(NNF *f, int ctx, int pure) {
     if (k >= 0 && nn_exposed(k, ctx)) f->v[i] = f->v[--f->n]; else i++;
   }
   if (pure) return;
-  /* the call may shrink an array or write a local through a closure */
-  f->nr = 0;
+  /* the call may shrink an array, write a local through a closure, or run
+     a method that writes one of self's ivars */
+  f->nr = 0; f->ni = 0;
   for (int i = 0; i < f->nn; ) {
     int k = nn_var(f->nonneg[i]);
     if (k < 0 || nn_vars[k].allw_ctx != ctx || nn_vars[k].owner != ctx) f->nonneg[i] = f->nonneg[--f->nn]; else i++;
@@ -30262,8 +30291,8 @@ static int nn_pure_call(Compiler *c, int id) {
   if (!nm || recv < 0 || nt_ref(nt, id, "block") >= 0) return 0;
   TyKind rt = comp_ntype(c, recv);
   if (rt == TY_INT || rt == TY_FLOAT) {
-    static const char *const ops[] = { "+", "-", "*", "<", "<=", ">", ">=", "==", "!=", "<=>",
-                                       "&", "|", "^", "%", "nil?", "!", "-@", "abs", NULL };
+    static const char *const ops[] = { "+", "-", "*", "/", "<", "<=", ">", ">=", "==", "!=", "<=>",
+                                       "&", "|", "^", "%", "~", "<<", ">>", "nil?", "!", "-@", "abs", NULL };
     return nn_name_in(nm, ops);
   }
   if (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)
@@ -30287,6 +30316,68 @@ static int nn_name_at(const char *nm, const char *const *set, int from) {
 }
 
 static void nn_visit(Compiler *c, int id, NNF *f, int ctx);
+
+/* A slot read directly at node r, whose nil a use has just raised on: an
+   ivar of self, or a local or parameter */
+static void nn_used_slot(Compiler *c, int r, NNF *f) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, r);
+  if (k == NK_InstanceVariableReadNode) nn_addiv(f, nn_ivar(nt_str(nt, r, "name")));
+  else if (k == NK_LocalVariableReadNode) nn_add(f, nn_local_of(c, r));
+}
+/* A call that raises on a nil it is handed: the receiver of an arithmetic
+   or ordering operator on a number (nil answers & | ^, so not those), an
+   operand of one, or an Integer or Float array's index. A slot read
+   directly there is non-nil once the call has returned. `&.` answers nil
+   for a nil receiver instead of raising, and a program that reopens a
+   class nil's or a number's operator can come from may answer for a nil
+   too (nn_numeric_reopened): neither proves anything. */
+static void nn_used(Compiler *c, int call, NNF *f, int ctx, int amark) {
+  const NodeTable *nt = c->nt;
+  static const char *const recv_raises[] = { "+", "-", "*", "/", "%", "**", "<<", ">>", "<", "<=", ">", ">=",
+                                             "-@", "~", NULL };
+  static const char *const opnd_raises[] = { "+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", "<", "<=",
+                                             ">", ">=", NULL };
+  /* a local operand of these is nn_operands_nonnil's */
+  static const char *const local_ops[] = { "<", "<=", ">", ">=", "+", "-", "*", "/", NULL };
+  const char *nm = nt_str(nt, call, "name");
+  int recv = nt_ref(nt, call, "receiver");
+  if (!nm || recv < 0 || nt_ref(nt, call, "block") >= 0 || call_is_safe_nav(nt, call) || nn_numeric_reopened)
+    return;
+  TyKind rt = comp_ntype(c, recv);
+  int num = rt == TY_INT || rt == TY_FLOAT;
+  int lops = nn_name_in(nm, local_ops);
+  if (num && nn_name_in(nm, recv_raises)) {
+    /* the receiver was read before the arguments ran: a write of it there,
+       or a call that may write it, means the slot no longer holds the
+       value read (the kill log from amark on tells) */
+    NodeKind rk = nt_kind(nt, recv);
+    if (rk == NK_LocalVariableReadNode && !lops) {
+      LocalVar *rl = nn_local_of(c, recv);
+      int k = nn_var(rl);
+      for (int i = amark; rl && i < nn_nlog; i++)
+        if ((nn_log[i].kind == NN_LOG_VAR && nn_log[i].lv == rl) ||
+            (nn_log[i].kind == NN_LOG_CALL && k >= 0 && nn_exposed(k, ctx)))
+          rl = NULL;
+      if (rl) nn_add(f, rl);
+    }
+    else if (rk == NK_InstanceVariableReadNode) {
+      int iv = nn_ivar(nt_str(nt, recv, "name")), keep = iv >= 0;
+      for (int i = amark; keep && i < nn_nlog; i++)
+        if ((nn_log[i].kind == NN_LOG_IVAR && nn_log[i].slot == 2 * iv + 1) || nn_log[i].kind == NN_LOG_CALL) keep = 0;
+      if (keep) nn_used_slot(c, recv, f);
+    }
+  }
+  int idx = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && sp_streq(nm, "[]");
+  if (!(num && nn_name_in(nm, opnd_raises)) && !idx) return;
+  int ca = nt_ref(nt, call, "arguments"), an = 0;
+  const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+  if (an != 1) return;
+  TyKind at = comp_ntype(c, av[0]);
+  if (!(at == TY_INT || at == TY_FLOAT)) return;
+  if (num && lops && nt_kind(nt, av[0]) == NK_LocalVariableReadNode) return;
+  nn_used_slot(c, av[0], f);
+}
 
 /* The value is an Integer or a Float the marks call non-nil. A value of
    another static type gets no mark to ask: a parameter or a local that only
@@ -30438,7 +30529,7 @@ static void nn_cond(Compiler *c, int id, const NNF *in, NNF *t, NNF *e, int ctx)
 static void nn_replay(NNF *f, int mark, int ctx) {
   for (int i = mark; i < nn_nlog; i++) {
     if (nn_log[i].kind == NN_LOG_VAR) nn_kill(f, nn_log[i].lv);
-    else if (nn_log[i].kind == NN_LOG_IVAR) nn_kill_rel_slot(f, nn_log[i].slot);
+    else if (nn_log[i].kind == NN_LOG_IVAR) { nn_kill_rel_slot(f, nn_log[i].slot); nn_killiv(f, (nn_log[i].slot - 1) / 2); }
     else nn_call_kill(f, ctx, 0);
   }
 }
@@ -30480,7 +30571,7 @@ static void nn_loop_entry(Compiler *c, int id, NNF *f, int ctx) {
   qsort(plain, (size_t)np, sizeof(LocalVar *), nn_ptr_cmp);
   for (int i = mark; i < nn_nlog; i++) {
     if (nn_log[i].kind == NN_LOG_CALL) { nn_call_kill(f, ctx, 0); continue; }
-    if (nn_log[i].kind == NN_LOG_IVAR) { nn_kill_rel_slot(f, nn_log[i].slot); continue; }
+    if (nn_log[i].kind == NN_LOG_IVAR) { nn_kill_rel_slot(f, nn_log[i].slot); nn_killiv(f, (nn_log[i].slot - 1) / 2); continue; }
     LocalVar *lv = nn_log[i].lv;
     int incr = !bsearch(&lv, plain, (size_t)np, sizeof(LocalVar *), nn_ptr_cmp);
     int had = nn_has(f, lv), hadnn = nn_hasnn(f, lv);
@@ -30520,12 +30611,23 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     return;
   }
   case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
-  case NK_StringNode: case NK_SymbolNode: case NK_SelfNode: case NK_InstanceVariableReadNode:
+  case NK_StringNode: case NK_SymbolNode: case NK_SelfNode:
     return;
-  case NK_InstanceVariableWriteNode: {
-    nn_visit(c, nt_ref(nt, id, "value"), f, ctx);
+  case NK_InstanceVariableReadNode: {
     int iv = nn_ivar(nt_str(nt, id, "name"));
-    if (iv >= 0) { nn_kill_rel_slot(f, 2 * iv + 1); nn_logpush(NN_LOG_IVAR, NULL, 2 * iv + 1, 0); }
+    if (!nn_dry && iv >= 0 && f->ni && nn_hasiv(f, iv)) nn_nonnil[id] = 1;
+    return;
+  }
+  case NK_InstanceVariableWriteNode: {
+    int v = nt_ref(nt, id, "value");
+    nn_visit(c, v, f, ctx);
+    int iv = nn_ivar(nt_str(nt, id, "name"));
+    if (iv >= 0) {
+      int nonnil = !nn_no_ivar_facts && nn_nonnil_value(c, v);
+      if (!nn_dry && nonnil && !f->bot && nn_hasiv(f, iv)) nn_ivwok[id] = 1;
+      nn_kill_rel_slot(f, 2 * iv + 1); nn_killiv(f, iv); nn_logpush(NN_LOG_IVAR, NULL, 2 * iv + 1, 0);
+      if (nonnil) nn_addiv(f, iv);
+    }
     return;
   }
   case NK_LocalVariableWriteNode: {
@@ -30646,6 +30748,7 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     } else if (blk >= 0) nn_visit_children_generic(c, blk, f, ctx);
     nn_operands_nonnil(c, id, f, ctx, amark);
     if (!nn_pure_call(c, id)) { nn_call_kill(f, ctx, 0); nn_logpush(NN_LOG_CALL, NULL, -1, 0); }
+    else nn_used(c, id, f, ctx, amark);
     /* Kernel's raise, exit and abort do not come back */
     const char *nm = nt_str(nt, id, "name");
     int ex = nm && nt_ref(nt, id, "receiver") < 0 ? nn_name_at(nm, nn_named, 0) : -1;
@@ -30678,7 +30781,13 @@ static void nn_visit(Compiler *c, int id, NNF *f, int ctx) {
     /* control flow the walk does not follow: nothing survives it */
     if (k == NK_BeginNode || k == NK_CaseNode || k == NK_CaseMatchNode || k == NK_ForNode ||
         k == NK_RescueModifierNode) {
-      f->n = 0; f->nr = 0; f->nn = 0;
+      f->n = 0; f->nr = 0; f->nn = 0; f->ni = 0;
+    }
+    /* an ivar written other than by `@x = v` (`@x op= v`, `||=`, a
+       multiple-assignment target): what was known of it is gone */
+    if (nn_is_ivar_node(k) && k != NK_InstanceVariableReadNode) {
+      int iv = nn_ivar(nt_str(nt, id, "name"));
+      if (iv >= 0) { nn_kill_rel_slot(f, 2 * iv + 1); nn_killiv(f, iv); nn_logpush(NN_LOG_IVAR, NULL, 2 * iv + 1, 0); }
     }
     return;
   }
@@ -31116,12 +31225,12 @@ static void nn_reset(void) {
 }
 
 static void nn_alloc(int cap) {
-  free(nn_nonnil); free(nn_inb); free(nn_cand); free(nn_wrok); free(nn_par); free(nn_ctx);
+  free(nn_nonnil); free(nn_inb); free(nn_cand); free(nn_wrok); free(nn_ivwok); free(nn_par); free(nn_ctx);
   free(nn_seq); free(nn_send); free(nn_ctxpar); free(nn_ctxdep); free(nn_stlist); free(nn_stidx);
   free(nn_loopout); free(nn_retry); free(nn_jump); free(nn_defbody); free(nn_frame);
   size_t n = (size_t)cap + 1;
   nn_cap = cap;
-  nn_nonnil = malloc(n); nn_inb = malloc(n); nn_wrok = malloc(n); nn_retry = malloc(n);
+  nn_nonnil = malloc(n); nn_inb = malloc(n); nn_wrok = malloc(n); nn_ivwok = malloc(n); nn_retry = malloc(n);
   nn_jump = malloc(n); nn_defbody = malloc(n); nn_frame = malloc(sizeof(int) * n);
   nn_cand = malloc(sizeof(int) * n); nn_par = malloc(sizeof(int) * n); nn_ctx = malloc(sizeof(int) * n);
   nn_seq = malloc(sizeof(int) * n); nn_send = malloc(sizeof(int) * n); nn_ctxpar = malloc(sizeof(int) * n);
@@ -31233,6 +31342,18 @@ static void nn_structure(Compiler *c) {
     if (sv && (strncmp(sv, "instance_variable", 17) == 0 || sp_streq(sv, "remove_instance_variable"))) nn_no_ivar_slots = 1;
     if (sv && strncmp(sv, "local_variable_", 15) == 0) nn_no_local_slots = 1;
   }
+  /* An ivar fact holds from a test to the next write or call; code that can
+     run between two statements (another thread, a signal handler, a
+     finalizer) could write the ivar in between */
+  nn_no_ivar_facts = nn_no_ivar_slots;
+  static const char *const async[] = { "Thread", "Queue", "SizedQueue", "Mutex", "Monitor", "ConditionVariable",
+                                       "Signal", "ObjectSpace", NULL };
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, k) if (nn_name_in(nt_str(nt, k, "name"), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, k) if (nn_name_in(nt_str(nt, k, "name"), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_CallNode, a) {
+    const char *an = nt_str(nt, a, "name");
+    if (an && (sp_streq(an, "trap") || sp_streq(an, "define_finalizer"))) nn_no_ivar_facts = 1;
+  }
 }
 
 /* The facts themselves, which depend on the marks: the writes that can leave
@@ -31240,7 +31361,7 @@ static void nn_structure(Compiler *c) {
 static void nn_facts(Compiler *c) {
   const NodeTable *nt = c->nt;
   size_t n = (size_t)nn_cap + 1;
-  memset(nn_nonnil, 0, n); memset(nn_inb, 0, n); memset(nn_wrok, 0, n);
+  memset(nn_nonnil, 0, n); memset(nn_inb, 0, n); memset(nn_wrok, 0, n); memset(nn_ivwok, 0, n);
   memset(nn_cand, 0, sizeof(int) * n);
   for (int k = 0; k < nn_nvars; k++) {
     NNVar *v = &nn_vars[k];
@@ -31416,8 +31537,9 @@ int nullable_int_value(Compiler *c, int v) {
         has = comp_ivar_index(&c->classes[k], nt_str(nt, v, "name")) >= 0;
       if (!has) return 1;
     }
-    /* a boxed ivar (a promote-widened member) can hold nil too */
-    return iv >= 0 && (ci->ivar_nullable_int[iv] || ci->ivar_types[iv] == TY_POLY);
+    /* a boxed ivar (a promote-widened member) can hold nil too; a read
+       after a use that raised on its nil cannot be (nn_ivar_read_nonnil) */
+    return iv >= 0 && (ci->ivar_nullable_int[iv] || ci->ivar_types[iv] == TY_POLY) && !nn_ivar_read_nonnil(c, v);
   }
   /* A class variable some write left nil in, as an ivar: `def
      self.b = (@@x = nil)` beside `@@x = 1` read back 0 */

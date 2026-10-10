@@ -8131,13 +8131,9 @@ static int int_arms_round_divide(Compiler *c, int id, Buf *b, const NodeTable *n
                   " ? (sp_raise_cls(\"ArgumentError\","
                   " \"The beginless range for Integer#[] results in infinity\"), 0)"
                   " : _t%d.first;"
-                  " sp_int _sh%d = ((%s) >> _lo%d);"
-                  " _t%d.last == INTPTR_MAX ? _sh%d"
-                  " : (_sh%d & ((((sp_int)1) << (_t%d.last - _lo%d + (_t%d.excl ? 0 : 1))) - 1)); })",
+                  " sp_int_bit_range((%s), _lo%d, sp_range_bit_width(_t%d, _lo%d)); })",
                trb, trb, trb,
-               trb, r, trb,
-               trb, trb,
-               trb, trb, trb, trb);
+               r, trb, trb, trb);
   }
   else if (sp_streq(name, "[]") && argc == 1) {
     /* clamped: a literal-folded out-of-range index was an undefined C

@@ -66,12 +66,35 @@ static inline sp_float sp_range_end_num(sp_Range r){return r.fe?r.fend:(sp_float
 static inline sp_bool sp_range_excl_end(sp_Range r){return r.fe?r.fe==2:r.excl!=0;}
 /* The effective stride: a literal `a..b` range stores 0, which iterates by +1. */
 static inline sp_int sp_range_step(sp_Range r){return r.step==0?1:r.step;}
-/* Number of elements the range enumerates (0 for an empty one), honoring step. */
+/* Whether the range enumerates nothing in its step's direction, and if not,
+   the distance from its first element to the last value it may reach (its end,
+   less one when excluded) and the stride, both in unsigned: exact for a
+   non-empty range however far apart its ends, where the signed difference of
+   two far ends (a range wider than 2**63) overflowed. */
+static inline sp_bool sp_range_none(sp_Range r, sp_int s){
+  return s>0?(r.last<r.first||(r.excl&&r.last==r.first)):(r.last>r.first||(r.excl&&r.last==r.first));
+}
+static inline uintptr_t sp_range_span(sp_Range r, sp_int s){
+  return s>0?(uintptr_t)r.last-(uintptr_t)r.first-(r.excl?1:0):(uintptr_t)r.first-(uintptr_t)r.last-(r.excl?1:0);
+}
+static inline uintptr_t sp_range_ustep(sp_int s){return s>0?(uintptr_t)s:(uintptr_t)0-(uintptr_t)s;}
+/* Number of elements the range enumerates (0 for an empty one), honoring step.
+   A count past 2**63-1 saturates there. */
 static inline sp_int sp_range_count(sp_Range r){
   sp_int s=sp_range_step(r);
-  sp_int lastv=r.excl?(r.last-(s>0?1:-1)):r.last;
-  sp_int n=(lastv-r.first)/s+1;
-  return n<0?0:n;
+  if(sp_range_none(r,s))return 0;
+  uintptr_t q=sp_range_span(r,s)/sp_range_ustep(s);
+  return q>=(uintptr_t)INTPTR_MAX?INTPTR_MAX:(sp_int)q+1;
+}
+/* The width of Integer#[lo..last]'s bit field, as sp_int_bit_range reads it:
+   last - lo + 1 bits (one fewer for an exclusive end); every bit from lo up
+   (-1) for an endless range or one whose end is below lo, as CRuby reads
+   `n[5..2]`. Taken in unsigned and capped at 64, the most a word holds, so a
+   far end does not overflow. */
+static inline sp_int sp_range_bit_width(sp_Range r, sp_int lo){
+  if(r.last==INTPTR_MAX||r.last<lo)return -1;
+  uintptr_t d=(uintptr_t)r.last-(uintptr_t)lo;
+  return d>=64?64:(sp_int)d+(r.excl?0:1);
 }
 /* Materialize the range into an int array (ascending or descending per step).
    The +1 stride (every literal `a..b` range) keeps the tight from_range loop; a
@@ -111,8 +134,10 @@ static inline sp_int sp_flt_range_bound(sp_float f, int up){
 /* Last enumerated element (== first for an empty range), and the min/max of the
    enumerated set -- direction-aware, so a descending range reports them right. */
 static inline sp_int sp_range_last_elem(sp_Range r){
-  sp_int n=sp_range_count(r);
-  return n<=0?r.first:r.first+(n-1)*sp_range_step(r);
+  sp_int s=sp_range_step(r);
+  if(sp_range_none(r,s))return r.first;
+  uintptr_t by=sp_range_ustep(s), off=sp_range_span(r,s)/by*by;
+  return (sp_int)(s>0?(uintptr_t)r.first+off:(uintptr_t)r.first-off);
 }
 /* min/max of an EMPTY (backwards, or exclusive single-point) range is nil
    (SP_INT_NIL, the nullable-int sentinel) -- CRuby returns nil there. A

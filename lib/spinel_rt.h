@@ -11331,11 +11331,11 @@ static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx) {
       sp_raise_cls("ArgumentError",
                    "The beginless range for Integer#[] results in infinity");
     { sp_int lo = rg.first;
-      sp_int len = (rg.last == INTPTR_MAX) ? 64 : (rg.last - lo + (rg.excl ? 0 : 1));
+      sp_int len = sp_range_bit_width(rg, lo);
       if (recv.tag == SP_TAG_INT) return sp_box_int(sp_int_bit_range(recv.v.i, lo, len));
       /* a Bignum has no word to shift: read the field a bit at a time, which
          is at most 64 of them and only on this cold path */
-      { sp_int out = 0, n = (len <= 0 || len > 64) ? 64 : len;
+      { sp_int out = 0, n = len < 0 ? 64 : len;
         for (sp_int k = 0; k < n; k++)
           if (sp_poly_int_bit(recv, lo + k)) out |= (sp_int)((uint64_t)1 << k);
         return sp_box_int(out); } }

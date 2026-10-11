@@ -1,0 +1,17 @@
+[:main]
+opt top level
+[[true, "hook on"]]
+[:main, :opt_module_body]
+[[false, "hook on"]]
+[:main, :opt_module_body]
+false
+[:main, :opt_module_body]
+32
+[:main, :opt_module_body, :late_loaded]
+false
+"raised"
+[1]
+true
+[1, 1, :ok]
+true
+[:a]

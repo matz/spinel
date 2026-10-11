@@ -6517,7 +6517,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               TyKind aw = ffi_spec_to_ty(spec);
               if (sp_streq(spec, "text")) aw = TY_STRING;
               if (aw == TY_UNKNOWN) { ok = 0; break; }
-              if (atmp_ty[ai] == TY_POLY) emit_unbox_text(c, aw, tn, &cb);
+              if (atmp_ty[ai] == TY_POLY) {
+                /* the temp is boxed: convert by tag rather than reading a
+                   union field whatever the box happens to hold */
+                if (aw == TY_FLOAT) buf_printf(&cb, "sp_num_to_f(%s)", tn);
+                else if (aw == TY_INT) buf_printf(&cb, "sp_num_to_i(%s)", tn);
+                else emit_unbox_text(c, aw, tn, &cb);
+              }
               else if (atmp_ty[ai] == aw || (aw == TY_STRING && atmp_ty[ai] == TY_STRBUF)) buf_puts(&cb, tn);
               else if (aw == TY_FLOAT && atmp_ty[ai] == TY_INT) buf_printf(&cb, "(sp_float)%s", tn);
               else { ok = 0; break; }
@@ -7646,6 +7652,11 @@ int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf
        (poly unboxing, #to_str / #to_int on a user object) */
     else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
     else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
+    else if (aw == TY_FLOAT && comp_ntype(c, argv[ai]) == TY_POLY) {
+      /* boxed value in a float slot: convert by tag (the ffi gem's boundary
+         conversion); emit_expr would hand the C call an sp_RbVal struct */
+      buf_puts(b, "sp_num_to_f("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+    }
     else emit_expr(c, argv[ai], b);
   }
   buf_puts(b, ")");
@@ -27063,8 +27074,12 @@ else {
           }
           else if (sp_streq(spec, "float") || sp_streq(spec, "double")) {
             if (at == TY_POLY) {
-              buf_puts(&call_buf, "(("); buf_puts(&call_buf, ffi_c_type(spec)); buf_puts(&call_buf, ")(");
-              emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, ").v.f)");
+              /* A boxed value in a float slot converts by its tag (the ffi
+                 gem's boundary conversion). Reading .v.f unconditionally
+                 puns an Integer's bits as a float -- a denormal ~0 that
+                 silently draws nothing -- not a conversion. */
+              buf_puts(&call_buf, "(("); buf_puts(&call_buf, ffi_c_type(spec)); buf_puts(&call_buf, ")sp_num_to_f(");
+              emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, "))");
             }
             else { buf_puts(&call_buf, "(("); buf_puts(&call_buf, ffi_c_type(spec)); buf_puts(&call_buf, ")("); emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, "))"); }
           }
@@ -27085,8 +27100,10 @@ else {
           else {
             /* integer-like: int, uint32, size_t, long, etc. */
             if (at == TY_POLY) {
-              buf_puts(&call_buf, "(("); buf_puts(&call_buf, ffi_c_type(spec)); buf_puts(&call_buf, ")(");
-              emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, ").v.i)");
+              /* Same tag conversion as the float slot above: .v.i over a
+                 boxed Float is its bit pattern, not its truncation. */
+              buf_puts(&call_buf, "(("); buf_puts(&call_buf, ffi_c_type(spec)); buf_puts(&call_buf, ")sp_num_to_i(");
+              emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, "))");
             }
             else if (at == TY_BIGINT) {
               /* An overflow-promoted integer (e.g. a backoff computed by

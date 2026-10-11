@@ -2815,6 +2815,22 @@ static sp_float sp_num_to_f(sp_RbVal v) {
   sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Float", w));
   return 0.0;
 }
+/* Coerce a value to a C integer for an integer-typed FFI argument slot. The
+   mirror of sp_num_to_f at the other numeric boundary: the ffi gem converts
+   at the call (NUM2LL truncating a Float, narrowing a Bignum) and refuses
+   nil / String, so a boxed value in an int slot is converted by its tag --
+   never read as the union's integer field whatever it happens to hold (a
+   boxed Float's bits are not its truncation). Bool answers 0/1: a :bool
+   slot takes true/false, and that is what the union read used to give. */
+static sp_int sp_num_to_i(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  if (v.tag == SP_TAG_FLT) return (sp_int)v.v.f;
+  if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_int((sp_Bigint *)v.v.p);
+  if (v.tag == SP_TAG_BOOL) return v.v.b ? 1 : 0;
+  const char *w = v.tag == SP_TAG_NIL ? "nil" : sp_poly_class_name(v);
+  sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Integer", w));
+  return 0;
+}
 /* Exception introspection staging: the runtime raisers stage the receiver /
    key / carried value here just before raising, and sp_raise_cls materializes
    a carried exception exposing them via #receiver / #key / #tag / #reason /

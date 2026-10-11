@@ -9982,6 +9982,11 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
              (poly unboxing, #to_str / #to_int on a user object) */
           else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
           else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
+          else if (aw == TY_FLOAT && comp_ntype(c, argv[ai]) == TY_POLY) {
+            /* boxed value in a float slot: convert by tag (the ffi gem's
+               boundary conversion); emit_expr would hand the C call a struct */
+            buf_puts(b, "sp_num_to_f("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
+          }
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

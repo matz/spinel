@@ -462,6 +462,38 @@ spinel: test/reject/const_value_not_a_module.rb:4: B is not a module: it is assi
 spinel: test/reject/def_delegators_splat.rb:10: def_delegators with arguments other than a literal symbol list is not supported (write the names as symbols: `def_delegators :@target, :name, ...`)
 == test/reject/def_delegators_splat.rb [promote] rc=1
 spinel: test/reject/def_delegators_splat.rb:10: def_delegators with arguments other than a literal symbol list is not supported (write the names as symbols: `def_delegators :@target, :name, ...`)
+== test/reject/define_method_late_in_dead_branch.rb [default] rc=1
+spinel: test/reject/define_method_late_in_dead_branch.rb:7: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_in_dead_branch.rb [promote] rc=1
+spinel: test/reject/define_method_late_in_dead_branch.rb:7: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_named_not_called.rb [default] rc=1
+spinel: test/reject/define_method_late_named_not_called.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_named_not_called.rb [promote] rc=1
+spinel: test/reject/define_method_late_named_not_called.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_attr.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_attr.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_attr.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_attr.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_builtin.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_builtin.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_builtin.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_builtin.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_inherited.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_inherited.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_inherited.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_inherited.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_own.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_own.rb:7: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_own.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_own.rb:7: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_subclass.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_subclass.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_unrelated_user_define_method.rb [default] rc=1
+spinel: test/reject/define_method_late_unrelated_user_define_method.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_unrelated_user_define_method.rb [promote] rc=1
+spinel: test/reject/define_method_late_unrelated_user_define_method.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_name_class_method.rb [default] rc=1
 spinel: test/reject/define_method_name_class_method.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written

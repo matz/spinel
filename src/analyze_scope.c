@@ -1436,10 +1436,15 @@ static void walk_scope_in(Compiler *c, int id, int scope_idx, int class_id, int 
        `make_my_diffs_pretty!` replaces `mu_pp` this way), the method it
        would define does not exist: registering it would answer every call
        of that name from the start, in place of the method that does. */
-    if (dm_ok && dm_is_dm && scope_idx > 0 &&
-        c->scopes[scope_idx].def_node >= 0 && nt_kind(c->nt, c->scopes[scope_idx].def_node) == NK_DefNode &&
-        method_never_named(c, c->scopes[scope_idx].name))
+    int dm_in_def = dm_ok && dm_is_dm && scope_idx > 0 && c->scopes[scope_idx].def_node >= 0 &&
+                    nt_kind(c->nt, c->scopes[scope_idx].def_node) == NK_DefNode;
+    if (dm_in_def && method_never_named(c, c->scopes[scope_idx].name))
       dm_ok = 0;
+    /* Otherwise it is registered from the start, which is right only for a
+       method the class does not answer yet: the codegen prepass refuses the
+       rest (cplan_define_method_early) once the class chains are known. */
+    else if (dm_in_def)
+      nt_node_set_int((NodeTable *)c->nt, id, "dm_host", scope_idx + 1);
     if (dm_ok) {
       int dm_args = nt_ref(c->nt, id, "arguments");
       int dm_na = 0;
@@ -1481,6 +1486,8 @@ static void walk_scope_in(Compiler *c, int id, int scope_idx, int class_id, int 
               int dv = nt_ref(c->nt, dm_opts[p], "value");
               if (pnm) scope_add_param(dm_s, pnm, dv);
             } }
+          if (nt_int(c->nt, id, "dm_host", 0))
+            nt_node_set_int((NodeTable *)c->nt, id, "dm_scope", dm_new_idx + 1);
           child = dm_new_idx;
         }
       }

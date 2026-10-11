@@ -7,6 +7,7 @@
 #include "analyze_internal.h"
 #include "call_plan.h"
 #include "repr.h"
+#include "codegen_call_arms.h"
 
 static CallPlan *g_cp_memo = NULL;
 static unsigned char *g_cp_have = NULL;
@@ -777,6 +778,86 @@ static int limit_exempt(Compiler *c, int id, int lx) {
     return ci >= 0 && comp_cmethod_in_chain(c, ci, name, NULL) >= 0;
   }
   case LX_BINDING: return cplan_user_fresh(c, id)->dispatch != CP_NONE;
+  }
+  return 0;
+}
+
+/* A define_method in a method's body defines its method when that method
+   runs, but analysis registers it from the start (walk_scope marks the call
+   dm_host, and dm_scope for the method it registers). A method nothing names
+   is not registered at all (method_never_named). Otherwise the early
+   registration is right only for a method that is new: one the class does
+   not answer before then. Anything else is refused: its own def or one up
+   its chain, a module's, a subclass's, an alias, attr or Struct member
+   (spelled as a Symbol), or a method every object has. */
+/* Object's instance methods, Kernel's included (ruby 4.0): a method every
+   object answers before any define_method replaces it */
+static int object_universal_method(const char *nm) {
+  static const char *const names[] = {
+    "!", "!=", "!~", "<=>", "==", "===", "Array", "Complex", "Float", "Hash", "Integer",
+    "Rational", "String", "__callee__", "__dir__", "__id__", "__method__", "__send__", "`",
+    "abort", "at_exit", "autoload", "autoload?", "binding", "block_given?", "caller",
+    "caller_locations", "catch", "class", "clone", "define_singleton_method", "display", "dup",
+    "enum_for", "eql?", "equal?", "eval", "exec", "exit", "exit!", "extend", "fail", "fork",
+    "format", "freeze", "frozen?", "gets", "global_variables", "hash", "initialize",
+    "initialize_clone", "initialize_copy", "initialize_dup", "inspect", "instance_eval",
+    "instance_exec", "instance_of?", "instance_variable_defined?", "instance_variable_get",
+    "instance_variable_set", "instance_variables", "is_a?", "iterator?", "itself", "kind_of?",
+    "lambda", "load", "local_variables", "loop", "method", "method_missing", "methods", "nil?",
+    "object_id", "open", "p", "pp", "print", "printf", "private_methods", "proc",
+    "protected_methods", "public_method", "public_methods", "public_send", "putc", "puts", "raise",
+    "rand", "readline", "readlines", "remove_instance_variable", "require", "require_relative",
+    "respond_to?", "respond_to_missing?", "select", "send", "set_trace_func", "singleton_class",
+    "singleton_method", "singleton_method_added", "singleton_method_removed",
+    "singleton_method_undefined", "singleton_methods", "sleep", "spawn", "sprintf", "srand",
+    "syscall", "system", "tap", "test", "then", "throw", "to_enum", "to_s", "trace_var", "trap",
+    "untrace_var", "warn", "yield_self", NULL };
+  for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
+  return 0;
+}
+
+int cplan_define_method_early(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int host = (int)nt_int(nt, id, "dm_host", 0) - 1, dm = (int)nt_int(nt, id, "dm_scope", 0) - 1;
+  if (host < 0 || host >= c->nscopes) return 0;
+  const Scope *hs = &c->scopes[host];
+  /* the program's own define_method, where this call reaches it (a class
+     method's self is the class, an instance method's the instance), is an
+     ordinary method; one in an unrelated class is not */
+  { int kc = hs->class_id, mod = comp_class_index(c, "Module"), cls = comp_class_index(c, "Class");
+    if (kc >= 0 && (hs->is_cmethod ? comp_cmethod_in_chain(c, kc, "define_method", NULL)
+                                   : comp_method_in_chain(c, kc, "define_method", NULL)) >= 0) return 0;
+    if (hs->is_cmethod && ((mod >= 0 && comp_method_in_chain(c, mod, "define_method", NULL) >= 0) ||
+                           (cls >= 0 && comp_method_in_chain(c, cls, "define_method", NULL) >= 0))) return 0; }
+  int an = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  int own = ac > 0 ? av[0] : -1;
+  if (own < 0 || (nt_kind(nt, own) != NK_SymbolNode && nt_kind(nt, own) != NK_StringNode)) return 0;
+  /* a method object (`define_method(:m, instance_method(:x))`) registers nothing */
+  if (dm < 0 || dm >= c->nscopes) return 1;
+  const Scope *ds = &c->scopes[dm];
+  if (!ds->name || ds->class_id < 0 || object_universal_method(ds->name) || basicobject_own_method(ds->name)) return 1;
+  int dc = -1, mi = comp_method_in_chain(c, ds->class_id, ds->name, &dc);
+  if (mi >= 0 && mi != dm) return 1;
+  for (int t = 0; t < c->nscopes; t++) {
+    const Scope *ts = &c->scopes[t];
+    if (t == dm || ts->is_cmethod || ts->class_id < 0 || !ts->name || !sp_streq(ts->name, ds->name)) continue;
+    for (int k = ds->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++) {
+      if (ts->class_id == k) return 1;
+      for (int m = 0; m < c->classes[k].nincluded_mods; m++)
+        if (c->classes[k].included_mods[m] == ts->class_id) return 1;
+    }
+    /* a subclass's: a class method run on the subclass defines it there */
+    for (int k = ts->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++)
+      if (k == ds->class_id) return 1;
+  }
+  for (int k = comp_kind_first(c, NK_SymbolNode); k >= 0; k = comp_kind_next(c, k)) {
+    const char *v = nt_kind(nt, k) == NK_SymbolNode && k != own ? nt_str(nt, k, "value") : NULL;
+    if (v && sp_streq(v, ds->name)) return 1;
+  }
+  for (int k = comp_kind_first(c, NK_StringNode); k >= 0; k = comp_kind_next(c, k)) {
+    const char *v = nt_kind(nt, k) == NK_StringNode && k != own ? nt_str(nt, k, "content") : NULL;
+    if (v && sp_streq(v, ds->name)) return 1;
   }
   return 0;
 }

@@ -114,6 +114,7 @@ const CallPlan *cplan_refuse(Compiler *c, int id);
 /* the documented-limit family: the node's message or NULL; *stop 0 when
    a limit down the receiver chain is the one to report */
 const char *cplan_feature_why(Compiler *c, int id, int *stop, char *buf, size_t cap);
+int cplan_define_method_early(Compiler *c, int id);
 
 /* The plan of the same call read in a context the node does not carry
    itself: its self, or its receiver, is an instance of self_ci. That is an

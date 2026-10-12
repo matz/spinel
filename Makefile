@@ -4096,7 +4096,20 @@ check:
 	+@$(MAKE) --no-print-directory alloc-report-test
 	+@$(MAKE) --no-print-directory infer-test
 	+@$(MAKE) --no-print-directory respond-to-audit
+	+@$(MAKE) --no-print-directory gen-respond-to-tables-test
 	+@$(MAKE) --no-print-directory spin-check
+
+# tools/gen_respond_to_tables.rb's own unit tests (dedup, false-positive
+# exclusion, the Proc/Range/Symbol/Exception self-checks' failure paths)
+# and a regression test that executes the Makefile's own
+# lib/spinel_rt_responds_generated.h recipe (with the generator swapped
+# for a command that fails the same way a real self-check failure does)
+# to prove it fails closed rather than silently overwriting a good header
+# with empty output. Neither file has CRuby-comparable runtime behavior
+# of its own, so this runs here rather than as a test/*.rb corpus entry.
+gen-respond-to-tables-test: lib/spinel_rt.h
+	ruby tools/gen_respond_to_tables_test.rb
+	ruby tools/gen_respond_to_tables_makefile_test.rb
 
 # Cross-checks sp_poly_responds_builtin's per-class method tables
 # (lib/spinel_rt.h) against src/builtin_ops.c's bop_rows, the actual

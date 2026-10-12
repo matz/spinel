@@ -352,10 +352,25 @@ SP_RT_NAME_SRC = $(wildcard lib/*.h lib/*.c packages/*/*.h packages/*/*.c)
 # tables, from src/builtin_ops.c's bop_rows (tools/gen_respond_to_tables.rb
 # has the full story). cmp-guarded like sp_rt_names.h, so a
 # content-identical regeneration does not touch the .h's mtime and does
-# not force a PCH rebuild it doesn't need.
-lib/spinel_rt_responds_generated.h: src/builtin_ops.c tools/gen_respond_to_tables.rb tools/builtin_row_gen.rb lib/spinel_rt.h
+# not force a PCH rebuild it doesn't need. src/builtin_zero_ops.inc is a
+# prerequisite too: tools/builtin_row_gen.rb (the generator's own
+# dependency) parses TY_STRING rows out of it, so a String-only edit
+# there must also trigger regeneration.
+#
+# `|| { rm -f $$t; exit 1; }` on the ruby invocation is load-bearing, not
+# defensive boilerplate: the generator's self-checks (check_proc_coverage
+# and friends) can legitimately fail closed with no output at all. Without
+# this, a failing run still produces an empty $$t, `cmp -s` sees it differ
+# from the last good header, and the final `mv` -- which make takes as
+# this recipe's exit status -- replaces that good header with the empty
+# one while reporting success, discarding the generator's actual error
+# message. The empty header does eventually break the C compile that
+# includes it, but as a confusing, unrelated-looking error, and a second
+# `make` run regenerates the same empty file (cmp now matches empty-to-
+# empty) and "succeeds" again, forever hiding the real GenError.
+lib/spinel_rt_responds_generated.h: src/builtin_ops.c src/builtin_zero_ops.inc tools/gen_respond_to_tables.rb tools/builtin_row_gen.rb lib/spinel_rt.h
 	@t=$@.tmp.$$$$; \
-	ruby tools/gen_respond_to_tables.rb > $$t; \
+	ruby tools/gen_respond_to_tables.rb > $$t || { rm -f $$t; exit 1; }; \
 	if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 # lib/spinel_rt_responds_generated.h is an explicit prerequisite (not just

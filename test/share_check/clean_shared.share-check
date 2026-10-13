@@ -1,2 +1,2 @@
-share-check: 4 marks, 0 declared, 0 copies
-share-check: plan: 3 sites, 2 agree, 1 read, 0 disagree; handle 1/1/0/0, wrap 0/0/1/0, refuse 0/0/0/0, bytes 0/0/0/0 (C handle/read/wrap/bytes); by consumer take 3, read 0, test 0, store 0, identity 0; 0 live, 0 stale
+share-check: 6 marks, 0 declared, 0 copies
+share-check: plan: 5 sites, 4 agree, 1 read, 0 disagree; handle 3/1/0/0, wrap 0/0/1/0, refuse 0/0/0/0, bytes 0/0/0/0 (C handle/read/wrap/bytes); by consumer take 3, read 0, test 0, store 0, identity 2; 0 live, 0 stale

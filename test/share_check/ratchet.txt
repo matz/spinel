@@ -189,5 +189,4 @@ test/share_strings_fresh_element_conditional.rb	test/share_strings_fresh_element
 test/share_strings_fresh_element_conditional.rb	test/share_strings_fresh_element_conditional.rb:13	LocalVariableReadNode (x__bp)	changed in place as bytes by sp_str_eq (bytes face)
 test/share_strings_fresh_element_conditional.rb	test/share_strings_fresh_element_conditional.rb:40	LocalVariableReadNode (x__bp)	changed in place as bytes by sp_str_eq (bytes face)
 test/share_strings_nil_self_route.rb	test/share_strings_nil_self_route.rb:17	LocalVariableReadNode (s)	changed in place as bytes by sp_str_freeze_val (sp_strbuf_read_pub)
-test/share_strings_nil_self_route.rb	test/share_strings_nil_self_route.rb:43	InstanceVariableReadNode (@s)	changed in place as bytes by sp_str_freeze_val (sp_strbuf_read_pub)
 test/share_strings_nil_self_route.rb	test/share_strings_nil_self_route.rb:46	InstanceVariableReadNode (@s)	changed in place as bytes by sp_str_freeze_val (sp_strbuf_read_pub)

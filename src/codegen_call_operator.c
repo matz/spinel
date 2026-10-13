@@ -42,47 +42,16 @@ static void emit_int_bit_recv(Compiler *c, int recv, TyKind rt, const char *conv
   emit_scalar_operand_op(c, recv, name, b);   /* NoMethodError for nil */
 }
 
-/* Is `v` an operand of a String identity comparison that is a handle where
-   `other` is one too? A yielding call spliced in with its literal block
-   answers the handle only for a value that is one; against a literal or a
-   plain String it answers the bytes the other operand names, and wrapping
-   them in a new handle would lose their identity. */
-static int string_identity_handle_operand(Compiler *c, int v, int other) {
-  HolderRef h;
-  if (holder_of_node(c, v, &h) && h.r.share) return 1;
-  if (!strbuf_route_inline_call(c, v)) return 0;
-  return (holder_of_node(c, other, &h) && h.r.share) || strbuf_route_inline_call(c, other) ||
-         repr_call_returns_handle(c, other);
-}
-int string_identity_inline(Compiler *c, int recv, int arg) {
-  return (strbuf_route_inline_call(c, recv) && string_identity_handle_operand(c, recv, arg)) ||
-         (strbuf_route_inline_call(c, arg) && string_identity_handle_operand(c, arg, recv));
-}
-
-/* Compare String identities through their boxes, retaining shared handles
-   and evaluating the receiver before an allocating argument. */
-void emit_string_identity(Compiler *c, int recv, int arg, Buf *b) {
+/* A nullable String compared by identity with a box or nil: both
+   operands boxed, the receiver evaluated before an allocating argument
+   and rooted across it. (--share-strings compares String identities
+   through the plan, emit_str_equal.) */
+static void emit_string_identity(Compiler *c, int recv, int arg, Buf *b) {
   int operand[2] = { recv, arg }, t[2];
   buf_puts(b, "({ ");
-  for (int i = 0; i < 2; i++) {
-    int sv = -1, cops[3];
-    /* a String clamp's String is the handle of the operand it answers;
-       its read face is a copy */
-    if (strbuf_route_clamp(c, operand[i], cops)) {
-      t[i] = ++g_tmp;
-      buf_printf(b, "sp_RbVal _t%d = sp_box_nullable_obj(", t[i]);
-      emit_strbuf_route(c, operand[i], b);
-      buf_printf(b, ", SP_BUILTIN_STRBUF); SP_GC_ROOT_RBVAL(_t%d); ", t[i]);
-      continue;
-    }
-    if (string_identity_handle_operand(c, operand[i], operand[1 - i])) {
-      sv = view_push(c, operand[i], TY_STRBUF);
-      view_push_repr(c, operand[i], VR_STRBUF_BOX, 1);
-    }
+  for (int i = 0; i < 2; i++)
     t[i] = hold_operand(c, operand[i], TY_POLY, 1, ++g_tmp,
                         i == 0 && operand_may_allocate(c, arg), " ", b);
-    if (sv >= 0) { view_pop(c, sv + 1); view_pop(c, sv); }
-  }
   buf_printf(b, "sp_poly_equal(_t%d, _t%d); })", t[0], t[1]);
 }
 
@@ -294,18 +263,6 @@ static int emit_compare_lead_arms(Compiler *c, int id, const char *name, int rec
       (repr_of(c, argv[0]).kind == RK_BOXED || repr_of(c, argv[0]).as_ty == TY_NIL ||
        (repr_of(c, argv[0]).may_nil && repr_of(c, argv[0]).as_ty != TY_STRING &&
         repr_of(c, argv[0]).as_ty != TY_STRBUF))) {
-    emit_string_identity(c, recv, argv[0], b);
-    return 1;
-  }
-  /* A call's shared String answer is compared as its handle, including
-     against a boxed operand. Hold the receiver before the argument can
-     replace the return channel, without a fixed-size slot-text buffer.
-     So is a String clamp's answer (strbuf_route_clamp). */
-  int cops[3];
-  if (repr_share_rule(c) && recv >= 0 && argc == 1 && is_identity_query(name) && is_equality_name(name) &&
-      comp_recv_type(c, recv) == TY_STRING &&
-      (repr_call_returns_handle(c, recv) || repr_call_returns_handle(c, argv[0]) ||
-       strbuf_route_clamp(c, recv, cops) || strbuf_route_clamp(c, argv[0], cops))) {
     emit_string_identity(c, recv, argv[0], b);
     return 1;
   }

@@ -71,9 +71,9 @@
      read      a taker given the bytes, kept by nothing the check sees: a
                consumer that only reads (one the share facts have no row
                for, so the plan asks the object), or a handle passed on
-               where the check cannot follow it; or an identity the plan
-               gives the handle, read as bytes the same way (an operand
-               read ahead of a comparison of its slot's handle);
+               where the check cannot follow it (an identity reads the
+               plan's form, emit_str_form: one the plan gives the handle
+               read as bytes disagrees);
      disagree  anything else, named per node with its consumer.
    Where the plan's memo can answer the need (the node read as itself), its
    answer is compared with the live one, and a contradiction is counted
@@ -757,10 +757,10 @@ static void sk_plan_report(Compiler *c, struct ShareAgree *A) {
       tally[form][e]++;
       /* a taker given the bytes, kept by nothing the check sees: the C
          may hand them to a consumer that only reads (one the facts have no
-         row for), or pass a handle on where the check cannot follow it;
-         so may an identity the plan gives the handle (an operand read
-         ahead of a comparison of the handle) */
-      if (e == SKE_READ && role != SPR_READ && role != SPR_TEST && (role != SPR_IDENTITY || form != SPF_BYTES)) {
+         row for), or pass a handle on where the check cannot follow it. An
+         identity reads the plan's form (emit_str_form): one the plan gives
+         the handle read as bytes is a renderer's gap */
+      if (e == SKE_READ && role != SPR_READ && role != SPR_TEST && role != SPR_IDENTITY) {
         read++;
         continue;
       }

@@ -2,5 +2,5 @@ share-check: copy: test/share_check/plan.rb:20 node 58 CallNode (p): boxed as by
 share-check: plan: disagree: test/share_check/plan.rb:12 node 21 CallNode (<<): plan refuse (live), C handle (take, receiver)
 share-check: plan: disagree: test/share_check/plan.rb:12 node 22 CallNode (<<): plan refuse (live), C handle (take, receiver)
 share-check: plan: disagree: test/share_check/plan.rb:12 node 23 CallNode (<<): plan refuse (live), C handle (take, receiver)
-share-check: 13 marks, 0 declared, 1 copies
-share-check: plan: 10 sites, 7 agree, 0 read, 3 disagree; handle 4/0/0/0, wrap 0/0/2/0, refuse 3/0/0/1, bytes 0/0/0/0 (C handle/read/wrap/bytes); by consumer take 9, read 0, test 0, store 0, identity 1; 3 live, 0 stale
+share-check: 15 marks, 0 declared, 1 copies
+share-check: plan: 11 sites, 8 agree, 0 read, 3 disagree; handle 5/0/0/0, wrap 0/0/2/0, refuse 3/0/0/1, bytes 0/0/0/0 (C handle/read/wrap/bytes); by consumer take 9, read 0, test 0, store 0, identity 2; 3 live, 0 stale

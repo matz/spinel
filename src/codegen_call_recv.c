@@ -7525,21 +7525,11 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      Only the unambiguous reflexive case -- the same side-effect-free local
      or ivar read on both sides (`x.equal?(x)`) -- is certainly identity-
      true; every other form is conservatively false, still evaluating the
-     argument for its side effects. */
+     argument for its side effects. (--share-strings compares the
+     identities the String plan gives the operands, emit_str_equal, ahead
+     of these arms.) */
   else if (sp_streq(name, "equal?") && argc == 1) {
     TyKind eqa = comp_ntype(c, argv[0]);
-    if (string_identity_inline(c, recv, argv[0])) {
-      emit_string_identity(c, recv, argv[0], b);
-      return 1;
-    }
-    /* A narrowed box keeps its identity in the original box, whether the
-       payload is a plain String or a shared handle. */
-    if (repr_share_rule(c) && (repr_of(c, recv).strbuf_src == RS_SLOT_POLY ||
-                             repr_of(c, argv[0]).strbuf_src == RS_SLOT_POLY)) {
-      buf_puts(b, "sp_poly_equal("); emit_boxed(c, recv, b);
-      buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
-      return 1;
-    }
     /* a mutable StringBuffer local as the argument: compare the buffer's
        OWN cstr pointer -- the plain read emits a defensive snapshot copy
        (sp_str_concat(cstr, "")), which would break `(s << "x").equal?(s)`
@@ -7565,12 +7555,9 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         int teq3 = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", teq3);
         emit_boxed(c, argv[0], b);
-        if (repr_share_rule(c))
-          buf_printf(b, "; sp_poly_equal(sp_box_nullable_obj(%s, SP_BUILTIN_STRBUF), _t%d); })", rrefE3, teq3);
-        else
-          buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STRBUF"
-                        " && (sp_String *)_t%d.v.p == %s); })",
-                     teq3, teq3, teq3, rrefE3);
+        buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STRBUF"
+                      " && (sp_String *)_t%d.v.p == %s); })",
+                   teq3, teq3, teq3, rrefE3);
         eq_sblv = 1;
       }
     }
@@ -7596,95 +7583,6 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         eq_sblv = 1;
       }
     }
-    /* --share-strings: a spliced yield whose block answers a holder's
-       handle (strbuf_route_yield), on either side: that handle, boxed, is
-       compared with the other side's box (the yield's read face is a copy) */
-    if (!eq_sblv && repr_share_rule(c)) {
-      int ys = nt_kind(nt, unwrap_parens(c, recv)) == NK_YieldNode ? recv
-             : nt_kind(nt, unwrap_parens(c, argv[0])) == NK_YieldNode ? argv[0] : -1;
-      Buf yh; memset(&yh, 0, sizeof yh);
-      if (ys >= 0 && strbuf_yield_tail_held(c) &&
-          emit_strbuf_route(c, ys, &yh)) {
-        int th = ++g_tmp;
-        buf_printf(b, "({ sp_RbVal _t%d = sp_box_nullable_obj(%s, SP_BUILTIN_STRBUF); SP_GC_ROOT_RBVAL(_t%d); "
-                      "(sp_bool)sp_poly_equal(_t%d, ", th, yh.p, th, th);
-        emit_boxed(c, ys == recv ? argv[0] : recv, b);
-        buf_puts(b, "); })");
-        eq_sblv = 1;
-      }
-      free(yh.p);
-    }
-    /* --share-strings: a String Range's endpoint (strbuf_route_srange_end)
-       against a handle: the handle the Range keeps is compared (#8321) */
-    if (!eq_sblv) {
-      char sx[192];
-      int rse = (strbuf_route_srange_end(c, recv) || strbuf_route_srange_extreme(c, recv)) &&
-                strbuf_slot_ref(c, argv[0], sx, sizeof sx);
-      int ase = !rse && (strbuf_route_srange_end(c, argv[0]) || strbuf_route_srange_extreme(c, argv[0])) &&
-                strbuf_slot_ref(c, recv, sx, sizeof sx);
-      if (rse || ase) {
-        int th = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = ", th);
-        emit_strbuf_route(c, rse ? recv : argv[0], b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); (sp_bool)(_t%d == %s); })", th, th, sx);
-        eq_sblv = 1;
-      }
-    }
-    /* ...and two such endpoints: each is the handle its Range keeps, else
-       the String it holds (sp_srange_end_id), as `r3 = r.dup;
-       r3.begin.equal?(r.begin)` shares them; a min or max is the endpoint
-       it answers, or a String of its own (sp_srange_extreme_id) */
-    if (!eq_sblv) {
-      int ra = strbuf_route_srange_end(c, recv), rb = strbuf_route_srange_end(c, argv[0]);
-      int xa = ra ? 0 : strbuf_route_srange_extreme(c, recv), xb = rb ? 0 : strbuf_route_srange_extreme(c, argv[0]);
-      if ((ra || xa) && (rb || xb)) {
-        int ta = ++g_tmp, tb = ++g_tmp;
-        buf_printf(b, "({ sp_StrRange _t%d = ", ta);
-        if (ra) emit_srange_end_recv(c, recv, b);
-        else emit_expr(c, nt_ref(c->nt, unwrap_parens(c, recv), "receiver"), b);
-        buf_printf(b, "; SP_GC_ROOT_SRANGE(_t%d); sp_StrRange _t%d = ", ta, tb);
-        if (rb) emit_srange_end_recv(c, argv[0], b);
-        else emit_expr(c, nt_ref(c->nt, unwrap_parens(c, argv[0]), "receiver"), b);
-        if (ra && rb)
-          buf_printf(b, "; (sp_bool)(sp_srange_end_id(_t%d, %d) == sp_srange_end_id(_t%d, %d)); })",
-                     ta, ra == 2, tb, rb == 2);
-        else {
-          /* a min / max answer is held while the other side is taken: a new
-             String's identity is its own only while it lives */
-          buf_printf(b, "; SP_GC_ROOT_SRANGE(_t%d); sp_String *_h%d = NULL; SP_GC_ROOT(_h%d); sp_String *_h%d = NULL; SP_GC_ROOT(_h%d);",
-                     tb, ta, ta, tb, tb);
-          if (xa) buf_printf(b, " _h%d = sp_srange_extreme_h(_t%d, %d);", ta, ta, xa == 2);
-          if (xb) buf_printf(b, " _h%d = sp_srange_extreme_h(_t%d, %d);", tb, tb, xb == 2);
-          buf_puts(b, " (sp_bool)(");
-          if (ra) buf_printf(b, "sp_srange_end_id(_t%d, %d)", ta, ra == 2);
-          else buf_printf(b, "sp_srange_extreme_id(_t%d, %d, _h%d)", ta, xa == 2, ta);
-          buf_puts(b, " == ");
-          if (rb) buf_printf(b, "sp_srange_end_id(_t%d, %d)", tb, rb == 2);
-          else buf_printf(b, "sp_srange_extreme_id(_t%d, %d, _h%d)", tb, xb == 2, tb);
-          buf_puts(b, "); })");
-        }
-        eq_sblv = 1;
-      }
-    }
-    /* an attribute assignment on a handle, or freeze over one, against a
-       handle: its own handle is compared (the read face is a copy); so is
-       a call answering its receiver over a handle (`s.freeze.freeze`),
-       which is that receiver's handle (emit_strbuf_handle_of) */
-    /* (and a `&.` call answering its receiver over one, `s.upcase!&.tap { }`,
-       whose guard holds that handle: emit_bang_self_handle) */
-    int eq_sn = repr_share_rule(c) && call_is_safe_nav(c->nt, unwrap_parens(c, recv)) && strbuf_self_route(c, recv);
-    if (!eq_sblv && repr_share_rule(c) && (strbuf_assign_route(c, recv) || strbuf_plain_self_call(c, recv) || eq_sn)) {
-      char arefL[192];
-      if (strbuf_slot_ref(c, argv[0], arefL, sizeof arefL)) {
-        int thl = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = ", thl);
-        if (strbuf_assign_route(c, recv)) emit_strbuf_route(c, recv, b);
-        else if (eq_sn && emit_bang_self_handle(c, unwrap_parens(c, recv), b)) { }
-        else emit_strbuf_handle_of(c, recv, b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); (sp_bool)(_t%d == %s); })", thl, thl, arefL);
-        eq_sblv = 1;
-      }
-    }
     if (!eq_sblv) {
       char arefE[192];
       if (strbuf_slot_ref(c, argv[0], arefE, sizeof arefE)) {
@@ -7702,9 +7600,6 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           int teq = ++g_tmp;
           buf_printf(b, "({ sp_String *_t%d = %s; (sp_bool)(_t%d == %s); })", teq, r, teq, arefE);
         }
-        /* (a boxed reader's read under the handle demand is the handle) */
-        else if (repr_of(c, recv).demand && repr_boxed_reader_handle(c, recv) && repr_of(c, recv).ty == TY_STRING)
-          buf_printf(b, "((const void *)(%s) == (const void *)%s)", r, arefE);
         else {
           int teq = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = %s; "
@@ -7717,43 +7612,19 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     if (eq_sblv) { /* emitted above */ }
     else if (eqa == TY_STRING) {
       /* string identity IS pointer identity (s.freeze.equal?(s) must be
-         true: freeze marks in place and returns the same pointer). Under
-         --share-strings a side that is a handle answers its identity
-         (sp_String_identity): a frozen literal's handle is its bytes' */
-      int hr = repr_share_rule(c) && repr_of(c, recv).as_ty == TY_STRBUF;
-      int ha = repr_share_rule(c) && repr_of(c, argv[0]).as_ty == TY_STRBUF;
-      buf_printf(b, "((const void *)%s(%s) == (const void *)%s(", hr ? "sp_String_identity" : "", r,
-                 ha ? "sp_String_identity" : "");
+         true: freeze marks in place and returns the same pointer) */
+      buf_printf(b, "((const void *)(%s) == (const void *)(", r);
       emit_expr(c, argv[0], b);
       buf_puts(b, "))");
     }
     else if (eqa == TY_POLY) {
       /* a boxed operand can hold this very String: its payload is the same
-         pointer, as an element read of it is (`[s, 1][0]`). Under
-         --share-strings it can hold a frozen literal's handle, which the
-         boxed comparison reads as the literal's bytes. */
+         pointer, as an element read of it is (`[s, 1][0]`) */
       int trq = ++g_tmp, teq = ++g_tmp;
-      /* --share-strings: a String Range's endpoint is boxed as the handle
-         the Range keeps for it (strbuf_route_srange_kept), the box a
-         container got when the endpoint was stored: its bytes boxed anew
-         are another String. Held while the operand runs, as a min or max
-         may be a String of its own. */
-      if (strbuf_route_srange_kept(c, recv)) {
-        buf_printf(b, "({ sp_RbVal _t%d = ", trq);
-        emit_boxed(c, recv, b);
-        if (operand_may_allocate(c, argv[0])) buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d)", trq);
-        buf_printf(b, "; sp_RbVal _t%d = ", teq);
-        emit_boxed(c, argv[0], b);
-        buf_printf(b, "; sp_poly_equal(_t%d, _t%d); })", trq, teq);
-        return 1;
-      }
       buf_printf(b, "({ const char *_t%d = %s; sp_RbVal _t%d = ", trq, r, teq);
       emit_boxed(c, argv[0], b);
-      if (repr_share_rule(c))
-        buf_printf(b, "; sp_poly_equal(sp_box_str(_t%d), _t%d); })", trq, teq);
-      else
-        buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_STR && (const void *)_t%d.v.s == (const void *)_t%d); })",
-                   teq, teq, trq);
+      buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_STR && (const void *)_t%d.v.s == (const void *)_t%d); })",
+                 teq, teq, trq);
     }
     else if (same_sefree_lvalue(c, recv, argv[0])) { buf_puts(b, "(("); emit_expr(c, argv[0], b); buf_puts(b, "), 1)"); }
     /* another kind is another object; the receiver and the argument

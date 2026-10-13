@@ -25363,16 +25363,11 @@ static int emit_at_without_array(Compiler *c, int id, Buf *b) {
 }
 
 static void emit_call_held(Compiler *c, int id, Buf *b) {
-  /* --share-strings: equal? with an exception's message on a side compares the
-     identity of the message (emit_exc_message_equal). Asked before anything
-     of the call is emitted: an operand emitted for another arm and dropped
-     leaves its conversion hoisted ahead of the call, to run twice. */
-  if (repr_share_rule(c) && nt_ref(c->nt, id, "receiver") >= 0) {
-    const char *en = nt_str(c->nt, id, "name");
-    int ea = nt_ref(c->nt, id, "arguments"), ec = 0;
-    const int *ev = ea >= 0 ? nt_arr(c->nt, ea, "arguments", &ec) : NULL;
-    if (en && is_equal_name(en) && ec == 1 && ev && emit_exc_message_equal(c, nt_ref(c->nt, id, "receiver"), ev[0], b)) return;
-  }
+  /* --share-strings: equal? with a String on a side compares the identities
+     the String plan gives its operands (emit_str_equal). Asked before
+     anything of the call is emitted: an operand emitted for another arm and
+     dropped leaves its conversion hoisted ahead of the call, to run twice. */
+  if (emit_str_equal(c, id, b)) return;
   if (emit_or_take_back(c, id, b, emit_at_without_array)) return;
   if (emit_or_take_back(c, id, b, emit_boxed_class_aref)) return;
   /* a tuple element read typed as the element itself: the read answers the

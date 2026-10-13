@@ -273,12 +273,15 @@ int strbuf_pickup_answers_nil(Compiler *c, int id);
 /* --share-strings: the handle slot a variable's read names, 0 for any
    other node (codegen_stmt.c) */
 int strbuf_var_handle(Compiler *c, int n, char *out, size_t cap);
-/* --share-strings: the String identity comparison of two operands through
-   their boxes (codegen_call_operator.c), and an inline-spliced call whose
-   result is the handle itself (codegen_stmt.c) */
-void emit_string_identity(Compiler *c, int recv, int arg, Buf *b);
-int string_identity_inline(Compiler *c, int recv, int arg);
+/* --share-strings: an inline-spliced call whose result is the handle
+   itself (codegen_stmt.c) */
 int strbuf_route_inline_call(Compiler *c, int v);
+/* --share-strings: a route that hands its String on as a box (a proc's
+   answer, a spliced call's tails), as that box (codegen_stmt.c) */
+int emit_strbuf_route_box(Compiler *c, int v, Buf *b);
+/* --share-strings: the boxed operand whose String a route answers, or -1
+   (codegen_stmt.c) */
+int strbuf_route_box_operand(Compiler *c, int v);
 /* --share-strings: does value v hand over a shared String as its handle
    (a variable, a route, a conditional with such an arm)? (codegen_stmt.c) */
 int strbuf_value_carries(Compiler *c, int v);
@@ -303,7 +306,6 @@ int exc_msg_handle(Compiler *c, int arg, char *href, size_t cap);
 /* --share-strings: `e.message` over a variable's exception (codegen_stmt.c) */
 int exc_message_identity_operand(Compiler *c, int v);
 void emit_exc_message_idbox(Compiler *c, int v, Buf *b);
-int emit_exc_message_equal(Compiler *c, int recv, int arg, Buf *b);
 int strbuf_route_exc_message(Compiler *c, int v);
 int strbuf_route_boxed_exc_message(Compiler *c, int v);
 int strbuf_route_ie(Compiler *c, int v);
@@ -387,9 +389,14 @@ typedef struct {
 /* Node v in the form the String plan (share_plan.c) gives it for a
    consumer in `role` (SPR_*), in the face the consumer holds it in, into
    sf; answers the form it rendered (SPF_*). The faces:
-     SPX_ID  its object id, an sp_int (object_id, __id__). */
-enum { SPX_ID };
+     SPX_ID   its object id, an sp_int (object_id, __id__);
+     SPX_BOX  an sp_RbVal whose identity (sp_poly_equal) is the String's,
+              for the identity role (equal?). */
+enum { SPX_ID, SPX_BOX };
 int emit_str_form(Compiler *c, int v, int role, int face, StrForm *sf);
+/* --share-strings: String#equal? through the plan (codegen_str.c); 0,
+   with nothing emitted, where it does not answer. */
+int emit_str_equal(Compiler *c, int id, Buf *b);
 /* Write sf's expression into b with its needs met: the one place a String
    form's evaluation, hold and root are decided. An SF_EVAL_ONCE value
    opens a statement expression that binds it; the consumer writes its

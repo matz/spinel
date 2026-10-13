@@ -2231,7 +2231,13 @@ void emit_exc_message_idbox(Compiler *c, int v, Buf *b) {
       view_pop(c, sd);
       view_pop(c, sb);
     }
-    else emit_boxed(c, v, b);
+    else {
+      /* (this arm runs for what is no exception and no String: its to_s
+         is a String of its own, no copy of one the rule shares) */
+      size_t arm_at = b->len;
+      emit_boxed(c, v, b);
+      if (g_share_check) share_check_declare_reads(b, arm_at, v);
+    }
     g_conv_hold = hold;
     view_unbind(mark);
     buf_puts(b, "; })");
@@ -2244,24 +2250,6 @@ void emit_exc_message_idbox(Compiler *c, int v, Buf *b) {
   if (cplan_nil(c, v) == CN_RAISE) emit_nil_cold_test(c, v, recv, b);
   view_unbind(mark);
   buf_printf(b, "%s(_e%d); })", ask, t);
-}
-/* equal? with an exception's message on a side (exc_message_identity_operand):
-   the two identity boxes compared, the other side as the box it is held in.
-   0, with nothing emitted, when neither side is one. */
-int emit_exc_message_equal(Compiler *c, int recv, int arg, Buf *b) {
-  if (!repr_share_rule(c) || !(exc_message_identity_operand(c, recv) || exc_message_identity_operand(c, arg))) return 0;
-  /* a receiver that is not the message may be an object of a class that
-     defines #equal? itself, which answers the call */
-  if (!exc_message_identity_operand(c, recv))
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_method_in_class(c, k, "equal?") >= 0) return 0;
-  int th = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = ", th);
-  if (exc_message_identity_operand(c, recv)) emit_exc_message_idbox(c, recv, b); else emit_boxed(c, recv, b);
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (sp_bool)sp_poly_equal(_t%d, ", th, th);
-  if (exc_message_identity_operand(c, arg)) emit_exc_message_idbox(c, arg, b); else emit_boxed(c, arg, b);
-  buf_puts(b, "); })");
-  return 1;
 }
 /* A plain reader of a shared String slot normally answers a snapshot.
    Its field-read arm can hand on the handle under a demand instead, as
@@ -2366,6 +2354,34 @@ static int strbuf_route_carries(Compiler *c, int v, int depth) {
   if (v >= 0 && nt_kind(c->nt, v) == NK_CallNode)
     return strbuf_native_answer(c, v) || strbuf_call_reads_handle(c, v);
   return strbuf_slot_ref(c, v, ref, sizeof ref);
+}
+/* --share-strings: the boxed operand whose String route v answers (`y.to_s`,
+   `+y`, `String(y)` with y boxed: strbuf_route_operand), or -1. The
+   route's read takes that String as the box holds it: a plain String's
+   bytes, or a handle's live buffer, never a copy. */
+int strbuf_route_box_operand(Compiler *c, int v) {
+  int x = strbuf_route_operand(c, v);
+  return x >= 0 && x != unwrap_parens(c, v) && repr_of(c, x).kind == RK_BOXED ? x : -1;
+}
+/* --share-strings: route v that hands its String on as a box -- a proc's
+   answer (strbuf_route_proc_call), the box a proc-form clone hands back
+   (strbuf_route_reopen_pf), or the value of a call spliced in with its
+   literal block (strbuf_route_inline_call), each tail boxed as what it
+   is -- as that box: its handle's, a plain String's, or nil. 0, with
+   nothing emitted, for any other value. An identity compares the box as
+   it is; emit_strbuf_route makes a plain String's box a new handle. */
+int emit_strbuf_route_box(Compiler *c, int v, Buf *b) {
+  int pc = strbuf_route_proc_call(c, v);
+  if (!pc && !strbuf_route_reopen_pf(c, v) && !strbuf_route_inline_call(c, v)) return 0;
+  v = unwrap_parens(c, v);
+  int sv = view_push(c, v, TY_POLY);
+  /* a block literal the call splices answers its tail boxed: asked as
+     the call's own type, a tail that is a shared String came out as its
+     bytes (#8399) */
+  if (pc && is_block_call(c, v)) emit_block_invoke(c, nt_ref(c->nt, v, "arguments"), b, 0, 1, TY_POLY);
+  else emit_expr(c, v, b);
+  view_pop(c, sv);
+  return 1;
 }
 /* The handle a route (strbuf_route_operand) hands on, as an sp_String *:
    1, or 0 with nothing emitted when v is no route over a handle. Wrapped
@@ -2525,29 +2541,13 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     buf_printf(b, ", %d)", sx == 2);
     return 1;
   }
-  if (strbuf_route_proc_call(c, v)) {
-    /* the box as the proc handed it back: its handle, a plain String's
-       new one, or nil */
-    v = unwrap_parens(c, v);
-    int t = ++g_tmp, sv = view_push(c, v, TY_POLY);
+  /* the box as the proc (or the proc-form clone) handed it back: its
+     handle, a plain String's new one, or nil */
+  if (strbuf_route_proc_call(c, v) || strbuf_route_reopen_pf(c, v)) {
+    int t = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", t);
-    /* a block literal the call splices answers its tail boxed: asked as
-       the call's own type, a tail that is a shared String came out as its
-       bytes (#8399) */
-    if (is_block_call(c, v)) emit_block_invoke(c, nt_ref(c->nt, v, "arguments"), b, 0, 1, TY_POLY);
-    else emit_expr(c, v, b);
+    emit_strbuf_route_box(c, v, b);
     buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (sp_String *)NULL : sp_poly_as_strbuf(_t%d); })", t, t);
-    view_pop(c, sv);
-    return 1;
-  }
-  if (strbuf_route_reopen_pf(c, v)) {
-    /* the box the proc-form clone hands back, read as the proc call's is */
-    v = unwrap_parens(c, v);
-    int t = ++g_tmp, sv = view_push(c, v, TY_POLY);
-    buf_printf(b, "({ sp_RbVal _t%d = ", t);
-    emit_expr(c, v, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (sp_String *)NULL : sp_poly_as_strbuf(_t%d); })", t, t);
-    view_pop(c, sv);
     return 1;
   }
   int x = strbuf_route_operand(c, v);

@@ -29,18 +29,21 @@ r = []
   r << Thread.new { Fiber.new { try { Integer("x#{i}") } }.resume }.value
 end
 p r
+# (each thread's own Array: `r` above is a top-level local, which a block's
+# `r = []` would assign, so four threads running in parallel would push into
+# one Array and the answer would depend on their timing)
 nts = 4.times.map do |i|
   Thread.new do
-    r = []
+    acc = []
     20.times do |k|
       begin
         k.zork("a#{i}", [k])
       rescue NoMethodError => e
-        r << e.class
+        acc << e.class
       end
-      r << :x
+      acc << :x
     end
-    r.last(2)
+    acc.last(2)
   end
 end
 p nts.map(&:value)

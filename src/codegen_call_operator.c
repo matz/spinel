@@ -246,14 +246,15 @@ static int emit_nil_aware_num_eq(Compiler *c, int id, const char *name, int recv
         hc_array(c, er, rt == TY_FLOAT, hd, hl, hw, sizeof hd)) {
       char hr[48]; hc_read_len(hd, hr, sizeof hr);
       const char *eq = ne ? "!=" : "==";
-      buf_printf(b, "({ sp_int _t%d = ", tl); (void)emit_int_index_raw(c, eav[0], b);
+      char redo[160];
+      buf_puts(b, "({ "); emit_int_index_late(c, eav[0], tl, redo, sizeof redo, b);
       buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? (%s[_t%d] %s ", tl, hr, hd, tl, eq);
       emit_expr(c, argv[0], b);
-      buf_printf(b, ") : ({ %s _t%d = sp_%sArray_oget(", oint_ctype(rt), tr, rt == TY_INT ? "Int" : "Float");
+      buf_printf(b, ") : %s({ %s _t%d = sp_%sArray_oget(", redo, oint_ctype(rt), tr, rt == TY_INT ? "Int" : "Float");
       emit_expr(c, er, b);
       buf_printf(b, ", _t%d); %s_t%d.nil %s _t%d.v %s ", tl, ne ? "" : "!", tr, ne ? "||" : "&&", tr, eq);
       emit_expr(c, argv[0], b);
-      buf_puts(b, "; }); })");
+      buf_printf(b, "; })%s; })", *redo ? ")" : "");
       return 1;
     }
     buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tl); emit_oint_expr(c, recv, rt, b);

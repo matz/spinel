@@ -1,0 +1,9 @@
+[#<MatchData "b" 1:"b">, 1]
+"<#<MatchData \"b\" 1:\"b\">>"
+[#<MatchData "y">, :k]
+[#<MatchData "1">, 2]
+[[1, "a3"], 2]
+{z: {a: "b3"}}
+[[1], "a3!"]
+"<<b3>>"
+[[1], "lit!"]

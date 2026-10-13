@@ -413,7 +413,7 @@ static int sk_text_bytes(const char *t, size_t e, const char **name) {
 static int sk_classify_at(struct ShareAgree *A, const char *t, const char *lo, size_t m, int bytes, char *tmp,
                           size_t tcap) {
   static const char *const wraps[] = { "sp_String_new_shared", "sp_String_new_fresh", "sp_String_new",
-    "sp_String_new_len", "SP_AS_STRING_HANDLE", "sp_poly_as_strbuf", "sp_poly_strbuf_lift", NULL };
+    "sp_String_new_len", "SP_AS_STRING_HANDLE", "sp_poly_as_strbuf", "sp_poly_strbuf_lift", "sp_box_str_new", NULL };
   static const char *const transparent[] = { "", "sp_str_uplus", "SP_GC_ROOT_VAL", NULL };
   char names[24][64];
   size_t bound, outer;

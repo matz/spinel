@@ -327,6 +327,44 @@ void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b)
   free(hb.p);
 }
 
+/* Does the default a zero-argument call passes for parameter ai make a new
+   object: an empty rest's Array, an empty **kwrest's Hash, or a default
+   expression that allocates? */
+static int zero_arg_default_allocates(Compiler *c, Scope *ds, int ai) {
+  if (ai == ds->rest_idx || ai == ds->kwrest_idx) return 1;
+  return ds->pdefault && ds->pdefault[ai] >= 0 && subtree_may_allocate(c->nt, ds->pdefault[ai]);
+}
+
+/* The defaults of a zero-argument call's parameters, `, d0, d1...` into cb.
+   Each is made in the C argument list, so a new object one makes (an empty
+   rest's Array, an empty **kwrest's Hash) was freed by a later default's
+   allocation: such a default, with a later one that allocates, is made into
+   a rooted temp in `pre`, ahead of the call, and the call reads the temp. */
+static void emit_zero_arg_defaults(Compiler *c, Scope *ds, Buf *cb, Buf *pre) {
+  int later = 0;
+  for (int ai = 0; ai < ds->nparams; ai++) later += zero_arg_default_allocates(c, ds, ai);
+  for (int ai = 0; ai < ds->nparams; ai++) {
+    int allocates = zero_arg_default_allocates(c, ds, ai);
+    later -= allocates;
+    const char *pnm = ds->pnames ? ds->pnames[ai] : NULL;
+    LocalVar *pv = pnm ? scope_local(ds, pnm) : NULL;
+    TyKind pt = pv && pv->type != TY_UNKNOWN ? pv->type : TY_POLY;
+    buf_puts(cb, ", ");
+    if (!allocates || !later || !needs_root(pt)) {
+      emit_arg_or_default(c, ds, ai, -1, cb);
+      continue;
+    }
+    Buf d; memset(&d, 0, sizeof d);
+    emit_arg_or_default(c, ds, ai, -1, &d);
+    int t = ++g_tmp;
+    emit_ctype(c, pt, pre);
+    buf_printf(pre, " _t%d = %s; ", t, d.p ? d.p : "");
+    buf_printf(pre, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(_t%d); " : "SP_GC_ROOT(_t%d); ", t);
+    buf_printf(cb, "_t%d", t);
+    free(d.p);
+  }
+}
+
 /* One user-class arm of a zero-argument poly dispatch, as the plan (or the
    decision above) gives it: `case k:` writing the result temp _t<tr> from
    receiver _t<tv>, the arm's value fitted to the call's type ret. */
@@ -404,6 +442,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
     /* Build the call; append default values for any optional params
        not provided by the (zero-arg) call site. */
     Buf cb; memset(&cb, 0, sizeof cb);
+    Buf dpre; memset(&dpre, 0, sizeof dpre);   /* defaults held ahead of the call */
     /* A reopened primitive (Integer/Float/String/Symbol) method takes the
        unboxed value, not a struct pointer -- read the matching union field
        instead of casting .v.p to a non-existent sp_<Prim> struct. */
@@ -482,9 +521,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
       /* the defaults are spelled for the proc form's own parameter
          types when that is the symbol called (#4492) */
       Scope *ds = &c->scopes[pfi9 >= 0 ? pfi9 : mi];
-      for (int ai = 0; ai < ds->nparams; ai++) {
-        buf_puts(&cb, ", "); emit_arg_or_default(c, ds, ai, -1, &cb);
-      }
+      emit_zero_arg_defaults(c, ds, &cb, &dpre);
       g_self = saved_self; g_self_deref = saved_deref;
     }
     /* self is always the first argument here, so a zero-param method
@@ -501,6 +538,12 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
     }
     else emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp0, &cb);
     buf_puts(&cb, ")");
+    if (dpre.len) {
+      Buf w; memset(&w, 0, sizeof w);
+      buf_printf(&w, "({ %s%s; })", dpre.p, cb.p ? cb.p : "");
+      free(cb.p); cb = w;
+    }
+    free(dpre.p);
     const char *call = cb.p ? cb.p : "";
     buf_printf(b, " case %d: ", k);
     /* A proc form is a separately inferred clone, so its own return type

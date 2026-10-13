@@ -1,0 +1,4 @@
+{protocol: "https", host: "example.com"}
+true
+{host: "example.com"}
+true

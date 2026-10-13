@@ -160,6 +160,14 @@ ShareRoute share_route(int site, int value, int elems);
 int share_node_fresh(const Compiler *c, int n);
 /* Does the rule share the elements of node n's value (a container)? */
 int share_node_elems_share(const Compiler *c, int n);
+/* ...or is their class proven to keep its Strings to itself: it exists,
+   the rule does not share it, and it meets nothing the walk does not
+   follow? */
+int share_node_elems_local(const Compiler *c, int n);
+/* Is node v, a new String, boxed into a container literal a holder keeps
+   whose elements share_node_elems_local proves its own, so that a copy of
+   the box no other name can tell from the String may hold its bytes? */
+int share_plan_box_plain(Compiler *c, int v);
 /* Is node n a blockless builtin's new Array of new Strings whose elements
    the rule shares? Its one evaluation is the only source of those Strings,
    so where it is consumed each can be wrapped as a handle of its own. */
@@ -282,8 +290,9 @@ int share_node_carries_handle(const Compiler *c, int n);
 /* ---- the String plan (share_plan.c, #8328) ----
    For each String value under --share-strings, once the analysis is final:
    what its consumer needs, what its producer supplies, and the form those
-   give. No emitter reads it yet; --share-check compares it with the
-   conversion each emitted site has. */
+   give. A consumer asks for a String in the plan's form through
+   emit_str_form (codegen_internal.h); --share-check compares the plan with
+   the conversion each emitted site has. */
 enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
 enum { SPF_BYTES, SPF_HANDLE, SPF_WRAP, SPF_REFUSE }; /* form */

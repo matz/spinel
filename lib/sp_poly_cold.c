@@ -620,6 +620,9 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
 
 sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
 {
+  /* a shared String handle, receiver or capture name, reads as its bytes */
+  if (sp_poly_is_strbuf(v)) v = sp_poly_strbuf_deref(v);
+  if (sp_poly_is_strbuf(b)) b = sp_poly_strbuf_deref(b);
   /* `s[/re/, n]` on a boxed String: capture n of the first match, nil when
      there is none -- the form the typed emitter answers inline. Read as a
      two-integer slice, the Regexp operand raised TypeError (campfire's

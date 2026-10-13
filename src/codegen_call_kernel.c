@@ -958,6 +958,12 @@ static int env_str_checked(const Compiler *c, int v) {
   const char *s = nt_kind(c->nt, v) == NK_StringNode ? nt_str(c->nt, v, "content") : NULL;
   return !s || strlen(s) != nt_str_len(c->nt, v, "content");
 }
+/* Does ENV operand v build a value where it stands, a new String or box
+   that only the C temp it lands in holds? An operand the operand-order
+   rewrite ran ahead of the call is its rooted temp already. */
+static int env_operand_new(Compiler *c, int v) {
+  return !arg_ran_first(v, 0) && operand_allocates_beside(c, v);
+}
 /* ENV name or value (value != 0) node v as a C string, checked */
 static void emit_env_str(Compiler *c, int v, int value, Buf *b) {
   if (env_str_checked(c, v)) buf_puts(b, "sp_env_chk(");
@@ -1335,7 +1341,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(b, ")");
       }
       else if (argc >= 2) emit_boxed(c, argv[1], b);
-      else buf_puts(b, "sp_box_str(\"DEFAULT\")");
+      else buf_puts(b, repr_share_rule(c) ? "sp_box_str_bytes(\"DEFAULT\")" : "sp_box_str(\"DEFAULT\")");
       buf_puts(b, ")");
       return 1;
     }
@@ -1501,8 +1507,12 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            bytes, which reach unsetenv past sp_env_str's allocation */
         char kref[1024];
         int key_handle = repr_share_rule(c) && strbuf_slot_ref(c, eav[0], kref, sizeof kref);
+        /* a key the operand builds (`ENV.delete(key(1))`) is a new String
+           nothing else holds, and it too reaches unsetenv past that
+           allocation; a variable's or a literal's is held where it is */
+        int key_new = !key_handle && env_operand_new(c, eav[0]);
         buf_printf(b, "({ const char *_t%d = ", t1); emit_env_str(c, eav[0], 0, b);
-        if (key_handle) buf_printf(b, "; SP_GC_ROOT(_t%d)", t1);
+        if (key_handle || key_new) buf_printf(b, "; SP_GC_ROOT(_t%d)", t1);
         buf_printf(b, "; const char *_t%d = getenv(_t%d);"
                       " _t%d = _t%d ? sp_env_str(_t%d) : NULL;"
                       " unsetenv(_t%d); ", t2, t1, t2, t2, t2, t1);
@@ -1531,7 +1541,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             if (repr_share_rule(c) && dpt != TY_STRING && dpt != TY_STRBUF && dpt != TY_POLY)
               unsupported_feature(c, id, "ENV.delete is not supported: its block parameter cannot carry the String key; see docs/limitations.md");
             if (repr_share_rule(c) && repr_of_slot(c, dlv).handle) {
-              if (!key_handle && nt_kind(nt, eav[0]) != NK_StringNode) buf_printf(b, "SP_GC_ROOT(_t%d); ", t1);
+              if (!key_handle && !key_new && nt_kind(nt, eav[0]) != NK_StringNode) buf_printf(b, "SP_GC_ROOT(_t%d); ", t1);
               buf_printf(b, "sp_String *lv_%s = ", rename_local(dp0));
               if (key_handle) buf_puts(b, kref);
               else buf_printf(b, "sp_String_new_shared(_t%d)", t1);
@@ -1595,6 +1605,10 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         if (evt == TY_STRING || lit_nil) {
           int tk = ++g_tmp, tv = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
+          /* a key the operand builds (`ENV["K#{i}"] = v`) is held across the
+             value's evaluation when that can allocate */
+          if (env_operand_new(c, argv[0]) && env_operand_new(c, argv[1]))
+            buf_printf(b, "; SP_GC_ROOT(_t%d)", tk);
           /* a nil VALUE unsets the variable; only the key is strict */
           buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr_nilable(c, argv[1], b);
           if (env_str_checked(c, argv[0])) buf_printf(b, "; sp_env_chk(_t%d, 0)", tk);
@@ -1651,6 +1665,9 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         int fhandle = repr_call_returns_handle(c, id);
         int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp, td = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", tky); emit_str_expr(c, argv[0], b);
+        /* a key the operand builds is held across a default that can allocate */
+        if (argc >= 2 && env_operand_new(c, argv[0]) && env_operand_new(c, argv[1]))
+          buf_printf(b, "; SP_GC_ROOT(_t%d)", tky);
         /* the default is an argument: it evaluates whether or not the
            variable is set, before the lookup */
         if (argc >= 2) {

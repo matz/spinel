@@ -232,8 +232,14 @@ class Tempfile
   def gets(*args, **opts) = @tmpfile.gets(*args, **opts)
   def readline(*args, **opts) = @tmpfile.readline(*args, **opts)
   def readlines(*args, **opts) = @tmpfile.readlines(*args, **opts)
-  def each_line(*args, **opts, &block) = @tmpfile.each_line(*args, **opts, &block)
-  def each(*args, **opts, &block) = @tmpfile.each(*args, **opts, &block)
+  # A literal block, not &block, and readlines, not a blockless each_line:
+  # File#each_line is lowered only with a literal block.
+  def each_line(*args, **opts)
+    return @tmpfile.readlines(*args, **opts).each unless block_given?
+
+    @tmpfile.each_line(*args, **opts) { |line| yield line }
+  end
+  def each(*args, **opts, &block) = each_line(*args, **opts, &block)
   def each_char(&block) = @tmpfile.each_char(&block)
   def each_byte(&block) = @tmpfile.each_byte(&block)
   def getc = @tmpfile.getc

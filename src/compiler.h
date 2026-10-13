@@ -1209,6 +1209,10 @@ typedef struct {
      unchanged (share_plan_sup_valid) */
   struct SharePlanSup *share_sup;
   int share_sup_n;
+  /* --share-strings: each node's parent at seal, for where a new String is
+     boxed (share_plan_box_plain) */
+  int *share_parent;
+  int share_parent_n;
   struct HandleArgTab *share_args; /* final callers, while sealing share facts */
   struct SbArgIndex *sb_args; /* settled parameter sources, built once for storage */
   unsigned share_sig;   /* the types the facts were last applied over */

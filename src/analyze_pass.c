@@ -11901,7 +11901,11 @@ int desugar_dir_surface(Compiler *c) {
       changed = 1; continue;
     }
 
-    /* block forms: X(args) { } -> X'(args).each { } */
+    /* block forms: X(args) { } -> (X'(args).each { }; nil). Each answers
+       nil, as File.foreach's does: rewritten to the bare `each`, the call
+       answered the Array of entries, which `p Dir.foreach(d) { }` printed,
+       and a block changing an entry in place was refused as a String that
+       answer would name again. */
     const char *inner = NULL;
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
       if (sp_streq(nm, "foreach")) inner = "entries";
@@ -11909,18 +11913,31 @@ int desugar_dir_surface(Compiler *c) {
       else if (sp_streq(nm, "glob")) inner = "glob";
     }
     if (inner) {
+      int base = nt->count;
       int ic = nt_new_node(nt, "CallNode");
-      if (ic < 0) continue;
+      int ec = nt_new_node(nt, "CallNode");
+      int nil2 = nt_new_node(nt, "NilNode");
+      int st = nt_new_node(nt, "StatementsNode");
+      int pr = nt_new_node(nt, "ParenthesesNode");
+      if (ic < 0 || ec < 0 || nil2 < 0 || st < 0 || pr < 0) continue;
       nt_node_set_str(nt, ic, "name", inner);
       nt_node_set_int(nt, ic, "builtin_only", 1);
       nt_node_set_ref(nt, ic, "receiver", recv);
       nt_node_set_ref(nt, ic, "arguments", args);
       nt_node_set_ref(nt, ic, "block", -1);
-      nt_node_set_str(nt, id, "name", "each");
-      nt_node_set_ref(nt, id, "receiver", ic);
+      nt_node_set_str(nt, ec, "name", "each");
+      nt_node_set_ref(nt, ec, "receiver", ic);
+      nt_node_set_ref(nt, ec, "arguments", -1);
+      nt_node_set_ref(nt, ec, "block", blk);
+      int body[2] = { ec, nil2 };
+      nt_node_set_arr(nt, st, "body", body, 2);
+      nt_node_set_ref(nt, pr, "body", st);
+      nt_node_set_str(nt, id, "name", "itself");
+      nt_node_set_ref(nt, id, "receiver", pr);
       nt_node_set_ref(nt, id, "arguments", -1);
+      nt_node_set_ref(nt, id, "block", -1);
       comp_grow_node_arrays(c);
-      c->nscope[ic] = c->nscope[id];
+      for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
       changed = 1; continue;
     }
     /* blockless foreach/each_child still enumerate */

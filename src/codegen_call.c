@@ -4460,6 +4460,43 @@ static int emit_complex_bool_reject(Compiler *c, int argc, const int *argv, Buf 
                 " (sp_Complex){0, 0, 0}; })", ti, tr, ti, argc);
   return 1;
 }
+
+/* curry[a, b, ...]: one sp_curry_apply per argument, each answering a new
+   accumulator, then the realization when the arity is reached. Nested in
+   one C expression, an accumulator (or a curry the receiver makes) is held
+   only in the argument list while the next argument is boxed, and a box
+   that allocates (a Range's) freed it: the accumulator is kept in a rooted
+   temp then -- when an argument after the first allocates, or the first
+   does beside a receiver that makes a new curry (a variable, or a temp the
+   operand order ran, is held already). Each accumulated arg is stored
+   boxed so a non-int arg keeps its type. */
+static void emit_curry_apply_chain(Compiler *c, int recv, const int *argv, int argc, int realize,
+                                   TyKind cret, Buf *b) {
+  int held = 0;
+  for (int k = 0; k < argc && !held; k++)
+    held = !arg_ran_first(argv[k], 0) &&
+           (operand_allocates_beside(c, argv[k]) || range_boxes_new(comp_ntype(c, argv[k]))) &&
+           (k > 0 || (!arg_ran_first(recv, 0) && subtree_may_allocate(c->nt, recv)));
+  const char *rfn = cret == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(";
+  if (!held) {
+    if (realize) buf_puts(b, rfn);
+    for (int k = 0; k < argc; k++) buf_puts(b, "sp_curry_apply(");
+    emit_expr(c, recv, b);
+    for (int k = 0; k < argc; k++) { buf_puts(b, ", "); emit_boxed(c, argv[k], b); buf_puts(b, ")"); }
+    if (realize) buf_puts(b, ")");
+    return;
+  }
+  int t = ++g_tmp;
+  buf_printf(b, "({ sp_Curry *_t%d = ", t); emit_expr(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT(_t%d);", t);
+  for (int k = 0; k < argc; k++) {
+    buf_printf(b, " _t%d = sp_curry_apply(_t%d, ", t, t);
+    emit_boxed(c, argv[k], b);
+    buf_puts(b, ");");
+  }
+  if (realize) buf_printf(b, " %s_t%d); })", rfn, t);
+  else buf_printf(b, " _t%d; })", t);
+}
 static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -4949,17 +4986,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "})");
         return 1;
       }
-      int realize = complete;
-      if (realize) buf_puts(b, cret == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(");
-      for (int k = 0; k < argc; k++) buf_puts(b, "sp_curry_apply(");
-      emit_expr(c, recv, b);
-      for (int k = 0; k < argc; k++) {
-        /* each accumulated arg is stored boxed so a non-int arg keeps its type */
-        buf_puts(b, ", ");
-        emit_boxed(c, argv[k], b);
-        buf_puts(b, ")");
-      }
-      if (realize) buf_puts(b, ")");
+      emit_curry_apply_chain(c, recv, argv, argc, complete, cret, b);
       return 1;
     }
     if (crt == TY_INT && sp_streq(name, "quo") && argc == 1) {
@@ -9041,7 +9068,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " _t%d = ", tr);
         if (is_fetch && argc == 2) {
           char dn[40]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
-          TyKind dt = repr_of(c, argv[1]).as_ty;
+          /* a default held as a shared handle is boxed as one: its temp is
+             an sp_String *, whatever the read's String type */
+          TyKind dt = atmp_ty[1] == TY_STRBUF ? TY_STRBUF : repr_of(c, argv[1]).as_ty;
           if (ret == TY_POLY) emit_boxed_text(c, dt, dn, b);
           else if (trn_o && dt == TY_NIL) buf_puts(b, oint_nil(ret));
           else if (trn_o && dt == TY_POLY) buf_printf(b, "%s(%s)", oint_unbox(ret), dn);
@@ -12778,6 +12807,17 @@ static int emit_hash_new_block_arg(Compiler *c, int id, int argc, Buf *b) {
   return 1;
 }
 
+/* Is Array.new(n, fill)'s fill held only in its C temp across the array's
+   allocation: a fresh handle box under --share-strings, or an object the
+   operand builds where it stands (`Array.new(2, {})`, `Array.new(3, "x#{i}")`),
+   which that allocation freed before the first push? A numeric fill holds no
+   reference, and a variable's or a constant's is held where it is. */
+static int array_fill_held_only_here(Compiler *c, int fill, int fh, const char *k) {
+  NodeKind fk = nt_kind(c->nt, fill);
+  if (fk == NK_LocalVariableReadNode || fk == NK_InstanceVariableReadNode || repr_static_read_kind(fk)) return 0;
+  if (fh) return 1;
+  return !is_numeric_literal_tag(k) && operand_allocates_beside(c, fill);
+}
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   const char *rty = nt_type(nt, recv);
@@ -13600,10 +13640,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         }
         buf_puts(g_pre, ";\n");
         emit_indent(g_pre, g_indent);
-        /* a fresh handle box lives only here across the array's allocation
-           (a variable's is held by the variable) */
-        NodeKind fk = nt_kind(nt, argv[1]);
-        if (fh && fk != NK_LocalVariableReadNode && fk != NK_InstanceVariableReadNode && !repr_static_read_kind(fk)) { emit_gc_root_tmp(c, TY_POLY, tv, g_pre); buf_puts(g_pre, "\n"); emit_indent(g_pre, g_indent); }
+        if (array_fill_held_only_here(c, argv[1], fh, k)) { emit_gc_root_tmp(c, fh || ar.elem == TY_POLY ? TY_POLY : ar.elem, tv, g_pre); buf_puts(g_pre, "\n"); emit_indent(g_pre, g_indent); }
         if (is_numeric_literal_tag(k) && *nil_store_sfx(c, k, argv[1])) {
           buf_printf(g_pre, "sp_%sArray *_t%d = _t%d.nil ? sp_%sArray_new_nil(_t%d) : sp_%sArray_new_fill(_t%d, _t%d.v);\n",
                      k, tr, tv, k, tn, k, tn, tv);
@@ -21563,6 +21600,29 @@ static int operand_binds_identity_box(Compiler *c, int id, int v) {
   return v == recv && comp_ntype(c, argv[0]) == TY_POLY && strbuf_route_srange_kept(c, recv);
 }
 
+/* held[i]: is argument operand[i] (the receiver, operand 0 when has_recv,
+   is never one) a new heap value only the C argument list would hold -- one
+   that allocates where it stands, of a reference type, not a container
+   literal the arms take as written, not a shared String's handle -- with a
+   later operand that can allocate? Ruby runs it before that operand anyway,
+   so binding it ahead of the call moves nothing; only the root is new. */
+static void operands_held_for_later(Compiler *c, const int *operand, int nop, int has_recv, int *held) {
+  int later = 0;
+  for (int i = nop - 1; i >= 0; i--) {
+    int v = operand[i];
+    Repr r = repr_of(c, v);
+    int ran = r.head_held || arg_ran_first(v, 0);
+    held[i] = 0;
+    /* (a read of a shared String slot is no new value: its copy is taken
+       last, after every other operand, by the copy-at-risk binding) */
+    if (i >= has_recv && later && !ran && operand_binds_as_value(nt_kind(c->nt, v)) && !strbuf_read_copies(c, v) &&
+        (needs_root(r.as_ty) || r.as_ty == TY_POLY) && r.as_ty != TY_STRBUF && !r.handle && !r.demand &&
+        operand_allocates_beside(c, v))
+      held[i] = 1;
+    if (!ran && operand_allocates_beside(c, v)) later = 1;
+  }
+}
+
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   /* The buffer arm holds its operands, including the handle a keyword
      may replace, before it checks or converts any of them. */
@@ -21651,6 +21711,14 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      local read is ordered the same way when a later operand can rebind it
      (read_rebound_by): a call that may run a proc assigning its cell,
      `v.divmod(la.call)` for `la = -> { v = 0; 5 }`. */
+  /* An argument that builds a new heap value where it stands is held only
+     in the C argument list, and a later argument that allocates frees it
+     before the call takes it (`IO.copy_stream("#{a}", "#{b}")`): such an
+     argument is bound and rooted ahead of the call like an observable one
+     (operand_held_for_later). */
+  int held[nmax], nheld = 0;
+  operands_held_for_later(c, operand, nop, recv >= 0, held);
+  for (int i = 0; i < nop; i++) nheld += held[i];
   int effects = 0;
   for (int i = 0; i < nop; i++)
     if (!repr_of(c, operand[i]).head_held && subtree_may_reassign_state(c, operand[i])) effects++;
@@ -21685,7 +21753,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     char sref[192];
     if ((state_read || local_read) && strbuf_slot_ref(c, operand[i], sref, sizeof sref))
       state_read = local_read = 0;
-    if (!local_read && (state_read ? effects < 1 : !subtree_has_side_effect(c, operand[i]))) {
+    if (!held[i] && !local_read && (state_read ? effects < 1 : !subtree_has_side_effect(c, operand[i]))) {
       /* ...unless its copy is at risk, decided below */
       cand[i] = operand_reads_copy(c, id, operand[i]);
       ncand += cand[i];
@@ -21705,7 +21773,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     int bindable = !route_op && (k == NK_CallNode || k == NK_SuperNode || k == NK_IfNode || k == NK_UnlessNode ||
                     k == NK_ForwardingSuperNode || k == NK_YieldNode ||
                     (k == NK_ParenthesesNode && pty != TY_STRING && pty != TY_STRBUF) ||
-                    state_read || local_read);
+                    state_read || local_read || held[i]);
     /* ...and any other value (a parenthesized statement, a write, a
        begin) when a copy beside it is at risk, decided below: a copy is
        taken last, so it can only follow an operand that is bound */
@@ -21778,7 +21846,9 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      it, so the copy follows it: bound last when at risk, else read in the
      call after the bound operands. */
   if (unb >= 0) {
-    if (!ncand) return emit_operands_before_unbound(c, id, operand, nop, recv >= 0, unb, b);
+    /* (an argument held for a later one binds the value operands beside
+       it as a copy at risk does, in order) */
+    if (!ncand && !nheld) return emit_operands_before_unbound(c, id, operand, nop, recv >= 0, unb, b);
     if (unb_lit) return 0;
   }
   /* Operands that are all pure reads -- `m.data[i * m.cols + j]`, two readers
@@ -21799,7 +21869,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   }
   /* One observable operand has no sibling to be ordered against or collected by:
      it is the only thing running, and the call consumes it immediately. */
-  if ((observable < 2 && !(converts && observable >= 1)) || nb < 1 ||
+  if ((observable < 2 && !(converts && observable >= 1) && !nheld) || nb < 1 ||
       g_n_argov + nb > MAX_ARG_OVERRIDE) return 0;
 
   size_t pre_mark = g_pre->len;
@@ -21816,7 +21886,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      the whole call, once per nesting level: 2^depth copies of a receiver
      chain (#4925). A copy is rendered with its binding, from its handle's
      temp. */
-  int operands_last = observable < 2;
+  int operands_last = observable < 2 && !nheld;
   for (int i = 0; i < nb; i++)
     if (copy[i]) { memset(&opb[i], 0, sizeof opb[i]); memset(&opp[i], 0, sizeof opp[i]); }
   for (; !operands_last && rendered < nb && ok; rendered++) {
@@ -21887,7 +21957,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        and costs a rooted temp on what may be a hot path (`@fetch[addr][addr]`
        is poly, and converts nothing). Counted as emitted, not as held: a
        #to_int renders inline and IO#write holds per operand. */
-    if (observable < 2 && g_conv_emitted == conv_mark) ok = 0;
+    if (observable < 2 && !nheld && g_conv_emitted == conv_mark) ok = 0;
     for (; operands_last && rendered < nb && ok; rendered++) {
       if (copy[rendered]) continue;
       render_bound_operand(c, node[rendered], fresh[rendered],

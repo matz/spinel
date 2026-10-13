@@ -9,6 +9,7 @@
 #include "repr.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
+#include "share.h"
 
 /* ---- nil out of band: an emitter whose C result is an sp_oint / sp_ofloat
    leaves it bare when the node is one (node_is_oint: the dispatcher's
@@ -318,18 +319,17 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       emit_expr(c, recv, b);
       buf_puts(b, repr_share_rule(c) ? "))" : ").v.p)");
     }
-    /* a mutable String held as its shared sp_String: that handle is the
-       identity, and the one a box of it carries; its text is a fresh copy
-       on every read. A nullable String boxes NULL as nil, whose fixed id
-       must not be the NULL pointer's integer value. */
-    else if (comp_recv_type(c, recv) == TY_STRING && repr_of(c, recv).may_nil) {
-      if (strbuf_object_ref(c, recv, b)) return 1;
-      int t = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", t);
-      emit_boxed(c, recv, b);
-      buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? SP_NIL_OBJECT_ID : (sp_int)(uintptr_t)_t%d.v.p; })", t, t);
+    /* a String: a mutable one held as its shared sp_String has that
+       handle's identity, the one a box of it carries (its text is a fresh
+       copy on every read); any other is its bytes. Which it is, is the
+       String plan's to say (emit_str_form). A nullable String boxes NULL as
+       nil, whose fixed id must not be the NULL pointer's integer value. */
+    else if ((comp_recv_type(c, recv) == TY_STRING && repr_of(c, recv).may_nil) || rt == TY_STRING) {
+      StrForm sf;
+      emit_str_form(c, recv, SPR_IDENTITY, SPX_ID, &sf);
+      str_form_settle(c, &sf, b);
+      str_form_free(&sf);
     }
-    else if (rt == TY_STRING && strbuf_object_ref(c, recv, b)) { }
     /* unboxed value structs have no identity: derive a stable Integer from
        the value hash (see the identity note in docs/limitations.md) */
     else if (rt == TY_COMPLEX || rt == TY_RATIONAL || rt == TY_RANGE || rt == TY_FLOAT_RANGE ||

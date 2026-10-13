@@ -716,10 +716,13 @@ int emit_hash_sort_by_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
-  HASH_VNIL_OF(c, id);
-  char *vb = emit_hash_block_eval(c, block, rr, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
+  /* The tuple is made before the block runs: the block's value is a temp
+     whose own root ends with the block (a new Array, a String), and the
+     tuple's allocation after it freed it before the push took it. */
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tup, tup);
+  HASH_VNIL_OF(c, id);
+  char *vb = emit_hash_block_eval(c, block, rr, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tup);
   if (bret == TY_POLY) buf_puts(g_pre, vb ? vb : "sp_box_nil()");
@@ -8356,7 +8359,16 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
     if (!arg_read_converts(c, pt, provided)) { emit_arg_or_default(c, m, idx, provided, out); return; }
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_arg_or_default(c, m, idx, provided, &cb);
-    emit_rooted_conversion(c, pt, cb.p ? cb.p : "NULL", out);
+    /* a String a handle parameter takes made here (a handle around the
+       argument's bytes) states that it stays rooted until the call, and
+       that making it may allocate */
+    if (pt == TY_STRBUF) {
+      StrForm sf;
+      str_form_of_text(&sf, cb.p ? cb.p : "NULL", pt, SF_ROOT_UNTIL_USE | SF_ALLOCATES);
+      str_form_settle(c, &sf, out);
+      str_form_free(&sf);
+    }
+    else emit_rooted_conversion(c, pt, cb.p ? cb.p : "NULL", out);
     free(cb.p);
     return;
   }
@@ -8932,6 +8944,13 @@ int head_held_read(Compiler *c, int node, const char *text) {
   if (h < 0 || !text) return -1;
   snprintf(ht, sizeof ht, "_t%d", h);
   return sp_streq(share_check_unmarked(text), ht) ? h : -1;
+}
+
+/* See codegen_internal.h. */
+int ran_first_read(Compiler *c, int node, const char *text) {
+  TyKind t = repr_of(c, node).as_ty;
+  if (!text || !(needs_root(t) || t == TY_POLY)) return -1;
+  return ran_first_temp(node, 0, text, NULL);
 }
 
 /* A box that only wraps what its operand holds (an immediate, or a pointer

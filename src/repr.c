@@ -1203,6 +1203,15 @@ static int repr_flow_checked(Compiler *c, int v) {
    the shared handle on (strbuf_flow_carries), or the program is refused,
    naming the route, rather than compiled handing on a copy. A flow kind
    or a route codegen does not know is refused too. */
+static void repr_flow_refuse(Compiler *c, int u, int kind) {
+  char rn[160];
+  repr_flow_route_name(c, u, rn, sizeof rn);
+  char msg[512];
+  snprintf(msg, sizeof msg, "under --share-strings, the String %s hands on as %s is shared with another "
+           "name and changed in place, and that route cannot carry the shared handle yet: it would hand "
+           "on a copy (#6765)", rn, repr_flow_kind_name(kind));
+  unsupported_feature_collect(c, u, msg);
+}
 static void repr_share_flows_check(Compiler *c, const char *stats) {
   int nf = share_flow_count(c);
   int bad = -1, bad_kind = 0;
@@ -1233,19 +1242,38 @@ static void repr_share_flows_check(Compiler *c, const char *stats) {
               (int)nt_int(c->nt, u, "node_line", 0), u, rn, ty_name(c->ntype[u]), repr_flow_kind_name(kind), ok,
               share_node_flags(c, u));
     }
-    if (!ok && bad < 0) { bad = u; bad_kind = kind; }
+    /* the first refused flow, or under SP_COLLECT_ERRORS each one */
+    if (!ok && collect_emit_anyway()) repr_flow_refuse(c, u, kind);
+    else if (!ok && bad < 0) { bad = u; bad_kind = kind; }
   }
   free(fm.yield_ok);
-  if (bad >= 0) {
-    int u = bad, kind = bad_kind;
-    char rn[160];
-    repr_flow_route_name(c, u, rn, sizeof rn);
-    char msg[512];
-    snprintf(msg, sizeof msg, "under --share-strings, the String %s hands on as %s is shared with another "
-             "name and changed in place, and that route cannot carry the shared handle yet: it would hand "
-             "on a copy (#6765)", rn, repr_flow_kind_name(kind));
-    unsupported_feature(c, u, msg);
-  }
+  if (bad >= 0) repr_flow_refuse(c, bad, bad_kind);
+}
+
+/* The seal's holder refusals: holder h holds a copy of a String the rule
+   shares (with elems, its elements are copies), or literal n does. */
+static void repr_share_holder_refuse(Compiler *c, int h, int elems) {
+  const ShareHolder *sh = share_holder(c, h);
+  char nm[160];
+  if (sh->kind == SHK_LOCAL) snprintf(nm, sizeof nm, "`%s`", c->scopes[sh->scope].locals[sh->local].name);
+  else snprintf(nm, sizeof nm, "`%s`", sh->name ? sh->name : "?");
+  const char *kind = sh->kind == SHK_LOCAL && c->scopes[sh->scope].locals[sh->local].is_block_param
+                     ? "block parameter" : repr_share_kind_name(sh->kind);
+  char msg[512];
+  if (elems)
+    snprintf(msg, sizeof msg, "under --share-strings, the Strings %s %s holds are shared with another "
+             "name and changed in place, and a typed String container cannot hold the shared handle "
+             "yet (#6765)", kind, nm);
+  else
+    snprintf(msg, sizeof msg, "under --share-strings, the String %s %s holds is shared with another "
+             "name and changed in place, and a %s cannot hold the shared handle yet (#6765)",
+             kind, nm, kind);
+  unsupported_feature_collect(c, sh->node, msg);
+}
+static void repr_share_literal_refuse(Compiler *c, int n) {
+  unsupported_feature_collect(c, n, "under --share-strings, the Strings this literal holds are shared with "
+                              "another name and changed in place, and a typed String container cannot hold "
+                              "the shared handle yet (#6765)");
 }
 
 /* The analysis is final: every holder the rule shares has to hold the
@@ -1329,28 +1357,25 @@ static void repr_share_seal(Compiler *c) {
   /* a route master refuses, left to the rule: refused as master does
      unless the final facts share its String */
   share_routes_check(c);
-  if (bad < 0 && bad_lit >= 0)
-    unsupported_feature(c, bad_lit, "under --share-strings, the Strings this literal holds are shared with "
-                        "another name and changed in place, and a typed String container cannot hold the "
-                        "shared handle yet (#6765)");
-  if (bad >= 0) {
-    const ShareHolder *sh = share_holder(c, bad);
-    char nm[160];
-    if (sh->kind == SHK_LOCAL) snprintf(nm, sizeof nm, "`%s`", c->scopes[sh->scope].locals[sh->local].name);
-    else snprintf(nm, sizeof nm, "`%s`", sh->name ? sh->name : "?");
-    const char *kind = sh->kind == SHK_LOCAL && c->scopes[sh->scope].locals[sh->local].is_block_param
-                       ? "block parameter" : repr_share_kind_name(sh->kind);
-    char msg[512];
-    if (bad_elems)
-      snprintf(msg, sizeof msg, "under --share-strings, the Strings %s %s holds are shared with another "
-               "name and changed in place, and a typed String container cannot hold the shared handle "
-               "yet (#6765)", kind, nm);
-    else
-      snprintf(msg, sizeof msg, "under --share-strings, the String %s %s holds is shared with another "
-               "name and changed in place, and a %s cannot hold the shared handle yet (#6765)",
-               kind, nm, kind);
-    unsupported_feature(c, sh->node, msg);
+  if (collect_emit_anyway()) {
+    /* SP_COLLECT_ERRORS: every refused holder and literal, as the routes
+       above were */
+    for (int h = 0; h < nh; h++) {
+      const ShareHolder *sh = share_holder(c, h);
+      if (repr_share_elems_carried(c, sh) == 0 && repr_str_elems_share(c, h)) repr_share_holder_refuse(c, h, 1);
+      Repr hr = repr_of_share_holder(c, sh);
+      if (hr.kind != RK_BOXED && !hr.share && (hr.ty == TY_STRING || hr.ty == TY_STRBUF) && repr_str_shares(c, h))
+        repr_share_holder_refuse(c, h, 0);
+    }
+    for (int n = bad_lit; n >= 0 && n < c->nt->count; n++) {
+      NodeKind k = nt_kind(c->nt, n);
+      int ne = 0;
+      if (k == NK_ArrayNode || k == NK_HashNode) nt_arr(c->nt, n, "elements", &ne);
+      if (ne > 0 && comp_scope_of(c, n)->reachable && repr_str_literal_shares(c, n)) repr_share_literal_refuse(c, n);
+    }
   }
+  else if (bad < 0 && bad_lit >= 0) repr_share_literal_refuse(c, bad_lit);
+  else if (bad >= 0) repr_share_holder_refuse(c, bad, bad_elems);
   repr_share_flows_check(c, stats);
 }
 

@@ -846,13 +846,104 @@ static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   free(tmp.p);
 }
 
+/* The literal c of an index `x + c` or `x - c`, in *lit, when c is no
+   further than 2^20 from 0 and not 0; else 0. */
+static int index_sum_lit(Compiler *c, int node, long long *lit) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "receiver") < 0 ||
+      nt_ref(nt, node, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  int a = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+  if (!nm || !is_add_sub(nm) || ac != 1 || nt_kind(nt, av[0]) != NK_IntegerNode ||
+      nt_str(nt, av[0], "bigval")) return 0;
+  long long v = nt_int(nt, av[0], "value", 0);
+  if (v == 0 || v < -(1LL << 20) || v > (1LL << 20)) return 0;
+  *lit = v;
+  return 1;
+}
+
+/* Is s[0, n) one C operand: parentheses that balance outside string and
+   character literals, none closing early, and no comma outside them? */
+static int c_one_operand(const char *s, size_t n) {
+  int depth = 0;
+  for (size_t i = 0; i < n; i++) {
+    char ch = s[i];
+    if (ch == '"' || ch == '\'') {
+      for (i++; i < n && s[i] != ch; i++) if (s[i] == '\\') i++;
+      if (i >= n) return 0;
+    }
+    else if (ch == '(') depth++;
+    else if (ch == ')' && --depth < 0) return 0;
+    else if (ch == ',' && depth == 0) return 0;
+  }
+  return n > 0 && depth == 0;
+}
+
 /* An Array index ahead of a cached bounds compare (`i < len ? data[i] :
-   ...`). A nil index has no word of its own any more: it is refused where
-   the index is read (sp_oint_arg, the TypeError), so nothing is owed off
-   the in-range read. Answers 0 always. */
-int emit_int_index_raw(Compiler *c, int node, Buf *b) {
-  emit_int_expr(c, node, b);
-  return 0;
+   ...`): writes `sp_int _t<tk> = ` and the index. A nil index has no word
+   of its own: it is refused where the index is read (sp_oint_arg, the
+   TypeError), so nothing is owed off the in-range read.
+
+   An index `x + c` or `x - c`, c an Integer literal no further than 2^20
+   from 0, is summed wrapped (sp_int_c_add), and its checked sum is taken
+   again only where the compare fails: `redo` gets `(_t<tk> = <checked
+   sum>, `, which the out-of-range arm opens with and closes with `)`, and
+   is "" for any other index.
+   A sum that overflowed wraps to 2^63 - 2^20 or more as an unsigned word
+   (2^31 - 2^20 on a 32-bit one), past any length an Integer or Float array
+   can have, so the in-range arm only reads at a sum that did not overflow,
+   and the redone sum raises the RangeError the checked one raised before.
+   Under promote the redone sum is promote's, whose Bignum the index refuses
+   as before. x is read first, with its own nil test, as before.
+
+   The sum is taken apart only where it was emitted as one checked add of x
+   and the literal, so an arm that emits it any other way keeps it whole. */
+void emit_int_index_late(Compiler *c, int node, int tk, char *redo, size_t n, Buf *b) {
+  long long lit;
+  *redo = 0;
+  if (b == g_pre || !index_sum_lit(c, node, &lit)) {
+    buf_printf(b, "sp_int _t%d = ", tk); emit_int_expr(c, node, b);
+    return;
+  }
+  const char *op = sp_streq(nt_str(c->nt, node, "name"), "+") ? "add" : "sub";
+  Buf ix; memset(&ix, 0, sizeof ix);
+  emit_int_expr(c, node, &ix);
+  const char *t = ix.p ? ix.p : "";
+  Buf lb; memset(&lb, 0, sizeof lb);
+  emit_int_lit(&lb, lit);
+  /* the checked add, or under promote the boxed one the index converts */
+  char pre[64], suf[64];
+  snprintf(pre, sizeof pre, "sp_int_%s(", op);
+  snprintf(suf, sizeof suf, ", %s)", lb.p);
+  size_t tl = strlen(t), pl = strlen(pre), sl = strlen(suf);
+  int poly = 0, ok = tl > pl + sl && !strncmp(t, pre, pl) && !strcmp(t + tl - sl, suf);
+  if (!ok) {
+    snprintf(pre, sizeof pre, "sp_poly_arg_int_chk(sp_poly_%s(", op);
+    snprintf(suf, sizeof suf, ", sp_box_int(%s)))", lb.p);
+    pl = strlen(pre); sl = strlen(suf); poly = 1;
+    ok = tl > pl + sl && !strncmp(t, pre, pl) && !strcmp(t + tl - sl, suf);
+  }
+  if (!ok || !c_one_operand(t + pl, tl - pl - sl) || !decide_node(c->nt, node, "index-sum", NULL)) {
+    buf_printf(b, "sp_int _t%d = %s", tk, t);
+    free(lb.p); free(ix.p);
+    return;
+  }
+  int tx = ++g_tmp, xl = (int)(tl - pl - sl);
+  if (poly) {
+    /* an x that is not an Integer (a Bignum, nil) takes the out-of-range
+       arm, which adds it as before */
+    buf_printf(b, "sp_RbVal _t%d = %.*s; ", tx, xl, t + pl);
+    buf_printf(b, "sp_int _t%d = _t%d.tag == SP_TAG_INT ? sp_int_c_%s(_t%d.v.i, %s) : -1",
+               tk, tx, op, tx, lb.p);
+    snprintf(redo, n, "(_t%d = sp_poly_arg_int_chk(sp_poly_%s(_t%d, sp_box_int(%s))), ", tk, op, tx, lb.p);
+  }
+  else {
+    buf_printf(b, "sp_int _t%d = %.*s; ", tx, xl, t + pl);
+    buf_printf(b, "sp_int _t%d = sp_int_c_%s(_t%d, %s)", tk, op, tx, lb.p);
+    snprintf(redo, n, "(_t%d = sp_int_%s(_t%d, %s), ", tk, op, tx, lb.p);
+  }
+  free(lb.p); free(ix.p);
 }
 
 void emit_int_expr(Compiler *c, int node, Buf *b) {
@@ -2159,7 +2250,24 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     return;
   }
   if (t == TY_STRING) {
-    buf_printf(b, "%s(", ty_box_fn(TY_STRING)); emit_expr(c, node, b); buf_puts(b, ")");
+    /* --share-strings: a String no other name holds is boxed as the object
+       it is (sp_box_str_new), so the box's copies name one String; a
+       frozen literal is its own object already, and a container literal
+       whose elements the facts prove its own keeps a copy no other name
+       can tell from the String (share_plan_box_plain) */
+    int fresh = repr_share_rule(c) && !share_frozen_literal(c, node) && share_value_fresh(c, node, 0) &&
+                !share_plan_box_plain(c, node);
+    /* The new handle is an object only this box holds, and the box is
+       often a temporary handed to a runtime call that allocates before it
+       is done with it (a Hash lookup's key): rooted here, as the runtime
+       roots a String key by its tag but not a handle's box. Unrooted, a
+       collection inside the lookup freed the handle and its inline bytes. */
+    if (fresh) {
+      int tb = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = sp_box_str_new(", tb); emit_expr(c, node, b);
+      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); _t%d; })", tb, tb);
+    }
+    else { buf_printf(b, "%s(", ty_box_fn(TY_STRING)); emit_expr(c, node, b); buf_puts(b, ")"); }
     RC(RF_STR, RW_NONE);
     return;
   }
@@ -5982,6 +6090,23 @@ static void gc_wb_insert_seg(Compiler *c, Buf *b, size_t fn_off) {
   }
 }
 
+/* The root a method's `self` takes when its body can allocate, or NULL.
+   Every parameter is rooted by the callee, but self is the receiver the
+   caller holds, and the caller roots one only when it is a call's answer
+   (`Pt.new(1, 2).desc`). Two kinds of self arrive as other new values the
+   argument alone holds: a boxed self, which an instance method reopening
+   Object, Numeric, Array or Hash takes (`sp_RbVal self`): every read of $~
+   hands a new MatchData, so `$~.pair(1)` freed it at the body's first
+   allocation; and a String reopening's `const char *self`, which an
+   interpolation hands a new String (`"a#{i}".two`). A typed class's
+   receiver comes from a call or a variable. */
+static const char *method_self_root(Compiler *c, Scope *s) {
+  if (s->class_id < 0 || s->is_cmethod || s->def_node < 0) return NULL;
+  const char *cn = c->classes[s->class_id].c_name;
+  const char *m = is_boxed_self_class_name(cn) ? "SP_GC_ROOT_RBVAL" : is_string_class_name(cn) ? "SP_GC_ROOT_STR" : NULL;
+  int body = m ? nt_ref(c->nt, s->def_node, "body") : -1;
+  return body >= 0 && subtree_may_allocate(c->nt, body) ? m : NULL;
+}
 void emit_method(Compiler *c, Scope *s, Buf *b) {
   /* an IO handle has no slots for a program's instance variables */
   if (s->class_id >= 0 && !s->is_cmethod && io_family_class(c, s->class_id) &&
@@ -6106,6 +6231,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   buf_puts(b, "    SP_GC_SAVE();\n");
   size_t gc_save_len = b->len - gc_save_off;
   if (repr_self_handle(c, (int)(s - c->scopes))) buf_puts(b, "    SP_GC_ROOT(self);\n");
+  else if (method_self_root(c, s)) buf_printf(b, "    %s(self);\n", method_self_root(c, s));
   emit_scope_decls(c, s, b);
   /* a method's entry is a safe point for pending finalizers (sp_gc.h) */
   if (g_uses_finalizers) buf_puts(b, "    SP_FIN_POLL();\n");
@@ -7240,9 +7366,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
     cap_self = 1;
     cap_self_class = c->classes[encl->class_id].c_name;
     { const char *rcn = c->classes[encl->class_id].name;
-      self_boxed = rcn && is_builtin_reopen(rcn) &&
-                   (sp_streq(rcn, "Array") || sp_streq(rcn, "Hash") || sp_streq(rcn, "Object") ||
-                    sp_streq(rcn, "Numeric")); }
+      self_boxed = rcn && is_builtin_reopen(rcn) && is_boxed_self_class_name(rcn); }
     self_is_value = c->classes[encl->class_id].is_value_type;
     self_is_ptr = !self_is_value || (encl->name && sp_streq(encl->name, "initialize"));
   }
@@ -8608,9 +8732,7 @@ else if (orecv >= 0 && onm) {
   int self_is_value = cap_self && c->classes[scls].is_value_type;
   /* an Object / Array / Hash / Numeric reopening holds self boxed (its
      methods take `sp_RbVal self`): captured as the boxed value */
-  int self_boxed = cap_self && !self_is_value && c->classes[scls].name &&
-                   (sp_streq(c->classes[scls].name, "Object") || sp_streq(c->classes[scls].name, "Array") ||
-                    sp_streq(c->classes[scls].name, "Hash") || sp_streq(c->classes[scls].name, "Numeric"));
+  int self_boxed = cap_self && !self_is_value && is_boxed_self_class_name(c->classes[scls].name);
   const char *self_cls = cap_self ? c->classes[scls].c_name : NULL;
 
   /* parameter metadata for Proc#parameters: every parameter kind in signature
@@ -10724,6 +10846,16 @@ void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b) {
   }
 }
 
+/* The runtime calls the hooks below (sp_obj_to_a, sp_obj_conv_sw, the
+   operator dispatchers, ...) with an object it may hold in nothing but the
+   argument -- one a call has just answered, `ns.slice(1, 2).to_a` or
+   `1 / BigDecimal(s)` -- and a hook allocates or calls a method of the
+   program's on it, which roots its parameters but not self (a caller holds
+   its receiver): the hook roots the object on entry, a slot of its frame. */
+static void emit_hook_object_root(Buf *b, const char *root, const char *obj) {
+  buf_printf(b, "  %s(%s);\n", root, obj);
+}
+
 /* ---- Marshal of user objects (CRuby `o` form) ----
    For each marshalable class, codegen emits an arm in two dispatchers that
    sp_marshal.h calls: sp_marshal_obj_dump (by cls_id) writes `o`<:Class><nivar>
@@ -10848,6 +10980,7 @@ static void emit_marshal_unbox_ivar(Compiler *c, TyKind t, Buf *b) {
 static void emit_obj_to_hash_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_hash) return;
   buf_puts(b, "static sp_RbVal sp_obj_to_hash(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -10932,6 +11065,7 @@ static int obj_to_json_any(Compiler *c) {
 static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_to_json) return;
   buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     if (comp_class_is_module(c, &c->classes[i])) continue;   /* no instances (#4654) */
@@ -11104,6 +11238,7 @@ static void emit_member_boxed(Compiler *c, int cid, int j, Buf *b) {
 static void emit_obj_to_h_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_to_h) return;
   buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -11162,6 +11297,7 @@ static void emit_obj_to_h_dispatch(Compiler *c, Buf *b) {
 static void emit_obj_struct_values_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_struct_values) return;
   buf_puts(b, "static sp_RbVal sp_obj_struct_values(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -11233,6 +11369,7 @@ static void emit_basicobject_singleton_to_a_wrappers(Compiler *c, Buf *b) {
 static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
   if (obj_to_a_any(c)) {
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v) {\n");
+    emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
     buf_puts(b, "  switch (v.cls_id) {\n");
     for (int i = 0; i < c->nclasses; i++) {
       ClassInfo *ci = &c->classes[i];
@@ -11280,6 +11417,7 @@ static int obj_to_ary_any(Compiler *c) {
 static void emit_obj_to_ary_dispatch(Compiler *c, Buf *b) {
   if (!obj_to_ary_any(c)) return;
   buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -11333,6 +11471,7 @@ static int obj_deconstruct_any(Compiler *c) {
 static void emit_obj_deconstruct_dispatch(Compiler *c, Buf *b) {
   if (!obj_deconstruct_any(c)) return;
   buf_puts(b, "static sp_RbVal sp_obj_deconstruct(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -11388,6 +11527,7 @@ static void emit_obj_is_data(Compiler *c, Buf *b) {
 static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_with) return;
   buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -11561,8 +11701,9 @@ static void emit_kconv_bridge(Compiler *c, Buf *b) {
                  comp_ty_value_obj(c, ty_object(callee)) ? "" : "*", bridge_blk_param(c, tmi));
     }
   }
-  buf_puts(b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) {\n"
-              "  switch (cls_id) {\n");
+  buf_puts(b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT", "p");
+  buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     int rows = 0;
     for (int w = 0; w < 4; w++)
@@ -11625,7 +11766,9 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   }
   /* user #to_s dispatcher: only classes defining one get an arm; NULL means
      "no user to_s" and the caller renders the #<Name:0xADDR> default. */
-  buf_puts(b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) {\n  switch (cls_id) {\n");
+  buf_puts(b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT", "p");
+  buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *tci = &c->classes[i];
     /* a native class binding its own to_s (IO::Buffer): dispatch to the
@@ -11711,6 +11854,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static const char *sp_obj_cls_name_rt(int cls_id) {\n"
               "  sp_Class _c = {cls_id}; return sp_class_to_s(_c);\n}\n");
   buf_puts(b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT", "p");
   buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     /* native classes with a bound #inspect, same as the to_s dispatcher */
@@ -13562,6 +13706,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
    to not-comparable, which the callers raise as an ArgumentError. */
 static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_int sp_obj_cmp_dispatch(sp_RbVal a, sp_RbVal b, sp_bool *comparable) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "a");
   buf_puts(b, "  switch (a.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     /* a reopened Time or Range is keyed by its builtin id, and its method
@@ -13764,6 +13909,7 @@ static int user_aset_scope(Compiler *c, int k, int *defcls) {
    containers, so an object with its own []= lost the store. */
 static void emit_user_aset_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static void sp_user_aset_dispatch(sp_RbVal a, sp_RbVal k, sp_RbVal v, sp_bool *handled) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "a");
   buf_puts(b, "  *handled = FALSE;\n  switch (a.cls_id) {\n");
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (!c->classes[ci].instantiated) continue;
@@ -13796,7 +13942,9 @@ static int user_init_copy_scope(Compiler *c, int k, int *defcls) {
 }
 
 static void emit_user_init_copy_dispatch(Compiler *c, Buf *b) {
-  buf_puts(b, "static void sp_user_init_copy_dispatch(sp_RbVal copy, sp_RbVal orig) {\n  switch (copy.cls_id) {\n");
+  buf_puts(b, "static void sp_user_init_copy_dispatch(sp_RbVal copy, sp_RbVal orig) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "copy");
+  buf_puts(b, "  switch (copy.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     int defcls = -1, mi = user_init_copy_scope(c, k, &defcls);
     if (mi < 0) continue;
@@ -13877,6 +14025,7 @@ static int program_has_user_eql(Compiler *c) {
    `uops` the class defines; `derive_eq` adds Comparable's `==` from `<=>`. */
 static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const char *const *uops, int derive_eq) {
   buf_printf(b, "static sp_RbVal %s(const char *op, sp_RbVal a, sp_RbVal b, sp_bool *handled) {\n", fname);
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "a");
   buf_puts(b, "  *handled = FALSE;\n  switch (a.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     /* A reopened builtin's boxed values carry the builtin's own id, and its
@@ -14042,6 +14191,7 @@ int class_to_io_dispatched(Compiler *c, int k) {
 
 static void emit_user_to_io_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_File *sp_user_to_io_dispatch(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_to_io_dispatched(c, k)) continue;
@@ -14079,6 +14229,7 @@ static void emit_user_to_io_dispatch(Compiler *c, Buf *b) {
    "can't be coerced" instead (#3960). */
 static void emit_user_coerce_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_RbVal sp_user_coerce_dispatch(const char *op, sp_RbVal recv, sp_RbVal obj, sp_bool *handled) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "obj");
   buf_puts(b, "  *handled = FALSE;\n  sp_PolyArray *_pr = NULL;\n  switch (obj.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!c->classes[k].instantiated || !class_coerce_emittable(c, k)) continue;
@@ -14271,7 +14422,9 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
    compare by VALUE inside Array/Hash equality, include?/index/uniq, and as
    nested members. Installed as sp_obj_eq_hook. */
 static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
-  buf_puts(b, "static sp_bool sp_obj_eq_dispatch(sp_RbVal a, sp_RbVal b) {\n  switch (a.cls_id) {\n");
+  buf_puts(b, "static sp_bool sp_obj_eq_dispatch(sp_RbVal a, sp_RbVal b) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "a");
+  buf_puts(b, "  switch (a.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     if (!ci->instantiated || !(ci->is_struct || ci->is_data)) continue;
@@ -18292,7 +18445,7 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
 extern const Compiler *g_tmc_c;
 
 static void emit_runtime_include(Compiler *c, Buf *b, int blank) {
-  if (repr_share_rule(c)) buf_puts(b, "#define SP_SHARE_STRING_LITERALS 1\n");
+  if (repr_share_rule(c)) buf_puts(b, "#define SP_SHARE_STRING_LITERALS 1\n#define SP_SHARE_BOX_HANDLES 1\n");
   /* sp_feature_required, not the require gate: without SPINEL_REQUIRE_GATE,
      respond_to?'s io/console answer must still follow the program's require,
      as CRuby's does. */

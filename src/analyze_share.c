@@ -4370,6 +4370,11 @@ int share_node_anchored(const Compiler *c, int n) {
   int r = sh_node_root(F, n, 0);
   return r >= 0 && F->anchored && F->anchored[r];
 }
+int share_node_elems_local(const Compiler *c, int n) {
+  const ShareFacts *F = c->share;
+  int r = sh_node_root(F, n, 1);
+  return r >= 0 && !(F->flags[r] & SHF_UNKNOWN) && !repr_str_class_shares(F->flags[r], sh_class_holders(F, r));
+}
 int share_node_elems_share(const Compiler *c, int n) {
   const ShareFacts *F = c->share;
   int r = sh_node_root(F, n, 1);
@@ -5131,6 +5136,29 @@ static int sh_bang_self_slot(const Compiler *c, int v) {
   }
   return 0;
 }
+/* Is call u `x.to_s` on a box that the program's own to_s methods make a
+   dispatch answering a box, whose String arm is the builtin default
+   (PB_D_TO_S in the plan): under the rule it answers a String receiver's
+   box itself (emit_poly_defaults0), unless a reopening of String's to_s or
+   the String trial takes the String first? */
+static int sh_poly_to_s_self(const Compiler *c, int u) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, u) != NK_CallNode || !is_to_s_name(nt_str(nt, u, "name")) ||
+      call_plain_argc((Compiler *)c, u) != 0 || nt_ref(nt, u, "block") >= 0)
+    return 0;
+  int recv = nt_ref(nt, u, "receiver");
+  int sci = comp_class_index((Compiler *)c, "String");
+  if (recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
+      (sci >= 0 && comp_method_in_chain((Compiler *)c, sci, "to_s", NULL) >= 0))
+    return 0;
+  const PolyPlan *p = cplan_poly((Compiler *)c, u);
+  int dflt = 0;
+  for (int i = 0; i < p->n; i++) {
+    if (p->arm[i].kind == PA_TRIAL && p->arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
+    dflt |= p->arm[i].kind == PA_BUILTIN && p->arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
+  }
+  return dflt && p->ret == TY_POLY;
+}
 /* share.h: does node n hand over the shared handle (or a box holding it),
    not a copy of its bytes? */
 int share_node_carries_handle(const Compiler *c, int n) {
@@ -5185,6 +5213,17 @@ int share_node_carries_handle(const Compiler *c, int n) {
   Repr r = repr_of(c, n);
   /* A boxed holder's read keeps what its incoming flows stored there. */
   if (r.kind == RK_BOXED && strbuf_boxed_local((Compiler *)c, n)) return 1;
+  /* So does a boxed field's read through a receiverless attr reader,
+     `self->iv_x` (implicit_self_is_field_read), as the arm above takes one
+     with a receiver: a box allocates no copy. Its type can widen to the box
+     after the route was recorded on a String. */
+  if (r.kind == RK_BOXED && u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") < 0 &&
+      implicit_self_is_field_read((Compiler *)c, u))
+    return 1;
+  /* A boxed to_s answering a String receiver's own box carries what the
+     receiver's box does. */
+  if (r.kind == RK_BOXED && u >= 0 && sh_poly_to_s_self(c, u))
+    return share_node_carries_handle(c, nt_ref(c->nt, u, "receiver"));
   /* The boxed unary-plus arm keeps a mutable String's handle and copies
      a frozen one, exactly as the typed value route does. */
   if (r.kind == RK_BOXED && nt_kind(c->nt, n) == NK_CallNode &&
@@ -5438,7 +5477,8 @@ void share_routes_check(Compiler *c) {
     char *m = malloc(n);
     if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     snprintf(m, n, "%s%s", lead, r->msg);
-    unsupported_feature(c, r->site, m);
+    unsupported_feature_collect(c, r->site, m);
+    free(m);
   }
 }
 

@@ -1124,6 +1124,11 @@ int is_symbol_exception_accessor(const char *n) {
   return sp_streq(n, "reason") || sp_streq(n, "tag") || sp_streq(n, "key") || sp_streq(n, "name");
 }
 
+int is_boxed_self_class_name(const char *name) {
+  return name && (sp_streq(name, "Object") || sp_streq(name, "Numeric") ||
+                  sp_streq(name, "Array") || sp_streq(name, "Hash"));
+}
+
 /* Classes whose reopenings keep the runtime value instead of a user struct. */
 int is_builtin_reopen_name(const char *name) {
   return sp_streq(name, "Toplevel") ||

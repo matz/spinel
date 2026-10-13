@@ -281,6 +281,29 @@ static inline sp_String*sp_String_force_encoding(sp_String*s,int mode){
 static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 
+/* --share-strings: a handle's own bytes (0xfd) as a box of that handle,
+   its header's `next` (sp_fd_own), while the handle still has these bytes;
+   otherwise the bytes boxed as themselves. */
+static inline sp_RbVal sp_box_str_owner(const char *v) {
+  sp_String *h = (sp_String *)(void *)(((const sp_str_hdr *)(v - 1)) - 1)->next;
+  if (h && h->data == v) return sp_box_obj(h, SP_BUILTIN_STRBUF);
+  return sp_box_str_bytes(v);
+}
+/* A String no other name holds, boxed (sp_box_str's rule otherwise):
+   --share-strings boxes a mutable heap String as a new handle over its
+   bytes, which sp_String_new_fresh copies before it allocates, so every
+   copy of the box names the one String; a frozen or static String is boxed
+   as itself, as nothing can change it and its identity is its bytes'. */
+static inline sp_RbVal sp_box_str_new(const char *v) {
+#ifdef SP_SHARE_BOX_HANDLES
+  if (v) {
+    unsigned char m = ((const unsigned char *)v)[-1];
+    if (m == 0xfe || m == 0xfc) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
+  }
+#endif
+  return sp_box_str(v);
+}
+
 /* Cold in-place mutators (compiled once in lib/sp_string.c). */
 void sp_String_prepend(sp_String*s,const char*t);
 void sp_String_insert(sp_String*s,int64_t idx,const char*t);

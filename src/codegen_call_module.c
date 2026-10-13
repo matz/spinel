@@ -1722,12 +1722,16 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
            IO is never closed. */
         const char *fd_keys[] = { "in", "out", "err" };
         for (int i = 0; i < 3; i++) {
+          /* --share-strings: a filename boxed as the String's handle reads
+             as the String (the arms below test the String tag) */
+          char vref[48];
+          snprintf(vref, sizeof vref, repr_share_rule(c) ? "sp_poly_strbuf_deref(_t%d)" : "_t%d", tkv);
           buf_printf(b,
             "{ sp_RbVal _t%d; sp_bool _t%d; "
             "_t%d = sp_poly_hash_get_pair_val(_t%d, "
             "sp_box_sym(sp_sym_intern(\"%s\")), &_t%d); "
             "if (_t%d) { "
-            "  sp_RbVal _v = _t%d; "
+            "  sp_RbVal _v = %s; "
             "  if (_v.tag == SP_TAG_NIL) { "
             "    sp_PolyArray_push(_t%d, sp_box_int(-1)); "
             "  }\nelse if (_v.tag == SP_TAG_BOOL && !_v.v.i) { "
@@ -1764,7 +1768,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
             "  } "
             "}\nelse { sp_PolyArray_push(_t%d, sp_box_int(-1)); } }",
             tkv, tfd, tkv, tth, fd_keys[i], tfd,
-            tfd, tkv,
+            tfd, vref,
             topts,
             topts,
             topts,

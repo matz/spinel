@@ -317,6 +317,9 @@ int emit_strbuf_ivar_write_handle(Compiler *c, int v, Buf *b);
    taken: the write, valued as that handle (codegen_expr.c) */
 int emit_strbuf_write_handle(Compiler *c, int v, Buf *b);
 int operand_may_allocate(Compiler *c, int id);
+/* Does boxing a value of type t make a new object (a Range of any kind,
+   whose sp_box_* allocates)? */
+int range_boxes_new(TyKind t);
 /* Can operand `v` allocate where it stands? operand_may_allocate, less
    what builds nothing: a pure read (subtree_is_pure_read: a typed Array's
    element, a plain field), and a shared String slot's read that hands its
@@ -343,6 +346,49 @@ void emit_str_frozen_check(Compiler *c, int recv, Buf *b);
 int strbuf_boxed_elem_read(Compiler *c, int v);
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b);
 int strbuf_object_ref(Compiler *c, int recv, Buf *b);
+/* A String value rendered for a consumer (codegen_str.c, #8328): its C
+   expression, and what the expression needs from where it is used, which
+   str_form_settle meets. Two flags are needs of the value itself:
+     SF_EVAL_ONCE       the value is used more than once (in two forms, or
+                        twice), so it is evaluated once, into a temp of
+                        type `cty` that the uses read (`tmp`);
+     SF_ROOT_UNTIL_USE  the value is an object made here that what runs
+                        before its use could collect, so it stays rooted
+                        until then.
+   The third describes the form's effect on other values:
+     SF_ALLOCATES       producing this form may allocate (it wraps a new
+                        handle around bytes or makes a String), so any
+                        other value live across it must be rooted. It is
+                        never set where the form reads an existing slot,
+                        box or handle; the value's own evaluation is the
+                        consumer's to judge, as operand_may_allocate does.
+                        The schedule layer reads it, and so is the
+                        argument binder's rooting of the values that run
+                        ahead to; str_form_settle does not act on it. */
+enum { SF_EVAL_ONCE = 1, SF_ROOT_UNTIL_USE = 2, SF_ALLOCATES = 4 };
+typedef struct {
+  Buf expr;
+  unsigned needs;
+  TyKind cty;
+  int tmp;
+} StrForm;
+/* Node v in the form the String plan (share_plan.c) gives it for a
+   consumer in `role` (SPR_*), in the face the consumer holds it in, into
+   sf; answers the form it rendered (SPF_*). The faces:
+     SPX_ID  its object id, an sp_int (object_id, __id__). */
+enum { SPX_ID };
+int emit_str_form(Compiler *c, int v, int role, int face, StrForm *sf);
+/* Write sf's expression into b with its needs met: the one place a String
+   form's evaluation, hold and root are decided. An SF_EVAL_ONCE value
+   opens a statement expression that binds it; the consumer writes its
+   uses of _t<sf->tmp>, and str_form_close ends it. */
+void str_form_settle(Compiler *c, StrForm *sf, Buf *b);
+/* The form of an expression a producer's renderer wrote that is not behind
+   emit_str_form yet (a handle parameter's argument, a nilable handle's
+   identity), with the needs it states. */
+void str_form_of_text(StrForm *sf, const char *expr, TyKind cty, unsigned needs);
+void str_form_close(const StrForm *sf, Buf *b);
+void str_form_free(StrForm *sf);
 extern int g_block_nren;
 extern int g_yield_block_fallback_nren;
 /* Paired 1:1 with g_block_nren / g_yield_block_fallback_nren: the &block
@@ -981,6 +1027,10 @@ int head_held_temp(Compiler *c, int node);
    itself, unconverted: the arm reads it in place of a hold of its own. -1
    otherwise. */
 int head_held_read(Compiler *c, int node, const char *text);
+/* The temp the operand-order rewrite ran argument `node` into and rooted
+   (arg_ran_first), when `text` (the argument as an arm rendered it) is that
+   temp; -1 otherwise. */
+int ran_first_read(Compiler *c, int node, const char *text);
 /* Is operand `node` one the head ran, boxed by a wrap of the head's temp
    (an immediate, or a pointer that temp roots, repr_box_form)? A hold of
    that box needs no root of its own. */
@@ -1358,6 +1408,7 @@ void refuse_prepass_at_emit(Compiler *c, int id);
 const char *sg_refused_msg(Compiler *c, int def);
 void sg_refused_def(Compiler *c, int def);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
+void unsupported_feature_collect(Compiler *c, int id, const char *msg);
 
 /* Compile a regexp literal with the engine and throw the result away, to
    refuse at COMPILE time a pattern that would only have failed at the
@@ -2347,9 +2398,10 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);
-/* an index ahead of a cached bounds compare: raw when it may be nil, 1 when
-   the caller owes its nil test where the compare sends it (codegen.c) */
-int emit_int_index_raw(Compiler *c, int node, Buf *b);
+/* `sp_int _t<tk> = ` an index ahead of a cached bounds compare; `redo` is
+   what the compare's out-of-range arm runs first, "" or the checked sum of
+   an `x + c` whose check waited (codegen.c) */
+void emit_int_index_late(Compiler *c, int node, int tk, char *redo, size_t n, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
 void emit_path_expr(Compiler *c, int node, Buf *b);
 void emit_to_s_expr(Compiler *c, int node, Buf *b);

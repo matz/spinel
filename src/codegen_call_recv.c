@@ -94,6 +94,11 @@ static void emit_int_array_delete(Compiler *c, const char *arr, int arg, int nil
   buf_puts(b, ")");
 }
 #include "analyze.h"
+
+/* --share-strings: a Struct member's name, a bare C literal compared with a
+   computed key, has no marker byte for sp_box_str to read (it boxes a
+   handle's own bytes as the handle), so it is boxed as bytes there */
+static const char *struct_name_box_fn(const Compiler *c) { return repr_share_rule(c) ? "sp_box_str_bytes" : "sp_box_str"; }
 /* codegen_fold.c: a step tail in its oint form, when it can be nil */
 int emit_iter_step_tail_o(Compiler *c, const IterStep *st, TyKind t, Buf *vb);
 /* codegen_fold.c: the call whose oint answer an arm keeps (bsearch) */
@@ -251,9 +256,9 @@ static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rt
   buf_printf(b, " sp_RbVal _t%d = sp_box_nil();", tr);
   for (int i = 0; i < sc->nmembers; i++) {
     buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%lldLL))"
-                  "||sp_rbval_eql_key(_t%d,sp_box_str(\"%s\"))){ _t%d = ",
+                  "||sp_rbval_eql_key(_t%d,%s(\"%s\"))){ _t%d = ",
                tk, comp_sym_intern(c, sc->ivars[i] + 1), tk, (long long)i,
-               tk, sc->ivars[i] + 1, tr);
+               tk, struct_name_box_fn(c), sc->ivars[i] + 1, tr);
     char fld[300]; snprintf(fld, sizeof fld, "%s->iv_%s", rtxt, iv_c(sc->ivars[i] + 1));
     emit_member_box(c, sc, i, fld, b);
     buf_puts(b, ";}\nelse");
@@ -2116,41 +2121,42 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
            a nil receiver's NoMethodError comes before the nil index's
            TypeError, as CRuby calls [] on the receiver first */
         int io = node_has_oint_form(c, argv[0]);
+        char redo[160] = "";
         if (io) {
           buf_printf(b, "({ sp_oint _o%d = ", tk); emit_oint_expr(c, argv[0], TY_INT, b);
           buf_printf(b, "; sp_int _t%d = _o%d.v", tk, tk);
         }
-        else {
-          buf_printf(b, "({ sp_int _t%d = ", tk);
-          (void)emit_int_index_raw(c, argv[0], b);
-        }
+        else { buf_puts(b, "({ "); emit_int_index_late(c, argv[0], tk, redo, sizeof redo, b); }
         const char *inil = "";
         char inb[32]; if (io) { snprintf(inb, sizeof inb, "!_o%d.nil && ", tk); inil = inb; }
         /* an oint read below the header's nil-free length (_hcr) is the
            element, with no test of its own; the rest take the oget */
         char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        if (oread) buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s(%s[_t%d]) : ({ ", inil, tk, hr, oint_of(ek), hd, tk);
-        else buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : ({ ", inil, tk, hl, hd, tk);
+        /* an index sum's checked add (redo) runs ahead of the receiver's
+           nil test, as the whole sum did */
+        if (oread) buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s(%s[_t%d]) : %s({ ", inil, tk, hr, oint_of(ek), hd, tk, redo);
+        else buf_printf(b, "; SP_LIKELY(%s(unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : %s({ ", inil, tk, hl, hd, tk, redo);
         emit_nil_cold_test(c, id, recv, b);
         buf_puts(b, " ");
         buf_printf(b, "sp_%sArray_%s(", k, oread ? "oget" : "get");
         emit_expr(c, recv, b);
         if (io) buf_printf(b, ", sp_oint_arg(_o%d)); }); })", tk);
-        else buf_printf(b, ", _t%d); }); })", tk);
+        else buf_printf(b, ", _t%d); })%s; })", tk, *redo ? ")" : "");
         { *out = 1; return 1; }
       }
       int tk = ++g_tmp;
-      buf_printf(b, "({ sp_int _t%d = ", tk);
-      (void)emit_int_index_raw(c, argv[0], b);
+      char redo[160];
+      buf_puts(b, "({ "); emit_int_index_late(c, argv[0], tk, redo, sizeof redo, b);
+      const char *rc = *redo ? ")" : "";
       /* unwrapped at once by its consumer (g_ck_node): the plain cached
          element, else the checked read raising the unwrap's error */
       if (oread && g_ck_node == id) {
         char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get_%s(",
-                   tk, hr, hd, tk, k, g_ck_op == g_ck_opnd ? "opnd" : g_ck_op ? "ck" : "arg");
+        buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : %ssp_%sArray_get_%s(",
+                   tk, hr, hd, tk, redo, k, g_ck_op == g_ck_opnd ? "opnd" : g_ck_op ? "ck" : "arg");
         emit_expr(c, recv, b);
-        if (g_ck_op && g_ck_op != g_ck_opnd) buf_printf(b, ", _t%d, \"%s\"); })", tk, g_ck_op);
-        else buf_printf(b, ", _t%d); })", tk);
+        if (g_ck_op && g_ck_op != g_ck_opnd) buf_printf(b, ", _t%d, \"%s\")%s; })", tk, g_ck_op, rc);
+        else buf_printf(b, ", _t%d)%s; })", tk, rc);
         g_ck_done = 1;
         { *out = 1; return 1; }
       }
@@ -2159,9 +2165,9 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
         buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s(%s[_t%d]) : ", tk, hr, oint_of(ek), hd, tk);
       }
       else buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : ", tk, hl, hd, tk);
-      buf_printf(b, "sp_%sArray_%s(", k, oread ? "oget" : "get");
+      buf_printf(b, "%ssp_%sArray_%s(", redo, k, oread ? "oget" : "get");
       emit_expr(c, recv, b);
-      buf_printf(b, ", _t%d); })", tk);
+      buf_printf(b, ", _t%d)%s; })", tk, rc);
       { *out = 1; return 1; }
     }
     int uo = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && node_is_oint(c, id);
@@ -3428,6 +3434,10 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       else emit_expr(c, recv, b);
       buf_puts(b, "; ");
+      /* the rebuilt poly array is new, and the fill value made next can
+         allocate (a Range boxes into a new object): rooted across it */
+      if (fill_conflict && (operand_allocates_beside(c, argv[0]) || range_boxes_new(comp_ntype(c, argv[0]))))
+        buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
       const char *fsfx = nil_store_sfx(c, fk, argv[0]);   /* a nil fill value takes the _nilable store */
       if (fsfx[0] && fill_rt != TY_POLY_ARRAY) buf_printf(b, "%s _t%d = ", oint_ctype(ty_array_elem(fill_rt)), tv);
       else { emit_ctype(c, ty_array_elem(fill_rt), b); buf_printf(b, " _t%d = ", tv); }
@@ -4514,6 +4524,14 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     if (comp_ntype(c, argv[0]) == TY_INT) { buf_puts(b, "sp_int_chr("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     else emit_str_expr(c, argv[0], b);
     buf_puts(b, ")");
+    /* each step answers a new String, held only in the temp while the next
+       argument is made: an Integer's byte (sp_int_chr) or any argument that
+       allocates collected it */
+    for (int a9 = 1; a9 < argc; a9++)
+      if (comp_ntype(c, argv[a9]) == TY_INT || operand_allocates_beside(c, argv[a9])) {
+        buf_printf(b, "; SP_GC_ROOT(_t%d)", tn9);
+        break;
+      }
     for (int a9 = 1; a9 < argc; a9++) {
       buf_printf(b, "; _t%d = sp_str_append_bytes(_t%d, ", tn9, tn9);
       if (comp_ntype(c, argv[a9]) == TY_INT) { buf_puts(b, "sp_int_chr("); emit_int_expr(c, argv[a9], b); buf_puts(b, ")"); }
@@ -6040,6 +6058,34 @@ static void emit_hash_fetch_default_tail(Compiler *c, int id, int dflt, const ch
   }
 }
 
+/* A merge of String-keyed Hashes of two value layouts: both sides are
+   promoted to sp_StrPolyHash (a receiver that already is one is taken as it
+   is), then merged. The receiver's promotion, or a receiver that builds a
+   new Hash (a merge before it), is held only in the C argument list while
+   the argument's promotion (or the argument itself) allocates: it is made
+   first into a rooted temp then. The operands are variables or calls the
+   operand-order rewrite sees; the promotions are not. */
+static void emit_str_poly_merge(Compiler *c, TyKind rt, TyKind at, int recv, int arg, Buf *b) {
+  const char *rfn = rt == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
+                  : rt == TY_STR_STR_HASH ? "sp_StrPolyHash_from_str_str_hash("
+                                          : NULL;
+  const char *afn = at == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
+                  : at == TY_STR_STR_HASH  ? "sp_StrPolyHash_from_str_str_hash("
+                                           : NULL;
+  int fresh = rfn || subtree_may_allocate(c->nt, recv);
+  int th = fresh && (afn || operand_allocates_beside(c, arg)) ? ++g_tmp : 0;
+  if (th) buf_printf(b, "({ sp_StrPolyHash *_t%d = ", th);
+  else buf_puts(b, "sp_StrPolyHash_merge(");
+  if (rfn) buf_puts(b, rfn);
+  emit_expr(c, recv, b);
+  if (rfn) buf_puts(b, ")");
+  if (th) buf_printf(b, "; SP_GC_ROOT(_t%d); sp_StrPolyHash_merge(_t%d, ", th, th);
+  else buf_puts(b, ", ");
+  if (afn) { buf_puts(b, afn); emit_expr(c, arg, b); buf_puts(b, ")"); }
+  else emit_expr(c, arg, b);
+  buf_puts(b, th ? "); })" : ")");
+}
+
 int emit_hash_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -6855,16 +6901,7 @@ else {
         /* cross-variant str merge: promote both sides to str_poly_hash */
         if ((rt == TY_STR_INT_HASH || rt == TY_STR_STR_HASH) &&
             ty_is_hash(at) && ty_hash_key(at) == TY_STRING && at != rt) {
-          buf_puts(b, "sp_StrPolyHash_merge(");
-          const char *rfn = rt == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
-                                                   : "sp_StrPolyHash_from_str_str_hash(";
-          buf_puts(b, rfn); emit_expr(c, recv, b); buf_puts(b, "), ");
-          const char *afn = at == TY_STR_INT_HASH ? "sp_StrPolyHash_from_str_int_hash("
-                          : at == TY_STR_STR_HASH  ? "sp_StrPolyHash_from_str_str_hash("
-                                                   : NULL;
-          if (afn) { buf_puts(b, afn); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-          else { emit_expr(c, argv[0], b); }
-          buf_puts(b, ")");
+          emit_str_poly_merge(c, rt, at, recv, argv[0], b);
           return 1;
         }
         /* any other cross-variant merge (mismatched key or value layout):
@@ -6914,14 +6951,14 @@ else {
             return 1;
           }
         }
-        buf_printf(b, "sp_%sHash_merge(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
         /* a str_poly receiver may be merged with a concrete str-keyed hash;
            coerce the argument to the receiver's variant first */
         if (rt == TY_STR_POLY_HASH && (at == TY_STR_STR_HASH || at == TY_STR_INT_HASH)) {
-          buf_printf(b, "sp_StrPolyHash_from_%s(", at == TY_STR_STR_HASH ? "str_str_hash" : "str_int_hash");
-          emit_expr(c, argv[0], b); buf_puts(b, ")");
+          emit_str_poly_merge(c, rt, at, recv, argv[0], b);
+          return 1;
         }
-        else if (at == TY_POLY && rt == TY_POLY_POLY_HASH) {
+        buf_printf(b, "sp_%sHash_merge(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
+        if (at == TY_POLY && rt == TY_POLY_POLY_HASH) {
           /* A boxed argument holds whichever variant the value really is, so
              the pointer cast below would read a Sym-keyed hash through a
              Poly-keyed struct. The general hash can be rebuilt from any of
@@ -10813,9 +10850,9 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     emit_frozen_obj_guard(c, ty_object_class(rt), obj, b);
     for (int i = 0; i < sc->nmembers; i++) {
       buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%lldLL))"
-                    "||sp_rbval_eql_key(_t%d,sp_box_str(\"%s\"))){ _t%d->iv_%s = ",
+                    "||sp_rbval_eql_key(_t%d,%s(\"%s\"))){ _t%d->iv_%s = ",
                  tk, comp_sym_intern(c, sc->ivars[i] + 1), tk, (long long)i,
-                 tk, sc->ivars[i] + 1, tw, iv_c(sc->ivars[i] + 1));
+                 tk, struct_name_box_fn(c), sc->ivars[i] + 1, tw, iv_c(sc->ivars[i] + 1));
       char vtxt[32]; snprintf(vtxt, sizeof vtxt, "_t%d", tv);
       int scid = ty_object_class(rt);
       /* a member with a nil bit takes the nil into its bit */

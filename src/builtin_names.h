@@ -284,6 +284,9 @@ int is_gated_exception_accessor(const char *n); /* accessors owned by specific e
 int is_symbol_exception_accessor(const char *n); /* exception accessors that can return a Symbol */
 
 int is_builtin_reopen_name(const char *name);
+/* A reopened class whose instance methods take self boxed (`sp_RbVal self`,
+   emit_method_signature): Object, Numeric, Array, Hash. */
+int is_boxed_self_class_name(const char *name);
 
 int is_nil_method(const char *n); /* NilClass's public methods, its own and Object's: what nil answers */
 int is_positional_io(const char *n); /* pread / pwrite: IO at an offset */

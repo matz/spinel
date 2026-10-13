@@ -1,0 +1,11 @@
+"ab\n"
+"cd\n"
+"ef"
+"ab"
+"cd"
+"ef"
+["ab\nc", "\nef"]
+"ab\n"
+"cd\n"
+"ab"
+"x"

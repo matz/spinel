@@ -69,6 +69,12 @@ class Holder
   p K.upcase
 end
 
+# a builtin's object constant in parentheses
+def paren_argv
+  def (ARGV).first = :stub
+  p ARGV.first
+end
+
 # a constant set by ||=
 def or_write_const
   def OR_NAME.upcase = "zzz"
@@ -94,4 +100,5 @@ puts tag(+"x").to_s
 expression
 struct_class
 or_write_const
+paren_argv
 p (+"abc").tag!.size

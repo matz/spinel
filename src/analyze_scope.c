@@ -2878,11 +2878,21 @@ static int sg_const_holds_class(Compiler *c, const char *name) {
   int writes = 0;
   for (int w = 0; w < nt->count; w++) {
     NodeKind k = nt_kind(nt, w);
-    if (k != NK_ConstantWriteNode && k != NK_ConstantOrWriteNode && k != NK_ConstantAndWriteNode &&
-        k != NK_ConstantOperatorWriteNode && k != NK_ConstantTargetNode) continue;
-    const char *wn = nt_str(nt, w, "name");
+    const char *wn;
+    if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+        k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)
+      wn = nt_str(nt, w, "name");
+    else if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode ||
+             k == NK_ConstantPathAndWriteNode || k == NK_ConstantPathOperatorWriteNode ||
+             k == NK_ConstantPathTargetNode) {
+      /* `M::NAME = ...` names the same constant a `def NAME.m` in M reads */
+      int t = nt_ref(nt, w, "target");
+      wn = t >= 0 ? nt_str(nt, t, "name") : nt_str(nt, w, "name");
+    }
+    else continue;
     if (!wn || !sp_streq(wn, name)) continue;
-    if (k != NK_ConstantWriteNode || !sg_class_value(c, nt_ref(nt, w, "value"))) return 0;
+    if ((k != NK_ConstantWriteNode && k != NK_ConstantPathWriteNode) ||
+        !sg_class_value(c, nt_ref(nt, w, "value"))) return 0;
     writes++;
   }
   if (writes) return 1;
@@ -2930,6 +2940,19 @@ void register_singleton_defs(Compiler *c) {
     int recv, is_extend = 0, is_dsm = 0, is_scls = 0;
     if (idk == NK_DefNode) {
       recv = nt_ref(nt, id, "receiver");
+      /* `def (obj).m` is `def obj.m`: a variable, or a constant that may
+         hold an object, binds the same way unwrapped. Self and a class's
+         constant stay as the walk filed them. */
+      int ur = sg_unparen(nt, recv);
+      NodeKind uk = ur >= 0 && ur != recv ? nt_kind(nt, ur) : NK_NilNode;
+      if (uk == NK_LocalVariableReadNode || uk == NK_InstanceVariableReadNode ||
+          uk == NK_ClassVariableReadNode || uk == NK_GlobalVariableReadNode ||
+          (uk == NK_ConstantReadNode && nt_str(nt, ur, "name") &&
+           comp_class_index(c, nt_str(nt, ur, "name")) < 0 &&
+           !sg_const_holds_class(c, nt_str(nt, ur, "name")))) {
+        nt_node_set_ref(nt, id, "receiver", ur);
+        recv = ur;
+      }
     }
     else if (idk == NK_CallNode) {
       const char *cn = nt_str(nt, id, "name");

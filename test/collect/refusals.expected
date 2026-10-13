@@ -1104,6 +1104,12 @@ spinel: 1 refusal, nothing written
 == test/reject/singleton_on_untraceable_recv.rb [promote] rc=1
 spinel: test/reject/singleton_on_untraceable_recv.rb:11: singleton method that needs a self, on a receiver that is not one user-class instance
 spinel: 1 refusal, nothing written
+== test/reject/singleton_untraced_const_path.rb [default] rc=1
+spinel: test/reject/singleton_untraced_const_path.rb:8: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: 1 refusal, nothing written
+== test/reject/singleton_untraced_const_path.rb [promote] rc=1
+spinel: test/reject/singleton_untraced_const_path.rb:8: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: 1 refusal, nothing written
 == test/reject/singleton_untraced_no_self.rb [default] rc=1
 spinel: test/reject/singleton_untraced_no_self.rb:11: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:21: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
@@ -1114,9 +1120,10 @@ spinel: test/reject/singleton_untraced_no_self.rb:47: singleton method on a rece
 spinel: test/reject/singleton_untraced_no_self.rb:54: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:61: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:74: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: test/reject/singleton_untraced_no_self.rb:83: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: test/reject/singleton_untraced_no_self.rb:80: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:68: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: 11 refusals, nothing written
+spinel: 12 refusals, nothing written
 == test/reject/singleton_untraced_no_self.rb [promote] rc=1
 spinel: test/reject/singleton_untraced_no_self.rb:11: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:21: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
@@ -1127,9 +1134,10 @@ spinel: test/reject/singleton_untraced_no_self.rb:47: singleton method on a rece
 spinel: test/reject/singleton_untraced_no_self.rb:54: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:61: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:74: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: test/reject/singleton_untraced_no_self.rb:83: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: test/reject/singleton_untraced_no_self.rb:80: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
+spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:68: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: 11 refusals, nothing written
+spinel: 12 refusals, nothing written
 == test/reject/stdout_reassigned_pp.rb [default] rc=1
 spinel: test/reject/stdout_reassigned_pp.rb:6: unsupported pp while the program reassigns $stdout (puts, print, printf and p without a splat or block argument write through it): node N (CallNode `pp`) recv=-/ty-1 argc=1 arg0ty19
 spinel: 1 refusal, nothing written

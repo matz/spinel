@@ -1673,7 +1673,12 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
       buf_printf(b, "}; _k%d = _xi%d >= 0 ? _xc%d[_xi%d] : 0x7fffffff; } _k%d; })", kt, pk, pk, pk, kt);
       return;
     }
-    buf_printf(b, "((_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION) ? sp_exc_user_cls_id(_t%d) : ", tv, tv, tv);
+    /* a user subclass instance boxed under its static class (`rescue Base
+       => e`) keys by the class it was raised as, too */
+    buf_printf(b, "((_t%d.tag == SP_TAG_OBJ && (_t%d.cls_id == SP_BUILTIN_EXCEPTION", tv, tv);
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_is_exc_subclass(c, k)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
+    buf_printf(b, ")) ? sp_exc_user_cls_id(_t%d) : ", tv);
     emit_poly_dispatch_key_pick(c, tv, key_guard, prim_cand, 0, NULL, b);
     buf_puts(b, ")");
     return;

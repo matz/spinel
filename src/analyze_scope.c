@@ -10515,7 +10515,7 @@ int infer_ivar_types(Compiler *c) {
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (an < 1) continue;
       TyKind vt = infer_type(c, argv[0]);
-      char ivname[256];
+      char ivname[sizeof base + 1];
       snprintf(ivname, sizeof ivname, "@%s", base);
       int sgc = sg_writer_class(c, id, recv);
       if (sgc >= 0 && comp_is_sg_writer(&c->classes[sgc], base)) {

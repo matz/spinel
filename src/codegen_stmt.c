@@ -17576,7 +17576,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             }
             if (an >= 1) {
               int rc = ty_object_class(rt);
-              char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+              char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
               int defc = -1; comp_writer_in_chain(c, rc, base, &defc);
               int iv = comp_ivar_index(&c->classes[defc < 0 ? rc : defc], ivn);
               TyKind ivt = iv >= 0 ? c->classes[defc < 0 ? rc : defc].ivar_types[iv] : TY_UNKNOWN;

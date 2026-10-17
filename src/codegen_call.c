@@ -10967,7 +10967,7 @@ int class_method_named(Compiler *c, const char *name) {
    `attr_accessor :pos`, a Struct member)? Writers are kept under the base
    name, which the arm's method and reader test does not ask. */
 int attr_writer_named(Compiler *c, int cls, const char *name) {
-  char base[128];
+  char base[256];
   if (!setter_base_name(name, base, sizeof base)) return 0;
   for (int k = 0; k < c->nclasses; k++)
     if ((cls < 0 || k == cls) && comp_writer_in_chain(c, k, base, NULL)) return 1;
@@ -28230,7 +28230,7 @@ int emit_sg_accessor(Compiler *c, int id, int ci, const char *cn, const char *na
     if (!setter_base_name(name, base, sizeof base)) return 0;
     if (!comp_is_sg_writer(cls, base)) return 0;
     if (comp_is_sg_civ(cls, base)) {
-      char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+      char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
       int ivi = comp_ivar_index(cls, ivn);
       TyKind ivt = ivi >= 0 ? cls->ivar_types[ivi] : TY_POLY;
       /* an oint static takes the value with its nil, and the write answers

@@ -6440,6 +6440,7 @@ int desugar_call_op_write(Compiler *c) {
   int changed = 0;
   int n0 = nt->count;
   int *parent = NULL;
+  char *wname = NULL, *aname = NULL;   /* this round's copies, freed by the next */
   for (int id = 0; id < n0; id++) {
     const char *ty = nt_type(nt, id);
     if (!ty || !sp_streq(ty, "CallOperatorWriteNode")) continue;
@@ -6452,12 +6453,13 @@ int desugar_call_op_write(Compiler *c) {
     if (!rty) continue;
     int simple = sp_streq(rty, "LocalVariableReadNode") || sp_streq(rty, "SelfNode") ||
                  sp_streq(rty, "InstanceVariableReadNode") || sp_streq(rty, "ConstantReadNode");
-    char wname[300];
-    snprintf(wname, sizeof wname, "%s=", attr);
+    free(wname);
+    wname = setter_name_of(attr);
     int has_def_writer = 0;
     for (int k = 0; k < c->nclasses && !has_def_writer; k++)
       if (comp_method_in_chain(c, k, wname, NULL) >= 0 || comp_method_in_chain(c, k, attr, NULL) >= 0) has_def_writer = 1;
-    char aname[300]; snprintf(aname, sizeof aname, "%s", attr);
+    free(aname);
+    aname = name_dup(attr);
     /* attr_writer: keep the store, unless something reads the op-assign's
        value (a method's tail, `x = (w.n += 1)`, a block's last statement,
        also in the block of a user `each`), which the writer call carries
@@ -6544,6 +6546,8 @@ int desugar_call_op_write(Compiler *c) {
     changed = 1;
   }
   free(parent);
+  free(wname);
+  free(aname);
   return changed;
 }
 
@@ -6562,6 +6566,7 @@ int desugar_call_or_write_reopen(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  char *wname = NULL;   /* this round's copy, freed by the next */
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_CallOrWriteNode && k != NK_CallAndWriteNode) continue;
@@ -6571,8 +6576,8 @@ int desugar_call_or_write_reopen(Compiler *c) {
     if (recv < 0 || !attr || val < 0) continue;
     TyKind rt = infer_type(c, recv);
     if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL || ty_is_object(rt)) continue;
-    char wname[300];
-    snprintf(wname, sizeof wname, "%s=", attr);
+    free(wname);
+    wname = setter_name_of(attr);
     /* both halves defined by a reopening of a builtin, or a receiver that
        may be one of several kinds (`known.is_alias_for ||= x`, `known` read
        out of a Hash of mixed values), which the two calls dispatch on as
@@ -6621,6 +6626,7 @@ int desugar_call_or_write_reopen(Compiler *c) {
     scope_local_intern(comp_scope_of(c, tw), tname);
     changed = 1;
   }
+  free(wname);
   return changed;
 }
 
@@ -19875,6 +19881,7 @@ int desugar_safe_nav_attr_write(Compiler *c) {
 int desugar_const_attr_op_assign(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  char *wn = NULL;   /* this round's copy, freed by the next */
   for (int id = 0; id < n0; id++) {
     const char *ty = nt_type(nt, id);
     if (!ty) continue;
@@ -19886,7 +19893,8 @@ int desugar_const_attr_op_assign(Compiler *c) {
     const char *rn = nt_str(nt, id, "name");
     int v = nt_ref(nt, id, "value");
     if (!rn || !rn[0] || v < 0 || nt_ref(nt, id, "arguments") >= 0) continue;
-    char wn[200]; snprintf(wn, sizeof wn, "%s=", rn);
+    free(wn);
+    wn = setter_name_of(rn);
     const char *op = is_op ? nt_str(nt, id, "binary_operator") : NULL;
     if (is_op && !op) continue;
     int recv2 = nt_clone_subtree(nt, recv); if (recv2 < 0) continue;
@@ -19907,6 +19915,7 @@ int desugar_const_attr_op_assign(Compiler *c) {
     }
     changed = 1;
   }
+  free(wn);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }
@@ -19980,6 +19989,7 @@ int desugar_reopened_op_write(Compiler *c) {
   /* the answer per operator, asked once: a scan of every class body per
      operator-write would grow with the program twice over */
   char memo_op[24][8]; int memo_ans[24], nmemo = 0;
+  char *rn = NULL, *wn = NULL;   /* this round's copies, freed by the next */
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     int f = -1, attr = nt_type(nt, id) && sp_streq(nt_type(nt, id), "CallOperatorWriteNode");
@@ -20029,8 +20039,9 @@ int desugar_reopened_op_write(Compiler *c) {
     else {
       const char *an = nt_str(nt, id, "name");
       if (!an) continue;
-      char rn[256], wn[260];
-      snprintf(rn, sizeof rn, "%s", an); snprintf(wn, sizeof wn, "%s=", an);
+      free(rn); free(wn);
+      rn = name_dup(an);
+      wn = setter_name_of(an);
       ow_twice(c, nt, id, recv, 'r', pre, &npre, &r1, &r2);
       if (r1 < 0 || r2 < 0) continue;
       int read = ca_attr_call(nt, r1, rn, -1);
@@ -20046,6 +20057,8 @@ int desugar_reopened_op_write(Compiler *c) {
     nt_node_set_ref(nt, id, "body", st);
     changed = 1;
   }
+  free(rn);
+  free(wn);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

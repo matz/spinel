@@ -427,8 +427,9 @@ static int cf_sg_access(CF *f, int v, int k, const char *nm, const int *argv, in
   char base[256];
   if (setter_base_name(nm, base, sizeof base)) {
     if (!comp_is_sg_writer(ci, base)) return 0;
-    snprintf(ivn, sizeof ivn, "@%s", base);
-    int e = cf_entry(f, -(k + 2), ivn);
+    char wivn[sizeof base + 1];
+    snprintf(wivn, sizeof wivn, "@%s", base);
+    int e = cf_entry(f, -(k + 2), wivn);
     for (int a = 0; a < argc; a++) { cf_unite(f, e, argv[a]); if (v >= 0) cf_unite(f, v, argv[a]); }
     return 1;
   }
@@ -1041,7 +1042,7 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       continue;
     }
     if (is_w && comp_writer_in_chain(c, k, base, NULL)) {
-      char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+      char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
       for (int a = 0; a < argc; a++) { cf_unite(f, cf_entry(f, f->fam[k], ivn), argv[a]); cf_unite(f, v, argv[a]); }
       continue;
     }

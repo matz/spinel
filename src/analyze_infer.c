@@ -2634,7 +2634,7 @@ static int sg_accessor_type(Compiler *c, int ci, const char *name, TyKind *out) 
   }
   *out = TY_POLY;
   if (comp_is_sg_civ(cls, rn)) {
-    char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rn);
+    char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", rn);
     int ivi = comp_ivar_index(cls, ivn);
     if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) *out = ivar_value_ty(cls, ivi);
   }

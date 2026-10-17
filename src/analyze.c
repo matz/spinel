@@ -27588,7 +27588,7 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
       int built = 0;
       NT_FOREACH_KIND(nt, NK_CallNode, w) {
         const char *wn = nt_str(nt, w, "name");
-        char base[128];
+        char base[256];
         if (!setter_base_name(wn, base, sizeof base)) continue;
         int wa = nt_ref(nt, w, "arguments"), wc = 0;
         const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wc) : NULL;
@@ -49135,6 +49135,17 @@ static void an_presence_unmarked(Compiler *c, int n, int depth) {
     for (int j = 0; j < m; j++) an_presence_unmarked(c, ids[j], depth + 1);
   }
 }
+/* Note ivar "@" + the first len bytes of name, a string made as long as the
+   name needs. */
+static void an_presence_note_ivar(Compiler *c, const char *name, size_t len, int flag) {
+  char *ivn = malloc(len + 2);
+  if (!ivn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  ivn[0] = '@';
+  memcpy(ivn + 1, name, len);
+  ivn[len + 1] = '\0';
+  comp_pres_note(c, ivn, flag);
+  free(ivn);
+}
 /* The writes and removals the flag cannot follow (Compiler.pres_names): an
    ivar target of a `for` or a `rescue`, a writer reached by its name, a
    bitwise op-write through a writer (nil answers `|`), an
@@ -49160,20 +49171,12 @@ static void an_presence_writes(Compiler *c, int id) {
       comp_pres_note(c, nt_str(nt, av[0], k0 == NK_SymbolNode ? "value" : "content"), PRES_REMOVED);
     else if ((is_send_family(nm) || is_method_ref_name(nm)) && k0 == NK_SymbolNode) {
       const char *wn = nt_str(nt, av[0], "value");
-      char ivn[256], wbase[256];
-      if (setter_base_name(wn, wbase, sizeof wbase)) {
-        snprintf(ivn, sizeof ivn, "@%s", wbase);
-        comp_pres_note(c, ivn, PRES_UNMARKED);
-      }
+      if (name_is_plain_setter(wn)) an_presence_note_ivar(c, wn, strlen(wn) - 1, PRES_UNMARKED);
     }
   }
   else if (sp_streq(nt_type(nt, id), "CallOperatorWriteNode")) {
     const char *op = nt_str(nt, id, "binary_operator"), *rn = nt_str(nt, id, "read_name");
-    char ivn[256];
-    if (op && rn && is_bit_op(op)) {
-      snprintf(ivn, sizeof ivn, "@%s", rn);
-      comp_pres_note(c, ivn, PRES_UNMARKED);
-    }
+    if (op && rn && is_bit_op(op)) an_presence_note_ivar(c, rn, strlen(rn), PRES_UNMARKED);
   }
 }
 /* presence_family: the classes linked by a parent or an included module,

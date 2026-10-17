@@ -1857,6 +1857,24 @@ int name_is_plain_setter(const char *name) {
   char p = name[ln - 2];
   return p != '=' && p != '!' && p != '<' && p != '>' && p != ']';
 }
+/* A copy of name, and of "attr=" (the setter name an attribute's writer is
+   called by), each made as long as the name needs; the caller frees it. */
+char *name_dup(const char *name) {
+  size_t n = strlen(name);
+  char *s = malloc(n + 1);
+  if (!s) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(s, name, n + 1);
+  return s;
+}
+char *setter_name_of(const char *attr) {
+  size_t n = strlen(attr);
+  char *s = malloc(n + 2);
+  if (!s) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(s, attr, n);
+  s[n] = '=';
+  s[n + 1] = '\0';
+  return s;
+}
 /* Is CallNode `id` a setter written as an assignment (`obj.x = v`), whose
    value is the argument whatever the writer returns? Prism flags it
    (nt_attr_write), and a desugar that writes one sets the flag. A call the

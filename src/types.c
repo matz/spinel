@@ -540,15 +540,20 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
      elsewhere) is also poly, not the Float this arm used to answer).
      Either bound TY_NIL keeps the receiver's own class boxed regardless
      of receiver kind (analyze_infer_recv.c, checked for both TY_INT and
-     TY_FLOAT together). */
+     TY_FLOAT together).
+
+     Written as an allowlist ("both bounds match the receiver's own
+     kind"), not a blocklist of the bound kinds known to force poly: a
+     second review round (CodeRabbit, upstream) found the earlier
+     blocklist version (poly only for FLOAT or POLY bounds) left a
+     Bignum or Rational bound answering the receiver's own kind, where
+     a non-constant receiver (confirmed via --emit-types -- a yield's
+     receiver is never a compile-time constant, so it always takes this
+     general path, never the constant-folded one a literal receiver
+     can take) answers poly for ANY bound kind other than its own. */
   if (!strcmp(name, "clamp") && argc == 2 && (recv == TY_INT || recv == TY_FLOAT)) {
     if (arg0 == TY_NIL || arg1 == TY_NIL) { *out = TY_POLY; return 1; }
-    if (recv == TY_INT) {
-      *out = (arg0 == TY_FLOAT || arg1 == TY_FLOAT || arg0 == TY_POLY || arg1 == TY_POLY)
-             ? TY_POLY : TY_INT;
-      return 1;
-    }
-    *out = (arg0 == TY_FLOAT && arg1 == TY_FLOAT) ? TY_FLOAT : TY_POLY;
+    *out = (arg0 == recv && arg1 == recv) ? recv : TY_POLY;
     return 1;
   }
   /* clamp(range): confirmed empirically (--emit-types on direct calls)

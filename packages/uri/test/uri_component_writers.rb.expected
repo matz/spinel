@@ -1,0 +1,53 @@
+"http://y/x"
+"http://h:81/x"
+"http://a:b@h/x"
+"http://me:pw@h/x"
+["me", "p:w"]
+"http://u@h/x"
+[URI::InvalidURIError, "password component depends user component"]
+[URI::InvalidComponentError, "bad component(expected userinfo component or user component): a b"]
+[URI::InvalidComponentError, "bad password component"]
+[URI::InvalidURIError, "invalid percent escape: %zz"]
+"a%20b%22c%22%3Cd%3E%2z%20%C3%A9"
+"a%20b%20%C3%A9#x"
+"http://h/x"
+"a%20b"
+[URI::InvalidURIError, "bad URI (is not URI?): \"http://h/x#a b\""]
+[URI::InvalidURIError, "invalid percent escape: %zz"]
+"http://[::1]/x"
+8080
+nil
+[URI::InvalidComponentError, "bad component(expected port component): \"x1\""]
+"https://h/x"
+[URI::InvalidComponentError, "bad component(expected scheme component): 1bad"]
+[URI::InvalidComponentError, "bad component(expected host component): a b"]
+[URI::InvalidComponentError, "bad component(expected absolute path component): rel"]
+"http://h/ok/%41"
+"ftp://h/rel/ok"
+[URI::InvalidURIError, "cannot set opaque with host, port, userinfo or path"]
+[URI::InvalidURIError, "cannot set host with registry or opaque"]
+[URI::InvalidURIError, "cannot set port with registry or opaque"]
+[URI::InvalidURIError, "path conflicts with opaque"]
+[URI::InvalidURIError, "query conflicts with opaque"]
+[URI::InvalidURIError, "cannot set user with opaque"]
+[URI::InvalidURIError, "cannot set registry"]
+[URI::InvalidURIError, "cannot set opaque with host, port, userinfo or path"]
+[URI::InvalidComponentError, "bad component(expected host component): a b"]
+"http://[::1]:8080"
+"//h/rel"
+"rel"
+"//u:p@h"
+[URI::InvalidURIError, "cannot set userinfo for file URI"]
+"file:///x"
+""
+[URI::InvalidComponentError, "bad component(expected absolute path component): dc=x"]
+[URI::InvalidComponentError, "unrecognised opaque part for mailtoURL: not an address"]
+[URI::InvalidComponentError, "bad component(expected opaque component): a b"]
+"http:?a%20b#c%20d"
+[URI::InvalidComponentError, "bad component(expected host component): a_b"]
+"a_b"
+[URI::InvalidComponentError, "bad component(expected absolute path component): /a b"]
+[URI::InvalidComponentError, "bad component(expected host component): "]
+[URI::InvalidComponentError, "bad component(expected host component): "]
+"ws://"
+"//"

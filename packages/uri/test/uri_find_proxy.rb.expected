@@ -1,0 +1,20 @@
+"http://proxy:8080"
+nil
+"http://sproxy:3128"
+"http://sproxy:3128"
+"http://fproxy:21"
+nil
+nil
+nil
+"http://proxy:8080"
+nil
+"http://proxy:8080"
+nil
+"http://ok:1"
+"http://cgi:1"
+"relative URI: /rel"
+false
+false
+true
+true
+false

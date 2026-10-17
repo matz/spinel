@@ -1,0 +1,37 @@
+"d"
+"../x/y"
+"?q=1"
+"../"
+"../../z"
+"//other.com/a"
+"https://example.com/a"
+""
+"#frag"
+"c"
+"relative URI: /rel"
+"http://example.com/a/c"
+"http://example.com/a/c"
+true
+"example.com"
+"http://example.com/"
+"http://example.com/"
+["example.com", 8080, "/p"]
+[:scheme, :userinfo, :host, :port, :path, :query, :fragment]
+[:scheme, :userinfo, :host, :port, :path, :query, :fragment]
+[:scheme, :userinfo, :host, :port, :registry, :path, :opaque, :query, :fragment]
+"expected of components of URI::HTTP (scheme, userinfo, host, port, path, query, fragment)"
+true
+false
+true
+false
+true
+1
+true
+false
+true
+"http://a.com/x"
+[URI::HTTP, "http://b.com/x", "http://a.com/"]
+["alice%40x", "p%3Aw", "alice@x", "p:w"]
+"http://alice%40x:new@example.com/"
+["bob", nil, "http://bob@example.com/"]
+["carol", "secret", "http://carol:secret@example.com/"]

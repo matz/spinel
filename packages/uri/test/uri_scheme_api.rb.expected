@@ -1,0 +1,43 @@
+"http://u:p@example.com:8080/a?q=1#f"
+"http://example.com/x"
+"https://example.com/s"
+"git://h/r"
+"urn:isbn:1"
+[ArgumentError, "expected Array of or Hash of components of URI::HTTP (userinfo, host, port, path, query, fragment)"]
+["ftp://ftp.example.com/pub/file.txt;type=i", "pub/file.txt", "i"]
+"ftp://u@ftp.example.com/%2Fetc/x"
+"d"
+"ftp://ftp.example.com/pub/file.txt;type=a"
+[URI::InvalidComponentError, "bad typecode(expected a, i, d): z"]
+["ftp://h/dir/other;type=a", "a"]
+[:scheme, :userinfo, :host, :port, :path, :typecode]
+["", nil, nil, "file:///etc/hosts"]
+"file:///tmp/x"
+""
+[URI::InvalidURIError, "cannot set userinfo for file URI"]
+[URI::InvalidURIError, "cannot set user for file URI"]
+nil
+"ws://example.com/cable"
+"wss://example.com:8443/c?x=1"
+"/"
+"http://example.com/"
+["mailto:a@example.com,b@example.com?subject=Hi&body=Yo", "a@example.com,b@example.com", [["subject", "Hi"], ["body", "Yo"]]]
+"mailto:c@example.com?cc=d@example.com"
+"mailto:e@example.com"
+["mailto:z@example.com?subject=New&body=Text%20here", "z@example.com", [["subject", "New"], ["body", "Text%20here"]]]
+"To: z@example.com\nSubject: New\n\nText here\n"
+"To: a@b.com, x@y.com\nSubject: Hi there\nCc: c@d.com\n\n\n"
+[URI::InvalidComponentError, "an address in 'to' is invalid as URI \"not an address\""]
+[URI::InvalidComponentError, "bad component(expected opaque component): a b"]
+[URI::InvalidComponentError, "unrecognised opaque part for mailtoURL: @@"]
+[:scheme, :to, :headers]
+[URI::LDAP, "dc=example,dc=com", "cn,mail", "sub", "(uid=a)", nil, 389, false]
+"ldap://ldap.example.com/dc=example,dc=com?cn,mail?one?(cn=*)"
+"ldap://ldap.example.com/ou=people?cn,mail?one?(cn=*)"
+"ldap://h/dc=x?cn?base"
+"ldap://h:3389/dc=y?"
+636
+["dc=z", nil]
+["one", "sub", "base"]
+[:scheme, :host, :port, :dn, :attributes, :scope, :filter, :extensions]
+[URI::InvalidURIError, "bad LDAP URL"]

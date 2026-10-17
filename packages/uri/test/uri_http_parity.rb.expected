@@ -1,0 +1,20 @@
+[URI::InvalidComponentError, "bad component(expected host component): "]
+"ws:///x"
+"h:"
+"h:8080"
+"http://h"
+"/"
+[NoMethodError, "undefined method 'request_uri' for an instance of URI::Generic"]
+"/a?b=1"
+"/a"
+["+", "%2F", 256]
+["%20", "/", "/", " "]
+{host: "h", scheme: "http"}
+{userinfo: "u", host: "h", port: 21, path: "p", typecode: "i", scheme: "ftp"}
+[Regexp, Regexp, Regexp]
+true
+true
+false
+[URI::InvalidURIError, "cannot set user for file URI"]
+[URI::InvalidURIError, "cannot set password for file URI"]
+"file:///etc/x"

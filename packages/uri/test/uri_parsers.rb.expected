@@ -1,0 +1,93 @@
+["http", "user:pw", "[::1]", "8080", nil, "/a/b", nil, "q=1", "f"]
+["https", nil, "[v1.fe]", nil, nil, "/x", nil, nil, nil]
+["http", nil, "192.168.0.1", nil, nil, "/", nil, nil, nil]
+["http", nil, "a", nil, nil, "/", nil, "q=a b", nil]
+["urn", nil, nil, nil, nil, nil, "isbn:0451450523", nil, nil]
+["mailto", nil, nil, nil, nil, nil, "a@b.com?subject=x", nil, nil]
+[nil, nil, "host", nil, nil, "/path", nil, nil, nil]
+[nil, nil, nil, nil, nil, "../rel/path", nil, "x", nil]
+[nil, nil, nil, nil, nil, "", nil, nil, nil]
+[nil, nil, nil, nil, nil, "", nil, nil, "frag"]
+["http", nil, "a", "", nil, "/p", nil, nil, nil]
+["HTTP", nil, "Example.COM", nil, nil, "/X", nil, nil, nil]
+[URI::InvalidURIError, "bad URI (is not URI?): \"http://a/b c\""]
+[URI::InvalidURIError, "URI must be ascii only \"http://a/\\u00E9\""]
+["foo", nil, nil, nil, nil, "/abs", nil, nil, nil]
+[URI::InvalidURIError, "bad URI (is not URI?): \"http://[::1/\""]
+[URI::InvalidURIError, "bad URI (is not URI?): \"http://a/%zz\""]
+"http://Example.COM/x"
+[URI::InvalidURIError, "bad URI (is not URI?): \"http://a/b c\""]
+[URI::InvalidComponentError, "missing opaque part for mailto URL"]
+["http", "u", "h", "1", nil, "/p;x", nil, "q", "f"]
+["foo", nil, nil, nil, "reg;name", "/x", nil, nil, nil]
+[URI::InvalidURIError, "the scheme foo does not accept registry part: reg;name (or bad hostname?)"]
+[URI::InvalidURIError, "bad URI (is not URI?): http://a b/"]
+[nil, nil, nil, nil, nil, "rel/seg/path", nil, "q", nil]
+URI::HTTP
+"a%20b/c?d=%C3%A9"
+"a%40b%3Ac"
+"x%2Fy"
+"a b/cあ"
+"http://a/d"
+["http://a.com/x", "mailto:b@c.com,", "ftp://f/"]
+["https://b.com"]
+nil
+["http://a.com", "http://b.org"]
+true
+"(?:(?:[a-zA-Z0-9\\-.]|%\\h\\h)+|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|\\[(?:(?:[a-fA-F\\d]{1,4}:)*(?:[a-fA-F\\d]{1,4}|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})|(?:(?:[a-fA-F\\d]{1,4}:)*[a-fA-F\\d]{1,4})?::(?:(?:[a-fA-F\\d]{1,4}:)*(?:[a-fA-F\\d]{1,4}|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}))?)\\])"
+[:ESCAPED, :UNRESERVED, :RESERVED, :DOMLABEL, :TOPLABEL, :HOSTNAME, :URIC, :URIC_NO_SLASH, :QUERY, :FRAGMENT, :IPV4ADDR, :IPV6ADDR, :IPV6REF, :HOST, :PORT, :HOSTPORT, :USERINFO, :PATH_SEGMENTS, :REG_NAME, :REL_SEGMENT, :SCHEME, :ABS_PATH, :REL_PATH, :NET_PATH, :HIER_PART, :OPAQUE_PART, :ABS_URI, :REL_URI, :URI_REF, :X_ABS_URI, :X_REL_URI]
+[:ABS_URI, :REL_URI, :URI_REF, :ABS_URI_REF, :REL_URI_REF, :ESCAPED, :UNSAFE, :SCHEME, :USERINFO, :HOST, :PORT, :OPAQUE, :REGISTRY, :ABS_PATH, :REL_PATH, :QUERY, :FRAGMENT]
+"(?:[a-z]+|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|\\[(?:(?:[a-fA-F\\d]{1,4}:)*(?:[a-fA-F\\d]{1,4}|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})|(?:(?:[a-fA-F\\d]{1,4}:)*[a-fA-F\\d]{1,4})?::(?:(?:[a-fA-F\\d]{1,4}:)*(?:[a-fA-F\\d]{1,4}|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}))?)\\])"
+"a%20b"
+"a b"
+[:SCHEME, :USERINFO, :HOST, :ABS_PATH, :REL_PATH, :QUERY, :FRAGMENT, :OPAQUE, :PORT]
+true
+["http://a.com/x"]
+true
+"http://a/e?x"
+[:ALPHA, true]
+[:ALNUM, true]
+[:HEX, true]
+[:ESCAPED, true]
+[:UNRESERVED, true]
+[:RESERVED, true]
+[:DOMLABEL, true]
+[:TOPLABEL, true]
+[:HOSTNAME, false]
+[:URIC, true]
+[:URIC_NO_SLASH, true]
+[:QUERY, true]
+[:FRAGMENT, true]
+[:IPV4ADDR, true]
+[:IPV6ADDR, true]
+[:IPV6REF, true]
+[:HOST, true]
+[:PORT, true]
+[:HOSTPORT, true]
+[:USERINFO, true]
+[:PATH_SEGMENTS, true]
+[:REG_NAME, true]
+[:REL_SEGMENT, true]
+[:SCHEME, true]
+[:ABS_PATH, true]
+[:REL_PATH, true]
+[:NET_PATH, true]
+[:HIER_PART, true]
+[:OPAQUE_PART, true]
+[:ABS_URI, true]
+[:REL_URI, true]
+[:URI_REF, true]
+[GopherURI, 70, "gopher://example.org/1/x"]
+["FILE", "FTP", "GOPHER", "HTTP", "HTTPS", "LDAP", "LDAPS", "MAILTO", "WS", "WSS"]
+GopherURI
+"http://h/p"
+URI::Generic
+URI::HTTP
+#<Encoding:UTF-8>
+#<Encoding:Windows-1252>
+#<Encoding:Windows-31J>
+#<Encoding:CP51932>
+#<Encoding:UTF-16LE>
+#<Encoding:Windows-31J>
+nil
+["1.1.2", "010102", URI::RFC3986_Parser, URI::RFC3986_Parser, URI::RFC3986_Parser, URI::RFC2396_REGEXP]

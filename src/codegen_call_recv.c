@@ -17213,6 +17213,22 @@ static const char *cbi_identity_refusal(Compiler *c, int id, int recv, TyKind rt
   return why;
 }
 
+/* `=~` answers the match offset or nil, so it rides boxed like the typed
+   form does; `!~` is that nil, as a bool. */
+static int emit_poly_match_index(Compiler *c, int id, const char *name, int recv, int arg, Buf *b) {
+  int ta = ++g_tmp, tmi = ++g_tmp;
+  Buf nb; memset(&nb, 0, sizeof nb);
+  buf_printf(&nb, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, &nb);
+  buf_printf(&nb, "; SP_GC_ROOT_RBVAL(_t%d); sp_oint _t%d = sp_poly_match_index(_t%d, ", ta, tmi, ta);
+  emit_boxed(c, arg, &nb);
+  if (sp_streq(name, "=~")) buf_printf(&nb, "); sp_box_oint(_t%d); })", tmi);
+  else buf_printf(&nb, "); (sp_bool)_t%d.nil; })", tmi);
+  if (sp_streq(name, "!~") && repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_BOOL, nb.p, b);
+  else buf_puts(b, nb.p);
+  free(nb.p);
+  return 1;
+}
+
 int emit_poly_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -17586,8 +17602,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
-  /* match?(pattern, pos) takes the same route, from the position */
-  int match_at = argc == 2 && is_match_p_name(name) && nt_kind(nt, argv[0]) != NK_SplatNode &&
+  /* match?(pattern, pos) and match(pattern, pos) take the same route, from
+     the position */
+  int match_at = argc == 2 && (is_match_p_name(name) || sp_streq(name, "match")) && nt_kind(nt, argv[0]) != NK_SplatNode &&
                  nt_kind(nt, argv[1]) != NK_SplatNode && nt_kind(nt, argv[1]) != NK_KeywordHashNode;
   /* A native binding of the name (StringScanner#match?, which answers a
      length or nil) is an arm of the poly dispatch, and the analyzer types
@@ -17595,18 +17612,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      did not compile. The dispatch below serves the builtin kinds too. */
   if (recv >= 0 && (argc == 1 || match_at) && nt_ref(nt, id, "block") < 0 &&
       !match_arm_user_claimed(c, name, rt, argc) &&
-      (sp_streq(name, "match?") || sp_streq(name, "match") || sp_streq(name, "=~")) &&
+      (sp_streq(name, "match?") || sp_streq(name, "match") || sp_streq(name, "=~") || sp_streq(name, "!~")) &&
       (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
                          comp_ntype(c, argv[0]) == TY_POLY))) {
-    /* `=~` answers the match offset or nil, so it rides boxed like the typed
-       form does; the other two answer a bool and a MatchData. */
-    if (sp_streq(name, "=~")) {
-      int tmi = ++g_tmp;
-      buf_printf(b, "({ sp_oint _t%d = sp_poly_match_index(", tmi);
-      emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b);
-      buf_printf(b, "); sp_box_oint(_t%d); })", tmi);
-      return 1;
-    }
+    if (sp_streq(name, "=~") || sp_streq(name, "!~"))
+      return emit_poly_match_index(c, id, name, recv, argv[0], b);
     /* the operands are held and checked first (sp_poly_match_check): the
        helpers answered no match for a receiver without the method and for
        a pattern of the wrong kind */
@@ -17621,7 +17631,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       buf_printf(&mb, "; SP_GC_ROOT_RBVAL(_t%d[1]); ", tb);
     }
     buf_printf(&mb, "sp_poly_match_check(_t%d, \"%s\", %d, _t%d); ", ta, name, argc, tb);
-    if (argc == 2) buf_printf(&mb, "sp_poly_match_p_at(_t%d, _t%d[0], sp_poly_arg_int_chk(_t%d[1])); })", ta, tb, tb);
+    if (argc == 2) buf_printf(&mb, "%s(_t%d, _t%d[0], sp_poly_arg_int_chk(_t%d[1])); })",
+                              sp_streq(name, "match?") ? "sp_poly_match_p_at" : "sp_poly_match_data_at", ta, tb, tb);
     else buf_printf(&mb, "%s(_t%d, _t%d[0]); })", fn, ta, tb);
     /* This arm takes the builtin only when no REACHABLE class defines the
        name. The analyzer's twin counts every class that defines it, so a

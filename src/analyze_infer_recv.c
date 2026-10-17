@@ -1750,9 +1750,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if (sp_streq(name, "names")) { *out = TY_STR_ARRAY; return 1; }
     if (sp_streq(name, "named_captures")) { *out = TY_STR_POLY_HASH; return 1; }
   }
-  /* the match forms with a boxed operand answer what the typed ones do */
-  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      !an_user_defines_or_reads(c, name) &&
+  /* the match forms with a boxed operand answer what the typed ones do, a
+     match or match? from a position too */
+  if (recv >= 0 && (argc == 1 || (argc == 2 && (sp_streq(name, "match") || sp_streq(name, "match?")))) &&
+      nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name) &&
       (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
                          infer_type(c, argv[0]) == TY_POLY))) {
     if (sp_streq(name, "match?")) { *out = TY_BOOL; return 1; }

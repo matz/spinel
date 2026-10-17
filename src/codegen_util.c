@@ -7436,6 +7436,19 @@ static int node_is_oint_asked(Compiler *c, int node);
    re-derives a receiver's type: asked as a pure read, as repr_of asks
    (an_pure_read_begin), so the derived type is not recorded over the
    view's. */
+/* Whether class `cid` or a class below it answers nil from its class method
+   `nm`: one with no value, or an Integer one that can be nil. */
+int cmethod_sibling_answers_nil(Compiler *c, int cid, const char *nm) {
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k != cid && !is_descendant(c, k, cid)) continue;
+    int smi = comp_cmethod_in_chain(c, k, nm, NULL);
+    if (smi < 0) continue;
+    Scope *ss = &c->scopes[smi];
+    if (method_is_void(ss) || ss->ret == TY_NIL || method_ret_is_oint(ss)) return 1;
+  }
+  return 0;
+}
+
 int node_is_oint(Compiler *c, int node) {
   an_pure_read_begin();
   int r = node_is_oint_asked(c, node);
@@ -7674,6 +7687,14 @@ static int node_is_oint_asked(Compiler *c, int node) {
       if (r >= 0 && ty_is_object(rt)) dcid = ty_object_class(rt);
       else if (r < 0) { Scope *self = comp_scope_of(c, node); if (self && !self->is_cmethod) dcid = self->class_id; }
       if (dcid >= 0 && dispatch_answers_nil(c, dcid, nm, mi)) return 1;
+    }
+    /* ...and a class method's call of a sibling: an inherited body runs for
+       its class and each subclass, each calling its own class's method of the
+       name, and one of them answering nil (`def self.dp = nil` in Base, 80 in
+       Sub) makes the site's Integer nil there */
+    if (r < 0 && oint_kind(comp_ntype(c, node))) {
+      Scope *self = comp_scope_of(c, node);
+      if (self && self->is_cmethod && self->class_id >= 0 && cmethod_sibling_answers_nil(c, self->class_id, nm)) return 1;
     }
     if (mi >= 0) return method_ret_is_oint(&c->scopes[mi]);
     /* `<=>` answers nil for an incomparable operand: the analysis's answer

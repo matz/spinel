@@ -1508,6 +1508,7 @@ void nd_stamp(int id, int kind);
 extern char **g_ndtarget;
 extern int g_ndtarget_cap;
 void nd_callee(Compiler *c, int id, int mi, int owner_ci, int add);
+int cmethod_sibling_answers_nil(Compiler *c, int cid, const char *nm);
 /* --plan-check: a user-method binding codegen made at node id (nd_callee
    reports every one; the splices and super, which stamp nothing for
    --emit-types, call it directly), and the end-of-compile report comparing

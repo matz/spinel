@@ -4554,6 +4554,12 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         /* a sibling that only raises (no value) where the site wants one */
         else if (slot_t == TY_POLY && method_is_void(ms))
           buf_printf(b, "(%s, sp_box_nil())", cb.p ? cb.p : "0");
+        /* a site whose Integer can be nil (another class's sibling of the
+           name answers nil: node_is_oint): this class's answers in that form */
+        else if (oint_kind(slot_t) && node_is_oint(c, id) && !method_ret_is_oint(ms)) {
+          if (method_is_void(ms) || kr == TY_NIL) buf_printf(b, "(%s, %s)", cb.p ? cb.p : "0", oint_nil(slot_t));
+          else buf_printf(b, "%s(%s)", oint_of(slot_t), cb.p ? cb.p : "0");
+        }
         else
           buf_puts(b, cb.p ? cb.p : "");
         free(cb.p);

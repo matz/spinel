@@ -42,6 +42,12 @@ p der.bytesize, der.encoding, leaf.to_pem.encoding
 # The subject's name rides in the DER as its own bytes.
 p der.include?("turn.jayang-dong.example"), certs[1].to_der.include?("Han River Test CA")
 
+# What to_der answers is the caller's: changing it leaves the certificate as
+# it was.
+mine = leaf.to_der
+mine << "Seoul"
+p leaf.to_der.bytesize, leaf.to_pem == LEAF_PEM
+
 # DER in, to either constructor.
 p OpenSSL::X509::Certificate.new(der).to_pem == LEAF_PEM
 p OpenSSL::X509::Certificate.load(der).map(&:to_der) == [der]

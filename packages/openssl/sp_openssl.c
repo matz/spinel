@@ -29,6 +29,7 @@
 #include <openssl/evp.h>
 #include <openssl/ecdsa.h>
 #include <openssl/rsa.h>
+#include <limits.h>
 #include <string.h>
 #include <fcntl.h>
 
@@ -196,6 +197,14 @@ static const char *sp_x509_fail(const char *what) {
   return "";
 }
 
+/* BIO_new_mem_buf takes an int length and sp_ffi_bin_len publishes one, so
+   input past half of INT_MAX is refused here rather than narrowed. Half
+   leaves room for what the answers add to it: a 4-byte length per
+   certificate, and PEM's growth over the DER it encodes. */
+static int sp_x509_too_big(const char *data) {
+  return sp_str_byte_len(data) > (size_t)INT_MAX / 2;
+}
+
 /* DER first, then PEM, the order CRuby's Certificate.new and .load try them
    in: DER is binary and can hold bytes that look like a PEM header, while
    PEM never parses as DER. */
@@ -224,13 +233,14 @@ static int sp_x509_append(sp_x509_out *o, size_t *at, X509 *x) {
 
 /* Certificate.new: one certificate, PEM or DER, answered as its DER. */
 const char *sp_x509_der(const char *data) {
-  X509 *x = sp_x509_from_der(data);
+  X509 *x;
   BIO *bio;
   size_t at = 0;
   int ok;
 
   sp_ssl_errbuf[0] = 0;
-  if (!x) {
+  if (sp_x509_too_big(data)) return sp_x509_fail("certificate data too large");
+  if (!(x = sp_x509_from_der(data))) {
     if (!(bio = BIO_new_mem_buf(data, (int)sp_str_byte_len(data))))
       return sp_x509_fail("BIO_new_mem_buf");
     x = PEM_read_bio_X509(bio, NULL, NULL, NULL);
@@ -250,13 +260,14 @@ const char *sp_x509_der(const char *data) {
    failure is a certificate that did not parse, and the whole load fails
    rather than answering the ones before it. */
 const char *sp_x509_load(const char *data) {
-  X509 *x = sp_x509_from_der(data);
+  X509 *x;
   BIO *bio;
   size_t at = 0;
   int ok = 1;
 
   sp_ssl_errbuf[0] = 0;
-  if (x) {
+  if (sp_x509_too_big(data)) return sp_x509_fail("certificate data too large");
+  if ((x = sp_x509_from_der(data))) {
     ok = sp_x509_append(&sp_x509_load_out, &at, x);
     X509_free(x);
     if (!ok) return sp_x509_fail("i2d_X509");

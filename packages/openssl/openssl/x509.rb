@@ -38,8 +38,10 @@ module OpenSSL
         raise CertificateError, Native.last_error if @der.empty?
       end
 
+      # A copy, as CRuby answers a new String each call: a caller that changes
+      # what it was given does not change the certificate.
       def to_der
-        @der
+        @der.dup
       end
 
       def to_pem

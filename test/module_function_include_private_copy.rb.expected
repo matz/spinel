@@ -1,0 +1,11 @@
+"'name'"
+false
+false
+true
+present is private
+wrap is private
+"module"
+"'module'"
+ArgumentError: empty
+true
+"open"

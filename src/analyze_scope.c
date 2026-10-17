@@ -6641,6 +6641,13 @@ static const char *include_shadow_copy(Compiler *c, int ci, int mod, const char 
   return NULL;
 }
 
+/* Does class ci's own table carry a visibility for name? */
+static int class_declares_vis(const ClassInfo *ci, const char *name) {
+  for (int i = 0; i < ci->nvis; i++)
+    if (sp_streq(ci->vis_names[i], name)) return 1;
+  return 0;
+}
+
 /* Copy module mod_id's instance methods into class ci, one clone per
    includer, as `include` does (process_include_body). */
 static void include_module_methods(Compiler *c, int ci, int mod_id) {
@@ -6783,6 +6790,10 @@ else {
        `Rt.peek` is a real call whoever also includes Rt, so the source is
        not copied AWAY, only copied FROM. */
     if (!src->is_module_function) src->is_transplanted_source = 1;
+    /* the includer's copy of a module_function is private, unless the
+       includer declares the name's visibility itself */
+    else if (!class_declares_vis(&c->classes[ci], dst_name))
+      comp_method_vis_set(&c->classes[ci], dst_name, SP_VIS_PRIVATE);
     scope_copy_params(dst, src);
     if (scope_own_defaults(c, dst_idx)) g_inc_did_clone = 1;
     src = &c->scopes[ms]; dst = &c->scopes[dst_idx];

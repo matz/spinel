@@ -389,16 +389,28 @@ static int ty_recv_is_plain_array(TyKind t) {
 static TyKind bop_arg0_kind(const void *ud, int i) {
   return i == 0 ? *(const TyKind *)ud : TY_UNKNOWN;
 }
-/* Names g_promote_mode gates elsewhere (analyze_infer.c/analyze.c) that
-   could collide with a bop_rows lookup here -- excluded so a future
-   promote-sensitive row can't bypass promote mode through this path
-   before someone re-audits it. succ/sum are excluded because they are
-   already answered above, not because they are unsafe here. */
-static int bop_result_excluded_for_promote(const char *name) {
-  return !strcmp(name, "succ") || !strcmp(name, "next") ||
-         !strcmp(name, "sum") || !strcmp(name, "to_i") ||
-         !strcmp(name, "divmod") || !strcmp(name, "pow") ||
-         !strcmp(name, "<<");
+/* g_promote_mode gates a scattered, open-ended set of arms across
+   analyze_infer.c/analyze.c for a numeric scalar receiver -- pred, the
+   div/divmod/modulo family (Integer with a Float or poly argument, and
+   Float's own div), pow, to_i, <<, and others, found piecemeal rather
+   than from one table. An earlier version of this guard denylisted
+   names by hand and missed pred and the div family outright, a fresh
+   review found the miss by running those exact calls through a yield
+   receiver under --int-overflow=promote and comparing to CRuby directly
+   (four programs that matched CRuby on the unfixed compiler started
+   raising RangeError once this generic path started answering them with
+   the row's plain, non-promoting result). A name denylist cannot be
+   trusted to enumerate every such arm as new ones are added elsewhere;
+   gating by receiver kind instead is structural and can't miss one:
+   none of the names this generic path was written to answer
+   (sort!/reverse!/rotate/shuffle/sample/take/drop/first(n)/last(n)/fetch)
+   ever operate on a scalar numeric receiver, and clamp -- the only
+   numeric-receiver name reaching this function at all -- is answered by
+   its own hand-written arm above, which always returns before this
+   check runs. Excluding every numeric scalar receiver under promote
+   mode here therefore loses nothing this generic path exists for. */
+static int bop_result_excluded_for_promote(TyKind recv, int promote) {
+  return promote && (recv == TY_INT || recv == TY_FLOAT || recv == TY_BIGINT);
 }
 int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
                             int range_has_float_bound, TyKind recv, int promote, TyKind *out) {
@@ -462,7 +474,7 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
     /* No hand-written arm above matched this argc=0 name: fall through
        (instead of returning 0 here) to the generic bop_rows-backed check
        below, which also answers argc=0 names (sort!, reverse!, rotate,
-       shuffle, sample) -- K-029. The dig/[] checks right after this block
+       shuffle, sample). The dig/[] checks right after this block
        self-guard on argc>=1, so they simply no-op for an argc=0 name that
        reaches here. */
   }
@@ -471,6 +483,21 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
      promote-independent -- an Integer Array's indexed read stays Integer
      under promote (only arithmetic results that could overflow become
      poly), so dig at one index follows it rather than succ/sum's rule. */
+  /* fetch(i, default) (the 2-argument, with-default form): the element
+     kind when the default's own type is unknown or already agrees with
+     it, poly when it disagrees -- mirrors analyze_infer_recv.c's fetch
+     arm exactly (the 1-arg form above, in the generic fallback via
+     bop_rows, has no such dependence; this is why the two forms are
+     split into separate rows there). A fresh review found this form was
+     never actually exercised by the probing that found the rest of this
+     family broken, and an earlier ledger ruling wrongly concluded it was
+     untouched by this change -- it was broken on both sides, just never
+     tested; this arm closes it now that arg1 exists. */
+  if (!strcmp(name, "fetch") && argc == 2 && ty_recv_is_plain_array(recv)) {
+    TyKind et = ty_array_elem(recv);
+    *out = (arg1 == TY_UNKNOWN || arg1 == et) ? et : TY_POLY;
+    return 1;
+  }
   if (!strcmp(name, "dig") && argc >= 1 && ty_recv_is_plain_array(recv)) {
     *out = (argc == 1) ? ty_array_elem(recv) : TY_POLY; return 1;
   }
@@ -479,23 +506,33 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
      Hash kind, answers one element) purely from arg0's own TyKind --
      confirmed empirically (--emit-types on a direct sample(random: r)):
      a KeywordHashNode literal's inferred type is a Hash kind, not TY_INT,
-     so no AST-shape inspection is needed, unlike it first looked (K-029). */
+     so no AST-shape inspection is needed, unlike it first looked. */
   if (!strcmp(name, "sample") && argc == 1 && ty_recv_is_plain_array(recv)) {
     *out = ty_is_hash(arg0) ? ty_array_elem(recv) : recv; return 1;
   }
   /* clamp(lo, hi): has no bop_rows row at all for Integer/Float -- its
-     answer is 100% hand-written in analyze_infer_recv.c, comparing both
-     bounds' kinds against the receiver and each other. Mirrors that logic
-     exactly (verified line by line, not improvised): either bound TY_NIL
-     keeps the receiver's own class boxed; a Float receiver with anything
-     other than two Float bounds is boxed (0.5.clamp(1, 3) is the Integer
-     1); otherwise the receiver's own kind. */
+     answer is 100% hand-written, split across two files and two separate
+     receiver-specific rules (found by a fresh review after an earlier,
+     wrong version of this arm claimed to mirror them "line by line" but
+     missed both: an Integer receiver with a Float OR poly bound
+     (analyze_infer.c's clamp arm, inside its `rt == TY_INT` block) is
+     poly, not the Integer receiver this arm used to answer; a Float
+     receiver with a poly bound (confirmed empirically via --emit-types,
+     since analyze_infer_recv.c's own Float-receiver rule explicitly
+     excludes a poly bound from its own condition and falls through
+     elsewhere) is also poly, not the Float this arm used to answer).
+     Either bound TY_NIL keeps the receiver's own class boxed regardless
+     of receiver kind (analyze_infer_recv.c, checked for both TY_INT and
+     TY_FLOAT together). */
   if (!strcmp(name, "clamp") && argc == 2 && (recv == TY_INT || recv == TY_FLOAT)) {
     if (arg0 == TY_NIL || arg1 == TY_NIL) { *out = TY_POLY; return 1; }
-    if (recv == TY_FLOAT && !(arg0 == TY_FLOAT && arg1 == TY_FLOAT) &&
-        (arg0 == TY_INT || arg0 == TY_FLOAT) && (arg1 == TY_INT || arg1 == TY_FLOAT))
-      { *out = TY_POLY; return 1; }
-    *out = recv; return 1;
+    if (recv == TY_INT) {
+      *out = (arg0 == TY_FLOAT || arg1 == TY_FLOAT || arg0 == TY_POLY || arg1 == TY_POLY)
+             ? TY_POLY : TY_INT;
+      return 1;
+    }
+    *out = (arg0 == TY_FLOAT && arg1 == TY_FLOAT) ? TY_FLOAT : TY_POLY;
+    return 1;
   }
   /* clamp(range): confirmed empirically (--emit-types on direct calls)
      that the only case answering the receiver's own kind is an Integer
@@ -514,28 +551,27 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
     *out = ty_array_elem(recv); return 1;
   }
   /* Every name above answers from its own hand-written rule, several of
-     them mode-gated (succ/sum). Below is a generic fallback for any OTHER
-     name: builtin_ops.c's bop_rows table already carries, per row, either
-     a fixed TyKind or a BOPR_* result derived purely from the receiver's
+     them mode-gated (succ/sum) or needing more than the receiver's kind
+     to answer (clamp). Below is a generic fallback for any OTHER name:
+     builtin_ops.c's bop_rows table already carries, per row, either a
+     fixed TyKind or a BOPR_* result derived purely from the receiver's
      kind (bop_result), and that lookup (bop_find_arg) is itself pure --
      already included above, no Compiler*, no node. Reusing it here closes
      a whole family of names (sort!, reverse!, rotate, shuffle, first(n),
      last(n), take, drop, fetch(1-arg), sample(0-arg) at the time this was
-     written -- K-029) with no per-name arm, and any future name whose row
-     already states a concrete result closes itself here too, for free.
-     Guarded against promote-sensitive names (succ/next/sum/to_i/divmod/
-     pow/<<) so a future promote-sensitive row can't bypass promote mode
-     through this path before someone re-audits it; today's five excluded
-     names are already answered above and never reach this check. */
-  if (!bop_result_excluded_for_promote(name)) {
+     written) with no per-name arm, and any future name whose row already
+     states a concrete result closes itself here too, for free. Excluded
+     for a promote-sensitive receiver kind (bop_result_excluded_for_promote)
+     so a promote-gated arm elsewhere in the analyzer can't be bypassed by
+     this generic path answering the row's plain, non-promoting result
+     instead. */
+  if (!bop_result_excluded_for_promote(recv, promote)) {
     /* bop_find_arg looks rows up by their exact key, and plain-array rows
        are keyed BOP_ANY_ARRAY (a family, not a real TyKind) -- a concrete
        recv (TY_INT_ARRAY, ...) must be mapped to its family first, the
        same way every other bop_rows caller (infer_array_call,
-       an_bop_find's own callers) already does, or the lookup silently
-       finds nothing for every plain-array name (found via
-       systematic-debugging after the first build of this check answered
-       0 for every site despite the row existing). */
+       an_bop_find's own callers) already does, or the lookup finds
+       nothing for every plain-array name despite the row existing. */
     const BuiltinOp *op = bop_find_arg(bop_family_of(recv), name, argc,
                                         /*has_block=*/0, bop_arg0_kind, &arg0);
     if (op && op->result != TY_UNKNOWN) { *out = bop_result(op, recv); return 1; }

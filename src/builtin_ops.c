@@ -2299,7 +2299,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "first",                 0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_FIRST },  /* an Integer / Float element with its nil */
   { BOP_ANY_ARRAY, "shift",                 0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_POP_SHIFT },  /* nil when empty: an sp_oint for the scalar kinds */
   { BOP_ANY_ARRAY, "pop",                   0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_POP_SHIFT },
-  { BOP_ANY_ARRAY, "sample",                0,   0, BF_ANY,      BOPR_ELEM,     BOPE_TEMPLATE, "$<sp_$AArray_sample$O($r)$>" },  /* one element, or nil when empty; was TY_UNKNOWN without BOPF_INFERRED, an unfinished row (K-029) -- no argument, so no ambiguity with sample(n)'s random:-kwarg case below */
+  { BOP_ANY_ARRAY, "sample",                0,   0, BF_ANY,      BOPR_ELEM,     BOPE_TEMPLATE, "$<sp_$AArray_sample$O($r)$>" },  /* one element, or nil when empty; was TY_UNKNOWN without BOPF_INFERRED, an unfinished row -- no argument, so no ambiguity with sample(n)'s random:-kwarg case below */
   { BOP_ANY_ARRAY, "inspect",               0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_$AArray_inspect($r)" },
   { BOP_ANY_ARRAY, "to_a",                  0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "$r", 0, 0, BOPF_SELF_EXACT },
   { BOP_ANY_ARRAY, "to_ary",                0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "$r", 0, 0, BOPF_SELF },
@@ -2315,8 +2315,8 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "intersection",          0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_dup($r)", 0, 0, BOPF_ARGS_BUILTIN },  /* a fold over nothing: a copy (#3851) */
   { BOP_ANY_ARRAY, "difference",            0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_dup($r)", 0, 0, BOPF_ARGS_BUILTIN },
   { BOP_ANY_ARRAY, "insert",                1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); (void)($i0); _t$t; })", 0, 0, BOPF_SELF },  /* no values: self */
-  { BOP_ANY_ARRAY, "take",                  1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); sp_int _t$u = $i0; if (_t$u < 0) sp_raise_cls(\"ArgumentError\", \"attempt to take negative size\"); sp_$AArray_slice(_t$t, 0, _t$u); })" },  /* was TY_UNKNOWN without BOPF_INFERRED, an unfinished row -- the answer never depended on anything but the receiver's own kind (K-029) */
-  { BOP_ANY_ARRAY, "drop",                  1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); sp_int _t$u = $i0; if (_t$u < 0) sp_raise_cls(\"ArgumentError\", \"attempt to drop negative size\"); sp_$AArray_slice(_t$t, _t$u, _t$t->len - _t$u); })" },  /* same as take above (K-029) */
+  { BOP_ANY_ARRAY, "take",                  1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); sp_int _t$u = $i0; if (_t$u < 0) sp_raise_cls(\"ArgumentError\", \"attempt to take negative size\"); sp_$AArray_slice(_t$t, 0, _t$u); })" },  /* was TY_UNKNOWN without BOPF_INFERRED, an unfinished row -- the answer never depended on anything but the receiver's own kind */
+  { BOP_ANY_ARRAY, "drop",                  1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); sp_int _t$u = $i0; if (_t$u < 0) sp_raise_cls(\"ArgumentError\", \"attempt to drop negative size\"); sp_$AArray_slice(_t$t, _t$u, _t$t->len - _t$u); })" },  /* same as take above */
   { BOP_ANY_ARRAY, "last",                  0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_LAST },
   { BOP_ANY_ARRAY, "join",                  0,   1, BF_ANY,      TY_STRING,     BOPE_ARRAY_JOIN },
   { BOP_ANY_ARRAY, "[]",                    2,   2, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $gsp_int _t$u = $i0; sp_int _t$v = $i1; sp_int _t$w = sp_$AArray_length(_t$t); (_t$v < 0 || _t$u > _t$w || _t$u < -_t$w) ? (sp_$AArray *)0 : sp_$AArray_slice(_t$t, _t$u, _t$v); })" },
@@ -2381,7 +2381,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "[]",                    1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },  /* an element, or a subarray for a Range */
   { BOP_ANY_ARRAY, "slice",                 1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "[]=",                   2,   3, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },  /* the assigned value */
-  { BOP_ANY_ARRAY, "fetch",                 1,   1, BF_ANY,      BOPR_ELEM,     BOPE_NONE },  /* split off the 1-arg (KeyError-on-miss) case: always the element kind, no ambiguity (K-029) */
+  { BOP_ANY_ARRAY, "fetch",                 1,   1, BF_NONE,     BOPR_ELEM,     BOPE_NONE },  /* split off the blockless, 1-arg (KeyError-on-miss) case: always the element kind. BF_NONE, not BF_ANY: a block form (fetch(i) { ... }) answers the block's own tail type compared against the element kind, a separate hand-written rule this row must not shadow. */
   { BOP_ANY_ARRAY, "fetch",                 2,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },  /* the 2-arg (with-default) case stays deferred: the default's own type can disagree with the element kind */
   { BOP_ANY_ARRAY, "==",                    1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_ARGS_BUILTIN },
   /* != negates ==: without ARGS_BUILTIN a typed Array subclass argument

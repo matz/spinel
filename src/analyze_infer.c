@@ -2475,9 +2475,9 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
   int an = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   /* Was `ac == 1` only (dig/[]/sample's own 1-arg needs); widened to any
-     ac >= 1 so clamp's 2-arg form also gets its first bound's kind (K-029
-     Task 2) -- every other existing arm here only ever matched ac == 1
-     anyway, so this changes no existing answer. */
+     ac >= 1 so clamp's 2-arg form also gets its first bound's kind --
+     every other existing arm here only ever matched ac == 1 anyway, so
+     this changes no existing answer. */
   TyKind a0 = ac >= 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
   TyKind a1; int rhfb;
   ty_recv_call_extra_args(c, av, ac, &a1, &rhfb);

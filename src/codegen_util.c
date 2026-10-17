@@ -979,9 +979,9 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
       return 1;
     } }
   { /* Same widening as ac==1 only, broadened to ac>=1 for clamp's 2-arg
-       bounds (K-029 Task 2) -- matches yield_recv_chain_kind's own
-       identical widening in analyze_infer.c, so both sides of the shared
-       table agree on what arg0 means. */
+       bounds -- matches yield_recv_chain_kind's own identical widening
+       in analyze_infer.c, so both sides of the shared table agree on
+       what arg0 means. */
     TyKind a0 = ac >= 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
     TyKind a1; int rhfb;
     ty_recv_call_extra_args(c, av, ac, &a1, &rhfb);

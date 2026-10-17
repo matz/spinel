@@ -954,6 +954,8 @@ static int yield_operator_site_type(const Compiler *c, int id, TyKind *out) {
    the table the call keeps one site's type, and answering the other site's
    own kind here sent its value to the raise-tail arm, which dropped it for
    nil (`-"ab"` at one site, `-5` at another, printed nil for the second). */
+void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
+                              TyKind *arg1, int *range_has_float_bound);   /* analyze_internal.h */
 static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode) return 0;
@@ -976,7 +978,15 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
       *out = rr;
       return 1;
     } }
-  if (ty_recv_builtin_result(op, ac, ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN, rt, g_promote_mode, out)) return 1;
+  { /* Same widening as ac==1 only, broadened to ac>=1 for clamp's 2-arg
+       bounds (K-029 Task 2) -- matches yield_recv_chain_kind's own
+       identical widening in analyze_infer.c, so both sides of the shared
+       table agree on what arg0 means. */
+    TyKind a0 = ac >= 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+    TyKind a1; int rhfb;
+    ty_recv_call_extra_args(c, av, ac, &a1, &rhfb);
+    if (ty_recv_builtin_result(op, ac, a0, a1, rhfb, rt, g_promote_mode, out)) return 1;
+  }
   /* a site the table does not answer, beside a reopen on the chain: the
      answer the analysis recorded for this site's kind */
   return an_yield_site_builtin_answer((Compiler *)c, id, rt, out);

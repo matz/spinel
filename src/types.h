@@ -249,11 +249,18 @@ TyKind ty_array_elem(TyKind arr);      /* array kind -> element type */
    builtins whose result follows the receiver (yield.first, yield.dup, ...);
    0 when the pair is not one of them. `promote` is the caller's
    g_promote_mode (--int-overflow=promote), which a few arms (succ, sum)
-   answer differently under than the default. The analyzer widens a
+   answer differently under than the default. `arg1` is the second
+   argument's kind (TY_UNKNOWN when there is no second argument), needed
+   by clamp(lo, hi). `range_has_float_bound` is whether a one-argument Range
+   literal argument has a Float-typed left or right bound (0 when the
+   argument isn't such a literal), needed by clamp(range) -- both computed
+   by ty_recv_call_extra_args (analyze_infer.c), which either of this
+   function's two callers can call identically. The analyzer widens a
    diverging yield only where every site's kind is answered here, and
    codegen types each site's call from it, so the two sides read one table
    (see types.c). */
-int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv, int promote, TyKind *out);
+int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
+                            int range_has_float_bound, TyKind recv, int promote, TyKind *out);
 int ty_is_hash(TyKind t);
 /* Object's identity protocol on the native kinds (=== == != equal? eql?
    frozen? freeze, and on the IO family to_s and <=> as well), answered by

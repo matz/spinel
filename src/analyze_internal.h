@@ -472,6 +472,14 @@ TyKind an_user_call(Compiler *c, int id, int mi, int via, int owner_ci);
 /* the record alone, for an arm that answers the bound call another way */
 void an_user_call_record(Compiler *c, int id, int mi, int via, int owner_ci);
 int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out);
+/* arg1's kind (TY_UNKNOWN when there is no second argument) and whether a
+   one-argument Range literal's own left/right bound is Float-typed (0
+   otherwise) -- the two extra pieces ty_recv_builtin_result's clamp arms
+   need beyond arg0, computed the same comp_ntype-based way both of its
+   callers already compute arg0. const-safe (comp_ntype only reads an
+   already-settled cache), so codegen's const Compiler* can call it too. */
+void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
+                              TyKind *arg1, int *range_has_float_bound);
 /* The array a map-shaped call answers from its block's tail (analyze_infer_recv.c). */
 TyKind infer_sum_block_ty(Compiler *c, int block);
 TyKind infer_map_block_ty(Compiler *c, int id, int block);

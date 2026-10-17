@@ -400,7 +400,8 @@ static int bop_result_excluded_for_promote(const char *name) {
          !strcmp(name, "divmod") || !strcmp(name, "pow") ||
          !strcmp(name, "<<");
 }
-int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv, int promote, TyKind *out) {
+int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
+                            int range_has_float_bound, TyKind recv, int promote, TyKind *out) {
   if (!name) return 0;
   if (argc == 0) {
     if (!strcmp(name, "abs") || !strcmp(name, "magnitude")) {
@@ -472,6 +473,42 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv,
      poly), so dig at one index follows it rather than succ/sum's rule. */
   if (!strcmp(name, "dig") && argc >= 1 && ty_recv_is_plain_array(recv)) {
     *out = (argc == 1) ? ty_array_elem(recv) : TY_POLY; return 1;
+  }
+  /* sample(n): tells a count (arg0 == TY_INT, answers a subarray -- the
+     receiver's own kind) apart from a random: keyword hash (arg0 is a
+     Hash kind, answers one element) purely from arg0's own TyKind --
+     confirmed empirically (--emit-types on a direct sample(random: r)):
+     a KeywordHashNode literal's inferred type is a Hash kind, not TY_INT,
+     so no AST-shape inspection is needed, unlike it first looked (K-029). */
+  if (!strcmp(name, "sample") && argc == 1 && ty_recv_is_plain_array(recv)) {
+    *out = ty_is_hash(arg0) ? ty_array_elem(recv) : recv; return 1;
+  }
+  /* clamp(lo, hi): has no bop_rows row at all for Integer/Float -- its
+     answer is 100% hand-written in analyze_infer_recv.c, comparing both
+     bounds' kinds against the receiver and each other. Mirrors that logic
+     exactly (verified line by line, not improvised): either bound TY_NIL
+     keeps the receiver's own class boxed; a Float receiver with anything
+     other than two Float bounds is boxed (0.5.clamp(1, 3) is the Integer
+     1); otherwise the receiver's own kind. */
+  if (!strcmp(name, "clamp") && argc == 2 && (recv == TY_INT || recv == TY_FLOAT)) {
+    if (arg0 == TY_NIL || arg1 == TY_NIL) { *out = TY_POLY; return 1; }
+    if (recv == TY_FLOAT && !(arg0 == TY_FLOAT && arg1 == TY_FLOAT) &&
+        (arg0 == TY_INT || arg0 == TY_FLOAT) && (arg1 == TY_INT || arg1 == TY_FLOAT))
+      { *out = TY_POLY; return 1; }
+    *out = recv; return 1;
+  }
+  /* clamp(range): confirmed empirically (--emit-types on direct calls)
+     that the only case answering the receiver's own kind is an Integer
+     receiver with a plain (non-mixed-bound) Range; every other
+     combination -- a Float receiver with ANY Range, or either receiver
+     with a TY_FLOAT_RANGE or a mixed-bound Range literal -- is poly. The
+     mixed-bound case needs range_has_float_bound (the Range literal's own
+     left/right child types), since TY_RANGE alone does not distinguish a
+     plain Int range from a mixed one. */
+  if (!strcmp(name, "clamp") && argc == 1 && (recv == TY_INT || recv == TY_FLOAT) &&
+      (arg0 == TY_RANGE || arg0 == TY_FLOAT_RANGE)) {
+    *out = (recv == TY_INT && arg0 == TY_RANGE && !range_has_float_bound) ? TY_INT : TY_POLY;
+    return 1;
   }
   if (argc == 1 && !strcmp(name, "[]") && arg0 == TY_INT && ty_recv_is_plain_array(recv)) {
     *out = ty_array_elem(recv); return 1;

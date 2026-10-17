@@ -2447,6 +2447,24 @@ static int yield_recv_chain_root(const NodeTable *nt, int call) {
   }
   return -1;
 }
+/* arg1's kind and whether a one-argument Range literal's own bound is
+   Float-typed -- see the declaration in analyze_internal.h. Only reads
+   comp_ntype's already-settled cache, so either of ty_recv_builtin_result's
+   two callers (this file's mutable Compiler*, or codegen_util.c's const
+   one) can call it identically. */
+void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
+                              TyKind *arg1, int *range_has_float_bound) {
+  const NodeTable *nt = c->nt;
+  *arg1 = argc >= 2 && av ? comp_ntype(c, av[1]) : TY_UNKNOWN;
+  *range_has_float_bound = 0;
+  if (argc == 1 && av && comp_ntype(c, av[0]) == TY_RANGE &&
+      nt_type(nt, av[0]) && sp_streq(nt_type(nt, av[0]), "RangeNode")) {
+    int l = nt_ref(nt, av[0], "left"), r = nt_ref(nt, av[0], "right");
+    if ((l >= 0 && comp_ntype(c, l) == TY_FLOAT) ||
+        (r >= 0 && comp_ntype(c, r) == TY_FLOAT))
+      *range_has_float_bound = 1;
+  }
+}
 /* What the chain from the yield up to `node` answers at a site whose block
    answers `bt`, by ty_recv_builtin_result one link at a time. */
 static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) {
@@ -2456,7 +2474,13 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
   if (!yield_recv_chain_kind(c, nt_ref(nt, node, "receiver"), bt, &rk)) return 0;
   int an = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  TyKind a0 = ac == 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+  /* Was `ac == 1` only (dig/[]/sample's own 1-arg needs); widened to any
+     ac >= 1 so clamp's 2-arg form also gets its first bound's kind (K-029
+     Task 2) -- every other existing arm here only ever matched ac == 1
+     anyway, so this changes no existing answer. */
+  TyKind a0 = ac >= 1 && av ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+  TyKind a1; int rhfb;
+  ty_recv_call_extra_args(c, av, ac, &a1, &rhfb);
   /* The table names the builtin's answer, and a program that reopened the
      kind's class with its own method of the name runs that one instead.
      That reopen is what codegen calls for such a site, so the site answers
@@ -2476,7 +2500,7 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
       *out = (rr == TY_UNKNOWN || rr == TY_VOID) ? TY_POLY : rr;
       return 1;
     } }
-  if (ty_recv_builtin_result(nt_str(nt, node, "name"), ac, a0, rk, g_promote_mode, out)) return 1;
+  if (ty_recv_builtin_result(nt_str(nt, node, "name"), ac, a0, a1, rhfb, rk, g_promote_mode, out)) return 1;
   return an_yield_site_builtin_answer(c, node, rk, out);
 }
 static int yield_recv_builtin_every_site(Compiler *c, int call) {

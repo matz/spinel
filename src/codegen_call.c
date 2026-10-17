@@ -13538,6 +13538,33 @@ void emit_regexp_new(Compiler *c, int argc, const int *argv, Buf *b) {
     buf_printf(b, "_t%d", tp);
     return;
   }
+  /* A boxed argument is a Regexp or a String only at run time: a Regexp
+     box is copied as above (the options it carries, any second argument
+     ignored as CRuby ignores it), anything else reads as the String. It
+     read as a String throughout, and a Regexp raised TypeError. */
+  if (comp_ntype(c, argv[0]) == TY_POLY) {
+    int tv = ++g_tmp;
+    Buf bv; memset(&bv, 0, sizeof bv);
+    emit_boxed(c, argv[0], &bv);
+    Buf flagbuf; memset(&flagbuf, 0, sizeof flagbuf);
+    emit_re_opts_flags(c, argc, argv, &flagbuf);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tv, bv.p ? bv.p : "sp_box_nil()");
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "mrb_regexp_pattern *_t%d;\n", tp);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { void *_t%d = _t%d.v.p; "
+                      "_t%d = re_compile(sp_re_source(_t%d), (int64_t)sp_re_source_len(_t%d), sp_re_raw_flags(_t%d)); }\n",
+               tv, tv, ts, tv, tp, ts, ts, ts);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "else { const char *_t%d = sp_poly_arg_str_chk(_t%d); "
+                      "_t%d = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), %s); }\n",
+               ts, tv, tp, ts, ts, ts, flagbuf.p ? flagbuf.p : "0");
+    free(bv.p);
+    free(flagbuf.p);
+    buf_printf(b, "_t%d", tp);
+    return;
+  }
   /* Emit the pattern value into a local buffer first: an interpolated arg
      whose embedded call roots its own args pushes those decls to g_pre,
      which must land as whole statements BEFORE this temp's decl line, not

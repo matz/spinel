@@ -1183,6 +1183,17 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port, sp_int family, 
   return out;
 }
 
+/* IPSocket.getaddress(host): the first address the name resolves to, as
+   CRuby answers it; SocketError with getaddrinfo's message when none */
+const char *sp_sock_getaddress(const char *host) {SP_GC_ROOT_STR(host);
+  extern int sp_net_getaddress(const char *host, char *ipbuf, int ipcap, const char **err);
+  char ip[64];
+  const char *err = NULL;
+  if (sp_net_getaddress(host, ip, (int)sizeof ip, &err) != 0)
+    sp_raise_cls("SocketError", sp_sprintf("getaddrinfo: %s", err ? err : ""));
+  return sp_str_from_bytes(ip, strlen(ip));
+}
+
 /* Socket.sockaddr_in(port, host) / Socket.pack_sockaddr_in: the packed
    sockaddr, as a byte string. It carries NUL bytes (a zero port octet, the
    sin_zero padding, an address with a zero octet), so it is built with

@@ -542,6 +542,29 @@ int sp_net_socket(int domain, int type, int protocol) {
 /* getaddrinfo, one resolution at a time: `idx` selects the entry so the caller
    can walk them without owning the addrinfo list. Fills family/socktype/
    protocol/ip/port; returns 0 on success, -1 past the end or on failure. */
+/* The first address +host+ resolves to, as text into ipbuf; getaddrinfo's
+   error text into *err on failure (IPSocket.getaddress). */
+int sp_net_getaddress(const char *host, char *ipbuf, int ipcap, const char **err) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    int rc = sp_net_resolve((host && *host) ? host : NULL, NULL, &hints, &res);
+    if (rc != 0) { if (err) *err = gai_strerror(rc); return -1; }
+    int ok = -1;
+    ipbuf[0] = '\0';
+    if (res && res->ai_family == AF_INET) {
+        inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, ipbuf, (socklen_t)ipcap);
+        ok = 0;
+    }
+    else if (res && res->ai_family == AF_INET6) {
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr, ipbuf, (socklen_t)ipcap);
+        ok = 0;
+    }
+    freeaddrinfo(res);
+    if (ok != 0 && err) *err = "no address";
+    return ok;
+}
+
 int sp_net_getaddrinfo_at(const char *host, int port, int want_family, int socktype, int idx,
                           int *family, int *stype, int *proto,
                           char *ipbuf, int ipcap, int *port_out) {

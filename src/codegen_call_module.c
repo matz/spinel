@@ -1431,6 +1431,18 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         return 1;
       }
     }
+    /* IPSocket.getaddress(host), and on the IPSocket classes below it: the
+       first address the name resolves to */
+    if (tcn && sp_feature_required("socket") && sp_streq(name, "getaddress") && argc == 1 &&
+        (sp_streq(tcn, "IPSocket") || sp_streq(tcn, "TCPSocket") || sp_streq(tcn, "UDPSocket"))) {
+      int skc = comp_class_index(c, tcn);
+      if (skc < 0 || comp_cmethod_in_chain(c, skc, name, NULL) < 0) {
+        buf_puts(b, "sp_sock_getaddress(");
+        emit_str_expr(c, argv[0], b);
+        buf_puts(b, ")");
+        return 1;
+      }
+    }
     /* BasicSocket.do_not_reverse_lookup and its writer, on any socket class:
        one setting they share, which each new socket takes. The writer
        answers its argument; only its truth sets the default. */

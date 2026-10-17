@@ -1,6 +1,6 @@
 # The socket classes are constants once `require "socket"` runs, and a class
 # Spinel recognizes but has not implemented reports the missing METHOD rather
-# than a missing constant. (IPSocket.getaddress is one of the documented gaps;
+# than a missing constant. (Socket.getservbyname is one of the documented gaps;
 # see docs/limitations.md.)
 require "socket"
 p TCPServer
@@ -11,7 +11,7 @@ p Socket
 p TCPServer.name
 p TCPServer.to_s
 
-r2 = (IPSocket.getaddress("localhost") rescue $!.class); p r2
+r2 = (Socket.getservbyname("http") rescue $!.class); p r2
 r3 = (TCPServer.bogus_xyz rescue $!.class); p r3
 r6 = (TCPServer.bogus_xyz rescue $!.message); p r6
 

@@ -4095,6 +4095,10 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
         if (sp_streq(name, "do_not_reverse_lookup") && argc == 0) { *out = TY_BOOL; return 1; }
         if (sp_streq(name, "do_not_reverse_lookup=") && argc == 1) { *out = infer_type(c, argv[0]); return 1; }
         if (sp_streq(name, "for_fd") && argc == 1) { *out = TY_IO; return 1; }
+        if (sp_streq(name, "getaddress") && argc == 1 &&
+            (sp_streq(nt_str(nt, recv, "name"), "IPSocket") || sp_streq(nt_str(nt, recv, "name"), "TCPSocket") ||
+             sp_streq(nt_str(nt, recv, "name"), "UDPSocket")))
+          { *out = TY_STRING; return 1; }
       }
     }
     if (rty && sp_streq(rty, "ConstantReadNode") && nt_str(nt, recv, "name") &&

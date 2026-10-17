@@ -488,7 +488,7 @@ still works.
 - `SOCKSSocket` does not exist (CRuby only defines it when built with the
   SOCKS library, so a program cannot rely on it either).
 - Missing class methods: `.open` with a block (which closes the socket when
-  the block returns), `.gethostbyname`, `IPSocket.getaddress`.
+  the block returns), `.gethostbyname`, `Socket.getservbyname`.
 - `TCPServer.new` takes no backlog argument (the listen backlog is fixed);
   `TCPSocket.new` has no four-argument local-address form.
 - A class Spinel recognizes but has not implemented reports the missing

@@ -176,6 +176,7 @@ sp_File *sp_sock_udp_new(sp_int family);
 const char *sp_sock_gethostname(void);
 sp_int sp_sock_addrinfo_hint(sp_RbVal v, sp_int is_family);
 sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port, sp_int family, sp_int socktype);
+const char *sp_sock_getaddress(const char *host);
 sp_Addrinfo *sp_sock_address(sp_File *f, sp_int peer);
 const char *sp_sock_getname(sp_File *f, sp_int peer);
 /* BasicSocket.do_not_reverse_lookup (shared by every socket class) and the

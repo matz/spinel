@@ -954,8 +954,6 @@ static int yield_operator_site_type(const Compiler *c, int id, TyKind *out) {
    the table the call keeps one site's type, and answering the other site's
    own kind here sent its value to the raise-tail arm, which dropped it for
    nil (`-"ab"` at one site, `-5` at another, printed nil for the second). */
-void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
-                              TyKind *arg1, int *range_has_float_bound);   /* analyze_internal.h */
 static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode) return 0;

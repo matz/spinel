@@ -243,7 +243,15 @@ typedef struct BuiltinOp {
    which a result kind cannot say), and the row only gives codegen its
    emitter. --plan-check expects inference to have answered such a call
    without a row, as long as the call was typed; a TY_UNKNOWN row without
-   the flag is a call the table does not type yet. */
+   the flag is a call the table does not type yet.
+
+   In practice only Method#receiver's own row sets this: most TY_UNKNOWN
+   rows whose answer genuinely is hand-written elsewhere (`[]`, `slice`,
+   `[]=`, `==`, `fetch`'s 2-arg form, ...) were never given the flag either,
+   so its absence is not reliable evidence that a row is unfinished rather
+   than a deliberate defer -- check what reads the row (an arm in
+   infer_array_call/infer_numeric_call/infer_hash_call, or a plan-check
+   expectation) before assuming a bare TY_UNKNOWN is a gap to close. */
 #define BOPF_INFERRED 128
 
 /* A row's recv may name a family of kinds rather than one; a caller looks

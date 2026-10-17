@@ -2069,6 +2069,12 @@ int builtin_recv_arity_span(const char *name, int *lo, int *hi);
 int builtin_recv_owner_classes(const char *name, const char **out, int cap);
 int poly_splat_keyed(const char *name);
 int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out);
+/* arg1's kind and whether a one-argument Range literal's own bound is
+   Float-typed -- see the canonical declaration in analyze_internal.h,
+   where it is defined (analyze_infer.c). const-safe, so this file's own
+   const Compiler* call sites can use it too. */
+void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
+                              TyKind *arg1, int *range_has_float_bound);
 int node_is_empty_container(const NodeTable *nt, int node);
 int an_empty_container_kind(Compiler *c, int b);
 TyKind ffi_spec_to_ty(const char *spec);

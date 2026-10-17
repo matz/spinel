@@ -4350,7 +4350,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (sp_streq(name, "write_nonblock")) { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
       if (sp_streq(name, "read") || sp_streq(name, "gets") ||
           sp_streq(name, "readline") || sp_streq(name, "pread") ||
-          sp_streq(name, "readpartial")) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
+          sp_streq(name, "readpartial") || sp_streq(name, "sysread")) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
       /* the descriptor surface, typed as the TY_IO arms type it: a stat is
          carried as the handle itself, the offsets and counts are ints */
       if (sp_streq(name, "stat") && argc == 0) { *out = an_poly_concrete(c, id, name, TY_IO); return 1; }

@@ -865,7 +865,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) ||
        sp_streq(name, "readlines") || sp_streq(name, "rewind") ||
        poly_io_codepoint_enum(c, id) ||
-       sp_streq(name, "readpartial") ||
+       sp_streq(name, "readpartial") || sp_streq(name, "sysread") ||
        /* a socket read back out of a container: its non-blocking connect and
           its options, as the typed socket arms answer them */
        (boxed_socket_opt(name, argc) && sp_feature_required("socket")) ||
@@ -1545,12 +1545,12 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          count-less, the arm below was skipped and the fallback answered
          fileno; over-long, the extras were read and dropped. CRuby refuses
          both with ArgumentError before touching the stream. */
-      else if (sp_streq(name, "readpartial") && (argc == 0 || argc > 2)) {
+      else if ((sp_streq(name, "readpartial") || sp_streq(name, "sysread")) && (argc == 0 || argc > 2)) {
         buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"wrong number of arguments "
                       "(given %d, expected 1..2)\"); (const char *)0; })", argc);
       }
       /* the same (len, outbuf) rebind the typed arm makes (#3336) */
-      else if (sp_streq(name, "readpartial") && argc >= 1) {
+      else if ((sp_streq(name, "readpartial") || sp_streq(name, "sysread")) && argc >= 1) {
         Buf sh; memset(&sh, 0, sizeof sh);
         if (argc == 2 && emit_io_read_outbuf(c, id, name, "sp_File_readpartial_or_nil", tio, argv, 1, argv[1], 0, b))
           buf_puts(b, "; })");

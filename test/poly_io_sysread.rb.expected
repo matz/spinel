@@ -1,0 +1,8 @@
+"ab"
+["cd", "cd", true]
+"ef"
+eof
+wrong number of arguments (given 0, expected 1..2)
+wrong number of arguments (given 3, expected 1..2)
+"# IO"
+undefined method 'sysread' for an instance of String

@@ -14293,6 +14293,24 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     buf_printf(b, "void *_ic%d = sp_inflight_cause;"
                   " if (_excf%d) sp_inflight_cause = sp_exc_ensure_obj(&_excobj%d, &_excmsg%d, _exccls%d);\n",
                eid, eid, eid, eid, eid);
+    /* Cleanup may raise and rescue another exception, replacing the shared
+       native snapshot. Keep the propagating exception's frames across it.
+       Debug-only: release programs retain their generated C and stack use. */
+    if (g_debug) {
+      emit_indent(b, indent);
+      buf_printf(b, "#if SP_BT_AVAILABLE\nvoid *_ebt%d[256]; int _ebn%d = _excf%d ? sp_bt_n : 0;"
+                    " if (_ebn%d) memcpy(_ebt%d, sp_bt_buf, sizeof(void *) * (size_t)_ebn%d);\n#endif\n",
+                 eid, eid, eid, eid, eid, eid);
+    }
+    /* A bare raise inside the body can leave before the native snapshot is
+       restored below. Give the handled object its own trace first. */
+    if (g_debug) {
+      emit_indent(b, indent);
+      buf_printf(b, "if (_excf%d && !((sp_Exception *)_excobj%d)->backtrace) {"
+                    " sp_StrArray *_bt = sp_backtrace_captured(); sp_gc_wb(_excobj%d);"
+                    " ((sp_Exception *)_excobj%d)->backtrace = _bt; }\n",
+                 eid, eid, eid, eid);
+    }
     /* The ensure's reads are not the method's return. Keep both a
        published handle and a fresh tail's cleared channel across them. */
     Scope *sc = comp_scope_of(c, id);
@@ -14324,6 +14342,12 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     buf_printf(b, "sp_unwind_kind = _uk%d; sp_unwind_target = _ut%d; sp_unwind_exc_top = _ue%d; sp_unwind_home = _uh%d;\n",
                eid, eid, eid, eid);
 
+    if (g_debug) {
+      emit_indent(b, indent);
+      buf_printf(b, "#if SP_BT_AVAILABLE\nif (_excf%d) { sp_bt_n = _ebn%d;"
+                    " if (_ebn%d) memcpy(sp_bt_buf, _ebt%d, sizeof(void *) * (size_t)_ebn%d); }\n#endif\n",
+                 eid, eid, eid, eid, eid);
+    }
     /* A non-local unwind passing through has now run this ensure: continue to the
        next handler or deliver to its target (never falls through to the
        deferred-return / re-raise propagation below). */

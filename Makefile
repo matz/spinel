@@ -2906,6 +2906,19 @@ backtrace-test: $(SPINEL) $(SP_RT_LIB)
 	for f in "Chain#inner" "Chain#mid" "Chain#outer" "Chain#top"; do \
 	  grep -q "$$f" "$$tmp/pt.out" || { echo "backtrace-test: FAIL (#5084: frame $$f cut by a rescue that did not match)"; cat "$$tmp/pt.out"; ok=0; }; \
 	done; \
+	$(SPINEL) --debug --no-inline-hot test/backtrace/ensure_frames.rb -o "$$tmp/ef" >/dev/null 2>&1 || \
+	  { echo "backtrace-test: FAIL (compile ensure_frames)"; ok=0; }; \
+	"$$tmp/ef" > "$$tmp/ef.out" 2>&1; \
+	cmp -s "$$tmp/ef.out" test/backtrace/ensure_frames.rb.expected || \
+	  { echo "backtrace-test: FAIL (ensure lost or replaced the original frames)"; cat "$$tmp/ef.out"; ok=0; }; \
+	$(SPINEL) --debug --no-inline-hot test/backtrace/ensure_uncaught.rb -o "$$tmp/eu" >/dev/null 2>&1 || \
+	  { echo "backtrace-test: FAIL (compile ensure_uncaught)"; ok=0; }; \
+	"$$tmp/eu" > "$$tmp/eu.out" 2>&1; status=$$?; \
+	[ "$$status" -eq 1 ] && head -1 "$$tmp/eu.out" | grep -q "ensure_uncaught.rb:\([0-9]*:\)\{0,1\}in .boom': boom (RuntimeError)" || \
+	  { echo "backtrace-test: FAIL (uncaught exception lost the raising frame)"; cat "$$tmp/eu.out"; ok=0; }; \
+	"$$tmp/eu" reraise > "$$tmp/er.out" 2>&1; status=$$?; \
+	[ "$$status" -eq 1 ] && head -1 "$$tmp/er.out" | grep -q "ensure_uncaught.rb:\([0-9]*:\)\{0,1\}in .boom': boom (RuntimeError)" || \
+	  { echo "backtrace-test: FAIL (bare raise inside ensure lost the raising frame)"; cat "$$tmp/er.out"; ok=0; }; \
 	$(SPINEL) --debug --no-inline-hot test/backtrace/required_main.rb -o "$$tmp/rq" >/dev/null 2>&1 || \
 	  { echo "backtrace-test: FAIL (compile required_main)"; ok=0; }; \
 	"$$tmp/rq" > "$$tmp/rq.out" 2>&1; \

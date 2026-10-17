@@ -15524,7 +15524,7 @@ void sp_fin_run_exit(void);   /* lib/sp_gc.c: finalizers still registered at exi
 /* Print an uncaught exception in CRuby's tail format. Factored out because two
    places print it now: the end of sp_raise_cls, and a hook whose own exception
    reached the drain's protect frame. */
-static void sp_exc_print_uncaught(const char *cls, const char *msg);
+static void sp_exc_print_uncaught(const char *cls, const char *msg, sp_StrArray *bt);
 void sp_exc_resignal(const char *cls, const char *msg);   /* lib/sp_cold.c */
 /* CRuby's tail format "<message> (<ClassName>)", prefixed by the raising frame
    and followed by its callers when the backtrace substrate is live (a --debug
@@ -15541,10 +15541,10 @@ static void sp_exc_print_uncaught_text(const char *cls, const char *msg) {
   if (sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", text);
   else fprintf(stderr, "%s (%s)\n", text, shown);
 }
-static void sp_exc_print_uncaught(const char *cls, const char *msg) {
+static void sp_exc_print_uncaught(const char *cls, const char *msg, sp_StrArray *bt) {
 #if SP_BT_AVAILABLE
-  if (sp_bt_enabled && sp_bt_n > 0) {
-    sp_StrArray *bt = sp_bt_format(sp_bt_buf, sp_bt_n);
+  if (sp_bt_enabled) {
+    if (!bt && sp_bt_n > 0) bt = sp_bt_format(sp_bt_buf, sp_bt_n);
     if (bt && bt->len > 0) {
       fprintf(stderr, "%s: ", sp_StrArray_get(bt, 0));
       sp_exc_print_uncaught_text(cls, msg);
@@ -15649,9 +15649,9 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (!sp_exc_msg_empty_given(msg)) msg = sp_exc_msg_plain(msg);
   SP_GC_ROOT_STR(msg);
 #if SP_BT_AVAILABLE
-  /* a pass-through, or a bare `raise` re-raising the handled exception, keeps
-     the frames of the raise that made it, as CRuby does */
-  if (sp_bt_enabled && !sp_bt_keep && !sp_reraise_current) sp_bt_n = backtrace(sp_bt_buf, 256);
+  /* A pass-through, a bare raise, or an ensure resuming its saved exception
+     keeps the frames of the raise that made it, as CRuby does. */
+  if (sp_bt_enabled && !sp_bt_keep && !sp_reraise_current && !cont) sp_bt_n = backtrace(sp_bt_buf, 256);
 #endif
   sp_bt_keep = 0;
   /* A real exception supersedes any non-local unwind in flight (e.g. raised from
@@ -15745,6 +15745,11 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      backtrace substrate is not so lucky: a hook that raises overwrites it, so
      a debug build keeps its own copy across the drain. */
 #if SP_BT_AVAILABLE
+  /* The object may have kept its original trace across a bare raise inside
+     ensure. Hooks clear the pending object, so root its trace before draining. */
+  sp_StrArray *_bt_obj = (sp_bt_enabled && sp_pending_exc_obj)
+    ? ((sp_Exception *)sp_pending_exc_obj)->backtrace : NULL;
+  if (_bt_obj) _sp_gc_root_push((void **)&_bt_obj);
   void *_bt_keep[256];
   int _bt_keep_n = (sp_bt_enabled && sp_bt_n > 0) ? sp_bt_n : 0;
   if (_bt_keep_n > 0) memcpy(_bt_keep, sp_bt_buf, sizeof(void *) * (size_t)_bt_keep_n);
@@ -15752,8 +15757,10 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   { int status = sp_at_exit_run(1);
 #if SP_BT_AVAILABLE
     if (_bt_keep_n > 0) { memcpy(sp_bt_buf, _bt_keep, sizeof(void *) * (size_t)_bt_keep_n); sp_bt_n = _bt_keep_n; }
+    sp_exc_print_uncaught(cls, msg, _bt_obj);
+#else
+    sp_exc_print_uncaught(cls, msg, NULL);
 #endif
-    sp_exc_print_uncaught(cls, msg);
     sp_exc_resignal(cls, msg);
 #ifdef SP_EXC_ABORT
     (void)status;
@@ -19699,7 +19706,7 @@ static int sp_at_exit_run(int status) {
       SP_GC_ROOT(eobj);
       if (ecls && strcmp(ecls, "SystemExit") == 0) st = sp_exc_exit_status(eobj);
       else {
-        sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", emsg);
+        sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", emsg, eobj ? ((sp_Exception *)eobj)->backtrace : NULL);
         st = 1;
       }
     }

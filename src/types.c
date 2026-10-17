@@ -384,6 +384,22 @@ TyKind ty_array_elem(TyKind arr) {
 static int ty_recv_is_plain_array(TyKind t) {
   return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY || t == TY_STR_ARRAY;
 }
+/* bop_find_arg's BopArgKind callback: this call site only ever has a
+   single argument's kind available (arg0), so i==0 is the only answer. */
+static TyKind bop_arg0_kind(const void *ud, int i) {
+  return i == 0 ? *(const TyKind *)ud : TY_UNKNOWN;
+}
+/* Names g_promote_mode gates elsewhere (analyze_infer.c/analyze.c) that
+   could collide with a bop_rows lookup here -- excluded so a future
+   promote-sensitive row can't bypass promote mode through this path
+   before someone re-audits it. succ/sum are excluded because they are
+   already answered above, not because they are unsafe here. */
+static int bop_result_excluded_for_promote(const char *name) {
+  return !strcmp(name, "succ") || !strcmp(name, "next") ||
+         !strcmp(name, "sum") || !strcmp(name, "to_i") ||
+         !strcmp(name, "divmod") || !strcmp(name, "pow") ||
+         !strcmp(name, "<<");
+}
 int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv, int promote, TyKind *out) {
   if (!name) return 0;
   if (argc == 0) {
@@ -442,7 +458,12 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv,
       if (!ty_recv_is_plain_array(recv)) return 0;
       *out = ty_array_elem(recv); return 1;
     }
-    return 0;
+    /* No hand-written arm above matched this argc=0 name: fall through
+       (instead of returning 0 here) to the generic bop_rows-backed check
+       below, which also answers argc=0 names (sort!, reverse!, rotate,
+       shuffle, sample) -- K-029. The dig/[] checks right after this block
+       self-guard on argc>=1, so they simply no-op for an argc=0 name that
+       reaches here. */
   }
   /* Unlike succ/sum above, dig ignores `promote`: a one-index dig answers
      the same nilable element `[]` does (below), and `[]` is itself
@@ -454,6 +475,33 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind recv,
   }
   if (argc == 1 && !strcmp(name, "[]") && arg0 == TY_INT && ty_recv_is_plain_array(recv)) {
     *out = ty_array_elem(recv); return 1;
+  }
+  /* Every name above answers from its own hand-written rule, several of
+     them mode-gated (succ/sum). Below is a generic fallback for any OTHER
+     name: builtin_ops.c's bop_rows table already carries, per row, either
+     a fixed TyKind or a BOPR_* result derived purely from the receiver's
+     kind (bop_result), and that lookup (bop_find_arg) is itself pure --
+     already included above, no Compiler*, no node. Reusing it here closes
+     a whole family of names (sort!, reverse!, rotate, shuffle, first(n),
+     last(n), take, drop, fetch(1-arg), sample(0-arg) at the time this was
+     written -- K-029) with no per-name arm, and any future name whose row
+     already states a concrete result closes itself here too, for free.
+     Guarded against promote-sensitive names (succ/next/sum/to_i/divmod/
+     pow/<<) so a future promote-sensitive row can't bypass promote mode
+     through this path before someone re-audits it; today's five excluded
+     names are already answered above and never reach this check. */
+  if (!bop_result_excluded_for_promote(name)) {
+    /* bop_find_arg looks rows up by their exact key, and plain-array rows
+       are keyed BOP_ANY_ARRAY (a family, not a real TyKind) -- a concrete
+       recv (TY_INT_ARRAY, ...) must be mapped to its family first, the
+       same way every other bop_rows caller (infer_array_call,
+       an_bop_find's own callers) already does, or the lookup silently
+       finds nothing for every plain-array name (found via
+       systematic-debugging after the first build of this check answered
+       0 for every site despite the row existing). */
+    const BuiltinOp *op = bop_find_arg(bop_family_of(recv), name, argc,
+                                        /*has_block=*/0, bop_arg0_kind, &arg0);
+    if (op && op->result != TY_UNKNOWN) { *out = bop_result(op, recv); return 1; }
   }
   return 0;
 }

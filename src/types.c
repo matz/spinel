@@ -415,6 +415,20 @@ static TyKind bop_arg01_kind(const void *ud, int i) {
 static int bop_result_excluded_for_promote(TyKind recv, int promote) {
   return promote && (recv == TY_INT || recv == TY_FLOAT || recv == TY_BIGINT);
 }
+/* The names the generic bop_rows fallback below may answer for -- each
+   verified with its own RED (compile failure on differing-kind yield
+   sites) then GREEN test, not merely "the table has a concrete row for
+   it". A name not on this list never reaches the fallback, however
+   concrete its own bop_rows row looks; see the fallback's own comment
+   for why that distinction matters (inspect has a concrete row too, and
+   broke a real program once let through unverified). */
+static int bop_result_fallback_allowed(const char *name) {
+  return !strcmp(name, "sort!") || !strcmp(name, "reverse!") ||
+         !strcmp(name, "rotate") || !strcmp(name, "shuffle") ||
+         !strcmp(name, "first") || !strcmp(name, "last") ||
+         !strcmp(name, "take") || !strcmp(name, "drop") ||
+         !strcmp(name, "fetch") || !strcmp(name, "sample");
+}
 int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
                             int range_has_float_bound, TyKind recv, int promote, TyKind *out) {
   if (!name) return 0;
@@ -555,20 +569,26 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
   }
   /* Every name above answers from its own hand-written rule, several of
      them mode-gated (succ/sum) or needing more than the receiver's kind
-     to answer (clamp). Below is a generic fallback for any OTHER name:
-     builtin_ops.c's bop_rows table already carries, per row, either a
-     fixed TyKind or a BOPR_* result derived purely from the receiver's
-     kind (bop_result), and that lookup (bop_find_arg) is itself pure --
-     already included above, no Compiler*, no node. Reusing it here closes
-     a whole family of names (sort!, reverse!, rotate, shuffle, first(n),
-     last(n), take, drop, fetch(1-arg), sample(0-arg) at the time this was
-     written) with no per-name arm, and any future name whose row already
-     states a concrete result closes itself here too, for free. Excluded
-     for a promote-sensitive receiver kind (bop_result_excluded_for_promote)
-     so a promote-gated arm elsewhere in the analyzer can't be bypassed by
-     this generic path answering the row's plain, non-promoting result
-     instead. */
-  if (!bop_result_excluded_for_promote(recv, promote)) {
+     to answer (clamp). Below is a generic fallback, delegating to
+     builtin_ops.c's bop_rows table (a fixed TyKind or a BOPR_* result
+     derived purely from the receiver's kind, via the existing pure
+     bop_find_arg/bop_result) instead of hand-writing another arm --
+     closes sort!, reverse!, rotate, shuffle, first(n), last(n), take,
+     drop, fetch(1-arg) and sample(0-arg) with no per-name code.
+
+     Deliberately an ALLOWLIST (bop_result_fallback_allowed), not every
+     name the table happens to answer concretely: a first version of
+     this let any name through and answered `inspect` too (its own row
+     has a concrete TY_STRING result), which a fresh review found
+     breaking test/string_encode_arguments.rb -- the wider bop_rows
+     table's "concrete result" promise is about what a DIRECT call
+     answers, not about what's safe to answer per SITE across a
+     yield's diverging call sites, and only the ten names below were
+     ever verified for that second, stricter property. A future name
+     needs the same verification (a RED test with differing-kind sites,
+     confirmed GREEN) before joining the list, not just a concrete row. */
+  if (bop_result_fallback_allowed(name) &&
+      !bop_result_excluded_for_promote(recv, promote)) {
     /* bop_find_arg looks rows up by their exact key, and plain-array rows
        are keyed BOP_ANY_ARRAY (a family, not a real TyKind) -- a concrete
        recv (TY_INT_ARRAY, ...) must be mapped to its family first, the

@@ -1188,10 +1188,10 @@ int desugar_extend_self(Compiler *c) {
       const char *dn = nt_str(nt, st, "name");
       int mine = 0;
       size_t dl = dn ? strlen(dn) : 0;
-      int dw = dl > 1 && dn[dl - 1] == '=' && (isalnum((unsigned char)dn[dl - 2]) || dn[dl - 2] == '_');   /* `def x=`, not `def ==` */
+      int dw = dl > 1 && dn[dl - 1] == '=' && (isalnum((unsigned char)dn[dl - 2]) || dn[dl - 2] == '_');   /* `def x=`, not `def ==`: an attr writer's base name matches it */
       for (int k = 0; dn && k < nown && !mine; k++)
-        mine = own[k].key == has && (dw ? own[k].writer && strlen(own[k].name) == dl - 1 && strncmp(own[k].name, dn, dl - 1) == 0
-                                        : !own[k].writer && sp_streq(own[k].name, dn));
+        mine = own[k].key == has && (own[k].writer ? dw && strlen(own[k].name) == dl - 1 && strncmp(own[k].name, dn, dl - 1) == 0
+                                                   : sp_streq(own[k].name, dn));
       if (mine) continue;   /* the module's own class method stands */
       int clone = nt_clone_subtree(nt, st);
       if (clone < 0) continue;

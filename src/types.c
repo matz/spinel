@@ -384,10 +384,13 @@ TyKind ty_array_elem(TyKind arr) {
 static int ty_recv_is_plain_array(TyKind t) {
   return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY || t == TY_STR_ARRAY;
 }
-/* bop_find_arg's BopArgKind callback: this call site only ever has a
-   single argument's kind available (arg0), so i==0 is the only answer. */
-static TyKind bop_arg0_kind(const void *ud, int i) {
-  return i == 0 ? *(const TyKind *)ud : TY_UNKNOWN;
+/* bop_find_arg's BopArgKind callback: ud points at a two-element array
+   holding arg0 and arg1, so a row guarded on either argument's kind
+   (bop_find_stage checks both) can still be matched -- a lookup that
+   only ever supplied arg0 found the first unguarded row instead of a
+   row guarded on arg1, e.g. a two-argument IO#set_encoding row. */
+static TyKind bop_arg01_kind(const void *ud, int i) {
+  return i == 0 || i == 1 ? ((const TyKind *)ud)[i] : TY_UNKNOWN;
 }
 /* g_promote_mode gates a scattered, open-ended set of arms across
    analyze_infer.c/analyze.c for a numeric scalar receiver -- pred, the
@@ -572,8 +575,9 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
        same way every other bop_rows caller (infer_array_call,
        an_bop_find's own callers) already does, or the lookup finds
        nothing for every plain-array name despite the row existing. */
+    TyKind ak[2] = { arg0, arg1 };
     const BuiltinOp *op = bop_find_arg(bop_family_of(recv), name, argc,
-                                        /*has_block=*/0, bop_arg0_kind, &arg0);
+                                        /*has_block=*/0, bop_arg01_kind, ak);
     if (op && op->result != TY_UNKNOWN) { *out = bop_result(op, recv); return 1; }
   }
   return 0;

@@ -4183,10 +4183,18 @@ static int const_recv_hold(Compiler *c, int id, Buf *b) {
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
   if (!const_has_flag(lv) || const_recv_held(c, r) < 0) return -1;
   int t = ++g_tmp;
+  /* the receiver's own prelude (`l.class` holds l in a temp) goes ahead of
+     the pointer; a statement has no prelude buffer of its own */
+  Buf slot; memset(&slot, 0, sizeof slot);
+  Buf own; memset(&own, 0, sizeof own);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  if (!g_pre) { g_pre = &own; g_indent = 0; }
+  emit_constant_slot(c, r, &slot);
+  g_pre = sv_pre; g_indent = sv_ind;
+  if (own.p) buf_puts(b, own.p);
   emit_ctype(c, lv->type, b);
-  buf_printf(b, " *_p%d = ", t);
-  emit_constant_slot(c, r, b);
-  buf_puts(b, "; ");
+  buf_printf(b, " *_p%d = %s; ", t, slot.p ? slot.p : "NULL");
+  free(slot.p); free(own.p);
   nt_node_set_int((NodeTable *)nt, r, "const_ptr", t);
   return r;
 }
@@ -4194,6 +4202,15 @@ int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
   Buf pre; memset(&pre, 0, sizeof pre);
   int r = const_recv_hold(c, id, &pre);
   if (r < 0) { free(pre.p); return 0; }
+  /* with a prelude buffer the pointer is declared there: a call that
+     hoists its loop into the prelude (`K::H.map { }`) reads it from there */
+  if (g_pre) {
+    emit_indent(g_pre, g_indent); buf_puts(g_pre, pre.p ? pre.p : ""); buf_puts(g_pre, "\n");
+    free(pre.p);
+    emit_call(c, id, b);
+    nt_node_set_int((NodeTable *)c->nt, r, "const_ptr", 0);
+    return 1;
+  }
   buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : ""); free(pre.p);
   emit_call(c, id, b);
   nt_node_set_int((NodeTable *)c->nt, r, "const_ptr", 0);

@@ -1,0 +1,41 @@
+literal: true
+left: true
+shorter: false
+longer: false
+differs: false
+ne: false
+ne other: true
+built: true
+interpolated: true
+mutated: true
+mutated longer: false
+sliced: true
+joined: true
+frozen: true
+upcased: true
+embedded NUL vs prefix: false
+embedded NUL slice: true
+embedded NUL tail: true
+NUL char: true
+NUL vs empty: false
+binary same bytes: true
+binary left: true
+binary differs: false
+utf8 literal vs binary: false
+empty: true
+empty vs x: false
+x vs empty: false
+nil.to_s: true
+true.to_s: true
+false.to_s: false
+Integer#to_s: true
+Float#to_s: true
+Symbol#to_s: true
+class name: true
+ENV unset: false
+ENV set: true
+controls: 5
+methods: [true, true, false, false, false, false]
+case: [:read, :read, :write, :empty, :other, :other, :other, :write, :write]
+case mixed: [:var, :nul_lit, :utf8, :none, :none]
+pattern: [:json, :html, :html, :text, :json, :text]

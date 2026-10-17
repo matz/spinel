@@ -2920,7 +2920,39 @@ static int node_may_run_ruby(const NodeTable *nt, int node) {
    temp would be churn in every string comparison in the program. Same shape as
    the operand rule #4049 settled for call arguments. A read of a shared String
    slot is a fresh copy too (operand_may_allocate). */
+/* A plain string literal of ASCII bytes and no NUL, as a comparison
+   operand: its bytes and length are known here, and it equals any string of
+   the same bytes whatever that string's encoding (sp_str_eq_lit). */
+static int str_eq_lit_operand(Compiler *c, int node, const char **s, size_t *n) {
+  if (node < 0 || nt_kind(c->nt, node) != NK_StringNode) return 0;
+  const char *sc = nt_str(c->nt, node, "content");
+  size_t len = sc ? (size_t)nt_str_len(c->nt, node, "content") : 0;
+  for (size_t i = 0; i < len; i++) if ((unsigned char)sc[i] >= 0x80 || sc[i] == 0) return 0;
+  *s = sc ? sc : ""; *n = len;
+  return 1;
+}
+/* `_t<t> == lit` for a case/when or pattern arm that is a plain ASCII
+   literal, through sp_str_eq_lit; 0 when the arm is not one, and the caller
+   emits its general comparison. */
+int emit_str_eq_lit_tmp(Compiler *c, int t, int lit, Buf *b) {
+  const char *ls; size_t ln;
+  if (!str_eq_lit_operand(c, lit, &ls, &ln)) return 0;
+  buf_printf(b, "sp_str_eq_lit(_t%d, \"", t); emit_c_escaped_n(b, ls, ln); buf_printf(b, "\", %zu)", ln);
+  return 1;
+}
 static void emit_str_eq_ordered(Compiler *c, int recv, int arg, int eq, Buf *b) {
+  /* Against a literal: no strcmp call, and the literal has no side effect
+     to order nor anything to root. */
+  const char *ls; size_t ln; int other = -1;
+  if (str_eq_lit_operand(c, arg, &ls, &ln)) other = recv;
+  else if (str_eq_lit_operand(c, recv, &ls, &ln)) other = arg;
+  if (other >= 0) {
+    buf_puts(b, eq ? "sp_str_eq_lit(" : "(!sp_str_eq_lit(");
+    emit_expr(c, other, b);
+    buf_puts(b, ", \""); emit_c_escaped_n(b, ls, ln); buf_printf(b, "\", %zu)", ln);
+    if (!eq) buf_puts(b, ")");
+    return;
+  }
   if (operand_may_allocate(c, recv) && operand_may_allocate(c, arg)) {
     int t = ++g_tmp;
     buf_printf(b, eq ? "({ const char *_t%d = " : "(!({ const char *_t%d = ", t);

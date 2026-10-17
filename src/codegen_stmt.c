@@ -7129,7 +7129,9 @@ void emit_pm_eq(Compiler *c, int t, TyKind pt, int valnode, Buf *b) {
     buf_puts(b, ")");
   }
   else if (pt == TY_STRING) {
-    buf_printf(b, "sp_str_eq(_t%d, ", t); emit_expr(c, valnode, b); buf_puts(b, ")");
+    if (!emit_str_eq_lit_tmp(c, t, valnode, b)) {
+      buf_printf(b, "sp_str_eq(_t%d, ", t); emit_expr(c, valnode, b); buf_puts(b, ")");
+    }
   }
   /* an Array, a Hash or a Bignum subject is matched by the value's ===,
      which for those is ==, not by the pointers both sides hold; the value
@@ -10735,7 +10737,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                 buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
               }
             }
-            else {
+            else if (!emit_str_eq_lit_tmp(c, t, conds[j], b)) {
               buf_printf(b, "sp_str_eq(_t%d, ", t);
               emit_poly_unboxed(c, conds[j], wat, "sp_poly_to_s(", b);
               buf_puts(b, ")");
@@ -11183,7 +11185,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
               buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
             }
           }
-          else {
+          else if (!emit_str_eq_lit_tmp(c, t, conds[j], b)) {
             buf_printf(b, "sp_str_eq(_t%d, ", t);
             emit_poly_unboxed(c, conds[j], wat2, "sp_poly_to_s(", b);
             buf_puts(b, ")");

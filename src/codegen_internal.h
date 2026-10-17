@@ -1703,6 +1703,7 @@ TyKind fold_seed_ntype(Compiler *c, int node);
    seed denotes the implicit Integer zero. */
 void emit_poly_sum_seed(Compiler *c, int recv, int seed, Buf *b);
 void emit_c_escaped_n(Buf *b, const char *s, size_t len);
+int emit_str_eq_lit_tmp(Compiler *c, int t, int lit, Buf *b);
 void emit_c_escaped(Buf *b, const char *s);
 /* A poly RHS assigned into a scalar slot needs an unbox. The statement form
    (emit_assign) and the expression form (`x = v` in value position) share the

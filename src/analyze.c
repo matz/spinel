@@ -37888,25 +37888,14 @@ static int wnh_last_stmt(Compiler *c, int id) {
 }
 /* Is node n method mi's answer: its body's last statement, or the last
    statement of an `if` / `unless` / `else` arm in that place, or of a `case`
-   or `case`/`in` clause, or of a `begin` (its else, which replaces the body,
-   or the body)? Read through the iterator with the if, unless, case and
-   case/in shapes; a begin is a leaf of it, which wnh_answer_arm takes apart
-   (a rescue clause is not read). */
-typedef struct { Compiler *c; int n; } WnhArms;
-static int wnh_answer_in(Compiler *c, int at, int n);
+   or `case`/`in` clause, or of a `begin` (its body, each rescue clause, or its
+   else, which replaces the body)? Read through the iterator with the if,
+   unless, case, case/in and begin shapes. */
 static int wnh_answer_arm(const VpLeaf *leaf, void *ud) {
-  WnhArms *a = ud;
-  const NodeTable *nt = a->c->nt;
-  if (leaf->kind != VPK_EXPR) return 0;
-  if (leaf->node == a->n) return 1;
-  if (nt_kind(nt, leaf->node) != NK_BeginNode) return 0;
-  int el = nt_ref(nt, leaf->node, "else_clause");
-  return wnh_answer_in(a->c, el >= 0 ? el : nt_ref(nt, leaf->node, "statements"), a->n);
+  return leaf->kind == VPK_EXPR && leaf->node == *(int *)ud;
 }
 static int wnh_answer_in(Compiler *c, int at, int n) {
-  if (at < 0) return 0;
-  WnhArms a = { c, n };
-  return for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN, wnh_answer_arm, &a);
+  return at >= 0 && for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN, wnh_answer_arm, &n);
 }
 static int wnh_is_answer(Compiler *c, Scope *sc, int n) {
   if (!sc || sc->def_node < 0 || sc->body < 0) return 0;

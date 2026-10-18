@@ -7101,24 +7101,15 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
 }
 
 /* Is node `id` the value scope `mi` returns by falling off its end: its
-   body's last statement, through parentheses, statement lists and a begin
-   without a rescue? */
+   body's last statement? A call in parentheses or in a `begin` is not. The
+   inlined sites of the method return a bare tail's value themselves, which
+   is why the call keeps the first site's type there; a tail in parentheses
+   or a `begin` is not returned that way, so a call whose sites answer
+   different kinds is boxed, as one whose value is used is. The same answer
+   for a tail in an `if`, a `case` or an `||`: the shape is not read. */
 int node_is_scope_tail(Compiler *c, int mi, int id) {
-  const NodeTable *nt = c->nt;
   if (mi < 0 || mi >= c->nscopes) return 0;
-  int n = c->scopes[mi].body;
-  for (int depth = 0; n >= 0 && depth < 16; depth++) {
-    if (n == id) return 1;
-    NodeKind k = nt_kind(nt, n);
-    if (k == NK_StatementsNode) {
-      int bn = 0; const int *bb = nt_arr(nt, n, "body", &bn);
-      n = bn > 0 ? bb[bn - 1] : -1;
-    }
-    else if (k == NK_ParenthesesNode) n = nt_ref(nt, n, "body");
-    else if (k == NK_BeginNode && nt_ref(nt, n, "rescue_clause") < 0) n = nt_ref(nt, n, "statements");
-    else return 0;
-  }
-  return 0;
+  return scope_body_last(c, mi) == id;
 }
 
 /* A Kernel method that runs its block: loop, catch and throw, instance_eval and instance_exec, a trampoline's block (infer_call_inner's rules, in their order) */

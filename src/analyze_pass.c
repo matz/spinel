@@ -1587,7 +1587,7 @@ static int flow_arm(const VpLeaf *leaf, void *ud) {
 }
 
 /* Does a builtin Array or Hash flow from `node`? Read through the iterator
-   with the if, unless, case and case/in shapes (and `||`/`&&`, both sides) and a
+   with the if, unless, case, case/in and begin shapes (and `||`/`&&`, both sides) and a
    `return`'s value: a typed value settles its own answer first, and a value
    position that is not itself an Array or a Hash is asked what its slot
    carries (flow_arm). The walk reads the structure and follows nothing, so
@@ -1599,7 +1599,7 @@ static int flows_container(Compiler *c, int node, int counts) {
   int v = flows_container_typed(c, node, counts);
   if (v >= 0) return v;
   FlowArms a = { c, node };
-  return for_each_value_position(c->nt, node, VP_FOLLOW_RETURN | VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_LOGIC,
+  return for_each_value_position(c->nt, node, VP_FOLLOW_RETURN | VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VPS_LOGIC,
                                  flow_arm, &a);
 }
 

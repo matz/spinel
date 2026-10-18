@@ -23415,7 +23415,7 @@ static int format_is_slot_read(Compiler *c, int v) {
    emit_interp folds it into one (interp_is_literal_fold). Anything else is
    a String made where it is written: an interpolation, a copy of a shared
    String, a call's answer. A choice is read through the iterator with the
-   if and unless shapes and `||`/`&&`: every value position of
+   if, unless and case shapes and `||`/`&&`: every value position of
    it has to be held, and a missing arm, a jump or a walk that gave up is not. */
 static int format_value_held(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
@@ -23431,7 +23431,7 @@ static int format_is_held(Compiler *c, int v) {
   v = unwrap_parens(c, v);
   if (v < 0) return 0;
   if (format_value_held(c, v)) return 1;
-  return !for_each_value_position(c->nt, v, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_LOGIC, format_arm_unheld, c);
+  return !for_each_value_position(c->nt, v, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_LOGIC, format_arm_unheld, c);
 }
 /* Did the statement already run the format into a temp of its own, which
    it roots (a call beside an argument that can see when it ran)? */

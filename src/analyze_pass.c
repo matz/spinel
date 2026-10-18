@@ -1393,7 +1393,7 @@ static TyKind push_elem_ty(Compiler *c, int node) {
    Array or Hash is among the values that flow here" -- along the same edges
    the types travel, and only ever turn it on. */
 
-static int flows_container(Compiler *c, int node, int depth);
+static int flows_container(Compiler *c, int node, int counts);
 
 /* The tail value of a statements list, which is what a body evaluates to. */
 static int stmts_tail(const NodeTable *nt, int stmts) {
@@ -1534,60 +1534,73 @@ int param_rest_misfits(Compiler *c, Scope *m, LocalVar *p, TyKind ct, const int 
   return 0;
 }
 
-static int flows_container(Compiler *c, int node, int depth) {
-  if (node < 0 || depth > 6) return 0;
-  const NodeTable *nt = c->nt;
+/* What the type of a value settles before its form is read. `counts`: a
+   container-typed value is itself the evidence. It does not at the receiver
+   of a call the caller asks about, which is a POLY one, so "this expression is
+   itself a container" would mean there is no poly dispatch to widen. Only the
+   slot evidence counts there. Deeper down we are walking the values that flow
+   into such a slot, where a container-typed producer is exactly the evidence
+   wanted. A transient array typing of the receiver otherwise answered yes for
+   a slot that never holds one, which is how Set's `orig.to_a` came to widen
+   (#3459). A settled non-container concrete type carries no container.
+   1 or 0 when settled, -1 when the form decides. */
+static int flows_container_typed(Compiler *c, int node, int counts) {
   TyKind t = infer_type(c, node);
-  /* At depth 0 the caller is asking about a POLY receiver, so "this expression
-     is itself a container" is not evidence -- it would mean there is no poly
-     dispatch to widen. Only the slot evidence counts there. Deeper down we are
-     walking the values that flow into such a slot, where a container-typed
-     producer is exactly the evidence wanted. A transient array typing of the
-     receiver otherwise answered yes for a slot that never holds one, which is
-     how Set's `orig.to_a` came to widen (#3459). */
-  if (depth > 0 && (ty_is_array(t) || ty_is_hash(t))) return 1;
-  /* a settled non-container concrete type carries no container */
+  if (counts && (ty_is_array(t) || ty_is_hash(t))) return 1;
   if (t != TY_POLY && t != TY_UNKNOWN && t != TY_NIL) return 0;
-  const char *ty = nt_type(nt, node);
-  if (!ty) return 0;
-  if (sp_streq(ty, "ParenthesesNode")) return flows_container(c, stmts_tail(nt, nt_ref(nt, node, "body")), depth + 1);
-  if (sp_streq(ty, "StatementsNode")) return flows_container(c, stmts_tail(nt, node), depth + 1);
-  if (sp_streq(ty, "ReturnNode")) {
-    int a = nt_ref(nt, node, "arguments");
-    int n = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
-    return (av && n > 0) ? flows_container(c, av[0], depth + 1) : 0;
-  }
-  if (sp_streq(ty, "IfNode") || sp_streq(ty, "UnlessNode")) {
-    if (flows_container(c, stmts_tail(nt, nt_ref(nt, node, "statements")), depth + 1)) return 1;
-    int sub = nt_ref(nt, node, "subsequent");
-    if (sub < 0) sub = nt_ref(nt, node, "else_clause");
-    if (sub < 0) return 0;
-    const char *sty = nt_type(nt, sub);
-    if (sty && (sp_streq(sty, "ElseNode") || sp_streq(sty, "IfNode") || sp_streq(sty, "UnlessNode")))
-      return flows_container(c, sty && sp_streq(sty, "ElseNode")
-                                ? stmts_tail(nt, nt_ref(nt, sub, "statements")) : sub, depth + 1);
-    return flows_container(c, sub, depth + 1);
-  }
-  if (sp_streq(ty, "AndNode") || sp_streq(ty, "OrNode"))
-    return flows_container(c, nt_ref(nt, node, "left"), depth + 1) ||
-           flows_container(c, nt_ref(nt, node, "right"), depth + 1);
-  if (sp_streq(ty, "CaseNode")) {
-    int n = 0; const int *ws = nt_arr(nt, node, "conditions", &n);
-    for (int i = 0; ws && i < n; i++)
-      if (flows_container(c, stmts_tail(nt, nt_ref(nt, ws[i], "statements")), depth + 1)) return 1;
-    int el = nt_ref(nt, node, "else_clause");
-    return el >= 0 && flows_container(c, stmts_tail(nt, nt_ref(nt, el, "statements")), depth + 1);
-  }
-  if (sp_streq(ty, "LocalVariableReadNode")) {
+  return -1;
+}
+
+/* The values that carry the bit: a read of a local that is marked, a call of
+   a method whose return is. */
+static int flows_container_slot(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) == NK_LocalVariableReadNode) {
     const char *nm = nt_str(nt, node, "name");
     LocalVar *lv = nm ? scope_local(comp_scope_of(c, node), nm) : NULL;
     return lv ? lv->poly_ctr : 0;
   }
-  if (sp_streq(ty, "CallNode")) {
+  if (nt_kind(nt, node) == NK_CallNode) {
     int mi = call_target_scope(c, node);
     return mi >= 0 ? c->scopes[mi].ret_poly_ctr : 0;
   }
   return 0;
+}
+
+/* One value position of the expression. A value other than the expression
+   itself is below it, where a container-typed producer is evidence. A
+   `return` that hands out several values is judged by its first. */
+typedef struct { Compiler *c; int root; } FlowArms;
+static int flow_arm(const VpLeaf *leaf, void *ud) {
+  FlowArms *a = ud;
+  Compiler *c = a->c;
+  const NodeTable *nt = c->nt;
+  if (leaf->kind == VPK_JUMP && nt_kind(nt, leaf->node) == NK_ReturnNode) {
+    int r = nt_ref(nt, leaf->node, "arguments");
+    int n = 0; const int *av = r >= 0 ? nt_arr(nt, r, "arguments", &n) : NULL;
+    return av && n > 0 && flows_container(c, av[0], 1);
+  }
+  if (leaf->kind != VPK_EXPR) return 0;
+  if (leaf->node == a->root) return flows_container_slot(c, leaf->node);
+  int v = flows_container_typed(c, leaf->node, 1);
+  return v >= 0 ? v : flows_container_slot(c, leaf->node);
+}
+
+/* Does a builtin Array or Hash flow from `node`? Read through the iterator
+   with the if, unless, case and `||`/`&&` shapes (both sides) and a
+   `return`'s value: a typed value settles its own answer first, and a value
+   position that is not itself an Array or a Hash is asked what its slot
+   carries (flow_arm). The walk reads the structure and follows nothing, so
+   it has no depth to cut: a ladder of any length is read. A walk that gave
+   up, which a tree cannot cause, is no container: the bit only ever turns
+   on, and the next round asks again. */
+static int flows_container(Compiler *c, int node, int counts) {
+  if (node < 0) return 0;
+  int v = flows_container_typed(c, node, counts);
+  if (v >= 0) return v;
+  FlowArms a = { c, node };
+  return for_each_value_position(c->nt, node, VP_FOLLOW_RETURN | VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_LOGIC,
+                                 flow_arm, &a);
 }
 
 int poly_expr_flows_container(Compiler *c, int node) { return flows_container(c, node, 0); }

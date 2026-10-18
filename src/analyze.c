@@ -37889,14 +37889,15 @@ static int wnh_last_stmt(Compiler *c, int id) {
 /* Is node n method mi's answer: its body's last statement, or the last
    statement of an `if` / `unless` / `else` arm in that place, or of a `case`
    or `case`/`in` clause, or of a `begin` (its body, each rescue clause, or its
-   else, which replaces the body), or the value of a rescue modifier? Read
-   through the iterator with the if, unless, case, case/in, begin and rescue
-   modifier shapes. */
+   else, which replaces the body), or the value of a rescue modifier, or an
+   operand of an `||` or `&&` (the right operand of an `&&`: its left is the
+   value only when falsy, which a Hash is not)? Read through the iterator with
+   every shape. */
 static int wnh_answer_arm(const VpLeaf *leaf, void *ud) {
   return leaf->kind == VPK_EXPR && leaf->node == *(int *)ud;
 }
 static int wnh_answer_in(Compiler *c, int at, int n) {
-  return at >= 0 && for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VPS_RESCUE_MOD, wnh_answer_arm, &n);
+  return at >= 0 && for_each_value_position(c->nt, at, VPS_ALL, wnh_answer_arm, &n);
 }
 static int wnh_is_answer(Compiler *c, Scope *sc, int n) {
   if (!sc || sc->def_node < 0 || sc->body < 0) return 0;

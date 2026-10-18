@@ -11905,39 +11905,18 @@ static int desugar_multi_yield_map_param(Compiler *c) {
 /* Does a def's body answer a VALUE on some path -- a local or ivar read, a
    literal, an assignment -- as the last expression or through a `return`?
    The `each`-like idiom answers self, nil or an iterator call, whose value
-   nobody keeps; index_by answers the Hash it built. Walked through the tail
-   of if / unless / parentheses and a return's argument. */
-static int te_tail_is_value(const NodeTable *nt, int n, int depth) {
-  if (n < 0 || depth > 12) return 0;
+   nobody keeps; index_by answers the Hash it built. The tail is read through
+   the iterator (if, unless, parentheses and a `return`'s value); a `return`
+   that hands out several values is judged by its first. A return before the
+   tail is not a value position: te_guard_value reads those. */
+static int te_tail_is_value(const NodeTable *nt, int n);
+static int te_value_leaf(const NodeTable *nt, int n) {
   switch (nt_kind(nt, n)) {
     case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
     case NK_LocalVariableWriteNode: case NK_InstanceVariableWriteNode:
     case NK_HashNode: case NK_StringNode: case NK_IntegerNode: case NK_FloatNode:
     case NK_SymbolNode: case NK_TrueNode: case NK_FalseNode:
       return 1;
-    case NK_StatementsNode: {
-      int bn = 0; const int *bb = nt_arr(nt, n, "body", &bn);
-      if (bn <= 0) return 0;
-      /* a `return v` anywhere in the list counts, the last statement is the tail */
-      for (int i = 0; i < bn - 1; i++)
-        if (nt_kind(nt, bb[i]) == NK_ReturnNode || nt_kind(nt, bb[i]) == NK_IfNode ||
-            nt_kind(nt, bb[i]) == NK_UnlessNode)
-          if (te_tail_is_value(nt, bb[i], depth + 1)) return 1;
-      return te_tail_is_value(nt, bb[bn - 1], depth + 1);
-    }
-    case NK_IfNode:
-      return te_tail_is_value(nt, nt_ref(nt, n, "statements"), depth + 1) ||
-             te_tail_is_value(nt, nt_ref(nt, n, "subsequent"), depth + 1);
-    case NK_UnlessNode:
-      return te_tail_is_value(nt, nt_ref(nt, n, "statements"), depth + 1) ||
-             te_tail_is_value(nt, nt_ref(nt, n, "else_clause"), depth + 1);
-    case NK_ElseNode: return te_tail_is_value(nt, nt_ref(nt, n, "statements"), depth + 1);
-    case NK_ParenthesesNode: return te_tail_is_value(nt, nt_ref(nt, n, "body"), depth + 1);
-    case NK_ReturnNode: {
-      int a = nt_ref(nt, n, "arguments");
-      int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-      return ac > 0 && te_tail_is_value(nt, av[0], depth + 1);
-    }
     /* a call answers its value -- `@a.select { |x| yield x }` an Array --
        unless it is an each-like iteration, whose value (the receiver)
        nobody keeps */
@@ -11953,6 +11932,57 @@ static int te_tail_is_value(const NodeTable *nt, int n, int depth) {
     }
     default: return 0;
   }
+}
+/* One value position of the tail. A walk that gave up, which a tree cannot
+   cause, is a value: the method is left unpinned. */
+static int te_tail_leaf(const VpLeaf *leaf, void *ud) {
+  const NodeTable *nt = ud;
+  if (leaf->kind == VPK_GAVE_UP) return 1;
+  if (leaf->kind == VPK_JUMP && nt_kind(nt, leaf->node) == NK_ReturnNode) {
+    int a = nt_ref(nt, leaf->node, "arguments");
+    int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    return ac > 0 && te_tail_is_value(nt, av[0]);
+  }
+  return leaf->kind == VPK_EXPR && te_value_leaf(nt, leaf->node);
+}
+/* A `return v`, `if` or `unless` among the statements before the last of a
+   list answers a value too (the guard `return @cache if @cache`). The lists
+   read are those the tail reaches through if, unless, parentheses and a
+   `return`'s value. */
+static int te_guard_value(const NodeTable *nt, int n) {
+  for (;;) {
+    switch (nt_kind(nt, n)) {
+      case NK_StatementsNode: {
+        int bn = 0; const int *bb = nt_arr(nt, n, "body", &bn);
+        if (bn <= 0) return 0;
+        for (int i = 0; i < bn - 1; i++)
+          if ((nt_kind(nt, bb[i]) == NK_ReturnNode || nt_kind(nt, bb[i]) == NK_IfNode ||
+               nt_kind(nt, bb[i]) == NK_UnlessNode) && te_tail_is_value(nt, bb[i]))
+            return 1;
+        n = bb[bn - 1];
+        continue;
+      }
+      case NK_IfNode: case NK_UnlessNode:
+        if (te_guard_value(nt, nt_ref(nt, n, "statements"))) return 1;
+        n = nt_ref(nt, n, nt_kind(nt, n) == NK_IfNode ? "subsequent" : "else_clause");
+        continue;
+      case NK_ElseNode: n = nt_ref(nt, n, "statements"); continue;
+      case NK_ParenthesesNode: n = nt_ref(nt, n, "body"); continue;
+      case NK_ReturnNode: {
+        int a = nt_ref(nt, n, "arguments");
+        int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+        if (ac <= 0) return 0;
+        n = av[0];
+        continue;
+      }
+      default: return 0;
+    }
+  }
+}
+static int te_tail_is_value(const NodeTable *nt, int n) {
+  if (n < 0) return 0;
+  return for_each_value_position(nt, n, VP_FOLLOW_RETURN | VPS_IF | VPS_UNLESS, te_tail_leaf, (void *)nt) ||
+         te_guard_value(nt, n);
 }
 
 /* Is `call` the value of a `return` guarded by block_given? alone at the top
@@ -12063,7 +12093,7 @@ static int desugar_to_enum(Compiler *c) {
          through an Enumerator-typed C signature, a type error; widened, a
          blockless call site reads a boxed Enumerator its consumers dispatch
          on. */
-      int value_form = es && es->body >= 0 && te_tail_is_value(nt, es->body, 0);
+      int value_form = es && es->body >= 0 && te_tail_is_value(nt, es->body);
       /* not in a reopened builtin, whose self tail is the boxed receiver:
          the blockless call already reads the Enumerator (ret_noblock) */
       if (self_recv && es && es->name && sp_streq(es->name, m) && !value_form && reopen_ci < 0 &&

@@ -37868,32 +37868,29 @@ static int wnh_last_stmt(Compiler *c, int id) {
   return 1;   /* not a statement: its value is used */
 }
 /* Is node n method mi's answer: its body's last statement, or the last
-   statement of an `if` / `unless` / `else` arm in that place? */
-static int wnh_answer_in(Compiler *c, int at, int n, int depth) {
-  const NodeTable *nt = c->nt;
-  at = an_unparen(nt, at);
-  if (at < 0 || depth > 32) return 0;
-  if (at == n) return 1;
-  switch (nt_kind(nt, at)) {
-    case NK_StatementsNode: {
-      int k = 0; const int *b = nt_arr(nt, at, "body", &k);
-      return k > 0 && wnh_answer_in(c, b[k - 1], n, depth + 1);
-    }
-    case NK_IfNode: case NK_UnlessNode:
-      return wnh_answer_in(c, nt_ref(nt, at, "statements"), n, depth + 1) ||
-             wnh_answer_in(c, nt_ref(nt, at, nt_kind(nt, at) == NK_IfNode ? "subsequent" : "else_clause"), n, depth + 1);
-    case NK_ElseNode:
-      return wnh_answer_in(c, nt_ref(nt, at, "statements"), n, depth + 1);
-    case NK_BeginNode: {   /* its statements answer, or its `else` when it has one */
-      int el = nt_ref(nt, at, "else_clause");
-      return wnh_answer_in(c, el >= 0 ? el : nt_ref(nt, at, "statements"), n, depth + 1);
-    }
-    default: return 0;
-  }
+   statement of an `if` / `unless` / `else` arm in that place, or of a
+   `begin` (its else, which replaces the body, or the body)? Read through the
+   iterator with the if and unless shapes; a begin is a leaf of it, which
+   wnh_answer_arm takes apart (a rescue clause is not read). */
+typedef struct { Compiler *c; int n; } WnhArms;
+static int wnh_answer_in(Compiler *c, int at, int n);
+static int wnh_answer_arm(const VpLeaf *leaf, void *ud) {
+  WnhArms *a = ud;
+  const NodeTable *nt = a->c->nt;
+  if (leaf->kind != VPK_EXPR) return 0;
+  if (leaf->node == a->n) return 1;
+  if (nt_kind(nt, leaf->node) != NK_BeginNode) return 0;
+  int el = nt_ref(nt, leaf->node, "else_clause");
+  return wnh_answer_in(a->c, el >= 0 ? el : nt_ref(nt, leaf->node, "statements"), a->n);
+}
+static int wnh_answer_in(Compiler *c, int at, int n) {
+  if (at < 0) return 0;
+  WnhArms a = { c, n };
+  return for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS, wnh_answer_arm, &a);
 }
 static int wnh_is_answer(Compiler *c, Scope *sc, int n) {
   if (!sc || sc->def_node < 0 || sc->body < 0) return 0;
-  return wnh_answer_in(c, sc->body, n, 0);
+  return wnh_answer_in(c, sc->body, n);
 }
 /* `answered`, when given, lets a read that is sc's own answer (the method's
    last value, wnh_is_answer; a `return` still escapes) pass, and reports

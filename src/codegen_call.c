@@ -6,6 +6,7 @@
 #include "repr.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
+#include "value_pos.h"
 /* the `&.` proc call currently being emitted inside its own nil guard */
 int g_sn_proc_node = -1;
 
@@ -23413,28 +23414,26 @@ static int format_is_slot_read(Compiler *c, int v) {
    (`"%d " "%d|"`, a squiggly heredoc of mixed indents) is a literal too:
    emit_interp folds it into one (interp_is_literal_fold). Anything else is
    a String made where it is written: an interpolation, a copy of a shared
-   String, a call's answer. */
-static int format_is_held(Compiler *c, int v, int depth) {
+   String, a call's answer. A choice is read through the iterator with the
+   if and `||`/`&&` shapes: every value position of it has to be held, and a
+   missing arm, a jump or a walk that gave up is not. */
+static int format_value_held(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
-  v = unwrap_parens(c, v);
-  if (v < 0 || depth > 8) return 0;
   NodeKind k = nt_kind(nt, v);
   if (k == NK_StringNode || !operand_may_allocate(c, v)) return 1;
   if (k == NK_InterpolatedStringNode && interp_is_literal_fold(nt, v)) return 1;
-  if (k == NK_IfNode) {
-    int arm[2] = { nt_ref(nt, v, "statements"), nt_ref(nt, v, "subsequent") };
-    if (arm[1] < 0 || nt_kind(nt, arm[1]) != NK_ElseNode) return 0;
-    arm[1] = nt_ref(nt, arm[1], "statements");
-    for (int i = 0; i < 2; i++) {
-      int n = 0; const int *bb = arm[i] >= 0 ? nt_arr(nt, arm[i], "body", &n) : NULL;
-      if (n != 1 || !format_is_held(c, bb[0], depth + 1)) return 0;
-    }
-    return 1;
-  }
-  if (k == NK_OrNode)
-    return format_is_held(c, nt_ref(nt, v, "left"), depth + 1) &&
-           format_is_held(c, nt_ref(nt, v, "right"), depth + 1);
   return k == NK_CallNode && format_is_slot_read(c, v);
+}
+static int format_arm_unheld(const VpLeaf *leaf, void *ud) {
+  return leaf->kind != VPK_EXPR || !format_value_held(ud, leaf->node);
+}
+static int format_is_held(Compiler *c, int v) {
+  v = unwrap_parens(c, v);
+  if (v < 0) return 0;
+  if (format_value_held(c, v)) return 1;
+  NodeKind k = nt_kind(c->nt, v);
+  if (k != NK_IfNode && k != NK_OrNode && k != NK_AndNode) return 0;
+  return !for_each_value_position(c->nt, v, VP_AND_LEFT | VPS_IF | VPS_LOGIC, format_arm_unheld, c);
 }
 /* Did the statement already run the format into a temp of its own, which
    it roots (a call beside an argument that can see when it ran)? */
@@ -23535,13 +23534,13 @@ static int format_arg_is_inert(Compiler *c, int a, int depth) {
 /* See codegen_call_arms.h. */
 int str_format_left_alone(Compiler *c, int recv, int arg) {
   int r = unwrap_parens(c, recv);
-  return r >= 0 && !format_ran_first(recv, r) && !format_is_held(c, r, 0) && !format_is_own_made(c, r) &&
+  return r >= 0 && !format_ran_first(recv, r) && !format_is_held(c, r) && !format_is_own_made(c, r) &&
          !format_arg_is_inert(c, arg, 0);
 }
 /* See codegen_call_arms.h. */
 const char *emit_str_format_held(Compiler *c, int recv, int arg, int fck, Buf *b) {
   int r = unwrap_parens(c, recv);
-  if (r < 0 || format_ran_first(recv, r) || format_is_held(c, r, 0) || str_format_left_alone(c, recv, arg)) return NULL;
+  if (r < 0 || format_ran_first(recv, r) || format_is_held(c, r) || str_format_left_alone(c, recv, arg)) return NULL;
   int t = fck >= 0 ? fck : ++g_tmp;
   buf_printf(b, "({ const char *_t%d = ", t);
   emit_expr(c, recv, b);

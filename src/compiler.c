@@ -643,13 +643,13 @@ static int range_value_arm(const VpLeaf *leaf, void *ud) {
 /* Can node's value be a Range, by its form: a Range-typed value, a read of
    a slot one was written into, an arm of a conditional, or a call of a
    method whose value can be one (Scope.ret_range)? Read through the
-   iterator with the if, unless, case, case/in and begin shapes and `||`/`&&` (both
-   sides), which has no limit on the length of an `elsif` ladder or of a chain
-   of `||`. */
+   iterator with every shape (if, unless, case, case/in, begin, the rescue
+   modifier and `||`/`&&`, both sides), which has no limit on the length of an
+   `elsif` ladder or of a chain of `||`. */
 int value_may_be_range(Compiler *c, int node) {
   if (node < 0) return 0;
   if (comp_ntype(c, node) == TY_RANGE) return 1;
-  return for_each_value_position(c->nt, node, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VPS_LOGIC, range_value_arm, c);
+  return for_each_value_position(c->nt, node, VP_AND_LEFT | VPS_ALL, range_value_arm, c);
 }
 
 /* Runtime typedefs `sp_<X>` a user class name could redefine. A user class whose

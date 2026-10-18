@@ -4,6 +4,7 @@
 #include "analyze.h"
 #include "builtin_names.h"
 #include "codegen_poly.h"
+#include "value_pos.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -614,42 +615,40 @@ int local_range_held(Compiler *c, int node) {
   return lv && lv->range_held;
 }
 
+/* One value position of a value that may be a Range: a Range-typed value, a
+   read of a slot one was written into, a Range literal, or a call of a method
+   whose value can be one (Scope.ret_range). A walk that gave up, which a tree
+   cannot cause, may be one. */
+static int range_value_arm(const VpLeaf *leaf, void *ud) {
+  Compiler *c = ud;
+  const NodeTable *nt = c->nt;
+  if (leaf->kind == VPK_GAVE_UP) return 1;
+  if (leaf->kind != VPK_EXPR) return 0;
+  int node = leaf->node;
+  if (comp_ntype(c, node) == TY_RANGE) return 1;
+  switch (nt_kind(nt, node)) {
+  case NK_LocalVariableReadNode: return local_range_held(c, node);
+  case NK_RangeNode: return 1;
+  case NK_CallNode: {
+    const char *nm = nt_str(nt, node, "name");
+    int recv = nt_ref(nt, node, "receiver"), mi = -1;
+    if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) mi = comp_self_call_mi(c, node, nm);
+    else if (ty_is_object(comp_ntype(c, recv))) mi = comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), nm, NULL);
+    return mi >= 0 && mi < c->nscopes && c->scopes[mi].ret_range;
+  }
+  default: return 0;
+  }
+}
+
 /* Can node's value be a Range, by its form: a Range-typed value, a read of
    a slot one was written into, an arm of a conditional, or a call of a
-   method whose value can be one (Scope.ret_range)? */
+   method whose value can be one (Scope.ret_range)? Read through the
+   iterator with the if, unless and `||`/`&&` shapes (both sides), which has
+   no limit on the length of an `elsif` ladder or of a chain of `||`. */
 int value_may_be_range(Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  for (int d = 0; node >= 0 && d < 32; d++) {
-    if (comp_ntype(c, node) == TY_RANGE) return 1;
-    switch (nt_kind(nt, node)) {
-    case NK_LocalVariableReadNode: return local_range_held(c, node);
-    case NK_RangeNode: return 1;
-    case NK_ParenthesesNode: node = nt_ref(nt, node, "body"); break;
-    case NK_ElseNode: node = nt_ref(nt, node, "statements"); break;
-    case NK_StatementsNode: {
-      int n = 0; const int *b = nt_arr(nt, node, "body", &n);
-      node = n > 0 ? b[n - 1] : -1;
-      break;
-    }
-    case NK_IfNode: case NK_UnlessNode:
-      if (value_may_be_range(c, nt_ref(nt, node, "statements"))) return 1;
-      node = nt_ref(nt, node, nt_kind(nt, node) == NK_IfNode ? "subsequent" : "else_clause");
-      break;
-    case NK_OrNode: case NK_AndNode:
-      if (value_may_be_range(c, nt_ref(nt, node, "left"))) return 1;
-      node = nt_ref(nt, node, "right");
-      break;
-    case NK_CallNode: {
-      const char *nm = nt_str(nt, node, "name");
-      int recv = nt_ref(nt, node, "receiver"), mi = -1;
-      if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) mi = comp_self_call_mi(c, node, nm);
-      else if (ty_is_object(comp_ntype(c, recv))) mi = comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), nm, NULL);
-      return mi >= 0 && mi < c->nscopes && c->scopes[mi].ret_range;
-    }
-    default: return 0;
-    }
-  }
-  return 0;
+  if (node < 0) return 0;
+  if (comp_ntype(c, node) == TY_RANGE) return 1;
+  return for_each_value_position(c->nt, node, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_LOGIC, range_value_arm, c);
 }
 
 /* Runtime typedefs `sp_<X>` a user class name could redefine. A user class whose

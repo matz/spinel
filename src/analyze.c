@@ -11906,7 +11906,7 @@ static int desugar_multi_yield_map_param(Compiler *c) {
    literal, an assignment -- as the last expression or through a `return`?
    The `each`-like idiom answers self, nil or an iterator call, whose value
    nobody keeps; index_by answers the Hash it built. The tail is read through
-   the iterator (if, unless, case, parentheses and a `return`'s value); a `return`
+   the iterator (if, unless, case, case/in, parentheses and a `return`'s value); a `return`
    that hands out several values is judged by its first. A return before the
    tail is not a value position: te_guard_value reads those. */
 static int te_tail_is_value(const NodeTable *nt, int n);
@@ -11947,9 +11947,9 @@ static int te_tail_leaf(const VpLeaf *leaf, void *ud) {
 }
 /* A `return v`, `if` or `unless` among the statements before the last of a
    list answers a value too (the guard `return @cache if @cache`), and so
-   does a return inside a case among them. The lists read are those the
-   tail reaches through if, unless, parentheses, the clauses of a case and its else, and a
-   `return`'s value. A return
+   does a return inside a case, a case/in among them. The lists read are those the
+   tail reaches through if, unless, parentheses, the clauses of a case or a case/in and its
+   else, and a `return`'s value. A return
    in a block is not read. */
 static int te_guard_value(const NodeTable *nt, int n) {
   for (;;) {
@@ -11960,7 +11960,7 @@ static int te_guard_value(const NodeTable *nt, int n) {
         for (int i = 0; i < bn - 1; i++) {
           NodeKind k = nt_kind(nt, bb[i]);
           if (k == NK_ReturnNode || k == NK_IfNode || k == NK_UnlessNode ? te_tail_is_value(nt, bb[i])
-              : (k == NK_CaseNode) && te_guard_value(nt, bb[i]))
+              : (k == NK_CaseNode || k == NK_CaseMatchNode) && te_guard_value(nt, bb[i]))
             return 1;
         }
         n = bb[bn - 1];
@@ -11970,7 +11970,7 @@ static int te_guard_value(const NodeTable *nt, int n) {
         if (te_guard_value(nt, nt_ref(nt, n, "statements"))) return 1;
         n = nt_ref(nt, n, nt_kind(nt, n) == NK_IfNode ? "subsequent" : "else_clause");
         continue;
-      case NK_CaseNode: {
+      case NK_CaseNode: case NK_CaseMatchNode: {
         int cn = 0; const int *cv = nt_arr(nt, n, "conditions", &cn);
         for (int i = 0; i < cn; i++)
           if (te_guard_value(nt, nt_ref(nt, cv[i], "statements"))) return 1;
@@ -11990,7 +11990,7 @@ static int te_guard_value(const NodeTable *nt, int n) {
 }
 static int te_tail_is_value(const NodeTable *nt, int n) {
   if (n < 0) return 0;
-  return for_each_value_position(nt, n, VP_FOLLOW_RETURN | VPS_IF | VPS_UNLESS | VPS_CASE, te_tail_leaf, (void *)nt) ||
+  return for_each_value_position(nt, n, VP_FOLLOW_RETURN | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN, te_tail_leaf, (void *)nt) ||
          te_guard_value(nt, n);
 }
 

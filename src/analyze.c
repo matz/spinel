@@ -37889,17 +37889,31 @@ static int wnh_last_stmt(Compiler *c, int id) {
 /* Is node n method mi's answer: its body's last statement, or the last
    statement of an `if` / `unless` / `else` arm in that place, or of a `case`
    or `case`/`in` clause, or of a `begin` (its body, each rescue clause, or its
-   else, which replaces the body)? Read through the iterator with the if,
-   unless, case, case/in and begin shapes. */
+   else, which replaces the body), or the value of a rescue modifier? Read
+   through the iterator with the if, unless, case, case/in, begin and rescue
+   modifier shapes. */
 static int wnh_answer_arm(const VpLeaf *leaf, void *ud) {
   return leaf->kind == VPK_EXPR && leaf->node == *(int *)ud;
 }
 static int wnh_answer_in(Compiler *c, int at, int n) {
-  return at >= 0 && for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN, wnh_answer_arm, &n);
+  return at >= 0 && for_each_value_position(c->nt, at, VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VPS_RESCUE_MOD, wnh_answer_arm, &n);
 }
 static int wnh_is_answer(Compiler *c, Scope *sc, int n) {
   if (!sc || sc->def_node < 0 || sc->body < 0) return 0;
   return wnh_answer_in(c, sc->body, n);
+}
+/* A read of `name` that is a value position of sc's body answers the method,
+   whether or not it ends a list: an operand of `||`, the expression of a rescue
+   modifier. Asked only where the method's return is a Hash of its own kind, the
+   one the widening has to follow; a return of another kind (`seen || {}`)
+   widens the local alone. */
+typedef struct { Compiler *c; Scope *sc; const char *name; } WnhReads;
+static int wnh_answering_read(const VpLeaf *leaf, void *ud) {
+  WnhReads *r = ud;
+  const NodeTable *nt = r->c->nt;
+  if (leaf->kind != VPK_EXPR || nt_kind(nt, leaf->node) != NK_LocalVariableReadNode) return 0;
+  const char *rn = nt_str(nt, leaf->node, "name");
+  return rn && sp_streq(rn, r->name) && comp_scope_of(r->c, leaf->node) == r->sc;
 }
 /* `answered`, when given, lets a read that is sc's own answer (the method's
    last value, wnh_is_answer; a `return` still escapes) pass, and reports
@@ -37913,6 +37927,10 @@ static int wnh_local_escapes_ex(Compiler *c, Scope *sc, const char *name, int *a
     if (!rn || !sp_streq(rn, name) || comp_scope_of(c, b[n - 1]) != sc) continue;
     if (answered && wnh_is_answer(c, sc, b[n - 1])) { *answered = 1; continue; }
     return 1;
+  }
+  if (answered && sc->def_node >= 0 && sc->body >= 0 && ty_is_hash(sc->ret)) {
+    WnhReads r = { c, sc, name };
+    if (for_each_value_position(nt, sc->body, VPS_ALL, wnh_answering_read, &r)) *answered = 1;
   }
   static const NodeKind wk[] = { NK_ReturnNode, NK_LocalVariableWriteNode, NK_InstanceVariableWriteNode,
                                  NK_GlobalVariableWriteNode, NK_ClassVariableWriteNode, NK_CallNode };

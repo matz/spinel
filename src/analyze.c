@@ -11906,7 +11906,8 @@ static int desugar_multi_yield_map_param(Compiler *c) {
    literal, an assignment -- as the last expression or through a `return`?
    The `each`-like idiom answers self, nil or an iterator call, whose value
    nobody keeps; index_by answers the Hash it built. The tail is read through
-   the iterator (if, unless, case, case/in, begin, the rescue modifier, parentheses and a `return`'s value); a `return`
+   the iterator (every shape: if, unless, case, case/in, begin, the rescue
+   modifier, `||` and `&&`, parentheses and a `return`'s value); a `return`
    that hands out several values is judged by its first. A return before the
    tail is not a value position: te_guard_value reads those. */
 static int te_tail_is_value(const NodeTable *nt, int n);
@@ -11999,7 +12000,7 @@ static int te_guard_value(const NodeTable *nt, int n) {
 }
 static int te_tail_is_value(const NodeTable *nt, int n) {
   if (n < 0) return 0;
-  return for_each_value_position(nt, n, VP_FOLLOW_RETURN | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN | VPS_RESCUE_MOD, te_tail_leaf, (void *)nt) ||
+  return for_each_value_position(nt, n, VP_FOLLOW_RETURN | VP_AND_LEFT | VPS_ALL, te_tail_leaf, (void *)nt) ||
          te_guard_value(nt, n);
 }
 

@@ -43262,11 +43262,10 @@ static int sa_param_caller_sees(Compiler *c, const SaName *from) {
   return 0;
 }
 /* A String bang method that answers its receiver (`strip!`, `sub!`): the
-   receiver, or -1. So do four calls without a bang that no alias walk
-   follows, and `*plain` is set for them: `bytesplice`, `append_as_bytes`,
-   and `concat` or `prepend` with other than one argument. Under
-   --share-strings those four are the rule's and are not taken here. */
-static int sa_bang_receiver(Compiler *c, int call, int *plain) {
+   receiver, or -1. (The four calls without a bang that answer their
+   receiver, `bytesplice`, `append_as_bytes`, and `concat` or `prepend`
+   with other than one argument, are the share rule's.) */
+static int sa_bang_receiver(Compiler *c, int call) {
   const NodeTable *nt = c->nt;
   call = an_unparen(nt, call);
   if (call < 0 || nt_kind(nt, call) != NK_CallNode) return -1;
@@ -43290,7 +43289,6 @@ static int sa_bang_receiver(Compiler *c, int call, int *plain) {
       !(bop_answers_self(TY_STRING, nm, argc, nt_ref(nt, call, "block") >= 0) &
         (BOPF_SELF | BOPF_SELF_OR_NIL)))
     return -1;
-  if (plain) *plain = 0;
   return r;
 }
 /* The String arguments a call's method answers as they are (`def id(x) =
@@ -43325,7 +43323,7 @@ static int sa_returned_args_t(Compiler *c, int call, int *out, int cap, int poly
   for (int i = 0; i < n; i++) {
     int l = an_unparen(nt, lv[i]);
     for (int d = 0; d < 8; d++) {
-      int b = str_self_call(nt, l) ? nt_ref(nt, l, "receiver") : sa_bang_receiver(c, l, NULL);
+      int b = str_self_call(nt, l) ? nt_ref(nt, l, "receiver") : sa_bang_receiver(c, l);
       if (b < 0) break;
       l = an_unparen(nt, b);
     }
@@ -43346,8 +43344,7 @@ static int sa_returned_args_t(Compiler *c, int call, int *out, int cap, int poly
   return got;
 }
 /* The refusal's message for each route: 0 a global, 1 a method returning
-   its parameter, 2 a bang method's result, 3 an Array element, 4 the
-   result of a call without a bang that answers its receiver. */
+   its parameter, 2 a bang method's result, 3 an Array element. */
 static const char *sa_msg(int route) {
   return route == 0 ? "a String variable assigned from or to a global variable is mutated in place (a String "
                  "is not yet shared by reference through a global variable). Mutate the String through "
@@ -43358,9 +43355,6 @@ static const char *sa_msg(int route) {
     : route == 2 ? "the result of a String bang method, which is its receiver, is mutated in place (a "
                    "String is not yet shared by reference through a bang method's result). Mutate the "
                    "receiver instead."
-    : route == 4 ? "the result of `bytesplice`, `append_as_bytes`, or `concat` or `prepend` with other "
-                   "than one argument, which is its receiver, is mutated in place (a String is not yet "
-                   "shared by reference through such a result). Mutate the receiver instead."
     : "a String variable added to an Array by `insert`, `prepend`, `concat`, a chained push, a push into "
       "a global, or as the value of `<<`, unary `+` or a reader method is mutated in place through the Array or the "
       "variable (a String is not yet shared by reference through such an Array element). Push the "
@@ -43780,23 +43774,14 @@ static void refuse_string_alias_copies(Compiler *c) {
          about: the bang itself is one, and a name reassigned and mutated
          again cannot be told from it without the order of the two. */
       int bv = nt_kind(nt, v) == NK_OrNode ? an_unparen(nt, nt_ref(nt, v, "left")) : v;
-      int plain = 0, b = sa_bang_receiver(c, bv, &plain);
+      int b = sa_bang_receiver(c, bv);
       if (b < 0 || !sa_name(c, b, &from) || (str_self_call(nt, bv) && sa_handle(c, &to, 0) && sa_handle(c, &from, 0)))
-        continue;
-      /* a class's instance variable that keeps the result of a call
-         without a bang is left as on master, and nothing there is refused
-         yet: an append through it reaches an instance-variable receiver in
-         some programs (`@r = @s.concat(a, b)` where a parameter set @s)
-         and does not build in others, and most other changes through
-         either name are lost. One of the top level takes a copy, as a
-         global does */
-      if (plain && to.kind == NK_InstanceVariableReadNode && to.cid != comp_class_index(c, "Toplevel"))
         continue;
       /* a local that shares its handle is read through the other name
          (`t = s; r = t.strip!; r << x; p s`) */
       int read = sa_read_elsewhere(c, &from, b) || (from.kind == NK_LocalVariableReadNode && sa_handle(c, &from, 0));
       if (sa_mutated(c, &to) && read) {
-        int route = plain ? 4 : 2;
+        int route = 2;
         ShareRoute q = share_route(w, v, 0);
         q.to = w;
         q.carry = v;

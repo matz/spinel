@@ -750,6 +750,55 @@ static void sh_dyn_name(ShareFacts *F, const char *name) {
   F->dyn[F->ndyn++] = name;
 }
 
+static const char *sh_lit_name(const NodeTable *nt, int n);
+/* The methods a method reference with a computed name can reach (#9627):
+   `method(x)`, `public_method(x)`, `instance_method(x)` and
+   `singleton_method(x)` reach the receiver's class's methods alone, so
+   their names go to F->dyn when that class is known (a constant, self in a
+   method, a value of one class), as a literal name does; a module's
+   instance methods are its own and its included modules', a class's its
+   chain's and the top level's (Object's). `define_method(x)` and
+   `define_singleton_method(x)` with a literal block make a new method of
+   the block, whose parameters and value already meet UNKNOWN, and with a
+   body expression (a Proc, an instance_method) that expression's own call
+   decides what it reaches: neither makes a method the program defines
+   reachable by name. Anything else (a receiver of unknown class, a name no
+   argument gives) keeps every method reachable (dyn_all), as before. */
+static void sh_method_ref_names(ShareFacts *F, Compiler *c, int n, const char *name, int argc, const int *argv,
+                                int lit_blk) {
+  const NodeTable *nt = c->nt;
+  const char *lit = argc >= 1 ? sh_lit_name(nt, argv[0]) : NULL;
+  if (lit) { sh_dyn_name(F, lit); return; }
+  if (is_define_method_name(name)) {
+    if (argc >= 1 && (lit_blk || argc >= 2)) return;
+    F->dyn_all = 1;
+    return;
+  }
+  int recv = nt_ref(nt, n, "receiver");
+  int cid = -1, singleton = sp_streq(name, "singleton_method"), instance = sp_streq(name, "instance_method");
+  if (recv < 0) {
+    const Scope *sc = comp_scope_of(c, n);
+    /* self in a method: the instance, or the class in a class method */
+    if (sc && sc->def_node >= 0 && sc->class_id >= 0) { cid = sc->class_id; if (sc->is_cmethod && !instance) singleton = 1; }
+  }
+  else if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
+    cid = nt_str(nt, recv, "name") ? comp_class_index(c, nt_str(nt, recv, "name")) : -1;
+    if (!instance) singleton = 1;   /* K.method(x) names a class method */
+  }
+  else if (ty_is_object(c->ntype[recv])) cid = ty_object_class(c->ntype[recv]);
+  if (cid < 0 || cid >= c->nclasses || argc < 1) { F->dyn_all = 1; return; }
+  int module = comp_class_is_module(c, &c->classes[cid]);
+  for (int mi = 0; mi < c->nscopes; mi++) {
+    const Scope *m = &c->scopes[mi];
+    if (m->def_node < 0 || !m->name) continue;
+    if (!!m->is_cmethod != !!singleton) continue;
+    int reached = m->class_id == cid ||
+                  (m->class_id >= 0 && (is_descendant(c, cid, m->class_id) || comp_module_includes(c, cid, m->class_id, 0))) ||
+                  (!module && !singleton && m->class_id < 0);   /* a top-level def: Object's, which a class inherits */
+    if (reached) sh_dyn_name(F, m->name);
+  }
+}
+
 static void sh_lend(ShareFacts *F, int arg, int par, int node, int direct) {
   if (arg < 0 || par < 0) return;
   if (F->nlend >= F->clend) {
@@ -1843,7 +1892,7 @@ static int sh_builtin(ShareFacts *F, Compiler *c, int n, int share, int rv, int 
         sh_flow(F, SHFL_ARG, n, nt_ref(nt, n, "receiver"), pd);
       }
     }
-    sh_dyn_name(F, argc >= 1 ? sh_lit_name(nt, argv[0]) : NULL);
+    sh_method_ref_names(F, c, n, nt_str(nt, n, "name"), argc, argv, lit_blk);
     if (lit_blk) {
       sh_block_params(F, c, blk, F->unknown, 1);
       sh_union(F, bv, F->unknown);
@@ -3031,7 +3080,11 @@ static int sh_call(ShareFacts *F, Compiler *c, int n) {
     Scope *sc = comp_scope_of(c, n);
     if (c->share_strings && sc && !sc->reachable) return -1;
     const char *lit = argc >= 1 ? sh_lit_name(nt, argv[0]) : NULL;
-    sh_dyn_name(F, lit);
+    /* a computed name whose arms are complete (desugar_dynamic_send,
+       dyn_send_complete): every method the send can reach has an arm the
+       walk follows as a call of its own, and any other name raises
+       NoMethodError, so no method is reached by name beside them (#9627) */
+    if (lit || !nt_int(nt, n, "dyn_send_complete", 0)) sh_dyn_name(F, lit);
     /* what an arm answers (desugar_dynamic_send's `recv.m(args)` for each
        name the receiver can take) is what the send answers: the receiver's
        String for `to_s`, `itself` or a bang, a field's for a reader, a

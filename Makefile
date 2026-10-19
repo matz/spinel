@@ -1097,6 +1097,13 @@ endif
 ifeq ($(shell uname -s),Darwin)
 TESTS := $(filter-out test/io_winsize_set.rb,$(TESTS))
 endif
+# A test whose subject only Linux gives (`# spinel: linux`): a connect to a
+# listener whose accept queue is full hangs there, as one to a dead host
+# does, where macOS refuses it at once. Such a test runs on Linux alone;
+# master's Linux jobs and the ryzen9 lanes are its check.
+ifneq ($(shell uname -s),Linux)
+TESTS := $(filter-out $(shell grep -l '^\# spinel: linux' test/*.rb),$(TESTS))
+endif
 # A platform that cannot give some tests their subject lists them in
 # TEST_SKIP -- native Windows (win32.mk), for tests of what only a POSIX
 # system answers -- and they are not run there.

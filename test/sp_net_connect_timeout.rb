@@ -1,4 +1,5 @@
 # spinel: not-cruby -- the spinel-native FFI DSL; the .expected is authored
+# spinel: linux -- a full accept queue drops the SYN on Linux, so the connect hangs; macOS refuses it
 # sp_net_connect_timeout: a connect with a deadline. sp_net_connect waits as
 # long as the kernel does, which for an address that never answers is over a
 # minute. The timed connect gives up after timeout_s seconds, and

@@ -7233,8 +7233,14 @@ static int time_value_fresh(Compiler *c, int v) {
   const char *nm = nt_str(nt, v, "name");
   int r = nt_ref(nt, v, "receiver");
   if (!nm || r < 0) return 0;
-  if (nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), "Time"))
-    return 1;
+  /* a Time constructor, not a class method the program defines on Time,
+     which can answer a Time someone holds */
+  static const char *const CTOR[] = { "now", "at", "utc", "gm", "local", "mktime", "new", NULL };
+  if (nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), "Time")) {
+    if (cplan_user_fresh(c, v)->dispatch != CP_NONE) return 0;
+    for (int i = 0; CTOR[i]; i++) if (sp_streq(nm, CTOR[i])) return 1;
+    return 0;
+  }
   static const char *const NEW[] = { "+", "-", "getlocal", "getutc", "getgm", "round", "floor", "ceil",
                                      "dup", "clone", "succ", NULL };
   if (comp_ntype(c, r) != TY_TIME || cplan_user_fresh(c, v)->dispatch != CP_NONE) return 0;

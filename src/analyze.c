@@ -17002,8 +17002,9 @@ int an_str_mutator_name(const char *nm) {
    write-back lands there, as an append lands in a lent String slot.
    It has no shared-handle form: where a String parameter falls back to the
    handle (captured by a proc that can outlive the call, reached through a
-   POLY receiver, rebound in the body), a Time parameter keeps the value
-   ABI. */
+   POLY receiver, rebound in the body) or keeps the value ABI (an ineligible
+   method), a Time parameter's in-place change is refused instead
+   (an_byref_refuse_time_params). */
 static int an_time_mutator_name(const char *nm) {
   return nm && (sp_streq(nm, "localtime") || sp_streq(nm, "utc") || sp_streq(nm, "gmtime"));
 }
@@ -17982,6 +17983,63 @@ static int an_param_fresh_at(Compiler *c, Scope *s, const char *vn, int use) {
   return an_param_rebound_ahead(c, s, vn, use) && !an_writes_unfresh(c, s->body, vn, 0);
 }
 
+/* After the fixpoint: a Time parameter the method changes in place
+   (t.localtime / t.utc / t.gmtime, or handed on into another method's lent
+   Time slot) that did not get the slot itself. The change would stop at the
+   method's copy where CRuby's caller sees it, so it is refused, naming why:
+   the String parameter's fallback, the shared handle, has no Time form. A
+   change after the parameter is rebound (an_param_rebound_ahead) is the
+   method's own and is let through. */
+static void an_byref_refuse_time_params(Compiler *c, const char *elig, const unsigned *blocked,
+                                        const char *polyr, const unsigned *cellh) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    Scope *s = comp_scope_of(c, id);
+    int si = s ? (int)(s - c->scopes) : -1;
+    if (si <= 0 || si >= c->nscopes || !s->name) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    const char *vn = NULL, *via = NULL;
+    int direct = 0;
+    if (recv >= 0 && nt_kind(nt, recv) == NK_LocalVariableReadNode && an_time_mutator_name(nm)) {
+      vn = nt_str(nt, recv, "name");
+      via = nm; direct = 1;
+    }
+    else if (nm && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode || nt_kind(nt, recv) == NK_ConstantReadNode ||
+                    nt_kind(nt, recv) == NK_ConstantPathNode)) {
+      int mi = an_any_scope_by_name(c, nm);
+      Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+      for (int j = 0; m && j < m->nparams && !vn; j++) {
+        LocalVar *mq = comp_byref_param(c, m, j) ? scope_local(m, m->pnames[j]) : NULL;
+        if (!mq || mq->type != TY_TIME) continue;
+        int an = arg_layout_param_node(c, m, id, j, NULL);
+        if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode) { vn = nt_str(nt, an, "name"); via = nm; }
+      }
+    }
+    int pi = an_param_idx(s, vn);
+    LocalVar *p = pi >= 0 && pi < 32 ? scope_local(s, vn) : NULL;
+    if (!p || !p->is_param || p->is_block_param || p->type != TY_TIME || p->byref_out ||
+        an_param_rebound_ahead(c, s, vn, id)) continue;
+    /* the handle bit (cellh) is also what a rebind sets: ask the causes */
+    const char *why =
+      blocked[si] & (1u << pi) ? "the method also assigns the parameter" :
+      p->cell_outlives ? "a block or lambda that can outlive the call captures it" :
+      polyr[si] ? "the method is called on a receiver of more than one class" :
+      "the method is one whose parameters are passed by value (an initialize, a yielding method, "
+      "an aliased one, or one reached through send/method)";
+    char what[192], msg[768];
+    if (direct) snprintf(what, sizeof what, "`%s.%s`", vn, via);
+    else snprintf(what, sizeof what, "`%s(%s)`", via, vn);
+    snprintf(msg, sizeof msg,
+             "%s in `%s` changes the Time passed as parameter `%s` in place, which the caller sees in "
+             "CRuby, but not here: %s. Return the Time and assign it in the caller, "
+             "or change a copy (`getlocal`/`getutc`).",
+             what, s->name, vn, why);
+    unsupported_feature(c, id, msg);
+  }
+}
+
 static void compute_byref_out_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = c->nscopes;
@@ -18175,12 +18233,13 @@ static void compute_byref_out_params(Compiler *c) {
       if (!polyr[si] && !(cellh[si] & (1u << j))) continue;
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
       if (!q || !q->byref_out) continue;
-      /* a Time has no handle: it keeps the value ABI */
+      /* a Time has no handle: its mutation is refused below */
       if (q->type == TY_TIME) { q->byref_out = 0; q->is_cell = q->cell_outlives; continue; }
       q->byref_out = 0; q->is_cell = q->cell_outlives;
       lv_set_type(q, TY_STRBUF); q->str_shared = 1;
     }
   }
+  an_byref_refuse_time_params(c, elig, blocked, polyr, cellh);
   /* the share facts built from here on ask the same answer */
   free(c->byref_elig);
   c->byref_elig = elig;

@@ -1634,6 +1634,22 @@ spinel: 1 refusal, nothing written
 == test/reject/table_loop_table_through_to_h.rb [promote] rc=1
 spinel: test/reject/table_loop_table_through_to_h.rb:8: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty6
 spinel: 1 refusal, nothing written
+== test/reject/time_inplace_param_initialize.rb [default] rc=1
+spinel: test/reject/time_inplace_param_initialize.rb:5: `t.localtime` in `initialize` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is one whose parameters are passed by value (an initialize, a yielding method, an aliased one, or one reached through send/method). Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_initialize.rb [promote] rc=1
+spinel: test/reject/time_inplace_param_initialize.rb:5: `t.localtime` in `initialize` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is one whose parameters are passed by value (an initialize, a yielding method, an aliased one, or one reached through send/method). Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_lambda.rb [default] rc=1
+spinel: test/reject/time_inplace_param_lambda.rb:5: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: a block or lambda that can outlive the call captures it. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_lambda.rb [promote] rc=1
+spinel: test/reject/time_inplace_param_lambda.rb:5: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: a block or lambda that can outlive the call captures it. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_rebound.rb [default] rc=1
+spinel: test/reject/time_inplace_param_rebound.rb:6: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method also assigns the parameter. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_rebound.rb [promote] rc=1
+spinel: test/reject/time_inplace_param_rebound.rb:6: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method also assigns the parameter. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_two_classes.rb [default] rc=1
+spinel: test/reject/time_inplace_param_two_classes.rb:6: `t.localtime` in `shift` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is called on a receiver of more than one class. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_two_classes.rb [promote] rc=1
+spinel: test/reject/time_inplace_param_two_classes.rb:6: `t.localtime` in `shift` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is called on a receiver of more than one class. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
 == test/reject/time_parse_no_require.rb [default] rc=1
 spinel: test/reject/time_parse_no_require.rb:7: Time.parse is not supported: spinel implements Time's other `require "time"` additions (the instance methods iso8601, httpdate, rfc2822) but not the string-parsing ones. Store times as epoch seconds and read them with Time.at instead (see docs/limitations.md)
 == test/reject/time_parse_no_require.rb [promote] rc=1

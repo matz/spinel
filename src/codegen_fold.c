@@ -7219,11 +7219,40 @@ static void emit_arg_or_default_at(Compiler *c, Scope *m, int idx, int provided,
    caller variable behind it -- a literal, an expression, a default, what a
    binder pulls out of a splat, a gather or a `**` hash -- has none to lend:
    it binds into a rooted temp and the temp's address is passed. The callee's
-   appends stay in the temp, as the pre-byref value ABI kept them; a lent
-   Time slot (p's type) takes an sp_Time temp the same way. */
+   appends stay in the temp, as the pre-byref value ABI kept them.
+   A lent Time slot (p's type) takes a temp only for a Time nobody else
+   holds (time_value_fresh): `Time.utc(...)`, `t + 60`. Any other value --
+   an element, a Hash value, a reader's answer, `t.utc` (which answers t
+   itself) -- is a Time CRuby's callee changes for everyone holding it, and
+   a temp would keep the change from them, so it is refused; `at` places
+   the refusal. */
+static int time_value_fresh(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  v = nt_paren_single(nt, v);
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, v, "name");
+  int r = nt_ref(nt, v, "receiver");
+  if (!nm || r < 0) return 0;
+  if (nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), "Time"))
+    return 1;
+  static const char *const NEW[] = { "+", "-", "getlocal", "getutc", "getgm", "round", "floor", "ceil",
+                                     "dup", "clone", "succ", NULL };
+  if (comp_ntype(c, r) != TY_TIME || cplan_user_fresh(c, v)->dispatch != CP_NONE) return 0;
+  for (int i = 0; NEW[i]; i++) if (sp_streq(nm, NEW[i])) return 1;
+  return 0;
+}
 void emit_lent_temp(Compiler *c, const LocalVar *p, int at, const char *val, Buf *out) {
   int t = ++g_tmp;
   if (p && p->type == TY_TIME) {
+    if (!time_value_fresh(c, at)) {
+      char msg[512];
+      snprintf(msg, sizeof msg,
+               "this Time is passed to parameter `%s`, which the method changes in place (localtime/utc/gmtime), "
+               "and CRuby's change reaches every holder of the Time; only a local variable or an instance "
+               "variable can be lent that way here. Assign the Time to a local, pass it, and store it back.",
+               p->name ? p->name : "?");
+      unsupported_feature(c, at, msg);
+    }
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_Time _t%d = %s;\n", t, val ? val : "(sp_Time){0}");
     buf_printf(out, "&_t%d", t);

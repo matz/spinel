@@ -2223,6 +2223,13 @@ reject-test: $(SPINEL)
 	  echo "reject-test: FAIL (a flip-flop compiled)"; ok=0; \
 	else grep -qF "FlipFlopNode at $$t:5:8" "$$tmp/unk.out" && grep -qF "MatchLastLineNode at $$t:10:8" "$$tmp/unk.out" || \
 	  { echo "reject-test: FAIL (an unsupported node kind refused without naming it)"; sed -n 1,5p "$$tmp/unk.out"; ok=0; }; fi; \
+	for t in $(shell grep -l '^\# spinel: reject-time-inplace: ' test/reject/*.rb); do \
+	  why=$$(sed -n 's/^# spinel: reject-time-inplace: //p' "$$t"); \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ti.c" >"$$tmp/ti.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled, dropping a Time's in-place change)"; ok=0; \
+	  else grep -qF "$$why" "$$tmp/ti.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/ti.out"; ok=0; }; fi; \
+	done; \
 	for t in $(shell grep -l '^\# spinel: reject-time-parse: ' test/reject/*.rb); do \
 	  why=$$(sed -n 's/^# spinel: reject-time-parse: //p' "$$t"); \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tp.c" >"$$tmp/tp.out" 2>&1; then \

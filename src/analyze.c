@@ -29285,7 +29285,8 @@ static int an_unlend_local(Compiler *c, const char *vn, Scope *vs) {
         Scope *mk = &c->scopes[m];
         if (!mk->name || !sp_streq(mk->name, gname) || j >= mk->nparams) continue;
         LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-        if (!q || !q->byref_out) continue;
+        /* a lent Time slot has no handle form (an_time_mutator_name) */
+        if (!q || !q->byref_out || q->type == TY_TIME) continue;
         q->byref_out = 0; q->is_cell = 0; lv_set_type(q, TY_STRBUF); q->str_shared = 1; changed = 1;
       }
     }
@@ -29361,6 +29362,7 @@ static int convert_byref_handle_params(Compiler *c,
           pp->type == TY_STRING && an_param_mutated_in_place(c, mi2, pj))
         strbuf_mut = 1;
       if (!pp->byref_out && !is_handle && !poly_mut && !strbuf_mut) continue;
+      if (pp->type == TY_TIME) continue;   /* a lent Time slot has no handle form */
       /* one pass over this method's call sites: detect a handle arg, and
          (once converted) pull plain-local args into the shared set */
       /* A POLY parameter the callee mutates in place boxes whatever it is
@@ -29632,7 +29634,7 @@ static int convert_byref_handle_params(Compiler *c,
     int h = -1;
     for (int j = 0; j < mk->nparams && j < 32; j++) {
       LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-      if (!q || !q->byref_out) continue;
+      if (!q || !q->byref_out || q->type == TY_TIME) continue;   /* a Time slot has no handle */
       if (h < 0 && (h = anh_find(&hnames, mk->name)) < 0) break;
       if (!(hbits[h] & (1u << j))) continue;
       q->byref_out = 0; q->is_cell = 0;
@@ -31462,7 +31464,7 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
           Scope *mk = &c->scopes[m];
           if (j >= mk->nparams) continue;
           LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-          if (!q || !q->byref_out) continue;
+          if (!q || !q->byref_out || q->type == TY_TIME) continue;   /* a Time slot has no handle */
           q->byref_out = 0; q->is_cell = 0; lv_set_type(q, TY_STRBUF); q->str_shared = 1; changed = 1;
         }
       }
@@ -33847,7 +33849,7 @@ static int fwd_super_string_params(Compiler *c) {
         /* a box, which carries the caller's handle (fwd_poly_param_handed_on),
            into a lent slot: the parent's takes the handle, as a handle
            argument at a call converts one (convert_byref_handle_params) */
-        else if (p->type == TY_POLY && d->byref_out) {
+        else if (p->type == TY_POLY && d->byref_out && d->type != TY_TIME) {
           d->byref_out = 0; d->is_cell = 0; lv_set_type(d, TY_STRBUF); d->str_shared = 1; changed = 1;
         }
       }

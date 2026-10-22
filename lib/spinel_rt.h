@@ -120,6 +120,35 @@ static int sp_bt_n = 0;
 /* sp_thread + the cooperative scheduler (Phase 0); bodies in lib/sp_sched.c. */
 #include "sp_sched.h"
 
+/* The capture. macOS's backtrace() walks frame pointers only within the
+   pthread's own stack, and answers no frame on a stack sp_ctx_make primed --
+   the one the top level runs on (sp_main_stack_run), a fiber's, a green
+   thread's (#9930). There the chain is walked here: each such stack starts
+   with a zero saved frame pointer (sp_ctx_make), which ends it, and a link
+   that does not climb, is misaligned or leaves the main stack's bounds ends
+   it too. Apple's ABIs keep frame pointers. glibc's backtrace() unwinds by
+   the unwind info and sees these stacks already. */
+#if defined(__APPLE__) && defined(HAVE_EXECINFO_H)
+static SP_UNUSED SP_NOINLINE int sp_bt_capture(void **buf, int max) {
+  int n = backtrace(buf, max);
+  if (n > 0) return n;
+  char *lo = sp_thread_stack_lo, *hi = sp_thread_stack_hi;
+  void **fp = (void **)__builtin_frame_address(0);
+  while (fp && n < max) {
+    void **next = (void **)fp[0];
+    /* the context's first frame: its return slot was never written */
+    if (!next || !fp[1]) break;
+    buf[n++] = fp[1];
+    if (next <= fp || ((uintptr_t)next & (sizeof(void *) - 1))) break;
+    if (lo && (char *)fp >= lo && (char *)fp < hi && (char *)next >= hi) break;
+    fp = next;
+  }
+  return n;
+}
+#elif SP_BT_AVAILABLE
+#define sp_bt_capture(buf, max) backtrace(buf, max)
+#endif
+
 /* Every SP_BUILTIN_* cls_id must name exactly one kind. They are declared in
    TWO headers -- sp_alloc.h and sp_gc.h, the latter because the inline mark
    helper has to see FOREIGN_PTR and REGEX -- and neither block can see the
@@ -16021,7 +16050,7 @@ static sp_StrArray *sp_caller_now(void) {
 #if SP_BT_AVAILABLE
   if (!sp_bt_enabled) return sp_StrArray_new();
   void *buf[256];
-  int n = backtrace(buf, 256);
+  int n = sp_bt_capture(buf, 256);
   return sp_bt_format(buf, n);
 #else
   return sp_StrArray_new();
@@ -16209,7 +16238,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
 #if SP_BT_AVAILABLE
   /* A pass-through, a bare raise, or an ensure resuming its saved exception
      keeps the frames of the raise that made it, as CRuby does. */
-  if (sp_bt_enabled && !sp_bt_keep && !sp_reraise_current && !cont) sp_bt_n = backtrace(sp_bt_buf, 256);
+  if (sp_bt_enabled && !sp_bt_keep && !sp_reraise_current && !cont) sp_bt_n = sp_bt_capture(sp_bt_buf, 256);
 #endif
   sp_bt_keep = 0;
   /* A real exception supersedes any non-local unwind in flight (e.g. raised from

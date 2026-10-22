@@ -1646,6 +1646,10 @@ spinel: test/reject/time_inplace_param_lambda.rb:5: `t.localtime` in `m` changes
 spinel: test/reject/time_inplace_param_rebound.rb:6: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method also assigns the parameter. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
 == test/reject/time_inplace_param_rebound.rb [promote] rc=1
 spinel: test/reject/time_inplace_param_rebound.rb:6: `t.localtime` in `m` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method also assigns the parameter. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_second_arg.rb [default] rc=1
+spinel: test/reject/time_inplace_param_second_arg.rb:7: `stamp(t)` in `initialize` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is one whose parameters are passed by value (an initialize, a yielding method, an aliased one, or one reached through send/method). Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
+== test/reject/time_inplace_param_second_arg.rb [promote] rc=1
+spinel: test/reject/time_inplace_param_second_arg.rb:7: `stamp(t)` in `initialize` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is one whose parameters are passed by value (an initialize, a yielding method, an aliased one, or one reached through send/method). Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
 == test/reject/time_inplace_param_two_classes.rb [default] rc=1
 spinel: test/reject/time_inplace_param_two_classes.rb:6: `t.localtime` in `shift` changes the Time passed as parameter `t` in place, which the caller sees in CRuby, but not here: the method is called on a receiver of more than one class. Return the Time and assign it in the caller, or change a copy (`getlocal`/`getutc`).
 == test/reject/time_inplace_param_two_classes.rb [promote] rc=1

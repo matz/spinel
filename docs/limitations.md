@@ -938,6 +938,34 @@ assignment binds. Build the array as a general Array where it is created, or
 give the parameter the argument's kind (an rbs seed, or call sites that all
 pass the same kind).
 
+#### A Time a method changes in place reaches the caller only from a variable
+
+`Time#localtime`, `#utc` and `#gmtime` change the receiver, and in CRuby
+everyone holding that Time sees the new zone. A Time is a value here, so a
+method's Time parameter changed that way is given the caller's variable: a
+local, an instance variable, or a new Time (`Time.utc(...)`, `t + 60`)
+nobody else holds. Where that cannot be done, the call is refused at
+compile time:
+
+```ruby
+def m(t)
+  t.localtime(3600)
+  t = Time.utc(2000, 1, 1)
+end
+m(Time.now)
+# spinel: t.rb:2: `t.localtime` in `m` changes the Time passed as parameter `t` in place, ...
+```
+
+It is refused when the method also assigns the parameter, when a block or
+lambda that can outlive the call captures it, when the method is an
+`initialize`, a yielding method, or one called on a receiver of more than
+one class, and when the argument is a Time held elsewhere too (an element,
+a Hash value, a reader's answer). Return the Time and assign it in the
+caller, or change a copy (`getlocal`, `getutc`).
+
+Not refused yet: `u = t; u.localtime(3600)` and `a[0].localtime(3600)`
+change a copy, so `t` keeps its zone.
+
 #### ENV passed around as a value is a snapshot
 
 `ENV` used as a value rather than a receiver (`params["e"] = ENV`,

@@ -16993,6 +16993,23 @@ int an_str_mutator_name(const char *nm) {
   return sp_str_mutator(nm, SP_MUT_LOCAL) || (l > 1 && nm[l - 1] == '!');
 }
 
+/* A Time parameter takes the lent slot too. CRuby's #localtime / #utc /
+   #gmtime change the receiver itself, and the caller that passed it sees
+   the new zone (time.rb's force_zone! returns nothing and relies on it).
+   sp_Time is a by-value struct and `t.localtime(off)` on a local is the
+   write-back `lv_t = sp_time_getlocal_off(lv_t, off)`, so the change used
+   to stop at the callee's copy. Lent the caller's slot (sp_Time *), the
+   write-back lands there, as an append lands in a lent String slot.
+   It has no shared-handle form: where a String parameter falls back to the
+   handle (captured by a proc that can outlive the call, reached through a
+   POLY receiver, rebound in the body), a Time parameter keeps the value
+   ABI. */
+static int an_time_mutator_name(const char *nm) {
+  return nm && (sp_streq(nm, "localtime") || sp_streq(nm, "utc") || sp_streq(nm, "gmtime"));
+}
+/* the parameter types a byref slot is lent for */
+static int an_byref_slot_type(TyKind t) { return t == TY_STRING || t == TY_TIME; }
+
 /* ANY method scope with this name, or -1. Byref is decided per NAME GROUP --
    every method of a name gets the ABI or none does -- so a caller asking
    "is parameter j byref here" may ask any member and get the group's answer.
@@ -17334,6 +17351,7 @@ static int an_byref_group_member_string(Compiler *c, Scope *m, int pi) {
 static int an_byref_group_takes_ref(Compiler *c, const char *nm, int pi, const char *elig,
                                     const unsigned *blocked, int n, int *captured) {
   if (!nm || pi < 0 || pi >= 32) return 0;
+  TyKind gty = TY_UNKNOWN;   /* the group's one slot type: String or Time */
   for (int k = 1; k < n; k++) {
     Scope *m = &c->scopes[k];
     if (!m->name || !sp_streq(m->name, nm)) continue;
@@ -17360,7 +17378,9 @@ static int an_byref_group_takes_ref(Compiler *c, const char *nm, int pi, const c
        caller. Refused, the append before the rebind went to a copy. */
     if (blocked && (blocked[k] & (1u << pi))) *captured = 1;
     LocalVar *q = scope_local(m, m->pnames[pi]);
-    if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING) return 0;
+    if (!q || !q->is_param || q->is_block_param || !an_byref_slot_type(q->type)) return 0;
+    if (gty != TY_UNKNOWN && q->type != gty) return 0;
+    gty = q->type;
     /* celled for a proc that can outlive the call (a stored proc, a Thread
        body) is not a slot the caller can lend: the proc would keep the
        caller's frame. It is one String the proc, the method and the caller
@@ -17942,7 +17962,12 @@ static int an_writes_unfresh(Compiler *c, int node, const char *vn, int depth) {
    Lent anyway, the rebind put the group on the shared handle, and a caller
    passing its own parameter on took the handle too, so its later
    `text = other(text)` was refused as a mutated parameter. */
-static int an_param_fresh_at(Compiler *c, Scope *s, const char *vn, int use) {
+/* Does a statement of s's body ahead of the one holding `use` rebind
+   parameter `vn`? From there on the local no longer names what the caller
+   passed. A Time parameter changed in place only after such a rebind
+   (`t = t.dup; t.utc`) changes the method's own Time, and keeps the value
+   ABI with nothing to refuse. */
+static int an_param_rebound_ahead(Compiler *c, Scope *s, const char *vn, int use) {
   const NodeTable *nt = c->nt;
   if (!vn || s->body < 0 || nt_kind(nt, s->body) != NK_StatementsNode) return 0;
   int bn = 0, ahead = 0;
@@ -17951,7 +17976,10 @@ static int an_param_fresh_at(Compiler *c, Scope *s, const char *vn, int use) {
     const char *wn = nt_kind(nt, bs[j]) == NK_LocalVariableWriteNode ? nt_str(nt, bs[j], "name") : NULL;
     if (wn && sp_streq(wn, vn)) ahead = 1;
   }
-  return ahead && !an_writes_unfresh(c, s->body, vn, 0);
+  return ahead;
+}
+static int an_param_fresh_at(Compiler *c, Scope *s, const char *vn, int use) {
+  return an_param_rebound_ahead(c, s, vn, use) && !an_writes_unfresh(c, s->body, vn, 0);
 }
 
 static void compute_byref_out_params(Compiler *c) {
@@ -18045,8 +18073,9 @@ static void compute_byref_out_params(Compiler *c) {
           }
           if (pi < 0 || pi >= 32) continue;
           LocalVar *p = scope_local(s, s->pnames[pi]);
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, s->pnames[pi], id) &&
+          LocalVar *mq = scope_local(m, m->pnames[j]);
+          if (p && p->is_param && mq && p->type == mq->type && !p->byref_out &&
+              (p->type == TY_TIME ? !an_param_rebound_ahead(c, s, s->pnames[pi], id) : !an_param_fresh_at(c, s, s->pnames[pi], id)) &&
               an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
             changed = 1;
         }
@@ -18059,16 +18088,18 @@ static void compute_byref_out_params(Compiler *c) {
       const char *nm = nt_str(nt, id, "name");
       int recv = nt_ref(nt, id, "receiver");
       const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
-      /* direct mutator: param << ... / param.gsub!(...) */
-      if (rty && sp_streq(rty, "LocalVariableReadNode") && an_str_mutator_name(nm)) {
+      /* direct mutator: param << ... / param.gsub!(...), or a Time
+         param's t.localtime / t.utc / t.gmtime */
+      if (rty && sp_streq(rty, "LocalVariableReadNode") && (an_str_mutator_name(nm) || an_time_mutator_name(nm))) {
         const char *vn = nt_str(nt, recv, "name");
         int pi = an_param_idx(s, vn);
         if (pi >= 0 && pi < 32) {
           LocalVar *p = scope_local(s, vn);
+          TyKind mty = an_time_mutator_name(nm) ? TY_TIME : TY_STRING;
           /* the whole name group takes it or none of it does; the cell deref
              forms the body already emits are what the ABI rides on */
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, vn, id) &&
+          if (p && p->is_param && p->type == mty && !p->byref_out &&
+              (mty == TY_TIME ? !an_param_rebound_ahead(c, s, vn, id) : !an_param_fresh_at(c, s, vn, id)) &&
               an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
             changed = 1;
         }
@@ -18118,8 +18149,9 @@ static void compute_byref_out_params(Compiler *c) {
           int pi = an_param_idx(s, vn);
           if (pi < 0 || pi >= 32) continue;
           LocalVar *p = scope_local(s, vn);
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, vn, id) &&
+          LocalVar *mq = scope_local(m, m->pnames[j]);
+          if (p && p->is_param && mq && p->type == mq->type && !p->byref_out &&
+              (p->type == TY_TIME ? !an_param_rebound_ahead(c, s, vn, id) : !an_param_fresh_at(c, s, vn, id)) &&
               an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
             changed = 1;
         }
@@ -18143,6 +18175,8 @@ static void compute_byref_out_params(Compiler *c) {
       if (!polyr[si] && !(cellh[si] & (1u << j))) continue;
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
       if (!q || !q->byref_out) continue;
+      /* a Time has no handle: it keeps the value ABI */
+      if (q->type == TY_TIME) { q->byref_out = 0; q->is_cell = q->cell_outlives; continue; }
       q->byref_out = 0; q->is_cell = q->cell_outlives;
       lv_set_type(q, TY_STRBUF); q->str_shared = 1;
     }

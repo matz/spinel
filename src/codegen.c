@@ -8040,6 +8040,8 @@ void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b) {
 /* The element type of a borrowed String slot, not an owned heap cell.
    Selector volatility is a separate qualifier on the pointer to this. */
 const char *borrowed_string_type(const LocalVar *lv) {
+  /* a lent Time slot (an_time_mutator_name) is the caller's sp_Time */
+  if (lv->type == TY_TIME) return lv->borrowed_volatile ? "sp_Time volatile" : "sp_Time";
   return lv->borrowed_volatile ? "const char * volatile" : "const char *";
 }
 
@@ -14617,7 +14619,7 @@ static void emit_zsuper_arg(Compiler *c, Scope *s, LocalVar *dst, TyKind dt, con
       Buf vb; memset(&vb, 0, sizeof vb);
       if (st == TY_POLY) emit_unbox_text(c, TY_STRING, _bx.p, &vb);
       else buf_puts(&vb, _bx.p);
-      emit_lent_temp(vb.p, b);
+      emit_lent_temp(c, dst, s->def_node, vb.p, b);
       free(vb.p);
     }
     free(_bx.p);

@@ -7219,9 +7219,16 @@ static void emit_arg_or_default_at(Compiler *c, Scope *m, int idx, int provided,
    caller variable behind it -- a literal, an expression, a default, what a
    binder pulls out of a splat, a gather or a `**` hash -- has none to lend:
    it binds into a rooted temp and the temp's address is passed. The callee's
-   appends stay in the temp, as the pre-byref value ABI kept them. */
-void emit_lent_temp(const char *val, Buf *out) {
+   appends stay in the temp, as the pre-byref value ABI kept them; a lent
+   Time slot (p's type) takes an sp_Time temp the same way. */
+void emit_lent_temp(Compiler *c, const LocalVar *p, int at, const char *val, Buf *out) {
   int t = ++g_tmp;
+  if (p && p->type == TY_TIME) {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_Time _t%d = %s;\n", t, val ? val : "(sp_Time){0}");
+    buf_printf(out, "&_t%d", t);
+    return;
+  }
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "const char *_t%d = %s;\n", t, val ? val : "NULL");
   emit_indent(g_pre, g_indent);
@@ -7255,8 +7262,9 @@ int emit_lent_local(LocalVar *lv, const char *vn, Buf *out) {
     return 1;
   }
   if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, vn)) {
-    /* a capture of another type has a cell of that type, no String slot */
-    if (lv && lv->type != TY_STRING) return 0;
+    /* a capture of another type has a cell of that type, no String slot
+       (a Time's is the sp_Time slot a lent Time parameter takes) */
+    if (lv && lv->type != TY_STRING && lv->type != TY_TIME) return 0;
     /* inside a proc body: the capture struct holds the cell pointer */
     if (!fwd) {
       emit_indent(g_pre, g_indent);
@@ -7266,7 +7274,7 @@ int emit_lent_local(LocalVar *lv, const char *vn, Buf *out) {
     buf_printf(out, "((%s *)_cap)->c_%s", g_cap_struct, vn);
     return 1;
   }
-  if (!lv || lv->type != TY_STRING) return 0;
+  if (!lv || (lv->type != TY_STRING && lv->type != TY_TIME)) return 0;
   if (lv->is_cell) {
     /* a heap cell: the callee stores through it and cannot name it, so
        the owner is recorded HERE, stickily, since this runs before the
@@ -7499,7 +7507,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
         const char *ivn = nt_str(c->nt, provided, "name");
         Scope *ivs = comp_scope_of(c, provided);
         if (ivn && ivs && ivs->class_id >= 0 && !ivs->is_cmethod &&
-            comp_ntype(c, provided) == TY_STRING) {
+            comp_ntype(c, provided) == p->type) {
           /* a value-type receiver is a struct, not a heap object: it has no
              header to mark dirty, and casting it to void* does not compile */
           if (!comp_ty_value_obj(c, ty_object(ivs->class_id))) {
@@ -7550,7 +7558,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
     p->byref_out = 0;   /* reenter for the plain coerced value */
     emit_arg_or_default(c, m, idx, provided, &ab);
     p->byref_out = 1;
-    emit_lent_temp(ab.p, out);
+    emit_lent_temp(c, p, provided >= 0 ? provided : m->pdefault[idx], ab.p, out);
     free(ab.p);
     return;
   }
@@ -9969,7 +9977,7 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
     plv->byref_out = 0;
     emit_ds_param_extract(c, m, i, ds_hash_tmp, ds_hash_type, &vb);
     plv->byref_out = 1;
-    emit_lent_temp(vb.p, out);
+    emit_lent_temp(c, plv, m->def_node, vb.p, out);
     free(vb.p);
     return;
   }
@@ -11424,7 +11432,7 @@ void emit_gathered_param(Compiler *c, Scope *m, int i, int ct, Buf *out) {
     sp->byref_out = 0;
     emit_gathered_param(c, m, i, ct, &vb);
     sp->byref_out = 1;
-    emit_lent_temp(vb.p, out);
+    emit_lent_temp(c, sp, m->def_node, vb.p, out);
     free(vb.p);
     return;
   }
@@ -11532,7 +11540,7 @@ static void emit_elem_param(Compiler *c, Scope *m, int i, int off, int tmp, TyKi
     sp->byref_out = 0;
     emit_elem_param(c, m, i, off, tmp, at, gathered, hold, &vb);
     sp->byref_out = 1;
-    emit_lent_temp(vb.p, out);
+    emit_lent_temp(c, sp, m->def_node, vb.p, out);
     free(vb.p);
     return;
   }

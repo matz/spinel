@@ -863,12 +863,15 @@ const char *sp_str_inspect(const char *s);
 const char *sp_sym_inspect_name(const char *name);
 /* The fixed-format parsers' argument as their ArgumentError shows it: the
    Symbol a call passed (sp_time_s_parse_sym), else the String inspected.
-   Read once: a raise leaves it cleared. */
+   Only the very name passed counts, so a value a raise left set is not
+   shown for another String. */
 static SP_TLS const char *tp_sym_arg;
 static const char *tp_inspect_arg(const char *s) {
   const char *sym = tp_sym_arg;
   tp_sym_arg = NULL;
-  return sym ? sp_sym_inspect_name(sym) : sp_str_inspect(s);
+  /* only the name the Symbol call handed in: a parser that raised before
+     the message (a field out of range) left it set for a later call */
+  return sym && sym == s ? sp_sym_inspect_name(sym) : sp_str_inspect(s);
 }
 
 /* ---- require "time": Time.httpdate / rfc2822 / xmlschema (iso8601) ----

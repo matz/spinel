@@ -15,3 +15,16 @@ p((Time.xmlschema(:bogus) rescue $!.message))
 p((Time.rfc2822(:"no date") rescue $!.message))
 p((Time.httpdate(:bogus) rescue $!.message))
 p((Time.xmlschema("bogus") rescue $!.message))
+
+# a Symbol whose fields are out of range raises before the format message;
+# a later bad String still shows the String
+begin
+  Time.xmlschema(:"2024-13-45T00:00:00Z")
+rescue ArgumentError
+  p :raised
+end
+begin
+  Time.xmlschema("bogus")
+rescue ArgumentError => e
+  p e.message
+end

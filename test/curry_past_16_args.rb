@@ -22,3 +22,9 @@ p d.(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 
 l17 = lambda { |a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15,a16,a17| a1 + a17 }
 p (l17.curry >> proc { |x| x * 2 }).(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 p (proc { |x| x + 1 } << l17).(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+
+# String and Symbol arguments reach a full curry's target as themselves
+sp2 = proc { |a, b| a + b }
+p sp2.curry["x"]["y"]
+sl3 = ->(a, b, c) { "#{a}-#{b}-#{c}" }
+p sl3.curry["p"][2][:q]

@@ -21668,8 +21668,12 @@ static SP_NOINLINE void sp_curry_call_target(sp_Curry *c) {
   }
   sp_proc_wide_open(n);
   for (sp_int i = 0; i < n; i++) {
-    slots[i] = sp_poly_slot_i(c->args[i]);
-    sp_proc_arg_set(i, c->args[i]);
+    /* a String or an object goes in its slot as the pointer, as the spread
+       calls pass one */
+    sp_RbVal e = c->args[i];
+    slots[i] = (e.tag == SP_TAG_OBJ || e.tag == SP_TAG_STR)
+             ? (sp_int)(uintptr_t)e.v.p : sp_poly_slot_arg(e);
+    sp_proc_arg_set(i, e);
   }
   /* the target publishes its (boxed) result through the return slot */
   sp_proc_call(c->target, n, slots);

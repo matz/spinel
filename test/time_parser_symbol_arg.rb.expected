@@ -10,3 +10,5 @@ NoMethodError
 "not RFC 2822 compliant date: :\"no date\""
 "not RFC 2616 compliant date: :bogus"
 "invalid xmlschema format: \"bogus\""
+:raised
+"invalid xmlschema format: \"bogus\""

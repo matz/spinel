@@ -345,6 +345,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
 
   /* Resolve cmd + args into argv. */
   const char *prog = NULL;
+  SP_GC_ROOT_STR(prog);
   char **argv = NULL;
   sp_PolyArray *cmd_arr = NULL;
   sp_PolyArray *args_arr = NULL;
@@ -375,7 +376,8 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
         if (!(words = sp_cmdline_words(prog, &wn)))
           sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
         if (wn == 0) { free(words); sp_process_spawn_fail(owned, "Errno::ENOENT", sp_errf_path(ENOENT, prog)); }
-        prog = words[0];
+        /* a copy: the error paths below name the program after free(argv) */
+        prog = sp_str_from_bytes(words[0], strlen(words[0]));
       }
     }
   }
@@ -601,6 +603,7 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
                        ? (sp_PolyArray *)args_box.v.p : NULL;
   int na = args ? (int)args->len : 0;
   const char *prog = NULL, *argv0 = NULL;
+  SP_GC_ROOT_STR(prog);
   cmd = sp_spawn_str(cmd);
   if (cmd.tag == SP_TAG_STR) prog = argv0 = cmd.v.s;
   else if (cmd.tag == SP_TAG_OBJ && cmd.cls_id == SP_BUILTIN_POLY_ARRAY) {
@@ -621,7 +624,8 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
     int wn = 0;
     if (!(argv = sp_cmdline_words(prog, &wn))) sp_raise_cls("NoMemoryError", "out of memory");
     if (wn == 0) { free(argv); sp_raise_cls("Errno::ENOENT", sp_errf_path(ENOENT, prog)); }
-    prog = argv[0];
+    /* a copy: the error after a failed exec names it after free(argv) */
+    prog = sp_str_from_bytes(argv[0], strlen(argv[0]));
   }
   else {
     argv = (char **)malloc(sizeof(char *) * (size_t)(na + 4));

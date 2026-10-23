@@ -30,3 +30,15 @@ Process.wait(pid)
 p $?.success?
 p system("")
 p $?.exitstatus
+
+# spawn and exec of a missing program name it in the error
+begin
+  Process.spawn("no_such_program_xyz arg")
+rescue SystemCallError => e
+  p e.class, e.message
+end
+begin
+  exec("no_such_program_xyz arg")
+rescue SystemCallError => e
+  p e.class, e.message
+end

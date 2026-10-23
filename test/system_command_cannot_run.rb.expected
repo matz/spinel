@@ -28,3 +28,7 @@ spawned ok
 true
 nil
 127
+Errno::ENOENT
+"No such file or directory - no_such_program_xyz"
+Errno::ENOENT
+"No such file or directory - no_such_program_xyz"

@@ -20,8 +20,8 @@
 # disagreement, the plan's form against the C's, with the consumer's role
 # and the node it sits in (`plan handle, C bytes (take, argument)`). The
 # compiler's node id is left out, because ids shift with any edit, and so is
-# the number the compiler gives a block parameter it renames (`x__bp44` is
-# listed as `x__bp`), and so is the producer kind a disagreement ends in
+# the name the compiler gives a block parameter it renames, after `__bp`
+# (`x__bpupper_7` is listed as `x__bp`), and so is the producer kind a disagreement ends in
 # (`[slot]`), which names the route the plan takes, not the site. A file of the compiler's own tree (a package) comes out
 # as the compiler's path, absolute and ending in bin/../packages/..; the part
 # up to bin/../ is dropped, so the line does not name the checkout. The lines
@@ -80,7 +80,7 @@ ls test/share/*.rb test/share/verify/*.rb test/share/verify/conflicts/*.rb test/
       if [ $kind = sites ]; then tag="copy"; else tag="plan: disagree"; fi
       grep "^share-check: $tag: " "$3/$k.err" > "$3/$k.raw"
       sed -n -E "s|^share-check: $tag: ([^ ]+:[0-9]+) node [0-9]+ ([A-Za-z]+) \(([^)]*)\): (.*)\$|$p${TAB}\1${TAB}\2 (\3)${TAB}\4|p" "$3/$k.raw" |
-        sed -E "s/__bp[0-9]+/__bp/g; s|${TAB}[^${TAB}]*/bin/\.\./|${TAB}|; s/ \[[a-z_]+\]\$//" > "$3/$k.$kind"
+        sed -E "s/__bp[A-Za-z0-9_]+/__bp/g; s|${TAB}[^${TAB}]*/bin/\.\./|${TAB}|; s/ \[[a-z_]+\]\$//" > "$3/$k.$kind"
       if [ "$(wc -l < "$3/$k.raw")" != "$(wc -l < "$3/$k.$kind")" ]; then
         echo "share-check-ratchet: FAIL $p (a $tag line is not in the format this script reads)" >> "$3/$k.fail"
       fi

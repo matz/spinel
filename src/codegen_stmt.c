@@ -1457,7 +1457,7 @@ const char *strbuf_new_func(Compiler *c, int v) {
    is named (sp_String_literal_of) */
 void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b) {
   int id = g_one_string ? fzl_text_id(t) : -1;
-  if (id >= 0) buf_printf(b, "sp_String_literal_of(&_fzl_%d_slot, (char *)_fzl_%d.d)", id, id);
+  if (id >= 0) buf_printf(b, "sp_String_literal_of(&_fzl_%s_slot, (char *)_fzl_%s.d)", fzl_id_name(id), fzl_id_name(id));
   else buf_printf(b, "%s(%s)", strbuf_new_func(c, v), t ? t : "");
 }
 /* --share-strings: put the handle demand on each `next` (k NK_NextNode) or

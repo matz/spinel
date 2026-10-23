@@ -8196,15 +8196,48 @@ int emit_poly_aset_default(Compiler *c, const char *name, int argc, const int *a
 typedef struct { char *key; int fn; } PdEntry;
 static PdEntry *pd_tab; static int pd_cap, pd_count, pd_fns;
 static char **pd_proto, **pd_def; static int pd_def_cap;
+/* A dispatch function is named by its key's hash (`sp_pd_1a2b3c4d`), not by
+   the order it was first wanted in, so one a method newly needs renames none
+   another calls; two keys with one hash
+   are told apart by `_<n>`. pd_name[fn] is the text after `sp_pd_`. */
+static char (*pd_name)[24]; static unsigned *pd_nhash; static int pd_name_cap;
+const char *pd_fn_name(int fn) { return fn >= 0 && fn < pd_fns ? pd_name[fn] : "none"; }
+/* The name is the hash of what the function dispatches (the method's name
+   and its C signature), not of its arms: an arm that changes its type
+   changes the function's body, and its callers keep calling it by the same
+   name. Two bodies for one name are told apart by `_<n>`, in the order they
+   were first wanted. */
+static void pd_name_set(int fn, const char *nm_key) {
+  if (fn >= pd_name_cap) {
+    int nc = pd_name_cap ? pd_name_cap * 2 : 1024;
+    while (nc <= fn) nc *= 2;
+    pd_name = realloc(pd_name, sizeof *pd_name * (size_t)nc);
+    pd_nhash = realloc(pd_nhash, sizeof *pd_nhash * (size_t)nc);
+    pd_name_cap = nc;
+  }
+  unsigned h = 2166136261u;
+  for (const char *q = nm_key; *q; q++) h = (h ^ (unsigned char)*q) * 16777619u;
+  pd_nhash[fn] = h;
+  int dup = 0;
+  for (int k = 0; k < fn; k++) if (pd_nhash[k] == h) dup++;
+  if (dup) snprintf(pd_name[fn], sizeof pd_name[fn], "%08x_%d", h, dup);
+  else snprintf(pd_name[fn], sizeof pd_name[fn], "%08x", h);
+}
+/* The function a `sp_pd_<name>` in the text names, or -1. */
+static int pd_find_name(const char *nm, size_t n) {
+  for (int k = 0; k < pd_fns; k++)
+    if (strlen(pd_name[k]) == n && !memcmp(pd_name[k], nm, n)) return k;
+  return -1;
+}
 
-/* Mark every sp_pd_N the text calls. */
+/* Mark every sp_pd_<name> the text calls. */
 static void pd_mark_refs(const char *t, char *used, int *stack, int *sp) {
   for (const char *q = t ? strstr(t, "sp_pd_") : NULL; q; q = strstr(q + 6, "sp_pd_")) {
     if (q > t && (q[-1] == '_' || (q[-1] >= 'a' && q[-1] <= 'z') || (q[-1] >= 'A' && q[-1] <= 'Z') || (q[-1] >= '0' && q[-1] <= '9'))) continue;
-    const char *d = q + 6;
-    if (*d < '0' || *d > '9') continue;
-    int n = atoi(d);
-    if (n < 0 || n >= pd_fns || used[n]) continue;
+    const char *d = q + 6, *e = d;
+    while ((*e >= '0' && *e <= '9') || (*e >= 'a' && *e <= 'f') || *e == '_') e++;
+    int n = pd_find_name(d, (size_t)(e - d));
+    if (n < 0 || used[n]) continue;
     used[n] = 1; stack[(*sp)++] = n;
   }
 }
@@ -8235,7 +8268,7 @@ static int pd_disabled(void) {
 
 static int pd_idch(char ch) { return ch == '_' || (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'); }
 
-static int pd_lookup_or_add(const char *key, int *is_new) {
+static int pd_lookup_or_add(const char *key, const char *nm_key, int *is_new) {
   if (pd_count * 2 >= pd_cap) {
     int ncap = pd_cap ? pd_cap * 2 : 1024;
     PdEntry *nt = calloc((size_t)ncap, sizeof *nt);
@@ -8257,6 +8290,7 @@ static int pd_lookup_or_add(const char *key, int *is_new) {
     j = (j + 1) & (pd_cap - 1);
   }
   pd_tab[j].key = strdup(key); pd_tab[j].fn = pd_fns++; pd_count++;
+  pd_name_set(pd_tab[j].fn, nm_key);
   *is_new = 1;
   return pd_tab[j].fn;
 }
@@ -8402,7 +8436,7 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
   }
   Buf sig; memset(&sig, 0, sizeof sig);
   if (g_pd_ret_ctype) buf_puts(&sig, g_pd_ret_ctype); else emit_ctype(c, rct, &sig);
-  buf_puts(&sig, " sp_pd_%d(");
+  buf_puts(&sig, " sp_pd_%s(");
   for (int a = 0; a < np; a++) {
     if (a) buf_puts(&sig, ", ");
     emit_ctype(c, pty[a], &sig);
@@ -8411,8 +8445,11 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
   buf_puts(&sig, ")");
   Buf key; memset(&key, 0, sizeof key);
   buf_puts(&key, sig.p); buf_puts(&key, "{"); buf_puts(&key, body.p ? body.p : "");
+  Buf nmk; memset(&nmk, 0, sizeof nmk);
+  buf_puts(&nmk, name ? name : "?"); buf_puts(&nmk, "|"); buf_puts(&nmk, sig.p);
   int is_new = 0;
-  int fn = pd_lookup_or_add(key.p, &is_new);
+  int fn = pd_lookup_or_add(key.p, nmk.p, &is_new);
+  free(nmk.p);
   if (is_new) {
     /* kept aside: a site can be written into a buffer the emitter then
        throws away, so only the functions the finished program calls are
@@ -8426,11 +8463,11 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
     }
     Buf pb; memset(&pb, 0, sizeof pb);
     buf_puts(&pb, "static SP_UNUSED SP_NOINLINE ");
-    buf_printf(&pb, sig.p, fn); buf_puts(&pb, ";\n");
+    buf_printf(&pb, sig.p, pd_fn_name(fn)); buf_puts(&pb, ";\n");
     Buf db; memset(&db, 0, sizeof db);
     emit_current_line_directive(c, &db);   /* the first site it came from */
     buf_puts(&db, "static ");
-    buf_printf(&db, sig.p, fn);
+    buf_printf(&db, sig.p, pd_fn_name(fn));
     buf_printf(&db, " { %s } return _t%d; }\n", body.p ? body.p : "", tr_canon);
     pd_proto[fn] = pb.p; pd_def[fn] = db.p;
   }
@@ -8438,7 +8475,7 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
   b->len = from; b->p[from] = 0;
   /* the temp takes the plan's own slot type: its oint where the plan answers one */
   if (g_pd_ret_ctype) buf_puts(b, g_pd_ret_ctype); else emit_ctype(c, rct, b);
-  buf_printf(b, " _t%d = sp_pd_%d(", tr, fn);
+  buf_printf(b, " _t%d = sp_pd_%s(", tr, pd_fn_name(fn));
   for (int a = 0; a < np; a++) buf_printf(b, "%s_t%d", a ? ", " : "", pid[a]);
   buf_puts(b, ");");
   free(tnum); free(tdecl); free(canon); free(body.p); free(sig.p); free(key.p);
@@ -8572,7 +8609,7 @@ static int bi_generic_fn(Compiler *c, int id, const char *name) {
     char key[300];
     snprintf(key, sizeof key, "bi:%s", name);
     int is_new = 0;
-    fn = pd_lookup_or_add(key, &is_new);
+    fn = pd_lookup_or_add(key, key, &is_new);
     if (fn >= pd_def_cap) {
       int nc = pd_def_cap ? pd_def_cap * 2 : 1024;
       while (nc <= fn) nc *= 2;
@@ -8581,13 +8618,13 @@ static int bi_generic_fn(Compiler *c, int id, const char *name) {
       pd_def_cap = nc;
     }
     Buf pb; memset(&pb, 0, sizeof pb);
-    buf_printf(&pb, "static SP_UNUSED SP_NOINLINE sp_RbVal sp_pd_%d(sp_RbVal _sp_bi_self, sp_int _sp_bi_argc, "
-                    "const sp_RbVal *_sp_bi_argv);\n", fn);
+    buf_printf(&pb, "static SP_UNUSED SP_NOINLINE sp_RbVal sp_pd_%s(sp_RbVal _sp_bi_self, sp_int _sp_bi_argc, "
+                    "const sp_RbVal *_sp_bi_argv);\n", pd_fn_name(fn));
     Buf db; memset(&db, 0, sizeof db);
     buf_printf(&db, "/* %s(*args) on a builtin: the generic entry */\n", name);
-    buf_printf(&db, "static sp_RbVal sp_pd_%d(sp_RbVal _sp_bi_self, sp_int _sp_bi_argc, const sp_RbVal *_sp_bi_argv) {\n"
+    buf_printf(&db, "static sp_RbVal sp_pd_%s(sp_RbVal _sp_bi_self, sp_int _sp_bi_argc, const sp_RbVal *_sp_bi_argv) {\n"
                     "  SP_GC_SAVE();\n  sp_RbVal _t%d = _sp_bi_self; sp_RbVal _t%d = sp_box_nil();\n"
-                    "  SP_GC_ROOT_RBVAL(_t%d); SP_GC_ROOT_RBVAL(_t%d);\n", fn, tv, tr, tv, tr);
+                    "  SP_GC_ROOT_RBVAL(_t%d); SP_GC_ROOT_RBVAL(_t%d);\n", pd_fn_name(fn), tv, tr, tv, tr);
     /* the arguments copied out of the caller's list and rooted: an arm
        allocates while it reads them */
     if (maxn > 0) {
@@ -8666,8 +8703,8 @@ static int emit_poly_builtin_default_generic(Compiler *c, int id, int recv, cons
   if (ret != TY_POLY || atmp_ty[0] != TY_POLY_ARRAY) return 0;
   int fn = bi_generic_fn(c, id, name);
   if (fn < 0) return 0;
-  buf_printf(b, "%s _t%d = sp_pd_%d(_t%d, _t%d->len, _t%d->data); break;",
-             label ? " default:" : "", tr, fn, tv, atmp[0], atmp[0]);
+  buf_printf(b, "%s _t%d = sp_pd_%s(_t%d, _t%d->len, _t%d->data); break;",
+             label ? " default:" : "", tr, pd_fn_name(fn), tv, atmp[0], atmp[0]);
   return 1;
 }
 
@@ -14674,7 +14711,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       int hbody = nt_ref(nt, hblk, "body");
       const char *hp = block_param_name(c, hblk, 0);
       const char *kp = block_param_name(c, hblk, 1);
-      int dn = ++g_proc_counter;
+      const char *dn = uid_new();
       /* Built into a buffer of its own and appended once complete, as a
          proc literal's function is: a nested default block's function
          written straight into g_procs landed in the middle of this one. */
@@ -14688,7 +14725,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       int dp_self = (g_emitting_class_id >= 0 && g_self && sp_streq(g_self, "self") &&
                      g_self_deref && sp_streq(g_self_deref, "->"));
       const char *dp_cls = dp_self ? c->classes[g_emitting_class_id].name : NULL;
-      buf_printf(pb, "static sp_RbVal _sp_hash_dproc_%d(sp_PolyPolyHash *_self_h, sp_RbVal _key, void *_dproc_self) {\n", dn);
+      buf_printf(pb, "static sp_RbVal _sp_hash_dproc_%s(sp_PolyPolyHash *_self_h, sp_RbVal _key, void *_dproc_self) {\n", dn);
       if (dp_self) buf_printf(pb, "  sp_%s *self = (sp_%s *)_dproc_self; (void)self;\n", dp_cls, dp_cls);
       else buf_puts(pb, "  (void)_dproc_self;\n");
       if (hp) {
@@ -14734,8 +14771,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_puts(pb, "}\n");
       if (dproc_buf.p) buf_puts(&g_procs, dproc_buf.p);
       free(dproc_buf.p);
-      if (dp_self) buf_printf(b, "sp_PolyPolyHash_new_dproc(_sp_hash_dproc_%d, (void *)self)", dn);
-      else buf_printf(b, "sp_PolyPolyHash_new_dproc(_sp_hash_dproc_%d, NULL)", dn);
+      if (dp_self) buf_printf(b, "sp_PolyPolyHash_new_dproc(_sp_hash_dproc_%s, (void *)self)", dn);
+      else buf_printf(b, "sp_PolyPolyHash_new_dproc(_sp_hash_dproc_%s, NULL)", dn);
       { *out = 1; return 1; }
     }
     if (cn && sp_streq(cn, "Regexp") && argc >= 1) { emit_regexp_new(c, argc, argv, b); *out = 1; return 1; }
@@ -18452,13 +18489,13 @@ void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b)
    declares, converts each to the target method's inferred parameter type
    (boxing a poly param, casting a scalar one), calls the compiled method, and
    converts the result to the callback's return type. The definition is appended
-   to g_procs; returns the trampoline's unique id. */
-static int emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
+   to g_procs; returns the trampoline's unique name. */
+static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
   FfiCallback *k = &c->ffi_callbacks[cbidx];
   Scope *ts = &c->scopes[mi];
-  int tid = ++g_proc_counter;
+  const char *tid = uid_new();
   Buf *pb = &g_procs;
-  buf_printf(pb, "static %s __sp_ffi_cb_%d(", ffi_c_type(k->ret_spec), tid);
+  buf_printf(pb, "static %s __sp_ffi_cb_%s(", ffi_c_type(k->ret_spec), tid);
   for (int i = 0; i < k->nargs; i++) {
     if (i) buf_puts(pb, ", ");
     buf_printf(pb, "%s _a%d", ffi_cb_arg_ctype(k->arg_specs[i]), i);
@@ -18528,8 +18565,8 @@ void emit_ffi_callback_arg(Compiler *c, int cbidx, int argnode, Buf *out) {
   if (is_method_obj_call(c, argnode)) {
     int mi = method_obj_target_mi(c, argnode);
     if (mi >= 0) {
-      int tid = emit_ffi_cb_trampoline(c, cbidx, mi);
-      buf_printf(out, "&__sp_ffi_cb_%d", tid);
+      const char *tid = emit_ffi_cb_trampoline(c, cbidx, mi);
+      buf_printf(out, "&__sp_ffi_cb_%s", tid);
       return;
     }
   }

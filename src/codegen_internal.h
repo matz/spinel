@@ -1030,10 +1030,19 @@ extern Buf g_proc_protos;
 extern Buf g_pd_protos;
 extern Buf g_pd_defs;
 void pd_emit_used(const char *const *texts, int ntexts, Buf *protos, Buf *defs);
-extern int g_proc_counter;
+/* The unit a function being emitted belongs to: its temps restart at _t1
+   (unit_begin resets g_tmp), and a file-scope symbol a method makes while it
+   is emitted (a proc literal's _proc_*, a fiber body's capture struct, a
+   Hash default proc's trampoline) is named by the unit and its count there
+   (uid_new), so an edit to one method renames nothing in another. The tag
+   is the function's own C name; a tag begun twice gets a _dN suffix, so two
+   units never share a name. */
+#define UNIT_TAG_MAX 192
+extern char g_unit_tag[UNIT_TAG_MAX];
+void unit_reset(void);                 /* at the start of a program's emission */
+void unit_begin(const char *tag);      /* a top-level function starts */
+const char *uid_new(void);             /* "<tag>_<n>": a file-scope symbol's name */
 extern int g_needs_proc_poly_argslot; /* any proc takes a TY_POLY arg via _sp_proc_poly_args */
-/* Fiber body functions accumulate here (similar to g_procs but void(*)(sp_Fiber*)). */
-extern int g_fiber_counter;
 
 /* Static regex-literal table: each distinct (source, flags) pair compiles once
    to an sp_re_pat_<i> global initialized in sp_tu_init(). */
@@ -1860,6 +1869,7 @@ int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b);
    object for that content, whose definition fzl_emit_defs writes. */
 void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len);
 int fzl_text_id(const char *t);
+const char *fzl_id_name(int id);
 void fzl_emit_defs(const char *t, Buf *out, int handles);
 /* Emit a Ruby string literal. len is the true byte count (may exceed strlen
    when the string contains embedded NUL bytes). */

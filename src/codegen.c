@@ -6865,9 +6865,9 @@ static size_t wb_value_never_young(const Buf *b, size_t q) {
   while (p < end && *p == ' ') p++;
   if (!strncmp(p, "NULL", 4)) p += 4;
   else if (!strncmp(p, "sp_box_nil()", 12)) p += 12;
-  else if (!strncmp(p, fzl, fn) && isdigit((unsigned char)p[fn])) {
+  else if (!strncmp(p, fzl, fn) && isxdigit((unsigned char)p[fn])) {
     const char *s = p + fn;
-    while (s < end && isdigit((unsigned char)*s)) s++;
+    while (s < end && (isxdigit((unsigned char)*s) || *s == '_')) s++;
     if (strncmp(s, data, dn)) return 0;
     p = s + dn;
   }
@@ -7198,6 +7198,8 @@ static void emit_rbs_cont_ret_wrapper(Compiler *c, Scope *s, const char *sig, Bu
   free(cn.p);
 }
 void emit_method(Compiler *c, Scope *s, Buf *b) {
+  { Buf nb; memset(&nb, 0, sizeof nb); emit_method_cname(c, s, &nb);
+    unit_begin(nb.p && !strncmp(nb.p, "sp_", 3) ? nb.p + 3 : nb.p ? nb.p : "method"); free(nb.p); }
   /* an IO handle has no slots for a program's instance variables */
   if (s->class_id >= 0 && !s->is_cmethod && io_family_class(c, s->class_id) &&
       scope_uses_ivars(c, (int)(s - c->scopes)))
@@ -8355,9 +8357,9 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
     return;
   }
 
-  int fid = ++g_fiber_counter;
-  char fname[48];
-  snprintf(fname, sizeof fname, "_fiber_body_%d", fid);
+  const char *fid = uid_new();
+  char fname[UNIT_TAG_MAX + 32];
+  snprintf(fname, sizeof fname, "_fiber_body_%s", fid);
 
   /* Block parameter names (all requireds). A Thread with multiple args passes
      them as one poly array in resumed_value, and each param binds to an element
@@ -8513,10 +8515,10 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
         buf_printf(&g_proc_protos, " c_%s;", caps.v[i]);
       }
     }
-    buf_printf(&g_proc_protos, " } _fib_cap_%d;\n", fid);
-    buf_printf(&g_proc_protos, "static void _fib_cap_scan_%d(void *p) {\n", fid);
+    buf_printf(&g_proc_protos, " } _fib_cap_%s;\n", fid);
+    buf_printf(&g_proc_protos, "static void _fib_cap_scan_%s(void *p) {\n", fid);
     buf_printf(&g_proc_protos, "  sp_gc_mark(p);\n");
-    buf_printf(&g_proc_protos, "  _fib_cap_%d *_c = (_fib_cap_%d *)p;\n", fid, fid);
+    buf_printf(&g_proc_protos, "  _fib_cap_%s *_c = (_fib_cap_%s *)p;\n", fid, fid);
     if (cap_self && self_boxed)
       buf_puts(&g_proc_protos, "  sp_mark_rbval(_c->self_val);\n");
     else if (cap_self && !self_is_value)
@@ -8618,7 +8620,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
 
   /* Unpack capture struct */
   if (ncap > 0 || cap_self || cap_cls) {
-    buf_printf(pb, "    _fib_cap_%d *_fc = (_fib_cap_%d *)_fb->user_data;\n", fid, fid);
+    buf_printf(pb, "    _fib_cap_%s *_fc = (_fib_cap_%s *)_fb->user_data;\n", fid, fid);
     if (cap_cls) buf_puts(pb, "    sp_Class _sp_cls = _fc->self_cls;\n    (void)_sp_cls;\n");
     if (cap_self && self_boxed) {
       const char *svar = sv_self ? sv_self : "self";
@@ -8899,7 +8901,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
       buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tf);
     }
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "_fib_cap_%d *_t%d = (_fib_cap_%d *)sp_gc_alloc(sizeof(_fib_cap_%d), NULL, _fib_cap_scan_%d);\n",
+    buf_printf(g_pre, "_fib_cap_%s *_t%d = (_fib_cap_%s *)sp_gc_alloc(sizeof(_fib_cap_%s), NULL, _fib_cap_scan_%s);\n",
                fid, tc, fid, fid, fid);
     /* Root the capture struct before it is handed off: for a generator it goes
        straight into sp_Enumerator_new_gen, whose enumerator allocation can
@@ -9892,7 +9894,7 @@ else if (orecv >= 0 && onm) {
     return;
   }
 
-  int pid = ++g_proc_counter;
+  const char *pid = uid_new();
   int ncap = caps.n;
   /* A block that references self and escapes into a real proc must capture self
      through _cap (#1436). A heap-object self is captured by pointer; a
@@ -9924,7 +9926,7 @@ else if (orecv >= 0 && onm) {
      :keyrest, :block. An anonymous rest/kwrest/block reports the CRuby
      placeholder name (:*, :**, :&); numbered params report as (:opt, :_N).
      Kinds and names are interned symbol ids. */
-  char meta_args[64];
+  char meta_args[2 * UNIT_TAG_MAX + 64];
   int meta_count = 0;
   {
     enum { PMETA_MAX = 64 };
@@ -10006,13 +10008,13 @@ else if (orecv >= 0 && onm) {
          kinds this particular proc uses */
       comp_sym_intern(c, "req");
       comp_sym_intern(c, "opt");
-      buf_printf(&g_procs, "static const sp_sym _proc_kinds_%d[] = {", pid);
+      buf_printf(&g_procs, "static const sp_sym _proc_kinds_%s[] = {", pid);
       for (int k = 0; k < meta_count; k++) buf_printf(&g_procs, "%s(sp_sym)%d", k ? ", " : "", comp_sym_intern(c, pkind[k]));
       buf_puts(&g_procs, "};\n");
-      buf_printf(&g_procs, "static const sp_sym _proc_names_%d[] = {", pid);
+      buf_printf(&g_procs, "static const sp_sym _proc_names_%s[] = {", pid);
       for (int k = 0; k < meta_count; k++) buf_printf(&g_procs, "%s(sp_sym)%d", k ? ", " : "", pname[k]);
       buf_puts(&g_procs, "};\n");
-      snprintf(meta_args, sizeof meta_args, "_proc_kinds_%d, _proc_names_%d", pid, pid);
+      snprintf(meta_args, sizeof meta_args, "_proc_kinds_%s, _proc_names_%s", pid, pid);
     }
     else snprintf(meta_args, sizeof meta_args, "NULL, NULL");
   }
@@ -10038,10 +10040,10 @@ else if (orecv >= 0 && onm) {
     if (cap_cls) buf_puts(&g_procs, " sp_Class __self_cls;");
     if (ret_proc) buf_puts(&g_procs, " sp_int _home;");  /* home method's proc-return id (sp_proc_home.id) */
     if (brk_blk) buf_puts(&g_procs, " sp_int _brkhome;");  /* the call site's break serial (sp_brk_push) */
-    buf_printf(&g_procs, " } _proc_cap_%d;\n", pid);
-    buf_printf(&g_procs, "static void _proc_cap_scan_%d(void *p) {\n", pid);
+    buf_printf(&g_procs, " } _proc_cap_%s;\n", pid);
+    buf_printf(&g_procs, "static void _proc_cap_scan_%s(void *p) {\n", pid);
     buf_printf(&g_procs, "  sp_gc_mark(p);\n");
-    buf_printf(&g_procs, "  _proc_cap_%d *_c = (_proc_cap_%d *)p;\n", pid, pid);
+    buf_printf(&g_procs, "  _proc_cap_%s *_c = (_proc_cap_%s *)p;\n", pid, pid);
     for (int i = 0; i < ncap; i++) {
       /* A BYREF parameter's cell is the CALLER's slot -- the address of a
          stack local, or a cell the caller already roots -- and not a GC
@@ -10069,7 +10071,7 @@ else if (orecv >= 0 && onm) {
     buf_puts(&g_procs, "}\n");
   }
 
-  buf_printf(&g_proc_protos, "static sp_int _proc_%d(void *_cap, sp_int argc, sp_int *args);\n", pid);
+  buf_printf(&g_proc_protos, "static sp_int _proc_%s(void *_cap, sp_int argc, sp_int *args);\n", pid);
 
   /* Save every emission global: the proc body is a fresh function context. */
   Buf *sv_pre = g_pre; int sv_indent = g_indent, sv_nren = g_nren, sv_block = g_block_id;
@@ -10089,8 +10091,8 @@ else if (orecv >= 0 && onm) {
   g_exc_frame_depth = 0; g_method_pr_exc_depth = 0; g_rescue_save_depth = 0;
   const char *sv_fn_prl = g_fn_pr_label, *sv_fn_prv = g_fn_pr_var; TyKind sv_fn_rt = g_fn_ret_type; int sv_fn_ro = g_fn_ret_oint;
   g_fn_pr_label = NULL; g_fn_pr_var = NULL; g_fn_ret_type = ret; g_fn_ret_oint = 0;
-  char home_acc[48] = "";
-  if (ret_proc) { snprintf(home_acc, sizeof home_acc, "((_proc_cap_%d *)_cap)->_home", pid); g_proc_return_home = home_acc; }
+  char home_acc[UNIT_TAG_MAX + 48] = "";
+  if (ret_proc) { snprintf(home_acc, sizeof home_acc, "((_proc_cap_%s *)_cap)->_home", pid); g_proc_return_home = home_acc; }
   else g_proc_return_home = NULL;
   /* a non-lambda proc written at TOP LEVEL: its `return` is a top-level
      return, which ends the script rather than just leaving the proc (#3663) */
@@ -10131,11 +10133,11 @@ else if (orecv >= 0 && onm) {
   g_proc_body_kind = is_lambda ? 1 : ((brk_proc || brk_blk) ? 2 : 0);
   /* serial -1 never matches a live scope: sp_brk_throw raises the CRuby
      LocalJumpError after evaluating the break value */
-  char brk_acc[48] = "";
-  if (brk_blk) snprintf(brk_acc, sizeof brk_acc, "((_proc_cap_%d *)_cap)->_brkhome", pid);
+  char brk_acc[UNIT_TAG_MAX + 48] = "";
+  if (brk_blk) snprintf(brk_acc, sizeof brk_acc, "((_proc_cap_%s *)_cap)->_brkhome", pid);
   g_proc_brk_home = brk_blk ? brk_acc : brk_proc ? "-1" : NULL;
-  char cap_struct_name[32] = "";
-  if (ncap > 0) { snprintf(cap_struct_name, sizeof cap_struct_name, "_proc_cap_%d", pid); g_cap_struct = cap_struct_name; g_cap_names = &caps; }
+  char cap_struct_name[UNIT_TAG_MAX + 32] = "";
+  if (ncap > 0) { snprintf(cap_struct_name, sizeof cap_struct_name, "_proc_cap_%s", pid); g_cap_struct = cap_struct_name; g_cap_names = &caps; }
   else { g_cap_struct = NULL; g_cap_names = NULL; }
 
   /* Build the function into a LOCAL buffer and append it to g_procs only when
@@ -10149,7 +10151,7 @@ else if (orecv >= 0 && onm) {
   g_c_ret_void = 0;   /* returns sp_int, whatever the enclosing body returns */
   Buf proc_body_buf; memset(&proc_body_buf, 0, sizeof proc_body_buf);
   Buf *pb = &proc_body_buf;
-  buf_printf(pb, "static sp_int _proc_%d(void *_cap, sp_int argc, sp_int *args) {\n", pid);
+  buf_printf(pb, "static sp_int _proc_%s(void *_cap, sp_int argc, sp_int *args) {\n", pid);
   buf_puts(pb, "    SP_GC_SAVE();\n");
   size_t proc_frame_ins = pb->len;
   if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
@@ -10174,19 +10176,19 @@ else if (orecv >= 0 && onm) {
   /* Captured instance self, read back from _cap (#1436). (void) guards the
      over-approximating use-of-self detection. */
   if (cap_self && self_is_value) {
-    buf_printf(pb, "    sp_%s self = ((_proc_cap_%d *)_cap)->__self_val;\n", self_cls, pid);
+    buf_printf(pb, "    sp_%s self = ((_proc_cap_%s *)_cap)->__self_val;\n", self_cls, pid);
     buf_puts(pb, "    (void)self;\n");
   }
   else if (self_boxed) {
-    buf_printf(pb, "    sp_RbVal self = ((_proc_cap_%d *)_cap)->__self_rb;\n", pid);
+    buf_printf(pb, "    sp_RbVal self = ((_proc_cap_%s *)_cap)->__self_rb;\n", pid);
     buf_puts(pb, "    (void)self;\n");
   }
   else if (cap_self) {
-    buf_printf(pb, "    sp_%s *self = (sp_%s *)((_proc_cap_%d *)_cap)->__self;\n", self_cls, self_cls, pid);
+    buf_printf(pb, "    sp_%s *self = (sp_%s *)((_proc_cap_%s *)_cap)->__self;\n", self_cls, self_cls, pid);
     buf_puts(pb, "    (void)self;\n");
   }
   if (cap_cls) {
-    buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%d *)_cap)->__self_cls;\n", pid);
+    buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%s *)_cap)->__self_cls;\n", pid);
     buf_puts(pb, "    (void)_sp_cls;\n");
   }
   emit_proc_ie_self(c, ie_cls, rself, body, pb);
@@ -10714,7 +10716,7 @@ else if (orecv >= 0 && onm) {
 
   if (ie_mark >= 0 || rself) buf_puts(b, "({ sp_Proc *_pie = ");
   if (ncap == 0 && !cap_self && !cap_cls && !ret_proc && !brk_blk) {
-    buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, NULL, NULL, %d, %s, %d, %s)",
+    buf_printf(b, "sp_proc_new_meta((void *)_proc_%s, NULL, NULL, %d, %s, %d, %s)",
                pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
   else {
@@ -10722,12 +10724,12 @@ else if (orecv >= 0 && onm) {
        (it shares the enclosing cells by pointer), then box the proc. */
     if (g_pre) {
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "_proc_cap_%d *_capv_%d = (_proc_cap_%d *)sp_gc_alloc(sizeof(_proc_cap_%d), NULL, _proc_cap_scan_%d);\n", pid, pid, pid, pid, pid);
+      buf_printf(g_pre, "_proc_cap_%s *_capv_%s = (_proc_cap_%s *)sp_gc_alloc(sizeof(_proc_cap_%s), NULL, _proc_cap_scan_%s);\n", pid, pid, pid, pid, pid);
       /* Root the capture struct: sp_proc_new_meta allocates the proc box and
          can fire a GC that would otherwise sweep this still-unreferenced
          struct before the box adopts it. */
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "SP_GC_ROOT(_capv_%d);\n", pid);
+      buf_printf(g_pre, "SP_GC_ROOT(_capv_%s);\n", pid);
       /* The cell pointer, as named where this proc is BUILT. Inside another
          proc that captures the same name, no `_cell_<n>` is in scope -- the
          cell arrived through that proc's own capture struct, and the nested
@@ -10736,10 +10738,10 @@ else if (orecv >= 0 && onm) {
         /* no shadow publish here either: see the fiber/thread fill above */
         emit_indent(g_pre, g_indent);
         if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
-          buf_printf(g_pre, "_capv_%d->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
+          buf_printf(g_pre, "_capv_%s->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
         else
           /* as the sibling site above, minus a shim's shadow rename: it names no cell */
-          buf_printf(g_pre, "_capv_%d->c_%s = _cell_%s;\n", pid, caps.v[i], rename_local_cell(caps.v[i]));
+          buf_printf(g_pre, "_capv_%s->c_%s = _cell_%s;\n", pid, caps.v[i], rename_local_cell(caps.v[i]));
       }
       /* Capture the enclosing instance self: by value for a value-type class
          (deref if the enclosing method holds self as a pointer, e.g. an
@@ -10747,10 +10749,10 @@ else if (orecv >= 0 && onm) {
       if (cap_self && self_is_value) {
         int self_ptr = g_self_deref && sp_streq(g_self_deref, "->");
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "_capv_%d->__self_val = %s%s;\n", pid, self_ptr ? "*" : "", sv_self ? sv_self : "self");
+        buf_printf(g_pre, "_capv_%s->__self_val = %s%s;\n", pid, self_ptr ? "*" : "", sv_self ? sv_self : "self");
       }
-      else if (self_boxed) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->__self_rb = %s;\n", pid, sv_self ? sv_self : "self"); }
-      else if (cap_self) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
+      else if (self_boxed) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__self_rb = %s;\n", pid, sv_self ? sv_self : "self"); }
+      else if (cap_self) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
       /* Capture the home method's proc-return frame so the proc's `return`
          longjmps to it (the creating method declared `_pr`). */
       /* the receiving class, as the enclosing class method knows it: forwarded
@@ -10758,14 +10760,14 @@ else if (orecv >= 0 && onm) {
       if (cap_cls) {
         emit_indent(g_pre, g_indent);
         if (g_cap_struct)
-          buf_printf(g_pre, "_capv_%d->__self_cls = ((%s *)_cap)->__self_cls;\n", pid, g_cap_struct);
+          buf_printf(g_pre, "_capv_%s->__self_cls = ((%s *)_cap)->__self_cls;\n", pid, g_cap_struct);
         else
-          buf_printf(g_pre, "_capv_%d->__self_cls = %s;\n", pid, bs->yields && sv_self ? sv_self : "_sp_cls");
+          buf_printf(g_pre, "_capv_%s->__self_cls = %s;\n", pid, bs->yields && sv_self ? sv_self : "_sp_cls");
       }
-      if (ret_proc) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->_home = %s;\n", pid, in_home_proc ? g_proc_return_home : "_h.id"); }
-      if (brk_blk) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->_brkhome = %s;\n", pid, sv_bser); }
+      if (ret_proc) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->_home = %s;\n", pid, in_home_proc ? g_proc_return_home : "_h.id"); }
+      if (brk_blk) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->_brkhome = %s;\n", pid, sv_bser); }
     }
-    buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, _capv_%d, _proc_cap_scan_%d, %d, %s, %d, %s)",
+    buf_printf(b, "sp_proc_new_meta((void *)_proc_%s, _capv_%s, _proc_cap_scan_%s, %d, %s, %d, %s)",
                pid, pid, pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
   if (ie_mark >= 0 || rself) buf_printf(b, "; _pie->ie_cls = %d; _pie; })", ie_mark >= 0 ? ie_mark + 1 : -rself);
@@ -11558,6 +11560,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   /* Native (C-backed) class: constructor + methods live in the package; nothing
      is generated here (see the native_method externs + .new emission). */
   if (ci->is_native_class) return;
+  { char nt_[UNIT_TAG_MAX]; snprintf(nt_, sizeof nt_, "new_%s", ci->c_name ? ci->c_name : ci->name); unit_begin(nt_); }
   int cid = comp_class_index(c, ci->name);
   if (ci->is_struct) {
     int sinit_def = cid;
@@ -20689,6 +20692,24 @@ static void prepare_obj_cmp_dispatch(Compiler *c) {
   }
 }
 
+/* The dispatch functions over the program's object classes, as one unit of
+   their own (unit_begin): a temp or name in them does not count on from the
+   class constructors before them. */
+static void emit_obj_dispatchers(Compiler *c, Buf *body) {
+  unit_begin("dispatch");
+  if (g_uses_marshal) emit_marshal_dispatch(c, body);
+  if (g_emit_obj_dispatch) emit_obj_inspect_dispatch(c, body);
+  emit_obj_to_hash_dispatch(c, body);
+  emit_obj_to_json_dispatch(c, body);
+  emit_obj_to_h_dispatch(c, body);
+  emit_obj_struct_values_dispatch(c, body);
+  emit_cls_answers_dispatch(c, body);
+  emit_obj_deconstruct_dispatch(c, body);
+  emit_obj_is_data(c, body);
+  emit_obj_to_a_dispatch(c, body);
+  emit_obj_to_ary_dispatch(c, body);
+  emit_obj_with_dispatch(c, body);
+}
 char *codegen_program(const NodeTable *nt) {
   char *isa_ext = NULL;  /* sp_poly_is_a's class-value arms, and where they go */
   size_t isa_ext_at = 0;
@@ -20800,7 +20821,7 @@ char *codegen_program(const NodeTable *nt) {
   memset(&g_procs, 0, sizeof g_procs);
   memset(&g_proc_protos, 0, sizeof g_proc_protos);
   if (g_pool_fwd) memset(g_pool_fwd, 0, (size_t)g_pool_fwd_n);
-  g_proc_counter = 0;
+  unit_reset();
   g_needs_at_exit = 0;
   g_re_count = 0;
   buf_puts(&b, "/* Generated by Spinel AOT compiler */\n");
@@ -21294,18 +21315,7 @@ char *codegen_program(const NodeTable *nt) {
     if (!is_builtin_reopen(c->classes[i].name))
       EMIT_COLLECT_UNIT(emit_class_new(c, &c->classes[i], body));
   /* user-object Marshal dispatchers (after every class struct + pool define) */
-  if (g_uses_marshal) emit_marshal_dispatch(c, body);
-  if (g_emit_obj_dispatch) emit_obj_inspect_dispatch(c, body);
-  emit_obj_to_hash_dispatch(c, body);
-  emit_obj_to_json_dispatch(c, body);
-  emit_obj_to_h_dispatch(c, body);
-  emit_obj_struct_values_dispatch(c, body);
-  emit_cls_answers_dispatch(c, body);
-  emit_obj_deconstruct_dispatch(c, body);
-  emit_obj_is_data(c, body);
-  emit_obj_to_a_dispatch(c, body);
-  emit_obj_to_ary_dispatch(c, body);
-  emit_obj_with_dispatch(c, body);
+  emit_obj_dispatchers(c, body);
   for (int s = 1; s < c->nscopes; s++) {
     if (c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue;
     int ndiag0 = g_ndiags, ndefer0 = g_stmt_deferrals;
@@ -21359,6 +21369,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   /* Comparable cmp-hook dispatcher (after the user `<=>` definitions it calls). */
   emit_synth_line_marker(body);
+  unit_begin("dispatch2");
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);
   if (c->gen_comparable) emit_obj_comparable_dispatch(c, body);
   if (g_has_user_binop) emit_user_binop_dispatch(c, body);
@@ -21387,6 +21398,7 @@ char *codegen_program(const NodeTable *nt) {
         if (!sty || !sp_streq(sty, "PostExecutionNode")) continue;
         int stmts = nt_ref(c->nt, tbody[k], "statements");
         end_count++;
+        { char et[32]; snprintf(et, sizeof et, "end_%d", end_count); unit_begin(et); }
         buf_printf(body, "static void sp_end_fn_%d(void) { SP_GC_SAVE();\n", end_count);
         size_t end_frame_ins = body->len;
         EMIT_COLLECT_UNIT(emit_stmts(c, stmts, body, 1));
@@ -21396,6 +21408,7 @@ char *codegen_program(const NodeTable *nt) {
     }
   }
 
+  unit_begin("main");
   size_t main_frame_ins = 0, main_open = 0;
   int sv_main_cv = g_c_ret_void;
   if (g_ext_init_name) {

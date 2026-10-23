@@ -385,11 +385,11 @@ int emit_op_method_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
   if (target >= 0) {
     Scope *tm = &c->scopes[target];
     int np = tm->nparams;
-    int tid = ++g_proc_counter;
+    const char *tid = uid_new();
     /* a bound __bam wrapper carries param[0] in the Method's self slot:
        proc arg k maps to param[k + shift] */
     int shift = method_call_param_shift(c, mn, target);
-    char mtpn[40]; snprintf(mtpn, sizeof mtpn, "_mtp_%d", tid);
+    char mtpn[UNIT_TAG_MAX + 16]; snprintf(mtpn, sizeof mtpn, "_mtp_%s", tid);
     emit_method_tramp_fn(c, tm, shift, mtpn, 0, method_node_recv_class(c, recv, tm->class_id), NULL, NULL);
     /* arity: required count (minus the self-carried wrapper param),
        negative when the signature is variadic (the Scope folds
@@ -403,7 +403,7 @@ int emit_op_method_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, "({ void *_t%d = (void *)(", tcap);
       emit_expr(c, recv, b);
       buf_printf(b, "); SP_GC_ROOT(_t%d);", tcap);
-      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%d, _t%d, sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL); })",
+      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%s, _t%d, sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL); })",
                  tid, tcap, m_arity); }
     return 1;
   }

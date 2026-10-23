@@ -1356,6 +1356,10 @@ typedef struct {
   int *bi_base_cnt;
   char **bi_base_key;
   int bi_base_cap;
+  /* a parsed program node's base: the nearest def, class or module it is in
+     (itself, for one of those), or -1 at the top level (comp_node_pbases) */
+  int *node_pbase; int node_pbase_n;
+  char **pbase_keys; int *pbase_key_cnt; int pbase_key_slots, pbase_key_n;   /* key -> times seen */
   /* --share-strings (SPINEL_SHARE_STRINGS): a mutable String is the shared
      handle unless the analysis proves it local (repr_str_shares, #6765),
      and the share classes that rule reads (share.h), rebuilt as the
@@ -1497,6 +1501,7 @@ int name_list_has(char **list, int n, const char *name);
 /* Resize per-node arrays (ntype/nscope) after the node table grew. */
 void comp_grow_node_arrays(Compiler *c);
 int comp_node_ord(Compiler *c, int id, int *builtin);
+void comp_node_pbases(Compiler *c);   /* the parsed program nodes' bases (comp_new) */
 const char *comp_node_tag(Compiler *c, int id);
 
 /* If `id` is a ternary `cond ? A : B` -- an IfNode whose then- and else-clauses

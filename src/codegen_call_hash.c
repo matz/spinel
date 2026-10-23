@@ -136,7 +136,7 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
   TyKind rt = x->rt;
   const char *hn = ty_hash_cname(rt);
   TyKind kt = ty_hash_key(rt), vt = ty_hash_val(rt);
-  int pn = ++g_proc_counter;
+  const char *pn = uid_new();
   /* The key is read from the proc's boxed side-channel, which every caller
      publishes, not from the sp_int slot: the proc can be called with a key
      of any class, and the slot's bits read as a `const char *` for a
@@ -152,8 +152,8 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
                      : (kt == TY_STRING) ? "SP_TAG_STR"
                      : (kt == TY_INT) ? "SP_TAG_INT" : NULL;
   g_needs_proc_poly_argslot = 1;
-  buf_printf(&g_proc_protos, "static sp_int _hashproc_%d(void *cap, sp_int argc, sp_int *args);\n", pn);
-  buf_printf(&g_procs, "static sp_int _hashproc_%d(void *cap, sp_int argc, sp_int *args) {\n", pn);
+  buf_printf(&g_proc_protos, "static sp_int _hashproc_%s(void *cap, sp_int argc, sp_int *args);\n", pn);
+  buf_printf(&g_procs, "static sp_int _hashproc_%s(void *cap, sp_int argc, sp_int *args) {\n", pn);
   /* the hash proc is a lambda: exactly one key, as CRuby's raises --
      the old `argc < 1 -> return 0` left the return slot holding the
      previous call's value */
@@ -180,7 +180,7 @@ int emit_op_hash_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
       emit_boxed_text(c, vt, _ge, &g_procs);
     } }
   buf_puts(&g_procs, ";\n  return 0;\n}\n");
-  buf_printf(b, "sp_proc_new_meta((void *)_hashproc_%d, (void *)(", pn);
+  buf_printf(b, "sp_proc_new_meta((void *)_hashproc_%s, (void *)(", pn);
   emit_expr(c, recv, b);
   /* CRuby's Hash#to_proc is a lambda: lambda? answers true and a
      composed call enforces its 1-arity instead of reading a stale slot */

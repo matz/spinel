@@ -814,6 +814,80 @@ int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int dep
 }
 int  g_tmp = 0;
 int  g_one_held = 0;
+
+/* The unit tag and the names it hands out (codegen_internal.h). */
+char g_unit_tag[UNIT_TAG_MAX] = "prog";
+static int unit_local;                 /* uid_new's count in the current unit */
+static char **unit_tags; static int unit_tags_n, unit_tags_cap;   /* every tag begun */
+static int *unit_tag_slot; static int unit_tag_slots;             /* open addressing over it */
+static char **uid_names; static int uid_n, uid_cap;
+
+static unsigned unit_fnv(const char *s) {
+  unsigned h = 2166136261u;
+  for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+  return h;
+}
+static int unit_tag_find(const char *t) {
+  if (!unit_tag_slots) return -1;
+  for (int i = (int)(unit_fnv(t) & (unsigned)(unit_tag_slots - 1)); unit_tag_slot[i] >= 0; i = (i + 1) & (unit_tag_slots - 1))
+    if (sp_streq(unit_tags[unit_tag_slot[i]], t)) return unit_tag_slot[i];
+  return -1;
+}
+static void unit_tag_add(const char *t) {
+  if ((unit_tags_n + 1) * 2 > unit_tag_slots) {
+    int ns = unit_tag_slots ? unit_tag_slots * 2 : 256;
+    free(unit_tag_slot);
+    unit_tag_slot = malloc(sizeof(int) * (size_t)ns);
+    for (int i = 0; i < ns; i++) unit_tag_slot[i] = -1;
+    unit_tag_slots = ns;
+    for (int k = 0; k < unit_tags_n; k++) {
+      int i = (int)(unit_fnv(unit_tags[k]) & (unsigned)(ns - 1));
+      while (unit_tag_slot[i] >= 0) i = (i + 1) & (ns - 1);
+      unit_tag_slot[i] = k;
+    }
+  }
+  if (unit_tags_n == unit_tags_cap) {
+    unit_tags_cap = unit_tags_cap ? unit_tags_cap * 2 : 256;
+    unit_tags = realloc(unit_tags, sizeof(char *) * (size_t)unit_tags_cap);
+  }
+  unit_tags[unit_tags_n] = strdup(t);
+  int i = (int)(unit_fnv(t) & (unsigned)(unit_tag_slots - 1));
+  while (unit_tag_slot[i] >= 0) i = (i + 1) & (unit_tag_slots - 1);
+  unit_tag_slot[i] = unit_tags_n++;
+}
+void unit_reset(void) {
+  for (int k = 0; k < unit_tags_n; k++) free(unit_tags[k]);
+  free(unit_tags); unit_tags = NULL; unit_tags_n = unit_tags_cap = 0;
+  free(unit_tag_slot); unit_tag_slot = NULL; unit_tag_slots = 0;
+  for (int k = 0; k < uid_n; k++) free(uid_names[k]);
+  free(uid_names); uid_names = NULL; uid_n = uid_cap = 0;
+  unit_begin("prog");
+}
+void unit_begin(const char *tag) {
+  char t[UNIT_TAG_MAX];
+  size_t o = 0;
+  for (const char *p = tag; *p && o < sizeof t - 12; p++) {
+    char ch = *p;
+    int ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+    t[o++] = ok ? ch : '_';
+  }
+  t[o] = 0;
+  for (int d = 1; unit_tag_find(t) >= 0; d++) snprintf(t + o, sizeof t - o, "_d%d", d);
+  unit_tag_add(t);
+  snprintf(g_unit_tag, sizeof g_unit_tag, "%s", t);
+  unit_local = 0;
+  g_tmp = 0;
+}
+const char *uid_new(void) {
+  char nm[UNIT_TAG_MAX + 16];
+  snprintf(nm, sizeof nm, "%s_%d", g_unit_tag, ++unit_local);
+  if (uid_n == uid_cap) {
+    uid_cap = uid_cap ? uid_cap * 2 : 256;
+    uid_names = realloc(uid_names, sizeof(char *) * (size_t)uid_cap);
+  }
+  uid_names[uid_n] = strdup(nm);
+  return uid_names[uid_n++];
+}
 /* A rename-table slot keeps its Buf when the table is cut back below it,
    and the next entry there rewrites it (buf_setf), so a name of any length
    fits and no site that cuts g_nren back has anything to free. */
@@ -1424,10 +1498,7 @@ Buf g_procs;
 Buf g_proc_protos;
 Buf g_pd_protos;
 Buf g_pd_defs;
-int g_proc_counter = 0;
 int g_needs_proc_poly_argslot = 0; /* any proc takes a TY_POLY arg via _sp_proc_poly_args */
-/* Fiber body functions accumulate here (similar to g_procs but void(*)(sp_Fiber*)). */
-int g_fiber_counter = 0;
 char **g_re_src; int *g_re_flg; int g_re_count, g_re_cap;
 int re_engine_flags(int pf) {
   int f = 0;
@@ -5641,11 +5712,37 @@ void emit_c_escaped(Buf *b, const char *s) {
    A site emits a reference; the definitions are kept here, keyed by the
    escaped text (emit_c_escaped_n and the interpolation fold escape the same
    way), and fzl_emit_defs writes the ones the finished unit still names. */
-typedef struct { char *esc; size_t esc_len, raw_len; unsigned hash; } FzlLit;
+typedef struct { char *esc; size_t esc_len, raw_len; unsigned hash; char name[24]; } FzlLit;
 static FzlLit *g_fzl;
 static int g_fzl_n, g_fzl_cap;
 static int *g_fzl_slot;            /* open addressing over g_fzl, -1 empty */
 static int g_fzl_slots;
+
+/* A literal is named by its content's hash (`_fzl_1a2b3c4d`), not by the
+   order it was first met in: a literal added to one method then renames
+   none in another. Two contents
+   with one hash are told apart by `_<n>`, in the order they were met. */
+static void fzl_name(FzlLit *f, int dup) {
+  if (dup) snprintf(f->name, sizeof f->name, "%08x_%d", f->hash, dup);
+  else snprintf(f->name, sizeof f->name, "%08x", f->hash);
+}
+/* The literal a `_fzl_<name>` in the text names, or -1. */
+static int fzl_find_name(const char *nm, size_t n) {
+  if (n < 8) return -1;
+  unsigned h = 0;
+  for (size_t i = 0; i < 8; i++) {
+    char ch = nm[i];
+    int d = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : -1;
+    if (d < 0) return -1;
+    h = (h << 4) | (unsigned)d;
+  }
+  if (!g_fzl_slots) return -1;
+  for (int i = (int)(h & (unsigned)(g_fzl_slots - 1)); g_fzl_slot[i] >= 0; i = (i + 1) & (g_fzl_slots - 1)) {
+    FzlLit *f = &g_fzl[g_fzl_slot[i]];
+    if (f->hash == h && strlen(f->name) == n && !memcmp(f->name, nm, n)) return g_fzl_slot[i];
+  }
+  return -1;
+}
 
 static unsigned fzl_hash(const char *s, size_t n) {
   unsigned h = 2166136261u;
@@ -5680,6 +5777,10 @@ void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len
   }
   int id = g_fzl_slot[i];
   if (id < 0) {
+    /* another content with this hash, met before: this one's name gets a suffix */
+    int dup = 0;
+    for (int j = (int)(h & (unsigned)(g_fzl_slots - 1)); g_fzl_slot[j] >= 0; j = (j + 1) & (g_fzl_slots - 1))
+      if (g_fzl[g_fzl_slot[j]].hash == h) dup++;
     if (g_fzl_n == g_fzl_cap) {
       g_fzl_cap = g_fzl_cap ? g_fzl_cap * 2 : 256;
       g_fzl = realloc(g_fzl, sizeof *g_fzl * (size_t)g_fzl_cap);
@@ -5689,19 +5790,28 @@ void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len
     memcpy(g_fzl[id].esc, esc, esc_len);
     g_fzl[id].esc[esc_len] = 0;
     g_fzl[id].esc_len = esc_len; g_fzl[id].raw_len = raw_len; g_fzl[id].hash = h;
+    fzl_name(&g_fzl[id], dup);
     g_fzl_slot[i] = id;
   }
-  buf_printf(b, "((char *)_fzl_%d.d)", id);
+  buf_printf(b, "((char *)_fzl_%s.d)", g_fzl[id].name);
 }
 /* The id of the literal a text emit_frozen_literal wrote names, as it
    stands or read through SP_STR_B; -1 for any other text */
 int fzl_text_id(const char *t) {
-  int id = -1, n = 0;
+  static const char lit[] = "((char *)_fzl_", sb[] = "SP_STR_B(";
   if (!t) return -1;
-  if (sscanf(t, "((char *)_fzl_%d.d)%n", &id, &n) == 1 && n > 0 && t[n] == 0) return id;
-  n = 0;
-  if (sscanf(t, "SP_STR_B(((char *)_fzl_%d.d))%n", &id, &n) == 1 && n > 0 && t[n] == 0) return id;
-  return -1;
+  int wrap = strncmp(t, sb, sizeof sb - 1) == 0;
+  const char *p = t + (wrap ? sizeof sb - 1 : 0);
+  if (strncmp(p, lit, sizeof lit - 1) != 0) return -1;
+  p += sizeof lit - 1;
+  const char *q = p;
+  while (isxdigit((unsigned char)*q) || *q == '_') q++;
+  if (strcmp(q, wrap ? ".d))" : ".d)") != 0) return -1;
+  return fzl_find_name(p, (size_t)(q - p));
+}
+/* The name fzl_text_id's literal goes by after `_fzl_` */
+const char *fzl_id_name(int id) {
+  return id >= 0 && id < g_fzl_n ? g_fzl[id].name : "";
 }
 /* --repr-check, with handles: a frozen literal built into a handle by a
    constructor that copies it. sp_String_new_shared answers the literal's own
@@ -5721,8 +5831,10 @@ static void fzl_check_handles(const char *t) {
     size_t n = (size_t)(e - s);
     if (strncmp(s, "sp_String_new", 13) != 0 || fzl_ctor_is(s, n, "sp_String_new_shared") ||
         fzl_ctor_is(s, n, "sp_String_new_unfrozen")) continue;
-    fprintf(stderr, "repr-check: conflict: frozen literal _fzl_%ld is built into a new handle by %.*s\n",
-            strtol(p + sizeof lit - 1, NULL, 10), (int)n, s);
+    const char *nm = p + sizeof lit - 1, *ne = nm;
+    while (isxdigit((unsigned char)*ne) || *ne == '_') ne++;
+    fprintf(stderr, "repr-check: conflict: frozen literal _fzl_%.*s is built into a new handle by %.*s\n",
+            (int)(ne - nm), nm, (int)n, s);
   }
 }
 /* The definitions of the literals the unit `t` names, in the order they were
@@ -5736,24 +5848,25 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
   char *used = calloc((size_t)g_fzl_n + 1, 1);
   for (const char *p = t; p && (p = strstr(p, "_fzl_")); ) {
     p += 5;
-    if (!isdigit((unsigned char)*p)) continue;
-    long k = 0;
-    while (isdigit((unsigned char)*p)) k = k * 10 + (*p++ - '0');
-    if (k < g_fzl_n) used[k] = 1;
+    const char *q = p;
+    while (isxdigit((unsigned char)*q) || *q == '_') q++;
+    int k = fzl_find_name(p, (size_t)(q - p));
+    if (k >= 0) used[k] = 1;
+    p = q;
   }
   for (int k = 0; k < g_fzl_n; k++) {
     FzlLit *f = &g_fzl[k];
     if (used[k] && handles)
-      buf_printf(out, "static sp_StringLiteral _fzl_%d_slot = { NULL, NULL };\n"
-                      "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%d = "
-                      "{ { (sp_str_hdr *)((char *)&_fzl_%d_slot + 1), %zu%s, %zu, 0 }, 0xf1, \"%s\" };\n",
-                 k, f->raw_len + 1, k, k, f->raw_len + 1,
+      buf_printf(out, "static sp_StringLiteral _fzl_%s_slot = { NULL, NULL };\n"
+                      "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
+                      "{ { (sp_str_hdr *)((char *)&_fzl_%s_slot + 1), %zu%s, %zu, 0 }, 0xf1, \"%s\" };\n",
+                 f->name, f->raw_len + 1, f->name, f->name, f->raw_len + 1,
                  fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
                  f->raw_len, f->esc);
     else if (used[k])
-      buf_printf(out, "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%d = "
+      buf_printf(out, "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
                       "{ { NULL, %zu%s, %zu, 0 }, 0xf1, \"%s\" };\n",
-                 f->raw_len + 1, k, f->raw_len + 1,
+                 f->raw_len + 1, f->name, f->raw_len + 1,
                  fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
                  f->raw_len, f->esc);
     free(f->esc);

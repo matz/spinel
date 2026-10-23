@@ -2611,7 +2611,7 @@ char *block_param_invent_name(Compiler *c, const char *written, int blk) {
   const NodeTable *nt = c->nt;
   /* `x__bp12` for a program block, `x__bqmin_by_12` for a builtin's */
   const char *tag = comp_node_tag(c, blk);
-  const char *p = tag[0] == 'q' ? "" : "p";
+  const char *p = tag[0] == 'q' || tag[0] == 'p' ? "" : "p";
   size_t n = strlen(written) + strlen(tag) + 32;   /* "__bp", "_<k>" */
   char *buf = malloc(n);
   if (!buf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

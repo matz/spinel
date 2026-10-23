@@ -24,7 +24,7 @@ class Date
       internal_civil unless @year
       return fast_ymd.force_encoding(Encoding::US_ASCII)
     end
-    fmt = format.to_str
+    fmt = Date.__send__(:string_value, format)
     if fmt == YMD_FMT
       internal_civil unless @year
       return fast_ymd.force_encoding(Encoding::US_ASCII)

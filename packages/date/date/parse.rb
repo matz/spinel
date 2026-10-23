@@ -33,11 +33,8 @@ class Date
     #
     # Related: Date.rfc3339 (returns a \Date object).
     def _rfc3339(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -100,11 +97,8 @@ class Date
     #
     # Related: Date.httpdate (returns a \Date object).
     def _httpdate(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -182,11 +176,8 @@ class Date
     #
     # Related: Date.rfc2822 (returns a \Date object).
     def _rfc2822(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -263,11 +254,8 @@ class Date
     #
     # Related: Date.xmlschema (returns a \Date object).
     def _xmlschema(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -325,11 +313,8 @@ class Date
     #
     # Related: Date.iso8601 (returns a \Date object).
     def _iso8601(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -381,11 +366,8 @@ class Date
     #
     # Related: Date.jisx0301 (returns a \Date object).
     def _jisx0301(string, limit: 128)
-      unless String === string
-        raise TypeError if string.is_a?(Symbol)
-        return {} if string.nil?
-        string = string.to_str
-      end
+      return {} if string.nil?
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
 
@@ -454,10 +436,7 @@ class Date
     #
     # Related: Date.parse(returns a \Date object).
     def _parse(string, comp = true, limit: 128)
-      unless String === string
-        raise TypeError, "no implicit conversion of #{string.class} into String" if string.is_a?(Symbol) || string.nil?
-        string = string.to_str
-      end
+      string = string_value(string)
       return {} if string.empty?
       raise ArgumentError, "string length (#{string.length}) exceeds limit (#{limit})" if limit && string.length > limit
 
@@ -817,10 +796,14 @@ class Date
       raise ArgumentError, "string length (#{str.length}) exceeds limit (#{limit})" if limit && str.length > limit
     end
 
-    def parse_to_str(obj)
-      return nil if obj.nil?
-      raise TypeError, "no implicit conversion of #{obj.class} into String" if obj.is_a?(Symbol)
-      String === obj ? obj : obj.to_str
+    # CRuby's StringValue: a String, or what to_str gives, or a TypeError.
+    def string_value(obj)
+      case obj
+      when String then return obj
+      when nil, true, false then raise TypeError, "no implicit conversion of #{obj.inspect} into String"
+      end
+      return obj.to_str if obj.respond_to?(:to_str)
+      raise TypeError, "no implicit conversion of #{obj.class} into String"
     end
 
     def parse_zone_and_offset(zone_str, hash)

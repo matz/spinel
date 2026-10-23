@@ -18,8 +18,8 @@ class Date
     #
     # Related: Date.strptime (returns a \Date object).
     def _strptime(string, format = '%F')
-      string = String === string ? string : string.to_str
-      format = String === format ? format : format.to_str
+      string = string_value(string)
+      format = string_value(format)
       if format == '%F' || format == '%Y-%m-%d'
         return internal_strptime_ymd(string)
       end
@@ -64,7 +64,7 @@ class Date
     #
     # Related: Date._strptime (returns a hash).
     def strptime(string = JULIAN_EPOCH_DATE, format = '%F', start = DEFAULT_SG)
-      str = String === string ? string : string.to_str
+      str = string_value(string)
       if format == '%F' || format == '%Y-%m-%d'
         result = internalinternal_strptime_ymd_to_date(str, start)
         return result if result

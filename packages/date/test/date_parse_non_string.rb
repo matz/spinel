@@ -54,3 +54,9 @@ def via_strptime(s) = Date.strptime(s, "%Y").to_s
   show("via _strptime") { via_strptime_hash(s) }
   show("via strptime") { via_strptime(s) }
 end
+
+# A to_str that does not answer a String is a TypeError too.
+class IntText; def to_str = 1; end
+class NilText; def to_str = nil; end
+show("_parse to_str gives Integer") { Date._parse(IntText.new) }
+show("_strptime to_str gives nil") { Date._strptime(NilText.new, "%Y") }

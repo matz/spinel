@@ -108,3 +108,5 @@
 ["via _parse", TypeError, "no implicit conversion of nil into String"]
 ["via _strptime", TypeError, "no implicit conversion of nil into String"]
 ["via strptime", TypeError, "no implicit conversion of nil into String"]
+["_parse to_str gives Integer", TypeError, "can't convert IntText to String (IntText#to_str gives Integer)"]
+["_strptime to_str gives nil", TypeError, "can't convert NilText to String (NilText#to_str gives NilClass)"]

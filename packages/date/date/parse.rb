@@ -796,13 +796,17 @@ class Date
       raise ArgumentError, "string length (#{str.length}) exceeds limit (#{limit})" if limit && str.length > limit
     end
 
-    # CRuby's StringValue: a String, or what to_str gives, or a TypeError.
+    # CRuby's StringValue: a String, or the String to_str gives, or a TypeError.
     def string_value(obj)
       case obj
       when String then return obj
       when nil, true, false then raise TypeError, "no implicit conversion of #{obj.inspect} into String"
       end
-      return obj.to_str if obj.respond_to?(:to_str)
+      if obj.respond_to?(:to_str)
+        str = obj.to_str
+        return str if String === str
+        raise TypeError, "can't convert #{obj.class} to String (#{obj.class}#to_str gives #{str.class})"
+      end
       raise TypeError, "no implicit conversion of #{obj.class} into String"
     end
 

@@ -45043,6 +45043,30 @@ static int sid_no_collection_kind(TyKind t) {
   return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_RATIONAL || t == TY_COMPLEX ||
          t == TY_STRING || t == TY_STRBUF || t == TY_SYMBOL || t == TY_NIL || t == TY_BOOL;
 }
+/* Is v a call of a reflective list that answers method, variable or
+   constant names, Symbols each (`nil.methods`, `instance_variables`), in a
+   program that defines no method of that name in any form: an instance
+   method, a class method (`def self.constants`, one in `class << self`, a
+   module's that a class extends), a singleton method (`def o.methods`,
+   `define_singleton_method(:methods)`), or one it may define or alias by
+   a name it computes or names by a literal? */
+static int sid_symbol_list_call(Compiler *c, int v) {
+  static const char *const names[] = {
+    "methods", "public_methods", "private_methods", "protected_methods", "singleton_methods",
+    "instance_methods", "public_instance_methods", "private_instance_methods", "protected_instance_methods",
+    "instance_variables", "class_variables", "local_variables", "global_variables", "constants", NULL };
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
+  if (!nm || nt_ref(nt, v, "block") >= 0) return 0;
+  int hit = 0;
+  for (int k = 0; names[k] && !hit; k++) hit = sp_streq(nm, names[k]);
+  if (!hit || an_user_recv_defines_method(c, nm) || an_prog_names_method(nm)) return 0;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && sp_streq(dn, nm)) return 0;
+  }
+  return 1;
+}
 static int sid_collection_ok(Compiler *c, int v, int set_cid) {
   const NodeTable *nt = c->nt;
   switch (vp_one(nt, v, VPS_NONE | VP_PARENS_ONLY, &v)) {
@@ -45053,7 +45077,7 @@ static int sid_collection_ok(Compiler *c, int v, int set_cid) {
   /* an Array's to_a holds its elements (`%i[a b].to_set` is
      `Set.new(%i[a b].to_a)` here): judged by the Array's, unless the
      program gives Array a to_a of its own (`class Array; def to_a =
-     ...`, or through a module it includes), which may answer anything */
+     ...`, or through a module it prepends), which may answer anything */
   int arr_cid = comp_class_index(c, "Array");
   int own_to_a = arr_cid >= 0 && comp_method_in_chain(c, arr_cid, "to_a", NULL) >= 0;
   for (int d = 0; d < 8 && !own_to_a && nt_kind(nt, v) == NK_CallNode && nt_str(nt, v, "name") &&
@@ -45070,6 +45094,17 @@ static int sid_collection_ok(Compiler *c, int v, int set_cid) {
   if (ty_is_array(t)) {
     TyKind et = ty_array_elem(t);
     if (et != TY_POLY && et != TY_UNKNOWN && sid_kind_ok(c, et)) return 1;
+    if (sid_symbol_list_call(c, v)) return 1;
+    /* `a + b` of two Arrays holds the elements of both, unless the program
+       gives Array a `+` of its own */
+    if (nt_kind(nt, v) == NK_CallNode && nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "+") &&
+        nt_ref(nt, v, "block") < 0 && !(arr_cid >= 0 && comp_method_in_chain(c, arr_cid, "+", NULL) >= 0)) {
+      int r = nt_ref(nt, v, "receiver"), an = 0;
+      const int *av = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &an);
+      if (r >= 0 && an == 1 && nt_kind(nt, av[0]) != NK_SplatNode && ty_is_array(infer_type(c, r)) &&
+          ty_is_array(infer_type(c, av[0])))
+        return sid_collection_ok(c, r, set_cid) && sid_collection_ok(c, av[0], set_cid);
+    }
     if (nt_kind(nt, v) == NK_ArrayNode) {
       int en = 0; const int *el = nt_arr(nt, v, "elements", &en);
       for (int e = 0; e < en; e++) if (!sid_value_ok(c, el[e], 0)) return 0;

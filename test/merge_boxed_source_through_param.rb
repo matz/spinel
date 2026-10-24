@@ -63,3 +63,18 @@ p keyed({ 1 => 2 }, { 3 => 4 })
 p keyed({ 1 => 2 }, entry(5))
 into(hd.h, { "c" => nil })
 p hd.h
+
+# an empty [] or {} in the literal is still an Array or a Hash: a receiver
+# of Integer values widens for it, one of boxed values holds it as it is,
+# a getter's included
+p assign({ "a" => 1 }, { "k" => [] })
+p assign({ "a" => 1 }, { "k" => {} })
+p assign({ "a" => [1] }, { "k" => [] })
+class Lists
+  attr_reader :h
+
+  def initialize = @h = { "a" => [1] }
+end
+ls = Lists.new
+into(ls.h, { "k" => [] })
+p ls.h

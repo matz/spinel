@@ -7477,10 +7477,8 @@ static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth
   return ch;
 }
 
-/* 1 when the hash `a` (of type `t`) merged into a container of type `ct`
-   brings a key or value `ct` cannot hold, each checked where it is known.
-   A boxed key or value is one only the run time knows, which the store
-   checks then; a literal's own elements still show theirs. */
+/* 1 when a key `k` or value `v` merged into a container of type `ct` is
+   one `ct` cannot hold; a boxed or unknown one is left to the store. */
 static int merged_kv_misfits(TyKind ct, TyKind k, TyKind v) {
   if (k == TY_STRBUF) k = TY_STRING;
   if (v == TY_STRBUF) v = TY_STRING;
@@ -7492,6 +7490,18 @@ static int merged_kv_misfits(TyKind ct, TyKind k, TyKind v) {
       (!fold_container_evidence(&f, 0, 0, ty_hash_key(ct), v) || f != ct)) return 1;
   return 0;
 }
+/* A merged literal's value `n`: an empty `[]` or `{}`, which infers
+   nothing, is the boxed Array or Hash it is built as. */
+static TyKind merged_val_ty(Compiler *c, int n) {
+  TyKind t = infer_type(c, n);
+  if (t != TY_UNKNOWN) return t;
+  int k = an_empty_container_kind(c, n);
+  return k == 1 ? TY_POLY_ARRAY : k == 2 ? TY_POLY_POLY_HASH : t;
+}
+/* 1 when the hash `a` (of type `t`) merged into a container of type `ct`
+   brings a key or value `ct` cannot hold, each checked where it is known.
+   A boxed key or value is one only the run time knows, which the store
+   checks then; a literal's own elements still show theirs. */
 static int merged_hash_misfits(Compiler *c, int a, TyKind t, TyKind ct) {
   if (!ty_is_hash(t)) return 0;
   if (merged_kv_misfits(ct, ty_hash_key(t), ty_hash_val(t))) return 1;
@@ -7499,7 +7509,7 @@ static int merged_hash_misfits(Compiler *c, int a, TyKind t, TyKind ct) {
   const int *el = h >= 0 && nt_kind(c->nt, h) == NK_HashNode ? nt_arr(c->nt, h, "elements", &en) : NULL;
   for (int i = 0; i < en; i++)
     if (nt_kind(c->nt, el[i]) == NK_AssocNode &&
-        merged_kv_misfits(ct, infer_type(c, nt_ref(c->nt, el[i], "key")), infer_type(c, nt_ref(c->nt, el[i], "value"))))
+        merged_kv_misfits(ct, infer_type(c, nt_ref(c->nt, el[i], "key")), merged_val_ty(c, nt_ref(c->nt, el[i], "value"))))
       return 1;
   return 0;
 }

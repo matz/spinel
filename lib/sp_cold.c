@@ -3854,6 +3854,24 @@ static void sp_io_codepoint_rewind(sp_Enumerator *e) {SP_GC_ROOT(e);
   clearerr(io->fp); io->lineno = 0;
 }
 
+/* A boxed Dir's block walk rewinds the handle, as CRuby's Dir#each does, and
+   reads one entry at a time, so a break leaves the rest unread. */
+static void sp_dir_each_gen(sp_Fiber *f) {
+  sp_Dir *dir = (sp_Dir *)f->user_data; SP_GC_ROOT(dir);
+  const char *entry = NULL; SP_GC_ROOT_STR(entry);
+  sp_Dir_rewind(dir);
+  while ((entry = sp_Dir_read(dir)) != NULL)
+    sp_Fiber_yield(sp_box_str(entry));
+  sp_gc_wb((void *)f);
+  f->yielded_value = sp_box_obj(dir, SP_BUILTIN_DIR);
+}
+sp_RbVal sp_dir_each_enumerator(sp_Dir *dir) {SP_GC_ROOT(dir);
+  sp_Enumerator *e = sp_Enumerator_new_gen(sp_dir_each_gen, dir, sp_box_nil());
+  SP_GC_ROOT(e);
+  e = sp_enum_with_src(e, sp_box_obj(dir, SP_BUILTIN_DIR), SPL("each"));
+  return sp_box_obj(e, SP_BUILTIN_ENUMERATOR);
+}
+
 /* IO.copy_stream(src_path, dst_path): stream one file to another, byte count. */
 sp_int sp_io_copy_stream(const char *src, const char *dst) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(dst);
   FILE *in = fopen(src ? src : "", "rb");

@@ -11914,7 +11914,10 @@ static sp_bool sp_poly_range_walks(sp_RbVal v) {
   sp_Range *r = (sp_Range *)v.v.p;
   return !r->nobeg && r->step == 0 && !r->fe;
 }
+sp_RbVal sp_dir_each_enumerator(sp_Dir *dir);
 static sp_RbVal sp_poly_iter_walk(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_DIR && v.v.p)
+    return sp_enum_walker_boxed(sp_dir_each_enumerator((sp_Dir *)v.v.p));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p) {
     sp_RbVal w = sp_enum_walker_boxed(v);
     if (w.tag != SP_TAG_NIL) return w;
@@ -11940,6 +11943,13 @@ static void sp_poly_iter_check(sp_RbVal v, const char *m) {
        v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR))
     return;
   sp_raise_poly_nomethod(m, v);
+}
+/* Dir is streamed by the block walk of `each` (codegen emits this check
+   for that walk only); the blockless constructor is unchanged. */
+static void sp_poly_block_iter_check(sp_RbVal v, const char *m) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_DIR && v.v.p)
+    return;
+  sp_poly_iter_check(v, m);
 }
 /* What `for x in v` walks for a boxed v: its items as an Array, but an
    Integer Range itself, read by index (sp_poly_range_walks). A

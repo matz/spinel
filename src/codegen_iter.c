@@ -7169,7 +7169,13 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     const char *wn = enum_walk_name(c, id, recv, name);
     emit_indent(b, indent); emit_poly_iter_obj_reject_as(c, ta, name, wn, b);
     emit_walk_arity_raise(c, id, recv, name, ta, indent, b);
-    emit_indent(b, indent); buf_printf(b, "sp_poly_iter_check(_t%d, \"%s\");\n", ta, wn);
+    /* a boxed Dir walks its entries under `each` (sp_poly_block_iter_check);
+       only a program that names Dir can hold one, so any other keeps the
+       plain check and its generated C, and so does one that defines an
+       `each` of its own, which a reopened Dir could answer */
+    const char *chk = is_each_name(wn) && an_program_makes_dir(c) && !an_user_recv_defines_method(c, "each")
+                      ? "sp_poly_block_iter_check" : "sp_poly_iter_check";
+    emit_indent(b, indent); buf_printf(b, "%s(_t%d, \"%s\");\n", chk, ta, wn);
     /* `each { |x| }` over an Enumerator yielding several values in a step
        binds x the first of them; the builtins/ walks (`each { |x| yield x }`)
        hand the step on whole */
@@ -7329,7 +7335,15 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
       emit_block_param_from_boxed(c, p0, e0t, src, b);
     }
     /* a paramless block (`each { ... }`) binds nothing; the loop still runs the
-       body once per element for its side effect. */
+       body once per element for its side effect. A walker (a boxed
+       Enumerator's or Dir's) is stepped to its next value by reading the
+       element, so for one the element is still read: unread, the walk ends
+       after the first. An Array or a Hash is not read, which would build a
+       pair per Hash entry for nothing. */
+    else {
+      emit_indent(b, indent + 1);
+      buf_printf(b, "if (sp_enum_is_walker(_t%d)) (void)sp_poly_each_elem(_t%d, _t%d);\n", ta, ta, ti);
+    }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
     return 1;

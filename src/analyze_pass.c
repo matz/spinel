@@ -7359,6 +7359,7 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
   return ch;
 }
 
+static int widen_method_value_sources(Compiler *c, int v, int mi, TyKind elem, int depth, int each_body);
 static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   /* Only once the optimistic rounds have settled: a slot is boxed for a
@@ -7420,9 +7421,41 @@ static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int dept
                  ((is_endpoint_query(nm)) && an == 0)))
     return widen_boxed_elem_sources(c, r, elem, depth + 1);
   int mi = backprop_call_target(c, v);
-  if (mi < 0) return 0;
+  if (mi >= 0) return widen_method_value_sources(c, v, mi, elem, depth, 0);
+  /* a call no one method is resolved for, on a receiver whose class only the
+     run time knows (a dispatch over the classes with a method of the name):
+     the arrays each method of the name answers, or the method an alias of
+     the name runs, widen where they are built (the builtin's own answer is
+     widened at the push, an_push_lifts_boxed). Every body is one the
+     dispatch can run, a method a subclass overrides too: an instance of the
+     class itself runs it. */
+  TyKind crt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
+  if (r < 0 || !(crt == TY_POLY || crt == TY_CLASS || ty_is_object(crt))) return 0;
+  int ch = 0;
+  for (int t = 1; t < c->nscopes; t++)
+    if (c->scopes[t].name && sp_streq(c->scopes[t].name, nm) && c->scopes[t].class_id >= 0)
+      ch |= widen_method_value_sources(c, v, t, elem, depth, 1);
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *cls = &c->classes[k];
+    for (int i = 0; i < cls->naliases; i++) {
+      if (!cls->alias_new[i] || !cls->alias_old[i] || !sp_streq(cls->alias_new[i], nm)) continue;
+      int from = cls->alias_cls && cls->alias_cls[i] >= 0 ? cls->alias_cls[i] : k;
+      int am = cls->alias_sg && cls->alias_sg[i] ? comp_cmethod_in_chain(c, from, cls->alias_old[i], NULL)
+                                                 : comp_method_in_chain(c, from, cls->alias_old[i], NULL);
+      if (am >= 0) ch |= widen_method_value_sources(c, v, am, elem, depth, 1);
+    }
+  }
+  return ch;
+}
+
+/* The arrays method mi answers at the call v (widen_boxed_array_sources_1).
+   A call resolved to mi alone stops where another body of the name (a
+   subclass's) could answer it instead; `each_body`: the call's other bodies
+   are followed beside this one, so this one's arrays are widened as well. */
+static int widen_method_value_sources(Compiler *c, int v, int mi, TyKind elem, int depth, int each_body) {
+  const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
-  if (m->ret_rbs_seeded || m->cs_synth || m->is_lowered_yield || method_has_other_body(c, mi)) return 0;
+  if (m->ret_rbs_seeded || m->cs_synth || m->is_lowered_yield || (!each_body && method_has_other_body(c, mi))) return 0;
   int lv[16];
   int n = method_value_leaves(c, mi, lv, 16), ch = 0;
   /* A value that is one of the method's parameters is, at this call, this

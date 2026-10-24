@@ -61,3 +61,58 @@ end
 store = Store.new
 p counted(store), store.shared
 p counted({ b: 2 })
+
+# Another class's class method aliased to the name: it runs on a class,
+# and answers as the method it names does.
+class Reader
+  def self.lex(s) = [:lex, s]
+
+  class << self
+    alias scan lex
+  end
+end
+
+p Reader.scan("s")
+p version_of(Label.new), version_of("V2_1")
+
+# A method answering a box that may be an Array an ivar holds: the push
+# goes into that Array, not into a copy.
+class Shelf
+  def initialize(full)
+    @full = full
+    @items = ["a"]
+  end
+
+  def keys = @full ? @items : 1
+  attr_reader :items
+end
+
+shelf = Shelf.new(true)
+p counted(shelf), shelf.items
+
+# Two classes answering literal Arrays of different kinds under one name.
+class Words
+  def parts = ["w"]
+end
+
+class Numbers
+  def parts = [1]
+end
+
+def extended(x)
+  (x.parts << :e).inspect
+end
+
+p extended(Words.new), extended(Numbers.new)
+
+# A method a subclass overrides is still one the dispatch runs, for an
+# instance of the class itself: its Array widens as the others do.
+class Shape
+  def parts = ["shape"]
+end
+
+class Circle < Shape
+  def parts = ["circle"]
+end
+
+p extended(Shape.new), extended(Circle.new)

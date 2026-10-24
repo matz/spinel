@@ -8372,9 +8372,57 @@ int an_push_widens_fresh(Compiler *c, int id) {
    Array at all, as its type shows. One answering a box (TY_POLY) may hand
    back an Array something else holds, which a copy would leave without the
    push, so it keeps the call as it was, and so do a reader of the name, a
-   method_missing, and a name the program defines, aliases or sends by a
-   Symbol or computes. Answers the kinds the push stores (AN_LIFT_*), 0 for
-   any other call. */
+   method_missing, an instance method's alias or a send by the name, and a
+   name the program computes. A class method's alias of the name answers
+   as the method it names does (lift_aliases_unheld). Answers the kinds the
+   push stores (AN_LIFT_*), 0 for any other call. */
+/* A method typed `t` answers no Array something else holds: the general
+   Array (a push stores into it as it is) or no Array at all. */
+static int lift_ret_unheld(TyKind t) {
+  return t == TY_POLY_ARRAY ||
+         (t != TY_POLY && t != TY_UNKNOWN && !ty_is_array(t) && !ty_is_ptr_array(t));
+}
+/* The aliases and sends of the name `rn`: an instance method's alias, or a
+   send by the Symbol whose receiver is not a constant, may run a method of
+   the program the scopes of the name do not show, so they keep the call as
+   it was. A class method's alias (`class << self; alias scan lex; end`)
+   runs on a class: the method it names answers by its type, as a method
+   of the name does. 1 when none of them can answer a held Array. */
+static int lift_aliases_unheld(Compiler *c, const char *rn) {
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *cls = &c->classes[k];
+    for (int i = 0; i < cls->naliases; i++) {
+      if (!cls->alias_new[i] || !sp_streq(cls->alias_new[i], rn)) continue;
+      if (!cls->alias_sg || !cls->alias_sg[i]) return 0;
+      int mi = cls->alias_old[i] ? comp_cmethod_in_chain(c, cls->alias_cls && cls->alias_cls[i] >= 0 ? cls->alias_cls[i] : k,
+                                                          cls->alias_old[i], NULL) : -1;
+      if (mi < 0 || !lift_ret_unheld((TyKind)c->scopes[mi].ret)) return 0;
+    }
+  }
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !(sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send") ||
+                 sp_streq(cn, "alias_method") || sp_streq(cn, "define_method") || sp_streq(cn, "instance_method") ||
+                 sp_streq(cn, "method"))) continue;
+    int a = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    int named = 0;
+    for (int j = 0; j < ac && !named; j++) {
+      NodeKind ak = nt_kind(nt, av[j]);
+      const char *v = ak == NK_SymbolNode ? nt_str(nt, av[j], "value") : ak == NK_StringNode ? nt_str(nt, av[j], "unescaped") : NULL;
+      named = v && sp_streq(v, rn);
+    }
+    if (!named) continue;
+    int r = nt_ref(nt, id, "receiver");
+    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) continue;
+    return 0;
+  }
+  return 1;
+}
+
 int an_push_lifts_boxed(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode) return 0;
@@ -8391,14 +8439,13 @@ int an_push_lifts_boxed(Compiler *c, int id) {
   if (!nt_int(nt, id, "builtin_only", 0) &&
       (array_hash_reopen_owner(c, id, TY_STR_ARRAY, nm) >= 0 || array_hash_reopen_owner(c, id, TY_POLY_ARRAY, nm) >= 0))
     return 0;
-  if (an_prog_names_method(rn) || an_prog_meta_by_value()) return 0;
+  if (an_prog_meta_by_value()) return 0;
   for (int s = 0; s < c->nscopes; s++) {
     const char *sn = c->scopes[s].name;
     if (!sn || (!sp_streq(sn, rn) && !sp_streq(sn, "method_missing"))) continue;
-    TyKind st = (TyKind)c->scopes[s].ret;
-    if (sp_streq(sn, "method_missing") || st == TY_POLY || st == TY_UNKNOWN ||
-        ((ty_is_array(st) || ty_is_ptr_array(st)) && st != TY_POLY_ARRAY)) return 0;
+    if (sp_streq(sn, "method_missing") || !lift_ret_unheld((TyKind)c->scopes[s].ret)) return 0;
   }
+  if (!lift_aliases_unheld(c, rn)) return 0;
   for (int k = 0; k < c->nclasses; k++)
     if (comp_is_reader(&c->classes[k], rn)) return 0;
   int a = nt_ref(nt, id, "arguments"), ac = 0, kinds = 0;

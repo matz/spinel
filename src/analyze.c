@@ -45526,8 +45526,41 @@ static int sid_alloc_is_source(Compiler *c, SidSources *S, int a) {
    (`attr_reader :seen`): no other Symbol or String of its name, no alias
    of it, and no method named by a name the program computes? And each
    place's ivar only where it reads or writes it by reflection? */
+/* Does the program define a method named nm itself (a def, or a name a
+   define_method or the like may be handed), so that a call of that name
+   may run the program's method? */
+static int sid_prog_defines(const NodeTable *nt, const char *nm) {
+  if (an_prog_names_method(nm)) return 1;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && sp_streq(dn, nm)) return 1;
+  }
+  return 0;
+}
+/* Is literal lit the new name of an alias (`alias take twice`,
+   `alias_method :take, :twice`), whose parent is up and grandparent call?
+   That defines another method of the name, and reaches no reader under
+   another one: the reader's own calls are followed by its name, a call of
+   the alias among them. `alias_method` counts as Module's own only as a
+   statement of a class or module body, in a program that defines no
+   alias_method or method_missing of its own (which could do anything with
+   the name, `send(new_name)`); `alias` is a keyword no method replaces. */
+static int sid_alias_new_name(const NodeTable *nt, const int *parent, int up, int call, int lit, int *own_am) {
+  if (up >= 0 && nt_kind(nt, up) == NK_AliasMethodNode) return nt_ref(nt, up, "new_name") == lit;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "arguments") != up) return 0;
+  const char *cn = nt_str(nt, call, "name");
+  if (!cn || !sp_streq(cn, "alias_method") || nt_ref(nt, call, "receiver") >= 0 || nt_ref(nt, call, "block") >= 0) return 0;
+  int an = 0; const int *av = nt_arr(nt, up, "arguments", &an);
+  if (an != 2 || av[0] != lit) return 0;
+  int st = parent[call], body = st >= 0 ? parent[st] : -1;
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || body < 0 ||
+      (nt_kind(nt, body) != NK_ClassNode && nt_kind(nt, body) != NK_ModuleNode)) return 0;
+  if (*own_am < 0) *own_am = sid_prog_defines(nt, "alias_method") || sid_prog_defines(nt, "method_missing");
+  return !*own_am;
+}
 static int sid_readers_only_declared(Compiler *c, const SidSources *S) {
   const NodeTable *nt = c->nt;
+  int own_am = -1;   /* the program's own alias_method or method_missing, asked once */
   for (int i = 0; i < S->nreaders; i++) {
     const char *r = S->readers[i];
     if (!an_prog_names_method(r)) continue;
@@ -45539,6 +45572,7 @@ static int sid_readers_only_declared(Compiler *c, const SidSources *S) {
       NT_FOREACH_KIND(nt, h ? NK_StringNode : NK_SymbolNode, lit) {
         if (!sp_streq(nt_str(nt, lit, h ? "content" : "value"), r)) continue;
         int args = S->parent[lit], call = args >= 0 ? S->parent[args] : -1;
+        if (sid_alias_new_name(nt, S->parent, args, call, lit, &own_am)) continue;
         if (h || call < 0 || nt_ref(nt, call, "arguments") != args || !attr_decl_call(c, call)) return 0;
       }
   }

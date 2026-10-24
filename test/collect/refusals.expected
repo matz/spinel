@@ -1364,6 +1364,10 @@ spinel: test/reject/set_identity_list_to_set_own_to_a.rb:19: a value whose ident
 spinel: test/reject/set_identity_member_list_read.rb:19: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_member_list_read.rb [promote] rc=1
 spinel: test/reject/set_identity_member_list_read.rb:19: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
+== test/reject/set_identity_own_alias_method.rb [default] rc=1
+spinel: test/reject/set_identity_own_alias_method.rb:19: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
+== test/reject/set_identity_own_alias_method.rb [promote] rc=1
+spinel: test/reject/set_identity_own_alias_method.rb:19: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_pairs_to_h.rb [default] rc=1
 spinel: test/reject/set_identity_pairs_to_h.rb:10: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_pairs_to_h.rb [promote] rc=1

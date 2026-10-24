@@ -1230,6 +1230,14 @@ spinel: test/reject/reopen_redef_poly_call_between.rb:13: a method redefined by 
 spinel: test/reject/reopen_redef_subclass_override_between.rb:10: a method redefined by a later reopening of its class is called between the two definitions on an object of a subclass that overrides it, so which definition the call reaches depends on where the override is defined. Define the method once, or the override before the call.
 == test/reject/reopen_redef_subclass_override_between.rb [promote] rc=1
 spinel: test/reject/reopen_redef_subclass_override_between.rb:10: a method redefined by a later reopening of its class is called between the two definitions on an object of a subclass that overrides it, so which definition the call reaches depends on where the override is defined. Define the method once, or the override before the call.
+== test/reject/require_relative_adjacent_literals.rb [default] rc=1
+spinel: test/reject/require_relative_adjacent_literals.rb:4: require_relative needs its path as one string literal
+== test/reject/require_relative_adjacent_literals.rb [promote] rc=1
+spinel: test/reject/require_relative_adjacent_literals.rb:4: require_relative needs its path as one string literal
+== test/reject/require_relative_literal_expression.rb [default] rc=1
+spinel: test/reject/require_relative_literal_expression.rb:4: require_relative needs its path as one string literal
+== test/reject/require_relative_literal_expression.rb [promote] rc=1
+spinel: test/reject/require_relative_literal_expression.rb:4: require_relative needs its path as one string literal
 == test/reject/rescue_modifiers_nested_too_deep.rb [default] rc=1
 spinel: test/reject/rescue_modifiers_nested_too_deep.rb:6: this expression nests more levels of conditionals, rescue modifiers or blocks than the compiler's emission stack holds; bind an inner part to a local or a method
 spinel: 1 refusal, nothing written

@@ -1,0 +1,28 @@
+first line
+require_relative 'require_relative_tree/never'
+last line
+require_relative "require_relative_tree/never"
+start
+b loaded
+42
+late loaded
+6
+s_a
+s_b
+2
+i_c
+i_d
+true
+"hi from i_c"
+11
+e_d
+true
+"e_d"
+m_b
+m_a
+[1, 2]
+w_a
+w_b
+[1, 2]
+f_z
+1

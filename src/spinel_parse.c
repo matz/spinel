@@ -3090,10 +3090,6 @@ static int sp_require_find(char *buf, char *from, const char *word, SpReqHit *ou
   return 0;
 }
 
-/* Rebuild `*result` with `content` inlined ahead of the top-level statement
-   the call sits in (sp_toplevel_stmt_start) and the call itself replaced by
-   `value`, so the statement around the require -- a
-   condition, an assignment, a method body -- survives intact. */
 /* The start of the top-level statement a position sits inside: the nearest
    line at or above it that begins, at the margin, something other than the
    continuation of a statement already open (end / else / rescue / a closing
@@ -3224,13 +3220,16 @@ static int sp_req_in_control_only(const char *buf, const char *kw) {
   return 0;
 }
 
+/* Rebuild `*result` with `content` inlined at `ins` (a require site's
+   insertion point, or sp_toplevel_stmt_start's answer for a plain require)
+   and the call itself replaced by `value`, so the statement around the
+   require -- a condition, an assignment, a method body -- survives intact. */
 static void sp_req_hoist_splice(char **result, unsigned char **fsl, size_t *fsl_n,
-                                const SpReqHit *h, const char *content,
+                                const SpReqHit *h, size_t ins, const char *content,
                                 unsigned char *cfsl, size_t cfsl_n,
                                 const char *value) {
   size_t kw_off = (size_t)(h->kw - *result), end_off = (size_t)(h->expr_end - *result);
   size_t rlen = strlen(*result), clen = strlen(content), vlen = strlen(value);
-  size_t ins = sp_toplevel_stmt_start(*result, kw_off);
   size_t ins_line = 0;
   for (size_t i = 0; i < ins; i++) if ((*result)[i] == '\n') ins_line++;
   sp_fsl_splice(fsl, fsl_n, ins_line, 0, cfsl, cfsl_n);
@@ -3637,12 +3636,20 @@ static char *sp_rewrite_autoloads(const char *source, const char *dir) {
    would otherwise read the file (or reject a missing one). Only erase literal
    require calls in provably unreachable branches: keep the surrounding code
    for Ruby's lexical locals, and preserve every newline for the source map. */
+/* The call nodes the fold blanked, so the require sites read from the same
+   tree leave them out (sp_req_sites). */
+typedef struct {
+  const pm_node_t **v;
+  int n, cap;
+} SpNodeList;
+
 typedef struct {
   pm_parser_t *parser;
   const char *source;
   char *result;
   int dead;
   int engine;   /* fold RUBY_ENGINE comparisons (the file does not assign the constant) */
+  SpNodeList *blanked;
 } SpDeadRequire;
 
 static int sp_pm_name_is(const pm_parser_t *parser, pm_constant_id_t id, const char *word) {
@@ -3726,6 +3733,13 @@ static int sp_call_receiver_is_kernel(const pm_parser_t *parser, const pm_node_t
    later line numbers hold (and a multiline call stays grouped, including
    before a modifier). */
 static void sp_dead_blank(SpDeadRequire *ctx, const pm_node_t *node) {
+  SpNodeList *b = ctx->blanked;
+  if (b->n == b->cap) {
+    b->cap = b->cap ? b->cap * 2 : 8;
+    b->v = realloc(b->v, sizeof *b->v * (size_t)b->cap);
+    if (!b->v) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  }
+  b->v[b->n++] = node;
   size_t start = (size_t)(node->location.start - (const uint8_t *)ctx->source);
   size_t end = (size_t)(node->location.end - (const uint8_t *)ctx->source);
   for (size_t i = start; i < end; i++)
@@ -3795,13 +3809,13 @@ static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
 }
 
 /* The file's text with its dead requires blanked, read from the file's own
-   parse. */
-static char *sp_rewrite_dead_requires(SpSrcFile *f) {
+   parse; the calls blanked are added to `blanked`. */
+static char *sp_rewrite_dead_requires(SpSrcFile *f, SpNodeList *blanked) {
   const char *source = f->text;
   char *result = strdup(source);
   if (!strstr(source, "require")) return result;
   if (f->parser.error_list.size == 0) {
-    SpDeadRequire ctx = { &f->parser, source, result, 0, !sp_source_writes_engine(source) };
+    SpDeadRequire ctx = { &f->parser, source, result, 0, !sp_source_writes_engine(source), blanked };
     pm_visit_node(f->root, sp_skip_dead_require, &ctx);
   }
   return result;
@@ -4142,6 +4156,275 @@ static const char *sp_defer_runtime(char **content, const char *canonical, const
   return ret;
 }
 
+/* ---- require_relative calls, read from the file's own tree ----
+ *
+ * Each `require_relative` of a file is a CallNode of its own parse (#9898):
+ * no receiver, or `Kernel.` / `::Kernel.`, no block, one argument that is a
+ * single- or double-quoted literal on one line (in parentheses or not). Text
+ * a String, a heredoc, `%q()` or `=begin` holds is never one, as it was for
+ * the line scanner (sp_require_find), which plain requires keep until each
+ * file's tree is flattened by itself. Where the call stands is read from its
+ * enclosing nodes: the top-level statement it is in, whether only control
+ * flow surrounds it, a modifier `if`/`unless` that is its whole condition,
+ * or a value position that needs the file inlined ahead of the statement.
+ * All offsets are into the text the tree was parsed from. */
+typedef struct {
+  size_t kw, end;            /* the call */
+  size_t arg, arg_len;       /* the literal's bytes as written, between its quotes */
+  char quote;
+  int margin;                /* the call starts its line */
+  int ml;                    /* bytes after the call that a modifier `if`/`unless` takes, to the line's end */
+  int has_modifier;          /* the call is part of a larger statement */
+  int control_only;          /* alone on its line, inside nothing but control flow */
+  size_t stmt_start;         /* line start of the top-level statement it is in */
+  size_t ctl_stmt_start;     /* line start of the innermost statement around it with only control flow above */
+} SpReqSite;
+
+typedef struct {
+  const pm_parser_t *parser;
+  const char *text;
+  const char *path;
+  const SpNodeList *skip;
+  const pm_node_t **stack;   /* the visited node's ancestors, the ProgramNode first */
+  int depth, stack_cap;
+  SpReqSite *v;
+  int n, cap;
+} SpReqSiteScan;
+
+static size_t sp_line_start_of(const char *text, size_t at) {
+  while (at > 0 && text[at - 1] != '\n') at--;
+  return at;
+}
+
+/* `node` (an if/unless/while/until) written after the statement it guards */
+static int sp_node_is_modifier(const pm_node_t *node) {
+  const pm_location_t *kw = NULL;
+  const pm_statements_node_t *body = NULL;
+  switch (PM_NODE_TYPE(node)) {
+  case PM_IF_NODE: kw = &((const pm_if_node_t *)node)->if_keyword_loc; body = ((const pm_if_node_t *)node)->statements; break;
+  case PM_UNLESS_NODE: kw = &((const pm_unless_node_t *)node)->keyword_loc; body = ((const pm_unless_node_t *)node)->statements; break;
+  case PM_WHILE_NODE: kw = &((const pm_while_node_t *)node)->keyword_loc; body = ((const pm_while_node_t *)node)->statements; break;
+  case PM_UNTIL_NODE: kw = &((const pm_until_node_t *)node)->keyword_loc; body = ((const pm_until_node_t *)node)->statements; break;
+  default: return 0;
+  }
+  return kw->start && body && kw->start > body->base.location.start;
+}
+
+static int sp_node_is_control(const pm_node_t *node) {
+  switch (PM_NODE_TYPE(node)) {
+  case PM_STATEMENTS_NODE: case PM_IF_NODE: case PM_UNLESS_NODE: case PM_ELSE_NODE:
+  case PM_CASE_NODE: case PM_WHEN_NODE: case PM_BEGIN_NODE: case PM_RESCUE_NODE:
+  case PM_ENSURE_NODE: case PM_WHILE_NODE: case PM_UNTIL_NODE:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+/* a single- or double-quoted literal on one line */
+static int sp_req_quoted_line(const pm_location_t *open, const pm_location_t *close) {
+  return open && close && open->start && close->start && (*open->start == '"' || *open->start == '\'') &&
+         open->end - open->start == 1 && !memchr(open->start, '\n', (size_t)(close->end - open->start));
+}
+
+static void sp_req_site_note(SpReqSiteScan *s, const pm_call_node_t *call) {
+  const pm_parser_t *pp = s->parser;
+  if (!sp_pm_name_is(pp, call->name, "require_relative") || !call->arguments) return;
+  if (call->receiver && (!sp_call_receiver_is_kernel(pp, call->receiver) ||
+                         !call->call_operator_loc.start || *call->call_operator_loc.start != '.')) return;
+  for (int i = 0; i < s->skip->n; i++) if (s->skip->v[i] == (const pm_node_t *)call) return;
+  const pm_node_t *arg = call->arguments->arguments.nodes[0];
+  const pm_location_t *open = NULL, *close = NULL;
+  const pm_node_t *lit = arg;
+  if (PM_NODE_TYPE(lit) == PM_PARENTHESES_NODE) {
+    const pm_node_t *body = ((const pm_parentheses_node_t *)lit)->body;
+    lit = body && PM_NODE_TYPE(body) == PM_STATEMENTS_NODE &&
+          ((const pm_statements_node_t *)body)->body.size == 1 ? ((const pm_statements_node_t *)body)->body.nodes[0] : NULL;
+  }
+  if (lit && PM_NODE_TYPE(lit) == PM_STRING_NODE) {
+    open = &((const pm_string_node_t *)lit)->opening_loc; close = &((const pm_string_node_t *)lit)->closing_loc;
+  }
+  else if (lit && PM_NODE_TYPE(lit) == PM_INTERPOLATED_STRING_NODE) {
+    open = &((const pm_interpolated_string_node_t *)lit)->opening_loc;
+    close = &((const pm_interpolated_string_node_t *)lit)->closing_loc;
+  }
+  int one_literal = !call->block && call->arguments->arguments.size == 1 && sp_req_quoted_line(open, close);
+  int head_only = 0;   /* the literal is only the head of the argument */
+  if (!one_literal) {
+    /* A call written without parentheses whose first argument starts with
+       a quoted literal was taken by the line scanner for a require of that
+       literal, the rest left applied to the call's value
+       (`require_relative "a".freeze`), and so it still is. A binary
+       operator on the literal (`"a" + ""`) or adjacent literals
+       (`"a" "b"`, two parts to Prism) only reached a refusal that way;
+       they are refused here in so many words. Anything else (a variable,
+       a call in parentheses) stays a call at run time. */
+    if (call->opening_loc.start) return;
+    int binary = 0;
+    lit = arg;
+    while (PM_NODE_TYPE(lit) == PM_CALL_NODE && ((const pm_call_node_t *)lit)->receiver &&
+           ((const pm_call_node_t *)lit)->receiver->location.start == lit->location.start) {
+      const pm_call_node_t *c = (const pm_call_node_t *)lit;
+      if (!c->call_operator_loc.start && !c->opening_loc.start && c->arguments && c->arguments->arguments.size == 1)
+        binary = 1;   /* `lit + x`, not `lit.m(x)` or `lit[x]` */
+      lit = c->receiver;
+    }
+    int adjacent = PM_NODE_TYPE(lit) == PM_INTERPOLATED_STRING_NODE &&
+                   !((const pm_interpolated_string_node_t *)lit)->opening_loc.start;
+    if (adjacent || binary) {
+      fprintf(stderr, "spinel: %s:%d: require_relative needs its path as one string literal\n",
+              s->path, (int)pm_newline_list_line(&pp->newline_list, call->base.location.start, pp->start_line));
+      exit(1);
+    }
+    open = close = NULL;
+    if (PM_NODE_TYPE(lit) == PM_STRING_NODE) {
+      open = &((const pm_string_node_t *)lit)->opening_loc; close = &((const pm_string_node_t *)lit)->closing_loc;
+    }
+    else if (PM_NODE_TYPE(lit) == PM_INTERPOLATED_STRING_NODE) {
+      open = &((const pm_interpolated_string_node_t *)lit)->opening_loc;
+      close = &((const pm_interpolated_string_node_t *)lit)->closing_loc;
+    }
+    if (!sp_req_quoted_line(open, close) || open->start != arg->location.start) return;
+    head_only = 1;
+  }
+  const char *t = s->text;
+  SpReqSite st;
+  memset(&st, 0, sizeof st);
+  st.kw = (size_t)((const char *)call->base.location.start - t);
+  st.end = (size_t)((const char *)(head_only ? close->end : call->base.location.end) - t);
+  st.arg = (size_t)((const char *)open->end - t);
+  st.arg_len = (size_t)(close->start - open->end);
+  st.quote = (char)*open->start;
+  size_t ls = sp_line_start_of(t, st.kw);
+  st.margin = ls == st.kw;
+  const pm_node_t *parent = s->depth > 0 ? s->stack[s->depth - 1] : NULL;
+  const pm_node_t *grand = s->depth > 1 ? s->stack[s->depth - 2] : NULL;
+  int in_stmts = parent && PM_NODE_TYPE(parent) == PM_STATEMENTS_NODE;
+  if (in_stmts && grand && sp_node_is_modifier(grand)) {
+    /* the modifier's condition, then blanks and a comment, to the line's end */
+    size_t q = (size_t)((const char *)grand->location.end - t), e = q;
+    if ((PM_NODE_TYPE(grand) == PM_IF_NODE || PM_NODE_TYPE(grand) == PM_UNLESS_NODE) &&
+        ((const pm_statements_node_t *)parent)->body.size == 1 && !memchr(t + st.end, '\n', q - st.end)) {
+      while (t[e] == ' ' || t[e] == '\t') e++;
+      if (t[e] == '#') while (t[e] && t[e] != '\n' && t[e] != '\r') e++;
+      if (t[e] == '\n' || t[e] == '\r' || !t[e]) st.ml = (int)(e - st.end);
+    }
+    st.has_modifier = 1;
+  }
+  else if (!in_stmts) st.has_modifier = 1;
+  if (in_stmts && (!st.has_modifier || st.ml) && s->depth > 2) {
+    int alone = 1;
+    for (size_t i = ls; i < st.kw; i++) if (t[i] != ' ' && t[i] != '\t') alone = 0;
+    st.control_only = alone;
+    for (int i = 1; st.control_only && i < s->depth; i++)
+      if (!sp_node_is_control(s->stack[i])) st.control_only = 0;
+  }
+  if (head_only) { st.ml = 0; st.has_modifier = 1; }   /* the rest is applied to the value */
+  const pm_node_t *top = s->depth > 2 ? s->stack[2] : (const pm_node_t *)call;
+  st.stmt_start = sp_line_start_of(t, (size_t)((const char *)top->location.start - t));
+  /* the innermost statement (the call or an ancestor right under a list of
+     statements) with nothing but control flow above it */
+  const pm_node_t *ctl = top;
+  for (int k = 2, ok = 1; k <= s->depth && ok; k++) {
+    if (PM_NODE_TYPE(s->stack[k - 1]) == PM_STATEMENTS_NODE)
+      ctl = k == s->depth ? (const pm_node_t *)call : s->stack[k];
+    ok = k < s->depth && sp_node_is_control(s->stack[k]);
+  }
+  st.ctl_stmt_start = sp_line_start_of(t, (size_t)((const char *)ctl->location.start - t));
+  if (s->n == s->cap) {
+    s->cap = s->cap ? s->cap * 2 : 8;
+    s->v = realloc(s->v, sizeof *s->v * (size_t)s->cap);
+    if (!s->v) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  }
+  s->v[s->n++] = st;
+}
+
+static bool sp_req_site_visit(const pm_node_t *node, void *data) {
+  SpReqSiteScan *s = data;
+  if (PM_NODE_TYPE(node) == PM_CALL_NODE) sp_req_site_note(s, (const pm_call_node_t *)node);
+  if (s->depth == s->stack_cap) {
+    s->stack_cap = s->stack_cap ? s->stack_cap * 2 : 32;
+    s->stack = realloc(s->stack, sizeof *s->stack * (size_t)s->stack_cap);
+    if (!s->stack) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  }
+  s->stack[s->depth++] = node;
+  pm_visit_child_nodes(node, sp_req_site_visit, data);
+  s->depth--;
+  return false;
+}
+
+/* The file's require_relative sites in source order (a parse with errors
+   has none: its text is resolved as it stands); the caller frees them. */
+static int sp_req_site_cmp(const void *a, const void *b) {
+  size_t x = ((const SpReqSite *)a)->kw, y = ((const SpReqSite *)b)->kw;
+  return x < y ? -1 : x > y;
+}
+
+static SpReqSite *sp_req_sites(const pm_parser_t *parser, const pm_node_t *root, const char *text,
+                               const char *path, const SpNodeList *skip, int *n_out) {
+  SpReqSiteScan s;
+  memset(&s, 0, sizeof s);
+  s.parser = parser; s.text = text; s.path = path; s.skip = skip;
+  /* (a file that never spells the word has none: the walk is skipped) */
+  if (parser->error_list.size == 0 && strstr(text, "require_relative")) pm_visit_node(root, sp_req_site_visit, &s);
+  free(s.stack);
+  /* Source order (the walk visits a modifier's condition before its body),
+     less a site inside another's argument; then each site a modifier's
+     condition holds goes ahead of the site it guards, as it runs first. */
+  if (s.n > 1) qsort(s.v, (size_t)s.n, sizeof *s.v, sp_req_site_cmp);
+  int n = 0;
+  for (int i = 0; i < s.n; i++)
+    if (!n || s.v[i].kw >= s.v[n - 1].end) s.v[n++] = s.v[i];
+  for (int i = 0; i < n; i++) {
+    int j = i + 1;
+    while (j < n && s.v[j].kw < s.v[i].end + (size_t)s.v[i].ml) j++;
+    if (j > i + 1) {
+      SpReqSite guarded = s.v[i];
+      memmove(&s.v[i], &s.v[i + 1], sizeof *s.v * (size_t)(j - i - 1));
+      s.v[j - 1] = guarded;
+      i = j - 1;
+    }
+  }
+  *n_out = n;
+  return s.v;
+}
+
+/* Where a position of the file's text is in the text being spliced: every
+   splice is recorded as the original offset it moves the text after, and
+   by how much. A require's own splices only touch its statement and what
+   comes before it, so the sites after it move as a whole; a hoist after an
+   earlier inline splice in the same statement goes after it. */
+typedef struct {
+  size_t *at;
+  ptrdiff_t *delta;
+  int n, cap;
+} SpEditMap;
+
+static void sp_emap_add(SpEditMap *m, size_t at, ptrdiff_t delta) {
+  if (m->n == m->cap) {
+    m->cap = m->cap ? m->cap * 2 : 8;
+    m->at = realloc(m->at, sizeof *m->at * (size_t)m->cap);
+    m->delta = realloc(m->delta, sizeof *m->delta * (size_t)m->cap);
+    if (!m->at || !m->delta) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  }
+  m->at[m->n] = at;
+  m->delta[m->n++] = delta;
+}
+
+static size_t sp_emap_pos(const SpEditMap *m, size_t p) {
+  ptrdiff_t d = 0;
+  for (int i = 0; i < m->n; i++) if (m->at[i] <= p) d += m->delta[i];
+  return (size_t)((ptrdiff_t)p + d);
+}
+
+/* A hoist put `site`'s file at `ins` and its value (of `vlen` bytes) in
+   the call's place, taking the text from `before` bytes to `after`. */
+static void sp_req_note_hoist(SpEditMap *m, const SpReqSite *site, size_t ins, size_t vlen, size_t before, size_t after) {
+  ptrdiff_t value = (ptrdiff_t)vlen - (ptrdiff_t)(site->end - site->kw);
+  sp_emap_add(m, ins, (ptrdiff_t)after - (ptrdiff_t)before - value);
+  sp_emap_add(m, site->end, value);
+}
+
 static char *resolve_requires(const char *source, const char *source_path,
                               unsigned char **fsl_out, size_t *fsl_n_out) {
   /* Get base directory */
@@ -4163,12 +4446,26 @@ static char *resolve_requires(const char *source, const char *source_path,
   sp_require_note_text(source, code_len);
   /* computed requires spelling a literal path (#5700), then autoloads with
      a literal path (#5696): each answers a fresh copy of what it reads */
-  char *reachable = sp_rewrite_dead_requires(&file);
+  SpNodeList blanked = { NULL, 0, 0 };
+  char *reachable = sp_rewrite_dead_requires(&file, &blanked);
   reachable[code_len] = '\0';   /* the blanking keeps every byte's place */
+  int nsites = 0;
+  SpReqSite *sites = sp_req_sites(&file.parser, file.root, source, source_path, &blanked, &nsites);
   sp_src_file_free(&file);
+  free(blanked.v);
+  blanked.v = NULL; blanked.n = blanked.cap = 0;   /* nodes of the tree just freed */
   char *pre_auto = sp_rewrite_computed_requires(reachable, dir);
   char *result = sp_rewrite_autoloads(pre_auto, dir);
-  if (strcmp(reachable, result) != 0) g_require_unread = 1;   /* a require the two made */
+  if (strcmp(reachable, result) != 0) {
+    g_require_unread = 1;   /* a require the two made */
+    /* the two rewrite text, so the sites are read again from what they
+       wrote (until they answer require sites themselves) */
+    SpSrcFile again;
+    sp_src_file_parse(&again, result, source_path);
+    free(sites);
+    sites = sp_req_sites(&again.parser, again.root, result, source_path, &blanked, &nsites);
+    sp_src_file_free(&again);
+  }
   free(reachable);
   free(pre_auto);
   sp_autoload_is_main = 0;
@@ -4176,17 +4473,31 @@ static char *resolve_requires(const char *source, const char *source_path,
      splice below so each literal keeps its own file's flag. */
   size_t fsl_n;
   unsigned char *fsl = sp_fsl_make(result, file_fsl, &fsl_n);
-  /* Same scan the plain requires use: wherever the call stands, and never the
-     word as it appears inside a string, comment or heredoc body. */
-  for (;;) {
+  /* Each require_relative site in turn, where the splices before it have
+     moved it to (sp_emap_pos); a site a splice took in is passed over. */
+  SpEditMap emap = { NULL, NULL, 0, 0 };
+  size_t taken_to = 0, inline_kw = SIZE_MAX;   /* the last splice in place */
+  for (int si = 0; si < nsites; si++) {
+    const SpReqSite *site = &sites[si];
+    if (site->kw < taken_to) continue;
+    /* A hoisted file goes ahead of its top-level statement, or, when a file
+       this one inlined earlier in that statement stands before the call,
+       after that file, ahead of the innermost statement around the call
+       that only control flow encloses: the order the two load in. */
+    size_t ins = site->stmt_start;
+    if (inline_kw != SIZE_MAX && inline_kw >= site->stmt_start && inline_kw < site->kw)
+      ins = site->ctl_stmt_start > taken_to ? site->ctl_stmt_start : taken_to;
     SpReqHit hit;
-    if (!sp_require_find(result, result, "require_relative", &hit)) break;
+    hit.kw = result + sp_emap_pos(&emap, site->kw);
+    hit.expr_end = result + sp_emap_pos(&emap, site->end);
+    hit.arg = result + sp_emap_pos(&emap, site->arg);
+    hit.arg_len = site->arg_len;
+    hit.margin = site->margin;
+    size_t len_before = strlen(result);
     /* a file inlined under a condition is loaded only when that branch runs:
        it (and what it requires) stays loadable elsewhere */
     int incl_mark = sp_included_count, cond_inline = 0, ml = 0;
     char *pos = hit.kw, *expr_end = hit.expr_end;
-    char *line_end = strchr(pos, '\n');
-    if (!line_end) line_end = pos + strlen(pos);
     /* Issue #765: bail rather than silently truncating overlong paths
        into the fixed-size buffers. */
     if (hit.arg_len >= 512) break;
@@ -4196,11 +4507,12 @@ static char *resolve_requires(const char *source, const char *source_path,
        file, false when something already had (#3453). */
     const char *req_val = "true";
     /* a name computed at run time: CRuby's LoadError (as for require) */
-    if (hit.arg[-1] == '"' && strstr(rel_path, "#{")) {
+    if (site->quote == '"' && strstr(rel_path, "#{")) {
       char val[700];
       snprintf(val, sizeof val, "raise(LoadError, \"cannot load such file -- %s\")", rel_path);
       size_t cn = 0; unsigned char *cf = sp_fsl_make("", 0, &cn);
-      sp_req_hoist_splice(&result, &fsl, &fsl_n, &hit, "", cf, cn, val);
+      sp_req_hoist_splice(&result, &fsl, &fsl_n, &hit, sp_emap_pos(&emap, ins), "", cf, cn, val);
+      sp_req_note_hoist(&emap, site, ins, strlen(val), len_before, strlen(result));
       free(cf);
       continue;
     }
@@ -4277,11 +4589,8 @@ else {
        trailing modifier would be stranded: inline the file ahead of the line
        and leave the value in the call's place (#3454). */
     {
-      char *trail = expr_end;
-      while (*trail == ' ' || *trail == '\t') trail++;
-      int has_modifier = (*trail != '\n' && *trail != '\r' && *trail != ';' &&
-                          *trail != '\0' && *trail != '#');
-      ml = sp_req_if_modifier(expr_end);
+      /* (a call in the modifier's condition may have been replaced already) */
+      ml = site->ml ? (int)(sp_emap_pos(&emap, site->end + (size_t)site->ml) - sp_emap_pos(&emap, site->end)) : 0;
       cond_inline = !hit.margin || ml || sp_in_cond_region(result, hit.kw);
       /* a later require of a file a hoisted one deferred stands where it
          was, and runs what that one held back */
@@ -4289,12 +4598,14 @@ else {
         free(content); content = strdup("");
         free(cfsl); cfsl = sp_fsl_make(content, 0, &cfsl_n);
       }
-      if (dval || (!hit.margin && !sp_req_in_control_only(result, hit.kw)) || (has_modifier && !ml)) {
+      if (dval || (!hit.margin && !site->control_only) || (site->has_modifier && !ml)) {
         if (!dval && strcmp(req_val, "true") == 0) {
           const char *v = sp_defer_runtime(&content, canon_keep, NULL, incl_mark);
           if (v) req_val = v;
         }
-        sp_req_hoist_splice(&result, &fsl, &fsl_n, &hit, content, cfsl, cfsl_n, req_val);
+        sp_req_hoist_splice(&result, &fsl, &fsl_n, &hit, sp_emap_pos(&emap, ins),
+                            content, cfsl, cfsl_n, req_val);
+        sp_req_note_hoist(&emap, site, ins, strlen(req_val), len_before, strlen(result));
         free(cfsl);
         free(content);
         free(canon_keep);
@@ -4332,10 +4643,16 @@ else {
 
     free(result);
     result = new_result;
+    taken_to = site->end + (size_t)site->ml + (size_t)(stmt_end - (expr_end + ml));
+    inline_kw = site->kw;
+    sp_emap_add(&emap, taken_to, (ptrdiff_t)strlen(result) - (ptrdiff_t)len_before);
     if (cond_inline)
       while (sp_included_count > incl_mark) free(sp_included_paths[--sp_included_count]);
     free(content);
   }
+  free(sites);
+  free(emap.at);
+  free(emap.delta);
   free(dir);
   *fsl_out = fsl;
   *fsl_n_out = fsl_n;
@@ -5046,7 +5363,8 @@ static char *resolve_plain_requires(char *source, const char *exe_path,
       char val[400];
       snprintf(val, sizeof val, "raise(LoadError, \"cannot load such file -- %s\")", lib_name);
       size_t cn = 0; unsigned char *cf = sp_fsl_make("", 0, &cn);
-      sp_req_hoist_splice(&result, fsl, fsl_n, &hit, "", cf, cn, val);
+      sp_req_hoist_splice(&result, fsl, fsl_n, &hit, sp_toplevel_stmt_start(result, (size_t)(hit.kw - result)),
+                          "", cf, cn, val);
       free(cf);
       continue;
     }
@@ -5287,7 +5605,8 @@ else {
           free(found);
           if (v) req_val = v;
         }
-        sp_req_hoist_splice(&result, fsl, fsl_n, &hit, content, cfsl, cfsl_n, req_val);
+        sp_req_hoist_splice(&result, fsl, fsl_n, &hit, sp_toplevel_stmt_start(result, (size_t)(hit.kw - result)),
+                            content, cfsl, cfsl_n, req_val);
         free(cfsl);
         free(content);
         free(canon_keep);

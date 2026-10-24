@@ -5,4 +5,5 @@ first,__END__,last
 true
 :value
 "EndAuto"
+engine.rb loaded
 done

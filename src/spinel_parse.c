@@ -3794,14 +3794,20 @@ static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
   return true;
 }
 
-/* The file's text with its dead requires blanked, read from the file's own
-   parse. */
-static char *sp_rewrite_dead_requires(SpSrcFile *f) {
+/* The file's code (its first `code_len` bytes: sp_src_file_code_len) with
+   its dead requires blanked, read from the file's own parse. Only the code
+   is read: a `RUBY_ENGINE = ...` in the data section after `__END__` is not
+   an assignment, and the tree's nodes all lie before it, at the same
+   offsets in the copy as in the file. */
+static char *sp_rewrite_dead_requires(SpSrcFile *f, size_t code_len) {
   const char *source = f->text;
-  char *result = strdup(source);
-  if (!strstr(source, "require")) return result;
+  char *result = malloc(code_len + 1);
+  if (!result) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  memcpy(result, source, code_len);
+  result[code_len] = '\0';
+  if (!strstr(result, "require")) return result;
   if (f->parser.error_list.size == 0) {
-    SpDeadRequire ctx = { &f->parser, source, result, 0, !sp_source_writes_engine(source) };
+    SpDeadRequire ctx = { &f->parser, source, result, 0, !sp_source_writes_engine(result) };
     pm_visit_node(f->root, sp_skip_dead_require, &ctx);
   }
   return result;
@@ -4163,8 +4169,7 @@ static char *resolve_requires(const char *source, const char *source_path,
   sp_require_note_text(source, code_len);
   /* computed requires spelling a literal path (#5700), then autoloads with
      a literal path (#5696): each answers a fresh copy of what it reads */
-  char *reachable = sp_rewrite_dead_requires(&file);
-  reachable[code_len] = '\0';   /* the blanking keeps every byte's place */
+  char *reachable = sp_rewrite_dead_requires(&file, code_len);
   sp_src_file_free(&file);
   char *pre_auto = sp_rewrite_computed_requires(reachable, dir);
   char *result = sp_rewrite_autoloads(pre_auto, dir);

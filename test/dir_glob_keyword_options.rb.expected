@@ -1,0 +1,11 @@
+["a.md"]
+[".hidden.md", "a.md", "z.md"]
+[".hidden.md", "a.md", "z.md"]
+["a.md", "z.md"]
+[".hidden.md", "a.md", "z.md"]
+[".hidden.md", "a.md", "z.md"]
+["a.md", "z.md"]
+[".hidden.md", "a.md", "z.md"]
+"expected true or false as sort: nil"
+"no implicit conversion from nil to integer"
+["a.md", "z.md"]

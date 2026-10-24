@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include "sp_alloc.h"   /* sp_str_alloc / sp_str_set_len / sp_raise_cls */
 #include "sp_array.h"   /* sp_StrArray for Dir.glob */
+#include "sp_hash.h"    /* sp_StrIntHash for Dir.glob(sort: false) */
 #include <dirent.h>
 #if defined(_WIN32)
 #include <spawn.h>
@@ -997,6 +998,42 @@ sp_StrArray *sp_dir_glob_base(const char *pattern, const char *base) {
       a->data[w++] = a->data[r];
     }
     a->len = w; }
+  return a;
+}
+
+const char *sp_poly_inspect(sp_RbVal v);   /* lib/sp_poly_cold.c */
+/* Dir.glob's keyword options reuse the walk; sort: false keeps the walk's
+   order, which the filesystem gives. */
+sp_StrArray *sp_dir_glob_options(const char *pattern, const char *base, sp_bool dotmatch, sp_RbVal sort) {
+  SP_GC_ROOT_STR(pattern); SP_GC_ROOT_STR(base); SP_GC_ROOT_RBVAL(sort);
+  if (sort.tag != SP_TAG_BOOL)
+    sp_raise_cls("ArgumentError", sp_sprintf("expected true or false as sort: %s", sp_poly_inspect(sort)));
+  int old_dotmatch = sp_glob_dotmatch;
+  sp_glob_dotmatch = dotmatch;
+  sp_StrArray *a;
+  if (sort.v.i) a = sp_dir_glob_base(pattern, base);
+  else {
+    a = sp_StrArray_new();
+    SP_GC_ROOT(a);
+    if (pattern) {
+      sp_glob_start();
+      sp_dir_glob_braces(pattern, base, a);
+      sp_glob_finish();
+    }
+    /* drop a repeated path as sp_dir_glob_base does, without sorting */
+    sp_StrIntHash *seen = sp_StrIntHash_new();
+    SP_GC_ROOT(seen);
+    sp_int w = 0;
+    for (sp_int i = 0; i < a->len; i++) {
+      sp_strelem e = a->data[i];
+      const char *k = SP_SEB(e);
+      if (k && sp_StrIntHash_has_key(seen, k)) continue;
+      if (k) sp_StrIntHash_set(seen, k, 1);
+      a->data[w++] = e;
+    }
+    a->len = w;
+  }
+  sp_glob_dotmatch = old_dotmatch;
   return a;
 }
 

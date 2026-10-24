@@ -105,6 +105,41 @@ static void emit_file_join_args(Compiler *c, const int *argv, int argc, int boxe
   buf_printf(b, "}, %d); })", argc);
 }
 
+/* Dir.glob(pattern, base:, sort:, flags:): one pattern with sort: or flags:;
+   a lone base: keeps its own route. The pattern and the keyword values are
+   evaluated once, in source order, and handed boxed to
+   sp_dir_glob_keywords, which reads them. */
+static int emit_dir_glob_options(Compiler *c, const int *argv, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int en = 0; const int *els = nt_arr(nt, argv[1], "elements", &en);
+  if (en < 1 || en > 3 || ty_is_array(comp_ntype(c, argv[0])) || nt_kind(nt, argv[0]) == NK_ArrayNode) return 0;
+  int nodes[4], n = 1, bi = -1, si = -1, fi = -1;
+  nodes[0] = argv[0];
+  for (int k = 0; k < en; k++) {
+    if (nt_kind(nt, els[k]) != NK_AssocNode) return 0;
+    int key = nt_ref(nt, els[k], "key"), val = nt_ref(nt, els[k], "value");
+    const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+    if (!kn || val < 0) return 0;
+    if (sp_streq(kn, "base")) bi = n;
+    else if (sp_streq(kn, "sort")) si = n;
+    else if (sp_streq(kn, "flags")) fi = n;
+    else return 0;
+    nodes[n++] = val;
+  }
+  if (si < 0 && fi < 0) return 0;
+  buf_puts(b, "({ ");
+  int first = emit_rooted_arg_list(c, nodes, n, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
+  buf_printf(b, "sp_dir_glob_keywords(_t%d", first);
+  int slot[3] = { bi, fi, si };
+  for (int k = 0; k < 3; k++) {
+    if (slot[k] >= 0) buf_printf(b, ", _t%d", first + slot[k]);
+    else buf_puts(b, ", sp_box_nil()");
+    if (k > 0) buf_printf(b, ", %d", slot[k] >= 0);
+  }
+  buf_puts(b, "); })");
+  return 1;
+}
+
 /* realdirpath takes (path, base), while join consumes (base, path).
    Hold the values in Ruby's order before reversing the slots. */
 static void emit_file_realdirpath2(Compiler *c, const int *argv, Buf *b) {
@@ -805,6 +840,9 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_puts(b, ")"); return 1;
       }
     }
+    /* Dir.glob(pattern, base:, sort:, flags: File::FNM_DOTMATCH) */
+    if (sp_streq(name, "glob") && argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode &&
+        emit_dir_glob_options(c, argv, b)) return 1;
     /* Dir[*pats] / Dir.glob(*pats), and Dir[a, b]: every pattern a splat
        holds or an argument names, gathered into one list for the union */
     if (sp_streq(name, "glob") && argc >= 1 &&

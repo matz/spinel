@@ -912,6 +912,13 @@ int an_push_widens_fresh(Compiler *c, int id);
    (analyze_infer.c) */
 enum { AN_LIFT_INT = 1, AN_LIFT_FLOAT = 2, AN_LIFT_STRING = 4, AN_LIFT_SYMBOL = 8, AN_LIFT_OTHER = 16 };
 int an_push_lifts_boxed(Compiler *c, int id);
+/* The parameter of a literal lambda that an `in` arm's pattern (or the one
+   under its guard) calls with the subject, as Proc#=== does: exactly one
+   required parameter the body does not assign, a body that leaves only by its
+   last value, and no === of the program's own on Proc. Analysis types that
+   parameter from the subject and codegen inlines the call; any other lambda pattern is left as
+   it was. Its RequiredParameterNode, or -1 (analyze_pass.c). */
+int case_in_lambda_param(Compiler *c, int lam);
 /* the value of node n is dropped where it is: a statement's, a loop
    body's, an ensure clause's (an_value_dropped, analyze_infer.c) */
 int an_node_dropped(Compiler *c, int n);

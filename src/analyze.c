@@ -14018,12 +14018,30 @@ static int oa_named_cmp(const void *a, const void *b) {
   return strcmp(((const OaNamed *)a)->nm, ((const OaNamed *)b)->nm);
 }
 
+/* A builtin walk that throws its block's value away: each & co. on an Array,
+   Hash, Range or Integer. The block's last statement is discarded there, as
+   in `def walk; @kids.each { |k| k.walk }; end`, where the recursive call
+   would otherwise read walk's value and keep @kids boxed. */
+static int oa_ignores_block_value(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  static const char *const walks[] = {
+    "each", "each_with_index", "reverse_each", "each_entry", "times", "upto",
+    "downto", "each_key", "each_value", "each_pair", NULL };
+  const char *nm = nt_str(nt, call, "name");
+  int recv = nt_ref(nt, call, "receiver");
+  if (!nm || recv < 0 || !str_in(nm, walks)) return 0;
+  TyKind rt = infer_type(c, recv);
+  return ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) ||
+         rt == TY_RANGE || rt == TY_INT;
+}
+
 /* walk_disc[id]: a walk's value is thrown away. An object array walk
    narrows only there: `y = a.each { }` or `a.each { break r }` hands the
    array (or the break value) to a consumer typed for the boxed array, which
    the narrowed sp_PtrArray is not (#4879). These statements throw their
    value away: one that another statement follows, a top-level statement,
-   and the last statement of an Integer's `times` block or of a loop body.
+   the last statement of a loop body, and the last statement of the block
+   of a walk that ignores its block's value (oa_ignores_block_value).
 
    The last statement of a method is the method's value. This pass finds
    the method names whose value something can read. A call of a name reads
@@ -14056,10 +14074,8 @@ static char *oa_walk_disc(Compiler *c, int nc) {
     int body = -1;
     if (k == NK_WhileNode || k == NK_UntilNode) body = nt_ref(nt, id, "statements");
     else if (k == NK_CallNode) {
-      const char *cn = nt_str(nt, id, "name");
-      int blk = nt_ref(nt, id, "block"), recv = nt_ref(nt, id, "receiver");
-      if (cn && sp_streq(cn, "times") && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
-          recv >= 0 && infer_type(c, recv) == TY_INT)
+      int blk = nt_ref(nt, id, "block");
+      if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && oa_ignores_block_value(c, id))
         body = nt_ref(nt, blk, "body");
     }
     if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;

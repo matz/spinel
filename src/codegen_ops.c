@@ -49,6 +49,8 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $K   a Hash receiver's boxed class id (hash_box_cls)
      $A   an Array receiver's element-kind name, for sp_<A>Array_* ("Poly"
           for a poly array, else array_kind)
+     $Y   an Array receiver's boxed class id, for sp_raise_frozen_array_at
+          (array_frozen_cls)
      $eN  argument N by emit_expr
      $B / $E  a String Range's begin / end in _t$T, through its handle
           under --share-strings (sp_srange_first / sp_srange_last)
@@ -187,6 +189,11 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     else if (p[0] == '$' && p[1] == 'A') {
       const char *ak = x->rt == TY_POLY_ARRAY ? "Poly" : array_kind(x->rt);
       buf_puts(b, ak ? ak : "");
+      p++;
+    }
+    else if (p[0] == '$' && p[1] == 'Y') {
+      const char *cls = array_frozen_cls(x->rt);
+      buf_puts(b, cls ? cls : "0");
       p++;
     }
     else if (p[0] == '$' && p[1] == 'O') {

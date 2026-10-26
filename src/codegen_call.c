@@ -6795,6 +6795,8 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
         emit_boxed(c, argv[k], b);
         buf_puts(b, ");");
       }
+      /* a frozen Array raises even when no value is given */
+      buf_printf(b, " if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) && sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d);", tr, tr, tr, tr);
       buf_printf(b, " sp_poly_insert_n(_t%d, _t%d, _t%d); })", tr, ti, ta);
     }
     if ((rvti_k == NK_LocalVariableReadNode ||

@@ -1118,12 +1118,12 @@ int emit_op_array_compact_bang(Compiler *c, const BopCtx *x, Buf *b) {
   if (rt == TY_POLY_ARRAY) {
     if (sp_streq(name, "compact!") && argc == 0) {
       /* value form: self when changed, nil when a no-op (CRuby) */
-      buf_puts(b, "sp_PolyArray_compact_bangq("); emit_expr(c, recv, b); buf_puts(b, ")");
+      buf_puts(b, "sp_PolyArray_compact_bangq("); emit_array_frozen_checked(c, recv, rt, b); buf_puts(b, ")");
       return 1;
     }
     if (sp_streq(name, "flatten!") && argc == 0) {
       /* value form: self when changed, nil when a no-op (CRuby) */
-      buf_puts(b, "sp_PolyArray_flatten_bangq("); emit_expr(c, recv, b); buf_puts(b, ")");
+      buf_puts(b, "sp_PolyArray_flatten_bangq("); emit_array_frozen_checked(c, recv, rt, b); buf_puts(b, ")");
       return 1;
     }
     return 0;
@@ -1142,7 +1142,7 @@ int emit_op_array_compact_bang(Compiler *c, const BopCtx *x, Buf *b) {
       (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)) {
     /* a typed array can hold neither sub-arrays nor nils: both bangs are
        always a no-op, and CRuby's no-op contract is nil */
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_box_nil())");
+    buf_puts(b, "((void)("); emit_array_frozen_checked(c, recv, rt, b); buf_puts(b, "), sp_box_nil())");
     return 1;
   }
   return 0;
@@ -1191,8 +1191,13 @@ int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b) {
     /* a typed (scalar-element) array has no nesting: flatten(n) copies,
        flatten!(n) is a no-op returning nil */
     if (name[7] == '!') {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
-      emit_int_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+      /* the receiver, then the depth, then the frozen check: the depth's
+         side effects run before the raise, as in CRuby */
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b);
+      buf_puts(b, "; (void)("); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "); if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s); sp_box_nil(); })",
+                 t, t, t, array_frozen_cls(rt));
     }
     else {
       buf_puts(b, "((void)(");
@@ -1813,6 +1818,8 @@ int emit_op_array_concat(Compiler *c, const BopCtx *x, Buf *b) {
     int lb = g_tmp + 1; g_tmp += argc;
     for (int ai = 0; ai < argc; ai++)
       buf_printf(b, " sp_int _t%d = sp_PolyArray_length(_t%d);", lb + ai, base + ai);
+    /* a frozen receiver raises even when every argument is empty */
+    buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, SP_BUILTIN_POLY_ARRAY);", t, t, t);
     for (int ai = 0; ai < argc; ai++) {
       int ti = ++g_tmp;
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));",

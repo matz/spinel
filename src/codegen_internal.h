@@ -1858,6 +1858,13 @@ const char *array_kind(TyKind t);
 /* "Poly" / "Ptr" / array_kind, for a loop that walks the container. "Ptr" is
    a nested numeric table (sp_PtrArray of row pointers). */
 const char *array_iter_kind(TyKind t);
+/* The receiver of an Array mutator, refused when frozen: CRuby's modify
+   check runs before the mutator looks at its arguments, so a call that
+   changes nothing still raises FrozenError. Answers the receiver. */
+void emit_array_frozen_checked(Compiler *c, int recv, TyKind rt, Buf *b);
+/* The class id sp_raise_frozen_array_at names for an Array of kind rt;
+   NULL for a type that is not an Array. */
+const char *array_frozen_cls(TyKind rt);
 const char *array_to_poly_fn(TyKind t);
 int call_never_returns(Compiler *c, int id);
 /* comp_ntype for a fold seed, with an empty `[]` / `{}` literal resolved to

@@ -5699,6 +5699,22 @@ const char *array_iter_kind(TyKind t) {
   if (ty_is_ptr_array(t)) return "Ptr";   /* a numeric table's rows, or objects */
   return array_kind(t);
 }
+const char *array_frozen_cls(TyKind rt) {
+  return rt == TY_POLY_ARRAY ? "SP_BUILTIN_POLY_ARRAY"
+       : rt == TY_INT_ARRAY ? "SP_BUILTIN_INT_ARRAY"
+       : rt == TY_FLOAT_ARRAY ? "SP_BUILTIN_FLT_ARRAY"
+       : rt == TY_STR_ARRAY ? "SP_BUILTIN_STR_ARRAY"
+       : ty_is_ptr_array(rt) ? "SP_BUILTIN_PTR_ARRAY" : NULL;
+}
+void emit_array_frozen_checked(Compiler *c, int recv, TyKind rt, Buf *b) {
+  const char *cls = array_frozen_cls(rt);
+  if (!cls) { emit_expr(c, recv, b); return; }
+  int t = ++g_tmp;
+  buf_puts(b, "({ "); emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", t);
+  emit_expr(c, recv, b);
+  buf_printf(b, "; if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s); _t%d; })",
+             t, t, t, cls, t);
+}
 void emit_c_escaped_n(Buf *b, const char *s, size_t len) {
   for (size_t i = 0; i < len; i++) {
     unsigned char ch = (unsigned char)s[i];

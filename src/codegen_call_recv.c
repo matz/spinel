@@ -1312,6 +1312,10 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
                tf, tf, tc, tc, ta, tc, tf, ta, tc);
     ta = tf;
   }
+  /* a frozen receiver raises even when the splats spread no element */
+  if (!poly)
+    buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", tr, tr, tr, array_frozen_cls(rt));
+  else buf_printf(b, " if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) && sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d);", tr, tr, tr, tr);
   int tj = ++g_tmp;
   /* the values come boxed, and a nil converts to an Integer or Float
      array's nil element */
@@ -2427,6 +2431,8 @@ else {
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_ary_arg_ck(_t%d);", tv, tv, tv);
         buf_printf(b, " sp_int _t%d = sp_poly_length(_t%d);", tn, tv);
       }
+      /* a frozen receiver raises even when every argument is empty */
+      buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", ta, ta, ta, array_frozen_cls(rt));
       for (int j = 0; j < argc; j++) {
         int tv = vbase + 2 * j, tn = tv + 1, ti = ++g_tmp;
         buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)", ti, ti, tn, ti);
@@ -2457,6 +2463,8 @@ else {
       }
       for (int j = 0; j < argc; j++)
         buf_printf(b, " sp_int _t%d = sp_%sArray_length(_t%d);", lbase + j, k, base + j);
+      /* a frozen receiver raises even when every argument is empty */
+      buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", ta, ta, ta, array_frozen_cls(rt));
       for (int j = 0; j < argc; j++) {
         int ii = ++g_tmp, sn = lbase + j;
         /* the appended elements carry their array's nils */
@@ -5056,7 +5064,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         (sp_streq(nmZ, "push") || sp_streq(nmZ, "append") ||
          sp_streq(nmZ, "concat") || sp_streq(nmZ, "unshift") ||
          sp_streq(nmZ, "prepend"))) {
-      emit_expr(c, recvZ, b);
+      emit_array_frozen_checked(c, recvZ, comp_ntype(c, recvZ), b);
       return 1;
     }
     /* `zip(*xs)` / `product(*xs)`: the splat spreads across the ARGUMENT LIST,

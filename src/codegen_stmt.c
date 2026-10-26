@@ -24118,6 +24118,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_printf(b, " }; if (!sp_poly_queue_push_n(_t%d, %d, _t%d)) {", tr, argc, ta);
       buf_printf(b, " if (!(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)))"
                     " sp_raise_nomethod(sp_nomethod_msg(\"push\", _t%d));", tr, tr, tr);
+      /* a frozen Array raises even when no value is given */
+      if (argc == 0) buf_printf(b, " if (sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d);", tr, tr);
       for (int a = 0; a < argc; a++) buf_printf(b, " sp_poly_shl(_t%d, _t%d[%d]);", tr, ta, a);
       buf_puts(b, " } }\n");
       return 1;
@@ -24468,6 +24470,12 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_puts(&lp, "\n");
     }
     if (hd.p) buf_puts(b, hd.p);
+    /* a frozen receiver raises even when every argument is empty */
+    if (array_frozen_cls(rt)) {
+      emit_indent(b, indent + 1);
+      buf_printf(b, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n",
+                 tr, tr, tr, array_frozen_cls(rt));
+    }
     if (lp.p) buf_puts(b, lp.p);
     emit_indent(b, indent + 1);
     for (int a = 0; a < argc; a++) buf_puts(b, "}");

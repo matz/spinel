@@ -24390,7 +24390,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
        the _nilable store sets (sp_array.h) */
     const char *nilable = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) ? "_nilable" : "";
     emit_indent(b, indent);
-    buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
+    /* rooted across the arguments, which can allocate */
+    buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
     Buf hd, lp; memset(&hd, 0, sizeof hd); memset(&lp, 0, sizeof lp);
     for (int a = 0; a < argc; a++) {
       int tn = ++g_tmp, ti = ++g_tmp;

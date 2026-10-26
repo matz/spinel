@@ -1195,7 +1195,7 @@ int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b) {
          side effects run before the raise, as in CRuby */
       int t = ++g_tmp;
       buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b);
-      buf_puts(b, "; (void)("); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); (void)(", t); emit_int_expr(c, argv[0], b);
       buf_printf(b, "); if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s); sp_box_nil(); })",
                  t, t, t, array_frozen_cls(rt));
     }
@@ -1787,7 +1787,9 @@ int emit_op_array_concat(Compiler *c, const BopCtx *x, Buf *b) {
      in place, return the receiver. Coerce a typed-array argument to poly. */
   if (rt == TY_POLY_ARRAY && sp_streq(name, "concat")) {
     int t = ++g_tmp;
-    buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b); buf_puts(b, ";");
+    /* rooted: an argument that allocates can collect a receiver nothing
+       else holds (a method's value) before the frozen check and the appends */
+    buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b); buf_printf(b, "; SP_GC_ROOT(_t%d);", t);
     /* evaluate (and root) every argument left-to-right BEFORE any append, so a
        side-effecting argument or one that reads the receiver sees pre-mutation
        state, per Ruby's arg-before-call evaluation order. */

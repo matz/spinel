@@ -12592,7 +12592,10 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       if (argc < 1 || argc > 16 || nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK)) continue;
     }
     if (id >= c->node_cap) continue;
-    if (std_stream_bare_call_own(c, id, nm)) continue;
+    /* `Kernel.puts x` (desugar_kernel_recv left it bare) is Kernel's even
+       beside a puts of the program's, so it writes to $stdout too */
+    int kern = nt_int(nt, id, "kernel_recv", 0);
+    if (!kern && std_stream_bare_call_own(c, id, nm)) continue;
     /* printf's text comes from Kernel#format: not when the program has a
        format of its own anywhere (a class's would shadow it there) */
     if (is_printf) {
@@ -12614,6 +12617,9 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       if (gv < 0) continue;
       nt_node_set_ref(nt, id, "receiver", gv);
       nt_set_vcall(nt, id, 0);
+      /* $stdout's puts now, not the builtin Kernel one */
+      nt_node_set_int(nt, id, "builtin_only", 0);
+      nt_node_set_int(nt, id, "kernel_recv", 0);
     }
     else {
       /* the text to write, and what the call answers */

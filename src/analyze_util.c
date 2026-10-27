@@ -912,10 +912,11 @@ int class_recv_static_ci(Compiler *c, int node) {
 
 /* The class method `name` the program defines for the class a class-valued
    receiver names at compile time (class_recv_static_ci), up its ancestors;
-   -1 when there is none or the class is known only at run time. */
-int class_recv_user_cmethod(Compiler *c, int node, const char *name) {
+   -1 when there is none or the class is known only at run time: the target
+   of call `call` on receiver `node` (call_target). */
+int class_recv_user_cmethod(Compiler *c, int call, int node, const char *name) {
   int ci = class_recv_static_ci(c, node);
-  return ci >= 0 ? comp_cmethod_in_chain(c, ci, name, NULL) : -1;
+  return ci >= 0 ? call_target(c, call, ci, name, CT_CMETHOD, NULL) : -1;
 }
 
 /* The literal symbol behind a symbol-typed expression: a SymbolNode itself,
@@ -1147,7 +1148,7 @@ int lazy_method_chain(Compiler *c, int call) {
     if (ac != 0) return -1; }
   const char *nm = nt_str(nt, call, "name");
   if (!nm) return -1;
-  int m = comp_method_index(c, nm);
+  int m = call_target(c, call, -1, nm, CT_TOP, NULL);
   if (m < 0 || c->scopes[m].nparams != 0) return -1;
   int body = c->scopes[m].body;
   if (body < 0) return -1;
@@ -2203,14 +2204,14 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
     /* resolved as emission resolves it: a class method's own chain before
        a top-level def of the same name */
     if (rmi < 0 && cn) rmi = comp_self_call_mi(c, cid, cn);
-    if (rmi < 0) rmi = comp_method_index(c, cn);
+    if (rmi < 0) rmi = call_target(c, cid, -1, cn, CT_TOP, NULL);
     if (rmi < 0) {
       Scope *cs = comp_scope_of(c, cid);
       if (cs->class_id >= 0) {
-        rmi = comp_method_in_chain(c, cs->class_id, cn, NULL);
+        rmi = call_target(c, cid, cs->class_id, cn, 0, NULL);
         /* an implicit-self call inside a class method resolves to a CLASS
            method; its block/forward feeds that method's blk_ret too */
-        if (rmi < 0) rmi = comp_cmethod_in_chain(c, cs->class_id, cn, NULL);
+        if (rmi < 0) rmi = call_target(c, cid, cs->class_id, cn, CT_CMETHOD, NULL);
       }
     }
     /* a bare call to a method of a module included at the top level, as
@@ -2221,7 +2222,7 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
   }
   else {
     TyKind crt = infer_type(c, crecv);
-    if (ty_is_object(crt)) rmi = comp_method_in_chain(c, ty_object_class(crt), cn, NULL);
+    if (ty_is_object(crt)) rmi = call_target(c, cid, ty_object_class(crt), cn, 0, NULL);
     /* `Klass.new { block }`: the block feeds the class's initialize. A
        scoped receiver (`NS::Klass`) resolves by its leaf name, the key
        classes are indexed under. */
@@ -2240,7 +2241,7 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
              (nt_kind(nt, crecv) == NK_ConstantReadNode ||
               nt_kind(nt, crecv) == NK_ConstantPathNode)) {
       int nci = comp_class_index(c, nt_str(nt, crecv, "name"));
-      if (nci >= 0) rmi = comp_cmethod_in_chain(c, nci, cn, NULL);
+      if (nci >= 0) rmi = call_target(c, cid, nci, cn, CT_CMETHOD, NULL);
     }
   }
   return rmi;
@@ -2982,8 +2983,8 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
   int nd = 0;
   const int *ds = comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++) {
-    int kmi = cmeth ? comp_cmethod_in_chain(c, ds[i], name, NULL)
-                    : comp_method_in_chain(c, ds[i], name, NULL);
+    int kmi = cmeth ? call_target(c, call_id, ds[i], name, CT_CMETHOD, NULL)
+                    : call_target(c, call_id, ds[i], name, 0, NULL);
     if (kmi < 0 || kmi == base_mi) continue;
     r = ty_unify(r, call_id >= 0 && c->scopes[kmi].yields ? method_call_ret(c, kmi, call_id)
                                                           : (TyKind)c->scopes[kmi].ret);
@@ -3425,7 +3426,7 @@ TyKind proc_ret_of(Compiler *c, int node) {
     if (recv < 0) mi = comp_self_call_mi(c, node, name);
 else {
       TyKind rt = infer_type(c, recv);
-      if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+      if (ty_is_object(rt)) mi = call_target(c, node, ty_object_class(rt), name, 0, NULL);
     }
     if (mi >= 0) return (TyKind)c->scopes[mi].ret_proc_ret;
   }
@@ -3442,11 +3443,12 @@ else {
 /* The instance method a class's own self reaches by `name`, or -1: a class
    is an instance of Class, so of the instance methods on its chain only one
    Object, BasicObject, Kernel, Module or Class gives it is the class's; the
-   rest (an included module's, the class's own) are its instances'. */
-int comp_class_self_inst_mi(Compiler *c, int class_id, const char *name) {
+   rest (an included module's, the class's own) are its instances'. Asked
+   for call `call` (call_target). */
+int comp_class_self_inst_mi(Compiler *c, int call, int class_id, const char *name) {
   static const char *const OBJ_SIDE[] = { "Object", "BasicObject", "Kernel", "Module", "Class", NULL };
   int dc = -1;
-  int mi = comp_method_in_chain(c, class_id, name, &dc);
+  int mi = call_target(c, call, class_id, name, 0, &dc);
   return mi >= 0 && dc >= 0 && c->classes[dc].name && str_in(c->classes[dc].name, OBJ_SIDE) ? mi : -1;
 }
 /* See compiler.h. A builtins/ file's helper is known by its def's stamp
@@ -3541,25 +3543,25 @@ int comp_self_call_mi(Compiler *c, int id, const char *name) {
        class methods, not the class's instance methods; inside an instance
        method it does not reach class methods */
     if (self->is_cmethod) {
-      mi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
-      if (mi < 0) mi = comp_class_self_inst_mi(c, self->class_id, name);
+      mi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
+      if (mi < 0) mi = comp_class_self_inst_mi(c, id, self->class_id, name);
     }
-    else mi = comp_method_in_chain(c, self->class_id, name, NULL);
+    else mi = call_target(c, id, self->class_id, name, 0, NULL);
   }
-  if (mi < 0) mi = comp_method_index(c, name);
+  if (mi < 0) mi = call_target(c, id, -1, name, CT_TOP, NULL);
   return mi;
 }
 
-int send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name) {
+int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char *name) {
   if (ty_is_object(srt))
-    return comp_method_in_chain(c, ty_object_class(srt), name, NULL) >= 0 ||
+    return call_target(c, call, ty_object_class(srt), name, 0, NULL) >= 0 ||
            comp_reader_in_chain(c, ty_object_class(srt), name, NULL);
   /* a class named by a constant (or `self.class`): its own class methods
      come before Object's private top-level def */
   NodeKind rk = nt_kind(c->nt, recv);
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
            ? comp_class_index(c, nt_str(c->nt, recv, "name")) : self_class_static_ci(c, recv);
-  if (ci >= 0 && comp_cmethod_in_chain(c, ci, name, NULL) >= 0) return 1;
+  if (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0) return 1;
   if (srt == TY_POLY) {
     /* any class's chain, from the by-name lists while the chain memo can
        be trusted, class by class otherwise */
@@ -3568,7 +3570,7 @@ int send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name) {
     if (nr > 0) return 1;
     if (nr == 0) return comp_name_reader_any(c, name);
     for (int k = 0; k < c->nclasses; k++)
-      if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
+      if (call_target(c, call, k, name, 0, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
     return 0;
   }
   const char *bc = srt == TY_INT ? "Integer" : srt == TY_FLOAT ? "Float"
@@ -3582,7 +3584,7 @@ int send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name) {
 int comp_cbody_call_mi(Compiler *c, int id, const char *name) {
   Scope *s = comp_scope_of(c, id);
   if (!name || (s && s->name) || c->node_cbody[id] < 0) return -1;
-  return comp_cmethod_in_chain(c, c->node_cbody[id], name, NULL);
+  return call_target(c, id, c->node_cbody[id], name, CT_CMETHOD, NULL);
 }
 
 TyKind proc_call_ret(Compiler *c, int recv) {
@@ -4010,8 +4012,8 @@ int call_user_yield_mi(Compiler *c, int id) {
     /* ... and `self.class.run { }` by the class self.class names, as the
        inliner does (self_class_static_ci) */
     int ci = cname ? comp_class_index(c, cname) : self_class_static_ci(c, recv);
-    if (ci >= 0) mi = comp_cmethod_in_chain(c, ci, name, NULL);
-    else if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+    if (ci >= 0) mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+    else if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);
   }
   if (mi < 0) return -1;
   Scope *m = &c->scopes[mi];
@@ -4402,7 +4404,7 @@ const char *time_strict_parser_call(Compiler *c, int id) {
   if (an != 1) return NULL;
   if (nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return NULL;
   int tci = comp_class_index(c, "Time");
-  if (tci >= 0 && comp_cmethod_in_chain(c, tci, name, NULL) >= 0) return NULL;
+  if (tci >= 0 && call_target(c, id, tci, name, CT_CMETHOD, NULL) >= 0) return NULL;
   return fn;
 }
 

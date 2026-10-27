@@ -79,6 +79,18 @@ CallPlan cplan_method_call(Compiler *c, int id);
 CallPlan cplan_send_arm(Compiler *c, int id);
 CallPlan cplan_exception_render(Compiler *c, int id, int ci);
 const CallPlan *cplan_user(Compiler *c, int id);
+/* The method scope call `id` runs when it asks for `name`: on cls's
+   instance side through its chain, CT_CMETHOD on its class side, CT_OWN
+   in cls's own table only, CT_TOP among the top-level functions (cls not
+   read); *def_class (when asked) the class whose table holds it; -1 for
+   none. The one place a site asks "what does this call run": it answers
+   from the tables by name (a redefined method's entry is its last
+   definition), and binding a call to one of a method's versions (#9898)
+   is decided here. A question about a name rather than one call (is it
+   defined, which classes answer it) and a method the language calls by a
+   fixed name (`initialize`, `<=>`) ask the tables directly. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4 };
+int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class);
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in

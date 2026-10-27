@@ -2633,8 +2633,8 @@ int an_bare_call_class_owned(Compiler *c, int id) {
   Scope *sc = comp_scope_of(c, id);
   int cid = sc ? sc->class_id : -1;
   if (cid < 0 || cid >= c->nclasses) return 0;
-  if (sc->is_cmethod) return comp_cmethod_in_chain(c, cid, name, NULL) >= 0;
-  return comp_method_in_chain(c, cid, name, NULL) >= 0 ||
+  if (sc->is_cmethod) return call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0;
+  return call_target(c, id, cid, name, 0, NULL) >= 0 ||
          comp_reader_in_chain(c, cid, name, NULL);
 }
 
@@ -2823,7 +2823,7 @@ TyKind infer_call(Compiler *c, int id) {
       /* not Enumerable's own method: the arm never dispatches to it
          (desugar_builtin_enum_calls), its includers' copies answer */
       if (c->classes[k].is_native_class || sp_streq(c->classes[k].name, "Enumerable")) continue;
-      int mi = comp_method_in_class(c, k, on);
+      int mi = call_target(c, id, k, on, CT_OWN, NULL);
       if (mi < 0) continue;
       if (c->scopes[mi].ret == TY_UNKNOWN) { pending = 1; continue; }
       r = r == TY_UNKNOWN ? (TyKind)c->scopes[mi].ret : ty_unify(r, (TyKind)c->scopes[mi].ret);
@@ -2961,7 +2961,7 @@ int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out
   const char *name = nt_str(c->nt, call_id, "name");
   if (!name || builtin_method_known(cls, name) || builtin_object_method_known(name)) return 0;
   int oci = comp_class_index(c, "Object");
-  int omi = oci >= 0 ? comp_method_in_chain(c, oci, name, NULL) : -1;
+  int omi = oci >= 0 ? call_target(c, call_id, oci, name, 0, NULL) : -1;
   if (omi < 0) return 0;
   /* a yielding one given a block answers what its proc form does, a boxed
      value (#5779), as the general Object fallback says */
@@ -3186,7 +3186,7 @@ int an_bi_generic_splat(Compiler *c, int id) {
   const char *own[64];
   if (builtin_recv_owner_classes(name, own, 64) < 0) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].ary_root > 0 && comp_method_in_chain(c, k, name, NULL) >= 0) return 0;
+    if (c->classes[k].ary_root > 0 && call_target(c, id, k, name, 0, NULL) >= 0) return 0;
   /* a name the program aliases, undefines, hides or defines by a Symbol
      (`alias center ljust`, `private :center`), and any name in a program
      that gives a builtin class or module a method of its own (String,
@@ -3256,7 +3256,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       for (int i = 0, k = 0; rp ? i < nr : k < c->nclasses; i++, k++) {
         if (rp) k = rp[2 * i];
         if (c->classes[k].is_native_class) continue;
-        int mi = rp ? rp[2 * i + 1] : comp_method_in_chain(c, k, name, NULL);
+        int mi = rp ? rp[2 * i + 1] : call_target(c, id, k, name, 0, NULL);
         if (mi < 0 || mi >= c->nscopes) continue;
         TyKind ur = (TyKind)c->scopes[mi].ret;
         if (ty_is_object(ur) || ur == TY_POLY) { *out = TY_POLY; return 1; }
@@ -3272,7 +3272,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       for (int i = 0, k = 0; rp ? i < nr : k < c->nclasses; i++, k++) {
         if (rp) k = rp[2 * i];
         if (c->classes[k].is_native_class) continue;
-        int mi = rp ? rp[2 * i + 1] : comp_method_in_chain(c, k, name, NULL);
+        int mi = rp ? rp[2 * i + 1] : call_target(c, id, k, name, 0, NULL);
         if (mi < 0 || mi >= c->nscopes) continue;
         TyKind ur = (TyKind)c->scopes[mi].ret;
         if (ur != TY_BOOL && ur != TY_UNKNOWN && ur != TY_VOID &&
@@ -3430,7 +3430,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         if (pcm < 0) {
           pcm = 0;
           for (int k = 0; k < c->nclasses && !pcm; k++)
-            if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) pcm = 1;
+            if (call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) pcm = 1;
         }
         if (!pcm) { *out = an_poly_concrete(c, name, TY_POLY_ARRAY); return 1; }
       }
@@ -3445,9 +3445,9 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
          curry, which answers for every receiver the Proc arm does not */
       if (argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode && sp_streq(name, "curry") &&
           !(comp_class_index(c, "Object") >= 0 &&
-            comp_method_in_chain(c, comp_class_index(c, "Object"), name, NULL) >= 0) &&
+            call_target(c, id, comp_class_index(c, "Object"), name, 0, NULL) >= 0) &&
           !(comp_class_index(c, "Kernel") >= 0 &&
-            comp_method_in_chain(c, comp_class_index(c, "Kernel"), name, NULL) >= 0))
+            call_target(c, id, comp_class_index(c, "Kernel"), name, 0, NULL) >= 0))
         { *out = an_poly_concrete(c, name, TY_CURRY); return 1; }
       if (argc == 0 && sp_streq(name, "to_proc")) { *out = an_poly_concrete(c, name, TY_POLY); return 1; }
       /* Integer#chr(Encoding::X) on a boxed Integer (emit_poly_call) */
@@ -3848,7 +3848,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         if (sp_streq(name, "next_float") || sp_streq(name, "prev_float")) {
           int cm_other = 0;
           for (int k = 0; k < c->nclasses && !cm_other && !an_builtin_only; k++) {
-            int mi = comp_cmethod_in_chain(c, k, name, NULL);
+            int mi = call_target(c, id, k, name, CT_CMETHOD, NULL);
             if (mi >= 0 && c->scopes[mi].ret != TY_FLOAT && c->scopes[mi].ret != TY_UNKNOWN)
               cm_other = 1;
           }
@@ -4068,7 +4068,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         char wbase[16] = "";
         if (sp_streq(name, "pos=")) memcpy(wbase, "pos", 4);
         for (int k = 0; k < c->nclasses && !owned; k++)
-          if (comp_poly_arm_defines(c, k, name) || comp_cmethod_in_chain(c, k, name, NULL) >= 0 ||
+          if (comp_poly_arm_defines(c, k, name) || call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0 ||
               (!c->classes[k].is_native_class && comp_is_reader(&c->classes[k], name)) ||
               (wbase[0] && comp_writer_in_chain(c, k, wbase, NULL)))
             owned = 1;
@@ -4550,7 +4550,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     if (rk == NK_ConstantReadNode && sp_feature_required("socket") &&
         io_family_name(nt_str(nt, recv, "name")) && !is_io_class_name(nt_str(nt, recv, "name"))) {
       int skc = comp_class_index(c, nt_str(nt, recv, "name"));
-      if (skc < 0 || comp_cmethod_in_chain(c, skc, name, NULL) < 0) {
+      if (skc < 0 || call_target(c, id, skc, name, CT_CMETHOD, NULL) < 0) {
         if (sp_streq(name, "do_not_reverse_lookup") && argc == 0) { *out = TY_BOOL; return 1; }
         if (sp_streq(name, "do_not_reverse_lookup=") && argc == 1) { *out = infer_type(c, argv[0]); return 1; }
         if (sp_streq(name, "for_fd") && argc == 1) { *out = TY_IO; return 1; }
@@ -5483,7 +5483,7 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
         ty_is_object(a0)) {
       int acls = ty_object_class(a0);
       if (comp_method_in_chain(c, acls, "coerce", NULL) >= 0) {
-        int op_mi = comp_method_in_chain(c, acls, name, NULL);
+        int op_mi = call_target(c, id, acls, name, 0, NULL);
         /* Only when the pair is of the object's own class does its operator
            decide the type. The documented plain-number idiom never reaches
            that method -- the pair's receiver is a Float -- so taking the
@@ -5747,7 +5747,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
        method of its own (`def self.name = Thread.current[:name]`), whose
        dispatch below types the call. A class known only at run time may be
        one with such a method or one without: boxed, either answer. */
-    if (argc == 0 && is_name_reader(name) && class_recv_user_cmethod(c, recv, name) < 0) {
+    if (argc == 0 && is_name_reader(name) && class_recv_user_cmethod(c, id, recv, name) < 0) {
       int ncc = 0, other = 0;
       const PolyCand *pc = NULL;
       if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv))
@@ -5797,14 +5797,14 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
                       sp_streq(name, ">=") || sp_streq(name, "<=>"))) {
       int oci = class_recv_static_ci(c, recv);
-      if (oci < 0 || comp_cmethod_in_chain(c, oci, name, NULL) < 0) { *out = TY_POLY; return 1; }
+      if (oci < 0 || call_target(c, id, oci, name, CT_CMETHOD, NULL) < 0) { *out = TY_POLY; return 1; }
     }
     if (argc == 0 && sp_streq(name, "ancestors")) { *out = TY_POLY_ARRAY; return 1; }
     if (argc == 0 && sp_streq(name, "subclasses")) { *out = TY_POLY_ARRAY; return 1; }
     if (argc == 1 && is_kind_query(name)) { *out = TY_BOOL; return 1; }
     if (argc == 1 && sp_streq(name, "include?")) {
       int oci = class_recv_static_ci(c, recv);
-      if (oci < 0 || comp_cmethod_in_chain(c, oci, name, NULL) < 0) { *out = TY_BOOL; return 1; }
+      if (oci < 0 || call_target(c, id, oci, name, CT_CMETHOD, NULL) < 0) { *out = TY_BOOL; return 1; }
     }
     if (argc == 1 && sp_streq(name, "class_variable_defined?")) { *out = TY_BOOL; return 1; }
     if (sp_streq(name, "class_variable_get") || sp_streq(name, "class_variable_set")) { *out = TY_POLY; return 1; }
@@ -5879,7 +5879,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     }
     if (argc == 1 && is_ivar_access(name) && !is_ivar_set(name)) {
       int ci = class_recv_static_ci(c, recv);
-      if (ci < 0 || comp_cmethod_in_chain(c, ci, name, NULL) < 0)
+      if (ci < 0 || call_target(c, id, ci, name, CT_CMETHOD, NULL) < 0)
         { *out = TY_POLY; return 1; }
     }
   }
@@ -5936,14 +5936,14 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
      codegen arm that lowers bareword freeze to self.) */
   if (recv < 0 && argc == 0 && nt_ref(c->nt, id, "block") < 0 && sp_streq(name, "freeze")) {
     Scope *s = comp_scope_of(c, id);
-    if (s && s->class_id >= 0 && comp_method_in_chain(c, s->class_id, name, NULL) < 0)
+    if (s && s->class_id >= 0 && call_target(c, id, s->class_id, name, 0, NULL) < 0)
       { *out = ty_object(s->class_id); return 1; }
   }
   /* bareword frozen? reads the instance's GC-header bit (see the codegen arm) */
   if (recv < 0 && argc == 0 && nt_ref(c->nt, id, "block") < 0 && sp_streq(name, "frozen?")) {
     Scope *s = comp_scope_of(c, id);
     if (s && s->class_id >= 0 && !s->is_cmethod &&
-        comp_method_in_chain(c, s->class_id, name, NULL) < 0)
+        call_target(c, id, s->class_id, name, 0, NULL) < 0)
       { *out = TY_BOOL; return 1; }
   }
   /* `require path` with a path known only at run time (sp_require_computed):
@@ -5951,7 +5951,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
      answers false, and any other raises LoadError -- a Boolean, so
      `if require(backend)` (metrics' Config#require_backend) is a condition */
   if (recv < 0 && argc == 1 && sp_streq(name, "require") && nt_kind(c->nt, argv[0]) != NK_StringNode &&
-      nt_kind(c->nt, argv[0]) != NK_SplatNode && comp_method_index(c, name) < 0 &&
+      nt_kind(c->nt, argv[0]) != NK_SplatNode && call_target(c, id, -1, name, CT_TOP, NULL) < 0 &&
       !an_bare_call_class_owned(c, id))
     { *out = TY_BOOL; return 1; }
 
@@ -6144,7 +6144,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
          an instance method or reader of the same name stood in for
          `def self.go` and typed the call by the wrong body */
       if (self->is_cmethod && !sp_streq(name, "new")) {
-        int cmi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
+        int cmi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
         if (cmi >= 0) { *out = an_self_call_ret(c, self, name, cmi, id); return 1; }
       }
       { int rdcls2 = -1;
@@ -6157,10 +6157,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
           if (iv >= 0) {
             /* a def in a subclass overrides the reader for that subclass */
             TyKind rt2 = ivar_value_ty(rci2, iv);
-            int base_mi2 = comp_method_in_chain(c, self->class_id, name, NULL);
+            int base_mi2 = call_target(c, id, self->class_id, name, 0, NULL);
             for (int k = 0; k < c->nclasses; k++) {
               if (k == self->class_id || !is_descendant(c, k, self->class_id)) continue;
-              int kmi = comp_method_in_chain(c, k, name, NULL);
+              int kmi = call_target(c, id, k, name, 0, NULL);
               if (kmi < 0 || kmi == base_mi2) continue;
               if (g_plan_check) an_user_call_record(c, id, kmi, UC_POLY, k);
               TyKind kr = (TyKind)c->scopes[kmi].ret;
@@ -6184,10 +6184,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
       }
       /* a class method's self is the class: of the instance methods on its
          chain only Object's and Module's are its own (comp_self_call_mi) */
-      int mi = self->is_cmethod ? comp_class_self_inst_mi(c, self->class_id, name)
-                                : comp_method_in_chain(c, self->class_id, name, NULL);
+      int mi = self->is_cmethod ? comp_class_self_inst_mi(c, id, self->class_id, name)
+                                : call_target(c, id, self->class_id, name, 0, NULL);
       if (mi < 0 && self->is_cmethod)
-        mi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
+        mi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
       if (mi >= 0) { *out = an_self_call_ret(c, self, name, mi, id); return 1; }
       /* A reopened Object's method is every object's: a bare call to it from
          an instance method reaches it with self as the receiver (the codegen
@@ -6195,7 +6195,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
          the builtin surface, as Ruby's lookup puts Object last. */
       if (mi < 0 && !self->is_cmethod) {
         int oc = comp_class_index(c, "Object");
-        int omi = oc >= 0 && oc != self->class_id ? comp_method_in_chain(c, oc, name, NULL) : -1;
+        int omi = oc >= 0 && oc != self->class_id ? call_target(c, id, oc, name, 0, NULL) : -1;
         if (omi >= 0) { *out = c->scopes[omi].ret; return 1; }
       }
       /* Method defined only in descendants (not in base chain): unify the
@@ -6209,8 +6209,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         int nd = 0; const int *ds = comp_descendants(c, self->class_id, &nd);
         for (int di = 0; di < nd; di++) {
           int k = ds[di];
-          int dmi = self->is_cmethod ? comp_cmethod_in_class(c, k, name)
-                                     : comp_method_in_class(c, k, name);
+          int dmi = self->is_cmethod ? call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL)
+                                     : call_target(c, id, k, name, CT_OWN, NULL);
           if (dmi < 0) continue;
           if (!found) an_user_call_record(c, id, dmi, self->is_cmethod ? UC_CMETH : UC_INST, self->class_id);
           r = found ? ty_unify(r, (TyKind)c->scopes[dmi].ret) : (TyKind)c->scopes[dmi].ret;
@@ -6231,7 +6231,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     int cbody = c->node_cbody[id];
     if (cbody < 0) cbody = g_cbody_class_id;
     if (cbody >= 0) {
-      int smi = comp_cmethod_in_chain(c, cbody, name, NULL);
+      int smi = call_target(c, id, cbody, name, CT_CMETHOD, NULL);
       if (smi >= 0) { *out = an_user_call(c, id, smi, UC_CMETH, cbody); return 1; }
       if (argc == 0 && comp_class_anonymous(c, cbody) && is_name_reader(name))
         { *out = TY_STRING; return 1; }
@@ -6241,7 +6241,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
   if (recv < 0) {
     int iec = ie_class_of(c, id);
     if (iec >= 0) {
-      int imi = comp_method_in_chain(c, iec, name, NULL);
+      int imi = call_target(c, id, iec, name, 0, NULL);
       if (imi >= 0) { *out = an_user_call(c, id, imi, UC_IE, iec); return 1; }
       TyKind at;
       if (argc == 0 && attr_reader_ty(c, iec, name, &at)) { *out = at; return 1; }
@@ -6249,7 +6249,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
     TyKind pr = TY_UNKNOWN;
     for (int i = 0; i < npk; i++) {
-      int imi = comp_method_in_chain(c, pk[i], name, NULL);
+      int imi = call_target(c, id, pk[i], name, 0, NULL);
       if (imi < 0) continue;
       TyKind t = method_call_ret(c, imi, id);
       pr = pr == TY_UNKNOWN ? t : ty_unify(pr, t);
@@ -6279,9 +6279,9 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
        sp_streq(name, "Hash"))) {
     TyKind krt = infer_type(c, recv);
     int kdisp = (ty_is_object(krt) &&
-                 comp_method_in_chain(c, ty_object_class(krt), name, NULL) < 0) ||
+                 call_target(c, id, ty_object_class(krt), name, 0, NULL) < 0) ||
                 ((krt == TY_NIL || krt == TY_POLY || krt == TY_UNKNOWN) &&
-                 comp_method_index(c, name) < 0);
+                 call_target(c, id, -1, name, CT_TOP, NULL) < 0);
     if (kdisp) {
       if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
         /* a Float argument converts to an Integer that promote mode lets be a
@@ -6321,11 +6321,11 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 
   /* user-defined free-function call (no receiver) */
   if (recv < 0) {
-    int mi = nt_int(nt, id, "builtin_only", 0) ? -1 : comp_method_index(c, name), fvia = UC_TOP;
+    int mi = nt_int(nt, id, "builtin_only", 0) ? -1 : call_target(c, id, -1, name, CT_TOP, NULL), fvia = UC_TOP;
     /* in a block run by instance_eval, the receiver's own method answers
        before a top-level def of the same name (#7213) */
     { int iec = ie_class_of(c, id);
-      if (mi >= 0 && iec >= 0 && iec < c->nclasses && comp_method_in_chain(c, iec, name, NULL) >= 0) mi = -1; }
+      if (mi >= 0 && iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0) mi = -1; }
     if (mi < 0 && !nt_int(nt, id, "builtin_only", 0)) { mi = comp_included_method_index(c, name, id); fvia = UC_INCLUDED; }
     if (mi >= 0) { *out = an_user_call(c, id, mi, fvia, fvia == UC_TOP ? -1 : c->scopes[mi].class_id); return 1; }
     /* Kernel conversions */
@@ -6438,7 +6438,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
     if (sci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
       int ci = sci >= 0 ? sci : comp_class_index(c, nt_str(nt, recv, "name"));
       if (ci >= 0) {
-        int mi = comp_cmethod_in_chain(c, ci, name, NULL);
+        int mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
         if (mi >= 0) { *out = an_user_call(c, id, mi, UC_CMETH, ci); return 1; }
       }
       int rmi = class_reopen_cmethod(c, recv, name);
@@ -6451,7 +6451,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
       TyKind rrt = robj >= 0 ? infer_type(c, robj) : TY_UNKNOWN;
       if (ty_is_object(rrt)) {
         int cid = ty_object_class(rrt);
-        int mi = comp_cmethod_in_chain(c, cid, name, NULL);
+        int mi = call_target(c, id, cid, name, CT_CMETHOD, NULL);
         if (mi >= 0) {
           TyKind r = (TyKind)c->scopes[mi].ret;
           for (int k = 0; k < c->nclasses; k++) {
@@ -6459,7 +6459,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
             for (int _p = c->classes[k].parent; _p >= 0; _p = c->classes[_p].parent)
               if (_p == cid) { _desc = 1; break; }
             if (!_desc) continue;
-            int kmi = comp_cmethod_in_class(c, k, name);
+            int kmi = call_target(c, id, k, name, CT_OWN | CT_CMETHOD, NULL);
             if (kmi >= 0) r = ty_unify(r, (TyKind)c->scopes[kmi].ret);
           }
           { *out = r; return 1; }
@@ -6602,7 +6602,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
     if (oc_cn) {
       int oc_ci = rt == TY_IO ? io_reopen_class(c, name) : comp_class_index(c, oc_cn);
       if (oc_ci >= 0) {
-        int oc_mi = comp_method_in_chain(c, oc_ci, name, NULL);
+        int oc_mi = call_target(c, id, oc_ci, name, 0, NULL);
         if (oc_mi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) { *out = an_planned_call_ret(c, id, TY_POLY); return 1; }
         if (oc_mi >= 0 && !cplan_reopen_runs_builtin(c, id, oc_mi)) { *out = an_user_call(c, id, oc_mi, UC_REOPEN, oc_ci); return 1; }
       }
@@ -6619,7 +6619,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
       const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
       if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
         int aci = comp_class_index(c, anc);
-        int ami = aci >= 0 ? comp_method_in_chain(c, aci, name, NULL) : -1;
+        int ami = aci >= 0 ? call_target(c, id, aci, name, 0, NULL) : -1;
         if (ami >= 0 && c->scopes[ami].class_id == aci)
           { *out = an_user_call(c, id, ami, UC_REOPEN, aci); return 1; }
       }
@@ -6824,7 +6824,7 @@ static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, cons
         if (comp_poly_arm_defines_n(c, k, name, argc)) ncand++;
         continue;
       }
-      int mi = comp_method_in_chain(c, k, name, NULL);
+      int mi = call_target(c, id, k, name, 0, NULL);
       if (mi >= 0 && argc >= c->scopes[mi].nrequired) ncand++;
     }
     if (ncand == 0) { *out = TY_STRING; return 1; }
@@ -7032,7 +7032,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      a program class's own method of the name, which the user-call typing
      answers (and the dispatch's, for a boxed receiver that may hold one) */
   if (is_then_alias(name) &&
-      !(recv >= 0 && ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), name, NULL) >= 0) &&
+      !(recv >= 0 && ty_is_object(rt) && call_target(c, id, ty_object_class(rt), name, 0, NULL) >= 0) &&
       !(recv >= 0 && rt == TY_POLY && an_user_defines_or_reads(c, name))) {
     int blk_id = nt_ref(nt, id, "block");
     /* with NO block it is an enumerator of one element, the receiver (#4028) */
@@ -7270,15 +7270,15 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
      lacks it (`class Exception; def as_json`) */
   if (recv >= 0 && (rt == TY_EXCEPTION ||
                     (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)) &&
-                     comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0))) {
+                     call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0))) {
     /* the runtime class picks among several definers, so the call answers
        what they all do, or a boxed value when they disagree */
     int xr[8];
     int xn = exc_reopen_definers(c, name, xr, 8);
     if (xn > 0) {
-      TyKind xt = an_user_call(c, id, comp_method_in_chain(c, xr[0], name, NULL), UC_REOPEN, xr[0]);
+      TyKind xt = an_user_call(c, id, call_target(c, id, xr[0], name, 0, NULL), UC_REOPEN, xr[0]);
       for (int q = 1; q < xn; q++)
-        if (method_call_ret(c, comp_method_in_chain(c, xr[q], name, NULL), id) != xt) { *out = TY_POLY; return 1; }
+        if (method_call_ret(c, call_target(c, id, xr[q], name, 0, NULL), id) != xt) { *out = TY_POLY; return 1; }
       { *out = xt; return 1; }
     }
   }
@@ -7293,7 +7293,7 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
   }
   int exc_shaped = rt == TY_EXCEPTION ||
                    (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)) &&
-                    comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0);
+                    call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0);
   if (recv >= 0 && exc_shaped) {
     /* Exception#message is #to_s, so an override answering something other
        than a String carries that value out: the string-typed helper answered
@@ -7443,7 +7443,7 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
         if (comp_poly_arm_defines_n(c, k, name, argc)) { *out = TY_POLY; return 1; }
         continue;
       }
-      int mi = comp_method_in_chain(c, k, name, NULL);
+      int mi = call_target(c, id, k, name, 0, NULL);
       if (mi >= 0 && (c->scopes[mi].nparams >= 1 || c->scopes[mi].rest_idx >= 0))
         { *out = TY_POLY; return 1; }
     }
@@ -7705,7 +7705,7 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
      (bare calls inside resolve via the ie node->class map). A trampoline
      method `recv.M { ... }` resolves the same way. */
   int ie_kind = (recv >= 0 && (is_instance_eval_family(name)) &&
-                 ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0);
+                 ty_is_object(rt) && call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0);
   /* a non-object receiver (nil, a scalar) is served by the non-object splice;
      type it by the block's last-expression the same way (#2956) */
   if (!ie_kind && recv >= 0 && !ty_is_object(rt) &&
@@ -8217,10 +8217,10 @@ static int infer_send_blind(Compiler *c, int id, int recv, const char *name, TyK
   /* A retargeted `x.send(:m)` depends on the program's method ancestry and
      yielding scopes, not just the builtin receiver and argument kinds. */
   if (nt_str(nt, id, "send_blind") && recv >= 0 && nt_ref(nt, id, "block") < 0) {
-    int smi = comp_method_index(c, name);
+    int smi = call_target(c, id, -1, name, CT_TOP, NULL);
     if (smi >= 0 && !(smi < c->nscopes && c->scopes[smi].yields)) {
       TyKind srt = infer_type(c, recv);
-      if (!send_blind_recv_owns(c, recv, srt, name)) { *out = an_user_call(c, id, smi, UC_SEND_BLIND, -1); return 1; }
+      if (!send_blind_recv_owns(c, id, recv, srt, name)) { *out = an_user_call(c, id, smi, UC_SEND_BLIND, -1); return 1; }
       /* a boxed receiver answers by its class, the dispatch or the
          top-level def: boxed, as codegen's split hands either back */
       if (srt == TY_POLY) {
@@ -8393,7 +8393,7 @@ static int reopen_owner_of(Compiler *c, int id, const char *cn, const char *name
     if (!ahr_any) return -1;
   }
   int aci = comp_class_index(c, cn);
-  int adc = -1, ami = aci >= 0 ? comp_method_in_chain(c, aci, name, &adc) : -1;
+  int adc = -1, ami = aci >= 0 ? call_target(c, id, aci, name, 0, &adc) : -1;
   /* the reopen's own method under this very name: an alias taken before the
      reopen (`alias orig_first first`) still names the builtin */
   if (ami < 0 || adc != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, name)) return -1;
@@ -8625,7 +8625,7 @@ static int infer_accessor_call(Compiler *c, int id, int recv, const char *name, 
   if (recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode) {
     int fold_ci = comp_sg_reader_const(c, recv);
     if (fold_ci >= 0) {
-      int mi = comp_cmethod_in_chain(c, fold_ci, name, NULL);
+      int mi = call_target(c, id, fold_ci, name, CT_CMETHOD, NULL);
       if (mi >= 0) { *out = an_user_call(c, id, mi, UC_CMETH, fold_ci); return 1; }
     }
     /* Stage-2: accessor holds one of several constants; unify their cmethod returns. */
@@ -8635,7 +8635,7 @@ static int infer_accessor_call(Compiler *c, int id, int recv, const char *name, 
     if (ncand >= 2) {
       TyKind r = TY_UNKNOWN;
       for (int k = 0; k < ncand; k++) {
-        int mi = comp_cmethod_in_chain(c, cand[k], name, NULL);
+        int mi = call_target(c, id, cand[k], name, CT_CMETHOD, NULL);
         if (mi >= 0) r = ty_unify(r, method_call_ret(c, mi, id));
       }
       if (r != TY_UNKNOWN) {
@@ -8739,7 +8739,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (recv >= 0) { TyKind ort = infer_type(c, recv); if (ty_is_object(ort)) oci = ty_object_class(ort); }
       else { int si = id < c->nt->count ? c->nscope[id] : -1; oci = si >= 0 ? c->scopes[si].class_id : -1; }
       if (chain_has_aliases(c, oci) && !is_builtin_reopen(c->classes[oci].name) &&
-          comp_method_in_chain(c, oci, name, NULL) < 0) {
+          call_target(c, id, oci, name, 0, NULL) < 0) {
         const char *rn = comp_resolve_alias(c, oci, name);
         /* not where a subclass defines either name: over the alias, or
            over the reader the alias captured, which the renamed call would
@@ -8747,7 +8747,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         int over = 0;
         for (int k = 0; k < c->nclasses && !over; k++)
           if (k != oci && is_descendant(c, k, oci) &&
-              (comp_method_in_class(c, k, name) >= 0 || (rn && comp_method_in_class(c, k, rn) >= 0))) over = 1;
+              (call_target(c, id, k, name, CT_OWN, NULL) >= 0 || (rn && call_target(c, id, k, rn, CT_OWN, NULL) >= 0))) over = 1;
         if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && comp_reader_in_chain(c, oci, rn, NULL) &&
             comp_method_vis_in_chain(c, oci, name) == SP_VIS_PUBLIC) {
           if (!an_pure_reads) {
@@ -8869,7 +8869,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
       !nt_str(nt, id, "vis_enforce") && !nt_int(nt, id, "builtin_only", 0)) {
-    int bmi = comp_method_index(c, name), bvia = UC_TOP;
+    int bmi = call_target(c, id, -1, name, CT_TOP, NULL), bvia = UC_TOP;
     if (bmi < 0) { bmi = comp_included_method_index(c, name, id); bvia = UC_INCLUDED; }
     if (bmi >= 0) {
       Scope *bsc = comp_scope_of(c, id);
@@ -8878,8 +8878,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       int bcls = biec >= 0 ? biec : bsc ? bsc->class_id : -1;
       int shadowed = bcls >= 0 && bcls < c->nclasses &&
                      ((biec < 0 && bsc->is_cmethod)
-                        ? comp_cmethod_in_chain(c, bcls, name, NULL) >= 0
-                        : (comp_method_in_chain(c, bcls, name, NULL) >= 0 ||
+                        ? call_target(c, id, bcls, name, CT_CMETHOD, NULL) >= 0
+                        : (call_target(c, id, bcls, name, 0, NULL) >= 0 ||
                            comp_is_reader(&c->classes[bcls], name)));
       /* A callee that yields carries a block parameter in its C signature,
          which the arm below is what establishes: answering here left the call
@@ -8897,8 +8897,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (bmi < 0 && ie_class_of(c, id) < 0 && an_bare_call_class_owned(c, id)) {
       Scope *osc = comp_scope_of(c, id);
       int ocls = osc ? osc->class_id : -1;
-      int omi = osc && osc->is_cmethod ? comp_cmethod_in_chain(c, ocls, name, NULL)
-                                       : comp_method_in_chain(c, ocls, name, NULL);
+      int omi = osc && osc->is_cmethod ? call_target(c, id, ocls, name, CT_CMETHOD, NULL)
+                                       : call_target(c, id, ocls, name, 0, NULL);
       /* the same answer the implicit-self arm below gives, overrides
          included: codegen's dispatch switches over every descendant's
          override, so the type must hold each of their returns. Answering
@@ -8919,7 +8919,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      frames, and the two message renderings strings */
   if (recv >= 0 && argc == 0 && ty_is_object(infer_type(c, recv)) &&
       class_is_exc_subclass(c, ty_object_class(infer_type(c, recv))) &&
-      comp_method_in_chain(c, ty_object_class(infer_type(c, recv)), name, NULL) < 0) {
+      call_target(c, id, ty_object_class(infer_type(c, recv)), name, 0, NULL) < 0) {
     if (sp_streq(name, "exception")) return infer_type(c, recv);
     if (sp_streq(name, "cause")) return TY_EXCEPTION;
     if (sp_streq(name, "backtrace")) return TY_STR_ARRAY;
@@ -8944,7 +8944,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=") || (sp_streq(name, "==") && argc == 1))) {
     TyKind nrt = infer_type(c, recv);
     if (ty_is_object(nrt)) {
-      int nmi = comp_method_in_chain(c, ty_object_class(nrt), name, NULL);
+      int nmi = call_target(c, id, ty_object_class(nrt), name, 0, NULL);
       if (nmi >= 0) return an_user_operator_ret(c, id, nmi, ty_object_class(nrt));
     }
   }
@@ -8976,7 +8976,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && rt == TY_POLY && argc >= 1 && name && sp_streq(name, "respond_to?")) {
     int own = 0;
     for (int k = 0; k < c->nclasses && !own; k++)
-      if (c->classes[k].instantiated && comp_method_in_chain(c, k, name, NULL) >= 0) own = 1;
+      if (c->classes[k].instantiated && call_target(c, id, k, name, 0, NULL) >= 0) own = 1;
     if (!own) return TY_BOOL;
   }
   /* The call on that widened yield is a boxed carrier too, whatever the
@@ -9013,7 +9013,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       !bonly && !nt_int(nt, id, "builtin_only", 0)) {
     const char *ecn = rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time" : "Class";
     int eci = rt == TY_IO ? io_reopen_class(c, name) : comp_class_index(c, ecn);
-    int emi = eci >= 0 ? comp_method_in_chain(c, eci, name, NULL) : -1;
+    int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;
     if (emi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) return an_planned_call_ret(c, id, TY_POLY);
     /* a kind no reopening serves gets the builtin's answer: boxed when the
        two answer different types */
@@ -9058,7 +9058,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       poly_enum_op_for(name)) {
     for (int k = 0; k < c->nclasses; k++) {
       if (!c->classes[k].ctor_reachable) continue;
-      if (comp_method_in_chain(c, k, name, NULL) >= 0) return TY_POLY;
+      if (call_target(c, id, k, name, 0, NULL) >= 0) return TY_POLY;
     }
   }
   /* Same, for a name outside that surface: only a yielding candidate makes
@@ -9067,7 +9067,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 && !an_builtin_only) {
     for (int k = 0; k < c->nclasses; k++) {
       if (!c->classes[k].ctor_reachable) continue;
-      int ymi = comp_method_in_chain(c, k, name, NULL);
+      int ymi = call_target(c, id, k, name, 0, NULL);
       if (ymi >= 0 && c->scopes[ymi].yields) return TY_POLY;
     }
   }
@@ -9385,7 +9385,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       (sp_streq(name, "instance_methods") || sp_streq(name, "public_instance_methods"))) {
     Scope *self = comp_scope_of(c, id);
     if (self && self->is_cmethod && self->class_id >= 0 &&
-        comp_cmethod_in_chain(c, self->class_id, name, NULL) < 0 &&
+        call_target(c, id, self->class_id, name, CT_CMETHOD, NULL) < 0 &&
         !comp_class_is_module(c, &c->classes[self->class_id]))
       return TY_POLY;
   }
@@ -9655,7 +9655,7 @@ static int stmts_diverge(Compiler *c, int st) {
   if (nt_kind(nt, last) != NK_CallNode || nt_ref(nt, last, "receiver") >= 0) return 0;
   const char *nm = nt_str(nt, last, "name");
   return nm && is_diverging_call(nm) && !an_bare_call_class_owned(c, last) &&
-         comp_method_index(c, nm) < 0;
+         call_target(c, last, -1, nm, CT_TOP, NULL) < 0;
 }
 /* Whether call `w`, named `wn`, can run a method the program defines: a
    receiverless call (or one on self) when some user method has the name; a
@@ -9674,10 +9674,10 @@ static int call_may_reach_user_method(Compiler *c, int w, const char *wn) {
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, r, "name");
     int ci = cn ? comp_class_index(c, cn) : -1;
-    if (ci >= 0) return comp_cmethod_in_chain(c, ci, wn, NULL) >= 0;
+    if (ci >= 0) return call_target(c, w, ci, wn, CT_CMETHOD, NULL) >= 0;
   }
   TyKind rt = comp_ntype(c, r);
-  if (ty_is_object(rt)) return comp_method_in_chain(c, ty_object_class(rt), wn, NULL) >= 0;
+  if (ty_is_object(rt)) return call_target(c, w, ty_object_class(rt), wn, 0, NULL) >= 0;
   if (rt == TY_POLY || rt == TY_UNKNOWN) return an_user_defines_method(c, wn);
   return 0;
 }

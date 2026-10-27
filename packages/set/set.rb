@@ -1,12 +1,16 @@
 # Spinel bundled `set`.
 #
-# A Set backed by an Array, preserving insertion order. Elements are kept
-# unique by #eql? (with #hash) like CRuby's Hash-backed Set -- a value object
-# that defines #eql?/#hash is deduplicated and found by #include? even across
-# distinct instances, and 1 and 1.0 are distinct members (1.eql?(1.0) is
-# false). This covers the standard Set surface (construction, iteration,
-# membership, set algebra, comparison, classify/divide/flatten) rather than
-# every CRuby corner.
+# A Set keeps its members in an Array, in insertion order. Elements are
+# unique by #hash and #eql? as in CRuby's Set -- a value object that defines
+# #eql?/#hash is deduplicated and found by #include? even across distinct
+# instances, and 1 and 1.0 are distinct members (1.eql?(1.0) is false). Past
+# eight members a Hash beside the Array, whose keys are the members, makes a
+# lookup one probe; up to eight the Set compares hashes along the Array, as
+# CRuby's Hash keeps a small table flat, since a table costs more than it
+# saves there. An identity Set walks its members with #equal? instead. This
+# covers the standard Set surface (construction, iteration, membership, set
+# algebra, comparison, classify/divide/flatten) rather than every CRuby
+# corner.
 
 class Set
   include Enumerable
@@ -36,6 +40,7 @@ class Set
 
   def initialize(enum = nil)
     @data = []
+    @index = nil
     @ident = false
     if enum
       Set.check_enum(enum)
@@ -53,8 +58,7 @@ class Set
   # dup and clone must not share the element array with the original. A copy
   # compares its elements as the original does.
   def initialize_copy(orig)
-    @data = orig.to_a
-    @ident = orig.compare_by_identity?
+    adopt(orig.to_a, orig.compare_by_identity?)
   end
 
   # compare_by_identity makes the Set find its elements by equal? rather than
@@ -66,6 +70,7 @@ class Set
     return self if @ident
     check_frozen
     @ident = true
+    @index = nil
     self
   end
 
@@ -73,24 +78,65 @@ class Set
     @ident
   end
 
-  # The members of an identity Set are found by equal?, of any other by eql?.
+  # The members of an identity Set are found by equal?, of any other by hash
+  # and then equal? or eql?, as CRuby's Set finds them: through @index past
+  # eight members, along @data up to eight. In @index a member changed after
+  # it joined is looked for under the hash it had then, until reset.
   def find_member(x)
-    if @ident
-      @data.any? { |e| e.equal?(x) }
-    else
-      @data.any? { |e| e.eql?(x) }
-    end
+    return @data.any? { |e| e.equal?(x) } if @ident
+    idx = @index
+    return idx.key?(x) if idx
+    h = x.hash
+    @data.any? { |e| e.hash == h && (e.equal?(x) || e.eql?(x)) }
   end
   private :find_member
 
+  # The member that leaves @data is the one the lookup found: @index maps
+  # each member to itself, and the walk stops on it. Float::NAN, which is not
+  # eql? to itself, leaves too.
   def remove_member(x)
     if @ident
       @data.delete_if { |e| e.equal?(x) }
-    else
-      @data.delete_if { |e| e.eql?(x) }
+      return
     end
+    idx = @index
+    if idx
+      return unless idx.key?(x)
+      m = idx.delete(x)
+      i = @data.rindex { |e| e.equal?(m) }
+    else
+      h = x.hash
+      i = @data.rindex { |e| e.hash == h && (e.equal?(x) || e.eql?(x)) }
+    end
+    @data.delete_at(i) if i
   end
   private :remove_member
+
+  # Up to this many members a Set compares hashes along @data and keeps no
+  # @index.
+  def walk_size?(n)
+    n <= 8
+  end
+  private :walk_size?
+
+  # A Hash whose keys are the given members, each mapped to itself.
+  def index_of(members)
+    idx = {}
+    members.each { |x| idx[x] = x }
+    idx
+  end
+  private :index_of
+
+  # Members a method has rebuilt whole, in order and unique, become the
+  # Set's. The index is built before anything is replaced, so a #hash that
+  # raises leaves the Set as it was.
+  def adopt(members, ident)
+    idx = (ident || walk_size?(members.size)) ? nil : index_of(members)
+    @data = members
+    @index = idx
+    @ident = ident
+  end
+  private :adopt
 
   # A new Set that compares as this one does, holding its members: what
   # CRuby's dup gives the combining operators.
@@ -123,6 +169,13 @@ class Set
     return if @ident
     e = @data[-1]
     @data[-1] = -e if e.is_a?(String) && !e.frozen?
+    idx = @index
+    if idx
+      k = @data[-1]
+      idx[k] = k
+    elsif !walk_size?(@data.size)
+      @index = index_of(@data)
+    end
   end
   private :push_member
 
@@ -189,6 +242,7 @@ class Set
   def clear
     check_frozen
     @data = []
+    @index = nil
     self
   end
 
@@ -226,12 +280,15 @@ class Set
     _i = 0
     while _i < @data.size
       x = @data[_i]
-      v = yield(x); r.push(v) unless r.any? { |e| e.eql?(v) }
+      r.push(yield(x))
       _i += 1
     end
+    t = Set.new
+    r.each { |v| t.add(v) }
     @data = []
+    @index = nil
     @ident = false
-    r.each { |v| push_member(v) }
+    t.each { |v| push_member(v) }
     self
   end
   alias collect! map!
@@ -245,7 +302,7 @@ class Set
       r.push(x) if yield(x)
       _i += 1
     end
-    @data = r
+    adopt(r, @ident)
     self
   end
 
@@ -258,7 +315,7 @@ class Set
       r.push(x) unless yield(x)
       _i += 1
     end
-    @data = r
+    adopt(r, @ident)
     self
   end
 
@@ -272,7 +329,7 @@ class Set
       r.push(x) if yield(x)
       _i += 1
     end
-    @data = r
+    adopt(r, @ident)
     @data.size == n ? nil : self
   end
   alias filter! select!
@@ -287,7 +344,7 @@ class Set
       r.push(x) unless yield(x)
       _i += 1
     end
-    @data = r
+    adopt(r, @ident)
     @data.size == n ? nil : self
   end
 
@@ -306,18 +363,30 @@ class Set
     check_frozen
     Set.check_enum(enum)
     if Set === enum
-      @data = enum.to_a
-      @ident = enum.compare_by_identity?
+      adopt(enum.to_a, enum.compare_by_identity?)
       return self
     end
     @data = []
+    @index = nil
     enum.to_a.each { |x| add(x) }
     self
   end
 
-  # CRuby rebuilds the hash index here; the array-backed set has no index,
-  # so reset only has to return self.
+  # reset looks every member up again under the hash it has now, as CRuby's
+  # does: members changed after they joined are found again, and two that
+  # have become eql? are one. An identity Set's members do not change.
   def reset
+    check_frozen
+    return self if @ident
+    t = []
+    idx = {}
+    @data.each do |x|
+      next if idx.key?(x)
+      idx[x] = x
+      t.push(x)
+    end
+    @data = t
+    @index = walk_size?(t.size) ? nil : idx
     self
   end
 
@@ -397,9 +466,9 @@ class Set
     mark = RecursionGuard.enter_eq(self, other)
     # A pair already being compared answers "equal", which is what lets two
     # distinct self-containing Sets finish. CRuby answers false here, for a
-    # reason Spinel's array-backed Set cannot reproduce: its Set is a hash
-    # table, and the element's hash was stored while the Set was still empty,
-    # so the membership probe misses.
+    # reason Spinel's Set does not reproduce: CRuby stores the element's hash
+    # while the Set is still empty, and Spinel takes it after the element has
+    # joined, so CRuby's membership probe misses where Spinel's would not.
     return true if mark < 0
     r = subset?(other)
     RecursionGuard.leave(mark)
@@ -597,6 +666,7 @@ class Set
     return nil unless nested
     f = flatten
     @data = []
+    @index = nil
     # CRuby replaces the Set with the flat one, which compares by eql?
     @ident = false
     f.each { |y| add(y) }

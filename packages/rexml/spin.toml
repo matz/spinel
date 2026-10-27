@@ -2,4 +2,5 @@
 name = "rexml"
 
 # Pre-installed spin package: ships with the compiler, versioned with it.
-# `require "rexml/document"` (and `require "rexml"`): REXML's tree API, in Ruby.
+# `require "rexml/document"` (and `require "rexml"`): REXML's tree API and its
+# Default and Pretty formatters, in Ruby.

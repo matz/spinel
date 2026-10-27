@@ -1,0 +1,183 @@
+REXML::DocType
+"svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd\""
+nil
+:doctype
+"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd\">"
+[:xmldecl, :doctype, :processing_instruction, :element]
+<?xml version='1.0'?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+<?xml-stylesheet href="graph.css" type="text/css"?>
+<svg width='500' height='300' viewBox='0 0 500 300' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' xmlns:a3='http://ns.adobe.com/AdobeSVGViewerExtensions/3.0/' a3:scriptImplementation='Adobe'>
+<!-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\-->
+<!-- Created with SVG::Graph -->
+<!-- //////////////////////////////////////////////////////////////////-->
+<defs>
+<style type='text/css'>
+<![CDATA[
+.svgBackground{
+  fill:#ffffff;
+}
+.graphBackground{
+  fill:#f0f0f0;
+}
+]]>
+</style>
+</defs>
+<!-- include default stylesheet if none specified -->
+<!--SVG Background-->
+<rect width='500' height='300' x='0' y='0' class='svgBackground'/>
+<g transform='translate( 50 20 )'>
+<rect x='0' y='0' width='400' height='250' class='graphBackground'/>
+<g>
+<text x='10' y='20' class='dataPointLabel'>
+12 &amp; &lt;13&gt;
+</text>
+<text x='30' y='40' class='dataPointLabel'>
+a long title with whitespace that runs on and on past the eighty column width of
+the formatter
+</text>
+<g id='popup' visibility='hidden'>
+<circle cx='5' cy='6' r='10'/>
+</g>
+</g>
+</g>
+<text x='250' class='mainTitle'>
+Title
+</text>
+</svg>
+--
+"<?xml version='1.0'?><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd\"><?xml-stylesheet href=\"graph.css\" type=\"text/css\"?><svg xmlns:a3='http://ns.adobe.com/AdobeSVGViewerExtensions/3.0/' height='300' a3:scriptImplementation='Adobe' viewBox='0 0 500 300' width='500' xmlns:xlink='http://www.w3.org/1999/xlink' xmlns='http://www.w3.org/2000/svg'><!-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\--><!-- Created with SVG::Graph --><!-- //////////////////////////////////////////////////////////////////--><defs><style type='text/css'><![CDATA[\n.svgBackground{\n  fill:#ffffff;\n}\n.graphBackground{\n  fill:#f0f0f0;\n}\n]]></style></defs><!-- include default stylesheet if none specified --><!--SVG Background--><rect class='svgBackground' height='300' width='500' x='0' y='0'/><g transform='translate( 50 20 )'><rect class='graphBackground' height='250' width='400' x='0' y='0'/><g><text class='dataPointLabel' x='10' y='20'>12 &amp; &lt;13&gt;</text><text class='dataPointLabel' x='30' y='40'>a long title with whitespace that runs on and on past the eighty column width of the formatter</text><g id='popup' visibility='hidden'><circle cx='5' cy='6' r='10'/></g></g></g><text class='mainTitle' x='250'>Title</text></svg>"
+<svg width='500' height='300' viewBox='0 0 500 300' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' xmlns:a3='http://ns.adobe.com/AdobeSVGViewerExtensions/3.0/' a3:scriptImplementation='Adobe'>
+<!-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\-->
+<!-- Created with SVG::Graph -->
+<!-- //////////////////////////////////////////////////////////////////-->
+<defs>
+<style type='text/css'>
+<![CDATA[
+.svgBackground{
+  fill:#ffffff;
+}
+.graphBackground{
+  fill:#f0f0f0;
+}
+]]>
+</style>
+</defs>
+<!-- include default stylesheet if none specified -->
+<!--SVG Background-->
+<rect width='500' height='300' x='0' y='0' class='svgBackground'/>
+<g transform='translate( 50 20 )'>
+<rect x='0' y='0' width='400' height='250' class='graphBackground'/>
+<g>
+<text x='10' y='20' class='dataPointLabel'>12 &amp; &lt;13&gt;</text>
+<text x='30' y='40' class='dataPointLabel'>
+a long title with whitespace that runs on and on past the eighty column width of
+the formatter
+</text>
+<g id='popup' visibility='hidden'>
+<circle cx='5' cy='6' r='10'/>
+</g>
+</g>
+</g>
+<text x='250' class='mainTitle'>Title</text>
+</svg>
+--
+<g transform='translate( 50 20 )'>
+  <rect x='0' y='0' width='400' height='250' class='graphBackground'/>
+  <g>
+    <text x='10' y='20' class='dataPointLabel'>
+      12 &amp; &lt;13&gt;
+    </text>
+    <text x='30' y='40' class='dataPointLabel'>
+      a long title with whitespace that runs on and on past the eighty column
+      width of the formatter
+    </text>
+    <g id='popup' visibility='hidden'>
+      <circle cx='5' cy='6' r='10'/>
+    </g>
+  </g>
+</g>
+--
+true
+"<circle cx='5' cy='6' r='10' />"
+<g id='popup' visibility='hidden'>
+  <circle cx='5' cy='6' r='10' />
+</g>
+--
+<p>
+    <q>
+        the quick brown fox
+        jumps over the lazy
+        dog the quick brown
+        fox jumps over the
+        lazy dog the quick
+        brown fox jumps over
+        the lazy dog the quick
+        brown fox jumps over
+        the lazy dog 
+    </q>
+    <r>
+        short
+    </r>
+    <s>
+        unbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakable
+    </s>
+</p>
+--
+<p>
+    <q>
+        the quick brown fox
+        jumps over the lazy
+        dog the quick brown
+        fox jumps over the
+        lazy dog the quick
+        brown fox jumps over
+        the lazy dog the quick
+        brown fox jumps over
+        the lazy dog 
+    </q>
+    <r>short</r>
+    <s>
+        unbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakableunbreakable
+    </s>
+</p>
+--
+<m>
+ before 
+ <b>
+  bold
+ </b>
+  after
+</m>
+<m>
+ before 
+ <b>bold</b>
+  after
+</m>
+--
+"<!DOCTYPE html>"
+"<!DOCTYPE foo SYSTEM>"
+"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"svg10.dtd\">"
+"<!DOCTYPE a PUBLIC \"it's\" 'say \"x\"'>"
+"<!DOCTYPE a SYSTEM \"it's\">"
+"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"svg10.dtd\">"
+"-//W3C//DTD SVG 1.0//EN"
+"svg10.dtd"
+"    <!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"svg10.dtd\">"
+[:doctype, :element]
+"<!DOCTYPE html><html><body/></html>"
+[:doctype, :xmldecl, :element]
+"<!DOCTYPE xhtml><?xml version='1.0'?><html/>"
+"xhtml"
+<!DOCTYPE xhtml><?xml version='1.0'?>
+<html/>
+nil
+<a>
+ <b>
+  x y
+ </b>
+ <c>
+  p q
+ </c>
+</a>
+"<a><b>x y</b><c>p q</c></a>"

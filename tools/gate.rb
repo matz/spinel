@@ -129,6 +129,9 @@ module Gate
         e = function_size_note(fn, before[fn], n) and warn "gate: #{f}: #{e}"
       end
     end
+    # a call's target goes through the call plan (tools/route_audit.rb); a warning, not a refusal
+    srcs = changed.grep(%r{\Asrc/.*\.c\z})
+    warn "gate: a call target bypasses call_target (tools/route_audit.rb)" unless srcs.empty? || system(RbConfig.ruby, File.join(__dir__, "route_audit.rb"), *srcs)
     added = git("diff", *change.diff, "--name-only", "--diff-filter=A", "--", "test/*.rb").to_s.split("\n")
       .reject { |t| t.count("/") > 1 }
     ruby = reference_ruby unless added.empty?

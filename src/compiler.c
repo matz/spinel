@@ -1531,6 +1531,12 @@ int comp_ary_root(Compiler *c, int cid) {
 int comp_ty_ary_root(Compiler *c, TyKind t) {
   return ty_is_object(t) ? comp_ary_root(c, ty_object_class(t)) : -1;
 }
+/* t is an instance of an Array subclass: its class embeds an Array, not a
+   Hash or a String */
+int comp_ty_arysub_array(Compiler *c, TyKind t) {
+  return comp_ty_ary_root(c, t) >= 0 && !c->classes[ty_object_class(t)].ary_hash &&
+         !c->classes[ty_object_class(t)].ary_str;
+}
 /* An Array subclass nothing is ever put into holds boxed values, as an empty
    `[]` that never settles does. While the inference is still optimistic an
    unsettled kind stays unknown, so a later push can still narrow it. */

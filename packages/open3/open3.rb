@@ -9,7 +9,7 @@
 require "tmpdir"
 
 module Open3
-  def self.__capture(cmd, stdin_data, merge, keep_err, chdir)
+  def self.__capture(cmd, stdin_data, merge, keep_err, chdir, binmode)
     env = nil
     args = cmd.dup
     env = args.shift if args[0].is_a?(Hash)
@@ -26,8 +26,10 @@ module Open3
     outf = File.join(dir, "out")
     errf = File.join(dir, "err")
     inf = stdin_data ? File.join(dir, "in") : nil
-    out = ""
-    err = ""
+    # binmode: reads the child's output as bytes (ASCII-8BIT), as CRuby's
+    # binary pipes give it; otherwise it is text, UTF-8
+    out = binmode ? "".b : ""
+    err = binmode ? "".b : ""
     status = nil
     begin
       File.write(inf, stdin_data.to_s) if inf
@@ -43,8 +45,8 @@ module Open3
       end
       pid = env ? Process.spawn(env, *args, **opts) : Process.spawn(*args, **opts)
       _, status = Process.waitpid2(pid)
-      out = File.read(outf) if File.exist?(outf)
-      err = File.read(errf) if !merge && keep_err && File.exist?(errf)
+      out = __read(outf, binmode) if File.exist?(outf)
+      err = __read(errf, binmode) if !merge && keep_err && File.exist?(errf)
     ensure
       [outf, errf, inf].each { |f| File.delete(f) if f && File.exist?(f) }
       Dir.rmdir(dir)
@@ -52,20 +54,22 @@ module Open3
     [out, err, status]
   end
 
+  def self.__read(path, binmode) = binmode ? File.binread(path) : File.read(path)
+
   # capture3(*cmd, stdin_data: nil, chdir: nil) -> [stdout, stderr, status]
   def self.capture3(*cmd, stdin_data: nil, binmode: false, chdir: nil)
-    __capture(cmd, stdin_data, false, true, chdir)
+    __capture(cmd, stdin_data, false, true, chdir, binmode)
   end
 
   # capture2(*cmd, stdin_data: nil, chdir: nil) -> [stdout, status]; stderr is the parent's
   def self.capture2(*cmd, stdin_data: nil, binmode: false, chdir: nil)
-    out, _err, status = __capture(cmd, stdin_data, false, false, chdir)
+    out, _err, status = __capture(cmd, stdin_data, false, false, chdir, binmode)
     [out, status]
   end
 
   # capture2e(*cmd, stdin_data: nil, chdir: nil) -> [stdout and stderr merged, status]
   def self.capture2e(*cmd, stdin_data: nil, binmode: false, chdir: nil)
-    out, _err, status = __capture(cmd, stdin_data, true, true, chdir)
+    out, _err, status = __capture(cmd, stdin_data, true, true, chdir, binmode)
     [out, status]
   end
 end

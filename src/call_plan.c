@@ -277,7 +277,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   if (recv >= 0 && nt_str(nt, id, "send_blind") && nt_ref(nt, id, "block") < 0) {
     int smi = comp_method_index(c, name);
     if (smi >= 0 && !c->scopes[smi].yields) {
-      if (!send_blind_recv_owns(c, recv, comp_ntype(c, recv), name)) {
+      if (!send_blind_recv_owns(c, id, recv, comp_ntype(c, recv), name)) {
         cplan_set(p, smi, -1, UC_SEND_BLIND, CP_DIRECT);
         return;
       }
@@ -483,7 +483,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
     const char *name = nt_str(c->nt, id, "name");
     if (recv >= 0 && comp_ntype(c, recv) == TY_POLY &&
         nt_str(c->nt, id, "send_blind") && nt_ref(c->nt, id, "block") < 0 && name &&
-        send_blind_recv_owns(c, recv, TY_POLY, name)) {
+        send_blind_recv_owns(c, id, recv, TY_POLY, name)) {
       int mi = comp_method_index(c, name);
       if (mi >= 0 && !c->scopes[mi].yields) p->send_fallback = mi;
     }
@@ -694,6 +694,17 @@ static const CallPlan *cplan_dep(const CallPlan *p) {
   if (p->owner_ci >= 0) IMEMO_DEP_CLASS(p->owner_ci);
   return p;
 }
+int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class) {
+  (void)id;
+  if (flags & CT_TOP) return comp_method_index(c, name);
+  if (flags & CT_OWN) {
+    int mi = flags & CT_CMETHOD ? comp_cmethod_in_class(c, cls, name) : comp_method_in_class(c, cls, name);
+    if (mi >= 0 && def_class) *def_class = cls;
+    return mi;
+  }
+  return flags & CT_CMETHOD ? comp_cmethod_in_chain(c, cls, name, def_class) : comp_method_in_chain(c, cls, name, def_class);
+}
+
 const CallPlan *cplan_user_in(Compiler *c, int id, int self_ci, int flags) {
   static CallPlan ctx;
   if (self_ci < 0) return cplan_user(c, id);

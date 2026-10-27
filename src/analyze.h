@@ -179,6 +179,8 @@ typedef struct {
   const char *target;   /* an alias's or a copy's original name */
 } LrDef;
 typedef struct { int node, body; } LrOpen;
+typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND } LrMixKind;
+typedef struct { int node, kind, mod; } LrMixin;   /* kind: LrMixKind; mod: the module's class, -2 one the record does not know */
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 void elab_program(Compiler *c);
 /* the version of cls's method `name` (singleton when sg) live at p, through
@@ -193,6 +195,10 @@ int elab_mixed_at(Compiler *c, int cls, int sg, int mod, LoadPoint p);
 int elab_written_before(Compiler *c, ElabVar kind, const char *name, LoadPoint p);
 /* the bodies cls runs, in the order they run; *n their number */
 const LrOpen *elab_class_bodies(Compiler *c, int cls, int *n);
+/* the mixins run on cls (-1: main's, at a file's top level), one per
+   module, in the order they run: `include A, B` as `include B` then
+   `include A`, A nearest; *n their number */
+const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n);
 /* what constant `name`, read at node, resolves to there: its lexical scopes'
    own constants, innermost first, then the innermost one's ancestors and
    Object's; *out the write or class definition found */

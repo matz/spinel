@@ -1690,7 +1690,7 @@ int    comp_method_index(Compiler *c, const char *name); /* -1 if none */
    top-level def (a private Object method, and so last in every ancestry) only
    as the fallback. See analyze_util.c. */
 int    comp_self_call_mi(Compiler *c, int call_node, const char *name);
-int    comp_class_self_inst_mi(Compiler *c, int class_id, const char *name);
+int    comp_class_self_inst_mi(Compiler *c, int call, int class_id, const char *name);
 /* A definition the compiler keeps for its own lowering, which CRuby has no
    method for: a builtins/ file's own helper (is_builtin_helper_name, the
    enumerator's `__enumw_map`) or a desugar's per-call-site copy (marked
@@ -1707,10 +1707,11 @@ int    comp_name_is_private_helper(Compiler *c, const char *m);
    send's dispatch leave it out. See analyze_util.c. */
 int    name_is_synth_method(Compiler *c, const char *m);
 int    comp_cbody_call_mi(Compiler *c, int call_node, const char *name);
-/* Does the receiver of a retargeted `recv.send(:name)` (send_blind) answer
-   name itself -- an instance's method or reader, a class constant's class
-   method -- rather than through a top-level def? srt is recv's type. */
-int    send_blind_recv_owns(Compiler *c, int recv, TyKind srt, const char *name);
+/* Does the receiver of a retargeted `recv.send(:name)` (send_blind), call
+   `call`, answer name itself -- an instance's method or reader, a class
+   constant's class method -- rather than through a top-level def? srt is
+   recv's type. */
+int    send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char *name);
 /* What a dispatch of `name` over cid's subtree answers: r (the base method
    base_mi's answer) unified with the return of every other implementation a
    class in the subtree runs -- its chain's, so a module a subclass includes
@@ -1833,7 +1834,7 @@ int cls_user_display_mi(Compiler *c, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class */
-int        class_recv_user_cmethod(Compiler *c, int node, const char *name); /* its user class method of the name */
+int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */
 int        anon_struct_ci_for_value(Compiler *c, int val);  /* k = Struct.new(...) value node */
 const char *struct_call_dup_member(Compiler *c, int callnode);  /* first duplicate member sym name, or NULL */
@@ -1996,6 +1997,7 @@ int        send_family_program_owns(Compiler *c, const char *name);
 int        comp_ary_root(Compiler *c, int cid);
 int        comp_implicit_to_ary_mi(Compiler *c, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
+int        comp_ty_arysub_array(Compiler *c, TyKind t);
 const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n);
 TyKind     comp_ary_kind(Compiler *c, int cid);
 /* Whether Array answers a call named n on an instance of Array subclass

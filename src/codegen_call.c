@@ -20241,10 +20241,12 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
    the same call on the Range's member Array (srange_enum): when it answers an
    Enumerator, that Enumerator has no size, as the Range's own is nil. The
    Enumerators built on it inherit that (sp_enum_inherit_size). */
-/* `*obj` on a program object reads `obj.to_a` (desugar_splat_to_a). An
-   answer that may be no Array is typed a PolyArray there: the answer the
-   class gives is kept and checked, as CRuby's splat does -- an Array spreads,
-   nil spreads the object itself, anything else is a TypeError. */
+/* `*obj` on a program object reads `obj.to_a` (desugar_splat_to_a), and
+   Kernel#Array a Hash or String subclass's own to_ary / to_a
+   (desugar_kernel_array_conv). An answer that may be no Array is typed a
+   PolyArray there: the answer the class gives is kept and checked, as
+   CRuby's splat does -- an Array spreads, nil spreads the object itself,
+   anything else is a TypeError. */
 static int g_splat_to_a_inner = -1;
 static int emit_splat_to_a_check_wrap(Compiler *c, int id, Buf *b) {
   if (!nt_int(c->nt, id, "splat_to_a", 0) || g_splat_to_a_inner == id) return 0;
@@ -20287,8 +20289,8 @@ static int emit_splat_to_a_check_wrap(Compiler *c, int id, Buf *b) {
   emit_boxed_text(c, rt, rn, b);
   buf_puts(b, "); }\n");
   buf_printf(b, "else if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) _t%d = sp_poly_to_poly_array(_t%d);\n", tb, tb, ta, tb);
-  buf_printf(b, "else { sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s to Array (%s#to_a gives %%s)\", sp_poly_class_name(_t%d))); _t%d = NULL; }\n",
-             cn, cn, tb, ta);
+  buf_printf(b, "else { sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s to Array (%s#%s gives %%s)\", sp_poly_class_name(_t%d))); _t%d = NULL; }\n",
+             cn, cn, nt_int(c->nt, id, "splat_to_a", 0) == 2 ? "to_ary" : "to_a", tb, ta);
   buf_printf(b, "}\n_t%d; })", ta);
   return 1;
 }
@@ -21414,7 +21416,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
   if (plain && nt_kind(nt, vrecv) == NK_SelfNode && cplan_has_method_missing(c, id, vcid, 0)) return 0;
   int top_priv = (stamped || (plain && self_is_main(c, id) && nt_kind(nt, vrecv) == NK_SelfNode)) && vnm && comp_method_index(c, vnm) >= 0 && !name_is_synth_method(c, vnm) &&
                  strncmp(vnm, "__enum_", 7) != 0 &&
-                 (vrecv < 0 ? self_is_main(c, id) : !send_blind_recv_owns(c, vrecv, comp_ntype(c, vrecv), vnm));
+                 (vrecv < 0 ? self_is_main(c, id) : !send_blind_recv_owns(c, id, vrecv, comp_ntype(c, vrecv), vnm));
   int at_main = top_priv && (vrecv < 0 || plain);
   if (vnm && vcid < 0 && vrecv >= 0 && !at_main) return emit_cmethod_vis_refusal(c, id, vrecv, vnm, b);
   if (!vnm || (vcid < 0 && !at_main)) return 0;
@@ -27789,7 +27791,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     Scope *es = comp_scope_of(c, id);
     if (!in_name && cn && sp_streq(cn, "name") && ca < 0 && nt_ref(c->nt, id, "block") < 0 &&
         comp_ntype(c, id) == TY_STRING &&
-        ((r >= 0 && comp_ntype(c, r) == TY_CLASS && class_recv_user_cmethod(c, r, cn) < 0) ||
+        ((r >= 0 && comp_ntype(c, r) == TY_CLASS && class_recv_user_cmethod(c, id, r, cn) < 0) ||
          (r < 0 && es && es->is_cmethod && es->class_id >= 0))) {
       in_name = 1;
       buf_puts(b, "sp_str_frozen_name(");

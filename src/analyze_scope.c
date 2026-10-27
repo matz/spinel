@@ -9025,21 +9025,20 @@ void specialize_inherited_cls_new(Compiler *c) {
    was, and a `prepend` in `class B ... end; class B; prepend Guard; end`
    compiled and did nothing -- while being the very form the explicit-receiver
    diagnostic recommends (#4200). */
-/* The top-level statement index of the class body `body` where that
-   statement reopens a class an earlier top-level statement defines (`class
-   Dog; ...; end; d.speak; class Dog; prepend Loud; end`), or -1. */
-static int prepend_late_stmt(const NodeTable *nt, int body) {
-  int root = nt->root_id >= 0 ? nt_ref(nt, nt->root_id, "statements") : -1, n = 0;
-  const int *st = root >= 0 ? nt_arr(nt, root, "body", &n) : NULL;
-  for (int j = 0; j < n; j++) {
-    if (nt_kind(nt, st[j]) != NK_ClassNode || nt_ref(nt, st[j], "body") != body) continue;
-    int cp = nt_ref(nt, st[j], "constant_path");
-    const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
-    for (int q = 0; cn && q < j; q++) {
-      if (nt_kind(nt, st[q]) != NK_ClassNode) continue;
-      int qp = nt_ref(nt, st[q], "constant_path");
-      if (qp >= 0 && nt_kind(nt, qp) == NK_ConstantReadNode && sp_streq(nt_str(nt, qp, "name"), cn)) return j;
-    }
+/* The class body `body` of class ci, where its statement reopens the class
+   at a file's top level after the class's first body ran (`class Dog; ...;
+   end; d.speak; class Dog; prepend Loud; end`): that statement, or -1. */
+static int prepend_late_stmt(Compiler *c, int ci, int body) {
+  const NodeTable *nt = c->nt;
+  int nb = 0;
+  const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  for (int k = 1; k < nb; k++) {
+    int s = ob[k].node, f, rank;
+    if (nt_kind(nt, s) != NK_ClassNode || nt_ref(nt, s, "body") != body) continue;
+    int cp = nt_ref(nt, s, "constant_path");
+    elab_top_place(c, s, &f, &rank);
+    if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode && f >= 0 && comp_parent_map(c)[s] == prog_root_stmts(c, f) &&
+        elab_cmp(elab_point_of(c, ob[0].node), elab_point_of(c, s)) == PROG_BEFORE) return s;
     return -1;
   }
   return -1;
@@ -9082,11 +9081,15 @@ static int mixin_guard_body(NodeTable *nt, int body, const char *flag, int line)
   nt_node_set_int(nt, seq, "node_line", line);
   return seq;
 }
-/* ...and the write that sets the flag, after top-level statement j */
-static void mixin_guard_flag_write(Compiler *c, int j, const char *flag) {
+/* ...and the write that sets the flag, after top-level statement `late`, in
+   its file's top level */
+static void mixin_guard_flag_write(Compiler *c, int late, const char *flag) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int root = nt_ref(nt, nt->root_id, "statements"), n = 0;
+  int f, rank;
+  elab_top_place(c, late, &f, &rank);
+  int root = prog_root_stmts(c, f), n = 0, j = 0;
   const int *st = nt_arr(nt, root, "body", &n);
+  while (j < n && st[j] != late) j++;
   int line = (int)nt_int(nt, st[j], "node_line", 0);
   int tv = nt_new_node(nt, "TrueNode");
   int w = nt_new_node(nt, "GlobalVariableWriteNode");
@@ -9108,7 +9111,7 @@ static void mixin_guard_flag_write(Compiler *c, int j, const char *flag) {
 
 static void process_prepend_body(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
-  int late = prepend_late_stmt(nt, body);
+  int late = prepend_late_stmt(c, ci, body);
   char flag[64] = "";
   /* a module's prepend goes wherever the module is mixed in, which
      desugar_module_prepends has written out already */

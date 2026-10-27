@@ -13594,7 +13594,9 @@ static SP_NOINLINE sp_bool sp_poly_eql_strict_slow(sp_RbVal a, sp_RbVal b) {
 }
 /* equal? for a poly value: object identity. Immediates (int, symbol, nil,
    bool, flonum) are their own identity by value; everything heap-backed
-   (string buffer, boxed object, bignum) compares by pointer. */
+   (string buffer, boxed object, bignum) compares by pointer. A Float is its
+   bits, as a typed Float's equal? compares them: the same NaN is itself,
+   and 0.0 is not -0.0. */
 static sp_bool sp_poly_equal(sp_RbVal a, sp_RbVal b) {
 #ifdef SP_SHARE_STRING_LITERALS
   a = sp_poly_literal_identity(a);
@@ -13606,7 +13608,7 @@ static sp_bool sp_poly_equal(sp_RbVal a, sp_RbVal b) {
     case SP_TAG_SYM: return a.v.i == b.v.i;
     case SP_TAG_BOOL: return a.v.b == b.v.b;
     case SP_TAG_NIL: return TRUE;
-    case SP_TAG_FLT: return a.v.f == b.v.f;
+    case SP_TAG_FLT: return memcmp(&a.v.f, &b.v.f, sizeof a.v.f) == 0;
     case SP_TAG_STR: return a.v.s == b.v.s;
     /* Class objects are their own identity: two references to Object are the
        same object. Spinel's classes are name-backed, so compare by name. */

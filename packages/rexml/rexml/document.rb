@@ -16,14 +16,22 @@
 #   references; a value a program sets is escaped when written; a childless
 #   element is written `<x/>`; attributes are written in single quotes,
 #   sorted by local name);
-# - `to_s` and Document#write use REXML's default formatter.
+# - a DocType a program builds (`DocType.new("html")`, a name with its
+#   external ID in one String, or `[name, id_type, public_id, system_id]`)
+#   is placed and written as REXML places and writes it;
+# - Formatters::Default and Formatters::Pretty (`compact`, `width`) write
+#   every node as REXML's do: `to_s` uses Default, and Document#write and
+#   Element#write with an indent use Pretty, which squeezes and wraps texts
+#   (and, as REXML's does, squeezes the written Text node itself).
 #
 # Not here, raised as NotImplementedError where a program reaches them: a
-# DOCTYPE (and so entity declarations), XPath beyond a child path of names
-# and `*` (predicates, `//`, `..`, axes, functions, an empty path), an
-# encoding other than UTF-8, a Document context Hash, a source that is not a
-# String, and #write with an indent (the pretty formatters). The pull,
-# stream and SAX2 parsers, REXML::XPath and REXML::Formatters are absent.
+# DOCTYPE in a parsed source (and so entity, element, attribute-list and
+# notation declarations), XPath beyond a child path of names and `*`
+# (predicates, `//`, `..`, axes, functions, an empty path), an encoding other
+# than UTF-8, a Document context Hash, a source that is not a String, and
+# #write with `transitive` (the Transitive formatter). Document#write takes
+# its arguments in order, not as REXML's options Hash. The pull, stream and
+# SAX2 parsers and REXML::XPath are absent.
 #
 # Known differences: a ParseException REXML raises around another exception
 # (an illegal character in a text or attribute, a second root element) quotes
@@ -204,6 +212,7 @@ module REXML
     def initialize(arg, respect_whitespace = false, parent = nil, raw = nil)
       super()
       @raw = false
+      @normalized = nil
       if arg.is_a?(Text)
         @string = arg.string_value.dup
         @raw = arg.raw
@@ -233,6 +242,7 @@ module REXML
 
     def <<(to_append)
       @string = @string + to_append.gsub(/\r\n?/, "\n")
+      @normalized = nil
       self
     end
 
@@ -241,24 +251,35 @@ module REXML
     def ==(other) = other.is_a?(Text) && to_s == other.to_s
 
     def to_s
-      @raw ? @string : Entities.normalize(@string)
+      return @string if @raw
+      @normalized ||= Entities.normalize(@string)
+    end
+
+    # REXML's Pretty formatter squeezes, in place, the String that `to_s`
+    # returns: the node's own text, or its cached normalized form.
+    def pretty_squeezed(str)
+      if @raw
+        @string = str
+      else
+        @normalized = str
+      end
     end
 
     def value = Entities.unnormalize(@string)
 
     def value=(val)
       @string = val.gsub(/\r\n?/, "\n")
+      @normalized = nil
       @raw = false
     end
 
     def inspect = @string.inspect
-
-    def write_to(out)
-      out << to_s
-    end
   end
 
   class CData < Text
+    START = "<![CDATA["
+    STOP = "]]>"
+
     def initialize(first, whitespace = true, parent = nil)
       super(first, whitespace, parent, false)
     end
@@ -270,13 +291,11 @@ module REXML
     def value = @string
 
     def node_type = :cdata
-
-    def write_to(out)
-      out << "<![CDATA[" << @string << "]]>"
-    end
   end
 
   class Comment < Child
+    START = "<!--"
+    STOP = "-->"
     attr_accessor :string
 
     def initialize(first, parent = nil)
@@ -292,13 +311,11 @@ module REXML
     def ==(other) = other.is_a?(Comment) && other.string == @string
 
     def node_type = :comment
-
-    def write_to(out)
-      out << "<!--" << @string << "-->"
-    end
   end
 
   class Instruction < Child
+    START = "<?"
+    STOP = "?>"
     attr_accessor :target, :content
 
     def initialize(target, content = nil)
@@ -315,13 +332,7 @@ module REXML
 
     def inspect = "<?p-i #{@target} ...?>"
 
-    def to_s = write_to(+"")
-
-    def write_to(out)
-      out << "<?" << @target
-      out << " " << @content unless @content.nil?
-      out << "?>"
-    end
+    def to_s = Formatters::Default.new.write(self, +"")
   end
 
   class XMLDecl < Child
@@ -380,14 +391,14 @@ module REXML
 
     def inspect = "<?xml ... ?>"
 
-    def to_s = write_to(+"")
+    def to_s = Formatters::Default.new.write(self, +"")
 
-    def write_to(out)
-      return out unless @writethis
-      out << "<?xml version='" << @version << "'"
-      out << " encoding='" << @encoding << "'" if @writeencoding
-      out << " standalone='" << @standalone << "'" unless @standalone.nil?
-      out << "?>"
+    def write(writer, indent = -1, transitive = false, ie_hack = false)
+      return nil unless @writethis
+      writer << "<?xml version='" << @version << "'"
+      writer << " encoding='" << @encoding << "'" if @writeencoding
+      writer << " standalone='" << @standalone << "'" unless @standalone.nil?
+      writer << "?>"
     end
   end
 
@@ -894,28 +905,17 @@ module REXML
 
     def instructions = @children.select { |c| c.is_a?(Instruction) }.freeze
 
-    def write_to(out)
-      out << "<" << @expanded_name
-      unless @attributes.empty?
-        sorted = @attributes.to_a.each_with_index.sort_by { |a, i| [a.name, i] }
-        sorted.each { |a, _i| out << " " << a.to_string }
-      end
-      if @children.empty?
-        out << "/"
+    def to_s = Formatters::Default.new.write(self, +"")
+
+    # REXML also warns that Element#write is deprecated.
+    def write(output = $stdout, indent = -1, transitive = false, ie_hack = false)
+      formatter = if indent > -1
+        raise NotImplementedError, "REXML transitive formatting" if transitive
+        Formatters::Pretty.new(indent, ie_hack)
       else
-        out << ">"
-        @children.each { |c| c.write_to(out) }
-        out << "</" << @expanded_name
+        Formatters::Default.new(ie_hack)
       end
-      out << ">"
-    end
-
-    def to_s = write_to(+"")
-
-    # Document#write, and Element#write (which REXML also warns is deprecated).
-    def write(output = $stdout, indent = -1)
-      raise NotImplementedError, "REXML pretty formatting (indent #{indent})" if indent > -1
-      output << to_s
+      formatter.write(self, output)
     end
   end
 
@@ -1082,6 +1082,20 @@ module REXML
         end
         child.parent = self
         child
+      elsif child.is_a?(DocType)
+        insert_before_index = @children.find_index { |x| x.is_a?(Element) || x.is_a?(DocType) }
+        if insert_before_index.nil?
+          @children << child
+        elsif @children[insert_before_index].is_a?(DocType)
+          @children[insert_before_index] = child
+        else
+          # REXML's `@children[insert_before_index - 1, 0] = child`: one slot early, and from the end when that is -1
+          at = insert_before_index - 1
+          at += @children.length if at < 0
+          @children.insert(at, child)
+        end
+        child.parent = self
+        child
       else
         rv = super(child)
         raise "attempted adding second root element to document" if @elements.size > 1
@@ -1098,7 +1112,7 @@ module REXML
 
     def root = @elements[1]
 
-    def doctype = nil
+    def doctype = @children.find { |item| item.is_a?(DocType) }
 
     def xml_decl
       rv = @children[0]
@@ -1114,12 +1128,318 @@ module REXML
 
     def stand_alone? = xml_decl.stand_alone?
 
-    def write_to(out)
-      @children.each { |c| c.write_to(out) }
-      out
+    def to_s = Formatters::Default.new.write(self, +"")
+
+    def write(output = $stdout, indent = -1, transitive = false, ie_hack = false, encoding = nil)
+      encoding = xml_decl.encoding if encoding.nil?
+      raise NotImplementedError, "REXML encoding #{encoding.inspect}: only UTF-8 is supported" unless encoding == "UTF-8"
+      super(output, indent, transitive, ie_hack)
+    end
+  end
+
+  # The external ID a DOCTYPE writes after its name.
+  class ReferenceWriter
+    # A Document context (and so `prologue_quote: :apostrophe`) is not
+    # supported, so the default quote is always `"`.
+    def initialize(id_type, public_id_literal, system_literal)
+      @id_type = id_type
+      @public_id_literal = public_id_literal
+      @system_literal = system_literal
+      @default_quote = "\""
     end
 
-    def to_s = write_to(+"")
+    def write(output)
+      output << " #{@id_type}"
+      unless @public_id_literal.nil?
+        quote = @public_id_literal.include?("'") ? "\"" : @default_quote
+        output << " #{quote}#{@public_id_literal}#{quote}"
+      end
+      unless @system_literal.nil?
+        quote = if @system_literal.include?("'")
+          "\""
+        elsif @system_literal.include?("\"")
+          "'"
+        else
+          @default_quote
+        end
+        output << " #{quote}#{@system_literal}#{quote}"
+      end
+      output
+    end
+  end
+
+  # A DOCTYPE a program builds and writes. `DocType.new("svg PUBLIC ...")`
+  # keeps the whole string as the name, as REXML does.
+  class DocType < Parent
+    START = "<!DOCTYPE"
+    STOP = ">"
+    SYSTEM = "SYSTEM"
+    PUBLIC = "PUBLIC"
+
+    attr_reader :name, :external_id, :long_name, :uri
+
+    # REXML's second argument is the external ID after a String name, and
+    # the parent after a DocType or an Array; the parent form is not here.
+    def initialize(first, parent = nil)
+      super()
+      @long_name = nil
+      @uri = nil
+      if first.is_a?(String)
+        @name = first
+        @external_id = parent
+      elsif first.is_a?(DocType)
+        raise NotImplementedError, "REXML DocType.new(doctype, parent): add the DocType to its parent" unless parent.nil?
+        @name = first.name
+        @external_id = first.external_id
+        @long_name = first.long_name
+        @uri = first.uri
+      elsif first.is_a?(Array)
+        raise NotImplementedError, "REXML DocType.new(array, parent): add the DocType to its parent" unless parent.nil?
+        @name = first[0]
+        @external_id = first[1]
+        @long_name = first[2]
+        @uri = first[3]
+      else
+        raise NotImplementedError, "REXML DocType from a Source: DOCTYPE parsing is not supported"
+      end
+    end
+
+    def node_type = :doctype
+
+    def clone = DocType.new(self)
+
+    def to_s = Formatters::Default.new.write(self, +"")
+
+    def write(output, indent = 0, transitive = false, ie_hack = false)
+      f = Formatters::Default.new
+      output << "  " * indent unless indent < 1
+      output << START
+      output << " "
+      output << @name
+      unless @external_id.nil?
+        ReferenceWriter.new(@external_id, @long_name, @uri).write(output)
+      end
+      unless @children.empty?
+        output << " ["
+        @children.each do |child|
+          output << "\n"
+          f.write(child, output)
+        end
+        output << "\n]"
+      end
+      output << STOP
+    end
+
+    def context = @parent.nil? ? nil : @parent.context
+
+    def public
+      if @external_id == "SYSTEM"
+        nil
+      elsif @external_id == "PUBLIC"
+        @long_name
+      end
+    end
+
+    def system
+      if @external_id == "SYSTEM"
+        @long_name
+      elsif @external_id == "PUBLIC"
+        @uri
+      end
+    end
+  end
+
+  module Formatters
+    # REXML's Default formatter: the document as it is, with ie_hack's space
+    # before an empty tag's `/`.
+    class Default
+      def initialize(ie_hack = false)
+        @ie_hack = ie_hack
+      end
+
+      def write(node, output)
+        if node.is_a?(Document)
+          node.xml_decl
+          write_document(node, output)
+        elsif node.is_a?(Element)
+          write_element(node, output)
+        elsif node.is_a?(Attribute)
+          output << node.to_string
+        elsif node.is_a?(Instruction)
+          write_instruction(node, output)
+        elsif node.is_a?(DocType) || node.is_a?(XMLDecl)
+          node.write(output)
+        elsif node.is_a?(Comment)
+          write_comment(node, output)
+        elsif node.is_a?(CData)
+          write_cdata(node, output)
+        elsif node.is_a?(Text)
+          write_text(node, output)
+        else
+          raise Exception.new("XML FORMATTING ERROR")
+        end
+        output
+      end
+
+      def write_document(node, output)
+        node.children.each { |child| write(child, output) }
+      end
+
+      # REXML sorts with `sort_by { |attr| attr.name }`, whose order for equal
+      # local names is not promised; source order keeps it deterministic.
+      def write_element(node, output)
+        output << "<#{node.expanded_name}"
+        unless node.attributes.empty?
+          node.attributes.to_a.each_with_index.sort_by { |a, i| [a.name, i] }.each do |attr, _i|
+            output << " "
+            output << attr.to_string
+          end
+        end
+        if node.children.empty?
+          output << " " if @ie_hack
+          output << "/"
+        else
+          output << ">"
+          node.children.each { |child| write(child, output) }
+          output << "</#{node.expanded_name}"
+        end
+        output << ">"
+      end
+
+      def write_text(node, output)
+        output << node.to_s
+      end
+
+      def write_comment(node, output)
+        output << Comment::START
+        output << node.to_s
+        output << Comment::STOP
+      end
+
+      def write_cdata(node, output)
+        output << CData::START
+        output << node.to_s
+        output << CData::STOP
+      end
+
+      def write_instruction(node, output)
+        output << Instruction::START
+        output << node.target
+        content = node.content
+        unless content.nil?
+          output << " "
+          output << content
+        end
+        output << Instruction::STOP
+      end
+    end
+
+    # REXML's Pretty formatter: each node on its own line, indented, texts
+    # squeezed and wrapped at `width`; `compact` keeps an element whose
+    # children are all texts on one line when it fits.
+    class Pretty < Default
+      attr_accessor :compact, :width
+
+      def initialize(indentation = 2, ie_hack = false)
+        @indentation = indentation
+        @level = 0
+        @ie_hack = ie_hack
+        @width = 80
+        @compact = false
+      end
+
+      def write_element(node, output)
+        output << " " * @level
+        output << "<#{node.expanded_name}"
+        unless node.attributes.empty?
+          node.attributes.each_attribute do |attr|
+            output << " "
+            output << attr.to_string
+          end
+        end
+        if node.children.empty?
+          output << " " if @ie_hack
+          output << "/"
+        else
+          output << ">"
+          skip = false
+          if compact
+            if node.children.all? { |c| c.is_a?(Text) }
+              string = +""
+              old_level = @level
+              @level = 0
+              node.children.each { |child| write(child, string) }
+              @level = old_level
+              if string.length < @width
+                output << string
+                skip = true
+              end
+            end
+          end
+          unless skip
+            output << "\n"
+            @level += @indentation
+            node.children.each do |child|
+              next if child.is_a?(Text) && child.to_s.strip.length == 0
+              write(child, output)
+              output << "\n"
+            end
+            @level -= @indentation
+            output << " " * @level
+          end
+          output << "</#{node.expanded_name}"
+        end
+        output << ">"
+      end
+
+      def write_text(node, output)
+        s = node.to_s.gsub(/\s/, " ").squeeze(" ")
+        node.pretty_squeezed(s)
+        s = wrap(s, @width - @level)
+        s = indent_text(s, @level, " ", true)
+        output << (" " * @level + s)
+      end
+
+      def write_comment(node, output)
+        output << " " * @level
+        super(node, output)
+      end
+
+      def write_cdata(node, output)
+        output << " " * @level
+        super(node, output)
+      end
+
+      # Default#write has given the document an XMLDecl as its first child.
+      def write_document(node, output)
+        node.children.each do |child|
+          next if child.instance_of?(Text)
+          first = node.children[0]
+          unless child == first || child.instance_of?(Text) ||
+                 (child == node.children[1] && first.is_a?(XMLDecl) && !first.writethis)
+            output << "\n"
+          end
+          write(child, output)
+        end
+      end
+
+      def indent_text(string, level = 1, style = "\t", indentfirstline = true)
+        return string if level < 0
+        string.gsub(/\n/, "\n#{style * level}")
+      end
+
+      def wrap(string, width)
+        parts = []
+        while string.length > width
+          place = string.rindex(" ", width)
+          break if place.nil?
+          parts << string[0, place]
+          string = string[place + 1, string.length - place - 1]
+        end
+        parts << string
+        parts.join("\n")
+      end
+    end
   end
 
   # REXML's IOSource over a String: the parser sees the document as it is

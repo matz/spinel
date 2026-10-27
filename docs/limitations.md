@@ -715,6 +715,15 @@ that defines `Foo` answers `"constant"` where CRuby answers `nil`, and a
 method a later-required file defines can be called before that require runs.
 A file's other top-level statements run when it is loaded.
 
+#### A core class's reopened method answers from the start of the program
+
+A program that reopens a core class and redefines one of its methods
+(`class Integer; def +(o) ... end; end`, `class String; def upcase ... end;
+end`) gets the new method for every call, also for a call that runs before
+the reopening does. CRuby runs the core method until the reopening has run.
+So `p 1 + 2` ahead of the reopening above prints what the new `+` answers,
+where CRuby prints `3`. Answering per point would give one name two targets.
+
 #### Two DISTINCT self-containing Sets compare equal
 
 A container walk that meets an object it is already inside stops there and

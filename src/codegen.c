@@ -17937,6 +17937,11 @@ static int program_needs_class_machinery(Compiler *c) {
                  sp_streq(nm, "ancestors") || sp_streq(nm, "superclass") ||
                  sp_streq(nm, "===")))
         need = 1;
+      /* the guard of an instance_eval or instance_exec of a Proc checks the
+         receiver against the Proc's class with sp_class_le_ids
+         (emit_ie_proc), which the bank defines */
+      if (nm && (sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")))
+        need = 1;
     }
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
       const char *nm = nt_str(nt, i, "name");

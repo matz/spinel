@@ -1,0 +1,20 @@
+"\xFF\x00\xC3\xA9"
+#<Encoding:BINARY (ASCII-8BIT)>
+4
+""
+#<Encoding:BINARY (ASCII-8BIT)>
+true
+"\x80\x01"
+#<Encoding:BINARY (ASCII-8BIT)>
+true
+[254, 255]
+#<Encoding:BINARY (ASCII-8BIT)>
+"\x01"
+"\x02"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+true
+#<Encoding:BINARY (ASCII-8BIT)>
+"café"
+#<Encoding:UTF-8>
+4

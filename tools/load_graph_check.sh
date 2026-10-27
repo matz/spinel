@@ -15,9 +15,8 @@
 # (`<top (required)>`, `Kernel#require_relative`). What graph mode does not
 # compile yet it refuses by name: a require below a file's top level or one
 # whose path is computed, an autoload, a load of the entry file, an END
-# block or a write of main's instance variable in a required file, and a
-# prepend after a require of a file that runs code. A required file that
-# only defines things costs no C.
+# block, a write of main's instance variable or a top-level include in a
+# required file. A required file that only defines things costs no C.
 # The load record's points of a program with a .load-record are those it
 # lists.
 #
@@ -200,9 +199,9 @@ refused ivar "a write of main's instance variable in a required file"
 printf 'END { puts "lib END" }\nputs "lib"\n' > "$tmp/end/lib.rb"
 printf 'require_relative "lib"\nputs "main"\n' > "$tmp/end/main.rb"
 refused end "an END block in a required file"
-printf 'class Dog\n  def speak = "woof"\nend\nputs Dog.new.speak\n' > "$tmp/mixin/dog.rb"
-printf 'require_relative "dog"\nmodule Loud\n  def speak = super.upcase\nend\nclass Dog\n  prepend Loud\nend\nputs Dog.new.speak\n' > "$tmp/mixin/main.rb"
-refused mixin "a prepend into a class after a require of a file that runs code"
+printf 'include Helpers\n' > "$tmp/mixin/lib.rb"
+printf 'module Helpers\n  LEVEL = 1\nend\nrequire_relative "lib"\np LEVEL\n' > "$tmp/mixin/main.rb"
+refused mixin "a top-level include in a required file"
 # an include in a required file after a call its module's method would
 # answer early: refused as in one file (refuse_mixin_after_calls reads the
 # statements in load order)

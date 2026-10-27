@@ -396,64 +396,20 @@ static void prog_def_add(ProgDef **v, int *n, int *cap, const char *cls, const c
   (*v)[(*n)++] = (ProgDef){ cls, name, root, node };
 }
 
-/* The class top-level statement st prepends a module to, by name: a class
-   or module body that prepends, or `K.prepend(M)`; else NULL. */
-static const char *prog_prepend_target(const NodeTable *nt, int st) {
-  NodeKind k = nt_kind(nt, st);
-  if (k == NK_CallNode) {
-    const char *cn = nt_str(nt, st, "name");
-    int r = nt_ref(nt, st, "receiver");
-    return cn && is_prepend_name(cn) && r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
-  }
-  int cp = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, st, "constant_path") : -1;
-  if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) return NULL;
-  int b = nt_ref(nt, st, "body"), bn = 0;
-  const int *bv = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &bn) : NULL;
-  for (int j = 0; j < bn; j++) {
-    const char *cn = nt_kind(nt, bv[j]) == NK_CallNode ? nt_str(nt, bv[j], "name") : NULL;
-    if (cn && is_prepend_name(cn) && nt_ref(nt, bv[j], "receiver") < 0) return nt_str(nt, cp, "name");
-  }
-  return NULL;
-}
-
-/* Is class or module `name` defined at the top level of a file other than
-   root i, or of root i ahead of its statement k? (Not by a builtins/ file:
-   the program's own code cannot have run ahead of those.) */
-static int prog_defined_elsewhere(const Compiler *c, const char *name, int i, int k) {
-  const NodeTable *nt = c->nt;
-  for (int r = 0; r < nt_nroots(nt); r++) {
-    int st = prog_root_stmts(c, r), n = 0;
-    const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
-    for (int q = 0; q < (r == i ? k : n); q++) {
-      NodeKind qk = nt_kind(nt, v[q]);
-      int cp = qk == NK_ClassNode || qk == NK_ModuleNode ? nt_ref(nt, v[q], "constant_path") : -1;
-      if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode && !nt_int(nt, v[q], "node_bi", 0) &&
-          nt_str(nt, cp, "name") && sp_streq(nt_str(nt, cp, "name"), name)) return 1;
-    }
-  }
-  return 0;
-}
-
 /* The statements a reader of the top level in order would have to place
    across a load (part 3b), refused by name, asked just ahead of the
    redefinition readers, once the builtins/ files' modules are taken apart
    (desugar_builtins, desugar_builtin_scalar_defs). In a required file's top
    level:
      - a top-level `def self.m` (rename_main_singleton_defs);
-     - `include` / `extend` (the top-level include list: the class
-       structure's and qc_object_mixin_write's);
+     - `include` (qc_object_mixin_write, which runs ahead of the load
+       record);
      - a write of main's instance variable (nf_written_before);
-   anywhere in a required file, `prepend` (prepend_late_stmt); and across
-   files:
+   and across files:
      - a top-level method defined in a required file and again anywhere
        (rename_redefined_toplevel_defs);
      - a method a class reopened at the top level of two files defines in
-       both (version_redefined_reopen_defs);
-     - a prepend into a class defined in another file or earlier in its
-       own, after a load of a file that runs code, whose calls may have run
-       ahead of it (prepend_late_stmt). An include there is
-       refuse_mixin_after_calls', which reads the statements in load
-       order. */
+       both (version_redefined_reopen_defs). */
 void prog_refuse_order(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!prog_graph(c)) return;
@@ -462,20 +418,15 @@ void prog_refuse_order(Compiler *c) {
   ProgDef *defs = NULL;
   int nd = 0, cd = 0;
   for (int i = 0; i < nt_nroots(nt); i++) {
-    int st = prog_root_stmts(c, i), n = 0, ran = 0;
+    int st = prog_root_stmts(c, i), n = 0;
     const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
       NodeKind sk = nt_kind(nt, v[k]);
       const char *nm = nt_str(nt, v[k], "name");
       if (i > 0 && sk == NK_DefNode && nt_ref(nt, v[k], "receiver") >= 0)
         unsupported_feature(c, v[k], "--load-model=graph: a top-level `def self.m` in a required file (rename_main_singleton_defs reads one file), for now");
-      if (i > 0 && sk == NK_CallNode && nt_ref(nt, v[k], "receiver") < 0 && nm && is_mixin_call(nm))
-        unsupported_feature(c, v[k], "--load-model=graph: a top-level mixin in a required file (the top-level include list reads one file), for now");
-      const char *mt = ran ? prog_prepend_target(nt, v[k]) : NULL;
-      if (mt && prog_defined_elsewhere(c, mt, i, k))
-        unsupported_feature(c, v[k], "--load-model=graph: a prepend into a class after a require of a file that runs code (prepend_late_stmt reads one file), for now");
-      int t = sk == NK_LoadNode && !nt_int(nt, v[k], "boot", 0) ? prog_ordered_load(c, v[k]) : -1;
-      if (t >= 0 && !prog_defines_only(c, t)) ran = 1;
+      if (i > 0 && sk == NK_CallNode && nt_ref(nt, v[k], "receiver") < 0 && nm && is_include_name(nm))
+        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file (qc_object_mixin_write reads one file), for now");
       if (sk == NK_DefNode && nt_ref(nt, v[k], "receiver") < 0 && nm)
         prog_def_add(&defs, &nd, &cd, "", nm, i, v[k]);
       int cp = sk == NK_ClassNode ? nt_ref(nt, v[k], "constant_path") : -1;
@@ -509,13 +460,9 @@ void prog_refuse_order(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     int ivar = k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
                k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode;
-    const char *cn = k == NK_CallNode ? nt_str(nt, id, "name") : NULL;
-    int prep = cn && is_prepend_name(cn);
-    if (!ivar && !prep) continue;
+    if (!ivar) continue;
     int r = prog_root_of(c, parent, id);
     if (r < 0 || r == nt->root_id) continue;
-    if (prep)
-      unsupported_feature(c, id, "--load-model=graph: `prepend` in a required file (prepend_late_stmt reads one file), for now");
     /* main's: outside any method, class, module, block or lambda */
     int in_body = 0;
     for (int a = parent[id]; a >= 0 && !in_body; a = parent[a]) {

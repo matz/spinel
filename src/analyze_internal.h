@@ -609,6 +609,7 @@ int narrow_site_boxed_block_params(Compiler *c);
 int desugar_to_proc_block_arg(Compiler *c);
 int desugar_proc_expr_block_arg(Compiler *c);
 int desugar_to_hash_splat(Compiler *c);
+int desugar_kernel_array_conv(Compiler *c);
 int desugar_splat_to_a(Compiler *c);
 int desugar_builtin_splat_forward(Compiler *c);
 int builtin_class_arity_spec(const char *cls, const char *m, int *min, int *max,

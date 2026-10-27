@@ -8739,6 +8739,62 @@ int desugar_to_hash_splat(Compiler *c) {
   return changed;
 }
 
+/* Class cid answers `name` by a def, an attr_reader, or an alias
+   (`alias to_a children`, `alias_method :to_ary, :keys`). */
+static int class_answers_own(Compiler *c, int cid, const char *name) {
+  if (comp_method_in_chain(c, cid, name, NULL) >= 0) return 1;
+  int builtin = 0;
+  const char *tn = comp_resolve_alias_ex(c, cid, name, NULL, &builtin);
+  if (builtin || !tn || !sp_streq(tn, name)) return 1;
+  return comp_resolve_member(c, cid, name, 0, NULL, NULL) != SP_MEMBER_NONE;
+}
+
+/* `Array(x)` where x is a Hash or String subclass instance whose class
+   answers #to_ary or #to_a itself: CRuby asks to_ary, then to_a. Rewrite the
+   argument to `x.to_ary` (or `x.to_a`), so the program's method runs as any
+   call of it does (a body calling super into Hash, an alias of a builtin
+   method), and Kernel#Array takes the Array it answers as it is. An Array
+   subclass instance is an Array already and is never asked; a Hash one with
+   no method of its own answers its pairs through the Kernel#Array arm. */
+int desugar_kernel_array_conv(Compiler *c) {
+  if (!c->has_arysub) return 0;
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    int arg = comp_arysub_kernel_array(c, id);
+    if (arg < 0) continue;
+    if (nt_kind(nt, arg) == NK_CallNode && nt_int(nt, arg, "kernel_array_conv", 0)) continue;
+    TyKind t = infer_type(c, arg);
+    if (comp_ty_ary_root(c, t) < 0 || comp_ty_arysub_array(c, t)) continue;
+    int cid = ty_object_class(t);
+    const char *conv = class_answers_own(c, cid, "to_ary") ? "to_ary"
+                     : class_answers_own(c, cid, "to_a") ? "to_a" : NULL;
+    if (!conv) continue;
+    int base = nt->count;
+    int call = nt_new_node(nt, "CallNode");
+    if (call < 0) continue;
+    nt_node_set_ref(nt, call, "receiver", arg);
+    nt_node_set_str(nt, call, "name", conv);
+    nt_node_set_ref(nt, call, "arguments", -1);
+    nt_node_set_ref(nt, call, "block", -1);
+    nt_node_set_int(nt, call, "kernel_array_conv", 1);
+    /* its answer must be an Array, or nil for [x] (emit_splat_to_a_check_wrap;
+       2 names to_ary there) */
+    nt_node_set_int(nt, call, "splat_to_a", sp_streq(conv, "to_ary") ? 2 : 1);
+    /* Kernel#Array calls a private converter too */
+    nt_set_ignore_visibility(nt, call, 1);
+    int args = nt_ref(nt, id, "arguments");
+    int av[1] = { call };
+    nt_node_set_arr(nt, args, "arguments", av, 1);
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+    changed = 1;
+  }
+  return changed;
+}
+
 /* Is SplatNode `sp` an argument handed to one of the program's own methods:
    of a call whose name the program defines, or of `super`? */
 static int splat_feeds_user_method(Compiler *c, int sp) {
@@ -8765,16 +8821,6 @@ static int splat_feeds_user_method(Compiler *c, int sp) {
     return 0;
   }
   return 0;
-}
-
-/* Class cid answers #to_a by a def, an attr_reader, or an alias
-   (`alias to_a children`). */
-static int class_defines_to_a(Compiler *c, int cid) {
-  if (comp_method_in_chain(c, cid, "to_a", NULL) >= 0) return 1;
-  int builtin = 0;
-  const char *tn = comp_resolve_alias_ex(c, cid, "to_a", NULL, &builtin);
-  if (builtin || !sp_streq(tn, "to_a")) return 1;
-  return comp_resolve_member(c, cid, "to_a", 0, NULL, NULL) != SP_MEMBER_NONE;
 }
 
 /* `[*h]`, `x = *h`, `f(*h)` with a Hash, a Struct, or an object defining #to_a:
@@ -8807,7 +8853,7 @@ int desugar_splat_to_a(Compiler *c) {
       if (cid < 0) continue;
       int st = 0;
       for (int k = cid; k >= 0 && !st; k = c->classes[k].parent) st = c->classes[k].is_struct;
-      if (!st && !class_defines_to_a(c, cid)) continue;
+      if (!st && !class_answers_own(c, cid, "to_a")) continue;
     }
     int base = nt->count;
     int call = nt_new_node(nt, "CallNode");
@@ -22147,7 +22193,7 @@ int desugar_index_assign_value(Compiler *c) {
     }
     /* a class-level `self.[]=` of a class a constant (or a local that
        holds one class) names, as the class method call resolves it */
-    if (!user) user = class_recv_user_cmethod(c, recv, "[]=") >= 0;
+    if (!user) user = class_recv_user_cmethod(c, id, recv, "[]=") >= 0;
     if (!user) continue;
     if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     /* a detached store (desugar_masgn_store_evidence's type evidence) has no parent */

@@ -45,6 +45,7 @@
 #include "analyze_internal.h"
 #include <limits.h>
 #include "builtin_names.h"
+#include "call_plan.h"
 
 int class_has_exc_name(Compiler *c, int ci);   /* codegen.c */
 
@@ -2831,17 +2832,17 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
         cf_construct(f, v, kc, argv, argc, blk, nm);
         continue;
       }
-      int cm = comp_cmethod_in_chain(c, kc, nm, NULL);
+      int cm = call_target(c, v, kc, nm, CT_CMETHOD, NULL);
       if (cm >= 0 && CF_UT(cm)) continue;
       if (cm < 0 && cf_sg_access(f, v, kc, nm, argv, argc)) continue;
-      if (cm < 0 && f->mod[kc]) { int mm = comp_method_in_chain(c, kc, nm, NULL); if (mm >= 0 && CF_UT(mm)) continue; }
+      if (cm < 0 && f->mod[kc]) { int mm = call_target(c, v, kc, nm, 0, NULL); if (mm >= 0 && CF_UT(mm)) continue; }
       if (cf_class_has_natives(f, kc)) { cf_native_class_answer(f, v, kc, nm, argc); continue; }
       if (cf_poison_class_call(f, v, c->classes[kc].name, nm, argv, argc, blk)) continue;
       builtin = 1;
       continue;
     }
     if (k < 0) { builtin = 1; continue; }
-    int mi = comp_method_in_chain(c, k, nm, NULL);
+    int mi = call_target(c, v, k, nm, 0, NULL);
     if (mi >= 0) { if (!CF_UT(mi)) builtin = 1; continue; }
     if (comp_reader_in_chain(c, k, nm, NULL)) {
       /* the reader an alias names reads its own ivar (`alias loc location`) */
@@ -2856,7 +2857,7 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       for (int a = 0; a < argc; a++) { cf_flow(f, argv[a], cf_entry(f, f->fam[k], ivn)); cf_flow(f, argv[a], v); }
       continue;
     }
-    int tl = comp_method_index(c, nm);
+    int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
     if (tl >= 0 && CF_UT(tl)) continue;
     if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) {
       /* (directed) the runtime calls the class's method_missing with the
@@ -2949,7 +2950,7 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
        answers for the runtime's values too (`class Object; def tagged`,
        `42.tagged`) */
     for (int i = 0; i < f->nopen; i++) {
-      int mi = comp_method_in_chain(c, f->open[i], nm, NULL);
+      int mi = call_target(c, v, f->open[i], nm, 0, NULL);
       if (mi >= 0) cf_user_target(f, v, mi, argv, argc, blk);
     }
     cf_builtin_rule(f, v, recv_el, argv, argc, blk, nm);
@@ -3440,7 +3441,7 @@ static void cf_call(CF *f, int v) {
       /* `new` or `allocate` in a class method: an instance of the class
          the method runs for, which a subclass's call makes its own */
       if (s->is_cmethod && (sp_streq(nm, "new") || sp_streq(nm, "allocate")) &&
-          comp_cmethod_in_chain(c, s->class_id, nm, NULL) < 0) {
+          call_target(c, v, s->class_id, nm, CT_CMETHOD, NULL) < 0) {
         cf_add_set(f, v, f->desc[s->class_id]);
         /* each class as `X.new` builds it: its initialize, or a Struct's
            or Data's members, which have none */
@@ -3451,10 +3452,10 @@ static void cf_call(CF *f, int v) {
         return;
       }
       if (s->is_cmethod) {
-        int cm = comp_cmethod_in_chain(c, s->class_id, nm, NULL);
+        int cm = call_target(c, v, s->class_id, nm, CT_CMETHOD, NULL);
         if (cm >= 0 && cf_user_target(f, v, cm, argv, argc, blk)) found = 1;
         for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0 && !found; i = cls_set_next(&f->pool[dsi], i)) {
-          int cm2 = comp_cmethod_in_chain(c, i, nm, NULL);
+          int cm2 = call_target(c, v, i, nm, CT_CMETHOD, NULL);
           if (cm2 >= 0 && cf_user_target(f, v, cm2, argv, argc, blk)) found = 1;
         }
         /* a singleton accessor of the class self is, or of a subclass */
@@ -3463,7 +3464,7 @@ static void cf_call(CF *f, int v) {
       }
       else {
         for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) {
-          int mi = comp_method_in_chain(c, i, nm, NULL);
+          int mi = call_target(c, v, i, nm, 0, NULL);
           if (mi >= 0) { if (cf_user_target(f, v, mi, argv, argc, blk)) found = 1; continue; }
           if (comp_reader_in_chain(c, i, nm, NULL)) {
             char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", comp_resolve_alias(c, i, nm));
@@ -3472,7 +3473,7 @@ static void cf_call(CF *f, int v) {
           }
         }
         if (!found) {
-          int mi = comp_method_in_chain(c, s->class_id, nm, NULL);
+          int mi = call_target(c, v, s->class_id, nm, 0, NULL);
           if (mi >= 0 && cf_user_target(f, v, mi, argv, argc, blk)) found = 1;
         }
         if (!found && f->has_mm) {
@@ -3486,11 +3487,11 @@ static void cf_call(CF *f, int v) {
          `include` are builtins of Module); a bare `new` is the class's */
       int cb = c->node_cbody[v];
       if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) { cf_construct(f, v, cb, argv, argc, blk, nm); return; }
-      int cm = comp_cmethod_in_chain(c, cb, nm, NULL);
+      int cm = call_target(c, v, cb, nm, CT_CMETHOD, NULL);
       if (cm >= 0 && cf_user_target(f, v, cm, argv, argc, blk)) found = 1;
     }
     if (!found) {
-      int tl = comp_method_index(c, nm);
+      int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
       if (tl >= 0 && cf_user_target(f, v, tl, argv, argc, blk)) found = 1;
     }
     /* a module included at top level is Object's (and one main extends is
@@ -3587,12 +3588,12 @@ static void cf_call(CF *f, int v) {
       cf_construct(f, v, x, argv, argc, blk, nm);
       return;
     }
-    int cm = comp_cmethod_in_chain(c, x, nm, NULL);
+    int cm = call_target(c, v, x, nm, CT_CMETHOD, NULL);
     if (cm >= 0 && cf_user_target(f, v, cm, argv, argc, blk)) return;
     if (cm < 0 && cf_sg_access(f, v, x, nm, argv, argc)) return;
     if (cm < 0 && f->mod[x]) {
       /* a module function */
-      int mi = comp_method_in_chain(c, x, nm, NULL);
+      int mi = call_target(c, v, x, nm, 0, NULL);
       if (mi >= 0 && cf_user_target(f, v, mi, argv, argc, blk)) return;
     }
     /* a native binding of the class or module (an ffi_func, a Fiddle
@@ -3651,7 +3652,7 @@ static void cf_call(CF *f, int v) {
     /* `self.new` in a class method: as the bare call above */
     int si = cf_scope_of(f, v);
     Scope *s = &c->scopes[si];
-    if (s->def_node >= 0 && s->is_cmethod && s->class_id >= 0 && comp_cmethod_in_chain(c, s->class_id, nm, NULL) < 0) {
+    if (s->def_node >= 0 && s->is_cmethod && s->class_id >= 0 && call_target(c, v, s->class_id, nm, CT_CMETHOD, NULL) < 0) {
       int dsi = f->desc[s->class_id];   /* (by index: a construction adds sets, and the pool moves) */
       cf_add_set(f, v, dsi);
       if (f->pool[dsi].all) { for (int i = 0; i < argc; i++) cf_all(f, argv[i]); return; }
@@ -3721,12 +3722,12 @@ static void cf_call_write(CF *f, int v) {
   snprintf(wn, sizeof wn, "%s=", rn);
   int x = cf_is_class_const(f, r);
   if (x >= 0) {
-    int cm = comp_cmethod_in_chain(f->c, x, rn, NULL);
+    int cm = call_target(f->c, v, x, rn, CT_CMETHOD, NULL);
     if (cm >= 0) cf_user_target(f, v, cm, NULL, 0, -1);
     else cf_sg_access(f, v, x, rn, NULL, 0);
     cf_op_answer(f, v, op, val);
     argv[argc++] = v;
-    cm = comp_cmethod_in_chain(f->c, x, wn, NULL);
+    cm = call_target(f->c, v, x, wn, CT_CMETHOD, NULL);
     if (cm >= 0) cf_user_target(f, v, cm, argv, argc, -1);
     else cf_sg_access(f, v, x, wn, argv, argc);
     return;
@@ -4551,7 +4552,7 @@ static void cf_collect_blk_local(CF *f) {
       const char *cn = pc >= 0 && nt_kind(nt, pc) == NK_CallNode ? nt_str(nt, pc, "name") : NULL;
       int k = c->scopes[mi].class_id;
       ok = cn && nt_ref(nt, pc, "receiver") < 0 && nt_ref(nt, pc, "block") == p && k >= 0 && !c->scopes[mi].is_cmethod &&
-           comp_method_in_chain(c, k, cn, NULL) >= 0;
+           call_target(c, pc, k, cn, 0, NULL) >= 0;
     }
     if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id) {
       const char *cn = nt_str(nt, p, "name");

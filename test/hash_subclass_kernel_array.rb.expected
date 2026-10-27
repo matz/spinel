@@ -1,0 +1,19 @@
+[[:a, 1], [:b, 2]]
+Array
+{a: 1, b: 2}
+[[:a, 1], [:b, 2]]
+[[:a, 1], [:b, 2]]
+[[:a, 1], [:b, 2]]
+[]
+[:own]
+[:ary]
+[[3, 4], [1, 2]]
+[5]
+[:priv]
+"can't convert J to Array (J#to_ary gives Integer)"
+["q"]
+S
+["w"]
+["a\n", "b"]
+true
+T

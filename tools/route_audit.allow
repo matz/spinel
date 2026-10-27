@@ -1,0 +1,50 @@
+# tools/route_audit.rb: the files whose call targets go through call_target
+# (call_plan.c), and their by-name lookups that ask about a name rather than
+# one call, each with why. `FILE FUNCTION [LOOKUP] reason`: with LOOKUP only
+# that lookup of the function is by name.
+files: src/analyze_infer.c src/analyze_infer_recv.c src/analyze_util.c src/analyze_cls.c
+
+# which classes answer a name, over every class: a poly receiver's arms
+src/analyze_cls.c cf_arms which classes answer the name
+src/analyze_cls.c cf_arms_list which classes answer the name
+src/analyze_cls.c cf_byname which classes answer the name
+src/analyze_cls.c cf_kpred_classes which classes answer the name
+src/analyze_infer.c infer_poly_operand_call comp_name_responders which classes answer the name
+src/analyze_util.c send_blind_recv_owns comp_name_responders which classes answer the name
+src/analyze_infer.c an_user_read_ty the return of every class's method of the name
+src/analyze_infer.c an_user_ret_disagrees the return of every class's method of the name
+
+# is a name defined (or listable) for a class, module or the program
+src/analyze_infer.c an_any_class_cmethod a name's presence
+src/analyze_infer.c an_module_defines a name's presence
+src/analyze_infer.c an_module_methods_listable a name's presence
+src/analyze_infer.c an_object_methods_listable a name's presence
+src/analyze_infer.c an_reopen_method a name's presence in a reopened builtin
+src/analyze_infer.c an_value_methods_class a name's presence
+src/analyze_infer.c kept_enum_reopen_defines a name's presence
+src/analyze_infer.c std_stream_foreign_writer a name's presence
+src/analyze_util.c an_blank_slates_lacking a name's presence
+src/analyze_util.c an_user_defines_method a name's presence
+src/analyze_util.c an_user_recv_defines_method a name's presence
+src/analyze_util.c an_zero_arg_builtin_shadowed a name's presence
+src/analyze_util.c io_reopen_class a name's presence in an IO reopening
+src/analyze_util.c io_reopen_defs a name's presence in an IO reopening
+src/analyze_util.c io_reopen_ret_mixed a name's presence in an IO reopening
+
+# a method the language calls by a name from a fixed table
+src/analyze_cls.c cf_call comp_method_in_chain the conversion protocol's names
+src/analyze_cls.c cf_proto_ret_build the protocol methods' names
+src/analyze_cls.c cf_scal_build Enumerable's iterator names
+src/analyze_infer.c kconv_integer_kind to_int / to_i
+
+# a scope's own name, super from its def's name
+src/analyze_cls.c cf_kdyn_method a scope's own name
+src/analyze_cls.c cf_node a scope's own name
+src/analyze_infer.c infer_uncached a scope's own shadow name
+src/analyze_infer.c super_reaches_exc_text super, by its def's name
+
+# a Symbol argument's method (method(:m), a send's), not the name a call is
+# written with: no call is versioned by it
+src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
+src/analyze_util.c class_value_bind_call_target a Symbol argument's method
+src/analyze_util.c method_obj_target_mi_raw a Method object's method

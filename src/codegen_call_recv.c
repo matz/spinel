@@ -16277,6 +16277,22 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 0;
 }
 
+/* Does a class's own `self.[]` take boxed index read `id` from the builtin's
+   runtime read? Where the receiver can hold its Class value
+   (cls_value_owns_name): the class-method dispatch serves that value and
+   re-emits the read for the values that are not a Class (g_cls_tag_skip)
+   (#5545). That dispatch takes no call with a literal block, which the
+   per-class poly dispatch serves instead, so any class's `self.[]` sends a
+   block call there, as before. */
+static int aref_cmethod_owns(Compiler *c, int id) {
+  int blk = nt_ref(c->nt, id, "block");
+  if (blk < 0 || nt_kind(c->nt, blk) != NK_BlockNode) return cls_value_owns_name(c, id, "[]");
+  if (g_cls_tag_skip == id) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_cmethod_in_chain(c, k, "[]", NULL) >= 0) return 1;
+  return 0;
+}
+
 /* Element access on a boxed receiver: an index read, []= and [] with one or two arguments (emit_poly_call's arms, in their order) */
 static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* poly receiver: arr[start, len] = src -- 3-arg splice assign
@@ -16574,10 +16590,11 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
      dispatch, which emits its arm beside the builtin ones, as the one-argument
      form below does: the slice read answered nil for a Grid (#5522). */
   int has_user_aref2 = 0;
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]") && argc == 2 && !g_poly_builtin_arm)
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_poly_arm_defines_n(c, k, "[]", argc) ||
-          (g_cls_tag_skip != id && comp_cmethod_in_chain(c, k, "[]", NULL) >= 0)) { has_user_aref2 = 1; break; }
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]") && argc == 2 && !g_poly_builtin_arm) {
+    has_user_aref2 = aref_cmethod_owns(c, id);
+    for (int k = 0; k < c->nclasses && !has_user_aref2; k++)
+      if (comp_poly_arm_defines_n(c, k, "[]", argc)) has_user_aref2 = 1;
+  }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "[]") && argc == 2 && !has_user_aref2) {
     /* The runtime dispatches on the receiver's tag: a string/array does a
        two-arg slice, a bound Method (optcarrot's poke handlers) is called with
@@ -16611,13 +16628,11 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     /* Only use the fast single-call path when no user class defines [].
        If any user class has its own [] method, fall through to the per-class
        poly dispatch (line ~4640) which generates both user and builtin arms. */
-    int has_user_aref = 0;
-    /* a class's own `self.[]` counts too: a Class value in the slot is
-       served by the class-method dispatch, which re-emits this read for the
-       values that are not a Class (g_cls_tag_skip) (#5545) */
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_poly_arm_defines_n(c, k, "[]", argc) ||
-          (g_cls_tag_skip != id && comp_cmethod_in_chain(c, k, "[]", NULL) >= 0)) { has_user_aref = 1; break; }
+    /* a class's own `self.[]` counts too where it takes the read
+       (aref_cmethod_owns) */
+    int has_user_aref = aref_cmethod_owns(c, id);
+    for (int k = 0; k < c->nclasses && !has_user_aref; k++)
+      if (comp_poly_arm_defines_n(c, k, "[]", argc)) has_user_aref = 1;
     if (!has_user_aref) {
       if (at == TY_SYMBOL) {
         buf_puts(b, "sp_poly_get_sym("); emit_expr(c, recv, b);

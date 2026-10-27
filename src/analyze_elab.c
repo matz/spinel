@@ -381,8 +381,6 @@ long long elab_sort_key(Compiler *c, int node) {
    class (or singleton class) a class body, `class << x` or class_eval
    block runs in, main's at a file's top level. */
 typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next; } LrHist;   /* a: class, or -2 - ElabVar; b: singleton */
-typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND } LrMixKind;
-typedef struct { int node, kind, mod; } LrMixin;   /* mod: the module's class, -2 one the record does not know */
 /* sup: the superclass the first header naming one names, as resolved
    there (has_sup); LR_UNKNOWN_CLASS when it is not a class the record knows */
 typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup; unsigned char has_sup; } LrClass;
@@ -951,6 +949,12 @@ const LrOpen *elab_class_bodies(Compiler *c, int cls, int *n) {
   const LrClass *k = c->lrec ? lr_class(c->lrec, cls) : NULL;
   *n = k ? k->nopen : 0;
   return k ? k->open : NULL;
+}
+
+const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {
+  const LrClass *k = c->lrec ? lr_class(c->lrec, cls) : NULL;
+  *n = k ? k->nmix : 0;
+  return k ? k->mix : NULL;
 }
 
 /* ---- SPINEL_ELAB_CHECK ---- */

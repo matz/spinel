@@ -3790,7 +3790,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     int cls_face = view_face_top(&fnode, &fkind) && fnode == recv && fkind == TY_CLASS;
     if (!cls_shadowed && !cls_face && argc == 0 && is_name_reader(name)) {
       int ncc = 0;
-      if (class_recv_user_cmethod(c, recv, name) >= 0) cls_shadowed = 1;
+      if (class_recv_user_cmethod(c, id, recv, name) >= 0) cls_shadowed = 1;
       else if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv)) {
         comp_cmethod_candidates(c, name, &ncc);
         if (ncc > 0) cls_shadowed = 1;
@@ -5246,7 +5246,7 @@ int emit_call_implicit_self_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     /* in a class method self is the class: its instances' methods are not
        its own, only one Object or Module gives every class */
     if (dispatch_cid >= 0 && self->is_cmethod && g_ie_class_id < 0 &&
-        comp_class_self_inst_mi(c, dispatch_cid, name) < 0)
+        comp_class_self_inst_mi(c, id, dispatch_cid, name) < 0)
       dispatch_cid = -1;
     if (dispatch_cid >= 0) {
       if (emit_or_take_back(c, id, b, emit_implicit_self_member)) return 1;

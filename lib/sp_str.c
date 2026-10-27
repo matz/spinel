@@ -557,6 +557,8 @@ const char*sp_str_dup(const char*s){SP_GC_ROOT_STR(s);if(!s)return NULL;size_t l
 
 /* ===================== utf8-dependent transforms ===================== */
 sp_int sp_str_count_chars(const char *s, size_t bl) {
+  /* a BINARY string's characters are its bytes */
+  if (sp_str_is_binary(s)) return (sp_int)bl;
   const char *p = s, *end = s + bl;
   sp_int n = 0;
   while (p + 8 <= end) {

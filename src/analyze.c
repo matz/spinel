@@ -12598,7 +12598,7 @@ static int desugar_std_stream_bare_output(Compiler *c) {
     if (!kern && std_stream_bare_call_own(c, id, nm)) continue;
     /* printf's text comes from Kernel#format: not when the program has a
        format of its own anywhere (a class's would shadow it there) */
-    if (is_printf) {
+    if (is_printf && !kern) {
       int own_format = 0;
       for (int k = 0; k < c->nscopes && !own_format; k++)
         own_format = c->scopes[k].name && sp_streq(c->scopes[k].name, "format");
@@ -12692,6 +12692,7 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       }
       else {
         int fmt = sbo_call(nt, -1, "format", argv, argc, id);
+        if (fmt >= 0 && kern) { nt_node_set_int(nt, fmt, "kernel_recv", 1); nt_node_set_int(nt, fmt, "builtin_only", 1); }
         int wr = fmt >= 0 ? sbo_call(nt, sbo_stdout_read(c, id), "write", &fmt, 1, id) : -1;
         int nil = nt_new_node(nt, "NilNode");
         if (wr < 0 || nil < 0) continue;

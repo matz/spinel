@@ -1,0 +1,12 @@
+"{\"command\":[\"bash\",\"-lc\",\"echo ok\"]}"
+["bash", "sh", "-l"]
+[7, 19]
+[1.25, 2.5]
+["one", "two"]
+["mixed", 23]
+[]
+nil
+["nullable", "value"]
+["rescue", "value"]
+ensured
+["ensure", "value"]

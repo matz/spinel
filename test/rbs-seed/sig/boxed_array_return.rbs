@@ -1,0 +1,7 @@
+module PreparedCommand
+  def self.command: (untyped original, bool wrap) -> Array[untyped]
+  def self.tail: (untyped value) -> Array[untyped]
+  def self.nullable: (untyped value) -> Array[untyped]?
+  def self.rescued: (untyped value) -> Array[untyped]
+  def self.ensured: (untyped value) -> Array[untyped]
+end

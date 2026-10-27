@@ -2422,7 +2422,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
              handle as its String */
           int sn_base = g_n_argov, sn_argc = 0;
           const int *sn_argv = call_args(nt, id, &sn_argc);
-          if (sn_late == 1 || sn_late == 2) emit_args_before(c, sn_argv, sn_argc, NULL, 0, &preb2);
+          if (sn_late == 1 || sn_late == 2) emit_args_before_range_ends(c, sn_argv, sn_argc, &preb2);
           if (sn_late == 2) ran_first_bind_read(recv, tsh);
           else if (sn_late) {}
           else if (sn_hold) ran_first_bind(recv, tsb, tsh);

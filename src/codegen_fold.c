@@ -9478,6 +9478,7 @@ int read_rebound_by(Compiler *c, int x, int after) {
    effect of its own is taken too when `rebound` says a later value can
    change what it reads (read_rebound_by): `m(b: x, a: (x = 2))` bound b the
    2. */
+static int g_arg_range_ends;
 static void emit_arg_first(Compiler *c, int v, int rebound, Buf *b) {
   const NodeTable *nt = c->nt;
   int x = nt_kind(nt, v) == NK_SplatNode ? nt_ref(nt, v, "expression") : v;
@@ -9485,6 +9486,18 @@ static void emit_arg_first(Compiler *c, int v, int rebound, Buf *b) {
   /* one a hoist around the call ran already reads its temp: a class
      value's arms bind what the dispatch hoisted */
   if (arg_ran_first(x, 0)) return;
+  /* under emit_args_before_range_ends a Range literal runs its ends first
+     and stays a literal over their temps: the arms that index by a literal
+     read its ends, not the Range, and ran them again after the Range's
+     temp. Its left end reads before the right runs: `s&.slice(i..(i = 3))`
+     is 1..3. */
+  int rn = g_arg_range_ends ? nt_paren_single(nt, x) : -1;
+  if (rn >= 0 && nt_kind(nt, rn) == NK_RangeNode) {
+    int l = nt_ref(nt, rn, "left"), r = nt_ref(nt, rn, "right");
+    if (l >= 0) emit_arg_first(c, l, rebound || read_rebound_by(c, l, r), b);
+    if (r >= 0) emit_arg_first(c, r, rebound, b);
+    return;
+  }
   int effect = subtree_has_side_effect(c, x);
   if (!effect && !rebound) return;
   TyKind at = repr_of(c, x).as_ty;
@@ -9734,6 +9747,14 @@ static void emit_args_before_forced(Compiler *c, const int *argv, int argc, cons
 /* See codegen_internal.h. */
 void emit_args_before(Compiler *c, const int *argv, int argc, const int *after, int nafter, Buf *b) {
   emit_args_before_forced(c, argv, argc, after, nafter, NULL, NULL, b);
+}
+
+/* See codegen_internal.h. */
+void emit_args_before_range_ends(Compiler *c, const int *argv, int argc, Buf *b) {
+  int sv = g_arg_range_ends;
+  g_arg_range_ends = 1;
+  emit_args_before(c, argv, argc, NULL, 0, b);
+  g_arg_range_ends = sv;
 }
 
 /* See codegen_internal.h. */

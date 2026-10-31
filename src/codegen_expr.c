@@ -5421,6 +5421,16 @@ static void emit_range_build(Buf *b, const char *fn, Buf *lo, Buf *hi, int excl,
   free(lo->p); free(hi->p);
 }
 
+/* The Rational end of a Range that is only walked (range_rat_walk): the
+   walk stops at the last Integer <= the end, its floor. A conversion to
+   sp_int truncated it, so (-3..-5r/2) walked -3, -2. */
+static int range_rat_walk_end(Compiler *c, int id, int right, Buf *hi, int oint) {
+  if (comp_ntype(c, right) != TY_RATIONAL || !range_rat_walk(c, id)) return 0;
+  buf_puts(hi, oint ? "sp_oint_of(sp_rational_floor_i(" : "sp_rational_floor_i(");
+  emit_expr(c, right, hi); buf_puts(hi, oint ? "))" : ")");
+  return 1;
+}
+
 /* A Range literal in value position (a..b, a...b, endless and beginless) */
 static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) {
   int left = nt_ref(nt, id, "left");
@@ -5670,11 +5680,12 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
     else if (repr_of(c, left).kind == RK_BOXED) { buf_puts(&lo, "sp_range_lo_bound("); emit_expr(c, left, &lo); buf_puts(&lo, ")"); }
     else emit_oint_expr(c, left, TY_INT, &lo);
     if (right_unbounded) buf_puts(&hi, "sp_oint_nil()");
+    else if (range_rat_walk_end(c, id, right, &hi, 1)) ;
     else emit_oint_expr(c, right, TY_INT, &hi);
     emit_range_build(b, fn, &lo, &hi, excl, in_order);
     return 1;
   }
-  fn = fend ? "sp_range_new_fend" : pend ? "sp_range_new_pend" : "sp_range_new";
+  fn = fend ? "sp_range_new_fend" : pend ? (range_rat_walk(c, id) ? "sp_range_new_pend_walk" : "sp_range_new_pend") : "sp_range_new";
   /* a nil that arrives at run time -- boxed, or an Integer slot's nil --
      is the absent bound too; read as a number, `lo..x` with x nil was the
      empty `lo..0` */
@@ -5696,6 +5707,7 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   else emit_int_expr(c, left, &lo);
   if (fend) emit_float_expr(c, right, &hi);
   else if (pend) emit_expr(c, right, &hi);
+  else if (range_rat_walk_end(c, id, right, &hi, 0)) ;
   else emit_int_expr(c, right, &hi);
   emit_range_build(b, fn, &lo, &hi, excl, in_order);
   return 1;

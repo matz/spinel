@@ -1252,6 +1252,13 @@ spinel: test/reject/range_prepended_alias_chain_endpoint_write.rb:17: a method t
 spinel: test/reject/range_prepended_alias_endpoint_write.rb:16: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_prepended_alias_endpoint_write.rb [promote] rc=1
 spinel: test/reject/range_prepended_alias_endpoint_write.rb:16: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
+== test/reject/range_rational_bound.rb [default] rc=1
+spinel: test/reject/range_rational_bound.rb:7: a Range with a Rational or Complex bound: a Range holds Integer, Float or String bounds, so it has nowhere to hold one. Comparing against the bounds directly (`x >= lo && x <= hi`) needs no Range and does work
+== test/reject/range_rational_bound.rb [promote] rc=1
+spinel: test/reject/range_rational_bound.rb:8: a Range with a Rational or Complex bound: a Range holds Integer, Float or String bounds, so it has nowhere to hold one. Comparing against the bounds directly (`x >= lo && x <= hi`) needs no Range and does work
+== test/reject/range_rational_walk_own_map.rb [default] rc=1
+spinel: test/reject/range_rational_walk_own_map.rb:8: a Range with a Rational or Complex bound: a Range holds Integer, Float or String bounds, so it has nowhere to hold one. Comparing against the bounds directly (`x >= lo && x <= hi`) needs no Range and does work
+== test/reject/range_rational_walk_own_map.rb [promote] rc=0
 == test/reject/range_reopen_float_range.rb [default] rc=1
 spinel: test/reject/range_reopen_float_range.rb:8: a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it
 == test/reject/range_reopen_float_range.rb [promote] rc=1

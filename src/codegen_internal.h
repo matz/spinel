@@ -1778,6 +1778,8 @@ const char *sg_refused_msg(Compiler *c, int def);
 void sg_refused_def(Compiler *c, int def);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
 void unsupported_feature_collect(Compiler *c, int id, const char *msg);
+/* a Range literal only walked from an Integer begin (codegen.c) */
+int range_rat_walk(Compiler *c, int rn);
 
 /* Compile a regexp literal with the engine and throw the result away, to
    refuse at COMPILE time a pattern that would only have failed at the

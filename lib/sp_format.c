@@ -743,11 +743,14 @@ static sp_rat_wide sp_rat_pow10(sp_int e) {
 /* Rational#round/#truncate with a precision: scale by 10^nd, round or chop to
    an integer, scale back. nd <= 0 yields an integer-valued Rational (den 1);
    codegen realizes the Integer class from the literal precision. */
+/* (no negation or sum of the terms: either overflows near the sp_int ends) */
 sp_int sp_rational_floor_i(sp_Rational a) {
-  return a.num >= 0 ? a.num / a.den : -((-a.num + a.den - 1) / a.den);
+  sp_int q = a.num / a.den;
+  return a.num < 0 && a.num % a.den != 0 ? q - 1 : q;
 }
 sp_int sp_rational_ceil_i(sp_Rational a) {
-  return a.num >= 0 ? (a.num + a.den - 1) / a.den : -((-a.num) / a.den);
+  sp_int q = a.num / a.den;
+  return a.num > 0 && a.num % a.den != 0 ? q + 1 : q;
 }
 /* Rational#round's tie-break rule as the 0 even / 1 up / 2 down code the
    other numeric paths take, so a mode read at run time reaches the same

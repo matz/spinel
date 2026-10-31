@@ -4339,12 +4339,24 @@ static SP_UNUSED sp_RbVal sp_range_num_end(sp_RbVal v) {
     sp_raise_cls("ArgumentError", "bad value for range");
   return v;
 }
+/* A boxed Rational or Complex bound of an Integer-represented Range: the
+   representation holds it truncated to its integer part, so `(x..2) ===
+   1r/4` with x = 1r/2 answered true. Say so. A Float Range converts its
+   bounds with to_f and is not asked. `rat_ok` lets a Rational end through
+   where the Range is only walked from an Integer begin (codegen's
+   range_rat_walk): `(1..5r/2).to_a` walks 1, 2 with the end truncated. */
+static SP_UNUSED sp_RbVal sp_range_int_bound(sp_RbVal v, int rat_ok) {
+  if (SP_UNLIKELY(((sp_poly_is_rational(v) || sp_poly_is_brat(v)) && !rat_ok) ||
+                  (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX)))
+    sp_raise_cls("NotImplementedError", "a Range with a Rational or Complex bound is not supported by spinel");
+  return v;
+}
 /* The boxed begin of an Integer-represented Range whose end is a Float
    (`x..2.5`): nil would make it beginless with the Float end, which the
    integer representation holds truncated. Refuse that one loudly; any other
    begin converts as a Range endpoint does. */
 static SP_UNUSED sp_int sp_range_lo_float_end(sp_RbVal v) {
-  v = sp_range_num_end(v);
+  v = sp_range_int_bound(sp_range_num_end(v), 0);
   if (SP_UNLIKELY(v.tag == SP_TAG_NIL))
     sp_raise_cls("NotImplementedError", "a beginless Range with a Float end decided at run time is not supported by spinel");
   if (SP_UNLIKELY(v.tag == SP_TAG_FLT))
@@ -4482,16 +4494,21 @@ static SP_UNUSED sp_PolyArray *sp_range_minmax_poly(sp_Range r) {
 /* A Range built from a boxed end (`lo..x`): nil is the absent end, a Float
    is kept as written (sp_range_new_fend), anything else converts as an
    Integer bound does. */
-static SP_UNUSED sp_Range sp_range_new_pend(sp_oint f, sp_RbVal e, sp_int x) {
-  e = sp_range_num_end(e);
+static SP_UNUSED sp_Range sp_range_new_pend_w(sp_oint f, sp_RbVal e, sp_int x, int walk) {
+  e = sp_range_int_bound(sp_range_num_end(e), walk && sp_poly_is_rational(e));
+  /* the walk stops at the last Integer <= the end: floor, not truncation
+     ((-3..-5r/2) walks only -3) */
+  if (walk && sp_poly_is_rational(e)) e = sp_box_int(sp_rational_floor_i(sp_poly_as_rational(e)));
   if (e.tag == SP_TAG_FLT) { sp_Range r = sp_range_new_fend(f.nil ? SP_RANGE_NO_BEGIN : f.v, e.v.f, x); r.nobeg = f.nil; return r; }
   return sp_range_new_o(f, e.tag == SP_TAG_NIL ? sp_oint_nil() : sp_oint_of(sp_poly_to_i(e)), x);
 }
+static SP_UNUSED sp_Range sp_range_new_pend(sp_oint f, sp_RbVal e, sp_int x) { return sp_range_new_pend_w(f, e, x, 0); }
+static SP_UNUSED sp_Range sp_range_new_pend_walk(sp_oint f, sp_RbVal e, sp_int x) { return sp_range_new_pend_w(f, e, x, 1); }
 /* A boxed begin of an Integer-represented Range: a Float there would make it
    a Float range, which this representation cannot hold. Say so; nil is the
    absent begin. */
 static SP_UNUSED sp_oint sp_range_lo_bound(sp_RbVal v) {
-  v = sp_range_num_end(v);
+  v = sp_range_int_bound(sp_range_num_end(v), 0);
   if (SP_UNLIKELY(v.tag == SP_TAG_FLT))
     sp_raise_cls("NotImplementedError", "a Range with a Float begin decided at run time is not supported by spinel");
   return v.tag == SP_TAG_NIL ? sp_oint_nil() : sp_oint_of(sp_poly_to_i(v));

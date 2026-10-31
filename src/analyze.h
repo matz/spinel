@@ -119,7 +119,11 @@ void an_nil_facts(Compiler *c);
    folds that decide `defined?(K)`. */
 void an_const_presence(Compiler *c);
 int const_has_flag(const LocalVar *lv);
-LocalVar *an_const_read_effect(Compiler *c, int id);
+typedef struct { const LocalVar *presence; int autoload, class_presence; } ConstReadEffect;
+int an_class_needs_presence(Compiler *c, int ci);
+int an_class_presence_is_read(const Compiler *c, int ci);
+int an_class_presence_write(Compiler *c, int id);
+ConstReadEffect an_const_read_effect(Compiler *c, int id);
 int an_const_read_keeps_class(Compiler *c, int id);
 int an_const_read_is_value(Compiler *c, int id);
 /* The program's files under --load-model=graph (analyze_program.c, #9898):
@@ -167,6 +171,9 @@ typedef struct LoadRecord LoadRecord;
 LoadPoint elab_point_of(Compiler *c, int node);
 int elab_point_may(Compiler *c, int node);
 LoadPoint elab_point_from(Compiler *c, int node);
+const int *elab_node_parents(Compiler *c, int *n);
+int prog_stmt_call_executable(Compiler *c, int node, int ci);
+int prog_sclass_call_executable(Compiler *c, int node);
 LoadPoint elab_point_done(Compiler *c, int node);
 int elab_in_method_body(Compiler *c, int node);
 int elab_cmp(LoadPoint a, LoadPoint b);
@@ -358,6 +365,8 @@ int elab_stamp_same(ElabStamp a, ElabStamp b);
 /* can the program run code the record has not seen: a load whose target
    it could not resolve (a computed path, a load the parse left)? */
 int elab_runs_unseen(Compiler *c);
+int elab_autoload_read(Compiler *c, int id);
+int elab_autoload_scope_open(Compiler *c, int id);
 /* may a version of `name` run outside its interval: does the program name
    the method by a Symbol or a String, name or make methods by computed
    names, or run code the record has not seen? */
@@ -441,7 +450,7 @@ int elab_class_candidates(Compiler *c, int node, int **out);   /* the classes a 
    when asked, its entity: the class whose constants hold its name (-1:
    Object's; below -1 not known) and the name (NULL outside the load
    phase's walk) */
-int elab_header_class(Compiler *c, int node, int *owner, const char **leaf);
+int elab_header_class(const Compiler *c, int node, int *owner, const char **leaf);
 /* what constant reference ref (a ConstantReadNode or ConstantPathNode)
    names, read where statement `site` stands: ELAB_NO when it names no
    constant there and the record sees every write of the name there can

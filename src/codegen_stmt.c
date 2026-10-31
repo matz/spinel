@@ -15855,6 +15855,33 @@ void emit_load_path_seed(Compiler *c, Buf *b) {
    but answers true the first time, as CRuby's does, from a flag of its
    feature's (native_load_flag, declared with the files'); false for one
    CRuby has loaded at boot. */
+int emit_autoload_register(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int n, argc; const int *av = call_args(nt, id, &argc);
+  int name = argc ? av[0] : -1;
+  const AutoloadRegistration *a = comp_autoloads(c, id, &n);
+  if (!n) return 0;
+  buf_puts(b, "({ ");
+  emit_const_read_stmt(c, nt_ref(nt, id, "receiver"), b, 0);
+  buf_puts(b, "const char *_an = ");
+  if (nt_kind(nt, name) == NK_SymbolNode) emit_str_literal(b, nt_str(nt, name, "value"));
+  else emit_str_expr(c, name, b);
+  buf_puts(b, nt_kind(nt, name) == NK_SymbolNode ? "; (void)(" : "; SP_GC_ROOT(_an); (void)(");
+  emit_str_expr(c, av[1], b);
+  buf_puts(b, "); ");
+  for (int k = 0; k < n; k++) {
+    int slot = a[k].slot, f = a[k].file;
+    buf_puts(b, "if (strcmp(_an, "); emit_str_literal(b, a[k].name); buf_puts(b, ") == 0) { ");
+    buf_printf(b, "if (!sp_auto_%d_loaded || !*sp_auto_%d_loaded) { sp_auto_%d_registered = 1; ", slot, slot, slot);
+    if (f >= 0) buf_printf(b, "sp_auto_%d_loaded = &sp_loaded_%d; sp_auto_%d_top = sp_file_%d_top; ", slot, f, slot, f);
+    else buf_printf(b, "sp_auto_%d_loaded = NULL; sp_auto_%d_top = NULL; ", slot, slot);
+    buf_printf(b, "sp_auto_%d_feature = ", slot);
+    emit_str_literal(b, a[k].path);
+    buf_puts(b, "; } } ");
+  }
+  buf_puts(b, "0; })");
+  return 1;
+}
 void emit_load_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *how = nt_str(nt, id, "how");
@@ -15901,11 +15928,27 @@ static void emit_load_stmt(Compiler *c, int id, Buf *b, int indent) {
   buf_puts(b, ";\n");
 }
 
+static void emit_class_presence_store(Compiler *c, int id, Buf *b, int indent) {
+  int flag = an_class_presence_write(c, id);
+  if (flag) { emit_indent(b, indent); buf_printf(b, "sp_class_present_%d = 1;\n", flag - 1); }
+}
+
+/* include, extend and prepend are declarations the emitters drop, but their
+   arguments are constant reads that run where the call stands: an autoload's
+   file loads there. */
+static void emit_mixin_arg_reads(Compiler *c, int id, Buf *b, int indent) {
+  int argc = 0;
+  const int *av = c->nautoloads && is_mixin_call(nt_str(c->nt, id, "name")) ? call_args(c->nt, id, &argc) : NULL;
+  for (int i = 0; av && i < argc; i++)
+    if (emit_const_read_stmt(c, av[i], b, indent)) buf_puts(b, "\n");
+}
+
 void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (g_repr_check) repr_check_ask(c, id);
   emit_line_directive(c, id, b);
   if (nt_kind(c->nt, id) == NK_LoadNode) { emit_with_prelude(c, id, b, indent, emit_load_stmt); return; }   /* (a computed path's temps) */
   if (emit_const_recv_stmt_wrap(c, id, b, indent, 0)) return;
+  if (nt_kind(c->nt, id) == NK_CallNode) emit_mixin_arg_reads(c, id, b, indent);
   /* A constant's visibility is not enforced (constants are resolved at
      compile time), so the class body skips these declarations -- also where
      one stands inside a conditional or a block of the body, which reaches
@@ -15933,6 +15976,8 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (nt_kind(c->nt, id) == NK_CallNode && call_is_setter_assign(c->nt, id))
     g_setter_stmt_id = id;
   emit_with_prelude(c, id, b, indent, emit_stmt_inner);
+  if (nt_kind(c->nt, id) == NK_ConstantWriteNode || nt_kind(c->nt, id) == NK_ConstantPathWriteNode)
+    emit_class_presence_store(c, id, b, indent);
   g_setter_stmt_id = saved_setter;
   /* a call the statement emitters placed themselves (puts, an iterator with
      its block) never reached emit_call's stamp: the same default (#4522) */
@@ -17422,38 +17467,19 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
         emit_stmt_or_defer(c, stmts[k], b, indent);
         continue;
       }
-      /* Kernel calls that act (output, an exception, exit) run where they
-         stand, as CRuby runs a class body top to bottom: `raise` or `warn`
-         in a class body was skipped as a declaration */
-      static const char *const kernel_acts[] = { "puts", "print", "p", "pp", "printf",
-        "putc", "warn", "raise", "fail", "exit", "exit!", "abort", "sleep", "at_exit",
-        "srand", "loop", "catch", NULL };
-      int is_output = 0;
-      for (int q = 0; cn && kernel_acts[q] && !is_output; q++) is_output = sp_streq(cn, kernel_acts[q]);
-      int is_user = cn && call_target(c, stmts[k], -1, cn, CT_TOP, NULL) >= 0;
-      /* a class_eval family call given a `&blk` runs it: not the reopen a
-         literal block of defs is */
-      int blk_arg = cn && is_eval_exec_family(cn) &&
-                    nt_kind(nt, nt_ref(nt, stmts[k], "block")) == NK_BlockArgumentNode;
-      /* self in a class body is the class, so a receiver-less call naming one
-         of its class methods (its own or an ancestor's) is a real call, not a
-         declaration macro -- the shape every declarative DSL uses (`key :a`,
-         `validates :name`). Skipping it left the state it establishes unset
-         and nothing said so (#4051). */
-      if (!is_user && cn && g_class_body_id >= 0)
-        is_user = call_target(c, stmts[k], g_class_body_id, cn, CT_CMETHOD, NULL) >= 0;
+      int executable = prog_stmt_call_executable(c, stmts[k], ci);
       /* A name nothing defines -- no method of any class or module in the
          program, no Module or Object method, no declaration the analysis
          reads -- is CRuby's NoMethodError at that point of the body, not a
          declaration to skip silently. */
-      if (!is_output && !is_user && cn && class_body_name_undefined(c, cn)) {
+      if (!executable && cn && class_body_name_undefined(c, cn)) {
         const char *rn = ci >= 0 ? class_ruby_name(c, ci) : NULL;
         emit_indent(b, indent);
         buf_printf(b, "sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for %s %s\");\n",
                    cn, ci >= 0 && comp_class_is_module(c, &c->classes[ci]) ? "module" : "class", rn ? rn : "Object");
         continue;
       }
-      if (!is_output && !is_user && !blk_arg) continue;
+      if (!executable) { emit_mixin_arg_reads(c, stmts[k], b, indent); continue; }
     }
     emit_stmt_or_defer(c, stmts[k], b, indent);
   }
@@ -20311,11 +20337,12 @@ static void emit_cpath_recv_name(Compiler *c, const char *name, int t, Buf *b, i
 static void emit_class_definition(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int cp = nt_ref(nt, id, "constant_path");
-  int reads[] = { nt_ref(nt, cp, "parent"), nt_ref(nt, id, "superclass") };
+  int reads[] = { an_const_read_effect(c, cp).autoload ? cp : nt_ref(nt, cp, "parent"), nt_ref(nt, id, "superclass") };
   for (int i = 0; i < 2; i++)
     if (emit_const_read_stmt(c, reads[i], b, indent)) buf_puts(b, "\n");
   const char *name = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
   int ci = name ? elab_header_class(c, id, NULL, NULL) : g_class_body_id;
+  emit_class_presence_store(c, id, b, indent);
   emit_class_body_stmts(c, ci, nt_ref(nt, id, "body"), b, indent);
   if (nt_int(nt, id, "class_new_anonymous", 0) == 1)
     emit_class_assign_name(c, ci, class_ruby_name(c, ci), b, indent);
@@ -21582,11 +21609,8 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
             sk == NK_InstanceVariableOrWriteNode || sk == NK_InstanceVariableAndWriteNode ||
             sk == NK_InstanceVariableOperatorWriteNode)
           continue;
-        if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0) {
-          const char *cn = nt_str(nt, stmts[k], "name");
-          if (!cn || (!sp_streq(cn, "puts") && !sp_streq(cn, "print") && !sp_streq(cn, "p")))
-            continue;
-        }
+        if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0 &&
+            !prog_sclass_call_executable(c, stmts[k])) continue;
         emit_stmt(c, stmts[k], b, indent);
       }
       return;

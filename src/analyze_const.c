@@ -325,6 +325,8 @@ static int cw_path_target(const ConstWalk *w, int id) {
           k == NK_ConstantPathOperatorWriteNode) && nt_ref(w->nt, p, "target") == id;
 }
 
+static int const_class_presence(Compiler *c, int id);
+
 /* Mark the constants some assignment can follow a read of: LocalVar.const_early
    (see the header comment). */
 void an_const_presence(Compiler *c) {
@@ -399,6 +401,17 @@ void an_const_presence(Compiler *c) {
   }
   for (int id = 0; id < nt->count; id++)
     if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
+  /* Compute consumption once, while the constant pass visits reads. A
+     syntactic read may become reachable later in inference. */
+  for (int ci = 0; ci < c->nclasses; ci++) c->classes[ci].presence_read = 0;
+  NodeKind kinds[] = { NK_ConstantReadNode, NK_ConstantPathNode };
+  for (int k = 0; k < 2; k++) NT_FOREACH_KIND(nt, kinds[k], id) {
+    int parent = w.par[id];
+    NodeKind pk = nt_kind(nt, parent);
+    if (cw_path_target(&w, id) || ((pk == NK_ClassNode || pk == NK_ModuleNode) && nt_ref(nt, parent, "constant_path") == id)) continue;
+    int ci = const_class_presence(c, id);
+    if (ci) c->classes[ci - 1].presence_read = 1;
+  }
   free(cref);
   for (int i = 0; i < w.ncrefs; i++) free(w.crefs[i]);
   free(w.crefs);
@@ -410,14 +423,59 @@ void an_const_presence(Compiler *c) {
 int const_has_flag(const LocalVar *lv) {
   return lv && lv->const_early && (lv->type == TY_NIL || is_scalar_ret(lv->type));
 }
+/* A header in an unplaced file has not made its class present merely by
+   being registered in the compiler's class table. */
+int an_class_needs_presence(Compiler *c, int ci) {
+  if (ci < 0 || ci >= c->nclasses || !prog_has_files(c)) return 0;
+  /* A builtin already exists; a later header only reopens it. */
+  if (c->classes[ci].is_builtin_const || builtin_class_id(c->classes[ci].name) ||
+      is_builtin_exception_name(c->classes[ci].name)) return 0;
+  int node = c->classes[ci].def_node;
+  return node >= 0 && elab_point_from(c, node).region > 0;
+}
+/* The lexical class and its enclosing classes already exist when their
+   bodies or methods run. The scope walk owns both of these facts. */
+static int const_class_presence(Compiler *c, int id) {
+  const char *nm = nt_str(c->nt, id, "name");
+  int ci = nm ? comp_class_index(c, nm) : -1;
+  if (!an_class_needs_presence(c, ci)) return 0;
+  Scope *scope = comp_scope_of(c, id);
+  int own = scope && scope->class_id >= 0 ? scope->class_id : id < c->node_cap ? c->node_cbody[id] : -1;
+  for (; own >= 0; own = c->classes[own].enclosing_class)
+    if (own == ci) return 0;
+  return ci + 1;
+}
+
+/* The creation that sets the flag is a header or a class-valued constant
+   assignment. Codegen renders the same store after either definition. */
+int an_class_presence_write(Compiler *c, int id) {
+  NodeKind k = nt_kind(c->nt, id);
+  int ci = -1;
+  if (k == NK_ClassNode || k == NK_ModuleNode) ci = elab_header_class(c, id, NULL, NULL);
+  else if (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode) {
+    int target = k == NK_ConstantWriteNode ? id : nt_ref(c->nt, id, "target");
+    const char *nm = nt_str(c->nt, target, "name");
+    ci = nm ? comp_class_index(c, nm) : -1;
+    if (ci >= 0 && c->classes[ci].def_node != id) ci = -1;
+  }
+  return an_class_presence_is_read(c, ci) ? ci + 1 : 0;
+}
+
 /* The slot whose presence evaluating this constant node observes. Path
    parents ask separately, before their child's value is used. */
-LocalVar *an_const_read_effect(Compiler *c, int id) {
+ConstReadEffect an_const_read_effect(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
-  if (!nt_kind_is_constant(k)) return NULL;
+  if (!nt_kind_is_constant(k)) return (ConstReadEffect){0};
   const char *nm = nt_str(c->nt, id, "name");
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
-  return const_has_flag(lv) && (k != NK_ConstantPathNode || (!const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id))) ? lv : NULL;
+  return (ConstReadEffect){ const_has_flag(lv) && (k != NK_ConstantPathNode || (!const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id))) ? lv : NULL,
+                           elab_autoload_read(c, id), const_class_presence(c, id) };
+}
+
+/* A definition-only file still runs a header's presence store when a
+   constant read in this program consumes it. */
+int an_class_presence_is_read(const Compiler *c, int ci) {
+  return ci >= 0 && ci < c->nclasses && c->classes[ci].presence_read;
 }
 
 /* A constant whose class value a consumer may fold away must retain the

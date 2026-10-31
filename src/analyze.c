@@ -47240,7 +47240,6 @@ static void an_phase_desugar_register(Compiler *c) {
   Scope *top = comp_scope_new(c, NULL, -1);
   { top->body = nt_ref(c->nt, c->nt->root_id, "statements"); comp_touch_scope(top->idx); }
   prog_file_scopes(c);   /* and each required file's (--load-model=graph) */
-  prog_refuse_loads(c);
   for (int r = 0; r < nt_nroots(c->nt); r++) reject_retry_in_ensure(c, nt_root(c->nt, r), 0, 0);
   if (g_exc_abort) reject_exc_abort_constructs(c);
   LowerCtx lc;
@@ -47406,6 +47405,7 @@ static void an_phase_desugar_register(Compiler *c) {
   qualify_colliding_classes(c);
   lower_finish(c, &lc);   /* SPINEL_LOWER_CHECK: the report, and no C */
   AN_STEP_V("elab_program", elab_program(c));   /* walk_scope of each file's top level, and the load record */
+  prog_refuse_loads(c);
   if (g_dump_load_record) { elab_dump(c, stdout); exit(0); }   /* the load phase's points, as the walk leaves them */
   AN_STEP_V("expand_static_splat_args", expand_static_splat_args(c, 0, c->nt->count));
   AN_STEP_V("register_singleton_defs", register_singleton_defs(c));   /* def CONST.m / def x.m -> synthesized subclass */

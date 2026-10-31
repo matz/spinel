@@ -24,6 +24,7 @@
 
 #include "analyze_internal.h"
 #include "builtin_names.h"
+#include "call_plan.h"
 #include <limits.h>
 
 static int prog_graph(const Compiler *c) { return c->nt->nfile_roots > 0; }
@@ -357,7 +358,8 @@ int prog_cmp_run(Compiler *c, int a, int b, int at, const char *reader) {
 /* Does root i only define things -- methods, aliases, and classes or modules
    whose bodies do no more -- so that loading it runs nothing? Asked of the
    program as it stands: codegen asks it of the desugared tree. */
-static int prog_defines_only_stmts(const NodeTable *nt, int st) {
+static int prog_defines_only_stmts(const Compiler *c, int st) {
+  const NodeTable *nt = c->nt;
   if (st < 0) return 1;
   if (nt_kind(nt, st) != NK_StatementsNode) return 0;
   int n = 0; const int *v = nt_arr(nt, st, "body", &n);
@@ -367,13 +369,14 @@ static int prog_defines_only_stmts(const NodeTable *nt, int st) {
        builtins/ files' modules, desugar_builtins) */
     if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_NilNode) continue;
     if ((k == NK_ClassNode || k == NK_ModuleNode) && nt_ref(nt, v[i], "superclass") < 0 &&
-        prog_defines_only_stmts(nt, nt_ref(nt, v[i], "body"))) continue;
+        !an_class_presence_is_read(c, elab_header_class(c, v[i], NULL, NULL)) &&
+        prog_defines_only_stmts(c, nt_ref(nt, v[i], "body"))) continue;
     return 0;
   }
   return 1;
 }
 int prog_defines_only(const Compiler *c, int i) {
-  return prog_defines_only_stmts(c->nt, prog_root_stmts(c, i));
+  return prog_defines_only_stmts(c, prog_root_stmts(c, i));
 }
 
 /* The root whose tree holds node id (a file's ProgramNode), or -1. */
@@ -388,7 +391,8 @@ static int prog_root_of(const Compiler *c, const int *parent, int id) {
    under none. seen[] (one byte per node) is set for them; live[] (one per
    file) for the files. A node's parent is not the way up: a statement a
    fold spliced out of a dead branch has that branch for its parent too. */
-static void prog_reach(const NodeTable *nt, unsigned char *seen, unsigned char *live) {
+static void prog_reach(const Compiler *c, unsigned char *seen, unsigned char *live) {
+  const NodeTable *nt = c->nt;
   int n = nt_nroots(nt), top = 0;
   int *stack = malloc(sizeof(int) * ((size_t)nt->count + 1));
   if (!stack) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -396,10 +400,11 @@ static void prog_reach(const NodeTable *nt, unsigned char *seen, unsigned char *
   if (nt_root(nt, 0) >= 0) { seen[nt_root(nt, 0)] = 1; stack[top++] = nt_root(nt, 0); }
   while (top > 0) {
     int id = stack[--top];
-    if (nt_kind(nt, id) == NK_LoadNode) {
-      int nc = prog_load_ncand(nt, id);
-      for (int k = -1; k < nc; k++) {   /* its file, and a closed set's */
-        int t = k < 0 ? (int)nt_int(nt, id, "target_file", -1) : prog_load_cand(nt, id, k);
+    int nauto; const AutoloadRegistration *a = comp_autoloads(c, id, &nauto);
+    if (nt_kind(nt, id) == NK_LoadNode || nauto) {
+      int nc = nauto ? nauto : prog_load_ncand(nt, id);
+      for (int k = nauto ? 0 : -1; k < nc; k++) {   /* its file, and a closed set's */
+        int t = nauto ? a[k].file : k < 0 ? (int)nt_int(nt, id, "target_file", -1) : prog_load_cand(nt, id, k);
         if (t > 0 && t < n && !live[t]) {
           live[t] = 1;
           if (nt_root(nt, t) >= 0 && !seen[nt_root(nt, t)]) { seen[nt_root(nt, t)] = 1; stack[top++] = nt_root(nt, t); }
@@ -427,6 +432,10 @@ static void prog_tops_scan(Compiler *c, unsigned char *has, const unsigned char 
   const NodeTable *nt = c->nt;
   int n = nt_nroots(nt);
   for (int i = 0; i < n; i++) has[i] = i > 0 && !prog_defines_only(c, i);
+  for (int k = 0; k < c->nautoloads; k++) {
+    const AutoloadRegistration *a = &c->autoloads[k];
+    if (seen[a->node] && a->file > 0 && a->file < n) has[a->file] = 1;
+  }
   const int *parent = comp_parent_map(c);
   NT_FOREACH_KIND(nt, NK_LoadNode, id) {
     int f = (int)nt_int(nt, id, "target_file", -1);
@@ -461,7 +470,7 @@ void prog_file_tops(Compiler *c, unsigned char *has, void (*native)(void *ud, in
   int n = nt_nroots(nt);
   unsigned char *seen = calloc((size_t)nt->count + 1, 1), *live = calloc((size_t)n, 1);
   if (!seen || !live) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  prog_reach(nt, seen, live);
+  prog_reach(c, seen, live);
   prog_tops_scan(c, has, seen, live, native, ud);
   if (native)
     NT_FOREACH_KIND(nt, NK_LoadNode, id)
@@ -493,7 +502,7 @@ int prog_load_sets_flag(Compiler *c, int id) {
     unsigned char *flags = calloc((size_t)nt->count + 1, 1), *has = calloc((size_t)n + 1, 1),
                   *seen = calloc((size_t)nt->count + 1, 1), *live = calloc((size_t)n + 1, 1);
     if (!flags || !has || !seen || !live) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    prog_reach(nt, seen, live);
+    prog_reach(c, seen, live);
     prog_tops_scan(c, has, seen, live, NULL, NULL);
     /* the native features a load that is a value reads the flag of, each
        once (there are as many as the native libraries at most) */
@@ -532,6 +541,86 @@ int prog_load_sets_flag(Compiler *c, int id) {
   return id >= 0 && id < nt->count && c->load_sets_flag[id];
 }
 
+/* A registration runs where its ordinary call stands, including in a body
+   whose bare calls otherwise default to declarations. */
+int prog_stmt_call_executable(Compiler *c, int id, int ci) {
+  const NodeTable *nt = c->nt;
+  int n;
+  comp_autoloads(c, id, &n);
+  if (n) return 1;
+  const char *cn = nt_str(nt, id, "name");
+  int is_user = cn && call_target(c, id, -1, cn, CT_TOP, NULL) >= 0;
+  /* a class_eval family call given a `&blk` runs it: not the reopen a
+     literal block of defs is */
+  int blk_arg = cn && is_eval_exec_family(cn) &&
+                nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockArgumentNode;
+  /* self in a class body is the class, so a receiver-less call naming one
+     of its class methods (its own or an ancestor's) is a real call, not a
+     declaration macro -- the shape every declarative DSL uses (`key :a`,
+     `validates :name`). Skipping it left the state it establishes unset
+     and nothing said so (#4051). */
+  if (!is_user && cn && ci >= 0)
+    is_user = call_target(c, id, ci, cn, CT_CMETHOD, NULL) >= 0;
+  return is_class_body_acting_name(cn) || is_user || blk_arg;
+}
+
+/* The same for a singleton-class body, which runs only the output calls. */
+int prog_sclass_call_executable(Compiler *c, int id) {
+  int n;
+  comp_autoloads(c, id, &n);
+  return n || is_stmt_output_name(nt_str(c->nt, id, "name"));
+}
+
+/* A registration must survive every body/statement filter on its recorded
+   path. Method bodies run separately; their declaration's operands do not. */
+static int prog_registration_dropped(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int n; const int *up = elab_node_parents(c, &n);
+  for (int ch = id, p = id >= 0 && id < n ? up[id] : -1; p >= 0; ch = p, p = up[p]) {
+    NodeKind k = nt_kind(nt, p), ck = nt_kind(nt, ch);
+    if ((k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) &&
+        ch == nt_ref(nt, p, "body") && ck != NK_StatementsNode) return 1;
+    if (k == NK_SingletonClassNode) {
+      int x = nt_ref(nt, p, "expression"); NodeKind xk = nt_kind(nt, x);
+      if (xk != NK_SelfNode && !((xk == NK_ConstantReadNode || xk == NK_ConstantPathNode) &&
+          comp_class_index(c, nt_str(nt, x, "name")) >= 0)) return 1;
+    }
+    if (k == NK_AliasMethodNode || k == NK_UndefNode ||
+        (k == NK_DefNode && ch == nt_ref(nt, p, "receiver"))) return 1;
+    if (k == NK_CallNode) {
+      const char *name = nt_str(nt, p, "name");
+      if (nt_ref(nt, p, "receiver") < 0 && (is_mixin_call(name) || visibility_of_name(name) ||
+          is_attr_decl_reader(name) || is_attr_decl_writer(name) || is_const_visibility_name(name))) return 1;
+      if (ch != nt_ref(nt, p, "block") && (is_define_method_name(name) || is_define_singleton_method_name(name))) return 1;
+      if (class_eval_reopen_class(c, p, c->node_cbody[p]) >= 0) return 1;
+      int rv = nt_ref(nt, p, "receiver"), block = nt_ref(nt, p, "block");
+      if (is_record_class_builder(nt_str(nt, rv, "name"), name) && block >= 0 &&
+          nt_kind(nt, nt_ref(nt, block, "body")) == NK_BeginNode) return 1;
+    }
+    int owner = up[p]; NodeKind ok = nt_kind(nt, owner);
+    if (k != NK_StatementsNode || p != nt_ref(nt, owner, "body") ||
+        (ok != NK_ClassNode && ok != NK_ModuleNode && ok != NK_SingletonClassNode)) continue;
+    if (ok == NK_SingletonClassNode && (ck == NK_InstanceVariableWriteNode || ck == NK_InstanceVariableOrWriteNode ||
+        ck == NK_InstanceVariableAndWriteNode || ck == NK_InstanceVariableOperatorWriteNode)) return 1;
+    if (ck == NK_CallNode && ch != id && nt_ref(nt, ch, "receiver") < 0 &&
+        !(ok == NK_SingletonClassNode ? prog_sclass_call_executable(c, ch) : prog_stmt_call_executable(c, ch, c->node_cbody[ch]))) return 1;
+  }
+  return 0;
+}
+
+/* Is a receiverless mixin call a plain statement of a class, module or
+   singleton-class body, possibly inside a begin? Anywhere else (the top level,
+   a modifier `if`, a block) the emitters do not run it as a declaration. */
+static int prog_mixin_plain_stmt(Compiler *c, int id) {
+  int n; const int *up = elab_node_parents(c, &n);
+  for (int p = id >= 0 && id < n ? up[id] : -1; p >= 0; p = up[p]) {
+    NodeKind k = nt_kind(c->nt, p);
+    if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 1;
+    if (k != NK_StatementsNode && k != NK_BeginNode) return 0;
+  }
+  return 0;
+}
+
 /* What --load-model=graph does not load yet, refused by name (#9898), asked
    once the load sites are known, ahead of the desugaring:
      - a require of the program's own entry file, which CRuby runs again as
@@ -545,18 +634,56 @@ int prog_load_sets_flag(Compiler *c, int id) {
 void prog_refuse_loads(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!prog_graph(c)) return;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *name = nt_str(nt, id, "name");
+    if (c->nautoloads && (is_const_query_name(name) || is_constants_list_name(name) || is_autoload_query_name(name)))
+      unsupported_feature(c, id, "--load-model=graph: constant-table query with autoload registrations, for now");
+    /* a receiverless include of an autoloaded module that is not a plain
+       statement of a class body (the top level, a modifier `if`, a block, a
+       `send`): the declaration does not take effect there, or the module's
+       methods reach the record only after the file runs */
+    int margc = 0;
+    const int *mav = c->nautoloads && nt_ref(nt, id, "receiver") < 0 ? call_args(nt, id, &margc) : NULL;
+    int msend = mav && margc > 1 && is_send_family(name) && nt_kind(nt, mav[0]) == NK_SymbolNode && is_mixin_call(nt_str(nt, mav[0], "value"));
+    if (!msend && !(mav && is_mixin_call(name) && !prog_mixin_plain_stmt(c, id))) mav = NULL;
+    for (int j = msend; mav && j < margc; j++)
+      if (elab_autoload_read(c, mav[j]))
+        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+    if (!is_autoload_name(name)) continue;
+    /* Name membership does not establish which receiver owns autoload. */
+    if (elab_names_method(c, name)) {
+      if (nt_ref(nt, id, "receiver") < 0)
+        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+      continue;
+    }
+    int n; const AutoloadRegistration *a = comp_autoloads(c, id, &n);
+    if (!n) unsupported_feature(c, id, "--load-model=graph: unresolved autoload registration");
+    /* These body emitters do not dispatch an implicit rescue/ensure body.
+       Any other dropped ancestor has the same effect on the registration. */
+    if (prog_registration_dropped(c, id))
+      unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+    for (int j = 0; j < n; j++) {
+      if (elab_point_from(c, id).region > 0 && c->node_cbody[id] >= 0)
+        unsupported_feature(c, id, "--load-model=graph: autoload registration in a deferred class or module body, for now");
+      if (!a[j].slot) unsupported_feature(c, id, "--load-model=graph: unresolved autoload owner");
+      if (!a[j].file) unsupported_feature(c, id, "--load-model=graph does not load the program's own entry file again, for now");
+    }
+  }
+  if (c->nautoloads)
+    NT_FOREACH_KIND(nt, NK_ConstantPathNode, id)
+      if (elab_autoload_scope_open(c, id))
+        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
   int *parent = an_parent_map(nt);
   if (!parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind k = nt_kind(nt, id);
-    if (k == NK_CallNode) {
-      const char *cn = nt_str(nt, id, "name");
-      if (cn && is_autoload_name(cn) && nt_ref(nt, id, "receiver") < 0)
-        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
-    }
-    else if (k == NK_LoadNode) {
+  NodeKind kinds[] = { NK_LoadNode, NK_PostExecutionNode, NK_ReturnNode };
+  for (int ki = 0; ki < 3; ki++) NT_FOREACH_KIND(nt, kinds[ki], id) {
+    NodeKind k = kinds[ki];
+    if (k == NK_LoadNode) {
       if (nt_int(nt, id, "target_file", -1) == 0)
         unsupported_feature(c, id, "--load-model=graph does not load the program's own entry file again, for now");
+      for (int j = 0; j < prog_load_ncand(nt, id); j++)
+        if (prog_load_cand(nt, id, j) == 0)
+          unsupported_feature(c, id, "--load-model=graph: a computed require may load the program's own entry file again, for now");
     }
     else if (k == NK_PostExecutionNode) {
       int r = prog_root_of(c, parent, id);
@@ -619,7 +746,7 @@ static void prog_site_note(void *ud, int load, int in_place) {
   q->open |= prog_load_open(q->c->nt, load);
   int t = (int)nt_int(q->c->nt, load, "target_file", -1);
   if (t <= 0 || t >= q->n) return;
-  q->nsite[t]++; q->site[t] = load; q->at[t] = q->stmt; q->ok[t] = (unsigned char)in_place;
+  q->nsite[t]++; q->site[t] = load; q->at[t] = q->stmt; q->ok[t] = (unsigned char)(in_place);
 }
 /* The top-level statement of a file that holds node id, or -1. */
 static int prog_top_stmt_of(const Compiler *c, const int *parent, int id) {
@@ -671,12 +798,16 @@ void prog_settle_files(Compiler *c) {
   unsigned char *seen = calloc((size_t)nt->count + 1, 1), *live = calloc((size_t)n, 1), *ok = calloc((size_t)n, 1);
   int *nsite = calloc((size_t)n, sizeof(int)), *site = calloc((size_t)n, sizeof(int)), *at = calloc((size_t)n, sizeof(int));
   if (!seen || !live || !ok || !nsite || !site || !at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  prog_reach(nt, seen, live);
+  prog_reach(c, seen, live);
   ProgSites q = { c, -1, n, 0, nsite, site, at, ok };
   for (int f = 0; f < n; f++) {
     int st = prog_root_stmts(c, f), m = 0;
     const int *v = st >= 0 && live[f] ? nt_arr(nt, st, "body", &m) : NULL;
     for (int k = 0; k < m; k++) { q.stmt = v[k]; elab_load_sites(c, v[k], prog_site_note, &q); }
+  }
+  for (int k = 0; k < c->nautoloads; k++) {
+    const AutoloadRegistration *a = &c->autoloads[k];
+    if (seen[a->node] && a->file > 0 && a->file < n) { nsite[a->file]++; ok[a->file] = 0; }
   }
   if (q.open) memset(ok, 0, (size_t)n);   /* an open require may run any file first */
   prog_unplace_candidates(c, seen, live);

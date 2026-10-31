@@ -2839,6 +2839,8 @@ static int yield_recv_builtin_every_site(Compiler *c, int call) {
 
 static int poly_scalar_row_call(Compiler *c, int id);
 TyKind infer_call(Compiler *c, int id) {
+  int n; comp_autoloads(c, id, &n);
+  if (n) return TY_NIL;
   /* a receiver that folded to a constant after the early rewrite of a
      singleton alias of a builtin's class method (`k = Integer; k.root(25)`) */
   if (c->has_cm_builtin_alias && !an_pure_reads && nt_ref(c->nt, id, "receiver") >= 0) rewrite_builtin_cm_alias_call(c, id);

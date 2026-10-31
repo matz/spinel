@@ -1275,6 +1275,8 @@ const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 /* A require under --load-model=graph, as its value (codegen_stmt.c) */
 void emit_load_call(Compiler *c, int id, Buf *b);
+int emit_autoload_register(Compiler *c, int id, Buf *b);
+int emit_const_autoload_run(Compiler *c, int id, Buf *b);   /* codegen_util.c */
 void emit_file_feature(const NodeTable *nt, int f, Buf *b);
 void emit_load_path_seed(Compiler *c, Buf *b);
 void native_load_flag(const NodeTable *nt, int id, char *buf, size_t n);

@@ -24617,7 +24617,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        and the hold converting g's boxed answer ran g ahead of f) */
     /* (...and so is a variable's write, which runs its value and answers
        it: left unbound, `(s = "k#{t}") + g.call` ran g ahead of t, #9258) */
-    int bindable = !route_op && (an_const_read_effect(c, operand[i]) != NULL ||
+    int bindable = !route_op && (an_const_read_effect(c, operand[i]).presence != NULL ||
                     an_const_read_keeps_class(c, operand[i]) ||
                     k == NK_CallNode || k == NK_SuperNode || k == NK_IfNode || k == NK_UnlessNode ||
                     k == NK_ForwardingSuperNode || k == NK_YieldNode || k == NK_InterpolatedStringNode ||
@@ -28062,6 +28062,7 @@ static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
 
 static void emit_call_lifted(Compiler *c, int id, Buf *b);
 void emit_call(Compiler *c, int id, Buf *b) {
+  if (emit_autoload_register(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;
   if (emit_missing_in_operand(c, id, b)) return;
   int fm = frange_index_view(c, id);

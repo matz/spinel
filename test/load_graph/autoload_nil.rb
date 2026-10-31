@@ -1,0 +1,2 @@
+p autoload(:AutoFoo, File.join(__dir__, "autoload_lib"))
+p AutoFoo.five

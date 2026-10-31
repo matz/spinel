@@ -1,0 +1,1 @@
+Lib = Data.define(:a)

@@ -652,6 +652,15 @@ void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int
   for (int e = 0; e < n; e++) nt_place(nt, id, copy[e], 'a', j);
 }
 
+void nt_add_autoload(NodeTable *nt, int node, int file, const char *name, const char *path) {
+  if (nt->nautoloads == nt->cautoloads) {
+    nt->cautoloads = nt->cautoloads ? 2 * nt->cautoloads : 8;
+    nt->autoloads = realloc(nt->autoloads, sizeof *nt->autoloads * (size_t)nt->cautoloads);
+    if (!nt->autoloads) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  nt->autoloads[nt->nautoloads++] = (AutoloadRegistration){ node, file, 0, 0, dup_n(name, strlen(name)), path ? dup_n(path, strlen(path)) : NULL };
+}
+
 void nt_free(NodeTable *nt) {
   if (!nt) return;
   for (int k = 0; k < nt->count; k++) {
@@ -675,6 +684,8 @@ void nt_free(NodeTable *nt) {
   free(nt->file_defers);
   free(nt->file_tier);
   free(nt->file_roots);
+  for (int i = 0; i < nt->nautoloads; i++) { free(nt->autoloads[i].name); free(nt->autoloads[i].path); }
+  free(nt->autoloads);
   free(nt->aux);
   free(nt->counts);
   if (nt->holders) { free(nt->holders->par); free(nt->holders->stamp); free(nt->holders); }
@@ -964,6 +975,7 @@ void nt_renumber(NodeTable *nt, const int *order) {
   if (nt->root_id >= 0 && nt->root_id < n) nt->root_id = perm[nt->root_id];
   for (int f = 0; f < nt->nfile_roots; f++)
     if (nt->file_roots[f] >= 0 && nt->file_roots[f] < n) nt->file_roots[f] = perm[nt->file_roots[f]];
+  for (int i = 0; i < nt->nautoloads; i++) nt->autoloads[i].node = perm[nt->autoloads[i].node];
   free(perm);
   nt->version++; nt->edits++;
   nki_drop(nt);   /* the ids of each kind moved */

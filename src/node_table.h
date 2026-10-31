@@ -50,7 +50,12 @@ typedef struct {
   int kind;            /* cached NodeKind+1; 0 = not yet computed (see nt_kind) */
 } SpNode;
 
+/* Parse inputs for each closed autoload registration. The Compiler's copy
+   adds the load record's slot and declaration ownership. */
+typedef struct { int node, file, slot, first; char *name, *path; } AutoloadRegistration;
+
 typedef struct {
+  AutoloadRegistration *autoloads; int nautoloads, cautoloads;
   SpNode *nodes;
   int count;           /* number of allocated node slots */
   int node_cap;        /* capacity of `nodes`; >= count (for append growth) */
@@ -250,6 +255,7 @@ void nt_dump(const NodeTable *nt, FILE *out);
 /* A hash of every node's type, content and fields (SPINEL_LOWER_CHECK). */
 unsigned long long nt_content_hash(const NodeTable *nt);
 
+void nt_add_autoload(NodeTable *nt, int node, int file, const char *name, const char *path);
 void nt_free(NodeTable *nt);
 /* Renumber the nodes to an order: order[k] is the id node k had (node_table.c). */
 void nt_renumber(NodeTable *nt, const int *order);

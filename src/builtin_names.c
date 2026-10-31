@@ -590,6 +590,21 @@ int is_text_print(const char *n) {
   return sp_streq(n, "puts") || sp_streq(n, "print");
 }
 
+/* the output calls a singleton-class body runs where they stand */
+int is_stmt_output_name(const char *n) {
+  return n && (sp_streq(n, "puts") || sp_streq(n, "print") || sp_streq(n, "p"));
+}
+
+/* the Kernel calls that act (output, an exception, exit) and so run where
+   they stand in a class body, as CRuby runs it top to bottom */
+int is_class_body_acting_name(const char *n) {
+  static const char *const names[] = { "puts", "print", "p", "pp", "printf",
+    "putc", "warn", "raise", "fail", "exit", "exit!", "abort", "sleep", "at_exit",
+    "srand", "loop", "catch", NULL };
+  for (int i = 0; n && names[i]; i++) if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
+
 int is_printf_name(const char *n) {
   return sp_streq(n, "printf");
 }
@@ -686,6 +701,10 @@ int is_const_query_name(const char *n) {
 
 int is_constants_list_name(const char *n) {
   return sp_streq(n, "constants");
+}
+
+int is_autoload_query_name(const char *n) {
+  return sp_streq(n, "autoload?");
 }
 
 /* the methods a definition runs when the program defines them: inherited

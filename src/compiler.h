@@ -742,6 +742,7 @@ typedef struct {
                           sp_IntArray, ...) in which case it is disambiguated so a
                           user `class RbVal` does not redefine the runtime type */
   int def_node;        /* ClassNode id */
+  unsigned char presence_read; /* constant pass: a read consumes the creation flag */
   int parent;          /* superclass index, or -1 */
   char **ivars;        /* instance variable names, incl. leading '@' */
   NameIdx ivars_ix;    /* comp_ivar_index's index of ivars */
@@ -1177,6 +1178,8 @@ typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
 
 typedef struct {
   const NodeTable *nt;
+  AutoloadRegistration *autoloads; int nautoloads, auto_nodes;
+  int *auto_at; /* parsed node -> first registration + 1; names/paths borrowed from nt */
   SP_TY_FIELD TyKind *ntype;    /* [node_cap] node id -> inferred type */
   int *norigin;     /* [node_cap] node id -> where its degraded type came from: the
                        child (or the slot's why.node, for a read) that carried the
@@ -1739,6 +1742,7 @@ typedef struct {
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 
+AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */
@@ -1970,6 +1974,7 @@ int comp_const_undefined(Compiler *c, int v);
 /* the dual: statically-true defined?(Const / Const::Path) guard */
 int comp_defined_guard_true(Compiler *c, int pred);
 int comp_defined_early(Compiler *c, int pred, const char **early, int cap);
+int comp_defined_reads(Compiler *c, int pred, int *reads, int cap);
 /* a constant path whose leaf is no member of the class or module its parent
    names (analyze_util.c) */
 int const_path_misses_member(Compiler *c, int id);

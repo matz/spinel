@@ -794,7 +794,9 @@ int subtree_has_side_effect(Compiler *c, int id) {
   NodeKind k = nt_kind(nt, id);
   if (!ty) return 0;
   if (view_const_read_done(c, id)) return 0;
-  if (k == NK_ConstantPathNode && an_const_read_effect(c, nt_ref(nt, id, "parent")) != NULL) return 1;
+  ConstReadEffect ce = an_const_read_effect(c, id);
+  if (ce.autoload || ce.class_presence) return 1;
+  if (k == NK_ConstantPathNode && an_const_read_effect(c, nt_ref(nt, id, "parent")).presence != NULL) return 1;
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode ||
       k == NK_YieldNode || strstr(ty, "WriteNode"))
     return 1;
@@ -4742,7 +4744,22 @@ static void emit_const_recv_class(Compiler *c, int par, Buf *b) {
   if (repr_of(c, par).kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par, b); buf_puts(b, ")"); }
   else emit_expr(c, par, b);
 }
-static void emit_const_read_open_checked(Compiler *c, int id, const LocalVar *lv, Buf *b) {
+static void emit_const_read_open_checked(Compiler *c, int id, ConstReadEffect ce, Buf *b) {
+  const LocalVar *lv = ce.presence;
+  if (ce.autoload) {
+    char nm[256]; const_read_name(c, id, nm, sizeof nm);
+    buf_puts(b, "((");
+    if (ce.class_presence) buf_printf(b, "sp_class_present_%d ? (void)0 : ", ce.class_presence - 1);
+    else if (ce.presence) buf_printf(b, "cst_%s__set ? (void)0 : ", ce.presence->name);
+    buf_printf(b, "sp_auto_%d_registered ? (void)sp_Kernel_require(sp_auto_%d_feature, sp_auto_%d_loaded, sp_auto_%d_top)"
+                  " : sp_raise_cls(\"NameError\", \"uninitialized constant %s\")), ",
+               ce.autoload, ce.autoload, ce.autoload, ce.autoload, nm);
+  }
+  if (ce.class_presence) {
+    char nm[256]; const_read_name(c, id, nm, sizeof nm);
+    buf_printf(b, "((sp_class_present_%d ? (void)0 : sp_raise_cls(\"NameError\", \"uninitialized constant %s\")), ", ce.class_presence - 1, nm);
+  }
+  if (!lv) return;
   int par = const_value_recv(c, id);
   if (par >= 0) {
     const NodeTable *nt = c->nt;
@@ -4763,12 +4780,37 @@ static void emit_const_read_open_checked(Compiler *c, int id, const LocalVar *lv
   const_read_name(c, id, nm, sizeof nm);
   buf_printf(b, "((cst_%s__set ? (void)0 : sp_raise_cls(\"NameError\", \"uninitialized constant %s\")), ", lv->name, nm);
 }
+/* defined? evaluates the parents of a scoped path, not its leaf: a registration
+   there runs its file, without the NameError an unset parent's read raises.
+   Opens a comma expression the caller closes; 0 when no parent runs a file. */
+int emit_const_autoload_run(Compiler *c, int id, Buf *b) {
+  if (!nt_kind_is_constant(nt_kind(c->nt, id))) return 0;
+  int n = nt_kind(c->nt, id) == NK_ConstantPathNode ? emit_const_autoload_run(c, nt_ref(c->nt, id, "parent"), b) : 0;
+  ConstReadEffect ce = an_const_read_effect(c, id);
+  if (!ce.autoload) return n;
+  buf_puts(b, n ? "" : "(");
+  if (ce.class_presence) buf_printf(b, "sp_class_present_%d ? (void)0 : ", ce.class_presence - 1);
+  else if (ce.presence) buf_printf(b, "cst_%s__set ? (void)0 : ", ce.presence->name);
+  buf_printf(b, "sp_auto_%d_registered ? (void)sp_Kernel_require(sp_auto_%d_feature, sp_auto_%d_loaded, sp_auto_%d_top) : (void)0, ",
+             ce.autoload, ce.autoload, ce.autoload, ce.autoload);
+  return 1;
+}
 void emit_const_read_open(Compiler *c, int id, const LocalVar *lv, Buf *b) {
-  if (!view_const_read_done(c, id) && const_has_flag(lv)) emit_const_read_open_checked(c, id, lv, b);
+  if (view_const_read_done(c, id)) return;
+  ConstReadEffect ce = an_const_read_effect(c, id);
+  ce.presence = const_has_flag(lv) ? lv : NULL;
+  emit_const_read_open_checked(c, id, ce, b);
+}
+static void emit_const_read_close_checked(Compiler *c, int id, ConstReadEffect ce, Buf *b) {
+  if (ce.presence) buf_puts(b, const_recv_held(c, id) >= 0 ? "; })" : ")");
+  if (ce.class_presence) buf_puts(b, ")");
+  if (ce.autoload) buf_puts(b, ")");
 }
 void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b) {
-  if (view_const_read_done(c, id) || !const_has_flag(lv)) return;
-  buf_puts(b, const_recv_held(c, id) >= 0 ? "; })" : ")");
+  if (view_const_read_done(c, id)) return;
+  ConstReadEffect ce = an_const_read_effect(c, id);
+  ce.presence = const_has_flag(lv) ? lv : NULL;
+  emit_const_read_close_checked(c, id, ce, b);
 }
 /* The effects of a statically resolved path, outermost parent first. The
    opening comma expression lets a caller retain the folded value or call. */
@@ -4776,12 +4818,12 @@ int emit_const_read_prefix(Compiler *c, int id, Buf *b) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k) || view_const_read_done(c, id)) return 0;
   int n = k == NK_ConstantPathNode ? emit_const_read_prefix(c, nt_ref(c->nt, id, "parent"), b) : 0;
-  LocalVar *lv = an_const_read_effect(c, id);
-  if (lv) {
+  ConstReadEffect ce = an_const_read_effect(c, id);
+  if (ce.presence || ce.autoload || ce.class_presence) {
     if (!n) buf_puts(b, "(");
-    emit_const_read_open_checked(c, id, lv, b);
+    emit_const_read_open_checked(c, id, ce, b);
     buf_puts(b, "0");
-    buf_puts(b, const_recv_held(c, id) >= 0 ? "; })" : ")");
+    emit_const_read_close_checked(c, id, ce, b);
     buf_puts(b, ", ");
     n = 1;
   }
@@ -4897,7 +4939,7 @@ int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail)
    asking it for no receiver (own 0) leaves a variable receiver unevaluated and
    unnamed. */
 void emit_const_slot_read(Compiler *c, int id, const LocalVar *lv, const char *key, int slot, int own, Buf *b) {
-  if (!const_has_flag(lv)) { buf_printf(b, "%scst_%s", slot ? "&" : "", key); return; }
+  if (!const_has_flag(lv) && !an_const_read_effect(c, id).autoload) { buf_printf(b, "%scst_%s", slot ? "&" : "", key); return; }
   int again = !own && const_recv_held(c, id) >= 0;
   if (again) {
     /* the name alone: the receiver is not this text's to run */

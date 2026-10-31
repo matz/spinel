@@ -1,13 +1,28 @@
-load record: 7 points, 1 regions
-r0 #0 f0 ProgramNode line 7
-r0 #1 f0 ClassNode Box line 7
-  r0 #2 f0 DefNode get line 8
-  r0 #3 f0 DefNode get line 9
-r0 #4 f0 IfNode line 11
-  r0 #5 may f0 CallNode autoload line 11
-r0 #6 f0 CallNode p line 12
+load record: 14 points, 2 regions
+r0 #0 f0 ProgramNode line 8
+r0 #1 f0 ClassNode Box line 8
+  r0 #2 f0 DefNode get line 9
+  r0 #3 f0 DefNode get line 10
+r0 #4 f0 IfNode line 12
+  r0 #5 may f0 CallNode autoload line 12
+r0 #6 f0 CallNode p line 13
+r1 #7 f1 ProgramNode line 1
+r1 #8 f1 CallNode puts line 1
+r1 #9 f1 GlobalVariableWriteNode $el4_autoload_marker line 2
+r1 #10 f1 ConstantWriteNode AutoExtra line 3
+r1 #11 f1 ClassNode AutoFoo line 4
+  r1 #12 f1 DefNode hi line 5
+  r1 #13 f1 DefNode five line 6
 class Box: body#1
+class AutoFoo: body#11
 entity Box: owner main leaf Box
+entity AutoFoo: owner main leaf AutoFoo
 const Box: write#1
-Box#get: def#2 runs=#6 def#3 runs=#6 end=yes
-versions Box#get: def#2..#3 seen=def#2 idle, def#3..end seen=def#3; 2 of the name, named
+Box#get: def#2 def#3 end=yes
+the record's surface: writersLater: write#5 may
+$el4_autoload_marker: write#9
+const AutoExtra: write#10
+const AutoFoo: write#11
+AutoFoo#hi: def#12 end=unknown
+AutoFoo.five: def#13 end=unknown
+versions Box#get: def#2..#3 seen=def#2 idle, def#3..end seen=def#3; 2 of the name

@@ -21447,6 +21447,15 @@ static void emit_file_top_decls(Compiler *c, Buf *b) {
   prog_file_tops(c, has, emit_native_flag, &nf);
   for (int f = 1; f < n; f++)
     if (has[f]) buf_printf(b, "static int sp_loaded_%d;\n%svoid sp_file_%d_top(void);\n", f, file_top_storage(), f);
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (an_class_presence_is_read(c, ci)) buf_printf(b, "static int sp_class_present_%d;\n", ci);
+  for (int k = 0; k < c->nautoloads; k++) {
+    const AutoloadRegistration *a = &c->autoloads[k];
+    if (!a->first) continue;
+    int slot = a->slot;
+    buf_printf(b, "static int sp_auto_%d_registered;\nstatic int *sp_auto_%d_loaded;\n"
+                  "static void (*sp_auto_%d_top)(void);\nstatic const char *sp_auto_%d_feature;\n", slot, slot, slot, slot);
+  }
   emit_required_table(c, b, has);
   free(has);
 }

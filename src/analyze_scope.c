@@ -6883,8 +6883,10 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       if (guarded) behind = own;
       own = -1;
     }
-    else if (guarded && own < 0)
+    else if (guarded && own < 0) {
       behind = inc_super_behind(c, ci, src->name, src->def_node);
+      src = &c->scopes[ms];   /* inc_super_behind's comp_scope_new may realloc */
+    }
     /* A builtin class's own method comes before an included module's, as
        the class's own def does (`class String; include M; end` with M#size:
        "abc".size is 3): the module's copy is shadowed, unless an alias the

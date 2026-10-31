@@ -180,6 +180,9 @@ int repr_self_shared(const Compiler *c, int node);
 /* The representation of a local variable's slot (a global's and a
    constant's LocalVar too). */
 Repr repr_of_slot(const Compiler *c, const LocalVar *lv);
+/* An Array operand's stored representation. A subclass keeps its node's
+   Array projection rather than its object's local-slot representation. */
+Repr repr_array_operand(Compiler *c, int node);
 /* The representation of class cid's ivar slot iv, of its class variable
    slot idx, and of method scope sc's value. */
 Repr repr_of_ivar(const Compiler *c, int cid, int iv);

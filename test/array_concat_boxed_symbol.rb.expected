@@ -1,0 +1,10 @@
+[1, "s", :s]
+Symbol
+[1, "s", :s]
+true
+[1, "s", 2, :s]
+Symbol
+[1, "s", 2, :s]
+true
+[1, "s", :s]
+Symbol

@@ -2591,120 +2591,10 @@ else {
     buf_puts(b, ")");
     { *out = 1; return 1; }
   }
-  /* concat(*arrays) as a value: append in place, evaluate to the
-     receiver (the mutating statement form lives in emit_array_mutate_stmt).
-     Same-kind arguments only; a differently-typed argument has already
-     widened the receiver to poly in inference. */
-  if (sp_streq(name, "concat") && argc >= 1) {
-    int same = 1, all_poly = 1;
-    /* the last operand that is boxed: its #to_ary (and an earlier one's)
-       can change an operand before it, which CRuby has already copied */
-    int last_boxed = -1;
-    for (int j = 0; j < argc; j++) {
-      /* Ask the SLOT, not the node: a block parameter's node type can
-         read as the element kind while its declaration is boxed, and
-         emitting the boxed local into a typed pointer does not compile
-         (#3850). */
-      Repr ar = repr_of(c, argv[j]);
-      if (nt_kind(nt, argv[j]) == NK_LocalVariableReadNode) {
-        Scope *asc = comp_scope_of(c, argv[j]);
-        LocalVar *alv = asc ? scope_local(asc, nt_str(nt, argv[j], "name")) : NULL;
-        /* (an Array subclass instance's slot holds the instance: its
-           node, viewed as the instance's Array, is what is read) */
-        if (alv && alv->type != TY_UNKNOWN && comp_ty_ary_root(c, alv->type) < 0) ar = repr_of_slot(c, alv);
-      }
-      if (ar.kind == RK_BOXED) last_boxed = j;
-      if (ar.elem != ty_array_elem(rt)) same = 0;
-      if (ar.kind != RK_BOXED && ar.elem != TY_POLY && ar.elem != ty_array_elem(rt)) all_poly = 0;
-    }
-    /* A boxed argument -- an element read out of a poly array, which is
-       what `g.each_with_object([]) { |r, acc| acc.concat(r) }` hands it --
-       is an array at run time; reading it as this array's C type did not
-       compile (#3850). Append its elements through the boxed surface. A
-       poly array argument takes the same path: `[2].concat([1, nil])`
-       as a value had no arm and raised NoMethodError. An Integer or
-       Float element goes through sp_poly_elem_i / _f, so a nil lands as
-       the slot's nil bit rather than 0. */
-    /* ...and onto a typed Array a builtin call just built, of another kind
-       (an_push_widens_fresh): nothing else holds it, so the value is the
-       general Array of its elements and every argument's */
-    int fresh = an_push_widens_fresh(c, id);
-    if ((!same && all_poly && k) || fresh) {
-      int ta = ++g_tmp;
-      Buf ra; memset(&ra, 0, sizeof ra);
-      if (fresh) { emit_fresh_lift_recv(c, recv, &ra); k = "Poly"; }
-      else ra = expr_buf(c, recv);
-      buf_printf(b, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);", k, ta, ra.p ? ra.p : "NULL", ta);
-      free(ra.p);
-      int vbase = g_tmp + 1; g_tmp += 2 * argc;   /* each value, then its length */
-      Buf ck = {0, 0, 0};
-      for (int j = 0; j < argc; j++) {
-        int tv = vbase + 2 * j, tn = tv + 1;
-        buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[j], b);
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tv);
-        /* (an Array, or what #to_ary answers: anything else is CRuby's
-           TypeError, where its length read as 0 appended nothing; it
-           converts after the frozen test, as CRuby converts it) */
-        buf_printf(&ck, " _t%d = sp_poly_ary_arg_ck(_t%d);", tv, tv);
-        /* copied at its turn when a boxed operand follows (a typed
-           Array's general view is already a new array; a general Array's
-           view is the array itself) */
-        if (j < last_boxed) {
-          int tc = ++g_tmp;
-          buf_printf(&ck, " { sp_PolyArray *_t%d = sp_poly_to_poly_array(_t%d); if (_t%d == (sp_PolyArray *)_t%d.v.p) _t%d = sp_PolyArray_dup(_t%d); _t%d = sp_box_poly_array(_t%d); }",
-                     tc, tv, tc, tv, tc, tc, tv, tc);
-        }
-        buf_printf(&ck, " sp_int _t%d = sp_poly_length(_t%d);", tn, tv);
-      }
-      /* a frozen receiver raises even when every argument is empty */
-      /* (the fresh Array's general copy is read as the general Array) */
-      buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", ta, ta, ta,
-                 fresh ? "SP_BUILTIN_POLY_ARRAY" : array_frozen_cls(rt));
-      if (ck.p) buf_puts(b, ck.p);
-      free(ck.p);
-      for (int j = 0; j < argc; j++) {
-        int tv = vbase + 2 * j, tn = tv + 1, ti = ++g_tmp;
-        buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)", ti, ti, tn, ti);
-        buf_printf(b, " sp_%sArray_push%s(_t%d, ", k, nil_store_sfx(c, k, NIL_STORE_BOXED), ta);
-        { char el[64]; snprintf(el, sizeof el, "sp_poly_each_elem(_t%d, _t%d)", tv, ti);
-          TyKind et = fresh ? TY_POLY : ty_array_elem(rt);
-          if (et == TY_INT) buf_printf(b, "sp_poly_elem_i(%s)", el);
-          else if (et == TY_FLOAT) buf_printf(b, "sp_poly_elem_f(%s)", el);
-          else emit_unbox_text(c, et, el, b); }
-        buf_puts(b, ");");
-      }
-      buf_printf(b, " _t%d; })", ta);
-      { *out = 1; return 1; }
-    }
-    if (same) {
-      int ta = ++g_tmp;
-      Buf ra = expr_buf(c, recv);
-      buf_printf(b, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);", k, ta, ra.p ? ra.p : "NULL", ta);
-      free(ra.p);
-      /* every argument and its length first: one aliasing the receiver is
-         appended as it was, not as an earlier append grew it (CRuby) */
-      int base = g_tmp + 1; g_tmp += argc;
-      int lbase = g_tmp + 1; g_tmp += argc;
-      for (int j = 0; j < argc; j++) {
-        buf_printf(b, " sp_%sArray *_t%d = ", k, base + j);
-        emit_expr(c, argv[j], b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d);", base + j);
-      }
-      for (int j = 0; j < argc; j++)
-        buf_printf(b, " sp_int _t%d = sp_%sArray_length(_t%d);", lbase + j, k, base + j);
-      /* a frozen receiver raises even when every argument is empty */
-      buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", ta, ta, ta, array_frozen_cls(rt));
-      for (int j = 0; j < argc; j++) {
-        int ii = ++g_tmp, sn = lbase + j;
-        /* the appended elements carry their array's nils */
-        int onum = rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY;
-        buf_printf(b, " { for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)"
-                      " sp_%sArray_push%s(_t%d, sp_%sArray_%s(_t%d, _t%d)); }",
-                   ii, ii, sn, ii, k, onum ? "_o" : "", ta, k, onum ? "oget" : "get", base + j, ii);
-      }
-      buf_printf(b, " _t%d; })", ta);
-      { *out = 1; return 1; }
-    }
+  if (sp_streq(name, "concat")) {
+    /* The ordinary typed call passed the Array-reopening route. */
+    *out = emit_builtin_array_concat(c, id, recv, rt, argv, argc, 0, b);
+    return *out;
   }
   if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) {
     int blk = fetch_fallback_block(c, id);
@@ -2956,26 +2846,6 @@ else {
     buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d));", tr, tpair);
     buf_printf(b, " } } _t%d; })", tr);
     { *out = 1; return 1; }
-  }
-  /* concat in VALUE position with a source of another kind (a general
-     Array read at run time, another typed kind): the statement emitter
-     owns the per-kind element loop, so run it inside a compound whose
-     value is the receiver. A same-kind source keeps its own arm below.
-     Reached since a typed parameter no longer widens under such a
-     concat (#4481); before, the receiver was a general Array here. */
-  if (sp_streq(name, "concat") && argc >= 1 &&
-      nt_kind(nt, recv) == NK_LocalVariableReadNode) {
-    int other = 0;
-    for (int ai = 0; ai < argc; ai++) {
-      TyKind at = comp_ntype(c, argv[ai]);
-      if (at == TY_POLY_ARRAY || at == TY_POLY || (ty_is_array(at) && at != rt)) other = 1;
-    }
-    if (other) {
-      buf_puts(b, "({ ");
-      emit_array_mutate_stmt(c, id, b, 0);
-      buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, "; })");
-      { *out = 1; return 1; }
-    }
   }
   if (sp_streq(name, "insert") && argc >= 2 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY)) {
     /* insert(i, v1, v2, ...): normalize a negative index ONCE against the

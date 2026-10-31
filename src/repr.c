@@ -52,6 +52,16 @@ static int dispatch_answers_nil(Compiler *c, int call, int cid, const char *nm, 
   return overridden && any_nil;
 }
 
+Repr repr_array_operand(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  if (nt_kind(c->nt, node) == NK_LocalVariableReadNode) {
+    Scope *sc = comp_scope_of(c, node);
+    LocalVar *lv = sc ? scope_local(sc, nt_str(c->nt, node, "name")) : NULL;
+    if (lv && lv->type != TY_UNKNOWN && comp_ty_ary_root(c, lv->type) < 0) r = repr_of_slot(c, lv);
+  }
+  return r;
+}
+
 int file_stat_nil_call(Compiler *c, int v);   /* analyze.c */
 static int node_is_oint_asked(Compiler *c, int node);
 

@@ -1530,7 +1530,12 @@ share-strings-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS
 # `make test` always runs fresh: it wipes the prior `.ok` stamps first,
 # then runs the suite. (The old incremental `test` + `retest` split is
 # gone -- a stale `.ok` reading PASS was a recurring foot-gun.)
-test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext-gc-test cext-exceptions-test cext-recorder-test cext-compiler-test cext-threads-test
+.PHONY: concat-repr-test
+concat-repr-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@CC="$(CC)" CFLAGS="$(CFLAGS)" SEC_FLAGS="$(SEC_FLAGS)" REF_RUBY="$(REF_RUBY)" \
+	 SPINEL="$(SPINEL)" SPINEL_TIMEOUT="$(SPINEL_TIMEOUT)" sh tools/concat_repr_test.sh
+
+test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext-gc-test cext-exceptions-test cext-recorder-test cext-compiler-test cext-threads-test concat-repr-test
 	@if [ -z "$(TIMEOUT_BIN)" ]; then \
 	  echo "WARNING: no 'timeout'/'gtimeout' on PATH -- tests run with NO time limit."; \
 	  echo "         A hanging test will hang this run until the CI job's own limit."; \

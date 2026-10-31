@@ -8506,7 +8506,9 @@ static int reopen_owner_of(Compiler *c, int id, int cn, const char *name) {
   /* the reopen's own method under this very name: an alias taken before the
      reopen (`alias orig_first first`) still names the builtin */
   if (ami < 0 || adc != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, name)) return -1;
-  if (nt_ref(c->nt, id, "block") >= 0 && builtin_method_known(core_class_name(cn), name) && c->scopes[ami].yields) return -1;
+  if (cplan_reopen_runs_builtin(c, id, ami)) return -1;
+  if (nt_ref(c->nt, id, "block") >= 0 && builtin_method_known(core_class_name(cn), name) && c->scopes[ami].yields &&
+      !(cn == CORE_ARRAY && sp_streq(name, "concat"))) return -1;
   return ami;
 }
 static int array_hash_reopen_owner(Compiler *c, int id, TyKind rt, const char *name) {

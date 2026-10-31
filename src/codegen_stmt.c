@@ -24449,19 +24449,6 @@ static int str_mutate_sn_var_guard(Compiler *c, int id, int recv, Buf *b, int in
   return r ? 1 : -1;
 }
 
-/* A concat operand's type. Ask the SLOT, not the node: a block parameter's
-   node type can read as an array kind while its declaration is boxed, and
-   reading the boxed local as a typed pointer does not compile (#3850). */
-static TyKind concat_operand_type(Compiler *c, int node) {
-  TyKind at = comp_ntype(c, node);
-  if (nt_kind(c->nt, node) == NK_LocalVariableReadNode) {
-    Scope *asc = comp_scope_of(c, node);
-    LocalVar *alv = asc ? scope_local(asc, nt_str(c->nt, node, "name")) : NULL;
-    if (alv && alv->type != TY_UNKNOWN) at = alv->type;
-  }
-  return at;
-}
-
 static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -24481,6 +24468,10 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     return 1;
   }
   TyKind rt = comp_ntype(c, recv);
+  /* A contextual user target (or refusal) owns this Array call. Decline
+     before output, including the fresh route; the ordinary path emits
+     that plan. Other receiver families keep their own admission. */
+  if (ty_is_array(rt) && sp_streq(name, "concat") && cplan_user(c, id)->dispatch != CP_NONE) return 0;
   /* a `&.` String mutator's guard, unless the receiver is a shim's shadow
      (sb_shadowed_reader): the shim took the receiver and tested it, and the
      guard read the shadow ahead of the statement, before the shim declared it */
@@ -24982,122 +24973,13 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     return 1;
   }
   if (sp_streq(name, "concat") && argc >= 1) {
-    /* an argument no Array conversion takes (nil, a boolean, an Integer,
-       a String, ...) is the value form's TypeError (emit_array_operand_misfit):
-       read below as an Array of the receiver's kind, one of the element's
-       own kind gave C that does not build (`a = [1]; a.concat(1)`) */
-    for (int a = 0; a < argc; a++) {
-      TyKind at = comp_ntype(c, argv[a]);
-      if (conv_to_ary_misfit(c, at)) return 0;
-    }
-    /* Every argument is evaluated, and its length taken, before anything is
-       appended, as CRuby concatenates the arguments as they were: with one
-       aliasing the receiver, `a.concat(a, a)` appended the grown array the
-       second time (8 elements where CRuby has 6). The appends follow in
-       order, each over its argument's own snapshot length. */
-    int tr = ++g_tmp;
-    TyKind et = ty_array_elem(rt);
-    /* an Integer or Float receiver takes a boxed nil as its nil bit, which
-       the _nilable store sets (sp_array.h) */
-    const char *nilable = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) ? "_nilable" : "";
-    emit_indent(b, indent);
-    /* rooted across the arguments, which can allocate */
-    buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
-    Buf hd, ck, lp; memset(&hd, 0, sizeof hd); memset(&ck, 0, sizeof ck); memset(&lp, 0, sizeof lp);
-    /* the last boxed operand: its #to_ary (and an earlier one's) can change
-       a typed operand before it, which CRuby has already copied */
-    int last_boxed = -1;
-    for (int a = 0; a < argc; a++) if (concat_operand_type(c, argv[a]) == TY_POLY) last_boxed = a;
-    for (int a = 0; a < argc; a++) {
-      int tn = ++g_tmp, ti = ++g_tmp;
-      /* the source array may be a different kind than the receiver (e.g.
-         IntArray#concat(PolyArray)); read with the source's kind and coerce
-         each element into the receiver's element representation. */
-      TyKind at = concat_operand_type(c, argv[a]);
-      const char *ak = (at == TY_POLY_ARRAY) ? "Poly" : array_kind(at);
-      if (at == TY_POLY) {
-        /* boxed source: walk it through the boxed surface */
-        int tv = ++g_tmp;
-        emit_indent(&hd, indent + 1);
-        buf_printf(&hd, "{ sp_RbVal _t%d = ", tv); emit_boxed(c, argv[a], &hd);
-        /* (an Array, or one #to_ary answers: anything else is CRuby's
-           TypeError, where its length read as 0 appended nothing) */
-        buf_printf(&hd, "; SP_GC_ROOT_RBVAL(_t%d);\n", tv);
-        /* (converted after the frozen test, as CRuby converts it: a frozen
-           receiver raises FrozenError ahead of the operand's TypeError) */
-        emit_indent(&ck, indent + 1);
-        buf_printf(&ck, "_t%d = sp_poly_ary_arg_ck(_t%d); sp_int _t%d = sp_poly_length(_t%d);\n", tv, tv, tn, tv);
-        emit_indent(&lp, indent + 1);
-        buf_printf(&lp, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ",
-                   ti, ti, tn, ti, k, nilable, tr);
-        /* the _nilable store takes the element whole, its nil included, as
-           the value-form concat does; the plain unbox raised on nil and
-           handed the store an sp_int */
-        { char el[64]; snprintf(el, sizeof el, "sp_poly_each_elem(_t%d, _t%d)", tv, ti);
-          if (et == TY_INT) buf_printf(&lp, "sp_poly_elem_i(%s)", el);
-          else if (et == TY_FLOAT) buf_printf(&lp, "sp_poly_elem_f(%s)", el);
-          else emit_unbox_text(c, et, el, &lp); }
-        buf_puts(&lp, ");\n");
-        continue;
-      }
-      if (!ak) ak = k;
-      /* Evaluate the source ONCE. It used to be re-emitted for the length and
-         again for every element, so `result.concat(str.bytes)` rebuilt the
-         whole byte array per element -- quadratic, and any side effect ran
-         n+1 times. Rooted: pushing into the receiver can collect. */
-      int ts = ++g_tmp;
-      emit_indent(&hd, indent + 1);
-      buf_printf(&hd, "{ sp_%sArray *_t%d = ", ak, ts); emit_expr(c, argv[a], &hd);
-      buf_printf(&hd, "; SP_GC_ROOT(_t%d);\n", ts);
-      /* (read in order with the boxed operands' conversions: a later
-         operand's #to_ary can change this one, so it is copied at its turn,
-         as CRuby copies it; an earlier one's can change its length) */
-      emit_indent(&ck, indent + 1);
-      if (a < last_boxed) buf_printf(&ck, "_t%d = sp_%sArray_dup(_t%d); ", ts, ak, ts);
-      buf_printf(&ck, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, ak, ts);
-      emit_indent(&lp, indent + 1);
-      /* the same number kind copies each element with its nil */
-      int same_o = *nilable && sp_streq(ak, k) && (sp_streq(k, "Int") || sp_streq(k, "Float"));
-      /* one Integer Array onto another: one runtime move, nils and all,
-         rather than a loop whose push the C inliner may leave out of line */
-      if (same_o && argc == 1 && sp_streq(k, "Int")) {
-        buf_printf(&lp, "sp_IntArray_append_o(_t%d, _t%d);\n", tr, ts);
-        continue;
-      }
-      buf_printf(&lp, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ",
-                 ti, ti, tn, ti, k, same_o ? "_o" : sp_streq(ak, "Poly") ? nilable : "", tr);
-      char getexpr[256];
-      snprintf(getexpr, sizeof getexpr, "sp_%sArray_%s(_t%d, _t%d)", ak, same_o ? "oget" : "get", ts, ti);
-      if (sp_streq(k, "Poly") && !sp_streq(ak, "Poly")) {
-        /* box the source scalar into the poly receiver */
-        emit_boxed_text(c, ty_array_elem(at), getexpr, &lp);
-      }
-      else if (!sp_streq(k, "Poly") && sp_streq(ak, "Poly")) {
-        /* unbox the source poly element into the receiver's scalar */
-        if (et == TY_INT) buf_printf(&lp, "sp_poly_elem_i(%s)", getexpr);
-        else if (et == TY_STRING) buf_printf(&lp, "sp_poly_elem_s(%s)", getexpr);
-        else if (et == TY_FLOAT) buf_printf(&lp, "sp_poly_elem_f(%s)", getexpr);
-        else buf_puts(&lp, getexpr);
-      }
-      else buf_puts(&lp, getexpr);
-      buf_puts(&lp, ");");
-      buf_puts(&lp, "\n");
-    }
-    if (hd.p) buf_puts(b, hd.p);
-    /* a frozen receiver raises even when every argument is empty */
-    if (array_frozen_cls(rt)) {
-      emit_indent(b, indent + 1);
-      buf_printf(b, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n",
-                 tr, tr, tr, array_frozen_cls(rt));
-    }
-    if (ck.p) buf_puts(b, ck.p);
-    if (lp.p) buf_puts(b, lp.p);
-    emit_indent(b, indent + 1);
-    for (int a = 0; a < argc; a++) buf_puts(b, "}");
-    buf_puts(b, "\n");
-    free(hd.p); free(ck.p); free(lp.p);
-    emit_indent(b, indent);
-    buf_puts(b, "}\n");
+    Buf cat = {0};
+    /* The contextual plan declined a user target above, and this route's
+       receiver-kind gate established Array's builtin arm. */
+    if (!emit_builtin_array_concat(c, id, recv, rt, argv, argc, 1, &cat)) return 0;
+    emit_indent(b, indent); buf_puts(b, "(void)"); buf_puts(b, cat.p);
+    free(cat.p);
+    buf_puts(b, ";\n");
     return 1;
   }
   return 0;

@@ -1946,6 +1946,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
         aw.pos = elab_child(c, id, ch, &w.pos);
         aw.slot = kind == NK_StatementsNode ? j + 1 : 0;
         walk_child(c, ch, aw);
+        /* the hooks its definitions call stand next in the list */
+        if (kind == NK_StatementsNode) elab_fire_after(c, id, j);
       }
     }
   }
@@ -1969,7 +1971,7 @@ static void mf_mark(Compiler *c, int mi) {
 
 /* Length of the base name of a conditional def's arm (`m#__cond2` -> 1),
    or -1 when `nm` is not an arm. desugar_conditional_defs names them. */
-static int mf_arm_base_len(const char *nm) {
+int mf_arm_base_len(const char *nm) {
   const char *p = nm ? strstr(nm, "#__cond") : NULL;
   return p ? (int)(p - nm) : -1;
 }

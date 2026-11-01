@@ -1549,6 +1549,7 @@ int desugar_extend_self(Compiler *c) {
       int sf = nt_new_node(nt, "SelfNode");
       if (sf < 0) continue;
       nt_node_set_ref(nt, clone, "receiver", sf);
+      nt_node_set_int(nt, clone, "extend_self", 1);   /* (the record sees no extend: a hook it stands for is not fired) */
       nb[nbn++] = clone;
     }
     nt_node_set_arr(nt, body, "body", nb, nbn);
@@ -24231,72 +24232,6 @@ int desugar_reader_index_write(Compiler *c) {
     int encl = c->nscope[id];
     c->nscope[ivr] = encl; c->nscope[w] = encl; c->nscope[body] = encl;
     changed = 1;
-  }
-  return changed;
-}
-
-/* Module#method_added: CRuby calls the class's `method_added(:name)` after each
-   `def` in its body, which Thor relies on to attach the `desc` just read to the
-   method that follows. Spinel defines methods at compile time and skipped the
-   `def` statements of a class body, so the hook never ran. For a class whose
-   chain has a program-defined `self.method_added`, a call is placed after each
-   receiverless `def` in the body, where CRuby makes it; the class-body emitter
-   runs a receiverless call that resolves to a class method. Methods defined
-   otherwise (attr_*, define_method) do not call it here. Idempotent: a `def`
-   already followed by its call is skipped. */
-int desugar_method_added_hook(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
-  int n0 = nt->count;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_class(nt, id)) continue;
-    int body = class_def_body(nt, id);
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int n = 0; const int *stmts = nt_arr(nt, body, "body", &n);
-    if (n <= 0) continue;
-    /* the class this body belongs to, as the analysis placed it (nested
-       `module M; class C` included), else by its written name. The fallback
-       reads the class recorded for that header. */
-    int ci = c->node_cbody ? c->node_cbody[stmts[0]] : -1;
-    if (ci < 0) ci = elab_header_class(c, id, NULL, NULL);
-    if (ci < 0 || ci >= c->nclasses) continue;
-    if (comp_cmethod_in_chain(c, ci, "method_added", NULL) < 0) continue;
-    int *out = malloc(sizeof(int) * (size_t)(2 * n));
-    if (!out) { perror("malloc"); exit(1); }
-    int m = 0, added = 0;
-    for (int k = 0; k < n; k++) {
-      int st = stmts[k];
-      out[m++] = st;
-      if (nt_kind(nt, st) != NK_DefNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      if (nt_int(nt, st, "concat_builtin_version", 0)) continue;
-      const char *mname = nt_str(nt, st, "name");
-      if (!mname) continue;
-      if (k + 1 < n && nt_kind(nt, stmts[k + 1]) == NK_CallNode) {
-        const char *nx = nt_str(nt, stmts[k + 1], "name");
-        if (nx && sp_streq(nx, "method_added") && nt_ref(nt, stmts[k + 1], "receiver") < 0) continue;
-      }
-      int sym = nt_new_node(nt, "SymbolNode");
-      int args = nt_new_node(nt, "ArgumentsNode");
-      int call = nt_new_node(nt, "CallNode");
-      if (sym < 0 || args < 0 || call < 0) continue;
-      nt_node_set_str(nt, sym, "value", mname);
-      nt_node_set_arr(nt, args, "arguments", &sym, 1);
-      nt_node_set_str(nt, call, "name", "method_added");
-      nt_node_set_ref(nt, call, "receiver", -1);
-      nt_node_set_ref(nt, call, "arguments", args);
-      nt_node_set_ref(nt, call, "block", -1);
-      nt_node_set_int(nt, call, "node_line", nt_int(nt, st, "node_line", 0));
-      nt_node_set_int(nt, call, "node_file", nt_int(nt, st, "node_file", 0));
-      comp_grow_node_arrays(c);
-      int encl = c->nscope[st];
-      int cb = c->node_cbody ? c->node_cbody[st] : -1;
-      int made[3] = { sym, args, call };
-      for (int j = 0; j < 3; j++) { c->nscope[made[j]] = encl; if (c->node_cbody) c->node_cbody[made[j]] = cb; }
-      out[m++] = call;
-      added = 1;
-    }
-    if (added) { nt_node_set_arr(nt, body, "body", out, m); changed = 1; }
-    free(out);
   }
   return changed;
 }

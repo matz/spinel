@@ -3126,8 +3126,8 @@ static int lr_literal_args(const NodeTable *nt, const int *av, int ac, int form)
 /* Does node run code of the program's where its statement runs (LR_RUN):
    a call, super or yield of a name the program defines a method by (sent
    by a literal name too); a `new`, `allocate` or raise, which makes an
-   object (and runs its initialize); a definition form, def, class header
-   or constant write whose hook the program defines; a mixin into an object
+   object (and runs its initialize); a definition form, def, alias, class
+   header or constant write whose hook the program defines; a mixin into an object
    the program holds; code, or a method made or called, by a name the
    record cannot read; a callable made to run later (a lambda, a kept
    block, a method object, a block argument). Or may it (LR_DISPATCH): any
@@ -3241,7 +3241,7 @@ static int lr_node_runs(Compiler *c, int id) {
     case NK_BlockNode:
       nm = par[id] >= 0 && nt_kind(nt, par[id]) == NK_CallNode ? nt_str(nt, par[id], "name") : NULL;
       return par[id] >= 0 && elab_block_when(c, par[id], 0) == ELAB_BLK_LATER && !(nm && is_method_naming_call(nm)) ? LR_RUN : 0;
-    case NK_DefNode: return lr_defines(r, "method_added") || lr_defines(r, "singleton_method_added") ? LR_RUN : hooks;
+    case NK_DefNode: case NK_AliasMethodNode: return lr_defines(r, "method_added") || lr_defines(r, "singleton_method_added") ? LR_RUN : hooks;
     case NK_ClassNode: return lr_header_hooks(c, id) ? LR_RUN : hooks;
     case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: return lr_defines(r, "const_added") ? LR_RUN : hooks;
     case NK_ProgramNode: case NK_StatementsNode: case NK_ModuleNode: case NK_SingletonClassNode:
@@ -3701,6 +3701,13 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   }
   if (nt_kind(c->nt, a) == NK_DefNode && r->urun[a] > w->from.seq)   /* nor before the body may first run (lr_rta) */
     w->from.seq = r->urun[a] < w->to.seq ? r->urun[a] : w->to.seq - 1;
+  if (nt_kind(c->nt, a) == NK_DefNode && !lr_runs_in(r, w->from.seq, w->from.seq + 1)) {
+    /* nor at a statement that runs no code of the program's (lr_run_points):
+       from the first that may, w's last when none does */
+    int lo = w->from.seq + 1, hi = w->to.seq;
+    while (lo < hi) { int mid = lo + (hi - lo) / 2; if (lr_runs_in(r, w->from.seq, mid) > 0) hi = mid; else lo = mid + 1; }
+    w->from.seq = lo - 1;
+  }
   return ELAB_YES;
 }
 

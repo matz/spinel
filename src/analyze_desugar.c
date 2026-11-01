@@ -14790,7 +14790,10 @@ static int ty_lacks_enumerable(TyKind t) {
   switch (t) {
   case TY_NIL: case TY_INT: case TY_BIGINT: case TY_FLOAT: case TY_STRING: case TY_STRBUF:
   case TY_SYMBOL: case TY_BOOL: case TY_TIME: case TY_COMPLEX: case TY_RATIONAL:
-  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION:
+  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION: case TY_PROC: case TY_CURRY:
+  case TY_METHOD: case TY_FIBER: case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR:
+  case TY_RANDOM: case TY_ADDRINFO: case TY_SOCKOPT: case TY_TMS: case TY_PROCESS_STATUS:
+  case TY_OPENSTRUCT:
     return 1;
   default:
     return 0;
@@ -14914,6 +14917,13 @@ int desugar_builtin_enum_calls(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
+    /* a call given back its written name on a receiver with no Enumerable
+       (below) takes the builtin's again once the receiver's type widens */
+    if (nt_int(nt, id, "enum_scalar_unrenamed", 0) && !ty_lacks_enumerable(infer_type(c, nt_ref(nt, id, "receiver")))) {
+      const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
+      if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
+      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);
+    }
     /* Array#index with a block and no argument is find_index (CRuby defines
        both as rb_ary_index): `@choices.index(&block)`, Forwardable's
        delegator shape in tty-prompt's Choices, had no emitter of its own */
@@ -14951,6 +14961,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
        (`42.send(:detect)`), or a reopening of the receiver's class; so does
        one an outer each is chained on (`42.send(:detect).each { }`) */
     if (ty_lacks_enumerable(rt) && enum_unrename(nt, id)) {
+      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 1);
       changed = 1;
       continue;
     }

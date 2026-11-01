@@ -36,6 +36,10 @@
    (emit_with_prelude); view_stmt_top reads the innermost one. Like a face it
    is no view of a node's cached type.
 
+   view_push_class_is says a Class-valued receiver names one class for
+   the emission (a class-tag arm's), for the Class emitters that answer
+   from a statically known class; like a target it views no cached type.
+
    view_push_splice marks a spliced method's parameter bound as an alias
    of the caller's variable (inline_alias_params) that the call's block
    assigns: the variable's argument node, the splice's tag and the
@@ -58,7 +62,7 @@
 
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
-enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_SPLICE = -5, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9 };
+enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_SPLICE = -5, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -308,6 +312,27 @@ const char *view_call_name(Compiler *c, int node) {
   return nt_str(c->nt, node, "name");
 }
 
+/* A Class-valued receiver known to name class ci for this emission (a
+   class-tag arm's value of one class); view_class_is reads it and marks
+   the entry read, which view_class_is_read reports for the arm's guard. */
+int view_push_class_is(Compiler *c, int node, int ci) {
+  int tok = view_open_mark(VK_CLASS_IS, node, ci, NULL);
+  view_stack[tok].c = c;
+  view_stack[tok].val = 0;
+  view_nodes++;
+  view_epoch_n++;
+  return tok;
+}
+int view_class_is(Compiler *c, int node) {
+  for (int i = view_sp - 1; i >= 0; i--)
+    if (view_stack[i].kind == VK_CLASS_IS && view_stack[i].c == c && view_stack[i].id == node) {
+      view_stack[i].val = 1;
+      return view_stack[i].saved;
+    }
+  return -1;
+}
+int view_class_is_read(int tok) { return tok >= 0 && tok < view_sp && view_stack[tok].val; }
+
 int view_push_splice(int arg, int tag, const char *pname) { return view_open_mark(VK_SPLICE, arg, tag, pname); }
 int view_push_fn(void) { return view_open_mark(VK_FN, -1, 0, NULL); }
 
@@ -329,7 +354,8 @@ static void view_close(int tok) {
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }
-  if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ)
+  if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ &&
+      view_stack[tok].kind != VK_CLASS_IS)
     view_write(view_stack[tok].c, view_stack[tok].kind, view_stack[tok].id, view_stack[tok].saved);
   view_nodes--;
   view_epoch_n++;

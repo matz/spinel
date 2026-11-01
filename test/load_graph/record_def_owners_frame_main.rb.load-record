@@ -31,6 +31,16 @@ r0 #28 f0 CallNode p line 44
 r0 #29 f0 LocalVariableWriteNode s line 45
 r0 #30 f0 CallNode p line 46
 r0 #31 f0 CallNode p line 47
+block class_eval line 11: assumed
+block each line 17: now
+block new line 24: assumed
+block each line 26: now
+block define_method line 26: later
+block each line 29: now
+block define_method line 29: later
+block new line 34: assumed
+block each line 35: now
+block define_method line 35: later
 class C: body#1
 class K: body#5
 entity C: owner main leaf C

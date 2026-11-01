@@ -35,6 +35,7 @@ r0 #31 f0 ClassNode Point line 66
 r0 #33 f0 ClassNode Bell line 70
   r0 #34 f0 DefNode ring line 71
 r0 #35 f0 CallNode puts line 74
+block new line 13: assumed
 class Chime: body#1
 class Fault: body#5 body#25 include Chime#8
 class Raised: body#9 body#27 include Chime#12

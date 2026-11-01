@@ -22,6 +22,7 @@ r0 #19 f0 CallNode puts line 31
 r0 #20 f0 CallNode puts line 32
 r0 #21 f0 CallNode p line 33
 r0 #22 f0 CallNode puts line 34
+block new line 22: assumed
 class TopHelper: body#1
 class M: body#3 include TopHelper#4
 class V: body#5

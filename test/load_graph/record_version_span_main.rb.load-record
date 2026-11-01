@@ -27,6 +27,8 @@ r0 #23 f0 ClassNode Pod line 47
 r0 #25 f0 ClassNode Drum line 51
   r0 #26 f0 DefNode ring line 52
 r0 #27 f0 CallNode puts line 55
+block map line 22: now
+block map line 34: now
 class Chime: body#1
 class Base: body#3
 class Bell: body#5 body#21 include Chime#9

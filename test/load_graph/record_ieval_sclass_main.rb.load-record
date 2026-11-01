@@ -15,6 +15,8 @@ r0 #6 f0 SingletonClassNode line 21
 r0 #13 f0 CallNode x= line 32
 r0 #14 f0 CallNode p line 33
 r0 #15 f0 CallNode p line 34
+block instance_eval line 22: assumed
+block class_eval line 26: assumed
 class M: body#1
 class N: body#3
 class C: body#5 extend M#8 extend N#11

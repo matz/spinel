@@ -546,6 +546,7 @@ int is_when_node_type(const char *t);      /* WhenNode */
 int is_clear_name(const char *n); /* clear */
 int is_enumerator_with(const char *n); /* with_index with_object: an enumerator link */
 int is_lazy_name(const char *n);       /* lazy */
+int is_lazy_chain_name(const char *n);   /* a Lazy's call that answers a Lazy: map, select, take, ... */
 int is_concat_name(const char *n);     /* concat */
 int is_array_constructor(const char *recv, const char *meth); /* Array.new */
 int is_pow_name(const char *n); /* pow: Integer power, with an optional modulus */

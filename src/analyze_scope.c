@@ -1166,7 +1166,7 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
 static void sclass_walk_child(Compiler *c, int p, int ch, const WalkCtx *w, int target_class, int depth, int reopen_recv, int reopen_class) {
   if (ch < 0) return;
   WalkCtx cw = *w;
-  cw.pos = elab_child(c->nt, p, ch, &w->pos);
+  cw.pos = elab_child(c, p, ch, &w->pos);
   int e = elab_walk_enter(c, ch, &cw.pos);
   sclass_walk_stmt(c, ch, &cw, target_class, depth, reopen_recv, reopen_class);
   elab_walk_leave(c, e);
@@ -1196,7 +1196,7 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
       c->nscope[va] = scope_idx;
       c->node_cbody[va] = w->cbody;
       WalkCtx aw = *w;
-      aw.pos = elab_child(nt, s, va, &w->pos);
+      aw.pos = elab_child(c, s, va, &w->pos);
       sclass_walk_child(c, va, vv[0], &aw, target_class, depth + 1, reopen_recv, reopen_class);
       return;
     }
@@ -1220,8 +1220,8 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
        is the class -- unwalked, its receiverless call resolved in the caller's
        self and raised NameError there */
     int pn = nt_ref(nt, s, "parameters");
-    if (pn >= 0) walk_scope_from(c, pn, w, elab_child(nt, s, pn, &w->pos), new_idx, target_class, 0);
-    if (sc->body >= 0) walk_scope_from(c, sc->body, w, elab_child(nt, s, sc->body, &w->pos), new_idx, target_class, 0);
+    if (pn >= 0) walk_scope_from(c, pn, w, elab_child(c, s, pn, &w->pos), new_idx, target_class, 0);
+    if (sc->body >= 0) walk_scope_from(c, sc->body, w, elab_child(c, s, sc->body, &w->pos), new_idx, target_class, 0);
     return;
   }
   NodeKind ty_k = nt_kind(nt, s);
@@ -1236,7 +1236,7 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
     return;
   }
   int pr = nt_ref(nt, s, "predicate");
-  if (pr >= 0) walk_scope_from(c, pr, w, elab_child(nt, s, pr, &w->pos), scope_idx, target_class, 0);
+  if (pr >= 0) walk_scope_from(c, pr, w, elab_child(c, s, pr, &w->pos), scope_idx, target_class, 0);
   sclass_walk_child(c, s, nt_ref(nt, s, "statements"), w, target_class, depth + 1, reopen_recv, reopen_class);
   sclass_walk_child(c, s, nt_ref(nt, s, "subsequent"), w, target_class, depth + 1, reopen_recv, reopen_class);
   sclass_walk_child(c, s, nt_ref(nt, s, "else_clause"), w, target_class, depth + 1, reopen_recv, reopen_class);
@@ -1576,12 +1576,12 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       /* the load record still places the receiver, which this walk does
          not enter, and a body with rescue clauses, whose statements it
          does not register */
-      elab_walk_rest(c, sexpr, elab_child(c->nt, id, sexpr, &w.pos));
+      elab_walk_rest(c, sexpr, elab_child(c, id, sexpr, &w.pos));
       int sbody = nt_ref(c->nt, id, "body");
       if (sbody >= 0) {
         nt_node_set_int((NodeTable *)c->nt, sbody, "singleton_body", 1);
         WalkCtx bw = w;
-        bw.pos = elab_child(c->nt, id, sbody, &w.pos);
+        bw.pos = elab_child(c, id, sbody, &w.pos);
         if (nt_kind(c->nt, sbody) != NK_StatementsNode) elab_walk_rest(c, sbody, bw.pos);
         int n = 0;
         const int *stmts = nt_arr(c->nt, sbody, "body", &n);
@@ -1917,7 +1917,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       if (r < 0 || elab_ref_last(c->nt, id, r) != (pass == 2)) continue;
       WalkCtx rw = cw;
       rw.dead = dead || (pred == 0 && r == then_body) || (pred == 1 && r == else_body);
-      rw.pos = elab_child(c->nt, id, r, &w.pos);
+      rw.pos = elab_child(c, id, r, &w.pos);
       if (r == bblk) rw.cls = rw.cbody = rw.direct = w.bclass1 - 1;
       walk_child(c, r, rw);
     }
@@ -1931,7 +1931,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
         int ch = ids[j];
         if (ch < 0) continue;
         WalkCtx aw = cw;
-        aw.pos = elab_child(c->nt, id, ch, &w.pos);
+        aw.pos = elab_child(c, id, ch, &w.pos);
         aw.slot = kind == NK_StatementsNode ? j + 1 : 0;
         walk_child(c, ch, aw);
       }

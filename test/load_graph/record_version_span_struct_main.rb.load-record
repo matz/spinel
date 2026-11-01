@@ -18,6 +18,7 @@ r0 #14 f0 ClassNode Point line 28
 r0 #16 f0 ClassNode Lone line 32
   r0 #17 f0 DefNode ring line 33
 r0 #18 f0 CallNode puts line 36
+block new line 6: assumed
 class Chime: body#3
 class Point: body#5 body#14 include Chime#8
 class Lone: body#9 body#16 include Chime#12

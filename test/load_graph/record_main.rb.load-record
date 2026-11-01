@@ -23,6 +23,9 @@ r0 #20 f0 CallNode helper line 21
   r0 #21 may f0 CallNode puts line 21
 r0 #22 f0 CallNode puts line 22
 r0 #23 f0 CallNode puts line 23
+block each line 11: now
+block define_method line 11: later
+block proc line 15: later
 class Shape: body#6 body#9
 entity Shape: owner main leaf Shape
 const Shape: write#6

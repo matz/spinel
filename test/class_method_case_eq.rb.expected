@@ -42,3 +42,9 @@ true
 [nil, :yes]
 [true, false]
 ["x"]
+true
+false
+true
+:n
+true
+false

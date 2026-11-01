@@ -4227,7 +4227,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     const char *rcn2 = ((rvt2_k == NK_ConstantReadNode ||
                                  rvt2_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
     const CallPlan *eqp = rcn2 && sp_streq(name, "===") && argc == 1 ? cplan_user(c, id) : NULL;
-    if (sp_streq(name, "===") && argc == 1 && !(eqp && eqp->mi >= 0 && eqp->via == UC_CMETH)) {
+    if (sp_streq(name, "===") && argc == 1 &&
+        !(eqp && eqp->mi >= 0 && eqp->via == UC_CMETH && !scope_calls_super(c, eqp->mi))) {
       if (rcn2 && (comp_class_index(c, rcn2) >= 0 ||
                    is_boolean_class_name(rcn2) ||
                    /* the roots: every object is one, and `Object === x` used to
@@ -4277,7 +4278,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         int own = 0, bx = class_eqq_answers_value(c);
         for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, k) >= 0;
         buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
-        if (own && at != TY_POLY && at != TY_UNKNOWN && !needs_root(at)) {
+        if (own && at != TY_POLY && at != TY_UNKNOWN && at != TY_NIL && !needs_root(at) && c_type_name(at)) {
           buf_printf(b, "; %s _a%d = ", c_type_name(at), o); emit_expr(c, argv[0], b);
           char aref[24]; snprintf(aref, sizeof aref, "_a%d", o);
           buf_printf(b, "; sp_RbVal _t%d = ", o); emit_boxed_text(c, at, aref, b);

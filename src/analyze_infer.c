@@ -5839,10 +5839,25 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 /* A Class receiver, Class and Module reflection, and the declarations of a class body (infer_call_inner's rules, in their order) */
 /* The class method `===` that class `ci` (or a class above it) defines in
    the program, or -1. A builtin row's own `===` does not count. */
-int class_own_cmethod_eqq(Compiler *c, int ci) {
+int class_any_cmethod_eqq(Compiler *c, int ci) {
   int mi = ci >= 0 ? comp_cmethod_in_chain(c, ci, "===", NULL) : -1;
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
       nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
+  /* (a super in it reaches Module#===, which the call cannot run yet: the
+     class test answers as it did) */
+  if (scope_calls_super(c, mi)) return -1;
+  return mi;
+}
+
+/* The same, only for a method of one plain parameter: the `when` and `in`
+   arms, grep and a class value call it. Another one is called only by a
+   written `Klass === x`, through its call plan. */
+int class_own_cmethod_eqq(Compiler *c, int ci) {
+  int mi = class_any_cmethod_eqq(c, ci);
+  if (mi < 0) return -1;
+  const Scope *s = &c->scopes[mi];
+  if (s->nparams != 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->blk_param || s->yields ||
+      (s->pdefault && s->pdefault[0] >= 0)) return -1;
   return mi;
 }
 
@@ -5930,7 +5945,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && sp_streq(name, "===")) {
       int eci = nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode
                 ? const_node_class_index(c, recv) : -2;
-      int emi = eci >= 0 ? class_own_cmethod_eqq(c, eci) : -1;
+      int emi = eci >= 0 ? class_any_cmethod_eqq(c, eci) : -1;
       if (emi >= 0 && c->scopes[emi].ret != TY_UNKNOWN) { *out = c->scopes[emi].ret; return 1; }
       if (eci == -2 && class_eqq_answers_value(c)) { *out = TY_POLY; return 1; }
     }
@@ -7009,7 +7024,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
      own, which answers what it answers */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
-      class_own_cmethod_eqq(c, const_node_class_index(c, recv)) < 0)
+      class_any_cmethod_eqq(c, const_node_class_index(c, recv)) < 0)
     { *out = TY_BOOL; return 1; }
 
   if ((is_unary_sign(name)) && recv >= 0 && argc == 0) {

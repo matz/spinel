@@ -70,3 +70,15 @@ p Big === 5
 class Sym; def self.===(o) = o == "x" ? :yes : nil; end
 [Sym, Integer].each { |k| p [k === 3, k === "x"] }
 p [3, "x", "y"].grep(Sym)
+
+# other shapes of `===`: a rest parameter, an optional second parameter
+class Rest; def self.===(*a) = a[0] == 1; end
+p Rest === 1, Rest === 2
+class Opt; def self.===(o, extra = 1) = o == extra; end
+p Opt === 1
+p(case 2 when Opt then :y else :n end)
+
+# a class value tested against nil
+class NilQ; def self.===(o) = o.nil?; end
+kq = [1].size > 0 ? NilQ : Integer
+p kq === nil, kq === 1

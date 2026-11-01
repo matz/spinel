@@ -10606,9 +10606,8 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
 
 /* Call class `ci`'s own class method `===` (see class_own_cmethod_eqq) with
    the value in C variable `subj` of type `pt`, and test the answer as `if`
-   does. The value is boxed when the method's parameter is. A method that
-   takes or answers a value this call cannot pass is refused at `node`
-   (with no node, it answers 0). 0: no such method. */
+   does (or give it boxed). The value is boxed when the method's parameter
+   is. 0: no such method, or one this call cannot pass the value to. */
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
   int mi = class_own_cmethod_eqq(c, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
@@ -10618,11 +10617,7 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   int ret_ptr = needs_root(ws->ret) && !comp_ty_value_obj(c, ws->ret);
   if (!wp || (wp->type != TY_POLY && !raw) || ws->rest_idx >= 0 || ws->kwrest_idx >= 0 || ws->blk_param ||
       ws->yields || ws->ret == TY_UNKNOWN) {
-    if (node < 0) return 0;   /* (no node: leave it to the caller) */
-    unsupported_feature(c, node, "a class whose class method #=== takes more than "
-                                 "one argument or a block");
-    buf_puts(b, "0");
-    return 1;
+    return 0;
   }
   Buf cl; memset(&cl, 0, sizeof cl);
   buf_printf(&cl, "%s(", mc_method(c, ws));

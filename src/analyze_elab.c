@@ -4885,6 +4885,7 @@ static const char *lr_event_form(LrKind kind) {
   switch (kind) {
     case LR_DEF: case LR_DEFINE_METHOD: case LR_READER: case LR_WRITER: case LR_ALIAS: case LR_VIS: return "define_method";
     case LR_COPY: return "module_function";
+    case LR_UNDEF: return "undef_method";
     default: return NULL;
   }
 }
@@ -4902,7 +4903,7 @@ static int lr_event_hooks(Compiler *c) {
   if (!r->evhooks) {
     r->evhooks = 1;
     for (int sg = 0; sg < 2; sg++)
-      if (lr_named(c, lr_event_hook(LR_DEF, sg))) r->evhooks = 2;
+      if (lr_named(c, lr_event_hook(LR_DEF, sg)) || lr_named(c, lr_event_hook(LR_UNDEF, sg))) r->evhooks = 2;
   }
   return r->evhooks == 2;
 }
@@ -4996,6 +4997,17 @@ static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, con
   return 0;
 }
 
+/* Does the core define method `name` on a class (its singleton when sg): a
+   Class row, or one of Object's instance methods */
+static int lr_core_method(int sg, const char *name) {
+  if (!sg) return builtin_object_method_known(name);
+  for (int i = 0; i < bop_row_count(); i++) {
+    const BuiltinOp *r = bop_row(i);
+    if (r->recv == TY_CLASS && sp_streq(r->name, name)) return 1;
+  }
+  return 0;
+}
+
 /* The hook calls for the versions statement list[j] added, spliced after it:
    `C.method_added(:name)`, or `C.__send__(:singleton_method_added, :name)`
    (BasicObject's: a send reaches a top-level def of the name), for each hook
@@ -5035,6 +5047,15 @@ int elab_fire_after(Compiler *c, int list, int j) {
     if (live && v->kind == LR_VIS) {
       int was = elab_method_vis_at(c, v->cls, v->name, 0, (LoadPoint){ p.region, e, -1 });
       live = !v->sg && elab_own_method_at(c, v->cls, v->name, p) == ELAB_NO && was >= 0 && was != v->vis;
+    }
+    /* an undef of a name that is not defined raises NameError, and fires
+       nothing: one the record shows undefined already (`undef a` a second
+       time) or finds nowhere, unless the core defines it */
+    if (live && v->kind == LR_UNDEF) {
+      LoadPoint before = { p.region, e, -1 };
+      int unsure = 0;
+      live = lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, 1) != LR_STOP &&
+             (elab_method_at(c, v->cls, v->name, v->sg, before, NULL) != ELAB_NO || lr_core_method(v->sg, v->name));
     }
     int recv = live ? lr_hook_recv(c, frame) : -2;
     if (recv > -2) {

@@ -1628,6 +1628,15 @@ concat-repr-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	@CC="$(CC)" CFLAGS="$(CFLAGS)" SEC_FLAGS="$(SEC_FLAGS)" REF_RUBY="$(REF_RUBY)" \
 	 SPINEL="$(SPINEL)" SPINEL_TIMEOUT="$(SPINEL_TIMEOUT)" sh tools/concat_repr_test.sh
 
+# The `...` forwarding rewrite keeps its program-sized workspace off the C
+# stack: a flat input of 150,000 statements compiles under a 512 KiB stack.
+# One of test-run's legs.
+.PHONY: forwarding-large-ast-test
+forwarding-large-ast-test: $(SPINEL)
+	@SPINEL="$(SPINEL)" sh tools/forwarding_large_ast_test.sh
+
+test-run: forwarding-large-ast-test
+
 test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext-gc-test cext-exceptions-test cext-recorder-test cext-compiler-test cext-threads-test concat-repr-test
 	@if [ -z "$(TIMEOUT_BIN)" ]; then \
 	  echo "WARNING: no 'timeout'/'gtimeout' on PATH -- tests run with NO time limit."; \

@@ -318,6 +318,15 @@ typedef struct BuiltinOp {
    answers anywhere else, an Enumerator. Only the rows that carry the flag
    pay for the test, which walks the calls. */
 #define BOPF_NOT_CHAIN_RECV 256
+/* The method is private in CRuby: only a call that ignores visibility
+   (`__send__`, `send`, a call with no receiver or with `self`) reaches the
+   row; an explicit receiver is NoMethodError, and the call is left to the
+   rules after the lookup (cplan_class_row, bop_flags). */
+#define BOPF_PRIVATE 512
+/* The method is Class's, not Module's (Class#inherited): a Module value
+   has none. Spinel types a module as a class too, so the row answers a call
+   only on a receiver proven a Class (cplan_recv_class). */
+#define BOPF_CLASS_ONLY 1024
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */
@@ -398,6 +407,8 @@ typedef struct BuiltinOp {
 int bop_row_count(void);
 const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
+/* The flags (BOPF_*) of the row of kind rt for `name`, 0 for none */
+int bop_flags(TyKind rt, const char *name);
 
 /* bop_find, with arg_of(ud, i) answering argument i's kind for the rows
    that guard it. It is called at most once per argument, and only when

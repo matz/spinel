@@ -743,12 +743,25 @@ int is_const_added_name(const char *n) {
 }
 
 /* the methods a definition runs when the program defines them: inherited
-   (class), included, extended, prepended, method_added and its singleton
-   kin, const_added */
+   (class), included, extended, prepended, method_added, method_removed,
+   method_undefined and their singleton kin, const_added */
 int is_definition_hook_name(const char *n) {
+  return is_module_hook_name(n) || is_basic_object_hook_name(n);
+}
+
+/* ...the ones Class and Module define: their methods stand before Object's,
+   so a top-level def of the name is no hook */
+int is_module_hook_name(const char *n) {
   return sp_streq(n, "inherited") || sp_streq(n, "included") || sp_streq(n, "extended") ||
-         sp_streq(n, "prepended") || sp_streq(n, "method_added") ||
-         sp_streq(n, "singleton_method_added") || is_const_added_name(n);
+         sp_streq(n, "prepended") || sp_streq(n, "method_added") || sp_streq(n, "method_removed") ||
+         sp_streq(n, "method_undefined") || is_const_added_name(n);
+}
+
+/* ...and the ones BasicObject defines (the singleton forms): its methods
+   stand after Object's, so a top-level def of the name is one */
+int is_basic_object_hook_name(const char *n) {
+  return sp_streq(n, "singleton_method_added") || sp_streq(n, "singleton_method_removed") ||
+         sp_streq(n, "singleton_method_undefined");
 }
 
 /* The hooks definition form `form` (given its arguments) fires, on the

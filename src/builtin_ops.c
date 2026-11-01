@@ -1850,6 +1850,11 @@ static const BuiltinOp bop_rows[] = {
      bool. */
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_Class _cl$T = $r; sp_Class _cl$t = $e0; if (!sp_class_is_module_val(_cl$t)) sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); _cl$T.cls_id != _cl$t.cls_id && sp_class_le(_cl$T, _cl$t); })", BOP_K(TY_CLASS) },
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_NONE },
+  /* Class#inherited: a private no-op answering nil. A call of it on a class
+     the program defines no such hook for, which a class made fires where the
+     record cannot tell whether the program does (lr_fire_inherited), reaches
+     this. */
+  { TY_CLASS, "inherited", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_CLASS_ONLY },
 
   /* Integer and Float: the result kinds read off the name, arity and block
      form. pow, clamp, coerce, Float#fdiv(Complex), Float <=> Rational,
@@ -2964,6 +2969,11 @@ const BuiltinOp *bop_row(int i) { return i >= 0 && i < bop_row_count() ? &bop_ro
 
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block) {
   return bop_find_arg(rt, name, argc, has_block, NULL, NULL);
+}
+
+int bop_flags(TyKind rt, const char *name) {
+  const BuiltinOp *r = bop_find(rt, name, 1, 0);
+  return r ? r->flags : 0;
 }
 
 const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_block,

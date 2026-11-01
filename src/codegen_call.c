@@ -31812,6 +31812,11 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
          methods too, answered to include_all as a user one's are */
       else if (rcn && ci < 0 && builtin_class_id(rcn) != 0 && foldable && include_all &&
                class_object_private_method(qm, is_builtin_module_name(rcn))) { resolved = 1; yes = 1; }
+      /* a private row (Class#inherited) types its call, and is no public
+         surface: answered to include_all above */
+      else if (rcn && ci < 0 && builtin_class_id(rcn) != 0 && (bop_flags(TY_CLASS, qm) & BOPF_PRIVATE)) {
+        if (foldable) { resolved = 1; yes = 0; }
+      }
       else if (rt_probe_answer(c, id, &yes)) resolved = 1;
     }
     else if (recv >= 0 && ty_is_object(rt)) {

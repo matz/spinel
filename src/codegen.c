@@ -69,7 +69,7 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
       }
     }
   }
-  if (k == NK_YieldNode || k == NK_SuperNode || k == NK_ForwardingSuperNode) dyn[t] = 1;
+  if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_user(c, n)->core_hook)) dyn[t] = 1;
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) poll_block_edges(c, nt_ref_at(nt, n, i), t, ef, et, ne, cap, dyn, depth + 1);
   int na = nt_num_arrs(nt, n);
@@ -136,8 +136,8 @@ int poll_scope_on_cycle(Compiler *c, int si) {
         if (et[ne - 1] == from) g_poll_cyc[from] = 1;   /* calls itself */
       }
     }
-    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns) dyn[f] = 1; }
-    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
     /* the edges by source (CSR), and their reverse */
     int *off = calloc((size_t)ns + 2, sizeof(int)), *adj = malloc(sizeof(int) * (size_t)(ne + 1));
     int *roff = calloc((size_t)ns + 2, sizeof(int)), *radj = malloc(sizeof(int) * (size_t)(ne + 1));
@@ -4044,7 +4044,7 @@ int cmethod_takes_self_cls(Compiler *c, int si) {
       if (comp_super_is_class_new(c, nid)) { ans = 1; break; }
       /* and any other super runs the method it reaches on that class, which
          may read it even where this body does not */
-      if (nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) { ans = 1; break; }
+      if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_user(c, nid)->core_hook) { ans = 1; break; }
       NodeKind ty_k = nt_kind(c->nt, nid);
       if (ty_k == NK_CallNode && nt_ref(c->nt, nid, "receiver") < 0) {
         const char *nm = nt_str(c->nt, nid, "name");
@@ -4557,7 +4557,10 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
     case NK_BlockNode: case NK_LambdaNode: case NK_BlockArgumentNode:
     case NK_BeginNode: case NK_RescueNode: case NK_RescueModifierNode:
     case NK_RetryNode: case NK_RedoNode: case NK_BreakNode: case NK_NextNode:
-    case NK_YieldNode: case NK_SuperNode: case NK_ForwardingSuperNode:
+    case NK_SuperNode: case NK_ForwardingSuperNode:
+      if (cplan_user(c, id)->core_hook) break;
+      return 1;
+    case NK_YieldNode:
       return 1;
     default: break;
   }
@@ -15412,19 +15415,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* Module's and Class's own hooks are no-ops answering nil: `super` from a
        program's method_added (Thor's), inherited, included, ... reaches them
        when no ancestor of the program defines one */
-    if (cmi < 0) {
-      static const char *const HOOKS[] = { "method_added", "method_removed", "method_undefined",
-        "singleton_method_added", "singleton_method_removed", "singleton_method_undefined",
-        "inherited", "included", "extended", "prepended", "const_added", NULL };
-      int hook = 0;
-      for (int h = 0; HOOKS[h] && !hook; h++) hook = sp_streq(uname, HOOKS[h]);
-      if (hook) {
-        Repr hr = repr_of(c, id);
-        TyKind ht = hr.as_ty;
-        if (hr.kind == RK_BOXED) buf_puts(b, "sp_box_nil()");
-        else buf_printf(b, "(%s)", raise_tail_value_c(c, ht));
-        return;
-      }
+    if (cmi < 0 && cplan_user(c, id)->core_hook) {
+      Repr hr = repr_of(c, id);
+      TyKind ht = hr.as_ty;
+      if (hr.kind == RK_BOXED) buf_puts(b, "sp_box_nil()");
+      else buf_printf(b, "(%s)", raise_tail_value_c(c, ht));
+      return;
     }
     /* Class#subclasses at the end of the chain: the receiving class's
        direct subclasses, of the classes the program defines below this

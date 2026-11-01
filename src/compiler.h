@@ -1707,8 +1707,9 @@ typedef struct {
      (class, side, name, parameter count) for the calls whose version is
      known only at run time, or with guard, for the calls that reach a
      later prepend's copy (Scope.mixin_guarded), and each of its arms'
-     calls pinned to the method it runs */
-  struct VerEntry { const char *name; int guard, cls, sg, ar, scope; } *ver_entries;
+     calls pinned to the method it runs. cells: its histories' cells are
+     written (ver_cells_write) */
+  struct VerEntry { const char *name; int guard, cls, sg, ar, scope, cells; } *ver_entries;
   int nver_entries;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */

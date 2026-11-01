@@ -4798,10 +4798,9 @@ static void ver_entries_index(Compiler *c) {
     if (!dup) { c->ver_names_next[i] = c->ver_names[m]; c->ver_names[m] = i; }
   }
 }
-/* Asks every open history (elab_open_histories) and makes the entries of
-   those a reader names: at the build, each a call names (the others are
-   deferred, Compiler.ver_defer); with demand, the deferred ones taken */
-static void ver_named_asks(Compiler *c, int demand) {
+/* The facts the open histories' asks read (VerNamedAsks: sup, vc, rn),
+   read from the tree as it stands; ver_named_facts_free frees them */
+static void ver_named_facts(Compiler *c, VerNamedAsks *q, int demand) {
   const NodeTable *nt = c->nt;
   unsigned char *sup = calloc((size_t)c->nscopes + 1, 1);
   if (!sup) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -4831,11 +4830,22 @@ static void ver_named_asks(Compiler *c, int demand) {
   }
   if (nvc) qsort(vc, (size_t)nvc, sizeof *vc, ver_name_cmp);
   if (nrn) qsort(rn, (size_t)nrn, sizeof *rn, ver_name_cmp);
-  VerNamedAsks q = { c, NULL, 0, sup, c->nscopes, vc, nvc, rn, nrn, demand, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+  *q = (VerNamedAsks){ c, NULL, 0, sup, c->nscopes, vc, nvc, rn, nrn, demand, NULL, NULL, NULL, NULL, NULL, 0, NULL };
+}
+static void ver_named_facts_free(VerNamedAsks *q) {
+  free(q->v); free(q->mh); free(q->mn); free(q->mk); free(q->seen); free(q->cps); free(q->bydef);
+  free((void *)q->sup); free(q->vc); free(q->rn);
+}
+/* Asks every open history (elab_open_histories) and makes the entries of
+   those a reader names: at the build, each a call names (the others are
+   deferred, Compiler.ver_defer); with demand, the deferred ones taken */
+static void ver_named_asks(Compiler *c, int demand) {
+  VerNamedAsks q;
+  ver_named_facts(c, &q, demand);
   elab_open_histories(c, ver_named_one, &q);
   for (int i = 0; i < q.n; i++) if (!q.v[i].atdef) ver_named_make(c, &q.v[i]);
   for (int i = 0; i < q.n; i++) if (q.v[i].atdef) ver_named_refuse_defs(c, &q.v[i]);
-  free(q.v); free(sup); free(vc); free(rn); free(q.mh); free(q.mn); free(q.mk); free(q.seen); free(q.cps); free(q.bydef);
+  ver_named_facts_free(&q);
 }
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -4939,7 +4949,7 @@ static int ver_write_cmp(const void *a, const void *b) {
   if (x->after != y->after) return x->after - y->after;
   return x->after ? y->k - x->k : x->k - y->k;
 }
-void ver_cells_write(Compiler *c, int from) {
+void ver_cells_write(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   ElabVersion vs[VER_MAX_ARMS];
   VerWrite *w = NULL;
@@ -4947,10 +4957,12 @@ void ver_cells_write(Compiler *c, int from) {
   const int *par = c->nver_entries ? comp_parent_map(c) : NULL, *first = top >= 0 ? nt_arr(nt, top, "body", &ntop) : NULL;
   unsigned char *seen = c->nver_entries ? calloc((size_t)nt->count + 1, 1) : NULL;
   if (c->nver_entries && !seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = from; i < c->nver_entries; i++) {
-    const struct VerEntry *e = &c->ver_entries[i];
+  for (int pass = 0; pass < 2; pass++)   /* (the entries written before first: a cell is written once) */
+  for (int i = 0; i < c->nver_entries; i++) {
+    struct VerEntry *e = &c->ver_entries[i];
     /* (not only the entries reached now: a send's arms, made in the fixpoint, reach methods whose calls bind entries this first pass leaves unreached) */
-    if (e->scope < 0) continue;
+    if (e->scope < 0 || e->cells == pass) continue;
+    e->cells = 1;
     int arms[VER_MAX_ARMS + 1], tests[VER_MAX_ARMS + 1];
     int na = e->guard == 1 ? ver_entry_targets(c, e->scope, arms, tests) : 0;
     int nv = e->guard == 2 ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
@@ -4966,6 +4978,7 @@ void ver_cells_write(Compiler *c, int from) {
       while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
       if (seen[node] || st < 0 || par[st] < 0) continue;
       seen[node] = 1;
+      if (!pass) continue;
       if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       NodeKind sk = nt_kind(nt, st);
       /* (ahead of a def, an alias or an undef, which runs no program code: after one that ends a branch, the write would be the branch's value) */
@@ -5018,7 +5031,9 @@ void ver_cells_write(Compiler *c, int from) {
   }
   for (int k = 0; k < nm; k++) elab_record_write(c, made[k]);
   free(made); free(all); free(hz); free(w);
-  /* (the versions kept before the writes are asked again) */
+  ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
+}
+void ver_memo_drop(Compiler *c) {
   free(c->ver_memo);
   c->ver_memo = NULL;
   c->ver_memo_cap = c->ver_memo_n = 0;
@@ -5036,7 +5051,7 @@ int ver_entries_demand(Compiler *c) {
   if (!any) return 0;
   ver_named_asks(c, 1);
   ver_entries_index(c);
-  ver_cells_write(c, e0);
+  ver_cells_write(c);
   return c->nver_entries > e0;
 }
 

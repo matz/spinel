@@ -49139,7 +49139,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
      construction site is a call node, so both are known now. Recomputed
      after the fixpoint, when a dynamic `.new` can be told from a static one. */
   AN_STEP_V("compute_reachable", compute_reachable(c, 0));
-  ver_cells_write(c, 0);
+  ver_cells_write(c);
   compute_instantiated(c, 1);
 }
 

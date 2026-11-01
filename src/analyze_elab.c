@@ -3970,20 +3970,29 @@ static void lr_span_take(Compiler *c, const LrHist *h, int cls, int sg, LoadPoin
   s->nh += s->m > had;
 }
 
+/* The first statement of region `region` from which a call may run on
+   cls: on its class object (sg) from the header that opens it, on an
+   instance from the first statement one may exist (lr_rta); -1 where the
+   record cannot tell (a builtin class, one no header opens, one opened in
+   another region, a program of more regions). */
+static int lr_live_from(Compiler *c, int cls, int sg, int region) {
+  LoadRecord *r = c->lrec;
+  lr_run_points(c);
+  const LrClass *kc = cls >= 0 && !c->classes[cls].is_builtin_const && r->nregion == 1 ? lr_class(r, cls) : NULL;
+  LoadPoint b = kc && kc->nopen ? elab_point_of(c, kc->open[0].node) : (LoadPoint){ -1, -1 };
+  return b.region != region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
+}
 /* elab_method_span; *idle when no statement of w that may run code of the
    program's sees a version (the one version counts all the same) */
 static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle) {
   LoadRecord *r = c->lrec;
   LoadPoint p0 = w->from, p1 = w->to;
   if (!r || !r->recorded || !name || cls < LR_MAIN || p0.region < 0 || elab_cmp(p0, p1) != PROG_BEFORE) return -1;
-  lr_run_points(c);
   /* no call on a class before it opens, nor on an instance of it before
-     the first statement one may exist (lr_rta); none in w: w's last
+     the first statement one may exist (lr_live_from); none in w: w's last
      statement. In a program of more regions, from w's start: more
      versions, never fewer */
-  const LrClass *kc = cls >= 0 && !c->classes[cls].is_builtin_const && r->nregion == 1 ? lr_class(r, cls) : NULL;
-  LoadPoint b = kc && kc->nopen ? elab_point_of(c, kc->open[0].node) : (LoadPoint){ -1, -1 };
-  int bl = b.region != p0.region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
+  int bl = lr_live_from(c, cls, sg, p0.region);
   if (bl >= p1.seq) bl = p1.seq - 1;
   if (p0.seq < bl && bl < p1.seq) p0.seq = bl;
   int n = 0, obs0 = 0, owners[64], no = lr_ancestry_owners(c, cls, owners, 64, 0);

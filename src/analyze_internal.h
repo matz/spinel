@@ -463,7 +463,6 @@ const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String 
 void register_struct_members(Compiler *c, ClassInfo *cls, int val);
 void register_structs(Compiler *c);
 void register_singleton_defs(Compiler *c);
-void fix_struct_block_scopes(Compiler *c);
 void register_attr_versions(Compiler *c);
 void register_attrs(Compiler *c);
 void register_aliases(Compiler *c);

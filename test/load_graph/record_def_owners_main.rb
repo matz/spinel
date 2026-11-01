@@ -1,7 +1,7 @@
 # Each def and define_method of a class body takes its class and side from
 # the load record: one on a receiver in parentheses, and the defs, the
 # `class << self` section, the `private def` and the define_methods of a
-# Struct block, whose class is made after the scope walk.
+# Struct block, whose class is made at its write.
 class Foo
   def (self).x = 1
   def self.y = 2

@@ -28,6 +28,14 @@ int is_record_class_builder(const char *recv, const char *meth) {
                           (sp_streq(recv, "Data") && sp_streq(meth, "define")));
 }
 
+/* The class methods a class Struct.new or Data.define makes answers of its
+   own (its singleton's, not Struct's or Data's): new, [], members, inspect,
+   and a Struct's keyword_init? (data: a Data class) */
+int is_record_class_cmethod(const char *n, int data) {
+  return n && (sp_streq(n, "new") || sp_streq(n, "[]") || sp_streq(n, "members") || sp_streq(n, "inspect") ||
+               (!data && sp_streq(n, "keyword_init?")));
+}
+
 /* Class.new: the builder of an anonymous class */
 int is_class_new(const char *recv, const char *meth) { return is_new_name(meth) && is_class_const_name(recv); }
 /* Module.new: the builder of an anonymous module */

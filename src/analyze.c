@@ -49227,9 +49227,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("expand_static_splat_args", expand_static_splat_args(c, 0, c->nt->count));
   AN_STEP_V("register_singleton_defs", register_singleton_defs(c));   /* def CONST.m / def x.m -> synthesized subclass */
   register_structs(c);
-  elab_record_builders(c);
   desugar_struct_index_ctor(c);
-  fix_struct_block_scopes(c);
   register_module_functions(c);
   register_locals(c);
   AN_STEP_V("desugar_block_arg_order", desugar_block_arg_order(c));   /* recv.m(a, &expr): receiver, args, then the block (#4992) */

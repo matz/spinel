@@ -1504,6 +1504,10 @@ int cplan_entry_finds(const Compiler *c, int e) {
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
 }
+/* See call_plan.h. */
+int cplan_user_new(Compiler *c, int id, int ci) {
+  return c->classes[ci].is_struct ? -1 : comp_cmethod_in_chain(c, ci, "new", NULL);
+}
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
    in a method of main's own; not in a top-level `def`, which runs on whatever
@@ -5279,7 +5283,7 @@ static int ver_in_dropped_rescue(const Compiler *c, const int *par, int n) {
    or rename stands where no call reaches them. A history holding a version
    marked cond_lone (a lone def under an `if` that pass leaves to the
    record, a define_method a Struct or Data block may not run,
-   fix_struct_block_scopes) refuses where it would have none
+   lr_block_cond_dms) refuses where it would have none
    ("cond_def_override"); its entry's name is not answered by reflection
    (ver_refl_named). A module's instance history arms each class (each
    side) whose chain holds it (elab_chain_versions, through modules that

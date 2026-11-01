@@ -747,6 +747,12 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    (NoMethodError, method_missing); -1 for a scope that is no entry */
 enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
 int cplan_entry_finds(const Compiler *c, int e);
+/* The program's `self.new` a `new` call id on class ci runs, -1 for
+   none: none for a Struct or Data class, whose builtin constructor
+   answers every `new` (codegen emits it, and inference types the call
+   by it); for any other class the tables', which also decide whether the
+   class builds its own constructor. */
+int cplan_user_new(Compiler *c, int id, int ci);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

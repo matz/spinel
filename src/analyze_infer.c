@@ -4380,7 +4380,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
           { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
-        int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+        int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
           *out = (TyKind)c->scopes[ucnew].ret; return 1;
@@ -4436,7 +4436,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
           { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
-        int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+        int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
           *out = (TyKind)c->scopes[ucnew].ret; return 1;

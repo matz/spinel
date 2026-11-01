@@ -555,10 +555,9 @@ void expand_struct_forwarding_super(Compiler *c) {
    and the one whose body it is directly in (direct, where `self` is the
    class: -1 inside a method or a block, mirroring codegen's
    g_class_body_id so a self/bare `class_eval` reopen is recognized
-   identically by analyze and codegen); whether it is directly in the block
-   of `Name = Struct.new(...) do ... end`, whose class register_structs
-   makes only after the walk (its methods take it from the load record,
-   elab_record_builders); and whether it is a
+   identically by analyze and codegen); the class whose header lexically
+   encloses it (hdr), the enclosing class of a record class a constant
+   write there makes; and whether it is a
    define_method of a `class << X` body, which defines a class method. pos:
    where the load phase stands there (analyze_elab.c), as the load record's
    walk, which this walk is, enters it; e -1 in a walk after it. slot: the
@@ -566,7 +565,7 @@ void expand_struct_forwarding_super(Compiler *c) {
    of the walk splices. */
 typedef struct {
   int scope, cls, proc, dead;
-  int cbody, direct, struct_direct, dm_sclass;
+  int cbody, direct, hdr, dm_sclass;
   int bclass1;   /* at a class builder's call: the class its write made, plus one (0 for none) */
   int cblock;    /* the class body the node is in is a block, which opens no constant scope: a class builder's, or one rewritten to a header (block_made_body) */
   ElabPos pos;
@@ -610,7 +609,7 @@ static void walk_child(Compiler *c, int ch, WalkCtx w) {
    class bodies of `w`, where it is reached. */
 static void walk_scope_from(Compiler *c, int id, const WalkCtx *w, ElabPos pos, int scope, int cls, int dm_sclass) {
   walk_child(c, id, (WalkCtx){ .scope = scope, .cls = cls, .proc = -1, .cbody = w->cbody,
-                               .direct = w->direct, .struct_direct = w->struct_direct, .dm_sclass = dm_sclass, .pos = pos });
+                               .direct = w->direct, .hdr = w->hdr, .dm_sclass = dm_sclass, .pos = pos });
 }
 
 /* String form of an int/string/symbol literal node, for compile-time
@@ -1535,6 +1534,30 @@ static int recv_is_method_param(Compiler *c, int recv, int scope_idx) {
   return lv && lv->is_param;
 }
 
+/* The record class a write of `Struct.new(...)` / `Data.define(...)` makes
+   where the walk reaches it, in walk order: a constant's is named as the
+   write names it, in the class whose header lexically encloses the write
+   (hdr), and is the class of that name when the program has one (a header
+   before it, an earlier write of the name); a local's is anonymous, named
+   StructAnon_<write> and keyed to the write. The node -> class map holds
+   it from here on; register_structs gives it its members once the walk is
+   done. -1 for a constant whose name no C identifier spells. */
+static int record_write_class(Compiler *c, int id, int hdr) {
+  int ci = elab_header_class(c, id, NULL, NULL);
+  if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
+  if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
+    const char *cname = nt_str(c->nt, id, "name");
+    return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, hdr) : -1;
+  }
+  char an[48];
+  snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
+  ClassInfo *cls = comp_class_new(c, an, id);
+  cls->is_anon_struct = 1;
+  c->anon_struct_ids_valid = 0;
+  elab_header_opened(c, id, cls->idx, 1);
+  return cls->idx;
+}
+
 static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (id < 0 || id >= c->nt->count) return;
   int scope_idx = w.scope, class_id = w.cls, proc = w.proc, dead = w.dead;
@@ -1686,6 +1709,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     int cp = class_def_path(c->nt, id);
     builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_name(c->nt, id), class_cref(c, class_id, w.cblock));
   }
+  /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
+  else if (class_def_record(c->nt, id) >= 0)
+    builder_class = record_write_class(c, id, w.hdr);
   else if (ty_k == NK_DefNode) {
     const char *name = nt_str(c->nt, id, "name");
     Scope *s = comp_scope_new(c, name, id);
@@ -1739,7 +1765,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     /* [lits].each { |v| define_method("m_#{v}") { body } } -- unroll into one
        method per element. Handled wholesale; skip the generic recursion so
        the inner define_method isn't also processed as a normal call. */
-    if ((class_id >= 0 || w.struct_direct) && collect_dm_each_unroll(c, id, &w)) { elab_walk_rest(c, id, w.pos); return; }
+    if (class_id >= 0 && collect_dm_each_unroll(c, id, &w)) { elab_walk_rest(c, id, w.pos); return; }
     /* compiler_state_int/str/sa/ia :fields -- declare ivars + synthesize the
        init/dump/set methods (the metaprogramming is native, not define_method). */
     if (class_id >= 0 && cs_macro_kind(nt_str(c->nt, id, "name"))) {
@@ -1752,7 +1778,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        function (class_id stays -1), matching `def`. */
     const char *dm_cn = nt_str(c->nt, id, "name");
     int dm_recv = nt_ref(c->nt, id, "receiver");
-    if (is_define_method_name(dm_cn) && (scope_idx > 0 || w.direct >= 0 || w.struct_direct) &&
+    if (is_define_method_name(dm_cn) && (scope_idx > 0 || w.direct >= 0) &&
         (dm_recv < 0 || nt_kind(c->nt, dm_recv) == NK_SelfNode)) {
       int an = nt_ref(c->nt, id, "arguments"), ac = 0;
       const int *av = an >= 0 ? nt_arr(c->nt, an, "arguments", &ac) : NULL;
@@ -1897,15 +1923,11 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   }
 
   WalkCtx cw = { .scope = child, .cls = child_class, .proc = proc, .dead = dead,
-                 .cbody = w.cbody, .direct = w.direct, .struct_direct = w.struct_direct,
+                 .cbody = w.cbody, .direct = w.direct, .hdr = w.hdr,
                  .bclass1 = builder_class + 1 };
   int bblk = ty_k == NK_CallNode && w.bclass1 ? nt_ref(c->nt, id, "block") : -1;   /* the builder's block */
-  NodeKind wk = nt_kind(c->nt, id);
-  if (child != scope_idx || wk == NK_ClassNode || wk == NK_ModuleNode || wk == NK_SingletonClassNode)
-    cw.struct_direct = 0;
-  else if ((wk == NK_ConstantWriteNode || wk == NK_LocalVariableWriteNode) && class_def_is_record_call(c->nt, nt_ref(c->nt, id, "value")) &&
-           class_def_body(c->nt, id) >= 0)
-    cw.struct_direct = 1;
+  if ((ty_k == NK_ClassNode || ty_k == NK_ModuleNode) && elab_header_class(c, id, NULL, NULL) >= 0)
+    cw.hdr = elab_header_class(c, id, NULL, NULL);
   if (child_class >= 0) cw.cbody = child_class;
   /* a header opens a constant scope, unless it is a block rewritten to one */
   cw.cblock = ty_k == NK_ClassNode || ty_k == NK_ModuleNode ? nt_int(c->nt, id, "block_made_body", 0) != 0 : w.cblock;
@@ -1964,13 +1986,13 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
 
 /* A walk of `id` from outside any class body */
 void walk_scope(Compiler *c, int id, int scope_idx, int class_id) {
-  walk_scope_in(c, id, (WalkCtx){ .scope = scope_idx, .cls = class_id, .proc = -1, .cbody = -1, .direct = -1, .pos = { .e = -1 } });
+  walk_scope_in(c, id, (WalkCtx){ .scope = scope_idx, .cls = class_id, .proc = -1, .cbody = -1, .direct = -1, .hdr = -1, .pos = { .e = -1 } });
 }
 
 /* Statement k of a file's top level, entered by the load record's walk at
    pos (analyze_elab.c): in the file's scope, outside any class body */
 void walk_scope_stmt(Compiler *c, int stmt, int k, int scope_idx, ElabPos pos) {
-  walk_child(c, stmt, (WalkCtx){ .scope = scope_idx, .cls = -1, .proc = -1, .cbody = -1, .direct = -1, .pos = pos, .slot = k + 1 });
+  walk_child(c, stmt, (WalkCtx){ .scope = scope_idx, .cls = -1, .proc = -1, .cbody = -1, .direct = -1, .hdr = -1, .pos = pos, .slot = k + 1 });
 }
 
 static void mf_mark(Compiler *c, int mi) {
@@ -2408,6 +2430,15 @@ int class_def_is_record_call(const NodeTable *nt, int val) {
   int vr = nt_ref(nt, val, "receiver");
   return vr >= 0 && nt_kind(nt, vr) == NK_ConstantReadNode &&
          is_record_class_builder(nt_str(nt, vr, "name"), nt_str(nt, val, "name"));
+}
+
+/* The `Struct.new(...)` / `Data.define(...)` call a constant or local write
+   holds: the write is the definition of a record class (`P = Struct.new(:a)`,
+   `k = Data.define(:a) do ... end`). -1 for any other node. */
+int class_def_record(const NodeTable *nt, int def_node) {
+  NodeKind k = def_node >= 0 ? nt_kind(nt, def_node) : NK_NONE;
+  int v = k == NK_ConstantWriteNode || k == NK_LocalVariableWriteNode ? nt_ref(nt, def_node, "value") : -1;
+  return class_def_is_record_call(nt, v) ? v : -1;
 }
 
 /* The class body a definition node carries: a ClassNode's or ModuleNode's
@@ -3659,36 +3690,6 @@ void register_singleton_defs(Compiler *c) {
   free(m.wkey); free(m.wci);
 }
 
-/* Stamp every ConstantWriteNode with the index of the class or module whose
-   body lexically encloses it. `Const = Struct.new(...)` defines a class just
-   as `class Const` does, but it arrives here as a plain constant write with no
-   scope around it, so the class was created with enclosing_class == -1 and
-   class_ruby_name -- which builds the Ruby-visible name by walking that link
-   -- answered the bare leaf. `Probe::Block.name` was "Block" where a declared
-   `class Block` in the same module answered "Probe::Block" (#4271).
-   Registration keys on the leaf name either way; only the visible name moves.
-   Runs after walk_scope, so the enclosing module already has its class. */
-static void stamp_const_write_encl(Compiler *c, int id, int ci) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return;
-  const char *ty = nt_type(nt, id);
-  NodeKind ty_k = nt_kind(nt, id);
-  if (!ty) return;
-  if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
-    int mci = elab_header_class(c, id, NULL, NULL);
-    if (mci >= 0) ci = mci;
-  }
-  else if (ty_k == NK_ConstantWriteNode && ci >= 0)
-    nt_node_set_int((NodeTable *)nt, id, "sg_encl_class", ci);
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) stamp_const_write_encl(c, nt_ref_at(nt, id, i), ci);
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int m = 0; const int *ids = nt_arr_at(nt, id, i, &m);
-    for (int k = 0; k < m; k++) stamp_const_write_encl(c, ids[k], ci);
-  }
-}
-
 /* Is record call VAL the value of a constant path write (`A::B = Struct.new(:a)`)? */
 static int rs_path_write_value(const NodeTable *nt, int val) {
   for (int p = 0; p < nt->count; p++)
@@ -3696,50 +3697,22 @@ static int rs_path_write_value(const NodeTable *nt, int val) {
   return 0;
 }
 
+/* The members of the record classes (`Const = Struct.new(:a, :b)`, `k =
+   Data.define(:a)`), which the walk made at their writes (record_write_class):
+   one ivar, reader and (Struct) writer per member, onto the class the node ->
+   class map holds for the write. A class an earlier write of its name, or a
+   header, already made a Struct or Data keeps the members it has. */
 void register_structs(Compiler *c) {
   const NodeTable *nt = c->nt;
-  for (int r = 0; r < nt_nroots(nt); r++) stamp_const_write_encl(c, nt_root(nt, r), -1);   /* each file's tree */
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
     if (!ty) continue;
-    /* Const = Struct.new(:a, :b) */
-    if (ty_k == NK_ConstantWriteNode) {
-      const char *cname = nt_str(nt, id, "name");
-      int val = nt_ref(nt, id, "value");
-      if (!cname || !is_c_ident(cname) || !class_def_is_record_call(nt, val)) continue;
-      int ci = comp_class_index(c, cname);
-      if (ci >= 0) {
-        /* A `class D` reopening this constant pre-created a memberless class
-           (walk_scope runs first and does not know D is a Struct/Data), so its
-           methods could not resolve the generated readers. Register the members
-           onto that existing class instead of skipping it; guard against
-           re-registering an already-populated Struct/Data class. */
-        ClassInfo *ex = &c->classes[ci];
-        if (!ex->is_struct && !ex->is_data)
-          register_struct_members(c, ex, val);
-      }
-      else {
-        ClassInfo *ni = comp_class_new(c, cname, id);
-        int encl = (int)nt_int(nt, id, "sg_encl_class", -1);
-        if (encl >= 0 && encl < c->nclasses) ni->enclosing_class = encl;
-        register_struct_members(c, ni, val);
-      }
-    }
-    /* k = Struct.new(:a, :b): an anonymous struct class held in a local.
-       Synthesize a uniquely named class keyed to the WRITE node (def_node);
-       class_var_static_ci resolves the local's reads to it, so .new/.members
-       and the member accessors dispatch like the constant form. #inspect
-       omits the synthetic name (CRuby shows `#<struct a=1, b=2>`). */
-    else if (ty_k == NK_LocalVariableWriteNode) {
-      int val = nt_ref(nt, id, "value");
-      if (!class_def_is_record_call(nt, val)) continue;
-      char an[48];
-      snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
-      ClassInfo *cls = comp_class_new(c, an, id);
-      cls->is_anon_struct = 1;
-      c->anon_struct_ids_valid = 0;
-      register_struct_members(c, cls, val);
+    if (ty_k == NK_ConstantWriteNode || ty_k == NK_LocalVariableWriteNode) {
+      int val = class_def_record(nt, id), ci = val >= 0 ? elab_header_class(c, id, NULL, NULL) : -1;
+      if (ci < 0) continue;
+      ClassInfo *cls = &c->classes[ci];
+      if (!cls->is_struct && !cls->is_data) register_struct_members(c, cls, val);
     }
     /* Inline `Data.define(...).method(...)` / `Struct.new(...).method(...)`: the
        struct/data call is the receiver of another call, with no name to hold it.
@@ -3783,92 +3756,6 @@ void register_structs(Compiler *c) {
       if (ci >= 0) register_struct_members(c, &c->classes[ci], sup);
     }
   }
-}
-
-/* The body of a class's opening that is a Struct.new / Data.define block
-   (`Name = Struct.new(...) do ... end`, a local's too), else -1 */
-static int struct_block_body(const NodeTable *nt, const LrOpen *o) {
-  NodeKind k = nt_kind(nt, o->node);
-  return k == NK_ConstantWriteNode || k == NK_LocalVariableWriteNode ? o->body : -1;
-}
-
-/* Mark the nodes of a Struct.new / Data.define block as the body of class
-   `ci` (node_cbody), as walk_scope marks a class's: self there is the class
-   (self_class_body), not main nor a class the block is written in. A nested
-   class or module keeps its own, and so does a nested struct block: `blk`
-   maps each struct block's body to its class. */
-static void struct_block_cbody(Compiler *c, int node, int ci, const int *blk) {
-  const NodeTable *nt = c->nt;
-  if (node < 0 || node >= c->node_cap) return;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_ClassNode || k == NK_ModuleNode || (blk[node] >= 0 && blk[node] != ci)) return;
-  c->node_cbody[node] = ci;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) struct_block_cbody(c, nt_ref_at(nt, node, i), ci, blk);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0;
-    const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) struct_block_cbody(c, ids[j], ci, blk);
-  }
-}
-
-/* A define_method in a Struct block that the load phase does not apply
-   whenever the block runs (elab_def_applied: under a run-time condition,
-   in a loop, a case, a rescue) defines its method only when that code
-   runs. Its open history's entry answers a call (ver_named_one); it is
-   marked cond_lone, so that a question about the method by name is
-   refused (ver_refl_named). One left without a class is refused, as a def
-   there is. */
-static void struct_cond_dm_mark(Compiler *c, int ci) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  for (int s = 0; s < c->nscopes; s++) {
-    Scope *sc = &c->scopes[s];
-    int dn = sc->def_node;
-    if (sc->is_cmethod || dn < 0 || c->node_cbody[dn] != ci) continue;
-    if (nt_kind(nt, dn) != NK_CallNode || !is_define_method_name(nt_str(nt, dn, "name"))) continue;
-    if ((sc->class_id >= 0 && elab_def_applied(c, dn)) || nt_int(nt, dn, "dm_host", 0)) continue;   /* (dm_host: in a method's body) */
-    if (sc->class_id >= 0) { nt_node_set_int(nt, dn, "cond_lone", 1); continue; }
-    nt_node_set_int(nt, dn, "struct_cond_dm", 1);
-    nt_node_set_str(nt, dn, "name", "raise");
-    nt_node_set_ref(nt, dn, "receiver", -1);
-    nt_node_set_ref(nt, dn, "block", -1);
-    nt_node_set_ref(nt, dn, "arguments", -1);
-  }
-}
-
-/* What a Struct.new / Data.define block's class needs once register_structs
-   has made it, beyond the classes its methods take from the load record
-   (lr_def_owners): its nodes' class body, and the marks of a
-   define_method left under a condition. The record names the class each
-   block is a body of (elab_class_bodies); a node takes the innermost
-   struct block it is in, and the marks read that once every block is
-   marked. */
-void fix_struct_block_scopes(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int *blk = malloc(sizeof(int) * (size_t)(c->node_cap > 0 ? c->node_cap : 1));
-  if (!blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < c->node_cap; i++) blk[i] = -1;
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    int nb = 0;
-    const LrOpen *o = elab_class_bodies(c, ci, &nb);
-    for (int i = 0; i < nb; i++) {
-      int b = struct_block_body(nt, &o[i]);
-      if (b >= 0 && b < c->node_cap) blk[b] = ci;
-    }
-  }
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    int nb = 0;
-    const LrOpen *o = elab_class_bodies(c, ci, &nb);
-    for (int i = 0; i < nb; i++) struct_block_cbody(c, struct_block_body(nt, &o[i]), ci, blk);
-  }
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    int nb = 0;
-    const LrOpen *o = elab_class_bodies(c, ci, &nb);
-    for (int i = 0; i < nb; i++)
-      if (struct_block_body(nt, &o[i]) >= 0) { struct_cond_dm_mark(c, ci); break; }
-  }
-  free(blk);
 }
 
 /* A body statement that is, or holds under an if / unless, a write of `ivname` */

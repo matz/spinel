@@ -45,3 +45,28 @@ p Always === [1, 2], Always === nil
 class Lg; def self.===(o) = (puts "asked #{o.inspect}"; nil); end
 p(case 3 when Lg then :y else :n end)
 p Lg === 4
+
+# a class whose `===` only a `case` calls, with an Integer subject
+class OnlyCase; def self.===(o) = o.is_a?(Integer); end
+p(case 5 when OnlyCase then :y else :n end)
+r = case 6
+    in OnlyCase then :y
+    else :n
+    end
+p r
+
+# answers that are not true or false
+class Word; def self.===(o) = o =~ /^\w+$/; end
+p Word === "a b", Word === "ab"
+p(case "hello" when Word then :word else :no end)
+class Id; def self.===(o) = o; end
+p(case 1 when Id then :y else :n end)
+p(case nil when Id then :y else :n end)
+
+# a class held in an Array, whose `===` takes a value of one kind
+class Big; def self.===(o) = o > 2; end
+p Big === 5
+[Big, Integer].each { |k| p k === 3 }
+class Sym; def self.===(o) = o == "x" ? :yes : nil; end
+[Sym, Integer].each { |k| p [k === 3, k === "x"] }
+p [3, "x", "y"].grep(Sym)

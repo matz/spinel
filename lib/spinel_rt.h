@@ -13752,9 +13752,9 @@ static inline void sp_idset_check_big(sp_Bigint *v, const char *msg) { if (v) sp
    target is resolved inline via sp_class_le on the boxed object's cls_id. */
 extern const char *(*sp_user_exc_parent_fn)(const char *);  /* fwd: the program's exception parent table */
 static int (*sp_poly_is_a_hook)(sp_RbVal, sp_Class) = NULL;
-/* a class method `===` of the program's own: 1 when the class has one, its
-   answer, tested as `if` does, in *out (set by sp_tu_init) */
-static int (*sp_cmeth_eqq_hook)(sp_RbVal, sp_Class, sp_bool *) = NULL;
+/* a class method `===` of the program's own: 1 when the class has one, and
+   its answer, boxed, in *out (set by sp_tu_init) */
+static int (*sp_cmeth_eqq_hook)(sp_RbVal, sp_Class, sp_RbVal *) = NULL;
 static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (!cn) return FALSE;
   if (strcmp(cn, "BasicObject") == 0) return TRUE;
@@ -19581,8 +19581,8 @@ static sp_bool sp_range_cover_poly(sp_Range *r, sp_RbVal x) {
    covers numerics; everything else is value equality. */
 static sp_bool sp_poly_case_eq(sp_RbVal pat, sp_RbVal e) {
   if (pat.tag == SP_TAG_CLASS) {
-    sp_bool r;
-    if (sp_cmeth_eqq_hook && sp_cmeth_eqq_hook(e, sp_unbox_class(pat), &r)) return r;
+    sp_RbVal r;
+    if (sp_cmeth_eqq_hook && sp_cmeth_eqq_hook(e, sp_unbox_class(pat), &r)) return sp_poly_truthy(r);
     return sp_poly_is_a_hook ? (sp_bool)(sp_poly_is_a_hook(e, sp_unbox_class(pat)) != 0) : 0;
   }
   /* a String, a shared String, a Symbol or an object's #to_str; $~ is left
@@ -19613,6 +19613,14 @@ static sp_bool sp_poly_case_eq(sp_RbVal pat, sp_RbVal e) {
   if (sp_poly_is_strbuf(pat) || sp_poly_is_strbuf(e))
     return sp_poly_rb_equal(sp_poly_strbuf_deref(pat), sp_poly_strbuf_deref(e));
   return sp_poly_rb_equal(pat, e);
+}
+/* `pattern === element` as a value: a class method `===` of the program's
+   own answers what it answers (nil, a match index); the rest answer true or
+   false. */
+static sp_RbVal sp_poly_case_eq_val(sp_RbVal pat, sp_RbVal e) {
+  sp_RbVal r;
+  if (pat.tag == SP_TAG_CLASS && sp_cmeth_eqq_hook && sp_cmeth_eqq_hook(e, sp_unbox_class(pat), &r)) return r;
+  return sp_box_bool(sp_poly_case_eq(pat, e));
 }
 /* `pat === e` where CRuby's Regexp#=== sets $~: a `when` arm, an explicit
    ===. Every other pattern answers as sp_poly_case_eq. */

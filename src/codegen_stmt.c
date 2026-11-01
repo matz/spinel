@@ -10611,16 +10611,16 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
    (with no node, it answers 0). 0: no such method. */
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
   int mi = class_own_cmethod_eqq(c, ci);
-  if (mi < 0) return 0;
+  if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
   LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
   int raw = wp && wp->type == pt && pt != TY_POLY;
   int ret_ptr = needs_root(ws->ret) && !comp_ty_value_obj(c, ws->ret);
   if (!wp || (wp->type != TY_POLY && !raw) || ws->rest_idx >= 0 || ws->kwrest_idx >= 0 || ws->blk_param ||
-      ws->yields || (ws->ret != TY_BOOL && ws->ret != TY_POLY && ws->ret != TY_NIL && !ret_ptr)) {
+      ws->yields || ws->ret == TY_UNKNOWN) {
     if (node < 0) return 0;   /* (no node: leave it to the caller) */
-    unsupported_feature(c, node, "a class whose class method #=== takes or answers "
-                                 "a value this call cannot pass");
+    unsupported_feature(c, node, "a class whose class method #=== takes more than "
+                                 "one argument or a block");
     buf_puts(b, "0");
     return 1;
   }
@@ -10632,16 +10632,19 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   buf_puts(&cl, ")");
   const char *call = cl.p ? cl.p : "";
   /* boxed: the answer itself, as a boxed value */
+  int nil_ret = ws->ret == TY_NIL || ws->ret == TY_VOID;
   if (boxed) {
-    if (ws->ret == TY_NIL) buf_printf(b, "((void)%s, sp_box_nil())", call);
+    if (nil_ret) buf_printf(b, "((void)%s, sp_box_nil())", call);
     else if (ws->ret == TY_POLY) buf_puts(b, call);
-    else emit_boxed_text(c, ws->ret, call, b);
+    else emit_boxed_ret_call(c, ws, call, b);
   }
-  /* (a method that answers nil is called for what it does, and is false) */
+  /* (a method that answers nil is called for what it does, and is false;
+     any other answer is tested as `if` tests it) */
   else if (ws->ret == TY_POLY) buf_printf(b, "sp_poly_truthy(%s)", call);
-  else if (ret_ptr) buf_printf(b, "(NULL != %s)", call);
-  else if (ws->ret == TY_NIL) buf_printf(b, "((void)%s, 0)", call);
-  else buf_printf(b, "(%s)", call);
+  else if (ws->ret == TY_BOOL && !method_ret_is_oint(ws)) buf_printf(b, "(%s)", call);
+  else if (ret_ptr && !method_ret_is_oint(ws)) buf_printf(b, "(NULL != %s)", call);
+  else if (nil_ret) buf_printf(b, "((void)%s, 0)", call);
+  else { buf_puts(b, "sp_poly_truthy("); emit_boxed_ret_call(c, ws, call, b); buf_puts(b, ")"); }
   free(cl.p);
   return 1;
 }

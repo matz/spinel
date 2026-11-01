@@ -10785,6 +10785,15 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   wbas_share_begin(&changed, &any);
   IptWork w;
   ipt_work_begin(c, &w);
+  /* A class method `===` of the program's own is called by `when` and `in`
+     arms, grep and a class held as a value, with any kind of value: its
+     parameter takes a boxed value. */
+  for (int k = 0; k < c->nclasses; k++) {
+    int emi = class_own_cmethod_eqq(c, k);
+    if (emi < 0 || c->scopes[emi].nparams < 1) continue;
+    LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
+    if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
+  }
   const int *ids = NULL;
   int nids = nt->count;
   for (;;) {

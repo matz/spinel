@@ -16242,12 +16242,12 @@ static int program_has_own_cmethod_eqq(Compiler *c) {
    (grep, a boxed `case` subject, a class in an Array) for a class with its
    own class method `===`, which answers. */
 static void emit_cmeth_eqq_dispatch(Compiler *c, Buf *b) {
-  buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_bool *out) {\n"
+  buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_RbVal *out) {\n"
               "  SP_GC_ROOT_RBVAL(e);\n"
               "  switch (cl.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf t; memset(&t, 0, sizeof t);
-    if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 0, &t) && t.p)
+    if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, &t) && t.p)
       buf_printf(b, "    case %d: *out = %s; return 1;\n", k, t.p);
     free(t.p);
   }
@@ -16901,7 +16901,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
   if (g_needs_class_machinery)
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
   if (program_has_own_cmethod_eqq(c))
-    buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_bool *out);\n");
+    buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_RbVal *out);\n");
   buf_puts(b, "static inline void *sp_poly_unbox_cls(sp_RbVal v, int cls, const char *want);\n");
   if (program_has_arysub(c)) {
     buf_puts(b, "static int sp_bsub_cls_of(sp_RbVal v);\n");

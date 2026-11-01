@@ -29,3 +29,16 @@ asked 3
 :n
 asked 4
 nil
+:y
+:y
+nil
+0
+:word
+:y
+:n
+true
+true
+true
+[nil, :yes]
+[true, false]
+["x"]

@@ -1354,10 +1354,19 @@ void compute_reachable(Compiler *c, int typed) {
     int has_when = 0;
     for (int id = 0; id < c->nt->count && !has_when; id++) {
       NodeKind ty_k = nt_kind(c->nt, id);
-      if (ty_k == NK_WhenNode) has_when = 1;
+      /* (an `in Klass` arm calls a class method `===` of the program too) */
+      if (ty_k == NK_WhenNode || ty_k == NK_InNode) has_when = 1;
     }
     if (has_when) {
       MARK_NAME("==="); MARK_NAME("==");
+      /* a class method `===` of the program's own, which a `when Klass` or
+         `in Klass` arm calls once Klass is named */
+      for (int k = 0; k < c->nclasses; k++) {
+        int emi = class_own_cmethod_eqq(c, k);
+        if (emi < 0) continue;
+        char sk[24]; snprintf(sk, sizeof sk, "\x01%d", emi);
+        MARK_NAME(sk);
+      }
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); cr_live_scope(&lv, s, scope_calls[s], sc_n[s]); }
     }
   }

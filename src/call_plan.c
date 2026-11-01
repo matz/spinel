@@ -1033,6 +1033,15 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
   *first_def = def;
   return n;
 }
+/* Does call id sit in a block the record takes to run at once that its
+   call's typed target keeps (an_mark_kept_blocks)? It may then run any
+   time after its point. */
+static int ct_block_kept(Compiler *c, int id) {
+  int calls[64], n = elab_assumed_blocks(c, id, calls, 64);
+  for (int i = 0; i < n; i++)
+    if (nt_int(c->nt, calls[i], "blk_kept", 0)) return 1;
+  return 0;
+}
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
 static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {
@@ -1114,10 +1123,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabWindow w;
-  int at = p.region >= 0 ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
+  int kept = ct_block_kept(c, id);   /* (it runs at its point only if no block around it is kept) */
+  int at = p.region >= 0 && !kept ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
   if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
   else if (elab_call_window(c, id, &w) == ELAB_YES) {
+    if (kept) elab_window_open(c, &w);
     n = elab_method_span(c, rcls, name, sg, &w, ds, VER_MAX_ARMS);
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);
@@ -1138,7 +1149,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     dc = rcls;
   }
   else if (vi < 0) n = 0;
-  if (vi < 0 && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
+  if (vi < 0 && !kept && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
   if (span) *span = n;
   /* only a version that is a function of its own: a replaced one
@@ -1219,7 +1230,7 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
-  return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
+  return none && !ct_block_kept(c, id) && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
 }
 /* See call_plan.h. */

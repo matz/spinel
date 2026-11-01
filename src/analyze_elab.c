@@ -3888,6 +3888,24 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   return ELAB_YES;
 }
 
+int elab_assumed_blocks(Compiler *c, int id, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  int n = 0;
+  for (int a = id; a >= 0 && par[a] >= 0 && n < cap; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
+    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) out[n++] = par[a];
+  }
+  return n;
+}
+void elab_window_open(Compiler *c, ElabWindow *w) {
+  LoadRecord *r = elab_fresh(c);
+  lr_run_points(c);
+  w->to = (LoadPoint){ w->from.region, r->rend[w->from.region] };
+  w->closed = 0;
+}
+
 /* The owners whose histories can be in cls's ancestry: its superclass chain
    and the modules mixed into any of those, a module's own mixins too (at any
    time, so a superset of lr_in_ancestry's). -1 when that is not known: a

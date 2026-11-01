@@ -398,6 +398,13 @@ int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, L
    has no point there (a file the load graph does not place). */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
+/* ...and the calls whose blocks around node id the record takes to run at
+   once (ELAB_BLK_ASSUMED), innermost first, into out[0..cap): their count.
+   Where the typed call target keeps one (Call node `blk_kept`), node id may
+   run any time after its point: elab_window_open widens w to its region's
+   end. */
+int elab_assumed_blocks(Compiler *c, int id, int *out, int cap);
+void elab_window_open(Compiler *c, ElabWindow *w);
 /* the versions of cls's method `name` (singleton when sg) a call running
    over window w can reach, each once, into out[0..cap) (NULL: none): the
    one live over each stretch of w between changes of the name on cls's

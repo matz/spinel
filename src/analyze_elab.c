@@ -85,9 +85,9 @@ enum { LR_LATE = 1, LR_BODY = 2 };   /* runs later: in a method body, a lambda o
 /* A method the walk has recorded a version of that CRuby tells its class
    (sg: its singleton's) the hook of: recorded as the statement it stands in
    is (lr_method), consumed as the scope walk leaves that statement
-   (elab_fire_after). kind is the version's LrKind, node the form that made
-   it (a def, a call), name the method's. */
-typedef struct { int stmt, cls, node; unsigned char sg, kind; char *name; } LrEvent;
+   (elab_fire_after). kind is the version's LrKind, vis its visibility, node
+   the form that made it (a def, a call), name the method's. */
+typedef struct { int stmt, cls, node; unsigned char sg, kind, vis; char *name; } LrEvent;
 
 /* A def of the program's, by its name (LoadRecord.defs) */
 typedef struct { const char *name; int node; } LrSite;
@@ -1406,7 +1406,7 @@ static int lr_def_scope(const LoadRecord *r, int node) {
    module_function one also copies it to the singleton */
 static int lr_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p);
 
-static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind, int node);
+static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind, int node, int vis);
 
 /* ...: a definition of initialize and its kin is private wherever it
    stands, and an alias, or an alias's forwarder (lr_def), takes its
@@ -1422,10 +1422,10 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   if (ov >= 0) vis = ov;
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
   lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced, .scope = sc });
-  lr_event(x, cls, sg, name, kind, node);
+  lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION) {
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced });
-    lr_event(x, cls, 1, name, LR_COPY, node);
+    lr_event(x, cls, 1, name, LR_COPY, node, SP_VIS_PUBLIC);
   }
 }
 
@@ -4883,7 +4883,7 @@ static void lr_fire_inherited(Compiler *c, int node) {
    entry of its own, which elab_fire_after decides. */
 static const char *lr_event_form(LrKind kind) {
   switch (kind) {
-    case LR_DEF: case LR_DEFINE_METHOD: case LR_READER: case LR_WRITER: case LR_ALIAS: return "define_method";
+    case LR_DEF: case LR_DEFINE_METHOD: case LR_READER: case LR_WRITER: case LR_ALIAS: case LR_VIS: return "define_method";
     case LR_COPY: return "module_function";
     default: return NULL;
   }
@@ -4911,10 +4911,10 @@ static int lr_event_hooks(Compiler *c) {
    (ElabRec.cur) whose hook the program may define, noted for the scope walk
    to fire as it leaves the statement. Only a version on the class whose
    body stands: its `self` names the receiver. */
-static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind, int node) {
+static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind, int node, int vis) {
   LoadRecord *r = x->r;
   const char *hook = lr_event_hook(kind, sg);
-  if (x->unplaced || !r->walk || !hook || !name || cls < 0 || cls != x->cfc || x->cfs != LR_FS_NONE ||
+  if (x->unplaced || !r->walk || !hook || !name || cls < 0 || cls != x->cfc || (x->cfs != LR_FS_NONE && !(x->cfs == LR_FS_SCLASS && sg)) ||
       !lr_named(x->c, hook)) return;   /* (a hook the program defines nowhere is the core's no-op) */
   /* a conditional def is its branches' arms (named `m#__condN`), which run
      where the branch does, and a dispatcher that is no def of the program's:
@@ -4928,20 +4928,8 @@ static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind,
   memcpy(copy, name, len);
   copy[len] = 0;
   r->ev[r->nev].name = copy;
-  r->ev[r->nev].stmt = x->cur; r->ev[r->nev].cls = cls; r->ev[r->nev].node = node; r->ev[r->nev].sg = (unsigned char)sg; r->ev[r->nev].kind = (unsigned char)kind;
+  r->ev[r->nev].stmt = x->cur; r->ev[r->nev].cls = cls; r->ev[r->nev].node = node; r->ev[r->nev].sg = (unsigned char)sg; r->ev[r->nev].kind = (unsigned char)kind; r->ev[r->nev].vis = (unsigned char)vis;
   r->nev++;
-}
-
-/* Is the form at node `form` the statement itself, or an argument of the
-   call that is (`private def m`, `memoize def m`, `private attr_accessor
-   :a`)? A form deeper in a statement (a def used as a value) runs before the
-   rest of its statement, whose effects the hook would follow. */
-static int lr_form_leads(const NodeTable *nt, int stmt, int form) {
-  if (form == stmt) return 1;
-  int an = nt_kind(nt, stmt) == NK_CallNode ? nt_ref(nt, stmt, "arguments") : -1, n = 0;
-  const int *v = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
-  for (int i = 0; i < n; i++) if (v[i] == form) return 1;
-  return 0;
 }
 
 /* A node naming the class or module the header, or the class builder's write
@@ -4964,6 +4952,38 @@ static int lr_frame_const(Compiler *c, int def) {
   return r;
 }
 
+/* The receiver of a hook call after a statement in the body of `frame` (the
+   header of a class or module, a class builder's write, or a `class << X`):
+   the constant the class, module or builder is written under (lr_frame_const;
+   -1, a bare call, for a body with none), or, in a singleton class's body, the
+   constant `class << K` names, or, for `class << self`, the one the class
+   around it is written under (self is the singleton class there). -2 for none
+   to be had. */
+static int lr_hook_recv(Compiler *c, int frame) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_kind(nt, frame) != NK_SingletonClassNode) return lr_frame_const(c, frame);
+  int ex = nt_ref(nt, frame, "expression"), recv = -1;
+  if (nt_kind(nt, ex) == NK_SelfNode) {
+    const LrStmt *s = lr_stmt_of(c->lrec, frame);
+    int up = s && s->frame >= 0 ? c->lrec->st[s->frame].node : -1;
+    recv = up >= 0 && class_def_opens_frame(nt, up) ? lr_frame_const(c, up) : -1;
+  }
+  else if (nt_kind(nt, ex) == NK_ConstantReadNode || nt_kind(nt, ex) == NK_ConstantPathNode) recv = nt_clone_subtree(nt, ex);
+  return recv < 0 ? -2 : recv;
+}
+
+/* Is the form at node `form` the statement itself, or an argument of the
+   call that is (`private def m`, `memoize def m`, `private attr_accessor
+   :a`)? A form deeper in a statement (a def used as a value) runs before the
+   rest of its statement, whose effects the hook would follow. */
+static int lr_form_leads(const NodeTable *nt, int stmt, int form) {
+  if (form == stmt) return 1;
+  int an = nt_kind(nt, stmt) == NK_CallNode ? nt_ref(nt, stmt, "arguments") : -1, n = 0;
+  const int *v = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+  for (int i = 0; i < n; i++) if (v[i] == form) return 1;
+  return 0;
+}
+
 /* Is `hook` live on cls's singleton at p, or may it be: the record says so or
    does not know, or code it cannot follow ran on cls or a superclass before
    p (a class method that defines one), in a program that defines a method of
@@ -4977,9 +4997,10 @@ static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, con
 }
 
 /* The hook calls for the versions statement list[j] added, spliced after it:
-   `C.method_added(:name)` (`C.__send__(:singleton_method_added, :name)`) for each hook live on the class at
-   the point just after the statement. The walk reaches them next, as the
-   statements after it in the list. The number spliced. */
+   `C.method_added(:name)`, or `C.__send__(:singleton_method_added, :name)`
+   (BasicObject's: a send reaches a top-level def of the name), for each hook
+   live on the class at the point just after the statement. The walk reaches
+   them next, as the statements after it in the list. The number spliced. */
 int elab_fire_after(Compiler *c, int list, int j) {
   LoadRecord *r = c->lrec;
   NodeTable *nt = (NodeTable *)c->nt;
@@ -4994,7 +5015,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
   if (e < 0 || r->st[e].node != node || elab_stmt_list(c, node, &frame) != list) return 0;
   /* in a class or module body, or a class builder's block: a class_eval
      block run in a frame of its own (a top-level one) has the caller's self */
-  int body = frame >= 0 && class_def_opens_frame(nt, frame);
+  int body = frame >= 0 && (class_def_opens_frame(nt, frame) || nt_kind(nt, frame) == NK_SingletonClassNode);
   int first = r->nev;
   while (first > 0 && r->ev[first - 1].stmt >= e) first--;
   int *calls = malloc(sizeof(int) * (size_t)(r->nev - first + 1)), n = 0;
@@ -5008,8 +5029,16 @@ int elab_fire_after(Compiler *c, int list, int j) {
     /* a hook the record has only as the copy `extend self` stands for is
        not one it can place: it runs where the extend does (the mixin form's) */
     if (live && d && nt_int(nt, d->node, "extend_self", 0)) live = 0;
-    if (live) {
-      int recv = lr_frame_const(c, frame), mod = recv >= 0 && is_module_hook_name(hook);
+    /* a visibility word gives the class an entry of its own, and calls the
+       hook, only for a method it does not hold itself and whose visibility
+       it changes */
+    if (live && v->kind == LR_VIS) {
+      int was = elab_method_vis_at(c, v->cls, v->name, 0, (LoadPoint){ p.region, e, -1 });
+      live = !v->sg && elab_own_method_at(c, v->cls, v->name, p) == ELAB_NO && was >= 0 && was != v->vis;
+    }
+    int recv = live ? lr_hook_recv(c, frame) : -2;
+    if (recv > -2) {
+      int mod = recv >= 0 && is_module_hook_name(hook);
       calls[n] = lr_hook_call(c, node, mod ? -1 : recv, hook, 0, v->name);
       if (mod) {   /* (a class body's call of its own class method: C.m, still a call on self) */
         nt_node_set_ref(nt, calls[n], "receiver", recv);

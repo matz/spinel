@@ -1,0 +1,18 @@
+ma m1
+ma own
+sma singleton_method_added
+sma x
+nsma a
+nsma b
+Child added own
+Child added inh
+Sing sadded singleton_method_added
+Sing sadded a
+Sing sadded c
+Built sadded singleton_method_added
+Built sadded x
+Nested ma a
+Mixin sadded singleton_method_added
+Mixin sadded y
+Pathed ma b
+done

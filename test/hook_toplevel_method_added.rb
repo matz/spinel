@@ -21,6 +21,22 @@ class Hooked
   def self.x; end
 end
 
+# a class or module a builder makes: the same
+Built = Class.new do
+  def self.singleton_method_added(n) = puts("Built sma #{n}")
+  def self.method_added(n) = puts("Built ma #{n}")
+  def b; end
+  def self.y; end
+end
+Sub = Class.new(Hooked) do
+  def self.z; end
+end
+Mixin = Module.new do
+  def self.singleton_method_added(n) = puts("Mixin sma #{n}")
+  def self.method_added(n) = puts("Mixin ma #{n}")
+  def c; end
+end
+
 Plain.send(:singleton_method_added, :q)
 Plain.__send__(:singleton_method_added, :r)
 puts "done"

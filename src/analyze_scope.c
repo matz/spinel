@@ -1587,13 +1587,17 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
         WalkCtx bw = w;
         bw.pos = elab_child(c, id, sbody, &w.pos);
         if (nt_kind(c->nt, sbody) != NK_StatementsNode) elab_walk_rest(c, sbody, bw.pos);
-        int n = 0;
-        const int *stmts = nt_arr(c->nt, sbody, "body", &n);
-        for (int k = 0; k < n; k++) {
+        /* read again at each step: the hooks its definitions call are
+           spliced after them (elab_fire_after) */
+        for (int k = 0;; k++) {
+          int n = 0;
+          const int *stmts = nt_arr(c->nt, sbody, "body", &n);
+          if (k >= n) break;
           int s = stmts[k];
           const char *sty = nt_type(c->nt, s);
           if (!sty) continue;
           sclass_walk_child(c, sbody, s, &bw, target_class, 0, native_reopen ? sexpr : -1, class_id);
+          if (nt_kind(c->nt, sbody) == NK_StatementsNode) elab_fire_after(c, sbody, k);
         }
         c->nscope[id] = scope_idx;
         c->nscope[sbody] = scope_idx;

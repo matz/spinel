@@ -1172,6 +1172,14 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
 }
+/* See call_plan.h. */
+int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
+  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD)) return 0;
+  int framed = elab_plan_enter(c, id);
+  int now = elab_blocks_run_now(c, id);
+  if (framed) elab_plan_leave(c);
+  return now;
+}
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
    in a method of main's own; not in a top-level `def`, which runs on whatever

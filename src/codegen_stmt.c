@@ -20994,6 +20994,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     /* a boxed constant slot (widened under promote, or a union) takes the
        value boxed, as the plain ConstantWriteNode does */
     else if (cv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
+    /* `Mod::X = Array.new(n) { Obj.new }` into an object table builds in
+       place at the slot's kind, as the plain ConstantWriteNode does. */
+    else if (ty_is_ptr_array(cv->type) && emit_ptr_array_build(c, v, cv->type, b)) { }
     else if (val_t < 0 && one_str_to_open(b, cv->type, "cst_%s", nm)) { emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, ";\n");

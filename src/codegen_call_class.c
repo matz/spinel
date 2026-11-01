@@ -4221,10 +4221,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        the receiver class among its ancestors. Only for a user-class receiver --
        the primitive type names (Integer === 5, Comparable === 5) have their own
        tag-based fold elsewhere, which this must not shadow. */
-    if (sp_streq(name, "===") && argc == 1) {
-      NodeKind rvt2_k = nt_kind(nt, recv);
-      const char *rcn2 = ((rvt2_k == NK_ConstantReadNode ||
-                                   rvt2_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
+    /* (a class method `===` of the program's own, which the call's plan
+       names, answers instead: emit_call_cmethod_arms calls it) */
+    NodeKind rvt2_k = nt_kind(nt, recv);
+    const char *rcn2 = ((rvt2_k == NK_ConstantReadNode ||
+                                 rvt2_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
+    const CallPlan *eqp = rcn2 && sp_streq(name, "===") && argc == 1 ? cplan_user(c, id) : NULL;
+    if (sp_streq(name, "===") && argc == 1 && !(eqp && eqp->mi >= 0 && eqp->via == UC_CMETH)) {
       if (rcn2 && (comp_class_index(c, rcn2) >= 0 ||
                    is_boolean_class_name(rcn2) ||
                    /* the roots: every object is one, and `Object === x` used to
@@ -4265,9 +4268,34 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          literal became a parameter. */
       if (!rcn2) {
         int o = ++g_tmp;
+        /* A class with its own class method `===` answers with it. The
+           value is passed as is when the method's parameter has its type,
+           boxed when the parameter is boxed. (A class whose method takes
+           another type is left to is_a?.) The answer is boxed when one of
+           those methods answers more than true or false. */
+        TyKind at = infer_type(c, argv[0]);
+        int own = 0, bx = class_eqq_answers_value(c);
+        for (int k = 0; k < c->nclasses && !own; k++) own = class_own_cmethod_eqq(c, k) >= 0;
         buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
-        buf_printf(b, "; sp_RbVal _t%d = ", o); emit_boxed(c, argv[0], b);
-        buf_printf(b, "; sp_poly_is_a(_t%d, _cl%d); })", o, _clt);
+        if (own && at != TY_POLY && at != TY_UNKNOWN && !needs_root(at)) {
+          buf_printf(b, "; %s _a%d = ", c_type_name(at), o); emit_expr(c, argv[0], b);
+          char aref[24]; snprintf(aref, sizeof aref, "_a%d", o);
+          buf_printf(b, "; sp_RbVal _t%d = ", o); emit_boxed_text(c, at, aref, b);
+        }
+        else { at = TY_POLY; buf_printf(b, "; sp_RbVal _t%d = ", o); emit_boxed(c, argv[0], b); }
+        int sw = 0;
+        char sref[24]; snprintf(sref, sizeof sref, at == TY_POLY ? "_t%d" : "_a%d", o);
+        for (int k = 0; k < c->nclasses && own; k++) {
+          Buf t; memset(&t, 0, sizeof t);
+          if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
+            if (!sw) { buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (_cl%d.cls_id) { ", o, bx ? "sp_RbVal" : "sp_bool", o, _clt); sw = 1; }
+            buf_printf(b, "case %d: _r%d = %s; break; ", k, o, t.p);
+          }
+          free(t.p);
+        }
+        if (sw) buf_printf(b, bx ? "default: _r%d = sp_box_bool(sp_poly_is_a(_t%d, _cl%d)); } _r%d; })"
+                                 : "default: _r%d = sp_poly_is_a(_t%d, _cl%d); } _r%d; })", o, o, _clt, o);
+        else buf_printf(b, bx ? "; sp_box_bool(sp_poly_is_a(_t%d, _cl%d)); })" : "; sp_poly_is_a(_t%d, _cl%d); })", o, _clt);
         return 1;
       }
     }

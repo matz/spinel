@@ -7281,6 +7281,7 @@ void emit_class_val_when(const char *cn, int t, Buf *b) {
 
 static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp, Buf *b);
 static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b);
+static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b);
 /* Both class-condition routes retain a read under a view. A declined
    condition must also discard its prefix, so its caller can refuse it.
    A non-NULL tmp is the poly when caller's named boxed scrutinee; the
@@ -8172,6 +8173,8 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
   if (pk == NK_ConstantReadNode) {
     const char *cn2 = nt_str(nt, pat, "name");
     if (!cn2) return 0;
+    /* (a class method `===` of the program's own answers, as in `when`) */
+    if (emit_when_class_cmethod_eq(c, pat, t, pt, b)) return 1;
     if (pt == TY_POLY) {
       char tmp[32]; snprintf(tmp, sizeof tmp, "_t%d", t);
       if (!emit_poly_class_when(c, pat, tmp, b)) buf_puts(b, "0");
@@ -10601,6 +10604,55 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
   }
 }
 
+/* Call class `ci`'s own class method `===` (see class_own_cmethod_eqq) with
+   the value in C variable `subj` of type `pt`, and test the answer as `if`
+   does. The value is boxed when the method's parameter is. A method that
+   takes or answers a value this call cannot pass is refused at `node`
+   (with no node, it answers 0). 0: no such method. */
+int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
+  int mi = class_own_cmethod_eqq(c, ci);
+  if (mi < 0) return 0;
+  Scope *ws = &c->scopes[mi];
+  LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
+  int raw = wp && wp->type == pt && pt != TY_POLY;
+  int ret_ptr = needs_root(ws->ret) && !comp_ty_value_obj(c, ws->ret);
+  if (!wp || (wp->type != TY_POLY && !raw) || ws->rest_idx >= 0 || ws->kwrest_idx >= 0 || ws->blk_param ||
+      ws->yields || (ws->ret != TY_BOOL && ws->ret != TY_POLY && ws->ret != TY_NIL && !ret_ptr)) {
+    if (node < 0) return 0;   /* (no node: leave it to the caller) */
+    unsupported_feature(c, node, "a class whose class method #=== takes or answers "
+                                 "a value this call cannot pass");
+    buf_puts(b, "0");
+    return 1;
+  }
+  Buf cl; memset(&cl, 0, sizeof cl);
+  buf_printf(&cl, "%s(", mc_method(c, ws));
+  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, &cl));
+  if (raw || pt == TY_POLY) buf_puts(&cl, subj);
+  else emit_boxed_text(c, pt, subj, &cl);
+  buf_puts(&cl, ")");
+  const char *call = cl.p ? cl.p : "";
+  /* boxed: the answer itself, as a boxed value */
+  if (boxed) {
+    if (ws->ret == TY_NIL) buf_printf(b, "((void)%s, sp_box_nil())", call);
+    else if (ws->ret == TY_POLY) buf_puts(b, call);
+    else emit_boxed_text(c, ws->ret, call, b);
+  }
+  /* (a method that answers nil is called for what it does, and is false) */
+  else if (ws->ret == TY_POLY) buf_printf(b, "sp_poly_truthy(%s)", call);
+  else if (ret_ptr) buf_printf(b, "(NULL != %s)", call);
+  else if (ws->ret == TY_NIL) buf_printf(b, "((void)%s, 0)", call);
+  else buf_printf(b, "(%s)", call);
+  free(cl.p);
+  return 1;
+}
+
+/* `when Klass` where Klass (or a class above it) defines its own class
+   method `===`: the arm calls it with the subject. 0: no such method. */
+static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
+  char sref[24]; snprintf(sref, sizeof sref, "_t%d", t);
+  return emit_class_cmethod_eqq(c, const_node_class_index(c, cond), sref, pt, cond, 0, b);
+}
+
 static int when_boxed_has_user_arm(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
     if (when_boxed_arm_class(c, k)) return 1;
@@ -11089,6 +11141,10 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
         /* ...and so is a builtin's value constant (`Socket::AF_INET`,
            `File::SEPARATOR`): typed a number or a String, not a class */
         if (cn2 && when_builtin_value_const(c, conds[j])) cn2 = NULL;
+        /* a class whose own class method `===` (or an ancestor's) answers
+           `when Klass`: that method with the subject, as CRuby calls it */
+        if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
+        else {
         int effect = cn2 && pt != TY_POLY ? emit_const_read_prefix(c, conds[j], b) : 0;
         if (cn2 && pt == TY_POLY) {
             char tmp[32]; snprintf(tmp, sizeof tmp, "_t%d", t);
@@ -11173,6 +11229,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
           }
           } /* close non-ConstantReadNode else */
           if (effect) buf_puts(b, ")");
+        } /* close the class-method `===` else */
           } /* close else { int reidx... } */
         }
       }
@@ -11527,6 +11584,10 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         /* ...and so is a builtin's value constant (`Socket::AF_INET`,
            `File::SEPARATOR`): typed a number or a String, not a class */
         if (cn2 && when_builtin_value_const(c, conds[j])) cn2 = NULL;
+        /* a class whose own class method `===` (or an ancestor's) answers
+           `when Klass`: that method with the subject, as CRuby calls it */
+        if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
+        else {
         int effect = cn2 && pt != TY_POLY ? emit_const_read_prefix(c, conds[j], b) : 0;
         if (cn2 && pt == TY_POLY) {
           char tmp[32]; snprintf(tmp, sizeof tmp, "_t%d", t);
@@ -11586,6 +11647,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         else emit_case_obj_eq(c, conds[j], t, pt, b);
         } /* close non-ConstantReadNode else */
         if (effect) buf_puts(b, ")");
+        } /* close the class-method `===` else */
       }
       else {
         buf_puts(b, "(");

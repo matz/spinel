@@ -16231,6 +16231,29 @@ static int user_init_copy_scope(Compiler *c, int k, int *defcls) {
   return mi;
 }
 
+/* Does a class of the program define its own class method `===`? */
+static int program_has_own_cmethod_eqq(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_own_cmethod_eqq(c, k) >= 0) return 1;
+  return 0;
+}
+
+/* sp_cmeth_eqq_dispatch (sp_cmeth_eqq_hook): `klass === x` on boxed values
+   (grep, a boxed `case` subject, a class in an Array) for a class with its
+   own class method `===`, which answers. */
+static void emit_cmeth_eqq_dispatch(Compiler *c, Buf *b) {
+  buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_bool *out) {\n"
+              "  SP_GC_ROOT_RBVAL(e);\n"
+              "  switch (cl.cls_id) {\n");
+  for (int k = 0; k < c->nclasses; k++) {
+    Buf t; memset(&t, 0, sizeof t);
+    if (class_own_cmethod_eqq(c, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 0, &t) && t.p)
+      buf_printf(b, "    case %d: *out = %s; return 1;\n", k, t.p);
+    free(t.p);
+  }
+  buf_puts(b, "    default: return 0;\n  }\n}\n");
+}
+
 static void emit_user_init_copy_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static void sp_user_init_copy_dispatch(sp_RbVal copy, sp_RbVal orig) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "copy");
@@ -16877,6 +16900,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_arysub_dup_dispatch(sp_RbVal v, int keep_frozen, sp_bool *handled);\n");
   if (g_needs_class_machinery)
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
+  if (program_has_own_cmethod_eqq(c))
+    buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_bool *out);\n");
   buf_puts(b, "static inline void *sp_poly_unbox_cls(sp_RbVal v, int cls, const char *want);\n");
   if (program_has_arysub(c)) {
     buf_puts(b, "static int sp_bsub_cls_of(sp_RbVal v);\n");
@@ -16992,6 +17017,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  SP_INSTALL_HOOK(sp_obj_hash_hook, sp_gen_obj_hash);\n  SP_INSTALL_HOOK(sp_obj_eql_hook, sp_gen_obj_eql);\n");
   if (g_gen_obj_valeq)
     buf_puts(b, "  SP_INSTALL_HOOK(sp_obj_eq_hook, sp_obj_eq_dispatch);\n");
+  if (program_has_own_cmethod_eqq(c))
+    buf_puts(b, "  sp_cmeth_eqq_hook = sp_cmeth_eqq_dispatch;\n");
   if (exc_has_user_msg_override(c))
     buf_puts(b, "  sp_user_exc_to_s_fn = sp_user_exc_to_s;\n  sp_user_exc_message_fn = sp_user_exc_message;\n");
   if (c->bivar_table)
@@ -22335,6 +22362,7 @@ char *codegen_program(const NodeTable *nt) {
   if (g_has_user_to_io) emit_user_to_io_dispatch(c, body);
   if (g_has_user_init_copy) emit_user_init_copy_dispatch(c, body);
   if (program_has_arysub(c)) emit_arysub_dup_dispatch(c, body);
+  if (program_has_own_cmethod_eqq(c)) emit_cmeth_eqq_dispatch(c, body);
   /* Struct/Data value-== hook (after the class struct definitions). */
   if (g_gen_obj_valeq) emit_obj_valeq_dispatch(c, body);
   /* Hash-key hooks (after the user #hash/#eql? definitions they call). */

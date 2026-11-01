@@ -13752,6 +13752,9 @@ static inline void sp_idset_check_big(sp_Bigint *v, const char *msg) { if (v) sp
    target is resolved inline via sp_class_le on the boxed object's cls_id. */
 extern const char *(*sp_user_exc_parent_fn)(const char *);  /* fwd: the program's exception parent table */
 static int (*sp_poly_is_a_hook)(sp_RbVal, sp_Class) = NULL;
+/* a class method `===` of the program's own: 1 when the class has one, its
+   answer, tested as `if` does, in *out (set by sp_tu_init) */
+static int (*sp_cmeth_eqq_hook)(sp_RbVal, sp_Class, sp_bool *) = NULL;
 static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (!cn) return FALSE;
   if (strcmp(cn, "BasicObject") == 0) return TRUE;
@@ -19577,8 +19580,11 @@ static sp_bool sp_range_cover_poly(sp_Range *r, sp_RbVal x) {
    sp_tu_init when the program carries it); Regexp matches a String; a Range
    covers numerics; everything else is value equality. */
 static sp_bool sp_poly_case_eq(sp_RbVal pat, sp_RbVal e) {
-  if (pat.tag == SP_TAG_CLASS)
+  if (pat.tag == SP_TAG_CLASS) {
+    sp_bool r;
+    if (sp_cmeth_eqq_hook && sp_cmeth_eqq_hook(e, sp_unbox_class(pat), &r)) return r;
     return sp_poly_is_a_hook ? (sp_bool)(sp_poly_is_a_hook(e, sp_unbox_class(pat)) != 0) : 0;
+  }
   /* a String, a shared String, a Symbol or an object's #to_str; $~ is left
      alone, as grep's is */
   if (pat.tag == SP_TAG_OBJ && pat.cls_id == SP_BUILTIN_REGEX) {

@@ -1,0 +1,31 @@
+true
+false
+false
+true
+true
+true
+false
+[Foo, true, false, false]
+[Baz, false, false, true]
+[Kid, true, false, false]
+[Integer, true, true, false]
+true
+true
+false
+:other
+:str
+:foo
+:baz
+:arr
+:in_foo
+[3, 8]
+2
+true
+false
+:m
+true
+true
+asked 3
+:n
+asked 4
+nil

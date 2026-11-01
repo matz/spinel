@@ -5837,6 +5837,26 @@ static int cls_value_sg_accessor_any(Compiler *c, const char *name, int argc) {
 
 
 /* A Class receiver, Class and Module reflection, and the declarations of a class body (infer_call_inner's rules, in their order) */
+/* The class method `===` that class `ci` (or a class above it) defines in
+   the program, or -1. A builtin row's own `===` does not count. */
+int class_own_cmethod_eqq(Compiler *c, int ci) {
+  int mi = ci >= 0 ? comp_cmethod_in_chain(c, ci, "===", NULL) : -1;
+  if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 ||
+      nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return -1;
+  return mi;
+}
+
+/* Does a class method `===` of the program answer a value other than
+   true or false? Then `klass === x`, with the class known only at run time,
+   answers a boxed value. */
+int class_eqq_answers_value(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = class_own_cmethod_eqq(c, k);
+    if (mi >= 0 && c->scopes[mi].ret != TY_BOOL && c->scopes[mi].ret != TY_UNKNOWN) return 1;
+  }
+  return 0;
+}
+
 static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind *out) {
   /* k = Struct.new(:a, :b): the value IS the synthesized anonymous struct
      class, as a first-class class object */
@@ -5904,6 +5924,16 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     /* #superclass is a (nullable) class value: BasicObject's is the nil-class
        sentinel, carried within TY_CLASS (#2654). */
     if (argc == 0 && sp_streq(name, "superclass")) { *out = TY_CLASS; return 1; }
+    /* a class method `===` of the program's own answers what it answers:
+       named, that method's answer; a class value, boxed when one of them
+       answers more than true or false */
+    if (argc == 1 && sp_streq(name, "===")) {
+      int eci = nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode
+                ? const_node_class_index(c, recv) : -2;
+      int emi = eci >= 0 ? class_own_cmethod_eqq(c, eci) : -1;
+      if (emi >= 0 && c->scopes[emi].ret != TY_UNKNOWN) { *out = c->scopes[emi].ret; return 1; }
+      if (eci == -2 && class_eqq_answers_value(c)) { *out = TY_POLY; return 1; }
+    }
     if (argc == 1 && (sp_streq(name, "==") || sp_streq(name, "eql?") || sp_streq(name, "!=") ||
                       sp_streq(name, "==="))) { *out = TY_BOOL; return 1; }
     /* Class ordering is tri-state: true/false when related, nil when the two
@@ -6975,9 +7005,11 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_kind(nt, recv) == NK_RegularExpressionNode)
     { *out = TY_BOOL; return 1; }
-  /* Class.===(obj) is always bool */
+  /* Class.===(obj) is bool, but for a class method `===` of the program's
+     own, which answers what it answers */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
-      nt_kind(nt, recv) == NK_ConstantReadNode)
+      nt_kind(nt, recv) == NK_ConstantReadNode &&
+      class_own_cmethod_eqq(c, const_node_class_index(c, recv)) < 0)
     { *out = TY_BOOL; return 1; }
 
   if ((is_unary_sign(name)) && recv >= 0 && argc == 0) {

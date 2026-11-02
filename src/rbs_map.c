@@ -687,9 +687,15 @@ else {
             /* `self` (or `instance`): an instance of the class the method is written in,
              * as the extractor's `-> self` return is (a reopened builtin's
              * obj_ tag is read as that builtin's kind); in `class Object`
-             * any value, as `Object` is */
+             * any value, as `Object` is. In a top-level builtin with a
+             * kind of its own (`class String`) it is that kind, the token
+             * the class's name maps to, so `-> self` there agrees with an
+             * `-> String` the .rbs writes; a nested `A::String` or a
+             * `My_String` keeps its obj_ tag. */
             if (g_self_type == NULL) return false;
             if (strcmp(g_self_type, "Object") == 0) { sbuf_set(out, "poly", 4); return true; }
+            const char *prim = strchr(g_self_type, '_') ? NULL : primitive_tag(g_self_type, strlen(g_self_type));
+            if (prim != NULL) { sbuf_set(out, prim, strlen(prim)); return true; }
             sbuf_set(out, "obj_", 4);
             sbuf_append_cstr(out, g_self_type);
             return true;

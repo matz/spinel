@@ -1,0 +1,12 @@
+# self_types.rb's signatures with the class named where it writes `self`:
+# in `class String` that is String, so both say the same thing.
+class String
+  def tidy!: (untyped) -> String
+  def filled: (untyped) -> String?
+  def cut: (Integer, ?Hash[Symbol, top]) -> untyped
+end
+
+class Counter
+  def bump: (untyped) -> Counter
+  def positive: (untyped) -> Counter?
+end

@@ -38131,7 +38131,8 @@ static int sg_civ_reader_call(Compiler *c, int v) {
    nil, and a walk that gave up may be */
 static int nullable_int_leaf(const VpLeaf *leaf, void *ud) {
   if (leaf->kind == VPK_NIL || leaf->kind == VPK_GAVE_UP) return 1;
-  return nullable_int_value(ud, leaf->node);
+  /* (an arm that raises gives no value: an_call_diverges) */
+  return !an_call_diverges(ud, leaf->node) && nullable_int_value(ud, leaf->node);
 }
 int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;

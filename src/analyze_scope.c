@@ -4566,12 +4566,21 @@ void register_aliases(Compiler *c) {
   free(a);
 }
 
-/* Each class's undefs, from the load record (elab_entries) */
+/* Each class's undefs, from the load record (elab_entries), in the order
+   the load phase runs them: a definition of the name on the same class side
+   after the undef defines it again (`undef a; def a = 10`), so only an undef
+   no later definition follows leaves the class without the method. */
 void register_undefs(Compiler *c) {
   int n = 0;
-  ElabEntry *a = elab_entries(c, 1u << LR_UNDEF, &n);
-  for (int i = 0; i < n; i++)
-    if (a[i].cls >= 0 && !a[i].sg) comp_add_undef(&c->classes[a[i].cls], a[i].name);
+  ElabEntry *a = elab_entries(c, 1u << LR_UNDEF | 1u << LR_DEF | 1u << LR_DEFINE_METHOD |
+                                 1u << LR_READER | 1u << LR_WRITER | 1u << LR_ALIAS, &n);
+  for (int i = 0; i < n; i++) {
+    if (a[i].kind != LR_UNDEF || a[i].cls < 0 || a[i].sg) continue;
+    int later = 0;
+    for (int j = i + 1; j < n && !later; j++)
+      later = a[j].kind != LR_UNDEF && a[j].cls == a[i].cls && a[j].sg == a[i].sg && sp_streq(a[j].name, a[i].name);
+    if (!later) comp_add_undef(&c->classes[a[i].cls], a[i].name);
+  }
   free(a);
 }
 

@@ -31907,9 +31907,20 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       /* a heap object slot holds nil as NULL (a defaulted `host = nil`
          parameter), and nil answers only its own surface */
       if (!comp_ty_value_obj(c, rt)) g_rto_nil_obj = 1;
-      int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
-      if (a < 0) return -1;
-      resolved = 1; yes = a;
+      /* asked where the load record places the call (a class body, the
+         top level), a name an undef there has taken away is not answered,
+         though a later definition gives it back: `undef_method :a;
+         p new.respond_to?(:a); def a = 10` prints false */
+      LoadPoint up = elab_point_of(c, id);
+      const LrDef *ud = NULL;
+      if (up.region >= 0 && elab_method_at(c, cid, qm, 0, up, &ud) == ELAB_NO && ud && ud->kind == LR_UNDEF) {
+        resolved = 1; yes = 0;
+      }
+      else {
+        int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
+        if (a < 0) return -1;
+        resolved = 1; yes = a;
+      }
     }
     else if (recv < 0) {
       /* implicit self: resolve against the enclosing scope's class. An

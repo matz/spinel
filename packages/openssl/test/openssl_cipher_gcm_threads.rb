@@ -1,3 +1,4 @@
+# spinel: not-cruby -- it rescues the package's OpenSSL::CipherError, which CRuby spells OpenSSL::Cipher::CipherError
 # An authentication verdict must survive other threads.
 #
 # The C answers 0x01 || plaintext for a message that authenticates and an empty

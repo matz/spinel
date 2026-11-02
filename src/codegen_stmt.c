@@ -19216,6 +19216,11 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       TyKind cvt = c->classes[cv_cid].cvar_types[cv_idx];
       TyKind valt = tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty;
       if (cvt == TY_POLY && valt != TY_POLY) emit_boxed_tmp(c, valt, tmps[i], b);
+      /* an oint static takes the element with its nil, as a global's does */
+      else if (cvar_is_oint(c, cv_cid, cv_idx)) {
+        char ex[32]; snprintf(ex, sizeof ex, "_t%d", tmps[i]);
+        masgn_conv_o(c, cvt, valt, masgn_nil_el(c, els[i]) ? NULL : ex, b);
+      }
       else if (one_str_to_open(b, cvt, "cvar_%s_%s", c->classes[cv_cid].name, cnm + 2)) buf_printf(b, "_t%d)", tmps[i]);
       else buf_printf(b, "_t%d", tmps[i]);
       buf_puts(b, ";\n");

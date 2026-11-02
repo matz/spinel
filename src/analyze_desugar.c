@@ -11945,7 +11945,11 @@ static int anon_fwd_rewrite(Compiler *c, int node, int parent, unsigned anon) {
   return changed;
 }
 
-static int module_is_extended(const NodeTable *nt, const char *mn) {
+/* The names a bare `extend` call names as a constant, in every call of the
+   program. They are borrowed from the node table: the rewrite below adds defs
+   and instance variable accesses, never an `extend` call, and sets no string
+   of an existing node. */
+static void extended_module_names(const NodeTable *nt, ANameHash *names) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "extend") || nt_ref(nt, id, "receiver") >= 0) continue;
@@ -11954,11 +11958,10 @@ static int module_is_extended(const NodeTable *nt, const char *mn) {
     for (int k = 0; k < ac; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       const char *anm = nt_str(nt, av[k], "name");
-      if ((ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) && anm && sp_streq(anm, mn))
-        return 1;
+      if ((ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) && anm && !anh_has(names, anm))
+        anh_add(names, anm);
     }
   }
-  return 0;
 }
 
 static int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
@@ -11996,13 +11999,15 @@ static int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
 void desugar_extended_module_attrs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
+  ANameHash extended = {0};
+  extended_module_names(nt, &extended);
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
     const char *mn = class_def_name(nt, m);
     int body = class_def_body(nt, m);
     int n = 0;
     const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-    if (!mn || !st || !module_is_extended(nt, mn)) continue;
+    if (!mn || !st || !anh_has(&extended, mn)) continue;
     int *out = malloc(sizeof(int) * (size_t)(n * 2 + 64));
     if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int no = 0, cap = n * 2 + 64, rewrote = 0;
@@ -12040,6 +12045,7 @@ void desugar_extended_module_attrs(Compiler *c) {
     }
     free(out);
   }
+  anh_free(&extended);
 }
 
 static const struct { NodeKind local; const char *global; } dmc_kinds[] = {

@@ -8552,7 +8552,13 @@ int desugar_index_op_write_user(Compiler *c) {
       if (en == 0 && !ty_is_hash(c->hash_want[val])) comp_set_hash_want(c, val, TY_POLY_POLY_HASH);
     }
     int encl = c->nscope[id];
-    for (int j = first; j < nt->count; j++) c->nscope[j] = encl;
+    /* (each read of the held receiver holds what recv does, so the class
+       facts that bound recv bound the `[]` and `[]=` made here: without one,
+       a boxed store reached every Struct's members) */
+    for (int j = first; j < nt->count; j++) {
+      c->nscope[j] = encl;
+      if (nt_kind(nt, j) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, j, "name"), rname)) cls_fact_same(c, j, recv);
+    }
     /* locals were collected before the fixpoint; these are new */
     Scope *sc = comp_scope_of(c, rw);
     scope_local_intern(sc, rname);

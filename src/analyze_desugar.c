@@ -1549,6 +1549,9 @@ int desugar_extend_self(Compiler *c) {
       int sf = nt_new_node(nt, "SelfNode");
       if (sf < 0) continue;
       nt_node_set_ref(nt, clone, "receiver", sf);
+      /* the module's instance method, seen on the module through its own
+         extend: the scope walk makes it the module's copy (origin_module_ci) */
+      nt_node_set_int(nt, clone, "extend_self_copy", 1);
       nb[nbn++] = clone;
     }
     nt_node_set_arr(nt, body, "body", nb, nbn);

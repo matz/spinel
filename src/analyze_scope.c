@@ -1689,6 +1689,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     int defrecv = nt_ref(c->nt, id, "receiver");
     if (defrecv >= 0) {
       { s->is_cmethod = 1; comp_touch_scope(s->idx); }
+      /* desugar_extend_self's class-side copy of a module's instance method
+         came from the module, as an extend's transplant does */
+      if (class_id >= 0 && nt_int(c->nt, id, "extend_self_copy", 0)) { s->origin_module_ci = class_id + 1; comp_touch_scope(s->idx); }
       defrecv = nt_def_receiver(c->nt, defrecv);
       /* `def Klass.foo` with an explicit constant receiver (typically defined
          outside the class body, where the enclosing class_id is -1) attaches
@@ -8469,6 +8472,7 @@ static void specialize_cmethod_for(Compiler *c, int mi, int def_cls, int ci, int
   if (new_body >= 0) walk_scope(c, new_body, dst_idx, ci);
   { dst->class_id = ci; comp_touch_scope(dst->idx); }
   { dst->is_cmethod = 1; comp_touch_scope(dst->idx); }
+  { dst->is_cmethod_copy = 1; comp_touch_scope(dst->idx); }
   /* a copy a later top-level reopening makes: a call reaches the method
      behind it until that statement has run (Scope.mixin_guarded) */
   dst->mixin_guarded = cell;

@@ -601,11 +601,20 @@ int emit_op_method_parameters(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
-static void emit_method_owner_class(Compiler *c, int mi, Buf *b) {
+/* Is method mi a method of its class's singleton, as a Method of it names
+   its owner: a class method of the class's own, not a copy (a module's, an
+   inherited one specialized for the class, an extend's), unless taken as an
+   instance method (unbound; a module function is both) */
+static int method_owner_singleton(Compiler *c, int mi, int unbound) {
+  const Scope *m = &c->scopes[mi];
+  return m->is_cmethod && !m->origin_module_ci && !m->is_cmethod_copy && m->class_id >= 0 && !unbound;
+}
+
+static void emit_method_owner_class(Compiler *c, int mi, int unbound, Buf *b) {
   const Scope *m = &c->scopes[mi];
   int ci = m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
   if (ci < 0) buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Object\")})");
-  else if (m->is_cmethod && !m->origin_module_ci) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
+  else if (method_owner_singleton(c, mi, unbound)) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
 }
 
@@ -616,13 +625,14 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   CallPlan plan = cplan_method_call(c, x->id);
   int mn = plan.method_node, target = plan.mi;
+  int unbound = mn >= 0 && is_instance_method_name(nt_str(nt, mn, "name"));
   if (plan.dispatch == CP_SWITCH) {
     int to[VER_MAX_ARMS + 1], n = ver_entry_targets(c, target, to, NULL), tr = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
     for (int i = 0; i < n; i++) {
       if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
-      emit_method_owner_class(c, to[i], b);
+      emit_method_owner_class(c, to[i], unbound, b);
       if (i < n - 1) buf_puts(b, " : ");
     }
     buf_puts(b, "; })");
@@ -633,14 +643,17 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
   if (target >= 0 && !is_bam) {
     /* a method a module provides is owned by that module, however many
-       classes include it (#3662) */
+       classes include it (#3662); a class method by its class's singleton */
     int ocid = c->scopes[target].origin_module_ci
                  ? c->scopes[target].origin_module_ci - 1
                  : c->scopes[target].class_id;
     const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
                                                             : c->classes[ocid].name) : "Object";
     buf_printf(b, "((void)("); emit_expr(c, recv, b);
-    buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", ocn);
+    buf_puts(b, "), ");
+    if (method_owner_singleton(c, target, unbound)) emit_method_owner_class(c, target, unbound, b);
+    else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
+    buf_puts(b, ")");
     return 1;
   }
   if (mrecv >= 0) {

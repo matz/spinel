@@ -474,6 +474,14 @@ spinel: 1 refusal, nothing written
 == test/reject/class_value_include.rb [promote] rc=1
 spinel: test/reject/class_value_include.rb:9: include / prepend on a Class held in a variable is not supported by AOT compilation: the ancestor chain is baked at compile time, so the class must be named by a constant. Write `K.include(M)` (or `include M` inside `class K ... end`) for each class (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/cmp_builtin_recv_toplevel_comparable.rb [default] rc=1
+spinel: test/reject/cmp_builtin_recv_toplevel_comparable.rb:10: unsupported comparison: node N (CallNode `>=`) recv=LocalVariableReadNode/ty18 argc=1 arg0ty3
+spinel: test/reject/cmp_builtin_recv_toplevel_comparable.rb:16: unsupported comparison: node N (CallNode `>`) recv=CallNode/ty9 argc=1 arg0ty3
+spinel: 2 refusals, nothing written
+== test/reject/cmp_builtin_recv_toplevel_comparable.rb [promote] rc=1
+spinel: test/reject/cmp_builtin_recv_toplevel_comparable.rb:10: unsupported comparison: node N (CallNode `>=`) recv=LocalVariableReadNode/ty18 argc=1 arg0ty3
+spinel: test/reject/cmp_builtin_recv_toplevel_comparable.rb:16: unsupported comparison: node N (CallNode `>`) recv=CallNode/ty9 argc=1 arg0ty3
+spinel: 2 refusals, nothing written
 == test/reject/compact_class_internal_name_clash.rb [default] rc=1
 spinel: test/reject/compact_class_internal_name_clash.rb:5: a class or module named Foo under a module path takes the internal name X__Foo, which the program's own class X__Foo already has, and a top-level Foo is defined too; rename one of them
 == test/reject/compact_class_internal_name_clash.rb [promote] rc=1

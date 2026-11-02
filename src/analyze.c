@@ -14651,6 +14651,21 @@ static void oa_note_src(int S, int node) {
   }
   g_oa_src_slot[g_oa_src_n] = S; g_oa_src_node[g_oa_src_n] = node; g_oa_src_n++;
 }
+/* Element evidence taken from another slot's last decision (oa_elem_evidence):
+   slot T took class K from an element of slot A, which holds only if A
+   narrows to K again this round (checked at resolution). Cleared with the
+   two lists above. */
+static int *g_oa_efrom_tgt, *g_oa_efrom_src, *g_oa_efrom_cls, g_oa_efrom_n, g_oa_efrom_cap;
+static void oa_note_elem_from(int T, int A, int K) {
+  if (g_oa_efrom_n >= g_oa_efrom_cap) {
+    g_oa_efrom_cap = g_oa_efrom_cap ? g_oa_efrom_cap * 2 : 32;
+    g_oa_efrom_tgt = (int *)realloc(g_oa_efrom_tgt, sizeof(int) * (size_t)g_oa_efrom_cap);
+    g_oa_efrom_src = (int *)realloc(g_oa_efrom_src, sizeof(int) * (size_t)g_oa_efrom_cap);
+    g_oa_efrom_cls = (int *)realloc(g_oa_efrom_cls, sizeof(int) * (size_t)g_oa_efrom_cap);
+    if (!g_oa_efrom_tgt || !g_oa_efrom_src || !g_oa_efrom_cls) { fprintf(stderr, "oom\n"); exit(1); }
+  }
+  g_oa_efrom_tgt[g_oa_efrom_n] = T; g_oa_efrom_src[g_oa_efrom_n] = A; g_oa_efrom_cls[g_oa_efrom_n] = K; g_oa_efrom_n++;
+}
 static void oa_note_empty(Compiler *c, int S, int node) {
   if (!is_empty_array_literal(c->nt, node, c->node_cap)) return;
   if (g_oa_empt_n >= g_oa_empt_cap) {
@@ -14689,10 +14704,16 @@ static int oa_local_write_evidence(Compiler *c, int node) {
   }
   return cls;
 }
+static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const int *par, int nc,
+                             LocalVar **wlv, int nwlv);
 /* element evidence from one value flowing into slot S, noting an empty
    literal for the stamp above and a boxed element for the row check at
-   resolution */
-static int oa_elem_evidence(Compiler *c, OAS *sl, int S, int node) {
+   resolution. An element of another slot (`node.links << nodes[j]`) reads
+   boxed while that slot is decided again this round, though it holds the
+   class the slot narrowed to last round: that class is the evidence, as a
+   local written from the read already gives it (`nb = nodes[j]` keeps the
+   type of last round), noted to hold only if the slot narrows to it again */
+static int oa_elem_evidence(Compiler *c, OAS *sl, int S, int node, const int *read_slot) {
   oa_note_empty(c, S, node);
   int ec;
   if (node >= 0 && infer_type(c, node) == TY_POLY) {
@@ -14700,6 +14721,13 @@ static int oa_elem_evidence(Compiler *c, OAS *sl, int S, int node) {
     ec = nt_kind(c->nt, node) == NK_LocalVariableReadNode ? oa_local_write_evidence(c, node) : oa_obj_class_of(c, node);
   }
   else ec = oa_obj_class_of(c, node);
+  if (ec == -1 && node >= 0 && nt_kind(c->nt, node) == NK_CallNode) {
+    int A = oa_elem_recv_slot(c, node, read_slot, comp_parent_map(c), c->nt->count, NULL, 0);
+    if (A >= 0 && A != S && ty_is_obj_array(sl[A].old_pin)) {
+      ec = ty_obj_array_class(sl[A].old_pin);
+      oa_note_elem_from(S, A, ec);
+    }
+  }
   /* a neutral element that is no empty row (a nil, a value with no type
      yet): the rows' own pushes cannot decide such a table (oa_row_use) */
   if (ec == -1 && !is_empty_array_literal(c->nt, node, c->node_cap)) sl[S].odd_elem = 1;
@@ -15556,7 +15584,7 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
     int en = 0; const int *el = nt_arr(nt, v, "elements", &en);
     for (int e = 0; e < en; e++) {
       NodeKind ek = nt_kind(nt, el[e]);
-      int ec = (ek == NK_SplatNode) ? -2 : oa_elem_evidence(c, sl, S, el[e]);
+      int ec = (ek == NK_SplatNode) ? -2 : oa_elem_evidence(c, sl, S, el[e], read_slot);
       /* OA_CLS_IA / OA_CLS_FA (a nested scalar array) are negative SENTINELS,
          not an "invalid" -1/-2: they are real evidence, so they must not kill
          the slot (an `[[a,b],[c,d]]` array-of-int-array literal narrows like a
@@ -15596,7 +15624,7 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
     else if (cn && is_push_alias(cn) &&
              can >= 1 && nt_ref(nt, v, "block") < 0 && crecv >= 0 && read_slot[crecv] >= 0) {
       int cargv_n = 0; const int *cargv = nt_arr(nt, cargs, "arguments", &cargv_n);
-      for (int a = 0; a < cargv_n; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, cargv[a]));
+      for (int a = 0; a < cargv_n; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, cargv[a], read_slot));
       claimed[crecv] = 1;
       oa_uf_union(sl, S, read_slot[crecv]);
     }
@@ -15605,7 +15633,7 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
        value is below. */
     else if (crecv >= 0 && nt_kind(nt, crecv) == NK_ConstantReadNode &&
              is_array_new(nt_str(nt, crecv, "name"), cn) && nt_ref(nt, v, "block") < 0 && can == 2) {
-      int ec = oa_elem_evidence(c, sl, S, nt_arr(nt, cargs, "arguments", &can)[1]);
+      int ec = oa_elem_evidence(c, sl, S, nt_arr(nt, cargs, "arguments", &can)[1], read_slot);
       if (ec < 0 && !OA_CLS_IS_ROW(ec)) sl[S].alive = 0;
       else sl[S].cls = oa_cls_join(sl[S].cls, ec);
     }
@@ -15620,11 +15648,29 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
       int gbody = gb >= 0 ? nt_ref(nt, gb, "body") : -1;
       int gn = 0;
       const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
-      int ec = (gs && gn > 0) ? oa_elem_evidence(c, sl, S, gs[gn - 1]) : -1;
+      int ec = (gs && gn > 0) ? oa_elem_evidence(c, sl, S, gs[gn - 1], read_slot) : -1;
+      /* a `next v` is an element too (`Array.new(n) { |i| next a if i.odd?; b }`):
+         its value joins the tail's, and one with no class of its own (boxed,
+         not typed yet, nil) keeps the Array boxed as such a tail does below,
+         the emitted `next` storing it as it is -- and so does such a tail
+         beside it, which the join would otherwise give the `next`'s class.
+         A bare `next` is a nil element, one with several values or a splat
+         an Array element. */
+      int nx[32];
+      int nn = gbody >= 0 ? an_block_nexts(nt, gbody, nx, 32) : 0;
+      if (nn >= 32) ec = -2;
+      for (int q = 0; q < nn && q < 32; q++) {
+        int na = nt_ref(nt, nx[q], "arguments"), ac = 0;
+        const int *av = na >= 0 ? nt_arr(nt, na, "arguments", &ac) : NULL;
+        if (ac == 0) continue;
+        if (ec == -1) ec = -2;
+        int nv = ac == 1 && nt_kind(nt, av[0]) != NK_SplatNode ? oa_elem_evidence(c, sl, S, av[0], read_slot) : -2;
+        ec = oa_cls_join(ec, nv == -1 ? -2 : nv);
+      }
       /* `Array.new(n) { [] }`: the row is an empty literal, neutral here and
          built at the table's kind once something else (a pushed row, an
          `Array[Array[Float]]` seed) decides it (#4484) */
-      if (gs && gn > 0 && is_empty_array_literal(nt, gs[gn - 1], c->node_cap) &&
+      if (nn == 0 && gs && gn > 0 && is_empty_array_literal(nt, gs[gn - 1], c->node_cap) &&
           !ty_is_ptr_array(infer_type(c, gs[gn - 1])) &&
           infer_type(c, gs[gn - 1]) != TY_INT_ARRAY && infer_type(c, gs[gn - 1]) != TY_FLOAT_ARRAY) { }
       else if (ec < 0 && !OA_CLS_IS_ROW(ec)) sl[S].alive = 0;
@@ -16240,6 +16286,19 @@ static int oa_component_narrows(Compiler *c, const OAS *s) {
      poly, where the boxed comparator raises the CRuby ArgumentError. */
   return !(s->needs_cmp && comp_method_in_chain(c, s->cls, "<=>", NULL) < 0);
 }
+/* A class taken from another slot's last decision (oa_note_elem_from) holds
+   only if that slot narrows to it again; otherwise the slot that took it
+   keeps its elements boxed this round, and the next round decides it again.
+   Answers whether it kept one boxed. */
+static int oa_elem_from_undo(Compiler *c, OAS *sl) {
+  int undone = 0;
+  for (int e = 0; e < g_oa_efrom_n; e++) {
+    int ra = oa_uf_find(sl, g_oa_efrom_src[e]), rt = oa_uf_find(sl, g_oa_efrom_tgt[e]);
+    if (!sl[rt].alive || (sl[ra].cls == g_oa_efrom_cls[e] && oa_component_narrows(c, &sl[ra]))) continue;
+    sl[rt].alive = 0; undone = 1;
+  }
+  return undone;
+}
 
 /* Interprocedural edges of call id, whose target narrow_object_arrays
    resolved to method oa_tmi (-1: unattributable). A PARAM slot may only
@@ -16288,7 +16347,7 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
       for (int j = 0; plv->store_val_src && j < M->nparams && j < 64; j++) {
         if (!((plv->store_val_src >> j) & 1ULL)) continue;
         int aj = layout_plain_arg(c, M, argv, &L, j);
-        if (aj >= 0) sl[T].cls = oa_cls_join(sl[T].cls, oa_elem_evidence(c, sl, T, aj));
+        if (aj >= 0) sl[T].cls = oa_cls_join(sl[T].cls, oa_elem_evidence(c, sl, T, aj, read_slot));
       }
     }
   }
@@ -16536,6 +16595,7 @@ static int narrow_object_arrays(Compiler *c) {
   oa_index_reset();
   g_oa_empt_n = 0;
   g_oa_src_n = 0;
+  g_oa_efrom_n = 0;
   /* Drop every want this pass stamped on a map source in an earlier round,
      before the round re-derives them. OA_DROP_SRC_STAMP below only reaches the
      sources RECORDED this round, and a node stops being recorded for reasons
@@ -17009,7 +17069,7 @@ static int narrow_object_arrays(Compiler *c) {
         if (name && ((is_element_at_alias(name) && argc == 1) || (is_endpoint_query(name) && argc == 0)))
           oa_row_use(c, sl, S, id, par, walk_disc, nc);
         if (name && is_push_alias(name)) {
-          for (int a = 0; a < argc; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[a]));
+          for (int a = 0; a < argc; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[a], read_slot));
           /* an append answers the array: like a sort result it must land
              in a modeled consumer, or a chained `a.push(x).push(y)` pushes
              an element no slot sees */
@@ -17042,7 +17102,7 @@ static int narrow_object_arrays(Compiler *c) {
           /* a range-keyed []= is a splice, which the obj-array representation
              has no emitter for: keep the slot on the poly path */
           if (infer_type(c, argv[0]) == TY_RANGE) sl[S].alive = 0;
-          else sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[1]));
+          else sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[1], read_slot));
         }
         else if (name && (sp_streq(name, "min") || sp_streq(name, "max") ||
                           sp_streq(name, "sort") || sp_streq(name, "sort!"))) {
@@ -17419,6 +17479,7 @@ static int narrow_object_arrays(Compiler *c) {
      decision, so until none is undone. */
   for (int undone = 1; undone; ) {
     undone = 0;
+    undone |= oa_elem_from_undo(c, sl);
     for (int p = 0; p < npend; p++) {
       if (pend[p].cls < 0) continue;
       int r = oa_uf_find(sl, pend[p].slot);

@@ -82,15 +82,26 @@ module OpenSSL
         raise CipherError, "key must be #{key_len} bytes for #{@name}"
       end
       @key = [k].join
-      @keystream = ""
+      restart
       k
     end
 
     def iv=(v)
       raise CipherError, "iv must not be empty" if v.empty?
       @iv = [v].join
-      @keystream = ""
+      restart
       v
+    end
+
+    # Setting the key or the iv starts a new message, as CRuby's EVP re-init
+    # does: the input updates gave before it is no part of the message final
+    # seals, whose bytes they already returned under the old setting, and a
+    # cipher final used up takes a new one the same way.
+    private def restart
+      @parts = []
+      @emitted = 0
+      @keystream = ""
+      @done = false
     end
 
     # Covered by the tag, absent from the output.

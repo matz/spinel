@@ -16309,10 +16309,11 @@ static int oa_const_slot(Compiler *c, OAS *sl, int n, int id, int *dyn) {
 
 static int strbuf_elem_first_iterator(const char *n);
 /* The slot whose element node recv is, or -1: an element read of a slot
-   (`as[i]`, or `as.first` / `as.last` / `as.sample`, an element or nil as
-   `as[i]` is), or the element parameter of a walk over one (`as.each { |a| }`,
-   each_with_index, map) that nothing in the block reassigns. Once the slot
-   narrows, either is typed as the slot's element class. */
+   (`as[i]`, or `as.first` / `as.last`, the endpoint queries oa_recv_op_ok
+   models, an element or nil as `as[i]` is), or the element parameter of a
+   walk over one (`as.each { |a| }`, each_with_index, map) that nothing in
+   the block reassigns. Once the slot narrows, either is typed as the slot's
+   element class. */
 static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const int *par, int nc,
                              LocalVar **wlv, int nwlv) {
   const NodeTable *nt = c->nt;
@@ -16324,7 +16325,7 @@ static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const 
     const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
     if (!nm || nt_ref(nt, recv, "block") >= 0 || r < 0 || r >= nc) return -1;
     if (is_element_at_alias(nm) ? argc != 1 || nt_kind(nt, argv[0]) == NK_RangeNode
-                                : !is_element_pick(nm) || argc != 0) return -1;
+                                : !is_endpoint_query(nm) || argc != 0) return -1;
     return read_slot[r];
   }
   if (k != NK_LocalVariableReadNode) return -1;

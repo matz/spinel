@@ -356,7 +356,10 @@ int  nt_renames_spare(const NodeTable *nt, NtStamp s, int (*reads)(const char *n
 /* Accessors. id must be in [0, nt->count). Out-of-range ids return the
    given defaults so callers can walk freely without bounds checks. */
 /* Resolve a `node_file` id to its source path, or NULL if out of range.
-   Used by codegen to emit `#line N "path"` directives in multi-file builds. */
+   Used by codegen to emit `#line N "path"` directives in multi-file builds.
+   One path can have two ids (a `#<SPINEL_SOURCE>` marker's name that a file
+   of that path and the file the marker is in disagree about deferring), so
+   two nodes are in the same file when their paths are equal, not their ids. */
 const char *nt_file_path(const NodeTable *nt, int fid);
 /* The file's `# spinel: defer-refusals` magic comment: set, and asked */
 void nt_put_file_defers(NodeTable *nt, int fid);

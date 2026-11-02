@@ -151,6 +151,9 @@ static bool sp_magic_comment_fsl_false(const pm_magic_comment_t *mc) {
    takes its file table (sp_defer_paths_mark). */
 static char **sp_defer_paths; static int sp_defer_npaths;
 static char **sp_file_table; static int sp_file_count;   /* (defined with the map builder below) */
+/* A file id the table holds twice under one path (sp_intern_display_file)
+   says which of the two defers: 0 = its path decides, 1 = no, 2 = yes. */
+static unsigned char *sp_file_defer_force;
 static bool sp_magic_comment_is(const pm_magic_comment_t *mc, const char *key, const char *value) {
   if (mc->key_length != strlen(key) || mc->value_length != strlen(value)) return false;
   for (uint32_t i = 0; i < mc->key_length; i++) {
@@ -173,10 +176,20 @@ static void sp_src_file_note_defers(const SpSrcFile *f) {
     return;
   }
 }
+static int sp_path_defers(const char *path) {
+  for (int k = 0; k < sp_defer_npaths; k++)
+    if (path && strcmp(path, sp_defer_paths[k]) == 0) return 1;
+  return 0;
+}
+/* Does file id i defer its refusals: as its own path says, unless the id was
+   made for a marker's name (sp_intern_display_file) and says it itself. */
+static int sp_file_id_defers(int i) {
+  if (sp_file_defer_force && sp_file_defer_force[i]) return sp_file_defer_force[i] == 2;
+  return sp_path_defers(sp_file_table[i]);
+}
 static void sp_defer_paths_mark(NodeTable *nt) {
   for (int i = 0; i < sp_file_count; i++)
-    for (int k = 0; k < sp_defer_npaths; k++)
-      if (sp_file_table[i] && strcmp(sp_file_table[i], sp_defer_paths[k]) == 0) nt_put_file_defers(nt, i);
+    if (sp_file_id_defers(i)) nt_put_file_defers(nt, i);
 }
 
 /* The frozen_string_literal flag of the file's literals: 1, in every file.
@@ -2924,6 +2937,21 @@ static int sp_file_count = 0, sp_file_cap = 0;
    (a require_relative, the entry) changes nothing. */
 static int sp_tier_merge(int old, int tier) { return tier > old ? tier : old; }
 
+static int sp_new_file(const char *path, int tier) {
+  int cap = sp_file_cap;
+  sp_file_table = sp_grow_strs(sp_file_table, sp_file_count, &sp_file_cap, 8);
+  if (sp_file_cap != cap) {
+    sp_file_tier = realloc(sp_file_tier, (size_t)sp_file_cap);
+    sp_file_defer_force = realloc(sp_file_defer_force, (size_t)sp_file_cap);
+  }
+  char *dup_path = strdup(path);
+  if (!dup_path || !sp_file_tier || !sp_file_defer_force) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  sp_file_table[sp_file_count] = dup_path;
+  sp_file_tier[sp_file_count] = (unsigned char)tier;
+  sp_file_defer_force[sp_file_count] = 0;
+  return sp_file_count++;
+}
+
 static int sp_intern_file(const char *path, int tier) {
   for (int i = 0; i < sp_file_count; i++)
     if (strcmp(sp_file_table[i], path) == 0) {
@@ -2931,20 +2959,44 @@ static int sp_intern_file(const char *path, int tier) {
                                         sp_tier_merge(sp_file_tier[i] & ~SP_FILE_DEFERRED, tier & ~SP_FILE_DEFERRED));
       return i;
     }
-  int cap = sp_file_cap;
-  sp_file_table = sp_grow_strs(sp_file_table, sp_file_count, &sp_file_cap, 8);
-  if (sp_file_cap != cap) sp_file_tier = realloc(sp_file_tier, (size_t)sp_file_cap);
-  char *dup_path = strdup(path);
-  if (!dup_path || !sp_file_tier) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-  sp_file_table[sp_file_count] = dup_path;
-  sp_file_tier[sp_file_count] = (unsigned char)tier;
-  return sp_file_count++;
+  return sp_new_file(path, tier);
+}
+
+/* The file id a `#<SPINEL_SOURCE>` marker in physical file `phys` shows: the
+   one for the name it gives, as the table has it. The name says nothing about
+   which file's `# spinel: defer-refusals` governs the lines under it, so a
+   name the table already has for a file of the other answer (the marker's
+   file defers and the name's file does not, or the reverse) gets an id of its
+   own, the same path, that answers as `phys` does. Every copy of the position
+   a node made then carries the answer with it.
+   A path has at most two ids, and the first, made by sp_intern_file, is
+   never one of these: a file read by that path is found by it and keeps its
+   own answer and tier, so a marker's own id always comes after its path's
+   first id. */
+static int sp_intern_display_file(const char *path, int phys) {
+  int want = phys >= 0 && phys < sp_file_count && sp_file_id_defers(phys);
+  int first = sp_intern_file(path, SP_LIB_NONE);
+  /* id 0 is the entry script, and also what the frame stack holds for "no
+     marker": a marker naming it is not taken, and its lines keep the id of
+     the file they are in, which answers as that file does */
+  if (first == 0) return 0;
+  for (int i = first; i < sp_file_count; i++) {
+    if (strcmp(sp_file_table[i], path) != 0) continue;
+    if (sp_file_id_defers(i) == want) return i;
+  }
+  int id = sp_new_file(path, SP_LIB_NONE);
+  sp_file_defer_force[id] = want ? 2 : 1;
+  return id;
 }
 
 /* The file table's tiers, onto the node table's */
 static void sp_file_tiers_mark(NodeTable *nt) {
-  for (int i = 0; i < sp_file_count; i++)
-    if ((sp_file_tier[i] & ~SP_FILE_DEFERRED) != SP_LIB_NONE) nt_put_file_tier(nt, i, sp_file_tier[i] & ~SP_FILE_DEFERRED);
+  for (int i = 0; i < sp_file_count; i++) {
+    int src = i;   /* an id made for a marker's name has its path's first id's tier */
+    if (sp_file_defer_force && sp_file_defer_force[i])
+      for (int k = 0; k < i; k++) if (strcmp(sp_file_table[k], sp_file_table[i]) == 0) { src = k; break; }
+    if ((sp_file_tier[src] & ~SP_FILE_DEFERRED) != SP_LIB_NONE) nt_put_file_tier(nt, i, sp_file_tier[src] & ~SP_FILE_DEFERRED);
+  }
 }
 /* Was file fid spliced from a require in a method, a block or a lambda, or
    inside such a file? */
@@ -3061,7 +3113,7 @@ else if (len < 12 || strncmp(line + len - 12, "SPINEL_COND>", 12) != 0) {
         long ln = colon ? strtol(colon + 1, &end, 10) : 0;
         if (colon && colon > pathbuf && end && end != colon + 1 && *end == '\0' && ln > 0 && ln < 1000000000) {
           *colon = '\0';
-          stk_dfile[sp] = sp_intern_file(pathbuf, SP_LIB_NONE);
+          stk_dfile[sp] = sp_intern_display_file(pathbuf, stk_file[sp]);
           stk_dline[sp] = (int)ln;
         }
       }

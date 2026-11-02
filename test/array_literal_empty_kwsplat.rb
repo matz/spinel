@@ -108,3 +108,20 @@ p [1, **e].frozen?
 x = [3, **e]
 x << 4
 p x
+
+# a method ending in a literal with `**h`, and a multiple assignment from
+# one, have no fixed tuple shape: the hash is left out when it is empty
+def kw_pair(h) = [1, "s", **h]
+e = {}
+p kw_pair(e)[-2]
+p kw_pair({k: 1})[-2]
+a1, b1, c1 = kw_pair(e)
+p [a1, b1, c1]
+a2, b2, c2 = kw_pair({k: 1})
+p [a2, b2, c2]
+a3, b3, c3 = [1, "s", **e]
+p [a3, b3, c3]
+a4, *r4 = [1, **e]
+p [a4, r4]
+a5, b5 = [1, **{k: 2}]
+p [a5, b5]

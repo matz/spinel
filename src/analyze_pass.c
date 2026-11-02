@@ -953,11 +953,8 @@ static int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
   /* A method whose last statement IS an array literal returns that array, and
      `a, b = m` destructures it -- so the literal's element types flow to the
      targets just as an explicit `return a, b` does (#2924). */
-  else if (nt_kind(nt, last) == NK_ArrayNode) {
+  else if (masgn_tuple_rhs(nt, last))
     av = nt_arr(nt, last, "elements", &an);
-    for (int i = 0; av && i < an; i++)
-      if (nt_kind(nt, av[i]) == NK_SplatNode) return 0;
-  }
   if (!av || an < 2) return 0;
   *elems = av;
   return an;
@@ -2868,13 +2865,14 @@ static int recv_hash_or_write(Compiler *c, int recv) {
 
 /* Is a multi-write's RHS a tuple -- a literal whose elements line up one to
    one with the targets? One holding a splat (`a, b = *xs, "s"`) is not: it
-   is typed as the array it builds. */
+   is typed as the array it builds. Nor is one ending in `**h`, which adds
+   no element when every spread is empty (`[1, **{}]` is `[1]`). */
 int masgn_tuple_rhs(const NodeTable *nt, int value) {
   if (value < 0 || nt_kind(nt, value) != NK_ArrayNode) return 0;
   int n = 0;
   const int *els = nt_arr(nt, value, "elements", &n);
   for (int i = 0; i < n; i++)
-    if (nt_kind(nt, els[i]) == NK_SplatNode) return 0;
+    if (nt_kind(nt, els[i]) == NK_SplatNode || kwh_only_spreads(nt, els[i])) return 0;
   return 1;
 }
 

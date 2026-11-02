@@ -18441,12 +18441,13 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
      the runtime-destructure path evaluate the whole ArrayNode (the literal
      emitter splices splats) and slice it. An empty literal (`a, *r = []`)
      stays a tuple, of no elements: every target takes nil and a splat
-     target an empty array. */
+     target an empty array. So does a `**h` element, which the literal
+     leaves out when every spread is empty (`a, b = [1, **{}]`). */
   int tuple = vk == NK_ArrayNode;
   if (els) {
     for (int i = 0; i < en; i++) {
       NodeKind ety0_k = nt_kind(nt, els[i]);
-      if (ety0_k == NK_SplatNode) { els = NULL; en = 0; tuple = 0; break; }
+      if (ety0_k == NK_SplatNode || kwh_only_spreads(nt, els[i])) { els = NULL; en = 0; tuple = 0; break; }
     }
   }
   int rn = 0;

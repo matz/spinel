@@ -59,3 +59,16 @@ else
 end
 q3 << 0.5
 p q1, q2, q3
+
+# an arm a static predicate folds to, of statements ending in `[]`, is
+# built at the result's kind as the unfolded pair builds it
+v = 7
+q4 = if v.is_a?(Integer)
+  puts "folded"
+  []
+else
+  [1.5]
+end
+q5 = if v.is_a?(String) then [2.5] else puts "folded else"; [] end
+q4 << 0.5
+p q4, q5

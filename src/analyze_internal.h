@@ -245,6 +245,7 @@ int is_void_call(const char *name);
 /* The enclosing scope's own chain owns this receiverless call's name, so no
    Kernel arm may claim it (the codegen twin is bare_call_class_owned). */
 int an_bare_call_class_owned(Compiler *c, int id);
+int an_call_diverges(Compiler *c, int id);   /* a bare raise / throw / exit that reaches Kernel's (analyze_infer.c) */
 /* Resolve a struct member from a literal key node: a SymbolNode names a
    member; an IntegerNode is a positional index. Returns the member index
    (0-based, matching ivar order) or -1. */
@@ -953,12 +954,13 @@ int desugar_conditional_defs(Compiler *c);
 int desugar_concat_builtin_version(Compiler *c);
 /* A dispatcher def over arms `<sel> == <val>` calling `callee` with the
    def's parameters passed on, and an else arm (disp_def_build,
-   analyze_desugar.c); `raise NoMethodError, msg` for that arm */
+   analyze_desugar.c); for that arm `raise NoMethodError.new(msg, :name,
+   [<args>], receiver: self)`, the args the def's ar parameters */
 typedef struct { const char *sel; int val; const char *callee; int hist; } DispArm;
 int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, int blk,
                    const DispArm *arm, int narm, int els);
-int disp_raise_no_method(NodeTable *nt, const char *msg);
-int disp_raise_no_method_self(NodeTable *nt, const char *head, int inst);
+int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar);
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_super_call(NodeTable *nt, int ar, int blk);
 int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk);

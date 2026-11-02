@@ -6529,8 +6529,8 @@ static int wb_field_is_ref_in(Compiler *c, int only, const char *fld, size_t n) 
   int plain = n + 2 <= sizeof ivn;
   for (size_t j = 0; plain && j < n; j++) plain = isalnum((unsigned char)fld[j]) || fld[j] == '_';
   if (plain) { ivn[0] = '@'; memcpy(ivn + 1, fld, n); ivn[n + 1] = '\0'; }
-  for (int k = 0; k < c->nclasses; k++) {
-    if (only >= 0 && k != only) continue;
+  /* (the one class asked, where the holder's C type names it) */
+  for (int k = only >= 0 ? only : 0; k < (only >= 0 ? only + 1 : c->nclasses); k++) {
     ClassInfo *ci = &c->classes[k];
     int i0 = 0, i1 = ci->nivars;
     if (plain) {
@@ -6919,7 +6919,8 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
   WbCells cs; memset(&cs, 0, sizeof cs);
   wb_cells_collect(&cs, b->p, b->len);
   if (!cs.n) { free(cs.v); return; }
-  size_t hdr_at = 0, hdr_h = (size_t)-1;
+  size_t hdr_at = 0, hdr_h = (size_t)-1, seg_to = 0;   /* seg_to: the text before it was searched for segment lines */
+  g_tmp = 0;
   for (size_t i = 0; i + 3 < b->len; i++) {
     if (b->p[i] != '(' || b->p[i+1] != '*') continue;
     size_t j = i, d = 0;
@@ -6966,6 +6967,16 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
     size_t send = at_stmt2 ? wb_stmt_end(b, q) : 0;
     Buf ins; memset(&ins, 0, sizeof ins);
     if (send) {
+      /* The temps are numbered from 1 in each segment (a top-level `static`
+         line starts one, as in gc_wb_insert), so a segment's names depend on
+         that segment alone and not on how many temps main took; an
+         --incremental build starts again at each unit pragma too, as
+         gc_wb_insert_seg does, for the methods that are not static (-g). */
+      for (; seg_to + 8 <= i; seg_to++)
+        if (b->p[seg_to] == '\n' &&
+            (!strncmp(b->p + seg_to + 1, "static ", 7) ||
+             (g_incremental && seg_to + 21 <= i && !strncmp(b->p + seg_to + 1, "#pragma spinel unit ", 20))))
+          g_tmp = 0;
       int wid = ++g_tmp;
       buf_printf(&ins, "{ __typeof__(");
       buf_putn(&ins, b->p + is, ie - is);
@@ -7059,12 +7070,14 @@ static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
     while (end < b->len && !(b->p[end] == '\n' && !strncmp(b->p + end + 1, "static ", 7))) end++;
     Buf seg; memset(&seg, 0, sizeof seg);
     buf_putn(&seg, b->p + start, end - start);
-    /* An --incremental build numbers each segment's barrier temps from 1.
-       The count otherwise runs on from whatever function was emitted last
-       (main), so one temp more in main renamed the barriers of the whole
-       program and every unit missed the cache. The default build keeps
-       its numbering, byte for byte. */
-    if (g_incremental) g_tmp = 0;
+    /* Each segment's barrier temps are numbered from 1 (a segment is a
+       top-level `static` definition, so a function split by a column-0
+       `static` local is several). The count would otherwise run on from
+       whatever function was emitted last (main), so one temp more in main
+       renamed the barriers of the whole program (and, under --incremental,
+       every unit missed the cache). gc_wb_cells numbers its _wcN the same
+       way. */
+    g_tmp = 0;
     gc_wb_insert_seg(c, &seg, 0);
     buf_putn(&out, seg.p, seg.len);
     free(seg.p);
@@ -18218,13 +18231,21 @@ static void scan_mark_subtree(const NodeTable *nt, int root, unsigned char *m, i
     for (int j = 0; j < nd->a[i].n; j++) scan_mark_subtree(nt, nd->a[i].ids[j], m, depth + 1);
 }
 /* ...nor do the arguments of the FFI and native-binding directives, which
-   the analysis reads and no code evaluates (`ffi_func :f, [:int], :int`). */
+   the analysis reads and no code evaluates (`ffi_func :f, [:int], :int`),
+   nor the array and keyword hash of a raise built out of line. */
 static unsigned char *scan_dsl_arg_nodes(Compiler *c) {
   const NodeTable *nt = c->nt;
   unsigned char *m = NULL;
   static const char *const dsl[] = { "ffi_lib", "ffi_lib_flags", "ffi_convention", "attach_function",
                                      "attach_variable", "callback", "typedef", "bitmask", "layout", NULL };
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
+    /* the array and keyword hash of a dispatcher's raise that is built out of line are no values */
+    if (nt_int(nt, id, "disp_nomethod", 0) && disp_nomethod_out_of_line(c, id)) {
+      int ac = 0; const int *av = call_args(nt, id, &ac);
+      if (!m) { m = (unsigned char *)calloc((size_t)nt->count + 1, 1); if (!m) return NULL; }
+      scan_mark_subtree(nt, av[2], m, 0);
+      scan_mark_subtree(nt, av[3], m, 0);
+    }
     if (nt_ref(nt, id, "receiver") >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm) continue;

@@ -1111,16 +1111,19 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
     else {
       Repr ar = repr_of(c, ac > 0 ? av[0] : -1);
       TyKind at = ar.as_ty;
-      if (ac >= 2 && (at == TY_POLY || at == TY_CLASS))
+      if (ac == 1 && emit_raise_nomethod_new(c, av[0], b)) { }
+      else if (ac >= 2 && (at == TY_POLY || at == TY_CLASS))
         emit_raise_class_value(c, av[0], av[1], b);
       else if (ac >= 2 && ar.exc) {
         /* `raise e, msg` with an exception object in a variable: the message
            was dropped and the class name answered */
         int rk = ++g_tmp, rm = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", rk); emit_boxed(c, av[0], b);
-        buf_printf(b, "; sp_RbVal _t%d = ", rm); emit_boxed(c, av[1], b);
-        buf_printf(b, "; %s(_t%d, _t%d); })",
-                   "sp_raise_poly_msg_h", rk, rm);
+        /* (the exception is held by nothing else once the expression that made it
+           ends, and building the message's box and the raised copy allocate) */
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", rk, rm); emit_boxed(c, av[1], b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d, _t%d); })",
+                   rm, "sp_raise_poly_msg_h", rk, rm);
       }
       else if (at == TY_EXCEPTION)
         { buf_puts(b, "sp_raise_exc((sp_Exception *)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
@@ -1221,4 +1224,132 @@ void exc_msg_release(Buf *b, int mark) {
   if (mark < 0) return;
   view_unbind(mark);
   buf_puts(b, "; })");
+}
+
+/* The call arguments of a NoMethodError.new that a dispatcher's no-method
+   arm builds, when every one is a variable of the dispatcher's own (held by
+   its frame, so nothing allocates ahead of the error): n locals, or `*r,
+   **k` of two. 1 with *rest and *kw the two locals (-1 for n locals, whose
+   nodes are el[0..*n)); 0 for any other array. */
+static int nomethod_var_args(const NodeTable *nt, int arr, const int **el, int *n, int *rest, int *kw) {
+  if (nt_kind(nt, arr) != NK_ArrayNode) return 0;
+  *el = nt_arr(nt, arr, "elements", n);
+  *rest = *kw = -1;
+  if (*n == 2 && nt_kind(nt, (*el)[0]) == NK_SplatNode && nt_kind(nt, (*el)[1]) == NK_KeywordHashNode) {
+    int sp = nt_ref(nt, (*el)[0], "expression"), kn = 0;
+    const int *ke = nt_arr(nt, (*el)[1], "elements", &kn);
+    if (sp < 0 || nt_kind(nt, sp) != NK_LocalVariableReadNode || kn != 1 || nt_kind(nt, ke[0]) != NK_AssocSplatNode) return 0;
+    int kv = nt_ref(nt, ke[0], "value");
+    if (kv < 0 || nt_kind(nt, kv) != NK_LocalVariableReadNode) return 0;
+    *rest = sp; *kw = kv;
+    return 1;
+  }
+  for (int e = 0; e < *n; e++) if (nt_kind(nt, (*el)[e]) != NK_LocalVariableReadNode) return 0;
+  return 1;
+}
+
+/* The raise a dispatcher's no-method arm makes (disp_raise_with marks its
+   `NoMethodError.new(msg, :name, [<args>], receiver: self)` disp_nomethod):
+   built and raised out of line (sp_raise_nomethod_call), so the call that
+   does not raise holds no root, array or exception temp for it. The
+   operands are the dispatcher's own variables and self, and its message;
+   they are C arguments, so none may allocate (a Range, which a box copies;
+   a String the share plan boxes as a new handle) or the callee would find
+   an earlier one collected; any other raise, and a dispatcher with such an
+   operand, builds the error where it stands (emit_name_error_new_kw). The
+   constant is the builtin's whether or not the program reopens it: the
+   error is not built by a program's initialize. 1 when emitted. */
+/* The operands of a marked raise that is built out of line: 1 when it is
+   (the conditions above), with the receiver node in *self and the arguments
+   as nomethod_var_args leaves them. One answer for the emitter and for
+   the scans that count the values a program has (a raise lowered out of
+   line makes none of its array and keyword hash). */
+static int nomethod_out_of_line(Compiler *c, int call, int *self, const int **el, int *n, int *rest, int *kw) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || !nt_int(nt, call, "disp_nomethod", 0)) return 0;
+  int argc = 0;
+  const int *argv = call_args(nt, call, &argc);
+  int kn = 0;
+  const int *ke = nt_arr(nt, argv[3], "elements", &kn);
+  *self = nt_ref(nt, ke[0], "value");
+  if (!nomethod_var_args(nt, argv[2], el, n, rest, kw) || boxed_arg_wants_root(c, *self)) return 0;
+  for (int e = 0; e < *n; e++) if (boxed_arg_wants_root(c, (*el)[e])) return 0;
+  return !(*rest >= 0 && (boxed_arg_wants_root(c, *rest) || boxed_arg_wants_root(c, *kw)));
+}
+int disp_nomethod_out_of_line(Compiler *c, int call) {
+  const int *el; int self, n, rest, kw;
+  return nomethod_out_of_line(c, call, &self, &el, &n, &rest, &kw);
+}
+int emit_raise_nomethod_new(Compiler *c, int call, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const int *el = NULL;
+  int self, n = 0, rest = -1, kw = -1, argc = 0;
+  if (!nomethod_out_of_line(c, call, &self, &el, &n, &rest, &kw)) return 0;
+  const int *argv = call_args(nt, call, &argc);
+  buf_puts(b, rest >= 0 ? "sp_raise_nomethod_call_rest(" : "sp_raise_nomethod_call(");
+  emit_exc_msg_arg(c, argv[0], b); buf_puts(b, ", ");
+  emit_boxed(c, argv[1], b); buf_puts(b, ", ");
+  emit_boxed(c, self, b);
+  if (rest >= 0) {
+    buf_puts(b, ", "); emit_boxed(c, rest, b);
+    buf_puts(b, ", "); emit_boxed(c, kw, b);
+  }
+  else {
+    buf_printf(b, ", %d", n);
+    for (int e = 0; e < n; e++) { buf_puts(b, ", "); emit_boxed(c, el[e], b); }
+  }
+  buf_puts(b, ")");
+  return 1;
+}
+
+/* NameError.new(msg, name, receiver: r) and NoMethodError.new(msg, name,
+   args, receiver: r): the error names the missing method (#name), holds the
+   failed call's arguments in xkey as the positional form does (#args) and
+   the receiver. argv ends with the keyword hash, whose receiver: value is
+   recv_v. As the positional form does, the message, the name, the arguments
+   and the receiver are evaluated, in that order, into rooted temps before
+   the exception is allocated, and stored once it holds them: any of them
+   may allocate (an empty `[]`, a Range receiver), and the exception is
+   not yet reachable from anything while they do. */
+int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *argv, int recv_v, Buf *b) {
+  int args = argc >= 4 && is_no_method_error_class(cn) ? argv[2] : -1;
+  /* the fourth positional, before the keywords: #private_call? */
+  int priv = argc >= 5 && is_no_method_error_class(cn) ? argv[3] : -1;
+  int te = ++g_tmp, tm = argc >= 2 ? ++g_tmp : -1, tn = argc >= 3 ? ++g_tmp : -1;
+  int ta = args >= 0 ? ++g_tmp : -1, tp = priv >= 0 ? ++g_tmp : -1, tr = ++g_tmp;
+  buf_puts(b, "({ ");
+  if (tm >= 0) {
+    buf_printf(b, "const char *_t%d = ", tm);
+    emit_exc_msg_arg(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", tm);
+  }
+  if (tn >= 0) {
+    buf_printf(b, "sp_RbVal _t%d = ", tn);
+    emit_boxed(c, argv[1], b);
+    buf_puts(b, "; ");
+    if (boxed_arg_wants_root(c, argv[1])) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tn);
+  }
+  if (ta >= 0) {
+    buf_printf(b, "sp_RbVal _t%d = ", ta);
+    emit_boxed(c, args, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", ta);
+  }
+  if (tp >= 0) {
+    buf_printf(b, "int _t%d = ", tp);
+    emit_cond(c, priv, b);
+    buf_puts(b, "; ");
+  }
+  buf_printf(b, "sp_RbVal _t%d = ", tr);
+  emit_boxed(c, recv_v, b);
+  buf_puts(b, "; ");
+  if (boxed_arg_wants_root(c, recv_v)) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tr);
+  buf_printf(b, "sp_Exception *_t%d = sp_exc_new(\"%s\", ", te, cn);
+  if (tm >= 0) buf_printf(b, "_t%d", tm);
+  else emit_exc_msg_arg(c, -1, b);
+  buf_printf(b, "); SP_GC_ROOT(_t%d);", te);
+  if (tn >= 0) buf_printf(b, " _t%d->xname = _t%d;", te, tn);
+  if (ta >= 0) buf_printf(b, " _t%d->xkey = _t%d;", te, ta);
+  if (tp >= 0) buf_printf(b, " _t%d->priv_call = _t%d;", te, tp);
+  buf_printf(b, " _t%d->xrecv = _t%d; _t%d->has_recv = 1; _t%d; })", te, tr, te, te);
+  return 1;
 }

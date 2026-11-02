@@ -568,6 +568,7 @@ typedef struct {
   int scope, cls, proc, dead;
   int cbody, direct, struct_direct, dm_sclass;
   int bclass1;   /* at a class builder's call: the class its write made, plus one (0 for none) */
+  int cblock;    /* the class body the node is in is a block, which opens no constant scope: a class builder's, or one rewritten to a header (block_made_body) */
   ElabPos pos;
   int slot;
 } WalkCtx;
@@ -1285,19 +1286,20 @@ static int block_body_class(const NodeTable *nt, int def_node) {
 
 /* Did qualify_colliding_classes rename this class or module header to its
    `Outer__Leaf` key, so that its C name is its own, not the builtin's? Not
-   when the enclosing class or module is a `Class.new do ... end` or
-   `Module.new do ... end` (rewritten to a header): a block opens no constant
-   scope, so the name is the builtin's there, as CRuby reads it. */
-static int header_qualified(Compiler *c, int cp, int class_id) {
+   when the body the header is in is a `Class.new do ... end` or
+   `Module.new do ... end` block (in_block, also when rewritten to a header):
+   a block opens no constant scope, so the name is the builtin's there, as
+   CRuby reads it. A header reopening a builder's class (`class A::B` after
+   `A::B = Class.new do ... end`) opens one, whatever made the class. */
+static int header_qualified(Compiler *c, int cp, int in_block) {
   if (cp < 0 || !nt_str(c->nt, cp, "qc_ruby_name")) return 0;
-  int encl = class_id >= 0 && class_id < c->nclasses ? c->classes[class_id].def_node : -1;
-  return !(encl >= 0 && block_body_class(c->nt, encl));
+  return !in_block;
 }
 
 /* Class bodies and direct singleton definitions obey the same reopen limits. */
-static void refuse_native_class_reopen(Compiler *c, int id, int cp, int class_id, const char *leaf) {
+static void refuse_native_class_reopen(Compiler *c, int id, int cp, int class_id, int in_block, const char *leaf) {
   const char *nat = reopened_native_class(c, cp, class_id, leaf);
-  if (!nat && is_untabled_native_class_name(leaf) && !header_qualified(c, cp, class_id)) {
+  if (!nat && is_untabled_native_class_name(leaf) && !header_qualified(c, cp, in_block)) {
     int ln = (int)nt_int(c->nt, id, "node_line", 0);
     const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
     fprintf(stderr, "spinel: %s:%d: unsupported class name '%s': "
@@ -1334,7 +1336,8 @@ void refuse_native_singleton_reopen(Compiler *c, Scope *s) {
   int recv = (int)nt_int(c->nt, s->def_node, "singleton_reopen", -1);
   if (recv < 0) return;
   int ci = (int)nt_int(c->nt, s->def_node, "singleton_reopen_class", -1);
-  refuse_native_class_reopen(c, s->def_node, recv, ci, nt_str(c->nt, recv, "name"));
+  int encl = ci >= 0 && ci < c->nclasses ? c->classes[ci].def_node : -1;
+  refuse_native_class_reopen(c, s->def_node, recv, ci, encl >= 0 && block_body_class(c->nt, encl), nt_str(c->nt, recv, "name"));
 }
 
 /* Whether the program defines or aliases a define_method of its own (a def,
@@ -1623,7 +1626,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        too, as unsupported rather than TypeError. */
     if (ty_k == NK_ModuleNode && cname &&
         ((is_builtin_class_name(cname) && !is_builtin_module_name(cname)) ||
-         (is_untabled_native_class_name(cls_leaf) && !header_qualified(c, cp, class_id)))) {
+         (is_untabled_native_class_name(cls_leaf) && !header_qualified(c, cp, w.cblock)))) {
       int ln = (int)nt_int(c->nt, id, "node_line", 0);
       const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
       if (cls_toplevel)
@@ -1641,8 +1644,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        namespace, so it is a class like any other. */
     int names_root = cls_toplevel ||
                      (cp >= 0 && nt_kind(c->nt, cp) == NK_ConstantPathNode && nt_ref(c->nt, cp, "parent") < 0) ||
-                     (cp >= 0 && nt_kind(c->nt, cp) == NK_ConstantReadNode && class_id >= 0 &&
-                      block_body_class(c->nt, c->classes[class_id].def_node));
+                     (cp >= 0 && nt_kind(c->nt, cp) == NK_ConstantReadNode && class_id >= 0 && w.cblock);
     if (nt_kind(c->nt, id) == NK_ClassNode && cname && is_builtin_module_const_name(cls_leaf) && names_root) {
       int ln = (int)nt_int(c->nt, id, "node_line", 0);
       const char *file = c->nt->source_file ? c->nt->source_file : "source.rb";
@@ -1669,7 +1671,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       }
     }
     if (nt_kind(c->nt, id) == NK_ClassNode && cname)
-      refuse_native_class_reopen(c, id, cp, class_id, cls_leaf);
+      refuse_native_class_reopen(c, id, cp, class_id, w.cblock, cls_leaf);
     child_class = elab_rec_open(c, id, cp, cname, class_cref(c, class_id));
   }
   /* `X = Class.new(S) do ... end`, `A::B = Module.new do ... end`: the class
@@ -1900,6 +1902,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
            class_def_body(c->nt, id) >= 0)
     cw.struct_direct = 1;
   if (child_class >= 0) cw.cbody = child_class;
+  /* a header opens a constant scope, unless it is a block rewritten to one */
+  cw.cblock = ty_k == NK_ClassNode || ty_k == NK_ModuleNode ? nt_int(c->nt, id, "block_made_body", 0) != 0 : w.cblock;
   /* direct is the class whose body we are *directly* in (where `self` is the
      class). A method/block scope is entered exactly when `child` was
      reassigned (DefNode/define_method/block); there `self` is no longer the class,
@@ -1926,7 +1930,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       WalkCtx rw = cw;
       rw.dead = dead || (pred == 0 && r == then_body) || (pred == 1 && r == else_body);
       rw.pos = elab_child(c, id, r, &w.pos);
-      if (r == bblk) rw.cls = rw.cbody = rw.direct = w.bclass1 - 1;
+      if (r == bblk) { rw.cls = rw.cbody = rw.direct = w.bclass1 - 1; rw.cblock = 1; }
       walk_child(c, r, rw);
     }
     for (int i = 0; pass == 1 && i < na; i++) {
@@ -9563,7 +9567,10 @@ int infer_cvar_types(Compiler *c, int nil_only) {
     NodeKind ak = an == 2 && av ? nt_kind(nt, av[0]) : NK_NilNode;
     const char *cvn = (ak == NK_SymbolNode) ? nt_str(nt, av[0], "value")
                     : (ak == NK_StringNode) ? nt_str(nt, av[0], "content") : NULL;
-    if (cci < 0 || !cvn || cvn[0] != '@' || cvn[1] != '@') {
+    /* a name written out that is no class variable name raises when the
+       call runs (cvar_name_ok): it declares nothing */
+    if (cvn && !cvar_name_ok(cvn)) continue;
+    if (cci < 0 || !cvn) {
       c->cvar_set_unplaced = 1;
       continue;
     }
@@ -9602,6 +9609,7 @@ int infer_cvar_types(Compiler *c, int nil_only) {
       memmove(&cl->cvars[j], &cl->cvars[j + 1], sizeof(char *) * (size_t)(cl->ncvars - j - 1));
       memmove((TyKind *)&cl->cvar_types[j], &cl->cvar_types[j + 1], sizeof(TyKind) * (size_t)(cl->ncvars - j - 1));
       cl->ncvars--;
+      comp_table_gen++;
       comp_touch_class(cl->idx);
       changed = 1;
     }
@@ -9882,21 +9890,31 @@ static int pivs_elems(Compiler *c, int arr, char *set, int depth);
 static void pivs_note_builtin(Compiler *c) {
   if (c->pivs->active >= 0) c->pivs->memo[c->pivs->active].builtin = 1;
 }
-/* A constant naming a class or module, read as a value: the class query
-   records it beside its instance set (poly_recv_class_values) and walks on,
-   though the instance set's own answer stays unbounded for it. Only a name
-   one class of the program carries, or a builtin class's, is taken. */
+/* A constant naming a class or module, or a self that is one, read as a
+   value: the class query records it beside its instance set
+   (poly_recv_class_values) and walks on, though the instance set's own
+   answer stays unbounded for it. Only a name one class of the program
+   carries, or a builtin class's, is taken. */
 static int pivs_note_class_value(Compiler *c, int v) {
   PivsFacts *f = c->pivs;
-  if (f->hash_mode != 0 || f->active < 0 || nt_kind(c->nt, v) != NK_ConstantReadNode) return 0;
-  const char *cn = nt_str(c->nt, v, "name");
-  if (!cn) return 0;
-  int ci = -1, nmatch = 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].name && sp_streq(c->classes[k].name, cn)) { ci = k; nmatch++; }
-  if (nmatch > 1) return 0;
-  if (ci >= 0 && comp_const(c, cn)) return 0;   /* a value constant of the name */
-  if (ci < 0 && builtin_class_id(cn) == 0) return 0;
+  if (f->hash_mode != 0 || f->active < 0) return 0;
+  int ci = -1;
+  if (nt_kind(c->nt, v) == NK_SelfNode) {
+    /* a class body's self, or a constant builder's block's (whose |k| the
+       body binds as `k = self`): that class */
+    ci = elab_self_value_at(c, v);
+    if (ci < 0) return 0;
+  }
+  else {
+    const char *cn = nt_kind(c->nt, v) == NK_ConstantReadNode ? nt_str(c->nt, v, "name") : NULL;
+    if (!cn) return 0;
+    int nmatch = 0;
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].name && sp_streq(c->classes[k].name, cn)) { ci = k; nmatch++; }
+    if (nmatch > 1) return 0;
+    if (ci >= 0 && comp_const(c, cn)) return 0;   /* a value constant of the name */
+    if (ci < 0 && builtin_class_id(cn) == 0) return 0;
+  }
   f->memo[f->active].has_class = 1;
   if (ci >= 0) f->memo[f->active].cvals[ci] = 1;
   return 1;
@@ -10460,6 +10478,7 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
       return 1;
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
+      if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
       if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))

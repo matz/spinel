@@ -212,6 +212,15 @@ int is_quantifier(const char *n) {
   return sp_streq(n, "all?") || sp_streq(n, "any?") || sp_streq(n, "none?") || sp_streq(n, "one?");
 }
 
+/* NameError or NoMethodError, whose .new takes the missing name second */
+int is_name_error_class(const char *n) {
+  return n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"));
+}
+
+int is_no_method_error_class(const char *n) {
+  return n && sp_streq(n, "NoMethodError");
+}
+
 int is_set_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "intersection") || sp_streq(n, "|") || sp_streq(n, "union") ||
          sp_streq(n, "-") || sp_streq(n, "difference");
@@ -1834,6 +1843,15 @@ int is_instance_method_list(const char *n) {
 /* The Module methods that read a class's method table: the instance-method
    lists and instance_method */
 int is_instance_method_table_read(const char *n) { return n && (is_instance_method_list(n) || sp_streq(n, "instance_method")); }
+/* Does the builtin Module / Class method n answer from its receiver's
+   class: an instance-method listing, const_defined?, class_variable_get,
+   class_variable_set, class_variable_defined? (the Class emitters a
+   class-tag arm tells its class, view_push_class_is)? */
+int is_class_value_reflection(const char *n) {
+  static const char *const names[] = { "const_defined?", "class_variable_get", "class_variable_set",
+    "class_variable_defined?", NULL };
+  return n && (is_instance_method_list(n) || builtin_name_in(n, names));
+}
 /* Does every object (with cmeth, every class and module too) answer m with
    a builtin method: one of Object's own, Kernel's or Object's (Module's)? */
 int builtin_every_object_answers(const char *m, int cmeth) {

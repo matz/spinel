@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 int comp_ternary_arms(const NodeTable *nt, int id, int *then_node, int *else_node) {
   NodeKind k = nt_kind(nt, id);
@@ -500,6 +501,8 @@ void comp_grow_node_arrays(Compiler *c) {
 void comp_free(Compiler *c) {
   if (!c) return;
   for (int i = 0; i < 8; i++) free(c->mc_ring[i]);
+  for (int i = 0; i < c->n_rsc_names; i++) free(c->rsc_names[i]);
+  free(c->rsc_names);
   for (int i = 0; i < c->n_cext_extensions; i++) { free(c->cext_extensions[i].name); free(c->cext_extensions[i].init); }
   free(c->cext_extensions);
   for (int i = 0; i < c->n_cext_stubs; i++) free(c->cext_stubs[i].key);
@@ -1292,6 +1295,17 @@ int comp_cvar_index(ClassInfo *ci, const char *name) {
    has an entry for `name`, or to `cid` itself when none does. Every reader and
    writer of a class variable goes through here before it looks the entry up or
    builds the slot's name. */
+/* Is `n` a class variable name: `@@` and an identifier (a letter, an
+   underscore or a byte of a non-ASCII character first, digits after)? A
+   class_variable_get / _set / _defined? with a literal name that is not one
+   raises CRuby's NameError when it runs, and declares nothing. */
+int cvar_name_ok(const char *n) {
+  if (!n || n[0] != '@' || n[1] != '@') return 0;
+  const unsigned char *p = (const unsigned char *)n + 2;
+  if (!(*p == '_' || isalpha(*p) || *p >= 0x80)) return 0;
+  for (p++; *p; p++) if (!(*p == '_' || isalnum(*p) || *p >= 0x80)) return 0;
+  return 1;
+}
 int comp_cvar_owner(const Compiler *c, int cid, const char *name) {
   int owner = cid;
   if (cid < 0 || !name) return cid;
@@ -1334,6 +1348,7 @@ int comp_cvar_intern(ClassInfo *ci, const char *name) {
     ci->cvar_str_shared = realloc(ci->cvar_str_shared, (size_t)ci->ccvars);
     { ci->cvar_elems_shared = realloc(ci->cvar_elems_shared, (size_t)ci->ccvars); comp_touch_class(ci->idx); }
   }
+  comp_table_gen++;
   ci->cvars[ci->ncvars] = strdup(name);
   ((TyKind *)ci->cvar_types)[ci->ncvars] = TY_UNKNOWN;
   comp_touch_class(ci->idx);    /* a new cvar is a change of the table */
@@ -2594,13 +2609,15 @@ static void name_append(char ***list, int *n, int *cap, const char *name) {
 void comp_def_asked_add(Compiler *c, const char *name) {
   if (name) name_add(&c->def_asked, &c->ndef_asked, &c->cdef_asked, name);
 }
-unsigned comp_table_gen = 0;   /* bumped when a reader or alias table grows (poly-candidate memo stamp) */
+unsigned comp_instantiated_gen = 0;
+unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table grows or a class-variable table changes (poly-candidate memo stamp) */
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->readers, &ci->nreaders, &ci->creaders, &ci->readers_ix, name);
   comp_touch_class(ci->idx);
 }
 void comp_add_writer(ClassInfo *ci, const char *name) {
+  comp_table_gen++;
   name_add_ix(&ci->writers, &ci->nwriters, &ci->cwriters, &ci->writers_ix, name);
   comp_touch_class(ci->idx);
 }
@@ -3143,13 +3160,13 @@ int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_c
    so a call there dispatches at run time (#4023). */
 int comp_subclass_answers(Compiler *c, int class_id, const char *name) {
   if (class_id < 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (k == class_id) continue;
-    int anc = 0;
-    for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
-      if (p2 == class_id) { anc = 1; break; }
-    if (anc && (comp_method_in_chain(c, k, name, NULL) >= 0 ||
-                comp_reader_in_chain(c, k, name, NULL))) return 1;
+  /* the strict subclasses alone (comp_descendants), where every class and
+     its parent chain was walked at every call asked */
+  int nd = 0;
+  const int *ds = comp_descendants(c, class_id, &nd);
+  for (int i = 0; i < nd; i++) {
+    int k = ds[i];
+    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
   }
   return 0;
 }

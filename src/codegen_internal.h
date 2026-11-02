@@ -2140,6 +2140,7 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b);
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out);
 int declare_default_locals(Compiler *c, Scope *m, int dnode);
 int arg_wants_root(Compiler *c, TyKind pt, int provided);
+int boxed_arg_wants_root(Compiler *c, int node);   /* codegen_call_class.c */
 int emit_nilfree_operand(Compiler *c, int v, const char *op, int left, const char *lhs, Buf *b);
 int emit_nilfree_cmp_operand(Compiler *c, int v, const char *op, int left, const char *lhs, Buf *b);
 void emit_rooted_operand(Compiler *c, TyKind pt, int provided, const char *expr, Buf *out);
@@ -2521,6 +2522,12 @@ const void *view_conversion(Compiler *c, int *node);
 /* The effective method for this call emission; the node keeps its own name. */
 int view_push_target(Compiler *c, int node, const char *name);
 const char *view_call_name(Compiler *c, int node);
+/* A Class-valued receiver that names class ci for this emission; the class,
+   or -1 with no such view open (the read marks the entry with what the
+   emitter answers from, ELAB_GAIN_*: view_class_is_read) */
+int view_push_class_is(Compiler *c, int node, int ci);
+int view_class_is(Compiler *c, int node, unsigned reads);
+unsigned view_class_is_read(int tok);
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);
 int view_type_top(int node, TyKind *kind);   /* the open type view on node, if any */
 void view_pop(Compiler *c, int tok);

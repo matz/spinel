@@ -1,0 +1,12 @@
+7
+true
+true
+false
+7
+1
+true
+false
+true
+7
+undefined method 'const_defined?' for an instance of Integer
+undefined method 'class_variable_get' for an instance of Integer

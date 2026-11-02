@@ -296,6 +296,31 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg);
    -2 for any other frame (a singleton class body, an eval form's or an
    anonymous builder's block) or no point */
 int elab_self_at(Compiler *c, int node);
+/* elab_self_at for a node no block stands between it and that body: a
+   statement of the class or module body, or of the class builder's block,
+   itself (a block of another call may run under another self, as
+   class_exec's does); -2 otherwise, and for main's top level */
+int elab_self_value_at(Compiler *c, int node);
+/* What a reflection on class cls at call id (from the first statement of
+   its window, elab_call_window) cannot answer as the load's end does: of
+   `kinds`, each whose every contributor the record cannot prove ran for
+   sure (placed, on no condition, in no body that may not run) before the
+   window. ELAB_GAIN_METHODS: its own instance side's entries and the
+   defs, aliases and attrs its tables hold; ELAB_GAIN_INHERITED: an
+   ancestor's (a top-level def, private, aside) and the mixins, and any
+   at all while main, Object, Kernel or BasicObject holds one (the
+   emitters do not list theirs); ELAB_GAIN_CONSTS: the constants written
+   into it, an ancestor or Object, a mixin, and any at all while one is
+   written in a singleton class body or by a const_set or remove_const
+   on another receiver than cls; ELAB_GAIN_CVARS: each class variable its
+   tables or an ancestor's hold, written in the body itself, a mixin, a
+   class_variable_set. Every kind where it cannot tell (no window, an
+   ancestry it does not know). keep: the call plan asks it outside any
+   view, scope move or splice, so the answer from the record and the
+   tables is kept for the passes that ask it again (by call, class and
+   window), while none of the epochs of what it reads has moved. */
+enum { ELAB_GAIN_METHODS = 1, ELAB_GAIN_INHERITED = 2, ELAB_GAIN_CONSTS = 4, ELAB_GAIN_CVARS = 8 };
+unsigned elab_class_unsettled(Compiler *c, int cls, unsigned kinds, int id, int keep);
 /* the class whose body is node's lexical scope (cref), which owns a
    constant node writes: a class or module body's; a class builder's block
    keeps the scope it is written in. -1 for main's top level; -2 in a

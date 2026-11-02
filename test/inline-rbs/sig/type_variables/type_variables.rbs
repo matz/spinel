@@ -1,0 +1,9 @@
+class Array[unchecked out Elem]
+  def from_pos: (Integer, untyped) -> Array[Elem]
+  def second_one: (untyped) -> Elem?
+  def has?: (Elem, untyped) -> bool
+end
+
+class Hash[unchecked out K, unchecked out V]
+  def at_key: (K, untyped) -> V?
+end

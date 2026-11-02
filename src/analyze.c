@@ -1855,6 +1855,7 @@ void compute_instantiated(Compiler *c, int early) {
   }
   for (int k = 0; k < c->nclasses; k++) { c->classes[k].ctor_reachable = c->classes[k].instantiated; comp_touch_class(c->classes[k].idx); }
   if (early) { for (int k = 0; k < c->nclasses; k++) c->classes[k].instantiated = keep[k]; free(keep); }
+  comp_instantiated_gen++;
   comp_touch_global();   /* instantiated and ctor_reachable moved: inference reads them (respond_to? on a box, the plans) */
 }
 
@@ -7610,33 +7611,6 @@ static void inline_warn(const char *where, const char *fmt, const char *a, const
   fputc('\n', stderr);
 }
 
-/* The class a class-level node belongs to: the struct's, for a direct
-   statement of a `Name = Struct.new(...) do` / `Data.define do` block, whose
-   node_cbody still names the class around the write (only the block's
-   defs take the struct's class, from the load record); otherwise its class
-   body's. */
-static int *inline_struct_owner(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int *own = malloc(sizeof(int) * (size_t)(nt->count ? nt->count : 1));
-  for (int i = 0; i < nt->count; i++) own[i] = -1;
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind wk = nt_kind(nt, id);
-    if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
-    int bbody = class_def_body(nt, id);
-    if (bbody < 0) continue;
-    char an[48];
-    const char *cname = nt_str(nt, id, "name");
-    if (wk == NK_LocalVariableWriteNode) { snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id)); cname = an; }
-    int ci = cname ? comp_class_index(c, cname) : -1;
-    if (ci < 0) continue;
-    own[bbody] = ci;
-    int bn = 0;
-    const int *stmts = nt_arr(nt, bbody, "body", &bn);
-    for (int k = 0; k < bn; k++) own[stmts[k]] = ci;
-  }
-  return own;
-}
-
 /* FILE:LINE of a node's annotation, and FILE:LINE:COL for a warning
    about it: the position the parser's own warnings carry */
 static void inline_where(const NodeTable *nt, int id, char *buf, size_t n) {
@@ -7729,13 +7703,50 @@ static int inline_def_applicable(Compiler *c, const NodeTable *nt, int id, Scope
   return INLINE_DEF_APPLIES;
 }
 
+/* The method name an annotation's reader wrote: an Enumerable method's
+   per-site copy (`__enum_sole__send`, `__enum_sole__3`) and its generic
+   definition (`__enum_sole`) carry the def's annotation under the name the
+   desugar gave them. */
+static const char *inline_user_name(const char *name, char *buf, size_t n) {
+  if (!name || strncmp(name, "__enum_", 7) != 0) return name;
+  snprintf(buf, n, "%s", name + 7);
+  char *t = strstr(buf, "__");
+  if (t && t > buf) {
+    const char *r = t + 2;
+    int digits = *r != '\0';
+    for (const char *q = r; *q; q++) if (*q < '0' || *q > '9') digits = 0;
+    if (digits || sp_streq(r, "send")) *t = '\0';
+  }
+  return buf;
+}
+
+/* Has the annotation at `head` been reported already? Records it if not.
+   A def the desugar copies (an Enumerable method's per-site copies) carries
+   its annotation on every copy: one verdict per comment is enough. */
+static int inline_warned_before(char ***seen, int *n, const char *head) {
+  for (int i = 0; i < *n; i++) if (sp_streq((*seen)[i], head)) return 1;
+  *seen = realloc(*seen, sizeof(char *) * (size_t)(*n + 1));
+  (*seen)[(*n)++] = strdup(head);
+  return 0;
+}
+
 static void apply_inline_rbs(Compiler *c) {
   const NodeTable *nt = c->nt;
   int any = 0;
   for (int r = 0; r < nt_nroots(nt) && !any; r++)   /* each file's root says whether it has one */
     any = nt_root(nt, r) >= 0 && nt_int(nt, nt_root(nt, r), "rbs_any", 0);
   if (!any) return;
-  int *sown = inline_struct_owner(c);
+  /* the annotations a def still carries: a node blanked by a desugar whose
+     copies carry its annotation (an Enumerable method's generic definition)
+     is reported through them */
+  char **live = NULL, **seen = NULL;
+  int nlive = 0, nseen = 0;
+  for (int id = 0; id < nt->count; id++)
+    if (nt_kind(nt, id) == NK_DefNode && nt_int(nt, id, "rbs_line", 0)) {
+      char h[300];
+      inline_head(nt, id, h, sizeof h);
+      inline_warned_before(&live, &nlive, h);
+    }
   for (int id = 0; id < nt->count; id++) {
     if (!nt_int(nt, id, "rbs_line", 0) && !nt_str(nt, id, "rbs_ivars")) continue;
     char where[300], head[300], spell[300];
@@ -7745,12 +7756,21 @@ static void apply_inline_rbs(Compiler *c) {
     const char *ivt = nt_str(nt, id, "rbs_ivar");
     if (k == NK_DefNode) {
       const char *ret = nt_str(nt, id, "rbs_ret"), *params = nt_str(nt, id, "rbs_params");
-      const char *name = nt_str(nt, id, "name");
+      char ubuf[256];
+      const char *name = inline_user_name(nt_str(nt, id, "name"), ubuf, sizeof ubuf);
+      const char *folded = nt_str(nt, id, "folded_into_object");
       Scope *ms = NULL, *rs = NULL;
       char bad[128], rbad[128];
       int app = inline_def_applicable(c, nt, id, &ms, bad, sizeof bad);
       int rep = app == INLINE_DEF_APPLIES ? inline_replacing_def(c, ms) : -1;
-      if (app == INLINE_DEF_NOT_FOUND) inline_warn(head, "the signature of `%s` is not applied: its method was not found after the parse%s", name, "");
+      if (app != INLINE_DEF_APPLIES && inline_warned_before(&seen, &nseen, head)) { /* reported through another copy */ }
+      else if (app == INLINE_DEF_NOT_FOUND && folded) {
+        /* desugar_object_method_builtin_overrides moved the body into Object's def */
+        char into[300];
+        snprintf(into, sizeof into, "%s branch of Object#%s", folded, name);
+        inline_warn(head, "the signature of `%s` is not applied: its body runs as the %s, whose signature is the one that applies", name, into);
+      }
+      else if (app == INLINE_DEF_NOT_FOUND) inline_warn(head, "the signature of `%s` is not applied: its method was not found after the parse%s", name, "");
       else if (app == INLINE_DEF_MIXED_IN)
         inline_warn(head, "the signature of `%s` is not applied: it is a method of a module mixed in with %s, whose calls "
                           "run a copy made for each class it is mixed into, which no signature reaches; the same signature "
@@ -7786,7 +7806,7 @@ static void apply_inline_rbs(Compiler *c) {
       }
     }
     else if (ivt && k == NK_CallNode) {
-      int ci = sown[id] >= 0 ? sown[id] : c->node_cbody[id];
+      int ci = c->node_cbody[id];
       if (ci < 0 || ci >= c->nclasses) { inline_warn(head, "this annotation is not applied: no class was found for it%s%s", "", ""); continue; }
       if (!inline_seed_tok_ok(c, ivt) && seed_obj_array_class(c, ivt) < 0 && !seed_nested_array_req(ivt)) {
         inline_warn(head, "this type is not applied: %s names no type Spinel can pin%s",
@@ -7808,14 +7828,14 @@ static void apply_inline_rbs(Compiler *c) {
         if (!nsym) inline_warn(head, "this type is not applied: the call names no attribute Spinel can see%s%s", "", "");
       }
     }
-    else if (nt_int(nt, id, "rbs_line", 0)) {
+    else if (nt_int(nt, id, "rbs_line", 0) && !inline_warned_before(&live, &nlive, head)) {
       /* every fact the parser wrote is applied or reported: one on a node
          an earlier pass rewrote into another kind would otherwise be lost */
       inline_warn(head, "this annotation is not applied: its declaration became a %s before types were read%s",
                   nt_type(nt, id) ? nt_type(nt, id) : "node", "");
     }
     if (nt_str(nt, id, "rbs_ivars")) {
-      int ci = sown[id] >= 0 ? sown[id] : c->node_cbody[id];
+      int ci = c->node_cbody[id];
       char *list = strdup(nt_str(nt, id, "rbs_ivars"));
       for (char *e = strtok(list, ","); e; e = strtok(NULL, ",")) {
         /* @x=<tag>@<line>@<file>@<col> */
@@ -7840,7 +7860,9 @@ static void apply_inline_rbs(Compiler *c) {
       free(list);
     }
   }
-  free(sown);
+  for (int i = 0; i < nlive; i++) free(live[i]);
+  for (int i = 0; i < nseen; i++) free(seen[i]);
+  free(live); free(seen);
 }
 
 /* A seed that names a class (`@memory: Bus`, `Array[Bus]`) the program has
@@ -16371,6 +16393,56 @@ static int oa_reader_ivslot(Compiler *c, int **ivslot, int ci, const char *name)
   return -1;
 }
 
+/* narrow_object_arrays' step 5c: the Symbols (by node, of the nc nodes)
+   that define an accessor rather than route to one. The `attr_reader :items`
+   declaration names the reader with a symbol; that one is the reader's
+   definition, not a dynamic route to it. `attr_accessor`/`attr_writer` name
+   it the same way -- their WRITER is what has to be vetted, and step 3a does
+   that by its own `:items=` name, so treating the declaration as a dynamic
+   route would kill every accessor slot for the bare symbol it is spelled
+   with. A member of `Struct.new(:items)` / `Data.define(:items)` is the
+   record class's own reader and writer the same way, and so are the keyword
+   naming it in a constructor call (`Group.new(items: v)`) and the member
+   names the each_pair a Struct is given yields (synth_struct_each): none
+   reaches another class's `items`. */
+static char *oa_defining_symbols(Compiler *c, int nc) {
+  const NodeTable *nt = c->nt;
+  char *attr_sym = (char *)calloc(nc, 1);
+  if (!attr_sym) { fprintf(stderr, "oom\n"); exit(1); }
+  for (int id = 0; id < nt->count && id < nc; id++) {
+    NodeKind ty_k = nt_kind(nt, id);
+    if (ty_k == NK_SymbolNode) {
+      Scope *ssc = comp_scope_of(c, id);
+      if (ssc && scope_is_struct_synth(c, (int)(ssc - c->scopes))) attr_sym[id] = 1;
+      continue;
+    }
+    if (ty_k != NK_CallNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    int aa = nt_ref(nt, id, "arguments"); int aan = 0;
+    const int *aav = aa >= 0 ? nt_arr(nt, aa, "arguments", &aan) : NULL;
+    if (class_def_is_record_call(nt, id) ||
+        (recv < 0 && cn && (sp_streq(cn, "attr_reader") || sp_streq(cn, "attr") ||
+                            sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr_writer")))) {
+      for (int k = 0; k < aan; k++) if (aav[k] >= 0 && aav[k] < nc) attr_sym[aav[k]] = 1;
+      continue;
+    }
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+    int rc = cn && is_struct_constructor(cn) && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
+             ? const_node_class_index(c, recv) : -1;
+    if (rc < 0 || !c->classes[rc].is_struct) continue;
+    for (int k = 0; k < aan; k++) {
+      if (nt_kind(nt, aav[k]) != NK_KeywordHashNode) continue;
+      int en = 0; const int *el = nt_arr(nt, aav[k], "elements", &en);
+      for (int e = 0; e < en; e++) {
+        int key = nt_kind(nt, el[e]) == NK_AssocNode ? nt_ref(nt, el[e], "key") : -1;
+        if (key >= 0 && key < nc && nt_kind(nt, key) == NK_SymbolNode) attr_sym[key] = 1;
+      }
+    }
+  }
+  return attr_sym;
+}
+
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -17100,23 +17172,7 @@ static int narrow_object_arrays(Compiler *c) {
          anywhere names it for `send`/`method`/`define_method`/`&:m`, and
          `super` reaches it with no call node at all. Retyping its C return
          under either would hand back something the caller cannot read. */
-  /* the `attr_reader :items` declaration itself names the reader with a
-     symbol; that one is the reader's definition, not a dynamic route to it.
-     `attr_accessor`/`attr_writer` name it the same way -- their WRITER is
-     what has to be vetted, and step 3a does that by its own `:items=` name,
-     so treating the declaration here as a dynamic route would kill every
-     accessor slot for the bare symbol it is spelled with. */
-  char *attr_sym = (char *)calloc(nc, 1);
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind ty_k = nt_kind(nt, id);
-    if (ty_k != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
-    const char *cn = nt_str(nt, id, "name");
-    if (!cn || !(sp_streq(cn, "attr_reader") || sp_streq(cn, "attr") ||
-                 sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr_writer"))) continue;
-    int aa = nt_ref(nt, id, "arguments"); int aan = 0;
-    const int *aav = aa >= 0 ? nt_arr(nt, aa, "arguments", &aan) : NULL;
-    for (int k = 0; k < aan; k++) if (aav[k] >= 0 && aav[k] < nc) attr_sym[aav[k]] = 1;
-  }
+  char *attr_sym = oa_defining_symbols(c, nc);
   /* The names the program's Symbols and supers spell, as a set: each
      Symbol was compared with every slot (tens of thousands of Symbols by
      thousands of slots on a Rails program, every round), and a slot dies
@@ -38192,7 +38248,8 @@ static int sg_civ_reader_call(Compiler *c, int v) {
    nil, and a walk that gave up may be */
 static int nullable_int_leaf(const VpLeaf *leaf, void *ud) {
   if (leaf->kind == VPK_NIL || leaf->kind == VPK_GAVE_UP) return 1;
-  return nullable_int_value(ud, leaf->node);
+  /* (an arm that raises gives no value: an_call_diverges) */
+  return !an_call_diverges(ud, leaf->node) && nullable_int_value(ud, leaf->node);
 }
 int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
@@ -48974,7 +49031,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
   /* intern every symbol literal so codegen can emit the id table */
   for (int id = 0; id < c->nt->count; id++) {
     NodeKind ty_k = nt_kind(c->nt, id);
-    if (ty_k == NK_SymbolNode) {
+    if (ty_k == NK_SymbolNode && !nt_int(c->nt, id, "key_only", 0)) {   /* (a keyword key only the code generator reads by name is no value) */
       const char *v = nt_str(c->nt, id, "value");
       /* the node's own byte length: a symbol literal may hold a NUL, and
          interning it by strlen registers the short name codegen then emits */

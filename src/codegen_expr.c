@@ -1138,7 +1138,7 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
     emit_bigint_operand_ext(c, nd, b);
     return;
   }
-  if ((ty_is_array(res) || ty_is_hash(res)) && bk == NK_CallNode &&
+  if ((ty_is_array(res) || ty_is_obj_array(res) || ty_is_hash(res)) && bk == NK_CallNode &&
       repr_of(c, nd).untyped && emit_empty_container_for_slot(c, nd, res, b))
     return;
   if (ty_is_array(res) && bk == NK_ArrayNode) {

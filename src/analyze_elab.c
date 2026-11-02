@@ -1048,8 +1048,10 @@ int elab_builder_class(Compiler *c, int node) {
    header's (the node -> class map), a class builder's; an alias's, a
    write whose value is a constant reference (`A = Foo`, `A = M::Foo`),
    the class that reference names at the write's point, along a chain of
-   aliases up to a cap; else none known */
-static int lr_class_of(Compiler *c, const LrDef *d) {
+   aliases up to a cap; else none known. *core (when asked): the core
+   class slot the chain ends in, as lr_class_ref_at gives it. */
+static int lr_class_of(Compiler *c, const LrDef *d, int *core) {
+  if (core) *core = -1;
   NodeKind k = d ? nt_kind(c->nt, d->node) : NK_NilNode;
   if (k == NK_ClassNode || k == NK_ModuleNode || (d && class_def_builder(c->nt, d->node) >= 0))
     return elab_header_class(c, d->node, NULL, NULL);
@@ -1060,7 +1062,7 @@ static int lr_class_of(Compiler *c, const LrDef *d) {
   LoadRecord *r = c->lrec;
   if ((vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) || r->follow >= 16) return LR_UNKNOWN_CLASS;
   r->follow++;
-  int ci = lr_class_ref_at(c, v, NULL);
+  int ci = lr_class_ref_at(c, v, core);
   r->follow--;
   return ci == LR_LATER ? LR_UNKNOWN_CLASS : ci;   /* a later reference keeps the name it is written with, not the alias's */
 }
@@ -1103,6 +1105,8 @@ static int lr_root_read(const NodeTable *nt, int node) {
   return nt_kind(nt, node) == NK_ConstantReadNode && nt_int(nt, node, "root_anchored", 0);
 }
 
+/* *core (when asked): the slot of the core class the name is registered as,
+   also through an alias of it, and -1 for any other. */
 static int lr_class_ref_at(Compiler *c, int node, int *core) {
   const NodeTable *nt = c->nt;
   const LrDef *d = NULL;
@@ -1120,7 +1124,7 @@ static int lr_class_ref_at(Compiler *c, int node, int *core) {
     if (pc < LR_MAIN) return LR_UNKNOWN_CLASS;
     o = lr_const_in(c, pc, nm, p, p.region < 0, pc == LR_MAIN, &d, 0, LR_KEY_CONST);
   }
-  if (o == ELAB_YES) return lr_class_of(c, d);
+  if (o == ELAB_YES) return lr_class_of(c, d, core);
   /* a name Object does not hold from the program: a core class's or module's */
   if (o == ELAB_NO && pc == LR_MAIN && (is_builtin_class_name(nm) || is_builtin_module_const_name(nm))) {
     int slot = builtin_core_class_slot(nm);
@@ -1187,7 +1191,7 @@ int elab_class_candidates(Compiler *c, int node, int **out) {
   if (o == ELAB_NO || r->cand_bad || !r->ncand) return -1;
   for (int i = 0; i < r->ncand && !s.bad; i++) {
     const LrDef *d = r->cand[i];
-    int ci = lr_class_of(c, d);
+    int ci = lr_class_of(c, d, NULL);
     if (ci >= LR_MAIN) lr_cls_add(&s, ci);
     else if (nt_kind(nt, d->node) == NK_ConstantWriteNode) for_each_value_position(nt, nt_ref(nt, d->node, "value"), 0, lr_value_leaf, &s);
     else s.bad = 1;
@@ -1333,6 +1337,33 @@ static void lr_def(ElabRec *x, int def, int fc, int fs, int bvis, int may) {
 static int lr_const_owner(int cls) { return cls >= LR_MAIN ? cls + 2 : 0; }
 static int lr_sg_const_owner(int cls) { return cls >= LR_MAIN ? -cls - 2 : 0; }
 
+/* Is p a path of constant names alone (`A::B`, `::A`, `A`)? */
+static int lr_const_chain(const NodeTable *nt, int p) {
+  for (; p >= 0; p = nt_ref(nt, p, "parent"))
+    if (nt_kind(nt, p) != NK_ConstantPathNode && nt_kind(nt, p) != NK_ConstantReadNode) return 0;
+  return 1;
+}
+
+/* The owner of the constant the write node sets through the path `path`
+   (`path::X = v`, `path.const_set(:X, v)`): the class the reference names
+   where it stands. Object, written `Object` or through an alias of it, is
+   main's (LR_MAIN), where `::X` and a top-level write go, whether the
+   program reopens it before, after or not at all (a record made again
+   after the walk gives the walk's owner). The walk visits a path after a
+   value that opens a statement of its own (a block run at once); a path of
+   names it has not reached is placed with its write, whose statement it
+   runs in. */
+static int lr_path_const_owner(Compiler *c, int node, int path) {
+  LoadRecord *r = c->lrec;
+  if (node < r->n && r->at[node] >= 0 && lr_const_chain(c->nt, path))
+    for (int p = path; p >= 0 && p < r->n && r->at[p] == -2; p = nt_ref(c->nt, p, "parent")) {
+      r->at[p] = r->at[node];
+      r->bits[p] = r->bits[node];
+    }
+  int core, cls = lr_class_ref_at(c, path, &core);
+  return lr_const_owner(core == CORE_OBJECT ? LR_MAIN : cls);
+}
+
 /* A known class's singleton has its own constant history, disjoint from
    the class's. A singleton of an arbitrary object remains unknown. */
 static int lr_singleton_owner(Compiler *c, int f) {
@@ -1404,7 +1435,7 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
       if (!nm || !is_const_set_name(nm) || an < 2 || !(name = vis_arg_name(nt, av[0]))) return;
       int rv = nt_ref(nt, node, "receiver");
       owner = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ?
-        (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_const_owner(lr_class_ref_at(c, rv, NULL));
+        (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_path_const_owner(c, node, rv);
       lr_write(c->lrec, ELAB_CONST, owner, name, node, lr_nil_value(nt, av[1]), may);
       return;
     }
@@ -1414,7 +1445,7 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
   if (target >= 0) {
     int par = nt_ref(nt, target, "parent");
     owner = par < 0 ? lr_const_owner(LR_MAIN) : nt_kind(nt, par) == NK_SelfNode ?
-      (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_const_owner(lr_class_ref_at(c, par, NULL));
+      (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_path_const_owner(c, node, par);
   }
   may |= k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
          k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode;
@@ -1874,7 +1905,7 @@ static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may) {
   if (!n) return;
   int recv = nt_ref(nt, node, "receiver");
   int owner = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ?
-    (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_const_owner(lr_class_ref_at(x->c, recv, NULL));
+    (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_path_const_owner(x->c, node, recv);
   for (int k = 0; k < n; k++) {
     if (!owner) continue;
     LrHist *h = lr_hist(x->r, LR_KEY_AUTO, owner, a[k].name, 1);
@@ -3453,7 +3484,7 @@ static void lr_rta_names(LrRta *t) {
       t->cname[n++] = (LrRtaName){ lr_written_name(nt, nt_ref(nt, id, "constant_path")), elab_header_class(t->c, id, NULL, NULL) };
     else if (path || k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantOperatorWriteNode) {
       int b = lr_rta_builder(t->c, id);
-      t->cname[n++] = (LrRtaName){ lr_written_name(nt, path ? nt_ref(nt, id, "target") : id), b != LR_UNKNOWN_CLASS ? b : lr_class_of(t->c, &(LrDef){ .node = id }) };
+      t->cname[n++] = (LrRtaName){ lr_written_name(nt, path ? nt_ref(nt, id, "target") : id), b != LR_UNKNOWN_CLASS ? b : lr_class_of(t->c, &(LrDef){ .node = id }, NULL) };
     }
     if ((cn && (is_const_set_name(cn) || is_remove_const_name(cn))) || (n && !t->cname[n - 1].name)) { t->ncname = -1; return; }
   }
@@ -4316,7 +4347,7 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   const LrDef *d = NULL;
   h->verdict = elab_const_own_at(c, h->owner, h->leaf, elab_point_of(c, node), &d);
   h->found = d ? d->node : -1;
-  h->want = d ? lr_class_of(c, d) : h->verdict == ELAB_NO ? LR_NEW : LR_UNKNOWN_CLASS;
+  h->want = d ? lr_class_of(c, d, NULL) : h->verdict == ELAB_NO ? LR_NEW : LR_UNKNOWN_CLASS;
   /* Object's constant of a builtin's name the program has not written yet
      is the builtin's: the header reopens it, at the top level or in
      `class Object` */
@@ -4653,7 +4684,7 @@ static int lr_ref_at(Compiler *c, int ref, int site, int *cls, const char **miss
     }
     o = lr_const_in(c, in, nm, p, p.region < 0, !scoped, &d, 0, LR_KEY_CONST);
   }
-  if (o == ELAB_YES) { *cls = lr_class_of(c, d); return o; }
+  if (o == ELAB_YES) { *cls = lr_class_of(c, d, NULL); return o; }
   if (o != ELAB_NO) return o;
   /* a builtin's, or a class made where the record does not see it */
   int ci = comp_class_index(c, nm);

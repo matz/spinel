@@ -3743,17 +3743,19 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
            Comparable's operators down with it (#3488, #3490). With the
            candidate skipped the builtin answer for the name applies, and once
            the method's return does settle it unifies in on a later round. */
-        if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN) continue;
+        /* The dispatch calls a yielding method through its proc form, whose
+           body is typed apart: `return list unless block_given?` answers
+           there, and the yield form, which takes the block as given,
+           answers self alone. A method no call splices (the proc form is its
+           only caller) has no return of its own: the proc form's is its
+           answer. */
+        int pf = mi >= 0 && c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
+        int pf_known = pf >= 0 && c->scopes[pf].ret != TY_UNKNOWN && c->scopes[pf].ret != TY_VOID;
+        if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN && !pf_known) continue;
         if (mi >= 0) {
           if (!found) an_user_call_record(c, id, mi, UC_POLY, k);
           r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1;
-          /* The dispatch calls a yielding method through its proc form, whose
-             body is typed apart: `return list unless block_given?` answers
-             there, and the yield form, which takes the block as given,
-             answers self alone. */
-          int pf = c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
-          if (pf >= 0 && c->scopes[pf].ret != TY_UNKNOWN && c->scopes[pf].ret != TY_VOID)
-            r = ty_unify(r, c->scopes[pf].ret);
+          if (pf_known) r = ty_unify(r, c->scopes[pf].ret);
           continue;
         }
         int rdcls = pcs[pi].rdcls;

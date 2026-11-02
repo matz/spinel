@@ -452,6 +452,7 @@ enum {
 /* CORE_* for any builtin row or non-row slot above, -1 for any other name. */
 int builtin_core_class_slot(const char *n);
 int core_of_type(TyKind t);
+int core_reopen_calls_proc_form(int core);   /* a reopened builtin's yielding method goes through its proc form */
 const char *core_class_name(int k);
 int is_builtin_method_host_name(const char *n); /* Object BasicObject Kernel Comparable Enumerable Module */
 int is_boolean_class_name(const char *n); /* FalseClass TrueClass */

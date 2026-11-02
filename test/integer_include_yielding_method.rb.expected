@@ -1,0 +1,48 @@
+3
+103
+:twice
+:twice
+108
+[10, 210]
+13
+32
+[:wrap, 2]
+:wrapped
+:none
+8
+:out
+:twice
+3
+ensure
+:normal
+ensure
+:b
+[:blk, 9]
+:late
+:twice
+140
+:twice
+7
+2097153
+8
+88
+:twice
+[:send, 1]
+[:send, 101]
+:twice
+7
+:twice
+21
+:returned
+true
+false
+false
+false
+:twice
+nil
+[:range, 1]
+:range_done
+[:array, 5]
+:array_done
+[:hash, :a]
+:hash_done

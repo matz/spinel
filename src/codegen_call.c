@@ -17774,6 +17774,13 @@ static int brk_block_direct_only(const NodeTable *nt, int node, int depth) {
       if (!brk_block_direct_only(nt, nd->a[i].ids[j], depth + 1)) return 0;
   return 1;
 }
+/* Is the call a builtin class's reopened yielding method, reached through
+   its proc form (emit_reopen_block_call)? The block is then a proc, not a
+   spliced loop body. */
+static int call_reaches_reopen_pf(Compiler *c, int id) {
+  const CallPlan *pl = cplan_user(c, id);
+  return pl->mi >= 0 && pl->via == UC_REOPEN && c->scopes[pl->mi].yields && scope_proc_form_of(c, pl->mi) >= 0;
+}
 /* The wrapper below can skip its sp_brk_push + setjmp when the iterator
    splices the block as a C loop and every break in it is the goto: a
    container or Integer receiver's builtin iterator, or an inlined yielding
@@ -17789,6 +17796,9 @@ int brk_wrapper_light(Compiler *c, int id) {
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
   if (!brk_block_direct_only(nt, nt_ref(nt, blk, "body"), 0)) return 0;
   int recv = nt_ref(nt, id, "receiver");
+  /* a builtin class's reopened yielding method is called through its proc
+     form with the block as a proc, whose break is a throw */
+  if (call_reaches_reopen_pf(c, id)) return 0;
   if (call_user_yield_mi(c, id) >= 0) {
     /* an inlined yielding method splices this block at its yields; the proc
        and lowered forms call it as a proc, whose break is a throw */
@@ -31971,13 +31981,22 @@ int reopen_yields_known_container(Compiler *c, Scope *m) {
   if (!m->yields && !m->blk_param) return 0;
   return hands_block_container(c, m, m->body, 1);
 }
-/* Random, Float, Symbol, Fiber, Thread, NilClass, Range and Time proc forms
-   take their receiver as the raw value (a NilClass method's `int self`). */
+/* Random, Integer, Float, Symbol, Fiber, Thread, NilClass, Range and Time
+   proc forms take their receiver as the raw value (a NilClass method's
+   `int self`). */
 static int reopen_pf_raw_self(Compiler *c, int ci) {
-  return ci == comp_core_class(c, CORE_RANDOM) || ci == comp_core_class(c, CORE_FLOAT) ||
+  return ci == comp_core_class(c, CORE_RANDOM) || ci == comp_core_class(c, CORE_INTEGER) ||
+         ci == comp_core_class(c, CORE_FLOAT) ||
          ci == comp_core_class(c, CORE_SYMBOL) || ci == comp_core_class(c, CORE_FIBER) ||
          ci == comp_core_class(c, CORE_THREAD) || ci == comp_core_class(c, CORE_NILCLASS) ||
          ci == comp_core_class(c, CORE_RANGE) || ci == comp_core_class(c, CORE_TIME);
+}
+/* Does the load record put the include of the module `mi` is a copy from
+   after call `id`? The call then runs the builtin class's own answer, or
+   raises NoMethodError, where the copy would be called. */
+static int reopen_mixed_later(Compiler *c, int id, int mi) {
+  int om = c->scopes[mi].origin_module_ci - 1;
+  return om >= 0 && elab_mixed_at(c, c->scopes[mi].class_id, 0, om, elab_point_of(c, id)) == ELAB_NO;
 }
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to
@@ -32033,6 +32052,13 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   const NodeTable *nt = c->nt;
   int pf = c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
   if (pf < 0) return 0;
+  if (reopen_mixed_later(c, id, mi))
+    unsupported_feature(c, id, "a call of a method a module mixes into a builtin class, made before the program includes the module, is not supported by AOT compilation");
+  /* (an Integer's is a new route: a Float's, Symbol's, Range's and Time's
+     keep the lambda's `return` they have always lost) */
+  if (c->scopes[mi].class_id == comp_core_class(c, CORE_INTEGER) &&
+      return_in_lambda(c, id) && proc_body_has_return(c, nt_ref(nt, id, "block")))
+    unsupported_feature(c, id, "a `return` in a block given to an Integer's yielding method, inside a lambda, is not supported by AOT compilation");
   /* A Random's, Float's, Symbol's, Range's, Time's or NilClass's method
      that yields a container is not called: a block that widens the
      container's element kind reads the boxed one as garbage (the same
@@ -32044,7 +32070,7 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   int pci = c->scopes[mi].class_id;
   if (reopen_pf_raw_self(c, pci) && pci != comp_core_class(c, CORE_FIBER) && pci != comp_core_class(c, CORE_THREAD) &&
       reopen_yields_known_container(c, &c->scopes[mi]))
-    unsupported_feature(c, id, "a yielding method of a reopened Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation");
+    unsupported_feature(c, id, "a yielding method of a reopened Integer, Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation");
   int cblk = nt_ref(nt, id, "block") >= 0 ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
   /* a forwarded `&blk` resolves below 0 when the caller passed no block:
      the clone's block parameter is then NULL (block_given? is false) */

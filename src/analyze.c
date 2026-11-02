@@ -2141,8 +2141,8 @@ static int super_reach(Compiler *c, Scope *s);
 int builtin_instance_method_known(const char *cls, const char *m);
 /* Is a block handed to a builtin receiver's reopened yielding method run as
    a real proc? The reopen arms (emit_call_reopen_arms) reach a String's,
-   Float's, Symbol's, Random's, Fiber's, Thread's, Range's or Time's own
-   reopening, then a Hash's, NilClass's, Numeric's, Array's and Object's,
+   Integer's, Float's, Symbol's, Random's, Fiber's, Thread's, Range's or
+   Time's own reopening, then a Hash's, NilClass's, Numeric's, Array's and Object's,
    through the method's proc-form clone with the block as a proc
    (emit_reopen_block_call), not spliced. Its writes to enclosing locals
    need cells: without them `total` in `1.5.twice { |v| total += v }`
@@ -2150,13 +2150,10 @@ int builtin_instance_method_known(const char *cls, const char *m);
 static int a_reopen_yielder_takes_block(Compiler *c, int id, TyKind rt, const char *name) {
   int own = core_of_type(rt), oci = own >= 0 ? comp_core_class(c, own) : -1;
   int omi = oci >= 0 ? call_target(c, id, oci, name, 0, NULL) : -1;
-  if (omi >= 0 && (rt == TY_STRING || rt == TY_STRBUF || rt == TY_FLOAT || rt == TY_SYMBOL ||
-                   rt == TY_RANDOM || rt == TY_FIBER || rt == TY_THREAD || rt == TY_RANGE ||
-                   rt == TY_TIME))
-    return c->scopes[omi].yields;
-  /* (an Integer's, Enumerator's, IO's or Class's own reopening is called,
-     or spliced, without one) */
-  if (omi >= 0 && (rt == TY_INT || rt == TY_ENUMERATOR || rt == TY_IO || rt == TY_CLASS))
+  if (omi >= 0 && core_reopen_calls_proc_form(own)) return c->scopes[omi].yields;
+  /* (an Enumerator's, IO's or Class's own reopening is called, or spliced,
+     without one) */
+  if (omi >= 0 && (rt == TY_ENUMERATOR || rt == TY_IO || rt == TY_CLASS))
     return 0;
   int cores[2], n = 0;
   if (ty_is_hash(rt)) cores[n++] = CORE_HASH;
@@ -34152,17 +34149,15 @@ static int pf_wanted(Compiler *c, const char *name) {
     if (recv >= 0) {
       TyKind rt = infer_type(c, recv);
       const char *rcn = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
-                      : (rt == TY_STRING || rt == TY_STRBUF) ? "String"
-                      : rt == TY_RANDOM ? "Random"
-                      : rt == TY_FIBER ? "Fiber" : rt == TY_THREAD ? "Thread"
                       : rt == TY_NIL ? "NilClass"
-                      : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
                       : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
       int rci = rcn ? comp_class_index(c, rcn) : -1;
       if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;
-      /* a Float's or Symbol's own reopening is reached the same way */
-      int oci = rt == TY_FLOAT ? comp_core_class(c, CORE_FLOAT)
-              : rt == TY_SYMBOL ? comp_core_class(c, CORE_SYMBOL) : -1;
+      /* so is a String's, Integer's, Float's, Symbol's, Random's, Fiber's,
+         Thread's, Range's or Time's own reopening (the clone is how a call
+         reaches it: core_reopen_calls_proc_form) */
+      int own = core_of_type(rt);
+      int oci = own >= 0 && core_reopen_calls_proc_form(own) ? comp_core_class(c, own) : -1;
       if (oci >= 0 && comp_method_in_class(c, oci, name) >= 0) return 1;
       /* and an Object reopening's, on a builtin receiver, with a block or
          without one: the Object fallback reaches it the same way */

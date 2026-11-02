@@ -116,6 +116,7 @@ struct LoadRecord {
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
+  unsigned char hold;        /* elab_hold: 1 asked for, 2 the map is made and kept as it is */
   /* the histories (elab_program) */
   int recorded;
   int frontier;              /* the statements recorded so far, in seq order: while the walk records, a query at p is complete for p.seq <= frontier (lr_ready) */
@@ -766,8 +767,20 @@ static void elab_points_walk(Compiler *c, int reg) {
    except while the registration's walk makes it */
 static LoadRecord *elab_fresh(Compiler *c) {
   LoadRecord *r = lr_get(c);
-  if (!r->walk && !r->plan_depth && (!r->at || r->n != c->nt->count || r->ver != c->nt->version)) elab_points_walk(c, 0);
+  if (!r->walk && !r->plan_depth && r->hold != 2 && (!r->at || r->n != c->nt->count || r->ver != c->nt->version)) elab_points_walk(c, 0);
+  if (r->hold == 1 && !r->walk && !r->plan_depth) r->hold = 2;
   return r;
+}
+
+/* While held, the map is made at the first question and then kept as it
+   is, whatever the table's nodes become: a pass that rewrites nodes as it
+   asks (desugar_engine_branches folds a guard to true or false, which
+   moves no statement) answers every question from the program as it was
+   read, instead of rebuilding the map after each rewrite. A hold does not
+   nest: releasing it ends it, so there is one holder at a time (the guard
+   fold of desugar_engine_branches). */
+void elab_hold(Compiler *c, int on) {
+  lr_get(c)->hold = on ? 1 : 0;
 }
 
 /* ---- the call plan's frame ----
@@ -908,6 +921,15 @@ int elab_point_may(Compiler *c, int node) {
   LoadRecord *r = elab_fresh(c);
   int e = node >= 0 && node < r->n ? r->at[node] : -1;
   return e >= 0 && r->st[e].may;
+}
+
+/* Does node's statement run at once if at all but maybe not whole (in an
+   iterator's block, or a begin body with rescue clauses, where a raise skips
+   the rest)? */
+int elab_point_partial(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  int e = node >= 0 && node < r->n ? r->at[node] : -1;
+  return e >= 0 && r->st[e].partial;
 }
 
 /* PROG_BEFORE / AFTER / SAME, or UNKNOWN for two regions or no point. */
@@ -1116,7 +1138,6 @@ static int lr_cref(Compiler *c, int e);
 static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth);
 static int lr_named(Compiler *c, const char *name);
 static const char *lr_const_written(const NodeTable *nt, int id);
-static const NodeKind *lr_const_write_kinds(int *n);
 
 /* The class a builder write's block opens (`X = Struct.new(:a) do`,
    `k = Data.define(:a) do`): the one registration homes it in
@@ -1784,7 +1805,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
   int nc = 0;
-  const NodeKind *ck = lr_const_write_kinds(&nc);
+  const NodeKind *ck = elab_const_write_kinds(&nc);
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return 1;
   for (int i = 0; i < nc; i++) if (k == ck[i]) return 1;
   if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return 1;   /* a block passed on */
@@ -2279,7 +2300,7 @@ static void lr_record_unplaced(Compiler *c) {
   /* Deferred writes have no load point, but may complete before any read.
      Reuse the write forms and lexical owners of the placed histories. */
   int nk = 0;
-  const NodeKind *kinds = lr_const_write_kinds(&nk);
+  const NodeKind *kinds = elab_const_write_kinds(&nk);
   for (int k = 0; k <= nk; k++) {
     NodeKind kind = k < nk ? kinds[k] : NK_CallNode;
     NT_FOREACH_KIND(nt, kind, id) {
@@ -5508,7 +5529,7 @@ static const char *lr_const_written(const NodeTable *nt, int id) {
 }
 
 /* The node kinds that write a constant (lr_const_written) */
-static const NodeKind *lr_const_write_kinds(int *n) {
+const NodeKind *elab_const_write_kinds(int *n) {
   static const NodeKind kinds[] = {
     NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode, NK_ConstantOperatorWriteNode,
     NK_ConstantTargetNode, NK_ConstantPathTargetNode, NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
@@ -5528,7 +5549,7 @@ void elab_note_const_writes(Compiler *c) {
   LoadRecord *r = lr_get(c);
   const NodeTable *nt = c->nt;
   int nk = 0, cap = 0;
-  const NodeKind *kinds = lr_const_write_kinds(&nk);
+  const NodeKind *kinds = elab_const_write_kinds(&nk);
   for (int k = 0; k < nk; k++) {
     int n = 0;
     const int *v = nt_nodes_of_kind(nt, kinds[k], &n);
@@ -5594,7 +5615,7 @@ static int lr_const_seen(Compiler *c, const char *name) {
   }
   const int *par = comp_parent_map(c);
   int nk = 0;
-  const NodeKind *kinds = lr_const_write_kinds(&nk);
+  const NodeKind *kinds = elab_const_write_kinds(&nk);
   for (int k = 0; k < nk; k++) {
     int n = 0;
     const int *v = nt_nodes_of_kind(nt, kinds[k], &n);

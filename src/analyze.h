@@ -175,7 +175,10 @@ typedef struct { int region, seq, node; } LoadPoint;
 typedef struct LoadRecord LoadRecord;
 LoadPoint elab_point_of(Compiler *c, int node);
 int elab_point_may(Compiler *c, int node);
+int elab_point_partial(Compiler *c, int node);
+const NodeKind *elab_const_write_kinds(int *n);   /* the node kinds that write a constant */
 LoadPoint elab_point_from(Compiler *c, int node);
+void elab_hold(Compiler *c, int on);   /* keep the map as the first question made it, until released */
 const int *elab_node_parents(Compiler *c, int *n);
 int prog_stmt_call_executable(Compiler *c, int node, int ci);
 int prog_sclass_call_executable(Compiler *c, int node);

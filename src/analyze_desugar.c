@@ -5395,38 +5395,57 @@ static int engine_source_lib(NodeTable *nt, const char *h) {
   return 0;
 }
 
-/* The index in the program's top-level statements of the one that is or
-   holds `id`, or -1. */
-static int engine_root_index(NodeTable *nt, int id) {
-  int n = 0; const int *st = nt->root_id < 0 ? NULL : nt_arr(nt, nt_ref(nt, nt->root_id, "statements"), "body", &n);
-  for (int i = 0; i < n; i++) if (st[i] == id || subtree_has(nt, st[i], id)) return i;
-  return -1;
+/* Is `id` a statement of a file's top level, the entry's or a required
+   file's, and one that surely runs (not under a condition, not cut short, in
+   the load phase the load graph places)? */
+static int engine_surely_top_stmt(Compiler *c, int id) {
+  int n = 0;
+  const int *par = elab_node_parents(c, &n);
+  return id >= 0 && id < n && prog_is_root_stmts(c, par[id]) &&
+         elab_point_from(c, id).region == 0 && !elab_point_may(c, id) && !elab_point_partial(c, id);
+}
+
+/* Could call `id` remove library `h` or its constant `x`? A remove_const, or
+   a send of it (`Object.send(:remove_const, :ERB)`), could when it names `h`
+   or `x` or names no literal; a removal of some other constant
+   (`Object.send(:remove_const, :Zork)`) leaves them alone. */
+static int engine_removes_const(NodeTable *nt, int id, const char *h, const char *x) {
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
+  int via = is_send_family(nm) && ac >= 1 && is_remove_const_name(vis_arg_name(nt, av[0]));
+  if (!via && !is_remove_const_name(nm)) return 0;
+  const char *gone = ac > via ? vis_arg_name(nt, av[via]) : NULL;
+  return !gone || sp_streq(gone, h) || sp_streq(gone, x);
 }
 
 /* Does library `h`, defined from source, define `X` as a class or module in
    its body before guard `in` runs? Then `defined?(h::X)` is "constant": the
-   library's top-level class (its require spliced at the top level) defines
-   X unconditionally, every writer of `h` is such a top-level class, and
-   nothing removes a constant. */
-static int engine_source_lib_defines(NodeTable *nt, const char *h, const char *x, int in) {
-  int gi = engine_root_index(nt, in), li = -1, rn = 0;
-  if (gi < 0) return 0;
-  const int *rs = nt_arr(nt, nt_ref(nt, nt->root_id, "statements"), "body", &rn);
-  for (int id = 0; id < nt->count; id++) {
-    const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
-    if (nm && sp_streq(nm, "remove_const")) return 0;
-    const char *wn = engine_written(nt, id);
-    if (!wn || !sp_streq(wn, h)) continue;
-    int ri = engine_root_index(nt, id);
-    int cp = nt_kind(nt, id) == NK_ClassNode || nt_kind(nt, id) == NK_ModuleNode ? nt_ref(nt, id, "constant_path") : -1;
-    if (ri < 0 || rs[ri] != id || cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) return 0;
-    int bn = 0; const int *b = nt_arr(nt, nt_ref(nt, id, "body"), "body", &bn);
-    for (int i = 0; i < bn && li < 0; i++) {
-      int bp = nt_kind(nt, b[i]) == NK_ClassNode || nt_kind(nt, b[i]) == NK_ModuleNode ? nt_ref(nt, b[i], "constant_path") : -1;
-      if (bp >= 0 && nt_kind(nt, bp) == NK_ConstantReadNode && sp_streq(nt_str(nt, bp, "name"), x)) li = ri;
+   library's class, a statement of the top level of its file, defines X
+   unconditionally, every writer of `h` is such a class, nothing removes `h`
+   or `X` (engine_removes_const), and the load record orders that class ahead
+   of the guard (the order the program runs them in, whichever file holds the
+   class and however its require stands, a BEGIN block included). A guard
+   inside the class itself is not asked. */
+static int engine_source_lib_defines(Compiler *c, const char *h, const char *x, int in) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int first = -1, nk = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id)
+    if (engine_removes_const(nt, id, h, x)) return 0;
+  const NodeKind *kinds = elab_const_write_kinds(&nk);
+  for (int k = 0; k < nk; k++)
+    NT_FOREACH_KIND(nt, kinds[k], id) {
+      const char *wn = engine_written(nt, id);
+      if (!wn || !sp_streq(wn, h)) continue;
+      int cp = nt_kind(nt, id) == NK_ClassNode || nt_kind(nt, id) == NK_ModuleNode ? nt_ref(nt, id, "constant_path") : -1;
+      if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !engine_surely_top_stmt(c, id)) return 0;
+      int bn = 0; const int *b = nt_arr(nt, nt_ref(nt, id, "body"), "body", &bn);
+      for (int i = 0; i < bn && first < 0; i++) {
+        int bp = nt_kind(nt, b[i]) == NK_ClassNode || nt_kind(nt, b[i]) == NK_ModuleNode ? nt_ref(nt, b[i], "constant_path") : -1;
+        if (bp >= 0 && nt_kind(nt, bp) == NK_ConstantReadNode && sp_streq(nt_str(nt, bp, "name"), x)) first = id;
+      }
     }
-  }
-  return li >= 0 && li < gi;
+  return first >= 0 && !subtree_has(nt, first, in) && elab_order(c, first, in) == PROG_BEFORE;
 }
 
 /* Is definition `id` in a module that only `in` mixes in anywhere (the
@@ -5528,7 +5547,7 @@ static int engine_absent(Compiler *c, int e, int in) {
     if (x && below >= 0 && nt_kind(nt, v) == NK_ConstantReadNode && engine_source_lib(nt, x)) {
       const char *lib = x;
       x = nt_str(nt, below, "name");
-      if (below == nt_ref(nt, e, "value") && engine_source_lib_defines(nt, lib, x, in)) return 0;
+      if (below == nt_ref(nt, e, "value") && engine_source_lib_defines(c, lib, x, in)) return 0;
     }
     /* `unless defined?(::A::B)` around B's only declaration (a reload
        guard: discourse's Discourse::VERSION) is absent there, whatever A
@@ -5850,9 +5869,15 @@ int desugar_engine_branches(Compiler *c) {
     if (wn && sp_streq(wn, "RUBY_ENGINE")) eng = 0;
     if (wn && sp_streq(wn, "RUBY_VERSION")) ver = 0;
   }
+  /* every guard is decided against the load record as the first question
+     finds it: a fold rewrites a predicate and moves no statement, and a
+     class statement that stands under another guard is not surely run in
+     it, so no proof leans on a fold made in this loop */
+  elab_hold(c, 1);
   for (int id = 0; id < n0; id++)
     if (nt_kind(nt, id) == NK_IfNode || nt_kind(nt, id) == NK_UnlessNode)
       changed |= engine_absent_fold(c, nt_ref(nt, id, "predicate"), id);
+  elab_hold(c, 0);
   /* `if false; def m ... end; end`: a condition its literals fix defines
      the method only on its live branch, as CRuby runs the body */
   for (int id = 0; id < n0; id++) {

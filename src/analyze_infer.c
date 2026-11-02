@@ -10096,6 +10096,39 @@ int an_empty_container_disagrees(int kind, TyKind other) {
   if (kind == 1) return !ty_is_array(other) && !ty_is_obj_array(other);
   return !ty_is_hash(other);
 }
+/* An empty `[]` / `Array.new` (kind 1) beside an arm typed as an Integer,
+   Float or String Array has no element type of its own, so it is that
+   Array: the arm emitters build an empty literal at the result's kind.
+   Joined as the general Array instead, it boxed both arms, and only when
+   it was the arm the type was asked of: `c ? [] : [1, 2]` was boxed where
+   `c ? [1, 2] : []` (whose ElseNode the tail check does not open) was not. */
+static int an_empty_array_takes(int kind, TyKind other) {
+  return kind == 1 && (other == TY_INT_ARRAY || other == TY_FLOAT_ARRAY || other == TY_STR_ARRAY);
+}
+
+/* A conditional's answer where an arm ends in an empty container (its arms
+   then_b and else_b, typed tt and et), or TY_UNKNOWN to leave it to the
+   unify. An empty `[]` / `{}` arm is still UNKNOWN (its kind comes from its
+   use), and the unify took the other arm's type for it: an object, a
+   String, a number. It is a container all the same, so a non-container
+   other arm makes the answer boxed; `if u then Rel.new else [] end` built
+   an sp_IntArray into an sp_Rel slot (#4938). Beside an Integer, Float or
+   String Array an empty Array is that Array (an_empty_array_takes). */
+static TyKind an_empty_arm_join(Compiler *c, int then_b, int else_b, TyKind tt, TyKind et) {
+  int tk = an_empty_container_kind(c, then_b), ek = an_empty_container_kind(c, else_b);
+  if (tk && ek && tk != ek) return TY_POLY;
+  if (!ek && an_empty_array_takes(tk, et)) return et;
+  if (!tk && an_empty_array_takes(ek, tt)) return tt;
+  if (tt == TY_UNKNOWN && tk && ek == 0 && an_empty_container_disagrees(tk, et)) return TY_POLY;
+  if (et == TY_UNKNOWN && ek && tk == 0 && an_empty_container_disagrees(ek, tt)) return TY_POLY;
+  /* ...and against an arm that settles on no type at all (a call nothing
+     answers raises), once the rounds are no longer optimistic, the empty
+     literal is the value: `if q then Parser.new.parse(q) else [] end`
+     answered nil (#4938) */
+  if (!g_infer_optimistic && tt == TY_UNKNOWN && et == TY_UNKNOWN && (tk != 0) != (ek != 0))
+    return (tk ? tk : ek) == 1 ? TY_POLY_ARRAY : TY_POLY_POLY_HASH;
+  return TY_UNKNOWN;
+}
 
 /* The value of the `super` node id in s that reaches method mi. */
 static TyKind super_target_ret(Compiler *c, Scope *s, int mi, int id) {
@@ -11494,21 +11527,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (ediv && !tdiv) return an_branch_ty(c, then_b);
     TyKind tt = an_branch_ty(c, then_b);
     TyKind et = an_branch_ty(c, else_b);
-    /* An empty `[]` / `{}` arm is still UNKNOWN (its kind comes from its
-       use), and the unify took the other arm's type for it: an object, a
-       String, a number. It is a container all the same, so a non-container
-       other arm makes the answer boxed; `if u then Rel.new else [] end` built
-       an sp_IntArray into an sp_Rel slot (#4938). */
-    { int tk = an_empty_container_kind(c, then_b), ek = an_empty_container_kind(c, else_b);
-      if (tk && ek && tk != ek) return TY_POLY;
-      if (tt == TY_UNKNOWN && tk && ek == 0 && an_empty_container_disagrees(tk, et)) return TY_POLY;
-      if (et == TY_UNKNOWN && ek && tk == 0 && an_empty_container_disagrees(ek, tt)) return TY_POLY;
-      /* ...and against an arm that settles on no type at all (a call nothing
-         answers raises), once the rounds are no longer optimistic, the empty
-         literal is the value: `if q then Parser.new.parse(q) else [] end`
-         answered nil (#4938) */
-      if (!g_infer_optimistic && tt == TY_UNKNOWN && et == TY_UNKNOWN && (tk != 0) != (ek != 0))
-        return (tk ? tk : ek) == 1 ? TY_POLY_ARRAY : TY_POLY_POLY_HASH; }
+    { TyKind ej = an_empty_arm_join(c, then_b, else_b, tt, et); if (ej != TY_UNKNOWN) return ej; }
     return ty_unify(tt, et);
   }
   if (nk == NK_ElseNode) {
@@ -11767,6 +11786,7 @@ TyKind infer_uncached(Compiler *c, int id) {
       int rn = 0;
       if (rk == NK_ArrayNode) {
         nt_arr(nt, rnd, "elements", &rn);
+        if (rn == 0 && an_empty_array_takes(1, lt)) return lt;
         if (rn == 0) rt = TY_POLY_ARRAY;
       }
       else if (rk == NK_HashNode) {
@@ -11779,6 +11799,7 @@ TyKind infer_uncached(Compiler *c, int id) {
          the answer boxes */
       if (rt == TY_UNKNOWN) {
         int ek = an_empty_container_kind(c, rnd);
+        if (an_empty_array_takes(ek, lt)) return lt;
         if (ek && nk == NK_OrNode && (lt == TY_NIL || lt == TY_UNKNOWN)) {
           /* the variant the slot's key writes chose (mark_empty_hash_key_ctx) */
           if (ek == 2 && c->hash_want && rnd < c->node_cap && ty_is_hash(c->hash_want[rnd]))

@@ -6919,7 +6919,8 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
   WbCells cs; memset(&cs, 0, sizeof cs);
   wb_cells_collect(&cs, b->p, b->len);
   if (!cs.n) { free(cs.v); return; }
-  size_t hdr_at = 0, hdr_h = (size_t)-1;
+  size_t hdr_at = 0, hdr_h = (size_t)-1, seg_to = 0;   /* seg_to: the text before it was searched for segment lines */
+  g_tmp = 0;
   for (size_t i = 0; i + 3 < b->len; i++) {
     if (b->p[i] != '(' || b->p[i+1] != '*') continue;
     size_t j = i, d = 0;
@@ -6966,6 +6967,11 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
     size_t send = at_stmt2 ? wb_stmt_end(b, q) : 0;
     Buf ins; memset(&ins, 0, sizeof ins);
     if (send) {
+      /* The temps are numbered from 1 in each segment (a top-level `static`
+         line starts one, as in gc_wb_insert), so a segment's names depend on
+         that segment alone and not on how many temps main took. */
+      for (; seg_to + 8 <= i; seg_to++)
+        if (b->p[seg_to] == '\n' && !strncmp(b->p + seg_to + 1, "static ", 7)) g_tmp = 0;
       int wid = ++g_tmp;
       buf_printf(&ins, "{ __typeof__(");
       buf_putn(&ins, b->p + is, ie - is);
@@ -7059,12 +7065,14 @@ static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
     while (end < b->len && !(b->p[end] == '\n' && !strncmp(b->p + end + 1, "static ", 7))) end++;
     Buf seg; memset(&seg, 0, sizeof seg);
     buf_putn(&seg, b->p + start, end - start);
-    /* An --incremental build numbers each segment's barrier temps from 1.
-       The count otherwise runs on from whatever function was emitted last
-       (main), so one temp more in main renamed the barriers of the whole
-       program and every unit missed the cache. The default build keeps
-       its numbering, byte for byte. */
-    if (g_incremental) g_tmp = 0;
+    /* Each segment's barrier temps are numbered from 1 (a segment is a
+       top-level `static` definition, so a function split by a column-0
+       `static` local is several). The count would otherwise run on from
+       whatever function was emitted last (main), so one temp more in main
+       renamed the barriers of the whole program (and, under --incremental,
+       every unit missed the cache). gc_wb_cells numbers its _wcN the same
+       way. */
+    g_tmp = 0;
     gc_wb_insert_seg(c, &seg, 0);
     buf_putn(&out, seg.p, seg.len);
     free(seg.p);

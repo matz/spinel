@@ -236,6 +236,7 @@ typedef struct {
     const char *lookup;    /* the parent namespace of owner */
     int in_def;            /* 0, 1 instance method, 2 class method */
     int in_class;          /* directly in a class body, not a module's or a block's */
+    int in_sclass;         /* a def directly in owner's `class << self`: one of owner's class methods */
 } ir_ctx;
 
 static void ir_name_into(const ir_file *f, pm_constant_id_t id, sbuf_t *out) {
@@ -344,7 +345,7 @@ static void ir_class_body(ir_ctx *cx, const pm_node_t *container, const pm_node_
     ir_container_add(cx->w, container, 0, owner, cx->owner);
     cx->w->conts[cx->w->nconts - 1].body = body;
     known_names_add(owner, strlen(owner));
-    ir_ctx sub = { cx->w, owner, cx->owner, 0, is_class };
+    ir_ctx sub = { cx->w, owner, cx->owner, 0, is_class, 0 };
     if (body != NULL) pm_visit_node(body, ir_visit, &sub);
     free(owner);
 }
@@ -394,9 +395,23 @@ static bool ir_visit(const pm_node_t *n, void *data) {
             sbuf_free(&p);
             return false;
         }
-        case PM_SINGLETON_CLASS_NODE:
+        case PM_SINGLETON_CLASS_NODE: {
+            const pm_singleton_class_node_t *sc = (const pm_singleton_class_node_t *) n;
             ir_container_add(w, n, 2, cx->owner, cx->lookup);
+            /* `class << self` in a class or module body: a def directly in it
+               is a `def self.` of the owner. Its other declarations belong to
+               the singleton class, which has no pins. */
+            if (cx->owner[0] && !cx->in_def && PM_NODE_TYPE_P(sc->expression, PM_SELF_NODE) &&
+                sc->body && PM_NODE_TYPE_P(sc->body, PM_STATEMENTS_NODE)) {
+                const pm_statements_node_t *st = (const pm_statements_node_t *) sc->body;
+                ir_ctx sub = *cx;
+                sub.in_class = 0;
+                sub.in_sclass = 1;
+                for (size_t i = 0; i < st->body.size; i++)
+                    if (PM_NODE_TYPE_P(st->body.nodes[i], PM_DEF_NODE)) ir_visit(st->body.nodes[i], &sub);
+            }
             return false;
+        }
         case PM_BLOCK_NODE:
         case PM_LAMBDA_NODE:
             /* Generic receiverless calls and lambdas preserve the lexical
@@ -434,7 +449,7 @@ static bool ir_visit(const pm_node_t *n, void *data) {
             if (!cx->owner[0] || cx->in_def ||
                 (d->receiver && !PM_NODE_TYPE_P(d->receiver, PM_SELF_NODE))) return false;
             ir_target *t = ir_target_new(w, IT_DEF, n, cx);
-            t->is_cmethod = d->receiver != NULL;
+            t->is_cmethod = d->receiver != NULL || cx->in_sclass;
             if (cx->in_class && !t->is_cmethod) t->self_class = t->owner;
             /* the line a trailing return annotation is written on: after `)`,
                or after the name of a def with no parentheses */
@@ -1450,7 +1465,7 @@ static void ir_walk_open(ir_file *f, ir_walk *w, pm_parser_t *parser, pm_node_t 
     for (size_t i = 0; i < len; i++) if (source[i] == '\n') f->line_starts[l++] = i + 1;
     memset(w, 0, sizeof *w);
     w->f = f;
-    ir_ctx cx = { w, "", "", 0, 0 };
+    ir_ctx cx = { w, "", "", 0, 0, 0 };
     pm_visit_node(root, ir_visit, &cx);
 }
 

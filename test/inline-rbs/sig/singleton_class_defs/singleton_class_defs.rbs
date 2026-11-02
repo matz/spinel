@@ -1,0 +1,10 @@
+class Clock
+  def self.echo: (untyped) -> untyped
+  def self.twice: (untyped) -> untyped
+  def self.add: (Integer, untyped) -> Integer
+  def echo: (untyped) -> untyped
+end
+
+module Units
+  def self.wrap: (untyped) -> untyped
+end

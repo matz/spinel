@@ -8,7 +8,7 @@ def self.on_main(x) = x
 
 class Other; end
 class Static
-  class << self
+  class << Other
     #: (untyped) -> untyped
     def enclosed(x) = x
   end
@@ -61,7 +61,7 @@ Static.class_eval do
   def evaluated(x) = x
 end
 
-p at_top(1), on_main(2), Static.enclosed(3), Other.foreign(4)
+p at_top(1), on_main(2), Other.enclosed(3), Other.foreign(4)
 s = Static.new
 p s.before_attr, s.before_method, s.endless(5), s.evaluated(6), s.block_declared, s.before_constant
 p Dynamic.new.value(7), Pair.new(8).value(1), Point.new(9).value(1)

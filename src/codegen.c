@@ -18397,8 +18397,7 @@ static void scan_prologue_features(Compiler *c) {
       if (sp_streq(nm, "last_match")) g_reads_match_regs = 1;
       if (sp_streq(nm, "to_sym") || sp_streq(nm, "intern") ||
           sp_streq(nm, "constants") || sp_streq(nm, "members") ||
-          sp_streq(nm, "instance_methods") || sp_streq(nm, "public_instance_methods") ||
-          sp_streq(nm, "private_instance_methods") || sp_streq(nm, "protected_instance_methods") ||
+          is_instance_method_list(nm) ||
           sp_streq(nm, "methods") || sp_streq(nm, "instance_variables") ||
           sp_streq(nm, "class_variables")) g_uses_symbols = 1;
       /* a bare `gets` reads ARGF, which walks the ARGV files. The argument

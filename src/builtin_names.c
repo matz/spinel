@@ -1813,6 +1813,9 @@ int is_instance_method_list(const char *n) {
     "protected_instance_methods", NULL };
   return builtin_name_in(n, names);
 }
+/* The Module methods that read a class's method table: the instance-method
+   lists and instance_method */
+int is_instance_method_table_read(const char *n) { return n && (is_instance_method_list(n) || sp_streq(n, "instance_method")); }
 /* Does every object (with cmeth, every class and module too) answer m with
    a builtin method: one of Object's own, Kernel's or Object's (Module's)? */
 int builtin_every_object_answers(const char *m, int cmeth) {

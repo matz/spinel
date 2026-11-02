@@ -6969,9 +6969,14 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
     if (send) {
       /* The temps are numbered from 1 in each segment (a top-level `static`
          line starts one, as in gc_wb_insert), so a segment's names depend on
-         that segment alone and not on how many temps main took. */
+         that segment alone and not on how many temps main took; an
+         --incremental build starts again at each unit pragma too, as
+         gc_wb_insert_seg does, for the methods that are not static (-g). */
       for (; seg_to + 8 <= i; seg_to++)
-        if (b->p[seg_to] == '\n' && !strncmp(b->p + seg_to + 1, "static ", 7)) g_tmp = 0;
+        if (b->p[seg_to] == '\n' &&
+            (!strncmp(b->p + seg_to + 1, "static ", 7) ||
+             (g_incremental && seg_to + 21 <= i && !strncmp(b->p + seg_to + 1, "#pragma spinel unit ", 20))))
+          g_tmp = 0;
       int wid = ++g_tmp;
       buf_printf(&ins, "{ __typeof__(");
       buf_putn(&ins, b->p + is, ie - is);

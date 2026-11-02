@@ -4942,6 +4942,22 @@ int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int
    of each list's statements: ahead of a statement in the order made, after
    it in the reverse order, as one insertion at a time placed them. */
 typedef struct { int list, stmt, node, n, hist, after, k, g; } VerWrite;
+/* The statement of a list a cell write of the version def `node` makes
+   goes beside: the def's own; for a def in a class_eval-family block,
+   whose defs the reopen registers and whose call runs none of its
+   statements (class_eval_reopen_class), the call's, after it, once the
+   block's defs are made */
+static int ver_write_stmt(const NodeTable *nt, const int *par, int node) {
+  int st = node;
+  for (;;) {
+    while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
+    int blk = st >= 0 && par[st] >= 0 ? par[par[st]] : -1, call = blk >= 0 ? par[blk] : -1;
+    const char *nm = call >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_kind(nt, call) == NK_CallNode &&
+                     nt_ref(nt, call, "block") == blk ? nt_str(nt, call, "name") : NULL;
+    if (!nm || !is_class_eval_family(nm)) return st;
+    st = call;
+  }
+}
 static int ver_write_cmp(const void *a, const void *b) {
   const VerWrite *x = a, *y = b;
   if (x->list != y->list) return x->list < y->list ? -1 : 1;
@@ -4974,8 +4990,7 @@ void ver_cells_write(Compiler *c) {
           reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].hist + 1;
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
-      int node = vs[j].v->node, st = node;
-      while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
+      int node = vs[j].v->node, st = ver_write_stmt(nt, par, node);
       if (seen[node] || st < 0 || par[st] < 0) continue;
       seen[node] = 1;
       if (!pass) continue;

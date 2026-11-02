@@ -15911,7 +15911,9 @@ static int oa_value_dropped(Compiler *c, int id) {
    value away: one that another statement follows, a top-level statement,
    the last statement of a loop body, and the last statement of the block
    of a builtin walk that ignores its block's value (oa_ignores_block_value):
-   `def walk; @kids.each { |k| k.walk }; end` reads no walk's value.
+   `def walk; @kids.each { |k| k.walk }; end` reads no walk's value. A call
+   ending a branch of an if, unless or case whose own value is thrown away
+   throws its value away too.
 
    The last statement of a method is the method's value. This pass finds
    the method names whose value something can read. A call of a name reads
@@ -16036,6 +16038,22 @@ static char *oa_walk_disc(Compiler *c, int nc) {
   for (int s = 0; s < c->nscopes; s++) if (tail[s] >= 0 && m_read[s]) tail_read[tail[s]] = 1;
   for (int s = 0; s < c->nscopes; s++)
     if (tail[s] >= 0 && !tail_read[tail[s]]) walk_disc[tail[s]] = 1;
+  /* a call ending a branch of an if, unless or case is that conditional's
+     value, so it is thrown away where the conditional is: climbed through
+     the branches and the statement lists they sit in, it takes the mark of
+     any node on the way (`if c; a.each { }; end; nil` reads no walk's
+     value, nor does `a.each { } if c` ending a loop body). Each step is a
+     node whose value is the call's; a write is no step, it keeps the value */
+  for (int id = 0; id < nt->count && id < nc && par; id++) {
+    if (walk_disc[id] || nt_kind(nt, id) != NK_CallNode) continue;
+    int cur = id;
+    for (int budget = nt->count; budget > 0 && !walk_disc[id]; budget--) {
+      int p = par[cur];
+      if (p < 0 || !vp_is_value_edge(nt, p, cur, VPS_IF | VPS_UNLESS | VPS_CASE)) break;
+      cur = p;
+      if (cur < nc && walk_disc[cur]) walk_disc[id] = 1;
+    }
+  }
   anh_free(&read);
   free(par);
   free(named); free(m_read); free(tail_read); free(is_tail); free(tail);

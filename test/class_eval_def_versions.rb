@@ -49,3 +49,29 @@ Q.module_eval do
   def late_q = 4
 end
 p go_q
+
+# A class body's own class_eval block runs as the body: its defs are the
+# body's statements, and a pure class_eval inside it is one of them, as is
+# one an included hook runs on the includer.
+class R; def late_r = 5; end
+def go_r = R.new.late_r
+class R
+  class_eval do
+    p go_r
+    def late_r = 6
+    p go_r
+    R.class_eval { def late_r = 7 }
+    p go_r
+  end
+end
+
+module Hk
+  def self.included(base)
+    base.class_eval { def late_s = 9 }
+  end
+end
+class S; def late_s = 8; end
+def go_s = S.new.late_s
+p go_s
+class S; include Hk; end
+p go_s

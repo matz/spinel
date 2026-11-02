@@ -4756,6 +4756,9 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  $(SPINEL) $$flags test/object_array_constant.rb -c --no-line-map -o "$$tmp/oac.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_constant: -c)"; ok=0; }; \
 	  [ "$$(grep -c '^static sp_PtrArray \* cst_\(PLANETS\|STARS\|RING\) = NULL;' "$$tmp/oac.c")" = 3 ] || { echo "infer-test: FAIL (a constant table of objects stayed boxed)"; ok=0; }; \
 	  grep -q '^static sp_PolyArray \* cst_NAMED = NULL;' "$$tmp/oac.c" || { echo "infer-test: FAIL (a constant reached through const_get narrowed)"; ok=0; }; \
+	  $(SPINEL) $$flags test/elem_reader_table_escape.rb -c --no-line-map -o "$$tmp/ert.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (elem_reader_table_escape: -c)"; ok=0; }; \
+	  awk '/^struct sp_Scan_s \{/,/^\}/' "$$tmp/ert.c" | grep -q 'sp_PolyArray \* iv_items;' || { echo "infer-test: FAIL (a table read through a reader on an element of a narrowing table narrowed unvetted)"; ok=0; }; \
+	  awk '/^struct sp_Reader_s \{/,/^\}/' "$$tmp/ert.c" | grep -q 'sp_PtrArray \* iv_scans;' || { echo "infer-test: FAIL (the table whose element a reader reads stopped narrowing)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_receiver_cmethod_kwarg_unbound.rb -c --no-line-map -o "$$tmp/pck.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_receiver_cmethod_kwarg_unbound: -c)"; ok=0; }; \
 	  grep -q 'sp_StrArray \* sp_Restore_s_apply(sp_Table \* lv_table, sp_StrArray \* lv_names)' "$$tmp/pck.c" || { echo "infer-test: FAIL (a keyword-only call bound a keyword hash into a keyword method's positional parameter)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_receiver_cmethod_kwarg_name_unbound.rb -c --no-line-map -o "$$tmp/pcn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_receiver_cmethod_kwarg_name_unbound: -c)"; ok=0; }; \

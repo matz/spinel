@@ -6447,9 +6447,7 @@ char **dsend_candidates(Compiler *c, int *out_n) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *rn = nt_str(nt, id, "name");
-    if (!rn || !(sp_streq(rn, "instance_methods") || sp_streq(rn, "public_instance_methods") ||
-                 sp_streq(rn, "private_instance_methods") || sp_streq(rn, "protected_instance_methods")))
-      continue;
+    if (!rn || !is_instance_method_list(rn)) continue;
     int rr = nt_ref(nt, id, "receiver"), rci = -1;
     if (rr < 0 || nt_kind(nt, rr) == NK_SelfNode) {
       /* a statement of a class body (not of a def in it): the body's class */
@@ -20893,21 +20891,6 @@ static int cb_program_defines(const NodeTable *nt, const char *nm, const char *c
   return 0;
 }
 
-/* The Module methods that read a class's method table, which a reopened
-   builtin class (String, Array) answers for the program's own methods alone:
-   left bare there, as they are refused, rather than answered without the
-   builtin's methods. method_defined? and its kin, which answer a builtin's
-   methods from CRuby's table, take the class by name instead. */
-static int cb_method_table_name(const char *nm) {
-  return nm && (sp_streq(nm, "instance_methods") || sp_streq(nm, "public_instance_methods") ||
-                sp_streq(nm, "private_instance_methods") || sp_streq(nm, "protected_instance_methods") ||
-                sp_streq(nm, "instance_method"));
-}
-static int cb_method_defined_name(const char *nm) {
-  return nm && (sp_streq(nm, "method_defined?") || sp_streq(nm, "public_method_defined?") ||
-                sp_streq(nm, "private_method_defined?") || sp_streq(nm, "protected_method_defined?"));
-}
-
 /* Struct's and Data's own class methods, which a block they build answers
    on self as Object's and Module's are (`members`) */
 static int cb_struct_act(const NodeTable *nt, int s) {
@@ -20923,7 +20906,9 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
   int changed = 0;
   const char *cm = k == NK_CallNode ? nt_str(nt, node, "name") : NULL;
   int r = k == NK_CallNode ? nt_ref(nt, node, "receiver") : -1;
-  if (builtin && cb_method_defined_name(cm) && !cb_program_defines(nt, cm, cname) &&
+  /* method_defined? and its kin, which answer a builtin's methods from
+     CRuby's table, take the class by name. */
+  if (builtin && is_method_defined_query(cm) && !cb_program_defines(nt, cm, cname) &&
       (r < 0 || nt_kind(nt, r) == NK_SelfNode)) {
     int cls = fwd_new_node_like(nt, node, "ConstantReadNode");
     if (cls >= 0) {
@@ -20932,8 +20917,12 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
       changed = 1;
     }
   }
+  /* The Module methods that read a class's method table are left bare in a
+     reopened builtin class (String, Array), which answers them for the
+     program's own methods alone: they are refused rather than answered
+     without the builtin's methods. */
   else if ((cb_self_act(nt, node) || (strct && cb_struct_act(nt, node))) && !cb_program_defines(nt, cm, cname) &&
-           !(builtin && cb_method_table_name(cm))) {
+           !(builtin && is_instance_method_table_read(cm))) {
     int self = fwd_new_node_like(nt, node, "SelfNode");
     if (self >= 0) {
       nt_set_self_receiver(nt, node, self);

@@ -5975,10 +5975,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     }
     if (argc == 1 && sp_streq(name, "class_variable_defined?")) { *out = TY_BOOL; return 1; }
     if (sp_streq(name, "class_variable_get") || sp_streq(name, "class_variable_set")) { *out = TY_POLY; return 1; }
-    if (argc <= 1 && (sp_streq(name, "instance_methods") ||
-                      sp_streq(name, "public_instance_methods") ||
-                      sp_streq(name, "private_instance_methods") ||
-                      sp_streq(name, "protected_instance_methods"))) { *out = TY_POLY; return 1; }
+    if (argc <= 1 && is_instance_method_list(name)) { *out = TY_POLY; return 1; }
     if (argc <= 1 && sp_streq(name, "singleton_methods") &&
         nt_kind(nt, recv) == NK_ConstantReadNode &&
         an_singleton_methods_foldable(c, recv))
@@ -6263,9 +6260,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     { *out = TY_POLY_ARRAY; return 1; }
 
   /* SomeClass.instance_methods / .public_instance_methods -> PolyArray of symbols */
-  if (recv >= 0 && argc <= 1 &&
-      (sp_streq(name, "instance_methods") || sp_streq(name, "public_instance_methods") ||
-       sp_streq(name, "private_instance_methods") || sp_streq(name, "protected_instance_methods")) &&
+  if (recv >= 0 && argc <= 1 && is_instance_method_list(name) &&
       nt_kind(nt, recv) == NK_ConstantReadNode)
     { *out = TY_POLY_ARRAY; return 1; }
 

@@ -1,0 +1,5 @@
+custom remove [:a]
+a
+true
+a
+done

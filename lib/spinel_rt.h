@@ -22521,4 +22521,15 @@ static SP_UNUSED sp_bool sp_poly_mutex_mon_owned(sp_RbVal value) {
   return sp_Mutex_owned(sp_monitor_check(sp_poly_as_mutex(value, "mon_owned?"), "mon_owned?"));
 }
 
+static sp_StrPolyHash *sp_StrPolyHash_from_poly_hash(sp_PolyPolyHash *src) {
+  SP_GC_ROOT(src);
+  sp_StrPolyHash *h = sp_StrPolyHash_new(); SP_GC_ROOT(h);
+  for (sp_int i = 0; src && i < src->len; i++) {
+    sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
+    if (k.tag != SP_TAG_STR) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
+    sp_StrPolyHash_set(h, k.v.s, v);
+  }
+  return h;
+}
+
 #endif /* SP_RUNTIME_H */

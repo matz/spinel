@@ -1,0 +1,5 @@
+{"type" => "seed", "count" => 1, "received" => true}
+{"type" => "instance", "count" => 2, "enabled" => false, "missing" => nil, "received" => true}
+{"type" => "spread", "count" => 3, "enabled" => false, "missing" => nil, "received" => true}
+{"type" => "seed class", "count" => 4, "received" => true}
+{"type" => "class", "count" => 5, "enabled" => false, "missing" => nil, "received" => true}

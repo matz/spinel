@@ -7559,32 +7559,6 @@ static void inline_warn(const char *where, const char *fmt, const char *a, const
   fputc('\n', stderr);
 }
 
-/* The class a class-level node belongs to: the struct's, for a direct
-   statement of a `Name = Struct.new(...) do` / `Data.define do` block, whose
-   node_cbody still names the class around the write (only the block's
-   defs take the struct's class, from the load record); otherwise its class
-   body's. */
-static int *inline_struct_owner(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int *own = malloc(sizeof(int) * (size_t)(nt->count ? nt->count : 1));
-  for (int i = 0; i < nt->count; i++) own[i] = -1;
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind wk = nt_kind(nt, id);
-    if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
-    int bbody = class_def_body(nt, id);
-    if (bbody < 0) continue;
-    const char *cname = nt_str(nt, id, "name");
-    int ci = wk == NK_LocalVariableWriteNode ? anon_struct_ci_for_value(c, nt_ref(nt, id, "value"))
-           : cname ? comp_class_index(c, cname) : -1;
-    if (ci < 0) continue;
-    own[bbody] = ci;
-    int bn = 0;
-    const int *stmts = nt_arr(nt, bbody, "body", &bn);
-    for (int k = 0; k < bn; k++) own[stmts[k]] = ci;
-  }
-  return own;
-}
-
 /* FILE:LINE of a node's annotation, and FILE:LINE:COL for a warning
    about it: the position the parser's own warnings carry */
 static void inline_where(const NodeTable *nt, int id, char *buf, size_t n) {
@@ -7683,7 +7657,6 @@ static void apply_inline_rbs(Compiler *c) {
   for (int r = 0; r < nt_nroots(nt) && !any; r++)   /* each file's root says whether it has one */
     any = nt_root(nt, r) >= 0 && nt_int(nt, nt_root(nt, r), "rbs_any", 0);
   if (!any) return;
-  int *sown = inline_struct_owner(c);
   for (int id = 0; id < nt->count; id++) {
     if (!nt_int(nt, id, "rbs_line", 0) && !nt_str(nt, id, "rbs_ivars")) continue;
     char where[300], head[300], spell[300];
@@ -7734,7 +7707,7 @@ static void apply_inline_rbs(Compiler *c) {
       }
     }
     else if (ivt && k == NK_CallNode) {
-      int ci = sown[id] >= 0 ? sown[id] : c->node_cbody[id];
+      int ci = c->node_cbody[id];
       if (ci < 0 || ci >= c->nclasses) { inline_warn(head, "this annotation is not applied: no class was found for it%s%s", "", ""); continue; }
       if (!inline_seed_tok_ok(c, ivt) && seed_obj_array_class(c, ivt) < 0 && !seed_nested_array_req(ivt)) {
         inline_warn(head, "this type is not applied: %s names no type Spinel can pin%s",
@@ -7763,7 +7736,7 @@ static void apply_inline_rbs(Compiler *c) {
                   nt_type(nt, id) ? nt_type(nt, id) : "node", "");
     }
     if (nt_str(nt, id, "rbs_ivars")) {
-      int ci = sown[id] >= 0 ? sown[id] : c->node_cbody[id];
+      int ci = c->node_cbody[id];
       char *list = strdup(nt_str(nt, id, "rbs_ivars"));
       for (char *e = strtok(list, ","); e; e = strtok(NULL, ",")) {
         /* @x=<tag>@<line>@<file>@<col> */
@@ -7788,7 +7761,6 @@ static void apply_inline_rbs(Compiler *c) {
       free(list);
     }
   }
-  free(sown);
 }
 
 /* A seed that names a class (`@memory: Bus`, `Array[Bus]`) the program has

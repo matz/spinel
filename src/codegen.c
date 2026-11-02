@@ -6529,8 +6529,8 @@ static int wb_field_is_ref_in(Compiler *c, int only, const char *fld, size_t n) 
   int plain = n + 2 <= sizeof ivn;
   for (size_t j = 0; plain && j < n; j++) plain = isalnum((unsigned char)fld[j]) || fld[j] == '_';
   if (plain) { ivn[0] = '@'; memcpy(ivn + 1, fld, n); ivn[n + 1] = '\0'; }
-  for (int k = 0; k < c->nclasses; k++) {
-    if (only >= 0 && k != only) continue;
+  /* (the one class asked, where the holder's C type names it) */
+  for (int k = only >= 0 ? only : 0; k < (only >= 0 ? only + 1 : c->nclasses); k++) {
     ClassInfo *ci = &c->classes[k];
     int i0 = 0, i1 = ci->nivars;
     if (plain) {

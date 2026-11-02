@@ -18218,13 +18218,21 @@ static void scan_mark_subtree(const NodeTable *nt, int root, unsigned char *m, i
     for (int j = 0; j < nd->a[i].n; j++) scan_mark_subtree(nt, nd->a[i].ids[j], m, depth + 1);
 }
 /* ...nor do the arguments of the FFI and native-binding directives, which
-   the analysis reads and no code evaluates (`ffi_func :f, [:int], :int`). */
+   the analysis reads and no code evaluates (`ffi_func :f, [:int], :int`),
+   nor the array and keyword hash of a raise built out of line. */
 static unsigned char *scan_dsl_arg_nodes(Compiler *c) {
   const NodeTable *nt = c->nt;
   unsigned char *m = NULL;
   static const char *const dsl[] = { "ffi_lib", "ffi_lib_flags", "ffi_convention", "attach_function",
                                      "attach_variable", "callback", "typedef", "bitmask", "layout", NULL };
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
+    /* the array and keyword hash of a dispatcher's raise that is built out of line are no values */
+    if (nt_int(nt, id, "disp_nomethod", 0) && disp_nomethod_out_of_line(c, id)) {
+      int ac = 0; const int *av = call_args(nt, id, &ac);
+      if (!m) { m = (unsigned char *)calloc((size_t)nt->count + 1, 1); if (!m) return NULL; }
+      scan_mark_subtree(nt, av[2], m, 0);
+      scan_mark_subtree(nt, av[3], m, 0);
+    }
     if (nt_ref(nt, id, "receiver") >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm) continue;

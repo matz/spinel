@@ -45,6 +45,8 @@ int is_plain_builtin_reader(const char *n); /* name: every builtin with it reads
 int is_tap_alias(const char *n);      /* tap then yield_self */
 int is_tap_name(const char *n);       /* tap */
 int is_quantifier(const char *n);     /* all? any? none? one? */
+int is_name_error_class(const char *n);   /* NameError NoMethodError: .new(msg, name, ...) */
+int is_no_method_error_class(const char *n);   /* NoMethodError: .new(msg, name, args, ...) */
 int is_set_op(const char *n);         /* & intersection | union - difference */
 int is_combination_family(const char *n);  /* combination permutation repeated_combination repeated_permutation */
 /* the visibility word a call names: module_function first, so that a

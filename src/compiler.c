@@ -500,6 +500,8 @@ void comp_grow_node_arrays(Compiler *c) {
 void comp_free(Compiler *c) {
   if (!c) return;
   for (int i = 0; i < 8; i++) free(c->mc_ring[i]);
+  for (int i = 0; i < c->n_rsc_names; i++) free(c->rsc_names[i]);
+  free(c->rsc_names);
   for (int i = 0; i < c->n_cext_extensions; i++) { free(c->cext_extensions[i].name); free(c->cext_extensions[i].init); }
   free(c->cext_extensions);
   for (int i = 0; i < c->n_cext_stubs; i++) free(c->cext_stubs[i].key);

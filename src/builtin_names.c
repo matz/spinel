@@ -212,6 +212,15 @@ int is_quantifier(const char *n) {
   return sp_streq(n, "all?") || sp_streq(n, "any?") || sp_streq(n, "none?") || sp_streq(n, "one?");
 }
 
+/* NameError or NoMethodError, whose .new takes the missing name second */
+int is_name_error_class(const char *n) {
+  return n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"));
+}
+
+int is_no_method_error_class(const char *n) {
+  return n && sp_streq(n, "NoMethodError");
+}
+
 int is_set_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "intersection") || sp_streq(n, "|") || sp_streq(n, "union") ||
          sp_streq(n, "-") || sp_streq(n, "difference");

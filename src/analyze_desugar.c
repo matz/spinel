@@ -15413,16 +15413,28 @@ int desugar_value_form_drop_block(Compiler *c) {
 }
 
 /* Is `t` a builtin value with no Enumerable in CRuby, no `each` to walk? (An
-   IO, ARGF or a Dir includes it, and a class object may extend it.) */
+   IO, ARGF or a Dir includes it, a Process::Tms is a Struct, and a class
+   object may extend it.) */
 static int ty_lacks_enumerable(TyKind t) {
   switch (t) {
   case TY_NIL: case TY_INT: case TY_BIGINT: case TY_FLOAT: case TY_STRING: case TY_STRBUF:
   case TY_SYMBOL: case TY_BOOL: case TY_TIME: case TY_COMPLEX: case TY_RATIONAL:
-  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION:
+  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION: case TY_PROC: case TY_CURRY:
+  case TY_METHOD: case TY_FIBER: case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR:
+  case TY_RANDOM: case TY_ADDRINFO: case TY_SOCKOPT: case TY_PROCESS_STATUS:
+  case TY_OPENSTRUCT:
     return 1;
   default:
     return 0;
   }
+}
+
+/* Is the value of node `recv` one with no Enumerable? --int-overflow=promote
+   holds a Rational boxed, typed poly and marked an_rat_value: the same
+   Rational, with no each. */
+static int recv_lacks_enumerable(Compiler *c, int recv) {
+  TyKind t = infer_type(c, recv);
+  return ty_lacks_enumerable(t) || (t == TY_POLY && an_rat_value(c, recv));
 }
 
 /* The name a call had before the pre-pass renamed it to the builtin's
@@ -15542,6 +15554,13 @@ int desugar_builtin_enum_calls(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
+    /* a call given back its written name on a receiver with no Enumerable
+       (below) takes the builtin's again once the receiver's type widens */
+    if (nt_int(nt, id, "enum_scalar_unrenamed", 0) && !recv_lacks_enumerable(c, nt_ref(nt, id, "receiver"))) {
+      const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
+      if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
+      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);
+    }
     /* Array#index with a block and no argument is find_index (CRuby defines
        both as rb_ary_index): `@choices.index(&block)`, Forwardable's
        delegator shape in tty-prompt's Choices, had no emitter of its own */
@@ -15578,9 +15597,8 @@ int desugar_builtin_enum_calls(Compiler *c) {
        written with, the one a top-level method a send reaches answers
        (`42.send(:detect)`), or a reopening of the receiver's class; so does
        one an outer each is chained on (`42.send(:detect).each { }`) */
-    /* (--int-overflow=promote holds a Rational boxed, typed poly and marked
-       an_rat_value: the same Rational, with no each) */
-    if ((ty_lacks_enumerable(rt) || (rt == TY_POLY && an_rat_value(c, recv))) && enum_unrename(nt, id)) {
+    if (recv_lacks_enumerable(c, recv) && enum_unrename(nt, id)) {
+      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 1);
       changed = 1;
       continue;
     }

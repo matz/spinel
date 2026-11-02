@@ -3390,14 +3390,51 @@ static int sg_enclosing_def(Compiler *c, int id) {
 /* The class a singleton definition on a receiver no binding traces lands on:
    no object is of it, so no call reaches the method (the definition is the one
    object's, whichever that is), and a bare call of its name at the top level
-   is the NameError it is in CRuby. Made when the first is parked. */
+   is the NameError it is in CRuby. Made when the first is parked. Named from
+   the node, as the other classes the pass synthesizes are (sg_get_or_make), so
+   a class the program writes cannot share its C name. */
 static int sg_parked_class(Compiler *c, int node) {
   if (!c->sg_parked) {
-    ClassInfo *k = comp_class_new(c, "Object__sg_untraced", node);
+    char nm[128];
+    snprintf(nm, sizeof nm, "Object__sg_parked_%s", comp_node_tag(c, node));
+    ClassInfo *k = comp_class_new(c, nm, node);
     k->ruby_name_cache = strdup("Object");
     c->sg_parked = (int)(k - c->classes) + 1;
   }
   return c->sg_parked - 1;
+}
+
+/* Move the method scope whose def_node is `node` onto class ci as an instance
+   method. */
+static void sg_reattach_scope(Compiler *c, int node, int ci) {
+  for (int ds = 1; ds < c->nscopes; ds++) {
+    if (c->scopes[ds].def_node == node) {
+      { c->scopes[ds].class_id = ci; comp_touch_scope(c->scopes[ds].idx); }
+      { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
+      break;
+    }
+  }
+}
+
+/* ...and each def the body of a `class << obj` makes, wherever in it the def
+   stands (under an `if`); a class or module body in it has its own. A def
+   that is a call's argument (`private def m`) moves only onto the parked
+   class: on a traced singleton class it would lose the visibility the call
+   gives it, so it stays where the walk filed it. */
+static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return;
+  if (k == NK_CallNode && ci != c->sg_parked - 1) return;
+  if (k == NK_DefNode) sg_reattach_scope(c, node, ci);
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) sg_reattach_body_defs(c, nt_ref_at(nt, node, i), ci, 0);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
+    for (int j = 0; j < m; j++) sg_reattach_body_defs(c, ids[j], ci, 0);
+  }
 }
 
 /* Move the method scopes a singleton node made onto class ci: the scope whose
@@ -3405,20 +3442,8 @@ static int sg_parked_class(Compiler *c, int node) {
    body of a `class << obj` (as instance methods, like the def obj.m they
    spell). */
 static void sg_reattach_scopes(Compiler *c, int id, int ci, int is_scls) {
-  const NodeTable *nt = c->nt;
-  int sbody = is_scls ? nt_ref(nt, id, "body") : -1;
-  int bn = 0; const int *stmts = sbody >= 0 ? nt_arr(nt, sbody, "body", &bn) : NULL;
-  for (int k = 0; k < (is_scls ? bn : 1); k++) {
-    int node = is_scls ? stmts[k] : id;
-    if (is_scls && nt_kind(nt, node) != NK_DefNode) continue;
-    for (int ds = 1; ds < c->nscopes; ds++) {
-      if (c->scopes[ds].def_node == node) {
-        { c->scopes[ds].class_id = ci; comp_touch_scope(c->scopes[ds].idx); }
-        { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
-        break;
-      }
-    }
-  }
+  if (is_scls) sg_reattach_body_defs(c, nt_ref(c->nt, id, "body"), ci, 1);
+  else sg_reattach_scope(c, id, ci);
 }
 
 void register_singleton_defs(Compiler *c) {

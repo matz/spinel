@@ -23,12 +23,17 @@ def def_local(flag)
   o
 end
 
-# class << obj on a local written twice
+# class << obj on a local written twice: a def beside the others, one under an
+# `if`, and one an argument of `private`
 def sclass_local(flag)
   o = Foo.new
   o = Foo.new if flag
   class << o
     def from_sclass = "sclass"
+    if flag
+      def from_sclass_if = "sclass if"
+    end
+    private def from_sclass_private = "sclass private"
   end
   o
 end
@@ -53,11 +58,13 @@ t = Foo.new
 t.define_singleton_method(:traced) { "traced" }
 puts t.traced
 
-%i[from_dsm from_def from_sclass from_ivar tagged].each do |name|
+%i[from_dsm from_def from_sclass from_sclass_if from_sclass_private from_ivar tagged].each do |name|
   puts "#{name}: #{respond_to?(name, true)}"
 end
 puts((begin; from_dsm; rescue NameError; "NameError"; end))
 puts((begin; from_def; rescue NameError; "NameError"; end))
 puts((begin; from_sclass; rescue NameError; "NameError"; end))
+puts((begin; from_sclass_if; rescue NameError; "NameError"; end))
+puts((begin; from_sclass_private; rescue NameError; "NameError"; end))
 puts((begin; from_ivar; rescue NameError; "NameError"; end))
 puts((begin; traced; rescue NameError; "NameError"; end))

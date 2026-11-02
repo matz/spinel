@@ -1017,6 +1017,26 @@ int desugar_singleton_class_meta(Compiler *c);
 int desugar_class_new_blocks(Compiler *c, HostStep *h);
 int desugar_extend_enumerable(Compiler *c, HostStep *h);
 int desugar_included_hooks(Compiler *c, HostStep *h);
+/* An included / extended / prepended hook body spliced at its mixin
+   (desugar_included_hooks before the walk, elab_fire_after at the walk's
+   mixin event): what the cloned body is rewritten with, the hook's
+   parameter, the including class's name (NULL: the class is self), the
+   mixin's argument naming the module, the module node whose body defines
+   the hook, and a node naming the including class that a read of the
+   parameter becomes a copy of (-1: cls's name) */
+typedef struct {
+  const char *param, *cls;
+  int mod, hook_mod, cls_node;
+} InclSubst;
+void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod);
+void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame);
+char *incl_frame_add(char *fr, const char *locals);
+int incl_hook_returns(const NodeTable *nt, int node);   /* a `return` that leaves the hook */
+int incl_hook_supers(const NodeTable *nt, int node);    /* a super the hook itself makes */
+/* Does the body of hook def `def` carry a shape a step between
+   desugar_included_hooks and the walk reads (host_prewalk_shape and the
+   rows it adds)? Such a hook keeps the pre-walk splice. */
+int incl_hook_declined(NodeTable *nt, int def);
 int desugar_class_body_object_acts(Compiler *c);
 int desugar_struct_block_anonymous(Compiler *c);
 int desugar_eval_method_block(Compiler *c);

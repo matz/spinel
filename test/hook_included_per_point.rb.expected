@@ -1,0 +1,9 @@
+late LateB
+v1 RedefA
+v2 RedefB
+gone GoneA
+ext ExtB
+same v1 SameA
+same v2 Same::Inner
+inside InsideA
+done

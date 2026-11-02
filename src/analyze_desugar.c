@@ -13736,8 +13736,11 @@ int desugar_conditional_defs(Compiler *c) {
         nt_node_set_str(nt, od, nt_kind(nt, od) == NK_SymbolNode ? "value" : "content", nm[k]);
       }
     }
+    /* a class's or module's hook (included, inherited, method_added and
+       the like) left undefined is the core's, a no-op: super reaches it */
+    int els = g[0].cm && is_module_hook_name(base) ? disp_super_call(nt, ar, blk) : disp_raise_no_method(c, base, msg, ar);
     int def = disp_def_build(nt, g[ng - 1].def, base, nt_ref(nt, g[ng - 1].def, "receiver") >= 0, ar, blk,
-                             arm, ng, disp_raise_no_method(c, base, msg, ar));
+                             arm, ng, els);
     free(arm);
     free(nm);
     /* the dispatcher answers the name before any arm's branch has run,
@@ -20488,13 +20491,8 @@ static int incl_mod_singleton(const NodeTable *nt, int m, const char *meth) {
   return 0;
 }
 
-/* What the cloned hook body is rewritten with: the hook's parameter, the
-   including class's name (NULL: the class is self), the `include` argument
-   naming the module, and the module node that defines the hook */
-typedef struct {
-  const char *param, *cls;
-  int mod, hook_mod;
-} InclSubst;
+/* (InclSubst, what the cloned hook body is rewritten with, is in
+   analyze_internal.h: the walk splices a hook too, elab_fire_after) */
 
 /* `note(x)` -> `M.__send__(:note, x)`: a receiverless call of the module's
    own singleton method, which self (the module) answers in the hook.
@@ -20554,7 +20552,7 @@ static void incl_mod_ivar(NodeTable *nt, int node, const InclSubst *is) {
   if (file) nt_node_set_int(nt, node, "node_file", file);
 }
 
-static void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
+void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || class_def_opens_frame(nt, node)) return;
@@ -20612,6 +20610,17 @@ static void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mo
   }
   if (k == NK_LocalVariableReadNode && nt_str(nt, node, "name") &&
       sp_streq(nt_str(nt, node, "name"), is->param)) {
+    if (is->cls_node >= 0) {   /* (as self becomes the module above) */
+      int line = (int)nt_int(nt, node, "node_line", 0), file = (int)nt_int(nt, node, "node_file", 0);
+      int cp = nt_clone_subtree(nt, is->cls_node);
+      if (cp < 0) return;
+      nt_node_reset(nt, node, nt_type(nt, cp));
+      nt_node_set_str(nt, node, "name", nt_str(nt, cp, "name"));
+      nt_node_set_ref(nt, node, "parent", nt_ref(nt, cp, "parent"));
+      if (line) nt_node_set_int(nt, node, "node_line", line);
+      if (file) nt_node_set_int(nt, node, "node_file", file);
+      return;
+    }
     if (!is->cls) { nt_node_reset(nt, node, "SelfNode"); return; }
     nt_node_reset(nt, node, "ConstantReadNode");
     nt_node_set_str(nt, node, "name", is->cls);
@@ -20639,7 +20648,7 @@ static void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mo
 }
 
 /* fr, comma-joined names, with those of locals after them */
-static char *incl_frame_add(char *fr, const char *locals) {
+char *incl_frame_add(char *fr, const char *locals) {
   size_t l = strlen(fr);
   fr = realloc(fr, l + strlen(locals) + 2);
   if (!fr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -20651,7 +20660,7 @@ static char *incl_frame_add(char *fr, const char *locals) {
    with a block is its block's body; anything else is itself. *frame, when
    asked for, gains the locals of each block unwrapped (sce_span), or
    becomes NULL, not known, at a block that takes parameters. */
-static void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame) {
+void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame) {
   if (nt_kind(nt, s) == NK_CallNode && nt_ref(nt, s, "receiver") < 0) {
     const char *nm = nt_str(nt, s, "name");
     int blk = nt_ref(nt, s, "block");
@@ -20677,7 +20686,7 @@ static void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *
 /* Does the hook body hold a `return` that leaves the hook? Spliced into the
    class body it would end the program instead. A `def`, a lambda or a
    define_method block is a method of its own: its `return` stays inside. */
-static int incl_hook_returns(const NodeTable *nt, int node) {
+int incl_hook_returns(const NodeTable *nt, int node) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_ReturnNode) return 1;
@@ -20703,6 +20712,152 @@ static int incl_hook_returns(const NodeTable *nt, int node) {
       if (incl_hook_returns(nt, ids[j])) return 1;
   }
   return 0;
+}
+
+/* Does the hook body make a super of its own (Module#included and its kin)?
+   Spliced into the class body it would be a super outside any method. A
+   `def`, a lambda, a class body and a define_method block are code of their
+   own. */
+int incl_hook_supers(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
+  /* (`defined?(super)` calls nothing: incl_subst answers it "super") */
+  if (k == NK_DefinedNode || k == NK_DefNode || k == NK_LambdaNode || class_def_opens_frame(nt, node)) return 0;
+  int skip = -1;
+  if (k == NK_CallNode) {
+    const char *cn = nt_str(nt, node, "name");
+    if (cn && (sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method"))) skip = nt_ref(nt, node, "block");
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != skip && incl_hook_supers(nt, ch)) return 1;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++)
+      if (incl_hook_supers(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+
+static int cb_self_act_name(const char *nm, int block);
+
+/* The rows incl_hook_declined adds to host_prewalk_shape, over the subtree
+   of node: the shapes of the steps between desugar_included_hooks and the
+   walk that read class-body code, each named by the step. param is the
+   hook's parameter (the includer); a call on it is a call on the class
+   once spliced. A def and a define_method block are method code, which
+   those steps read where it is written. */
+static int incl_declined_node(const NodeTable *nt, int node, const char *param) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  switch (k) {
+  case NK_DefNode: return 0;
+  /* a class-body ivar once spliced, or the module's in the hook
+     (desugar_body_ivars, desugar_class_eval_ivars, desugar_const_ivar_access);
+     a class variable (the cvar passes) */
+  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+  case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
+  case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
+  /* a constant write (desugar_constant_path_self_alias, qualify_colliding_consts) */
+  case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
+  case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
+  /* `class << x` (desugar_sclass_readers_through_class and the singleton mixins) */
+  case NK_SingletonClassNode:
+  /* `v op= x` where the program may reopen the operator (desugar_reopened_op_write) */
+  case NK_LocalVariableOperatorWriteNode: case NK_IndexOperatorWriteNode: case NK_CallOperatorWriteNode:
+    return 1;
+  default: break;
+  }
+  int skip = -1;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    int r = nt_ref(nt, node, "receiver"), blk = nt_ref(nt, node, "block");
+    int on_self = r < 0 || nt_kind(nt, r) == NK_SelfNode ||
+                  (nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
+                   sp_streq(nt_str(nt, r, "name"), param));
+    if (!nm) return 1;
+    if (sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method")) skip = blk;
+    /* an ivar or a constant by name (desugar_const_ivar_access, the
+       const_get desugars), a send (any name), a require (the load-order
+       steps), a singleton class (desugar_singleton_attr's kin), a constant's
+       visibility */
+    else if (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
+             sp_streq(nm, "instance_variable_defined?") || sp_streq(nm, "class_variable_get") ||
+             sp_streq(nm, "class_variable_set") || is_const_set_name(nm) || is_send_family(nm) ||
+             is_file_load_name(nm) || is_require_name(nm) || sp_streq(nm, "autoload") ||
+             sp_streq(nm, "singleton_class") || is_const_visibility_name(nm))
+      return 1;
+    /* an eval-family call the splice does not unwrap, or one given a
+       string or a block argument (desugar_body_module_eval,
+       desugar_eval_method_block), a bare Object or Module method run on
+       the class (desugar_class_body_object_acts) */
+    else if (on_self && (is_eval_exec_family(nm) || cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode)))
+      return 1;
+    /* attr_accessor(*FLAGS) (desugar_attr_const_splat) */
+    else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) {
+      int an = nt_ref(nt, node, "arguments"), ac = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_SplatNode) return 1;
+    }
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != skip && incl_declined_node(nt, ch, param)) return 1;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++)
+      if (incl_declined_node(nt, ids[j], param)) return 1;
+  }
+  return 0;
+}
+
+/* The statements of a hook body as the splice leaves them at the class
+   body's level: a class_eval-family block on the includer (bare once
+   spliced) is its body's statements (incl_emit_stmt), anything else
+   itself. Each is asked of incl_declined_node, and all of them of
+   host_prewalk_shape. */
+static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
+  int bn = 0;
+  const int *bv = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (body >= 0 && !bv) { bv = &body; bn = 1; }
+  for (int i = 0; i < bn; i++) {
+    int s = bv[i];
+    if (nt_kind(nt, s) == NK_CallNode) {
+      const char *nm = nt_str(nt, s, "name");
+      int r = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
+      int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
+                    sp_streq(nt_str(nt, r, "name"), param);
+      int an = nt_ref(nt, s, "arguments");
+      if (nm && on_base && an < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && is_class_eval_family(nm) &&
+          nt_ref(nt, blk, "parameters") < 0) {
+        if (incl_declined_stmts(nt, nt_ref(nt, blk, "body"), param)) return 1;
+        continue;
+      }
+    }
+    if (incl_declined_node(nt, s, param)) return 1;
+  }
+  return bn > 0 && host_prewalk_shape(nt, bv, bn) >= 0;
+}
+
+/* Does hook body `body` (of a `def self.<hook>(param)`, param read off the
+   def) carry a shape a step between desugar_included_hooks and the walk
+   reads? The walk splices or calls only a hook that carries none; the
+   others keep the pre-walk splice, which those steps then read. */
+int incl_hook_declined(NodeTable *nt, int def) {
+  int ps = nt_ref(nt, def, "parameters"), rn = 0;
+  const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+  const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
+  return incl_declined_stmts(nt, nt_ref(nt, def, "body"), param);
 }
 
 /* `M.__send__(:included, self)`: the hook run as the method it is, for a body
@@ -20816,6 +20971,25 @@ static void incl_range_add(InclRanges *r, int from, int to, char *frame, const c
   r->gone[r->len] = gone ? strdup(gone) : NULL;
   r->n[r->len++] = to - from;
 }
+/* Is any `def self.<hook>` of the module node m names (its qualified name,
+   in any of its bodies) one incl_hook_declined declines? */
+static int incl_hook_declined_any(NodeTable *nt, char *const *qn, int n0, int m, const char *hook) {
+  const char *mn = qn[m] ? qn[m] : class_def_name(nt, m);
+  for (int o = 0; o < n0; o++) {
+    if (!class_def_is_module(nt, o)) continue;
+    const char *on = qn[o] ? qn[o] : class_def_name(nt, o);
+    if (o != m && (!on || !mn || !sp_streq(on, mn))) continue;
+    int body = class_def_body(nt, o), n = 0;
+    const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+    for (int k = 0; k < n; k++) {
+      int d = st[k], r = nt_ref(nt, d, "receiver");
+      const char *dn = nt_kind(nt, d) == NK_DefNode ? nt_str(nt, d, "name") : NULL;
+      if (dn && sp_streq(dn, hook) && r >= 0 && nt_kind(nt, r) == NK_SelfNode && incl_hook_declined(nt, d)) return 1;
+    }
+  }
+  return 0;
+}
+
 int desugar_included_hooks(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -20878,8 +21052,19 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         const char *param = NULL;
         int hook_mod = -1;
         if (!parent) incl_names_build(nt, n0, &parent, &qn);
-        int hook = incl_find_hook_at(nt, parent, qn, n0, cn, av[j], &param,
-                                     is_ext ? "extended" : "included", &hook_mod);
+        const char *hname = is_ext ? "extended" : "included";
+        int hook = incl_find_hook_at(nt, parent, qn, n0, cn, av[j], &param, hname, &hook_mod);
+        /* The walk fires the hook live at the mixin's point (elab_fire_after),
+           except in a Struct or class builder's block, whose class the
+           record does not hold, for a core class reopened, whose body the
+           builtin-reopen steps read, and for a hook one of whose defs
+           carries a shape a step before the walk reads (incl_hook_declined):
+           those are spliced here, the first def found, as before. */
+        int keep = ck != NK_ModuleNode && ck != NK_ClassNode;
+        if (!keep && cls && (is_builtin_class_name(cls) || is_builtin_exception_name(cls))) keep = 1;
+        if (!keep && hook >= 0) keep = incl_hook_declined_any(nt, qn, n0, hook_mod, hname);
+        if (!keep) continue;
+        nt_node_set_int(nt, av[j], "incl_prewalk", 1);
         if (hook < 0) continue;
         int hb = nt_ref(nt, hook, "body");
         if (hb < 0) continue;
@@ -20894,7 +21079,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         }
         int clone = nt_clone_subtree(nt, hb);
         if (clone < 0) continue;
-        InclSubst is = { param, cls, av[j], hook_mod };
+        InclSubst is = { param, cls, av[j], hook_mod, -1 };
         incl_subst(nt, clone, &is, 1);
         int hn = 0; const int *hs = nt_kind(nt, clone) == NK_StatementsNode ? nt_arr(nt, clone, "body", &hn) : NULL;
         const char *hl = nt_str(nt, hook, "locals");
@@ -20940,7 +21125,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
  * class: such a call is given self as its receiver, which runs it where it
  * stands, as in CRuby. The walk stops at a def, a nested class or module, a
  * `class << x`, a block and a lambda. */
-static int cb_self_act(const NodeTable *nt, int s) {
+static int cb_self_act_name(const char *nm, int block) {
   static const char *const block_runners[] = { "tap", "yield_self", "instance_eval",
     "instance_exec", "class_eval", "class_exec", "module_eval", "module_exec", NULL };
   static const char *const acts[] = { "display", "public_send", "instance_variable_set",
@@ -20952,14 +21137,16 @@ static int cb_self_act(const NodeTable *nt, int s) {
     "private_instance_methods", "protected_instance_methods",
     "instance_method", "method_defined?", "public_method_defined?", "private_method_defined?",
     "include?", "included_modules", NULL };
-  if (nt_kind(nt, s) != NK_CallNode || nt_ref(nt, s, "receiver") >= 0) return 0;
-  const char *nm = nt_str(nt, s, "name");
   if (!nm) return 0;
-  int blk = nt_ref(nt, s, "block");
   for (int i = 0; block_runners[i]; i++)
-    if (sp_streq(nm, block_runners[i])) return blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
+    if (sp_streq(nm, block_runners[i])) return block;
   for (int i = 0; acts[i]; i++) if (sp_streq(nm, acts[i])) return 1;
   return 0;
+}
+static int cb_self_act(const NodeTable *nt, int s) {
+  if (nt_kind(nt, s) != NK_CallNode || nt_ref(nt, s, "receiver") >= 0) return 0;
+  int blk = nt_ref(nt, s, "block");
+  return cb_self_act_name(nt_str(nt, s, "name"), blk >= 0 && nt_kind(nt, blk) == NK_BlockNode);
 }
 
 /* Is `nm` the name of a method the program defines? Its call already goes

@@ -86,8 +86,10 @@ enum { LR_LATE = 1, LR_BODY = 2 };   /* runs later: in a method body, a lambda o
    (sg: its singleton's) the hook of: recorded as the statement it stands in
    is (lr_method), consumed as the scope walk leaves that statement
    (elab_fire_after). kind is the version's LrKind, vis its visibility, node
-   the form that made it (a def, a call), name the method's. */
-typedef struct { int stmt, cls, node; unsigned char sg, kind, vis; char *name; } LrEvent;
+   the form that made it (a def, a call), name the method's. A mixin's
+   event (mix: 1 + its LrMixKind) is the module's: cls the includer, mod the
+   module, arg the mixin's argument naming it, name the hook's. */
+typedef struct { int stmt, cls, node, mod, arg; unsigned char sg, kind, vis, mix; char *name; } LrEvent;
 
 /* A def of the program's, by its name (LoadRecord.defs) */
 typedef struct { const char *name; int node; } LrSite;
@@ -1898,6 +1900,28 @@ static int lr_wrapped_vis(ElabRec *x, int call, int cls, int sg, int node, int b
   return 0;
 }
 
+/* The hook a mixin of kind kind fires on its module (definition_form_hooks):
+   included, extended, prepended; NULL for a singleton class's prepend */
+static const char *lr_mix_hook(int kind) {
+  return kind == LR_INCLUDE ? "included" : kind == LR_EXTEND ? "extended" : kind == LR_PREPEND ? "prepended" : NULL;
+}
+
+/* A mixin the walk has recorded at the statement it is recording, of
+   module mod (named by the argument arg) into class cls, whose hook the
+   program may define: noted for the scope walk to fire as it leaves the
+   statement (elab_fire_after), unless the pre-walk splice took the mixin
+   (desugar_included_hooks marks it) */
+static void lr_mix_event(ElabRec *x, int cls, int node, int arg, int mod, int kind) {
+  LoadRecord *r = x->r;
+  const char *hook = lr_mix_hook(kind);
+  if (x->unplaced || !r->walk || !hook || cls < 0 || nt_int(x->c->nt, arg, "incl_prewalk", 0) || !lr_named(x->c, hook)) return;
+  r->ev = lr_grow(r->ev, &r->cev, r->nev, sizeof *r->ev);
+  char *copy = strdup(hook);
+  if (!copy) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->ev[r->nev] = (LrEvent){ .stmt = x->cur, .cls = cls, .node = node, .mod = mod, .arg = arg, .mix = (unsigned char)(kind + 1), .name = copy };
+  r->nev++;
+}
+
 /* A call statement's definitions: attrs, aliases, visibility, mixins,
    define_method, undef_method / remove_method, on the class its receiver
    names. vs is the frame's visibility state, which an attr form or a
@@ -1970,6 +1994,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       x->r->hgen++;
       k->mix[k->nmix++] = (LrMixin){ node, lr_mix_kind(nt, node, nm, sg), mod, av[i], .cond = !x->unplaced && x->r->at[node] >= 0 && x->r->st[x->r->at[node]].fmay,
                                      .applied = lr_stmt_applied(x->unplaced ? NULL : lr_stmt_of(x->r, node), x->unplaced, may) == 1, .open = fnode };
+      /* include, extend or prepend on the body's own class: the module's
+         hook fires after it (elab_fire_after) */
+      if (mod >= 0 && !nested && fs == LR_FS_NONE && cls == fc && !sg && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode))
+        lr_mix_event(x, cls, node, av[i], mod, lr_mix_kind(nt, node, nm, sg));
     }
     else if (is_undef_method_name(nm) || is_remove_method_name(nm))
       lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
@@ -5069,8 +5097,8 @@ static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind,
   if (!copy) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memcpy(copy, name, len);
   copy[len] = 0;
-  r->ev[r->nev].name = copy;
-  r->ev[r->nev].stmt = x->cur; r->ev[r->nev].cls = cls; r->ev[r->nev].node = node; r->ev[r->nev].sg = (unsigned char)sg; r->ev[r->nev].kind = (unsigned char)kind; r->ev[r->nev].vis = (unsigned char)vis;
+  r->ev[r->nev] = (LrEvent){ .stmt = x->cur, .cls = cls, .node = node, .mod = -1, .arg = -1, .sg = (unsigned char)sg,
+                             .kind = (unsigned char)kind, .vis = (unsigned char)vis, .name = copy };
   r->nev++;
 }
 
@@ -5149,6 +5177,93 @@ static int lr_core_method(int sg, const char *name) {
   return 0;
 }
 
+/* What a mixin's hook puts after the mixin: one span of statements, each a
+   scope of its own (host_splice), run in a frame of the locals `locals`
+   but `gone` (NULL: not known, none) */
+typedef struct { int *ids; int n; char *locals, *gone; } LrSpan;
+typedef struct { LrSpan *v; int n, cap; } LrSpans;
+
+static void lr_span_add(LrSpans *s, int *ids, int n, char *locals, const char *gone) {
+  if (n <= 0) { free(ids); free(locals); return; }
+  s->v = lr_grow(s->v, &s->cap, s->n, sizeof *s->v);
+  s->v[s->n].ids = ids; s->v[s->n].n = n; s->v[s->n].locals = locals;
+  s->v[s->n].gone = gone ? strdup(gone) : NULL;
+  if (gone && !s->v[s->n].gone) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  s->n++;
+}
+
+/* Does any name the program defines a mixin hook (lr_mix_hook)? */
+static int lr_mix_hooks(Compiler *c) {
+  return lr_named(c, "included") || lr_named(c, "extended") || lr_named(c, "prepended");
+}
+
+/* The hook a mixin event v fires, after the mixin statement node in the body
+   of frame (a class or module header), at point p: the version live on the
+   module's singleton there (lr_hook_live) or none. A `def self.<hook>(base)`
+   of the module's own body, run by a receiverless mixin, is spliced as the
+   pre-walk splice splices it (incl_subst, incl_emit_stmt): base reads the
+   includer's constant, self the module. One with a `return` or a `super` of
+   its own, the conditional dispatcher, a hook reached another way (`class <<
+   self`, a module the module extends, define_singleton_method) or a version
+   the record cannot name is called: `M.__send__(:included, K)`. A version
+   that carries a shape a step before the walk reads (incl_hook_declined)
+   fires nothing, as it never did where the pre-walk splice does not take
+   the mixin; nor does a core class's reopening, whose mixins the builtin
+   reopen steps read. */
+static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, LoadPoint p, LrSpans *out) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const LrDef *d = NULL;
+  if (v->cls < 0 || v->cls >= c->nclasses || v->mod < 0 || v->mod >= c->nclasses) return;
+  if (is_builtin_class_name(c->classes[v->cls].name) || is_builtin_exception_name(c->classes[v->cls].name)) return;
+  if (!lr_hook_live(c, v->mod, v->name, p, &d)) return;
+  int dn = d ? d->node : -1;
+  if (dn >= 0 && nt_kind(nt, dn) == NK_DefNode && incl_hook_declined(nt, dn)) return;
+  int base = lr_frame_const(c, frame);
+  if (base < 0) return;   /* (a body with no constant to name its class by) */
+  /* spliced: the module's own def self.<hook>(base), one required parameter
+     (a keyword or a block parameter beside it as the pre-walk splice takes
+     it: the mixin passes neither) */
+  int ps = dn >= 0 && nt_kind(nt, dn) == NK_DefNode ? nt_ref(nt, dn, "parameters") : -1, rn = 0;
+  const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+  const LrStmt *ds = dn >= 0 ? lr_stmt_of(c->lrec, dn) : NULL;
+  int hdr = ds && ds->frame >= 0 ? c->lrec->st[ds->frame].node : -1;
+  int dr = dn >= 0 ? nt_ref(nt, dn, "receiver") : -1, hb = dn >= 0 ? nt_ref(nt, dn, "body") : -1;
+  const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
+  int splice = param && dr >= 0 && nt_kind(nt, dr) == NK_SelfNode && hdr >= 0 && class_def_is_module(nt, hdr) &&
+               nt_ref(nt, node, "receiver") < 0 && !nt_int(nt, dn, "cond_lone_disp", 0) &&
+               (nt_kind(nt, frame) == NK_ClassNode || nt_kind(nt, frame) == NK_ModuleNode) &&
+               !incl_hook_returns(nt, hb) && !incl_hook_supers(nt, hb);
+  if (!splice) {
+    int call = lr_hook_call(c, node, nt_clone_subtree(nt, v->arg), v->name, base, NULL);
+    nt_node_set_int(nt, call, "class_recv", 1);   /* (a module is a class value: the receiver is proven one) */
+    nt_node_set_int(nt, call, "event_hook", 1);
+    int *ids = malloc(sizeof(int));
+    if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ids[0] = call;
+    lr_span_add(out, ids, 1, NULL, NULL);
+    return;
+  }
+  if (hb < 0) return;   /* an empty hook: nothing to run */
+  int clone = nt_clone_subtree(nt, hb);
+  if (clone < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  InclSubst is = { param, NULL, v->arg, hdr, base };
+  incl_subst(nt, clone, &is, 1);
+  const char *hl = nt_str(nt, dn, "locals");
+  char *fr = strdup(hl ? hl : "");   /* the hook's frame, then the blocks' it unwraps */
+  if (!fr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int *ids = NULL, n = 0, cap = 0, hn = 0;
+  const int *hs = nt_kind(nt, clone) == NK_StatementsNode ? nt_arr(nt, clone, "body", &hn) : NULL;
+  if (!hs) incl_emit_stmt(nt, clone, &ids, &n, &cap, &fr);
+  else {
+    int *cp = malloc(sizeof(int) * (size_t)(hn + 1));
+    if (!cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(cp, hs, sizeof(int) * (size_t)hn);
+    for (int q = 0; q < hn; q++) incl_emit_stmt(nt, cp[q], &ids, &n, &cap, &fr);
+    free(cp);
+  }
+  lr_span_add(out, ids, n, fr, param);
+}
+
 /* The hook calls for the versions statement list[j] added, spliced after it:
    `C.method_added(:name)`, or `C.__send__(:singleton_method_added, :name)`
    (BasicObject's: a send reaches a top-level def of the name), for each hook
@@ -5159,7 +5274,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
   NodeTable *nt = (NodeTable *)c->nt;
   HostStep *h = elab_walk_host(c);
   int bn = 0;
-  if (!h || !lr_event_hooks(c)) return 0;
+  if (!h || (!lr_event_hooks(c) && !lr_mix_hooks(c))) return 0;
   lr_record_upto(r, r->nst);   /* the statement is recorded: the hooks are asked after its versions */
   const int *st = r->nev ? nt_arr(nt, list, "body", &bn) : NULL;
   if (!st || j >= bn) return 0;
@@ -5174,8 +5289,14 @@ int elab_fire_after(Compiler *c, int list, int j) {
   int *calls = malloc(sizeof(int) * (size_t)(r->nev - first + 1)), n = 0;
   if (!calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   LoadPoint p = { r->st[e].region, e + 1, -1 };
+  LrSpans mix = { 0 };
   for (int i = first; i < r->nev; i++) {
     LrEvent *v = &r->ev[i];
+    if (v->mix) {   /* a mixin's: the module's hook, after the mixin (lr_fire_mixin) */
+      if (body && v->stmt == e && v->node == node) lr_fire_mixin(c, v, node, frame, p, &mix);
+      free(v->name);
+      continue;
+    }
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);
     const LrDef *d = NULL;
     int live = body && v->stmt == e && lr_form_leads(nt, node, v->node) && lr_hook_live(c, v->cls, hook, p, &d);
@@ -5212,20 +5333,31 @@ int elab_fire_after(Compiler *c, int list, int j) {
     free(v->name);
   }
   r->nev = first;
-  if (n) {
-    int *out = malloc(sizeof(int) * (size_t)(bn + n));
+  /* the mixins' hooks first (a mixin statement adds no method), then the
+     method hooks' calls, each span a scope of its own */
+  if (n) lr_span_add(&mix, calls, n, NULL, NULL);
+  else free(calls);
+  int total = 0;
+  for (int k = 0; k < mix.n; k++) total += mix.v[k].n;
+  if (total) {
+    int *out = malloc(sizeof(int) * (size_t)(bn + total)), at = j + 1;
     if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     memcpy(out, st, sizeof(int) * (size_t)(j + 1));
-    memcpy(out + j + 1, calls, sizeof(int) * (size_t)n);
-    memcpy(out + j + 1 + n, st + j + 1, sizeof(int) * (size_t)(bn - j - 1));
-    nt_node_set_arr(nt, list, "body", out, bn + n);
+    for (int k = 0; k < mix.n; k++) { memcpy(out + at, mix.v[k].ids, sizeof(int) * (size_t)mix.v[k].n); at += mix.v[k].n; }
+    memcpy(out + at, st + j + 1, sizeof(int) * (size_t)(bn - j - 1));
+    nt_node_set_arr(nt, list, "body", out, bn + total);
     free(out);
     comp_grow_node_arrays(c);
-    host_splice(c, h, frame, list, j + 1, n, NULL, NULL);
-    comp_grow_node_arrays(c);
+    total = 0;
+    for (int k = 0, at2 = j + 1; k < mix.n; k++) {
+      int got = host_splice(c, h, frame, list, at2, mix.v[k].n, mix.v[k].locals, mix.v[k].gone);
+      comp_grow_node_arrays(c);
+      at2 += got; total += got;
+    }
   }
-  free(calls);
-  return n;
+  for (int k = 0; k < mix.n; k++) { free(mix.v[k].ids); free(mix.v[k].locals); free(mix.v[k].gone); }
+  free(mix.v);
+  return total;
 }
 
 /* The class the class or module header at node opens, as registration

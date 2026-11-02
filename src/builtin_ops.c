@@ -1858,6 +1858,12 @@ static const BuiltinOp bop_rows[] = {
      does (lr_fire_inherited, elab_fire_after), reaches this. */
   { TY_CLASS, "inherited", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_CLASS_ONLY },
   { TY_CLASS, "method_added", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
+  /* Module#included, #extended and #prepended: a mixin's event fires them
+     where the record cannot tell whether the program's hook is there
+     (lr_fire_mixin) */
+  { TY_CLASS, "included", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
+  { TY_CLASS, "extended", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
+  { TY_CLASS, "prepended", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
   { TY_CLASS, "singleton_method_added", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
   { TY_CLASS, "method_removed", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
   { TY_CLASS, "method_undefined", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },

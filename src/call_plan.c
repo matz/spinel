@@ -4552,6 +4552,9 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
   for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;
   if (last < nc - 1) return VK_KEEP;
+  /* a class's or module's hook (included, inherited, method_added and the
+     like) with no version run is the core's no-op, which super reaches */
+  if (sg && cls >= 0 && ar == 1 && !blk && is_module_hook_name(name)) return VK_SUPER;
   /* (method_missing where the calls run: there at some and not at
      others, the history keeps its handling; at none, NoMethodError) */
   if (cplan_mm_method(c, cls, sg) >= 0 && (mm & 1)) return mm == 1 ? VK_MM : VK_KEEP;

@@ -1723,6 +1723,11 @@ int cmethod_sibling_answers_nil(Compiler *c, int call, int cid, const char *nm);
    --emit-types, call it directly), and the end-of-compile report comparing
    them with inference's (codegen_util.c) */
 void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add);
+/* While the depth is above 0, ucall_observe stamps each observation as an
+   arm of a switch (add): a call emitted as a choice between nil's method
+   and the receiver's (emit_nil_program_call) */
+void ucall_arm_push(void);
+void ucall_arm_pop(void);
 void ucall_report(Compiler *c);
 /* --plan-check: codegen emitted the call node id (whatever it bound) */
 void ucall_emitted(int id);

@@ -171,7 +171,12 @@ static int ucall_respec_ctx(Compiler *c, int id) {
   return 0;
 }
 
+static int g_ucall_arm_depth = 0;
+void ucall_arm_push(void) { g_ucall_arm_depth++; }
+void ucall_arm_pop(void) { if (g_ucall_arm_depth > 0) g_ucall_arm_depth--; }
+
 void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add) {
+  if (g_ucall_arm_depth > 0) add = 1;
   const CallPlan *conversion = view_conversion(c, &id);
   if (g_repr_check) repr_channel_call(c, id, mi);
   if (conversion) {

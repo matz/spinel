@@ -26404,9 +26404,13 @@ static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   Buf cb; memset(&cb, 0, sizeof cb);
   Buf nb; memset(&nb, 0, sizeof nb);
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 1);
+  /* the two are the arms of a choice on the receiver, as a dispatch
+     switch's are: --plan-check stamps each as an arm (ucall_arm_push) */
+  ucall_arm_push();
   emit_call_held(c, id, &cb);
   /* (nil's: as on a receiver that is nil) */
   emit_call_reopen_arms(c, id, &nb, nt, nt_str(nt, id, "name"), r, TY_NIL);
+  ucall_arm_pop();
   view_pop(c, vt);
   nil_target_release(c, mark, held);
   if (g_plan_check) cplan_served("nil-program");

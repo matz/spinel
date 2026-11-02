@@ -15769,7 +15769,9 @@ static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
    recv (cls_fact_excludes), as the call's dispatch leaves out its arm. A
    class they cannot bound, a module's method and a receiverless call stay
    reachable. A class method is reached through the Class object, which the
-   facts hold as k + nclasses: the value may be the class or a subclass. */
+   facts hold as k + nclasses: the value may be the class or a subclass, or
+   a class they cannot bound (a reopened builtin's, whose Class object a
+   builtin value's `.class` answers without a bit of its own). */
 static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   int ci = s->ici >= 0 ? s->ici : s->sidx >= 0 ? c->scopes[s->sidx].class_id : -1;
   if (recv < 0 || ci < 0 || ci >= c->nclasses || cls_fact_unbounded(c, recv)) return 1;
@@ -15779,7 +15781,7 @@ static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   if (cm && (!f || (f->n == 0 && !f->bv && !f->os))) return 1;
   for (int k = 0; k < c->nclasses; k++)
     if ((k == ci || is_descendant(c, k, ci)) &&
-        (cm ? cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k))) return 1;
+        (cm ? !cls_fact_bounded(c, k) || cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k))) return 1;
   return 0;
 }
 

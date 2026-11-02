@@ -5226,6 +5226,39 @@ static int sp_lib_lookup(const char *lib_dir, const char *lib_name, char *out, s
   return SP_LIB_PACKAGE;
 }
 
+/* What the compiler appends after a library file's own text, whichever
+   load model reads the file: the one place both models ask, so they
+   cannot differ on a file's text. Only the compiler's own libraries
+   (`tier` is SP_LIB_BUILTIN or SP_LIB_PACKAGE, as the require that found
+   the file says) have any. `content` is the file's text and is consumed;
+   `path` is the file as found. First, what a native Windows build
+   answers differently for it, lib/win32/overlay/<the same path>
+   (sp_win32_driver.c). Then a package's share declarations
+   (`native_share`), in <name>.share.rb beside the file; kept apart so
+   that a build without the flag parses no node of them. */
+static char *sp_lib_text_appended(char *content, const char *path, int tier) {
+  if (!content || tier < SP_LIB_BUILTIN) return content;
+#if defined(_WIN32)
+  content = sp_w32_overlay(content, path);
+#endif
+  if (sp_share_strings_env() && strlen(path) > 3) {
+    char sp[1100];
+    snprintf(sp, sizeof sp, "%.*s.share.rb", (int)(strlen(path) - 3), path);
+    char *side = read_file(sp);
+    if (side) {
+      size_t cl = strlen(content), sl = strlen(side);
+      char *both = malloc(cl + sl + 2);
+      if (!both) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(both, content, cl);
+      both[cl] = '\n';
+      memcpy(both + cl + 1, side, sl + 1);
+      free(content); free(side);
+      content = both;
+    }
+  }
+  return content;
+}
+
 /* The edge of the plain require of `name` (as written, between `quote`s) in
    file `from`. */
 static void sp_load_plain(SpLoadGraph *g, SpLoadEdge **v, int *n, int *cap, int from, int line,
@@ -6341,29 +6374,7 @@ else {
         free(rc);
       }
       if (content && tier == SP_LIB_BUILTIN) sp_note_builtin_path(found);
-#if defined(_WIN32)
-      /* what a native Windows build answers differently for this file:
-         lib/win32/overlay/<the same path>, appended (sp_win32_driver.c) */
-      if (content && tier >= SP_LIB_BUILTIN) content = sp_w32_overlay(content, found);
-#endif
-      /* --share-strings: a package's share declarations for it
-         (`native_share`), in <name>.share.rb beside the file, follow it.
-         Kept apart so a build without the flag parses no node of them. */
-      if (content && tier >= SP_LIB_BUILTIN && sp_share_strings_env() && strlen(found) > 3) {
-        char sp[1100];
-        snprintf(sp, sizeof sp, "%.*s.share.rb", (int)(strlen(found) - 3), found);
-        char *side = read_file(sp);
-        if (side) {
-          size_t cl = strlen(content), sl = strlen(side);
-          char *both = malloc(cl + sl + 2);
-          if (!both) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          memcpy(both, content, cl);
-          both[cl] = '\n';
-          memcpy(both + cl + 1, side, sl + 1);
-          free(content); free(side);
-          content = both;
-        }
-      }
+      content = sp_lib_text_appended(content, found, tier);
       if (!content) {
         if (sp_lib_is_native(lib_name)) {
           /* Provided natively by the Spinel runtime; the require is a
@@ -7874,7 +7885,9 @@ static void sp_graph_inherit(SpLoadGraph *g, int f) {
    could not be read or parsed (reported). */
 static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames *facts) {
   const char *path = f ? g->file[f] : source_file;
-  char *text = read_file(path);
+  /* (a library of the compiler's has what the inline model's splice of it
+     appends, by the tier the require that found the file gave it) */
+  char *text = sp_lib_text_appended(read_file(path), path, sp_load_tier(g, f));
   if (!text) { fprintf(stderr, "spinel_parse: cannot open '%s'\n", path); return 0; }
   SpGraphFile *r = sp_graph_rec(g, f);
   r->text = text;

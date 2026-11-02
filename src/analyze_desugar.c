@@ -15555,11 +15555,19 @@ int desugar_builtin_enum_calls(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
     /* a call given back its written name on a receiver with no Enumerable
-       (below) takes the builtin's again once the receiver's type widens */
-    if (nt_int(nt, id, "enum_scalar_unrenamed", 0) && !recv_lacks_enumerable(c, nt_ref(nt, id, "receiver"))) {
-      const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
-      if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
-      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);
+       (below) takes the builtin's again once a later round types the
+       receiver as one with Enumerable. A receiver that widens to poly (a
+       Rational beside an Array) keeps the written name, as before this
+       mark: either name is wrong for one of its values without a dispatch
+       at run time, and a boxed Rational's an_rat_value is not cleared by
+       the widening */
+    if (nt_int(nt, id, "enum_scalar_unrenamed", 0)) {
+      TyKind wt = infer_type(c, nt_ref(nt, id, "receiver"));
+      if (wt != TY_POLY && wt != TY_UNKNOWN && !ty_lacks_enumerable(wt)) {
+        const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
+        if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
+        nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);
+      }
     }
     /* Array#index with a block and no argument is find_index (CRuby defines
        both as rb_ary_index): `@choices.index(&block)`, Forwardable's

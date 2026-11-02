@@ -307,6 +307,14 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    the chain before the call, a load it could not resolve). For the Class
    reopening's class side, its instance side is searched too. */
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg);
+/* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
+   header's superclass is the class a builder makes (`class Foo <
+   Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it
+   the chain is the builtin Struct or Data's. */
+int elab_record_class_of(Compiler *c, int cls);
+/* does that class answer class method `name` with its own builtin (new,
+   [], members, inspect: is_record_class_cmethod) */
+int elab_record_cmethod(Compiler *c, int cls, const char *name);
 /* the class self is where node runs at its load point: a class or module
    body's, or a constant's class builder's block; -1 for main's top level;
    -2 for any other frame (a singleton class body, an eval form's or an

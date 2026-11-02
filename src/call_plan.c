@@ -4915,18 +4915,21 @@ struct VerNamedAsks;
 static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm);
 static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced);
 static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last);
-/* Does cls's chain hold a builtin class other than Object (a reopened one,
-   a builtin superclass)? Its methods are not all in the builtin tables
-   (IO's on File, a socket's), so what a call meeting no version of the
-   program's runs there is not known: its entry keeps the table's answer.
-   Except a class-side name a public row of the builtin-op table gives every
-   class (bop_class_answers; elab asks only the readers name, to_s and
-   inspect): the lookup finds Module's text whatever the chain holds. A
-   Struct or Data class has an inspect of its own, but it adds only the
-   keyword_init suffix to that text, which the class tables carry
-   (comp_class_kw_init), and no builtin class above one defines name or to_s. */
+/* Does cls's chain (its class side when sg) hold a builtin class other
+   than Object (a reopened one, a builtin superclass)? Its methods are not
+   all in the builtin tables (IO's on File, a socket's), so what a call
+   meeting no version of the program's runs there is not known: its entry
+   keeps the table's answer. Except a class-side name a public row of the
+   builtin-op table gives every class (bop_class_answers; elab asks only the
+   readers name, to_s and inspect): the lookup finds Module's text whatever
+   the chain holds. A Struct or Data class has an inspect of its own, but it
+   adds only the keyword_init suffix to that text, which the class tables
+   carry (comp_class_kw_init), and no builtin class above one defines name
+   or to_s. Nor the class side of a class a record builder made, or of one
+   inheriting from it (elab_record_class_of): its builtin's class methods
+   are the ones elab_record_cmethod names, and Class's. */
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk) {
-  if (sg && bop_class_answers(name, ar, blk)) return 0;
+  if (sg && (bop_class_answers(name, ar, blk) || elab_record_class_of(c, cls) >= 0)) return 0;
   if (cls >= 0 && class_builtin_parent(c, cls) != builtin_class_at(CORE_OBJECT)->id) return 1;
   for (int k = cls, d = 0; k >= 0 && d < 64; k = c->classes[k].parent, d++)
     if (c->classes[k].is_builtin_const && !is_object_base_name(c->classes[k].name)) return 1;
@@ -5121,7 +5124,8 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
 /* Does a method the entry's else arm cannot run answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
    builtin superclass's or an included builtin module's, cls's own reader,
-   or a Struct or Data member in its chain? */
+   a Struct or Data member in its chain, or on the class side a record
+   class's own builtin (elab_record_cmethod)? */
 static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
   int dc = -1, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
   if (builtin_every_object_answers(name, sg) || is_object_receiver_handoff(name) || is_method_missing_name(name) ||
@@ -5129,7 +5133,7 @@ static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
       builtin_self_method_known(name, !sg ? BSELF_MAIN : mod ? BSELF_MODULE : BSELF_CLASS)) return 1;
   if (cls < 0) return 0;
   if (builtin_class_id_answers(class_builtin_parent(c, cls), name, sg)) return 1;
-  if (sg) return 0;
+  if (sg) return elab_record_cmethod(c, cls, name);
   if (comp_reader_in_chain(c, cls, name, &dc) && dc >= 0 && (dc == cls || c->classes[dc].is_struct || c->classes[dc].is_data)) return 1;
   for (int k = cls; k >= 0; k = c->classes[k].parent) {
     int nmx = 0;

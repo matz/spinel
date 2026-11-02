@@ -5110,6 +5110,19 @@ int elab_value_not_module(Compiler *c, int node) {
   return is_new_name(mn) && lr_new_makes_object(c, lr_class_ref_at(c, r, NULL), mn);
 }
 
+int elab_record_class_of(Compiler *c, int cls) {
+  for (int a = cls, i = 0; a >= 0 && a < c->nclasses && i < 64; a = lr_super(c, a), i++) {
+    int d = c->classes[a].def_node;
+    if (lr_record_class(c, a) || (d >= 0 && class_def_is_record_call(c->nt, class_def_super(c->nt, d)))) return a;
+  }
+  return -1;
+}
+
+int elab_record_cmethod(Compiler *c, int cls, const char *name) {
+  int a = elab_record_class_of(c, cls);
+  return a >= 0 && is_record_class_cmethod(name, c->classes[a].is_data);
+}
+
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_of(c, id);

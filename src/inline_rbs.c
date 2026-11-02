@@ -856,7 +856,10 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
        kind, one to one: `(Integer, ?String, *Symbol, Float)` for
        `def m(a, b = "", *c, d)`. A rest or `**` slot is typed by
        construction, as the gathered array or hash, and takes no field, as
-       --rbs gives it none. A def that forwards with `...` hands every
+       --rbs gives it none. One optional past the def's own, where the def
+       gathers the rest (`(Symbol, ?untyped)` for `def fetch(key, *default)`),
+       describes what the rest gathers: it lands on the rest slot, which
+       --rbs leaves as gathered. A def that forwards with `...` hands every
        argument past its named positionals on to the method it calls: those
        take the signature's leading positionals, required ones first, and
        the rest of the signature is the forwarded call's, which --rbs pins
@@ -879,8 +882,10 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
             return "the signature's positional parameters do not match the method's";
     }
     else {
-        if (sreq != nreq || sopt != nopt ||
-            (fn->rest_positionals != NULL) != (nrest > 0) || ir_list_len(fn->trailing_positionals) != npost)
+        bool opt_on_rest = nrest > 0 && fn->rest_positionals == NULL && sopt == nopt + 1 &&
+                           npost == 0 && ir_list_len(fn->trailing_positionals) == 0;
+        if (sreq != nreq || (sopt != nopt && !opt_on_rest) ||
+            ((fn->rest_positionals != NULL) != (nrest > 0) && !opt_on_rest) || ir_list_len(fn->trailing_positionals) != npost)
             return "the signature's positional parameters do not match the method's";
         if (fn->rest_keywords != NULL && nkwrest == 0)
             return "the signature's keyword parameters do not match the method's";

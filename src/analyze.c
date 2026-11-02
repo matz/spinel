@@ -16487,6 +16487,77 @@ static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const 
   return -1;
 }
 
+/* narrow_object_arrays' step 4 for call id whose receiver recv reads slot S:
+   a supported operation claims the read and gives the slot its evidence
+   (an element read's row, a push's or a []='s element, a removal, a sort),
+   a walk or a filter is an arm the slot keeps, and any other call kills the
+   slot. Step 5d asks it again for a reader it decides on an element of a
+   table being narrowed (`nodes[0].links[0] = n`), a read of the reader's
+   ivar that is known for one only once the table's class is. */
+static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int *read_slot,
+                        char *claimed, int *call_ret, char *value_ok, const char *walk_disc,
+                        const int *par, int nc) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int has_block = nt_ref(nt, id, "block") >= 0;
+  int args = nt_ref(nt, id, "arguments");
+  int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  if (oa_recv_op_ok(name, argc, has_block)) {
+    claimed[recv] = 1;
+    /* an element read answers a row: what is done with it (oa_row_use) */
+    if (name && ((is_element_at_alias(name) && argc == 1) || (is_endpoint_query(name) && argc == 0)))
+      oa_row_use(c, sl, S, id, par, walk_disc, nc);
+    if (name && is_push_alias(name)) {
+      for (int a = 0; a < argc; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[a], read_slot));
+      /* an append answers the array: like a sort result it must land
+         in a modeled consumer, or a chained `a.push(x).push(y)` pushes
+         an element no slot sees */
+      if (!(id < nc && value_ok[id])) sl[S].alive = 0;
+    }
+    /* the removals have emitters for an object array only (the
+       removes bit, checked at component resolution). clear answers the
+       array, so like an append it must land in a modeled consumer, and
+       the emitter reads delete_at's index as a C integer. */
+    else if (name && (sp_streq(name, "pop") || sp_streq(name, "shift") ||
+                      sp_streq(name, "clear") || sp_streq(name, "delete_at"))) {
+      sl[S].removes = 1;
+      if (sp_streq(name, "clear") && !(id < nc && value_ok[id])) sl[S].alive = 0;
+      /* (a boxed index too, which the emitter takes as an Integer the way
+         every index is taken: --int-overflow=promote boxes the Integer
+         locals after the fixpoint and runs the pass again, and a slot
+         that fell back to the box there left the removals already typed
+         as an element, whose nil then had no check) */
+      if (sp_streq(name, "delete_at") && infer_type(c, argv[0]) != TY_INT &&
+          infer_type(c, argv[0]) != TY_POLY)
+        sl[S].alive = 0;
+    }
+    /* ... and a Range-keyed read is a slice, which the element read
+       took as an Integer index and raised TypeError for (#9932): the
+       same slot keeps the poly path */
+    else if (name && is_element_at_alias(name) && argc == 1 &&
+             (nt_kind(nt, argv[0]) == NK_RangeNode || infer_type(c, argv[0]) == TY_RANGE))
+      sl[S].alive = 0;
+    else if (name && sp_streq(name, "[]=") && argc == 2) {
+      /* a range-keyed []= is a splice, which the obj-array representation
+         has no emitter for: keep the slot on the poly path */
+      if (infer_type(c, argv[0]) == TY_RANGE) sl[S].alive = 0;
+      else sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[1], read_slot));
+    }
+    else if (name && (sp_streq(name, "min") || sp_streq(name, "max") ||
+                      sp_streq(name, "sort") || sp_streq(name, "sort!"))) {
+      sl[S].needs_cmp = 1;
+      /* a sort/sort! RESULT must land in a modeled consumer (statement
+         position, or a slot-alias write handled in step 5); an escaping
+         result keeps the component on the boxed poly path. */
+      if ((is_sort_family(name)) &&
+          !(id < nc && value_ok[id]))
+        sl[S].alive = 0;
+    }
+  }
+  else if (!oa_walk_arm(c, id, recv, sl, S, claimed, walk_disc, nc) &&
+           !oa_filter_arm(c, id, recv, sl, S, claimed, call_ret, value_ok, walk_disc, nc)) sl[S].alive = 0;
+}
+
 /* narrow_object_arrays' step 5d: the slot of the ivar that the synthesized
    reader `name` of class ci reads, its own or an ancestor's (as OA_IVSLOT
    finds it: a subclass's copy of an inherited ivar has no slot of its own,
@@ -17061,63 +17132,8 @@ static int narrow_object_arrays(Compiler *c) {
     int has_block = nt_ref(nt, id, "block") >= 0;
     int args = nt_ref(nt, id, "arguments");
     int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-    if (recv >= 0 && read_slot[recv] >= 0) {
-      int S = read_slot[recv];
-      if (oa_recv_op_ok(name, argc, has_block)) {
-        claimed[recv] = 1;
-        /* an element read answers a row: what is done with it (oa_row_use) */
-        if (name && ((is_element_at_alias(name) && argc == 1) || (is_endpoint_query(name) && argc == 0)))
-          oa_row_use(c, sl, S, id, par, walk_disc, nc);
-        if (name && is_push_alias(name)) {
-          for (int a = 0; a < argc; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[a], read_slot));
-          /* an append answers the array: like a sort result it must land
-             in a modeled consumer, or a chained `a.push(x).push(y)` pushes
-             an element no slot sees */
-          if (!(id < nc && value_ok[id])) sl[S].alive = 0;
-        }
-        /* the removals have emitters for an object array only (the
-           removes bit, checked at component resolution). clear answers the
-           array, so like an append it must land in a modeled consumer, and
-           the emitter reads delete_at's index as a C integer. */
-        else if (name && (sp_streq(name, "pop") || sp_streq(name, "shift") ||
-                          sp_streq(name, "clear") || sp_streq(name, "delete_at"))) {
-          sl[S].removes = 1;
-          if (sp_streq(name, "clear") && !(id < nc && value_ok[id])) sl[S].alive = 0;
-          /* (a boxed index too, which the emitter takes as an Integer the way
-             every index is taken: --int-overflow=promote boxes the Integer
-             locals after the fixpoint and runs the pass again, and a slot
-             that fell back to the box there left the removals already typed
-             as an element, whose nil then had no check) */
-          if (sp_streq(name, "delete_at") && infer_type(c, argv[0]) != TY_INT &&
-              infer_type(c, argv[0]) != TY_POLY)
-            sl[S].alive = 0;
-        }
-        /* ... and a Range-keyed read is a slice, which the element read
-           took as an Integer index and raised TypeError for (#9932): the
-           same slot keeps the poly path */
-        else if (name && is_element_at_alias(name) && argc == 1 &&
-                 (nt_kind(nt, argv[0]) == NK_RangeNode || infer_type(c, argv[0]) == TY_RANGE))
-          sl[S].alive = 0;
-        else if (name && sp_streq(name, "[]=") && argc == 2) {
-          /* a range-keyed []= is a splice, which the obj-array representation
-             has no emitter for: keep the slot on the poly path */
-          if (infer_type(c, argv[0]) == TY_RANGE) sl[S].alive = 0;
-          else sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[1], read_slot));
-        }
-        else if (name && (sp_streq(name, "min") || sp_streq(name, "max") ||
-                          sp_streq(name, "sort") || sp_streq(name, "sort!"))) {
-          sl[S].needs_cmp = 1;
-          /* a sort/sort! RESULT must land in a modeled consumer (statement
-             position, or a slot-alias write handled in step 5); an escaping
-             result keeps the component on the boxed poly path. */
-          if ((is_sort_family(name)) &&
-              !(id < nc && value_ok[id]))
-            sl[S].alive = 0;
-        }
-      }
-      else if (!oa_walk_arm(c, id, recv, sl, S, claimed, walk_disc, nc) &&
-               !oa_filter_arm(c, id, recv, sl, S, claimed, call_ret, value_ok, walk_disc, nc)) sl[S].alive = 0;
-    }
+    if (recv >= 0 && read_slot[recv] >= 0)
+      oa_recv_use(c, sl, read_slot[recv], id, recv, read_slot, claimed, call_ret, value_ok, walk_disc, par, nc);
     /* Resolve the call target the way emission will: the enclosing self's
        ancestry first and a free function only as the fallback, then an
        explicit receiver -- a constant names a class, so the target is that
@@ -17407,7 +17423,18 @@ static int narrow_object_arrays(Compiler *c) {
     for (int p = 0; p < npend; p++) {
       int id = pend[p].id, args = nt_ref(nt, id, "arguments"), argc = 0;
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-      if (reads[p]) { read_slot[id] = oa_reader_ivslot(c, ivslot, pend[p].cls, nt_str(nt, id, "name")); continue; }
+      if (reads[p]) {
+        int rs = oa_reader_ivslot(c, ivslot, pend[p].cls, nt_str(nt, id, "name"));
+        read_slot[id] = rs;
+        /* what the call over the read does with it, as step 4 classifies a
+           read of the slot (oa_recv_use); a read used another way is left
+           unclaimed, and step 6 kills the slot */
+        int pc = par[id];
+        if (rs >= 0 && pc >= 0 && pc < nc && nt_kind(nt, pc) == NK_CallNode &&
+            nt_ref(nt, pc, "receiver") == id && !(dead && dead[pc]))
+          oa_recv_use(c, sl, rs, pc, id, read_slot, claimed, call_ret, value_ok, walk_disc, par, nc);
+        continue;
+      }
       if (tmis[p] < 0) {
         OA_DYN_KILL(nt_ref(nt, id, "receiver"), nt_str(nt, id, "name"));
       }

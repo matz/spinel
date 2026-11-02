@@ -16378,6 +16378,56 @@ static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const 
   return -1;
 }
 
+/* narrow_object_arrays' step 5c: the Symbols (by node, of the nc nodes)
+   that define an accessor rather than route to one. The `attr_reader :items`
+   declaration names the reader with a symbol; that one is the reader's
+   definition, not a dynamic route to it. `attr_accessor`/`attr_writer` name
+   it the same way -- their WRITER is what has to be vetted, and step 3a does
+   that by its own `:items=` name, so treating the declaration as a dynamic
+   route would kill every accessor slot for the bare symbol it is spelled
+   with. A member of `Struct.new(:items)` / `Data.define(:items)` is the
+   record class's own reader and writer the same way, and so are the keyword
+   naming it in a constructor call (`Group.new(items: v)`) and the member
+   names the each_pair a Struct is given yields (synth_struct_each): none
+   reaches another class's `items`. */
+static char *oa_defining_symbols(Compiler *c, int nc) {
+  const NodeTable *nt = c->nt;
+  char *attr_sym = (char *)calloc(nc, 1);
+  if (!attr_sym) { fprintf(stderr, "oom\n"); exit(1); }
+  for (int id = 0; id < nt->count && id < nc; id++) {
+    NodeKind ty_k = nt_kind(nt, id);
+    if (ty_k == NK_SymbolNode) {
+      Scope *ssc = comp_scope_of(c, id);
+      if (ssc && scope_is_struct_synth(c, (int)(ssc - c->scopes))) attr_sym[id] = 1;
+      continue;
+    }
+    if (ty_k != NK_CallNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    int aa = nt_ref(nt, id, "arguments"); int aan = 0;
+    const int *aav = aa >= 0 ? nt_arr(nt, aa, "arguments", &aan) : NULL;
+    if (class_def_is_record_call(nt, id) ||
+        (recv < 0 && cn && (sp_streq(cn, "attr_reader") || sp_streq(cn, "attr") ||
+                            sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr_writer")))) {
+      for (int k = 0; k < aan; k++) if (aav[k] >= 0 && aav[k] < nc) attr_sym[aav[k]] = 1;
+      continue;
+    }
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+    int rc = cn && is_struct_constructor(cn) && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
+             ? const_node_class_index(c, recv) : -1;
+    if (rc < 0 || !c->classes[rc].is_struct) continue;
+    for (int k = 0; k < aan; k++) {
+      if (nt_kind(nt, aav[k]) != NK_KeywordHashNode) continue;
+      int en = 0; const int *el = nt_arr(nt, aav[k], "elements", &en);
+      for (int e = 0; e < en; e++) {
+        int key = nt_kind(nt, el[e]) == NK_AssocNode ? nt_ref(nt, el[e], "key") : -1;
+        if (key >= 0 && key < nc && nt_kind(nt, key) == NK_SymbolNode) attr_sym[key] = 1;
+      }
+    }
+  }
+  return attr_sym;
+}
+
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -17107,23 +17157,7 @@ static int narrow_object_arrays(Compiler *c) {
          anywhere names it for `send`/`method`/`define_method`/`&:m`, and
          `super` reaches it with no call node at all. Retyping its C return
          under either would hand back something the caller cannot read. */
-  /* the `attr_reader :items` declaration itself names the reader with a
-     symbol; that one is the reader's definition, not a dynamic route to it.
-     `attr_accessor`/`attr_writer` name it the same way -- their WRITER is
-     what has to be vetted, and step 3a does that by its own `:items=` name,
-     so treating the declaration here as a dynamic route would kill every
-     accessor slot for the bare symbol it is spelled with. */
-  char *attr_sym = (char *)calloc(nc, 1);
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind ty_k = nt_kind(nt, id);
-    if (ty_k != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
-    const char *cn = nt_str(nt, id, "name");
-    if (!cn || !(sp_streq(cn, "attr_reader") || sp_streq(cn, "attr") ||
-                 sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr_writer"))) continue;
-    int aa = nt_ref(nt, id, "arguments"); int aan = 0;
-    const int *aav = aa >= 0 ? nt_arr(nt, aa, "arguments", &aan) : NULL;
-    for (int k = 0; k < aan; k++) if (aav[k] >= 0 && aav[k] < nc) attr_sym[aav[k]] = 1;
-  }
+  char *attr_sym = oa_defining_symbols(c, nc);
   /* The names the program's Symbols and supers spell, as a set: each
      Symbol was compared with every slot (tens of thousands of Symbols by
      thousands of slots on a Rails program, every round), and a slot dies

@@ -476,17 +476,16 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
       if (ami >= 0 && c->scopes[ami].class_id == aci) { cplan_set(p, ami, aci, UC_REOPEN, CP_DIRECT); return; }
     }
   }
-  /* an Array or Hash reopen's own method of the name */
-  if ((ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt)) &&
-      (nt_ref(nt, id, "block") < 0 ||
-       ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(rname, "concat")))) {
-    int aci = comp_core_class(c, ty_is_hash(rt) ? CORE_HASH : CORE_ARRAY);
-    int adc = -1, ami = aci >= 0 ? call_target(c, id, aci, rname, 0, &adc) : -1;
-    if (ami >= 0 && adc == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, rname)) {
-      if (cplan_reopen_runs_builtin(c, id, ami)) return;
-      cplan_set(p, ami, aci, UC_REOPEN, CP_DIRECT);
-      return;
-    }
+  /* an Array or Hash reopen's own method of the name. With a block, the
+     reopen's only when the builtin arms do not keep the call: a yielding
+     reopen of a name the builtin surface has (`each`, `map`) stays the
+     builtin's loop; one of a name it lacks, or one that does not yield,
+     runs the reopen's method, through its proc form when it yields
+     (an_reopen_owner: the inference and the emitter decide alike) */
+  if (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt)) {
+    int cn = ty_is_hash(rt) ? CORE_HASH : CORE_ARRAY;
+    int ami = an_reopen_owner(c, id, cn);
+    if (ami >= 0) { cplan_set(p, ami, comp_core_class(c, cn), UC_REOPEN, CP_DIRECT); return; }
   }
   /* last, a program's own Object method for a name the receiver's builtin
      class and Object's own surface do not have (object_reopen_answers) */

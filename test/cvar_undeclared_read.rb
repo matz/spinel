@@ -177,3 +177,23 @@ class Refl
   p class_variable_get("@@s"), class_variable_defined?("@@s")
 end
 p Refl.s, Refl.class_variables
+
+# class_variable_get of a declared variable that no write has set yet
+class Later
+  begin
+    class_variable_get(:@@v)
+  rescue NameError => e
+    p e.message, e.name
+  end
+  @@v = 1
+  p class_variable_get(:@@v)
+  def self.peek
+    Later.class_variable_get(:@@w)
+  rescue NameError => e
+    e.receiver
+  end
+  def self.set = (@@w = 2)
+end
+p Later.peek
+Later.set
+p Later.peek

@@ -2951,16 +2951,16 @@ void emit_strbuf_node_read(Compiler *c, int id, const char *sref, Buf *b) {
    nor an ancestor or mixin declares (no write anywhere registers it there):
    CRuby raises NameError when the read runs, its receiver the class and its
    name the variable's, or RuntimeError at main's top level, where every
-   class variable access raises. Valued as the read's dead tail; the
-   receiver and name are staged inside the raise's message argument, so the
-   text still opens with the raise the tail emitters recognize. */
+   class variable access raises (emit_cvar_name_error). Valued as the
+   read's dead tail. */
 static void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
   if (h->cid == c->toplevel_class)
     buf_puts(b, "(sp_raise_cls(\"RuntimeError\", \"class variable access from toplevel\"), ");
-  else
-    buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
-                  "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\")), ",
-               h->cid, h->name, h->name, class_ruby_name(c, h->cid) ? class_ruby_name(c, h->cid) : c->classes[h->cid].name);
+  else {
+    buf_puts(b, "(");
+    emit_cvar_name_error(c, h->cid, h->name, b);
+    buf_puts(b, ", ");
+  }
   buf_printf(b, "%s)", raise_tail_value(repr_of(c, id).as_ty));
 }
 

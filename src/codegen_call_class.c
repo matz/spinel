@@ -4278,6 +4278,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         return 1;
       }
       if (cvn && ccid >= 0) {
+        int rcid = ccid;   /* the receiver, which the NameError names */
         ccid = comp_cvar_owner(c, ccid, cvn);
         int cvi = comp_cvar_index(&c->classes[ccid], cvn);
         char ref[300]; snprintf(ref, sizeof ref, "cvar_%s_%s", c->classes[ccid].name, cvn + 2);
@@ -4288,7 +4289,15 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         }
         if (cvi >= 0) {
           TyKind ct = c->classes[ccid].cvar_types[cvi];
-          if (sp_streq(name, "class_variable_get")) { emit_boxed_text(c, ct, ref, b); return 1; }
+          /* a variable not set yet raises, as an undeclared one does */
+          if (sp_streq(name, "class_variable_get")) {
+            buf_printf(b, "((%s__set ? (void)0 : ", ref);
+            emit_cvar_name_error(c, rcid, cvn, b);
+            buf_puts(b, "), ");
+            emit_boxed_text(c, ct, ref, b);
+            buf_puts(b, ")");
+            return 1;
+          }
           if (sp_streq(name, "class_variable_set") && argc == 2) {
             buf_printf(b, "(%s = ", ref);
             if (ct == TY_POLY) emit_boxed(c, argv[1], b);
@@ -4302,9 +4311,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           }
         }
         else if (sp_streq(name, "class_variable_get")) {
-          buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
-                        "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\")), sp_box_nil())",
-                     ccid, cvn, cvn, class_ruby_name(c, ccid) ? class_ruby_name(c, ccid) : c->classes[ccid].name);
+          buf_puts(b, "(");
+          emit_cvar_name_error(c, rcid, cvn, b);
+          buf_puts(b, ", sp_box_nil())");
           return 1;
         }
       }

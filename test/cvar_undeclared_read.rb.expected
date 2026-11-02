@@ -35,3 +35,8 @@ true
 true
 5
 [:@@s]
+"uninitialized class variable @@v in Later"
+:@@v
+1
+Later
+2

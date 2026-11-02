@@ -5314,7 +5314,7 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
       rk == NK_AndNode || rk == NK_OrNode)
     return 1;
   /* A constant assigned a class value (`K = make`) names no class it knows */
-  if (rk == NK_ConstantReadNode) return const_class_value_only(c, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return const_class_value_only(c, recv);
   if (rk != NK_CallNode) return 0;
   /* `self.class` in a class with no subclass resolves to that class
      statically and has its own arms on both sides; treating it as dynamic

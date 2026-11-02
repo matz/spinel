@@ -1189,12 +1189,21 @@ int class_recv_static_ci(Compiler *c, int node) {
    the program, a builtin class or an alias has its own static dispatch. */
 int const_class_value_only(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_kind(nt, node) == NK_ConstantReadNode ? nt_str(nt, node, "name") : NULL;
+  NodeKind k = nt_kind(nt, node);
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, node, "name") : NULL;
   if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
   LocalVar *lv = comp_const(c, nm);
+  if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
   const LrDef *d = NULL;
-  return lv && (lv->type == TY_CLASS || lv->type == TY_POLY) && !resolve_class_alias_chain(c, nm) &&
-    elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  if (k == NK_ConstantReadNode)
+    return elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  /* `M::X` (or `::X`): the write must be the constant of the class or
+     module the parent names (Object's for `::X`) where the read stands, as
+     `M::X` looks it up; a parent known only at run time names none */
+  int par = nt_ref(nt, node, "parent");
+  int owner = par < 0 ? -1 : class_recv_static_ci(c, par);
+  if (par >= 0 && owner < 0) return 0;
+  return elab_const_own_at(c, owner, nm, elab_point_of(c, node), &d) != ELAB_NO && d && d->kind == LR_WRITE;
 }
 
 /* The class method `name` the program defines for the class a class-valued

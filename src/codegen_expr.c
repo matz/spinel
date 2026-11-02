@@ -4967,7 +4967,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       else if (oint_kind(vt))  buf_printf(&tc2, lo2 ? "(!_t%d.nil)" : "(1)", t2);
       else if (vt == TY_SYMBOL) buf_printf(&tc2, "(_t%d != (sp_sym)-1)", t2);
       else if (vt == TY_CLASS) buf_printf(&tc2, "(!sp_class_nil_p(_t%d))", t2);
-      else if (vt == TY_STRING || ty_is_array(vt) || ty_is_hash(vt) || ty_is_object(vt) ||
+      else if (vt == TY_STRING || ty_is_array(vt) || ty_is_obj_array(vt) || ty_is_hash(vt) || ty_is_object(vt) ||
                vt == TY_PROC || vt == TY_MATCHDATA || vt == TY_EXCEPTION ||
                ty_nullable_builtin_id(vt))
         buf_printf(&tc2, "(_t%d != 0)", t2);
@@ -5119,7 +5119,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     else if (lt == TY_BOOL) buf_printf(&tcond, "_t%d", t);
     else if (lt_falsy_const) buf_puts(&tcond, "0");
     else if (oint_kind(lt)) buf_printf(&tcond, lo ? "(!_t%d.nil)" : "(1)", t);  /* a nullable scalar reads falsy at nil; a plain one is always truthy */
-    else if (lt == TY_STRING || ty_is_array(lt) || ty_is_hash(lt) || ty_is_object(lt) ||
+    else if (lt == TY_STRING || ty_is_array(lt) || ty_is_obj_array(lt) || ty_is_hash(lt) || ty_is_object(lt) ||
              lt == TY_PROC || lt == TY_MATCHDATA || lt == TY_EXCEPTION ||
              lt == TY_BIGINT || ty_nullable_builtin_id(lt) || (lt == TY_STRBUF))
       buf_printf(&tcond, "(_t%d != 0)", t);  /* nullable pointer: NULL reads falsy */
@@ -5170,9 +5170,11 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
                else if (ty_nullable_builtin_id(lt)) buf_printf((TB), "sp_box_nullable_obj((void *)_t%d, %s)", t, ty_nullable_builtin_id(lt)); \
                else if (lt == TY_CLASS) buf_printf((TB), "sp_box_class(_t%d)", t); \
                /* any other kind with a box of its own (a Time, a Range, a \
-                  Rational): boxed by it, where the raw temp met the boxed \
-                  arm in one C conditional (#10078) */ \
-               else if (!lt_falsy_const && lt != TY_UNKNOWN && ty_traits_of(lt) && ty_traits_of(lt)->box_text) { \
+                  Rational, an Array of one class's objects): boxed by it, \
+                  where the raw temp met the boxed arm in one C conditional \
+                  (#10078) */ \
+               else if (!lt_falsy_const && lt != TY_UNKNOWN && \
+                        ((ty_traits_of(lt) && ty_traits_of(lt)->box_text) || ty_is_obj_array(lt))) { \
                  char kept_[32]; snprintf(kept_, sizeof kept_, "_t%d", t); emit_boxed_text(c, lt, kept_, (TB)); } \
                else buf_printf((TB), "_t%d", t); } \
              /* the kept left in an Integer / Float result: its oint where

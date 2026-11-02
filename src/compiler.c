@@ -2608,6 +2608,7 @@ static void name_append(char ***list, int *n, int *cap, const char *name) {
 void comp_def_asked_add(Compiler *c, const char *name) {
   if (name) name_add(&c->def_asked, &c->ndef_asked, &c->cdef_asked, name);
 }
+unsigned comp_instantiated_gen = 0;
 unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table grows (poly-candidate memo stamp) */
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;

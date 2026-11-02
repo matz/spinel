@@ -2332,6 +2332,7 @@ const PolyCand *comp_poly_candidates(Compiler *c, const char *name, int *n);
    (cls_fact_excludes, #8530): what its arms are counted, typed and emitted from */
 const PolyCand *comp_poly_candidates_at(Compiler *c, int id, const char *name, int *n);
 extern unsigned comp_table_gen;
+extern unsigned comp_instantiated_gen;   /* bumped whenever a class's instantiated flag may have moved (compute_instantiated, a C extension's class) */
 void comp_poly_candidates_reset(void);
 /* The classes answering class method `name` through their chain, ascending,
    each with the scope comp_cmethod_in_chain gives (`cls`, `mi`; the other

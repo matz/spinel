@@ -1855,6 +1855,7 @@ void compute_instantiated(Compiler *c, int early) {
   }
   for (int k = 0; k < c->nclasses; k++) { c->classes[k].ctor_reachable = c->classes[k].instantiated; comp_touch_class(c->classes[k].idx); }
   if (early) { for (int k = 0; k < c->nclasses; k++) c->classes[k].instantiated = keep[k]; free(keep); }
+  comp_instantiated_gen++;
   comp_touch_global();   /* instantiated and ctor_reachable moved: inference reads them (respond_to? on a box, the plans) */
 }
 

@@ -15801,9 +15801,16 @@ static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   const ClsSet *f = cm ? cls_fact_node(c, recv) : NULL;
   /* (a receiver no value reaches excludes nothing, as cls_fact_excludes says) */
   if (cm && (!f || (f->n == 0 && !f->bv && !f->os))) return 1;
-  for (int k = 0; k < c->nclasses; k++)
-    if ((k == ci || is_descendant(c, k, ci)) &&
-        (cm ? !cls_fact_bounded(c, k) || cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k))) return 1;
+  /* ci, then its descendants (comp_descendants, less the unreferenced ones
+     is_descendant leaves out), not every class with its parent chain: this
+     runs for each slot of the name at each dynamic call */
+  int nd = 0;
+  const int *ds = comp_descendants(c, ci, &nd);
+  for (int i = -1; i < nd; i++) {
+    int k = i < 0 ? ci : ds[i];
+    if (i >= 0 && c->classes[k].unreferenced) continue;
+    if (cm ? !cls_fact_bounded(c, k) || cls_set_has(f, k + c->nclasses) : !cls_fact_excludes(c, recv, k)) return 1;
+  }
   return 0;
 }
 

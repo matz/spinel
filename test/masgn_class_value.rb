@@ -45,3 +45,14 @@ module B21
   A21::X21 = mk21
 end
 p A21::X21.name
+
+# A rescued exception's class carries its name, not a Class.new class's id
+e22 = begin; raise ArgumentError; rescue => x22; x22; end
+X22, Y22 = e22.class, Class.new { def hi = 22 }
+p X22, Y22.name
+
+# Object's own body names its constants bare
+class Object
+  self::X23, $v23 = Class.new { def hi = 23 }, 0
+end
+p X23.name

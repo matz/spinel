@@ -20363,13 +20363,16 @@ static int const_name_owner(Compiler *c, int tgt, int *owner) {
   if (k != NK_ConstantPathTargetNode && k != NK_ConstantPathNode) {
     int cref = elab_cref_at(c, tgt);
     *owner = cref >= -1 ? cref : g_class_body_id;
-    return 1;
   }
-  int recv = nt_ref(nt, tgt, "parent");
-  if (recv >= 0 && nt_kind(nt, recv) == NK_SelfNode) *owner = cpath_in_singleton(c, tgt) ? -1 : g_class_body_id;
-  else if (cpath_recv_is_object(c, recv)) *owner = -1;
-  else if (cpath_recv_dynamic(c, recv, 1)) return 0;
-  else *owner = class_recv_static_ci(c, recv);
+  else {
+    int recv = nt_ref(nt, tgt, "parent");
+    if (recv >= 0 && nt_kind(nt, recv) == NK_SelfNode) *owner = cpath_in_singleton(c, tgt) ? -1 : g_class_body_id;
+    else if (cpath_recv_is_object(c, recv)) *owner = -1;
+    else if (cpath_recv_dynamic(c, recv, 1)) return 0;
+    else *owner = class_recv_static_ci(c, recv);
+  }
+  /* Object's own constants are top-level ones: CRuby names them bare */
+  if (*owner >= 0 && *owner == comp_core_class(c, CORE_OBJECT)) *owner = -1;
   return 1;
 }
 

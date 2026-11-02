@@ -10777,6 +10777,53 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }
 int infer_param_types_settle(Compiler *c) { return infer_param_types_ex(c, 1, NULL); }
 int infer_changed_param_types(Compiler *c, const NodeTypes *before) { return infer_param_types_ex(c, 1, before); }
+/* `when Klass` and `in Klass` hand the case subject to Klass's own class
+   method `===` as its boxed parameter, as a call does: an element or a
+   key the method writes through it widens the subject's typed container,
+   as infer_param_types_ex does for a boxed parameter of a call. */
+static int cmeth_eqq_subject_arg(Compiler *c, int cond, int pred) {
+  int ci = const_node_class_index(c, cond);
+  int mi = ci >= 0 ? class_own_cmethod_eqq(c, ci) : -1;
+  if (mi < 0 || c->scopes[mi].nparams != 1) return 0;
+  LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
+  if (!p || p->type != TY_POLY) return 0;
+  TyKind at = infer_type(c, pred);
+  int changed = 0;
+  if (ty_is_array(at) && at != TY_POLY_ARRAY && p->boxed_push_elem != TY_UNKNOWN &&
+      p->boxed_push_elem != ty_array_elem(at))
+    changed |= widen_arg_array(c, pred);
+  if (ty_is_hash(at) && at != TY_POLY_POLY_HASH && p->boxed_store_key != TY_UNKNOWN) {
+    TyKind folded = at;
+    if (!fold_evidence(&folded, 0, 0, p->boxed_store_key, p->boxed_store_val) || folded != at)
+      changed |= widen_arg_hash(c, pred);
+  }
+  return changed;
+}
+
+static int cmeth_eqq_subject_writes(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  NT_FOREACH_KIND(nt, NK_CaseNode, id) {
+    int pred = nt_ref(nt, id, "predicate");
+    if (pred < 0) continue;
+    int nw = 0; const int *whens = nt_arr(nt, id, "conditions", &nw);
+    for (int k = 0; k < nw; k++) {
+      int wc = 0; const int *wconds = nt_arr(nt, whens[k], "conditions", &wc);
+      for (int j = 0; j < wc; j++) changed |= cmeth_eqq_subject_arg(c, wconds[j], pred);
+    }
+  }
+  NT_FOREACH_KIND(nt, NK_CaseMatchNode, id) {
+    int pred = nt_ref(nt, id, "predicate");
+    if (pred < 0) continue;
+    int nw = 0; const int *ins = nt_arr(nt, id, "conditions", &nw);
+    for (int k = 0; k < nw; k++) {
+      int pat = nt_kind(nt, ins[k]) == NK_InNode ? nt_ref(nt, ins[k], "pattern") : -1;
+      if (pat >= 0) changed |= cmeth_eqq_subject_arg(c, pat, pred);
+    }
+  }
+  return changed;
+}
+
 static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before) {
   const NodeTable *nt = c->nt;
   int changed = 0, any = 0;
@@ -10785,6 +10832,16 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   wbas_share_begin(&changed, &any);
   IptWork w;
   ipt_work_begin(c, &w);
+  /* A class method `===` of the program's own is called by `when` and `in`
+     arms, grep and a class held as a value, with any kind of value: its
+     parameter takes a boxed value. */
+  for (int k = 0; k < c->nclasses; k++) {
+    int emi = class_own_cmethod_eqq(c, k);
+    if (emi < 0 || c->scopes[emi].nparams < 1) continue;
+    LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
+    if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
+  }
+  if (cmeth_eqq_subject_writes(c)) changed = 1;
   const int *ids = NULL;
   int nids = nt->count;
   for (;;) {

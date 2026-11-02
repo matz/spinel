@@ -6,7 +6,10 @@
 # not all linear, so the time of the phase the signatures run in is taken with
 # the signatures and without them, and their difference is compared at 1,000
 # and 4,000 methods (linear: 4x; limit 8x). The 1,000-method difference counts
-# as at least 5 ms, so one that is only timer noise cannot decide the ratio.
+# as at least 20 ms, so one that is only timer noise cannot decide the ratio,
+# and each difference is the least of five, since the phase is wall time and
+# a scheduler pause under a loaded gate would otherwise fail the check (the
+# quadratic lookups added 170 ms at 4,000 methods, far above the floor).
 # Run from the Spinel root.
 set -eu
 SPINEL=${SPINEL:-bin/spinel}
@@ -36,11 +39,11 @@ ms() {
   echo "$m"
 }
 
-# what the signatures add: the least of three differences, each taken from a
+# what the signatures add: the least of five differences, each taken from a
 # compile with them and one without, back to back
 added() {
   best=
-  for _ in 1 2 3; do
+  for _ in 1 2 3 4 5; do
     p=$(ms "$tmp/s$1.rb") || return 1
     r=$(ms --rbs "$tmp/s$1.rbs" "$tmp/s$1.rb") || return 1
     best=$(awk -v b="$best" -v r="$r" -v p="$p" 'BEGIN { d = r - p; print ((b == "" || d < b + 0) ? d : b) }')
@@ -54,7 +57,7 @@ fail() { echo "rbs-seed-scale-test: FAIL ($1)"; exit 1; }
 d1=$(added 1000) || fail "no compile or pre-fixpoint timing row for 1000 methods"
 d4=$(added 4000) || fail "no compile or pre-fixpoint timing row for 4000 methods"
 awk -v d1="$d1" -v d4="$d4" 'BEGIN {
-  f = d1 < 5 ? 5 : d1
-  printf "rbs-seed-scale-test: signatures add %.1f ms at 1000 methods, %.1f ms at 4000 (ratio %.1fx over at least 5 ms, limit 8x)\n", d1, d4, d4 / f
+  f = d1 < 20 ? 20 : d1
+  printf "rbs-seed-scale-test: signatures add %.1f ms at 1000 methods, %.1f ms at 4000 (ratio %.1fx over at least 20 ms, limit 8x)\n", d1, d4, d4 / f
   exit (d4 / f > 8) }' || fail "applying --rbs signatures grew superlinearly: a scan of all scopes or declarations per signature"
 echo "rbs-seed-scale-test: pass"

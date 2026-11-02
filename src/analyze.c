@@ -5166,7 +5166,7 @@ static void qc_note_path_write(Compiler *c, int tgt, QCWrite **ws, int *n, int *
   if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
   if (!*ws) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   QCWrite *w = &(*ws)[(*n)++];
-  w->node = tgt; w->depth = md; w->salt = 0; w->head[0] = 0;
+  w->node = tgt; w->depth = md; w->salt = 0; w->head[0] = 0; w->is_class = 0;
   for (int i = 0; i < md; i++) snprintf(w->path[i], 64, "%s", mods[i]);
   snprintf(w->name, sizeof w->name, "%s", chain[cn - 1]);
   /* the module the write is under, by its Ruby name, for the class's
@@ -5191,7 +5191,7 @@ void qc_collect_writes(Compiler *c, int node, char (*path)[64], int depth,
     if (nm) {
       if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
       QCWrite *w = &(*ws)[(*n)++];
-      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0;
+      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0; w->is_class = 0;
       for (int i = 0; i < depth; i++) snprintf(w->path[i], 64, "%s", path[i]);
       snprintf(w->name, sizeof w->name, "%s", nm);
     }
@@ -5779,6 +5779,7 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
       if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
       QCWrite *w = &(*ws)[(*n)++];
       w->node = cp; w->depth = depth - 1; w->salt = 0; w->head[0] = 0;
+      w->is_class = ty_k == NK_ClassNode;
       for (int i = 0; i < depth - 1; i++) snprintf(w->path[i], 64, "%s", path[i]);
       snprintf(w->name, sizeof w->name, "%s", mn);
       /* a builtin parent (`class String::Helper`) is no body the passes
@@ -5798,7 +5799,7 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
     if (cn && class_def_is_record_call(nt, nt_ref(nt, node, "value"))) {
       if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
       QCWrite *w = &(*ws)[(*n)++];
-      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0;
+      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0; w->is_class = 1;
       for (int i = 0; i < depth; i++) snprintf(w->path[i], 64, "%s", path[i]);
       snprintf(w->name, sizeof w->name, "%s", cn);
     }
@@ -5913,6 +5914,11 @@ void qualify_colliding_classes(Compiler *c) {
        refusal is never reached. A builtin MODULE's name (Comparable, Math)
        reopens at any depth and is left alone. */
     if (!collide && ws[i].depth > 0 && is_builtin_class_name(ws[i].name) && !is_builtin_module_name(ws[i].name)) collide = 1;
+    /* ... but a CLASS named like a builtin module cannot reopen it: solid_queue's
+       `module SolidQueue; class Process` is a constant of its own, and a rooted
+       `::Process.pid` beside it names the builtin. Qualified, it is kept apart. */
+    if (!collide && ws[i].depth > 0 && is_builtin_module_name(ws[i].name) &&
+        ws[i].is_class) collide = 1;
     /* ... and the builtins with no row in that table at all (Monitor, and
        OpenStruct once required), whose leaf the builtin's own checks match
        as well: graphql's `class MonitorTrace::Monitor` took over a top-level

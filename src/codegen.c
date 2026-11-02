@@ -8404,7 +8404,7 @@ int scope_creates_returning_proc(Compiler *c, int si) {
    function and is not closed here. */
 int fiber_cap_needs_root(TyKind t) {
   if (ty_is_struct_valued(t)) return 0;
-  return t == TY_STRING || t == TY_BIGINT || ty_is_array(t) || ty_is_hash(t) ||
+  return t == TY_STRING || t == TY_BIGINT || ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) ||
          ty_is_object(t) || t == TY_POLY || t == TY_PROC || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR ||
          t == TY_EXCEPTION ||
          /* every other heap-backed handle: an unmarked capture is a GC UAF

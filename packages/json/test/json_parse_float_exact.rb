@@ -21,10 +21,12 @@ p JSON.parse('{"x": 0.50742313, "y": -12.75e-1, "z": [1.5, 2E1, -0.0]}')
 seed = 11
 h = 0
 3000.times do |i|
-  seed = (seed * 1103515245 + 12345) % 2147483648
-  int = (seed % 100000).to_s
-  seed = (seed * 1103515245 + 12345) % 2147483648
-  frac = (seed % 1000000000).to_s.rjust(9, "0")[0, 1 + i % 9]
+  seed = (seed * 75 + 74) % 65537
+  int = seed.to_s
+  seed = (seed * 75 + 74) % 65537
+  a = seed % 10000
+  seed = (seed * 75 + 74) % 65537
+  frac = (a.to_s.rjust(4, "0") + (seed % 100000).to_s.rjust(5, "0"))[0, 1 + i % 9]
   s = "#{i.odd? ? "-" : ""}#{int}.#{frac}"
   s += "e#{i % 7 - 3}" if i % 3 == 0
   f = JSON.parse("[#{s}]")[0]

@@ -742,9 +742,10 @@ static int jp_float_exact(int neg, const char *ip, const char *ie, const char *f
   for (; xp < xe; xp++) x = x * 10 + (*xp - '0');
   ptrdiff_t k = (ptrdiff_t)(xneg ? -x : x) - (fe - fp);
   if (k < -22 || k > 22) return 0;
-  double r = (double)m;
-  r = k < 0 ? r / p10[-k] : r * p10[k];
-  *out = neg ? -r : r;
+  /* the sign goes on first, so a directed rounding mode (fesetround through
+     FFI) rounds the signed value, as strtod does */
+  double r = neg ? -(double)m : (double)m;
+  *out = k < 0 ? r / p10[-k] : r * p10[k];
   return 1;
 #else
   (void)neg; (void)ip; (void)ie; (void)fp; (void)fe; (void)xneg; (void)xp; (void)xe; (void)out;

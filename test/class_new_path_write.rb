@@ -116,6 +116,28 @@ module X; end
 X::B = Class.new
 p X::B.name
 
+# A header that names a superclass (Object, the builder's own) reopens the
+# class too: the builder stays how it is made, so the reads ahead of the
+# write and in its block still find it undefined.
+module Rp; end
+def rp_defined = defined?(Rp::B)
+p rp_defined, defined?(Rp::B)
+Rp::B = Class.new do
+  p defined?(Rp::B)
+  begin
+    Rp::B
+    p :found
+  rescue NameError
+    p :name_error
+  end
+  def self.x = defined?(Rp::B)
+end
+p defined?(Rp::B), Rp::B.x, rp_defined
+class Rp::B < Object
+  def c = 3
+end
+p Rp::B.new.c
+
 # A namespace a path builder is written under is not defined in code that
 # runs before its header (BEGIN runs first).
 BEGIN { p defined?(A), defined?(A::B) }

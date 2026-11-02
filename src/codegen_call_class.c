@@ -4160,8 +4160,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       buf_printf(b, "; sp_class_sclass_p(_cl%d); })", _clt);
       return 1;
     }
-    /* the Class rows (Module#include?), in the family's temp */
-    if (emit_builtin_op_tmp(c, id, recv, TY_CLASS, name, _clt, b)) return 1;
+    /* the Class rows (Module#include?, a hook's no-op) that answer the call */
+    if (cplan_class_row(c, id, recv, name) && emit_builtin_op_tmp(c, id, recv, TY_CLASS, name, _clt, b)) return 1;
     /* Module#class_variables: the registered cvars, own + ancestors (#2719) */
     if (sp_streq(name, "class_variables") && argc == 0) {
       const char *rcn9 = nt_kind(nt, recv) == NK_ConstantReadNode

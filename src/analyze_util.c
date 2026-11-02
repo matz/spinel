@@ -3966,6 +3966,14 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
            ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
   if (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0) return 1;
+  /* then Class's and Module's own (the Class rows), which stand before
+     Object's methods, a top-level def among them */
+  if (srt == TY_CLASS) {
+    int an = nt_ref(c->nt, call, "arguments"), ac = 0;
+    if (an >= 0) nt_arr(c->nt, an, "arguments", &ac);
+    const BuiltinOp *row = bop_find(TY_CLASS, name, ac, nt_ref(c->nt, call, "block") >= 0);
+    if (row && (!(row->flags & BOPF_CLASS_ONLY) || cplan_recv_class(c, call, recv))) return 1;
+  }
   if (srt == TY_POLY) {
     /* any class's chain, from the by-name lists while the chain memo can
        be trusted, class by class otherwise */

@@ -1,0 +1,3 @@
+inherited AfterRequire
+cond inherited CondSub
+done

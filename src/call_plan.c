@@ -40,6 +40,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->by_name = 0;
   p->chain = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
+  p->core_hook = 0;
 }
 
 /* The core id of the class a builtin receiver kind is reopened as, or -1. */
@@ -176,7 +177,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
-  }
+  } else if (uname && s->is_cmethod && is_definition_hook_name(uname))
+    p->core_hook = 1;   /* Class#inherited and the like: a no-op that reads no class and calls no method */
 }
 
 /* Is node id inside a block, a lambda or a method body (it may run later)? */
@@ -1252,6 +1254,28 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   if (c->scopes[mi].versioned || (flags & CT_CAPTURE)) mi = ct_version(c, id, cls, name, flags, mi, def_class, NULL);
   /* An alias's record already selected its captured definition. */
   return mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name) ? ct_guard(c, id, mi, flags) : mi;
+}
+
+int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
+  const NodeTable *nt = c->nt;
+  int ci = class_recv_static_ci(c, recv);
+  if (ci >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) return 0;
+  int fl = bop_flags(TY_CLASS, name);
+  if ((fl & BOPF_CLASS_ONLY) && !cplan_recv_class(c, id, recv)) return 0;
+  return !((fl & BOPF_PRIVATE) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind"));
+}
+
+int cplan_recv_class(Compiler *c, int id, int recv) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, recv);
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, recv, "name") : NULL;
+  int ci = k == NK_SelfNode ? self_class_static_ci(c, recv) : nm ? class_recv_static_ci(c, recv) : -1;
+  if (nt_int(nt, id, "class_recv", 0)) return 1;
+  if (nm && is_builtin_module_const_name(nm)) return 0;   /* (a core module has an entry that is no module's) */
+  if (ci >= 0) return !comp_class_is_module(c, &c->classes[ci]);
+  if (nm) return is_builtin_class_name(nm);
+  return k == NK_CallNode && nt_ref(nt, recv, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, recv, "receiver")) == NK_ConstantReadNode &&
+         is_class_new(nt_str(nt, nt_ref(nt, recv, "receiver"), "name"), nt_str(nt, recv, "name"));
 }
 
 /* Is a call of nm one whose version call_target chooses: does the record

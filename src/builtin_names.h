@@ -296,7 +296,9 @@ int is_constants_list_name(const char *n); /* constants */
 int is_autoload_query_name(const char *n); /* autoload? */
 int is_stmt_output_name(const char *n); /* puts print p */
 int is_class_body_acting_name(const char *n); /* output, raise, exit and the like */
-int is_definition_hook_name(const char *n); /* inherited included extended prepended method_added singleton_method_added const_added */
+int is_definition_hook_name(const char *n); /* inherited included extended prepended method_added method_removed method_undefined their singleton forms const_added */
+int is_module_hook_name(const char *n); /* ...Class's and Module's: all but the singleton forms */
+int is_basic_object_hook_name(const char *n); /* ...BasicObject's: singleton_method_added singleton_method_removed singleton_method_undefined */
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */

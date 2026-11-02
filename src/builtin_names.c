@@ -1499,6 +1499,16 @@ int is_autoload_name(const char *n) { return sp_streq(n, "autoload"); }
 int is_file_load_name(const char *n) {
   return n && (is_require_name(n) || is_load_name(n) || is_autoload_name(n));
 }
+/* The builtin exception classes a `rescue` names that catch a LoadError:
+   LoadError and the classes above it (ScriptError, Exception) */
+int is_load_error_catch_name(const char *n) {
+  return n && (sp_streq(n, "LoadError") || sp_streq(n, "ScriptError") || sp_streq(n, "Exception"));
+}
+/* ...and the ScriptError family: ScriptError and the classes below it */
+int is_script_error_name(const char *n) {
+  return n && (sp_streq(n, "ScriptError") || sp_streq(n, "LoadError") || sp_streq(n, "NotImplementedError") ||
+               sp_streq(n, "SyntaxError"));
+}
 /* A LoadNode's `how` (spinel_parse.c, sp_load_resolve) that names no file
    at compile time: one not there (LoadError when it runs, for the feature
    the node carries), or a path the require computes when it runs

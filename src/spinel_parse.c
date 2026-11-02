@@ -6825,9 +6825,6 @@ static int sp_load_resolve(SpLoadGraph *g, int from, const char *method, const c
   int how = sp_load_target(g, from, rel, path, &to);
   if (how == SP_LOAD_FILE || how == SP_LOAD_NATIVE || how == SP_LOAD_CORE) sp_load_resolved(g, from);
   sp_load_edge(&g->edge, &g->nedge, &g->edgecap, from, line, !rel, path, how, to);
-  if (how == SP_LOAD_NONE)
-    fprintf(stderr, "warning: %s:%d: cannot load such file -- %s (the %s raises LoadError when it runs)\n",
-            g->file[from], line, path, method);
   return g->nedge - 1;
 }
 
@@ -7787,6 +7784,11 @@ static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char 
     sp_load_resolved(g, w->f);
   }
   if (auto_load) {
+    /* (a require's warning is the program's, which knows whether a rescue
+       catches the LoadError: prog_settle_files) */
+    if (g->edge[e].how == SP_LOAD_NONE)
+      fprintf(stderr, "warning: %s:%d: cannot load such file -- %s (the require raises LoadError when it runs)\n",
+              g->file[w->f], line, g->edge[e].name);
     SpPaths names = { { NULL }, 0, 0 };
     const pm_node_t *name = n->arguments->arguments.nodes[0];
     if (PM_NODE_TYPE(name) == PM_SYMBOL_NODE) {

@@ -10,7 +10,8 @@
 # its own: every test/load_graph program with an .expected prints what
 # CRuby prints and exits as CRuby does, 0 unless a `# spinel: exit N` line
 # in its first lines gives N (the others are the files they require).
-# A require that names no file raises LoadError when it runs, and a
+# A require that names no file raises LoadError when it runs (and says so
+# when it compiles, unless a rescue its begin runs catches it), and a
 # --debug build reports a required file's frames as CRuby does
 # (`<top (required)>`, `Kernel#require_relative`). What graph mode does not
 # compile yet it refuses by name: an autoload, a load of the entry file, an END
@@ -101,6 +102,14 @@ for e in test/load_graph/*.rb.expected; do
     fail "$t did not compile"; sed -n 1,5p "$tmp/$b.c.out"
   fi
 done
+
+# A require that names no file warns that it raises LoadError when it runs,
+# unless the rescue clause its begin runs for it catches that LoadError
+# (the fat-binary fallback, rescue_runs_main.rb)
+grep -q "cannot load such file" "$tmp/rescue_runs_main.c.out" &&
+  fail "a require whose LoadError a rescue catches warned"
+grep -q "load_error_uncaught_main.rb:5: cannot load such file -- load_error_uncaught_no_such_lib" "$tmp/load_error_uncaught_main.c.out" ||
+  fail "a require of no file did not warn"
 
 # ---- the load record: a test/load_graph program with a .load-record dumps
 # those points (--dump-load-record, analyze_elab.c) ----

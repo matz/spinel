@@ -506,6 +506,8 @@ int is_toplevel_const_name(const char *n);     /* a constant CRuby, or a library
 int is_constless_builtin_name(const char *n);  /* a builtin class or module with no constants of its own */
 int is_autoload_name(const char *n);
 int is_file_load_name(const char *n);    /* require require_relative load autoload: a call that runs a file's text */
+int is_load_error_catch_name(const char *n);   /* LoadError ScriptError Exception */
+int is_script_error_name(const char *n);       /* ScriptError LoadError NotImplementedError SyntaxError */
 int is_load_how_missing(const char *how);
 int is_load_how_set(const char *how);
 int is_load_how_core(const char *how);

@@ -1340,6 +1340,10 @@ typedef struct {
      text it evaluates -- as an_note_written_names reads the tree; a module
      mixed in and a file loaded are not counted (elab_runs_unseen) */
   int names_by_value;
+  /* the program writes a definition hook's name (is_definition_hook_name)
+     as a def's, a Symbol's or a String's, as an_note_written_names reads
+     the tree */
+  int writes_hook_name;
 
   /* the subset of `classes` synthesized for an anonymous Struct/Data, so
      resolving one does not walk every user class; invalidated wherever

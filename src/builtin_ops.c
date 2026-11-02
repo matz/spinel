@@ -1850,14 +1850,19 @@ static const BuiltinOp bop_rows[] = {
      bool. */
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_Class _cl$T = $r; sp_Class _cl$t = $e0; if (!sp_class_is_module_val(_cl$t)) sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); _cl$T.cls_id != _cl$t.cls_id && sp_class_le(_cl$T, _cl$t); })", BOP_K(TY_CLASS) },
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_NONE },
-  /* Class#inherited and Module's method_added and singleton_method_added:
-     private no-ops answering nil (inherited is Class's alone). A call of one
+  /* Class#inherited and Module's method_added, singleton_method_added,
+     method_undefined and singleton_method_undefined: private no-ops
+     answering nil (inherited is Class's alone). A call of one
      on a class the program defines no such hook for, which a class made or a
      method added fires where the record cannot tell whether the program
      does (lr_fire_inherited, elab_fire_after), reaches this. */
   { TY_CLASS, "inherited", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_CLASS_ONLY },
   { TY_CLASS, "method_added", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
   { TY_CLASS, "singleton_method_added", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
+  { TY_CLASS, "method_removed", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
+  { TY_CLASS, "method_undefined", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
+  { TY_CLASS, "singleton_method_removed", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
+  { TY_CLASS, "singleton_method_undefined", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
 
   /* Integer and Float: the result kinds read off the name, arity and block
      form. pow, clamp, coerce, Float#fdiv(Complex), Float <=> Rational,

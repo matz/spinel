@@ -5858,6 +5858,11 @@ int class_own_cmethod_eqq(Compiler *c, int ci) {
   const Scope *s = &c->scopes[mi];
   if (s->nparams != 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->blk_param || s->yields ||
       (s->pdefault && s->pdefault[0] >= 0)) return -1;
+  /* (a keyword parameter, `def self.===(value:)`, takes no positional value) */
+  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
+  int nkw = 0;
+  if (pn >= 0) nt_arr(c->nt, pn, "keywords", &nkw);
+  if (nkw > 0) return -1;
   return mi;
 }
 

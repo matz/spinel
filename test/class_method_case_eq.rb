@@ -82,3 +82,25 @@ p(case 2 when Opt then :y else :n end)
 class NilQ; def self.===(o) = o.nil?; end
 kq = [1].size > 0 ? NilQ : Integer
 p kq === nil, kq === 1
+
+# a `===` that writes into the case subject: the subject's Array or Hash
+# takes the new kind of element, as in a call
+class Grow
+  def self.===(x)
+    x << "z" if x.is_a?(Array)
+    x[:k] = "s" if x.is_a?(Hash)
+    true
+  end
+end
+ga = [1, 2]
+case ga
+when Grow then p ga
+end
+gb = [1, 2]
+case gb
+in Grow then p gb
+end
+gh = {a: 1}
+case gh
+when Grow then p gh
+end

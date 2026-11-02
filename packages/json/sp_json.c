@@ -12,6 +12,7 @@
 #include <stdlib.h>           /* strtoll, strtod */
 #include <errno.h>            /* ERANGE past int64 */
 #include <math.h>             /* isinf, isnan */
+#include <float.h>            /* FLT_EVAL_METHOD (jp_float_exact) */
 #include <stdio.h>            /* snprintf (sp_json_float) */
 sp_Bigint *sp_bigint_new_str(const char *s, int base);   /* the runtime archive (sp_bigint.c) */
 const char *sp_poly_to_s(sp_RbVal v);                   /* the runtime archive (sp_poly_cold.c) */
@@ -713,34 +714,77 @@ static const char *jp_key(jrd *j) {
   }
   return k;
 }
+/* A decimal of at most 15 significant digits (an integer below 2^53, so an
+   exact double) scaled by a power of ten within 10^22 (each an exact double)
+   is one IEEE division or product of two exact doubles, which is correctly
+   rounded: the value strtod answers, without its general multi-precision
+   path (Clinger's fast path, "How to Read Floating Point Numbers
+   Accurately", 1990; Go's strconv tries the same test first). Arithmetic
+   carried in a wider type rounds twice, so a build that does not evaluate
+   doubles as doubles (x87, FLT_EVAL_METHOD != 0) leaves every number to
+   strtod. The digits come as jp_number found them: the integer part, the
+   fraction (empty without one) and the exponent's (empty without one), so
+   a number with too many digits is turned away by its lengths alone. */
+static int jp_float_exact(int neg, const char *ip, const char *ie, const char *fp, const char *fe,
+                          int xneg, const char *xp, const char *xe, double *out) {
+#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
+  static const double p10[] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                                1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+  const char *f0 = fp;
+  /* a zero integer part and the zeros that follow it are not significant:
+     0.000123 holds three digits */
+  if (ie - ip == 1 && *ip == '0') { ip = ie; while (f0 < fe && *f0 == '0') f0++; }
+  if ((ie - ip) + (fe - f0) > 15 || xe - xp > 3) return 0;
+  uint64_t m = 0;
+  for (; ip < ie; ip++) m = m * 10 + (uint64_t)(*ip - '0');
+  for (; f0 < fe; f0++) m = m * 10 + (uint64_t)(*f0 - '0');
+  int x = 0;
+  for (; xp < xe; xp++) x = x * 10 + (*xp - '0');
+  ptrdiff_t k = (ptrdiff_t)(xneg ? -x : x) - (fe - fp);
+  if (k < -22 || k > 22) return 0;
+  double r = (double)m;
+  r = k < 0 ? r / p10[-k] : r * p10[k];
+  *out = neg ? -r : r;
+  return 1;
+#else
+  (void)neg; (void)ip; (void)ie; (void)fp; (void)fe; (void)xneg; (void)xp; (void)xe; (void)out;
+  return 0;
+#endif
+}
 static sp_RbVal jp_number(jrd *j) {
   const char *start = j->p;
   int is_float = 0;
   if (j->p < j->end && *j->p == '-') j->p++;
+  const char *ds = j->p;
   /* integer part (RFC 8259 s6): a lone 0, or 1-9 then digits -- no leading zeros */
   if (j->p < j->end && *j->p == '0') {
     j->p++;
     if (j->p < j->end && *j->p >= '0' && *j->p <= '9') jp_err("leading zero in number");
   }
   else {
-    const char *ds = j->p;
     while (j->p < j->end && *j->p >= '0' && *j->p <= '9') j->p++;
     if (j->p == ds) jp_err("expected a digit in number");
   }
+  /* the integer digits end at de; the fraction's and the exponent's are
+     empty (at de) without one */
+  const char *de = j->p, *fs = de, *fe = de, *es = de, *ee = de;
+  int xneg = 0;
   /* fraction: '.' then at least one digit */
   if (j->p < j->end && *j->p == '.') {
     is_float = 1; j->p++;
-    const char *fs = j->p;
+    fs = j->p;
     while (j->p < j->end && *j->p >= '0' && *j->p <= '9') j->p++;
     if (j->p == fs) jp_err("expected a digit after '.'");
+    fe = j->p;
   }
   /* exponent: e/E, optional sign, then at least one digit */
   if (j->p < j->end && (*j->p == 'e' || *j->p == 'E')) {
     is_float = 1; j->p++;
-    if (j->p < j->end && (*j->p == '+' || *j->p == '-')) j->p++;
-    const char *es = j->p;
+    if (j->p < j->end && (*j->p == '+' || *j->p == '-')) xneg = *j->p++ == '-';
+    es = j->p;
     while (j->p < j->end && *j->p >= '0' && *j->p <= '9') j->p++;
     if (j->p == es) jp_err("expected a digit in exponent");
+    ee = j->p;
   }
   size_t n = (size_t)(j->p - start);
   if (n == 0) jp_err("invalid number");
@@ -750,6 +794,11 @@ static sp_RbVal jp_number(jrd *j) {
     long long v = 0;
     for (const char *d = start + (*start == '-'); d < j->p; d++) v = v * 10 + (*d - '0');
     return sp_box_i64((int64_t)(*start == '-' ? -v : v));
+  }
+  if (is_float) {
+    double f;
+    if (jp_float_exact(*start == '-', ds, de, fs, fe, xneg, es, ee, &f))
+      return sp_box_float(f);
   }
   /* the digits as a C string: a stack buffer for the usual width, the heap
      for an integer longer than that, which is a Bignum and has no limit */

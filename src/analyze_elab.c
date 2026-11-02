@@ -142,6 +142,7 @@ struct LoadRecord {
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
   int follow;                /* the aliases lr_class_of is following, to cap a chain */
+  signed char *bread; int nbread;   /* [nbread] by def node: lr_def_block's reading + 3, 1 while it is read, 0 for not read yet */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
   int *dscope, ndscope;      /* [ndscope] by node: the method scope the scope walk made of a def or define_method (elab_def_scope), 0 for none */
@@ -204,7 +205,9 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
 
 static int lr_defines(const LoadRecord *r, const char *name);
 static int lr_literal_kind(NodeKind k);
+static const char *lr_literal_class(NodeKind k);
 static int lr_lazy_later(Compiler *c, int call);
+static int lr_target_runs_block(Compiler *c, int call);
 
 /* When the block of `call` runs, from the syntax alone (the receiver is
    not typed yet): ELAB_BLK_NOW before the call answers, for certain: a
@@ -234,14 +237,22 @@ static int elab_block_when(Compiler *c, int call, int lazy) {
 }
 
 /* When the block of `node` (a call's, or an END's body, run at exit)
-   runs: elab_block_when with the lazy chain. The record places a lazy
+   runs: elab_block_when with the lazy chain, and for a call the record
+   binds to a method of the program's, that method's reading of its block
+   (lr_target_runs_block): at once for certain when its body runs the
+   block only before it answers; a body that may keep it takes a builtin
+   iterator's reading back to ELAB_BLK_ASSUMED. The record places a lazy
    chain's block by its call's name (lazy 0) and an END body at its
    statement: that a block does not run now does not tell that it runs
    after a later def (the chain may be forced before it, the program may
    exit before it), so the record binds no later def to its calls; only
    a run-time check can. */
 int elab_block_runs(Compiler *c, int node) {
-  return nt_kind(c->nt, node) == NK_PostExecutionNode ? ELAB_BLK_LATER : elab_block_when(c, node, 1);
+  if (nt_kind(c->nt, node) == NK_PostExecutionNode) return ELAB_BLK_LATER;
+  int runs = elab_block_when(c, node, 1);
+  if (runs != ELAB_BLK_NOW && runs != ELAB_BLK_UNKNOWN) return runs;
+  int t = lr_target_runs_block(c, node);
+  return t > 0 ? ELAB_BLK_NOW : t < 0 && runs == ELAB_BLK_NOW ? ELAB_BLK_ASSUMED : runs;
 }
 
 /* Is call a builtin lazy enumerator's whose block runs only once the chain
@@ -2062,6 +2073,7 @@ static void lr_record_drop(LoadRecord *r) {
   r->slot_builds = -1;
   r->nentries = 0; r->indexed = r->opened = -1;   /* the by-name index and the open bits are of the dropped histories */
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
+  free(r->bread); r->bread = NULL; r->nbread = 0;   /* (read through the dropped histories) */
 }
 
 static char *lr_dump_text(Compiler *c);
@@ -2618,6 +2630,240 @@ int elab_blocks_run_now(Compiler *c, int node) {
   return v >= 0 && v < n && par[v] < 0 && nt_kind(c->nt, v) == NK_ProgramNode;
 }
 
+/* The record's readings of a method body's block (lr_def_block): kept for
+   later, for certain (a store, a closure that escapes, a hand-on to a call
+   that keeps it); not proven; not kept, the block dropped or tested; run
+   before the body answers. Combined over a body's uses by lr_def_block;
+   one use's reading is the lowest of its parts'. */
+enum { LRB_KEEPS = -1, LRB_UNSURE = 0, LRB_NOW = 1, LRB_RUNS = 2 };
+static int lr_def_block(Compiler *c, int def);
+static int lr_block_value(Compiler *c, int x, int def, const char **names, int *nn);
+
+/* When call q, in the body of def node `def`, runs the block the body
+   was given, which q gets as its block's code (a yield or a read of the
+   parameter in it) or handed on (`&b`, `&`, `...`, a super's): LRB_KEEPS
+   for a call that runs it later than it answers (is_deferred_block_call,
+   a lazy chain) or a method of the program's whose body keeps it; LRB_RUNS
+   for a builtin iterator on a literal, a method of the program's that does
+   not keep it, and a super that reaches Object's builtin of an iterator's
+   name that runs it at once (object_iter_runs_now); else LRB_UNSURE. A
+   receiverless callee is main's method only where no builtin class
+   answers the name (the body runs on a literal, whose class would answer
+   first), and is read only when the program defines it once: the body is
+   read for every call that reaches it, not as of one. */
+static int lr_hand_on(Compiler *c, int q, int def) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, q);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode)
+    return object_iter_runs_now(nt_str(nt, def, "name")) ? LRB_RUNS : LRB_UNSURE;
+  if (k != NK_CallNode) return LRB_UNSURE;
+  int w = elab_block_when(c, q, 1);
+  if (w == ELAB_BLK_LATER) return LRB_KEEPS;
+  int t = lr_target_runs_block(c, q);
+  if (t) return t > 0 ? LRB_RUNS : LRB_KEEPS;
+  const char *nm = nt_str(nt, q, "name");
+  int rv = nt_ref(nt, q, "receiver");
+  if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && nm && lr_defines(c->lrec, nm)) {
+    ElabVersion v[2];
+    if (builtin_instance_name_known(nm) || elab_history_versions(c, LR_MAIN, 0, nm, v, 2) != 1 ||
+        v[0].v->kind != LR_DEF) return LRB_UNSURE;
+    return lr_def_block(c, v[0].v->node);
+  }
+  return w == ELAB_BLK_NOW ? LRB_RUNS : LRB_UNSURE;
+}
+
+/* Does call q make a Proc of its block (`proc { }`, `lambda { }`,
+   `Proc.new { }`), whose value then decides when the block runs? */
+static int lr_proc_made(Compiler *c, int q) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_kind(nt, q) == NK_CallNode ? nt_str(nt, q, "name") : NULL;
+  int rv = nm ? nt_ref(nt, q, "receiver") : -1;
+  if (!nm) return 0;
+  if (rv < 0) return is_proc_constructor(nm);
+  return nt_kind(nt, rv) == NK_ConstantReadNode && is_proc_new(nt_str(nt, rv, "name"), nm);
+}
+
+/* How node x, in the body of def node `def`, holds the block the body was
+   given, through the blocks and closures around it up to the def: a
+   closure made there (a lambda, a Proc made of a block) as its value does
+   (lr_block_value); a block as its call does (lr_hand_on); a nested def or
+   an END keeps it. LRB_RUNS when every one runs it at once. */
+static int lr_body_capture(Compiler *c, int x, int def, const char **names, int *nn) {
+  int n, res = LRB_RUNS;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = x >= 0 && x < n ? par[x] : -1; p >= 0 && p < n && p != def; p = par[p]) {
+    NodeKind k = nt_kind(c->nt, p);
+    int h;
+    if (k == NK_DefNode || k == NK_PostExecutionNode) return LRB_KEEPS;
+    if (k == NK_LambdaNode) h = lr_block_value(c, p, def, names, nn);
+    else if (k != NK_BlockNode) continue;
+    else if (par[p] < 0) h = LRB_UNSURE;
+    else h = lr_proc_made(c, par[p]) ? lr_block_value(c, par[p], def, names, nn) : lr_hand_on(c, par[p], def);
+    if (h == LRB_KEEPS) return h;
+    if (h < res) res = h;
+  }
+  return res;
+}
+
+/* How the value of node x (a read of the block parameter, a closure that
+   holds it, or a call on either), in the body of def node `def`, holds the
+   block, climbed by the value edges (vp_climb): the receiver of call, (),
+   [] or yield: run there; of another call: as that call's value
+   (`b.to_proc.call`); handed on as `&b`: as the call does (lr_hand_on);
+   written whole to a local: that local's reads stand for it too (names,
+   *nn); written anywhere else, an element of an Array or Hash literal, an
+   argument, a return's value or the body's: kept; a statement whose value
+   is dropped, a truth test or a loop body: not kept. Any other place is
+   not proven (LRB_UNSURE). */
+static int lr_block_value(Compiler *c, int x, int def, const char **names, int *nn) {
+  const NodeTable *nt = c->nt;
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (;;) {
+    VpUp up;
+    VpUpKind k = vp_climb(nt, par, x, VPS_ALL, &up);
+    if (k == VPU_DROPPED) return LRB_NOW;
+    if (k != VPU_ENDED) return LRB_UNSURE;
+    int p = up.parent;
+    if (vp_up_def(nt, &up) == def) return LRB_KEEPS;   /* the body's value */
+    switch (nt_kind(nt, p)) {
+      case NK_CallNode:
+        if (nt_ref(nt, p, "receiver") != up.node) return LRB_UNSURE;
+        if (is_proc_invoke(nt_str(nt, p, "name"))) return LRB_RUNS;
+        x = p;
+        continue;
+      case NK_BlockArgumentNode: return p < n && par[p] >= 0 ? lr_hand_on(c, par[p], def) : LRB_UNSURE;
+      case NK_LocalVariableWriteNode: {
+        const char *wn = nt_str(nt, p, "name");
+        for (int i = 0; wn && i < *nn; i++) if (sp_streq(names[i], wn)) return LRB_NOW;
+        if (!wn || *nn >= 4) return LRB_UNSURE;
+        names[(*nn)++] = wn;
+        return LRB_NOW;
+      }
+      case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
+      case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode:
+      case NK_GlobalVariableAndWriteNode: case NK_GlobalVariableOperatorWriteNode: case NK_ClassVariableWriteNode:
+      case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableOperatorWriteNode:
+      case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_MultiWriteNode:
+      case NK_ArrayNode: case NK_HashNode: case NK_KeywordHashNode: case NK_AssocNode: case NK_SplatNode:
+      case NK_ArgumentsNode: case NK_ReturnNode:
+        return LRB_KEEPS;
+      case NK_IfNode: case NK_UnlessNode: case NK_WhileNode: case NK_UntilNode: case NK_AndNode: case NK_OrNode:
+        return LRB_NOW;   /* (a predicate, a loop body, `&&`'s left operand) */
+      default:
+        return LRB_UNSURE;
+    }
+  }
+}
+
+/* How the body of def node `def` holds the block it is given (LRB_*), from
+   its uses: a yield, a read of the block parameter (or of a local it, or a
+   closure holding it, is written to whole: `blk = b`, the &-parameter
+   rewrite's `__bpv_b = b`, `l = lambda { yield }`) as a value
+   (lr_block_value), a hand-on of the block it does not name (`&`, `...`, a
+   super that takes no block of its own), each through the blocks and
+   closures around it (lr_body_capture). It keeps the block when some use
+   keeps it and none runs it now or is unsure: a body that also runs it now
+   (or may) keeps the call's reading by name, which a run now answers
+   right. It runs it now when every use does or drops it, at least one
+   runs it, and none keeps it or is unsure. A write of the parameter drops
+   the block, and a yield under a condition runs now or not at all, as an
+   iterator's zero runs. Read through the def's own nodes, once per def
+   (bread); a def asked while its own reading is in progress (a recursive
+   hand-on) answers LRB_UNSURE. */
+static int lr_def_block(Compiler *c, int def) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  LoadRecord *r = c->lrec;
+  if (def < 0 || def >= nt->count || nt_kind(nt, def) != NK_DefNode) return LRB_UNSURE;
+  if (def >= r->nbread) {
+    signed char *nb = realloc(r->bread, (size_t)nt->count);
+    if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(nb + r->nbread, 0, (size_t)(nt->count - r->nbread));
+    r->bread = nb; r->nbread = nt->count;
+  }
+  if (r->bread[def]) return r->bread[def] == 1 ? LRB_UNSURE : r->bread[def] - 3;
+  r->bread[def] = 1;
+  int ps = nt_ref(nt, def, "parameters"), bp = ps >= 0 ? nt_ref(nt, ps, "block") : -1;
+  const char *names[4] = { bp >= 0 ? nt_str(nt, bp, "name") : NULL };
+  int nn = names[0] ? 1 : 0, nids = 0, keeps = 0, runs = 0, unsure = 0;
+  int *ids = nt_subtree_ids(nt, &def, 1, &nids);
+  for (int pass = 0, grew = 1; grew && !(keeps && (runs || unsure)); pass++) {
+    int before = nn;
+    for (int i = 0; i < nids && !(keeps && (runs || unsure)); i++) {
+      int x = ids[i], h = LRB_NOW;
+      if (elab_body_def(c, x) != def) continue;
+      switch (nt_kind(nt, x)) {
+        case NK_YieldNode:
+          if (pass == 0) h = lr_body_capture(c, x, def, names, &nn);
+          break;
+        case NK_SuperNode: case NK_ForwardingSuperNode:
+          if (pass == 0 && nt_ref(nt, x, "block") < 0) {
+            h = lr_body_capture(c, x, def, names, &nn);
+            if (h != LRB_KEEPS) { int o = lr_hand_on(c, x, def); h = o < h ? o : h; }
+          }
+          break;
+        case NK_ForwardingArgumentsNode: case NK_BlockArgumentNode: {
+          if (pass || (nt_kind(nt, x) == NK_BlockArgumentNode && nt_ref(nt, x, "expression") >= 0)) break;
+          int n, q = -1;
+          const int *par = elab_node_parents(c, &n);
+          for (q = x < n ? par[x] : -1; q >= 0 && q < n && nt_kind(nt, q) == NK_ArgumentsNode; q = par[q]) {}
+          h = lr_body_capture(c, x, def, names, &nn);
+          if (h != LRB_KEEPS) { int o = q >= 0 ? lr_hand_on(c, q, def) : LRB_UNSURE; h = o < h ? o : h; }
+          break;
+        }
+        case NK_LocalVariableReadNode: {
+          const char *vn = nt_str(nt, x, "name");
+          int in = -1;
+          for (int j = 0; vn && j < nn; j++) if (sp_streq(names[j], vn)) in = j;
+          if (in < 0) break;
+          h = lr_body_capture(c, x, def, names, &nn);
+          if (h != LRB_KEEPS) { int o = lr_block_value(c, x, def, names, &nn); h = o < h ? o : h; }
+          break;
+        }
+        default: break;
+      }
+      if (h == LRB_KEEPS) keeps = 1;
+      else if (h == LRB_UNSURE) unsure = 1;
+      else if (h == LRB_RUNS) runs = 1;
+    }
+    grew = nn > before;
+  }
+  free(ids);
+  int res = keeps ? (runs || unsure ? LRB_UNSURE : LRB_KEEPS) : unsure ? LRB_UNSURE : runs ? LRB_RUNS : LRB_NOW;
+  r->bread[def] = (signed char)(res + 3);
+  return res;
+}
+
+/* The method of the program's that call `call` runs, as the record binds
+   it: on a literal of a builtin class no header of the program reopens, a
+   name the class does not answer itself reaches Object's, main's methods
+   (a public top-level def): the version live at the call (an alias's
+   original), whose body the record reads for how it holds the block
+   (lr_def_block). 1 when it runs it only before it answers, -1 when it
+   keeps it; 0 for none (the builtin's; a private one, which CRuby refuses
+   to call there, so the block never runs), and for a body whose reading
+   proves neither or a version the record cannot place at the call (a def
+   in a loop's block): the call keeps its reading by name. */
+static int lr_target_runs_block(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  int rv = nm ? nt_ref(nt, call, "receiver") : -1;
+  const char *cls = rv >= 0 ? lr_literal_class(nt_kind(nt, rv)) : NULL;
+  if (!r || r->nreopens || !cls || !lr_defines(r, nm) || builtin_instance_method_known(cls, nm)) return 0;
+  LoadPoint p = elab_point_of(c, call);
+  for (int hop = 0; hop < 8; hop++) {
+    const LrDef *d = NULL;
+    if (elab_method_at(c, LR_MAIN, nm, 0, p, &d) != ELAB_YES || !d) return 0;
+    int vis = hop ? SP_VIS_PUBLIC : elab_method_vis_at(c, LR_MAIN, nm, 0, p);   /* (the called name's, not an alias's original's) */
+    if (vis == SP_VIS_PRIVATE || vis == SP_VIS_PROTECTED) return 0;
+    if (d->kind != LR_ALIAS || !d->target) return d->kind == LR_DEF ? lr_def_block(c, d->node) : 0;
+    nm = d->target;
+    p = elab_point_of(c, d->node);
+  }
+  return 0;
+}
+
 /* ---- the queries ---- */
 /* The live version of history h at p (late: as of the load's end; LR_ONCE:
    at p on the first run of the bodies around it, which may run again):
@@ -3079,11 +3325,22 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
 static int lr_defines(const LoadRecord *r, const char *name);
 
 static int lr_literal_kind(NodeKind k) {
+  return lr_literal_class(k) != NULL;
+}
+/* the builtin class a literal of kind k makes, NULL for no literal */
+static const char *lr_literal_class(NodeKind k) {
   switch (k) {
-    case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_InterpolatedStringNode: case NK_SymbolNode:
-    case NK_ArrayNode: case NK_HashNode: case NK_RangeNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
-      return 1;
-    default: return 0;
+    case NK_IntegerNode: return "Integer";
+    case NK_FloatNode: return "Float";
+    case NK_StringNode: case NK_InterpolatedStringNode: return "String";
+    case NK_SymbolNode: return "Symbol";
+    case NK_ArrayNode: return "Array";
+    case NK_HashNode: return "Hash";
+    case NK_RangeNode: return "Range";
+    case NK_NilNode: return "NilClass";
+    case NK_TrueNode: return "TrueClass";
+    case NK_FalseNode: return "FalseClass";
+    default: return NULL;
   }
 }
 

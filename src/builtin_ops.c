@@ -3954,6 +3954,10 @@ const IterRow *iter_row(TyKind fam, const char *name, int argc, unsigned skip) {
   return NULL;
 }
 
+int object_iter_runs_now(const char *name) {
+  return builtin_object_method_known(name) && iter_row(BOP_ANY_RECV, name, -1, 0) && !is_deferred_block_call(NULL, name);
+}
+
 int iter_row_named(const char *name) {
   for (int i = 0; name && i < ITER_NROWS; i++)
     if (sp_streq(iter_rows[i].name, name)) return 1;

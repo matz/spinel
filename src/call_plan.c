@@ -4242,7 +4242,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
   int els, like = c->scopes[to[nv - 1]].def_node;
-  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(nt, w->name), w->refuse, 1);
+  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
   else els = ver_named_else(c, w);
   /* (at the last version, where a refusal names it) */
   static const char *const at[] = { "node_line", "node_file", "node_col" };
@@ -4283,15 +4283,16 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   default: break;
   }
   int mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
+  comp_sym_intern(c, name);   /* (the error's name, a Symbol made after the literals were interned) */
   if (cls >= 0) comp_descendants(c, cls, &nd);
   if (cls < 0) snprintf(msg, sizeof msg, "undefined method '%s' for main", name);
   else if (nd || (mod && !sg) || comp_class_anonymous(c, cls)) {
     snprintf(msg, sizeof msg, "undefined method '%s' for %s", name, sg ? "class " : "an instance of ");
-    return disp_raise_no_method_self(nt, msg, !sg);
+    return disp_raise_no_method_self(c, name, msg, !sg, w->ar);
   }
   else if (sg) snprintf(msg, sizeof msg, "undefined method '%s' for %s %s", name, mod ? "module" : "class", class_ruby_name(c, cls));
   else snprintf(msg, sizeof msg, "undefined method '%s' for an instance of %s", name, class_ruby_name(c, cls));
-  return disp_raise_no_method(nt, msg);
+  return disp_raise_no_method(c, name, msg, w->ar);
 }
 /* Does a method the entry's else arm cannot run answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
@@ -4601,7 +4602,7 @@ static void ver_named_refuse_defs(Compiler *c, const VerNamed *w) {
     if (!nt_int(nt, d, "cond_lone", 0)) continue;
     while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
     if (st < 0 || par[st] < 0) continue;
-    nt_node_set_int(nt, r = disp_raise_no_method(nt, w->name), w->refuse, 1);
+    nt_node_set_int(nt, r = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
     for (int j = 0; j < 3; j++) nt_node_set_int(nt, r, at[j], nt_int(nt, d, at[j], 0));
     comp_grow_node_arrays(c);
     for (int k = n0; k < nt->count; k++) c->nscope[k] = c->nscope[st];

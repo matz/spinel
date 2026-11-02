@@ -48914,7 +48914,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
   /* intern every symbol literal so codegen can emit the id table */
   for (int id = 0; id < c->nt->count; id++) {
     NodeKind ty_k = nt_kind(c->nt, id);
-    if (ty_k == NK_SymbolNode) {
+    if (ty_k == NK_SymbolNode && !nt_int(c->nt, id, "key_only", 0)) {   /* (a keyword key only the code generator reads by name is no value) */
       const char *v = nt_str(c->nt, id, "value");
       /* the node's own byte length: a symbol literal may hold a NUL, and
          interning it by strlen registers the short name codegen then emits */

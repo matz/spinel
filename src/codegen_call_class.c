@@ -2487,7 +2487,7 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
    (arg_wants_root's reads). A by-value object or a struct-valued kind (a
    Range, a String Range) is copied into a new box, and --share-strings may
    box a String as a new handle. */
-static int boxed_arg_wants_root(Compiler *c, int node) {
+int boxed_arg_wants_root(Compiler *c, int node) {
   Repr tr = repr_of(c, node);
   TyKind t = tr.as_ty;
   if (t == TY_INT || t == TY_FLOAT || t == TY_BOOL || t == TY_NIL || t == TY_SYMBOL || t == TY_CLASS)
@@ -3186,7 +3186,10 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       const char *qn = superclass_builtin_exc_name(nt, recv);
       if (qn) cn = qn;
     }
-    if (cn && is_exc_name(cn)) {
+    /* (`::NoMethodError.new(msg, name, args, receiver: r)`, a root-anchored
+       path, is built by emit_new_call_arms with its name, arguments and
+       receiver) */
+    if (cn && is_exc_name(cn) && !(ci < 0 && nt_ref(nt, recv, "parent") < 0)) {
       if (emit_syserr_family_new(c, id, cn, argc, argv, b)) return 1;
       emit_exc_new_msg(c, cn, argc >= 1 ? argv[0] : -1, b);
       return 1;

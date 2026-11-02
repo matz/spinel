@@ -1709,6 +1709,9 @@ typedef struct {
   int nver_entries;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
+  char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
+  int n_rsc_names;
+  int nomethod_init;   /* 1 none, 2 a class NoMethodError defines an initialize (analyze_desugar.c, disp_raise_with); 0 not asked yet */
   int ncond_lone_disp;  /* those of them a lone def is lowered to (call_plan.c, feature_limit) */
   /* the open histories no reader names yet, sorted by name (call_plan.c,
      ver_named_one): made once a call names one, taken 1 when asked for and

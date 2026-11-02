@@ -14735,6 +14735,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else if (knm && sp_streq(knm, "receiver")) recv_v = nt_ref(nt, kel2[ke], "value");
           else other = 1;
         }
+        if (!other && key_v < 0 && recv_v >= 0 && is_name_error_class(cn)) {
+          emit_name_error_new_kw(c, cn, argc, argv, recv_v, b);
+          { *out = 1; return 1; }
+        }
         if (!other && (key_v >= 0 || recv_v >= 0)) {
           int te3 = ++g_tmp;
           buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", ", te3, cn);
@@ -14757,11 +14761,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       /* NameError.new(msg, name) / NoMethodError.new(msg, name): carry the
          missing name for the #name accessor (rooted across the alloc). */
-      if (argc >= 2 && (sp_streq(cn, "NameError") || sp_streq(cn, "NoMethodError"))) {
+      if (argc >= 2 && is_name_error_class(cn)) {
         /* NoMethodError.new(msg, name, args): the third argument is the
            failed call's argument list, read back by #args (#3042). */
         int tn2 = ++g_tmp, te2 = ++g_tmp, ta2 = -1;
-        int has_args = argc >= 3 && sp_streq(cn, "NoMethodError");
+        int has_args = argc >= 3 && is_no_method_error_class(cn);
         buf_printf(b, "({ sp_RbVal _t%d = ", tn2);
         emit_boxed(c, argv[1], b);
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tn2);
@@ -14780,7 +14784,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (has_args) buf_printf(b, " _t%d->xkey = _t%d;", te2, ta2);
         /* NoMethodError.new(msg, name, args, private): the fourth argument
            drives #private_call? (#3042) */
-        if (argc >= 4 && sp_streq(cn, "NoMethodError")) {
+        if (argc >= 4 && is_no_method_error_class(cn)) {
           buf_printf(b, " _t%d->priv_call = ", te2);
           emit_cond(c, argv[3], b);
           buf_puts(b, ";");

@@ -2308,10 +2308,6 @@ void emit_ffi_num_arg(Compiler *c, int arg, TyKind at, const char *spec, int dbl
    in (spinel keys the mixin off the presence of a user `<=>`). */
 const char *const comparable_names[] = {
     "<", ">", "<=", ">=", "==", "between?", "clamp", NULL };
-static int name_is_comparable_module_method(const char *m) {
-  for (int i = 0; comparable_names[i]; i++) if (sp_streq(m, comparable_names[i])) return 1;
-  return 0;
-}
 
 #define BAK(...)
 /* Method#arity reads the introspection column of the shared facts. */
@@ -18288,7 +18284,7 @@ int class_implicit_responds(Compiler *c, int cid, const char *qm) {
       name_is_enumerable_module_method(qm) &&
       (class_struct_kind(c, cid) == 1 || class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0))) return 1;
   if (comp_method_in_chain(c, cid, "<=>", NULL) >= 0 &&
-      name_is_comparable_module_method(qm) &&
+      is_comparable_module_method(qm) &&
       class_is_comparable(c, cid)) return 1;
   int sk = class_struct_kind(c, cid);
   if (!sk) return 0;

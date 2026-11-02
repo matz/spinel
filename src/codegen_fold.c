@@ -12884,21 +12884,60 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
   return 1;
 }
 
+/* Self of class cid boxed: a user exception as the sp_Exception it is,
+   another object with the class its header carries. */
+static void emit_obj_self_box(Compiler *c, int cid, const char *selfptr, Buf *b) {
+  if (cid >= 0 && class_is_exc_subclass(c, cid)) buf_printf(b, "sp_box_obj((void *)(%s), SP_BUILTIN_EXCEPTION)", selfptr);
+  else buf_printf(b, "sp_box_obj((void *)(%s), (%s)->cls_id)", selfptr, selfptr);
+}
+
 /* The runtime class a virtual dispatch switches on. A user exception is an
    sp_Exception, whose header carries no cls_id, so it keys by its class
    name through sp_exc_user_cls_id. */
 void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b) {
-  if (cid >= 0 && class_is_exc_subclass(c, cid))
-    buf_printf(b, "sp_exc_user_cls_id(sp_box_obj((void *)(%s), SP_BUILTIN_EXCEPTION))", selfptr);
+  if (cid >= 0 && class_is_exc_subclass(c, cid)) {
+    buf_puts(b, "sp_exc_user_cls_id(");
+    emit_obj_self_box(c, cid, selfptr, b);
+    buf_puts(b, ")");
+  }
   else
     buf_printf(b, "(%s)->cls_id", selfptr);
+}
+
+/* The default arm's value of a dispatch on self from class cid whose chain
+   holds no method of `name` (only descendants do): when the dispatch is
+   call miss_id's own (emit_dispatch_in decides it; -1 otherwise), the raise
+   the plan says self of another class gets there (cplan_dispatch_miss),
+   naming self's class as it runs and staging self as the receiver;
+   otherwise, and after the raise, the typed placeholder the result slot
+   takes. */
+static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
+                                       int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
+  int miss = miss_id >= 0 ? cplan_dispatch_miss(c, miss_id, cid) : CM_NONE;
+  if (miss != CM_NONE) {
+    Buf v; memset(&v, 0, sizeof v);
+    emit_obj_self_box(c, cid, selfptr, &v);
+    if (miss == CM_NAMEERROR) {
+      buf_puts(b, "sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%s' for %s\", ");
+      emit_str_literal(b, name);
+      buf_printf(b, ", sp_nomethod_recv_desc(%s)), %s)); ", v.p, v.p);
+    }
+    else {
+      buf_puts(b, "sp_raise_poly_nomethod(");
+      emit_str_literal(b, name);
+      buf_printf(b, ", %s); ", v.p);
+    }
+    free(v.p);
+  }
+  buf_printf(b, "_t%d = %s; break;", rtmp,
+             ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
 }
 
 /* The dispatch switch for arms that disagree on their parameters: each arm
    binds the call's arguments by its own method's list, the way a direct call
    to that method would, defaults and arity check included. The argument
    expressions sit inside the arms, so only the entered one evaluates them. */
-static void emit_dispatch_per_arm(Compiler *c, int cid, const char *name, const char *selfptr,
+static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
                                   int argsNode, int blk_node, int mi, int defcls,
                                   TyKind ret, TyKind disp_ret, Buf *b) {
   int want_blk = 0;
@@ -12938,8 +12977,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, const char *name, const 
   if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
-    buf_printf(b, "_t%d = %s; break;", rtmp,
-               ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, rtmp, ret, disp_ret, b);
   buf_printf(b, " } _t%d; })", rtmp);
 }
 
@@ -13233,7 +13271,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
      assertion, looks the name up itself */
   CallPlan dpc;
   const CallPlan *dpl = NULL;
-  int mi = -1, served = 0;
+  int mi = -1, served = 0, miss_id = -1;
   int conversion_node = g_nd_call_id;
   const CallPlan *conversion = view_conversion(c, &conversion_node);
   if (conversion && sp_streq(conversion->delegate, name)) {
@@ -13252,6 +13290,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
         dpc = *cplan_user_in(c, g_nd_call_id, cid,
                              g_ie_class_id == cid ? CPX_IE : g_emitting_class_id == cid ? CPX_EMIT : CPX_ARM);
       served = 1;
+      miss_id = g_nd_call_id;
       if (dpc.chain && dpc.via == UC_INST && dpc.owner_ci == cid) {
         mi = dpc.mi;
         if (mi >= 0) defcls = c->scopes[mi].class_id;
@@ -13373,7 +13412,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
               nt_str(nt, g_nd_call_id, "name") && sp_streq(nt_str(nt, g_nd_call_id, "name"), name) &&
               node_is_oint(c, g_nd_call_id);
   if (virtual && form == CP_PER_ARM) {
-    emit_dispatch_per_arm(c, cid, name, selfptr, argsNode, blk_node, mi, defcls, ret, disp_ret, b);
+    emit_dispatch_per_arm(c, cid, miss_id, name, selfptr, argsNode, blk_node, mi, defcls, ret, disp_ret, b);
     return;
   }
 
@@ -13873,12 +13912,14 @@ else {
   arm_texts_flush(at, nat, b);
   free(at);
   /* When the method is defined only in descendants (m == NULL), the base class
-     has no implementation. The default arm is unreachable (self is always a
-     descendant that has the method), so emit a typed placeholder rather than a
+     has no implementation: self of a class with none (the base's own
+     instance, another descendant, an object a singleton definition did not
+     reach) gets the raise the plan says (emit_dispatch_miss_default), not a
      call to a nonexistent sp_<base>_<name>. */
   if (!m) {
-    buf_printf(b, " default: _t%d = %s; break; } _t%d; })", rtmp,
-               ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret), rtmp);
+    buf_puts(b, " default: ");
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, rtmp, ret, disp_ret, b);
+    buf_printf(b, " } _t%d; })", rtmp);
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;
   }

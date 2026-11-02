@@ -3420,14 +3420,19 @@ static void sg_reattach_scope(Compiler *c, int node, int ci) {
    stands (under an `if`); a class or module body in it has its own. A def
    that is a call's argument (`private def m`) moves only onto the parked
    class: on a traced singleton class it would lose the visibility the call
-   gives it, so it stays where the walk filed it. */
+   gives it, so it stays where the walk filed it. A def with a receiver
+   (`def Foo.m` in a method of the body, which defines Foo's own class method
+   when the method runs) moves only onto the parked class too: on a traced
+   singleton class it is no instance method of the object and would lose
+   Foo.m. Nothing of a parked body runs, so there all of it goes. */
 static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top) {
   const NodeTable *nt = c->nt;
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return;
   if (k == NK_CallNode && ci != c->sg_parked - 1) return;
-  if (k == NK_DefNode) sg_reattach_scope(c, node, ci);
+  if (k == NK_DefNode && (nt_ref(nt, node, "receiver") < 0 || ci == c->sg_parked - 1))
+    sg_reattach_scope(c, node, ci);
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) sg_reattach_body_defs(c, nt_ref_at(nt, node, i), ci, 0);
   int na = nt_num_arrs(nt, node);

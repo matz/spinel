@@ -1,4 +1,7 @@
 traced
+:defined
+marker
+false
 from_dsm: false
 from_def: false
 from_sclass: false
@@ -6,6 +9,8 @@ from_sclass_if: false
 from_sclass_private: false
 from_ivar: false
 tagged: false
+Foo.from_sclass_class: false
+Foo.from_sclass_self: false
 NameError
 NameError
 NameError

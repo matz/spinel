@@ -595,6 +595,7 @@ int is_untabled_native_class_name(const char *n);
 int is_define_method_name(const char *n); /* define_method */
 int is_define_singleton_method_name(const char *n); /* define_singleton_method */
 int is_singleton_class_name(const char *n); /* singleton_class */
+int is_reopen_self_name(const char *n);       /* __self: the receiver of a method a builtin's reopening defines */
 int is_ffi_decl_name(const char *n);        /* ffi_lib attach_function attach_variable callback native_func ...: declarations made methods before the walk */
 int is_method_defined_query(const char *n); /* method_defined? public_/private_/protected_method_defined? */
 int is_undef_method_name(const char *n);  /* undef_method */

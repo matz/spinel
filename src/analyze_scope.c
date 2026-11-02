@@ -3405,6 +3405,70 @@ static int sg_enclosing_def(Compiler *c, int id) {
   return (s && s->def_node >= 0 && s->def_node != id && nt_kind(nt, s->def_node) == NK_DefNode) ? s->def_node : -1;
 }
 
+/* The class a singleton definition on a receiver no binding traces lands on:
+   no object is of it, so no call reaches the method (the definition is the one
+   object's, whichever that is), and a bare call of its name at the top level
+   is the NameError it is in CRuby. Made when the first is parked. Named from
+   the node, as the other classes the pass synthesizes are (sg_get_or_make), so
+   a class the program writes cannot share its C name. */
+static int sg_parked_class(Compiler *c, int node) {
+  if (!c->sg_parked) {
+    char nm[128];
+    snprintf(nm, sizeof nm, "Object__sg_parked_%s", comp_node_tag(c, node));
+    ClassInfo *k = comp_class_new(c, nm, node);
+    k->ruby_name_cache = strdup("Object");
+    c->sg_parked = (int)(k - c->classes) + 1;
+  }
+  return c->sg_parked - 1;
+}
+
+/* Move the method scope whose def_node is `node` onto class ci as an instance
+   method. */
+static void sg_reattach_scope(Compiler *c, int node, int ci) {
+  for (int ds = 1; ds < c->nscopes; ds++) {
+    if (c->scopes[ds].def_node == node) {
+      { c->scopes[ds].class_id = ci; comp_touch_scope(c->scopes[ds].idx); }
+      { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
+      break;
+    }
+  }
+}
+
+/* ...and each def the body of a `class << obj` makes, wherever in it the def
+   stands (under an `if`); a class or module body in it has its own. A def
+   that is a call's argument (`private def m`) moves only onto the parked
+   class: on a traced singleton class it would lose the visibility the call
+   gives it, so it stays where the walk filed it. A def with a receiver
+   (`def Foo.m` in a method of the body, which defines Foo's own class method
+   when the method runs) moves only onto the parked class too: on a traced
+   singleton class it is no instance method of the object and would lose
+   Foo.m. Nothing of a parked body runs, so there all of it goes. */
+static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return;
+  if (k == NK_CallNode && ci != c->sg_parked - 1) return;
+  if (k == NK_DefNode && (nt_ref(nt, node, "receiver") < 0 || ci == c->sg_parked - 1))
+    sg_reattach_scope(c, node, ci);
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) sg_reattach_body_defs(c, nt_ref_at(nt, node, i), ci, 0);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
+    for (int j = 0; j < m; j++) sg_reattach_body_defs(c, ids[j], ci, 0);
+  }
+}
+
+/* Move the method scopes a singleton node made onto class ci: the scope whose
+   def_node is the node (a def, a define_singleton_method), or each def in the
+   body of a `class << obj` (as instance methods, like the def obj.m they
+   spell). */
+static void sg_reattach_scopes(Compiler *c, int id, int ci, int is_scls) {
+  if (is_scls) sg_reattach_body_defs(c, nt_ref(c->nt, id, "body"), ci, 1);
+  else sg_reattach_scope(c, id, ci);
+}
+
 void register_singleton_defs(Compiler *c) {
   /* not const: the pass marks a resolved dsm call on the node itself */
   NodeTable *nt = (NodeTable *)c->nt;
@@ -3552,14 +3616,26 @@ void register_singleton_defs(Compiler *c) {
          (`def Mutex.helper`, sg_const_holds_class) takes a class method;
          `__self` is a builtin reopening's own receiver: its class in the
          class body, one instance inside a method (`def self.m` there). */
+      /* a constant that holds a class, or a builtin reopening's receiver
+         (`__self`), keeps the class-method filing the walk gave it */
+      int class_side = bk == SG_CONST ? sg_const_holds_class(c, rn) : is_reopen_self_name(rn);
+      int refused = 0;
       if (idk == NK_DefNode && !is_extend && !is_dsm && !is_scls) {
-        if (sg_def_needs_self(c, id))
+        if (sg_def_needs_self(c, id)) {
           nt_node_set_int(nt, id, "sg_needs_self_refused", 1);
-        else if (bk == SG_CONST ? !sg_const_holds_class(c, rn)
-                                : !sp_streq(rn, "__self") || sg_enclosing_def(c, id) >= 0)
+          refused = 1;
+        }
+        else if (!class_side || (bk != SG_CONST && sg_enclosing_def(c, id) >= 0)) {
           nt_node_set_int(nt, id, "sg_untraced_refused", 1);
+          refused = 1;
+        }
       }
-      continue;   /* not statically traceable: leave as today */
+      /* ...and the method it made does not stay a method of the top level or
+         of the enclosing class, where a bare call or respond_to? finds a
+         method CRuby defines on the one object only */
+      if (refused || ((is_dsm || is_scls) && !class_side))
+        sg_reattach_scopes(c, id, sg_parked_class(c, id), is_scls);
+      continue;   /* not statically traceable: left to the refusals above */
     }
     /* `def @a.m` / `def @@a.m` / `def a.m`: the receiver is read where the
        def stands, as the activation reads it, not in the method the walk put
@@ -3607,32 +3683,11 @@ void register_singleton_defs(Compiler *c) {
     }
     int newci = sg_get_or_make(c, &m, wnode, parent_ci);
     sg_mark_activation(nt, id, newci);
-    if (is_scls) {
-      /* reattach every DefNode in the singleton-class body. The generic walk
-         already created each as a (receiverless) scope; only class_id/is_cmethod
-         need flipping, exactly like def obj.m. */
-      int sbody = nt_ref(nt, id, "body");
-      int bn = 0; const int *stmts = sbody >= 0 ? nt_arr(nt, sbody, "body", &bn) : NULL;
-      for (int k = 0; k < bn; k++) {
-        if (nt_kind(nt, stmts[k]) != NK_DefNode) continue;
-        for (int ds = 1; ds < c->nscopes; ds++) {
-          if (c->scopes[ds].def_node == stmts[k]) {
-            { c->scopes[ds].class_id = newci; comp_touch_scope(c->scopes[ds].idx); }
-            { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
-            break;
-          }
-        }
-      }
-      continue;
-    }
-    /* def / dsm: reattach the scope whose def_node == id to the subclass. */
-    for (int ds = 1; ds < c->nscopes; ds++) {
-      if (c->scopes[ds].def_node == id) {
-        { c->scopes[ds].class_id = newci; comp_touch_scope(c->scopes[ds].idx); }
-        { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
-        break;
-      }
-    }
+    /* reattach every DefNode in a singleton-class body, or the scope of a def
+       or a dsm. The generic walk already created each as a (receiverless)
+       scope; only class_id/is_cmethod need flipping, exactly like def obj.m. */
+    sg_reattach_scopes(c, id, newci, is_scls);
+    if (is_scls) continue;
     /* Mark the dsm CALL as compile-time resolved. The emitter cannot re-derive
        this from the receiver's type: a local that also carries a `def obj.m`
        widens to poly, and reading it back as "not a singleton subclass" sent

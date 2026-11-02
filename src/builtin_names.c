@@ -1951,6 +1951,10 @@ int is_define_method_name(const char *n) {
 int is_define_singleton_method_name(const char *n) { return n && sp_streq(n, "define_singleton_method"); }
 /* Kernel#singleton_class */
 int is_singleton_class_name(const char *n) { return n && sp_streq(n, "singleton_class"); }
+/* The receiver parameter of a method a builtin's reopening defines (String,
+   Array): `def self.m` there names it, and the object it is a method of is the
+   builtin one, whose class-method filing the walk keeps */
+int is_reopen_self_name(const char *n) { return n && sp_streq(n, "__self"); }
 /* The ffi gem's and native_func's declarations, which a step before the
    registration's walk turns into methods (desugar_ffi_library_functions,
    desugar_native_func_defs) */

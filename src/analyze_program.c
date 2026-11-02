@@ -822,19 +822,30 @@ static int prog_top_stmt_of(const Compiler *c, const int *parent, int id) {
   return id >= 0 && parent[id] >= 0 ? id : -1;
 }
 
+/* May a constant write of the program give name nm another class where
+   rescue clause rc looks it up? From the top level (a file's, or a method's
+   or a block's there), one in Object (elab_source_writes_const); from a
+   class or module body, which also looks in its own ancestors, any. */
+static int prog_rescue_name_written(Compiler *c, const int *parent, int rc, const char *nm) {
+  return elab_source_writes_const(c, nm, elab_lexical_header(c->nt, parent, rc) < 0);
+}
+
 /* What rescue clause rc names (prog_note_rescues): PROG_RC_LOAD when one
    of its classes catches a LoadError, PROG_RC_SCRIPT when all of them are
    of the ScriptError family; 0 when it names another class, or one by an
-   expression or a splat (`rescue => e` names StandardError). */
+   expression or a splat (`rescue => e` names StandardError), or one the
+   program may give another class where the clause looks it up
+   (prog_rescue_name_written). */
 enum { PROG_RC_LOAD = 1, PROG_RC_SCRIPT = 2 };
-static int prog_rescue_names(const NodeTable *nt, int rc) {
+static int prog_rescue_names(Compiler *c, const int *parent, int rc) {
+  const NodeTable *nt = c->nt;
   int n = 0, load = 0, script = 1;
   const int *v = nt_arr(nt, rc, "exceptions", &n);
   for (int i = 0; i < n; i++) {
     NodeKind k = nt_kind(nt, v[i]);
     const char *nm = k == NK_ConstantReadNode || (k == NK_ConstantPathNode && nt_ref(nt, v[i], "parent") < 0)
                      ? nt_str(nt, v[i], "name") : NULL;
-    if (!is_load_error_catch_name(nm) && !is_script_error_name(nm)) return 0;
+    if ((!is_load_error_catch_name(nm) && !is_script_error_name(nm)) || prog_rescue_name_written(c, parent, rc, nm)) return 0;
     load |= is_load_error_catch_name(nm);
     script &= is_script_error_name(nm);
   }
@@ -868,14 +879,18 @@ static int prog_may_give_hook(const Compiler *c) {
        there raises one. Not where the program may give any class a
        definition hook (prog_may_give_hook): a `method_added` or
        `inherited` runs as the file defines, and may raise;
-     - not known otherwise (unset), and wherever the program writes a
-       constant by one of those classes' names, which may be its own.
+     - not known otherwise (unset), and where the program may write a
+       constant the clause names where the clause looks it up, which may
+       then be its own (prog_rescue_names): anywhere, where it may write
+       one by a name it computes (elab_consts_by_value; an autoload or a
+       const_missing makes only a name nothing holds, and these names are
+       always Object's).
    Asked ahead of the reach (prog_reach), which reads it. */
 static void prog_note_rescues(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int nrc = 0;
   (void)nt_nodes_of_kind(nt, NK_RescueNode, &nrc);
-  if (!nrc || elab_source_writes_const(c, is_load_error_catch_name) || elab_source_writes_const(c, is_script_error_name)) return;
+  if (!nrc || elab_consts_by_value(c, 0)) return;
   const int *parent = comp_parent_map(c);
   int hooks = prog_may_give_hook(c);
   unsigned char *retry = calloc((size_t)nt->count + 1, 1);
@@ -894,7 +909,7 @@ static void prog_note_rescues(Compiler *c) {
       quiet &= t > 0 && t < nt_nroots(nt) && prog_defines_only(c, t);
     }
     for (int rc = nt_ref(nt, b, "rescue_clause"), first = 1; rc >= 0; rc = nt_ref(nt, rc, "subsequent"), first = 0) {
-      int names = prog_rescue_names(nt, rc);
+      int names = prog_rescue_names(c, parent, rc);
       int runs = first && raises && (names & PROG_RC_LOAD) && !retry[rc] ? 1 : quiet && (names & PROG_RC_SCRIPT) ? 0 : -1;
       if (runs >= 0) nt_node_set_int(nt, rc, "rescue_runs", runs);
     }

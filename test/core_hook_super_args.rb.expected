@@ -1,0 +1,7 @@
+log Sub
+Two: wrong number of arguments (given 2, expected 1)
+Zero: wrong number of arguments (given 0, expected 1)
+nil
+nil
+added foo
+done

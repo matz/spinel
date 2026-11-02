@@ -15418,8 +15418,26 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (cmi < 0 && cplan_user(c, id)->core_hook) {
       Repr hr = repr_of(c, id);
       TyKind ht = hr.as_ty;
+      /* an explicit `super(...)` evaluates its arguments, in order, before
+         the hook runs, and every core hook takes one argument: another count
+         is CRuby's ArgumentError once they are evaluated. A splat's count is
+         not known here and raises nothing. A zsuper passes the method's own
+         parameters, which read nothing. */
+      int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
+      int san = 0, splat = 0;
+      const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
+      int explicit = nt_kind(c->nt, id) == NK_SuperNode;
+      if (explicit) buf_puts(b, "({ ");
+      for (int i = 0; i < san; i++) {
+        int a = sav[i];
+        if (nt_kind(c->nt, a) == NK_SplatNode) { splat = 1; a = nt_ref(c->nt, a, "expression"); }
+        if (a < 0) continue;
+        buf_puts(b, "(void)("); emit_boxed(c, a, b); buf_puts(b, "); ");
+      }
+      if (explicit && !splat && san != 1) buf_printf(b, "sp_raise_arity(%d, 1, 1, NULL); ", san);
       if (hr.kind == RK_BOXED) buf_puts(b, "sp_box_nil()");
       else buf_printf(b, "(%s)", raise_tail_value_c(c, ht));
+      if (explicit) buf_puts(b, "; })");
       return;
     }
     /* Class#subclasses at the end of the chain: the receiving class's

@@ -5850,13 +5850,14 @@ int class_any_cmethod_eqq(Compiler *c, int ci) {
 }
 
 /* The same, only for a method of one plain parameter: the `when` and `in`
-   arms, grep and a class value call it. Another one is called only by a
-   written `Klass === x`, through its call plan. */
+   arms, grep and a class value call it. Another one (a keyword, a default,
+   a rest) is called only by a written `Klass === x`, through its call
+   plan. */
 int class_own_cmethod_eqq(Compiler *c, int ci) {
   int mi = class_any_cmethod_eqq(c, ci);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
-  if (s->nparams != 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->blk_param || s->yields ||
+  if (s->nparams != 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->ps_nkw > 0 || s->blk_param || s->yields ||
       (s->pdefault && s->pdefault[0] >= 0)) return -1;
   return mi;
 }

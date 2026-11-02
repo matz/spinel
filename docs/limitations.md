@@ -147,7 +147,11 @@ a Digest), `OpenSSL::KDF.hkdf` /
 `pbkdf2_hmac` and `OpenSSL::PKCS5.pbkdf2_hmac` are there, over the runtime's
 own crypto rather than libssl, and no HMAC-MD5; the digest object keeps the
 hash state between updates, not its input. `Cipher` (aes-gcm) and `PKey::EC` are subsets,
-each described in its file under `packages/openssl/openssl/`.
+each described in its file under `packages/openssl/openssl/`. Cipher updates
+return each call's bytes, and final verifies the authentication tag. The
+optional output-buffer argument is not supported. Cipher still retains all
+input until final, plus a private keystream grown geometrically for linear update
+work. This is not bounded-memory streaming. Decrypted update output is unauthenticated until final succeeds.
 `OpenSSL::PKey.read` reads EC keys, private (SEC1 or PKCS#8) or public, from
 PEM or DER into a `PKey::EC`, and RSA keys (PKCS#1 or PKCS#8) into a
 `PKey::RSA`, which signs with `sign` and `sign_pss` when it has its private

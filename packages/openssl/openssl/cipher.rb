@@ -8,22 +8,15 @@
 #   ct = c.update(plaintext) + c.final
 #   tag = c.auth_tag
 #
-# What is underneath is not CRuby's. The key, iv, aad and the data handed to
-# #update are held here as ordinary ivars, and the C is called exactly once,
-# at #final, when every input exists at the same moment (#4221). So nothing on
-# the C side survives a call: there is no EVP context to free, no handle into
-# a table, and no slot to run out of. A Cipher abandoned before #final -- an
-# exception mid-stream, or a decrypt that raises on a bad tag from attacker
-# input -- costs nothing, exactly like an abandoned EC key. A handle table
-# would have needed a free protocol, and CRuby's Cipher protocol has no #close
-# to hang one on.
-#
-# THE SUBSET THAT BUYS: this buffers rather than streams. A caller running a
-# large file through a cipher holds it in memory, where CRuby would emit
-# ciphertext as it went. GCM cannot answer its tag before #final in any case,
-# so what is lost is streaming of the plaintext, not of the authentication --
-# and #update answers "" with #final answering the whole result, which leaves
-# the `update(x) + final` idiom returning exactly what CRuby returns.
+# The input is held as ordinary ivars over stateless C (#4221). Each update
+# XORs its bytes with a private GCM keystream, the encryption of zero bytes.
+# Growing that cache geometrically makes the total work linear in the input.
+# The counter-mode transform is the same in either direction and uses the
+# native call's IV handling. Input and keystream remain buffered, not bounded
+# in memory. There is no EVP context to free, handle table, or new verdict path.
+# Final still makes one whole-message call; aes_gcm_decrypt checks the tag
+# before the operation succeeds. As in CRuby, plaintext returned by update is
+# unauthenticated until then. The keystream is cleared even if final rejects.
 #
 # THE ALGORITHM SET IS aes-128-gcm AND aes-256-gcm, and any other name raises.
 # Cipher.new's argument is an algorithm chosen by a runtime string, which
@@ -47,10 +40,12 @@ module OpenSSL
       "aes-256-gcm" => [32, 12],
     }
 
-    attr_reader :name
+    # [s].join copies a String's bytes without running a subclass's dup or to_s,
+    # so what's retained here can't change after it's set.
+    def name = [@name].join
 
     def initialize(name)
-      @name = name.to_s.downcase
+      @name = [name.to_s].join.downcase
       unless CIPHERS.key?(@name)
         raise CipherError,
               "unsupported cipher: #{name} (this package has #{CIPHERS.keys.join(", ")})"
@@ -60,6 +55,8 @@ module OpenSSL
       @iv = ""
       @auth_data = ""
       @parts = []
+      @emitted = 0
+      @keystream = ""
       @auth_tag = ""
       @expected_tag = ""
       @done = false
@@ -84,17 +81,22 @@ module OpenSSL
       unless k.bytesize == key_len
         raise CipherError, "key must be #{key_len} bytes for #{@name}"
       end
-      @key = k
+      @key = [k].join
+      @keystream = ""
+      k
     end
 
     def iv=(v)
       raise CipherError, "iv must not be empty" if v.empty?
-      @iv = v
+      @iv = [v].join
+      @keystream = ""
+      v
     end
 
     # Covered by the tag, absent from the output.
     def auth_data=(a)
-      @auth_data = a
+      @auth_data = [a].join
+      a
     end
 
     # The tag to check, on the decrypt side. CRuby takes it before #final,
@@ -103,26 +105,40 @@ module OpenSSL
       unless t.bytesize == 16
         raise CipherError, "auth tag must be 16 bytes"
       end
-      @expected_tag = t
+      @expected_tag = [t].join
+      t
     end
 
     def random_key
       self.key = Crypto.random_bin(key_len)
-      @key
     end
 
     def random_iv
       self.iv = Crypto.random_bin(iv_len)
-      @iv
     end
 
-    # Buffers. The answer is "" rather than the ciphertext so far, which is the
-    # one place this diverges from CRuby's object -- see the header. The total
-    # is unchanged, so `update(x) + final` is byte-identical either way.
+    # Keep the bytes consumed by each call, even if the caller changes its input.
     def update(data)
       raise CipherError, "cipher already finished" if @done
-      @parts << data
-      ""
+      part = [data].join
+      needed = @emitted + part.bytesize
+      if needed > @keystream.bytesize || @keystream.empty?
+        # The one-shot native update takes an int length.
+        length = [needed, [2 * @keystream.bytesize, 2_147_483_647].min].max
+        zeros = "\0" * length
+        out = Native.aes_gcm_encrypt(@name, @key, @iv, @auth_data, zeros)
+        raise CipherError, reason("AES-GCM update failed") if out.empty?
+        @keystream = out.byteslice(0, length)
+      end
+      chunk = String.new(encoding: Encoding::BINARY)
+      i = 0
+      while i < part.bytesize
+        chunk << (part.getbyte(i) ^ @keystream.getbyte(@emitted + i))
+        i += 1
+      end
+      @parts << part
+      @emitted = needed
+      chunk
     end
 
     # The whole operation, in one C call.
@@ -131,6 +147,7 @@ module OpenSSL
       raise CipherError, "key not set" if @key.empty?
       raise CipherError, "iv not set" if @iv.empty?
       @done = true
+      @keystream = ""
       data = @parts.join
 
       if @encrypting
@@ -141,7 +158,7 @@ module OpenSSL
         # ciphertext || tag: the C returns both in one value, and the tag is
         # always the last 16 bytes.
         @auth_tag = out.byteslice(out.bytesize - 16, 16)
-        out.byteslice(0, out.bytesize - 16)
+        out.byteslice(@emitted, out.bytesize - 16 - @emitted)
       else
         if @expected_tag.empty?
           raise CipherError, "auth_tag must be set before final on a decrypt"
@@ -152,14 +169,14 @@ module OpenSSL
         # "forged", and an out-of-band verdict can be read after another
         # thread has overwritten it. last_error is only the wording.
         raise CipherError, reason("AES-GCM decrypt failed") if out.empty?
-        out.byteslice(1, out.bytesize - 1)
+        out.byteslice(1 + @emitted, out.bytesize - 1 - @emitted)
       end
     end
 
     # Available after #final on the encrypt side, as in CRuby.
     def auth_tag
       raise CipherError, "auth_tag is not available until final" unless @done
-      @auth_tag
+      [@auth_tag].join
     end
 
     private

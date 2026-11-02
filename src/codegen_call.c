@@ -19060,9 +19060,6 @@ int class_object_answers_builtin(const char *qm, int is_module) {
   if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
   return class_object_private_method(qm, is_module);
 }
-static int class_is_module(Compiler *c, int ci) {
-  return comp_class_is_module(c, &c->classes[ci]);
-}
 
 /* Does class object ci answer `qm`, asked at call id: its own class
    methods and singleton attrs only once one is defined where id runs, as
@@ -31795,13 +31792,13 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         yes = class_responds_to(c, ci, qm, id);
         /* A reopening retains the builtin methods its own table does not list. */
         if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) &&
-            !(class_is_module(c, ci) && class_only_method(qm)))
+            !(comp_class_is_module(c, &c->classes[ci]) && class_only_method(qm)))
           rt_probe_answer(c, id, &yes);
         /* a private/protected class method answers only to include_all */
         if (yes && foldable && comp_cmethod_vis_declared(c, ci, qm, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         /* as do Class's and Module's private ones (private, inherited, ...) */
-        if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, ci)))
+        if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])))
           yes = 1;
       }
       /* A core class or module (String, Integer, Comparable, Thread) has no
@@ -31845,7 +31842,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
           yes = class_responds_to(c, cid, qm, id);
           if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
-          if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))
+          if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
             yes = 1;
         }
         else {
@@ -31864,7 +31861,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         yes = class_responds_to(c, cid, qm, id);
         if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
-        if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))
+        if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
           yes = 1;
         if (!foldable && !yes) resolved = 0;
       }

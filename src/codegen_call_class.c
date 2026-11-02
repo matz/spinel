@@ -3846,12 +3846,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          #name (and an `#<Class:0x...>`-shaped #to_s). The synthetic
          StructAnon_<n> the compiler keys it by is not a Ruby-visible name. */
       if (sp_streq(name, "name")) {
-        /* the anon class is registered under a name keyed by the node that
-           produced it (analyze_scope), so the receiver node identifies it */
-        int acid = -1;
-        { char an[64]; snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, recv));
-          int rcid = comp_class_index(c, an);
-          if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid; }
+        /* the anon class is registered keyed to the node that produced it
+           (analyze_scope), so the receiver node identifies it */
+        int acid = anon_struct_ci_for_value(c, recv);
         /* the class is just as anonymous when a local holds it (`k =
            Struct.new(:a); k.name`): resolve the read to the same class the
            write registered (#3827) */

@@ -15652,8 +15652,10 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
       /* a `next v` is an element too (`Array.new(n) { |i| next a if i.odd?; b }`):
          its value joins the tail's, and one with no class of its own (boxed,
          not typed yet, nil) keeps the Array boxed as such a tail does below,
-         the emitted `next` storing it as it is. A bare `next` is a nil
-         element, one with several values or a splat an Array element. */
+         the emitted `next` storing it as it is -- and so does such a tail
+         beside it, which the join would otherwise give the `next`'s class.
+         A bare `next` is a nil element, one with several values or a splat
+         an Array element. */
       int nx[32];
       int nn = gbody >= 0 ? an_block_nexts(nt, gbody, nx, 32) : 0;
       if (nn >= 32) ec = -2;
@@ -15661,6 +15663,7 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
         int na = nt_ref(nt, nx[q], "arguments"), ac = 0;
         const int *av = na >= 0 ? nt_arr(nt, na, "arguments", &ac) : NULL;
         if (ac == 0) continue;
+        if (ec == -1) ec = -2;
         int nv = ac == 1 && nt_kind(nt, av[0]) != NK_SplatNode ? oa_elem_evidence(c, sl, S, av[0], read_slot) : -2;
         ec = oa_cls_join(ec, nv == -1 ? -2 : nv);
       }

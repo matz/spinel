@@ -15762,6 +15762,20 @@ static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT);
   return oc >= 0 && oc != ci && comp_resolve_member(c, oc, name, 0, NULL, NULL) != SP_MEMBER_NONE;
 }
+/* Can a call on the boxed value recv reach slot s: may the value be an
+   instance of the class whose ivar or method s is, or of a class under it?
+   OA_DYN_KILL's call reaches only the methods of the classes the receiver
+   may hold: the class facts rule out a class no instance of which reaches
+   recv (cls_fact_excludes), as the call's dispatch leaves out its arm. A
+   class they cannot bound, a module's method and a receiverless call stay
+   reachable. */
+static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
+  int ci = s->ici >= 0 ? s->ici : s->sidx >= 0 ? c->scopes[s->sidx].class_id : -1;
+  if (recv < 0 || ci < 0 || ci >= c->nclasses || cls_fact_unbounded(c, recv)) return 1;
+  for (int k = 0; k < c->nclasses; k++)
+    if ((k == ci || is_descendant(c, k, ci)) && !cls_fact_excludes(c, recv, k)) return 1;
+  return 0;
+}
 
 /* The slots by the name a call on a dynamic receiver reaches them under: an
    ivar slot by its reader's name, a method's value and parameter slots by
@@ -16830,10 +16844,10 @@ static int narrow_object_arrays(Compiler *c) {
   /* A dynamic receiver may dispatch to ANY same-named instance method at
      runtime (the poly dispatch arms), passing boxed values and expecting a
      boxed one back; neither a param slot nor a return slot reachable that
-     way must narrow. */
-  #define OA_DYN_KILL(nm) do { \
+     way (oa_recv_may_reach) must narrow. */
+  #define OA_DYN_KILL(recv, nm) do { \
     for (int pi = oa_byname_first(&oa_bn, (nm)); pi >= 0; pi = oa_bn.next[pi]) { \
-      if (!sl[pi].alive) continue; \
+      if (!sl[pi].alive || !oa_recv_may_reach(c, (recv), &sl[pi])) continue; \
       /* a dynamic receiver may be this class: its reader would hand the \
          unboxed array to a caller expecting the boxed one -- when the \
          class has a reader, or a method, by the name at all */ \
@@ -16988,7 +17002,7 @@ static int narrow_object_arrays(Compiler *c) {
             pend[npend].id = id; pend[npend].slot = es; pend[npend].cls = -1; npend++;
             continue;
           }
-          OA_DYN_KILL(name);
+          OA_DYN_KILL(recv, name);
         }
       }
     }
@@ -17226,7 +17240,7 @@ static int narrow_object_arrays(Compiler *c) {
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
       if (reads[p]) continue;
       if (tmis[p] < 0) {
-        OA_DYN_KILL(nt_str(nt, id, "name"));
+        OA_DYN_KILL(nt_ref(nt, id, "receiver"), nt_str(nt, id, "name"));
       }
       oa_call_edges(c, sl, n, id, tmis[p], argv, argc, read_slot, claimed, call_ret, nc);
     }
@@ -17302,7 +17316,7 @@ static int narrow_object_arrays(Compiler *c) {
       if (sl[r].cls == pend[p].cls && oa_component_narrows(c, &sl[r])) continue;
       int id = pend[p].id, args = nt_ref(nt, id, "arguments"), argc = 0;
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-      OA_DYN_KILL(nt_str(nt, id, "name"));
+      OA_DYN_KILL(nt_ref(nt, id, "receiver"), nt_str(nt, id, "name"));
       for (int k = 0; k < argc; k++) if (read_slot[argv[k]] >= 0) sl[read_slot[argv[k]]].alive = 0;
       pend[p].cls = -1; undone = 1;
     }

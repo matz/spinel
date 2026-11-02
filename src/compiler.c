@@ -3158,13 +3158,13 @@ int comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_c
    so a call there dispatches at run time (#4023). */
 int comp_subclass_answers(Compiler *c, int class_id, const char *name) {
   if (class_id < 0) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (k == class_id) continue;
-    int anc = 0;
-    for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
-      if (p2 == class_id) { anc = 1; break; }
-    if (anc && (comp_method_in_chain(c, k, name, NULL) >= 0 ||
-                comp_reader_in_chain(c, k, name, NULL))) return 1;
+  /* the strict subclasses alone (comp_descendants), where every class and
+     its parent chain was walked at every call asked */
+  int nd = 0;
+  const int *ds = comp_descendants(c, class_id, &nd);
+  for (int i = 0; i < nd; i++) {
+    int k = ds[i];
+    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
   }
   return 0;
 }

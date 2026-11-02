@@ -2628,9 +2628,9 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
            class the way CRuby does -- a Regexp matches, a Range covers, a
            Class tests membership. Plain equality answered false for all of
            them (#3963). */
-        buf_printf(&pb3, ") : sp_box_bool(sp_poly_case_eq(_t%d, ", tp3);
+        buf_printf(&pb3, ") : sp_poly_case_eq_val(_t%d, ", tp3);
         buf_puts(&pb3, ab3.p ? ab3.p : "sp_box_nil()"); free(ab3.p); }
-      buf_puts(&pb3, ")); })");
+      buf_puts(&pb3, "); })");
       emit_unbox_text(c, repr_of(c, id).as_ty, pb3.p ? pb3.p : "sp_box_nil()", b);
       free(pb3.p);
       return 1;

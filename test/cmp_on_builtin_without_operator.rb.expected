@@ -1,0 +1,11 @@
+undefined method '>=' for an instance of RuntimeError
+argument runs first
+undefined method '<' for an instance of ArgumentError
+undefined method '<=' for true
+undefined method '>' for false
+undefined method '>=' for an instance of Regexp
+undefined method '<' for an instance of Proc
+undefined method '>' for an instance of MatchData
+undefined method '>' for an instance of RuntimeError
+"handled missing"
+true

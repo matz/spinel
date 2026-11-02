@@ -15560,10 +15560,11 @@ int desugar_builtin_enum_calls(Compiler *c) {
        Rational beside an Array) keeps the written name, as before this
        mark: either name is wrong for one of its values without a dispatch
        at run time, and a boxed Rational's an_rat_value is not cleared by
-       the widening */
+       the widening. So does an IO: a File::Stat is one too, told from a
+       stream only at run time, and has no each */
     if (nt_int(nt, id, "enum_scalar_unrenamed", 0)) {
       TyKind wt = infer_type(c, nt_ref(nt, id, "receiver"));
-      if (wt != TY_POLY && wt != TY_UNKNOWN && !ty_lacks_enumerable(wt)) {
+      if (wt != TY_POLY && wt != TY_UNKNOWN && wt != TY_IO && !ty_lacks_enumerable(wt)) {
         const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
         if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
         nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);

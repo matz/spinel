@@ -16380,16 +16380,18 @@ static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const 
 
 /* narrow_object_arrays' step 5d: the slot of the ivar that the synthesized
    reader `name` of class ci reads, its own or an ancestor's (as OA_IVSLOT
-   finds it), or -1. Steps 2 and 4 make a reader called on a receiver typed
-   as the class a read of that slot, vetted with the rest; one called on an
-   element of a table this pass narrows is decided only here, after the
-   uses were classified, so it is a read nothing claimed (step 6). */
+   finds it: a subclass's copy of an inherited ivar has no slot of its own,
+   so the walk goes on to the ancestor's), or -1. Steps 2 and 4 make a
+   reader called on a receiver typed as the class a read of that slot,
+   vetted with the rest; one called on an element of a table this pass
+   narrows is decided only here, after the uses were classified, so it is
+   a read nothing claimed (step 6). */
 static int oa_reader_ivslot(Compiler *c, int **ivslot, int ci, const char *name) {
   char ivn[300];
   if (!name || strlen(name) >= sizeof ivn - 1) return -1;
   ivn[0] = '@'; strcpy(ivn + 1, name);
   for (int k = ci; k >= 0 && k < c->nclasses; k = c->classes[k].parent)
-    if (ivslot[k]) { int iv = comp_ivar_index(&c->classes[k], ivn); if (iv >= 0) return ivslot[k][iv] - 1; }
+    if (ivslot[k]) { int iv = comp_ivar_index(&c->classes[k], ivn); if (iv >= 0 && ivslot[k][iv]) return ivslot[k][iv] - 1; }
   return -1;
 }
 

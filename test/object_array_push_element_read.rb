@@ -62,7 +62,8 @@ p bin.items.map(&:class)
 
 # an Array.new block's `next v` is an element too: a `next` of another class
 # keeps the Array boxed, whether the tail is an element read or a new object,
-# and one of the same class narrows it as the tail alone would
+# and so does a boxed one (an element of a mixed Array); one of the same
+# class narrows it as the tail alone would
 class Other
   def id = -1
 end
@@ -76,5 +77,7 @@ same = Array.new(4) { |i| next src[1] if i.odd?; Node.new(i) }
 same.each { |x| ids << x.id }
 holes = Array.new(3) { |i| next if i == 1; Node.new(i) }
 holes.each { |x| ids << (x ? x.id : 0) }
+boxed_next = Array.new(3) { |i| next mixed[1] if i == 0; src[0] }
+boxed_next.each { |x| ids << x.id }
 p ids
 

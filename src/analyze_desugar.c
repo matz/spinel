@@ -12802,6 +12802,10 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* The call workspace is as long as the program, so it lives on the heap: a
+     program-sized array on the C stack overflows it on a large input. One
+     buffer serves every forwarder, allocated at the first. */
+  int *calls = NULL;
   for (int def = 0; def < n0; def++) {
     if (!fwd_node_is(nt, def, "DefNode")) continue;
     int pn = nt_ref(nt, def, "parameters");
@@ -12810,7 +12814,11 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
     if (!dname) continue;
     if (wait && fwd_waits_on_forwarder(nt, def, fwd_subtree_max(nt, def) + 1)) continue;
     int hi = fwd_subtree_max(nt, def) + 1;
-    int calls[n0]; int ncalls = 0; int shape = 0; int ok = 1;
+    if (!calls) {
+      calls = malloc(sizeof *calls * (size_t)n0);
+      if (!calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    int ncalls = 0; int shape = 0; int ok = 1;
     int nfwd_args = 0;
     int nreq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nreq);
     int nopt = 0; const int *opts = nt_arr(nt, pn, "optionals", &nopt);
@@ -13024,6 +13032,7 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[def];
     changed = 1;
   }
+  free(calls);
   return changed;
 }
 /* A forwarder takes the shape of the method it forwards to, and a `...`

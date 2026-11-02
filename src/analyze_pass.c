@@ -19712,6 +19712,16 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   }
   if (ty_k == NK_CallNode) {
     nm = nt_str(nt, id, "name");
+    /* a call desugar_builtin_scalar_calls rewrote onto an Integer or Float
+       copy still runs nil's method of its name for a receiver that can be
+       nil (emit_onum_nil_program_call): NilClass's, or Object's */
+    const char *bxn = nt_int(nt, id, "bx_done", 0) ? nt_str(nt, id, "bx_name") : NULL;
+    if (bxn) {
+      int nk = comp_core_class(c, CORE_NILCLASS), ok = comp_core_class(c, CORE_OBJECT);
+      if ((nk >= 0 && call_target(c, id, nk, bxn, 0, NULL) >= 0) ||
+          (ok >= 0 && call_target(c, id, ok, bxn, 0, NULL) >= 0))
+        cr_add_name(out, n, cap, bxn);
+    }
     /* `method(:foo)` takes a reference to foo without calling it; the target
        must still be emitted, so treat the symbol arg as a called name. */
     if (nm && (sp_streq(nm, "method") || sp_streq(nm, "instance_method"))) {

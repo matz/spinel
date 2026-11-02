@@ -26447,9 +26447,104 @@ static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   return 1;
 }
 
+/* Call id on an Integer or Float local that can be nil (an sp_oint or
+   sp_ofloat slot), with no arguments and no block, where the program gives
+   nil a method of its name other than the one the number runs: NilClass's
+   own, or Object's where the number's class has its own. The number's
+   call unwrapped the slot (sp_oint_val's NoMethodError, sp_ofloat_arg's
+   TypeError), or ran Object's method with the slot boxed, for nil too.
+   The call is also the one desugar_builtin_scalar_calls rewrote onto an
+   Integer or Float copy (`__int_blank_p__0(x)`), with the receiver as its
+   first argument, which --int-overflow=promote holds boxed (the copy's
+   own test raised NoMethodError for its nil, emit_arg_or_default_fill).
+   The slot is read twice: a local's read has no effect. *rn, *nm and
+   *boxed say the receiver, the name and whether it is boxed; the nil
+   method's index, or -1. */
+static int g_onum_nil_skip = -1;
+static int onum_nil_program_method(Compiler *c, int id, int *rn, const char **nm, int *nilcls, int *boxed) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || id == g_onum_nil_skip || nt_kind(nt, id) != NK_CallNode) return -1;
+  if (nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id)) return -1;
+  int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  const char *name = NULL;
+  int bx = (int)nt_int(nt, id, "bx_container", -1);
+  if (r >= 0 && an == 0) name = cplan_call_name(nt, id);
+  else if (r < 0 && nt_int(nt, id, "bx_done", 0) && (bx == 0 || bx == 1) && an == 1 &&
+           (int)nt_int(nt, id, "bx_args", -1) < 0) {
+    r = av[0];
+    name = nt_str(nt, id, "bx_name");
+  }
+  if (r < 0 || !name || nt_kind(nt, r) != NK_LocalVariableReadNode) return -1;
+  TyKind rt = comp_ntype(c, r);
+  /* (a rewritten call's boxed receiver can have widened past the number
+     the copy serves: the copy's container says which it is) */
+  *boxed = nt_ref(nt, id, "receiver") < 0 && repr_of(c, r).kind == RK_BOXED;
+  if (*boxed) rt = bx == 1 ? TY_FLOAT : TY_INT;
+  else if ((rt != TY_INT && rt != TY_FLOAT) || !node_is_oint(c, r)) return -1;
+  /* (a call read in its own oint form, an Integer or Float that can be
+     nil, is left as it is: both arms here are plain values) */
+  if (node_has_oint_form(c, id)) return -1;
+  int nmi = cplan_nil_program_method(c, id, name, nilcls);
+  if (nmi < 0) return -1;
+  /* the number's own, Numeric's, or none (Object's through the fallback) */
+  int own = call_target(c, id, comp_core_class(c, rt == TY_FLOAT ? CORE_FLOAT : CORE_INTEGER), name, 0, NULL);
+  if (own < 0) own = call_target(c, id, comp_core_class(c, CORE_NUMERIC), name, 0, NULL);
+  if (own == nmi || (own < 0 && !*nilcls)) return -1;
+  /* nil's answer has a place in the call's slot (as cplan_nil_program_served) */
+  if (*nilcls) {
+    Repr want = repr_of(c, id);
+    Scope *s = &c->scopes[nmi];
+    if (want.kind != RK_BOXED &&
+        (!method_is_void(s) && (TyKind)s->ret != TY_NIL ? (TyKind)s->ret != want.as_ty
+                                                        : !(want.kind == RK_PTR || want.as_ty == TY_NIL)))
+      return -1;
+  }
+  *rn = r; *nm = name;
+  return nmi;
+}
+
+/* (emits it: nil's method for a nil slot, the call for any other; a
+   statement drops both answers. 1 when it emitted) */
+static int emit_onum_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
+  int r = -1, nilcls = 0, boxed = 0;
+  const char *nm = NULL;
+  int mi = onum_nil_program_method(c, id, &r, &nm, &nilcls, &boxed);
+  if (mi < 0) return 0;
+  Scope *s = &c->scopes[mi];
+  Repr want = repr_of(c, id);
+  Buf nb; memset(&nb, 0, sizeof nb);
+  if (nilcls) buf_printf(&nb, "%s(0)", mc_method(c, s));
+  else buf_printf(&nb, "%s(sp_box_nil())", mc_method(c, s));
+  Buf nv; memset(&nv, 0, sizeof nv);
+  if (stmt) buf_printf(&nv, "(void)(%s)", nb.p);
+  else if (method_is_void(s) || (nilcls && (TyKind)s->ret == TY_NIL))
+    buf_printf(&nv, "((void)(%s), %s)", nb.p,
+               want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+  else if (nilcls && want.kind == RK_BOXED) emit_boxed_text(c, (TyKind)s->ret, nb.p, &nv);
+  else if (nilcls) buf_puts(&nv, nb.p);
+  else emit_coerce_text(c, id, (TyKind)s->ret, want.kind == RK_BOXED ? TY_POLY : want.as_ty,
+                        CO_HOLD, nb.p, "an Object method result", &nv);
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (boxed) emit_expr(c, r, &rb);
+  else emit_oint_expr(c, r, comp_ntype(c, r), &rb);
+  Buf cb; memset(&cb, 0, sizeof cb);
+  int sv = g_onum_nil_skip;
+  g_onum_nil_skip = id;
+  emit_expr(c, id, &cb);
+  g_onum_nil_skip = sv;
+  if (g_plan_check) cplan_served("nil-program");
+  const char *isnil = boxed ? ".tag == SP_TAG_NIL" : ".nil";
+  if (stmt) buf_printf(b, "((%s)%s ? %s : (void)(%s))", rb.p, isnil, nv.p, cb.p ? cb.p : "0");
+  else buf_printf(b, "((%s)%s ? %s : %s)", rb.p, isnil, nv.p, cb.p ? cb.p : "0");
+  free(nb.p); free(nv.p); free(rb.p); free(cb.p);
+  return 1;
+}
+
 /* Call id in value position, behind its nil arm. 1 when it emitted. */
 static int emit_nil_target_call(Compiler *c, int id, Buf *b) {
   if (strbuf_mutator_on_held_self_answer(c, id)) return 0;   /* (as below) */
+  if (emit_onum_nil_program_call(c, id, b, 0)) return 1;
   int cn = cplan_nil(c, id);
   if (cn == CN_ANSWER && emit_nil_answer_call(c, id, b)) return 1;
   if (cn == CN_PROGRAM) return emit_nil_program_call(c, id, b, 0);
@@ -26504,6 +26599,13 @@ int emit_nil_target_stmt(Compiler *c, int id, Buf *b, int indent) {
      for nil itself (emit_held_self_answer_shim); a head here would run
      the chain once more for a test of its bytes */
   if (strbuf_mutator_on_held_self_answer(c, id)) return 0;
+  {
+    Buf ob; memset(&ob, 0, sizeof ob);
+    int done = emit_onum_nil_program_call(c, id, &ob, 1);
+    if (done) { emit_indent(b, indent); buf_printf(b, "%s;\n", ob.p); }
+    free(ob.p);
+    if (done) return 1;
+  }
   int cn = cplan_nil(c, id);
   TyKind srt = comp_ntype(c, nt_ref(c->nt, id, "receiver"));
   if (cn == CN_ANSWER && ty_is_object(srt) && !class_is_exc_subclass(c, ty_object_class(srt)) &&

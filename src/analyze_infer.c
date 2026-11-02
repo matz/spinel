@@ -1512,8 +1512,9 @@ int an_literal_int_rows(Compiler *c, int arr) {
 }
 
 /* A row read back out of table `@<ivname>` itself (`@t[j]`, `@t.at(j)`, an
-   Integer index), or a local whose every write is one: storing it moves a
-   row the table already holds, and says nothing of what the rows are.
+   Integer index, Array's own: a reopen's answers what it likes), or a local
+   whose every write is one: storing it moves a row the table already
+   holds, and says nothing of what the rows are.
    Counted as a store, it made the answer depend on the order of inference:
    a read typed boxed before the rows were known is itself one of the
    stores, so it stays boxed (a signature on a heap's push, typing the
@@ -1528,7 +1529,7 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
     int a = nt_ref(nt, n, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (!nm || !is_element_at_alias(nm) || rcv < 0 || an != 1 || nt_ref(nt, n, "block") >= 0 ||
-        nt_kind(nt, rcv) != NK_InstanceVariableReadNode) return 0;
+        nt_kind(nt, rcv) != NK_InstanceVariableReadNode || an_reopen_owner(c, n, CORE_ARRAY) >= 0) return 0;
     const char *rn = nt_str(nt, rcv, "name");
     return rn && sp_streq(rn, ivname) && comp_ntype(c, av[0]) == TY_INT;
   }

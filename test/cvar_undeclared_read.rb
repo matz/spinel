@@ -137,3 +137,20 @@ class D
   def self.n = (@@n ||= 4)
 end
 p D.dy, D.n
+
+# an undeclared read stored into a typed class variable, global or
+# argument raises before the store
+class Typed
+  @@ready = true
+  @@i = 1
+  def self.take(x) = x
+  def self.go
+    r = []
+    begin; @@ready = @@missing; rescue NameError => e; r << e.name; end
+    begin; @@i = @@missing; rescue NameError => e; r << e.name; end
+    begin; $tg = 1; $tg = @@missing; rescue NameError => e; r << e.name; end
+    begin; take(true); take(@@missing); rescue NameError => e; r << e.name; end
+    r << @@ready << @@i << $tg
+  end
+end
+p Typed.go

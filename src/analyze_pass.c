@@ -5090,6 +5090,56 @@ static TyKind local_write_ty(Compiler *c, int id, int stashed) {
   return newt;
 }
 
+/* A slot narrowed to a pointer array, a nested table or a table's element
+   type (oa_pin) that re-derives as the poly array or the poly scalar its
+   writes still read takes the pin back; 0 when it derives as neither, and
+   the pin no longer holds. */
+static int lv_put_pin_back(LocalVar *lv) {
+  if (lv->type != TY_POLY_ARRAY && lv->type != TY_POLY && lv->type != lv->oa_pin) return 0;
+  lv_set_type(lv, lv->oa_pin);
+  return 1;
+}
+
+/* The slots infer_write_types' main loop holds at their pins while it joins
+   the round's writes, each with the type its own writes join to. */
+typedef struct { LocalVar **lv; TyKind *derived; int n, cap; } PinShadow;
+
+/* slot_take for that loop. A pinned slot re-derives as the poly array or the
+   poly scalar its writes still read, and the pin was put back only once the
+   round's writes were all joined: a write joined before that read a table's
+   row as poly, and `r = c ? rows[0] : rows[1]` or `r = rows[1] || []` boxed
+   r. The slot is held at its pin for the writes after its own, and its own
+   joins take the type they derive, not the pin. */
+static void pin_shadow_take(Compiler *c, PinShadow *ps, LocalVar *lv, TyKind t, int node) {
+  int k = 0;
+  while (k < ps->n && ps->lv[k] != lv) k++;
+  if (k < ps->n) lv_set_type(lv, ps->derived[k]);
+  slot_take(c, lv, t, node);
+  TyKind d = lv->type;
+  int held = lv->oa_pin != TY_UNKNOWN && lv_put_pin_back(lv);
+  if (k == ps->n) {
+    if (!held) return;
+    if (ps->n == ps->cap) {
+      ps->cap = ps->cap ? 2 * ps->cap : 16;
+      ps->lv = realloc(ps->lv, sizeof *ps->lv * (size_t)ps->cap);
+      ps->derived = realloc(ps->derived, sizeof *ps->derived * (size_t)ps->cap);
+      if (!ps->lv || !ps->derived) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    ps->lv[ps->n++] = lv;
+  }
+  ps->derived[k] = d;
+}
+
+/* The joins are over, the re-joins of writes that read a degraded slot
+   (infer_write_reads_widened) too, which read a pinned table as the poly array
+   it re-derives and re-boxed its rows' locals. The rest of the round reads
+   each slot as its writes derived it, as before, and lv_keep_decisions puts
+   the pins back at its end. */
+static void pin_shadow_lift(PinShadow *ps) {
+  for (int k = 0; k < ps->n; k++) lv_set_type(ps->lv[k], ps->derived[k]);
+  free(ps->lv); free(ps->derived);
+}
+
 /* What infer_write_types keeps of a slot across its join: the decisions
    about the slot's representation that a re-derivation from its writes alone
    would undo. Inside the recompute frame (`stashed`), a slot the round could
@@ -5117,14 +5167,10 @@ static void lv_keep_decisions(LocalVar *lv, int stashed) {
      derives as a poly array has lost the precondition and the pin with it.
      Without this the two passes trade the slot back and forth and every
      compile ran to the 128-iteration cap. */
-  if (lv->oa_pin != TY_UNKNOWN) {
-    /* TY_POLY too: a local narrowed to a container's ELEMENT type re-derives
-       as the plain poly scalar the read hands back, exactly as a narrowed
-       container re-derives as the poly array. */
-    if (lv->type == TY_POLY_ARRAY || lv->type == TY_POLY || lv->type == lv->oa_pin)
-      lv_set_type(lv, lv->oa_pin);
-    else lv->oa_pin = TY_UNKNOWN;
-  }
+  /* TY_POLY too: a local narrowed to a container's ELEMENT type re-derives
+     as the plain poly scalar the read hands back, exactly as a narrowed
+     container re-derives as the poly array. */
+  if (lv->oa_pin != TY_UNKNOWN && !lv_put_pin_back(lv)) lv->oa_pin = TY_UNKNOWN;
   /* The same again for the empty-`{}` argument a TY_POLY parameter widened to
      the PolyPoly hash (#3158). The caller's own element writes (`h["k"] = v`)
      re-derive the slot as the narrower StrStr kind every round, and the
@@ -5273,6 +5319,7 @@ int infer_write_types(Compiler *c) {
      guards on the InstanceVariableReadNode branches below. */
   LWIndex ivw_ix;
   ivw_index_build(c, &ivw_ix);
+  PinShadow pins = {0};
 
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
@@ -5314,7 +5361,7 @@ int infer_write_types(Compiler *c) {
       }
       continue;
     }
-    slot_take(c, lv, newt, nt_ref(nt, id, "value"));
+    pin_shadow_take(c, &pins, lv, newt, nt_ref(nt, id, "value"));
   }
 
   /* Second targeted pass for `x = recv.instance_eval/exec { ... }` (and
@@ -5382,6 +5429,7 @@ int infer_write_types(Compiler *c) {
 
   changed |= infer_write_multi_assign_pinned(c, nt);
   infer_write_reads_widened(c, nt);
+  pin_shadow_lift(&pins);
 
   changed |= infer_case_pattern_locals(c);
 

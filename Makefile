@@ -4708,6 +4708,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  ! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
 	  $(SPINEL) $$flags test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	  ! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
+	  $(SPINEL) $$flags test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \
+	  for v in IntArray:r1 IntArray:r2 IntArray:r3 IntArray:r4 FloatArray:f1 Item:it; do \
+	    grep -q "sp_$${v%%:*} \* lv_$${v#*:} = NULL;" "$$tmp/trj.c" || { echo "infer-test: FAIL (a local joined from a table's rows or elements boxed them: $$v)"; ok=0; }; \
+	  done; \
 	  $(SPINEL) $$flags test/range_index_unbounded_receiver.rb -c --no-line-map -o "$$tmp/riu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (range_index_unbounded_receiver: -c)"; ok=0; }; \
 	  ! grep -q 'sp_RbVal sp_Regs__lb_rb(' "$$tmp/riu.c" || { echo "infer-test: FAIL (a Range on a receiver of no known class boxed every [] method's element read)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_aref_struct_class_beside_instance_new.rb -c --no-line-map -o "$$tmp/pas.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_aref_struct_class_beside_instance_new: -c)"; ok=0; }; \

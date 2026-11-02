@@ -497,6 +497,10 @@ void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_EXC_O
   if (sp_pending_exc_flags & 1) { e->xrecv = sp_pending_exc_recv; e->has_recv = 1; }
   if (sp_pending_exc_flags & 2) { e->xkey = sp_pending_exc_key; e->has_key = 1; }
   if (sp_pending_exc_flags & 4) e->result = sp_pending_exc_val;
+  if (sp_pending_exc_flags & 8) {   /* NameError#name, staged as its text */
+    SP_GC_ROOT(e);
+    e->xname = sp_box_sym(sp_json_sym_intern_fn(sp_pending_exc_name));   /* the program's interner */
+  }
   return e;
 }
 /* SystemExit#status carried in the result slot; 0 when unset. */

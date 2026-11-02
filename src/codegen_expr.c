@@ -2947,6 +2947,23 @@ void emit_strbuf_node_read(Compiler *c, int id, const char *sref, Buf *b) {
   emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
 }
 
+/* A read of a class variable that neither the class it is looked up from
+   nor an ancestor or mixin declares (no write anywhere registers it there):
+   CRuby raises NameError when the read runs, its receiver the class and its
+   name the variable's, or RuntimeError at main's top level, where every
+   class variable access raises. Valued as the read's dead tail; the
+   receiver and name are staged inside the raise's message argument, so the
+   text still opens with the raise the tail emitters recognize. */
+static void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
+  if (h->cid == c->toplevel_class)
+    buf_puts(b, "(sp_raise_cls(\"RuntimeError\", \"class variable access from toplevel\"), ");
+  else
+    buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
+                  "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\")), ",
+               h->cid, h->name, h->name, class_ruby_name(c, h->cid) ? class_ruby_name(c, h->cid) : c->classes[h->cid].name);
+  buf_printf(b, "%s)", raise_tail_value(repr_of(c, id).as_ty));
+}
+
 static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "InstanceVariableReadNode")) {
     const char *nm = nt_str(nt, id, "name");  /* "@x" */
@@ -3069,7 +3086,12 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
   }
   if (sp_streq(ty, "ClassVariableReadNode")) {
     HolderRef h;
-    if (holder_of_node_in(c, id, g_class_body_id, &h)) {
+    int held = holder_of_node_in(c, id, g_class_body_id, &h);
+    if (held && h.idx < 0 && !c->cvar_set_unplaced) {
+      emit_cvar_undeclared_raise(c, id, &h, b);
+      return 1;
+    }
+    if (held && h.idx >= 0) {
       /* --share-strings: a class variable holding the shared handle */
       Buf sref; memset(&sref, 0, sizeof sref);
       if (holder_static_handle_buf(c, id, &sref)) {
@@ -3085,7 +3107,8 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
         if (cvar_is_oint(c, h.cid, h.idx) && !want) buf_puts(b, ".v"); }
       return 1;
     }
-    unsupported(c, id, "class variable read (no class scope)");
+    unsupported(c, id, held ? "class variable read beside a class_variable_set Spinel cannot place"
+                            : "class variable read (no class scope)");
   }
   if (sp_streq(ty, "ClassVariableWriteNode")) {  /* in value position: yields the assigned value */
     const char *nm = nt_str(nt, id, "name");

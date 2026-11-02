@@ -2298,6 +2298,13 @@ int is_const_visibility_name(const char *n) {
 }
 /* class_variable_set remove_class_variable */
 int is_cvar_write_name(const char *n) { return n && (sp_streq(n, "class_variable_set") || sp_streq(n, "remove_class_variable")); }
+int is_cvar_set_name(const char *n) { return n && sp_streq(n, "class_variable_set"); }
+/* class_variable_get class_variable_set class_variable_defined?: the
+   reflection on one class variable of self's class, by its name */
+int is_cvar_reflection_name(const char *n) {
+  static const char *const names[] = { "class_variable_get", "class_variable_set", "class_variable_defined?", NULL };
+  return n && builtin_name_in(n, names);
+}
 int is_hook_protocol_name(const char *n) {
   return n && (sp_streq(n, "append_features") || sp_streq(n, "extend_object") || sp_streq(n, "prepend_features"));
 }

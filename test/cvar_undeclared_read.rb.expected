@@ -1,0 +1,26 @@
+"uninitialized class variable @@h in T"
+NameError
+"uninitialized class variable @@h in T"
+:@@h
+T
+"uninitialized class variable @@h in T"
+:none
+"uninitialized class variable @@h in Mod"
+"uninitialized class variable @@a in B"
+"uninitialized class variable @@a in B"
+1
+"uninitialized class variable @@s in Kid"
+"uninitialized class variable @@x in Reader"
+4
+11
+"uninitialized class variable @@nope in Set1"
+:@@nope
+Set1
+:other
+8
+false
+true
+false
+nil
+nil
+4

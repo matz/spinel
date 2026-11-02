@@ -9541,21 +9541,26 @@ int infer_cvar_types(Compiler *c, int nil_only) {
   }
   /* Pass 2.5: `Klass.class_variable_set(:@@name, v)` with a literal name
      DECLARES the cvar when the class has no such write -- CRuby creates it on
-     the fly, and the codegen store needs a registered global to hit (#2719). */
+     the fly, and the codegen store needs a registered global to hit (#2719).
+     One with another receiver or a name not written out may declare any
+     variable (Compiler.cvar_set_unplaced), asked again each round, since a
+     desugar may give a bare one its class's constant in a later round. */
+  c->cvar_set_unplaced = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "class_variable_set") || store_unchanged(c, id)) continue;
+    if (!is_cvar_set_name(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    int cci = const_node_class_index(c, recv);
-    if (cci < 0) continue;
+    int cci = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? const_node_class_index(c, recv) : -1;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an != 2 || !av) continue;
-    NodeKind ak = nt_kind(nt, av[0]);
+    NodeKind ak = an == 2 && av ? nt_kind(nt, av[0]) : NK_NilNode;
     const char *cvn = (ak == NK_SymbolNode) ? nt_str(nt, av[0], "value")
                     : (ak == NK_StringNode) ? nt_str(nt, av[0], "content") : NULL;
-    if (!cvn || cvn[0] != '@' || cvn[1] != '@') continue;
+    if (cci < 0 || !cvn || cvn[0] != '@' || cvn[1] != '@') {
+      c->cvar_set_unplaced = 1;
+      continue;
+    }
+    if (store_unchanged(c, id)) continue;
     ClassInfo *scl = &c->classes[comp_cvar_owner(c, cci, cvn)];
     int idx = comp_cvar_intern(scl, cvn);
     if (nil_only && scl->cvar_types[idx] != TY_BOOL &&

@@ -12744,6 +12744,15 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_DefNode) return;
+  /* a bare class_variable_get / _set / _defined? is a call on self too */
+  if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 && is_cvar_reflection_name(nt_str(nt, root, "name"))) {
+    int cr = nt_new_node(nt, "ConstantReadNode");
+    if (cr < 0) return;
+    nt_node_set_str(nt, cr, "name", cname);
+    comp_grow_node_arrays(c);
+    c->nscope[cr] = c->nscope[root];
+    nt_node_set_ref(nt, root, "receiver", cr);
+  }
   SpNode *nd = &nt->nodes[root];
   for (int i = 0; i < nd->nr; i++) {
     int ch = nd->r[i].ref;
@@ -12880,7 +12889,8 @@ static int exec_param_reads_arg(Compiler *c, int body, const char *pn, int arg) 
      C.class_exec(a) { |x| b }  ->  (->(x) { b }).call(a)
 
    reusing the block's own parameters/body nodes, with SelfNode occurrences in
-   the body repointed at the receiver constant. #2697 */
+   the body, and the receiver of a bare class_variable_get / _set /
+   _defined?, repointed at the receiver constant. #2697 */
 int desugar_class_eval_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

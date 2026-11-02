@@ -4211,8 +4211,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           }
         }
         else if (sp_streq(name, "class_variable_get")) {
-          buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized class variable %s in %s\"), sp_box_nil())",
-                     cvn, c->classes[ccid].name);
+          buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
+                        "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\")), sp_box_nil())",
+                     ccid, cvn, cvn, class_ruby_name(c, ccid) ? class_ruby_name(c, ccid) : c->classes[ccid].name);
           return 1;
         }
       }

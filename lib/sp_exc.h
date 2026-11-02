@@ -79,6 +79,7 @@ const char *const *sp_exc_modules_of_name(const char *cls);
 const char *sp_exc_canonical_name(const char *cls);
 extern SP_TLS sp_RbVal sp_pending_exc_recv, sp_pending_exc_key, sp_pending_exc_val;
 extern SP_TLS unsigned char sp_pending_exc_flags;
+extern SP_TLS const char *sp_pending_exc_name;
 
 int sp_exc_cls_matches(const char *raised, const char *target);
 sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc);   /* has the class-gated accessor */

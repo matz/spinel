@@ -1189,12 +1189,21 @@ int class_recv_static_ci(Compiler *c, int node) {
    the program, a builtin class or an alias has its own static dispatch. */
 int const_class_value_only(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_kind(nt, node) == NK_ConstantReadNode ? nt_str(nt, node, "name") : NULL;
+  NodeKind k = nt_kind(nt, node);
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, node, "name") : NULL;
   if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
   LocalVar *lv = comp_const(c, nm);
+  if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
   const LrDef *d = NULL;
-  return lv && (lv->type == TY_CLASS || lv->type == TY_POLY) && !resolve_class_alias_chain(c, nm) &&
-    elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  if (k == NK_ConstantReadNode)
+    return elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  /* `M::X` (or `::X`): the write must be the constant of the class or
+     module the parent names (Object's for `::X`) where the read stands, as
+     `M::X` looks it up; a parent known only at run time names none */
+  int par = nt_ref(nt, node, "parent");
+  int owner = par < 0 ? -1 : class_recv_static_ci(c, par);
+  if (par >= 0 && owner < 0) return 0;
+  return elab_const_own_at(c, owner, nm, elab_point_of(c, node), &d) != ELAB_NO && d && d->kind == LR_WRITE;
 }
 
 /* The class method `name` the program defines for the class a class-valued
@@ -3970,6 +3979,14 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
            ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
   if (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0) return 1;
+  /* then Class's and Module's own (the Class rows), which stand before
+     Object's methods, a top-level def among them */
+  if (srt == TY_CLASS) {
+    int an = nt_ref(c->nt, call, "arguments"), ac = 0;
+    if (an >= 0) nt_arr(c->nt, an, "arguments", &ac);
+    const BuiltinOp *row = bop_find(TY_CLASS, name, ac, nt_ref(c->nt, call, "block") >= 0);
+    if (row && !(row->flags & BOPF_BASIC_OBJECT) && (!(row->flags & BOPF_CLASS_ONLY) || cplan_recv_class(c, call, recv))) return 1;
+  }
   if (srt == TY_POLY) {
     /* any class's chain, from the by-name lists while the chain memo can
        be trusted, class by class otherwise */

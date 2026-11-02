@@ -725,7 +725,6 @@ int desugar_descendant_reader_calls(Compiler *c);
 int desugar_masgn_store_evidence(Compiler *c);
 int desugar_index_assign_user_recv(Compiler *c);
 int desugar_index_assign_value(Compiler *c);
-int desugar_method_added_hook(Compiler *c);
 int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
 int desugar_body_self_call(Compiler *c);
@@ -857,6 +856,8 @@ const char *handle_attr_decl(const NodeTable *nt, int call);   /* analyze_desuga
 int handle_attr_form(Compiler *c, int call, int list, int j, int now, int file);   /* analyze_desugar.c: `Thread.attr_accessor :x` reached by the walk (statement j of list, run there when now, in file): the reopening in its place (its first statement), -2 at the file's end, -1 none */
 void ct_macro_facts_free(struct CtMacroFacts *f);
 struct HostStep *elab_walk_host(Compiler *c);   /* analyze_elab.c: the host a walk-time form splices through, while the walk runs */
+int mf_arm_base_len(const char *nm);   /* analyze_scope.c: the length of the name a conditional def's arm (`m#__condN`) stands for, -1 when nm is no arm */
+int elab_fire_after(Compiler *c, int list, int j);   /* analyze_elab.c: the hook calls the versions statement j of `list` added, spliced after it (the number) */
 int elab_walk_replace(Compiler *c, int old, int with);   /* ...and node with, spliced in place of entered statement old, takes its point */
 int elab_stmt_list(Compiler *c, int node, int *frame);   /* the statement list statement node is an element of, *frame the class or module header around it (-1: main's); -1 for no statement */
 int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c: the graft over every class and module body */
@@ -1017,7 +1018,6 @@ int desugar_class_body_object_acts(Compiler *c);
 int desugar_struct_block_anonymous(Compiler *c);
 int desugar_eval_method_block(Compiler *c);
 int desugar_singleton_body_self(Compiler *c);
-int desugar_inherited_hooks(Compiler *c);
 int desugar_self_const_get(Compiler *c);
 int desugar_holder_block_self_const(Compiler *c);
 int holder_subclass_defines(const NodeTable *nt, const char *holder, const char *name);

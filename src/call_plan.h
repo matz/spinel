@@ -69,6 +69,7 @@ typedef struct {
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
+  unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
   const char *delegate;     /* the protocol method name, before alias resolution */
 } CallPlan;
 
@@ -108,6 +109,17 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
    last version. Super contributes the enclosing method's original name. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class);
+/* Does the Class row for call id, named name, on the class value recv answer
+   the call? Not where a class method of the program's does (the plan binds
+   it a target), nor where the row is a private method's and the call names
+   an explicit receiver and does not ignore visibility (a send does): that is
+   NoMethodError. */
+int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* Is class value recv, of call id, proven a Class and not a Module: a program
+   class (not a module) it names, a core class, `Class.new`, `self` in a class
+   body, or a superclass reference of a class made (the fired hook's receiver)?
+   A Class-only row (BOPF_CLASS_ONLY) answers a call on such a receiver only. */
+int cplan_recv_class(Compiler *c, int id, int recv);
 /* the classes a call of a versioned name (ct_version_named) may run on,
    each handed to fn with the flags call_target is asked with */
 int ct_version_named(Compiler *c, const char *nm);

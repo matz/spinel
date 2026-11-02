@@ -15928,7 +15928,9 @@ static int oa_value_dropped(Compiler *c, int id) {
    value away: one that another statement follows, a top-level statement,
    the last statement of a loop body, and the last statement of the block
    of a builtin walk that ignores its block's value (oa_ignores_block_value):
-   `def walk; @kids.each { |k| k.walk }; end` reads no walk's value.
+   `def walk; @kids.each { |k| k.walk }; end` reads no walk's value. A call
+   ending a branch of an if, unless or case whose own value is thrown away
+   throws its value away too.
 
    The last statement of a method is the method's value. This pass finds
    the method names whose value something can read. A call of a name reads
@@ -16053,6 +16055,22 @@ static char *oa_walk_disc(Compiler *c, int nc) {
   for (int s = 0; s < c->nscopes; s++) if (tail[s] >= 0 && m_read[s]) tail_read[tail[s]] = 1;
   for (int s = 0; s < c->nscopes; s++)
     if (tail[s] >= 0 && !tail_read[tail[s]]) walk_disc[tail[s]] = 1;
+  /* a call ending a branch of an if, unless or case is that conditional's
+     value, so it is thrown away where the conditional is: climbed through
+     the branches and the statement lists they sit in, it takes the mark of
+     any node on the way (`if c; a.each { }; end; nil` reads no walk's
+     value, nor does `a.each { } if c` ending a loop body). Each step is a
+     node whose value is the call's; a write is no step, it keeps the value */
+  for (int id = 0; id < nt->count && id < nc && par; id++) {
+    if (walk_disc[id] || nt_kind(nt, id) != NK_CallNode) continue;
+    int cur = id;
+    for (int budget = nt->count; budget > 0 && !walk_disc[id]; budget--) {
+      int p = par[cur];
+      if (p < 0 || !vp_is_value_edge(nt, p, cur, VPS_IF | VPS_UNLESS | VPS_CASE)) break;
+      cur = p;
+      if (cur < nc && walk_disc[cur]) walk_disc[id] = 1;
+    }
+  }
   anh_free(&read);
   free(par);
   free(named); free(m_read); free(tail_read); free(is_tail); free(tail);
@@ -47767,7 +47785,6 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_included_hooks", desugar_included_hooks(c, &hs));
   host_end(c, &hs);
   AN_STEP_V("desugar_eval_method_block", desugar_eval_method_block(c));          /* k.class_eval(&o.method(:m)) -> o.m(k) */
-  AN_STEP_V("desugar_inherited_hooks", desugar_inherited_hooks(c));            /* class A < B -> B.inherited(A) first in A's body */
   AN_STEP_V("desugar_class_body_object_acts", desugar_class_body_object_acts(c));     /* class B; tap { } -> self.tap { } */
   lower_run(c, &lc, LW_NIL_BLOCK_ARG);
   AN_STEP_V("desugar_literal_const_get", desugar_literal_const_get(c));          /* Object.const_get("A::B") -> A::B */
@@ -47957,7 +47974,6 @@ static void an_phase_class_structure(Compiler *c) {
   type_rescue_bindings(c);
   AN_STEP_V("rewrite_prepended_builtin_supers", rewrite_prepended_builtin_supers(c));   /* super in a module prepended into Range -> Range's own */
   AN_STEP_V("rewrite_ivar_reflection_supers", rewrite_ivar_reflection_supers(c));     /* super in the program's own ivar reflection -> Object's */
-  AN_STEP_V("desugar_method_added_hook", desugar_method_added_hook(c));   /* def in a class body -> def; method_added(:name): needs the parents and extends, and runs before class methods are specialized per class */
   AN_STEP_V("desugar_reader_index_write", desugar_reader_index_write(c));  /* all[k] = v through a reader of @all -> (all; @all[k] = v) */
   /* again, now that modules have put their methods in: an alias can take an
      inherited method an ancestor got from one */

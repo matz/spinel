@@ -39,3 +39,13 @@ end
 
 p Project.commands
 p Thor.commands
+
+# the other core hooks answer nil to a `super` from the program's own
+class Lifecycle
+  def self.method_removed(n) = (puts "removed #{n}"; super)
+  def self.method_undefined(n) = (puts "undefined #{n}"; super)
+  def self.singleton_method_removed(n) = (puts "sremoved #{n}"; super)
+  def self.singleton_method_undefined(n) = (puts "sundefined #{n}"; super)
+  def self.inherited(k) = (puts "inherited #{k}"; super)
+  p method_removed(:a), method_undefined(:b), singleton_method_removed(:c), singleton_method_undefined(:d)
+end

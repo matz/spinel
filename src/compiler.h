@@ -1365,6 +1365,10 @@ typedef struct {
   NtStamp lvws_stamp;
   int lvws_built;
 
+  /* the class untraced singleton definitions land on (sg_parked_class), plus
+     one; 0 for none made */
+  int sg_parked;
+
   /* node-by-kind chains; see comp_kind_first */
   int *kind_head;       /* [NK_COUNT-ish buckets] first node id of each kind */
   int *kind_next;       /* [kind_count] next node id of the same kind */

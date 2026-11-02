@@ -1911,6 +1911,13 @@ static void cls_value_probe_fn(Compiler *c, int id, void *ctx, Buf *nb) {
   pr->got = got;
   emit_call(c, id, nb);
 }
+/* Is a Class value's answer, as the emitter wrote it, one that raises or
+   can raise NoMethodError: a raise, or the Class emitter's own
+   class-method switch (the program's methods of the name, then the raise)? */
+static int cls_value_answer_raises(const char *t) {
+  return strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
+         strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"");
+}
 /* The default arm of the class-side switch below: a class value whose class
    defines no class method of this name, answered as a Class the compiler
    does not know statically -- the receiver read as the unboxed sp_Class
@@ -1955,9 +1962,7 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   /* an answer that can itself raise NoMethodError is the Class emitter's
      own class-method switch (the program's methods of the name, then the
      raise): no better than the default it would replace */
-  if (!t || strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
-      strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"") ||
-      (got == TY_VOID && tr >= 0 && ret != TY_POLY)) {
+  if (!t || cls_value_answer_raises(t) || (got == TY_VOID && tr >= 0 && ret != TY_POLY)) {
     free(nb->p); free(nb); free(arm_pre);
     return 0;
   }
@@ -1978,6 +1983,16 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   buf_puts(b, arm_pre ? " } break;" : " break;");
   free(nb->p); free(nb); free(arm_pre);
   return 1;
+}
+
+/* The test a class-tag arm keys class k on: its index, or its name for a
+   Class value that carries one (`obj.class` of a poly object,
+   sp_poly_class_val), followed by ` ? `. */
+static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
+  const char *crn = class_ruby_name(c, k);
+  if (!crn) crn = c->classes[k].name;
+  buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
+                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
 }
 
 int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
@@ -22766,14 +22781,9 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           for (int k = 0; k < nc; k++) {
             nd_callee(c, id, cmi[k], cdef[k], 1);
             int rarm = emit_reopen_arm_test(c, cmi[k], nm, rcls, NULL, b);
-            if (!rarm) {
-              /* `obj.class` of a poly object is a Class value that carries
-                 its name (sp_poly_class_val): it names this class too */
-              const char *crn = class_ruby_name(c, ccls[k]);
-              if (!crn) crn = c->classes[ccls[k]].name;
-              buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
-                            "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, ccls[k], tv, tv, tv, crn);
-            }
+            /* `obj.class` of a poly object is a Class value that carries
+               its name (sp_poly_class_val): it names this class too */
+            if (!rarm) emit_cls_value_test(c, ccls[k], tv, b);
             /* a class whose method is private (private_class_method, or
                `class << self; private`) refuses it here as a direct `C.foo`
                does: the value only names the class at run time (#8202) */

@@ -1252,7 +1252,22 @@ int obj_class_unrelated(Compiler *c, int a, int b) {
    `instantiated` never marks it and its dispatch arm must not be dropped for
    that (#4219). Limited to the primitive names the dispatch key below can map
    a runtime tag to. */
+static int class_is_prim_reopen_raw(Compiler *c, int k);
+/* (kept per class under the class count and shape: a boxed call's arm key
+   asked it of every candidate class of its name, by name comparisons) */
 int class_is_prim_reopen(Compiler *c, int k) {
+  static unsigned char *memo; static int memo_n = -1; static unsigned memo_gen; static const Compiler *memo_c;
+  if (memo_c != c || memo_n != c->nclasses || memo_gen != comp_class_shape_gen()) {
+    free(memo); memo = calloc((size_t)c->nclasses + 1, 1);
+    memo_c = c; memo_n = c->nclasses; memo_gen = comp_class_shape_gen();
+  }
+  /* (only while the scope index is frozen: class names and nesting are
+     settled by then) */
+  if (!memo || k < 0 || k >= memo_n || !comp_scope_index_is_frozen()) return class_is_prim_reopen_raw(c, k);
+  if (!memo[k]) memo[k] = class_is_prim_reopen_raw(c, k) ? 2 : 1;
+  return memo[k] == 2;
+}
+static int class_is_prim_reopen_raw(Compiler *c, int k) {
   const char *n = c->classes[k].name;
   return sp_streq(n, "Integer") || sp_streq(n, "Float") ||
          sp_streq(n, "String") || sp_streq(n, "Symbol") ||

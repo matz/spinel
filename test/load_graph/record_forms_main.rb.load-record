@@ -1,4 +1,4 @@
-load record: 24 points, 1 regions
+load record: 26 points, 1 regions
 r0 #0 f0 ProgramNode line 7
 r0 #1 f0 ModuleNode Hooked line 7
   r0 #2 f0 DefNode included line 8
@@ -9,27 +9,29 @@ r0 #6 f0 ClassNode Watched line 14
   r0 #7 f0 DefNode method_added line 15
 r0 #8 f0 ClassNode Sub line 17
   r0 #9 f0 CallNode define_method line 18
-r0 #10 f0 ClassNode Quiet line 20
-  r0 #11 f0 CallNode attr_accessor line 21
-  r0 #12 f0 CallNode include line 22
-  r0 #13 f0 CallNode include line 23
-  r0 #14 f0 NilNode line 8
-r0 #15 f0 ClassNode Watched line 25
-  r0 #16 f0 CallNode attr_reader line 26
-r0 #17 f0 ClassNode Own line 28
-  r0 #18 f0 DefNode attr_writer line 29
-  r0 #19 f0 CallNode attr_writer line 30
-  r0 #20 f0 CallNode attr_reader line 31
-r0 #21 f0 LocalVariableWriteNode q line 33
-r0 #22 f0 CallNode a= line 34
-r0 #23 f0 CallNode puts line 35
+  r0 #10 f0 CallNode method_added line 18
+r0 #11 f0 ClassNode Quiet line 20
+  r0 #12 f0 CallNode attr_accessor line 21
+  r0 #13 f0 CallNode include line 22
+  r0 #14 f0 CallNode include line 23
+  r0 #15 f0 NilNode line 8
+r0 #16 f0 ClassNode Watched line 25
+  r0 #17 f0 CallNode attr_reader line 26
+  r0 #18 f0 CallNode method_added line 26
+r0 #19 f0 ClassNode Own line 28
+  r0 #20 f0 DefNode attr_writer line 29
+  r0 #21 f0 CallNode attr_writer line 30
+  r0 #22 f0 CallNode attr_reader line 31
+r0 #23 f0 LocalVariableWriteNode q line 33
+r0 #24 f0 CallNode a= line 34
+r0 #25 f0 CallNode puts line 35
 block define_method line 18: later
 class Hooked: body#1
 class Plain: body#4
-class Watched: body#6 body#15
+class Watched: body#6 body#16
 class Sub: body#8
-class Quiet: body#10 include Plain#12 include Hooked#13
-class Own: body#17
+class Quiet: body#11 include Plain#13 include Hooked#14
+class Own: body#19
 entity Hooked: owner main leaf Hooked
 entity Plain: owner main leaf Plain
 entity Watched: owner main leaf Watched
@@ -46,14 +48,14 @@ Watched.method_added: def#7 end=yes
 const Sub: write#8
 form #9 runs code
 Sub#dm: define_method#9 end=yes
-const Quiet: write#10
-Quiet#a: reader#11 end=yes
-Quiet#a=: writer#11 end=yes
-form #13 runs code
-form #16 runs code
-Watched#r: reader#16 end=yes
-const Own: write#17
-Own.attr_writer: def#18 end=yes
-form #19 runs code
-Own#w=: writer#19 end=yes
-Own#v: reader#20 end=yes
+const Quiet: write#11
+Quiet#a: reader#12 end=yes
+Quiet#a=: writer#12 end=yes
+form #14 runs code
+form #17 runs code
+Watched#r: reader#17 end=yes
+const Own: write#19
+Own.attr_writer: def#20 end=yes
+form #21 runs code
+Own#w=: writer#21 end=yes
+Own#v: reader#22 end=yes

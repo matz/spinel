@@ -327,6 +327,10 @@ typedef struct BuiltinOp {
    has none. Spinel types a module as a class too, so the row answers a call
    only on a receiver proven a Class (cplan_recv_class). */
 #define BOPF_CLASS_ONLY 1024
+/* The method is BasicObject's (singleton_method_added): it stands after
+   Object's methods, so a top-level def of the name is the one a send
+   reaches (send_blind_recv_owns does not count the row). */
+#define BOPF_BASIC_OBJECT 2048
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */

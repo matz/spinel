@@ -3972,7 +3972,7 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
     int an = nt_ref(c->nt, call, "arguments"), ac = 0;
     if (an >= 0) nt_arr(c->nt, an, "arguments", &ac);
     const BuiltinOp *row = bop_find(TY_CLASS, name, ac, nt_ref(c->nt, call, "block") >= 0);
-    if (row && (!(row->flags & BOPF_CLASS_ONLY) || cplan_recv_class(c, call, recv))) return 1;
+    if (row && !(row->flags & BOPF_BASIC_OBJECT) && (!(row->flags & BOPF_CLASS_ONLY) || cplan_recv_class(c, call, recv))) return 1;
   }
   if (srt == TY_POLY) {
     /* any class's chain, from the by-name lists while the chain memo can

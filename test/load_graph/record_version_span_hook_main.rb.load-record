@@ -1,4 +1,4 @@
-load record: 37 points, 1 regions
+load record: 38 points, 1 regions
 r0 #0 f0 ProgramNode line 8
 r0 #1 f0 ModuleNode Chime line 8
   r0 #2 f0 DefNode ring line 9
@@ -22,24 +22,25 @@ r0 #18 f0 ClassNode Host line 48
   r0 #20 f0 CallNode << line 35
 r0 #21 f0 ClassNode Watch line 52
   r0 #22 f0 DefNode tick line 53
-r0 #23 f0 ClassNode Bell line 56
-  r0 #24 f0 CallNode include line 57
-r0 #25 f0 ClassNode Drum line 60
-  r0 #26 f0 CallNode include line 61
-r0 #27 f0 ClassNode Gong line 64
-  r0 #28 f0 CallNode include line 65
-r0 #29 f0 ClassNode Bell line 68
-  r0 #30 f0 DefNode ring line 69
-r0 #31 f0 ClassNode Drum line 72
-  r0 #32 f0 DefNode ring line 73
-r0 #33 f0 ClassNode Gong line 76
-  r0 #34 f0 DefNode ring line 77
-r0 #35 f0 CallNode puts line 80
-r0 #36 f0 CallNode puts line 81
+  r0 #23 f0 CallNode method_added line 53
+r0 #24 f0 ClassNode Bell line 56
+  r0 #25 f0 CallNode include line 57
+r0 #26 f0 ClassNode Drum line 60
+  r0 #27 f0 CallNode include line 61
+r0 #28 f0 ClassNode Gong line 64
+  r0 #29 f0 CallNode include line 65
+r0 #30 f0 ClassNode Bell line 68
+  r0 #31 f0 DefNode ring line 69
+r0 #32 f0 ClassNode Drum line 72
+  r0 #33 f0 DefNode ring line 73
+r0 #34 f0 ClassNode Gong line 76
+  r0 #35 f0 DefNode ring line 77
+r0 #36 f0 CallNode puts line 80
+r0 #37 f0 CallNode puts line 81
 class Chime: body#1
-class Bell: body#4 body#23 body#29 include Chime#24
-class Drum: body#6 body#25 body#31 include Chime#26
-class Gong: body#8 body#27 body#33 include Chime#28
+class Bell: body#4 body#24 body#30 include Chime#25
+class Drum: body#6 body#26 body#32 include Chime#27
+class Gong: body#8 body#28 body#34 include Chime#29
 class Tracker: body#10
 class Mixer: body#12
 class Watch: body#14 body#21
@@ -55,14 +56,14 @@ entity Watch: owner main leaf Watch
 entity Sub: owner main leaf Sub
 entity Host: owner main leaf Host
 const Chime: write#1
-Chime#ring: def#2 runs=#36 end=yes
+Chime#ring: def#2 runs=#37 end=yes
 const LOG: write#3
 const Bell: write#4
-Bell#ring: def#5 runs=#36 def#30 runs=#36 end=yes
+Bell#ring: def#5 runs=#37 def#31 runs=#37 end=yes
 const Drum: write#6
-Drum#ring: def#7 runs=#36 def#32 runs=#36 end=yes
+Drum#ring: def#7 runs=#37 def#33 runs=#37 end=yes
 const Gong: write#8
-Gong#ring: def#9 runs=#36 def#34 runs=#36 end=yes
+Gong#ring: def#9 runs=#37 def#35 runs=#37 end=yes
 const Tracker: write#10
 Tracker.inherited: def#11 end=yes
 const Mixer: write#12
@@ -74,6 +75,6 @@ opaque Tracker: opaque#17
 const Host: write#18
 form #19 runs code
 Watch#tick: def#22 end=yes
-versions Bell#ring: def#5..#30 seen=unknown, def#30..end seen=def#30; 7 of the name
-versions Drum#ring: def#7..#32 seen=unknown, def#32..end seen=def#32; 7 of the name
-versions Gong#ring: def#9..#34 seen=unknown, def#34..end seen=def#34; 7 of the name
+versions Bell#ring: def#5..#31 seen=unknown, def#31..end seen=def#31; 7 of the name
+versions Drum#ring: def#7..#33 seen=unknown, def#33..end seen=def#33; 7 of the name
+versions Gong#ring: def#9..#35 seen=unknown, def#35..end seen=def#35; 7 of the name

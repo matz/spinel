@@ -1,3 +1,6 @@
 inherited AfterRequire
+added late_a
+added late_b
 cond inherited CondSub
+cond added cond_def
 done

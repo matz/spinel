@@ -656,8 +656,66 @@ static bool ir_says_nothing(rbs_parser_t *p, rbs_node_t *type) {
     return b;
 }
 
-/* map_type with the owner's lexical scope, as traverse_members sets it up */
+/* The type variables core RBS declares for a builtin generic
+   (`class Array[unchecked out Elem]`), which a reopening's inline
+   signatures use without declaring them: NULL when `owner` has none. */
+static const char *const *ir_core_type_params(const char *owner) {
+    static const char *const elem[] = { "Elem", NULL };
+    static const char *const kv[] = { "K", "V", NULL };
+    static const char *const set[] = { "A", NULL };
+    static const char *const en[] = { "Elem", "Return", NULL };
+    if (strcmp(owner, "Array") == 0 || strcmp(owner, "Enumerable") == 0 || strcmp(owner, "Range") == 0 ||
+        strcmp(owner, "Struct") == 0) return elem;
+    if (strcmp(owner, "Hash") == 0) return kv;
+    if (strcmp(owner, "Set") == 0) return set;
+    if (strcmp(owner, "Enumerator") == 0 || strcmp(owner, "Enumerator_Lazy") == 0) return en;
+    return NULL;
+}
+
+/* Does `type` name one of `params` (`Elem`, `Array[Elem]`, `Elem?`)? Such
+   a type is the receiver's element type, which differs from receiver to
+   receiver, so no one type stands for it. */
+static bool ir_names_type_param(rbs_parser_t *p, rbs_node_t *type, const char *const *params) {
+    if (type == NULL || params == NULL) return false;
+    switch (type->type) {
+        case RBS_TYPES_VARIABLE:
+            return true;
+        case RBS_TYPES_OPTIONAL:
+            return ir_names_type_param(p, ((rbs_types_optional_t *) type)->type, params);
+        case RBS_TYPES_UNION:
+        case RBS_TYPES_INTERSECTION: {
+            rbs_node_list_t *l = type->type == RBS_TYPES_UNION ? ((rbs_types_union_t *) type)->types
+                                                               : ((rbs_types_intersection_t *) type)->types;
+            for (rbs_node_list_node_t *e = l ? l->head : NULL; e; e = e->next)
+                if (ir_names_type_param(p, e->node, params)) return true;
+            return false;
+        }
+        case RBS_TYPES_CLASS_INSTANCE: {
+            rbs_types_class_instance_t *ci = (rbs_types_class_instance_t *) type;
+            for (rbs_node_list_node_t *e = ci->args ? ci->args->head : NULL; e; e = e->next)
+                if (ir_names_type_param(p, e->node, params)) return true;
+            if (ci->args && ci->args->length > 0) return false;
+            if (ci->name == NULL || (ci->name->rbs_namespace &&
+                (ci->name->rbs_namespace->absolute ||
+                 (ci->name->rbs_namespace->path && ci->name->rbs_namespace->path->length > 0)))) return false;
+            sbuf_t n; sbuf_init(&n);
+            name_of_type_name(p, ci->name, &n);
+            bool hit = false;
+            for (int i = 0; params[i] && n.buf && !hit; i++) hit = strcmp(n.buf, params[i]) == 0;
+            sbuf_free(&n);
+            return hit;
+        }
+        default:
+            return false;
+    }
+}
+
+/* map_type with the owner's lexical scope, as traverse_members sets it up.
+   A type naming one of the owner's core type variables pins nothing ("-"),
+   as `top` does, and the rest of the signature applies: --rbs, where
+   `class Array[Elem]` declares the variable, leaves that slot alone too. */
 static bool ir_map(rbs_parser_t *p, rbs_node_t *type, const ir_target *t, sbuf_t *out) {
+    if (ir_names_type_param(p, type, ir_core_type_params(t->owner))) { sbuf_set(out, "-", 1); return true; }
     const char *sv = g_self_scope;
     g_self_scope = strcmp(t->owner, "Object") == 0 ? "" : t->owner;
     bool ok = map_type(p, type, t->lookup, out);

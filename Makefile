@@ -3766,7 +3766,7 @@ INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syn
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
                      contradiction_inline objarray_boxed
-INLINE_RBS_PARITY += flag_types
+INLINE_RBS_PARITY += flag_types self_types
 INLINE_RBS_RESULTS := $(patsubst %,build/inline-rbs-results/%.par,$(INLINE_RBS_PARITY)) \
                       $(patsubst %,build/inline-rbs-results/%.res,$(INLINE_RBS_CHECKS))
 inline-rbs-test: $(INLINE_RBS_RESULTS)

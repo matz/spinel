@@ -393,13 +393,19 @@ static void traverse_members(rbs_parser_t *p, rbs_node_list_t *members,
     bool sv_is_class = g_self_scope_is_class;
     g_self_scope = qualified_scope;
     g_self_scope_is_class = is_class;
+    const char *sv_self_type = g_self_type;
     rbs_node_list_node_t *cur = members->head;
     while (cur != NULL) {
         rbs_node_t *n = cur->node;
+        /* an attribute's or instance variable's `self` is an instance of a class */
+        g_self_type = is_class ? qualified_scope : NULL;
         switch (n->type) {
-            case RBS_AST_MEMBERS_METHOD_DEFINITION:
-                emit_method(p, (rbs_ast_members_method_definition_t *) n, qualified_scope, lookup_scope, out);
+            case RBS_AST_MEMBERS_METHOD_DEFINITION: {
+                rbs_ast_members_method_definition_t *m = (rbs_ast_members_method_definition_t *) n;
+                g_self_type = is_class && m->kind == RBS_METHOD_DEFINITION_KIND_INSTANCE ? qualified_scope : NULL;
+                emit_method(p, m, qualified_scope, lookup_scope, out);
                 break;
+            }
             case RBS_AST_MEMBERS_ATTR_ACCESSOR: {
                 rbs_ast_members_attr_accessor_t *a = (rbs_ast_members_attr_accessor_t *) n;
                 emit_attr_member(p, a->name, a->type, a->kind, a->ivar_name, lookup_scope, out);
@@ -436,6 +442,7 @@ static void traverse_members(rbs_parser_t *p, rbs_node_list_t *members,
     }
     g_self_scope = sv_self_scope;
     g_self_scope_is_class = sv_is_class;
+    g_self_type = sv_self_type;
 }
 
 /* Pre-pass: collect every Class/Module declaration's qualified name

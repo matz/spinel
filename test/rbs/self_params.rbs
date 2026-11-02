@@ -1,0 +1,13 @@
+# `self` and `instance` are an instance of the class an instance method is
+# written in, as its name would map, in a parameter and inside `?` as in a
+# return. A singleton method's `self` parameter (the class object) and a
+# module's (the including object) name no such class and take no seed.
+class SelfParams
+  def a: (self) -> void
+  def b: (instance) -> self?
+  def self.c: (self) -> void
+end
+
+module SelfMixin
+  def d: (self) -> void
+end

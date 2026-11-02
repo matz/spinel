@@ -1,0 +1,6 @@
+class SelfParams
+meth a - obj_SelfParams
+meth b obj_SelfParams? obj_SelfParams
+cmeth c - -
+class SelfMixin
+meth d - -

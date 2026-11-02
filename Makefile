@@ -3765,7 +3765,7 @@ INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide 
 INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
-                     contradiction_inline objarray_boxed
+                     contradiction_inline objarray_boxed desugared_warnings
 INLINE_RBS_PARITY += flag_types
 INLINE_RBS_RESULTS := $(patsubst %,build/inline-rbs-results/%.par,$(INLINE_RBS_PARITY)) \
                       $(patsubst %,build/inline-rbs-results/%.res,$(INLINE_RBS_CHECKS))
@@ -4079,6 +4079,19 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	if $(CC) -O0 -Ilib "$$tmp/w.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/w" 2>/dev/null; then \
 	  "$$tmp/w" > "$$tmp/w.out" 2>/dev/null; cmp -s "$$tmp/w.out" $(IRB)/analyzer_warnings.expected || { echo "inline-rbs-test: FAIL (analyzer_warnings.rb output differs from CRuby)"; ok=0; }; \
 	else echo "inline-rbs-test: FAIL (analyzer_warnings.rb: C did not compile)"; ok=0; fi; \
+	;; \
+	desugared_warnings) \
+	$(SPINEL) $(IRB)/desugared_warnings.rb -c --no-line-map -o "$$tmp/w.c" 2>"$$tmp/w.err" || { echo "inline-rbs-test: FAIL (desugared_warnings: the compile failed)"; sed -n 1,5p "$$tmp/w.err"; ok=0; }; \
+	$(call IRB_IGNORED,desugared_warnings.rb); \
+	for w in 'desugared_warnings.rb:11:3: warning: inline RBS: the signature of `compact_blank` is not applied: `Array[Elem]` names no type' \
+	         'desugared_warnings.rb:28:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the FalseClass branch of Object#blank?' \
+	         'desugared_warnings.rb:33:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the TrueClass branch of Object#blank?'; do \
+	  grep -qF "$$w" "$$tmp/w.err" || { echo "inline-rbs-test: FAIL (no warning '$$w')"; ok=0; }; done; \
+	[ "$$(grep -c 'warning: inline RBS' "$$tmp/w.err")" = 3 ] || { echo "inline-rbs-test: FAIL (desugared_warnings: expected one warning per unapplied comment, 3)"; cat "$$tmp/w.err"; ok=0; }; \
+	if grep -q '__enum_' "$$tmp/w.err"; then echo "inline-rbs-test: FAIL (desugared_warnings: a warning named a copy, not the method)"; ok=0; fi; \
+	if $(CC) -O0 -Ilib "$$tmp/w.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/w" 2>/dev/null; then \
+	  "$$tmp/w" > "$$tmp/w.out" 2>/dev/null; cmp -s "$$tmp/w.out" $(IRB)/desugared_warnings.expected || { echo "inline-rbs-test: FAIL (desugared_warnings.rb output differs from CRuby)"; ok=0; }; \
+	else echo "inline-rbs-test: FAIL (desugared_warnings.rb: C did not compile)"; ok=0; fi; \
 	;; \
 	dump_ast_malformed) \
 	for m in --dump-ast --emit-types --emit-rbs; do for tp in syntax_error=3:15 syntax_error_multiline=4:18; do \

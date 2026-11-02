@@ -24367,6 +24367,8 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         int dup = 0;
         for (int r = 0; r < nrm; r++) if (rm_def[r] == ovr[q]) dup = 1;
         if (!dup && nrm < 1024) { rm_def[nrm] = ovr[q]; rm_cls[nrm] = ovc[q]; nrm++; }
+        /* its inline signature's warning names where the body went (apply_inline_rbs) */
+        nt_node_set_str(nt, ovr[q], "folded_into_object", ocls[q]);
       }
       changed = 1;
     }

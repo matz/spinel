@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 int comp_ternary_arms(const NodeTable *nt, int id, int *then_node, int *else_node) {
   NodeKind k = nt_kind(nt, id);
@@ -1294,6 +1295,17 @@ int comp_cvar_index(ClassInfo *ci, const char *name) {
    has an entry for `name`, or to `cid` itself when none does. Every reader and
    writer of a class variable goes through here before it looks the entry up or
    builds the slot's name. */
+/* Is `n` a class variable name: `@@` and an identifier (a letter, an
+   underscore or a byte of a non-ASCII character first, digits after)? A
+   class_variable_get / _set / _defined? with a literal name that is not one
+   raises CRuby's NameError when it runs, and declares nothing. */
+int cvar_name_ok(const char *n) {
+  if (!n || n[0] != '@' || n[1] != '@') return 0;
+  const unsigned char *p = (const unsigned char *)n + 2;
+  if (!(*p == '_' || isalpha(*p) || *p >= 0x80)) return 0;
+  for (p++; *p; p++) if (!(*p == '_' || isalnum(*p) || *p >= 0x80)) return 0;
+  return 1;
+}
 int comp_cvar_owner(const Compiler *c, int cid, const char *name) {
   int owner = cid;
   if (cid < 0 || !name) return cid;

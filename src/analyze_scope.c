@@ -9563,7 +9563,10 @@ int infer_cvar_types(Compiler *c, int nil_only) {
     NodeKind ak = an == 2 && av ? nt_kind(nt, av[0]) : NK_NilNode;
     const char *cvn = (ak == NK_SymbolNode) ? nt_str(nt, av[0], "value")
                     : (ak == NK_StringNode) ? nt_str(nt, av[0], "content") : NULL;
-    if (cci < 0 || !cvn || cvn[0] != '@' || cvn[1] != '@') {
+    /* a name written out that is no class variable name raises when the
+       call runs (cvar_name_ok): it declares nothing */
+    if (cvn && !cvar_name_ok(cvn)) continue;
+    if (cci < 0 || !cvn) {
       c->cvar_set_unplaced = 1;
       continue;
     }

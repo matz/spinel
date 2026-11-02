@@ -8312,18 +8312,21 @@ int desugar_main_self_call(Compiler *c) {
 
 /* `class_variable_get(:@@x)`, `class_variable_set(:@@x, v)` and
    `class_variable_defined?(:@@x)`, bare or on `self`, in a class method of a
-   class no other class inherits from: self is that class, so the call is the
-   `Klass.class_variable_*` spelling the cvar reflection resolves. Bare, it
-   was refused. */
+   class no other class inherits from, or where the record places self at
+   the call (a class or module body, or a builder's block, elab_self_at):
+   self is that class, so the call is the `Klass.class_variable_*` spelling
+   the cvar reflection resolves. Bare, it was refused or dropped. */
 int desugar_cmethod_cvar_reflection(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
-  int n0 = nt->count;
+  int n0 = nt->count, nk = 0;
+  /* every call's class is decided before any node is appended: an append
+     makes the record's next answer a rebuild */
+  int *calls = malloc(sizeof(int) * 2 * (size_t)(n0 > 0 ? n0 : 1));
+  if (!calls) return 0;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
-    if (!name || (!sp_streq(name, "class_variable_get") && !sp_streq(name, "class_variable_set") &&
-                  !sp_streq(name, "class_variable_defined?"))) continue;
+    if (!is_cvar_reflection_name(name)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv >= 0 && (nt_kind(nt, recv) != NK_SelfNode || nt_int(nt, recv, "ie_self", 0))) continue;
     int args = nt_ref(nt, id, "arguments");
@@ -8332,21 +8335,29 @@ int desugar_cmethod_cvar_reflection(Compiler *c) {
     const char *cvn = nt_str(nt, av[0], "value");
     if (!cvn || cvn[0] != '@' || cvn[1] != '@') continue;
     Scope *s = comp_scope_of(c, id);
-    if (!s || !s->is_cmethod || s->class_id < 0 || ie_class_of(c, id) != -1) continue;
-    int cid = s->class_id;
+    if (!s || ie_class_of(c, id) != -1) continue;
+    int cid = s->class_id < 0 ? elab_self_at(c, id) : -1;
+    if (cid < 0) {
+      if (!s->is_cmethod || s->class_id < 0) continue;
+      cid = s->class_id;
+      int inherited = 0;
+      for (int k = 0; k < c->nclasses && !inherited; k++) inherited = c->classes[k].parent == cid;
+      if (inherited) continue;
+    }
     if (call_target(c, id, cid, name, CT_CMETHOD, NULL) >= 0) continue;
-    int inherited = 0;
-    for (int k = 0; k < c->nclasses && !inherited; k++) inherited = c->classes[k].parent == cid;
-    if (inherited) continue;
+    calls[nk++] = id;
+    calls[nk++] = cid;
+  }
+  for (int q = 0; q < nk; q += 2) {
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) continue;
-    nt_node_set_str(nt, cr, "name", c->classes[cid].name);
-    nt_node_set_ref(nt, id, "receiver", cr);
+    nt_node_set_str(nt, cr, "name", c->classes[calls[q + 1]].name);
+    nt_node_set_ref(nt, calls[q], "receiver", cr);
     comp_grow_node_arrays(c);
-    c->nscope[cr] = c->nscope[id];
-    changed = 1;
+    c->nscope[cr] = c->nscope[calls[q]];
   }
-  return changed;
+  free(calls);
+  return nk > 0;
 }
 
 /* `recv[k] ||= v`, `recv[k] &&= v` and `recv[k] op= v` on an instance of a

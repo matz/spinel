@@ -1429,6 +1429,9 @@ typedef struct {
   ClassInfo *classes;
   int nclasses, cclasses;
   int toplevel_class;
+  unsigned char cvar_set_unplaced;   /* a class_variable_set infer_cvar_types could not
+                                        give a class and a literal name: any class
+                                        variable may be declared at run time */
   int *class_head, *class_next, class_buckets;   /* name -> class index (comp_class_index) */
   int *class_def_head, *class_def_next;   /* def node -> class index (comp_class_of_def), same buckets */
   unsigned char class_hash_check;   /* SPINEL_ELAB_CHECK: each lookup also scans the classes */

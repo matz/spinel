@@ -3999,6 +3999,47 @@ int elab_cref_at(Compiler *c, int node) {
   return p.region < 0 ? LR_UNKNOWN_CLASS : lr_cref(c, p.seq);
 }
 
+/* A class variable's lookup (CRuby's cvar base) skips the singleton class
+   bodies around it and the cref an eval form's block pushes; a builder's
+   block pushes none, nor does the anonymous class header a builder's block
+   was rewritten to (block_made_body). So: the innermost class or module body
+   around the statement node runs from, which for a method body or a block
+   run later is the statement that defines or makes it. A clone (a module's
+   method copied into each class that includes it) looks up from where the
+   node it copies was written, along a chain of up to 64 copies. */
+static int lr_cvar_cref_at(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  LoadPoint p = elab_point_from(c, node);
+  for (int depth = 0; p.region < 0 && depth < 64; depth++) {
+    char how = 0; int a = 0, k = 0; unsigned pass = 0;
+    node = nt_origin(c->nt, node, &how, &a, &pass, &k);
+    if (node < 0 || how != 'c') return LR_UNKNOWN_CLASS;
+    p = elab_point_from(c, node);
+  }
+  if (p.region < 0) return LR_UNKNOWN_CLASS;
+  for (int f = r->st[p.seq].frame; f >= 0; f = r->st[f].frame) {
+    int h = r->st[f].node;
+    NodeKind k = nt_kind(c->nt, h);
+    if ((k == NK_ClassNode || k == NK_ModuleNode) && !nt_int(c->nt, h, "block_made_body", 0))
+      return elab_header_class(c, h, NULL, NULL);
+  }
+  return LR_MAIN;
+}
+/* Asked once the record is made, as elab_class_ref_at is: in the call
+   plan's frame, so that a node a pass (or a String mutator's emission)
+   appended since answers at its source position, and the map is not
+   rebuilt per ask. A node the frame cannot place answers not known. */
+int elab_cvar_cref_at(Compiler *c, int node) {
+  LoadRecord *r = lr_get(c);
+  if (!r->recorded || r->walk || r->plan_depth) return lr_cvar_cref_at(c, node);
+  int framed = elab_plan_enter(c, node), ci = LR_UNKNOWN_CLASS;
+  if (framed) {
+    ci = lr_cvar_cref_at(c, node);
+    elab_plan_leave(c);
+  }
+  return ci;
+}
+
 int elab_mixed_at(Compiler *c, int cls, int sg, int mod, LoadPoint p) {
   if (!lr_ready(c, p) || mod < 0) return ELAB_UNKNOWN;
   return lr_search(c, cls, sg, NULL, mod, p, p.region < 0, 0, NULL, 0);

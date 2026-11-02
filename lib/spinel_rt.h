@@ -5475,6 +5475,15 @@ SP_COLD void sp_exc_stage_key(sp_RbVal v);
 #else
 SP_COLD void sp_exc_stage_key(sp_RbVal v)  { sp_pending_exc_key = v;  sp_pending_exc_flags |= 2; }
 #endif
+/* NameError#name, staged as its text (a C literal, which the collector
+   never sees) and interned when the carried exception is built */
+#ifdef SPINEL_EXT_HOST
+extern SP_TLS const char *sp_pending_exc_name;
+SP_COLD void sp_exc_stage_name(const char *nm);
+#else
+SP_TLS const char *sp_pending_exc_name;
+SP_COLD void sp_exc_stage_name(const char *nm) { sp_pending_exc_name = nm; sp_pending_exc_flags |= 8; }
+#endif
 #ifdef SPINEL_EXT_HOST
 SP_COLD void sp_exc_stage_val(sp_RbVal v);
 #else

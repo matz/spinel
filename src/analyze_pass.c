@@ -1807,11 +1807,8 @@ static TyRef named_array_slot(Compiler *c, int recv) {
       return lv ? &lv->type : NULL;
     }
     case NK_ClassVariableReadNode: {
-      Scope *s = comp_scope_of(c, recv);
-      int cid = s ? s->class_id : -1;
-      if (cid < 0) cid = c->toplevel_class;
+      int cid = holder_cvar_owner(c, recv, nm, holder_cbody(c, recv));
       if (cid < 0) return NULL;
-      cid = comp_cvar_owner(c, cid, nm);
       int idx = comp_cvar_index(&c->classes[cid], nm);
       return idx >= 0 ? &c->classes[cid].cvar_types[idx] : NULL;
     }
@@ -2976,11 +2973,10 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
       if (lv_widen(glv, elem)) changed = 1;
     }
     else if (sp_streq(lty_ms, "ClassVariableTargetNode")) {
-      /* in a method, its class; in a class body, the body's */
-      int cc = ms && ms->class_id >= 0 ? ms->class_id
-             : tgts[i] < c->node_cap ? c->node_cbody[tgts[i]] : -1;
+      /* in a method or a class body, the class it is looked up from */
       const char *cvnm = nt_str(nt, tgts[i], "name");
-      if (cc >= 0 && cvnm) cc = comp_cvar_owner(c, cc, cvnm);
+      int cc = cvnm ? holder_cvar_class_in_body(c, tgts[i]) : -1;
+      if (cc >= 0) cc = comp_cvar_owner(c, cc, cvnm);
       int cvx = cc >= 0 && cvnm ? comp_cvar_index(&c->classes[cc], cvnm) : -1;
       if (cvx < 0) continue;
       TyKind mg = ty_unify(c->classes[cc].cvar_types[cvx], elem);
@@ -6309,10 +6305,7 @@ static int widen_arg_hash(Compiler *c, int arg) {
     slot = named_array_slot(c, arg);
     wk = ak == NK_GlobalVariableReadNode ? NK_GlobalVariableWriteNode
        : ak == NK_ClassVariableReadNode ? NK_ClassVariableWriteNode : NK_ConstantWriteNode;
-    if (ak == NK_ClassVariableReadNode) {
-      cid = asc->class_id >= 0 ? asc->class_id : c->toplevel_class;
-      cid = comp_cvar_owner(c, cid, an);
-    }
+    if (ak == NK_ClassVariableReadNode) cid = holder_cvar_owner(c, arg, an, holder_cbody(c, arg));
   }
   else return 0;
   if (!slot || !ty_is_hash(*slot) || *slot == TY_POLY_POLY_HASH) return 0;
@@ -6321,9 +6314,12 @@ static int widen_arg_hash(Compiler *c, int arg) {
     NT_FOREACH_KIND(nt, wk, w) {
       if (!sp_streq(nt_str(nt, w, "name"), an)) continue;
       if (cid >= 0) {
-        Scope *ws = comp_scope_of(c, w);
-        int wc = ws && ws->class_id >= 0 ? ws->class_id : c->toplevel_class;
-        if (ak == NK_ClassVariableReadNode) wc = comp_cvar_owner(c, wc, an);
+        int wc;
+        if (ak == NK_ClassVariableReadNode) wc = holder_cvar_owner(c, w, an, holder_cbody(c, w));
+        else {
+          Scope *ws = comp_scope_of(c, w);
+          wc = ws && ws->class_id >= 0 ? ws->class_id : c->toplevel_class;
+        }
         if (wc != cid) continue;
       }
       int v = nt_ref(nt, w, "value");
@@ -6661,14 +6657,16 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
               : k == NK_ConstantReadNode ? NK_ConstantWriteNode : NK_NONE;
   if (wk == NK_NONE) return nout;
   int cid = -1;
-  if (k == NK_InstanceVariableReadNode || k == NK_ClassVariableReadNode)
-    cid = sc->class_id >= 0 ? sc->class_id : c->toplevel_class;
-  if (k == NK_ClassVariableReadNode) cid = comp_cvar_owner(c, cid, nm);
+  if (k == NK_InstanceVariableReadNode) cid = sc->class_id >= 0 ? sc->class_id : c->toplevel_class;
+  if (k == NK_ClassVariableReadNode) cid = holder_cvar_owner(c, n, nm, holder_cbody(c, n));
   for (int w = clw_first_named(c, wk, nm); w >= 0; w = clw_next[w]) {
     if (cid >= 0) {
-      Scope *ws = comp_scope_of(c, w);
-      int wc = ws && ws->class_id >= 0 ? ws->class_id : c->toplevel_class;
-      if (k == NK_ClassVariableReadNode) wc = comp_cvar_owner(c, wc, nm);
+      int wc;
+      if (k == NK_ClassVariableReadNode) wc = holder_cvar_owner(c, w, nm, holder_cbody(c, w));
+      else {
+        Scope *ws = comp_scope_of(c, w);
+        wc = ws && ws->class_id >= 0 ? ws->class_id : c->toplevel_class;
+      }
       if (wc != cid) continue;
     }
     nout = container_literals(c, nt_ref(nt, w, "value"), out, nout, cap, depth + 1);
@@ -6938,21 +6936,16 @@ static int named_writes_fresh(Compiler *c, int v) {
     wk[2] = NK_ClassVariableAndWriteNode; wk[3] = NK_ClassVariableOperatorWriteNode;
   }
   else wk[0] = NK_ConstantWriteNode;
-  Scope *vs = comp_scope_of(c, v);
-  int vcls = vs && vs->class_id >= 0 ? vs->class_id : c->toplevel_class;
-  if (k == NK_ClassVariableReadNode) vcls = comp_cvar_owner(c, vcls, nt_str(nt, v, "name"));
+  int vcls = -1;
+  if (k == NK_ClassVariableReadNode) vcls = holder_cvar_owner(c, v, nt_str(nt, v, "name"), holder_cbody(c, v));
   int saw = 0;
   for (int t = 0; t < 4 && wk[t] != NK_NONE; t++)
     NT_FOREACH_KIND(nt, wk[t], w) {
       if (!sp_streq(nt_str(nt, w, "name"), nt_str(nt, v, "name"))) continue;
       /* a class variable of another class is another slot, unless that class
          inherits it */
-      if (k == NK_ClassVariableReadNode) {
-        Scope *ws = comp_scope_of(c, w);
-        int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
-        if (wc < 0) wc = c->toplevel_class;
-        if (comp_cvar_owner(c, wc, nt_str(nt, v, "name")) != vcls) continue;
-      }
+      if (k == NK_ClassVariableReadNode &&
+          holder_cvar_owner(c, w, nt_str(nt, v, "name"), holder_cbody(c, w)) != vcls) continue;
       if (t >= 2) return 0;
       int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
       if (wv < 0 || (nt_kind(nt, wv) != NK_NilNode && !is_fresh_array(c, wv))) return 0;
@@ -12809,6 +12802,15 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_DefNode) return;
+  /* a bare class_variable_get / _set / _defined? is a call on self too */
+  if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 && is_cvar_reflection_name(nt_str(nt, root, "name"))) {
+    int cr = nt_new_node(nt, "ConstantReadNode");
+    if (cr < 0) return;
+    nt_node_set_str(nt, cr, "name", cname);
+    comp_grow_node_arrays(c);
+    c->nscope[cr] = c->nscope[root];
+    nt_node_set_ref(nt, root, "receiver", cr);
+  }
   SpNode *nd = &nt->nodes[root];
   for (int i = 0; i < nd->nr; i++) {
     int ch = nd->r[i].ref;
@@ -12945,7 +12947,8 @@ static int exec_param_reads_arg(Compiler *c, int body, const char *pn, int arg) 
      C.class_exec(a) { |x| b }  ->  (->(x) { b }).call(a)
 
    reusing the block's own parameters/body nodes, with SelfNode occurrences in
-   the body repointed at the receiver constant. #2697 */
+   the body, and the receiver of a bare class_variable_get / _set /
+   _defined?, repointed at the receiver constant. #2697 */
 int desugar_class_eval_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

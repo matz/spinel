@@ -58,8 +58,18 @@ int holder_static_node(NodeKind k);
 int holder_scope_class(const Compiler *c, int node, int body);
 /* The class body the analysis put `node` in (node_cbody), or -1. */
 int holder_cbody(const Compiler *c, int node);
+/* The class a class variable `node` in the class body `body` looks its
+   name up from, CRuby's cref: holder_scope_class's, except in a class
+   builder's block and the methods defined there, whose cref is the class
+   around the builder (elab_cvar_cref_at). -1 when there is no class (the
+   top level before the Toplevel class is made). */
+int holder_cvar_class(const Compiler *c, int node, int body);
+/* ...for a node in a method or in the class body the analysis put it in
+   (node_cbody); -1 for one in main's top-level code outside both, whose
+   class variables the Toplevel holds, which a caller registers apart */
+int holder_cvar_class_in_body(const Compiler *c, int node);
 /* The class that holds class variable `nm` for `node` in the class body
-   `body`: holder_scope_class's, or the ancestor that declares it
+   `body`: holder_cvar_class's, or the ancestor that declares it
    (comp_cvar_owner). -1 when there is no class. */
 int holder_cvar_owner(const Compiler *c, int node, const char *nm, int body);
 

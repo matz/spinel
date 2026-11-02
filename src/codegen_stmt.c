@@ -16676,6 +16676,15 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   return ix < 0 || ivt == TY_POLY || (oint_kind(ivt) && ivar_has_nilbit(c, wcls, ix));
 }
 static int masgn_index_writer(Compiler *c, TyKind rt, int *cdef, TyKind *kt);
+/* The class holding class variable `nm` that multiple assignment `id`
+   stores into, in the method or the class body being emitted
+   (holder_cvar_owner); -1 at main's top level, where infer_cvar_types
+   registers no target */
+static int masgn_cvar_class(Compiler *c, int id, const char *nm) {
+  Scope *sc = comp_scope_of(c, id);
+  if (!(sc && sc->class_id >= 0) && g_class_body_id < 0) return -1;
+  return holder_cvar_owner(c, id, nm, g_class_body_id);
+}
 /* Can the slot a global, class variable, index or call target stores into
    take an element with its nil: a boxed slot, one that holds its nil, an Array
    store that notes one, a writer as masgn_writer_takes_nil says? A plain
@@ -16691,9 +16700,7 @@ static int masgn_target_takes_nil(Compiler *c, int id, int tgt) {
     return !gv || gv->type == TY_POLY || gvar_is_oint(c, gv);
   }
   if (tk == NK_ClassVariableTargetNode && nm) {
-    Scope *sc = comp_scope_of(c, id);
-    int cid = (sc && sc->class_id >= 0) ? sc->class_id : g_class_body_id;
-    if (cid >= 0) cid = comp_cvar_owner(c, cid, nm);
+    int cid = masgn_cvar_class(c, id, nm);
     int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
     return cx < 0 || c->classes[cid].cvar_types[cx] == TY_POLY || cvar_is_oint(c, cid, cx);
   }
@@ -16831,9 +16838,7 @@ static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
     return ix >= 0 ? c->classes[cid].ivar_types[ix] : TY_UNKNOWN;
   }
   if (k == NK_ClassVariableTargetNode) {
-    Scope *sc = comp_scope_of(c, id);
-    int cid = (sc && sc->class_id >= 0) ? sc->class_id : g_class_body_id;
-    if (cid >= 0) cid = comp_cvar_owner(c, cid, nm);
+    int cid = masgn_cvar_class(c, id, nm);
     int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
     return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
   }
@@ -17034,9 +17039,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     return 1;
   }
   if (ty_k == NK_ClassVariableTargetNode && nm) {
-    Scope *sc = comp_scope_of(c, id);
-    int cid = (sc && sc->class_id >= 0) ? sc->class_id : g_class_body_id;
-    if (cid >= 0) cid = comp_cvar_owner(c, cid, nm);
+    int cid = masgn_cvar_class(c, id, nm);
     int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
     if (cx < 0) { unsupported(c, id, "multiple assignment class variable target"); return 1; }
     emit_indent(b, indent);
@@ -19120,10 +19123,8 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
     else if (lk == NK_ClassVariableTargetNode) {
       const char *cnm = nt_str(nt, lefts[i], "name");
       if (!cnm || cnm[0] != '@' || cnm[1] != '@') { unsupported(c, id, "multiple assignment class variable target"); continue; }
-      Scope *cv_sc = comp_scope_of(c, id);
-      int cv_cid = (cv_sc && cv_sc->class_id >= 0) ? cv_sc->class_id : g_class_body_id;
+      int cv_cid = masgn_cvar_class(c, id, cnm);
       if (cv_cid < 0) { unsupported(c, id, "multiple assignment class variable target no class"); continue; }
-      cv_cid = comp_cvar_owner(c, cv_cid, cnm);
       int cv_idx = comp_cvar_index(&c->classes[cv_cid], cnm);
       if (cv_idx < 0) { unsupported(c, id, "multiple assignment class variable target unregistered"); continue; }
       emit_indent(b, indent);

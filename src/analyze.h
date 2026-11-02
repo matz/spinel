@@ -301,6 +301,11 @@ int elab_self_at(Compiler *c, int node);
    keeps the scope it is written in. -1 for main's top level; -2 in a
    singleton class body or with no point */
 int elab_cref_at(Compiler *c, int node);
+/* ...the class a class variable node reads or writes looks its name up
+   from (CRuby's cvar base): the cref past singleton class bodies, for a
+   node anywhere, a method body's being its def's. -1 for main's top
+   level, -2 with no point (a node a pass made) */
+int elab_cvar_cref_at(Compiler *c, int node);
 /* the versions of method `name` the record holds, in every class's and
    module's histories: defs, define_methods, attrs, aliases, module_function
    copies, undefs and removes (not visibility changes) */

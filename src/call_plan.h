@@ -136,6 +136,11 @@ int ver_entries_demand(Compiler *c);
    last version (the method a Method object of it captured before) */
 enum { VER_MAX_ARMS = 64 };
 int ver_entry_targets(const Compiler *c, int e, int *out, int *tests);
+/* Does the builtin answer `name` on class (or module) cls itself, taking
+   ar arguments and a block when blk, where no method of the program's of
+   the name runs yet: Module's own (`name`, `to_s`, `inspect`), as its
+   builtin-op rows (TY_CLASS) list them? */
+int cplan_class_builtin(int cls, const char *name, int ar, int blk);
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in

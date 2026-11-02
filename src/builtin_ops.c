@@ -1850,6 +1850,13 @@ static const BuiltinOp bop_rows[] = {
      bool. */
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_Class _cl$T = $r; sp_Class _cl$t = $e0; if (!sp_class_is_module_val(_cl$t)) sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); _cl$T.cls_id != _cl$t.cls_id && sp_class_le(_cl$T, _cl$t); })", BOP_K(TY_CLASS) },
   { TY_CLASS, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_NONE },
+  /* ...name, to_s and inspect, which every class and module answers on
+     itself: the facts a version entry's else arm reads (the builtin runs
+     where no version of the program's runs yet); typed and emitted
+     elsewhere. */
+  { TY_CLASS, "name",            0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
+  { TY_CLASS, "to_s",            0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
+  { TY_CLASS, "inspect",         0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
 
   /* Integer and Float: the result kinds read off the name, arity and block
      form. pow, clamp, coerce, Float#fdiv(Complex), Float <=> Rational,

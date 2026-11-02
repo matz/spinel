@@ -13525,6 +13525,12 @@ int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk) {
   }
   return call;
 }
+/* ...and `self.callee(<args>)` */
+int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
+  int call = disp_forward_call(nt, callee, ar, blk);
+  nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
+  return call;
+}
 /* ...and `super(<args>)`, the same arguments passed on to the method the
    ancestors answer; `method_missing(:name, <args>)` */
 int disp_super_call(NodeTable *nt, int ar, int blk) {

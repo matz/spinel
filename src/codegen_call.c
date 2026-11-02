@@ -15728,7 +15728,9 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "sp_StrPolyHash_new()");
     return 1;
   }
-  /* <StructClass>.members at the class level: the member symbol list */
+  /* <StructClass>.members at the class level: the member symbol list,
+     where the call reaches no program `members` (call_target: none, or
+     one defined only after the call) */
   if (recv >= 0 && sp_streq(name, "members") && argc == 0) {
     NodeKind mrk = nt_kind(nt, recv);
     int mci = -1;
@@ -15737,8 +15739,7 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
     else if (mrk == NK_LocalVariableReadNode ||
              (mrk == NK_CallNode && class_def_is_record_call(nt, recv)))
       mci = class_var_static_ci(c, recv);
-    if (mci >= 0 && c->classes[mci].is_struct &&
-        comp_cmethod_in_chain(c, mci, "members", NULL) < 0) {
+    if (mci >= 0 && c->classes[mci].is_struct && call_target(c, id, mci, name, CT_CMETHOD, NULL) < 0) {
       ClassInfo *mcl = &c->classes[mci];
       int rm = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", rm, rm);
@@ -15748,7 +15749,8 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
-  /* StructClass.keyword_init? -> whether the struct was defined keyword_init: true
+  /* StructClass.keyword_init?, where the call reaches no program one
+     (call_target) -> whether the struct was defined keyword_init: true
      (a Data class is not keyword-init in CRuby's sense: keyword_init? is nil, but
      spinel has no separate nil-class answer here, so report false). */
   if (recv >= 0 && sp_streq(name, "keyword_init?") && argc == 0) {
@@ -15758,8 +15760,7 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
       kci = const_node_class_index(c, recv);
     else if (krk == NK_LocalVariableReadNode)
       kci = class_var_static_ci(c, recv);
-    if (kci >= 0 && c->classes[kci].is_struct &&
-        comp_cmethod_in_chain(c, kci, "keyword_init?", NULL) < 0) {
+    if (kci >= 0 && c->classes[kci].is_struct && call_target(c, id, kci, name, CT_CMETHOD, NULL) < 0) {
       int kw = c->classes[kci].kw_init;
       buf_puts(b, kw == 1 ? "sp_box_bool(TRUE)" : kw == -1 ? "sp_box_bool(FALSE)" : "sp_box_nil()");
       return 1;

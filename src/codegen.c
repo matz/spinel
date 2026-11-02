@@ -20549,15 +20549,15 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
 /* Opens `switch(id){` over the class a sp_Class value stands for. A value that
    carries its name (an exception's class, Range#class) keeps cls_id 0, which
    must not read as the first class; it selects a Class.new class only when
-   the name is that class's identity key, and otherwise answers the name. */
-static void emit_anon_class_select(Compiler *c, Buf *b) {
+   the name is that class's identity key, and otherwise runs `miss`. */
+static void emit_anon_class_select(Compiler *c, Buf *b, const char *miss) {
   buf_puts(b, "int id=c.cls_id;if(c.name){id=-1000;");
   for (int i = 0; i < c->nclasses; i++)
     if (comp_class_anonymous(c, i)) {
       const char *kn = class_ruby_name(c, i) ? class_ruby_name(c, i) : c->classes[i].name;
       buf_printf(b, "if(!strcmp(c.name,\"%s\"))id=%d;", kn, i);
     }
-  buf_puts(b, "if(id==-1000)return c.name;}switch(id){");
+  buf_printf(b, "if(id==-1000)%s}switch(id){", miss);
 }
 
 /* The symbol hash: FNV-1a over the name's bytes, then a short avalanche so
@@ -20894,7 +20894,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
          (the text starts one byte into its allocation, after the marker) and
          answers the published one. */
       buf_puts(b, "static const char *sp_class_display(sp_Class c){");
-      emit_anon_class_select(c, b);
+      emit_anon_class_select(c, b, "return c.name;");
       for (int i = 0; i < c->nclasses; i++)
         if (comp_class_anonymous(c, i)) {
           char mk[192];
@@ -20941,7 +20941,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
        (`Struct.new(:a).name`) has always answered nil; this is the same class
        reached through a value (`obj.class.name`) (#4031). */
     buf_puts(b, "static const char *sp_class_name_or_nil(sp_Class c){if(sp_class_sclass_p(c))return NULL;");
-    if (c->has_anonymous_classes) emit_anon_class_select(c, b);
+    if (c->has_anonymous_classes) emit_anon_class_select(c, b, "return c.name;");
     else buf_puts(b, "switch(c.cls_id){");
     for (int i = 0; i < c->nclasses; i++)
       if (comp_class_anonymous(c, i)) {
@@ -20952,7 +20952,9 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
         buf_printf(b, "case %d:return NULL;", i);
     buf_puts(b, "default:break;} return sp_class_to_s(c); }\n\n");
     if (c->has_anonymous_classes) {
-      buf_puts(b, "static void sp_class_assign_name(sp_Class c, const char *name){switch(c.cls_id){");
+      /* a value carrying a name that is no Class.new class's names nothing */
+      buf_puts(b, "static void sp_class_assign_name(sp_Class c, const char *name){");
+      emit_anon_class_select(c, b, "return;");
       for (int i = 0; i < c->nclasses; i++)
         if (comp_class_anonymous(c, i)) {
           /* the first name stays; with Threads two workers may assign at once */

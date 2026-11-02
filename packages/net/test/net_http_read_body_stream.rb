@@ -10,10 +10,10 @@ t = Thread.new do
   while (line = c.gets)
     break if line.strip.empty?
   end
-  c.write("HTTP/1.1 200 OK\r\nContent-Length: 32768\r\nConnection: close\r\n\r\n")
-  c.write("a" * 16384)
+  c.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+  c.write("a")
   received.pop
-  c.write("b" * 16384)
+  c.write("b")
   c.close
 end
 

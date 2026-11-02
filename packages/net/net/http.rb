@@ -760,7 +760,9 @@ module Net
     end
 
     def wire_read(n)
-      @tls.nil? ? @socket.read(n) : @tls.read(n)
+      @tls.nil? ? @socket.readpartial(n) : @tls.readpartial(n)
+    rescue EOFError
+      nil
     end
 
     def wire_read_all

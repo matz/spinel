@@ -2732,7 +2732,12 @@ static int lr_block_value(Compiler *c, int x, int def, const char **names, int *
         if (is_proc_invoke(nt_str(nt, p, "name"))) return LRB_RUNS;
         x = p;
         continue;
-      case NK_BlockArgumentNode: return p < n && par[p] >= 0 ? lr_hand_on(c, par[p], def) : LRB_UNSURE;
+      case NK_BlockArgumentNode:
+        if (p >= n || par[p] < 0) return LRB_UNSURE;
+        /* a Proc made of the block (`proc(&b)`, `Proc.new(&b)`) is a closure
+           like a literal block's: its own value decides, as lr_body_capture
+           reads it */
+        return lr_proc_made(c, par[p]) ? lr_block_value(c, par[p], def, names, nn) : lr_hand_on(c, par[p], def);
       case NK_LocalVariableWriteNode: {
         const char *wn = nt_str(nt, p, "name");
         for (int i = 0; wn && i < *nn; i++) if (sp_streq(names[i], wn)) return LRB_NOW;
@@ -2770,7 +2775,12 @@ static int lr_block_value(Compiler *c, int x, int def, const char **names, int *
    the block, and a yield under a condition runs now or not at all, as an
    iterator's zero runs. Read through the def's own nodes, once per def
    (bread); a def asked while its own reading is in progress (a recursive
-   hand-on) answers LRB_UNSURE. */
+   hand-on) answers LRB_UNSURE. A def read inside such a cycle (two helpers
+   that hand on to each other) caches the LRB_UNSURE it got, and a later ask
+   for that def alone gets it where a fresh reading might be definite. That
+   is safe, for LRB_UNSURE keeps the call's reading by name, and the answer
+   is the same on every compile of a program, though it depends on which
+   def is asked first. */
 static int lr_def_block(Compiler *c, int def) {
   NodeTable *nt = (NodeTable *)c->nt;
   LoadRecord *r = c->lrec;
@@ -2854,6 +2864,16 @@ static int lr_target_runs_block(Compiler *c, int call) {
   LoadPoint p = elab_point_of(c, call);
   for (int hop = 0; hop < 8; hop++) {
     const LrDef *d = NULL;
+    /* A call in a method body has no place in the load (no region): the
+       version live there is the one at the load's end, which the body may
+       not see when it runs. Read the callee only when main defines the name
+       once and Object has no method of that name of its own, as lr_hand_on
+       reads a receiverless callee: where Object answers it, the call
+       reaches that until the def, and it runs the block at once. */
+    if (p.region < 0) {
+      ElabVersion hv[2];
+      if (object_instance_method_name(nm) || elab_history_versions(c, LR_MAIN, 0, nm, hv, 2) != 1) return 0;
+    }
     if (elab_method_at(c, LR_MAIN, nm, 0, p, &d) != ELAB_YES || !d) return 0;
     int vis = hop ? SP_VIS_PUBLIC : elab_method_vis_at(c, LR_MAIN, nm, 0, p);   /* (the called name's, not an alias's original's) */
     if (vis == SP_VIS_PRIVATE || vis == SP_VIS_PROTECTED) return 0;

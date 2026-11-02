@@ -8,8 +8,10 @@
 # as of a later run: one that stores the block, hands it on (`&b`, `&`,
 # `...`) to a method that stores it, or yields or calls it from a proc, a
 # lambda or another method's block. An alias answers as the method it
-# names. A lambda called at once runs the block at once, and a body that
-# runs the block at once and may also keep it answers as of the first run.
+# names. A lambda called at once runs the block at once, and so does a Proc
+# made of the block parameter; a body that runs the block at once and may
+# also keep it answers as of the first run. A literal's call in the body
+# reaches the version of its method that was live when the body ran.
 
 class S1; end
 class S2; end
@@ -37,6 +39,10 @@ class S23; end
 class S24; end
 class S25; end
 class S26; end
+class S27; end
+class S28; end
+class S29; end
+class S30; end
 
 # runs the block at once
 public def tap = (yield self; self)
@@ -213,3 +219,39 @@ public def tap(&b)
 end
 26.tap { p S26.respond_to?(:z) }
 def S26.z = 1
+
+# a Proc made of the block parameter, called at once
+public def tap(&b)
+  Proc.new(&b).call(self)
+  self
+end
+27.tap { p S27.respond_to?(:z) }
+def S27.z = 1
+
+public def tap(&b)
+  proc(&b).call(self)
+  self
+end
+28.tap { p S28.respond_to?(:z) }
+def S28.z = 1
+
+# a literal's call in the body reaches the version that was live when the
+# body ran, not the one a later def replaces it with
+public def yield_self(&b) = (yield self; self)
+public def tap(&b)
+  2.yield_self(&b)
+  self
+end
+29.tap { p S29.respond_to?(:z) }
+public def yield_self(&b) = ($b29 = b; self)
+def S29.z = 1
+
+# ...and where Object answers the callee's name until main's one def, the
+# call reaches Object's, which runs the block at once
+public def tap(&b)
+  30.instance_eval(&b)
+  self
+end
+30.tap { p S30.respond_to?(:z) }
+public def instance_eval(&b) = ($b30 = b; self)
+def S30.z = 1

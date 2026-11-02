@@ -44,3 +44,18 @@ r[0] += 5
 s = rows[5] || []
 s << 1
 p r, rows, s
+
+# a sequence ending in an empty literal is a value of its own and keeps
+# the general Array; an arm of statements ending in one is the literal
+q1 = c ? (puts "seq"; []) : [1.5]
+q1 << 2.5
+q2 = [1] && (puts "and"; Array.new)
+q2 << 4
+q3 = if c
+  puts "then"
+  []
+else
+  [1.5]
+end
+q3 << 0.5
+p q1, q2, q3

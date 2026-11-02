@@ -1511,6 +1511,45 @@ int an_literal_int_rows(Compiler *c, int arr) {
   return en > 0;
 }
 
+/* A row read back out of table `@<ivname>` itself (`@t[j]`, `@t.at(j)`, an
+   Integer index, Array's own: a reopen's answers what it likes), or a local
+   whose every write is one: storing it moves a row the table already
+   holds, and says nothing of what the rows are.
+   Counted as a store, it made the answer depend on the order of inference:
+   a read typed boxed before the rows were known is itself one of the
+   stores, so it stays boxed (a signature on a heap's push, typing the
+   method early, kept the heap boxed). */
+static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || depth > 1) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, n, "name");
+    int rcv = nt_ref(nt, n, "receiver");
+    int a = nt_ref(nt, n, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (!nm || !is_element_at_alias(nm) || rcv < 0 || an != 1 || nt_ref(nt, n, "block") >= 0 ||
+        nt_kind(nt, rcv) != NK_InstanceVariableReadNode || an_reopen_owner(c, n, CORE_ARRAY) >= 0) return 0;
+    const char *rn = nt_str(nt, rcv, "name");
+    return rn && sp_streq(rn, ivname) && comp_ntype(c, av[0]) == TY_INT;
+  }
+  if (k != NK_LocalVariableReadNode) return 0;
+  int s = c->nscope[n];
+  const char *nm = nt_str(nt, n, "name");
+  if (!nm || s < 0 || s >= c->nscopes) return 0;
+  LocalVar *lv = scope_local(&c->scopes[s], nm);
+  if (!lv || lv->is_param || lv->is_block_param) return 0;
+  int seen = 0;
+  for (int w = comp_lvw_first_sc(c, s, nm); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (c->nscope[w] != s || !wn || !sp_streq(wn, nm)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode ||
+        !an_own_row_read(c, nt_ref(nt, w, "value"), ivname, depth + 1)) return 0;
+    seen = 1;
+  }
+  return seen;
+}
+
 /* Whether every element stored into poly-array ivar `@<ivname>` is an int
    array (a nested array of int arrays, e.g. @chr_banks / @nmt_mem). Element
    reads then yield an int array rather than a boxed poly. */
@@ -1542,6 +1581,8 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
       int an = 0;
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (is_store && an < 2) continue;
+      /* `@t[a..b] = v` splices v's elements in: what it stores is no row */
+      if (is_store && an == 2 && (nt_kind(nt, av[0]) == NK_RangeNode || comp_ntype(c, av[0]) == TY_RANGE)) return 0;
       for (int a = is_store || is_insert ? 1 : 0; a < an; a++) {
         NodeKind ak = nt_kind(nt, av[a]);
         if (ak == NK_SplatNode) return 0;
@@ -1551,6 +1592,7 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
         }
         TyKind vt = comp_ntype(c, av[a]);
         if (vt == TY_INT_ARRAY) { saw = 1; continue; }
+        if (an_own_row_read(c, av[a], ivname, 0)) continue;
         if (an_row_open_empty(c, av[a])) return 0;
         if (vt == TY_NIL || vt == TY_UNKNOWN) continue;
         return 0;

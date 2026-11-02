@@ -452,6 +452,24 @@ static int builtin_recv_lacks_cmp(Compiler *c, TyKind rt, const char *name) {
   return 1;
 }
 
+/* `<`, `<=`, `>` or `>=` on such a receiver (builtin_recv_lacks_cmp):
+   CRuby's NoMethodError once the argument has run. An `e >= 0` in a method
+   only a computed `send(name, e)` may reach was refused, though CRuby runs
+   the program and raises only if the call is made. Asked ahead of the
+   operand arms, in emit_call_operator_arms and emit_call_compare_arms: a
+   boxed argument (an Integer under --int-overflow=promote) took the
+   run-time compare, which raised ArgumentError. Answers whether it emitted
+   the call. */
+static int emit_builtin_recv_cmp_raise(Compiler *c, const char *name, int recv, int argc, const int *argv, TyKind rt, Buf *b) {
+  if (recv < 0 || argc != 1 || !(sp_streq(name, "<") || sp_streq(name, "<=") || sp_streq(name, ">") || sp_streq(name, ">=")) ||
+      !builtin_recv_lacks_cmp(c, rt, name)) return 0;
+  int tv = hoist_boxed_rooted(c, recv);
+  buf_puts(b, "({ (void)(");
+  emit_expr(c, argv[0], b);
+  buf_printf(b, "); (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
+  return 1;
+}
+
 /* `<`, `<=`, `>`, `>=` on a receiver with no static type (an unresolved
    call, a slot the fixpoint could not settle): it still has a boxed form,
    so compare at run time, as the arithmetic operators do (#3781). */
@@ -466,6 +484,7 @@ static int emit_untyped_recv_cmp(Compiler *c, const char *name, int recv, int ar
 
 int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (emit_compare_lead_arms(c, id, name, recv, argc, argv, rt, b)) return 1;
+  if (emit_builtin_recv_cmp_raise(c, name, recv, argc, argv, rt, b)) return 1;
   /* a literal `<<` whose result overflowed int64 (`1 << 64`): the node is typed
      bigint, but the int receiver would otherwise emit a UB C `1LL << 64LL`.
      Promote to a bigint shift. */
@@ -1209,17 +1228,6 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        it (a `<=>` alone gives none): CRuby's NoMethodError, raised once the
        argument has run */
     if (ty_is_object(rt) && call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0) {
-      int tv = hoist_boxed_rooted(c, recv);
-      buf_puts(b, "({ (void)(");
-      emit_expr(c, argv[0], b);
-      buf_printf(b, "); (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
-      return 1;
-    }
-    /* the same for a builtin receiver whose class has no such method (an
-       Exception, a Regexp, true): an `e >= 0` in a method only a computed
-       `send(name, e)` may reach was refused, though CRuby runs the program
-       and raises only if the call is made */
-    if (builtin_recv_lacks_cmp(c, rt, name)) {
       int tv = hoist_boxed_rooted(c, recv);
       buf_puts(b, "({ (void)(");
       emit_expr(c, argv[0], b);
@@ -2020,6 +2028,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       c->args_in_call = recv;
       return 1;
     }
+    if (emit_builtin_recv_cmp_raise(c, name, recv, argc, argv, rt, b)) return 1;
     const char *cfn = NULL;
     if (sp_streq(name, "<")) cfn = "sp_poly_lt";
     else if (sp_streq(name, ">")) cfn = "sp_poly_gt";

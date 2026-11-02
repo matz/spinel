@@ -7573,10 +7573,9 @@ static int *inline_struct_owner(Compiler *c) {
     if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
     int bbody = class_def_body(nt, id);
     if (bbody < 0) continue;
-    char an[48];
     const char *cname = nt_str(nt, id, "name");
-    if (wk == NK_LocalVariableWriteNode) { snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id)); cname = an; }
-    int ci = cname ? comp_class_index(c, cname) : -1;
+    int ci = wk == NK_LocalVariableWriteNode ? anon_struct_ci_for_value(c, nt_ref(nt, id, "value"))
+           : cname ? comp_class_index(c, cname) : -1;
     if (ci < 0) continue;
     own[bbody] = ci;
     int bn = 0;

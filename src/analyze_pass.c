@@ -10773,6 +10773,54 @@ int rejoin_changed_pattern_locals(Compiler *c, const NodeTypes *before) {
   }
   return changed;
 }
+/* A `when Klass` or `in Klass` arm whose class has a class method `===` of
+   the program's own (class_own_cmethod_eqq) calls it with the case subject,
+   as emit_class_cmethod_eqq does, so the subject is that call's argument:
+   it is bound as a written call's argument is (infer_param_types_ex, the
+   BOXED parameter). The parameter is boxed, so only the element writes
+   through it reach the subject here: an array of the caller's that a store
+   through the parameter cannot fit is widened where it is built
+   (widen_arg_array), or followed back through a boxed subject
+   (widen_boxed_array_sources). Without this `when M` with
+   `def self.===(x) = x << "s"` left the subject an Array[Integer], and the
+   store raised TypeError where CRuby appends. */
+static int bind_case_eqq_subjects(Compiler *c, int *changed, int *any) {
+  const NodeTable *nt = c->nt;
+  int ch = 0;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_CaseNode && k != NK_CaseMatchNode) continue;
+    int pred = nt_ref(nt, id, "predicate");
+    if (pred < 0) continue;
+    TyKind at = infer_type(c, pred);
+    if (!(ty_is_array(at) && at != TY_POLY_ARRAY) && at != TY_POLY) continue;
+    int nw = 0; const int *arms = nt_arr(nt, id, "conditions", &nw);
+    for (int w = 0; w < nw; w++) {
+      int one[1]; int nc = 0; const int *conds;
+      if (nt_kind(nt, arms[w]) == NK_WhenNode) conds = nt_arr(nt, arms[w], "conditions", &nc);
+      else if (nt_kind(nt, arms[w]) == NK_InNode) { one[0] = nt_ref(nt, arms[w], "pattern"); conds = one; nc = one[0] >= 0; }
+      else continue;
+      for (int j = 0; j < nc; j++) {
+        NodeKind ck = nt_kind(nt, conds[j]);
+        if (ck != NK_ConstantReadNode && ck != NK_ConstantPathNode) continue;
+        int ci = const_node_class_index(c, conds[j]);
+        int mi = ci >= 0 ? class_own_cmethod_eqq(c, ci) : -1;
+        if (mi < 0) continue;
+        LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
+        if (!p || p->type != TY_POLY) continue;
+        if (at != TY_POLY) {
+          if (p->boxed_push_elem != TY_UNKNOWN && p->boxed_push_elem != ty_array_elem(at)) ch |= widen_arg_array(c, pred);
+        }
+        else if (p->boxed_known_elem != TY_UNKNOWN) {
+          *changed |= ch; ch = 0;
+          wbas_share_step(changed, any);
+          ch |= widen_boxed_array_sources(c, pred, p->boxed_known_elem, 0);
+        }
+      }
+    }
+  }
+  return ch;
+}
 static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before);
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }
 int infer_param_types_settle(Compiler *c) { return infer_param_types_ex(c, 1, NULL); }
@@ -10794,6 +10842,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     LocalVar *ep = scope_local(&c->scopes[emi], c->scopes[emi].pnames[0]);
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
   }
+  changed |= bind_case_eqq_subjects(c, &changed, &any);
   const int *ids = NULL;
   int nids = nt->count;
   for (;;) {

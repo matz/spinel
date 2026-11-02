@@ -11550,7 +11550,11 @@ int emit_reopen_recv_args(Compiler *c, int id, int mi, int recv, int boxed, cons
 }
 
 static void emit_reopen_primitive_call(Compiler *c, int id, int ci, int mi, int recv, const char *name, Buf *b) {
-  if (ci == comp_core_class(c, CORE_STRING) && emit_reopen_block_call(c, id, recv, mi, NULL, b)) return;
+  /* a yielding one has no function of its own: its proc form, with no
+     block (a Float's, Symbol's, Range's or Time's named sp_Float_m, which
+     was never emitted) */
+  if ((ci == comp_core_class(c, CORE_STRING) || c->scopes[mi].yields) &&
+      emit_reopen_block_call(c, id, recv, mi, NULL, b)) return;
   if (g_plan_check) ucall_observe(c, id, mi, ci, 0);
   size_t at = b->len;
   int open = 0;
@@ -31966,12 +31970,13 @@ int reopen_yields_known_container(Compiler *c, Scope *m) {
   if (!m->yields && !m->blk_param) return 0;
   return hands_block_container(c, m, m->body, 1);
 }
-/* Random, Float, Symbol, Fiber and Thread proc forms take their receiver
-   as the raw value. */
+/* Random, Float, Symbol, Fiber, Thread, Range and Time proc forms take
+   their receiver as the raw value. */
 static int reopen_pf_raw_self(Compiler *c, int ci) {
   return ci == comp_core_class(c, CORE_RANDOM) || ci == comp_core_class(c, CORE_FLOAT) ||
          ci == comp_core_class(c, CORE_SYMBOL) || ci == comp_core_class(c, CORE_FIBER) ||
-         ci == comp_core_class(c, CORE_THREAD);
+         ci == comp_core_class(c, CORE_THREAD) || ci == comp_core_class(c, CORE_RANGE) ||
+         ci == comp_core_class(c, CORE_TIME);
 }
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to

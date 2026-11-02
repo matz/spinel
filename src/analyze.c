@@ -2128,6 +2128,43 @@ static int a_scope_forwards_block_to_lowered(Compiler *c, int mi) {
 }
 
 static int super_reach(Compiler *c, Scope *s);
+int builtin_instance_method_known(const char *cls, const char *m);
+/* Is a block handed to a builtin receiver's reopened yielding method run as
+   a real proc? The reopen arms (emit_call_reopen_arms) reach a String's,
+   Float's, Symbol's, Random's, Fiber's, Thread's, Range's or Time's own
+   reopening, then a Hash's, NilClass's, Numeric's, Array's and Object's,
+   through the method's proc-form clone with the block as a proc
+   (emit_reopen_block_call), not spliced. Its writes to enclosing locals
+   need cells: without them `total` in `1.5.twice { |v| total += v }`
+   stayed 0, and on an Array or a Hash the block read a nil of its own. */
+static int a_reopen_yielder_takes_block(Compiler *c, int id, TyKind rt, const char *name) {
+  int own = core_of_type(rt), oci = own >= 0 ? comp_core_class(c, own) : -1;
+  int omi = oci >= 0 ? call_target(c, id, oci, name, 0, NULL) : -1;
+  if (omi >= 0 && (rt == TY_STRING || rt == TY_STRBUF || rt == TY_FLOAT || rt == TY_SYMBOL ||
+                   rt == TY_RANDOM || rt == TY_FIBER || rt == TY_THREAD || rt == TY_RANGE ||
+                   rt == TY_TIME))
+    return c->scopes[omi].yields;
+  /* (an Integer's, Enumerator's, IO's or Class's own reopening is called,
+     or spliced, without one) */
+  if (omi >= 0 && (rt == TY_INT || rt == TY_ENUMERATOR || rt == TY_IO || rt == TY_CLASS))
+    return 0;
+  int cores[2], n = 0;
+  if (ty_is_hash(rt)) cores[n++] = CORE_HASH;
+  else if (rt == TY_NIL) cores[n++] = CORE_NILCLASS;
+  else if (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) cores[n++] = CORE_NUMERIC;
+  else if (ty_is_array(rt)) cores[n++] = CORE_ARRAY;
+  /* (Object's only for a name the builtin itself has no method of: the
+     builtin arms take `[x].each { }` ahead of the fallback) */
+  const char *bcn = builtin_class_of_type(rt);
+  if (!bcn || !builtin_instance_method_known(bcn, name)) cores[n++] = CORE_OBJECT;
+  for (int k = 0; k < n; k++) {
+    int ci = comp_core_class(c, cores[k]);
+    int mi = ci >= 0 ? call_target(c, id, ci, name, 0, NULL) : -1;
+    if (mi >= 0) return c->scopes[mi].yields;
+  }
+  return 0;
+}
+
 int a_block_is_lifted(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   NodeKind ty_k = nt_kind(nt, id);
@@ -2244,6 +2281,9 @@ else {
       else if ((rt == TY_STRING || rt == TY_STRBUF) && comp_core_class(c, CORE_STRING) >= 0 &&
                call_target(c, id, comp_core_class(c, CORE_STRING), name, 0, NULL) >= 0 &&
                c->scopes[call_target(c, id, comp_core_class(c, CORE_STRING), name, 0, NULL)].yields)
+        return 1;
+      else if (rt != TY_UNKNOWN && rt != TY_POLY && !ty_is_object(rt) && builtin_class_of_type(rt) &&
+               a_reopen_yielder_takes_block(c, id, rt, name))
         return 1;
       /* A program Array#concat owns its block too. The reopening's proc
          form receives it, so captured writes need cells. */
@@ -34108,6 +34148,7 @@ static int pf_wanted(Compiler *c, const char *name) {
                       : (rt == TY_STRING || rt == TY_STRBUF) ? "String"
                       : rt == TY_RANDOM ? "Random"
                       : rt == TY_FIBER ? "Fiber" : rt == TY_THREAD ? "Thread"
+                      : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
                       : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
       int rci = rcn ? comp_class_index(c, rcn) : -1;
       if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;

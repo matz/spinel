@@ -1495,6 +1495,13 @@ static int lr_singleton_owner(Compiler *c, int f) {
   return lr_sg_const_owner(cls);
 }
 
+/* A constant of a reopened Object is a top-level one: CRuby's Object is
+   main's constant table, where a read at the top level looks, as for
+   `Object::X = v` (lr_path_const_owner) */
+static int lr_object_as_main(Compiler *c, int cls) {
+  return cls >= 0 && cls == comp_core_class(c, CORE_OBJECT) ? LR_MAIN : cls;
+}
+
 static int lr_const_scope_owner(Compiler *c, int e) {
   const LoadRecord *r = c->lrec;
   for (int f = e >= 0 ? r->st[e].frame : -1; f >= 0; f = r->st[f].frame) {
@@ -1502,7 +1509,7 @@ static int lr_const_scope_owner(Compiler *c, int e) {
     if (k == NK_SingletonClassNode) return lr_singleton_owner(c, f);
     if (k == NK_ClassNode || k == NK_ModuleNode) break;
   }
-  return lr_const_owner(lr_cref(c, e));
+  return lr_const_owner(lr_object_as_main(c, lr_cref(c, e)));
 }
 /* Is a written value nil: none, a nil, or the nil a chain of writes ends
    in (`$a = @b = nil`)? */
@@ -1537,7 +1544,7 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
         owner = f >= 0 && c->lrec->st[f].node == a ? lr_singleton_owner(c, f) : 0;
         break;
       }
-      if (ak == NK_ClassNode || ak == NK_ModuleNode) { owner = lr_const_owner(elab_header_class(c, a, NULL, NULL)); break; }
+      if (ak == NK_ClassNode || ak == NK_ModuleNode) { owner = lr_const_owner(lr_object_as_main(c, elab_header_class(c, a, NULL, NULL))); break; }
     }
     fc = owner < 0 ? -owner - 2 : owner - 2;
     fs = owner < 0 ? LR_FS_SCLASS : LR_FS_NONE;
@@ -1558,7 +1565,7 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
       if (!nm || !is_const_set_name(nm) || an < 2 || !(name = vis_arg_name(nt, av[0]))) return;
       int rv = nt_ref(nt, node, "receiver");
       owner = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ?
-        (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_path_const_owner(c, node, rv);
+        (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(lr_object_as_main(c, fc))) : lr_path_const_owner(c, node, rv);
       lr_write(c->lrec, ELAB_CONST, owner, name, node, lr_nil_value(nt, av[1]), may);
       return;
     }
@@ -1568,7 +1575,7 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
   if (target >= 0) {
     int par = nt_ref(nt, target, "parent");
     owner = par < 0 ? lr_const_owner(LR_MAIN) : nt_kind(nt, par) == NK_SelfNode ?
-      (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(fc)) : lr_path_const_owner(c, node, par);
+      (fs == LR_FS_SCLASS ? lr_sg_const_owner(fc) : lr_const_owner(lr_object_as_main(c, fc))) : lr_path_const_owner(c, node, par);
   }
   may |= k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
          k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode;

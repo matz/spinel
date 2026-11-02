@@ -9886,21 +9886,31 @@ static int pivs_elems(Compiler *c, int arr, char *set, int depth);
 static void pivs_note_builtin(Compiler *c) {
   if (c->pivs->active >= 0) c->pivs->memo[c->pivs->active].builtin = 1;
 }
-/* A constant naming a class or module, read as a value: the class query
-   records it beside its instance set (poly_recv_class_values) and walks on,
-   though the instance set's own answer stays unbounded for it. Only a name
-   one class of the program carries, or a builtin class's, is taken. */
+/* A constant naming a class or module, or a self that is one, read as a
+   value: the class query records it beside its instance set
+   (poly_recv_class_values) and walks on, though the instance set's own
+   answer stays unbounded for it. Only a name one class of the program
+   carries, or a builtin class's, is taken. */
 static int pivs_note_class_value(Compiler *c, int v) {
   PivsFacts *f = c->pivs;
-  if (f->hash_mode != 0 || f->active < 0 || nt_kind(c->nt, v) != NK_ConstantReadNode) return 0;
-  const char *cn = nt_str(c->nt, v, "name");
-  if (!cn) return 0;
-  int ci = -1, nmatch = 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (c->classes[k].name && sp_streq(c->classes[k].name, cn)) { ci = k; nmatch++; }
-  if (nmatch > 1) return 0;
-  if (ci >= 0 && comp_const(c, cn)) return 0;   /* a value constant of the name */
-  if (ci < 0 && builtin_class_id(cn) == 0) return 0;
+  if (f->hash_mode != 0 || f->active < 0) return 0;
+  int ci = -1;
+  if (nt_kind(c->nt, v) == NK_SelfNode) {
+    /* a class body's self, or a constant builder's block's (whose |k| the
+       body binds as `k = self`): that class */
+    ci = elab_self_value_at(c, v);
+    if (ci < 0) return 0;
+  }
+  else {
+    const char *cn = nt_kind(c->nt, v) == NK_ConstantReadNode ? nt_str(c->nt, v, "name") : NULL;
+    if (!cn) return 0;
+    int nmatch = 0;
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].name && sp_streq(c->classes[k].name, cn)) { ci = k; nmatch++; }
+    if (nmatch > 1) return 0;
+    if (ci >= 0 && comp_const(c, cn)) return 0;   /* a value constant of the name */
+    if (ci < 0 && builtin_class_id(cn) == 0) return 0;
+  }
   f->memo[f->active].has_class = 1;
   if (ci >= 0) f->memo[f->active].cvals[ci] = 1;
   return 1;
@@ -10464,6 +10474,7 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
       return 1;
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
+      if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
       if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))

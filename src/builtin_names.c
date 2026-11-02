@@ -2386,6 +2386,8 @@ int is_const_visibility_name(const char *n) {
 /* class_variable_set remove_class_variable */
 int is_cvar_write_name(const char *n) { return n && (sp_streq(n, "class_variable_set") || sp_streq(n, "remove_class_variable")); }
 int is_cvar_set_name(const char *n) { return n && sp_streq(n, "class_variable_set"); }
+int is_cvar_get_name(const char *n) { return n && sp_streq(n, "class_variable_get"); }
+int is_cvar_defined_name(const char *n) { return n && sp_streq(n, "class_variable_defined?"); }
 /* class_variable_get class_variable_set class_variable_defined?: the
    reflection on one class variable of self's class, by its name */
 int is_cvar_reflection_name(const char *n) {

@@ -758,6 +758,8 @@ int is_remove_const_name(const char *n);   /* remove_const */
 int is_const_visibility_name(const char *n);   /* private_constant public_constant deprecate_constant */
 int is_cvar_write_name(const char *n);     /* class_variable_set remove_class_variable */
 int is_cvar_set_name(const char *n);       /* class_variable_set */
+int is_cvar_get_name(const char *n);       /* class_variable_get */
+int is_cvar_defined_name(const char *n);   /* class_variable_defined? */
 int is_cvar_reflection_name(const char *n);   /* class_variable_get class_variable_set class_variable_defined? */
 int is_hook_protocol_name(const char *n);  /* append_features extend_object prepend_features: what include, extend and prepend send before their hooks */
 int is_port_gvar_name(const char *n);      /* $stdout $stderr $>: assigning an object makes it the port output goes to */

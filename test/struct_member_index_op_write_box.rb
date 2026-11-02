@@ -1,0 +1,37 @@
+# An index op-write through a boxed value types only the Structs it may hold
+# `buf[i] += v` on a value of no static type is written out during
+# inference as a read and a store through a held copy of the receiver. The
+# class facts were computed before that, so the new `[]=` had none and was
+# taken as possibly any Struct's: its boxed value widened the members of
+# every Struct in the program. The written-out reads now hold the
+# receiver's fact, so Point's members stay Integers; Pair's, which a box
+# that may hold a Pair stores a Float into, still widen.
+
+Point = Struct.new(:x, :y)
+Pair = Struct.new(:a, :b)
+
+def bump(buf, i)
+  buf[i] += 1
+end
+
+def fill(buf, i)
+  buf[i] ||= 7
+end
+
+def scale(box, k)
+  box[k] += 0.5
+end
+
+bufs = {}
+[1, 2].each { |k| bufs[k] = Array.new(4, 0) }
+bump(bufs[1], 1)
+fill(bufs[2], 3)
+p bufs
+
+pair = Pair.new(1, 2)
+scale([pair, [1.0]][ARGV.size], :a)
+scale([[1.0], pair][ARGV.size], 0)
+p pair
+
+pts = Array.new(10) { |i| Point.new(i, i * 2) }
+p pts.sum { |pt| pt.x * pt.y }

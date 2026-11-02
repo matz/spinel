@@ -1,0 +1,5 @@
+class Front
+  def self.parse: (String, ?strict: bool) -> untyped
+  def self.join: (untyped, String, ?sep: String) -> untyped
+  def self.pair: (Integer, ?untyped, ?Integer) -> untyped
+end

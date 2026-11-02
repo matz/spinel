@@ -764,7 +764,7 @@ static bool ir_map(rbs_parser_t *p, rbs_node_t *type, const ir_target *t, sbuf_t
 /* the def's parameters, in order, with what each is */
 typedef struct {
     char *name;
-    char kind;        /* 'r' required, 'k' keyword, 'o' optional, '*' rest, 'p' post, '&' block, 'K' **, 'x' other */
+    char kind;        /* 'r' required, 'k' keyword, 'o' optional, '*' rest, 'p' post, '&' block, 'K' **, 'f' ..., 'x' other */
 } ir_param;
 
 static int ir_def_params(const ir_file *f, const pm_def_node_t *d, ir_param **out) {
@@ -795,7 +795,7 @@ static int ir_def_params(const ir_file *f, const pm_def_node_t *d, ir_param **ou
         IR_PUSH(ir_strdup(s.buf ? s.buf : ""), 'k');
         sbuf_free(&s);
     }
-    if (pn->keyword_rest) IR_PUSH(ir_strdup(""), 'K');
+    if (pn->keyword_rest) IR_PUSH(ir_strdup(""), PM_NODE_TYPE_P(pn->keyword_rest, PM_FORWARDING_PARAMETER_NODE) ? 'f' : 'K');
     if (pn->block) IR_PUSH(ir_strdup(""), '&');
 #undef IR_PUSH
     *out = ps;
@@ -856,8 +856,12 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
        kind, one to one: `(Integer, ?String, *Symbol, Float)` for
        `def m(a, b = "", *c, d)`. A rest or `**` slot is typed by
        construction, as the gathered array or hash, and takes no field, as
-       --rbs gives it none. */
-    int nreq = 0, nopt = 0, nrest = 0, npost = 0, nkw = 0, nkwrest = 0;
+       --rbs gives it none. A def that forwards with `...` hands every
+       argument past its named positionals on to the method it calls: those
+       take the signature's leading positionals, required ones first, and
+       the rest of the signature is the forwarded call's, which --rbs pins
+       nothing of either. */
+    int nreq = 0, nopt = 0, nrest = 0, npost = 0, nkw = 0, nkwrest = 0, nfwd = 0;
     for (int i = 0; i < np; i++)
         switch (ps[i].kind) {
             case 'r': nreq++; break;
@@ -866,21 +870,34 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
             case 'p': npost++; break;
             case 'k': nkw++; break;
             case 'K': nkwrest++; break;
+            case 'f': nfwd++; break;
             default: break;
         }
-    if (ir_list_len(fn->required_positionals) != nreq || ir_list_len(fn->optional_positionals) != nopt ||
-        (fn->rest_positionals != NULL) != (nrest > 0) || ir_list_len(fn->trailing_positionals) != npost)
-        return "the signature's positional parameters do not match the method's";
-    if (fn->rest_keywords != NULL && nkwrest == 0)
-        return "the signature's keyword parameters do not match the method's";
+    int sreq = ir_list_len(fn->required_positionals), sopt = ir_list_len(fn->optional_positionals);
+    if (nfwd) {
+        if (sreq < nreq || sreq + sopt < nreq + nopt)
+            return "the signature's positional parameters do not match the method's";
+    }
+    else {
+        if (sreq != nreq || sopt != nopt ||
+            (fn->rest_positionals != NULL) != (nrest > 0) || ir_list_len(fn->trailing_positionals) != npost)
+            return "the signature's positional parameters do not match the method's";
+        if (fn->rest_keywords != NULL && nkwrest == 0)
+            return "the signature's keyword parameters do not match the method's";
+    }
     for (int i = 0; i < np; i++) {
         sbuf_t tag; sbuf_init(&tag);
         if (ps[i].kind == 'r' || ps[i].kind == 'o' || ps[i].kind == 'p') {
             int k = 0;
             for (int j = 0; j < i; j++) if (ps[j].kind == ps[i].kind) k++;
-            rbs_node_t *n = ir_list_at(ps[i].kind == 'r' ? fn->required_positionals
-                                     : ps[i].kind == 'o' ? fn->optional_positionals
-                                                         : fn->trailing_positionals, k);
+            rbs_node_list_t *l = ps[i].kind == 'r' ? fn->required_positionals
+                               : ps[i].kind == 'o' ? fn->optional_positionals
+                                                   : fn->trailing_positionals;
+            /* ahead of `...`, an optional takes the signature's next
+               positional, a required one while any is left */
+            if (nfwd && ps[i].kind == 'o' && nreq + k < sreq) { l = fn->required_positionals; k += nreq; }
+            else if (nfwd && ps[i].kind == 'o') k -= sreq - nreq;
+            rbs_node_t *n = ir_list_at(l, k);
             rbs_types_function_param_t *fp = (rbs_types_function_param_t *) n;
             if (n == NULL || n->type != RBS_TYPES_FUNCTION_PARAM || !ir_map(p, fp->type, t, &tag)) {
                 sbuf_free(&tag);
@@ -909,7 +926,7 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
     int skw = 0;
     const rbs_hash_t *hs2[] = { fn->required_keywords, fn->optional_keywords };
     for (int h = 0; h < 2; h++) if (hs2[h]) for (rbs_hash_node_t *e = hs2[h]->head; e; e = e->next) skw++;
-    if (skw != nkw) return "the signature's keyword parameters do not match the method's";
+    if (!nfwd && skw != nkw) return "the signature's keyword parameters do not match the method's";
     sbuf_t r; sbuf_init(&r);
     if (!ir_map(p, fn->return_type, t, &r)) { sbuf_free(&r); return "the return type is outside the types Spinel can pin"; }
     *ret = ir_strdup(r.buf);

@@ -3761,7 +3761,7 @@ ifeq ($(wildcard $(RBS_INC)/rbs/parser.h),)
 inline-rbs-test:
 	@echo "inline-rbs-test: parser-backed cases skipped (vendor/rbs not fetched; run 'make deps')"
 else
-INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide check_honest hash_return_box builtin_classes relative_const_class multiline_signature optional_params
+INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide check_honest hash_return_box builtin_classes relative_const_class multiline_signature optional_params forwarding_params
 INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \

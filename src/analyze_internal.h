@@ -147,6 +147,7 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analy
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int builtin_method_known(const char *cls, const char *m);
 int builtin_method_known_any(const char *m);   /* codegen_call.c */
+int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_object_method_known(const char *m);   /* builtin_names.c */
 int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */

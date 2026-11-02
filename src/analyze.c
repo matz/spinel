@@ -35620,6 +35620,17 @@ static int poly_dispatch_nullable(Compiler *c, int v, const char *cn) {
     if ((nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int) &&
         share_target_armed(c, v, si)) return 1;
   }
+  /* ...and the method the plan binds on each candidate class where it is
+     not the table's (cplan_cand_target): a version entry, under a name of
+     its own, whose else arm may answer nil */
+  for (int sg = 0; sg < 2; sg++) {
+    int npc = 0;
+    const PolyCand *pcs = sg ? comp_cmethod_candidates(c, cn, &npc) : comp_poly_candidates_at(c, v, cn, &npc);
+    for (int k = 0; k < npc; k++) {
+      int si = cplan_cand_target(c, v, cn, &pcs[k], sg ? CT_CMETHOD : 0);
+      if (si >= 0 && si != pcs[k].mi && (nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int)) return 1;
+    }
+  }
   /* an attr_reader over a scalar ivar: those slots start nil, their nil
      byte set (emit_ivar_nil_inits_from), so the read can answer nil like a
      `return nil` would -- the resolved-receiver twin of this lives in codegen's
@@ -49312,7 +49323,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
      construction site is a call node, so both are known now. Recomputed
      after the fixpoint, when a dynamic `.new` can be told from a static one. */
   AN_STEP_V("compute_reachable", compute_reachable(c, 0));
-  ver_cells_write(c, 0);
+  ver_cells_write(c);
   compute_instantiated(c, 1);
 }
 

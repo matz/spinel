@@ -132,6 +132,8 @@ struct LoadRecord {
   unsigned char callbacks;              /* lr_callbacks_define's memo: 1 no, 2 yes */
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
+  char **refl; int nrefl, crefl;        /* the names a reflection reader of the source names, sorted (lr_refl_take) */
+  unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   unsigned char structs;     /* registration has made the class builders' classes (elab_record_builders) */
   int builders;              /* the builder blocks recorded before their class was made (lr_frame) */
@@ -147,6 +149,7 @@ struct LoadRecord {
   unsigned long hgen;        /* bumped by every change to the histories and the mixins, and by each scope owner the record sets */
   const LrDef **cand; int ncand, ccand, cand_bad; unsigned char collect;   /* elab_class_candidates: the writes lr_last_before passes */
   long opened;               /* LrHist.open is of this many entries (lr_open_make), -1 for none made */
+  long lated;                /* LrVers.late is of this many entries (lr_late_make), -1 for none made */
   struct LrSettle *set; int nset, cset;   /* the answers recorded ahead of a later region, to recompute (lr_settle_regions) */
   unsigned char unseen;      /* elab_runs_unseen's memo: 1 no, 2 yes */
   unsigned char consts;      /* lr_const_seen's memo: 1 the program makes constants only as it writes them, 2 not */
@@ -1683,6 +1686,39 @@ static void lr_reopens_take(Compiler *c) {
     }
   if (r->nreopens > 1) qsort(r->reopens, (size_t)r->nreopens, sizeof *r->reopens, lr_name_cmp);
 }
+/* The names the source's reflection readers name, taken before the walk,
+   ahead of the passes that rewrite readers (desugar_defined_method_call,
+   desugar_respond_to_probe): respond_to?, method_defined? and their kin and
+   a Method's makers (is_method_presence_query 1) by a literal name, called
+   by their own names or through the send family, a send of a send too
+   (whose first argument, when no literal, may name any of them), a call under defined?, and the queries a fold has answered already (def_asked,
+   desugar_engine_branches). They answer from the final method tables, so a call
+   they guard runs where they say the method is there (lr_late_make). A
+   list of methods or a name the record cannot read may be any (refl_any). */
+static void lr_refl_add(LoadRecord *r, const char *name) {
+  if (!name) { r->refl_any = 1; return; }
+  r->refl = lr_grow(r->refl, &r->crefl, r->nrefl, sizeof *r->refl);
+  if (!(r->refl[r->nrefl++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
+static void lr_refl_take(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  NT_FOREACH_KIND(nt, NK_CallNode, n) {
+    const char *rn = nt_str(nt, n, "name");
+    int ac = 0, a = 0, pq;
+    const int *av = call_args(nt, n, &ac);
+    /* (each send's first argument names the method it calls: a send in turn) */
+    while (rn && is_send_family(rn)) rn = a < ac ? vis_arg_name(nt, av[a++]) : "";
+    if (!rn) { lr_refl_add(r, NULL); continue; }
+    if ((pq = is_method_presence_query(rn))) lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL);
+  }
+  NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
+    int v = nt_ref(nt, n, "value");
+    if (v >= 0 && nt_kind(nt, v) == NK_CallNode) lr_refl_add(r, nt_str(nt, v, "name"));
+  }
+  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i]);
+  if (r->nrefl > 1) qsort(r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp);
+}
 
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
 static int lr_callbacks_define(Compiler *c, int depth);
@@ -2160,7 +2196,7 @@ static void lr_record_drop(LoadRecord *r) {
   for (int b = 0; r->hhead && b < LR_BUCKETS; b++) r->hhead[b] = -1;
   r->nhist = 0; r->frontier = 0; r->nset = 0; r->builders = 0;
   r->slot_builds = -1;
-  r->nentries = 0; r->indexed = r->opened = -1;   /* the by-name index and the open bits are of the dropped histories */
+  r->nentries = 0; r->indexed = r->opened = r->lated = -1;   /* the by-name index and the open and late bits are of the dropped histories */
   r->hgen++;
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
 }
@@ -2295,6 +2331,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
      explicit receivers as ordinary calls, with no registration for either. */
   if (lr_named(c, "autoload")) c->nautoloads = 0;
   lr_reopens_take(c);
+  lr_refl_take(c);
   r->rec = &x;
   r->host = h;
   h->now = 1;
@@ -2552,7 +2589,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next; unsigned char captured, replaced; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias */
+typedef struct LrVers { const char *name; int first, nver, next; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no, 2 yes, 3 not asked (two histories) */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced; }
 
@@ -2601,6 +2638,47 @@ int elab_method_versions(Compiler *c, const char *name) {
   return x ? x->nver : 0;
 }
 
+/* The late bit of every name whose versions are one history's (LrVers.late),
+   once for all of them, as of the entries recorded: a call of the name
+   may run before the history's first version is made, its statement, or
+   the window of the bodies around it (elab_call_window), opening ahead
+   of that version's point in its region. The first version opens the
+   method; before it the name is absent. Whether a call meets that is
+   the typed receiver's fact (ct_version_at). A name of two histories is
+   not asked, nor one a builtin's method answers (Object's, or any builtin
+   class's): such a call may reach the builtin's, which no entry calls;
+   nor one a reflection reader names (lr_refl_take): a call it guards
+   would take the entry where the reader answers the method is there, and
+   raise where the table's answer runs the def. */
+static void lr_late_make(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  lr_vers_index(r);
+  if (r->lated == r->nentries) return;
+  r->lated = r->nentries;
+  for (int k = 0; k < r->nvers; k++) r->vers[k].late = 1;
+  NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+    LrVers *x = lr_vers(r, nt_str(c->nt, id, "name"));
+    const LrDef *v = NULL;
+    int nh = 0;
+    ElabWindow w;
+    if (!x || !x->nver || x->late != 1) continue;
+    for (int h = x->first; h >= 0 && nh < 2; h = r->hist[h].nlink)
+      for (int j = 0; j < r->hist[h].n; j++)
+        if (lr_is_version(&r->hist[h].v[j])) { if (!nh++) v = &r->hist[h].v[j]; break; }
+    if (nh != 1 || builtin_object_method_known(x->name) || builtin_instance_name_known(x->name) || r->refl_any ||
+        (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp))) { x->late = 3; continue; }
+    LoadPoint q = v ? elab_point_of(c, v->node) : (LoadPoint){ -1, -1 };
+    if (q.region >= 0 && elab_call_window(c, id, &w) == ELAB_YES && w.from.region == q.region && w.from.seq < q.seq) x->late = 2;
+  }
+}
+int elab_method_late(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
+  if (!x || !x->nver) return 0;
+  lr_late_make(c);
+  return x->late == 2;
+}
+
 int elab_method_replaced(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   const LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
@@ -2620,7 +2698,8 @@ int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) 
 }
 
 /* Each method scope's version facts (analyze.h):
-   Scope.versioned when the record holds more than one version of its name;
+   Scope.versioned when the record holds more than one version of its name,
+   or one that a call may run before (elab_method_late);
    Scope.replaced when it is a def's scope that a later scope of the same
    class, side and name takes the method table's place of (a top-level
    method: a later def's), so that the tables answer the later one. */
@@ -2644,7 +2723,7 @@ void elab_mark_versions(Compiler *c) {
     if (sc->versioned || sc->replaced) { sc->versioned = sc->replaced = 0; comp_touch_scope(sc->idx); }
     const char *name = sc->mixin_guarded ? comp_scope_user_name(sc) : sc->name;
     const LrVers *x = name && sc->def_node >= 0 ? lr_vers(r, name) : NULL;
-    if (!x || x->nver < 2) continue;
+    if (!x || (x->nver < 2 && !elab_method_late(c, name))) continue;
     { sc->versioned = 1; comp_touch_scope(sc->idx); }
     int def = nt_kind(c->nt, sc->def_node) == NK_DefNode;
     if (!x->replaced || (sc->class_id < 0 && !def)) continue;
@@ -3224,8 +3303,8 @@ static int lr_literal_args(const NodeTable *nt, const int *av, int ac, int form)
 /* Does node run code of the program's where its statement runs (LR_RUN):
    a call, super or yield of a name the program defines a method by (sent
    by a literal name too); a `new`, `allocate` or raise, which makes an
-   object (and runs its initialize); a definition form, def, class header
-   or constant write whose hook the program defines; a mixin into an object
+   object (and runs its initialize); a definition form, def, alias, class
+   header or constant write whose hook the program defines; a mixin into an object
    the program holds; code, or a method made or called, by a name the
    record cannot read; a callable made to run later (a lambda, a kept
    block, a method object, a block argument). Or may it (LR_DISPATCH): any
@@ -3339,7 +3418,7 @@ static int lr_node_runs(Compiler *c, int id) {
     case NK_BlockNode:
       nm = par[id] >= 0 && nt_kind(nt, par[id]) == NK_CallNode ? nt_str(nt, par[id], "name") : NULL;
       return par[id] >= 0 && elab_block_when(c, par[id], 0) == ELAB_BLK_LATER && !(nm && is_method_naming_call(nm)) ? LR_RUN : 0;
-    case NK_DefNode: return lr_defines(r, "method_added") || lr_defines(r, "singleton_method_added") ? LR_RUN : hooks;
+    case NK_DefNode: case NK_AliasMethodNode: return lr_defines(r, "method_added") || lr_defines(r, "singleton_method_added") ? LR_RUN : hooks;
     case NK_ClassNode: return lr_header_hooks(c, id) ? LR_RUN : hooks;
     case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: return lr_defines(r, "const_added") ? LR_RUN : hooks;
     case NK_ProgramNode: case NK_StatementsNode: case NK_ModuleNode: case NK_SingletonClassNode:
@@ -3799,6 +3878,13 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   }
   if (nt_kind(c->nt, a) == NK_DefNode && r->urun[a] > w->from.seq)   /* nor before the body may first run (lr_rta) */
     w->from.seq = r->urun[a] < w->to.seq ? r->urun[a] : w->to.seq - 1;
+  if (nt_kind(c->nt, a) == NK_DefNode && !lr_runs_in(r, w->from.seq, w->from.seq + 1)) {
+    /* nor at a statement that runs no code of the program's (lr_run_points):
+       from the first that may, w's last when none does */
+    int lo = w->from.seq + 1, hi = w->to.seq;
+    while (lo < hi) { int mid = lo + (hi - lo) / 2; if (lr_runs_in(r, w->from.seq, mid) > 0) hi = mid; else lo = mid + 1; }
+    w->from.seq = lo - 1;
+  }
   return ELAB_YES;
 }
 
@@ -4061,20 +4147,33 @@ static void lr_span_take(Compiler *c, const LrHist *h, int cls, int sg, LoadPoin
   s->nh += s->m > had;
 }
 
+/* The first statement of region `region` from which a call may run on
+   cls: on its class object (sg) from the header that opens it, on an
+   instance from the first statement one may exist (lr_rta); -1 where the
+   record cannot tell (a builtin class, one no header opens, one opened in
+   another region, a program of more regions). */
+static int lr_live_from(Compiler *c, int cls, int sg, int region) {
+  LoadRecord *r = c->lrec;
+  lr_run_points(c);
+  const LrClass *kc = cls >= 0 && !c->classes[cls].is_builtin_const && r->nregion == 1 ? lr_class(r, cls) : NULL;
+  LoadPoint b = kc && kc->nopen ? elab_point_of(c, kc->open[0].node) : (LoadPoint){ -1, -1 };
+  return b.region != region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
+}
+int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p) {
+  LoadRecord *r = elab_fresh(c);
+  return !r->recorded || p.region < 0 || p.seq >= lr_live_from(c, cls, sg, p.region);
+}
 /* elab_method_span; *idle when no statement of w that may run code of the
    program's sees a version (the one version counts all the same) */
 static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle) {
   LoadRecord *r = c->lrec;
   LoadPoint p0 = w->from, p1 = w->to;
   if (!r || !r->recorded || !name || cls < LR_MAIN || p0.region < 0 || elab_cmp(p0, p1) != PROG_BEFORE) return -1;
-  lr_run_points(c);
   /* no call on a class before it opens, nor on an instance of it before
-     the first statement one may exist (lr_rta); none in w: w's last
+     the first statement one may exist (lr_live_from); none in w: w's last
      statement. In a program of more regions, from w's start: more
      versions, never fewer */
-  const LrClass *kc = cls >= 0 && !c->classes[cls].is_builtin_const && r->nregion == 1 ? lr_class(r, cls) : NULL;
-  LoadPoint b = kc && kc->nopen ? elab_point_of(c, kc->open[0].node) : (LoadPoint){ -1, -1 };
-  int bl = b.region != p0.region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
+  int bl = lr_live_from(c, cls, sg, p0.region);
   if (bl >= p1.seq) bl = p1.seq - 1;
   if (p0.seq < bl && bl < p1.seq) p0.seq = bl;
   int n = 0, obs0 = 0, owners[64], no = lr_ancestry_owners(c, cls, owners, 64, 0);
@@ -6145,7 +6244,8 @@ void elab_free(Compiler *c) {
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
-  free(r->names); free(r->defs); free(r->reopens);
+  for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
+  free(r->names); free(r->defs); free(r->reopens); free(r->refl);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);

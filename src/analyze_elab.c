@@ -4364,6 +4364,11 @@ void elab_header_opened(Compiler *c, int node, int cls, int made) {
           lr_class_name(c, h->cls), lr_class_name(c, h->owner), h->leaf, lr_class_name(c, h->want));
 }
 
+/* Is the superclass node `sup` the constant Object? */
+static int elab_names_object(const NodeTable *nt, int sup) {
+  return nt_kind(nt, sup) == NK_ConstantReadNode && nt_str(nt, sup, "name") && is_object_class_name(nt_str(nt, sup, "name"));
+}
+
 /* The class the class or module header at node opens, as registration
    holds it under cname (qualify's spelling): a new one, made here, whose
    body encl's encloses -- or, for `class A::B`, the class A names
@@ -4405,9 +4410,19 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
      nested class) and reopened later with `< Super`. The parent link is read
      from def_node's "superclass" ref, so prefer the opening that declares one;
      otherwise the superclass is lost and a subclass's overrides aren't
-     dispatched against the right ancestor chain (matz/spinel#1477). */
+     dispatched against the right ancestor chain (matz/spinel#1477). A
+     class builder's definition stays when the header names Object: the
+     builder's call states the superclass (none means Object), so that header
+     only reopens the class and the builder is still how the class is made
+     (the path write the presence logic reads). Any other superclass is a
+     superclass mismatch in CRuby (TypeError), and so is a class header over
+     a module builder; neither is raised here, and the header takes the
+     definition as it did. */
   else if (class_def_super(c->nt, node) >= 0 && c->classes[ci].def_node >= 0 &&
-           class_def_super(c->nt, c->classes[ci].def_node) < 0)
+           class_def_super(c->nt, c->classes[ci].def_node) < 0 &&
+           (class_def_builder(c->nt, c->classes[ci].def_node) < 0 ||
+            !class_def_is_class(c->nt, c->classes[ci].def_node) ||
+            !elab_names_object(c->nt, class_def_super(c->nt, node))))
     comp_class_set_def(c, ci, node);
   elab_header_opened(c, node, ci, made);
   return ci;

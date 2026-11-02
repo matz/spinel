@@ -6,7 +6,8 @@
 # Journal is no value of x either), and `s.pick` reaches no Ranker, whose
 # parameter takes Board's table. Those tables narrow; Scan's, which
 # `x.items` does reach, and Shelf's, which a call on a Book reaches through
-# the reader Book inherits, stay boxed.
+# the reader Book inherits, stay boxed. So does the parameter of Press.pick,
+# a class method a call on a value that may be the Press class reaches.
 
 Item = Struct.new(:id, :w)
 
@@ -50,6 +51,15 @@ class Board
   def best(by) = by.pick(@rows)
 end
 
+class Press
+  def self.pick(rows) = rows.first
+end
+
+class Desk
+  def initialize = @rows = Array.new(2) { |i| Item.new(i, 20 + i) }
+  def top = Press.pick(@rows)
+end
+
 p Reader.new(4).items.map(&:w).max, Journal.new(2).items.map(&:w)
 x = [Scan.new(2), Label.new][ARGV.size]
 p x.items.size
@@ -58,3 +68,6 @@ p y.items.map(&:w)
 s = [Sorter.new, "s"][ARGV.size]
 p s.pick([Item.new(1, 5), Item.new(2, 7)]).w
 p Board.new.best(Ranker.new).w
+p Desk.new.top.w
+k = [Press, "k"][ARGV.size]
+p k.pick([1, "two", 3.0])

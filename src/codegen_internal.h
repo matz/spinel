@@ -2522,10 +2522,11 @@ const void *view_conversion(Compiler *c, int *node);
 int view_push_target(Compiler *c, int node, const char *name);
 const char *view_call_name(Compiler *c, int node);
 /* A Class-valued receiver that names class ci for this emission; the class,
-   or -1 with no such view open (the read marks the entry: view_class_is_read) */
+   or -1 with no such view open (the read marks the entry with what the
+   emitter answers from, ELAB_GAIN_*: view_class_is_read) */
 int view_push_class_is(Compiler *c, int node, int ci);
-int view_class_is(Compiler *c, int node);
-int view_class_is_read(int tok);
+int view_class_is(Compiler *c, int node, unsigned reads);
+unsigned view_class_is_read(int tok);
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);
 int view_type_top(int node, TyKind *kind);   /* the open type view on node, if any */
 void view_pop(Compiler *c, int tok);

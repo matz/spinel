@@ -373,6 +373,10 @@ typedef struct {
                            class (an exception reopening's for its definer), the
                            reader's ivar class; -1 for others */
   unsigned char vis;    /* a PA_VIS arm's SP_VIS_*: the visibility that refuses */
+  unsigned char unsettled;  /* a class-value trial arm's: what of its class
+                               the record cannot prove settled before the
+                               call (ELAB_GAIN_*, elab_class_unsettled),
+                               which an emitter reading it cannot answer from */
   int mi;               /* the user method scope, or -1 */
 } PolyArm;
 
@@ -394,6 +398,12 @@ static inline int face_kind_index(unsigned kind) {
 /* a class value's class-side arm, by its class (the pre-arm ahead of the
    instance switch) */
 #define PA_KEY_CLASS_VALUE 0x2000
+/* a class-value trial arm's class (cplan_poly_cmeth: the builtin Module /
+   Class answer for a Class value no class method takes), or -1 */
+static inline int pa_class_value_trial(const PolyArm *a) {
+  return a->kind == PA_TRIAL && a->key >= PA_KEY_CLASS_VALUE && a->key < PA_KEY_BUILTIN
+         ? a->key - PA_KEY_CLASS_VALUE : -1;
+}
 
 /* how the dispatch holds its receiver and keys its switch */
 enum {
@@ -456,6 +466,10 @@ const PolyPlan *cplan_each_split(Compiler *c, int id);
    of the name, or its proc form. Computed afresh. */
 int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int *pfk);
 const PolyPlan *cplan_poly_cmeth(Compiler *c, int id);
+/* cplan_poly_cmeth's class-value trial arms alone (pa_class_value_trial),
+   without the cost of asking every class for a class method of the name.
+   Computed afresh, into a plan the caller drops with cplan_poly_free. */
+PolyPlan *cplan_poly_cls_values(Compiler *c, int id);
 int cplan_visibility_class(Compiler *c, int id, int ci);
 int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod);
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);

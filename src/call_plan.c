@@ -2845,7 +2845,7 @@ static void cpoly_add(PolyPlan *p, int *cap, int kind, int key, int mi, TyKind v
   }
   PolyArm *a = &p->arm[p->n++];
   a->kind = (unsigned char)kind; a->key = (short)key; a->mi = mi;
-  a->vty = (unsigned char)vty; a->conv = (unsigned char)conv; a->def = -1; a->vis = 0;
+  a->vty = (unsigned char)vty; a->conv = (unsigned char)conv; a->def = -1; a->vis = 0; a->unsettled = 0;
 }
 
 /* The classes a dispatch of name can take an arm for, ascending: the ones
@@ -3786,6 +3786,28 @@ int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int
   return mi;
 }
 
+/* The class-value trial arms of call id's class-tag switch into p: a Class
+   value the receiver can hold (as far as the walk bounds them) whose class
+   has no method of the name, for a builtin Module / Class method that
+   answers from its receiver's class (is_class_value_reflection). Its answer
+   for that class only the emission can tell (a trial: kept where the Class
+   emitter answers from the class, and only from what the record proves
+   settled before the call: the emitters answer as of the load's end). */
+static void cpoly_cls_value_trials(Compiler *c, int id, const char *name, int argc, PolyPlan *p, int *cap) {
+  const char *cvals = nt_ref(c->nt, id, "receiver") >= 0 && is_class_value_reflection(name) ? poly_recv_class_values(c, id) : NULL;
+  const unsigned all = ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED | ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS;
+  for (int k = 0; cvals && k < c->nclasses; k++) {
+    if (!cvals[k] || cls_sg_accessor_first(c, id, k, name, argc) || cplan_cmethod_arm(c, id, k, name, NULL, NULL) >= 0)
+      continue;
+    int framed = elab_plan_enter(c, id);
+    unsigned unsettled = elab_class_unsettled(c, k, all, id, cplan_plain_ctx());
+    if (framed) elab_plan_leave(c);
+    if (unsettled == all) continue;
+    cpoly_add(p, cap, PA_TRIAL, PA_KEY_CLASS_VALUE + k, -1, TY_UNKNOWN, 0);
+    p->arm[p->n - 1].unsettled = (unsigned char)unsettled;
+  }
+}
+
 const PolyPlan *cplan_poly_cmeth(Compiler *c, int id) {
   static PolyPlan cp;
   free(cp.arm);
@@ -3804,7 +3826,19 @@ const PolyPlan *cplan_poly_cmeth(Compiler *c, int id) {
     TyKind mret = c->scopes[pf >= 0 ? pf : mi].ret;
     cpoly_add(&cp, &cap, pf >= 0 ? PA_PROC_FORM : PA_USER, k, mi, mret, mret == TY_POLY ? PC_SAME : PC_BOX);
   }
+  cpoly_cls_value_trials(c, id, name, argc, &cp, &cap);
   return &cp;
+}
+
+PolyPlan *cplan_poly_cls_values(Compiler *c, int id) {
+  PolyPlan *vp = calloc(1, sizeof *vp);
+  if (!vp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  vp->ntype = vp->ret = comp_ntype(c, id);
+  int cap = 0, argc = 0;
+  const char *name = nt_str(c->nt, id, "name");
+  call_args(c->nt, id, &argc);
+  if (name) cpoly_cls_value_trials(c, id, name, argc, vp, &cap);
+  return vp;
 }
 
 const PolyPlan *cplan_poly_sub(Compiler *c, int id) {

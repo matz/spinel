@@ -2594,13 +2594,14 @@ static void name_append(char ***list, int *n, int *cap, const char *name) {
 void comp_def_asked_add(Compiler *c, const char *name) {
   if (name) name_add(&c->def_asked, &c->ndef_asked, &c->cdef_asked, name);
 }
-unsigned comp_table_gen = 0;   /* bumped when a reader or alias table grows (poly-candidate memo stamp) */
+unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table grows (poly-candidate memo stamp) */
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->readers, &ci->nreaders, &ci->creaders, &ci->readers_ix, name);
   comp_touch_class(ci->idx);
 }
 void comp_add_writer(ClassInfo *ci, const char *name) {
+  comp_table_gen++;
   name_add_ix(&ci->writers, &ci->nwriters, &ci->cwriters, &ci->writers_ix, name);
   comp_touch_class(ci->idx);
 }

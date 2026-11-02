@@ -1994,6 +1994,139 @@ static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
   buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
                 "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
 }
+/* One class value's arm of a class-tag switch (a class-value trial arm of
+   cplan_poly_cmeth): the call re-entered on the receiver read as the
+   sp_Class of class k, which the Class emitters are told
+   (view_push_class_is), under the silent probe, boxed into *out. Kept only
+   where the emission read that class and answered without raising: an
+   emitter that answers for any class would answer as for one it does not
+   know, and a refusal or a raise keeps the switch's NoMethodError. Dropped
+   too where it read something the record cannot prove settled before the
+   call (`unsettled`, PolyArm.unsettled): the emitters answer as of the
+   load's end. A slot `ret` other than TY_POLY takes only an answer of its
+   own type. */
+static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, int tv, TyKind ret, Buf *out) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int argc = 0; const int *argv = call_args(nt, id, &argc);
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
+      nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
+  /* each argument runs once, in the arm that is taken */
+  for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
+  int sv_tmp = g_tmp;
+  int slot = view_bind(recv, "sp_unbox_class(_t%d)", tv);
+  int va = view_push_arm(id, g_prbd_skip, 1);
+  int vw = view_push(c, recv, TY_CLASS);
+  int fv = view_push_face(recv, TY_CLASS);
+  int vk = view_push_class_is(c, recv, k);
+  ClsValueProbe pr = { ret, TY_UNKNOWN };
+  Buf nb; memset(&nb, 0, sizeof nb);
+  char *pre = NULL;
+  int ok = poly_arm_probe(c, id, cls_value_probe_fn, &pr, &nb, &pre) && pr.got != TY_UNKNOWN &&
+           pr.got != TY_VOID && view_class_is_read(vk) && !(view_class_is_read(vk) & unsettled);
+  view_pop(c, vk);
+  view_pop(c, fv);
+  view_pop(c, vw);
+  view_pop(c, va);
+  view_unbind(slot);
+  const char *t = ok ? nb.p : NULL;
+  if (t && cls_value_answer_raises(t)) t = NULL;
+  if (t) {
+    if (pre) buf_printf(out, "({ %s ", pre);
+    if (ret == TY_POLY) emit_boxed_text(c, pr.got, t, out);
+    else buf_puts(out, t);
+    if (pre) buf_puts(out, "; })");
+  }
+  /* a dropped arm leaves the C it did not keep unnumbered */
+  if (!t) g_tmp = sv_tmp;
+  free(nb.p); free(pre);
+  return t != NULL;
+}
+/* The kept class-value arms of plan p, each `test ? answer : ` into b, the
+   receiver held in _t<tv> (with tagged, the test asks its tag first), the
+   answers in a slot of type ret; each observed into --plan-check frame
+   `frame` (-1: none). Their count. */
+static int cls_value_known_arms(Compiler *c, int id, const PolyPlan *p, int tv, TyKind ret, int tagged, int frame, Buf *b) {
+  int kept = 0;
+  for (int i = 0; i < p->n; i++) {
+    const PolyArm *a = &p->arm[i];
+    int k = pa_class_value_trial(a);
+    if (k < 0) continue;
+    Buf ab; memset(&ab, 0, sizeof ab);
+    int ok = cls_value_known_arm(c, id, k, a->unsettled, tv, ret, &ab);
+    if (ok) {
+      if (tagged) buf_printf(b, "_t%d.tag == SP_TAG_CLASS && ", tv);
+      emit_cls_value_test(c, k, tv, b);
+      buf_puts(b, ab.p);
+      buf_puts(b, " : ");
+      kept++;
+    }
+    free(ab.p);
+    if (frame >= 0) { pa_resume(frame); pa_observe(PA_TRIAL, a->key, -1, TY_UNKNOWN, ok); }
+  }
+  return kept;
+}
+/* A class-tag switch for a call no class method of the program takes:
+   a Class value of the receiver answers what the builtin Module and Class
+   methods answer for its class, as `K.name(args)` does (the plan's
+   class-value arms); any other value, and a class whose arm is dropped,
+   takes what the call compiles to without the switch. The call's slot is
+   boxed, or a scalar the arms answer in their own type (a predicate's
+   Boolean). Emits nothing and answers 0 when no arm is kept. */
+static int emit_cls_value_switch(Compiler *c, int id, Buf *b) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  const char *nm = nt_str(c->nt, id, "name");
+  if (recv < 0 || !is_class_value_reflection(nm) || g_cls_value_recv == recv) return 0;
+  Repr rr = repr_of(c, id);
+  int boxed = rr.kind == RK_BOXED || rr.as_ty == TY_UNKNOWN;
+  TyKind ret = boxed ? TY_POLY : rr.as_ty;
+  if (!boxed && (!is_scalar_ret(ret) || ret == TY_VOID || ret == TY_NIL || (oint_kind(ret) && node_is_oint(c, id))))
+    return 0;
+  /* a scalar slot keeps master's raise for every class while one has a
+     class method of the name (no class-method switch serves it) */
+  int ncm = 0;
+  if (!boxed && (comp_cmethod_candidates(c, nm, &ncm), ncm > 0)) return 0;
+  PolyPlan *p = cplan_poly_cls_values(c, id);
+  Buf arms; memset(&arms, 0, sizeof arms);
+  int sv_tmp = g_tmp;
+  int tv = ++g_tmp;
+  /* asked before the receiver is held, so a call none answers keeps its C */
+  if (!cls_value_known_arms(c, id, p, tv, ret, 1, -1, &arms)) {
+    g_tmp = sv_tmp;
+    free(arms.p); cplan_poly_free(p); return 0;
+  }
+  int th = hold_operand_pre(c, recv, TY_POLY, 1, tv, 1);
+  int frame = g_plan_check ? pa_begin(id) : -1;
+  if (th != tv || frame >= 0) {
+    free(arms.p); memset(&arms, 0, sizeof arms);
+    tv = th;
+    cls_value_known_arms(c, id, p, tv, ret, 1, frame, &arms);
+  }
+  nd_stamp(id, ND_SWITCH);
+  char raise[320];
+  if (boxed)
+    snprintf(raise, sizeof raise,
+             "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()}))", nm, tv);
+  else
+    snprintf(raise, sizeof raise, "(sp_raise_cls(\"NoMethodError\", sp_nomethod_msg(\"%s\", _t%d)), %s)",
+             nm, tv, default_value_from_compiler(c, ret));
+  /* not a Class at run time, or a class whose arm is dropped: the call as
+     it compiles without the switch (master's raise, with its arguments) */
+  Buf eb; memset(&eb, 0, sizeof eb);
+  argov_reserve();
+  view_bind(recv, "_t%d", tv);
+  int sv = g_cls_tag_skip;
+  g_cls_tag_skip = id;
+  if (boxed) emit_boxed(c, id, &eb);
+  else emit_expr(c, id, &eb);
+  g_cls_tag_skip = sv;
+  view_unbind(g_n_argov - 1);
+  buf_printf(b, "({ %s%s; })", arms.p ? arms.p : "", eb.p && eb.p[0] ? eb.p : raise);
+  if (frame >= 0) pa_end(c, frame, p);
+  free(eb.p); free(arms.p);
+  cplan_poly_free(p);
+  return 1;
+}
 
 int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
                                const int *atmp, const TyKind *atmp_ty, const int *htmp,
@@ -22829,6 +22962,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             buf_puts(b, " : ");
           }
           if (nsg > 0) emit_boxed_cls_sg_first_arms(c, id, nm, argc, argv, tv, b);
+          /* a Class value whose class has no method of the name: the
+             builtin answer for its class (the plan's class-value arms) */
+          if (is_class_value_reflection(nm)) {
+            PolyPlan *cvp = cplan_poly_cls_values(c, id);
+            cls_value_known_arms(c, id, cvp, tv, TY_POLY, 0, pa_frame, b);
+            cplan_poly_free(cvp);
+          }
           /* Not a Class at run time: this is whatever the call would have
              compiled to with no class method of the name in the program -- a
              String receiver takes the String method. Raising here instead made
@@ -22884,6 +23024,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           if (tv >= 0) unhoist_dispatch_args(c, hn, hsv, hty);
           free(sg.p); }
       }
+      /* no class method takes a Class value: the builtin answer for its class */
+      if (grt == TY_POLY && nm && g_cls_tag_skip != id && emit_cls_value_switch(c, id, b)) return 1;
       /* The receiver's static class HAS subclasses and cannot answer this
          name, while some subclass can. A slot typed as that class is only its
          STATIC type -- an inherited method storing `self` types it as the

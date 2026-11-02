@@ -87,6 +87,7 @@ annotations with ruby/rbs's default `untyped` signatures.
 | Trailing return on a regular method | `def m(x) #: Integer` |
 | Leading signature on an endless method | `#: (Integer) -> Integer` above `def m(x) = x` |
 | Class method in a class or module | A leading signature above `def self.m` |
+| Method in `class << self` | A leading signature above `def m` directly inside it, as for `def self.m` |
 | Method modifier | A leading signature above `private def m(x)` |
 | Skip a method annotation | `# @rbs skip` |
 | Trailing attribute type | `attr_reader :name, :title #: String` |
@@ -136,8 +137,12 @@ A Ruby block parameter without an RBS block declaration remains inferred.
   have no analyzer node for the declaration and warn without a pin.
   A following method, attribute, or constant consumes an adjacent block
   without an ivar pin. Separate the ivar block with a blank source line.
-- Top-level methods, `class << self`, non-self singleton receivers, and
-  dynamic `Class.new`, `Struct.new`, or `Data.define` bodies receive no pins.
+- A def directly inside a class or module body's `class << self` is that
+  class's method, and its signature applies as a `def self.m`'s. The other
+  declarations of `class << self` (attributes, `@x` declarations, constants)
+  belong to the singleton class and receive no pins.
+- Top-level methods, `class << obj` for another `obj`, non-self singleton
+  receivers, and dynamic `Class.new`, `Struct.new`, or `Data.define` bodies receive no pins.
   Explicit-receiver `C.class_eval` blocks receive no pins. Receiverless
   `class_eval` inside a static declaration retains that declaration's context.
 - Spinel reads the entry file and required Ruby files as it parses them.
@@ -149,6 +154,8 @@ These placements follow the
 and its
 [attachment tests](https://github.com/ruby/rbs/blob/e84e0724656b2ffd1c4f11f893e75b27aadddaf3/test/rbs/inline_parser_test.rb).
 In particular, the tests leave endless-method trailing returns untyped.
+One placement departs from it: ruby/rbs reads a def in `class << self` as an
+instance method of the class, and Spinel reads it as the class method it is.
 
 ## Diagnostics and limitations
 

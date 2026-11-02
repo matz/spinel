@@ -15661,10 +15661,11 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
          the emitted `next` storing it as it is -- and so does such a tail
          beside it, which the join would otherwise give the `next`'s class.
          A bare `next` is a nil element, one with several values or a splat
-         an Array element. */
+         an Array element; more than 32, or a walk too deep to see them all,
+         keeps it boxed. */
       int nx[32];
       int nn = gbody >= 0 ? an_block_nexts(nt, gbody, nx, 32) : 0;
-      if (nn >= 32) ec = -2;
+      if (nn < 0 || nn >= 32) ec = -2;
       for (int q = 0; q < nn && q < 32; q++) {
         int na = nt_ref(nt, nx[q], "arguments"), ac = 0;
         const int *av = na >= 0 ? nt_arr(nt, na, "arguments", &ac) : NULL;

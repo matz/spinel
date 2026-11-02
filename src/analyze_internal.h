@@ -309,7 +309,8 @@ TyKind yield_value_type(Compiler *c, int mi);
 int yield_block_tails(Compiler *c, int mi, int *out, int max);
 /* The NextNode ids of a block body that leave that block (a nested block's,
    lambda's, def's or loop's own `next` excluded), at most max; answers how
-   many. A `next v` hands v out as the block's value. */
+   many, or -1 when the walk stopped at its depth cap and may have missed one.
+   A `next v` hands v out as the block's value. */
 int an_block_nexts(const NodeTable *nt, int body, int *out, int max);
 /* The calls whose literal block reaches `mi`'s yield, or -1 when not all
    are known (see analyze_util.c). */

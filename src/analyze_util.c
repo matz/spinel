@@ -2882,7 +2882,9 @@ TyKind yield_value_type(Compiler *c, int mi) {
    nested blocks', lambdas', defs' and loops' own `next` excluded). Only the
    nil question asks for them (nullable_int_value). */
 int yield_block_tails_next = 0;
+static int ybt_cut;   /* the walk below stopped at its depth cap */
 static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int depth) {
+  if (depth > 200) ybt_cut = 1;
   if (id < 0 || max <= 0 || depth > 200) return 0;
   NodeKind k = nt_kind(nt, id);
   if (k == NK_NextNode) { out[0] = id; return 1; }
@@ -2900,7 +2902,9 @@ static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int 
 }
 
 int an_block_nexts(const NodeTable *nt, int body, int *out, int max) {
-  return ybt_collect_next(nt, body, out, max, 0);
+  ybt_cut = 0;
+  int n = ybt_collect_next(nt, body, out, max, 0);
+  return ybt_cut ? -1 : n;
 }
 
 int yield_block_tails(Compiler *c, int mi, int *out, int max) {

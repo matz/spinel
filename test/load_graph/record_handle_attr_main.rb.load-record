@@ -26,6 +26,8 @@ r0 #23 f0 CallNode own_x= line 31
 r0 #24 f0 CallNode p line 32
 r0 #25 f0 ClassNode Thread line 23
   r0 #26 f0 DefNode ie line 23
+block new line 18: later
+block instance_eval line 23: assumed
 class Cfg: body#1
 class Thread: body#2 body#4 body#18 body#25
 class Fiber: body#11

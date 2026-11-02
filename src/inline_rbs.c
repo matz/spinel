@@ -407,8 +407,13 @@ static bool ir_visit(const pm_node_t *n, void *data) {
                 ir_ctx sub = *cx;
                 sub.in_class = 0;
                 sub.in_sclass = 1;
+                /* only a receiverless def: `def self.m` here is a method of
+                   the singleton class's own singleton, which has no pins and
+                   keeps the placement warning it had */
                 for (size_t i = 0; i < st->body.size; i++)
-                    if (PM_NODE_TYPE_P(st->body.nodes[i], PM_DEF_NODE)) ir_visit(st->body.nodes[i], &sub);
+                    if (PM_NODE_TYPE_P(st->body.nodes[i], PM_DEF_NODE) &&
+                        ((const pm_def_node_t *) st->body.nodes[i])->receiver == NULL)
+                        ir_visit(st->body.nodes[i], &sub);
             }
             return false;
         }

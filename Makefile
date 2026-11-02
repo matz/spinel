@@ -3765,7 +3765,7 @@ INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide 
 INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
-                     contradiction_inline objarray_boxed desugared_warnings self_types_agree
+                     contradiction_inline objarray_boxed desugared_warnings self_types_agree sclass_receiver_def
 INLINE_RBS_PARITY += flag_types self_types
 INLINE_RBS_PARITY += type_variables
 INLINE_RBS_PARITY += singleton_class_defs
@@ -3881,6 +3881,10 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	two_annotations) \
 	if $(SPINEL) $(IRB)/two_annotations.rb -c --no-line-map -o "$$tmp/t.c" >"$$tmp/t.err" 2>&1; then echo "inline-rbs-test: FAIL (two signatures for one method compiled)"; ok=0; \
 	else grep -q 'two_annotations.rb:4:.*two_annotations.rb:3' "$$tmp/t.err" || { echo "inline-rbs-test: FAIL (two signatures for one method were refused without naming both)"; sed -n 1,5p "$$tmp/t.err"; ok=0; }; fi; \
+	;; \
+	sclass_receiver_def) \
+	$(SPINEL) $(IRB)/sclass_receiver_def.rb -c --no-line-map -o "$$tmp/srd.c" 2>"$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (a malformed annotation on a def self. in class << self stopped the build)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
+	[ "$$(grep -c 'not applied' "$$tmp/srd.err")" = 1 ] && grep -q 'sclass_receiver_def.rb:7:' "$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (class << self: the def self. annotation was not the one warning, or the receiverless def's was not applied)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
 	;; \
 	self_types_agree) \
 	$(SPINEL) $(IRB)/self_types.rb --rbs $(IRB)/sig/self_types_agree -c --no-line-map -o "$$tmp/both.c" 2>"$$tmp/both.err" || { echo "inline-rbs-test: FAIL (an inline -> self agreeing with the class the .rbs names was refused)"; sed -n 1,5p "$$tmp/both.err"; ok=0; }; \

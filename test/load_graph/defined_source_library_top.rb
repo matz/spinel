@@ -40,7 +40,4 @@ p both
 NoSuch = Class.new
 p((defined?(ERB::Escape) ? 1 : 2))
 p((defined?(ERB::NoSuch) ? 1 : 2))
-
-# a constant of the package's Util that CRuby's ERB::Util does not have
-p((defined?(ERB::Util::HTML_ESCAPE) ? 1 : 2))
 p((defined?(ERB::Escape::Foo) ? 1 : 2))

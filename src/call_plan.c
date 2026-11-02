@@ -1454,6 +1454,8 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 }
 /* See call_plan.h. */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
+  int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
+  if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
   if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD)) return 0;
   int framed = elab_plan_enter(c, id);
   int now = elab_blocks_run_now(c, id);

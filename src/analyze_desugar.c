@@ -7921,8 +7921,11 @@ int desugar_defined_method_call(Compiler *c) {
       nt_node_set_ref(nt, rto, "arguments", rargs);
       nt_node_set_int(nt, rto, "node_line", line);
       /* CRuby looks the method up, so the receiver need not answer
-         respond_to? itself (an object below BasicObject does not) */
-      nt_node_set_int(nt, rto, "defined_ask", 1);
+         respond_to? itself (an object below BasicObject does not). The
+         mark names the call asked of, plus one: made after the load
+         record, the ask answers at that call's point, the defined?'s
+         (cplan_cmethod_later) */
+      nt_node_set_int(nt, rto, "defined_ask", lv[i] + 1);
       comp_sym_intern(c, m);
       int ask = rto, next = -1;
       if (pure && i == k - 1) nt_node_set_ref(nt, rto, "receiver", recv);

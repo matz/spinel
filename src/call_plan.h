@@ -697,7 +697,9 @@ int cplan_self_builtin(Compiler *c, int id);
    its statement does: not in a method body, a lambda or an END body, and
    in a block only when every block around it is certain to run at once
    (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
-   whose chain the record does not know. */
+   whose chain the record does not know. The respond_to? a `defined?(C.z)`
+   is answered by (desugar_defined_method_call) asks at the point of the
+   call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
 /* What call id of class method `name` on program class ci runs where ci
    has a `class << self` accessor of the name: CP_SG_NONE where it has none

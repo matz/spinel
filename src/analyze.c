@@ -6973,7 +6973,7 @@ static int seed_class_index(Compiler *c, const char *name) {
 }
 
 static Scope *find_method_scope(Compiler *c, int class_id, const char *name, int is_cmethod) {
-  for (int si = 1; si < c->nscopes; si++) {
+  for (int si = an_scopes_named_first(c, name); si >= 1; si = an_scopes_named_next(c, name, si)) {
     Scope *s = &c->scopes[si];
     if (s->class_id != class_id) continue;
     if (!!s->is_cmethod != !!is_cmethod) continue;
@@ -7107,7 +7107,7 @@ void class_pin_ivar(ClassInfo *ci, const char *name) {
 static int method_in_override_family(Compiler *c, int class_id,
                                      const char *name, int is_cmethod) {
   if (class_id < 0 || !name) return 0;
-  for (int si = 1; si < c->nscopes; si++) {
+  for (int si = an_scopes_named_first(c, name); si >= 1; si = an_scopes_named_next(c, name, si)) {
     Scope *s = &c->scopes[si];
     if (!!s->is_cmethod != !!is_cmethod) continue;
     if (!s->name || !sp_streq(s->name, name)) continue;
@@ -7334,12 +7334,12 @@ static int is_empty_array_literal(const NodeTable *nt, int id, int cap);
    record would replace the earlier one, so a call the first one contradicts
    builds. Said once, naming the method and both signatures. */
 typedef struct { char *key; char *sig; } SeedDecl;
-static void seed_decl_note(SeedDecl **tab, int *n, int *cap, const char *kind,
+static void seed_decl_note(SeedDecl **tab, int *n, int *cap, ANameHash *index, const char *kind,
                            const char *cls, const char *name, const char *ret, const char *params) {
   char key[600]; snprintf(key, sizeof key, "%s %s %s", kind, cls ? cls : "Object", name);
   char sig[900]; snprintf(sig, sizeof sig, "%s %s", ret, params ? params : "");
-  for (int i = 0; i < *n; i++) {
-    if (strcmp((*tab)[i].key, key) != 0) continue;
+  int i = anh_find(index, key);
+  if (i >= 0) {
     if (strcmp((*tab)[i].sig, sig) != 0) {
       fprintf(stderr, "spinel: --rbs declares %s%s%s twice with different signatures:\n"
                       "  (%s) and (%s)\n"
@@ -7352,7 +7352,8 @@ static void seed_decl_note(SeedDecl **tab, int *n, int *cap, const char *kind,
     return;
   }
   if (*n == *cap) { *cap = *cap ? *cap * 2 : 16; *tab = (SeedDecl *)realloc(*tab, sizeof(SeedDecl) * (size_t)*cap); }
-  (*tab)[*n].key = strdup(key); (*tab)[*n].sig = strdup(sig); (*n)++;
+  (*tab)[*n].key = strdup(key); (*tab)[*n].sig = strdup(sig);
+  anh_add(index, (*tab)[*n].key); (*n)++;
 }
 
 /* Pin instance variable `a1` of class `cur_ci` to seed type `a2`, as an
@@ -7826,6 +7827,7 @@ static void seed_warn_unknown_classes(Compiler *c, int ci, const char *sep,
 static void apply_rbs_seeds(Compiler *c, const char *path) {
   FILE *f = fopen(path, "rb");
   if (!f) return;
+  ANameHash decl_index = {0};
   SeedDecl *decls = NULL; int ndecls = 0, capdecls = 0;
   const char *cur_cname = NULL; char cur_cname_buf[300]; cur_cname_buf[0] = 0;
   int cur_ci = -1;       /* current class index; -2 = top level (Object) */
@@ -7859,7 +7861,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
       seed_class_ivar(c, cur_ci, a1, a2);
     }
     else if (sp_streq(kw, "meth") && a1 && a2) {
-      seed_decl_note(&decls, &ndecls, &capdecls, "meth", cur_cname, a1, a2, a3);
+      seed_decl_note(&decls, &ndecls, &capdecls, &decl_index, "meth", cur_cname, a1, a2, a3);
       int class_id = (cur_ci == -2) ? -1 : cur_ci;
       if (cur_ci == -2 || cur_ci >= 0) {
         Scope *ms = find_method_scope(c, class_id, a1, 0);
@@ -7869,7 +7871,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
       }
     }
     else if (sp_streq(kw, "cmeth") && a1 && a2 && cur_ci >= 0) {
-      seed_decl_note(&decls, &ndecls, &capdecls, "cmeth", cur_cname, a1, a2, a3);
+      seed_decl_note(&decls, &ndecls, &capdecls, &decl_index, "cmeth", cur_cname, a1, a2, a3);
       Scope *ms = find_method_scope(c, cur_ci, a1, 1);
       if (ms && !inline_pin_agrees(c, ms, -1, NULL, a2, a3, src, 1)) continue;
       if (ms) seed_warn_unknown_classes(c, cur_ci, ".", a1, a2, a3);
@@ -7881,6 +7883,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
   }
   fclose(f);
   for (int i = 0; i < ndecls; i++) { free(decls[i].key); free(decls[i].sig); }
+  anh_free(&decl_index);
   free(decls);
 }
 
@@ -49011,7 +49014,15 @@ static void an_phase_pre_fixpoint(Compiler *c) {
   {
     const char *seed = g_opt_rbs_seed;
     apply_inline_rbs(c);
-    if (seed && *seed) apply_rbs_seeds(c, seed);
+    if (seed && *seed) {
+      /* Seeds change types, not scope shape. Look methods up through the
+         by-name index, which lists scopes in definition order as the scans
+         did, instead of scanning every scope for each signature. */
+      int was_frozen = comp_scope_index_is_frozen();
+      comp_scope_index_set_frozen(1);
+      apply_rbs_seeds(c, seed);
+      comp_scope_index_set_frozen(was_frozen);
+    }
     if (g_inline_rbs_bad) exit(1);
   }
 

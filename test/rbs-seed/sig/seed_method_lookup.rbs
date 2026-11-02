@@ -1,0 +1,18 @@
+class SmlA
+  def v: (Integer) -> Integer
+  def self.v: (Integer) -> String
+end
+
+class SmlB
+  def v: (String) -> String
+  def self.v: (String) -> String
+end
+
+class SmlTwin
+  def twice: (Integer) -> Integer
+  def twice: (Integer) -> Integer
+end
+
+class SmlTwice
+  def m: (Integer) -> Integer
+end

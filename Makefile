@@ -3149,7 +3149,12 @@ RBS_SEED_CHECKS := $(patsubst test/rbs-seed/%.rb,%,$(shell grep -l '^\# spinel: 
 RBS_SEED_RUN_CHECKS := $(patsubst test/rbs-seed/%.rb,%,$(shell grep -l '^\# spinel: rbs-seed-run$$' test/rbs-seed/*.rb))
 RBS_SEED_RESULTS := $(patsubst %,build/rbs-seed-results/%.res,$(RBS_SEED_CHECKS)) \
                     $(patsubst %,build/rbs-seed-results/%.run,$(RBS_SEED_RUN_CHECKS))
-rbs-seed-test: $(RBS_SEED_RESULTS)
+# Applying a directory of signatures finds each method and each earlier
+# declaration through an index; one of rbs-seed-test's legs.
+.PHONY: rbs-seed-scale-test
+rbs-seed-scale-test: rbs-seed-extractor
+	@SPINEL="$(SPINEL)" sh tools/rbs_seed_scale_test.sh
+rbs-seed-test: rbs-seed-scale-test $(RBS_SEED_RESULTS)
 	@ok=1; for r in $(RBS_SEED_RESULTS); do [ "$$(cat $$r)" = 1 ] || ok=0; done; \
 	if [ $$ok -eq 1 ]; then echo "rbs-seed-test: pass"; else exit 1; fi
 # The extractor must sit beside $(SPINEL) before any check compiles.

@@ -1313,8 +1313,10 @@ int emit_raise_nomethod_new(Compiler *c, int call, Buf *b) {
    not yet reachable from anything while they do. */
 int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *argv, int recv_v, Buf *b) {
   int args = argc >= 4 && is_no_method_error_class(cn) ? argv[2] : -1;
+  /* the fourth positional, before the keywords: #private_call? */
+  int priv = argc >= 5 && is_no_method_error_class(cn) ? argv[3] : -1;
   int te = ++g_tmp, tm = argc >= 2 ? ++g_tmp : -1, tn = argc >= 3 ? ++g_tmp : -1;
-  int ta = args >= 0 ? ++g_tmp : -1, tr = ++g_tmp;
+  int ta = args >= 0 ? ++g_tmp : -1, tp = priv >= 0 ? ++g_tmp : -1, tr = ++g_tmp;
   buf_puts(b, "({ ");
   if (tm >= 0) {
     buf_printf(b, "const char *_t%d = ", tm);
@@ -1332,6 +1334,11 @@ int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *arg
     emit_boxed(c, args, b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", ta);
   }
+  if (tp >= 0) {
+    buf_printf(b, "int _t%d = ", tp);
+    emit_cond(c, priv, b);
+    buf_puts(b, "; ");
+  }
   buf_printf(b, "sp_RbVal _t%d = ", tr);
   emit_boxed(c, recv_v, b);
   buf_puts(b, "; ");
@@ -1342,6 +1349,7 @@ int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *arg
   buf_printf(b, "); SP_GC_ROOT(_t%d);", te);
   if (tn >= 0) buf_printf(b, " _t%d->xname = _t%d;", te, tn);
   if (ta >= 0) buf_printf(b, " _t%d->xkey = _t%d;", te, ta);
+  if (tp >= 0) buf_printf(b, " _t%d->priv_call = _t%d;", te, tp);
   buf_printf(b, " _t%d->xrecv = _t%d; _t%d->has_recv = 1; _t%d; })", te, tr, te, te);
   return 1;
 }

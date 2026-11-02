@@ -7593,6 +7593,13 @@ static void sp_req_beside(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out)
       pm_visit_node(sp_scope_body(x->stack[i]), sp_local_scan, &sc);
       if (sc.nwrite || sc.other) { sp_paths_open(out); return; }
     }
+  /* A local the path reads other than the loop's word (the index of an
+     each_with_index, any other local) has a value only the run time knows, so
+     the literals alone name other files than the path does: it stays open. */
+  SpReads rs = { { NULL }, 0, 0 };
+  pm_visit_node(arg, sp_reads_visit, &rs);
+  for (int i = 0; i < rs.n && !rs.bad; i++) rs.bad = !words || rs.rd[i]->name != pid;
+  if (rs.bad) { sp_paths_open(out); return; }
   char *var = words ? cstr(pid) : NULL;
   for (size_t k = 0; k < (words ? words->size : 1) && !out->open; k++) {
     const pm_string_t *u = words ? &((const pm_string_node_t *)words->nodes[k])->unescaped : NULL;

@@ -15600,17 +15600,19 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
       claimed[crecv] = 1;
       oa_uf_union(sl, S, read_slot[crecv]);
     }
-    /* `slot.each { }` answers the receiver too, unless its block breaks or
-       the program redefines that walk on Array: a method ending in one,
-       after an early `return`, kept its return slot boxed while the walk,
-       its value unread (walk_disc), let the list narrow -- the same
-       sp_PtrArray under an sp_PolyArray return */
+    /* `slot.each { }` answers the receiver too, unless its block breaks: a
+       method ending in one, after an early `return`, kept its return slot
+       boxed while the walk, its value unread (walk_disc), let the list
+       narrow -- the same sp_PtrArray under an sp_PolyArray return. Where
+       the program may redefine that walk on Array (share_builtin_overridden,
+       which a module put ahead of any class answers too), the walk's value
+       is not known to be the receiver: both stay boxed. */
     else if (cn && is_each_walk_or_with_index(cn) && can == 0 && crecv >= 0 && read_slot[crecv] >= 0 &&
-             !share_builtin_overridden(c, "Array", cn) &&
              nt_ref(nt, v, "block") >= 0 && nt_kind(nt, nt_ref(nt, v, "block")) == NK_BlockNode &&
              !block_body_breaks(nt, nt_ref(nt, nt_ref(nt, v, "block"), "body"))) {
       claimed[crecv] = 1;
-      oa_uf_union(sl, S, read_slot[crecv]);
+      if (share_builtin_overridden(c, "Array", cn)) sl[read_slot[crecv]].alive = sl[S].alive = 0;
+      else oa_uf_union(sl, S, read_slot[crecv]);
     }
     /* `t = Array.new(n, v)`: every slot holds the one fill value v, so v is
        the same evidence a pushed element gives, as the generator block's

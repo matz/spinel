@@ -9995,7 +9995,9 @@ static int branch_diverges(Compiler *c, int b) {
 
 /* `Array.new` answers 1 and `Hash.new` (bare, with a default or a capacity,
    or with a default block) 2: like the empty literals they start with no element type
-   of their own, and infer to TY_UNKNOWN until their use settles one. */
+   of their own, and infer to TY_UNKNOWN until their use settles one. A
+   program's own `Array.new` / `Hash.new` answers what it returns, as in
+   node_is_empty_container. */
 static int an_empty_container_new(Compiler *c, int b) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, b, "name");
@@ -10004,10 +10006,10 @@ static int an_empty_container_new(Compiler *c, int b) {
   const char *rn = nt_str(nt, r, "name");
   int a = nt_ref(nt, b, "arguments");
   int an = 0; if (a >= 0) nt_arr(nt, a, "arguments", &an);
-  if (rn && sp_streq(rn, "Array"))
-    return an == 0 && nt_ref(nt, b, "block") < 0 ? 1 : 0;
-  if (!rn || !sp_streq(rn, "Hash")) return 0;
-  return an <= 1 ? 2 : 0;
+  int k = 0;
+  if (rn && sp_streq(rn, "Array")) k = an == 0 && nt_ref(nt, b, "block") < 0 ? 1 : 0;
+  else if (rn && sp_streq(rn, "Hash")) k = an <= 1 ? 2 : 0;
+  return k && (an_builtin_only || !cplan_const_user(c, b, r, 1)) ? k : 0;
 }
 
 /* An empty `[]` / `{}` carries no element type of its own, so it caches
@@ -10055,11 +10057,13 @@ static TyKind an_branch_ty(Compiler *c, int stmts) {
 }
 
 /* 1 when a value (a branch arm, a write's right side, a returned value) is
-   an empty `[]` literal or `Array.new`, 2 for an empty `{}` or `Hash.new`. */
-int an_empty_container_kind(Compiler *c, int b) {
+   an empty `[]` literal or `Array.new`, 2 for an empty `{}` or `Hash.new`.
+   With seq 0 a `(a; b)` is not looked through. */
+static int an_empty_container_at(Compiler *c, int b, int seq) {
   const NodeTable *nt = c->nt;
   while (b >= 0) {
     NodeKind k = nt_kind(nt, b);
+    if (k == NK_ParenthesesNode && !seq && nt_paren_single(nt, b) == b) return 0;
     if (k == NK_ElseNode || k == NK_ParenthesesNode) { b = nt_ref(nt, b, k == NK_ElseNode ? "statements" : "body"); continue; }
     if (k == NK_StatementsNode) {
       int n = 0; const int *ids = nt_arr(nt, b, "body", &n);
@@ -10074,6 +10078,7 @@ int an_empty_container_kind(Compiler *c, int b) {
   }
   return 0;
 }
+int an_empty_container_kind(Compiler *c, int b) { return an_empty_container_at(c, b, 1); }
 /* `(a; b)` is its last statement. An empty `[]` / `{}` there reads UNKNOWN
    for want of an element type, and unlike `([])` a sequence is not looked
    through by the slot that takes it: nothing settled a type, the consumer
@@ -10116,6 +10121,40 @@ int an_empty_container_disagrees(int kind, TyKind other) {
   if (!kind || other == TY_UNKNOWN || other == TY_NIL || other == TY_VOID || other == TY_POLY) return 0;
   if (kind == 1) return !ty_is_array(other) && !ty_is_obj_array(other);
   return !ty_is_hash(other);
+}
+/* An empty `[]` / `Array.new` (kind 1) beside an arm typed as an Integer,
+   Float or String Array has no element type of its own, so it is that
+   Array: the arm emitters build an empty literal at the result's kind.
+   Joined as the general Array instead, it boxed both arms, and only when
+   it was the arm the type was asked of: `c ? [] : [1, 2]` was boxed where
+   `c ? [1, 2] : []` (whose ElseNode the tail check does not open) was not.
+   A `(a; [])` is a value of its own (an_paren_ty), not an arm's literal. */
+static int an_empty_array_takes(Compiler *c, int b, TyKind other) {
+  return (other == TY_INT_ARRAY || other == TY_FLOAT_ARRAY || other == TY_STR_ARRAY) && an_empty_container_at(c, b, 0) == 1;
+}
+
+/* A conditional's answer where an arm ends in an empty container (its arms
+   then_b and else_b, typed tt and et), or TY_UNKNOWN to leave it to the
+   unify. An empty `[]` / `{}` arm is still UNKNOWN (its kind comes from its
+   use), and the unify took the other arm's type for it: an object, a
+   String, a number. It is a container all the same, so a non-container
+   other arm makes the answer boxed; `if u then Rel.new else [] end` built
+   an sp_IntArray into an sp_Rel slot (#4938). Beside an Integer, Float or
+   String Array an empty Array is that Array (an_empty_array_takes). */
+static TyKind an_empty_arm_join(Compiler *c, int then_b, int else_b, TyKind tt, TyKind et) {
+  int tk = an_empty_container_kind(c, then_b), ek = an_empty_container_kind(c, else_b);
+  if (tk && ek && tk != ek) return TY_POLY;
+  if (!ek && an_empty_array_takes(c, then_b, et)) return et;
+  if (!tk && an_empty_array_takes(c, else_b, tt)) return tt;
+  if (tt == TY_UNKNOWN && tk && ek == 0 && an_empty_container_disagrees(tk, et)) return TY_POLY;
+  if (et == TY_UNKNOWN && ek && tk == 0 && an_empty_container_disagrees(ek, tt)) return TY_POLY;
+  /* ...and against an arm that settles on no type at all (a call nothing
+     answers raises), once the rounds are no longer optimistic, the empty
+     literal is the value: `if q then Parser.new.parse(q) else [] end`
+     answered nil (#4938) */
+  if (!g_infer_optimistic && tt == TY_UNKNOWN && et == TY_UNKNOWN && (tk != 0) != (ek != 0))
+    return (tk ? tk : ek) == 1 ? TY_POLY_ARRAY : TY_POLY_POLY_HASH;
+  return TY_UNKNOWN;
 }
 
 /* The value of the `super` node id in s that reaches method mi. */
@@ -11515,21 +11554,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (ediv && !tdiv) return an_branch_ty(c, then_b);
     TyKind tt = an_branch_ty(c, then_b);
     TyKind et = an_branch_ty(c, else_b);
-    /* An empty `[]` / `{}` arm is still UNKNOWN (its kind comes from its
-       use), and the unify took the other arm's type for it: an object, a
-       String, a number. It is a container all the same, so a non-container
-       other arm makes the answer boxed; `if u then Rel.new else [] end` built
-       an sp_IntArray into an sp_Rel slot (#4938). */
-    { int tk = an_empty_container_kind(c, then_b), ek = an_empty_container_kind(c, else_b);
-      if (tk && ek && tk != ek) return TY_POLY;
-      if (tt == TY_UNKNOWN && tk && ek == 0 && an_empty_container_disagrees(tk, et)) return TY_POLY;
-      if (et == TY_UNKNOWN && ek && tk == 0 && an_empty_container_disagrees(ek, tt)) return TY_POLY;
-      /* ...and against an arm that settles on no type at all (a call nothing
-         answers raises), once the rounds are no longer optimistic, the empty
-         literal is the value: `if q then Parser.new.parse(q) else [] end`
-         answered nil (#4938) */
-      if (!g_infer_optimistic && tt == TY_UNKNOWN && et == TY_UNKNOWN && (tk != 0) != (ek != 0))
-        return (tk ? tk : ek) == 1 ? TY_POLY_ARRAY : TY_POLY_POLY_HASH; }
+    { TyKind ej = an_empty_arm_join(c, then_b, else_b, tt, et); if (ej != TY_UNKNOWN) return ej; }
     return ty_unify(tt, et);
   }
   if (nk == NK_ElseNode) {
@@ -11788,6 +11813,7 @@ TyKind infer_uncached(Compiler *c, int id) {
       int rn = 0;
       if (rk == NK_ArrayNode) {
         nt_arr(nt, rnd, "elements", &rn);
+        if (rn == 0 && an_empty_array_takes(c, rnd, lt)) return lt;
         if (rn == 0) rt = TY_POLY_ARRAY;
       }
       else if (rk == NK_HashNode) {
@@ -11799,6 +11825,7 @@ TyKind infer_uncached(Compiler *c, int id) {
          fallback of `||` is the container, and beside a left of another kind
          the answer boxes */
       if (rt == TY_UNKNOWN) {
+        if (an_empty_array_takes(c, rnd, lt)) return lt;
         int ek = an_empty_container_kind(c, rnd);
         if (ek && nk == NK_OrNode && (lt == TY_NIL || lt == TY_UNKNOWN)) {
           /* the variant the slot's key writes chose (mark_empty_hash_key_ctx) */

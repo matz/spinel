@@ -4648,6 +4648,9 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   TyKind et = repr_of(c, recv).as_ty;
   /* an object whose class writes its own tap / then is called */
   if (ty_is_object(et) && call_target(c, id, ty_object_class(et), name, 0, NULL) >= 0) return 0;
+  /* a boxed receiver that may be one goes through the dispatch, whose
+     builtin arm comes back here */
+  if (et == TY_POLY && !g_poly_builtin_arm && user_defines_or_reads(c, name)) return 0;
   /* An empty array literal receiver (`[].tap { |a| a << x }.join`) has no
      element type of its own, so comp_ntype leaves it unknown. Adopt the block
      param's container type (it was typed from the pushes) and materialize a

@@ -5527,6 +5527,12 @@ SP_COLD static const char *sp_nomethod_msg(const char *m, sp_RbVal v) {
   if (sp_nomethod_kernel_private(m)) return sp_sprintf("private method '%s' called for %s", m, d);
   return sp_sprintf("undefined method '%s' for %s", m, d);
 }
+/* The NameError of `recv.method(:m)` where the receiver has no such method:
+   CRuby names the receiver's class ("undefined method 'm' for class
+   'NilClass'"), where a call's NoMethodError describes the receiver. */
+SP_COLD static const char *sp_nomethod_class_msg(const char *m, sp_RbVal v) {
+  return sp_sprintf("undefined method '%s' for class '%s'", m, sp_poly_class_name(v));
+}
 /* The NoMethodError of a call on nil, as sp_raise_nomethod(sp_nomethod_msg(m,
    nil)) raises it (the receiver staged, a Kernel private name spelled as
    one); it does not return, so the C compiler takes a nil test's raise as

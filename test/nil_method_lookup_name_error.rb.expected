@@ -1,0 +1,5 @@
+NameError: undefined method 'keep' for class 'NilClass'
+NameError: undefined method 'zork' for class 'NilClass'
+NameError: undefined method 'zork' for class 'TrueClass'
+NameError: undefined method 'zork' for class 'Foo'
+NameError: undefined method 'keep' for class 'NilClass'

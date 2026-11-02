@@ -1704,7 +1704,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (recv >= 0 && !bam_poly && repr_of(c, recv).kind == RK_BOXED) {
       buf_puts(b, "({ sp_RbVal _rpm = ");
       emit_expr(c, recv, b);
-      buf_puts(b, "; SP_GC_ROOT_RBVAL(_rpm); sp_raise_cls(\"NoMethodError\", sp_nomethod_msg(");
+      buf_puts(b, "; SP_GC_ROOT_RBVAL(_rpm); sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
       emit_str_literal(b, sym);
       buf_puts(b, ", _rpm)); (sp_BoundMethod *)0; })");
       return 1;
@@ -1921,7 +1921,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         /* An undefined name is CRuby's immediate NameError (#2752): with a
            concretely-typed receiver, accept only names the builtin table (or
            the universal Object surface) knows; everything else raises now,
-           not at call time. A poly/unknown receiver keeps the lenient path. */
+           not at call time. A poly/unknown receiver keeps the lenient path.
+           The message names the receiver's class, as CRuby's does
+           ("for class 'NilClass'"), the program's own by its Ruby name. */
         TyKind nrt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
         const char *ncls = nrt == TY_STRING ? "String" : nrt == TY_INT ? "Integer"
                          : nrt == TY_FLOAT ? "Float" : nrt == TY_SYMBOL ? "Symbol"
@@ -1933,10 +1935,17 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         if (ncls && builtin_method_arity(ncls, sym, &nba)) nknown = 1;
         if (builtin_object_method_known(sym)) nknown = 1;
         if (ncls && !nknown) {
-          buf_printf(b, "(sp_int)(sp_raise_cls(\"NameError\","
-                        " sp_sprintf(\"undefined method '%s' for %%s\","
-                        " \"an instance of %s\")), 0)",
-                     sym, ncls);
+          const char *shown = nrt == TY_NIL ? "NilClass" : ncls;
+          if (ty_is_object(nrt)) {
+            const char *rn = class_ruby_name(c, ty_object_class(nrt));
+            shown = rn ? rn : c->classes[ty_object_class(nrt)].name;
+          }
+          buf_puts(b, "(sp_int)(sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '");
+          buf_puts(b, sym);
+          buf_puts(b, "' for class '%s'\", ");
+          if (nrt == TY_BOOL) { buf_puts(b, "("); emit_expr(c, recv, b); buf_puts(b, ") ? \"TrueClass\" : \"FalseClass\""); }
+          else buf_printf(b, "\"%s\"", shown);
+          buf_puts(b, ")), 0)");
         }
         else buf_puts(b, "(sp_int)0");  /* builtin/Kernel method: no callable address */
       }

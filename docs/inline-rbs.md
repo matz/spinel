@@ -117,7 +117,10 @@ name. Required, optional and trailing positional parameters and keywords,
 including optional keywords, can receive pins; each positional takes the
 signature's type of its own kind in order, so `(Integer, ?String, *Symbol,
 Float)` describes `def m(a, b = "", *c, d)`. A rest or `**` parameter stays
-the array or hash its arguments are gathered into, as with `--rbs`.
+the array or hash its arguments are gathered into, as with `--rbs`. One
+optional positional past the def's own, where the def has a rest and no
+trailing positionals (`(Symbol, ?untyped)` for `def fetch(key, *default)`),
+describes what the rest gathers and pins nothing, as with `--rbs`.
 A method that forwards with `...` (`def self.parse(...)`, `def m(a, ...)`)
 takes the signature's return type, and each named positional ahead of the
 `...` takes the signature's leading positional in its place, required ones

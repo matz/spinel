@@ -1,0 +1,4 @@
+class Bag
+  def fetch: (untyped, ?untyped) -> untyped
+  def get: (untyped, ?untyped, ?strict: untyped) -> untyped
+end

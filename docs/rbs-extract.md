@@ -204,6 +204,8 @@ the field layouts coincide by construction.
 | `Time`, `Thread`, `Fiber`, `Random`, `File`, `IO`, a socket class, `Class` | `obj_Time`, ... (the builtin's own kind) |
 | `Range`, an exception class (`StandardError`, `Errno::ENOENT`) | `obj_Range`, ... (applies; the slot stays inferred) |
 | `IO::Buffer` (a native class)          | `obj_IO_Buffer`                       |
+| `self`, `instance` (a class's instance method or attribute) | `obj_<the class>` (`-> self` in `class String` is `-> String`) |
+| `top` as a type argument (`Hash[Symbol, top]`) | as `untyped`: `sym_poly_hash`  |
 | `Array[Integer]`                       | `int_array`                           |
 | `Array[Float]`                         | `float_array`                         |
 | `Array[String]`                        | `str_array`                           |

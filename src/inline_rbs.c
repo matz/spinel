@@ -207,6 +207,7 @@ typedef struct {
     char *lookup;          /* the namespace a bare type name is looked up in first */
     int is_cmethod;
     int in_def;            /* writes: 0 class body / top level, 1 instance method, 2 class method */
+    const char *self_class;   /* a def or attribute of a class's instances: owner, which `self` names; else NULL */
     ir_ann **anns;
     int nanns;
 } ir_target;
@@ -234,6 +235,7 @@ typedef struct {
     const char *owner;     /* "" at top level */
     const char *lookup;    /* the parent namespace of owner */
     int in_def;            /* 0, 1 instance method, 2 class method */
+    int in_class;          /* directly in a class body, not a module's or a block's */
 } ir_ctx;
 
 static void ir_name_into(const ir_file *f, pm_constant_id_t id, sbuf_t *out) {
@@ -337,12 +339,12 @@ static bool ir_makes_class(const ir_file *f, const pm_node_t *v) {
 }
 
 static void ir_class_body(ir_ctx *cx, const pm_node_t *container, const pm_node_t *body,
-                          const char *leaf_path) {
+                          const char *leaf_path, int is_class) {
     char *owner = ir_join(cx->owner, leaf_path);
     ir_container_add(cx->w, container, 0, owner, cx->owner);
     cx->w->conts[cx->w->nconts - 1].body = body;
     known_names_add(owner, strlen(owner));
-    ir_ctx sub = { cx->w, owner, cx->owner, 0 };
+    ir_ctx sub = { cx->w, owner, cx->owner, 0, is_class };
     if (body != NULL) pm_visit_node(body, ir_visit, &sub);
     free(owner);
 }
@@ -388,7 +390,7 @@ static bool ir_visit(const pm_node_t *n, void *data) {
                 pm_visit_node(((const pm_class_node_t *) n)->superclass, ir_visit, cx);
             sbuf_t p;
             sbuf_init(&p);
-            if (ir_const_path(f, path, &p) && p.buf) ir_class_body(cx, n, body, p.buf);
+            if (ir_const_path(f, path, &p) && p.buf) ir_class_body(cx, n, body, p.buf, PM_NODE_TYPE_P(n, PM_CLASS_NODE));
             sbuf_free(&p);
             return false;
         }
@@ -400,6 +402,14 @@ static bool ir_visit(const pm_node_t *n, void *data) {
             /* Generic receiverless calls and lambdas preserve the lexical
                class for declarations, but do not declare class-body ivars. */
             ir_container_add(w, n, 3, cx->owner, cx->lookup);
+            if (!cx->in_def && cx->in_class) {
+                /* a def in `Struct.new do ... end` or `class_eval do` is not
+                   necessarily one of the class's own instance methods */
+                ir_ctx sub = *cx;
+                sub.in_class = 0;
+                pm_visit_child_nodes(n, ir_visit, &sub);
+                return false;
+            }
             return !cx->in_def;
         case PM_CONSTANT_WRITE_NODE:
             /* `CType = Data.define(...)` makes a class as `class CType` does:
@@ -425,6 +435,7 @@ static bool ir_visit(const pm_node_t *n, void *data) {
                 (d->receiver && !PM_NODE_TYPE_P(d->receiver, PM_SELF_NODE))) return false;
             ir_target *t = ir_target_new(w, IT_DEF, n, cx);
             t->is_cmethod = d->receiver != NULL;
+            if (cx->in_class && !t->is_cmethod) t->self_class = t->owner;
             /* the line a trailing return annotation is written on: after `)`,
                or after the name of a def with no parentheses */
             const uint8_t *se = d->rparen_loc.start ? d->rparen_loc.end : d->name_loc.end;
@@ -442,7 +453,8 @@ static bool ir_visit(const pm_node_t *n, void *data) {
             if (call->receiver != NULL) return false;
             if (ir_is_attr_call(f, call)) {
                 if (!cx->owner[0]) return false;
-                ir_target_new(w, IT_ATTR, n, cx);
+                ir_target *t = ir_target_new(w, IT_ATTR, n, cx);
+                if (cx->in_class) t->self_class = t->owner;
                 return false;
             }
             pm_constant_t *name = pm_constant_pool_id_to_constant(&f->pm->constant_pool, call->name);
@@ -658,10 +670,12 @@ static bool ir_says_nothing(rbs_parser_t *p, rbs_node_t *type) {
 
 /* map_type with the owner's lexical scope, as traverse_members sets it up */
 static bool ir_map(rbs_parser_t *p, rbs_node_t *type, const ir_target *t, sbuf_t *out) {
-    const char *sv = g_self_scope;
+    const char *sv = g_self_scope, *st = g_self_type;
     g_self_scope = strcmp(t->owner, "Object") == 0 ? "" : t->owner;
+    g_self_type = t->self_class;
     bool ok = map_type(p, type, t->lookup, out);
     g_self_scope = sv;
+    g_self_type = st;
     if (!ok && ir_says_nothing(p, type)) { sbuf_set(out, "-", 1); return true; }
     if (ok && out->buf && type->location.end_byte > type->location.start_byte)
         ir_names_add(&g_ir_names, out->buf, p->lexer->string.start + type->location.start_byte,
@@ -1378,7 +1392,7 @@ static void ir_walk_open(ir_file *f, ir_walk *w, pm_parser_t *parser, pm_node_t 
     for (size_t i = 0; i < len; i++) if (source[i] == '\n') f->line_starts[l++] = i + 1;
     memset(w, 0, sizeof *w);
     w->f = f;
-    ir_ctx cx = { w, "", "", 0 };
+    ir_ctx cx = { w, "", "", 0, 0 };
     pm_visit_node(root, ir_visit, &cx);
 }
 

@@ -5,8 +5,6 @@
 # beside two seeded parameters. Note: `untyped` is NOT here -- it maps to
 # poly.
 class DroppedTypes
-  def a: (self) -> void
-  def b: (instance) -> void
   def c: (_Each) -> void
   def d: (Integer & String) -> void
   def e: (:sym) -> void

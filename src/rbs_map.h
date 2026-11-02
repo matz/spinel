@@ -48,6 +48,11 @@ extern bool g_alias_unresolved;
  * an unqualified type name resolves against it first. */
 extern const char *g_self_scope;
 
+/* The qualified name of the class whose instance `self` is in the type
+ * being mapped (`String` for a method of `class String`); NULL where
+ * `self` is no one class's instance, and `self` is then out of the subset. */
+extern const char *g_self_type;
+
 void name_of_symbol(rbs_parser_t *p, rbs_ast_symbol_t *sym, sbuf_t *out);
 void name_of_type_name(rbs_parser_t *p, rbs_type_name_t *tn, sbuf_t *out);
 

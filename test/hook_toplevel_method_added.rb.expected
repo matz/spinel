@@ -1,0 +1,15 @@
+Hooked sma singleton_method_added
+Hooked sma method_added
+Hooked ma a
+Hooked sma x
+Built sma singleton_method_added
+Built sma method_added
+Built ma b
+Built sma y
+Hooked sma z
+Mixin sma singleton_method_added
+Mixin sma method_added
+Mixin ma c
+top sma q
+top sma r
+done

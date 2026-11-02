@@ -16898,6 +16898,55 @@ static void sp_raise_exc(volatile sp_Exception *ve) {
   /* a message never given is the class name, as #message answers it */
   sp_raise_cls(e->cls_name, (e->msg && !e->msg_h) ? e->msg : sp_exc_message(e));
 }
+/* A dispatcher's raise of NoMethodError for a call that finds no method,
+   out of line so the call that does not raise carries nothing for it: the
+   error names the method and holds the receiver and the call's arguments,
+   the n that follow (passed as values, so the caller keeps no array for
+   them), or a rest dispatcher's rest array and keywords (a non-empty hash is
+   the last argument). The caller passes operands that allocate nothing, but
+   some are heap values nothing else holds (an interpolated message, a
+   temporary receiver), so each is rooted on entry, before the first
+   allocation here. */
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_obj(const char *msg, sp_RbVal name, sp_RbVal recv, sp_PolyArray *a) {
+  sp_Exception *e = sp_exc_new("NoMethodError", msg);
+  e->xname = name;
+  e->xkey = sp_box_poly_array(a);
+  e->xrecv = recv;
+  e->has_recv = 1;
+  sp_raise_exc(e);
+  SP_UNREACHABLE();   /* sp_raise_exc longjmps */
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call(const char *msg, sp_RbVal name, sp_RbVal recv, sp_int n, ...) {
+  SP_GC_SAVE();
+  SP_GC_ROOT_STR(msg);
+  SP_GC_ROOT_RBVAL(name);
+  SP_GC_ROOT_RBVAL(recv);
+  sp_RbVal v[n > 0 ? n : 1];
+  va_list ap;
+  va_start(ap, n);
+  for (sp_int i = 0; i < n; i++) v[i] = va_arg(ap, sp_RbVal);
+  va_end(ap);
+  for (sp_int i = 0; i < n; i++) _sp_gc_root_push((void **)((uintptr_t)&v[i] | (uintptr_t)1));
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  for (sp_int i = 0; i < n; i++) sp_PolyArray_push(a, v[i]);
+  sp_raise_nomethod_obj(msg, name, recv, a);
+}
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const char *msg, sp_RbVal name, sp_RbVal recv, sp_RbVal rest, sp_RbVal kw) {
+  SP_GC_SAVE();
+  SP_GC_ROOT_STR(msg);
+  SP_GC_ROOT_RBVAL(name);
+  SP_GC_ROOT_RBVAL(recv);
+  SP_GC_ROOT_RBVAL(rest);
+  SP_GC_ROOT_RBVAL(kw);
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  sp_PolyArray *r = sp_poly_to_poly_array(rest);
+  SP_GC_ROOT(r);
+  for (sp_int i = 0; r && i < r->len; i++) sp_PolyArray_push(a, r->data[i]);
+  if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
+  sp_raise_nomethod_obj(msg, name, recv, a);
+}
 /* e.message as the String handle it holds (sp_Exception.msg_h), for a
    change through it (--share-strings). A message held as bytes becomes the
    exception's handle here, frozen when the message is (a literal's), so a

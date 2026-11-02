@@ -18,10 +18,10 @@
 #   keep-alive, no pipelining and no HTTP/2
 # * no proxy support, no cookie jar, no automatic redirect following
 #   (#get_response hands back the 3xx and its Location, as CRuby's does)
-# * no streaming body block on #request; the body is read whole
 # * a gzip or deflate body is inflated whole once it is read; not streamed
 require "socket"
 require "timeout"
+require "net/protocol"
 require "uri"
 require "zlib"
 
@@ -88,7 +88,7 @@ module Net
   # through #get_fields as the separate values. `fields` holds those; a
   # response built without it has one value per header.
   class HTTPResponse
-    attr_reader :http_version, :code, :message, :body
+    attr_reader :http_version, :code, :message
 
     def initialize(http_version, code, message, headers, body, fields = nil)
       @http_version = http_version
@@ -96,12 +96,44 @@ module Net
       @message = message
       @headers = headers          # downcased name => value
       @body = body
+      @body_reader = nil
+      @decode_content = false
+      @read = false
       @fields = {}
       if fields.nil?
         headers.each { |k, v| @fields[k] = [v] }
       else
         fields.each { |k, v| @fields[k] = v }
       end
+    end
+
+    def reading_body(reader, decode_content)
+      @body_reader = reader
+      @decode_content = decode_content
+    end
+
+    def body
+      read_body
+    end
+
+    def read_body(dest = nil, &block)
+      if @read
+        raise IOError, "#{self.class}#read_body called twice" if dest || block
+        return @body
+      end
+      raise ArgumentError, "both arg and block given for HTTP method" if dest && block
+      if !@body_reader.nil? || (!@body.nil? && (dest || block))
+        out = block.nil? ? (dest || String.new) : ReadAdapter.new(block)
+        if @body_reader.nil?
+          out << @body
+        else
+          @body_reader.read_entity_body(@headers, @fields, out, @decode_content)
+        end
+        @body = out
+      end
+      @body_reader = nil
+      @read = true
+      @body
     end
 
     def [](name)
@@ -674,42 +706,20 @@ module Net
       request(Delete.new(path, headers))
     end
 
-    # A block gets the response, as CRuby's does. CRuby streams the body to it;
-    # this reads the body whole first, so the block sees a complete response --
-    # the difference is when the bytes arrive, not what the block is handed.
-    # The transport lives in `perform` so that the reconnect recursion below
-    # has no block to forward and this method has exactly one place to call it.
-    # `&blk` rather than `yield ... if block_given?`: the latter makes this a
-    # YIELDING method, which is inlined at its call sites, and the no-block
-    # spelling then found no arm here (`undefined method 'request'` at run
-    # time). A declared block parameter keeps one ordinary function for both
-    # spellings.
+    # Keep the connection alive through the block, then consume an unread body.
+    # An explicit block parameter also keeps the no-block spelling callable.
     def request(req, &blk)
+      started = @started
+      start unless started
       res = perform(req)
       blk.call(res) unless blk.nil?
+      res.body
       res
+    ensure
+      do_finish unless started
     end
 
     def perform(req)
-      # CRuby opens a connection for a #request on an unstarted Net::HTTP, runs
-      # the request over it and closes it again -- so `Net::HTTP.new(host,
-      # port).request(req)` works without a `start`, and is the spelling a
-      # caller writes when the connection is configured somewhere other than
-      # where the request is sent. Doing that here rather than raising keeps
-      # the two spellings interchangeable, as they are there.
-      unless @started
-        # `start` is INSIDE the begin: `connect` assigns @socket and
-        # only then completes the TLS handshake, so a handshake failure raises
-        # with a live socket that nothing else will close. `do_finish` is a
-        # no-op when there is nothing open, which is the other way start can
-        # fail.
-        begin
-          start
-          return perform(req)
-        ensure
-          do_finish
-        end
-      end
       # Every request goes out with `Connection: close`, so the server hangs
       # up after answering and the socket a second request would use is dead.
       # CRuby reconnects transparently in that situation, and a caller writing
@@ -750,7 +760,9 @@ module Net
     end
 
     def wire_read(n)
-      @tls.nil? ? @socket.read(n) : @tls.read(n)
+      @tls.nil? ? @socket.readpartial(n) : @tls.readpartial(n)
+    rescue EOFError
+      nil
     end
 
     def wire_read_all
@@ -830,22 +842,27 @@ module Net
       # come, until the server closed the connection. Their #body is nil,
       # as CRuby's is.
       bodyless = method == "HEAD" || code[0, 1] == "1" || code == "204" || code == "304"
-      body =
-        if bodyless
-          nil
-        elsif headers["transfer-encoding"].to_s.downcase.split(",").last.to_s.strip == "chunked"
-          read_chunked
-        elsif headers.key?("content-length")
-          n = headers["content-length"].to_i
-          n > 0 ? wire_read(n).to_s : ""
-        else
-          wire_read_all.to_s
-        end
+      res = build_response(version, code, message, headers, nil, fields)
+      res.reading_body(self, decode_content) unless bodyless
+      res
+    end
 
-      debug "read #{body.bytesize} bytes" unless body.nil?
-      if decode_content && !bodyless
-        length_before = headers["content-length"]
-        body = decode_body(headers, body)
+    def read_entity_body(headers, fields, dest, decode_content)
+      length_before = headers["content-length"]
+      encoded = decode_content && !headers.key?("content-range") &&
+        ["gzip", "x-gzip", "deflate"].include?(headers["content-encoding"].to_s.downcase)
+      if encoded
+        body = String.new
+        read_framed_body(headers, body)
+        dest << decode_body(headers, body)
+      else
+        read_framed_body(headers, dest)
+        if decode_content && !headers.key?("content-range") &&
+            ["identity", "none"].include?(headers["content-encoding"].to_s.downcase)
+          headers.delete("content-encoding")
+        end
+      end
+      if decode_content
         # decode_body may drop Content-Encoding and restate Content-Length;
         # the separate values follow only what it changed.
         fields.delete("content-encoding") unless headers.key?("content-encoding")
@@ -853,7 +870,29 @@ module Net
           fields["content-length"] = [headers["content-length"]]
         end
       end
-      build_response(version, code, message, headers, body, fields)
+      dest
+    end
+
+    def read_framed_body(headers, dest)
+      if headers["transfer-encoding"].to_s.downcase.split(",").last.to_s.strip == "chunked"
+        read_chunked(dest)
+      elsif headers.key?("content-length")
+        read_length(headers["content-length"].to_i, dest)
+      else
+        while (chunk = wire_read(16384))
+          break if chunk.empty?
+          dest << chunk
+        end
+      end
+    end
+
+    def read_length(n, dest)
+      while n > 0
+        chunk = wire_read([n, 16384].min).to_s
+        break if chunk.empty?
+        dest << chunk
+        n -= chunk.bytesize
+      end
     end
 
     # Inflates a gzip or deflate body once it is read whole. A Content-Range
@@ -920,8 +959,7 @@ module Net
     # Chunked transfer: each chunk is a hex length line, the bytes, then CRLF.
     # A zero length ends it, and the trailer that may follow is read to the
     # blank line so the connection is left where the caller expects.
-    def read_chunked
-      out = String.new
+    def read_chunked(out)
       loop do
         line = wire_gets
         break if line.nil?
@@ -932,9 +970,7 @@ module Net
           end
           break
         end
-        chunk = wire_read(size)
-        break if chunk.nil?
-        out << chunk
+        read_length(size, out)
         wire_gets                    # the CRLF after the chunk
       end
       out

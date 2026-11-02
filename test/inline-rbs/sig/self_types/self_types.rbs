@@ -1,0 +1,10 @@
+class String
+  def tidy!: (untyped) -> self
+  def filled: (untyped) -> self?
+  def cut: (Integer, ?Hash[Symbol, top]) -> untyped
+end
+
+class Counter
+  def bump: (untyped) -> self
+  def positive: (untyped) -> self?
+end

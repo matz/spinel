@@ -4046,7 +4046,7 @@ static void cf_node(CF *f, int v) {
   case NK_RequiredParameterNode: case NK_RestParameterNode: case NK_KeywordRestParameterNode:
   case NK_BlockParameterNode: case NK_InNode: case NK_EmbeddedStatementsNode:
   case NK_PreExecutionNode: case NK_PostExecutionNode: case NK_PinnedExpressionNode: case NK_PinnedVariableNode:
-  case NK_ConstantPathTargetNode: case NK_CallTargetNode: case NK_IndexTargetNode:
+  case NK_CallTargetNode: case NK_IndexTargetNode:
     return;
   case NK_OptionalParameterNode: case NK_OptionalKeywordParameterNode: {
     /* a default: into the parameter it defaults */
@@ -4263,7 +4263,7 @@ static void cf_node(CF *f, int v) {
   }
   case NK_ClassVariableTargetNode: cf_all(f, cf_entry(f, CF_K_CVAR, nt_str(nt, v, "name"))); return;
   case NK_GlobalVariableTargetNode: { const char *nm = nt_str(nt, v, "name"); if (nm && nm[0] == '$') nm = comp_resolve_gvar(c, nm + 1); cf_all(f, cf_entry(f, CF_K_GVAR, nm)); return; }
-  case NK_ConstantTargetNode: cf_all(f, cf_entry(f, CF_K_CONST, cf_const_key(nt_str(nt, v, "name")))); return;
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode: cf_all(f, cf_entry(f, CF_K_CONST, cf_const_key(nt_str(nt, v, "name")))); return;
   case NK_ClassVariableReadNode: cf_flow(f, cf_entry(f, CF_K_CVAR, nt_str(nt, v, "name")), v); return;
   case NK_GlobalVariableReadNode: {
     const char *nm = nt_str(nt, v, "name");

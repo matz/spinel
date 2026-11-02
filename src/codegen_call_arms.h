@@ -255,6 +255,9 @@ void emit_math_arg(Compiler *c, int node, Buf *out);
 int json_to_json_is_builtin(Compiler *c, int recv);
 int node_is_stringio(Compiler *c, int node);
 void emit_exc_exception(Compiler *c, int recv, int arg, Buf *b);
+int emit_name_error_new_kw(Compiler *c, const char *cn, int argc, const int *argv, int recv_v, Buf *b);
+int emit_raise_nomethod_new(Compiler *c, int call, Buf *b);
+int disp_nomethod_out_of_line(Compiler *c, int call);   /* (codegen.c's value scan asks it too) */
 const char *exc_gated_acc_fn(const char *name);
 int hoist_exc_recv(Compiler *c, int recv);
 int ctor_init_takes_block(Compiler *c, int initm);

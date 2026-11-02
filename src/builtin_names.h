@@ -45,6 +45,8 @@ int is_plain_builtin_reader(const char *n); /* name: every builtin with it reads
 int is_tap_alias(const char *n);      /* tap then yield_self */
 int is_tap_name(const char *n);       /* tap */
 int is_quantifier(const char *n);     /* all? any? none? one? */
+int is_name_error_class(const char *n);   /* NameError NoMethodError: .new(msg, name, ...) */
+int is_no_method_error_class(const char *n);   /* NoMethodError: .new(msg, name, args, ...) */
 int is_set_op(const char *n);         /* & intersection | union - difference */
 int is_combination_family(const char *n);  /* combination permutation repeated_combination repeated_permutation */
 /* the visibility word a call names: module_function first, so that a
@@ -294,7 +296,9 @@ int is_constants_list_name(const char *n); /* constants */
 int is_autoload_query_name(const char *n); /* autoload? */
 int is_stmt_output_name(const char *n); /* puts print p */
 int is_class_body_acting_name(const char *n); /* output, raise, exit and the like */
-int is_definition_hook_name(const char *n); /* inherited included extended prepended method_added singleton_method_added const_added */
+int is_definition_hook_name(const char *n); /* inherited included extended prepended method_added method_removed method_undefined their singleton forms const_added */
+int is_module_hook_name(const char *n); /* ...Class's and Module's: all but the singleton forms */
+int is_basic_object_hook_name(const char *n); /* ...BasicObject's: singleton_method_added singleton_method_removed singleton_method_undefined */
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */
@@ -576,6 +580,7 @@ int builtin_object_method_known(const char *m);   /* one of Object's own methods
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */
+int is_class_value_reflection(const char *n); /* a listing, const_defined?, class_variable_get/set/defined?: from the receiver's class */
 int is_singleton_method_list(const char *n); /* singleton_methods */
 int builtin_every_object_answers(const char *m, int cmeth); /* Object's own, Kernel's, Object's; with cmeth Module's too */
 int builtin_class_id_answers(int id, const char *m, int cmeth); /* the builtin class of cls_id id, or one above it, has m (cmeth: a class method) */

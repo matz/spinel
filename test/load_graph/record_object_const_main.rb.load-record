@@ -1,0 +1,122 @@
+load record: 64 points, 1 regions
+r0 #0 f0 ProgramNode line 7
+r0 #1 f0 ConstantPathWriteNode line 7
+r0 #2 f0 ConstantPathWriteNode line 8
+r0 #3 f0 ConstantPathOrWriteNode line 9
+r0 #4 f0 ConstantPathWriteNode line 10
+r0 #5 f0 ConstantPathAndWriteNode line 11
+r0 #6 f0 ConstantPathWriteNode line 12
+r0 #7 f0 ConstantPathOperatorWriteNode line 13
+r0 #8 f0 MultiWriteNode line 14
+r0 #9 f0 ConstantPathWriteNode line 15
+r0 #10 f0 CallNode p line 16
+r0 #11 f0 ClassNode K line 18
+  r0 #12 f0 ConstantPathWriteNode line 19
+  r0 #13 f0 ConstantPathWriteNode line 20
+  r0 #14 f0 ConstantPathOrWriteNode line 21
+  r0 #15 f0 ConstantPathWriteNode line 22
+  r0 #16 f0 CallNode p line 23
+r0 #17 f0 ModuleNode M line 25
+  r0 #18 f0 ConstantPathWriteNode line 26
+  r0 #19 f0 CallNode each line 27
+    r0 #20 f0 ConstantPathWriteNode line 27
+  r0 #21 f0 CallNode p line 28
+r0 #22 f0 DefNode run line 31
+r0 #23 f0 CallNode run line 32
+  r0 #24 may f0 ConstantPathWriteNode line 32
+r0 #25 f0 CallNode run line 33
+  r0 #26 may f0 ConstantPathWriteNode line 33
+r0 #27 f0 CallNode run line 34
+  r0 #28 may f0 ConstantPathOrWriteNode line 34
+r0 #29 f0 CallNode p line 35
+r0 #30 f0 ConstantWriteNode O line 37
+r0 #31 f0 ConstantPathWriteNode line 38
+r0 #32 f0 ConstantPathOrWriteNode line 39
+r0 #33 f0 CallNode p line 40
+r0 #34 f0 ConstantPathWriteNode line 42
+  r0 #35 f0 CallNode * line 42
+r0 #36 f0 ConstantPathOrWriteNode line 43
+  r0 #37 may f0 CallNode + line 43
+r0 #38 f0 ConstantPathWriteNode line 44
+  r0 #39 f0 LocalVariableReadNode v line 44
+r0 #40 f0 CallNode p line 45
+r0 #41 f0 ModuleNode N line 47
+  r0 #42 f0 ConstantWriteNode N__Object line 48
+  r0 #43 f0 ConstantPathWriteNode line 49
+  r0 #44 f0 CallNode p line 50
+  r0 #45 f0 ConstantPathWriteNode line 51
+r0 #46 f0 CallNode p line 53
+r0 #47 f0 ClassNode SpinelAnonClass1 line 57
+  r0 #48 f0 DefNode hi line 57
+r0 #49 f0 ConstantPathWriteNode line 57
+r0 #50 f0 ConstantWriteNode S39 line 58
+  r0 #51 f0 DefNode b line 59
+r0 #52 f0 CallNode p line 61
+r0 #53 f0 ClassNode Object line 62
+  r0 #54 f0 DefNode zz line 63
+r0 #55 f0 CallNode p line 65
+r0 #56 f0 ClassNode Object line 67
+r0 #57 f0 ConstantWriteNode O21 line 68
+r0 #58 f0 ClassNode SpinelAnonClass2 line 69
+  r0 #59 f0 DefNode hi line 69
+r0 #60 f0 ConstantPathWriteNode line 69
+r0 #61 f0 CallNode p line 70
+r0 #62 f0 ClassNode Object line 71
+  r0 #63 f0 CallNode p line 72
+block each line 27: assumed
+block map line 42: assumed
+block map line 43: assumed
+block map line 44: assumed
+block new line 48: assumed
+block new line 58: assumed
+class K: body#11
+class M: body#17
+class N: body#41
+class N__Object: body#42
+class SpinelAnonClass1: body#47
+class Object: body#53 body#56 body#62
+class SpinelAnonClass2: body#58
+entity K: owner main leaf K
+entity M: owner main leaf M
+entity N: owner main leaf N
+entity SpinelAnonClass1: owner main leaf SpinelAnonClass1
+entity SpinelAnonClass2: owner main leaf SpinelAnonClass2
+const A: write#1
+const B: write#2
+const C: write#3 may
+const D: write#4 write#5 may
+const E: write#6 write#7
+const F: write#8
+const G: write#8
+const H: write#9
+const K: write#11
+const K1: write#12
+const K2: write#13
+const K3: write#14 may
+const K4: write#15
+const M: write#17
+const M1: write#18
+const M2: write#20 may
+main#run: def#22 private end=yes
+const R1: write#24 may
+const R2: write#26 may
+const R3: write#28 may
+const O: write#30
+const O1: write#31
+const O2: write#32 may
+const V1: write#34
+const V2: write#36 may
+const V3: write#38
+const N: write#41
+const N::Object: write#42
+const N__Object::N1: write#43
+const N2: write#45
+const SpinelAnonClass1: write#47
+SpinelAnonClass1#hi: def#48 runs=#52 end=yes
+const Y39: write#49
+const S39: write#50
+Object#zz: def#54 end=yes
+const O21: write#57
+const SpinelAnonClass2: write#58
+SpinelAnonClass2#hi: def#59 runs=#52 end=yes
+const Y21: write#60

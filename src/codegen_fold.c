@@ -12620,8 +12620,15 @@ int is_descendant(Compiler *c, int k, int anc) {
    dispatch. */
 int dispatch_impl_count(Compiler *c, int call, int cid, const char *name) {
   int impls[256], n = 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (!is_descendant(c, k, cid)) continue;
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  /* cid and its descendants (comp_descendants, less the unreferenced ones
+     is_descendant leaves out), not every class with its parent chain: the
+     count does not depend on the order */
+  int nd = 0;
+  const int *ds = comp_descendants(c, cid, &nd);
+  for (int di = -1; di < nd; di++) {
+    int k = di < 0 ? cid : ds[di];
+    if (di >= 0 && c->classes[k].unreferenced) continue;
     int def = -1;
     if (call_target(c, call, k, name, 0, &def) < 0) continue;
     int seen = 0;

@@ -64,6 +64,7 @@ static size_t known_names_cap = 0;
  * innermost enclosing namespace, so `Application` inside `module Rails`
  * is `Rails::Application` when that is declared. */
 const char *g_self_scope = NULL;
+const char *g_self_type = NULL;
 
 void known_names_add(const char *name, size_t n) {
     /* dedupe (linear; n is small in practice) */
@@ -242,6 +243,15 @@ static bool type_name_is_unqualified(rbs_type_name_t *tn) {
 
 /* Map a ClassInstance node. Handles Array[T], Hash[K,V], primitives,
  * and nominal classes. */
+/* A type argument (`V` of `Hash[K, V]`): as map_type, except that `top`
+ * (any value) is the boxed value an element of several types is, as
+ * `untyped` is. A slot of its own typed `top` pins nothing instead. */
+static bool map_type_arg(rbs_parser_t *p, rbs_node_t *node,
+                         const char *enclosing_scope, sbuf_t *out) {
+    if (node != NULL && node->type == RBS_TYPES_BASES_TOP) { sbuf_set(out, "poly", 4); return true; }
+    return map_type(p, node, enclosing_scope, out);
+}
+
 static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,
                                 const char *enclosing_scope, sbuf_t *out) {
     sbuf_t name;
@@ -289,7 +299,7 @@ static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,
     if (name.len >= 5 && strcmp(name.buf + name.len - 5, "Array") == 0 && argc == 1) {
         sbuf_t elem;
         sbuf_init(&elem);
-        if (!map_type(p, ci->args->head->node, enclosing_scope, &elem)) {
+        if (!map_type_arg(p, ci->args->head->node, enclosing_scope, &elem)) {
             sbuf_free(&elem);
             sbuf_free(&name);
             return false;
@@ -321,8 +331,8 @@ else {
     if (name.len >= 4 && strcmp(name.buf + name.len - 4, "Hash") == 0 && argc == 2) {
         sbuf_t k, v;
         sbuf_init(&k); sbuf_init(&v);
-        if (!map_type(p, ci->args->head->node, enclosing_scope, &k)
-            || !map_type(p, ci->args->head->next->node, enclosing_scope, &v)) {
+        if (!map_type_arg(p, ci->args->head->node, enclosing_scope, &k)
+            || !map_type_arg(p, ci->args->head->next->node, enclosing_scope, &v)) {
             sbuf_free(&k); sbuf_free(&v); sbuf_free(&name); return false;
         }
         const char *tag = hash_tag_for_kv(k.buf, v.buf);
@@ -672,6 +682,24 @@ else {
             sbuf_set(out, "bool", 4);
             return true;
         }
+        case RBS_TYPES_BASES_SELF:
+        case RBS_TYPES_BASES_INSTANCE: {
+            /* `self` (or `instance`): an instance of the class the method is written in,
+             * as the extractor's `-> self` return is (a reopened builtin's
+             * obj_ tag is read as that builtin's kind); in `class Object`
+             * any value, as `Object` is. In a top-level builtin with a
+             * kind of its own (`class String`) it is that kind, the token
+             * the class's name maps to, so `-> self` there agrees with an
+             * `-> String` the .rbs writes; a nested `A::String` or a
+             * `My_String` keeps its obj_ tag. */
+            if (g_self_type == NULL) return false;
+            if (strcmp(g_self_type, "Object") == 0) { sbuf_set(out, "poly", 4); return true; }
+            const char *prim = strchr(g_self_type, '_') ? NULL : primitive_tag(g_self_type, strlen(g_self_type));
+            if (prim != NULL) { sbuf_set(out, prim, strlen(prim)); return true; }
+            sbuf_set(out, "obj_", 4);
+            sbuf_append_cstr(out, g_self_type);
+            return true;
+        }
         case RBS_TYPES_CLASS_SINGLETON:
             /* `singleton(X)`: the class itself, a Class value. It used to
              * fall out of the subset, which dropped the whole method's seed,
@@ -679,7 +707,7 @@ else {
             sbuf_set(out, "class", 5);
             return true;
         default:
-            /* Out of subset: Self / Top / Bottom / Any / Instance /
+            /* Out of subset: Self and Instance (but in a class's instance method) / Top / Bottom / Any /
              * Class / Block / Function / Interface / Intersection /
              * Literal (but true and false) / Proc / Tuple / UntypedFunction / Variable. */
             return false;

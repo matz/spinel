@@ -1252,7 +1252,22 @@ int obj_class_unrelated(Compiler *c, int a, int b) {
    `instantiated` never marks it and its dispatch arm must not be dropped for
    that (#4219). Limited to the primitive names the dispatch key below can map
    a runtime tag to. */
+static int class_is_prim_reopen_raw(Compiler *c, int k);
+/* (kept per class under the class count and shape: a boxed call's arm key
+   asked it of every candidate class of its name, by name comparisons) */
 int class_is_prim_reopen(Compiler *c, int k) {
+  static unsigned char *memo; static int memo_n = -1; static unsigned memo_gen; static const Compiler *memo_c;
+  if (memo_c != c || memo_n != c->nclasses || memo_gen != comp_class_shape_gen()) {
+    free(memo); memo = calloc((size_t)c->nclasses + 1, 1);
+    memo_c = c; memo_n = c->nclasses; memo_gen = comp_class_shape_gen();
+  }
+  /* (only while the scope index is frozen: class names and nesting are
+     settled by then) */
+  if (!memo || k < 0 || k >= memo_n || !comp_scope_index_is_frozen()) return class_is_prim_reopen_raw(c, k);
+  if (!memo[k]) memo[k] = class_is_prim_reopen_raw(c, k) ? 2 : 1;
+  return memo[k] == 2;
+}
+static int class_is_prim_reopen_raw(Compiler *c, int k) {
   const char *n = c->classes[k].name;
   return sp_streq(n, "Integer") || sp_streq(n, "Float") ||
          sp_streq(n, "String") || sp_streq(n, "Symbol") ||
@@ -1911,6 +1926,13 @@ static void cls_value_probe_fn(Compiler *c, int id, void *ctx, Buf *nb) {
   pr->got = got;
   emit_call(c, id, nb);
 }
+/* Is a Class value's answer, as the emitter wrote it, one that raises or
+   can raise NoMethodError: a raise, or the Class emitter's own
+   class-method switch (the program's methods of the name, then the raise)? */
+static int cls_value_answer_raises(const char *t) {
+  return strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
+         strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"");
+}
 /* The default arm of the class-side switch below: a class value whose class
    defines no class method of this name, answered as a Class the compiler
    does not know statically -- the receiver read as the unboxed sp_Class
@@ -1955,9 +1977,7 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   /* an answer that can itself raise NoMethodError is the Class emitter's
      own class-method switch (the program's methods of the name, then the
      raise): no better than the default it would replace */
-  if (!t || strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
-      strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"") ||
-      (got == TY_VOID && tr >= 0 && ret != TY_POLY)) {
+  if (!t || cls_value_answer_raises(t) || (got == TY_VOID && tr >= 0 && ret != TY_POLY)) {
     free(nb->p); free(nb); free(arm_pre);
     return 0;
   }
@@ -1977,6 +1997,149 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   else buf_printf(b, " _t%d = %s;", tr, nb->p);
   buf_puts(b, arm_pre ? " } break;" : " break;");
   free(nb->p); free(nb); free(arm_pre);
+  return 1;
+}
+
+/* The test a class-tag arm keys class k on: its index, or its name for a
+   Class value that carries one (`obj.class` of a poly object,
+   sp_poly_class_val), followed by ` ? `. */
+static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
+  const char *crn = class_ruby_name(c, k);
+  if (!crn) crn = c->classes[k].name;
+  buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
+                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
+}
+/* One class value's arm of a class-tag switch (a class-value trial arm of
+   cplan_poly_cmeth): the call re-entered on the receiver read as the
+   sp_Class of class k, which the Class emitters are told
+   (view_push_class_is), under the silent probe, boxed into *out. Kept only
+   where the emission read that class and answered without raising: an
+   emitter that answers for any class would answer as for one it does not
+   know, and a refusal or a raise keeps the switch's NoMethodError. Dropped
+   too where it read something the record cannot prove settled before the
+   call (`unsettled`, PolyArm.unsettled): the emitters answer as of the
+   load's end. A slot `ret` other than TY_POLY takes only an answer of its
+   own type. */
+static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, int tv, TyKind ret, Buf *out) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int argc = 0; const int *argv = call_args(nt, id, &argc);
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || g_n_argov + 1 > MAX_ARG_OVERRIDE ||
+      nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return 0;
+  /* each argument runs once, in the arm that is taken */
+  for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
+  int sv_tmp = g_tmp;
+  int slot = view_bind(recv, "sp_unbox_class(_t%d)", tv);
+  int va = view_push_arm(id, g_prbd_skip, 1);
+  int vw = view_push(c, recv, TY_CLASS);
+  int fv = view_push_face(recv, TY_CLASS);
+  int vk = view_push_class_is(c, recv, k);
+  ClsValueProbe pr = { ret, TY_UNKNOWN };
+  Buf nb; memset(&nb, 0, sizeof nb);
+  char *pre = NULL;
+  int ok = poly_arm_probe(c, id, cls_value_probe_fn, &pr, &nb, &pre) && pr.got != TY_UNKNOWN &&
+           pr.got != TY_VOID && view_class_is_read(vk) && !(view_class_is_read(vk) & unsettled);
+  view_pop(c, vk);
+  view_pop(c, fv);
+  view_pop(c, vw);
+  view_pop(c, va);
+  view_unbind(slot);
+  const char *t = ok ? nb.p : NULL;
+  if (t && cls_value_answer_raises(t)) t = NULL;
+  if (t) {
+    if (pre) buf_printf(out, "({ %s ", pre);
+    if (ret == TY_POLY) emit_boxed_text(c, pr.got, t, out);
+    else buf_puts(out, t);
+    if (pre) buf_puts(out, "; })");
+  }
+  /* a dropped arm leaves the C it did not keep unnumbered */
+  if (!t) g_tmp = sv_tmp;
+  free(nb.p); free(pre);
+  return t != NULL;
+}
+/* The kept class-value arms of plan p, each `test ? answer : ` into b, the
+   receiver held in _t<tv> (with tagged, the test asks its tag first), the
+   answers in a slot of type ret; each observed into --plan-check frame
+   `frame` (-1: none). Their count. */
+static int cls_value_known_arms(Compiler *c, int id, const PolyPlan *p, int tv, TyKind ret, int tagged, int frame, Buf *b) {
+  int kept = 0;
+  for (int i = 0; i < p->n; i++) {
+    const PolyArm *a = &p->arm[i];
+    int k = pa_class_value_trial(a);
+    if (k < 0) continue;
+    Buf ab; memset(&ab, 0, sizeof ab);
+    int ok = cls_value_known_arm(c, id, k, a->unsettled, tv, ret, &ab);
+    if (ok) {
+      if (tagged) buf_printf(b, "_t%d.tag == SP_TAG_CLASS && ", tv);
+      emit_cls_value_test(c, k, tv, b);
+      buf_puts(b, ab.p);
+      buf_puts(b, " : ");
+      kept++;
+    }
+    free(ab.p);
+    if (frame >= 0) { pa_resume(frame); pa_observe(PA_TRIAL, a->key, -1, TY_UNKNOWN, ok); }
+  }
+  return kept;
+}
+/* A class-tag switch for a call no class method of the program takes:
+   a Class value of the receiver answers what the builtin Module and Class
+   methods answer for its class, as `K.name(args)` does (the plan's
+   class-value arms); any other value, and a class whose arm is dropped,
+   takes what the call compiles to without the switch. The call's slot is
+   boxed, or a scalar the arms answer in their own type (a predicate's
+   Boolean). Emits nothing and answers 0 when no arm is kept. */
+static int emit_cls_value_switch(Compiler *c, int id, Buf *b) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  const char *nm = nt_str(c->nt, id, "name");
+  if (recv < 0 || !is_class_value_reflection(nm) || g_cls_value_recv == recv) return 0;
+  Repr rr = repr_of(c, id);
+  int boxed = rr.kind == RK_BOXED || rr.as_ty == TY_UNKNOWN;
+  TyKind ret = boxed ? TY_POLY : rr.as_ty;
+  if (!boxed && (!is_scalar_ret(ret) || ret == TY_VOID || ret == TY_NIL || (oint_kind(ret) && node_is_oint(c, id))))
+    return 0;
+  /* a scalar slot keeps master's raise for every class while one has a
+     class method of the name (no class-method switch serves it) */
+  int ncm = 0;
+  if (!boxed && (comp_cmethod_candidates(c, nm, &ncm), ncm > 0)) return 0;
+  PolyPlan *p = cplan_poly_cls_values(c, id);
+  Buf arms; memset(&arms, 0, sizeof arms);
+  int sv_tmp = g_tmp;
+  int tv = ++g_tmp;
+  /* asked before the receiver is held, so a call none answers keeps its C */
+  if (!cls_value_known_arms(c, id, p, tv, ret, 1, -1, &arms)) {
+    g_tmp = sv_tmp;
+    free(arms.p); cplan_poly_free(p); return 0;
+  }
+  int th = hold_operand_pre(c, recv, TY_POLY, 1, tv, 1);
+  int frame = g_plan_check ? pa_begin(id) : -1;
+  if (th != tv || frame >= 0) {
+    free(arms.p); memset(&arms, 0, sizeof arms);
+    tv = th;
+    cls_value_known_arms(c, id, p, tv, ret, 1, frame, &arms);
+  }
+  nd_stamp(id, ND_SWITCH);
+  char raise[320];
+  if (boxed)
+    snprintf(raise, sizeof raise,
+             "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()}))", nm, tv);
+  else
+    snprintf(raise, sizeof raise, "(sp_raise_cls(\"NoMethodError\", sp_nomethod_msg(\"%s\", _t%d)), %s)",
+             nm, tv, default_value_from_compiler(c, ret));
+  /* not a Class at run time, or a class whose arm is dropped: the call as
+     it compiles without the switch (master's raise, with its arguments) */
+  Buf eb; memset(&eb, 0, sizeof eb);
+  argov_reserve();
+  view_bind(recv, "_t%d", tv);
+  int sv = g_cls_tag_skip;
+  g_cls_tag_skip = id;
+  if (boxed) emit_boxed(c, id, &eb);
+  else emit_expr(c, id, &eb);
+  g_cls_tag_skip = sv;
+  view_unbind(g_n_argov - 1);
+  buf_printf(b, "({ %s%s; })", arms.p ? arms.p : "", eb.p && eb.p[0] ? eb.p : raise);
+  if (frame >= 0) pa_end(c, frame, p);
+  free(eb.p); free(arms.p);
+  cplan_poly_free(p);
   return 1;
 }
 
@@ -14738,6 +14901,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else if (knm && sp_streq(knm, "receiver")) recv_v = nt_ref(nt, kel2[ke], "value");
           else other = 1;
         }
+        if (!other && key_v < 0 && recv_v >= 0 && is_name_error_class(cn)) {
+          emit_name_error_new_kw(c, cn, argc, argv, recv_v, b);
+          { *out = 1; return 1; }
+        }
         if (!other && (key_v >= 0 || recv_v >= 0)) {
           int te3 = ++g_tmp;
           buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", ", te3, cn);
@@ -14760,11 +14927,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       /* NameError.new(msg, name) / NoMethodError.new(msg, name): carry the
          missing name for the #name accessor (rooted across the alloc). */
-      if (argc >= 2 && (sp_streq(cn, "NameError") || sp_streq(cn, "NoMethodError"))) {
+      if (argc >= 2 && is_name_error_class(cn)) {
         /* NoMethodError.new(msg, name, args): the third argument is the
            failed call's argument list, read back by #args (#3042). */
         int tn2 = ++g_tmp, te2 = ++g_tmp, ta2 = -1;
-        int has_args = argc >= 3 && sp_streq(cn, "NoMethodError");
+        int has_args = argc >= 3 && is_no_method_error_class(cn);
         buf_printf(b, "({ sp_RbVal _t%d = ", tn2);
         emit_boxed(c, argv[1], b);
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tn2);
@@ -14783,7 +14950,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (has_args) buf_printf(b, " _t%d->xkey = _t%d;", te2, ta2);
         /* NoMethodError.new(msg, name, args, private): the fourth argument
            drives #private_call? (#3042) */
-        if (argc >= 4 && sp_streq(cn, "NoMethodError")) {
+        if (argc >= 4 && is_no_method_error_class(cn)) {
           buf_printf(b, " _t%d->priv_call = ", te2);
           emit_cond(c, argv[3], b);
           buf_puts(b, ";");
@@ -18893,9 +19060,6 @@ int class_object_answers_builtin(const char *qm, int is_module) {
   if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
   return class_object_private_method(qm, is_module);
 }
-static int class_is_module(Compiler *c, int ci) {
-  return comp_class_is_module(c, &c->classes[ci]);
-}
 
 /* Does class object ci answer `qm`, asked at call id: its own class
    methods and singleton attrs only once one is defined where id runs, as
@@ -22766,14 +22930,9 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           for (int k = 0; k < nc; k++) {
             nd_callee(c, id, cmi[k], cdef[k], 1);
             int rarm = emit_reopen_arm_test(c, cmi[k], nm, rcls, NULL, b);
-            if (!rarm) {
-              /* `obj.class` of a poly object is a Class value that carries
-                 its name (sp_poly_class_val): it names this class too */
-              const char *crn = class_ruby_name(c, ccls[k]);
-              if (!crn) crn = c->classes[ccls[k]].name;
-              buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
-                            "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, ccls[k], tv, tv, tv, crn);
-            }
+            /* `obj.class` of a poly object is a Class value that carries
+               its name (sp_poly_class_val): it names this class too */
+            if (!rarm) emit_cls_value_test(c, ccls[k], tv, b);
             /* a class whose method is private (private_class_method, or
                `class << self; private`) refuses it here as a direct `C.foo`
                does: the value only names the class at run time (#8202) */
@@ -22819,6 +22978,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             buf_puts(b, " : ");
           }
           if (nsg > 0) emit_boxed_cls_sg_first_arms(c, id, nm, argc, argv, tv, b);
+          /* a Class value whose class has no method of the name: the
+             builtin answer for its class (the plan's class-value arms) */
+          if (is_class_value_reflection(nm)) {
+            PolyPlan *cvp = cplan_poly_cls_values(c, id);
+            cls_value_known_arms(c, id, cvp, tv, TY_POLY, 0, pa_frame, b);
+            cplan_poly_free(cvp);
+          }
           /* Not a Class at run time: this is whatever the call would have
              compiled to with no class method of the name in the program -- a
              String receiver takes the String method. Raising here instead made
@@ -22874,6 +23040,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           if (tv >= 0) unhoist_dispatch_args(c, hn, hsv, hty);
           free(sg.p); }
       }
+      /* no class method takes a Class value: the builtin answer for its class */
+      if (grt == TY_POLY && nm && g_cls_tag_skip != id && emit_cls_value_switch(c, id, b)) return 1;
       /* The receiver's static class HAS subclasses and cannot answer this
          name, while some subclass can. A slot typed as that class is only its
          STATIC type -- an inherited method storing `self` types it as the
@@ -26200,11 +26368,91 @@ static int emit_nil_answer_call(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* Has the answer of nil's method for call id (cplan_nil_program_method)
+   the call's type: its own, or a boxed slot's, or nil where the call's
+   slot holds a nil (a pointer, or a nil)? An Object method's arm converts
+   its answer itself (emit_call_reopen_arms). */
+int cplan_nil_program_served(Compiler *c, int id) {
+  int nilcls = 0;
+  int mi = cplan_nil_program_method(c, id, cplan_call_name(c->nt, id), &nilcls);
+  if (mi < 0) return 0;
+  if (!nilcls) return 1;
+  Repr want = repr_of(c, id);
+  if (want.kind == RK_BOXED) return 1;
+  Scope *s = &c->scopes[mi];
+  TyKind t = want.as_ty;
+  if (!method_is_void(s) && (TyKind)s->ret != TY_NIL) return (TyKind)s->ret == t;
+  return want.kind == RK_PTR || t == TY_NIL;
+}
+
+/* Call id where the program gives nil a method of its name, other than
+   the one the receiver's class runs (CN_PROGRAM): the receiver and the
+   arguments held in Ruby's order, then nil's method (NilClass's, or
+   Object's) for a NULL receiver and the call for any other. A statement
+   (stmt) drops both answers. 1 when it emitted. */
+static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, id, "receiver");
+  int nilcls = 0;
+  int mi = cplan_nil_program_method(c, id, cplan_call_name(nt, id), &nilcls);
+  if (mi < 0) return 0;
+  Buf hb; memset(&hb, 0, sizeof hb);
+  int mark, held;
+  char rtext[32] = "";
+  emit_nil_target_head_r(c, id, &hb, "", 0, 0, &mark, &held, rtext, sizeof rtext);
+  size_t pre0 = g_pre ? g_pre->len : 0;
+  Buf cb; memset(&cb, 0, sizeof cb);
+  Buf nb; memset(&nb, 0, sizeof nb);
+  int vt = view_push_repr(c, r, VR_NIL_TESTED, 1);
+  /* the two are the arms of a choice on the receiver, as a dispatch
+     switch's are: --plan-check stamps each as an arm (ucall_arm_push) */
+  ucall_arm_push();
+  emit_call_held(c, id, &cb);
+  /* (nil's: as on a receiver that is nil) */
+  emit_call_reopen_arms(c, id, &nb, nt, nt_str(nt, id, "name"), r, TY_NIL);
+  ucall_arm_pop();
+  view_pop(c, vt);
+  nil_target_release(c, mark, held);
+  if (g_plan_check) cplan_served("nil-program");
+  Repr want = repr_of(c, id);
+  Scope *s = &c->scopes[mi];
+  Buf nv; memset(&nv, 0, sizeof nv);
+  if (stmt) buf_printf(&nv, "(void)(%s)", nb.p ? nb.p : "0");
+  else if (nilcls && (method_is_void(s) || (TyKind)s->ret == TY_NIL))
+    buf_printf(&nv, "((void)(%s), %s)", nb.p ? nb.p : "0",
+               want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+  else if (nilcls && want.kind == RK_BOXED) emit_boxed_text(c, (TyKind)s->ret, nb.p ? nb.p : "0", &nv);
+  else buf_puts(&nv, nb.p ? nb.p : "0");
+  Buf rb; memset(&rb, 0, sizeof rb);
+  nil_target_recv_text(c, r, rtext, &rb);
+  Buf vb; memset(&vb, 0, sizeof vb);
+  buf_printf(&vb, "(%s) == NULL ? %s : ", rb.p ? rb.p : "0", nv.p);
+  if (stmt) buf_printf(&vb, "(void)(%s)", cb.p ? cb.p : "0");
+  else buf_puts(&vb, cb.p ? cb.p : "");
+  if (g_pre && g_pre->len > pre0) {
+    /* the call hoisted work (an argument's prelude): the head goes ahead of
+       it, and the value is the choice alone */
+    Buf rest; memset(&rest, 0, sizeof rest);
+    buf_puts(&rest, g_pre->p + pre0);
+    g_pre->len = pre0; g_pre->p[pre0] = 0;
+    size_t hn = hb.p ? strlen(hb.p) : 0;
+    while (hn > 0 && hb.p[hn - 1] == ' ') hb.p[--hn] = 0;
+    if (hn) { emit_indent(g_pre, g_indent); buf_puts(g_pre, hb.p); buf_puts(g_pre, "\n"); }
+    buf_puts(g_pre, rest.p);
+    free(rest.p);
+    buf_printf(b, "(%s)", vb.p);
+  }
+  else buf_printf(b, "({ %s%s; })", hb.p ? hb.p : "", vb.p);
+  free(hb.p); free(cb.p); free(nb.p); free(nv.p); free(rb.p); free(vb.p);
+  return 1;
+}
+
 /* Call id in value position, behind its nil arm. 1 when it emitted. */
 static int emit_nil_target_call(Compiler *c, int id, Buf *b) {
   if (strbuf_mutator_on_held_self_answer(c, id)) return 0;   /* (as below) */
   int cn = cplan_nil(c, id);
   if (cn == CN_ANSWER && emit_nil_answer_call(c, id, b)) return 1;
+  if (cn == CN_PROGRAM) return emit_nil_program_call(c, id, b, 0);
   int test = cn == CN_RAISE;
   if (!test && (!poly_target_call(c, id) || nil_target_runs_in_call(c, id))) return 0;
   if (test && g_plan_check) cplan_served("nil-target");
@@ -26270,6 +26518,13 @@ int emit_nil_target_stmt(Compiler *c, int id, Buf *b, int indent) {
       return 1;
     }
     free(vb.p);
+  }
+  if (cn == CN_PROGRAM) {
+    Buf vb; memset(&vb, 0, sizeof vb);
+    int done = emit_nil_program_call(c, id, &vb, 1);
+    if (done) { emit_indent(b, indent); buf_printf(b, "%s;\n", vb.p); }
+    free(vb.p);
+    return done;
   }
   int test = cn == CN_RAISE;
   if (!test && (!poly_target_call(c, id) || nil_target_runs_in_call(c, id))) return 0;
@@ -31624,13 +31879,13 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         yes = class_responds_to(c, ci, qm, id);
         /* A reopening retains the builtin methods its own table does not list. */
         if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) &&
-            !(class_is_module(c, ci) && class_only_method(qm)))
+            !(comp_class_is_module(c, &c->classes[ci]) && class_only_method(qm)))
           rt_probe_answer(c, id, &yes);
         /* a private/protected class method answers only to include_all */
         if (yes && foldable && comp_cmethod_vis_declared(c, ci, qm, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         /* as do Class's and Module's private ones (private, inherited, ...) */
-        if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, ci)))
+        if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])))
           yes = 1;
       }
       /* A core class or module (String, Integer, Comparable, Thread) has no
@@ -31644,6 +31899,11 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
          methods too, answered to include_all as a user one's are */
       else if (rcn && ci < 0 && builtin_class_id(rcn) != 0 && foldable && include_all &&
                class_object_private_method(qm, is_builtin_module_name(rcn))) { resolved = 1; yes = 1; }
+      /* a private row (Class#inherited) types its call, and is no public
+         surface: answered to include_all above */
+      else if (rcn && ci < 0 && builtin_class_id(rcn) != 0 && (bop_flags(TY_CLASS, qm) & BOPF_PRIVATE)) {
+        if (foldable) { resolved = 1; yes = 0; }
+      }
       else if (rt_probe_answer(c, id, &yes)) resolved = 1;
     }
     else if (recv >= 0 && ty_is_object(rt)) {
@@ -31651,9 +31911,20 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       /* a heap object slot holds nil as NULL (a defaulted `host = nil`
          parameter), and nil answers only its own surface */
       if (!comp_ty_value_obj(c, rt)) g_rto_nil_obj = 1;
-      int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
-      if (a < 0) return -1;
-      resolved = 1; yes = a;
+      /* asked where the load record places the call (a class body, the
+         top level), a name an undef there has taken away is not answered,
+         though a later definition gives it back: `undef_method :a;
+         p new.respond_to?(:a); def a = 10` prints false */
+      LoadPoint up = elab_point_of(c, id);
+      const LrDef *ud = NULL;
+      if (up.region >= 0 && elab_method_at(c, cid, qm, 0, up, &ud) == ELAB_NO && ud && ud->kind == LR_UNDEF) {
+        resolved = 1; yes = 0;
+      }
+      else {
+        int a = rto_subtree_answer(c, cid, qm, include_all, foldable);
+        if (a < 0) return -1;
+        resolved = 1; yes = a;
+      }
     }
     else if (recv < 0) {
       /* implicit self: resolve against the enclosing scope's class. An
@@ -31674,7 +31945,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
           yes = class_responds_to(c, cid, qm, id);
           if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
-          if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))
+          if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
             yes = 1;
         }
         else {
@@ -31693,7 +31964,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         yes = class_responds_to(c, cid, qm, id);
         if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
-        if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))
+        if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
           yes = 1;
         if (!foldable && !yes) resolved = 0;
       }

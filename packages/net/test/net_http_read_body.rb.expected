@@ -1,0 +1,18 @@
+["200", "hello world", "Net::ReadAdapter", true]
+Net::HTTPOK#read_body called twice
+"Net::ReadAdapter"
+["hello world", "hello world", "hello world"]
+Net::HTTPOK#read_body called twice
+"hello world"
+["200", "hello world", "Net::ReadAdapter", true]
+Net::HTTPOK#read_body called twice
+"Net::ReadAdapter"
+["hello world", "hello world", "hello world"]
+Net::HTTPOK#read_body called twice
+"hello world"
+["200", "hello world", "Net::ReadAdapter", true]
+Net::HTTPOK#read_body called twice
+"Net::ReadAdapter"
+["hello world", "hello world", "hello world"]
+Net::HTTPOK#read_body called twice
+"hello world"

@@ -992,6 +992,17 @@ int str_in(const char *s, const char *const *set) {
   for (int i = 0; set[i]; i++) if (sp_streq(s, set[i])) return 1;
   return 0;
 }
+/* recv is `singleton_class` or `self.singleton_class`, with no arguments and
+   no block: in a class or module body, the body's own singleton class, on
+   which `singleton_class.attr_reader :x` defines what `class << self;
+   attr_reader :x; end` does */
+int nt_self_singleton_class(const NodeTable *nt, int recv) {
+  if (recv < 0 || nt_kind(nt, recv) != NK_CallNode || !is_singleton_class_name(nt_str(nt, recv, "name")) ||
+      nt_ref(nt, recv, "arguments") >= 0 || nt_ref(nt, recv, "block") >= 0) return 0;
+  int r = nt_ref(nt, recv, "receiver");
+  return r < 0 || nt_kind(nt, r) == NK_SelfNode;
+}
+
 /* A construct whose VALUE is an empty container. Its type reads UNKNOWN
    because it carries no element type, which is not the same as producing no
    value -- and the two were conflated wherever an expression's type decides
@@ -1189,12 +1200,21 @@ int class_recv_static_ci(Compiler *c, int node) {
    the program, a builtin class or an alias has its own static dispatch. */
 int const_class_value_only(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_kind(nt, node) == NK_ConstantReadNode ? nt_str(nt, node, "name") : NULL;
+  NodeKind k = nt_kind(nt, node);
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, node, "name") : NULL;
   if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
   LocalVar *lv = comp_const(c, nm);
+  if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
   const LrDef *d = NULL;
-  return lv && (lv->type == TY_CLASS || lv->type == TY_POLY) && !resolve_class_alias_chain(c, nm) &&
-    elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  if (k == NK_ConstantReadNode)
+    return elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
+  /* `M::X` (or `::X`): the write must be the constant of the class or
+     module the parent names (Object's for `::X`) where the read stands, as
+     `M::X` looks it up; a parent known only at run time names none */
+  int par = nt_ref(nt, node, "parent");
+  int owner = par < 0 ? -1 : class_recv_static_ci(c, par);
+  if (par >= 0 && owner < 0) return 0;
+  return elab_const_own_at(c, owner, nm, elab_point_of(c, node), &d) != ELAB_NO && d && d->kind == LR_WRITE;
 }
 
 /* The class method `name` the program defines for the class a class-valued
@@ -2862,7 +2882,9 @@ TyKind yield_value_type(Compiler *c, int mi) {
    nested blocks', lambdas', defs' and loops' own `next` excluded). Only the
    nil question asks for them (nullable_int_value). */
 int yield_block_tails_next = 0;
+static int ybt_cut;   /* the walk below stopped at its depth cap */
 static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int depth) {
+  if (depth > 200) ybt_cut = 1;
   if (id < 0 || max <= 0 || depth > 200) return 0;
   NodeKind k = nt_kind(nt, id);
   if (k == NK_NextNode) { out[0] = id; return 1; }
@@ -2877,6 +2899,12 @@ static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int 
     for (int j = 0; j < an && n < max; j++) n += ybt_collect_next(nt, ids[j], out + n, max - n, depth + 1);
   }
   return n;
+}
+
+int an_block_nexts(const NodeTable *nt, int body, int *out, int max) {
+  ybt_cut = 0;
+  int n = ybt_collect_next(nt, body, out, max, 0);
+  return ybt_cut ? -1 : n;
 }
 
 int yield_block_tails(Compiler *c, int mi, int *out, int max) {
@@ -3966,6 +3994,14 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
   int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode
            ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
   if (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0) return 1;
+  /* then Class's and Module's own (the Class rows), which stand before
+     Object's methods, a top-level def among them */
+  if (srt == TY_CLASS) {
+    int an = nt_ref(c->nt, call, "arguments"), ac = 0;
+    if (an >= 0) nt_arr(c->nt, an, "arguments", &ac);
+    const BuiltinOp *row = bop_find(TY_CLASS, name, ac, nt_ref(c->nt, call, "block") >= 0);
+    if (row && !(row->flags & BOPF_BASIC_OBJECT) && (!(row->flags & BOPF_CLASS_ONLY) || cplan_recv_class(c, call, recv))) return 1;
+  }
   if (srt == TY_POLY) {
     /* any class's chain, from the by-name lists while the chain memo can
        be trusted, class by class otherwise */

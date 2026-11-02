@@ -16520,6 +16520,7 @@ static int masgn_target_writes(const NodeTable *nt, int t, int id) {
   return 0;
 }
 static int masgn_store_runs_user_code(Compiler *c, int tgt);
+static void emit_const_target_class_name(Compiler *c, int tgt, const char *nm, Buf *b, int indent);
 /* A part that answers the same whenever it runs: a read, a literal, or
    arithmetic over them -- unless a target assigned before its store writes
    what it reads (`i, a[i] = 1, 2`). */
@@ -17062,6 +17063,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     if (ow) buf_puts(b, ")");
     buf_puts(b, ";\n");
     emit_const_flag_set(cv, nm, b, indent);
+    if (cv->type == TY_CLASS) emit_const_target_class_name(c, tgt, nm, b, indent);
     return 1;
   }
   if (ty_k == NK_IndexTargetNode) {
@@ -17850,6 +17852,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
           buf_puts(b, cgx);
         buf_puts(b, ";\n");
         emit_const_flag_set(cv_rt, cnm_rt, b, indent);
+        if (cv_rt->type == TY_CLASS) emit_const_target_class_name(c, lefts[i], cnm_rt, b, indent);
       }
       else {
         char gx[80], ix[32]; snprintf(ix, sizeof ix, "%dLL", i);
@@ -18504,12 +18507,13 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
      the runtime-destructure path evaluate the whole ArrayNode (the literal
      emitter splices splats) and slice it. An empty literal (`a, *r = []`)
      stays a tuple, of no elements: every target takes nil and a splat
-     target an empty array. */
+     target an empty array. So does a `**h` element, which the literal
+     leaves out when every spread is empty (`a, b = [1, **{}]`). */
   int tuple = vk == NK_ArrayNode;
   if (els) {
     for (int i = 0; i < en; i++) {
       NodeKind ety0_k = nt_kind(nt, els[i]);
-      if (ety0_k == NK_SplatNode) { els = NULL; en = 0; tuple = 0; break; }
+      if (ety0_k == NK_SplatNode || kwh_only_spreads(nt, els[i])) { els = NULL; en = 0; tuple = 0; break; }
     }
   }
   int rn = 0;
@@ -18855,6 +18859,7 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       else buf_printf(b, "_t%d", tmps[i]);
       buf_puts(b, ";\n");
       emit_const_flag_set(comp_const(c, cnm_l), cnm_l, b, indent);
+      if (comp_const(c, cnm_l)->type == TY_CLASS) emit_const_target_class_name(c, lefts[i], cnm_l, b, indent);
     }
     else if (lk == NK_InstanceVariableTargetNode) {
       const char *ivnm = nt_str(nt, lefts[i], "name");
@@ -19303,7 +19308,10 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
   {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
+    /* `singleton_class.attr_reader :x`: an attr of the body's singleton,
+       registered from the load record as `class << self`'s are */
+    int sc_attr = recv >= 0 && nt_int(nt, id, "sg_attr_decl", 0);
+    if ((recv < 0 || sc_attr) && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
                            sp_streq(nm, "prepend") || sp_streq(nm, "module_function") ||
                            sp_streq(nm, "private") || sp_streq(nm, "protected") ||
                            sp_streq(nm, "public") || sp_streq(nm, "attr_reader") ||
@@ -20369,6 +20377,15 @@ static int cpath_in_singleton(Compiler *c, int id) {
   return 0;
 }
 
+/* Does the receiver of `recv::X = v` name Object (the core answer of
+   elab_class_ref_at)? CRuby names a class so written `X`, as `::X = v` does,
+   not `Object::X`. */
+static int cpath_recv_is_object(Compiler *c, int recv) {
+  int core = -1;
+  if (recv >= 0) elab_class_ref_at(c, recv, &core);
+  return core == CORE_OBJECT;
+}
+
 /* The receiver of `recv::X = v` that no compile-time fact names. A constant
    that resolves to a class or module the program defines is read flat, by its
    leaf, and so is a local holding one named class (class_recv_static_ci).
@@ -20379,10 +20396,12 @@ static int cpath_in_singleton(Compiler *c, int id) {
    CRuby runs it, and must be a Class or Module when the write is made. A
    receiver typed a Class or Module with no effect of its own, given a value
    that is no class, has nothing to check or name: the flat write is all of
-   it. */
+   it. `Object` is none of them: it is always a class, and names its
+   constants as the root does. */
 static int cpath_recv_dynamic(Compiler *c, int recv, int value_is_class) {
   if (recv < 0) return 0;
   if (nt_kind(c->nt, recv) == NK_SelfNode) return g_class_body_id < 0;
+  if (cpath_recv_is_object(c, recv)) return 0;
   int ci = class_recv_static_ci(c, recv);
   if (ci >= 0 && !comp_class_anonymous(c, ci)) return 0;
   if (ci < 0 && comp_ntype(c, recv) == TY_CLASS && !subtree_has_side_effect(c, recv) && !value_is_class)
@@ -20394,6 +20413,47 @@ static int cpath_recv_dynamic(Compiler *c, int recv, int value_is_class) {
    prelude (hold_operand_pre), ahead of any prelude the value leaves there. */
 static int emit_cpath_recv_hold(Compiler *c, int recv) {
   return hold_operand_pre(c, recv, TY_POLY, 1, ++g_tmp, 1);
+}
+
+/* The namespace a class value takes its name under at a constant write's
+   target `tgt` (a ConstantWriteNode, a ConstantTargetNode, a
+   ConstantPathTargetNode or a path write's ConstantPathNode): the cref for a
+   bare constant; for a path, `self` in a body, the root (-1) for `::X`, for
+   `Object::X` and in the body of a `class << self`, else the class the path's
+   receiver names. *owner is that class, -1 for none. 0 when only the run time
+   knows the namespace (cpath_recv_dynamic). */
+static int const_name_owner(Compiler *c, int tgt, int *owner) {
+  const NodeTable *nt = c->nt;
+  int k = nt_kind(nt, tgt);
+  if (k != NK_ConstantPathTargetNode && k != NK_ConstantPathNode) {
+    int cref = elab_cref_at(c, tgt);
+    *owner = cref >= -1 ? cref : g_class_body_id;
+  }
+  else {
+    int recv = nt_ref(nt, tgt, "parent");
+    if (recv >= 0 && nt_kind(nt, recv) == NK_SelfNode) {
+      int self = elab_self_at(c, tgt);   /* (a class reopened in a `class << self` body is self there) */
+      *owner = self >= -1 ? self : cpath_in_singleton(c, tgt) ? -1 : g_class_body_id;
+    }
+    else if (cpath_recv_is_object(c, recv)) *owner = -1;
+    else if (cpath_recv_dynamic(c, recv, 1)) return 0;
+    else *owner = class_recv_static_ci(c, recv);
+  }
+  /* Object's own constants are top-level ones: CRuby names them bare */
+  if (*owner >= 0 && *owner == comp_core_class(c, CORE_OBJECT)) *owner = -1;
+  return 1;
+}
+
+/* A path or multiple-assignment constant target that holds a class value: the
+   class takes the target's name, as the plain write `X = v` names it
+   (emit_class_const_name). A target whose namespace only the run time knows
+   leaves the class as it was. Named by the leaf as written, not the C name a
+   collision gave it. */
+static void emit_const_target_class_name(Compiler *c, int tgt, const char *nm, Buf *b, int indent) {
+  int owner;
+  if (!const_name_owner(c, tgt, &owner)) return;
+  const char *wn = nt_str(c->nt, tgt, "qc_orig_name");
+  emit_class_const_name(c, nm, wn ? wn : nm, owner, b, indent);
 }
 
 /* After the value is evaluated, before it is stored: a receiver that is not a
@@ -20998,8 +21058,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     /* the name is the constant's under its lexical scope: a builder's block
        (`X = Class.new do K = self end`) names K at the top level */
     if (!isg && lv->type == TY_CLASS) {
-      int cref = elab_cref_at(c, id);
-      emit_class_const_name(c, key, nm, cref >= -1 ? cref : g_class_body_id, b, indent);
+      int owner;
+      const_name_owner(c, id, &owner);
+      emit_class_const_name(c, key, nm, owner, b, indent);
     }
     if (!isg) emit_const_write_last_value(c, lv, key, b, indent);
     return 1;
@@ -21062,6 +21123,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     /* a boxed constant slot (widened under promote, or a union) takes the
        value boxed, as the plain ConstantWriteNode does */
     else if (cv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
+    /* `Mod::X = Array.new(n) { Obj.new }` into an object table builds in
+       place at the slot's kind, as the plain ConstantWriteNode does. */
+    else if (ty_is_ptr_array(cv->type) && emit_ptr_array_build(c, v, cv->type, b)) { }
     else if (val_t < 0 && one_str_to_open(b, cv->type, "cst_%s", nm)) { emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, ";\n");
@@ -21072,14 +21136,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       else buf_printf(b, "cst_%s = _t%d;\n", nm, val_t);
       if (cv->type == TY_CLASS) emit_cpath_recv_name(c, nm, recv_t, b, indent);
     }
-    else if (cv->type == TY_CLASS) {
-      int owner = class_recv_static_ci(c, crecv);
-      if (crecv >= 0 && nt_kind(nt, crecv) == NK_SelfNode)
-        owner = cpath_in_singleton(c, id) ? -1 : g_class_body_id;
-      /* named by the leaf as written, not the C name a collision gave it */
-      const char *wn = nt_str(nt, tgt, "qc_orig_name");
-      emit_class_const_name(c, nm, wn ? wn : nm, owner, b, indent);
-    }
+    else if (cv->type == TY_CLASS) emit_const_target_class_name(c, tgt, nm, b, indent);
     emit_const_flag_set(cv, nm, b, indent);
     return 1;
   }

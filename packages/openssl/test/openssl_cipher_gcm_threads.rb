@@ -1,3 +1,4 @@
+# spinel: not-cruby -- it rescues the package's OpenSSL::CipherError, which CRuby spells OpenSSL::Cipher::CipherError
 # An authentication verdict must survive other threads.
 #
 # The C answers 0x01 || plaintext for a message that authenticates and an empty
@@ -30,8 +31,7 @@ def decrypt(ct, tag)
   d.key = KEY
   d.iv = IV
   d.auth_tag = tag
-  d.update(ct)
-  d.final
+  d.update(ct) + d.final
 end
 
 # Half the workers forge and half send genuine messages, so each is running

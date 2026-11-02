@@ -478,7 +478,7 @@ void register_cext_layouts(Compiler *c) {
      * TypedData_Make_Struct / TypedData_Wrap_Struct; the layout is the same */
     if (cc->allocator >= 0 || cc->allocator == -2) {
       c->classes[cid].cext_layout = 1;
-      c->classes[cid].instantiated = 1; comp_touch_class(cid);
+      c->classes[cid].instantiated = 1; comp_instantiated_gen++; comp_touch_class(cid);
       c->classes[cid].cext_extension = cc->extension + 1;
       c->classes[cid].cext_allocator = cc->allocator >= 0 ? cc->allocator : -1;
     }

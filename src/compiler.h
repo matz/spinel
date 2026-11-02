@@ -1712,6 +1712,9 @@ typedef struct {
   int nver_entries;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
+  char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
+  int n_rsc_names;
+  int nomethod_init;   /* 1 none, 2 a class NoMethodError defines an initialize (analyze_desugar.c, disp_raise_with); 0 not asked yet */
   int ncond_lone_disp;  /* those of them a lone def is lowered to (call_plan.c, feature_limit) */
   /* the open histories no reader names yet, sorted by name (call_plan.c,
      ver_named_one): made once a call names one, taken 1 when asked for and
@@ -2118,6 +2121,7 @@ int        comp_member_index(ClassInfo *ci, const char *name);
 int        comp_cvar_index(ClassInfo *ci, const char *name);  /* class var; -1 if none */
 int        comp_cvar_intern(ClassInfo *ci, const char *name); /* find or add; returns index */
 int        comp_cvar_owner(const Compiler *c, int cid, const char *name); /* the class whose slot holds @@name */
+int        cvar_name_ok(const char *n);   /* `@@` and an identifier: a reflection call's literal name that is not one raises NameError */
 /* 1 iff method m's param idx is a byref string out-param (LocalVar.byref_out):
    passed as const char** so callee mutation lands in the caller's variable. */
 int        comp_byref_param(Compiler *c, Scope *m, int idx);
@@ -2328,6 +2332,7 @@ const PolyCand *comp_poly_candidates(Compiler *c, const char *name, int *n);
    (cls_fact_excludes, #8530): what its arms are counted, typed and emitted from */
 const PolyCand *comp_poly_candidates_at(Compiler *c, int id, const char *name, int *n);
 extern unsigned comp_table_gen;
+extern unsigned comp_instantiated_gen;   /* bumped whenever a class's instantiated flag may have moved (compute_instantiated, a C extension's class) */
 void comp_poly_candidates_reset(void);
 /* The classes answering class method `name` through their chain, ascending,
    each with the scope comp_cmethod_in_chain gives (`cls`, `mi`; the other

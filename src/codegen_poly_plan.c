@@ -1619,6 +1619,34 @@ static int recv_user_cdefines(Compiler *c, const char *name) {
    emit_poly_method_dispatch), and its user candidates: ncand classes own
    the name at all, ncall_arm of them get a calling arm (the root
    decision). Shared by the dispatch and the resolver (cplan_poly). */
+/* poly_specials0's candidate counts by (name, has a block), under the
+   stamps of what they read */
+struct sp0_entry { char *name; int blk, ncand, ncall_arm; struct sp0_entry *next; };
+#define SP0_BUCKETS 1024
+static struct sp0_entry *sp0_tab[SP0_BUCKETS];
+static struct { unsigned sgen, tgen, igen; int nscopes, nclasses; const Compiler *c; } sp0_of;
+static void sp0_stamp(const Compiler *c) {
+  if (sp0_of.c == c && sp0_of.sgen == comp_scope_index_gen() && sp0_of.tgen == comp_table_gen &&
+      sp0_of.igen == comp_instantiated_gen && sp0_of.nscopes == c->nscopes && sp0_of.nclasses == c->nclasses) return;
+  for (int b = 0; b < SP0_BUCKETS; b++)
+    for (struct sp0_entry *e = sp0_tab[b], *nx; e; e = nx) { nx = e->next; free(e->name); free(e); }
+  memset(sp0_tab, 0, sizeof sp0_tab);
+  sp0_of.c = c; sp0_of.sgen = comp_scope_index_gen(); sp0_of.tgen = comp_table_gen;
+  sp0_of.igen = comp_instantiated_gen; sp0_of.nscopes = c->nscopes; sp0_of.nclasses = c->nclasses;
+}
+static int sp0_lookup(const Compiler *c, const char *name, int blk, int *ncand, int *ncall_arm) {
+  sp0_stamp(c);
+  for (struct sp0_entry *e = sp0_tab[(sp_strhash(name) * 2u + (unsigned)blk) % SP0_BUCKETS]; e; e = e->next)
+    if (e->blk == blk && sp_streq(e->name, name)) { *ncand = e->ncand; *ncall_arm = e->ncall_arm; return 1; }
+  return 0;
+}
+static void sp0_store(const Compiler *c, const char *name, int blk, int ncand, int ncall_arm) {
+  sp0_stamp(c);
+  struct sp0_entry *e = malloc(sizeof *e);
+  if (!e || !(e->name = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  unsigned b = (sp_strhash(name) * 2u + (unsigned)blk) % SP0_BUCKETS;
+  e->blk = blk; e->ncand = ncand; e->ncall_arm = ncall_arm; e->next = sp0_tab[b]; sp0_tab[b] = e;
+}
 void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   const NodeTable *nt = c->nt;
   int argc = 0;
@@ -1699,7 +1727,17 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
      for neither: the name's memoized candidates are the classes to ask */
   int npc0 = 0;
   const PolyCand *pc0 = comp_poly_candidates(c, name, &npc0);
+  /* The counts depend on the call only through whether it has a block, and,
+     for a block-carrying call, a native class's call_target: for every other
+     call they are the name's, kept while nothing they read can move (the
+     frozen scope index, the scope, class and table epochs, the instantiated
+     flags). Every poly call of a name asked every class of it (#10546). */
+  int blk0 = nt_ref(nt, id, "block") >= 0;
+  int sp0_memo = comp_scope_index_is_frozen() && comp_scope_move_depth() == 0;
+  if (sp0_memo && sp0_lookup(c, name, blk0, &ncand, &ncall_arm)) npc0 = 0;
+  int sp0_native = 0;
   for (int ki = 0; ki < npc0; ki++) {
+    if (blk0 && c->classes[pc0[ki].cls].is_native_class) sp0_native = 1;
     int k = pc0[ki].cls;
     /* comp_poly_arm_defines: a native class counts only through its
        declared bindings (#4504) -- its Ruby-side defs get no arm in the
@@ -1721,6 +1759,7 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
        candidate, as the choice to emit a dispatch at all always has. */
     if (is_call && (c->classes[k].instantiated || class_is_prim_reopen(c, k))) ncall_arm++;
   }
+  if (sp0_memo && npc0 > 0 && !sp0_native) sp0_store(c, name, blk0, ncand, ncall_arm);
   s->lengthlike = is_lengthlike;
   s->empty = is_empty;
   s->class_named = is_class_named;

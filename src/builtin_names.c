@@ -212,6 +212,15 @@ int is_quantifier(const char *n) {
   return sp_streq(n, "all?") || sp_streq(n, "any?") || sp_streq(n, "none?") || sp_streq(n, "one?");
 }
 
+/* NameError or NoMethodError, whose .new takes the missing name second */
+int is_name_error_class(const char *n) {
+  return n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"));
+}
+
+int is_no_method_error_class(const char *n) {
+  return n && sp_streq(n, "NoMethodError");
+}
+
 int is_set_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "intersection") || sp_streq(n, "|") || sp_streq(n, "union") ||
          sp_streq(n, "-") || sp_streq(n, "difference");
@@ -734,12 +743,25 @@ int is_const_added_name(const char *n) {
 }
 
 /* the methods a definition runs when the program defines them: inherited
-   (class), included, extended, prepended, method_added and its singleton
-   kin, const_added */
+   (class), included, extended, prepended, method_added, method_removed,
+   method_undefined and their singleton kin, const_added */
 int is_definition_hook_name(const char *n) {
+  return is_module_hook_name(n) || is_basic_object_hook_name(n);
+}
+
+/* ...the ones Class and Module define: their methods stand before Object's,
+   so a top-level def of the name is no hook */
+int is_module_hook_name(const char *n) {
   return sp_streq(n, "inherited") || sp_streq(n, "included") || sp_streq(n, "extended") ||
-         sp_streq(n, "prepended") || sp_streq(n, "method_added") ||
-         sp_streq(n, "singleton_method_added") || is_const_added_name(n);
+         sp_streq(n, "prepended") || sp_streq(n, "method_added") || sp_streq(n, "method_removed") ||
+         sp_streq(n, "method_undefined") || is_const_added_name(n);
+}
+
+/* ...and the ones BasicObject defines (the singleton forms): its methods
+   stand after Object's, so a top-level def of the name is one */
+int is_basic_object_hook_name(const char *n) {
+  return sp_streq(n, "singleton_method_added") || sp_streq(n, "singleton_method_removed") ||
+         sp_streq(n, "singleton_method_undefined");
 }
 
 /* The hooks definition form `form` (given its arguments) fires, on the
@@ -1834,6 +1856,15 @@ int is_instance_method_list(const char *n) {
 /* The Module methods that read a class's method table: the instance-method
    lists and instance_method */
 int is_instance_method_table_read(const char *n) { return n && (is_instance_method_list(n) || sp_streq(n, "instance_method")); }
+/* Does the builtin Module / Class method n answer from its receiver's
+   class: an instance-method listing, const_defined?, class_variable_get,
+   class_variable_set, class_variable_defined? (the Class emitters a
+   class-tag arm tells its class, view_push_class_is)? */
+int is_class_value_reflection(const char *n) {
+  static const char *const names[] = { "const_defined?", "class_variable_get", "class_variable_set",
+    "class_variable_defined?", NULL };
+  return n && (is_instance_method_list(n) || builtin_name_in(n, names));
+}
 /* Does every object (with cmeth, every class and module too) answer m with
    a builtin method: one of Object's own, Kernel's or Object's (Module's)? */
 int builtin_every_object_answers(const char *m, int cmeth) {

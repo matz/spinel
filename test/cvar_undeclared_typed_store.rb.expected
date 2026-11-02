@@ -1,0 +1,8 @@
+go: uninitialized class variable @@missing in T
+true
+set_n: uninitialized class variable @@missing in T (1)
+local: uninitialized class variable @@missing in T
+-1
+push: uninitialized class variable @@missing in T
+[]
+1

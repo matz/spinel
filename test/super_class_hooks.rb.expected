@@ -1,3 +1,11 @@
 no usage for undocumented in Project (super answered nil)
 {"add" => "add PATH", "ls" => "ls"}
 {}
+removed a
+undefined b
+sremoved c
+sundefined d
+nil
+nil
+nil
+nil

@@ -1,0 +1,10 @@
+"'@@x-y' is not allowed as a class variable name"
+:"@@x-y"
+A
+1
+"'@@bad name' is not allowed as a class variable name"
+"'x' is not allowed as a class variable name"
+true
+"'@@x-y' is not allowed as a class variable name"
+true
+1

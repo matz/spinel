@@ -1,0 +1,14 @@
+key.plaintext=73616d706c65
+iv.plaintext=73616d706c65
+aad.plaintext=73616d706c65
+tag.plaintext=73616d706c65
+transient.key=73616d706c65
+transient.iv=73616d706c65
+key.return=true
+iv.return=true
+aad.return=true
+name.snapshot=true
+tag.snapshot=true
+changed_bad_tag=rejected
+random.key.snapshot=true
+random.iv.snapshot=true

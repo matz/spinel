@@ -171,7 +171,12 @@ static int ucall_respec_ctx(Compiler *c, int id) {
   return 0;
 }
 
+static int g_ucall_arm_depth = 0;
+void ucall_arm_push(void) { g_ucall_arm_depth++; }
+void ucall_arm_pop(void) { if (g_ucall_arm_depth > 0) g_ucall_arm_depth--; }
+
 void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add) {
+  if (g_ucall_arm_depth > 0) add = 1;
   const CallPlan *conversion = view_conversion(c, &id);
   if (g_repr_check) repr_channel_call(c, id, mi);
   if (conversion) {
@@ -5313,8 +5318,15 @@ void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, 
        to its NameError raise with a Class value behind it: into a slot of
        another kind (`Version = Version_C` beside `Version = "1.0"`) it
        answers that slot's zero instead */
-    if ((nt_kind_is_constant(nt_kind(c->nt, node))) &&
-        comp_ntype(c, node) == TY_UNKNOWN && slot != TY_POLY && slot != TY_CLASS && slot != TY_UNKNOWN) {
+    /* ...and so is a read of a class variable no class on its lookup chain
+       declares, which lowers to its NameError raise with a boxed nil behind
+       it (emit_cvar_undeclared_raise): `@@ready = @@missing` into a bool
+       slot did not compile */
+    NodeKind fit_k = nt_kind(c->nt, node);
+    int cvar_read = fit_k == NK_ClassVariableReadNode;
+    if ((nt_kind_is_constant(fit_k) || cvar_read) &&
+        comp_ntype(c, node) == TY_UNKNOWN && slot != TY_POLY && slot != TY_UNKNOWN &&
+        (cvar_read || slot != TY_CLASS)) {
       Buf t; memset(&t, 0, sizeof t);
       emit_expr(c, node, &t);
       const char *tx = t.p ? t.p : "";

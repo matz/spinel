@@ -3765,8 +3765,10 @@ INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide 
 INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
-                     contradiction_inline objarray_boxed
-INLINE_RBS_PARITY += flag_types
+                     contradiction_inline objarray_boxed desugared_warnings self_types_agree sclass_receiver_def
+INLINE_RBS_PARITY += flag_types self_types
+INLINE_RBS_PARITY += type_variables
+INLINE_RBS_PARITY += singleton_class_defs
 INLINE_RBS_RESULTS := $(patsubst %,build/inline-rbs-results/%.par,$(INLINE_RBS_PARITY)) \
                       $(patsubst %,build/inline-rbs-results/%.res,$(INLINE_RBS_CHECKS))
 inline-rbs-test: $(INLINE_RBS_RESULTS)
@@ -3879,6 +3881,16 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	two_annotations) \
 	if $(SPINEL) $(IRB)/two_annotations.rb -c --no-line-map -o "$$tmp/t.c" >"$$tmp/t.err" 2>&1; then echo "inline-rbs-test: FAIL (two signatures for one method compiled)"; ok=0; \
 	else grep -q 'two_annotations.rb:4:.*two_annotations.rb:3' "$$tmp/t.err" || { echo "inline-rbs-test: FAIL (two signatures for one method were refused without naming both)"; sed -n 1,5p "$$tmp/t.err"; ok=0; }; fi; \
+	;; \
+	sclass_receiver_def) \
+	$(SPINEL) $(IRB)/sclass_receiver_def.rb -c --no-line-map -o "$$tmp/srd.c" 2>"$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (a malformed annotation on a def self. in class << self stopped the build)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
+	[ "$$(grep -c 'not applied' "$$tmp/srd.err")" = 1 ] && grep -q 'sclass_receiver_def.rb:7:' "$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (class << self: the def self. annotation was not the one warning, or the receiverless def's was not applied)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
+	;; \
+	self_types_agree) \
+	$(SPINEL) $(IRB)/self_types.rb --rbs $(IRB)/sig/self_types_agree -c --no-line-map -o "$$tmp/both.c" 2>"$$tmp/both.err" || { echo "inline-rbs-test: FAIL (an inline -> self agreeing with the class the .rbs names was refused)"; sed -n 1,5p "$$tmp/both.err"; ok=0; }; \
+	$(SPINEL) $(IRB)/self_types.rb -c --no-line-map -o "$$tmp/inl.c" >/dev/null 2>&1; \
+	cmp -s "$$tmp/both.c" "$$tmp/inl.c" || { echo "inline-rbs-test: FAIL (-> self and the class the .rbs names compile differently from inline RBS alone)"; ok=0; }; \
+	if grep -vq '^Wrote ' "$$tmp/both.err"; then echo "inline-rbs-test: FAIL (-> self and the class the .rbs names drew a diagnostic)"; sed -n 1,3p "$$tmp/both.err"; ok=0; fi; \
 	;; \
 	precedence_agree) \
 	$(SPINEL) $(IRB)/precedence.rb --rbs $(IRB)/sig/precedence_agree -c --no-line-map -o "$$tmp/both.c" 2>"$$tmp/both.err" || { echo "inline-rbs-test: FAIL (an inline annotation agreeing with --rbs was refused)"; sed -n 1,5p "$$tmp/both.err"; ok=0; }; \
@@ -4079,6 +4091,19 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	if $(CC) -O0 -Ilib "$$tmp/w.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/w" 2>/dev/null; then \
 	  "$$tmp/w" > "$$tmp/w.out" 2>/dev/null; cmp -s "$$tmp/w.out" $(IRB)/analyzer_warnings.expected || { echo "inline-rbs-test: FAIL (analyzer_warnings.rb output differs from CRuby)"; ok=0; }; \
 	else echo "inline-rbs-test: FAIL (analyzer_warnings.rb: C did not compile)"; ok=0; fi; \
+	;; \
+	desugared_warnings) \
+	$(SPINEL) $(IRB)/desugared_warnings.rb -c --no-line-map -o "$$tmp/w.c" 2>"$$tmp/w.err" || { echo "inline-rbs-test: FAIL (desugared_warnings: the compile failed)"; sed -n 1,5p "$$tmp/w.err"; ok=0; }; \
+	$(call IRB_IGNORED,desugared_warnings.rb); \
+	for w in 'desugared_warnings.rb:11:3: warning: inline RBS: the signature of `compact_blank` is not applied: `Array[T]` names no type' \
+	         'desugared_warnings.rb:28:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the FalseClass branch of Object#blank?' \
+	         'desugared_warnings.rb:33:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the TrueClass branch of Object#blank?'; do \
+	  grep -qF "$$w" "$$tmp/w.err" || { echo "inline-rbs-test: FAIL (no warning '$$w')"; ok=0; }; done; \
+	[ "$$(grep -c 'warning: inline RBS' "$$tmp/w.err")" = 3 ] || { echo "inline-rbs-test: FAIL (desugared_warnings: expected one warning per unapplied comment, 3)"; cat "$$tmp/w.err"; ok=0; }; \
+	if grep -q '__enum_' "$$tmp/w.err"; then echo "inline-rbs-test: FAIL (desugared_warnings: a warning named a copy, not the method)"; ok=0; fi; \
+	if $(CC) -O0 -Ilib "$$tmp/w.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/w" 2>/dev/null; then \
+	  "$$tmp/w" > "$$tmp/w.out" 2>/dev/null; cmp -s "$$tmp/w.out" $(IRB)/desugared_warnings.expected || { echo "inline-rbs-test: FAIL (desugared_warnings.rb output differs from CRuby)"; ok=0; }; \
+	else echo "inline-rbs-test: FAIL (desugared_warnings.rb: C did not compile)"; ok=0; fi; \
 	;; \
 	dump_ast_malformed) \
 	for m in --dump-ast --emit-types --emit-rbs; do for tp in syntax_error=3:15 syntax_error_multiline=4:18; do \
@@ -4706,11 +4731,17 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
 	  $(SPINEL) $$flags test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \
 	  ! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
+	  $(SPINEL) $$flags test/struct_member_index_op_write_box.rb -c --no-line-map -o "$$tmp/smo.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (struct_member_index_op_write_box: -c)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/smo.c" | grep -c 'sp_int iv_[xy];')" = 2 ] && awk '/^struct sp_Pair_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_a;' && awk '/^struct sp_Cell_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_v;' || { echo "infer-test: FAIL (an index op-write through a box typed a Struct the box cannot hold, or not one it can)"; ok=0; }; \
 	  $(SPINEL) $$flags test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
 	  ! grep -q 'sp_RbVal lv_line\b' "$$tmp/iru.c" || { echo "infer-test: FAIL (an index read guessed a settling local a Hash and boxed a block parameter)"; ok=0; }; \
 	  $(SPINEL) $$flags test/table_row_join_keeps_kind.rb -c --no-line-map -o "$$tmp/trj.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (table_row_join_keeps_kind: -c)"; ok=0; }; \
 	  for v in IntArray:r1 IntArray:r2 IntArray:r3 IntArray:r4 FloatArray:f1 Item:it; do \
 	    grep -q "sp_$${v%%:*} \* lv_$${v#*:} = NULL;" "$$tmp/trj.c" || { echo "infer-test: FAIL (a local joined from a table's rows or elements boxed them: $$v)"; ok=0; }; \
+	  done; \
+	  $(SPINEL) $$flags test/empty_array_arm_takes_sibling_kind.rb -c --no-line-map -o "$$tmp/eat.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (empty_array_arm_takes_sibling_kind: -c)"; ok=0; }; \
+	  for v in IntArray:x1 IntArray:x2 IntArray:x3 IntArray:x4 FloatArray:x5 StrArray:x6 FloatArray:q4 FloatArray:q5; do \
+	    grep -q "sp_$${v%%:*} \* lv_$${v#*:} = NULL;" "$$tmp/eat.c" || { echo "infer-test: FAIL (an empty [] beside an Integer, Float or String Array is not that Array: $$v)"; ok=0; }; \
 	  done; \
 	  $(SPINEL) $$flags test/range_index_unbounded_receiver.rb -c --no-line-map -o "$$tmp/riu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (range_index_unbounded_receiver: -c)"; ok=0; }; \
 	  ! grep -q 'sp_RbVal sp_Regs__lb_rb(' "$$tmp/riu.c" || { echo "infer-test: FAIL (a Range on a receiver of no known class boxed every [] method's element read)"; ok=0; }; \
@@ -4727,9 +4758,14 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  $(SPINEL) $$flags test/ivar_table_reader_name_elsewhere.rb -c --no-line-map -o "$$tmp/itn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_reader_name_elsewhere: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_Grid_s \{/,/^\}/' "$$tmp/itn.c" | grep -c 'sp_PtrArray \* iv_[br];')" = 2 ] || { echo "infer-test: FAIL (a Struct member or another class's reader of the name boxed a class's ivar table it has no reader for)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_Ledger_s \{/,/^\}/' "$$tmp/itn.c" | grep -c 'sp_PolyArray \* iv_[cd];')" = 2 ] || { echo "infer-test: FAIL (an ivar table a reader hands to a dynamic call or a send narrowed)"; ok=0; }; \
+	  $(SPINEL) $$flags test/ivar_table_reader_record_member.rb -c --no-line-map -o "$$tmp/irm.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_reader_record_member: -c)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_Shelf_s \{/,/^\}/' "$$tmp/irm.c" | grep -c 'sp_PtrArray \* iv_\(items\|tags\);')" = 2 ] || { echo "infer-test: FAIL (a Struct or Data member, its constructor keyword or its each_pair boxed another class's ivar table of the name)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_Crate_s \{/,/^\}/' "$$tmp/irm.c" | grep -c 'sp_PolyArray \* iv_\(boxes\|lids\);')" = 2 ] || { echo "infer-test: FAIL (an ivar table send or a computed name reaches narrowed)"; ok=0; }; \
 	  $(SPINEL) $$flags test/ivar_table_with_subclasses.rb -c --no-line-map -o "$$tmp/its.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_with_subclasses: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_(Grid|Scaled|Deep)_s \{/,/^\}/' "$$tmp/its.c" | grep -c 'sp_PtrArray \* iv_t;')" = 3 ] || { echo "infer-test: FAIL (an ivar table stayed boxed because its class has subclasses)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_(Counts|Labeled|Shared|Exposed|Store|OpenStore)_s \{/,/^\}/' "$$tmp/its.c" | grep -c 'sp_PolyArray \* iv_t;')" = 6 ] || { echo "infer-test: FAIL (a subclass's other rows, reader or writer narrowed its ancestor's ivar table)"; ok=0; }; \
+	  $(SPINEL) $$flags test/ivar_table_element_pick_receiver.rb -c --no-line-map -o "$$tmp/iep.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_element_pick_receiver: -c)"; ok=0; }; \
+	  awk '/^struct sp_Reader_s \{/,/^\}/' "$$tmp/iep.c" | grep -q 'sp_PtrArray \* iv_items;' && awk '/^struct sp_Scan_s \{/,/^\}/' "$$tmp/iep.c" | grep -q 'sp_PolyArray \* iv_items;' || { echo "infer-test: FAIL (a call on t.first or t.last of a narrowing table boxed every ivar table its name's readers hand out, or narrowed the one it reads)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_operator_param_held_classes.rb -c --no-line-map -o "$$tmp/pph.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_operator_param_held_classes: -c)"; ok=0; }; \
 	  $(SPINEL) $$flags packages/csv/test/csv_parse_struct_members_typed.rb -c --no-line-map -o "$$tmp/cps.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (csv_parse_struct_members_typed: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/cps.c" | grep -c 'sp_float iv_[xy];')" = 2 ] || { echo "infer-test: FAIL (a store in a method no call reaches typed every Struct's members, #10489)"; ok=0; }; \
@@ -4757,9 +4793,15 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  $(SPINEL) $$flags test/object_array_element_receiver.rb -c --no-line-map -o "$$tmp/oer.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_element_receiver: -c)"; ok=0; }; \
 	  grep -q 'sp_Body_step(sp_Body \*self, sp_PtrArray \* lv_bodies, sp_float lv_dt)' "$$tmp/oer.c" || { echo "infer-test: FAIL (a table handed to a method of its own element stayed boxed)"; ok=0; }; \
 	  grep -q 'sp_Rod_advance(sp_Rod \*self, sp_PolyArray \* lv_rods)' "$$tmp/oer.c" || { echo "infer-test: FAIL (a call on a reassigned block parameter narrowed the table it was handed)"; ok=0; }; \
+	  $(SPINEL) $$flags test/ivar_table_dynamic_call_held_classes.rb -c --no-line-map -o "$$tmp/idc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_dynamic_call_held_classes: -c)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_(Reader|Ledger|Board)_s \{/,/^\}/' "$$tmp/idc.c" | grep -c 'sp_PtrArray \* iv_\(items\|rows\);')" = 3 ] && grep -q 'sp_Ranker_pick(sp_Ranker \*self, sp_PtrArray \* lv_t)' "$$tmp/idc.c" || { echo "infer-test: FAIL (a call on a boxed value boxed a table of a class the value never holds)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_(Scan|Shelf)_s \{/,/^\}/' "$$tmp/idc.c" | grep -c 'sp_PolyArray \* iv_items;')" = 2 ] && grep -q 'sp_Sorter_pick(sp_Sorter \*self, sp_PolyArray \* lv_t)' "$$tmp/idc.c" && grep -q 'sp_Press_s_pick(sp_PolyArray \* lv_rows)' "$$tmp/idc.c" || { echo "infer-test: FAIL (a table a call on a boxed value reaches narrowed)"; ok=0; }; \
 	  $(SPINEL) $$flags test/object_array_constant.rb -c --no-line-map -o "$$tmp/oac.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_constant: -c)"; ok=0; }; \
 	  [ "$$(grep -c '^static sp_PtrArray \* cst_\(PLANETS\|STARS\|RING\) = NULL;' "$$tmp/oac.c")" = 3 ] || { echo "infer-test: FAIL (a constant table of objects stayed boxed)"; ok=0; }; \
 	  grep -q '^static sp_PolyArray \* cst_NAMED = NULL;' "$$tmp/oac.c" || { echo "infer-test: FAIL (a constant reached through const_get narrowed)"; ok=0; }; \
+	  $(SPINEL) $$flags test/elem_reader_table_escape.rb -c --no-line-map -o "$$tmp/ert.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (elem_reader_table_escape: -c)"; ok=0; }; \
+	  awk '/^struct sp_Scan_s \{/,/^\}/' "$$tmp/ert.c" | grep -q 'sp_PolyArray \* iv_items;' || { echo "infer-test: FAIL (a table read through a reader on an element of a narrowing table narrowed unvetted)"; ok=0; }; \
+	  awk '/^struct sp_Reader_s \{/,/^\}/' "$$tmp/ert.c" | grep -q 'sp_PtrArray \* iv_scans;' || { echo "infer-test: FAIL (the table whose element a reader reads stopped narrowing)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_receiver_cmethod_kwarg_unbound.rb -c --no-line-map -o "$$tmp/pck.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_receiver_cmethod_kwarg_unbound: -c)"; ok=0; }; \
 	  grep -q 'sp_StrArray \* sp_Restore_s_apply(sp_Table \* lv_table, sp_StrArray \* lv_names)' "$$tmp/pck.c" || { echo "infer-test: FAIL (a keyword-only call bound a keyword hash into a keyword method's positional parameter)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_receiver_cmethod_kwarg_name_unbound.rb -c --no-line-map -o "$$tmp/pcn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_receiver_cmethod_kwarg_name_unbound: -c)"; ok=0; }; \
@@ -4970,6 +5012,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	esac; \
 	grep -q 'sp_PtrArray \* iv_pts;' "$$tmp/oae.c" || { echo "infer-test: FAIL (an array of one class whose class defines each stayed boxed through a walk)"; ok=0; }; \
 	[ "$$(grep -cE '\(lv_pt__bp[A-Za-z0-9_]+\)->iv_x' "$$tmp/oae.c")" = 3 ] || { echo "infer-test: FAIL (an each, reverse_each or each_with_index walk over an array of one class bound its parameter boxed)"; ok=0; }; \
+	$(SPINEL) test/object_array_push_element_read.rb -c --no-line-map -o "$$tmp/oap.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_push_element_read: -c)"; ok=0; }; \
+	[ "$$(awk '/^struct sp_(Node|Ring|Bin)_s \{/ { c = $$2 } c && /iv_(links|members|items)/ { print c, $$1; c = "" }' "$$tmp/oap.c" | tr '\n' ' ')" = "sp_Node_s sp_PtrArray sp_Ring_s sp_PtrArray sp_Bin_s sp_PolyArray " ] || { echo "infer-test: FAIL (an element read of an Array of one class stored into another gave it no class, or one of a mixed Array narrowed it)"; ok=0; }; \
+	$(SPINEL) test/object_array_walk_ends_branch.rb -c --no-line-map -o "$$tmp/oaw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_walk_ends_branch: -c)"; ok=0; }; \
+	[ "$$(awk '/^struct sp_(Bag|Box|Crate|Tray|Shelf)_s \{/ { c = $$2 } c && /iv_items/ { print c, $$1; c = "" }' "$$tmp/oaw.c" | tr '\n' ' ')" = "sp_Bag_s sp_PtrArray sp_Box_s sp_PtrArray sp_Crate_s sp_PtrArray sp_Tray_s sp_PtrArray sp_Shelf_s sp_PolyArray " ] || { echo "infer-test: FAIL (a walk ending a branch of an if, unless or case whose value is thrown away kept its Array boxed, or one whose value is read narrowed it)"; ok=0; }; \
 	$(SPINEL) test/infer/obj_array_literal_arg.rb -c --no-line-map -o "$$tmp/oal.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_literal_arg: -c)"; ok=0; }; \
 	grep -q 'sp_PtrArray \* iv_steps;' "$$tmp/oal.c" && grep -q 'sp_total(sp_PtrArray \* lv_parts' "$$tmp/oal.c" || { echo "infer-test: FAIL (an object Array literal passed as an argument stayed boxed)"; ok=0; }; \
 	$(SPINEL) test/obj_array_removals.rb -c --no-line-map -o "$$tmp/oar.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (obj_array_removals: -c)"; ok=0; }; \

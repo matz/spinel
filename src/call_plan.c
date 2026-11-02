@@ -40,6 +40,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->by_name = 0;
   p->chain = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
+  p->core_hook = 0;
 }
 
 /* The core id of the class a builtin receiver kind is reopened as, or -1. */
@@ -176,7 +177,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
-  }
+  } else if (uname && s->is_cmethod && is_definition_hook_name(uname))
+    p->core_hook = 1;   /* Class#inherited and the like: a no-op that reads no class and calls no method */
 }
 
 /* Is node id inside a block, a lambda or a method body (it may run later)? */
@@ -1252,6 +1254,28 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   if (c->scopes[mi].versioned || (flags & CT_CAPTURE)) mi = ct_version(c, id, cls, name, flags, mi, def_class, NULL);
   /* An alias's record already selected its captured definition. */
   return mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name) ? ct_guard(c, id, mi, flags) : mi;
+}
+
+int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
+  const NodeTable *nt = c->nt;
+  int ci = class_recv_static_ci(c, recv);
+  if (ci >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) return 0;
+  int fl = bop_flags(TY_CLASS, name);
+  if ((fl & BOPF_CLASS_ONLY) && !cplan_recv_class(c, id, recv)) return 0;
+  return !((fl & BOPF_PRIVATE) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind"));
+}
+
+int cplan_recv_class(Compiler *c, int id, int recv) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, recv);
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, recv, "name") : NULL;
+  int ci = k == NK_SelfNode ? self_class_static_ci(c, recv) : nm ? class_recv_static_ci(c, recv) : -1;
+  if (nt_int(nt, id, "class_recv", 0)) return 1;
+  if (nm && is_builtin_module_const_name(nm)) return 0;   /* (a core module has an entry that is no module's) */
+  if (ci >= 0) return !comp_class_is_module(c, &c->classes[ci]);
+  if (nm) return is_builtin_class_name(nm);
+  return k == NK_CallNode && nt_ref(nt, recv, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, recv, "receiver")) == NK_ConstantReadNode &&
+         is_class_new(nt_str(nt, nt_ref(nt, recv, "receiver"), "name"), nt_str(nt, recv, "name"));
 }
 
 /* Is a call of nm one whose version call_target chooses: does the record
@@ -2845,7 +2869,7 @@ static void cpoly_add(PolyPlan *p, int *cap, int kind, int key, int mi, TyKind v
   }
   PolyArm *a = &p->arm[p->n++];
   a->kind = (unsigned char)kind; a->key = (short)key; a->mi = mi;
-  a->vty = (unsigned char)vty; a->conv = (unsigned char)conv; a->def = -1; a->vis = 0;
+  a->vty = (unsigned char)vty; a->conv = (unsigned char)conv; a->def = -1; a->vis = 0; a->unsettled = 0;
 }
 
 /* The classes a dispatch of name can take an arm for, ascending: the ones
@@ -3786,6 +3810,28 @@ int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int
   return mi;
 }
 
+/* The class-value trial arms of call id's class-tag switch into p: a Class
+   value the receiver can hold (as far as the walk bounds them) whose class
+   has no method of the name, for a builtin Module / Class method that
+   answers from its receiver's class (is_class_value_reflection). Its answer
+   for that class only the emission can tell (a trial: kept where the Class
+   emitter answers from the class, and only from what the record proves
+   settled before the call: the emitters answer as of the load's end). */
+static void cpoly_cls_value_trials(Compiler *c, int id, const char *name, int argc, PolyPlan *p, int *cap) {
+  const char *cvals = nt_ref(c->nt, id, "receiver") >= 0 && is_class_value_reflection(name) ? poly_recv_class_values(c, id) : NULL;
+  const unsigned all = ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED | ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS;
+  for (int k = 0; cvals && k < c->nclasses; k++) {
+    if (!cvals[k] || cls_sg_accessor_first(c, id, k, name, argc) || cplan_cmethod_arm(c, id, k, name, NULL, NULL) >= 0)
+      continue;
+    int framed = elab_plan_enter(c, id);
+    unsigned unsettled = elab_class_unsettled(c, k, all, id, cplan_plain_ctx());
+    if (framed) elab_plan_leave(c);
+    if (unsettled == all) continue;
+    cpoly_add(p, cap, PA_TRIAL, PA_KEY_CLASS_VALUE + k, -1, TY_UNKNOWN, 0);
+    p->arm[p->n - 1].unsettled = (unsigned char)unsettled;
+  }
+}
+
 const PolyPlan *cplan_poly_cmeth(Compiler *c, int id) {
   static PolyPlan cp;
   free(cp.arm);
@@ -3804,7 +3850,19 @@ const PolyPlan *cplan_poly_cmeth(Compiler *c, int id) {
     TyKind mret = c->scopes[pf >= 0 ? pf : mi].ret;
     cpoly_add(&cp, &cap, pf >= 0 ? PA_PROC_FORM : PA_USER, k, mi, mret, mret == TY_POLY ? PC_SAME : PC_BOX);
   }
+  cpoly_cls_value_trials(c, id, name, argc, &cp, &cap);
   return &cp;
+}
+
+PolyPlan *cplan_poly_cls_values(Compiler *c, int id) {
+  PolyPlan *vp = calloc(1, sizeof *vp);
+  if (!vp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  vp->ntype = vp->ret = comp_ntype(c, id);
+  int cap = 0, argc = 0;
+  const char *name = nt_str(c->nt, id, "name");
+  call_args(c->nt, id, &argc);
+  if (name) cpoly_cls_value_trials(c, id, name, argc, vp, &cap);
+  return vp;
 }
 
 const PolyPlan *cplan_poly_sub(Compiler *c, int id) {
@@ -3910,6 +3968,31 @@ static int cplan_nil_user_method(Compiler *c, int call, const char *name) {
     if (k >= 0 && call_target(c, call, k, name, 0, NULL) >= 0) return 1;
   }
   return 0;
+}
+
+int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls) {
+  int nk = comp_core_class(c, CORE_NILCLASS), ok = comp_core_class(c, CORE_OBJECT);
+  int mi = nk >= 0 ? call_target(c, call, nk, name, 0, NULL) : -1;
+  *nilcls = mi >= 0;
+  if (mi < 0 && ok >= 0) mi = call_target(c, call, ok, name, 0, NULL);
+  return mi;
+}
+
+/* Does the receiver of call `call` (of type rt) run another method than
+   nil does, or none: a reopened String's, Array's or Hash's, or the
+   object's class's own, where nil runs NilClass's or Object's? */
+static int cplan_nil_runs_other(Compiler *c, int call, TyKind rt, const char *name) {
+  int nilcls = 0, nmi = cplan_nil_program_method(c, call, name, &nilcls);
+  if (nmi < 0) return 0;
+  int k = rt == TY_STRING ? comp_core_class(c, CORE_STRING)
+        : ty_is_array(rt) ? comp_core_class(c, CORE_ARRAY)
+        : ty_is_hash(rt) ? comp_core_class(c, CORE_HASH)
+        : ty_is_object(rt) ? ty_object_class(rt) : -1;
+  if (k < 0) return 0;
+  int own = call_target(c, call, k, name, 0, NULL);
+  /* (a receiver whose class has none runs Object's through its fallback,
+     with the value boxed, which answers for nil as nil's own) */
+  return own != nmi && (own >= 0 || nilcls);
 }
 
 int cplan_nil_written(int why) {
@@ -4037,7 +4120,10 @@ int cplan_nil(Compiler *c, int id) {
     const char *rn = nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
     if (!rn || !sp_streq(rn, "__self")) return CN_NONE;
   }
-  if (cplan_nil_user_method(c, id, nm)) return CN_NONE;
+  if (cplan_nil_user_method(c, id, nm))
+    return (rr.kind == RK_PTR || rr.kind == RK_STRBUF) && cplan_nil_runs_other(c, id, rt, nm) &&
+           cplan_nil_program_served(c, id)
+           ? CN_PROGRAM : CN_NONE;
   /* an arm of a lowered `send` on a user object, for a name its class does
      not define: the arm reaches a Kernel method, which nil answers through
      send as any object does (`nil.send(:Integer, "12")`) */
@@ -4249,7 +4335,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
     if (c->scopes[to[i]].shadow == SHADOW_PREP && !spell) spell = strdup(c->scopes[to[i]].name);
   }
   int els, like = c->scopes[to[nv - 1]].def_node;
-  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(nt, w->name), w->refuse, 1);
+  if (w->refuse) nt_node_set_int(nt, els = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
   else els = ver_named_else(c, w);
   /* (at the last version, where a refusal names it) */
   static const char *const at[] = { "node_line", "node_file", "node_col" };
@@ -4290,15 +4376,16 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   default: break;
   }
   int mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
+  comp_sym_intern(c, name);   /* (the error's name, a Symbol made after the literals were interned) */
   if (cls >= 0) comp_descendants(c, cls, &nd);
   if (cls < 0) snprintf(msg, sizeof msg, "undefined method '%s' for main", name);
   else if (nd || (mod && !sg) || comp_class_anonymous(c, cls)) {
     snprintf(msg, sizeof msg, "undefined method '%s' for %s", name, sg ? "class " : "an instance of ");
-    return disp_raise_no_method_self(nt, msg, !sg);
+    return disp_raise_no_method_self(c, name, msg, !sg, w->ar);
   }
   else if (sg) snprintf(msg, sizeof msg, "undefined method '%s' for %s %s", name, mod ? "module" : "class", class_ruby_name(c, cls));
   else snprintf(msg, sizeof msg, "undefined method '%s' for an instance of %s", name, class_ruby_name(c, cls));
-  return disp_raise_no_method(nt, msg);
+  return disp_raise_no_method(c, name, msg, w->ar);
 }
 /* Does a method the entry's else arm cannot run answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
@@ -4608,7 +4695,7 @@ static void ver_named_refuse_defs(Compiler *c, const VerNamed *w) {
     if (!nt_int(nt, d, "cond_lone", 0)) continue;
     while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
     if (st < 0 || par[st] < 0) continue;
-    nt_node_set_int(nt, r = disp_raise_no_method(nt, w->name), w->refuse, 1);
+    nt_node_set_int(nt, r = disp_raise_no_method(c, w->name, w->name, 0), w->refuse, 1);
     for (int j = 0; j < 3; j++) nt_node_set_int(nt, r, at[j], nt_int(nt, d, at[j], 0));
     comp_grow_node_arrays(c);
     for (int k = n0; k < nt->count; k++) c->nscope[k] = c->nscope[st];

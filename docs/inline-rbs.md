@@ -87,6 +87,7 @@ annotations with ruby/rbs's default `untyped` signatures.
 | Trailing return on a regular method | `def m(x) #: Integer` |
 | Leading signature on an endless method | `#: (Integer) -> Integer` above `def m(x) = x` |
 | Class method in a class or module | A leading signature above `def self.m` |
+| Method in `class << self` | A leading signature above `def m` directly inside it, as for `def self.m` |
 | Method modifier | A leading signature above `private def m(x)` |
 | Skip a method annotation | `# @rbs skip` |
 | Trailing attribute type | `attr_reader :name, :title #: String` |
@@ -94,12 +95,21 @@ annotations with ruby/rbs's default `untyped` signatures.
 
 The supported types match `--rbs`: `Integer`, `Float`, `String`, `Symbol`,
 `bool`, `nil`, `untyped`, program classes, `Array[T]`, `Hash[K, V]`,
-`T?`, unions as boxed values, `singleton(C)`, and the literals `true` and
-`false` (as `bool`); a `void` return is accepted and pins nothing (it says
+`T?`, unions as boxed values, `singleton(C)`, the literals `true` and
+`false` (as `bool`), and `self` (or `instance`) in a class's instance
+method, which is that class (`-> self` and `-> self?` in `class String` are
+`-> String` and `-> String?`); a `void` return is accepted and pins nothing (it says
 the value is unused, not what it is). So is a `top` or `boolish` (core's
 `type boolish = top`) parameter or return: it admits any value, so that
 slot is left to inference and the rest of the signature applies, as with
-`--rbs`. See
+`--rbs`. As a type argument (`Hash[Symbol, top]`) `top` is a value of any
+type, as `untyped` is. So is a type naming a type variable core RBS declares for the
+builtin generic a reopening opens (`Elem` of `Array`, `Enumerable`,
+`Range` and `Struct`, `K` and `V` of `Hash`, `A` of `Set`): `Elem`,
+`Elem?` or `Array[Elem]` in `class Array` is the receiver's element type,
+which no one type stands for, so that slot pins nothing and the rest of
+the signature applies, as with `--rbs`, where `class Array[Elem]` declares
+the variable. See
 [Type vocabulary](rbs-extract.md#type-vocabulary).
 
 A method uses one signature: a method type or named parameter and return
@@ -127,8 +137,12 @@ A Ruby block parameter without an RBS block declaration remains inferred.
   have no analyzer node for the declaration and warn without a pin.
   A following method, attribute, or constant consumes an adjacent block
   without an ivar pin. Separate the ivar block with a blank source line.
-- Top-level methods, `class << self`, non-self singleton receivers, and
-  dynamic `Class.new`, `Struct.new`, or `Data.define` bodies receive no pins.
+- A def directly inside a class or module body's `class << self` is that
+  class's method, and its signature applies as a `def self.m`'s. The other
+  declarations of `class << self` (attributes, `@x` declarations, constants)
+  belong to the singleton class and receive no pins.
+- Top-level methods, `class << obj` for another `obj`, non-self singleton
+  receivers, and dynamic `Class.new`, `Struct.new`, or `Data.define` bodies receive no pins.
   Explicit-receiver `C.class_eval` blocks receive no pins. Receiverless
   `class_eval` inside a static declaration retains that declaration's context.
 - Spinel reads the entry file and required Ruby files as it parses them.
@@ -140,6 +154,8 @@ These placements follow the
 and its
 [attachment tests](https://github.com/ruby/rbs/blob/e84e0724656b2ffd1c4f11f893e75b27aadddaf3/test/rbs/inline_parser_test.rb).
 In particular, the tests leave endless-method trailing returns untyped.
+One placement departs from it: ruby/rbs reads a def in `class << self` as an
+instance method of the class, and Spinel reads it as the class method it is.
 
 ## Diagnostics and limitations
 
@@ -152,7 +168,7 @@ overridden return can remain inferred while supported parameter types apply.
 | Malformed RBS annotation | Error with the parser's message and source position |
 | Two signatures for one method, or duplicate parameter annotations | Error naming both locations |
 | Conflicting applied inline or external declarations | Error naming both locations |
-| Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs, `self`/`instance`/`class`, type variables | Warning; ignore the whole annotation |
+| Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs, `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
 | Unknown program class, such as `Regexp` or `Array[Time]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
 | Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), a destructuring parameter, or RBS block parameters | Warning; ignore the whole signature |
 | Overloads, `...`, generic method signatures, and superclass/mixin type arguments | Warning; ignore the annotation |

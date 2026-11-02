@@ -4414,7 +4414,15 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
           else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx); buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", t, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
           free(el.p);
         }
-else {
+        else if (kwh_only_spreads(nt, els[j])) {
+          /* `[1, **h]`: CRuby leaves the keyword hash out when every spread
+             is empty. The hash is its own rooted temp, and only
+             sp_poly_length runs before the push, so the box needs no root. */
+          int th = hold_operand_pre(c, els[j], TY_POLY, 1, ++g_tmp, 0);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "if (sp_poly_length(_t%d) > 0) sp_PolyArray_push(_t%d, _t%d);\n", th, t, th);
+        }
+        else {
           Buf el; memset(&el, 0, sizeof el);
           /* (a published String before an element that can change it is
              boxed as its handle: emit_boxed_operand) */
@@ -4704,10 +4712,11 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
       int fbox = fres == TY_POLY && repr_of(c, lb[ln - 1]).kind != RK_BOXED;
       /* ...and an empty `[]`, which has no element kind of its own, takes
          the result's array kind as the unfolded pair gives it: emitted raw
-         it was the default Integer array, stored into a poly array slot */
+         it was the default Integer array, stored into a poly array slot (or
+         the Float or String array the analysis gives it beside such an arm) */
       int fempty = 0;
-      if (ln == 1 && ty_is_array(fres) && node_is_empty_container(c, lb[0]))
-        fempty = an_empty_container_kind(c, lb[0]) == 1;
+      if (ty_is_array(fres) && node_is_empty_container(c, lb[ln - 1]))
+        fempty = an_empty_container_kind(c, lb[ln - 1]) == 1;
       /* ...and an Integer / Float slot that holds its nil (an sp_oint, as the
          analysis gives `x.is_a?(Integer) ? x : raise` while the dead arm is
          still counted) takes the arm in its oint form, as the unfolded pair
@@ -4729,7 +4738,7 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
          line (#4139). The prelude keeps them in source order. */
       for (int j = 0; j < ln - 1; j++) emit_stmt(c, lb[j], g_pre, g_indent);
       if (fo) emit_ternary_arm_o(c, lb[ln - 1], fres, 1, b);
-      else if (fbox) emit_ternary_arm(c, lb[ln - 1], fres, b);
+      else if (fbox || fempty) emit_ternary_arm(c, lb[ln - 1], fres, b);
       else emit_expr(c, lb[ln - 1], b);
       return 1;
     }

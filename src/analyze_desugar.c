@@ -1549,6 +1549,7 @@ int desugar_extend_self(Compiler *c) {
       int sf = nt_new_node(nt, "SelfNode");
       if (sf < 0) continue;
       nt_node_set_ref(nt, clone, "receiver", sf);
+      nt_node_set_int(nt, clone, "extend_self", 1);   /* (the record sees no extend: a hook it stands for is not fired) */
       nb[nbn++] = clone;
     }
     nt_node_set_arr(nt, body, "body", nb, nbn);
@@ -8551,7 +8552,13 @@ int desugar_index_op_write_user(Compiler *c) {
       if (en == 0 && !ty_is_hash(c->hash_want[val])) comp_set_hash_want(c, val, TY_POLY_POLY_HASH);
     }
     int encl = c->nscope[id];
-    for (int j = first; j < nt->count; j++) c->nscope[j] = encl;
+    /* (each read of the held receiver holds what recv does, so the class
+       facts that bound recv bound the `[]` and `[]=` made here: without one,
+       a boxed store reached every Struct's members) */
+    for (int j = first; j < nt->count; j++) {
+      c->nscope[j] = encl;
+      if (nt_kind(nt, j) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, j, "name"), rname)) cls_fact_same(c, j, recv);
+    }
     /* locals were collected before the fixpoint; these are new */
     Scope *sc = comp_scope_of(c, rw);
     scope_local_intern(sc, rname);
@@ -10596,19 +10603,24 @@ int desugar_root_scoped_constants(Compiler *c) {
   /* the names some class or module body defines: there the bare spelling
      resolves lexically and the two spellings differ */
   char **names = (char **)malloc(sizeof(char *) * 4096);
+  unsigned char *seen = (unsigned char *)calloc((size_t)n0, 1);
+  if (!names || !seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int nn = 0;
-  if (names) {
-    unsigned char *seen = (unsigned char *)calloc((size_t)n0, 1);
-    if (seen) {
-      for (int id = 0; id < n0; id++) {
-        NodeKind k = nt_kind(nt, id);
-        if (k != NK_ClassNode && k != NK_ModuleNode) continue;
-        int body = nt_ref(nt, id, "body");
-        if (body >= 0) rsc_mark_nested_defs(nt, body, seen, names, &nn, 0);
-      }
-      free(seen);
-    }
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_ClassNode && k != NK_ModuleNode) continue;
+    int body = nt_ref(nt, id, "body");
+    if (body >= 0) rsc_mark_nested_defs(nt, body, seen, names, &nn, 0);
   }
+  free(seen);
+  /* (kept, for the raises disp_raise_with builds later; comp_free frees them) */
+  for (int k = 0; k < c->n_rsc_names; k++) free(c->rsc_names[k]);
+  free(c->rsc_names);
+  c->rsc_names = (char **)malloc(sizeof(char *) * (size_t)(nn ? nn : 1));
+  if (!c->rsc_names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < nn; k++)
+    if (!(c->rsc_names[k] = strdup(names[k]))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->n_rsc_names = nn;
   int changed = 0;
   for (int id = n0 - 1; id >= 0; id--) {
     if (skip[id] || nt_kind(nt, id) != NK_ConstantPathNode) continue;
@@ -11954,7 +11966,11 @@ static int anon_fwd_rewrite(Compiler *c, int node, int parent, unsigned anon) {
   return changed;
 }
 
-static int module_is_extended(const NodeTable *nt, const char *mn) {
+/* The names a bare `extend` call names as a constant, in every call of the
+   program. They are borrowed from the node table: the rewrite below adds defs
+   and instance variable accesses, never an `extend` call, and sets no string
+   of an existing node. */
+static void extended_module_names(const NodeTable *nt, ANameHash *names) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "extend") || nt_ref(nt, id, "receiver") >= 0) continue;
@@ -11963,11 +11979,10 @@ static int module_is_extended(const NodeTable *nt, const char *mn) {
     for (int k = 0; k < ac; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       const char *anm = nt_str(nt, av[k], "name");
-      if ((ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) && anm && sp_streq(anm, mn))
-        return 1;
+      if ((ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) && anm && !anh_has(names, anm))
+        anh_add(names, anm);
     }
   }
-  return 0;
 }
 
 static int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
@@ -12005,13 +12020,15 @@ static int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
 void desugar_extended_module_attrs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
+  ANameHash extended = {0};
+  extended_module_names(nt, &extended);
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
     const char *mn = class_def_name(nt, m);
     int body = class_def_body(nt, m);
     int n = 0;
     const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-    if (!mn || !st || !module_is_extended(nt, mn)) continue;
+    if (!mn || !st || !anh_has(&extended, mn)) continue;
     int *out = malloc(sizeof(int) * (size_t)(n * 2 + 64));
     if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int no = 0, cap = n * 2 + 64, rewrote = 0;
@@ -12049,6 +12066,7 @@ void desugar_extended_module_attrs(Compiler *c) {
     }
     free(out);
   }
+  anh_free(&extended);
 }
 
 static const struct { NodeKind local; const char *global; } dmc_kinds[] = {
@@ -13377,24 +13395,104 @@ static int cdef_name_inherited(const NodeTable *nt, const char *nm, int own) {
   return 0;
 }
 
-/* `raise NoMethodError, msg`, a dispatcher's arm for no method; with
-   disp_raise_no_method_self, `raise NoMethodError, "<head>#{self.class}"`
-   (`#{self}` when !inst), which names the class of the object it runs on */
-static int disp_raise_with(NodeTable *nt, int em) {
-  int ec = nt_new_node(nt, "ConstantReadNode");
-  nt_node_set_str(nt, ec, "name", "NoMethodError");
-  int ea[2] = { ec, em }, eargs = nt_new_node(nt, "ArgumentsNode");
-  nt_node_set_arr(nt, eargs, "arguments", ea, 2);
-  int raise = fwd_new_call(nt, -1, "raise", -1);
-  nt_node_set_ref(nt, raise, "arguments", eargs);
-  return raise;
+/* `raise NoMethodError.new(msg, :name, [<args>], receiver: self)`, a
+   dispatcher's arm for no method: the error names the method and carries
+   the call's arguments (the dispatcher's ar required parameters, or with
+   ar -1 `*__condr, **__condk`, its rest and keywords as disp_forward_call
+   passes them on) and the object it runs on, as CRuby's does for a call
+   that finds no method; with disp_raise_no_method_self, its message
+   `"<head>#{self.class}"` (`#{self}` when !inst), which names the class of
+   the object it runs on */
+/* Does class node cls define an initialize among its statements? */
+static int class_defines_initialize(const NodeTable *nt, int cls) {
+  int body = nt_ref(nt, cls, "body"), n = 0;
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  for (int k = 0; k < n; k++) {
+    const char *dn = nt_kind(nt, st[k]) == NK_DefNode ? nt_str(nt, st[k], "name") : NULL;
+    if (dn && is_initialize_name(dn)) return 1;
+  }
+  return 0;
 }
-int disp_raise_no_method(NodeTable *nt, const char *msg) {
+
+/* Does the program give the builtin NoMethodError an initialize of its own: a
+   `class NoMethodError` at the top level of a file, or a `class ::NoMethodError`
+   at any nesting (a root-anchored path, as desugar_root_scoped_constants
+   leaves it)? CRuby never runs it for the error a failed call raises. (A
+   NoMethodError a module defines is not the builtin: the arm raises
+   ::NoMethodError, which it does not touch.) Asked of the tree: the load
+   record that holds the fact is made after this pass has run. */
+static int nomethod_own_init(Compiler *c) {
+  if (c->nomethod_init) return c->nomethod_init == 2;
+  const NodeTable *nt = c->nt;
+  c->nomethod_init = 1;
+  for (int id = 0; id < nt->count && c->nomethod_init == 1; id++) {
+    int cp = nt_kind(nt, id) == NK_ClassNode ? nt_ref(nt, id, "constant_path") : -1;
+    const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    if (!cn || !is_no_method_error_class(cn)) continue;
+    int root = nt_kind(nt, cp) == NK_ConstantPathNode ? nt_ref(nt, cp, "parent") < 0 : nt_int(nt, cp, "root_anchored", 0);
+    if (root && class_defines_initialize(nt, id)) c->nomethod_init = 2;
+  }
+  for (int r = 0; r < nt_nroots(nt) && c->nomethod_init == 1; r++) {
+    int tn = 0; const int *top = nt_arr(nt, prog_root_stmts(c, r), "body", &tn);
+    for (int t = 0; t < tn; t++) {
+      int cp = nt_kind(nt, top[t]) == NK_ClassNode ? nt_ref(nt, top[t], "constant_path") : -1;
+      const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
+      if (cn && is_no_method_error_class(cn) && class_defines_initialize(nt, top[t])) c->nomethod_init = 2;
+    }
+  }
+  return c->nomethod_init == 2;
+}
+
+static int disp_raise_with(Compiler *c, const char *name, int em, int ar) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  char pn[32];
+  if (nomethod_own_init(c)) {   /* (raise NoMethodError, msg: the program's initialize stays what it was) */
+    int rc = nt_new_node(nt, "ConstantReadNode"), ra[2] = { rc, em }, rargs = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_str(nt, rc, "name", "NoMethodError");
+    nt_node_set_arr(nt, rargs, "arguments", ra, 2);
+    int raise = fwd_new_call(nt, -1, "raise", -1);
+    nt_node_set_ref(nt, raise, "arguments", rargs);
+    return raise;
+  }
+  /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
+     program's own: a path where a class or module body defines the name */
+  int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, "NoMethodError");
+  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = nt_new_node(nt, "SymbolNode"), args = nt_new_node(nt, "ArrayNode");
+  int key = nt_new_node(nt, "SymbolNode"), as = nt_new_node(nt, "AssocNode"), kh = nt_new_node(nt, "KeywordHashNode");
+  int ne = ar < 0 ? 2 : ar, ev[ne > 0 ? ne : 1];
+  for (int a = 0; a < ar; a++) { snprintf(pn, sizeof pn, "__cond%d", a); ev[a] = cdef_local(nt, "LocalVariableReadNode", pn); }
+  if (ar < 0) {
+    ev[0] = nt_new_node(nt, "SplatNode");
+    nt_node_set_ref(nt, ev[0], "expression", cdef_local(nt, "LocalVariableReadNode", "__condr"));
+    int rs = nt_new_node(nt, "AssocSplatNode");
+    nt_node_set_ref(nt, rs, "value", cdef_local(nt, "LocalVariableReadNode", "__condk"));
+    ev[1] = nt_new_node(nt, "KeywordHashNode");
+    nt_node_set_arr(nt, ev[1], "elements", &rs, 1);
+  }
+  nt_node_set_arr(nt, args, "elements", ev, ne);
+  nt_node_set_str(nt, ec, "name", "NoMethodError");
+  if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);   /* ::NoMethodError, which a nested definition of the name must not capture */
+  nt_node_set_str(nt, sym, "value", name);
+  nt_node_set_str(nt, key, "value", "receiver");
+  nt_node_set_int(nt, key, "key_only", 1);   /* never a value of the program: not interned for the Symbol table */
+  nt_node_set_ref(nt, as, "key", key);
+  nt_node_set_ref(nt, as, "value", nt_new_node(nt, "SelfNode"));
+  nt_node_set_arr(nt, kh, "elements", &as, 1);
+  int na[4] = { em, sym, args, kh }, nargs = nt_new_node(nt, "ArgumentsNode"), made = fwd_new_call(nt, ec, "new", -1);
+  nt_node_set_arr(nt, nargs, "arguments", na, 4);
+  nt_node_set_ref(nt, made, "arguments", nargs);
+  nt_node_set_int(nt, made, "disp_nomethod", 1);   /* the raise the code generator may lower out of line (emit_raise_nomethod_new) */
+  return fwd_new_call(nt, -1, "raise", made);
+}
+int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar) {
+  NodeTable *nt = (NodeTable *)c->nt;
   int em = nt_new_node(nt, "StringNode");
   nt_node_set_str(nt, em, "content", msg);
-  return disp_raise_with(nt, em);
+  return disp_raise_with(c, name, em, ar);
 }
-int disp_raise_no_method_self(NodeTable *nt, const char *head, int inst) {
+int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar) {
+  NodeTable *nt = (NodeTable *)c->nt;
   int em = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode");
   int es = nt_new_node(nt, "EmbeddedStatementsNode"), self = nt_new_node(nt, "SelfNode");
   int who = inst ? fwd_new_call(nt, self, "class", -1) : self;
@@ -13403,7 +13501,7 @@ int disp_raise_no_method_self(NodeTable *nt, const char *head, int inst) {
   nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, who));
   int parts[2] = { hd, es };
   nt_node_set_arr(nt, em, "parts", parts, 2);
-  return disp_raise_with(nt, em);
+  return disp_raise_with(c, name, em, ar);
 }
 
 /* `callee(<args>)`, a dispatcher arm's call: the dispatcher's ar required
@@ -13639,7 +13737,7 @@ int desugar_conditional_defs(Compiler *c) {
       }
     }
     int def = disp_def_build(nt, g[ng - 1].def, base, nt_ref(nt, g[ng - 1].def, "receiver") >= 0, ar, blk,
-                             arm, ng, disp_raise_no_method(nt, msg));
+                             arm, ng, disp_raise_no_method(c, base, msg, ar));
     free(arm);
     free(nm);
     /* the dispatcher answers the name before any arm's branch has run,
@@ -15322,16 +15420,28 @@ int desugar_value_form_drop_block(Compiler *c) {
 }
 
 /* Is `t` a builtin value with no Enumerable in CRuby, no `each` to walk? (An
-   IO, ARGF or a Dir includes it, and a class object may extend it.) */
+   IO, ARGF or a Dir includes it, a Process::Tms is a Struct, and a class
+   object may extend it.) */
 static int ty_lacks_enumerable(TyKind t) {
   switch (t) {
   case TY_NIL: case TY_INT: case TY_BIGINT: case TY_FLOAT: case TY_STRING: case TY_STRBUF:
   case TY_SYMBOL: case TY_BOOL: case TY_TIME: case TY_COMPLEX: case TY_RATIONAL:
-  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION:
+  case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION: case TY_PROC: case TY_CURRY:
+  case TY_METHOD: case TY_FIBER: case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR:
+  case TY_RANDOM: case TY_ADDRINFO: case TY_SOCKOPT: case TY_PROCESS_STATUS:
+  case TY_OPENSTRUCT:
     return 1;
   default:
     return 0;
   }
+}
+
+/* Is the value of node `recv` one with no Enumerable? --int-overflow=promote
+   holds a Rational boxed, typed poly and marked an_rat_value: the same
+   Rational, with no each. */
+static int recv_lacks_enumerable(Compiler *c, int recv) {
+  TyKind t = infer_type(c, recv);
+  return ty_lacks_enumerable(t) || (t == TY_POLY && an_rat_value(c, recv));
 }
 
 /* The name a call had before the pre-pass renamed it to the builtin's
@@ -15451,6 +15561,22 @@ int desugar_builtin_enum_calls(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
+    /* a call given back its written name on a receiver with no Enumerable
+       (below) takes the builtin's again once a later round types the
+       receiver as one with Enumerable. A receiver that widens to poly (a
+       Rational beside an Array) keeps the written name, as before this
+       mark: either name is wrong for one of its values without a dispatch
+       at run time, and a boxed Rational's an_rat_value is not cleared by
+       the widening. So does an IO: a File::Stat is one too, told from a
+       stream only at run time, and has no each */
+    if (nt_int(nt, id, "enum_scalar_unrenamed", 0)) {
+      TyKind wt = infer_type(c, nt_ref(nt, id, "receiver"));
+      if (wt != TY_POLY && wt != TY_UNKNOWN && wt != TY_IO && !ty_lacks_enumerable(wt)) {
+        const LowerRow *al = lower_row_named(LR_ENUM_NAME, name);
+        if (al) { nt_node_set_str(nt, id, "name", al->target); name = nt_str(nt, id, "name"); changed = 1; }
+        nt_node_set_int(nt, id, "enum_scalar_unrenamed", 0);
+      }
+    }
     /* Array#index with a block and no argument is find_index (CRuby defines
        both as rb_ary_index): `@choices.index(&block)`, Forwardable's
        delegator shape in tty-prompt's Choices, had no emitter of its own */
@@ -15487,9 +15613,8 @@ int desugar_builtin_enum_calls(Compiler *c) {
        written with, the one a top-level method a send reaches answers
        (`42.send(:detect)`), or a reopening of the receiver's class; so does
        one an outer each is chained on (`42.send(:detect).each { }`) */
-    /* (--int-overflow=promote holds a Rational boxed, typed poly and marked
-       an_rat_value: the same Rational, with no each) */
-    if ((ty_lacks_enumerable(rt) || (rt == TY_POLY && an_rat_value(c, recv))) && enum_unrename(nt, id)) {
+    if (recv_lacks_enumerable(c, recv) && enum_unrename(nt, id)) {
+      nt_node_set_int(nt, id, "enum_scalar_unrenamed", 1);
       changed = 1;
       continue;
     }
@@ -19954,8 +20079,8 @@ static int scm_body_stmts(NodeTable *nt, int id, int *out, int cap) {
   return -1;
 }
 /* For self in a body, the declarations go where they stand, in the forms
-   the later passes take (desugar_singleton_attr, the define_method rewrite):
-   `singleton_class.attr_accessor :a`, `def self.h`; an alias in a
+   the later passes take (the walk's singleton attr, the define_method
+   rewrite): `singleton_class.attr_accessor :a`, `def self.h`; an alias in a
    `class << self`. Into out[] (at most cap), or -1 for one of no such form. */
 static int scm_self_stmts(NodeTable *nt, int like, const int *in, int n, int *out, int cap) {
   if (n > cap) return -1;
@@ -20979,321 +21104,14 @@ int desugar_class_body_object_acts(Compiler *c) {
   return changed;
 }
 
-/* ---- Class.inherited hooks ----
+/* ---- the qualified names of the program's classes ----
  *
- * `class A < Base` calls Base.inherited(A) as the class is created, before
- * its body runs. The inheritance graph is static, so the call is placed as
- * the first statement of the first body that names the superclass:
- *
- *   class A < Base; BODY; end  ->  class A < Base; Base.__send__(:inherited, self); BODY; end
- *
- * (__send__, as the hook is often private.) Dispatch then finds the hook on Base or the nearest ancestor that defines
- * it, as a call would. A `super` in a hook that no ancestor's hook answers
- * reaches Class#inherited, which does nothing: it becomes nil. Classes are
- * matched by their last name segment, as the superclass links are followed.
- * The hook is found in a body of the class, or defined on it by name from
- * anywhere: `def Base.inherited(sub)`, or `def inherited` in `class << Base`.
- * A class defined before any hook in its chain exists (the hook's `def`, or
- * the `extend` that brings it, comes later in the program) fires nothing, as
- * in CRuby: nodes are numbered in program order, required files spliced in
- * where they are required, and `BEGIN` code runs ahead of the rest. */
-
-/* The `def inherited` a class body defines on the class itself
-   (`def self.inherited(sub)`, or `def inherited` in its `class << self`), or -1. */
-static int inh_hook_in_body(const NodeTable *nt, int body) {
-  int bn = 0; const int *bv = nt_arr(nt, body, "body", &bn);
-  for (int k = 0; k < bn; k++) {
-    int d = fwd_body_def(nt, bv[k]);
-    if (d >= 0) {
-      const char *dn = nt_str(nt, d, "name");
-      if (dn && sp_streq(dn, "inherited") && fwd_node_is(nt, nt_ref(nt, d, "receiver"), "SelfNode")) return d;
-      continue;
-    }
-    if (!fwd_node_is(nt, bv[k], "SingletonClassNode") ||
-        !fwd_node_is(nt, nt_ref(nt, bv[k], "expression"), "SelfNode")) continue;
-    int sn = 0; const int *sv = nt_arr(nt, nt_ref(nt, bv[k], "body"), "body", &sn);
-    for (int j = 0; j < sn; j++) {
-      int sd = fwd_body_def(nt, sv[j]);
-      const char *dn = sd >= 0 ? nt_str(nt, sd, "name") : NULL;
-      if (dn && sp_streq(dn, "inherited") && nt_ref(nt, sd, "receiver") < 0) return sd;
-    }
-  }
-  return -1;
-}
-static int inh_hook_in(const NodeTable *nt, int id) {
-  return inh_hook_in_body(nt, class_def_body(nt, id));
-}
-
-/* The hook node `id` defines on a class it names, wherever it is written:
-   `def Base.inherited(sub)`, or `def inherited` in a `class << Base`. Gives
-   the `def`, with the class's name in `*cname`, or -1. */
-static int inh_hook_on_named(const NodeTable *nt, int id, const char **cname) {
-  NodeKind k = nt_kind(nt, id);
-  if (k == NK_DefNode) {
-    const char *dn = nt_str(nt, id, "name");
-    int r = nt_ref(nt, id, "receiver");
-    if (!dn || !sp_streq(dn, "inherited") || r < 0) return -1;
-    if (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode) return -1;
-    *cname = nt_str(nt, r, "name");
-    return *cname ? id : -1;
-  }
-  if (k != NK_SingletonClassNode) return -1;
-  int x = nt_ref(nt, id, "expression");
-  if (x < 0 || (nt_kind(nt, x) != NK_ConstantReadNode && nt_kind(nt, x) != NK_ConstantPathNode)) return -1;
-  int sn = 0; const int *sv = nt_arr(nt, nt_ref(nt, id, "body"), "body", &sn);
-  for (int j = 0; j < sn; j++) {
-    int sd = fwd_body_def(nt, sv[j]);
-    const char *dn = sd >= 0 ? nt_str(nt, sd, "name") : NULL;
-    if (dn && sp_streq(dn, "inherited") && nt_ref(nt, sd, "receiver") < 0) {
-      *cname = nt_str(nt, x, "name");
-      return *cname ? sd : -1;
-    }
-  }
-  return -1;
-}
-
-/* The instance-method `def inherited` module node `m` defines, or -1: the hook
-   a class that extends the module answers. */
-static int inh_module_def_hook(const NodeTable *nt, int m) {
-  int bn = 0; const int *bv = nt_arr(nt, nt_ref(nt, m, "body"), "body", &bn);
-  for (int k = 0; k < bn; k++) {
-    int d = fwd_body_def(nt, bv[k]);
-    const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL;
-    if (dn && sp_streq(dn, "inherited") && nt_ref(nt, d, "receiver") < 0) return d;
-  }
-  return -1;
-}
-
-/* What the hook questions ask about a name, found once per pass instead of by
-   a scan of every node per ask. A name a class or a Struct constant is
-   written under holds `has_hook` (a body of it defines the hook or extends a
-   module that does, or a `def Name.inherited` elsewhere defines it),
-   `ext_hook` (the hook comes through an `extend`), `hook_at` (the node from which it has one) and `super`, the superclass name the first `class` of it
-   to give one gives. A module name holds `hook_def`, the `def inherited` of
-   the first module of that name that has one (or -1), and, once the
-   extenders are counted, how many bodies extend it and whether one of them
-   sits below a class with a hook. */
-typedef struct {
-  const char *super;
-  int has_hook, ext_hook, hook_at, hook_def, extenders, above;
-} InhName;
-typedef struct {
-  ANameHash cls, mod;
-  InhName *c, *m;
-  int ccap, mcap;
-  int any_hook, any_mod_hook;
-  unsigned char *in_begin;   /* by node: inside a `BEGIN { }`, or NULL when none */
-  int n0;                    /* the node count in_begin covers */
-} InhIndex;
-
-static void inh_index_free(InhIndex *ix) {
-  anh_free(&ix->cls); anh_free(&ix->mod);
-  free(ix->c); free(ix->m); free(ix->in_begin);
-}
-
-/* Where node `id` runs in program order: its own number, or, inside a
-   `BEGIN { }`, which runs first, its number less the node count, so the
-   BEGIN code comes before every other node and stays in order itself. */
-static int inh_pos(const InhIndex *ix, int id) {
-  return ix->in_begin && id >= 0 && ix->in_begin[id] ? id - ix->n0 : id;
-}
-
-static void inh_mark_tree(const NodeTable *nt, int node, unsigned char *mark, int n0) {
-  if (node < 0 || node >= n0 || mark[node]) return;
-  mark[node] = 1;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) inh_mark_tree(nt, nt_ref_at(nt, node, i), mark, n0);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) inh_mark_tree(nt, ids[j], mark, n0);
-  }
-}
-
-/* The entry of `nm` in `h`, added when it is new. */
-static int inh_name_slot(ANameHash *h, InhName **ents, int *cap, const char *nm) {
-  int e = anh_find(h, nm);
-  if (e >= 0) return e;
-  if (h->n == *cap) {
-    *cap = *cap ? *cap * 2 : 64;
-    *ents = realloc(*ents, sizeof(InhName) * (size_t)*cap);
-    if (!*ents) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  anh_add(h, nm);
-  memset(&(*ents)[h->n - 1], 0, sizeof(InhName));
-  (*ents)[h->n - 1].hook_def = -1;
-  (*ents)[h->n - 1].hook_at = INT_MAX;
-  return h->n - 1;
-}
-
-/* The module entry whose hook a class body takes from a module it extends
-   (`extend Tracking`), or -1: the first module in the body's `extend`s that
-   has one. `at`, when given, gets the node from which the class has it: the
-   `extend`, or the module's `def` when that comes later. */
-static int inh_extended_entry_at(const InhIndex *ix, const NodeTable *nt, int body, int *at) {
-  int bn = 0; const int *bv = nt_arr(nt, body, "body", &bn);
-  for (int k = 0; k < bn; k++) {
-    if (!fwd_node_is(nt, bv[k], "CallNode") || nt_ref(nt, bv[k], "receiver") >= 0) continue;
-    const char *nm = nt_str(nt, bv[k], "name");
-    if (!nm || !sp_streq(nm, "extend")) continue;
-    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, bv[k], "arguments"), "arguments", &an);
-    for (int j = 0; j < an; j++) {
-      NodeKind ak = nt_kind(nt, av[j]);
-      if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) continue;
-      const char *mn = nt_str(nt, av[j], "name");
-      int e = mn ? anh_find(&ix->mod, mn) : -1;
-      if (e >= 0 && ix->m[e].hook_def >= 0) {
-        if (at) {
-          int xp = inh_pos(ix, bv[k]), dp = inh_pos(ix, ix->m[e].hook_def);
-          *at = xp > dp ? xp : dp;
-        }
-        return e;
-      }
-    }
-  }
-  return -1;
-}
-static int inh_extended_entry(const InhIndex *ix, const NodeTable *nt, int body) {
-  return inh_extended_entry_at(ix, nt, body, NULL);
-}
-
-/* Mark the class entry `e` as having a hook when `body` defines one or
-   extends a module that does, keeping the earliest node it has one from. */
-static void inh_note_hook(InhIndex *ix, const NodeTable *nt, int e, int body) {
-  int d = inh_hook_in_body(nt, body), at = d >= 0 ? inh_pos(ix, d) : INT_MAX, xat = INT_MAX;
-  if (inh_extended_entry_at(ix, nt, body, &xat) >= 0) {
-    ix->c[e].ext_hook = 1;
-    if (xat < at) at = xat;
-  }
-  if (at == INT_MAX) return;
-  ix->c[e].has_hook = ix->any_hook = 1;
-  if (at < ix->c[e].hook_at) ix->c[e].hook_at = at;
-}
-
-/* The body of a class `Name = Struct.new(...) do ... end` (or Data.define)
-   builds, when `id` is that constant write, or -1. */
-static int inh_struct_body(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, id) != NK_ConstantWriteNode) return -1;
-  int body = class_def_body(nt, id);
-  return body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? body : -1;
-}
-
-/* Does class `cname` or an ancestor of it define an inherited hook, its own
-   or one from a module it extends? The walk follows the first superclass each
-   name gives, at most 64 links. */
-static int inh_chain_has_hook(const InhIndex *ix, const char *cname) {
-  for (int depth = 0; cname && depth < 64; depth++) {
-    int e = anh_find(&ix->cls, cname);
-    if (e < 0) return 0;
-    if (ix->c[e].has_hook) return 1;
-    const char *super_name = ix->c[e].super;
-    if (super_name && sp_streq(super_name, cname)) break;
-    cname = super_name;
-  }
-  return 0;
-}
-
-/* The earliest node from which class `cname` or an ancestor of it has an
-   inherited hook, or INT_MAX: a class defined before it fires none. */
-static int inh_chain_hook_at(const InhIndex *ix, const char *cname) {
-  int at = INT_MAX;
-  for (int depth = 0; cname && depth < 64; depth++) {
-    int e = anh_find(&ix->cls, cname);
-    if (e < 0) break;
-    if (ix->c[e].hook_at < at) at = ix->c[e].hook_at;
-    const char *super_name = ix->c[e].super;
-    if (super_name && sp_streq(super_name, cname)) break;
-    cname = super_name;
-  }
-  return at;
-}
-
-/* Index the program's modules, then its classes and Struct constants (a hook
-   through `extend` needs the modules), and count the extenders of the modules
-   that have a hook (which needs the chains). */
-static void inh_index_build(Compiler *c, InhIndex *ix, int n0) {
-  const NodeTable *nt = c->nt;
-  memset(ix, 0, sizeof *ix);
-  ix->n0 = n0;
-  int nb = 0;
-  const int *begins = nt_nodes_of_kind(nt, NK_PreExecutionNode, &nb);
-  if (nb > 0 && (ix->in_begin = calloc((size_t)n0, 1)))
-    for (int i = 0; i < nb; i++) inh_mark_tree(nt, begins[i], ix->in_begin, n0);
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_module(nt, id)) continue;
-    const char *nm = class_def_name(nt, id);
-    if (!nm) continue;
-    int e = inh_name_slot(&ix->mod, &ix->m, &ix->mcap, nm);
-    if (ix->m[e].hook_def < 0) {
-      ix->m[e].hook_def = inh_module_def_hook(nt, id);
-      if (ix->m[e].hook_def >= 0) ix->any_mod_hook = 1;
-    }
-  }
-  for (int id = 0; id < n0; id++) {
-    int sbody = inh_struct_body(c, id);
-    if (sbody >= 0) {
-      const char *wn = nt_str(nt, id, "name");
-      if (!wn) continue;
-      int e = inh_name_slot(&ix->cls, &ix->c, &ix->ccap, wn);
-      inh_note_hook(ix, nt, e, sbody);
-      continue;
-    }
-    const char *hn = NULL;
-    int hd = inh_hook_on_named(nt, id, &hn);
-    if (hd >= 0) {   /* a hook defined on the class from outside its body */
-      int e = inh_name_slot(&ix->cls, &ix->c, &ix->ccap, hn);
-      int at = inh_pos(ix, hd);
-      ix->c[e].has_hook = ix->any_hook = 1;
-      if (at < ix->c[e].hook_at) ix->c[e].hook_at = at;
-      continue;
-    }
-    if (!class_def_is_class(nt, id)) continue;
-    const char *cn = class_def_name(nt, id);
-    if (!cn) continue;
-    int e = inh_name_slot(&ix->cls, &ix->c, &ix->ccap, cn);
-    inh_note_hook(ix, nt, e, class_def_body(nt, id));
-    int sc = class_def_super(nt, id);
-    if (!ix->c[e].super && sc >= 0 &&
-        (nt_kind(nt, sc) == NK_ConstantReadNode || nt_kind(nt, sc) == NK_ConstantPathNode))
-      ix->c[e].super = nt_str(nt, sc, "name");
-  }
-  if (!ix->any_mod_hook) return;
-  for (int id = 0; id < n0; id++) {
-    int sbody = inh_struct_body(c, id);
-    int body = sbody >= 0 ? sbody : class_def_is_class(nt, id) ? class_def_body(nt, id) : -1;
-    if (body < 0) continue;
-    int e = inh_extended_entry(ix, nt, body);
-    if (e < 0) continue;
-    ix->m[e].extenders++;
-    if (ix->m[e].above) continue;
-    int sc = sbody >= 0 ? -1 : class_def_super(nt, id);
-    const char *sn = sc >= 0 ? nt_str(nt, sc, "name") : NULL;
-    if (sn && inh_chain_has_hook(ix, sn)) ix->m[e].above = 1;
-  }
-}
-
-/* `super` in a hook that reaches Class#inherited -> nil, and
-   `defined?(super)` there -> "super" */
-static void inh_drop_super(NodeTable *nt, int node) {
-  if (node < 0) return;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) { nt_node_reset(nt, node, "NilNode"); return; }
-  NodeKind vk = k == NK_DefinedNode ? nt_kind(nt, nt_ref(nt, node, "value")) : NK_NilNode;
-  if (vk == NK_SuperNode || vk == NK_ForwardingSuperNode) {
-    nt_node_reset(nt, node, "StringNode");
-    nt_node_set_str(nt, node, "content", "super");
-    return;
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) inh_drop_super(nt, nt_ref_at(nt, node, i));
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) inh_drop_super(nt, ids[j]);
-  }
-}
+ * A class or module header names its class by a path (`class A::Foo`,
+ * `module A; class Foo`) that is looked up in the scopes around the header
+ * as CRuby looks a constant up. inh_qualified_names gives each header node
+ * the qualified name it resolves to, and the qualified name of the superclass
+ * its first header writes, for the passes that follow superclass links by
+ * name (readers_over_inherited_defs, self_const_get). */
 
 static int cbs_path_text(const NodeTable *nt, int p, char *buf, size_t cap, int *rooted);
 
@@ -21590,183 +21408,6 @@ void mark_path_builders(Compiler *c) {
   for (int id = 0; id < nt->count; id++) free(qn[id]);
   free(qn);
   free(parent);
-}
-
-/* The classes by the qualified names their headers resolve to
-   (inh_qualified_names): whether one of its bodies has an inherited hook,
-   its own or through `extend`, the qualified superclass the first header
-   naming one gives, and whether a hook is defined on its leaf from outside
-   a body (`def Foo.inherited`, which the leaf index keys alone). */
-typedef struct { ANameHash names; char *hook, *outside, *unsure; const char **sup; } InhQIndex;
-static void inh_qindex_build(InhQIndex *qx, Compiler *c, const InhIndex *ix, char **qn, char **qs, int n0) {
-  const NodeTable *nt = c->nt;
-  memset(qx, 0, sizeof *qx);
-  ANameHash outside; memset(&outside, 0, sizeof outside);
-  for (int id = 0; id < n0; id++) {
-    const char *hn = NULL;
-    if (inh_hook_on_named(nt, id, &hn) >= 0 && hn && !anh_has(&outside, hn)) anh_add(&outside, hn);
-  }
-  int cap = 0;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_class(nt, id) || !qn[id]) continue;
-    int e = anh_find(&qx->names, qn[id]);
-    if (e < 0) {
-      anh_add(&qx->names, qn[id]); e = qx->names.n - 1;
-      if (e >= cap) {
-        cap = cap ? cap * 2 : 64;
-        qx->hook = realloc(qx->hook, (size_t)cap); qx->outside = realloc(qx->outside, (size_t)cap);
-        qx->unsure = realloc(qx->unsure, (size_t)cap);
-        qx->sup = realloc(qx->sup, sizeof(char *) * (size_t)cap);
-        if (!qx->hook || !qx->outside || !qx->unsure || !qx->sup) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      }
-      qx->hook[e] = 0; qx->unsure[e] = 0; qx->sup[e] = NULL;
-      const char *leaf = class_def_name(nt, id);
-      qx->outside[e] = leaf && anh_has(&outside, leaf);
-    }
-    int body = class_def_body(nt, id);
-    if (inh_hook_in(nt, id) >= 0 || (body >= 0 && inh_extended_entry(ix, nt, body) >= 0)) qx->hook[e] = 1;
-    if (!qx->sup[e] && qs[id]) qx->sup[e] = qs[id];
-    /* a constant superclass with no resolved name (left to the ancestors,
-       or out of memory): the qualified chain cannot be followed */
-    int sc = class_def_super(nt, id);
-    if (sc >= 0 && (nt_kind(nt, sc) == NK_ConstantReadNode || nt_kind(nt, sc) == NK_ConstantPathNode) && !qs[id])
-      qx->unsure[e] = 1;
-  }
-  anh_free(&outside);
-}
-static void inh_qindex_free(InhQIndex *qx) {
-  anh_free(&qx->names); free(qx->hook); free(qx->outside); free(qx->unsure); free(qx->sup);
-}
-/* Does the class qualified `q`, or an ancestor of it, have an inherited
-   hook, followed by qualified names? 1 or 0; -1 when the chain leaves the
-   class headers (a class a Struct constant or no header of the program
-   defines) or meets a hook defined from outside a body, where the leaf
-   names decide as before. Keyed by the leaf alone, the hook of one Base
-   reached every class under another Base: a Syntax::Base
-   hook went into each Expression::Base subclass. */
-static int inh_qchain_has_hook(const InhQIndex *qx, const char *q) {
-  for (int depth = 0; q && depth < 64; depth++) {
-    int e = anh_find(&qx->names, q);
-    if (e < 0) return -1;
-    if (qx->hook[e]) return 1;
-    if (qx->outside[e] || qx->unsure[e]) return -1;
-    const char *sup = qx->sup[e];
-    if (!sup || sp_streq(sup, q)) return 0;
-    q = sup;
-  }
-  return -1;
-}
-
-int desugar_inherited_hooks(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  InhIndex ix;
-  inh_index_build(c, &ix, n0);
-  /* no class or Struct has a hook, its own or through `extend`: nothing
-     below has a `super` to drop or a call to place */
-  if (!ix.any_hook) { inh_index_free(&ix); return 0; }
-  int *parent = an_build_parent_index(nt, n0);
-  if (!parent) { inh_index_free(&ix); return 0; }
-  /* the hooks first: a `super` that finds no ancestor's hook. A class's own
-     hook reaches a module it extends next; a Struct's reaches Struct's. */
-  for (int id = 0; id < n0; id++) {
-    int sbody = inh_struct_body(c, id);
-    if (sbody >= 0) {
-      int d = inh_hook_in_body(nt, sbody);
-      if (d >= 0 && inh_extended_entry(&ix, nt, sbody) < 0) inh_drop_super(nt, nt_ref(nt, d, "body"));
-      continue;
-    }
-    const char *hn = NULL;
-    int hd = inh_hook_on_named(nt, id, &hn);
-    if (hd >= 0) {
-      int e = anh_find(&ix.cls, hn);
-      const char *sn = e >= 0 ? ix.c[e].super : NULL;
-      if (e >= 0 && !ix.c[e].ext_hook && (!sn || sp_streq(sn, hn) || !inh_chain_has_hook(&ix, sn)))
-        inh_drop_super(nt, nt_ref(nt, hd, "body"));
-      continue;
-    }
-    if (!class_def_is_class(nt, id)) continue;
-    int d = inh_hook_in(nt, id);
-    if (d < 0) continue;
-    int sc = class_def_super(nt, id);
-    const char *sn = sc >= 0 ? nt_str(nt, sc, "name") : NULL;
-    if (inh_extended_entry(&ix, nt, class_def_body(nt, id)) < 0 && (!sn || !inh_chain_has_hook(&ix, sn)))
-      inh_drop_super(nt, nt_ref(nt, d, "body"));
-  }
-  /* a module's hook goes on to the hooks above the classes that extend it;
-     when none of them has one, its `super` reaches Class#inherited too */
-  for (int m = 0; m < n0; m++) {
-    if (!class_def_is_module(nt, m)) continue;
-    const char *mn = class_def_name(nt, m);
-    int e = mn ? anh_find(&ix.mod, mn) : -1;
-    if (e < 0 || ix.m[e].hook_def < 0) continue;
-    if (ix.m[e].extenders > 0 && !ix.m[e].above) inh_drop_super(nt, nt_ref(nt, ix.m[e].hook_def, "body"));
-  }
-  /* then the call, once per class: a reopening does not create it again */
-  ANameHash seen; memset(&seen, 0, sizeof seen);
-  char **qsupers = NULL;
-  char **qnames = inh_qualified_names(nt, parent, n0, &qsupers);
-  InhQIndex qx; memset(&qx, 0, sizeof qx);
-  if (qnames && qsupers) inh_qindex_build(&qx, c, &ix, qnames, qsupers, n0);
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_class(nt, id)) continue;
-    int sc = class_def_super(nt, id);
-    if (sc < 0 || (nt_kind(nt, sc) != NK_ConstantReadNode && nt_kind(nt, sc) != NK_ConstantPathNode)) continue;
-    const char *sn = nt_str(nt, sc, "name");
-    if (!sn || !inh_chain_has_hook(&ix, sn)) continue;
-    const char *qn = qnames ? qnames[id] : NULL;
-    if (!qn || anh_has(&seen, qn)) continue;
-    /* the superclass the header names, qualified: a hook on another class
-       of the same leaf does not fire here */
-    if (qsupers && qsupers[id] && inh_qchain_has_hook(&qx, qsupers[id]) == 0) continue;
-    char *qd = strdup(qn);
-    if (!qd) break;
-    anh_add(&seen, qd);
-    /* defined before its superclass had the hook: nothing fires, nor on a
-       reopening */
-    if (inh_chain_hook_at(&ix, sn) > inh_pos(&ix, id)) continue;
-    int recv = nt_clone_subtree(nt, sc);
-    int call = fwd_new_node_like(nt, id, "CallNode");
-    int args = fwd_new_node_like(nt, id, "ArgumentsNode");
-    int sym = fwd_new_node_like(nt, id, "SymbolNode");
-    int self = fwd_new_node_like(nt, id, "SelfNode");
-    if (recv < 0 || call < 0 || args < 0 || sym < 0 || self < 0) continue;
-    nt_node_set_str(nt, sym, "value", "inherited");
-    nt_node_set_str(nt, call, "name", "__send__");
-    nt_node_set_ref(nt, call, "receiver", recv);
-    int av[2] = { sym, self };
-    nt_node_set_arr(nt, args, "arguments", av, 2);
-    nt_node_set_ref(nt, call, "arguments", args);
-    int body = class_def_body(nt, id);
-    if (body < 0) {
-      body = fwd_new_node_like(nt, id, "StatementsNode");
-      if (body < 0) continue;
-      nt_node_set_arr(nt, body, "body", &call, 1);
-      class_def_set_body(nt, id, body);
-    }
-    else if (nt_kind(nt, body) == NK_StatementsNode) {
-      int bn = 0; const int *bv = nt_arr(nt, body, "body", &bn);
-      int *out = malloc(sizeof(int) * (size_t)(bn + 1));
-      if (!out) continue;
-      out[0] = call;
-      if (bn > 0) memcpy(out + 1, bv, sizeof(int) * (size_t)bn);
-      nt_node_set_arr(nt, body, "body", out, bn + 1);
-      free(out);
-    }
-    else continue;
-    changed = 1;
-  }
-  for (int k = 0; k < seen.n; k++) free((char *)seen.key[k]);
-  if (qnames) for (int k = 0; k < n0; k++) free(qnames[k]);
-  free(qnames);
-  inh_qindex_free(&qx);
-  if (qsupers) for (int k = 0; k < n0; k++) free(qsupers[k]);
-  free(qsupers);
-  anh_free(&seen);
-  inh_index_free(&ix);
-  free(parent);
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
 }
 
 /* ---- `const_get :Name` on self in a class method ----------------------------
@@ -24367,6 +24008,8 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         int dup = 0;
         for (int r = 0; r < nrm; r++) if (rm_def[r] == ovr[q]) dup = 1;
         if (!dup && nrm < 1024) { rm_def[nrm] = ovr[q]; rm_cls[nrm] = ovc[q]; nrm++; }
+        /* its inline signature's warning names where the body went (apply_inline_rbs) */
+        nt_node_set_str(nt, ovr[q], "folded_into_object", ocls[q]);
       }
       changed = 1;
     }
@@ -24622,72 +24265,6 @@ int desugar_reader_index_write(Compiler *c) {
     int encl = c->nscope[id];
     c->nscope[ivr] = encl; c->nscope[w] = encl; c->nscope[body] = encl;
     changed = 1;
-  }
-  return changed;
-}
-
-/* Module#method_added: CRuby calls the class's `method_added(:name)` after each
-   `def` in its body, which Thor relies on to attach the `desc` just read to the
-   method that follows. Spinel defines methods at compile time and skipped the
-   `def` statements of a class body, so the hook never ran. For a class whose
-   chain has a program-defined `self.method_added`, a call is placed after each
-   receiverless `def` in the body, where CRuby makes it; the class-body emitter
-   runs a receiverless call that resolves to a class method. Methods defined
-   otherwise (attr_*, define_method) do not call it here. Idempotent: a `def`
-   already followed by its call is skipped. */
-int desugar_method_added_hook(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
-  int n0 = nt->count;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_class(nt, id)) continue;
-    int body = class_def_body(nt, id);
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int n = 0; const int *stmts = nt_arr(nt, body, "body", &n);
-    if (n <= 0) continue;
-    /* the class this body belongs to, as the analysis placed it (nested
-       `module M; class C` included), else by its written name. The fallback
-       reads the class recorded for that header. */
-    int ci = c->node_cbody ? c->node_cbody[stmts[0]] : -1;
-    if (ci < 0) ci = elab_header_class(c, id, NULL, NULL);
-    if (ci < 0 || ci >= c->nclasses) continue;
-    if (comp_cmethod_in_chain(c, ci, "method_added", NULL) < 0) continue;
-    int *out = malloc(sizeof(int) * (size_t)(2 * n));
-    if (!out) { perror("malloc"); exit(1); }
-    int m = 0, added = 0;
-    for (int k = 0; k < n; k++) {
-      int st = stmts[k];
-      out[m++] = st;
-      if (nt_kind(nt, st) != NK_DefNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      if (nt_int(nt, st, "concat_builtin_version", 0)) continue;
-      const char *mname = nt_str(nt, st, "name");
-      if (!mname) continue;
-      if (k + 1 < n && nt_kind(nt, stmts[k + 1]) == NK_CallNode) {
-        const char *nx = nt_str(nt, stmts[k + 1], "name");
-        if (nx && sp_streq(nx, "method_added") && nt_ref(nt, stmts[k + 1], "receiver") < 0) continue;
-      }
-      int sym = nt_new_node(nt, "SymbolNode");
-      int args = nt_new_node(nt, "ArgumentsNode");
-      int call = nt_new_node(nt, "CallNode");
-      if (sym < 0 || args < 0 || call < 0) continue;
-      nt_node_set_str(nt, sym, "value", mname);
-      nt_node_set_arr(nt, args, "arguments", &sym, 1);
-      nt_node_set_str(nt, call, "name", "method_added");
-      nt_node_set_ref(nt, call, "receiver", -1);
-      nt_node_set_ref(nt, call, "arguments", args);
-      nt_node_set_ref(nt, call, "block", -1);
-      nt_node_set_int(nt, call, "node_line", nt_int(nt, st, "node_line", 0));
-      nt_node_set_int(nt, call, "node_file", nt_int(nt, st, "node_file", 0));
-      comp_grow_node_arrays(c);
-      int encl = c->nscope[st];
-      int cb = c->node_cbody ? c->node_cbody[st] : -1;
-      int made[3] = { sym, args, call };
-      for (int j = 0; j < 3; j++) { c->nscope[made[j]] = encl; if (c->node_cbody) c->node_cbody[made[j]] = cb; }
-      out[m++] = call;
-      added = 1;
-    }
-    if (added) { nt_node_set_arr(nt, body, "body", out, m); changed = 1; }
-    free(out);
   }
   return changed;
 }
@@ -25999,74 +25576,6 @@ static int ma_def(NodeTable *nt, const char *name, int self_recv, int with_val, 
   int body = ma_stmts1(nt, body_stmt); if (body < 0) return -1;
   nt_node_set_ref(nt, def, "body", body);
   return def;
-}
-/* ---- `singleton_class.attr_accessor :x` in a class or module body ----
-   Accessors on the class object over its class-level ivar: what
-   `def self.x; @x; end` / `def self.x=(val); @x = val; end` spell, and the
-   one singleton_class idiom that never needs the singleton class as a value
-   (which stays unsupported: docs/limitations.md). attr_reader / attr_writer
-   likewise; symbol or string names, or the call is left alone. */
-int desugar_singleton_attr(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_opens_frame(nt, id)) continue;
-    int body = class_def_body(nt, id);
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int bn = 0; const int *bb0 = nt_arr(nt, body, "body", &bn);
-    int *bb = (int *)malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1));
-    if (!bb) continue;
-    if (bn > 0) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
-    int *nb = NULL, nbn = 0, any = 0;
-    for (int i = 0; i < bn; i++) {
-      int st = bb[i];
-      const char *nm = nt_kind(nt, st) == NK_CallNode ? nt_str(nt, st, "name") : NULL;
-      int reader = 0, writer = 0;
-      if (nm && sp_streq(nm, "attr_accessor")) reader = writer = 1;
-      else if (nm && sp_streq(nm, "attr_reader")) reader = 1;
-      else if (nm && sp_streq(nm, "attr_writer")) writer = 1;
-      int rcv = nm ? nt_ref(nt, st, "receiver") : -1;
-      int is_sc = rcv >= 0 && nt_kind(nt, rcv) == NK_CallNode && nt_str(nt, rcv, "name") &&
-                  sp_streq(nt_str(nt, rcv, "name"), "singleton_class") &&
-                  nt_ref(nt, rcv, "arguments") < 0 && nt_ref(nt, rcv, "block") < 0 &&
-                  (nt_ref(nt, rcv, "receiver") < 0 || nt_kind(nt, nt_ref(nt, rcv, "receiver")) == NK_SelfNode);
-      if (!(reader || writer) || !is_sc || nt_ref(nt, st, "block") >= 0) { xc_push(&nb, &nbn, st); continue; }
-      int an = 0; int args = nt_ref(nt, st, "arguments");
-      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      const char *syms[32]; int nsyms = 0, ok = an > 0;
-      for (int a = 0; a < an && ok; a++) {
-        NodeKind ak = nt_kind(nt, av[a]);
-        const char *t = ak == NK_SymbolNode ? nt_str(nt, av[a], "value") : ak == NK_StringNode ? nt_str(nt, av[a], "content") : NULL;
-        if (!t || !t[0] || nsyms >= 32) ok = 0; else syms[nsyms++] = t;
-      }
-      if (!ok) { xc_push(&nb, &nbn, st); continue; }
-      long long line = nt_int(nt, st, "node_line", 0);
-      for (int j = 0; j < nsyms && ok; j++) {
-        char iv[300], wn[300]; snprintf(iv, sizeof iv, "@%s", syms[j]); snprintf(wn, sizeof wn, "%s=", syms[j]);
-        if (reader) {
-          int rd = nt_new_node(nt, "InstanceVariableReadNode"); if (rd < 0) { ok = 0; break; }
-          nt_node_set_str(nt, rd, "name", iv);
-          int d = ma_def(nt, syms[j], 1, 0, rd, line); if (d < 0) { ok = 0; break; }
-          xc_push(&nb, &nbn, d);
-        }
-        if (writer) {
-          int w = nt_new_node(nt, "InstanceVariableWriteNode"); if (w < 0) { ok = 0; break; }
-          nt_node_set_str(nt, w, "name", iv);
-          int vr = nt_new_node(nt, "LocalVariableReadNode"); if (vr < 0) { ok = 0; break; }
-          nt_node_set_str(nt, vr, "name", "val"); nt_node_set_int(nt, vr, "depth", 0);
-          nt_node_set_ref(nt, w, "value", vr);
-          int d = ma_def(nt, wn, 1, 1, w, line); if (d < 0) { ok = 0; break; }
-          xc_push(&nb, &nbn, d);
-        }
-      }
-      if (!ok) { free(nb); nb = NULL; nbn = 0; any = 0; break; }
-      any = 1;
-    }
-    if (any && nb) { nt_node_set_arr(nt, body, "body", nb, nbn); changed = 1; }
-    free(nb); free(bb);
-  }
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
 }
 
 

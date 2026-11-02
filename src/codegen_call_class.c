@@ -3219,7 +3219,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
   if (argc > 1 || (argc == 1 && nt_kind(nt, argv[0]) != NK_TrueNode)) return 0;
-  int ci = recv >= 0 ? view_class_is(c, recv) : -1, si = -1, dyn = 0;
+  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, si = -1, dyn = 0;
   /* a constant path (`Outer::Mod`) names its class by the leaf, as constant
      paths resolve here; a class-tag arm's receiver, the class it names */
   if (ci >= 0) ;
@@ -3931,7 +3931,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_printf(b, "(sp_sock_const(\"%s\") >= 0)", cn0);
           return 1;
         }
-        int vci = view_class_is(c, recv);   /* a class-tag arm's: as its class's literal */
+        int vci = view_class_is(c, recv, ELAB_GAIN_CONSTS);   /* a class-tag arm's: as its class's literal */
         int lit0 = vci >= 0 || rk0 == NK_ConstantReadNode || rk0 == NK_ConstantPathNode;
         int yes = lit0 ? const_defined_from(c, vci >= 0 ? vci : const_get_recv_class(c, id, recv), cn0)
                        : const_defined_known(c, CG_NONE, cn0);
@@ -4068,7 +4068,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (is_false_arg) {
         const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
                           ? nt_str(nt, recv, "name") : NULL;
-        int ci2 = cn2 ? comp_class_index(c, cn2) : view_class_is(c, recv);   /* or a class-tag arm's */
+        int ci2 = cn2 ? comp_class_index(c, cn2) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
         if (ci2 >= 0) {
           ReflNames r = {0};
           /* a module's own: what it answers for itself, not what an
@@ -4189,7 +4189,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                       : (aty2_k == NK_StringNode) ? nt_str(nt, argv[0], "content") : NULL;
       NodeKind rty2_k = nt_kind(nt, recv);
       int ccid = (rty2_k == NK_ConstantReadNode) ? const_node_class_index(c, recv) : -1;
-      if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid < 0) ccid = view_class_is(c, recv);   /* a class-tag arm's */
+      if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid < 0)
+        ccid = view_class_is(c, recv, ELAB_GAIN_CVARS);   /* a class-tag arm's */
       if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid >= 0) {
         ccid = comp_cvar_owner(c, ccid, cvn);
         int cvi = comp_cvar_index(&c->classes[ccid], cvn);

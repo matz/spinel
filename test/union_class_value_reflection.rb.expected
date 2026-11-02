@@ -1,0 +1,17 @@
+[:a, :pr]
+[:a]
+[:b]
+[:pr]
+true
+true
+[:m]
+2
+["a", "pr"]
+[:a, :pr]
+[:c]
+[:pr]
+2
+undefined method 'instance_methods' for an instance of Integer
+undefined method 'name' for an instance of Integer
+undefined method 'instance_methods' for nil
+undefined method 'instance_methods' for an instance of Integer

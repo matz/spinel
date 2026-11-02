@@ -2836,6 +2836,24 @@ static int yield_recv_builtin_every_site(Compiler *c, int call) {
 }
 
 static int poly_scalar_row_call(Compiler *c, int id);
+/* A boxed receiver's Class value answers what the builtin Module and Class
+   methods answer for its class (the class-value arms of the plan's
+   class-tag switch, cplan_poly_cls_values): asked with the receiver faced a
+   Class, where the plan has such an arm. The call is boxed then, the arms
+   beside the other values' NoMethodError. */
+static int poly_cls_value_answers(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv < 0 || !is_class_value_reflection(nt_str(c->nt, id, "name")) || an_builtin_only || face_active() ||
+      comp_ntype(c, recv) != TY_POLY) return 0;
+  PolyPlan *p = cplan_poly_cls_values(c, id);
+  int any = p->n > 0;
+  cplan_poly_free(p);
+  if (!any) return 0;
+  an_face_push(recv, TY_CLASS);
+  TyKind kt = infer_call(c, id);
+  an_face_pop();
+  return kt != TY_UNKNOWN && kt != TY_VOID;
+}
 TyKind infer_call(Compiler *c, int id) {
   int n; comp_autoloads(c, id, &n);
   if (n) return TY_NIL;
@@ -2895,6 +2913,7 @@ TyKind infer_call(Compiler *c, int id) {
   int av = t == TY_UNKNOWN ? builtin_arity_violation(c, id) : 0;
   if (av) return av == 2 ? TY_POLY : TY_NIL;
   if (t == TY_UNKNOWN && poly_scalar_row_call(c, id)) return TY_POLY;
+  if (t == TY_UNKNOWN && poly_cls_value_answers(c, id)) return TY_POLY;
   return t;
 }
 

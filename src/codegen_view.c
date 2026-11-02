@@ -314,7 +314,9 @@ const char *view_call_name(Compiler *c, int node) {
 
 /* A Class-valued receiver known to name class ci for this emission (a
    class-tag arm's value of one class); view_class_is reads it and marks
-   the entry read, which view_class_is_read reports for the arm's guard. */
+   the entry with what the emitter answers from (ELAB_GAIN_*: the class's
+   methods, constants or class variables), which view_class_is_read
+   reports for the arm's guard. */
 int view_push_class_is(Compiler *c, int node, int ci) {
   int tok = view_open_mark(VK_CLASS_IS, node, ci, NULL);
   view_stack[tok].c = c;
@@ -323,15 +325,15 @@ int view_push_class_is(Compiler *c, int node, int ci) {
   view_epoch_n++;
   return tok;
 }
-int view_class_is(Compiler *c, int node) {
+int view_class_is(Compiler *c, int node, unsigned reads) {
   for (int i = view_sp - 1; i >= 0; i--)
     if (view_stack[i].kind == VK_CLASS_IS && view_stack[i].c == c && view_stack[i].id == node) {
-      view_stack[i].val = 1;
+      view_stack[i].val |= (int)reads;
       return view_stack[i].saved;
     }
   return -1;
 }
-int view_class_is_read(int tok) { return tok >= 0 && tok < view_sp && view_stack[tok].val; }
+unsigned view_class_is_read(int tok) { return tok >= 0 && tok < view_sp ? (unsigned)view_stack[tok].val : 0; }
 
 int view_push_splice(int arg, int tag, const char *pname) { return view_open_mark(VK_SPLICE, arg, tag, pname); }
 int view_push_fn(void) { return view_open_mark(VK_FN, -1, 0, NULL); }

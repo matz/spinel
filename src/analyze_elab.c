@@ -129,6 +129,11 @@ struct LoadRecord {
   long nentries, indexed;
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
+  /* elab_class_unsettled's answers from the record and the tables, by
+     call, class and window start (key: the quadruples, -1 for none),
+     asked again each pass, while the epochs in of hold (lr_unset_kept) */
+  struct LrUnset { int *key; unsigned char *un; int n, cap; struct { unsigned long hgen; unsigned sgen, shape, tgen; int ncls, nscopes, nclasses; } of; } unset;
+  unsigned long hgen;        /* bumped by every change to the histories and the mixins, and by each scope owner the record sets */
   const LrDef **cand; int ncand, ccand, cand_bad; unsigned char collect;   /* elab_class_candidates: the writes lr_last_before passes */
   long opened;               /* LrHist.open is of this many entries (lr_open_make), -1 for none made */
   struct LrSettle *set; int nset, cset;   /* the answers recorded ahead of a later region, to recompute (lr_settle_regions) */
@@ -989,6 +994,7 @@ static LrHist *lr_hist(LoadRecord *r, int a, int b, const char *name, int make) 
   *x = (LrHist){ a, b, strdup(name), NULL, 0, 0, r->hhead[h], -1, 0 };
   if (!x->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   r->hhead[h] = r->nhist++;
+  r->hgen++;
   return x;
 }
 
@@ -998,7 +1004,7 @@ static void lr_version(LoadRecord *r, int a, int b, const char *name, LrDef d) {
   if (d.target && !(d.target = strdup(d.target))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   x->v = lr_grow(x->v, &x->cap, x->n, sizeof *x->v);
   x->v[x->n++] = d;
-  r->nentries++;
+  r->nentries++; r->hgen++;
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;   /* elab_class_surface's are of fewer entries */
 }
 
@@ -1835,6 +1841,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       opaque |= mod < 0 && mod != LR_LATER;
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
+      x->r->hgen++;
       k->mix[k->nmix++] = (LrMixin){ node, lr_mix_kind(nt, node, nm, sg), mod, av[i], .cond = !x->unplaced && x->r->at[node] >= 0 && x->r->st[x->r->at[node]].fmay,
                                      .applied = lr_stmt_applied(x->unplaced ? NULL : lr_stmt_of(x->r, node), x->unplaced, may) == 1, .open = fnode };
     }
@@ -2061,6 +2068,7 @@ static void lr_record_drop(LoadRecord *r) {
   r->nhist = 0; r->frontier = 0; r->nset = 0; r->builders = 0;
   r->slot_builds = -1;
   r->nentries = 0; r->indexed = r->opened = -1;   /* the by-name index and the open bits are of the dropped histories */
+  r->hgen++;
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
 }
 
@@ -2261,7 +2269,7 @@ static void lr_def_owners(Compiler *c, int check) {
         if ((sc->class_id != cls || sc->is_cmethod != h->b) && f->differ++ < LR_CHECK_SHOW)
           fprintf(stderr, "spinel-elab-check: owner %s walk=%d/%d record=%d/%d\n", sc->name, sc->class_id, sc->is_cmethod, cls, h->b);
       }
-      if (sc->class_id != cls || sc->is_cmethod != h->b) { sc->class_id = cls; sc->is_cmethod = h->b; comp_touch_scope(sc->idx); }
+      if (sc->class_id != cls || sc->is_cmethod != h->b) { sc->class_id = cls; sc->is_cmethod = h->b; comp_touch_scope(sc->idx); c->lrec->hgen++; }
     }
   }
   lr_unrolled_owners(c);
@@ -2297,7 +2305,7 @@ static void lr_def_owners(Compiler *c, int check) {
 static void lr_unrolled_owner(Compiler *c, int call, int ci) {
   int dn = nt_kind(c->nt, call) == NK_CallNode ? dm_each_inner(c->nt, call) : -1;
   for (int k = 0; dn >= 0 && k < c->nscopes; k++)
-    if (c->scopes[k].def_node == dn && c->scopes[k].class_id != ci) { c->scopes[k].class_id = ci; comp_touch_scope(c->scopes[k].idx); }
+    if (c->scopes[k].def_node == dn && c->scopes[k].class_id != ci) { c->scopes[k].class_id = ci; comp_touch_scope(c->scopes[k].idx); c->lrec->hgen++; }
 }
 static void lr_unrolled_owners(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
@@ -3698,14 +3706,16 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
    and the modules mixed into any of those, a module's own mixins too (at any
    time, so a superset of lr_in_ancestry's). -1 when that is not known: a
    superclass or a mixin the record cannot resolve, code it cannot follow run
-   on one of them, or more owners than fit. */
-static int lr_ancestry_owners(Compiler *c, int cls, int *out, int cap) {
+   on one of them, or more owners than fit. A module's (mod) is itself and
+   Object, whose constants its lookup reaches, and their mixins. */
+static int lr_ancestry_owners(Compiler *c, int cls, int *out, int cap, int mod) {
   LoadRecord *r = c->lrec;
   int n = 0, a = cls;
   for (int d = 0; a >= LR_MAIN; a = lr_super(c, a), d++) {
     if (d >= 64 || n >= cap) return -1;
     out[n++] = a;
   }
+  if (mod && n == 1 && a == LR_UNKNOWN_CLASS && n < cap) out[n++] = LR_MAIN;
   if (a != LR_UNKNOWN_CLASS || out[n - 1] != LR_MAIN) return -1;
   for (int i = 0; i < n; i++) {
     if (lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(out[i]), "", 0)) return -1;
@@ -3725,6 +3735,126 @@ static int lr_ancestry_owners(Compiler *c, int cls, int *out, int cap) {
     }
   }
   return n;
+}
+
+/* Does the statement holding node run for sure before p: placed, on no
+   condition and in no body that may not run or be cut short, and ordered
+   before p? */
+static int lr_settled(Compiler *c, int node, LoadPoint p) {
+  const LrStmt *s = node >= 0 ? lr_stmt_of(c->lrec, node) : NULL;
+  return s && s->region >= 0 && !s->may && !s->partial && elab_cmp(elab_point_of(c, node), p) == PROG_BEFORE;
+}
+
+/* Is class k Object, Kernel or BasicObject, whose program methods and
+   mixins no Class emitter lists among a class's inherited ones? */
+static int lr_core_owner(Compiler *c, int k) {
+  return k >= 0 && (k == comp_core_class(c, CORE_OBJECT) || k == comp_core_class(c, CORE_KERNEL) ||
+                    k == comp_core_class(c, CORE_BASIC_OBJECT));
+}
+
+/* What of `kinds` the record's histories and the class and scope tables
+   leave unsettled for a reflection on cls at p (owners: its ancestry,
+   lr_ancestry_owners): every entry the record holds of them, and every
+   contributor the tables hold -- an instance method's def, an alias, an
+   attr the record has an entry of, a mixin. The inherited kind is
+   unsettled too while main (a public top-level def), Object, Kernel or
+   BasicObject holds any: the emitters do not list theirs. */
+static unsigned lr_unsettled_tables(Compiler *c, int cls, const int *owners, int n, unsigned kinds, LoadPoint p) {
+  LoadRecord *r = c->lrec;
+  unsigned un = 0;
+  for (int i = 0; i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    int own = h->a == cls ? 1 : 0, core = h->a == LR_MAIN || lr_core_owner(c, h->a);
+    for (int o = 0; o < n && !own && h->a >= LR_MAIN; o++) own = owners[o] == h->a ? 2 : 0;
+    unsigned k = h->b || !own ? (h->b || !core ? 0 : ELAB_GAIN_INHERITED) : own == 1 ? ELAB_GAIN_METHODS : ELAB_GAIN_INHERITED;
+    for (int j = 0; (kinds & k & ~un) && j < h->n; j++) {
+      const LrDef *d = &h->v[j];
+      /* a top-level def is Object's private method, which no listing of
+         public and protected methods holds */
+      if (h->a == LR_MAIN && d->kind <= LR_DEFINE_METHOD && d->vis == SP_VIS_PRIVATE) continue;
+      if (core || d->may || !lr_settled(c, d->node, p)) un |= k;
+    }
+  }
+  for (int si = 0; (kinds & (ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) & ~un) && si < c->nscopes; si++) {
+    const Scope *sc = &c->scopes[si];
+    if (sc->class_id < 0 || sc->is_cmethod || !sc->name) continue;
+    int core = lr_core_owner(c, sc->class_id), own = sc->class_id == cls;
+    for (int o = 0; o < n && !own; o++) own = owners[o] == sc->class_id ? 2 : 0;
+    if (core) un |= ELAB_GAIN_INHERITED;
+    if (own && !lr_settled(c, sc->def_node, p)) un |= own == 1 ? ELAB_GAIN_METHODS : ELAB_GAIN_INHERITED;
+  }
+  const int cores[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT };
+  for (int o = -3; o < n; o++) {   /* (the core classes first, then the owners) */
+    int a = o < 0 ? comp_core_class(c, cores[o + 3]) : owners[o];
+    if (o < 0 && a < 0) continue;
+    const LrClass *kc = lr_class(r, a);
+    for (int j = 0; kc && j < kc->nmix; j++)
+      if (o < 0 || a == LR_MAIN || !lr_settled(c, kc->mix[j].node, p)) un |= kinds & ~ELAB_GAIN_METHODS;
+    if (a < 0) continue;
+    const ClassInfo *ki = &c->classes[a];
+    unsigned k = a == cls ? ELAB_GAIN_METHODS : ELAB_GAIN_INHERITED;
+    if (o < 0 && ki->naliases + ki->nreaders + ki->nwriters) un |= ELAB_GAIN_INHERITED;
+    for (int j = 0; o >= 0 && (kinds & k & ~un) && j < ki->naliases; j++)
+      if (!(ki->alias_sg && ki->alias_sg[j]) && !lr_settled(c, ki->alias_node[j], p)) un |= k;
+    for (int j = 0; o >= 0 && (kinds & k & ~un) && j < ki->nreaders + ki->nwriters; j++) {
+      char wn[256];
+      snprintf(wn, sizeof wn, j < ki->nreaders ? "%s" : "%s=", j < ki->nreaders ? ki->readers[j] : ki->writers[j - ki->nreaders]);
+      if (!lr_hist(r, a, 0, wn, 0)) un |= k;
+    }
+  }
+  return un & kinds;
+}
+
+/* An open-addressed slot of the memo for (id, cls) asked from window
+   start w: its own, or the empty one it goes in */
+static int lr_unset_slot(const int *key, int cap, int id, int cls, LoadPoint w) {
+  unsigned h = ((unsigned)id * 31u + (unsigned)cls * 7u + (unsigned)w.seq) & (unsigned)(cap - 1);
+  while (key[4 * h] >= 0 && (key[4 * h] != id || key[4 * h + 1] != cls || key[4 * h + 2] != w.region || key[4 * h + 3] != w.seq))
+    h = (h + 1) & (unsigned)(cap - 1);
+  return (int)h;
+}
+
+/* lr_unsettled_tables for call id from window start w, kept while nothing
+   it reads can have moved: the histories, the mixins and the scope owners
+   the record sets (LoadRecord.hgen), the scopes' classes and names (the
+   frozen scope index's epoch, the scope count), the aliases and parents
+   (comp_class_shape_gen), the attrs (comp_table_gen) and the class count */
+static unsigned lr_unset_kept(Compiler *c, int cls, const int *owners, int n, int id, LoadPoint w) {
+  LoadRecord *r = c->lrec;
+  const unsigned all = ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED | ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS;
+  if (!comp_scope_index_is_frozen()) return lr_unsettled_tables(c, cls, owners, n, all, w);
+  struct LrUnset *m = &r->unset;
+  int same = m->key && m->of.hgen == r->hgen && m->of.sgen == comp_scope_index_gen() && m->of.shape == comp_class_shape_gen() &&
+             m->of.tgen == comp_table_gen && m->of.ncls == r->ncls && m->of.nscopes == c->nscopes && m->of.nclasses == c->nclasses;
+  if (!same || 2 * (m->n + 1) > m->cap) {   /* start afresh, twice as large when full */
+    int cap = same ? 2 * m->cap : 256;
+    free(m->key); free(m->un);
+    m->key = malloc(sizeof(int) * 4 * (size_t)cap); m->un = malloc((size_t)cap);
+    if (!m->key || !m->un) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(m->key, -1, sizeof(int) * 4 * (size_t)cap);
+    m->cap = cap; m->n = 0;
+    m->of.hgen = r->hgen; m->of.sgen = comp_scope_index_gen(); m->of.shape = comp_class_shape_gen();
+    m->of.tgen = comp_table_gen; m->of.ncls = r->ncls; m->of.nscopes = c->nscopes; m->of.nclasses = c->nclasses;
+  }
+  int h = lr_unset_slot(m->key, m->cap, id, cls, w);
+  if (m->key[4 * h] < 0) {
+    m->un[h] = (unsigned char)lr_unsettled_tables(c, cls, owners, n, all, w);
+    m->key[4 * h] = id; m->key[4 * h + 1] = cls; m->key[4 * h + 2] = w.region; m->key[4 * h + 3] = w.seq; m->n++;
+  }
+  return m->un[h];
+}
+
+unsigned elab_class_unsettled(Compiler *c, int cls, unsigned kinds, int id, int keep) {
+  LoadRecord *r = elab_fresh(c);
+  ElabWindow w;
+  int owners[64], n;
+  /* (a file the compiler did not read, an autoload's too, can give the class anything) */
+  if (g_require_unread || !r->recorded || cls < 0 || cls >= c->nclasses || elab_call_window(c, id, &w) != ELAB_YES ||
+      (n = lr_ancestry_owners(c, cls, owners, 64, comp_class_is_module(c, &c->classes[cls]))) < 0) return kinds;
+  unsigned un = keep && r->plan_depth ? lr_unset_kept(c, cls, owners, n, id, w.from) & kinds
+                                      : lr_unsettled_tables(c, cls, owners, n, kinds, w.from);
+  /* the record's constants and class variables are not consulted */
+  return un | (kinds & (ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS));
 }
 
 typedef struct { int m, nh, any, *cp; } LrSpanAcc;
@@ -3761,7 +3891,7 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
   int bl = b.region != p0.region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
   if (bl >= p1.seq) bl = p1.seq - 1;
   if (p0.seq < bl && bl < p1.seq) p0.seq = bl;
-  int n = 0, obs0 = 0, owners[64], no = lr_ancestry_owners(c, cls, owners, 64);
+  int n = 0, obs0 = 0, owners[64], no = lr_ancestry_owners(c, cls, owners, 64, 0);
   LrSpanAcc acc = { 0, 0, 0, NULL };
   const LrVers *x = lr_vers(r, name);
   if (no >= 0) {   /* the histories of the ancestors alone, through the hash */
@@ -5503,7 +5633,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
-  free(r->hist); free(r->mixed); free(r->clsmod); free(r->hhead); free(r->cls); free(r->held); free(r->vers); free(r->vers_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->held); free(r->vers); free(r->vers_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r);

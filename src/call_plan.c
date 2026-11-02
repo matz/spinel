@@ -1033,10 +1033,11 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
   *first_def = def;
   return n;
 }
-/* Does call id sit in a block the record takes to run at once that its
-   call's typed target keeps (an_mark_kept_blocks)? It may then run any
-   time after its point. */
-static int ct_block_kept(Compiler *c, int id) {
+/* Does call id run any time after its point: in a block the record
+   answers later or an END body (elab_runs_later), or in a block it takes
+   to run at once that its call's typed target keeps (an_mark_kept_blocks)? */
+static int ct_after_point(Compiler *c, int id) {
+  if (elab_runs_later(c, id)) return 1;
   int calls[64], n = elab_assumed_blocks(c, id, calls, 64);
   for (int i = 0; i < n; i++)
     if (nt_int(c->nt, calls[i], "blk_kept", 0)) return 1;
@@ -1123,7 +1124,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabWindow w;
-  int kept = ct_block_kept(c, id);   /* (it runs at its point only if no block around it is kept) */
+  int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
   int at = p.region >= 0 && !kept ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
   if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
@@ -1230,7 +1231,7 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
-  return none && !ct_block_kept(c, id) && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
+  return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
 }
 /* See call_plan.h. */
@@ -1318,8 +1319,13 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   }
   /* a call the record proves runs before any version of a class method or
      a top-level function is defined raises, whatever versions follow; the
-     entry's else arm answers only a call that may run before them */
+     entry's else arm answers only a call that may run before them. One at
+     a point that may run any time after it (ct_after_point) takes the
+     entry, whose cells tell at run time; with no entry, it raises too:
+     nothing proves it runs after a def */
   if (ct_undefined_at(c, id, cls, name, flags)) {
+    int vi = c->scopes[mi].versioned && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, def_class, NULL) : -1;
+    if (vi >= 0 && c->scopes[vi].entry) return vi;
     if (def_class) *def_class = dc0;
     return -1;
   }

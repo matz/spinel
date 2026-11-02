@@ -3899,6 +3899,22 @@ int elab_assumed_blocks(Compiler *c, int id, int *out, int cap) {
   }
   return n;
 }
+/* Does node id run later than its point, at a time the syntax does not
+   tell: in a block whose call the record answers ELAB_BLK_LATER for (a
+   lazy chain's, placed at its call's point), or in an END body (placed at
+   its statement), with no def or lambda between (a body of its own: its
+   window is the def's)? It may then run any time after its point. */
+int elab_runs_later(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k == NK_PostExecutionNode ||
+        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_LATER)) return 1;
+  }
+  return 0;
+}
 void elab_window_open(Compiler *c, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
   lr_run_points(c);

@@ -404,6 +404,10 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w);
    run any time after its point: elab_window_open widens w to its region's
    end. */
 int elab_assumed_blocks(Compiler *c, int id, int *out, int cap);
+/* ...and whether node id is in a block the record answers later
+   (elab_block_runs: a lazy chain's) or in an END body: it may run any time
+   after its point too */
+int elab_runs_later(Compiler *c, int id);
 void elab_window_open(Compiler *c, ElabWindow *w);
 /* the versions of cls's method `name` (singleton when sg) a call running
    over window w can reach, each once, into out[0..cap) (NULL: none): the

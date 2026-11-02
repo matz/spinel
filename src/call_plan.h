@@ -458,6 +458,12 @@ void cplan_poly_free(PolyPlan *p);
 /* The name index bounds a query for a native Ruby literal-block target. */
 int cplan_native_block_possible(Compiler *c, int id, const PolyCand *pc, int n);
 int cplan_cand_target(Compiler *c, int id, const char *name, const PolyCand *pc, unsigned flags);
+/* Is mi a method an arm of call id's boxed dispatch on name reaches: a
+   candidate class's table method or, for a name with versions, the
+   version or entry call_target binds on that class, which the arm calls
+   (cplan_cand_target); a reader candidate's; or the same for a class
+   value's class methods. inst 0 asks the class-method arms alone. */
+int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst);
 const PolyPlan *cplan_poly_block(Compiler *c, int id);
 /* A boxed receiver's `each { }` that the run-time dispatch serves because a
    class of the program takes a block for `each`: one arm, PB_ENUM_INLINE,

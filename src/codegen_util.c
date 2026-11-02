@@ -217,16 +217,7 @@ void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add) {
   /* a boxed receiver's union: any of its candidates is one of its arms */
   if (inf->via == UC_POLY) {
     const char *pnm = nt_str(c->nt, id, "name");
-    int npc = 0, ncc = 0;
-    const PolyCand *pcs = pnm ? comp_poly_candidates(c, pnm, &npc) : NULL;
-    for (int k = 0; k < npc; k++)
-      if (pcs[k].mi == mi ||
-          (pcs[k].mi < 0 && call_target(c, id, pcs[k].cls, pnm, 0, NULL) == mi)) {
-        o->flags |= UO_MATCH | UO_ARM; return;
-      }
-    const PolyCand *ccs = pnm ? comp_cmethod_candidates(c, pnm, &ncc) : NULL;
-    for (int k = 0; k < ncc; k++)
-      if (ccs[k].mi == mi) { o->flags |= UO_MATCH | UO_ARM; return; }
+    if (pnm && cplan_cand_arm(c, id, pnm, mi, 1)) { o->flags |= UO_MATCH | UO_ARM; return; }
   }
   /* a yielding method's proc-form clone is that method, taken as a function
      with its block as a proc */
@@ -7295,6 +7286,24 @@ static void shadow_tab_build(Compiler *c, int raw) {
   free(tab);
   g_shadow_c = c; g_shadow_n = n; g_shadow_raw = raw; g_shadow_gen = comp_scope_index_gen();
 }
+/* The table grown to scopes appended since it was built, when none of
+   them shadows a method: each has no name, or is a hidden entry (the
+   version entries the fixpoint makes, one per call's chain: a rebuild
+   for each grew with the square of their number). The others' answers
+   stand, and the new scopes' are 0, as the pass would answer. 0 when one
+   may shadow: the pass is run again. */
+static int shadow_tab_extend(Compiler *c) {
+  int n = c->nscopes;
+  if (g_shadow_n < 0 || g_shadow_n > n) return 0;
+  for (int k = g_shadow_n; k < n; k++)
+    if (c->scopes[k].name && c->scopes[k].entry != ENTRY_DISPATCH) return 0;
+  unsigned char *t = realloc(g_shadow_tab, (size_t)(n > 0 ? n : 1));
+  if (!t) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memset(t + g_shadow_n, 0, (size_t)(n - g_shadow_n));
+  g_shadow_tab = t;
+  g_shadow_n = n;
+  return 1;
+}
 int scope_is_shadowed(Compiler *c, int s) {
   if (c->scopes[s].c_name) return 0;
   /* a replaced method version, and a version entry, is a function of its
@@ -7308,8 +7317,8 @@ int scope_is_shadowed(Compiler *c, int s) {
      planner asks per arm of every dispatch it weighs, every round. */
   int raw = !g_scopes_settled;
   if (raw && !comp_scope_index_is_frozen()) return scope_is_shadowed_scan(c, s);
-  if (g_shadow_c != c || g_shadow_n != c->nscopes || g_shadow_raw != raw ||
-      (raw && g_shadow_gen != comp_scope_index_gen()))
+  if (g_shadow_c != c || g_shadow_raw != raw || (raw && g_shadow_gen != comp_scope_index_gen()) ||
+      (g_shadow_n != c->nscopes && !shadow_tab_extend(c)))
     shadow_tab_build(c, raw);
   return g_shadow_tab[s];
 }

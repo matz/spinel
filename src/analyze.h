@@ -264,6 +264,10 @@ void elab_record_builders(Compiler *c);
 int elab_method_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p, const LrDef **out);
 /* ...and whether the program gives cls's instance side a method `name` of its own at p, or through a prepend: what shadows the class's own core method (an ancestor's, a Numeric's or Object's, does not, nor an include's); ELAB_YES also for one removed, ELAB_UNKNOWN for one that may not have run (under a condition) */
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p);
+/* may a call at p run on cls: on its class object (sg) once a header has
+   opened it, on an instance once one may exist? 1 where the record cannot
+   tell */
+int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p);
 /* is the history of cls's method `name` (singleton when sg) open: does a
    version after its last surely applied one (applied 1, lr_stmt_applied)
    stand under a run-time condition in its class body (applied 2), or in an
@@ -339,6 +343,10 @@ int elab_method_versions(Compiler *c, const char *name);
    main's) history of it hold more than one version, or an alias, which
    names the version it captured? */
 int elab_method_replaced(Compiler *c, const char *name);
+/* does a call of `name`, whose versions the record holds in one history,
+   run, or open the window of the bodies around it, ahead of the first
+   version, where the name is absent? */
+int elab_method_late(Compiler *c, const char *name);
 /* The record's histories of method `name`, one class and side at a time:
    the first with i -1, then the one after i; -1 past the last. *cls the
    class (-1 main's), *sg 1 for its singleton side. */

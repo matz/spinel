@@ -299,6 +299,7 @@ int is_class_body_acting_name(const char *n); /* output, raise, exit and the lik
 int is_definition_hook_name(const char *n); /* inherited included extended prepended method_added singleton_method_added const_added */
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
+extern const char METHOD_MISSING_NAME[];   /* "method_missing", the name a lookup of that method asks */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */
 int is_const_missing_name(const char *n); /* const_missing */
 int is_const_table_def_name(const char *n); /* __const_get__ __const_defined__ */

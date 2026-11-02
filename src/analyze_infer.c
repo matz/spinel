@@ -2602,7 +2602,7 @@ static TyKind an_poly_concrete(Compiler *c, int id, const char *name, TyKind t) 
        the poly-IO arm answered its raw const char *, and the C did not
        build. an_user_read_ty and the dispatch union already skip them. */
     if (c->classes[k].is_native_class || (live && !an_poly_class_live(c, k))) continue;
-    int mi = pcs[pi].mi;
+    int mi = cplan_cand_target(c, id, name, &pcs[pi], 0);   /* (the method its arm calls) */
     if ((mi < 0 || mi >= c->nscopes) && pcs[pi].rdcls < 0) continue;
     TyKind r = mi >= 0 && mi < c->nscopes ? (TyKind)c->scopes[mi].ret : an_reader_ret(c, k, pcs[pi].rdcls, name);
     if (r == t || r == TY_UNKNOWN || r == TY_VOID) continue;
@@ -2656,7 +2656,7 @@ TyKind an_class_concrete(Compiler *c, int id, const char *name, TyKind t) {
   int ncc = 0;
   const PolyCand *cc = comp_cmethod_candidates(c, name, &ncc);
   for (int i = 0; i < ncc; i++) {
-    int k = cc[i].cls, mi = cc[i].mi;
+    int k = cc[i].cls, mi = cplan_cand_target(c, id, name, &cc[i], CT_CMETHOD);
     if (mi < 0 || mi >= c->nscopes || is_builtin_reopen(c->classes[k].name)) continue;
     if (!poly_cls_value_reaches(c, id, k) || poly_cls_arm_left_out(c, id, k, mi) ||
         !cplan_target_binds(c, id, mi)) continue;
@@ -3752,7 +3752,10 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
           continue;
         }
         if (live && !an_poly_class_live(c, k)) continue;
-        int mi = pcs[pi].mi;
+        /* the method the call plan binds on k, which the dispatch's arm
+           calls (cplan_cand_target): for a name with versions, a version or
+           rcls's entry, whose else arm's answer joins the union */
+        int mi = cplan_cand_target(c, id, name, &pcs[pi], 0);
         /* A candidate whose own return has not been derived yet contributes
            nothing: "not known yet" is not an answer, and taking it as one is
            permanent. `def zero?; @value.zero?; end` on a union receiver
@@ -3813,7 +3816,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         int ncc = 0;
         const PolyCand *ccs = comp_cmethod_candidates(c, name, &ncc);
         for (int ki = 0; ki < ncc; ki++) {
-          int cmi = ccs[ki].mi;
+          int cmi = cplan_cand_target(c, id, name, &ccs[ki], CT_CMETHOD);
           if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].ret != TY_UNKNOWN)
             r = ty_unify(r, (TyKind)c->scopes[cmi].ret);
         }
@@ -5924,7 +5927,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv))
         pc = comp_cmethod_candidates(c, name, &ncc);
       for (int k = 0; k < ncc; k++) {
-        TyKind kr = (TyKind)c->scopes[pc[k].mi].ret;
+        TyKind kr = (TyKind)c->scopes[cplan_cand_target(c, id, name, &pc[k], CT_CMETHOD)].ret;
         if (kr != TY_STRING && kr != TY_UNKNOWN) other = 1;
       }
       *out = other ? TY_POLY : TY_STRING; return 1;
@@ -6012,7 +6015,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       for (int ki = 0; ki < ncc; ki++) {
         int k = ccs[ki].cls;
         if (is_builtin_reopen(c->classes[k].name)) continue;
-        int kmi = ccs[ki].mi;
+        int kmi = cplan_cand_target(c, id, name, &ccs[ki], CT_CMETHOD);   /* (the method its arm calls) */
         /* A candidate that yields, takes a block, or has a rest param has no
            arm the emitter can build, so it kills the whole dispatch. A
            candidate with the WRONG ARITY does not: this call cannot reach it,
@@ -8297,10 +8300,11 @@ static int infer_regexp_call(Compiler *c, int id, const NodeTable *nt, const cha
    counts, as the fixpoint widens it once it is. */
 static int user_cover_answers_bool(Compiler *c, int id) {
   int n = 0;
-  const PolyCand *pcs = comp_poly_candidates_at(c, id, "cover?", &n);
+  const char *nm = "cover?";
+  const PolyCand *pcs = comp_poly_candidates_at(c, id, nm, &n);
   for (int i = 0; i < n; i++) {
     if (pcs[i].native || pcs[i].mi < 0) continue;
-    TyKind r = (TyKind)c->scopes[pcs[i].mi].ret;
+    TyKind r = (TyKind)c->scopes[cplan_cand_target(c, id, nm, &pcs[i], 0)].ret;
     if (r != TY_BOOL && r != TY_UNKNOWN) return 0;
   }
   return 1;

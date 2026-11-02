@@ -1,0 +1,46 @@
+:nme
+1
+:nme
+2
+:nme
+3
+:nme
+4
+"undefined method 'c3' for class C"
+5
+:nme
+6
+:nme
+7
+:nme
+8
+:nme
+9
+10
+[:mm, :c7]
+11
+:nme
+12
+[:nme, :nme, :nme]
+[13, 13, :nme]
+[:nme, :nme]
+[14, :nme]
+:nme
+[15]
+[:nme, :nme]
+[16, :nme]
+false
+17
+false
+18
+false
+19
+[:mm, :nme]
+[20, :nme]
+:ok
+21
+:nme
+false
+22
+[:cmm, :nme]
+[23, :nme]

@@ -1707,10 +1707,18 @@ typedef struct {
      (class, side, name, parameter count) for the calls whose version is
      known only at run time, or with guard, for the calls that reach a
      later prepend's copy (Scope.mixin_guarded), and each of its arms'
-     calls pinned to the method it runs. cells: its histories' cells are
-     written (ver_cells_write) */
-  struct VerEntry { const char *name; int guard, cls, sg, ar, scope, cells; } *ver_entries;
+     calls pinned to the method it runs. absent: asked for a call that may
+     meet no version of the chain yet, 2 when the entry's else arm answers
+     for none, 1 when it keeps the last version (ver_entries_demand);
+     cells: its histories' cells are written (ver_cells_write) */
+  struct VerEntry { const char *name; int guard, cls, sg, ar, scope, absent, cells; } *ver_entries;
   int nver_entries;
+  /* the chains a typed call may meet with no version made yet, whose
+     entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
+     where the call runs, method_missing is on the chain (1), is not (2),
+     or both (ver_mm_at) */
+  struct VerLate { const char *name; int cls, sg, mi, ar, mm; } *ver_late;
+  int nver_late;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
   char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */

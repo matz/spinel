@@ -24,7 +24,7 @@ p go_e
 module M; end
 class F; include M; end
 def go_f = F.new.late_f
-go_f if ARGV.size > 5
+p((begin; go_f; rescue NoMethodError; :nme; end))
 M.module_eval do
   def late_f = 56
 end

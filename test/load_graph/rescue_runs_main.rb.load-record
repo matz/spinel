@@ -1,0 +1,30 @@
+load record: 19 points, 1 regions
+r0 #0 f0 ProgramNode line 11
+r0 #1 f0 BeginNode line 11
+  r0 #2 f0 LoadNode line 12
+  r0 #3 f0 LoadNode line 14
+r0 #4 f1 ProgramNode line 1
+r0 #5 f1 ClassNode RescueRunsDb line 1
+  r0 #6 f1 DefNode busy_timeout= line 2
+r0 #7 f0 LoadNode line 16
+r0 #8 f2 ProgramNode line 1
+r0 #9 f2 LoadNode line 1
+r0 #10 f3 ProgramNode line 1
+r0 #11 f3 ModuleNode RescueRunsPragmas line 1
+  r0 #12 f3 DefNode busy_timeout line 2
+  r0 #13 f3 DefNode busy_timeout= line 3
+r0 #14 f2 ClassNode RescueRunsDb line 2
+  r0 #15 f2 CallNode include line 3
+  r0 #16 f2 CallNode alias_method line 4
+r0 #17 f0 CallNode p line 17
+r0 #18 f0 CallNode p line 18
+class RescueRunsDb: body#5 body#14 include RescueRunsPragmas#15
+class RescueRunsPragmas: body#11
+entity RescueRunsDb: owner main leaf RescueRunsDb
+entity RescueRunsPragmas: owner main leaf RescueRunsPragmas
+const RescueRunsDb: write#5
+RescueRunsDb#busy_timeout=: def#6 runs=#17 end=yes
+const RescueRunsPragmas: write#11
+RescueRunsPragmas#busy_timeout: def#12 runs=#17 end=yes
+RescueRunsPragmas#busy_timeout=: def#13 runs=#17 end=yes
+RescueRunsDb#busy_timeout: alias#16 (busy_timeout=: def#6) end=yes

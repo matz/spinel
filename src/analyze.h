@@ -148,6 +148,7 @@ int prog_site_places(const Compiler *c, int id);
 int prog_load_ncand(const NodeTable *nt, int load);
 int prog_load_cand(const NodeTable *nt, int load, int k);
 int prog_load_open(const NodeTable *nt, int load);
+int prog_rescue_runs(const NodeTable *nt, int rescue);
 int prog_load_path_seeded(const NodeTable *nt);
 void prog_top_stmts(const Compiler *c, void (*fn)(void *ud, int stmt), void *ud);
 int *prog_top_seq(const Compiler *c, int *n, int **file);
@@ -190,6 +191,7 @@ void elab_check_sort(Compiler *c, const int *now, const int *rec, int n, const i
 void elab_dump(Compiler *c, FILE *out);
 void elab_free(Compiler *c);
 void elab_note_const_writes(Compiler *c);   /* the source's constant writes, before any pass */
+int elab_source_writes_const(Compiler *c, int (*named)(const char *));   /* ...one of them writes a name `named` takes */
 extern int g_dump_load_record;   /* --dump-load-record */
 /* The load record's histories (analyze_elab.c), recorded by elab_program,
    which takes the scope walk's place: a method's versions by (class,

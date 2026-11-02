@@ -1907,6 +1907,10 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     then_body = nt_ref(c->nt, id, "statements");
     else_body = nt_ref(c->nt, id, kind == NK_UnlessNode ? "else_clause" : "subsequent");
   }
+  else if (kind == NK_RescueNode) {   /* a clause that never runs, as a branch that never does (prog_rescue_runs) */
+    pred = prog_rescue_runs(c->nt, id);
+    then_body = nt_ref(c->nt, id, "statements");
+  }
   /* the parts in the order they run: the refs, the arrays, then the refs
      that run after them, a case's else and a begin's ensure (elab_ref_last),
      each where the load phase stands there (elab_child) */

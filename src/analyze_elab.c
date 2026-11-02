@@ -254,7 +254,9 @@ static ElabPos elab_value_pos(const NodeTable *nt, int v, ElabPos q) {
    on the path; a branch whose condition is a constant (`x if true`,
    nt_pred_const, which the scope walk folds too) runs whenever the
    condition is reached, and the arms after one that always runs never do,
-   which the record keeps as may not run; a value written under `||=` /
+   which the record keeps as may not run; a rescue clause that runs
+   whenever its begin completes (prog_rescue_runs: a require of no file in
+   the body raises) runs as such a branch does; a value written under `||=` /
    `&&=` or after `rescue` may not run, as the right side of `&&` and `||`
    does; a block run at once by a call the record does not know (a program
    method may yield to it, or keep it) may not run, and an iterator's may
@@ -284,7 +286,8 @@ ElabPos elab_child(const NodeTable *nt, int p, int ch, const ElabPos *pp) {
       /* a condition's constant predicate: whether its statements, and its
          else, run whenever the condition is reached */
       int pc = k == NK_IfNode || k == NK_UnlessNode ? nt_pred_const(nt, nt_ref(nt, p, "predicate")) : -1;
-      int then_runs = k == NK_IfNode ? pc == 1 : k == NK_UnlessNode ? pc == 0 : k == NK_ElseNode && pp->sure;
+      int then_runs = k == NK_IfNode ? pc == 1 : k == NK_UnlessNode ? pc == 0 :
+                      k == NK_RescueNode ? prog_rescue_runs(nt, p) == 1 : k == NK_ElseNode && pp->sure;
       if (spine && ch == nt_ref(nt, p, "statements")) {
         if (!then_runs) q.may = q.fmay = 1;
         if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) q.rep = pp->e;
@@ -4536,6 +4539,17 @@ void elab_note_const_writes(Compiler *c) {
       r->nsrcw++;
     }
   }
+}
+
+/* Does the program's source write a constant whose name `named` takes,
+   anywhere (a write of any form, a class or module header;
+   elab_note_const_writes)? A `rescue` naming a builtin exception class may
+   name the program's own then, where one is in scope (prog_settle_files). */
+int elab_source_writes_const(Compiler *c, int (*named)(const char *)) {
+  LoadRecord *r = lr_get(c);
+  for (int i = 0; i < r->nsrcw; i++)
+    if (named(r->srcw[i].name)) return 1;
+  return 0;
 }
 
 /* Does the record see every write of constant `name` there can be? Not

@@ -376,8 +376,14 @@ static void an_note_written_names(Compiler *c) {
         for (int i = 0; i < n; i++) if (nt_kind(nt, v[i]) != NK_SymbolNode) by_value = 1;
         break;
       }
+      case NK_StringNode: {
+        const char *sv = nt_str(nt, id, "content");
+        if (sv && is_definition_hook_name(sv)) c->writes_hook_name = 1;
+        break;
+      }
       case NK_SymbolNode: {
         const char *nm = nt_str(nt, id, "value");
+        if (nm && is_definition_hook_name(nm)) c->writes_hook_name = 1;
         an_written_add(&g_symbol_names, nm);
         an_written_add(&g_written, nm);
         an_written_add(&g_written_twice, nm);
@@ -386,6 +392,7 @@ static void an_note_written_names(Compiler *c) {
       }
       case NK_DefNode: {
         const char *nm = nt_str(nt, id, "name");
+        if (nm && is_definition_hook_name(nm)) c->writes_hook_name = 1;
         if (nm && anh_has(&g_written, nm)) an_written_add(&g_written_twice, nm);
         an_written_add(&g_written, nm);
         if (an_mixes(nm)) mixes = 1;

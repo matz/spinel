@@ -20366,7 +20366,10 @@ static int const_name_owner(Compiler *c, int tgt, int *owner) {
   }
   else {
     int recv = nt_ref(nt, tgt, "parent");
-    if (recv >= 0 && nt_kind(nt, recv) == NK_SelfNode) *owner = cpath_in_singleton(c, tgt) ? -1 : g_class_body_id;
+    if (recv >= 0 && nt_kind(nt, recv) == NK_SelfNode) {
+      int self = elab_self_at(c, tgt);   /* (a class reopened in a `class << self` body is self there) */
+      *owner = self >= -1 ? self : cpath_in_singleton(c, tgt) ? -1 : g_class_body_id;
+    }
     else if (cpath_recv_is_object(c, recv)) *owner = -1;
     else if (cpath_recv_dynamic(c, recv, 1)) return 0;
     else *owner = class_recv_static_ci(c, recv);

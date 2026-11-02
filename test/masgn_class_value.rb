@@ -56,3 +56,14 @@ class Object
   self::X23, $v23 = Class.new { def hi = 23 }, 0
 end
 p X23.name
+
+# A class reopened in a `class << self` body is self there
+class A24; end
+class H24
+  class << self
+    class ::A24
+      self::C24, z24 = Class.new { def hi = 24 }, 0
+    end
+  end
+end
+p A24::C24.name

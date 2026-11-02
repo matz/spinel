@@ -4,11 +4,11 @@
 #   carrying the def's annotation. One comment gets one verdict, under the
 #   name the comment's reader wrote (`compact_blank`, not a copy's name),
 #   and an annotation the copies apply (`exclude?`) is not reported as lost
-#   with the def they were copied from.
+#   with the def they were copied from. (`T` is no variable of Enumerable's.)
 # - A TrueClass or FalseClass method Object also defines runs as a branch
 #   of Object's method: its warning says so, and not that it was not found.
 module Enumerable
-  #: () -> Array[Elem]
+  #: () -> Array[T]
   def compact_blank
     reject { |x| x.nil? || x == "" }
   end

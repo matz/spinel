@@ -4084,7 +4084,7 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	desugared_warnings) \
 	$(SPINEL) $(IRB)/desugared_warnings.rb -c --no-line-map -o "$$tmp/w.c" 2>"$$tmp/w.err" || { echo "inline-rbs-test: FAIL (desugared_warnings: the compile failed)"; sed -n 1,5p "$$tmp/w.err"; ok=0; }; \
 	$(call IRB_IGNORED,desugared_warnings.rb); \
-	for w in 'desugared_warnings.rb:11:3: warning: inline RBS: the signature of `compact_blank` is not applied: `Array[Elem]` names no type' \
+	for w in 'desugared_warnings.rb:11:3: warning: inline RBS: the signature of `compact_blank` is not applied: `Array[T]` names no type' \
 	         'desugared_warnings.rb:28:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the FalseClass branch of Object#blank?' \
 	         'desugared_warnings.rb:33:3: warning: inline RBS: the signature of `blank?` is not applied: its body runs as the TrueClass branch of Object#blank?'; do \
 	  grep -qF "$$w" "$$tmp/w.err" || { echo "inline-rbs-test: FAIL (no warning '$$w')"; ok=0; }; done; \

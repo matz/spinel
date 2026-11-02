@@ -11206,6 +11206,9 @@ const char *class_ruby_name(Compiler *c, int ci) {
     chain[depth++] = k;
     if (k != ci && c->classes[k].ruby_name_cache) break;
     k = c->classes[k].enclosing_class;
+    /* a reopened Object's constants are top-level ones: CRuby names
+       `class Object; B = Class.new; end` B, not Object::B */
+    if (k >= 0 && k == comp_core_class(c, CORE_OBJECT)) break;
   }
   if (depth == 1) return c->classes[ci].name; /* top-level: no qualification needed */
   /* Built once and kept on the class. This used to answer out of a shared

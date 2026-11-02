@@ -16769,6 +16769,42 @@ static char *oa_defining_symbols(Compiler *c, int nc) {
   return attr_sym;
 }
 
+/* The one class of the program whose synthesized reader `nm` a call on the
+   boxed receiver recv reaches, by the class facts (#8530): a class the facts
+   bound and leave in, with the reader; any other member answers no `nm` at
+   all (a builtin or a class without the name raises NoMethodError). -1 when
+   the facts do not bound recv, or a second class, a class object or a method
+   of the name could answer the call `id`. The call then reads that class's
+   slot as a reader call on a receiver of the class does. */
+static int oa_fact_reader_class(Compiler *c, int id, int recv, const char *nm) {
+  const ClsSet *s = recv >= 0 ? cls_fact_node(c, recv) : NULL;
+  if (!s || s->all || s->os || (s->bv && builtin_method_known_any(nm))) return -1;
+  int k = -1;
+  for (int m = cls_set_next(s, -1); m >= 0; m = cls_set_next(s, m)) {
+    if (m >= c->nclasses || !cls_fact_bounded(c, m)) return -1;
+    if (call_target(c, id, m, nm, 0, NULL) >= 0) return -1;
+    if (!comp_reader_in_chain(c, m, nm, NULL)) continue;
+    if (k >= 0) return -1;
+    k = m;
+  }
+  return k;
+}
+
+/* Method s ends in an each-family walk with a block while its return is
+   still untyped (nil or unknown): the walk answers the walked array once
+   inference reaches it. A list a reader call on a boxed value reads
+   (oa_fact_reader_class) can narrow in the round its receiver is first
+   typed, before that; with no return slot to join it then, the method's
+   value came out a nil and an sp_PtrArray * apart, boxed. */
+static int oa_untyped_walk_tail(Compiler *c, int s) {
+  const NodeTable *nt = c->nt;
+  TyKind r = c->scopes[s].ret;
+  int t = r == TY_NIL || r == TY_UNKNOWN ? scope_body_last(c, s) : -1;
+  if (t < 0 || nt_kind(nt, t) != NK_CallNode || !is_each_walk_or_with_index(nt_str(nt, t, "name"))) return 0;
+  int b = nt_ref(nt, t, "block");
+  return b >= 0 && nt_kind(nt, b) == NK_BlockNode;
+}
+
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -16879,7 +16915,7 @@ static int narrow_object_arrays(Compiler *c) {
     if (sc->ret_oa_pin == TY_INT_ARRAY_ARRAY || sc->ret_oa_pin == TY_FLOAT_ARRAY_ARRAY ||
         ty_is_obj_array(sc->ret_oa_pin))
       scope_set_ret(sc, TY_POLY_ARRAY);   /* same reset */
-    if (sc->ret != TY_POLY_ARRAY || !sc->name || sc->def_node < 0) continue;
+    if ((sc->ret != TY_POLY_ARRAY && !oa_untyped_walk_tail(c, s)) || !sc->name || sc->def_node < 0) continue;
     if (sc->ret_rbs_seeded || sc->ret_specialized) continue;
     /* `new` answers the object, never initialize's value: a constructor
        ending in `@items << x` has no return slot to keep alive, and one that
@@ -17096,7 +17132,7 @@ static int narrow_object_arrays(Compiler *c) {
       /* a bare call in an instance_eval/exec block is the receiver's reader */
       if (recv < 0 && OA_IE_KILL(id, ivn)) continue;
       int rci = -1;
-      if (recv >= 0) { TyKind rt = infer_type(c, recv); if (ty_is_object(rt)) rci = ty_object_class(rt); }
+      if (recv >= 0) { TyKind rt = infer_type(c, recv); rci = ty_is_object(rt) ? ty_object_class(rt) : rt == TY_POLY || rt == TY_UNKNOWN ? oa_fact_reader_class(c, id, recv, nm) : -1; }
       else { Scope *sc = comp_scope_of(c, id); if (sc && !sc->is_cmethod) rci = sc->class_id; }
       if (rci < 0 || !comp_reader_in_chain(c, rci, nm, NULL)) continue;
       int i = OA_IVSLOT(rci, ivn);
@@ -17347,7 +17383,7 @@ static int narrow_object_arrays(Compiler *c) {
             pend[npend].id = id; pend[npend].slot = es; pend[npend].cls = -1; npend++;
             continue;
           }
-          OA_DYN_KILL(recv, name);
+          if (read_slot[id] < 0) OA_DYN_KILL(recv, name);   /* (the facts' one reader class is read as its slot) */
         }
       }
     }

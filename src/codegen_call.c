@@ -32032,13 +32032,18 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   const NodeTable *nt = c->nt;
   int pf = c->scopes[mi].yields ? scope_proc_form_of(c, mi) : -1;
   if (pf < 0) return 0;
-  /* A Random's, Float's or Symbol's method that yields a container stays
-     uncalled: a block that widens the container's element kind reads the
-     boxed one as garbage (the same widening is wrong for a top-level
-     method). */
+  /* A Random's, Float's, Symbol's, Range's, Time's or NilClass's method
+     that yields a container is not called: a block that widens the
+     container's element kind reads the boxed one as garbage (the same
+     widening is wrong for a top-level method). Only a value known to be a
+     container counts: a boxed one (an Integer under --int-overflow=promote,
+     a poly value) reaches a block typed for a boxed value, which reads it
+     as it is. The method has no function of its own, so the call is
+     refused here rather than named and left to the C compiler. */
   int pci = c->scopes[mi].class_id;
   if (reopen_pf_raw_self(c, pci) && pci != comp_core_class(c, CORE_FIBER) && pci != comp_core_class(c, CORE_THREAD) &&
-      reopen_yields_container(c, &c->scopes[mi])) return 0;
+      reopen_yields_known_container(c, &c->scopes[mi]))
+    unsupported_feature(c, id, "a yielding method of a reopened Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation");
   int cblk = nt_ref(nt, id, "block") >= 0 ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
   /* a forwarded `&blk` resolves below 0 when the caller passed no block:
      the clone's block parameter is then NULL (block_given? is false) */

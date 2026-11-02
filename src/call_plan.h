@@ -516,13 +516,22 @@ void pa_report(void);
 typedef enum {
   CN_NONE,     /* not nil here, a `&.` call, or a method the program gives nil */
   CN_RAISE,    /* nil has no such method: NoMethodError, after the operands */
-  CN_ANSWER    /* nil has it (is_nil_method): NilClass answers, where its
+  CN_ANSWER,   /* nil has it (is_nil_method): NilClass answers, where its
                   answer has the call's type (nil_answer_text); a call whose
                   answer has not is emitted as before, untested */
+  CN_PROGRAM   /* the program gives nil the method (NilClass's or Object's,
+                  cplan_nil_program_method), and the receiver's class runs
+                  another or none: nil runs nil's, where its answer has the
+                  call's type (cplan_nil_program_served) */
 } CplanNil;
 const char *cplan_call_name(const NodeTable *nt, int id);
 int cplan_nil(Compiler *c, int id);
 int cplan_nil_answer_served(Compiler *c, int id);   /* codegen_call.c: nil's answer has the call's type */
+/* The program's method call `call` runs for a nil receiver: NilClass's,
+   else Object's (-1 for none, or one only Kernel, BasicObject or the top
+   level gives it); *nilcls whether it is NilClass's. */
+int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls);
+int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --
    a literal, a missing else, a safe navigation, a slot read before its
    write, an element of an Array the program stores nil into -- which a

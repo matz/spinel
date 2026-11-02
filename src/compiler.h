@@ -708,6 +708,12 @@ typedef struct {
   int lidx_cap;     /* a power of two, at least twice nlocals */
 } Scope;
 
+/* Is s a method of its class's side cm (1 the class side): a module function
+   is both, the module's own method and its private instance method */
+static inline int scope_on_side(const Scope *s, int cm) {
+  return cm ? s->is_cmethod : !s->is_cmethod || s->is_module_function;
+}
+
 static inline TyKind scope_set_ret(Scope *s, TyKind t) {
   if (s->ret != t) { *(TyKind *)&s->ret = t; comp_touch_scope(s->idx); }
   return t;
@@ -2171,6 +2177,11 @@ const char *io_super_name(const char *k);
 /* Like comp_method_in_class but walks the superclass chain. On success,
    *def_class (if non-NULL) is set to the class that defines the method. */
 int        comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
+/* ...the method a receiverless call in an instance of class_id reaches:
+   as comp_method_in_chain, with a module's module functions among its
+   instance methods (each is the module's private instance method, and the
+   later of it and an instance def of the name answers) */
+int        comp_self_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
 /* The method version recorded at def node def_node: the scope of that def
    named name on class_id's superclass chain (class side when is_cm; a
    top-level method when class_id < 0), the nearest class's when copies

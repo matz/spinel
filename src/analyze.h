@@ -224,7 +224,8 @@ typedef struct {
                              at a point sees it */
   int scope;            /* a def's or a define_method's: the method scope
                            the scope walk made of it (its Scope index; 0,
-                           the program's top level, for none) */
+                           the program's top level, for none); a
+                           module_function copy's of one, that one's */
 } LrDef;
 typedef struct { int node, body; } LrOpen;
 typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /* LR_SG_PREPEND: a prepend of the singleton class, ahead of its own methods */
@@ -557,12 +558,16 @@ typedef struct {
 const ElabSurface *elab_class_surface(Compiler *c, int cls, int sg, int *n);
 /* An entry the registration applies, as the load phase ends (lr_applied):
    on class side (cls, LR_MAIN for main's; sg), of kind LrKind, by node, of
-   name (an alias's original in target); names point into the record */
-typedef struct { int cls, sg, kind, node; const char *name, *target; } ElabEntry;
+   name (an alias's original in target), with its version's scope
+   (LrDef.scope); names point into the record */
+typedef struct { int cls, sg, kind, node; const char *name, *target; int scope; } ElabEntry;
 /* every class side's entries of the kinds in mask (1 << LrKind), in the
    order the load phase makes them: by class and side, then statement, then
    the argument that names them (a reader before its writer); *n of them,
-   the caller frees the array */
+   the caller frees the array. ELAB_ENTRY_MAY in mask also takes those under
+   a run-time condition, which the registration otherwise leaves to the run
+   time (lr_stmt_applied: 2) */
+enum { ELAB_ENTRY_MAY = 1 << 30 };
 ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
 /* did code the record cannot follow (a send, an eval of a String, a mixin
    of a module it does not know, a computed method name, a method of the

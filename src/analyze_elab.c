@@ -1311,7 +1311,7 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
   lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced, .scope = sc });
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target))
-    lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced });
+    lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced, .scope = sc });
 }
 
 /* The class a frame's def, alias or undef defines on (in *sg, on its
@@ -4886,9 +4886,11 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n) {
     if (h->a < LR_MAIN || !lr_class(r, h->a)) continue;
     for (int j = 0; j < h->n; j++) {
       const LrDef *d = &h->v[j];
-      if (!(mask >> d->kind & 1) || lr_applied(c, d) != 1) continue;
+      if (!(mask >> d->kind & 1)) continue;
+      int ap = lr_applied(c, d);
+      if (ap != 1 && !(ap == 2 && (mask & ELAB_ENTRY_MAY))) continue;
       v = lr_grow(v, &cap, k, sizeof *v);
-      v[k++] = (LrEntryKey){ { h->a, h->b, d->kind, d->node, h->name, d->target }, elab_sort_key(c, d->node),
+      v[k++] = (LrEntryKey){ { h->a, h->b, d->kind, d->node, h->name, d->target, d->scope }, elab_sort_key(c, d->node),
                              lr_entry_arg(c->nt, d->node, h->name, d->kind == LR_WRITER) };
     }
   }
@@ -5278,9 +5280,9 @@ enum { LR_SF_READER, LR_SF_WRITER, LR_SF_UNDEF, LR_SF_COPY, LR_SF_ALIAS, LR_SF_V
    alias with another original counts 2. */
 static void lr_check_name(Compiler *c, ClassInfo *k, int cls, int sg, const char *name, const ElabSurface *s, int mask) {
   const char *fam[] = { "the record's surface: readers", "the record's surface: writers", "the record's surface: undefs",
-                               /* the table's are still the module_function pass's (conditional-def
-                                  arms by its own rule), not filled from the record */
-                               "the record's surface: module_function copies, not filled from the record yet",
+                               /* the table's are the registration's, from the record's copies
+                                  (conditional-def arms by their own rule) */
+                               "the record's surface: module_function copies",
                                "the record's surface: aliases",
                                "the record's surface: visibility" };
   int now[LR_SF_N] = { 0 }, rec[LR_SF_N] = { 0 }, nl = (int)strlen(name), w = nl > 1 && name[nl - 1] == '=';
@@ -5294,7 +5296,9 @@ static void lr_check_name(Compiler *c, ClassInfo *k, int cls, int sg, const char
     int mf = 0;   /* a module_function copy: the table keeps its instance side's privacy as the Scope's flag */
     for (int i = 0; i < c->nscopes && !mf; i++)
       mf = c->scopes[i].is_module_function && c->scopes[i].class_id == cls && sp_streq(c->scopes[i].name, name);
-    now[LR_SF_COPY] = sg && mf;
+    /* ...or, for a copy of a method the module holds under another name or
+       through an include, a class method of its own (mf_copy_entries) */
+    now[LR_SF_COPY] = sg && (mf || (s && s->copy && comp_cmethod_in_class(c, cls, name) >= 0));
     int v = sg ? lr_table_has(k->cm_vis_names, k->cm_vis_kinds, k->ncm_vis, name) : lr_table_has(k->vis_names, k->vis_kinds, k->nvis, name);
     /* ...and an initialize's by its name: a public entry in the table may be
        a public section's, which those keep */
@@ -5412,7 +5416,7 @@ static int host_id_cmp(const void *a, const void *b) {
    constant path (desugar_constant_path_self_alias, qualify_colliding_consts),
    instance_eval (desugar_instance_eval_defs), a method_defined? guard
    (desugar_def_unless_method_defined), an alias (desugar_inherited_aliases,
-   desugar_reader_aliases_before_redef, desugar_module_function_aliases).
+   desugar_reader_aliases_before_redef).
    A define_method block is the program's own code, which those steps read
    where it is written: its nodes are not asked. Code spliced in the walk
    carries none. */

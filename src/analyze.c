@@ -543,12 +543,13 @@ static int cr_name_reaches(Compiler *c, int t, int on_instance) {
   return !sc->replaced && (!on_instance || !sc->is_cmethod || sc->is_module_function);
 }
 
-/* Is scope t a method an alias of class ci's names: any, for an instance
-   alias; a class method of ci or an ancestor, for a singleton alias (one
-   module's `M.g` aliasing its own `f` is not live by another's `f`) */
+/* Is scope t a method an alias of class ci's names: an instance method
+   (a module function is one), for an instance alias; a class method of ci
+   or an ancestor, for a singleton alias (one module's `M.g` aliasing its
+   own `f` is not live by another's `f`) */
 static int cr_alias_side(Compiler *c, int t, int ci, int asg) {
   const Scope *s = &c->scopes[t];
-  return !asg || (s->is_cmethod && cr_class_is_ancestor(c, s->class_id, ci));
+  return asg ? s->is_cmethod && cr_class_is_ancestor(c, s->class_id, ci) : scope_on_side(s, 0);
 }
 
 /* Is `nm` called: by bare name, or on a known instance (`K.new.nm`, marked
@@ -1557,7 +1558,9 @@ void compute_reachable(Compiler *c, int typed) {
         const char *an = cls->alias_new[i], *ao = cls->alias_old[i];
         int an_live = (an && cn_live(&cn_set, an)), ao_live = (ao && cn_live(&cn_set, ao));
         /* also check reachable scope names (covers scope-backed aliases), of
-           the alias's side and class (cr_alias_side) */
+           the alias's side and class (cr_alias_side): a module_function
+           copy of an instance alias, a class method of the module's own,
+           does not keep the alias's target */
         int asg = cls->alias_sg && cls->alias_sg[i];
         if (an) for (int t = SN_FIRST(an); t >= 0 && !an_live; t = sn_link[t]) if (c->scopes[t].reachable && cr_alias_side(c, t, ci, asg)) an_live = 1;
         if (ao) for (int t = SN_FIRST(ao); t >= 0 && !ao_live; t = sn_link[t]) if (c->scopes[t].reachable && cr_alias_side(c, t, ci, asg)) ao_live = 1;
@@ -13377,6 +13380,21 @@ static void mfn_build(Compiler *c) {
     }
     mfn_mod[mfn_n] = ms->class_id; mfn_next[mfn_n] = mfn_first[i]; mfn_first[i] = mfn_n++;
   }
+  /* ...and the instance aliases of those names a class holds (an include
+     copies a module's alias, not its module function), with no module of
+     their own: the call resolves the alias first */
+  for (int k = 0; k < c->nclasses && mfn_names.n; k++) {
+    const ClassInfo *kc = &c->classes[k];
+    for (int a = 0; a < kc->naliases; a++) {
+      if ((kc->alias_sg && kc->alias_sg[a]) || !kc->alias_new[a] || !kc->alias_old[a] ||
+          anh_find(&mfn_names, kc->alias_old[a]) < 0 || anh_find(&mfn_names, kc->alias_new[a]) >= 0) continue;
+      anh_add(&mfn_names, kc->alias_new[a]);
+      int *nf = realloc(mfn_first, sizeof *mfn_first * (size_t)mfn_names.n);
+      if (!nf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      mfn_first = nf;
+      mfn_first[mfn_names.n - 1] = -1;
+    }
+  }
 }
 /* does module m have a module_function named nm (mfn_build ran)? */
 static int mfn_module_has(int m, const char *nm) {
@@ -13407,13 +13425,18 @@ static int desugar_module_function_call(Compiler *c) {
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     if (nt_ref(nt, id, "receiver") >= 0) continue;
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || anh_find(&mfn_names, nm) < 0) continue;
+    const char *cn = nt_str(nt, id, "name"), *nm = cn;
+    int ni = cn ? anh_find(&mfn_names, cn) : -1;
+    if (ni < 0) continue;
     Scope *sc = comp_scope_of(c, id);
     if (!sc || sc->class_id < 0 || sc->class_id >= c->nclasses) continue;
+    /* a name no module has a module_function of is the class's alias of one
+       its module brings: the call runs that module function */
+    int alias = mfn_first[ni] < 0;
+    if (alias && (!(nm = comp_resolve_alias(c, sc->class_id, cn)) || (ni = anh_find(&mfn_names, nm)) < 0 || mfn_first[ni] < 0)) continue;
     if (call_target(c, id, sc->class_id, nm, CT_CMETHOD, NULL) >= 0) continue;
     /* a local of this name is a variable read, not a call */
-    if (scope_local(sc, nm)) continue;
+    if (scope_local(sc, cn)) continue;
     /* the module whose module_function it is, included by the class or a
        superclass directly or through a module it includes (`module B;
        include A; end`, then `include B`), the first in the ancestor order
@@ -13432,6 +13455,7 @@ static int desugar_module_function_call(Compiler *c) {
     if (mc < 0) continue;
     nt_node_set_str(nt, mc, "name", c->classes[mod].name);
     nt_node_set_ref(nt, id, "receiver", mc);
+    if (alias) nt_node_set_str(nt, id, "name", nm);
     comp_grow_node_arrays(c);
     c->nscope[mc] = c->nscope[id];
     changed = 1;
@@ -47688,7 +47712,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_SINGLETON_CLASS_DEFINE_METHOD); /* singleton_class.define_method -> define_singleton_method */
   lower_run(c, &lc, LW_EMPTY_HASH_COMPARE_BY_IDENTITY); /* {}.compare_by_identity -> Hash.new.compare_by_identity */
   lower_run(c, &lc, LW_DEFINE_METHOD_PROC_ARG);     /* define_method(:m, -> { }) -> define_method(:m) { } */
-  AN_STEP_V("desugar_module_function_aliases", desugar_module_function_aliases(c));    /* alias_method :n, :x + module_function :n -> def n (x's body) */
   lower_run(c, &lc, LW_DEFINE_METHOD_CAPTURES);     /* class body local a define_method reads -> a global */
   lower_run(c, &lc, LW_DEFINE_METHOD_KEYWORDS);     /* define_method(:m) { |k: 1| } -> def m(k: 1) */
   lower_run(c, &lc, LW_NAME_ANON_BLOCK_KWREST);

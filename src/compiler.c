@@ -1488,24 +1488,35 @@ static void sm_build(Compiler *c) {
   for (int i = 0; i < sm_buckets; i++) { sm_head[i] = -1; tm_head[i] = -1; }
   sm_add(c, 0, ns);
 }
+/* scope s answers (class_id, side): a method of that side (0 the instance,
+   1 the class side), or, for side 2, a receiverless call's in an instance
+   of the class: an instance method or a module function of the module,
+   which is also its private instance method (the later of the two
+   answers) */
+static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
+  if (side < 2) return sm_owns(c, s, class_id, side);
+  return sm_owns(c, s, class_id, 0) || (scope_on_side(&c->scopes[s], 0) && sm_owns(c, s, class_id, 1));
+}
 static int sm_lookup(Compiler *c, int class_id, const char *name, int is_cm) {
   if (!name) return -1;
   if (!sm_frozen) {
     /* scope shape may still change: scan in reverse so a later (reopened /
        transplanted) definition wins, matching the frozen index's ordering. */
     for (int s = c->nscopes - 1; s >= 0; s--)
-      if (sm_owns(c, s, class_id, is_cm) &&
+      if (sm_owns_side(c, s, class_id, is_cm) &&
           c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
             (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)))) return s;
     return -1;
   }
   if (sm_nscopes != c->nscopes) sm_build(c);
   if (!sm_buckets) return -1;
-  unsigned b = sm_hash(class_id, name, is_cm) % (unsigned)sm_buckets;
-  for (int s = sm_head[b]; s >= 0; s = sm_next[s])
-    if (sm_owns(c, s, class_id, is_cm) &&
-        c->scopes[s].name && sp_streq(c->scopes[s].name, name)) return s;
-  return -1;
+  int found = -1;
+  for (int side = is_cm & 1; side < (is_cm ? 2 : 1); side++) {   /* (a receiverless ask reads the class side's chain too) */
+    unsigned b = sm_hash(class_id, name, side) % (unsigned)sm_buckets;
+    for (int s = sm_head[b]; s > found; s = sm_next[s])
+      if (sm_owns_side(c, s, class_id, is_cm) && c->scopes[s].name && sp_streq(c->scopes[s].name, name)) { found = s; break; }
+  }
+  return found;
 }
 
 int comp_method_in_class(Compiler *c, int class_id, const char *name) {
@@ -1617,18 +1628,18 @@ static int chain_lookup(Compiler *c, int class_id, const char *name, int *def_cl
     return a[2 * class_id];
   }
   int start = class_id, mi = -1, dc = -1, bi = 0;
-  const char *rn = resolve_alias_side(c, class_id, name, &start, &bi, is_cm ? 1 : 2);
+  const char *rn = resolve_alias_side(c, class_id, name, &start, &bi, is_cm == 1 ? 1 : 2);
   /* an alias that captured a builtin's method names no method of the
      program's, whatever the class defines of that name later */
   if (bi && !sp_streq(rn, name)) start = -1;
   for (int cid = start; cid >= 0; cid = c->classes[cid].parent) {
-    int m = is_cm ? comp_cmethod_in_class(c, cid, rn) : comp_method_in_class(c, cid, rn);
-    if (m >= 0) { mi = m; dc = cid; break; }
+    int m = sm_lookup(c, cid, rn, is_cm);
+    if (m >= 0) { IMEMO_DEP_SCOPE(m); mi = m; dc = cid; break; }
   }
   /* A class-side alias of an inherited method resumes at the ancestor that
      owned it, but the receiver's own copy of that body (one made for a class
      below, which runs it with that class as self) is the same method */
-  for (int cid = class_id; is_cm && mi >= 0 && start != class_id && cid >= 0 && cid != start;
+  for (int cid = class_id; is_cm == 1 && mi >= 0 && start != class_id && cid >= 0 && cid != start;
        cid = c->classes[cid].parent) {
     int m = comp_cmethod_in_class(c, cid, rn);
     if (m >= 0 && c->scopes[m].def_node == c->scopes[mi].def_node) { mi = m; dc = cid; break; }
@@ -1646,6 +1657,12 @@ int comp_cmethod_in_chain(Compiler *c, int class_id, const char *name, int *def_
 
 int comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
   int mi = chain_lookup(c, class_id, name, def_class, 0);
+  if (mi >= 0) IMEMO_DEP_SCOPE(mi);
+  return mi;
+}
+
+int comp_self_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
+  int mi = chain_lookup(c, class_id, name, def_class, 2);
   if (mi >= 0) IMEMO_DEP_SCOPE(mi);
   return mi;
 }
@@ -2841,13 +2858,14 @@ static const char *resolve_alias_side(Compiler *c, int class_id, const char *nam
     int from = class_id;
     for (int cid = class_id; cid >= 0 && !next; cid = c->classes[cid].parent) {
       ClassInfo *ci = &c->classes[cid];
-      /* The class side (1) reads the singleton aliases, and in a module the
-         instance ones too: a module's instance alias can be a module
-         function as well (`alias shellwords shellsplit; module_function
-         :shellwords`, or `extend self`). An instance method's lookup (2)
-         reads the instance aliases only. */
+      /* The class side (1) reads the singleton aliases, and in a module that
+         extends itself the instance ones too (`extend self`, which
+         desugar_extend_self answers by a class method per def). An instance
+         method's lookup (2) reads the instance aliases only. (A module
+         function that copies an alias is a method of the module of its own,
+         made from the record's copy: register_module_functions.) */
       /* ... but not over a class method the module defines itself */
-      int mod = class_def_is_module(c->nt, ci->def_node) &&
+      int mod = class_def_is_module(c->nt, ci->def_node) && nt_int(c->nt, ci->def_node, "extends_self", 0) &&
                 !(sg == 1 && comp_cmethod_in_class(c, cid, name) >= 0);
       for (int i = (cid == lim_cls ? lim : ci->naliases) - 1; i >= 0; i--) {
         int asg = ci->alias_sg && ci->alias_sg[i];
@@ -4745,7 +4763,7 @@ static int main_call_site(Compiler *c, int call_id) {
    `def self.x`.) */
 static int toplevel_mod_method(Compiler *c, int k, const char *name, int mf_only) {
   int ci = c->toplevel_includes[k];
-  int mi = comp_method_in_chain(c, ci, name, NULL);
+  int mi = comp_self_method_in_chain(c, ci, name, NULL);
   if (mi >= 0) return mi;
   mi = comp_cmethod_in_chain(c, ci, name, NULL);
   return mi >= 0 && (!mf_only || c->scopes[mi].is_module_function) ? mi : -1;

@@ -4391,7 +4391,15 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
           else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx); buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", t, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
           free(el.p);
         }
-else {
+        else if (kwh_only_spreads(nt, els[j])) {
+          /* `[1, **h]`: CRuby leaves the keyword hash out when every spread
+             is empty. The hash is its own rooted temp, and only
+             sp_poly_length runs before the push, so the box needs no root. */
+          int th = hold_operand_pre(c, els[j], TY_POLY, 1, ++g_tmp, 0);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "if (sp_poly_length(_t%d) > 0) sp_PolyArray_push(_t%d, _t%d);\n", th, t, th);
+        }
+        else {
           Buf el; memset(&el, 0, sizeof el);
           /* (a published String before an element that can change it is
              boxed as its handle: emit_boxed_operand) */

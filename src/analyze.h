@@ -321,6 +321,10 @@ void elab_mark_versions(Compiler *c);
 /* does node run whenever the body of def node `def` runs: is it inside that
    body with no lambda, nested def or deferred block between? */
 int elab_runs_with(Compiler *c, int node, int def);
+/* does node run when its statement does, for certain: every block around
+   it runs at once (ELAB_BLK_NOW), no END body around it, and the climb
+   reaches a file's root? */
+int elab_blocks_run_now(Compiler *c, int node);
 /* the scope walk made method scope `scope` of def or define_method node
    `node`: the record's version of it holds it (LrDef.scope) */
 void elab_def_scope(Compiler *c, int node, int scope);

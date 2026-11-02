@@ -560,6 +560,15 @@ int cplan_self_class(Compiler *c, int id);
    builtin the class itself answers (`U.name`) keeps its receiver and
    reaches the builtin through call_target's answer. */
 int cplan_self_builtin(Compiler *c, int id);
+/* Is every class method `name` of program class cls defined after call id,
+   as the record proves at the call's load point (call_target's answer for
+   a call there)? A reflection asked there (`C.respond_to?(:z)` before
+   `def C.z`) then finds none. 0 unless the call has a point and runs when
+   its statement does: not in a method body, a lambda or an END body, and
+   in a block only when every block around it is certain to run at once
+   (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
+   whose chain the record does not know. */
+int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

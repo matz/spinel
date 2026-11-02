@@ -2600,6 +2600,24 @@ int elab_runs_with(Compiler *c, int node, int def) {
   return 0;
 }
 
+/* Does node run when its statement does, for certain: is every block
+   around it one that runs at once where its call runs (elab_block_runs:
+   ELAB_BLK_NOW, a builtin iterator on a literal), with no END body around
+   it, up to a file's root? A block taken to run at once (ELAB_BLK_ASSUMED)
+   or not known may run later (a program's `each` may keep it), and a node
+   whose climb does not reach a root is not known either. */
+int elab_blocks_run_now(Compiler *c, int node) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  int v = node;
+  for (int p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
+    NodeKind k = nt_kind(c->nt, p);
+    if (k == NK_PostExecutionNode) return 0;
+    if (k == NK_BlockNode && (par[p] < 0 || elab_block_runs(c, par[p]) != ELAB_BLK_NOW)) return 0;
+  }
+  return v >= 0 && v < n && par[v] < 0 && nt_kind(c->nt, v) == NK_ProgramNode;
+}
+
 /* ---- the queries ---- */
 /* The live version of history h at p (late: as of the load's end; LR_ONCE:
    at p on the first run of the bodies around it, which may run again):

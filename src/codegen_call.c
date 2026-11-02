@@ -18894,15 +18894,21 @@ static int class_is_module(Compiler *c, int ci) {
   return comp_class_is_module(c, &c->classes[ci]);
 }
 
-static int class_responds_to(Compiler *c, int ci, const char *qm) {
+/* Does class object ci answer `qm`, asked at call id: its own class
+   methods and singleton attrs only once one is defined where id runs, as
+   the plan says (cplan_cmethod_later), and every builtin one; -1 for no
+   call, the program's answer anywhere. */
+static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
   const NodeTable *nt = c->nt;
-  if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
-  /* singleton attr_accessor/reader/writer via class << self */
-  char base[256];
-  if (name_is_plain_setter(qm)) {
-    if (setter_base_name(qm, base, sizeof base) && comp_is_sg_writer(&c->classes[ci], base)) return 1;
+  if (!cplan_cmethod_later(c, id, ci, qm)) {
+    if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
+    /* singleton attr_accessor/reader/writer via class << self */
+    char base[256];
+    if (name_is_plain_setter(qm)) {
+      if (setter_base_name(qm, base, sizeof base) && comp_is_sg_writer(&c->classes[ci], base)) return 1;
+    }
+    else if (comp_is_sg_reader(&c->classes[ci], qm)) return 1;
   }
-  else if (comp_is_sg_reader(&c->classes[ci], qm)) return 1;
   int is_module = comp_class_is_module(c, &c->classes[ci]);
   /* A module's `module_function` methods are recorded class-level and were
      already matched above. Its plain `def m` are instance methods, which the
@@ -18921,11 +18927,11 @@ static int class_responds_to(Compiler *c, int ci, const char *qm) {
 
 int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b) {
   int any = (class_reopen_cmethod(c, -1, -1, qm) >= 0);
-  for (int k = 0; k < c->nclasses && !class_object_universal_method(qm); k++) any |= class_responds_to(c, k, qm);
+  for (int k = 0; k < c->nclasses && !class_object_universal_method(qm); k++) any |= class_responds_to(c, k, qm, -1);
   if (!any || !b) return any;
   buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv,
              class_object_universal_method(qm) || (class_reopen_cmethod(c, -1, -1, qm) >= 0));
-  for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
+  for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm, -1)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
   buf_puts(b, ")))");
   return 1;
 }
@@ -31612,7 +31618,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
                sp_streq(qm, "define")) { resolved = 1; yes = 1; }
       else if (ci >= 0) {
         resolved = 1;
-        yes = class_responds_to(c, ci, qm);
+        yes = class_responds_to(c, ci, qm, id);
         /* A reopening retains the builtin methods its own table does not list. */
         if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) &&
             !(class_is_module(c, ci) && class_only_method(qm)))
@@ -31662,7 +31668,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
              the explicit `Const.respond_to?` fold, including the
              builtin Class/Module capabilities (:new, :name, ...). */
           resolved = 1;
-          yes = class_responds_to(c, cid, qm);
+          yes = class_responds_to(c, cid, qm, id);
           if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
           if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))
@@ -31681,7 +31687,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       else if (ss && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) {
         int cid = c->node_cbody[id];
         resolved = 1;
-        yes = class_responds_to(c, cid, qm);
+        yes = class_responds_to(c, cid, qm, id);
         if (yes && foldable && comp_cmethod_vis_declared(c, cid, qm, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         if (!yes && foldable && include_all && class_object_private_method(qm, class_is_module(c, cid)))

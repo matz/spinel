@@ -4557,10 +4557,10 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
     case NK_BlockNode: case NK_LambdaNode: case NK_BlockArgumentNode:
     case NK_BeginNode: case NK_RescueNode: case NK_RescueModifierNode:
     case NK_RetryNode: case NK_RedoNode: case NK_BreakNode: case NK_NextNode:
+    case NK_YieldNode:
+      return 1;
     case NK_SuperNode: case NK_ForwardingSuperNode:
       if (cplan_user(c, id)->core_hook) break;
-      return 1;
-    case NK_YieldNode:
       return 1;
     default: break;
   }

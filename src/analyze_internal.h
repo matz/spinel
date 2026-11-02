@@ -422,7 +422,7 @@ typedef struct {
   unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
-ElabPos elab_child(const NodeTable *nt, int p, int ch, const ElabPos *pp);
+ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);
 int elab_ref_last(const NodeTable *nt, int id, int ref);
 int elab_walk_enter(Compiler *c, int ch, ElabPos *pos);
 void elab_walk_leave(Compiler *c, int e);

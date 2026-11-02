@@ -58,6 +58,7 @@ r0 #55 f0 ModuleNode Shout line 110
   r0 #56 f0 CallNode refine line 111
     r0 #57 may f0 DefNode shout line 112
 r0 #58 f0 CallNode puts line 116
+block map line 70: now
 class Mix: body#1 body#53
 class Shout: body#3 body#55
 class Matcher: body#7 body#39

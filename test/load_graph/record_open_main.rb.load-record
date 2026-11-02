@@ -42,6 +42,9 @@ r0 #39 f0 LocalVariableWriteNode f line 57
 r0 #40 f0 CallNode p line 58
 r0 #41 f0 LocalVariableWriteNode b line 59
 r0 #42 f0 CallNode p line 60
+block each line 17: now
+block define_method line 46: later
+block each line 48: now
 class Gate: body#1
 class Framed: body#19
 class Branch: body#25

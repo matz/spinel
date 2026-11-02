@@ -23,6 +23,7 @@ r0 #17 f0 ClassNode Own line 28
 r0 #21 f0 LocalVariableWriteNode q line 33
 r0 #22 f0 CallNode a= line 34
 r0 #23 f0 CallNode puts line 35
+block define_method line 18: later
 class Hooked: body#1
 class Plain: body#4
 class Watched: body#6 body#15

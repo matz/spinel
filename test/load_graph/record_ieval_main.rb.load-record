@@ -20,6 +20,8 @@ r0 #15 f0 ClassNode C line 35
 r0 #18 f0 LocalVariableWriteNode c line 39
 r0 #19 f0 CallNode x= line 40
 r0 #20 f0 CallNode p line 41
+block instance_eval line 25: assumed
+block class_eval line 31: assumed
 class M: body#1
 class P: body#3
 class N: body#5

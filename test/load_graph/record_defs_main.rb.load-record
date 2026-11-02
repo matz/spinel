@@ -34,6 +34,7 @@ r0 #31 f0 CallNode puts line 37
 r0 #32 f0 CallNode puts line 38
 r0 #33 f0 CallNode puts line 39
 r0 #34 f0 CallNode puts line 40
+block define_method line 22: later
 class Loud: body#1
 class Speaker: body#3 body#14 body#16 include Quiet#15 include Loud#18
 class Quiet: body#12

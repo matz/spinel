@@ -202,19 +202,81 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
   return k;
 }
 
-/* When the block of `call` runs: 1 before the call answers (class_eval
-   and kin, a class builder's `Class.new(B) do`, a builtin iterator's: the
-   iterator rows), -1 later (is_deferred_block_call: a Proc, a method body,
-   a thread, ...), 0 not known (any other call's: a program method may
-   yield to it, or keep it). The receiver is not typed yet, so a builtin
-   iterator's name stands for the iterator. */
-static int elab_block_runs(const NodeTable *nt, int call) {
+static int lr_defines(const LoadRecord *r, const char *name);
+static int lr_literal_kind(NodeKind k);
+static int lr_lazy_later(Compiler *c, int call);
+
+/* When the block of `call` runs, from the syntax alone (the receiver is
+   not typed yet): ELAB_BLK_NOW before the call answers, for certain: a
+   builtin iterator's (the iterator rows) on a literal of a builtin class
+   the program reopens none of; ELAB_BLK_LATER not now, at a time the
+   syntax does not tell (is_deferred_block_call: a Proc, a method body, a
+   thread, at_exit, ...; with lazy, a builtin lazy chain's whose value
+   leaves the expression unforced, lr_lazy_later); ELAB_BLK_ASSUMED taken
+   to run before the call answers, as an iterator's name, class_eval and
+   kin and a class builder's `Class.new(B) do` read, though a method of
+   the program's the call reaches may keep the block (whether it does is
+   the typed call target's fact); ELAB_BLK_UNKNOWN for any other call's (a
+   program method may yield to it, or keep it). The record places a block
+   by its answer with lazy 0: the forms is_deferred_block_call names run it
+   later than their statement whatever the program does, and their calls
+   see every def of the record. */
+static int elab_block_when(Compiler *c, int call, int lazy) {
+  const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
   const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
-  if (!nm) return 0;
-  if (is_deferred_block_call(rn, nm)) return -1;
-  return is_eval_exec_family(nm) || is_class_builder(rn, nm) || iter_row_named(nm) ? 1 : 0;
+  if (!nm) return ELAB_BLK_UNKNOWN;
+  if (is_deferred_block_call(rn, nm) || (lazy && lr_lazy_later(c, call))) return ELAB_BLK_LATER;
+  if (is_eval_exec_family(nm) || is_class_builder(rn, nm)) return ELAB_BLK_ASSUMED;
+  if (!iter_row_named(nm)) return ELAB_BLK_UNKNOWN;
+  return rv >= 0 && c->lrec && !c->lrec->nreopens && lr_literal_kind(nt_kind(nt, rv)) ? ELAB_BLK_NOW : ELAB_BLK_ASSUMED;
+}
+
+/* When the block of `node` (a call's, or an END's body, run at exit)
+   runs: elab_block_when with the lazy chain. The record places a lazy
+   chain's block by its call's name (lazy 0) and an END body at its
+   statement: that a block does not run now does not tell that it runs
+   after a later def (the chain may be forced before it, the program may
+   exit before it), so the record binds no later def to its calls; only
+   a run-time check can. */
+int elab_block_runs(Compiler *c, int node) {
+  return nt_kind(c->nt, node) == NK_PostExecutionNode ? ELAB_BLK_LATER : elab_block_when(c, node, 1);
+}
+
+/* Is call a builtin lazy enumerator's whose block runs only once the chain
+   is forced: a lazy-returning call (is_lazy_chain_name) on a chain of them
+   from a `lazy` the program does not define, whose value leaves the
+   expression with no call forcing it there (`.first`, `.to_a`, `.each { }`:
+   any other name taking it as receiver)? Climbed by the value edges
+   (vp_climb: parentheses, `begin`, a branch, a write's value), it leaves
+   as a statement's dropped value, an argument handed on, a jump's value or
+   a method's answer; any other use keeps the reading that it runs now. */
+static int lr_lazy_later(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  const LoadRecord *r = c->lrec;
+  int lz = 0;
+  if (!is_lazy_chain_name(nt_str(nt, call, "name"))) return 0;
+  for (int v = nt_ref(nt, call, "receiver"); !lz && v >= 0 && nt_kind(nt, v) == NK_CallNode; v = nt_ref(nt, v, "receiver")) {
+    const char *nm = nt_str(nt, v, "name");
+    if (is_lazy_name(nm)) lz = !r || !lr_defines(r, nm) ? 1 : -1;
+    else if (!is_lazy_chain_name(nm)) return 0;
+  }
+  if (lz != 1) return 0;
+  const int *par = comp_parent_map(c);
+  for (int v = call;;) {
+    VpUp up;
+    VpUpKind k = vp_climb(nt, par, v, VPS_ALL | VP_WRITES, &up);
+    if (k == VPU_DROPPED) return 1;
+    if (k != VPU_ENDED) return 0;   /* (a subtree a pass moved out of the tree too: the parent map names its old place) */
+    NodeKind pk = nt_kind(nt, up.parent);
+    if (pk == NK_CallNode && nt_ref(nt, up.parent, "receiver") == up.node) {
+      if (!is_lazy_chain_name(nt_str(nt, up.parent, "name"))) return 0;
+      v = up.parent;
+      continue;
+    }
+    return pk == NK_ArgumentsNode || pk == NK_ProgramNode || pk == NK_ReturnNode || pk == NK_NextNode || pk == NK_BreakNode || vp_up_def(nt, &up) >= 0;
+  }
 }
 
 /* Does the block of `call` run as a class body (a frame): class_eval and
@@ -259,7 +321,8 @@ static ElabPos elab_value_pos(const NodeTable *nt, int v, ElabPos q) {
    does; a block run at once by a call the record does not know (a program
    method may yield to it, or keep it) may not run, and an iterator's may
    run partly (zero times, or several). */
-ElabPos elab_child(const NodeTable *nt, int p, int ch, const ElabPos *pp) {
+ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
+  const NodeTable *nt = c->nt;
   ElabPos q = *pp;
   NodeKind k = nt_kind(nt, p);
   q.kind = EP_NODE; q.defer = 0; q.sure = 0;
@@ -332,13 +395,13 @@ ElabPos elab_child(const NodeTable *nt, int p, int ch, const ElabPos *pp) {
       return elab_value_pos(nt, ch, q);
     case NK_CallNode: {
       if (ch != nt_ref(nt, p, "block") || nt_kind(nt, ch) != NK_BlockNode) break;
-      int runs = elab_block_runs(nt, p);
-      if (runs < 0) { q.defer = 1; break; }
+      int runs = elab_block_when(c, p, 0);
+      if (runs == ELAB_BLK_LATER) { q.defer = 1; break; }
       /* An immediate block keeps its call's point in an expression too;
          only a call that may keep the block leaves its body unplaced. */
-      if (!spine) { q.defer = runs == 0; break; }
+      if (!spine) { q.defer = runs == ELAB_BLK_UNKNOWN; break; }
       q.kind = EP_SPINE;
-      if (runs == 0) q.may = q.fmay = q.kept = 1;
+      if (runs == ELAB_BLK_UNKNOWN) q.may = q.fmay = q.kept = 1;
       if (elab_opens_frame(nt, p)) { q.frame = pp->e; q.fmay = q.fpartial = 0; }
       else { q.partial = q.fpartial = 1; q.rep = pp->e; }   /* an iterator's: zero times, or several */
       break;
@@ -402,14 +465,14 @@ static void elab_walk(ElabWalk *w, int id, ElabPos pos) {
     for (int i = 0; pass != 1 && i < nr; i++) {
       int ch = nt_ref_at(nt, id, i);
       if (elab_ref_last(nt, id, ch) != (pass == 2)) continue;
-      ElabPos q = elab_child(nt, id, ch, &pos);
+      ElabPos q = elab_child(w->c, id, ch, &pos);
       if (q.kind != EP_NODE || w->reg) elab_walk(w, ch, q);
     }
     for (int i = 0; pass == 1 && i < na; i++) {
       int m = 0;
       const int *v = nt_arr_at(nt, id, i, &m);
       for (int j = 0; j < m; j++) {
-        ElabPos q = elab_child(nt, id, v[j], &pos);
+        ElabPos q = elab_child(w->c, id, v[j], &pos);
         if (q.kind != EP_NODE || w->reg) elab_walk(w, v[j], q);
       }
     }
@@ -490,21 +553,22 @@ void elab_walk_rest(Compiler *c, int id, ElabPos pos) {
    branch of `c ? a : b`, the right side of `&&`): it takes the may, fmay,
    partial and fpartial the path would give it. */
 typedef int (*ElabPartFn)(void *ud, int ch, ElabPos *q);
-static void elab_parts(const NodeTable *nt, int p, const ElabPos *pp, ElabPartFn fn, void *ud) {
+static void elab_parts(Compiler *c, int p, const ElabPos *pp, ElabPartFn fn, void *ud) {
+  const NodeTable *nt = c->nt;
   int nr = nt_num_refs(nt, p), na = nt_num_arrs(nt, p);
   for (int i = 0; i < nr + na; i++) {
     int m = 1, one = i < nr ? nt_ref_at(nt, p, i) : -1;
     const int *v = i < nr ? &one : nt_arr_at(nt, p, i - nr, &m);
     for (int j = 0; j < m; j++) {
       if (v[j] < 0) continue;
-      ElabPos q = elab_child(nt, p, v[j], pp);
+      ElabPos q = elab_child(c, p, v[j], pp);
       if (q.kind == EP_NODE) {
         ElabPos on = *pp;
         on.kind = EP_SPINE;
-        on = elab_child(nt, p, v[j], &on);
+        on = elab_child(c, p, v[j], &on);
         q.may = on.may; q.fmay = on.fmay; q.partial = on.partial; q.fpartial = on.fpartial;
       }
-      if (fn(ud, v[j], &q)) elab_parts(nt, v[j], &q, fn, ud);
+      if (fn(ud, v[j], &q)) elab_parts(c, v[j], &q, fn, ud);
     }
   }
 }
@@ -525,7 +589,7 @@ static int elab_site_part(void *ud, int id, ElabPos *q) {
 void elab_load_sites(Compiler *c, int stmt, void (*fn)(void *ud, int load, int in_place), void *ud) {
   ElabPos at = { .e = 0, .top = -1, .frame = -1, .rep = -1, .list = -1, .kind = EP_NEW };
   ElabSites s = { c->nt, fn, ud };
-  if (stmt >= 0 && elab_site_part(&s, stmt, &at)) elab_parts(c->nt, stmt, &at, elab_site_part, &s);
+  if (stmt >= 0 && elab_site_part(&s, stmt, &at)) elab_parts(c, stmt, &at, elab_site_part, &s);
 }
 
 /* File f's top level, entered at its load: its root, its BEGIN blocks (run
@@ -582,10 +646,10 @@ static void elab_file(ElabWalk *w, int f, const ElabPos *site) {
 }
 
 /* Is a node under parent p one that runs later than p's statement: under
-   a method, a lambda, or a block kept to run later? */
-static int lr_defers(const NodeTable *nt, const int *par, int p) {
-  NodeKind k = nt_kind(nt, p);
-  return k == NK_DefNode || k == NK_LambdaNode || (k == NK_BlockNode && par[p] >= 0 && elab_block_runs(nt, par[p]) < 0);
+   a method, a lambda, or a block kept to run later (elab_block_when)? */
+static int lr_defers(Compiler *c, const int *par, int p) {
+  NodeKind k = nt_kind(c->nt, p);
+  return k == NK_DefNode || k == NK_LambdaNode || (k == NK_BlockNode && par[p] >= 0 && elab_block_when(c, par[p], 0) == ELAB_BLK_LATER);
 }
 
 /* The record's statements, walked from the roots (reg: by the scope walk,
@@ -654,7 +718,7 @@ static void elab_points_walk(Compiler *c, int reg) {
       int b = stack[--s], p = up[b];
       r->at[b] = r->at[p];
       ElabPos pos = { .e = r->at[p], .kind = live[p] >> 1, .defer = live[p] & 1, .bits = r->bits[p] };
-      pos = elab_child(nt, p, b, &pos);
+      pos = elab_child(c, p, b, &pos);
       live[b] = (unsigned char)((pos.kind << 1) | pos.defer);
       r->bits[b] = (unsigned char)pos.bits;
     }
@@ -724,7 +788,7 @@ static int lr_plan_place(Compiler *c, int id, int depth) {
     return 1;
   }
   r->at[id] = r->at[o]; r->plan_par[id] = o;
-  r->bits[id] = (unsigned char)(((r->bits[o] & LR_LATE) || lr_defers(c->nt, r->plan_par, o) ? LR_LATE : 0) |
+  r->bits[id] = (unsigned char)(((r->bits[o] & LR_LATE) || lr_defers(c, r->plan_par, o) ? LR_LATE : 0) |
                                 ((r->bits[o] & LR_BODY) || nt_kind(c->nt, o) == NK_DefNode ? LR_BODY : 0));
   return 1;
 }
@@ -1935,7 +1999,7 @@ static void lr_record_stmt(ElabRec *x, int e) {
     ElabPos at = { .e = e, .file = s->file, .top = s->top, .frame = f, .depth = s->depth, .rep = s->rep, .list = -1,
                    .may = 0, .partial = s->partial, .fmay = s->fmay, .fpartial = s->fpartial, .kind = EP_SPINE };
     LrNested n = { x, fc, fs, f >= 0 ? r->st[f].node : nt_root(nt, s->file), vs };
-    elab_parts(nt, node, &at, lr_nested_part, &n);
+    elab_parts(x->c, node, &at, lr_nested_part, &n);
   }
 }
 
@@ -2525,7 +2589,7 @@ int elab_runs_with(Compiler *c, int node, int def) {
   const int *par = elab_node_parents(c, &n);
   for (int p = node >= 0 && node < n ? par[node] : -1; p >= 0 && p < n; p = par[p]) {
     if (p == def) return 1;
-    if (lr_defers(c->nt, par, p)) return 0;
+    if (lr_defers(c, par, p)) return 0;
   }
   return 0;
 }
@@ -2585,7 +2649,7 @@ static int lr_run_order(Compiler *c, int d, int n) {
     while (y >= 0 && y < np && par[y] != p) y = par[y];
     if (y >= 0 && y < np) return !lr_child_first(nt, p, x, y) ? PROG_AFTER : may ? PROG_UNKNOWN : PROG_BEFORE;
     ElabPos pp = { .e = 0, .kind = EP_SPINE };
-    ElabPos q = elab_child(nt, p, x, &pp);
+    ElabPos q = elab_child(c, p, x, &pp);
     may |= q.may || q.partial || q.defer || q.kept || (q.bits & LR_LATE);
   }
   return PROG_UNKNOWN;
@@ -3142,7 +3206,7 @@ static int lr_node_runs(Compiler *c, int id) {
     case NK_SuperNode: case NK_ForwardingSuperNode: case NK_YieldNode: case NK_LambdaNode: case NK_BlockArgumentNode: return LR_RUN;
     case NK_BlockNode:
       nm = par[id] >= 0 && nt_kind(nt, par[id]) == NK_CallNode ? nt_str(nt, par[id], "name") : NULL;
-      return par[id] >= 0 && elab_block_runs(nt, par[id]) < 0 && !(nm && is_method_naming_call(nm)) ? LR_RUN : 0;
+      return par[id] >= 0 && elab_block_when(c, par[id], 0) == ELAB_BLK_LATER && !(nm && is_method_naming_call(nm)) ? LR_RUN : 0;
     case NK_DefNode: return lr_defines(r, "method_added") || lr_defines(r, "singleton_method_added") ? LR_RUN : hooks;
     case NK_ClassNode: return lr_header_hooks(c, id) ? LR_RUN : hooks;
     case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: return lr_defines(r, "const_added") ? LR_RUN : hooks;
@@ -4303,7 +4367,7 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   /* the constant path is the header's own: placed now, as the walk places
      it next, for the lookup of its parent */
   lr_fit(r, nt->count);
-  ElabPos q = elab_child(nt, node, cp, pos);
+  ElabPos q = elab_child(c, node, cp, pos);
   for (int x = cp; x >= 0 && (nt_kind(nt, x) == NK_ConstantPathNode || nt_kind(nt, x) == NK_ConstantReadNode);
        x = nt_kind(nt, x) == NK_ConstantPathNode ? nt_ref(nt, x, "parent") : -1)
     lr_place(r, x, &q);
@@ -5120,6 +5184,15 @@ void elab_dump(Compiler *c, FILE *out) {
     const char *nm = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, s->node, "name");
     fprintf(out, "%*sr%d #%d%s f%d %s%s%s line %d\n", 2 * s->depth, "", s->region, e, s->may ? " may" : "",
             s->file, nt_type(nt, s->node), nm ? " " : "", nm ? nm : "", (int)nt_int(nt, s->node, "node_line", 0));
+  }
+  /* when each placed block runs, as the syntax tells (elab_block_runs),
+     where it tells more than "not known" */
+  for (int id = 0; id < r->n; id++) {
+    int pe = nt_kind(nt, id) == NK_PostExecutionNode, b = pe ? -1 : nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "block") : -1;
+    int runs = r->at[id] < 0 || (!pe && (b < 0 || nt_kind(nt, b) != NK_BlockNode)) ? ELAB_BLK_UNKNOWN : elab_block_runs(c, id);
+    if (runs != ELAB_BLK_UNKNOWN)
+      fprintf(out, "block %s line %d: %s\n", pe ? "END" : nt_str(nt, id, "name"), (int)nt_int(nt, id, "node_line", 0),
+              runs == ELAB_BLK_LATER ? "later" : runs == ELAB_BLK_NOW ? "now" : "assumed");
   }
   if (!r->recorded) return;
   lr_open_make(c);

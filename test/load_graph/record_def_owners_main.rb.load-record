@@ -21,6 +21,12 @@ r0 #17 f0 ConstantWriteNode D line 25
 r0 #19 f0 CallNode p line 29
 r0 #20 f0 CallNode p line 30
 r0 #21 f0 CallNode p line 31
+block new line 12: assumed
+block define_method line 19: later
+block define_method line 21: later
+block each line 23: now
+block define_method line 23: later
+block define line 25: assumed
 class Foo: body#1
 entity Foo: owner main leaf Foo
 const Foo: write#1

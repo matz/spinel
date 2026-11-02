@@ -11,6 +11,7 @@ r0 #7 f0 ConstantWriteNode Pt line 9
 r0 #9 f0 LocalVariableWriteNode pt line 12
 r0 #10 f0 CallNode x= line 13
 r0 #11 f0 CallNode p line 14
+block new line 9: assumed
 class Struct: body#3
 Struct.on_added: def#4 end=yes
 Struct.method_added: alias#6 (on_added: def#4) end=yes

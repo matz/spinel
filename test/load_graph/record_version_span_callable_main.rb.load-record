@@ -31,6 +31,7 @@ r0 #27 f0 ClassNode Gong line 57
 r0 #29 f0 ClassNode Pod line 61
   r0 #30 f0 DefNode ring line 62
 r0 #31 f0 CallNode puts line 65
+block at_exit line 30: later
 class Chime: body#1
 class Bell: body#3 body#15 body#23 include Chime#16
 class Drum: body#5 body#17 body#25 include Chime#18

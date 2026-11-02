@@ -203,6 +203,16 @@ extern int g_dump_load_record;   /* --dump-load-record */
    end of the load phase. */
 enum { ELAB_NO, ELAB_YES, ELAB_UNKNOWN };
 enum { LR_MAY_IN = 2 };   /* LrDef.may */
+/* When a call's block (or an END body) runs, from the syntax alone
+   (elab_block_runs): not now, at a time the syntax does not tell (a later
+   def may or may not have run by then); not known (a program method may
+   run or keep it); taken to run at once (master's reading of an
+   iterator's name, class_eval, a class builder: a method of the program's
+   the call reaches may keep it, which only the typed call target tells);
+   at once, for certain (a builtin iterator on a literal of a builtin class
+   the program does not reopen) */
+enum { ELAB_BLK_LATER = -1, ELAB_BLK_UNKNOWN, ELAB_BLK_ASSUMED, ELAB_BLK_NOW };
+int elab_block_runs(Compiler *c, int call);
 typedef enum { LR_DEF, LR_DEFINE_METHOD, LR_READER, LR_WRITER, LR_ALIAS, LR_COPY, LR_UNDEF, LR_REMOVE, LR_VIS, LR_WRITE, LR_OPAQUE } LrKind;
 typedef struct {
   int node;

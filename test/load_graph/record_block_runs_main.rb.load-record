@@ -1,0 +1,29 @@
+load record: 16 points, 1 regions
+r0 #0 f0 ProgramNode line 8
+r0 #1 f0 ClassNode S line 8
+r0 #2 f0 LocalVariableWriteNode held line 9
+  r0 #3 f0 CallNode z line 9
+r0 #4 f0 CallNode p line 10
+r0 #5 f0 CallNode p line 11
+r0 #6 f0 RescueModifierNode line 12
+r0 #7 f0 CallNode each line 13
+  r0 #8 f0 CallNode p line 13
+r0 #9 f0 CallNode tap line 14
+  r0 #10 f0 CallNode p line 14
+r0 #11 f0 LocalVariableWriteNode pr line 15
+r0 #12 f0 PostExecutionNode line 16
+r0 #13 f0 DefNode z line 17
+r0 #14 f0 CallNode p line 18
+r0 #15 f0 CallNode p line 19
+block map line 9: later
+block map line 11: assumed
+block select line 12: assumed
+block each line 13: now
+block tap line 14: now
+block proc line 15: later
+block END line 16: later
+block map line 19: assumed
+class S: body#1
+entity S: owner main leaf S
+const S: write#1
+S.z: def#13 end=yes

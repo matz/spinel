@@ -24,6 +24,8 @@ r0 #21 f0 CallNode p line 37
 r0 #22 f0 CallNode puts line 38
 r0 #23 f0 CallNode puts line 39
 r0 #24 f0 CallNode puts line 40
+block class_eval line 10: assumed
+block define_method line 32: later
 class Foo: body#1
 class A: body#4
 class A__Kind: body#6

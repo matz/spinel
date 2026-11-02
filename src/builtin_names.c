@@ -1699,6 +1699,15 @@ int is_enumerator_with(const char *n) {
   return sp_streq(n, "with_index") || sp_streq(n, "with_object");
 }
 int is_lazy_name(const char *n) { return n && sp_streq(n, "lazy"); }
+/* A call that answers a lazy enumerator on one (Enumerator::Lazy's own
+   methods that return one, `lazy` too): its block runs once the chain is
+   forced. zip, eager, force and to_enum are not among them. */
+int is_lazy_chain_name(const char *n) {
+  static const char *const LAZY[] = { "chunk", "chunk_while", "collect", "collect_concat", "compact", "drop", "drop_while",
+    "filter", "filter_map", "find_all", "flat_map", "grep", "grep_v", "lazy", "map", "reject", "select", "slice_after",
+    "slice_before", "slice_when", "take", "take_while", "uniq", "with_index", NULL };
+  return n && builtin_name_in(n, LAZY);
+}
 int is_concat_name(const char *n) { return sp_streq(n, "concat"); }
 
 /* `Array.new(...)`, by its receiver's constant name and the method */

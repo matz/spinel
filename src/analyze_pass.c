@@ -17227,6 +17227,19 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
            not called through its proc form either (reopen_yields_known_container) */
         if (mi > 0 && rt0 != TY_STRING && rt0 != TY_STRBUF && reopen_yields_known_container(c, &c->scopes[mi])) mi = -1;
       }
+      /* an Array's or a Hash's reopened method the plan binds the call to
+         (a yielding one of a name the builtin surface lacks): the block is
+         run as a proc by the method's proc form, so its parameters take
+         what the method yields, not the builtin's shape of the name
+         (`m` in `each_with_object([]) { |e, m| }` read the boxed memo the
+         reopen yielded as a typed Array and crashed) */
+      else if (ty_is_array(rt0) || ty_is_obj_array(rt0) || ty_is_hash(rt0)) {
+        const CallPlan *rp = cplan_user_fresh(c, id);
+        if (rp->mi >= 0 && rp->via == UC_REOPEN &&
+            rp->owner_ci == comp_core_class(c, ty_is_hash(rt0) ? CORE_HASH : CORE_ARRAY) &&
+            c->scopes[rp->mi].yields)
+          mi = rp->mi;
+      }
       if (ty_is_object(rt0)) mi = call_target(c, id, ty_object_class(rt0), name, 0, NULL);
       /* Class.new { |...| }: the yielding method is Class#initialize.
          A ConstantPATH receiver counts: `N::Conn` names a class as much as

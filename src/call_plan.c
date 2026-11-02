@@ -4281,7 +4281,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   }
   if (q && na && one && !ver_builtin_chain(c, rcls)) els = ver_absent_else(c, q, rcls, sg, name, vs[0].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
   if (absent) *absent = els >= 0;
-  if (els < 0 && (nv < 2 || !na || same)) return -1;
+  if (els < 0 && (q || nv < 2 || !na || same)) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
   return ver_entry_emit(c, rcls, sg, name, ar, blk, spliced, arm, to, na, fallback, els);
 }
 /* The entry's def, its arms' calls pinned to to[] and its else arm's to

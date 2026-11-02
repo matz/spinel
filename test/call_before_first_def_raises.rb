@@ -8,23 +8,23 @@ class K < P; end
 class MM; def self.method_missing(n, *a) = [:mm, n]; end
 
 def a_cls = C.c1
-p((a_cls rescue :nme))
+p((begin; a_cls; rescue NoMethodError; :nme; end))
 def C.c1 = 1
 p a_cls
 
 def a_inst = C.new.i1
-p((a_inst rescue :nme))
+p((begin; a_inst; rescue NoMethodError; :nme; end))
 class C; def i1 = 2; end
 p a_inst
 
 f = -> { C.c2 }
-p((f.call rescue :nme))
+p((begin; f.call; rescue NoMethodError; :nme; end))
 def C.c2 = 3
 p f.call
 
 o = C.new
 g = proc { o.i2 }
-p((g.call rescue :nme))
+p((begin; g.call; rescue NoMethodError; :nme; end))
 class C; def i2 = 4; end
 p g.call
 
@@ -34,22 +34,22 @@ def C.c3 = 5
 p a_msg
 
 def a_sub = K.c4
-p((a_sub rescue :nme))
+p((begin; a_sub; rescue NoMethodError; :nme; end))
 def P.c4 = 6
 p a_sub
 
 def a_arg(x) = C.new.i3(x)
-p((a_arg(1) rescue :nme))
+p((begin; a_arg(1); rescue NoMethodError; :nme; end))
 class C; def i3(x) = x * 7; end
 p a_arg(1)
 
 def a_mod = M.c5
-p((a_mod rescue :nme))
+p((begin; a_mod; rescue NoMethodError; :nme; end))
 module M; def self.c5 = 8; end
 p a_mod
 
 def a_two = C.c6
-p((a_two rescue :nme))
+p((begin; a_two; rescue NoMethodError; :nme; end))
 def C.c6 = 9
 p a_two
 def C.c6 = 10
@@ -60,7 +60,7 @@ p a_mm
 def MM.c7 = 11
 p a_mm
 
-p((C.new.i4 rescue :nme))
+p((begin; C.new.i4; rescue NoMethodError; :nme; end))
 class C; def i4 = 12; end
 p C.new.i4
 
@@ -71,22 +71,22 @@ class Q; end
 class QS < Q; end
 module QM; end
 class QI; include QM; end
-def a_box(o) = (o.b1 rescue :nme)
+def a_box(o) = (begin; o.b1; rescue NoMethodError; :nme; end)
 p [a_box(Q.new), a_box(QS.new), a_box(1)]
 class Q; def b1 = 13; end
 p [a_box(Q.new), a_box(QS.new), a_box(1)]
 
-def a_boxm(o) = (o.b2 rescue :nme)
+def a_boxm(o) = (begin; o.b2; rescue NoMethodError; :nme; end)
 p [a_boxm(QI.new), a_boxm("s")]
 module QM; def b2 = 14; end
 p [a_boxm(QI.new), a_boxm("s")]
 
 def a_map(xs) = xs.map(&:b3)
-p((a_map([Q.new]) rescue :nme))
+p((begin; a_map([Q.new]); rescue NoMethodError; :nme; end))
 class Q; def b3 = 15; end
 p a_map([Q.new])
 
-def a_boxc(k) = (k.b4 rescue :nme)
+def a_boxc(k) = (begin; k.b4; rescue NoMethodError; :nme; end)
 p [a_boxc(Q), a_boxc(1)]
 def Q.b4 = 16
 p [a_boxc(Q), a_boxc(1)]
@@ -114,7 +114,7 @@ p a_df
 class U
   def method_missing(n, *a) = n == :h1 ? :mm : nil
 end
-def a_mm(o) = (o.h1 rescue :nme)
+def a_mm(o) = (begin; o.h1; rescue NoMethodError; :nme; end)
 p [a_mm(U.new), a_mm(1)]
 class U; def h1 = 20; end
 p [a_mm(U.new), a_mm(1)]
@@ -124,7 +124,7 @@ a_nil(U.new)
 p :ok
 class U; def h2 = 21; end
 p a_nil(U.new)
-p((a_nil(1) rescue :nme))
+p((begin; a_nil(1); rescue NoMethodError; :nme; end))
 
 # a guard spelled through the send family is a reflection reader too
 def a_sd = R.send(:respond_to?, :g4) ? R.g4 : :none
@@ -138,7 +138,7 @@ class V
   def self.method_missing(n, *a) = :cmm
 end
 class VD; end
-def a_cv(k) = (k.h3 rescue :nme)
+def a_cv(k) = (begin; k.h3; rescue NoMethodError; :nme; end)
 p [a_cv(V), a_cv(VD)]
 def V.h3 = 23
 p [a_cv(V), a_cv(VD)]

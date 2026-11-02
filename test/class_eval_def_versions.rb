@@ -5,7 +5,7 @@
 # its own: a name defined on two classes keeps the static answer.)
 class C; end
 def go = C.new.late_c
-p((go rescue :nme))
+p((begin; go; rescue NoMethodError; :nme; end))
 C.class_eval { def late_c = 40 }
 p go
 
@@ -17,7 +17,7 @@ p go_d
 
 class E; end
 def go_e = E.late_e
-p((go_e rescue :nme))
+p((begin; go_e; rescue NoMethodError; :nme; end))
 E.instance_eval { def late_e = 55 }
 p go_e
 

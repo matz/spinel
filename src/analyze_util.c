@@ -2879,6 +2879,10 @@ static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int 
   return n;
 }
 
+int an_block_nexts(const NodeTable *nt, int body, int *out, int max) {
+  return ybt_collect_next(nt, body, out, max, 0);
+}
+
 int yield_block_tails(Compiler *c, int mi, int *out, int max) {
   if (max <= 0) return 0;
   for (int i = 0; i < g_yvt_depth; i++)

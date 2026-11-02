@@ -6,6 +6,7 @@
 # stays boxed gives no evidence: its element pushed elsewhere keeps the
 # target boxed. infer-test greps the C: Node's and Ring's lists are an
 # sp_PtrArray *, Bin's, filled from a mixed Array, stays an sp_PolyArray *.
+# An Array.new block's `next v` is one of its elements as its tail is.
 class Node
   attr_reader :id, :links
   def initialize(id) = (@id = id; @links = [])
@@ -58,3 +59,22 @@ bin = Bin.new
 3.times { |i| bin.items << mixed[i] }
 p bin.items.map { |x| x.id + 1 }
 p bin.items.map(&:class)
+
+# an Array.new block's `next v` is an element too: a `next` of another class
+# keeps the Array boxed, whether the tail is an element read or a new object,
+# and one of the same class narrows it as the tail alone would
+class Other
+  def id = -1
+end
+src = [Node.new(30), Node.new(31)]
+ids = []
+mixed_read = Array.new(4) { |i| next Other.new if i.odd?; src[0] }
+mixed_read.each { |x| ids << x.id }
+mixed_new = Array.new(4) { |i| next Other.new if i.odd?; Node.new(i) }
+mixed_new.each { |x| ids << x.id }
+same = Array.new(4) { |i| next src[1] if i.odd?; Node.new(i) }
+same.each { |x| ids << x.id }
+holes = Array.new(3) { |i| next if i == 1; Node.new(i) }
+holes.each { |x| ids << (x ? x.id : 0) }
+p ids
+

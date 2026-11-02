@@ -15649,10 +15649,22 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
       int gn = 0;
       const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
       int ec = (gs && gn > 0) ? oa_elem_evidence(c, sl, S, gs[gn - 1], read_slot) : -1;
+      /* a `next v` is an element too (`Array.new(n) { |i| next a if i.odd?; b }`):
+         its value joins the tail's, a bare `next` is a nil element (neutral),
+         and one with several values or a splat an Array element */
+      int nx[32];
+      int nn = gbody >= 0 ? an_block_nexts(nt, gbody, nx, 32) : 0;
+      if (nn >= 32) ec = -2;
+      for (int q = 0; q < nn && q < 32; q++) {
+        int na = nt_ref(nt, nx[q], "arguments"), ac = 0;
+        const int *av = na >= 0 ? nt_arr(nt, na, "arguments", &ac) : NULL;
+        if (ac == 0) continue;
+        ec = ac == 1 && nt_kind(nt, av[0]) != NK_SplatNode ? oa_cls_join(ec, oa_elem_evidence(c, sl, S, av[0], read_slot)) : -2;
+      }
       /* `Array.new(n) { [] }`: the row is an empty literal, neutral here and
          built at the table's kind once something else (a pushed row, an
          `Array[Array[Float]]` seed) decides it (#4484) */
-      if (gs && gn > 0 && is_empty_array_literal(nt, gs[gn - 1], c->node_cap) &&
+      if (nn == 0 && gs && gn > 0 && is_empty_array_literal(nt, gs[gn - 1], c->node_cap) &&
           !ty_is_ptr_array(infer_type(c, gs[gn - 1])) &&
           infer_type(c, gs[gn - 1]) != TY_INT_ARRAY && infer_type(c, gs[gn - 1]) != TY_FLOAT_ARRAY) { }
       else if (ec < 0 && !OA_CLS_IS_ROW(ec)) sl[S].alive = 0;

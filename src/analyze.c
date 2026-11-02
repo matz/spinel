@@ -543,6 +543,14 @@ static int cr_name_reaches(Compiler *c, int t, int on_instance) {
   return !sc->replaced && (!on_instance || !sc->is_cmethod || sc->is_module_function);
 }
 
+/* Is scope t a method an alias of class ci's names: any, for an instance
+   alias; a class method of ci or an ancestor, for a singleton alias (one
+   module's `M.g` aliasing its own `f` is not live by another's `f`) */
+static int cr_alias_side(Compiler *c, int t, int ci, int asg) {
+  const Scope *s = &c->scopes[t];
+  return !asg || (s->is_cmethod && cr_class_is_ancestor(c, s->class_id, ci));
+}
+
 /* Is `nm` called: by bare name, or on a known instance (`K.new.nm`, marked
    "\x03nm" by compute_reachable)? */
 static int cn_live(const ANameHash *cn_set, const char *nm) {
@@ -845,6 +853,25 @@ static void cr_live_reach_as(CrLive *lv, int t, int bound) {
   lv->queue[(*lv->qtail)++] = t;
 }
 static void cr_live_reach(CrLive *lv, int t) { cr_live_reach_as(lv, t, 0); }
+
+/* Mark nm, alias i of class ci's counterpart (its new name when new is 1),
+   where the alias, not the name, decides: a singleton alias's is ci's own
+   class method of the name, not every class's, and a new name no method
+   has (named is 0) and no other alias of ci names has nothing to carry on.
+   Answers 0 when nm goes by name (an instance alias's target, an inherited
+   or aliased one). */
+static int cr_alias_mark_own(CrLive *lv, const ClassInfo *cls, int ci, int i, const char *nm, int new, int named) {
+  Compiler *c = lv->c;
+  if (!nm) return 0;
+  if (cls->alias_sg && cls->alias_sg[i]) {
+    int t = call_target(c, -1, ci, nm, CT_CMETHOD | CT_OWN, NULL);
+    if (t >= 0) { cr_live_reach(lv, t); return 1; }
+  }
+  if (!new || named) return 0;
+  for (int j = 0; j < cls->naliases; j++)
+    if (j != i && cls->alias_old[j] && sp_streq(cls->alias_old[j], nm)) return 0;
+  return 1;
+}
 
 /* Retry each scope held on a side; the ones still held stay listed */
 static void cr_live_retry(CrLive *lv, int *head) {
@@ -1529,9 +1556,11 @@ void compute_reachable(Compiler *c, int typed) {
       for (int i = 0; i < cls->naliases; i++) {
         const char *an = cls->alias_new[i], *ao = cls->alias_old[i];
         int an_live = (an && cn_live(&cn_set, an)), ao_live = (ao && cn_live(&cn_set, ao));
-        /* also check reachable scope names (covers scope-backed aliases) */
-        if (an) for (int t = SN_FIRST(an); t >= 0 && !an_live; t = sn_link[t]) if (c->scopes[t].reachable) an_live = 1;
-        if (ao) for (int t = SN_FIRST(ao); t >= 0 && !ao_live; t = sn_link[t]) if (c->scopes[t].reachable) ao_live = 1;
+        /* also check reachable scope names (covers scope-backed aliases), of
+           the alias's side and class (cr_alias_side) */
+        int asg = cls->alias_sg && cls->alias_sg[i];
+        if (an) for (int t = SN_FIRST(an); t >= 0 && !an_live; t = sn_link[t]) if (c->scopes[t].reachable && cr_alias_side(c, t, ci, asg)) an_live = 1;
+        if (ao) for (int t = SN_FIRST(ao); t >= 0 && !ao_live; t = sn_link[t]) if (c->scopes[t].reachable && cr_alias_side(c, t, ci, asg)) ao_live = 1;
         /* Marked whenever the counterpart is live, not only when no scope of
            the other name is yet: a module both included and extended carries
            a copy of the target to each side, and a class-side copy made live
@@ -1543,7 +1572,7 @@ void compute_reachable(Compiler *c, int typed) {
            the entry that carries it on may come earlier in the table. */
         if (an_live) {
           int prev_qtail = qtail, prev_cn = cn_n;
-          MARK_NAME(ao);
+          if (!cr_alias_mark_own(&lv, cls, ci, i, ao, 0, 1)) MARK_NAME(ao);
           if (qtail > prev_qtail || cn_n > prev_cn) changed = 1;
           /* drain newly enqueued scopes */
           while (qhead < qtail) {
@@ -1554,7 +1583,7 @@ void compute_reachable(Compiler *c, int typed) {
         }
         if (ao_live) {
           int prev_qtail = qtail, prev_cn = cn_n;
-          MARK_NAME(an);
+          if (!cr_alias_mark_own(&lv, cls, ci, i, an, 1, SN_FIRST(an) >= 0)) MARK_NAME(an);
           if (qtail > prev_qtail || cn_n > prev_cn) changed = 1;
           while (qhead < qtail) {
             int s = queue[qhead++];

@@ -32070,9 +32070,20 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
     free(rx.p);
     buf_printf(&rb, "_t%d", t);
   }
-  /* nil carries nothing: its `int self` is 0, after the receiver runs */
+  /* nil carries nothing: its `int self` is 0. A receiver with an effect (a
+     call that answers nil) runs first, as a statement ahead of the
+     arguments, which are held in the frame ahead of the call: passed as
+     the self argument it ran in the order the C compiler picked, after
+     them. */
   else if (c->scopes[mi].class_id == comp_core_class(c, CORE_NILCLASS)) {
-    buf_puts(&rb, "((void)("); emit_expr(c, recv, &rb); buf_puts(&rb, "), 0)");
+    if (subtree_has_side_effect(c, recv)) {
+      Buf rx; memset(&rx, 0, sizeof rx);
+      emit_expr(c, recv, &rx);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "(void)(%s);\n", rx.p ? rx.p : "0");
+      free(rx.p);
+    }
+    buf_puts(&rb, "0");
   }
   else if (reopen_pf_raw_self(c, c->scopes[mi].class_id)) emit_expr(c, recv, &rb);
   else if (box_fn) { buf_printf(&rb, "%s(", box_fn); emit_expr(c, recv, &rb); buf_puts(&rb, ")"); }

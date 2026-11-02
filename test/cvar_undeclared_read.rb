@@ -154,3 +154,12 @@ class Typed
   end
 end
 p Typed.go
+
+# a class_variable_set, bare or on self, in a class_eval block nested in
+# another class's acts on the inner receiver, not on the outer one
+class NestHost; end
+class NestOther; end
+NestHost.class_eval { NestOther.class_eval { class_variable_set(:@@o, 2) } }
+NestHost.class_eval { NestOther.class_eval { self.class_variable_set(:@@q, 3) } }
+p NestHost.class_variable_defined?(:@@o), NestHost.class_variable_defined?(:@@q)
+p NestOther.class_variable_defined?(:@@o), NestOther.class_variable_defined?(:@@q)

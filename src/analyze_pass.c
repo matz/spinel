@@ -12855,7 +12855,9 @@ static int subtree_has_kind(const NodeTable *nt, int root, NodeKind k, int depth
 
 /* Repoint every SelfNode under `root` at a fresh ConstantReadNode(cname): the
    PARENT's ref/arr slot is retargeted (a node's type string is immutable).
-   Does not descend into nested class/module/def bodies, whose self differs. */
+   Does not descend into nested class/module/def bodies, or the block of a
+   call that runs it with another self (is_block_self_call), whose self
+   differs. */
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
@@ -12870,9 +12872,16 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
     c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
   }
+  int keep = -1;   /* a block whose self is another object */
+  if (k == NK_CallNode) {
+    int rv = nt_ref(nt, root, "receiver");
+    const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
+    if (is_block_self_call(rn, nt_str(nt, root, "name"))) keep = nt_ref(nt, root, "block");
+  }
   SpNode *nd = &nt->nodes[root];
   for (int i = 0; i < nd->nr; i++) {
     int ch = nd->r[i].ref;
+    if (ch >= 0 && ch == keep) continue;
     if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
       int cr = nt_new_node(nt, "ConstantReadNode");
       if (cr < 0) return;

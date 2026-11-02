@@ -700,6 +700,12 @@ int is_class_self_answer(const char *n) {
 int is_self_rebinding_call(const char *n) {
   return is_eval_exec_family(n) || sp_streq(n, "define_singleton_method");
 }
+/* ...and every call whose block runs with another self than the code
+   around it: those, define_method's (an instance), a class builder's (the
+   new class) */
+int is_block_self_call(const char *recv, const char *n) {
+  return n && (is_self_rebinding_call(n) || is_define_method_name(n) || is_class_builder(recv, n));
+}
 
 int is_class_relatives_query(const char *n) {
   return sp_streq(n, "ancestors") || sp_streq(n, "superclass") || sp_streq(n, "subclasses") ||

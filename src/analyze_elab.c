@@ -251,16 +251,22 @@ int elab_block_runs(Compiler *c, int node) {
    any other name taking it as receiver)? Climbed by the value edges
    (vp_climb: parentheses, `begin`, a branch, a write's value), it leaves
    as a statement's dropped value, an argument handed on, a jump's value or
-   a method's answer; any other use keeps the reading that it runs now. */
+   a method's answer; any other use keeps the reading that it runs now.
+   A chain name the program defines somewhere (a reopened
+   Enumerator::Lazy#map, say) may run the block as it is called, so the
+   chain is not known to be later either. */
+static int lr_lazy_chain_call(const LoadRecord *r, const char *name) {
+  return is_lazy_chain_name(name) && (!r || !lr_defines(r, name));
+}
 static int lr_lazy_later(Compiler *c, int call) {
   const NodeTable *nt = c->nt;
   const LoadRecord *r = c->lrec;
   int lz = 0;
-  if (!is_lazy_chain_name(nt_str(nt, call, "name"))) return 0;
+  if (!lr_lazy_chain_call(r, nt_str(nt, call, "name"))) return 0;
   for (int v = nt_ref(nt, call, "receiver"); !lz && v >= 0 && nt_kind(nt, v) == NK_CallNode; v = nt_ref(nt, v, "receiver")) {
     const char *nm = nt_str(nt, v, "name");
     if (is_lazy_name(nm)) lz = !r || !lr_defines(r, nm) ? 1 : -1;
-    else if (!is_lazy_chain_name(nm)) return 0;
+    else if (!lr_lazy_chain_call(r, nm)) return 0;
   }
   if (lz != 1) return 0;
   const int *par = comp_parent_map(c);
@@ -271,7 +277,7 @@ static int lr_lazy_later(Compiler *c, int call) {
     if (k != VPU_ENDED) return 0;   /* (a subtree a pass moved out of the tree too: the parent map names its old place) */
     NodeKind pk = nt_kind(nt, up.parent);
     if (pk == NK_CallNode && nt_ref(nt, up.parent, "receiver") == up.node) {
-      if (!is_lazy_chain_name(nt_str(nt, up.parent, "name"))) return 0;
+      if (!lr_lazy_chain_call(r, nt_str(nt, up.parent, "name"))) return 0;
       v = up.parent;
       continue;
     }

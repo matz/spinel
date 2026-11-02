@@ -1,0 +1,24 @@
+load record: 12 points, 1 regions
+r0 #0 f0 ProgramNode line 6
+r0 #1 f0 ClassNode Q line 6
+  r0 #2 f0 DefNode map line 7
+r0 #3 f0 ClassNode S line 9
+r0 #4 f0 LocalVariableWriteNode held line 10
+  r0 #5 f0 CallNode z line 10
+r0 #6 f0 LocalVariableWriteNode kept line 11
+  r0 #7 f0 CallNode z line 11
+r0 #8 f0 CallNode p line 12
+r0 #9 f0 CallNode p line 13
+r0 #10 f0 DefNode z line 14
+r0 #11 f0 CallNode p line 15
+block map line 10: assumed
+block select line 11: later
+block map line 15: assumed
+class Q: body#1
+class S: body#3
+entity Q: owner main leaf Q
+entity S: owner main leaf S
+const Q: write#1
+Q#map: def#2 end=yes
+const S: write#3
+S.z: def#10 end=yes

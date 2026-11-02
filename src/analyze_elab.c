@@ -84,6 +84,7 @@ enum { LR_LATE = 1, LR_BODY = 2 };   /* runs later: in a method body, a lambda o
 
 /* A def of the program's, by its name (LoadRecord.defs) */
 typedef struct { const char *name; int node; } LrSite;
+typedef struct { const char *name; int node, owner; } LrCvarWrite;   /* a class variable written in owner's body */
 
 /* Flat constant slots: first plain write, earliest other write, and the
    earliest sure/possible completions in each load region. */
@@ -129,10 +130,11 @@ struct LoadRecord {
   long nentries, indexed;
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
-  /* elab_class_unsettled's answers from the record and the tables, by
-     call, class and window start (key: the quadruples, -1 for none),
-     asked again each pass, while the epochs in of hold (lr_unset_kept) */
-  struct LrUnset { int *key; unsigned char *un; int n, cap; struct { unsigned long hgen; unsigned sgen, shape, tgen; int ncls, nscopes, nclasses; } of; } unset;
+  /* elab_class_unsettled's answers from the record, the tables and the
+     nodes, by call, class and window start (key: the quadruples, -1 for
+     none), asked again each pass, while the epochs in of hold
+     (lr_unset_kept) */
+  struct LrUnset { int *key; unsigned char *un; int n, cap; struct { unsigned long hgen, nedits; unsigned sgen, shape, tgen, nver; int ncls, nscopes, nclasses; } of; } unset;
   unsigned long hgen;        /* bumped by every change to the histories and the mixins, and by each scope owner the record sets */
   const LrDef **cand; int ncand, ccand, cand_bad; unsigned char collect;   /* elab_class_candidates: the writes lr_last_before passes */
   long opened;               /* LrHist.open is of this many entries (lr_open_make), -1 for none made */
@@ -3752,6 +3754,12 @@ static int lr_core_owner(Compiler *c, int k) {
                     k == comp_core_class(c, CORE_BASIC_OBJECT));
 }
 
+/* a call that sets or removes a constant or a class variable by name, or
+   names a constant to autoload */
+static int lr_setter_name(const char *n) {
+  return is_const_set_name(n) || is_remove_const_name(n) || is_cvar_write_name(n) || is_autoload_name(n);
+}
+
 /* What of `kinds` the record's histories and the class and scope tables
    leave unsettled for a reflection on cls at p (owners: its ancestry,
    lr_ancestry_owners): every entry the record holds of them, and every
@@ -3766,13 +3774,15 @@ static unsigned lr_unsettled_tables(Compiler *c, int cls, const int *owners, int
     const LrHist *h = &r->hist[i];
     int own = h->a == cls ? 1 : 0, core = h->a == LR_MAIN || lr_core_owner(c, h->a);
     for (int o = 0; o < n && !own && h->a >= LR_MAIN; o++) own = owners[o] == h->a ? 2 : 0;
-    unsigned k = h->b || !own ? (h->b || !core ? 0 : ELAB_GAIN_INHERITED) : own == 1 ? ELAB_GAIN_METHODS : ELAB_GAIN_INHERITED;
+    int sg = h->a == LR_KEY_CONST && h->b <= 0;   /* (a singleton class body's, or an owner not known) */
+    unsigned k = h->a == LR_KEY_CONST ? ELAB_GAIN_CONSTS : h->b || !own ? (h->b || !core ? 0 : ELAB_GAIN_INHERITED)
+               : own == 1 ? ELAB_GAIN_METHODS : ELAB_GAIN_INHERITED;
     for (int j = 0; (kinds & k & ~un) && j < h->n; j++) {
       const LrDef *d = &h->v[j];
       /* a top-level def is Object's private method, which no listing of
          public and protected methods holds */
       if (h->a == LR_MAIN && d->kind <= LR_DEFINE_METHOD && d->vis == SP_VIS_PRIVATE) continue;
-      if (core || d->may || !lr_settled(c, d->node, p)) un |= k;
+      if (core || sg || d->may || !lr_settled(c, d->node, p)) un |= k;
     }
   }
   for (int si = 0; (kinds & (ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) & ~un) && si < c->nscopes; si++) {
@@ -3805,6 +3815,82 @@ static unsigned lr_unsettled_tables(Compiler *c, int cls, const int *owners, int
   return un & kinds;
 }
 
+static int lr_owner_in(const int *owners, int n, int a) {
+  for (int o = 0; o < n; o++) if (owners[o] == a) return 1;
+  return 0;
+}
+
+/* Does a class_variable_set or remove_class_variable call, its receiver
+   naming `on` (LR_UNKNOWN_CLASS: not known), set or remove one the emitters
+   see: a class variable off cls's ancestry, one the owner it names holds
+   itself (not one an ancestor overtook), or, on a receiver not known, one
+   cls's ancestry holds? */
+static int lr_cvar_set_seen(Compiler *c, int cls, const int *owners, int n, int call, int on) {
+  int an = 0, a = nt_ref(c->nt, call, "arguments");
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+  const char *nm = an ? vis_arg_name(c->nt, av[0]) : NULL;
+  if (!nm) return 0;
+  if (on >= 0 && !lr_owner_in(owners, n, on)) return 1;
+  int k = comp_cvar_owner(c, on >= 0 ? on : cls, nm);
+  return (on < 0 || k == on) && comp_cvar_index(&c->classes[k], nm) >= 0;
+}
+
+/* ...and what the nodes as they are leave unsettled: a class variable the
+   tables hold with no write the record places in its class body itself;
+   one name two owners' bodies write (which owner keeps it, or whether a
+   read raises as overtaken, depends on the order of the writes); a call
+   that sets or removes a class variable the tables do not hold; a call
+   that sets or removes a constant by name on any receiver but cls, and an
+   autoload; any of those calls the record cannot settle, call id aside */
+static unsigned lr_unsettled_nodes(Compiler *c, int cls, const int *owners, int n, unsigned kinds, int id, LoadPoint p) {
+  const NodeTable *nt = c->nt;
+  unsigned un = 0;
+  /* (the owners' body writes, sorted by name) */
+  int nw = 0, cw = 0;
+  LrCvarWrite *wr = NULL;
+  for (int u = kinds & ELAB_GAIN_CVARS ? comp_kind_first(c, NK_ClassVariableWriteNode) : -1; u >= 0; u = comp_kind_next(c, u)) {
+    int s = elab_self_value_at(c, u);
+    const char *nm = nt_str(nt, u, "name");
+    if (!nm || !lr_owner_in(owners, n, s)) continue;
+    wr = lr_grow(wr, &cw, nw, sizeof *wr);
+    wr[nw++] = (LrCvarWrite){ nm, u, s };
+  }
+  if (nw > 1) qsort(wr, (size_t)nw, sizeof *wr, lr_name_cmp);
+  for (int o = 0; o < n; o++) {
+    const ClassInfo *ki = owners[o] >= 0 ? &c->classes[owners[o]] : NULL;
+    for (int j = 0; ki && (kinds & ELAB_GAIN_CVARS & ~un) && j < ki->ncvars; j++) {
+      int k, body = 0;
+      const LrCvarWrite *e = lr_name_range(wr, nw, sizeof *wr, ki->cvars[j], &k);
+      for (int i = 0; i < k && !body; i++) body = e[i].owner == owners[o] && lr_settled(c, e[i].node, p);
+      if (!body) un |= ELAB_GAIN_CVARS;
+    }
+  }
+  for (int x = 1; x < nw && !(un & ELAB_GAIN_CVARS); x++)
+    if (lr_name_cmp(&wr[x], &wr[x - 1]) == 0 && wr[x].owner != wr[x - 1].owner) un |= ELAB_GAIN_CVARS;
+  free(wr);
+  int *calls = NULL, nc = kinds & (ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS) & ~un ? an_calls_named_if(c, lr_setter_name, nt->count, &calls) : 0;
+  for (int i = 0; i < nc; i++) {
+    const char *cn = nt_str(nt, calls[i], "name");
+    unsigned k = is_cvar_write_name(cn) ? ELAB_GAIN_CVARS : ELAB_GAIN_CONSTS;
+    if (calls[i] == id) continue;
+    int rv = nt_ref(nt, calls[i], "receiver");
+    int on = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? elab_self_value_at(c, calls[i]) : lr_class_ref_at(c, rv, NULL);
+    /* (what the emitters do not see: an autoload, a constant set or
+       removed on another receiver than cls, a class variable the tables
+       do not hold) */
+    int seen = is_autoload_name(cn) ? 0 : k == ELAB_GAIN_CONSTS ? on == cls : lr_cvar_set_seen(c, cls, owners, n, calls[i], on);
+    if (!seen || !lr_settled(c, calls[i], p)) un |= k;
+  }
+  free(calls);
+  return un & kinds;
+}
+
+/* Both, for call id */
+static unsigned lr_unsettled_of(Compiler *c, int cls, const int *owners, int n, unsigned kinds, int id, LoadPoint p) {
+  unsigned un = lr_unsettled_tables(c, cls, owners, n, kinds, p);
+  return un | lr_unsettled_nodes(c, cls, owners, n, kinds & ~un, id, p);
+}
+
 /* An open-addressed slot of the memo for (id, cls) asked from window
    start w: its own, or the empty one it goes in */
 static int lr_unset_slot(const int *key, int cap, int id, int cls, LoadPoint w) {
@@ -3814,18 +3900,21 @@ static int lr_unset_slot(const int *key, int cap, int id, int cls, LoadPoint w) 
   return (int)h;
 }
 
-/* lr_unsettled_tables for call id from window start w, kept while nothing
-   it reads can have moved: the histories, the mixins and the scope owners
+/* lr_unsettled_of for call id from window start w, kept while nothing it
+   reads can have moved: the histories, the mixins and the scope owners
    the record sets (LoadRecord.hgen), the scopes' classes and names (the
    frozen scope index's epoch, the scope count), the aliases and parents
-   (comp_class_shape_gen), the attrs (comp_table_gen) and the class count */
+   (comp_class_shape_gen), the attrs and class variables (comp_table_gen),
+   the class count and the nodes' names, kinds and refs (the node table's
+   version and edits) */
 static unsigned lr_unset_kept(Compiler *c, int cls, const int *owners, int n, int id, LoadPoint w) {
   LoadRecord *r = c->lrec;
   const unsigned all = ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED | ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS;
-  if (!comp_scope_index_is_frozen()) return lr_unsettled_tables(c, cls, owners, n, all, w);
+  if (!comp_scope_index_is_frozen()) return lr_unsettled_of(c, cls, owners, n, all, id, w);
   struct LrUnset *m = &r->unset;
   int same = m->key && m->of.hgen == r->hgen && m->of.sgen == comp_scope_index_gen() && m->of.shape == comp_class_shape_gen() &&
-             m->of.tgen == comp_table_gen && m->of.ncls == r->ncls && m->of.nscopes == c->nscopes && m->of.nclasses == c->nclasses;
+             m->of.tgen == comp_table_gen && m->of.ncls == r->ncls && m->of.nscopes == c->nscopes && m->of.nclasses == c->nclasses &&
+             m->of.nver == c->nt->version && m->of.nedits == c->nt->edits;
   if (!same || 2 * (m->n + 1) > m->cap) {   /* start afresh, twice as large when full */
     int cap = same ? 2 * m->cap : 256;
     free(m->key); free(m->un);
@@ -3835,10 +3924,11 @@ static unsigned lr_unset_kept(Compiler *c, int cls, const int *owners, int n, in
     m->cap = cap; m->n = 0;
     m->of.hgen = r->hgen; m->of.sgen = comp_scope_index_gen(); m->of.shape = comp_class_shape_gen();
     m->of.tgen = comp_table_gen; m->of.ncls = r->ncls; m->of.nscopes = c->nscopes; m->of.nclasses = c->nclasses;
+    m->of.nver = c->nt->version; m->of.nedits = c->nt->edits;
   }
   int h = lr_unset_slot(m->key, m->cap, id, cls, w);
   if (m->key[4 * h] < 0) {
-    m->un[h] = (unsigned char)lr_unsettled_tables(c, cls, owners, n, all, w);
+    m->un[h] = (unsigned char)lr_unsettled_of(c, cls, owners, n, all, id, w);
     m->key[4 * h] = id; m->key[4 * h + 1] = cls; m->key[4 * h + 2] = w.region; m->key[4 * h + 3] = w.seq; m->n++;
   }
   return m->un[h];
@@ -3851,10 +3941,8 @@ unsigned elab_class_unsettled(Compiler *c, int cls, unsigned kinds, int id, int 
   /* (a file the compiler did not read, an autoload's too, can give the class anything) */
   if (g_require_unread || !r->recorded || cls < 0 || cls >= c->nclasses || elab_call_window(c, id, &w) != ELAB_YES ||
       (n = lr_ancestry_owners(c, cls, owners, 64, comp_class_is_module(c, &c->classes[cls]))) < 0) return kinds;
-  unsigned un = keep && r->plan_depth ? lr_unset_kept(c, cls, owners, n, id, w.from) & kinds
-                                      : lr_unsettled_tables(c, cls, owners, n, kinds, w.from);
-  /* the record's constants and class variables are not consulted */
-  return un | (kinds & (ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS));
+  return keep && r->plan_depth ? lr_unset_kept(c, cls, owners, n, id, w.from) & kinds
+                               : lr_unsettled_of(c, cls, owners, n, kinds, id, w.from);
 }
 
 typedef struct { int m, nh, any, *cp; } LrSpanAcc;
@@ -4121,6 +4209,13 @@ int elab_self_at(Compiler *c, int node) {
   /* a class or module body, or a class builder's block (made at its write) */
   int cls = class_def_opens_frame(c->nt, r->st[f].node) ? elab_header_class(c, r->st[f].node, NULL, NULL) : LR_UNKNOWN_CLASS;
   return cls >= 0 ? cls : LR_UNKNOWN_CLASS;
+}
+
+int elab_self_value_at(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  const LrStmt *s = lr_stmt_of(r, node);
+  if (!s || s->region < 0 || s->frame < 0 || s->up != s->frame) return LR_UNKNOWN_CLASS;
+  return elab_self_at(c, node);
 }
 
 int elab_cref_at(Compiler *c, int node) {

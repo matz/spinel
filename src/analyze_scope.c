@@ -9602,6 +9602,7 @@ int infer_cvar_types(Compiler *c, int nil_only) {
       memmove(&cl->cvars[j], &cl->cvars[j + 1], sizeof(char *) * (size_t)(cl->ncvars - j - 1));
       memmove((TyKind *)&cl->cvar_types[j], &cl->cvar_types[j + 1], sizeof(TyKind) * (size_t)(cl->ncvars - j - 1));
       cl->ncvars--;
+      comp_table_gen++;
       comp_touch_class(cl->idx);
       changed = 1;
     }

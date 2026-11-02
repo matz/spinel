@@ -7729,6 +7729,33 @@ static int inline_def_applicable(Compiler *c, const NodeTable *nt, int id, Scope
   return INLINE_DEF_APPLIES;
 }
 
+/* The method name an annotation's reader wrote: an Enumerable method's
+   per-site copy (`__enum_sole__send`, `__enum_sole__3`) and its generic
+   definition (`__enum_sole`) carry the def's annotation under the name the
+   desugar gave them. */
+static const char *inline_user_name(const char *name, char *buf, size_t n) {
+  if (!name || strncmp(name, "__enum_", 7) != 0) return name;
+  snprintf(buf, n, "%s", name + 7);
+  char *t = strstr(buf, "__");
+  if (t && t > buf) {
+    const char *r = t + 2;
+    int digits = *r != '\0';
+    for (const char *q = r; *q; q++) if (*q < '0' || *q > '9') digits = 0;
+    if (digits || sp_streq(r, "send")) *t = '\0';
+  }
+  return buf;
+}
+
+/* Has the annotation at `head` been reported already? Records it if not.
+   A def the desugar copies (an Enumerable method's per-site copies) carries
+   its annotation on every copy: one verdict per comment is enough. */
+static int inline_warned_before(char ***seen, int *n, const char *head) {
+  for (int i = 0; i < *n; i++) if (sp_streq((*seen)[i], head)) return 1;
+  *seen = realloc(*seen, sizeof(char *) * (size_t)(*n + 1));
+  (*seen)[(*n)++] = strdup(head);
+  return 0;
+}
+
 static void apply_inline_rbs(Compiler *c) {
   const NodeTable *nt = c->nt;
   int any = 0;
@@ -7736,6 +7763,17 @@ static void apply_inline_rbs(Compiler *c) {
     any = nt_root(nt, r) >= 0 && nt_int(nt, nt_root(nt, r), "rbs_any", 0);
   if (!any) return;
   int *sown = inline_struct_owner(c);
+  /* the annotations a def still carries: a node blanked by a desugar whose
+     copies carry its annotation (an Enumerable method's generic definition)
+     is reported through them */
+  char **live = NULL, **seen = NULL;
+  int nlive = 0, nseen = 0;
+  for (int id = 0; id < nt->count; id++)
+    if (nt_kind(nt, id) == NK_DefNode && nt_int(nt, id, "rbs_line", 0)) {
+      char h[300];
+      inline_head(nt, id, h, sizeof h);
+      inline_warned_before(&live, &nlive, h);
+    }
   for (int id = 0; id < nt->count; id++) {
     if (!nt_int(nt, id, "rbs_line", 0) && !nt_str(nt, id, "rbs_ivars")) continue;
     char where[300], head[300], spell[300];
@@ -7745,12 +7783,21 @@ static void apply_inline_rbs(Compiler *c) {
     const char *ivt = nt_str(nt, id, "rbs_ivar");
     if (k == NK_DefNode) {
       const char *ret = nt_str(nt, id, "rbs_ret"), *params = nt_str(nt, id, "rbs_params");
-      const char *name = nt_str(nt, id, "name");
+      char ubuf[256];
+      const char *name = inline_user_name(nt_str(nt, id, "name"), ubuf, sizeof ubuf);
+      const char *folded = nt_str(nt, id, "folded_into_object");
       Scope *ms = NULL, *rs = NULL;
       char bad[128], rbad[128];
       int app = inline_def_applicable(c, nt, id, &ms, bad, sizeof bad);
       int rep = app == INLINE_DEF_APPLIES ? inline_replacing_def(c, ms) : -1;
-      if (app == INLINE_DEF_NOT_FOUND) inline_warn(head, "the signature of `%s` is not applied: its method was not found after the parse%s", name, "");
+      if (app != INLINE_DEF_APPLIES && inline_warned_before(&seen, &nseen, head)) { /* reported through another copy */ }
+      else if (app == INLINE_DEF_NOT_FOUND && folded) {
+        /* desugar_object_method_builtin_overrides moved the body into Object's def */
+        char into[300];
+        snprintf(into, sizeof into, "%s branch of Object#%s", folded, name);
+        inline_warn(head, "the signature of `%s` is not applied: its body runs as the %s, whose signature is the one that applies", name, into);
+      }
+      else if (app == INLINE_DEF_NOT_FOUND) inline_warn(head, "the signature of `%s` is not applied: its method was not found after the parse%s", name, "");
       else if (app == INLINE_DEF_MIXED_IN)
         inline_warn(head, "the signature of `%s` is not applied: it is a method of a module mixed in with %s, whose calls "
                           "run a copy made for each class it is mixed into, which no signature reaches; the same signature "
@@ -7808,7 +7855,7 @@ static void apply_inline_rbs(Compiler *c) {
         if (!nsym) inline_warn(head, "this type is not applied: the call names no attribute Spinel can see%s%s", "", "");
       }
     }
-    else if (nt_int(nt, id, "rbs_line", 0)) {
+    else if (nt_int(nt, id, "rbs_line", 0) && !inline_warned_before(&live, &nlive, head)) {
       /* every fact the parser wrote is applied or reported: one on a node
          an earlier pass rewrote into another kind would otherwise be lost */
       inline_warn(head, "this annotation is not applied: its declaration became a %s before types were read%s",
@@ -7840,6 +7887,9 @@ static void apply_inline_rbs(Compiler *c) {
       free(list);
     }
   }
+  for (int i = 0; i < nlive; i++) free(live[i]);
+  for (int i = 0; i < nseen; i++) free(seen[i]);
+  free(live); free(seen);
   free(sown);
 }
 

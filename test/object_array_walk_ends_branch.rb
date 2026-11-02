@@ -4,6 +4,8 @@
 # statement, a loop body's last, an unread method's last -- the walk's is
 # too, so the Array narrows (`if c; list.each { }; end; nil`). Where the
 # conditional's value is read, the walk answers the Array as before.
+# infer-test greps the C: each class's @items is an sp_PtrArray *, but
+# Shelf's, whose walk's value is read, stays an sp_PolyArray *.
 class Item
   attr_reader :n
   def initialize(n) = @n = n

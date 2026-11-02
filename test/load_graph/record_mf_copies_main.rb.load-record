@@ -1,0 +1,37 @@
+load record: 15 points, 1 regions
+r0 #0 f0 ProgramNode line 5
+r0 #1 f0 ModuleNode W line 5
+  r0 #2 f0 CallNode module_function line 6
+  r0 #3 f0 DefNode a line 7
+  r0 #4 f0 AliasMethodNode line 8
+  r0 #5 f0 CallNode alias_method line 9
+  r0 #6 f0 CallNode attr_reader line 10
+  r0 #7 f0 CallNode define_method line 11
+  r0 #8 f0 DefNode z line 12
+  r0 #9 f0 UndefNode line 13
+r0 #10 f0 ModuleNode X line 15
+  r0 #11 f0 DefNode m line 16
+  r0 #12 f0 AliasMethodNode line 17
+  r0 #13 f0 CallNode module_function line 18
+  r0 #14 f0 DefNode n line 19
+class W: body#1
+class X: body#10
+entity W: owner main leaf W
+entity X: owner main leaf X
+const W: write#1
+visibility in #1: vis#2 module_function
+W#a: def#3 runs=never private undef#9 private end=no
+W.a: copy#3 end=yes
+W#b: alias#4 (a: def#3) private end=yes
+W#c: alias#5 (a: def#3) private end=yes
+W#q: reader#6 private end=yes
+W#dm: define_method#7 private end=yes
+W.dm: copy#7 end=yes
+W#z: def#8 runs=never private end=yes
+W.z: copy#8 end=yes
+const X: write#10
+X#m: def#11 end=yes
+X#n: alias#12 (m: def#11) vis#13 private def#14 runs=never end=yes
+X.n: copy#13 end=yes
+versions W#a: def#3..#9 seen=def#3 idle, undef#9..end seen=none idle; 3 of the name, named
+versions X#n: alias#12..#14 seen=alias#12 idle, def#14..end seen=def#14 idle; 3 of the name, named

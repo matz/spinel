@@ -1281,6 +1281,14 @@ static int lr_def_scope(const LoadRecord *r, int node) {
   return node >= 0 && node < r->ndscope ? r->dscope[node] : 0;
 }
 
+/* Does module_function copy a version of this kind to the singleton: a
+   def, a define_method and a `module_function :n` of a name do; an alias
+   (or the forwarder of one), an attr reader or writer and an undef do not
+   (CRuby makes no copy for those under the bare word either) */
+static int lr_mf_copies(LrKind kind, const char *target) {
+  return !target && (kind == LR_DEF || kind == LR_DEFINE_METHOD || kind == LR_VIS);
+}
+
 /* A method version of (cls, sg, name) by node, under the visibility state
    bvis: the frame's where the version is the frame's own definee's (a
    `class << self` body's def is the singleton's), public for one on
@@ -1302,7 +1310,7 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   if (ov >= 0) vis = ov;
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
   lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced, .scope = sc });
-  if (!sg && bvis == BVIS_MODULE_FUNCTION)
+  if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target))
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced });
 }
 

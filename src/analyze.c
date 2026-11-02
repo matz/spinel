@@ -16396,6 +16396,23 @@ static int oa_elem_recv_slot(Compiler *c, int recv, const int *read_slot, const 
   return -1;
 }
 
+/* narrow_object_arrays' step 5d: the slot of the ivar that the synthesized
+   reader `name` of class ci reads, its own or an ancestor's (as OA_IVSLOT
+   finds it: a subclass's copy of an inherited ivar has no slot of its own,
+   so the walk goes on to the ancestor's), or -1. Steps 2 and 4 make a
+   reader called on a receiver typed as the class a read of that slot,
+   vetted with the rest; one called on an element of a table this pass
+   narrows is decided only here, after the uses were classified, so it is
+   a read nothing claimed (step 6). */
+static int oa_reader_ivslot(Compiler *c, int **ivslot, int ci, const char *name) {
+  char ivn[300];
+  if (!name || strlen(name) >= sizeof ivn - 1) return -1;
+  ivn[0] = '@'; strcpy(ivn + 1, name);
+  for (int k = ci; k >= 0 && k < c->nclasses; k = c->classes[k].parent)
+    if (ivslot[k]) { int iv = comp_ivar_index(&c->classes[k], ivn); if (iv >= 0 && ivslot[k][iv]) return ivslot[k][iv] - 1; }
+  return -1;
+}
+
 /* narrow_object_arrays' step 5c: the Symbols (by node, of the nc nodes)
    that define an accessor rather than route to one. The `attr_reader :items`
    declaration names the reader with a symbol; that one is the reader's
@@ -17291,14 +17308,14 @@ static int narrow_object_arrays(Compiler *c) {
       tmis[p] = !rdead[r] && k >= 0 && k < c->nclasses ? call_target(c, pend[p].id, k, pn, 0, NULL) : -1;
       if (tmis[p] >= 0) pend[p].cls = k;
       /* an attribute reader of the element's class (as above): the call
-         reads the element's ivar, and is neither an edge nor a kill */
+         reads the element's ivar, a read of its slot that nothing vetted */
       else if (!rdead[r] && k >= 0 && k < c->nclasses && nt_ref(nt, pend[p].id, "arguments") < 0 &&
                comp_reader_in_chain(c, k, pn, NULL)) { reads[p] = 1; pend[p].cls = k; }
     }
     for (int p = 0; p < npend; p++) {
       int id = pend[p].id, args = nt_ref(nt, id, "arguments"), argc = 0;
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-      if (reads[p]) continue;
+      if (reads[p]) { read_slot[id] = oa_reader_ivslot(c, ivslot, pend[p].cls, nt_str(nt, id, "name")); continue; }
       if (tmis[p] < 0) {
         OA_DYN_KILL(nt_str(nt, id, "name"));
       }

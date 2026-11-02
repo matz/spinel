@@ -164,3 +164,19 @@ class Tup
   def self.n = @@n
 end
 p Tup.x, Tup.n
+
+# an anonymous Class.new block's variable is the enclosing class's only:
+# the new class's own reflection does not find it
+class AnonReg
+  k = Class.new do
+    @@r = 1
+    def self.g = class_variable_get(:@@r)
+  end
+  begin
+    k.g
+  rescue NameError => e
+    p e.name
+  end
+  def self.r = @@r
+end
+p AnonReg.r

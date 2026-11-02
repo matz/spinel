@@ -9649,7 +9649,10 @@ int infer_cvar_types(Compiler *c, int nil_only) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   /* Pass 1: class body-level writes (comp_scope_of returns scope 0, class_id=-1,
-     so use the class's def_node to find which class owns them). */
+     so walk each class's def_node body), registered on the class they are
+     looked up from (holder_cvar_class_in_body): the body's own, except in
+     the anonymous class header a builder's block is rewritten to, whose
+     variables are the enclosing class's. */
   for (int ci = 0; ci < c->nclasses; ci++) {
     int body = nt_ref(nt, c->classes[ci].def_node, "body");
     int n = 0;
@@ -9660,7 +9663,8 @@ int infer_cvar_types(Compiler *c, int nil_only) {
       NodeKind sk = nt_kind(nt, s);
       if (!sty || store_unchanged(c, s)) continue;
       if (is_cvar_write_kind(nt_kind(nt, s))) {
-        if (cvar_note_write(c, ci, s, nil_only)) changed = 1;
+        int wc = holder_cvar_class_in_body(c, s);
+        if (wc >= 0 && cvar_note_write(c, wc, s, nil_only)) changed = 1;
       }
       else if (sk == NK_MultiWriteNode) {
         int mln = 0;
@@ -9672,8 +9676,9 @@ int infer_cvar_types(Compiler *c, int nil_only) {
           NodeKind mlk = nt_kind(nt, mlefts[mi]);
           if (mlk != NK_ClassVariableTargetNode) continue;
           const char *cnm = nt_str(nt, mlefts[mi], "name");
-          if (!cnm) continue;
-          ClassInfo *mcl = &c->classes[comp_cvar_owner(c, ci, cnm)];
+          int mc = cnm ? holder_cvar_class_in_body(c, mlefts[mi]) : -1;
+          if (mc < 0) continue;
+          ClassInfo *mcl = &c->classes[comp_cvar_owner(c, mc, cnm)];
           int midx = comp_cvar_intern(mcl, cnm);
           if (nil_only && mcl->cvar_types[midx] != TY_BOOL &&
               mcl->cvar_types[midx] != TY_SYMBOL) continue;

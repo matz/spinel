@@ -118,6 +118,11 @@ including optional keywords, can receive pins; each positional takes the
 signature's type of its own kind in order, so `(Integer, ?String, *Symbol,
 Float)` describes `def m(a, b = "", *c, d)`. A rest or `**` parameter stays
 the array or hash its arguments are gathered into, as with `--rbs`.
+A method that forwards with `...` (`def self.parse(...)`, `def m(a, ...)`)
+takes the signature's return type, and each named positional ahead of the
+`...` takes the signature's leading positional in its place, required ones
+first. The rest of the signature describes the arguments passed on, which
+the called method types, so they pin nothing, as with `--rbs`.
 A Ruby block parameter without an RBS block declaration remains inferred.
 
 ## Where an annotation attaches

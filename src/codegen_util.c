@@ -3300,8 +3300,8 @@ int gvar_global_slot(Compiler *c, int node, Buf *out) {
   return plain;
 }
 /* The C global a class variable read or write `node` names
-   (cvar_<owner>_<name>), by the read emitter's rule: the method's class, or
-   the class body the node is in, or the Toplevel, then the ancestor that
+   (cvar_<owner>_<name>), by the read emitter's rule (holder_cvar_owner):
+   the class it is looked up from, or the Toplevel, then the ancestor that
    owns the class variable. Appends it to `out` and answers 1, or 0. */
 int cvar_global_slot(Compiler *c, int node, Buf *out) {
   const char *nm = nt_str(c->nt, node, "name");

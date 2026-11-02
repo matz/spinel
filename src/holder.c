@@ -47,8 +47,26 @@ int holder_cbody(const Compiler *c, int node) {
   return c->node_cbody && node >= 0 && node < c->node_cap ? c->node_cbody[node] : -1;
 }
 
+int holder_cvar_class(const Compiler *c, int node, int body) {
+  /* CRuby looks a class variable up from the cref, the class or module
+     body the code is written in, which the record answers for every node
+     it placed: a class builder's block (`S = Struct.new(:a) do`,
+     Data.define, Class.new, Module.new) takes the class as self but keeps
+     the cref it is written in, and so do the methods defined there. Main's
+     top level is the Toplevel's, which holds the top-level class
+     variables. A node the record did not place keeps its scope's class. */
+  int cref = elab_cvar_cref_at((Compiler *)c, node);
+  return cref >= 0 ? cref : cref == -1 ? c->toplevel_class : holder_scope_class(c, node, body);
+}
+
+int holder_cvar_class_in_body(const Compiler *c, int node) {
+  Scope *s = comp_scope_of((Compiler *)c, node);
+  int body = holder_cbody(c, node);
+  return s && (s->class_id >= 0 || body >= 0) ? holder_cvar_class(c, node, body) : -1;
+}
+
 int holder_cvar_owner(const Compiler *c, int node, const char *nm, int body) {
-  int k = nm ? holder_scope_class(c, node, body) : -1;
+  int k = nm ? holder_cvar_class(c, node, body) : -1;
   return k >= 0 ? comp_cvar_owner(c, k, nm) : -1;
 }
 

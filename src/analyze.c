@@ -12,6 +12,7 @@
 #include "timing.h"
 #include "value_pos.h"
 #include "builtin_names.h"
+#include "holder.h"
 
 
 static int narrow_int_table_ivars(Compiler *c, int in_round);  /* declared early: the fixpoint calls it */
@@ -19463,13 +19464,9 @@ static int hash_key_slot_of(Compiler *c, int id, HashKeySlot *out) {
   }
   else if (kind == 1) {
     /* A class body's `@@c = {...}` sits in scope 0, outside its class: its
-       owner is the class whose body states it, as infer_cvar_types reads it. */
-    out->cls = s->class_id;
-    for (int ci = 0; out->cls < 0 && ci < c->nclasses; ci++) {
-      int body = nt_ref(nt, c->classes[ci].def_node, "body");
-      int n = 0; const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-      for (int q = 0; q < n; q++) if (stmts[q] == id) { out->cls = ci; break; }
-    }
+       class is the one the body's code looks it up from, as
+       infer_cvar_types registers it (none at main's top level). */
+    out->cls = holder_cvar_class_in_body(c, id);
     if (out->cls < 0) return -1;
   }
   return kind;
@@ -28788,10 +28785,7 @@ static int poly_store_place(Compiler *c, int id, NodeKind rk, const char *nm) {
   int cid = s ? s->class_id : -1;
   if (rk == NK_InstanceVariableReadNode || rk == NK_InstanceVariableWriteNode)
     return cid < 0 ? -1 : cid * 2 + (s->is_cmethod ? 1 : 0);
-  if (cid < 0 && c->node_cbody && id < c->node_cap) cid = c->node_cbody[id];
-  if (cid < 0) cid = c->toplevel_class;
-  if (cid < 0 || cid >= c->nclasses) return -1;
-  return comp_cvar_owner(c, cid, nm);
+  return s ? holder_cvar_owner(c, id, nm, holder_cbody(c, id)) : -1;
 }
 /* The variables of read kind `rk` the program appends to in place -- a read
    of one is a String mutator's receiver, or is lifted for a parameter
@@ -36654,15 +36648,12 @@ int box_nullable_arg(Compiler *c, int v) {
   return repr_box_nullable_arg(c, v);   /* repr.c */
 }
 
-/* The class variable a read or write of `@@x` names, resolved as
-   infer_type resolves it: the method's class, a class body's own class, else
-   Toplevel. -1 when there is none. */
+/* The class variable a read or write of `@@x` names in the class it is
+   looked up from (holder_cvar_class): the cref's, else Toplevel. -1 when
+   there is none. */
 static int cvar_slot(Compiler *c, int id, ClassInfo **cio) {
   const char *nm = nt_str(c->nt, id, "name");
-  Scope *s = comp_scope_of(c, id);
-  int cid = s ? s->class_id : -1;
-  if (cid < 0 && c->node_cbody && id < c->node_cap) cid = c->node_cbody[id];
-  if (cid < 0) cid = c->toplevel_class;
+  int cid = comp_scope_of(c, id) ? holder_cvar_class(c, id, holder_cbody(c, id)) : -1;
   if (cid < 0 || cid >= c->nclasses || !nm) return -1;
   *cio = &c->classes[cid];
   return comp_cvar_index(*cio, nm);
@@ -51789,9 +51780,9 @@ static void an_phase_proc_returns(Compiler *c) {
           }
           else {
             Scope *ws = comp_scope_of(c, id);
-            int cid = ws ? ws->class_id : -1;
+            int cid = ws && ws->class_id >= 0 ? holder_cvar_owner(c, id, nm, -1) : -1;
             if (cid < 0) continue;
-            ClassInfo *ci = &c->classes[comp_cvar_owner(c, cid, nm)];
+            ClassInfo *ci = &c->classes[cid];
             for (int cv = 0; cv < ci->ncvars; cv++) {
               if (!ci->cvars[cv] || !sp_streq(ci->cvars[cv], nm)) continue;
               TyKind cur = ci->cvar_types[cv], nw = PW_JOIN(cur, vt);

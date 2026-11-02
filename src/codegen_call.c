@@ -11848,9 +11848,8 @@ static TyKind write_slot_ty_of(Compiler *c, int id, NodeKind kind) {
     Scope *ws = comp_scope_of(c, w);
     int cid = ws ? ws->class_id : -1;
     if (kind == NK_ClassVariableOrWriteNode) {
-      if (cid < 0) cid = c->toplevel_class;
+      cid = holder_cvar_owner(c, w, vn, holder_cbody(c, w));
       if (cid < 0) return TY_UNKNOWN;
-      cid = comp_cvar_owner(c, cid, vn);
       int idx = comp_cvar_index(&c->classes[cid], vn);
       return idx >= 0 ? c->classes[cid].cvar_types[idx] : TY_UNKNOWN;
     }

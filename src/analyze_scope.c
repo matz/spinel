@@ -3,6 +3,7 @@
 #include "call_plan.h"
 #include "share.h"
 #include "value_pos.h"
+#include "holder.h"
 #include <stdint.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -9512,9 +9513,7 @@ int infer_cvar_types(Compiler *c, int nil_only) {
      class in node_cbody, and the cvar is that class's (not Toplevel's). */
   for (int id = 0; id < nt->count; id++) {
     if (!is_cvar_write_kind(nt_kind(nt, id)) || store_unchanged(c, id)) continue;
-    Scope *s = comp_scope_of(c, id);
-    int wcid = s->class_id;
-    if (wcid < 0 && c->node_cbody && id < c->node_cap) wcid = c->node_cbody[id];
+    int wcid = holder_cvar_class_in_body(c, id);
     if (wcid < 0) continue;
     if (cvar_note_write(c, wcid, id, nil_only)) changed = 1;
   }
@@ -9522,8 +9521,7 @@ int infer_cvar_types(Compiler *c, int nil_only) {
      body and on either side of a splat, declares its cvar too; the elements'
      types reach the slot through infer_write_types. */
   NT_FOREACH_KIND(nt, NK_ClassVariableTargetNode, id) {
-    Scope *s = comp_scope_of(c, id);
-    int cc = s && s->class_id >= 0 ? s->class_id : id < c->node_cap ? c->node_cbody[id] : -1;
+    int cc = holder_cvar_class_in_body(c, id);
     const char *nm = nt_str(nt, id, "name");
     if (cc < 0 || !nm) continue;
     ClassInfo *tcl = &c->classes[comp_cvar_owner(c, cc, nm)];
@@ -9537,8 +9535,9 @@ int infer_cvar_types(Compiler *c, int nil_only) {
   for (int id = 0; id < nt->count; id++) {
     if (!is_cvar_write_kind(nt_kind(nt, id)) || store_unchanged(c, id)) continue;
     Scope *s = comp_scope_of(c, id);
-    if (s->class_id >= 0 || id >= c->node_cap || c->node_cbody[id] < 0) continue;
-    if (cvar_note_write(c, c->node_cbody[id], id, nil_only)) changed = 1;
+    if (s->class_id >= 0 || holder_cbody(c, id) < 0) continue;
+    int bcid = holder_cvar_class(c, id, holder_cbody(c, id));
+    if (bcid >= 0 && cvar_note_write(c, bcid, id, nil_only)) changed = 1;
   }
   /* Pass 2.5: `Klass.class_variable_set(:@@name, v)` with a literal name
      DECLARES the cvar when the class has no such write -- CRuby creates it on
@@ -9567,12 +9566,13 @@ int infer_cvar_types(Compiler *c, int nil_only) {
     if (merged != scl->cvar_types[idx]) { cvar_set_type(scl, idx, merged); changed = 1; }
   }
   /* Pass 3: top-level writes (class_id == -1 in scope 0, and not inside any
-     class body) -- use Toplevel pseudo-class. */
+     class body), and those of a builder's block at the top level, whose
+     cref is main's -- use Toplevel pseudo-class. */
   for (int id = 0; id < nt->count; id++) {
     if (!is_cvar_write_kind(nt_kind(nt, id)) || store_unchanged(c, id)) continue;
-    Scope *s = comp_scope_of(c, id);
-    if (!nt_str(nt, id, "name") || s->class_id >= 0) continue;
-    if (c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) continue;
+    if (!nt_str(nt, id, "name")) continue;
+    int k = holder_cvar_class(c, id, holder_cbody(c, id));
+    if (k >= 0 && k != c->toplevel_class) continue;
     int tl_idx = comp_toplevel_class_make(c);
     if (cvar_note_write(c, tl_idx, id, nil_only)) changed = 1;
   }

@@ -5162,10 +5162,12 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       }
     }
     /* NilClass methods on a receiver known to be nil (self is the `int self`
-       the bool reopens take; nil carries nothing) */
+       the bool reopens take; nil carries nothing); a yielding one through
+       its proc form, as the reopens beside it */
     if (rt == TY_NIL) {
       int nc_ci = comp_core_class(c, CORE_NILCLASS);
       int nc_mi = nc_ci >= 0 ? call_target(c, id, nc_ci, name, 0, NULL) : -1;
+      if (nc_mi >= 0 && emit_reopen_block_call(c, id, recv, nc_mi, NULL, b)) return 1;
       if (nc_mi >= 0) {
         if (g_plan_check) ucall_observe(c, id, nc_mi, nc_ci, 0);
         buf_printf(b, "((void)("); emit_expr(c, recv, b);

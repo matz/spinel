@@ -34101,13 +34101,15 @@ static int pf_wanted(Compiler *c, const char *name) {
     if (recv >= 0 && infer_type(c, recv) == TY_CLASS && class_recv_is_dynamic(c, recv)) return 1;
     /* an Array, Hash or Numeric reopening's method on a receiver of that
        kind is called, not spliced: the reopen fallback reaches it through
-       the clone. String reopenings need the same callable form. */
+       the clone. String reopenings need the same callable form. So do
+       NilClass's, on nil. */
     if (recv >= 0) {
       TyKind rt = infer_type(c, recv);
       const char *rcn = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                       : (rt == TY_STRING || rt == TY_STRBUF) ? "String"
                       : rt == TY_RANDOM ? "Random"
                       : rt == TY_FIBER ? "Fiber" : rt == TY_THREAD ? "Thread"
+                      : rt == TY_NIL ? "NilClass"
                       : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
       int rci = rcn ? comp_class_index(c, rcn) : -1;
       if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;

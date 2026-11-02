@@ -31960,12 +31960,12 @@ int reopen_yields_known_container(Compiler *c, Scope *m) {
   if (!m->yields && !m->blk_param) return 0;
   return hands_block_container(c, m, m->body, 1);
 }
-/* Random, Float, Symbol, Fiber and Thread proc forms take their receiver
-   as the raw value. */
+/* Random, Float, Symbol, Fiber, Thread and NilClass proc forms take their
+   receiver as the raw value (a NilClass method's `int self`). */
 static int reopen_pf_raw_self(Compiler *c, int ci) {
   return ci == comp_core_class(c, CORE_RANDOM) || ci == comp_core_class(c, CORE_FLOAT) ||
          ci == comp_core_class(c, CORE_SYMBOL) || ci == comp_core_class(c, CORE_FIBER) ||
-         ci == comp_core_class(c, CORE_THREAD);
+         ci == comp_core_class(c, CORE_THREAD) || ci == comp_core_class(c, CORE_NILCLASS);
 }
 /* A reopened builtin's yielding method reached with the call's block: it
    has no symbol of its own, being spliced where it can, so the call goes to
@@ -32053,6 +32053,10 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
     buf_printf(g_pre, "const char *_t%d = %s; SP_GC_ROOT(_t%d);\n", t, rx.p ? rx.p : "", t);
     free(rx.p);
     buf_printf(&rb, "_t%d", t);
+  }
+  /* nil carries nothing: its `int self` is 0, after the receiver runs */
+  else if (c->scopes[mi].class_id == comp_core_class(c, CORE_NILCLASS)) {
+    buf_puts(&rb, "((void)("); emit_expr(c, recv, &rb); buf_puts(&rb, "), 0)");
   }
   else if (reopen_pf_raw_self(c, c->scopes[mi].class_id)) emit_expr(c, recv, &rb);
   else if (box_fn) { buf_printf(&rb, "%s(", box_fn); emit_expr(c, recv, &rb); buf_puts(&rb, ")"); }

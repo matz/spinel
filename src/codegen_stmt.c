@@ -19308,7 +19308,10 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
   {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
+    /* `singleton_class.attr_reader :x`: an attr of the body's singleton,
+       registered from the load record as `class << self`'s are */
+    int sc_attr = recv >= 0 && nt_int(nt, id, "sg_attr_decl", 0);
+    if ((recv < 0 || sc_attr) && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
                            sp_streq(nm, "prepend") || sp_streq(nm, "module_function") ||
                            sp_streq(nm, "private") || sp_streq(nm, "protected") ||
                            sp_streq(nm, "public") || sp_streq(nm, "attr_reader") ||

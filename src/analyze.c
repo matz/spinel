@@ -47900,7 +47900,6 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_extend_enumerable", desugar_extend_enumerable(c, &hs));
   host_end(c, &hs);
   AN_STEP_V("desugar_attr_const_splat", desugar_attr_const_splat(c));           /* attr_accessor(*FLAGS), FLAGS = %i[a b] -> attr_accessor(:a, :b) */
-  AN_STEP_V("desugar_singleton_attr", desugar_singleton_attr(c));             /* singleton_class.attr_accessor :x -> def self.x / def self.x= */
   AN_STEP_V("desugar_sclass_readers_through_class", desugar_sclass_readers_through_class(c)); /* class << self; attr_reader :x read as obj.class.x -> def x = @x */
   AN_STEP_V("desugar_fiber_prepended_init", desugar_fiber_prepended_init(c));       /* a prepended Fiber#initialize -> __spinel_init run on the new fiber */
   AN_STEP_V("desugar_handle_ivars", desugar_handle_ivars(c));               /* @x in a Fiber / Thread reopening or its mixin -> the same store */

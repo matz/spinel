@@ -992,6 +992,17 @@ int str_in(const char *s, const char *const *set) {
   for (int i = 0; set[i]; i++) if (sp_streq(s, set[i])) return 1;
   return 0;
 }
+/* recv is `singleton_class` or `self.singleton_class`, with no arguments and
+   no block: in a class or module body, the body's own singleton class, on
+   which `singleton_class.attr_reader :x` defines what `class << self;
+   attr_reader :x; end` does */
+int nt_self_singleton_class(const NodeTable *nt, int recv) {
+  if (recv < 0 || nt_kind(nt, recv) != NK_CallNode || !is_singleton_class_name(nt_str(nt, recv, "name")) ||
+      nt_ref(nt, recv, "arguments") >= 0 || nt_ref(nt, recv, "block") >= 0) return 0;
+  int r = nt_ref(nt, recv, "receiver");
+  return r < 0 || nt_kind(nt, r) == NK_SelfNode;
+}
+
 /* A construct whose VALUE is an empty container. Its type reads UNKNOWN
    because it carries no element type, which is not the same as producing no
    value -- and the two were conflated wherever an expression's type decides

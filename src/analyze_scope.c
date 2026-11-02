@@ -3934,6 +3934,9 @@ void register_attrs(Compiler *c) {
       if (w) comp_add_sg_writer(k, base);
       else comp_add_sg_reader(k, base);
       comp_add_sg_decl(k, base, w, a[i].node);
+      /* the declaring call is a definition the class body emits nothing
+         for, also when its receiver is `singleton_class` (lr_call) */
+      nt_node_set_int((NodeTable *)c->nt, a[i].node, "sg_attr_decl", 1);
       continue;
     }
     char ivname[260];

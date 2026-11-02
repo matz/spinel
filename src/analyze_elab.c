@@ -1875,6 +1875,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
   int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0), an = nt_ref(nt, node, "arguments"), ac = 0;
+  /* `singleton_class.attr_reader :x` in a class or module body: an attr of
+     the body's singleton, as `class << self; attr_reader :x; end` records */
+  if (nm && (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) && fc >= 0 && fs == LR_FS_NONE &&
+      nt_self_singleton_class(nt, recv)) { cls = fc; sg = 1; }
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   int bvis = visibility_of_name(nm), cvis = class_method_vis_of_name(nm), opaque = 0;
   int self = recv < 0 || nt_kind(nt, recv) == NK_SelfNode, st = self ? *vs : BVIS_PUBLIC;

@@ -20079,8 +20079,8 @@ static int scm_body_stmts(NodeTable *nt, int id, int *out, int cap) {
   return -1;
 }
 /* For self in a body, the declarations go where they stand, in the forms
-   the later passes take (desugar_singleton_attr, the define_method rewrite):
-   `singleton_class.attr_accessor :a`, `def self.h`; an alias in a
+   the later passes take (the walk's singleton attr, the define_method
+   rewrite): `singleton_class.attr_accessor :a`, `def self.h`; an alias in a
    `class << self`. Into out[] (at most cap), or -1 for one of no such form. */
 static int scm_self_stmts(NodeTable *nt, int like, const int *in, int n, int *out, int cap) {
   if (n > cap) return -1;
@@ -25576,74 +25576,6 @@ static int ma_def(NodeTable *nt, const char *name, int self_recv, int with_val, 
   int body = ma_stmts1(nt, body_stmt); if (body < 0) return -1;
   nt_node_set_ref(nt, def, "body", body);
   return def;
-}
-/* ---- `singleton_class.attr_accessor :x` in a class or module body ----
-   Accessors on the class object over its class-level ivar: what
-   `def self.x; @x; end` / `def self.x=(val); @x = val; end` spell, and the
-   one singleton_class idiom that never needs the singleton class as a value
-   (which stays unsupported: docs/limitations.md). attr_reader / attr_writer
-   likewise; symbol or string names, or the call is left alone. */
-int desugar_singleton_attr(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_opens_frame(nt, id)) continue;
-    int body = class_def_body(nt, id);
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int bn = 0; const int *bb0 = nt_arr(nt, body, "body", &bn);
-    int *bb = (int *)malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1));
-    if (!bb) continue;
-    if (bn > 0) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
-    int *nb = NULL, nbn = 0, any = 0;
-    for (int i = 0; i < bn; i++) {
-      int st = bb[i];
-      const char *nm = nt_kind(nt, st) == NK_CallNode ? nt_str(nt, st, "name") : NULL;
-      int reader = 0, writer = 0;
-      if (nm && sp_streq(nm, "attr_accessor")) reader = writer = 1;
-      else if (nm && sp_streq(nm, "attr_reader")) reader = 1;
-      else if (nm && sp_streq(nm, "attr_writer")) writer = 1;
-      int rcv = nm ? nt_ref(nt, st, "receiver") : -1;
-      int is_sc = rcv >= 0 && nt_kind(nt, rcv) == NK_CallNode && nt_str(nt, rcv, "name") &&
-                  sp_streq(nt_str(nt, rcv, "name"), "singleton_class") &&
-                  nt_ref(nt, rcv, "arguments") < 0 && nt_ref(nt, rcv, "block") < 0 &&
-                  (nt_ref(nt, rcv, "receiver") < 0 || nt_kind(nt, nt_ref(nt, rcv, "receiver")) == NK_SelfNode);
-      if (!(reader || writer) || !is_sc || nt_ref(nt, st, "block") >= 0) { xc_push(&nb, &nbn, st); continue; }
-      int an = 0; int args = nt_ref(nt, st, "arguments");
-      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      const char *syms[32]; int nsyms = 0, ok = an > 0;
-      for (int a = 0; a < an && ok; a++) {
-        NodeKind ak = nt_kind(nt, av[a]);
-        const char *t = ak == NK_SymbolNode ? nt_str(nt, av[a], "value") : ak == NK_StringNode ? nt_str(nt, av[a], "content") : NULL;
-        if (!t || !t[0] || nsyms >= 32) ok = 0; else syms[nsyms++] = t;
-      }
-      if (!ok) { xc_push(&nb, &nbn, st); continue; }
-      long long line = nt_int(nt, st, "node_line", 0);
-      for (int j = 0; j < nsyms && ok; j++) {
-        char iv[300], wn[300]; snprintf(iv, sizeof iv, "@%s", syms[j]); snprintf(wn, sizeof wn, "%s=", syms[j]);
-        if (reader) {
-          int rd = nt_new_node(nt, "InstanceVariableReadNode"); if (rd < 0) { ok = 0; break; }
-          nt_node_set_str(nt, rd, "name", iv);
-          int d = ma_def(nt, syms[j], 1, 0, rd, line); if (d < 0) { ok = 0; break; }
-          xc_push(&nb, &nbn, d);
-        }
-        if (writer) {
-          int w = nt_new_node(nt, "InstanceVariableWriteNode"); if (w < 0) { ok = 0; break; }
-          nt_node_set_str(nt, w, "name", iv);
-          int vr = nt_new_node(nt, "LocalVariableReadNode"); if (vr < 0) { ok = 0; break; }
-          nt_node_set_str(nt, vr, "name", "val"); nt_node_set_int(nt, vr, "depth", 0);
-          nt_node_set_ref(nt, w, "value", vr);
-          int d = ma_def(nt, wn, 1, 1, w, line); if (d < 0) { ok = 0; break; }
-          xc_push(&nb, &nbn, d);
-        }
-      }
-      if (!ok) { free(nb); nb = NULL; nbn = 0; any = 0; break; }
-      any = 1;
-    }
-    if (any && nb) { nt_node_set_arr(nt, body, "body", nb, nbn); changed = 1; }
-    free(nb); free(bb);
-  }
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
 }
 
 

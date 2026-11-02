@@ -26368,11 +26368,87 @@ static int emit_nil_answer_call(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* Has the answer of nil's method for call id (cplan_nil_program_method)
+   the call's type: its own, or a boxed slot's, or nil where the call's
+   slot holds a nil (a pointer, or a nil)? An Object method's arm converts
+   its answer itself (emit_call_reopen_arms). */
+int cplan_nil_program_served(Compiler *c, int id) {
+  int nilcls = 0;
+  int mi = cplan_nil_program_method(c, id, cplan_call_name(c->nt, id), &nilcls);
+  if (mi < 0) return 0;
+  if (!nilcls) return 1;
+  Repr want = repr_of(c, id);
+  if (want.kind == RK_BOXED) return 1;
+  Scope *s = &c->scopes[mi];
+  TyKind t = want.as_ty;
+  if (!method_is_void(s) && (TyKind)s->ret != TY_NIL) return (TyKind)s->ret == t;
+  return want.kind == RK_PTR || t == TY_NIL;
+}
+
+/* Call id where the program gives nil a method of its name, other than
+   the one the receiver's class runs (CN_PROGRAM): the receiver and the
+   arguments held in Ruby's order, then nil's method (NilClass's, or
+   Object's) for a NULL receiver and the call for any other. A statement
+   (stmt) drops both answers. 1 when it emitted. */
+static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, id, "receiver");
+  int nilcls = 0;
+  int mi = cplan_nil_program_method(c, id, cplan_call_name(nt, id), &nilcls);
+  if (mi < 0) return 0;
+  Buf hb; memset(&hb, 0, sizeof hb);
+  int mark, held;
+  char rtext[32] = "";
+  emit_nil_target_head_r(c, id, &hb, "", 0, 0, &mark, &held, rtext, sizeof rtext);
+  size_t pre0 = g_pre ? g_pre->len : 0;
+  Buf cb; memset(&cb, 0, sizeof cb);
+  Buf nb; memset(&nb, 0, sizeof nb);
+  int vt = view_push_repr(c, r, VR_NIL_TESTED, 1);
+  emit_call_held(c, id, &cb);
+  /* (nil's: as on a receiver that is nil) */
+  emit_call_reopen_arms(c, id, &nb, nt, nt_str(nt, id, "name"), r, TY_NIL);
+  view_pop(c, vt);
+  nil_target_release(c, mark, held);
+  if (g_plan_check) cplan_served("nil-program");
+  Repr want = repr_of(c, id);
+  Scope *s = &c->scopes[mi];
+  Buf nv; memset(&nv, 0, sizeof nv);
+  if (stmt) buf_printf(&nv, "(void)(%s)", nb.p ? nb.p : "0");
+  else if (nilcls && (method_is_void(s) || (TyKind)s->ret == TY_NIL))
+    buf_printf(&nv, "((void)(%s), %s)", nb.p ? nb.p : "0",
+               want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+  else if (nilcls && want.kind == RK_BOXED) emit_boxed_text(c, (TyKind)s->ret, nb.p ? nb.p : "0", &nv);
+  else buf_puts(&nv, nb.p ? nb.p : "0");
+  Buf rb; memset(&rb, 0, sizeof rb);
+  nil_target_recv_text(c, r, rtext, &rb);
+  Buf vb; memset(&vb, 0, sizeof vb);
+  buf_printf(&vb, "(%s) == NULL ? %s : ", rb.p ? rb.p : "0", nv.p);
+  if (stmt) buf_printf(&vb, "(void)(%s)", cb.p ? cb.p : "0");
+  else buf_puts(&vb, cb.p ? cb.p : "");
+  if (g_pre && g_pre->len > pre0) {
+    /* the call hoisted work (an argument's prelude): the head goes ahead of
+       it, and the value is the choice alone */
+    Buf rest; memset(&rest, 0, sizeof rest);
+    buf_puts(&rest, g_pre->p + pre0);
+    g_pre->len = pre0; g_pre->p[pre0] = 0;
+    size_t hn = hb.p ? strlen(hb.p) : 0;
+    while (hn > 0 && hb.p[hn - 1] == ' ') hb.p[--hn] = 0;
+    if (hn) { emit_indent(g_pre, g_indent); buf_puts(g_pre, hb.p); buf_puts(g_pre, "\n"); }
+    buf_puts(g_pre, rest.p);
+    free(rest.p);
+    buf_printf(b, "(%s)", vb.p);
+  }
+  else buf_printf(b, "({ %s%s; })", hb.p ? hb.p : "", vb.p);
+  free(hb.p); free(cb.p); free(nb.p); free(nv.p); free(rb.p); free(vb.p);
+  return 1;
+}
+
 /* Call id in value position, behind its nil arm. 1 when it emitted. */
 static int emit_nil_target_call(Compiler *c, int id, Buf *b) {
   if (strbuf_mutator_on_held_self_answer(c, id)) return 0;   /* (as below) */
   int cn = cplan_nil(c, id);
   if (cn == CN_ANSWER && emit_nil_answer_call(c, id, b)) return 1;
+  if (cn == CN_PROGRAM) return emit_nil_program_call(c, id, b, 0);
   int test = cn == CN_RAISE;
   if (!test && (!poly_target_call(c, id) || nil_target_runs_in_call(c, id))) return 0;
   if (test && g_plan_check) cplan_served("nil-target");
@@ -26438,6 +26514,13 @@ int emit_nil_target_stmt(Compiler *c, int id, Buf *b, int indent) {
       return 1;
     }
     free(vb.p);
+  }
+  if (cn == CN_PROGRAM) {
+    Buf vb; memset(&vb, 0, sizeof vb);
+    int done = emit_nil_program_call(c, id, &vb, 1);
+    if (done) { emit_indent(b, indent); buf_printf(b, "%s;\n", vb.p); }
+    free(vb.p);
+    return done;
   }
   int test = cn == CN_RAISE;
   if (!test && (!poly_target_call(c, id) || nil_target_runs_in_call(c, id))) return 0;

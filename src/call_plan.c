@@ -3970,6 +3970,31 @@ static int cplan_nil_user_method(Compiler *c, int call, const char *name) {
   return 0;
 }
 
+int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls) {
+  int nk = comp_core_class(c, CORE_NILCLASS), ok = comp_core_class(c, CORE_OBJECT);
+  int mi = nk >= 0 ? call_target(c, call, nk, name, 0, NULL) : -1;
+  *nilcls = mi >= 0;
+  if (mi < 0 && ok >= 0) mi = call_target(c, call, ok, name, 0, NULL);
+  return mi;
+}
+
+/* Does the receiver of call `call` (of type rt) run another method than
+   nil does, or none: a reopened String's, Array's or Hash's, or the
+   object's class's own, where nil runs NilClass's or Object's? */
+static int cplan_nil_runs_other(Compiler *c, int call, TyKind rt, const char *name) {
+  int nilcls = 0, nmi = cplan_nil_program_method(c, call, name, &nilcls);
+  if (nmi < 0) return 0;
+  int k = rt == TY_STRING ? comp_core_class(c, CORE_STRING)
+        : ty_is_array(rt) ? comp_core_class(c, CORE_ARRAY)
+        : ty_is_hash(rt) ? comp_core_class(c, CORE_HASH)
+        : ty_is_object(rt) ? ty_object_class(rt) : -1;
+  if (k < 0) return 0;
+  int own = call_target(c, call, k, name, 0, NULL);
+  /* (a receiver whose class has none runs Object's through its fallback,
+     with the value boxed, which answers for nil as nil's own) */
+  return own != nmi && (own >= 0 || nilcls);
+}
+
 int cplan_nil_written(int why) {
   return why == NFW_NIL || why == NFW_NO_ELSE || why == NFW_SAFE_NAV || why == NFW_UNSET || why == NFW_ELEM_NIL || why == NFW_ELEM ||
          why == NFW_TAKEN;
@@ -4095,7 +4120,10 @@ int cplan_nil(Compiler *c, int id) {
     const char *rn = nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
     if (!rn || !sp_streq(rn, "__self")) return CN_NONE;
   }
-  if (cplan_nil_user_method(c, id, nm)) return CN_NONE;
+  if (cplan_nil_user_method(c, id, nm))
+    return (rr.kind == RK_PTR || rr.kind == RK_STRBUF) && cplan_nil_runs_other(c, id, rt, nm) &&
+           cplan_nil_program_served(c, id)
+           ? CN_PROGRAM : CN_NONE;
   /* an arm of a lowered `send` on a user object, for a name its class does
      not define: the arm reaches a Kernel method, which nil answers through
      send as any object does (`nil.send(:Integer, "12")`) */

@@ -3786,30 +3786,22 @@ static void sp_load_sites_note(const pm_parser_t *parser, const pm_node_t *root,
  * method or in a block is none: the compiler does not follow whether or
  * when it runs, and a file it would name is not found. */
 
-/* The real directory top-level statement `stmt` of the file in `dir` puts on
-   the load path, or NULL; *first: at the front (unshift, prepend). */
-static char *sp_load_dir_stmt(const pm_parser_t *pp, const pm_node_t *stmt, const char *dir, int *first) {
-  if (PM_NODE_TYPE(stmt) != PM_CALL_NODE) return NULL;
-  const pm_call_node_t *c = (const pm_call_node_t *)stmt;
-  if (!c->receiver || PM_NODE_TYPE(c->receiver) != PM_GLOBAL_VARIABLE_READ_NODE || !c->arguments ||
-      c->arguments->arguments.size != 1 || c->block) return NULL;
-  pm_constant_id_t gv = ((const pm_global_variable_read_node_t *)c->receiver)->name;
-  *first = sp_pm_name_is(pp, c->name, "unshift") || sp_pm_name_is(pp, c->name, "prepend");
-  if (!(*first || sp_pm_name_is(pp, c->name, "<<") || sp_pm_name_is(pp, c->name, "push") ||
-        sp_pm_name_is(pp, c->name, "append")) ||
-      !(sp_pm_name_is(pp, gv, "$LOAD_PATH") || sp_pm_name_is(pp, gv, "$:") || sp_pm_name_is(pp, gv, "$-I"))) return NULL;
+/* Does the evaluator know the load-path argument `arg` of the file in `dir`
+   (a path)? 0 for a splat or a computed value. *real: the real directory it
+   names, NULL when there is none. */
+static int sp_load_dir_arg(const pm_parser_t *pp, const pm_node_t *arg, const char *dir, char **real) {
   PevCtx ev;
   memset(&ev, 0, sizeof ev);
   ev.dir = dir;
   const pm_parser_t *saved = g_parser;   /* (the evaluator reads names from it) */
   g_parser = pp;
   Mv v;
-  int ok = pev_eval(&ev, c->arguments->arguments.nodes[0], &v) && v.k == MV_STR && v.s[0] == '/';
+  int ok = pev_eval(&ev, (pm_node_t *)arg, &v) && v.k == MV_STR && v.s[0] == '/';
   g_parser = saved;
   struct stat st;
-  char *real = ok ? realpath(v.s, NULL) : NULL;
-  if (real && !(stat(real, &st) == 0 && S_ISDIR(st.st_mode))) { free(real); real = NULL; }
-  return real;
+  *real = ok ? realpath(v.s, NULL) : NULL;
+  if (*real && !(stat(*real, &st) == 0 && S_ISDIR(st.st_mode))) { free(*real); *real = NULL; }
+  return ok;
 }
 
 /* The directory of `file`, real, or NULL */
@@ -3837,6 +3829,66 @@ static void sp_feature_root_put(const char *dir, int first) {
     break;
   }
   sp_feature_root_at(dir, first);
+}
+
+/* Constant `id`'s name copied to `buf` (0 when it does not fit), for the
+   name layer's predicates. */
+static int sp_name_buf(const pm_parser_t *pp, pm_constant_id_t id, char *buf, size_t cap) {
+  const pm_constant_t *nm = pm_constant_pool_id_to_constant(&pp->constant_pool, id);
+  if (nm->length >= cap) return 0;
+  memcpy(buf, nm->start, nm->length);
+  buf[nm->length] = '\0';
+  return 1;
+}
+
+/* Top-level statement `stmt` of the file in `dir`, a write to the load path
+   (a call, or a chain of calls, on the load path's global): the directories
+   it adds are roots from here on, in the order CRuby's path takes them.
+   Nothing is added unless the evaluator knows every argument of every link
+   of the chain (it does not know a splat or a computed value): the known
+   ones alone would put a file's directory in the wrong place. A chain
+   (`$: << a << b`) adds its receiver's directories first. 1 when `stmt` is
+   such a write; the directories are added when `apply`, and only counted as
+   known otherwise, so a chain is added whole or not at all. */
+static int sp_load_path_stmt(const pm_parser_t *pp, const pm_node_t *stmt, const char *dir, int apply) {
+  if (PM_NODE_TYPE(stmt) != PM_CALL_NODE) return 0;
+  const pm_call_node_t *c = (const pm_call_node_t *)stmt;
+  char name[16];
+  if (!c->receiver || c->block || !c->arguments || !sp_name_buf(pp, c->name, name, sizeof name) || !is_load_path_write(name)) return 0;
+  if (PM_NODE_TYPE(c->receiver) == PM_GLOBAL_VARIABLE_READ_NODE) {
+    char gv[16];
+    if (!sp_name_buf(pp, ((const pm_global_variable_read_node_t *)c->receiver)->name, gv, sizeof gv) || !is_load_path_global(gv)) return 0;
+  }
+  else if (!sp_load_path_stmt(pp, c->receiver, dir, apply)) return 0;
+  const pm_node_list_t *args = &c->arguments->arguments;
+  int concat = is_concat_name(name), first = is_prepend_alias(name);
+  if (is_shovel_name(name) && args->size != 1) return 0;   /* (`<<` takes one argument: more raise ArgumentError) */
+  /* the directory nodes in argument order: concat's are its array literals' elements */
+  size_t total = 0, n = 0;
+  for (size_t i = 0; i < args->size; i++)
+    total += concat && PM_NODE_TYPE(args->nodes[i]) == PM_ARRAY_NODE ? ((const pm_array_node_t *)args->nodes[i])->elements.size : 1;
+  const pm_node_t **nodes = malloc(sizeof *nodes * (total + 1));
+  char **real = calloc(total + 1, sizeof *real);
+  int known = 1;
+  if (!nodes || !real) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  for (size_t i = 0; i < args->size; i++) {
+    const pm_node_t *arg = args->nodes[i];
+    if (!concat) nodes[n++] = arg;
+    else if (PM_NODE_TYPE(arg) != PM_ARRAY_NODE) known = 0;
+    else
+      for (size_t k = 0; k < ((const pm_array_node_t *)arg)->elements.size; k++)
+        nodes[n++] = ((const pm_array_node_t *)arg)->elements.nodes[k];
+  }
+  for (size_t i = 0; known && i < n; i++) known = sp_load_dir_arg(pp, nodes[i], dir, &real[i]);
+  /* unshift(a, b) leaves [a, b, *old]: the last argument goes in first */
+  for (size_t i = 0; apply && known && i < n; i++) {
+    const char *d = real[first ? n - 1 - i : i];
+    if (d) sp_feature_root_put(d, first);
+  }
+  for (size_t i = 0; i < n; i++) free(real[i]);
+  free(real);
+  free(nodes);
+  return known;
 }
 
 /* ---- a require that runs later than the program start ----
@@ -7833,10 +7885,8 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
     w.stmt = (int)i; w.top = st->body.nodes[i];
     pm_visit_node(st->body.nodes[i], sp_graph_site_visit, &w);
     /* a directory the statement puts on the load path is one for the statements after it */
-    int first;
-    char *real = dir && !builtin ? sp_load_dir_stmt(&r->src.parser, st->body.nodes[i], dir, &first) : NULL;
-    if (real) sp_feature_root_put(real, first);   /* a root from here on */
-    free(real);
+    if (dir && !builtin && sp_load_path_stmt(&r->src.parser, st->body.nodes[i], dir, 0))
+      sp_load_path_stmt(&r->src.parser, st->body.nodes[i], dir, 1);
   }
   free(dir);
   free(w.stack);

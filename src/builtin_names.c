@@ -386,6 +386,11 @@ int is_push_unshift(const char *n) {
          sp_streq(n, "unshift");
 }
 
+/* The names of the calls that add to $LOAD_PATH: Array's pushes and concat. */
+int is_load_path_write(const char *n) {
+  return is_array_push_family(n) || is_concat_name(n);
+}
+
 /* A call whose answer tells an object from a copy of it: its identity, or
    whether it is frozen (a copy of a String later frozen is not). */
 int is_identity_query(const char *n) {

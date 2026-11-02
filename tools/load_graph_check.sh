@@ -529,12 +529,12 @@ done
 printf 'require_relative "main"\n' > "$tmp/entry/lib.rb"
 printf 'require_relative "lib"\nputs "main"\n' > "$tmp/entry/main.rb"
 refused entry "the program's own entry file"
-# a computed path no file matches may name any file, the entry among them...
-printf '%%w[ig ih].each_with_index { |v, i| require File.join("main", v) }\n' > "$tmp/entry/main.rb"
-refused entry "a computed require may load the program's own entry file"
-# ...and a closed set that names it beside another file
+# a closed set that names it beside another file, of a loop of each...
 printf 'puts "lib"\n' > "$tmp/entry/lib.rb"
 printf '%%w[lib main].each { |v| require File.join(__dir__, v) } if ARGV.size > 5\n' > "$tmp/entry/main.rb"
+refused entry "a computed require may load the program's own entry file"
+# ...and of each_with_index, whose first parameter is the word too
+printf '%%w[lib main].each_with_index { |v, i| require File.join(__dir__, v) }\n' > "$tmp/entry/main.rb"
 refused entry "a computed require may load the program's own entry file"
 # on a value no module can be, autoload is the run-time call master makes,
 # and its file is not part of the program (one that does not parse included)

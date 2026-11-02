@@ -7443,21 +7443,24 @@ static bool sp_local_scan(const pm_node_t *n, void *data) {
   }
 }
 
-/* A block parameter of `%w(a b).each { |p| ... }`: the words, and 1 when
-   scope `si` is such a block whose only parameter is `want` (any when 0);
-   `got` is that parameter */
+/* A block parameter of `%w(a b).each { |p| ... }`, or the first of
+   `each_with_index { |p, i| ... }`: the words, and 1 when scope `si` is such
+   a block whose parameter is `want` (any when 0); `got` is that parameter */
 static int sp_each_words(const SpReqCtx *x, int si, pm_constant_id_t want, const pm_node_list_t **words, pm_constant_id_t *got) {
   const pm_node_t *s = x->stack[si];
   if (si < 1 || PM_NODE_TYPE(s) != PM_BLOCK_NODE || PM_NODE_TYPE(x->stack[si - 1]) != PM_CALL_NODE) return 0;
   const pm_call_node_t *c = (const pm_call_node_t *)x->stack[si - 1];
   const pm_node_t *bp = ((const pm_block_node_t *)s)->parameters;
+  char name[16];
   if (c->block != s || c->arguments || !c->receiver || PM_NODE_TYPE(c->receiver) != PM_ARRAY_NODE ||
-      !sp_pm_name_is(x->pp, c->name, "each") || !bp || PM_NODE_TYPE(bp) != PM_BLOCK_PARAMETERS_NODE) return 0;
+      !sp_name_buf(x->pp, c->name, name, sizeof name) || !is_each_or_index(name) || !bp || PM_NODE_TYPE(bp) != PM_BLOCK_PARAMETERS_NODE) return 0;
+  int indexed = is_with_index_alias(name);   /* (each_with_index: the index is the second parameter) */
   const pm_parameters_node_t *pa = ((const pm_block_parameters_node_t *)bp)->parameters;
   const pm_array_node_t *list = (const pm_array_node_t *)c->receiver;
-  if (!pa || pa->requireds.size != 1 || pa->optionals.size || pa->rest || pa->posts.size || pa->keywords.size ||
+  if (!pa || pa->requireds.size != (indexed ? 2 : 1) || pa->optionals.size || pa->rest || pa->posts.size || pa->keywords.size ||
       pa->keyword_rest || pa->block || !list->elements.size ||
       PM_NODE_TYPE(pa->requireds.nodes[0]) != PM_REQUIRED_PARAMETER_NODE ||
+      (indexed && PM_NODE_TYPE(pa->requireds.nodes[1]) != PM_REQUIRED_PARAMETER_NODE) ||
       (want && ((const pm_required_parameter_node_t *)pa->requireds.nodes[0])->name != want)) return 0;
   *got = ((const pm_required_parameter_node_t *)pa->requireds.nodes[0])->name;
   for (size_t i = 0; i < list->elements.size; i++)

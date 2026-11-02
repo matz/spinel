@@ -163,3 +163,17 @@ NestHost.class_eval { NestOther.class_eval { class_variable_set(:@@o, 2) } }
 NestHost.class_eval { NestOther.class_eval { self.class_variable_set(:@@q, 3) } }
 p NestHost.class_variable_defined?(:@@o), NestHost.class_variable_defined?(:@@q)
 p NestOther.class_variable_defined?(:@@o), NestOther.class_variable_defined?(:@@q)
+
+# a String name, and a name that is no class variable's, given to the
+# reflection on the implicit self of a class body
+class Refl
+  class_variable_set("@@s", 5)
+  def self.s = @@s
+  begin
+    class_variable_set(:"@@x-y", 1)
+  rescue NameError => e
+    p e.message, e.name
+  end
+  p class_variable_get("@@s"), class_variable_defined?("@@s")
+end
+p Refl.s, Refl.class_variables

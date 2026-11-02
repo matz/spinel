@@ -4253,8 +4253,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     }
     /* class-variable reflection with a literal @@name on a constant class
        receiver: resolve to the cvar's C global (#2694). */
-    if ((sp_streq(name, "class_variable_get") || sp_streq(name, "class_variable_set") ||
-         sp_streq(name, "class_variable_defined?")) && argc >= 1) {
+    if (is_cvar_reflection_name(name) && argc >= 1) {
       NodeKind aty2_k = nt_kind(nt, argv[0]);
       const char *cvn = (aty2_k == NK_SymbolNode) ? nt_str(nt, argv[0], "value")
                       : (aty2_k == NK_StringNode) ? nt_str(nt, argv[0], "content") : NULL;
@@ -4265,17 +4264,20 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a name written out that is no class variable name (`:"@@x-y"`,
          `:x`): CRuby's NameError when the call runs, its receiver the class
          and its name the text, valued as the call's dead tail (the name's C
-         identifier would not even compile) */
+         identifier would not even compile), the value argument evaluated
+         first */
       if (cvn && ccid >= 0 && !cvar_name_ok(cvn)) {
         char msg[400]; snprintf(msg, sizeof msg, "'%s' is not allowed as a class variable name", cvn);
+        buf_puts(b, "(");
+        for (int a = 1; a < argc; a++) { buf_puts(b, "(void)("); emit_expr(c, argv[a], b); buf_puts(b, "), "); }
         buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), sp_exc_stage_name(", ccid);
         emit_str_literal(b, cvn);
         buf_puts(b, "), ");
         emit_str_literal(b, msg);
-        buf_printf(b, ")), %s)", raise_tail_value(repr_of(c, id).as_ty));
+        buf_printf(b, ")), %s))", raise_tail_value(repr_of(c, id).as_ty));
         return 1;
       }
-      if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid >= 0) {
+      if (cvn && ccid >= 0) {
         ccid = comp_cvar_owner(c, ccid, cvn);
         int cvi = comp_cvar_index(&c->classes[ccid], cvn);
         char ref[300]; snprintf(ref, sizeof ref, "cvar_%s_%s", c->classes[ccid].name, cvn + 2);

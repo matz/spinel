@@ -9727,7 +9727,8 @@ int infer_cvar_types(Compiler *c, int nil_only) {
      the fly, and the codegen store needs a registered global to hit (#2719).
      One with another receiver or a name not written out may declare any
      variable (Compiler.cvar_set_unplaced), asked again each round, since a
-     desugar may give a bare one its class's constant in a later round. */
+     desugar may give a bare one its class's constant in a later round. One
+     whose literal name is no class variable's raises and declares nothing. */
   c->cvar_set_unplaced = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");

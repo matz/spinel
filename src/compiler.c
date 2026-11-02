@@ -1348,6 +1348,7 @@ int comp_cvar_intern(ClassInfo *ci, const char *name) {
     ci->cvar_str_shared = realloc(ci->cvar_str_shared, (size_t)ci->ccvars);
     { ci->cvar_elems_shared = realloc(ci->cvar_elems_shared, (size_t)ci->ccvars); comp_touch_class(ci->idx); }
   }
+  comp_table_gen++;
   ci->cvars[ci->ncvars] = strdup(name);
   ((TyKind *)ci->cvar_types)[ci->ncvars] = TY_UNKNOWN;
   comp_touch_class(ci->idx);    /* a new cvar is a change of the table */
@@ -2609,7 +2610,7 @@ void comp_def_asked_add(Compiler *c, const char *name) {
   if (name) name_add(&c->def_asked, &c->ndef_asked, &c->cdef_asked, name);
 }
 unsigned comp_instantiated_gen = 0;
-unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table grows (poly-candidate memo stamp) */
+unsigned comp_table_gen = 0;   /* bumped when a reader, writer or alias table grows or a class-variable table changes (poly-candidate memo stamp) */
 void comp_add_reader(ClassInfo *ci, const char *name) {
   comp_table_gen++;
   name_add_ix(&ci->readers, &ci->nreaders, &ci->creaders, &ci->readers_ix, name);

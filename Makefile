@@ -4726,6 +4726,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  $(SPINEL) $$flags test/ivar_table_with_subclasses.rb -c --no-line-map -o "$$tmp/its.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_with_subclasses: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_(Grid|Scaled|Deep)_s \{/,/^\}/' "$$tmp/its.c" | grep -c 'sp_PtrArray \* iv_t;')" = 3 ] || { echo "infer-test: FAIL (an ivar table stayed boxed because its class has subclasses)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_(Counts|Labeled|Shared|Exposed|Store|OpenStore)_s \{/,/^\}/' "$$tmp/its.c" | grep -c 'sp_PolyArray \* iv_t;')" = 6 ] || { echo "infer-test: FAIL (a subclass's other rows, reader or writer narrowed its ancestor's ivar table)"; ok=0; }; \
+	  $(SPINEL) $$flags test/ivar_table_element_pick_receiver.rb -c --no-line-map -o "$$tmp/iep.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_table_element_pick_receiver: -c)"; ok=0; }; \
+	  [ "$$(awk '/^struct sp_(Reader|Scan)_s \{/,/^\}/' "$$tmp/iep.c" | grep -c 'sp_PtrArray \* iv_items;')" = 2 ] || { echo "infer-test: FAIL (a call on t.first or t.last of a narrowing table boxed every ivar table its name's readers hand out)"; ok=0; }; \
 	  $(SPINEL) $$flags test/poly_operator_param_held_classes.rb -c --no-line-map -o "$$tmp/pph.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_operator_param_held_classes: -c)"; ok=0; }; \
 	  $(SPINEL) $$flags packages/csv/test/csv_parse_struct_members_typed.rb -c --no-line-map -o "$$tmp/cps.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (csv_parse_struct_members_typed: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/cps.c" | grep -c 'sp_float iv_[xy];')" = 2 ] || { echo "infer-test: FAIL (a store in a method no call reaches typed every Struct's members, #10489)"; ok=0; }; \

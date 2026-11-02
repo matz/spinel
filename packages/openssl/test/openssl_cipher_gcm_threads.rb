@@ -30,8 +30,7 @@ def decrypt(ct, tag)
   d.key = KEY
   d.iv = IV
   d.auth_tag = tag
-  d.update(ct)
-  d.final
+  d.update(ct) + d.final
 end
 
 # Half the workers forge and half send genuine messages, so each is running

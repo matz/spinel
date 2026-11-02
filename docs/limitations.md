@@ -107,8 +107,11 @@ request per connection -- a second request inside one `Net::HTTP.start` block
 reconnects transparently, as CRuby does, rather than failing, but the
 connection is not reused: no keep-alive, no pipelining, no HTTP/2, no proxy,
 no cookie jar and no automatic redirect following (a 3xx comes back as the
-response it is, with its Location). Chunked transfer decoding and automatic
-gzip/deflate content decoding are there. Content decoding reads the whole body
+response it is, with its Location). A request block can consume the body with
+`response.read_body`, in bounded chunks for Content-Length, chunked and EOF
+framing over HTTP or HTTPS. Without a consumer block, `read_body` caches the body.
+Chunked transfer decoding and automatic gzip/deflate content decoding are there.
+Content decoding reads the whole body
 before inflating it with the bundled one-shot zlib codec; it is not streaming.
 The codec can reject incomplete streams or trailing bytes with `Zlib::DataError`
 where CRuby's streaming inflater returns a body. An explicit Accept-Encoding

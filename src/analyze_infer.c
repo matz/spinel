@@ -1581,6 +1581,8 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
       int an = 0;
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (is_store && an < 2) continue;
+      /* `@t[a..b] = v` splices v's elements in: what it stores is no row */
+      if (is_store && an == 2 && (nt_kind(nt, av[0]) == NK_RangeNode || comp_ntype(c, av[0]) == TY_RANGE)) return 0;
       for (int a = is_store || is_insert ? 1 : 0; a < an; a++) {
         NodeKind ak = nt_kind(nt, av[a]);
         if (ak == NK_SplatNode) return 0;

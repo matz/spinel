@@ -75,3 +75,11 @@ puts shown[0]
 p shown[0]
 puts "#{shown[0]}"
 p shown
+class Line < Time
+  def to_s
+    "stamp\n"
+  end
+end
+lines = [Line.at(0), "x"]
+puts lines[0]
+puts "end"

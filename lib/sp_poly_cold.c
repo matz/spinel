@@ -335,7 +335,7 @@ void sp_poly_puts(sp_RbVal v)
         case SP_BUILTIN_STR_RANGE: puts(sp_srange_to_s(SP_SRANGE_OF(v.v.p))); break;
         /* a Time subclass instance, boxed as its Time, shows through its
            class's to_s (an override of its own included) */
-        case SP_BUILTIN_TIME: puts(sp_poly_time_display(v, 0)); break;
+        case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0)); break;
         case SP_BUILTIN_STRBUF: sp_puts_str_line(sp_String_cstr((sp_String *)v.v.p)); break;
         case SP_BUILTIN_COMPLEX: puts(sp_complex_to_s(*(sp_Complex *)v.v.p)); break;
         case SP_BUILTIN_RATIONAL: puts(sp_rational_to_s(*(sp_Rational *)v.v.p)); break;

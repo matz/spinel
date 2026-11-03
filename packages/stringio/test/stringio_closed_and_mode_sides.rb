@@ -18,6 +18,7 @@ def closed_io = StringIO.new(+"ab\ncd").tap(&:close)
 puts "-- closed: writers"
 t(:putc_s) { closed_io.putc("x") }
 t(:putc_i) { closed_io.putc(66) }
+t(:putc_empty) { closed_io.putc("") }
 t(:write) { closed_io.write("y") }
 t(:write_empty) { closed_io.write("") }
 t(:shl) { (closed_io << "z").class }
@@ -58,6 +59,9 @@ r = StringIO.new(+"ab", "r")
 t(:r_read) { r.read }
 t(:r_write) { r.write("x") }
 t(:r_putc) { r.putc(65) }
+t(:r_putc_empty) { r.putc("") }
+t(:frozen_putc_empty) { StringIO.new("ab".freeze).putc("") }
+t(:putc_empty_ok) { s = StringIO.new(+"ab"); s.putc(""); s.string }
 t(:r_closed_p) { r.closed? }
 t(:rb_write) { StringIO.new(+"ab", "rb").write("x") }
 w = StringIO.new(+"ab", "w")

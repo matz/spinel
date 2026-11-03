@@ -207,6 +207,7 @@ sp_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
 const char *sp_StringIO_putc_s(sp_StringIO *s, const char *str) {SP_GC_ROOT(s);SP_GC_ROOT_STR(str);
   int64_t l = str ? (int64_t)sp_str_byte_len(str) : 0;
   if (l > 0) sio_write(s, str, sio_char_len(str, l, sp_str_is_binary(str)));
+  else sio_check_write(s);   /* putc("") writes nothing, but asks first */
   return str; }
 sp_int sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }
 sp_int sp_StringIO_zero(sp_StringIO *s) { (void)s; return 0; }

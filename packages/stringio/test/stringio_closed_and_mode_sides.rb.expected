@@ -1,6 +1,7 @@
 -- closed: writers
 [:putc_s, IOError, "not opened for writing"]
 [:putc_i, IOError, "not opened for writing"]
+[:putc_empty, IOError, "not opened for writing"]
 [:write, IOError, "not opened for writing"]
 [:write_empty, IOError, "not opened for writing"]
 [:shl, IOError, "not opened for writing"]
@@ -37,6 +38,9 @@
 [:r_read, :ok, "ab"]
 [:r_write, IOError, "not opened for writing"]
 [:r_putc, IOError, "not opened for writing"]
+[:r_putc_empty, IOError, "not opened for writing"]
+[:frozen_putc_empty, IOError, "not opened for writing"]
+[:putc_empty_ok, :ok, "ab"]
 [:r_closed_p, :ok, false]
 [:rb_write, IOError, "not opened for writing"]
 [:w_write, :ok, 2]

@@ -9765,13 +9765,15 @@ void emit_poly_arm_args(Compiler *c, Scope *m, Scope *ms, const ArgLayout *L,
      expression, and C runs a call's arguments in no set order: the second
      one's allocation collected the first. Each such argument binds to a
      rooted local ahead of the call instead, as a default reading an earlier
-     parameter already has them do. */
+     parameter already has them do. A boxed value's conversion to the
+     parameter's kind (sp_poly_as_str_poly_hash) may build a new object that
+     nothing roots, and counts as one of them. */
   Buf *pav = NULL; int nfresh = 0, nrun = 0;
   if (!pd_arm && ms->nparams > 1) {
     pav = calloc((size_t)ms->nparams, sizeof *pav);
     for (int a = 0; pav && a < ms->nparams; a++) {
       emit_poly_arm_param(c, ms, a, L, A, ct, selfd, a < last_read, &pav[a]);
-      if (pav[a].p && strstr(pav[a].p, "SP_GC_ROOT(")) nfresh++;
+      if (pav[a].p && (strstr(pav[a].p, "SP_GC_ROOT(") || strstr(pav[a].p, "sp_poly_as_"))) nfresh++;
       else if (pav[a].p && strstr(pav[a].p, "_new(")) nrun++;
     }
   }
@@ -9782,8 +9784,12 @@ void emit_poly_arm_args(Compiler *c, Scope *m, Scope *ms, const ArgLayout *L,
     else emit_poly_arm_param(c, ms, a, L, A, ct, selfd, a < last_read, &pa);
     /* A rest's slice is bound so as well when it is the only one: the
        callee need not root it before it allocates (a method capturing its
-       rest allocates the cell first), as emit_rest_held holds it. */
-    if (!pd_arm && pa.p && strstr(pa.p, "SP_GC_ROOT(") && (nfresh > 1 || nrun || a == ms->rest_idx)) {
+       rest allocates the cell first), as emit_rest_held holds it. A Hash a
+       converter rebuilt (sp_StrIntHash_from_poly_hash) is always bound:
+       nothing roots it once the converter returns. */
+    if (!pd_arm && pa.p && (strstr(pa.p, "_from_poly_hash(") ||
+                            ((strstr(pa.p, "SP_GC_ROOT(") || strstr(pa.p, "sp_poly_as_")) &&
+                             (nfresh > 1 || nrun || a == ms->rest_idx)))) {
       const char *pnm = ms->pnames ? ms->pnames[a] : NULL;
       LocalVar *pv = pnm ? scope_local(ms, pnm) : NULL;
       TyKind pt = pv ? pv->type : TY_POLY;

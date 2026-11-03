@@ -1069,6 +1069,26 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
 static int ct_after_point(Compiler *c, int id) {
   return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
+/* The method call id meets as cls's `name` (singleton when sg) wherever
+   it runs: the one version of the name on cls's chain over the statements
+   id may run in (elab_call_window, elab_method_span), a def that ran there
+   for sure, as cls's copy of it when a mixin brought it (ct_def_version);
+   -1 where the record cannot prove one -- no version yet at some point of
+   the window (a def or the include that brings it comes later), more than
+   one, or one that may not have run (under a condition, or after a
+   statement that may raise in a begin body with rescue clauses:
+   elab_point_partial) */
+static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg) {
+  ElabWindow w;
+  const LrDef *ds[2];
+  if (elab_call_window(c, id, &w) != ELAB_YES) return -1;
+  if (ct_after_point(c, id)) elab_window_open(c, &w);
+  int n = elab_method_span(c, cls, name, sg, &w, ds, 2);
+  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
+      elab_point_partial(c, ds[0]->node)) return -1;
+  int dc = -1;
+  return ct_def_version(c, cls, name, sg, ds[0], &dc);
+}
 /* Does node id make the implied call `name` on operand op (a node, or an
    NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
    the rows the load record reads */
@@ -1081,29 +1101,15 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
 }
 /* The method the implied call `name` node id makes on operand op (a row:
    a multiple assignment's to_ary of its value, ct_implied_row) runs on an
-   instance of cls: the one version of `name` on cls's chain over the
-   statements id may run in (elab_call_window, elab_method_span), a def
-   that ran there for sure, as cls's copy of it when a mixin brought it
-   (ct_def_version); -1 where no row makes the call, or the record cannot
-   prove one -- no version yet at some point of the window (a def or the
-   include that brings it comes later), more than one, or one that may
-   not have run (under a condition, or after a statement that may raise
-   in a begin body with rescue clauses: elab_point_partial). The call is
-   lowered as a call of `name`, which binds through the method table:
-   where an undef of the name on cls's chain leaves the table without it
-   (comp_is_undeffed_in_chain), that call is not the version proved, and
-   there is no answer either. */
+   instance of cls: the version the call meets there (ct_window_version);
+   -1 where no row makes the call, or the record cannot prove one. The
+   call is lowered as a call of `name`, which binds through the method
+   table: where an undef of the name on cls's chain leaves the table
+   without it (comp_is_undeffed_in_chain), that call is not the version
+   proved, and there is no answer either. */
 static int ct_implied_version_at(Compiler *c, int id, const char *name, int op, int cls) {
-  ElabWindow w;
-  const LrDef *ds[2];
-  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name) ||
-      elab_call_window(c, id, &w) != ELAB_YES) return -1;
-  if (ct_after_point(c, id)) elab_window_open(c, &w);
-  int n = elab_method_span(c, cls, name, 0, &w, ds, 2);
-  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
-      elab_point_partial(c, ds[0]->node)) return -1;
-  int dc = -1;
-  return ct_def_version(c, cls, name, 0, ds[0], &dc);
+  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name)) return -1;
+  return ct_window_version(c, id, cls, name, 0);
 }
 /* ...asked in the record's frame for the call plan (elab_plan_enter), as
    ct_version asks: the passes that ask it append nodes between the asks */
@@ -1508,8 +1514,12 @@ int cplan_entry_finds(const Compiler *c, int e) {
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
 }
-/* See call_plan.h. */
-int cplan_user_new(Compiler *c, int id, int ci) {
+/* The program's `new` a call reaches on record class ci (cplan_user_new),
+   and in *unplaced whether the record can tell neither that version nor
+   the builtin constructor there: a def call_target finds that is proven
+   made neither at the call nor over its window, nor proven absent there.
+   Such a call takes no guess; it is refused (CRF_RECORD_NEW). */
+static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   /* (`S[x]`, which desugar_struct_index_ctor gives new's name, is the
      class's own `[]`: a program's `new` is not what it calls) */
   const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
@@ -1517,10 +1527,35 @@ int cplan_user_new(Compiler *c, int id, int ci) {
   if (!c->classes[ci].is_struct) return comp_cmethod_in_chain(c, ci, "new", NULL);   /* (index_ctor marks a record's only) */
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
-  int framed = elab_plan_enter(c, id);
-  int made = elab_call_method(c, id, ci, nm, 1) == ELAB_YES;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1), absent = at == ELAB_NO;
+  /* (a call in a method or a block: the def in force over its window, or
+     none over all of it) */
+  int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1) == t;
+  ElabWindow w;
+  const LrDef *ds[2];
+  if (!made && !absent && elab_call_window(c, id, &w) == ELAB_YES)
+    absent = elab_method_span(c, ci, nm, 1, &w, ds, 2) == 1 && !ds[0];
   if (framed) elab_plan_leave(c);
+  if (unplaced) *unplaced = !made && !absent;
   return made ? t : -1;
+}
+/* See call_plan.h. */
+int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+/* Is call id a `new` (or a record class's `[]`) on a record class whose
+   target the record cannot place (user_new_at)? The class is the
+   receiver's constant, or self's in a class method (the copy's class for
+   an inherited one). */
+static int cplan_record_new_gap(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver"), ci = -1, unplaced = 0;
+  if (!is_new_name(nt_str(nt, id, "name"))) return 0;
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, id);
+    ci = s && s->is_cmethod ? s->class_id : -1;
+  }
+  else if (nt_kind_is_constant(nt_kind(nt, recv))) ci = class_recv_static_ci(c, recv);
+  if (ci >= 0 && c->classes[ci].is_struct) user_new_at(c, id, ci, &unplaced);
+  return unplaced;
 }
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
@@ -3401,6 +3436,12 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_TOP_SELF, CR_FEATURE,
                      "a top-level method's self is not modelled: this call finds main's singleton method when the "
                      "method runs on main and Object's when it runs on another object", buf, cap);
+    return;
+  }
+  if (!what && cplan_record_new_gap(c, id)) {
+    cplan_refuse_set(p, CRF_RECORD_NEW, CR_FEATURE,
+                     "a Struct or Data class's `new` or `[]` the program defines, called where the record "
+                     "cannot tell whether that def has run: CRuby runs it once it has, the builtin before", buf, cap);
     return;
   }
   if (!what && cplan_capture_gap(c, id)) {

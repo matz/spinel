@@ -4788,6 +4788,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
          version, and its else arm none, the builtin): bare `new` calls that
          method, whose value the analysis types (#5405). The sibling class
          method call below reaches it. */
+      if (is_new_name(name) && c->classes[new_cls].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
       int user_new = is_new_name(name) ? cplan_user_new(c, id, new_cls) : -1;
       if (user_new >= 0 && (&c->scopes[user_new] == encl ||
                             !scope_has_callable_symbol(c, user_new))) user_new = -1;

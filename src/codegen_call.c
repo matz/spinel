@@ -14918,6 +14918,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                              comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
     /* native (C-backed) class: the declared constructor (see emit_native_ctor) */
     if (!reopen_builtin_new && emit_native_ctor(c, id, ci, argc, argv, b)) { *out = 1; return 1; }
+    if (ci >= 0 && c->classes[ci].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
     if (ci >= 0 && c->classes[ci].is_struct && cplan_user_new(c, id, ci) < 0) { *out = emit_struct_new_call(c, id, ci, argc, argv, b); return 1; }
     if (ci >= 0 && !reopen_builtin_new) {
       /* user exception subclass: use the generated constructor */

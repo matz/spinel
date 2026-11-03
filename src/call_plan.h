@@ -49,7 +49,8 @@ typedef enum {
   CRF_IO_REOPEN,   /* an IO reopening that yields (emit_io_reopen_call) */
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
-  CRF_CAPTURE      /* a record class's class method captured where its def may not have run (emit_call_method_obj_arms) */
+  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run (emit_call_method_obj_arms) */
+  CRF_RECORD_NEW   /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
 } CplanRefuseFrom;
 
 typedef struct {
@@ -754,7 +755,8 @@ int cplan_entry_finds(const Compiler *c, int e);
    none: for an arm of a version entry, its pin (call_target); for a
    Struct or Data class, the one call_target finds where the
    call runs (its version entry, or the def where the record proves it made
-   there), its builtin constructor answering a call before the def and one
+   there, or made over all the statements a call in a method or a block may
+   run in), its builtin constructor answering a call before the def and one
    the record cannot place (as the constructor answered every call
    before); for any other class the tables', which also decide whether the
    class builds its own constructor. */

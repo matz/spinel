@@ -405,6 +405,16 @@ int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, L
    has no point there (a file the load graph does not place). */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
+/* ...and whether node id is in a block the record takes to run at once
+   (ELAB_BLK_ASSUMED) whose typed call target keeps it (Call node
+   `blk_kept`), with no def or lambda between: node id may then run any
+   time after its point, and elab_window_open widens w to its region's end. */
+int elab_in_kept_block(Compiler *c, int id);
+/* ...and whether node id is in a block the record answers later
+   (elab_block_runs: a lazy chain's) or in an END body: it may run any time
+   after its point too */
+int elab_runs_later(Compiler *c, int id);
+void elab_window_open(Compiler *c, ElabWindow *w);
 /* the versions of cls's method `name` (singleton when sg) a call running
    over window w can reach, each once, into out[0..cap) (NULL: none): the
    one live over each stretch of w between changes of the name on cls's

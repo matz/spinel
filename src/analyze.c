@@ -2575,6 +2575,28 @@ int a_proc_create_or_lifted(Compiler *c, int id) {
          a_is_fiber_or_gen_create(c, id) || is_handler_proc_block(c, id);
 }
 
+/* The blocks the load record takes to run at once (ELAB_BLK_ASSUMED: an
+   iterator's name, class_eval and kin) whose typed call target makes them
+   a proc that may outlive the call, as the capture marking reads it
+   (mark_proc_captures): `blk_kept` on the call, so that the call plan
+   answers a call in one for any time after its point
+   (elab_in_kept_block). Marked in the fixpoint as the targets settle; a
+   block once kept stays so. Changed when it marked one. */
+int an_mark_kept_blocks(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int ch = 0;
+  if (!c->lrec) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_int(nt, id, "blk_kept", 0) || elab_block_runs(c, id) != ELAB_BLK_ASSUMED ||
+        !(a_proc_create_or_lifted(c, id) || a_block_forwarded_to_proc(c, id))) continue;
+    nt_node_set_int(nt, id, "blk_kept", 1);
+    ch = 1;
+  }
+  if (ch) ver_memo_drop(c);   /* (the versions kept before are asked again) */
+  return ch;
+}
+
 /* Does the subtree rooted at `root` contain node `id`? Bounded recursion over
    every ref/arr field. */
 static int a_subtree_contains(const NodeTable *nt, int root, int id, int depth) {
@@ -49872,6 +49894,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_method_call_runtime_name", desugar_method_call_runtime_name(c)); /* method(var).call(a) -> send(var, a) */
     ch |= AN_PASS("desugar_dynamic_send", desugar_dynamic_send(c));             /* recv.send(var, a) -> static name dispatch */
     ch |= AN_PASS("desugar_dynamic_method", desugar_dynamic_method(c));
+    ch |= AN_PASS("mark_kept_blocks", an_mark_kept_blocks(c));               /* an iterator's block its target keeps */
     ch |= AN_PASS("ver_entries_demand", ver_entries_demand(c));               /* a deferred history a call names now */
     ch |= AN_PASS("desugar_dynamic_respond_to", desugar_dynamic_respond_to(c));       /* recv.respond_to?(var) -> static name dispatch */
     ch |= AN_PASS("desugar_toplevel_instance_exec", desugar_toplevel_instance_exec(c));   /* top-level instance_exec(&b) -> b.call */

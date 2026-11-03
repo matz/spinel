@@ -1035,6 +1035,12 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
   *first_def = def;
   return n;
 }
+/* Does call id run any time after its point: in a block the record
+   answers later or an END body (elab_runs_later), or in a block it takes
+   to run at once that its call's typed target keeps (an_mark_kept_blocks)? */
+static int ct_after_point(Compiler *c, int id) {
+  return elab_runs_later(c, id) || elab_in_kept_block(c, id);
+}
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
 static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {
@@ -1116,10 +1122,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabWindow w;
-  int at = p.region >= 0 ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
+  int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
+  int at = p.region >= 0 && !kept ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
   if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
   else if (elab_call_window(c, id, &w) == ELAB_YES) {
+    if (kept) elab_window_open(c, &w);
     n = elab_method_span(c, rcls, name, sg, &w, ds, VER_MAX_ARMS);
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);
@@ -1140,7 +1148,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     dc = rcls;
   }
   else if (vi < 0) n = 0;
-  if (vi < 0 && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
+  if (vi < 0 && !kept && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
   if (span) *span = n;
   /* only a version that is a function of its own: a replaced one
@@ -1309,8 +1317,13 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   }
   /* a call the record proves runs before any version of a class method or
      a top-level function is defined raises, whatever versions follow; the
-     entry's else arm answers only a call that may run before them */
+     entry's else arm answers only a call that may run before them. One at
+     a point that may run any time after it (ct_after_point) takes the
+     entry, whose cells tell at run time; with no entry, it raises too:
+     nothing proves it runs after a def */
   if (ct_undefined_at(c, id, cls, name, flags)) {
+    int vi = c->scopes[mi].versioned && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, def_class, NULL) : -1;
+    if (vi >= 0 && c->scopes[vi].entry) return vi;
     if (def_class) *def_class = dc0;
     return -1;
   }

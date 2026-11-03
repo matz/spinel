@@ -1086,6 +1086,7 @@ int a_block_is_lifted(Compiler *c, int id);
 /* 1 if scope `si` creates a proc whose `return` leaves it (codegen.c): the method needs a proc-return frame. */
 int scope_creates_returning_proc(Compiler *c, int si);
 int a_proc_create_or_lifted(Compiler *c, int id);
+int an_mark_kept_blocks(Compiler *c);
 void mark_proc_captures(Compiler *c);
 void bigint_scan_body(const NodeTable *nt, int id, char ***names, int *n, int *cap);
 void detect_bigint_loop_vars(Compiler *c);

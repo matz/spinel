@@ -3964,6 +3964,40 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   return ELAB_YES;
 }
 
+int elab_in_kept_block(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  for (int a = id; a >= 0 && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
+    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && nt_int(nt, par[a], "blk_kept", 0) &&
+        elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) return 1;
+  }
+  return 0;
+}
+/* Does node id run later than its point, at a time the syntax does not
+   tell: in a block whose call the record answers ELAB_BLK_LATER for (a
+   lazy chain's, placed at its call's point), or in an END body (placed at
+   its statement), with no def or lambda between (a body of its own: its
+   window is the def's)? It may then run any time after its point. */
+int elab_runs_later(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k == NK_PostExecutionNode ||
+        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_LATER)) return 1;
+  }
+  return 0;
+}
+void elab_window_open(Compiler *c, ElabWindow *w) {
+  LoadRecord *r = elab_fresh(c);
+  lr_run_points(c);
+  w->to = (LoadPoint){ w->from.region, r->rend[w->from.region] };
+  w->closed = 0;
+}
+
 /* The owners whose histories can be in cls's ancestry: its superclass chain
    and the modules mixed into any of those, a module's own mixins too (at any
    time, so a superset of lr_in_ancestry's). -1 when that is not known: a

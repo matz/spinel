@@ -1926,8 +1926,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
                  .cbody = w.cbody, .direct = w.direct, .hdr = w.hdr,
                  .bclass1 = builder_class + 1 };
   int bblk = ty_k == NK_CallNode && w.bclass1 ? nt_ref(c->nt, id, "block") : -1;   /* the builder's block */
-  if ((ty_k == NK_ClassNode || ty_k == NK_ModuleNode) && elab_header_class(c, id, NULL, NULL) >= 0)
-    cw.hdr = elab_header_class(c, id, NULL, NULL);
+  int hc = ty_k == NK_ClassNode || ty_k == NK_ModuleNode ? elab_header_class(c, id, NULL, NULL) : -1;
+  if (hc >= 0) cw.hdr = hc;
   if (child_class >= 0) cw.cbody = child_class;
   /* a header opens a constant scope, unless it is a block rewritten to one */
   cw.cblock = ty_k == NK_ClassNode || ty_k == NK_ModuleNode ? nt_int(c->nt, id, "block_made_body", 0) != 0 : w.cblock;

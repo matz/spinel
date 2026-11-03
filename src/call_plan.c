@@ -1420,7 +1420,8 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
-                   builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
+                   builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
+                   !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
 /* See call_plan.h. */
 int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot, size_t cap) {
@@ -1506,7 +1507,16 @@ int cplan_entry_finds(const Compiler *c, int e) {
 }
 /* See call_plan.h. */
 int cplan_user_new(Compiler *c, int id, int ci) {
-  return c->classes[ci].is_struct ? -1 : comp_cmethod_in_chain(c, ci, "new", NULL);
+  /* (`S[x]`, which desugar_struct_index_ctor gives new's name, is the
+     class's own `[]`: a program's `new` is not what it calls) */
+  const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
+  if (!c->classes[ci].is_struct) return comp_cmethod_in_chain(c, ci, "new", NULL);   /* (index_ctor marks a record's only) */
+  int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
+  if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
+  int framed = elab_plan_enter(c, id);
+  int made = elab_call_method(c, id, ci, nm, 1) == ELAB_YES;
+  if (framed) elab_plan_leave(c);
+  return made ? t : -1;
 }
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
@@ -1806,10 +1816,11 @@ int cplan_self_class(Compiler *c, int id) {
   return ci;
 }
 /* Does a builtin answer `name` on program class ci (main for -1): one on
-   any self, a core class's own? */
+   any self, a core class's own, a record class's own
+   (elab_record_cmethod)? */
 static int cm_builtin_answers(Compiler *c, int ci, const char *name) {
   const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
-  return builtin_self_method_known(name, cm_self_kind(c, ci)) ||
+  return builtin_self_method_known(name, cm_self_kind(c, ci)) || (ci >= 0 && elab_record_cmethod(c, ci, name)) ||
          (cn && builtin_class_id(cn) && (builtin_cmethod_known(cn, name) || builtin_super_cmethod_known(cn, name)));
 }
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
@@ -4906,7 +4917,8 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    VK_SUPER the method super reaches; VK_IVAR an inherited reader's
    instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
    inspect through super(); VK_BUILTIN the builtin a class answers on itself
-   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   (bop_class_answers, or a record class's own: elab_record_cmethod),
+   called on self; VK_NOMETHOD NoMethodError; VK_KEEP
    no entry, where none of these is CRuby's answer: the history keeps the
    handling it had (its last version taken as run); a version entry's
    else arm the same, VK_KEEP its last version (ver_entry_make) */
@@ -5180,7 +5192,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     return sc >= 0 && sv == vis ? VK_SUPER : VK_KEEP;
   }
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
-  if (sg && cls >= 0 && bop_class_answers(name, ar, blk)) return VK_BUILTIN;
+  if (sg && cls >= 0 && ar >= 0 && (bop_class_answers(name, ar, blk) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
   if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);

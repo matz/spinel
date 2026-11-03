@@ -8772,16 +8772,19 @@ int desugar_enum_for_with_args_at(Compiler *c, LowerCtx *lc, int id) {
    so every inherited Enumerable method (map/select/sum/min/include?/...)
    rides the __enum_to_a machinery synthesized right below. Unused copies
    prune by reachability. */
-/* `StructConst[a, b]` is Struct::[], an alias for StructConst.new(a, b). Rewrite
-   the `[]` call to `new` once the struct classes are registered so the whole
-   .new machinery (positional/keyword member fill, typing) serves it. */
+/* `StructConst[a, b]` is Struct::[], which builds as the builtin `new` does.
+   Rewrite the `[]` call to `new` once the struct classes are registered so the
+   whole .new machinery (positional/keyword member fill, typing) serves it. It
+   stays the class's own `[]` (index_ctor, the class plus one): CRuby's `[]`
+   never calls a `new` the program defines, and the call plan answers a
+   `def S.[]` for it. */
 static void desugar_struct_index_ctor(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "[]")) continue;
+    if (!is_aref_name(nm)) continue;
     if (nt_ref(nt, id, "block") >= 0) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) continue;
@@ -8793,6 +8796,7 @@ static void desugar_struct_index_ctor(Compiler *c) {
       ci = class_var_static_ci(c, recv);
     if (ci < 0 || !c->classes[ci].is_struct) continue;
     nt_node_set_str(nt, id, "name", "new");
+    nt_node_set_int(nt, id, "index_ctor", ci + 1);   /* (the class whose own `[]` it is: cplan_user_new, cr_collect_calls) */
   }
 }
 

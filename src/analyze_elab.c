@@ -2962,7 +2962,8 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
   int cside = h->a >= 0 && h->b;
   if (!lr_first_version(h) || r->refl_any || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside)) return 0;
-  return (cside && bop_class_answers(x->name, 0, 0)) || !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
+  return (cside && (bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name))) ||
+         !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
 }
 /* The late bit of every method history (LrHist.late), once for all of
    them, as of the entries recorded: a call of the name may run before the
@@ -2976,8 +2977,9 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
    builtin's method answers (Object's, or any builtin class's): such a
    call may reach the builtin's, which no entry calls; but a class's (or
    module's) own class-side history is, of a name the class answers on
-   itself as a reader, with no argument or block (bop_class_answers),
-   whose entry's else arm calls that builtin (VK_BUILTIN). The ask is of
+   itself as a reader, with no argument or block (bop_class_answers), or
+   of a record class's own builtin (elab_record_cmethod), whose entry's
+   else arm calls that builtin (VK_BUILTIN). The ask is of
    the name's shape, not one call's; each entry asks again at its own
    arity and keeps the table's answer where the builtin does not take it.
    Of a name of two or more histories, only the class-side ones are
@@ -5144,9 +5146,6 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg) {
     int k = lr_core(r, i ? CORE_BASIC_OBJECT : CORE_OBJECT);
     if (k >= 0 && k != cls) o = elab_method_at(c, k, name, 1, p, NULL);
   }
-  /* ...and a record class's own builtin class methods (`Foo.members`) */
-  for (int a = cls, i = 0; o == ELAB_NO && sg && a >= 0 && a < c->nclasses && i < 64; a = lr_super(c, a), i++)
-    if (lr_record_class(c, a) && is_record_class_cmethod(name, c->classes[a].is_data)) o = ELAB_YES;
   /* a method_missing may answer the call */
   if (o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
   if (o == ELAB_NO && (elab_runs_unseen(c) || lr_unordered_supply(c, cls < 0 ? LR_MAIN : cls, sg, name, p))) return ELAB_UNKNOWN;

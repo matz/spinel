@@ -1291,6 +1291,16 @@ int class_recv_static_ci(Compiler *c, int node) {
     return const_node_class_index(c, node);
   return class_var_static_ci(c, node);
 }
+/* See compiler.h. */
+int record_recv_class(Compiler *c, int node) {
+  int ci = -1;
+  if (nt_kind(c->nt, node) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, node);
+    if (s && s->is_cmethod) ci = s->class_id;
+  }
+  else ci = class_recv_static_ci(c, node);
+  return ci >= 0 && c->classes[ci].is_struct ? ci : -1;
+}
 
 /* A constant slot whose value may be a class known only at run time.
    A Class slot dispatches on that class, and a poly slot on its tag and

@@ -22269,10 +22269,12 @@ static int cb_program_defines(const NodeTable *nt, const char *nm, const char *c
 }
 
 /* Struct's and Data's own class methods, which a block they build answers
-   on self as Object's and Module's are (`members`) */
+   on self as Object's and Module's are (`members`): always on self, even
+   where the program defines one too, whose def the plan finds where the
+   call runs (call_target) */
 static int cb_struct_act(const NodeTable *nt, int s) {
   const char *nm = nt_kind(nt, s) == NK_CallNode && nt_ref(nt, s, "receiver") < 0 ? nt_str(nt, s, "name") : NULL;
-  return nm && (sp_streq(nm, "members") || sp_streq(nm, "keyword_init?"));
+  return is_record_block_self_cmethod(nm);
 }
 
 static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct, const char *cname) {
@@ -22298,7 +22300,7 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
      reopened builtin class (String, Array), which answers them for the
      program's own methods alone: they are refused rather than answered
      without the builtin's methods. */
-  else if ((cb_self_act(nt, node) || (strct && cb_struct_act(nt, node))) && !cb_program_defines(nt, cm, cname) &&
+  else if (((strct && cb_struct_act(nt, node)) || (cb_self_act(nt, node) && !cb_program_defines(nt, cm, cname))) &&
            !(builtin && is_instance_method_table_read(cm))) {
     int self = fwd_new_node_like(nt, node, "SelfNode");
     if (self >= 0) {

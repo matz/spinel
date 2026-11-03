@@ -305,7 +305,9 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    (a version or mixin a pass made or copied, one of the builtin prelude or
    of a package CRuby loads at boot, code the record cannot follow run on
    the chain before the call, a load it could not resolve). For the Class
-   reopening's class side, its instance side is searched too. */
+   reopening's class side, its instance side is searched too. Only the
+   program's methods: a builtin one that answers (a record class's own,
+   elab_record_cmethod) is the caller's to ask. */
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <

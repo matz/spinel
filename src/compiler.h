@@ -2121,6 +2121,10 @@ int cls_user_display_mi(Compiler *c, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class */
+/* The Struct or Data class a class method call's receiver names at compile
+   time: as class_recv_static_ci reads it, or `self` in a class method of
+   the class (a version entry's else arm); -1 for none */
+int        record_recv_class(Compiler *c, int node);
 int        const_class_value_only(Compiler *c, int node); /* constant slot that may hold a class known only at run time */
 int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */

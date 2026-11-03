@@ -8431,20 +8431,12 @@ static int infer_constant_query_call(Compiler *c, int id, const NodeTable *nt, c
   /* <StructClass>.members at the class level: symbol array, where the
      call reaches no program `members` (call_target) */
   if (recv >= 0 && sp_streq(name, "members") && argc == 0) {
-    int mci = -1;
-    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
-      mci = comp_class_index(c, cn);
-    else if (rk == NK_LocalVariableReadNode || (rk == NK_CallNode && class_def_is_record_call(nt, recv)))
-      mci = class_var_static_ci(c, recv);
-    if (mci >= 0 && c->classes[mci].is_struct && call_target(c, id, mci, name, CT_CMETHOD, NULL) < 0) { *out = TY_POLY_ARRAY; return 1; }
+    int mci = record_recv_class(c, recv);
+    if (mci >= 0 && call_target(c, id, mci, name, CT_CMETHOD, NULL) < 0) { *out = TY_POLY_ARRAY; return 1; }
   }
   if (recv >= 0 && sp_streq(name, "keyword_init?") && argc == 0) {
-    int kci = -1;
-    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
-      kci = comp_class_index(c, cn);
-    else if (rk == NK_LocalVariableReadNode)
-      kci = class_var_static_ci(c, recv);
-    if (kci >= 0 && c->classes[kci].is_struct && call_target(c, id, kci, name, CT_CMETHOD, NULL) < 0) { *out = TY_POLY; return 1; }  /* nil/true/false */
+    int kci = record_recv_class(c, recv);
+    if (kci >= 0 && call_target(c, id, kci, name, CT_CMETHOD, NULL) < 0) { *out = TY_POLY; return 1; }  /* nil/true/false */
   }
   /* Integer.sqrt(Bignum) -> Bignum (#2420) */
   if (recv >= 0 && sp_streq(name, "sqrt") && argc == 1 &&

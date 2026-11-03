@@ -35,6 +35,11 @@ int is_record_class_cmethod(const char *n, int data) {
   return n && (sp_streq(n, "new") || sp_streq(n, "[]") || sp_streq(n, "members") || sp_streq(n, "inspect") ||
                (!data && sp_streq(n, "keyword_init?")));
 }
+/* ...of them, the ones a block Struct.new or Data.define runs answers on
+   self, as Object's and Module's are: members, keyword_init? */
+int is_record_block_self_cmethod(const char *n) {
+  return n && (sp_streq(n, "members") || sp_streq(n, "keyword_init?"));
+}
 
 /* Class.new: the builder of an anonymous class */
 int is_class_new(const char *recv, const char *meth) { return is_new_name(meth) && is_class_const_name(recv); }

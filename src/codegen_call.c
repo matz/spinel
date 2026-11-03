@@ -28626,6 +28626,9 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
      arguments run, as CRuby's lookup refuses it */
   int cvis = mi >= 0 ? bool_side_closed_vis(c, id, recv, mi) : SP_VIS_PUBLIC;
   if (cvis != SP_VIS_PUBLIC) {
+    /* (the side is still the plan's arm: it binds the method, which then
+       refuses the call) */
+    if (g_plan_check) ucall_observe(c, id, mi, c->scopes[mi].class_id, 1);
     const char *cn = c->classes[c->scopes[mi].class_id].name;
     int vac; const int *vav = call_args(c->nt, id, &vac);
     buf_printf(b, "(sp_exc_stage_recv(sp_box_bool(_t%d)), ", tb);

@@ -143,6 +143,10 @@ void ver_cells_write(Compiler *c);
    fact they read that changed */
 void ver_memo_drop(Compiler *c);
 int ver_entries_demand(Compiler *c);
+/* Is call id the builtin an entry's else arm runs on self (VK_BUILTIN)? It
+   renders the class by the builtin's own table, not by a class method the
+   program defines: that method is the one the entry has not reached */
+int cplan_pinned_builtin(const Compiler *c, int id);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its
    last version (the method a Method object of it captured before) */

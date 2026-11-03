@@ -5208,6 +5208,20 @@ void ver_cells_write(Compiler *c) {
       w[nw++] = (VerWrite){ par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].hist,
                             sk != NK_DefNode && sk != NK_AliasMethodNode && sk != NK_UndefNode, 0, -1 };
       if (vs[j].hist >= nh) nh = vs[j].hist + 1;
+      /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
+         method is there as soon as an arm (`name#__condN`) runs in its branch */
+      if (nt_int(nt, node, "cond_lone_disp", 0)) {
+        size_t bl = strlen(e->name);
+        NT_FOREACH_KIND(nt, NK_DefNode, d) {
+          const char *dn = nt_str(nt, d, "name");
+          if (!nt_int(nt, d, "cond_arm", 0) || !dn || strncmp(dn, e->name, bl) || strncmp(dn + bl, "#__cond", 7) || seen[d]) continue;
+          int ast = ver_write_stmt(nt, par, d);
+          if (ast < 0 || par[ast] < 0) continue;
+          seen[d] = 1;
+          if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          w[nw++] = (VerWrite){ par[ast], ast, d, vs[j].n, vs[j].hist, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
+        }
+      }
     }
   }
   free(seen); free(par);

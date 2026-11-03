@@ -31,3 +31,20 @@ begin
 rescue NoMethodError
   puts "never_made raises"
 end
+
+# Before a branch defines it, a call still reaches method_missing.
+class Box
+  def method_missing(name, *args)
+    "missing #{name}"
+  end
+end
+box = Box.new
+p box.greet
+if flag
+  class Box
+    def greet
+      "hi"
+    end
+  end
+end
+p box.greet

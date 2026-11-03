@@ -1941,8 +1941,14 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
        same place emit_string_slice_poly's one-arg sibling above reads it. */
     int ts = ++g_tmp, tn = ++g_tmp, th = ++g_tmp;
     char pat[32];
+    /* rooted right after the receiver is evaluated: the Regexp and
+       capture-index operands below can allocate (a non-literal Regexp or
+       a method-call capture index), and a non-variable receiver (a fresh
+       String nothing else holds, such as `(a + b).slice!(re, n)`) has
+       nothing else keeping it alive across that (CodeRabbit, #10838). */
     buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, recv, b);
-    buf_printf(b, "; if (_t%d) sp_str_check_mutable(_t%d);", ts, ts);
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d);", ts);
+    buf_printf(b, " if (_t%d) sp_str_check_mutable(_t%d);", ts, ts);
     if (re_lit_index(c, argv[0]) >= 0) snprintf(pat, sizeof pat, "sp_re_pat_%d", re_lit_index(c, argv[0]));
     else {
       int tp3 = ++g_tmp;

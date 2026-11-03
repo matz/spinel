@@ -22813,6 +22813,145 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
   return host;
 }
 
+/* ---- constants a builtin reopening's methods read ----------------------
+ *
+ *   LIM = 1
+ *   class Integer
+ *     LIM = 3
+ *     def dd = LIM
+ *   end
+ *   5.dd        # 3: the read is lexically in Integer's body
+ *
+ * The passes that follow move such a method out of its body: an Integer,
+ * Float or Comparable method becomes a top-level function
+ * (desugar_builtin_scalar_defs), a Proc, Rational or Regexp method goes to
+ * Object (desugar_builtin_reopen_methods), a Kernel method to the top level
+ * (desugar_kernel_reopen). The read then found the top-level LIM (1). So
+ * the read becomes the path `Integer::LIM` before the method moves, when
+ * the constant is certainly the builtin's by then: a statement of an earlier
+ * top-level body of the builtin, or of this body ahead of the statement
+ * that holds the def, writes it (a constant write, `Integer::LIM = v` or
+ * `self::LIM = v`, or a class or module header). A write under a condition
+ * or a rescue may not run, and one after the def may run after a call, so
+ * CRuby can still read the top-level constant there: such a read keeps its
+ * lexical lookup. */
+/* the constant a body statement writes for certain, or NULL */
+/* (or the path cn::X, self::X a body of cn writes: `Proc::X = v`,
+   `class Proc::Helper`) */
+static const char *brc_path_own(const NodeTable *nt, int path, const char *cn) {
+  if (path < 0) return NULL;
+  if (nt_kind(nt, path) == NK_ConstantReadNode) return nt_str(nt, path, "name");
+  if (nt_kind(nt, path) != NK_ConstantPathNode) return NULL;
+  int par = nt_ref(nt, path, "parent");
+  if (par < 0) return NULL;
+  NodeKind pk = nt_kind(nt, par);
+  if (pk == NK_SelfNode || (pk == NK_ConstantReadNode && nt_str(nt, par, "name") &&
+                            sp_streq(nt_str(nt, par, "name"), cn)))
+    return nt_str(nt, path, "name");
+  return NULL;
+}
+static const char *brc_stmt_writes(const NodeTable *nt, int st, const char *cn) {
+  NodeKind k = nt_kind(nt, st);
+  if (k == NK_ClassNode || k == NK_ModuleNode) return brc_path_own(nt, nt_ref(nt, st, "constant_path"), cn);
+  if (k == NK_ConstantWriteNode) return nt_str(nt, st, "name");
+  if (k == NK_ConstantPathWriteNode) {
+    int t = nt_ref(nt, st, "target");
+    return t >= 0 && nt_kind(nt, t) == NK_ConstantPathNode ? brc_path_own(nt, t, cn) : NULL;
+  }
+  return NULL;
+}
+typedef struct { const char **v; int n, cap; } BrcNames;
+static void brc_add(BrcNames *w, const char *nm) {
+  if (!nm) return;
+  for (int i = 0; i < w->n; i++) if (sp_streq(w->v[i], nm)) return;
+  if (w->n == w->cap) {
+    w->cap = w->cap ? w->cap * 2 : 16;
+    w->v = realloc(w->v, sizeof *w->v * (size_t)w->cap);
+    if (!w->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  w->v[w->n++] = nm;
+}
+static int brc_has(const BrcNames *w, const char *nm) {
+  for (int i = 0; i < w->n; i++) if (sp_streq(w->v[i], nm)) return 1;
+  return 0;
+}
+static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNames *w, int *changed) {
+  if (n < 0) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
+  if (k == NK_ConstantReadNode) {
+    const char *nm = nt_str(nt, n, "name");
+    if (!nm || sp_streq(nm, cn) || !brc_has(w, nm)) return;
+    int par = fwd_new_node_like(nt, n, "ConstantReadNode");
+    if (par < 0) return;
+    nt_node_set_str(nt, par, "name", cn);
+    nt_node_set_type(nt, n, "ConstantPathNode");
+    nt_node_set_ref(nt, n, "parent", par);
+    *changed = 1;
+    return;
+  }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) brc_rewrite_reads(nt, nt_ref_at(nt, n, i), cn, w, changed);
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int q = 0; q < m; q++) brc_rewrite_reads(nt, ids[q], cn, w, changed);
+  }
+}
+/* the methods a body statement defines, in it and the blocks and
+   conditions around them, not in a nested body */
+static void brc_body_defs(NodeTable *nt, int n, const char *cn, const BrcNames *w, int *changed) {
+  if (n < 0) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
+  if (k == NK_DefNode) { brc_rewrite_reads(nt, n, cn, w, changed); return; }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) brc_body_defs(nt, nt_ref_at(nt, n, i), cn, w, changed);
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int q = 0; q < m; q++) brc_body_defs(nt, ids[q], cn, w, changed);
+  }
+}
+/* the name a top-level statement opens a builtin's body by, or NULL */
+static const char *brc_builtin_header(const NodeTable *nt, int st) {
+  if (!class_def_opens_cref(nt, st)) return NULL;
+  int cp = nt_ref(nt, st, "constant_path");
+  const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
+  return cn && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) ? cn : NULL;
+}
+int desugar_builtin_reopen_const_reads(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  /* the top-level statements in load order, a file's own in its order */
+  int tn = 0, *tfile = NULL, *tb = prog_top_seq(c, &tn, &tfile);
+  for (int i = 0; i < tn; i++) {
+    const char *cn = brc_builtin_header(nt, tb[i]);
+    if (!cn) continue;
+    BrcNames w = { NULL, 0, 0 };
+    /* the constants earlier bodies of the builtin wrote */
+    for (int j = 0; j < i; j++) {
+      const char *hn = brc_builtin_header(nt, tb[j]);
+      if (!hn || !sp_streq(hn, cn)) continue;
+      int b = class_def_body(nt, tb[j]), bn = 0;
+      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+      for (int q = 0; q < bn; q++) brc_add(&w, brc_stmt_writes(nt, bs[q], cn));
+    }
+    int b = class_def_body(nt, tb[i]), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int q = 0; q < bn; q++) {
+      int st = bs[q];
+      brc_body_defs(nt, st, cn, &w, &changed);
+      brc_add(&w, brc_stmt_writes(nt, st, cn));
+      bs = nt_arr(nt, b, "body", &bn);   /* (nodes added: the list may move) */
+    }
+    free(w.v);
+  }
+  free(tb); free(tfile);
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_builtin_reopen_self_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

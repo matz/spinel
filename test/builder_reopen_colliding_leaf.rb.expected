@@ -1,0 +1,16 @@
+2
+1
+8
+7
+9
+false
+"Outer::Bar"
+"Other::Bar"
+"Third::Bar"
+false
+:m1
+:m2
+2
+true
+7
+"A::B::Err"

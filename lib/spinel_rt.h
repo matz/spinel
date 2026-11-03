@@ -3536,6 +3536,7 @@ static SP_INLINE sp_int sp_poly_to_i(sp_RbVal v) {
   return sp_poly_to_i_cold(v);
 }
 static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v);   /* the object arm, below */
+sp_int sp_obj_to_int_answer(int cls_id, sp_RbVal r);   /* a user #to_int's answer judged: sp_poly_cold.c */
 /* Does this Bignum fit the Integer slot? The width is sp_int's, not a
    64-bit constant: under -m32 sp_int is 32 bits, so a 40-bit value passed a
    `<= 63` test and was then silently cut by the cast -- the very shape of

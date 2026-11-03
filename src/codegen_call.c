@@ -9739,6 +9739,18 @@ static int poly_arm_last_read(Compiler *c, Scope *ms, const ArgLayout *L, const 
   return last;
 }
 
+static int poly_arm_default_allocates(Compiler *c, Scope *ms, int a,
+                                      const ArgLayout *L, const PolyArgs *A) {
+  if (!ms->pdefault || ms->pdefault[a] < 0) return 0;
+  ArgFrom from = L->from[a];
+  if (from == ARG_BY_NAME) {
+    const char *pn = ms->pnames ? ms->pnames[a] : NULL;
+    if (A->kw && A->kw->kwall < 0 && pn && kwh_lookup(c->nt, A->kw->kwh, pn) >= 0) return 0;
+  }
+  else if (from != ARG_DEFAULT && from != ARG_ELEM && from != ARG_GATHERED) return 0;
+  return subtree_may_allocate(c->nt, ms->pdefault[a]);
+}
+
 /* An arm's arguments into `cb`, the first after `lead`, each parameter as
    the layout says; what they need ahead of the call into `pre`: the gather
    and its count, then the keywords' checks (the count first, as CRuby
@@ -9774,7 +9786,7 @@ void emit_poly_arm_args(Compiler *c, Scope *m, Scope *ms, const ArgLayout *L,
     for (int a = 0; pav && a < ms->nparams; a++) {
       emit_poly_arm_param(c, ms, a, L, A, ct, selfd, a < last_read, &pav[a]);
       if (pav[a].p && (strstr(pav[a].p, "SP_GC_ROOT(") || strstr(pav[a].p, "sp_poly_as_"))) nfresh++;
-      else if (pav[a].p && strstr(pav[a].p, "_new(")) nrun++;
+      else if (pav[a].p && (strstr(pav[a].p, "_new(") || poly_arm_default_allocates(c, ms, a, L, A))) nrun++;
     }
   }
   for (int a = 0; a < ms->nparams; a++) {

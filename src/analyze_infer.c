@@ -1553,7 +1553,20 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
 /* Whether every element stored into poly-array ivar `@<ivname>` is an int
    array (a nested array of int arrays, e.g. @chr_banks / @nmt_mem). Element
    reads then yield an int array rather than a boxed poly. */
-static int g_allint_active;   /* (a value inferred for the check below, which may read a table) */
+/* The tables whose scan below is running: the scan infers stored values and
+   indexes, which can read one of them (`@a[0] = @b[0]` with `@b[0] = @a[1]`,
+   `@t[@t[0][0]] = r`). A stored row read out of one of them says nothing of
+   what the rows are, as one read out of the table itself does; a table asked
+   about again while its scan runs (an index read of it) answers no. A nested
+   scan that met either answers on that footing and is not memoized: the
+   outermost scan's answer is the one kept. */
+static struct { long k; int cid; const char *iv; } g_allint_scan[32];
+static int g_allint_depth, g_allint_cycle;
+static int an_scanned_row_read(Compiler *c, int cid, int n) {
+  for (int i = 0; i < g_allint_depth; i++)
+    if (g_allint_scan[i].cid == cid && an_own_row_read(c, n, g_allint_scan[i].iv, 0)) return 1;
+  return 0;
+}
 static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char *ivname) {
   const NodeTable *nt = c->nt;
   int saw = 0;
@@ -1599,7 +1612,8 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
            fixpoint a boxed one (`@rows[0] = @other[i]`, @other holding a
            String) had none yet when the table's reads were typed, and they
            answered Integer rows */
-        if (vt == TY_UNKNOWN && !g_allint_active) { g_allint_active = 1; vt = infer_type(c, av[a]); g_allint_active = 0; }
+        if (vt == TY_UNKNOWN && an_scanned_row_read(c, cid, av[a])) { g_allint_cycle = 1; continue; }
+        if (vt == TY_UNKNOWN) vt = infer_type(c, av[a]);
         if (vt == TY_INT_ARRAY) { saw = 1; continue; }
         if (vt == TY_NIL || vt == TY_UNKNOWN) continue;
         return 0;
@@ -1695,8 +1709,18 @@ static int ivar_array_elems_all_int_array(Compiler *c, int cid, const char *ivna
   long k = narrow_key(1, cid, ivname);
   int hit; int v = narrow_memo_get(k, &hit);
   if (hit) return v;
+  for (int i = 0; i < g_allint_depth; i++)
+    if (g_allint_scan[i].k == k) { g_allint_cycle = 1; return 0; }
+  if (g_allint_depth == (int)(sizeof g_allint_scan / sizeof *g_allint_scan)) { g_allint_cycle = 1; return 0; }
+  int outer_cycle = g_allint_cycle;
+  g_allint_cycle = 0;
+  g_allint_scan[g_allint_depth].k = k;
+  g_allint_scan[g_allint_depth].cid = cid;
+  g_allint_scan[g_allint_depth++].iv = ivname;
   v = ivar_array_elems_all_int_array_impl(c, cid, ivname);
-  narrow_memo_put(k, v);
+  g_allint_depth--;
+  if (!g_allint_cycle || g_allint_depth == 0) narrow_memo_put(k, v);
+  g_allint_cycle |= outer_cycle;
   return v;
 }
 

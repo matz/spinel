@@ -1,0 +1,12 @@
+[TypeError, "no implicit conversion from nil to integer"]
+"AB"
+[TypeError, "no implicit conversion from nil to integer"]
+67
+"AC"
+[TypeError, "no implicit conversion from nil to integer"]
+"AB"
+"w:nil"
+"w:\"AB\""
+"A"
+[IOError, "not opened for writing"]
+[IOError, "not opened for writing"]

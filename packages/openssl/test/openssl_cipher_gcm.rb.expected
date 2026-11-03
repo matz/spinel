@@ -11,7 +11,8 @@ true
 CipherError: AES-GCM decrypt failed: auth tag did not verify
 CipherError: AES-GCM decrypt failed: auth tag did not verify
 CipherError: unsupported cipher: aes-256-cbc (this package has aes-128-gcm, aes-256-gcm)
-CipherError: key must be 16 bytes for aes-128-gcm
+ArgumentError: key must be 16 bytes
+ArgumentError: iv must be 12 bytes
 CipherError: auth tag must be 16 bytes
 CipherError: auth_tag is not available until final
 [32, 12]

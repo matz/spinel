@@ -133,12 +133,20 @@ rescue OpenSSL::CipherError => ex
   puts "CipherError: #{ex.message}"
 end
 
+# a key or an iv of the wrong length is CRuby's ArgumentError
 begin
   k = OpenSSL::Cipher.new("aes-128-gcm")
   k.encrypt
   k.key = hx("00" * 32)
-rescue OpenSSL::CipherError => ex
-  puts "CipherError: #{ex.message}"
+rescue ArgumentError => ex
+  puts "ArgumentError: #{ex.message}"
+end
+begin
+  k2 = OpenSSL::Cipher.new("aes-128-gcm")
+  k2.encrypt
+  k2.iv = hx("00")
+rescue ArgumentError => ex
+  puts "ArgumentError: #{ex.message}"
 end
 
 begin

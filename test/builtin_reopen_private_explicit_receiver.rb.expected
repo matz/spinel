@@ -1,0 +1,45 @@
+NoMethodError: private method 'sec' called for true (true)
+[:f, 2]
+NoMethodError: private method 'fs' called for false (false)
+NoMethodError: private method 'sec' called for true (true)
+NoMethodError: protected method 'pro' called for true (true)
+:p
+arg runs first
+NoMethodError: private method 'isec' called for an instance of Integer (5)
+NoMethodError: protected method 'ipro' called for an instance of Integer (5)
+:ip
+8
+10
+6
+NoMethodError: private method 'isec' called for an instance of Integer (5)
+NoMethodError: private method 'nsec' called for nil (nil)
+NoMethodError: private method 'up2' called for an instance of String ("ab")
+NoMethodError: private method 'asec' called for an instance of Array ([1, 2])
+2
+NoMethodError: private method 'hh' called for an instance of Hash ({a: 1})
+NoMethodError: private method 'ff' called for an instance of Float (2.5)
+NoMethodError: private method 'rr' called for an instance of Range (1..2)
+NoMethodError: protected method 'sp' called for an instance of Symbol (:a)
+2
+3
+false
+true
+NoMethodError: private method 'isec' called for an instance of Integer (5)
+NoMethodError: private method 'isec' called for an instance of Integer (5)
+NoMethodError: private method 'isec' called for an instance of Integer (5)
+[:err, :err]
+NoMethodError: private method 'y1' called for an instance of Integer (5)
+NoMethodError: private method 'y4' called for an instance of Integer (5)
+NoMethodError: private method 'y5' called for an instance of Integer (5)
+NoMethodError: private method 'x1' called for an instance of Integer (5)
+NoMethodError: private method 'x2' called for an instance of Integer (5)
+[1, 4, 3, 1, 2]
+NoMethodError: private method 'fz' called for an instance of Float (1.5)
+NoMethodError: private method 'y1' called for an instance of Integer (5)
+"mine"
+NoMethodError: private method 'gcd' called for an instance of Integer (12)
+NoMethodError: private method 'isec' called for an instance of Integer (12)
+nil
+NoMethodError: private method 'mi' called for an instance of Integer (5)
+1
+nil

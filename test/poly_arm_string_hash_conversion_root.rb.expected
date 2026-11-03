@@ -1,0 +1,6 @@
+{"type" => "seed", "count" => 0, "seen" => 1}
+{"type" => "seed class", "count" => 0, "seen" => 1}
+{"type" => "seed kept", "count" => 0, "kept" => true}
+{"type" => "instance", "count" => 1, "seen" => 1}
+{"type" => "class", "count" => 2, "seen" => 1}
+{"type" => "captured", "count" => 3, "kept" => true}

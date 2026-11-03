@@ -10277,6 +10277,47 @@ static int struct_with_types_members(Compiler *c, int id, int ci) {
   return changed;
 }
 
+/* ... and on a Data with an initialize of its own (imi): CRuby builds the
+   copy as `self.class.new(**to_h.merge(k: v))`, so the values are
+   initialize's keywords, not the members': a given one binds as a call's
+   keyword does, and a member the call leaves out binds the keyword of its
+   name with the member's type. The members take what its `super` gives.
+   Each `**hash` can carry any keyword (the binder reads the first). */
+static int struct_with_binds_initialize(Compiler *c, int id, int ci, int imi) {
+  const NodeTable *nt = c->nt;
+  ClassInfo *cls = &c->classes[ci];
+  Scope *m = &c->scopes[imi];
+  int changed = bind_call_params(c, id, imi);
+  int args = nt_ref(nt, id, "arguments");
+  int an = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  int kwh = an == 1 && nt_kind(nt, argv[0]) == NK_KeywordHashNode ? argv[0] : -1;
+  int en = 0; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+  for (int e = 0; e < en; e++) {
+    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) continue;
+    int hv = nt_ref(nt, els[e], "value");
+    TyKind ht = hv >= 0 ? infer_type(c, hv) : TY_UNKNOWN;
+    TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+    if (vt == TY_UNKNOWN) continue;
+    if (vt == TY_NIL) vt = TY_POLY;
+    for (int j = 0; j < m->nparams; j++) {
+      if (!m->pnames[j] || !callee_param_is_declared_kwarg(c, m, m->pnames[j])) continue;
+      LocalVar *p = scope_local(m, m->pnames[j]);
+      if (p && !p->rbs_seeded) changed |= slot_take(c, p, vt, kwh);
+    }
+  }
+  for (int a = 0; a < cls->nmembers; a++) {
+    const char *mname = cls->ivars[a] + 1;
+    if (kwh >= 0 && kwh_lookup(nt, kwh, mname) >= 0) continue;
+    if (!callee_param_is_declared_kwarg(c, m, mname)) continue;
+    LocalVar *p = scope_local(m, mname);
+    TyKind mt = cls->ivar_types[a];
+    if (!p || p->rbs_seeded || mt == TY_UNKNOWN) continue;
+    changed |= slot_take(c, p, mt == TY_STRBUF ? TY_STRING : mt, -1);
+  }
+  return changed;
+}
+
 /* The argument `v` (of type at) a Struct member that is the general
    container `mt` is built from: an attribute's ivar (`S.new(o.items)`)
    widens as the alias step widens it, anything else is followed back to
@@ -11476,7 +11517,10 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     TyKind rt = infer_type(c, recv);
     if (name && sp_streq(name, "with") && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
         comp_method_in_chain(c, ty_object_class(rt), "with", NULL) < 0) {
-      changed |= struct_with_types_members(c, id, ty_object_class(rt));
+      int wci = ty_object_class(rt);
+      int wimi = comp_method_in_chain(c, wci, "initialize", NULL);
+      changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
+                           : struct_with_types_members(c, id, wci);
       continue;
     }
     /* A receiver that settled on NO type is emitted BOXED, exactly as a poly

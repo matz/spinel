@@ -11235,6 +11235,160 @@ static void emit_struct_member_value(Compiler *c, TyKind mt, TyKind vt, const ch
   free(u.p);
 }
 
+/* Member i of the receiver held in _t<t>, in the slot of parameter j of
+   initialize m, its nil included */
+static void emit_with_member_arg(Compiler *c, ClassInfo *sc, int i, int t, Scope *m, int j, Buf *b) {
+  int scid = (int)(sc - c->classes);
+  char fld[300]; snprintf(fld, sizeof fld, "_t%d->iv_%s", t, iv_c(sc->ivars[i] + 1));
+  LocalVar *p = scope_local(m, m->pnames[j]);
+  TyKind pt = p ? p->type : TY_POLY, mt = sc->ivar_types[i];
+  if (pt == TY_POLY) {
+    if (mt == TY_POLY) buf_puts(b, fld); else emit_member_box(c, sc, i, fld, b);
+  }
+  else if (mt == TY_POLY) {
+    if (slot_is_oint(p)) buf_printf(b, "%s(%s)", oint_unbox(pt), fld);
+    else emit_unbox_text(c, pt, fld, b);
+  }
+  else if (slot_is_oint(p) && mt == TY_NIL) buf_puts(b, oint_nil(pt));
+  else if (slot_is_oint(p) && ivar_has_nilbit(c, scid, i)) {
+    char robj[32], nb[128]; snprintf(robj, sizeof robj, "_t%d->", t);
+    ivar_nilbit_test(c, scid, i, robj, nb, sizeof nb);
+    buf_printf(b, "(%s ? %s : %s(%s))", nb, oint_nil(pt), oint_of(pt), fld);
+  }
+  else if (slot_is_oint(p)) buf_printf(b, "%s(%s)", oint_of(pt), fld);
+  else emit_coerce_text(c, -1, mt, pt, CO_HOLD, fld, "Data#with", b);
+}
+
+/* Data#with on a Data with an initialize of its own (mi, the one its
+   constructor runs): CRuby builds the copy as `self.class.new(**to_h.merge(kw))`,
+   so initialize takes every member by name, a given value in place of the
+   receiver's, and a keyword no member names takes its default. The
+   constructor takes initialize's parameters in initialize's order; handed
+   the members in theirs, a keyword declared in another order took another
+   member's value. kwh is the call's keyword hash. */
+static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, int mi, int kwh, Buf *b) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
+  int ds = 0;
+  for (int e = 0; e < en; e++) ds += nt_kind(nt, els[e]) == NK_AssocSplatNode;
+  if (m->yields) unsupported_feature(c, id, "Data#with on a Data whose initialize yields");
+  for (int j = 0; j < m->nparams; j++) {
+    LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
+    if (!p || !callee_param_is_declared_kwarg(c, m, m->pnames[j]))
+      unsupported_feature(c, id, "Data#with on a Data whose initialize takes a parameter other than a keyword");
+    if (p->byref_out) unsupported_feature(c, id, "Data#with on a Data whose initialize appends to a String keyword");
+  }
+  /* CRuby's errors, in its order: the required keywords nothing fills, then
+     the keys initialize does not take (the members first, as to_h has them) */
+  char names[512] = ""; int nn = 0;
+  const char *kind = "missing";
+  for (int j = 0; j < m->nparams; j++) {
+    const char *pn = m->pnames[j];
+    char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", pn);
+    if ((m->pdefault && m->pdefault[j] >= 0) || comp_member_index(sc, ivn) >= 0 || kwh_lookup(nt, kwh, pn) >= 0) continue;
+    if (ds) unsupported_feature(c, id, "Data#with with a `**hash` and a required keyword no member names");
+    char iv[300]; kw_key_inspect(pn, 1, iv, sizeof iv);
+    kw_names_add(names, sizeof names, &nn, iv);
+  }
+  if (!nn) {
+    kind = "unknown";
+    for (int i = 0; i < sc->nmembers; i++) {
+      if (callee_param_is_declared_kwarg(c, m, sc->ivars[i] + 1)) continue;
+      char iv[300]; kw_key_inspect(sc->ivars[i] + 1, 1, iv, sizeof iv);
+      kw_names_add(names, sizeof names, &nn, iv);
+    }
+    for (int e = 0; e < en; e++) {
+      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) continue;
+      int key = nt_ref(nt, els[e], "key");
+      NodeKind kk = nt_kind(nt, key);
+      int is_sym = kk == NK_SymbolNode;
+      const char *kn = is_sym ? nt_str(nt, key, "value") : kk == NK_StringNode ? nt_str(nt, key, "content") : NULL;
+      if (!kn) unsupported_feature(c, id, "Data#with with a computed key on a Data with an initialize of its own");
+      char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", kn);
+      if (is_sym && (callee_param_is_declared_kwarg(c, m, kn) || comp_member_index(sc, ivn) >= 0)) continue;
+      int dup = 0;
+      for (int e2 = 0; e2 < e && !dup; e2++) {
+        int k2 = nt_ref(nt, els[e2], "key");
+        const char *n2 = k2 >= 0 && nt_kind(nt, k2) == kk ? nt_str(nt, k2, is_sym ? "value" : "content") : NULL;
+        dup = n2 && sp_streq(n2, kn);
+      }
+      if (dup) continue;
+      char iv[300]; kw_key_inspect(kn, is_sym, iv, sizeof iv);
+      kw_names_add(names, sizeof names, &nn, iv);
+    }
+  }
+  if (nn) {
+    char km[600];
+    kw_error_message(km, sizeof km, kind, nn, names);
+    buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_puts(b, "); sp_raise_cls(\"ArgumentError\", ");
+    emit_str_literal(b, km);
+    buf_printf(b, "); (sp_%s *)NULL; })", sc->c_name);
+    return;
+  }
+  /* the receiver and each `**hash` are held by these temps alone while the
+     arguments run, a keyword default among them */
+  int t = ++g_tmp;
+  Buf rb = expr_buf(c, recv);
+  buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
+  int *th = (int *)calloc((size_t)(en > 0 ? en : 1), sizeof(int));
+  if (!th) { perror("calloc"); exit(1); }
+  for (int e = 0; e < en; e++) {
+    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) continue;
+    th[e] = ++g_tmp;
+    buf_printf(b, " sp_RbVal _t%d = ", th[e]); emit_boxed(c, nt_ref(nt, els[e], "value"), b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", th[e]);
+  }
+  int tn = ++g_tmp;
+  buf_printf(b, " sp_%s *_t%d = sp_%s_new(", sc->c_name, tn, sc->c_name);
+  for (int j = 0; j < m->nparams; j++) {
+    const char *pn = m->pnames[j];
+    if (j) buf_puts(b, ", ");
+    LocalVar *p = scope_local(m, pn);
+    TyKind pt = p ? p->type : TY_POLY;
+    /* the last element naming the keyword wins, as in a Hash: a `**hash`
+       that carries it at run time, else the next one back */
+    int opened = 0, given = -1;
+    for (int e = en - 1; e >= 0 && given < 0; e--) {
+      if (!th[e]) {
+        int key = nt_ref(nt, els[e], "key");
+        if (key >= 0 && nt_kind(nt, key) == NK_SymbolNode && sp_streq(nt_str(nt, key, "value"), pn))
+          given = nt_ref(nt, els[e], "value");
+        continue;
+      }
+      int f = ++g_tmp;
+      buf_printf(b, "({ sp_bool _f%d = 0; sp_RbVal _v%d = sp_poly_hash_get_pair_val(_t%d, "
+                    "sp_box_sym(sp_sym_intern(\"%s\")), &_f%d); _f%d ? ", f, f, th[e], pn, f, f);
+      char vn[32]; snprintf(vn, sizeof vn, "_v%d", f);
+      if (pt == TY_POLY) buf_puts(b, vn);
+      else if (slot_is_oint(p)) buf_printf(b, "%s(%s)", oint_unbox(pt), vn);
+      else emit_unbox_text(c, pt, vn, b);
+      buf_puts(b, " : ");
+      opened++;
+    }
+    if (given >= 0) {
+      /* run only where no later `**hash` carries the key */
+      NodeKind gk = nt_kind(nt, given);
+      if (opened && !expr_is_held_ref(c, given) && gk != NK_IntegerNode && gk != NK_FloatNode &&
+          gk != NK_SymbolNode && gk != NK_StringNode && gk != NK_NilNode && gk != NK_TrueNode && gk != NK_FalseNode)
+        unsupported_feature(c, id, "Data#with with a computed keyword value before a `**hash`");
+      emit_arg_or_default(c, m, j, given, b);
+    }
+    else {
+      char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", pn);
+      int i = comp_member_index(sc, ivn);
+      if (i < 0 && default_refs_earlier_param(c, m))
+        unsupported_feature(c, id, "Data#with on a Data whose initialize has a keyword default that reads another parameter");
+      if (i >= 0) emit_with_member_arg(c, sc, i, t, m, j, b);
+      else emit_arg_or_default(c, m, j, -1, b);
+    }
+    while (opened--) buf_puts(b, "; })");
+  }
+  free(th);
+  buf_printf(b, "); _t%d; })", tn);
+}
+
 static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind res, int *out) {
   /* Struct instance methods (to_h / to_a / values / members / dig). */
   if (!(recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
@@ -11518,6 +11672,11 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
       unsupported(c, id, "Data#with with a positional argument (keywords only)");
       { *out = 0; return 1; }
     }
+    int wimi = comp_method_in_chain(c, (int)(sc - c->classes), "initialize", NULL);
+    if (wimi >= 0 && c->scopes[wimi].reachable) {
+      emit_data_with_init(c, id, recv, sc, wimi, wkwh, b);
+      { *out = 1; return 1; }
+    }
     if (wkwh >= 0) {
       int en = 0; const int *els = nt_arr(nt, wkwh, "elements", &en);
       /* an unknown member keyword is a runtime ArgumentError in CRuby (not a
@@ -11562,8 +11721,9 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     int th = wds >= 0 ? ++g_tmp : -1;
     int scid = (int)(sc - c->classes);
     Buf rb = expr_buf(c, recv);
-    buf_printf(b, "({ sp_%s *_t%d = %s;", sc->c_name, t, rb.p ? rb.p : ""); free(rb.p);
-    if (th >= 0) { buf_printf(b, " sp_RbVal _t%d = ", th); emit_boxed(c, wds, b); buf_puts(b, ";"); }
+    /* the `**hash` and the given values run after the receiver is made */
+    buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
+    if (th >= 0) { buf_printf(b, " sp_RbVal _t%d = ", th); emit_boxed(c, wds, b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", th); }
     /* A member that can hold nil keeps it in the copy (#8508): a given
        value's nil, read once into a temp ahead of the constructor, or the
        receiver's for a member the call leaves as it was; the constructor

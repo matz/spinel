@@ -1,0 +1,26 @@
+0.3
+0.5
+0.0
+#<data Tween from=0.5, to=1.0, elapsed=0.0>
+#<data Label text="hi", x=1.5, y=9.0, kind=:plain>
+#<data Label text="yo", x=1.5, y=2.5, kind=:bold>
+#<data Box w=2, h=6>
+#<data Box w=10, h=12>
+#<data Box w=2, h=6>
+#<data Sub a=nil, b=3>
+#<data Sub a="y", b=2>
+#<data Sub a="y", b=nil>
+#<data Sub a="z", b=2>
+#<data Req a=2, b=15>
+"missing keyword: :k"
+"unknown keyword: :z"
+#<data Sub a="s", b=5>
+#<data Sub a="s", b=5>
+#<data Sub a=nil, b=7>
+#<data Sub a="s", b=2>
+#<data Sub a="k", b=2>
+#<data Sub a=nil, b=5>
+#<data Swap a=2, b=1>
+#<data Swap a=1, b=nil>
+#<data Swap a=5, b=2>
+#<data Swap a=3, b=nil>

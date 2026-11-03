@@ -1,0 +1,21 @@
+"NE"
+"NE"
+"NE"
+"NE"
+"NE"
+"NE"
+nil
+nil
+String
+Thread::Mutex
+Process::Status
+Errno::ENOENT
+Infinity
+#<Encoding:UTF-8>
+BasicObject
+"NE"
+NameError
+"uninitialized constant Array::String"
+"NE"
+String
+Array

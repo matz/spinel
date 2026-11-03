@@ -10421,6 +10421,20 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
   if (par_nm && sp_streq(par_nm, "Socket") && sp_feature_required("socket") && nm)
     { *out = TY_INT; return 1; }
   if (nm && const_node_class_index(c, id) >= 0) { *out = TY_CLASS; return 1; }
+  /* a builtin scope holds no top-level builtin (Array::String): it names
+     nothing, as String::Foo does */
+  {
+    /* (const_path_misses_member asks the path's segments' types back
+       through infer_cext_builtin_constant: once at a time) */
+    static int asking;
+    int par = nt_ref(nt, id, "parent");
+    if (!asking && nm && is_builtin_class_name(nm) && par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode) {
+      asking = 1;
+      int miss = const_path_misses_member(c, id);
+      asking = 0;
+      if (miss) { *out = TY_UNKNOWN; return 1; }
+    }
+  }
   if (nm && is_builtin_class_name(nm)) { *out = TY_CLASS; return 1; }
   /* a builtin class named by its path (Enumerator::Chain), a Class value
      carried by that name */

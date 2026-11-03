@@ -584,7 +584,12 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
      path is renamed, with the name written (the alias pass runs before the
      mixins are recorded, so it cannot tell yet) */
   int k = comp_class_index(c, nt_str(nt, seg, "name"));
-  if (!is_constless_builtin_name(pn) || k < 0 || c->classes[k].enclosing_class >= 0) return 0;
+  if (!is_constless_builtin_name(pn)) return 0;
+  /* a top-level builtin class or module (Array::String) is no member
+     either, unless the program reopens it or gives it its own entry */
+  int top_builtin = k < 0 && !strchr(nm, ':') && builtin_class_id(nm) != 0 &&
+                    !(sp_streq(pn, "BasicObject") && sp_streq(nm, "BasicObject"));   /* BasicObject holds its own name */
+  if (!top_builtin && (k < 0 || c->classes[k].enclosing_class >= 0)) return 0;
   return !program_gives_builtin_const(c, nm) && !program_places_const_dynamically(c, nm);
 }
 /* `P::NAME` where P is a class or module of the program (not Object) and

@@ -103,12 +103,13 @@ registry, or stack reification -- none of which exist in a flat compiled binary.
 | YAML (`require "yaml"` / `"psych"`) that builds a Ruby object other than a String, number, Symbol, true, false, nil, Array or Hash: a Date or Time when the load permits it, `unsafe_load` of a tagged object (`!ruby/object`, `!ruby/regexp`, `!!set`), `!ruby/encoding`, `!!omap`, `freeze: true`; `Psych.dump` of a Range or a program's own object, or with a collection as a mapping key; `Psych.parse` and the node and event APIs | unsupported | the package is Psych and libyaml's emitter written in Ruby. Loading answers as Psych 5.3.1 does for the rest, including DisallowedClass, AliasesNotEnabled, AnchorNotDefined and SyntaxError with Psych's messages; an unpermitted class still raises DisallowedClass; the cases listed raise `NotImplementedError` naming what was reached. |
 | `Time.parse` / `Time.strptime` called only through a receiver not written as `Time` (`k = Time; k.parse(s)`, `Time.send(:parse, s)`, `Time.method(:parse)`) | not spliced, so as without the package: `Time.strptime` and `Time.method(:parse)` refused at compile time; `Time.parse` reads only the numeric ISO 8601 forms and raises NotImplementedError naming any other | with `require "time"`, a program whose code calls `Time.parse` or `Time.strptime` by name gets CRuby's time.rb spliced in (`packages/time`), which reads what CRuby reads, and that program's `iso8601`, `httpdate`, `rfc2822` and `xmlschema` are time.rb's too. The splice sees the call in the text, so a receiver held in a variable or a `send` does not count. A program that does not call them keeps the runtime's `iso8601`, `httpdate`, `rfc2822` and the class methods `Time.iso8601` / `xmlschema` / `httpdate` / `rfc2822` / `rfc822`, which each read one fixed format. Without `require "time"`, `Time.parse` and `Time.strptime` are refused at compile time, as CRuby does not define them. |
 
-**`net/http` / `uri`.** An HTTP/1.1 client with `Connection: close`, one
-request per connection -- a second request inside one `Net::HTTP.start` block
-reconnects transparently, as CRuby does, rather than failing, but the
-connection is not reused: no keep-alive, no pipelining, no HTTP/2, no proxy,
-no cookie jar and no automatic redirect following (a 3xx comes back as the
-response it is, with its Location). A request block can consume the body with
+**`net/http` / `uri`.** An HTTP/1.1 client. The requests of one
+`Net::HTTP.start` block share its connection while both sides keep it alive,
+as CRuby's do (`keep_alive_timeout`, and `max_retries` for an idempotent
+request whose reused connection fails); a request with no session sends
+`Connection: close`. There is no pipelining, no connection pool shared between
+sessions, no HTTP/2, no proxy, no cookie jar and no automatic redirect
+following (a 3xx comes back as the response it is, with its Location). A request block can consume the body with
 `response.read_body`, in bounded chunks for Content-Length, chunked and EOF
 framing over HTTP or HTTPS. Without a consumer block, `read_body` caches the body.
 Chunked transfer decoding and automatic gzip/deflate content decoding are there.

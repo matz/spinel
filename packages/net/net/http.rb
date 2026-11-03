@@ -14,8 +14,10 @@
 # What is absent is absent the way a subset is, and a program naming it fails
 # to compile rather than at run time:
 #
-# * HTTP/1.1 with `Connection: close`, one request per connection. There is no
-#   keep-alive, no pipelining and no HTTP/2
+# * HTTP/1.1. The requests of one `start` session share its connection while
+#   both sides keep it alive (keep_alive_timeout, max_retries); a request
+#   with no session asks for `Connection: close`. There is no pipelining, no
+#   connection pool shared between sessions and no HTTP/2
 # * no proxy support, no cookie jar, no automatic redirect following
 #   (#get_response hands back the 3xx and its Location, as CRuby's does)
 # * a gzip or deflate body is inflated whole once it is read; not streamed
@@ -437,13 +439,21 @@ module Net
     # connect path's own timeouts, as before.
     attr_accessor :ssl_timeout
 
-    # CRuby's keep_alive_timeout is how long an idle connection may be reused
-    # before `begin_transport` opens a new one. Every request here goes out
-    # with `Connection: close`, so no connection is ever idle-reused and there
-    # is nothing for it to govern; it is held so a program that sets it (a
-    # connection pool does) compiles and reads back what it wrote. CRuby's
-    # default is 2.
+    # How long, in seconds, a session's idle connection may be reused before
+    # `begin_transport` opens a new one, as CRuby's: 2 by default.
     attr_accessor :keep_alive_timeout
+
+    # How many times an idempotent request (GET, HEAD, PUT, DELETE, OPTIONS,
+    # TRACE) is sent again when its connection fails before the response
+    # arrives, as CRuby's: 1 by default. A connection the server closed while
+    # it sat idle fails that way.
+    attr_reader :max_retries
+
+    def max_retries=(retries)
+      retries = retries.to_int
+      raise ArgumentError, "max_retries should be non-negative integer number" if retries < 0
+      @max_retries = retries
+    end
 
     # The address to CONNECT to, when it differs from the address the request
     # is addressed to. An application that resolves a hostname itself and then
@@ -475,6 +485,10 @@ module Net
       @read_timeout = 60
       @ssl_timeout = nil
       @keep_alive_timeout = 2
+      @max_retries = 1
+      @one_shot = false
+      @reusable = false
+      @last_communicated = 0.0
       @verify_mode = nil
       @debug_output = nil
       @socket = nil
@@ -604,13 +618,18 @@ module Net
     end
 
     def do_finish
-      debug "Conn close" unless @socket.nil?
+      close_socket
+      @started = false
+      nil
+    end
+
+    def close_socket
       @tls.sysclose unless @tls.nil?
       @socket.close unless @socket.nil?
       @tls = nil
       @socket = nil
       @fresh = false
-      @started = false
+      @reusable = false
       nil
     end
     private :do_finish
@@ -708,41 +727,89 @@ module Net
 
     # Keep the connection alive through the block, then consume an unread body.
     # An explicit block parameter also keeps the no-block spelling callable.
+    # A request with no session is the session's only one, and asks the
+    # server to close after it, as CRuby's does (write_request).
     def request(req, &blk)
       started = @started
       start unless started
+      @one_shot = !started
       res = perform(req)
       blk.call(res) unless blk.nil?
       res.body
+      end_transport(req, res)
       res
     ensure
       do_finish unless started
     end
 
+    IDEMPOTENT_METHODS = %w[GET HEAD PUT DELETE OPTIONS TRACE].freeze
+
+    # CRuby's transport_request: a connection that fails before the response
+    # arrives (the server closed it while it sat idle, or reset it) is opened
+    # again and an idempotent request sent again, max_retries times. A POST
+    # is not: the server may have acted on it.
     def perform(req)
-      # Every request goes out with `Connection: close`, so the server hangs
-      # up after answering and the socket a second request would use is dead.
-      # CRuby reconnects transparently in that situation, and a caller writing
-      # `start { |http| http.get("/a"); http.get("/b") }` -- which is the
-      # idiom -- has no reason to know. This is one connection per request
-      # rather than keep-alive; what it is not is a failure on the second one.
-      begin_transport(req)
-      write_request(req)
-      read_response(req.method, req.decode_content)
+      count = 0
+      begin
+        begin_transport(req)
+        write_request(req)
+        read_response(req.method, req.decode_content)
+      rescue EOFError, IOError, Errno::ECONNRESET, Errno::ECONNABORTED, Errno::EPIPE, ReadTimeout => e
+        raise if count >= @max_retries || !IDEMPOTENT_METHODS.include?(req.method)
+        debug "Conn close because of error #{e.message}, and retry"
+        close_socket
+        count += 1
+        retry
+      end
     end
 
+    # A connection is reused while it is alive: kept after the last response
+    # (end_transport), idle for no longer than keep_alive_timeout, and with
+    # nothing to read, which an idle connection has only when the server
+    # closed it or said something unasked. Otherwise a new one is opened.
     def begin_transport(req)
-      unless @fresh
-        @tls.sysclose unless @tls.nil?
-        @socket.close unless @socket.nil?
-        @tls = nil
-        @socket = nil
+      if @socket.nil?
         connect
+      elsif !@fresh
+        reuse = @reusable
+        if reuse && Process.clock_gettime(Process::CLOCK_MONOTONIC) - @last_communicated > @keep_alive_timeout
+          debug "Conn close because of keep_alive_timeout"
+          reuse = false
+        end
+        if reuse && !IO.select([@socket], nil, nil, 0).nil?
+          debug "Conn close because of EOF"
+          reuse = false
+        end
+        unless reuse
+          close_socket
+          connect
+        end
       end
       @fresh = false
+      @reusable = false
       nil
     end
-    private :connect, :begin_transport
+
+    # After the response's body is read: the connection is kept for the next
+    # request unless either side asked to close it, or the server speaks
+    # HTTP/1.0 and did not ask to keep it (CRuby's keep_alive?).
+    def end_transport(req, res)
+      keep = !@one_shot && !req["connection"].to_s.downcase.include?("close") && !@socket.nil?
+      if keep
+        conn = res["connection"].to_s.downcase
+        keep = res.http_version == "1.0" || res.http_version.empty? ? conn.include?("keep-alive") : !conn.include?("close")
+      end
+      @reusable = keep
+      if keep
+        debug "Conn keep-alive"
+        @last_communicated = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      else
+        debug "Conn close"
+        close_socket
+      end
+      nil
+    end
+    private :connect, :begin_transport, :end_transport, :close_socket
 
     # ---- the wire ----
 
@@ -789,7 +856,7 @@ module Net
       # A request that carries a body states its length even when it is
       # zero, as CRuby's does; some servers answer 411 without it.
       out << "Content-Length: #{body.bytesize}\r\n" if !have_len && (req.request_body_permitted? || !body.empty?)
-      out << "Connection: close\r\n"
+      out << "Connection: close\r\n" if @one_shot && !req.key?("connection")
       out << "\r\n"
       out << body
       debug "<- #{out.dump}"
@@ -810,7 +877,7 @@ module Net
       # after it.
       loop do
         status = wire_gets
-        raise HTTPError, "no response from #{@address}" if status.nil?
+        raise EOFError, "end of file reached" if status.nil?
         debug "-> #{status.dump}"
         # CRuby's check of the status line: HTTP, an optional version, a
         # three-digit code and an optional reason.

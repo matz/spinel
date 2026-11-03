@@ -1,0 +1,10 @@
+c1r1 c1r2 accepts=1 connection=["", ""]
+c1r1 c2r1 accepts=2 connection=["", ""]
+c1r1 c2r1 accepts=2 connection=["", ""]
+c1r1 c2r1 accepts=2 connection=["", ""]
+c1r1 c2r1 accepts=2 connection=["", "", ""]
+c1r1 EOFError accepts=1 connection=["", ""]
+c1r1 accepts=1 connection=["close"]
+1
+3
+max_retries should be non-negative integer number

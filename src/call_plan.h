@@ -182,6 +182,9 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    (a row of tools/implied_calls.yml: a multiple assignment's to_ary of its
    value) runs, where the load record proves the one; -1 otherwise */
 int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls);
+/* The classes whose to_ary that call reaches on a boxed operand, where
+   the record proves it: into out[0..cap), the count */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);
 /* cplan_targets, for a reader that wants the code the call's emission
    names (reachability): the same answer, but for a call on a boxed receiver
    the methods of the arms its dispatch has, which the receiver's class

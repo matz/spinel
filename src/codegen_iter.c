@@ -5,6 +5,7 @@
 #include "share.h"
 #include "repr.h"
 #include "call_plan.h"
+#include "implied_calls.h"
 #include "value_pos.h"
 #include <errno.h>
 
@@ -2916,6 +2917,10 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
                  poly_splat_tmp, pb2.p ? pb2.p : "sp_box_nil()", poly_splat_tmp);
+      /* a lone value, not a `*x` (to_a's), converts as the parameters'
+         implied to_ary of it (its row) */
+      if (inner == yargs[0])
+        poly_splat_tmp = emit_boxed_to_ary(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, poly_splat_tmp, g_pre, g_indent);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "int _fs%d = (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id));\n",
                  poly_splat_tmp, poly_splat_tmp, poly_splat_tmp);
@@ -5763,6 +5768,8 @@ static void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty,
 static void emit_poly_auto_splat(Compiler *c, int block, int telem, Buf *b, int indent) {
   Scope *bs = comp_scope_of(c, block);
   int npp = 0; while (block_param_name(c, block, npp)) npp++;
+  /* (the parameters' implied to_ary of the value: its row) */
+  telem = emit_boxed_to_ary(c, nt_ref(c->nt, block, "parameters"), NTI_YIELDED, telem, b, indent + 1);
   emit_indent(b, indent + 1);
   buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) {\n", telem, telem);
   for (int pj = 0; pj < npp; pj++) {

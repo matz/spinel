@@ -6,6 +6,7 @@ static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 #include "share.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "implied_calls.h"
 #include "codegen_call_arms.h"
 #include "value_pos.h"
 
@@ -18114,6 +18115,8 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
     buf_puts(b, ";\n");
     emit_indent(b, indent);
     buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d);\n", tarr);
+    /* a boxed value converts as the assignment's implied to_ary of it (its row) */
+    if (st == TY_POLY) tarr = emit_boxed_to_ary(c, id, value, tarr, b, indent);
     for (int i = 0; i < ln; i++) {
       const char *lty = nt_type(nt, lefts[i]);
       NodeKind lk = nt_kind(nt, lefts[i]);

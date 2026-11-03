@@ -103,3 +103,9 @@ a, b, *r, (c, d) = 1, Pair.new(1, 2)
 p [a, b.class, r, c, d]
 a, *r, (c, d) = 1, Pair.new(3, 4)
 p [a, r, c, d]
+# a nested assignment whose value is read answers its elements as they
+# were, each evaluated once, while the nested target takes the converted one
+r = (a, (c, d) = 1, Pair.new(5, 6))
+p [r[1].class, a, c, d]
+def nested_value(o) = ((x, (y, z) = 7, o))
+p nested_value(Pair.new(8, 9)).map(&:class)

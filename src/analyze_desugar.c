@@ -3375,40 +3375,55 @@ static int masgn_to_ary_call(NodeTable *nt, int v) {
   nt_node_set_ref(nt, tp, "block", -1);
   return tp;
 }
-/* ...where the assignment's own value is read: it answers the object, not
-   the Array, so masgn id becomes `(<the assignment> = (t = obj)&.to_ary;
-   t)` on a temp, the assignment moved to a new node; its targets'
-   receivers and index arguments still run before the value */
-static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value) {
-  char tname[48];
-  snprintf(tname, sizeof tname, "__mta_%s", comp_node_tag(c, id));
-  int tw = nt_new_node(nt, "LocalVariableWriteNode"), ts = nt_new_node(nt, "StatementsNode");
-  int tpar = nt_new_node(nt, "ParenthesesNode"), tr2 = nt_new_node(nt, "LocalVariableReadNode");
+/* Masgn id becomes `(<the assignment> = v; tail)`, the assignment moved
+   to a new node with its targets and value v; its targets' receivers and
+   index arguments still run before the value */
+static int masgn_to_ary_move(NodeTable *nt, int id, int v, int tail) {
   int mw = nt_new_node(nt, "MultiWriteNode"), stmts = nt_new_node(nt, "StatementsNode");
-  int tp = tpar >= 0 ? masgn_to_ary_call(nt, tpar) : -1;
-  if (tw < 0 || ts < 0 || tpar < 0 || tr2 < 0 || mw < 0 || stmts < 0 || tp < 0) return 0;
-  nt_node_set_str(nt, tw, "name", tname); nt_node_set_ref(nt, tw, "value", value);
-  nt_node_set_arr(nt, ts, "body", &tw, 1);
-  nt_node_set_ref(nt, tpar, "body", ts);
-  nt_node_set_str(nt, tr2, "name", tname);
+  if (mw < 0 || stmts < 0) return 0;
   static const char *const arrs[] = { "lefts", "rights" };
   for (int a = 0; a < 2; a++) {
     int n = 0;
-    const int *v = nt_arr(nt, id, arrs[a], &n);
-    nt_node_set_arr(nt, mw, arrs[a], v, n);
+    const int *t = nt_arr(nt, id, arrs[a], &n);
+    nt_node_set_arr(nt, mw, arrs[a], t, n);
     nt_node_set_arr(nt, id, arrs[a], NULL, 0);
   }
   nt_node_set_ref(nt, mw, "rest", nt_ref(nt, id, "rest"));
-  nt_node_set_ref(nt, mw, "value", tp);
+  nt_node_set_ref(nt, mw, "value", v);
   nt_node_set_int(nt, mw, "node_line", nt_int(nt, id, "node_line", 0));
-  int body[2] = { mw, tr2 };
+  int body[2] = { mw, tail };
   nt_node_set_arr(nt, stmts, "body", body, 2);
   nt_node_set_type(nt, id, "ParenthesesNode");
   nt_node_set_ref(nt, id, "body", stmts);
   nt_node_set_ref(nt, id, "rest", -1);
   nt_node_set_ref(nt, id, "value", -1);
-  scope_local_intern(comp_scope_of(c, id), tname);
   return 1;
+}
+/* `(<name> = v)`, a temp of masgn id's scope */
+static int masgn_to_ary_temp(Compiler *c, NodeTable *nt, int id, const char *name, int v) {
+  int tw = nt_new_node(nt, "LocalVariableWriteNode"), ts = nt_new_node(nt, "StatementsNode");
+  int tpar = nt_new_node(nt, "ParenthesesNode");
+  if (tw < 0 || ts < 0 || tpar < 0) return -1;
+  nt_node_set_str(nt, tw, "name", name); nt_node_set_ref(nt, tw, "value", v);
+  nt_node_set_arr(nt, ts, "body", &tw, 1);
+  nt_node_set_ref(nt, tpar, "body", ts);
+  scope_local_intern(comp_scope_of(c, id), name);
+  return tpar;
+}
+static int masgn_to_ary_read(NodeTable *nt, const char *name) {
+  int r = nt_new_node(nt, "LocalVariableReadNode");
+  if (r >= 0) nt_node_set_str(nt, r, "name", name);
+  return r;
+}
+/* ...where the assignment's own value is read: it answers the object, not
+   the Array, so masgn id becomes `(<the assignment> = (t = obj)&.to_ary;
+   t)` on a temp (masgn_to_ary_move) */
+static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value) {
+  char tname[48];
+  snprintf(tname, sizeof tname, "__mta_%s", comp_node_tag(c, id));
+  int tpar = masgn_to_ary_temp(c, nt, id, tname, value), tr2 = masgn_to_ary_read(nt, tname);
+  int tp = tpar >= 0 ? masgn_to_ary_call(nt, tpar) : -1;
+  return tr2 >= 0 && tp >= 0 && masgn_to_ary_move(nt, id, tp, tr2);
 }
 /* May an element of the Array a to_ary answers be an object that
    converts in turn? A nested target would destructure it, and the
@@ -3444,12 +3459,45 @@ static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
   }
   return changed;
 }
+/* ...where such an assignment's own value is read: it answers the
+   literal's elements as they were, not the converted ones (orig, before
+   masgn_to_ary_nested), so each element is kept in a temp as the value
+   evaluates it and the assignment answers the temps: `a, (b, c) = 1, obj`
+   becomes `(<the assignment> = (t0 = 1), (t1 = obj)&.to_ary; [t0, t1])` */
+static int masgn_to_ary_nested_kept(Compiler *c, NodeTable *nt, int id, int value, const int *orig, int en) {
+  int n = 0, arr = nt_new_node(nt, "ArrayNode");
+  const int *cur = nt_arr(nt, value, "elements", &n);
+  if (arr < 0 || n != en) return 0;
+  int *nels = malloc(sizeof(int) * (size_t)(2 * en + 1)), *reads = nels + en;
+  if (!nels) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(nels, cur, sizeof(int) * (size_t)en);
+  int ok = 1;
+  for (int i = 0; i < en && ok; i++) {
+    char tname[64];
+    snprintf(tname, sizeof tname, "__mtv_%s_%d", comp_node_tag(c, id), i);
+    int t = masgn_to_ary_temp(c, nt, id, tname, orig[i]);
+    reads[i] = masgn_to_ary_read(nt, tname);
+    ok = t >= 0 && reads[i] >= 0;
+    /* a converted element is `orig&.to_ary` (masgn_to_ary_call): the
+       call now takes the temp */
+    if (ok && nels[i] != orig[i]) nt_node_set_ref(nt, nels[i], "receiver", t);
+    else if (ok) nels[i] = t;
+  }
+  if (ok) {
+    nt_node_set_arr(nt, value, "elements", nels, en);
+    nt_node_set_arr(nt, arr, "elements", reads, en);
+    ok = masgn_to_ary_move(nt, id, value, arr);
+  }
+  free(nels);
+  return ok;
+}
 /* A multiple assignment CRuby destructures through a to_ary of the
    program's (masgn_to_ary_mi) took the object as the one element: `a, b =
    obj` now reads `obj&.to_ary`, where the assignment's value is thrown away
    (an_node_dropped), or the temp form where it is read
    (masgn_to_ary_kept); a nested target, the element of a literal value
-   (masgn_to_ary_nested). A value whose Array may hold an object a nested
+   (masgn_to_ary_nested), with temps where the value is read
+   (masgn_to_ary_nested_kept). A value whose Array may hold an object a nested
    target would have to convert in turn is left whole
    (masgn_element_may_convert). The store evidence of the targets is made
    again from the Array (desugar_masgn_store_evidence passes an object
@@ -3461,7 +3509,16 @@ int desugar_masgn_to_ary(Compiler *c) {
     if (nt_kind(nt, id) != NK_MultiWriteNode) continue;
     int value = nt_ref(nt, id, "value"), base = nt->count, did = 0, tp, mi;
     if (value < 0) continue;
-    if (masgn_tuple_rhs(nt, value)) did = masgn_to_ary_nested(c, nt, id, value);
+    if (masgn_tuple_rhs(nt, value)) {
+      int en = 0;
+      const int *els = nt_arr(nt, value, "elements", &en);
+      int *orig = malloc(sizeof(int) * (size_t)(en + 1));
+      if (!orig) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(orig, els, sizeof(int) * (size_t)en);
+      did = masgn_to_ary_nested(c, nt, id, value);
+      if (did && !an_node_dropped(c, id)) did = masgn_to_ary_nested_kept(c, nt, id, value, orig, en);
+      free(orig);
+    }
     else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id)) >= 0 &&
              !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
       if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);

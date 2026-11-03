@@ -17079,6 +17079,29 @@ void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf
   view_pop(c, cv);
 }
 
+/* The boxed value _t<src> node id takes apart, converted as the implied
+   to_ary call its row makes on operand op (cplan_boxed_to_ary_classes):
+   a rooted temp holding it, made the Array an object of one of those
+   classes answers (sp_poly_ary_operand: a nil answer keeps the object,
+   any other is CRuby's TypeError); its number. src itself, and no C,
+   where no class's to_ary is reached. */
+int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent) {
+  int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = cplan_boxed_to_ary_classes(c, id, op, ks, c->nclasses + 1), t = src;
+  if (n > 0) {
+    t = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_RbVal _t%d = _t%d; SP_GC_ROOT_RBVAL(_t%d);\n", t, src, t);
+    emit_indent(b, indent);
+    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (", t);
+    for (int i = 0; i < n; i++) buf_printf(b, "%s_t%d.cls_id == %d", i ? " || " : "", t, ks[i]);
+    buf_printf(b, ")) _t%d = sp_poly_ary_operand(_t%d);\n", t, t);
+  }
+  free(ks);
+  return t;
+}
+
 /* Bind the splice RHS object to `_tq<ta>` (rooted -- the to_ary dispatch and
    the splice pushes can allocate) and write its to_ary call text into out. */
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty,

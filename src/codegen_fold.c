@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "implied_calls.h"
 #include "repr.h"
 #include "call_plan.h"
 #include "codegen_call_arms.h"
@@ -1448,6 +1449,8 @@ static void splat_poly_elem(const LocalVar *lvp, int j, const void *src, Buf *ou
    each param's pinned type. Used where a multi-param block iterates a poly array
    whose elements are themselves arrays (map/select/reject/sort_by). */
 void emit_autosplat_params(Compiler *c, int block, int np, int elem_temp, int indent) {
+  /* (the parameters' implied to_ary of the element: its row) */
+  if (indent >= 0) elem_temp = emit_boxed_to_ary(c, nt_ref(c->nt, block, "parameters"), NTI_YIELDED, elem_temp, g_pre, indent);
   char src[24]; snprintf(src, sizeof src, "_t%d", elem_temp);
   emit_splat_params(c, block, np, splat_poly_elem, src, g_pre, indent);
 }

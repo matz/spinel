@@ -1,0 +1,20 @@
+[5, 6]
+[Integer, 2]
+[Integer, 4]
+[Integer, nil]
+[NilClass, nil]
+[Nope, nil]
+[Symbol, :n]
+[2, 4, nil, nil, nil, :n]
+[Array, Pair, Mixed]
+[2]
+[3, 4]
+[5, nil]
+Pair
+3
+4
+[3, [4]]
+[Nope, nil]
+"can't convert Bad to Array (Bad#to_ary gives Integer)"
+"can't convert Bad to Array (Bad#to_ary gives Integer)"
+8

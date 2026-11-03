@@ -9,6 +9,7 @@
 #include "repr.h"
 #include "codegen_call_arms.h"
 #include "implicit_calls.h"
+#include "implied_calls.h"
 
 static CallPlan *g_cp_memo = NULL;
 static unsigned char *g_cp_have = NULL;
@@ -1043,29 +1044,62 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
 static int ct_after_point(Compiler *c, int id) {
   return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
-/* The method a conversion CRuby makes without a call node at node id (a
-   multiple assignment's to_ary) runs on an instance of cls: the one
-   version of `name` on cls's chain over the statements id may run in
-   (elab_call_window, elab_method_span), a def that ran there for sure,
-   as cls's copy of it when a mixin brought it (ct_def_version); -1 where
-   the record cannot prove one -- no version yet at some point of the
-   window (a def or the include that brings it comes later), more than
-   one, or one that may not have run (under a condition, or after a
-   statement that may raise in a begin body with rescue clauses:
-   elab_point_partial). The conversion is lowered as a call of `name`,
-   which binds through the method table: where an undef of the name on
-   cls's chain leaves the table without it (comp_is_undeffed_in_chain),
-   that call is not the version proved, and there is no answer either. */
-int cplan_implied_version(Compiler *c, int id, int cls, const char *name) {
+/* Does node id make the implied call `name` on operand op (a node, or an
+   NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
+   the rows the load record reads */
+static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
+  NtImplied rows[16];
+  int n = nt_implied_calls(c->nt, id, rows, 16);
+  for (int i = 0; i < n && i < 16; i++)
+    if (rows[i].operand == op && sp_streq(rows[i].name, name)) return 1;
+  return 0;
+}
+/* The method the implied call `name` node id makes on operand op (a row:
+   a multiple assignment's to_ary of its value, ct_implied_row) runs on an
+   instance of cls: the one version of `name` on cls's chain over the
+   statements id may run in (elab_call_window, elab_method_span), a def
+   that ran there for sure, as cls's copy of it when a mixin brought it
+   (ct_def_version); -1 where no row makes the call, or the record cannot
+   prove one -- no version yet at some point of the window (a def or the
+   include that brings it comes later), more than one, or one that may
+   not have run (under a condition, or after a statement that may raise
+   in a begin body with rescue clauses: elab_point_partial). The call is
+   lowered as a call of `name`, which binds through the method table:
+   where an undef of the name on cls's chain leaves the table without it
+   (comp_is_undeffed_in_chain), that call is not the version proved, and
+   there is no answer either. */
+int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls) {
   ElabWindow w;
   const LrDef *ds[2];
-  if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name) || elab_call_window(c, id, &w) != ELAB_YES) return -1;
+  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name) ||
+      elab_call_window(c, id, &w) != ELAB_YES) return -1;
   if (ct_after_point(c, id)) elab_window_open(c, &w);
   int n = elab_method_span(c, cls, name, 0, &w, ds, 2);
   if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
       elab_point_partial(c, ds[0]->node)) return -1;
   int dc = -1;
   return ct_def_version(c, cls, name, 0, ds[0], &dc);
+}
+/* The classes whose own to_ary the implied to_ary call node id makes on
+   operand op reaches when the operand is boxed (a multiple assignment's
+   value, the value a block of several parameters takes apart): each
+   class a box can hold (comp_poly_candidates) whose no-argument to_ary is
+   the version the record proves there (cplan_implied_version). An Array
+   subclass is an Array already. A multiple assignment with a nested
+   target (masgn_nests, the typed rewrite's test) would take an element
+   apart in turn, which the boxed lowering does not convert: none there,
+   as the typed rewrite leaves such a value whole. Into out[0..cap),
+   ascending; the count. */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
+  if (nt_kind(c->nt, id) == NK_MultiWriteNode && masgn_nests(c->nt, id)) return 0;
+  int n = 0, np = 0;
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  for (int i = 0; i < np && n < cap; i++) {
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    if (cplan_implied_version(c, id, "to_ary", op, k) == mi) out[n++] = k;
+  }
+  return n;
 }
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */

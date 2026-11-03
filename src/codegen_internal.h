@@ -2837,6 +2837,7 @@ int frange_index_view(Compiler *c, int id);
 int splice_to_ary_mi(Compiler *c, TyKind rhs_ty);
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty, int mi, int ta, Buf *b, Buf *out);
 void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out);
+int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent);
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent);
 void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or);
 int scope_has_return(Compiler *c, int scope_idx);

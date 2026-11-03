@@ -1080,6 +1080,27 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
   int dc = -1;
   return ct_def_version(c, cls, name, 0, ds[0], &dc);
 }
+/* The classes whose own to_ary the implied to_ary call node id makes on
+   operand op reaches when the operand is boxed (a multiple assignment's
+   value, the value a block of several parameters takes apart): each
+   class a box can hold (comp_poly_candidates) whose no-argument to_ary is
+   the version the record proves there (cplan_implied_version). An Array
+   subclass is an Array already. A multiple assignment with a nested
+   target (masgn_nests, the typed rewrite's test) would take an element
+   apart in turn, which the boxed lowering does not convert: none there,
+   as the typed rewrite leaves such a value whole. Into out[0..cap),
+   ascending; the count. */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
+  if (nt_kind(c->nt, id) == NK_MultiWriteNode && masgn_nests(c->nt, id)) return 0;
+  int n = 0, np = 0;
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  for (int i = 0; i < np && n < cap; i++) {
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    if (cplan_implied_version(c, id, "to_ary", op, k) == mi) out[n++] = k;
+  }
+  return n;
+}
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
 static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {

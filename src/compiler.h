@@ -1256,6 +1256,10 @@ typedef struct {
                           (VR_HEAD_HELD) around the call's own emission,
                           where an arm that holds the operand reads that
                           temp (hold_operand) */
+  unsigned char *value_discarded; /* [node_cap] a node emitted where its value
+                          is thrown away (emit_expr_for_effect: `((void)(...))`,
+                          the left of a comma): set only as a view
+                          (VR_DISCARDED) around that emission */
   SP_TY_FIELD TyKind *nilnarrow; /* [node_cap] param-read narrowed by a `return .. if p.nil?`
                         guard: the read's non-nil type (codegen unboxes the poly
                         slot at the read site); TY_UNKNOWN = not narrowed */

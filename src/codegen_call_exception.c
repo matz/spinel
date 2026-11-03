@@ -758,7 +758,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     if (sp_streq(name, "backtrace")) {
       /* the stack captured at the most recent raise (sp_bt_buf); the substrate
          is live in --debug builds and empty in release, same as Kernel#caller. */
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_backtrace_captured())");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), sp_backtrace_captured())");
       return 1;
     }
     if (argc == 1 && is_kind_query(name)) {
@@ -893,7 +893,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
           return 1;
         }
         buf_puts(b, "(");
-        if (ac > 0 && !first_const) { buf_puts(b, "(void)("); emit_expr(c, av[0], b); buf_puts(b, "), "); }
+        if (ac > 0 && !first_const) { buf_puts(b, "(void)("); emit_expr_for_effect(c, av[0], b); buf_puts(b, "), "); }
         if (ac > 1) { buf_puts(b, "(void)("); emit_boxed(c, av[1], b); buf_puts(b, "), "); }
         buf_puts(b, "(void)("); emit_boxed(c, cause_node, b); buf_puts(b, "), ");
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"exception object expected\"))");
@@ -1134,14 +1134,14 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
         /* CRuby: raising a non-exception object is TypeError, not a
            pointer smuggled into the message slot (which emitted a C
            warning and raised garbage). Evaluate the operand for effect. */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", \"exception class/object expected\"))");
       }
       else if (at == TY_STRING && ac >= 2 && raise_plain_arg(nt, av[1])) {
         /* a String and then anything is not an exception class and message:
            both operands run, then CRuby's TypeError. A splat or keywords may
            be empty, so they keep the path below */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), (void)("); emit_boxed(c, av[1], b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", \"exception class/object expected\"))");
       }
@@ -1178,7 +1178,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
         /* Integer/nil/Array/Symbol/Float/...: valid Ruby, TypeError at
            runtime. The old path smuggled the value into the const char*
            message slot -- a C type error for scalars, garbage for the rest. */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", \"exception class/object expected\"))");
       }
     }

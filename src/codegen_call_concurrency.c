@@ -76,7 +76,7 @@ int emit_op_mutex_sleep(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "sp_Mutex_sleep(_t%d, 1, (double)(", tm); emit_expr(c, argv[0], b); buf_puts(b, ")); })");
   }
   else if (st == TY_NIL) {
-    buf_puts(b, "(void)("); emit_expr(c, argv[0], b);
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b);
     buf_printf(b, "); sp_Mutex_sleep(_t%d, 0, 0.0); })", tm);
   }
   else {   /* a boxed timeout: nil means none */
@@ -130,7 +130,7 @@ int emit_op_condvar_wait(Compiler *c, const BopCtx *x, Buf *b) {
          nil) still has to run for its side effects, then means no timeout. */
       int m = ++g_tmp;
       buf_printf(b, "; sp_mutex *_m%d = ", m); emit_condvar_mutex_arg(c, argv[0], b);
-      buf_puts(b, "; (void)("); emit_expr(c, to_arg, b);
+      buf_puts(b, "; (void)("); emit_expr_for_effect(c, to_arg, b);
       buf_printf(b, "); sp_CondVar_wait(_t%d, _m%d); })", t, m);
     }
     else {

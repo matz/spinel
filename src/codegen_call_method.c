@@ -245,7 +245,7 @@ int emit_op_proc_source_location(Compiler *c, const BopCtx *x, Buf *b) {
     if (!fn) fn = nt->source_file;
     if (!fn) fn = "?";
     int ta = ++g_tmp;
-    buf_printf(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
     buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(", ta); emit_str_literal(b, fn); buf_puts(b, "));");
     buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(%d));", ta, nl);
@@ -319,7 +319,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   }
   else {
     buf_puts(b, "((void)(");
-    emit_expr(c, recv, b);
+    emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), (sp_BoundMethod *)NULL)");
   }
   return 1;
@@ -338,7 +338,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
     /* obj of another class: CRuby's TypeError, at bind time, whether or
        not the Method is ever called. It was bound and called as one. */
     buf_puts(b, "({ (void)(");
-    emit_expr(c, argv[0], b);
+    emit_expr_for_effect(c, argv[0], b);
     buf_printf(b, "); sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); (sp_BoundMethod *)NULL; })",
                c->classes[c->scopes[t2].class_id].name);
     return 1;
@@ -457,7 +457,7 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   int mn4 = method_recv_node(c, recv);
   int tg4 = mn4 >= 0 ? method_obj_target_mi(c, mn4) : -1;
   if (tg4 >= 0 && c->scopes[tg4].name) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b);
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), sp_sym_intern(");
     emit_str_literal(b, comp_scope_user_name(&c->scopes[tg4]));
     buf_puts(b, "))");
@@ -477,7 +477,7 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
   int dn4 = tg4 >= 0 ? c->scopes[tg4].def_node : -1;
   int ln4 = dn4 >= 0 ? (int)nt_int(nt, dn4, "node_line", 0) : 0;
   if (dn4 >= 0 && nt_int(nt, dn4, "cext_extension", 0)) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)"); return 1;
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); return 1;
   }
   /* a boxed receiver's wrapper (bam_poly) has no position of its own: the
      method is the one the receiver's run-time class answers by the name,
@@ -534,7 +534,7 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
     const char *file4 = nt_file_path(nt, (int)nt_int(nt, dn4, "node_file", 0));
     if (!file4 || !*file4) file4 = nt->source_file;
     int tr4 = ++g_tmp;
-    buf_printf(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
                   " sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4, tr4);
     emit_str_literal(b, file4 ? file4 : "");
@@ -592,7 +592,7 @@ int emit_op_method_parameters(Compiler *c, const BopCtx *x, Buf *b) {
   }
   if (tg4 >= 0) {
     int tr4 = ++g_tmp;
-    buf_printf(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr4, tr4);
     emit_method_parameters_pushes(c, pn4, tr4, b);
     buf_printf(b, " _t%d; })", tr4);
@@ -649,7 +649,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
                  : c->scopes[target].class_id;
     const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
                                                             : c->classes[ocid].name) : "Object";
-    buf_printf(b, "((void)("); emit_expr(c, recv, b);
+    buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), ");
     if (method_owner_singleton(c, target, unbound)) emit_method_owner_class(c, target, unbound, b);
     else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
@@ -671,7 +671,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
       /* and Numeric's that Integer and Float inherit: Integer#abs2 */
       else if (osym && builtin_numeric_owns(mcls, osym) && !builtin_method_known(mcls, osym))
         mcls = "Numeric";
-      buf_printf(b, "((void)("); emit_expr(c, recv, b);
+      buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", mcls);
       return 1;
     }
@@ -702,7 +702,7 @@ int emit_op_method_receiver(Compiler *c, const BopCtx *x, Buf *b) {
                       mrk == NK_ArrayNode || mrk == NK_SelfNode ||
                       mrk == NK_InstanceVariableReadNode);
   if (pure) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), ");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ");
     emit_expr(c, mrecv, b); buf_puts(b, ")");
     return 1;
   }
@@ -782,8 +782,8 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
          inline (creating the bound method emits a non-void-castable
          expression), or the local read when the method object is var-held */
       buf_printf(b, "((void)(");
-      if (mn == recv) { if (mrecv >= 0) emit_expr(c, mrecv, b); else buf_puts(b, "0"); }
-      else emit_expr(c, recv, b);
+      if (mn == recv) { if (mrecv >= 0) emit_expr_for_effect(c, mrecv, b); else buf_puts(b, "0"); }
+      else emit_expr_for_effect(c, recv, b);
       buf_printf(b, "), (sp_int)%d)", ba);
       return 1;
     }
@@ -1589,7 +1589,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       argc == 1 && (is_shift_op(name)) &&
       ty_never_callable(comp_ntype(c, argv[0])) &&
       !user_defines_or_reads(c, "call")) {
-    buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "); (void)("); emit_boxed(c, argv[0], b);
     buf_puts(b, "); sp_raise_cls(\"TypeError\", \"callable object is expected\");"
                 " (sp_Proc *)NULL; })");
@@ -1644,7 +1644,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       is_call_alias(name) &&
       method_expr_is_unbound(c, recv)) {
     if (g_plan_check) ucall_refused(id);
-    buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "); sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"undefined method '%s' for an instance of UnboundMethod\")[1])); %s; })",
                name, default_value_from_compiler(c, repr_of(c, id).as_ty));
     return 1;
@@ -2045,7 +2045,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
          self; an instance-method context binds self too, same answer */
       if (tg3 >= 0 && bare3) {
         buf_puts(b, "((void)(");
-        emit_expr(c, mrecv2, b);
+        emit_expr_for_effect(c, mrecv2, b);
         buf_puts(b, "), (sp_bool)1)");
         return 1;
       }

@@ -197,7 +197,7 @@ static void emit_io_read_len_call(Compiler *c, const char *r, int len, Buf *b) {
   Repr lt0r = repr_of(c, len);
   TyKind lt0 = lt0r.as_ty;
   if (lt0 == TY_NIL) {
-    buf_puts(b, "({ (void)("); emit_expr(c, len, b);
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, len, b);
     buf_printf(b, "); sp_File_read(%s); })", r);
   }
   else if (lt0r.kind == RK_BOXED) {
@@ -1006,7 +1006,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int tv = ++g_tmp;
       char msg[96]; arity_message(msg, sizeof msg, argc, 0, 0, NULL);
       buf_puts(b, "({ "); tv = hold_operand(c, recv, TY_POLY, 1, tv, 1, " ", b);
-      for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+      for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
       buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", tv);
       for (size_t o = 0; o < sizeof owners / sizeof owners[0]; o++)
         if (!builtin_arity_admits(owners[o].cls, name, argc)) buf_printf(b, " || _t%d.cls_id == %s", tv, owners[o].id);
@@ -1374,7 +1374,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           else if (np++ < 2) pos[np - 1] = argv[k];
         }
         if (np > 2) {
-          for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+          for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
           buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 0..2)\"); "
                         "(sp_StrArray *)0", np);
         }
@@ -1617,7 +1617,7 @@ static int emit_io_syswrite_count(Compiler *c, const char *r, const int *argv, i
   int tf = ++g_tmp;
   char msg[96]; arity_message(msg, sizeof msg, argc, 1, 1, NULL);
   buf_printf(b, "({ sp_File *_t%d = %s; ", tf, r);
-  for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+  for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
   buf_printf(b, "if (!_t%d) sp_nil_recv(\"syswrite\"); sp_raise_cls(\"ArgumentError\", \"%s\"); (sp_int)0; })",
              tf, msg);
   return 1;
@@ -1647,7 +1647,7 @@ static void emit_io_read_overcount(Compiler *c, const char *name, const char *r,
                                    const char *expected, Buf *b) {
   int tf = ++g_tmp;
   buf_printf(b, "({ sp_File *_t%d = %s; ", tf, r);
-  for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+  for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
   buf_printf(b, "if (!_t%d) sp_nil_recv(\"%s\"); ", tf, name);
   buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected %s)\"); "
                 "(const char *)0; })", argc, expected);

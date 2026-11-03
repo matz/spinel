@@ -568,7 +568,7 @@ int emit_call_range_literal_arms(Compiler *c, Buf *b, const NodeTable *nt, const
       if (is_range_membership(name) && argc == 1) {
         if (a0 != TY_STRING) {
           /* a non-string can't be in a string range: false (eval arg) */
-          buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)");
+          buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)");
         }
         else {
           int ta = ++g_tmp;

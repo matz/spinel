@@ -1282,7 +1282,7 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
     if (es && es->cand_bound) {
       snprintf(msg, sizeof msg, "no implicit conversion of %s into %s", cn ? cn : "Object", into);
       buf_puts(b, "((void)(");
-      emit_expr(c, node, b);
+      emit_expr_for_effect(c, node, b);
       buf_puts(b, "), sp_raise_cls(\"TypeError\", ");
       emit_str_literal(b, msg);
       buf_printf(b, "), (%s)0)", c_type_name(want));
@@ -1362,7 +1362,7 @@ static int emit_nilbool_conv_raise_w(Compiler *c, int node, TyKind want, int nil
     const char *cn = t == TY_UNKNOWN ? unsettled_container_cls(c, node) : conv_wrong_cls_name(t);
     if (!cn) return 0;
     buf_puts(b, "({ (void)(");
-    emit_expr(c, node, b);
+    emit_expr_for_effect(c, node, b);
     buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into %s\"); %s; })",
                cn, want == TY_STRING ? "String" : "Integer",
                want == TY_STRING ? "(const char *)0" : "(sp_int)0");
@@ -1372,7 +1372,7 @@ static int emit_nilbool_conv_raise_w(Compiler *c, int node, TyKind want, int nil
   const char *dv = want == TY_STRING ? "(const char *)0" : "(sp_int)0";
   if (t == TY_NIL) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, node, b);
+    emit_expr_for_effect(c, node, b);
     /* CRuby's rb_num2long-style slots say "from nil to integer"; the
        rb_convert_type ones (Random.srand, Dir.mkdir's mode) say
        "of nil into Integer", and an IO offset (NUM2OFFT) either, by the
@@ -1614,7 +1614,7 @@ void emit_int_expr_nilable(Compiler *c, int node, Buf *b) {
    written-out `s[nil..]` and the omitted `s[..]` take the same path (#4896). */
 void emit_int_expr_bound(Compiler *c, int node, const char *none, Buf *b) {
   if (comp_ntype(c, node) == TY_NIL) {   /* the literal, and anything typed nil */
-    buf_puts(b, "((void)("); emit_expr(c, node, b); buf_printf(b, "), (sp_int)(%s))", none);
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, node, b); buf_printf(b, "), (sp_int)(%s))", none);
     return;
   }
   if (repr_opt_kind(c, node) == TY_INT) {
@@ -1717,7 +1717,7 @@ void emit_float_expr(Compiler *c, int node, Buf *b) {
   const char *cn = conv_cls_name_of(c, t);
   if (cn && t != TY_INT && t != TY_FLOAT) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, node, b);
+    emit_expr_for_effect(c, node, b);
     buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into Float\"); 0.0; })", cn);
     return;
   }
@@ -1775,7 +1775,7 @@ void emit_float_coerce_expr(Compiler *c, int node, Buf *b) {
     emit_float_expr(c, node, b);
     return;
   }
-  buf_puts(b, "({ (void)("); emit_expr(c, node, b);
+  buf_puts(b, "({ (void)("); emit_expr_for_effect(c, node, b);
   buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Float\"); 0.0; })", cn);
 }
 
@@ -2911,7 +2911,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
       if (nk == NK_NilNode) { buf_puts(b, "sp_box_nil()"); RC(RF_NIL_EFFECT, RW_NONE); return; }
       /* a nil-typed expression can still have side effects (e.g. a void-valued
          block call): evaluate it for effect, then yield nil */
-      buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, ", sp_box_nil())");
+      buf_puts(b, "("); emit_expr_for_effect(c, node, b); buf_puts(b, ", sp_box_nil())");
       RC(RF_NIL_EFFECT, RW_NONE);
       return;
     }
@@ -3009,7 +3009,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   case RK_NONE:
   default:
     /* TY_UNKNOWN (e.g. unrecognized stdlib class .new): evaluate for side-effects, yield nil */
-    buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE); return;
+    buf_puts(b, "("); emit_expr_for_effect(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE); return;
   }
   /* A pointer: NULL is nil. Reference-backed builtins (IO/Fiber/Thread/
      Queue/Mutex/ConditionVariable/Enumerator/Exception/Proc/Method/Regexp/
@@ -3101,7 +3101,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     return;
   }
   /* a pointer kind with no box: evaluate for side-effects, yield nil */
-  buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE);
+  buf_puts(b, "("); emit_expr_for_effect(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE);
 }
 /* emit_boxed: the boxing of node `node`'s value (emit_boxed_impl); under
    --repr-check it keeps the nesting the recorder reads */

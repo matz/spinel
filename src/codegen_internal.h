@@ -1206,6 +1206,9 @@ const char *rename_local(const char *nm);
 
 
 void emit_expr(Compiler *c, int id, Buf *b);
+void emit_expr_for_effect(Compiler *c, int node, Buf *b);
+int effect_view_open(Compiler *c, int node);
+void effect_view_close(Compiler *c, int v);
 /* Does a read of constant (path) node id raise NameError, the constant
    being defined nowhere the program or the runtime can see? A rescue
    operand is read so when an exception reaches its clause. */
@@ -2586,7 +2589,7 @@ void view_unbind(int n);
    restored by view_pop (or view_unwind on a refusal) like a type view. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
-enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD };
+enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED };
 int view_push_repr(Compiler *c, int id, int flag, int v);
 /* A splice's alias of a caller's variable that the call's block assigns
    (argument node arg, splice tag, parameter name), and a fence for a C

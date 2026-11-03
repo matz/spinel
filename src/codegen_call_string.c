@@ -280,7 +280,7 @@ no_gsub_enum:
         (is_match_family(name))) {
       const char *tn9 = rt == TY_FLOAT ? "Float" : "Integer";
       const char *dv9 = default_value_from_compiler(c, repr_of(c, id).as_ty);
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_printf(b, "), (sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for an instance of %s\"), %s))",
                  name, tn9, dv9 ? dv9 : "sp_box_nil()");
       return 1;
@@ -561,7 +561,7 @@ no_gsub_enum:
               (is_match_family(name))) {
             const char *tn9 = rt == TY_FLOAT ? "Float" : "Integer";
             const char *dv9 = default_value_from_compiler(c, repr_of(c, id).as_ty);
-            buf_puts(b, "((void)("); emit_expr(c, recv, b);
+            buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
             buf_printf(b, "), (sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for an instance of %s\"), %s))",
                        name, tn9, dv9 ? dv9 : "sp_box_nil()");
             free(rp.p); return 1;
@@ -710,7 +710,7 @@ no_gsub_enum:
             else if (a0 == TY_NIL) {
               /* nil is the one non-String `re =~ x` accepts: it answers nil
                  rather than raising (#3633) */
-              buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+              buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
               free(rp.p); return 1;
             }
             else {
@@ -729,7 +729,7 @@ no_gsub_enum:
              is checked as =~ checks it -- a String is matched, nil answers
              true, anything else raises =~'s TypeError */
           if (sp_streq(name, "!~") && argc == 1 && a0 == TY_NIL) {
-            buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), (sp_bool)1)");
+            buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), (sp_bool)1)");
             free(rp.p); return 1;
           }
           if (sp_streq(name, "!~") && argc == 1) {
@@ -914,7 +914,7 @@ int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
     else if (emit_try_convert_boxed(c, "Regexp", argv[0], b)) {}
     else {
-      buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
     }
     return 1;
   }
@@ -1110,7 +1110,7 @@ int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_puts(b, "sp_re_src_linear_time(sp_re_source((void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, ")))");
     }
-    else { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), TRUE)"); }
+    else { buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), TRUE)"); }
     return 1;
   }
   /* Regexp.compile is an alias for Regexp.new, and compiles as it does: a
@@ -1784,7 +1784,7 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
     if (root >= 0) {
       NodeTable *ntw = (NodeTable *)c->nt;
       int orig = nt_ref(ntw, id, "receiver");
-      buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
       nt_node_set_ref(ntw, id, "receiver", root);
       emit_expr(c, id, b);
       nt_node_set_ref(ntw, id, "receiver", orig);
@@ -1886,8 +1886,8 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
        through span2, checked here first so the TY_RANGE arm no longer
        sees it. */
     if (argc == 2 && comp_ntype(c, argv[0]) == TY_RANGE) {
-      buf_puts(b, " (void)("); emit_expr(c, argv[0], b); buf_puts(b, ");");
-      buf_puts(b, " (void)("); emit_expr(c, argv[1], b); buf_puts(b, ");");
+      buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, ");");
+      buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, ");");
       buf_puts(b, " sp_raise_cls(\"TypeError\", \"no implicit conversion of Range into Integer\");"
                   " (const char *)0; })");
       return 1;

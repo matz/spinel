@@ -3502,7 +3502,7 @@ int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b) {
       buf_puts(b, "(");
       for (int i = 0; i < en; i++) {
         int ev = nt_kind(nt, el[i]) == NK_AssocNode ? nt_ref(nt, el[i], "value") : el[i];
-        buf_puts(b, "(void)("); emit_expr(c, ev, b); buf_puts(b, "), ");
+        buf_puts(b, "(void)("); emit_expr_for_effect(c, ev, b); buf_puts(b, "), ");
       }
       buf_printf(b, "sp_%sHash_new())", hcn);
       return 1;
@@ -5071,7 +5071,7 @@ void emit_expr_slot(Compiler *c, int node, TyKind slot, Buf *b) {
     if (nt_kind(c->nt, node) == NK_NilNode) { buf_puts(b, sent); return; }
     TyKind vt = repr_of(c, node).as_ty;
     if (vt == TY_NIL || vt == TY_VOID) {
-      buf_puts(b, "({ (void)("); emit_expr(c, node, b); buf_printf(b, "); %s; })", sent);
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, node, b); buf_printf(b, "); %s; })", sent);
       return;
     }
   }
@@ -6450,7 +6450,7 @@ int emit_catch_tag(Compiler *c, int id, Buf *b) {
   /* nil, true and false are single objects in CRuby, so they match by
      identity: each is the address of its own marker. */
   if (t == TY_NIL) {
-    buf_puts(b, "((void)("); emit_expr(c, id, b); buf_puts(b, "), (const char *)&sp_catch_nil_tag)");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, id, b); buf_puts(b, "), (const char *)&sp_catch_nil_tag)");
     return 1;
   }
   if (t == TY_BOOL) {
@@ -6504,7 +6504,7 @@ int hash_okey_miss(Compiler *c, int key, TyKind kt) {
 }
 /* that key: evaluated for its effects, then the nil no entry matches */
 void emit_hash_okey(Compiler *c, int key, Buf *b) {
-  buf_puts(b, "({ (void)("); emit_expr(c, key, b); buf_puts(b, "); sp_oint_nil(); })");
+  buf_puts(b, "({ (void)("); emit_expr_for_effect(c, key, b); buf_puts(b, "); sp_oint_nil(); })");
 }
 
 /* ... and a key that may not be an Integer at run time -- a boxed one, or
@@ -6615,7 +6615,7 @@ static void emit_hash_key_value(Compiler *c, int key, TyKind kt, Buf *b) {
     }
     /* evaluate the key for its effects, then answer the value no key equals */
     buf_puts(b, "({ (void)(");
-    emit_expr(c, key, b);
+    emit_expr_for_effect(c, key, b);
     if (kt == TY_STRING)      buf_puts(b, "); (const char *)0; })");
     else                      buf_puts(b, "); (sp_sym)-1; })");
     return;
@@ -8794,7 +8794,7 @@ void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b) {
      nothing included): evaluated for its effect, then nil */
   if (vt == TY_NIL || vt == TY_VOID ||
       ((vt == TY_UNKNOWN || vt == TY_POLY) && vc >= 0 && nt_kind(nt, vc) == NK_CallNode && call_names_only_void_methods(c, vc))) {
-    buf_puts(b, "((void)("); emit_expr(c, node, b); buf_printf(b, "), %s)", oint_nil(t));
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, node, b); buf_printf(b, "), %s)", oint_nil(t));
     return;
   }
   /* a boxed value, or an untyped one (the gate's raising token): unboxed
@@ -8854,7 +8854,7 @@ void emit_oint_truthy(Compiler *c, int node, TyKind t, Buf *b) {
   if (node_has_oint_form(c, node)) {
     buf_puts(b, "(!("); emit_oint_expr(c, node, t, b); buf_puts(b, ").nil)");
   }
-  else { buf_puts(b, "(("); emit_expr(c, node, b); buf_puts(b, "), 1)"); }
+  else { buf_puts(b, "(("); emit_expr_for_effect(c, node, b); buf_puts(b, "), 1)"); }
 }
 
 /* A typed element read (`a[j]`) whose oint is unwrapped at once: the read

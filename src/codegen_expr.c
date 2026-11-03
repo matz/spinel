@@ -1112,7 +1112,7 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
     if ((at == TY_VOID || at == TY_NIL) && res != TY_POLY && res != TY_UNKNOWN &&
         res != TY_VOID && res != TY_NIL) {
       Buf ab; memset(&ab, 0, sizeof ab);
-      emit_expr(c, nd, &ab);
+      emit_expr_for_effect(c, nd, &ab);
       const char *nv = nil_value(res);
       if (!nv) nv = default_value_from_compiler(c, res);
       if (!nv) nv = "0";
@@ -2187,6 +2187,28 @@ void emit_expr(Compiler *c, int id, Buf *b) {
   g_oint_read = 0;
   g_expr_depth--;
   if (g_repr_check) repr_channel_end(c, frame);
+}
+
+/* Node `node` emitted where its value is thrown away: inside `((void)(...))`,
+   on the left of a comma whose right is the value the position answers, or
+   as a statement whose value is dropped. It is seen as discarded there
+   (Repr.discarded, a view), and so is each node its value can come from (an
+   arm of a conditional, the right of `&&` or `||`: the value-position climb
+   from that node reaches it), so an emitter can leave out what only a read
+   needs. */
+void emit_expr_for_effect(Compiler *c, int node, Buf *b) {
+  int v = effect_view_open(c, node);
+  emit_expr(c, node, b);
+  effect_view_close(c, v);
+}
+/* The view emit_expr_for_effect holds, for a discarding site whose operand
+   another emitter renders (emit_str_expr, emit_oint_expr, emit_boxed):
+   opened before the operand, closed after it. -1 for no node. */
+int effect_view_open(Compiler *c, int node) {
+  return node >= 0 ? view_push_repr(c, nt_paren_single(c->nt, node), VR_DISCARDED, 1) : -1;
+}
+void effect_view_close(Compiler *c, int v) {
+  if (v >= 0) view_pop(c, v);
 }
 
 /* The slot read emit_expr is about to render (a local, an ivar, a cvar, a
@@ -5100,7 +5122,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     else emit_ctype(c, (lt == TY_UNKNOWN || lt_falsy_const) ? res : lt, b);
     buf_printf(b, " _t%d = ", t);
     if (lt_falsy_const) {
-      buf_puts(b, "("); emit_expr(c, left, b); buf_puts(b, ", ");
+      buf_puts(b, "("); emit_expr_for_effect(c, left, b); buf_puts(b, ", ");
       buf_puts(b, res == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, res == TY_UNKNOWN ? TY_INT : res));
       buf_puts(b, ")");
     }
@@ -5327,7 +5349,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       Buf *sv_pre0 = g_pre; int sv_ind0 = g_indent;
       g_pre = &epre; g_indent = 1;
       Buf ev; memset(&ev, 0, sizeof ev);
-      emit_expr(c, e, &ev);
+      emit_expr_for_effect(c, e, &ev);
       g_pre = sv_pre0; g_indent = sv_ind0;
       if (epre.p) buf_puts(b, epre.p);
       buf_printf(b, "%s;", ev.p ? ev.p : "");
@@ -5595,12 +5617,12 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
     }
     buf_printf(b, "sp_frange_new%s(", (om || lpoly || rpoly) ? "_o" : "");
     if (lpoly) buf_printf(b, "sp_poly_frange_bound(_t%d, -HUGE_VAL)", tl);
-    else if (left >= 0 && lnil) { buf_puts(b, "((void)("); emit_expr(c, left, b); buf_puts(b, "), -HUGE_VAL)"); }
+    else if (left >= 0 && lnil) { buf_puts(b, "((void)("); emit_expr_for_effect(c, left, b); buf_puts(b, "), -HUGE_VAL)"); }
     else if (left >= 0) emit_float_expr(c, left, b);
     else buf_puts(b, "(-HUGE_VAL)");
     buf_puts(b, ", ");
     if (rpoly) buf_printf(b, "sp_poly_frange_bound(_t%d, HUGE_VAL)", tr);
-    else if (right >= 0 && rnil) { buf_puts(b, "((void)("); emit_expr(c, right, b); buf_puts(b, "), HUGE_VAL)"); }
+    else if (right >= 0 && rnil) { buf_puts(b, "((void)("); emit_expr_for_effect(c, right, b); buf_puts(b, "), HUGE_VAL)"); }
     else if (right >= 0) emit_float_expr(c, right, b);
     else buf_puts(b, "HUGE_VAL");
     buf_printf(b, ", %d", excl);

@@ -389,7 +389,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
           if (mv >= 0) emit_str_expr(c, mv, b); else buf_puts(b, "\"w\"");
           buf_puts(b, ", ");
-          if (comp_ntype(c, pv) == TY_NIL) { buf_puts(b, "({ (void)("); emit_expr(c, pv, b); buf_puts(b, "); sp_oint_nil(); })"); }
+          if (comp_ntype(c, pv) == TY_NIL) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, pv, b); buf_puts(b, "); sp_oint_nil(); })"); }
           else if (yield_site_type(c, pv) == TY_POLY) { buf_puts(b, "sp_poly_arg_perm("); emit_expr(c, pv, b); buf_puts(b, ")"); }
           else emit_oint_expr(c, pv, TY_INT, b);
           buf_puts(b, ")");
@@ -405,7 +405,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       else if (comp_ntype(c, argv[2]) == TY_NIL) {
         /* a nil OFFSET is "no offset" -- a plain truncating write, not a
            write at position 0 (which would keep the file's tail) */
-        buf_puts(b, "({ (void)("); emit_expr(c, argv[2], b);
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[2], b);
         buf_puts(b, "); sp_file_write("); emit_path_expr(c, argv[0], b);
         buf_puts(b, ", "); emit_to_s_expr(c, argv[1], b); buf_puts(b, "); })");
         return 1;
@@ -425,7 +425,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     }
     /* File.exists? was removed in Ruby 4.0: NoMethodError at the call (#2780) */
     if (sp_streq(name, "exists?") && argc == 1) {
-      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_puts(b, "); sp_raise_cls(\"NoMethodError\", \"undefined method 'exists?' for class File\"); (sp_bool)0; })");
       return 1;
     }
@@ -839,7 +839,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_puts(b, "sp_dir_glob_base("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
         if (comp_ntype(c, bv) != TY_NIL) emit_path_expr(c, bv, b);
         else if (subtree_is_pure_read(c, bv)) buf_puts(b, "NULL");
-        else { buf_puts(b, "({ (void)("); emit_expr(c, bv, b); buf_puts(b, "); NULL; })"); }
+        else { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, bv, b); buf_puts(b, "); NULL; })"); }
         buf_puts(b, ")"); return 1;
       }
     }
@@ -1018,7 +1018,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         }
         const char *ocn = conv_cls_name_of(c, at);
         if (ocn) {
-          buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+          buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
           buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into an exact number\"); (sp_Time *)NULL; })", ocn);
           return 1;
         }
@@ -1214,7 +1214,7 @@ int emit_io_select(Compiler *c, int argc, const int *argv, Buf *b) {
   if (argc < 4) buf_puts(b, "-1.0");
   else if (io_select_timeout_numeric(c, argv[3])) emit_float_expr(c, argv[3], b);
   else if (repr_of(c, argv[3]).as_ty == TY_NIL) {
-    buf_puts(b, "((void)("); emit_expr(c, argv[3], b); buf_puts(b, "), -1.0)");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[3], b); buf_puts(b, "), -1.0)");
   }
   else {
     int tv = ++g_tmp;
@@ -1269,7 +1269,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       if (ok) {
         buf_puts(b, "(");
         for (int e = 0; e < en; e++) {
-          buf_puts(b, "(void)("); emit_expr(c, nt_ref(nt, els[e], "value"), b); buf_puts(b, "), ");
+          buf_puts(b, "(void)("); emit_expr_for_effect(c, nt_ref(nt, els[e], "value"), b); buf_puts(b, "), ");
         }
         buf_puts(b, "sp_gc_collect_request(), (sp_int)0)");
         return 1;
@@ -1594,7 +1594,7 @@ else {
          pointer-to-int cast that silently truncates to Infinity (#2616) */
       if (repr_of(c, argv[1]).big) {
         buf_puts(b, "((void)("); emit_math_arg(c, argv[0], b); buf_puts(b, "), (void)(");
-        emit_expr(c, argv[1], b);
+        emit_expr_for_effect(c, argv[1], b);
         buf_puts(b, "), (sp_raise_cls(\"RangeError\", \"bignum too big to convert into `long'\"), 0.0))");
         return 1;
       }
@@ -1638,7 +1638,7 @@ else {
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir") &&
       (is_exist_alias(name)) && argc == 1) {
     if (sp_streq(name, "exists?")) {
-      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_puts(b, "); sp_raise_cls(\"NoMethodError\", \"undefined method 'exists?' for class Dir\"); (sp_bool)0; })");
       return 1;
     }
@@ -2381,7 +2381,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
       else if (argc >= 1 && comp_ntype(c, argv[0]) == TY_NIL) {
         /* rand(nil) is CRuby's ArgumentError, not the int slot's TypeError */
-        buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
         buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"invalid argument - \"); (sp_int)0; })");
       }
       else if (argc >= 1) {
@@ -2499,7 +2499,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (argc >= 1 && comp_ntype(c, argv[0]) == TY_NIL) {
-        buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
         buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"invalid argument - \"); (sp_int)0; })");
       }
       else if (argc >= 1) {
@@ -2518,7 +2518,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     /* a Random instance is an opaque object: #class, and identity #==/#equal? (#2524) */
     if (sp_streq(name, "class") && argc == 0) {
       if (!node_may_be_null_nil(c, recv)) {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), ((sp_Class){0, SPL(\"Random\")}))");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ((sp_Class){0, SPL(\"Random\")}))");
         return 1;
       }
       /* a NULL slot is nil, whose class is NilClass */
@@ -2559,11 +2559,11 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            then the argument, as Ruby orders them. */
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_Random *_t%d = ", tr); emit_expr(c, recv, b);
-        buf_puts(b, "; (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
         buf_printf(b, "); _t%d == NULL; })", tr);
       }
       else {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), FALSE)");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), FALSE)");
       }
       return 1;
     }

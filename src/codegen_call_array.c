@@ -360,7 +360,7 @@ static int emit_array_operand_type_error(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "%s _t%d = (", at == TY_BOOL ? "int" : "const char *", tb);
     emit_expr(c, argv[0], b); buf_puts(b, "); ");
   }
-  else { buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); "); }
+  else { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); "); }
   emit_fold_recv_test(c, x->id, tr, b);
   if (at == TY_NIL)
     buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");");
@@ -1173,7 +1173,7 @@ int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b) {
         int cfl = hold_recv_open(c, recv, 0, "sp_PolyArray *", "SP_GC_ROOT", b, &rfl);
         buf_printf(b, "sp_PolyArray_flatten_n(%s, ", rfl.p);
         /* a nil depth is legal and means "no limit" (flatten_n: < 0) */
-        if (comp_ntype(c, argv[0]) == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), (sp_int)-1)"); }
+        if (comp_ntype(c, argv[0]) == TY_NIL) { buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), (sp_int)-1)"); }
         else emit_int_expr(c, argv[0], b);
         buf_puts(b, ")");
         free(rfl.p);
@@ -1467,7 +1467,7 @@ int emit_op_array_assoc(Compiler *c, const BopCtx *x, Buf *b) {
   if (rt != TY_POLY_ARRAY && argc == 1 && (sp_streq(name, "assoc") || sp_streq(name, "rassoc"))) {
     TyKind et = ty_array_elem(rt);
     if (et == TY_INT || et == TY_FLOAT || et == TY_STRING || et == TY_SYMBOL || et == TY_BOOL) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");
       emit_boxed(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
       return 1;
     }
@@ -1662,7 +1662,7 @@ int emit_op_array_fetch_values0(Compiler *c, const BopCtx *x, Buf *b) {
   if (rt == TY_POLY_ARRAY) return 0;
   /* fetch_values with no keys reads nothing: an empty Array */
   if (sp_streq(name, "fetch_values") && argc == 0) {
-    buf_printf(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), sp_%sArray_new())", k);
+    buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), sp_%sArray_new())", k);
     return 1;
   }
   return 0;

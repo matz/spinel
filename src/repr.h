@@ -76,6 +76,8 @@ typedef struct {
   unsigned head_held:1;   /* a call's nil arm head ran this operand into a
                              temp of its own ahead of the call (VR_HEAD_HELD,
                              a view around the call): it reads as that temp */
+  unsigned discarded:1;   /* emitted where its value is thrown away
+                             (VR_DISCARDED, a view around the emission) */
   unsigned big:1;         /* an Integer held as an sp_Bigint * */
   unsigned elems_handle:1; /* a container slot whose String elements are
                               boxed shared handles (--share-strings) */

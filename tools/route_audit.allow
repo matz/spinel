@@ -169,7 +169,7 @@ src/analyze_pass.c infer_param_types_ex =s->name super, by its def's name
 src/analyze_pass.c propagate_prep_params a prepended method's own name
 src/analyze_scope.c cmethod_reaches_class_ivar_walk =c->scopes[mi].name a scope's own name
 src/analyze_scope.c forwarding_target_scan =s->name a scope's own name
-src/analyze_scope.c specialize_cmethod_for =c->scopes[mi].name a scope's own name
+src/analyze_scope.c specialize_cmethod_for =as the copy's own name (its scope's, or the hidden name of a module's hidden copy)
 src/analyze_scope.c specialize_inherited_cls_new =mname a scope's own name
 src/analyze_scope.c specialize_super_cmethod super, by its def's name
 src/analyze_scope.c super_lands_on_attr super, by its def's name

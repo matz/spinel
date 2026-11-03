@@ -94,6 +94,7 @@ int ie_body_has_break_next(Compiler *c, int node);
 int ie_body_ivar_write(const NodeTable *nt, int node);
 TyKind ie_splice_value_ty(Compiler *c, int node);
 int basicobject_own_method(const char *n);
+void emit_poly_call2_ordered(Compiler *c, const char *fn, const char *lead, int recv, int arg, Buf *b);
 void emit_poly_cmp_ordered(Compiler *c, const char *fn, int recv, int arg, Buf *b);
 void emit_handle_inspect(Compiler *c, int recv, TyKind rt, Buf *b);
 int bigint_cmp_operand_ok(TyKind t);

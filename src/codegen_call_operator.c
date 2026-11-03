@@ -2058,8 +2058,10 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     else if (sp_streq(name, ">=")) cfn = "sp_poly_ge";
     /* a user operator that answers a non-bool goes through the dispatch */
     if (cfn && repr_of(c, id).kind == RK_BOXED && user_defines_or_reads(c, name)) {
-      buf_printf(b, "sp_poly_relop_v(\"%s\", ", name); emit_boxed(c, recv, b); buf_puts(b, ", ");
-      emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      char lead[16]; snprintf(lead, sizeof lead, "\"%s\", ", name);
+      int aic = c->args_in_call;
+      emit_poly_call2_ordered(c, "sp_poly_relop_v", lead, recv, argv[0], b);
+      c->args_in_call = aic;   /* (a program's operator answers, not a raise) */
       return 1;
     }
     if (cfn) {
@@ -2067,8 +2069,9 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          but in a dispatch's builtin arm the builtin comparison answers: its
          bool is boxed for the readers of the call's boxed type */
       int bx = repr_of(c, id).kind == RK_BOXED;
-      buf_printf(b, "%s%s(", bx ? "sp_box_bool(" : "", cfn); emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, bx ? "))" : ")");
-      c->args_in_call = recv;
+      if (bx) buf_puts(b, "sp_box_bool(");
+      emit_poly_cmp_ordered(c, cfn, recv, argv[0], b);
+      if (bx) buf_puts(b, ")");
       return 1;
     }
   }

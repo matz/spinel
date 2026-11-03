@@ -3595,20 +3595,31 @@ int poly_binop_recv_temp(Compiler *c, int recv, int arg, Buf *b, int *stmt_expr)
    against the value the argument had just stored. And the statement
    expression the hoist used holds only while the argument renders as a C
    expression: under promote, boxing an argument spills its writes into the
-   pre-statement buffer, which lands in front of the whole expression. */
-void emit_poly_cmp_ordered(Compiler *c, const char *fn, int recv, int arg, Buf *b) {
-  if (node_may_run_ruby(c->nt, arg)) {
+   pre-statement buffer, which lands in front of the whole expression.
+
+   The receiver is held, too, when it can be a value nothing else holds (the
+   member read out of a fresh `P.new(...).b`, a fresh `x + y`) and the
+   argument allocates without running Ruby (an interpolation): that
+   allocation collected it, which emit_str_eq_ordered's rooted temp prevents
+   for the typed String twin. `lead` is text the call takes ahead of the two
+   operands ("" for none). */
+void emit_poly_call2_ordered(Compiler *c, const char *fn, const char *lead, int recv, int arg, Buf *b) {
+  if (node_may_run_ruby(c->nt, arg) ||
+      (operand_may_allocate(c, recv) && operand_may_allocate(c, arg))) {
     int se = 0;
     int t = poly_binop_recv_temp(c, recv, arg, b, &se);
-    buf_printf(b, "%s(_t%d, ", fn, t);
+    buf_printf(b, "%s(%s_t%d, ", fn, lead, t);
     emit_boxed(c, arg, b);
     buf_puts(b, se ? "); })" : ")");
     c->args_in_call = recv;
     return;
   }
-  buf_printf(b, "%s(", fn); emit_boxed(c, recv, b); buf_puts(b, ", ");
+  buf_printf(b, "%s(%s", fn, lead); emit_boxed(c, recv, b); buf_puts(b, ", ");
   emit_boxed(c, arg, b); buf_puts(b, ")");
   c->args_in_call = recv;
+}
+void emit_poly_cmp_ordered(Compiler *c, const char *fn, int recv, int arg, Buf *b) {
+  emit_poly_call2_ordered(c, fn, "", recv, arg, b);
 }
 /* 1 for Encoding::BINARY or Encoding::ASCII_8BIT, 0 for Encoding::UTF_8, -1
    for any other node: the two encodings a String reads as (String#encoding in
@@ -16481,9 +16492,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
        A String range (family 7) is Range#=== instead, the runtime coverage
        rule (sp_poly_case_eq), which also reads a shared mutable String. */
     if (fr && fr != 5 && fr != 6 && a0r.kind == RK_BOXED) {
-      buf_puts(b, fr == 7 ? "sp_poly_case_eq(" : "sp_poly_eq(");
-      emit_boxed(c, recv, b); buf_puts(b, ", ");
-      emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      emit_poly_cmp_ordered(c, fr == 7 ? "sp_poly_case_eq" : "sp_poly_eq", recv, argv[0], b);
       return 1;
     }
     /* a comparable-family receiver === nil is always false; === is value

@@ -27,7 +27,8 @@ int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int ha
   if (cid < 0 || !name) return has_base ? CP_DIRECT : CP_NONE;
   int n = dispatch_impl_count(c, call, cid, name);
   if (!(n > 1 || (!has_base && n >= 1))) return has_base ? CP_DIRECT : CP_NONE;
-  return dispatch_arms_disagree(c, call, cid, name) ? CP_PER_ARM : CP_SWITCH;
+  return dispatch_arms_disagree(c, call, cid, name) || (!has_base && dispatch_count_misfits(c, call, cid, name))
+         ? CP_PER_ARM : CP_SWITCH;
 }
 
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {

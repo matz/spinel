@@ -11103,7 +11103,8 @@ int arity_count_error(Compiler *c, Scope *m, int given, char *msg, size_t n) {
    (emit_dispatch) and the inlined yield path (emit_inline_call_x): the
    dispatch kept its own count, which took keyword parameters for positional
    slots and skipped every keyword hash, so `obj.m(3, 4)` against
-   `def m(x, k: 1)` bound silently where `m(3, 4)` raised. */
+   `def m(x, k: 1)` bound silently where `m(3, 4)` raised.
+   call_arity_may_raise asks the same without emitting. */
 void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
   int kwh = -1;
@@ -11152,6 +11153,25 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
     return;
   }
   args_raise(c, argv, argc, "%s", msg);
+}
+
+/* Does emit_call_arity_check raise for these arguments into `m`? Its
+   questions in its order, asked without emitting: a `**nil` method given a
+   keyword (a `**` spread's when the run time finds a key in it), a count it
+   judges here, or a keyword error (after a splat, once the run time has
+   judged the count). A positional count only the run time knows, past a
+   splat or a `**` spread that may count, is not asked: emit_call_arity_check
+   does not judge it either. A change to one is a change to the other. */
+static int call_arity_may_raise(Compiler *c, Scope *m, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  int kwh = nt_argv_kwh(nt, argv, argc) >= 0 ? argv[argc - 1] : -1, pos_argc = kwh >= 0 ? argc - 1 : argc;
+  KwPlan P;
+  kw_plan(c, m, kwh, &P);
+  if (P.role == KWH_REFUSED) return 1;
+  char msg[512];
+  if (!nt_argv_has_splat(nt, argv, pos_argc) && P.count != KWC_NONEMPTY &&
+      arity_count_error(c, m, pos_argc + P.count, msg, sizeof msg)) return 1;
+  return !arity_unjudged(c, m) && kw_plan_error(&P, msg, sizeof msg);
 }
 
 /* The positional layout of one call into one callee: which argument, splat
@@ -12735,6 +12755,59 @@ int dispatch_arms_disagree(Compiler *c, int call, int cid, const char *name) {
   return 0;
 }
 
+/* The method the shared temps of a dispatch on cid are laid out for when
+   cid's chain has none: the first arm's, which every arm takes alike
+   (dispatch_arms_disagree). NULL for none. */
+static Scope *dispatch_first_arm(Compiler *c, int call, int cid, const char *name) {
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!is_descendant(c, k, cid)) continue;
+    int kmi = call_target(c, call, k, name, 0, NULL);
+    if (kmi >= 0 && scope_has_callable_symbol(c, kmi)) return &c->scopes[kmi];
+  }
+  return NULL;
+}
+
+/* Is the count of a call's arguments judged ahead of a dispatch's switch,
+   against pm? Not when an argument is forwarded or a block argument, nor
+   when a parameter is synthesized (every __-prefixed one, a __bam_
+   wrapper's too: a receiver-bound wrapper's first one is its receiver, not
+   an argument). */
+static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, int argc) {
+  const NodeTable *nt = c->nt;
+  if (!pm || (!argv && argc)) return 0;
+  for (int k = 0; k < argc; k++) {
+    NodeKind ak = nt_kind(nt, argv[k]);
+    if (ak == NK_ForwardingArgumentsNode || ak == NK_BlockArgumentNode) return 0;
+  }
+  for (int i = 0; i < pm->nparams; i++)
+    if (pm->pnames[i] && pm->pnames[i][0] == '_' && pm->pnames[i][1] == '_') return 0;
+  return 1;
+}
+
+/* Does a descendant of cid answer `name` through an attr reader or writer,
+   which has no scope to be an arm of its own? */
+static int dispatch_accessor_answers(Compiler *c, int call, int cid, const char *name) {
+  char wbase[256];
+  int is_wr = setter_base_name(name, wbase, sizeof wbase);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!is_descendant(c, k, cid) || dispatch_arm_scope(c, call_target(c, call, k, name, 0, NULL)) >= 0) continue;
+    if (comp_reader_in_chain(c, k, name, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL))) return 1;
+  }
+  return 0;
+}
+
+/* See codegen_internal.h. */
+int dispatch_count_misfits(Compiler *c, int call, int cid, const char *name) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || !sp_streq(nt_str(nt, call, "name"), name) ||
+      cplan_dispatch_miss(c, call, cid) == CM_NONE || dispatch_accessor_answers(c, call, cid, name))
+    return 0;
+  Scope *pm = dispatch_first_arm(c, call, cid, name);
+  int argc = 0;
+  const int *argv = call_args(nt, call, &argc);
+  return dispatch_count_judged(c, pm, argv, argc) && call_arity_may_raise(c, pm, argc, argv);
+}
+
 /* One arm of a per-arm dispatch: the call of `kmi` (defined in class `kd`) with
    its own argument list, assigned to the result temp. */
 /* the dispatch switch being emitted holds an Integer / Float answer that
@@ -12910,11 +12983,25 @@ void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b) {
    the plan says self of another class gets there (cplan_dispatch_miss),
    naming self's class as it runs and staging self as the receiver;
    otherwise, and after the raise, the typed placeholder the result slot
-   takes. */
+   takes. A per-arm dispatch passes its arguments (argsNode), which no
+   arm ran for this self: CRuby runs them before it finds no method. */
 static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
-                                       int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
+                                       int argsNode, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
   int miss = miss_id >= 0 ? cplan_dispatch_miss(c, miss_id, cid) : CM_NONE;
   if (miss != CM_NONE) {
+    int argc = 0;
+    const int *argv = argsNode >= 0 ? nt_arr(c->nt, argsNode, "arguments", &argc) : NULL;
+    Buf pb; memset(&pb, 0, sizeof pb);
+    if (argc > 0) {
+      Buf *sv = g_pre;
+      int ov = g_n_argov;
+      g_pre = &pb;
+      emit_args_run(c, argv, argc);
+      g_pre = sv;
+      view_unbind(ov);
+    }
+    /* in a block of its own: the arguments' temps are declarations */
+    if (pb.p) buf_printf(b, "{ %s", pb.p);
     Buf v; memset(&v, 0, sizeof v);
     emit_obj_self_box(c, cid, selfptr, &v);
     if (miss == CM_NAMEERROR) {
@@ -12928,6 +13015,8 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
       buf_printf(b, ", %s); ", v.p);
     }
     free(v.p);
+    if (pb.p) buf_puts(b, "} ");
+    free(pb.p);
   }
   buf_printf(b, "_t%d = %s; break;", rtmp,
              ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
@@ -12936,7 +13025,8 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
 /* The dispatch switch for arms that disagree on their parameters: each arm
    binds the call's arguments by its own method's list, the way a direct call
    to that method would, defaults and arity check included. The argument
-   expressions sit inside the arms, so only the entered one evaluates them. */
+   expressions sit inside the arms, so only the entered one evaluates them;
+   the default arm runs them before its miss raise (emit_dispatch_miss_default). */
 static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
                                   int argsNode, int blk_node, int mi, int defcls,
                                   TyKind ret, TyKind disp_ret, Buf *b) {
@@ -12977,7 +13067,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, rtmp, ret, disp_ret, b);
   buf_printf(b, " } _t%d; })", rtmp);
 }
 
@@ -13386,7 +13476,9 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
   if (!dpl || g_plan_check) {
     int impl_n = dispatch_impl_count(c, g_nd_call_id, cid, name);
     int sw = impl_n > 1 || (!m && impl_n >= 1);
-    int oform = !sw ? (m ? CP_DIRECT : CP_NONE) : dispatch_arms_disagree(c, g_nd_call_id, cid, name) ? CP_PER_ARM : CP_SWITCH;
+    int oform = !sw ? (m ? CP_DIRECT : CP_NONE)
+              : dispatch_arms_disagree(c, g_nd_call_id, cid, name) || (!m && dispatch_count_misfits(c, g_nd_call_id, cid, name))
+              ? CP_PER_ARM : CP_SWITCH;
     if (!dpl) form = oform;
     else if (form != oform)
       fprintf(stderr, "plan-check: cplan-conflict: dispatch-form node %d %s: plan %d, counted %d (%d implementations)\n",
@@ -13420,28 +13512,16 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
      or for a method only subclasses define the first arm's, which every arm
      takes alike (dispatch_arms_disagree). Laid out as the call's positionals
      given, a rest arm got them one by one, and the C call did not build. */
-  Scope *pm = m;
-  for (int k = 0; !pm && k < c->nclasses; k++) {
-    if (!is_descendant(c, k, cid)) continue;
-    int kmi = call_target(c, g_nd_call_id, k, name, 0, NULL);
-    if (kmi >= 0 && scope_has_callable_symbol(c, kmi)) pm = &c->scopes[kmi];
-  }
+  Scope *pm = m ? m : dispatch_first_arm(c, g_nd_call_id, cid, name);
   /* Arity check, the free-function path's own: an over- or under-supplied
      instance call went through with the extra arguments simply dropped
      (#3677). A count only a splat knows is measured with the splat below. */
   int argov_saved_d = g_n_argov;
-  /* the count is judged here, and with the splat below, unless an argument
-     is forwarded or a block argument, or a parameter is synthesized --
-     every __-prefixed one, a __bam_ wrapper's too: a receiver-bound
-     wrapper's first one is its receiver, not an argument */
-  int judged_d = pm && (argv || argc == 0);
-  for (int k = 0; k < argc && argv && judged_d; k++) {
-    const char *at = nt_type(nt, argv[k]);
-    if (at && (nt_kind(nt, argv[k]) == NK_ForwardingArgumentsNode || sp_streq(at, "BlockArgumentNode")))
-      judged_d = 0;
-  }
-  for (int i = 0; judged_d && i < pm->nparams; i++)
-    if (pm->pnames[i] && pm->pnames[i][0] == '_' && pm->pnames[i][1] == '_') judged_d = 0;
+  /* the count is judged here, and with the splat below
+     (dispatch_count_judged); a count that raises against a method only
+     descendants define is judged in their arms instead (the plan's
+     CP_PER_ARM, dispatch_count_misfits) */
+  int judged_d = dispatch_count_judged(c, pm, argv, argc);
   if (judged_d) emit_call_arity_check(c, pm, argc, argv);
   /* `callee(...)`: forward the enclosing `def foo(...)` method's synthesized
      __fwd_* params positionally (#1288), same as the emit_args_filled path. */
@@ -13918,7 +13998,7 @@ else {
      call to a nonexistent sp_<base>_<name>. */
   if (!m) {
     buf_puts(b, " default: ");
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, rtmp, ret, disp_ret, b);
     buf_printf(b, " } _t%d; })", rtmp);
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;

@@ -1829,20 +1829,41 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
       else if (obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
           scope_has_callable_symbol(c, obj_mi)) {
         /* an optional parameter takes its default, spelled with the
-           boxed receiver as self */
+           boxed receiver as self. What a default puts ahead of the call (a
+           temp of its own, an earlier parameter it reads) is this arm's
+           alone, in a block of the arm: in the statement's prelude it ran
+           for a value of every class, or named a temp the prelude never
+           declared. A default that reads an earlier parameter reads it
+           from that parameter's temp (emit_pd_param_bind), as a direct
+           call's does. */
+        Scope *om = &c->scopes[obj_mi];
         Buf ob; memset(&ob, 0, sizeof ob);
-        buf_printf(&ob, "%s(_t%d", mc_method(c, &c->scopes[obj_mi]), tv);
+        Buf apre; memset(&apre, 0, sizeof apre);
+        buf_printf(&ob, "%s(_t%d", mc_method(c, om), tv);
         { const char *saved_self = g_self;
           char oselfbuf[32]; snprintf(oselfbuf, sizeof oselfbuf, "_t%d", tv);
           g_self = oselfbuf;
-          for (int a = 0; a < c->scopes[obj_mi].nparams; a++) {
-            buf_puts(&ob, ", "); emit_arg_or_default(c, &c->scopes[obj_mi], a, -1, &ob);
+          Buf *sv_pre = g_pre; g_pre = &apre;
+          int sibling = om->nparams <= 64 && default_refs_earlier_param(c, om);
+          int uid = sibling ? ++g_tmp : 0, ren_base = g_nren;
+          for (int a = 0; a < om->nparams; a++) {
+            buf_puts(&ob, ", ");
+            if (!sibling) { emit_arg_or_default(c, om, a, -1, &ob); continue; }
+            Buf vb; memset(&vb, 0, sizeof vb);
+            char tn[64];
+            emit_arg_or_default(c, om, a, -1, &vb);
+            emit_pd_param_bind(c, om, a, uid, vb.p, tn, sizeof tn);
+            free(vb.p);
+            buf_puts(&ob, tn);
           }
+          g_nren = ren_base;
+          g_pre = sv_pre;
           g_self = saved_self; }
-        emit_trailing_blk_arg(c, &c->scopes[obj_mi], id, (*blk_tmp0), &ob);
+        emit_trailing_blk_arg(c, om, id, (*blk_tmp0), &ob);
         buf_puts(&ob, ")");
         const char *ocall = ob.p;
         buf_puts(b, " default: ");
+        if (apre.p && apre.p[0]) { buf_puts(b, "{ "); buf_puts(b, apre.p); }
         int pconv = PC_SAME;
         if (method_is_void(&c->scopes[obj_mi])) { buf_puts(b, ocall); pconv = PC_VOID; }
         else {
@@ -1861,7 +1882,9 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
           else if (method_ret_is_oint(&c->scopes[obj_mi])) buf_printf(b, "%s(%s)", oint_arg(c->scopes[obj_mi].ret), ocall);
           else plan_put_plain(so, ret, ocall, b);
         }
+        if (apre.p && apre.p[0]) buf_puts(b, "; }");
         buf_puts(b, "; break;");
+        free(apre.p);
         free(ob.p);
         done = 1;
         if (g_plan_check) pa_observe(PA_USER, PA_KEY_DEFAULT, obj_mi, c->scopes[obj_mi].ret, pconv);

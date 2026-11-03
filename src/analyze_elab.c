@@ -1023,10 +1023,19 @@ static int lr_core(const LoadRecord *r, int k) {
    that the record cannot follow, keyed as a constant owner; and whether a
    definition form runs code of the program's, keyed by its node (vis: the
    answer, lr_form_runs); whether a def's body defines or writes anything
-   when it runs, keyed by the def (vis: the answer, lr_body_defines) */
+   when it runs, keyed by the def (vis: the answer, lr_body_defines); and
+   whether the record holds a def in a method body as the version that
+   body makes, keyed by the def (vis: the answer, lr_body_held) */
 enum { LR_KEY_VIS = -5, LR_KEY_OPAQUE = -6, LR_KEY_RUNS = -7, LR_KEY_DEFINES = -8, LR_KEY_AUTO = -9,
        LR_KEY_CONST = -2 - ELAB_CONST,   /* a constant's history, keyed as the variables' (ElabVar) are */
-       LR_KEY_EITHER = -10 };   /* a lookup's only: an owner's constant, else its registration, as CRuby's table holds both */
+       LR_KEY_EITHER = -10,   /* a lookup's only: an owner's constant, else its registration, as CRuby's table holds both */
+       LR_KEY_HELD = -11 };
+/* Is key a the memo of an answer (LR_KEY_RUNS, LR_KEY_DEFINES,
+   LR_KEY_HELD): a history keyed by a node, holding no entry of the
+   program's, which a walk over the histories passes over? */
+static int lr_key_memo(int a) {
+  return a == LR_KEY_RUNS || a == LR_KEY_DEFINES || a == LR_KEY_HELD;
+}
 
 static void *lr_grow(void *v, int *cap, int n, size_t sz) {
   if (n < *cap) return v;
@@ -1783,6 +1792,76 @@ static void lr_refl_take(Compiler *c) {
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
 static int lr_callbacks_define(Compiler *c, int depth);
 
+static int lr_body_def(const NodeTable *nt, const int *par, int n, int node);
+static int lr_const_seen(Compiler *c, const char *name);
+static int lr_super(Compiler *c, int cls);
+
+/* Is constant `name` bound once, so that what it names never changes: the
+   record sees every write of it (lr_const_seen), the source writes it with
+   class and module headers alone, which reopen what the first made, or
+   with one write and no header, and no remove_const may take it away? */
+static int lr_const_final(Compiler *c, const char *name) {
+  const LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  int writes = 0, headers = 0;
+  if (!lr_const_seen(c, name)) return 0;
+  for (int i = 0; i < r->nsrcw; i++)
+    if (sp_streq(r->srcw[i].name, name)) {
+      NodeKind wk = nt_kind(nt, r->srcw[i].node);
+      if (wk == NK_ClassNode || wk == NK_ModuleNode) headers++;
+      else writes++;
+    }
+  if (writes > 1 || (writes && headers)) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, n) {
+    const char *m = nt_str(nt, n, "name");
+    int ac = 0, a = 0;
+    const int *av = call_args(nt, n, &ac);
+    while (m && is_send_family(m)) m = a < ac ? vis_arg_name(nt, av[a++]) : NULL;
+    if (!m) return 0;   /* (lr_const_seen: no name the record cannot read) */
+    if (is_remove_const_name(m) && (a >= ac || !vis_arg_name(nt, av[a]) || sp_streq(vis_arg_name(nt, av[a]), name))) return 0;
+  }
+  return 1;
+}
+
+/* Does the record hold def node `def` (a `def K.m` in a method body) as
+   the version that body makes (lr_body_versions), on facts that cannot
+   change later: K's constant is bound once (lr_const_final), and K's class
+   and every class on its chain are in the record already, each superclass
+   fixed by the class's first header (CRuby raises on another), so its
+   chain is where it ends (lr_chain_open)? Its version opens where the
+   body first runs, so the def is no definition the record cannot follow
+   (lr_node_defines). Asked first while the walk records, where a class it
+   has not reached yet answers no, and kept (LR_KEY_HELD): a yes is then
+   the answer of the whole record, and a def it does not hold, which
+   lr_body_versions may still record, counts as a definition the record
+   cannot follow, so the calls that run its body stay opaque.
+   SPINEL_ELAB_CHECK asks it again of the finished record (lr_check_held). */
+static int lr_body_holds(Compiler *c, int def) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);   /* (the walk's: the tree's) */
+  int recv = nt_ref(nt, def, "receiver"), k = recv >= 0 ? nt_def_receiver(nt, recv) : -1, held = 0;
+  int body = def < r->n ? lr_body_def(nt, par, r->n, def) : -1;
+  if (body > 0 && k >= 0 && nt_kind(nt, k) == NK_ConstantReadNode && r->at[body] >= 0 && lr_const_final(c, lr_written_name(nt, k))) {
+    lr_place_ref(r, nt, k, r->at[body], LR_LATE | LR_BODY);   /* (where the climb places it: a placed def's receiver, lr_receiver) */
+    int cls = lr_class_ref_at(c, k, NULL);
+    held = cls >= LR_MAIN && !lr_chain_open(c, cls);
+    for (int a = cls, d = 0; held && a >= 0 && a < c->nclasses && d < 64; a = lr_super(c, a), d++) {
+      const LrClass *kc = lr_class(r, a);
+      if (!c->classes[a].is_builtin_const && (!kc || !kc->nopen)) held = 0;
+    }
+  }
+  return held;
+}
+/* ...its first answer, kept */
+static int lr_body_held(Compiler *c, int def) {
+  const LrHist *h = lr_hist(c->lrec, LR_KEY_HELD, def, "", 0);
+  if (h && h->n) return h->v[h->n - 1].vis;
+  int held = lr_body_holds(c, def);
+  lr_version(c->lrec, LR_KEY_HELD, def, "", (LrDef){ def, LR_OPAQUE, (unsigned char)held, 0, 0, NULL });
+  return held;
+}
+
 /* May a call of `name` in a method body run a method of the program's
    that defines or writes something? Each place the program defines the
    name must be a def whose body does neither (lr_body_defines), and one
@@ -1840,6 +1919,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   NodeKind k = nt_kind(nt, n);
   int nc = 0;
   const NodeKind *ck = elab_const_write_kinds(&nc);
+  if (k == NK_DefNode && lr_body_held(c, n)) return 0;   /* (the record follows it) */
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return 1;
   for (int i = 0; i < nc; i++) if (k == ck[i]) return 1;
   if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return 1;   /* a block passed on */
@@ -2359,6 +2439,31 @@ static void lr_body_versions(Compiler *c) {
   }
 }
 
+/* Each def the record answered held for (lr_body_held, its first answer
+   kept) against the answer the finished record gives, and recorded as a
+   body version: a held def that is not, or a kept yes the record now
+   answers no to, is an input the first answer read before it was final.
+   A kept no the record now answers yes to is the walk's (a class it had
+   not reached), which lr_body_held keeps on purpose. */
+static void lr_check_held(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  LrCheck *f = lr_family(r, "body held");
+  for (int i = 0; i < r->nhist; i++) {
+    if (r->hist[i].a != LR_KEY_HELD || !r->hist[i].n || !r->hist[i].v[r->hist[i].n - 1].vis) continue;
+    int def = r->hist[i].b, recv = nt_ref(nt, def, "receiver"), found = 0, now;
+    const LrHist *h = recv >= 0 ? lr_hist(r, lr_class_ref_at(c, nt_def_receiver(nt, recv), NULL), 1, nt_str(nt, def, "name"), 0) : NULL;
+    for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
+    f->asked++;
+    if ((now = lr_body_holds(c, def)) && found) continue;
+    f->differ++;
+    if (r->shown++ >= LR_CHECK_SHOW) continue;
+    char d[96];
+    lr_node_desc(c, def, d, sizeof d);
+    fprintf(stderr, "spinel-elab-check: body held def=%s recorded=%d now=%d\n", d, found, now);
+  }
+}
+
 /* A class or module body that is no statement of the load phase: one in
    a lambda or in a block kept to run later (`l = -> { class G; private
    :foo; end }`), or in an expression. It runs when the program runs that
@@ -2472,6 +2577,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_record_unplaced(c);
   r->recorded = 1;
   if (r->check) {   /* the same record made after the walk, as a check */
+    lr_check_held(c);
     char *walked = lr_dump_text(c);
     lr_record_again(&x);
     lr_check_walked(c, walked);
@@ -4415,6 +4521,7 @@ static unsigned lr_unsettled_tables(Compiler *c, int cls, const int *owners, int
   unsigned un = 0;
   for (int i = 0; i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
+    if (lr_key_memo(h->a)) continue;
     int own = h->a == cls ? 1 : 0, core = h->a == LR_MAIN || lr_core_owner(c, h->a);
     for (int o = 0; o < n && !own && h->a >= LR_MAIN; o++) own = owners[o] == h->a ? 2 : 0;
     int sg = h->a == LR_KEY_CONST && h->b <= 0;   /* (a singleton class body's, or an owner not known) */
@@ -6685,14 +6792,14 @@ void elab_dump(Compiler *c, FILE *out) {
   if (r->nhist) lr_run_points(c);
   for (int i = 0; i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
-    if (h->a == LR_KEY_DEFINES) continue;
-    if (h->a == LR_KEY_VIS) fprintf(out, "visibility in #%d:", elab_point_of(c, h->b).seq);
-    else if (h->a == LR_KEY_OPAQUE) fprintf(out, "opaque %s:", h->b >= 2 ? c->classes[h->b - 2].name : "main");
-    else if (h->a == LR_KEY_RUNS) {   /* only the forms that run the program's code */
+    if (h->a == LR_KEY_RUNS) {   /* only the forms that run the program's code */
       if (h->n && h->v[h->n - 1].vis != ELAB_NO)
         fprintf(out, "form #%d runs code%s\n", elab_point_of(c, h->b).seq, h->v[h->n - 1].vis == ELAB_YES && !h->v[h->n - 1].may ? "" : " (maybe)");
       continue;
     }
+    if (lr_key_memo(h->a)) continue;
+    if (h->a == LR_KEY_VIS) fprintf(out, "visibility in #%d:", elab_point_of(c, h->b).seq);
+    else if (h->a == LR_KEY_OPAQUE) fprintf(out, "opaque %s:", h->b >= 2 ? c->classes[h->b - 2].name : "main");
     else if ((h->a == LR_KEY_CONST || h->a == LR_KEY_AUTO) && h->b < 0)
       fprintf(out, "%s #<Class:%s>::%s:", h->a == LR_KEY_AUTO ? "autoload" : "const", lr_class_name(c, -h->b - 2), h->name);
     else if (h->a == LR_KEY_AUTO)   /* a registration, keyed by its owner as a constant is */

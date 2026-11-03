@@ -19958,6 +19958,30 @@ static int sc_value_taken_at_once(const NodeTable *nt, const int *parent, int id
          (ok == NK_DefNode || ok == NK_ParenthesesNode || ok == NK_BlockNode || ok == NK_LambdaNode);
 }
 
+/* Is X of the `class << X` at node id a class or a module: a `self` in a
+   class, module or singleton class body or in a class method (`def self.m`)
+   of one, or a constant a class or module definition of the program names? */
+static int sc_recv_is_class(const NodeTable *nt, const int *parent, int id, int ex) {
+  if (nt_kind(nt, ex) != NK_SelfNode) {
+    const char *xn = nt_str(nt, ex, "name");
+    int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+    for (int dh = 0; xn && dh < ndk; dh++)
+      NT_FOREACH_KIND(nt, dk[dh], d) {
+        const char *dn = class_def_is_class(nt, d) || class_def_is_module(nt, d) ? class_def_name(nt, d) : NULL;
+        if (dn && sp_streq(dn, xn)) return 1;
+      }
+    return 0;
+  }
+  for (int p = parent[id], hops = 0; p >= 0 && hops < nt->count; p = parent[p], hops++) {
+    NodeKind k = nt_kind(nt, p);
+    if (class_def_opens_frame(nt, p) || k == NK_SingletonClassNode) return 1;
+    if (k == NK_DefNode && nt_kind(nt, nt_ref(nt, p, "receiver")) != NK_SelfNode) return 0;
+    /* a block can rebind self (define_method, instance_eval): not known to be the class */
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
+  return 0;
+}
+
 /* The value of a class, module or singleton class body is its last
    statement's: nil for an empty body, a def's name, a nested body's own
    value; any other statement runs in the body, with the class as self, so
@@ -19973,7 +19997,11 @@ static int sc_value_taken_at_once(const NodeTable *nt, const int *parent, int id
    with a value leaf that a body pass reads by its shape (a receiverless
    call: attr_accessor, private, include; a write as the last statement
    itself; an alias or undef; a nested definition), or with an empty path
-   it cannot fill, keeps its form. */
+   it cannot fill, keeps its form.
+   `class << X; ...; self; end` answers X's singleton class: its last self
+   leaves the body, which no other statement sees, and the value is
+   `X.singleton_class`, on a self or a constant X. Outside the body X may
+   name something else, so a nested one keeps its form. */
 static int cbv_body_def(const NodeTable *nt, int id) {
   NodeKind k = id >= 0 ? nt_kind(nt, id) : NK_NONE;
   return k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode;
@@ -19984,6 +20012,9 @@ static int cbv_last(const NodeTable *nt, int id, int *body) {
   const int *st = b >= 0 ? nt_arr(nt, b, "body", &n) : NULL;
   *body = b;
   return n ? st[n - 1] : -1;
+}
+static int cbv_self_sclass(const NodeTable *nt, int id, int s) {
+  return s >= 0 && nt_kind(nt, id) == NK_SingletonClassNode && nt_kind(nt, s) == NK_SelfNode;
 }
 /* A value leaf of a body's last statement that `$g = leaf` can wrap: not a
    statement a body pass reads by its shape (a receiverless call, an alias
@@ -20065,13 +20096,15 @@ static int cbv_leaves(const NodeTable *nt, int s, CbvLeaves *l) {
   if (!ok) { free(l->ids); free(l->nils); }
   return ok;
 }
-static int cbv_valued(const NodeTable *nt, int id) {
+static int cbv_valued(const NodeTable *nt, int id, int nested) {
   int b, s = cbv_last(nt, id, &b);
   if (s < -1) return 0;
-  /* (`class << X; ...; self; end`: X's singleton class, sc_value_form) */
-  if (s >= 0 && nt_kind(nt, id) == NK_SingletonClassNode && nt_kind(nt, s) == NK_SelfNode) return 0;
+  if (cbv_self_sclass(nt, id, s)) {
+    NodeKind ek = nt_kind(nt, nt_ref(nt, id, "expression"));
+    return !nested && (ek == NK_SelfNode || ek == NK_ConstantReadNode || ek == NK_ConstantPathNode);
+  }
   if (s < 0 || nt_kind(nt, s) == NK_DefNode) return 1;
-  if (cbv_body_def(nt, s)) return cbv_valued(nt, s);
+  if (cbv_body_def(nt, s)) return cbv_valued(nt, s, 1);
   CbvLeaves l;
   int ok = cbv_leaves(nt, s, &l);
   if (ok) { free(l.ids); free(l.nils); }
@@ -20084,6 +20117,14 @@ static int cbv_value(Compiler *c, const int *par, int id) {
   int b, s = cbv_last(nt, id, &b);
   if (s < 0) return fwd_new_node_like(nt, id, "NilNode");
   if (cbv_body_def(nt, s)) return cbv_value(c, par, s);
+  if (cbv_self_sclass(nt, id, s)) {
+    int n = 0, ex = nt_ref(nt, id, "expression");
+    const int *st = nt_arr(nt, b, "body", &n);
+    nt_node_set_arr(nt, b, "body", st, n - 1);
+    int call = fwd_new_call(nt, nt_clone_subtree(nt, ex), "singleton_class", -1);
+    nt_set_ignore_visibility(nt, call, nt_kind(nt, ex) == NK_SelfNode);
+    return call;
+  }
   if (nt_kind(nt, s) == NK_DefNode) {
     int sym = fwd_new_node_like(nt, id, "SymbolNode");
     nt_node_set_str(nt, sym, "value", nt_str(nt, s, "name"));
@@ -20114,10 +20155,17 @@ static int cbv_value(Compiler *c, const int *par, int id) {
    the value-position walk throws it away (an_value_dropped: a loop's
    body, an iterator's block, a BEGIN or END block), nor as the last
    statement of a class builder's block (`Class.new do .. end`), whose
-   value the builder throws away. */
+   value the builder throws away. `X.singleton_class` is refused where X
+   is the main object or no class (Object#singleton_class), so a value no
+   use takes would turn a program that compiles into a refusal: only a
+   class or module X is followed through the arms, any other is taken
+   where it stands (sc_value_taken_at_once). */
 static int cbv_taken(const NodeTable *nt, const int *par, int id) {
   VpUp up;
-  if (!sc_value_taken(nt, par, id) || an_value_dropped(nt, par, id)) return 0;
+  int b, s = cbv_last(nt, id, &b), ex = nt_ref(nt, id, "expression");
+  int taken = cbv_self_sclass(nt, id, s) && !sc_recv_is_class(nt, par, id, ex) ? sc_value_taken_at_once(nt, par, id)
+                                                                                : sc_value_taken(nt, par, id);
+  if (!taken || an_value_dropped(nt, par, id)) return 0;
   vp_climb(nt, par, id, AN_DROP_CLIMB, &up);
   int call = vp_up_block_call(nt, par, &up), recv = call >= 0 ? nt_ref(nt, call, "receiver") : -1;
   return !(recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
@@ -20165,7 +20213,7 @@ static int cbv_hides_directive(const NodeTable *nt, int p, int id) {
 }
 int desugar_class_body_values_left(Compiler *c, LowerCtx *lc, int id) {
   const int *par = lower_parents(c, lc);
-  return par[id] >= 0 && cbv_valued(c->nt, id) && cbv_taken(c->nt, par, id) && !cbv_hides_directive(c->nt, par[id], id);
+  return par[id] >= 0 && cbv_valued(c->nt, id, 0) && cbv_taken(c->nt, par, id) && !cbv_hides_directive(c->nt, par[id], id);
 }
 int desugar_class_body_values_at(Compiler *c, LowerCtx *lc, int id) {
   if (!desugar_class_body_values_left(c, lc, id)) return 0;
@@ -20182,77 +20230,10 @@ int desugar_class_body_values_at(Compiler *c, LowerCtx *lc, int id) {
   return 1;
 }
 
-/* Is X of the `class << X` at node id a class or a module: a `self` in a
-   class, module or singleton class body or in a class method (`def self.m`)
-   of one, or a constant a class or module definition of the program names? */
-static int sc_recv_is_class(const NodeTable *nt, const int *parent, int id, int ex) {
-  if (nt_kind(nt, ex) != NK_SelfNode) {
-    const char *xn = nt_str(nt, ex, "name");
-    int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
-    for (int dh = 0; xn && dh < ndk; dh++)
-      NT_FOREACH_KIND(nt, dk[dh], d) {
-        const char *dn = class_def_is_class(nt, d) || class_def_is_module(nt, d) ? class_def_name(nt, d) : NULL;
-        if (dn && sp_streq(dn, xn)) return 1;
-      }
-    return 0;
-  }
-  for (int p = parent[id], hops = 0; p >= 0 && hops < nt->count; p = parent[p], hops++) {
-    NodeKind k = nt_kind(nt, p);
-    if (class_def_opens_frame(nt, p) || k == NK_SingletonClassNode) return 1;
-    if (k == NK_DefNode && nt_kind(nt, nt_ref(nt, p, "receiver")) != NK_SelfNode) return 0;
-    /* a block can rebind self (define_method, instance_eval): not known to be the class */
-    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
-  }
-  return 0;
-}
-
-/* `class << X; ...; self; end` whose value is used (`sc = class << self;
-   self; end`): the body as a statement, then `X.singleton_class`, in
-   parentheses. Its last self is that value, which the rest of the body
-   does not see. */
-static int sc_value_form(NodeTable *nt, const int *parent, int id) {
-  int body = nt_ref(nt, id, "body"), bn = 0;
-  const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (bn < 1 || nt_kind(nt, bb[bn - 1]) != NK_SelfNode) return 0;
-  int ex = nt_ref(nt, id, "expression");
-  NodeKind ek = ex >= 0 ? nt_kind(nt, ex) : NK_NilNode;
-  if (ek != NK_SelfNode && ek != NK_ConstantReadNode && ek != NK_ConstantPathNode) return 0;
-  /* `X.singleton_class` is refused where X is the main object or no class
-     (Object#singleton_class), so a value no use takes would turn a program
-     that compiles into a refusal: only a class or module is
-     followed through the arms, any other X is taken where it stands */
-  if (sc_recv_is_class(nt, parent, id, ex) ? !sc_value_taken(nt, parent, id)
-                                           : !sc_value_taken_at_once(nt, parent, id)) return 0;
-  int recv = nt_clone_subtree(nt, ex);
-  int sc = fwd_new_node_like(nt, id, "SingletonClassNode");
-  int nbody = fwd_new_node_like(nt, id, "StatementsNode");
-  int call = fwd_new_call(nt, recv, "singleton_class", -1);
-  nt_set_ignore_visibility(nt, call, ek == NK_SelfNode);
-  int stmts = fwd_new_node_like(nt, id, "StatementsNode");
-  if (recv < 0 || sc < 0 || nbody < 0 || call < 0 || stmts < 0) return 0;
-  nt_node_set_arr(nt, nbody, "body", bb, bn - 1);
-  nt_node_set_ref(nt, sc, "expression", ex);
-  nt_node_set_ref(nt, sc, "body", nbody);
-  int sv[2] = { sc, call };
-  nt_node_set_arr(nt, stmts, "body", sv, 2);
-  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-  nt_node_reset(nt, id, "ParenthesesNode");
-  nt_node_set_int(nt, id, "node_line", line);
-  nt_node_set_int(nt, id, "node_file", file);
-  nt_node_set_ref(nt, id, "body", stmts);
-  return 1;
-}
-
 int desugar_singleton_body_self(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_SingletonClassNode) continue;
-    if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    if (sc_value_form(nt, parent, id)) changed = 1;
-  }
-  if (changed) { free(parent); parent = NULL; n0 = nt->count; }
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_SingletonClassNode) continue;
     /* the class whose singleton class this is: `class << Foo`, or

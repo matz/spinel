@@ -13,6 +13,9 @@ p((class CbX; 1 + 2; end), (module CbY; "s" * 2; end))
 p(class CbS; self; end)
 p(class CbT; self.name; end)
 p(class CbBig; 2**40; end)
+z = (class CbQ; def k = 1; end)
+w = (class << CbP; self; end)
+p z, w == CbP.singleton_class
 
 # a nested body's value, and the nested class it defines
 y = class CbO

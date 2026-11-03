@@ -4679,7 +4679,17 @@ static void cf_collect_blk_local(CF *f) {
 /* `blk.call(a, b)` on a block parameter that is only called: the yield
    `yield a, b` */
 static int cf_blk_call(CF *f, int v, int r, const char *nm, const int *argv, int argc) {
-  if (r < 0 || !f->blk_local || nt_kind(f->nt, r) != NK_LocalVariableReadNode || !cf_blk_call_name(nm)) return 0;
+  if (r < 0 || nt_kind(f->nt, r) != NK_LocalVariableReadNode || !cf_blk_call_name(nm)) return 0;
+  /* a call whose value is read reads the blocks' values, as such a yield
+     does, whether or not the parameter is only called: unmarked, a `set(k,
+     blk.call)` stored a class the facts left out of every read of the store */
+  int p = f->par ? f->par[v] : -1, used = 1;
+  if (p >= 0 && nt_kind(f->nt, p) == NK_StatementsNode) {
+    int n = 0; const int *b = nt_arr(f->nt, p, "body", &n);
+    used = n > 0 && b[n - 1] == v;
+  }
+  if (used) cf_proc_value_ready(f, r);
+  if (!f->blk_local) return 0;
   int mi = cf_owner_def(f, r, 1, NULL);
   const char *rn = nt_str(f->nt, r, "name");
   if (mi < 0 || !f->blk_local[mi] || !rn || !sp_streq(rn, f->c->scopes[mi].blk_param)) return 0;
@@ -5360,6 +5370,11 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
   }
   cf_collect_exec(&f);
   cf_collect_blk_local(&f);
+  /* a block parameter stored, passed or returned as a value is called where
+     the walk cannot follow it (`@last = blk`, `pr = blk; pr.call`), so its
+     blocks' values are read */
+  for (int mi = 1; mi < c->nscopes; mi++)
+    if (f.exec_esc[mi] && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0]) f.yval_used[mi] = 1;
   for (int k = 0; k < c->nclasses && !f.has_mm; k++)
     if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) f.has_mm = 1;
   /* the parameters a call the analysis cannot see binds: anything */

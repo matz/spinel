@@ -18806,6 +18806,7 @@ static void mark_empty_array_operands(Compiler *c) {
    types as the bare-container default (poly array / STR_POLY hash), the same
    thing `x = []; x` returns. Skipped when the method has explicit returns:
    their unification (`return [1]` elsewhere) should keep narrowing. */
+static int an_subtree_has_return(const NodeTable *nt, int n, int depth);
 static void mark_empty_literal_tails(Compiler *c) {
   if (!c->empty_arr_recv || !c->empty_hash_recv) return;
   const NodeTable *nt = c->nt;
@@ -18818,11 +18819,14 @@ static void mark_empty_literal_tails(Compiler *c) {
     }
   }
   /* Mark the empty literal that ends `stmts`, the body of something whose
-     value that literal is. */
-  #define MARK_EMPTY_TAIL(stmts) do { \
+     value that literal is, in parentheses too (`def m = ({})`). A block's
+     `{}` is the wide hash: its value goes where the literal's key sites
+     cannot follow (a map's element, a fetch default, a yield's value), and
+     the String-keyed default refused a later `h[:k] = v`. */
+  #define MARK_EMPTY_TAIL(stmts, wide_hash) do { \
     int bn_ = 0; const int *bb_ = nt_arr(nt, (stmts), "body", &bn_); \
     if (bn_ > 0) { \
-      int last_ = bb_[bn_ - 1]; \
+      int last_ = nt_paren_single(nt, bb_[bn_ - 1]); \
       const char *lty_ = (last_ >= 0 && last_ < c->node_cap) ? nt_type(nt, last_) : NULL; \
       int en_ = 0; \
       if (lty_ && sp_streq(lty_, "ArrayNode")) { \
@@ -18831,7 +18835,7 @@ static void mark_empty_literal_tails(Compiler *c) {
       } \
       else if (lty_ && (sp_streq(lty_, "HashNode") || sp_streq(lty_, "KeywordHashNode"))) { \
         nt_arr(nt, last_, "elements", &en_); \
-        if (en_ == 0) comp_set_empty_hash_recv(c, last_, 1); \
+        if (en_ == 0) { if (wide_hash) comp_set_empty_hash_arg(c, last_, 1); else comp_set_empty_hash_recv(c, last_, 1); } \
       } \
     } \
   } while (0)
@@ -18839,19 +18843,19 @@ static void mark_empty_literal_tails(Compiler *c) {
     Scope *sc = &c->scopes[s];
     if (sc->body < 0 || (has_ret && has_ret[s])) continue;
     if (nt_kind(nt, sc->body) != NK_StatementsNode) continue;
-    MARK_EMPTY_TAIL(sc->body);
+    MARK_EMPTY_TAIL(sc->body, 0);
   }
   /* A block's value is its tail the same way a method's is, but only a DEF
      scope carries a body, so a block was never reached here: `x.then { [] }`
      takes the block's value as its own and had none to take, which declared
-     the C temp `void` (#3930). A `return` inside leaves the method rather than
-     the block, so those are skipped exactly as a method's are. */
+     the C temp `void` (#3930). A block holding a `return` is skipped as such
+     a method is; a `return` elsewhere in its method is no value of the block,
+     and skipping on it left `fetch(k) { {} }` untyped, boxed as nil. */
   NT_FOREACH_KIND(nt, NK_BlockNode, blk) {
     int bs = nt_ref(nt, blk, "body");
     if (bs < 0 || nt_kind(nt, bs) != NK_StatementsNode) continue;
-    Scope *sc = comp_scope_of(c, blk);
-    if (has_ret && sc && has_ret[(int)(sc - c->scopes)]) continue;
-    MARK_EMPTY_TAIL(bs);
+    if (an_subtree_has_return(nt, bs, 0)) continue;
+    MARK_EMPTY_TAIL(bs, 1);
   }
   /* A block whose tail is `next v` hands back v as its value, so an empty
      `[]` / `{}` there is the value just as a tail one is: left unmarked it
@@ -18873,7 +18877,7 @@ static void mark_empty_literal_tails(Compiler *c) {
     }
     else if (nt_kind(nt, v) == NK_HashNode) {
       nt_arr(nt, v, "elements", &en);
-      if (en == 0) comp_set_empty_hash_recv(c, v, 1);
+      if (en == 0) comp_set_empty_hash_arg(c, v, 1);
     }
   }
   #undef MARK_EMPTY_TAIL

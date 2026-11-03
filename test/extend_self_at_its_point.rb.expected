@@ -1,0 +1,10 @@
+:nomethod
+1
+extended Hooked
+hi
+3
+:inst
+:s
+private method 'secret' called for class Ext
+:s
+private method 'secret' called for module Both

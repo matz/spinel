@@ -7807,14 +7807,18 @@ static int inline_replacing_def(Compiler *c, Scope *ms) {
 static const char *inline_def_mixed_in(Compiler *c, int id, const Scope *ms) {
   if (ms->is_module_function) return NULL;
   const char *how = NULL;
+  int own_copy = 0;
   for (int si = 1; si < c->nscopes; si++) {
     const Scope *s = &c->scopes[si];
     if (s == ms || s->def_node != id) continue;
+    /* the copy `extend self` makes on the module itself is the module's
+       own class method: the signature reaches it (apply_inline_rbs seeds it) */
+    if (s->class_id == ms->class_id) { own_copy = 1; continue; }
     const char *w = s->is_prepend_copy ? "prepend" : s->is_extend_copy ? "extend"
                   : s->is_include_copy ? "include" : s->origin_module_ci ? "extend" : NULL;
     if (w) how = how && !sp_streq(how, w) ? "include, extend or prepend" : w;
   }
-  if (!how && ms->is_transplanted_source && ms->class_id >= 0 &&
+  if (!how && !own_copy && ms->is_transplanted_source && ms->class_id >= 0 &&
       comp_class_is_module(c, &c->classes[ms->class_id])) how = "include, extend or prepend";
   return how;
 }
@@ -7941,6 +7945,14 @@ static void apply_inline_rbs(Compiler *c) {
           char *pcopy = params ? strdup(params) : NULL;
           seed_method(c, ms, fam ? NULL : ret, pcopy, where, head, 0);
           free(pcopy);
+          /* and the module's own class-side copy, from `extend self` */
+          for (int si = 1; si < c->nscopes; si++) {
+            Scope *s = &c->scopes[si];
+            if (s == ms || s->def_node != id || s->class_id != ms->class_id) continue;
+            pcopy = params ? strdup(params) : NULL;
+            seed_method(c, s, fam ? NULL : ret, pcopy, where, head, 0);
+            free(pcopy);
+          }
         }
         inline_pin_record(ms, -1, NULL, ret, params, where, head);
       }
@@ -48120,7 +48132,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_SAFE_NAV_ATTR_WRITE);        /* r&.a op= v -> (t = r; t.nil? ? nil : t.a op= v) */
   lower_run(c, &lc, LW_CONST_ATTR_OP_ASSIGN);       /* Klass.a op= v -> Klass.a = Klass.a op v (a class-level accessor) */
   desugar_body_module_eval(c);           /* self.module_eval do S end in a body -> S */
-  AN_STEP_V("desugar_extend_self", desugar_extend_self(c));                /* `extend self` -> a def self.m twin per def */
+                /* `extend self` -> a def self.m twin per def */
   AN_STEP_V("desugar_kernel_reopen", desugar_kernel_reopen(c));              /* module Kernel; def m -> a top-level def m */
   AN_STEP_V("desugar_ffi_library_functions", desugar_ffi_library_functions(c));   /* attach_function :f -> def self.f (the ffi gem) */
   AN_STEP_V("desugar_native_func_defs", desugar_native_func_defs(c));          /* native_func :f -> def self.f = Mod.f (a module value finds it) */

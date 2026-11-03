@@ -2043,7 +2043,12 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
     }
     else if (mix) {
       LrClass *k = lr_class(x->r, cls);
-      int mod = lr_class_ref_at(x->c, av[i], NULL);
+      /* `extend self` in a module's own body: an extend of the module on
+         itself, at its point (CRuby's model: the module's singleton gets
+         the module as a mixin) */
+      int mod = nt_kind(nt, av[i]) == NK_SelfNode && self && !sg && cls == fc && fs == LR_FS_NONE &&
+                fnode >= 0 && class_def_is_module(nt, fnode) && is_extend_name(nm)
+                ? cls : lr_class_ref_at(x->c, av[i], NULL);
       opaque |= mod < 0 && mod != LR_LATER;
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
@@ -5689,9 +5694,6 @@ int elab_fire_after(Compiler *c, int list, int j) {
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);
     const LrDef *d = NULL;
     int live = body && v->stmt == e && lr_form_leads(nt, node, v->node) && lr_hook_live(c, v->cls, hook, p, &d);
-    /* a hook the record has only as the copy `extend self` stands for is
-       not one it can place: it runs where the extend does (the mixin form's) */
-    if (live && d && nt_int(nt, d->node, "extend_self", 0)) live = 0;
     /* a visibility word gives the class an entry of its own, and calls the
        hook, only for a method it does not hold itself and whose visibility
        it changes */
@@ -6878,8 +6880,7 @@ static int host_id_cmp(const void *a, const void *b) {
    query of the walk has taken over (the precondition rule, H3-PLAN 2.4), or
    -1: an ffi declaration (desugar_ffi_library_functions,
    desugar_native_func_defs), a mixin (desugar_included_hooks,
-   desugar_explicit_receiver_mixin, desugar_extend_self,
-   desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
+   desugar_explicit_receiver_mixin, desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
    desugar_inline_struct_blocks), const_get (desugar_literal_const_get,
    desugar_self_const_get, desugar_dynamic_const_get), a write through a
    constant path (desugar_constant_path_self_alias, qualify_colliding_consts),

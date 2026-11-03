@@ -2875,18 +2875,15 @@ static const char *resolve_alias_side(Compiler *c, int class_id, const char *nam
     int from = class_id;
     for (int cid = class_id; cid >= 0 && !next; cid = c->classes[cid].parent) {
       ClassInfo *ci = &c->classes[cid];
-      /* The class side (1) reads the singleton aliases, and in a module that
-         extends itself the instance ones too (`extend self`, which
-         desugar_extend_self answers by a class method per def). An instance
-         method's lookup (2) reads the instance aliases only. (A module
-         function that copies an alias is a method of the module of its own,
-         made from the record's copy: register_module_functions.) */
-      /* ... but not over a class method the module defines itself */
-      int mod = class_def_is_module(c->nt, ci->def_node) && nt_int(c->nt, ci->def_node, "extends_self", 0) &&
-                !(sg == 1 && comp_cmethod_in_class(c, cid, name) >= 0);
+      /* The class side (1) reads the singleton aliases, and an instance
+         method's lookup (2) the instance aliases only; a module the class
+         extends (`extend self` too) brings its instance aliases to the class
+         side below. (A module function that copies an alias is a method of
+         the module of its own, made from the record's copy:
+         register_module_functions.) */
       for (int i = (cid == lim_cls ? lim : ci->naliases) - 1; i >= 0; i--) {
         int asg = ci->alias_sg && ci->alias_sg[i];
-        if ((sg == 1 ? asg || mod : sg == 2 ? !asg : 1) && sp_streq(ci->alias_new[i], name)) {
+        if ((sg == 1 ? asg : sg == 2 ? !asg : 1) && sp_streq(ci->alias_new[i], name)) {
           /* a class below that defines the name itself, as the kind looked
              up, answers it: the ancestor's alias of that name is behind it
              (`attr_reader :loc` in a subclass of one with `alias loc

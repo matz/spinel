@@ -35,7 +35,8 @@ are refused at compile time unless `--defer-refusals` is supplied.
 A successful compile does not establish CRuby-compatible behavior.
 Separately, `--defer-refusals` explicitly turns eligible compile-time
 refusals into runtime `NotImplementedError`s. A file does the same for its
-own refusals with the magic comment `# spinel: defer-refusals` at its top:
+own refusals with the magic comment `# spinel: defer-refusals` at its top
+(its lines under a `#<SPINEL_SOURCE>` marker included):
 a vendored library whose one unsupported method (sqlite3's
 `create_aggregate`, which builds a class per call) must not keep a program
 that never calls it from building carries it; the program's other files are

@@ -346,4 +346,7 @@ comment too.
 
 Only the reported position moves. `__FILE__`, `__dir__`, `__LINE__` and
 `require_relative` still answer from the `.rb` the code is in, and a syntax
-error is reported at the generated file.
+error is reported at the generated file. The file's `# spinel: defer-refusals`
+comment (docs/limitations.md) also still applies: the lines under a marker
+defer their refusals as the `.rb` they are in does, whatever file the marker
+names.

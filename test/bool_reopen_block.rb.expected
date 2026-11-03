@@ -1,0 +1,39 @@
+true
+[true, 1]
+"got true"
+:none
+2
+[true]
+[:t, 3]
+[:f, 10]
+[3, :t]
+[3, :f]
+[:brk, :t]
+"1f"
+[:t, 0]
+[:f, 0]
+[true]
+:no_method
+"undefined method 'e' for "
+true
+:f
+true
+:f
+1
+nil
+2
+nil
+1.5
+nil
+2.5
+nil
+nil
+2
+1
+nil
+2.5
+nil
+1.5
+nil
+7
+1

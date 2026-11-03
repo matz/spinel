@@ -28537,6 +28537,22 @@ static void emit_call_inner(Compiler *c, int id, Buf *b);
 static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int boxed, int ow, Buf *b) {
   Buf nb; memset(&nb, 0, sizeof nb);
   TyKind t;
+  /* (a yielding method has no function of its own: its proc form, with the
+     call's block as a proc, self the value held in _t<tb>) */
+  if (mi >= 0 && c->scopes[mi].yields) {
+    int slot = view_bind(recv, "_t%d", tb);
+    ucall_arm_push();   /* (one arm of the plan's CP_SWITCH) */
+    int done = emit_reopen_block_call(c, id, recv, mi, NULL, &nb);
+    ucall_arm_pop();
+    view_unbind(slot);
+    /* (emit_reopen_pf_call has boxed or unboxed the answer for the call's
+       representation already) */
+    if (done) {
+      buf_puts(b, nb.p ? nb.p : "0");
+      free(nb.p);
+      return;
+    }
+  }
   if (mi >= 0) {
     if (g_plan_check) ucall_observe(c, id, mi, c->scopes[mi].class_id, 1);
     buf_puts(&nb, mc_method(c, &c->scopes[mi]));
@@ -28589,8 +28605,19 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
    calls it for true, and the builtin for false. */
 static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(c->nt, id, "receiver"), tmi, fmi;
-  if (recv < 0 || g_poly_builtin_arm || g_pd_skip == id || nt_ref(c->nt, id, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_BOOL) return 0;
+  if (recv < 0 || g_poly_builtin_arm || g_pd_skip == id || comp_ntype(c, recv) != TY_BOOL) return 0;
+  /* (a block's `break` wraps the call first: emit_brk_wrapped_call comes
+     back here with the call as g_brk_skip_id) */
+  if (id != g_brk_skip_id && call_breaks(c, id)) return 0;
+  /* (a call with a block reaches a yielding side's method through its
+     proc form, which only a yielding method has: one that keeps its `&b`
+     without yielding stays on the old path) */
+  if (nt_ref(c->nt, id, "block") >= 0) {
+    int ytm, yfm;
+    if (cplan_bool_sides(c, id, &ytm, &yfm) &&
+        ((ytm >= 0 && !c->scopes[ytm].yields && c->scopes[ytm].blk_param && c->scopes[ytm].blk_param[0]) ||
+         (yfm >= 0 && !c->scopes[yfm].yields && c->scopes[yfm].blk_param && c->scopes[yfm].blk_param[0]))) return 0;
+  }
   const CallPlan *pl = cplan_user(c, id);
   if (pl->via != UC_REOPEN || pl->dispatch != CP_SWITCH || !cplan_bool_sides(c, id, &tmi, &fmi)) return 0;
   int boxed = repr_of(c, id).kind == RK_BOXED;
@@ -32630,7 +32657,8 @@ static int reopen_pf_raw_self(Compiler *c, int ci) {
          ci == comp_core_class(c, CORE_FLOAT) ||
          ci == comp_core_class(c, CORE_SYMBOL) || ci == comp_core_class(c, CORE_FIBER) ||
          ci == comp_core_class(c, CORE_THREAD) || ci == comp_core_class(c, CORE_NILCLASS) ||
-         ci == comp_core_class(c, CORE_RANGE) || ci == comp_core_class(c, CORE_TIME);
+         ci == comp_core_class(c, CORE_RANGE) || ci == comp_core_class(c, CORE_TIME) ||
+         ci == comp_core_class(c, CORE_TRUECLASS) || ci == comp_core_class(c, CORE_FALSECLASS);
 }
 /* Does the load record put the include of the module `mi` is a copy from
    after call `id`? The call then runs the builtin class's own answer, or
@@ -32678,6 +32706,8 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   TyKind want = wr.as_ty, pr = (TyKind)c->scopes[pf].ret;
   if (method_is_void(&c->scopes[pf]))
     buf_printf(b, "(%s, %s)", oc.p, wr.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want));
+  /* (an Integer or Float that can be nil is an oint: boxed with its nil) */
+  else if (wr.kind == RK_BOXED && method_ret_is_oint(&c->scopes[pf])) emit_boxed_ret_call(c, &c->scopes[pf], oc.p, b);
   else if (wr.kind == RK_BOXED && pr != TY_POLY) emit_boxed_text(c, pr, oc.p, b);
   else if (wr.kind != RK_BOXED && pr == TY_POLY && is_scalar_ret(want)) emit_unbox_text(c, want, oc.p, b);
   else buf_puts(b, oc.p);
@@ -32700,6 +32730,11 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   if (c->scopes[mi].class_id == comp_core_class(c, CORE_INTEGER) &&
       return_in_lambda(c, id) && proc_body_has_return(c, nt_ref(nt, id, "block")))
     unsupported_feature(c, id, "a `return` in a block given to an Integer's yielding method, inside a lambda, is not supported by AOT compilation");
+  /* (a TrueClass's or FalseClass's is a new route too) */
+  if ((c->scopes[mi].class_id == comp_core_class(c, CORE_TRUECLASS) ||
+       c->scopes[mi].class_id == comp_core_class(c, CORE_FALSECLASS)) &&
+      return_in_lambda(c, id) && proc_body_has_return(c, nt_ref(nt, id, "block")))
+    unsupported_feature(c, id, "a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation");
   /* A Random's, Float's, Symbol's, Range's, Time's or NilClass's method
      that yields a container is not called: a block that widens the
      container's element kind reads the boxed one as garbage (the same

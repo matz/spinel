@@ -22049,7 +22049,10 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
     for (int k = 0; k < vac; k++) { buf_puts(b, "(void)("); emit_expr(c, vav[k], b); buf_puts(b, "), "); } }
   { int vblk = nt_ref(nt, id, "block");
     int vbx = vblk >= 0 && nt_kind(nt, vblk) == NK_BlockArgumentNode ? nt_ref(nt, vblk, "expression") : -1;
-    if (vbx >= 0 && nt_kind(nt, vbx) != NK_SymbolNode) { buf_puts(b, "(void)("); emit_expr(c, vbx, b); buf_puts(b, "), "); } }
+    /* a block parameter handed on (`&blk`, an anonymous `&`) is read for
+       nothing: an inlined copy of its method binds no C variable for it when
+       its call passes no block, and the read did not build */
+    if (vbx >= 0 && nt_kind(nt, vbx) != NK_SymbolNode && nt_kind(nt, vbx) != NK_LocalVariableReadNode) { buf_puts(b, "(void)("); emit_expr(c, vbx, b); buf_puts(b, "), "); } }
   {
     TyKind vrt = repr_of(c, id).as_ty;
     char head[200]; snprintf(head, sizeof head, "%s method '%s' called for an instance of ",

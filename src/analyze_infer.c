@@ -9948,7 +9948,14 @@ int an_call_diverges(Compiler *c, int id) {
 static int call_may_reach_user_method(Compiler *c, int w, const char *wn) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, w, "receiver");
-  if (r < 0 || nt_kind(nt, r) == NK_SelfNode) return an_user_defines_method(c, wn);
+  if (r < 0 || nt_kind(nt, r) == NK_SelfNode) {
+    /* in a class method self is the class: `set(k, yield)` in a `def
+       self.fetch` reaches its `def self.set` */
+    Scope *ws = comp_scope_of(c, w);
+    if (ws && ws->is_cmethod && ws->class_id >= 0 && call_target(c, w, ws->class_id, wn, CT_CMETHOD, NULL) >= 0)
+      return 1;
+    return an_user_defines_method(c, wn);
+  }
   NodeKind rk = nt_kind(nt, r);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, r, "name");

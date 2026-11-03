@@ -1232,6 +1232,12 @@ spinel: 1 refusal, nothing written
 == test/reject/method_of_package_native_func.rb [promote] rc=1
 spinel: test/reject/method_of_package_native_func.rb:8: Base64.method(:strict_decode64) is not supported: a Method object of a package's native function has no compiled function to bind. Call Base64.strict_decode64 directly, or wrap it in a lambda
 spinel: 1 refusal, nothing written
+== test/reject/method_string_handed_to_appender.rb [default] rc=1
+spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/method_string_handed_to_appender.rb [promote] rc=1
+spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
 == test/reject/module_named_like_monitor.rb [default] rc=1
 spinel: test/reject/module_named_like_monitor.rb:3: Monitor is not a module (TypeError)
 == test/reject/module_named_like_monitor.rb [promote] rc=1
@@ -1307,6 +1313,12 @@ spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant p
 spinel: 1 refusal, nothing written
 == test/reject/pattern_value_const_range.rb [promote] rc=1
 spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant pattern other than an Integer, Float, String or Symbol: node N (ConstantPathNode)
+spinel: 1 refusal, nothing written
+== test/reject/proc_string_handed_on_to_appender.rb [default] rc=1
+spinel: test/reject/proc_string_handed_on_to_appender.rb:11: a String is passed to a proc's parameter `s__bp6Buffer_3run_3` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc and assign it, or append to it in the caller.
+spinel: 1 refusal, nothing written
+== test/reject/proc_string_handed_on_to_appender.rb [promote] rc=1
+spinel: test/reject/proc_string_handed_on_to_appender.rb:11: a String is passed to a proc's parameter `s__bp6Buffer_3run_3` through `f.call`, which the proc appends to: this call hands the proc a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc and assign it, or append to it in the caller.
 spinel: 1 refusal, nothing written
 == test/reject/range_prepended_alias_chain_endpoint_write.rb [default] rc=1
 spinel: test/reject/range_prepended_alias_chain_endpoint_write.rb:17: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
@@ -1554,6 +1566,10 @@ spinel: test/reject/set_identity_float_lookup.rb:8: a value whose identity is no
 spinel: test/reject/set_identity_forwarded_block_kept.rb:25: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_forwarded_block_kept.rb [promote] rc=1
 spinel: test/reject/set_identity_forwarded_block_kept.rb:25: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
+== test/reject/set_identity_hook_name_sent.rb [default] rc=1
+spinel: test/reject/set_identity_hook_name_sent.rb:20: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
+== test/reject/set_identity_hook_name_sent.rb [promote] rc=1
+spinel: test/reject/set_identity_hook_name_sent.rb:20: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_integer_member.rb [default] rc=1
 spinel: test/reject/set_identity_integer_member.rb:9: a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, or one of no static kind) enters or is looked up in a Set, in a program that calls Set#compare_by_identity: an identity Set would find it otherwise than CRuby's
 == test/reject/set_identity_integer_member.rb [promote] rc=1
@@ -1919,11 +1935,9 @@ spinel: test/reject/super_initialize_rescue_mod_ternary.rb:18: unsupported value
 == test/reject/super_initialize_rescue_mod_ternary.rb [promote] rc=1
 spinel: test/reject/super_initialize_rescue_mod_ternary.rb:18: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
 == test/reject/super_into_method_missing_value.rb [default] rc=1
-spinel: test/reject/super_into_method_missing_value.rb:13: warning: method_missing is defined but spinel does not dispatch undefined-method calls to it; such calls raise NoMethodError (method_missing can still be called explicitly)
 spinel: test/reject/super_into_method_missing_value.rb:10: a super into a method whose own super reaches method_missing is not supported (method_missing is not dispatched); see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/super_into_method_missing_value.rb [promote] rc=1
-spinel: test/reject/super_into_method_missing_value.rb:13: warning: method_missing is defined but spinel does not dispatch undefined-method calls to it; such calls raise NoMethodError (method_missing can still be called explicitly)
 spinel: test/reject/super_into_method_missing_value.rb:10: a super into a method whose own super reaches method_missing is not supported (method_missing is not dispatched); see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/superclass_mismatch.rb [default] rc=1

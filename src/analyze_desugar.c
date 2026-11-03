@@ -17824,18 +17824,20 @@ int mark_sym_proc_blocks_at(Compiler *c, LowerCtx *lc, int id) {
 }
 
 /* The method a still one-parameter `&:m` block calls, or NULL. A block
-   desugar_builtin_iter_block_shapes lowered is none: its one parameter is
-   the lowering's own, binding the values its prologue spreads (the
-   `|*__spr_N|` sym_proc_rest_view made is lowered so, and viewing it again
-   left the prologue's write of __spr_N behind, a local of the method's
-   frame the block then read through a cell its proc never had). */
-static const char *sym_proc_block_name(const NodeTable *nt, int blk) {
-  const char *mn = nt_int(nt, blk, "bs_lowered", 0) ? NULL : nt_str(nt, blk, "sym_proc");
+   desugar_builtin_iter_block_shapes lowered is none unless `lowered`: its
+   one parameter is the lowering's own, binding the values its prologue
+   spreads, so only sym_proc_rest_view, which replaces that body, takes it. */
+static const char *sym_proc_name_of(const NodeTable *nt, int blk, int lowered) {
+  const char *mn = !lowered && nt_int(nt, blk, "bs_lowered", 0) ? NULL : nt_str(nt, blk, "sym_proc");
   int bp = mn ? nt_ref(nt, blk, "parameters") : -1;
   int pn = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
   int P = 0;
   if (pn >= 0) nt_arr(nt, pn, "requireds", &P);
   return P == 1 ? mn : NULL;
+}
+
+static const char *sym_proc_block_name(const NodeTable *nt, int blk) {
+  return sym_proc_name_of(nt, blk, 0);
 }
 
 /* `<recv>.m(<second>)` */
@@ -18100,6 +18102,14 @@ static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   if (!b.ok || stmts < 0) return 0;
   nt_node_set_arr(nt, pn, "requireds", NULL, 0);
   nt_node_set_ref(nt, pn, "rest", rest);
+  /* A view desugar_builtin_iter_block_shapes lowered (its receiver read as
+     an Array for a round) is viewed again: the body it replaces assigns the
+     rest name, and left in the table that is the method's write of it, so
+     the capture pass celled the lifted block's own parameter. */
+  if (nt_int(nt, blk, "bs_lowered", 0)) {
+    nt_subtree_blank(nt, nt_ref(nt, blk, "body"));
+    nt_node_set_int(nt, blk, "bs_lowered", 0);
+  }
   nt_node_set_ref(nt, blk, "body", stmts);
   comp_grow_node_arrays(c);
   for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[blk];
@@ -18122,9 +18132,10 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   if (!nm || argc || ty_iter_shape(nm) != TY_ITER_MAP || nt_ref(nt, id, "block") < 0) return 0;
   int changed = sym_proc_blockify_op(c, id);
   int blk = nt_ref(nt, id, "block");
-  const char *mn = nt_kind(nt, blk) == NK_BlockNode ? sym_proc_block_name(nt, blk) : NULL;
+  int rest = user_block_method(c, nm);
+  const char *mn = nt_kind(nt, blk) == NK_BlockNode ? sym_proc_name_of(nt, blk, rest) : NULL;
   if (!mn || nt_ref(nt, blk, "sym_proc_pair") >= 0) return changed;
-  if (user_block_method(c, nm)) return sym_proc_rest_view(c, blk, mn) | changed;
+  if (rest) return sym_proc_rest_view(c, blk, mn) | changed;
   int pn = nt_ref(nt, nt_ref(nt, blk, "parameters"), "parameters");
   int P = 0; const int *pre = nt_arr(nt, pn, "requireds", &P);
   const char *xn = nt_str(nt, pre[0], "name");

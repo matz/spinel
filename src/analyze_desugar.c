@@ -24168,13 +24168,50 @@ static int mo_defaults_match(const NodeTable *nt, int a, int b) {
   }
   return 1;
 }
+/* Does a class body of the program named cn write constant nm (`class
+   Hash; D = 2; end`)? A default read of D there is Hash::D, not Object's. */
+static int mo_class_writes_const(const NodeTable *nt, int n, const char *nm, int top) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefNode)) return 0;
+  if ((k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantOperatorWriteNode ||
+       k == NK_ConstantAndWriteNode) && nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), nm)) return 1;
+  const SpNode *nd = &nt->nodes[n];
+  for (int j = 0; j < nd->nr; j++) if (mo_class_writes_const(nt, nd->r[j].ref, nm, 0)) return 1;
+  for (int j = 0; j < nd->na; j++)
+    for (int q = 0; q < nd->a[j].n; q++) if (mo_class_writes_const(nt, nd->a[j].ids[q], nm, 0)) return 1;
+  return 0;
+}
+/* The first constant read in default v that a class body named cn defines
+   for itself, or -1 */
+static int mo_default_class_const(const NodeTable *nt, int n0, int v, const char *cn) {
+  if (v < 0) return -1;
+  if (nt_kind(nt, v) == NK_ConstantReadNode && nt_str(nt, v, "name")) {
+    for (int m = 0; m < n0; m++) {
+      if (!class_def_is_class(nt, m)) continue;
+      const char *mn = class_def_name(nt, m);
+      if (mn && sp_streq(mn, cn) && mo_class_writes_const(nt, class_def_body(nt, m), nt_str(nt, v, "name"), 1)) return v;
+    }
+  }
+  const SpNode *nd = &nt->nodes[v];
+  for (int j = 0; j < nd->nr; j++) {
+    int r = mo_default_class_const(nt, n0, nd->r[j].ref, cn);
+    if (r >= 0) return r;
+  }
+  for (int j = 0; j < nd->na; j++)
+    for (int q = 0; q < nd->a[j].n; q++) {
+      int r = mo_default_class_const(nt, n0, nd->a[j].ids[q], cn);
+      if (r >= 0) return r;
+    }
+  return -1;
+}
 /* The fold keeps Object's parameter list, so an override's own default
    (`def o(x = 2)` in Hash beside Object's `def o(x = 1)`) is lost. A
    default runs with the method's self, so Object's default becomes a
    choice on self's class, as the body is:
      def o(x = (if is_a?(Hash) then 2 else 1 end))
    Only the defaults that differ are rewritten. */
-static void mo_fold_defaults(NodeTable *nt, int odef, const int *ovr, const char *const *ocls, int no) {
+static void mo_fold_defaults(Compiler *c, int n0, NodeTable *nt, int odef, const int *ovr, const char *const *ocls, int no) {
   int po = nt_ref(nt, odef, "parameters");
   if (po < 0) return;
   static const char *const L[] = { "optionals", "keywords" };
@@ -24185,10 +24222,16 @@ static void mo_fold_defaults(NodeTable *nt, int odef, const int *ovr, const char
       int ov = nt_ref(nt, io[j], "value");
       if (ov < 0) continue;
       int differs = 0;
-      for (int q = 0; q < no && !differs; q++) {
+      for (int q = 0; q < no; q++) {
         int m = 0;
         const int *iq = nt_arr(nt, nt_ref(nt, ovr[q], "parameters"), L[li], &m);
-        differs = !cdef_same(nt, ov, nt_ref(nt, iq[j], "value"));
+        differs |= !cdef_same(nt, ov, nt_ref(nt, iq[j], "value"));
+        /* (a constant the class defines for itself would be read as
+           Object's once the default runs in Object's method) */
+        int kc = mo_default_class_const(nt, n0, nt_ref(nt, iq[j], "value"), ocls[q]);
+        if (kc >= 0)
+          unsupported_feature(c, kc, "a parameter default of a builtin class's override of an Object method "
+                                     "that reads a constant the class defines is not supported by AOT compilation");
       }
       if (!differs) continue;
       int tail = fwd_new_node_like(nt, odef, "ElseNode");
@@ -24260,7 +24303,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         }
       }
       if (bad || no == 0) continue;
-      mo_fold_defaults(nt, odef, ovr, ocls, no);
+      mo_fold_defaults(c, n0, nt, odef, ovr, ocls, no);
       /* if is_a?(A) then A's body elsif ... else Object's body end */
       int obody = nt_ref(nt, odef, "body");
       int tail = -1;   /* the else part */

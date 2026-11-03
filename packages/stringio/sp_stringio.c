@@ -502,7 +502,7 @@ static int64_t sio_write_vals(sp_StringIO *s, sp_int n, sp_RbVal *v, int is_puts
 }
 void sp_StringIO_print_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { sio_check_write(s); sio_write_vals(s, n, v, 0); }
 void sp_StringIO_puts_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { sio_write_vals(s, n, v, 1); }
-sp_int sp_StringIO_write_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { return sio_write_vals(s, n, v, 0); }
+sp_int sp_StringIO_write_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { if (n > 0) sio_check_write(s); return sio_write_vals(s, n, v, 0); }  /* write(nil) writes nothing, but asks first */
 /* read(*args), when the count is only known at run time: read, read(nil)
    and read(len). A buffer to read into is not supported here. */
 const char *sp_StringIO_read_va(sp_StringIO *s, sp_int n, sp_RbVal *v) {

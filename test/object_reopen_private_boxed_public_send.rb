@@ -63,3 +63,8 @@ class KC
   def self.b = public_send(:top)
 end
 p try { KC.b }
+
+# a Method calls its method whatever its visibility
+class R; private def sec = "sec"; end
+p [I.new, D.new].map { |x| x.method(:top).call }
+p [R.new, 1].first.method(:sec).call

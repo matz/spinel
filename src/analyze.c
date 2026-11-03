@@ -10270,6 +10270,8 @@ static int desugar_builtin_method_obj(Compiler *c) {
     nt_node_set_str(nt, call, "name", slice_alias ? "[]" : sym);
     nt_node_set_ref(nt, call, "receiver", rread);
     if (name_is_plain_setter(sym)) nt_set_attr_write(nt, call, 1);   /* `__bam_r.attr = __bam_a` */
+    /* a Method calls its method whatever its visibility, as send does */
+    nt_set_ignore_visibility(nt, call, 1);
     if (nt_int(nt, id, "dyn_of", -1) >= 0) nt_node_set_int(nt, call, "dyn_arm", 1);
     if (cargs >= 0) nt_node_set_ref(nt, call, "arguments", cargs);
     int body = nt_new_node(nt, "StatementsNode");

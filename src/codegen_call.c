@@ -21821,6 +21821,9 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
   else if (vcid >= 0) {
     if (vcid == oci && !stamped) return 0;
     if (vcid != oci && object_reopen_class_owns(c, id, vcid, oci, vnm)) return 0;
+    /* the value may be a subclass's instance, which may answer it */
+    for (int k = 0; k < c->nclasses; k++)
+      if (k != vcid && k != oci && is_descendant(c, k, vcid) && object_reopen_class_owns(c, id, k, oci, vnm)) return 0;
     cname = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
   }
   else if (vrt == TY_POLY) {

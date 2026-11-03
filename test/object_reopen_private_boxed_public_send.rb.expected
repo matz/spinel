@@ -26,3 +26,5 @@
 ["NME private method 'top' called for an instance of Integer", "NME private method 'top' called for an instance of Integer"]
 ["ctop", "t", nil]
 "NME private method 'top' called for class KC"
+["t", "own"]
+"sec"

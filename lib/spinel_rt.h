@@ -12374,6 +12374,8 @@ static sp_StrIntHash *sp_StrIntHash_from_poly_hash(sp_PolyPolyHash *src) {
   sp_StrIntHash *h = sp_StrIntHash_new(); SP_GC_ROOT(h);
   for (sp_int i = 0; src && i < src->len; i++) {
     sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
+    /* (a nil value is kept, as the variant keeps one) */
+    if (k.tag == SP_TAG_STR && v.tag == SP_TAG_NIL) { sp_StrIntHash_set_nil(h, k.v.s); continue; }
     if (k.tag != SP_TAG_STR || v.tag != SP_TAG_INT) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
     sp_StrIntHash_set(h, k.v.s, v.v.i);
   }
@@ -12384,8 +12386,10 @@ static sp_StrStrHash *sp_StrStrHash_from_poly_hash(sp_PolyPolyHash *src) {
   sp_StrStrHash *h = sp_StrStrHash_new(); SP_GC_ROOT(h);
   for (sp_int i = 0; src && i < src->len; i++) {
     sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
-    if (k.tag != SP_TAG_STR || v.tag != SP_TAG_STR) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
-    sp_StrStrHash_set_e(h, k.v.s, SP_SEF(v.v.s));
+    /* (a String value read out of a typed variant is boxed as its handle;
+       a nil value is kept as the variant's NULL, which SP_SEV gives) */
+    if (k.tag != SP_TAG_STR || (v.tag != SP_TAG_STR && v.tag != SP_TAG_NIL && !sp_poly_is_strbuf(v))) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
+    sp_StrStrHash_set_e(h, k.v.s, SP_SEV(v));
   }
   return h;
 }

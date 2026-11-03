@@ -1250,7 +1250,6 @@ int emit_exc_reopen_pick_head(Compiler *c, const int *xr, int xn, const char *cl
 int class_has_subclass(Compiler *c, int ocid);
 int exc_has_user_msg_override(Compiler *c);
 int exc_text_override_calls_super(Compiler *c);
-int scope_calls_super(Compiler *c, int s);
 int exc_has_nonstring_msg_override(Compiler *c);
 int fi_fiber_stack_risk(Compiler *c);
 const char *class_ruby_name(Compiler *c, int ci);

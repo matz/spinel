@@ -2039,6 +2039,9 @@ int comp_defined_reads(Compiler *c, int pred, int *reads, int cap);
    names (analyze_util.c) */
 int const_path_misses_member(Compiler *c, int id);
 int const_node_class_index(Compiler *c, int id);
+/* Does scope s call `super` in its body or its parameter defaults (analyze.c).
+   Analysis and codegen both ask it. */
+int scope_calls_super(Compiler *c, int s);
 void builtin_given_free(Compiler *c);
 int const_path_class(Compiler *c, int id);
 /* a segment naming a builtin class, module or constant (analyze_util.c) */

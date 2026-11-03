@@ -123,15 +123,17 @@ static SP_NOINLINE SP_COLD void sp_nilbits_move(uint64_t *b, sp_int cap, sp_int 
    at it raises it to the next nil up (sp_nil_lo_up), dropping the bitmap
    when none is left, and clearing another bit leaves it. */
 #define SP_NIL_LO_NONE UINT32_MAX
-/* nil_lo once the nil at it is overwritten: the next nil up, or none */
+/* nil_lo once the nil at it is overwritten: the next nil up, or none (a nil
+   at or past SP_NIL_LO_NONE keeps the bound just below it, never none) */
 static SP_NOINLINE SP_COLD uint32_t sp_nil_lo_next(const uint64_t *b, uint32_t lo, sp_int cap) {
   sp_int p = sp_nilbits_next(b, lo, cap);
-  return p < 0 ? SP_NIL_LO_NONE : (uint32_t)p;
+  return p < 0 ? SP_NIL_LO_NONE : (uint64_t)p >= SP_NIL_LO_NONE ? SP_NIL_LO_NONE - 1 : (uint32_t)p;
 }
-/* (the next nil in nil_lo's own word: the common case, a fill in order) */
+/* (the next nil in nil_lo's own word: the common case, a fill in order; the
+   word that holds slot SP_NIL_LO_NONE goes the long way) */
 static inline uint32_t sp_nil_lo_up(const uint64_t *b, uint32_t lo, sp_int cap) {
   uint64_t m = b[lo >> 6] & (~(uint64_t)0 << (lo & 63));
-  return m ? (lo & ~(uint32_t)63) + (uint32_t)SP_CTZ64(m) : sp_nil_lo_next(b, lo, cap);
+  return m && (lo | 63) != SP_NIL_LO_NONE ? (lo & ~(uint32_t)63) + (uint32_t)SP_CTZ64(m) : sp_nil_lo_next(b, lo, cap);
 }
 #define SP_NILBITS_NEW_A(a) ((a)->nil_lo = SP_NIL_LO_NONE, (a)->nilbits = sp_nilbits_new((a), (a)->cap))
 #define SP_NILBIT_SET_A(a, p) ({ sp_int _nb_p = (p); \

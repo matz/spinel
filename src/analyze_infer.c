@@ -2106,6 +2106,11 @@ int hash_enum_redispatch(Compiler *c, int id) {
   /* a Hash reopen's own method of the name is the call's target, not the
      pair array (`class Hash; def uniq = "mine"; end`) */
   if (an_reopen_owner(c, id, CORE_HASH) >= 0) return 0;
+  /* so is an Enumerable reopening's method of a name builtins/ has no
+     definition of (desugar_builtin_enum_calls takes the call to it) */
+  if ((sp_streq(name, "uniq") || sp_streq(name, "zip") || sp_streq(name, "reverse_each") ||
+       sp_streq(name, "find_all") || sp_streq(name, "sort") || sp_streq(name, "min") ||
+       sp_streq(name, "max")) && an_enum_prog_method(c, name)) return 0;
   int block = nt_ref(nt, id, "block");
   /* blockless pair-order Enumerables: min/max compare the [k, v] pairs */
   if (block < 0 && (is_extrema_family(name)))

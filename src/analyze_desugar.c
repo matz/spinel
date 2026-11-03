@@ -4493,6 +4493,8 @@ int desugar_enumerable_chain(Compiler *c) {
         int ci = ty_object_class(rt);
         if (ci >= 0 && !comp_enum_answers_first(c, ci, "chain")) continue;
       }
+      /* a program's Enumerable#chain answers a builtin receiver too */
+      else if (an_enum_prog_method(c, "chain")) continue;
       /* A boxed receiver (an Array read out of a container) materializes
          through the run-time #to_a dispatch over whatever it holds, so it
          qualifies as an untyped one does; it stands down when a user class
@@ -10931,6 +10933,9 @@ int desugar_enumerable_via_to_a(Compiler *c) {
     if (comp_ntype(c, id) != TY_UNKNOWN) continue;
     /* a Hash or Range reopen's own method of the name is the call's target */
     if (an_reopen_owner(c, id, ty_is_hash(rt) ? CORE_HASH : CORE_RANGE) >= 0) continue;
+    /* so is an Enumerable reopening's method the class has none of
+       (desugar_builtin_enum_calls) */
+    if (an_enum_prog_method(c, nm) && !builtin_method_known(ty_is_hash(rt) ? "Hash" : "Range", nm)) continue;
     /* A blockless each_* over a Range has an arm already, and its Enumerator
        keeps the Range as its source (`(1..6).each_slice(2)` inspects as
        `1..6:each_slice(2)`); routing it would answer the elements instead. A
@@ -14156,6 +14161,28 @@ static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int
    registers a class no builtin receiver dispatches through, so a name it
    adds that none of them answers otherwise is given a generic definition
    beside the builtins', and each call takes its copy the same way. */
+/* The names of the methods a `module Enumerable` reopening of the program
+   defines in its own body and desugar_builtins routes to builtin
+   receivers (an included module's are not among them: they sit behind
+   Enumerable's native methods). */
+static char **g_enum_reopen_names = NULL;
+static int g_enum_reopen_names_n = 0;
+static void enum_reopen_name_add(const char *nm) {
+  if (!nm) return;
+  for (int i = 0; i < g_enum_reopen_names_n; i++) if (sp_streq(g_enum_reopen_names[i], nm)) return;
+  char **g = (char **)realloc(g_enum_reopen_names, sizeof(char *) * (size_t)(g_enum_reopen_names_n + 1));
+  if (!g) return;
+  g_enum_reopen_names = g;
+  g_enum_reopen_names[g_enum_reopen_names_n++] = strdup(nm);
+}
+/* Does a `module Enumerable` reopening of the program define nm itself, a
+   method a builtin receiver whose class has no nm of its own runs? */
+int an_enum_prog_method(Compiler *c, const char *nm) {
+  (void)c;
+  for (int i = 0; nm && i < g_enum_reopen_names_n; i++) if (sp_streq(g_enum_reopen_names[i], nm)) return 1;
+  return 0;
+}
+
 static int own_enum_name_routable(const char *nm) {
   if (!nm || builtin_enum_name_index(nm) >= 0 || is_enum_helper_name(nm) || object_public_method_name(nm)) return 0;
   return !bi_enum_receivers_answer(nm);
@@ -14413,7 +14440,17 @@ int desugar_builtins(Compiler *c) {
           changed = 1;
           continue;
         }
-        if (d < 0 || nt_ref(nt, d, "receiver") >= 0 || !own_enum_name_routable(nt_str(nt, d, "name"))) continue;
+        /* a name an Array or another receiver has a method of (map, uniq)
+           is routed too, written in the reopening itself (an included
+           module's sits behind Enumerable's native one): the receivers
+           with a method of their own keep it (enum_recv_class_owns). One
+           that calls super keeps the builtin's. */
+        const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL;
+        int wide = dn && !own_enum_name_routable(dn) && builtin_enum_name_index(dn) < 0 &&
+                   !is_enum_helper_name(dn) && !object_public_method_name(dn) && bi_enum_receivers_answer(dn);
+        if (wide && bi_def_calls_super(nt, d)) continue;
+        if (d < 0 || nt_ref(nt, d, "receiver") >= 0 || (!wide && !own_enum_name_routable(dn))) continue;
+        enum_reopen_name_add(dn);
         int *g = (int *)realloc(own, sizeof(int) * (size_t)(nown + 1));
         if (!g) break;
         own = g; own[nown++] = bb[k];
@@ -14501,6 +14538,7 @@ int desugar_builtins(Compiler *c) {
        module_function): only a call on self takes the copy; another call
        raises as the method is not public */
     if (bi_def_visibility(nt, own[k]) != BVIS_PUBLIC) nt_node_set_int(nt, g, "enum_self_only", 1);
+    if (bi_enum_receivers_answer(name)) nt_node_set_int(nt, g, "enum_prog_def", 1);
     if (gdef[bi] >= 0) nt_subtree_blank(nt, gdef[bi]);
     gdef[bi] = g;
     changed = 1;
@@ -15160,6 +15198,8 @@ static int enum_class_owns(const char *cls, const char *nm, int blk) {
   if (blk && sp_streq(cls, "Array") && sp_streq(nm, "minmax")) return 0;
   if (blk && sp_streq(cls, "Range") &&
       (sp_streq(nm, "count") || sp_streq(nm, "min") || sp_streq(nm, "max") || sp_streq(nm, "minmax"))) return 0;
+  /* a bounded Range's entries and to_set call super */
+  if (sp_streq(cls, "Range") && (sp_streq(nm, "entries") || sp_streq(nm, "to_set"))) return 0;
   return 1;
 }
 static const char *const enum_owner_classes[] = { "Array", "Hash", "Range", "Enumerator", NULL };
@@ -15720,6 +15760,11 @@ static int enum_sym_proc_block(const NodeTable *nt, int blk) {
   const char *rn2 = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return rn2 && sp_streq(rn2, "_spx") && nt_ref(nt, call, "arguments") < 0 && nt_ref(nt, call, "block") < 0;
 }
+/* Does Struct have an Enumerable name of its own (CRuby 4.0's
+   Struct.instance_methods(false) & Enumerable.instance_methods)? */
+static int enum_struct_owns(const char *nm) {
+  return nm && (sp_streq(nm, "to_a") || sp_streq(nm, "to_h") || sp_streq(nm, "select") || sp_streq(nm, "filter"));
+}
 /* Does the receiver of call id, of type rt, have a method nm of its own
    class (enum_class_owns)? A receiver the analysis made (`to_a` or
    `__enum_to_a` over a Hash, a Range or a class with #each) is no Array of
@@ -15731,11 +15776,21 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
   if (nt_kind(nt, recv) == NK_CallNode) {
     const char *rn = nt_str(nt, recv, "name");
     if (nt_int(nt, recv, "made_to_a", 0) || nt_str(nt, recv, "enum_recv") || nt_str(nt, recv, "enum_each_wrap") ||
-        (rn && strncmp(rn, "__enum_to_a", 11) == 0)) return 0;
+        (rn && strncmp(rn, "__enum_to_a", 11) == 0)) {
+      /* (the member Array of a Struct: the Struct's own select answers) */
+      int sr = nt_ref(nt, recv, "receiver");
+      TyKind st = sr >= 0 ? infer_type(c, sr) : TY_UNKNOWN;
+      int sc = ty_is_object(st) ? ty_object_class(st) : -1;
+      return sc >= 0 && sc < c->nclasses && c->classes[sc].is_struct && enum_struct_owns(nm);
+    }
   }
   const char *cls = NULL;
   if (ty_is_array(rt) || ty_is_obj_array(rt)) cls = "Array";
   else if (ty_is_object(rt) && comp_ary_root(c, ty_object_class(rt)) >= 0) cls = "Array";
+  /* a Struct's own select or to_a */
+  else if (ty_is_object(rt) && ty_object_class(rt) >= 0 && ty_object_class(rt) < c->nclasses &&
+           c->classes[ty_object_class(rt)].is_struct)
+    return enum_struct_owns(nm);
   else if (ty_is_hash(rt)) cls = "Hash";
   else if (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE) cls = "Range";
   else if (rt == TY_ENUMERATOR) cls = "Enumerator";
@@ -15856,7 +15911,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
                      sp_streq(name, "sum") || sp_streq(name, "count") || sp_streq(name, "size") ||
                      sp_streq(name, "first") || sp_streq(name, "last") || sp_streq(name, "include?") ||
                      sp_streq(name, "member?"));
-    if (range_own && nt_ref(nt, id, "block") < 0) continue;
+    /* (a program's Enumerable method of a name Range has none of, sum,
+       answers the Range) */
+    if (range_own && nt_ref(nt, id, "block") < 0 &&
+        !(an_enum_prog_method(c, name) && !builtin_method_known("Range", name))) continue;
     /* the Range arm of a boxed receiver's minmax (range_arm below): the
        poly dispatch answers it, off the endpoints */
     if (nt_int(nt, id, "enum_range_own", 0)) continue;
@@ -16022,6 +16080,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
       for (int k = 0; own_copy >= 0 && own_copy < nt->count && enum_owner_classes[k]; k++)
         if (enum_class_owns(enum_owner_classes[k], oq, nt_ref(nt, id, "block") >= 0)) own_arm = 1;
       if (own_arm && comp_method_index(c, nt_str(nt, own_copy, "name")) < 0) own_arm = 0;
+      /* a name builtins/ has no definition of that a builtin receiver
+         answers itself (map, uniq, entries) has no copy for the classes
+         that own it: the call keeps its typed dispatch */
+      if ((own_copy < 0 || own_copy >= nt->count) && bi_enum_receivers_answer(oq)) continue;
     }
     const char *gn = nt_str(nt, copy, "name");
     if (!gn || comp_method_index(c, gn) < 0) continue;

@@ -32113,6 +32113,42 @@ int private_answer_overridden(Compiler *c, const char *qm, TyKind rt) {
   }
   return 0;
 }
+/* true or false asked respond_to?(qm) where TrueClass or FalseClass
+   defines qm itself: each value answers by its own class, as Ruby's lookup
+   does. Sets *ta (true's answer) and *fa (false's): 1 or 0, or -1 for the
+   builtin surface, which the run time answers (sp_poly_responds_builtin),
+   or 2 for a private one asked with a second argument only the run time
+   knows (that argument answers). 0 when the answer is left to the other paths: a name a root reopening or
+   an included module defines, or Object's private methods to include_all. */
+int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldable, int *ta, int *fa) {
+  int ks[2] = { comp_core_class(c, CORE_TRUECLASS), comp_core_class(c, CORE_FALSECLASS) };
+  int own[2], any = 0;
+  for (int i = 0; i < 2; i++) {
+    own[i] = ks[i] >= 0 ? comp_method_in_class(c, ks[i], qm) : -1;
+    if (own[i] >= 0) any = 1;
+  }
+  if (!any || root_reopen_defines(c, qm)) return 0;
+  if (include_all || !foldable) {
+    if (object_private_method_name(qm)) return 0;
+    for (int si = 0; si < c->nscopes; si++) {
+      const Scope *ts = &c->scopes[si];
+      if (ts->name && ts->def_node >= 0 && ts->class_id < 0 && !ts->is_cmethod &&
+          !ts->is_proc_form && sp_streq(ts->name, qm)) return 0;
+    }
+  }
+  int ans[2];
+  for (int i = 0; i < 2; i++) {
+    if (ks[i] >= 0 && (comp_is_undeffed_in_chain(c, ks[i], qm) || comp_is_reader(&c->classes[ks[i]], qm)))
+      return 0;
+    if (own[i] >= 0)
+      ans[i] = comp_method_vis_declared(c, ks[i], qm, NULL) == SP_VIS_PUBLIC ? 1 : foldable ? include_all : 2;
+    /* (a method an included module gives the class) */
+    else if (ks[i] >= 0 && comp_method_in_chain(c, ks[i], qm, NULL) >= 0) return 0;
+    else ans[i] = -1;
+  }
+  *ta = ans[0]; *fa = ans[1];
+  return 1;
+}
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm,
                                     int argc, const int *argv) {
   const NodeTable *nt = c->nt;
@@ -32132,6 +32168,17 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   }
   const char *const *uni = respond_universal;
   int yes = 0, resolved = 0;
+  /* true or false where TrueClass or FalseClass defines the name: a
+     literal's own side answers; any other is asked at run time
+     (emit_respond_to_bool_sides) */
+  { int ta, fa;
+    if (recv >= 0 && rt == TY_BOOL && bool_side_responds(c, qm, include_all, foldable, &ta, &fa)) {
+      int lr = nt_paren_single(nt, recv);
+      NodeKind lk = lr >= 0 ? nt_kind(nt, lr) : NK_NilNode;
+      if (lk == NK_TrueNode && (ta == 0 || ta == 1)) return ta;
+      if (lk == NK_FalseNode && (fa == 0 || fa == 1)) return fa;
+      return -1;
+    } }
   /* a compiler-synthesized helper (__enum_to_a) is not a real method: CRuby
      answers false, so never let the class-chain lookup below report it */
   if (name_is_synth_method(c, qm)) { resolved = 1; yes = 0; }

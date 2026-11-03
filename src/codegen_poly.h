@@ -9,6 +9,8 @@
 
 void emit_poly_user_box(Compiler *c, int id, Scope *m, const char *call, Buf *b);
 int  class_is_prim_reopen(Compiler *c, int k);
+const int *comp_prim_reopen_classes(Compiler *c, int *n);   /* the classes it answers for, per class table */
+const int *comp_exc_subclasses(Compiler *c, int *n);        /* ...and class_is_exc_subclass's */
 int  exc_arm_definer(Compiler *c, int k, const char *name);
 int  poly_arm_refuses_none(Compiler *c, int mi, char *exp, size_t n);
 void emit_poly_arity_raise(Buf *b, const char *msg);

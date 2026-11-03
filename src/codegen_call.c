@@ -1267,6 +1267,38 @@ int class_is_prim_reopen(Compiler *c, int k) {
   if (!memo[k]) memo[k] = class_is_prim_reopen_raw(c, k) ? 2 : 1;
   return memo[k] == 2;
 }
+/* The classes class_is_prim_reopen answers for, and the ones
+   class_is_exc_subclass answers for, each as a list kept per class table
+   (the same stamps as their memos): a boxed dispatch's key asked every
+   candidate of its name whether it is one, at every dispatch (#10546). */
+static int *g_prim_list, g_prim_n, g_prim_ncls = -1;
+static unsigned g_prim_gen; static const Compiler *g_prim_c;
+const int *comp_prim_reopen_classes(Compiler *c, int *n) {
+  if (g_prim_c != c || g_prim_ncls != c->nclasses || g_prim_gen != comp_class_shape_gen()) {
+    free(g_prim_list);
+    g_prim_list = (int *)malloc(sizeof(int) * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+    if (!g_prim_list) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_prim_n = 0;
+    for (int k = 0; k < c->nclasses; k++) if (class_is_prim_reopen(c, k)) g_prim_list[g_prim_n++] = k;
+    g_prim_c = c; g_prim_ncls = c->nclasses; g_prim_gen = comp_class_shape_gen();
+  }
+  *n = g_prim_n;
+  return g_prim_list;
+}
+static int *g_excl_list, g_excl_n, g_excl_ncls = -1;
+static unsigned g_excl_gen; static const Compiler *g_excl_c;
+const int *comp_exc_subclasses(Compiler *c, int *n) {
+  if (g_excl_c != c || g_excl_ncls != c->nclasses || g_excl_gen != comp_class_shape_gen()) {
+    free(g_excl_list);
+    g_excl_list = (int *)malloc(sizeof(int) * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+    if (!g_excl_list) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_excl_n = 0;
+    for (int k = 0; k < c->nclasses; k++) if (class_is_exc_subclass(c, k)) g_excl_list[g_excl_n++] = k;
+    g_excl_c = c; g_excl_ncls = c->nclasses; g_excl_gen = comp_class_shape_gen();
+  }
+  *n = g_excl_n;
+  return g_excl_list;
+}
 static int class_is_prim_reopen_raw(Compiler *c, int k) {
   const char *n = c->classes[k].name;
   return sp_streq(n, "Integer") || sp_streq(n, "Float") ||
@@ -1298,14 +1330,15 @@ int exc_arm_definer(Compiler *c, int k, const char *name) {
    to map a boxed exception (tagged SP_BUILTIN_EXCEPTION) to its class. */
 int poly_exc_cand(Compiler *c, const char *name) {
   { int xr[8]; if (exc_reopen_definers(c, name, xr, 8) > 0) return 1; }
-  /* a class with the method or a reader is one of the name's candidates */
-  int npc = 0;
-  const PolyCand *pcs = comp_poly_candidates(c, name, &npc);
-  for (int i = 0; i < npc; i++) {
-    int k = pcs[i].cls;
-    if (class_is_exc_subclass(c, k) &&
-        (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)))
-      return 1;
+  /* a class with the method or a reader is one of the name's candidates
+     (comp_poly_candidates): asked of the exception subclasses alone, where
+     every candidate of the name was asked whether it is one (#10546) */
+  IMEMO_DEP_GLOBAL();   /* (the candidates are read over every class) */
+  int nxs = 0;
+  const int *xs = comp_exc_subclasses(c, &nxs);
+  for (int i = 0; i < nxs; i++) {
+    int k = xs[i];
+    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;
   }
   return 0;
 }
@@ -20482,9 +20515,11 @@ static int poly_arity_plan(Compiler *c, int id, const char **tests, char exps[][
   int nmm;
   comp_name_responders(c, "method_missing", 0, &nmm);
   if (nmm > 0) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_is_reader(&c->classes[k], name) || comp_is_writer(&c->classes[k], name) ||
-        (nmm < 0 && comp_method_in_chain(c, k, "method_missing", NULL) >= 0)) return 0;
+  /* (an accessor of the name anywhere, from the set of every class's;
+     the classes were walked at every boxed dispatch, #10546) */
+  if (comp_any_class_accessor(c, name)) return 0;
+  for (int k = 0; nmm < 0 && k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
   return poly_arity_rows(c, name, with_block, argc, kwh, 0, tests, exps);
 }
 

@@ -6507,11 +6507,38 @@ static int main_body_split(Compiler *c, Buf *body, size_t open, size_t *frame_in
 
    Only reference fields: a barrier on every ivar store, scalars included,
    costs 14% on optcarrot where the reference-only one costs 0.5%. */
-/* The class whose struct is named `sp_<name>`, or -1. */
+static unsigned wb_hash_n(const char *s, size_t n) {
+  unsigned h = 2166136261u;
+  for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 16777619u; }
+  return h;
+}
+/* The class whose struct is named `sp_<name>`, or -1: the lowest index of
+   the name. From a hash of the C names kept per class table: the barrier
+   pass asks it at every function header, and a scan of every class per
+   header was (methods x classes) on a large program (#10546). */
 static int wb_class_by_cname(Compiler *c, const char *nm, size_t n) {
-  for (int k = 0; k < c->nclasses; k++) {
-    const char *cn = c->classes[k].c_name;
-    if (cn && strlen(cn) == n && !strncmp(cn, nm, n)) return k;
+  static int *slot; static unsigned cap;
+  static const Compiler *memo_c; static int memo_n = -1; static unsigned memo_gen;
+  if (memo_c != c || memo_n != c->nclasses || memo_gen != comp_class_shape_gen()) {
+    unsigned ncap = 64;
+    while (ncap < (unsigned)c->nclasses * 2u + 2u) ncap *= 2;
+    free(slot); slot = (int *)calloc(ncap, sizeof(int));
+    if (!slot) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    cap = ncap;
+    /* from the last class down, so a name two classes share keeps the
+       lower index, as the scan's first hit did */
+    for (int k = c->nclasses - 1; k >= 0; k--) {
+      const char *cn = c->classes[k].c_name;
+      if (!cn) continue;
+      unsigned h = wb_hash_n(cn, strlen(cn)) & (cap - 1);
+      while (slot[h] && strcmp(c->classes[slot[h] - 1].c_name, cn) != 0) h = (h + 1) & (cap - 1);
+      slot[h] = k + 1;
+    }
+    memo_c = c; memo_n = c->nclasses; memo_gen = comp_class_shape_gen();
+  }
+  for (unsigned h = wb_hash_n(nm, n) & (cap - 1); slot[h]; h = (h + 1) & (cap - 1)) {
+    const char *cn = c->classes[slot[h] - 1].c_name;
+    if (strlen(cn) == n && !strncmp(cn, nm, n)) return slot[h] - 1;
   }
   return -1;
 }
@@ -6583,8 +6610,41 @@ static int wb_field_is_ref_in(Compiler *c, int only, const char *fld, size_t n) 
   }
   return 0;
 }
+/* ...asked of every class, for a store whose holder the text does not name:
+   the answer is kept per field name while the class table holds, since the
+   question is asked at every such store and the scan was (stores x classes)
+   on a large program (#10546). */
 static int wb_field_is_ref(Compiler *c, const char *fld, size_t n) {
-  return wb_field_is_ref_in(c, -1, fld, n);
+  static char **keys; static unsigned char *ans; static unsigned cap, used;
+  static const Compiler *memo_c; static int memo_n = -1; static unsigned memo_gen, memo_tab;
+  if (memo_c != c || memo_n != c->nclasses || memo_gen != comp_class_shape_gen() || memo_tab != comp_table_gen) {
+    for (unsigned i = 0; i < cap; i++) free(keys[i]);
+    free(keys); free(ans); keys = NULL; ans = NULL; cap = 0; used = 0;
+    memo_c = c; memo_n = c->nclasses; memo_gen = comp_class_shape_gen(); memo_tab = comp_table_gen;
+  }
+  if (n >= 200) return wb_field_is_ref_in(c, -1, fld, n);
+  if ((used + 1) * 2 > cap) {
+    unsigned ncap = cap ? cap * 2 : 256;
+    char **nk = (char **)calloc(ncap, sizeof(char *));
+    unsigned char *na = (unsigned char *)calloc(ncap, 1);
+    if (!nk || !na) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (unsigned i = 0; i < cap; i++) {
+      if (!keys[i]) continue;
+      unsigned h = wb_hash_n(keys[i], strlen(keys[i])) & (ncap - 1);
+      while (nk[h]) h = (h + 1) & (ncap - 1);
+      nk[h] = keys[i]; na[h] = ans[i];
+    }
+    free(keys); free(ans); keys = nk; ans = na; cap = ncap;
+  }
+  unsigned h = wb_hash_n(fld, n) & (cap - 1);
+  for (; keys[h]; h = (h + 1) & (cap - 1))
+    if (strlen(keys[h]) == n && !strncmp(keys[h], fld, n)) return ans[h];
+  int r = wb_field_is_ref_in(c, -1, fld, n);
+  keys[h] = (char *)malloc(n + 1);
+  if (!keys[h]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(keys[h], fld, n); keys[h][n] = '\0';
+  ans[h] = (unsigned char)r; used++;
+  return r;
 }
 /* Does class `k` declare the emitted field `fld` (which carries the "iv_"
    prefix)? Used to check that a holder class resolved from the text is really

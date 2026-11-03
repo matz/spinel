@@ -2414,6 +2414,7 @@ int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kerne
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
 int        core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
 int        comp_is_writer(ClassInfo *ci, const char *name);
+int        comp_any_class_accessor(Compiler *c, const char *name);   /* any class declares a reader or writer of the name */
 int        name_is_plain_setter(const char *name);
 int        call_is_setter_assign(const NodeTable *nt, int id);
 int        proc_parameters_lambda_mode(const NodeTable *nt, int argc, const int *argv);

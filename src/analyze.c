@@ -27221,19 +27221,21 @@ static int an_arg_hands_handle(Compiler *c, int node) {
    walked without a scan of every scope per call site. The table is built once
    per scope-index epoch, as an_any_scope_by_name's is; before the index is
    frozen, names can still change, so the answer is a scan. */
+static int *asn_next, *asn_nextp, asn_stamp_n = -1;
+static unsigned asn_stamp_gen;
 static int an_same_name_next(Compiler *c, int i) {
   const char *nm = c->scopes[i].name;
   if (!nm) return -1;
   if (comp_scope_index_is_frozen()) {
-    static int *next = NULL, stamp_n = -1;
-    static unsigned stamp_gen;
-    if (stamp_n != c->nscopes || stamp_gen != comp_scope_index_gen()) {
-      free(next);
-      next = (int *)malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
-      int *last = (int *)malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+    if (asn_stamp_n != c->nscopes || asn_stamp_gen != comp_scope_index_gen()) {
+      free(asn_next); free(asn_nextp);
+      size_t cnt = (size_t)(c->nscopes > 0 ? c->nscopes : 1);
+      int *next = asn_next = (int *)malloc(sizeof(int) * cnt);
+      int *nextp = asn_nextp = (int *)malloc(sizeof(int) * cnt);
+      int *last = (int *)malloc(sizeof(int) * cnt);
       ANameHash names; memset(&names, 0, sizeof names);
       /* -1 is the group's end: a missing table would cut every group short */
-      if (!next || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (!next || !nextp || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       for (int k = c->nscopes - 1; k >= 1; k--) {
         const char *sn = c->scopes[k].name;
         next[k] = -1;
@@ -27242,13 +27244,31 @@ static int an_same_name_next(Compiler *c, int i) {
         if (h >= 0) { next[k] = last[h]; last[h] = k; }
         else { anh_add(&names, sn); last[names.n - 1] = k; }
       }
+      /* the chain of the scopes that take a parameter (an_same_name_next_params):
+         each link skips to the first of them after it, which is known, as
+         the links run upward and these are made from the top down */
+      for (int k = c->nscopes - 1; k >= 1; k--) {
+        int nx = next[k];
+        nextp[k] = nx < 0 ? -1 : c->scopes[nx].nparams > 0 ? nx : nextp[nx];
+      }
       anh_free(&names); free(last);
-      stamp_n = c->nscopes; stamp_gen = comp_scope_index_gen();
+      asn_stamp_n = c->nscopes; asn_stamp_gen = comp_scope_index_gen();
     }
-    return next[i];
+    return asn_next[i];
   }
   for (int k = i + 1; k < c->nscopes; k++)
     if (c->scopes[k].name && sp_streq(c->scopes[k].name, nm)) return k;
+  return -1;
+}
+/* The method scope after `i` of the same name that takes a parameter, or
+   -1 (a consumer with ACallTargets.params_only set walks these). */
+static int an_same_name_next_params(Compiler *c, int i) {
+  if (comp_scope_index_is_frozen() && c->scopes[i].name) {
+    (void)an_same_name_next(c, i);   /* (the tables, when the epoch moved) */
+    return asn_nextp[i];
+  }
+  for (int k = an_same_name_next(c, i); k >= 0; k = an_same_name_next(c, k))
+    if (c->scopes[k].nparams > 0) return k;
   return -1;
 }
 
@@ -27258,7 +27278,12 @@ static int an_same_name_next(Compiler *c, int i) {
    is not built: the walk only answers whether that one scope is a target
    (`hit`), which is what an_call_targets_scope asks for every scope of the
    name, and listing a wide group's overrides for each was quadratic. */
-typedef struct { int *v; int n, cap; int want, hit; } ACallTargets;
+/* `params_only`: a consumer that reads only parameter chains (the handle
+   argument table, the String argument index) asks for the targets that take
+   a parameter; a poly receiver's call reaches every method of its name,
+   most of them often taking none, and listing those for every such call
+   was (calls x methods) on a large program (#10546). */
+typedef struct { int *v; int n, cap; int want, hit; int params_only; } ACallTargets;
 
 /* scope -> the list act_add last put it in, so a group of a thousand
    candidates is deduplicated without comparing each against the rest */
@@ -27480,6 +27505,11 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
   }
   if (t->want >= 0 && c->scopes[t->want].name && sp_streq(c->scopes[t->want].name, un))
     t->hit = 1;
+  else if (t->params_only) {
+    int k = first;
+    if (k >= 0 && c->scopes[k].nparams <= 0) k = an_same_name_next_params(c, k);
+    for (; k >= 0 && t->want < 0; k = an_same_name_next_params(c, k)) act_add(t, k);
+  }
   else
     for (int k = first; k >= 0 && t->want < 0; k = an_same_name_next(c, k)) act_add(t, k);
   /* and every method a class aliases under the name */
@@ -27745,6 +27775,7 @@ static void strbuf_arg_index_build(Compiler *c) {
   if (!x->head) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < x->off[c->nscopes]; i++) x->head[i] = -1;
   ACallTargets t = {0};
+  t.params_only = 1;   /* (strbuf_arg_index_call records a parameter's edges and nothing of a method without) */
   int *allm = NULL, nallm = 0;
   const NodeTable *nt = c->nt;
   for (int u = nt->count - 1; u >= 0; u--) {
@@ -27843,7 +27874,7 @@ static void handle_arg_tab_init(Compiler *c, HandleArgTab *t) {
   }
   t->ok = 1;
   int ne = 0;
-  ACallTargets tg = { NULL, 0, 0, -1, 0 };
+  ACallTargets tg = { NULL, 0, 0, -1, 0, 1 };   /* (only a parameter's chain is read: params_only) */
   for (int u = 0; u < nt->count; u++) {
     if (nt_kind(nt, u) != NK_CallNode) continue;
     an_call_targets_of(c, u, &tg);

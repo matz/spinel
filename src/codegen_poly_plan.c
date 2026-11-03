@@ -1915,12 +1915,16 @@ int poly_key_cls0(Compiler *c, int call, const char *name, int argc, int kwh, in
    dispatch of call `call`? The key then maps a runtime tag to its class
    (#4219). */
 int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, int pos_argc, int splat_a) {
-  /* a reopening without the method takes no arm: the name's candidates */
-  int npc = 0;
-  const PolyCand *pcs = comp_poly_candidates(c, name, &npc);
-  for (int ki = 0; ki < npc; ki++) {
-    int k = pcs[ki].cls;
-    if (!class_is_prim_reopen(c, k)) continue;
+  /* a reopening without the method takes no arm: only one of the name's
+     candidates (a class whose chain has the method or a reader,
+     comp_poly_candidates), asked of the primitive reopenings alone, which
+     are few, where every candidate of the name was asked (#10546) */
+  IMEMO_DEP_GLOBAL();   /* (the candidates are read over every class) */
+  int npk = 0;
+  const int *pks = comp_prim_reopen_classes(c, &npk);
+  for (int ki = 0; ki < npk; ki++) {
+    int k = pks[ki];
+    if (comp_method_in_chain(c, k, name, NULL) < 0 && !comp_reader_in_chain(c, k, name, NULL)) continue;
     int pmi = call_target(c, call, k, name, 0, NULL);
     char pexp[600];
     if (pmi < 0) continue;

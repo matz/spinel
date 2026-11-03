@@ -2373,6 +2373,8 @@ static int exc_text_call_on(Compiler *c, int v, int boxed) {
   if (comp_ntype(c, v) != TY_STRING && comp_ntype(c, v) != TY_STRBUF) return 0;
   if (!boxed) return repr_of(c, recv).exc;
   if (rt != TY_POLY) return 0;
+  /* (a program with no exception class of its own: no walk below finds one) */
+  { int nxs = 0; (void)comp_exc_subclasses(c, &nxs); if (nxs == 0) return 0; }
   /* a boxed receiver is claimed only where the classes it can hold (the
      boxed-receiver walk) include an exception class */
   int nk = 0;
@@ -2388,8 +2390,7 @@ static int exc_text_call_on(Compiler *c, int v, int boxed) {
   /* (a box the walk cannot follow, an Array's element an exception was
      pushed into, can hold an exception of any of the program's classes:
      the route tests the box at run time) */
-  for (int k = 0; !ks && k < c->nclasses; k++)
-    if (class_is_exc_subclass(c, k)) return 1;
+  if (!ks) { int nxs = 0; (void)comp_exc_subclasses(c, &nxs); return nxs > 0; }
   return 0;
 }
 /* --share-strings: a String Range's begin / first (1) or end / last (2),

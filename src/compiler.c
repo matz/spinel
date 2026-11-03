@@ -2673,6 +2673,36 @@ void comp_add_own_reader(ClassInfo *ci, const char *name) {
 }
 int comp_is_own_reader(ClassInfo *ci, const char *name) { return name_idx_find(&ci->own_readers_ix, ci->own_readers, ci->nown_readers, name) >= 0; }
 int comp_is_writer(ClassInfo *ci, const char *name) { return name_idx_find(&ci->writers_ix, ci->writers, ci->nwriters, name) >= 0; }
+/* Does any class declare a reader or a writer named `name`? From a list of
+   every class's reader and writer names, built again when a table grows
+   (comp_table_gen; they never shrink) or the class count changes: the boxed
+   arity plan asked every class at every boxed dispatch (#10546). */
+int comp_any_class_accessor(Compiler *c, const char *name) {
+  static char **list; static int n, cap; static NameIdx ix;
+  static const Compiler *memo_c; static int memo_ncls = -1; static unsigned memo_gen;
+  if (memo_c != c || memo_ncls != c->nclasses || memo_gen != comp_table_gen) {
+    n = 0;
+    free(ix.slot); memset(&ix, 0, sizeof ix);
+    for (int k = 0; k < c->nclasses; k++) {
+      ClassInfo *ci = &c->classes[k];
+      for (int pass = 0; pass < 2; pass++) {
+        int cnt = pass ? ci->nwriters : ci->nreaders;
+        char **v = pass ? ci->writers : ci->readers;
+        for (int j = 0; j < cnt; j++) {
+          if (!v[j]) continue;
+          if (n == cap) {
+            cap = cap ? cap * 2 : 64;
+            list = (char **)realloc(list, sizeof(char *) * (size_t)cap);
+            if (!list) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          }
+          list[n++] = v[j];
+        }
+      }
+    }
+    memo_c = c; memo_ncls = c->nclasses; memo_gen = comp_table_gen;
+  }
+  return name_idx_find(&ix, list, n, name) >= 0;
+}
 
 /* A plain setter name: `x=`, but not the operators that also end in `=`
    (`==`, `!=`, `<=`, `>=`, `===`) and not `[]=`, whose value form is its own. */

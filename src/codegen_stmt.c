@@ -21157,6 +21157,18 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       const_name_owner(c, id, &owner);
       emit_class_const_name(c, key, nm, owner, b, indent);
     }
+    /* a constant of no fixed kind (`X = [Class.new].first`) names the class
+       it holds when it holds one, as CRuby names any class a constant's
+       first write holds */
+    else if (!isg && lv->type == TY_POLY && c->has_anonymous_classes) {
+      int owner;
+      const_name_owner(c, id, &owner);
+      const char *prefix = owner >= 0 ? class_ruby_name(c, owner) : NULL;
+      emit_indent(b, indent);
+      buf_printf(b, "if (cst_%s.tag == SP_TAG_CLASS && cst_%s.cls_id != SP_CLASS_BY_NAME) "
+                    "sp_class_assign_name(sp_unbox_class(cst_%s), SPL(\"%s%s%s\"));\n",
+                 key, key, key, prefix ? prefix : "", prefix ? "::" : "", nm);
+    }
     if (!isg) emit_const_write_last_value(c, lv, key, b, indent);
     return 1;
   }

@@ -11308,6 +11308,19 @@ int obj_str_ret_poly(Compiler *c, int cid, int want_inspect) {
   return mi >= 0 && (TyKind)c->scopes[mi].ret == TY_POLY;
 }
 
+/* True when it answers an instance of a String subclass (a `def to_s =
+   SafeBuffer.new(...)`): the instance is the String CRuby reads, and its
+   struct begins with that String, so callers read its bytes through
+   sp_strbuf_read instead of taking the struct pointer as a const char *.
+   Not for a String subclass's own instances, which are read as the String
+   they are without a #to_s call (rb_obj_as_string). */
+int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect) {
+  if (cid < 0 || cid >= c->nclasses || comp_ary_is_str(c, cid)) return 0;
+  int mi = display_method_scope(c, cid, want_inspect, NULL);
+  TyKind r = mi >= 0 ? (TyKind)c->scopes[mi].ret : TY_UNKNOWN;
+  return ty_is_object(r) && comp_ary_is_str(c, ty_object_class(r));
+}
+
 /* Return the builtin exception parent name for user exc subclass ci,
    walking up the chain until a builtin exception name is found. */
 const char *exc_builtin_parent(Compiler *c, int ci) {
@@ -13762,12 +13775,16 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     for (int m = 0; m < 2; m++) {
       int fdef = -1;
       int fmi = comp_method_in_chain(c, i, mnames[m], &fdef);
-      if (fmi < 0 || !c->scopes[fmi].reachable || c->scopes[fmi].ret != TY_STRING ||
+      /* (a to_s answering a String subclass instance returns its struct) */
+      TyKind fret = fmi >= 0 ? (TyKind)c->scopes[fmi].ret : TY_UNKNOWN;
+      int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, i, 0);
+      if (fmi < 0 || !c->scopes[fmi].reachable || (fret != TY_STRING && !fstrsub) ||
           c->scopes[fmi].nparams != 0 || fdef != i) continue;
       /* a debug (-g) build gives user methods external linkage (see
          emit_method_signature); this forward decl must match it */
-      buf_printf(b, "%sconst char *%s(sp_%s %sself);\n",
-                 g_debug ? "" : "static ",
+      if (fstrsub) buf_printf(b, "%ssp_%s *", g_debug ? "" : "static ", c->classes[ty_object_class(fret)].c_name);
+      else buf_printf(b, "%sconst char *", g_debug ? "" : "static ");
+      buf_printf(b, "%s(sp_%s %sself);\n",
                  mc_method(c, &c->scopes[fmi]), c->classes[fdef].c_name,
                  is_val ? "" : "*");
     }
@@ -13816,6 +13833,13 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "    case %d: return %s%s((sp_%s *)p%s)%s;\n",
                  i, tspoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[tmi]),
                  c->classes[tdef].c_name, bridge_blk_arg(c, tmi), tspoly ? ")" : "");
+      continue;
+    }
+    /* one answering a String subclass instance: that String's bytes, where
+       the object default rendered #<Name:0x...> */
+    if (tmi >= 0 && c->scopes[tmi].reachable && c->scopes[tmi].nparams == 0 && obj_str_ret_strsub(c, i, 0)) {
+      buf_printf(b, "    case %d: return sp_str_or_empty(sp_strbuf_read((sp_String *)%s((sp_%s *)p%s)));\n",
+                 i, mc_method(c, &c->scopes[tmi]), c->classes[tdef].c_name, bridge_blk_arg(c, tmi));
       continue;
     }
     /* Struct/Data #to_s IS #inspect in CRuby, and they have a generated one

@@ -1271,6 +1271,7 @@ const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
 const char *obj_str_fn(Compiler *c, int cid, int want_inspect);
 const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect);
 int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
+int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 /* A require under --load-model=graph, as its value (codegen_stmt.c) */

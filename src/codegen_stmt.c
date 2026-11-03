@@ -26,7 +26,9 @@ static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
   /* A to_s that unions a String with another branch type (e.g. nil)
      returns a boxed sp_RbVal; route it through sp_poly_to_s rather than a
      pointer cast (#3266). */
-  buf_puts(b, ret_poly ? "sp_poly_to_s(" : "(const char *)(");
+  /* one answering a String subclass instance: that String's bytes */
+  int ret_strsub = !ret_poly && obj_str_ret_strsub(c, ty_object_class(t), 0);
+  buf_puts(b, ret_poly ? "sp_poly_to_s(" : ret_strsub ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "(const char *)(");
   buf_printf(b, "%s((sp_%s *)", obj_str_fn(c, ty_object_class(t), 0), cn);
   NodeKind rk = nt_kind(c->nt, arg);
   if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_SelfNode || rk == NK_ConstantReadNode) {
@@ -46,7 +48,7 @@ static void emit_obj_to_s(Compiler *c, int arg, TyKind t, Buf *b) {
     if (!comp_ty_value_obj(c, t)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tt); }
     buf_printf(b, "_t%d", tt);
   }
-  buf_printf(b, "%s))", obj_str_blockarg(c, ty_object_class(t), 0));
+  buf_printf(b, "%s))%s", obj_str_blockarg(c, ty_object_class(t), 0), ret_strsub ? "))" : "");
 }
 
 static int emit_splat_io(Compiler *c, int arg, const char *fn, Buf *b, int indent) {

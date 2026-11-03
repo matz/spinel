@@ -1933,6 +1933,7 @@ static sp_Bigint *sp_poly_as_bigint(sp_RbVal v);
 static int sp_bigint_eq_f(sp_Bigint *a, double d);    /* fwd: the exact Bignum/Float pair */
 static int sp_bigint_cmp_f(sp_Bigint *a, double d);
 static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg);  /* fwd */
+SP_COLD static const char *sp_stage_recv_args_msg(const char *msg, sp_RbVal recv, sp_int n, sp_RbVal *args);  /* fwd */
 static const char *sp_cmperr_desc(sp_RbVal v);  /* fwd: a failed coerce names its operand this way too */
 static inline int sp_poly_is_array_kind(int cls_id);            /* fwd: array set ops */
 static sp_PolyArray *sp_poly_to_poly_array(sp_RbVal v);
@@ -3440,8 +3441,15 @@ static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg) {
   /* CRuby names nil, true and false as THEMSELVES here, not as instances of
      their classes -- `[1, 2].reduce(nil, :+)` reads "undefined method '+' for
      nil". sp_nomethod_msg is where that wording already lives. */
-  if (!sp_poly_has_binop(recv, op))
-    sp_raise_cls("NoMethodError", sp_nomethod_msg(op, recv));
+  /* (with the receiver and the operand, for NoMethodError#receiver and
+     #args, as a compiled call's missing method stages them) */
+  if (!sp_poly_has_binop(recv, op)) {
+    /* (rooted: staging the operand allocates, and the message is a heap
+       String a collection there would take) */
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(arg);
+    const char *msg = sp_nomethod_msg(op, recv); SP_GC_ROOT_STR(msg);
+    sp_raise_cls("NoMethodError", sp_stage_recv_args_msg(msg, recv, 1, (sp_RbVal[]){ arg }));
+  }
   /* CRuby names the offending value by its class, EXCEPT nil/true/false, which
      it spells as themselves -- and the two messages disagree about Symbol:
      "no implicit conversion" says Symbol, "can't be coerced" says :sym. */

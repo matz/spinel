@@ -116,6 +116,35 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
            (ty_is_object(rt) && comp_method_in_chain(c, ty_object_class(rt), "respond_to?", NULL) >= 0));
 }
 
+/* The instance methods of the program's Object, Kernel and BasicObject
+   reopenings that class k's chain does not reach (the class table keeps
+   them apart), into pub or priv by the visibility root_reopen_method_vis
+   gives; k -1 for a value of no program class. Each name once. */
+static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  for (int u = 0; roots[u] >= 0; u++) {
+    int r = comp_core_class(c, roots[u]);
+    if (r < 0 || r == k) continue;
+    for (int s = 0; s < c->nscopes; s++) {
+      const Scope *os = &c->scopes[s];
+      if (!os->name || os->is_cmethod || os->is_proc_form || os->class_id != r) continue;
+      if (comp_method_in_class(c, r, os->name) != s) continue;
+      if (k >= 0 && (comp_method_in_chain(c, k, os->name, NULL) >= 0 || comp_reader_in_chain(c, k, os->name, NULL) ||
+                     comp_is_undeffed_in_chain(c, k, os->name))) continue;
+      /* the first root that defines it answers (Object over Kernel) */
+      int first = 1;
+      for (int v = 0; v < u && first; v++) {
+        int rv = comp_core_class(c, roots[v]);
+        if (rv >= 0 && rv != k && comp_method_in_class(c, rv, os->name) >= 0) first = 0;
+      }
+      int vis = root_reopen_method_vis(c, k, os->name);
+      if (!first || vis < 0 || name_is_synth_method(c, os->name) || is_initialize_family(os->name)) continue;
+      Buf *b = vis == SP_VIS_PUBLIC ? pub : priv;
+      buf_puts(b, "\""); emit_c_escaped(b, os->name); buf_puts(b, "\", ");
+    }
+  }
+}
+
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
 static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
@@ -170,8 +199,30 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
     for (int l = 0; l < 4; l++)
       for (int i = 0; imp[l][i]; i++)
         if (class_implicit_responds(c, k, imp[l][i])) emit_responds_name(c, k, imp[l][i], &pb, &vb);
+    /* and the methods of a program's Object reopening the chain does not
+       reach (the class table keeps Object apart), by Object's visibility */
+    emit_object_reopen_responds(c, k, &pb, &vb);
+    /* a class with no names answers none (its undef took them): the
+       default arm below is a builtin value's */
+    if (!pb.len && !vb.len) buf_printf(b, " case %d: break;", k);
     if (pb.len || vb.len) {
       buf_printf(b, " case %d: _r%d = ", k, tv);
+      if (pb.len) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pb.p);
+      if (vb.len) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, vb.p);
+      buf_puts(b, "0; break;");
+    }
+    free(pb.p);
+    free(vb.p);
+  }
+  /* a builtin value, or an object of a class with no names of its own,
+     answers the Object reopening's methods */
+  {
+    Buf pb, vb;
+    memset(&pb, 0, sizeof pb);
+    memset(&vb, 0, sizeof vb);
+    emit_object_reopen_responds(c, -1, &pb, &vb);
+    if (pb.len || vb.len) {
+      buf_printf(b, " default: _r%d = ", tv);
       if (pb.len) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pb.p);
       if (vb.len) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, vb.p);
       buf_puts(b, "0; break;");

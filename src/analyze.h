@@ -364,8 +364,9 @@ int elab_method_replaced(Compiler *c, const char *name);
 int elab_method_late(Compiler *c, const char *name);
 /* Does a reflection reader that answers from the method table (respond_to?,
    method_defined?, defined?, a list of methods: not a Method's maker) name
-   `name`, or one name any (lr_refl_take)? */
-int elab_method_reflected(Compiler *c, const char *name);
+   `name`, or one name any (lr_refl_take)? A respond_to? whose answer the
+   version cells hold for a class method (sg) does not. */
+int elab_method_reflected(Compiler *c, const char *name, int sg);
 /* The record's histories of method `name`, one class and side at a time:
    the first with i -1, then the one after i; -1 past the last. *cls the
    class (-1 main's), *sg 1 for its singleton side. */

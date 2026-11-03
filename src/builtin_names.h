@@ -290,6 +290,7 @@ int is_class_query(const char *n); /* class */
 int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
+int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
 /* const_get const_source_location nesting attached_object each_object eval binding */
 int is_constant_or_object_reflection(const char *n);
 int is_const_set_name(const char *n); /* const_set */
@@ -585,6 +586,7 @@ int is_dir_blockless_iter(const char *n);  /* foreach each_child: an Enumerator 
 int is_kernel_module_name(const char *n);
 int is_kernel_module_function(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */

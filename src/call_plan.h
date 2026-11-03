@@ -100,8 +100,11 @@ const CallPlan *cplan_user(Compiler *c, int id);
    name reached only by arms and captures. */
 /* CT_REACH asks the same lookup for an explicit route such as super.
    CT_CAPTURE selects the definition live at construction, or its entry
-   when the constructor must select an arm at run time. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
+   when the constructor must select an arm at run time. CT_CELLS, with
+   CT_CAPTURE, asks for that entry for a reader of its cells
+   (cplan_cmethod_presence), which a reader answering from the table does
+   not bind to the table's method as it binds a capture. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_CELLS = 32 };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
@@ -701,6 +704,23 @@ int cplan_sg_version(Compiler *c, int id, int ci, const char *name);
    accessor slot (cplan_sg_accessor). The reach pass then reaches no scope
    from it, though the version it binds to is the accessor's own. */
 int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name);
+/* The class whose own class methods `respond_to?` call id asks about: a
+   constant receiver's, or self's in a class method or a class body; -1 for
+   any other receiver, an instance's, and for a call of another shape
+   (respond_to_cells_shape). */
+int cplan_presence_class(Compiler *c, int id);
+/* The version cells that answer whether class cls has its class method
+   `name` where respond_to? call id runs: the cells of the version entry a
+   call of the name there would take, where the record cannot order the
+   call against a version (a method body's def, which may run any number
+   of times). Each cell holds one of the chain's versions while that
+   version is the method; only public ones unless include_all. 1 with the
+   cells in *out, 0 where the answer is the table's or the record's at the
+   point (cplan_cmethod_later), for a chain whose entry arms an undef or
+   a remove, and in a program that defines respond_to_missing?
+   (respond_to_missing_defined). */
+typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; } CplanCells;
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

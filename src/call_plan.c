@@ -1216,8 +1216,11 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      where a reader that answers from the table names the method
      (elab_method_reflected, the fact that keeps the name off the late
      bit): a respond_to? guarding the capture says it is there, so the
-     capture binds the table's method too, as the guarded call does. */
-  if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name)) {
+     capture binds the table's method too, as the guarded call does. A
+     class method's respond_to? that reads the entry's cells
+     (cplan_cmethod_presence) leaves the capture on the entry, and is
+     itself given the entry (CT_CELLS). */
+  if ((flags & (CT_CAPTURE | CT_CELLS)) == CT_CAPTURE && p.region < 0 && elab_method_reflected(c, name, sg)) {
     if (span) *span = 0;
     return mi;
   }
@@ -1383,6 +1386,41 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   int now = elab_blocks_run_now(c, id);
   if (framed) elab_plan_leave(c);
   return now;
+}
+/* See call_plan.h. */
+int cplan_presence_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (!respond_to_cells_shape(nt, id)) return -1;
+  int recv = nt_ref(nt, id, "receiver");
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return class_recv_static_ci(c, recv);
+  if (rk != NK_SelfNode) return -1;
+  const Scope *s = comp_scope_of(c, id);
+  if (s && s->class_id >= 0) return s->is_cmethod ? s->class_id : -1;
+  return s && c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
+}
+/* Does respond_to? call id ask the version cells of cls's class method
+   name: one the record cannot order there, in a program whose
+   respond_to? asks only the methods (respond_to_missing_defined) */
+static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name) {
+  return id >= 0 && cls >= 0 && ct_version_named(c, name) && !cplan_cmethod_later(c, id, cls, name) &&
+         !respond_to_missing_defined(c);
+}
+/* See call_plan.h. */
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out) {
+  ElabVersion vs[VER_MAX_ARMS];
+  if (!cplan_presence_asks(c, id, cls, name)) return 0;
+  int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE | CT_CELLS, NULL);
+  if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
+  int nv = elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
+  out->n = 0;
+  for (int i = 0; i < nv; i++) {
+    if (vs[i].v->kind == LR_REMOVE || vs[i].v->kind == LR_UNDEF) return 0;
+    if (!include_all && vs[i].v->vis != SP_VIS_PUBLIC) continue;
+    ver_cell_name(vs[i].hist, out->cell[out->n]);
+    out->val[out->n++] = vs[i].n;
+  }
+  return 1;
 }
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
@@ -5487,7 +5525,11 @@ void ver_entries_build(Compiler *c) {
      of their names asks an entry of the chain behind them */
   ver_named_asks(c, 0);
   if (c->nver_defer) qsort(c->ver_defer, (size_t)c->nver_defer, sizeof *c->ver_defer, ver_name_cmp);
-  for (int id = 0, n0 = nt->count; id < n0; id++)
+  for (int id = 0, n0 = nt->count; id < n0; id++) {
+    /* a respond_to? of a class's own class method reads the cells of the
+       entry a call of the name would take there (cplan_cmethod_presence) */
+    int pc = cplan_presence_class(c, id);
+    if (pc >= 0 && cplan_presence_asks(c, id, pc, method_sym_arg(c, id))) ver_need(c, id, method_sym_arg(c, id), pc, CT_CMETHOD, &o);
     for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++) {
       if (!names[i]) continue;
       if (ct_version_named(c, names[i])) ct_version_classes(c, id, names[i], ver_need, &o);
@@ -5499,6 +5541,7 @@ void ver_entries_build(Compiler *c) {
         if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
       }
     }
+  }
   for (int i = 0; i < o.n; i++) {
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
                          : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL);

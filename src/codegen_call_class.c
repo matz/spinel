@@ -577,6 +577,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (run) buf_puts(b, "; })");
         return 1;
       }
+      if (emit_respond_to_cells(c, id, qm, argc, argv, b)) return 1;
       /* a user object's include_all known only at run time, or one of
          Object's private methods (exit, puts) to a literal one where some
          class could answer otherwise: the run-time answer, which reads the

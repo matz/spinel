@@ -128,6 +128,12 @@ int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, con
 int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
+/* respond_to? call id (its argc arguments argv, asking qm) of a class's own
+   class method whose answer the version cells hold (cplan_cmethod_presence):
+   one of the versions' cells, or what the class answers with none of them,
+   written to b. 0, writing nothing, for a call the plan does not answer
+   so; with b NULL, only asked. */
+int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];
 extern const char *const respond_universal_all[]; /* public and private */

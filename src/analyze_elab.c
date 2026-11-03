@@ -138,6 +138,8 @@ struct LoadRecord {
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
   char **refl; int nrefl, crefl;        /* the names a reflection reader of the source names, sorted (lr_refl_take) */
   char **refl_table; int nrefl_table, crefl_table;   /* ...those a reader that answers from the table names */
+  char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
+  char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   unsigned char structs;     /* registration has made the class builders' classes (elab_record_builders) */
@@ -1772,16 +1774,24 @@ static void lr_reopens_take(Compiler *c) {
    desugar_engine_branches). They answer from the final method tables, so a call
    they guard runs where they say the method is there (lr_late_make). A
    list of methods or a name the record cannot read may be any (refl_any).
-   Every reader but a Method's maker answers from the table (refl_table,
-   elab_method_reflected); a maker binds through the call plan. */
-static void lr_refl_add(LoadRecord *r, const char *name, int table) {
+   A respond_to? the version cells may answer (respond_to_cells_shape), and
+   a defined? of a call on a constant or self, which becomes one, go to
+   refl_cell instead, and a Method's maker of that shape
+   (capture_cells_shape) to refl_capt: of a class's own class method, they
+   read the cells of the entry its call takes (cplan_cmethod_presence), or
+   take the entry. Every other reader but a Method's maker answers from
+   the table (refl_table, elab_method_reflected). */
+enum { LR_REFL_TABLE, LR_REFL_MAKER, LR_REFL_CELL, LR_REFL_CAPT };
+static void lr_refl_list(LoadRecord *r, char ***l, int *n, int *cap, const char *name) {
+  *l = lr_grow(*l, cap, *n, sizeof **l);
+  if (!((*l)[(*n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
+static void lr_refl_add(LoadRecord *r, const char *name, int kind) {
   if (!name) { r->refl_any = 1; return; }
-  for (int t = 0; t <= table; t++) {
-    char ***l = t ? &r->refl_table : &r->refl;
-    int *n = t ? &r->nrefl_table : &r->nrefl;
-    *l = lr_grow(*l, t ? &r->crefl_table : &r->crefl, *n, sizeof **l);
-    if (!((*l)[(*n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
+  if (kind == LR_REFL_CELL) { lr_refl_list(r, &r->refl_cell, &r->nrefl_cell, &r->crefl_cell, name); return; }
+  if (kind == LR_REFL_CAPT) { lr_refl_list(r, &r->refl_capt, &r->nrefl_capt, &r->crefl_capt, name); return; }
+  lr_refl_list(r, &r->refl, &r->nrefl, &r->crefl, name);
+  if (kind == LR_REFL_TABLE) lr_refl_list(r, &r->refl_table, &r->nrefl_table, &r->crefl_table, name);
 }
 static void lr_refl_take(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -1792,17 +1802,24 @@ static void lr_refl_take(Compiler *c) {
     const int *av = call_args(nt, n, &ac);
     /* (each send's first argument names the method it calls: a send in turn) */
     while (rn && is_send_family(rn)) rn = a < ac ? vis_arg_name(nt, av[a++]) : "";
-    if (!rn) { lr_refl_add(r, NULL, 1); continue; }
+    if (!rn) { lr_refl_add(r, NULL, LR_REFL_TABLE); continue; }
     if ((pq = is_method_presence_query(rn)))
-      lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL, !is_method_object_maker(rn));
+      lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL,
+                  respond_to_cells_shape(nt, n) ? LR_REFL_CELL : capture_cells_shape(nt, n) ? LR_REFL_CAPT :
+                  is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE);
   }
   NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
-    int v = nt_ref(nt, n, "value");
-    if (v >= 0 && nt_kind(nt, v) == NK_CallNode) lr_refl_add(r, nt_str(nt, v, "name"), 1);
+    int v = nt_ref(nt, n, "value"), rv = v >= 0 ? nt_ref(nt, v, "receiver") : -1;
+    NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
+    if (v >= 0 && nt_kind(nt, v) == NK_CallNode)
+      lr_refl_add(r, nt_str(nt, v, "name"),
+                  rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? LR_REFL_CELL : LR_REFL_TABLE);
   }
-  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], 1);
+  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], LR_REFL_TABLE);
   if (r->nrefl > 1) qsort(r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp);
   if (r->nrefl_table > 1) qsort(r->refl_table, (size_t)r->nrefl_table, sizeof *r->refl_table, lr_name_cmp);
+  if (r->nrefl_cell > 1) qsort(r->refl_cell, (size_t)r->nrefl_cell, sizeof *r->refl_cell, lr_name_cmp);
+  if (r->nrefl_capt > 1) qsort(r->refl_capt, (size_t)r->nrefl_capt, sizeof *r->refl_capt, lr_name_cmp);
 }
 
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
@@ -2928,6 +2945,24 @@ int elab_method_versions(Compiler *c, const char *name) {
   return x ? x->nver : 0;
 }
 
+static int lr_refl_has(char *const *l, int n, const char *name) {
+  return n && bsearch(&name, l, (size_t)n, sizeof *l, lr_name_cmp);
+}
+/* Does a respond_to? the cells may answer (refl_cell) answer `name` from
+   the table after all: where the side is not a class's own class side
+   (cside 0), in a program that defines respond_to_missing?
+   (respond_to_missing_defined), or where one of the name's versions
+   undefines or removes it (cplan_cmethod_presence declines them)? */
+static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
+  LoadRecord *r = c->lrec;
+  if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name)) return 0;
+  if (!cside || respond_to_missing_defined(c)) return 1;
+  const LrVers *x = lr_vers(r, name);
+  for (int h = x ? x->first : -1; h >= 0; h = r->hist[h].nlink)
+    for (int j = 0; j < r->hist[h].n; j++)
+      if (r->hist[h].v[j].kind == LR_UNDEF || r->hist[h].v[j].kind == LR_REMOVE) return 1;
+  return 0;
+}
 /* the first version of history h, NULL for none */
 static const LrDef *lr_first_version(const LrHist *h) {
   for (int j = 0; j < h->n; j++) if (lr_is_version(&h->v[j])) return &h->v[j];
@@ -2935,10 +2970,11 @@ static const LrDef *lr_first_version(const LrHist *h) {
 }
 /* Is the late bit asked of history h of x's name, one of nh histories
    that hold a version (lr_late_make)? */
-static int lr_late_asked(const LoadRecord *r, const LrVers *x, const LrHist *h, int nh) {
+static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
+  const LoadRecord *r = c->lrec;
   int cside = h->a >= 0 && h->b;
-  if (!lr_first_version(h) || r->refl_any || (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp)) ||
-      (nh > 1 && !cside)) return 0;
+  if (!lr_first_version(h) || r->refl_any || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
+      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside)) return 0;
   return (cside && bop_class_answers(x->name, 0, 0)) || !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
 }
 /* The late bit of every method history (LrHist.late), once for all of
@@ -2961,8 +2997,14 @@ static int lr_late_asked(const LoadRecord *r, const LrVers *x, const LrHist *h, 
    asked: an instance's chain keeps the table's. Nor one a reflection
    reader names (lr_refl_take): a call it guards would take the entry
    where the reader answers the method is there, and raise where the
-   table's answer runs the def. LrVers.late is 2 where some history of the
-   name is late. */
+   table's answer runs the def. A class's own class-side history is
+   asked all the same where the reader is a respond_to? the cells answer
+   (refl_cell), which reads them as the call does
+   (cplan_cmethod_presence), unless the table answers it after all
+   (lr_refl_cell_table), or a Method's maker that takes the entry
+   (refl_capt), which binds as the call does. One the record cannot read
+   (refl_any) stops every name. LrVers.late is 2 where some history of
+   the name is late. */
 static void lr_late_make(Compiler *c) {
   LoadRecord *r = c->lrec;
   lr_vers_index(r);
@@ -2976,7 +3018,7 @@ static void lr_late_make(Compiler *c) {
     x->late = 3;
     for (int h = x->first; h >= 0; h = r->hist[h].nlink) {
       LrHist *y = &r->hist[h];
-      y->late = lr_late_asked(r, x, y, nh) ? 1 : 3;
+      y->late = lr_late_asked(c, x, y, nh) ? 1 : 3;
       if (y->late == 3) continue;
       if (lr_first_version(y)->body) y->late = x->late = 2;   /* (a method body's: before its extent opens, lr_version_order) */
       else { x->pend++; if (x->late == 3) x->late = 1; }
@@ -3015,10 +3057,10 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
   return late;
 }
 
-int elab_method_reflected(Compiler *c, const char *name) {
+int elab_method_reflected(Compiler *c, const char *name, int sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
-  return r->refl_any || (r->nrefl_table && bsearch(&name, r->refl_table, (size_t)r->nrefl_table, sizeof *r->refl_table, lr_name_cmp));
+  return r->refl_any || lr_refl_has(r->refl_table, r->nrefl_table, name) || lr_refl_cell_table(c, name, sg);
 }
 
 int elab_method_replaced(Compiler *c, const char *name) {
@@ -7192,7 +7234,9 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
   for (int i = 0; i < r->nrefl_table; i++) free(r->refl_table[i]);
-  free(r->refl_table);
+  for (int i = 0; i < r->nrefl_cell; i++) free(r->refl_cell[i]);
+  for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);
+  free(r->refl_table); free(r->refl_cell); free(r->refl_capt);
   free(r->names); free(r->defs); free(r->reopens); free(r->refl);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);

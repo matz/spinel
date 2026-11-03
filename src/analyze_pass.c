@@ -9243,10 +9243,15 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
         /* The keyword-rest param receives the whole forwarded hash, not the
            splat's value type -- leave it as its hash type. The positional
            rest stays TY_POLY_ARRAY: an unconsumed **h degrades to one
-           positional element inside it, never a type on the slot itself. */
+           positional element inside it, never a type on the slot itself.
+           Nor does a positional take a value out of it: the `**` fills only
+           keywords (callee_has_kwarg), and a callee that takes none binds
+           the hash as one positional by the layout above. Bound from it as
+           well, `Enc.new(src, **opts)` boxed `src` and every ivar it was
+           written to. */
         if (i == m->kwrest_idx) continue;
         if (i == m->rest_idx) continue;
-        if (!m->pnames[i]) continue;
+        if (!m->pnames[i] || !callee_has_kwarg(c, m, m->pnames[i])) continue;
         LocalVar *p = scope_local(m, m->pnames[i]);
         if (!p || p->rbs_seeded) continue;
         changed |= slot_take(c, p, at, kwh);

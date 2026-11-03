@@ -5,7 +5,8 @@
 # or not the class had such a reader. A Struct member :b, a `.b` on some other
 # class's value: Grid has no `b`, so its @b stays a Float table. Ledger has
 # readers, and the tables they hand out stay boxed: @c reached by a dynamic
-# call alone (no Symbol spells :c), @d through send and method as well.
+# call alone (no Symbol spells :c) on a value that may be a Ledger or a Pt,
+# whose own `c` answers something else, @d through send and method as well.
 
 class Grid
   def initialize(n)
@@ -42,6 +43,7 @@ p [col.r, col.b]
 class Pt
   def initialize(v) = @v = v
   def r = @v
+  def c = [@v]
 end
 
 g = Grid.new(4)
@@ -49,7 +51,7 @@ p g.total, g.diag
 
 q = [Pt.new(7), Ledger.new(3)][ARGV.size]
 p q.r
-l = [Ledger.new(3), "s"][ARGV.size]
+l = [Ledger.new(3), Pt.new(5)][ARGV.size]
 p l.c.size, l.c[2]
 p l.send(:d)[1][1], l.method(:d).call.size
 p Grid.new(2).total

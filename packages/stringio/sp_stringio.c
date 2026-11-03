@@ -41,10 +41,23 @@ static void sio_own(sp_StringIO *sio) {SP_GC_ROOT(sio);
 /* A StringIO opened on a frozen String, or handed one by #string=, takes no
    write, as CRuby's (run with frozen string literals); nor one whose String
    was frozen since, in CRuby's other words */
+#define SIO_NO_READ  1
+#define SIO_NO_WRITE 2
 static void sio_check_write(sp_StringIO *sio) {
-  if (sio->ro) sp_raise_cls("IOError", "not opened for writing");
+  if ((sio->closed & SIO_NO_WRITE) || sio->ro) sp_raise_cls("IOError", "not opened for writing");
   if (sio->str ? sp_String_is_frozen(sio->str) : sio->borrowed && sp_str_is_frozen_val(sio->buf))
     sp_raise_cls("IOError", "not modifiable string");
+}
+/* A closed StringIO, or one opened for output only, reads nothing: CRuby
+   asks before it looks at the arguments */
+static void sio_check_read(sp_StringIO *sio) {
+  if (sio->closed & SIO_NO_READ) sp_raise_cls("IOError", "not opened for reading");
+}
+/* the sides a mode leaves closed: "r" takes no write, "w" and "a" no read,
+   and a "+" takes both */
+static int sio_mode_sides(const char *mode) {
+  if (!mode || !mode[0] || strchr(mode, '+')) return 0;
+  return mode[0] == 'r' ? SIO_NO_WRITE : mode[0] == 'w' || mode[0] == 'a' ? SIO_NO_READ : 0;
 }
 /* a frozen String opened for writing ("w", "a", "r+") is EACCES, as CRuby's */
 static void sio_mode_check(int frozen, const char *mode) {
@@ -72,15 +85,15 @@ sp_StringIO *sp_StringIO_new_s(sp_int cls_id, const char *init) {SP_GC_ROOT_STR(
 /* StringIO.new(str, mode): the mode's first char selects the initial
    content/position. "w"/"w+" truncate to empty; "a"/"a+" keep the content and
    seek to the end; "r"/"r+" and anything else keep the content at position 0.
-   Read-only enforcement ("r" rejecting writes) is not modelled. */
+   The mode also closes the side it does not open (sio_mode_sides). */
 sp_StringIO *sp_StringIO_new_sm(sp_int cls_id, const char *init, const char *mode) {SP_GC_ROOT_STR(init);SP_GC_ROOT_STR(mode);
   if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (!mode || !mode[0]) return sp_StringIO_new_s(cls_id, init);
   sio_mode_check(sp_str_is_frozen_val(init), mode);
   char m0 = mode[0];
-  if (m0 == 'w') return sp_StringIO_new(cls_id);
-  sp_StringIO *s = sp_StringIO_new_s(cls_id, init);
+  sp_StringIO *s = m0 == 'w' ? sp_StringIO_new(cls_id) : sp_StringIO_new_s(cls_id, init);
   if (m0 == 'a') s->pos = s->len;
+  s->closed = sio_mode_sides(mode);
   return s;
 }
 /* The in-place twins of the constructors (`_new` -> `_init`), for a
@@ -109,9 +122,10 @@ void sp_StringIO_init_sm(sp_StringIO *s, sp_int cls_id, const char *init, const 
   if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (!mode || !mode[0]) { sp_StringIO_init_s(s, cls_id, init); return; }
   sio_mode_check(sp_str_is_frozen_val(init), mode);
-  if (mode[0] == 'w') { sp_StringIO_init(s, cls_id); return; }
-  sp_StringIO_init_s(s, cls_id, init);
+  if (mode[0] == 'w') sp_StringIO_init(s, cls_id);
+  else sp_StringIO_init_s(s, cls_id, init);
   if (mode[0] == 'a') s->pos = s->len;
+  s->closed = sio_mode_sides(mode);
 }
 /* #string returns the buffer as a spinel String. A borrowed buffer already IS
    a spinel string (a valid sp_str_hdr precedes it), so it can be handed back
@@ -136,14 +150,15 @@ void sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp
 void sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); }
 void sp_StringIO_print(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
 sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
-const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); sio_sync(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
+const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
 /* read(n): nil at the end for a positive n, "" for read(0), and an
    ArgumentError for a negative n (CRuby) */
 const char *sp_StringIO_read_n(sp_StringIO *s, sp_int n) {SP_GC_ROOT(s);
+  sio_check_read(s);
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
   sio_sync(s);
   if (s->pos >= s->len) return n > 0 ? NULL : sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
-const char *sp_StringIO_gets(sp_StringIO *s) {SP_GC_ROOT(s); sio_sync(s); if (s->pos >= s->len) return NULL; const char *st = s->buf + s->pos; const char *nl = memchr(st, '\n', s->len - s->pos); int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos; char *r = sp_str_alloc_raw(ll+1); memcpy(r, st, ll); r[ll] = '\0'; sp_str_set_len(r, (size_t)ll); s->pos += ll; s->lineno++; return r; }
+const char *sp_StringIO_gets(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return NULL; const char *st = s->buf + s->pos; const char *nl = memchr(st, '\n', s->len - s->pos); int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos; char *r = sp_str_alloc_raw(ll+1); memcpy(r, st, ll); r[ll] = '\0'; sp_str_set_len(r, (size_t)ll); s->pos += ll; s->lineno++; return r; }
 /* The byte length of the character at p, n bytes available: a whole UTF-8
    sequence, or one byte where the sequence is malformed or cut short (CRuby
    hands those out a byte at a time). A binary buffer is bytes only. */
@@ -161,15 +176,15 @@ static int64_t sio_char_len(const char *p, int64_t n, int binary) {
   }
   return cl;
 }
-const char *sp_StringIO_getc(sp_StringIO *s) {SP_GC_ROOT(s); sio_sync(s); if (s->pos >= s->len) return NULL;
+const char *sp_StringIO_getc(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return NULL;
   /* a binary String is read a byte at a time: the shared handle's own
      mark, or a borrowed String's header */
   int binary = s->str ? (int)s->str->binary : s->borrowed && sp_str_is_binary(s->buf);
   int64_t cl = sio_char_len(s->buf + s->pos, s->len - s->pos, binary);
   char *gc = sp_str_alloc_raw(cl + 1); memcpy(gc, s->buf + s->pos, cl); gc[cl] = '\0'; sp_str_set_len(gc, (size_t)cl); s->pos += cl; return gc; }
-sp_RbVal sp_StringIO_getbyte(sp_StringIO *s) { sio_sync(s); if (s->pos >= s->len) return sp_box_nil(); return sp_box_int((int64_t)(unsigned char)s->buf[s->pos++]); }
+sp_RbVal sp_StringIO_getbyte(sp_StringIO *s) { sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return sp_box_nil(); return sp_box_int((int64_t)(unsigned char)s->buf[s->pos++]); }
 /* readbyte and readchar: getbyte and getc that raise EOFError at the end */
-sp_int sp_StringIO_readbyte(sp_StringIO *s) { sio_sync(s); if (s->pos >= s->len) sp_raise_cls("EOFError", "end of file reached"); return (int64_t)(unsigned char)s->buf[s->pos++]; }
+sp_int sp_StringIO_readbyte(sp_StringIO *s) { sio_check_read(s); sio_sync(s); if (s->pos >= s->len) sp_raise_cls("EOFError", "end of file reached"); return (int64_t)(unsigned char)s->buf[s->pos++]; }
 const char *sp_StringIO_readchar(sp_StringIO *s) {SP_GC_ROOT(s); const char *r = sp_StringIO_getc(s); if (!r) sp_raise_cls("EOFError", "end of file reached"); return r; }
 sp_int sp_StringIO_rewind(sp_StringIO *s) { s->pos = 0; s->lineno = 0; return 0; }
 sp_int sp_StringIO_seek(sp_StringIO *s, sp_int off) { if (off < 0) off = 0; s->pos = off; return 0; }
@@ -177,10 +192,10 @@ sp_int sp_StringIO_tell(sp_StringIO *s) { return s->pos; }
 /* pos= moves to any offset at or past 0 (past the end reads nothing); a
    negative one is CRuby's Errno::EINVAL */
 sp_int sp_StringIO_set_pos(sp_StringIO *s, sp_int p) { if (p < 0) sp_raise_cls("Errno::EINVAL", "Invalid argument"); s->pos = p; return p; }
-sp_bool sp_StringIO_eof_p(sp_StringIO *s) { sio_sync(s); return s->pos >= s->len; }
+sp_bool sp_StringIO_eof_p(sp_StringIO *s) { sio_check_read(s); sio_sync(s); return s->pos >= s->len; }
 sp_int sp_StringIO_truncate(sp_StringIO *s, sp_int l) { sio_sync(s); if (l < 0) l = 0; sio_check_write(s); if (l < s->len) { sio_own(s); s->len = l; s->buf[l] = '\0'; sio_publish(s); } return 0; }
-void sp_StringIO_close(sp_StringIO *s) { s->closed = 1; }
-sp_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed; }
+void sp_StringIO_close(sp_StringIO *s) { s->closed = SIO_NO_READ | SIO_NO_WRITE; }
+sp_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed == (SIO_NO_READ | SIO_NO_WRITE); }
 sp_StringIO *sp_StringIO_flush(sp_StringIO *s) { return s; }
 sp_bool sp_StringIO_sync(sp_StringIO *s) { (void)s; return 1; }
 sp_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
@@ -259,6 +274,7 @@ static const char *sio_getline(sp_StringIO *s, const char *sep, sp_int limit, sp
 
 /* gets(sep): a String separator, with no limit and no chomp. */
 const char *sp_StringIO_gets_sep(sp_StringIO *s, const char *sep) {SP_GC_ROOT(s);SP_GC_ROOT_STR(sep);
+  sio_check_read(s);
   return sio_getline(s, sep, -1, 0);
 }
 
@@ -369,6 +385,7 @@ static void sio_line_args(const sp_RbVal *a0, int n0, const char **sep, sp_int *
 
 /* gets(...), which answers "" for a zero limit and nil at the end. */
 static const char *sio_gets_n(sp_StringIO *s, const sp_RbVal *a, int n) {SP_GC_ROOT(s);
+  sio_check_read(s);
   const char *sep; sp_int limit; sp_bool chomp;
   sio_line_args(a, n, &sep, &limit, &chomp);
   if (limit == 0) return sp_str_empty;
@@ -388,6 +405,7 @@ const char *sp_StringIO_readline_a2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) {SP_
 const char *sp_StringIO_readline_a3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(b);SP_GC_ROOT_RBVAL(c); sp_RbVal v[3] = {a, b, c}; return sio_readline_n(s, v, 3); }
 
 static sp_RbVal sio_readlines_n(sp_StringIO *s, const sp_RbVal *a, int n) {SP_GC_ROOT(s);
+  sio_check_read(s);
   const char *sep; sp_int limit; sp_bool chomp;
   sio_line_args(a, n, &sep, &limit, &chomp);
   if (limit == 0) sp_raise_cls("ArgumentError", "invalid limit: 0 for readlines");
@@ -485,6 +503,7 @@ sp_int sp_StringIO_write_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { return sio_
 /* read(*args), when the count is only known at run time: read, read(nil)
    and read(len). A buffer to read into is not supported here. */
 const char *sp_StringIO_read_va(sp_StringIO *s, sp_int n, sp_RbVal *v) {
+  sio_check_read(s);
   if (n > 2) {
     char msg[80];
     snprintf(msg, sizeof msg, "wrong number of arguments (given %lld, expected 0..2)", (long long)n);
@@ -533,6 +552,7 @@ sp_StringIO *sp_StringIO_new_hm(sp_int cls_id, sp_String *str, const char *mode)
   char m0 = mode ? mode[0] : 0;
   if (m0 == 'w') sp_StringIO_truncate(s, 0);
   if (m0 == 'a') s->pos = s->len;
+  s->closed = sio_mode_sides(mode);
   return s;
 }
 /* StringIO.new: over a String of its own, which #string answers */
@@ -554,6 +574,7 @@ void sp_StringIO_init_hm(sp_StringIO *s, sp_int cls_id, sp_String *str, const ch
   char m0 = mode ? mode[0] : 0;
   if (m0 == 'w') sp_StringIO_truncate(s, 0);
   if (m0 == 'a') s->pos = s->len;
+  s->closed = sio_mode_sides(mode);
 }
 void sp_StringIO_init_hn(sp_StringIO *s, sp_int cls_id) {SP_GC_ROOT(s);
   sp_StringIO_init_h(s, cls_id, sp_String_new_fresh(sp_str_empty));

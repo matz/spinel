@@ -15202,7 +15202,9 @@ int desugar_builtin_splat_forward(Compiler *c) {
        (`Time.new(*fields)`) was read whole as the year. (Time's other
        makers, at, utc, local, gm and mktime, read a splat as it is.) */
     int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
-               sp_streq(nt_str(nt, recv, "name"), "Time") && comp_class_index(c, "Time") < 0 &&
+               sp_streq(nt_str(nt, recv, "name"), "Time") &&
+               /* (a reopen of Time leaves Time.new alone unless it defines its own) */
+               (comp_class_index(c, "Time") < 0 || comp_cmethod_in_chain(c, comp_class_index(c, "Time"), "new", NULL) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
     if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
         !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;

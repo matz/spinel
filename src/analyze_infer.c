@@ -2079,14 +2079,8 @@ int range_enum_redispatch(Compiler *c, int id) {
    Enumerable reopen; the builtin definition carries node_bi)? That method
    then answers a Hash's or an Enumerator's find_index, block and all. */
 int an_enum_own_find_index(Compiler *c) {
-  return an_enum_prog_method(c, "find_index");
-}
-/* Does Enumerable's method chain hold a method nm the program wrote (a
-   `module Enumerable` reopening's def, or one a module it includes has)?
-   A builtin receiver whose class has no method nm of its own runs it. */
-int an_enum_prog_method(Compiler *c, const char *nm) {
-  int en = nm ? comp_class_index(c, "Enumerable") : -1;
-  int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
+  int en = comp_class_index(c, "Enumerable");
+  int mi = en >= 0 ? comp_method_in_chain(c, en, "find_index", NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }

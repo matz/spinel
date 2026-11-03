@@ -12267,7 +12267,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       if (rt == TY_UNKNOWN && g_infer_optimistic) decline = 1;   /* not yet known */
       /* a program's Enumerable#to_set answers every receiver but a Set */
       if (an_enum_prog_method(c, "to_set") &&
-          !(ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target))) decline = 1;
+          (ty_is_hash(rt) || ty_is_array(rt) || rt == TY_RANGE || rt == TY_ENUMERATOR)) decline = 1;
       /* Set#to_set is the receiver itself, which is also what keeps a
          `to_set.to_set` chain from nesting one Set.new inside another (#3623) */
       else if (ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target) &&
@@ -13218,9 +13218,6 @@ int desugar_enum_method_recv(Compiler *c) {
     if (sp_streq(nm, "each_with_index")) continue;
     int cid = ty_object_class(rt);
     if (comp_method_in_chain(c, cid, "__enum_to_a", NULL) < 0) continue;  /* not an #each class */
-    /* a program's Enumerable method of the name answers through the
-       class's chain (a Struct's own select stays Struct's) */
-    if (an_enum_prog_method(c, nm) && !(c->classes[cid].is_struct && builtin_method_known("Struct", nm))) continue;
     /* A Struct's blockless #each returns an Enumerator over its members (CRuby),
        not the LocalJumpError the synthesized yielding #each would raise. Route
        it through the member array's blockless #each, which materializes the

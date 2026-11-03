@@ -2079,8 +2079,14 @@ int range_enum_redispatch(Compiler *c, int id) {
    Enumerable reopen; the builtin definition carries node_bi)? That method
    then answers a Hash's or an Enumerator's find_index, block and all. */
 int an_enum_own_find_index(Compiler *c) {
-  int en = comp_class_index(c, "Enumerable");
-  int mi = en >= 0 ? comp_method_in_chain(c, en, "find_index", NULL) : -1;
+  return an_enum_prog_method(c, "find_index");
+}
+/* Does Enumerable's method chain hold a method nm the program wrote (a
+   `module Enumerable` reopening's def, or one a module it includes has)?
+   A builtin receiver whose class has no method nm of its own runs it. */
+int an_enum_prog_method(Compiler *c, const char *nm) {
+  int en = nm ? comp_class_index(c, "Enumerable") : -1;
+  int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
@@ -2096,6 +2102,11 @@ int hash_enum_redispatch(Compiler *c, int id) {
   /* a Hash reopen's own method of the name is the call's target, not the
      pair array (`class Hash; def uniq = "mine"; end`) */
   if (an_reopen_owner(c, id, CORE_HASH) >= 0) return 0;
+  /* so is an Enumerable reopening's method of a name builtins/ has no
+     definition of (desugar_builtin_enum_calls takes the call to it) */
+  if ((sp_streq(name, "uniq") || sp_streq(name, "zip") || sp_streq(name, "reverse_each") ||
+       sp_streq(name, "find_all") || sp_streq(name, "sort") || sp_streq(name, "min") ||
+       sp_streq(name, "max")) && an_enum_prog_method(c, name)) return 0;
   int block = nt_ref(nt, id, "block");
   /* blockless pair-order Enumerables: min/max compare the [k, v] pairs */
   if (block < 0 && (is_extrema_family(name)))

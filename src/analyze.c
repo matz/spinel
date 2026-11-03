@@ -12123,7 +12123,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
      Type-aware, hence here and not in the one-shot pre-pass; while the
      receiver type is still unsettled g_infer_optimistic holds the rewrite
      back rather than guessing. */
-  if (nm && sp_streq(nm, "each_entry") && nt_ref(nt, id, "block") >= 0) {
+  if (nm && sp_streq(nm, "each_entry") && nt_ref(nt, id, "block") >= 0 &&
+      !an_enum_prog_method(c, nm)) {   /* a program's Enumerable#each_entry runs instead */
     int erecv = nt_ref(nt, id, "receiver");
     if (erecv >= 0) {
       TyKind ert = infer_type(c, erecv);
@@ -12264,6 +12265,9 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       TyKind rt = infer_type(c, recv);
       int decline = 0;
       if (rt == TY_UNKNOWN && g_infer_optimistic) decline = 1;   /* not yet known */
+      /* a program's Enumerable#to_set answers every receiver but a Set */
+      if (an_enum_prog_method(c, "to_set") &&
+          !(ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target))) decline = 1;
       /* Set#to_set is the receiver itself, which is also what keeps a
          `to_set.to_set` chain from nesting one Set.new inside another (#3623) */
       else if (ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target) &&
@@ -12728,7 +12732,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
      existing pair-array destructure serves the two-param block (#2372). The
      to_a hop is marked (enum_recv), so the value emitter answers the Hash
      itself, as CRuby's reverse_each answers its receiver. */
-  if (nm && sp_streq(nm, "reverse_each") && nt_ref(nt, id, "block") >= 0) {
+  if (nm && sp_streq(nm, "reverse_each") && nt_ref(nt, id, "block") >= 0 &&
+      !an_enum_prog_method(c, nm)) {   /* a program's Enumerable#reverse_each runs for a Hash */
     int hrc = nt_ref(nt, id, "receiver");
     if (hrc >= 0 && ty_is_hash(infer_type(c, hrc))) {
       int toa = nt_new_node(nt, "CallNode");
@@ -12776,7 +12781,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
      serves every terminal, not just a `.to_a` directly on the chain call. */
   /* find_all is a full alias of select on the builtin containers; rename
      so the select/with_index machinery serves both (#2389) */
-  if (nm && sp_streq(nm, "find_all")) {
+  if (nm && sp_streq(nm, "find_all") && !an_enum_prog_method(c, nm)) {   /* a program's Enumerable#find_all runs */
     int frc = nt_ref(nt, id, "receiver");
     TyKind frt = frc >= 0 ? infer_type(c, frc) : TY_UNKNOWN;
     int fa_user = 0;
@@ -12978,7 +12983,7 @@ int desugar_enum_method_recv(Compiler *c) {
     /* find_all == select once the receiver is ARRAY-shaped (a hash receiver
        reaches here as the redispatched pair array, so the result is the
        Enumerable pair list, not a hash) */
-    if (sp_streq(nm, "find_all") && nt_ref(nt, id, "block") >= 0 &&
+    if (sp_streq(nm, "find_all") && nt_ref(nt, id, "block") >= 0 && !an_enum_prog_method(c, nm) &&
         (ty_is_array(comp_ntype(c, recv)) || ty_is_array(infer_type(c, recv)))) {
       nt_node_set_str(nt, id, "name", "select");
       changed = 1;
@@ -13132,6 +13137,7 @@ int desugar_enum_method_recv(Compiler *c) {
        regroups the windows the receiver yields: no chain arm reads it) */
     if (rt == TY_ENUMERATOR && (!recv_is_index_enum || (enum_regroup && recv_is_slice_enum)) &&
         !enum_lazy_driven && !sp_streq(nm, "to_a") && !sp_streq(nm, "entries") &&
+        !an_enum_prog_method(c, nm) &&   /* a program's Enumerable method answers an Enumerator */
         (nt_ref(nt, id, "block") >= 0 || enum_terminal || enum_regroup)) {
       /* the block forms of these answer the RECEIVING Enumerator, but the
          redirect makes the call read the materialized array, whose own
@@ -13212,6 +13218,9 @@ int desugar_enum_method_recv(Compiler *c) {
     if (sp_streq(nm, "each_with_index")) continue;
     int cid = ty_object_class(rt);
     if (comp_method_in_chain(c, cid, "__enum_to_a", NULL) < 0) continue;  /* not an #each class */
+    /* a program's Enumerable method of the name answers through the
+       class's chain (a Struct's own select stays Struct's) */
+    if (an_enum_prog_method(c, nm) && !(c->classes[cid].is_struct && builtin_method_known("Struct", nm))) continue;
     /* A Struct's blockless #each returns an Enumerator over its members (CRuby),
        not the LocalJumpError the synthesized yielding #each would raise. Route
        it through the member array's blockless #each, which materializes the

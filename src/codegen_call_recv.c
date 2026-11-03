@@ -7723,7 +7723,26 @@ else {
                       " sp_int _ix = _t%d->order[_t%d];"
                       " sp_PolyPolyHash_set(_t%d, _t%d->keys[_ix], _t%d->vals[_ix]); }",
                    tj, tj, tc, tj, tc, tj, tr, tc, tc);
-        buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, argv[0], b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
+        /* an object argument merges its #to_hash, as the typed merge does */
+        TyKind oat = comp_ntype(c, argv[0]);
+        int odef = -1;
+        TyKind oht = ty_is_object(oat) ? obj_container_conv(c, oat, "to_hash", &odef) : TY_UNKNOWN;
+        if (ty_is_object(oat) && odef >= 0 && ty_is_hash(oht)) {
+          int tob = ++g_tmp, toh = ++g_tmp, obv = repr_of(c, argv[0]).kind == RK_VOBJ;
+          char ob[32], oh[32];
+          snprintf(ob, sizeof ob, "_t%d", tob); snprintf(oh, sizeof oh, "_t%d", toh);
+          buf_puts(b, " "); emit_ctype(c, oat, b); buf_printf(b, " _t%d = ", tob);
+          emit_expr(c, argv[0], b); buf_puts(b, ";");
+          /* an object slot may hold nil, which has no #to_hash */
+          if (!obv) buf_printf(b, " if (!_t%d) sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Hash\"); SP_GC_ROOT(_t%d);", tob, tob);
+          buf_printf(b, " %s _t%d = ", c_type_name(oht), toh);
+          emit_obj_conv_call(c, odef, "to_hash", obv, ob, b);
+          buf_printf(b, "; if (!_t%d) { const char *_cn%d = sp_poly_class_name(", toh, toh); emit_boxed_text(c, oat, ob, b);
+          buf_printf(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %%s to Hash (%%s#to_hash gives NilClass)\", _cn%d, _cn%d)); }"
+                        " SP_GC_ROOT(_t%d);", toh, toh, toh);
+          buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed_text(c, oht, oh, b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
+        }
+        else { buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, argv[0], b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to); }
         if (bp0) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp0));
         if (bp1) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp1));
         if (bp2) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp2));

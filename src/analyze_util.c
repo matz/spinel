@@ -2102,6 +2102,11 @@ int struct_member_idx_float(Compiler *c, ClassInfo *sc, int keynode) {
   if (idx < 0) idx += sc->nmembers;
   return idx >= 0 && idx < sc->nmembers ? idx : -1;
 }
+/* Whether index argument `n` is a Range (`a[1..2]`, `a[r]`): the call
+   reads or stores a slice, not one element. */
+int an_range_index(Compiler *c, int n) {
+  return n >= 0 && (nt_kind(c->nt, nt_paren_single(c->nt, n)) == NK_RangeNode || infer_type(c, n) == TY_RANGE);
+}
 int scope_body_last(Compiler *c, int mi) {
   int body = c->scopes[mi].body;
   if (body < 0 || nt_kind(c->nt, body) != NK_StatementsNode) return -1;

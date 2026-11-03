@@ -2763,6 +2763,9 @@ static void lr_late_make(Compiler *c) {
         }
     if (nh != 1 || (!own && (builtin_object_method_known(x->name) || builtin_instance_name_known(x->name))) || r->refl_any ||
         (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp))) { x->late = 3; continue; }
+    /* Not a lone conditional def's dispatcher: it stands after the condition, while its arm is
+       made where the branch runs, and it raises NoMethodError itself until an arm has run */
+    if (v && nt_int(c->nt, v->node, "cond_lone_disp", 0)) { x->late = 3; continue; }
     LoadPoint q = v ? elab_point_of(c, v->node) : (LoadPoint){ -1, -1 };
     if (q.region >= 0 && elab_call_window(c, id, &w) == ELAB_YES && w.from.region == q.region && w.from.seq < q.seq) x->late = 2;
   }

@@ -19876,6 +19876,17 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     /* Ivar write in a class/module body (outside any def): write to the
        module-level civ_ variable. */
     else if (cws && cws->class_id < 0 && !cws->is_cmethod && g_class_body_id >= 0) {
+      /* one with no slot (`@a = nil` that nothing reads: a nil-only ivar
+         is given none) has nothing to store; its value runs for its effects */
+      if (comp_ivar_index(&c->classes[g_class_body_id], nm) < 0) {
+        if (v >= 0 && nt_kind(nt, v) != NK_NilNode) {
+          emit_indent(b, indent);
+          buf_puts(b, "(void)(");
+          emit_expr(c, v, b);
+          buf_puts(b, ");\n");
+        }
+        return 1;
+      }
       emit_indent(b, indent);
       buf_printf(b, "civ_%s_%s = ", c->classes[g_class_body_id].name, iv_c(nm + 1));
     }

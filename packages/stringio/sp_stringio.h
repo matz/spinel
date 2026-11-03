@@ -45,6 +45,8 @@ void sp_StringIO_puts_empty(sp_StringIO *s);
 void sp_StringIO_print(sp_StringIO *s, const char *str);
 sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch);
 const char *sp_StringIO_putc_s(sp_StringIO *s, const char *str);   /* answers its argument */
+sp_int sp_StringIO_putc_i(sp_StringIO *s, sp_int ch);                 /* the [:int] binding: within a C int */
+sp_RbVal sp_StringIO_putc_v(sp_StringIO *s, sp_RbVal v);             /* a run-time value; answers it */
 const char *sp_StringIO_read(sp_StringIO *s);
 const char *sp_StringIO_read_n(sp_StringIO *s, sp_int n);
 const char *sp_StringIO_gets(sp_StringIO *s);

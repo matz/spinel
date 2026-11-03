@@ -1,0 +1,5 @@
+[:edge, :ok, Complex]
+[:frac, :ok, Complex]
+[:neg, :ok, Complex]
+[0, 66, 66]
+[:fetch_edge, IndexError, "index -2147483648 outside of array bounds: -2...2"]

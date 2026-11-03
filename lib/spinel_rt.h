@@ -3904,7 +3904,7 @@ static SP_NOINLINE sp_int sp_complex_to_int(sp_Complex c) {
     sp_raise_cls("RangeError", sp_sprintf("can't convert %s into Integer", sp_complex_to_s(c)));
   if (!isfinite(c.re))
     sp_raise_cls("FloatDomainError", isnan(c.re) ? "NaN" : c.re > 0 ? "Infinity" : "-Infinity");
-  return (sp_int)c.re;
+  return sp_float_fit_i(trunc(c.re));
 }
 static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
   if (v.tag == SP_TAG_FLT) return sp_float_arg_i(v.v.f);
@@ -3930,8 +3930,16 @@ static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
                                          sp_poly_class_name(v)));
   }
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p)
-    return sp_complex_to_int(*(sp_Complex *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) {
+    sp_Complex c = *(sp_Complex *)v.v.p;
+    /* a real part past the slot, once truncated: CRuby's to_int answers a
+       Bignum, which then does not fit, as below */
+    sp_float t = trunc(c.re);
+    if (c.im == 0.0 && !(c.fl & SP_CPLX_IM_F) && isfinite(c.re) &&
+        (t >= -(sp_float)INTPTR_MIN || t < (sp_float)INTPTR_MIN))
+      sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
+    return sp_complex_to_int(c);
+  }
   /* a Bignum the slot cannot hold is CRuby's RangeError, not its low word:
      `a.delete_at(2**70)` deleted a[0] */
   if (v.tag == SP_TAG_BIGINT && v.v.p) {

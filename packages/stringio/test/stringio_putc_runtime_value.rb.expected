@@ -1,0 +1,29 @@
+-- a stream that takes no write
+[:literal_nil, IOError, "not opened for writing"]
+[:boxed_nil, IOError, "not opened for writing"]
+[:boxed_sym, IOError, "not opened for writing"]
+[:float, IOError, "not opened for writing"]
+-- a writable stream
+[0, TypeError, "no implicit conversion from nil to integer"]
+[1, TypeError, "no implicit conversion of Symbol into Integer"]
+[2, TypeError, "no implicit conversion of true into Integer"]
+[3, RangeError, "bignum too big to convert into 'long'"]
+[4, RangeError, "float NaN out of range of integer"]
+[5, RangeError, "float 1e+30 out of range of integer"]
+[6, :ok, Integer]
+[7, :ok, Integer]
+[8, :ok, Float]
+[9, TypeError, "no implicit conversion of Object into Integer"]
+[10, :ok, String]
+[11, :ok, Integer]
+[:literal_nil, TypeError, "no implicit conversion from nil to integer"]
+[:float, :ok, 67.7]
+[255, 65, 65, 120, 66, 67]
+-- #to_int, Rational and Complex convert; putc answers its argument
+[:to_int, :ok, N]
+[:rational, :ok, Rational]
+[:complex, :ok, Complex]
+[:typed_to_int, :ok, N]
+"CDEC"
+-- typed arguments as before
+"BA"

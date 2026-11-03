@@ -335,6 +335,28 @@ static sp_RbVal sio_arg_value(sp_RbVal v) {
   return v;
 }
 
+/* putc(Integer), the [:int] binding: its low byte, but one past a C int is
+   CRuby's RangeError (NUM2CHR), raised after the stream's own write check */
+sp_int sp_StringIO_putc_i(sp_StringIO *s, sp_int ch) {
+  if (ch > INT32_MAX || ch < INT32_MIN) {
+    sio_check_write(s);
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too %s to convert to 'int'", (long long)ch, ch > 0 ? "big" : "small"));
+  }
+  return sp_StringIO_putc(s, ch);
+}
+/* putc(any): an argument only the run time knows -- a boxed value, nil, a
+   Float. The stream's write check comes first, as CRuby's putc makes it; a
+   String then writes its first character, and anything else converts as an
+   Integer argument does (sp_poly_arg_int: #to_int, Rational, Complex, and
+   CRuby's errors). It answers its argument, not what it wrote. */
+sp_RbVal sp_StringIO_putc_v(sp_StringIO *s, sp_RbVal v) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
+  sio_check_write(s);
+  sp_RbVal a = sio_arg_value(v);
+  if (a.tag == SP_TAG_STR) { sp_StringIO_putc_s(s, a.v.s); return v; }
+  sp_StringIO_putc_i(s, sp_poly_arg_int(a));
+  return v;
+}
+
 /* The arguments of gets, readline and readlines: ([sep,] [limit,] [chomp: b]).
    With one, a String or nil is the separator (nil reads to the end) and
    anything else is the limit. With two, the first is the separator and the

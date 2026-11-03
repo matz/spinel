@@ -13,6 +13,8 @@ module Gem
   def self.java_platform? = false
   def self.ruby_version = Version.new(RUBY_VERSION)
   def self.platforms = []
+  # no gem is activated in a compiled program, so no spec is loaded
+  def self.loaded_specs = {}
   # no gem can provide a path: a compiled program has no gem to activate
   def self.try_activate(path) = false
 

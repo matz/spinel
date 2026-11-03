@@ -765,7 +765,7 @@ int ct_method_defined(const NodeTable *nt, const char *meth);   /* the program d
 /* the rows, in the order the stage runs them */
 enum {
   LW_NIL_BLOCK_ARG, LW_CONST_SET_WRITE, LW_THREAD_START, LW_MARSHAL_RESTORE, LW_SOCKET_OPEN, LW_SYSTEM_OPTIONS, LW_IO_POPEN_BLOCK,
-  LW_USER_BACKTICK, LW_LITERAL_UNDEF_METHOD, LW_EXPLICIT_INITIALIZE_CALLS, LW_NOARG_DISPLAY_WRAPPERS,
+  LW_USER_BACKTICK, LW_LITERAL_UNDEF_METHOD, LW_EXPLICIT_INITIALIZE_CALLS, LW_NOARG_DISPLAY_WRAPPERS, LW_BIND_ATTR_HELPERS,
   LW_PAREN_BLOCK_ARG, LW_PAREN_OPERANDS, LW_SEND_CLASS_MAKERS, LW_SELF_SUPERCLASS, LW_STRUCT_SUBCLASS_NEW_WRITE,
   LW_REFUSE_SUPERCLASS_EXPRS, LW_RESCUE_BLOCK_BODIES,
   LW_MARK_SYM_PROC_BLOCKS, LW_BUILDER_BLOCK_PARAM, LW_BODY_LOCAL_SCOPES, LW_ERRNO_ALIASES, LW_PAREN_DEF_BODY, LW_MARK_MATCH_RANGES,
@@ -902,6 +902,8 @@ LowerFn desugar_singleton_class_define_method_at, desugar_singleton_class_define
 LowerFn desugar_define_method_proc_arg_at, desugar_define_method_keywords_at;
 LowerFn desugar_block_implicit_rest_at, desugar_block_implicit_rest_left;
 LowerFn desugar_noarg_display_wrappers_at, desugar_noarg_display_wrappers_left;   /* analyze.c */
+LowerFn desugar_bind_attr_helpers_at, desugar_bind_attr_helpers_left;
+LowerGate desugar_bind_attr_helpers_gate;
 LowerFn desugar_self_superclass_at, desugar_self_superclass_left;
 LowerFn desugar_enum_chain_shapes_at;
 LowerFn desugar_paren_block_arg_at, desugar_paren_block_arg_left;           /* analyze.c */

@@ -47525,6 +47525,134 @@ int desugar_noarg_display_wrappers_at(Compiler *c, LowerCtx *lc, int id) {
   return 1;
 }
 
+/* `K.instance_method(:x).bind_call(obj)` where K answers x by an attr
+   reader or writer: the bind_call's arms call the method of the class the
+   name binds (class_value_bind_call_target), and a generated accessor has
+   none, so the call raised NameError. Each `attr_reader :x` (or another
+   attribute declaration, is_attr_decl_reader) of a class or module body
+   whose name such an `instance_method(:x)` (or `:x=`) names gets a sibling,
+   `def __bind x = @x` (`def __bind x=(v) = @x = v`), that the arms call. The
+   space keeps the name out of the program's reach, as `__noarg` does. */
+int desugar_bind_attr_helpers_gate(Compiler *c, LowerCtx *lc) {
+  const NodeTable *nt = c->nt;
+  for (int bc = 0; bc < lc->n0; bc++) {
+    if (nt_kind(nt, bc) != NK_CallNode || !nt_str(nt, bc, "name") || !sp_streq(nt_str(nt, bc, "name"), "bind_call")) continue;
+    int id = nt_ref(nt, bc, "receiver");
+    if (id < 0 || nt_kind(nt, id) != NK_CallNode || !nt_str(nt, id, "name") || !sp_streq(nt_str(nt, id, "name"), "instance_method")) continue;
+    if (!method_sym_arg(c, id)) continue;
+    if ((lc->nids & (lc->nids + 1)) == 0 || !lc->ids) {
+      /* (grown at each power of two less one: 0, 1, 3, 7, ...) */
+      int *g = realloc(lc->ids, sizeof(int) * (size_t)(2 * lc->nids + 2));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      lc->ids = g;
+    }
+    lc->ids[lc->nids++] = id;
+  }
+  return lc->nids > 0;
+}
+/* Whether such an instance_method names `nm` (the gate's calls), by a
+   Symbol or a String. */
+static int bind_attr_named(Compiler *c, const LowerCtx *lc, const char *nm) {
+  for (int i = 0; i < lc->nids; i++)
+    if (sp_streq(method_sym_arg(c, lc->ids[i]), nm)) return 1;
+  return 0;
+}
+/* The attribute declaration statement d is (`private attr_reader :x` too),
+   or -1. */
+static int bind_attr_call(const NodeTable *nt, int d) {
+  for (int depth = 0; depth < 2 && d >= 0 && nt_kind(nt, d) == NK_CallNode && nt_ref(nt, d, "receiver") < 0; depth++) {
+    const char *dn = nt_str(nt, d, "name");
+    if (is_attr_decl_reader(dn) || is_attr_decl_writer(dn)) return d;
+    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, d, "arguments"), "arguments", &an);
+    if (!visibility_of_name(dn) || an != 1) return -1;
+    d = av[0];
+  }
+  return -1;
+}
+/* How many helpers statement d's attr call wants that its body has no def
+   of yet; with out, their names are written there too (each "__bind x" or
+   "__bind x="). */
+static int bind_attr_missing(Compiler *c, const LowerCtx *lc, int d, char (*out)[300]) {
+  const NodeTable *nt = c->nt;
+  int call = bind_attr_call(nt, d), n = 0;
+  if (call < 0) return 0;
+  const char *dn = nt_str(nt, call, "name");
+  int rd = is_attr_decl_reader(dn), wr = is_attr_decl_writer(dn);
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
+  int bn = 0; const int *bb = nt_arr(nt, lc->body, "body", &bn);
+  for (int a = 0; a < an; a++) {
+    const char *x = nt_kind(nt, av[a]) == NK_SymbolNode ? nt_str(nt, av[a], "value") : NULL;
+    if (!x || strlen(x) > 200) continue;
+    for (int w = 0; w < 2; w++) {
+      if (!(w ? wr : rd)) continue;
+      char nm[256], hn[300]; snprintf(nm, sizeof nm, "%s%s", x, w ? "=" : "");
+      if (!bind_attr_named(c, lc, nm)) continue;
+      snprintf(hn, sizeof hn, "__bind %s", nm);
+      int have = 0;
+      for (int k = 0; k < bn && !have; k++)
+        have = nt_kind(nt, bb[k]) == NK_DefNode && nt_str(nt, bb[k], "name") && sp_streq(nt_str(nt, bb[k], "name"), hn);
+      if (!have && out) memcpy(out[n], hn, sizeof hn);
+      if (!have) n++;
+    }
+  }
+  return n;
+}
+int desugar_bind_attr_helpers_left(Compiler *c, LowerCtx *lc, int id) {
+  return bind_attr_missing(c, lc, id, NULL) > 0;
+}
+int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int nn = bind_attr_missing(c, lc, id, NULL);
+  if (!nn) return 0;
+  char (*nms)[300] = malloc(sizeof *nms * (size_t)nn);
+  int *defs = malloc(sizeof(int) * (size_t)nn);
+  if (!nms || !defs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  bind_attr_missing(c, lc, id, nms);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  for (int i = 0; i < nn; i++) {
+    const char *x = nms[i] + 7;   /* past "__bind " */
+    size_t xl = strlen(x);
+    int wr = x[xl - 1] == '=';
+    char iv[300]; snprintf(iv, sizeof iv, "@%.*s", (int)(wr ? xl - 1 : xl), x);
+    int base = nt->count;
+    int st = nt_new_node(nt, "StatementsNode"), def = nt_new_node(nt, "DefNode");
+    int val = nt_new_node(nt, wr ? "InstanceVariableWriteNode" : "InstanceVariableReadNode");
+    int params = -1;
+    if (st < 0 || def < 0 || val < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    nt_node_set_str(nt, val, "name", iv);
+    if (wr) {
+      int req = nt_new_node(nt, "RequiredParameterNode"), rd = nt_new_node(nt, "LocalVariableReadNode");
+      params = nt_new_node(nt, "ParametersNode");
+      if (req < 0 || rd < 0 || params < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      nt_node_set_str(nt, req, "name", "__bind_v");
+      nt_node_set_str(nt, rd, "name", "__bind_v");
+      nt_node_set_arr(nt, params, "requireds", &req, 1);
+      nt_node_set_ref(nt, val, "value", rd);
+    }
+    nt_node_set_arr(nt, st, "body", &val, 1);
+    nt_node_set_str(nt, def, "name", nms[i]);
+    nt_node_set_ref(nt, def, "receiver", -1);
+    nt_node_set_ref(nt, def, "parameters", params);
+    nt_node_set_ref(nt, def, "body", st);
+    for (int j = base; j < nt->count && line > 0; j++) {
+      nt_node_set_int(nt, j, "node_line", line);
+      nt_node_set_int(nt, j, "node_file", file);
+    }
+    defs[i] = def;
+  }
+  /* the helpers follow the attr call */
+  int at = lower_stmt_at(nt, lc, id), bn = 0;
+  const int *bb = nt_arr(nt, lc->body, "body", &bn);
+  int *nb = malloc(sizeof(int) * (size_t)(bn + nn));
+  if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(nb, bb, sizeof(int) * (size_t)(at + 1));
+  memcpy(nb + at + 1, defs, sizeof(int) * (size_t)nn);
+  memcpy(nb + at + 1 + nn, bb + at + 1, sizeof(int) * (size_t)(bn - at - 1));
+  nt_node_set_arr(nt, lc->body, "body", nb, bn + nn);
+  free(nb); free(nms); free(defs);
+  return 1;
+}
+
 /* Does the subtree at n hold a node whose meaning depends on being the
    method it is written in: super, yield, block_given?? */
 static int reinit_body_bound(const NodeTable *nt, int n, int depth) {
@@ -48257,6 +48385,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_LITERAL_UNDEF_METHOD);       /* undef_method :a in a body -> undef a */
   lower_run(c, &lc, LW_EXPLICIT_INITIALIZE_CALLS);  /* initialize(x) in a method -> a copy of it as a method */
   lower_run(c, &lc, LW_NOARG_DISPLAY_WRAPPERS);     /* def inspect(i = 0) -> + `__noarg inspect` = inspect */
+  lower_run(c, &lc, LW_BIND_ATTR_HELPERS);          /* attr_reader :x an instance_method names -> + `__bind x` = @x */
   /* a bare constant CRuby's lookup cannot reach, bound by its leaf name to a
      nested definition: refused while the source still says where each
      reference is written */
@@ -49160,6 +49289,9 @@ static int ur_name_excluded(const char *nm) {
   if (!nm || !nm[0] || !strncmp(nm, "to_", 3)) return 1;   /* the conversions the runtime asks for */
   if (!(nm[0] == '_' || (nm[0] >= 'a' && nm[0] <= 'z') || (nm[0] >= 'A' && nm[0] <= 'Z'))) return 1;
   if (nm[strlen(nm) - 1] == '=') return 1;
+  /* an accessor's helper, which a bind_call's arm calls for its value
+     (desugar_bind_attr_helpers) */
+  if (!strncmp(nm, "__bind ", 7)) return 1;
   return method_name_implicitly_invoked(nm) || is_definition_hook_name(nm) || str_in(nm, names);
 }
 /* a plain String method, emitted as a function of its own under the name

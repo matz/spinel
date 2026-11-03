@@ -19816,6 +19816,10 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
         if (ak == NK_SymbolNode) msym = nt_str(nt, mav[0], "value");
         else if (ak == NK_StringNode) { msym = nt_str(nt, mav[0], "content"); if (!msym) msym = nt_str(nt, mav[0], "unescaped"); }
         if (msym) cr_add_name(out, n, cap, msym);
+        /* and an accessor's helper for a bind_call of it (desugar_bind_attr_helpers) */
+        char hn[300];
+        if (msym && sp_streq(nm, "instance_method") && snprintf(hn, sizeof hn, "__bind %s", msym) < (int)sizeof hn)
+          cr_add_name(out, n, cap, hn);
       }
     }
   }

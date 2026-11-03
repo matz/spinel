@@ -100,6 +100,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_explicit_initialize_calls_at, NULL, "`initialize(x)` called in a method" },
   [LW_NOARG_DISPLAY_WRAPPERS] = { "desugar_noarg_display_wrappers", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_noarg_display_wrappers_at, desugar_noarg_display_wrappers_left, "`def inspect(i = 0)` in a body" },
+  [LW_BIND_ATTR_HELPERS] = { "desugar_bind_attr_helpers", LF_STMT | LF_FRAMES, { NK_NONE },
+    desugar_bind_attr_helpers_at, desugar_bind_attr_helpers_left, "`attr_reader :x` an `instance_method(:x)` names", desugar_bind_attr_helpers_gate },
   [LW_PAREN_BLOCK_ARG] = { "desugar_paren_block_arg", 0, { NK_BlockArgumentNode },
     desugar_paren_block_arg_at, desugar_paren_block_arg_left, "`&(e)`: a block argument in parentheses" },
   [LW_PAREN_OPERANDS] = { "desugar_paren_operands", 0,

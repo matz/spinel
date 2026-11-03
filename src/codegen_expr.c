@@ -3825,7 +3825,9 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         return 1;
       }
       int _bcpid = builtin_class_id(nm);
-      if (_bcpid != 0) { buf_printf(b, "((sp_Class){%d})", _bcpid); return 1; }
+      /* (a builtin scope holds no top-level builtin: Array::String names
+         nothing, as String::Foo does) */
+      if (_bcpid != 0 && !const_path_misses_member(c, id)) { buf_printf(b, "((sp_Class){%d})", _bcpid); return 1; }
     }
     /* A qualified constant defined nowhere: the same build-time answer as the
        bare form above (#3976). */

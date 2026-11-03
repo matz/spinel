@@ -28413,8 +28413,24 @@ static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
 }
 
 static void emit_call_lifted(Compiler *c, int id, Buf *b);
+/* A call on a constant path through a builtin scope that names a
+   top-level builtin (`Array::String.new`): the path raises NameError
+   before the call runs, as String::Foo does; the call is never made, so
+   it is not emitted for the leaf's class. */
+static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
+  const char *nm = nt_str(nt, recv, "name");
+  if (!nm || !is_builtin_class_name(nm) || !const_path_misses_member(c, recv)) return 0;
+  buf_puts(b, "((void)(");
+  emit_expr(c, recv, b);
+  buf_printf(b, "), %s)", default_value_from_compiler(c, repr_of(c, id).as_ty));
+  return 1;
+}
 void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_autoload_register(c, id, b)) return;
+  if (emit_call_on_missing_builtin_path(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;
   if (emit_missing_in_operand(c, id, b)) return;
   int fm = frange_index_view(c, id);

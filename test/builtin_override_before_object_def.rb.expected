@@ -1,0 +1,29 @@
+[:true, 3]
+[:hash, 4]
+[:ary, 1]
+[:false, 5]
+[:true, 6]
+[:obj, 7]
+[:obj, 1]
+[:true, 2]
+[:false, 2]
+[:hash, 2]
+[:ary, 2]
+[:obj, 2]
+[:obj, 2]
+[:obj, 2]
+:no_method
+:no_method
+:obj
+:obj
+true
+true
+[:time, 1]
+[:range, 1]
+[:obj, 1]
+[:obj, 1]
+[:hash, 2]
+[:hash, 3]
+[:obj, 1]
+[:hash, 3]
+[:obj, 7]

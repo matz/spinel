@@ -9,6 +9,7 @@ end
 module Enumerable
   include Extra
   def select(*a) = :enum_select
+  def filter_map(*a) = :enum_filter_map
 end
 p({a: 1}.uniq)
 p (1..3).sum
@@ -17,3 +18,4 @@ p [1, 1].uniq
 S = Struct.new(:a, :b)
 p S.new(1, 2).select { |x| x > 1 }
 p (1..3).select { |x| x > 1 }
+p S.new(1, 2).filter_map { |x| x }

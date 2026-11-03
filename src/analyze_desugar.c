@@ -15557,6 +15557,11 @@ static int enum_sym_proc_block(const NodeTable *nt, int blk) {
   const char *rn2 = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return rn2 && sp_streq(rn2, "_spx") && nt_ref(nt, call, "arguments") < 0 && nt_ref(nt, call, "block") < 0;
 }
+/* Does Struct have an Enumerable name of its own (CRuby 4.0's
+   Struct.instance_methods(false) & Enumerable.instance_methods)? */
+static int enum_struct_owns(const char *nm) {
+  return nm && (sp_streq(nm, "to_a") || sp_streq(nm, "to_h") || sp_streq(nm, "select") || sp_streq(nm, "filter"));
+}
 /* Does the receiver of call id, of type rt, have a method nm of its own
    class (enum_class_owns)? A receiver the analysis made (`to_a` or
    `__enum_to_a` over a Hash, a Range or a class with #each) is no Array of
@@ -15573,7 +15578,7 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
       int sr = nt_ref(nt, recv, "receiver");
       TyKind st = sr >= 0 ? infer_type(c, sr) : TY_UNKNOWN;
       int sc = ty_is_object(st) ? ty_object_class(st) : -1;
-      return sc >= 0 && sc < c->nclasses && c->classes[sc].is_struct && builtin_instance_method_known("Struct", nm);
+      return sc >= 0 && sc < c->nclasses && c->classes[sc].is_struct && enum_struct_owns(nm);
     }
   }
   const char *cls = NULL;
@@ -15582,7 +15587,7 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
   /* a Struct's own select or to_a */
   else if (ty_is_object(rt) && ty_object_class(rt) >= 0 && ty_object_class(rt) < c->nclasses &&
            c->classes[ty_object_class(rt)].is_struct)
-    return builtin_instance_method_known("Struct", nm);
+    return enum_struct_owns(nm);
   else if (ty_is_hash(rt)) cls = "Hash";
   else if (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE) cls = "Range";
   else if (rt == TY_ENUMERATOR) cls = "Enumerator";

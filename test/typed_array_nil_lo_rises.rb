@@ -51,6 +51,19 @@ begin
 rescue TypeError => e
   p e.class
 end
+# the last nil overwritten through a negative index
+w[-2] = 3
+p w, total(w), w.include?(nil)
+
+# the only nil popped off the end, and shifted off the front
+pp = Array.new(3, x)
+pp[0] = 4
+pp[1] = 5
+p pp.pop, pp, total(pp)
+sf = Array.new(3, x)
+sf[1] = 6
+sf[2] = 7
+p sf.shift, sf, total(sf)
 
 # shifted, then filled
 sh = Array.new(5, x)
@@ -76,3 +89,6 @@ fz.each { |v| fs += v }
 p fz, fs, fz.include?(nil)
 fz[1] = fx
 p fz, fz.compact.sum
+fp = Array.new(2, fx)
+fp[0] = 0.75
+p fp.pop, fp, fp.sum

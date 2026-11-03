@@ -180,7 +180,8 @@ static SP_COLD sp_IntArray*sp_IntArray_new_nil(sp_int n){sp_IntArray*a=sp_IntArr
 /* Reads and removals of elements that can be nil answer sp_oint. The bit of
    an element leaving the live window is cleared, so the window's outside
    stays clear (sp_types.h) and a push never writes the bitmap. */
-static SP_NOINLINE SP_COLD sp_oint sp_IntArray_take_cold(sp_IntArray*a,sp_int pi,sp_int v){if(sp_nilbit_get(a->nilbits,pi)){sp_nilbit_clr(a->nilbits,pi);return sp_oint_nil();}return sp_oint_of(v);}
+static SP_NOINLINE SP_COLD void sp_IntArray_clr_nil(sp_IntArray*a,sp_int pi);
+static SP_NOINLINE SP_COLD sp_oint sp_IntArray_take_cold(sp_IntArray*a,sp_int pi,sp_int v){if(sp_nilbit_get(a->nilbits,pi)){sp_IntArray_clr_nil(a,pi);return sp_oint_nil();}return sp_oint_of(v);}
 /* Issue #826/#832: empty pop/shift answer nil to match MRI; without the
    guard, `--a->len` wraps to -1 and reads past the buffer start. */
 static inline sp_oint sp_IntArray_pop_o(sp_IntArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("pop"); if (a->len<=0)return sp_oint_nil();if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return sp_oint_nil();}sp_int pi=a->start+--a->len;if(SP_UNLIKELY(a->nilbits))return sp_IntArray_take_cold(a,pi,a->data[pi]);return sp_oint_of(a->data[pi]);}
@@ -209,7 +210,7 @@ static SP_INLINE sp_oint sp_IntArray_oget(sp_IntArray*a,sp_int i){if(SP_LIKELY(a
 static void sp_IntArray_set_slow(sp_IntArray*a,sp_int i,sp_int v){if(i<0)return;while(a->start+i>=a->cap)sp_IntArray_set_cap(a,a->cap*2+1);if(i>a->len){/* gap slots read as nil */if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBITS_SET_RANGE_A(a, a->start+a->len, a->start+i);while(i>a->len){a->data[a->start+a->len]=0;a->len++;}}if(i==a->len)a->len++;a->data[a->start+i]=v;if(SP_UNLIKELY(a->nilbits))sp_nilbit_clr(a->nilbits,a->start+i);}
 /* Issue #839: an extreme negative index (still negative after `i += len`)
    raises IndexError per MRI. */
-static SP_NOINLINE SP_COLD void sp_IntArray_set_cold(sp_IntArray*a,sp_int i,sp_int v){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));if(i<a->len){a->data[a->start+i]=v;if(SP_UNLIKELY(a->nilbits))sp_nilbit_clr(a->nilbits,a->start+i);return;}sp_IntArray_set_slow(a,i,v);}
+static SP_NOINLINE SP_COLD void sp_IntArray_set_cold(sp_IntArray*a,sp_int i,sp_int v){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));if(i<a->len){a->data[a->start+i]=v;if(SP_UNLIKELY(a->nilbits))sp_IntArray_clr_nil(a,a->start+i);return;}sp_IntArray_set_slow(a,i,v);}
 static SP_COLD void sp_IntArray_drop_nilbits(sp_IntArray*a);
 /* the bitmap write of an in-range store, off the store's path: the nil's bit
    cleared, nil_lo raised past it, and a bitmap with no nil left dropped (no
@@ -344,7 +345,8 @@ static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){
 /* Array.new(n, v): see sp_IntArray_new_fill */
 static sp_FloatArray*sp_FloatArray_new_fill(sp_int n,sp_float v){sp_FloatArray*a=(sp_FloatArray*)sp_gc_alloc(sizeof(sp_FloatArray),sp_FloatArray_fin,NULL);if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();a->cap=n>16?n:16;a->data=(sp_float*)sp_pl_alloc(sizeof(sp_float)*a->cap);if(!a->data)sp_oom_die();a->nilbits=NULL;for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_float)*a->cap;sp_gc_bytes_add(sizeof(sp_float)*a->cap);}return a;}
 static SP_COLD sp_FloatArray*sp_FloatArray_new_nil(sp_int n){sp_FloatArray*a=sp_FloatArray_new_fill(n,0.0);if(n>0){SP_NILBITS_NEW_A(a);SP_NILBITS_SET_RANGE_A(a, 0, n);}return a;}
-static SP_NOINLINE SP_COLD sp_ofloat sp_FloatArray_take_cold(sp_FloatArray*a,sp_int i,sp_float v){if(sp_nilbit_get(a->nilbits,i)){sp_nilbit_clr(a->nilbits,i);return sp_ofloat_nil();}return sp_ofloat_of(v);}
+static SP_NOINLINE SP_COLD void sp_FloatArray_clr_nil(sp_FloatArray*a,sp_int i);
+static SP_NOINLINE SP_COLD sp_ofloat sp_FloatArray_take_cold(sp_FloatArray*a,sp_int i,sp_float v){if(sp_nilbit_get(a->nilbits,i)){sp_FloatArray_clr_nil(a,i);return sp_ofloat_nil();}return sp_ofloat_of(v);}
 /* CRuby answers nil for pop/shift on an empty array (#4288). */
 static inline sp_ofloat sp_FloatArray_pop_o(sp_FloatArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("pop"); if (a->len<=0)return sp_ofloat_nil();if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return sp_ofloat_nil();}sp_int i=--a->len;if(SP_UNLIKELY(a->nilbits))return sp_FloatArray_take_cold(a,i,a->data[i]);return sp_ofloat_of(a->data[i]);}
 /* FloatArray is 0-based (no `start` offset, unlike IntArray): a shift steps

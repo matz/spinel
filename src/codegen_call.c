@@ -28541,7 +28541,9 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
      call's block as a proc, self the value held in _t<tb>) */
   if (mi >= 0 && c->scopes[mi].yields) {
     int slot = view_bind(recv, "_t%d", tb);
+    ucall_arm_push();   /* (one arm of the plan's CP_SWITCH) */
     int done = emit_reopen_block_call(c, id, recv, mi, NULL, &nb);
+    ucall_arm_pop();
     view_unbind(slot);
     /* (emit_reopen_pf_call has boxed or unboxed the answer for the call's
        representation already) */

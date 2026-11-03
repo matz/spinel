@@ -164,6 +164,7 @@ int civ_class_of(Compiler *c, int node, Scope *s);
 void emit_civ_slot_decl(Compiler *c, int cid, const char *nm, const char *ctype, TyKind t,
                         const char *init, Buf *b);
 int ie_class_of(Compiler *c, int node);
+int ie_own_class_of(Compiler *c, int node);
 /* The shared-mutable shim (codegen_stmt.c) re-runs a value-semantics mutator
    arm against a plain shadow copy, then swaps the handle's bytes for it. A
    LOCAL receiver is redirected into the shadow by the rename table; an ivar

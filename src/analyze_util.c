@@ -2558,7 +2558,11 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
   int crecv = nt_ref(nt, cid, "receiver");
   int rmi = -1;
   if (crecv < 0) {
-    rmi = comp_cbody_call_mi(c, cid, cn);
+    /* in an instance_eval / exec block, on the receiver it rebinds self to,
+       as the call plan resolves it */
+    int iec = cn ? ie_class_of(c, cid) : -1;
+    if (iec >= 0) rmi = call_target(c, cid, iec, cn, 0, NULL);
+    if (rmi < 0) rmi = comp_cbody_call_mi(c, cid, cn);
     /* resolved as emission resolves it: a class method's own chain before
        a top-level def of the same name */
     if (rmi < 0 && cn) rmi = comp_self_call_mi(c, cid, cn);

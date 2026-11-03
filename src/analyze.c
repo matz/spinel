@@ -11855,6 +11855,39 @@ static int desugar_std_stream_bare_warn(Compiler *c) {
   return changed;
 }
 
+static int ctor_literal(const NodeTable *nt, int id) {
+  switch (nt_kind(nt, id)) {
+    case NK_IntegerNode: case NK_FloatNode: case NK_StringNode:
+    case NK_SymbolNode: case NK_NilNode:
+      return 1;
+    default:
+      return 0;
+  }
+}
+static int ctor_kw_splat(const NodeTable *nt, int kwh) {
+  int n = 0; const int *el = nt_arr(nt, kwh, "elements", &n);
+  for (int k = 0; k < n; k++)
+    if (nt_kind(nt, el[k]) == NK_AssocSplatNode) return 1;
+  return 0;
+}
+/* An endpoint held in a local of its own, ahead of the flag: `name = x`,
+   answering a read of it. */
+static int ctor_hold(Compiler *c, Scope *sc, int id, int k, int x, int *pre, int *npre) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  char tn[64];
+  snprintf(tn, sizeof tn, "__rnew%s_%d", comp_node_tag(c, id), k);
+  scope_local_intern(sc, tn);
+  int w = nt_new_node(nt, "LocalVariableWriteNode");
+  nt_node_set_str(nt, w, "name", tn);
+  nt_node_set_int(nt, w, "depth", 0);
+  nt_node_set_ref(nt, w, "value", x);
+  pre[(*npre)++] = w;
+  int r = nt_new_node(nt, "LocalVariableReadNode");
+  nt_node_set_str(nt, r, "name", tn);
+  nt_node_set_int(nt, r, "depth", 0);
+  return r;
+}
+
 /* `Array[a, b, c]` and `Range.new(lo, hi)` are the constructor spellings of the
    `[a, b, c]` and `(lo..hi)` literals, and both raised NoMethodError -- the
    literal worked and the documented constructor for the same value did not
@@ -11890,17 +11923,124 @@ static int desugar_class_literal_ctors(Compiler *c) {
       nt_node_reset(nt, id, "ArrayNode");
       nt_node_set_arr(nt, id, "elements", els, argc);
     }
-    else if (sp_streq(rn, "Range") && sp_streq(mn, "new") && (argc == 2 || argc == 3)) {
+    else if (sp_streq(rn, "Range") && sp_streq(mn, "new") && argc != 2 && argc != 3) {
+      /* any other count: the arguments, then CRuby's ArgumentError. A
+         keyword hash may come out empty, so its count is the run time's. */
+      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      if (argc > 15 || nt_argv_has(nt, argv, argc, NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+      int body[16];
+      for (int k = 0; k < argc; k++) body[k] = argv[k];
+      long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
+                col = nt_int(nt, id, "node_col", 0);
+      int base = nt->count;
+      char msg[80];
+      snprintf(msg, sizeof msg, "wrong number of arguments (given %d, expected 2..3)", argc);
+      int ecn = nt_new_node(nt, "ConstantReadNode");
+      nt_node_set_str(nt, ecn, "name", "ArgumentError");
+      int emn = nt_new_node(nt, "StringNode");
+      nt_node_set_str(nt, emn, "content", msg);
+      int ea[2] = { ecn, emn };
+      int eargs = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, eargs, "arguments", ea, 2);
+      int rz = nt_new_node(nt, "CallNode");
+      nt_node_set_str(nt, rz, "name", "raise");
+      nt_node_set_ref(nt, rz, "receiver", -1);
+      nt_node_set_ref(nt, rz, "arguments", eargs);
+      nt_node_set_ref(nt, rz, "block", -1);
+      nt_node_set_int(nt, rz, "node_line", line);
+      nt_node_set_int(nt, rz, "node_file", file);
+      nt_node_set_int(nt, rz, "node_col", col);
+      body[argc] = rz;
+      int stmts = nt_new_node(nt, "StatementsNode");
+      nt_node_set_arr(nt, stmts, "body", body, argc + 1);
+      nt_node_reset(nt, id, "ParenthesesNode");
+      nt_node_set_ref(nt, id, "body", stmts);
+      nt_node_set_int(nt, id, "node_line", line);
+      nt_node_set_int(nt, id, "node_file", file);
+      nt_node_set_int(nt, id, "node_col", col);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) {
+        c->nscope[j] = c->nscope[id];
+        if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id];
+      }
+    }
+    else if (sp_streq(rn, "Range") && sp_streq(mn, "new")) {
       if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
       /* the exclusive flag is part of the literal's shape, so it has to be
-         readable here; a computed third argument keeps today's behaviour */
+         readable here */
       int excl = 0;
+      int lo = argv[0], hi = argv[1];
       if (argc == 3) {
         NodeKind ek = nt_kind(nt, argv[2]);
         if (ek == NK_TrueNode) excl = 1;
-        else if (ek != NK_FalseNode && ek != NK_NilNode) continue;
+        else if (ek != NK_FalseNode && ek != NK_NilNode) {
+          /* A computed flag picks one of the two literals:
+               Range.new(lo, hi, e)  ->  (t0 = lo; t1 = hi; e ? t0...t1 : t0..t1)
+             The call evaluates the endpoints before the flag, so each one
+             that is not a literal is held first. */
+          Scope *sc = comp_scope_of(c, id);
+          if (!sc) continue;
+          int e = argv[2];
+          /* a `**h` that comes out empty passes no flag at all */
+          int kws = ek == NK_KeywordHashNode && ctor_kw_splat(nt, e);
+          long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0),
+                    col = nt_int(nt, id, "node_col", 0);
+          int base = nt->count;
+          int pre[3], npre = 0, ep[2] = { lo, hi }, rx_ep[2], ri_ep[2];
+          for (int k = 0; k < 2; k++) {
+            if (ctor_literal(nt, ep[k])) {
+              rx_ep[k] = ep[k];
+              ri_ep[k] = nt_clone_subtree(nt, ep[k]);
+              continue;
+            }
+            rx_ep[k] = ctor_hold(c, sc, id, k, ep[k], pre, &npre);
+            ri_ep[k] = nt_clone_subtree(nt, rx_ep[k]);
+          }
+          int rx = nt_new_node(nt, "RangeNode");
+          nt_node_set_ref(nt, rx, "left", rx_ep[0]);
+          nt_node_set_ref(nt, rx, "right", rx_ep[1]);
+          nt_range_set_excl(nt, rx, 1);
+          int ri = nt_new_node(nt, "RangeNode");
+          nt_node_set_ref(nt, ri, "left", ri_ep[0]);
+          nt_node_set_ref(nt, ri, "right", ri_ep[1]);
+          int ts = nt_new_node(nt, "StatementsNode");
+          nt_node_set_arr(nt, ts, "body", kws ? &ri : &rx, 1);
+          int es = nt_new_node(nt, "StatementsNode");
+          nt_node_set_arr(nt, es, "body", kws ? &rx : &ri, 1);
+          if (kws) {
+            int em = nt_new_node(nt, "CallNode");
+            nt_node_set_str(nt, em, "name", "empty?");
+            nt_node_set_ref(nt, em, "receiver", e);
+            nt_node_set_ref(nt, em, "arguments", -1);
+            nt_node_set_ref(nt, em, "block", -1);
+            e = em;
+          }
+          int en = nt_new_node(nt, "ElseNode");
+          nt_node_set_ref(nt, en, "statements", es);
+          int ifn = npre ? nt_new_node(nt, "IfNode") : id;
+          if (npre) {
+            pre[npre++] = ifn;
+            int stmts = nt_new_node(nt, "StatementsNode");
+            nt_node_set_arr(nt, stmts, "body", pre, npre);
+            nt_node_reset(nt, id, "ParenthesesNode");
+            nt_node_set_ref(nt, id, "body", stmts);
+          }
+          else nt_node_reset(nt, id, "IfNode");
+          nt_node_set_ref(nt, ifn, "predicate", e);
+          nt_node_set_ref(nt, ifn, "statements", ts);
+          nt_node_set_ref(nt, ifn, "subsequent", en);
+          nt_node_set_int(nt, id, "node_line", line);
+          nt_node_set_int(nt, id, "node_file", file);
+          nt_node_set_int(nt, id, "node_col", col);
+          comp_grow_node_arrays(c);
+          for (int j = base; j < nt->count; j++) {
+            c->nscope[j] = c->nscope[id];
+            if (c->node_cbody) c->node_cbody[j] = c->node_cbody[id];
+          }
+          changed = 1;
+          continue;
+        }
       }
-      int lo = argv[0], hi = argv[1];
       nt_node_reset(nt, id, "RangeNode");
       nt_node_set_ref(nt, id, "left", lo);
       nt_node_set_ref(nt, id, "right", hi);
@@ -42073,10 +42213,17 @@ static int splat_user_method_rejects(Compiler *c, const char *name, int n) {
 /* A default constructor consumes the expanded value, not the Array
    enclosing it. Its share row identifies that argument flow in both builds,
    independently of String sharing; its positional range is zero to one. */
-static int splat_constructor_arity(const NodeTable *nt, int id, const char *name) {
+static int splat_constructor_arity(const NodeTable *nt, int id, const char *name, int *lo) {
+  if (lo) *lo = 0;
   if (!is_new_name(name)) return -1;
   int recv = nt_ref(nt, id, "receiver");
   const char *cn = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+  /* Range.new(first, last, exclude_end = false): each arm is the literal's
+     constructor spelling (desugar_class_literal_ctors) */
+  if (cn && sp_streq(cn, "Range") && sp_streq(name, "new")) {
+    if (lo) *lo = 2;
+    return 3;
+  }
   int sh = cn ? bop_share_named(BOP_CLASS_NEW, cn) : 0;
   if (sh == BSH_NEW_DEFAULT) return 1;
   /* A fill constructor consumes size and fill separately. */
@@ -42694,8 +42841,9 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   /* a dynamic send's arm (`public_send(*args)`) takes its counts from
      CRuby's tables, the block-carrying call's where there is a block */
   int odyn = 0, spec = 0;
-  int ctor = splat_constructor_arity(nt, id, cnm);
-  if (ctor >= 0) { lo = 0; hi = ctor; variadic = 0; }
+  int ctor_lo = 0;
+  int ctor = splat_constructor_arity(nt, id, cnm, &ctor_lo);
+  if (ctor >= 0) { lo = ctor_lo; hi = ctor; variadic = 0; }
   else if (!splat_builtin_range(cnm, &lo, &hi, &variadic)) {
     if (splat_dyn_arm_range(c, id, cnm, blk >= 0, &lo, &hi, &variadic)) odyn = 1;
     /* another builtin name the list above leaves out */
@@ -43185,7 +43333,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     const char *cnm = nt_str(nt, id, "name");
     if (!cnm) continue;
     int listed = splat_builtin_arity(cnm) >= 0 || sp_streq(cnm, "slice") || sp_streq(cnm, "fill");
-    if (!listed && splat_constructor_arity(nt, id, cnm) < 0 &&
+    if (!listed && splat_constructor_arity(nt, id, cnm, NULL) < 0 &&
         !splat_builtin_range(cnm, NULL, NULL, NULL) &&
         !splat_dyn_arm_range(c, id, cnm, nt_ref(nt, id, "block") >= 0, NULL, NULL, NULL) &&
         ((nt_ref(nt, id, "block") >= 0 && !splat_value_or_block_name(cnm)) ||

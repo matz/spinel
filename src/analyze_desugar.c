@@ -3355,8 +3355,8 @@ static int masgn_to_ary_mi(Compiler *c, TyKind t, int at, int op) {
   if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) return -1;
   return cplan_implied_version(c, at, "to_ary", op, cls) == mi ? mi : -1;
 }
-/* (analyze_internal.h) */
-int masgn_nests(const NodeTable *nt, int id) {
+/* Does masgn id destructure into a nested target list? */
+static int masgn_nests(const NodeTable *nt, int id) {
   static const char *const arrs[] = { "lefts", "rights" };
   for (int a = 0; a < 2; a++) {
     int n = 0;

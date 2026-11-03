@@ -1092,13 +1092,11 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
    value, the value a block of several parameters takes apart): each
    class a box can hold (comp_poly_candidates) whose no-argument to_ary is
    the version the record proves there (cplan_implied_version). An Array
-   subclass is an Array already. A multiple assignment with a nested
-   target (masgn_nests, the typed rewrite's test) would take an element
-   apart in turn, which the boxed lowering does not convert: none there,
-   as the typed rewrite leaves such a value whole. Into out[0..cap),
-   ascending; the count. */
+   subclass is an Array already. A nested target's element converts at
+   its own level, as its MultiTargetNode's implied to_ary of the element
+   it takes (emit_massign_poly_target). Into out[0..cap), ascending; the
+   count. */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
-  if (nt_kind(c->nt, id) == NK_MultiWriteNode && masgn_nests(c->nt, id)) return 0;
   int n = 0, np = 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {

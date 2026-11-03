@@ -50,3 +50,14 @@ rescue TypeError => e
   p e.message
 end
 p $calls.size
+# a nested target: the boxed value converts, and so does the element the
+# nested target takes apart, each at its own level
+v = ARGV.size > 5 ? 1 : Pair.new(Pair.new(1, 2), 3)
+(a, b), c = v
+p [a, b, c]
+v = ARGV.size > 5 ? 1 : Pair.new(Pair.new(Pair.new(4, 5), 6), 7)
+((a, b), c), d = v
+p [a, b, c, d]
+v = ARGV.size > 5 ? 1 : Pair.new(Nope.new, 8)
+(a, b), c = v
+p [a.class, b, c]

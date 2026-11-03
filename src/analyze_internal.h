@@ -943,9 +943,6 @@ int desugar_int_enum_with_index(Compiler *c);
 int desugar_hash_iter_with_index(Compiler *c);
 int desugar_array_op_to_ary(Compiler *c);
 int desugar_masgn_to_ary(Compiler *c);
-/* Does multiple assignment (or nested target list) id destructure into a
-   nested target list? */
-int masgn_nests(const NodeTable *nt, int id);
 int widen_shared_cmp_params(Compiler *c);
 int desugar_reduce_proc_arg(Compiler *c);
 int desugar_reduce_splat_args(Compiler *c);

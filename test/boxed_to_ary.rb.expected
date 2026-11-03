@@ -18,3 +18,6 @@ Pair
 "can't convert Bad to Array (Bad#to_ary gives Integer)"
 "can't convert Bad to Array (Bad#to_ary gives Integer)"
 8
+[1, 2, 3]
+[4, 5, 6, 7]
+[Nope, nil, 8]

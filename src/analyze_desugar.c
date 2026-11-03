@@ -24169,6 +24169,128 @@ static int mo_params_sig(const NodeTable *nt, int def, char *out, size_t cap) {
   return o < cap;
 }
 
+/* Does each optional parameter of def b have a default where def a has
+   one? A required keyword in one and an optional one in the other cannot
+   share Object's parameter list. */
+static int mo_defaults_match(const NodeTable *nt, int a, int b) {
+  int pa = nt_ref(nt, a, "parameters"), pb = nt_ref(nt, b, "parameters");
+  if (pa < 0 || pb < 0) return pa == pb;
+  static const char *const L[] = { "optionals", "keywords" };
+  for (int li = 0; li < 2; li++) {
+    int na = 0, nb = 0;
+    const int *ia = nt_arr(nt, pa, L[li], &na), *ib = nt_arr(nt, pb, L[li], &nb);
+    if (na != nb) return 0;
+    for (int j = 0; j < na; j++)
+      if ((nt_ref(nt, ia[j], "value") < 0) != (nt_ref(nt, ib[j], "value") < 0)) return 0;
+  }
+  return 1;
+}
+/* May constant nm read in a body of class cn be the class's own rather
+   than Object's: written in a body of cn or as `cn::nm = v`
+   (program_writes_const_in), or in a module cn includes or prepends? */
+static int mo_class_own_const(Compiler *c, const char *cn, const char *nm, int depth) {
+  const NodeTable *nt = c->nt;
+  if (depth > 8) return 1;
+  if (program_writes_const_in(c, cn, nm)) return 1;
+  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+  for (int dh = 0; dh < ndk; dh++)
+    NT_FOREACH_KIND(nt, dk[dh], d) {
+      const char *dn = class_def_opens_cref(nt, d) ? class_def_name(nt, d) : NULL;
+      if (!dn || !sp_streq(dn, cn)) continue;
+      int b = class_def_body(nt, d), bn = 0;
+      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+      for (int k = 0; k < bn; k++) {
+        const char *in = nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 ? nt_str(nt, bs[k], "name") : NULL;
+        if (!in || !(sp_streq(in, "include") || sp_streq(in, "prepend"))) continue;
+        int ac = 0, an = nt_ref(nt, bs[k], "arguments");
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+        for (int q = 0; q < ac; q++) {
+          const char *mn = nt_kind(nt, av[q]) == NK_ConstantReadNode || nt_kind(nt, av[q]) == NK_ConstantPathNode
+                           ? nt_str(nt, av[q], "name") : NULL;
+          if (!mn || mo_class_own_const(c, mn, nm, depth + 1)) return 1;
+        }
+      }
+    }
+  return 0;
+}
+/* The first constant read in default v that class cn may hold for itself
+   (mo_class_own_const), or -1 */
+static int mo_default_class_const(Compiler *c, int v, const char *cn) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return -1;
+  if (nt_kind(nt, v) == NK_ConstantReadNode && nt_str(nt, v, "name") &&
+      mo_class_own_const(c, cn, nt_str(nt, v, "name"), 0)) return v;
+  const SpNode *nd = &nt->nodes[v];
+  for (int j = 0; j < nd->nr; j++) {
+    int r = mo_default_class_const(c, nd->r[j].ref, cn);
+    if (r >= 0) return r;
+  }
+  for (int j = 0; j < nd->na; j++)
+    for (int q = 0; q < nd->a[j].n; q++) {
+      int r = mo_default_class_const(c, nd->a[j].ids[q], cn);
+      if (r >= 0) return r;
+    }
+  return -1;
+}
+/* The fold keeps Object's parameter list, so an override's own default
+   (`def o(x = 2)` in Hash beside Object's `def o(x = 1)`) is lost. A
+   default runs with the method's self, so Object's default becomes a
+   choice on self's class, as the body is:
+     def o(x = (if is_a?(Hash) then 2 else 1 end))
+   Only the defaults that differ are rewritten. */
+static void mo_fold_defaults(Compiler *c, NodeTable *nt, int odef, const int *ovr, const char *const *ocls, int no) {
+  int po = nt_ref(nt, odef, "parameters");
+  if (po < 0) return;
+  static const char *const L[] = { "optionals", "keywords" };
+  for (int li = 0; li < 2; li++) {
+    int n = 0;
+    const int *io = nt_arr(nt, po, L[li], &n);
+    for (int j = 0; j < n; j++) {
+      int ov = nt_ref(nt, io[j], "value");
+      if (ov < 0) continue;
+      int differs = 0;
+      for (int q = 0; q < no; q++) {
+        int m = 0;
+        const int *iq = nt_arr(nt, nt_ref(nt, ovr[q], "parameters"), L[li], &m);
+        differs |= !cdef_same(nt, ov, nt_ref(nt, iq[j], "value"));
+        /* (a constant the class defines for itself would be read as
+           Object's once the default runs in Object's method) */
+        int kc = mo_default_class_const(c, nt_ref(nt, iq[j], "value"), ocls[q]);
+        if (kc >= 0)
+          unsupported_feature(c, kc, "a parameter default of a builtin class's override of an Object method "
+                                     "that reads a constant the class defines is not supported by AOT compilation");
+      }
+      if (!differs) continue;
+      int tail = fwd_new_node_like(nt, odef, "ElseNode");
+      int st = fwd_new_node_like(nt, odef, "StatementsNode");
+      nt_node_set_arr(nt, st, "body", &ov, 1);
+      nt_node_set_ref(nt, tail, "statements", st);
+      for (int q = no - 1; q >= 0; q--) {
+        int m = 0;
+        const int *iq = nt_arr(nt, nt_ref(nt, ovr[q], "parameters"), L[li], &m);
+        int dv = nt_clone_subtree(nt, nt_ref(nt, iq[j], "value"));
+        int ifn = fwd_new_node_like(nt, odef, "IfNode");
+        nt_node_set_ref(nt, ifn, "predicate", mo_guard_pred(nt, odef, ocls[q]));
+        int qs = fwd_new_node_like(nt, odef, "StatementsNode");
+        nt_node_set_arr(nt, qs, "body", &dv, 1);
+        nt_node_set_ref(nt, ifn, "statements", qs);
+        /* (nested as `c ? a : d ? b : e` is: an elsif chain as a default
+           value reached a call site's hoist that declared no temp) */
+        if (nt_kind(nt, tail) == NK_IfNode) {
+          int el = fwd_new_node_like(nt, odef, "ElseNode");
+          int es = fwd_new_node_like(nt, odef, "StatementsNode");
+          nt_node_set_arr(nt, es, "body", &tail, 1);
+          nt_node_set_ref(nt, el, "statements", es);
+          tail = el;
+        }
+        nt_node_set_ref(nt, ifn, "subsequent", tail);
+        tail = ifn;
+      }
+      nt_node_set_ref(nt, io[j], "value", tail);
+    }
+  }
+}
+
 int desugar_object_method_builtin_overrides(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -24202,11 +24324,13 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
           const char *dn = nt_str(nt, bs[k], "name");
           if (!dn || !sp_streq(dn, mname)) continue;
           char sig[1024];
-          if (!mo_params_sig(nt, bs[k], sig, sizeof sig) || strcmp(sig, osig) != 0) { bad = 1; break; }
+          if (!mo_params_sig(nt, bs[k], sig, sizeof sig) || strcmp(sig, osig) != 0 ||
+              !mo_defaults_match(nt, odef, bs[k])) { bad = 1; break; }
           if (no < 32) { ovr[no] = bs[k]; ovc[no] = m; ocls[no] = g; no++; }
         }
       }
       if (bad || no == 0) continue;
+      mo_fold_defaults(c, nt, odef, ovr, ocls, no);
       /* if is_a?(A) then A's body elsif ... else Object's body end */
       int obody = nt_ref(nt, odef, "body");
       int tail = -1;   /* the else part */

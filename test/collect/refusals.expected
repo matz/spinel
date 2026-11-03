@@ -1286,6 +1286,10 @@ spinel: 1 refusal, nothing written
 == test/reject/object_method_ivar_struct_slot.rb [promote] rc=1
 spinel: test/reject/object_method_ivar_struct_slot.rb:3: unsupported instance_variable_set to an ivar absent from the fixed object layout: node N (CallNode `instance_variable_set`) recv=SelfNode/ty50 argc=2 arg0ty8
 spinel: 1 refusal, nothing written
+== test/reject/object_override_default_class_const.rb [default] rc=1
+spinel: test/reject/object_override_default_class_const.rb:11: a parameter default of a builtin class's override of an Object method that reads a constant the class defines is not supported by AOT compilation
+== test/reject/object_override_default_class_const.rb [promote] rc=1
+spinel: test/reject/object_override_default_class_const.rb:11: a parameter default of a builtin class's override of an Object method that reads a constant the class defines is not supported by AOT compilation
 == test/reject/object_receiver_include_alias.rb [default] rc=1
 spinel: test/reject/object_receiver_include_alias.rb:8: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
 spinel: 1 refusal, nothing written

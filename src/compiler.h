@@ -2061,6 +2061,7 @@ int        comp_class_anonymous(Compiler *c, int ci);
 int        comp_has_sclass_values(Compiler *c);
 const char *comp_class_display_fn(Compiler *c);
 const char *comp_class_reader_fn(Compiler *c, const char *name, int builtin);   /* the renderer of a class value's name, to_s or inspect (builtin: not through the program's own class method) */
+int comp_class_kw_init(Compiler *c, int ci);   /* inspects with the keyword_init suffix: a keyword_init Struct class or a subclass of one */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name);   /* a keyword-init Struct class's inspect suffix, else "" */
 const char *comp_class_base_display_fn(Compiler *c);
 int cls_user_display_mi(Compiler *c, int k, const char *nm);

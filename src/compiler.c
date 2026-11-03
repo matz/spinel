@@ -5409,9 +5409,17 @@ const char *comp_class_reader_fn(Compiler *c, const char *name, int builtin) {
   if (is_inspect_name(name)) return builtin && prog_has_cls_user_display(c, "inspect") ? "sp_class_inspect_text" : "sp_class_inspect_name";
   return is_class_name_name(name) ? "sp_class_name_or_nil" : builtin ? comp_class_base_display_fn(c) : comp_class_display_fn(c);
 }
+/* Does class ci inspect with the keyword_init suffix: a Struct class made
+   with keyword_init: true, or a subclass of one (which inherits the
+   class-side inspect; its own kw_init stays unset, the constructor's fact)? */
+int comp_class_kw_init(Compiler *c, int ci) {
+  for (int d = 0; ci >= 0 && ci < c->nclasses && d < 64; ci = c->classes[ci].parent, d++)
+    if (c->classes[ci].kw_init) return c->classes[ci].is_struct && c->classes[ci].kw_init == 1;
+  return 0;
+}
 /* ...and what a static reader of class ci's name prints after it: a
    keyword-init Struct class's inspect `K(keyword_init: true)`, nothing for
    its name and to_s, a positional Struct or a Data class (#3947) */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name) {
-  return ci >= 0 && is_inspect_name(name) && c->classes[ci].is_struct && c->classes[ci].kw_init == 1 ? "(keyword_init: true)" : "";
+  return is_inspect_name(name) && comp_class_kw_init(c, ci) ? "(keyword_init: true)" : "";
 }

@@ -20951,7 +20951,8 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     buf_printf(b, "static const char *%s(sp_Class c){switch(c.cls_id){", ihook ? "sp_class_inspect_text" : "sp_class_inspect_name");
     for (int i = 0; i < c->nclasses; i++) {
       if (is_builtin_reopen(c->classes[i].name)) continue;
-      if (!c->classes[i].is_struct || c->classes[i].kw_init != 1) continue;
+      if (!comp_class_kw_init(c, i)) continue;
+      if (!c->classes[i].kw_init && comp_class_anonymous(c, i)) continue;   /* (a Class.new subclass of one names itself at run time) */
       const char *qname = class_ruby_name(c, i);
       if (!qname) qname = c->classes[i].name;
       buf_printf(b, "case %d:return SPL(\"%s(keyword_init: true)\");", i, qname);

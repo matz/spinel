@@ -4307,9 +4307,12 @@ static int ver_absent_else(Compiler *c, const struct VerNamedAsks *q, int rcls, 
    a builtin superclass)? Its methods are not all in the builtin tables
    (IO's on File, a socket's), so what a call meeting no version of the
    program's runs there is not known: its entry keeps the table's answer.
-   Except a class-side name every class answers on itself (bop_class_answers:
-   Module's name, to_s, inspect): no builtin class above cls defines it on
-   its class side, so the lookup finds Module's whatever the chain holds. */
+   Except a class-side name a public row of the builtin-op table gives every
+   class (bop_class_answers; elab asks only the readers name, to_s and
+   inspect): the lookup finds Module's text whatever the chain holds. A
+   Struct or Data class has an inspect of its own, but it adds only the
+   keyword_init suffix to that text, which the class tables carry
+   (comp_class_kw_init), and no builtin class above one defines name or to_s. */
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk) {
   if (sg && bop_class_answers(name, ar, blk)) return 0;
   if (cls >= 0 && class_builtin_parent(c, cls) != builtin_class_at(CORE_OBJECT)->id) return 1;

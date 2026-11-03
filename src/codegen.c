@@ -13417,12 +13417,13 @@ static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want
        its boxed answer is judged by the runtime, which takes an Integer and
        raises CRuby's TypeError (or a Bignum's RangeError) for the rest */
     if (want == TY_INT && (c->scopes[tmi].ret != TY_INT || method_ret_is_oint(&c->scopes[tmi]))) {
-      char call[256];
-      snprintf(call, sizeof call, "%s((sp_%s *)p%s)", mc_method(c, &c->scopes[tmi]),
-               c->classes[callee].c_name, bridge_blk_arg(c, tmi));
+      Buf call; memset(&call, 0, sizeof call);
+      buf_printf(&call, "%s((sp_%s *)p%s)", mc_method(c, &c->scopes[tmi]),
+                 c->classes[callee].c_name, bridge_blk_arg(c, tmi));
       buf_printf(b, "    case %d: %sreturn sp_obj_to_int_answer(cls_id, ", i, with_ok ? "*ok = 1; " : "");
-      emit_boxed_ret_call(c, &c->scopes[tmi], call, b);
+      emit_boxed_ret_call(c, &c->scopes[tmi], call.p, b);
       buf_puts(b, ");\n");
+      free(call.p);
       continue;
     }
     /* A conversion whose answer is BOXED is still a conversion. Its static

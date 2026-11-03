@@ -35,7 +35,11 @@ def g(v) = v.both { |x, s| [s, x] }
 p g(true), g(false)
 def h(v) = v.e { |x| [x] }
 p h(true)
-p((h(false) rescue :no_method))
+begin
+  p h(false)
+rescue NoMethodError
+  p :no_method
+end
 begin
   false.e { |v| v }
 rescue NoMethodError => err
@@ -48,3 +52,12 @@ class FalseClass; def bg = :f; end
 p true.bg { 1 }
 p false.bg { 1 }
 [true, false].each { |v| p v.bg { 2 } }
+
+# a side's method that can answer nil: the call keeps the nil
+class TrueClass;  def nn = yield ? 1 : nil;   def nf = yield ? 1.5 : nil; end
+class FalseClass; def nn = yield ? 2 : nil;   def nf = yield ? 2.5 : nil; end
+def nh(b, x) = b.nn { x }
+def nk(b, x) = b.nf { x }
+p nh(true, true), nh(true, false), nh(false, true), nh(false, false)
+p nk(true, true), nk(true, false), nk(false, true), nk(false, false)
+p true.nn { false }, false.nn { true }

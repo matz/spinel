@@ -38906,6 +38906,14 @@ int nullable_int_value(Compiler *c, int v) {
             if (kmi >= 0 && c->scopes[kmi].ret_nullable_int) return 1;
           }
         }
+        /* true or false where TrueClass or FalseClass defines the name: the
+           value picks the side (cplan_bool_sides), so either side's nil */
+        else if (rt == TY_BOOL) {
+          int btm, bfm;
+          if (cplan_bool_sides(c, v, &btm, &bfm) &&
+              ((btm >= 0 && c->scopes[btm].ret_nullable_int) ||
+               (bfm >= 0 && c->scopes[bfm].ret_nullable_int))) return 1;
+        }
       }
     }
     if (mi >= 0 && c->scopes[mi].ret_nullable_int) return 1;

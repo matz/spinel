@@ -190,9 +190,10 @@ sp_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
    fsync/fileno/pid are always 0 on an in-memory stream. */
 /* putc(String) writes the string's first character, all of its bytes; a
    String-or-nil argument that is nil takes CRuby's path for a non-String,
-   the Integer conversion, as the [:int] binding's nil does */
+   the Integer conversion, as the [:int] binding's nil does -- after the
+   stream's own write check, which CRuby's putc makes first */
 const char *sp_StringIO_putc_s(sp_StringIO *s, const char *str) {SP_GC_ROOT(s);SP_GC_ROOT_STR(str);
-  if (!str) sp_raise_nil_to_int(0);
+  if (!str) { sio_check_write(s); sp_raise_nil_to_int(0); }
   int64_t l = (int64_t)sp_str_byte_len(str);
   if (l > 0) sio_write(s, str, sio_char_len(str, l, sp_str_is_binary(str)));
   return str; }

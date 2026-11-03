@@ -7,8 +7,8 @@ require "stringio"
 
 def try
   p yield
-rescue TypeError => e
-  p [:type_error, e.message]
+rescue TypeError, IOError => e
+  p [e.class, e.message]
 end
 
 def s_or_nil(x) = x ? "AB" : nil
@@ -29,3 +29,8 @@ io2 = StringIO.new
   try { o.putc(s_or_nil(ARGV.size < 5)) }
 end
 p io2.string
+
+# on a stream that takes no write, the write check comes first
+ro = StringIO.new("abc".freeze)
+try { ro.putc(s_or_nil(ARGV.size > 5)) }
+try { ro.putc(s_or_nil(ARGV.size < 5)) }

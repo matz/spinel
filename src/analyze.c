@@ -48055,6 +48055,7 @@ static void an_phase_desugar_register(Compiler *c) {
   desugar_class_reopen(c);               /* class Class / Class.class_eval -> a module */
   AN_STEP_V("desugar_inline_struct_blocks", desugar_inline_struct_blocks(c));      /* Struct.new(:x) { .. } -> (__spinel_struct_1 = Struct.new(:x) { .. }) */
   AN_STEP_V("desugar_singleton_class_meta", desugar_singleton_class_meta(c));      /* Foo.singleton_class.attr_accessor :a -> class << Foo; attr_accessor :a; end */
+  lower_run(c, &lc, LW_CLASS_BODY_VALUES);         /* x = class A; def k; end -> x = (class A; def k; end; :k) */
   /* Class.new(B) do..end held by no constant -> an anonymous class, a body
      the host grafts (its class_eval "<text>") and lowers as a class body;
      a constant's builder keeps its block, the class's frame */

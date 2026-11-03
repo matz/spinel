@@ -332,6 +332,9 @@ void nt_node_restore_str(NodeTable *nt, int id, const char *key, char *held);
 void nt_node_set_int(NodeTable *nt, int id, const char *key, long long val);
 void nt_node_set_ref(NodeTable *nt, int id, const char *key, int child);
 void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int n);
+/* Point parent's references to child old, in its ref fields and its array
+   fields, at with instead. */
+void nt_replace_child(NodeTable *nt, int parent, int old, int with);
 int  nt_new_int(NodeTable *nt, long long v);                     /* a new IntegerNode */
 /* Are the nodes appended at or after id `from` all local variable reads?
    Such a read is a leaf, so a whole-tree index built before it was appended

@@ -436,6 +436,7 @@ typedef struct {
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);
+int elab_write_value_kind(NodeKind k, int *may);   /* a write whose value the load walk places where the write stands */
 int elab_ref_last(const NodeTable *nt, int id, int ref);
 int elab_walk_enter(Compiler *c, int ch, ElabPos *pos);
 void elab_walk_leave(Compiler *c, int e);
@@ -771,7 +772,7 @@ enum {
   LW_REFUSE_SUPERCLASS_EXPRS, LW_RESCUE_BLOCK_BODIES,
   LW_MARK_SYM_PROC_BLOCKS, LW_BUILDER_BLOCK_PARAM, LW_BODY_LOCAL_SCOPES, LW_ERRNO_ALIASES, LW_PAREN_DEF_BODY, LW_MARK_MATCH_RANGES,
   LW_MARK_RANGE_LOCALS, LW_DUPLICATE_UNDERSCORE_PARAMS, LW_ENCODING_QUERIES, LW_ALIAS_METHOD_STRING_NAMES,
-  LW_ALIAS_METHOD_VALUES, LW_REASSIGNED_BLOCK_PARAMS,
+  LW_ALIAS_METHOD_VALUES, LW_REASSIGNED_BLOCK_PARAMS, LW_CLASS_BODY_VALUES,
   LW_ITSELF_RECEIVER, LW_TAP_VALUE_WRITE, LW_BLK_PARAM_WRITES, LW_REST_PARAM_WRITES, LW_YIELD_IN_CLOSURE,
   LW_SAFE_NAV_ATTR_WRITE, LW_CONST_ATTR_OP_ASSIGN, LW_STORED_ENUM_EACH, LW_SCOPE_NUMBERED_BLOCK_PARAMS,
   LW_SINGLETON_CLASS_DEFINE_METHOD, LW_EMPTY_HASH_COMPARE_BY_IDENTITY, LW_DEFINE_METHOD_PROC_ARG,
@@ -899,6 +900,7 @@ LowerFn desugar_forwarding_to_rest_callee_at, desugar_recursive_param_defaults_a
 LowerFn desugar_stored_enum_each_at;                                         /* analyze_desugar.c */
 LowerFn desugar_literal_undef_method_at, desugar_literal_undef_method_left;
 LowerFn desugar_alias_method_values_at, desugar_alias_method_values_left;
+LowerFn desugar_class_body_values_at, desugar_class_body_values_left;
 LowerFn desugar_singleton_class_define_method_at, desugar_singleton_class_define_method_left;
 LowerFn desugar_define_method_proc_arg_at, desugar_define_method_keywords_at;
 LowerFn desugar_block_implicit_rest_at, desugar_block_implicit_rest_left;

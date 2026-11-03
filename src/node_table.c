@@ -666,6 +666,24 @@ int nt_paren_peel(NodeTable *nt, int n) {
   return un;
 }
 
+/* See node_table.h. */
+void nt_replace_child(NodeTable *nt, int parent, int old, int with) {
+  SpNode *nd = (SpNode *)node_at(nt, parent);
+  if (!nd || old == with) return;
+  for (int j = 0; j < nd->nr; j++)
+    if (nd->r[j].ref == old) nt_node_set_ref(nt, parent, nd->r[j].key, with);
+  for (int j = 0; j < nd->na; j++) {
+    int n = nd->a[j].n, hit = 0;
+    for (int e = 0; e < n; e++) hit |= nd->a[j].ids[e] == old;
+    if (!hit) continue;
+    int *ids = malloc(sizeof(int) * (size_t)n);
+    if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int e = 0; e < n; e++) ids[e] = nd->a[j].ids[e] == old ? with : nd->a[j].ids[e];
+    nt_node_set_arr(nt, parent, nd->a[j].key, ids, n);
+    free(ids);
+  }
+}
+
 void nt_add_autoload(NodeTable *nt, int node, int file, const char *name, const char *path) {
   if (nt->nautoloads == nt->cautoloads) {
     nt->cautoloads = nt->cautoloads ? 2 * nt->cautoloads : 8;

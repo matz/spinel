@@ -19958,6 +19958,230 @@ static int sc_value_taken_at_once(const NodeTable *nt, const int *parent, int id
          (ok == NK_DefNode || ok == NK_ParenthesesNode || ok == NK_BlockNode || ok == NK_LambdaNode);
 }
 
+/* The value of a class, module or singleton class body is its last
+   statement's: nil for an empty body, a def's name, a nested body's own
+   value; any other statement runs in the body, with the class as self, so
+   its value leaves through a global of the site's (`$__spinel_cbv_<tag> =
+   e`), written at each of the last statement's value leaves
+   (for_each_value_position over an if, unless, case, plain begin,
+   parentheses, `&&` and `||`), so the statements inside those stay
+   statements for the passes that read a body by its shape. The passes read
+   a definition as a statement, so one whose value is taken
+   (sc_value_taken) becomes `(<definition>; <value>)`. A path with no leaf
+   (a missing else, an empty arm) gets an else or a statement that writes
+   nil, so every path writes the global last. A body with a rescue, or one
+   with a value leaf that a body pass reads by its shape (a receiverless
+   call: attr_accessor, private, include; a write as the last statement
+   itself; an alias or undef; a nested definition), or with an empty path
+   it cannot fill, keeps its form. */
+static int cbv_body_def(const NodeTable *nt, int id) {
+  NodeKind k = id >= 0 ? nt_kind(nt, id) : NK_NONE;
+  return k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode;
+}
+static int cbv_last(const NodeTable *nt, int id, int *body) {
+  int n = 0, b = nt_ref(nt, id, "body");
+  if (b >= 0 && nt_kind(nt, b) != NK_StatementsNode) return -2;
+  const int *st = b >= 0 ? nt_arr(nt, b, "body", &n) : NULL;
+  *body = b;
+  return n ? st[n - 1] : -1;
+}
+/* A value leaf of a body's last statement that `$g = leaf` can wrap: not a
+   statement a body pass reads by its shape (a receiverless call, an alias
+   or undef, and, as the last statement itself, a write), nor a definition
+   (whose value the row gives at its own site). */
+static int cbv_wrappable(const NodeTable *nt, int leaf, int last) {
+  NodeKind k = nt_kind(nt, leaf);
+  const char *ty = nt_type(nt, leaf);
+  return !(k == NK_CallNode && nt_ref(nt, leaf, "receiver") < 0) && !(last && ty && strstr(ty, "WriteNode")) &&
+         k != NK_AliasMethodNode && k != NK_AliasGlobalVariableNode && k != NK_UndefNode && !cbv_body_def(nt, leaf);
+}
+/* The value leaves of a body's last statement s: ids are the expression
+   leaves, nils the parent (an if, unless, case) of each path that answers
+   nil without a leaf, a missing else or an empty arm. */
+typedef struct { const NodeTable *nt; int last; int *ids, n, cap; int *nils, nn, ncap; } CbvLeaves;
+static void cbv_push(int **v, int *n, int *cap, int x) {
+  if (*n == *cap) {
+    *cap = *cap ? 2 * *cap : 8;
+    *v = realloc(*v, sizeof(int) * (size_t)*cap);
+    if (!*v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  (*v)[(*n)++] = x;
+}
+static int cbv_leaf(const VpLeaf *lf, void *ud) {
+  CbvLeaves *a = ud;
+  if (lf->kind == VPK_NIL && lf->parent >= 0) { cbv_push(&a->nils, &a->nn, &a->ncap, lf->parent); return 0; }
+  if (lf->kind == VPK_NIL) { cbv_push(&a->ids, &a->n, &a->cap, a->last); return 0; }   /* `()` */
+  if (lf->kind != VPK_EXPR || !cbv_wrappable(a->nt, lf->node, lf->node == a->last)) return 1;
+  cbv_push(&a->ids, &a->n, &a->cap, lf->node);
+  return 0;
+}
+enum { CBV_LEAF_FLAGS = VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_BEGIN_PLAIN | VPS_LOGIC };
+/* The `$g = nil` that fills an empty path of branch node p: g is NULL when
+   only counting. A slot is an empty statements field, or an else clause
+   (made when it is missing and create is set; a `case/in` without one
+   raises). How many it found. */
+static int cbv_nil_stmts(NodeTable *nt, int owner, const char *key, const char *g) {
+  int st = nt_ref(nt, owner, key), n = 0;
+  if (st >= 0 && (nt_kind(nt, st) != NK_StatementsNode || (nt_arr(nt, st, "body", &n), n))) return 0;
+  if (!g) return 1;
+  if (st < 0) { st = fwd_new_node_like(nt, owner, "StatementsNode"); nt_node_set_ref(nt, owner, key, st); }
+  int w = fwd_new_node_like(nt, owner, "GlobalVariableWriteNode");
+  nt_node_set_str(nt, w, "name", g);
+  nt_node_set_ref(nt, w, "value", fwd_new_node_like(nt, owner, "NilNode"));
+  nt_node_set_arr(nt, st, "body", &w, 1);
+  return 1;
+}
+static int cbv_nil_else(NodeTable *nt, int owner, const char *key, int create, const char *g) {
+  int e = nt_ref(nt, owner, key);
+  if (e >= 0) return nt_kind(nt, e) == NK_ElseNode ? cbv_nil_stmts(nt, e, "statements", g) : 0;
+  if (!create) return 0;
+  if (g) {
+    e = fwd_new_node_like(nt, owner, "ElseNode");
+    nt_node_set_ref(nt, owner, key, e);
+    cbv_nil_stmts(nt, e, "statements", g);
+  }
+  return 1;
+}
+static int cbv_nil_slots(NodeTable *nt, int p, const char *g) {
+  NodeKind k = nt_kind(nt, p);
+  int found = 0;
+  if (k == NK_IfNode || k == NK_UnlessNode)
+    return cbv_nil_stmts(nt, p, "statements", g) + cbv_nil_else(nt, p, k == NK_IfNode ? "subsequent" : "else_clause", 1, g);
+  if (k != NK_CaseNode && k != NK_CaseMatchNode) return 0;
+  int n = 0; const int *arms = nt_arr(nt, p, "conditions", &n);
+  for (int i = 0; i < n; i++) found += cbv_nil_stmts(nt, arms[i], "statements", g);
+  return found + cbv_nil_else(nt, p, "else_clause", k == NK_CaseNode, g);
+}
+/* Collect s's value leaves into l, and fill the empty paths when g is given.
+   0 when a leaf, or an empty path, has to keep its form. */
+static int cbv_leaves(const NodeTable *nt, int s, CbvLeaves *l) {
+  *l = (CbvLeaves){ nt, s, NULL, 0, 0, NULL, 0, 0 };
+  int ok = !for_each_value_position(nt, s, CBV_LEAF_FLAGS, cbv_leaf, l);
+  for (int i = 0; ok && i < l->nn; i++) {
+    int same = 0;
+    for (int j = 0; j < l->nn; j++) same += l->nils[j] == l->nils[i];
+    ok = cbv_nil_slots((NodeTable *)nt, l->nils[i], NULL) == same;
+  }
+  if (!ok) { free(l->ids); free(l->nils); }
+  return ok;
+}
+static int cbv_valued(const NodeTable *nt, int id) {
+  int b, s = cbv_last(nt, id, &b);
+  if (s < -1) return 0;
+  /* (`class << X; ...; self; end`: X's singleton class, sc_value_form) */
+  if (s >= 0 && nt_kind(nt, id) == NK_SingletonClassNode && nt_kind(nt, s) == NK_SelfNode) return 0;
+  if (s < 0 || nt_kind(nt, s) == NK_DefNode) return 1;
+  if (cbv_body_def(nt, s)) return cbv_valued(nt, s);
+  CbvLeaves l;
+  int ok = cbv_leaves(nt, s, &l);
+  if (ok) { free(l.ids); free(l.nils); }
+  return ok;
+}
+/* the node that answers body definition id's value (cbv_valued), its last
+   statement made to leave it where it must; par is the parent map */
+static int cbv_value(Compiler *c, const int *par, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int b, s = cbv_last(nt, id, &b);
+  if (s < 0) return fwd_new_node_like(nt, id, "NilNode");
+  if (cbv_body_def(nt, s)) return cbv_value(c, par, s);
+  if (nt_kind(nt, s) == NK_DefNode) {
+    int sym = fwd_new_node_like(nt, id, "SymbolNode");
+    nt_node_set_str(nt, sym, "value", nt_str(nt, s, "name"));
+    return sym;
+  }
+  char g[64];
+  snprintf(g, sizeof g, "$__spinel_cbv_%s", comp_node_tag(c, id));
+  CbvLeaves l;
+  cbv_leaves(nt, s, &l);
+  for (int i = 0; i < l.n; i++) {
+    int w = fwd_new_node_like(nt, l.ids[i], "GlobalVariableWriteNode");
+    nt_node_set_str(nt, w, "name", g);
+    nt_replace_child(nt, l.ids[i] == s ? b : par[l.ids[i]], l.ids[i], w);
+    nt_node_set_ref(nt, w, "value", l.ids[i]);
+  }
+  for (int i = 0; i < l.nn; i++) {
+    int first = 1;
+    for (int j = 0; j < i; j++) first &= l.nils[j] != l.nils[i];
+    if (first) cbv_nil_slots(nt, l.nils[i], g);
+  }
+  free(l.ids);
+  free(l.nils);
+  int r = fwd_new_node_like(nt, id, "GlobalVariableReadNode");
+  nt_node_set_str(nt, r, "name", g);
+  return r;
+}
+/* Is the value of body definition id taken (sc_value_taken)? Not where
+   the value-position walk throws it away (an_value_dropped: a loop's
+   body, an iterator's block, a BEGIN or END block), nor as the last
+   statement of a class builder's block (`Class.new do .. end`), whose
+   value the builder throws away. */
+static int cbv_taken(const NodeTable *nt, const int *par, int id) {
+  VpUp up;
+  if (!sc_value_taken(nt, par, id) || an_value_dropped(nt, par, id)) return 0;
+  vp_climb(nt, par, id, AN_DROP_CLIMB, &up);
+  int call = vp_up_block_call(nt, par, &up), recv = call >= 0 ? nt_ref(nt, call, "receiver") : -1;
+  return !(recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
+           is_class_builder(nt_str(nt, recv, "name"), nt_str(nt, call, "name")));
+}
+/* A statement that declares for the class (a body pass reads it by its
+   shape): attr_*, include, private, define_method, a visibility, an alias or
+   an undef. */
+static int cbv_directive(const NodeTable *nt, int id) {
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_AliasMethodNode || k == NK_AliasGlobalVariableNode || k == NK_UndefNode) return 1;
+  const char *n = k == NK_CallNode && nt_ref(nt, id, "receiver") < 0 ? nt_str(nt, id, "name") : NULL;
+  return n && (visibility_of_name(n) || is_mixin_call(n) || is_method_naming_call(n) || is_class_self_answer(n) ||
+               is_const_visibility_name(n));
+}
+/* Is there a directive under id, which the body passes would not see there:
+   anywhere but a def, block, lambda or definition body of its own? */
+static int cbv_buried_directive(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || cbv_body_def(nt, id)) return 0;
+  int nr = nt_num_refs(nt, id), na = nt_num_arrs(nt, id);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, id, i);
+    if (ch >= 0 && (cbv_directive(nt, ch) || cbv_buried_directive(nt, ch))) return 1;
+  }
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, id, i, &m);
+    for (int j = 0; j < m; j++) if (cbv_directive(nt, ids[j]) || cbv_buried_directive(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+/* The load walk places a directive the body holds as a statement, or inside
+   an if, begin or parentheses, when the definition stands as a statement or
+   as a write's value (elab_child). `(<definition>; <value>)` in the place of
+   one that is an argument or an operand hides a directive that is not a
+   statement of the body: such a body keeps its form. */
+static int cbv_hides_directive(const NodeTable *nt, int p, int id) {
+  int may, b, s = cbv_last(nt, id, &b), n = 0;
+  if (nt_kind(nt, p) == NK_StatementsNode || elab_write_value_kind(nt_kind(nt, p), &may)) return 0;
+  const int *st = s >= -1 && b >= 0 ? nt_arr(nt, b, "body", &n) : NULL;
+  for (int i = 0; i < n; i++)
+    if (!cbv_directive(nt, st[i]) && cbv_buried_directive(nt, st[i])) return 1;
+  return 0;
+}
+int desugar_class_body_values_left(Compiler *c, LowerCtx *lc, int id) {
+  const int *par = lower_parents(c, lc);
+  return par[id] >= 0 && cbv_valued(c->nt, id) && cbv_taken(c->nt, par, id) && !cbv_hides_directive(c->nt, par[id], id);
+}
+int desugar_class_body_values_at(Compiler *c, LowerCtx *lc, int id) {
+  if (!desugar_class_body_values_left(c, lc, id)) return 0;
+  NodeTable *nt = (NodeTable *)c->nt;
+  const int *par = lower_parents(c, lc);
+  int p = par[id], v = cbv_value(c, par, id);
+  if (nt_kind(nt, p) == NK_StatementsNode) cdef_insert_after(nt, p, id, v);
+  else {
+    int st = nt_new_node(nt, "StatementsNode"), pr = fwd_new_node_like(nt, id, "ParenthesesNode"), seq[2] = { id, v };
+    nt_node_set_arr(nt, st, "body", seq, 2);
+    nt_node_set_ref(nt, pr, "body", st);
+    nt_replace_child(nt, p, id, pr);
+  }
+  return 1;
+}
+
 /* Is X of the `class << X` at node id a class or a module: a `self` in a
    class, module or singleton class body or in a class method (`def self.m`)
    of one, or a constant a class or module definition of the program names? */

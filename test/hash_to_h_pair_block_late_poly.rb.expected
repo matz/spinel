@@ -1,0 +1,15 @@
+ok hi
+ok n
+{text: "hi", note: "n"}
+ok 
+ok n
+{text: "", note: "n"}
+{text: true, note: true}
+{a: 1}
+{a: 0}
+{b: 2}
+{[:b, 2] => 0}
+{"x" => 1, "y" => 2}
+{x: 1, y: 1}
+{"z" => 3}
+{z: 1}

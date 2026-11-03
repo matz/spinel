@@ -16010,6 +16010,13 @@ static sp_PolyArray *sp_poly_keys(sp_RbVal v) {
   sp_raise_nomethod(sp_nomethod_msg("keys", v));   /* nil and the rest named as CRuby does */
   return NULL;  /* unreachable: sp_raise_cls is noreturn */
 }
+/* What a boxed `x.to_h { |k| }` maps over: a Hash's keys, the one value
+   its block of one parameter binds (sp_poly_to_h_subject otherwise). */
+static sp_RbVal sp_poly_to_h_key_subject(sp_RbVal v) {
+  v = sp_poly_to_h_subject(v);
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_box_poly_array(sp_poly_keys(v));
+  return v;
+}
 static int sp_kwargs_name_in(const char *nm, const char *const *names) {
   for (const char *const *a = names; *a; a++) if (!strcmp(nm, *a)) return 1;
   return 0;

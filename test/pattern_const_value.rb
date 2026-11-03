@@ -20,3 +20,16 @@ p(case 3; in NAME then :name; else :no; end)
 p(case 1.5; in RATE then :rate; else :no; end)
 p(case :t; in TAG | LIMIT then :either; else :no; end)
 p(case [3, "a"]; in [LIMIT, NAME] then :pair; else :no; end)
+
+# an Integer or Float subject that holds nil equals no value
+ZERO = 0
+FZERO = 0.0
+def pick(i) = i.even? ? i : nil
+def pick_f(i) = i.even? ? 0.0 : nil
+v = pick(1); f = pick_f(1); w = pick(0)
+p(case v; in ZERO then :z; else :no; end)
+p(case f; in FZERO then :z; else :no; end)
+p(case v; in 0 then :z; else :no; end)
+p(case f; in 0.0 then :z; else :no; end)
+p(case w; in ZERO then :z; else :no; end)
+p(case v; in FZERO then :z; else :no; end)

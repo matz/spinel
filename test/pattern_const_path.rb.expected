@@ -24,3 +24,6 @@ M::J
 :n
 :inf
 NoMatchingPatternError
+[:ak, :ae, :ai, :no]
+"3: M::K === 3 does not return true"
+"4: 3 === 4 does not return true"

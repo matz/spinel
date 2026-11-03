@@ -64,3 +64,18 @@ begin
 rescue NoMatchingPatternError => e
   p e.class
 end
+
+# a constant that names a class tests that class
+module M
+  class Err < StandardError; end
+  AK = K; AE = Err; AI = Integer
+end
+begin; raise M::Err, "x"; rescue => e; ex = e; end
+p [(case M::K.new; in M::AK then :ak; else :no; end),
+   (case ex; in M::AE then :ae; else :no; end),
+   (case 3; in M::AI then :ai; else :no; end),
+   (case "s"; in M::AI then :ai; else :no; end)]
+
+# the NoMatchingPatternError message names the pattern
+begin; 3 => M::K; rescue NoMatchingPatternError => e; p e.message; end
+begin; 4 => M::N; rescue NoMatchingPatternError => e; p e.message; end

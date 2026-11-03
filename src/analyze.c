@@ -45377,6 +45377,188 @@ static void arysub_builtin_alias_recv_call(Compiler *c, int id) {
   }
 }
 
+/* A Time maker (at, now, utc, gm, local, mktime) on a Class value held in a
+   local or an instance variable (tzinfo's `def new_time(klass = Time) =
+   klass.at(...)`). With no class of the program defining that class method,
+   only Time and its subclasses answer it, so the call is the one each would
+   make: `k == Sub ? Sub.allocate.__sp_time_set(Time.at(args)) : k == Time ?
+   Time.at(args) : raise NoMethodError`, the subclasses' first. The receiver
+   is read again in each test, which a local or an ivar answers alike. */
+static int tmcv_node(Compiler *c, const char *type, int at) { return arysub_node(c, type, at); }
+static int tmcv_if(Compiler *c, int at, int pred, int yes, int no) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int ifn = tmcv_node(c, "IfNode", at), ys = tmcv_node(c, "StatementsNode", at);
+  int ns = tmcv_node(c, "StatementsNode", at), el = tmcv_node(c, "ElseNode", at);
+  if (ifn < 0 || ys < 0 || ns < 0 || el < 0) return -1;
+  nt_node_set_arr(nt, ys, "body", &yes, 1);
+  nt_node_set_arr(nt, ns, "body", &no, 1);
+  nt_node_set_ref(nt, el, "statements", ns);
+  nt_node_set_ref(nt, ifn, "predicate", pred);
+  nt_node_set_ref(nt, ifn, "statements", ys);
+  nt_node_set_ref(nt, ifn, "subsequent", el);
+  return ifn;
+}
+static int tmcv_const(Compiler *c, int at, const char *name) {
+  int k = tmcv_node(c, "ConstantReadNode", at);
+  if (k >= 0) nt_node_set_str((NodeTable *)c->nt, k, "name", name);
+  return k;
+}
+static int rewrite_time_maker_class_value(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  if (comp_class_index(c, "Time") >= 0 && !comp_ary_is_time(c, comp_class_index(c, "Time"))) {
+    /* (a program class named Time of its own: not the builtin's) */
+    if (c->classes[comp_class_index(c, "Time")].def_node >= 0) return 0;
+  }
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!nm || recv < 0) continue;
+    if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
+          sp_streq(nm, "local") || sp_streq(nm, "mktime"))) continue;
+    NodeKind rk = nt_kind(nt, recv);
+    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
+    if (infer_type(c, recv) != TY_CLASS) continue;
+    int ncc = 0;
+    comp_cmethod_candidates(c, nm, &ncc);
+    if (ncc > 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int base = nt->count;
+    /* the NoMethodError CRuby raises for any other class value */
+    char msg[96]; snprintf(msg, sizeof msg, "undefined method '%s' for class ", nm);
+    int str = tmcv_node(c, "StringNode", id);
+    if (str < 0) continue;
+    nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
+    int kname = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "to_s", -1, -1);
+    int full = arysub_new_call(c, id, str, "+", arysub_args(c, id, &kname, 1), -1);
+    int rargs[2] = { tmcv_const(c, id, "NoMethodError"), full };
+    int tail = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
+    /* Time's own arm */
+    {
+      int tc = tmcv_const(c, id, "Time");
+      int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &tc, 1), -1);
+      int call = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+      tail = tmcv_if(c, id, eq, call, tail);
+    }
+    /* each Time subclass's, ahead of Time's: its instance, made of Time's */
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!comp_ary_is_time(c, k) || !c->classes[k].name) continue;
+      const char *rn = class_ruby_name(c, k);
+      if (!rn) continue;
+      int kc = tmcv_const(c, id, rn);
+      int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
+      int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+      int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
+      int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
+      nt_node_set_int(nt, set, "builtin_only", 1);
+      tail = tmcv_if(c, id, eq, set, tail);
+    }
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+    int body = tmcv_node(c, "StatementsNode", id);
+    nt_node_set_arr(nt, body, "body", &tail, 1);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_ref(nt, id, "body", body);
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+    /* (the receiver's and the arguments' copies read in the call's scope) */
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      c->node_cbody[j] = c->node_cbody[id];
+      nt_node_set_int(nt, j, "node_line", line);
+      nt_node_set_int(nt, j, "node_file", file);
+    }
+    changed = 1;
+  }
+  return changed;
+}
+
+/* Whether the local `name` of node `at`'s scope holds a Time class value
+   from its writes alone: a parameter whose default, or a local whose every
+   write, is a constant naming Time or a Time subclass (tzinfo's
+   `def new_time(klass = Time)`). */
+static int tmcv_const_is_time(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || nt_kind(nt, v) != NK_ConstantReadNode || !nt_str(nt, v, "name")) return 0;
+  const char *n = nt_str(nt, v, "name");
+  if (sp_streq(n, "Time")) return comp_class_index(c, "Time") < 0 || comp_ary_is_time(c, comp_class_index(c, "Time"));
+  int k = comp_class_index(c, n);
+  return k >= 0 && comp_ary_is_time(c, k);
+}
+static int tmcv_local_holds_time_class(Compiler *c, int at, const char *name) {
+  const NodeTable *nt = c->nt;
+  Scope *s = comp_scope_of(c, at);
+  if (!s || !name) return 0;
+  int seen = 0;
+  if (s->def_node >= 0) {
+    int pn = nt_ref(nt, s->def_node, "parameters"), on = 0;
+    const int *op = pn >= 0 ? nt_arr(nt, pn, "optionals", &on) : NULL;
+    for (int i = 0; i < on; i++) {
+      const char *pnm = nt_str(nt, op[i], "name");
+      if (!pnm || !sp_streq(pnm, name)) continue;
+      if (!tmcv_const_is_time(c, nt_ref(nt, op[i], "value"))) return 0;
+      seen = 1;
+    }
+  }
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, name) || comp_scope_of(c, w) != s) continue;
+    if (!tmcv_const_is_time(c, nt_ref(nt, w, "value"))) return 0;
+    seen = 1;
+  }
+  return seen;
+}
+/* The early half of rewrite_time_maker_class_value: on such a local, each
+   Time subclass's arm goes in ahead of the type fixpoint, so the instance it
+   makes is one the program is known to make; the call itself stays as the
+   else, for the typed pass to finish. */
+static void rewrite_time_maker_class_local(Compiler *c, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0) return;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return;
+  if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
+        sp_streq(nm, "local") || sp_streq(nm, "mktime"))) return;
+  if (!tmcv_local_holds_time_class(c, id, nt_str(nt, recv, "name"))) return;
+  int ncc = 0;
+  comp_cmethod_candidates(c, nm, &ncc);
+  if (ncc > 0) return;
+  int args = nt_ref(nt, id, "arguments");
+  int base = nt->count;
+  int orig = arysub_new_call(c, id, nt_clone_subtree(nt, recv), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+  int tail = orig;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!comp_ary_is_time(c, k) || !c->classes[k].name) continue;
+    const char *rn = class_ruby_name(c, k);
+    if (!rn) continue;
+    int kc = tmcv_const(c, id, rn);
+    int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
+    int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+    int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
+    int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
+    nt_node_set_int(nt, set, "builtin_only", 1);
+    tail = tmcv_if(c, id, eq, set, tail);
+  }
+  if (tail == orig) return;
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  int body = tmcv_node(c, "StatementsNode", id);
+  nt_node_set_arr(nt, body, "body", &tail, 1);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", body);
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+    nt_node_set_int(nt, j, "node_line", line);
+    nt_node_set_int(nt, j, "node_file", file);
+  }
+}
+
 static void rewrite_array_subclass_calls(Compiler *c) {
   if (!c->has_arysub) return;
   const NodeTable *nt = c->nt;
@@ -45437,7 +45619,10 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       rewrite_array_subclass_new(c, id);
       if (nt_ref(nt, id, "receiver") < 0) rewrite_array_subclass_self_call(c, id);
     }
-    else if (k == NK_CallNode) rewrite_array_subclass_new(c, id);
+    else if (k == NK_CallNode) {
+      rewrite_array_subclass_new(c, id);
+      if (nt_kind(nt, id) == NK_CallNode) rewrite_time_maker_class_local(c, id);
+    }
   }
   if (nt->count > n0) {
     int m0 = nt->count;
@@ -50079,6 +50264,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_kernel_array_conv", desugar_kernel_array_conv(c));    /* Array(h) -> Array(h.to_ary) (Hash/String subclass's own) */
     ch |= AN_PASS("desugar_splat_to_a", desugar_splat_to_a(c));               /* [*h] -> [*h.to_a] (Hash, user #to_a) */
     ch |= AN_PASS("desugar_builtin_splat_forward", desugar_builtin_splat_forward(c));    /* @a.m(*args, &blk) on a builtin -> one fixed arity per args.size */
+    ch |= AN_PASS("rewrite_time_maker_class_value", rewrite_time_maker_class_value(c));  /* klass.at(..) on a Class value -> Time's, or a Time subclass's */
     ch |= AN_PASS("desugar_value_callable_forwards", desugar_value_callable_forwards(c));  /* &proc -> { |x| proc.call(x) } */
     if (AN_PASS("desugar_builtin_enum_calls", desugar_builtin_enum_calls(c))) {       /* recv.m(a) { } -> __enum_m(recv, a) { } */
       ch = 1;

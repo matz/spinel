@@ -2090,9 +2090,10 @@ const char *nil_value(TyKind t) {
 }
 
 /* Does the program ask whether class variable `nm` ("@@x") is set yet --
-   `defined?(@@x)` or `class_variable_defined?(:@@x)`? Only such a cvar
-   carries a cvar_<C>_<x>__set flag, so every other program's writes stay
-   plain stores. */
+   `defined?(@@x)`, `class_variable_defined?(:@@x)`, or
+   `class_variable_get(:@@x)`, which raises while it is not? Only such a
+   cvar carries a cvar_<C>_<x>__set flag, so every other program's writes
+   stay plain stores. */
 int cvar_defined_probed(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
   if (!nm) return 0;
@@ -2106,8 +2107,8 @@ int cvar_defined_probed(Compiler *c, const char *nm) {
       if (vk == NK_ClassVariableReadNode && nt_str(nt, v, "name") &&
           sp_streq(nt_str(nt, v, "name"), nm)) return 1;
     }
-    else if (kk == NK_CallNode && nt_str(nt, k, "name") &&
-             sp_streq(nt_str(nt, k, "name"), "class_variable_defined?")) {
+    else if (kk == NK_CallNode && is_cvar_reflection_name(nt_str(nt, k, "name")) &&
+             !is_cvar_set_name(nt_str(nt, k, "name"))) {
       int an = 0; int aa = nt_ref(nt, k, "arguments");
       const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &an) : NULL;
       if (an < 1) continue;
@@ -2127,6 +2128,16 @@ int cvar_defined_probed(Compiler *c, const char *nm) {
 void emit_cvar_set_flag(Compiler *c, int cid, const char *nm, int as_expr, Buf *b) {
   if (cid < 0 || !nm || !cvar_defined_probed(c, nm)) return;
   buf_printf(b, "cvar_%s_%s__set = 1%s", c->classes[cid].name, nm + 2, as_expr ? ", " : "; ");
+}
+
+/* CRuby's NameError for class variable `nm` that class `cid` neither
+   declares nor has set yet, "uninitialized class variable @@x in C", its
+   receiver (the class) and name staged inside the message argument, so
+   the text still opens with the raise the tail emitters recognize */
+void emit_cvar_name_error(Compiler *c, int cid, const char *nm, Buf *b) {
+  buf_printf(b, "sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
+                "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\"))",
+             cid, nm, nm, class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name);
 }
 
 /* The flag set after the store, in value position: `(cvar = rhs` + this +

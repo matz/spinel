@@ -8347,7 +8347,8 @@ int desugar_main_self_call(Compiler *c) {
    class no other class inherits from, or where the record places self at
    the call (a class or module body, or a builder's block, elab_self_at):
    self is that class, so the call is the `Klass.class_variable_*` spelling
-   the cvar reflection resolves. Bare, it was refused or dropped. */
+   the cvar reflection resolves, with a Symbol or a String name. Bare, it
+   was refused or dropped. */
 int desugar_cmethod_cvar_reflection(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, nk = 0;
@@ -8363,9 +8364,9 @@ int desugar_cmethod_cvar_reflection(Compiler *c) {
     if (recv >= 0 && (nt_kind(nt, recv) != NK_SelfNode || nt_int(nt, recv, "ie_self", 0))) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an < 1 || nt_kind(nt, av[0]) != NK_SymbolNode) continue;
-    const char *cvn = nt_str(nt, av[0], "value");
-    if (!cvn || cvn[0] != '@' || cvn[1] != '@') continue;
+    /* a literal name, a Symbol or a String; one that is no class
+       variable's raises NameError where the reflection is emitted */
+    if (an < 1 || !vis_arg_name(nt, av[0])) continue;
     Scope *s = comp_scope_of(c, id);
     if (!s || ie_class_of(c, id) != -1) continue;
     int cid = s->class_id < 0 ? elab_self_at(c, id) : -1;

@@ -24,3 +24,22 @@ false
 nil
 nil
 4
+[:@@missing, :@@missing, :@@missing, :@@missing, true, 1, 1]
+false
+false
+true
+true
+"'@@x-y' is not allowed as a class variable name"
+:"@@x-y"
+5
+true
+5
+[:@@s]
+"uninitialized class variable @@v in Later"
+:@@v
+1
+Later
+2
+NestHost
+true
+NestHost

@@ -137,3 +137,75 @@ class D
   def self.n = (@@n ||= 4)
 end
 p D.dy, D.n
+
+# an undeclared read stored into a typed class variable, global or
+# argument raises before the store
+class Typed
+  @@ready = true
+  @@i = 1
+  def self.take(x) = x
+  def self.go
+    r = []
+    begin; @@ready = @@missing; rescue NameError => e; r << e.name; end
+    begin; @@i = @@missing; rescue NameError => e; r << e.name; end
+    begin; $tg = 1; $tg = @@missing; rescue NameError => e; r << e.name; end
+    begin; take(true); take(@@missing); rescue NameError => e; r << e.name; end
+    r << @@ready << @@i << $tg
+  end
+end
+p Typed.go
+
+# a class_variable_set, bare or on self, in a class_eval block nested in
+# another class's acts on the inner receiver, not on the outer one
+class NestHost; end
+class NestOther; end
+NestHost.class_eval { NestOther.class_eval { class_variable_set(:@@o, 2) } }
+NestHost.class_eval { NestOther.class_eval { self.class_variable_set(:@@q, 3) } }
+p NestHost.class_variable_defined?(:@@o), NestHost.class_variable_defined?(:@@q)
+p NestOther.class_variable_defined?(:@@o), NestOther.class_variable_defined?(:@@q)
+
+# a String name, and a name that is no class variable's, given to the
+# reflection on the implicit self of a class body
+class Refl
+  class_variable_set("@@s", 5)
+  def self.s = @@s
+  begin
+    class_variable_set(:"@@x-y", 1)
+  rescue NameError => e
+    p e.message, e.name
+  end
+  p class_variable_get("@@s"), class_variable_defined?("@@s")
+end
+p Refl.s, Refl.class_variables
+
+# class_variable_get of a declared variable that no write has set yet
+class Later
+  begin
+    class_variable_get(:@@v)
+  rescue NameError => e
+    p e.message, e.name
+  end
+  @@v = 1
+  p class_variable_get(:@@v)
+  def self.peek
+    Later.class_variable_get(:@@w)
+  rescue NameError => e
+    e.receiver
+  end
+  def self.set = (@@w = 2)
+end
+p Later.peek
+Later.set
+p Later.peek
+
+# ...but a program's own instance_eval runs its block where it stands, and
+# a block argument's expression runs with the class_eval block's self
+class OwnEval
+  def instance_eval(&b) = b.call
+end
+own = OwnEval.new
+p(NestHost.class_eval { own.instance_eval { self } })
+NestHost.class_eval { own.instance_eval { class_variable_set(:@@own, 1) } }
+p NestHost.class_variable_defined?(:@@own)
+def keep_self(x) = proc { x }
+p(NestHost.class_eval { NestOther.instance_exec(&keep_self(self)) })

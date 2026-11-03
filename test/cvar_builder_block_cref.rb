@@ -152,3 +152,31 @@ class Plain
   def self.a = @@a
 end
 p Plain.h, Plain.a
+
+# a builder block's multiple assignment into a variable an ||= leaves
+# nullable, and a nil element into it
+class Tup
+  @@x ||= 1
+  Struct.new(:a) { @@x, y = 2, 3 }
+  def self.x = @@x
+  @@n ||= 1
+  Struct.new(:a) { @@n, z = nil, 3 }
+  def self.n = @@n
+end
+p Tup.x, Tup.n
+
+# an anonymous Class.new block's variable is the enclosing class's only:
+# the new class's own reflection does not find it
+class AnonReg
+  k = Class.new do
+    @@r = 1
+    def self.g = class_variable_get(:@@r)
+  end
+  begin
+    k.g
+  rescue NameError => e
+    p e.name
+  end
+  def self.r = @@r
+end
+p AnonReg.r

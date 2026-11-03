@@ -3606,6 +3606,77 @@ static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const
   return 1;
 }
 
+/* class-variable reflection (class_variable_get, _set, _defined?) with a
+   literal @@name on a constant class receiver: resolve to the cvar's C
+   global (#2694). 1 when emitted. */
+static int emit_cvar_reflection(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name,
+                                int recv, int argc, const int *argv) {
+  if (!is_cvar_reflection_name(name) || argc < 1) return 0;
+  NodeKind aty2_k = nt_kind(nt, argv[0]);
+  const char *cvn = (aty2_k == NK_SymbolNode) ? nt_str(nt, argv[0], "value")
+                  : (aty2_k == NK_StringNode) ? nt_str(nt, argv[0], "content") : NULL;
+  NodeKind rty2_k = nt_kind(nt, recv);
+  int ccid = (rty2_k == NK_ConstantReadNode) ? const_node_class_index(c, recv) : -1;
+  if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid < 0)
+    ccid = view_class_is(c, recv, ELAB_GAIN_CVARS);   /* a class-tag arm's */
+  /* a name written out that is no class variable name (`:"@@x-y"`, `:x`):
+     CRuby's NameError when the call runs, its receiver the class and its
+     name the text, valued as the call's dead tail (the name's C identifier
+     would not even compile), the value argument evaluated first */
+  if (cvn && ccid >= 0 && !cvar_name_ok(cvn)) {
+    char msg[400]; snprintf(msg, sizeof msg, "'%s' is not allowed as a class variable name", cvn);
+    buf_puts(b, "(");
+    for (int a = 1; a < argc; a++) { buf_puts(b, "(void)("); emit_expr(c, argv[a], b); buf_puts(b, "), "); }
+    buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), sp_exc_stage_name(", ccid);
+    emit_str_literal(b, cvn);
+    buf_puts(b, "), ");
+    emit_str_literal(b, msg);
+    buf_printf(b, ")), %s))", raise_tail_value(repr_of(c, id).as_ty));
+    return 1;
+  }
+  if (cvn && ccid >= 0) {
+    int rcid = ccid;   /* the receiver, which the NameError names */
+    ccid = comp_cvar_owner(c, ccid, cvn);
+    int cvi = comp_cvar_index(&c->classes[ccid], cvn);
+    char ref[300]; snprintf(ref, sizeof ref, "cvar_%s_%s", c->classes[ccid].name, cvn + 2);
+    if (is_cvar_defined_name(name)) {
+      if (cvi >= 0) buf_printf(b, "(%s__set != 0)", ref);
+      else buf_puts(b, "0");
+      return 1;
+    }
+    if (cvi >= 0) {
+      TyKind ct = c->classes[ccid].cvar_types[cvi];
+      /* a variable not set yet raises, as an undeclared one does */
+      if (is_cvar_get_name(name)) {
+        buf_printf(b, "((%s__set ? (void)0 : ", ref);
+        emit_cvar_name_error(c, rcid, cvn, b);
+        buf_puts(b, "), ");
+        emit_boxed_text(c, ct, ref, b);
+        buf_puts(b, ")");
+        return 1;
+      }
+      if (is_cvar_set_name(name) && argc == 2) {
+        buf_printf(b, "(%s = ", ref);
+        if (ct == TY_POLY) emit_boxed(c, argv[1], b);
+        /* (a slot that holds a String's handle takes the String's) */
+        else if (ct == TY_STRBUF) { buf_puts(b, "SP_STR_HDL("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+        else emit_expr(c, argv[1], b);
+        buf_puts(b, ", ");
+        emit_cvar_set_flag(c, ccid, cvn, 1, b);
+        emit_boxed_text(c, ct, ref, b); buf_puts(b, ")");
+        return 1;
+      }
+    }
+    else if (is_cvar_get_name(name)) {
+      buf_puts(b, "(");
+      emit_cvar_name_error(c, rcid, cvn, b);
+      buf_puts(b, ", sp_box_nil())");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* SomeClass.superclass -> the parent class as sp_Class value */
   if (recv >= 0 && argc == 0 && sp_streq(name, "superclass") &&
@@ -4251,62 +4322,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         return 1;
       }
     }
-    /* class-variable reflection with a literal @@name on a constant class
-       receiver: resolve to the cvar's C global (#2694). */
-    if ((sp_streq(name, "class_variable_get") || sp_streq(name, "class_variable_set") ||
-         sp_streq(name, "class_variable_defined?")) && argc >= 1) {
-      NodeKind aty2_k = nt_kind(nt, argv[0]);
-      const char *cvn = (aty2_k == NK_SymbolNode) ? nt_str(nt, argv[0], "value")
-                      : (aty2_k == NK_StringNode) ? nt_str(nt, argv[0], "content") : NULL;
-      NodeKind rty2_k = nt_kind(nt, recv);
-      int ccid = (rty2_k == NK_ConstantReadNode) ? const_node_class_index(c, recv) : -1;
-      if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid < 0)
-        ccid = view_class_is(c, recv, ELAB_GAIN_CVARS);   /* a class-tag arm's */
-      /* a name written out that is no class variable name (`:"@@x-y"`,
-         `:x`): CRuby's NameError when the call runs, its receiver the class
-         and its name the text, valued as the call's dead tail (the name's C
-         identifier would not even compile) */
-      if (cvn && ccid >= 0 && !cvar_name_ok(cvn)) {
-        char msg[400]; snprintf(msg, sizeof msg, "'%s' is not allowed as a class variable name", cvn);
-        buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), sp_exc_stage_name(", ccid);
-        emit_str_literal(b, cvn);
-        buf_puts(b, "), ");
-        emit_str_literal(b, msg);
-        buf_printf(b, ")), %s)", raise_tail_value(repr_of(c, id).as_ty));
-        return 1;
-      }
-      if (cvn && cvn[0] == '@' && cvn[1] == '@' && ccid >= 0) {
-        ccid = comp_cvar_owner(c, ccid, cvn);
-        int cvi = comp_cvar_index(&c->classes[ccid], cvn);
-        char ref[300]; snprintf(ref, sizeof ref, "cvar_%s_%s", c->classes[ccid].name, cvn + 2);
-        if (sp_streq(name, "class_variable_defined?")) {
-          if (cvi >= 0) buf_printf(b, "(%s__set != 0)", ref);
-          else buf_puts(b, "0");
-          return 1;
-        }
-        if (cvi >= 0) {
-          TyKind ct = c->classes[ccid].cvar_types[cvi];
-          if (sp_streq(name, "class_variable_get")) { emit_boxed_text(c, ct, ref, b); return 1; }
-          if (sp_streq(name, "class_variable_set") && argc == 2) {
-            buf_printf(b, "(%s = ", ref);
-            if (ct == TY_POLY) emit_boxed(c, argv[1], b);
-            /* (a slot that holds a String's handle takes the String's) */
-            else if (ct == TY_STRBUF) { buf_puts(b, "SP_STR_HDL("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-            else emit_expr(c, argv[1], b);
-            buf_puts(b, ", ");
-            emit_cvar_set_flag(c, ccid, cvn, 1, b);
-            emit_boxed_text(c, ct, ref, b); buf_puts(b, ")");
-            return 1;
-          }
-        }
-        else if (sp_streq(name, "class_variable_get")) {
-          buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), "
-                        "sp_exc_stage_name(\"%s\"), \"uninitialized class variable %s in %s\")), sp_box_nil())",
-                     ccid, cvn, cvn, class_ruby_name(c, ccid) ? class_ruby_name(c, ccid) : c->classes[ccid].name);
-          return 1;
-        }
-      }
-    }
+    if (emit_cvar_reflection(c, id, b, nt, name, recv, argc, argv)) return 1;
     /* Klass === obj is obj.is_a?(Klass): does the operand's runtime class have
        the receiver class among its ancestors. Only for a user-class receiver --
        the primitive type names (Integer === 5, Comparable === 5) have their own

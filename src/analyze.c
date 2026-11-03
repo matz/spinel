@@ -43165,7 +43165,15 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   int pre[32];
   int npre = 0;
   char tn[64];
-  if (!splat_leaf_node(nt, recv)) {
+  /* CRuby reads the receiver and each argument in turn. A local or ivar read
+     ahead of the last argument that runs code (or of a splat that is not a
+     local) is held, as is a local splat: that code may change them. */
+  int last_run = -1;
+  for (int k = 0; k < argc; k++)
+    if (k == sp_at ? !ex_local : !splat_leaf_node(nt, argv[k])) last_run = k;
+  NodeKind rk = nt_kind(nt, recv);
+  if (!splat_leaf_node(nt, recv) ||
+      (last_run >= 0 && (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode))) {
     snprintf(tn, sizeof tn, "__splr%s", comp_node_tag(c, id));
     scope_local_intern(comp_scope_of(c, id), tn);
     int w = nt_new_node(nt, "LocalVariableWriteNode");
@@ -43181,7 +43189,9 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   char snm[64];
   for (int k = 0; k < argc; k++) {
     fargs[k] = argv[k];
-    if (k == sp_at && !ex_local) {
+    NodeKind ak = nt_kind(nt, k == sp_at ? ex : argv[k]);
+    int held = k < last_run && (ak == NK_LocalVariableReadNode || ak == NK_InstanceVariableReadNode);
+    if (k == sp_at && (!ex_local || held)) {
       snprintf(snm, sizeof snm, "__spls%s", comp_node_tag(c, id));
       scope_local_intern(comp_scope_of(c, id), snm);
       int arr = nt_new_node(nt, "ArrayNode");
@@ -43195,7 +43205,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
       aview = 0;
       continue;
     }
-    if (k == sp_at || splat_leaf_node(nt, argv[k])) continue;
+    if (k == sp_at || (splat_leaf_node(nt, argv[k]) && !held)) continue;
     /* Hash.new's capacity lowering reads the keyword's key. Hold its value
        once, but keep the explicit pair for that lowering in each arm. */
     if (ctor == 1 && nt_kind(nt, argv[k]) == NK_KeywordHashNode) {

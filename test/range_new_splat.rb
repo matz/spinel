@@ -70,6 +70,34 @@ p Range.new(*lo, flag)
 p Range.new(*lo, ARGV.size > 5)
 p Range.new(*hl, flag)
 
+# a later argument that runs code sees the receiver, the arguments ahead
+# of it and a splatted local as they were when the call read them
+sa = [1, 2]
+sa << 3 if ARGV.size > 5
+p Range.new(*sa, (sa.pop; false))
+sb = [9]
+sb << 8 if ARGV.size > 5
+x = 1
+p Range.new(*sb, x, (x = 2; true))
+class Lo
+  def rs(s) = Range.new(*s, @lo, bump)
+end
+p Lo.new.rs(sb)
+x = 1
+def three = [3]
+p Range.new(x, *(x = 5; three))
+cs = [6, "-"]
+cs << 3 if ARGV.size > 5
+begin
+  "ab".center(*cs, (cs.pop; 0))
+rescue ArgumentError => e
+  p e.message
+end
+str = "hello"
+ks = [1]
+ks << 2 if ARGV.size > 5
+p str.slice(*ks, (str = "zz"; 2))
+
 # a `**` that comes out empty passes no flag
 none = {}
 some = { a: 1 }

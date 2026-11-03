@@ -6390,8 +6390,11 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
 
 /* A call with no receiver (implicit self, a class body's, a free function) and a Kernel conversion sent to an explicit receiver (infer_call_inner's rules, in their order) */
 static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind *out) {
+  /* `Kernel.sleep(x)` with its receiver dropped (desugar_kernel_recv) is
+     Kernel's: no method of self's answers it, as comp_self_call_mi says */
+  int kernel = nt_int(nt, id, "kernel_recv", 0);
   /* implicit-self call inside an instance method */
-  if (recv < 0) {
+  if (recv < 0 && !kernel) {
     Scope *self = comp_scope_of(c, id);
     if (self->class_id >= 0 && ie_class_of(c, id) < 0) {
       /* inside a class method self is the class, so its class methods come
@@ -6479,7 +6482,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
      The scope walk records the enclosing class body per node in node_cbody[id]
      (a bare module-body cmethod call, e.g. `take(mk)` where mk is
      `def self.mk`). */
-  if (recv < 0) {
+  if (recv < 0 && !kernel) {
     int cbody = c->node_cbody[id];
     if (cbody >= 0) {
       int smi = call_target(c, id, cbody, name, CT_CMETHOD, NULL);
@@ -6489,7 +6492,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     }
   }
   /* bare call inside an instance_eval/exec block: dispatch on receiver class */
-  if (recv < 0) {
+  if (recv < 0 && !kernel) {
     int iec = ie_class_of(c, id);
     if (iec >= 0) {
       int imi = call_target(c, id, iec, name, 0, NULL);

@@ -53,6 +53,7 @@ module OpenSSL
       @encrypting = true
       @key = ""
       @iv = ""
+      @iv_len = nil
       @auth_data = ""
       @parts = []
       @emitted = 0
@@ -75,19 +76,28 @@ module OpenSSL
     end
 
     def key_len = CIPHERS[@name][0]
-    def iv_len  = CIPHERS[@name][1]
+    # the iv length #iv= takes: the cipher's own (12 for GCM) unless the
+    # program set another with #iv_len=, as CRuby's GCM takes any
+    def iv_len  = @iv_len || CIPHERS[@name][1]
 
+    def iv_len=(n)
+      n = n.to_int
+      raise ArgumentError, "iv_len must be positive" unless n > 0
+      @iv_len = n
+      n
+    end
+
+    # A key or an iv of the wrong length is CRuby's ArgumentError, with its
+    # message ("key must be 16 bytes"), not a CipherError.
     def key=(k)
-      unless k.bytesize == key_len
-        raise CipherError, "key must be #{key_len} bytes for #{@name}"
-      end
+      raise ArgumentError, "key must be #{key_len} bytes" unless k.bytesize == key_len
       @key = [k].join
       restart
       k
     end
 
     def iv=(v)
-      raise CipherError, "iv must not be empty" if v.empty?
+      raise ArgumentError, "iv must be #{iv_len} bytes" unless v.bytesize == iv_len
       @iv = [v].join
       restart
       v

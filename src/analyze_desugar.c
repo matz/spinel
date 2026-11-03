@@ -289,7 +289,7 @@ int desugar_bare_class_self_calls(Compiler *c) {
    bar` there. A private one, or one of a module Enumerable includes, is not
    reached through self on these receivers yet, so it keeps the bare call. */
 static int ie_enum_reopen_answers(Compiler *c, int cls, const char *nm) {
-  if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls)) return 0;
+  if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls) || comp_ary_is_time(c, cls)) return 0;
   int en = comp_core_class(c, CORE_ENUMERABLE);
   int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
   if (mi < 0) return 0;
@@ -374,7 +374,7 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
     int cls = sc ? sc->class_id : -1;
     if (sc && sc->is_cmethod) continue;
     if (cls >= 0) {
-      if (cls == obj || class_def_is_module(nt, c->classes[cls].def_node)) continue;
+      if (cls == obj || comp_class_is_module(c, &c->classes[cls])) continue;
       if (call_target(c, id, cls, nm, 0, NULL) >= 0) continue;
     }
     /* at the top level self is main, an Object; a top-level `def` of the
@@ -1151,116 +1151,6 @@ static int xs_body_extends_self(const NodeTable *nt, int mod) {
   for (int i = 0; i < bn; i++) if (xs_is_extend_self(nt, bb[i])) return 1;
   return 0;
 }
-/* The class methods a module defines itself, in every body of it: a
-   `def self.name` or `def Mod.name`, and in a `class << self` or
-   `class << Mod` a def or an alias (`alias`, `alias_method`) of the name.
-   The module's singleton class holds them and answers before the module
-   `extend self` brought in, so a `def self.name` clone of the instance def
-   must not take their place. key is the module the entries belong to. */
-typedef struct { int key; const char *name; int writer; } XsOwn;   /* writer: the name of `name=` */
-static void xs_add_own_w(XsOwn **v, int *n, int *cap, int key, const char *nm, int writer) {
-  if (!nm) return;
-  if (*n >= *cap) {
-    *cap = *cap ? *cap * 2 : 8;
-    *v = (XsOwn *)realloc(*v, sizeof(XsOwn) * (size_t)*cap);
-    if (!*v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  (*v)[*n].key = key; (*v)[*n].writer = writer; (*v)[(*n)++].name = nm;
-}
-static void xs_add_own(XsOwn **v, int *n, int *cap, int key, const char *nm) { xs_add_own_w(v, n, cap, key, nm, 0); }
-static int xs_is_module_ref(const NodeTable *nt, int r, const char *mname) {
-  if (r < 0) return 0;
-  if (nt_kind(nt, r) == NK_SelfNode) return 1;
-  const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
-  return rn && mname && sp_streq(rn, mname);
-}
-static void xs_collect_own(const NodeTable *nt, int mod, int key, XsOwn **v, int *n, int *cap) {
-  int body = class_def_body(nt, mod);
-  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return;
-  const char *mname = class_def_name(nt, mod);
-  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
-  for (int i = 0; i < bn; i++) {
-    if (nt_kind(nt, bb[i]) == NK_DefNode && xs_is_module_ref(nt, nt_ref(nt, bb[i], "receiver"), mname))
-      xs_add_own(v, n, cap, key, nt_str(nt, bb[i], "name"));
-    if (nt_kind(nt, bb[i]) != NK_SingletonClassNode || !xs_is_module_ref(nt, nt_ref(nt, bb[i], "expression"), mname)) continue;
-    int sb = nt_ref(nt, bb[i], "body");
-    if (sb < 0 || nt_kind(nt, sb) != NK_StatementsNode) continue;
-    int sn = 0; const int *ss = nt_arr(nt, sb, "body", &sn);
-    for (int j = 0; j < sn; j++) {
-      const char *cn = nt_str(nt, ss[j], "name");
-      if (nt_kind(nt, ss[j]) == NK_DefNode && nt_ref(nt, ss[j], "receiver") < 0) xs_add_own(v, n, cap, key, cn);
-      else if (nt_kind(nt, ss[j]) == NK_AliasMethodNode) {
-        int nn = nt_ref(nt, ss[j], "new_name");
-        xs_add_own(v, n, cap, key, nn >= 0 ? nt_str(nt, nn, "value") : NULL);
-      }
-      else if (nt_kind(nt, ss[j]) == NK_CallNode && nt_ref(nt, ss[j], "receiver") < 0 && cn && is_alias_method_name(cn)) {
-        int a = nt_ref(nt, ss[j], "arguments"), an = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-        xs_add_own(v, n, cap, key, an >= 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL);
-      }
-      else if (nt_kind(nt, ss[j]) == NK_CallNode && nt_ref(nt, ss[j], "receiver") < 0 && cn &&
-               (is_attr_reader_family(cn) || is_attr_writer_family(cn))) {
-        /* `attr_reader :x` names the reader x, `attr_writer :x` the writer x= */
-        int a = nt_ref(nt, ss[j], "arguments"), an = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-        for (int q = 0; q < an; q++) {
-          const char *an_ = nt_kind(nt, av[q]) == NK_SymbolNode ? nt_str(nt, av[q], "value") : NULL;
-          if (is_attr_reader_family(cn)) xs_add_own_w(v, n, cap, key, an_, 0);
-          if (is_attr_writer_family(cn)) xs_add_own_w(v, n, cap, key, an_, 1);
-        }
-      }
-    }
-  }
-}
-/* is nm, a reader (writer 0) or writer (1) name, a class method the module
-   (key has) defines itself? */
-static int xs_owns(const XsOwn *own, int nown, int has, const char *nm, int writer) {
-  size_t l = strlen(nm);
-  for (int k = 0; k < nown; k++) {
-    if (own[k].key != has) continue;
-    if (own[k].writer == writer && sp_streq(own[k].name, nm)) return 1;
-    /* a `def self.nm=` is entered by its whole name */
-    const char *on = own[k].name;
-    if (writer && !own[k].writer && strlen(on) == l + 1 && strncmp(on, nm, l) == 0 && on[l] == '=') return 1;
-  }
-  return 0;
-}
-/* `attr_accessor :a, :b` (or attr_reader / attr_writer) as a direct statement
-   of the body: the same call in a `class << self` beside it, without the
-   names the module defines itself as class methods; -1 when none is left
-   or the call is another shape. */
-static int xs_singleton_attr(NodeTable *nt, int st, const XsOwn *own, int nown, int has) {
-  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return -1;
-  const char *cn = nt_str(nt, st, "name");
-  if (!cn || !(is_attr_reader_family(cn) || is_attr_writer_family(cn))) return -1;
-  int args = nt_ref(nt, st, "arguments"), an = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an <= 0) return -1;
-  for (int q = 0; q < an; q++) if (nt_kind(nt, av[q]) != NK_SymbolNode) return -1;
-  int call = nt_clone_subtree(nt, st);
-  int cargs = call >= 0 ? nt_ref(nt, call, "arguments") : -1;
-  if (cargs < 0) return -1;
-  int cn_ = 0; const int *cv = nt_arr(nt, cargs, "arguments", &cn_);
-  int *keep = (int *)malloc(sizeof(int) * (size_t)cn_); int nk = 0;
-  if (!keep) return -1;
-  for (int q = 0; q < cn_; q++) {
-    const char *an_ = nt_str(nt, cv[q], "value");
-    if (!an_ || (is_attr_reader_family(cn) && xs_owns(own, nown, has, an_, 0)) ||
-        (is_attr_writer_family(cn) && xs_owns(own, nown, has, an_, 1))) continue;
-    keep[nk++] = cv[q];
-  }
-  if (nk > 0) nt_node_set_arr(nt, cargs, "arguments", keep, nk);
-  free(keep);
-  if (nk == 0) return -1;
-  int sc = fwd_new_node_like(nt, st, "SingletonClassNode");
-  int sbody = fwd_new_node_like(nt, st, "StatementsNode");
-  int sf = fwd_new_node_like(nt, st, "SelfNode");
-  if (sc < 0 || sbody < 0 || sf < 0) return -1;
-  nt_node_set_arr(nt, sbody, "body", &call, 1);
-  nt_node_set_ref(nt, sc, "expression", sf);
-  nt_node_set_ref(nt, sc, "body", sbody);
-  return sc;
-}
 static int program_defines_name(const NodeTable *nt, int n0, const char *name);
 static int program_defines_name_off_class(const NodeTable *nt, int n0, const char *name, int recv);
 /* The paths the program writes, for the receiver of an instance_eval:
@@ -1480,90 +1370,6 @@ int desugar_instance_eval_defs(Compiler *c) {
   free(body_of);
   ied_paths_free(&ip);
   if (changed) comp_grow_node_arrays(c);
-  return changed;
-}
-
-int desugar_extend_self(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  /* The namespace keys of the modules some body of which carries the
-     statement, taken before any body is rewritten (the statement is dropped
-     as its body is), so a reopening after that body still finds it; a
-     same-named module elsewhere has another key. */
-  enum { XS_MAX = 256 };
-  char keys[XS_MAX][512]; int nkeys = 0;
-  for (int id = 0; id < n0 && nkeys < XS_MAX; id++) {
-    if (!class_def_is_module(nt, id) || !xs_body_extends_self(nt, id)) continue;
-    xs_module_key(nt, id, keys[nkeys], sizeof keys[nkeys]);
-    nkeys++;
-  }
-  /* what each of those modules defines as its own class methods, in all
-     of its bodies, before any body is rewritten */
-  XsOwn *own = NULL;
-  int nown = 0, cown = 0;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_module(nt, id)) continue;
-    char key[512];
-    xs_module_key(nt, id, key, sizeof key);
-    for (int k = 0; k < nkeys; k++)
-      if (sp_streq(keys[k], key)) { xs_collect_own(nt, id, k, &own, &nown, &cown); break; }
-  }
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_is_module(nt, id)) continue;
-    int body = class_def_body(nt, id);
-    if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
-    char key[512];
-    xs_module_key(nt, id, key, sizeof key);
-    int has = -1;
-    for (int k = 0; k < nkeys && has < 0; k++) if (sp_streq(keys[k], key)) has = k;
-    if (has < 0) continue;
-    /* the module stays its own extender once the statement is dropped: its
-       instance aliases answer on the module (resolve_alias_side) */
-    nt_node_set_int(nt, id, "extends_self", 1);
-    int *nb = (int *)malloc(sizeof(int) * (size_t)(bn * 2 + 1)); int nbn = 0;
-    int *old = (int *)malloc(sizeof(int) * (size_t)bn);
-    if (!nb || !old) { free(nb); free(old); continue; }
-    memcpy(old, bb, sizeof(int) * (size_t)bn);
-    for (int i = 0; i < bn; i++) {
-      int st = old[i];
-      if (xs_is_extend_self(nt, st)) continue;   /* dropped: the clones are what it meant */
-      nb[nbn++] = st;
-      if (xs_is_include(nt, st)) {
-        int ext = nt_clone_subtree(nt, st);
-        if (ext < 0) continue;
-        nt_node_set_str(nt, ext, "name", "extend");
-        nb[nbn++] = ext;
-        continue;
-      }
-      int sattr = xs_singleton_attr(nt, st, own, nown, has);
-      if (sattr >= 0) { nb[nbn++] = sattr; continue; }
-      if (nt_kind(nt, st) != NK_DefNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      const char *dn = nt_str(nt, st, "name");
-      int mine = 0;
-      size_t dl = dn ? strlen(dn) : 0;
-      int dw = dl > 1 && dn[dl - 1] == '=' && (isalnum((unsigned char)dn[dl - 2]) || dn[dl - 2] == '_');   /* `def x=`, not `def ==`: an attr writer's base name matches it */
-      for (int k = 0; dn && k < nown && !mine; k++)
-        mine = own[k].key == has && (own[k].writer ? dw && strlen(own[k].name) == dl - 1 && strncmp(own[k].name, dn, dl - 1) == 0
-                                                   : sp_streq(own[k].name, dn));
-      if (mine) continue;   /* the module's own class method stands */
-      int clone = nt_clone_subtree(nt, st);
-      if (clone < 0) continue;
-      int sf = nt_new_node(nt, "SelfNode");
-      if (sf < 0) continue;
-      nt_node_set_ref(nt, clone, "receiver", sf);
-      nt_node_set_int(nt, clone, "extend_self", 1);   /* (the record sees no extend: a hook it stands for is not fired) */
-      /* the module's instance method, seen on the module through its own
-         extend: the scope walk makes it the module's copy (origin_module_ci) */
-      nt_node_set_int(nt, clone, "extend_self_copy", 1);
-      nb[nbn++] = clone;
-    }
-    nt_node_set_arr(nt, body, "body", nb, nbn);
-    free(nb); free(old);
-    comp_grow_node_arrays(c);
-    changed = 1;
-  }
-  free(own);
   return changed;
 }
 
@@ -11103,8 +10909,7 @@ static void fwd_ns_key(const NodeTable *nt, int id, char *key, size_t cap);
 /* The class or module whose body holds each node (fwd_body_holds), the
    first of them in node order before it, or -1. Asked by scanning every
    node before it, per node and per level of nesting, the namespace keys
-   (desugar_extend_self takes one per module, fwd_resolve_const one per
-   candidate class) grew with the square of the program. The holders are
+   (fwd_resolve_const takes one per candidate class) grew with the square of the program. The holders are
    entered in node order, statement by statement, only as far as a
    question needs: up to the statement of the first one holding the node,
    where the scan stopped too, and never past the node. A tree (again
@@ -12014,6 +11819,11 @@ static void extended_module_names(const NodeTable *nt, ANameHash *names) {
       if ((ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) && anm && !anh_has(names, anm))
         anh_add(names, anm);
     }
+  }
+  /* and a module whose own body says `extend self` (it extends itself) */
+  for (int m = 0; m < nt->count; m++) {
+    const char *mn = class_def_is_module(nt, m) && xs_body_extends_self(nt, m) ? class_def_name(nt, m) : NULL;
+    if (mn && !anh_has(names, mn)) anh_add(names, mn);
   }
 }
 
@@ -15117,7 +14927,7 @@ static int enum_is_a_chain(Compiler *c, const char *rn, const int *defcls, const
    or a constant reads as it stands, and any other (a reader,
    `def first(*args) = items.first(*args)`) is held in a temporary first, so
    it runs once. A builtin taking any number of arguments keeps its splat. */
-#define SPL_MAX_ARITY 4
+#define SPL_MAX_ARITY 7
 static int spl_pure_recv(const NodeTable *nt, int r) {
   NodeKind k = nt_kind(nt, r);
   return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || k == NK_SelfNode ||
@@ -15198,8 +15008,16 @@ int desugar_builtin_splat_forward(Compiler *c) {
     if (sv < 0 || nt_kind(nt, sv) != NK_LocalVariableReadNode) continue;
     const char *rest = nt_str(nt, sv, "name");
     Scope *ms = comp_scope_of(c, id);
-    if (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
-        !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest)) continue;
+    /* Time.new takes the fields one by one: a splatted Array local
+       (`Time.new(*fields)`) was read whole as the year. (Time's other
+       makers, at, utc, local, gm and mktime, read a splat as it is.) */
+    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
+               sp_streq(nt_str(nt, recv, "name"), "Time") &&
+               /* (a reopen of Time leaves Time.new alone unless it defines its own) */
+               (comp_class_index(c, "Time") < 0 || comp_cmethod_in_chain(c, comp_class_index(c, "Time"), "new", NULL) < 0) &&
+               sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
+    if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
+        !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;
     /* the block: none, the method's own (`&block`, or the yielding literal
        a forward of it became), or the caller's own literal */
     int blk = nt_ref(nt, id, "block"), own = 0;
@@ -15211,13 +15029,19 @@ int desugar_builtin_splat_forward(Compiler *c) {
         own = 1;
       } else own = spl_has_yield(nt, blk);
     }
-    TyKind rt = infer_type(c, recv);
-    const char *cls = ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
-                    : rt == TY_STRING ? "String" : NULL;
-    if (!cls) continue;
-    /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself) */
+    TyKind rt = tnew ? TY_CLASS : infer_type(c, recv);
+    /* (a Time subclass instance's builtin call, its `super` into Time
+       included, is Time's) */
+    const char *cls = tnew ? NULL : ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
+                    : rt == TY_STRING ? "String" : rt == TY_TIME ? "Time"
+                    : ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt)) &&
+                      nt_int(nt, id, "builtin_only", 0) ? "Time" : NULL;
+    if (!cls && !tnew) continue;
+    /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself); Time.new's,
+       which it does not list, as CRuby's message gives them */
     int lo = 0, hi = 0; const char *lo_exp = NULL, *hi_exp = NULL;
-    if (!builtin_class_arity_spec(cls, nm, &lo, &hi, &lo_exp, &hi_exp) || hi > SPL_MAX_ARITY || !hi_exp) continue;
+    if (tnew) { lo = 0; hi = 7; hi_exp = "0..7"; }
+    else if (!builtin_class_arity_spec(cls, nm, &lo, &hi, &lo_exp, &hi_exp) || hi > SPL_MAX_ARITY || !hi_exp) continue;
     int base = nt->count;
     /* the receiver held once, where reading it again could answer another */
     int hold = -1;
@@ -16230,6 +16054,11 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       if (nt_kind(nt, def) != NK_DefNode) continue;
       const char *name = nt_str(nt, def, "name");
       if (!name) continue;
+      /* a method the body leaves private or protected (`private :m`, a
+         bare `private` above it): its copy serves the class's own calls
+         (bare, `self.`), and a call with another receiver keeps its name,
+         so the visibility check refuses it (bx_closed, below) */
+      int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
       if (pn0 >= 0 && (nt_ref(nt, pn0, "block") >= 0 || nt_ref(nt, pn0, "rest") >= 0 ||
@@ -16269,6 +16098,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int lo = clone;
       bi_self_to_local(nt, lo, hi, mn, 1);
       { char gn[256]; snprintf(gn, sizeof gn, "%s%s", sp_bx_prefix[bx], name); nt_node_set_str(nt, clone, "name", gn); }
+      if (closed) nt_node_set_int(nt, clone, "bx_closed", 1);
       int bi = sp_builtin_extra_name_index(bx, name);
       if (bi >= 0) {
         if (gdef[bx][bi] >= 0) nt_subtree_blank(nt, gdef[bx][bi]);
@@ -16343,6 +16173,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
         if (sp_streq(odef_name[k][m], cn0) && odef_def[k][m] >= 0) { bx = k; gd = odef_def[k][m]; break; }
     }
     if (gd < 0) continue;
+    /* a private or protected method's copy takes no call with an explicit
+       receiver other than self (`__self` in a copy) */
+    if (nt_int(nt, gd, "bx_closed", 0)) {
+      int r = nt_ref(nt, id, "receiver");
+      const char *rn = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+      if (r >= 0 && nt_kind(nt, r) != NK_SelfNode && !(rn && sp_streq(rn, "__self"))) continue;
+    }
     int in_copy = (int)nt_int(nt, id, "bx_in_copy", -1), rec = -1;
     for (int a = in_copy; a >= 0 && rec < 0; a = (int)nt_int(nt, a, "bx_in_copy", -1))
       if ((int)nt_int(nt, a, "bx_def", -1) == gd) rec = a;

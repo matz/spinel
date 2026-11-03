@@ -7760,7 +7760,7 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
   /* an Array subclass instance is frozen as its Array is (#7449); a Hash
      subclass instance, as its Hash is, by the header bit, and a String
      subclass instance as its String handle is, by the same bit */
-  if (c->classes[cid].ary_root > 0 && !c->classes[cid].ary_hash && !c->classes[cid].ary_str) buf_printf(b, "if ((%s)->ary.frozen) ", selfexpr);
+  if (c->classes[cid].ary_root > 0 && !c->classes[cid].ary_hash && !c->classes[cid].ary_str && !c->classes[cid].ary_time) buf_printf(b, "if ((%s)->ary.frozen) ", selfexpr);
   else buf_printf(b, "if (sp_gc_is_frozen((void *)%s)) ", selfexpr);
   buf_printf(b,
       "sp_raise_frozen_obj(sp_box_obj((void *)%s, %d), (&(\"\\xff\" \"can't modify frozen %s\")[1])); ",

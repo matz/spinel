@@ -2396,6 +2396,7 @@ const char *arysub_array_ctype(Compiler *c, int cid);   /* codegen.c: an Array s
 void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b);
 void arysub_box_id(Compiler *c, TyKind t, Buf *b);   /* the cls_id an object's box carries */
 int program_has_arysub(Compiler *c);
+int program_has_timesub(Compiler *c);   /* codegen.c: some class is a Time subclass (sp_timesub_copy) */
 int program_has_strsub(Compiler *c);   /* a class of the program that subclasses String */
 void emit_obj_switch_key(Compiler *c, int tv, Buf *b);   /* codegen.c: a class switch's key, Array subclasses included */
 void emit_poly_recv_deref(Compiler *c, int recv, const char *name, Buf *b);   /* codegen.c: a dispatch receiver read as its String value, a String subclass with its own method kept */
@@ -3076,7 +3077,7 @@ const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_class_struct(Compiler *c, ClassInfo *ci, Buf *b);
 int class_needs_scan(ClassInfo *ci);
 void emit_class_scan(Compiler *c, ClassInfo *ci, Buf *b);
-int comp_class_is_module(Compiler *c, ClassInfo *ci);
+int comp_class_is_module(Compiler *c, const ClassInfo *ci);
 int hv_value_class(Compiler *c, int recv);   /* analyze_infer.c (#4846) */
 void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b);
 int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr);

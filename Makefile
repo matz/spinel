@@ -4224,7 +4224,7 @@ endif
 # two weeks are pruned when the test results are cleared.
 GATE_CACHE ?= 1
 export GATE_CACHE
-RESULT_CACHE_HARNESS := 1
+RESULT_CACHE_HARNESS := 2
 RESULT_CACHE_FP = $(if $(filter 0,$(GATE_CACHE)),off,$(eval RESULT_CACHE_FP := $(shell RC_CC="$(CC)" tools/result_cache.sh fp $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(SPINEL_TIMEOUT) -- pch $(PCH_ROOT) $(PCH_FLAGS)))$(RESULT_CACHE_FP))
 # A `<test>.rb.opt` file beside a test names the C optimization flag it is
 # compiled with (`-O0`), for a test whose C is a shape the optimizer does not
@@ -4328,13 +4328,14 @@ elif [ $$built -eq 0 ]; then \
   else \
     : > "$$experr.n"; \
   fi; \
-  if cmp -s "$$exp.n" "$$act.n" && cmp -s "$$experr.n" "$$acterr.n"; then \
+  if cmp -s "$$exp.n" "$$act.n" && cmp -s "$$experr.n" "$$acterr.n" && [ "$$run_rc" -lt 129 ]; then \
     echo PASS > "$@"; \
     if [ -n "$$ckey" ]; then echo PASS | tools/result_cache.sh put "$$ckey"; fi; \
     if [ -t 1 ]; then printf .; fi; \
   else \
     echo FAIL > "$@"; \
     { if [ "$$run_rc" -eq 124 ]; then echo "=== timed out: 10 s of CPU, or the clock backstop of 60 s (the output below is partial) ==="; fi; \
+      if [ "$$run_rc" -ge 129 ]; then echo "=== killed by signal $$((run_rc - 128)) (a program that dies by a signal fails, whatever it printed) ==="; fi; \
       echo "=== stdout diff (expected vs actual) ==="; diff -u "$$exp.n" "$$act.n" || true; \
       echo "=== stderr diff (expected vs actual) ==="; diff -u "$$experr.n" "$$acterr.n" || true; } > "$@.diff" 2>&1; \
     if [ -t 1 ]; then printf F; fi; \

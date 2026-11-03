@@ -1,0 +1,10 @@
+[true, true, true, false]
+[true, true, true]
+iterable
+sized
+[false, true, true, false]
+[false, true, false]
+not iterable
+unsized
+true
+true

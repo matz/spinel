@@ -1697,9 +1697,6 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     int defrecv = nt_ref(c->nt, id, "receiver");
     if (defrecv >= 0) {
       { s->is_cmethod = 1; comp_touch_scope(s->idx); }
-      /* desugar_extend_self's class-side copy of a module's instance method
-         came from the module, as an extend's transplant does */
-      if (class_id >= 0 && nt_int(c->nt, id, "extend_self_copy", 0)) { s->origin_module_ci = class_id + 1; comp_touch_scope(s->idx); }
       defrecv = nt_def_receiver(c->nt, defrecv);
       /* `def Klass.foo` with an explicit constant receiver (typically defined
          outside the class body, where the enclosing class_id is -1) attaches
@@ -2161,8 +2158,9 @@ static void mf_copy_entries(Compiler *c);
 /* Mark a module's module functions as class-level (is_cmethod=1, no self
    param). This lets them be called as bare functions when their module is
    included at the top level. The record's copies name them (mf_copy_entries);
-   what it does not hold is a body that `extend self` makes the module's own,
-   and the arms of a conditional def, which this reads from the tree. */
+   what it does not hold is the arms of a conditional def, which this reads
+   from the tree. (`extend self` is an extend of the module on itself, which
+   the record holds and register_extends copies, not a module function.) */
 void register_module_functions(Compiler *c) {
   const NodeTable *nt = c->nt;
   mf_copy_entries(c);
@@ -2179,41 +2177,15 @@ void register_module_functions(Compiler *c) {
     if (body < 0) continue;
     int bn = 0;
     const int *stmts = nt_arr(nt, body, "body", &bn);
-    int extend_self = 0, arms_mf = 0;
-    /* `extend self` is the other spelling of module_function, and unlike it
-       the placement carries no meaning: it makes EVERY method of the module
-       callable on the module itself, wherever in the body it sits. So scan
-       for it first. (module_function also makes the instance copies
-       private; a module written this way is called as `M.f` -- the same
-       assumption the record's copies already make.) */
-    for (int k = 0; k < bn; k++) {
-      int s = stmts[k];
-      NodeKind sk = nt_kind(nt, s);
-      if (sk != NK_CallNode || nt_ref(nt, s, "receiver") >= 0) continue;
-      const char *nm = nt_str(nt, s, "name");
-      if (!nm || !sp_streq(nm, "extend")) continue;
-      int an = 0;
-      int anode = nt_ref(nt, s, "arguments");
-      const int *aargs = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
-      if (an == 1 && nt_kind(nt, aargs[0]) == NK_SelfNode) { extend_self = 1; break; }
-    }
+    int arms_mf = 0;
     for (int k = 0; k < bn; k++) {
       int s = stmts[k];
       const char *sty = nt_type(nt, s);
-      NodeKind sk = nt_kind(nt, s);
       if (!sty) continue;
       /* arms take only a bare module_function of this body, earlier */
       if (mf_bare_call(nt, s, "module_function")) arms_mf = 1;
       if (mf_call_apply(c, ci, s, stmts, k)) continue;
       if (arms_mf) mf_mark_cond_arms(c, ci, s, NULL);
-      if (sk == NK_DefNode && extend_self) {
-        for (int mi = 0; mi < c->nscopes; mi++) {
-          if (c->scopes[mi].def_node == s) {
-            mf_mark(c, mi);
-            break;
-          }
-        }
-      }
     }
   }
 }
@@ -4557,7 +4529,7 @@ static void mf_copy_entries(Compiler *c) {
   if (n && !src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++) {
     src[i] = -1;
-    if (!a[i].sg || a[i].cls < 0 || !class_def_is_module(c->nt, c->classes[a[i].cls].def_node)) continue;
+    if (!a[i].sg || a[i].cls < 0 || !comp_class_is_module(c, &c->classes[a[i].cls])) continue;
     if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
     src[i] = mf_entry_scope(c, &a[i]);
     int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
@@ -6693,14 +6665,14 @@ static void mark_array_subclasses(Compiler *c) {
   /* the program's reopens of Array and Hash, which a subclass's chain
      reaches above its root */
   int aro = comp_core_class(c, CORE_ARRAY), hro = comp_core_class(c, CORE_HASH);
-  int sro = comp_core_class(c, CORE_STRING);
+  int sro = comp_core_class(c, CORE_STRING), tro = comp_core_class(c, CORE_TIME);
   for (int i = 0; i < c->nclasses; i++) {
     int r = i;
     for (int g = 0; c->classes[r].parent >= 0 && c->classes[r].parent != r &&
                     c->classes[r].parent != hro && c->classes[r].parent != aro &&
-                    c->classes[r].parent != sro && g < 256; g++)
+                    c->classes[r].parent != sro && c->classes[r].parent != tro && g < 256; g++)
       r = c->classes[r].parent;
-    if (r == hro || r == aro || r == sro) continue;
+    if (r == hro || r == aro || r == sro || r == tro) continue;
     if (!class_def_is_class(c->nt, c->classes[r].def_node)) continue;
     const char *par = builtin_value_superclass(c, class_def_super(c->nt, c->classes[r].def_node));
     if (is_embedding_builtin(par)) {
@@ -6708,6 +6680,8 @@ static void mark_array_subclasses(Compiler *c) {
       c->classes[i].ary_hash = sp_streq(par, "Hash");
       c->classes[i].ary_str = sp_streq(par, "String");
       if (c->classes[i].ary_str) { c->classes[r].ary_kind = TY_STRBUF; comp_touch_class(c->classes[r].idx); }
+      c->classes[i].ary_time = sp_streq(par, "Time");
+      if (c->classes[i].ary_time) { c->classes[r].ary_kind = TY_TIME; comp_touch_class(c->classes[r].idx); }
       c->has_arysub = 1;
     }
   }
@@ -8044,6 +8018,10 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
        `include` of the same module had made, with the class object cast
        to an instance pointer (#4648). */
     if (src->class_id != mod_id || (src->is_cmethod && !src->is_module_function) || !src->name) continue;
+    /* an accessor the singleton class declares itself (`class << self;
+       attr_reader :x`) answers before any module the class extends; only a
+       singleton prepend goes in front of it */
+    if (!prepend && comp_sg_accessor_own(c, ci, src->name)) continue;
     int own = comp_cmethod_in_class(c, ci, src->name);
     if (own >= 0 && inherited) continue;
     /* The class's own class method comes first, and a module it extends
@@ -8152,7 +8130,7 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
          copy behind the class's own method is out of reach of a call. */
       if (cp >= 0 && !own_name)
         comp_cmethod_extend_vis_set(&c->classes[ci], src->name, src->is_module_function && ci != mod_id
-                                    ? SP_VIS_PRIVATE : comp_method_vis(&c->classes[mod_id], src->name));
+                                    ? SP_VIS_PRIVATE : comp_method_vis_in_chain(c, mod_id, src->name));
       if (own_name) {
         if (cp >= 0) { free(c->scopes[cp].name); c->scopes[cp].name = strdup(behind); comp_scope_set_shadow(c, cp, SHADOW_INC, src->name); }
         free(c->scopes[own].name);
@@ -8887,7 +8865,7 @@ void specialize_inherited_cls_new(Compiler *c) {
       Scope *encl = comp_scope_of(c, id);
       if (rn && sp_streq(rn, "class") && rr >= 0 && nt_kind(nt, rr) == NK_SelfNode &&
           mname && !sp_streq(mname, "new") && encl && !encl->is_cmethod && encl->class_id >= 0 &&
-          !class_def_is_module(nt, c->classes[encl->class_id].def_node)) {
+          !comp_class_is_module(c, &c->classes[encl->class_id])) {
         int base = encl->class_id;
         /* the enclosing class too: one that inherits the method holds its
            own class-level ivars as its descendants do */

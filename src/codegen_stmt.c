@@ -17628,6 +17628,9 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
         emit_stmt_or_defer(c, stmts[k], b, indent);
         continue;
       }
+      /* a mixin naming a class (`include K`, the load record's mark):
+         CRuby's TypeError where the statement runs, not a declaration */
+      if (nt_int(nt, stmts[k], "mixin_class_arg", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       int executable = prog_stmt_call_executable(c, stmts[k], ci);
       /* A name nothing defines -- no method of any class or module in the
          program, no Module or Object method, no declaration the analysis
@@ -19404,7 +19407,14 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
                            sp_streq(nm, "attr"))) {
       /* These are class-body declarations handled at analysis time; skip.
          Exception: a visibility call naming a method the class does not
-         define raises NameError when the body executes, per CRuby. */
+         define raises NameError when the body executes, per CRuby, and a
+         mixin of a class (`include K`) raises TypeError there (the load
+         record marks it, and mixes nothing in). */
+      if (nt_int(nt, id, "mixin_class_arg", 0)) {
+        emit_indent(b, indent);
+        buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");
+        return 1;
+      }
       if (visibility_of_name(nm) > BVIS_MODULE_FUNCTION) {
         int vcid = g_class_body_id >= 0 ? g_class_body_id
                  : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
@@ -21146,6 +21156,18 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       int owner;
       const_name_owner(c, id, &owner);
       emit_class_const_name(c, key, nm, owner, b, indent);
+    }
+    /* a constant of no fixed kind (`X = [Class.new].first`) names the class
+       it holds when it holds one, as CRuby names any class a constant's
+       first write holds */
+    else if (!isg && lv->type == TY_POLY && c->has_anonymous_classes) {
+      int owner;
+      const_name_owner(c, id, &owner);
+      const char *prefix = owner >= 0 ? class_ruby_name(c, owner) : NULL;
+      emit_indent(b, indent);
+      buf_printf(b, "if (cst_%s.tag == SP_TAG_CLASS && cst_%s.cls_id != SP_CLASS_BY_NAME) "
+                    "sp_class_assign_name(sp_unbox_class(cst_%s), SPL(\"%s%s%s\"));\n",
+                 key, key, key, prefix ? prefix : "", prefix ? "::" : "", nm);
     }
     if (!isg) emit_const_write_last_value(c, lv, key, b, indent);
     return 1;

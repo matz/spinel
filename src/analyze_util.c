@@ -3942,6 +3942,9 @@ int name_is_synth_method(Compiler *c, const char *m) {
      (desugar_noarg_display_wrappers); the space is no `def`'s, so a method
      the program names `__noarg_inspect` is its own */
   if (strncmp(m, "__noarg ", 8) == 0) return 1;
+  /* `__bind x`: the method a bind_call of an attr accessor's
+     instance_method calls (desugar_bind_attr_helpers), spaced as __noarg is */
+  if (strncmp(m, "__bind ", 7) == 0) return 1;
   /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
      so an override can reach it through super (#3738); a name no such copy
      has, as `__inc foo`, is the program's own */
@@ -4187,11 +4190,19 @@ const char *class_value_instance_method_sym(Compiler *c, int node) {
    do not pass: *armless is set for them. */
 int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless) {
   if (ci < 0 || ci >= c->nclasses || is_builtin_reopen(c->classes[ci].name)) return -1;
-  int mi = comp_method_in_chain(c, ci, sym, NULL);
+  int mdc = -1, mi = comp_method_in_chain(c, ci, sym, &mdc);
+  /* an attr reader or writer declared below any def of the name binds its
+     `__bind x`, a method of the class that declares it
+     (desugar_bind_attr_helpers) */
+  char hn[300], base[256];
+  int hdc = -1, hmi = snprintf(hn, sizeof hn, "__bind %s", sym) < (int)sizeof hn ? comp_method_in_chain(c, ci, hn, &hdc) : -1;
+  int attr = setter_base_name(sym, base, sizeof base) ? comp_writer_in_chain(c, ci, base, NULL)
+                                                      : comp_reader_in_chain(c, ci, sym, NULL);
+  if (hmi >= 0 && attr && (mi < 0 || (hdc != mdc && is_descendant(c, hdc, mdc)))) mi = hmi;
   if (mi < 0) return -1;
   const ClassInfo *k = &c->classes[ci];
   Scope *tm = &c->scopes[mi];
-  if (k->is_value_type || class_def_is_module(c->nt, k->def_node) ||
+  if (k->is_value_type || comp_class_is_module(c, k) ||
       tm->yields || (tm->blk_param && tm->blk_param[0])) {
     if (armless) *armless = 1;
     return -1;
@@ -4203,16 +4214,18 @@ int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *arml
    a class it has no arm for: a user class the arms skip, a builtin the
    program reopens with the method, or, for a Class value the run time
    picks, a core class's method of the name, which a builtin class held in
-   it would answer. The call is refused rather than raise NameError there. */
+   it would answer. The call is refused rather than raise NameError there.
+   A class constant binds its own class's alone. */
 int class_value_bind_call_gap(Compiler *c, int node) {
   const char *sym = class_value_instance_method_sym(c, node);
   if (!sym) return 0;
+  int recv = nt_ref(c->nt, node, "receiver");
+  int sci = infer_type(c, recv) == TY_CLASS && !class_recv_is_dynamic(c, recv) ? class_recv_static_ci(c, recv) : -1;
   int armless = 0;
-  for (int k = 0; k < c->nclasses && !armless; k++) {
+  for (int k = sci >= 0 ? sci : 0; k < (sci >= 0 ? sci + 1 : c->nclasses) && !armless; k++) {
     if (is_builtin_reopen(c->classes[k].name)) armless = comp_method_in_chain(c, k, sym, NULL) >= 0;
     else (void)class_value_bind_call_target(c, k, sym, &armless);
   }
-  int recv = nt_ref(c->nt, node, "receiver");
   return armless || (core_method_name(sym) && class_recv_static_ci(c, recv) < 0);
 }
 

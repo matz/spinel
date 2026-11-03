@@ -18,7 +18,9 @@ typedef struct sp_StringIO_s {
                           shared read-only so #string keeps identity (the
                           first mutation copies it private) */
   int64_t len, cap, pos, lineno;
-  int closed;
+  int closed;          /* the sides it does not take: SIO_NO_READ (1) for an
+                          output-only mode ("w", "a"), SIO_NO_WRITE (2) for
+                          "r"; #close sets both, and #closed? asks for both */
   int borrowed;
   /* --share-strings: the String the StringIO is opened on, as its shared
      handle (sp_StringIO_new_h): the handle holds the bytes, and buf, len

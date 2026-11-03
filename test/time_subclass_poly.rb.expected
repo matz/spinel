@@ -1,0 +1,24 @@
+3
+"JST"
+32400
+true
+true
+false
+TimeWithOffset
+nil
+18
+"03:04 "
+2026-01-02 03:04:05 +0900
+2026-01-02 03:04:05 +0900
+own JST
+time 1970
+other x
+[TimeWithOffset, Time, String]
+"offset JST"
+"plain"
+shown 1970
+#<Shown 1970>
+shown 1970
+[#<Shown 1970>, "x"]
+stamp
+end

@@ -4,7 +4,7 @@ def configured(bits, iv, decrypting, tag)
   c = OpenSSL::Cipher.new("aes-#{bits}-gcm")
   decrypting ? c.decrypt : c.encrypt
   c.key = 'k' * (bits / 8)
-  c.iv_len = iv.bytesize if RUBY_ENGINE != 'spinel'
+  c.iv_len = iv.bytesize
   c.iv = iv
   c.auth_data = 'context'
   c.auth_tag = tag if decrypting

@@ -958,11 +958,14 @@ typedef struct {
      class of the chain. The comp_ary_* / comp_arysub_* functions answer for
      both; the Array-only ones say so. A String subclass is the same with its
      String, a mutable handle (sp_String) by value: ary_str is set on every
-     class of the chain and ary_kind is TY_STRBUF. */
+     class of the chain and ary_kind is TY_STRBUF. A Time subclass embeds
+     its Time value (sp_Time) the same way: ary_time is set on every class of
+     the chain and ary_kind is TY_TIME. */
   int ary_root;
   TyKind ary_kind;
   int ary_hash;
   int ary_str;
+  int ary_time;
   char *c_struct;      /* e.g. "sp_StringIO", or NULL */
   char *native_free;   /* finalizer C symbol, or NULL */
   /* native_subclass "header", "scan": the class may be subclassed (#9269);
@@ -2289,6 +2292,8 @@ int        comp_array_method_name(const char *n);
 /* the class chain of cid embeds a Hash, not an Array */
 int        comp_ary_is_hash(Compiler *c, int cid);
 int        comp_ary_is_str(Compiler *c, int cid);
+int        comp_ary_is_time(Compiler *c, int cid);
+int        comp_timesub_copy_name(Compiler *c, const char *n);
 int        comp_arysub_emb(Compiler *c, int cid);
 int        comp_arysub_str_boxed(const char *n);
 int        comp_arysub_builtin(Compiler *c, int cid);

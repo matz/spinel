@@ -2849,7 +2849,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       /* A MODULE has no `new`, and no constructor is emitted for one: giving it
          an arm called an sp_<Module>_new that nothing defines, and the program
          failed to link (#3965). */
-      if (class_def_is_module(nt, c->classes[ci].def_node)) continue;
+      if (comp_class_is_module(c, &c->classes[ci])) continue;
       if (emit_user_new_arm(c, id, ci, 0, NULL, 1, rt2, b)) continue;
       /* a zero-arg .new can only construct a class whose initialize takes no
          required args; an arg-requiring ctor is CRuby's ArgumentError, and its
@@ -3013,7 +3013,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
           continue;
         } }
       if (!c->classes[ci].instantiated) continue;
-      if (class_def_is_module(nt, c->classes[ci].def_node)) continue;   /* a module has no `new` (#3965) */
+      if (comp_class_is_module(c, &c->classes[ci])) continue;   /* a module has no `new` (#3965) */
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
       if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, initm, rt2, b)) continue;
@@ -3163,6 +3163,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     int acid = const_node_class_index(c, recv);
+    /* allocate is Class's: a module raises NoMethodError (#10751) */
+    if (acid >= 0 && comp_class_is_module(c, &c->classes[acid])) {
+      const char *mn = class_ruby_name(c, acid); if (!mn) mn = c->classes[acid].name;
+      buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_stage_recv_msg(\"undefined method 'allocate' for module %s\", sp_box_class((sp_Class){%d}))), sp_box_nil())", mn, acid);
+      return 1;
+    }
     if (acid >= 0 && (!class_is_exc_subclass(c, acid) ||
         comp_cmethod_in_chain(c, acid, "allocate", NULL) < 0)) {
       emit_obj_alloc_expr(c, acid, b);
@@ -3711,6 +3717,12 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       nt_str(nt, recv, "name")) {
     int ci = const_node_class_index(c, recv);
     if (ci >= 0) {
+      /* superclass is Class's: a module raises NoMethodError (#10751) */
+      if (comp_class_is_module(c, &c->classes[ci])) {
+        const char *mn = class_ruby_name(c, ci); if (!mn) mn = c->classes[ci].name;
+        buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_stage_recv_msg(\"undefined method 'superclass' for module %s\", sp_box_class((sp_Class){%d}))), (sp_Class){0})", mn, ci);
+        return 1;
+      }
       int par = c->classes[ci].parent;
       if (par >= 0) { buf_printf(b, "((sp_Class){%d})", par); return 1; }
       /* a reopened builtin class: the builtin's own superclass */

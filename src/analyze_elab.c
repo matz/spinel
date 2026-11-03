@@ -1987,6 +1987,21 @@ static int lr_remove_shadowed(Compiler *c, int node, const char *nm, int cls, in
    singleton methods. nested: a form the statement holds in its parts
    (lr_nested_part), whose own call the form's answers (lr_form_runs, an opaque
    call) are not asked of. */
+/* Does a mixin call name a class where a module is expected (`include K`,
+   `extend String`): one of the program's, a builtin one the program reopens,
+   or a builtin class by name? CRuby checks every argument before mixing any
+   in, so the statement raises TypeError and brings nothing. */
+static int lr_mix_names_class(Compiler *c, const int *av, int ac) {
+  const NodeTable *nt = c->nt;
+  for (int i = 0; i < ac; i++) {
+    int m = lr_class_ref_at(c, av[i], NULL);
+    if (m >= 0 && m < c->nclasses) { if (!comp_class_is_module(c, &c->classes[m])) return 1; continue; }
+    const char *nm = nt_kind(nt, av[i]) == NK_ConstantReadNode ? nt_str(nt, av[i], "name") : NULL;
+    if (nm && m == LR_UNKNOWN_CLASS && is_builtin_class_name(nm) && !is_builtin_module_name(nm)) return 1;
+  }
+  return 0;
+}
+
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2043,7 +2058,15 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
     }
     else if (mix) {
       LrClass *k = lr_class(x->r, cls);
-      int mod = lr_class_ref_at(x->c, av[i], NULL);
+      /* `extend self` in a module's own body: an extend of the module on
+         itself, at its point (CRuby's model: the module's singleton gets
+         the module as a mixin) */
+      int mod = nt_kind(nt, av[i]) == NK_SelfNode && self && !sg && cls == fc && fs == LR_FS_NONE &&
+                fnode >= 0 && class_def_is_module(nt, fnode) && is_extend_name(nm)
+                ? cls : lr_class_ref_at(x->c, av[i], NULL);
+      /* a class among the arguments: TypeError where the statement runs
+         (codegen reads the mark), and no mixin, not of the modules beside it */
+      if (lr_mix_names_class(x->c, av, ac)) { nt_node_set_int((NodeTable *)nt, node, "mixin_class_arg", 1); continue; }
       opaque |= mod < 0 && mod != LR_LATER;
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
@@ -3281,7 +3304,7 @@ static int lr_super(Compiler *c, int cls) {
   LrClass *k = lr_class(c->lrec, cls);
   if (k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) >= 0) return k->sup;   /* the record's, which it has while it is made */
   if (c->classes[cls].parent >= 0) return c->classes[cls].parent;
-  return class_def_is_module(c->nt, c->classes[cls].def_node) ? LR_UNKNOWN_CLASS : LR_MAIN;
+  return comp_class_is_module(c, &c->classes[cls]) ? LR_UNKNOWN_CLASS : LR_MAIN;
 }
 
 /* Did mixin m of a class happen before p (late: in the load phase)?
@@ -3366,7 +3389,7 @@ static int lr_sg_tail_of(Compiler *c, int cls, int tail[5]) {   /* where in tail
   const LoadRecord *r = c->lrec;
   tail[0] = comp_core_class(c, CORE_CLASS_REOPEN), tail[1] = lr_core(r, CORE_MODULE), tail[2] = lr_core(r, CORE_OBJECT);
   tail[3] = LR_MAIN, tail[4] = lr_core(r, CORE_KERNEL);
-  return cls == LR_MAIN ? 2 : cls >= 0 && class_def_is_module(c->nt, c->classes[cls].def_node) ? 1 : 0;
+  return cls == LR_MAIN ? 2 : cls >= 0 && comp_class_is_module(c, &c->classes[cls]) ? 1 : 0;
 }
 /* ...for a hook the core defines on Class or Module (is_module_hook_name)
    only up to where Object's begin (tail[2]): theirs stand before Object's,
@@ -5689,9 +5712,6 @@ int elab_fire_after(Compiler *c, int list, int j) {
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);
     const LrDef *d = NULL;
     int live = body && v->stmt == e && lr_form_leads(nt, node, v->node) && lr_hook_live(c, v->cls, hook, p, &d);
-    /* a hook the record has only as the copy `extend self` stands for is
-       not one it can place: it runs where the extend does (the mixin form's) */
-    if (live && d && nt_int(nt, d->node, "extend_self", 0)) live = 0;
     /* a visibility word gives the class an entry of its own, and calls the
        hook, only for a method it does not hold itself and whose visibility
        it changes */
@@ -6878,8 +6898,7 @@ static int host_id_cmp(const void *a, const void *b) {
    query of the walk has taken over (the precondition rule, H3-PLAN 2.4), or
    -1: an ffi declaration (desugar_ffi_library_functions,
    desugar_native_func_defs), a mixin (desugar_included_hooks,
-   desugar_explicit_receiver_mixin, desugar_extend_self,
-   desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
+   desugar_explicit_receiver_mixin, desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
    desugar_inline_struct_blocks), const_get (desugar_literal_const_get,
    desugar_self_const_get, desugar_dynamic_const_get), a write through a
    constant path (desugar_constant_path_self_alias, qualify_colliding_consts),

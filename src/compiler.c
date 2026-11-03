@@ -1881,6 +1881,9 @@ int comp_ary_is_hash(Compiler *c, int cid) {
 int comp_ary_is_str(Compiler *c, int cid) {
   return comp_ary_root(c, cid) >= 0 && c->classes[cid].ary_str;
 }
+int comp_ary_is_time(Compiler *c, int cid) {
+  return comp_ary_root(c, cid) >= 0 && c->classes[cid].ary_time;
+}
 /* The builtin cid's chain embeds as the flag the comp_arysub_answer family
    takes: 0 Array, 1 Hash, 2 String */
 int an_str_mutator_name(const char *nm);
@@ -1891,11 +1894,11 @@ int comp_arysub_str_boxed(const char *n) {
          sp_streq(n, "force_encoding") || sp_streq(n, "frozen?");
 }
 int comp_arysub_emb(Compiler *c, int cid) {
-  return comp_ary_is_str(c, cid) ? 2 : comp_ary_is_hash(c, cid) ? 1 : 0;
+  return comp_ary_is_time(c, cid) ? 3 : comp_ary_is_str(c, cid) ? 2 : comp_ary_is_hash(c, cid) ? 1 : 0;
 }
 /* The core id cid's chain embeds: CORE_ARRAY, CORE_HASH or CORE_STRING. */
 int comp_arysub_builtin(Compiler *c, int cid) {
-  return comp_ary_is_str(c, cid) ? CORE_STRING : comp_ary_is_hash(c, cid) ? CORE_HASH : CORE_ARRAY;
+  return comp_ary_is_time(c, cid) ? CORE_TIME : comp_ary_is_str(c, cid) ? CORE_STRING : comp_ary_is_hash(c, cid) ? CORE_HASH : CORE_ARRAY;
 }
 /* The scope of the #to_ary an implicit Array conversion of a class cid
    instance calls, or -1. An Array subclass instance is an Array already:
@@ -1934,6 +1937,12 @@ int comp_arysub_builtin_name(Compiler *c, int cid, const char *n) {
   if (comp_ary_is_str(c, cid)) {
     if (comp_builtin_kind_reopen_mi(c, TY_STRING, n) >= 0) return 1;
     return builtin_instance_method_known("String", n) || is_arysub_kernel_name(n);
+  }
+  /* a Time subclass's construction writes its Time through __sp_time_set
+     (rewrite_array_subclass_new) */
+  if (comp_ary_is_time(c, cid)) {
+    if (comp_builtin_kind_reopen_mi(c, TY_TIME, n) >= 0) return 1;
+    return builtin_instance_method_known("Time", n) || sp_streq(n, "__sp_time_set") || is_arysub_kernel_name(n);
   }
   if (comp_builtin_kind_reopen_mi(c, hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY, n) >= 0) return 1;
   if (!hash) return comp_array_method_name(n);
@@ -2006,14 +2015,14 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
    argument as an Array (bop_args_as_builtin). Every Array kind reads the
    same family rows. */
 static int arysub_call_flags(Compiler *c, int id, int hash, int args_builtin) {
-  /* hash: 0 an Array, 1 a Hash, 2 a String (comp_arysub_emb) */
+  /* hash: 0 an Array, 1 a Hash, 2 a String, 3 a Time (comp_arysub_emb) */
   const char *n = nt_str(c->nt, id, "name");
   int args = nt_ref(c->nt, id, "arguments"), argc = 0;
   if (!n) return 0;
   if (args >= 0) nt_arr(c->nt, args, "arguments", &argc);
   int blk = nt_ref(c->nt, id, "block") >= 0;
   /* and every Hash kind the Hash family's */
-  TyKind fam = hash == 2 ? TY_STRING : hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY;
+  TyKind fam = hash == 3 ? TY_TIME : hash == 2 ? TY_STRING : hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY;
   return args_builtin ? bop_args_as_builtin(fam, n, argc, blk)
                       : bop_answers_self(fam, n, argc, blk);
 }
@@ -2021,8 +2030,27 @@ int comp_arysub_answer(Compiler *c, int id, int hash) { return arysub_call_flags
 /* Array's answer to call `id` is its receiver -- always (BOPF_SELF) or when
    it changed it (BOPF_SELF_OR_NIL) -- so on an Array subclass instance it
    is the instance (#7449). */
+/* Whether the program's reopen of Time defines `n` (its own method answers it) */
+static int comp_time_reopen_defines(Compiler *c, const char *n) {
+  int ro = comp_core_class(c, CORE_TIME);
+  return ro >= 0 && n && comp_method_in_class(c, ro, n) >= 0;
+}
 int comp_arysub_self_result(Compiler *c, int id, int hash) {
+  /* Time's conversions in place answer the Time they changed: the instance */
+  if (hash == 3) {
+    const char *n = nt_str(c->nt, id, "name");
+    /* (not a name the program's reopen of Time defines: its own method answers) */
+    return n && (sp_streq(n, "utc") || sp_streq(n, "gmtime") || sp_streq(n, "localtime") || sp_streq(n, "__sp_time_set")) &&
+           (sp_streq(n, "__sp_time_set") || !comp_time_reopen_defines(c, n));
+  }
   return (comp_arysub_answer(c, id, hash) & (BOPF_SELF | BOPF_SELF_OR_NIL)) != 0;
+}
+/* Time's copies of a Time subclass instance answer an instance of its class
+   (getutc, getlocal, as dup does): CRuby makes them with the receiver's
+   class. Its arithmetic and rounding answer a plain Time. */
+int comp_timesub_copy_name(Compiler *c, const char *n) {
+  return n && (sp_streq(n, "getutc") || sp_streq(n, "getgm") || sp_streq(n, "getlocal")) &&
+         !comp_time_reopen_defines(c, n);
 }
 
 /* Whether the arguments of call `id`, on a receiver of type rt (-1: none),
@@ -2875,18 +2903,15 @@ static const char *resolve_alias_side(Compiler *c, int class_id, const char *nam
     int from = class_id;
     for (int cid = class_id; cid >= 0 && !next; cid = c->classes[cid].parent) {
       ClassInfo *ci = &c->classes[cid];
-      /* The class side (1) reads the singleton aliases, and in a module that
-         extends itself the instance ones too (`extend self`, which
-         desugar_extend_self answers by a class method per def). An instance
-         method's lookup (2) reads the instance aliases only. (A module
-         function that copies an alias is a method of the module of its own,
-         made from the record's copy: register_module_functions.) */
-      /* ... but not over a class method the module defines itself */
-      int mod = class_def_is_module(c->nt, ci->def_node) && nt_int(c->nt, ci->def_node, "extends_self", 0) &&
-                !(sg == 1 && comp_cmethod_in_class(c, cid, name) >= 0);
+      /* The class side (1) reads the singleton aliases, and an instance
+         method's lookup (2) the instance aliases only; a module the class
+         extends (`extend self` too) brings its instance aliases to the class
+         side below. (A module function that copies an alias is a method of
+         the module of its own, made from the record's copy:
+         register_module_functions.) */
       for (int i = (cid == lim_cls ? lim : ci->naliases) - 1; i >= 0; i--) {
         int asg = ci->alias_sg && ci->alias_sg[i];
-        if ((sg == 1 ? asg || mod : sg == 2 ? !asg : 1) && sp_streq(ci->alias_new[i], name)) {
+        if ((sg == 1 ? asg : sg == 2 ? !asg : 1) && sp_streq(ci->alias_new[i], name)) {
           /* a class below that defines the name itself, as the kind looked
              up, answers it: the ancestor's alias of that name is behind it
              (`attr_reader :loc` in a subclass of one with `alias loc
@@ -3685,7 +3710,7 @@ static void cv_build(Compiler *c) {
   for (int k = 0; k < nk; k++) {
     int named_struct = (c->classes[k].is_struct || c->classes[k].is_data) && !c->classes[k].is_anon_struct &&
                        !c->classes[k].is_native_class && !c->classes[k].is_singleton_of;
-    if ((!(class_def_is_class(nt, c->classes[k].def_node) || class_def_is_module(nt, c->classes[k].def_node)) && !named_struct) || c->classes[k].is_singleton_of ||
+    if ((!(class_def_is_class(nt, c->classes[k].def_node) || comp_class_is_module(c, &c->classes[k])) && !named_struct) || c->classes[k].is_singleton_of ||
         c->classes[k].is_native_class || class_is_prim_reopen(c, k))
       v[k] = 1;
   }
@@ -3805,7 +3830,7 @@ static void cv_build(Compiler *c) {
     cv_self_answers(c, v, nt_ref(nt, nt_root(nt, r), "statements"), NULL, 1, 0);
   if (owner && methods) all = 1;
   for (int k = 0; k < nk; k++) {
-    if (all || (cls_call && !class_def_is_module(nt, c->classes[k].def_node))) v[k] = 1;
+    if (all || (cls_call && !comp_class_is_module(c, &c->classes[k]))) v[k] = 1;
     if (rel && c->classes[k].parent >= 0) v[k] = v[c->classes[k].parent] = 1;
     for (int e = 0; rel && e < c->classes[k].nincluded_mods; e++) v[c->classes[k].included_mods[e]] = 1;
     for (int e = 0; rel && e < c->classes[k].nextended_mods; e++) v[c->classes[k].extended_mods[e]] = 1;
@@ -5002,7 +5027,7 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   if (p >= 0 || is_cmethod) return p;
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0 || obj == class_id) return -1;
-  if (class_def_is_module(c->nt, c->classes[class_id].def_node)) return -1;
+  if (comp_class_is_module(c, &c->classes[class_id])) return -1;
   return obj;
 }
 
@@ -5271,7 +5296,7 @@ int self_class_static_ci(Compiler *c, int recv) {
   if (!cn || !sp_streq(cn, "class") || cr < 0 || nt_kind(nt, cr) != NK_SelfNode) return -1;
   Scope *s = comp_scope_of(c, recv);
   int cid = s ? s->class_id : -1;
-  if (cid < 0 || class_def_is_module(nt, c->classes[cid].def_node)) return -1;
+  if (cid < 0 || comp_class_is_module(c, &c->classes[cid])) return -1;
   for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return -1;
   return cid;
 }
@@ -5289,7 +5314,7 @@ int allocate_on_own_class(Compiler *c, int id) {
   if (an) return -1;
   Scope *s = comp_scope_of(c, id);
   int cid = s ? s->class_id : -1;
-  if (cid < 0 || cid >= c->nclasses || class_def_is_module(nt, c->classes[cid].def_node)) return -1;
+  if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid])) return -1;
   int recv = nt_ref(nt, id, "receiver");
   if (s->is_cmethod) return (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) ? cid : -1;
   return self_class_base_ci(c, recv);
@@ -5303,7 +5328,7 @@ int self_class_base_ci(Compiler *c, int recv) {
   if (recv < 0 || nt_kind(nt, recv) != NK_CallNode) return -1;
   Scope *s = comp_scope_of(c, recv);
   int cid = s ? s->class_id : -1;
-  if (cid < 0 || cid >= c->nclasses || s->is_cmethod || class_def_is_module(nt, c->classes[cid].def_node)) return -1;
+  if (cid < 0 || cid >= c->nclasses || s->is_cmethod || comp_class_is_module(c, &c->classes[cid])) return -1;
   const char *rn = nt_str(nt, recv, "name");
   int rr = nt_ref(nt, recv, "receiver");
   return rn && sp_streq(rn, "class") && rr >= 0 && nt_kind(nt, rr) == NK_SelfNode ? cid : -1;

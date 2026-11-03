@@ -2229,7 +2229,7 @@ static int an_module_tree(Compiler *c, int m, int *mods, int *n, int cap) {
   for (int j = 0; j < *n; j++) if (mods[j] == m) return 0;   /* reached twice */
   ClassInfo *mc = &c->classes[m];
   if (!comp_class_is_module(c, mc) || mc->is_native_class || mc->nincluded_mod_names > 0) return 0;
-  if (!class_def_is_module(nt, mc->def_node)) return 0;
+  if (!comp_class_is_module(c, mc)) return 0;
   mods[(*n)++] = m;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, m, &nb);
@@ -6373,6 +6373,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     NodeKind rk = nt_kind(nt, recv);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
       int ci = const_node_class_index(c, recv);
+      /* a module's allocate raises (no instance of a module): boxed, as the
+         raise's expression is (#10751) */
+      if (ci >= 0 && comp_class_is_module(c, &c->classes[ci])) { *out = TY_POLY; return 1; }
       /* Exception subclasses have a dedicated storage layout in the common
          allocator. A user class method of their own still takes precedence. */
       if (ci >= 0 && (!class_is_exc_subclass(c, ci) ||
@@ -12552,7 +12555,8 @@ TyKind infer_type(Compiler *c, int id) {
   /* an Array subclass instance read where an Array is wanted -- a splat, a
      destructuring, an element write that is no call (marked ary_operand) --
      is its Array (#7449) */
-  if (ty_is_object(t) && comp_ty_ary_root(c, t) >= 0 && !comp_ary_is_str(c, ty_object_class(t))) {
+  if (ty_is_object(t) && comp_ty_ary_root(c, t) >= 0 && !comp_ary_is_str(c, ty_object_class(t)) &&
+      !comp_ary_is_time(c, ty_object_class(t))) {
     long long op = nt_int(c->nt, id, "ary_operand", 0);
     if (op == 1 || (op == 2 && comp_method_in_chain(c, ty_object_class(t), "[]", NULL) < 0 &&
                     comp_method_in_chain(c, ty_object_class(t), "[]=", NULL) < 0) ||

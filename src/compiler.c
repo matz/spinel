@@ -1371,6 +1371,9 @@ int comp_cvar_intern(ClassInfo *ci, const char *name) {
    block in a block) keeps its first record. */
 static int *mv_s = NULL, *mv_cls = NULL, *mv_cm = NULL;
 static int mv_n = 0, mv_cap = 0;
+/* Is a scope moved for an instance_exec block right now (comp_scope_move_begin)?
+   A memo keyed on the scopes' classes is not filled while one is. */
+int comp_scope_moving(void) { return mv_n > 0; }
 static Compiler *mv_c = NULL;
 void comp_scope_move_begin(Compiler *c, int s) {
   if (mv_n == mv_cap) {

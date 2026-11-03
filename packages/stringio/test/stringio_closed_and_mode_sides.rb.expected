@@ -8,6 +8,11 @@
 [:puts, IOError, "not opened for writing"]
 [:puts_bare, IOError, "not opened for writing"]
 [:print, IOError, "not opened for writing"]
+[:print_nil, IOError, "not opened for writing"]
+[:print_none, IOError, "not opened for writing"]
+[:print_nils, IOError, "not opened for writing"]
+[:puts_empty_array, :ok, nil]
+[:write_none, :ok, 0]
 [:truncate, IOError, "not opened for writing"]
 -- closed: readers
 [:read, IOError, "not opened for reading"]

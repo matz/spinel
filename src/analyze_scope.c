@@ -3446,21 +3446,29 @@ static void sg_reattach_scope(Compiler *c, int node, int ci) {
    (`def Foo.m` in a method of the body, which defines Foo's own class method
    when the method runs) moves only onto the parked class too: on a traced
    singleton class it is no instance method of the object and would lose
-   Foo.m. Nothing of a parked body runs, so there all of it goes. */
-static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top) {
+   Foo.m. Nothing of a parked body runs, so there all of it goes. But a
+   `def self.m` in a method that moved (`self_obj`: the innermost def around
+   it is a method of the object) defines the object's own method when that
+   method runs, so it moves with it; directly in the body its self is the
+   singleton class, and in `def Foo.m` it is Foo. */
+static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top, int self_obj) {
   const NodeTable *nt = c->nt;
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return;
   if (k == NK_CallNode && ci != c->sg_parked - 1) return;
-  if (k == NK_DefNode && (nt_ref(nt, node, "receiver") < 0 || ci == c->sg_parked - 1))
-    sg_reattach_scope(c, node, ci);
+  if (k == NK_DefNode) {
+    int recv = nt_ref(nt, node, "receiver");
+    self_obj = recv < 0 || ci == c->sg_parked - 1 ||
+               (self_obj && nt_kind(nt, nt_def_receiver(nt, recv)) == NK_SelfNode);
+    if (self_obj) sg_reattach_scope(c, node, ci);
+  }
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) sg_reattach_body_defs(c, nt_ref_at(nt, node, i), ci, 0);
+  for (int i = 0; i < nr; i++) sg_reattach_body_defs(c, nt_ref_at(nt, node, i), ci, 0, self_obj);
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
-    for (int j = 0; j < m; j++) sg_reattach_body_defs(c, ids[j], ci, 0);
+    for (int j = 0; j < m; j++) sg_reattach_body_defs(c, ids[j], ci, 0, self_obj);
   }
 }
 
@@ -3469,7 +3477,7 @@ static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top) {
    body of a `class << obj` (as instance methods, like the def obj.m they
    spell). */
 static void sg_reattach_scopes(Compiler *c, int id, int ci, int is_scls) {
-  if (is_scls) sg_reattach_body_defs(c, nt_ref(c->nt, id, "body"), ci, 1);
+  if (is_scls) sg_reattach_body_defs(c, nt_ref(c->nt, id, "body"), ci, 1, 0);
   else sg_reattach_scope(c, id, ci);
 }
 

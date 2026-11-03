@@ -24,8 +24,9 @@ def def_local(flag)
 end
 
 # class << obj on a local written twice: a def beside the others, one under an
-# `if`, one an argument of `private`, and two with a receiver (a class's own
-# method and a `self.` one): nothing of the body runs, so Foo gets no method
+# `if`, one an argument of `private`, two with a receiver (a class's own
+# method and a `self.` one) and a `self.` one in a method of the body: nothing
+# of the body runs, so Foo gets no method
 def sclass_local(flag)
   o = Foo.new
   o = Foo.new if flag
@@ -37,6 +38,9 @@ def sclass_local(flag)
     private def from_sclass_private = "sclass private"
     def Foo.from_sclass_class = "sclass class"
     def self.from_sclass_self = "sclass self"
+    def from_sclass_setup
+      def self.from_sclass_inner = "sclass inner"
+    end
   end
   o
 end
@@ -56,23 +60,39 @@ def extend_local(flag)
   o
 end
 
-# a traced local beside them still defines its method on its object, and a
+# a traced local beside them still defines its method on its object; a
 # `def Foo.m` in a method of its `class << t` still defines Foo's own method
-# when that method runs
+# when that method runs, and a `def self.m` there, one method deep or two,
+# defines the object's own
 t = Foo.new
 t.define_singleton_method(:traced) { "traced" }
 puts t.traced
 class << t
   def define_marker
     def Foo.marker = "marker"
+    def self.inner = "inner"
     :defined
+  end
+  def define_outer
+    def define_middle
+      def self.deep = "deep"
+      :middle
+    end
+    :outer
   end
 end
 p t.define_marker
 puts Foo.marker
 p Foo.new.respond_to?(:marker)
+puts t.inner
+p t.define_outer
+p t.define_middle
+puts t.deep
+p Foo.new.respond_to?(:inner)
+p Foo.new.respond_to?(:deep)
 
-%i[from_dsm from_def from_sclass from_sclass_if from_sclass_private from_ivar tagged].each do |name|
+%i[from_dsm from_def from_sclass from_sclass_if from_sclass_private from_sclass_setup
+   from_sclass_inner from_ivar tagged].each do |name|
   puts "#{name}: #{respond_to?(name, true)}"
 end
 puts "Foo.from_sclass_class: #{Foo.respond_to?(:from_sclass_class)}"
@@ -82,5 +102,6 @@ puts((begin; from_def; rescue NameError; "NameError"; end))
 puts((begin; from_sclass; rescue NameError; "NameError"; end))
 puts((begin; from_sclass_if; rescue NameError; "NameError"; end))
 puts((begin; from_sclass_private; rescue NameError; "NameError"; end))
+puts((begin; from_sclass_inner; rescue NameError; "NameError"; end))
 puts((begin; from_ivar; rescue NameError; "NameError"; end))
 puts((begin; traced; rescue NameError; "NameError"; end))

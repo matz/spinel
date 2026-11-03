@@ -9982,7 +9982,12 @@ int poly_native_arm_fits(Compiler *c, int k, const char *name, int n, const int 
      the [:string] one declared first */
   /* a subclass of a native class takes the class's bindings (#9269) */
   int nk = comp_native_binding_class(c, k, name);
-  int nmi = comp_native_method_find_typed(c, nk >= 0 ? nk : k, name, n, 0, atmp_ty);
+  /* a temp holding a String's handle picks the binding a String does, as
+     the check below takes it: matched as a handle, StringIO#putc(s) chose
+     its [:int] binding, which refused it, and the StringIO arm was gone */
+  TyKind fty[n > 0 ? n : 1];
+  for (int a = 0; a < n; a++) fty[a] = atmp_ty[a] == TY_STRBUF ? TY_STRING : atmp_ty[a];
+  int nmi = comp_native_method_find_typed(c, nk >= 0 ? nk : k, name, n, 0, fty);
   if (nmi < 0 || !native_takes(&c->native_methods[nmi], n)) return -1;
   NativeMethod *nmet = &c->native_methods[nmi];
   for (int ai = 0; ai < nmet->nargs; ai++) {

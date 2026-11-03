@@ -12447,7 +12447,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       if (rt == TY_UNKNOWN && g_infer_optimistic) decline = 1;   /* not yet known */
       /* a program's Enumerable#to_set answers every receiver but a Set */
       if (an_enum_prog_method(c, "to_set") &&
-          (ty_is_hash(rt) || ty_is_array(rt) || rt == TY_RANGE || rt == TY_ENUMERATOR)) decline = 1;
+          (ty_is_hash(rt) || ty_is_array(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE ||
+           rt == TY_STR_RANGE || rt == TY_ENUMERATOR)) decline = 1;
       /* Set#to_set is the receiver itself, which is also what keeps a
          `to_set.to_set` chain from nesting one Set.new inside another (#3623) */
       else if (ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target) &&

@@ -1946,6 +1946,19 @@ static void lr_mix_event(ElabRec *x, int cls, int node, int arg, int mod, int ki
   r->nev++;
 }
 
+static int lr_runs(Compiler *c, int cls, const char *name, LoadPoint p);
+
+/* Does a method of the program's answer the call nm (`remove_method`) at
+   node, on class cls (its singleton when sg)? Then the call runs that,
+   removes nothing and fires no hook. On a class the method is found on its
+   singleton's chain. On a singleton class (a `class << X` body) the record
+   does not hold the singleton class's own singleton, where an extend of a
+   module would put one: a program that defines a method of the name is
+   taken to answer it. */
+static int lr_remove_shadowed(Compiler *c, int node, const char *nm, int cls, int sg) {
+  return sg ? lr_defines(c->lrec, nm) : lr_runs(c, cls, nm, elab_point_of(c, node)) == ELAB_YES;
+}
+
 /* A call statement's definitions: attrs, aliases, visibility, mixins,
    define_method, undef_method / remove_method, on the class its receiver
    names. vs is the frame's visibility state, which an attr form or a
@@ -2023,8 +2036,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       if (mod >= 0 && !nested && fs == LR_FS_NONE && cls == fc && !sg && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode))
         lr_mix_event(x, cls, node, av[i], mod, lr_mix_kind(nt, node, nm, sg));
     }
-    else if (is_undef_method_name(nm) || is_remove_method_name(nm))
-      lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
+    else if (is_undef_method_name(nm) || is_remove_method_name(nm)) {
+      if (is_remove_method_name(nm) && lr_remove_shadowed(x->c, node, nm, cls, sg)) opaque = 1;   /* (a program method answers: it may do anything) */
+      else lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
+    }
   }
   if (dm && ac > 0)
     lr_method(x, cls, sg || is_define_singleton_method_name(nm), vis_arg_name(nt, av[0]), node, LR_DEFINE_METHOD,
@@ -5097,6 +5112,7 @@ static const char *lr_event_form(LrKind kind) {
     case LR_DEF: case LR_DEFINE_METHOD: case LR_READER: case LR_WRITER: case LR_ALIAS: case LR_VIS: return "define_method";
     case LR_COPY: return "module_function";
     case LR_UNDEF: return "undef_method";
+    case LR_REMOVE: return "remove_method";
     default: return NULL;
   }
 }
@@ -5112,9 +5128,11 @@ static const char *lr_event_hook(LrKind kind, int sg) {
 static int lr_event_hooks(Compiler *c) {
   LoadRecord *r = c->lrec;
   if (!r->evhooks) {
+    const LrKind kinds[] = { LR_DEF, LR_UNDEF, LR_REMOVE };
     r->evhooks = 1;
     for (int sg = 0; sg < 2; sg++)
-      if (lr_named(c, lr_event_hook(LR_DEF, sg)) || lr_named(c, lr_event_hook(LR_UNDEF, sg))) r->evhooks = 2;
+      for (int k = 0; k < (int)(sizeof kinds / sizeof *kinds); k++)
+        if (lr_named(c, lr_event_hook(kinds[k], sg))) r->evhooks = 2;
   }
   return r->evhooks == 2;
 }
@@ -5306,6 +5324,16 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   lr_span_add(out, ids, n, fr, param);
 }
 
+/* Does an event before ev[i] in the statement at e (events from first on)
+   take the same name on the same class, as `remove_method :x, :x` does? */
+static int lr_event_repeats(const LoadRecord *r, int first, int i, int e) {
+  const LrEvent *v = &r->ev[i];
+  for (int q = first; q < i; q++)
+    if (r->ev[q].stmt == e && r->ev[q].kind == v->kind && r->ev[q].cls == v->cls && r->ev[q].sg == v->sg &&
+        strcmp(r->ev[q].name, v->name) == 0) return 1;
+  return 0;
+}
+
 /* The hook calls for the versions statement list[j] added, spliced after it:
    `C.method_added(:name)`, or `C.__send__(:singleton_method_added, :name)`
    (BasicObject's: a send reaches a top-level def of the name), for each hook
@@ -5332,11 +5360,11 @@ int elab_fire_after(Compiler *c, int list, int j) {
   if (!calls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   LoadPoint p = { r->st[e].region, e + 1, -1 };
   LrSpans mix = { 0 };
+  int dead = 0;   /* a name of the statement raised NameError, which ends it */
   for (int i = first; i < r->nev; i++) {
     LrEvent *v = &r->ev[i];
     if (v->mix) {   /* a mixin's: the module's hook, after the mixin (lr_fire_mixin) */
       if (body && v->stmt == e && v->node == node) lr_fire_mixin(c, v, node, frame, p, &mix);
-      free(v->name);
       continue;
     }
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);
@@ -5358,8 +5386,18 @@ int elab_fire_after(Compiler *c, int list, int j) {
     if (live && v->kind == LR_UNDEF) {
       LoadPoint before = { p.region, e, -1 };
       int unsure = 0;
-      live = lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, 1) != LR_STOP &&
+      live = !dead && !lr_event_repeats(r, first, i, e) &&
+             lr_search_one(c, v->cls, v->sg, v->name, -1, before, p.region < 0, 0, NULL, 0, &unsure, 1) != LR_STOP &&
              (elab_method_at(c, v->cls, v->name, v->sg, before, NULL) != ELAB_NO || lr_core_method(v->sg, v->name));
+      dead |= !live;
+    }
+    /* a removal takes the class's own entry: it raises NameError, and fires
+       nothing, for a name the class does not hold itself (one it inherits,
+       one removed or undefined already). One under a condition may be held. */
+    if (live && v->kind == LR_REMOVE) {
+      int own = lr_own(c, lr_hist(r, v->cls, v->sg, v->name, 0), (LoadPoint){ p.region, e, -1 }, p.region < 0, 0, NULL);
+      live = !dead && !lr_event_repeats(r, first, i, e) && (own == ELAB_YES || own == ELAB_UNKNOWN);
+      dead |= !live;
     }
     int recv = live ? lr_hook_recv(c, frame) : -2;
     if (recv > -2) {
@@ -5372,8 +5410,8 @@ int elab_fire_after(Compiler *c, int list, int j) {
       }
       nt_node_set_int(nt, calls[n++], "event_hook", 1);
     }
-    free(v->name);
   }
+  for (int i = first; i < r->nev; i++) free(r->ev[i].name);
   r->nev = first;
   /* the mixins' hooks first (a mixin statement adds no method), then the
      method hooks' calls, each span a scope of its own */

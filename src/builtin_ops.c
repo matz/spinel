@@ -1314,7 +1314,7 @@ static const BuiltinOp bop_rows[] = {
      rfc2822 depend on the time feature, <=> on the operand. */
   /* a Time subclass instance's construction writing the Time it embeds
      (rewrite_array_subclass_new): a name no program writes */
-  { TY_TIME, "__sp_time_set", 1, 1, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "({ SP_TIME_TMP(_t$t) = $r; *_t$t = *($e0); _t$t; })", TY_UNKNOWN },
+  { TY_TIME, "__sp_time_set", 1, 1, BF_ANY, BOPR_SELF,   BOPE_TEMPLATE, "({ SP_TIME_TMP(_t$t) = $r; *_t$t = *($e0); _t$t; })", TY_UNKNOWN },
   { TY_TIME, "utc",        0, 127, BF_ANY, TY_TIME,       BOPE_NONE },
   { TY_TIME, "gmtime",     0, 127, BF_ANY, TY_TIME,       BOPE_NONE },
   { TY_TIME, "getutc",     0, 127, BF_ANY, TY_TIME,       BOPE_NONE },

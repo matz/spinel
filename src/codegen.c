@@ -13874,6 +13874,11 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "    case %d: return sp_strbuf_read((sp_String *)p);\n", i);
       continue;
     }
+    /* a Time subclass instance's #to_s is its Time's */
+    if (tci->ary_root > 0 && comp_ary_is_time(c, i)) {
+      buf_printf(b, "    case %d: return sp_Time_to_s((sp_Time *)p);\n", i);
+      continue;
+    }
     if (tci->ary_root > 0) {
       const char *at = arysub_array_ctype(c, i);
       buf_printf(b, "    case %d: return %s_inspect((%s *)p);\n", i, at, at);
@@ -18653,7 +18658,7 @@ static void scan_prologue_features(Compiler *c) {
        (`class A < Array; end; p A.new([1])`), though its slots are typed as
        the class */
     for (int k = 0; k < c->nclasses && !polyish; k++)
-      if (comp_ary_root(c, k) >= 0 && !comp_ary_is_str(c, k)) polyish = 1;
+      if (comp_ary_root(c, k) >= 0 && !comp_ary_is_str(c, k) && !comp_ary_is_time(c, k)) polyish = 1;
 #undef SP_TT
     g_tu_poly_values = polyish;
     if (polyish) { g_emit_sym_rt = 1; g_emit_class_names = 1; }

@@ -10385,7 +10385,20 @@ static TyKind struct_member_arg_type(Compiler *c, int v) {
 /* `d.with(k: v)` on a Struct or Data: each value a literal key gives a
    member is one that member can hold, as a construction's is; a member the
    call does not name keeps what it had. Unread, `Row.new(1).with(a: nil)`
-   left the Integer member unable to hold nil and stored 0 (#8508). */
+   left the Integer member unable to hold nil and stored 0 (#8508).
+   A `**hash` among the keywords: a Hash literal's Symbol keys each name
+   the member they give, as a literal keyword does; any other hash can
+   carry any member, so each member can hold the hash's value type. */
+/* a Hash literal whose every element is a Symbol-keyed pair */
+static int hash_lit_sym_keyed(const NodeTable *nt, int h) {
+  int n = 0; const int *el = nt_arr(nt, h, "elements", &n);
+  for (int e = 0; e < n; e++) {
+    if (nt_kind(nt, el[e]) != NK_AssocNode) return 0;
+    int key = nt_ref(nt, el[e], "key");
+    if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) return 0;
+  }
+  return 1;
+}
 static int struct_with_types_members(Compiler *c, int id, int ci) {
   const NodeTable *nt = c->nt;
   ClassInfo *cls = &c->classes[ci];
@@ -10396,6 +10409,34 @@ static int struct_with_types_members(Compiler *c, int id, int ci) {
   int kn = 0; const int *ke = nt_arr(nt, argv[0], "elements", &kn);
   int changed = 0;
   for (int e = 0; e < kn; e++) {
+    if (nt_kind(nt, ke[e]) == NK_AssocSplatNode) {
+      int hv = nt_ref(nt, ke[e], "value");
+      if (hv < 0) continue;
+      if (nt_kind(nt, hv) == NK_HashNode && hash_lit_sym_keyed(nt, hv)) {
+        int hn = 0; const int *he = nt_arr(nt, hv, "elements", &hn);
+        for (int k = 0; k < hn; k++) {
+          const char *kname = nt_str(nt, nt_ref(nt, he[k], "key"), "value");
+          int v = nt_ref(nt, he[k], "value");
+          if (!kname || v < 0) continue;
+          for (int a = 0; a < cls->nmembers; a++) {
+            if (!sp_streq(cls->ivars[a] + 1, kname) || class_ivar_pinned(cls, cls->ivars[a])) continue;
+            TyKind m = ty_unify(cls->ivar_types[a], struct_member_arg_type(c, v));
+            if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); changed = 1; }
+          }
+        }
+        continue;
+      }
+      TyKind ht = infer_type(c, hv);
+      TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+      if (vt == TY_UNKNOWN) continue;
+      if (vt == TY_NIL) vt = TY_POLY;
+      for (int a = 0; a < cls->nmembers; a++) {
+        if (class_ivar_pinned(cls, cls->ivars[a])) continue;
+        TyKind m = ty_unify(cls->ivar_types[a], vt);
+        if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); changed = 1; }
+      }
+      continue;
+    }
     if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;
     int key = nt_ref(nt, ke[e], "key"), v = nt_ref(nt, ke[e], "value");
     const char *kname = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;

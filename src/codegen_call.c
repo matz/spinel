@@ -21969,6 +21969,13 @@ static int recv_reads_self(const NodeTable *nt, int r) {
   const char *rn = nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return rn && sp_streq(rn, "__self");
 }
+/* Does call id reach a method whatever its visibility: a call on self, a
+   send, a dispatch arm, or one the desugars let through? (A public_send,
+   stamped vis_enforce, is asked by its callers on its own.) */
+static int call_vis_exempt(const NodeTable *nt, int id, int recv) {
+  return recv_reads_self(nt, recv) || nt_int(nt, id, "self_call", 0) || nt_str(nt, id, "send_blind") ||
+         nt_int(nt, id, "dyn_arm", 0) || nt_ignore_visibility(nt, id);
+}
 /* The visibility vcid's method vnm has for an explicit-receiver call at
    node id: the declared one, except that a protected method is public to a
    caller whose self is an instance of the declaring class. */
@@ -28609,9 +28616,7 @@ static int bool_side_closed_vis(Compiler *c, int id, int recv, int mi) {
   int ci = c->scopes[mi].class_id;
   if (!nm || ci < 0 || ci >= c->nclasses) return SP_VIS_PUBLIC;
   if (nt_str(nt, id, "vis_enforce")) return comp_method_vis_declared(c, ci, nm, NULL);
-  if (recv_reads_self(nt, recv) || nt_int(nt, id, "self_call", 0) || nt_str(nt, id, "send_blind") ||
-      nt_int(nt, id, "dyn_arm", 0) || nt_ignore_visibility(nt, id) || cplan_has_method_missing(c, id, ci, 0))
-    return SP_VIS_PUBLIC;
+  if (call_vis_exempt(nt, id, recv) || cplan_has_method_missing(c, id, ci, 0)) return SP_VIS_PUBLIC;
   return method_vis_for_caller(c, id, ci, nm);
 }
 static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int boxed, int ow, Buf *b) {
@@ -28870,8 +28875,7 @@ static int builtin_reopen_call_closed(Compiler *c, int id) {
   int recv = nt_ref(nt, id, "receiver");
   const char *nm = nt_str(nt, id, "name");
   if (recv < 0 || !nm || g_poly_builtin_arm) return 0;
-  if (recv_reads_self(nt, recv) || nt_int(nt, id, "self_call", 0)) return 0;
-  if (nt_str(nt, id, "send_blind") || nt_int(nt, id, "dyn_arm", 0) || nt_ignore_visibility(nt, id)) return 0;
+  if (call_vis_exempt(nt, id, recv)) return 0;
   int ci = builtin_reopen_vis_class(c, comp_ntype(c, recv), nm);
   return ci >= 0 && !cplan_has_method_missing(c, id, ci, 0);
 }

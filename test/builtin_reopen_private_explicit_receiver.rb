@@ -60,3 +60,17 @@ v = [5, "s"].first
 t { v.isec(1) }
 t { [5, 6].map { |e| e.isec(1) } }
 t { [1.5, 2].map { |e| e.ff rescue :err } }
+
+# `private :name`, a list, and a bare `private` section
+class Integer; def y1 = 1; private :y1; end
+class Integer; private; def y4 = 4; def y5(a) = a; end
+class Integer; def x1 = 1; def x2 = 2; private :x1, :x2; def callme = [y1, self.y4, y5(3), x1, self.x2]; end
+class Float; def fz = 1; private :fz; end
+t { 5.y1 }
+t { 5.y4 }
+t { 5.y5(1) }
+t { 5.x1 }
+t { 5.x2 }
+t { 5.callme }
+t { 1.5.fz }
+t { [5, "a"].first.y1 }

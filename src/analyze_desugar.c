@@ -16230,6 +16230,11 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       if (nt_kind(nt, def) != NK_DefNode) continue;
       const char *name = nt_str(nt, def, "name");
       if (!name) continue;
+      /* a method the body leaves private or protected (`private :m`, a
+         bare `private` above it) keeps its calls: a copy's call has no
+         receiver, and an explicit one must still be refused. A `private
+         def` is not a bare def, and was never copied either. */
+      if (bi_def_visibility(nt, def) != BVIS_PUBLIC) continue;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
       if (pn0 >= 0 && (nt_ref(nt, pn0, "block") >= 0 || nt_ref(nt, pn0, "rest") >= 0 ||

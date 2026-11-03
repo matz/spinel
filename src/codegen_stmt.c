@@ -7698,14 +7698,30 @@ static int emit_pm_subcond_expr(Compiler *c, int spat, const char *elem, Buf *b)
    constraint), or PM_HASH_VAL_REJECT for a shape we emit no check for (a
    literal, range, pin, or nested pattern) so the caller can reject it. */
 #define PM_HASH_VAL_REJECT (-2)
-static int pm_hash_value_class(const NodeTable *nt, int vpat) {
+static int pm_value_const(Compiler *c, int pat, const char *cn);
+/* A ConstantReadNode pattern that names a class, not a value constant
+   (`in LIMIT` is LIMIT === v, a value test the recursive matcher emits) */
+static int pm_class_const_read(Compiler *c, int n) {
+  if (n < 0 || nt_kind(c->nt, n) != NK_ConstantReadNode) return 0;
+  const char *cn = nt_str(c->nt, n, "name");
+  return cn && !pm_value_const(c, n, cn);
+}
+/* the class name a class pattern tests: the class an alias constant
+   (`AI = Integer`) names, or the name itself */
+static const char *pm_class_name(Compiler *c, int n) {
+  const char *cn = nt_str(c->nt, n, "name");
+  const char *ra = cn ? resolve_class_alias(c, cn) : NULL;
+  return ra ? ra : cn;
+}
+static int pm_hash_value_class(Compiler *c, int vpat) {
+  const NodeTable *nt = c->nt;
   if (vpat < 0 || !nt_type(nt, vpat)) return -1;
   NodeKind vk = nt_kind(nt, vpat);
-  if (vk == NK_ConstantReadNode) return vpat;
+  if (pm_class_const_read(c, vpat)) return vpat;
   if (vk == NK_ImplicitNode || vk == NK_LocalVariableTargetNode) return -1;
   if (vk == NK_CapturePatternNode) {
     int cv = nt_ref(nt, vpat, "value");
-    if (cv >= 0 && nt_kind(nt, cv) == NK_ConstantReadNode) return cv;
+    if (pm_class_const_read(c, cv)) return cv;
   }
   return PM_HASH_VAL_REJECT;
 }
@@ -8441,14 +8457,13 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
         int pn2 = gi < apn ? reqs[gi] : posts[gi - apn];
         NodeKind rk = nt_kind(nt, pn2);
         int classpat = -1;
-        if (rk == NK_ConstantReadNode) classpat = pn2;
+        if (pm_class_const_read(c, pn2)) classpat = pn2;
         else if (rk == NK_CapturePatternNode) {
           int val = nt_ref(nt, pn2, "value");
-          if (val >= 0 && nt_kind(nt, val) == NK_ConstantReadNode)
-            classpat = val;
+          if (pm_class_const_read(c, val)) classpat = val;
         }
         if (classpat >= 0) {
-          const char *cn2 = nt_str(nt, classpat, "name");
+          const char *cn2 = pm_class_name(c, classpat);
           if (cn2 && ty_matches_class(c, et2, cn2, 0) <= 0 &&
               !(et2 == TY_STRING && sp_streq(cn2, "NilClass"))) class_mismatch = 1;
         }
@@ -8586,7 +8601,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     for (int i = 0; i < en; i++) {
       if (nt_kind(nt, elms[i]) != NK_AssocNode) return 0;
       if (nt_ref(nt, elms[i], "key") < 0) return 0;
-      int classpat = pm_hash_value_class(nt, nt_ref(nt, elms[i], "value"));
+      int classpat = pm_hash_value_class(c, nt_ref(nt, elms[i], "value"));
       if (classpat == PM_HASH_VAL_REJECT) {
         /* a value sub-pattern (literal, range, alternation, pin, container):
            trial-emit the recursive condition against the fetched value's type
@@ -8616,7 +8631,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     for (int i = 0; i < en; i++) {
       int key = nt_ref(nt, elms[i], "key");
       int vchk = nt_ref(nt, elms[i], "value");
-      int classpat = pm_hash_value_class(nt, vchk);
+      int classpat = pm_hash_value_class(c, vchk);
       emit_indent(hs, hi);
       buf_printf(hs, "_t%d = _t%d && sp_%sHash_has_key(_t%d, ", hcond, hcond, hn, t);
       emit_hash_key(c, key, ty_hash_key(pt), hs); buf_puts(hs, ");\n");
@@ -8649,7 +8664,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
         buf_puts(hs, " }\n");
       }
       else {
-        const char *cn = nt_str(nt, classpat, "name");
+        const char *cn = pm_class_name(c, classpat);
         if (cn && ty_matches_class(c, hvt, cn, 0) <= 0) {
           emit_indent(hs, hi); buf_printf(hs, "_t%d = 0;\n", hcond);
         }
@@ -9126,9 +9141,14 @@ static int pm_diag_ok(Compiler *c, int pat) {
   switch (ty_k) {
   case NK_LocalVariableTargetNode: case NK_ImplicitNode: case NK_SplatNode: case NK_ImplicitRestNode:
   case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode: case NK_NilNode:
-  case NK_TrueNode: case NK_FalseNode: case NK_ConstantReadNode: case NK_ConstantPathNode:
-  case NK_PinnedVariableNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_PinnedVariableNode:
     return 1;
+  /* a class with its own class method `===` would run it a second time
+     for the message: the plain subject-only message is raised instead */
+  case NK_ConstantReadNode: case NK_ConstantPathNode: {
+    int ci = const_node_class_index(c, pat);
+    return ci < 0 || class_own_cmethod_eqq(c, ci) < 0;
+  }
   default:
     break;
   }
@@ -9426,6 +9446,18 @@ static void emit_pm_nomatch_raise(Compiler *c, int pred, int pat, int guarded, i
      hashes; an object, a MatchData or a Time is not. */
   int walk = pat >= 0 && pm_diag_ok(c, pat) &&
              (!pm_diag_deconstructs(c, pat) || !pm_subject_deconstructs_apart(c, pt));
+  /* The pattern is one class whose own class method `===` answered no:
+     the arm ran it once, so the message is known without a second call */
+  int one = pat >= 0 && nt_kind(c->nt, pat) == NK_CapturePatternNode ? nt_ref(c->nt, pat, "value") : pat;
+  if (!walk && one >= 0 && !guarded && nt_kind_is_constant(nt_kind(c->nt, one)) &&
+      !pm_diag_ok(c, one)) {
+    emit_indent(b, indent);
+    buf_printf(b, "sp_pm_raise_nomatch(%s, sp_pm_eqq_msg(", sb.p);
+    emit_pm_diag_pat_s(c, one, b);
+    buf_printf(b, ", %s), 0);\n", sb.p);
+    free(sb.p);
+    return;
+  }
   if (!walk) {
     emit_indent(b, indent);
     buf_printf(b, "sp_pm_raise_nomatch(%s, NULL, 0);\n", sb.p);

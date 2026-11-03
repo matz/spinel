@@ -33,3 +33,11 @@ p(case v; in 0 then :z; else :no; end)
 p(case f; in 0.0 then :z; else :no; end)
 p(case w; in ZERO then :z; else :no; end)
 p(case v; in FZERO then :z; else :no; end)
+
+# inside a typed Array or Hash pattern
+p(case [3]; in [LIMIT] then :a; else :no; end)
+p(case [3, 4]; in [LIMIT, Integer] then :a; else :no; end)
+p(case [4]; in [LIMIT] then :a; else :no; end)
+p(case({a: 3}); in {a: LIMIT} then :h; else :no; end)
+p(case({a: 4}); in {a: LIMIT} then :h; else :no; end)
+p(case ["a"]; in [NAME] then :s; else :no; end)

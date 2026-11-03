@@ -1135,7 +1135,7 @@ enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS };
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
    level's (vmain) */
-typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int cur, cfc; unsigned char cfs; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs */
+typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int cur, cfc; unsigned char cfs; int body; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body) */
 
 /* The constant name a class or module header (or a read) names, as the
    program wrote it: a header the qualify passes renamed keeps the Ruby path
@@ -1468,8 +1468,9 @@ static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind,
 /* ...: a definition of initialize and its kin is private wherever it
    stands, and an alias, or an alias's forwarder (lr_def), takes its
    original's visibility */
+static int lr_chain_open(Compiler *c, int cls);
 static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, LrKind kind, int bvis, int may, const char *target) {
-  if (cls < LR_MAIN || !name) return;
+  if (cls < LR_MAIN || !name || (x->body && lr_chain_open(x->c, cls))) return;   /* (lr_body_versions) */
   int vis = lr_vis(bvis), ov = target ? lr_vis_at(x->c, cls, target, sg, elab_point_of(x->c, node)) : -1;
   const LrHist *th = x->unplaced && target ? lr_hist(x->r, cls, sg, target, 0) : NULL;
   for (int i = th ? th->n - 1 : -1; i >= 0; i--)   /* an unplaced body's own original, which no query at a point sees */
@@ -1478,7 +1479,7 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   if (target && !x->unplaced) lr_settle_add(x->r, SET_ALIAS, node, cls, sg, may, vis, name);
   if (ov >= 0) vis = ov;
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
-  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced, .scope = sc });
+  lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = x->unplaced && !x->body, .scope = sc, .body = x->body });
   lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target)) {
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced, .scope = sc });
@@ -2325,6 +2326,30 @@ static void lr_body_defs(Compiler *c, int ci, int body, int fnode) {
   }
 }
 
+static int lr_body_def(const NodeTable *nt, const int *par, int n, int node);
+/* The versions method bodies make (LrDef.body): a `def K.m` on a constant
+   the record resolves, in the body of a def, with no class body between,
+   is a version of K's singleton history of m wherever the walk stands,
+   recorded after the placed ones. It has no load point but an extent
+   (lr_version_order): from the first statement the def's body may run on,
+   any number of times, as CRuby defines it each time the body runs. Not
+   on a class whose chain the record does not hold (lr_chain_open: a
+   class a builder call makes, `S = Struct.new(:a) { }`): no call on it is
+   ordered against a version, so its calls would meet the version as if
+   it had run from the start. */
+static void lr_body_versions(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  const int *par = r->plan_depth ? r->plan_par : r->up;
+  NT_FOREACH_KIND(nt, NK_DefNode, id) {
+    int recv = nt_ref(nt, id, "receiver"), body = lr_body_def(nt, par, r->n, id);
+    NodeKind rk = recv >= 0 ? nt_kind(nt, nt_def_receiver(nt, recv)) : NK_SelfNode;
+    if (id >= r->n || body <= 0 || (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)) continue;
+    ElabRec x = { c, r, .unplaced = 1, .body = body };
+    lr_def(&x, id, LR_MAIN, LR_FS_NONE, BVIS_PUBLIC, 1);
+  }
+}
+
 /* A class or module body that is no statement of the load phase: one in
    a lambda or in a block kept to run later (`l = -> { class G; private
    :foo; end }`), or in an expression. It runs when the program runs that
@@ -2371,6 +2396,7 @@ static void lr_record_unplaced(Compiler *c) {
       kc->nopen++;
       if (class_def_body(nt, id) >= 0) lr_body_defs(c, ci, class_def_body(nt, id), id);
     }
+  lr_body_versions(c);
 }
 
 /* The record dropped and made again over the walked statements */
@@ -2734,7 +2760,8 @@ int elab_method_versions(Compiler *c, const char *name) {
    once for all of them, as of the entries recorded: a call of the name
    may run before the history's first version is made, its statement, or
    the window of the bodies around it (elab_call_window), opening ahead
-   of that version's point in its region. The first version opens the
+   of that version's point in its region; any call, where a method body
+   makes that version (LrDef.body). The first version opens the
    method; before it the name is absent. Whether a call meets that is
    the typed receiver's fact (ct_version_at). A name of two histories is
    not asked, nor one a builtin's method answers (Object's, or any builtin
@@ -2768,6 +2795,7 @@ static void lr_late_make(Compiler *c) {
         }
     if (nh != 1 || (!own && (builtin_object_method_known(x->name) || builtin_instance_name_known(x->name))) || r->refl_any ||
         (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp))) { x->late = 3; continue; }
+    if (v && v->body) { x->late = 2; continue; }   /* (a method body's: before its extent opens, lr_version_order) */
     LoadPoint q = v ? elab_point_of(c, v->node) : (LoadPoint){ -1, -1 };
     if (q.region >= 0 && elab_call_window(c, id, &w) == ELAB_YES && w.from.region == q.region && w.from.seq < q.seq) x->late = 2;
   }
@@ -3225,6 +3253,7 @@ static int lr_run_order(Compiler *c, int d, int n) {
    body's or a block's in it too, runs as lr_run_order orders it against
    that node, under the condition the node runs under; where that order
    is not sure, the statement's answers. */
+static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late);
 static int lr_last_before(Compiler *c, const LrHist *h, LoadPoint p, int late, int skip_vis, const LrDef **out) {
   int unsure = 0;
   LoadRecord *r = c->lrec;
@@ -3234,10 +3263,9 @@ static int lr_last_before(Compiler *c, const LrHist *h, LoadPoint p, int late, i
     const LrDef *v = &h->v[i];
     if (take && v->unplaced) r->cand_bad = 1;
     if ((skip_vis && v->kind == LR_VIS) || v->unplaced) continue;
-    int in = at && v->node >= 0 && v->node < r->n && r->at[v->node] == p.seq;
+    int in = at && !v->body && v->node >= 0 && v->node < r->n && r->at[v->node] == p.seq;
     int o = in ? lr_run_order(c, v->node, p.node) : PROG_UNKNOWN;
-    if (o == PROG_UNKNOWN)
-      o = late == 1 ? (elab_point_of(c, v->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, v->node), p);
+    if (o == PROG_UNKNOWN) o = lr_version_order(c, v, p, late);
     if (o == PROG_UNKNOWN || (o == PROG_BEFORE && !in && v->may && (late == 1 || !lr_may_dominates(c->lrec, v, p)))) {
       unsure = 1;
       if (out && (h->a == LR_KEY_CONST || h->a == LR_KEY_AUTO) && !*out) *out = v;
@@ -3826,6 +3854,22 @@ static int lr_node_runs(Compiler *c, int id) {
    urun[def]: the first statement a recorded def's body may run, 0 for one
    the record did not record. */
 enum { LR_NEVER = INT_MAX, LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2 };
+/* The order of version v against point p (late == 1: as of the load phase's
+   end): a version at a point, its point's; one a method body makes
+   (LrDef.body), its extent's: after p where p comes before the first
+   statement that body may run on (lr_rta's urun) and that statement does
+   not run again before p (lr_runs_again), not known from there on, since
+   the body may run any number of times, and after every point for a body
+   that never runs */
+static int lr_version_order(Compiler *c, const LrDef *v, LoadPoint p, int late) {
+  if (!v->body)
+    return late == 1 ? (elab_point_of(c, v->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, v->node), p);
+  LoadRecord *r = c->lrec;
+  lr_run_points(c);
+  int from = r->urun[v->body];
+  if (from == LR_NEVER) return PROG_AFTER;
+  return late != 1 && p.region >= 0 && p.seq < from && !lr_runs_again(c, r->st[from].node, p) ? PROG_AFTER : PROG_UNKNOWN;
+}
 /* The class constant write w holds when a builder made it (`P =
    Struct.new(:x)`): the program's class of it, or LR_CORE when the program
    has none (no block, no header reopens it: only core ancestors);
@@ -4536,7 +4580,7 @@ static void lr_span_take(Compiler *c, const LrHist *h, int cls, int sg, LoadPoin
   int had = s->m;
   for (int j = 0; j < h->n; j++) {
     const LrDef *v = &h->v[j];
-    if (!lr_is_version(v) || !lr_inside(c, v->node, p0, p1)) continue;
+    if (!lr_is_version(v) || (v->body ? lr_version_order(c, v, p1, 0) == PROG_AFTER : !lr_inside(c, v->node, p0, p1))) continue;
     LoadPoint q = elab_point_of(c, v->node);
     if (v->may || elab_cmp(p0, q) != PROG_BEFORE || elab_cmp(q, p1) != PROG_BEFORE) { s->any = 1; continue; }
     if (!(s->m & (s->m - 1)) && !(s->cp = realloc(s->cp, sizeof(int) * (size_t)(s->m ? 2 * s->m : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -6645,7 +6689,13 @@ void elab_dump(Compiler *c, FILE *out) {
       const LrDef *v = &h->v[j];
       fprintf(out, " %s#%d%s%s%s", kinds[v->kind], elab_point_of(c, v->node).seq, v->may ? " may" : "", v->nil ? " nil" : "",
               v->unplaced ? " unplaced" : "");
-      if (v->kind == LR_DEF && h->a >= LR_MAIN && r->nregion == 1 && v->node < r->n && elab_method_versions(c, h->name) > 1)   /* lr_rta */
+      if (v->body) {   /* a method body's (LrDef.body): its extent, from that body's first statement on */
+        lr_run_points(c);
+        fprintf(out, " in def#%d", elab_point_of(c, v->body).seq);
+        int from = r->urun[v->body];   /* (0: a body lr_rta did not record, whose extent opens anywhere) */
+        from == LR_NEVER ? fputs(" from=never", out) : from ? fprintf(out, " from=#%d", from) : fputs(" from=?", out);
+      }
+      if (v->kind == LR_DEF && !v->body && h->a >= LR_MAIN && r->nregion == 1 && v->node < r->n && elab_method_versions(c, h->name) > 1)   /* lr_rta */
         r->urun[v->node] == LR_NEVER ? fputs(" runs=never", out) : fprintf(out, " runs=#%d", r->urun[v->node]);
       if (v->kind == LR_ALIAS && v->target) {   /* the version the alias takes, as the query answers it */
         const LrDef *d = NULL;

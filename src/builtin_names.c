@@ -2240,6 +2240,15 @@ static const BuiltinClass BUILTIN_CLASSES[] = { SP_BUILTIN_CLASSES(X) };
 const BuiltinClass *builtin_class_at(int i) {
   return i >= 0 && i < BUILTIN_CLASS_N ? &BUILTIN_CLASSES[i] : NULL;
 }
+/* Is a yielding method a program's reopening of builtin class `core`
+   (CORE_*) defines called through its proc form, with the call's block as a
+   proc, since it has no function of its own? (The Array, Hash, NilClass,
+   Numeric and Object reopenings are reached another way.) */
+int core_reopen_calls_proc_form(int core) {
+  return core == CORE_STRING || core == CORE_INTEGER || core == CORE_FLOAT || core == CORE_SYMBOL ||
+         core == CORE_RANDOM || core == CORE_FIBER || core == CORE_THREAD || core == CORE_RANGE ||
+         core == CORE_TIME;
+}
 /* The core class of a receiver kind; each reader keeps its own kind filter. */
 int core_of_type(TyKind t) {
   if (t == TY_INT || t == TY_BIGINT) return CORE_INTEGER;

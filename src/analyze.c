@@ -39523,7 +39523,7 @@ int *du_parent_map(const NodeTable *nt) {
   if (!par) return NULL;
   char *seen = calloc((size_t)nt->count + 1, 1);
   int *stack = malloc(sizeof(int) * ((size_t)nt->count + 1));
-  if (!seen || !stack) { free(seen); free(stack); return par; }
+  if (!seen || !stack) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int root = 0; root < nt->count; root++) {
     NodeKind ty_k = nt_kind(nt, root);
     if (ty_k != NK_ProgramNode || seen[root]) continue;

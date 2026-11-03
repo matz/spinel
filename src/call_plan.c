@@ -3352,11 +3352,14 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
 }
 
 /* A String-typed slot may already hold the shared handle. The argument
-   temp keeps that representation so boxed arms keep its identity too. */
+   temp keeps that representation so boxed arms keep its identity too. So
+   does a value whose read yields the handle (Repr.handle: a call a handle
+   parameter of one of the arms asked it of): held as the String, the temp
+   was declared the bytes and initialized with the handle. */
 TyKind cplan_poly_arg_storage(Compiler *c, int id) {
   Repr r = repr_of(c, id);
   if (r.strbuf_src == RS_SLOT_POLY) return TY_POLY;
-  if (r.as_ty == TY_STRING && r.strbuf_src == RS_HANDLE) return TY_STRBUF;
+  if (r.as_ty == TY_STRING && (r.strbuf_src == RS_HANDLE || r.handle)) return TY_STRBUF;
   return r.as_ty;
 }
 

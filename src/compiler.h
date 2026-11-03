@@ -1259,6 +1259,10 @@ typedef struct {
                           (VR_HEAD_HELD) around the call's own emission,
                           where an arm that holds the operand reads that
                           temp (hold_operand) */
+  unsigned char *value_discarded; /* [node_cap] a node emitted where its value
+                          is thrown away (emit_expr_for_effect: `((void)(...))`,
+                          the left of a comma): set only as a view
+                          (VR_DISCARDED) around that emission */
   SP_TY_FIELD TyKind *nilnarrow; /* [node_cap] param-read narrowed by a `return .. if p.nil?`
                         guard: the read's non-nil type (codegen unboxes the poly
                         slot at the read site); TY_UNKNOWN = not narrowed */
@@ -1754,6 +1758,11 @@ typedef struct {
   int nver_defer;
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
+  /* per method scope, made once (call_plan.c, cplan_scope_facts): whether
+     it holds a super that reaches no method, and whether a method_missing
+     answers for self or hands the name on */
+  unsigned char *scope_super_facts;
+  int nscope_super_facts;
   /* ...by name: ver_ix chains the entries of one (class, side, name, parameter
      count) and ver_names one scope-holding entry of each name (ver_entries_index) */
   int *ver_ix, *ver_ix_next, *ver_names, *ver_names_next;

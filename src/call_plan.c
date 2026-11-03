@@ -3893,6 +3893,97 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod) {
   return cplan_mm_method(c, ci, cmethod) >= 0;
 }
 
+/* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
+   its only statement; -1 for any other body */
+static int cplan_body_super(Compiler *c, int mi) {
+  int b = c->scopes[mi].body, n = 0;
+  if (b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode) {
+    const int *st = nt_arr(c->nt, b, "body", &n);
+    b = st && n == 1 ? st[0] : -1;
+  }
+  NodeKind k = b >= 0 ? nt_kind(c->nt, b) : NK_NONE;
+  return k == NK_SuperNode || k == NK_ForwardingSuperNode ? b : -1;
+}
+
+enum { SSF_DEAD_ASKED = 1, SSF_DEAD_SUPER = 2, SSF_MM_ASKED = 4, SSF_MM_ANSWERS = 8 };
+/* Method scope mi's super facts (Compiler.scope_super_facts), each filled
+   when first asked: SSF_DEAD_SUPER (cplan_value_dead_super), SSF_MM_ANSWERS
+   (cplan_mm_answers). */
+static unsigned char *cplan_scope_facts(Compiler *c, int mi) {
+  if (c->nscope_super_facts != c->nscopes) {
+    free(c->scope_super_facts);
+    c->scope_super_facts = calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
+    if (!c->scope_super_facts) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->nscope_super_facts = c->nscopes;
+  }
+  return &c->scope_super_facts[mi];
+}
+
+/* A value position of a method's body: one that answers a value of its own
+   (not a super whose plan reaches no method, nor a bare raise,
+   an_call_diverges) stops the walk; a dead super is noted in dead */
+typedef struct { Compiler *c; int dead; } DeadSuperWalk;
+static int cplan_own_value_leaf(const VpLeaf *leaf, void *ud) {
+  DeadSuperWalk *w = ud;
+  if (leaf->kind != VPK_EXPR && leaf->kind != VPK_GAVE_UP) return 1;
+  NodeKind k = leaf->kind == VPK_EXPR ? nt_kind(w->c->nt, leaf->node) : NK_NONE;
+  /* (a walk that gave up is taken as dead: the refusal is the safe answer) */
+  if (leaf->kind == VPK_GAVE_UP ||
+      ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && cplan_user(w->c, leaf->node)->mi < 0)) {
+    w->dead = 1;
+    return 0;
+  }
+  return !an_call_diverges(w->c, leaf->node);
+}
+/* Is method scope mi's value a super whose plan reaches no method, where
+   CRuby answers what its method_missing does: some value position of its
+   body (for_each_value_position) is one, and none answers a value of its
+   own? One that can (an untaken arm's nil, a statement after the super)
+   answers it as CRuby does there, and a body that only raises, throws or
+   exits answers nothing. */
+static int cplan_value_dead_super(Compiler *c, int mi) {
+  unsigned char *f = cplan_scope_facts(c, mi);
+  if (!(*f & SSF_DEAD_ASKED)) {
+    *f |= SSF_DEAD_ASKED;
+    DeadSuperWalk w = { c, 0 };
+    int b = c->scopes[mi].body;
+    if (b >= 0 && !for_each_value_position(c->nt, b, VP_ALL_FLAGS & ~VP_CASE_IN_RAISE_NIL, cplan_own_value_leaf, &w) &&
+        w.dead)
+      *f |= SSF_DEAD_SUPER;
+  }
+  return (*f & SSF_DEAD_SUPER) != 0;
+}
+
+/* Does method_missing scope mm answer for self? One whose value is its own
+   super, unconditionally, hands the name on: CRuby then asks the
+   method_missing that super reaches, and past the last one raises
+   NoMethodError, as Spinel does. Any other answers, or may (one that
+   answers some names and supers on for the rest). */
+static int cplan_mm_answers(Compiler *c, int mm) {
+  unsigned char *f = cplan_scope_facts(c, mm);
+  if (!(*f & SSF_MM_ASKED)) {
+    *f |= SSF_MM_ASKED;   /* (a cycle of hand-ons answers nothing) */
+    int sup = cplan_body_super(c, mm), up = sup >= 0 ? cplan_user(c, sup)->mi : -1;
+    if (sup < 0 || (up >= 0 && cplan_mm_answers(c, up))) *f |= SSF_MM_ANSWERS;
+  }
+  return (*f & SSF_MM_ANSWERS) != 0;
+}
+/* Does super `id` reach a method whose value is its own super that reaches
+   no method (cplan_value_dead_super), where CRuby calls a method_missing
+   Spinel does not dispatch: one that answers for self (cplan_mm_answers), on
+   the chain of the class or of a descendant, as self may be one? */
+int cplan_super_needs_method_missing(Compiler *c, int id) {
+  const CallPlan *p = cplan_user(c, id);
+  Scope *s = comp_scope_of(c, id);
+  if (!s || p->via != UC_SUPER || p->mi < 0 || !cplan_value_dead_super(c, p->mi)) return 0;
+  for (int k = -1; k < c->nclasses; k++) {
+    if (k >= 0 && (k == s->class_id || !is_descendant(c, k, s->class_id))) continue;
+    int mm = cplan_mm_method(c, k < 0 ? s->class_id : k, s->is_cmethod);
+    if (mm >= 0 && cplan_mm_answers(c, mm)) return 1;
+  }
+  return 0;
+}
+
 /* Whether the boxed class arm calls the method rather than raising for
    its visibility. Explicit self may call private methods too.
    The class-body self stamp identifies the caller of a protected call. */

@@ -1250,12 +1250,12 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
       int excl = nt_range_excl(nt, rn9);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "int64_t _t%d = sp_f2key(", klo);
-      if (blt9 == TY_NIL) { if (rleft >= 0) { buf_puts(g_pre, "((void)("); emit_expr(c, rleft, g_pre); buf_puts(g_pre, "), -HUGE_VAL)"); } else buf_puts(g_pre, "-HUGE_VAL"); }
+      if (blt9 == TY_NIL) { if (rleft >= 0) { buf_puts(g_pre, "((void)("); emit_expr_for_effect(c, rleft, g_pre); buf_puts(g_pre, "), -HUGE_VAL)"); } else buf_puts(g_pre, "-HUGE_VAL"); }
       else emit_float_expr(c, rleft, g_pre);
       buf_puts(g_pre, ") - 1;\n");
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "int64_t _t%d = sp_f2key(", khi);
-      if (brt9 == TY_NIL) { if (rright >= 0) { buf_puts(g_pre, "((void)("); emit_expr(c, rright, g_pre); buf_puts(g_pre, "), HUGE_VAL)"); } else buf_puts(g_pre, "HUGE_VAL"); }
+      if (brt9 == TY_NIL) { if (rright >= 0) { buf_puts(g_pre, "((void)("); emit_expr_for_effect(c, rright, g_pre); buf_puts(g_pre, "), HUGE_VAL)"); } else buf_puts(g_pre, "HUGE_VAL"); }
       else emit_float_expr(c, rright, g_pre);
       buf_printf(g_pre, ")%s;\n", excl ? "" : " + 1");
     }
@@ -7630,7 +7630,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
       nt_kind(c->nt, provided) != NK_NilNode && !(p && (p->byref_out || p->str_shared))) {
     TyKind at = repr_of(c, provided).as_ty;
     if (at == TY_NIL || at == TY_VOID) {
-      buf_puts(out, "({ (void)("); emit_expr(c, provided, out); buf_puts(out, "); NULL; })");
+      buf_puts(out, "({ (void)("); emit_expr_for_effect(c, provided, out); buf_puts(out, "); NULL; })");
       return;
     }
   }
@@ -7716,7 +7716,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
       int sve = g_emitting_class_id;
       char dself[32];
       dflt_self_enter(m, dvP, dself, sizeof dself);
-      buf_puts(out, "({ (void)("); emit_expr(c, dvP, out); buf_puts(out, "); NULL; })");
+      buf_puts(out, "({ (void)("); emit_expr_for_effect(c, dvP, out); buf_puts(out, "); NULL; })");
       g_self = svs; g_self_deref = svd; g_emitting_class_id = sve;
       return;
     }
@@ -8093,7 +8093,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
           snprintf(pw, sizeof pw, "parameter %s of %s", m->pnames[idx] ? m->pnames[idx] : "?", m->name ? m->name : "?");
           refuse_nil_store(c, provided, pt, pw);
         }
-        else if (at == TY_NIL && pt == TY_STRING) { buf_puts(out, "((void)("); emit_expr(c, provided, out); buf_puts(out, "), NULL)"); }
+        else if (at == TY_NIL && pt == TY_STRING) { buf_puts(out, "((void)("); emit_expr_for_effect(c, provided, out); buf_puts(out, "), NULL)"); }
         else if (at == TY_POLY && pt == TY_STRING) { buf_puts(out, "sp_poly_to_s_or_nil("); emit_expr(c, provided, out); buf_puts(out, ")"); }
         /* An unresolved call typed TY_UNKNOWN whose emitted value is the gate's
            sp_raise_nomethod(...) poly token, landing in a concretely-typed

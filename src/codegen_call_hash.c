@@ -96,7 +96,7 @@ int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
             : sp_streq(hnn, "PolyPoly") ? 2 : -1;
   if (hdp_v < 0) {
     buf_puts(b, "((void)(");
-    emit_expr(c, recv, b);
+    emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), (sp_Proc *)NULL)");
     return 1;
   }
@@ -210,7 +210,7 @@ int emit_op_hash_aref(Compiler *c, const BopCtx *x, Buf *b) {
     TyKind vt = ty_hash_val(rt);
     int t = ++g_tmp;
     buf_printf(b, "({ %s _t%d = ", c_type_name(rt), t); emit_expr(c, recv, b); buf_puts(b, "; ");
-    buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");  /* the key still evaluates */
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); ");  /* the key still evaluates */
     if (vt == TY_INT) { oint_open(c, x->id, TY_INT, b); buf_printf(b, "({ %s _d%d = _t%d; (_d%d && !_d%d->default_nil) ? sp_oint_of(_d%d->default_v) : sp_oint_nil(); }); })", c_type_name(rt), t, t, t, t, t); oint_close(c, x->id, b); }
     /* absent means the hash's default, which is nil unless one was
        given -- not the empty string (#3790) */
@@ -245,7 +245,7 @@ int emit_op_hash_has_key(Compiler *c, const BopCtx *x, Buf *b) {
   if (hash_key_misses(c, argv[0], hash_kt) && !hash_nil_key_stored(c, argv[0], hash_kt)) {
     /* a key of a class the table cannot hold: false, the receiver and
        the key still evaluated */
-    buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b);
     buf_puts(b, "); 0; })");
     return 1;
   }
@@ -310,7 +310,7 @@ int emit_op_hash_default(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, ", _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })", t, t, t);
     }
     else if (argc == 1) {
-      buf_printf(b, "; (void)("); emit_expr(c, argv[0], b);
+      buf_printf(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_printf(b, "); _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
     }
     else {
@@ -560,7 +560,7 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT(_t%d);", tv);
   }
   else if (held) { buf_puts(b, " "); emit_ctype(c, at, b); buf_printf(b, " _t%d = ", tv); emit_expr(c, argv[0], b); buf_puts(b, ";"); }
-  else if (is_nil) { buf_puts(b, " (void)("); emit_expr(c, argv[0], b); buf_puts(b, ");"); }
+  else if (is_nil) { buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, ");"); }
   buf_printf(b, " if (_t%d && sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);",
              t, t, t, hash_box_cls(rt));
   /* --share-strings: a String the rule shares is the default itself (`h.default
@@ -1132,7 +1132,7 @@ int emit_call_openstruct_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (sp_streq(name, "instance_of?")) yes = tcn && sp_streq(tcn, "OpenStruct");
       else yes = tcn && (sp_streq(tcn, "OpenStruct") || sp_streq(tcn, "Object") ||
                          sp_streq(tcn, "Kernel") || sp_streq(tcn, "BasicObject"));
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes ? 1 : 0);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), %d)", yes ? 1 : 0);
       return 1;
     }
     if (sp_streq(name, "[]") && argc == 1) {
@@ -1260,7 +1260,7 @@ int emit_call_hash_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        only a default argument the receiver may carry, for its effect */
     int dn = hash_new_default_arg(c, recv);
     buf_puts(b, "(");
-    if (dn >= 0) { buf_puts(b, "(void)("); emit_expr(c, dn, b); buf_puts(b, "), "); }
+    if (dn >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, dn, b); buf_puts(b, "), "); }
     buf_puts(b, "(sp_Proc *)NULL)");
     return 1;
   }

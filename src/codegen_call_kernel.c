@@ -363,7 +363,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         if (ko) oint_close(c, id, b);
         return 1;
       }
-      oint_open(c, id, TY_INT, b); buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_oint_nil())"); oint_close(c, id, b);
+      oint_open(c, id, TY_INT, b); buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b); buf_puts(b, "), sp_oint_nil())"); oint_close(c, id, b);
       return 1;
     }
     if (kconv_noraise && sp_streq(name, "Float") && ac == 1) {
@@ -376,7 +376,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else if (ty_is_object(at0) || at0 == TY_POLY || at0 == TY_RATIONAL || at0 == TY_COMPLEX) {
         buf_puts(b, "sp_poly_Float_ex("); emit_boxed(c, av[0], b); buf_puts(b, ", 0)");
       }
-      else { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_ofloat_nil())"); }
+      else { buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b); buf_puts(b, "), sp_ofloat_nil())"); }
       oint_close(c, id, b);
       return 1;
     }
@@ -430,7 +430,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
                         ? "; sp_poly_flo_domain_ck(_t%d); sp_box_f_to_int(_t%d); })"
                         : "; sp_poly_flo_domain_ck(_t%d); sp_float_fit_i(_t%d); })", tf, tf);
       }
-      else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Integer\"), (sp_int)0)"); }  /* #2514 */
+      else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Integer\"), (sp_int)0)"); }  /* #2514 */
       else if (at == TY_POLY) { buf_puts(b, "sp_poly_Integer("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_INT || at == TY_UNKNOWN) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       /* Kernel#Integer converts anything answering #to_int, and a Rational or
@@ -453,7 +453,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
            not the value reinterpreted as an integer (#3717); nil, true and
            false name themselves, as sp_convert_src_name spells them for the
            boxed path */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s into Integer\", sp_convert_src_name(");
         emit_boxed(c, av[0], b);
         buf_puts(b, "))), (sp_int)0)");
@@ -494,7 +494,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       }
       else if (at == TY_STRING) { buf_puts(b, "sp_str_to_f_strict("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_INT) { buf_puts(b, "((sp_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
-      else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Float\"), 0.0)"); }  /* #2514 */
+      else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Float\"), 0.0)"); }  /* #2514 */
       else if (at == TY_POLY) { buf_puts(b, "sp_poly_Float("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_FLOAT || at == TY_UNKNOWN) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       /* Kernel#Float converts anything answering #to_f, and a Rational or a
@@ -519,7 +519,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       else {
         /* a Boolean, Symbol, Array or Hash has no #to_f: CRuby's TypeError,
            not the value reinterpreted as a double (#3888) */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s into Float\", sp_convert_src_name(");
         emit_boxed(c, av[0], b);
         buf_puts(b, "))), 0.0)");
@@ -689,7 +689,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       }
       else if (at == TY_NIL || empty_arr_lit) {
         /* result type is TY_POLY_POLY_HASH: emit the raw hash pointer */
-        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, av[0], b);
         buf_puts(b, "), sp_PolyPolyHash_new())");
       }
       else if (ar.kind == RK_BOXED) { buf_puts(b, "sp_kernel_hash("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
@@ -863,7 +863,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     Repr sr = repr_of(c, argv[0]);
     TyKind st = sr.as_ty;
     if (st == TY_NIL) {
-      buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_sleep_forever(), (sp_int)0)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_sleep_forever(), (sp_int)0)");
       return 1;
     }
     buf_puts(b, "((void)sp_sleep(");
@@ -882,7 +882,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     else if (st != TY_FLOAT && st != TY_BIGINT && conv_cls_name_of(c, st)) {
       /* rb_time_interval's wording, which names the class -- not the Float
          slot's ("can't convert String into time interval") */
-      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into time interval\"); 0.0; })",
                  conv_cls_name_of(c, st));
     }
@@ -1118,7 +1118,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
      tripping -Wunused-value. */
   if (recv < 0 && sp_streq(name, "caller_locations") && argc <= 2 && !bare_call_class_owned(c, id)) {
     buf_puts(b, "(");
-    for (int ai = 0; ai < argc; ai++) { buf_puts(b, "(void)("); emit_expr(c, argv[ai], b); buf_puts(b, "), "); }
+    for (int ai = 0; ai < argc; ai++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[ai], b); buf_puts(b, "), "); }
     buf_puts(b, "sp_PolyArray_new())");
     return 1;
   }
@@ -1495,7 +1495,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           (sp_streq(enm, "key?") || sp_streq(enm, "has_key?") ||
            sp_streq(enm, "include?") || sp_streq(enm, "member?") || sp_streq(enm, "[]"))) {
         buf_puts(b, "(");
-        for (int q = 0; q < eac; q++) { buf_puts(b, "(void)("); emit_expr(c, eav[q], b); buf_puts(b, "), "); }
+        for (int q = 0; q < eac; q++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, eav[q], b); buf_puts(b, "), "); }
         buf_printf(b, "(sp_raise_cls(\"ArgumentError\","
                       " (&(\"\\xff\" \"wrong number of arguments (given %d, expected 1)\")[1])), %s)",
                    eac, default_value_from_compiler(c, repr_of(c, id).as_ty));
@@ -1505,7 +1505,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* arity: [] takes 1; fetch takes 1..2 (#2773) */
       if (enm && sp_streq(enm, "fetch") && (eac == 0 || eac > 2) && nt_ref(nt, id, "block") < 0) {
         buf_puts(b, "(");
-        for (int q = 0; q < eac; q++) { buf_puts(b, "(void)("); emit_expr(c, eav[q], b); buf_puts(b, "), "); }
+        for (int q = 0; q < eac; q++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, eav[q], b); buf_puts(b, "), "); }
         buf_printf(b, "(sp_raise_cls(\"ArgumentError\","
                       " (&(\"\\xff\" \"wrong number of arguments (given %d, expected 1..2)\")[1])), %s)",
                    eac, default_value_from_compiler(c, repr_of(c, id).as_ty));

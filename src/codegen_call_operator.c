@@ -465,7 +465,7 @@ static int emit_builtin_recv_cmp_raise(Compiler *c, const char *name, int recv, 
       !builtin_recv_lacks_cmp(c, rt, name)) return 0;
   int tv = hoist_boxed_rooted(c, recv);
   buf_puts(b, "({ (void)(");
-  emit_expr(c, argv[0], b);
+  emit_expr_for_effect(c, argv[0], b);
   buf_printf(b, "); (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
   return 1;
 }
@@ -713,7 +713,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     /* nil <=> nil is 0; nil <=> anything-else is nil (#2383) */
     if (lrt == TY_NIL) {
       oint_open(c, id, TY_INT, b);
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), (void)("); emit_boxed(c, argv[0], b);
       buf_printf(b, "), %s)", lat == TY_NIL ? "sp_oint_of(0)" : "sp_oint_nil()");
       oint_close(c, id, b);
@@ -805,8 +805,8 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if ((lrt == TY_SYMBOL || comp_ntype(c, recv) == TY_SYMBOL) &&
         lat != TY_SYMBOL && lat != TY_POLY && !latr.untyped) {
       oint_open(c, id, TY_INT, b);
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
-      buf_puts(b, "), (void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+      buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_puts(b, "), sp_oint_nil())");
       oint_close(c, id, b);
       return 1;
@@ -916,7 +916,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                    tb, tb, ta, tb);
         return 1;
       }
-      buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
       return 1;
     }
     /* Array <=> Array: lexicographic element-wise compare, or nil when an
@@ -963,7 +963,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       char ref[24];
       oint_open(c, id, TY_INT, b);
       buf_puts(b, "({ "); emit_sentinel_bind(c, lrt, recv, ref, sizeof ref, b);
-      buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
+      buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); ");
       emit_slot_truthy(lrt, ref, b);
       buf_puts(b, " ? sp_oint_nil() : sp_oint_of(0); })");
       oint_close(c, id, b);
@@ -995,8 +995,8 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int exc_inst = lrt == TY_EXCEPTION && latr.exc && lat != TY_EXCEPTION;
       if (lat != lrt && !exc_inst) {
         oint_open(c, id, TY_INT, b);
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
-        buf_puts(b, "), (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+        buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b);
         buf_puts(b, "), sp_oint_nil())");
         oint_close(c, id, b);
         return 1;
@@ -1018,9 +1018,9 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         !ty_is_object(lrt) && !ty_is_object(lat)) {
       oint_open(c, id, TY_INT, b);
       buf_puts(b, "((void)(");
-      emit_expr(c, recv, b);
+      emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), (void)(");
-      emit_expr(c, argv[0], b);
+      emit_expr_for_effect(c, argv[0], b);
       buf_puts(b, "), sp_oint_nil())");
       oint_close(c, id, b);
       return 1;
@@ -1048,8 +1048,8 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         const char *cn9 = rt == TY_FLOAT ? "Float" : rt == TY_RATIONAL ? "Rational" : "Integer";
         const char *an9 = cat == TY_NIL ? "nil" : cat == TY_STRING ? "String"
                         : cat == TY_SYMBOL ? "Symbol" : "boolean";
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
-        buf_puts(b, "), (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+        buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b);
         buf_printf(b, "), sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"), 0)",
                    cn9, an9);
         return 1;
@@ -1133,7 +1133,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int cls = ty_is_hash(sat) || ty_is_array(sat) || sat == TY_RANGE || lk == NK_ArrayNode || lk == NK_HashNode;
       if (sat == TY_INT || sat == TY_FLOAT || sat == TY_NIL || sat == TY_BOOL ||
           sat == TY_SYMBOL || cls) {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "), sp_raise_cls(\"ArgumentError\", sp_sprintf("
                       "\"comparison of String with %%s failed\", %s(", cls ? "sp_cmperr_desc" : "sp_poly_inspect");
         emit_boxed(c, argv[0], b);
@@ -1185,7 +1185,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_printf(b, "; sp_poly_time_cmp_arg(_t%d, _t%d) %s 0; })", tt, tu, name);
         return 1;
       }
-      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
       buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"comparison of Time with an incompatible value failed\"); 0; })");
       return 1;
     }
@@ -1230,7 +1230,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if (ty_is_object(rt) && call_target(c, id, ty_object_class(rt), name, 0, NULL) < 0) {
       int tv = hoist_boxed_rooted(c, recv);
       buf_puts(b, "({ (void)(");
-      emit_expr(c, argv[0], b);
+      emit_expr_for_effect(c, argv[0], b);
       buf_printf(b, "); (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
       return 1;
     }
@@ -1306,7 +1306,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       buf_printf(b, "; _t%d.nil ? %d : %d; })", tq, nilyes, yes);
       return 1;
     }
-    if (yes >= 0) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes); return 1; }
+    if (yes >= 0) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), %d)", yes); return 1; }
   }
 
   /* poly.is_a?(class_var) where the argument is a TY_CLASS typed expression.
@@ -1378,67 +1378,67 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        are the argument's truthiness -- not integer bitwise (#2401) */
     if (argc == 1 && is_bit_op(name)) {
       if (sp_streq(name, "&")) {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_puts(b, "), (void)("); emit_boxed(c, argv[0], b); buf_puts(b, "), 0)");
       }
       else {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_puts(b, "), sp_poly_truthy("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
       }
       return 1;
     }
     /* nil.inspect is a new String each call, which a later `<<` changes */
     if (argc == 0 && sp_streq(name, "inspect")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), sp_str_dup(SPL(\"nil\")))");
       return 1;
     }
-    if (argc == 0 && sp_streq(name, "to_s"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_str_frozen_empty)"); return 1; }
-    if (argc == 0 && sp_streq(name, "nil?"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)"); return 1; }
-    if (argc == 0 && sp_streq(name, "to_i"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (sp_int)0)"); return 1; }
-    if (argc == 0 && sp_streq(name, "to_f"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0.0)"); return 1; }
-    if (argc == 0 && (is_to_rational(name))) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_rational_new(0, 1))"); return 1; }
+    if (argc == 0 && sp_streq(name, "to_s"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), sp_str_frozen_empty)"); return 1; }
+    if (argc == 0 && sp_streq(name, "nil?"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)"); return 1; }
+    if (argc == 0 && sp_streq(name, "to_i"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (sp_int)0)"); return 1; }
+    if (argc == 0 && sp_streq(name, "to_f"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0.0)"); return 1; }
+    if (argc == 0 && (is_to_rational(name))) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), sp_rational_new(0, 1))"); return 1; }
     /* nil.rationalize takes an epsilon of any kind and ignores it; it is
        still evaluated, after the receiver */
     if (argc == 1 && sp_streq(name, "rationalize")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
-      emit_expr(c, argv[0], b); buf_puts(b, "), sp_rational_new(0, 1))");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");
+      emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_rational_new(0, 1))");
       return 1;
     }
     /* nil =~ anything is nil; nil !~ anything is true (#2385) */
     if (argc == 1 && sp_streq(name, "=~")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
-      buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+      buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)");
       return 1;
     }
     if (argc == 1 && sp_streq(name, "!~")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
-      buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 1)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+      buf_puts(b, "), (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 1)");
       return 1;
     }
-    if (argc == 0 && sp_streq(name, "to_c"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (sp_Complex){0, 0})"); return 1; }
-    if (argc == 0 && sp_streq(name, "to_a"))    { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_PolyArray_new())"); return 1; }
+    if (argc == 0 && sp_streq(name, "to_c"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (sp_Complex){0, 0})"); return 1; }
+    if (argc == 0 && sp_streq(name, "to_a"))    { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), sp_PolyArray_new())"); return 1; }
     if (argc == 0 && sp_streq(name, "to_h"))    {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), sp_SymPolyHash_new())");
       return 1;
     }
     if (argc == 1 && is_kind_query(name)) {
       const char *cn = isa_const_name(nt, argv[0]);
       int yes = cn ? (sp_streq(cn, "NilClass") || sp_streq(name, "instance_of?") ? sp_streq(cn, "NilClass") : (is_object_base_name(cn))) : 0;
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), %d)", yes);
       return 1;
     }
     /* NilClass boolean operators: & is always false, | and ^ test the
        operand's truthiness */
     if (argc == 1 && is_bit_op(name)) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), ");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ");
       if (sp_streq(name, "&")) { buf_puts(b, "(void)("); emit_boxed(c, argv[0], b); buf_puts(b, "), 0)"); }
       else { buf_puts(b, "sp_poly_truthy("); emit_boxed(c, argv[0], b); buf_puts(b, "))"); }
       return 1;
     }
     if (argc == 1 && (sp_streq(name, "===") || sp_streq(name, "equal?") || sp_streq(name, "eql?"))) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (");
       emit_boxed(c, argv[0], b);
       buf_puts(b, ").tag == SP_TAG_NIL)");
       return 1;
@@ -1492,7 +1492,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     const char *acn = nt_kind(nt, argv[0]) == NK_ConstantReadNode
                         ? nt_str(nt, argv[0], "name") : NULL;
     if (acn && is_object_root(acn)) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)");
       return 1;
     }
   }
@@ -1890,14 +1890,14 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     else if (rt == TY_CLASS) { buf_puts(b, "sp_class_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); }
     /* a by-value object has no pointer to null-check and is never falsy (#2633) */
     else if (ty_is_object(rt) && comp_ty_value_obj(c, rt)) {
-      buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), 0)");
+      buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     }
     else if (rt == TY_STRING || ty_is_array(rt) || ty_is_hash(rt) || ty_is_object(rt) ||
              rt == TY_PROC ||
              rt == TY_MATCHDATA || rt == TY_EXCEPTION || rt == TY_FIBER || rt == TY_IO) {
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == 0)");  /* NULL pointer is falsy */
     }
-    else { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), 0)"); }  /* always-truthy -> false */
+    else { buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); }  /* always-truthy -> false */
     return 1;
   }
 
@@ -1915,7 +1915,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     }
     else {
       /* a different-class operand is never the same object: nil */
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");
       emit_boxed(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
     }
     return 1;

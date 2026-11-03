@@ -534,7 +534,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         /* a receiver that runs code (a call, a write) is evaluated, as
            CRuby does, though the answer is known */
         int run = recv >= 0 && subtree_has_side_effect(c, recv);
-        if (run) { buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
+        if (run) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); "); }
         buf_printf(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(%d)" : "%d", ans);
         if (run) buf_puts(b, "; })");
         return 1;
@@ -1023,7 +1023,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          qualified. Qualify when the receiver is a constant other than Object. */
       /* stage the receiver (the module const_get was sent to) so #receiver is
          it, not nil; #name is recovered from the message (#3034) */
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), sp_exc_stage_recv("); emit_boxed(c, recv, b);
       buf_puts(b, "), sp_raise_cls(\"NameError\", ");
       if (cg_qm[0] >= 'A' && cg_qm[0] <= 'Z') {
@@ -1054,7 +1054,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (cg_own) {
       /* the name exists, but not on the receiver itself, and the search was
          asked not to climb (#3762) */
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_puts(b, "), sp_exc_stage_recv("); emit_boxed(c, recv, b);
       buf_puts(b, "), sp_raise_cls(\"NameError\", ");
       {
@@ -1081,7 +1081,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     else if (ak == NK_StringNode) qm = nt_str(nt, argv[0], "content");
     if (qm) {
       if (const_name_is_wrong(qm)) {
-        buf_printf(b, "((void)("); emit_expr(c, recv, b);
+        buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "), sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", ");
         emit_str_literal(b, qm);
         buf_printf(b, ")), 0)");
@@ -3659,7 +3659,7 @@ static int emit_cvar_reflection(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (cvn && ccid >= 0 && !cvar_name_ok(cvn)) {
     char msg[400]; snprintf(msg, sizeof msg, "'%s' is not allowed as a class variable name", cvn);
     buf_puts(b, "(");
-    for (int a = 1; a < argc; a++) { buf_puts(b, "(void)("); emit_expr(c, argv[a], b); buf_puts(b, "), "); }
+    for (int a = 1; a < argc; a++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[a], b); buf_puts(b, "), "); }
     buf_printf(b, "(sp_raise_cls(\"NameError\", (sp_exc_stage_recv(sp_box_class((sp_Class){%d})), sp_exc_stage_name(", ccid);
     emit_str_literal(b, cvn);
     buf_puts(b, "), ");
@@ -3865,7 +3865,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          name-backed value and side-effect-eval the receiver. */
       const char *_ocn = _cidx >= 0 && _cidx < c->nclasses ? c->classes[_cidx].name : NULL;
       if (_ocn && (is_object_base_name(_ocn))) {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", _ocn);
         return 1;
       }
@@ -3875,7 +3875,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          "IO::Buffer" over a leaf-keyed class). */
       if (_cidx >= 0 && c->classes[_cidx].is_native_class) {
         const char *_nqn = class_ruby_name(c, _cidx);
-        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "), ((sp_Class){(sp_int)%d, SPL(\"%s\")}))", _cidx,
                    _nqn ? _nqn : c->classes[_cidx].name);
         return 1;
@@ -3924,7 +3924,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_printf(b, "; ((sp_Class){(sp_int)-1, _t%d.nil ? SPL(\"NilClass\") : SPL(\"%s\")}); })", tcv, cls);
       }
       else {
-        buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "); ((sp_Class){(sp_int)-1, SPL(\"%s\")}); })", cls);
       }
       return 1;
@@ -3942,7 +3942,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (cn) {
       /* a first-class name-backed Class value; the receiver is side-effect-
          evaluated when it is not a plain read */
-      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", cn);
       return 1;
     }
@@ -4038,7 +4038,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid;
         }
         if (acid >= 0) {
-          buf_puts(b, "((void)("); emit_expr(c, recv, b);
+          buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
           buf_puts(b, "), (const char *)NULL)");
           return 1;
         }
@@ -4100,7 +4100,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       else if (a0k == NK_StringNode) cn0 = nt_str(nt, argv[0], "unescaped");
       if (cn0) {
         if (const_name_is_wrong(cn0)) {
-          buf_printf(b, "((void)("); emit_expr(c, recv, b);
+          buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
           buf_printf(b, "), sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", ");
           emit_str_literal(b, cn0);
           buf_printf(b, ")), 0)");
@@ -4130,7 +4130,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_puts(b, "; })");
           return 1;
         }
-        buf_printf(b, "((void)("); emit_expr(c, recv, b);
+        buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         /* a constant not assigned yet is not defined: asked at run time */
         if (yes && const_has_flag(comp_const(c, cn0))) buf_printf(b, "), cst_%s__set)", cn0);
         else buf_printf(b, "), %d)", yes);
@@ -5208,7 +5208,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       Buf sgb; memset(&sgb, 0, sizeof sgb);
       if (!class_has_subclass(c, cid) &&
           emit_sg_accessor(c, id, cid, c->classes[cid].name, name, argc, argv, &sgb)) {
-        buf_puts(b, "((void)("); emit_expr(c, robj, b); buf_printf(b, "), %s)", sgb.p);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, robj, b); buf_printf(b, "), %s)", sgb.p);
         free(sgb.p);
         return 1;
       }
@@ -5334,7 +5334,7 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       if (nc_mi >= 0 && emit_reopen_block_call(c, id, recv, nc_mi, NULL, b)) return 1;
       if (nc_mi >= 0) {
         if (g_plan_check) ucall_observe(c, id, nc_mi, nc_ci, 0);
-        buf_printf(b, "((void)("); emit_expr(c, recv, b);
+        buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         buf_printf(b, "), %s(0", mc_method(c, &c->scopes[nc_mi]));
         emit_args_filled(c, nc_mi, nt_ref(nt, id, "arguments"), ", ", b);
         emit_trailing_blk_arg(c, &c->scopes[nc_mi], id, -1, b);

@@ -329,7 +329,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        overflow the signed product) */
     else if (rt == TY_INT) { buf_puts(b, "((sp_int)(2*(uintptr_t)("); emit_expr(c, recv, b); buf_puts(b, ")+1))"); }
     else if (rt == TY_SYMBOL) { buf_puts(b, "SP_SYM_OBJECT_ID("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-    else if (rt == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), SP_NIL_OBJECT_ID)"); }
+    else if (rt == TY_NIL) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), SP_NIL_OBJECT_ID)"); }
     else if (rt == TY_BOOL) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") ? SP_TRUE_OBJECT_ID : SP_FALSE_OBJECT_ID)"); }
     /* a class value: the identity its box carries (its id, or the name a
        name-backed class boxes by), so a boxed copy of it answers the same */
@@ -422,7 +422,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      false (the receiver still evaluated). */
   if (recv >= 0 && oint_kind(rt) && sp_streq(name, "nil?") && argc == 0) {
     if (node_has_oint_form(c, recv)) { buf_puts(b, "(("); emit_oint_expr(c, recv, rt, b); buf_puts(b, ").nil)"); }
-    else { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)"); }
+    else { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); }
     return 1;
   }
   /* nil? on a string: a nullable string carries NULL (e.g. a scan miss);
@@ -453,7 +453,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
   if (recv >= 0 && argc == 0 && sp_streq(name, "nil?") &&
       (rt == TY_RANGE || rt == TY_TIME || rt == TY_COMPLEX || rt == TY_RATIONAL ||
        rt == TY_BOOL || rt == TY_CLASS)) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     return 1;
   }
   /* a predicate on an empty array literal folds to a constant: the block (if
@@ -553,7 +553,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           yn = (ak == NK_TrueNode) ? 1 : (ak == NK_FalseNode) ? 0 : (at2 != TY_BOOL && at2 != TY_POLY ? 0 : -1);
         else
           yn = (ak == NK_FalseNode) ? 1 : (ak == NK_TrueNode) ? 0 : (at2 != TY_BOOL && at2 != TY_POLY ? 0 : -1);
-        if (yn >= 0) { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_printf(b, "), %d)", yn); return 1; }
+        if (yn >= 0) { buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_printf(b, "), %d)", yn); return 1; }
       }
       /* an exception instance matches by name up its class chain (#2759) */
       if (at2 == TY_EXCEPTION && (is_exc_name(cn) || is_builtin_class_name(cn))) {
@@ -563,7 +563,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       }
       int yes = ty_matches_class(c, at2, cn, 0);
       if (yes >= 0) {
-        buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_printf(b, "), %d)", yes);
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_printf(b, "), %d)", yes);
         return 1;
       }
       /* a user object: its class may descend from this builtin (a Struct or
@@ -984,7 +984,11 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
             if (!pdecl) buf_puts(g_pre, "(void)(");
             else buf_printf(g_pre, "lv_%s = ", rename_local(pn));
             if (is_exec) {
-              if (p < iac) { if (ppoly) emit_boxed(c, iav[p], g_pre); else emit_expr(c, iav[p], g_pre); }
+              if (p < iac) {
+                int ve = !pdecl ? effect_view_open(c, iav[p]) : -1;
+                if (ppoly) emit_boxed(c, iav[p], g_pre); else emit_expr(c, iav[p], g_pre);
+                effect_view_close(c, ve);
+              }
               else emit_ie_param_default(c, plv ? plv->type : TY_POLY, g_pre);
             }
             else buf_printf(g_pre, "_t%d", tr);
@@ -1018,7 +1022,11 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           if (tramp_argc >= 0) {
             int an = ie_tramp_effective_arg(c, id, p);
             Buf eb; memset(&eb, 0, sizeof eb);
-            if (an >= 0) { if (ppoly) emit_boxed(c, an, &eb); else emit_expr(c, an, &eb); }
+            if (an >= 0) {
+              int ve = !pdecl ? effect_view_open(c, an) : -1;
+              if (ppoly) emit_boxed(c, an, &eb); else emit_expr(c, an, &eb);
+              effect_view_close(c, ve);
+            }
             /* a parameter the trampoline passes nothing for is nil in its
                slot's own form: the `0` assigned an int to a boxed one */
             else if (pdecl) emit_ie_param_default(c, plv->type, &eb);
@@ -1273,7 +1281,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     Repr frr = repr_of(c, recv);
     TyKind frt = frr.as_ty;
     if (frt == TY_INT || frt == TY_FLOAT || frt == TY_SYMBOL || frt == TY_BOOL || frt == TY_NIL) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)");
       return 1;
     }
     /* a shared String handle keeps its own frozen flag: read through it, not
@@ -1384,7 +1392,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int fzcall = nt_kind(nt, fzb) == NK_CallNode;
         int mk = fzcall ? view_bind(fzb, "%s", thr) : -1;
         buf_puts(b, " (void)(");
-        emit_expr(c, recv, b);
+        emit_expr_for_effect(c, recv, b);
         buf_puts(b, ");");
         if (fzcall) view_unbind(mk);
       }
@@ -1597,7 +1605,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (fvt == TY_INT || fvt == TY_FLOAT || fvt == TY_SYMBOL || fvt == TY_BOOL ||
         fvt == TY_COMPLEX || fvt == TY_RATIONAL ||
         fvt == TY_BIGINT) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)");
       return 1;
     }
   }
@@ -1645,7 +1653,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* itself is pure identity for every receiver, hashes included; the
        hash exclusion below is for freeze/dup/clone, which need real
        handling on the reference types */
-    if (argc0 == 0 && sp_streq(name, "itself")) { emit_expr(c, recv, b); return 1; }
+    if (argc0 == 0 && is_itself_name(name)) { emit_expr_as_value_of(c, recv, id, b); return 1; }
     /* a Time is a reference: dup and clone answer a new Time, which a later
        localtime / utc changes apart from the receiver */
     if (is_dup_clone && recv_t == TY_TIME && recv_tr.kind != RK_BOXED) {
@@ -1670,12 +1678,12 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                         : recv_t == TY_NIL ? "NilClass"
                         : (recv_t == TY_INT || recv_t == TY_BIGINT) ? "Integer" : NULL;
         if (fvt && sp_streq(fvt, "FalseNode") && icn) {
-          buf_puts(b, "((void)("); emit_expr(c, recv, b);
+          buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
           buf_printf(b, "), (sp_raise_cls(\"ArgumentError\", \"can't unfreeze %s\"), %s))",
                      icn, default_value_from_compiler(c, recv_t));
           return 1;
         }
-        emit_expr(c, recv, b); return 1;
+        emit_expr_as_value_of(c, recv, id, b); return 1;
       }
     }
     /* dup/clone of a boxed plain object copies (Object.new included); the
@@ -1731,7 +1739,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     if (argc0 == 0 && !freeze_stateful && !ty_is_hash(recv_t) &&
         !(is_dup_clone && (recv_t == TY_STRING || ty_is_array(recv_t) || recv_native))) {
-      emit_expr(c, recv, b); return 1;
+      emit_expr_as_value_of(c, recv, id, b); return 1;
     }
     if (argc0 == 0 && recv_t == TY_STRING && is_dup_clone) {
       /* clone preserves the frozen state; dup always returns an unfrozen copy. */
@@ -2571,7 +2579,7 @@ static int emit_blank_slate_defined_ask(Compiler *c, int id, int recv, int ci, B
                   comp_reader_in_chain(c, ci, m, NULL) || comp_writer_in_chain(c, ci, m, NULL) ||
                   (basicobject_own_method(m) && !sp_streq(m, "initialize") && !sp_streq(m, "method_missing")));
   buf_puts(b, "((void)(");
-  emit_expr(c, recv, b);
+  emit_expr_for_effect(c, recv, b);
   buf_printf(b, "), %d)", yes);
   return 1;
 }
@@ -2646,7 +2654,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     if (ic_r >= 0 && ic_n && sp_streq(ic_n, "initialize_copy") && ic_c == 1 &&
         ty_is_object(comp_ntype(c, ic_r)) &&
         comp_method_in_chain(c, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", NULL) < 0) {
-      buf_puts(b, "((void)("); emit_expr(c, ic_v[0], b); buf_puts(b, "), ");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, ic_v[0], b); buf_puts(b, "), ");
       emit_expr(c, ic_r, b); buf_puts(b, ")");
       return 1;
     }
@@ -2823,7 +2831,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
           }
           return 1;
         }
-        buf_puts(b, "((void)("); emit_expr(c, crecv, b); buf_puts(b, "))");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, crecv, b); buf_puts(b, "))");
         return 1;
       }
     }
@@ -2850,7 +2858,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
           !comp_reader_in_chain(c, bsci, bsnm, NULL) &&
           !comp_writer_in_chain(c, bsci, bsnm, NULL)) {
         const char *bscn = class_ruby_name(c, bsci) ? class_ruby_name(c, bsci) : c->classes[bsci].name;
-        buf_printf(b, "({ (void)("); emit_expr(c, bsrecv, b);
+        buf_printf(b, "({ (void)("); emit_expr_for_effect(c, bsrecv, b);
         {
           char head[200]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", bsnm);
           buf_puts(b, "); sp_raise_cls(\"NoMethodError\", ");
@@ -2873,7 +2881,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&
             comp_resolve_member(c, ty_object_class(irt0), "itself", 0, NULL, NULL) == SP_MEMBER_ATTR)) {
-        emit_expr(c, nt_ref(nt, id, "receiver"), b);
+        emit_expr_as_value_of(c, nt_ref(nt, id, "receiver"), id, b);
         return 1;
       }
     }
@@ -2898,8 +2906,8 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         return 1;
       }
       if (rt0 == TY_NIL && at0 == TY_NIL) {
-        buf_puts(b, "((void)("); emit_expr(c, rv0, b); buf_puts(b, "), (void)(");
-        emit_expr(c, av0[0], b); buf_puts(b, "), sp_box_int(0))");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, rv0, b); buf_puts(b, "), (void)(");
+        emit_expr_for_effect(c, av0[0], b); buf_puts(b, "), sp_box_int(0))");
         return 1;
       }
       /* a boxed operand can hold the same singleton: `false <=> key`, the
@@ -2910,8 +2918,8 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         buf_puts(b, ")");
         return 1;
       }
-      buf_puts(b, "((void)("); emit_expr(c, rv0, b); buf_puts(b, "), (void)(");
-      emit_expr(c, av0[0], b); buf_puts(b, "), sp_box_nil())");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, rv0, b); buf_puts(b, "), (void)(");
+      emit_expr_for_effect(c, av0[0], b); buf_puts(b, "), sp_box_nil())");
       return 1;
     }
     /* a boolean has no #=~ (so #!~ fails the same way): CRuby's NoMethodError.
@@ -2920,7 +2928,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         !diag_user_defines(c, "=~")) {
       int t1 = ++g_tmp;
       buf_printf(b, "({ sp_int _t%d = ", t1); emit_expr(c, rv0, b);
-      buf_printf(b, "; (void)("); emit_expr(c, av0[0], b);
+      buf_printf(b, "; (void)("); emit_expr_for_effect(c, av0[0], b);
       buf_printf(b, "); sp_raise_cls(\"NoMethodError\", _t%d ?"
                     " (&(\"\\xff\" \"undefined method '=~' for true\")[1])"
                     " : (&(\"\\xff\" \"undefined method '=~' for false\")[1])); 0; })", t1);
@@ -2944,7 +2952,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         const char *icn = rt0 == TY_NIL ? "NilClass" : rt0 == TY_INT ? "Integer"
                         : rt0 == TY_SYMBOL ? "Symbol" : rt0 == TY_FLOAT ? "Float" : NULL;
         if (icn) {
-          buf_printf(b, "({ (void)("); emit_expr(c, rv0, b);
+          buf_printf(b, "({ (void)("); emit_expr_for_effect(c, rv0, b);
           buf_printf(b, "); sp_raise_cls(\"ArgumentError\","
                         " (&(\"\\xff\" \"can't unfreeze %s\")[1])); %s; })",
                      icn, default_value_from_compiler(c, repr_of(c, id).as_ty));
@@ -3052,15 +3060,15 @@ int emit_call_print_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *n
      that call's own diagnostic (a compile-time NoMethodError) instead of
      silently printing "[]" with the whole receiver dropped. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "inspect")) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), \"[]\")"); return 1;
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), \"[]\")"); return 1;
   }
   if (recv >= 0 && argc == 0 && sp_streq(name, "to_s")) {
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), \"\")"); return 1;
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), \"\")"); return 1;
   }
   /* nil? on an object type: a value-type object is never nil; a heap object
      reference is nil exactly when its pointer is NULL. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "nil?") && ty_is_object(rt)) {
-    if (comp_ty_value_obj(c, rt)) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)"); }
+    if (comp_ty_value_obj(c, rt)) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); }
     else { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)"); }
     return 1;
   }
@@ -3146,7 +3154,7 @@ int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b) {
       tn = ++g_tmp;
       tn = hold_operand(c, argv[k], TY_POLY, 1, tn, 1, " ", b);
     }
-    else { buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, "); "); }
+    else { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
   }
   if (tn >= 0) buf_printf(b, "sp_ivar_name_check(_t%d); ", tn);
   /* a literal name with no `@` is NameError before anything else */
@@ -3224,7 +3232,7 @@ int emit_call_display_ivar_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_printf(b, "), sp_sym_intern(\"%s\"))", ivn);
       return 1;
     }
-    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", have);
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), %d)", have);
     return 1;
   }
   return 0;
@@ -3339,7 +3347,7 @@ int emit_object_ivar_list(Compiler *c, int recv, int ivcid, Buf *b) {
     tracked = 0;
   }
   else if (any1 || tbl) { buf_printf(b, "({ sp_%s *_t%d = ", ivc->c_name, tro); emit_expr(c, recv, b); buf_puts(b, ";"); }
-  else { buf_printf(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, ");"); }
+  else { buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, ");"); }
   if (tracked || tbl) buf_printf(b, " SP_GC_ROOT(_t%d);", tro);
   buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tia, tia);
   /* a ranked class lists them in the order they were first assigned */
@@ -3546,7 +3554,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
     /* A name without a leading `@` is never a valid ivar name: raise NameError
        at runtime (evaluating the receiver first for its side effects). */
     if (!sym || sym[0] != '@') {
-      if (recv >= 0) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), "); }
+      if (recv >= 0) { buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
       else buf_puts(b, "(");
       buf_printf(b, "sp_raise_cls(\"NameError\", \"'%s' is not allowed as an instance variable name\"), sp_box_nil())",
                  sym ? sym : "");
@@ -3744,7 +3752,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
       emit_ivar_reflect_answer(c, id, ivn, b);
       return 1;
     }
-    if (recv >= 0) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, "), sp_box_nil())"); }
+    if (recv >= 0) { buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), sp_box_nil())"); }
     else buf_puts(b, "sp_box_nil()");
     return 1;
   }

@@ -3663,7 +3663,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
       Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
       if (want_ty == TY_POLY) {
         buf_puts(&tb, "((void)(");
-        emit_expr(c, bd3[bn3 - 1], &tb);
+        emit_expr_for_effect(c, bd3[bn3 - 1], &tb);
         buf_puts(&tb, "), sp_box_nil())");
       }
       else emit_unresolved_coerced(c, bd3[bn3 - 1], want_ty, &tb);

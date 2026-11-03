@@ -2176,6 +2176,13 @@ reject-test: string-minus-reject-test $(SPINEL)
 	else grep -q "unsupported value of \`super\` in initialize" "$$tmp/siv.out" || \
 	  { echo "reject-test: FAIL (the value of super in initialize rejected without saying why: $$t)"; sed -n 1,5p "$$tmp/siv.out"; ok=0; }; fi; \
 	done; \
+	for t in $(shell grep -l '^\# spinel: reject-unsupported: ' test/reject/*.rb); do \
+	  why=$$(sed -n 's/^# spinel: reject-unsupported: //p' "$$t"); \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/un.c" >"$$tmp/un.out" 2>&1; then \
+	    echo "reject-test: FAIL ($$t compiled: a construct the compiler refuses)"; ok=0; \
+	  else grep -qF "$$why" "$$tmp/un.out" || \
+	    { echo "reject-test: FAIL ($$t refused without saying why)"; sed -n 1,5p "$$tmp/un.out"; ok=0; }; fi; \
+	done; \
 	for t in $(shell grep -l '^\# spinel: reject-send-super$$' test/reject/*.rb); do \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/ss.c" >"$$tmp/ss.out" 2>&1; then \
 	  echo "reject-test: FAIL (super from a program-defined send into Object#send compiled: $$t)"; ok=0; \

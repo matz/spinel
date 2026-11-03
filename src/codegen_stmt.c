@@ -271,7 +271,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "puts(\"{}\");\n");
   }
   else if (t == TY_NIL || t == TY_VOID) {
-    buf_puts(b, "(void)("); emit_expr(c, arg, b); buf_puts(b, "); putchar('\\n');  /* puts nil */\n");
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, "); putchar('\\n');  /* puts nil */\n");
   }
   else if (nt_kind(c->nt, arg) == NK_ConstantReadNode &&
            nt_str(c->nt, arg, "name") && const_node_class_index(c, arg) >= 0) {
@@ -288,7 +288,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
            (nt_kind(c->nt, arg) == NK_ConstantReadNode ||
             nt_kind(c->nt, arg) == NK_ConstantPathNode)) {
     /* unresolved constant: emit the expression which will raise NameError */
-    buf_puts(b, "(void)("); emit_expr(c, arg, b); buf_puts(b, "); putchar('\\n');\n");
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, "); putchar('\\n');\n");
   }
   else {
     if (!diagnose_eval_call(c, arg) && !diagnose_unsupported_call(c, arg))
@@ -363,7 +363,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (t == TY_VOID) {
     /* a void value (e.g. an always-raising method) printed: evaluate it for
        its effect (it diverges or returns nil); print renders nil as nothing */
-    buf_puts(b, "(void)("); emit_expr(c, arg, b); buf_puts(b, ");\n");
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, arg, b); buf_puts(b, ");\n");
   }
   else if (ty_is_object(t) && obj_str_cname(c, ty_object_class(t), 0)) {
     /* an object with #to_s: call it directly (like the puts arm) */
@@ -605,7 +605,9 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     int sv_vd = g_value_discarded; g_value_discarded = 1;
     buf_puts(b, "(void)(");
     /* a producer whose nil rides beside it is evaluated as that oint, never unwrapped */
+    int ve = effect_view_open(c, arg);
     if (node_has_oint_form(c, arg)) emit_oint_expr(c, arg, TY_INT, b); else emit_expr(c, arg, b);
+    effect_view_close(c, ve);
     buf_puts(b, "); fputs(\"nil\\n\", stdout);\n");
     g_value_discarded = sv_vd;
   }
@@ -1099,7 +1101,7 @@ else {
                     " isnan(_t%d) ? \"NaN\" : \"Infinity\"); }\n", tf, tf);
       return 1;
     }
-    emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, ");\n");
+    emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, ");\n");
     return 1;
   }
   if (sp_streq(name, "warn")) {
@@ -1133,7 +1135,7 @@ else {
           NodeKind ek = nt_kind(c->nt, elems[e]);
           if (ek == NK_AssocSplatNode) {
             int val = nt_ref(c->nt, elems[e], "value");
-            if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, val, b); buf_puts(b, ");\n"); }
+            if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr_for_effect(c, val, b); buf_puts(b, ");\n"); }
             continue;
           }
           int key = nt_ref(c->nt, elems[e], "key");
@@ -1166,9 +1168,9 @@ else {
               /* validate now (unknown raises), read the flag at each print */
               buf_printf(b, "); (void)sp_warning_aref(_t%d);\n", cat_dyn);
             }
-            else if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, val, b); buf_puts(b, ");\n"); }
+            else if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr_for_effect(c, val, b); buf_puts(b, ");\n"); }
           }
-          else if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, val, b); buf_puts(b, ");\n"); }
+          else if (val >= 0) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr_for_effect(c, val, b); buf_puts(b, ");\n"); }
         }
       }
     }
@@ -1246,7 +1248,7 @@ else {
     }
     for (int k = 0; k < argc; k++) {
       if (k == kw_idx) continue;
-      if (bad_cat[0]) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr(c, argv[k], b); buf_puts(b, ");\n"); continue; }
+      if (bad_cat[0]) { emit_indent(b, indent); buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, ");\n"); continue; }
       if (up_pre[0]) {
         emit_indent(b, indent);
         if (guard[0]) buf_printf(b, "if (%s) ", guard);
@@ -5282,7 +5284,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
            (vlv = scope_local(comp_scope_of(c, v), nt_str(c->nt, v, "name"))) &&
            repr_of_slot(c, vlv).handle) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, v, b);
+    emit_expr_for_effect(c, v, b);
     buf_puts(b, "); ");
     emit_local_ref(c, v, nt_str(c->nt, v, "name"), b);
     buf_puts(b, "; })");
@@ -5291,7 +5293,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
      s)` names $g's String */
   else if (shared && strbuf_gvar_write_handle(c, v, &srefV)) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, v, b);
+    emit_expr_for_effect(c, v, b);
     buf_printf(b, "); %s; })", srefV.p);
   }
   /* A conditional whose arms include a local that is the handle (`h = c ? x
@@ -5354,7 +5356,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
      that slot's (new) handle */
   else if (shared && strbuf_opwrite_handle(c, v, &srefV)) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, v, b);
+    emit_expr_for_effect(c, v, b);
     buf_printf(b, "); %s; })", srefV.p);
   }
   /* --share-strings: a mutator on a narrowed box answers that box: its
@@ -5406,7 +5408,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     else if (cb9 != v && shared &&
         strbuf_slot_text(c, cb9, &srefC9b)) {
       buf_puts(b, "({ (void)(");
-      emit_expr(c, v, b);
+      emit_expr_for_effect(c, v, b);
       buf_printf(b, "); %s; })", srefC9b.p);
     }
     else {
@@ -6079,7 +6081,7 @@ int emit_array_op_assign(Compiler *c, const char *lval, TyKind t,
     return 1;
   }
   if (sp_streq(op, "*") && array_times_type_error(vt)) {
-    buf_puts(b, "{ (void)("); emit_expr(c, v, b);
+    buf_puts(b, "{ (void)("); emit_expr_for_effect(c, v, b);
     buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s\"); }", array_times_type_error(vt));
     return 1;
   }
@@ -6455,7 +6457,7 @@ static void emit_op_assign_str_rhs(Compiler *c, int v, int strict, Buf *b) {
   }
   else if (vt == TY_UNKNOWN) emit_unresolved_coerced(c, v, TY_STRING, b);   /* the raise token */
   else if (strict && (vt == TY_NIL || vt == TY_VOID)) {
-    buf_puts(b, "({ (void)("); emit_expr(c, v, b); buf_puts(b, "); (const char *)NULL; })");
+    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, v, b); buf_puts(b, "); (const char *)NULL; })");
   }
   else emit_expr(c, v, b);
 }
@@ -6795,7 +6797,7 @@ void emit_cond(Compiler *c, int id, Buf *b) {
        the test would have to read. */
     if (bn > 0 && (btt == TY_UNKNOWN || btt == TY_VOID) && block_tail_is_unresolved(c, bb[bn - 1]) &&
         block_next_value_ty(c, bbody) == TY_UNKNOWN) {
-      buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 0)");
+      buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)");
       return;
     }
   }
@@ -6830,12 +6832,12 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   TyKind t = tr.as_ty;
   if (emit_cond_andor(c, id, t, b)) return;
   if (tr.kind == RK_BOXED) { buf_puts(b, "sp_poly_truthy("); emit_expr(c, id, b); buf_puts(b, ")"); return; }
-  if (t == TY_NIL)  { buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 0)"); return; }
+  if (t == TY_NIL)  { buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return; }
   /* Ruby truthiness: only nil and false are falsy. A nullable scalar reads
      falsy at its nil (NULL string / the oint's flag); a pointer
      value is falsy when NULL. Every other concrete value is truthy. */
   /* a value-type object is never a NULL pointer -- it is always truthy */
-  if (comp_ty_value_obj(c, t)) { buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 1)"); return; }
+  if (comp_ty_value_obj(c, t)) { buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 1)"); return; }
   if (t == TY_STRING || t == TY_STRBUF || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t) ||
       t == TY_PROC || t == TY_MATCHDATA || t == TY_EXCEPTION ||
       t == TY_BIGINT || t == TY_REGEX || t == TY_CURRY || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR || t == TY_RANDOM || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT ||
@@ -6854,14 +6856,14 @@ void emit_cond(Compiler *c, int id, Buf *b) {
      is truthy in condition position. Evaluate it for side effects and yield 1. */
   if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_COMPLEX ||
       t == TY_RATIONAL || t == TY_TIME) {
-    buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 1)"); return;
+    buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 1)"); return;
   }
   /* a yield no call site gives a block has no value type: reached, it
      raises LocalJumpError (the yield's own emission), so the test that
      follows is never read (#5096) */
   if ((t == TY_UNKNOWN || t == TY_VOID) && nt_kind(c->nt, id) == NK_YieldNode &&
       g_block_id < 0 && !g_yield_proc_ref) {
-    buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 0)"); return;
+    buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return;
   }
   /* a class method no reopening of a builtin defines, as a condition
      (`::Time.zone ? a : b`, DateTime.current): the call raises when reached
@@ -6872,7 +6874,7 @@ void emit_cond(Compiler *c, int id, Buf *b) {
      operators around it untyped */
   if ((t == TY_UNKNOWN || t == TY_VOID) && nt_kind(c->nt, id) == NK_CallNode &&
       (call_on_builtin_class_missing(c, id) || missing_call_raised(c, id) >= 0)) {
-    buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, "), 0)"); return;
+    buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return;
   }
   if (t != TY_BOOL) unsupported(c, id, "condition (non-bool)");
   emit_expr(c, id, b);
@@ -10522,7 +10524,7 @@ static int emit_case_container_eq(Compiler *c, int cond, int t, TyKind pt, Buf *
     buf_puts(b, "))");
   }
   else {
-    buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, cond, b); buf_puts(b, "), 0)");
+    buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, cond, b); buf_puts(b, "), 0)");
   }
   return 1;
 }
@@ -10840,7 +10842,7 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
            (pt == TY_INT || pt == TY_FLOAT || pt == TY_BOOL || pt == TY_NIL ||
             pt == TY_BIGINT || pt == TY_RATIONAL)) {
     buf_printf(b, "((void)_t%d, ", t);
-    if (reidx < 0) { buf_puts(b, "(void)("); emit_expr(c, cond, b); buf_puts(b, "), "); }
+    if (reidx < 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, cond, b); buf_puts(b, "), "); }
     buf_puts(b, "0)");
   }
   /* a Regexp value that is no literal (built by interpolation, held in a
@@ -10864,7 +10866,7 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
      evaluate the arm for its effects and answer false */
   else if ((comp_ntype(c, cond) == TY_RANGE && (ty_is_array(pt) || ty_is_hash(pt))) ||
            (comp_ntype(c, cond) == TY_FLOAT_RANGE && (pt == TY_STRING || ty_is_array(pt) || ty_is_hash(pt)))) {
-    buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, cond, b); buf_puts(b, "), 0)");
+    buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, cond, b); buf_puts(b, "), 0)");
   }
   else if (comp_ntype(c, cond) == TY_RANGE && pt != TY_STRING) {
     /* `when lo..hi` is range membership, not equality */
@@ -11271,7 +11273,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             if (wat != TY_STRING && wat != TY_STRBUF && wat != TY_POLY && wat != TY_UNKNOWN) {
               /* ...save an object whose class has its own ===, which may */
               if (!emit_when_user_eq(c, conds[j], t, pt, b)) {
-                buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
+                buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, conds[j], b); buf_puts(b, "), 0)");
               }
             }
             else if (!emit_str_eq_lit_tmp(c, t, conds[j], b)) {
@@ -11711,7 +11713,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
           TyKind wat2 = comp_ntype(c, conds[j]);
           if (wat2 != TY_STRING && wat2 != TY_STRBUF && wat2 != TY_POLY && wat2 != TY_UNKNOWN) {
             if (!emit_when_user_eq(c, conds[j], t, pt, b)) {
-              buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
+              buf_printf(b, "((void)_t%d, (void)(", t); emit_expr_for_effect(c, conds[j], b); buf_puts(b, "), 0)");
             }
           }
           else if (!emit_str_eq_lit_tmp(c, t, conds[j], b)) {
@@ -14085,7 +14087,7 @@ void emit_tail_value(Compiler *c, int node, Buf *b) {
              node == scope_body_last(c, (int)(ts - c->scopes)) ? strbuf_iter_box_tail(c, node) : -1;
   if (ibox >= 0) {
     buf_puts(b, "({ (void)(");
-    emit_expr(c, node, b);
+    emit_expr_for_effect(c, node, b);
     buf_puts(b, "); sp_poly_unbox_s_pub(");
     emit_expr(c, ibox, b);
     buf_puts(b, "); })");
@@ -14156,7 +14158,7 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
   if (g_ret_type != TY_UNKNOWN && nt_kind(c->nt, node) == NK_CallNode &&
       comp_ntype(c, node) == TY_UNKNOWN &&
       (call_names_only_void_methods(c, node) || call_misses_self_method(c, node))) {
-    buf_puts(b, "((void)("); emit_expr(c, node, b); buf_puts(b, "), ");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, node, b); buf_puts(b, "), ");
     emit_ret_nil(c, g_ret_type, b); buf_puts(b, ")");
     return;
   }
@@ -14171,7 +14173,7 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
     TyKind vt0 = comp_ntype(c, node);
     if (ty_is_object(vt0) && !ty_is_object(g_ret_type) && !ty_is_array(g_ret_type) &&
         !ty_is_hash(g_ret_type) && g_ret_type != TY_STRING && g_ret_type != TY_STRBUF) {
-      buf_puts(b, "((void)("); emit_expr(c, node, b); buf_puts(b, "), NULL)");
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, node, b); buf_puts(b, "), NULL)");
       return;
     }
   }
@@ -14319,7 +14321,7 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
       if (nt_kind(c->nt, node) == NK_NilNode) { emit_ret_nil(c, slot, b); return; }
       TyKind nvt = repr_of(c, node).as_ty;
       if (nvt == TY_NIL || nvt == TY_VOID) {
-        buf_puts(b, "({ (void)("); emit_expr(c, node, b); buf_puts(b, "); ");
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, node, b); buf_puts(b, "); ");
         emit_ret_nil(c, slot, b); buf_puts(b, "; })");
         return;
       }
@@ -14344,7 +14346,7 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
       int null_slot = nb.p && sp_streq(nb.p, "NULL");
       free(nb.p);
       if (null_slot && (nvt == TY_NIL || nvt == TY_VOID)) {
-        buf_puts(b, "({ (void)("); emit_expr(c, node, b); buf_puts(b, "); NULL; })");
+        buf_puts(b, "({ (void)("); emit_expr_for_effect(c, node, b); buf_puts(b, "); NULL; })");
         return;
       }
     }
@@ -14479,7 +14481,7 @@ static void emit_return_deferred(Compiler *c, const int *a, int n, Buf *b, int i
        including in a statement-position inline with no return slot. */
     for (int k = 0; k < n; k++) {
       if (node_is_pure_literal(c->nt, a[k])) continue;
-      buf_puts(b, "(void)("); emit_expr(c, a[k], b); buf_puts(b, "); ");
+      buf_puts(b, "(void)("); emit_expr_for_effect(c, a[k], b); buf_puts(b, "); ");
     }
   }
   /* inside a rescue/else clause the region's frame is already popped, so
@@ -14593,7 +14595,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
          before jumping to the exit -- matching the void non-inline path below. */
       for (int k = 0; k < n; k++) {
         int vn = nt_paren_single(c->nt, a[k]);
-        if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr(c, vn, b); buf_puts(b, "); "); }
+        if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, vn, b); buf_puts(b, "); "); }
       }
     }
     emit_frame_unwind(b, g_method_pr_exc_depth, NULL);
@@ -14628,7 +14630,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
   if (g_c_ret_void && g_ret_type == TY_UNKNOWN) {
     emit_indent(b, indent);
     buf_puts(b, "{ ");
-    for (int k = 0; k < n; k++) { buf_puts(b, "(void)("); emit_expr(c, a[k], b); buf_puts(b, "); "); }
+    for (int k = 0; k < n; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a[k], b); buf_puts(b, "); "); }
     emit_frame_unwind(b, 0, NULL);
     emit_main_exit(b);
     return;
@@ -14691,7 +14693,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
   }
   if (ret_has_frames && valueless) {
     int vn = nt_paren_single(c->nt, a[0]);
-    if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr(c, vn, b); buf_puts(b, "); "); }
+    if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, vn, b); buf_puts(b, "); "); }
     n = 0;
   }
   emit_frame_unwind(b, 0, NULL);
@@ -14709,7 +14711,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
        value. Evaluate a non-literal expr for side effects, then a bare return,
        so the generated C doesn't `return <value>` from a void function. */
     int vn = nt_paren_single(c->nt, a[0]);
-    if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr(c, vn, b); buf_puts(b, "); "); }
+    if (!node_is_pure_literal(c->nt, vn)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, vn, b); buf_puts(b, "); "); }
     buf_puts(b, "return;\n");
   }
   else if (n > 0) {
@@ -14720,7 +14722,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
        Evaluate for effect and yield the slot's empty value (#3259). */
     if (ty_is_object(g_ret_type) && !ty_is_object(r0n) &&
         r0n != TY_POLY && r0n != TY_UNKNOWN && r0n != TY_VOID) {
-      buf_puts(b, "{ (void)("); emit_expr(c, a[0], b); buf_puts(b, "); return ");
+      buf_puts(b, "{ (void)("); emit_expr_for_effect(c, a[0], b); buf_puts(b, "); return ");
       if (comp_ty_value_obj(c, g_ret_type))
         buf_printf(b, "(sp_%s){0}", c->classes[ty_object_class(g_ret_type)].c_name);
       else buf_puts(b, "NULL");
@@ -16009,7 +16011,9 @@ int emit_autoload_register(Compiler *c, int id, Buf *b) {
   if (nt_kind(nt, name) == NK_SymbolNode) emit_str_literal(b, nt_str(nt, name, "value"));
   else emit_str_expr(c, name, b);
   buf_puts(b, nt_kind(nt, name) == NK_SymbolNode ? "; (void)(" : "; SP_GC_ROOT(_an); (void)(");
+  int ve = effect_view_open(c, av[1]);
   emit_str_expr(c, av[1], b);
+  effect_view_close(c, ve);
   buf_puts(b, "); ");
   for (int k = 0; k < n; k++) {
     int slot = a[k].slot, f = a[k].file;
@@ -17522,7 +17526,7 @@ static int emit_next_leaving_body(Compiler *c, int id, Buf *b, int indent) {
   else if (nvc > 0) {
     /* untypable slot: evaluate for effects, return nil */
     emit_indent(b, indent); buf_puts(b, "(void)(");
-    emit_expr(c, nv[0], b); buf_puts(b, ");\n");
+    emit_expr_for_effect(c, nv[0], b); buf_puts(b, ");\n");
     emit_indent(b, indent); emit_frame_unwind(b, 0, NULL); buf_puts(b, "_sp_proc_poly_ret = sp_box_nil(); return 0;\n");
   }
   /* the boxed answer a caller reading the poly slot sees (Proc#===, a
@@ -19789,7 +19793,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             return 1;
           }
           emit_indent(b, indent);
-          buf_puts(b, "(void)"); emit_expr(c, id, b); buf_puts(b, ";\n");
+          buf_puts(b, "(void)"); emit_expr_for_effect(c, id, b); buf_puts(b, ";\n");
           return 1;
         }
       }
@@ -19814,7 +19818,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
         /* an answer whose nil rides beside it is left as that oint */
         Repr r = repr_of(c, id);
         if (r.opt_producer) emit_oint_expr(c, id, r.as_ty, b);
-        else emit_expr(c, id, b);
+        else emit_expr_for_effect(c, id, b);
         buf_puts(b, ";\n");
         g_ie_discard_value = sv;
         return 1;
@@ -19823,9 +19827,11 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
   }
   emit_indent(b, indent);
   /* a value nobody reads is never unwrapped: `a[-100]` alone must not raise
-     the TypeError sp_oint_arg carries for a plain read */
+     the TypeError sp_oint_arg carries for a plain read; a call whose value is
+     dropped (an_node_dropped) is emitted for its effect */
   { Repr r = repr_of(c, id);
     if (r.opt_producer) { buf_puts(b, "(void)("); emit_oint_expr(c, id, r.as_ty, b); buf_puts(b, ")"); }
+    else if (an_node_dropped(c, id)) emit_expr_for_effect(c, id, b);
     else emit_expr(c, id, b); }
   buf_puts(b, ";\n");
   return 1;
@@ -22138,7 +22144,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       for (int a = 0; a < nvc2; a++) {
         if (node_is_pure_literal(nt, nv2[a])) continue;
         emit_indent(b, indent);
-        buf_puts(b, "(void)("); emit_expr(c, nv2[a], b); buf_puts(b, ");\n");
+        buf_puts(b, "(void)("); emit_expr_for_effect(c, nv2[a], b); buf_puts(b, ");\n");
       }
     }
     /* `next` crossing begin..ensure regions opened INSIDE this loop must run
@@ -22253,12 +22259,14 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
   if (ty_k == NK_PreExecutionNode || ty_k == NK_PostExecutionNode) { return; } /* hoisted separately */
 
   /* any remaining value expression as a bare statement (its value is used
-     only when this is the last statement of an inlined expr method); a
+     only when this is the last statement of an inlined expr method: one
+     whose value is dropped, an_node_dropped, is emitted for its effect); a
      number answered with its nil beside it is left as that oint, not
      unwrapped (a nil would raise for a value nobody reads) */
   emit_indent(b, indent);
   { Repr r = repr_of(c, id);
     if (r.opt_producer) emit_oint_expr(c, id, r.as_ty, b);
+    else if (an_node_dropped(c, id)) emit_expr_for_effect(c, id, b);
     else emit_expr(c, id, b); }
   buf_puts(b, ";\n");
 }
@@ -23043,7 +23051,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
            !is_subst && nt_kind(nt, id) == NK_CallNode && nt_ref(nt, id, "receiver") < 0 &&
            nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "loop") &&
            nt_ref(nt, id, "block") >= 0) {
-    buf_puts(b, "((void)("); emit_expr(c, id, b); buf_puts(b, "), ");
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, id, b); buf_puts(b, "), ");
     emit_ret_nil(c, g_ret_type, b); buf_puts(b, ")");
   }
   /* a poly tail value feeding a narrower (non-poly) return slot -- a scalar
@@ -24770,7 +24778,9 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     emit_indent(b, indent);
     buf_puts(b, "(void)(");
     /* (an Integer answer, setbyte's, is read as the `&.`'s nil-able form) */
+    int ve = effect_view_open(c, id);
     if (oint_kind(st) && repr_of(c, id).kind != RK_BOXED) emit_oint_expr(c, id, st, b); else emit_expr(c, id, b);
+    effect_view_close(c, ve);
     buf_puts(b, ");\n");
     return 1;
   }
@@ -24797,7 +24807,9 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     emit_indent(b, indent);
     buf_puts(b, "(void)(");
     /* (an Integer answer is read as the `&.`'s nil-able form) */
+    int ve = effect_view_open(c, id);
     if (oint_kind(st) && repr_of(c, id).kind != RK_BOXED) emit_oint_expr(c, id, st, b); else emit_expr(c, id, b);
+    effect_view_close(c, ve);
     buf_puts(b, ");\n");
     return 1;
   }
@@ -25180,7 +25192,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   /* onto a fresh typed Array given another kind (an_push_widens_fresh): the
      value form rebuilds it as the general Array; the statement drops it */
   if ((is_push_alias(name) || sp_streq(name, "concat")) && argc >= 1 && an_push_widens_fresh(c, id)) {
-    emit_indent(b, indent); buf_puts(b, "(void)"); emit_expr(c, id, b); buf_puts(b, ";\n");
+    emit_indent(b, indent); buf_puts(b, "(void)"); emit_expr_for_effect(c, id, b); buf_puts(b, ";\n");
     return 1;
   }
   if (is_push_alias(name) && argc >= 1) {

@@ -153,6 +153,7 @@ static int view_read(Compiler *c, int kind, int id) {
   case VR_POLY_LIFT:     return c->poly_strbuf_lift[id];
   case VR_NIL_TESTED:    return c->nil_tested[id];
   case VR_HEAD_HELD:     return c->head_held[id];
+  case VR_DISCARDED:     return c->value_discarded[id];
   default:               return (int)c->nilnarrow[id];
   }
 }
@@ -164,6 +165,7 @@ static void view_write(Compiler *c, int kind, int id, int v) {
   case VR_POLY_LIFT:     c->poly_strbuf_lift[id] = (unsigned char)v; break;
   case VR_NIL_TESTED:    c->nil_tested[id] = (unsigned char)v; break;
   case VR_HEAD_HELD:     c->head_held[id] = (unsigned char)v; break;
+  case VR_DISCARDED:     c->value_discarded[id] = (unsigned char)v; break;
   default:               comp_set_nilnarrow(c, id, (TyKind)v); break;
   }
 }

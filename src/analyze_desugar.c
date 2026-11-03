@@ -14061,6 +14061,36 @@ static void bi_flag_dead_else(NodeTable *nt, int copy) {
   if (els >= 0 && nt_kind(nt, els) == NK_ElseNode) bi_flag_calls(nt, els);
 }
 
+/* A copy of bdef, the builtins/ definition of the bi-th name a program's
+   reopening replaced, for the call id (enum_copy_own): a receiver whose
+   class has its own method of the name runs it. Appended to nb. 0 when out
+   of memory. */
+static int enum_own_copy(NodeTable *nt, int bdef, int bi, int id, int in_copy, int k,
+                         int **nb, int *nbn, int *cap) {
+  int obase = nt->count;
+  int oc = nt_clone_subtree(nt, bdef);
+  if (oc < 0) return 0;
+  char on[256]; snprintf(on, sizeof on, "__enum_%s__%do", sp_builtin_enum_names[bi], k);
+  nt_node_set_str(nt, oc, "name", on);
+  nt_node_set_int(nt, oc, "private_helper", 1);
+  nt_node_set_int(nt, oc, "enum_site", id);
+  nt_node_set_int(nt, oc, "enum_bi", bi);
+  nt_node_set_int(nt, oc, "enum_in_copy", in_copy);
+  nt_node_set_int(nt, id, "enum_copy_own", oc);
+  for (int j = obase; j < nt->count; j++)
+    if (j != oc && nt_kind(nt, j) == NK_CallNode) nt_node_set_int(nt, j, "enum_in_copy", oc);
+  { int sb = nt_ref(nt, id, "block");
+    if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, oc); }
+  if (*nbn >= *cap) {
+    int nc = *cap * 2;
+    int *g = (int *)realloc(*nb, sizeof(int) * (size_t)nc);
+    if (!g) return 0;
+    *nb = g; *cap = nc;
+  }
+  (*nb)[(*nbn)++] = oc;
+  return 1;
+}
+
 /* Is `v` a name the program builds rather than spells: an interpolation
    (`"#{q}_by"`, `:"on_#{t}"`), a `to_sym` / `intern` / `+` of anything? */
 static int bi_value_builds_name(const NodeTable *nt, int v) {
@@ -14432,7 +14462,14 @@ int desugar_builtins(Compiler *c) {
     int in_copy = (int)nt_int(nt, id, "enum_in_copy", -1), rec = -1;
     for (int a = in_copy; a >= 0 && rec < 0; a = (int)nt_int(nt, a, "enum_in_copy", -1))
       if ((int)nt_int(nt, a, "enum_bi", -1) == bi) rec = a;
-    if (rec >= 0) { nt_node_set_int(nt, id, "enum_copy", rec); continue; }
+    if (rec >= 0) {
+      nt_node_set_int(nt, id, "enum_copy", rec);
+      /* a reopening's method calling its name on an Array (`[1].take_while`
+         in its own take_while) takes the builtins/ copy all the same */
+      if (bi < nbdef && bdef[bi] >= 0 && nt_int(nt, rec, "enum_prog_def", 0) &&
+          !enum_own_copy(nt, bdef[bi], bi, id, in_copy, site_seq[bi]++, &nb, &nbn, &cap)) break;
+      continue;
+    }
     int cbase = nt->count;
     int copy = nt_clone_subtree(nt, gdef[bi]);
     if (copy < 0) break;
@@ -14454,24 +14491,8 @@ int desugar_builtins(Compiler *c) {
     nb[nbn++] = copy;
     /* the builtins/ definition the reopening replaced, for a receiver whose
        class has its own method of the name (enum_copy_own) */
-    if (bi < nbdef && bdef[bi] >= 0) {
-      int obase = nt->count;
-      int oc = nt_clone_subtree(nt, bdef[bi]);
-      if (oc < 0) break;
-      char on[256]; snprintf(on, sizeof on, "__enum_%s__%do", sp_builtin_enum_names[bi], site_seq[bi] - 1);
-      nt_node_set_str(nt, oc, "name", on);
-      nt_node_set_int(nt, oc, "private_helper", 1);
-      nt_node_set_int(nt, oc, "enum_site", id);
-      nt_node_set_int(nt, oc, "enum_bi", bi);
-      nt_node_set_int(nt, oc, "enum_in_copy", in_copy);
-      nt_node_set_int(nt, id, "enum_copy_own", oc);
-      for (int j = obase; j < nt->count; j++)
-        if (j != oc && nt_kind(nt, j) == NK_CallNode) nt_node_set_int(nt, j, "enum_in_copy", oc);
-      { int sb = nt_ref(nt, id, "block");
-        if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, oc); }
-      if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) break; nb = g; }
-      nb[nbn++] = oc;
-    }
+    if (bi < nbdef && bdef[bi] >= 0 &&
+        !enum_own_copy(nt, bdef[bi], bi, id, in_copy, site_seq[bi] - 1, &nb, &nbn, &cap)) break;
   }
   free(in_generic);
   nt_node_set_arr(nt, top, "body", nb, nbn);
@@ -16023,7 +16044,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
           int ib = 0; const int *ibb = nt_arr(nt, es, "body", &ib);
           if (ib == 1 && nt_kind(nt, ibb[0]) == NK_IfNode) cel = nt_ref(nt, ibb[0], "subsequent");
         }
-        own_stmts = cel >= 0 ? -3 - nt_ref(nt, cel, "statements") : -3 - es;   /* wrapped once whole (below) */
+        /* wrapped once whole (below); the else of the safe navigation's
+           inner test holds the generic call there */
+        if (safe_nav && ndef > 0) own_stmts = cel >= 0 && nt_ref(nt, cel, "statements") >= 0 ? -3 - nt_ref(nt, cel, "statements") : -1;
+        else own_stmts = -3 - es;
       }
       nt_node_set_ref(nt, eln, "statements", es);
       nt_node_set_ref(nt, ifn, "predicate", pred);

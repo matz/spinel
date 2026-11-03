@@ -3689,6 +3689,13 @@ static void stamp_const_write_encl(Compiler *c, int id, int ci) {
   }
 }
 
+/* Is record call VAL the value of a constant path write (`A::B = Struct.new(:a)`)? */
+static int rs_path_write_value(const NodeTable *nt, int val) {
+  for (int p = 0; p < nt->count; p++)
+    if (nt_kind(nt, p) == NK_ConstantPathWriteNode && nt_ref(nt, p, "value") == val) return 1;
+  return 0;
+}
+
 void register_structs(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int r = 0; r < nt_nroots(nt); r++) stamp_const_write_encl(c, nt_root(nt, r), -1);   /* each file's tree */
@@ -3757,6 +3764,11 @@ void register_structs(Compiler *c) {
       if (is_recv || !is_write_value) {
         char an[48];
         snprintf(an, sizeof an, "StructAnon_%s", comp_node_tag(c, id));
+        /* `Ns::S = Struct.new(:a)`: the path write names the class when it
+           runs (emit_const_target_class_name), as `S = Struct.new(:a)`
+           names it, so the class takes a name once written */
+        if (!is_recv && rs_path_write_value(nt, id))
+          nt_node_set_int((NodeTable *)nt, id, "class_new_anonymous", 2);
         ClassInfo *cls = comp_class_new(c, an, id);
         cls->is_anon_struct = 1;
         c->anon_struct_ids_valid = 0;

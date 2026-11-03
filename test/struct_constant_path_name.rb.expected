@@ -1,0 +1,22 @@
+#<struct Ns::S a=1>
+"Ns::S"
+Ns::S
+Ns::S
+"Ns::S"
+#<struct Ns::S a=2>
+#<struct A::B::P a=[2]>
+"A::B::P"
+#<struct Top t=1>
+"Top"
+#<struct Ns::KW a=1>
+Ns::KW(keyword_init: true)
+#<data Ns::D x=1, y=2>
+#<data Ns::D x=1, y=3>
+"Ns::D"
+[#<struct Ns::S a=#<struct Ns::S a=1>>, {k: #<data Ns::D x=1, y=2>}]
+#<struct Ns::K c=4>
+4
+Ns::K
+#<struct a=1>
+nil
+#<Class:X>(keyword_init: true)

@@ -21712,29 +21712,41 @@ void emit_vis_raise_boxed(int vis, const char *vnm, int tv, Buf *b) {
              td, tv, td, tv, vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, td);
 }
 static int emit_vis_refusal_x(Compiler *c, int id, Buf *b);
+/* Is self at node id an Object, so that Object's protected method is open
+   to it? Main and a class method's class are; an instance method's self
+   is, unless its class is a blank slate (BasicObject's subclass). */
+static int object_protected_open(Compiler *c, int id) {
+  Scope *cs = comp_scope_of(c, id);
+  if (!cs || cs->is_cmethod || cs->class_id < 0) return 1;
+  return !class_is_blank_slate(c, cs->class_id);
+}
 /* A private (or protected) method of a program's Object reopening, called
    with an explicit receiver whose own class does not define the name: the
    method is Object's, so the call is refused as CRuby refuses it, with the
    receiver's class in the message (`5.foo` after `class Object; def foo;
    private :foo; end`). A boxed receiver names its class at run time. */
 static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind vrt, int vcid,
-                                          const char *vnm, Buf *b) {
+                                          const char *vnm, int stamped, Buf *b) {
   if (!vnm || builtin_object_method_known(vnm)) return 0;
   int oci = comp_core_class(c, CORE_OBJECT);
   if (oci < 0 || call_target(c, id, oci, vnm, CT_OWN, NULL) < 0) return 0;
   int vis = comp_method_vis_declared(c, oci, vnm, NULL);
   if (vis == SP_VIS_PUBLIC) return 0;
-  /* a protected method is callable from an instance's own methods */
-  if (vis == SP_VIS_PROTECTED) {
-    Scope *cs = comp_scope_of(c, id);
-    if (cs && !cs->is_cmethod && cs->class_id >= 0) return 0;
-  }
+  /* a protected method of Object is callable wherever self is an Object
+     (main, a class, any instance but a blank slate's), but never through
+     public_send (stamped) */
+  if (vis == SP_VIS_PROTECTED && !stamped && object_protected_open(c, id)) return 0;
   const char *cname = NULL;
   int boxed = 0;
-  if (vcid >= 0) {
-    if (vcid == oci) return 0;
+  /* main is named as main (public_send at the top level) */
+  int at_main = nt_kind(c->nt, vrecv) == NK_SelfNode && self_is_main(c, id);
+  if (at_main) cname = "main";
+  else if (vcid >= 0) {
+    if (vcid == oci && !stamped) return 0;
     int mi = call_target(c, id, vcid, vnm, 0, NULL);
     if (mi >= 0 && c->scopes[mi].class_id != oci) return 0;
+    /* a reader (attr_reader, a Struct member) of the class answers it */
+    if (comp_reader_in_chain(c, vcid, vnm, NULL)) return 0;
     cname = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
   }
   else if (vrt == TY_POLY) {
@@ -21768,7 +21780,9 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
   else {
     char head[200]; snprintf(head, sizeof head, "%s method '%s' called for an instance of ", kind, vnm);
     buf_puts(b, "sp_raise_cls(\"NoMethodError\", ");
-    if (vcid >= 0 && anon_class_text(c, vcid, head, b)) buf_puts(b, ")");
+    if (at_main)
+      buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for main\")[1]))", kind, vnm);
+    else if (vcid >= 0 && anon_class_text(c, vcid, head, b)) buf_puts(b, ")");
     else buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1]))", kind, vnm, cname);
     buf_printf(b, ", %s)", default_value_from_compiler(c, repr_of(c, id).as_ty));
   }
@@ -21867,8 +21881,9 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
         if (vcid < 0) return 0;
       }
     }
-    if (plain && nt_kind(nt, vrecv) != NK_SelfNode && !nt_int(nt, id, "self_call", 0) &&
-        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, b)) return 1;
+    /* public_send refuses Object's private method on any receiver, self too */
+    if (((plain && nt_kind(nt, vrecv) != NK_SelfNode && !nt_int(nt, id, "self_call", 0)) || stamped) &&
+        emit_object_reopen_vis_refusal(c, id, vrecv, vrt, vcid, vnm, stamped, b)) return 1;
   }
   else {
     Scope *vs = comp_scope_of(c, id);
@@ -21971,6 +21986,53 @@ static int vis_name_may_refuse(Compiler *c, const char *nm) {
   }
   return 0;
 }
+/* A private (or protected) method of a program's Object reopening, called
+   on a boxed receiver: every value whose class does not answer the name
+   below Object reaches Object's method, which the call refuses as CRuby
+   does (`[a, d, 3].each { |x| x.top }` after `class Object; private def
+   top`, where class D's own public top answers for D's instances only).
+   The typed form is emit_object_reopen_vis_refusal. A builtin reopening
+   that answers the name, or a method_missing on the way, leaves the call
+   to the dispatch. */
+static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const char *vnm, int stamped, Buf *b) {
+  if (builtin_object_method_known(vnm)) return;
+  int oci = comp_core_class(c, CORE_OBJECT);
+  if (oci < 0 || call_target(c, id, oci, vnm, CT_OWN, NULL) < 0) return;
+  int vis = comp_method_vis_declared(c, oci, vnm, NULL);
+  if (vis == SP_VIS_PUBLIC) return;
+  if (vis == SP_VIS_PROTECTED && !stamped && object_protected_open(c, id)) return;
+  if (cplan_has_method_missing(c, id, oci, 0)) return;
+  /* the classes that answer the name themselves: a program class by its
+     cls_id, a reopened builtin (`class String; def top`) by its name */
+  Buf own, bown; memset(&own, 0, sizeof own); memset(&bown, 0, sizeof bown);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == oci) continue;
+    int breopen = class_is_builtin_reopen(c, k);
+    if (comp_class_is_module(c, &c->classes[k])) {
+      /* a reopened builtin module (Comparable) reaches builtin values the
+         dispatch knows and this test does not */
+      if (breopen && call_target(c, id, k, vnm, CT_OWN, NULL) >= 0) goto give_up;
+      continue;
+    }
+    int mi = call_target(c, id, k, vnm, 0, NULL);
+    int owns = (mi >= 0 && mi < c->nscopes && c->scopes[mi].class_id != oci) ||
+               comp_reader_in_chain(c, k, vnm, NULL) || cplan_has_method_missing(c, id, k, 0);
+    if (!owns) continue;
+    if (c->classes[k].is_native_class) goto give_up;
+    if (breopen) {
+      const char *rn = class_ruby_name(c, k) ? class_ruby_name(c, k) : c->classes[k].name;
+      buf_printf(&bown, " && strcmp(sp_poly_class_name(_t%d), \"%s\") != 0", tv, rn);
+    }
+    else buf_printf(&own, " || _t%d.cls_id == %d", tv, k);
+  }
+  buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0%s))%s) { ", tv, own.p ? own.p : "", bown.p ? bown.p : "");
+  free(own.p); free(bown.p);
+  emit_vis_raise_boxed(vis, vnm, tv, b);
+  buf_puts(b, "; } ");
+  return;
+give_up:
+  free(own.p); free(bown.p);
+}
 void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
   const NodeTable *nt = c->nt;
   int vrecv = nt_ref(nt, id, "receiver");
@@ -22026,6 +22088,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
     }
   }
   if (plain && nt_kind(nt, vrecv) == NK_SelfNode) return;
+  if (plain || stamped) emit_object_reopen_vis_precheck(c, id, tv, vnm, stamped, b);
   /* a boxed IO handle, by the reopening its kind picks */
   int ks[16], n = io_reopen_defs(c, vnm, 0, ks, 16);
   for (int i = 0; i < n; i++) {

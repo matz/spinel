@@ -42088,6 +42088,46 @@ static void mark_nullable_int_locals(Compiler *c) {
         }
       }
     }
+    /* `super` from a Data's own `with` that no ancestor defines is the
+       builtin Data#with (emit_super_data_with): `super(k: v)` hands member
+       k the value v, and a bare super hands each keyword parameter that
+       can hold nil to the member of its name */
+    for (int pass = 0; pass < 2; pass++) {
+      NT_FOREACH_KIND(nt, pass ? NK_ForwardingSuperNode : NK_SuperNode, su) {
+        Scope *ws = comp_scope_of(c, su);
+        if (!ws || !ws->name || !sp_streq(ws->name, "with") || ws->is_cmethod || ws->class_id < 0) continue;
+        ClassInfo *sci = &c->classes[ws->class_id];
+        if (!sci->is_struct || !sci->is_data ||
+            (sci->parent >= 0 && comp_method_in_chain(c, sci->parent, "with", NULL) >= 0)) continue;
+        if (pass) {
+          for (int pi = 0; pi < ws->nparams; pi++) {
+            const char *pn = ws->pnames ? ws->pnames[pi] : NULL;
+            LocalVar *pv = pn && pi != ws->kwrest_idx ? scope_local(ws, pn) : NULL;
+            if (!pv || !pv->nullable_int || !callee_param_is_declared_kwarg(c, ws, pn)) continue;
+            char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", pn);
+            int m = comp_ivar_index(sci, ivb);
+            if (m < 0 || m >= sci->nmembers || sci->ivar_nullable_int[m]) continue;
+            if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
+            { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
+          }
+          continue;
+        }
+        int sa = nt_ref(nt, su, "arguments"), san = 0;
+        const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+        if (san != 1 || nt_kind(nt, sav[0]) != NK_KeywordHashNode) continue;
+        int kn = 0; const int *kv = nt_arr(nt, sav[0], "elements", &kn);
+        for (int e = 0; e < kn; e++) {
+          int key = nt_ref(nt, kv[e], "key"), v = nt_ref(nt, kv[e], "value");
+          if (nt_kind(nt, kv[e]) != NK_AssocNode || key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
+          char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", nt_str(nt, key, "value"));
+          int m = comp_ivar_index(sci, ivb);
+          if (m < 0 || m >= sci->nmembers || sci->ivar_nullable_int[m]) continue;
+          if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
+          if (!nullable_int_value(c, v)) continue;
+          { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
+        }
+      }
+    }
     /* `s[:x] = v` / `s["x"] = v` / `s[0] = v` on a Struct (or a boxed value
        that can be one): the member takes v, nil included */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {

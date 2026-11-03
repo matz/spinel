@@ -11638,7 +11638,8 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (rt == TY_BOOL && cplan_bool_sides(c, id, &tmi, &fmi)) {
         if (tmi >= 0) changed |= bind_call_params(c, id, tmi);
         if (fmi >= 0) changed |= bind_call_params(c, id, fmi);
-        continue;
+        /* the side with no method of its own reaches Object's, below */
+        if (tmi >= 0 && fmi >= 0) continue;
       }
       int bc = core_of_type(rt);
       int bci = bc >= 0 && (bc == CORE_RANDOM || bc == CORE_STRING || builtin_class_of_type(rt))

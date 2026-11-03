@@ -34,3 +34,9 @@ p go(1), go("s")
 [true, false].each { |b| p b.tag(:sym) }
 y = 3 > 2
 p y.tag([1, 2])
+
+# a name only TrueClass defines: false reaches Object's, which takes the
+# arguments too
+class TrueClass; def only_t(a = 1) = a; end
+class Object; def only_t(a = 9) = [:obj, a]; end
+p true.only_t("s"), false.only_t("f"), false.only_t, 3.only_t(2.5)

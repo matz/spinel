@@ -18,3 +18,7 @@ true
 :sym
 [:sym]
 [1, 2]
+"s"
+[:obj, "f"]
+[:obj, 9]
+[:obj, 2.5]

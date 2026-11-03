@@ -1,0 +1,30 @@
+xy
+1
+[2, 3]
+[1, 2, nil]
+hi
+Opaque
+nil
+12
+Pair
+5
+6
+Pair
+[11, 12]
+[1, 7, 8]
+[2, 9, 10]
+[nil, nil]
+nil
+nil
+nil
+[nil, nil]
+[13, 14]
+[Late, nil]
+[:late, :now]
+Logged
+[:recv1, :recv2, :rhs, :to_ary]
+[Skipped, nil]
+true
+[Dropped, nil]
+[1, Pair, [], nil, nil]
+[1, [], 3, 4]

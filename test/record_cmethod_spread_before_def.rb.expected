@@ -1,0 +1,13 @@
+[:mine, {a: 1}]
+[:mine, [1, 2]]
+#<struct L a=1, b=2>
+6
+#<struct T a=3>
+[:b]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[:x]
+[ArgumentError, "wrong number of arguments (given 3, expected 0)"]
+[:em, {q: 1}]
+true
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]

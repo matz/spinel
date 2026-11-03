@@ -13869,6 +13869,46 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
+/* ...and call, a dispatcher arm's call of a method that takes no
+   arguments, where the dispatcher passes on `*__condr, **__condk` (ar -1):
+   `__condr.empty? && __condk.empty? ? call : raise ArgumentError, "wrong
+   number of arguments (given N, expected 0)"`, N the rest's size and one
+   more for keywords, as CRuby counts the call's arguments */
+int disp_when_unspread(Compiler *c, int call) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode"), both = nt_new_node(nt, "AndNode");
+  nt_node_set_ref(nt, both, "left", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "empty?", -1));
+  nt_node_set_ref(nt, both, "right", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condk"), "empty?", -1));
+  int kw = nt_new_node(nt, "IfNode"), kel = nt_new_node(nt, "ElseNode"), zero = nt_new_node(nt, "IntegerNode"), one = nt_new_node(nt, "IntegerNode");
+  nt_node_set_int(nt, zero, "value", 0);
+  nt_node_set_int(nt, one, "value", 1);
+  nt_node_set_ref(nt, kw, "predicate", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condk"), "empty?", -1));
+  nt_node_set_ref(nt, kw, "statements", cdef_stmts(nt, zero));
+  nt_node_set_ref(nt, kel, "statements", cdef_stmts(nt, one));
+  nt_node_set_ref(nt, kw, "subsequent", kel);
+  int given = fwd_new_call(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1), "+", kw);
+  int msg = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode"), es = nt_new_node(nt, "EmbeddedStatementsNode"), tl = nt_new_node(nt, "StringNode");
+  nt_node_set_str(nt, hd, "unescaped", "wrong number of arguments (given ");
+  nt_node_set_str(nt, hd, "content", "wrong number of arguments (given ");
+  nt_node_set_str(nt, tl, "unescaped", ", expected 0)");
+  nt_node_set_str(nt, tl, "content", ", expected 0)");
+  nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, given));
+  int parts[3] = { hd, es, tl };
+  nt_node_set_arr(nt, msg, "parts", parts, 3);
+  /* (::ArgumentError where a class or module body defines the name, as desugar_root_scoped_constants spells it) */
+  int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, "ArgumentError");
+  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode");
+  nt_node_set_str(nt, ec, "name", "ArgumentError");
+  if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);
+  int ra[2] = { ec, msg }, rargs = nt_new_node(nt, "ArgumentsNode"), raise = fwd_new_call(nt, -1, "raise", -1);
+  nt_node_set_arr(nt, rargs, "arguments", ra, 2);
+  nt_node_set_ref(nt, raise, "arguments", rargs);
+  nt_node_set_ref(nt, iff, "predicate", both);
+  nt_node_set_ref(nt, iff, "statements", cdef_stmts(nt, call));
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, raise));
+  nt_node_set_ref(nt, iff, "subsequent", el);
+  return iff;
+}
 /* ...and `super(<args>)`, the same arguments passed on to the method the
    ancestors answer; `method_missing(:name, <args>)` */
 int disp_super_call(NodeTable *nt, int ar, int blk) {

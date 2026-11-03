@@ -154,6 +154,7 @@ int is_to_array_alias(const char *n); /* entries to_a */
 int is_match_p_name(const char *n);   /* match? */
 int is_record_class_builder(const char *recv, const char *meth); /* Struct.new, Data.define */
 int is_record_class_cmethod(const char *n, int data); /* new [] members inspect keyword_init? (not on a Data class) */
+int is_record_class_cmethod_with_args(const char *n); /* new [] */
 int is_record_block_self_cmethod(const char *n); /* members keyword_init? */
 int is_class_new(const char *recv, const char *meth); /* Class.new */
 int is_module_new(const char *recv, const char *meth); /* Module.new */

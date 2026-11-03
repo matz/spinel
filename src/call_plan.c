@@ -5195,9 +5195,12 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   case VK_TEXT: return disp_super_call(nt, 0, 0);
   case VK_MM: comp_sym_intern(c, name); return disp_method_missing_call(nt, name, w->ar, w->blk);   /* (its Symbol, made after the literals were interned) */
   case VK_BUILTIN: {
-    int call = disp_self_call(nt, name, w->ar, w->blk);
+    /* (a record class's builtin that takes none, with `*r, **k` passed on:
+       called where both are empty, as CRuby passes it no argument then) */
+    int bare = w->ar < 0 && !is_record_class_cmethod_with_args(name);
+    int call = disp_self_call(nt, name, bare ? 0 : w->ar, w->blk);
     ver_pin(c, call, CT_PIN_BUILTIN);
-    return call;
+    return bare ? disp_when_unspread(c, call) : call;
   }
   case VK_IVAR: {
     char iv[256];
@@ -5279,7 +5282,8 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     return sc >= 0 && sv == vis ? VK_SUPER : VK_KEEP;
   }
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
-  if (sg && cls >= 0 && ar >= 0 && (bop_class_answers(name, ar, blk) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
+  /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
+  if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
   if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);

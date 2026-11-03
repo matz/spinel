@@ -413,6 +413,12 @@ const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
 /* The flags (BOPF_*) of the row of kind rt for `name`, 0 for none */
 int bop_flags(TyKind rt, const char *name);
+/* Does the builtin answer `name` on a class (or module) itself, taking argc
+   arguments and a block when has_block, where no method of the program's
+   of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)
+   list them (`name`, `to_s`, `inspect`, `include?`)? A negative argc (no
+   one count) is not answered. */
+int bop_class_answers(const char *name, int argc, int has_block);
 
 /* bop_find, with arg_of(ud, i) answering argument i's kind for the rows
    that guard it. It is called at most once per argument, and only when

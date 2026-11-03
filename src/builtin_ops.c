@@ -1869,6 +1869,13 @@ static const BuiltinOp bop_rows[] = {
   { TY_CLASS, "method_undefined", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE },
   { TY_CLASS, "singleton_method_removed", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
   { TY_CLASS, "singleton_method_undefined", 1, 1, BF_ANY, TY_NIL, BOPE_TEMPLATE, "((void)($r), (void)($e0), 0)", 0, 0, BOPF_PRIVATE | BOPF_BASIC_OBJECT },
+  /* ...name, to_s and inspect, which every class and module answers on
+     itself: the facts a version entry's else arm reads (the builtin runs
+     where no version of the program's runs yet); typed and emitted
+     elsewhere. */
+  { TY_CLASS, "name",            0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
+  { TY_CLASS, "to_s",            0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
+  { TY_CLASS, "inspect",         0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
 
   /* Integer and Float: the result kinds read off the name, arity and block
      form. pow, clamp, coerce, Float#fdiv(Complex), Float <=> Rational,
@@ -2988,6 +2995,11 @@ const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block) 
 int bop_flags(TyKind rt, const char *name) {
   const BuiltinOp *r = bop_find(rt, name, 1, 0);
   return r ? r->flags : 0;
+}
+
+/* See builtin_ops.h. */
+int bop_class_answers(const char *name, int argc, int has_block) {
+  return argc >= 0 && bop_find(TY_CLASS, name, argc, has_block) != NULL;
 }
 
 const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_block,

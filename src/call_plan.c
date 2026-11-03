@@ -963,7 +963,9 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
   return e >= 0 ? e : mi;   /* a later synthesized call uses the general table entry */
 }
 /* The version an entry's arm (or else arm) call is pinned to, -1 for any
-   other node: the pins are kept in the order of their nodes (ver_pin) */
+   other node, CT_PIN_BUILTIN for an else arm that runs the builtin
+   (VK_BUILTIN): the pins are kept in the order of their nodes (ver_pin) */
+enum { CT_PIN_BUILTIN = -2 };
 static int ct_pin_of(const Compiler *c, int id) {
   int lo = 0, hi = c->nver_pins - 1;
   while (lo <= hi) {
@@ -1300,8 +1302,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   if (ct_send_shadow(c, id, name)) return -1;
   int dc0 = def_class ? *def_class : -1, mi = ct_lookup(c, id, cls, name, &flags, def_class), pin;
   if (mi < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) return mi;
-  if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) >= 0) {   /* (an entry's arm: its method's own class) */
-    if (ct_top_version(c, pin, flags)) return -1;
+  if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1) {   /* (an entry's arm: its method's own class) */
+    if (pin == CT_PIN_BUILTIN || ct_top_version(c, pin, flags)) return -1;
     if (def_class) *def_class = c->scopes[pin].class_id;
     return pin;
   }
@@ -4405,10 +4407,11 @@ static void ver_entry_add(Compiler *c, struct VerEntry e) {
    for every history before any entry is made (ver_named_kind):
    VK_SUPER the method super reaches; VK_IVAR an inherited reader's
    instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
-   inspect through super(); VK_NOMETHOD NoMethodError; VK_KEEP no entry,
-   where none of these is CRuby's answer: the history keeps the handling
-   it had (its last version taken as run) */
-enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_NOMETHOD, VK_KEEP };
+   inspect through super(); VK_BUILTIN the builtin a class answers on itself
+   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   no entry, where none of these is CRuby's answer: the history keeps the
+   handling it had (its last version taken as run) */
+enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP };
 typedef struct {
   int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs) */
   const char *name, *refuse;
@@ -4468,6 +4471,11 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   case VK_SUPER: return disp_super_call(nt, w->ar, w->blk);
   case VK_TEXT: return disp_super_call(nt, 0, 0);
   case VK_MM: comp_sym_intern(c, name); return disp_method_missing_call(nt, name, w->ar, w->blk);   /* (its Symbol, made after the literals were interned) */
+  case VK_BUILTIN: {
+    int call = disp_self_call(nt, name, w->ar, w->blk);
+    ver_pin(c, call, CT_PIN_BUILTIN);
+    return call;
+  }
   case VK_IVAR: {
     char iv[256];
     int rd = nt_new_node(nt, "InstanceVariableReadNode");
@@ -4547,6 +4555,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     return sc >= 0 && sv == vis ? VK_SUPER : VK_KEEP;
   }
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
+  if (sg && cls >= 0 && bop_class_answers(name, ar, blk)) return VK_BUILTIN;
   if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
@@ -4836,7 +4845,8 @@ int ver_entry_targets(const Compiler *c, int e, int *out, int *tests) {
   int n = 0, at = ver_first_stmt(nt, nt_ref(nt, c->scopes[e].def_node, "body"));
   for (; at >= 0 && n <= VER_MAX_ARMS; at = nt_kind(nt, at) == NK_IfNode ? nt_ref(nt, at, "subsequent") : -1) {
     if (tests) tests[n] = nt_kind(nt, at) == NK_IfNode ? nt_ref(nt, at, "predicate") : -1;
-    out[n++] = ct_pin_of(c, ver_first_stmt(nt, nt_ref(nt, at, "statements")));
+    int pin = ct_pin_of(c, ver_first_stmt(nt, nt_ref(nt, at, "statements")));
+    out[n++] = pin < 0 ? -1 : pin;
   }
   if (n > 1 && out[n - 1] < 0 && c->scopes[e].entry == ENTRY_NAMED) out[n - 1] = out[n - 2];
   return n;

@@ -2699,7 +2699,13 @@ int elab_method_versions(Compiler *c, const char *name) {
    the typed receiver's fact (ct_version_at). A name of two histories is
    not asked, nor one a builtin's method answers (Object's, or any builtin
    class's): such a call may reach the builtin's, which no entry calls;
-   nor one a reflection reader names (lr_refl_take): a call it guards
+   but a class's (or module's) own class-side history is, of a name the
+   class answers on itself as a reader, with no argument or block
+   (bop_class_answers), whose entry's else arm calls that builtin
+   (VK_BUILTIN). The bit is the name's, not one call's, so it asks the
+   name's shape; each entry asks again at its own arity and keeps the
+   table's answer where the builtin does not take it. Nor one a
+   reflection reader names (lr_refl_take): a call it guards
    would take the entry where the reader answers the method is there, and
    raise where the table's answer runs the def. */
 static void lr_late_make(Compiler *c) {
@@ -2711,13 +2717,16 @@ static void lr_late_make(Compiler *c) {
   NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
     LrVers *x = lr_vers(r, nt_str(c->nt, id, "name"));
     const LrDef *v = NULL;
-    int nh = 0;
+    int nh = 0, own = 0;
     ElabWindow w;
     if (!x || !x->nver || x->late != 1) continue;
     for (int h = x->first; h >= 0 && nh < 2; h = r->hist[h].nlink)
       for (int j = 0; j < r->hist[h].n; j++)
-        if (lr_is_version(&r->hist[h].v[j])) { if (!nh++) v = &r->hist[h].v[j]; break; }
-    if (nh != 1 || builtin_object_method_known(x->name) || builtin_instance_name_known(x->name) || r->refl_any ||
+        if (lr_is_version(&r->hist[h].v[j])) {
+          if (!nh++) { v = &r->hist[h].v[j]; own = r->hist[h].a >= 0 && r->hist[h].b && bop_class_answers(x->name, 0, 0); }
+          break;
+        }
+    if (nh != 1 || (!own && (builtin_object_method_known(x->name) || builtin_instance_name_known(x->name))) || r->refl_any ||
         (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp))) { x->late = 3; continue; }
     LoadPoint q = v ? elab_point_of(c, v->node) : (LoadPoint){ -1, -1 };
     if (q.region >= 0 && elab_call_window(c, id, &w) == ELAB_YES && w.from.region == q.region && w.from.seq < q.seq) x->late = 2;

@@ -527,6 +527,20 @@ TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */
 const PolyPlan *cplan_poly_sub(Compiler *c, int id);
+/* How a receiverless call id in a builtin class's reopening hands its
+   block to mi, the reopening's own method it reaches (emit_reopen_own_call):
+   ROB_NONE, it has none; ROB_PASS, as mi's `&blk` argument, as the
+   explicit-receiver reopen call passes it; ROB_DROP, unused by mi, which
+   takes none (a literal block, a forwarded local); ROB_DECLINE, not by that
+   call: a yielding mi is reached through its proc form, and a forwarded
+   expression is evaluated by the general call. */
+enum { ROB_NONE, ROB_PASS, ROB_DROP, ROB_DECLINE };
+int cplan_reopen_own_block(Compiler *c, int id, int mi);
+/* Does the enumerable driver (sp_poly_enum_proc), handed a callable call
+   id forwards on a boxed receiver, answer the call: is no object of a class
+   of the program with an `each` of its own among the values the receiver
+   may hold, and is the callable never nil (an_fwd_block_may_be_nil)? */
+int cplan_driver_walks_recv(Compiler *c, int id);
 /* The re-entry of a call on a poly receiver as an Array call (#2935).
    Computed afresh. */
 const PolyPlan *cplan_poly_redispatch(Compiler *c, int id);

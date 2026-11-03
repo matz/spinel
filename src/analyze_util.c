@@ -2,6 +2,7 @@
 #include "builtin_names.h"
 #include "share.h"
 #include "call_plan.h"
+#include "implicit_calls.h"
 #include <errno.h>
 #include <limits.h>
 
@@ -3309,53 +3310,178 @@ int block_given_tail_then_last(Compiler *c, int last) {
   return tn > 0 ? tb[tn - 1] : -1;
 }
 
-/* Whether the calls of method `mi` give it a block: 1 when every call site
-   does (a literal block, a forwarded `&b`, a `...`), 0 when none does, -1 when
-   they differ or there is no site to read. A forwarded block is counted as
-   present here; a forward from a method whose own answer is mixed is mixed
-   too, one level up (recursion bounded like yield_value_type's). */
-static int method_block_presence(Compiler *c, int mi) {
-  for (int i = 0; i < g_yvt_depth; i++)
-    if (g_yvt_mi[i] == mi) return -1;
-  if (g_yvt_depth >= MAX_YVT_DEPTH) return -1;
-  g_yvt_mi[g_yvt_depth++] = mi;
+/* How the calls of a method enter it: BP_WITH with a block or a callable
+   that is never nil, BP_WITHOUT without one or with nil, both when its
+   calls differ, when one hands a callable that may be nil, or when a call
+   the program does not name reaches it. */
+enum { BP_WITH = 1, BP_WITHOUT = 2, BP_ANY = 3 };
+static int bp_method(Compiler *c, int mi, int *cut);
+/* Is local write w a statement of its method's or its file's body, run
+   whenever the body runs past it: not under a branch, a loop, a rescue or a
+   block? A read after it, which the parser only makes a local read past
+   the first write, then sees its value. */
+static int write_is_body_stmt(Compiler *c, int w) {
+  const NodeTable *nt = c->nt;
+  const Scope *s = comp_scope_of(c, w);
+  if (!s) return 0;
+  int n = 0;
+  const int *st = NULL;
+  if (s->def_node >= 0) {
+    int body = nt_ref(nt, s->def_node, "body");
+    st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+    for (int i = 0; i < n; i++) if (st[i] == w) return 1;
+    return 0;
+  }
+  for (int pg = comp_kind_first(c, NK_ProgramNode); pg >= 0; pg = comp_kind_next(c, pg)) {
+    int body = nt_ref(nt, pg, "statements");
+    st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+    for (int i = 0; st && i < n; i++) if (st[i] == w) return 1;
+  }
+  return 0;
+}
+/* Is scope si the method self whose calls are being read, or its proc form? */
+static int bp_is_self(Compiler *c, int si, int self) {
+  return self >= 0 && (si == self || (c->scopes[si].is_proc_form && c->scopes[si].def_node == c->scopes[self].def_node));
+}
+/* What callable v hands as a block: a Proc or lambda literal, a Symbol or
+   a method(:x) that reaches Kernel#method (no method of the program's,
+   cplan_targets) is never nil, nil is none, and anything else (a call's
+   answer, an ivar, a constant) may be either. */
+static int bp_value(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return BP_ANY;
+  NodeKind k = nt_kind(nt, v);
+  if (k == NK_NilNode) return BP_WITHOUT;
+  if (k == NK_SymbolNode || k == NK_LambdaNode || is_proc_literal(c, v)) return BP_WITH;
+  return k == NK_CallNode && nt_ref(nt, v, "receiver") < 0 && is_method_ref_name(nt_str(nt, v, "name")) &&
+         cplan_targets(c, v, NULL, 0) == 0 ? BP_WITH : BP_ANY;
+}
+/* What a read of local xn in scope s hands (self: the method whose calls
+   are being read, whose own block adds nothing to itself). Its &block
+   parameter hands how s is entered, and any other parameter, or a block's,
+   either. A local hands what every write of it in s stores, each a plain
+   or `||=` write that is a statement of the body (write_is_body_stmt): one
+   under a branch may leave it nil, and a multiple assignment, `for`,
+   `rescue =>`, `&&=` or operator write stores a value read elsewhere. */
+static int bp_local(Compiler *c, Scope *s, const char *xn, int self, int *cut) {
+  const NodeTable *nt = c->nt;
+  LocalVar *lv = xn ? scope_local(s, xn) : NULL;
+  int si = (int)(s - c->scopes);
+  if (!lv || lv->is_block_param) return BP_ANY;
+  if (lv->is_param) return s->blk_param && sp_streq(s->blk_param, xn) ? (bp_is_self(c, si, self) ? 0 : bp_method(c, si, cut)) : BP_ANY;
+  const NodeKind wk[] = { NK_LocalVariableWriteNode, NK_LocalVariableOrWriteNode, NK_LocalVariableTargetNode,
+                          NK_LocalVariableAndWriteNode, NK_LocalVariableOperatorWriteNode };
+  int bits = 0;
+  for (int i = 0; i < 5; i++)
+    for (int w = comp_kind_first(c, wk[i]); w >= 0; w = comp_kind_next(c, w)) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, xn) || comp_scope_of(c, w) != s) continue;
+      if (i >= 2 || !write_is_body_stmt(c, w)) return BP_ANY;
+      bits |= bp_value(c, nt_ref(nt, w, "value"));
+    }
+  return bits ? bits : BP_ANY;
+}
+/* What call or super id hands the method it reaches, blk its block node:
+   with none, nothing, or for a `super` (implicit) or a `...` forward the
+   enclosing method's own block; a literal block, a block; a forwarded
+   callable, what it may hold. */
+static int bp_site(Compiler *c, int id, int blk, int implicit, int self, int *cut) {
+  const NodeTable *nt = c->nt;
+  Scope *encl = comp_scope_of(c, id);
+  int ei = encl ? (int)(encl - c->scopes) : -1;
+  NodeKind bk = blk >= 0 ? nt_kind(nt, blk) : NK_NilNode;
+  int ex = bk == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -2;
+  if (blk < 0 && !implicit && !yvt_call_forwards_block(nt, id)) return BP_WITHOUT;
+  if (bk == NK_BlockNode && !nt_int(nt, blk, "fwd_yield", 0)) return BP_WITH;
+  if (ei < 0) return BP_ANY;
+  if (blk < 0 || ex == -1 || bk == NK_BlockNode) return bp_is_self(c, ei, self) ? 0 : bp_method(c, ei, cut);
+  if (ex >= 0 && nt_kind(nt, ex) == NK_LocalVariableReadNode) return bp_local(c, encl, nt_str(nt, ex, "name"), self, cut);
+  return bp_value(c, ex);
+}
+/* The calls that enter method mi: those of its name, an alias of it or
+   `new` the call plan says enter it (cplan_entries; one the plan cannot
+   enumerate counts), the `super`s that reach it (cplan_super_target) or
+   that the plan says enter it (a program `new`'s into Class#new, one it
+   cannot enumerate where mi's name bounds it), and a send naming it. A send or a Method of a computed name is lowered to an
+   arm per name it may take (dyn_send_arms), each a call of that name read
+   above; one left unlowered, a Method of mi or an alias_method of it
+   enters it either way. */
+static int bp_calls(Compiler *c, int mi, int *cut) {
   const NodeTable *nt = c->nt;
   const char *mn = c->scopes[mi].name;
-  int with = 0, without = 0, mixed = 0;
-  /* the calls of the method's name, not every node: asked per call of a
-     method whose answer depends on its block */
-  for (int cid = mn ? an_calls_named_first(c, mn) : -1; cid >= 0 && !mixed; cid = an_calls_named_next(cid)) {
-    if (nt_kind(nt, cid) != NK_CallNode) continue;
-    const char *cn = nt_str(nt, cid, "name");
-    if (!cn || !mn || !sp_streq(cn, mn)) continue;
-    if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
-    if (!yvt_reaches(c, cid, mi)) continue;
-    int blk = nt_ref(nt, cid, "block");
-    if (blk < 0 && !yvt_call_forwards_block(nt, cid)) { without++; continue; }
-    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) {
-      /* `m(&b)`: b is the enclosing method's own block, or a value that may
-         be nil at run time */
-      int ex = nt_ref(nt, blk, "expression");
-      Scope *encl = comp_scope_of(c, cid);
-      const char *xn = ex >= 0 && nt_kind(nt, ex) == NK_LocalVariableReadNode ? nt_str(nt, ex, "name") : NULL;
-      if (encl && encl->blk_param && encl->blk_param[0] && xn && sp_streq(xn, encl->blk_param)) {
-        int up = method_block_presence(c, (int)(encl - c->scopes));
-        if (up == 1) with++; else if (up == 0) without++; else mixed = 1;
-      }
-      else mixed = 1;
-      continue;
-    }
-    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_int(nt, blk, "fwd_yield", 0)) {
-      Scope *encl = comp_scope_of(c, cid);
-      int up = encl ? method_block_presence(c, (int)(encl - c->scopes)) : -1;
-      if (up == 1) with++; else if (up == 0) without++; else mixed = 1;
-      continue;
-    }
-    with++;
+  if (ic_core_callback(mn, c->scopes[mi].is_cmethod)) return BP_ANY;
+  int n = 0, bits = 0, *ids = an_scope_call_candidates(c, &c->scopes[mi], &n);
+  for (int i = 0; i < n && bits != BP_ANY; i++) {
+    if (nt_kind(nt, ids[i]) != NK_CallNode) continue;
+    /* (a builtin `new` enters the initialize of the class it builds, and
+       one on a class value the plan cannot name any: CPT_UNKNOWN) */
+    int tg[CPT_MAX], nt_ = cplan_entries(c, ids[i], tg, CPT_MAX), hit = nt_ == CPT_UNKNOWN;
+    for (int j = 0; j < nt_ && !hit; j++) hit = tg[j] == mi;
+    if (hit) bits |= bp_site(c, ids[i], nt_ref(nt, ids[i], "block"), 0, mi, cut);
   }
+  free(ids);
+  for (int k = 0; k < 2 && bits != BP_ANY; k++)
+    for (int id = comp_kind_first(c, k ? NK_ForwardingSuperNode : NK_SuperNode); id >= 0 && bits != BP_ANY; id = comp_kind_next(c, id)) {
+      Scope *s = comp_scope_of(c, id);
+      /* (a program `new`'s super into the builtin Class#new enters the
+         initialize it runs: cplan_entries; one it cannot list, each method
+         of the names it bounds them by) */
+      int at, tg[CPT_MAX], nt_ = cplan_entries(c, id, tg, CPT_MAX), hit = 0;
+      const char *bn[2];
+      for (int j = 0, nb = nt_ == CPT_UNKNOWN ? cplan_entries_bound_names(c, id, bn) : 0; j < nb && !hit; j++)
+        hit = sp_streq(bn[j], mn);
+      for (int j = 0; j < nt_ && !hit; j++) hit = tg[j] == mi;
+      if (hit || (s && s->class_id >= 0 && s->name && cplan_super_target(c, id, s, &at) == mi))
+        bits |= bp_site(c, id, nt_ref(nt, id, "block"), 1, mi, cut);
+    }
+  ids = NULL;
+  n = bits == BP_ANY ? 0 : an_calls_named_if(c, is_method_handoff_name, nt->count, &ids);
+  for (int i = 0; i < n && bits != BP_ANY; i++) {
+    int a = nt_ref(nt, ids[i], "arguments"), an = 0, arms = 0, send = is_send_family(nt_str(nt, ids[i], "name"));
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    nt_arr(nt, ids[i], "dyn_send_arms", &arms);
+    if (arms > 0) continue;
+    for (int j = 0; j < (send && an ? 1 : an); j++) {
+      NodeKind ak = nt_kind(nt, av[j]);
+      const char *lit = ak == NK_SymbolNode ? nt_str(nt, av[j], "value") : ak == NK_StringNode ? nt_str(nt, av[j], "content") : NULL;
+      /* (a Method of `new` enters initialize too: cplan_name_bound_names) */
+      const char *bn[2];
+      int nb = lit ? cplan_name_bound_names(lit, bn) : 0, hit = !lit;
+      for (int q = 0; q < nb && !hit; q++) hit = sp_streq(bn[q], mn);
+      if (!hit) continue;
+      bits |= lit && send ? bp_site(c, ids[i], nt_ref(nt, ids[i], "block"), 0, mi, cut) : BP_ANY;
+    }
+  }
+  free(ids);
+  return bits ? bits : BP_ANY;
+}
+/* Kept per method while infer_type's memo keeps its edit count. A proc
+   form is entered by the calls of the method it clones. A method on the
+   stack (a forward cycle, or one yield_value_type is reading) answers
+   either, and *cut keeps the answers read through it unkept. */
+static int bp_method(Compiler *c, int mi, int *cut) {
+  Scope *m = &c->scopes[mi];
+  int memo = infer_memo_usable(), own = 0;
+  unsigned long ed = infer_memo_edits(c);
+  if (memo && m->bp_edits == ed + 1) return m->bp_bits;
+  for (int s = 0; m->is_proc_form && s < c->nscopes; s++)
+    if (!c->scopes[s].is_proc_form && c->scopes[s].def_node == m->def_node && c->scopes[s].class_id == m->class_id &&
+        c->scopes[s].is_cmethod == m->is_cmethod) return bp_method(c, s, cut);
+  if (!m->name || m->is_proc_form) return BP_ANY;
+  for (int i = 0; i < g_yvt_depth; i++)
+    if (g_yvt_mi[i] == mi) { if (cut) *cut = 1; return BP_ANY; }
+  if (g_yvt_depth >= MAX_YVT_DEPTH) { if (cut) *cut = 1; return BP_ANY; }
+  g_yvt_mi[g_yvt_depth++] = mi;
+  int bits = bp_calls(c, mi, &own);
   g_yvt_depth--;
-  if (mixed || (with && without) || (!with && !without)) return -1;
-  return with ? 1 : 0;
+  if (own && cut) *cut = 1;
+  if (!own && memo && infer_memo_edits(c) == ed) { m->bp_edits = ed + 1; m->bp_bits = bits; }
+  return bits;
+}
+/* (analyze.h) */
+int an_fwd_block_may_be_nil(Compiler *c, int id) {
+  int blk = nt_ref(c->nt, id, "block");
+  return blk >= 0 && nt_kind(c->nt, blk) == NK_BlockArgumentNode && (bp_site(c, id, blk, 0, -1, NULL) & BP_WITHOUT);
 }
 
 TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int base_mi, TyKind r,
@@ -3510,7 +3636,7 @@ TyKind method_call_ret(Compiler *c, int mi, int call_id) {
       int emi = encl ? (int)(encl - c->scopes) : -1;
       if (emi >= 0 && emi != mi) {
         TyKind ft = yvt_forwarded_value(c, emi);
-        TyKind nb = tl >= 0 && method_block_presence(c, emi) != 1 ? c->scopes[mi].ret_noblock : TY_UNKNOWN;
+        TyKind nb = tl >= 0 && bp_method(c, emi, NULL) != BP_WITH ? c->scopes[mi].ret_noblock : TY_UNKNOWN;
         if (ft != TY_UNKNOWN && ft != TY_VOID)
           return method_yield_ret(c, mi, nb == TY_UNKNOWN ? ft : ty_unify(ft, nb));
       }
@@ -3582,10 +3708,10 @@ TyKind method_call_ret(Compiler *c, int mi, int call_id) {
     int blk = nt_ref(c->nt, call_id, "block");
     if (blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode && nt_int(c->nt, blk, "fwd_yield", 0)) {
       Scope *encl = comp_scope_of(c, call_id);
-      int up = encl ? method_block_presence(c, (int)(encl - c->scopes)) : -1;
-      if (up != 1) {
+      int up = encl ? bp_method(c, (int)(encl - c->scopes), NULL) : BP_ANY;
+      if (up != BP_WITH) {
         if (c->scopes[mi].ret_noblock == TY_UNKNOWN) return TY_UNKNOWN;
-        if (up == 0) return c->scopes[mi].ret_noblock;
+        if (up == BP_WITHOUT) return c->scopes[mi].ret_noblock;
         return ty_unify(c->scopes[mi].ret, c->scopes[mi].ret_noblock);
       }
     }

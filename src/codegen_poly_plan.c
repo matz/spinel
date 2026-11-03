@@ -5201,6 +5201,15 @@ void emit_poly_last_default(Compiler *c, int id, int recv, const char *name, int
    each_cons, the repeated pair), 0 for any other. */
 int poly_redispatch_kind(Compiler *c, int id, const char *name, int argc) {
   const NodeTable *nt = c->nt;
+  /* A callable forwarded to a name the enumerable driver serves
+     (`xs.sort_by(&f)`) has no block body for the array emitters to splice:
+     re-entered as an Array call, it found no emitter and raised
+     NoMethodError naming Array. The driver takes it, where it answers for
+     every value the receiver holds (cplan_driver_walks_recv). A literal
+     block the forward resolves to (a spliced caller's) is spliced. */
+  int blk = nt_ref(nt, id, "block"), rfb = resolve_forwarded_block(c, blk);
+  if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode && (rfb < 0 || nt_kind(nt, rfb) == NK_BlockArgumentNode) &&
+      argc == 0 && poly_enum_op_for(name) && cplan_driver_walks_recv(c, id)) return 0;
   int takes = (nt_ref(nt, id, "block") >= 0 && sp_streq(name, "sort_by")) ||
        /* and the COMPARATOR-block forms. `sort` blockless has an arm of its
           own above; with a block it had none, so a method whose parameter

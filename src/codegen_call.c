@@ -29332,15 +29332,20 @@ int emit_reopen_own_call(Compiler *c, int id, int dispatch_cid, Buf *b) {
   if (!name || dispatch_cid < 0 || dispatch_cid >= c->nclasses) return 0;
   const char *cn = c->classes[dispatch_cid].name;
   if (!cn || !is_builtin_reopen(cn) || dispatch_cid == c->toplevel_class) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
   Scope *self = comp_scope_of(c, id);
   if (!self || self->is_cmethod) return 0;
   int mi = call_target(c, id, dispatch_cid, name, 0, NULL);
   if (mi < 0 || mi >= c->nscopes || c->scopes[mi].class_id != dispatch_cid || c->scopes[mi].is_cmethod) return 0;
+  /* the block as the plan hands it on (`def go(&b) = twice(&b)` in `class
+     Integer` cast self to a struct Integer does not have, a C error) */
+  int rob = cplan_reopen_own_block(c, id, mi);
+  if (rob == ROB_DECLINE) return 0;
+  const Scope *m = &c->scopes[mi];
   if (g_plan_check) ucall_observe(c, id, mi, dispatch_cid, 0);
-  buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
+  buf_printf(b, "%s(", mc_method(c, m));
   emit_reopen_self_arg(c, id, mi, b);
   emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), ", ", b);
+  if (rob == ROB_PASS) emit_trailing_blk_arg(c, m, id, -1, b);
   buf_puts(b, ")");
   return 1;
 }

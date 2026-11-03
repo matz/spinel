@@ -792,6 +792,54 @@ spinel: 1 refusal, nothing written
 == test/reject/forwarding_super_yielding_optional.rb [promote] rc=1
 spinel: test/reject/forwarding_super_yielding_optional.rb:5: `super(...)` into a method that yields and takes an optional or *rest parameter: the forwarded arguments cannot leave one out
 spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_args.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_args.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_args.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_args.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_bind_call.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_bind_call.rb:8: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_bind_call.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_bind_call.rb:8: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_nil.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_nil.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_nil.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_nil.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_poly_class_each.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_poly_class_each.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_poly_class_each.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_poly_class_each.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_poly_class_value.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_poly_class_value.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_poly_class_value.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_poly_class_value.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_prepend.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_prepend.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_prepend.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_prepend.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_sclass.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_sclass.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_sclass.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_sclass.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_superclass_new.rb [default] rc=1
+spinel: test/reject/fwd_block_super_new_superclass_new.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/fwd_block_super_new_superclass_new.rb [promote] rc=1
+spinel: test/reject/fwd_block_super_new_superclass_new.rb:6: unsupported Array#min on a value typed as Array, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `min`) recv=LocalVariableReadNode/ty22 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/include_module_from_expression.rb [default] rc=1
 spinel: test/reject/include_module_from_expression.rb:9: `include` of a module named by an expression, not a constant, is not supported (the mixin is resolved at compile time)
 == test/reject/include_module_from_expression.rb [promote] rc=1

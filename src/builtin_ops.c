@@ -3072,6 +3072,11 @@ int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block) {
   return r && (r->answer == IA_RECV || r->answer == IA_BLOCKVALS_INPLACE);
 }
 
+int iter_boxed_answers_recv(const char *name) {
+  const IterRow *a = iter_row(BOP_ANY_ARRAY, name, 0, 0), *h = iter_row(BOP_ANY_HASH, name, 0, 0);
+  return (a || h) && (!a || a->answer == IA_RECV) && (!h || h->answer == IA_RECV);
+}
+
 int iter_hands_recv(const char *name) {
   const IterRow *r = iter_row(BOP_ANY_RECV, name, 0, 0);
   return r && r->nyield == 1 && r->yield[0] == YS_RECV;

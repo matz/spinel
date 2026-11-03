@@ -479,6 +479,10 @@ int bop_answers_self(TyKind rt, const char *name, int argc, int has_block);
    IA_BLOCKVALS_INPLACE (each, tap, map!). The value is then another name
    of the receiver's object, not a copy of it. */
 int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block);
+/* Does `name` with a block and no argument answer the receiver on a boxed
+   value, by the Array and the Hash iterator rows (IA_RECV in each family
+   that has the name)? */
+int iter_boxed_answers_recv(const char *name);
 /* Is `name` a method every value answers that hands its block the receiver
    itself, once (an any-receiver iterator row yielding YS_RECV: tap, then,
    yield_self)? Its answer is the receiver or the block's value. */

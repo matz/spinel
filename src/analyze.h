@@ -1020,6 +1020,16 @@ int block_keyword_default(Compiler *c, int block, int idx);
    block from a nested proc/lambda literal. */
 int is_proc_constant(const NodeTable *nt, int n);
 int is_proc_literal(Compiler *c, int id);
+/* Can the callable call id forwards (`a.m(&b)`) be nil at run time? The
+   enclosing method's own block is where some call enters the method
+   without a block or with a callable that may be nil, read from every
+   call that reaches it (its name or an alias's, a `super`, a send; a
+   Method of it or a computed name may enter it either way); a Symbol, a
+   proc or lambda literal, a method(:x) and a local every write of which
+   is one, written as a statement of its method's or file's body, are not;
+   any other value (a parameter, an ivar, a call's answer, a local set
+   under a branch) may be. */
+int an_fwd_block_may_be_nil(Compiler *c, int id);
 /* A `Hash.new { }` default block lowered to a real proc (analyze_util.c);
    codegen emits it that way. */
 int hash_new_block_is_proc(Compiler *c, int id);

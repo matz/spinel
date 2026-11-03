@@ -22867,7 +22867,13 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                          (iter_value_answers_recv(c, id) || num_iter_answers_recv(c, id) ||
                           (tv_name && is_scan_name(tv_name))) &&
                          tail_iter_receiver(c, id) < 0;
-  if (!is_tail_loop && !is_tail_valued && !is_tail_recv_val &&
+  /* A callable forwarded to an iterator on a boxed receiver goes to the
+     enumerable driver, whose answer the statement form drops: `b ? a.sum(&b)
+     : 0` answered nil. The value form hands the driver's answer back, where
+     the plan has the driver answer the call (cplan_driver_walks_recv). */
+  int is_tail_fwd_proc = k == NK_CallNode && nt_ref(nt, id, "block") >= 0 &&
+                         iter_fwd_proc_to_driver(c, id) && cplan_driver_walks_recv(c, id);
+  if (!is_tail_loop && !is_tail_valued && !is_tail_recv_val && !is_tail_fwd_proc &&
       k == NK_CallNode && nt_ref(nt, id, "block") >= 0 &&
       !call_breaks(c, id) &&
       emit_iteration_stmt(c, id, b, indent)) {

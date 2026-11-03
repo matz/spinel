@@ -3914,6 +3914,26 @@ const PolyPlan *cplan_poly_fresh(Compiler *c, int id) {
   return &fresh;
 }
 
+/* (call_plan.h) */
+int cplan_reopen_own_block(Compiler *c, int id, int mi) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0) return ROB_NONE;
+  const Scope *m = &c->scopes[mi];
+  if (m->yields) return ROB_DECLINE;   /* (reached through its proc form) */
+  if (m->blk_param && m->blk_param[0]) return ROB_PASS;
+  int bx = nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+  return bx >= 0 && nt_kind(nt, bx) != NK_LocalVariableReadNode ? ROB_DECLINE : ROB_DROP;
+}
+/* (call_plan.h) The driver walks a value as a builtin container; an object
+   of a class with an `each` of its own is read as an empty one, where
+   CRuby's Enumerable runs that each. And it runs the callable on every
+   element: a nil one is no block in CRuby, where the call answers as
+   written without one (an Enumerator for most names). */
+int cplan_driver_walks_recv(Compiler *c, int id) {
+  return !poly_recv_defines(c, id, "each") && !an_fwd_block_may_be_nil(c, id);
+}
+
 /* (call_plan.h) Only `each`: its inline walk is what sp_poly_enum_proc does
    for the kinds it serves, reading the length at every step. The inline
    forms of reverse_each, each_pair and the rest differ from it on a

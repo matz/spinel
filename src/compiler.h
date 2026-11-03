@@ -596,6 +596,10 @@ typedef struct {
   const int *ps_kws;
   int ps_fwd;             /* a `...` keyword rest: every name binds by keyword */
   int ps_obr;             /* an optional with posts beside it; -1: no list says */
+  /* How its calls enter it (an_block_presence's BP_* bits), kept while
+     infer_type's memo keeps this edit count, plus one (0: not read). */
+  unsigned long bp_edits;
+  int bp_bits;
 
   SP_TY_FIELD TyKind ret;     /* inferred return type */
   SlotWhy ret_why;  /* how `ret` came to be untyped, if it is */

@@ -2336,6 +2336,15 @@ int is_hash_read_only(const char *n) {
   return 0;
 }
 int is_to_a_name(const char *n) { return n && sp_streq(n, "to_a"); }
+/* The reflection calls (is_method_name_reflection) whose name argument is
+   a method they call (the send family) or hand on to be called later, with
+   any block or none (Kernel#method and its kin, alias_method): all but the
+   ones that only define a method of the name or ask whether there is one. */
+int is_method_handoff_name(const char *n) {
+  return is_method_name_reflection(n) && !is_define_method_name(n) && !sp_streq(n, "define_singleton_method") &&
+         !sp_streq(n, "respond_to?") && !is_method_defined_query(n);
+}
+
 int is_hash_self_answer(const char *n) {
   return n && (sp_streq(n, "each") || sp_streq(n, "each_pair") || sp_streq(n, "each_key") ||
                sp_streq(n, "each_value") || sp_streq(n, "freeze") || sp_streq(n, "to_h"));

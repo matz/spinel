@@ -2071,6 +2071,7 @@ int block_tail_is_unresolved(Compiler *c, int node);
 int emit_iter_value_expr(Compiler *c, int id, Buf *b);
 void set_enum_walk_result(int tmp);
 int iter_value_answers_recv(Compiler *c, int id);
+int iter_fwd_proc_to_driver(Compiler *c, int id);
 int sn_guard_pending(Compiler *c, int id);
 int emit_takewhile_with_index(Compiler *c, int id, Buf *b);
 int emit_transform_hash_expr(Compiler *c, int id, Buf *b);

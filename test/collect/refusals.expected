@@ -1323,10 +1323,10 @@ spinel: test/reject/range_reopen_string_range.rb:12: a method the program define
 == test/reject/range_reopen_string_range.rb [promote] rc=1
 spinel: test/reject/range_reopen_string_range.rb:12: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_reopen_yield_container.rb [default] rc=1
-spinel: test/reject/range_reopen_yield_container.rb:11: a yielding method of a reopened Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation
+spinel: test/reject/range_reopen_yield_container.rb:11: a yielding method of a reopened Integer, Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation
 spinel: 1 refusal, nothing written
 == test/reject/range_reopen_yield_container.rb [promote] rc=1
-spinel: test/reject/range_reopen_yield_container.rb:11: a yielding method of a reopened Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation
+spinel: test/reject/range_reopen_yield_container.rb:11: a yielding method of a reopened Integer, Float, Symbol, Random, Range, Time or NilClass that hands its block an Array or Hash is not supported by AOT compilation
 spinel: 1 refusal, nothing written
 == test/reject/range_reopened_endpoint_write.rb [default] rc=1
 spinel: test/reject/range_reopened_endpoint_write.rb:11: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it

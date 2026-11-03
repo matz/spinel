@@ -1802,7 +1802,8 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
      needs str_fresh_value to tell a literal/ternary/other-non-variable
      receiver apart from one that is provably fresh, since both get
      identical codegen once sb_asgn is false. */
-  int span2 = argc == 2 && !sb_asgn && re_lit_index(c, argv[0]) < 0;
+  int span2 = argc == 2 && !sb_asgn && re_lit_index(c, argv[0]) < 0 &&
+              comp_ntype(c, argv[0]) != TY_REGEX;
   if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
     int tp2 = ++g_tmp;
     buf_puts(b, "({ "); emit_str_frozen_check(c, recv, b);
@@ -1930,19 +1931,29 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " } _t%d; })", tr2);
     return 1;
   }
-  if (argc == 2 && re_lit_index(c, argv[0]) >= 0) {
+  if (argc == 2 && (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_REGEX)) {
     /* slice!(/re/, n): remove the nth capture group of the first match and
        evaluate to it. sp_re_caps holds each group's byte span, so the removal
        is the group's own occurrence rather than the first textual one, which
-       is a different character when the group repeats (#3543). */
+       is a different character when the group repeats (#3543). A Regexp held
+       in a value (a parameter, a local no literal resolves) is read once,
+       right after the receiver, in Ruby's own left-to-right argument order --
+       same place emit_string_slice_poly's one-arg sibling above reads it. */
     int ts = ++g_tmp, tn = ++g_tmp, th = ++g_tmp;
+    char pat[32];
     buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, recv, b);
     buf_printf(b, "; if (_t%d) sp_str_check_mutable(_t%d);", ts, ts);
+    if (re_lit_index(c, argv[0]) >= 0) snprintf(pat, sizeof pat, "sp_re_pat_%d", re_lit_index(c, argv[0]));
+    else {
+      int tp3 = ++g_tmp;
+      snprintf(pat, sizeof pat, "_t%d", tp3);
+      buf_printf(b, " mrb_regexp_pattern *_t%d = ", tp3); emit_expr(c, argv[0], b); buf_puts(b, ";");
+    }
     buf_printf(b, " sp_int _t%d = ", tn); emit_int_expr(c, argv[1], b);
-    buf_printf(b, "; const char *_t%d = sp_re_match(sp_re_pat_%d, _t%d) >= 0"
+    buf_printf(b, "; const char *_t%d = sp_re_match(%s, _t%d) >= 0"
                   " ? (_t%d == 0 ? sp_re_match_str"
                   "    : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL)) : NULL;",
-               th, re_lit_index(c, argv[0]), ts, tn, tn, tn, tn);
+               th, pat, ts, tn, tn, tn, tn);
     if (sb_asgn) {
       buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) {"
                     " sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];"

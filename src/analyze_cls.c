@@ -1936,7 +1936,12 @@ static void cf_bind_args(CF *f, int mi, const int *argv, int argc) {
       if (!bound) {
         /* a computed key, a double splat: any keyword parameter */
         for (int i = 0; i < m->nparams; i++)
-          if (i == m->kwrest_idx || cf_param_is_kw(f, m, i)) { cf_flow(f, val, cf_param_el(f, mi, i)); if (i == m->kwrest_idx) cf_store(f, cf_param_el(f, mi, i), val); }
+          if (i == m->kwrest_idx || cf_param_is_kw(f, m, i)) {
+            cf_flow(f, val, cf_param_el(f, mi, i));
+            if (i == m->kwrest_idx) cf_store(f, cf_param_el(f, mi, i), val);
+            /* (a `**` hands a keyword one of its values) */
+            else if (nt_kind(nt, els[e]) == NK_AssocSplatNode) cf_load(f, val, cf_param_el(f, mi, i));
+          }
       }
     }
   }
@@ -2630,6 +2635,77 @@ static int cf_user_target(CF *f, int v, int mi, const int *argv, int argc, int b
   return 1;
 }
 
+/* member name's element in the Struct or Data x */
+static int cf_member_el(CF *f, int x, const char *name) {
+  char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", name);
+  return cf_entry(f, f->fam[x], ivn);
+}
+/* the arguments the builtin initialize of a Struct or Data x stores: the
+   members in order, or by keyword; a splat, a computed key or a `**` may
+   reach any member, a splat and a `**` with what they hold; a positional
+   argument after a splat may reach any member. A Struct's keywords are one
+   positional Hash after a positional argument or with keyword_init: false. */
+static void cf_member_args(CF *f, int x, const int *argv, int argc) {
+  const NodeTable *nt = f->nt;
+  ClassInfo *k = &f->c->classes[x];
+  int p = 0, after_splat = 0;
+  for (int i = 0; i < argc; i++) {
+    NodeKind ak = nt_kind(nt, argv[i]);
+    if (ak == NK_BlockArgumentNode) continue;
+    if (ak == NK_SplatNode) {
+      int a = nt_ref(nt, argv[i], "expression");
+      for (int r = 0; r < k->nreaders; r++) { int me = cf_member_el(f, x, k->readers[r]); cf_flow(f, a, me); cf_load(f, a, me); }
+      after_splat = 1;
+      continue;
+    }
+    int kwh = ak == NK_KeywordHashNode;
+    /* (after an empty splat the keywords still go by name) */
+    int by_name = kwh && (k->is_data || (k->kw_init != -1 && p == 0));
+    int as_hash = kwh && !k->is_data && (k->kw_init == -1 || p > 0 || after_splat);
+    if (!kwh || as_hash) {
+      if (after_splat) { for (int r = 0; r < k->nreaders; r++) cf_flow(f, argv[i], cf_member_el(f, x, k->readers[r])); }
+      else if (p < k->nreaders) cf_flow(f, argv[i], cf_member_el(f, x, k->readers[p]));
+      p++;
+    }
+    if (!by_name) continue;
+    int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
+    for (int e = 0; e < en; e++) {
+      int dsplat = nt_kind(nt, els[e]) == NK_AssocSplatNode;
+      int key = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
+      const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+      int val = nt_ref(nt, els[e], "value");
+      if (val < 0) continue;
+      if (kn) { cf_flow(f, val, cf_member_el(f, x, kn)); continue; }
+      for (int r = 0; r < k->nreaders; r++) {
+        int me = cf_member_el(f, x, k->readers[r]);
+        cf_flow(f, val, me);
+        if (dsplat) cf_load(f, val, me);
+      }
+    }
+  }
+}
+/* a bare `super` in method mi of a Struct or Data x hands on mi's
+   parameters: the positional ones in order, the keywords by name, what a
+   rest or a **rest holds to any member */
+static void cf_member_params(CF *f, int x, int mi) {
+  Scope *m = &f->c->scopes[mi];
+  ClassInfo *k = &f->c->classes[x];
+  int p = 0, after_rest = 0;
+  for (int i = 0; i < m->nparams; i++) {
+    int pe = cf_param_el(f, mi, i);
+    if (pe < 0) continue;
+    if (i == m->rest_idx || i == m->kwrest_idx) {
+      for (int r = 0; r < k->nreaders; r++) cf_load(f, pe, cf_member_el(f, x, k->readers[r]));
+      if (i == m->rest_idx) after_rest = 1;
+      continue;
+    }
+    if (cf_param_is_kw(f, m, i)) { cf_flow(f, pe, cf_member_el(f, x, m->pnames[i])); continue; }
+    if (after_rest) { for (int r = 0; r < k->nreaders; r++) cf_flow(f, pe, cf_member_el(f, x, k->readers[r])); continue; }
+    if (p < k->nreaders) cf_flow(f, pe, cf_member_el(f, x, k->readers[p]));
+    p++;
+  }
+}
+
 /* `X.new(...)`: an instance of the user class X, initialized */
 static void cf_construct(CF *f, int v, int x, const int *argv, int argc, int blk, const char *nm) {
   Compiler *c = f->c;
@@ -2645,32 +2721,42 @@ static void cf_construct(CF *f, int v, int x, const int *argv, int argc, int blk
   if (sp_streq(nm, "allocate")) return;
   int init = comp_method_in_chain(c, x, "initialize", NULL);
   if (init >= 0) { cf_user_target(f, -1, init, argv, argc, blk); return; }
-  if (k->is_struct || k->is_data) {
-    /* the members, in order, or by keyword */
-    int kwh = -1, p = 0;
-    for (int i = 0; i < argc; i++) {
-      NodeKind ak = nt_kind(nt, argv[i]);
-      if (ak == NK_KeywordHashNode) { kwh = argv[i]; continue; }
-      if (ak == NK_BlockArgumentNode) continue;
-      if (ak == NK_SplatNode) {
-        for (int r = 0; r < k->nreaders; r++) { char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", k->readers[r]); cf_flow(f, nt_ref(nt, argv[i], "expression"), cf_entry(f, f->fam[x], ivn)); }
-        continue;
-      }
-      if (p < k->nreaders) { char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", k->readers[p]); cf_flow(f, argv[i], cf_entry(f, f->fam[x], ivn)); }
-      p++;
-    }
-    if (kwh >= 0) {
-      int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
-      for (int e = 0; e < en; e++) {
-        int key = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
-        const char *kn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
-        int val = nt_ref(nt, els[e], "value");
-        if (kn) { char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", kn); cf_flow(f, val, cf_entry(f, f->fam[x], ivn)); }
-        else for (int r = 0; r < k->nreaders; r++) { char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", k->readers[r]); cf_flow(f, val, cf_entry(f, f->fam[x], ivn)); }
-      }
-    }
-  }
+  if (k->is_struct || k->is_data) cf_member_args(f, x, argv, argc);
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+}
+
+/* `d.with(k: v)` on a Data x: a new instance, initialized as `new`
+   initializes one from the given keywords and the receiver's other
+   members, which x's own initialize takes as keywords */
+static void cf_data_with(CF *f, int v, int x, const int *argv, int argc) {
+  Compiler *c = f->c;
+  ClassInfo *k = &c->classes[x];
+  if (v >= 0) cf_add_set(f, v, f->own[x]);
+  int init = comp_method_in_chain(c, x, "initialize", NULL);
+  if (init < 0) { cf_member_args(f, x, argv, argc); return; }
+  cf_bind_args(f, init, argv, argc);
+  Scope *m = &c->scopes[init];
+  for (int r = 0; r < k->nreaders; r++) {
+    int me = cf_member_el(f, x, k->readers[r]);
+    for (int i = 0; i < m->nparams; i++)
+      if (m->pnames[i] && sp_streq(m->pnames[i], k->readers[r]) && cf_param_is_kw(f, m, i)) cf_flow(f, me, cf_param_el(f, init, i));
+    if (m->kwrest_idx >= 0) cf_store(f, cf_param_el(f, init, m->kwrest_idx), me);
+  }
+}
+/* `s[i] = v` on a Struct x: v is in the member a Symbol, a String or an
+   Integer names, else in any member */
+static void cf_struct_aset(CF *f, int x, const int *argv) {
+  const NodeTable *nt = f->nt;
+  ClassInfo *k = &f->c->classes[x];
+  NodeKind ik = nt_kind(nt, argv[0]);
+  const char *kn = ik == NK_SymbolNode ? nt_str(nt, argv[0], "value") : ik == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
+  if (!kn && ik == NK_IntegerNode) {
+    long long i = nt_int(nt, argv[0], "value", 0);
+    if (i < 0) i += k->nreaders;
+    if (i >= 0 && i < k->nreaders) kn = k->readers[i];
+  }
+  for (int r = 0; r < k->nreaders; r++)
+    if (!kn || sp_streq(kn, k->readers[r])) cf_flow(f, argv[1], cf_member_el(f, x, k->readers[r]));
 }
 
 /* the call on a receiver whose classes are known (set pidx, not every
@@ -2954,6 +3040,8 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
        members, Enumerable over the class's own each */
     builtin = 1;
     ClassInfo *ci = &c->classes[k];
+    if (ci->is_data && sp_streq(nm, "with")) cf_data_with(f, v, k, argv, argc);
+    if (ci->is_struct && sp_streq(nm, "[]=") && argc == 2) cf_struct_aset(f, k, argv);
     if (ci->is_struct || ci->is_data)
       for (int r = 0; r < ci->nreaders; r++) {
         char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", ci->readers[r]);
@@ -3060,6 +3148,10 @@ static void cf_call_any_at(CF *f, int v, const char *nm, const int *argv, int ar
       for (int a = 0; a < argc; a++) cf_flow(f, argv[a], cf_entry(f, f->fam[b->wr[i]], ivn));
   }
   if (sp_streq(nm, "new")) { CFByName *ini = cf_byname(f, "initialize"); for (int q = 0; q < ini->n; q++) cf_bind_args(f, ini->mi[q], argv, argc); }
+  /* Data#with: into each Data's members that takes it */
+  if (sp_streq(nm, "with"))
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].is_data && comp_method_in_chain(c, k, "with", NULL) < 0) cf_data_with(f, -1, k, argv, argc);
   /* the block's parameters and the arguments may go anywhere */
   if (blk >= 0 && nt_kind(f->nt, blk) == NK_BlockNode) { cf_all_block_params(f, blk); cf_flow(f, blk, v); }
   /* (the kinds: code the walk does not see may store into an argument's
@@ -4460,6 +4552,11 @@ static void cf_node(CF *f, int v) {
       int nk = ik >= 0 ? comp_native_answer_class(c, ik, s->name) : -1;
       if (nk >= 0 && nk != ik) cf_native_answer(f, v, recv_el, nk, s->name, argc2);
       else cf_builtin_rule(f, v, recv_el, argv2, argc2, blk, s->name);
+      /* a Struct's or Data's own initialize stores into the members */
+      if (ik >= 0 && sp_streq(s->name, "initialize") && (c->classes[ik].is_struct || c->classes[ik].is_data)) {
+        if (k == NK_SuperNode) cf_member_args(f, ik, argv2, argc2);
+        else cf_member_params(f, ik, mi);
+      }
     }
     return;
   }

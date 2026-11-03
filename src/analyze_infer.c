@@ -2229,7 +2229,7 @@ static int an_module_tree(Compiler *c, int m, int *mods, int *n, int cap) {
   for (int j = 0; j < *n; j++) if (mods[j] == m) return 0;   /* reached twice */
   ClassInfo *mc = &c->classes[m];
   if (!comp_class_is_module(c, mc) || mc->is_native_class || mc->nincluded_mod_names > 0) return 0;
-  if (!class_def_is_module(nt, mc->def_node)) return 0;
+  if (!comp_class_is_module(c, mc)) return 0;
   mods[(*n)++] = m;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, m, &nb);

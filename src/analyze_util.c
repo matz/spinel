@@ -4191,7 +4191,7 @@ int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *arml
   if (mi < 0) return -1;
   const ClassInfo *k = &c->classes[ci];
   Scope *tm = &c->scopes[mi];
-  if (k->is_value_type || class_def_is_module(c->nt, k->def_node) ||
+  if (k->is_value_type || comp_class_is_module(c, k) ||
       tm->yields || (tm->blk_param && tm->blk_param[0])) {
     if (armless) *armless = 1;
     return -1;

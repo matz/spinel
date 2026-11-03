@@ -374,7 +374,7 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
     int cls = sc ? sc->class_id : -1;
     if (sc && sc->is_cmethod) continue;
     if (cls >= 0) {
-      if (cls == obj || class_def_is_module(nt, c->classes[cls].def_node)) continue;
+      if (cls == obj || comp_class_is_module(c, &c->classes[cls])) continue;
       if (call_target(c, id, cls, nm, 0, NULL) >= 0) continue;
     }
     /* at the top level self is main, an Object; a top-level `def` of the

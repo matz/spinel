@@ -1860,7 +1860,7 @@ void compute_instantiated(Compiler *c, int early) {
       /* main's ivars live on the Toplevel pseudo-class, which is never built */
       if (k == c->toplevel_class) continue;
       /* a module has no instances, whatever `klass.new` can reach */
-      if (class_def_is_module(nt, c->classes[k].def_node)) continue;
+      if (comp_class_is_module(c, &c->classes[k])) continue;
       c->classes[k].instantiated = 1;
     }
   for (int k = 0; k < c->nclasses; k++) {
@@ -16992,7 +16992,7 @@ static int narrow_object_arrays(Compiler *c) {
         all keep the slot boxed. */
   for (int ci = 0; ci < c->nclasses; ci++) {
     ClassInfo *cl = &c->classes[ci];
-    if (cl->def_node < 0 || class_def_is_module(nt, cl->def_node)) continue;
+    if (cl->def_node < 0 || comp_class_is_module(c, cl)) continue;
     if (cl->is_struct || cl->is_data || cl->is_native_class || cl->is_value_type) continue;
     for (int iv = 0; iv < cl->nivars; iv++) {
       const char *ivn = cl->ivars[iv];
@@ -17217,7 +17217,7 @@ static int narrow_object_arrays(Compiler *c) {
       Scope *sc = comp_scope_of(c, id);
       int own = (sc && !sc->is_cmethod && !in_blk[id] && sc->class_id >= 0 && sc->class_id < c->nclasses &&
                  c->classes[sc->class_id].def_node >= 0 &&
-                 !class_def_is_module(nt, c->classes[sc->class_id].def_node)) ? sc->class_id : -1;
+                 !comp_class_is_module(c, &c->classes[sc->class_id])) ? sc->class_id : -1;
       if (own >= 0) {
         int i = OA_IVSLOT(own, nm);
         if (i >= 0) sl[i].alive = 0;

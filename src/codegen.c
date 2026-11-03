@@ -13296,7 +13296,7 @@ static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want
   ClassInfo *ci2 = &c->classes[i];
   if (is_builtin_reopen(ci2->name) || ci2->is_native_class) return -1;
   if (!any_shape && comp_ty_value_obj(c, ty_object(i))) return -1;
-  if (class_def_is_module(c->nt, ci2->def_node)) return -1;   /* no instances */
+  if (comp_class_is_module(c, ci2)) return -1;   /* no instances */
   int tdef = -1;
   int tmi = comp_method_in_chain(c, i, mname, &tdef);
   /* a no-parameter method only (a `&block` parameter is not in nparams; the
@@ -13316,7 +13316,7 @@ static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want
   *out_mi = tmi;
   /* a module def is copied into the includer; an ancestor CLASS def is one
      real function the child casts into */
-  return class_def_is_module(c->nt, c->classes[tdef].def_node) ? i : tdef;
+  return comp_class_is_module(c, &c->classes[tdef]) ? i : tdef;
 }
 /* Whether the per-class object switches (to_s, inspect, the conversions and
    the Marshal rows) have an arm for class i, and so whether the dispatch is
@@ -19719,7 +19719,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     buf_printf(b, "static const int sp_cls_is_module[%d] = {", c->nclasses);
     for (int i = 0; i < c->nclasses; i++) {
       if (i) buf_puts(b, ",");
-      buf_printf(b, "%d", class_def_is_module(nt, c->classes[i].def_node) ? 1 : 0);
+      buf_printf(b, "%d", comp_class_is_module(c, &c->classes[i]) ? 1 : 0);
     }
     buf_puts(b, "};\n");
   }
@@ -20961,7 +20961,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
           char mk[192];
           snprintf(mk, sizeof mk, "sp_anon_text(\"\",sp_sprintf(SPL(\"#<%s:0x%%016llx>\"),"
                                   "(unsigned long long)(uintptr_t)&sp_class_to_s+%d))",
-                   class_def_is_module(c->nt, c->classes[i].def_node) ? "Module" : "Class", i);
+                   comp_class_is_module(c, &c->classes[i]) ? "Module" : "Class", i);
           char nx[96]; anon_name_expr(nx, sizeof nx, i);
           buf_printf(b, "case %d:if(%s)return %s;{static const char *t;", i, nx, nx);
           if (g_uses_threads)

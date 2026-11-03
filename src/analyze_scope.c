@@ -4529,7 +4529,7 @@ static void mf_copy_entries(Compiler *c) {
   if (n && !src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++) {
     src[i] = -1;
-    if (!a[i].sg || a[i].cls < 0 || !class_def_is_module(c->nt, c->classes[a[i].cls].def_node)) continue;
+    if (!a[i].sg || a[i].cls < 0 || !comp_class_is_module(c, &c->classes[a[i].cls])) continue;
     if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
     src[i] = mf_entry_scope(c, &a[i]);
     int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
@@ -8863,7 +8863,7 @@ void specialize_inherited_cls_new(Compiler *c) {
       Scope *encl = comp_scope_of(c, id);
       if (rn && sp_streq(rn, "class") && rr >= 0 && nt_kind(nt, rr) == NK_SelfNode &&
           mname && !sp_streq(mname, "new") && encl && !encl->is_cmethod && encl->class_id >= 0 &&
-          !class_def_is_module(nt, c->classes[encl->class_id].def_node)) {
+          !comp_class_is_module(c, &c->classes[encl->class_id])) {
         int base = encl->class_id;
         /* the enclosing class too: one that inherits the method holds its
            own class-level ivars as its descendants do */

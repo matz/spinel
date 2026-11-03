@@ -2849,7 +2849,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       /* A MODULE has no `new`, and no constructor is emitted for one: giving it
          an arm called an sp_<Module>_new that nothing defines, and the program
          failed to link (#3965). */
-      if (class_def_is_module(nt, c->classes[ci].def_node)) continue;
+      if (comp_class_is_module(c, &c->classes[ci])) continue;
       if (emit_user_new_arm(c, id, ci, 0, NULL, 1, rt2, b)) continue;
       /* a zero-arg .new can only construct a class whose initialize takes no
          required args; an arg-requiring ctor is CRuby's ArgumentError, and its
@@ -3013,7 +3013,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
           continue;
         } }
       if (!c->classes[ci].instantiated) continue;
-      if (class_def_is_module(nt, c->classes[ci].def_node)) continue;   /* a module has no `new` (#3965) */
+      if (comp_class_is_module(c, &c->classes[ci])) continue;   /* a module has no `new` (#3965) */
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
       if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, initm, rt2, b)) continue;

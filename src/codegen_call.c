@@ -12668,7 +12668,7 @@ static void arity_names(char *out, size_t n, const char *pre, const char *const 
 int ctor_arity_error(Compiler *c, int ci, int initm, int argc, char *msg, size_t n) {
   const NodeTable *nt = c->nt;
   ClassInfo *k = &c->classes[ci];
-  if (class_def_is_module(nt, k->def_node)) return 0;
+  if (comp_class_is_module(c, k)) return 0;
   msg[0] = 0;
   if (initm < 0) {
     if (k->is_struct) {
@@ -13184,7 +13184,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
        argument too many. */
     if (initm < 0) {
       if (spl < 0 || !splat_operand_ok(c, spl) ||
-          class_def_is_module(nt, c->classes[ci].def_node) || class_is_exc_subclass(c, ci) ||
+          comp_class_is_module(c, &c->classes[ci]) || class_is_exc_subclass(c, ci) ||
           comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
       int tsa = ++g_tmp;
       buf_printf(b, "case %d: { sp_PolyArray *_t%d = ", ci, tsa);
@@ -21760,7 +21760,7 @@ static int emit_cmethod_vis_refusal(Compiler *c, int id, int vrecv, const char *
   if (cid < 0 || cid >= c->nclasses || cplan_cmethod_visible(c, id, cid, vnm)) return 0;
   int vis = comp_cmethod_vis_declared(c, cid, vnm, NULL);
   const char *vrn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
-  int is_mod = class_def_is_module(nt, c->classes[cid].def_node);
+  int is_mod = comp_class_is_module(c, &c->classes[cid]);
   buf_puts(b, "(");
   { int vac; const int *vav = call_args(nt, id, &vac);
     for (int k = 0; k < vac; k++) { buf_puts(b, "(void)("); emit_expr(c, vav[k], b); buf_puts(b, "), "); } }
@@ -21884,7 +21884,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     if (ci < 0 || ci >= c->nclasses) return 0;
     if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci))
       return 0;
-    snprintf(cvname, sizeof cvname, "%s %s", class_def_is_module(c->nt, c->classes[ci].def_node) ? "module" : "class",
+    snprintf(cvname, sizeof cvname, "%s %s", comp_class_is_module(c, &c->classes[ci]) ? "module" : "class",
              class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
     cname = cvname; named = 1;
   }
@@ -23162,7 +23162,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
               if (!cplan_cmethod_visible(c, id, ccls[k], nm)) {
                 int vis = comp_cmethod_vis_declared(c, ccls[k], nm, NULL);
                 const char *vrn = class_ruby_name(c, ccls[k]) ? class_ruby_name(c, ccls[k]) : c->classes[ccls[k]].name;
-                int is_mod = class_def_is_module(nt, c->classes[ccls[k]].def_node);
+                int is_mod = comp_class_is_module(c, &c->classes[ccls[k]]);
                 buf_printf(b, "(sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for %s %s\")[1])), sp_box_nil()) : ",
                            vis == SP_VIS_PRIVATE ? "private" : "protected", nm, is_mod ? "module" : "class", vrn);
                 continue;
@@ -23608,7 +23608,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
    classes this answers yes for. */
 int class_isa_user(Compiler *c, int k, int cid) {
   if (k == cid || is_descendant(c, k, cid)) return 1;
-  return class_def_is_module(c->nt, c->classes[cid].def_node) && !class_def_is_module(c->nt, c->classes[k].def_node) &&
+  return comp_class_is_module(c, &c->classes[cid]) && !comp_class_is_module(c, &c->classes[k]) &&
          class_includes_module(c, k, cid);
 }
 
@@ -31445,7 +31445,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
 int bind_owner_mismatch(Compiler *c, int target, TyKind ot) {
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
-  if (cid < 0 || tm->is_cmethod || class_def_is_module(c->nt, c->classes[cid].def_node)) return 0;
+  if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid])) return 0;
   return !class_isa_user(c, ty_object_class(ot), cid);
 }
 

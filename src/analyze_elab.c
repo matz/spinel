@@ -3304,7 +3304,7 @@ static int lr_super(Compiler *c, int cls) {
   LrClass *k = lr_class(c->lrec, cls);
   if (k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) >= 0) return k->sup;   /* the record's, which it has while it is made */
   if (c->classes[cls].parent >= 0) return c->classes[cls].parent;
-  return class_def_is_module(c->nt, c->classes[cls].def_node) ? LR_UNKNOWN_CLASS : LR_MAIN;
+  return comp_class_is_module(c, &c->classes[cls]) ? LR_UNKNOWN_CLASS : LR_MAIN;
 }
 
 /* Did mixin m of a class happen before p (late: in the load phase)?
@@ -3389,7 +3389,7 @@ static int lr_sg_tail_of(Compiler *c, int cls, int tail[5]) {   /* where in tail
   const LoadRecord *r = c->lrec;
   tail[0] = comp_core_class(c, CORE_CLASS_REOPEN), tail[1] = lr_core(r, CORE_MODULE), tail[2] = lr_core(r, CORE_OBJECT);
   tail[3] = LR_MAIN, tail[4] = lr_core(r, CORE_KERNEL);
-  return cls == LR_MAIN ? 2 : cls >= 0 && class_def_is_module(c->nt, c->classes[cls].def_node) ? 1 : 0;
+  return cls == LR_MAIN ? 2 : cls >= 0 && comp_class_is_module(c, &c->classes[cls]) ? 1 : 0;
 }
 /* ...for a hook the core defines on Class or Module (is_module_hook_name)
    only up to where Object's begin (tail[2]): theirs stand before Object's,

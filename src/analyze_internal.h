@@ -271,6 +271,8 @@ int struct_aset_members(Compiler *c, int id, int k, int *lo, int *hi);
 int struct_aset_may_reach(Compiler *c, int id);
 /* A read of a String slot the share rule holds as the handle (analyze.c) */
 int an_arg_is_shared_handle(Compiler *c, int node);
+/* Whether an index argument is a Range: a slice, not one element. */
+int an_range_index(Compiler *c, int n);
 /* Last statement of a scope's body, or -1. */
 int scope_body_last(Compiler *c, int mi);
 int scope_block_given_tail(Compiler *c, Scope *sc);

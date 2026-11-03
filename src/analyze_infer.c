@@ -1553,6 +1553,7 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
 /* Whether every element stored into poly-array ivar `@<ivname>` is an int
    array (a nested array of int arrays, e.g. @chr_banks / @nmt_mem). Element
    reads then yield an int array rather than a boxed poly. */
+static int g_allint_active;   /* (a value inferred for the check below, which may read a table) */
 static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char *ivname) {
   const NodeTable *nt = c->nt;
   int saw = 0;
@@ -1582,7 +1583,7 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (is_store && an < 2) continue;
       /* `@t[a..b] = v` splices v's elements in: what it stores is no row */
-      if (is_store && an == 2 && (nt_kind(nt, av[0]) == NK_RangeNode || comp_ntype(c, av[0]) == TY_RANGE)) return 0;
+      if (is_store && an == 2 && an_range_index(c, av[0])) return 0;
       for (int a = is_store || is_insert ? 1 : 0; a < an; a++) {
         NodeKind ak = nt_kind(nt, av[a]);
         if (ak == NK_SplatNode) return 0;
@@ -1594,6 +1595,12 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
         if (vt == TY_INT_ARRAY) { saw = 1; continue; }
         if (an_own_row_read(c, av[a], ivname, 0)) continue;
         if (an_row_open_empty(c, av[a])) return 0;
+        /* a value with no type yet this pass: in the passes after the
+           fixpoint a boxed one (`@rows[0] = @other[i]`, @other holding a
+           String) had none yet when the table's reads were typed, and they
+           answered Integer rows */
+        if (vt == TY_UNKNOWN && !g_allint_active) { g_allint_active = 1; vt = infer_type(c, av[a]); g_allint_active = 0; }
+        if (vt == TY_INT_ARRAY) { saw = 1; continue; }
         if (vt == TY_NIL || vt == TY_UNKNOWN) continue;
         return 0;
       }

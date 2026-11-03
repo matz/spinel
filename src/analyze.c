@@ -15391,7 +15391,8 @@ static int narrow_int_table_ivars(Compiler *c, int in_round) {
           if (un && (sp_streq(un, "[]=") || sp_streq(un, "push") || sp_streq(un, "<<") ||
                      sp_streq(un, "append"))) {
             const int *uav = nt_arr(nt, ua, "arguments", &uan);
-            int rows_ok = 1;
+            /* `@t[a..b] = v` splices v's elements in: what it stores is no row */
+            int rows_ok = !sp_streq(un, "[]=") || !an_range_index(c, uav[0]);
             for (int a = sp_streq(un, "[]=") ? 1 : 0; a < uan && rows_ok; a++) {
               TyKind at = infer_type(c, uav[a]);
               if (at == TY_UNKNOWN && is_empty_array_literal(nt, uav[a], c->node_cap)) continue;
@@ -16679,12 +16680,12 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
        took as an Integer index and raised TypeError for (#9932): the
        same slot keeps the poly path */
     else if (name && is_element_at_alias(name) && argc == 1 &&
-             (nt_kind(nt, argv[0]) == NK_RangeNode || infer_type(c, argv[0]) == TY_RANGE))
+             an_range_index(c, argv[0]))
       sl[S].alive = 0;
     else if (name && sp_streq(name, "[]=") && argc == 2) {
       /* a range-keyed []= is a splice, which the obj-array representation
          has no emitter for: keep the slot on the poly path */
-      if (infer_type(c, argv[0]) == TY_RANGE) sl[S].alive = 0;
+      if (an_range_index(c, argv[0])) sl[S].alive = 0;
       else sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[1], read_slot));
     }
     else if (name && (sp_streq(name, "min") || sp_streq(name, "max") ||
@@ -35888,7 +35889,7 @@ int slice_read_call(Compiler *c, int call) {
   int ca = nt_ref(nt, call, "arguments"); int an = 0;
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
   if (!av) return 0;
-  return an == 2 || (an == 1 && (nt_kind(nt, av[0]) == NK_RangeNode || infer_type(c, av[0]) == TY_RANGE));
+  return an == 2 || (an == 1 && an_range_index(c, av[0]));
 }
 
 /* The tail expression of a literal block attached to `call`, or -1. */
@@ -36108,8 +36109,7 @@ int array_mutation_stores(Compiler *c, int call, int strict, int *from, int *to,
     /* where the write starts: the index, a slice's start (`a[s, n] = v`) or
        a range's first (`a[s..e] = v`). Past the end, CRuby nil-fills up to it
        whatever the value is, and so does the typed splice. */
-    int rng = an == 2 && (nt_kind(nt, nt_paren_single(nt, av[0])) == NK_RangeNode ||
-                          infer_type(c, av[0]) == TY_RANGE);
+    int rng = an == 2 && an_range_index(c, av[0]);
     if (an == 3 || rng) {
       if (!index_write_in_range(c, call, rng ? range_write_start(c, av[0]) : av[0])) return 1;
     }
@@ -36126,7 +36126,7 @@ int array_mutation_stores(Compiler *c, int call, int strict, int *from, int *to,
        The block's values are the caller's to read. */
     int blk = nt_ref(nt, call, "block") >= 0;
     int fa = 1 - blk, fx = an > fa ? av[fa] : -1;
-    int frng = fx >= 0 && (nt_kind(nt, nt_paren_single(nt, fx)) == NK_RangeNode || infer_type(c, fx) == TY_RANGE);
+    int frng = an_range_index(c, fx);
     if ((frng || an > fa + 1) && !index_write_in_range(c, call, frng ? range_write_start(c, fx) : fx))
       return 1;
     *to = blk ? 0 : 1;

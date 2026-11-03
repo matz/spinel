@@ -277,6 +277,7 @@ int scope_block_given_tail(Compiler *c, Scope *sc);
 int scope_block_given_else_last(Compiler *c, Scope *sc);
 /* ...or the begin a def's own rescue makes its body (analyze_util.c). */
 int scope_body_value(Compiler *c, int mi);
+int scope_calls_super(Compiler *c, int s);   /* analyze.c */
 /* The expressions whose value method scope mi answers (its body's and each
    `return`'s; see analyze_pass.c). Answers the count, or -1. */
 int method_value_leaves(Compiler *c, int mi, int *out, int cap);
@@ -713,7 +714,6 @@ int narrow_empty_array_args_by_yield(Compiler *c);
 int builtin_enum_name_index(const char *name);
 void enum_send_copy_take(NodeTable *nt, int call);
 int an_class_includes_enumerable(Compiler *c, int ci);
-int desugar_module_function_aliases(Compiler *c);
 int method_body_next_to_return(NodeTable *nt, int id);
 void desugar_extended_module_attrs(Compiler *c);
 int desugar_enumerable_via_to_a(Compiler *c);

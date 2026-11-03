@@ -1275,7 +1275,10 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
     if (mi >= 0 && def_class) *def_class = cls;
     return mi;
   }
-  return flags & CT_CMETHOD ? comp_cmethod_in_chain(c, cls, name, def_class) : comp_method_in_chain(c, cls, name, def_class);
+  /* a Method's capture (method, instance_method, an alias) takes a private
+     instance method too, as a receiverless call does: a module function */
+  return flags & CT_CMETHOD ? comp_cmethod_in_chain(c, cls, name, def_class)
+       : flags & CT_CAPTURE ? comp_self_method_in_chain(c, cls, name, def_class) : comp_method_in_chain(c, cls, name, def_class);
 }
 /* The method call id runs on candidate pc of its boxed dispatch: the
    table's, or for a name with versions the one call_target binds on pc's

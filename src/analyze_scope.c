@@ -1696,6 +1696,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     int defrecv = nt_ref(c->nt, id, "receiver");
     if (defrecv >= 0) {
       { s->is_cmethod = 1; comp_touch_scope(s->idx); }
+      /* desugar_extend_self's class-side copy of a module's instance method
+         came from the module, as an extend's transplant does */
+      if (class_id >= 0 && nt_int(c->nt, id, "extend_self_copy", 0)) { s->origin_module_ci = class_id + 1; comp_touch_scope(s->idx); }
       defrecv = nt_def_receiver(c->nt, defrecv);
       /* `def Klass.foo` with an explicit constant receiver (typically defined
          outside the class body, where the enclosing class_id is -1) attaches
@@ -2128,11 +2131,11 @@ static void mf_mark_cond_arms(Compiler *c, int ci, int node, const char *only) {
   }
 }
 
-/* A `module_function` call of module `ci`'s body: bare, it turns on the mode
-   for the defs that follow; `module_function :m1, :m2` (or a def) marks the
-   named methods, with the arms of theirs in `prev`, the `nprev` body
-   statements before the call. 1 when `s` is one. */
-static int mf_call_apply(Compiler *c, int ci, int s, int *in_mf, const int *prev, int nprev) {
+/* A `module_function` call of module `ci`'s body: 1 when `s` is one. Given
+   names (`module_function :m1, :m2`), it also marks the arms of theirs in
+   `prev`, the `nprev` body statements before the call. The methods the call
+   copies to the module are the record's copies (mf_copy_entries). */
+static int mf_call_apply(Compiler *c, int ci, int s, const int *prev, int nprev) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, s) != NK_CallNode || nt_ref(nt, s, "receiver") >= 0) return 0;
   const char *nm = nt_str(nt, s, "name");
@@ -2140,7 +2143,6 @@ static int mf_call_apply(Compiler *c, int ci, int s, int *in_mf, const int *prev
   int an = 0;
   int anode = nt_ref(nt, s, "arguments");
   const int *aargs = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
-  if (an == 0) { *in_mf = 1; return 1; }
   for (int ai = 0; ai < an; ai++) {
     NodeKind ak = nt_kind(nt, aargs[ai]);
     const char *aval = NULL;
@@ -2148,48 +2150,21 @@ static int mf_call_apply(Compiler *c, int ci, int s, int *in_mf, const int *prev
     else if (ak == NK_DefNode && nt_ref(nt, aargs[ai], "receiver") < 0)
       aval = nt_str(nt, aargs[ai], "name");
     if (!aval) continue;
-    for (int mi = 0; mi < c->nscopes; mi++) {
-      if (c->scopes[mi].class_id == ci && !c->scopes[mi].is_cmethod &&
-          c->scopes[mi].name && sp_streq(c->scopes[mi].name, aval))
-        mf_mark(c, mi);
-    }
     for (int pi = 0; pi < nprev; pi++) mf_mark_cond_arms(c, ci, prev[pi], aval);
   }
   return 1;
 }
 
-/* A `module_function` call inside a body statement's value takes effect as
-   the bare statement does. Nested bodies with their own self are not
-   walked. */
-static void mf_apply_nested(Compiler *c, int ci, int node, int *in_mf) {
-  const NodeTable *nt = c->nt;
-  if (node < 0) return;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
-      k == NK_BlockNode || k == NK_LambdaNode)
-    return;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) {
-    int ch = nt_ref_at(nt, node, i);
-    if (ch < 0) continue;
-    mf_call_apply(c, ci, ch, in_mf, NULL, 0);
-    mf_apply_nested(c, ci, ch, in_mf);
-  }
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
-    for (int j = 0; j < m; j++) {
-      mf_call_apply(c, ci, ids[j], in_mf, NULL, 0);
-      mf_apply_nested(c, ci, ids[j], in_mf);
-    }
-  }
-}
+static void mf_copy_entries(Compiler *c);
 
-/* Mark methods following `module_function` in a module body as class-level
-   (is_cmethod=1, no self param). This lets them be called as bare functions
-   when their module is included at the top level. */
+/* Mark a module's module functions as class-level (is_cmethod=1, no self
+   param). This lets them be called as bare functions when their module is
+   included at the top level. The record's copies name them (mf_copy_entries);
+   what it does not hold is a body that `extend self` makes the module's own,
+   and the arms of a conditional def, which this reads from the tree. */
 void register_module_functions(Compiler *c) {
   const NodeTable *nt = c->nt;
+  mf_copy_entries(c);
   /* Every module BODY, not just the one recorded as the module's def_node: a
      module reopened in a second file (a gem's version.rb naming the module,
      then its main file) keeps the first body as def_node, so the reopen's
@@ -2203,14 +2178,13 @@ void register_module_functions(Compiler *c) {
     if (body < 0) continue;
     int bn = 0;
     const int *stmts = nt_arr(nt, body, "body", &bn);
-    int in_module_function = 0, arms_mf = 0;
+    int extend_self = 0, arms_mf = 0;
     /* `extend self` is the other spelling of module_function, and unlike it
        the placement carries no meaning: it makes EVERY method of the module
        callable on the module itself, wherever in the body it sits. So scan
-       for it first rather than letting the positional flag below decide.
-       (module_function also makes the instance copies private; a module
-       written this way is called as `M.f` -- the same assumption the
-       positional form already makes.) */
+       for it first. (module_function also makes the instance copies
+       private; a module written this way is called as `M.f` -- the same
+       assumption the record's copies already make.) */
     for (int k = 0; k < bn; k++) {
       int s = stmts[k];
       NodeKind sk = nt_kind(nt, s);
@@ -2220,23 +2194,18 @@ void register_module_functions(Compiler *c) {
       int an = 0;
       int anode = nt_ref(nt, s, "arguments");
       const int *aargs = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
-      if (an == 1 && nt_kind(nt, aargs[0]) == NK_SelfNode) { in_module_function = 1; break; }
+      if (an == 1 && nt_kind(nt, aargs[0]) == NK_SelfNode) { extend_self = 1; break; }
     }
     for (int k = 0; k < bn; k++) {
       int s = stmts[k];
       const char *sty = nt_type(nt, s);
       NodeKind sk = nt_kind(nt, s);
       if (!sty) continue;
-      /* arms take only a bare module_function of this body, earlier; the
-         in_module_function flag keeps its own rules for plain defs */
+      /* arms take only a bare module_function of this body, earlier */
       if (mf_bare_call(nt, s, "module_function")) arms_mf = 1;
-      if (mf_call_apply(c, ci, s, &in_module_function, stmts, k)) continue;
-      /* `x = module_function def m`, `p(module_function :m)` */
-      mf_apply_nested(c, ci, s, &in_module_function);
+      if (mf_call_apply(c, ci, s, stmts, k)) continue;
       if (arms_mf) mf_mark_cond_arms(c, ci, s, NULL);
-      if (sk == NK_DefNode && in_module_function) {
-        const char *mname = nt_str(nt, s, "name");
-        if (!mname) continue;
+      if (sk == NK_DefNode && extend_self) {
         for (int mi = 0; mi < c->nscopes; mi++) {
           if (c->scopes[mi].def_node == s) {
             mf_mark(c, mi);
@@ -4042,7 +4011,7 @@ static int alias_def_after(Compiler *c, int cid, const char *name, int at, int c
   int first = -1;
   for (int si = 1; si < c->nscopes; si++) {
     Scope *sc = &c->scopes[si];
-    if (sc->class_id != cid || !sc->is_cmethod != !cm || sc->def_node < 0) continue;
+    if (sc->class_id != cid || !scope_on_side(sc, cm) || sc->def_node < 0) continue;
     if (nt_kind(nt, sc->def_node) != NK_DefNode) continue;
     const char *dn = nt_str(nt, sc->def_node, "name");
     if (!dn || !sp_streq(dn, name)) continue;
@@ -4101,7 +4070,7 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
      then order only when selecting among multiple versions. */
   for (int si = 1; si < c->nscopes; si++) {
     Scope *sc = &c->scopes[si];
-    if (sc->class_id != cid || !sc->is_cmethod != !cm || sc->is_proc_form || !sc->name) continue;
+    if (sc->class_id != cid || !scope_on_side(sc, cm) || sc->is_proc_form || !sc->name) continue;
     const char *dn = sc->def_node >= 0 && nt_kind(nt, sc->def_node) == NK_DefNode
                      ? nt_str(nt, sc->def_node, "name") : NULL;
     if (!sp_streq(sc->name, od) && !(dn && sp_streq(dn, od))) continue;
@@ -4112,7 +4081,7 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
   else {
     for (int si = 1; si < c->nscopes; si++) {
       Scope *sc = &c->scopes[si];
-      if (sc->class_id != cid || !sc->is_cmethod != !cm || sc->is_proc_form || !sc->name) continue;
+      if (sc->class_id != cid || !scope_on_side(sc, cm) || sc->is_proc_form || !sc->name) continue;
       const char *dn = sc->def_node >= 0 && nt_kind(nt, sc->def_node) == NK_DefNode
                        ? nt_str(nt, sc->def_node, "name") : NULL;
       if (!sp_streq(sc->name, od) && !(dn && sp_streq(dn, od))) continue;
@@ -4122,6 +4091,9 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
       else after = 1;
     }
   }
+  /* a module function is the module's own method under its name too: the
+     alias keeps naming it, as an alias of the name */
+  if (before >= 0 && after && !cm && c->scopes[before].is_module_function) return 0;
   if (before < 0 || !after) {
     if (alias_def_after(c, cid, nw, alias_node, cm) < 0) return 0;
     alias_bind(c, cls, cid, nw, before >= 0 ? c->scopes[before].name : od, alias_node, cm);
@@ -4195,7 +4167,7 @@ static void alias_refuse_early_call(Compiler *c, ClassInfo *cls, const char *nw,
   int defn = -1;
   for (int si = 1; si < c->nscopes; si++) {
     Scope *sc = &c->scopes[si];
-    if (sc->class_id != cid || !sc->is_cmethod != !cm || sc->is_proc_form || sc->def_node < 0 ||
+    if (sc->class_id != cid || !scope_on_side(sc, cm) || sc->is_proc_form || sc->def_node < 0 ||
         nt_kind(nt, sc->def_node) != NK_DefNode) continue;
     const char *dn = nt_str(nt, sc->def_node, "name");
     if (dn && sp_streq(dn, nw) && prog_cmp_run(c, sc->def_node, alias_node, alias_node, "the alias reading") < 0 &&
@@ -4524,6 +4496,92 @@ static const char *alias_body_copy(Compiler *c, int k, int want, const char *od)
   scope_own_defaults(c, di);
   g_inc_did_clone = 1;
   return c->scopes[di].name;
+}
+
+/* Module function `name` of module cls that copies scope si, a method the
+   module holds under another name (the def an alias captured) or not at all
+   (an included module's): CRuby's module_function copies the method found
+   under the name, so M.name runs a body of its own, as an include's copy
+   does. The body is cloned and walked under the module as a class-level
+   scope. */
+static void mf_copy_scope(Compiler *c, int cls, int si, const char *name) {
+  comp_scope_new(c, name, c->scopes[si].def_node);
+  int di = c->nscopes - 1;
+  { c->scopes[di].class_id = cls; c->scopes[di].is_cmethod = 1; comp_touch_scope(c->scopes[di].idx); }
+  int body = c->scopes[si].body, nb = body >= 0 ? nt_clone_subtree((NodeTable *)c->nt, body) : -1;
+  if (nb >= 0) comp_grow_node_arrays(c);
+  { c->scopes[di].body = nb >= 0 ? nb : body; comp_touch_scope(c->scopes[di].idx); }
+  if (nb >= 0) walk_scope(c, nb, di, cls);
+  scope_copy_method_shape(&c->scopes[di], &c->scopes[si]);
+  scope_own_defaults(c, di);
+}
+
+/* The method scope a module_function copy entry copies, or -1: the def or
+   define_method it stands at (a method under the bare word, the scope the
+   record keeps with the copy), else the version of the name live where
+   `module_function :n` stands, followed through the aliases to the def each
+   captured. Each step asks at an alias's own point, where only a version
+   recorded before it is live, so the chain ends. */
+static int mf_entry_scope(Compiler *c, const ElabEntry *e) {
+  if (e->scope > 0) return e->scope;
+  const char *nm = e->name;
+  LoadPoint p = elab_point_of(c, e->node);
+  for (;;) {
+    const LrDef *d = NULL;
+    if (elab_method_at(c, e->cls, nm, 0, p, &d) != ELAB_YES || !d) return -1;
+    if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) return d->scope > 0 ? d->scope : -1;
+    if (d->kind != LR_ALIAS || !d->target) return -1;
+    nm = d->target;
+    p = elab_point_of(c, d->node);
+  }
+}
+
+/* A module's module functions, from the load record's copies to its
+   singleton (elab_entries): a def's own scope when the module defines it
+   under that name, else the module function the name stood for (an alias
+   of one is a singleton alias of it) or a copy of the method it stood for.
+   A define_method under the bare word gets a copy too, and its instance
+   method stays one: a module function's one scope is reached from an
+   includer by a bare call only (desugar_module_function_call), and the
+   method is the includer's to send. A copy under a run-time condition is
+   taken as made, as the tree reading took it. */
+static void mf_copy_entries(Compiler *c) {
+  int n = 0;
+  ElabEntry *a = elab_entries(c, 1u << LR_COPY | ELAB_ENTRY_MAY, &n);
+  int *src = n ? malloc(sizeof *src * (size_t)n) : NULL;
+  if (n && !src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) {
+    src[i] = -1;
+    if (!a[i].sg || a[i].cls < 0 || !class_def_is_module(c->nt, c->classes[a[i].cls].def_node)) continue;
+    src[i] = mf_entry_scope(c, &a[i]);
+    int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
+    if (src[i] >= 0 && !dm && c->scopes[src[i]].class_id == a[i].cls && c->scopes[src[i]].name &&
+        sp_streq(c->scopes[src[i]].name, a[i].name)) {
+      mf_mark(c, src[i]);
+      src[i] = -1;
+    }
+  }
+  /* ...after every own def is one, so an alias finds its target marked */
+  for (int i = 0; i < n; i++) {
+    if (src[i] < 0) continue;
+    const Scope *s = &c->scopes[src[i]];
+    if (s->is_module_function && s->class_id == a[i].cls && s->is_cmethod) {
+      alias_register(c, &c->classes[a[i].cls], a[i].name, s->name, a[i].node, 1);
+      continue;
+    }
+    /* a super in the copied body runs along the singleton's chain in the
+       copy and along the includer's in the method the copy is of, neither
+       of which a body copied from a module follows */
+    if (scope_calls_super(c, src[i])) {
+      char msg[512];
+      snprintf(msg, sizeof msg, "%s.%s: a module_function copy of %s, a method that calls super, is not supported",
+               c->classes[a[i].cls].name, a[i].name, s->name);
+      unsupported_feature(c, a[i].node, msg);
+    }
+    mf_copy_scope(c, a[i].cls, src[i], a[i].name);
+  }
+  free(src);
+  free(a);
 }
 
 void settle_mixin_aliases(Compiler *c) {
@@ -7162,6 +7220,8 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
      a clone of one stands in front of the clone of what it stood in front of */
   int *made = calloc((size_t)(snap > 0 ? snap : 1), sizeof(int));
   if (!made) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int mod_mf = 0;   /* (the module has a module function) */
+  for (int ms = 0; ms < snap && !mod_mf; ms++) mod_mf = c->scopes[ms].class_id == mod_id && c->scopes[ms].is_module_function;
   for (int ms = 0; ms < snap; ms++) {
     Scope *src = &c->scopes[ms];
     if (src->class_id != mod_id || !src->name) continue;
@@ -7170,6 +7230,12 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
     if (src->is_cmethod &&
         !(src->is_module_function && module_function_self_dependent(c, ms)))
       continue;
+    /* an instance def a later module function of the name replaced: the
+       module function is the module's instance method of the name */
+    if (mod_mf && !src->is_cmethod) {
+      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
+      if (live >= 0 && live != ms && c->scopes[live].is_module_function) continue;
+    }
     const char *dst_name = src->name;
     char inc_shadow[256];
     int own = comp_method_in_class(c, ci, src->name), behind = -1;
@@ -8092,6 +8158,15 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
        (`Coordinates.countdown(1)`), so its source is not dead */
     if (!src->is_module_function) src->is_transplanted_source = 1;
   }
+  /* an instance alias of the module is the class's class method too (the
+     class side reads it, resolve_alias_side), with the module's visibility
+     of it: `private :b`, or `module_function :b` of the alias */
+  ClassInfo *m = &c->classes[mod_id];
+  for (int i = 0; i < m->naliases && !inherited; i++) {
+    if ((m->alias_sg && m->alias_sg[i]) || !m->alias_new[i] || comp_cmethod_in_class(c, ci, m->alias_new[i]) >= 0) continue;
+    int v = comp_method_vis(m, m->alias_new[i]);
+    if (v != SP_VIS_PUBLIC) comp_cmethod_extend_vis_set(&c->classes[ci], m->alias_new[i], v);
+  }
   return did_clone;
 }
 
@@ -8566,6 +8641,7 @@ static void specialize_cmethod_for(Compiler *c, int mi, int def_cls, int ci, int
   if (new_body >= 0) walk_scope(c, new_body, dst_idx, ci);
   { dst->class_id = ci; comp_touch_scope(dst->idx); }
   { dst->is_cmethod = 1; comp_touch_scope(dst->idx); }
+  { dst->is_cmethod_copy = 1; comp_touch_scope(dst->idx); }
   /* a copy a later top-level reopening makes: a call reaches the method
      behind it until that statement has run (Scope.mixin_guarded) */
   dst->mixin_guarded = cell;

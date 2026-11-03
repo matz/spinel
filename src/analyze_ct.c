@@ -1181,10 +1181,9 @@ static int ct_fx_stmt(CtBind *b, Compiler *c, int list, int call, const CtFx *f)
 /* The statements text effect f's code becomes in class body frame's (class
    cls's, at p), grafted as a class_eval of that text at f's call is
    (sce_graft_text), into *ids (*n): 0 where it may not run there. Only a
-   class's body: desugar_extend_self and desugar_module_function_aliases
-   read a module's defs. Only defs of self's methods, each unasked by a
-   folded definition query and none a hook (desugar_included_hooks
-   reads those), nor a class method `extend
+   class's body: desugar_extend_self reads a module's defs. Only defs of
+   self's methods, each unasked by a folded definition query and none a
+   hook (desugar_included_hooks reads those), nor a class method `extend
    Enumerable` routes (desugar_extend_enumerable reads those), nor one
    singleton_method_added would see. In their bodies: no class, module,
    singleton class, nested def, alias or undef; no constant

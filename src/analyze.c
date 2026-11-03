@@ -5893,13 +5893,20 @@ static int qc_native_leaf_declared(const char *const *decls, int ndecls, const Q
   return found;
 }
 /* whether the program defines a class or module whose header names `nm` */
+/* A builder write the constant pass qualified (`Bar = Class.new` in
+   module Outer, named Outer__Bar there) is the same constant as a header
+   `class Bar` in Outer, whose qualified name is the same: it is that class,
+   not another class of the program with that name. */
 static int qc_class_name_defined(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], id) {
       const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_name(nt, id) : NULL;
-      if (mn && sp_streq(mn, nm)) return 1;
+      if (!mn || !sp_streq(mn, nm)) continue;
+      if (nt_kind(nt, id) == NK_ConstantWriteNode && class_def_builder(nt, id) >= 0 &&
+          nt_str(nt, id, "qc_orig_name") && qc_const_qualified(nm)) continue;
+      return 1;
     }
   return 0;
 }

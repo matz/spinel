@@ -41,3 +41,10 @@ begin
 rescue NoMethodError => err
   p err.message[0, 25]
 end
+
+# the two sides answer different types: the call's answer is boxed once
+class TrueClass;  def bg = yield > 0; end
+class FalseClass; def bg = :f; end
+p true.bg { 1 }
+p false.bg { 1 }
+[true, false].each { |v| p v.bg { 2 } }

@@ -15,3 +15,7 @@ true
 [true]
 :no_method
 "undefined method 'e' for "
+true
+:f
+true
+:f

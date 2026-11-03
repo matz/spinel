@@ -28543,10 +28543,10 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
     int slot = view_bind(recv, "_t%d", tb);
     int done = emit_reopen_block_call(c, id, recv, mi, NULL, &nb);
     view_unbind(slot);
+    /* (emit_reopen_pf_call has boxed or unboxed the answer for the call's
+       representation already) */
     if (done) {
-      t = c->scopes[scope_proc_form_of(c, mi)].ret;
-      if (boxed && t != TY_POLY) emit_boxed_text(c, t, nb.p ? nb.p : "0", b);
-      else buf_puts(b, nb.p ? nb.p : "0");
+      buf_puts(b, nb.p ? nb.p : "0");
       free(nb.p);
       return;
     }
@@ -28607,6 +28607,15 @@ static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
   /* (a block's `break` wraps the call first: emit_brk_wrapped_call comes
      back here with the call as g_brk_skip_id) */
   if (id != g_brk_skip_id && call_breaks(c, id)) return 0;
+  /* (a call with a block reaches a yielding side's method through its
+     proc form, which only a yielding method has: one that keeps its `&b`
+     without yielding stays on the old path) */
+  if (nt_ref(c->nt, id, "block") >= 0) {
+    int ytm, yfm;
+    if (cplan_bool_sides(c, id, &ytm, &yfm) &&
+        ((ytm >= 0 && !c->scopes[ytm].yields && c->scopes[ytm].blk_param && c->scopes[ytm].blk_param[0]) ||
+         (yfm >= 0 && !c->scopes[yfm].yields && c->scopes[yfm].blk_param && c->scopes[yfm].blk_param[0]))) return 0;
+  }
   const CallPlan *pl = cplan_user(c, id);
   if (pl->via != UC_REOPEN || pl->dispatch != CP_SWITCH || !cplan_bool_sides(c, id, &tmi, &fmi)) return 0;
   int boxed = repr_of(c, id).kind == RK_BOXED;
@@ -32717,6 +32726,11 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   if (c->scopes[mi].class_id == comp_core_class(c, CORE_INTEGER) &&
       return_in_lambda(c, id) && proc_body_has_return(c, nt_ref(nt, id, "block")))
     unsupported_feature(c, id, "a `return` in a block given to an Integer's yielding method, inside a lambda, is not supported by AOT compilation");
+  /* (a TrueClass's or FalseClass's is a new route too) */
+  if ((c->scopes[mi].class_id == comp_core_class(c, CORE_TRUECLASS) ||
+       c->scopes[mi].class_id == comp_core_class(c, CORE_FALSECLASS)) &&
+      return_in_lambda(c, id) && proc_body_has_return(c, nt_ref(nt, id, "block")))
+    unsupported_feature(c, id, "a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation");
   /* A Random's, Float's, Symbol's, Range's, Time's or NilClass's method
      that yields a container is not called: a block that widens the
      container's element kind reads the boxed one as garbage (the same

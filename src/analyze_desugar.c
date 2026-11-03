@@ -24122,26 +24122,28 @@ int desugar_builtin_ivars(Compiler *c) {
 
 /* ---- a method on Object, overridden in builtin classes --------------------
  *
- *   class Object;    def ffi_yajl(g, s) ... to_json ... end; end
- *   class Hash;      def ffi_yajl(g, s) ... each { } ... end; end
- *   class Array;     def ffi_yajl(g, s) ... end; end
- *   class TrueClass; def ffi_yajl(g, s) ... end; end
+ *   class Object;   def ffi_yajl(g, s) ... to_json ... end; end
+ *   class Proc;     def ffi_yajl(g, s) ... end; end
+ *   class Rational; def ffi_yajl(g, s) ... end; end
  *
  * Dispatch on a run-time value reaches Object's method (whose self is the
- * boxed value) and the reopened scalars (String, Integer, ...), which take
- * their unboxed self; a container, boolean or other builtin override has no
- * such arm. The overrides move into Object's method as branches on self's
- * class:
+ * boxed value) and the reopened classes that have an arm of their own; a
+ * Proc, Rational, Complex or Regexp override has no such arm. The overrides
+ * move into Object's method as branches on self's class:
  *
  *   def ffi_yajl(g, s)
- *     if is_a?(Hash) then <Hash's body> elsif is_a?(Array) then <Array's>
- *     elsif self == true then <TrueClass's> else <Object's> end
+ *     if is_a?(Proc) then <Proc's body> elsif is_a?(Rational) then <Rational's>
+ *     else <Object's> end
  *   end
  *
- * Only when every override takes the same parameters as Object's. */
+ * Only when every override takes the same parameters as Object's. The
+ * folded method is defined where Object's def is, so a call that runs
+ * between the override's def and a later Object def finds no method.
+ * Hash, Array, TrueClass, FalseClass, Time, Range, Date, DateTime and
+ * Exception overrides have their own arms in the dispatch, so they stay
+ * in their classes and keep their own load point. */
 static const char *mo_override_class(const char *cn) {
-  static const char *const B[] = { "Hash", "Array", "TrueClass", "FalseClass", "Time", "Range",
-    "Regexp", "Proc", "Date", "DateTime", "Rational", "Complex", "Exception", NULL };
+  static const char *const B[] = { "Regexp", "Proc", "Rational", "Complex", NULL };
   for (int i = 0; B[i]; i++) if (sp_streq(B[i], cn)) return B[i];
   return NULL;
 }

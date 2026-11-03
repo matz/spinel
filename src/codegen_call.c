@@ -32118,16 +32118,27 @@ int private_answer_overridden(Compiler *c, const char *qm, TyKind rt) {
    does. Sets *ta (true's answer) and *fa (false's): 1 or 0, or -1 for the
    builtin surface, which the run time answers (sp_poly_responds_builtin),
    or 2 for a private one asked with a second argument only the run time
-   knows (that argument answers). 0 when the answer is left to the other paths: a name a root reopening or
-   an included module defines, or Object's private methods to include_all. */
+   knows (that argument answers). 0 when the answer is left to the other
+   paths: a name a root reopening or an included module defines, a
+   respond_to_missing? some class could run, or Object's private methods to
+   include_all. */
 int bool_side_responds(Compiler *c, const char *qm, int include_all, int foldable, int *ta, int *fa) {
   int ks[2] = { comp_core_class(c, CORE_TRUECLASS), comp_core_class(c, CORE_FALSECLASS) };
   int own[2], any = 0;
   for (int i = 0; i < 2; i++) {
     own[i] = ks[i] >= 0 ? comp_method_in_class(c, ks[i], qm) : -1;
+    /* (an alias of the class's own method is its own too) */
+    if (own[i] < 0 && ks[i] >= 0) {
+      const char *al = comp_resolve_alias(c, ks[i], qm);
+      if (al && !sp_streq(al, qm)) own[i] = comp_method_in_class(c, ks[i], al);
+    }
     if (own[i] >= 0) any = 1;
   }
   if (!any || root_reopen_defines(c, qm)) return 0;
+  /* (a respond_to_missing? answers too: left to the other paths) */
+  if (root_reopen_defines(c, "respond_to_missing?")) return 0;
+  for (int i = 0; i < 2; i++)
+    if (ks[i] >= 0 && comp_method_in_chain(c, ks[i], "respond_to_missing?", NULL) >= 0) return 0;
   if (include_all || !foldable) {
     if (object_private_method_name(qm)) return 0;
     for (int si = 0; si < c->nscopes; si++) {

@@ -44,3 +44,7 @@ p false.respond_to?(:e2), false.respond_to?(:e2, true), true.respond_to?(:e2, tr
 # the answer boxed
 z = [1, "s", false.respond_to?(:e), true.respond_to?(:e)]
 p z
+
+# an alias of TrueClass's own method
+class TrueClass; alias e6 e; alias_method :e7, :e; end
+p true.respond_to?(:e6), false.respond_to?(:e6), r(false), false.respond_to?(:e7)

@@ -542,6 +542,9 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
            sp_RbVal -- render it through sp_poly_to_s so it's a const char *
            in the interpolation (#3266). */
         int ret_poly = obj_str_ret_poly(c, ty_object_class(t), 0);
+        /* one answering a String subclass instance reads its bytes */
+        const char *ss_open = !ret_poly && obj_str_ret_strsub(c, ty_object_class(t), 0) ? "sp_str_or_empty(sp_strbuf_read((sp_String *)(" : "";
+        const char *ss_close = *ss_open ? ")))" : "";
         if (ret_poly) buf_puts(&conv, "sp_poly_to_s(");
         /* a part that may be nil (the nil fact, #7444) reads as nil's to_s,
            the empty String, where its class's to_s would run on no object */
@@ -550,9 +553,10 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
            casting its receiver to a pointer is a C type error (#2357) */
         if (!part_nil && (comp_ty_value_obj(c, t) || (!vexpr[0] && !iv_pre && expr_is_held_ref(c, expr)))) {
           const char *tsf = obj_str_fn(c, ty_object_class(t), 0);
+          buf_puts(&conv, ss_open);
           if (comp_ty_value_obj(c, t)) buf_printf(&conv, "%s(", tsf);
           else buf_printf(&conv, "%s((sp_%s *)", tsf, cn);
-          EMIT_IV(); buf_printf(&conv, "%s)", obj_str_blockarg(c, ty_object_class(t), 0));
+          EMIT_IV(); buf_printf(&conv, "%s)%s", obj_str_blockarg(c, ty_object_class(t), 0), ss_close);
         }
         else {
           /* rooted: the part may be a fresh object (`"#{C.new}"`) held
@@ -562,8 +566,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
           EMIT_IV();
           buf_printf(&conv, "); SP_GC_ROOT(_t%d); ", to);
           if (part_nil) buf_printf(&conv, "_t%d ? ", to);
-          buf_printf(&conv, "%s(_t%d%s)%s; })", obj_str_fn(c, ty_object_class(t), 0), to,
-                     obj_str_blockarg(c, ty_object_class(t), 0), part_nil ? " : sp_str_empty" : "");
+          buf_printf(&conv, "%s%s(_t%d%s)%s%s; })", ss_open, obj_str_fn(c, ty_object_class(t), 0), to,
+                     obj_str_blockarg(c, ty_object_class(t), 0), ss_close, part_nil ? " : sp_str_empty" : "");
         }
         if (ret_poly) buf_puts(&conv, ")");
       }

@@ -4817,7 +4817,10 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
       emit_cell_shadow_store(c, tsc, p0, g_pre, g_indent);
   }
 
+  /* the block's own calls are not the arm's: a builtin arm's reading of
+     its value (g_poly_builtin_arm) stays outside it (step_arm_begin) */
   int sv = g_indent; g_indent = din;
+  int arm = step_arm_begin();
   if (is_then) {
     /* The body goes through the next-aware substrate: `next <v>` inside a
        `then` block leaves the block WITH that value, and this splice has no
@@ -4852,6 +4855,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     g_loop_exc_base = sv_lexcw; g_loop_rescue_base = sv_lexcw_rb; g_loop_ensure_base = sv_lensw;
     g_ie_next_var = sv_nxv;
   }
+  step_arm_end(c, arm);
   g_indent = sv;
   if (use_shadow) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
   if (tlv0) lv_set_type(tlv0, tsaved0);

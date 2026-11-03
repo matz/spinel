@@ -17,3 +17,8 @@
 [Array, Symbol]
 [:int_then, 8]
 nil
+[99, [true, false, false]]
+[Integer, [:int_then, [99, 2, 3]]]
+[Symbol, :foo_then]
+[99, [true, false, false]]
+[String, [99, 2, 3]]

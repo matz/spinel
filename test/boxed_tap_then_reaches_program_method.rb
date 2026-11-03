@@ -42,3 +42,16 @@ y = [7, nil].first
 p y&.then { |v| v + 1 }
 n = [nil, 7].first
 p n&.then { |v| v + 1 }
+
+# the block's own calls are not the arm's: a program method of another
+# value's class, and its respond_to?, answer inside the builtin's block
+class Sized
+  def respond_to?(m, priv = false) = m == :zz ? true : super
+  def size = 99
+end
+ws = [Sized.new, [1, 2], "abc"]
+[1, Foo.new, "s"].each do |v|
+  x = v.tap { |o| p [ws.first.size, ws.map { |w| w.respond_to?(:zz) }] }
+  y = v.then { |o| ws.map { |w| w.size } }
+  p [x.class, y]
+end

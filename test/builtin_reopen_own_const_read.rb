@@ -62,3 +62,32 @@ p g(5), g(proc { 1 }), g(2r), g("s")
 BLIM = :top
 class Integer; def blim = BLIM; end
 p 5.blim
+
+# a write that may not run, or runs after the def, keeps the lexical read
+CLIM = :top
+class Integer
+  CLIM = :int if ARGV.size > 5
+  def cxlim = CLIM
+end
+p 5.cxlim
+DLIM = :top
+class Integer
+  DLIM = :int unless defined?(DLIM)
+  def dlim = DLIM
+end
+p 5.dlim
+ELIM = :top
+class Integer
+  begin
+    ELIM = Integer("x")
+  rescue ArgumentError
+  end
+  def elim = ELIM
+end
+p 5.elim
+FLIM2 = :top
+class Integer
+  def flim2 = FLIM2
+  p 5.flim2
+  FLIM2 = :int
+end

@@ -111,8 +111,9 @@ struct LoadRecord {
   LrCheck fam[LR_CHECK_MAX];
   double ms; int builds;
   /* the call plan's frame (elab_plan_enter): the map one build made, swapped
-     in while call_target asks its questions, with the parents it climbed */
-  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap; } plan;
+     in while call_target asks its questions, with the parents it climbed and
+     the run points made of it (lr_run_points) */
+  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *urun; } plan;
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
@@ -810,11 +811,15 @@ void elab_hold(Compiler *c, int on) {
    program's runtime-name sends make a clone of each call per name, and
    desugar_builtin_method_obj, which appends a wrapper between its asks,
    rebuilt the map hundreds of times a round. SPINEL_ELAB_CHECK asks each
-   call's version of the map as it is too (elab_check_version). */
+   call's version of the map as it is too (elab_check_version). The run
+   points (lr_run_points: each statement's run bits, each region's end, and
+   lr_rta's first statements) are facts of one map's statement numbers, so
+   they swap with it: the frame and the live map each make their own. */
 static void lr_plan_swap(LoadRecord *r) {
-  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap };
+  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->urun };
   r->st = r->plan.st; r->nst = r->plan.nst; r->cst = r->plan.cst; r->at = r->plan.at;
   r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap;
+  r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst; r->urun = r->plan.urun;
   r->plan = live;
 }
 static void *lr_dup(const void *v, size_t sz) {
@@ -857,7 +862,7 @@ int elab_plan_enter(Compiler *c, int id) {
     r->plan.st = lr_dup(r->st, sizeof *r->st * (size_t)r->nst); r->plan.nst = r->plan.cst = r->nst;
     r->plan.at = lr_dup(r->at, sizeof(int) * (size_t)r->ncap);
     r->plan.bits = lr_dup(r->bits, (size_t)r->ncap);
-    r->plan.n = r->n; r->plan.ncap = r->ncap;
+    r->plan.n = r->n; r->plan.ncap = r->ncap; r->plan.runs_of = -1;
     r->plan_par = lr_dup(r->up, sizeof(int) * (size_t)r->n);
     r->plan_par = realloc(r->plan_par, sizeof(int) * (size_t)r->ncap);
     r->plan_made = 1;
@@ -2584,7 +2589,7 @@ void elab_record_builders(Compiler *c) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded) return;
   r->structs = 1;
-  r->runs_of = -1;   /* lr_rta's facts are of the builders' classes from here: computed afresh */
+  r->runs_of = r->plan.runs_of = -1;   /* lr_rta's facts are of the builders' classes from here: computed afresh */
   lr_fit_classes(r, c);
   for (int ci = 0; ci < c->nclasses; ci++) if (lr_builder_body(c, ci) >= 0) r->held[ci + 1] = 1;
   if (r->builders) {
@@ -6838,6 +6843,7 @@ void elab_free(Compiler *c) {
     fprintf(stderr, "spinel-elab-check: family=\"%s\" asked=%ld differ=%ld\n", r->fam[i].reader, r->fam[i].asked, r->fam[i].differ);
   lr_record_drop(r);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
+  free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);

@@ -9209,6 +9209,8 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
   if (ty_k == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0) {
     const char *nm = nt_str(c->nt, id, "name");
     if (nm && call_target(c, id, class_id, nm, 0, NULL) >= 0) return 1;
+    /* a bare instance_exec / instance_eval runs its block on self */
+    if (nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval"))) return 1;
     /* an attr_reader is not a method in the chain -- it reads the ivar
        directly off self, which the body needs captured all the same (#3750) */
     if (nm && comp_reader_in_chain(c, class_id, nm, NULL)) return 1;

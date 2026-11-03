@@ -571,6 +571,16 @@ int cplan_nil_written(int why);
    otherwise; anon may be NULL). Pure. */
 typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
+/* The raise of call id's dispatch on self from class cid when cid's chain
+   holds no method of its name and only descendants do: the switch's arms
+   are theirs, and self of any other class (cid's own instance, a
+   descendant without one, an object no singleton definition reached) gets
+   CRuby's NameError for a bare name, NoMethodError otherwise. CM_NONE when
+   cid's chain, a builtin of every object or a builtin module cid includes
+   (Comparable, Enumerable) answers, a builtin superclass may, or the
+   program defines a method_missing anywhere: spinel does not dispatch to
+   one, and the call keeps the answer it had. Pure. */
+CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid);
 /* Does the subtree at id hold a call cplan_missing answers, in a block or
    an operand alike? */
 int cplan_subtree_missing(Compiler *c, int id);

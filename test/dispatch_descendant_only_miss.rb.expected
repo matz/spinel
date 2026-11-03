@@ -1,0 +1,13 @@
+"sub step"
+"sub step"
+42
+NameError: undefined local variable or method 'step' for an instance of Base
+NoMethodError: undefined method 'step' for an instance of Base
+NameError: undefined local variable or method 'step' for an instance of Other
+NameError: undefined local variable or method 'tally' for an instance of Base
+"tw"
+NameError: undefined local variable or method 'hi' for an instance of Foo
+"ho"
+NameError: undefined local variable or method 'ho' for an instance of Bar
+[:step, true]
+[:step, true]

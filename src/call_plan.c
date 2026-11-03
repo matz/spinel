@@ -1563,6 +1563,20 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
 }
 /* See call_plan.h. */
+CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
+  const NodeTable *nt = c->nt;
+  const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (!name || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, NULL) >= 0 ||
+      builtin_object_method_known(name) || is_kernel_module_function(name) ||
+      (is_comparable_module_method(name) && class_is_comparable(c, cid)) ||
+      (name_is_enumerable_module_method(name) && class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0)) ||
+      comp_method_in_chain(c, cid, "method_missing", NULL) >= 0 || an_user_defines_method(c, "method_missing"))
+    return CM_NONE;
+  for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
+    if (c->classes[k].is_native_class) return CM_NONE;
+  return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
+}
+/* See call_plan.h. */
 int cplan_subtree_missing(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;

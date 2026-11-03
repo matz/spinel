@@ -1575,12 +1575,17 @@ BuiltinDefaultCmp builtin_default_cmp(int family) {
    public methods as CRuby 4.0 lists them: Integer and Float are Numeric and
    Comparable, String and Symbol Comparable, Array, Hash and Range
    Enumerable. The builtin table holds each class's own methods only. */
+/* Comparable's own instance methods, which a class that includes the
+   module answers */
+int is_comparable_module_method(const char *m) {
+  static const char *const cmp[] = { "<", "<=", "==", ">", ">=", "between?", "clamp", NULL };
+  return builtin_name_in(m, cmp);
+}
+
 /* Comparable's own methods on a builtin class that includes it: Integer,
    Float, String and Symbol. */
 int builtin_comparable_owns(const char *cls, const char *m) {
-  static const char *const cmp[] = { "<", "<=", "==", ">", ">=", "between?", "clamp", NULL };
-  return is_comparable_builtin_name(cls) &&
-         builtin_name_in(m, cmp);
+  return is_comparable_builtin_name(cls) && is_comparable_module_method(m);
 }
 
 /* Method#arity of a Comparable method: between?(min, max), clamp(min, max)

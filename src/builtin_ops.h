@@ -417,7 +417,9 @@ int bop_flags(TyKind rt, const char *name);
    arguments and a block when has_block, where no method of the program's
    of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)
    list them (`name`, `to_s`, `inspect`, `include?`)? A negative argc (no
-   one count) is not answered. */
+   one count) is not answered, nor a private row: a hook (`inherited`,
+   `included`, ...) whose version entry falls back to super, the core's
+   no-op (ver_named_kind). */
 int bop_class_answers(const char *name, int argc, int has_block);
 
 /* bop_find, with arg_of(ud, i) answering argument i's kind for the rows

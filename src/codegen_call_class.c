@@ -482,6 +482,33 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_puts(b, "\"))); })");
       return 1;
     }
+    /* true or false where TrueClass or FalseClass defines the name: the
+       value picks its class's answer */
+    int bta, bfa, bia = argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode,
+        bfo = argc < 2 || nt_kind(nt, argv[1]) == NK_TrueNode || nt_kind(nt, argv[1]) == NK_FalseNode;
+    if (qm && recv >= 0 && rt == TY_BOOL && bool_side_responds(c, qm, bia, bfo, &bta, &bfa) &&
+        respond_to_static_answer(c, id, recv, rt, qm, argc, argv) < 0) {
+      int tv = ++g_tmp, boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_bool(");
+      buf_printf(b, "({ int _t%d = ", tv);
+      emit_expr(c, recv, b);
+      /* (a second argument only the run time knows: read after the receiver) */
+      if (!bfo) { buf_printf(b, "; int _ia%d = ", tv); emit_cond(c, argv[1], b); }
+      buf_printf(b, "; _t%d ? ", tv);
+      for (int side = 0; side < 2; side++) {
+        int a = side == 0 ? bta : bfa;
+        if (a == 2) buf_printf(b, "_ia%d", tv);
+        else if (a >= 0) buf_printf(b, "%d", a);
+        else {
+          buf_printf(b, "sp_poly_responds_builtin(sp_box_bool(_t%d), \"", tv);
+          emit_c_escaped(b, qm);
+          buf_puts(b, "\")");
+        }
+        buf_puts(b, side == 0 ? " : " : "; })");
+      }
+      if (boxed) buf_puts(b, ")");
+      return 1;
+    }
     if (qm) {
       int ans = respond_to_static_answer(c, id, recv, rt, qm, argc, argv);
       if (ans >= 0 && g_rto_nil_obj) {

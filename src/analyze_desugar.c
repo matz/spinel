@@ -13802,7 +13802,14 @@ int desugar_conditional_defs(Compiler *c) {
        (ver_list_held), and the record answers such a def as possibly
        made, not made (elab_own_method_at) */
     nt_node_set_int(nt, def, "cond_lone_disp", 1); c->ncond_disp++;
-    if (ng == 1) c->ncond_lone_disp++;
+    /* a lone one in a class other than Object or BasicObject is that
+       class's and the classes below it, asked by the chain as the
+       dispatchers of several arms are. One at the top level or in Object
+       is every class's, and one in a module is any class's the module is
+       mixed into, Object's or one a run-time include names: a list's
+       receiver chain names neither, so such a def still refuses every list */
+    if (ng == 1 && (!cn || class_def_is_module(nt, g[0].cls) || sp_streq(cn, "Object") || sp_streq(cn, "BasicObject")))
+      c->ncond_lone_disp++;
     cdef_insert_after(nt, g[ng - 1].tst, g[ng - 1].top, *g[0].vis ? fwd_new_call(nt, -1, g[0].vis, def) : def);
     serial += ng;
     free(base);

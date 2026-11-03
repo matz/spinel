@@ -10,6 +10,7 @@
 #include "analyze_internal.h"
 #include "value_pos.h"
 #include "call_plan.h"
+#include "implied_calls.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <limits.h>
@@ -3341,16 +3342,18 @@ int desugar_array_op_to_ary(Compiler *c) {
 }
 
 /* The to_ary of the program's, answering an Array, through which a value
-   of type t converts at node `at`, where CRuby destructures it
-   (rb_check_array_type); -1 for none. Only the one the load record proves
+   of type t converts where node `at` takes it apart: the implied to_ary
+   call a row of tools/implied_calls.yml says `at` makes on operand op (a
+   multiple assignment's value, the element a nested target takes),
+   rb_check_array_type's; -1 for none. Only the one the load record proves
    the object answers there (cplan_implied_version): a to_ary defined, or
    brought in by an include, after the assignment is not answered yet. An
    Array subclass instance is an Array already (comp_implicit_to_ary_mi). */
-static int masgn_to_ary_mi(Compiler *c, TyKind t, int at) {
+static int masgn_to_ary_mi(Compiler *c, TyKind t, int at, int op) {
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
   if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) return -1;
-  return cplan_implied_version(c, at, cls, "to_ary") == mi ? mi : -1;
+  return cplan_implied_version(c, at, "to_ary", op, cls) == mi ? mi : -1;
 }
 /* Does masgn id destructure into a nested target list? */
 static int masgn_nests(const NodeTable *nt, int id) {
@@ -3444,7 +3447,7 @@ static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
     for (int j = 0, n = side ? rn : ln; j < n; j++) {
       int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp;
       els = nt_arr(nt, value, "elements", &en);
-      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : masgn_to_ary_mi(c, infer_type(c, els[e]), id);
+      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : masgn_to_ary_mi(c, infer_type(c, els[e]), ts[j], NTI_YIELDED);
       if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret))) ||
           (tp = masgn_to_ary_call(nt, els[e])) < 0) continue;
       int *nels = malloc(sizeof(int) * (size_t)en);
@@ -3519,7 +3522,7 @@ int desugar_masgn_to_ary(Compiler *c) {
       if (did && !an_node_dropped(c, id)) did = masgn_to_ary_nested_kept(c, nt, id, value, orig, en);
       free(orig);
     }
-    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id)) >= 0 &&
+    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id, value)) >= 0 &&
              !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
       if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
       else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }

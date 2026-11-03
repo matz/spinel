@@ -431,8 +431,10 @@ void an_const_presence(Compiler *c) {
   free(first_settled); free(early_reads);
 }
 
+/* A constant whose value never returns (`X = raise ...`) is never set: any
+   read of it is one before its assignment. */
 int const_has_flag(const LocalVar *lv) {
-  return lv && lv->const_early && (lv->type == TY_NIL || is_scalar_ret(lv->type));
+  return lv && ((lv->const_early && (lv->type == TY_NIL || is_scalar_ret(lv->type))) || lv->type == TY_VOID);
 }
 /* A header in an unplaced file, and a path write's builder (`A::B =
    Class.new do ... end`, which a value path write was before it), have not

@@ -1,0 +1,10 @@
+PATH: no shareable lambda
+LIMIT: unavailable
+DIRECT: direct
+nil
+nil
+nil
+NameError: uninitialized constant Router::PATH
+NameError: uninitialized constant LIMIT
+NameError: uninitialized constant DIRECT
+7

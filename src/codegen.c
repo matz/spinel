@@ -2170,8 +2170,12 @@ int emit_unresolved_coerced_text(Compiler *c, int node, TyKind target, const cha
      a void expression in the typed slot. Its node is TY_UNKNOWN when the
      method ends in the raise of something defined nowhere (`Styler.render`),
      which never returns. Evaluate it and hand the slot its nil, as the boxed
-     slots already do with `(call, sp_box_nil())`. */
-  else if (target != TY_UNKNOWN && call_answers_no_value(c, node)) {
+     slots already do with `(call, sp_box_nil())`. So does a call on a
+     receiver that never returns (`m.version.merge(h)`, m raising): it is
+     evaluated for that and answers its own type's placeholder, here an
+     untyped one's boxed nil, which the slot's type does not hold. */
+  else if (target != TY_UNKNOWN && (call_answers_no_value(c, node) ||
+                                    (target != TY_POLY && call_never_returns(c, node)))) {
     buf_printf(b, "((void)(%s), %s)", txt, raise_tail_value_c(c, target));
     is_tok = 1;
   }

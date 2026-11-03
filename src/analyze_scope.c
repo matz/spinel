@@ -1513,13 +1513,14 @@ static int class_superclass_missing(Compiler *c, int id) {
 }
 
 /* The class whose constants a statement in class cls's body writes: cls,
-   or for the block of a class builder's write (`X = Class.new do ... end`),
-   which opens no constant scope, the class around the write */
-int class_cref(Compiler *c, int cls) {
-  while (cls >= 0 && !class_def_opens_cref(c->nt, c->classes[cls].def_node) &&
-         class_def_builder(c->nt, c->classes[cls].def_node) >= 0)
-    cls = c->classes[cls].enclosing_class;
-  return cls;
+   or for a body that is a block (cblock: a class builder's write,
+   `X = Class.new do ... end`), which opens no constant scope, the class
+   around the write, which the class was made with as its enclosing class
+   (for a write to a plain constant; a path write's is the path's parent).
+   The class's definition does not say which body it is: a header over a
+   builder's class (`class A::B`) is a body of its own. */
+static int class_cref(Compiler *c, int cls, int cblock) {
+  return cls >= 0 && cblock ? c->classes[cls].enclosing_class : cls;
 }
 
 /* Is node `recv` a read of a parameter of the method it stands in? A block
@@ -1676,14 +1677,14 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     }
     if (nt_kind(c->nt, id) == NK_ClassNode && cname)
       refuse_native_class_reopen(c, id, cp, class_id, w.cblock, cls_leaf);
-    child_class = elab_rec_open(c, id, cp, cname, class_cref(c, class_id));
+    child_class = elab_rec_open(c, id, cp, cname, class_cref(c, class_id, w.cblock));
   }
   /* `X = Class.new(S) do ... end`, `A::B = Module.new do ... end`: the class
      is made at the write, as a header's, and the block is walked with the
      class as self and definee (bclass1); its constants stay the cref's */
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_name(c->nt, id), class_cref(c, class_id));
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_name(c->nt, id), class_cref(c, class_id, w.cblock));
   }
   else if (ty_k == NK_DefNode) {
     const char *name = nt_str(c->nt, id, "name");

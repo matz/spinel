@@ -1,0 +1,14 @@
+"A::B::Inner"
+A::B::Inner
+A::B::Inner::Deep
+A::B::Inner
+A::B::Inner
+"A::B::Inner::Deep"
+"A2::E::Inner2"
+2
+"InBlock"
+"InNested"
+"InAnon"
+1
+[:B]
+[]

@@ -1056,7 +1056,7 @@ static int ct_after_point(Compiler *c, int id) {
    which binds through the method table: where an undef of the name on
    cls's chain leaves the table without it (comp_is_undeffed_in_chain),
    that call is not the version proved, and there is no answer either. */
-int cplan_implied_version(Compiler *c, int id, int cls, const char *name) {
+static int ct_implied_version_at(Compiler *c, int id, int cls, const char *name) {
   ElabWindow w;
   const LrDef *ds[2];
   if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name) || elab_call_window(c, id, &w) != ELAB_YES) return -1;
@@ -1066,6 +1066,13 @@ int cplan_implied_version(Compiler *c, int id, int cls, const char *name) {
       elab_point_partial(c, ds[0]->node)) return -1;
   int dc = -1;
   return ct_def_version(c, cls, name, 0, ds[0], &dc);
+}
+/* ...asked in the record's frame for the call plan (elab_plan_enter), as
+   ct_version asks: the passes that ask it append nodes between the asks */
+int cplan_implied_version(Compiler *c, int id, int cls, const char *name) {
+  int framed = elab_plan_enter(c, id), vi = ct_implied_version_at(c, id, cls, name);
+  if (framed) elab_plan_leave(c);
+  return vi;
 }
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */

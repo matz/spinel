@@ -1509,7 +1509,7 @@ int lines_sep_ty(Compiler *c, int a) {
 
 int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   { const char *nm0 = nt_str(c->nt, id, "name");
-    if (nm0 && sp_streq(nm0, "__to_h_subject")) { *out = TY_POLY; return 1; } }
+    if (nm0 && (sp_streq(nm0, "__to_h_subject") || sp_streq(nm0, "__to_h_key_subject"))) { *out = TY_POLY; return 1; } }
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");

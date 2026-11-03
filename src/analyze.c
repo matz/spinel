@@ -11968,6 +11968,62 @@ int scope_is_struct_synth(Compiler *c, int si) {
   return dn >= 0 && nt_str(c->nt, dn, "synth") != NULL;
 }
 
+/* `x.to_h { |..| pair }` on a value only known at run time is
+   `x.map { |..| pair }.to_h`: Array#to_h, Hash#to_h and Enumerable#to_h
+   with a block all build the hash from the block's pairs. The boxed
+   dispatch has the blockless to_h and a boxed map, but no block form of
+   to_h, so the call compiled to an unconditional NoMethodError naming the
+   very class that defines it (#4838). A typed receiver keeps its own
+   emitter; a program class with its own to_h keeps it too, since the
+   boxed value may be one of those. */
+static int rewrite_poly_to_h_block(Compiler *c, int id, NodeTable *nt, const char *nm) {
+  if (!nm || !sp_streq(nm, "to_h") || nt_kind(nt, nt_ref(nt, id, "block")) != NK_BlockNode ||
+      nt_ref(nt, id, "arguments") >= 0) return 0;
+  int trecv = nt_ref(nt, id, "receiver");
+  if (trecv < 0) return 0;
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (comp_method_in_class(c, ci, "to_h") >= 0) return 0;
+  if (infer_type(c, trecv) != TY_POLY) return 0;
+  /* A Hash's to_h yields the key and the value as two values, where its
+     map yields the pair as one: a block of one parameter, `|key|`, binds
+     the key (#8505), so such a block maps over the keys of a Hash */
+  int blk = nt_ref(nt, id, "block");
+  int bp = nt_ref(nt, blk, "parameters");
+  int pn = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
+  int rn = 0, on = 0, qn = 0, kn = 0;
+  const int *rq = pn >= 0 ? nt_arr(nt, pn, "requireds", &rn) : NULL;
+  if (pn >= 0) { nt_arr(nt, pn, "optionals", &on); nt_arr(nt, pn, "posts", &qn); nt_arr(nt, pn, "keywords", &kn); }
+  int one_key = rn == 1 && on == 0 && qn == 0 && kn == 0 && nt_ref(nt, pn, "rest") < 0 &&
+                nt_ref(nt, pn, "keyword_rest") < 0 && nt_kind(nt, rq[0]) == NK_RequiredParameterNode;
+  int mapc = nt_new_node(nt, "CallNode");
+  /* a Struct or Data value maps over its [member, value] pairs, not its
+     values: the receiver is read through __to_h_subject first */
+  int subj = nt_new_node(nt, "CallNode");
+  if (mapc < 0 || subj < 0) return 0;
+  nt_node_set_str(nt, subj, "name", one_key ? "__to_h_key_subject" : "__to_h_subject");
+  nt_node_set_ref(nt, subj, "receiver", trecv);
+  nt_node_set_str(nt, mapc, "name", "map");
+  nt_node_set_ref(nt, mapc, "receiver", subj);
+  nt_node_set_ref(nt, mapc, "block", blk);
+  nt_node_set_ref(nt, id, "receiver", mapc);
+  nt_node_set_ref(nt, id, "block", -1);
+  comp_grow_node_arrays(c);
+  c->nscope[mapc] = c->nscope[id];
+  c->nscope[subj] = c->nscope[id];
+  return 1;
+}
+
+/* The same rewrite once the fixpoint has settled: a receiver typed only
+   then (an ivar that starts as `{}` and is filled from elsewhere) was
+   still unknown while the desugars ran. */
+static int desugar_poly_to_h_block_late(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  for (int id = 0; id < n0; id++)
+    if (nt_kind(nt, id) == NK_CallNode && rewrite_poly_to_h_block(c, id, nt, nt_str(nt, id, "name"))) changed = 1;
+  return changed;
+}
+
 /* A CallNode's rewrites keyed by its method name, ahead of the array-enum
    ones: Enumerator and Hash chains, Struct and Set members, the finders, step
    and % (desugar_enum_method_recv's rewrites, in their order) */
@@ -12062,41 +12118,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       }
     }
   }
-  /* `x.to_h { |..| pair }` on a value only known at run time is
-     `x.map { |..| pair }.to_h`: Array#to_h, Hash#to_h and Enumerable#to_h
-     with a block all build the hash from the block's pairs. The boxed
-     dispatch has the blockless to_h and a boxed map, but no block form of
-     to_h, so the call compiled to an unconditional NoMethodError naming the
-     very class that defines it (#4838). A typed receiver keeps its own
-     emitter; a program class with its own to_h keeps it too, since the
-     boxed value may be one of those. */
-  if (nm && sp_streq(nm, "to_h") && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
-      nt_ref(nt, id, "arguments") < 0) {
-    int trecv = nt_ref(nt, id, "receiver");
-    int user_to_h = 0;
-    for (int ci = 0; ci < c->nclasses && !user_to_h; ci++)
-      if (comp_method_in_class(c, ci, "to_h") >= 0) user_to_h = 1;
-    if (trecv >= 0 && !user_to_h && infer_type(c, trecv) == TY_POLY) {
-      int mapc = nt_new_node(nt, "CallNode");
-      /* a Struct or Data value maps over its [member, value] pairs, not its
-         values: the receiver is read through __to_h_subject first */
-      int subj = nt_new_node(nt, "CallNode");
-      if (mapc >= 0 && subj >= 0) {
-        nt_node_set_str(nt, subj, "name", "__to_h_subject");
-        nt_node_set_ref(nt, subj, "receiver", trecv);
-        nt_node_set_str(nt, mapc, "name", "map");
-        nt_node_set_ref(nt, mapc, "receiver", subj);
-        nt_node_set_ref(nt, mapc, "block", nt_ref(nt, id, "block"));
-        nt_node_set_ref(nt, id, "receiver", mapc);
-        nt_node_set_ref(nt, id, "block", -1);
-        comp_grow_node_arrays(c);
-        c->nscope[mapc] = c->nscope[id];
-        c->nscope[subj] = c->nscope[id];
-        *changed = 1;
-        return 1;
-      }
-    }
-  }
+  if (rewrite_poly_to_h_block(c, id, nt, nm)) { *changed = 1; return 1; }
   /* Enumerable#each_entry on a receiver whose #each yields ONE value per
      element is #each: same elements, same receiver as the value. That is
      every builtin enumerable -- an Array/Range/Enumerator element, a Hash
@@ -54171,7 +54193,8 @@ int an_written_call(int id) { return g_an_src_nodes < 0 || id < g_an_src_nodes; 
 int g_enum_late;   /* desugar_builtin_enum_calls runs for an_phase_enum_late */
 static void an_phase_enum_late(Compiler *c) {
   g_enum_late = 1;
-  int any = AN_PASS("desugar_builtin_enum_calls_late", desugar_builtin_enum_calls(c));
+  int any = AN_PASS("desugar_poly_to_h_block_late", desugar_poly_to_h_block_late(c));
+  any |= AN_PASS("desugar_builtin_enum_calls_late", desugar_builtin_enum_calls(c));
   if (!any) { g_enum_late = 0; return; }
   AN_PASS_V("mark_empty_literal_args", mark_empty_literal_args(c));
   /* The types widen until they settle, and then the rewrite looks again

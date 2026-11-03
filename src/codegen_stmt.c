@@ -17813,10 +17813,10 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
     return 1;
   }
   /* any expression returning a typed array: runtime destructure. An Array
-     of a class's objects reads its elements as the class's pointers, NULL
-     (nil) past the end. */
+     of a class's objects, or a table's rows, reads its elements as their
+     pointers, NULL (nil) past the end. */
   if ((ty_is_array(st) || ty_is_obj_array(st)) && st != TY_UNKNOWN) {
-    const char *k = (st == TY_POLY_ARRAY) ? "Poly" : ty_is_obj_array(st) ? "Ptr" : array_kind(st);
+    const char *k = array_iter_kind(st);
     if (!k) k = "Int";
     TyKind elem = ty_array_elem(st);
     int tarr = ++g_tmp;
@@ -17829,7 +17829,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
        reads below take the source's length and its elements. A source the
        nil fact says is never nil keeps its C. */
     {
-      const char *nk = st == TY_POLY_ARRAY ? "Poly" : ty_is_obj_array(st) ? "Ptr" : array_kind(st);
+      const char *nk = array_iter_kind(st);
       if (nk && !recv_never_nil(c, value)) {
         emit_indent(b, indent);
         buf_printf(b, "if (!_t%d) _t%d = sp_%sArray_new();\n", tarr, tarr, nk);

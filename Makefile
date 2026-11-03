@@ -4734,6 +4734,16 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  "$$tmp/ibin" >/dev/null 2>&1 || { echo "infer-test: FAIL ($$f: the program does not run)"; ok=0; }; \
 	done; \
 	for flags in '' --share-strings; do \
+	  if [ -f "$(RBS_INC)/rbs/parser.h" ]; then \
+	  $(SPINEL) $$flags test/getter_pending_receiver.rb -c --no-line-map -o "$$tmp/gpr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (getter_pending_receiver: -c)"; ok=0; }; \
+	  for cls in Response Entry; do \
+	    awk "/^struct sp_$${cls}_s \\{/,/^\\}/" "$$tmp/gpr.c" | grep -Fq 'sp_StrStrHash * iv_headers;' || { echo "infer-test: FAIL (a pending getter receiver widened $$cls headers)"; ok=0; }; \
+	  done; \
+	  else echo "infer-test: getter_pending_receiver skipped (no rbs parser)"; fi; \
+	  $(SPINEL) $$flags test/getter_pending_receiver_fallback.rb -c --no-line-map -o "$$tmp/gpf.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (getter_pending_receiver_fallback: -c)"; ok=0; }; \
+	  awk '/^struct sp_Ring_s \{/,/^\}/' "$$tmp/gpf.c" | grep -Fq 'sp_PolyPolyHash * iv_data;' || { echo "infer-test: FAIL (an unknown getter receiver lost its conservative write)"; ok=0; }; \
+	  $(SPINEL) $$flags test/getter_boxed_receiver_owners.rb -c --no-line-map -o "$$tmp/gbo.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (getter_boxed_receiver_owners: -c)"; ok=0; }; \
+	  awk '/^struct sp_Left_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_letters;' && awk '/^struct sp_Right_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_numbers;' || { echo "infer-test: FAIL (a boxed getter receiver lost a possible owner)"; ok=0; }; \
 	  $(SPINEL) $$flags test/is_a_user_class_guard_narrows.rb -c --no-line-map -o "$$tmp/iug.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (is_a_user_class_guard_narrows: -c)"; ok=0; }; \
 	  grep -q 'sp_Int_tag((sp_Int \*)(sp_Int \*)sp_poly_unbox_cls(lv_x' "$$tmp/iug.c" || { echo "infer-test: FAIL (is_a?(Int) left a guarded call on a user class in boxed dispatch)"; ok=0; }; \
 	  $(SPINEL) $$flags test/object_method_ivar_receivers.rb -c --no-line-map -o "$$tmp/oir.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_method_ivar_receivers: -c)"; ok=0; }; \

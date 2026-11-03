@@ -101,3 +101,24 @@ pu = Purse.new(0, [])
 key = ARGV.empty? ? :coins : :n
 pu[key] = [Coin.new(10)]
 pu.show
+
+# a positional argument after a splat, and keywords as a positional Hash
+Bead = Data.define(:x)
+class Bead
+  def glint = "bead #{x}"
+  def roll = "rolled #{x}"
+  def drop = "dropped #{x}"
+end
+Thread2 = Struct.new(:a, :b)
+class Thread2
+  def show_b = b.each { |bd| puts bd.glint }
+  def show_hash = b.each_value { |bd| puts bd.roll }
+end
+head = [nil]
+Thread2.new(*head, [Bead.new(11)]).show_b
+Thread2.new(0, b: Bead.new(12)).show_hash
+Loose = Struct.new(:opts, :n, keyword_init: false)
+class Loose
+  def show = opts.each_value { |bd| puts bd.drop }
+end
+Loose.new(opts: Bead.new(13)).show

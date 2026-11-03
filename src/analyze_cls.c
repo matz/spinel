@@ -2642,24 +2642,32 @@ static int cf_member_el(CF *f, int x, const char *name) {
 }
 /* the arguments the builtin initialize of a Struct or Data x stores: the
    members in order, or by keyword; a splat, a computed key or a `**` may
-   reach any member, a splat and a `**` with what they hold */
+   reach any member, a splat and a `**` with what they hold; a positional
+   argument after a splat may reach any member. A Struct's keywords are one
+   positional Hash after a positional argument or with keyword_init: false. */
 static void cf_member_args(CF *f, int x, const int *argv, int argc) {
   const NodeTable *nt = f->nt;
   ClassInfo *k = &f->c->classes[x];
-  int p = 0;
+  int p = 0, after_splat = 0;
   for (int i = 0; i < argc; i++) {
     NodeKind ak = nt_kind(nt, argv[i]);
     if (ak == NK_BlockArgumentNode) continue;
     if (ak == NK_SplatNode) {
       int a = nt_ref(nt, argv[i], "expression");
       for (int r = 0; r < k->nreaders; r++) { int me = cf_member_el(f, x, k->readers[r]); cf_flow(f, a, me); cf_load(f, a, me); }
+      after_splat = 1;
       continue;
     }
-    if (ak != NK_KeywordHashNode) {
-      if (p < k->nreaders) cf_flow(f, argv[i], cf_member_el(f, x, k->readers[p]));
+    int kwh = ak == NK_KeywordHashNode;
+    /* (after an empty splat the keywords still go by name) */
+    int by_name = kwh && (k->is_data || (k->kw_init != -1 && p == 0));
+    int as_hash = kwh && !k->is_data && (k->kw_init == -1 || p > 0 || after_splat);
+    if (!kwh || as_hash) {
+      if (after_splat) { for (int r = 0; r < k->nreaders; r++) cf_flow(f, argv[i], cf_member_el(f, x, k->readers[r])); }
+      else if (p < k->nreaders) cf_flow(f, argv[i], cf_member_el(f, x, k->readers[p]));
       p++;
-      continue;
     }
+    if (!by_name) continue;
     int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
     for (int e = 0; e < en; e++) {
       int dsplat = nt_kind(nt, els[e]) == NK_AssocSplatNode;

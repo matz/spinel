@@ -197,3 +197,15 @@ end
 p Later.peek
 Later.set
 p Later.peek
+
+# ...but a program's own instance_eval runs its block where it stands, and
+# a block argument's expression runs with the class_eval block's self
+class OwnEval
+  def instance_eval(&b) = b.call
+end
+own = OwnEval.new
+p(NestHost.class_eval { own.instance_eval { self } })
+NestHost.class_eval { own.instance_eval { class_variable_set(:@@own, 1) } }
+p NestHost.class_variable_defined?(:@@own)
+def keep_self(x) = proc { x }
+p(NestHost.class_eval { NestOther.instance_exec(&keep_self(self)) })

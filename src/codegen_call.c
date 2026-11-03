@@ -31494,6 +31494,23 @@ int object_private_method_name(const char *qm) {
   return 0;
 }
 
+/* The visibility of method qm that a program's reopening of Object, Kernel
+   or BasicObject gives an instance of class cid (-1: a value of no program
+   class), in the order CRuby looks them up, or -1 when none defines it.
+   A blank slate (BasicObject's subclass) reaches only BasicObject's. The
+   class table keeps these roots apart from cid's own chain. */
+int root_reopen_method_vis(Compiler *c, int cid, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  int blank = cid >= 0 && class_is_blank_slate(c, cid);
+  for (int u = 0; roots[u] >= 0; u++) {
+    if (blank && roots[u] != CORE_BASIC_OBJECT) continue;
+    int k = comp_core_class(c, roots[u]);
+    if (k < 0 || k == cid || comp_method_in_class(c, k, qm) < 0) continue;
+    return comp_method_vis_declared(c, k, qm, NULL);
+  }
+  return -1;
+}
+
 /* What an instance of user class cid answers to Object#respond_to?(qm): 2 =
    true, 1 = only with include_all (a private or protected match), 0 = false.
    The method-table reading of respond_to_static_answer's object branch,
@@ -31533,6 +31550,13 @@ static int obj_responds_answer(Compiler *c, int cid, const char *qm) {
      Enumerable includer's, a Comparable's, a Struct's or a Data's
      core names (#2663) */
   if (!found && class_implicit_responds(c, cid, qm)) return 2;
+  /* a method of a program's Object, Kernel or BasicObject reopening that
+     the chain does not reach (the class table keeps them apart): the
+     root's, by its visibility there */
+  if (!found) {
+    int rv = root_reopen_method_vis(c, cid, qm);
+    if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
+  }
   /* Object's private methods (exit, puts, raise) answer to include_all;
      one an Object reopening redefines is left as the chain reads it */
   if (!found) return object_private_method_name(qm) && !class_is_blank_slate(c, cid) &&
@@ -31895,6 +31919,23 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     if (!private_answer_overridden(c, qm, rt)) resolved = yes = 1;
     /* the value's class picks, at run time (emit_call_reflection_arms) */
     else if (respond_to_runtime_reaches(c, rt)) return -1;
+  }
+  /* A builtin value reaches a method of a program's Object (Kernel,
+     BasicObject) reopening that
+     its own class lacks: Object's, by its visibility there (a protected or
+     private one only to include_all) */
+  if (!resolved && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS && rt != TY_IO &&
+      rt != TY_POLY && rt != TY_UNKNOWN) {
+    const char *bn = builtin_class_of_type(rt);
+    int bcls = bn ? core_of_type(rt) : -1;
+    int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
+    int rv = bn ? root_reopen_method_vis(c, -1, qm) : -1;
+    if (rv >= 0 && !builtin_method_known(bn, qm) &&
+        (bci < 0 || is_object_root(c->classes[bci].name) || comp_method_in_chain(c, bci, qm, NULL) < 0)) {
+      if (rv == SP_VIS_PUBLIC) resolved = yes = 1;
+      else if (foldable) { resolved = 1; yes = include_all; }
+      else return -1;
+    }
   }
   /* An IO answers by its kind -- a File, a socket, a server socket, a stat
      share the type -- which only the handle knows: sp_io_responds decides at

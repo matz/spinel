@@ -64,6 +64,13 @@ sf = Array.new(3, x)
 sf[1] = 6
 sf[2] = 7
 p sf.shift, sf, total(sf)
+# a move of the bits (unshift) ahead of the last nil, which is then overwritten
+um = Array.new(2, x)
+um[0] = 1
+um.unshift(0)
+p um, um.index(nil)
+um[2] = 2
+p um, total(um), um.include?(nil)
 
 # shifted, then filled
 sh = Array.new(5, x)
@@ -92,3 +99,8 @@ p fz, fz.compact.sum
 fp = Array.new(2, fx)
 fp[0] = 0.75
 p fp.pop, fp, fp.sum
+f1 = Array.new(1, fx)
+p f1.shift, f1, f1.sum
+f2 = Array.new(2, fx)
+f2[1] = 1.25
+p f2.delete_at(0), f2, f2.sum

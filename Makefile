@@ -2029,14 +2029,6 @@ link-names-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB)
 
 reject-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
-	for model in inline graph; do for overflow in plain promote; do \
-	  fl=; [ "$$overflow" = promote ] && fl=--int-overflow=promote; \
-	  if $(SPINEL) --load-model=$$model $$fl test/reject/const_parent_array_pattern.rb -c --no-line-map -o "$$tmp/pat.c" >"$$tmp/pat.out" 2>&1; then \
-	    echo "reject-test: FAIL (const_parent_array_pattern compiled)"; ok=0; \
-	  elif ! grep -qF "unsupported pattern sub-form inside a container pattern" "$$tmp/pat.out"; then \
-	    echo "reject-test: FAIL (const_parent_array_pattern refusal)"; cat "$$tmp/pat.out"; ok=0; \
-	  fi; \
-	done; done; \
 	for t in $(shell grep -l '^\# spinel: reject-self-mutation$$' test/reject/*.rb); do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/sk.c" >"$$tmp/sk.out" 2>&1; then \
 	    echo "reject-test: FAIL ($$t compiled)"; ok=0; \

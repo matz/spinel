@@ -8103,6 +8103,34 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
 static int emit_pm_cond_subj(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b) {
   return emit_class_condition(c, pat, NULL, t, pt, subj, b);
 }
+static int when_builtin_value_const(Compiler *c, int cond);
+/* A constant in a pattern that holds a value, not a class or module: a
+   program constant typed a value (`LIMIT = 3`), an ffi_const, or a builtin's
+   value constant (`Float::INFINITY`). The same three checks as `when`. */
+static int pm_value_const(Compiler *c, int pat, const char *cn) {
+  LocalVar *lv = comp_const(c, cn);
+  if (lv && lv->type != TY_UNKNOWN && lv->type != TY_CLASS) return 1;
+  if (comp_ffi_const_at(c, pat, NULL)) return 1;
+  return when_builtin_value_const(c, pat);
+}
+/* the kinds whose === is ==, so the arm is the equality test of `in ^x` */
+static int pm_eq_scalar(TyKind k) {
+  return k == TY_INT || k == TY_FLOAT || k == TY_STRING || k == TY_SYMBOL;
+}
+/* `in LIMIT` for a value constant: LIMIT === subject. An Integer, Float,
+   String or Symbol value compares by ==. A subject of another such kind is
+   never equal (Integer and Float do compare). Any other value kind (a Regexp,
+   a Range, a Proc, an object with its own ===) is refused. */
+static void emit_pm_value_const(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
+  TyKind vt = comp_ntype(c, pat);
+  if (!pm_eq_scalar(vt) || repr_of(c, pat).kind == RK_BOXED) {
+    unsupported(c, pat, "value constant pattern other than an Integer, Float, String or Symbol");
+  }
+  int num = (vt == TY_INT || vt == TY_FLOAT) && (pt == TY_INT || pt == TY_FLOAT);
+  if (pt == TY_POLY || pt == vt || num) { emit_pm_eq(c, t, pt, pat, b); return; }
+  if (pm_eq_scalar(pt) || pt == TY_NIL || pt == TY_BOOL) { buf_puts(b, "0"); return; }
+  unsupported(c, pat, "value constant pattern against this subject");
+}
 static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *pty = nt_type(nt, pat);
@@ -8169,10 +8197,19 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     else buf_puts(b, "0");
     return 1;
   }
-  /* class pattern: runtime tag/class test for poly, compile-time fold otherwise */
-  if (pk == NK_ConstantReadNode) {
-    const char *cn2 = nt_str(nt, pat, "name");
-    if (!cn2) return 0;
+  /* class pattern: runtime tag/class test for poly, compile-time fold
+     otherwise. A constant path (`in Mod::Klass`) is the same test: with no
+     branch here it reached the caller as "no condition" and the arm matched
+     every subject. A constant that holds a value is `value === subject`. */
+  if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) {
+    char cq[192];
+    const char *cn2 = pk == NK_ConstantReadNode ? nt_str(nt, pat, "name")
+                                                : isa_match_name(nt, pat, cq, sizeof cq);
+    if (!cn2) unsupported(c, pat, "constant pattern with a computed scope");
+    if (pm_value_const(c, pat, cn2)) {
+      emit_pm_value_const(c, pat, t, pt, b);
+      return 1;
+    }
     /* (a class method `===` of the program's own answers, as in `when`) */
     if (emit_when_class_cmethod_eq(c, pat, t, pt, b)) return 1;
     if (pt == TY_POLY) {
@@ -8182,7 +8219,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     }
     if (pt == TY_EXCEPTION) {
       /* an exception scrutinee matches by name up its class chain (#2759) */
-      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, pat, NULL, 0));
+      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, pat, cq, sizeof cq));
       return 1;
     }
     if (pt == TY_BOOL && (is_boolean_class_name(cn2)) &&

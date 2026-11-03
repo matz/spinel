@@ -1,0 +1,26 @@
+:no
+:no
+:k
+:k
+:no
+[:no, :str, :k, :j, :no, :no]
+:ak
+:mk
+:or
+:no
+:no
+M::J
+:g
+:top
+:mix
+:no
+:arr
+:no
+:no
+:h
+[1, 2]
+:no
+[:n, :no, :s, :no]
+:n
+:inf
+NoMatchingPatternError

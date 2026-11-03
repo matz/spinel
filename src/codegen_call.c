@@ -8419,6 +8419,16 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     nt_node_set_ref((NodeTable *)nt, id, "block", fb1);
   }
   if (bt == TY_UNKNOWN) bt = an_builtin_answer(c, id);
+  /* a then's answer is its block's value, the Array its tail is typed as
+     now, which the answer recorded for the arm may not be: under
+     --int-overflow=promote a dispatched call's Integer comes back boxed, and
+     a map of it builds a boxed Array (emit_tap_then_expr's slot is this) */
+  if (is_then_alias(name) && argc == 0 && ty_is_array(bt)) {
+    int blk = nt_ref(nt, id, "block"), body = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1, bn = 0;
+    const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    TyKind tt = bn > 0 ? comp_ntype(c, bb[bn - 1]) : TY_UNKNOWN;
+    if (ty_is_array(tt)) bt = tt;
+  }
   /* --share-strings: a reflective read of a String ivar beside a user arm
      answers the slot's box, a shared String's handle's, boxed as it is
      (its bytes boxed anew are another String) */

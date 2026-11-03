@@ -178,10 +178,10 @@ int cplan_initializers(Compiler *c, int id, int *out, int cap);
    receiver and add members, and nothing here promises a set only grows. */
 enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
-/* The version of cls's `name` a conversion with no call node at node id
-   (a multiple assignment's to_ary) runs, where the load record proves the
-   one; -1 otherwise */
-int cplan_implied_version(Compiler *c, int id, int cls, const char *name);
+/* The version of cls's `name` the implied call node id makes on operand op
+   (a row of tools/implied_calls.yml: a multiple assignment's to_ary of its
+   value) runs, where the load record proves the one; -1 otherwise */
+int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls);
 /* cplan_targets, for a reader that wants the code the call's emission
    names (reachability): the same answer, but for a call on a boxed receiver
    the methods of the arms its dispatch has, which the receiver's class

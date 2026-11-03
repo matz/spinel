@@ -11864,7 +11864,7 @@ static void emit_ivar_nil_inits(Compiler *c, Buf *b, ClassInfo *ci, const char *
 
 /* Was this "class" written as `module`? Module-ness lives in the AST node
    kind, not in ClassInfo, and two emitters need the same answer. */
-int comp_class_is_module(Compiler *c, ClassInfo *ci) {
+int comp_class_is_module(Compiler *c, const ClassInfo *ci) {
   if (ci && ci->def_node < 0) return is_builtin_module_const_name(ci->name);
   return ci && class_def_is_module(c->nt, ci->def_node);
 }

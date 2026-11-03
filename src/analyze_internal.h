@@ -1145,7 +1145,7 @@ extern const char *g_ext_entries;
 
 /* the class every value of a boxed-value hash slot holds, or -1 (#4846) */
 int hv_value_class(Compiler *c, int recv);
-int comp_class_is_module(Compiler *c, ClassInfo *ci);
+int comp_class_is_module(Compiler *c, const ClassInfo *ci);
 int poly_ivar_set_class(Compiler *c, int k);
 int is_builtin_reopen(const char *name);
 char **dsend_candidates(Compiler *c, int *out_n);

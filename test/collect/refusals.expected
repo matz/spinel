@@ -1780,6 +1780,58 @@ spinel: 1 refusal, nothing written
 == test/reject/string_method_object_mutator_user_method.rb [promote] rc=1
 spinel: test/reject/string_method_object_mutator_user_method.rb:12: String#method is not supported for a method that changes the String in place (`<<`, `concat`, `upcase!`, ...): the Method object is bound to the String's value, not to the String, so calling it could not change the String it came from. Call the method on the String directly, or wrap it in a block (`->(x) { s << x }`) (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/string_minus_argument_call.rb [default] rc=1
+spinel: test/reject/string_minus_argument_call.rb:4: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_argument_call.rb [promote] rc=0
+== test/reject/string_minus_block.rb [default] rc=1
+spinel: test/reject/string_minus_block.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_block.rb [promote] rc=1
+spinel: test/reject/string_minus_block.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_keyword.rb [default] rc=1
+spinel: test/reject/string_minus_keyword.rb:6: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_keyword.rb [promote] rc=1
+spinel: test/reject/string_minus_keyword.rb:6: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_keyword_splat.rb [default] rc=1
+spinel: test/reject/string_minus_keyword_splat.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_keyword_splat.rb [promote] rc=1
+spinel: test/reject/string_minus_keyword_splat.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_literal.rb [default] rc=1
+spinel: test/reject/string_minus_literal.rb:3: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_literal.rb [promote] rc=1
+spinel: test/reject/string_minus_literal.rb:3: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_local_argument.rb [default] rc=1
+spinel: test/reject/string_minus_local_argument.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_local_argument.rb [promote] rc=1
+spinel: test/reject/string_minus_local_argument.rb:7: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_local_block.rb [default] rc=1
+spinel: test/reject/string_minus_local_block.rb:9: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_local_block.rb [promote] rc=0
+== test/reject/string_minus_local_safe_navigation.rb [default] rc=1
+spinel: test/reject/string_minus_local_safe_navigation.rb:5: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_local_safe_navigation.rb [promote] rc=0
+== test/reject/string_minus_receiver.rb [default] rc=1
+spinel: test/reject/string_minus_receiver.rb:3: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_receiver.rb [promote] rc=1
+spinel: test/reject/string_minus_receiver.rb:3: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_receiver_call.rb [default] rc=1
+spinel: test/reject/string_minus_receiver_call.rb:11: undefined method '-' for an instance of String (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/string_minus_receiver_call.rb [promote] rc=0
 == test/reject/string_mutator_jump_arm.rb [default] rc=1
 spinel: test/reject/string_mutator_jump_arm.rb:7: unsupported expression: node N (ReturnNode)
 spinel: 1 refusal, nothing written

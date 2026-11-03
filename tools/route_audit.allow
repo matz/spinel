@@ -294,3 +294,4 @@ src/codegen_util.c strbuf_reader_field_boxed the String sharing routes
 src/analyze_pass.c cr_mark_implied the implicit-callback rows' method-table names
 src/call_plan.c ver_entries_build the current own body of each public name before entries are installed
 src/call_plan.c ver_named_one the method an includer holds of a module's open history's name, its copy's or its own
+src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy

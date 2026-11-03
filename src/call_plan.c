@@ -1043,6 +1043,30 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
 static int ct_after_point(Compiler *c, int id) {
   return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
+/* The method a conversion CRuby makes without a call node at node id (a
+   multiple assignment's to_ary) runs on an instance of cls: the one
+   version of `name` on cls's chain over the statements id may run in
+   (elab_call_window, elab_method_span), a def that ran there for sure,
+   as cls's copy of it when a mixin brought it (ct_def_version); -1 where
+   the record cannot prove one -- no version yet at some point of the
+   window (a def or the include that brings it comes later), more than
+   one, or one that may not have run (under a condition, or after a
+   statement that may raise in a begin body with rescue clauses:
+   elab_point_partial). The conversion is lowered as a call of `name`,
+   which binds through the method table: where an undef of the name on
+   cls's chain leaves the table without it (comp_is_undeffed_in_chain),
+   that call is not the version proved, and there is no answer either. */
+int cplan_implied_version(Compiler *c, int id, int cls, const char *name) {
+  ElabWindow w;
+  const LrDef *ds[2];
+  if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name) || elab_call_window(c, id, &w) != ELAB_YES) return -1;
+  if (ct_after_point(c, id)) elab_window_open(c, &w);
+  int n = elab_method_span(c, cls, name, 0, &w, ds, 2);
+  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
+      elab_point_partial(c, ds[0]->node)) return -1;
+  int dc = -1;
+  return ct_def_version(c, cls, name, 0, ds[0], &dc);
+}
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
 static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {

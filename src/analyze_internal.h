@@ -942,6 +942,7 @@ int desugar_curry_arity_to_int(Compiler *c);
 int desugar_int_enum_with_index(Compiler *c);
 int desugar_hash_iter_with_index(Compiler *c);
 int desugar_array_op_to_ary(Compiler *c);
+int desugar_masgn_to_ary(Compiler *c);
 int widen_shared_cmp_params(Compiler *c);
 int desugar_reduce_proc_arg(Compiler *c);
 int desugar_reduce_splat_args(Compiler *c);

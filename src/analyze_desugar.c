@@ -3340,6 +3340,142 @@ int desugar_array_op_to_ary(Compiler *c) {
   return changed;
 }
 
+/* The to_ary of the program's, answering an Array, through which a value
+   of type t converts at node `at`, where CRuby destructures it
+   (rb_check_array_type); -1 for none. Only the one the load record proves
+   the object answers there (cplan_implied_version): a to_ary defined, or
+   brought in by an include, after the assignment is not answered yet. An
+   Array subclass instance is an Array already (comp_implicit_to_ary_mi). */
+static int masgn_to_ary_mi(Compiler *c, TyKind t, int at) {
+  int cls = ty_is_object(t) ? ty_object_class(t) : -1;
+  int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
+  if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) return -1;
+  return cplan_implied_version(c, at, cls, "to_ary") == mi ? mi : -1;
+}
+/* Does masgn id destructure into a nested target list? */
+static int masgn_nests(const NodeTable *nt, int id) {
+  static const char *const arrs[] = { "lefts", "rights" };
+  for (int a = 0; a < 2; a++) {
+    int n = 0;
+    const int *v = nt_arr(nt, id, arrs[a], &n);
+    for (int j = 0; j < n; j++) if (nt_kind(nt, v[j]) == NK_MultiTargetNode) return 1;
+  }
+  return 0;
+}
+/* `v&.to_ary`, private or not, as CRuby calls it; nil answers no to_ary
+   and destructures as nil */
+static int masgn_to_ary_call(NodeTable *nt, int v) {
+  int tp = nt_new_node(nt, "CallNode");
+  if (tp < 0) return -1;
+  nt_node_set_ref(nt, tp, "receiver", v);
+  nt_node_set_str(nt, tp, "name", "to_ary");
+  nt_set_ignore_visibility(nt, tp, 1);
+  nt_set_safe_nav(nt, tp, 1);
+  nt_node_set_ref(nt, tp, "arguments", -1);
+  nt_node_set_ref(nt, tp, "block", -1);
+  return tp;
+}
+/* ...where the assignment's own value is read: it answers the object, not
+   the Array, so masgn id becomes `(<the assignment> = (t = obj)&.to_ary;
+   t)` on a temp, the assignment moved to a new node; its targets'
+   receivers and index arguments still run before the value */
+static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value) {
+  char tname[48];
+  snprintf(tname, sizeof tname, "__mta_%s", comp_node_tag(c, id));
+  int tw = nt_new_node(nt, "LocalVariableWriteNode"), ts = nt_new_node(nt, "StatementsNode");
+  int tpar = nt_new_node(nt, "ParenthesesNode"), tr2 = nt_new_node(nt, "LocalVariableReadNode");
+  int mw = nt_new_node(nt, "MultiWriteNode"), stmts = nt_new_node(nt, "StatementsNode");
+  int tp = tpar >= 0 ? masgn_to_ary_call(nt, tpar) : -1;
+  if (tw < 0 || ts < 0 || tpar < 0 || tr2 < 0 || mw < 0 || stmts < 0 || tp < 0) return 0;
+  nt_node_set_str(nt, tw, "name", tname); nt_node_set_ref(nt, tw, "value", value);
+  nt_node_set_arr(nt, ts, "body", &tw, 1);
+  nt_node_set_ref(nt, tpar, "body", ts);
+  nt_node_set_str(nt, tr2, "name", tname);
+  static const char *const arrs[] = { "lefts", "rights" };
+  for (int a = 0; a < 2; a++) {
+    int n = 0;
+    const int *v = nt_arr(nt, id, arrs[a], &n);
+    nt_node_set_arr(nt, mw, arrs[a], v, n);
+    nt_node_set_arr(nt, id, arrs[a], NULL, 0);
+  }
+  nt_node_set_ref(nt, mw, "rest", nt_ref(nt, id, "rest"));
+  nt_node_set_ref(nt, mw, "value", tp);
+  nt_node_set_int(nt, mw, "node_line", nt_int(nt, id, "node_line", 0));
+  int body[2] = { mw, tr2 };
+  nt_node_set_arr(nt, stmts, "body", body, 2);
+  nt_node_set_type(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", stmts);
+  nt_node_set_ref(nt, id, "rest", -1);
+  nt_node_set_ref(nt, id, "value", -1);
+  scope_local_intern(comp_scope_of(c, id), tname);
+  return 1;
+}
+/* May an element of the Array a to_ary answers be an object that
+   converts in turn? A nested target would destructure it, and the
+   desugar converts only what it can name, so such a value is left whole. */
+static int masgn_element_may_convert(Compiler *c, TyKind e) {
+  return e == TY_UNKNOWN || e == TY_POLY || (ty_is_object(e) && comp_implicit_to_ary_mi(c, ty_object_class(e)) >= 0);
+}
+/* ...and the elements of a literal value a nested target destructures
+   (`a, (b, c) = 1, obj`): a left target takes the element at its index, a
+   right one (after a rest) the element counted from the end, where that
+   is past the left targets' elements (fewer elements leave it nil) */
+static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
+  int changed = 0, ln = 0, rn = 0, en = 0;
+  const int *els = nt_arr(nt, value, "elements", &en);
+  int rest = nt_ref(nt, id, "rest") >= 0;
+  for (int side = 0; side < 2; side++) {
+    const int *ts = nt_arr(nt, id, side ? "rights" : "lefts", side ? &rn : &ln);
+    for (int j = 0, n = side ? rn : ln; j < n; j++) {
+      int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp;
+      els = nt_arr(nt, value, "elements", &en);
+      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : masgn_to_ary_mi(c, infer_type(c, els[e]), id);
+      if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret))) ||
+          (tp = masgn_to_ary_call(nt, els[e])) < 0) continue;
+      int *nels = malloc(sizeof(int) * (size_t)en);
+      if (!nels) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(nels, els, sizeof(int) * (size_t)en);
+      nels[e] = tp;
+      nt_node_set_arr(nt, value, "elements", nels, en);
+      free(nels);
+      ts = nt_arr(nt, id, side ? "rights" : "lefts", side ? &rn : &ln);
+      changed = 1;
+    }
+  }
+  return changed;
+}
+/* A multiple assignment CRuby destructures through a to_ary of the
+   program's (masgn_to_ary_mi) took the object as the one element: `a, b =
+   obj` now reads `obj&.to_ary`, where the assignment's value is thrown away
+   (an_node_dropped), or the temp form where it is read
+   (masgn_to_ary_kept); a nested target, the element of a literal value
+   (masgn_to_ary_nested). A value whose Array may hold an object a nested
+   target would have to convert in turn is left whole
+   (masgn_element_may_convert). The store evidence of the targets is made
+   again from the Array (desugar_masgn_store_evidence passes an object
+   value by). */
+int desugar_masgn_to_ary(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  for (int id = comp_kind_first(c, NK_MultiWriteNode); id >= 0 && id < n0; id = comp_kind_next(c, id)) {
+    if (nt_kind(nt, id) != NK_MultiWriteNode) continue;
+    int value = nt_ref(nt, id, "value"), base = nt->count, did = 0, tp, mi;
+    if (value < 0) continue;
+    if (masgn_tuple_rhs(nt, value)) did = masgn_to_ary_nested(c, nt, id, value);
+    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id)) >= 0 &&
+             !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
+      if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
+      else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }
+    }
+    if (!did) continue;
+    if (nt_kind(nt, id) == NK_MultiWriteNode) nt_node_set_int(nt, id, "masgn_ev", 0);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 /* A String mutator whose receiver is an expression answering an existing
    String is sent to that String in CRuby: `(c ? s : t) << x`,
    `(@buf ||= +"") << x`, `(s).upcase!`, `s.to_s << x`. The mutator

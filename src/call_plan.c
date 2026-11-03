@@ -993,12 +993,13 @@ static unsigned ver_mix(unsigned h) {
   return h;
 }
 /* How many versions rcls's chain holds of name (-1 past VER_MAX_ARMS),
-   whether the first is a plain def, and whether a method body makes one
+   whether the first is a plain def, whether a method body makes one
    (LrDef.body: a call may run before that body does, where the chain may
-   hold none of them), kept by (class, side, name) for the record as it
+   hold none of them), and the late bit of the chain's histories
+   (elab_versions_late), kept by (class, side, name) for the record as it
    stands (elab_stamp): every call asked of every class of a name asks it,
    and the answer is the chain's. */
-struct VerChain { struct VerChainSlot { const char *name; int rcls, sg, n, def, body; } *slot; int cap, used; ElabStamp stamp; };
+struct VerChain { struct VerChainSlot { const char *name; int rcls, sg, n, def, body, late; } *slot; int cap, used; ElabStamp stamp; };
 void ver_chain_free(Compiler *c) {
   if (!c->ver_chain) return;
   free(c->ver_chain->slot);
@@ -1008,7 +1009,7 @@ void ver_chain_free(Compiler *c) {
 static unsigned ver_chain_hash(const char *name, int rcls, int sg) {
   return ver_mix(sp_strhash(name) + (unsigned)rcls * 0x9E3779B1u + (unsigned)sg * 0x85EBCA6Bu);
 }
-static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int *first_def, int *body) {
+static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int *first_def, int *body, int *late) {
   struct VerChain *m = c->ver_chain;
   if (m && !elab_stamp_same(m->stamp, elab_stamp(c))) { ver_chain_free(c); m = NULL; }
   if (!m) {
@@ -1033,15 +1034,17 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
     if (m->slot[j].rcls == rcls && m->slot[j].sg == sg && sp_streq(m->slot[j].name, name)) {
       *first_def = m->slot[j].def;
       *body = m->slot[j].body;
+      *late = m->slot[j].late;
       return m->slot[j].n;
     }
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
   for (int k = 0; k < n; k++) any |= vs[k].v->body != 0;
-  m->slot[j] = (struct VerChainSlot){ name, rcls, sg, n, def, any };
+  m->slot[j] = (struct VerChainSlot){ name, rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;
   *body = any;
+  *late = m->slot[j].late;
   return n;
 }
 /* Does call id run any time after its point: in a block the record
@@ -1159,7 +1162,7 @@ static int ver_mm_at(Compiler *c, int rcls, int sg, LoadPoint p, int at, const E
 }
 
 /* The version of `name` call id runs, when the method has more than one
-   (#9898), or one the call may run before (elab_method_late): a call at
+   (#9898), or one the call may run before (elab_versions_late): a call at
    a load point gets the version live there; any other (a load point in a
    body that runs again, a method body, a block kept to run later), the
    one version it can reach over the statements it may run in
@@ -1174,15 +1177,16 @@ static int ver_mm_at(Compiler *c, int rcls, int sg, LoadPoint p, int at, const E
    was made. *span (when asked): how many versions the window reaches
    (elab_method_span), 0 when no window was asked. */
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, int *span) {
-  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0;
+  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
-  /* a call may meet the chain with no version made yet: the name's late
-     bit, or a version a method body makes on the chain (its extent opens
-     where that body first runs). Not for a capture (CT_CAPTURE): a Method
-     made where no version is live would need an entry that checks the
-     method is there, which captures do not have yet, so a capture keeps
-     the table's answer until presence-checked captures retire this */
-  int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body), late = elab_method_late(c, name) || (body && !(flags & CT_CAPTURE));
+  /* a call may meet the chain with no version made yet: the late bit of
+     its histories, or a version a method body makes on the chain (its
+     extent opens where that body first runs). Not for a capture
+     (CT_CAPTURE): a Method made where no version is live would need an
+     entry that checks the method is there, which captures do not have
+     yet, so a capture keeps the table's answer until presence-checked
+     captures retire this */
+  int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), late = cl == 2 || (body && !(flags & CT_CAPTURE));
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
   if (nc == 1 && first_def && !late) {
@@ -1314,8 +1318,8 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
   /* (a capture on a chain a method body makes a version on keeps the
      table's answer, as in ct_version_at, until captures check presence) */
-  int first_def = 0, body = 0;
-  if ((flags & CT_CAPTURE) && (ver_chain_count(c, flags & CT_TOP ? -1 : cls, (flags & CT_CMETHOD) != 0, name, &first_def, &body), body)) return 0;
+  int first_def = 0, body = 0, cl = 0;
+  if ((flags & CT_CAPTURE) && (ver_chain_count(c, flags & CT_TOP ? -1 : cls, (flags & CT_CMETHOD) != 0, name, &first_def, &body, &cl), body)) return 0;
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
@@ -4442,10 +4446,15 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
     if (c->classes[k].is_builtin_const && !is_object_base_name(c->classes[k].name)) return 1;
   return 0;
 }
+/* The version entry of name on rcls's chain (side sg) for ar arguments:
+   an arm per version, nearest history first, each testing its history's
+   cell; asked for a call that may meet no version (q), its else arm what
+   the lookup finds past every version of the chain (ver_absent_else),
+   when they share a visibility. -1 for none. */
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int sg, const char *name, int mi, int ar, int mm, int *absent) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
-  int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, one = 1, els = -1, fallback = mi;
+  int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi;
   int spliced = c->scopes[mi].yields;
   char sel[VER_MAX_ARMS][32];
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
@@ -4456,14 +4465,14 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
       return -1;
     blk |= c->scopes[s].blk_param || c->scopes[s].yields;
     spliced &= c->scopes[s].yields;
-    one &= vs[i].hist == vs[0].hist && vs[i].v->vis == vs[0].v->vis;
+    vis &= vs[i].v->vis == vs[0].v->vis;
     ver_cell_name(vs[i].hist, sel[na]);
     arm[na] = (DispArm){ sel[na], vs[i].n, name, vs[i].hist + 1 };
     to[na++] = s;
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
-  if (q && na && one && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) els = ver_absent_else(c, q, rcls, sg, name, vs[0].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
+  if (q && na && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) els = ver_absent_else(c, q, rcls, sg, name, vs[nv - 1].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
   if (absent) *absent = els >= 0;
   if (els < 0 && (q || nv < 2 || !na || same)) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
   return ver_entry_emit(c, rcls, sg, name, ar, blk, spliced, arm, to, na, fallback, els);
@@ -4709,10 +4718,11 @@ static int ver_else_block(Compiler *c, int cls, int sg, int last, int els) {
   return t < 0 || !(c->scopes[t].blk_param || c->scopes[t].yields) ? 0 : c->scopes[t].yields ? 2 : 1;
 }
 /* The else arm of rcls's version entry for a call that may meet no
-   version of the chain yet (ver_entries_demand), the versions to[0..na), one
-   history's of visibility vis: what the lookup finds with none of them
-   made, as an open history's entry answers for none run (ver_named_kind,
-   ver_named_else), at the last version's line; -1 where that is VK_KEEP,
+   version of the chain yet (ver_entries_demand), the versions to[0..na),
+   of one visibility vis, past the farthest of whose histories (hist) the
+   lookup goes on: what it finds with none of them made, as an open
+   history's entry answers for none run (ver_named_kind, ver_named_else),
+   at the last version's line; -1 where that is VK_KEEP,
    for which the entry keeps the last version (the table's answer). It
    may take the caller's block on (ver_else_block). */
 static int ver_absent_else(Compiler *c, const VerNamedAsks *q, int rcls, int sg, const char *name, int hist, int vis,

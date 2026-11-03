@@ -356,9 +356,9 @@ int elab_method_versions(Compiler *c, const char *name);
    main's) history of it hold more than one version, or an alias, which
    names the version it captured? */
 int elab_method_replaced(Compiler *c, const char *name);
-/* does a call of `name`, whose versions the record holds in one history,
-   run, or open the window of the bodies around it, ahead of the first
-   version, where the name is absent? */
+/* does a call of `name` run, or open the window of the bodies around it,
+   ahead of the first version of one of its histories, where the name is
+   absent on that class and side? */
 int elab_method_late(Compiler *c, const char *name);
 /* Does a reflection reader that answers from the method table (respond_to?,
    method_defined?, defined?, a list of methods: not a Method's maker) name
@@ -455,6 +455,13 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
    not hold, a mixin's module is not known, or past cap. */
 typedef struct { const LrDef *v; int hist, n; } ElabVersion;
 int elab_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* the late bit of the histories of `name` that versions vs[0..n) are in
+   (elab_chain_versions): 2 where a call may run ahead of the first version
+   of one of them, 3 where none is but one was not asked (a name a
+   builtin's method answers, an instance-side history of a name of two or
+   more, one a reflection reader names), else 1; for n -1, the name's: 2
+   where one of its histories is, else 3 */
+int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int n);
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);

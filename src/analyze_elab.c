@@ -4869,6 +4869,18 @@ int elab_const_own_at(Compiler *c, int owner, const char *name, LoadPoint p, con
    class. The write the walk has not reached yet, by the source's writes
    (elab_note_const_writes): the first of the leaf whose lexical scope is
    owner's body, the top level for Object (main); -1 for none. */
+/* The class or module header (or `class << x`) whose body is node id's
+   lexical scope, by the parent map par; -1 for a file's top level. A
+   method's or a block's body keeps the scope it is written in; a header's
+   superclass expression is in the scope around the header. */
+int elab_lexical_header(const NodeTable *nt, const int *par, int id) {
+  for (int a = par[id], from = id; a >= 0; from = a, a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if ((k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) && nt_ref(nt, a, "body") == from) return a;
+  }
+  return -1;
+}
+
 static int lr_later_alias(Compiler *c, int owner, const char *name) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
@@ -4877,11 +4889,8 @@ static int lr_later_alias(Compiler *c, int owner, const char *name) {
     int w = r->srcw[i].node, in = LR_MAIN;
     if (!sp_streq(r->srcw[i].name, name) || nt_kind(nt, w) != NK_ConstantWriteNode || !sp_streq(lr_written_name(nt, w), name)) continue;
     if (!par) par = comp_parent_map(c);
-    for (int a = par[w]; a >= 0; a = par[a]) {
-      NodeKind k = nt_kind(nt, a);
-      if (k == NK_SingletonClassNode) { in = LR_UNKNOWN_CLASS; break; }
-      if (k == NK_ClassNode || k == NK_ModuleNode) { in = elab_header_class(c, a, NULL, NULL); break; }
-    }
+    int a = elab_lexical_header(nt, par, w);
+    if (a >= 0) in = nt_kind(nt, a) == NK_SingletonClassNode ? LR_UNKNOWN_CLASS : elab_header_class(c, a, NULL, NULL);
     if (in == owner) return w;
   }
   return -1;
@@ -5569,45 +5578,95 @@ void elab_note_const_writes(Compiler *c) {
   }
 }
 
-/* Does the program's source write a constant whose name `named` takes,
-   anywhere (a write of any form, a class or module header;
-   elab_note_const_writes)? A `rescue` naming a builtin exception class may
-   name the program's own then, where one is in scope (prog_settle_files). */
-int elab_source_writes_const(Compiler *c, int (*named)(const char *)) {
-  LoadRecord *r = lr_get(c);
-  for (int i = 0; i < r->nsrcw; i++)
-    if (named(r->srcw[i].name)) return 1;
+/* The path a constant write w names its class by (`A::X = 1`, `class
+   A::X`): the ConstantPath whose parent is that class; -1 where w writes
+   the bare name, in the class whose body is its lexical scope */
+static int lr_write_path(const NodeTable *nt, int w) {
+  NodeKind k = nt_kind(nt, w);
+  int p = k == NK_ConstantPathTargetNode ? w
+        : k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, w, "constant_path")
+        : k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+          k == NK_ConstantPathOperatorWriteNode ? nt_ref(nt, w, "target") : -1;
+  return p >= 0 && (p == w || nt_kind(nt, p) == NK_ConstantPathNode) ? p : -1;
+}
+
+/* May constant cp (a header's name, a path's parent) hold Object? Where it
+   is no constant, is Object's name, or is a name a write other than a
+   header gives (`O = Object; class O`) */
+static int lr_may_name_object(const LoadRecord *r, const NodeTable *nt, int cp) {
+  NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
+  const char *leaf = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? lr_written_name(nt, cp) : NULL;
+  if (!leaf || is_object_class_name(leaf)) return 1;
+  for (int i = 0; i < r->nsrcw; i++) {
+    NodeKind wk = nt_kind(nt, r->srcw[i].node);
+    if (wk != NK_ClassNode && wk != NK_ModuleNode && sp_streq(r->srcw[i].name, leaf)) return 1;
+  }
   return 0;
+}
+
+/* Does the program's source write constant `name` (a write of any form, a
+   class or module header; elab_note_const_writes)? With `top`, only where
+   a lookup from the top level finds it: in Object, or a class the source
+   does not tell apart from it. A write in the body of a header that names
+   another class (lr_may_name_object), in a singleton class's body, or by a
+   path whose parent is such a class, is that class's; one at a file's top
+   level, in a method or a block there (a block keeps the lexical scope it
+   is written in), or by `::X`, is Object's. A `rescue` naming a builtin
+   exception class may name the program's own then (prog_note_rescues). */
+int elab_source_writes_const(Compiler *c, const char *name, int top) {
+  LoadRecord *r = lr_get(c);
+  const NodeTable *nt = c->nt;
+  const int *par = top ? comp_parent_map(c) : NULL;
+  for (int i = 0; i < r->nsrcw; i++) {
+    if (!sp_streq(r->srcw[i].name, name)) continue;
+    int w = r->srcw[i].node, p = top ? lr_write_path(nt, w) : -1, in_top = 1;
+    if (p >= 0) in_top = nt_ref(nt, p, "parent") < 0 || lr_may_name_object(r, nt, nt_ref(nt, p, "parent"));
+    else if (top) {
+      int a = elab_lexical_header(nt, par, w);
+      in_top = a < 0 || (nt_kind(nt, a) != NK_SingletonClassNode && lr_may_name_object(r, nt, nt_ref(nt, a, "constant_path")));
+    }
+    if (in_top) return 1;
+  }
+  return 0;
+}
+
+/* May the program write a constant, one already held included, under a
+   name its source does not spell: by const_set or an eval of a String
+   (also through a send), or by a send of a name it computes? With `unheld`,
+   also where it defines one only while the name holds nothing: by an
+   autoload (one of a held name does nothing), or in a const_missing it
+   defines. Read from the tree as it stands (the caller keeps the answer). */
+int elab_consts_by_value(Compiler *c, int unheld) {
+  const NodeTable *nt = c->nt;
+  int hit = 0, n = 0;
+  const int *v = nt_nodes_of_kind(nt, NK_CallNode, &n);
+  for (int i = 0; !hit && i < n; i++) {
+    const char *m = nt_str(nt, v[i], "name");
+    int a = nt_ref(nt, v[i], "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (m && is_send_family(m)) m = an > 0 ? vis_arg_name(nt, av[0]) : NULL;
+    hit = !m || is_const_set_name(m) || (unheld && is_autoload_name(m)) || (is_code_eval_name(m) && an > 0);
+  }
+  v = unheld ? nt_nodes_of_kind(nt, NK_DefNode, &n) : NULL;
+  for (int i = 0; !hit && v && i < n; i++) hit = is_const_missing_name(nt_str(nt, v[i], "name"));
+  return hit;
 }
 
 /* Does the record see every write of constant `name` there can be? Not
    when the program runs code it cannot follow (elab_runs_unseen), loads a
-   C extension, or calls const_set, autoload or an eval of a String (also
-   through a send), or defines const_missing; nor when a write the
-   program's source has is gone or rewritten by a pass before the walk
-   (elab_note_const_writes); nor when a write of the name is one it does
-   not record: a path or operator write, a multiple assignment's target,
-   or a write or header in a method body, a lambda or a block, which may
-   run before any point, or in a file region 0 has not entered (yet, while
-   the walk records: a file a later load enters, or one in a region of its
-   own, whose points the record cannot order). */
+   C extension, or may make a constant by a name it computes, a held one or
+   not (elab_consts_by_value); nor when a write the program's source has is
+   gone or rewritten by a pass before the walk (elab_note_const_writes);
+   nor when a write of the name is one it does not record: a path or
+   operator write, a multiple assignment's target, or a write or header in
+   a method body, a lambda or a block, which may run before any point, or
+   in a file region 0 has not entered (yet, while the walk records: a file
+   a later load enters, or one in a region of its own, whose points the
+   record cannot order). */
 static int lr_const_seen(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
-  if (!r->consts) {
-    int hit = elab_runs_unseen(c) || nt->has_cext_decls, n = 0;
-    const int *v = nt_nodes_of_kind(nt, NK_CallNode, &n);
-    for (int i = 0; !hit && i < n; i++) {
-      const char *m = nt_str(nt, v[i], "name");
-      int a = nt_ref(nt, v[i], "arguments"), an = 0;
-      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-      if (m && is_send_family(m)) m = an > 0 ? vis_arg_name(nt, av[0]) : NULL;
-      hit = !m || is_const_set_name(m) || is_autoload_name(m) || (is_code_eval_name(m) && an > 0);
-    }
-    v = nt_nodes_of_kind(nt, NK_DefNode, &n);
-    for (int i = 0; !hit && i < n; i++) hit = is_const_missing_name(nt_str(nt, v[i], "name"));
-    r->consts = hit ? 2 : 1;
-  }
+  if (!r->consts) r->consts = elab_runs_unseen(c) || nt->has_cext_decls || elab_consts_by_value(c, 1) ? 2 : 1;
   if (r->consts == 2) return 0;
   for (int i = 0; i < r->nsrcw; i++) {
     const char *now = sp_streq(r->srcw[i].name, name) ? lr_const_written(nt, r->srcw[i].node) : name;

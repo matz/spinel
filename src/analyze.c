@@ -45077,10 +45077,12 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
     arysub_set_call(c, n, self, mn, args, blk);
     nt_node_set_int((NodeTable *)c->nt, n, "builtin_only", 1);
   }
-  else if (an == 0 && blk < 0) arysub_set_call(c, n, self, "clear", -1, -1);
+  else if (an == 0 && blk < 0 && !sp_streq(bn, "Time")) arysub_set_call(c, n, self, "clear", -1, -1);
   else {
     int an_call = arysub_builtin_call(c, at, bn, "new", an ? args : -1, blk);
-    if (an_call >= 0) arysub_set_call(c, n, self, "replace", arysub_args(c, at, &an_call, 1), -1);
+    /* (a Time has no replace: its subclass's construction sets the Time it embeds) */
+    const char *put = sp_streq(bn, "Time") ? "__sp_time_set" : "replace";
+    if (an_call >= 0) arysub_set_call(c, n, self, put, arysub_args(c, at, &an_call, 1), -1);
     if (an_call >= 0 && init == 2) nt_node_set_int((NodeTable *)c->nt, n, "builtin_only", 1);
   }
   nt_set_ignore_visibility((NodeTable *)c->nt, n, 1);
@@ -45303,7 +45305,13 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
-  if (!nm || (!sp_streq(nm, "new") && !sp_streq(nm, "[]"))) return;
+  if (!nm) return;
+  /* Time's makers on a Time subclass make an instance of it: `X.at(s)` is
+     `X.allocate.replace(Time.at(s))`, as `X.new` is when no initialize of
+     the program runs */
+  int time_maker = sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
+                   sp_streq(nm, "local") || sp_streq(nm, "mktime");
+  if (!sp_streq(nm, "new") && !sp_streq(nm, "[]") && !time_maker) return;
   int k = -1;
   if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
     k = const_node_class_index(c, recv);
@@ -45315,13 +45323,17 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   int brackets = sp_streq(nm, "[]");
   /* String has no `[]` of its own class: X[...] is a NoMethodError */
   if (brackets && comp_ary_is_str(c, k)) return;
-  if (!brackets && comp_method_in_chain(c, k, "initialize", NULL) >= 0) return;
+  int tim = comp_ary_is_time(c, k);
+  if ((brackets || time_maker) && tim != time_maker) return;
+  if (tim && brackets) return;
+  if (!brackets && !time_maker && comp_method_in_chain(c, k, "initialize", NULL) >= 0) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   int an = 0;
   if (args >= 0) nt_arr(nt, args, "arguments", &an);
   if (recv < 0) recv = arysub_node(c, "SelfNode", id);
   if (recv < 0) return;
-  if (!brackets && an == 0 && blk < 0) { arysub_set_call(c, id, recv, "allocate", -1, -1); return; }
+  /* (a Time made with no arguments is Time.new's: now, not the epoch) */
+  if (!brackets && !tim && an == 0 && blk < 0) { arysub_set_call(c, id, recv, "allocate", -1, -1); return; }
   int alloc = arysub_new_call(c, id, recv, "allocate", -1, -1);
   int src = -1;
   int hash = comp_ary_is_hash(c, k);
@@ -45345,9 +45357,9 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
     src = arysub_node(c, "ArrayNode", id);
     if (src >= 0) nt_node_set_arr((NodeTable *)nt, src, "elements", av, an);
   }
-  else src = arysub_builtin_call(c, id, core_class_name(comp_arysub_builtin(c, k)), "new", args, blk);
+  else src = arysub_builtin_call(c, id, core_class_name(comp_arysub_builtin(c, k)), tim ? nm : "new", args, blk);
   if (alloc < 0 || src < 0) return;
-  arysub_set_call(c, id, alloc, "replace", arysub_args(c, id, &src, 1), -1);
+  arysub_set_call(c, id, alloc, tim ? "__sp_time_set" : "replace", arysub_args(c, id, &src, 1), -1);
   /* Array's and Hash's own construction: a `replace` of the class's own is
      never called */
   nt_node_set_int((NodeTable *)nt, id, "builtin_only", 1);

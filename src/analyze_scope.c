@@ -6665,14 +6665,14 @@ static void mark_array_subclasses(Compiler *c) {
   /* the program's reopens of Array and Hash, which a subclass's chain
      reaches above its root */
   int aro = comp_core_class(c, CORE_ARRAY), hro = comp_core_class(c, CORE_HASH);
-  int sro = comp_core_class(c, CORE_STRING);
+  int sro = comp_core_class(c, CORE_STRING), tro = comp_core_class(c, CORE_TIME);
   for (int i = 0; i < c->nclasses; i++) {
     int r = i;
     for (int g = 0; c->classes[r].parent >= 0 && c->classes[r].parent != r &&
                     c->classes[r].parent != hro && c->classes[r].parent != aro &&
-                    c->classes[r].parent != sro && g < 256; g++)
+                    c->classes[r].parent != sro && c->classes[r].parent != tro && g < 256; g++)
       r = c->classes[r].parent;
-    if (r == hro || r == aro || r == sro) continue;
+    if (r == hro || r == aro || r == sro || r == tro) continue;
     if (!class_def_is_class(c->nt, c->classes[r].def_node)) continue;
     const char *par = builtin_value_superclass(c, class_def_super(c->nt, c->classes[r].def_node));
     if (is_embedding_builtin(par)) {
@@ -6680,6 +6680,8 @@ static void mark_array_subclasses(Compiler *c) {
       c->classes[i].ary_hash = sp_streq(par, "Hash");
       c->classes[i].ary_str = sp_streq(par, "String");
       if (c->classes[i].ary_str) { c->classes[r].ary_kind = TY_STRBUF; comp_touch_class(c->classes[r].idx); }
+      c->classes[i].ary_time = sp_streq(par, "Time");
+      if (c->classes[i].ary_time) { c->classes[r].ary_kind = TY_TIME; comp_touch_class(c->classes[r].idx); }
       c->has_arysub = 1;
     }
   }

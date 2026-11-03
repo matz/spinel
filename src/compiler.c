@@ -1881,6 +1881,9 @@ int comp_ary_is_hash(Compiler *c, int cid) {
 int comp_ary_is_str(Compiler *c, int cid) {
   return comp_ary_root(c, cid) >= 0 && c->classes[cid].ary_str;
 }
+int comp_ary_is_time(Compiler *c, int cid) {
+  return comp_ary_root(c, cid) >= 0 && c->classes[cid].ary_time;
+}
 /* The builtin cid's chain embeds as the flag the comp_arysub_answer family
    takes: 0 Array, 1 Hash, 2 String */
 int an_str_mutator_name(const char *nm);
@@ -1891,11 +1894,11 @@ int comp_arysub_str_boxed(const char *n) {
          sp_streq(n, "force_encoding") || sp_streq(n, "frozen?");
 }
 int comp_arysub_emb(Compiler *c, int cid) {
-  return comp_ary_is_str(c, cid) ? 2 : comp_ary_is_hash(c, cid) ? 1 : 0;
+  return comp_ary_is_time(c, cid) ? 3 : comp_ary_is_str(c, cid) ? 2 : comp_ary_is_hash(c, cid) ? 1 : 0;
 }
 /* The core id cid's chain embeds: CORE_ARRAY, CORE_HASH or CORE_STRING. */
 int comp_arysub_builtin(Compiler *c, int cid) {
-  return comp_ary_is_str(c, cid) ? CORE_STRING : comp_ary_is_hash(c, cid) ? CORE_HASH : CORE_ARRAY;
+  return comp_ary_is_time(c, cid) ? CORE_TIME : comp_ary_is_str(c, cid) ? CORE_STRING : comp_ary_is_hash(c, cid) ? CORE_HASH : CORE_ARRAY;
 }
 /* The scope of the #to_ary an implicit Array conversion of a class cid
    instance calls, or -1. An Array subclass instance is an Array already:
@@ -1934,6 +1937,12 @@ int comp_arysub_builtin_name(Compiler *c, int cid, const char *n) {
   if (comp_ary_is_str(c, cid)) {
     if (comp_builtin_kind_reopen_mi(c, TY_STRING, n) >= 0) return 1;
     return builtin_instance_method_known("String", n) || is_arysub_kernel_name(n);
+  }
+  /* a Time subclass's construction writes its Time through __sp_time_set
+     (rewrite_array_subclass_new) */
+  if (comp_ary_is_time(c, cid)) {
+    if (comp_builtin_kind_reopen_mi(c, TY_TIME, n) >= 0) return 1;
+    return builtin_instance_method_known("Time", n) || sp_streq(n, "__sp_time_set") || is_arysub_kernel_name(n);
   }
   if (comp_builtin_kind_reopen_mi(c, hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY, n) >= 0) return 1;
   if (!hash) return comp_array_method_name(n);
@@ -2006,14 +2015,14 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
    argument as an Array (bop_args_as_builtin). Every Array kind reads the
    same family rows. */
 static int arysub_call_flags(Compiler *c, int id, int hash, int args_builtin) {
-  /* hash: 0 an Array, 1 a Hash, 2 a String (comp_arysub_emb) */
+  /* hash: 0 an Array, 1 a Hash, 2 a String, 3 a Time (comp_arysub_emb) */
   const char *n = nt_str(c->nt, id, "name");
   int args = nt_ref(c->nt, id, "arguments"), argc = 0;
   if (!n) return 0;
   if (args >= 0) nt_arr(c->nt, args, "arguments", &argc);
   int blk = nt_ref(c->nt, id, "block") >= 0;
   /* and every Hash kind the Hash family's */
-  TyKind fam = hash == 2 ? TY_STRING : hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY;
+  TyKind fam = hash == 3 ? TY_TIME : hash == 2 ? TY_STRING : hash ? TY_POLY_POLY_HASH : TY_POLY_ARRAY;
   return args_builtin ? bop_args_as_builtin(fam, n, argc, blk)
                       : bop_answers_self(fam, n, argc, blk);
 }
@@ -2021,8 +2030,27 @@ int comp_arysub_answer(Compiler *c, int id, int hash) { return arysub_call_flags
 /* Array's answer to call `id` is its receiver -- always (BOPF_SELF) or when
    it changed it (BOPF_SELF_OR_NIL) -- so on an Array subclass instance it
    is the instance (#7449). */
+/* Whether the program's reopen of Time defines `n` (its own method answers it) */
+static int comp_time_reopen_defines(Compiler *c, const char *n) {
+  int ro = comp_core_class(c, CORE_TIME);
+  return ro >= 0 && n && comp_method_in_class(c, ro, n) >= 0;
+}
 int comp_arysub_self_result(Compiler *c, int id, int hash) {
+  /* Time's conversions in place answer the Time they changed: the instance */
+  if (hash == 3) {
+    const char *n = nt_str(c->nt, id, "name");
+    /* (not a name the program's reopen of Time defines: its own method answers) */
+    return n && (sp_streq(n, "utc") || sp_streq(n, "gmtime") || sp_streq(n, "localtime") || sp_streq(n, "__sp_time_set")) &&
+           (sp_streq(n, "__sp_time_set") || !comp_time_reopen_defines(c, n));
+  }
   return (comp_arysub_answer(c, id, hash) & (BOPF_SELF | BOPF_SELF_OR_NIL)) != 0;
+}
+/* Time's copies of a Time subclass instance answer an instance of its class
+   (getutc, getlocal, as dup does): CRuby makes them with the receiver's
+   class. Its arithmetic and rounding answer a plain Time. */
+int comp_timesub_copy_name(Compiler *c, const char *n) {
+  return n && (sp_streq(n, "getutc") || sp_streq(n, "getgm") || sp_streq(n, "getlocal")) &&
+         !comp_time_reopen_defines(c, n);
 }
 
 /* Whether the arguments of call `id`, on a receiver of type rt (-1: none),

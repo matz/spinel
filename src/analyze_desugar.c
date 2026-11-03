@@ -289,7 +289,7 @@ int desugar_bare_class_self_calls(Compiler *c) {
    bar` there. A private one, or one of a module Enumerable includes, is not
    reached through self on these receivers yet, so it keeps the bare call. */
 static int ie_enum_reopen_answers(Compiler *c, int cls, const char *nm) {
-  if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls)) return 0;
+  if (comp_ary_root(c, cls) < 0 || comp_ary_is_str(c, cls) || comp_ary_is_time(c, cls)) return 0;
   int en = comp_core_class(c, CORE_ENUMERABLE);
   int mi = en >= 0 ? comp_method_in_chain(c, en, nm, NULL) : -1;
   if (mi < 0) return 0;
@@ -15022,8 +15022,12 @@ int desugar_builtin_splat_forward(Compiler *c) {
       } else own = spl_has_yield(nt, blk);
     }
     TyKind rt = infer_type(c, recv);
+    /* (a Time subclass instance's builtin call, its `super` into Time
+       included, is Time's) */
     const char *cls = ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
-                    : rt == TY_STRING ? "String" : NULL;
+                    : rt == TY_STRING ? "String" : rt == TY_TIME ? "Time"
+                    : ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt)) &&
+                      nt_int(nt, id, "builtin_only", 0) ? "Time" : NULL;
     if (!cls) continue;
     /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself) */
     int lo = 0, hi = 0; const char *lo_exp = NULL, *hi_exp = NULL;

@@ -11406,6 +11406,8 @@ void arysub_box_id(Compiler *c, TyKind t, Buf *b) {
   if (c->classes[oc].ary_root <= 0) { buf_printf(b, "%d", oc); return; }
   /* a String subclass instance is boxed as its String handle */
   if (comp_ary_is_str(c, oc)) { buf_puts(b, "SP_BUILTIN_STRBUF"); return; }
+  /* a Time subclass instance is boxed as its Time, which it starts with */
+  if (comp_ary_is_time(c, oc)) { buf_puts(b, "SP_BUILTIN_TIME"); return; }
   /* a Hash subclass instance is boxed as its Hash */
   if (comp_ary_is_hash(c, oc)) { buf_puts(b, hash_box_cls(comp_ary_kind(c, oc))); return; }
   switch (comp_ary_kind(c, oc)) {
@@ -11432,6 +11434,10 @@ static int program_has_hashsub(Compiler *c) {
 }
 int program_has_strsub(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) if (c->classes[k].ary_root > 0 && c->classes[k].ary_str) return 1;
+  return 0;
+}
+int program_has_timesub(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) if (c->classes[k].ary_root > 0 && c->classes[k].ary_time) return 1;
   return 0;
 }
 
@@ -11494,6 +11500,7 @@ void emit_arysub_machinery(Compiler *c, Buf *b) {
   buf_puts(b, "  if(v.tag!=SP_TAG_OBJ||!v.v.p||!(sp_poly_is_array_kind(v.cls_id)");
   if (program_has_hashsub(c)) buf_puts(b, "||sp_poly_is_hash_kind(v.cls_id)");
   if (program_has_strsub(c)) buf_puts(b, "||v.cls_id==SP_BUILTIN_STRBUF");
+  if (program_has_timesub(c)) buf_puts(b, "||v.cls_id==SP_BUILTIN_TIME");
   buf_puts(b, "))return -1;\n");
   buf_puts(b, "  void(*s)(void*)=((sp_gc_hdr*)((char*)v.v.p-sizeof(sp_gc_hdr)))->scan;\n");
   for (int k = 0; k < c->nclasses; k++)
@@ -11506,12 +11513,26 @@ void emit_arysub_machinery(Compiler *c, Buf *b) {
               "  if(k>=0&&sp_class_le((sp_Class){k},(sp_Class){cls}))return v.v.p;\n"
               "  sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %s (expected %s)\", sp_poly_class_name(v), want));\n"
               "  return NULL;\n}\n");
+  /* a fresh instance of Time subclass k holding Time t, with no ivars of the
+     receiver's: Time's copies (getutc, getlocal) are made with the
+     receiver's class, as CRuby's are; a plain Time for any other k */
+  if (program_has_timesub(c)) buf_puts(b, "SP_UNUSED static sp_Time *sp_timesub_copy(int k, sp_Time *t);\n");
+}
+/* ...its body, once the subclasses' allocators are written */
+void emit_timesub_copy(Compiler *c, Buf *b) {
+  if (!program_has_timesub(c)) return;
+  buf_puts(b, "SP_UNUSED static sp_Time *sp_timesub_copy(int k, sp_Time *t){\n  sp_Time *d = NULL;\n  switch(k){\n");
+  for (int k = 0; k < c->nclasses; k++)
+    if (c->classes[k].ary_root > 0 && c->classes[k].ary_time)
+      buf_printf(b, "    case %d: d = (sp_Time *)sp_%s__alloc(); break;\n", k, c->classes[k].c_name);
+  buf_puts(b, "    default: return t;\n  }\n  *d = *t;\n  return d;\n}\n");
 }
 
 /* The C struct of the Array an Array subclass instance embeds (#7449), or
    of the Hash a Hash subclass instance embeds. */
 const char *arysub_array_ctype(Compiler *c, int cid) {
   if (comp_ary_is_str(c, cid)) return "sp_String";
+  if (comp_ary_is_time(c, cid)) return "sp_Time";
   if (comp_ary_is_hash(c, cid)) {
     static char hb[32];
     snprintf(hb, sizeof hb, "sp_%sHash", ty_hash_cname(comp_ary_kind(c, cid)));
@@ -11539,7 +11560,8 @@ void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_printf(b, "SP_UNUSED static sp_%s *sp_%s__alloc(void) {\n", cn, cn);
   int hash = comp_ary_is_hash(c, cid);
   buf_printf(b, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), ", cn, cn, cn);
-  if (sp_streq(at, "sp_PolyArray")) buf_puts(b, "NULL");
+  /* a Time is a value: nothing to free */
+  if (sp_streq(at, "sp_PolyArray") || sp_streq(at, "sp_Time")) buf_puts(b, "NULL");
   else buf_printf(b, "%s_fin", at);
   /* a String subclass's handle frees its payload as a String does */
   buf_printf(b, ", sp_%s__gc_scan);\n", cn);
@@ -11559,6 +11581,13 @@ void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b) {
     /* the bytes and the encoding tag; frozen is the header bit */
     buf_puts(b, "  d->ary.len = 0; sp_fd_append_len(&d->ary, o->ary.data, o->ary.len);\n"
                 "  if (o->ary.binary) { d->ary.binary = 1; sp_fd_publish(&d->ary); }\n");
+    buf_puts(b, "  if (mode == 1 ? sp_gc_is_frozen(o) : mode == 3) sp_gc_freeze(d);\n");
+    buf_puts(b, "  return d;\n}\n");
+    return;
+  }
+  if (comp_ary_is_time(c, cid)) {
+    /* the Time value itself; frozen is the header bit */
+    buf_puts(b, "  d->ary = o->ary;\n");
     buf_puts(b, "  if (mode == 1 ? sp_gc_is_frozen(o) : mode == 3) sp_gc_freeze(d);\n");
     buf_puts(b, "  return d;\n}\n");
     return;
@@ -13860,6 +13889,11 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     /* an Array subclass instance's #to_s is its Array's (#7449) */
     if (tci->ary_root > 0 && comp_ary_is_str(c, i)) {
       buf_printf(b, "    case %d: return sp_strbuf_read((sp_String *)p);\n", i);
+      continue;
+    }
+    /* a Time subclass instance's #to_s is its Time's */
+    if (tci->ary_root > 0 && comp_ary_is_time(c, i)) {
+      buf_printf(b, "    case %d: return sp_Time_to_s((sp_Time *)p);\n", i);
       continue;
     }
     if (tci->ary_root > 0) {
@@ -18641,7 +18675,7 @@ static void scan_prologue_features(Compiler *c) {
        (`class A < Array; end; p A.new([1])`), though its slots are typed as
        the class */
     for (int k = 0; k < c->nclasses && !polyish; k++)
-      if (comp_ary_root(c, k) >= 0 && !comp_ary_is_str(c, k)) polyish = 1;
+      if (comp_ary_root(c, k) >= 0 && !comp_ary_is_str(c, k) && !comp_ary_is_time(c, k)) polyish = 1;
 #undef SP_TT
     g_tu_poly_values = polyish;
     if (polyish) { g_emit_sym_rt = 1; g_emit_class_names = 1; }
@@ -21959,6 +21993,7 @@ char *codegen_program(const NodeTable *nt) {
       emit_class_scan(c, &c->classes[i], &b);
       emit_arysub_alloc(c, &c->classes[i], &b);
     }
+  emit_timesub_copy(c, &b);
   emit_cext_runtime(c, &b);
   if (c->nclasses > 0) buf_puts(&b, "\n");
 

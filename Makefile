@@ -2027,7 +2027,21 @@ link-names-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB)
 	rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "link-names-test: pass" || exit 1
 
-reject-test: $(SPINEL)
+.PHONY: string-minus-reject-test
+string-minus-reject-test: $(SPINEL)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-string-minus.XXXXXX); \
+	for t in $(shell grep -l '^\# spinel: reject-string-minus$$' test/reject/*.rb); do \
+	  rm -f "$$tmp/out.c"; \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/out.c" >"$$tmp/out.log" 2>&1; then \
+	    echo "string-minus-reject-test: FAIL ($$t compiled)"; ok=0; \
+	  elif ! grep -qF "undefined method '-' for an instance of String (NoMethodError)" "$$tmp/out.log" || \
+	       [ -e "$$tmp/out.c" ]; then \
+	    echo "string-minus-reject-test: FAIL ($$t refusal diagnostic/output)"; ok=0; \
+	  fi; \
+	done; rm -rf "$$tmp"; \
+	[ $$ok = 1 ] && echo "string-minus-reject-test: pass" || exit 1
+
+reject-test: string-minus-reject-test $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
 	for model in inline graph; do for overflow in plain promote; do \
 	  fl=; [ "$$overflow" = promote ] && fl=--int-overflow=promote; \

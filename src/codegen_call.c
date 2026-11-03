@@ -17899,6 +17899,13 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
     }
+    /* The byte-count shape needs no effectful receiver/argument staging.
+       Other String `-` forms keep their arithmetic refusal: the general
+       missing-method gate cannot yet preserve all their call semantics. */
+    if (rt == TY_STRING && sp_streq(name, "-") && a0 == TY_INT && argc == 1 &&
+        nt_kind(nt, recv) == NK_LocalVariableReadNode &&
+        nt_kind(nt, argv[0]) == NK_LocalVariableReadNode &&
+        nt_ref(nt, id, "block") < 0 && !nt_safe_nav(nt, id)) return 0;
     unsupported(c, id, "arithmetic");
   }
   return 0;

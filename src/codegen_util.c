@@ -5304,7 +5304,7 @@ void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, 
   if (oint_kind(slot) && node_may_be_nil(c, node)) refuse_nil_store(c, node, slot, what);
   int plan = repr_coerce_plan(c, node, slot, how, &from);
   switch (plan) {
-  case CF_FIT:
+  case CF_FIT: ;   /* (a declaration follows: C99 takes one after a statement, not after a label) */
     /* a constant defined nowhere is untyped, so it fits any slot, and lowers
        to its NameError raise with a Class value behind it: into a slot of
        another kind (`Version = Version_C` beside `Version = "1.0"`) it

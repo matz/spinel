@@ -2091,7 +2091,14 @@ void emit_str_expr_sep(Compiler *c, int node, Buf *b) {
 int call_answers_no_value(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   node = nt_paren_single(c->nt, node);
-  if (node < 0 || nt_kind(nt, node) != NK_CallNode) return 0;
+  if (node < 0) return 0;
+  /* a super whose plan reaches such a method (one that only supers on into
+     nothing) */
+  if (nt_kind(nt, node) == NK_SuperNode || nt_kind(nt, node) == NK_ForwardingSuperNode) {
+    const CallPlan *spl = cplan_user(c, node);
+    return spl->via == UC_SUPER && spl->mi >= 0 && !c->scopes[spl->mi].yields && method_is_void(&c->scopes[spl->mi]);
+  }
+  if (nt_kind(nt, node) != NK_CallNode) return 0;
   const char *nm = nt_str(nt, node, "name");
   if (!nm) return 0;
   /* (a setter's call answers the value it was given, whatever the method
@@ -2138,6 +2145,49 @@ int call_answers_no_value(Compiler *c, int node) {
 const char *token_unbox_fmt(TyKind target) {
   const TyTraits *tr = ty_traits_of(target);   /* the unbox_token column (types.c) */
   return tr ? tr->unbox_token : NULL;
+}
+
+/* Is node `id`'s value thrown away where it is emitted: it is emitted for
+   its effect (Repr.discarded, emit_expr_for_effect), or so is the node its
+   value is the value of, an arm of a conditional or the right of `&&` or
+   `||` (an_value_top; the tested left of `||` is read)? */
+static int value_thrown_away(Compiler *c, int id) {
+  int top = an_value_top(c, id);
+  return repr_of(c, id).discarded || (top >= 0 && repr_of(c, nt_paren_single(c->nt, top)).discarded);
+}
+/* Node `node` emitted as the value of node `owner`, a call that answers it
+   (`x.itself`, `x.freeze`, an identity `dup`): for its effect where owner's
+   value is thrown away (value_thrown_away), read otherwise. */
+void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b) {
+  if (value_thrown_away(c, owner)) emit_expr_for_effect(c, node, b);
+  else emit_expr(c, node, b);
+}
+
+/* Call or super `id` as `emit` renders it. One-String mode: a call to a
+   method that answers no value is a `void` C call, which the String faces
+   (SP_STR_B, SP_STR_HDL) cannot take; it raises before anything reads it,
+   so it reads as nil's String. (A call typed some other kind -- an
+   Integer's oint, a box, an Array -- answers its own nil of that kind
+   already.) */
+void emit_reading_no_value(Compiler *c, int id, void (*emit)(Compiler *, int, Buf *), Buf *b) {
+  TyKind nvt = repr_of(c, id).as_ty;
+  int no_value = call_answers_no_value(c, id) &&
+                 (nvt == TY_STRING || nvt == TY_STRBUF || nvt == TY_NIL || nvt == TY_VOID || nvt == TY_UNKNOWN);
+  int super = nt_kind(c->nt, id) != NK_CallNode;
+  /* (a super whose value is thrown away (value_thrown_away) is its bare
+     call: nothing reads the void there, so it takes no nil and no refusal.
+     A call keeps its nil there, as it always has: the nil is thrown away
+     with the value.) */
+  if (super && no_value && value_thrown_away(c, id)) no_value = 0;
+  /* (a super read there whose target's own super would call a
+     method_missing, which Spinel does not dispatch: refused, as reading nil
+     after its NoMethodError would answer wrong) */
+  if (no_value && super && cplan_super_needs_method_missing(c, id))
+    unsupported_feature(c, id, "a super into a method whose own super reaches method_missing is not supported "
+                               "(method_missing is not dispatched); see docs/limitations.md");
+  if (no_value) buf_puts(b, "((void)(");
+  emit(c, id, b);
+  if (no_value) buf_puts(b, "), (const char *)0)");
 }
 
 int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
@@ -15414,11 +15464,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* A replaced shadow has its own versioned C name, as the entry's arms do. */
     if (smi >= 0) buf_puts(b, mc_method(c, &c->scopes[smi]));
     else buf_printf(b, "sp_%s_%s", c->classes[s->class_id].c_name, mc(shadow));
+    /* the shadow is a method of this same class, so it takes self as this
+       method holds it: a program class's struct pointer, a reopened
+       builtin's own value (an Integer, an Object's boxed value), or the
+       String handle where either side holds one */
     buf_puts(b, "(");
-    if (repr_self_handle(c, smi) || repr_self_handle(c, (int)(s - c->scopes))) {
-      emit_reopen_self_arg(c, id, smi, b);
-    }
-    else buf_printf(b, "(sp_%s *)%s", c->classes[s->class_id].c_name, g_self);
+    emit_reopen_self_arg(c, id, smi, b);
     if (ty_k == NK_ForwardingSuperNode && smi >= 0) {
       /* laid out over the shadow's parameters as any bare super is: passed
          slot by slot, a `**` went into the shadow's first keyword */

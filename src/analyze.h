@@ -724,6 +724,10 @@ int fresh_array_builtin_name(const char *nm);
 /* the value of node n is dropped where it is: a statement's, a loop
    body's, an ensure clause's (an_value_dropped, analyze_infer.c) */
 int an_node_dropped(Compiler *c, int n);
+/* the outermost node whose value node n's value is, through conditionals'
+   arms and the right of `&&` or `||`; -1 past the tested left of `||`
+   (an_value_top, analyze_infer.c) */
+int an_value_top(Compiler *c, int n);
 /* True if a regex source contains a capturing group: an unescaped '(' that
    isn't the start of a non-capturing/extension group '(?...'. scan returns
    nested arrays for capturing patterns, which the str_array path can't model. */

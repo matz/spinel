@@ -6616,7 +6616,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
   if (emit_if_expr(c, id, b, nt, ty)) return;
   if (ty_k == NK_CallNode) { emit_call(c, id, b); return; }
   if (ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) {
-    if (!emit_super_inline(c, id, b, 0, 1)) emit_super(c, id, b);
+    if (!emit_super_inline(c, id, b, 0, 1)) emit_reading_no_value(c, id, emit_super, b);
     return;
   }
   if (emit_and_or_begin_expr(c, id, b, nt, ty)) return;

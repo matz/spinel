@@ -1653,7 +1653,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* itself is pure identity for every receiver, hashes included; the
        hash exclusion below is for freeze/dup/clone, which need real
        handling on the reference types */
-    if (argc0 == 0 && sp_streq(name, "itself")) { emit_expr(c, recv, b); return 1; }
+    if (argc0 == 0 && is_itself_name(name)) { emit_expr_as_value_of(c, recv, id, b); return 1; }
     /* a Time is a reference: dup and clone answer a new Time, which a later
        localtime / utc changes apart from the receiver */
     if (is_dup_clone && recv_t == TY_TIME && recv_tr.kind != RK_BOXED) {
@@ -1683,7 +1683,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                      icn, default_value_from_compiler(c, recv_t));
           return 1;
         }
-        emit_expr(c, recv, b); return 1;
+        emit_expr_as_value_of(c, recv, id, b); return 1;
       }
     }
     /* dup/clone of a boxed plain object copies (Object.new included); the
@@ -1739,7 +1739,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     if (argc0 == 0 && !freeze_stateful && !ty_is_hash(recv_t) &&
         !(is_dup_clone && (recv_t == TY_STRING || ty_is_array(recv_t) || recv_native))) {
-      emit_expr(c, recv, b); return 1;
+      emit_expr_as_value_of(c, recv, id, b); return 1;
     }
     if (argc0 == 0 && recv_t == TY_STRING && is_dup_clone) {
       /* clone preserves the frozen state; dup always returns an unfrozen copy. */
@@ -2881,7 +2881,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
           /* a generated READER of the name owns it, as in CRuby (#4190) */
           !(ty_is_object(irt0) &&
             comp_resolve_member(c, ty_object_class(irt0), "itself", 0, NULL, NULL) == SP_MEMBER_ATTR)) {
-        emit_expr(c, nt_ref(nt, id, "receiver"), b);
+        emit_expr_as_value_of(c, nt_ref(nt, id, "receiver"), id, b);
         return 1;
       }
     }

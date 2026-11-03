@@ -1404,6 +1404,16 @@ int an_value_dropped(const NodeTable *nt, const int *parent, int node) {
 int an_node_dropped(Compiler *c, int n) {
   return n >= 0 && n < c->nt->count && an_value_dropped(c->nt, comp_parent_map(c), n);
 }
+/* The outermost node whose value node n's value is, climbing through the
+   arms of conditionals and the right of `&&` or `||` (vp_climb over
+   VPS_ALL): n itself when nothing takes it as its own value; -1 when the
+   climb crosses the tested left of `||` or gives up. */
+int an_value_top(Compiler *c, int n) {
+  VpUp up;
+  if (n < 0 || n >= c->nt->count) return -1;
+  if (vp_climb(c->nt, comp_parent_map(c), n, VPS_ALL, &up) == VPU_GAVE_UP || up.reach) return -1;
+  return up.node;
+}
 
 /* A row that is an empty container with no kind of its own: `[]`, `{}`, a
    bare `Array.new` or `Hash.new`. It is built boxed, as a poly array or a

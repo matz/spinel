@@ -1208,6 +1208,7 @@ const char *rename_local(const char *nm);
 void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_for_effect(Compiler *c, int node, Buf *b);
 int effect_view_open(Compiler *c, int node);
+void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);
 void effect_view_close(Compiler *c, int v);
 /* Does a read of constant (path) node id raise NameError, the constant
    being defined nowhere the program or the runtime can see? A rescue
@@ -3012,6 +3013,7 @@ void emit_sock_family_arg(Compiler *c, int arg, int is_family, Buf *b);
 int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b);
 int emit_unresolved_coerced_text(Compiler *c, int node, TyKind target, const char *txt, Buf *b);
 int call_answers_no_value(Compiler *c, int node);
+void emit_reading_no_value(Compiler *c, int id, void (*emit)(Compiler *, int, Buf *), Buf *b);
 void emit_int_divisor(Compiler *c, int node, Buf *b);
 void emit_float_expr(Compiler *c, int node, Buf *b);
 void emit_float_coerce_expr(Compiler *c, int node, Buf *b);

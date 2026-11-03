@@ -1755,6 +1755,11 @@ typedef struct {
   int nver_defer;
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
+  /* per method scope, made once (call_plan.c, cplan_scope_facts): whether
+     it holds a super that reaches no method, and whether a method_missing
+     answers for self or hands the name on */
+  unsigned char *scope_super_facts;
+  int nscope_super_facts;
   /* ...by name: ver_ix chains the entries of one (class, side, name, parameter
      count) and ver_names one scope-holding entry of each name (ver_entries_index) */
   int *ver_ix, *ver_ix_next, *ver_names, *ver_names_next;

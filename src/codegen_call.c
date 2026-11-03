@@ -28696,17 +28696,7 @@ static void emit_call_lifted(Compiler *c, int id, Buf *b) {
      across the block (g_one_held) */
   int held = g_one_held;
   if (nt_ref(c->nt, id, "block") >= 0) g_one_held = 1;
-  /* (one-String mode: a call to a method that answers no value is a `void`
-     C call, which the String faces (SP_STR_B, SP_STR_HDL) cannot take; it
-     raises before anything reads it, so it reads as nil's String) */
-  /* (a call typed some other kind -- an Integer's oint, a box, an Array --
-     answers its own nil of that kind already) */
-  TyKind nvt = repr_of(c, id).as_ty;
-  int no_value = call_answers_no_value(c, id) &&
-                 (nvt == TY_STRING || nvt == TY_STRBUF || nvt == TY_NIL || nvt == TY_VOID || nvt == TY_UNKNOWN);
-  if (no_value) buf_puts(b, "((void)(");
-  emit_call_inner(c, id, b);
-  if (no_value) buf_puts(b, "), (const char *)0)");
+  emit_reading_no_value(c, id, emit_call_inner, b);
   g_one_held = held;
 }
 /* One-String mode: a builtin String method's argument that can change a

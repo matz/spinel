@@ -89,8 +89,10 @@ size_t sp_fiber_guard(void) {
 #endif
 #if defined(__APPLE__)
   #define SP_CTX_SYM "_" SP_CTX_NAME
+  #define SP_CTX_START_SYM "_sp_ctx_start"
 #else
   #define SP_CTX_SYM SP_CTX_NAME
+  #define SP_CTX_START_SYM "sp_ctx_start"
 #endif
 #if defined(__x86_64__)
 __asm__(
@@ -134,6 +136,18 @@ __asm__(
   "  ldp x21, x22, [sp, #16]\n"
   "  ldp x19, x20, [sp], #160\n"
   "  ret\n"
+  /* A fresh context's first swap returns here (sp_ctx_make): the entry is in
+     x19, and it is branched to with lr and fp zero, so its frame records a
+     return address of 0 and an unwinder (backtrace() under --debug) stops
+     at it. Returning into the entry with lr holding the entry itself made
+     the frame's caller the entry's address less one, the function before
+     it, whose unwind rules walked off the stack (#10839). */
+  ".p2align 2\n"
+  ".globl " SP_CTX_START_SYM "\n"
+  SP_CTX_START_SYM ":\n"
+  "  mov x29, xzr\n"
+  "  mov x30, xzr\n"
+  "  br x19\n"
 );
 #endif
 #ifdef SP_ASAN

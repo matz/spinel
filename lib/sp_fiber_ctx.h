@@ -58,6 +58,11 @@ typedef struct sp_fiber_ctx { void *sp; const void *asan_lo; size_t asan_size; }
 typedef struct sp_fiber_ctx { void *sp; } sp_fiber_ctx;
 #endif
 
+#if defined(__aarch64__)
+/* The first code a fresh context runs (sp_fiber.c's asm): branches to the
+   entry in x19 with lr and fp zero */
+void sp_ctx_start(void);
+#endif
 static inline void sp_ctx_make(sp_fiber_ctx *ctx, void *base, size_t size,
                                void (*entry)(void)) {
   uintptr_t top = ((uintptr_t)base + size) & ~(uintptr_t)15; /* 16B-align the top */
@@ -71,11 +76,14 @@ static inline void sp_ctx_make(sp_fiber_ctx *ctx, void *base, size_t size,
   ctx->sp = s;                           /* top-64 */
 #else /* __aarch64__ */
   /* Mirror the aarch64 sp_ctx_swap frame: 160 bytes holding x19..x30 (12) then
-     d8..d15 (8). x30 (lr = entry) sits at offset 88 (slot 11). On the first
-     swap the ldp's load zeros + entry into lr and `ret` (br x30) jumps to it. */
+     d8..d15 (8). On the first swap the ldp's load entry into x19 (slot 0) and
+     sp_ctx_start into lr (x30, slot 11), and `ret` goes to sp_ctx_start, which
+     enters entry with lr and fp zero: entry's frame then ends the stack for an
+     unwinder, as the zero above the entry's slot does on x86_64. */
   void **s = (void **)(top - 160);
   for (int i = 0; i < 20; i++) s[i] = 0;
-  s[11] = (void *)entry;                 /* x30 (lr) */
+  s[0] = (void *)entry;                  /* x19 */
+  s[11] = (void *)sp_ctx_start;          /* x30 (lr) */
   ctx->sp = s;
 #endif
 #ifdef SP_ASAN

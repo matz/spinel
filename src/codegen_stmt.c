@@ -10668,7 +10668,9 @@ static void emit_case_obj_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
    methods are emitted in the classes that include it, which have arms of
    their own) */
 static int when_boxed_arm_class(Compiler *c, int k) {
-  return !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) &&
+  /* a class with no instance never matches the arm's cls_id test (#10902) */
+  return c->classes[k].instantiated &&
+         !c->classes[k].is_native_class && !comp_class_is_module(c, &c->classes[k]) &&
          comp_method_in_chain(c, k, "===", NULL) >= 0;
 }
 static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, int tpw, Buf *b) {
@@ -20340,6 +20342,11 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
          unique user class defining OP and dispatch through .v.p cast. */
       int poly_defcls = -1, poly_mi = -1;
       for (int _ci = 0; _ci < c->nclasses; _ci++) {
+        /* a class with no instance never reaches the slot, and its operator's
+           body may never be emitted: the arm called a function the C never
+           defined (#10902). The other arm's sp_poly_add still reaches a
+           user operator through the binop hook. */
+        if (!c->classes[_ci].instantiated) continue;
         int _di = -1;
         int _mi2 = call_target(c, id, _ci, op, 0, &_di);
         if (_mi2 >= 0) { poly_mi = _mi2; poly_defcls = _di; break; }

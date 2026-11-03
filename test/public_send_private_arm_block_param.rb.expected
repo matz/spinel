@@ -1,0 +1,8 @@
+"html [1, 2]"
+"html [3] anon"
+"html []"
+"html [4] named"
+"private method 'secret' called for an instance of Collector"
+"private method 'secret' called for an instance of Collector"
+"private method 'secret' called for an instance of Collector"
+"private method 'secret' called for an instance of Collector"

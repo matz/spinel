@@ -626,7 +626,6 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             if (comp_is_undeffed_in_chain(c, k, qm)) continue;
             int nk = comp_native_binding_class(c, k, qm);
             int native = nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0;
-            int native_private = native && comp_method_vis_in_chain(c, k, qm) != SP_VIS_PUBLIC;
             int has = (comp_method_in_chain(c, k, qm, NULL) >= 0 &&
                        !method_hidden_from_reflection(c, k, qm)) ||
                       comp_reader_in_chain(c, k, qm, NULL) ||
@@ -635,6 +634,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                       /* the names the class carries without a method entry
                          answer as they do on the typed receiver */
                       class_implicit_responds(c, k, qm);
+            /* a private or protected method, the program's own as much as a
+               native one, answers only to a true include_all */
+            int nonpublic = has && comp_method_vis_in_chain(c, k, qm) != SP_VIS_PUBLIC;
             /* an exception class with no method of its own for the name
                answers through a builtin reopening its runtime class is under */
             int xr[8], xn = 0;
@@ -650,7 +652,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                            q ? " || " : "", tv, c->classes[xr[q]].name);
               buf_puts(b, "))");
             }
-            else if (native_private) {
+            else if (nonpublic) {
               buf_printf(b, "%s(_k%d == %d && (", first ? "" : " || ", tv, k);
               if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
               buf_puts(b, "))");

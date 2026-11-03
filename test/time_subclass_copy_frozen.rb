@@ -45,3 +45,14 @@ begin
 rescue FrozenError => e
   p e.class
 end
+zb = [Sub2.at(0), "x"]
+p zb[0].getlocal("+09:00").class, zb[0].getlocal("+09:00").hour
+z0 = zb[0]
+p z0.localtime("+02:00").equal?(z0), z0.localtime("+02:00").class, zb[0].hour
+zf = [Stamp.at(0), "x"]
+zf[0].freeze
+begin
+  zf[0].localtime("+03:00")
+rescue FrozenError => e
+  p e.class
+end

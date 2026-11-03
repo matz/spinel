@@ -9,3 +9,9 @@ FrozenError
 FrozenError
 true
 FrozenError
+Sub2
+9
+true
+Sub2
+2
+FrozenError

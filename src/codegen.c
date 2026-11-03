@@ -11521,7 +11521,7 @@ void emit_arysub_machinery(Compiler *c, Buf *b) {
 /* ...its body, once the subclasses' allocators are written */
 void emit_timesub_copy(Compiler *c, Buf *b) {
   if (!program_has_timesub(c)) return;
-  buf_puts(b, "SP_UNUSED static sp_Time *sp_timesub_copy(int k, sp_Time *t){\n  sp_Time *d = NULL;\n  switch(k){\n");
+  buf_puts(b, "SP_UNUSED static sp_Time *sp_timesub_copy(int k, sp_Time *t){\n  sp_Time *d = NULL;\n  SP_GC_ROOT(t);\n  switch(k){\n");
   for (int k = 0; k < c->nclasses; k++)
     if (c->classes[k].ary_root > 0 && c->classes[k].ary_time)
       buf_printf(b, "    case %d: d = (sp_Time *)sp_%s__alloc(); break;\n", k, c->classes[k].c_name);

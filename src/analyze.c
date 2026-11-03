@@ -45496,7 +45496,7 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     }
     /* each Time subclass's, ahead of Time's: its instance, made of Time's */
     for (int k = 0; k < c->nclasses; k++) {
-      if (!comp_ary_is_time(c, k) || !c->classes[k].name) continue;
+      if (!comp_ary_is_time(c, k) || !c->classes[k].name || sp_streq(c->classes[k].name, "Time")) continue;
       const char *rn = class_ruby_name(c, k);
       if (!rn) continue;
       int kc = tmcv_const(c, id, rn);
@@ -45583,7 +45583,7 @@ static void rewrite_time_maker_class_local(Compiler *c, int id) {
   int orig = arysub_new_call(c, id, nt_clone_subtree(nt, recv), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
   int tail = orig;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!comp_ary_is_time(c, k) || !c->classes[k].name) continue;
+    if (!comp_ary_is_time(c, k) || !c->classes[k].name || sp_streq(c->classes[k].name, "Time")) continue;
     const char *rn = class_ruby_name(c, k);
     if (!rn) continue;
     int kc = tmcv_const(c, id, rn);

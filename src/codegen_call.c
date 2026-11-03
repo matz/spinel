@@ -6651,10 +6651,20 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
       const char *bang = sp_streq(name, "localtime") ? "_bang" : "";
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
       buf_printf(b, "; sp_RbVal _t%d = ", ov); emit_boxed(c, argv[0], b);
-      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME"
-                    " ? sp_box_time(sp_time_in_zone_v%s((sp_Time *)_t%d.v.p, _t%d, 1))"
-                    " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })",
-                 tv, tv, bang, tv, ov, name, tv);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME ? ", tv, tv);
+      if (*bang && program_has_arysub(c))
+        buf_printf(b, "((sp_bsub_cls_of(_t%d) >= 0 && sp_gc_is_frozen(_t%d.v.p) ? (sp_raise_cls(\"FrozenError\", "
+                      "sp_str_concat(sp_str_concat((&(\"\\xff\" \"can't modify frozen \")[1]), sp_poly_class_name(_t%d)), "
+                      "sp_str_concat((&(\"\\xff\" \": \")[1]), sp_Time_inspect((sp_Time *)_t%d.v.p)))), 0) : 0), "
+                      "sp_time_in_zone_v_bang((sp_Time *)_t%d.v.p, _t%d, 1), _t%d)",
+                   tv, tv, tv, tv, tv, ov, tv);
+      else if (*bang)
+        buf_printf(b, "(sp_time_in_zone_v_bang((sp_Time *)_t%d.v.p, _t%d, 1), _t%d)", tv, ov, tv);
+      else if (program_has_timesub(c))
+        buf_printf(b, "sp_box_time(sp_timesub_copy(sp_bsub_cls_of(_t%d), sp_time_in_zone_v((sp_Time *)_t%d.v.p, _t%d, 1)))", tv, tv, ov);
+      else
+        buf_printf(b, "sp_box_time(sp_time_in_zone_v((sp_Time *)_t%d.v.p, _t%d, 1))", tv, ov);
+      buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, tv);
       return 1;
     }
   }

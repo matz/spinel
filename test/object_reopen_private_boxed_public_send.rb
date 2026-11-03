@@ -12,7 +12,6 @@ class F; include M; end
 class G; attr_reader :top; def initialize = @top = "g"; end
 S = Struct.new(:top)
 class I; end
-class String; def top = "str"; end
 
 def try
   yield
@@ -47,3 +46,20 @@ class BO < BasicObject
   def go = 3.pro
 end
 p try { BO.new.go }
+
+# a builtin subclass, a class method, a visibility a class declares, and
+# a safe call on nil answer as CRuby does
+class AS < Array; def top = "as"; end
+class HS < Hash; def top = "hs"; end
+class CM; def self.top = "ctop"; end
+class P; public :top; end
+y = nil
+[AS.new, HS.new, P.new, CM, 7].each do |x|
+  p [try { x.top }, try { x.public_send(:top) }]
+end
+p [CM.public_send(:top), P.new.public_send(:top), y&.public_send(:top)]
+
+class KC
+  def self.b = public_send(:top)
+end
+p try { KC.b }

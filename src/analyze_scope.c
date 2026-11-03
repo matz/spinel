@@ -4545,7 +4545,11 @@ static int mf_entry_scope(Compiler *c, const ElabEntry *e) {
    method stays one: a module function's one scope is reached from an
    includer by a bare call only (desugar_module_function_call), and the
    method is the includer's to send. A copy under a run-time condition is
-   taken as made, as the tree reading took it. */
+   taken as made, as the tree reading took it. The arms of a conditional
+   def (`m#__cond1`, ...) are not taken from the record: mf_mark_cond_arms
+   gives them to the module only where every branch defines one, since
+   where none may run, the dispatcher's NoMethodError names an instance,
+   and CRuby's names the module. */
 static void mf_copy_entries(Compiler *c) {
   int n = 0;
   ElabEntry *a = elab_entries(c, 1u << LR_COPY | ELAB_ENTRY_MAY, &n);
@@ -4554,6 +4558,7 @@ static void mf_copy_entries(Compiler *c) {
   for (int i = 0; i < n; i++) {
     src[i] = -1;
     if (!a[i].sg || a[i].cls < 0 || !class_def_is_module(c->nt, c->classes[a[i].cls].def_node)) continue;
+    if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
     src[i] = mf_entry_scope(c, &a[i]);
     int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
     if (src[i] >= 0 && !dm && c->scopes[src[i]].class_id == a[i].cls && c->scopes[src[i]].name &&

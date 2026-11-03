@@ -551,10 +551,10 @@ spinel: 1 refusal, nothing written
 spinel: unsupported call: node N (CallNode `m#__cond1`) recv=-/ty-1 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/cond_def_module_function_visibility.rb [default] rc=1
-spinel: unsupported call: node N (CallNode `m#__cond1`) recv=-/ty-1 argc=0
+spinel: test/reject/cond_def_module_function_visibility.rb:16: undefined method 'm' for a Class: no class in the program defines a class method 'm' (NoMethodError)
 spinel: 1 refusal, nothing written
 == test/reject/cond_def_module_function_visibility.rb [promote] rc=1
-spinel: unsupported call: node N (CallNode `m#__cond1`) recv=-/ty-1 argc=0
+spinel: test/reject/cond_def_module_function_visibility.rb:16: undefined method 'm' for a Class: no class in the program defines a class method 'm' (NoMethodError)
 spinel: 1 refusal, nothing written
 == test/reject/const_get_runtime_name.rb [default] rc=1
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6

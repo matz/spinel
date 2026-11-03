@@ -1,6 +1,7 @@
-# spinel: reject-subclass: CallNode `m#__cond
+# spinel: reject-subclass: undefined method 'm'
 # A bare public, even nested in another statement, ends module_function's
-# mode, so the arms after it are not module functions (CRuby: NoMethodError).
+# mode, so the arms after it are not module functions (CRuby: NoMethodError):
+# the module has no `m` of its own, and the call of it is refused.
 module M
   module_function
   public if true

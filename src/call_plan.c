@@ -1204,10 +1204,6 @@ static int cm_self_kind(Compiler *c, int self) {
   if (self < 0) return BSELF_MAIN;
   return comp_class_is_module(c, &c->classes[self]) ? BSELF_MODULE : BSELF_CLASS;
 }
-/* See call_plan.h. */
-int cplan_class_builtin(int cls, const char *name, int ar, int blk) {
-  return cls >= 0 && ar >= 0 && bop_find(TY_CLASS, name, ar, blk) != NULL;
-}
 /* Does call id run where no method of `name` is live yet, as the record
    proves it at the call (elab_call_method): cls's chain, its class side
    for CT_CMETHOD, main's top-level functions for CT_TOP? The method the
@@ -4360,7 +4356,7 @@ static void ver_entry_add(Compiler *c, struct VerEntry e) {
    VK_SUPER the method super reaches; VK_IVAR an inherited reader's
    instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
    inspect through super(); VK_BUILTIN the builtin a class answers on itself
-   (cplan_class_builtin), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
    no entry, where none of these is CRuby's answer: the history keeps the
    handling it had (its last version taken as run) */
 enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP };
@@ -4507,7 +4503,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     return sc >= 0 && sv == vis ? VK_SUPER : VK_KEEP;
   }
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
-  if (sg && cplan_class_builtin(cls, name, ar, blk)) return VK_BUILTIN;
+  if (sg && cls >= 0 && bop_class_answers(name, ar, blk)) return VK_BUILTIN;
   if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);

@@ -2973,6 +2973,11 @@ const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block) 
   return bop_find_arg(rt, name, argc, has_block, NULL, NULL);
 }
 
+/* See builtin_ops.h. */
+int bop_class_answers(const char *name, int argc, int has_block) {
+  return argc >= 0 && bop_find(TY_CLASS, name, argc, has_block) != NULL;
+}
+
 const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_block,
                               BopArgKind arg_of, const void *ud) {
   return bop_find_stage(rt, name, argc, has_block, arg_of, ud, -1);

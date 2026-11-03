@@ -5118,7 +5118,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
      receiving class rides in (cmethod_takes_self_cls) resolve the name at run
      time rather than folding the defining class's. */
   /* bare `name` inside a class method body -> the class name */
-  if (argc == 0 && (recv < 0 ? sp_streq(name, "name") :
+  if (argc == 0 && (recv < 0 ? is_class_name_name(name) :
       (is_name_reader(name) &&
        nt_kind(nt, recv) == NK_SelfNode &&
        !nt_int(nt, recv, "sclass_value", 0)))) {   /* a singleton class's is its own */
@@ -5126,7 +5126,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL) < 0) {
       if (cmethod_takes_self_cls(c, (int)(encl - c->scopes)))
-        buf_printf(b, "%s(%s)", c->has_anonymous_classes && is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c),
+        buf_printf(b, "%s(%s)", is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c),
                    encl->yields && g_self ? g_self : "_sp_cls");
       else if (comp_class_anonymous(c, encl->class_id))
         buf_printf(b, "%s((sp_Class){%d})", is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), encl->class_id);

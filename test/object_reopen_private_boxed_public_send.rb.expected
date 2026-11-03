@@ -1,0 +1,30 @@
+["own", "own", "own"]
+["own", "own", "own"]
+["m", "m", "m"]
+["g", "g", "g"]
+["s", "s", "s"]
+["NME private method 'top' called for an instance of I", "NME private method 'top' called for an instance of I", "t"]
+["NME private method 'top' called for an instance of String", "NME private method 'top' called for an instance of String", "t"]
+["NME private method 'top' called for an instance of Integer", "NME private method 'top' called for an instance of Integer", "t"]
+["NME private method 'top' called for nil", "NME private method 'top' called for nil", "t"]
+["NME private method 'top' called for an instance of Symbol", "NME private method 'top' called for an instance of Symbol", "t"]
+["NME private method 'top' called for an instance of Array", "NME private method 'top' called for an instance of Array", "t"]
+["NME private method 'top' called for an instance of Object", "NME private method 'top' called for an instance of Object", "t"]
+"NME private method 'top' called for an instance of I"
+"NME private method 'top' called for an instance of Integer"
+"NME private method 'top' called for an instance of Object"
+"NME private method 'top' called for an instance of Object"
+["g", 2, "own"]
+["NME private method 'top' called for an instance of K", "t", "NME private method 'top' called for an instance of K", "p", "NME protected method 'pro' called for an instance of Integer", "p"]
+"p"
+"NME private method 'top' called for main"
+"NME protected method 'pro' called for an instance of Integer"
+["as", "as"]
+["hs", "hs"]
+["t", "t"]
+["ctop", "ctop"]
+["NME private method 'top' called for an instance of Integer", "NME private method 'top' called for an instance of Integer"]
+["ctop", "t", nil]
+"NME private method 'top' called for class KC"
+["t", "own"]
+"sec"

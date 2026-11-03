@@ -1,0 +1,4 @@
+["own", "own", "own"]
+["NME private method 'top' called for an instance of I", "NME private method 'top' called for an instance of I", "t"]
+["str", "str", "str"]
+["NME private method 'top' called for an instance of I", "NME private method 'top' called for an instance of I", "str"]

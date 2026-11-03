@@ -3605,6 +3605,9 @@ static sp_int sp_poly_slot_i(sp_RbVal v) {
      handed a boxed String of a hundred digits raised before it ran (#10462) */
   sp_RbVal s = sp_poly_strbuf_deref(v);
   if (s.tag == SP_TAG_STR) return (sp_int)strtoll(s.v.s ? s.v.s : sp_str_empty, NULL, 10);
+  /* nor is a Bignum past the word: a 32-bit sp_int raised RangeError for a
+     53-bit id handed to a block whose parameter reads the boxed side */
+  if (v.tag == SP_TAG_BIGINT) return (sp_int)sp_bigint_to_int((sp_Bigint *)v.v.p);
   return sp_poly_to_i(v);
 }
 

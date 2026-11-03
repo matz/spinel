@@ -560,12 +560,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
 == test/reject/const_get_runtime_name.rb [promote] rc=1
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
-== test/reject/const_parent_array_pattern.rb [default] rc=1
-spinel: test/reject/const_parent_array_pattern.rb:6: unsupported pattern sub-form inside a container pattern: node N (ConstantPathNode)
-spinel: 1 refusal, nothing written
-== test/reject/const_parent_array_pattern.rb [promote] rc=1
-spinel: test/reject/const_parent_array_pattern.rb:6: unsupported pattern sub-form inside a container pattern: node N (ConstantPathNode)
-spinel: 1 refusal, nothing written
 == test/reject/const_set_ambiguous_receiver.rb [default] rc=1
 spinel: test/reject/const_set_ambiguous_receiver.rb:11: const_set(:X, ...) on a receiver whose class or module is known only at run time is not supported when more than one module holds a constant X: constants are compile-time globals, and which module's X this sets is not known at compile time. Write `Mod.const_set(:X, v)` or `Mod::X = v` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1297,6 +1291,12 @@ spinel: test/reject/object_receiver_include_alias.rb:8: Object.include(...) is n
 spinel: 1 refusal, nothing written
 == test/reject/object_receiver_include_alias.rb [promote] rc=1
 spinel: test/reject/object_receiver_include_alias.rb:8: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/pattern_value_const_range.rb [default] rc=1
+spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant pattern other than an Integer, Float, String or Symbol: node N (ConstantPathNode)
+spinel: 1 refusal, nothing written
+== test/reject/pattern_value_const_range.rb [promote] rc=1
+spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant pattern other than an Integer, Float, String or Symbol: node N (ConstantPathNode)
 spinel: 1 refusal, nothing written
 == test/reject/range_prepended_alias_chain_endpoint_write.rb [default] rc=1
 spinel: test/reject/range_prepended_alias_chain_endpoint_write.rb:17: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it

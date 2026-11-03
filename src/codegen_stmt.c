@@ -7698,14 +7698,30 @@ static int emit_pm_subcond_expr(Compiler *c, int spat, const char *elem, Buf *b)
    constraint), or PM_HASH_VAL_REJECT for a shape we emit no check for (a
    literal, range, pin, or nested pattern) so the caller can reject it. */
 #define PM_HASH_VAL_REJECT (-2)
-static int pm_hash_value_class(const NodeTable *nt, int vpat) {
+static int pm_value_const(Compiler *c, int pat, const char *cn);
+/* A ConstantReadNode pattern that names a class, not a value constant
+   (`in LIMIT` is LIMIT === v, a value test the recursive matcher emits) */
+static int pm_class_const_read(Compiler *c, int n) {
+  if (n < 0 || nt_kind(c->nt, n) != NK_ConstantReadNode) return 0;
+  const char *cn = nt_str(c->nt, n, "name");
+  return cn && !pm_value_const(c, n, cn);
+}
+/* the class name a class pattern tests: the class an alias constant
+   (`AI = Integer`) names, or the name itself */
+static const char *pm_class_name(Compiler *c, int n) {
+  const char *cn = nt_str(c->nt, n, "name");
+  const char *ra = cn ? resolve_class_alias(c, cn) : NULL;
+  return ra ? ra : cn;
+}
+static int pm_hash_value_class(Compiler *c, int vpat) {
+  const NodeTable *nt = c->nt;
   if (vpat < 0 || !nt_type(nt, vpat)) return -1;
   NodeKind vk = nt_kind(nt, vpat);
-  if (vk == NK_ConstantReadNode) return vpat;
+  if (pm_class_const_read(c, vpat)) return vpat;
   if (vk == NK_ImplicitNode || vk == NK_LocalVariableTargetNode) return -1;
   if (vk == NK_CapturePatternNode) {
     int cv = nt_ref(nt, vpat, "value");
-    if (cv >= 0 && nt_kind(nt, cv) == NK_ConstantReadNode) return cv;
+    if (pm_class_const_read(c, cv)) return cv;
   }
   return PM_HASH_VAL_REJECT;
 }
@@ -8103,6 +8119,43 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
 static int emit_pm_cond_subj(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b) {
   return emit_class_condition(c, pat, NULL, t, pt, subj, b);
 }
+static int when_builtin_value_const(Compiler *c, int cond);
+/* emit_pm_eq, but an Integer or Float subject that holds nil (its nil flag,
+   the oint of emit_case_match) is equal to no value: read as a number, nil
+   matched a 0 */
+static void emit_pm_eq_nonnil(Compiler *c, int t, TyKind pt, int valnode, Buf *b) {
+  if (t != g_pm_sentinel_t || (pt != TY_INT && pt != TY_FLOAT)) { emit_pm_eq(c, t, pt, valnode, b); return; }
+  char ref[24]; snprintf(ref, sizeof ref, "_o%d", t);
+  buf_puts(b, "("); emit_slot_truthy(pt, ref, b); buf_puts(b, " && ");
+  emit_pm_eq(c, t, pt, valnode, b); buf_puts(b, ")");
+}
+/* A constant in a pattern that holds a value, not a class or module: a
+   program constant typed a value (`LIMIT = 3`), an ffi_const, or a builtin's
+   value constant (`Float::INFINITY`). The same three checks as `when`. */
+static int pm_value_const(Compiler *c, int pat, const char *cn) {
+  LocalVar *lv = comp_const(c, cn);
+  if (lv && lv->type != TY_UNKNOWN && lv->type != TY_CLASS) return 1;
+  if (comp_ffi_const_at(c, pat, NULL)) return 1;
+  return when_builtin_value_const(c, pat);
+}
+/* the kinds whose === is ==, so the arm is the equality test of `in ^x` */
+static int pm_eq_scalar(TyKind k) {
+  return k == TY_INT || k == TY_FLOAT || k == TY_STRING || k == TY_SYMBOL;
+}
+/* `in LIMIT` for a value constant: LIMIT === subject. An Integer, Float,
+   String or Symbol value compares by ==. A subject of another such kind is
+   never equal (Integer and Float do compare). Any other value kind (a Regexp,
+   a Range, a Proc, an object with its own ===) is refused. */
+static void emit_pm_value_const(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
+  TyKind vt = comp_ntype(c, pat);
+  if (!pm_eq_scalar(vt) || repr_of(c, pat).kind == RK_BOXED) {
+    unsupported(c, pat, "value constant pattern other than an Integer, Float, String or Symbol");
+  }
+  int num = (vt == TY_INT || vt == TY_FLOAT) && (pt == TY_INT || pt == TY_FLOAT);
+  if (pt == TY_POLY || pt == vt || num) { emit_pm_eq_nonnil(c, t, pt, pat, b); return; }
+  if (pm_eq_scalar(pt) || pt == TY_NIL || pt == TY_BOOL) { buf_puts(b, "0"); return; }
+  unsupported(c, pat, "value constant pattern against this subject");
+}
 static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *pty = nt_type(nt, pat);
@@ -8111,7 +8164,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
   /* literal value patterns: scrutinee == literal */
   if (pk == NK_IntegerNode || pk == NK_FloatNode ||
       pk == NK_StringNode || pk == NK_SymbolNode) {
-    emit_pm_eq(c, t, pt, pat, b);
+    emit_pm_eq_nonnil(c, t, pt, pat, b);
     return 1;
   }
   /* a Regexp literal pattern is Regexp#===, as in `when /re/`: a String
@@ -8169,10 +8222,24 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     else buf_puts(b, "0");
     return 1;
   }
-  /* class pattern: runtime tag/class test for poly, compile-time fold otherwise */
-  if (pk == NK_ConstantReadNode) {
-    const char *cn2 = nt_str(nt, pat, "name");
-    if (!cn2) return 0;
+  /* class pattern: runtime tag/class test for poly, compile-time fold
+     otherwise. A constant path (`in Mod::Klass`) is the same test: with no
+     branch here it reached the caller as "no condition" and the arm matched
+     every subject. A constant that holds a value is `value === subject`. */
+  if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) {
+    char cq[192];
+    const char *cn2 = pk == NK_ConstantReadNode ? nt_str(nt, pat, "name")
+                                                : isa_match_name(nt, pat, cq, sizeof cq);
+    if (!cn2) unsupported(c, pat, "constant pattern with a computed scope");
+    if (pm_value_const(c, pat, cn2)) {
+      emit_pm_value_const(c, pat, t, pt, b);
+      return 1;
+    }
+    /* a constant that names a class (`AK = K`, `M::AI = Integer`) tests
+       that class, as `when` does */
+    const char *ra = resolve_class_alias(c, cn2);
+    int aliased = ra && !sp_streq(ra, cn2);
+    if (ra) cn2 = ra;
     /* (a class method `===` of the program's own answers, as in `when`) */
     if (emit_when_class_cmethod_eq(c, pat, t, pt, b)) return 1;
     if (pt == TY_POLY) {
@@ -8182,7 +8249,10 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     }
     if (pt == TY_EXCEPTION) {
       /* an exception scrutinee matches by name up its class chain (#2759) */
-      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, pat, NULL, 0));
+      int eci = comp_class_index(c, cn2);
+      const char *en = eci >= 0 ? class_ruby_name(c, eci) : NULL;
+      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t,
+                 aliased ? (en ? en : cn2) : exc_when_cls_name(c, pat, cq, sizeof cq));
       return 1;
     }
     if (pt == TY_BOOL && (is_boolean_class_name(cn2)) &&
@@ -8387,14 +8457,13 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
         int pn2 = gi < apn ? reqs[gi] : posts[gi - apn];
         NodeKind rk = nt_kind(nt, pn2);
         int classpat = -1;
-        if (rk == NK_ConstantReadNode) classpat = pn2;
+        if (pm_class_const_read(c, pn2)) classpat = pn2;
         else if (rk == NK_CapturePatternNode) {
           int val = nt_ref(nt, pn2, "value");
-          if (val >= 0 && nt_kind(nt, val) == NK_ConstantReadNode)
-            classpat = val;
+          if (pm_class_const_read(c, val)) classpat = val;
         }
         if (classpat >= 0) {
-          const char *cn2 = nt_str(nt, classpat, "name");
+          const char *cn2 = pm_class_name(c, classpat);
           if (cn2 && ty_matches_class(c, et2, cn2, 0) <= 0 &&
               !(et2 == TY_STRING && sp_streq(cn2, "NilClass"))) class_mismatch = 1;
         }
@@ -8532,7 +8601,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     for (int i = 0; i < en; i++) {
       if (nt_kind(nt, elms[i]) != NK_AssocNode) return 0;
       if (nt_ref(nt, elms[i], "key") < 0) return 0;
-      int classpat = pm_hash_value_class(nt, nt_ref(nt, elms[i], "value"));
+      int classpat = pm_hash_value_class(c, nt_ref(nt, elms[i], "value"));
       if (classpat == PM_HASH_VAL_REJECT) {
         /* a value sub-pattern (literal, range, alternation, pin, container):
            trial-emit the recursive condition against the fetched value's type
@@ -8562,7 +8631,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
     for (int i = 0; i < en; i++) {
       int key = nt_ref(nt, elms[i], "key");
       int vchk = nt_ref(nt, elms[i], "value");
-      int classpat = pm_hash_value_class(nt, vchk);
+      int classpat = pm_hash_value_class(c, vchk);
       emit_indent(hs, hi);
       buf_printf(hs, "_t%d = _t%d && sp_%sHash_has_key(_t%d, ", hcond, hcond, hn, t);
       emit_hash_key(c, key, ty_hash_key(pt), hs); buf_puts(hs, ");\n");
@@ -8595,7 +8664,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
         buf_puts(hs, " }\n");
       }
       else {
-        const char *cn = nt_str(nt, classpat, "name");
+        const char *cn = pm_class_name(c, classpat);
         if (cn && ty_matches_class(c, hvt, cn, 0) <= 0) {
           emit_indent(hs, hi); buf_printf(hs, "_t%d = 0;\n", hcond);
         }
@@ -9072,8 +9141,14 @@ static int pm_diag_ok(Compiler *c, int pat) {
   switch (ty_k) {
   case NK_LocalVariableTargetNode: case NK_ImplicitNode: case NK_SplatNode: case NK_ImplicitRestNode:
   case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode: case NK_NilNode:
-  case NK_TrueNode: case NK_FalseNode: case NK_ConstantReadNode: case NK_PinnedVariableNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_PinnedVariableNode:
     return 1;
+  /* a class with its own class method `===` would run it a second time
+     for the message: the plain subject-only message is raised instead */
+  case NK_ConstantReadNode: case NK_ConstantPathNode: {
+    int ci = const_node_class_index(c, pat);
+    return ci < 0 || class_own_cmethod_eqq(c, ci) < 0;
+  }
   default:
     break;
   }
@@ -9194,7 +9269,7 @@ static void emit_pm_diag(Compiler *c, int pat, const char *v, PmDiag *d, int ind
   if (!is_arr && !is_find && !is_hash) {
     Buf cb; memset(&cb, 0, sizeof cb);
     if (emit_pm_subcond_expr(c, pat, v, &cb) && cb.p) {
-      if (ty_k != NK_ConstantReadNode) emit_pm_diag_bail_obj(d, v, ind, b);
+      if (!nt_kind_is_constant(ty_k)) emit_pm_diag_bail_obj(d, v, ind, b);
       Buf mb; memset(&mb, 0, sizeof mb);
       buf_puts(&mb, "sp_pm_eqq_msg(");
       emit_pm_diag_pat_s(c, pat, &mb);
@@ -9371,6 +9446,18 @@ static void emit_pm_nomatch_raise(Compiler *c, int pred, int pat, int guarded, i
      hashes; an object, a MatchData or a Time is not. */
   int walk = pat >= 0 && pm_diag_ok(c, pat) &&
              (!pm_diag_deconstructs(c, pat) || !pm_subject_deconstructs_apart(c, pt));
+  /* The pattern is one class whose own class method `===` answered no:
+     the arm ran it once, so the message is known without a second call */
+  int one = pat >= 0 && nt_kind(c->nt, pat) == NK_CapturePatternNode ? nt_ref(c->nt, pat, "value") : pat;
+  if (!walk && one >= 0 && !guarded && nt_kind_is_constant(nt_kind(c->nt, one)) &&
+      !pm_diag_ok(c, one)) {
+    emit_indent(b, indent);
+    buf_printf(b, "sp_pm_raise_nomatch(%s, sp_pm_eqq_msg(", sb.p);
+    emit_pm_diag_pat_s(c, one, b);
+    buf_printf(b, ", %s), 0);\n", sb.p);
+    free(sb.p);
+    return;
+  }
   if (!walk) {
     emit_indent(b, indent);
     buf_printf(b, "sp_pm_raise_nomatch(%s, NULL, 0);\n", sb.p);
@@ -11131,14 +11218,12 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
              comp_const with a real type) in `when` is an equality test,
              not Module#=== -- treating it as a class name folded every
              arm of doom's Menu#render state dispatch to `if (0)`. */
-          if (cn2 && ({ LocalVar *_wv = comp_const(c, cn2); _wv && _wv->type != TY_UNKNOWN && _wv->type != TY_CLASS; })) cn2 = NULL;
-        /* An `ffi_const` is a value too, and it lives in its own table
-           rather than the constant one: read as a class name the arm folded
-           to a constant false and the branch was never taken. */
-        if (cn2 && comp_ffi_const_at(c, conds[j], NULL)) cn2 = NULL;
-        /* ...and so is a builtin's value constant (`Socket::AF_INET`,
-           `File::SEPARATOR`): typed a number or a String, not a class */
-        if (cn2 && when_builtin_value_const(c, conds[j])) cn2 = NULL;
+          /* An `ffi_const` is a value too, and it lives in its own table
+             rather than the constant one: read as a class name the arm folded
+             to a constant false and the branch was never taken. So is a
+             builtin's value constant (`Socket::AF_INET`, `File::SEPARATOR`):
+             typed a number or a String, not a class (pm_value_const). */
+          if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
@@ -11574,14 +11659,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         const char *cn2 = (cty2_k == NK_ConstantReadNode || cty2_k == NK_ConstantPathNode)
                          ? isa_match_name(nt, conds[j], cq2, sizeof cq2) : NULL;
         /* value constant in `when`: equality, not a class test (see above) */
-        if (cn2 && ({ LocalVar *_wv = comp_const(c, cn2); _wv && _wv->type != TY_UNKNOWN && _wv->type != TY_CLASS; })) cn2 = NULL;
-        /* An `ffi_const` is a value too, and it lives in its own table
-           rather than the constant one: read as a class name the arm folded
-           to a constant false and the branch was never taken. */
-        if (cn2 && comp_ffi_const_at(c, conds[j], NULL)) cn2 = NULL;
-        /* ...and so is a builtin's value constant (`Socket::AF_INET`,
-           `File::SEPARATOR`): typed a number or a String, not a class */
-        if (cn2 && when_builtin_value_const(c, conds[j])) cn2 = NULL;
+        if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }

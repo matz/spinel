@@ -1,0 +1,29 @@
+:no
+:no
+:k
+:k
+:no
+[:no, :str, :k, :j, :no, :no]
+:ak
+:mk
+:or
+:no
+:no
+M::J
+:g
+:top
+:mix
+:no
+:arr
+:no
+:no
+:h
+[1, 2]
+:no
+[:n, :no, :s, :no]
+:n
+:inf
+NoMatchingPatternError
+[:ak, :ae, :ai, :no]
+"3: M::K === 3 does not return true"
+"4: 3 === 4 does not return true"

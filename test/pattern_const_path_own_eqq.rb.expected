@@ -1,0 +1,10 @@
+:own
+:no
+[:k, :no, :no, :s]
+:sub
+Loud === 3
+"3: M::Loud === 3 does not return true"
+Quiet === 3
+"3: Quiet === 3 does not return true"
+Loud === 3
+"3: M::Loud === 3 does not return true"

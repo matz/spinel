@@ -91,3 +91,13 @@ class Integer
   p 5.flim2
   FLIM2 = :int
 end
+
+# a path write in the body (`Proc::X = v`, `self::X = v`) is the class's too
+PX = :top
+SX = :top
+class Proc
+  Proc::PX = :proc
+  self::SX = :self
+  def px = [PX, SX]
+end
+p proc { 1 }.px

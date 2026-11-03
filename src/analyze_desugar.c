@@ -22846,18 +22846,34 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
  * the read becomes the path `Integer::LIM` before the method moves, when
  * the constant is certainly the builtin's by then: a statement of an earlier
  * top-level body of the builtin, or of this body ahead of the statement
- * that holds the def, writes it (a constant write, or a class or module
- * header). A write under a condition or a rescue may not run, and one after
- * the def may run after a call, so CRuby can still read the top-level
- * constant there: such a read keeps its lexical lookup. */
+ * that holds the def, writes it (a constant write, `Integer::LIM = v` or
+ * `self::LIM = v`, or a class or module header). A write under a condition
+ * or a rescue may not run, and one after the def may run after a call, so
+ * CRuby can still read the top-level constant there: such a read keeps its
+ * lexical lookup. */
 /* the constant a body statement writes for certain, or NULL */
-static const char *brc_stmt_writes(const NodeTable *nt, int st) {
+/* (or the path cn::X, self::X a body of cn writes: `Proc::X = v`,
+   `class Proc::Helper`) */
+static const char *brc_path_own(const NodeTable *nt, int path, const char *cn) {
+  if (path < 0) return NULL;
+  if (nt_kind(nt, path) == NK_ConstantReadNode) return nt_str(nt, path, "name");
+  if (nt_kind(nt, path) != NK_ConstantPathNode) return NULL;
+  int par = nt_ref(nt, path, "parent");
+  if (par < 0) return NULL;
+  NodeKind pk = nt_kind(nt, par);
+  if (pk == NK_SelfNode || (pk == NK_ConstantReadNode && nt_str(nt, par, "name") &&
+                            sp_streq(nt_str(nt, par, "name"), cn)))
+    return nt_str(nt, path, "name");
+  return NULL;
+}
+static const char *brc_stmt_writes(const NodeTable *nt, int st, const char *cn) {
   NodeKind k = nt_kind(nt, st);
-  if (k == NK_ClassNode || k == NK_ModuleNode) {
-    int cp = nt_ref(nt, st, "constant_path");
-    return cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
-  }
+  if (k == NK_ClassNode || k == NK_ModuleNode) return brc_path_own(nt, nt_ref(nt, st, "constant_path"), cn);
   if (k == NK_ConstantWriteNode) return nt_str(nt, st, "name");
+  if (k == NK_ConstantPathWriteNode) {
+    int t = nt_ref(nt, st, "target");
+    return t >= 0 && nt_kind(nt, t) == NK_ConstantPathNode ? brc_path_own(nt, t, cn) : NULL;
+  }
   return NULL;
 }
 typedef struct { const char **v; int n, cap; } BrcNames;
@@ -22935,14 +22951,14 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
       if (!hn || !sp_streq(hn, cn)) continue;
       int b = class_def_body(nt, tb[j]), bn = 0;
       const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-      for (int q = 0; q < bn; q++) brc_add(&w, brc_stmt_writes(nt, bs[q]));
+      for (int q = 0; q < bn; q++) brc_add(&w, brc_stmt_writes(nt, bs[q], cn));
     }
     int b = class_def_body(nt, tb[i]), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
       int st = bs[q];
       brc_body_defs(nt, st, cn, &w, &changed);
-      brc_add(&w, brc_stmt_writes(nt, st));
+      brc_add(&w, brc_stmt_writes(nt, st, cn));
       bs = nt_arr(nt, b, "body", &bn);   /* (nodes added: the list may move) */
     }
     free(w.v);

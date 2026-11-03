@@ -25,3 +25,4 @@
 :top
 :top
 :top
+[:proc, :self]

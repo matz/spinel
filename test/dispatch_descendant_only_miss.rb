@@ -87,3 +87,23 @@ end
   end
 end
 p $log
+
+# a subclass that answers through an accessor keeps CRuby's ArgumentError
+class Gauge
+  def read = level(1)
+  def write = send(:level=)
+end
+class Dial < Gauge
+  attr_accessor :level
+end
+class Knob < Gauge
+  def level = 7
+  def level=(x)
+    @level = x
+  end
+end
+[Dial.new, Knob.new].each do |g|
+  %i[read write].each do |m|
+    puts((begin; g.send(m); rescue ArgumentError => e; "#{e.class}: #{e.message}"; end))
+  end
+end

@@ -11103,22 +11103,8 @@ int arity_count_error(Compiler *c, Scope *m, int given, char *msg, size_t n) {
    (emit_dispatch) and the inlined yield path (emit_inline_call_x): the
    dispatch kept its own count, which took keyword parameters for positional
    slots and skipped every keyword hash, so `obj.m(3, 4)` against
-   `def m(x, k: 1)` bound silently where `m(3, 4)` raised. */
-/* Does emit_call_arity_check raise for these arguments into `m`, now or once
-   a splat's count or a `**` spread's keys are known at run time? The same
-   questions in the same order, asked without emitting. */
-static int call_arity_may_raise(Compiler *c, Scope *m, int argc, const int *argv) {
-  const NodeTable *nt = c->nt;
-  int kwh = nt_argv_kwh(nt, argv, argc) >= 0 ? argv[argc - 1] : -1, pos_argc = kwh >= 0 ? argc - 1 : argc;
-  KwPlan P;
-  kw_plan(c, m, kwh, &P);
-  if (P.role == KWH_REFUSED) return 1;
-  char msg[512];
-  if (!nt_argv_has_splat(nt, argv, pos_argc) && P.count != KWC_NONEMPTY &&
-      arity_count_error(c, m, pos_argc + P.count, msg, sizeof msg)) return 1;
-  return !arity_unjudged(c, m) && kw_plan_error(&P, msg, sizeof msg);
-}
-
+   `def m(x, k: 1)` bound silently where `m(3, 4)` raised.
+   call_arity_may_raise asks the same without emitting. */
 void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
   int kwh = -1;
@@ -11167,6 +11153,25 @@ void emit_call_arity_check(Compiler *c, Scope *m, int argc, const int *argv) {
     return;
   }
   args_raise(c, argv, argc, "%s", msg);
+}
+
+/* Does emit_call_arity_check raise for these arguments into `m`? Its
+   questions in its order, asked without emitting: a `**nil` method given a
+   keyword (a `**` spread's when the run time finds a key in it), a count it
+   judges here, or a keyword error (after a splat, once the run time has
+   judged the count). A positional count only the run time knows, past a
+   splat or a `**` spread that may count, is not asked: emit_call_arity_check
+   does not judge it either. A change to one is a change to the other. */
+static int call_arity_may_raise(Compiler *c, Scope *m, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  int kwh = nt_argv_kwh(nt, argv, argc) >= 0 ? argv[argc - 1] : -1, pos_argc = kwh >= 0 ? argc - 1 : argc;
+  KwPlan P;
+  kw_plan(c, m, kwh, &P);
+  if (P.role == KWH_REFUSED) return 1;
+  char msg[512];
+  if (!nt_argv_has_splat(nt, argv, pos_argc) && P.count != KWC_NONEMPTY &&
+      arity_count_error(c, m, pos_argc + P.count, msg, sizeof msg)) return 1;
+  return !arity_unjudged(c, m) && kw_plan_error(&P, msg, sizeof msg);
 }
 
 /* The positional layout of one call into one callee: which argument, splat
@@ -12779,12 +12784,27 @@ static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, 
   return 1;
 }
 
+/* Does a descendant of cid answer `name` through an attr reader or writer,
+   which has no scope to be an arm of its own? */
+static int dispatch_accessor_answers(Compiler *c, int call, int cid, const char *name) {
+  char wbase[256];
+  int is_wr = setter_base_name(name, wbase, sizeof wbase);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!is_descendant(c, k, cid) || dispatch_arm_scope(c, call_target(c, call, k, name, 0, NULL)) >= 0) continue;
+    if (comp_reader_in_chain(c, k, name, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL))) return 1;
+  }
+  return 0;
+}
+
 /* See codegen_internal.h. */
 int dispatch_count_misfits(Compiler *c, int call, int cid, const char *name) {
-  if (call < 0 || nt_kind(c->nt, call) != NK_CallNode) return 0;
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || !sp_streq(nt_str(nt, call, "name"), name) ||
+      cplan_dispatch_miss(c, call, cid) == CM_NONE || dispatch_accessor_answers(c, call, cid, name))
+    return 0;
   Scope *pm = dispatch_first_arm(c, call, cid, name);
   int argc = 0;
-  const int *argv = call_args(c->nt, call, &argc);
+  const int *argv = call_args(nt, call, &argc);
   return dispatch_count_judged(c, pm, argv, argc) && call_arity_may_raise(c, pm, argc, argv);
 }
 

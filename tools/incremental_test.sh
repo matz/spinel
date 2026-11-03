@@ -17,9 +17,9 @@
 # untouched, the shape of a unit directory, the planted missing declaration
 # that must be a compile error and never an object, reproducible objects,
 # a corpus smoke, two builds sharing an empty cache, the prune, the
-# working directory in a -g build's key, a -g edit as local as a plain one,
-# and a directory spinel did not write, or a file in a unit set it did not
-# list, left alone.
+# working directory in a -g build's key, a -g edit as local as a plain one
+# (for an instance variable barrier and for a cell barrier), and a directory
+# spinel did not write, or a file in a unit set it did not list, left alone.
 #
 # Every build runs with SPINEL_INCREMENTAL_STRICT=1, so a split or unit
 # compile the fallback would hide fails here instead. The cache lives in
@@ -526,6 +526,37 @@ files=$(find "$T/d20" -name 'unit_*.c' ! -name unit_notes.c | wc -l | tr -d ' ')
 kept=0; [ -f "$T/d20/unit_notes.c" ] && kept=1
 o=0; [ $r = 0 ] && [ "$listed" -gt 0 ] && [ "$files" = "$listed" ] && [ $kept = 1 ] && o=1
 report "20 a unit set written over" $o "rc=$r unit-files=$files listed=$listed unit_notes.c-kept=$kept"
+
+# --- 21 -g cell barrier temps ------------------------------------------------------
+# a local a block captures lives in a heap cell, and a store into the cell
+# names a _wcN temp. Under -g the methods are not static, so the count ran on
+# from one method to the next: four cell stores more in m1 renamed the cells
+# of m2, m3 and m4 and missed their units. They are numbered from 1 again at
+# each unit now, so the edit changes the units of m1 alone, as in a plain
+# build (units of 1K, to split the methods)
+for v in a b; do
+  {
+    echo "def m1"
+    if [ $v = b ]; then echo "  u = nil; t = nil; u = nil; t = nil; u = nil; t = nil"; else echo "  u = nil; t = nil"; fi
+    echo "  pr = proc { t = (u = \"a\" * 3).size.to_s; u }"
+    echo "  pr.call"
+    echo "end"
+    for m in m2 m3 m4; do
+      echo "def $m"
+      echo "  u = nil; t = nil"
+      echo "  pr = proc { t = (u = \"$m\" * 3).size.to_s; u }"
+      echo "  pr.call"
+      echo "end"
+    done
+    echo "puts m1, m2, m3, m4"
+  } > "$T/c21$v.rb"
+done
+uset c21a u21p --unit-bytes=1K; uset c21b u21pw --unit-bytes=1K
+uset c21a u21g -g --unit-bytes=1K; uset c21b u21gw -g --unit-bytes=1K
+cp_=$(comm -13 "$T/u21p.h" "$T/u21pw.h" | wc -l | tr -d ' ')
+cg_=$(comm -13 "$T/u21g.h" "$T/u21gw.h" | wc -l | tr -d ' ')
+o=0; [ "$cp_" -ge 1 ] && [ "$cg_" -ge 1 ] && [ "$cg_" -le "$cp_" ] && o=1
+report "21 -g cell barrier temps" $o "changed units: -g=$cg_ plain=$cp_ of $(grep -c '' "$T/u21g.h")"
 
 if [ $fail = 0 ]; then echo "incremental-test: pass"; else echo "incremental-test: FAILED:$failed"; fi
 exit $fail

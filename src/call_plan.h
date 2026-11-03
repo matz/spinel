@@ -189,25 +189,33 @@ int cplan_emitted_targets(Compiler *c, int id, int *out, int cap);
    than cap (CPT_WHY_CAP), or its receiver is of a type the analysis did not
    settle (CPT_WHY_RECV_UNTYPED) -- the two ct_resolve gives up on, whose
    members are still the program's methods of the call's name or a
-   builtin's. CPT_WHY_NONE where it lists the members. CPT_WHY_NEW_OPEN is
-   cplan_entries_unknown_why's. */
-enum { CPT_WHY_NONE = 0, CPT_WHY_CAP, CPT_WHY_RECV_UNTYPED, CPT_WHY_NEW_OPEN };
+   builtin's. CPT_WHY_NONE where it lists the members. */
+enum { CPT_WHY_NONE = 0, CPT_WHY_CAP, CPT_WHY_RECV_UNTYPED };
 int cplan_targets_unknown_why(Compiler *c, int id, int cap);
 /* The user methods call node id enters, into out (at most cap): the
    methods its arguments bind to and its block is handed to, which a call
    graph, a parameter's or a block's facts follow. For a builtin `new`
    (no program `new` answers it), the initialize methods it runs: the class
    it builds and, for a `new` on the class its method runs for, each
-   subclass's; none for a builtin class; CPT_UNKNOWN for a class value the
-   plan cannot name, which may run any initialize of the program. For any
-   other call, its cplan_targets. Same answers as cplan_targets otherwise
-   (n >= 0, CPT_UNKNOWN). Never what the call answers: that is
-   cplan_targets'. */
+   subclass's; none for a builtin class; CPT_UNKNOWN for a receiver the
+   plan cannot name a class of, which may run any initialize of the
+   program. So for a super, bare or not, in a program `new` that reaches
+   the builtin Class#new: the initialize methods of the method's class and
+   its subclasses, CPT_UNKNOWN for a module's `new`. For any other call,
+   its cplan_targets. Same answers as cplan_targets otherwise (n >= 0,
+   CPT_UNKNOWN). Never what the call answers: that is cplan_targets'. */
 int cplan_entries(Compiler *c, int id, int *out, int cap);
-/* Why cplan_entries answers CPT_UNKNOWN for call id: CPT_WHY_NEW_OPEN for a
-   builtin `new` on a class value the plan cannot name (any initialize of
-   the program), else cplan_targets_unknown_why's reason. */
-int cplan_entries_unknown_why(Compiler *c, int id, int cap);
+/* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
+   program methods hold every method call node id may enter, into names (at
+   most 2), and how many: the call's own name (a super's, its method's),
+   and for a `new` initialize too (cplan_name_bound_names). A superset, for a reader that must see every body the
+   call may run (a call graph, the blocks or arguments a method may be
+   handed); a reader that needs the exact set takes CPT_UNKNOWN as it is. */
+int cplan_entries_bound_names(Compiler *c, int id, const char *names[2]);
+/* The same bound for a call of method name `name` that no node shows (a
+   Method or an UnboundMethod of it, a send): name, and initialize for
+   `new`. */
+int cplan_name_bound_names(const char *name, const char *names[2]);
 void cplan_targets_drop(void);
 /* Counts the drops (and a new compiler's first ask): an answer held at one
    count is the answer while it stands. */

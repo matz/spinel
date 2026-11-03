@@ -1735,16 +1735,17 @@ const CallPlan *cplan_user_fresh(Compiler *c, int id) {
   return cplan_dep(&fresh);
 }
 
-/* The class a constructor call builds: a constant receiver's, or the class
-   its method runs for, as inference types it (bare or `self.new` in a class
-   method, `self.class.new` in an instance method). *own is set for the
-   second kind, which a subclass receiving the method builds its own of. */
+/* The class a constructor call builds: a constant receiver's or a local's
+   that holds one class (class_recv_static_ci), or the class its method
+   runs for, as inference types it (bare or `self.new` in a class method,
+   `self.class.new` in an instance method). *own is set for the last kind,
+   which a subclass receiving the method builds its own of. */
 static int cplan_new_class(Compiler *c, int id, int *own) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver");
   NodeKind k = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   *own = 0;
-  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) return const_node_class_index(c, r);
+  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode || k == NK_LocalVariableReadNode) return class_recv_static_ci(c, r);
   Scope *s = comp_scope_of(c, id);
   int ci = -1;
   if (s && s->is_cmethod && (r < 0 || k == NK_SelfNode)) ci = s->class_id;
@@ -1756,20 +1757,11 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
   return ci;
 }
 
-/* A builtin `new` (no program `new` answers it): the initialize methods it
-   may run. A constructor's result can be discarded, so this resolves from
-   its receiver, not from its result type.
-   The class it builds is cplan_new_class's, with each subclass's for a
-   `new` on the class its method runs for, which a subclass receiving the
-   method builds its own of; a constant naming a builtin, one the program
-   assigns no constant of its name to, runs none of the program's; any
-   other class value (a variable's, a call's answer, a constant the program
-   assigns) is no closed set. -2 for any other call. The methods a
-   builtin `new` enters, never what it answers (cplan_entries). */
-static int ct_new_initializers(Compiler *c, int id, int *out) {
-  const NodeTable *nt = c->nt;
-  if (!is_new_name(nt_str(nt, id, "name"))) return -2;
-  int own, ci = cplan_new_class(c, id, &own), n = 0;
+/* The initialize methods a builtin `new` runs that builds class ci, or with
+   own an instance of ci or of any subclass (into out, at most CPT_MAX;
+   CPT_UNKNOWN past it). */
+static int ct_class_initializers(Compiler *c, int ci, int own, int *out) {
+  int n = 0;
   for (int k = ci; ci >= 0 && k < c->nclasses; k++) {
     if (k != ci && (!own || !is_descendant(c, k, ci))) continue;
     int mi = comp_method_in_chain(c, k, "initialize", NULL), dup = 0;
@@ -1778,11 +1770,32 @@ static int ct_new_initializers(Compiler *c, int id, int *out) {
     if (n == CPT_MAX) return CPT_UNKNOWN;
     out[n++] = mi;
   }
+  return n;
+}
+/* A builtin `new` (no program `new` answers it): the initialize methods it
+   may run. A constructor's result can be discarded, so this resolves from
+   its receiver, not from its result type.
+   The class it builds is cplan_new_class's, with each subclass's for a
+   `new` on the class its method runs for, which a subclass receiving the
+   method builds its own of; a constant naming a builtin (or one the
+   builtin class table lacks, is_untabled_native_class_name), one the
+   program assigns no constant of its name to, runs none of the program's;
+   any other receiver that may be a class (a variable's value of more than
+   one class, a call's answer, a constant the program assigns, an untyped
+   one) is no closed set. -2 for any other call. The methods a builtin
+   `new` enters, never what it answers (cplan_entries). */
+static int ct_new_initializers(Compiler *c, int id, int *out) {
+  const NodeTable *nt = c->nt;
+  if (!is_new_name(nt_str(nt, id, "name"))) return -2;
+  int own, ci = cplan_new_class(c, id, &own), n = ci >= 0 ? ct_class_initializers(c, ci, own, out) : 0;
   int r = nt_ref(nt, id, "receiver");
   if (ci >= 0 || r < 0) return ci >= 0 ? n : -2;
   NodeKind k = nt_kind(nt, r);
+  /* (an untabled builtin runs no program initialize only while reopening,
+     subclassing, prepend, class_eval and define_method on it are refused:
+     revisit when they are lifted) */
   if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && !comp_const(c, nt_str(nt, r, "name")) &&
-      const_seg_builtin(c, r))
+      (const_seg_builtin(c, r) || (k == NK_ConstantReadNode && is_untabled_native_class_name(nt_str(nt, r, "name")))))
     return 0;
   TyKind rt = comp_ntype(c, r);
   return rt == TY_POLY || rt == TY_UNKNOWN || rt == TY_CLASS ? CPT_UNKNOWN : -2;
@@ -2076,13 +2089,72 @@ int cplan_targets(Compiler *c, int id, int *out, int cap) {
   return n;
 }
 
-/* A builtin `new` call id's entries (ct_new_initializers, into out), or -2
-   for any other call, whose entries are its targets. */
+/* A super, bare or not, in a program `new` that reaches the builtin
+   Class#new (no program `new` above the method): the initialize methods it
+   runs, those of the method's class and its subclasses, which self is one
+   of. Open (CPT_UNKNOWN) for a module's `new`, which a class's singleton
+   takes by extend or prepend, and for a method under a prepend chain,
+   whose super the chain decides. -2 for any other super. */
+static int ct_super_new_initializers(Compiler *c, int id, int *out) {
+  Scope *s = comp_scope_of(c, id);
+  if (!s || s->class_id < 0 || !is_new_name(comp_scope_def_name(c, s))) return -2;
+  int at;
+  if (cplan_super_target(c, id, s, &at) >= 0) return -2;
+  int mod = comp_class_is_module(c, &c->classes[s->class_id]);
+  if (mod ? !s->is_cmethod : comp_super_shadow(c, s) != NULL) return CPT_UNKNOWN;
+  return !mod && s->is_cmethod ? ct_class_initializers(c, s->class_id, 1, out) : -2;
+}
+/* A `new` call id that a program `new` answers for some class its
+   receiver may be: those methods (its cplan_targets), and the initialize
+   methods of each class it may be that takes the builtin `new` instead.
+   The classes are cplan_new_class's (with its subclasses for the class a
+   method runs for) or, for a class value, those its class facts list
+   (cls_fact_node); CPT_UNKNOWN where they cannot be listed. */
+static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
+  int n = cplan_targets(c, id, out, CPT_MAX), own, ci = cplan_new_class(c, id, &own);
+  if (n < 0) return n;
+  int r = nt_ref(c->nt, id, "receiver"), cls[CPT_MAX], ncls = 0;
+  if (ci >= 0) {
+    for (int k = ci; k < c->nclasses; k++)
+      if (k == ci || (own && is_descendant(c, k, ci))) {
+        if (ncls == CPT_MAX) return CPT_UNKNOWN;
+        cls[ncls++] = k;
+      }
+  } else if (r >= 0) {
+    const ClsSet *cs = cls_fact_node(c, r);
+    if (!cs || cs->all || cs->bv) return CPT_UNKNOWN;
+    /* (a member past nclasses is a class value: its class methods answer) */
+    for (int m = cls_set_next(cs, -1); m >= 0; m = cls_set_next(cs, m)) {
+      if (m < c->nclasses) continue;
+      if (ncls == CPT_MAX) return CPT_UNKNOWN;
+      cls[ncls++] = m - c->nclasses;
+    }
+  }
+  for (int i = 0; i < ncls; i++) {
+    int k = cls[i], init[CPT_MAX];
+    if (comp_class_is_module(c, &c->classes[k]) || comp_cmethod_in_chain(c, k, "new", NULL) >= 0) continue;
+    int ni = ct_class_initializers(c, k, 0, init);
+    if (ni < 0) return CPT_UNKNOWN;
+    for (int j = 0; j < ni; j++) {
+      int dup = 0;
+      for (int q = 0; q < n && !dup; q++) dup = out[q] == init[j];
+      if (dup) continue;
+      if (n == CPT_MAX) return CPT_UNKNOWN;
+      out[n++] = init[j];
+    }
+  }
+  return n;
+}
+/* A `new` call id's entries: a builtin one's (ct_new_initializers), one a
+   program `new` answers for some class (ct_mixed_new_entries), into out;
+   or a super's that reaches the builtin one (ct_super_new_initializers);
+   -2 for any other call, whose entries are its targets. */
 static int ct_new_entries(Compiler *c, int id, int *out) {
-  if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name")) ||
-      cplan_user_fresh(c, id)->dispatch != CP_NONE)
-    return -2;
-  return ct_new_initializers(c, id, out);
+  if (id < 0 || id >= c->node_cap) return -2;
+  NodeKind k = nt_kind(c->nt, id);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return ct_super_new_initializers(c, id, out);
+  if (k != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name"))) return -2;
+  return cplan_user_fresh(c, id)->dispatch != CP_NONE ? ct_mixed_new_entries(c, id, out) : ct_new_initializers(c, id, out);
 }
 
 int cplan_entries(Compiler *c, int id, int *out, int cap) {
@@ -2095,11 +2167,23 @@ int cplan_entries(Compiler *c, int id, int *out, int cap) {
   return n;
 }
 
-int cplan_entries_unknown_why(Compiler *c, int id, int cap) {
-  int tmp[CPT_MAX], n = ct_new_entries(c, id, tmp), recv = nt_ref(c->nt, id, "receiver");
-  if (n == CPT_UNKNOWN && recv >= 0 && comp_ntype(c, recv) != TY_UNKNOWN) return CPT_WHY_NEW_OPEN;
-  if (n >= 0) return n > cap ? CPT_WHY_CAP : CPT_WHY_NONE;
-  return cplan_targets_unknown_why(c, id, cap);
+int cplan_entries_bound_names(Compiler *c, int id, const char *names[2]) {
+  if (id < 0 || id >= c->node_cap) return 0;
+  NodeKind k = nt_kind(c->nt, id);
+  const Scope *s = k == NK_SuperNode || k == NK_ForwardingSuperNode ? comp_scope_of(c, id) : NULL;
+  /* (a super's name is its method's) */
+  const char *nm = k == NK_CallNode ? nt_str(c->nt, id, "name") : s ? comp_scope_def_name(c, s) : NULL;
+  return nm ? cplan_name_bound_names(nm, names) : 0;
+}
+int cplan_name_bound_names(const char *name, const char *names[2]) {
+  int n = 0;
+  names[n++] = name;
+  /* (the builtin `new` runs the initialize of the class it builds. The
+     bound takes `new` by its name: an alias of it, or a class-side
+     method_missing that builds, is refused today, else its bound would
+     miss initialize) */
+  if (is_new_name(name)) names[n++] = "initialize";
+  return n;
 }
 
 /* See call_plan.h. A boxed receiver's cplan_targets lists every class's

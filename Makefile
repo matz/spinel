@@ -5521,6 +5521,18 @@ signal-default-test: $(SPINEL)
 	if [ $$ok -eq 1 ]; then \
 	  [ "$$(timeout -s KILL 10 "$$tmp/iir" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through new: the call graph lost the edge from new to initialize)"; ok=0; }; \
 	fi; \
+	$(SPINEL) test/signal/interrupt_class_value_new.rb -o "$$tmp/icv" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile class value new)"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  [ "$$(timeout -s KILL 10 "$$tmp/icv" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through new on a class value: the call graph lost the edge to every initialize)"; ok=0; }; \
+	fi; \
+	$(SPINEL) test/signal/interrupt_super_new_recursion.rb -o "$$tmp/isn" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile super new recursion)"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  [ "$$(timeout -s KILL 10 "$$tmp/isn" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through a program new's super)"; ok=0; }; \
+	fi; \
+	$(SPINEL) test/signal/interrupt_mixed_new_recursion.rb -o "$$tmp/imn" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile mixed new recursion)"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  [ "$$(timeout -s KILL 10 "$$tmp/imn" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through new on a class value that may take the builtin new: the call graph lost the edge to its initialize)"; ok=0; }; \
+	fi; \
 	$(SPINEL) test/signal/interrupt_dynamic_call.rb -o "$$tmp/idc" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile dynamic call)"; ok=0; }; \
 	if [ $$ok -eq 1 ]; then \
 	  [ "$$(timeout -s KILL 10 "$$tmp/idc" 2>/dev/null)" = "dynamic call interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through a proc's call made in a spliced yielder)"; ok=0; }; \

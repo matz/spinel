@@ -790,11 +790,16 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
     int blk = nt_ref(nt, n, "block");
     if (blk < 0) continue;
     int tg[64], ntg = sh_targets_in(F, c, n, tg, 64, 1);
-    /* a builtin `new` on a class value the plan cannot name: any initialize */
-    if (ntg < 0 && nt_kind(nt, blk) == NK_BlockNode && cplan_entries_unknown_why(c, n, 64) == CPT_WHY_NEW_OPEN)
-      for (int m = an_scopes_named_first(c, "initialize"); m >= 1; m = an_scopes_named_next(c, "initialize", m))
-        if (c->scopes[m].def_node >= 0 && !c->scopes[m].is_cmethod) sh_mb_add(F, c, blk, m);
-    if (ntg < 0) continue;
+    /* methods the plan cannot list: its block may reach each method of the
+       names the plan bounds them by (cplan_entries_bound_names) */
+    if (ntg < 0) {
+      const char *bn[2];
+      int nb = cplan_entries_bound_names(c, n, bn);
+      for (int j = 0; j < nb; j++)
+        for (int m = an_scopes_named_first(c, bn[j]); m >= 1; m = an_scopes_named_next(c, bn[j], m))
+          if (c->scopes[m].def_node >= 0) sh_mb_block(F, c, n, blk, m);
+      continue;
+    }
     int nbind = 0;
     for (int i = 0; i < ntg; i++) nbind += cplan_target_binds(c, n, tg[i]);
     if (ntg > 0 && nbind > 0)
@@ -805,7 +810,9 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
     NT_FOREACH_KIND(nt, sup[k], n) {
       if (dead[n]) continue;
       int blk = nt_ref(nt, n, "block");
-      int tg[64], ntg = sh_targets(c, n, tg, 64), cur = sh_method_index(c, n);
+      /* (the methods it enters: a program `new`'s super into the builtin
+         Class#new enters the initialize it runs, which answers no value) */
+      int tg[64], ntg = sh_targets_in(F, c, n, tg, 64, 1), cur = sh_method_index(c, n);
       for (int i = 0; i < ntg; i++) {
         if (sup[k] == NK_ForwardingSuperNode && cur >= 0) {
           F->blk_dyn[tg[i]] |= 3;

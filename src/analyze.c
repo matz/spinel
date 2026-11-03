@@ -25760,16 +25760,21 @@ static int share_default_apply(Compiler *c, int in_fixpoint) {
      gathers: the callee's parameters name those elements again. A literal
      handed to a builtin (`p [a, b]`), a proc or a block's value is left as
      before. The methods the call enters are the plan's (cplan_entries: a
-     builtin `new`'s initialize), as the facts read them. */
+     builtin `new`'s initialize), as the facts read them, and where it
+     cannot list them each method of the names it bounds them by. */
   unsigned char *rest_read = rest_param_reads(c);
   NT_FOREACH_KIND(c->nt, NK_CallNode, n) {
     int args = nt_ref(c->nt, n, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &an) : NULL;
     if (an == 0) continue;
-    int mis[CPT_MAX], cnt = cplan_entries(c, n, mis, CPT_MAX);
-    if (cnt <= 0) continue;
-    for (int i = 0; i < an; i++) changed |= share_demand_literal_arg(c, av[i]);
+    int mis[CPT_MAX], cnt = cplan_entries(c, n, mis, CPT_MAX), any = cnt > 0;
     for (int t = 0; t < cnt; t++) changed |= share_demand_rest_args(c, mis[t], av, an, rest_read);
+    const char *bn[2];
+    int nb = cnt < 0 ? cplan_entries_bound_names(c, n, bn) : 0;
+    for (int j = 0; j < nb; j++)
+      for (int m = an_scopes_named_first(c, bn[j]); m >= 1; m = an_scopes_named_next(c, bn[j], m))
+        if (c->scopes[m].def_node >= 0) { any = 1; changed |= share_demand_rest_args(c, m, av, an, rest_read); }
+    for (int i = 0; any && i < an; i++) changed |= share_demand_literal_arg(c, av[i]);
   }
   free(rest_read);
   sb_share_end();

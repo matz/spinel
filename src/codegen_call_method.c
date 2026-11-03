@@ -1805,6 +1805,11 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         buf_printf(b, "({ void *_t%d = (void *)(", self_tmp);
         emit_expr(c, recv, b);
         buf_printf(b, "); SP_GC_ROOT%s(_t%d); ", self_is_str ? "_STR" : "", self_tmp);
+        /* a receiver that may be nil (a NULL pointer here) has no method of
+           the name: CRuby's NameError at the lookup, where a Method bound
+           to NULL would call the method on it (#10719, e4) */
+        if (nil_fact_node(c, recv))
+          buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ", self_tmp, sym);
       }
     }
     buf_puts(b, mi >= 0 ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");

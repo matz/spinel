@@ -34594,6 +34594,16 @@ static int pf_wanted(Compiler *c, const char *name) {
                       : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
       int rci = rcn ? comp_class_index(c, rcn) : -1;
       if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;
+      /* a receiver not typed yet (an ivar an empty literal seeds, `@arr =
+         []`) may settle as one of them: the clone is made, a static
+         function the C compiler drops when nothing calls it (#10719) */
+      if (rt == TY_UNKNOWN) {
+        static const char *const reopens[] = { "Array", "Hash", "Numeric", "String", "NilClass" };
+        for (int q = 0; q < 5; q++) {
+          int qci = comp_class_index(c, reopens[q]);
+          if (qci >= 0 && comp_method_in_class(c, qci, name) >= 0) return 1;
+        }
+      }
       /* so is a String's, Integer's, Float's, Symbol's, Random's, Fiber's,
          Thread's, Range's or Time's own reopening (the clone is how a call
          reaches it: core_reopen_calls_proc_form) */

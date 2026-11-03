@@ -13905,6 +13905,14 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       if (nin >= 0 && sp_streq(c->native_methods[nin].ret, "string"))
         buf_printf(b, "    case %d: return %s((%s *)p);\n",
                    i, c->native_methods[nin].csym, c->classes[i].c_struct);
+      /* one without renders Object#inspect's default, #<StringIO:0x...>, as
+         its #to_s does: the walk has no row for it and answered #<Object> */
+      else {
+        char drn[512], darg[96];
+        obj_default_name(c, i, drn, sizeof drn, darg, sizeof darg);
+        buf_printf(b, "    case %d: return sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)p);\n",
+                   i, drn, darg);
+      }
       continue;
     }
     /* a value-type class: a user #inspect of its own answers (self by

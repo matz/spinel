@@ -1,0 +1,24 @@
+644 644
+u+x 744
+g-r 704
+o=rw 706
+a-w 504
+u=rw,go=r 644
++x 755
+a= 0
+u=rwx,g=u,o=g-w 775
+u+r-w 575
+g=u+x 555
+700
+600
+644
+640
+755
+644
+644
+chmod u+x x
+640
+invalid 'perm' symbol in file mode: q
+invalid 'who' symbol in file mode: z
+invalid file mode: u
+no implicit conversion of String into Integer

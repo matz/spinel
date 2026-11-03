@@ -19336,12 +19336,12 @@ static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   /* builtin Class/Module methods every class object inherits; a module
      lacks Class's own (`new`, `superclass`, ...) */
   if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
-  /* A Struct or Data CLASS object carries the member list the same way its
-     instances do; the instance arm of the respond_to? fold already answered
-     these, so the class object saying false about its own `members` was the
-     odd one out (#3482). */
-  if ((c->classes[ci].is_struct || c->classes[ci].is_data) && sp_streq(qm, "members")) return 1;
-  return 0;
+  /* A Struct or Data CLASS object answers its record class's own builtins
+     (is_record_class_cmethod: `members`, a Struct's `keyword_init?`, ...)
+     the way its instances answer theirs (#3482), before a program's def of
+     one as after it, an anonymous `Struct.new(...)` too */
+  int sk = class_struct_kind(c, ci);
+  return sk && is_record_class_cmethod(qm, sk == 2);
 }
 /* See codegen_call_arms.h. */
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {

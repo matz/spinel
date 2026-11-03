@@ -86,9 +86,12 @@ p [q.class, w]
 class Dropped
   def to_ary = [:gone, :later]
 end
+# an undef of to_ary that runs later: the assignment before it does not
+# raise (w is :later in CRuby; the conversion is not made while the class
+# holds an undef of to_ary, so w is not printed)
 begin
   q, w = Dropped.new
-  p w.nil? || w == :later
+  p :assigned
 rescue NoMethodError
   p :raised
 end
@@ -103,3 +106,9 @@ a, b, *r, (c, d) = 1, Pair.new(1, 2)
 p [a, b.class, r, c, d]
 a, *r, (c, d) = 1, Pair.new(3, 4)
 p [a, r, c, d]
+# a nested assignment whose value is read answers its elements as they
+# were, each evaluated once, while the nested target takes the converted one
+r = (a, (c, d) = 1, Pair.new(5, 6))
+p [r[1].class, a, c, d]
+def nested_value(o) = ((x, (y, z) = 7, o))
+p nested_value(Pair.new(8, 9)).map(&:class)

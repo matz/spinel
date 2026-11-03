@@ -6633,8 +6633,10 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
     if (a >= 0) nt_arr(nt, a, "arguments", &an);
     int elem_read = (sp_streq(nm, "[]") && an == 1) || (sp_streq(nm, "fetch") && an >= 1) ||
                     ((is_endpoint_query(nm)) && an == 0);
-    /* a copy is built as the container it copies: the two widen together */
-    if (r >= 0 && an == 0 && nt_ref(nt, n, "block") < 0 && (sp_streq(nm, "dup") || sp_streq(nm, "clone")))
+    /* a copy is built as the container it copies: the two widen together;
+       a frozen one is the container itself (`@h = {}.freeze`) */
+    if (r >= 0 && an == 0 && nt_ref(nt, n, "block") < 0 &&
+        (sp_streq(nm, "dup") || sp_streq(nm, "clone") || sp_streq(nm, "freeze")))
       return container_literals(c, r, out, nout, cap, depth + 1);
     if (r < 0 || !elem_read || nt_ref(nt, n, "block") >= 0) return nout;
     int outer[32];

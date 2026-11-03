@@ -22244,6 +22244,22 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
     }
   }
   if (plain && nt_kind(nt, vrecv) == NK_SelfNode) return;
+  /* a nil receiver keys to the NilClass reopening by its tag, not by a
+     cls_id the loop above tests: a private method the program gives
+     NilClass refuses the explicit receiver as CRuby does (`x&.m` never
+     calls on nil) */
+  {
+    int nci = comp_core_class(c, CORE_NILCLASS);
+    int nvis = nci >= 0 && may_refuse && !nt_safe_nav(nt, id) &&
+               (call_target(c, id, nci, vnm, 0, NULL) >= 0 || comp_reader_in_chain(c, nci, vnm, NULL))
+             ? (plain ? method_vis_for_caller(c, id, nci, vnm) : comp_method_vis_declared(c, nci, vnm, NULL))
+             : SP_VIS_PUBLIC;
+    if (nvis != SP_VIS_PUBLIC) {
+      buf_printf(b, "if (_t%d.tag == SP_TAG_NIL) { ", tv);
+      emit_vis_raise_boxed(nvis, vnm, tv, b);
+      buf_puts(b, "; } ");
+    }
+  }
   if (plain || stamped) emit_object_reopen_vis_precheck(c, id, tv, vnm, stamped, b);
   /* a boxed IO handle, by the reopening its kind picks */
   int ks[16], n = io_reopen_defs(c, vnm, 0, ks, 16);
@@ -26599,6 +26615,10 @@ int cplan_nil_program_served(Compiler *c, int id) {
   if (!nilcls) return 1;
   Repr want = repr_of(c, id);
   if (want.kind == RK_BOXED) return 1;
+  /* a call whose other arm raises (the receiver's class has no method of
+     the name) has no type of its own, and is rendered boxed as the raise
+     is: nil's answer goes boxed beside it */
+  if (want.as_ty == TY_UNKNOWN) return 1;
   Scope *s = &c->scopes[mi];
   TyKind t = want.as_ty;
   if (!method_is_void(s) && (TyKind)s->ret != TY_NIL) return (TyKind)s->ret == t;
@@ -26637,7 +26657,20 @@ static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   Repr want = repr_of(c, id);
   Scope *s = &c->scopes[mi];
   Buf nv; memset(&nv, 0, sizeof nv);
+  /* a private method of NilClass's (or Object's) is no answer for a call
+     with an explicit receiver (this one has a variable's): CRuby's
+     NoMethodError, as for `nil.m` written out */
+  int nil_private = comp_method_vis_in_chain(c, s->class_id, nt_str(nt, id, "name")) == SP_VIS_PRIVATE;
+  /* (a call with no type of its own, whose other arm raises, is boxed) */
+  int boxed = want.kind == RK_BOXED || want.as_ty == TY_UNKNOWN;
+  if (nil_private) {
+    free(nb.p); nb.p = NULL; nb.len = nb.cap = 0;
+    buf_printf(&nb, "(sp_exc_stage_recv(sp_box_nil()), sp_raise_cls(\"NoMethodError\", \"private method '%s' called for nil\"), %s)",
+               nt_str(nt, id, "name"), boxed ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+  }
   if (stmt) buf_printf(&nv, "(void)(%s)", nb.p ? nb.p : "0");
+  else if (nil_private) buf_puts(&nv, nb.p);
+  else if (nilcls && boxed && !(method_is_void(s) || (TyKind)s->ret == TY_NIL)) emit_boxed_text(c, (TyKind)s->ret, nb.p ? nb.p : "0", &nv);
   else if (nilcls && (method_is_void(s) || (TyKind)s->ret == TY_NIL))
     buf_printf(&nv, "((void)(%s), %s)", nb.p ? nb.p : "0",
                want.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));

@@ -3008,6 +3008,10 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     break;
   case RK_NONE:
   default:
+    /* a call of no type whose other arm raises, behind the nil arm the plan
+       serves (cplan_nil: CN_PROGRAM): the nil arm's answer, boxed by its
+       emitter, not a nil after it */
+    if (nt_kind(c->nt, node) == NK_CallNode && cplan_nil(c, node) == CN_PROGRAM) { emit_expr(c, node, b); RC(RF_NIL_EFFECT, RW_NONE); return; }
     /* TY_UNKNOWN (e.g. unrecognized stdlib class .new): evaluate for side-effects, yield nil */
     buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, ", sp_box_nil())"); RC(RF_NIL_EFFECT, RW_NONE); return;
   }

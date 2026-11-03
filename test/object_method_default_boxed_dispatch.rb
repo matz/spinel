@@ -26,3 +26,7 @@ p $n
 def ca(v) = v.o(7)
 def cka(v) = v.kw(a: 4)
 p [ca({}), ca(3), cka({}), cka(3)]
+# a later default that writes an earlier parameter through a lambda
+class Object; def cw(x = 1, y = (-> { x = 7 }.call)) = [x, y]; end
+def c3(v) = v.cw
+[nil, 1, "s"].each { |v| p c3(v) }

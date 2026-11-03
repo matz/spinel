@@ -2160,6 +2160,7 @@ int default_refs_earlier_param(Compiler *c, Scope *m);
 int opt_before_required(Compiler *c, Scope *m);
 int arg_layout_param_node(Compiler *c, Scope *m, int call, int i, int *spread);
 void emit_pd_param_bind(Compiler *c, Scope *m, int i, int uid, const char *val, char *name, size_t cap);
+void emit_pd_cell_copyback(Compiler *c, Scope *m, int uid, char names[][64]);
 /* `(sp_Parent *)` when an object value flows into an ancestor-typed slot; the
    layouts match by construction, but C needs the cast spelled (#3418). */
 void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b);

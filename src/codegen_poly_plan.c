@@ -1846,15 +1846,17 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
           Buf *sv_pre = g_pre; g_pre = &apre;
           int sibling = om->nparams <= 64 && default_refs_earlier_param(c, om);
           int uid = sibling ? ++g_tmp : 0, ren_base = g_nren;
+          char tn[64][64];
           for (int a = 0; a < om->nparams; a++) {
-            buf_puts(&ob, ", ");
-            if (!sibling) { emit_arg_or_default(c, om, a, -1, &ob); continue; }
+            if (!sibling) { buf_puts(&ob, ", "); emit_arg_or_default(c, om, a, -1, &ob); continue; }
             Buf vb; memset(&vb, 0, sizeof vb);
-            char tn[64];
             emit_arg_or_default(c, om, a, -1, &vb);
-            emit_pd_param_bind(c, om, a, uid, vb.p, tn, sizeof tn);
+            emit_pd_param_bind(c, om, a, uid, vb.p, tn[a], sizeof tn[a]);
             free(vb.p);
-            buf_puts(&ob, tn);
+          }
+          if (sibling) {
+            emit_pd_cell_copyback(c, om, uid, tn);
+            for (int a = 0; a < om->nparams; a++) { buf_puts(&ob, ", "); buf_puts(&ob, tn[a]); }
           }
           g_nren = ren_base;
           g_pre = sv_pre;

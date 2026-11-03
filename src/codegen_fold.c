@@ -10706,6 +10706,25 @@ void emit_pd_param_bind(Compiler *c, Scope *m, int i, int uid, const char *val, 
   snprintf(name, cap, byref ? "_cell_%s" : "lv_%s", uniq);
 }
 
+/* After every parameter of m is bound (emit_pd_param_bind, uid): a
+   parameter a closure captures lives in its cell once a default has run,
+   which a later default may have written (`b = (-> { a = 7 }.call)`), so
+   the call passes the alias, which takes the cell's value. names[i] is
+   parameter i's bound name. */
+void emit_pd_cell_copyback(Compiler *c, Scope *m, int uid, char names[][64]) {
+  for (int i = 0; i < m->nparams && i < 64; i++) {
+    LocalVar *cp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+    if (!cp || !cp->is_cell || cp->byref_out) continue;
+    for (int j = i + 1; j < m->nparams; j++)
+      if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_local(c, m->pdefault[j], m->pnames[i])) {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "%s = %s*_cell__pd%d_%d;\n", names[i],
+                   cp->type == TY_PROC ? "(sp_Proc *)(uintptr_t)" : "", uid, i);
+        break;
+      }
+  }
+}
+
 /* True if some parameter's default expression references an EARLIER parameter
    (reads or assigns it: `b = (a = 4)`). Ruby evaluates defaults left-to-right in the callee where earlier params are
    already bound; spinel fills defaults at the call site, where those bindings
@@ -12345,20 +12364,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
       emit_pd_param_bind(c, m, i, uid, vb.p, tmpnames[i], sizeof tmpnames[0]);
       free(vb.p);
     }
-    /* a parameter a closure captures lives in its cell once a default has
-       run, which a later default may have written (`b = (-> { a = 7 }.call)`):
-       the call passes the alias, which takes the cell's value */
-    for (int i = 0; i < m->nparams; i++) {
-      LocalVar *cp = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
-      if (!cp || !cp->is_cell || cp->byref_out) continue;
-      for (int j = i + 1; j < m->nparams; j++)
-        if (m->pdefault && m->pdefault[j] >= 0 && subtree_writes_local(c, m->pdefault[j], m->pnames[i])) {
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "%s = %s*_cell__pd%d_%d;\n", tmpnames[i],
-                     cp->type == TY_PROC ? "(sp_Proc *)(uintptr_t)" : "", uid, i);
-          break;
-        }
-    }
+    emit_pd_cell_copyback(c, m, uid, tmpnames);
     g_nren = ren_base;  /* pop the renames before emitting the call args */
     for (int i = 0; i < m->nparams; i++) {
       buf_puts(out, i == 0 ? lead : ", ");

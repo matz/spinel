@@ -9,15 +9,16 @@
 class CA < Array; end
 class CB < CA; end
 class CH < Hash; end
+class CHS < CH; end
 class CS < String; end
 
 def array_name = CA.name
 def sub_name(k) = k.name
-def hash_text = CH.to_s
+def hash_text = [CH.to_s, CHS.to_s]
 def string_text = CS.inspect
 array_lambda = -> { [CA.name, CB.name] }
 def calls = [array_name, sub_name(CB), sub_name(CA), CA.then { |k| k.name }, hash_text, string_text]
-p calls, array_lambda.(), CA.name, CH.to_s, CS.inspect
+p calls, array_lambda.(), CA.name, CH.to_s, CHS.to_s, CS.inspect
 
 class CA
   def self.name = "ca"
@@ -26,4 +27,4 @@ class CH
   def self.to_s = "ch"
 end
 def CS.inspect = "cs"
-p calls, array_lambda.(), CA.name, CH.to_s, CS.inspect
+p calls, array_lambda.(), CA.name, CH.to_s, CHS.to_s, CS.inspect

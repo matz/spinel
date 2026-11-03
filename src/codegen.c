@@ -20945,10 +20945,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
     if (prog_has_cls_user_display(c, "to_s"))
       buf_printf(b, "static const char *sp_class_to_s_disp(sp_Class c){if(sp_class_user_to_s_fn){const char *_u=sp_class_user_to_s_fn(c);if(_u)return _u;}return %s(c);}\n\n",
                  comp_class_base_display_fn(c));
-    buf_puts(b, "static const char *sp_class_inspect_name(sp_Class c){");
-    if (prog_has_cls_user_display(c, "inspect"))
-      buf_puts(b, "if(sp_class_user_inspect_fn){const char *_u=sp_class_user_inspect_fn(c);if(_u)return _u;}");
-    buf_puts(b, "switch(c.cls_id){");
+    /* (apart from the hook's table only where the program has a hook:
+       sp_class_inspect_text, which an else arm that runs the builtin calls) */
+    int ihook = prog_has_cls_user_display(c, "inspect");
+    buf_printf(b, "static const char *%s(sp_Class c){switch(c.cls_id){", ihook ? "sp_class_inspect_text" : "sp_class_inspect_name");
     for (int i = 0; i < c->nclasses; i++) {
       if (is_builtin_reopen(c->classes[i].name)) continue;
       if (!c->classes[i].is_struct || c->classes[i].kw_init != 1) continue;
@@ -20957,6 +20957,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
       buf_printf(b, "case %d:return SPL(\"%s(keyword_init: true)\");", i, qname);
     }
     buf_printf(b, "default:break;} return %s(c); }\n\n", comp_class_base_display_fn(c));
+    if (ihook)
+      buf_puts(b, "static const char *sp_class_inspect_name(sp_Class c){"
+                  "if(sp_class_user_inspect_fn){const char *_u=sp_class_user_inspect_fn(c);if(_u)return _u;}"
+                  "return sp_class_inspect_text(c); }\n\n");
     /* #name of an ANONYMOUS class is nil, where #to_s and #inspect are the
        address form sp_class_to_s renders. The static spelling
        (`Struct.new(:a).name`) has always answered nil; this is the same class

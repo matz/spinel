@@ -3864,7 +3864,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; %s(_cl%d); })",
-                 is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), _clt);
+                 comp_class_reader_fn(c, name, 0), _clt);
       return 1;
     }
     if (sp_streq(name, "nil?")) {
@@ -4554,7 +4554,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           if (!rdef9 && argc == 0 && is_name_reader(name)) {
             char nb[128];
             if (is_class_name_name(name)) snprintf(nb, sizeof nb, "sp_str_frozen_name(sp_class_name_or_nil(_t%d))", tk9);
-            else snprintf(nb, sizeof nb, "%s(_t%d)", comp_class_display_fn(c), tk9);
+            else snprintf(nb, sizeof nb, "%s(_t%d)", comp_class_reader_fn(c, name, 0), tk9);
             if (slot9 == TY_POLY) buf_printf(b, " default: _t%d = sp_box_nullable_str(%s); break;", tr9, nb);
             else buf_printf(b, " default: _t%d = %s; break;", tr9, nb);
           }
@@ -4795,7 +4795,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int smi = call_target(c, id, g_class_body_id, name, CT_CMETHOD, NULL);
     if (smi < 0 && argc == 0 && comp_class_anonymous(c, g_class_body_id) && is_name_reader(name)) {
       buf_printf(b, "%s((sp_Class){%d})",
-                 is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), g_class_body_id);
+                 comp_class_reader_fn(c, name, 0), g_class_body_id);
       return 1;
     }
     if (smi >= 0) {
@@ -4878,8 +4878,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       /* inspect carries a keyword-init Struct class's suffix; to_s stays the
          bare name (#3947), and name is nil for an anonymous class (#4031) */
       buf_printf(b, "; %s(_cl%d); })",
-                 is_inspect_name(name) ? "sp_class_inspect_name"
-                 : is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), _clt);
+                 comp_class_reader_fn(c, name, 0), _clt);
     }
     else emit_expr(c, recv, b);
     return 1;
@@ -5100,17 +5099,11 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       call_target(c, id, const_node_class_index(c, recv), name, CT_CMETHOD, NULL) < 0) {
     { int qci = const_node_class_index(c, recv);
       if (comp_class_anonymous(c, qci)) {
-        buf_printf(b, "%s((sp_Class){%d})", is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), qci);
+        buf_printf(b, "%s((sp_Class){%d})", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), qci);
         return 1;
       }
       const char *qn8 = qci >= 0 ? class_ruby_name(c, qci) : NULL;
-      /* A keyword-init Struct class INSPECTS as `K(keyword_init: true)`; its
-         name and to_s stay the bare name, and a positional Struct or a Data
-         class has no suffix at all (#3947). */
-      int kwq = (qci >= 0 && c->classes[qci].is_struct && c->classes[qci].kw_init == 1 &&
-                 sp_streq(name, "inspect"));
-      buf_printf(b, "SPL(\"%s%s\")", qn8 ? qn8 : nt_str(nt, recv, "name"),
-                 kwq ? "(keyword_init: true)" : ""); }
+      buf_printf(b, "SPL(\"%s%s\")", qn8 ? qn8 : nt_str(nt, recv, "name"), comp_class_inspect_suffix(c, qci, name)); }
     return 1;
   }
   /* self.name / self.to_s / self.inspect inside a class method -> class name.
@@ -5126,15 +5119,14 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL) < 0) {
       if (cmethod_takes_self_cls(c, (int)(encl - c->scopes)))
-        buf_printf(b, "%s(%s)", is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c),
-                   encl->yields && g_self ? g_self : "_sp_cls");
+        buf_printf(b, "%s(%s)", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->yields && g_self ? g_self : "_sp_cls");
       else if (comp_class_anonymous(c, encl->class_id))
-        buf_printf(b, "%s((sp_Class){%d})", is_class_name_name(name) ? "sp_class_name_or_nil" : comp_class_display_fn(c), encl->class_id);
+        buf_printf(b, "%s((sp_Class){%d})", comp_class_reader_fn(c, name, cplan_pinned_builtin(c, id)), encl->class_id);
       else {
         /* the Ruby-visible name: the enclosing path, with any collision
            qualification undone (`Brainfuck__Array` is `Brainfuck::Array`) */
         const char *qn9 = class_ruby_name(c, encl->class_id);
-        buf_printf(b, "SPL(\"%s\")", qn9 ? qn9 : c->classes[encl->class_id].name);
+        buf_printf(b, "SPL(\"%s%s\")", qn9 ? qn9 : c->classes[encl->class_id].name, comp_class_inspect_suffix(c, encl->class_id, name));
       }
       return 1;
     }

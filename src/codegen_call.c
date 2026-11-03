@@ -31717,14 +31717,34 @@ int object_private_method_name(const char *qm) {
    class), in the order CRuby looks them up, or -1 when none defines it.
    A blank slate (BasicObject's subclass) reaches only BasicObject's. The
    class table keeps these roots apart from cid's own chain. */
+/* Whether root reopening k itself defines qm: a def, or an attr_reader or
+   attr_writer (`x=`) its body declared. */
+int root_reopen_defines_own(Compiler *c, int k, const char *qm) {
+  ClassInfo *ci = &c->classes[k];
+  /* (not a copy that an include made: Object's copy of a Kernel method is
+     Kernel's) */
+  int mi = comp_method_in_class(c, k, qm);
+  if ((mi >= 0 && c->scopes[mi].origin_module_ci == 0) || comp_is_reader(ci, qm)) return 1;
+  if (!name_is_plain_setter(qm)) return 0;
+  char base[260];
+  size_t ln = strlen(qm);
+  if (ln - 1 >= sizeof base) return 0;
+  memcpy(base, qm, ln - 1); base[ln - 1] = 0;
+  return comp_is_writer(ci, base);
+}
+
 int root_reopen_method_vis(Compiler *c, int cid, const char *qm) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   int blank = cid >= 0 && class_is_blank_slate(c, cid);
   for (int u = 0; roots[u] >= 0; u++) {
     if (blank && roots[u] != CORE_BASIC_OBJECT) continue;
     int k = comp_core_class(c, roots[u]);
-    if (k < 0 || k == cid || comp_method_in_class(c, k, qm) < 0) continue;
-    return comp_method_vis_declared(c, k, qm, NULL);
+    if (k < 0 || k == cid) continue;
+    /* an undef here hides a lower root's method of that name; it is
+       checked first, as comp_is_undeffed_in_chain does, since a Kernel
+       reopening's defs land in Object's table */
+    if (name_list_has(c->classes[k].undefs, c->classes[k].nundefs, qm)) return -1;
+    if (root_reopen_defines_own(c, k, qm)) return comp_method_vis_declared(c, k, qm, NULL);
   }
   return -1;
 }

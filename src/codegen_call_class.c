@@ -120,6 +120,28 @@ int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
    reopenings that class k's chain does not reach (the class table keeps
    them apart), into pub or priv by the visibility root_reopen_method_vis
    gives; k -1 for a value of no program class. Each name once. */
+/* One name of root reopening u (an index in roots) for class k: into pub or
+   priv when k's chain does not answer it and u is the first root with it. */
+static void object_reopen_responds_name(Compiler *c, int k, const int *roots, int u, const char *nm,
+                                        Buf *pub, Buf *priv) {
+  if (k >= 0 && (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL) ||
+                 comp_is_undeffed_in_chain(c, k, nm))) return;
+  /* the first root that defines it answers (Object over Kernel) */
+  for (int v = 0; v < u; v++) {
+    int rv = comp_core_class(c, roots[v]);
+    if (rv >= 0 && rv != k && root_reopen_defines_own(c, rv, nm)) return;
+  }
+  int vis = root_reopen_method_vis(c, k, nm);
+  if (vis < 0 || name_is_synth_method(c, nm) || is_initialize_family(nm)) return;
+  Buf *b = vis == SP_VIS_PUBLIC ? pub : priv;
+  buf_puts(b, "\""); emit_c_escaped(b, nm); buf_puts(b, "\", ");
+}
+
+/* The instance methods of the program's Object, Kernel and BasicObject
+   reopenings that class k's chain does not reach (the class table keeps
+   them apart), into pub or priv by the visibility root_reopen_method_vis
+   gives; k -1 for a value of no program class. Each name once. Readers and
+   writers (attr_*) count as methods. */
 static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv) {
   static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   for (int u = 0; roots[u] >= 0; u++) {
@@ -129,18 +151,16 @@ static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv)
       const Scope *os = &c->scopes[s];
       if (!os->name || os->is_cmethod || os->is_proc_form || os->class_id != r) continue;
       if (comp_method_in_class(c, r, os->name) != s) continue;
-      if (k >= 0 && (comp_method_in_chain(c, k, os->name, NULL) >= 0 || comp_reader_in_chain(c, k, os->name, NULL) ||
-                     comp_is_undeffed_in_chain(c, k, os->name))) continue;
-      /* the first root that defines it answers (Object over Kernel) */
-      int first = 1;
-      for (int v = 0; v < u && first; v++) {
-        int rv = comp_core_class(c, roots[v]);
-        if (rv >= 0 && rv != k && comp_method_in_class(c, rv, os->name) >= 0) first = 0;
-      }
-      int vis = root_reopen_method_vis(c, k, os->name);
-      if (!first || vis < 0 || name_is_synth_method(c, os->name) || is_initialize_family(os->name)) continue;
-      Buf *b = vis == SP_VIS_PUBLIC ? pub : priv;
-      buf_puts(b, "\""); emit_c_escaped(b, os->name); buf_puts(b, "\", ");
+      object_reopen_responds_name(c, k, roots, u, os->name, pub, priv);
+    }
+    const ClassInfo *rc = &c->classes[r];
+    for (int i = 0; i < rc->nreaders; i++)
+      if (comp_method_in_class(c, r, rc->readers[i]) < 0)
+        object_reopen_responds_name(c, k, roots, u, rc->readers[i], pub, priv);
+    for (int i = 0; i < rc->nwriters; i++) {
+      char nm[260];
+      if (snprintf(nm, sizeof nm, "%s=", rc->writers[i]) >= (int)sizeof nm) continue;
+      if (comp_method_in_class(c, r, nm) < 0) object_reopen_responds_name(c, k, roots, u, nm, pub, priv);
     }
   }
 }

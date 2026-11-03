@@ -2715,6 +2715,21 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     int rest[8]; for (int k = 0; k < nrest; k++) rest[k] = argv[k + 1];
     free(cand);
     int ncand = cg_cands_for_recv(c, &cs, const_get_recv_class(c, id, recv), nt_kind(nt, recv) == NK_SelfNode, &cand);
+    /* const_defined? also knows the builtin top-level names (String,
+       Comparable, ARGV), each arm answered at compile time */
+    int rci = const_get_recv_class(c, id, recv);
+    if (sp_streq(nm, "const_defined?") && !(rci >= 0 && class_is_blank_slate(c, rci))) {
+      int nw = 0; while (comp_wellknown_const_at(nw)) nw++;
+      char **g = (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + nw + 1));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      cand = g;
+      for (int w = 0; w < nw; w++) {
+        const char *wn = comp_wellknown_const_at(w);
+        int dup = 0;
+        for (int k = 0; k < ncand && !dup; k++) dup = sp_streq(cand[k], wn);
+        if (!dup) cand[ncand++] = (char *)wn;
+      }
+    }
     if (ncand == 0) continue;
     int base = nt->count;
     int *arms = (int *)malloc(sizeof(int) * (size_t)ncand);
@@ -22242,9 +22257,29 @@ static void cg_collect_qual(const NodeTable *nt, const int *parent, const ScgQua
   }
 }
 
+/* Whether class header CLS (a ClassNode) descends from BasicObject: its
+   superclass, followed by leaf name through the program's class headers.
+   A loose match only drops the Object fallback, as before. */
+static int cg_blank_slate(const NodeTable *nt, int n0, int cls, int depth) {
+  if (depth > 16 || cls < 0 || nt_kind(nt, cls) != NK_ClassNode) return 0;
+  int sup = nt_ref(nt, cls, "superclass");
+  if (sup < 0) return 0;
+  NodeKind sk = nt_kind(nt, sup);
+  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return 0;
+  const char *sn = nt_str(nt, sup, "name");
+  if (!sn) return 0;
+  if (sp_streq(sn, "BasicObject")) return 1;
+  for (int m = 0; m < n0; m++) {
+    if (m == cls || nt_kind(nt, m) != NK_ClassNode) continue;
+    const char *bn = class_def_name(nt, m);
+    if (bn && sp_streq(bn, sn) && cg_blank_slate(nt, n0, m, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* def self.<mname>(__cg_n) = {<table>}.<op>(__cg_n.to_s) */
 static int cg_def(NodeTable *nt, int like, const char *mname, const char *op,
-                  char **names, int nn, const char *mod) {
+                  char **names, int nn, const char *mod, const char *rbn, int plain) {
   int def = fwd_new_node_like(nt, like, "DefNode");
   int self = fwd_new_node_like(nt, like, "SelfNode");
   int ps = fwd_new_node_like(nt, like, "ParametersNode");
@@ -22274,7 +22309,81 @@ static int cg_def(NodeTable *nt, int like, const char *mname, const char *op,
   nt_node_set_str(nt, call, "name", op);
   nt_node_set_ref(nt, call, "receiver", hash);
   nt_node_set_ref(nt, call, "arguments", args);
-  if (!sp_streq(op, "[]") || !mod) nt_node_set_arr(nt, body, "body", &call, 1);
+  if (!sp_streq(op, "[]") && !mod) {
+    /* the inherit argument (optional, read by the fallback below) */
+    int opt = fwd_new_node_like(nt, like, "OptionalParameterNode");
+    nt_node_set_str(nt, opt, "name", "__cg_i");
+    nt_node_set_ref(nt, opt, "value", fwd_new_node_like(nt, like, "TrueNode"));
+    nt_node_set_arr(nt, ps, "optionals", &opt, 1);
+  }
+  if (!sp_streq(op, "[]") && !mod && !plain) {
+    /* const_defined? with inherit (the default) looks at Object's
+       constants too, as CRuby's lookup does for a module or a class, and
+       a path (`Inner::Z`) starts at the module (rbn, its Ruby name):
+         {...}.key?(__cg_n.to_s) ||
+           (__cg_i && (Object.const_defined?(__cg_n.to_s) ||
+                       Object.const_defined?("Mod::" + __cg_n.to_s))) */
+    int oc = fwd_new_node_like(nt, like, "CallNode");
+    int oca = fwd_new_node_like(nt, like, "ArgumentsNode");
+    int ocr = fwd_new_node_like(nt, like, "ConstantReadNode");
+    int ots = fwd_new_node_like(nt, like, "CallNode");
+    nt_node_set_str(nt, ots, "name", "to_s");
+    nt_node_set_ref(nt, ots, "receiver", local_read_like(nt, like, "__cg_n"));
+    nt_node_set_arr(nt, oca, "arguments", &ots, 1);
+    nt_node_set_str(nt, ocr, "name", "Object");
+    nt_node_set_str(nt, oc, "name", "const_defined?");
+    nt_node_set_ref(nt, oc, "receiver", ocr);
+    nt_node_set_ref(nt, oc, "arguments", oca);
+    /* a name such as "::X" stays with the table (Object's arms raise on it) */
+    int sw = fwd_new_node_like(nt, like, "CallNode");
+    int swa = fwd_new_node_like(nt, like, "ArgumentsNode");
+    int sws = fwd_new_node_like(nt, like, "CallNode");
+    nt_node_set_str(nt, sws, "name", "to_s");
+    nt_node_set_ref(nt, sws, "receiver", local_read_like(nt, like, "__cg_n"));
+    int swc = str_node_like(nt, like, ":");
+    nt_node_set_arr(nt, swa, "arguments", &swc, 1);
+    nt_node_set_str(nt, sw, "name", "start_with?");
+    nt_node_set_ref(nt, sw, "receiver", sws);
+    nt_node_set_ref(nt, sw, "arguments", swa);
+    int nsw = fwd_new_node_like(nt, like, "CallNode");
+    nt_node_set_str(nt, nsw, "name", "!");
+    nt_node_set_ref(nt, nsw, "receiver", sw);
+    int gate = fwd_new_node_like(nt, like, "AndNode");
+    nt_node_set_ref(nt, gate, "left", local_read_like(nt, like, "__cg_i"));
+    nt_node_set_ref(nt, gate, "right", nsw);
+    int an = fwd_new_node_like(nt, like, "AndNode");
+    nt_node_set_ref(nt, an, "left", gate);
+    nt_node_set_ref(nt, an, "right", oc);
+    if (rbn) {
+      int pc = fwd_new_node_like(nt, like, "CallNode");
+      int pca = fwd_new_node_like(nt, like, "ArgumentsNode");
+      int pcr = fwd_new_node_like(nt, like, "ConstantReadNode");
+      int cat = fwd_new_node_like(nt, like, "CallNode");
+      int cata = fwd_new_node_like(nt, like, "ArgumentsNode");
+      int pts = fwd_new_node_like(nt, like, "CallNode");
+      char pre[300]; snprintf(pre, sizeof pre, "%s::", rbn);
+      nt_node_set_str(nt, pts, "name", "to_s");
+      nt_node_set_ref(nt, pts, "receiver", local_read_like(nt, like, "__cg_n"));
+      nt_node_set_arr(nt, cata, "arguments", &pts, 1);
+      nt_node_set_str(nt, cat, "name", "+");
+      nt_node_set_ref(nt, cat, "receiver", str_node_like(nt, like, pre));
+      nt_node_set_ref(nt, cat, "arguments", cata);
+      nt_node_set_arr(nt, pca, "arguments", &cat, 1);
+      nt_node_set_str(nt, pcr, "name", "Object");
+      nt_node_set_str(nt, pc, "name", "const_defined?");
+      nt_node_set_ref(nt, pc, "receiver", pcr);
+      nt_node_set_ref(nt, pc, "arguments", pca);
+      int por = fwd_new_node_like(nt, like, "OrNode");
+      nt_node_set_ref(nt, por, "left", oc);
+      nt_node_set_ref(nt, por, "right", pc);
+      nt_node_set_ref(nt, an, "right", por);
+    }
+    int orn = fwd_new_node_like(nt, like, "OrNode");
+    nt_node_set_ref(nt, orn, "left", call);
+    nt_node_set_ref(nt, orn, "right", an);
+    nt_node_set_arr(nt, body, "body", &orn, 1);
+  }
+  else if (!sp_streq(op, "[]") || !mod) nt_node_set_arr(nt, body, "body", &call, 1);
   else {
     /* const_get of a name outside the table is CRuby's NameError:
          __cg_h = {...}; __cg_k = __cg_n.to_s
@@ -22374,6 +22483,9 @@ int desugar_dynamic_const_get(Compiler *c) {
   char **done = NULL; int ndone = 0;
   int *parent = NULL;   /* and q, built at the first call to resolve */
   ScgQual q; memset(&q, 0, sizeof q);
+  int user_def = 0;
+  for (int id = 0; id < n0 && !user_def; id++)
+    if (nt_kind(nt, id) == NK_DefNode && sp_streq(nt_str(nt, id, "name"), "const_defined?")) user_def = 1;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -22425,8 +22537,15 @@ int desugar_dynamic_const_get(Compiler *c) {
       int bn = 0; const int *bs = nt_arr(nt, body, "body", &bn);
       int *out = malloc(sizeof(int) * (size_t)(bn + 2));
       memcpy(out, bs, sizeof(int) * (size_t)bn);
-      int d1 = cg_def(nt, id, "__const_get__", "[]", names, nn, key);
-      int d2 = cg_def(nt, id, "__const_defined__", "key?", names, nn, NULL);
+      int d1 = cg_def(nt, id, "__const_get__", "[]", names, nn, key, NULL, 1);
+      /* (key: the module's qualified Ruby name when the receiver resolved) */
+      /* no Object fallback when the program defines a const_defined? (it
+         may answer the generated Object call) or the class descends from
+         BasicObject (its lookup never reaches Object) */
+      int plain = user_def || cg_blank_slate(nt, n0, first, 0);
+      if (g >= 0)
+        for (int m = q.head[g]; m >= 0 && !plain; m = q.next[m]) plain = cg_blank_slate(nt, n0, m, 0);
+      int d2 = cg_def(nt, id, "__const_defined__", "key?", names, nn, NULL, g >= 0 ? key : NULL, plain);
       int no = bn;
       if (d1 >= 0) out[no++] = d1;
       if (d2 >= 0) out[no++] = d2;
@@ -22439,8 +22558,9 @@ int desugar_dynamic_const_get(Compiler *c) {
       done[ndone++] = strdup(key);
     }
     nt_node_set_str(nt, id, "name", is_get ? "__const_get__" : "__const_defined__");
-    /* a second argument (inherit) has no meaning for the table */
-    if (an > 1) nt_node_set_arr(nt, args, "arguments", av, 1);
+    /* a second argument (inherit) has no meaning for const_get's table;
+       const_defined? reads it for the Object fallback */
+    if (an > (is_get ? 1 : 2)) nt_node_set_arr(nt, args, "arguments", av, is_get ? 1 : 2);
     changed = 1;
   }
   for (int k = 0; k < ndone; k++) free(done[k]);

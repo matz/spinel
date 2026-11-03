@@ -2064,6 +2064,7 @@ int        comp_class_def_next(const Compiler *c, int k);   /* the next class of
 void       comp_class_set_def(Compiler *c, int k, int node);   /* the one writer after comp_class_new */
 int        comp_any_computed_ivar_set(Compiler *c);
 int        comp_is_wellknown_const(const char *cn);
+const char *comp_wellknown_const_at(int i);
 int        const_name_resolves_top_level(Compiler *c, const char *cn);
 /* Does constant segment node seg (a ConstantReadNode or a path's segment)
    resolve: by its name, as a builtin, or as a program class the path names? */

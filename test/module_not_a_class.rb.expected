@@ -1,0 +1,39 @@
+["undefined method 'superclass' for module M", M]
+["undefined method 'allocate' for module M", M]
+"undefined method 'superclass' for module Outer::Inner"
+Object
+K
+"undefined method 'superclass' for module Comparable"
+include: wrong argument type Class (expected Module)
+:before
+:after
+false
+false
+extend: wrong argument type Class (expected Module)
+prepend: wrong argument type Class (expected Module)
+builtin: wrong argument type Class (expected Module)
+true
+:mixed
+Module
+Class
+Module
+false
+true
+true
+false
+true
+true
+false
+false
+true
+true
+"M"
+"M"
+"M"
+:nme
+:nme
+:nme
+Class
+[M]
+[K, Object, Kernel, BasicObject]
+Class

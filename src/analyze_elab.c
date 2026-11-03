@@ -1987,6 +1987,21 @@ static int lr_remove_shadowed(Compiler *c, int node, const char *nm, int cls, in
    singleton methods. nested: a form the statement holds in its parts
    (lr_nested_part), whose own call the form's answers (lr_form_runs, an opaque
    call) are not asked of. */
+/* Does a mixin call name a class where a module is expected (`include K`,
+   `extend String`): one of the program's, a builtin one the program reopens,
+   or a builtin class by name? CRuby checks every argument before mixing any
+   in, so the statement raises TypeError and brings nothing. */
+static int lr_mix_names_class(Compiler *c, const int *av, int ac) {
+  const NodeTable *nt = c->nt;
+  for (int i = 0; i < ac; i++) {
+    int m = lr_class_ref_at(c, av[i], NULL);
+    if (m >= 0 && m < c->nclasses) { if (!comp_class_is_module(c, &c->classes[m])) return 1; continue; }
+    const char *nm = nt_kind(nt, av[i]) == NK_ConstantReadNode ? nt_str(nt, av[i], "name") : NULL;
+    if (nm && m == LR_UNKNOWN_CLASS && is_builtin_class_name(nm) && !is_builtin_module_name(nm)) return 1;
+  }
+  return 0;
+}
+
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2049,6 +2064,9 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       int mod = nt_kind(nt, av[i]) == NK_SelfNode && self && !sg && cls == fc && fs == LR_FS_NONE &&
                 fnode >= 0 && class_def_is_module(nt, fnode) && is_extend_name(nm)
                 ? cls : lr_class_ref_at(x->c, av[i], NULL);
+      /* a class among the arguments: TypeError where the statement runs
+         (codegen reads the mark), and no mixin, not of the modules beside it */
+      if (lr_mix_names_class(x->c, av, ac)) { nt_node_set_int((NodeTable *)nt, node, "mixin_class_arg", 1); continue; }
       opaque |= mod < 0 && mod != LR_LATER;
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);

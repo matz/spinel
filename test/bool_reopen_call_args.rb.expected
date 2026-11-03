@@ -1,0 +1,20 @@
+1
+true
+"s"
+1.5
+true
+3
+"x"
+[1, true]
+[2, 3]
+1
+:x
+[2]
+["f"]
+[1, false]
+[1, "b"]
+[1, false]
+["s", false]
+:sym
+[:sym]
+[1, 2]

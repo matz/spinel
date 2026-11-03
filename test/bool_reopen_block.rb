@@ -61,3 +61,11 @@ def nk(b, x) = b.nf { x }
 p nh(true, true), nh(true, false), nh(false, true), nh(false, false)
 p nk(true, true), nk(true, false), nk(false, true), nk(false, false)
 p true.nn { false }, false.nn { true }
+
+# ... and boxed, when the sides answer different types
+class TrueClass;  def nb = yield ? 1 : nil;   def nw = yield ? 1.5 : nil; end
+class FalseClass; def nb = yield ? 2.5 : nil; def nw = yield ? 7 : 1; end
+def bh(b, x) = b.nb { x }
+def bj(b, x) = b.nw { x }
+p bh(true, true), bh(true, false), bh(false, true), bh(false, false)
+p bj(true, true), bj(true, false), bj(false, true), bj(false, false)

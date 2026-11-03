@@ -1,0 +1,15 @@
+root(col(text:a,row(text:b)))
+root(col(col(text:c),x(text:x),y(text:d),z))
+["outer", "outer", "outer"]
+["outer"]
+["other"]
+["t", "t"]
+["a"]
+["b"]
+["c"]
+[]
+["inner"]
+["a", "a", "a", "a", "a"]
+["v", Array, Integer, Symbol, Acc, String]
+[Integer, String, Array, Integer, Integer]
+["h", "h"]

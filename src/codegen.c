@@ -9744,11 +9744,17 @@ static void emit_proc_scalar_param_bind(Buf *pb, TyKind pt, int k, int oint) {
   else buf_printf(pb, "args[%d];\n", k);
 }
 
-static void emit_proc_ie_self(Compiler *c, int ie_cls, int rself, int body, Buf *pb) {
-  if (ie_cls >= 0)
+/* fb names the capture struct of a proc whose maker's self is a kind of
+   ie_cls: a plain call runs on that self, as CRuby does. */
+static void emit_proc_ie_self(Compiler *c, int ie_mark, int ie_cls, int rself, int body, const char *fb, Buf *pb) {
+  if (ie_cls >= 0 && fb)
+    buf_printf(pb, "    sp_%s *self = (sp_%s *)(_sp_ie_self ? _sp_ie_self : ((_proc_cap_%s *)_cap)->__self); _sp_ie_self = NULL;\n",
+               c->classes[ie_cls].c_name, c->classes[ie_cls].c_name, fb);
+  else if (ie_cls >= 0)
     buf_printf(pb, "    sp_%s *self = (sp_%s *)_sp_ie_self; _sp_ie_self = NULL;\n"
                "    if (!self) sp_raise_cls(\"NotImplementedError\", \"proc bound to instance_eval called without it\");\n",
                c->classes[ie_cls].c_name, c->classes[ie_cls].c_name);
+  else if (ie_mark >= 0) buf_puts(pb, "    _sp_ie_self = NULL;\n");  /* the caller set it; no later call may read it */
   if (rself != 1) return;
   Buf rb; memset(&rb, 0, sizeof rb);
   g_ie_rself_on = 0;
@@ -10140,13 +10146,21 @@ else if (orecv >= 0 && onm) {
      through _cap (#1436). A heap-object self is captured by pointer; a
      value-type (by-value) self is captured by value in a `sp_X __self_val`
      field. A class-method self has no instance and is left as-is. */
-  int ie_mark = ie_class_of(c, body) == ie_class_of(c, create) ? -1 : ie_class_of(c, body);
+  /* A body that shares the class of the block it sits in runs on its maker's
+     self, unless an instance_eval / exec of its own runs it there too: then
+     it takes the receiver it is handed, as a block of another class does. */
+  int ie_body = ie_class_of(c, body);
+  int ie_mark = ie_body == ie_class_of(c, create) && ie_own_class_of(c, body) != ie_body ? -1 : ie_body;
   if (ie_mark < -1) unsupported(c, create, "proc run by instance_eval on more than one class");
-  int ie_cls = ie_mark >= 0 && proc_body_uses_self(c, body, ie_mark) ? ie_mark : -1, rself = ie_mark < 0 && body >= 0 ? (int)nt_int(nt, body, "ie_rself_lit", 0) : 0, sv_rself_on = g_ie_rself_on;
+  int ie_cls = ie_mark >= 0 && (proc_body_uses_self(c, body, ie_mark) ||
+                                proc_body_uses_self(c, proc_params_node(c, create), ie_mark)) ? ie_mark : -1;
+  int rself = ie_mark < 0 && body >= 0 ? (int)nt_int(nt, body, "ie_rself_lit", 0) : 0, sv_rself_on = g_ie_rself_on;
   int scls = g_ie_class_id >= 0 ? g_ie_class_id : bs && !bs->is_cmethod ? bs->class_id : -1;
   int cap_self = ie_cls < 0 && scls >= 0 &&
                  (proc_body_uses_self(c, body, scls) ||
                   proc_body_uses_self(c, proc_params_node(c, create), scls));
+  int ie_fb = ie_cls >= 0 && scls >= 0 && is_descendant(c, scls, ie_cls) &&
+              !c->classes[scls].is_value_type && !is_boxed_self_class_name(c->classes[scls].name);
   /* A class method that takes the receiving class as a leading parameter has
      it in `_sp_cls`; a lifted block's function signature is (_cap, argc, args)
      and knows nothing of it, so a sibling class-method call inside the block
@@ -10263,7 +10277,7 @@ else if (orecv >= 0 && onm) {
      the cap struct itself first (sp_Proc_scan does not), then each cell --
      matching the sp_hashproc convention; marking only the cells would leave
      the cap struct unreachable and free it out from under the proc. */
-  if (ncap > 0 || cap_self || cap_cls || ret_proc || brk_blk) {
+  if (ncap > 0 || cap_self || ie_fb || cap_cls || ret_proc || brk_blk) {
     buf_printf(&g_procs, "typedef struct {");
     for (int i = 0; i < ncap; i++) {
       LocalVar *clv = scope_local(bs, caps.v[i]);
@@ -10276,7 +10290,7 @@ else if (orecv >= 0 && onm) {
     }
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
     else if (self_boxed) buf_puts(&g_procs, " sp_RbVal __self_rb;");
-    else if (cap_self) buf_puts(&g_procs, " void *__self;");
+    else if (cap_self || ie_fb) buf_puts(&g_procs, " void *__self;");
     if (cap_cls) buf_puts(&g_procs, " sp_Class __self_cls;");
     if (ret_proc) buf_puts(&g_procs, " sp_int _home;");  /* home method's proc-return id (sp_proc_home.id) */
     if (brk_blk) buf_puts(&g_procs, " sp_int _brkhome;");  /* the call site's break serial (sp_brk_push) */
@@ -10307,7 +10321,7 @@ else if (orecv >= 0 && onm) {
         buf_printf(&g_procs, "  sp_%s__gc_scan(&_c->__self_val);\n", self_cls);
     }
     else if (self_boxed) buf_puts(&g_procs, "  sp_mark_rbval(_c->__self_rb);\n");
-    else if (cap_self) buf_puts(&g_procs, "  if (_c->__self) sp_gc_mark(_c->__self);\n");
+    else if (cap_self || ie_fb) buf_puts(&g_procs, "  if (_c->__self) sp_gc_mark(_c->__self);\n");
     buf_puts(&g_procs, "}\n");
   }
 
@@ -10394,7 +10408,7 @@ else if (orecv >= 0 && onm) {
   buf_printf(pb, "static sp_int _proc_%s(void *_cap, sp_int argc, sp_int *args) {\n", pid);
   buf_puts(pb, "    SP_GC_SAVE();\n");
   size_t proc_frame_ins = pb->len;
-  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
+  if (ncap == 0 && !cap_self && !ie_fb && !cap_cls && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
   buf_puts(pb, "    (void)args;\n");
   buf_puts(pb, "    (void)argc;\n");
   /* `&b`: the block the call that entered this body was given, on the
@@ -10431,7 +10445,7 @@ else if (orecv >= 0 && onm) {
     buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%s *)_cap)->__self_cls;\n", pid);
     buf_puts(pb, "    (void)_sp_cls;\n");
   }
-  emit_proc_ie_self(c, ie_cls, rself, body, pb);
+  emit_proc_ie_self(c, ie_mark, ie_cls, rself, body, ie_fb ? pid : NULL, pb);
   /* Lambda: strict arity -- requireds + trailing posts mandatory, optionals
      widen the max, a splat rest lifts it entirely. */
   int has_kwrest = 0, no_kw = 0;
@@ -10951,7 +10965,7 @@ else if (orecv >= 0 && onm) {
   g_fn_pr_label = sv_fn_prl; g_fn_pr_var = sv_fn_prv; g_fn_ret_type = sv_fn_rt; g_fn_ret_oint = sv_fn_ro;
 
   if (ie_mark >= 0 || rself) buf_puts(b, "({ sp_Proc *_pie = ");
-  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc && !brk_blk) {
+  if (ncap == 0 && !cap_self && !ie_fb && !cap_cls && !ret_proc && !brk_blk) {
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%s, NULL, NULL, %d, %s, %d, %s)",
                pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
@@ -10991,7 +11005,7 @@ else if (orecv >= 0 && onm) {
         buf_printf(g_pre, "_capv_%s->__self_val = %s%s;\n", pid, self_ptr ? "*" : "", sv_self ? sv_self : "self");
       }
       else if (self_boxed) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__self_rb = %s;\n", pid, sv_self ? sv_self : "self"); }
-      else if (cap_self) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
+      else if (cap_self || ie_fb) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%s->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
       /* Capture the home method's proc-return frame so the proc's `return`
          longjmps to it (the creating method declared `_pr`). */
       /* the receiving class, as the enclosing class method knows it: forwarded

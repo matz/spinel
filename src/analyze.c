@@ -3138,6 +3138,14 @@ static int g_ie_node_class_cap = 0;
    of the program's (nil, a number, a String): its ivars are nil there.
    Sized as g_ie_node_class. */
 static unsigned char *g_ie_nonobj = NULL;
+/* the class a block body's own instance_eval / exec call (or a forwarder to
+   one) runs it on; -1 for a body that only sits inside such a block, whose
+   class it shares in g_ie_node_class. Sized as g_ie_node_class. */
+static int *g_ie_own = NULL;
+static void mark_ie_own(Compiler *c, int body, int cls) {
+  if (body >= 0 && body < g_ie_node_class_cap) g_ie_own[body] = cls;
+  mark_ie_subtree(c, body, cls);
+}
 static void mark_ie_nonobj(Compiler *c, int node) {
   if (node < 0 || node >= g_ie_node_class_cap) return;
   NodeKind k = nt_kind(c->nt, node);
@@ -4196,9 +4204,12 @@ void build_ie_map(Compiler *c) {
     if (!grown) return;  /* OOM: keep the old map rather than leak/deref NULL */
     unsigned char *gn = realloc(g_ie_nonobj, (size_t)nt->count);
     if (!gn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = g_ie_node_class_cap; i < nt->count; i++) { grown[i] = -1; gn[i] = 0; }
+    int *go = realloc(g_ie_own, sizeof(int) * (size_t)nt->count);
+    if (!go) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = g_ie_node_class_cap; i < nt->count; i++) { grown[i] = -1; gn[i] = 0; go[i] = -1; }
     g_ie_node_class = grown;
     g_ie_nonobj = gn;
+    g_ie_own = go;
     g_ie_node_class_cap = nt->count;
   }
   /* (each entry that changes moves its node's scope: the build runs
@@ -4212,6 +4223,7 @@ void build_ie_map(Compiler *c) {
   g_ief_ready = 0;
   for (int i = 0; i < nt->count; i++) {
     pend[i] = -1;
+    g_ie_own[i] = -1;
     if (g_ie_node_class[i] != -1) { g_ie_node_class[i] = -1; comp_touch_node(c, i); }
   }
   ie_param_n = 0;
@@ -4264,10 +4276,10 @@ void build_ie_map(Compiler *c) {
     }
     if (body < 0) continue;
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;
-    mark_ie_subtree(c, body, pass ? pend[body] : cls);
+    mark_ie_own(c, body, pass ? pend[body] : cls);
   }
-  for (int i = 0; i < pend_n; i++) if (pend[i] != -1) mark_ie_subtree(c, i, pend[i]);
-  for (int i = 0; i < ie_param_n; i++) mark_ie_subtree(c, ie_param_marks[i][0], ie_param_marks[i][1]);
+  for (int i = 0; i < pend_n; i++) if (pend[i] != -1) mark_ie_own(c, i, pend[i]);
+  for (int i = 0; i < ie_param_n; i++) mark_ie_own(c, ie_param_marks[i][0], ie_param_marks[i][1]);
   ie_param_n = 0;
   free(pend);
 }
@@ -4279,6 +4291,12 @@ int ie_class_of(Compiler *c, int node) {
      synthesized mid-iteration (id >= cap) has no instance_eval receiver yet. */
   return (g_ie_node_class && node >= 0 && node < g_ie_node_class_cap)
            ? g_ie_node_class[node] : -1;
+}
+
+/* The class a block body's own instance_eval/exec runs it on, or -1. */
+int ie_own_class_of(Compiler *c, int node) {
+  (void)c;
+  return (g_ie_own && node >= 0 && node < g_ie_node_class_cap) ? g_ie_own[node] : -1;
 }
 
 int *ie_body_retype(Compiler *c, int body, int cls) {

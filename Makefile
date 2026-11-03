@@ -5946,6 +5946,17 @@ COND_DEFS_LIMIT ?= 2.2
 # def, reads 7.0x to 7.4x). A time ratio moves with the machine's load; only a
 # rise past the limit is a finding.
 COND_DEFS_CPU_LIMIT ?= 9.0
+# N nested classes, each of a leaf name of its own (test/scale/class_qualification.sh),
+# and ten calls per class, at N=400 and N=800: the work of the nested program
+# less the work of the same program with the classes at the top level, which
+# is what the classes cost, since the calls and the classes are the same.
+# qualify_colliding_classes looked for a native_struct declaration among every
+# call for each nested class; that extra work read 3.82x at 2x the classes
+# (27.6 M units at 800 classes, 1.95 M now), and reads 2.39x with the
+# declarations collected once. The limit sits between them. (The pairwise
+# comparison of the classes' leaves is the same in both programs and cancels,
+# so this leg does not measure it.)
+CLASS_QUAL_LIMIT ?= 3.1
 # Splices into one class (test/scale/splices.sh), compiled to C at K=200 and
 # K=400: an included hook whose class_eval block runs K class_eval texts in
 # its includer, and K texts in the class's own body, K over a constant list
@@ -6045,6 +6056,12 @@ scale-test: $(SPINEL_WORK)
 	gen cond_defs 200 q2.rb; gen cond_defs 400 q4.rb; \
 	qa=$$(sw -c -o "$$tmp/q2.c" "$$tmp/q2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	qb=$$(sw -c -o "$$tmp/q4.c" "$$tmp/q4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen class_qualification "400 nested" yn4.rb; gen class_qualification "800 nested" yn8.rb; \
+	gen class_qualification "400 top" yt4.rb; gen class_qualification "800 top" yt8.rb; \
+	yna=$$(sw --emit-rbs -o "$$tmp/yn4.rbs" "$$tmp/yn4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ynb=$$(sw --emit-rbs -o "$$tmp/yn8.rbs" "$$tmp/yn8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	yta=$$(sw --emit-rbs -o "$$tmp/yt4.rbs" "$$tmp/yt4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ytb=$$(sw --emit-rbs -o "$$tmp/yt8.rbs" "$$tmp/yt8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6057,7 +6074,8 @@ scale-test: $(SPINEL_WORK)
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
 	   [ -z "$$ka" ] || [ -z "$$kb" ] || [ -z "$$ea" ] || [ -z "$$eb" ] || [ -z "$$ra" ] || [ -z "$$rb" ] || [ -z "$$ta" ] || [ -z "$$tb" ] || \
-	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ]; then \
+	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
+	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6101,6 +6119,10 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$qa" -v b="$$qb" -v lim="$(COND_DEFS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: open method history work at 2x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' entries or their cell writes grew superlinearly: see ver_named_one and ver_cells_write)"; exit 1; }; \
+	awk -v na="$$yna" -v nb="$$ynb" -v ta="$$yta" -v tb="$$ytb" -v lim="$(CLASS_QUAL_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
+	  r = b / (a < 1 ? 1 : a); \
+	  printf "scale-test: nested class qualification work at 2x the classes is %.2fx (%d, %d units; limit %.2f)\n", r, a, b, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the work of the nested classes grew superlinearly: qualify_colliding_classes asked every call about each class's native_struct declaration, see qc_native_leaf_declared)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

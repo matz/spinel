@@ -5822,17 +5822,11 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
    when it spells w's own path -- `class OpenSSL::X509::Store` beside
    "OpenSSL::X509::Store" is that native class reopened -- 1 when it is under
    another qualified path, 0 when no declaration names it */
-static int qc_native_leaf_declared(Compiler *c, const QCWrite *w) {
-  const NodeTable *nt = c->nt;
+static int qc_native_leaf_declared(const char *const *decls, int ndecls, const QCWrite *w) {
   int found = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "native_struct") || nt_ref(nt, id, "receiver") >= 0) continue;
-    int args = nt_ref(nt, id, "arguments");
-    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an < 1 || nt_kind(nt, av[0]) != NK_StringNode) continue;
-    const char *cn = nt_str(nt, av[0], "content");
-    const char *sep = cn ? strrchr(cn, ':') : NULL;
+  for (int d = 0; d < ndecls; d++) {
+    const char *cn = decls[d];
+    const char *sep = strrchr(cn, ':');
     if (!sep || sep == cn || sep[-1] != ':') continue;
     if (!sp_streq(sep + 1, w->name)) continue;
     char own[512];
@@ -5858,11 +5852,61 @@ static int qc_class_name_defined(Compiler *c, const char *nm) {
     }
   return 0;
 }
+/* Whether each class write shares its leaf with a write under another path.
+   A leaf whose writes have two or more distinct paths collides for every
+   one of them (each differs from one of the two), so one pass over the
+   writes, a name set and the first path of each name are enough. Asked of
+   the writes as collected: qualify_colliding_classes drops the ones that do
+   not collide as it goes, and an entry that does not collide shares its leaf
+   with no entry under another path, so dropping it changes no other answer;
+   the one the loop drops with a collision (a native class reopened under
+   its own path) shares its leaf with a nested class that the native
+   declaration qualifies anyway (qc_native_leaf_declared), or with a
+   top-level class or module, which is never renamed: keeping it only lets
+   the read rewrite run, whose one edit for a top-level write (`::X` read as
+   a root-anchored X) names the same constant, and the old loop kept it too
+   whenever it reached it before the native class. */
+static unsigned char *qc_colliding_leaves(QCWrite *ws, int wn) {
+  int n = wn ? wn : 1;
+  ANameHash names = {0};
+  int *group = malloc(sizeof(int) * (size_t)n), *first = malloc(sizeof(int) * (size_t)n);
+  unsigned char *differ = calloc((size_t)n, 1), *collide = calloc((size_t)n, 1);
+  if (!group || !first || !differ || !collide) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < wn; i++) {
+    int g = anh_find(&names, ws[i].name);
+    if (g < 0) { anh_add(&names, ws[i].name); g = names.n - 1; first[g] = i; }
+    else if (!qc_path_eq(ws[i].path, ws[i].depth, ws[first[g]].path, ws[first[g]].depth)) differ[g] = 1;
+    group[i] = g;
+  }
+  for (int i = 0; i < wn; i++) collide[i] = differ[group[i]];
+  anh_free(&names);   /* (its names are the writes' own, which the loop moves) */
+  free(group); free(first); free(differ);
+  return collide;
+}
 void qualify_colliding_classes(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
   char path[QC_MAXDEPTH][64];
   qc_resolve_headers(c);
+  /* Headers ask only about native_struct declarations: collected once here,
+     not looked for among every call for each nested class. */
+  const char **native_decls = NULL;
+  int nnative = 0, cnative = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "native_struct") || nt_ref(nt, id, "receiver") >= 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an < 1 || nt_kind(nt, av[0]) != NK_StringNode) continue;
+    const char *cn = nt_str(nt, av[0], "content");
+    if (!cn) continue;
+    if (nnative == cnative) {
+      cnative = cnative ? cnative * 2 : 8;
+      native_decls = realloc(native_decls, (size_t)cnative * sizeof *native_decls);
+      if (!native_decls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    native_decls[nnative++] = cn;
+  }
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's tree */
     qc_collect_class_writes(c, nt_root(nt, r), path, 0, &ws, &wn, &wcap);
   /* A class under a builtin parent (`class String::Helper`) stays under the
@@ -5894,14 +5938,10 @@ void qualify_colliding_classes(Compiler *c) {
   for (int i = 0; i < kwn; i++)
     if (qc_is_class_write(&kws[i], ws, wn)) { kws[i] = kws[--kwn]; i--; }
   /* keep only leaf names defined under 2+ distinct module paths */
+  unsigned char *leaf_collides = qc_colliding_leaves(ws, wn);   /* moves with its write */
   int any = 0;
   for (int i = 0; i < wn; i++) {
-    int collide = 0;
-    for (int j = 0; j < wn && !collide; j++) {
-      if (i == j || !sp_streq(ws[i].name, ws[j].name)) continue;
-      if (ws[i].depth != ws[j].depth) { collide = 1; break; }
-      for (int k = 0; k < ws[i].depth; k++) if (!sp_streq(ws[i].path[k], ws[j].path[k])) { collide = 1; break; }
-    }
+    int collide = leaf_collides[i];
     /* A class defined INSIDE a module whose leaf name is a builtin's --
        `module M; class Array < Bench` -- collides with the BUILTIN rather than
        with another user class, and every builtin-name test (Array.new, the
@@ -5912,7 +5952,7 @@ void qualify_colliding_classes(Compiler *c) {
        leaf: a nested `class Store` elsewhere (activesupport's Cache::Store)
        shares that key and was refused as a merge; qualified, it is its own
        class. */
-    int native = ws[i].depth > 0 ? qc_native_leaf_declared(c, &ws[i]) : 0;
+    int native = ws[i].depth > 0 ? qc_native_leaf_declared(native_decls, nnative, &ws[i]) : 0;
     if (!collide && native == 1) collide = 1;
     /* ... and the builtin classes the id table does not carry (Encoding is
        a tag of its own, not a class id): walk_scope refuses a nested
@@ -5976,9 +6016,11 @@ void qualify_colliding_classes(Compiler *c) {
         }
       }
     }
-    if (!collide) { ws[i] = ws[--wn]; i--; continue; }
+    if (!collide) { ws[i] = ws[--wn]; leaf_collides[i] = leaf_collides[wn]; i--; continue; }
     any = 1;
   }
+  free(leaf_collides);
+  free(native_decls);
   free(kws);
   if (any) {
     /* rewrite references first (they match against the original leaf names),

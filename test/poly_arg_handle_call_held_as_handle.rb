@@ -20,3 +20,16 @@ end
 [[65], Rest.new, Named.new].each do |a|
   p a.pack("C", buffer: nil)
 end
+
+# a native arm beside them: StringIO#putc takes the handle as the String it
+# is (its [:string] binding), not as its [:int] one
+require "stringio"
+class Rest
+  def putc(*args, **kw) = "rest:#{args}:#{kw}"
+end
+class Named
+  def putc(s, buffer: nil) = "named:#{s}:#{buffer.inspect}"
+end
+io = StringIO.new
+[io, Rest.new, Named.new].each { |a| p a.putc(fmt) }
+p io.string

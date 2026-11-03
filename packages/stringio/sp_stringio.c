@@ -487,9 +487,11 @@ static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROO
   return w;
 }
 
-void sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 0); }
-void sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); }
-void sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); }
+/* print asks for the write side before its values, which may write
+   nothing (print(nil)), as CRuby's does; puts does not ask for an empty one */
+void sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_check_write(s); sio_write_val(s, a, 0); }
+void sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); }
+void sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); }
 void sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); }
 void sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); }
 void sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); }
@@ -502,9 +504,9 @@ static int64_t sio_write_vals(sp_StringIO *s, sp_int n, sp_RbVal *v, int is_puts
   for (sp_int i = 0; i < n; i++) w += sio_write_val(s, v[i], is_puts);
   return w;
 }
-void sp_StringIO_print_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { sio_write_vals(s, n, v, 0); }
+void sp_StringIO_print_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { sio_check_write(s); sio_write_vals(s, n, v, 0); }
 void sp_StringIO_puts_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { sio_write_vals(s, n, v, 1); }
-sp_int sp_StringIO_write_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { return sio_write_vals(s, n, v, 0); }
+sp_int sp_StringIO_write_va(sp_StringIO *s, sp_int n, sp_RbVal *v) { if (n > 0) sio_check_write(s); return sio_write_vals(s, n, v, 0); }  /* write(nil) writes nothing, but asks first */
 /* read(*args), when the count is only known at run time: read, read(nil)
    and read(len). A buffer to read into is not supported here. */
 const char *sp_StringIO_read_va(sp_StringIO *s, sp_int n, sp_RbVal *v) {

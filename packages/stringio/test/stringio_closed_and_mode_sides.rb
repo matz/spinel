@@ -25,6 +25,14 @@ t(:shl) { (closed_io << "z").class }
 t(:puts) { closed_io.puts("w") }
 t(:puts_bare) { closed_io.puts }
 t(:print) { closed_io.print("v") }
+t(:print_nil) { closed_io.print(nil) }
+t(:print_none) { closed_io.print }
+t(:print_nils) { closed_io.print(nil, nil) }
+t(:puts_empty_array) { closed_io.puts([]) }   # writes nothing, and CRuby does not ask
+t(:write_none) { closed_io.write }
+t(:write_nil) { closed_io.write(nil) }
+t(:write_nils) { closed_io.write(nil, nil) }
+t(:r_write_nil) { StringIO.new("ab", "r").write(nil) }
 t(:truncate) { closed_io.truncate(0) }
 
 puts "-- closed: readers"

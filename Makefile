@@ -152,7 +152,11 @@ export LD_LIBRARY_PATH := $(OPENSSL_PREFIX)/lib$(if $(LD_LIBRARY_PATH),:$(LD_LIB
 # (or `spin build`) linked `-lssl` with no -L and failed with `library
 # 'ssl' not found` (#7191). The probed directory is recorded in the
 # compiler (spinel_rev.h), which puts it beside the package's -l flags.
-SPINEL_OPENSSL_LIBDIR := $(OPENSSL_PREFIX)/lib
+# Exported too: a `$(MAKE)` from a recipe (`make gate`) inherits the CPATH
+# and LIBRARY_PATH above, so its own first probe passes without a prefix
+# and this block is skipped there; it reads the directory from the
+# environment instead of rewriting spinel_rev.h with an empty one.
+export SPINEL_OPENSSL_LIBDIR := $(OPENSSL_PREFIX)/lib
 endif
 endif
 endif

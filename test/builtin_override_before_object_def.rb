@@ -39,3 +39,9 @@ p({}.late(2))
 class Object; def late(a = 1) = [:obj, a]; end
 p({}.late(3))
 p 3.late
+
+# A Hash override's default reads Hash's own constant.
+D = 7
+class Object; def cd(x = D) = [:obj, x]; end
+class Hash; D = 3; def cd(x = D) = [:hash, x]; end
+p({}.cd, 5.cd)

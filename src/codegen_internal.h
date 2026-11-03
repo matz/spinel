@@ -2412,6 +2412,11 @@ int dispatch_impl_count(Compiler *c, int call, int cid, const char *name);
 /* do a dispatch switch's arms bind the call's arguments differently (each
    arm then lays them out itself)? the plan's CP_PER_ARM */
 int dispatch_arms_disagree(Compiler *c, int call, int cid, const char *name);
+/* would the shared switch of a dispatch on cid, whose chain has no method of
+   name, raise ArgumentError for call's arguments ahead of the switch? Self
+   of a class without one must reach the miss (cplan_dispatch_miss), so each
+   arm judges the count for itself: the plan's CP_PER_ARM */
+int dispatch_count_misfits(Compiler *c, int call, int cid, const char *name);
 /* Do `given` positionals not fit method `m`? Answers 1 with CRuby's
    ArgumentError message in `msg`; 0 when they fit, or when the method's
    arity is not judged (arity_unjudged). The one count rule of the direct

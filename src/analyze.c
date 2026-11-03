@@ -30133,6 +30133,9 @@ static struct {
   /* dyn_may_callable's memos: 0 not asked, 1 never a proc, 2 may be, 3 being asked */
   unsigned char *callable; /* per node */
   unsigned char *pcall;    /* per scope and positional parameter */
+  /* dyn_param_appended's memo, per scope and positional parameter: 0 not
+     asked, 1 no, 2 yes, 3 being asked */
+  unsigned char *papp;
   unsigned char *rcall;    /* per scope: what it returns */
   /* and its indexes, built once per pass: every call by name, every return
      by scope, the names a Symbol or String argument spells, and whether
@@ -30153,7 +30156,7 @@ static struct {
 
 static void dyn_memo_reset(Compiler *c) {
   free(g_dyn.lit); free(g_dyn.meth); free(g_dyn.blk); free(g_dyn.ctor);
-  free(g_dyn.callable); free(g_dyn.pcall); free(g_dyn.rcall);
+  free(g_dyn.callable); free(g_dyn.pcall); free(g_dyn.papp); free(g_dyn.rcall);
   anh_free(&g_dyn.cnames); anh_free(&g_dyn.lnames);
   free(g_dyn.chead); free(g_dyn.cnext); free(g_dyn.rhead); free(g_dyn.rnext);
   free(g_dyn.litpost); free(g_dyn.blkpost);
@@ -30170,10 +30173,11 @@ static void dyn_memo_reset(Compiler *c) {
   g_dyn.ctor = (unsigned *)calloc((size_t)g_dyn.nscope + 1, sizeof(unsigned));
   g_dyn.callable = (unsigned char *)calloc((size_t)g_dyn.nlit + 1, 1);
   g_dyn.pcall = (unsigned char *)calloc(((size_t)g_dyn.nscope + 1) * DYN_ARGS, 1);
+  g_dyn.papp = (unsigned char *)calloc(((size_t)g_dyn.nscope + 1) * DYN_ARGS, 1);
   g_dyn.rcall = (unsigned char *)calloc((size_t)g_dyn.nscope + 1, 1);
   g_dyn.litpost = (unsigned char *)calloc((size_t)g_dyn.nlit + 1, 1);
   g_dyn.blkpost = (unsigned char *)calloc((size_t)g_dyn.nscope + 1, 1);
-  if (!g_dyn.lit || !g_dyn.meth || !g_dyn.blk || !g_dyn.ctor || !g_dyn.callable || !g_dyn.pcall || !g_dyn.rcall ||
+  if (!g_dyn.lit || !g_dyn.meth || !g_dyn.blk || !g_dyn.ctor || !g_dyn.callable || !g_dyn.pcall || !g_dyn.papp || !g_dyn.rcall ||
       !g_dyn.litpost || !g_dyn.blkpost) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   g_dyn.any = -1;
   g_dyn.ctor_any = -1;
@@ -30262,15 +30266,53 @@ static int dyn_name_at(const char **pn, int np, const char *vn) {
 }
 /* Which of the names pn[0..np) a body appends to (*app) and reads for more
    than its bytes (*kept). A name handed on to a user method whose parameter
-   there is lent, the handle or appended to counts as appended too: the
-   method appends to the one String. */
+   there is lent or appended to (dyn_param_appended) counts as appended too:
+   the method appends to the one String. */
 static int dyn_scopes_named(Compiler *c, const char *nm);
-/* Is parameter j of method mi lent, the handle, or appended to? */
+static void dyn_body_scan(Compiler *c, int node, const char **pn, int np, unsigned *app, unsigned *kept);
+static int dyn_method_nreq(Compiler *c, Scope *m);
+/* Does the code under node hand the method's parameters on unnamed: a
+   zsuper, or `...`? */
+static int dyn_forwards_params(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_ForwardingSuperNode || k == NK_ForwardingArgumentsNode) return 1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (dyn_forwards_params(c, nt_ref_at(nt, node, i))) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) if (dyn_forwards_params(c, ids[j])) return 1;
+  }
+  return 0;
+}
+/* Is parameter j of method mi lent, the handle, or appended to? The share
+   rule makes every String parameter the handle, so for a leading positional
+   one the body decides: a parameter it only reads for its bytes (a pure
+   reader's receiver, printed, interpolated) is not appended to. One it
+   appends to, hands on, stores, returns or forwards unnamed is. */
 static int dyn_param_appended(Compiler *c, int mi, int j) {
   Scope *m = &c->scopes[mi];
   LocalVar *q = j < m->nparams && m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-  return q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j) ||
-               (q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED)));
+  if (!q) return 0;
+  if (q->byref_out || an_param_mutated_in_place(c, mi, j) ||
+      (q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED)))
+    return 1;
+  if (q->type != TY_STRBUF || !q->str_shared) return 0;
+  if (mi >= g_dyn.nscope || j >= DYN_ARGS || j >= dyn_method_nreq(c, m) || m->def_node < 0 || m->body < 0)
+    return 1;
+  unsigned char *p = &g_dyn.papp[(size_t)mi * DYN_ARGS + (size_t)j];
+  if (*p) return *p != 1;
+  /* a hand-on that comes back here is counted by the read that hands on */
+  *p = 3;
+  const char *pn[1] = { m->pnames[j] };
+  unsigned app = 0, kept = 0;
+  dyn_body_scan(c, m->body, pn, 1, &app, &kept);
+  int r = app || kept || dyn_forwards_params(c, m->body);
+  g_dyn.papp[(size_t)mi * DYN_ARGS + (size_t)j] = r ? 2 : 1;
+  return r;
 }
 /* Does call `call` into method mi bind argument `arg` to a parameter the
    method appends to? The argument is placed by the call's own layout
@@ -30634,10 +30676,7 @@ static unsigned dyn_meth_bits(Compiler *c, int mi) {
   const char *pn[DYN_ARGS];
   for (int j = 0; j < np; j++) {
     pn[j] = m->pnames[j];
-    LocalVar *q = pn[j] ? scope_local(m, pn[j]) : NULL;
-    if (q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j) ||
-              (q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED))))
-      app |= 1u << j;
+    if (dyn_param_appended(c, mi, j)) app |= 1u << j;
   }
   dyn_body_scan(c, m->body, pn, np, &app, &kept);
   g_dyn.meth[mi] = DYN_DONE | (app & 0xffffu) | ((kept & 0x3fffu) << 16);

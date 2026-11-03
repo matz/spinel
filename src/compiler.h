@@ -2293,7 +2293,7 @@ int        comp_array_method_name(const char *n);
 int        comp_ary_is_hash(Compiler *c, int cid);
 int        comp_ary_is_str(Compiler *c, int cid);
 int        comp_ary_is_time(Compiler *c, int cid);
-int        comp_timesub_copy_name(const char *n);
+int        comp_timesub_copy_name(Compiler *c, const char *n);
 int        comp_arysub_emb(Compiler *c, int cid);
 int        comp_arysub_str_boxed(const char *n);
 int        comp_arysub_builtin(Compiler *c, int cid);

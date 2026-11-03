@@ -13580,6 +13580,23 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     /* CRuby's #utc/#gmtime/#localtime change the receiver and answer it; the
        get* flavors answer a new Time. A Time is a reference, so the _bang
        forms write through it and every holder sees the change. */
+    /* a Time subclass instance read as its Time: a frozen one raises
+       FrozenError before an in-place conversion, as CRuby's time_modify
+       does (utc on one already in UTC changes nothing, and does not) */
+    extern int g_timesub_view_recv, g_timesub_view_cls;
+    int frz = g_timesub_view_recv == recv && g_timesub_view_cls >= 0 &&
+              (sp_streq(name, "utc") || sp_streq(name, "gmtime") || sp_streq(name, "localtime"));
+    if (frz) {
+      const char *rn = class_ruby_name(c, g_timesub_view_cls);
+      int ft = ++g_tmp;
+      char utc_ck[48] = "";
+      if (!sp_streq(name, "localtime")) snprintf(utc_ck, sizeof utc_ck, " && _t%d->is_utc != 1", ft);
+      buf_printf(b, "({ sp_Time *_t%d = %s; if (sp_gc_is_frozen((void *)_t%d)%s) sp_raise_cls(\"FrozenError\", "
+                    "sp_str_concat((&(\"\\xff\" \"can't modify frozen %s: \")[1]), sp_Time_inspect(_t%d))); ",
+                 ft, r, ft, utc_ck, rn ? rn : "Time", ft);
+      char rr[32]; snprintf(rr, sizeof rr, "_t%d", ft);
+      free(rs.p); rs.p = strdup(rr); r = rs.p;
+    }
     if (sp_streq(name, "utc") || sp_streq(name, "gmtime")) buf_printf(b, "sp_time_utc_bang(%s)", r);
     else if (sp_streq(name, "getutc")) buf_printf(b, "sp_time_utc(%s)", r);
     /* getlocal(zone)/localtime(zone): a fixed UTC offset, given as seconds or
@@ -13753,6 +13770,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       else { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())"); }
     }
     else done = 0;
+    if (frz) buf_puts(b, "; })");
     free(rs.p);
     if (done) return 1;
   }

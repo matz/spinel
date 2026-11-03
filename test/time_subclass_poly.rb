@@ -59,3 +59,19 @@ def describe(v)
   v.respond_to?(:timezone_offset) ? "offset #{v.timezone_offset.abbr}" : "plain"
 end
 p describe(t), describe(Time.at(0))
+
+# A display override of the subclass's own wins on a boxed instance too.
+class Shown < Time
+  def to_s
+    "shown #{year}"
+  end
+
+  def inspect
+    "#<Shown #{year}>"
+  end
+end
+shown = [Shown.at(0).utc, "x"]
+puts shown[0]
+p shown[0]
+puts "#{shown[0]}"
+p shown

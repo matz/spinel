@@ -2030,19 +2030,27 @@ int comp_arysub_answer(Compiler *c, int id, int hash) { return arysub_call_flags
 /* Array's answer to call `id` is its receiver -- always (BOPF_SELF) or when
    it changed it (BOPF_SELF_OR_NIL) -- so on an Array subclass instance it
    is the instance (#7449). */
+/* Whether the program's reopen of Time defines `n` (its own method answers it) */
+static int comp_time_reopen_defines(Compiler *c, const char *n) {
+  int ro = comp_core_class(c, CORE_TIME);
+  return ro >= 0 && n && comp_method_in_class(c, ro, n) >= 0;
+}
 int comp_arysub_self_result(Compiler *c, int id, int hash) {
   /* Time's conversions in place answer the Time they changed: the instance */
   if (hash == 3) {
     const char *n = nt_str(c->nt, id, "name");
-    return n && (sp_streq(n, "utc") || sp_streq(n, "gmtime") || sp_streq(n, "localtime") || sp_streq(n, "__sp_time_set"));
+    /* (not a name the program's reopen of Time defines: its own method answers) */
+    return n && (sp_streq(n, "utc") || sp_streq(n, "gmtime") || sp_streq(n, "localtime") || sp_streq(n, "__sp_time_set")) &&
+           (sp_streq(n, "__sp_time_set") || !comp_time_reopen_defines(c, n));
   }
   return (comp_arysub_answer(c, id, hash) & (BOPF_SELF | BOPF_SELF_OR_NIL)) != 0;
 }
 /* Time's copies of a Time subclass instance answer an instance of its class
    (getutc, getlocal, as dup does): CRuby makes them with the receiver's
    class. Its arithmetic and rounding answer a plain Time. */
-int comp_timesub_copy_name(const char *n) {
-  return n && (sp_streq(n, "getutc") || sp_streq(n, "getgm") || sp_streq(n, "getlocal"));
+int comp_timesub_copy_name(Compiler *c, const char *n) {
+  return n && (sp_streq(n, "getutc") || sp_streq(n, "getgm") || sp_streq(n, "getlocal")) &&
+         !comp_time_reopen_defines(c, n);
 }
 
 /* Whether the arguments of call `id`, on a receiver of type rt (-1: none),

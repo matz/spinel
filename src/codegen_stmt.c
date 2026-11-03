@@ -17406,6 +17406,8 @@ static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, i
   int tv = ++g_tmp, tn = ++g_tmp;
   emit_indent(b, indent);
   buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tv, val, tv);
+  /* the element converts as the nested target's implied to_ary of it (its row) */
+  tv = emit_boxed_to_ary(c, tgt, NTI_YIELDED, tv, b, indent);
   emit_indent(b, indent);
   buf_printf(b, "sp_int _t%d = sp_poly_massign_len(_t%d); (void)_t%d;\n", tn, tv, tn);
   for (int i = 0; i < ln; i++) {

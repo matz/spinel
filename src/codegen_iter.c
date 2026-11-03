@@ -5768,10 +5768,11 @@ static void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty,
 static void emit_poly_auto_splat(Compiler *c, int block, int telem, Buf *b, int indent) {
   Scope *bs = comp_scope_of(c, block);
   int npp = 0; while (block_param_name(c, block, npp)) npp++;
-  /* (the parameters' implied to_ary of the value: its row) */
+  /* (the parameters' implied to_ary of the value: its row); an Array of
+     any kind splats, as sp_poly_ary_operand answers it */
   telem = emit_boxed_to_ary(c, nt_ref(c->nt, block, "parameters"), NTI_YIELDED, telem, b, indent + 1);
   emit_indent(b, indent + 1);
-  buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) {\n", telem, telem);
+  buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) {\n", telem, telem);
   for (int pj = 0; pj < npp; pj++) {
     const char *pnj = block_param_name(c, block, pj);
     if (!pnj) break;

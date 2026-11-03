@@ -3328,7 +3328,7 @@ int desugar_masgn_to_ary(Compiler *c) {
       if (did && !an_node_dropped(c, id)) did = masgn_to_ary_nested_kept(c, nt, id, value, orig, en);
       free(orig);
     }
-    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id)) >= 0 &&
+    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id, value)) >= 0 &&
              !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
       if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
       else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }

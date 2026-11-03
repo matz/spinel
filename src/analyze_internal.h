@@ -154,6 +154,7 @@ const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 int builtin_method_arity(const char *cls, const char *m, int *out);
 int builtin_cmethod_known(const char *cls, const char *name);
 int builtin_instance_method_known(const char *cls, const char *m);   /* codegen_call.c */
+int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_method_names(const char *cls, const char **out, int cap);
 int builtin_name_arity_span(const char *name, int with_block, int *lo, int *hi);

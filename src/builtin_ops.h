@@ -659,6 +659,10 @@ const IterRow *iter_row(TyKind fam, const char *name, int argc, unsigned skip);
    one that yields to its block before it answers? (The load-phase record
    asks it of a block whose receiver is not typed yet.) */
 int iter_row_named(const char *name);
+/* Does Object's builtin of `name` run its block before it answers, on
+   any receiver: an any-receiver iterator row of a name Object's surface
+   answers (tap, then, yield_self)? */
+int object_iter_runs_now(const char *name);
 /* The iterator row a call with a block reads on a receiver of kind rt:
    any receiver's (tap, then, each_with_object), else its family's (an
    Array's, a Hash's, a Range's, ...), or NULL. */

@@ -34,6 +34,10 @@ static inline double sp_time_ns_to_f(int64_t sec, int64_t nsec) {
   return (double)sec + (double)nsec / 1e9;
 }
 
+/* The Time a Time subclass instance starts with, inside the instance, before
+   its `new`, `at` or `now` sets it: the epoch, local (Time.allocate's). */
+static inline void sp_Time_init_embedded(sp_Time *t) { *t = (sp_Time){0, 0, 0, 0}; }
+
 /* Constructors */
 sp_Time sp_timev_now(void);
 sp_Time sp_timev_at_int(int64_t sec);

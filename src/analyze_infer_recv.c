@@ -1231,7 +1231,8 @@ int infer_arysub_call(Compiler *c, int id, TyKind *out) {
   int hash = comp_arysub_emb(c, ty_object_class(rt));
   /* a Hash method answering a copy of its receiver answers one of its class */
   int self = comp_arysub_self_result(c, id, hash) ||
-             (hash == 1 && (comp_arysub_answer(c, id, hash) & BOPF_COPY_CLASS));
+             (hash == 1 && (comp_arysub_answer(c, id, hash) & BOPF_COPY_CLASS)) ||
+             (hash == 3 && comp_timesub_copy_name(nt_str(c->nt, id, "name")));
   TyKind r = TY_UNKNOWN;
   if (k != TY_UNKNOWN) {
     an_face_push(recv, k);

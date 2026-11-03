@@ -3174,8 +3174,9 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN, k = TY_UNKNOWN;
   v->bound = -1; v->vr = v->vf = v->vi = -1; v->nv = 0; v->nat = TY_UNKNOWN; v->copy = 0; v->copy_class = 0;
   int str = recv >= 0 && ty_is_object(rt) && comp_ary_is_str(c, ty_object_class(rt));
-  if (comp_arysub_call(c, id, rt, &k) && (array_new_copies(k) || ty_is_hash(k) || str)) {
-    int hash = str ? 2 : ty_is_hash(k) ? 1 : 0;
+  int tim = recv >= 0 && ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt));
+  if (comp_arysub_call(c, id, rt, &k) && (array_new_copies(k) || ty_is_hash(k) || str || tim)) {
+    int hash = tim ? 3 : str ? 2 : ty_is_hash(k) ? 1 : 0;
     v->bound = arysub_bind(c, recv, k);
     v->vr = view_push(c, recv, k);
     v->vf = view_push_face(recv, k);
@@ -3196,6 +3197,7 @@ static int arysub_view_open(Compiler *c, int id, ArysubView *v) {
        BOPF_COPY_CLASS) answers an instance of the receiver's class, with its
        instance variables: the Hash emitter's answer is put into a dup */
     else if (hash == 1 && (comp_arysub_answer(c, id, hash) & BOPF_COPY_CLASS)) v->copy_class = 1;
+    else if (hash == 3 && comp_timesub_copy_name(nt_str(nt, id, "name"))) v->copy_class = 1;
     rt = k;
   }
   int args = nt_ref(nt, id, "arguments"), an = 0;
@@ -3259,6 +3261,15 @@ int emit_arysub_call(Compiler *c, int id, Buf *b) {
     buf_printf(ob, "%s_dup(", arysub_array_ctype(c, ty_object_class(rt)));
     emit_call(c, id, ob);
     buf_puts(ob, ")");
+  }
+  else if (v.copy_class && cn && comp_ary_is_time(c, ty_object_class(rt))) {
+    /* a copy of the Time, as an instance of the receiver's class */
+    int t = ++g_tmp, d = ++g_tmp;
+    buf_printf(ob, "({ sp_Time *_t%d = ", t);
+    emit_call(c, id, ob);
+    buf_printf(ob, "; SP_GC_ROOT(_t%d); sp_%s *_t%d = (sp_%s *)sp_%s__dup((void *)%s, 0); SP_GC_ROOT(_t%d); "
+                  "_t%d->ary = *_t%d; _t%d; })",
+               t, cn, d, cn, cn, g_argov_text[v.bound], d, d, t, d);
   }
   else if (v.copy_class) {
     const char *at = arysub_array_ctype(c, ty_object_class(rt));

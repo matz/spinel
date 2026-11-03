@@ -11402,6 +11402,8 @@ void arysub_box_id(Compiler *c, TyKind t, Buf *b) {
   if (c->classes[oc].ary_root <= 0) { buf_printf(b, "%d", oc); return; }
   /* a String subclass instance is boxed as its String handle */
   if (comp_ary_is_str(c, oc)) { buf_puts(b, "SP_BUILTIN_STRBUF"); return; }
+  /* a Time subclass instance is boxed as its Time, which it starts with */
+  if (comp_ary_is_time(c, oc)) { buf_puts(b, "SP_BUILTIN_TIME"); return; }
   /* a Hash subclass instance is boxed as its Hash */
   if (comp_ary_is_hash(c, oc)) { buf_puts(b, hash_box_cls(comp_ary_kind(c, oc))); return; }
   switch (comp_ary_kind(c, oc)) {
@@ -11428,6 +11430,10 @@ static int program_has_hashsub(Compiler *c) {
 }
 int program_has_strsub(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++) if (c->classes[k].ary_root > 0 && c->classes[k].ary_str) return 1;
+  return 0;
+}
+static int program_has_timesub(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) if (c->classes[k].ary_root > 0 && c->classes[k].ary_time) return 1;
   return 0;
 }
 
@@ -11490,6 +11496,7 @@ void emit_arysub_machinery(Compiler *c, Buf *b) {
   buf_puts(b, "  if(v.tag!=SP_TAG_OBJ||!v.v.p||!(sp_poly_is_array_kind(v.cls_id)");
   if (program_has_hashsub(c)) buf_puts(b, "||sp_poly_is_hash_kind(v.cls_id)");
   if (program_has_strsub(c)) buf_puts(b, "||v.cls_id==SP_BUILTIN_STRBUF");
+  if (program_has_timesub(c)) buf_puts(b, "||v.cls_id==SP_BUILTIN_TIME");
   buf_puts(b, "))return -1;\n");
   buf_puts(b, "  void(*s)(void*)=((sp_gc_hdr*)((char*)v.v.p-sizeof(sp_gc_hdr)))->scan;\n");
   for (int k = 0; k < c->nclasses; k++)
@@ -11508,6 +11515,7 @@ void emit_arysub_machinery(Compiler *c, Buf *b) {
    of the Hash a Hash subclass instance embeds. */
 const char *arysub_array_ctype(Compiler *c, int cid) {
   if (comp_ary_is_str(c, cid)) return "sp_String";
+  if (comp_ary_is_time(c, cid)) return "sp_Time";
   if (comp_ary_is_hash(c, cid)) {
     static char hb[32];
     snprintf(hb, sizeof hb, "sp_%sHash", ty_hash_cname(comp_ary_kind(c, cid)));
@@ -11535,7 +11543,8 @@ void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_printf(b, "SP_UNUSED static sp_%s *sp_%s__alloc(void) {\n", cn, cn);
   int hash = comp_ary_is_hash(c, cid);
   buf_printf(b, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), ", cn, cn, cn);
-  if (sp_streq(at, "sp_PolyArray")) buf_puts(b, "NULL");
+  /* a Time is a value: nothing to free */
+  if (sp_streq(at, "sp_PolyArray") || sp_streq(at, "sp_Time")) buf_puts(b, "NULL");
   else buf_printf(b, "%s_fin", at);
   /* a String subclass's handle frees its payload as a String does */
   buf_printf(b, ", sp_%s__gc_scan);\n", cn);
@@ -11555,6 +11564,13 @@ void emit_arysub_alloc(Compiler *c, ClassInfo *ci, Buf *b) {
     /* the bytes and the encoding tag; frozen is the header bit */
     buf_puts(b, "  d->ary.len = 0; sp_fd_append_len(&d->ary, o->ary.data, o->ary.len);\n"
                 "  if (o->ary.binary) { d->ary.binary = 1; sp_fd_publish(&d->ary); }\n");
+    buf_puts(b, "  if (mode == 1 ? sp_gc_is_frozen(o) : mode == 3) sp_gc_freeze(d);\n");
+    buf_puts(b, "  return d;\n}\n");
+    return;
+  }
+  if (comp_ary_is_time(c, cid)) {
+    /* the Time value itself; frozen is the header bit */
+    buf_puts(b, "  d->ary = o->ary;\n");
     buf_puts(b, "  if (mode == 1 ? sp_gc_is_frozen(o) : mode == 3) sp_gc_freeze(d);\n");
     buf_puts(b, "  return d;\n}\n");
     return;

@@ -9681,9 +9681,9 @@ static void emit_poly_arm_param(Compiler *c, Scope *ms, int a, const ArgLayout *
     }
     /* fall through */
   case ARG_KWH:
-    if (A->kw->kwall_any && (pt == TY_STR_INT_HASH || pt == TY_STR_STR_HASH)) {
+    if (A->kw->kwall_any && (pt == TY_STR_INT_HASH || pt == TY_STR_STR_HASH || pt == TY_STR_POLY_HASH)) {
       /* a String-keyed braceless hash into a concrete Hash parameter */
-      buf_printf(pa, "sp_%sHash_from_poly_hash(_t%d)", pt == TY_STR_INT_HASH ? "StrInt" : "StrStr", A->kw->kwall);
+      buf_printf(pa, "sp_%sHash_from_poly_hash(_t%d)", ty_hash_cname(pt), A->kw->kwall);
       return;
     }
     emit_kwh_pos_hash(c, A->kw, pt == TY_POLY, pa);

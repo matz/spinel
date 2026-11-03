@@ -20882,8 +20882,13 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
            renders it as the address form. #name already answers nil; this is
            the same class seen through #to_s / #inspect / `p` (#4031). */
         if (c->classes[i].is_anon_struct) {
-          buf_printf(b, "case %d:return sp_sprintf(SPL(\"#<Class:0x%%016llx>\"),"
-                         "(unsigned long long)(uintptr_t)&sp_class_to_s+%d);", i, i);
+          /* ...until a constant write names it (`Ns::S = Struct.new(:a)`,
+             `S = Struct.new(:a) do ... end`): an instance's class prints
+             that name too */
+          buf_printf(b, "case %d:", i);
+          if (comp_class_anonymous(c, i)) buf_printf(b, "if(sp_class_assigned_name_%d)return sp_class_assigned_name_%d;", i, i);
+          buf_printf(b, "return sp_sprintf(SPL(\"#<Class:0x%%016llx>\"),"
+                         "(unsigned long long)(uintptr_t)&sp_class_to_s+%d);", i);
           continue;
         }
         const char *qname = class_ruby_name(c, i);
@@ -20993,6 +20998,13 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
       if (is_builtin_reopen(c->classes[i].name)) continue;
       if (!comp_class_kw_init(c, i)) continue;
       if (!c->classes[i].kw_init && comp_class_anonymous(c, i)) continue;   /* (a Class.new subclass of one names itself at run time) */
+      /* a class with no static name (a Struct.new a local holds, or one a
+         path write names as it runs) prints its display form, the name the
+         write gave or the anonymous `#<Class:0x...>` */
+      if (comp_class_anonymous(c, i) || c->classes[i].is_anon_struct) {
+        buf_printf(b, "case %d:return sp_sprintf(SPL(\"%%s(keyword_init: true)\"), %s(c));", i, comp_class_base_display_fn(c));
+        continue;
+      }
       const char *qname = class_ruby_name(c, i);
       if (!qname) qname = c->classes[i].name;
       buf_printf(b, "case %d:return SPL(\"%s(keyword_init: true)\");", i, qname);

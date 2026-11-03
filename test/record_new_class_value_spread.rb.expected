@@ -1,0 +1,6 @@
+#<struct T a=5, b=6>
+#<struct T a=7, b=nil>
+#<struct T a=1, b=2>
+#<struct K a=3, b=4>
+#<data D a=1, b=2>
+#<data D a=3, b=4>

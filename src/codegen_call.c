@@ -13264,7 +13264,8 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     if (!class_has_ctor(&c->classes[ci])) continue;
     int initm = comp_method_in_chain(c, ci, "initialize", NULL);
     /* A Struct or Data class's generated constructor, reached with a sole
-       `*args` or a sole keyword hash: the arm builds it as the static
+       `*args`, a sole keyword hash, or both spread (`k.new(*r, **h)`, as a
+       forward passes them on): the arm builds it as the static
        `S.new(...)` does (emit_struct_new_call), the members from the array
        or by keyword -- the hash itself as the first member of a
        keyword_init: false Struct that can hold it -- its statements in the
@@ -13277,7 +13278,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
       ClassInfo *k = &c->classes[ci];
       int sole_kwh = argc == 1 && nt_kind(nt, argv[0]) == NK_KeywordHashNode;
       int ok = initm < 0 && (sole_splat >= 0 ? splat_operand_ok(c, sole_splat)
-               : sole_kwh && k->nreaders > 0 && dynamic_new_may_reach(c, id, ci) &&
+               : (sole_kwh || (kw_splat >= 0 && splat_operand_ok(c, kw_splat))) && k->nreaders > 0 && dynamic_new_may_reach(c, id, ci) &&
                  (k->is_data || k->kw_init >= 0 ||
                   struct_member_slot_type(k, k->readers[0]) == TY_POLY));
       if (!ok) continue;

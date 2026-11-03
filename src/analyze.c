@@ -5892,23 +5892,46 @@ static int qc_native_leaf_declared(const char *const *decls, int ndecls, const Q
   }
   return found;
 }
-/* whether the program defines a class or module whose header names `nm` */
-/* A builder write the constant pass qualified (`Bar = Class.new` in
-   module Outer, named Outer__Bar there) is the same constant as a header
-   `class Bar` in Outer, whose qualified name is the same: it is that class,
-   not another class of the program with that name. */
-static int qc_class_name_defined(Compiler *c, const char *nm) {
+/* How header hdr (the constant_path of `class Bar` or `module Bar`)
+   may reopen a builder: 1 a class header with no superclass, 2 a module
+   header, 0 a class header that names a superclass */
+static int qc_header_reopens(const NodeTable *nt, int hdr) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, id)
+    if (nt_ref(nt, id, "constant_path") == hdr) return nt_ref(nt, id, "superclass") < 0;
+  return 2;
+}
+/* Is the program's write a before node b in the source (same file)? */
+static int qc_written_before(const NodeTable *nt, int a, int b) {
+  if (nt_int(nt, a, "node_file", 0) != nt_int(nt, b, "node_file", 0)) return 0;
+  long long la = nt_int(nt, a, "node_line", 0), lb = nt_int(nt, b, "node_line", 0);
+  return la < lb || (la == lb && nt_int(nt, a, "node_col", 0) < nt_int(nt, b, "node_col", 0));
+}
+/* Is nm the name of a class or module the program defines, other than
+   the one header hdr reopens? A builder write the constant pass
+   qualified (`Bar = Class.new` in module Outer, named Outer__Bar there)
+   is the constant a header `class Bar` in Outer names, whose qualified
+   name is the same. The header reopens it when it is the only builder
+   write of that name, it comes before the header, and the header is of
+   the builder's kind and names no superclass (CRuby checks a superclass
+   against the builder's, which the passes do not); otherwise the header
+   stays a class of its own, as before. */
+static int qc_class_name_defined(Compiler *c, const char *nm, int hdr) {
   const NodeTable *nt = c->nt;
-  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+  int ndk = 0, builders = 0, reopens = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], id) {
       const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_name(nt, id) : NULL;
       if (!mn || !sp_streq(mn, nm)) continue;
-      if (nt_kind(nt, id) == NK_ConstantWriteNode && class_def_builder(nt, id) >= 0 &&
-          nt_str(nt, id, "qc_orig_name") && qc_const_qualified(nm)) continue;
+      if (hdr >= 0 && nt_kind(nt, id) == NK_ConstantWriteNode && class_def_builder(nt, id) >= 0 &&
+          nt_str(nt, id, "qc_orig_name") && qc_const_qualified(nm)) {
+        builders++;
+        int how = qc_header_reopens(nt, hdr);
+        reopens += qc_written_before(nt, id, hdr) && (class_def_is_module(nt, id) ? how == 2 : how == 1);
+        continue;
+      }
       return 1;
     }
-  return 0;
+  return builders && !(builders == 1 && reopens == 1);
 }
 /* Whether each class write shares its leaf with a write under another path.
    A leaf whose writes have two or more distinct paths collides for every
@@ -6059,7 +6082,7 @@ void qualify_colliding_classes(Compiler *c) {
        leaf is still refused. */
     if (collide && ws[i].depth > 0) {
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      if (qc_class_name_defined(c, qn)) {
+      if (qc_class_name_defined(c, qn, ws[i].node)) {
         for (int j = 0; j < wn; j++)
           if (j != i && ws[j].depth == 0 && sp_streq(ws[j].name, ws[i].name)) {
             char msg[768];
@@ -6068,7 +6091,7 @@ void qualify_colliding_classes(Compiler *c) {
                      "top-level %s is defined too; rename one of them", ws[i].name, qn, qn, ws[i].name);
             unsupported_feature(c, ws[i].node, msg);
           }
-        while (qc_class_name_defined(c, qn)) {
+        while (qc_class_name_defined(c, qn, -1)) {
           ws[i].salt++;
           qc_qualified_name(qn, sizeof qn, &ws[i]);
         }

@@ -3888,16 +3888,16 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   return ELAB_YES;
 }
 
-int elab_assumed_blocks(Compiler *c, int id, int *out, int cap) {
+int elab_in_kept_block(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const int *par = comp_parent_map(c);
-  int n = 0;
-  for (int a = id; a >= 0 && par[a] >= 0 && n < cap; a = par[a]) {
+  for (int a = id; a >= 0 && par[a] >= 0; a = par[a]) {
     NodeKind k = nt_kind(nt, a);
     if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
-    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) out[n++] = par[a];
+    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && nt_int(nt, par[a], "blk_kept", 0) &&
+        elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) return 1;
   }
-  return n;
+  return 0;
 }
 /* Does node id run later than its point, at a time the syntax does not
    tell: in a block whose call the record answers ELAB_BLK_LATER for (a

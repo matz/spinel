@@ -2573,7 +2573,7 @@ int a_proc_create_or_lifted(Compiler *c, int id) {
    a proc that may outlive the call, as the capture marking reads it
    (mark_proc_captures): `blk_kept` on the call, so that the call plan
    answers a call in one for any time after its point
-   (elab_assumed_blocks). Marked in the fixpoint as the targets settle; a
+   (elab_in_kept_block). Marked in the fixpoint as the targets settle; a
    block once kept stays so. Changed when it marked one. */
 int an_mark_kept_blocks(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;

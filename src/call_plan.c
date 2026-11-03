@@ -1037,11 +1037,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
    answers later or an END body (elab_runs_later), or in a block it takes
    to run at once that its call's typed target keeps (an_mark_kept_blocks)? */
 static int ct_after_point(Compiler *c, int id) {
-  if (elab_runs_later(c, id)) return 1;
-  int calls[64], n = elab_assumed_blocks(c, id, calls, 64);
-  for (int i = 0; i < n; i++)
-    if (nt_int(c->nt, calls[i], "blk_kept", 0)) return 1;
-  return 0;
+  return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */

@@ -14330,6 +14330,13 @@ int desugar_builtins(Compiler *c) {
   int *gdef = (int *)malloc(sizeof(int) * (size_t)sp_builtin_enum_names_n);
   if (!gdef) { free(nb); free(tb); free(tfile); return 0; }
   for (int i = 0; i < sp_builtin_enum_names_n; i++) gdef[i] = -1;
+  /* the builtins/ definition a program's reopening replaces (bdef): a
+     receiver whose class has its own method of the name (an Array's
+     take_while) still runs it, through a copy of its own per site */
+  int nbdef = sp_builtin_enum_names_n;
+  int *bdef = (int *)malloc(sizeof(int) * (size_t)(nbdef ? nbdef : 1));
+  if (!bdef) { free(gdef); free(bdef); free(nb); free(tb); free(tfile); return 0; }
+  for (int i = 0; i < nbdef; i++) bdef[i] = -1;
   int *own = NULL, nown = 0;   /* the own Enumerable methods a builtin receiver takes */
   const char *own_mn = NULL;   /* the module's name, as the program's reopenings spell it */
   for (int i = 0; i < tn; i++) {
@@ -14347,6 +14354,22 @@ int desugar_builtins(Compiler *c) {
       own_mn = mn;
       for (int k = 0; k < bn; k++) {
         int d = fwd_body_def(nt, bb[k]);
+        /* a builtin's name beside the reopening's own methods: its def
+           answers an Array, a Hash, a Range or an Enumerator as the
+           all-builtin reopening's does (a generic copy), the module's def
+           staying for its includers. A private one, a singleton one or one
+           that calls super keeps the builtin's. */
+        int dbi = d >= 0 ? builtin_enum_name_index(nt_str(nt, d, "name")) : -1;
+        if (dbi >= 0 && dbi < nbdef && nt_ref(nt, d, "receiver") < 0 && !nt_int(nt, d, "node_bi", 0) &&
+            !bi_def_calls_super(nt, d) && bi_def_visibility(nt, bb[k]) == BVIS_PUBLIC) {
+          int g = own_enum_generic(nt, d, mn);
+          if (g < 0) break;
+          nt_node_set_int(nt, g, "enum_prog_def", 1);
+          if (gdef[dbi] >= 0 && !nt_int(nt, gdef[dbi], "enum_prog_def", 0)) bdef[dbi] = gdef[dbi];
+          gdef[dbi] = g;
+          changed = 1;
+          continue;
+        }
         if (d < 0 || nt_ref(nt, d, "receiver") >= 0 || !own_enum_name_routable(nt_str(nt, d, "name"))) continue;
         int *g = (int *)realloc(own, sizeof(int) * (size_t)(nown + 1));
         if (!g) break;
@@ -14378,6 +14401,13 @@ int desugar_builtins(Compiler *c) {
          that, orphaned in the node table, it cannot be mistaken for a
          method of the builtin's name. */
       { char gn[256]; snprintf(gn, sizeof gn, "__enum_%s", name); nt_node_set_str(nt, def, "name", gn); }
+      /* a program's own reopening (not builtins/enumerable.rb): a receiver
+         whose class has its own method of the name keeps that method
+         (desugar_builtin_enum_calls, enum_recv_class_owns) */
+      if (!nt_int(nt, def, "node_bi", 0)) {
+        nt_node_set_int(nt, def, "enum_prog_def", 1);
+        if (bi >= 0 && bi < nbdef && gdef[bi] >= 0 && !nt_int(nt, gdef[bi], "enum_prog_def", 0)) bdef[bi] = gdef[bi];
+      }
       if (bi >= 0) gdef[bi] = def;
     }
     /* the module node and its `Enumerable` constant leave the program too:
@@ -14433,7 +14463,7 @@ int desugar_builtins(Compiler *c) {
     changed = 1;
   }
   free(own);
-  if (!changed) { free(gdef); free(nb); return 0; }
+  if (!changed) { free(gdef); free(bdef); free(nb); return 0; }
   int n0 = nt->count;   /* the program's own nodes (the generics among them): the call sites to clone for */
   /* the numbers carry on across calls: a second pass's copies must not
      take names the first pass's already have */
@@ -14441,7 +14471,7 @@ int desugar_builtins(Compiler *c) {
   static int site_seq_n = 0;
   if (site_seq_n < sp_builtin_enum_names_n + 1) {
     int *g = (int *)realloc(site_seq, sizeof(int) * (size_t)(sp_builtin_enum_names_n + 1));
-    if (!g) { free(gdef); free(nb); return 0; }
+    if (!g) { free(gdef); free(bdef); free(nb); return 0; }
     memset(g + site_seq_n, 0, sizeof(int) * (size_t)(sp_builtin_enum_names_n + 1 - site_seq_n));
     site_seq = g; site_seq_n = sp_builtin_enum_names_n + 1;
   }
@@ -14467,9 +14497,11 @@ int desugar_builtins(Compiler *c) {
      calls in the blockless arm of a builtin's copy made for a call with a
      literal block, an arm that never runs (bi_flag_dead_else). */
   unsigned char *in_generic = (unsigned char *)calloc((size_t)n0 + 1, 1);
-  if (!in_generic) { free(gdef); free(nb); return 0; }
+  if (!in_generic) { free(gdef); free(bdef); free(nb); return 0; }
   for (int i = 0; i < sp_builtin_enum_names_n; i++)
     if (gdef[i] >= 0 && gdef[i] < own_lo) bi_mark_subtree(nt, gdef[i], in_generic, n0);
+  for (int i = 0; i < nbdef; i++)
+    if (bdef[i] >= 0 && bdef[i] < own_lo) bi_mark_subtree(nt, bdef[i], in_generic, n0);
   /* A send of a name the program holds rather than spells gets its arms in
      the fixpoint, long after this pass, and a Symbol's to_proc becomes its
      call after it too: `m = :tally; a.public_send(m)` had a `tally` arm with
@@ -14481,7 +14513,7 @@ int desugar_builtins(Compiler *c) {
      sites the walk below reaches. */
   if (g_enum_send_copy_n < sp_builtin_enum_names_n) {
     int *g = (int *)realloc(g_enum_send_copy, sizeof(int) * (size_t)sp_builtin_enum_names_n);
-    if (!g) { free(in_generic); free(gdef); free(nb); return 0; }
+    if (!g) { free(in_generic); free(gdef); free(bdef); free(nb); return 0; }
     for (int i = g_enum_send_copy_n; i < sp_builtin_enum_names_n; i++) g[i] = -1;
     g_enum_send_copy = g; g_enum_send_copy_n = sp_builtin_enum_names_n;
   }
@@ -14599,6 +14631,7 @@ int desugar_builtins(Compiler *c) {
     nt_node_set_int(nt, copy, "private_helper", 1);   /* no Ruby method (comp_scope_is_private_helper) */
     nt_node_set_int(nt, copy, "enum_site", id);   /* the call it serves (enum_copy_site) */
     if (bi >= nbuiltin) nt_node_set_int(nt, copy, "enum_own_def", 1);   /* a reopening's method (desugar_builtin_enum_calls) */
+    if (nt_int(nt, gdef[bi], "enum_prog_def", 0)) nt_node_set_int(nt, copy, "enum_prog_def", 1);
     nt_node_set_int(nt, id, "enum_copy", copy);
     /* the calls in the copy are its sites, the walk reaches them below */
     nt_node_set_int(nt, copy, "enum_bi", bi);
@@ -14609,12 +14642,33 @@ int desugar_builtins(Compiler *c) {
       if (bi < nbuiltin && sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, copy); }
     if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) break; nb = g; }
     nb[nbn++] = copy;
+    /* the builtins/ definition the reopening replaced, for a receiver whose
+       class has its own method of the name (enum_copy_own) */
+    if (bi < nbdef && bdef[bi] >= 0) {
+      int obase = nt->count;
+      int oc = nt_clone_subtree(nt, bdef[bi]);
+      if (oc < 0) break;
+      char on[256]; snprintf(on, sizeof on, "__enum_%s__%do", sp_builtin_enum_names[bi], site_seq[bi] - 1);
+      nt_node_set_str(nt, oc, "name", on);
+      nt_node_set_int(nt, oc, "private_helper", 1);
+      nt_node_set_int(nt, oc, "enum_site", id);
+      nt_node_set_int(nt, oc, "enum_bi", bi);
+      nt_node_set_int(nt, oc, "enum_in_copy", in_copy);
+      nt_node_set_int(nt, id, "enum_copy_own", oc);
+      for (int j = obase; j < nt->count; j++)
+        if (j != oc && nt_kind(nt, j) == NK_CallNode) nt_node_set_int(nt, j, "enum_in_copy", oc);
+      { int sb = nt_ref(nt, id, "block");
+        if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, oc); }
+      if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) break; nb = g; }
+      nb[nbn++] = oc;
+    }
   }
   free(in_generic);
   nt_node_set_arr(nt, top, "body", nb, nbn);
   for (int i = 0; i < sp_builtin_enum_names_n; i++) if (gdef[i] >= 0) nt_subtree_blank(nt, gdef[i]);
+  for (int i = 0; i < nbdef; i++) if (bdef[i] >= 0) nt_subtree_blank(nt, bdef[i]);
   comp_grow_node_arrays(c);
-  free(gdef); free(nb);
+  free(gdef); free(bdef); free(nb);
   return 1;
 }
 
@@ -15055,6 +15109,43 @@ static int enum_is_a_named(Compiler *c, const char *rn, const char *cls) {
   nt_node_set_ref(nt, ia, "receiver", pr);
   nt_node_set_ref(nt, ia, "arguments", iaa);
   return ia;
+}
+
+/* Does builtin class cls have a method nm of its own, one CRuby finds
+   ahead of Enumerable's, for a call with a block (blk) or without? The
+   builtin facts' Method#arity rows (builtin_method_known) are each class's
+   own public instance methods; an Enumerator's own ones are not among
+   them. With a block, some of those call super, so Enumerable's answers:
+   Array#minmax, and Range's count, min, max and minmax. */
+static int enum_class_owns(const char *cls, const char *nm, int blk) {
+  if (!cls || !nm) return 0;
+  if (sp_streq(cls, "Enumerator"))
+    return sp_streq(nm, "each_with_index") || sp_streq(nm, "each_with_object") ||
+           sp_streq(nm, "with_index") || sp_streq(nm, "with_object");
+  if (!builtin_method_known(cls, nm)) return 0;
+  if (blk && sp_streq(cls, "Array") && sp_streq(nm, "minmax")) return 0;
+  if (blk && sp_streq(cls, "Range") &&
+      (sp_streq(nm, "count") || sp_streq(nm, "min") || sp_streq(nm, "max") || sp_streq(nm, "minmax"))) return 0;
+  return 1;
+}
+static const char *const enum_owner_classes[] = { "Array", "Hash", "Range", "Enumerator", NULL };
+
+/* `__r.is_a?(Array) || __r.is_a?(Hash) ...` over the builtin classes that
+   have their own method nm (enum_class_owns), read from the local rn */
+static int enum_owner_chain(Compiler *c, const char *rn, const char *nm, int blk) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int pred = -1;
+  for (int k = 0; enum_owner_classes[k]; k++) {
+    if (!enum_class_owns(enum_owner_classes[k], nm, blk)) continue;
+    int ia = enum_is_a_named(c, rn, enum_owner_classes[k]);
+    if (ia < 0) return -1;
+    if (pred < 0) { pred = ia; continue; }
+    int orn = nt_new_node(nt, "OrNode");
+    if (orn < 0) return -1;
+    nt_node_set_ref(nt, orn, "left", pred); nt_node_set_ref(nt, orn, "right", ia);
+    pred = orn;
+  }
+  return pred;
 }
 /* An instantiated class of the program with an #each or a #to_a but no
    Enumerable behind it (comp_enum_behind) and no method_missing: the walk
@@ -15581,6 +15672,28 @@ static int enum_sym_proc_block(const NodeTable *nt, int blk) {
   const char *rn2 = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return rn2 && sp_streq(rn2, "_spx") && nt_ref(nt, call, "arguments") < 0 && nt_ref(nt, call, "block") < 0;
 }
+/* Does the receiver of call id, of type rt, have a method nm of its own
+   class (enum_class_owns)? A receiver the analysis made (`to_a` or
+   `__enum_to_a` over a Hash, a Range or a class with #each) is no Array of
+   the program's. */
+static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0) return 0;
+  if (nt_kind(nt, recv) == NK_CallNode) {
+    const char *rn = nt_str(nt, recv, "name");
+    if (nt_int(nt, recv, "made_to_a", 0) || nt_str(nt, recv, "enum_recv") || nt_str(nt, recv, "enum_each_wrap") ||
+        (rn && strncmp(rn, "__enum_to_a", 11) == 0)) return 0;
+  }
+  const char *cls = NULL;
+  if (ty_is_array(rt) || ty_is_obj_array(rt)) cls = "Array";
+  else if (ty_is_object(rt) && comp_ary_root(c, ty_object_class(rt)) >= 0) cls = "Array";
+  else if (ty_is_hash(rt)) cls = "Hash";
+  else if (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE) cls = "Range";
+  else if (rt == TY_ENUMERATOR) cls = "Enumerator";
+  return enum_class_owns(cls, nm, nt_ref(nt, id, "block") >= 0);
+}
+
 int desugar_builtin_enum_calls(Compiler *c) {
   if (sp_builtin_enum_names_n == 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
@@ -15840,6 +15953,28 @@ int desugar_builtin_enum_calls(Compiler *c) {
       if (g_enum_late && lb >= 0 && (nt_kind(nt, lb) != NK_BlockNode || enum_sym_proc_block(nt, lb))) continue; }
     int copy = (int)nt_int(nt, id, "enum_copy", -1);
     if (copy < 0 || copy >= nt->count) continue;   /* no copy was made for this site */
+    /* a program's `module Enumerable` method is behind the receiver's class:
+       an Array's own find_index or take_while, a Hash's own any?, a Range's
+       own minmax answer first, as CRuby looks the class up before the
+       module. The call takes the builtins/ definition's copy (enum_copy_own),
+       or keeps the typed emitter when the reopening defines a name
+       builtins/ has none of. */
+    if (nt_int(nt, copy, "enum_prog_def", 0) &&
+        enum_recv_class_owns(c, id, rt, nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name)) {
+      copy = (int)nt_int(nt, id, "enum_copy_own", -1);
+      if (copy < 0 || copy >= nt->count) continue;
+    }
+    /* a receiver known only at run time: the classes among them that have
+       their own method of the name take the builtins/ definition's copy, by
+       an is_a? test ahead of the reopening's (own_arm) */
+    int own_copy = -1, own_arm = 0;
+    if (rt == TY_POLY && nt_int(nt, copy, "enum_prog_def", 0)) {
+      own_copy = (int)nt_int(nt, id, "enum_copy_own", -1);
+      const char *oq = nt_str(nt, id, "orig_name") ? nt_str(nt, id, "orig_name") : name;
+      for (int k = 0; own_copy >= 0 && own_copy < nt->count && enum_owner_classes[k]; k++)
+        if (enum_class_owns(enum_owner_classes[k], oq, nt_ref(nt, id, "block") >= 0)) own_arm = 1;
+      if (own_arm && comp_method_index(c, nt_str(nt, own_copy, "name")) < 0) own_arm = 0;
+    }
     const char *gn = nt_str(nt, copy, "name");
     if (!gn || comp_method_index(c, gn) < 0) continue;
     int args = nt_ref(nt, id, "arguments");
@@ -15929,7 +16064,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
        answers false for a boxed builtin.) */
     int scal_arm = rt == TY_POLY && !safe_nav && !range_arm && !wo_arm && nt_int(nt, copy, "enum_own_def", 0);
     if (wo_arm) ndef = 0;   /* the arm as written answers every other class */
-    if (ndef > 0 || safe_nav || range_arm || wo_arm || scal_arm) {
+    if (wo_arm || range_arm) own_arm = 0;
+    int own_stmts = -1;   /* the statements the generic call sits in, for own_arm */
+    if (ndef > 0 || safe_nav || range_arm || wo_arm || scal_arm || own_arm) {
       char rn[64]; snprintf(rn, sizeof rn, "__enumrecv_%s", comp_node_tag(c, id));
       int w = nt_new_node(nt, "LocalVariableWriteNode");
       int own = nt_new_node(nt, "CallNode");
@@ -15958,7 +16095,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
         nt_node_set_ref(nt, nq, "receiver", nr);
         pred = nq;
       }
-      if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
+      int own_only = own_arm && ndef == 0 && !safe_nav;   /* the own arm's test is the only one */
+      if (own_only) pred = enum_owner_chain(c, rn, qn, blk >= 0);
+      else if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
                           : wo_arm ? enum_is_a_named(c, rn, "Enumerator") : enum_is_a_chain(c, rn, defcls, exact, ndef);
       if (scal_arm) {
         static const char *const enums[] = { "Array", "Hash", "Range", "Enumerator", "Struct", "IO", "Dir" };
@@ -16038,6 +16177,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
         nt_node_set_arr(nt, ts, "body", &nil_n, 1);
         nt_node_set_arr(nt, es, "body", &ifc, 1);
       }
+      else if (own_only) {   /* the builtins/ copy goes in once the generic call is whole */
+        nt_node_set_type(nt, own, "NilNode");
+        own_stmts = ts;
+      }
       else {
         nt_node_set_str(nt, own, "name", qn);
         nt_node_set_ref(nt, own, "receiver", ownr);
@@ -16050,6 +16193,14 @@ int desugar_builtin_enum_calls(Compiler *c) {
       }
       /* the builtin's copy, with a copy of the block */
       if (!(safe_nav && ndef > 0)) nt_node_set_arr(nt, wo_arm ? ts : es, "body", &gen, 1);
+      if (own_arm && !own_only) {
+        int cel = -1;   /* the else of the safe navigation's inner class test */
+        if (safe_nav && ndef > 0) {
+          int ib = 0; const int *ibb = nt_arr(nt, es, "body", &ib);
+          if (ib == 1 && nt_kind(nt, ibb[0]) == NK_IfNode) cel = nt_ref(nt, ibb[0], "subsequent");
+        }
+        own_stmts = cel >= 0 ? -3 - nt_ref(nt, cel, "statements") : -3 - es;   /* wrapped once whole (below) */
+      }
       nt_node_set_ref(nt, eln, "statements", es);
       nt_node_set_ref(nt, ifn, "predicate", pred);
       nt_node_set_ref(nt, ifn, "statements", ts);
@@ -16080,6 +16231,30 @@ int desugar_builtin_enum_calls(Compiler *c) {
     free(na);
     nt_node_set_ref(nt, generic, "receiver", -1);
     { char gnb[256]; snprintf(gnb, sizeof gnb, "%s", gn); nt_node_set_str(nt, generic, "name", gnb); }
+    /* the own arm: the builtins/ definition's copy of the generic call */
+    if (own_arm && own_stmts != -1) {
+      int g2 = nt_clone_subtree(nt, generic);
+      if (g2 >= 0) {
+        nt_node_set_str(nt, g2, "name", nt_str(nt, own_copy, "name"));
+        if (own_stmts >= 0) nt_node_set_arr(nt, own_stmts, "body", &g2, 1);
+        else {
+          int st = -3 - own_stmts;
+          char rn2[64]; snprintf(rn2, sizeof rn2, "__enumrecv_%s", comp_node_tag(c, id));
+          int pr = enum_owner_chain(c, rn2, qn, blk >= 0);
+          int ifo = nt_new_node(nt, "IfNode"), ts2 = nt_new_node(nt, "StatementsNode");
+          int es2 = nt_new_node(nt, "StatementsNode"), el2 = nt_new_node(nt, "ElseNode");
+          if (pr >= 0 && ifo >= 0 && ts2 >= 0 && es2 >= 0 && el2 >= 0) {
+            nt_node_set_arr(nt, ts2, "body", &g2, 1);
+            nt_node_set_arr(nt, es2, "body", &generic, 1);
+            nt_node_set_ref(nt, el2, "statements", es2);
+            nt_node_set_ref(nt, ifo, "predicate", pr);
+            nt_node_set_ref(nt, ifo, "statements", ts2);
+            nt_node_set_ref(nt, ifo, "subsequent", el2);
+            nt_node_set_arr(nt, st, "body", &ifo, 1);
+          }
+        }
+      }
+    }
     comp_grow_node_arrays(c);
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;

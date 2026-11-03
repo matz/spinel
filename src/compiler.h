@@ -499,6 +499,9 @@ typedef struct {
   int is_transplanted_source; /* method was copied into another class via include/prepend */
   int origin_module_ci;      /* +1-based module this copy came from (0 = none):
                                 Method#owner names the module, not the includer */
+  int def_module_ci;         /* a hidden copy's inner module, once asked
+                                (mixin_def_module): +1-based, -1 none, 0 not
+                                asked yet */
   int is_include_copy;        /* this scope IS such a copy: a later include of a
                                  module defining the same name replaces it, and
                                  the replacement's super chains to it (#3731) */

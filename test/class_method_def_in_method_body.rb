@@ -74,3 +74,43 @@ S = Struct.new(:a) { class << self; attr_accessor :cfg; end }
 S.cfg = 3
 def setup_s = (def S.k = :mk)
 puts S.respond_to?(:k)
+
+# a class-side attr writer called before the body runs writes and defines
+# nothing: the body's def is still unmade
+class W; class << self; attr_accessor :cfg; end; end
+W.cfg = 3
+def setup_w = (def W.k = :wk)
+puts W.respond_to?(:k)
+setup_w
+puts W.respond_to?(:k), W.k
+
+# a writer a later `class << R` def replaces runs that def from then on:
+# the class method its body makes is there once it has run, not before
+class R
+  class << self; attr_accessor :cfg; end
+end
+R.cfg = 3
+puts R.respond_to?(:k)
+class << R
+  def cfg=(v)
+    def R.k = :w
+  end
+end
+puts R.respond_to?(:k)
+R.cfg = 4
+puts R.respond_to?(:k), R.k
+
+# the same beside a method body's def of the name that never runs
+class H
+  class << self; attr_accessor :cfg; end
+end
+H.cfg = 3
+class << H
+  def cfg=(v)
+    def H.k = :w
+  end
+end
+def setup_h = (def H.k = :mk)
+puts H.respond_to?(:k), H.cfg
+H.cfg = 4
+puts H.respond_to?(:k), H.k

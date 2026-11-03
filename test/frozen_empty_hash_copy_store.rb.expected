@@ -1,0 +1,10 @@
+{erb: 1, builder: 2}
+true
+3
+true
+{erb: 1, builder: 1, raw: 2}
+[:erb, :builder, :raw]
+true
+true
+FrozenError
+{}

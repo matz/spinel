@@ -2835,6 +2835,22 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     int _ne = 0; nt_arr(c->nt, node, "elements", &_ne);
     if (_ne == 0) { buf_puts(b, "sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH)"); RC(RF_SPECIAL, RW_LITERAL); return; }
   }
+  /* ...and so is a frozen one no key usage narrowed (`@h = {}.freeze`
+     in a module body, read through `@h.dup`): the String-keyed default
+     the call answers raised on the copy's first Symbol key */
+  if (nt_kind(c->nt, node) == NK_CallNode && nt_ref(c->nt, node, "arguments") < 0 &&
+      nt_ref(c->nt, node, "block") < 0 && nt_str(c->nt, node, "name") &&
+      sp_streq(nt_str(c->nt, node, "name"), "freeze")) {
+    int hl = nt_ref(c->nt, node, "receiver"), _ne = -1;
+    if (hl >= 0 && nt_kind(c->nt, hl) == NK_HashNode) nt_arr(c->nt, hl, "elements", &_ne);
+    if (_ne == 0 && !(c->hash_want && hl < c->node_cap && ty_is_hash(c->hash_want[hl]))) {
+      int th = ++g_tmp;
+      buf_printf(b, "({ sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); sp_gc_freeze((void *)_t%d); "
+                    "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH); })", th, th, th);
+      RC(RF_SPECIAL, RW_LITERAL);
+      return;
+    }
+  }
   /* Hash.new / Hash.new(default) whose variant no key usage ever narrowed:
      box an empty PolyPolyHash carrying the default (it used to fall to the
      constant path and raise "uninitialized constant Hash"). */

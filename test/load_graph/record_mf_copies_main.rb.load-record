@@ -14,6 +14,7 @@ r0 #10 f0 ModuleNode X line 15
   r0 #12 f0 AliasMethodNode line 17
   r0 #13 f0 CallNode module_function line 18
   r0 #14 f0 DefNode n line 19
+block define_method line 11: later
 class W: body#1
 class X: body#10
 entity W: owner main leaf W

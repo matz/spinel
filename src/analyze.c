@@ -46884,6 +46884,19 @@ static int sid_name_only_member(const NodeTable *nt, const int *parent, int lit)
   }
   return 0;
 }
+/* Is the name literal lit only the argument of a hook call the load record
+   makes after a def (`Set.method_added(:compare_by_identity)`, for the def
+   of compare_by_identity in Set's own body), one no method of the program's
+   answers? The core's hook hands the name to no call. */
+static int sid_name_only_hooked(Compiler *c, const int *parent, int lit) {
+  const NodeTable *nt = c->nt;
+  int args = parent[lit], call = args >= 0 ? parent[args] : -1;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "arguments") != args ||
+      !nt_int(nt, call, "event_hook", 0))
+    return 0;
+  const char *hook = nt_str(nt, call, "name");
+  return hook && is_definition_hook_name(hook) && !call_reaches_program_method(c, call);
+}
 const char *const g_sid_refusal_msg =
     "a value whose identity is not CRuby's (a String, an Integer, a Float, a Rational, a Complex, a Range, "
     "or one of no static kind) enters or is looked up in a Set, in a program that calls "
@@ -46918,7 +46931,8 @@ static void refuse_set_identity_members(Compiler *c) {
      defines (Rack::Headers defines its own compare_by_identity): such a
      call is no Set's unless the program spells the name, as
      `x.method(:compare_by_identity)` would -- and a name only listed in a
-     constant the program asks membership of is not handed to any call */
+     constant the program asks membership of, or only handed to a hook no
+     method of the program's answers, is not handed to any call */
   int spelled = 0, *lit_parent = NULL;
   for (int k = 0; k < 2 && !spelled; k++)
     NT_FOREACH_KIND(nt, k ? NK_StringNode : NK_SymbolNode, lit) {
@@ -46926,7 +46940,7 @@ static void refuse_set_identity_members(Compiler *c) {
       if (!is_compare_by_identity_name(v)) continue;
       if (!lit_parent) lit_parent = an_parent_map(nt);
       if (!lit_parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      if (!sid_name_only_member(nt, lit_parent, lit)) { spelled = 1; break; }
+      if (!sid_name_only_member(nt, lit_parent, lit) && !sid_name_only_hooked(c, lit_parent, lit)) { spelled = 1; break; }
     }
   free(lit_parent);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {

@@ -47290,22 +47290,22 @@ int desugar_bind_attr_helpers_gate(Compiler *c, LowerCtx *lc) {
     if (nt_kind(nt, bc) != NK_CallNode || !nt_str(nt, bc, "name") || !sp_streq(nt_str(nt, bc, "name"), "bind_call")) continue;
     int id = nt_ref(nt, bc, "receiver");
     if (id < 0 || nt_kind(nt, id) != NK_CallNode || !nt_str(nt, id, "name") || !sp_streq(nt_str(nt, id, "name"), "instance_method")) continue;
-    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
-    if (an != 1 || nt_kind(nt, av[0]) != NK_SymbolNode || !nt_str(nt, av[0], "value")) continue;
+    if (!method_sym_arg(c, id)) continue;
     if ((lc->nids & (lc->nids + 1)) == 0 || !lc->ids) {
       /* (grown at each power of two less one: 0, 1, 3, 7, ...) */
       int *g = realloc(lc->ids, sizeof(int) * (size_t)(2 * lc->nids + 2));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       lc->ids = g;
     }
-    lc->ids[lc->nids++] = av[0];
+    lc->ids[lc->nids++] = id;
   }
   return lc->nids > 0;
 }
-/* Whether such an instance_method names `nm` (the gate's symbols). */
-static int bind_attr_named(const NodeTable *nt, const LowerCtx *lc, const char *nm) {
+/* Whether such an instance_method names `nm` (the gate's calls), by a
+   Symbol or a String. */
+static int bind_attr_named(Compiler *c, const LowerCtx *lc, const char *nm) {
   for (int i = 0; i < lc->nids; i++)
-    if (sp_streq(nt_str(nt, lc->ids[i], "value"), nm)) return 1;
+    if (sp_streq(method_sym_arg(c, lc->ids[i]), nm)) return 1;
   return 0;
 }
 /* The attribute declaration statement d is (`private attr_reader :x` too),
@@ -47320,43 +47320,46 @@ static int bind_attr_call(const NodeTable *nt, int d) {
   }
   return -1;
 }
-/* The helper names statement d's attr call wants that its body has no def
-   of yet, written to out (up to cap of them, each "__bind x" or
-   "__bind x="); answers how many. */
-static int bind_attr_missing(const NodeTable *nt, const LowerCtx *lc, int d, char out[][300], int cap) {
+/* How many helpers statement d's attr call wants that its body has no def
+   of yet; with out, their names are written there too (each "__bind x" or
+   "__bind x="). */
+static int bind_attr_missing(Compiler *c, const LowerCtx *lc, int d, char (*out)[300]) {
+  const NodeTable *nt = c->nt;
   int call = bind_attr_call(nt, d), n = 0;
   if (call < 0) return 0;
   const char *dn = nt_str(nt, call, "name");
   int rd = is_attr_decl_reader(dn), wr = is_attr_decl_writer(dn);
   int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
   int bn = 0; const int *bb = nt_arr(nt, lc->body, "body", &bn);
-  for (int a = 0; a < an && n < cap; a++) {
+  for (int a = 0; a < an; a++) {
     const char *x = nt_kind(nt, av[a]) == NK_SymbolNode ? nt_str(nt, av[a], "value") : NULL;
     if (!x || strlen(x) > 200) continue;
-    for (int w = 0; w < 2 && n < cap; w++) {
+    for (int w = 0; w < 2; w++) {
       if (!(w ? wr : rd)) continue;
-      char nm[256]; snprintf(nm, sizeof nm, "%s%s", x, w ? "=" : "");
-      if (!bind_attr_named(nt, lc, nm)) continue;
-      snprintf(out[n], 300, "__bind %s", nm);
+      char nm[256], hn[300]; snprintf(nm, sizeof nm, "%s%s", x, w ? "=" : "");
+      if (!bind_attr_named(c, lc, nm)) continue;
+      snprintf(hn, sizeof hn, "__bind %s", nm);
       int have = 0;
       for (int k = 0; k < bn && !have; k++)
-        have = nt_kind(nt, bb[k]) == NK_DefNode && nt_str(nt, bb[k], "name") && sp_streq(nt_str(nt, bb[k], "name"), out[n]);
+        have = nt_kind(nt, bb[k]) == NK_DefNode && nt_str(nt, bb[k], "name") && sp_streq(nt_str(nt, bb[k], "name"), hn);
+      if (!have && out) memcpy(out[n], hn, sizeof hn);
       if (!have) n++;
     }
   }
   return n;
 }
 int desugar_bind_attr_helpers_left(Compiler *c, LowerCtx *lc, int id) {
-  char nms[8][300];
-  return bind_attr_missing(c->nt, lc, id, nms, 8) > 0;
+  return bind_attr_missing(c, lc, id, NULL) > 0;
 }
 int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
-  char nms[8][300];
-  int nn = bind_attr_missing(nt, lc, id, nms, 8);
+  int nn = bind_attr_missing(c, lc, id, NULL);
   if (!nn) return 0;
+  char (*nms)[300] = malloc(sizeof *nms * (size_t)nn);
+  int *defs = malloc(sizeof(int) * (size_t)nn);
+  if (!nms || !defs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  bind_attr_missing(c, lc, id, nms);
   long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-  int defs[8];
   for (int i = 0; i < nn; i++) {
     const char *x = nms[i] + 7;   /* past "__bind " */
     size_t xl = strlen(x);
@@ -47397,7 +47400,7 @@ int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
   memcpy(nb + at + 1, defs, sizeof(int) * (size_t)nn);
   memcpy(nb + at + 1 + nn, bb + at + 1, sizeof(int) * (size_t)(bn - at - 1));
   nt_node_set_arr(nt, lc->body, "body", nb, bn + nn);
-  free(nb);
+  free(nb); free(nms); free(defs);
   return 1;
 }
 

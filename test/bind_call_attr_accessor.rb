@@ -7,7 +7,8 @@
 # the slot and is the call's answer. obj must be an instance of the owner,
 # else TypeError, and a class with no x raises NameError (a module's
 # reader is refused on a Class value, as a module's def is). The accessors
-# stay out of the class's method lists. Such a call raised NameError.
+# stay out of the class's method lists. The name may be a String, and one
+# declaration may list any number of names. Such a call raised NameError.
 
 class Pt
   attr_reader :d, :e
@@ -56,6 +57,11 @@ class Plain
   def initialize = (@q = 0)
   def bump = (@q += 1)
 end
+class Nine
+  attr_reader :a, :b, :c, :d, :e, :f, :g, :h, :i
+  def initialize = (@a = 1; @b = 2; @c = 3; @d = 4; @e = 5; @f = 6; @g = 7; @h = 8; @i = 9)
+  def bump = (@a += 1)
+end
 class Wr
   attr_writer :d
   def initialize = (@d = 0)
@@ -97,6 +103,13 @@ p set(Wr, w, 4.5)
 p w.get
 p set(Wr, w, [1])
 p w.get
+
+p Pt.instance_method("d").bind_call(pt)
+p go(Tag) == Tag.instance_method("lb").bind_call(Tag.new)
+n = Nine.new
+p Nine.instance_method(:a).bind_call(n), Nine.instance_method(:b).bind_call(n), Nine.instance_method(:c).bind_call(n),
+  Nine.instance_method(:d).bind_call(n), Nine.instance_method(:e).bind_call(n), Nine.instance_method(:f).bind_call(n),
+  Nine.instance_method(:g).bind_call(n), Nine.instance_method(:h).bind_call(n), Nine.instance_method(:i).bind_call(n)
 
 p Pt.instance_methods(false).sort
 p pt.respond_to?(:d), pt.methods.include?(:w=)

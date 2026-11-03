@@ -4305,8 +4305,12 @@ static int ver_absent_else(Compiler *c, const struct VerNamedAsks *q, int rcls, 
 /* Does cls's chain hold a builtin class other than Object (a reopened one,
    a builtin superclass)? Its methods are not all in the builtin tables
    (IO's on File, a socket's), so what a call meeting no version of the
-   program's runs there is not known: its entry keeps the table's answer. */
-static int ver_builtin_chain(Compiler *c, int cls) {
+   program's runs there is not known: its entry keeps the table's answer.
+   Except a class-side name every class answers on itself (bop_class_answers:
+   Module's name, to_s, inspect): no builtin class above cls defines it on
+   its class side, so the lookup finds Module's whatever the chain holds. */
+static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk) {
+  if (sg && bop_class_answers(name, ar, blk)) return 0;
   if (cls >= 0 && class_builtin_parent(c, cls) != builtin_class_at(CORE_OBJECT)->id) return 1;
   for (int k = cls, d = 0; k >= 0 && d < 64; k = c->classes[k].parent, d++)
     if (c->classes[k].is_builtin_const && !is_object_base_name(c->classes[k].name)) return 1;
@@ -4333,7 +4337,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
-  if (q && na && one && !ver_builtin_chain(c, rcls)) els = ver_absent_else(c, q, rcls, sg, name, vs[0].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
+  if (q && na && one && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) els = ver_absent_else(c, q, rcls, sg, name, vs[0].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
   if (absent) *absent = els >= 0;
   if (els < 0 && (q || nv < 2 || !na || same)) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
   return ver_entry_emit(c, rcls, sg, name, ar, blk, spliced, arm, to, na, fallback, els);

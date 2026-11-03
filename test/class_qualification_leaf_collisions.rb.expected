@@ -1,0 +1,12 @@
+Solo1::Only1 only1
+Solo2::Only2 only2
+Solo3::Only3 only3
+Solo4::Only4 only4
+A::Item a
+B::Item b
+C::Inner::Item c_inner
+H::Item h
+Twice::Reopen 1 2
+E::Array e_array Array 2
+Widget top G::Widget nested
+4

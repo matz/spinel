@@ -5133,6 +5133,8 @@ typedef struct {
 typedef struct {
   char lib_dir[1024];     /* where plain requires look first (sp_lib_dir) */
   char **file; int nfile, filecap;
+  char **found; int foundcap;               /* [file] the path it was first found at, before
+                                               symlinks are resolved (sp_graph_read) */
   unsigned char *flags; int flagcap;        /* [file] SP_FILE_* */
   SpLoadEdge *edge; int nedge, edgecap;     /* the tree's sites */
   SpLoadEdge *spl; int nspl, splcap;        /* the plain pass's resolutions */
@@ -5145,12 +5147,16 @@ typedef struct {
   char **iroots; int niroots;               /* the roots from -I, which the load path starts with */
 } SpLoadGraph;
 
-/* The file `path`'s id, added the first time it is named. */
+/* The file `path`'s id, added the first time it is named: one file per
+   canonical path, which keeps the path it was first named by too. */
 static int sp_load_file(SpLoadGraph *g, const char *path) {
   char *canon = sp_canonical_path(path);
   for (int i = 0; i < g->nfile; i++) if (strcmp(g->file[i], canon) == 0) { free(canon); return i; }
   g->file = sp_grow_strs(g->file, g->nfile, &g->filecap, 16);
+  g->found = sp_grow_strs(g->found, g->nfile, &g->foundcap, 16);
   g->file[g->nfile] = canon;
+  g->found[g->nfile] = strdup(path);
+  if (!g->found[g->nfile]) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
   return g->nfile++;
 }
 
@@ -5408,7 +5414,7 @@ static void sp_load_graph_free(SpLoadGraph *g) {
   free(g->gf); free(g->boot); free(g->entered);
   for (int i = 0; i < g->niroots; i++) free(g->iroots[i]);
   free(g->iroots);
-  for (int i = 0; i < g->nfile; i++) free(g->file[i]);
+  for (int i = 0; i < g->nfile; i++) { free(g->file[i]); free(g->found[i]); }
   for (int i = 0; i < g->nedge; i++) {
     free(g->edge[i].name);
     for (int k = 0; k < g->edge[i].nauto; k++) { free(g->edge[i].autoload[k]); free(g->edge[i].auto_path[k]); }
@@ -5416,7 +5422,7 @@ static void sp_load_graph_free(SpLoadGraph *g) {
     free(g->edge[i].cand);
   }
   for (int i = 0; i < g->nspl; i++) free(g->spl[i].name);
-  free(g->file); free(g->flags); free(g->edge); free(g->spl);
+  free(g->file); free(g->found); free(g->flags); free(g->edge); free(g->spl);
 }
 
 static char *resolve_requires(SpLoadGraph *g, const char *source, const char *source_path,
@@ -7940,8 +7946,10 @@ static void sp_graph_inherit(SpLoadGraph *g, int f) {
 static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames *facts) {
   const char *path = f ? g->file[f] : source_file;
   /* (a library of the compiler's has what the inline model's splice of it
-     appends, by the tier the require that found the file gave it) */
-  char *text = sp_lib_text_appended(read_file(path), path, sp_load_tier(g, f));
+     appends, by the tier the require that found the file gave it, and
+     beside the path the require found it at, as the splice looks: a
+     package file that is a symlink has its declarations beside the link) */
+  char *text = sp_lib_text_appended(read_file(path), f ? g->found[f] : source_file, sp_load_tier(g, f));
   if (!text) { fprintf(stderr, "spinel_parse: cannot open '%s'\n", path); return 0; }
   SpGraphFile *r = sp_graph_rec(g, f);
   r->text = text;

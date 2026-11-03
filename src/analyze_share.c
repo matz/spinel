@@ -191,9 +191,11 @@ static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int
 int share_target_armed(Compiler *c, int call, int mi) {
   return share_target_armed_plan(c, cplan_user_fresh(c, call), call, mi);
 }
-static int sh_targets_in(ShareFacts *F, Compiler *c, int call, int *out, int cap) {
+/* The methods call enters (cplan_entries) when `entries`, else those whose
+   return is its value (cplan_targets), that the share walk follows. */
+static int sh_targets_in(ShareFacts *F, Compiler *c, int call, int *out, int cap, int entries) {
   (void)F;
-  int n = cplan_targets(c, call, out, cap), m = 0;
+  int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
   if (n == CPT_UNKNOWN) return -1;
   if (n == 0) return sh_copied_self_targets(c, call, out, cap);
   /* the plan once for the call: cplan_user_fresh answers in a buffer the
@@ -203,7 +205,7 @@ static int sh_targets_in(ShareFacts *F, Compiler *c, int call, int *out, int cap
     if (share_target_reachable(c, call, out[i]) && share_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
   return m;
 }
-static int sh_targets(Compiler *c, int call, int *out, int cap) { return sh_targets_in(NULL, c, call, out, cap); }
+static int sh_targets(Compiler *c, int call, int *out, int cap) { return sh_targets_in(NULL, c, call, out, cap, 0); }
 /* A module's method an include copied into its includers runs as those
    copies (is_transplanted_source), where self is an includer, so a
    receiverless call in it reaches what each includer's chain answers to
@@ -782,42 +784,22 @@ static void sh_mb_dyn(ShareFacts *F, Compiler *c, int n, const unsigned char *de
 static void sh_mb_build(ShareFacts *F, Compiler *c) {
   const NodeTable *nt = c->nt;
   const unsigned char *dead = sh_dead_nodes(c);
-  int any_new = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
     if (dead[n]) continue;
     sh_mb_dyn(F, c, n, dead);
     int blk = nt_ref(nt, n, "block");
     if (blk < 0) continue;
-    int tg[64], ntg = sh_targets(c, n, tg, 64);
+    int tg[64], ntg = sh_targets_in(F, c, n, tg, 64, 1);
+    /* a builtin `new` on a class value the plan cannot name: any initialize */
+    if (ntg < 0 && nt_kind(nt, blk) == NK_BlockNode && cplan_entries_unknown_why(c, n, 64) == CPT_WHY_NEW_OPEN)
+      for (int m = an_scopes_named_first(c, "initialize"); m >= 1; m = an_scopes_named_next(c, "initialize", m))
+        if (c->scopes[m].def_node >= 0 && !c->scopes[m].is_cmethod) sh_mb_add(F, c, blk, m);
     if (ntg < 0) continue;
     int nbind = 0;
     for (int i = 0; i < ntg; i++) nbind += cplan_target_binds(c, n, tg[i]);
-    if (ntg > 0 && nbind > 0) {
+    if (ntg > 0 && nbind > 0)
       for (int i = 0; i < ntg; i++) sh_mb_block(F, c, n, blk, tg[i]);
-      continue;
-    }
-    const char *name = nt_str(nt, n, "name");
-    if (!name || bop_share_named(BOP_ANY_RECV, name) != BSH_NEW || nt_kind(nt, blk) != NK_BlockNode) continue;
-    int recv = nt_ref(nt, n, "receiver");
-    if (recv < 0) {
-      /* a bare `new` in a class method: every initialize it may run */
-      int own[CPT_MAX], nown = cplan_initializers(c, n, own, CPT_MAX);
-      for (int i = 0; i < nown; i++) sh_mb_add(F, c, blk, own[i]);
-      continue;
-    }
-    int mi = cplan_initialize(c, n);
-    if (mi >= 0) { sh_mb_add(F, c, blk, mi); continue; }
-    TyKind rt = c->ntype[recv];
-    /* a class held in a variable: any initialize */
-    if (rt == TY_CLASS || rt == TY_POLY || rt == TY_UNKNOWN) {
-      for (int m = 0; m < c->nscopes; m++)
-        if (c->scopes[m].def_node >= 0 && c->scopes[m].name && sp_streq(c->scopes[m].name, "initialize") &&
-            !c->scopes[m].is_cmethod)
-          sh_mb_add(F, c, blk, m);
-      any_new = 1;
-    }
   }
-  (void)any_new;
   static const NodeKind sup[] = { NK_SuperNode, NK_ForwardingSuperNode };
   for (int k = 0; k < 2; k++)
     NT_FOREACH_KIND(nt, sup[k], n) {

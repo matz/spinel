@@ -58,7 +58,7 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
                sp_streq(nm, "call") || sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval")))
       dyn[t] = 1;
     else if (nm) {
-      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_targets(c, n, tg, CPT_MAX);
+      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_entries(c, n, tg, CPT_MAX);
       if (ntg >= 0) cnt = ntg;
       else first = poll_names_of(c, nm, &cnt);
       for (int i = 0; i < cnt; i++) {
@@ -79,10 +79,11 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
   }
 }
 /* Is method scope si on a cycle of the call graph: a call reaches the
-   methods its plan names where the receiver's type settles them
-   (cplan_targets: a builtin receiver's call reaches none, #9377), else
-   every method of its name; a dynamic send, a yield, a block's or a
-   proc's call reaches every method? Only such a method polls at its entry
+   methods the plan says it enters where the receiver's type settles them
+   (cplan_entries: a builtin receiver's call reaches none, #9377, and a
+   builtin `new` the initialize it runs), else every method of its name; a
+   dynamic send, a yield, a block's or a proc's call reaches every method?
+   Only such a method polls at its entry
    for a delivered signal (#9222): a call chain that ends returns to a loop
    or a method that polls. A method is on one when its strongly connected
    component has two methods or calls itself, or when it makes a call that
@@ -120,7 +121,7 @@ int poll_scope_on_cycle(Compiler *c, int si) {
       /* a literal block runs inside each method of the name that yields: an
          edge from that method to what the block's body calls (its calls are
          the caller's edges too, as the block shares its scope) */
-      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_targets(c, n, tg, CPT_MAX);
+      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_entries(c, n, tg, CPT_MAX);
       if (ntg >= 0) cnt = ntg;
       else first = poll_names_of(c, nm, &cnt);
       if (bk >= 0) {

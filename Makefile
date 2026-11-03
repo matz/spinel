@@ -5517,6 +5517,10 @@ signal-default-test: $(SPINEL)
 	if [ $$ok -eq 1 ]; then \
 	  [ "$$(timeout 10 "$$tmp/ir" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion with no loop: the call graph lost its cycle, #9377)"; ok=0; }; \
 	fi; \
+	$(SPINEL) test/signal/interrupt_initialize_recursion.rb -o "$$tmp/iir" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile initialize recursion)"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  [ "$$(timeout -s KILL 10 "$$tmp/iir" 2>/dev/null)" = "recursion interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through new: the call graph lost the edge from new to initialize)"; ok=0; }; \
+	fi; \
 	$(SPINEL) test/signal/interrupt_dynamic_call.rb -o "$$tmp/idc" >/dev/null 2>&1 || { echo "signal-default-test: FAIL (compile dynamic call)"; ok=0; }; \
 	if [ $$ok -eq 1 ]; then \
 	  [ "$$(timeout -s KILL 10 "$$tmp/idc" 2>/dev/null)" = "dynamic call interrupted" ] || { echo "signal-default-test: FAIL (a SIGINT did not reach a recursion through a proc's call made in a spliced yielder)"; ok=0; }; \

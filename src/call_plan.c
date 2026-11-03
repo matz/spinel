@@ -1756,31 +1756,36 @@ static int cplan_new_class(Compiler *c, int id, int *own) {
   return ci;
 }
 
-/* A constructor's result can be discarded, so resolve from its receiver
-   after the user new plan has declined, rather than from its result type. */
-int cplan_initialize(Compiler *c, int id) {
+/* A builtin `new` (no program `new` answers it): the initialize methods it
+   may run. A constructor's result can be discarded, so this resolves from
+   its receiver, not from its result type.
+   The class it builds is cplan_new_class's, with each subclass's for a
+   `new` on the class its method runs for, which a subclass receiving the
+   method builds its own of; a constant naming a builtin, one the program
+   assigns no constant of its name to, runs none of the program's; any
+   other class value (a variable's, a call's answer, a constant the program
+   assigns) is no closed set. -2 for any other call. The methods a
+   builtin `new` enters, never what it answers (cplan_entries). */
+static int ct_new_initializers(Compiler *c, int id, int *out) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || nt_kind(nt, id) != NK_CallNode || !is_new_name(nt_str(nt, id, "name"))) return -1;
-  int own, ci = cplan_new_class(c, id, &own);
-  if (ci < 0 || cplan_user_fresh(c, id)->dispatch != CP_NONE) return -1;
-  return comp_method_in_chain(c, ci, "initialize", NULL);
-}
-
-/* Every initialize a constructor call may run: cplan_initialize's, and for
-   a `new` on the class its method runs for the initialize of each subclass
-   too, which may be the one that receives the method. Answers the count. */
-int cplan_initializers(Compiler *c, int id, int *out, int cap) {
-  const NodeTable *nt = c->nt;
-  if (id < 0 || nt_kind(nt, id) != NK_CallNode || !is_new_name(nt_str(nt, id, "name"))) return 0;
+  if (!is_new_name(nt_str(nt, id, "name"))) return -2;
   int own, ci = cplan_new_class(c, id, &own), n = 0;
-  if (ci < 0 || cplan_user_fresh(c, id)->dispatch != CP_NONE) return 0;
-  for (int k = ci; k < c->nclasses && n < cap; k++) {
+  for (int k = ci; ci >= 0 && k < c->nclasses; k++) {
     if (k != ci && (!own || !is_descendant(c, k, ci))) continue;
     int mi = comp_method_in_chain(c, k, "initialize", NULL), dup = 0;
     for (int j = 0; j < n; j++) dup |= out[j] == mi;
-    if (mi >= 0 && !dup) out[n++] = mi;
+    if (mi < 0 || dup) continue;
+    if (n == CPT_MAX) return CPT_UNKNOWN;
+    out[n++] = mi;
   }
-  return n;
+  int r = nt_ref(nt, id, "receiver");
+  if (ci >= 0 || r < 0) return ci >= 0 ? n : -2;
+  NodeKind k = nt_kind(nt, r);
+  if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && !comp_const(c, nt_str(nt, r, "name")) &&
+      const_seg_builtin(c, r))
+    return 0;
+  TyKind rt = comp_ntype(c, r);
+  return rt == TY_POLY || rt == TY_UNKNOWN || rt == TY_CLASS ? CPT_UNKNOWN : -2;
 }
 
 /* ---- cplan_targets: the user methods a call may reach ---- */
@@ -2071,6 +2076,32 @@ int cplan_targets(Compiler *c, int id, int *out, int cap) {
   return n;
 }
 
+/* A builtin `new` call id's entries (ct_new_initializers, into out), or -2
+   for any other call, whose entries are its targets. */
+static int ct_new_entries(Compiler *c, int id, int *out) {
+  if (id < 0 || id >= c->node_cap || nt_kind(c->nt, id) != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name")) ||
+      cplan_user_fresh(c, id)->dispatch != CP_NONE)
+    return -2;
+  return ct_new_initializers(c, id, out);
+}
+
+int cplan_entries(Compiler *c, int id, int *out, int cap) {
+  int tmp[CPT_MAX], n = ct_new_entries(c, id, tmp);
+  if (n == -2) return cplan_targets(c, id, out, cap);
+  if (n > cap) return CPT_UNKNOWN;
+  if (n > 0) memcpy(out, tmp, (size_t)n * sizeof *tmp);
+  /* (the entries are what the asker reads next: their parameters) */
+  for (int i = 0; i < n; i++) IMEMO_DEP_SCOPE(out[i]);
+  return n;
+}
+
+int cplan_entries_unknown_why(Compiler *c, int id, int cap) {
+  int tmp[CPT_MAX], n = ct_new_entries(c, id, tmp), recv = nt_ref(c->nt, id, "receiver");
+  if (n == CPT_UNKNOWN && recv >= 0 && comp_ntype(c, recv) != TY_UNKNOWN) return CPT_WHY_NEW_OPEN;
+  if (n >= 0) return n > cap ? CPT_WHY_CAP : CPT_WHY_NONE;
+  return cplan_targets_unknown_why(c, id, cap);
+}
+
 /* See call_plan.h. A boxed receiver's cplan_targets lists every class's
    method of the name; its dispatch has an arm only for the classes its
    receiver can hold (comp_poly_candidates_at) and that fit the call, one
@@ -2086,7 +2117,7 @@ int cplan_emitted_targets(Compiler *c, int id, int *out, int cap) {
     out[n++] = fb;
   }
   if (p->via != UC_POLY || p->mi < 0 || p->dispatch == CP_REFUSE) {
-    int m = cplan_targets(c, id, out + n, cap - n);
+    int m = cplan_entries(c, id, out + n, cap - n);
     if (m == CPT_UNKNOWN) return m;
     for (int i = n; i < n + m; i++)
       if (out[i] == fb) { out[i] = out[n + m - 1]; m--; break; }

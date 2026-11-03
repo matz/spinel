@@ -20796,8 +20796,8 @@ static int an_subtree_lends_local_x(Compiler *c, int node, const char *vn, int d
     int cand[CPT_MAX + 1], nc = 0;
     cand[nc++] = an_call_target_mi(c, node);
     if (x && x->plan && an_call_has_local_arg(c, node, vn)) {
-      int pt[CPT_MAX], np = cplan_targets(c, node, pt, CPT_MAX);
-      /* targets the plan cannot list: the call may take the slot */
+      int pt[CPT_MAX], np = cplan_entries(c, node, pt, CPT_MAX);
+      /* methods the plan cannot list: the call may take the slot */
       if (np < 0) return 1;
       for (int i = 0; i < np; i++) cand[nc++] = pt[i];
     }
@@ -25759,13 +25759,14 @@ static int share_default_apply(Compiler *c, int in_fixpoint) {
      spread with `*` or `**`, and for each argument a rest parameter
      gathers: the callee's parameters name those elements again. A literal
      handed to a builtin (`p [a, b]`), a proc or a block's value is left as
-     before. The call's targets are the plan's, as the facts read them. */
+     before. The methods the call enters are the plan's (cplan_entries: a
+     builtin `new`'s initialize), as the facts read them. */
   unsigned char *rest_read = rest_param_reads(c);
   NT_FOREACH_KIND(c->nt, NK_CallNode, n) {
     int args = nt_ref(c->nt, n, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &an) : NULL;
     if (an == 0) continue;
-    int mis[CPT_MAX], cnt = cplan_targets(c, n, mis, CPT_MAX);
+    int mis[CPT_MAX], cnt = cplan_entries(c, n, mis, CPT_MAX);
     if (cnt <= 0) continue;
     for (int i = 0; i < an; i++) changed |= share_demand_literal_arg(c, av[i]);
     for (int t = 0; t < cnt; t++) changed |= share_demand_rest_args(c, mis[t], av, an, rest_read);
@@ -27714,10 +27715,14 @@ static void strbuf_arg_index_build(Compiler *c) {
   for (int u = nt->count - 1; u >= 0; u--) {
     NodeKind k = nt_kind(nt, u);
     if (k == NK_CallNode) {
+      /* a builtin `new`: the initialize methods the plan says it enters (a
+         program's `new` is a call of its name, below) */
       if (is_new_name(nt_str(nt, u, "name"))) {
-        int mis[CPT_MAX], nmi = cplan_initializers(c, u, mis, CPT_MAX);
-        for (int i = 0; i < nmi; i++) strbuf_arg_index_call(c, x, u, mis[i]);
-        if (nmi > 0) continue;
+        int mis[CPT_MAX], nmi = cplan_entries(c, u, mis, CPT_MAX);
+        if (nmi > 0 && is_initialize_name(c->scopes[mis[0]].name)) {
+          for (int i = 0; i < nmi; i++) strbuf_arg_index_call(c, x, u, mis[i]);
+          continue;
+        }
       }
       strbuf_arg_index_method_call(c, x, u, &allm, &nallm);
       an_call_targets_of(c, u, &t);

@@ -24967,6 +24967,28 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
   }
 }
 
+/* (an operator, `||=` or `&&=` write of a variable is a write too: it runs
+   its value and answers it. Left unbound, `s[n += 1, n += 1]` declined the
+   rewrite, and gcc ran the length's write first) */
+static int nk_is_var_op_write(NodeKind k) {
+  return k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode ||
+         k == NK_LocalVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
+         k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode ||
+         k == NK_GlobalVariableOperatorWriteNode || k == NK_GlobalVariableOrWriteNode ||
+         k == NK_GlobalVariableAndWriteNode || k == NK_ClassVariableOperatorWriteNode ||
+         k == NK_ClassVariableOrWriteNode || k == NK_ClassVariableAndWriteNode;
+}
+
+/* Is v a Range literal (`a..b`, `a...b`) with both ends written, at least one
+   of which can run code? Its ends are ordered as separate operands. */
+static int range_lit_ends_ordered(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || nt_kind(nt, v) != NK_RangeNode) return 0;
+  int lo = nt_ref(nt, v, "left"), hi = nt_ref(nt, v, "right");
+  if (lo < 0 || hi < 0) return 0;
+  return subtree_has_side_effect(c, lo) || subtree_has_side_effect(c, hi);
+}
+
 static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   /* The buffer arm holds its operands, including the handle a keyword
      may replace, before it checks or converts any of them. */
@@ -25019,8 +25041,10 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
      it that it can rebind runs first, with the operands before it
      (emit_operands_before_unbound). */
   int nmax = 1 + argc;
-  for (int i = 0; i < argc; i++)
+  for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) == NK_KeywordHashNode) { int nk = 0; nt_arr(nt, argv[i], "elements", &nk); nmax += nk; }
+    else if (range_lit_ends_ordered(c, argv[i])) nmax++;
+  }
   int node[nmax], fresh[nmax], oo[nmax], copy[nmax], sh[nmax], fb[nmax], nb = 0;
   TyKind ty[nmax];
   int operand[nmax], nop = 0;
@@ -25035,6 +25059,16 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     int plain = els != NULL;
     for (int k = 0; k < nk && plain; k++)
       plain = nt_kind(nt, els[k]) == NK_AssocNode && nt_kind(nt, nt_ref(nt, els[k], "key")) == NK_SymbolNode;
+    /* a Range literal's ends are operands one at a time too: the arms pass
+       them to C as two arguments of one call (`x[(n += 1)..(n += 1)]` reached
+       sp_IntArray_slice_range with both writes as its arguments, and gcc ran
+       the end first), so each is bound in the order written */
+    if (!els && range_lit_ends_ordered(c, argv[i])) {
+      int lo = nt_ref(nt, argv[i], "left"), hi = nt_ref(nt, argv[i], "right");
+      operand[nop++] = lo;
+      operand[nop++] = hi;
+      continue;
+    }
     if (!plain) {
       operand[nop++] = argv[i];
       continue;
@@ -25147,6 +25181,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                     k == NK_CallNode || k == NK_SuperNode || k == NK_IfNode || k == NK_UnlessNode ||
                     k == NK_ForwardingSuperNode || k == NK_YieldNode || k == NK_InterpolatedStringNode ||
                     k == NK_LocalVariableWriteNode || k == NK_InstanceVariableWriteNode ||
+                    nk_is_var_op_write(k) ||
                     k == NK_GlobalVariableWriteNode || k == NK_ClassVariableWriteNode ||
                     (k == NK_ParenthesesNode && pty != TY_STRING && pty != TY_STRBUF) ||
                     state_read || local_read || held[i]);

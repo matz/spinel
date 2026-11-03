@@ -51547,28 +51547,6 @@ static void an_phase_method_backstops(Compiler *c) {
   }
   reassert_rbs_param_seeds(c);
 
-  /* method_missing is not honored: spinel resolves every call statically and
-     does not route an undefined-method call to method_missing (that would need
-     runtime dispatch foreign to the whole-program model). Warn once per
-     definition so the author isn't misled into relying on it -- the method is
-     still callable explicitly, it just never fires as a missing-method hook. */
-  for (int s = 0; s < c->nscopes; s++) {
-    Scope *sc = &c->scopes[s];
-    if (sc->class_id < 0 || !sc->name || !sp_streq(sc->name, "method_missing")) continue;
-    int dn = sc->def_node;
-    int ln = dn >= 0 ? (int)nt_int(c->nt, dn, "node_line", 0) : 0;
-    const char *file = c->nt->source_file;
-    if (ln > 0) {
-      const char *f = nt_file_path(c->nt, (int)nt_int(c->nt, dn, "node_file", 0));
-      if (f && *f) file = f;
-    }
-    if (!file || !*file) file = "source.rb";
-    fprintf(stderr, "spinel: %s:%d: warning: method_missing is defined but "
-            "spinel does not dispatch undefined-method calls to it; such calls "
-            "raise NoMethodError (method_missing can still be called "
-            "explicitly)\n", file, ln);
-  }
-
   /* Block splat params reach only the lowerings that bind them; the rest
      reject loudly here rather than emitting nil-bound or misdeclared bodies. */
   check_block_rest_support(c);

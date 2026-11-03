@@ -1876,3 +1876,20 @@ sp_RbVal sp_process_redirect_value(sp_RbVal opts, int slot, sp_bool *found, int 
   }
   return sp_box_nil();
 }
+
+/* What a user #to_int answered, reached through the generated bridge
+   (sp_obj_to_int_sw) when its answer is not statically an Integer. CRuby's
+   rb_to_int takes an Integer -- a Bignum one then does not fit the slot --
+   and names anything else: "can't convert B to Integer (B#to_int gives
+   String)", nil included. cls_id is the receiver's, as CRuby names its class. */
+sp_int sp_obj_to_int_answer(int cls_id, sp_RbVal r) {
+  if (r.tag == SP_TAG_INT) return r.v.i;
+  if (r.tag == SP_TAG_BIGINT && r.v.p) {
+    if (sp_bigint_fits_int((sp_Bigint *)r.v.p)) return (sp_int)sp_bigint_to_int((sp_Bigint *)r.v.p);
+    sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
+  }
+  const char *n = sp_obj_cls_name_fn ? sp_obj_cls_name_fn(cls_id) : "Object";
+  sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Integer (%s#to_int gives %s)",
+                                       n, n, sp_poly_class_name(r)));
+  return 0;
+}

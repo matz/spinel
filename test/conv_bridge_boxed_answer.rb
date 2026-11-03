@@ -28,11 +28,8 @@ p proc { |v| v }.curry(hA[:o]).call(7)
 boxed = [IdxBlk.new, "not an index"]
 p [10, 20, 30][boxed[0]]
 
-# a #to_int answering something that is not an Integer is still the TypeError.
-# Only the class is pinned here: CRuby names the offending answer ("can't
-# convert Wrong to Integer (Wrong#to_int gives String)") where Spinel gives the
-# generic text, and that difference is older than this and not what this test
-# is about.
+# a #to_int answering something that is not an Integer is still the TypeError,
+# naming the offending answer as CRuby does
 class Wrong
   def to_int
     "no"
@@ -42,7 +39,7 @@ w = { o: Wrong.new }
 begin
   p [10, 20, 30][w[:o]]
 rescue TypeError => e
-  puts "wrong kind: #{e.class}"
+  puts "wrong kind: #{e.class}: #{e.message}"
 end
 
 # a class with no #to_int at all is the same TypeError

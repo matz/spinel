@@ -1,5 +1,5 @@
 7
 20
-wrong kind: TypeError
+wrong kind: TypeError: can't convert Wrong to Integer (Wrong#to_int gives String)
 no method: no implicit conversion of Bare into Integer
 "xab"

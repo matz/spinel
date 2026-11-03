@@ -13295,7 +13295,7 @@ static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want
                               int any_shape, int *out_mi) {
   ClassInfo *ci2 = &c->classes[i];
   if (is_builtin_reopen(ci2->name) || ci2->is_native_class) return -1;
-  if (!any_shape && comp_ty_value_obj(c, ty_object(i))) return -1;
+  if (any_shape != 1 && comp_ty_value_obj(c, ty_object(i))) return -1;
   if (class_def_is_module(c->nt, ci2->def_node)) return -1;   /* no instances */
   int tdef = -1;
   int tmi = comp_method_in_chain(c, i, mname, &tdef);
@@ -13307,10 +13307,11 @@ static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want
   if (tmi < 0 || !c->scopes[tmi].reachable || c->scopes[tmi].nparams != 0 ||
       c->scopes[tmi].yields) return -1;
   /* the Kernel#Integer / #Float bridge takes the method whatever it answers
-     (`any_shape`), and a value-type class's too, called on the boxed copy */
+     (`any_shape` 1), and a value-type class's too, called on the boxed copy;
+     the #to_int bridge takes it whatever it answers (2), to judge the answer */
   /* The answer's static type may be the wanted one or boxed: a boxed answer
      is unwrapped (and judged) by the bridge row itself, so it is eligible
-     too. Anything else -- a #to_int answering a String -- is not a
+     too. Anything else -- a #to_str answering an Integer -- is not a
      conversion the protocol can use. */
   if (!any_shape && c->scopes[tmi].ret != want && c->scopes[tmi].ret != TY_POLY) return -1;
   *out_mi = tmi;
@@ -13358,21 +13359,39 @@ const char *obj_str_blockarg(Compiler *c, int cid, int want_inspect) {
 static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want,
                              const char *rett, const char *sig, int with_ok,
                              const char *dflt) {
+  /* a #to_int is called whatever it answers: CRuby names a non-Integer
+     answer ("B#to_int gives String"), where no row was "no implicit
+     conversion of B" */
+  int shape = want == TY_INT ? 2 : 0;
   for (int i = 0; i < c->nclasses; i++) {
     int tmi = -1;
-    int callee = conv_bridge_callee(c, i, mname, want, 0, &tmi);
+    int callee = conv_bridge_callee(c, i, mname, want, shape, &tmi);
     if (callee != i) continue;   /* an ancestor's own row declares it */
     int poly_ret = c->scopes[tmi].ret == TY_POLY;
-    buf_printf(b, "%s%s %s(sp_%s *self%s);\n", g_debug ? "" : "static ",
-               poly_ret ? "sp_RbVal" : method_ret_is_oint(&c->scopes[tmi]) ? oint_ctype(c->scopes[tmi].ret) : rett,
-               mc_method(c, &c->scopes[tmi]),
+    buf_puts(b, g_debug ? "" : "static ");
+    if (poly_ret || c->scopes[tmi].ret == want)
+      buf_puts(b, poly_ret ? "sp_RbVal" : method_ret_is_oint(&c->scopes[tmi]) ? oint_ctype(c->scopes[tmi].ret) : rett);
+    else emit_method_ret_ctype(c, &c->scopes[tmi], b);   /* a #to_int's other answer */
+    buf_printf(b, " %s(sp_%s *self%s);\n", mc_method(c, &c->scopes[tmi]),
                c->classes[callee].c_name, bridge_blk_param(c, tmi));
   }
   buf_printf(b, "%s {\n  switch (cls_id) {\n", sig);
   for (int i = 0; i < c->nclasses; i++) {
     int tmi = -1;
-    int callee = class_has_obj_arm(c, i) ? conv_bridge_callee(c, i, mname, want, 0, &tmi) : -1;
+    int callee = class_has_obj_arm(c, i) ? conv_bridge_callee(c, i, mname, want, shape, &tmi) : -1;
     if (callee < 0) continue;
+    /* a #to_int not statically an Integer, or one that may answer nil:
+       its boxed answer is judged by the runtime, which takes an Integer and
+       raises CRuby's TypeError (or a Bignum's RangeError) for the rest */
+    if (want == TY_INT && (c->scopes[tmi].ret != TY_INT || method_ret_is_oint(&c->scopes[tmi]))) {
+      char call[256];
+      snprintf(call, sizeof call, "%s((sp_%s *)p%s)", mc_method(c, &c->scopes[tmi]),
+               c->classes[callee].c_name, bridge_blk_arg(c, tmi));
+      buf_printf(b, "    case %d: %sreturn sp_obj_to_int_answer(cls_id, ", i, with_ok ? "*ok = 1; " : "");
+      emit_boxed_ret_call(c, &c->scopes[tmi], call, b);
+      buf_puts(b, ");\n");
+      continue;
+    }
     /* A conversion whose answer is BOXED is still a conversion. Its static
        type is the analysis's business and changes with the mode -- under
        --int-overflow=promote a method returning a plain `1` can be poly --
@@ -13386,15 +13405,12 @@ static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want
       buf_printf(b, "    case %d: { sp_RbVal _cv = %s((sp_%s *)p%s);\n",
                  i, mc_method(c, &c->scopes[tmi]),
                  c->classes[callee].c_name, bridge_blk_arg(c, tmi));
-      if (want == TY_INT)
-        buf_printf(b, "      if (_cv.tag == SP_TAG_INT) { %sreturn _cv.v.i; }\n",
-                   with_ok ? "*ok = 1; " : "");
-      else
-        /* a String held in a shared handle (SP_BUILTIN_STRBUF, as an Array
-           element or a lifted local is) is still a String answer */
-        buf_printf(b, "      _cv = sp_rbval_str(_cv);\n"
-                      "      if (_cv.tag == SP_TAG_STR && _cv.v.s) { %sreturn _cv.v.s; }\n",
-                   with_ok ? "*ok = 1; " : "");
+      /* a String held in a shared handle (SP_BUILTIN_STRBUF, as an Array
+         element or a lifted local is) is still a String answer (a #to_int
+         is judged above) */
+      buf_printf(b, "      _cv = sp_rbval_str(_cv);\n"
+                    "      if (_cv.tag == SP_TAG_STR && _cv.v.s) { %sreturn _cv.v.s; }\n",
+                 with_ok ? "*ok = 1; " : "");
       buf_printf(b, "      %s }\n", dflt);
       continue;
     }

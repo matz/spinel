@@ -1,0 +1,14 @@
+["app", "app/a", "app/k/x", "other"]
+["app", "app/a", "app/k/x"]
+ab
+[2, "<ab>"]
+abc
+[3, "<abc>"]
+"abc"
+true
+false
+["x/y"]
+["a/b"]
+true
+true
+["x/y"]

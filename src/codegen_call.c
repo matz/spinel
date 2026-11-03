@@ -22276,7 +22276,7 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
   /* a value of a reopened builtin class (Integer, String, true, ...) whose
      reopening declares the name private or protected, keyed as the
      dispatch's switch keys it */
-  if (may_refuse && !nt_int(nt, id, "self_call", 0) && !recv_reads_self(nt, vrecv)) {
+  if (may_refuse && (stamped || (!nt_int(nt, id, "self_call", 0) && !recv_reads_self(nt, vrecv)))) {
     int tk = -1;
     for (int k = 0; k < c->nclasses; k++) {
       if (k == comp_core_class(c, CORE_OBJECT) || !class_is_builtin_reopen(c, k) ||
@@ -28878,7 +28878,11 @@ static int builtin_reopen_call_closed(Compiler *c, int id) {
   int recv = nt_ref(nt, id, "receiver");
   const char *nm = nt_str(nt, id, "name");
   if (recv < 0 || !nm || g_poly_builtin_arm) return 0;
-  if (call_vis_exempt(nt, id, recv)) return 0;
+  /* a `&.` call is refused in its guard's non-nil arm: a nil receiver
+     answers nil */
+  if (sn_guard_pending(c, id)) return 0;
+  /* public_send refuses a closed method on self too */
+  if (!nt_str(nt, id, "vis_enforce") && call_vis_exempt(nt, id, recv)) return 0;
   int ci = builtin_reopen_vis_class(c, comp_ntype(c, recv), nm);
   return ci >= 0 && !cplan_has_method_missing(c, id, ci, 0);
 }
@@ -28926,7 +28930,10 @@ static void emit_call_inner(Compiler *c, int id, Buf *b) {
     int bx = repr_of(c, id).kind == RK_BOXED && repr_of(c, id).as_ty != TY_POLY;
     Buf vb; memset(&vb, 0, sizeof vb);
     if (emit_vis_refusal(c, id, bx ? &vb : b)) {
-      if (bx) emit_boxed_text(c, repr_of(c, id).as_ty, vb.p ? vb.p : "0", b);
+      TyKind bt = repr_of(c, id).as_ty;
+      /* (an Integer or Float call that can answer nil has an oint placeholder) */
+      if (bx && oint_kind(bt) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_box(bt), vb.p ? vb.p : oint_nil(bt));
+      else if (bx) emit_boxed_text(c, bt, vb.p ? vb.p : "0", b);
       free(vb.p);
       return;
     }

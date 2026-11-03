@@ -36,3 +36,10 @@ NoMethodError: private method 'x2' called for an instance of Integer (5)
 [1, 4, 3, 1, 2]
 NoMethodError: private method 'fz' called for an instance of Float (1.5)
 NoMethodError: private method 'y1' called for an instance of Integer (5)
+"mine"
+NoMethodError: private method 'gcd' called for an instance of Integer (12)
+NoMethodError: private method 'isec' called for an instance of Integer (12)
+nil
+NoMethodError: private method 'mi' called for an instance of Integer (5)
+1
+nil

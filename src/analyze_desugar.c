@@ -16231,10 +16231,10 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       const char *name = nt_str(nt, def, "name");
       if (!name) continue;
       /* a method the body leaves private or protected (`private :m`, a
-         bare `private` above it) keeps its calls: a copy's call has no
-         receiver, and an explicit one must still be refused. A `private
-         def` is not a bare def, and was never copied either. */
-      if (bi_def_visibility(nt, def) != BVIS_PUBLIC) continue;
+         bare `private` above it): its copy serves the class's own calls
+         (bare, `self.`), and a call with another receiver keeps its name,
+         so the visibility check refuses it (bx_closed, below) */
+      int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
       if (pn0 >= 0 && (nt_ref(nt, pn0, "block") >= 0 || nt_ref(nt, pn0, "rest") >= 0 ||
@@ -16274,6 +16274,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int lo = clone;
       bi_self_to_local(nt, lo, hi, mn, 1);
       { char gn[256]; snprintf(gn, sizeof gn, "%s%s", sp_bx_prefix[bx], name); nt_node_set_str(nt, clone, "name", gn); }
+      if (closed) nt_node_set_int(nt, clone, "bx_closed", 1);
       int bi = sp_builtin_extra_name_index(bx, name);
       if (bi >= 0) {
         if (gdef[bx][bi] >= 0) nt_subtree_blank(nt, gdef[bx][bi]);
@@ -16348,6 +16349,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
         if (sp_streq(odef_name[k][m], cn0) && odef_def[k][m] >= 0) { bx = k; gd = odef_def[k][m]; break; }
     }
     if (gd < 0) continue;
+    /* a private or protected method's copy takes no call with an explicit
+       receiver other than self (`__self` in a copy) */
+    if (nt_int(nt, gd, "bx_closed", 0)) {
+      int r = nt_ref(nt, id, "receiver");
+      const char *rn = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+      if (r >= 0 && nt_kind(nt, r) != NK_SelfNode && !(rn && sp_streq(rn, "__self"))) continue;
+    }
     int in_copy = (int)nt_int(nt, id, "bx_in_copy", -1), rec = -1;
     for (int a = in_copy; a >= 0 && rec < 0; a = (int)nt_int(nt, a, "bx_in_copy", -1))
       if ((int)nt_int(nt, a, "bx_def", -1) == gd) rec = a;

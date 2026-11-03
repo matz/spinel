@@ -74,3 +74,17 @@ t { 5.x2 }
 t { 5.callme }
 t { 1.5.fz }
 t { [5, "a"].first.y1 }
+
+# a program's private def of a name builtins/ also defines (gcd) keeps the
+# class's own receiverless calls; public_send on self, `&.` on nil, an
+# Integer-or-nil answer in a boxed slot
+class Integer; def gcd(a) = "mine"; private :gcd; def run = gcd(8); def ps = self.public_send(:isec, 1); end
+t { 12.run }
+t { 12.gcd(8) }
+t { 12.ps }
+xn = [nil, 5][0]
+t { xn&.isec(1) }
+class Integer; def mi = (self > 2 ? 1 : nil); private :mi; def ok = mi; end
+t { 5.mi }
+t { 5.ok }
+t { 1.ok }

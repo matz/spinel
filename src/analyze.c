@@ -41499,6 +41499,39 @@ static void mark_nullable_int_locals(Compiler *c) {
         { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
       }
     }
+    /* ... and an explicit `super(k: v)` hands member k the value v, whatever
+       parameter it reads (`super(a: b, b: a)`); `super(x, y)` by position */
+    NT_FOREACH_KIND(nt, NK_SuperNode, su) {
+      Scope *is = comp_scope_of(c, su);
+      if (!is || !is->name || !sp_streq(is->name, "initialize") || is->is_cmethod || is->class_id < 0) continue;
+      int k = is->class_id, sc = -1;
+      for (int hop = 0; k >= 0 && hop < 64; k = c->classes[k].parent, hop++)
+        if (c->classes[k].is_struct || c->classes[k].is_data) { sc = k; break; }
+      if (sc < 0) continue;
+      ClassInfo *sci = &c->classes[sc];
+      int sa = nt_ref(nt, su, "arguments"), san = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+      for (int x = 0; x < san; x++) {
+        int one = sav[x], kn = 1;
+        const int *kv = &one;
+        if (nt_kind(nt, one) == NK_KeywordHashNode) kv = nt_arr(nt, one, "elements", &kn);
+        else if (x >= sci->nmembers) continue;
+        for (int e = 0; e < kn; e++) {
+          int m = x, v = kv[e];
+          if (kv != &one) {
+            int key = nt_ref(nt, kv[e], "key");
+            if (nt_kind(nt, kv[e]) != NK_AssocNode || key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
+            char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", nt_str(nt, key, "value"));
+            m = comp_ivar_index(sci, ivb);
+            v = nt_ref(nt, kv[e], "value");
+          }
+          if (m < 0 || m >= sci->nmembers || sci->ivar_nullable_int[m]) continue;
+          if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
+          if (!nullable_int_value(c, v)) continue;
+          { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
+        }
+      }
+    }
     /* `s[:x] = v` / `s["x"] = v` / `s[0] = v` on a Struct (or a boxed value
        that can be one): the member takes v, nil included */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -41548,6 +41581,26 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (!ty_is_object(wrt)) continue;
       ClassInfo *sci = &c->classes[ty_object_class(wrt)];
       if (!sci->is_struct || sci->nmembers <= 0) continue;
+      /* with an initialize of its own the values are its keywords'
+         (struct_with_binds_initialize): a given nil is the nil of the
+         keyword it names, and so is a nil the copy takes from the receiver */
+      int wimi = comp_method_in_chain(c, sci->idx, "initialize", NULL);
+      if (wimi >= 0 && comp_method_in_chain(c, sci->idx, "with", NULL) < 0) {
+        changed |= mark_nullable_params_of_call(c, id, wimi);
+        Scope *wm = &c->scopes[wimi];
+        for (int k = 0; k < wm->nparams; k++) {
+          const char *pk = wm->pnames[k];
+          LocalVar *p = pk ? scope_local(wm, pk) : NULL;
+          if (!p || (p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int ||
+              !callee_param_is_declared_kwarg(c, wm, pk) || kwh_lookup(nt, wav[0], pk) >= 0 ||
+              param_strict(c, wimi, k, NULL, NULL)) continue;
+          char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", pk);
+          int m = comp_ivar_index(sci, ivb);
+          if (m < 0 || m >= sci->nmembers || (!sci->ivar_nullable_int[m] && sci->ivar_types[m] != TY_NIL)) continue;
+          p->nullable_int = 1; changed = 1;
+        }
+        continue;
+      }
       int kn = 0; const int *ke = nt_arr(nt, wav[0], "elements", &kn);
       for (int e = 0; e < kn; e++) {
         if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;

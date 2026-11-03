@@ -652,6 +652,20 @@ void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int
   for (int e = 0; e < n; e++) nt_place(nt, id, copy[e], 'a', j);
 }
 
+/* See node_table.h. */
+int nt_paren_peel(NodeTable *nt, int n) {
+  int un = nt_paren_single(nt, n);
+  while (n != un) {
+    int body = nt_ref(nt, n, "body"), cnt = 0, next = nt_arr(nt, body, "body", &cnt)[0];
+    nt_node_set_arr(nt, body, "body", NULL, 0);
+    nt_node_set_type(nt, body, "NilNode");
+    nt_node_set_ref(nt, n, "body", -1);
+    nt_node_set_type(nt, n, "NilNode");
+    n = next;
+  }
+  return un;
+}
+
 void nt_add_autoload(NodeTable *nt, int node, int file, const char *name, const char *path) {
   if (nt->nautoloads == nt->cautoloads) {
     nt->cautoloads = nt->cautoloads ? 2 * nt->cautoloads : 8;

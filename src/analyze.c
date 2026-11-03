@@ -47762,7 +47762,7 @@ int desugar_paren_block_arg_left(Compiler *c, LowerCtx *lc, int id) {
 int desugar_paren_block_arg_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *ntm = (NodeTable *)c->nt;
   if (!desugar_paren_block_arg_left(c, lc, id)) return 0;
-  nt_node_set_ref(ntm, id, "expression", nt_paren_single(c->nt, nt_ref(ntm, id, "expression")));
+  nt_node_set_ref(ntm, id, "expression", nt_paren_peel(ntm, nt_ref(ntm, id, "expression")));
   return 1;
 }
 
@@ -47797,7 +47797,7 @@ int desugar_paren_operands_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *ntm = (NodeTable *)c->nt;
   if (!desugar_paren_operands_left(c, lc, id)) return 0;
   const char *field = paren_operand_field(nt_kind(ntm, id));
-  nt_node_set_ref(ntm, id, field, nt_paren_single(c->nt, nt_ref(ntm, id, field)));
+  nt_node_set_ref(ntm, id, field, nt_paren_peel(ntm, nt_ref(ntm, id, field)));
   return 1;
 }
 

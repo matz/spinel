@@ -642,6 +642,12 @@ static inline int nt_paren_single(const NodeTable *nt, int n) {
   }
   return n;
 }
+/* nt_paren_single's answer for n, with the parentheses it peels taken out
+   of the table: each one and its statements become NilNodes that hold
+   nothing, so no walk by id and no parent map (an_parent_map) still finds
+   the expression in them. For a desugar that puts the expression in their
+   place. */
+int nt_paren_peel(NodeTable *nt, int n);
 /* A def's receiver `recv` as written inside its parentheses: `def (expr).m`,
    where Prism gives the receiver's own parentheses the expression itself
    as body; parentheses inside it hold statements as usual (nt_paren_single) */

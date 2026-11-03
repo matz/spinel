@@ -12840,6 +12840,15 @@ static int fwd_def_still_forwards(const NodeTable *nt, const char *name, int sel
   }
   return 0;
 }
+/* Is there a def of `name` other than `self`? */
+static int fwd_other_def_named(const NodeTable *nt, const char *name, int self) {
+  for (int id = 0; id < nt->count; id++) {
+    if (id == self || !fwd_node_is(nt, id, "DefNode")) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, name)) return 1;
+  }
+  return 0;
+}
 /* Does `def` hand its `...` to a method another def still declares with
    `...`? That def has no shape to read until it is rewritten itself. A
    `new(...)` reaches an initialize; `super(...)` names its one parent
@@ -12888,6 +12897,13 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
     for (int id = def + 1; id < hi && id < n0; id++) {
       /* a bare `super` forwards everything, as `super(...)` does */
       int is_zsuper = fwd_node_is(nt, id, "ForwardingSuperNode");
+      /* ...but one from a method_missing no other def answers reaches
+         Object's, which raises NoMethodError: it hands the arguments
+         nowhere, so it leaves the shape to the calls beside it. Counted, it
+         left the method to the __fwd_N model, which handed the leading
+         parameter to `public_send(symbol, ...)` in place of the rest (a
+         template collector's method_missing(symbol, ...)). */
+      if (is_zsuper && sp_streq(dname, "method_missing") && !fwd_other_def_named(nt, dname, def)) continue;
       if (is_zsuper || nt_kind(nt, id) == NK_ForwardingArgumentsNode) nfwd_args++;
       int is_super = is_zsuper || fwd_node_is(nt, id, "SuperNode");
       if (!is_super && !fwd_node_is(nt, id, "CallNode")) continue;

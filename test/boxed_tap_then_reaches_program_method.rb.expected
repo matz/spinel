@@ -1,0 +1,24 @@
+[Integer, [:int_then, Integer]]
+[String, String]
+[NilClass, NilClass]
+[Symbol, :foo_then]
+[Float, Float]
+[Symbol, Symbol]
+[Array, Array]
+[Hash, Hash]
+[Bar, [:bar, Integer]]
+[:int_then, "3!"]
+[:bar, "2!"]
+"abc"
+[:in, 3]
+3
+[:int_then, 12]
+:foo
+[Array, Symbol]
+[:int_then, 8]
+nil
+[99, [true, false, false]]
+[Integer, [:int_then, [99, 2, 3]]]
+[Symbol, :foo_then]
+[99, [true, false, false]]
+[String, [99, 2, 3]]

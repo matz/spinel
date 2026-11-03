@@ -479,6 +479,10 @@ int bop_answers_self(TyKind rt, const char *name, int argc, int has_block);
    IA_BLOCKVALS_INPLACE (each, tap, map!). The value is then another name
    of the receiver's object, not a copy of it. */
 int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block);
+/* Is `name` a method every value answers that hands its block the receiver
+   itself, once (an any-receiver iterator row yielding YS_RECV: tap, then,
+   yield_self)? Its answer is the receiver or the block's value. */
+int iter_hands_recv(const char *name);
 /* Whether that call reads its arguments of the receiver's builtin class as
    that builtin (BOPF_ARGS_BUILTIN), looked up as bop_answers_self does. */
 int bop_args_as_builtin(TyKind rt, const char *name, int argc, int has_block);

@@ -22105,7 +22105,7 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   }
   if (positive && !own.p) return;
   buf_printf(b, "{ int _t%d = ", tk);
-  emit_poly_dispatch_key(c, tv, 1, 1, 0, b);
+  emit_poly_dispatch_key(c, tv, 1, 1, poly_exc_cand(c, vnm), b);
   buf_printf(b, "; (void)_t%d; if (%s(0%s)", tk, positive ? "" : "!", own.p ? own.p : "");
   free(own.p);
   /* a class value answers its own class method (`def self.top`) */

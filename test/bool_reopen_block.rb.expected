@@ -1,0 +1,17 @@
+true
+[true, 1]
+"got true"
+:none
+2
+[true]
+[:t, 3]
+[:f, 10]
+[3, :t]
+[3, :f]
+[:brk, :t]
+"1f"
+[:t, 0]
+[:f, 0]
+[true]
+:no_method
+"undefined method 'e' for "

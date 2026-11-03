@@ -2191,6 +2191,10 @@ static int a_reopen_yielder_takes_block(Compiler *c, int id, TyKind rt, const ch
   int own = core_of_type(rt), oci = own >= 0 ? comp_core_class(c, own) : -1;
   int omi = oci >= 0 ? call_target(c, id, oci, name, 0, NULL) : -1;
   if (omi >= 0 && core_reopen_calls_proc_form(own)) return c->scopes[omi].yields;
+  /* true and false: either value's own class's method (cplan_bool_sides) */
+  int tmi, fmi;
+  if (rt == TY_BOOL && cplan_bool_sides(c, id, &tmi, &fmi))
+    return (tmi >= 0 && c->scopes[tmi].yields) || (fmi >= 0 && c->scopes[fmi].yields);
   /* (an Enumerator's, IO's or Class's own reopening is called, or spliced,
      without one) */
   if (omi >= 0 && (rt == TY_ENUMERATOR || rt == TY_IO || rt == TY_CLASS))
@@ -2329,7 +2333,7 @@ else {
                call_target(c, id, comp_core_class(c, CORE_STRING), name, 0, NULL) >= 0 &&
                c->scopes[call_target(c, id, comp_core_class(c, CORE_STRING), name, 0, NULL)].yields)
         return 1;
-      else if (rt != TY_UNKNOWN && rt != TY_POLY && !ty_is_object(rt) && builtin_class_of_type(rt) &&
+      else if (rt != TY_UNKNOWN && rt != TY_POLY && !ty_is_object(rt) && (builtin_class_of_type(rt) || rt == TY_BOOL) &&
                a_reopen_yielder_takes_block(c, id, rt, name))
         return 1;
       /* A program Array#concat owns its block too. The reopening's proc
@@ -34553,6 +34557,12 @@ static int pf_wanted(Compiler *c, const char *name) {
       int own = core_of_type(rt);
       int oci = own >= 0 && core_reopen_calls_proc_form(own) ? comp_core_class(c, own) : -1;
       if (oci >= 0 && comp_method_in_class(c, oci, name) >= 0) return 1;
+      /* and a TrueClass's or FalseClass's, on true or false */
+      if (rt == TY_BOOL) {
+        int tci = comp_core_class(c, CORE_TRUECLASS), fci = comp_core_class(c, CORE_FALSECLASS);
+        if ((tci >= 0 && comp_method_in_class(c, tci, name) >= 0) ||
+            (fci >= 0 && comp_method_in_class(c, fci, name) >= 0)) return 1;
+      }
       /* and an Object reopening's, on a builtin receiver, with a block or
          without one: the Object fallback reaches it the same way */
       int obj = comp_core_class(c, CORE_OBJECT);

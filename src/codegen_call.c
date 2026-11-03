@@ -28537,6 +28537,20 @@ static void emit_call_inner(Compiler *c, int id, Buf *b);
 static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int boxed, int ow, Buf *b) {
   Buf nb; memset(&nb, 0, sizeof nb);
   TyKind t;
+  /* (a yielding method has no function of its own: its proc form, with the
+     call's block as a proc, self the value held in _t<tb>) */
+  if (mi >= 0 && c->scopes[mi].yields) {
+    int slot = view_bind(recv, "_t%d", tb);
+    int done = emit_reopen_block_call(c, id, recv, mi, NULL, &nb);
+    view_unbind(slot);
+    if (done) {
+      t = c->scopes[scope_proc_form_of(c, mi)].ret;
+      if (boxed && t != TY_POLY) emit_boxed_text(c, t, nb.p ? nb.p : "0", b);
+      else buf_puts(b, nb.p ? nb.p : "0");
+      free(nb.p);
+      return;
+    }
+  }
   if (mi >= 0) {
     if (g_plan_check) ucall_observe(c, id, mi, c->scopes[mi].class_id, 1);
     buf_puts(&nb, mc_method(c, &c->scopes[mi]));
@@ -28589,8 +28603,10 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
    calls it for true, and the builtin for false. */
 static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(c->nt, id, "receiver"), tmi, fmi;
-  if (recv < 0 || g_poly_builtin_arm || g_pd_skip == id || nt_ref(c->nt, id, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_BOOL) return 0;
+  if (recv < 0 || g_poly_builtin_arm || g_pd_skip == id || comp_ntype(c, recv) != TY_BOOL) return 0;
+  /* (a block's `break` wraps the call first: emit_brk_wrapped_call comes
+     back here with the call as g_brk_skip_id) */
+  if (id != g_brk_skip_id && call_breaks(c, id)) return 0;
   const CallPlan *pl = cplan_user(c, id);
   if (pl->via != UC_REOPEN || pl->dispatch != CP_SWITCH || !cplan_bool_sides(c, id, &tmi, &fmi)) return 0;
   int boxed = repr_of(c, id).kind == RK_BOXED;
@@ -32630,7 +32646,8 @@ static int reopen_pf_raw_self(Compiler *c, int ci) {
          ci == comp_core_class(c, CORE_FLOAT) ||
          ci == comp_core_class(c, CORE_SYMBOL) || ci == comp_core_class(c, CORE_FIBER) ||
          ci == comp_core_class(c, CORE_THREAD) || ci == comp_core_class(c, CORE_NILCLASS) ||
-         ci == comp_core_class(c, CORE_RANGE) || ci == comp_core_class(c, CORE_TIME);
+         ci == comp_core_class(c, CORE_RANGE) || ci == comp_core_class(c, CORE_TIME) ||
+         ci == comp_core_class(c, CORE_TRUECLASS) || ci == comp_core_class(c, CORE_FALSECLASS);
 }
 /* Does the load record put the include of the module `mi` is a copy from
    after call `id`? The call then runs the builtin class's own answer, or

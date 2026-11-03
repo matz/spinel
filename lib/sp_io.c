@@ -490,6 +490,14 @@ void sp_io_wait_readable(sp_File *f) {SP_GC_ROOT(f);
   if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED)) sp_raise_cls("IOError", "stream closed in another thread");
 }
 
+/* Counts the spawns that have handed descriptors to a child. A write end
+   that cached its O_NONBLOCK flag under an older count asks again. */
+static unsigned int sp_io_child_fds_gen;
+
+void sp_io_child_fds_given(void) {
+  SP_ATOMIC_FETCH_ADD(&sp_io_child_fds_gen, 1u, __ATOMIC_RELEASE);
+}
+
 /* The socket write path: straight to the descriptor, looping over short
    writes. The stdio stream is never written through, so there is nothing to
    flush and no read/write switching hazard on the shared FILE*. */
@@ -512,9 +520,19 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
      on the write side). */
   int nb = 0;
   if (!f->is_sock) {
+    unsigned int gen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
     if (!f->wnonblock) {
       int fl = fcntl(fd, F_GETFL);
       f->wnonblock = (fl >= 0 && (fl & O_NONBLOCK ? 1 : fcntl(fd, F_SETFL, fl | O_NONBLOCK) == 0)) ? 1 : 2;
+      f->wgen = gen;
+    }
+    else if (f->wnonblock == 1 && f->wgen != gen) {
+      /* A child may have been given this pipe since the flag was set, and
+         it takes its descriptors blocking (sp_process.c). The flag is not
+         set again: the child can still be writing to the pipe. */
+      int fl = fcntl(fd, F_GETFL);
+      f->wnonblock = (fl >= 0 && (fl & O_NONBLOCK)) ? 1 : 2;
+      f->wgen = gen;
     }
     nb = f->wnonblock == 1;
   }
@@ -554,6 +572,10 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
       put = send(fd, s + off, want, SP_MSG_DONTWAIT);
     }
     else {
+      /* A blocking pipe that polls writable takes PIPE_BUF bytes without
+         sleeping; more than that can sleep in the kernel holding the
+         worker while the reader waits for it. */
+      if (!nb && want > PIPE_BUF) want = PIPE_BUF;
       put = write(fd, s + off, want);
     }
     if (put < 0) {

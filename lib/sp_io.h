@@ -72,6 +72,10 @@ typedef struct {
                                   of fd so close/fin never touch the caller's
                                   descriptor; this carries the ORIGINAL fd (+1,
                                   0 = unset) so #fileno answers it (#4208) */
+  unsigned int wgen;           /* sp_io_child_fds_gen when wnonblock was last
+                                  asked: a spawn since then may have handed
+                                  the descriptor to a child and cleared the
+                                  flag (give_blocking, sp_process.c) */
   unsigned int uses;           /* the threads inside a descriptor read or write
                                   of this handle right now, with the top bit set
                                   once #close has begun. The FILE and its

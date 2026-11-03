@@ -1,0 +1,22 @@
+s1:1
+s2:2
+s3:3
+s4:4
+s5:5
+s6:6
+m7:7
+s8:8
+s9:9
+p1:1
+p2:2
+p3:3
+p4:4
+T1 ArgumentError
+T2 ArgumentError
+T3 ArgumentError
+T5 ArgumentError
+T6 ArgumentError
+P5 ArgumentError
+P6 ArgumentError
+T8 ArgumentError
+t7:7

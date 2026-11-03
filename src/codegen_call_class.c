@@ -3818,8 +3818,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     else if (ty_is_object(rt)) {
       /* user object: .class returns a TY_CLASS value */
       int _cidx = ty_object_class(rt);
-      /* a value-type instance has the class's static cls_id (no NULL case) */
-      if (comp_ty_value_obj(c, rt)) { buf_printf(b, "((sp_Class){%d})", _cidx); return 1; }
+      /* a value-type instance has the class's static cls_id (no NULL case);
+         the receiver is still evaluated for its side effects */
+      if (comp_ty_value_obj(c, rt)) {
+        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_printf(b, "), ((sp_Class){%d}))", _cidx);
+        return 1;
+      }
       /* A bare Object/BasicObject instance uses the runtime sp_Object struct
          ({uint8_t _pad}) -- it has no cls_id field to read (every generated
          user-class struct does). Its class is statically that base, so emit the

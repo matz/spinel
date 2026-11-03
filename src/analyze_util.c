@@ -74,7 +74,7 @@ static int const_path_is(const NodeTable *nt, int node, const char *pn, const ch
 }
 /* Does the program write the constant nm into the class or module named pn:
    in a body of it, or through the path `pn::nm = v`? */
-static int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
+int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
   const NodeTable *nt = c->nt;
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)

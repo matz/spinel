@@ -1,3 +1,4 @@
+# spinel: not-cruby -- OpenSSL::PKey::EC.from_private_bytes is this package's; the .expected is the package's own answers
 require "openssl"
 
 def hx(s) = [s].pack("H*")

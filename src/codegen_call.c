@@ -32642,6 +32642,10 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         /* a class value that answers yes is the site's to emit: nil responds
            to nothing, so the answer is the value's non-nilness, not a fold */
         if (yes && rt == TY_CLASS && recv >= 0) return -1;
+        /* a String, Array, Hash or IO slot that may hold nil holds it as
+           NULL, and nil answers only its own surface: the answer is the
+           value's non-nilness, as for an object slot above */
+        if (recv >= 0 && nil_fact_tracked(rt) && nil_fact_node(c, recv)) g_rto_nil_obj = 1;
         resolved = 1;
       }
     }

@@ -22951,6 +22951,41 @@ static int mo_object_defines(const NodeTable *nt, int n0, const char *mname) {
 /* A builtin class body left with nothing in it disappears, so no user class
    of a builtin's name is defined (`class Time` would clash with the runtime's
    Time). */
+/* A Hash, Array, TrueClass or FalseClass override has its own arm in the
+   dispatch on a boxed value, so it stays in its class and is defined at
+   its own point: `class TrueClass; def m`, a call `true.m`, then
+   `class Object; def m` answers TrueClass's method. */
+static int mo_dispatch_arm(const char *g) {
+  return sp_streq(g, "Hash") || sp_streq(g, "Array") || sp_streq(g, "TrueClass") || sp_streq(g, "FalseClass");
+}
+/* Does a body of class cn change the visibility of method mname
+   (`private :m`, `protected def m`, a bare `private` section)? The arm in
+   the dispatch does not keep a builtin class's own visibility, and the
+   fold keeps it, so such an override is still folded. */
+static int mo_vis_changed(const NodeTable *nt, int n0, const char *cn, const char *mname) {
+  for (int m = 0; m < n0; m++) {
+    if (!class_def_is_class(nt, m)) continue;
+    const char *dn = class_def_name(nt, m);
+    if (!dn || !sp_streq(dn, cn)) continue;
+    int b = class_def_body(nt, m), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int k = 0; k < bn; k++) {
+      const char *vn = nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 ? nt_str(nt, bs[k], "name") : NULL;
+      if (!vn || !visibility_of_name(vn)) continue;
+      int an = nt_ref(nt, bs[k], "arguments"), ac = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      if (!ac) return 1;
+      for (int q = 0; q < ac; q++) {
+        NodeKind ak = nt_kind(nt, av[q]);
+        const char *v = ak == NK_SymbolNode || ak == NK_StringNode ? nt_str(nt, av[q], ak == NK_SymbolNode ? "value" : "content")
+                      : ak == NK_DefNode ? nt_str(nt, av[q], "name") : NULL;
+        if (!v || sp_streq(v, mname)) return 1;
+      }
+    }
+  }
+  return 0;
+}
+
 static int mo_params_sig(const NodeTable *nt, int def, char *out, size_t cap);
 int desugar_builtin_reopen_methods(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -24128,8 +24163,8 @@ int desugar_builtin_ivars(Compiler *c) {
  *
  * Dispatch on a run-time value reaches Object's method (whose self is the
  * boxed value) and the reopened classes that have an arm of their own; a
- * Proc, Rational, Complex or Regexp override has no such arm. The overrides
- * move into Object's method as branches on self's class:
+ * Proc, Rational or other builtin override in this list has no such arm.
+ * The overrides move into Object's method as branches on self's class:
  *
  *   def ffi_yajl(g, s)
  *     if is_a?(Proc) then <Proc's body> elsif is_a?(Rational) then <Rational's>
@@ -24138,12 +24173,10 @@ int desugar_builtin_ivars(Compiler *c) {
  *
  * Only when every override takes the same parameters as Object's. The
  * folded method is defined where Object's def is, so a call that runs
- * between the override's def and a later Object def finds no method.
- * Hash, Array, TrueClass, FalseClass, Time, Range, Date, DateTime and
- * Exception overrides have their own arms in the dispatch, so they stay
- * in their classes and keep their own load point. */
+ * between the override's def and a later Object def finds no method. */
 static const char *mo_override_class(const char *cn) {
-  static const char *const B[] = { "Regexp", "Proc", "Rational", "Complex", NULL };
+  static const char *const B[] = { "Hash", "Array", "TrueClass", "FalseClass", "Time", "Range",
+    "Regexp", "Proc", "Date", "DateTime", "Rational", "Complex", "Exception", NULL };
   for (int i = 0; B[i]; i++) if (sp_streq(B[i], cn)) return B[i];
   return NULL;
 }
@@ -24318,7 +24351,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         if (!class_def_is_class(nt, m)) continue;
         const char *cn = class_def_name(nt, m);
         const char *g = cn ? mo_override_class(cn) : NULL;
-        if (!g || mo_program_owns(nt, n0, cn)) continue;
+        if (!g || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
         int b = class_def_body(nt, m);
         int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++) {

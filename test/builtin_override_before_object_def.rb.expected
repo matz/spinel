@@ -12,7 +12,13 @@
 [:obj, 2]
 [:obj, 2]
 [:obj, 2]
-[:time, :time]
-[:range, :range]
-[:obj, :obj]
-[:obj, :obj]
+:no_method
+:no_method
+:obj
+:obj
+true
+true
+[:time, 1]
+[:range, 1]
+[:obj, 1]
+[:obj, 1]

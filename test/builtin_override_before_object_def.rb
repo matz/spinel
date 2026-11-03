@@ -14,8 +14,17 @@ p "s".only
 def g(v) = v.only(2)
 [true, false, {}, [], 3, nil, :s].each { |v| p g(v) }
 
-# Each override keeps its own default value and its own body.
-class Time; def tag(x = :time) = [:time, x]; end
-class Range; def tag(x = :range) = [:range, x]; end
-class Object; def tag(x = :obj) = [:obj, x]; end
+# A private override keeps its visibility.
+class Hash; def pm = :hash; private :pm; end
+class Array; def pq = :ary; protected :pq; end
+class Object; def pm = :obj; def pq = :obj; end
+p(({}.pm rescue :no_method))
+p(([].pq rescue :no_method))
+p 3.pm, 3.pq
+
+# A Time or Range override answers respond_to?.
+class Object; def tag(x = 1) = [:obj, x]; end
+class Time; def tag(x = 1) = [:time, x]; end
+class Range; def tag(x = 1) = [:range, x]; end
+p Time.at(0).respond_to?(:tag), (1..2).respond_to?(:tag)
 [Time.at(0), (1..2), 5, "t"].each { |v| p v.tag }

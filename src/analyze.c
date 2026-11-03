@@ -48078,7 +48078,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_dynamic_const_get", desugar_dynamic_const_get(c));          /* M.const_get(expr) -> a table of M's constants */
   AN_STEP_V("desugar_builtin_reopen_self_calls", desugar_builtin_reopen_self_calls(c));  /* class Hash; def m = each {..} -> self.each */
   AN_STEP_V("desugar_builtin_ivars", desugar_builtin_ivars(c));              /* class Array; def m = @x -> self.__bivar_get(:@x) */
-  AN_STEP_V("desugar_object_method_builtin_overrides", desugar_object_method_builtin_overrides(c)); /* Proc#m + Object#m -> Object#m branching on self */
+  AN_STEP_V("desugar_object_method_builtin_overrides", desugar_object_method_builtin_overrides(c)); /* Hash#m + Object#m -> Object#m branching on self */
   AN_STEP_V("desugar_builtin_reopen_methods", desugar_builtin_reopen_methods(c));     /* class Hash; def m -> Object#m guarded by is_a?(Hash) */
   AN_STEP_V("desugar_const_ivar_access", desugar_const_ivar_access(c));          /* C.instance_variable_set(:@x, v) -> C.__spinel_civset_x(v) */
   AN_STEP_V("desugar_class_eval_ivars", desugar_class_eval_ivars(c));           /* C.class_eval { @x = v } -> C.class_eval { C.__spinel_civset_x(v) } */

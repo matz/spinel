@@ -11449,6 +11449,10 @@ static void emit_string_tail_into(Compiler *c, int node, const char *dst, Buf *b
 static int emit_paren_tail_pub(Compiler *c, int v, Buf *b);
 /* the case expression being emitted answers an oint (cond_res_oint) */
 static int g_case_res_oint = 0;
+/* the case emit_tail_value hands on as a String tail, and whether the case
+   being emitted is that tail: its arms are then tails of the slot too */
+static int g_tail_case_node = -1;
+static int g_case_arm_tail = 0;
 void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   const NodeTable *nt = c->nt;
   int res_o = g_case_res_oint && oint_kind(rt);
@@ -11457,7 +11461,7 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   /* A String return channel follows each arm's tail, including nested
      conditionals: use the same tail emission as begin/rescue arms. */
   Scope *sc = stmts >= 0 ? comp_scope_of(c, stmts) : NULL;
-  if (rt == TY_STRING && sc && (sc->ret_pub_fresh || sc->ret_pub_bang)) {
+  if (rt == TY_STRING && sc && (sc->ret_pub_fresh || sc->ret_pub_bang || g_case_arm_tail)) {
     char dst[32]; snprintf(dst, sizeof dst, "_cr%d", cr);
     emit_string_tail_into(c, stmts, dst, b);
     return;
@@ -11557,9 +11561,10 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
 void emit_case_expr(Compiler *c, int id, Buf *b);
 static void emit_case_expr_in(Compiler *c, int id, Buf *b);
 void emit_case_expr(Compiler *c, int id, Buf *b) {
-  int sro = g_case_res_oint, sso = g_case_scrut_oint;
+  int sro = g_case_res_oint, sso = g_case_scrut_oint, sat = g_case_arm_tail;
+  g_case_arm_tail = id == g_tail_case_node;
   emit_case_expr_in(c, id, b);
-  g_case_res_oint = sro; g_case_scrut_oint = sso;
+  g_case_res_oint = sro; g_case_scrut_oint = sso; g_case_arm_tail = sat;
 }
 static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -14141,7 +14146,15 @@ void emit_tail_value(Compiler *c, int node, Buf *b) {
     if (g_repr_check) repr_channel_end(c, frame);
     return;
   }
+  /* A String tail `case` answers what its arms end in, and each arm is a
+     tail (emit_case_branch_value): a new String's arm clears the side
+     channel a read in the subject or a `when` published, which a caller's
+     pickup took for the answer (`out << esc(ch)` stored ch, not "Q").
+     So is the one case in parentheses, `return (case ... end)`. */
+  int sv_tc = g_tail_case_node, tc = nt_paren_single(c->nt, node);
+  g_tail_case_node = ts && nt_kind(c->nt, tc) == NK_CaseNode ? tc : -1;
   emit_tail_value_1(c, node, b);
+  g_tail_case_node = sv_tc;
   if (g_repr_check) repr_channel_end(c, frame);
 }
 static void emit_tail_value_1(Compiler *c, int node, Buf *b) {

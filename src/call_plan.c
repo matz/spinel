@@ -1190,7 +1190,15 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   }
   LoadPoint p = elab_point_of(c, id);
   /* An unplaced capture chooses at construction through the existing
-     entry, even when a later wrapper changes the call's live window. */
+     entry, even when a later wrapper changes the call's live window. Not
+     where a reader that answers from the table names the method
+     (elab_method_reflected, the fact that keeps the name off the late
+     bit): a respond_to? guarding the capture says it is there, so the
+     capture binds the table's method too, as the guarded call does. */
+  if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name)) {
+    if (span) *span = 0;
+    return mi;
+  }
   if ((flags & CT_CAPTURE) && p.region < 0 &&
       (vi = ct_entry_of(c, 0, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
     if (def_class && !(flags & CT_TOP)) *def_class = rcls;

@@ -137,6 +137,7 @@ struct LoadRecord {
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
   char **refl; int nrefl, crefl;        /* the names a reflection reader of the source names, sorted (lr_refl_take) */
+  char **refl_table; int nrefl_table, crefl_table;   /* ...those a reader that answers from the table names */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   unsigned char structs;     /* registration has made the class builders' classes (elab_record_builders) */
@@ -1745,11 +1746,17 @@ static void lr_reopens_take(Compiler *c) {
    (whose first argument, when no literal, may name any of them), a call under defined?, and the queries a fold has answered already (def_asked,
    desugar_engine_branches). They answer from the final method tables, so a call
    they guard runs where they say the method is there (lr_late_make). A
-   list of methods or a name the record cannot read may be any (refl_any). */
-static void lr_refl_add(LoadRecord *r, const char *name) {
+   list of methods or a name the record cannot read may be any (refl_any).
+   Every reader but a Method's maker answers from the table (refl_table,
+   elab_method_reflected); a maker binds through the call plan. */
+static void lr_refl_add(LoadRecord *r, const char *name, int table) {
   if (!name) { r->refl_any = 1; return; }
-  r->refl = lr_grow(r->refl, &r->crefl, r->nrefl, sizeof *r->refl);
-  if (!(r->refl[r->nrefl++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int t = 0; t <= table; t++) {
+    char ***l = t ? &r->refl_table : &r->refl;
+    int *n = t ? &r->nrefl_table : &r->nrefl;
+    *l = lr_grow(*l, t ? &r->crefl_table : &r->crefl, *n, sizeof **l);
+    if (!((*l)[(*n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
 }
 static void lr_refl_take(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -1760,15 +1767,17 @@ static void lr_refl_take(Compiler *c) {
     const int *av = call_args(nt, n, &ac);
     /* (each send's first argument names the method it calls: a send in turn) */
     while (rn && is_send_family(rn)) rn = a < ac ? vis_arg_name(nt, av[a++]) : "";
-    if (!rn) { lr_refl_add(r, NULL); continue; }
-    if ((pq = is_method_presence_query(rn))) lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL);
+    if (!rn) { lr_refl_add(r, NULL, 1); continue; }
+    if ((pq = is_method_presence_query(rn)))
+      lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL, !is_method_object_maker(rn));
   }
   NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
     int v = nt_ref(nt, n, "value");
-    if (v >= 0 && nt_kind(nt, v) == NK_CallNode) lr_refl_add(r, nt_str(nt, v, "name"));
+    if (v >= 0 && nt_kind(nt, v) == NK_CallNode) lr_refl_add(r, nt_str(nt, v, "name"), 1);
   }
-  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i]);
+  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], 1);
   if (r->nrefl > 1) qsort(r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp);
+  if (r->nrefl_table > 1) qsort(r->refl_table, (size_t)r->nrefl_table, sizeof *r->refl_table, lr_name_cmp);
 }
 
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
@@ -2806,6 +2815,12 @@ int elab_method_late(Compiler *c, const char *name) {
   if (!x || !x->nver) return 0;
   lr_late_make(c);
   return x->late == 2;
+}
+
+int elab_method_reflected(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name) return 0;
+  return r->refl_any || (r->nrefl_table && bsearch(&name, r->refl_table, (size_t)r->nrefl_table, sizeof *r->refl_table, lr_name_cmp));
 }
 
 int elab_method_replaced(Compiler *c, const char *name) {
@@ -6897,6 +6912,8 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
+  for (int i = 0; i < r->nrefl_table; i++) free(r->refl_table[i]);
+  free(r->refl_table);
   free(r->names); free(r->defs); free(r->reopens); free(r->refl);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);

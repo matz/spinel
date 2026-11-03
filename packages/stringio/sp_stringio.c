@@ -188,9 +188,12 @@ sp_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
 /* Normalized helpers so the binding stays a plain method->symbol map:
    putc with a string arg writes its first byte; lineno is a field read;
    fsync/fileno/pid are always 0 on an in-memory stream. */
-/* putc(String) writes the string's first character, all of its bytes */
+/* putc(String) writes the string's first character, all of its bytes; a
+   String-or-nil argument that is nil takes CRuby's path for a non-String,
+   the Integer conversion, as the [:int] binding's nil does */
 const char *sp_StringIO_putc_s(sp_StringIO *s, const char *str) {SP_GC_ROOT(s);SP_GC_ROOT_STR(str);
-  int64_t l = str ? (int64_t)sp_str_byte_len(str) : 0;
+  if (!str) sp_raise_nil_to_int(0);
+  int64_t l = (int64_t)sp_str_byte_len(str);
   if (l > 0) sio_write(s, str, sio_char_len(str, l, sp_str_is_binary(str)));
   return str; }
 sp_int sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }

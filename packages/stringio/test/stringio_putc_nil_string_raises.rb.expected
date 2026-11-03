@@ -1,0 +1,10 @@
+[:type_error, "no implicit conversion from nil to integer"]
+"AB"
+[:type_error, "no implicit conversion from nil to integer"]
+67
+"AC"
+[:type_error, "no implicit conversion from nil to integer"]
+"AB"
+"w:nil"
+"w:\"AB\""
+"A"

@@ -6461,8 +6461,13 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
           }
         }
       }
-      /* bare `new` inside a class method returns an instance of self's class */
+      /* bare `new` inside a class method returns an instance of self's
+         class, or what the class's own `self.new` the call reaches answers
+         (cplan_user_new: a version entry's arm reaches its version), but
+         for one in that `self.new` itself, which the constructor builds */
       if (self->is_cmethod && is_new_name(name)) {
+        int un = cplan_user_new(c, id, self->class_id);
+        if (un >= 0 && &c->scopes[un] != self) { *out = an_self_call_ret(c, self, name, un, id); return 1; }
         if (g_plan_check) {
           const CallPlan *p = cplan_user_fresh(c, id);
           if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);

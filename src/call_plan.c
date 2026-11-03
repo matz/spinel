@@ -1510,6 +1510,7 @@ int cplan_user_new(Compiler *c, int id, int ci) {
   /* (`S[x]`, which desugar_struct_index_ctor gives new's name, is the
      class's own `[]`: a program's `new` is not what it calls) */
   const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
+  if (ct_pin_of(c, id) != -1) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (!c->classes[ci].is_struct) return comp_cmethod_in_chain(c, ci, "new", NULL);   /* (index_ctor marks a record's only) */
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;

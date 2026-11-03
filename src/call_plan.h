@@ -748,7 +748,8 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
 enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
 int cplan_entry_finds(const Compiler *c, int e);
 /* The program's `self.new` a `new` call id on class ci runs, -1 for
-   none: for a Struct or Data class, the one call_target finds where the
+   none: for an arm of a version entry, its pin (call_target); for a
+   Struct or Data class, the one call_target finds where the
    call runs (its version entry, or the def where the record proves it made
    there), its builtin constructor answering a call before the def and one
    the record cannot place (as the constructor answered every call

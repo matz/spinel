@@ -5,8 +5,8 @@
 #   name the comment's reader wrote (`compact_blank`, not a copy's name),
 #   and an annotation the copies apply (`exclude?`) is not reported as lost
 #   with the def they were copied from. (`T` is no variable of Enumerable's.)
-# - A TrueClass or FalseClass method Object also defines runs as a branch
-#   of Object's method: its warning says so, and not that it was not found.
+# - A TrueClass or FalseClass method Object also defines is a method of its
+#   own class (#10859), so its signature applies and no warning is given.
 module Enumerable
   #: () -> Array[T]
   def compact_blank

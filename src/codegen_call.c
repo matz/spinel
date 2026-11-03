@@ -19831,21 +19831,47 @@ static int reopened_owns(Compiler *c, const char *cls, const char *name) {
    class when they are collected, so they reach no chain, and a def under a
    conditional in a singleton body reaches none either; the constant arm
    asks here. */
-typedef struct { char *cn; char *name; } SingletonDef;
+typedef struct { char *cn; char *name; int next; } SingletonDef;
 static SingletonDef *g_sdefs;
 static int g_nsdefs, g_csdefs;
+static int *g_sdefs_head, g_sdefs_nb;
 static const NodeTable *g_sdefs_nt;
 static int g_sdefs_count;
 static unsigned g_sdefs_version;
+static unsigned sdefs_hash(const char *cn, const char *name) { return sp_strhash(cn) * 31u + sp_strhash(name); }
+static int sdefs_has(const char *cn, const char *name) {
+  if (!g_sdefs_nb) return 0;
+  unsigned b = sdefs_hash(cn, name) & (unsigned)(g_sdefs_nb - 1);
+  for (int i = g_sdefs_head[b]; i >= 0; i = g_sdefs[i].next)
+    if (sp_streq(g_sdefs[i].cn, cn) && sp_streq(g_sdefs[i].name, name)) return 1;
+  return 0;
+}
 static void sdefs_add(const char *cn, const char *name) {
+  if (sdefs_has(cn, name)) return;
   if (g_nsdefs >= g_csdefs) {
     int cap = g_csdefs ? g_csdefs * 2 : 16;
     SingletonDef *grown = realloc(g_sdefs, sizeof *grown * (size_t)cap);
-    if (!grown) return;
+    if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     g_sdefs = grown; g_csdefs = cap;
   }
-  g_sdefs[g_nsdefs].cn = strdup(cn); g_sdefs[g_nsdefs].name = strdup(name); g_nsdefs++;
+  if (!g_sdefs_nb || g_nsdefs >= g_sdefs_nb) {
+    g_sdefs_nb = g_sdefs_nb ? g_sdefs_nb * 2 : 32;
+    free(g_sdefs_head);
+    g_sdefs_head = malloc(sizeof(int) * (size_t)g_sdefs_nb);
+    if (!g_sdefs_head) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < g_sdefs_nb; i++) g_sdefs_head[i] = -1;
+    for (int i = 0; i < g_nsdefs; i++) {
+      unsigned b = sdefs_hash(g_sdefs[i].cn, g_sdefs[i].name) & (unsigned)(g_sdefs_nb - 1);
+      g_sdefs[i].next = g_sdefs_head[b]; g_sdefs_head[b] = i;
+    }
+  }
+  unsigned b = sdefs_hash(cn, name) & (unsigned)(g_sdefs_nb - 1);
+  SingletonDef *d = &g_sdefs[g_nsdefs];
+  d->cn = strdup(cn); d->name = strdup(name); d->next = g_sdefs_head[b];
+  if (!d->cn || !d->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g_sdefs_head[b] = g_nsdefs++;
 }
+
 static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singleton) {
   const char *ty = id >= 0 ? nt_type(nt, id) : NULL;
   NodeKind ty_k = nt_kind(nt, id);
@@ -19905,30 +19931,38 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
      place without growing the table */
   if (g_sdefs_nt != nt || g_sdefs_count != nt->count || g_sdefs_version != nt->version) {
     for (int i = 0; i < g_nsdefs; i++) { free(g_sdefs[i].cn); free(g_sdefs[i].name); }
+    for (int i = 0; i < g_sdefs_nb; i++) g_sdefs_head[i] = -1;
     g_nsdefs = 0; g_sdefs_nt = nt; g_sdefs_count = nt->count; g_sdefs_version = nt->version;
-    for (int id = 0; id < nt->count; id++) {
-      const char *ty = nt_type(nt, id);
-      NodeKind k = nt_kind(nt, id);
-      if (!ty) continue;
-      if (k == NK_DefNode) {
-        int dr = nt_ref(nt, id, "receiver");
-        NodeKind rk = nt_kind(nt, dr);
-        const char *rn = rk == NK_ConstantReadNode ? nt_str(nt, dr, "name") : NULL;
-        const char *dn = nt_str(nt, id, "name");
-        if (rn && dn) sdefs_add(rn, dn);
+    /* Only declaration roots can contribute; their recursive scans keep the
+       same branch/block/singleton and extend-self rules. Membership is a set,
+       so grouping roots by kind cannot change an answer. The kind lists are
+       walked as they stand: sdefs_scan reads the table and never changes it. */
+    static const NodeKind kinds[] = { NK_DefNode, NK_ClassNode, NK_ModuleNode, NK_SingletonClassNode };
+    for (unsigned ki = 0; ki < sizeof kinds / sizeof *kinds; ki++) {
+      int nk = 0; const int *ids = nt_nodes_of_kind(nt, kinds[ki], &nk);
+      for (int ni = 0; ni < nk; ni++) {
+        int id = ids[ni];
+        const char *ty = nt_type(nt, id);
+        NodeKind k = nt_kind(nt, id);
+        if (!ty) continue;
+        if (k == NK_DefNode) {
+          int dr = nt_ref(nt, id, "receiver");
+          NodeKind rk = nt_kind(nt, dr);
+          const char *rn = rk == NK_ConstantReadNode ? nt_str(nt, dr, "name") : NULL;
+          const char *dn = nt_str(nt, id, "name");
+          if (rn && dn) sdefs_add(rn, dn);
+        }
+        else if (k == NK_ClassNode || k == NK_ModuleNode) {
+          int cp = nt_ref(nt, id, "constant_path");
+          NodeKind ck = nt_kind(nt, cp);
+          const char *kn = ck == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
+          if (kn) sdefs_scan(nt, nt_ref(nt, id, "body"), kn, 0);
+        }
+        else if (k == NK_SingletonClassNode) sdefs_scan(nt, id, NULL, 0);
       }
-      else if (k == NK_ClassNode || k == NK_ModuleNode) {
-        int cp = nt_ref(nt, id, "constant_path");
-        NodeKind ck = nt_kind(nt, cp);
-        const char *kn = ck == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
-        if (kn) sdefs_scan(nt, nt_ref(nt, id, "body"), kn, 0);
-      }
-      else if (k == NK_SingletonClassNode) sdefs_scan(nt, id, NULL, 0);
     }
   }
-  for (int i = 0; i < g_nsdefs; i++)
-    if (sp_streq(g_sdefs[i].cn, cn) && sp_streq(g_sdefs[i].name, name)) return 1;
-  return 0;
+  return sdefs_has(cn, name);
 }
 
 /* A top-level def or alias: Object's private instance method, which CRuby

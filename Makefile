@@ -5875,12 +5875,14 @@ IE_FORWARD_LIMIT ?= 2.5
 # program) but the emission's work does not: the emission alone reads 13.9x
 # and the whole compile 6.39x. Sampled every 4,096 units, about 470M of the
 # 1.16G units above 4x are walks of the program repeated per call site or per
-# method: singleton_def_of under arity_violation, whose table is cached but
-# rebuilt, a walk of the node table, whenever the emission has added a node
-# since the last call (401 rebuilds for 1,200 calls at 400 units),
-# fi_fiber_stack_risk under emit_method_signature, and scope_has_return's scan
-# of a node kind under call_breaks. The limit sits just above; lower it as
-# those go. One walk of
+# method: singleton_def_of under arity_violation, whose table was cached but
+# rebuilt, a walk of the node table, whenever the emission had added a node
+# since the last call (401 rebuilds for 1,200 calls at 400 units; it is now
+# rebuilt from the declarations alone, which moved this leg's 6.51x to 6.33x:
+# the hashed lookup is not seen here, and no leg fails if the rebuild is
+# put back while this limit stands), fi_fiber_stack_risk under emit_method_signature, and
+# scope_has_return's scan of a node kind under call_breaks. The limit sits
+# just above; lower it as those go. One walk of
 # the node table per emitted method reads 7.66x. The count does not see a
 # scan that compares ids before names: scope_is_shadowed's scan of every
 # later scope, per class at every poly dispatch, was 11% of gen.sh 400's
@@ -5946,6 +5948,15 @@ COND_DEFS_LIMIT ?= 2.2
 # def, reads 7.0x to 7.4x). A time ratio moves with the machine's load; only a
 # rise past the limit is a finding.
 COND_DEFS_CPU_LIMIT ?= 9.0
+# N singleton defs on one class and sixteen arity-checked calls per def
+# (test/scale/singleton_defs.sh), compiled to C at N=400 and N=800. The check
+# of each call asks singleton_def_of whether the program defines the method on
+# the constant's singleton, sixteen times per call (fifteen inference passes
+# and the emission), and the list of the defs was scanned for each ask: 2.35x at 2x the defs (327 M of 1.2 G units
+# at 800), and 2.04x with the defs hashed. The other change to singleton_def_of,
+# rebuilding its table from the declarations and not from every node, is what
+# the codegen leg above sees (6.51x to 6.33x); this leg does not.
+SINGLETON_DEFS_LIMIT ?= 2.2
 # Splices into one class (test/scale/splices.sh), compiled to C at K=200 and
 # K=400: an included hook whose class_eval block runs K class_eval texts in
 # its includer, and K texts in the class's own body, K over a constant list
@@ -6045,6 +6056,9 @@ scale-test: $(SPINEL_WORK)
 	gen cond_defs 200 q2.rb; gen cond_defs 400 q4.rb; \
 	qa=$$(sw -c -o "$$tmp/q2.c" "$$tmp/q2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	qb=$$(sw -c -o "$$tmp/q4.c" "$$tmp/q4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen singleton_defs 400 ud4.rb; gen singleton_defs 800 ud8.rb; \
+	uda=$$(sw -c -o "$$tmp/ud4.c" "$$tmp/ud4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	udb=$$(sw -c -o "$$tmp/ud8.c" "$$tmp/ud8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6057,7 +6071,8 @@ scale-test: $(SPINEL_WORK)
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
 	   [ -z "$$ka" ] || [ -z "$$kb" ] || [ -z "$$ea" ] || [ -z "$$eb" ] || [ -z "$$ra" ] || [ -z "$$rb" ] || [ -z "$$ta" ] || [ -z "$$tb" ] || \
-	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ]; then \
+	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
+	   [ -z "$$uda" ] || [ -z "$$udb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6101,6 +6116,9 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$qa" -v b="$$qb" -v lim="$(COND_DEFS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: open method history work at 2x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' entries or their cell writes grew superlinearly: see ver_named_one and ver_cells_write)"; exit 1; }; \
+	awk -v a="$$uda" -v b="$$udb" -v lim="$(SINGLETON_DEFS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: singleton def check work at 2x the defs, compiled to C, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the arity check of a call scanned the singleton defs: see singleton_def_of)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

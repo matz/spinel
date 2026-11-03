@@ -118,6 +118,10 @@ void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
 void sp_io_wait_readable(sp_File *f);
 void sp_io_wait_fd_readable(int fd);
+/* Held around a fork that execs, and around a pipe whose close-on-exec flag
+   is set after it is made (no pipe2): no child inherits a half-made pipe */
+void sp_fork_exec_lock(void);
+void sp_fork_exec_unlock(void);
 /* Park until the handle can take bytes (a socket, or an IO.pipe write end). */
 void sp_io_wait_writable(sp_File *f);
 /* Bytes stdio already holds for this stream (readable without a read(2)). */

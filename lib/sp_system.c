@@ -149,7 +149,10 @@ int sp_system_start(const char *line, const char *prog, char *const *argv, char 
   extern int sp_io_make_pipe(int fds[2]);
   int err_pipe[2];
   if (sp_io_make_pipe(err_pipe) < 0) { sp_last_status = -1; return -1; }
+  extern void sp_fork_exec_lock(void), sp_fork_exec_unlock(void);
+  sp_fork_exec_lock();
   pid_t pid = fork();
+  if (pid != 0) sp_fork_exec_unlock();
   if (pid < 0) {
     close(err_pipe[0]); close(err_pipe[1]);
     sp_last_status = -1;
@@ -176,6 +179,10 @@ int sp_system_start(const char *line, const char *prog, char *const *argv, char 
   close(err_pipe[1]);
   int e = 0;
   ssize_t got;
+  /* (parked until the child execs or fails: a worker in read(2) never
+     reaches a safepoint, and a collection would wait on it) */
+  extern void sp_io_wait_fd_readable(int fd);
+  sp_io_wait_fd_readable(err_pipe[0]);
   do { got = read(err_pipe[0], &e, sizeof e); } while (got < 0 && errno == EINTR);
   close(err_pipe[0]);
   if (got > 0) {

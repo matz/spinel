@@ -158,23 +158,42 @@ static int sp_io_set_cloexec(int fd) {
 }
 #endif
 
+/* Without pipe2 (macOS, the BSDs) a pipe's close-on-exec flag is set
+   after pipe(), and a child another worker forked in between kept the ends
+   past its exec: a `system` whose child it was waited on that child's
+   error pipe until the other child exited (#4528's test hung on macOS).
+   The threaded build holds one lock around the pipe and its flags, and
+   around a fork that execs (sp_fork_exec_lock), so no fork falls in
+   between. The child does not unlock: it execs or exits. */
+#if !defined(__linux__) && !defined(_WIN32) && defined(SP_THREADS)
+#include <pthread.h>
+static pthread_mutex_t sp_cloexec_mu = PTHREAD_MUTEX_INITIALIZER;
+void sp_fork_exec_lock(void) { pthread_mutex_lock(&sp_cloexec_mu); }
+void sp_fork_exec_unlock(void) { pthread_mutex_unlock(&sp_cloexec_mu); }
+#else
+void sp_fork_exec_lock(void) {}
+void sp_fork_exec_unlock(void) {}
+#endif
+
 /* Returns 0 on success, -1 on error with errno set. Both ends are
-   close-on-exec, as CRuby's are. Without pipe2 the flag is set after pipe(),
-   so a spawn on another worker in between can still inherit them. */
+   close-on-exec, as CRuby's are; without pipe2, under sp_fork_exec_lock. */
 int sp_io_make_pipe(int fds[2]) {
 #if defined(__linux__)
   return pipe2(fds, O_CLOEXEC);
 #elif defined(_WIN32)
   return pipe(fds);
 #else
-  if (pipe(fds) != 0) return -1;
+  sp_fork_exec_lock();
+  if (pipe(fds) != 0) { sp_fork_exec_unlock(); return -1; }
   if (sp_io_set_cloexec(fds[0]) != 0 || sp_io_set_cloexec(fds[1]) != 0) {
     int e = errno;
     close(fds[0]);
     close(fds[1]);
+    sp_fork_exec_unlock();
     errno = e;
     return -1;
   }
+  sp_fork_exec_unlock();
   return 0;
 #endif
 }

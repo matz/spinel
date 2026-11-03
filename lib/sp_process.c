@@ -501,6 +501,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
      successful execvp closes the write end and the parent sees a
      zero-byte read and no raise. */
   extern int sp_io_make_pipe(int fds[2]);
+  extern void sp_fork_exec_lock(void), sp_fork_exec_unlock(void), sp_io_wait_fd_readable(int fd);
   int err_pipe[2];
   if (sp_io_make_pipe(err_pipe) < 0) {
     free(argv);
@@ -511,8 +512,9 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   /* what the parent has buffered for its streams is written before the
      child can write to the same descriptors, as CRuby flushes them */
   fflush(NULL);
+  sp_fork_exec_lock();
   pid_t pid = fork();
-  if (pid != 0) free(envp);
+  if (pid != 0) { sp_fork_exec_unlock(); free(envp); }
   if (pid < 0) {
     free(argv);
     sp_process_spawn_fail(owned, "SystemCallError", sp_errf_errno("fork failed", errno));
@@ -571,6 +573,8 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   close(err_pipe[1]);
   close_owned(owned);
   int fail[2] = { 0, 0 };
+  /* (parked until the child execs or fails, as sp_system_start's read) */
+  sp_io_wait_fd_readable(err_pipe[0]);
   ssize_t got = SP_SIG_BLOCKING(read(err_pipe[0], fail, sizeof fail));
   close(err_pipe[0]);
   free(argv);

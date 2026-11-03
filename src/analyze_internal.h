@@ -1005,6 +1005,7 @@ int desugar_ffi_library_functions(Compiler *c);
 int desugar_native_func_defs(Compiler *c);
 int comp_ffi_library_module(const NodeTable *nt, const char *mn);
 int rewrite_ffi_dynamic_calls(Compiler *c);
+int desugar_builtin_reopen_const_reads(Compiler *c);
 int desugar_builtin_reopen_self_calls(Compiler *c);
 int desugar_builtin_reopen_methods(Compiler *c);
 int desugar_object_method_builtin_overrides(Compiler *c);

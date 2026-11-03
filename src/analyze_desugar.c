@@ -14927,7 +14927,7 @@ static int enum_is_a_chain(Compiler *c, const char *rn, const int *defcls, const
    or a constant reads as it stands, and any other (a reader,
    `def first(*args) = items.first(*args)`) is held in a temporary first, so
    it runs once. A builtin taking any number of arguments keeps its splat. */
-#define SPL_MAX_ARITY 4
+#define SPL_MAX_ARITY 7
 static int spl_pure_recv(const NodeTable *nt, int r) {
   NodeKind k = nt_kind(nt, r);
   return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || k == NK_SelfNode ||
@@ -15008,8 +15008,16 @@ int desugar_builtin_splat_forward(Compiler *c) {
     if (sv < 0 || nt_kind(nt, sv) != NK_LocalVariableReadNode) continue;
     const char *rest = nt_str(nt, sv, "name");
     Scope *ms = comp_scope_of(c, id);
-    if (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
-        !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest)) continue;
+    /* Time.new takes the fields one by one: a splatted Array local
+       (`Time.new(*fields)`) was read whole as the year. (Time's other
+       makers, at, utc, local, gm and mktime, read a splat as it is.) */
+    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
+               sp_streq(nt_str(nt, recv, "name"), "Time") &&
+               /* (a reopen of Time leaves Time.new alone unless it defines its own) */
+               (comp_class_index(c, "Time") < 0 || comp_cmethod_in_chain(c, comp_class_index(c, "Time"), "new", NULL) < 0) &&
+               sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
+    if (!tnew && (!rest || !ms || ms->rest_idx < 0 || ms->rest_idx >= ms->nparams || !ms->pnames ||
+        !ms->pnames[ms->rest_idx] || !sp_streq(ms->pnames[ms->rest_idx], rest))) continue;
     /* the block: none, the method's own (`&block`, or the yielding literal
        a forward of it became), or the caller's own literal */
     int blk = nt_ref(nt, id, "block"), own = 0;
@@ -15021,17 +15029,19 @@ int desugar_builtin_splat_forward(Compiler *c) {
         own = 1;
       } else own = spl_has_yield(nt, blk);
     }
-    TyKind rt = infer_type(c, recv);
+    TyKind rt = tnew ? TY_CLASS : infer_type(c, recv);
     /* (a Time subclass instance's builtin call, its `super` into Time
        included, is Time's) */
-    const char *cls = ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
+    const char *cls = tnew ? NULL : ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                     : rt == TY_STRING ? "String" : rt == TY_TIME ? "Time"
                     : ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt)) &&
                       nt_int(nt, id, "builtin_only", 0) ? "Time" : NULL;
-    if (!cls) continue;
-    /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself) */
+    if (!cls && !tnew) continue;
+    /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself); Time.new's,
+       which it does not list, as CRuby's message gives them */
     int lo = 0, hi = 0; const char *lo_exp = NULL, *hi_exp = NULL;
-    if (!builtin_class_arity_spec(cls, nm, &lo, &hi, &lo_exp, &hi_exp) || hi > SPL_MAX_ARITY || !hi_exp) continue;
+    if (tnew) { lo = 0; hi = 7; hi_exp = "0..7"; }
+    else if (!builtin_class_arity_spec(cls, nm, &lo, &hi, &lo_exp, &hi_exp) || hi > SPL_MAX_ARITY || !hi_exp) continue;
     int base = nt->count;
     /* the receiver held once, where reading it again could answer another */
     int hold = -1;

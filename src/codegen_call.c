@@ -11172,6 +11172,16 @@ int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf *b) {
     buf_puts(b, ")");
     return 1;
   }
+  /* ...and a boxed one that is a String when it runs (`Time.new(*fields)`
+     with one field, Time.new_splat's arm): parsed as the string form, any
+     other value read as the year */
+  if (is_new && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode && repr_of(c, argv[0]).kind == RK_BOXED) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv);
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, "); _t%d.tag == SP_TAG_STR ? sp_time_parse(_t%d.v.s) : sp_time_new(sp_poly_time_field(_t%d, 0), 1, 1, 0, 0, 0); })", tv, tv, tv);
+    return 1;
+  }
   /* a splat leaves the count, and so the form, to run time */
   if (!is_new && nt_argv_has_splat(nt, argv, argc) && !nt_argv_has_keywords(nt, argv, argc)) {
     int ta = ++g_tmp;

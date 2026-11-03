@@ -22,3 +22,6 @@ true
 [:range, 1]
 [:obj, 1]
 [:obj, 1]
+[:hash, 2]
+[:hash, 3]
+[:obj, 1]

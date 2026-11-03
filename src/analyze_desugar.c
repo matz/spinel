@@ -22959,9 +22959,10 @@ static int mo_dispatch_arm(const char *g) {
   return sp_streq(g, "Hash") || sp_streq(g, "Array") || sp_streq(g, "TrueClass") || sp_streq(g, "FalseClass");
 }
 /* Does a body of class cn change the visibility of method mname
-   (`private :m`, `protected def m`, a bare `private` section)? The arm in
-   the dispatch does not keep a builtin class's own visibility, and the
-   fold keeps it, so such an override is still folded. */
+   (`private :m`, `protected def m`, a bare `private` section before a
+   def of mname in the same body)? The arm in the dispatch does not keep
+   a builtin class's own visibility, and the fold keeps it, so such an
+   override is still folded. */
 static int mo_vis_changed(const NodeTable *nt, int n0, const char *cn, const char *mname) {
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
@@ -22969,12 +22970,15 @@ static int mo_vis_changed(const NodeTable *nt, int n0, const char *cn, const cha
     if (!dn || !sp_streq(dn, cn)) continue;
     int b = class_def_body(nt, m), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    int section = 0;   /* (a bare `private` or `protected` seen in this body) */
     for (int k = 0; k < bn; k++) {
+      if (section && nt_kind(nt, bs[k]) == NK_DefNode && nt_ref(nt, bs[k], "receiver") < 0 &&
+          nt_str(nt, bs[k], "name") && sp_streq(nt_str(nt, bs[k], "name"), mname)) return 1;
       const char *vn = nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 ? nt_str(nt, bs[k], "name") : NULL;
       if (!vn || !visibility_of_name(vn)) continue;
       int an = nt_ref(nt, bs[k], "arguments"), ac = 0;
       const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-      if (!ac) return 1;
+      if (!ac) { section = !sp_streq(vn, "public"); continue; }
       for (int q = 0; q < ac; q++) {
         NodeKind ak = nt_kind(nt, av[q]);
         const char *v = ak == NK_SymbolNode || ak == NK_StringNode ? nt_str(nt, av[q], ak == NK_SymbolNode ? "value" : "content")

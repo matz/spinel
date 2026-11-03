@@ -28,3 +28,14 @@ class Time; def tag(x = 1) = [:time, x]; end
 class Range; def tag(x = 1) = [:range, x]; end
 p Time.at(0).respond_to?(:tag), (1..2).respond_to?(:tag)
 [Time.at(0), (1..2), 5, "t"].each { |v| p v.tag }
+
+# A bare `private` after the override does not change it.
+class Hash
+  def late(a = 1) = [:hash, a]
+  private
+  def helper = 1
+end
+p({}.late(2))
+class Object; def late(a = 1) = [:obj, a]; end
+p({}.late(3))
+p 3.late

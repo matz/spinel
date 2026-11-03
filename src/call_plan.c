@@ -979,6 +979,7 @@ static int ct_pin_of(const Compiler *c, int id) {
   return -1;
 }
 int cplan_pinned_builtin(const Compiler *c, int id) { return ct_pin_of(c, id) == CT_PIN_BUILTIN; }
+int cplan_pinned(const Compiler *c, int id) { return ct_pin_of(c, id) != -1; }
 /* Is version vi a top-level method (Object's) that a call asked on a
    class's chain reaches past the class's own versions? The class's table
    holds no such method: the call's top-level ask (CT_TOP) binds it. */

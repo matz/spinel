@@ -5151,9 +5151,13 @@ void ver_cells_write(Compiler *c) {
   ElabVersion vs[VER_MAX_ARMS];
   VerWrite *w = NULL;
   int nw = 0, top = prog_root_stmts(c, 0), ntop = 0, nh = 0;
-  const int *par = c->nver_entries ? comp_parent_map(c) : NULL, *first = top >= 0 ? nt_arr(nt, top, "body", &ntop) : NULL;
+  const int *first = top >= 0 ? nt_arr(nt, top, "body", &ntop) : NULL;
+  /* (the parents the program's tree reaches: a class_eval block spliced
+     into its class body still names its statements, and the statement a
+     write goes beside is the class body's) */
+  int *par = c->nver_entries ? du_parent_map(nt) : NULL;
   unsigned char *seen = c->nver_entries ? calloc((size_t)nt->count + 1, 1) : NULL;
-  if (c->nver_entries && !seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (c->nver_entries && (!seen || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int pass = 0; pass < 2; pass++)   /* (the entries written before first: a cell is written once) */
   for (int i = 0; i < c->nver_entries; i++) {
     struct VerEntry *e = &c->ver_entries[i];
@@ -5183,7 +5187,7 @@ void ver_cells_write(Compiler *c) {
       if (vs[j].hist >= nh) nh = vs[j].hist + 1;
     }
   }
-  free(seen);
+  free(seen); free(par);
   /* the zero writes: one per cell, at its first write, none where the first statement writes it */
   unsigned char *hz = calloc((size_t)nh + 1, 1);
   int at0 = ntop ? first[0] : -1, nz = 0;

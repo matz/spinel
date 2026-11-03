@@ -22,3 +22,7 @@ class Kid < Base
 end
 def via(x) = {7 => 1, "a" => :b}.merge(x) { |k, o, n| [o, n] }
 p via(Kid.new)
+# a slot that may hold nil raises, as CRuby's merge(nil) does
+y = F.new
+y = nil if ARGV.size == 0
+p(({7 => 1, "a" => :b}.merge(y) { |k, o, n| [o, n] } rescue $!.message))

@@ -7733,7 +7733,8 @@ else {
           snprintf(ob, sizeof ob, "_t%d", tob); snprintf(oh, sizeof oh, "_t%d", toh);
           buf_puts(b, " "); emit_ctype(c, oat, b); buf_printf(b, " _t%d = ", tob);
           emit_expr(c, argv[0], b); buf_puts(b, ";");
-          if (!obv) buf_printf(b, " SP_GC_ROOT(_t%d);", tob);
+          /* an object slot may hold nil, which has no #to_hash */
+          if (!obv) buf_printf(b, " if (!_t%d) sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Hash\"); SP_GC_ROOT(_t%d);", tob, tob);
           buf_printf(b, " %s _t%d = ", c_type_name(oht), toh);
           emit_obj_conv_call(c, odef, "to_hash", obv, ob, b);
           buf_printf(b, "; if (!_t%d) { const char *_cn%d = sp_poly_class_name(", toh, toh); emit_boxed_text(c, oat, ob, b);

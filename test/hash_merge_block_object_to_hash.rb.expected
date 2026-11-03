@@ -7,3 +7,4 @@
 {7 => ["x", 8], 8 => 2}
 {7 => [1.5, 8]}
 {7 => [1, 5], "a" => :b}
+"no implicit conversion of nil into Hash"

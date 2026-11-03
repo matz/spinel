@@ -17823,9 +17823,14 @@ int mark_sym_proc_blocks_at(Compiler *c, LowerCtx *lc, int id) {
   return 0;   /* a mark: nothing is rewritten */
 }
 
-/* The method a still one-parameter `&:m` block calls, or NULL. */
+/* The method a still one-parameter `&:m` block calls, or NULL. A block
+   desugar_builtin_iter_block_shapes lowered is none: its one parameter is
+   the lowering's own, binding the values its prologue spreads (the
+   `|*__spr_N|` sym_proc_rest_view made is lowered so, and viewing it again
+   left the prologue's write of __spr_N behind, a local of the method's
+   frame the block then read through a cell its proc never had). */
 static const char *sym_proc_block_name(const NodeTable *nt, int blk) {
-  const char *mn = nt_str(nt, blk, "sym_proc");
+  const char *mn = nt_int(nt, blk, "bs_lowered", 0) ? NULL : nt_str(nt, blk, "sym_proc");
   int bp = mn ? nt_ref(nt, blk, "parameters") : -1;
   int pn = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
   int P = 0;

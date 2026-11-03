@@ -21003,6 +21003,16 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       }
       return 1;
     }
+    /* a value that never returns (`X = raise ...`, a call to a method that
+       only raises) raises before the write: it runs for that, and the
+       constant's slot (the nil carrier, emit_globals) is left unset */
+    if (!isg && lv->type == TY_VOID && v >= 0) {
+      emit_indent(b, indent);
+      buf_puts(b, "(void)(");
+      emit_expr(c, v, b);
+      buf_puts(b, ");\n");
+      return 1;
+    }
     if (!isg && lv->init_guarded) {
       /* flag the const as in-progress while its Class.new runs, so a
          self-referential read inside initialize raises NameError */

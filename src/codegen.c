@@ -22177,8 +22177,10 @@ char *codegen_program(const NodeTable *nt) {
     /* `NAME = nil` still needs a slot: the assignment and every read reference
        cst_NAME, so skipping the declaration left an undeclared identifier
        (#3361). An int carrier is enough -- the reads fold to nil on their own,
-       they just have to have something to evaluate. */
-    if (lv->type == TY_NIL) {
+       they just have to have something to evaluate. So does a constant
+       whose value never returns (`X = raise ...`): its write raises before
+       it stores, but the reads still name the slot. */
+    if (lv->type == TY_NIL || lv->type == TY_VOID) {
       buf_printf(&b, "static sp_int cst_%s = 0;\n", lv->name);
       if (lv->init_guarded) buf_printf(&b, "static int sp_init_in_progress_%s;\n", lv->name);
       if (const_has_flag(lv)) buf_printf(&b, "static int cst_%s__set;\n", lv->name);

@@ -870,6 +870,11 @@ static inline sp_RbVal sp_bi_box_mstr(char *v) { return sp_box_str(v); }
    lost 40% of its frame rate to a warm one). */
 SP_NORETURN SP_COLD void sp_nil_recv(const char *meth);          /* NoMethodError "undefined method 'meth' for nil" */
 SP_NORETURN SP_COLD void sp_raise_nil_to_int(int of_wording);    /* TypeError "no implicit conversion from nil to integer" (1: "of nil into Integer") */
+/* a boxed Integer argument converted as compiled code converts one
+   (sp_poly_arg_int_chk: a Float truncated, #to_int, Rational, Complex, a
+   Bignum's RangeError, CRuby's TypeErrors), for a runtime unit or a
+   package that cannot reach spinel_rt.h (lib/sp_poly_cold.c) */
+sp_int sp_poly_arg_int(sp_RbVal v);
 SP_NORETURN SP_COLD void sp_raise_nil_opnd(const char *cls);     /* TypeError "nil can't be coerced into <cls>" */
 SP_NORETURN SP_COLD void sp_raise_nil_cmp(int left_nil, const char *op, const char *cls);  /* ArgumentError "comparison of <cls> with nil failed" (left_nil: NoMethodError) */
 SP_NORETURN SP_COLD void sp_raise_float_cmp(sp_float with);          /* ArgumentError "comparison of Float with <with> failed" (a NaN) */

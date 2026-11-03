@@ -314,21 +314,25 @@ static sp_RbVal sio_arg_value(sp_RbVal v) {
   return v;
 }
 
+/* putc(Integer), the [:int] binding: its low byte, but one past a C int is
+   CRuby's RangeError (NUM2CHR), raised after the stream's own write check */
+sp_int sp_StringIO_putc_i(sp_StringIO *s, sp_int ch) {
+  if (ch > INT32_MAX || ch < INT32_MIN) {
+    sio_check_write(s);
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too %s to convert to 'int'", (long long)ch, ch > 0 ? "big" : "small"));
+  }
+  return sp_StringIO_putc(s, ch);
+}
 /* putc(any): an argument only the run time knows -- a boxed value, nil, a
    Float. The stream's write check comes first, as CRuby's putc makes it; a
    String then writes its first character, and anything else converts as an
-   Integer argument does (NUM2INT's messages). It answers its argument. */
+   Integer argument does (sp_poly_arg_int: #to_int, Rational, Complex, and
+   CRuby's errors). It answers its argument, not what it wrote. */
 sp_RbVal sp_StringIO_putc_v(sp_StringIO *s, sp_RbVal v) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
   sio_check_write(s);
   sp_RbVal a = sio_arg_value(v);
   if (a.tag == SP_TAG_STR) { sp_StringIO_putc_s(s, a.v.s); return v; }
-  sp_int ch = 0;
-  if (a.tag == SP_TAG_INT) ch = a.v.i;
-  else if (a.tag == SP_TAG_FLT) ch = sp_float_arg_i(a.v.f);
-  else if (a.tag == SP_TAG_NIL) sp_raise_nil_to_int(0);
-  else if (a.tag == SP_TAG_BIGINT) sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
-  else sio_type_error(a, "Integer");
-  sp_StringIO_putc(s, ch);
+  sp_StringIO_putc_i(s, sp_poly_arg_int(a));
   return v;
 }
 

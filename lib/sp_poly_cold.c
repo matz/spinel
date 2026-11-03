@@ -22,6 +22,8 @@
 #define sp_sym_intern_n sp_poly_cold_sym_intern_n
 #include "spinel_rt.h"
 
+sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
+
 #ifdef SP_CEXT
 sp_RbVal sp_cext_object_class(sp_RbVal object) {
   return sp_box_class(sp_poly_class_val(object));

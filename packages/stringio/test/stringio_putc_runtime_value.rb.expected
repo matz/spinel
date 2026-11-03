@@ -19,5 +19,11 @@
 [:literal_nil, TypeError, "no implicit conversion from nil to integer"]
 [:float, :ok, 67.7]
 [255, 65, 65, 120, 66, 67]
+-- #to_int, Rational and Complex convert; putc answers its argument
+[:to_int, :ok, N]
+[:rational, :ok, Rational]
+[:complex, :ok, Complex]
+[:typed_to_int, :ok, N]
+"CDEC"
 -- typed arguments as before
 "BA"

@@ -29,6 +29,18 @@ t(:literal_nil) { io.putc(nil) }
 t(:float) { io.putc(67.7) }
 p io.string.bytes
 
+puts "-- #to_int, Rational and Complex convert; putc answers its argument"
+class N
+  def to_int = 67
+end
+io3 = StringIO.new
+conv = [1, N.new, Rational(68, 1), Complex(69, 0)]
+t(:to_int) { io3.putc(conv[ARGV.size + 1]).class }
+t(:rational) { io3.putc(conv[ARGV.size + 2]).class }
+t(:complex) { io3.putc(conv[ARGV.size + 3]).class }
+t(:typed_to_int) { io3.putc(N.new).class }
+p io3.string
+
 puts "-- typed arguments as before"
 io2 = StringIO.new
 io2.putc(66)

@@ -52,7 +52,7 @@ module StringIOPackage
   native_method :print,    [:any, :any], :nil, "sp_StringIO_print_v2"
   native_method :print,    [:any, :any, :any], :nil, "sp_StringIO_print_v3"
   native_method :print,    [:rest], :nil, "sp_StringIO_print_va"
-  native_method :putc,     [:int], :int, "sp_StringIO_putc"
+  native_method :putc,     [:int], :int, "sp_StringIO_putc_i"
   native_method :putc,     [:string], :string, "sp_StringIO_putc_s"
   native_method :putc,     [:any], :any, "sp_StringIO_putc_v"
   native_method :flush,    [], :self,    "sp_StringIO_flush"

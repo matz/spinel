@@ -291,6 +291,14 @@ module Enumerable
         v = yield x
         if v.is_a?(Array)
           out.concat(v)
+        elsif v.respond_to?(:to_ary)
+          # CRuby splices whatever answers to_ary (rb_check_array_type), an ActiveRecord relation among them.
+          a = v.to_ary
+          if a.is_a?(Array)
+            out.concat(a)
+          else
+            out << v
+          end
         else
           out << v
         end

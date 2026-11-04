@@ -9695,7 +9695,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
       if (dm >= 0) {
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_hash(rrt) ? rrt : TY_SYM_POLY_HASH;
-        const char *dcn = c->classes[ddef].name;
+        const char *dcn = c->classes[ddef].c_name;
         arm_t = ++g_tmp;
         emit_indent(b, indent + 1); emit_ctype(c, drt, b);
         Buf kab2; memset(&kab2, 0, sizeof kab2);
@@ -15148,12 +15148,12 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       buf_printf(b, "sp_Exception *_ce_%d = (sp_exc_obj[sp_exc_top] && sp_exc_cls_matches(_rcls_%d, \"%s\"))"
                     " ? (sp_Exception *)sp_exc_obj[sp_exc_top]"
                     " : (sp_Exception *)sp_exc_new_sub_sized(sizeof(sp_%s), _rcls_%d, _rmsg_%d);\n",
-                 rc, rc, qn ? qn : xn, xn, rc, rc);
+                 rc, rc, qn ? qn : xn, c->classes[spec_cid].c_name, rc, rc);
     }
     else
       buf_printf(b, "sp_Exception *_ce_%d = sp_exc_obj[sp_exc_top] ? (sp_Exception *)sp_exc_obj[sp_exc_top]"
                     " : (sp_Exception *)sp_exc_new_sub_sized(sizeof(sp_%s), _rcls_%d, _rmsg_%d);\n",
-                 rc, xn, rc, rc);
+                 rc, c->classes[spec_cid].c_name, rc, rc);
   }
   else
     buf_printf(b, "sp_Exception *_ce_%d = sp_exc_obj[sp_exc_top] ? (sp_Exception *)sp_exc_obj[sp_exc_top]"
@@ -20955,7 +20955,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         int ivs = ivt == TY_STRING || (ivt == TY_STRBUF);
         if (ivs && !(op && sp_streq(op, "+"))) continue;
         if (ivt == TY_POLY && !cpf && !bitop) continue;
-        const char *cn = c->classes[pdcls].name;
+        const char *cn = c->classes[pdcls].c_name;
         any = 1;
         emit_indent(b, indent + 1);
         buf_printf(b, "case %d: { sp_%s *_o = (sp_%s *)_t%d.v.p; ", k, cn, cn, trecv);

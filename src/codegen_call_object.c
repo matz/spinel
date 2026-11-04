@@ -263,7 +263,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       }
       if (mi_b >= 0) {
         int ts = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp;
-        const char *cname = c->classes[defcls_b].name;
+        const char *cname = c->classes[defcls_b].c_name;
         /* the `<=>` param may have widened to poly (sp_obj_clamp and the
            checked-comparison helpers call it through the boxed ABI): match
            the signature by boxing the bound temps when it did */

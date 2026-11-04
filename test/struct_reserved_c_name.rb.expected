@@ -1,0 +1,36 @@
+#<struct Mutex a=1, b=2>
+#<struct Mutex a=1, b=2>
+[1, 2]
+{a: 1, b: 2}
+#<struct SumState a=3, b=4>
+#<struct SumState a=3, b=4>
+[3, 4]
+{a: 3, b: 4}
+#<struct EqlSet a=5>
+#<struct EqlSet a=5>
+[5]
+{a: 5}
+#<struct StringLiteral s="lit">
+#<struct StringLiteral s="lit">
+["lit"]
+{s: "lit"}
+#<struct OpenStruct a=6, b=7>
+#<struct OpenStruct a=6, b=7>
+[6, 7]
+{a: 6, b: 7}
+#<struct App::Queue a=8, b=9>
+#<struct App::Queue a=8, b=9>
+[8, 9]
+{a: 8, b: 9}
+#<struct App::Monitor a=10>
+#<struct App::Monitor a=10>
+[10]
+{a: 10}
+#<struct Mutex a=1, b=2>
+"#<struct Mutex a=1, b=2>"
+[1, 2]
+3
+true
+true
+custom
+custom

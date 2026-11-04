@@ -11435,7 +11435,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
   if (is_to_a && argc == 0) {
     int t = ++g_tmp; int rt2 = ++g_tmp;
     Buf rb = expr_buf(c, recv);
-    buf_printf(b, "({ sp_%s *_t%d = %s;", sc->name, t, rb.p ? rb.p : "");
+    buf_printf(b, "({ sp_%s *_t%d = %s;", sc->c_name, t, rb.p ? rb.p : "");
     emit_struct_recv_root(c, recv, t, b);
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", rt2, rt2);
     for (int i = 0; i < sc->nmembers; i++) {
@@ -11456,7 +11456,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     const char *hn = ty_hash_cname(hr.as_ty);
     if (!hn) hn = "SymPoly";
     buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);",
-               sc->name, t, rb.p ? rb.p : "", t, hn, rh, hn, rh);
+               sc->c_name, t, rb.p ? rb.p : "", t, hn, rh, hn, rh);
     free(rb.p);
     if (block >= 0) {
       /* to_h { |k, v| [nk, nv] }: per member, bind k/v then set hash[nk] = nv */

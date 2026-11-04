@@ -610,8 +610,11 @@ Workflow:
 
 - Open a focused PR. Small and contained merges faster than sweeping
   refactors.
-- Make `make gate` pass before pushing (`make test`, `make bench` and
-  `make optcarrot`, the checks CI runs).
+- Run `make gate` on your branch merged with the current `master`, and
+  paste its `Tests:`, `scale-test` and `gate:` lines into the PR. The gate
+  runs the test corpus, the benchmarks, optcarrot, rubyboy, the ruby/spec
+  retention gate, scale-test, spin-check and the other property tests; see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 - Add a regression test under `test/` for any fix or new feature; the
   harness compares Spinel's output against CRuby on the same source,
   so the test usually doesn't need to assert anything beyond `puts`.

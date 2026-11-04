@@ -12920,6 +12920,27 @@ int arm_arg_param(Compiler *c, Scope *m) {
   return -1;
 }
 
+/* Do two or more defaults an arm fills include one that runs code? A
+   keyword's default counts as a positional one does: the arm passes no
+   keyword hash, so every keyword with a default is filled. The defaults are
+   spelled in the call, or hoisted into the arm's prelude when they build a
+   value (emit_arg_rooted), so the hoist reorders them: a default that logs
+   would run after one that allocates, and one that reads what another
+   changes would see it changed (`def <=>(o, a = $v, b = bump)`). Such an
+   arm binds every value in order to a rooted local, as an argument list
+   does once two of its arguments can observe each other
+   (emit_args_filled_argv, n_se). */
+static int arm_defaults_ordered(Compiler *c, Scope *m, const ArgLayout *L) {
+  int filled = 0, effect = 0;
+  for (int i = 0; i < m->nparams; i++) {
+    int kwd = L->from[i] == ARG_BY_NAME && i != m->kwrest_idx && m->pdefault && m->pdefault[i] >= 0;
+    if (L->from[i] != ARG_DEFAULT && !kwd) continue;
+    filled++;
+    if (subtree_has_side_effect(c, m->pdefault[i])) effect = 1;
+  }
+  return filled >= 2 && effect;
+}
+
 /* See codegen_internal.h. */
 int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *const *argv, int argc,
                        Buf *pre, Buf *out, int *builds, char *raise, size_t rn) {
@@ -12947,7 +12968,7 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
     snprintf(what, sizeof what, "a dispatch arm cannot bind its arguments to `%s`", m->name ? m->name : "?");
     unsupported(c, m->def_node, what);
   }
-  int pd_uid = default_refs_earlier_param(c, m) ? ++g_tmp : 0, pd_base = g_nren;
+  int pd_uid = default_refs_earlier_param(c, m) || arm_defaults_ordered(c, m, &L) ? ++g_tmp : 0, pd_base = g_nren;
   Buf *sv_pre = g_pre; int sv_ind = g_indent;
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
@@ -12966,6 +12987,12 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
     if (L.from[i] != ARG_NODE) built = 1;
     if (L.from[i] == ARG_REST) emit_ctor_arm_param(c, m, i, &L, atmp, pre, &vb);
     else if (L.from[i] == ARG_NODE) buf_puts(&vb, argv[L.arg[i]]);
+    /* a default that builds a value is held in a temp rooted in `pre`, as a
+       direct call holds it (emit_arg_rooted): spelled inside the call, the
+       value is held by nothing while a later default allocates, and C runs
+       the arguments in no fixed order (`def <=>(o, x = {}, y = {})`). With
+       pd_uid, ctor_arm_arg binds every value to a rooted local already. */
+    else if (!pd_uid) emit_arg_rooted(c, m, i, -1, 0, &vb);
     else emit_arg_or_default(c, m, i, -1, &vb);
     buf_puts(out, ", ");
     ctor_arm_arg(c, m, i, vb.p ? vb.p : "", pd_uid, pre, out);

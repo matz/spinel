@@ -50984,13 +50984,6 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_inherited_ivars", infer_inherited_ivars(c));
     ch |= AN_PASS("infer_return_types", infer_return_types(c));
     ch |= AN_PASS("backprop_hash_return_types", backprop_hash_return_types(c));
-    /* Visiting the deferred write is not enough: its getter return and a
-       caller's local may need further rounds to observe the widened field.
-       Only programs that deferred a getter write wait for a settled round. */
-    if (g_infer_getter_write_pending && !g_infer_optimistic && !ch) {
-      g_infer_getter_write_pending = 0;
-      ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));
-    }
     if (!ch) {
       /* Converged with the ambiguous guesses held at bottom. Clear the flag
          and keep going: a slot whose evidence never arrived is genuinely
@@ -51013,6 +51006,14 @@ static void an_phase_infer_fixpoint(Compiler *c) {
         g_final_bind_pass = 1;
         ch = infer_param_types(c);
         g_final_bind_pass = 0;
+      }
+      /* Visiting the deferred write is not enough: its getter return, a
+         caller's local and an empty-array argument the backstop types may
+         need further rounds. Only programs that deferred a getter write
+         wait for this settled round. */
+      if (!ch && g_infer_getter_write_pending) {
+        g_infer_getter_write_pending = 0;
+        ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));
       }
       if (!ch && !AN_STEP("desugar_mutator_recv_rebind", desugar_mutator_recv_rebind(c))) break;
     }

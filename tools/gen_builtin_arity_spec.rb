@@ -148,36 +148,42 @@ PROBE_ANYWAY = { "StringIO" => %w[gets readline], "Mutex" => %w[sleep] }
 # Class/module methods: the constructors and module functions whose emitters
 # index argv[] unconditionally (File.open with no arguments crashed the
 # compiler), the surface of the constants a program names bare, and the
-# Kernel functions a bare call reaches. Every call is made with nil
+# Kernel functions a bare call reaches. Every probed call is made with nil
 # arguments, which Process.spawn, waitpid2 and the socket constructors
-# reject before acting; still, never probe anything that could act on the
-# probing process itself with any argument (fork / exec / select / sleep).
+# reject before acting. A name that could act on the probing process (fork,
+# exec, sleep, Thread.stop) stays in this list for its place in the table but
+# is not probed: it goes through CLASS_UNCOUNTED, CLASS_INTROSPECTED or
+# CLASS_BELOW_MIN below, and is never called with a count it accepts. (IO.select
+# is probed: it only waits, and never gets an IO to wait on.)
 # GC.disable is undone by the GC.enable probed right after it.
 CLASS_TARGETS = {
-  "File"    => %w[open new read write binread binwrite readlines foreach delete unlink
+  "File"    => %w[open new read write binread binwrite readlines delete unlink
                   rename exist? size basename dirname extname join split expand_path
                   chmod utime umask truncate symlink link readlink realpath stat lstat
                   ftype mtime atime ctime empty? zero? identical? absolute_path
                   file? directory? readable? writable? executable? symlink? size?
-                  fnmatch fnmatch? owned? world_readable? world_writable? path
+                  fnmatch fnmatch? owned? grpowned? setuid? setgid? sticky? pipe?
+                  socket? blockdev? chardev? world_readable? world_writable? path
                   absolute_path? birthtime chown lchmod lchown mkfifo],
   # IO.select probes slowly (a nil-args call waits for the 2 s timeout) but
   # the row it yields is real: a missing-argument call is CRuby's
   # ArgumentError, and the probe never passes an actual IO to wait on.
+  # (foreach is listed here: the table's row for it is IO's, where #10119 put it)
   "IO"      => %w[for_fd sysopen new open read write binread binwrite readlines pipe
-                  select copy_stream],
+                  select copy_stream foreach try_convert],
   "Dir"     => %w[new open mkdir rmdir delete unlink entries children glob foreach
                   exist? empty? home pwd getwd],
   "Time"    => %w[at local mktime utc gm now],
-  "Hash"    => %w[new],
-  "Array"   => %w[new],
-  "String"  => %w[new],
-  "Integer" => %w[sqrt],
+  "Hash"    => %w[new try_convert []],
+  "Array"   => %w[new try_convert []],
+  "String"  => %w[new try_convert],
+  "Integer" => %w[sqrt try_convert],
   "Math"    => %w[sqrt cbrt sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh
                   atanh log log2 log10 exp hypot ldexp frexp erf erfc gamma lgamma],
   "Process" => %w[getpriority setpriority getsid kill clock_gettime clock_getres pid ppid
-                  uid gid euid egid setproctitle times spawn waitpid2 wait2 wait waitpid],
-  "Regexp"  => %w[new escape quote union],
+                  uid gid euid egid setproctitle times spawn waitpid2 wait2 wait waitpid
+                  exec last_status],
+  "Regexp"  => %w[new escape quote try_convert last_match union],
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
@@ -187,8 +193,9 @@ CLASS_TARGETS = {
   # Data.define answered is keyed StructClass / DataClass
   "GC"      => %w[start stat compact count disable enable stress latest_gc_info],
   "Fiber"   => %w[current yield],
-  "Thread"  => %w[current main list pass new start abort_on_exception
-                  report_on_exception pending_interrupt? handle_interrupt],
+  "Thread"  => %w[current main list pass new stop start fork abort_on_exception
+                  report_on_exception report_on_exception= pending_interrupt?
+                  handle_interrupt],
   "StructClass" => %w[members keyword_init?],
   "DataClass"   => %w[members],
   "Marshal" => %w[dump load],
@@ -214,6 +221,41 @@ CLASS_TARGETS = {
   "StringScanner" => %w[new],
   "Pathname"      => %w[new glob getwd pwd],
 }
+
+# CLASS_TARGETS names that are not probed the usual way: a call could act on
+# the probing process, or the probe would find nothing to enforce. They keep
+# their place in CLASS_TARGETS (the rows follow its order) and take their row
+# from Method#arity and Method#parameters instead (CLASS_BELOW_MIN also makes
+# two harmless calls, below).
+#
+# CLASS_UNCOUNTED rows are the never-firing sentinel quartets, like
+# FORWARDING's: the method takes any number of arguments, so there is no
+# count to guard, but the row tells the guard the class owns the name
+# (singleton_methods(false), respond_to?). Every C method of arity -1
+# reports [[:rest]], so that check alone proves little: these three are
+# harmless to call, so the run also probes them and aborts unless the probe
+# finds no count to enforce, which catches a future check in them.
+#   Hash.[], Array.[], Regexp.union  variadic constructors, nothing to enforce
+CLASS_UNCOUNTED = { "Hash" => %w[[]], "Array" => %w[[]], "Regexp" => %w[union] }
+# CLASS_UNCOUNTED_UNCALLED rows are the same, for names that spawn a thread
+# and so are not called at all: the [[:rest]] parameters check is all there
+# is for them.
+#   Thread.start, Thread.fork
+CLASS_UNCOUNTED_UNCALLED = { "Thread" => %w[start fork] }
+# CLASS_INTROSPECTED rows are read off Method#parameters, which must be
+# required positionals only (the accepted count is then exactly their number
+# and CRuby words both sides as that number).
+#   Thread.stop                      halts the probing thread
+#   Thread.report_on_exception=      changes the process's thread reporting
+CLASS_INTROSPECTED = { "Thread" => %w[stop report_on_exception=] }
+# CLASS_BELOW_MIN entries are safe to call only with fewer arguments than
+# their minimum, because CRuby checks the count before acting: the ArgumentError
+# is raised before anything happens. Only count 0 is ever called; its message
+# names the minimum, and the maximum comes from Method#parameters, which must
+# be a lone *rest (unbounded). An accepted count is never called.
+#   Process.exec                     replaces the probing process once it
+#                                    accepts its arguments
+CLASS_BELOW_MIN = { "Process" => %w[exec] }
 
 # A top-level def is a private method of every object, the probe receivers
 # included, and a builtin's internals may dispatch to it -- an Enumerator's
@@ -279,6 +321,44 @@ def spec_of(recv, m, block: false)
     return [min, -1, lo_exp, nil]
   end
   [min, max, lo_exp, hi_exp]
+end
+
+# The spec of a CLASS_UNCOUNTED* / CLASS_INTROSPECTED method, from the method
+# object alone. Anything but the shapes documented there aborts the run,
+# rather than record a row the method no longer has.
+def declared_spec_of(const, m, kind)
+  params = const.method(m).parameters
+  if kind != :introspected
+    abort "#{const}.#{m} is no longer a lone *rest: #{params.inspect}" unless params == [[:rest]]
+    if kind == :uncounted && full_spec_of(-> { const }, m)
+      abort "#{const}.#{m} now has a count to enforce: probe it as an ordinary target"
+    end
+    return [*NO_SPEC, *NO_SPEC]
+  end
+  abort "#{const}.#{m} is not required positionals only: #{params.inspect}" unless params.all? { |k, _| k == :req }
+  n = params.length
+  [n, n, (n.to_s if n > 0), n.to_s] * 2
+end
+
+# The spec of a CLASS_BELOW_MIN method: the zero-argument call, bare and with
+# a block, must raise the count ArgumentError "expected N+" (N > 0); count 0
+# is the only count called.
+def below_min_spec_of(const, m)
+  params = const.method(m).parameters
+  abort "#{const}.#{m} is no longer a lone *rest: #{params.inspect}" unless params == [[:rest]]
+  sides = [false, true].map do |block|
+    begin
+      block ? const.__send__(m) { "a" } : const.__send__(m)
+    rescue ArgumentError => e
+      msg = e.message[/\Awrong number of arguments \(given 0, expected (\d+\+)\)\z/, 1]
+      abort "#{const}.#{m}: unexpected zero-argument message #{e.message.inspect}" unless msg && msg.to_i > 0
+      next [msg.to_i, -1, msg, nil]
+    rescue Exception => e
+      abort "#{const}.#{m}: the zero-argument call raised #{e.class}, not the count error: #{e.message}"
+    end
+    abort "#{const}.#{m} accepted zero arguments: not a below-minimum probe"
+  end
+  sides.flatten(1)
 end
 
 # The bare spec plus the with-block spec in one 10-column row; a side the
@@ -354,7 +434,12 @@ CLASS_TARGETS.each do |cls, meths|
   const = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }
   thunk = -> { const }
   meths.each do |m|
-    s = full_spec_of(thunk, m)
+    declared = [[CLASS_UNCOUNTED, :uncounted], [CLASS_UNCOUNTED_UNCALLED, :uncounted_uncalled],
+                [CLASS_INTROSPECTED, :introspected]].find { |t, _| t.fetch(cls, []).include?(m) }
+    s = if CLASS_BELOW_MIN.fetch(cls, []).include?(m) then below_min_spec_of(const, m)
+        elsif declared then declared_spec_of(const, m, declared[1])
+        else full_spec_of(thunk, m)
+        end
     cm << [cls, m, *s] if s
   end
 end
@@ -389,7 +474,8 @@ end
 # Retain Method#arity order, including the receiverless Kernel wrappers.
 counts = inst.to_h { |r| [r[0, 2], r[2..]] }
 out = <<~C
-  /* Builtin arity facts generated by tools/gen_builtin_arity_spec.rb from CRuby 4.0.
+  /* Generated by tools/gen_builtin_arity_spec.rb from CRuby 4.0: do not edit;
+     add a new method to the generator's lists and regenerate with --write.
      Method#arity and accepted positional counts are independent facts.
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts. -1 maxima are unbounded; NULL messages

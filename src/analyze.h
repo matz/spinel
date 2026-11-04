@@ -437,13 +437,15 @@ void elab_window_open(Compiler *c, ElabWindow *w);
    elsewhere or the record cannot order, the changes of more than one
    history in a body that runs again, a stretch whose version the record
    cannot tell); -1 when cls's chain moves inside w (a mixin of a module
-   that has or may have the name, code the record cannot follow). */
+   that has or may have the name, code the record cannot follow that may
+   define). */
 enum { ELAB_SPAN_ANY = -2 };
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap);
 /* does cls's chain (its singleton's when sg) hold still for `name` from p
    to the load's end: each mixin of a module that has or may have the name
    into a class on it ran before p for certain, and no code the record
-   cannot follow runs on one of them? Then the chain the record holds at
+   cannot follow that may define (not one that only writes) runs on one of
+   them? Then the chain the record holds at
    the load's end (elab_chain_versions) is the one a call after p meets. */
 int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint p);
 /* the versions of cls's method `name` (singleton when sg) in the histories

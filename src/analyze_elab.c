@@ -1996,20 +1996,37 @@ static int lr_callbacks_define(Compiler *c, int depth) {
   return o;
 }
 
+/* What code the record cannot follow may do, kept in its opaque entry's
+   vis: LR_OPAQUE_WRITES, only write an instance variable, the method it
+   runs being an attr's (LR_READER, LR_WRITER), which defines nothing;
+   LR_OPAQUE_DEFINES, anything (a send, an eval, a mixin a pass made, a
+   program method that may define, one the record cannot pin). Only the
+   defining ones may supply a method (lr_unordered_supply). */
+enum { LR_OPAQUE_WRITES = 1, LR_OPAQUE_DEFINES };
+/* Does owner k's opaque history hold code that may define (LR_OPAQUE_DEFINES)? */
+static int lr_opaque_defines(LoadRecord *r, int k) {
+  const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
+  for (int j = 0; op && j < op->n; j++)
+    if (op->v[j].vis == LR_OPAQUE_DEFINES) return 1;
+  return 0;
+}
 /* Does a call of `name` on class cls (its singleton when sg) at p run a
    method of the program's that may define or write something: any one
-   it may find but a def whose body does neither (lr_body_defines)? */
+   it may find but a def whose body does neither (lr_body_defines)? 0 when
+   not, else what it may do */
 static int lr_runs_defining(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
   const LrDef *d = NULL;
   int o = lr_search(c, cls, sg, name, -1, p, 0, 0, &d, 0);
-  return o != ELAB_NO && !(o == ELAB_YES && d && d->kind == LR_DEF && !lr_body_defines(c, d->node, 0, 0));
+  if (o == ELAB_NO || (o == ELAB_YES && d && d->kind == LR_DEF && !lr_body_defines(c, d->node, 0, 0))) return 0;
+  return o == ELAB_YES && d && (d->kind == LR_READER || d->kind == LR_WRITER) ? LR_OPAQUE_WRITES : LR_OPAQUE_DEFINES;
 }
 
 /* Does call `node` on class cls (in its singleton when sg) run code the
    record cannot follow: a send, an eval of a String, or a method of the
    program that may define or write something (lr_runs_defining), called
    on the class (its singleton method, from its body or through its
-   constant) or from its body (a top-level one)? */
+   constant) or from its body (a top-level one)? 0 when not, else what it
+   may do (LR_OPAQUE_*) */
 static int lr_opaque_call(Compiler *c, int node, int cls, int sg) {
   const NodeTable *nt = c->nt;
   if (nt_int(nt, node, "event_hook", 0)) return 0;   /* (the call of a hook the record fires: it asked for it) */
@@ -2017,8 +2034,9 @@ static int lr_opaque_call(Compiler *c, int node, int cls, int sg) {
   int recv = nt_ref(nt, node, "receiver");
   LoadPoint p = elab_point_of(c, node);
   int bare = recv < 0 || nt_kind(nt, recv) == NK_SelfNode;
-  return is_send_family(nm) || (is_eval_exec_family(nm) && nt_ref(nt, node, "block") < 0) ||
-         (!sg && lr_runs_defining(c, cls, 1, nm, p)) || (bare && lr_runs_defining(c, LR_MAIN, 0, nm, p));
+  if (is_send_family(nm) || (is_eval_exec_family(nm) && nt_ref(nt, node, "block") < 0)) return LR_OPAQUE_DEFINES;
+  int on = sg ? 0 : lr_runs_defining(c, cls, 1, nm, p), top = bare ? lr_runs_defining(c, LR_MAIN, 0, nm, p) : 0;
+  return on > top ? on : top;
 }
 /* Is call `node` (named nm) a definition form a statement may hold in its
    parts (`r = attr_reader :a`, `p(private :b)`, `memoize private def c`):
@@ -2151,8 +2169,8 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       if (lr_wrapped_vis(x, av[i], cls, sg, node, bvis, may)) continue;
     }
     for (int k = 0; (bvis || cvis) && ak == NK_ArrayNode && k < en; k++)
-      if (!vis_arg_name(nt, ev[k])) opaque = 1;
-    if (!an_ && ak != NK_DefNode && (ak != NK_ArrayNode || !(bvis || cvis)) && naming && (!dm || i == 0)) opaque = 1;   /* a computed name */
+      if (!vis_arg_name(nt, ev[k])) opaque = LR_OPAQUE_DEFINES;
+    if (!an_ && ak != NK_DefNode && (ak != NK_ArrayNode || !(bvis || cvis)) && naming && (!dm || i == 0)) opaque = LR_OPAQUE_DEFINES;   /* a computed name */
     if ((bvis || cvis) && ak == NK_DefNode) {
       /* private def m, private_class_method def self.m */
       lr_def(x, av[i], cls, sg, bvis ? bvis : *vs, may);
@@ -2178,7 +2196,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       /* a class among the arguments: TypeError where the statement runs
          (codegen reads the mark), and no mixin, not of the modules beside it */
       if (lr_mix_names_class(x->c, av, ac)) { nt_node_set_int((NodeTable *)nt, node, "mixin_class_arg", 1); continue; }
-      opaque |= mod < 0 && mod != LR_LATER;
+      if (mod < 0 && mod != LR_LATER) opaque = LR_OPAQUE_DEFINES;
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;
@@ -2190,7 +2208,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
         lr_mix_event(x, cls, node, av[i], mod, lr_mix_kind(nt, node, nm, sg));
     }
     else if (is_undef_method_name(nm) || is_remove_method_name(nm)) {
-      if (is_remove_method_name(nm) && lr_remove_shadowed(x->c, node, nm, cls, sg)) opaque = 1;   /* (a program method answers: it may do anything) */
+      if (is_remove_method_name(nm) && lr_remove_shadowed(x->c, node, nm, cls, sg)) opaque = LR_OPAQUE_DEFINES;   /* (a program method answers: it may do anything) */
       else lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
     }
   }
@@ -2205,7 +2223,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
     lr_settle_add(x->r, SET_OPAQUE, node, cls, sg, may, 0, NULL);
   }
   if (opaque && cls >= 0 && !x->unplaced)
-    lr_version(x->r, LR_KEY_OPAQUE, lr_const_owner(cls), "", (LrDef){ node, LR_OPAQUE, 0, (unsigned char)may, 0, NULL });
+    lr_version(x->r, LR_KEY_OPAQUE, lr_const_owner(cls), "", (LrDef){ node, LR_OPAQUE, (unsigned char)opaque, (unsigned char)may, 0, NULL });
 }
 
 /* The definition forms statement node p (standing at pp, in the frame fc,
@@ -2823,7 +2841,7 @@ static void lr_settle_regions(Compiler *c) {
       int mod = lr_class_ref_at(c, k->mix[j].ref, NULL), was = k->mix[j].mod;
       k->mix[j].mod = mod;
       if (mod < 0 && mod != LR_LATER && !(was < 0 && was != LR_LATER) && i >= 1)
-        lr_version(r, LR_KEY_OPAQUE, lr_const_owner(i - 1), "", (LrDef){ k->mix[j].node, LR_OPAQUE, 0, (unsigned char)elab_point_may(c, k->mix[j].node), 0, NULL });
+        lr_version(r, LR_KEY_OPAQUE, lr_const_owner(i - 1), "", (LrDef){ k->mix[j].node, LR_OPAQUE, LR_OPAQUE_DEFINES, (unsigned char)elab_point_may(c, k->mix[j].node), 0, NULL });
     }
     if (k->has_sup) k->sup = lr_class_ref_at(c, k->sup_ref, NULL);
   }
@@ -2838,8 +2856,8 @@ static void lr_settle_regions(Compiler *c) {
       h = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(t->cls), "", 0);
       int seen = 0;
       for (int j = 0; h && j < h->n; j++) seen |= h->v[j].node == t->node;
-      if (!seen && t->cls >= 0 && lr_opaque_call(c, t->node, t->cls, t->sg))
-        lr_version(r, LR_KEY_OPAQUE, lr_const_owner(t->cls), "", (LrDef){ t->node, LR_OPAQUE, 0, (unsigned char)t->may, 0, NULL });
+      int o = !seen && t->cls >= 0 ? lr_opaque_call(c, t->node, t->cls, t->sg) : 0;
+      if (o) lr_version(r, LR_KEY_OPAQUE, lr_const_owner(t->cls), "", (LrDef){ t->node, LR_OPAQUE, (unsigned char)o, (unsigned char)t->may, 0, NULL });
     }
     else {
       h = lr_hist(r, t->cls, t->sg, t->name, 0);
@@ -3799,7 +3817,8 @@ static const int *lr_mixed(Compiler *c, int *n) {
 
 /* Does cls's chain (its singleton's when sg) change for `name` strictly
    between p0 and p1: a module that has or may have the name mixed into a
-   class on it, code the record cannot follow run on one of them? */
+   class on it, code the record cannot follow run on one of them that may
+   define (LR_OPAQUE_DEFINES)? */
 static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPoint p0, LoadPoint p1) {
   LoadRecord *r = c->lrec;
   int nk = 0;
@@ -3815,7 +3834,7 @@ static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPo
           (lr_mixin_class(c, m) < 0 || lr_search(c, m->mod, 0, name, -1, p1, 1, 0, NULL, 0) != ELAB_NO)) return 1;
     }
     for (int j = 0; op && j < op->n; j++)
-      if (lr_inside(c, op->v[j].node, p0, p1)) return 1;
+      if (op->v[j].vis == LR_OPAQUE_DEFINES && lr_inside(c, op->v[j].node, p0, p1)) return 1;
   }
   return 0;
 }
@@ -3831,9 +3850,8 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
   for (int i = 0; i < nk; i++) {
     int k = mk[i];
     const LrClass *kc = lr_class(r, k);
-    const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
     if (!lr_in_ancestry(c, cls, sg, k, end)) continue;
-    if (op && op->n) return 0;
+    if (lr_opaque_defines(r, k)) return 0;
     for (int j = 0; kc && j < kc->nmix; j++) {
       LrMixin *m = &kc->mix[j];
       if (lr_later(c, &m->mod, m->ref) < 0) return 0;
@@ -4563,8 +4581,9 @@ void elab_window_open(Compiler *c, ElabWindow *w) {
 /* The owners whose histories can be in cls's ancestry: its superclass chain
    and the modules mixed into any of those, a module's own mixins too (at any
    time, so a superset of lr_in_ancestry's). -1 when that is not known: a
-   superclass or a mixin the record cannot resolve, code it cannot follow run
-   on one of them, or more owners than fit. A module's (mod) is itself and
+   superclass or a mixin the record cannot resolve, code it cannot follow
+   that may define (not one that only writes) run on one of them, or more
+   owners than fit. A module's (mod) is itself and
    Object, whose constants its lookup reaches, and their mixins. */
 static int lr_ancestry_owners(Compiler *c, int cls, int *out, int cap, int mod) {
   LoadRecord *r = c->lrec;
@@ -4576,7 +4595,7 @@ static int lr_ancestry_owners(Compiler *c, int cls, int *out, int cap, int mod) 
   if (mod && n == 1 && a == LR_UNKNOWN_CLASS && n < cap) out[n++] = LR_MAIN;
   if (a != LR_UNKNOWN_CLASS || out[n - 1] != LR_MAIN) return -1;
   for (int i = 0; i < n; i++) {
-    if (lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(out[i]), "", 0)) return -1;
+    if (lr_opaque_defines(r, out[i])) return -1;
     const LrClass *kc = lr_class(r, out[i]);
     for (int j = 0; kc && j < kc->nmix; j++) {
       int mod = lr_mixin_class(c, &kc->mix[j]), have = 0;
@@ -4973,7 +4992,8 @@ static int lr_unplaced(Compiler *c, int node) {
 /* May what the record cannot order supply `name` on cls's chain (its
    singleton's when sg) at p: a version of the name a pass made, a mixin a
    pass made into a class on the chain, or code the record cannot follow
-   (a send, an eval of a String) run on one before p? */
+   (a send, an eval of a String) run on one before p, but code that only
+   writes (LR_OPAQUE_WRITES)? */
 static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
   LoadRecord *r = c->lrec;
   const LrVers *x = lr_vers(r, name);
@@ -4988,7 +5008,7 @@ static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, L
     for (int j = 0; kc && j < kc->nmix; j++)
       if (lr_unplaced(c, kc->mix[j].node)) return 1;
     for (int j = 0; op && j < op->n; j++)
-      if (elab_cmp(elab_point_of(c, op->v[j].node), p) != PROG_AFTER) return 1;
+      if (op->v[j].vis == LR_OPAQUE_DEFINES && elab_cmp(elab_point_of(c, op->v[j].node), p) != PROG_AFTER) return 1;
   }
   return 0;
 }
@@ -6683,6 +6703,8 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name) {
   return 0;
 }
 
+/* (every entry, one that only writes too: the macro splice in analyze_ct.c
+   runs code at compile time that may read the instance variable it wrote) */
 int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {
   if (!lr_ready(c, p)) return ELAB_UNKNOWN;
   return lr_last_before(c, lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0), p, p.region < 0, 0, NULL);

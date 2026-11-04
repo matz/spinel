@@ -19303,13 +19303,31 @@ static sp_Enumerator *sp_enum_step_labeled(sp_Enumerator *e, sp_RbVal src, const
    boxed receiver, where a program class's own method of the name took the
    dispatch: the Enumerator the no-user-class path makes (#<Enumerator:
    7:upto(9)>), and NoMethodError for any other value. */
+/* A Bignum's upto / downto walked as far as it is read: a limit far off, or
+   an infinite Float, would lay out without end */
+typedef struct { sp_RbVal recv; sp_RbVal lim; sp_int step; } sp_big_step_cap;
+static void sp_big_step_cap_scan(void *p) {
+  sp_big_step_cap *cap = (sp_big_step_cap *)p;
+  sp_mark_rbval(cap->recv); sp_mark_rbval(cap->lim);
+}
+static void sp_big_step_gen(sp_Fiber *f) {
+  sp_big_step_cap *cap = (sp_big_step_cap *)f->user_data;
+  sp_RbVal v = cap->recv;
+  SP_GC_ROOT_RBVAL(v);
+  while (cap->step > 0 ? sp_poly_cmp_ck(v, cap->lim) <= 0 : sp_poly_cmp_ck(v, cap->lim) >= 0) {
+    sp_Fiber_yield(v);
+    v = sp_poly_add(v, sp_box_int(cap->step));
+  }
+  f->yielded_value = cap->recv;   /* the walk answers the receiver */
+}
 static sp_RbVal sp_poly_upto_enum(sp_RbVal r, sp_RbVal lim, int up) {
   SP_GC_ROOT_RBVAL(r); SP_GC_ROOT_RBVAL(lim);
   const char *op = up ? "upto" : "downto";
   if (up && (r.tag == SP_TAG_STR || sp_poly_is_strbuf(r))) {
     sp_StrArray *s = sp_StrArray_from_string_range(sp_poly_recv_s(r, "upto"), sp_poly_arg_str_chk(lim), 0);
     SP_GC_ROOT(s);
-    return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_from(sp_box_nullable_obj((void *)s, SP_BUILTIN_STR_ARRAY)), r, op, &lim, 1),
+    /* a String's walk has no size of its own: CRuby's `"a".upto("c").size` is nil */
+    return sp_box_nullable_obj((void *)sp_enum_size_nil(sp_enum_step_labeled(sp_Enumerator_new_from(sp_box_nullable_obj((void *)s, SP_BUILTIN_STR_ARRAY)), r, op, &lim, 1)),
                                SP_BUILTIN_ENUMERATOR);
   }
   if (r.tag != SP_TAG_INT && r.tag != SP_TAG_BIGINT) sp_raise_nomethod(sp_nomethod_msg(op, r));
@@ -19320,16 +19338,22 @@ static sp_RbVal sp_poly_upto_enum(sp_RbVal r, sp_RbVal lim, int up) {
     sp_Range rg = up ? (sp_Range){ .first = r.v.i, .last = l, .excl = 0 } : sp_range_new_step(r.v.i, l, 0, -1LL);
     return sp_box_nullable_obj((void *)sp_int_step_enum(rg, r.v.i, op, lim), SP_BUILTIN_ENUMERATOR);
   }
-  /* a Bignum counts boxed, its members laid out ahead */
-  sp_PolyArray *a = sp_PolyArray_new();
-  SP_GC_ROOT(a);
-  sp_RbVal cur = r;
-  SP_GC_ROOT_RBVAL(cur);
-  while (up ? sp_poly_cmp_ck(cur, lim) <= 0 : sp_poly_cmp_ck(cur, lim) >= 0) {
-    sp_PolyArray_push(a, cur);
-    cur = sp_poly_add(cur, sp_box_int(up ? 1 : -1));
+  /* a Bignum counts boxed, as far as the walk is read; its size is the
+     members between, none past the limit, or infinite toward an infinite Float */
+  sp_big_step_cap *cap = (sp_big_step_cap *)sp_gc_alloc(sizeof *cap, NULL, sp_big_step_cap_scan);
+  SP_GC_ROOT(cap);
+  cap->recv = r; cap->lim = lim; cap->step = up ? 1 : -1;
+  sp_RbVal size = sp_box_int(0);
+  SP_GC_ROOT_RBVAL(size);
+  if (lim.tag == SP_TAG_FLT && isinf(lim.v.f)) size = (lim.v.f > 0) == (up != 0) ? sp_box_float(INFINITY) : sp_box_int(0);
+  else {
+    sp_RbVal edge = lim.tag == SP_TAG_FLT ? sp_box_float(up ? floor(lim.v.f) : ceil(lim.v.f)) : lim;
+    SP_GC_ROOT_RBVAL(edge);
+    sp_RbVal span = up ? sp_poly_sub(edge, r) : sp_poly_sub(r, edge);
+    if (sp_poly_cmp_ck(span, sp_box_int(0)) >= 0) size = sp_poly_add(span, sp_box_int(1));
+    if (size.tag == SP_TAG_FLT) size = sp_box_int((sp_int)size.v.f);
   }
-  return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_from(sp_box_poly_array(a)), r, op, &lim, 1),
+  return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_gen(sp_big_step_gen, cap, size), r, op, &lim, 1),
                              SP_BUILTIN_ENUMERATOR);
 }
 static sp_Enumerator *sp_Enumerator_new_from_rev(sp_RbVal arr) {

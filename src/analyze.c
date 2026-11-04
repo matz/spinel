@@ -42146,10 +42146,22 @@ static void mark_nullable_int_locals(Compiler *c) {
         }
         continue;
       }
+      /* a Hash literal under `**` gives its members as literal keywords do */
       int kn = 0; const int *ke = nt_arr(nt, wav[0], "elements", &kn);
+      int nke = 0; int *ake = (int *)malloc((size_t)(kn > 0 ? kn : 1) * sizeof(int));
+      if (!ake) { perror("malloc"); exit(1); }
       for (int e = 0; e < kn; e++) {
-        if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;
-        int key = nt_ref(nt, ke[e], "key"), v = nt_ref(nt, ke[e], "value");
+        int hv = nt_kind(nt, ke[e]) == NK_AssocSplatNode ? nt_ref(nt, ke[e], "value") : -1;
+        if (hv < 0 || nt_kind(nt, hv) != NK_HashNode) { ake[nke++] = ke[e]; continue; }
+        int hn = 0; const int *he = nt_arr(nt, hv, "elements", &hn);
+        int *g = (int *)realloc(ake, (size_t)(nke + hn + kn) * sizeof(int));
+        if (!g) { perror("realloc"); exit(1); }
+        ake = g;
+        for (int k = 0; k < hn; k++) ake[nke++] = he[k];
+      }
+      for (int e = 0; e < nke; e++) {
+        if (nt_kind(nt, ake[e]) != NK_AssocNode) continue;
+        int key = nt_ref(nt, ake[e], "key"), v = nt_ref(nt, ake[e], "value");
         const char *mn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
         if (!mn || v < 0 || (nt_kind(nt, v) != NK_NilNode && !nullable_int_value(c, v))) continue;
         char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", mn);
@@ -42158,6 +42170,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
         { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
       }
+      free(ake);
     }
     /* `o.instance_variable_set(:@x, v)` with a nil, or a nullable number,
        stores it in the ivar as a plain write would. */

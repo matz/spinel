@@ -11448,6 +11448,101 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
   buf_printf(b, "); _t%d; })", tn);
 }
 
+/* A boxed value `expr` read into Data member i: its oint / ofloat with
+   the nil (`as_o`), the boxed value itself for a boxed member, else the
+   member's C type */
+static void data_with_unbox(Compiler *c, TyKind mt, int as_o, const char *expr, Buf *b) {
+  if (as_o) buf_printf(b, "sp_unbox_o%s(%s)", mt == TY_FLOAT ? "float" : "int", expr);
+  else if (mt == TY_POLY) buf_puts(b, expr);
+  else emit_unbox_text(c, mt, expr, b);
+}
+
+/* The value Data member i takes in `with`: the last keyword element that
+   names it, a `**hash` naming it only at run time, else the receiver's
+   (held in _t<t>). `et` holds each element's boxed temp. */
+static void data_with_pick(Compiler *c, ClassInfo *sc, int i, int t, const int *els, int en,
+                           const int *et, int as_o, Buf *b) {
+  const NodeTable *nt = c->nt;
+  TyKind mt = sc->ivar_types[i];
+  const char *mn = sc->ivars[i] + 1;
+  int opened = 0, hit = -1;
+  for (int e = en - 1; e >= 0 && hit < 0; e--) {
+    if (nt_kind(nt, els[e]) == NK_AssocSplatNode) {
+      buf_printf(b, "({ sp_bool _f = 0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
+                    "sp_box_sym(sp_sym_intern(\"%s\")), &_f); _f ? ", et[e], mn);
+      data_with_unbox(c, mt, as_o, "_v", b);
+      buf_puts(b, " : ");
+      opened++;
+      continue;
+    }
+    int key = nt_ref(nt, els[e], "key");
+    if (key >= 0 && nt_kind(nt, key) == NK_SymbolNode && sp_streq(nt_str(nt, key, "value"), mn)) hit = e;
+  }
+  if (hit >= 0) {
+    char tx[32]; snprintf(tx, sizeof tx, "_t%d", et[hit]);
+    data_with_unbox(c, mt, as_o, tx, b);
+  }
+  else if (as_o) {
+    char robj[32], nb[128];
+    snprintf(robj, sizeof robj, "_t%d->", t);
+    ivar_nilbit_test(c, (int)(sc - c->classes), i, robj, nb, sizeof nb);
+    buf_printf(b, "((%s){ _t%d->iv_%s, %s })", oint_ctype(mt), t, iv_c(mn), nb);
+  }
+  else buf_printf(b, "_t%d->iv_%s", t, iv_c(mn));
+  while (opened--) buf_puts(b, "; })");
+}
+
+/* Data#with with a `**hash` among its keywords, the receiver held in
+   _t<t>: every element runs in source order, each with its own hoists
+   (not in the caller's prelude, where they ran before the receiver), into
+   a rooted boxed temp, so a later `**hash` neither runs first nor changes
+   an earlier value. A member then takes the last element that names it,
+   as in a Hash literal. A member with a nil bit takes its value and its
+   nil through an oint temp, since the constructor clears every nil byte. */
+static void emit_data_with_splats(Compiler *c, int id, ClassInfo *sc, int t, int kwh, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int scid = (int)(sc - c->classes);
+  int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
+  int *et = (int *)calloc((size_t)(en > 0 ? en : 1), sizeof(int));
+  int *onil = (int *)calloc((size_t)(sc->nmembers > 0 ? sc->nmembers : 1), sizeof(int));
+  if (!et || !onil) { perror("calloc"); exit(1); }
+  for (int e = 0; e < en; e++) {
+    int v = nt_ref(nt, els[e], "value");
+    if (v < 0) { unsupported_feature(c, id, "Data#with with an anonymous `**`"); continue; }
+    et[e] = ++g_tmp;
+    Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
+    g_pre = &pre; emit_boxed(c, v, &vb); g_pre = saved_pre;
+    if (pre.p) buf_printf(b, " %s", pre.p);
+    buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", et[e], vb.p ? vb.p : "sp_box_nil()", et[e]);
+    free(pre.p); free(vb.p);
+  }
+  for (int i = 0; i < sc->nmembers; i++) {
+    if (!ivar_has_nilbit(c, scid, i)) continue;
+    onil[i] = ++g_tmp;
+    buf_printf(b, " %s _t%d = ", oint_ctype(sc->ivar_types[i]), onil[i]);
+    data_with_pick(c, sc, i, t, els, en, et, 1, b);
+    buf_puts(b, ";");
+  }
+  int tn = ++g_tmp;
+  buf_printf(b, " sp_%s *_t%d = sp_%s_new(", sc->c_name, tn, sc->c_name);
+  for (int i = 0; i < sc->nmembers; i++) {
+    if (i) buf_puts(b, ", ");
+    if (onil[i]) buf_printf(b, "_t%d.v", onil[i]);
+    else data_with_pick(c, sc, i, t, els, en, et, 0, b);
+  }
+  buf_puts(b, ");");
+  for (int i = 0; i < sc->nmembers; i++) {
+    if (!onil[i]) continue;
+    char tobj[32], nf[32], dst[128];
+    snprintf(tobj, sizeof tobj, "_t%d->", tn);
+    snprintf(nf, sizeof nf, "_t%d.nil", onil[i]);
+    ivar_nilbit_assign(c, scid, i, tobj, nf, dst, sizeof dst);
+    buf_printf(b, " %s;", dst);
+  }
+  buf_printf(b, " _t%d; })", tn);
+  free(et); free(onil);
+}
+
 static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind res, int *out) {
   /* Struct instance methods (to_h / to_a / values / members / dig). */
   if (!(recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
@@ -11717,13 +11812,11 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     if (wargc == 0) { emit_expr(c, recv, b); { *out = 1; return 1; } }
     int wkwh = nt_argv_kwh(nt, wargv, wargc);
     /* a `**hash` double-splat in the keyword hash carries member overrides
-       only known at run time; look each member up in it (#2972) */
-    int wds = -1;
+       only known at run time; look each member up in each (#2972) */
+    int wds = 0;
     if (wkwh >= 0) {
       int en = 0; const int *els = nt_arr(nt, wkwh, "elements", &en);
-      for (int e = 0; e < en; e++)
-        if (nt_kind(nt, els[e]) == NK_AssocSplatNode)
-          wds = nt_ref(nt, els[e], "value");
+      for (int e = 0; e < en; e++) wds += nt_kind(nt, els[e]) == NK_AssocSplatNode;
     }
     /* Data#with takes keyword arguments only; a positional argument (the only
        arg, or one alongside the keyword hash) is an ArgumentError in CRuby. */
@@ -11777,18 +11870,16 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
       }
     }
     int t = ++g_tmp;
-    int th = wds >= 0 ? ++g_tmp : -1;
     int scid = (int)(sc - c->classes);
     Buf rb = expr_buf(c, recv);
-    /* the `**hash` and the given values run after the receiver is made */
     buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
-    if (th >= 0) { buf_printf(b, " sp_RbVal _t%d = ", th); emit_boxed(c, wds, b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", th); }
+    if (wds) { emit_data_with_splats(c, id, sc, t, wkwh, b); { *out = 1; return 1; } }
     /* A member that can hold nil keeps it in the copy (#8508): a given
        value's nil, read once into a temp ahead of the constructor, or the
        receiver's for a member the call leaves as it was; the constructor
        clears every nil byte, so they are set after it */
     int *onil = (int *)calloc((size_t)(sc->nmembers > 0 ? sc->nmembers : 1), sizeof(int));
-    for (int i = 0; i < sc->nmembers && th < 0; i++) {
+    for (int i = 0; i < sc->nmembers; i++) {
       if (!ivar_has_nilbit(c, scid, i)) continue;
       int val = wkwh >= 0 ? kwh_lookup(nt, wkwh, sc->ivars[i] + 1) : -1;
       TyKind mt = sc->ivar_types[i];
@@ -11834,21 +11925,12 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
           emit_expr(c, val, b);
         }
       }
-      else if (th >= 0) {
-        /* member not given literally: take it from the **hash if present,
-           else copy from the receiver (#2972) */
-        buf_printf(b, "({ sp_bool _f = 0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
-                      "sp_box_sym(sp_sym_intern(\"%s\")), &_f); _f ? (", th, sc->ivars[i] + 1);
-        if (sc->ivar_types[i] == TY_POLY) buf_puts(b, "_v");
-        else emit_unbox_text(c, sc->ivar_types[i], "_v", b);
-        buf_printf(b, ") : _t%d->iv_%s; })", t, iv_c(sc->ivars[i] + 1));
-      }
       else {
         buf_printf(b, "_t%d->iv_%s", t, iv_c(sc->ivars[i] + 1));
       }
     }
     buf_puts(b, ");");
-    for (int i = 0; i < sc->nmembers && th < 0; i++) {
+    for (int i = 0; i < sc->nmembers; i++) {
       if (!ivar_has_nilbit(c, scid, i)) continue;
       char tobj[32], dst[128], src[128];
       snprintf(tobj, sizeof tobj, "_t%d->", tn);

@@ -18750,6 +18750,14 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY &&
       sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  /* obj.methods / public_methods / singleton_methods on a boxed receiver: the
+     list of whichever class of the program it is an instance of
+     (emit_poly_object_methods_reflection); anything else is the
+     NoMethodError CRuby raises */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 && argc <= 1 &&
+      (sp_streq(name, "methods") || sp_streq(name, "public_methods") || sp_streq(name, "singleton_methods")) &&
+      emit_poly_object_methods_reflection(c, id, name, recv, argc, argv, b))
+    return 1;
   /* Module#constants on a boxed value that is a class: the switch a typed
      class value takes (emit_class_value_constants); anything else is the
      NoMethodError CRuby raises */

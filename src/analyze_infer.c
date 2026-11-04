@@ -8855,7 +8855,30 @@ static int infer_enum_desugar_call(const char *name, int argc, TyKind *out) {
 /* obj.methods / public_methods / singleton_methods the compiler lists: on
    a typed user object (an_object_methods_listable) or a builtin value
    (an_value_methods_class) */
-static int infer_methods_listed(Compiler *c, int recv, TyKind rt, const char *name, int argc,
+/* See analyze.h: obj.methods / public_methods / singleton_methods on a boxed
+   receiver, which the emitter lists per class
+   (emit_poly_object_methods_reflection). Every class the receiver can hold
+   (poly_recv_classes; every instantiated class of the program when the walk
+   bounds none) lists the name with these arguments, and none defines a
+   method or a reader of the name itself, which the call would reach instead. */
+int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int argc, const int *argv) {
+  if (!name || (!sp_streq(name, "methods") && !sp_streq(name, "public_methods") &&
+                !sp_streq(name, "singleton_methods"))) return 0;
+  if (argc > 1 || nt_ref(c->nt, id, "block") >= 0 || comp_object_defines(c, name)) return 0;
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, id, &nk);
+  int n = ks ? nk : c->nclasses, any = 0;
+  for (int i = 0; i < n; i++) {
+    int k = ks ? ks[i] : i;
+    if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
+    if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 0;
+    if (!an_object_methods_listable(c, k, name) || an_object_methods_all_arg(c, k, argc, argv) < 0) return 0;
+    any = 1;
+  }
+  return any;
+}
+
+static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
                                 const int *argv) {
   if (recv >= 0 && ty_is_object(rt) &&
       (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
@@ -8863,6 +8886,7 @@ static int infer_methods_listed(Compiler *c, int recv, TyKind rt, const char *na
       an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
       an_object_methods_listable(c, ty_object_class(rt), name))
     return 1;
+  if (recv >= 0 && rt == TY_POLY && an_poly_object_methods_listable(c, id, name, argc, argv)) return 1;
   return an_value_methods_class(c, recv, rt, name, argc, argv) != NULL;
 }
 
@@ -9701,7 +9725,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && ty_is_object(rt) && argc == 0 &&
       sp_streq(name, "instance_variables"))
     return TY_POLY_ARRAY;
-  if (infer_methods_listed(c, recv, rt, name, argc, argv)) return TY_POLY_ARRAY;
+  if (infer_methods_listed(c, id, recv, rt, name, argc, argv)) return TY_POLY_ARRAY;
 
   /* Kernel#puts / #print return nil; typed so the value form composes. */
   if (recv < 0 && !an_bare_call_class_owned(c, id) && (is_text_print(name)) &&

@@ -11782,6 +11782,11 @@ int infer_ivar_types(Compiler *c) {
          writes) pin this ivar. */
       int nil_write = ty_k != NK_InstanceVariableOperatorWriteNode &&
                       (vt == TY_NIL || comp_nil_chain_bottom(nt, vnode) >= 0);
+      /* `@prev = prev` from a `prev = nil` parameter no call supplies
+         writes the nil it always is; the parameter itself stays boxed */
+      if (!nil_write && ty_k == NK_InstanceVariableWriteNode && vt == TY_POLY && nil_param_read(c, vnode)) {
+        nil_write = 1; vt = TY_NIL;
+      }
       if (vt == TY_POLY && ivar_nullable_int_ternary(c, vnode) == TY_INT) vt = TY_INT;
       Scope *s = comp_scope_of(c, id);
       int cls_id2 = s->class_id;

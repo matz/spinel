@@ -15,6 +15,13 @@ class Metal
   end
   def self.depth = @depth
 end
+# a program class's own class_eval, a code generator's: not a class value's
+class CodeGenerator
+  def class_eval = yield(self)
+  def push(s) = (@lines ||= []) << s
+end
+g = CodeGenerator.new
+g.class_eval { |b| b.push("x") }
 class Posts < Metal; end
 class Drafts < Posts; end
 p Posts.controller_name, Metal.controller_name, Drafts.controller_name

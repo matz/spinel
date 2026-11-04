@@ -25222,6 +25222,24 @@ static void cbi_rewrite_access_recv(NodeTable *nt, int id, int recv) {
    (desugar_const_ivar_access). The block's statements, with their ivars
    so rewritten, stand where the call stood; the block must be plain
    (cvce_plain), with no parameters. 1 when rewritten. */
+/* Does the program give Module's class_eval family a method of its own: a
+   def of the name in a reopening of Module, Class, Object, BasicObject or
+   Kernel, which a class value's call would reach? One on a class of the
+   program's (a code generator's `def class_eval`) is that class's, not a
+   class value's. */
+static int cvce_program_owns_class_eval(const NodeTable *nt, const int *parent) {
+  static const char *const roots[] = { "Module", "Class", "Object", "BasicObject", "Kernel", NULL };
+  for (int id = 0; id < nt->count; id++) {
+    const char *dn = nt_kind(nt, id) == NK_DefNode ? nt_str(nt, id, "name") : NULL;
+    if (!dn || !is_class_eval_family(dn)) continue;
+    int a = parent[id];
+    while (a >= 0 && !class_def_opens_frame(nt, a)) a = parent[a];
+    const char *cn = a >= 0 ? class_def_bare_name(nt, a) : NULL;
+    if (!cn) return 1;   /* a top-level def: Object's */
+    for (int i = 0; roots[i]; i++) if (sp_streq(cn, roots[i])) return 1;
+  }
+  return 0;
+}
 static int cvce_rewrite(NodeTable *nt, const int *parent, int id, int r, int blk) {
   int body = nt_ref(nt, blk, "body");
   if (nt_ref(nt, blk, "parameters") >= 0 || body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
@@ -25266,7 +25284,7 @@ int desugar_class_eval_ivars(Compiler *c) {
   /* a program that gives class_eval (or its kin) a method of its own runs
      the block as that says: its calls stay as they are. Asked once a
      candidate is seen. */
-  int own = -1, own_ie = -1;
+  int own = -1, own_ie = -1, own_cv = -1;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -25275,14 +25293,18 @@ int desugar_class_eval_ivars(Compiler *c) {
     if (ie && own_ie < 0)
       own_ie = program_defines_name(nt, n0, "instance_eval") || program_defines_name(nt, n0, "instance_exec");
     if (!ie && own < 0) own = sce_program_owns_class_eval(nt);
-    if (ie ? own_ie : own) continue;
     int r = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
     if (r >= 0 && !ie && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, id, "arguments") < 0 &&
         (nt_kind(nt, r) == NK_LocalVariableReadNode || nt_kind(nt, r) == NK_CallNode)) {
+      /* (a class value's class_eval is Module's unless a reopening of
+         Module's chain gives it one: a program class's own def of the
+         name, which sce_program_owns_class_eval counts, is not reached) */
       if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      if (cvce_rewrite(nt, parent, id, r, blk)) changed = 1;
+      if (own_cv < 0) own_cv = cvce_program_owns_class_eval(nt, parent);
+      if (!own_cv && cvce_rewrite(nt, parent, id, r, blk)) changed = 1;
       continue;
     }
+    if (ie ? own_ie : own) continue;
     if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode || blk < 0 || nt_kind(nt, blk) != NK_BlockNode)
       continue;
     const char *cn = nt_str(nt, r, "name");

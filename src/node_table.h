@@ -121,6 +121,11 @@ typedef struct {
   int *kind_moved, nkind_moved, ckind_moved;
   int kind_live;
   int **kind_retired, nkind_retired, ckind_retired;
+  /* the strings an edit replaced (a string field's value or key, a type, a
+     content), kept until nt_free: a caller may hold the pointer nt_str or
+     nt_type answered across a call that renames the node */
+  char **str_retired;
+  int nstr_retired, cstr_retired;
   /* the class or module body that holds each node (fwd_lex_parent), made as
      far as its questions need; NULL until the first */
   struct NtHolders *holders;
@@ -324,9 +329,10 @@ void nt_node_reset(NodeTable *nt, int id, const char *type);
 void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val);
 /* A temporary rename (an emitter re-entering under another spelling): the
    swap sets key to a copy of val and answers the string it held, NULL when
-   the node had none, which the restore puts back. Unlike nt_node_set_str it
-   frees nothing a caller may still hold: a name read before the rename stays
-   valid through it and after. */
+   the node had none, which the restore puts back. Neither, nor any other
+   edit, frees a string a caller may still hold: the replaced one is kept
+   until the table is freed (NodeTable.str_retired), so a name read before a
+   rename stays valid through it and after. */
 char *nt_node_swap_str(NodeTable *nt, int id, const char *key, const char *val);
 void nt_node_restore_str(NodeTable *nt, int id, const char *key, char *held);
 void nt_node_set_int(NodeTable *nt, int id, const char *key, long long val);

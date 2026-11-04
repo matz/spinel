@@ -1743,14 +1743,17 @@ typedef struct {
      calls pinned to the method it runs. absent: asked for a call that may
      meet no version of the chain yet, 2 when the entry's else arm answers
      for none, 1 when it keeps the last version (ver_entries_demand);
-     cells: its histories' cells are written (ver_cells_write) */
-  struct VerEntry { const char *name; int guard, cls, sg, ar, scope, absent, cells; } *ver_entries;
+     cells: its histories' cells are written (ver_cells_write). Each name
+     is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
+     the chain counts: a caller may ask with a name it frees itself
+     (desugar_call_op_write's setter name) */
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
      or both (ver_mm_at) */
-  struct VerLate { const char *name; int cls, sg, mi, ar, mm; } *ver_late;
+  struct VerLate { char *name; int cls, sg, mi, ar, mm; } *ver_late;
   int nver_late;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
@@ -1784,9 +1787,9 @@ typedef struct {
      comp_name_is_shadow_copy reads */
   int *shadow_copies, nshadow_copies, cshadow_copies;
   /* the version each call asked on a class runs, once the entries are
-     made (call_plan.c, ct_version): open addressing, name NULL for a free
-     slot; dc the class it answers, -2 for the table's */
-  struct VerMemo { const char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
+     made (call_plan.c, ct_version): open addressing, name (the memo's own
+     copy) NULL for a free slot; dc the class it answers, -2 for the table's */
+  struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
   int ver_memo_cap, ver_memo_n;
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */

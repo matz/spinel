@@ -551,7 +551,11 @@ void comp_free(Compiler *c) {
   for (int i = 0; i < c->pres_ord_n; i++) free(c->pres_ord[i]);
   free(c->pres_ord); c->pres_ord = NULL; c->pres_ord_n = 0;
   free(c->splat_views); c->splat_views = NULL; c->nsplat_views = 0;
+  for (int i = 0; i < c->nver_entries; i++) free(c->ver_entries[i].name);
   free(c->ver_entries); c->ver_entries = NULL; c->nver_entries = 0;
+  ver_memo_drop(c);
+  for (int i = 0; i < c->nver_late; i++) free(c->ver_late[i].name);
+  free(c->ver_late); c->ver_late = NULL; c->nver_late = 0;
   ver_hold_free(c);
   ver_chain_free(c);
   free(c->ver_ix); free(c->ver_ix_next); free(c->ver_names); free(c->ver_names_next);

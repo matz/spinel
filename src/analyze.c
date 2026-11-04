@@ -45789,9 +45789,23 @@ static int tmcv_if(Compiler *c, int at, int pred, int yes, int no) {
   nt_node_set_ref(nt, ifn, "subsequent", el);
   return ifn;
 }
+/* Not one ConstantReadNode named "M::N": a read of that whole name finds no
+   class, so a namespaced subclass's arm raised NameError */
 static int tmcv_const(Compiler *c, int at, const char *name) {
-  int k = tmcv_node(c, "ConstantReadNode", at);
-  if (k >= 0) nt_node_set_str((NodeTable *)c->nt, k, "name", name);
+  NodeTable *nt = (NodeTable *)c->nt;
+  int k = -1;
+  for (const char *p = name; p && *p; ) {
+    const char *q = strstr(p, "::");
+    size_t len = q ? (size_t)(q - p) : strlen(p);
+    char *seg = strndup(p, len);
+    int n = tmcv_node(c, k < 0 ? "ConstantReadNode" : "ConstantPathNode", at);
+    if (n < 0 || !seg) { free(seg); return -1; }
+    nt_node_set_str(nt, n, "name", seg);
+    if (k >= 0) nt_node_set_ref(nt, n, "parent", k);
+    free(seg);
+    k = n;
+    p = q ? q + 2 : NULL;
+  }
   return k;
 }
 static int rewrite_time_maker_class_value(Compiler *c) {

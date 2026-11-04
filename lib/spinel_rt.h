@@ -10514,6 +10514,40 @@ static sp_PolyArray*sp_StrPolyHash_values(sp_StrPolyHash*h){SP_GC_ROOT(h);sp_Pol
 static sp_bool sp_StrPolyHash_has_value(sp_StrPolyHash*h,sp_RbVal v){if (SP_UNLIKELY(!h)) sp_nil_recv("value?");for(sp_int i=0;i<h->len;i++)if(sp_poly_rb_equal(sp_StrPolyHash_get(h,h->order[i]),v))return TRUE;return FALSE;}
 static void sp_StrPolyHash_delete(sp_StrPolyHash*h,const char*k){ sp_gc_wb((void*)h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){sp_order_drop_str(h->order,h->len,h->keys[idx]);h->keys[idx]=NULL;h->vals[idx]=sp_box_nil();h->len--;sp_int j=(idx+1)&h->mask;while(h->keys[j]){sp_int nj=(sp_int)(sp_str_hash(h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=NULL;h->vals[j]=sp_box_nil();idx=j;}j=(j+1)&h->mask;}return;}idx=(idx+1)&h->mask;}}
 static void sp_StrPolyHash_delete_bytes(sp_StrPolyHash*h,const char*k){ sp_gc_wb((void*)h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){sp_order_drop_str(h->order,h->len,h->keys[idx]);h->keys[idx]=NULL;h->vals[idx]=sp_box_nil();h->len--;sp_int j=(idx+1)&h->mask;while(h->keys[j]){sp_int nj=(sp_int)(sp_str_hash(h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=NULL;h->vals[j]=sp_box_nil();idx=j;}j=(j+1)&h->mask;}return;}idx=(idx+1)&h->mask;}}
+/* Hash#delete returns the removed value. Keep lookup and removal together:
+   has_key/get/delete would hash and probe the same lookup key three times.
+   The caller retains the frozen-hash guard used by typed deletion paths.
+   No default value/proc is consulted on a miss. */
+static sp_RbVal sp_StrPolyHash_delete_value(sp_StrPolyHash *h, const char *k) {
+  if (SP_UNLIKELY(!h)) sp_nil_recv("delete");
+  sp_gc_wb((void *)h);
+  sp_int idx = (sp_int)(sp_str_hash(k) & h->mask);
+  while (h->keys[idx]) {
+    if (sp_str_probe_eq(h->keys[idx], k)) {
+      sp_RbVal removed = h->vals[idx];
+      sp_order_drop_str(h->order, h->len, h->keys[idx]);
+      h->keys[idx] = NULL;
+      h->vals[idx] = sp_box_nil();
+      h->len--;
+      sp_int j = (idx + 1) & h->mask;
+      while (h->keys[j]) {
+        sp_int nj = (sp_int)(sp_str_hash(h->keys[j]) & h->mask);
+        if ((j > idx && (nj <= idx || nj > j)) ||
+            (j < idx && nj <= idx && nj > j)) {
+          h->keys[idx] = h->keys[j];
+          h->vals[idx] = h->vals[j];
+          h->keys[j] = NULL;
+          h->vals[j] = sp_box_nil();
+          idx = j;
+        }
+        j = (j + 1) & h->mask;
+      }
+      return removed;
+    }
+    idx = (idx + 1) & h->mask;
+  }
+  return sp_box_nil();
+}
 /* Hash#merge for str_poly_hash. Same shape as the
    StrIntHash / SymPolyHash siblings -- copy recv's entries into a
    fresh hash, then overlay other's. */

@@ -759,8 +759,10 @@ int cplan_entry_finds(const Compiler *c, int e);
    there, or made over all the statements a call in a method or a block may
    run in), its builtin constructor answering a call before the def and one
    the record cannot place (as the constructor answered every call
-   before); for any other class the tables', which also decide whether the
-   class builds its own constructor. */
+   before); for any other class the one call_target finds where the call
+   runs, its version entry where the call may reach two or more of the
+   class's `self.new`, so that inference, the emitter and the call plan
+   name one method. */
 int cplan_user_new(Compiler *c, int id, int ci);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top

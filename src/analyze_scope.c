@@ -8777,14 +8777,14 @@ static int cmethod_needs_specialization_d(Compiler *c, int mi, int ci, int def_c
    the cloned body's implicit-self call rebinds to ci's copy instead of staying
    on the base -- that transitive rebind is the #1451 fix. The ci-already-owns
    guard makes this idempotent and terminates mutually-recursive cmethods. */
+/* Is body's value, past its statements and parentheses (vp_one), a bare
+   `new` or `self.new`? */
 static int body_tail_is_bare_new(const NodeTable *nt, int body) {
-  int n = 0;
-  const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
-  int tail = st && n > 0 ? st[n - 1] : body;
-  if (tail < 0 || nt_kind(nt, tail) != NK_CallNode) return 0;
+  int tail;
+  if (vp_one(nt, body, VPS_NONE | VP_PARENS_ONLY, &tail) != VP1_NODE || nt_kind(nt, tail) != NK_CallNode) return 0;
   const char *nm = nt_str(nt, tail, "name");
   int r = nt_ref(nt, tail, "receiver");
-  return nm && sp_streq(nm, "new") && (r < 0 || nt_kind(nt, r) == NK_SelfNode);
+  return is_new_name(nm) && (r < 0 || nt_kind(nt, r) == NK_SelfNode);
 }
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind) {
   if (!as) as = c->scopes[mi].name;

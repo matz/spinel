@@ -5874,7 +5874,7 @@ static sp_File *sp_select_io_of(sp_RbVal v) {
    whatever else is ready right now (rb_io_read_pending). */
 static int sp_select_pending(sp_RbVal v) {
   sp_File *f = sp_select_io_of(v);
-  return f && f->fp && !f->closed && sp_io_stdio_buffered(f->fp) > 0;
+  return f && f->fp && !f->closed && sp_io_pending(f) > 0;
 }
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
   sp_PolyArray *src[3] = { rd, wr, er };

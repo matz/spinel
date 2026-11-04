@@ -342,7 +342,7 @@ static int sp_io_unuse(sp_File *f) {
 int sp_io_readiness_fd(sp_File *f, int *buffered) {
   FILE *fp = sp_io_use(f);
   int fd = fileno(fp);
-  if (buffered) *buffered = sp_io_stdio_buffered(fp) > 0;
+  if (buffered) *buffered = sp_io_pending(f) > 0;
   sp_io_unuse(f);
   return fd;
 }
@@ -483,7 +483,7 @@ void sp_io_wait_readable(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !SP_ATOMIC_LOAD(&f->fp, __ATOMIC_RELAXED)) return;
   if (!sp_io_parkable(f)) return;
   FILE *fp = sp_io_use(f);
-  size_t buffered = sp_io_stdio_buffered(fp);
+  size_t buffered = sp_io_pending(f);
   int fd = fileno(fp);
   sp_io_unuse(f);
   if (buffered > 0) return;

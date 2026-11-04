@@ -45262,17 +45262,26 @@ static void rewrite_builtin_cm_alias_calls(Compiler *c) {
       if (c->classes[k].alias_sg[i] && c->classes[k].alias_node[i] >= 0) {
         als[nal].name = c->classes[k].alias_new[i]; als[nal++].node = c->classes[k].alias_node[i];
       }
+  /* (the calls whose order is unproven are all found with the map first:
+     a rewrite (rewrite_builtin_cm_alias_call's new receiver, nt_new_node,
+     and its renames, nt_node_set_str) changes the table's version, and the
+     next ask for the map after it (comp_parent_map) rebuilds the map and
+     frees the one `par` holds) */
+  unsigned char *unsure = calloc((size_t)n0 + 1, 1);
+  if (!unsure) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   const int *par = comp_parent_map(c);
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
-    for (int a = 0; nm && a < nal; a++)
-      if (sp_streq(als[a].name, nm) && cm_alias_order_unproven(c, par, id, als[a].node)) {
-        nt_node_set_int(nt, id, "cm_alias_unsure", 1);
-        break;
-      }
+    for (int a = 0; nm && a < nal && !unsure[id]; a++)
+      unsure[id] = sp_streq(als[a].name, nm) && cm_alias_order_unproven(c, par, id, als[a].node);
+  }
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (unsure[id]) nt_node_set_int(nt, id, "cm_alias_unsure", 1);
     rewrite_builtin_cm_alias_call(c, id);
   }
+  free(unsure);
   free(als);
 }
 /* A class body's call on self the desugar spelled with the class

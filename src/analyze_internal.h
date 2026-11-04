@@ -90,6 +90,8 @@ int proc_to_proc_method_nodes(Compiler *c, int recv, int **out);
 int local_sole_range_node(Compiler *c, int recv);
 int const_array_elems_all_int_array(Compiler *c, const char *cname);
 int *an_parent_map(const NodeTable *nt);
+/* (borrowed: an edit that changes the table's version or count, followed by
+   another ask, frees it; see analyze_util.c) */
 const int *comp_parent_map(Compiler *c);
 /* The definite-assignment walk (analyze.c), shared with the nil facts
    (analyze_nil.c): the program's parent map, each statement's place in its

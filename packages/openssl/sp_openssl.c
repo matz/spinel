@@ -30,12 +30,80 @@
 #include <openssl/ecdsa.h>
 #include <openssl/rsa.h>
 #include <openssl/crypto.h>
+#include <openssl/hmac.h>
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 # include <openssl/decoder.h>
 #endif
 #include <limits.h>
 #include <string.h>
 #include <fcntl.h>
+
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+# define SP_MD_FETCH(name) EVP_MD_fetch(NULL, name, NULL)
+# define SP_MD_FREE(md) EVP_MD_free((EVP_MD *)(md))
+#else
+# define SP_MD_FETCH(name) EVP_get_digestbyname(name)
+# define SP_MD_FREE(md) ((void)(md))
+#endif
+
+static const EVP_MD *sp_openssl_md(const char *name) {
+  const EVP_MD *md;
+  if (!name) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  ERR_clear_error();
+  md = SP_MD_FETCH(name);
+  if (!md) {
+    char message[1024];
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const char *data = NULL;
+    int flags = 0;
+    unsigned long error = ERR_get_error_all(NULL, NULL, NULL, &data, &flags);
+    const char *reason = ERR_reason_error_string(error);
+    snprintf(message, sizeof message, "unsupported digest algorithm: %s: %s%s%s%s",
+             name, reason ? reason : "unknown object name",
+             data && (flags & ERR_TXT_STRING) ? " (" : "",
+             data && (flags & ERR_TXT_STRING) ? data : "",
+             data && (flags & ERR_TXT_STRING) ? ")" : "");
+#else
+    snprintf(message, sizeof message, "Unsupported digest algorithm (%s).: unknown object name", name);
+#endif
+    ERR_clear_error();
+    sp_raise_cls("OpenSSL::Digest::DigestError", message);
+  }
+  return md;
+}
+
+static SP_TLS unsigned char sp_openssl_digest_bytes[EVP_MAX_MD_SIZE];
+
+const char *sp_openssl_digest(const char *name, const char *data) {
+  if (!data) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  const EVP_MD *md = sp_openssl_md(name);
+  unsigned int size = 0;
+  int ok = EVP_Digest(data, sp_str_byte_len(data), sp_openssl_digest_bytes, &size, md, NULL);
+  SP_MD_FREE(md);
+  if (!ok) sp_raise_cls("OpenSSL::Digest::DigestError", "EVP_Digest failed");
+  sp_ffi_bin_len = (int)size;
+  return (const char *)sp_openssl_digest_bytes;
+}
+
+static SP_TLS unsigned char sp_openssl_hmac_bytes[EVP_MAX_MD_SIZE];
+
+const char *sp_openssl_hmac(const char *name, const char *key, const char *data) {
+  if (!key || !data) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  const EVP_MD *md = sp_openssl_md(name);
+  unsigned int size = 0;
+  unsigned char *out;
+  size_t key_size = sp_str_byte_len(key);
+  if (key_size > INT_MAX) {
+    SP_MD_FREE(md);
+    sp_raise_cls("ArgumentError", "key is too long");
+  }
+  out = HMAC(md, key, (int)key_size, (const unsigned char *)data,
+             sp_str_byte_len(data), sp_openssl_hmac_bytes, &size);
+  SP_MD_FREE(md);
+  if (!out) sp_raise_cls("OpenSSL::Digest::DigestError", "HMAC failed");
+  sp_ffi_bin_len = (int)size;
+  return (const char *)sp_openssl_hmac_bytes;
+}
 
 sp_int sp_openssl_fixed_length_secure_compare(const char *a, const char *b) {
   /* Byte lengths include embedded NULs; libcrypto owns the constant-time loop. */

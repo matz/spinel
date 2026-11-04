@@ -1,6 +1,6 @@
-# A super in ==, equal?, eql?, !, nil?, frozen?, hash or itself that no
-# program ancestor defines reaches BasicObject's or Kernel's method: the
-# same object, false, the frozen bit, the object's hash or the object.
+# A super in ==, equal?, eql?, !, nil?, frozen? or itself that no program
+# ancestor defines reaches BasicObject's or Kernel's method: the same
+# object, false, the frozen bit or the object.
 # A class under BasicObject has BasicObject's ==, equal? and ! only.
 class Pt
   attr_reader :x
@@ -8,7 +8,6 @@ class Pt
   def ==(o) = super
   def equal?(o) = super
   def eql?(o) = super
-  def hash = super
   def !() = super
   def nil? = super
   def frozen? = super
@@ -17,11 +16,9 @@ end
 a = Pt.new(1)
 b = Pt.new(1)
 p a == a, a == b, a == 1, a.equal?(a), a.equal?(b)
-p a.eql?(a), a.eql?(b), a.hash == a.hash, !a, a.nil?
+p a.eql?(a), a.eql?(b), !a, a.nil?
 p a.frozen?, a.freeze.frozen?, a.itself.equal?(a)
-h = { a => :a }
-p h[a], h[b]
-p [a, a, b].uniq.size
+p [a, a, b].uniq.size, [b].include?(a)
 
 class Sub < Pt; end
 s = Sub.new(2)
@@ -31,12 +28,13 @@ class Bare < BasicObject
   def ==(o) = super
   def equal?(o) = super
   def !() = super
-  def hash = super
+  def nil? = super
 end
 z = Bare.new
 p z == z, z == 1, z.equal?(z), !z
 begin
-  z.hash
+  z.nil?
 rescue NoMethodError
   puts "NoMethodError"
 end
+

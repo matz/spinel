@@ -2506,11 +2506,11 @@ const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cm
 const char *comp_scope_def_name(Compiler *c, const Scope *s);
 int comp_super_is_class_new(Compiler *c, int id);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
-enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_HASH, SUPER_OBJ_SELF };
-/* a super no program ancestor answers that reaches BasicObject's or
-   Kernel's ==, equal?, eql?, !, nil?, frozen?, hash or itself: SUPER_OBJ_*,
+enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF };
+/* a super (node id) no program ancestor answers that reaches BasicObject's
+   or Kernel's ==, equal?, eql?, !, nil?, frozen? or itself: SUPER_OBJ_*,
    else 0 */
-int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int argc);
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
 /* What a name means on a class: nothing, an attribute (attr_reader/writer,

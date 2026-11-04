@@ -15654,18 +15654,12 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
    another shape (a splat, no argument, two) is refused. 0 where self has
    no Kernel#` above it (a BasicObject subclass): the caller raises
    NoMethodError. */
-/* The argument count a super passes: the method's own for a bare super. */
-static int super_argc(Compiler *c, int id, const Scope *s) {
-  if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) return s->nparams;
-  int sa = nt_ref(c->nt, id, "arguments"), n = 0;
-  if (sa >= 0) (void)nt_arr(c->nt, sa, "arguments", &n);
-  return n;
-}
-
 /* emit_super's arm for comp_super_object_builtin. */
 static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, Buf *b) {
-  int kind = comp_super_object_builtin(c, s, uname, super_argc(c, id, s));
-  if (!kind) return 0;
+  int kind = comp_super_object_builtin(c, s, uname, id);
+  /* a by-value object (detect_value_types) has no identity to compare:
+     the super raises as before */
+  if (!kind || c->classes[s->class_id].is_value_type) return 0;
   Buf vb; memset(&vb, 0, sizeof vb);
   TyKind vt = TY_BOOL;
   if (kind == SUPER_OBJ_SAME) {
@@ -15689,10 +15683,6 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   }
   else if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0)");
   else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s))", g_self);
-  else if (kind == SUPER_OBJ_HASH) {
-    vt = TY_INT;
-    buf_printf(&vb, "sp_rbval_hash_key(sp_box_nullable_obj((void *)(%s), 0))", g_self);
-  }
   else {
     vt = ty_object(s->class_id);
     buf_printf(&vb, "((sp_%s *)%s)", c->classes[s->class_id].c_name, g_self);
@@ -16326,10 +16316,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
     /* `super` in a ` override no ancestor defines is Kernel#` */
     if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
-    /* `super` in an ==, equal?, eql?, !, nil?, frozen?, hash or itself
-       override no program ancestor defines is BasicObject's or Kernel's
-       (comp_super_object_builtin): the same object, false, the frozen bit,
-       the object's hash, or the object itself */
+    /* `super` in an ==, equal?, eql?, !, nil?, frozen? or itself override
+       no program ancestor defines is BasicObject's or Kernel's
+       (comp_super_object_builtin): the same object, false, the frozen bit
+       or the object itself */
     if (uname && emit_super_object_builtin(c, id, s, uname, b)) return;
     /* `super` from the program's own send, __send__ or public_send that no
        ancestor of the program defines is Object's: it dispatches on the name

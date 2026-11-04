@@ -11932,12 +11932,10 @@ TyKind infer_uncached(Compiler *c, int id) {
        no ancestor defines is Object#freeze, which answers the object
        (codegen's twin in emit_super) */
     int freeze_super = !s->is_cmethod && uname && sp_streq(uname, "freeze");
-    /* and `super` in an ==, equal?, eql?, !, nil?, frozen?, hash or itself
+    /* and `super` in an ==, equal?, eql?, !, nil?, frozen? or itself
        override reaches BasicObject's or Kernel's (comp_super_object_builtin;
        emit_super_object_builtin is codegen's twin) */
-    int sa_n = 0, sa_id = nk == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
-    if (sa_id >= 0) (void)nt_arr(nt, sa_id, "arguments", &sa_n);
-    int obj_super = comp_super_object_builtin(c, s, uname, nk == NK_ForwardingSuperNode ? s->nparams : sa_n);
+    int obj_super = comp_super_object_builtin(c, s, uname, id);
     /* and `super` in a class method named subclasses reaches Class#subclasses,
        an Array of classes (emit_super's twin) */
     int subs_super = s->is_cmethod && uname && sp_streq(uname, "subclasses") &&
@@ -11950,7 +11948,6 @@ TyKind infer_uncached(Compiler *c, int id) {
                 : subs_super ? TY_POLY_ARRAY
                 : rto_super ? TY_BOOL
                 : freeze_super ? ty_object(s->class_id)
-                : obj_super == SUPER_OBJ_HASH ? TY_INT
                 : obj_super == SUPER_OBJ_SELF ? ty_object(s->class_id)
                 : obj_super ? TY_BOOL : TY_UNKNOWN;
     /* and `super` in a Data's own with reaches Data#with: a copy, or self

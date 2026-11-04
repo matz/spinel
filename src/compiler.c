@@ -5151,16 +5151,41 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
 /* What a `super` that no program ancestor answers reaches when the
    method is one of BasicObject's or Kernel's that Spinel answers for any
    object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same
-   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?),
-   SUPER_OBJ_HASH (hash) or SUPER_OBJ_SELF (itself); 0 for any other. argc
-   is the argument count the super passes. Only a plain class qualifies
+   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?) or
+   SUPER_OBJ_SELF (itself); 0 for any other, and for a super `id` that
+   passes a splat, a keyword, a forwarded list or a count the method does
+   not take. Only a plain class qualifies
    (comp_plain_class): a builtin ancestor (Struct, Exception, an Array
    subclass, a native class) or a core module it includes (Comparable) has
    its own ==. Kernel's names need Kernel in the
    chain, so a class under BasicObject without it still raises. A method of
    the name in a program's Object, Kernel or BasicObject is not this one. */
 int class_is_comparable(Compiler *c, int cid);   /* codegen_call.c */
-int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int argc) {
+int is_descendant(Compiler *c, int k, int anc);
+/* The plain argument count a super passes, or -1 for a splat, a keyword
+   or a forwarded list: a bare super's comes from the method's parameters,
+   which must all be required ones. */
+static int super_plain_argc(Compiler *c, int id, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
+    int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
+    if (pn < 0) return 0;
+    const char *arrs[] = { "optionals", "posts", "keywords" };
+    for (int i = 0; i < 3; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
+    if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
+    (void)nt_arr(nt, pn, "requireds", &n);
+    return n == s->nparams ? n : -1;
+  }
+  int sa = nt_ref(nt, id, "arguments"), n = 0;
+  const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, av[i]);
+    if (k == NK_SplatNode || k == NK_ForwardingArgumentsNode || k == NK_KeywordHashNode || k == NK_BlockArgumentNode)
+      return -1;
+  }
+  return n;
+}
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
   if (!s || s->is_cmethod || !uname || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   int kind = 0, nargs = 0, kernel = 0;
   if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
@@ -5168,11 +5193,15 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
   else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
   else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
-  else if (sp_streq(uname, "hash")) { kind = SUPER_OBJ_HASH; kernel = 1; }
   else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
-  if (!kind || argc != nargs) return 0;
+  if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
   if (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id)) return 0;
+  /* the method runs for a subclass's instance too, and a subclass that
+     includes Comparable answers == by <=> */
+  for (int k = 0; k < c->nclasses; k++)
+    if (k != s->class_id && is_descendant(c, k, s->class_id) &&
+        (!comp_plain_class(c, k) || class_is_comparable(c, k))) return 0;
   int root = s->class_id;
   for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;

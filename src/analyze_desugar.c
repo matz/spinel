@@ -26309,10 +26309,13 @@ int desugar_safe_nav_attr_write_at(Compiler *c, LowerCtx *lc, int id) {
 }
 
 /* Is self at node id a class or module: a statement of a class or module
-   body, or in a `def self.m` or a def of the body's `class << self`? A block
-   of a call that gives its block another self (define_method, instance_eval,
-   class_eval and their kin, a class builder's) on the way says no, as does
-   `class << obj`; any other block or a lambda keeps self. */
+   body, or in a `def self.m` or a def of the body's `class << self`, or in
+   a class_eval-family block, whose self is the class the call is made on
+   (a hook's `base.class_eval do ... end`, spliced into the includer with
+   the block still around its statements)? A block of a call that gives its
+   block another self (define_method, instance_eval, a class builder's) on
+   the way says no, as does `class << obj`; any other block or a lambda
+   keeps self. */
 static int ca_self_is_class(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   const int *par = lower_parents(c, lc);
@@ -26335,9 +26338,10 @@ static int ca_self_is_class(Compiler *c, LowerCtx *lc, int id) {
     if (k == NK_BlockNode) {
       int call = par[n];
       const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-      if (!cn || is_class_eval_family(cn) || sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec") ||
-          sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") || is_new_name(cn) ||
-          sp_streq(cn, "define"))
+      if (!cn) return 0;
+      if (is_class_eval_family(cn)) return def < 0;   /* Module's: self in the block is the class it is called on */
+      if (sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec") || sp_streq(cn, "define_method") ||
+          sp_streq(cn, "define_singleton_method") || is_new_name(cn) || sp_streq(cn, "define"))
         return 0;
     }
   }

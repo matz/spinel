@@ -48626,7 +48626,7 @@ int desugar_paren_block_arg_left(Compiler *c, LowerCtx *lc, int id) {
 int desugar_paren_block_arg_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *ntm = (NodeTable *)c->nt;
   if (!desugar_paren_block_arg_left(c, lc, id)) return 0;
-  nt_node_set_ref(ntm, id, "expression", nt_paren_single(c->nt, nt_ref(ntm, id, "expression")));
+  nt_node_set_ref(ntm, id, "expression", nt_paren_peel(ntm, nt_ref(ntm, id, "expression")));
   return 1;
 }
 
@@ -48661,7 +48661,7 @@ int desugar_paren_operands_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *ntm = (NodeTable *)c->nt;
   if (!desugar_paren_operands_left(c, lc, id)) return 0;
   const char *field = paren_operand_field(nt_kind(ntm, id));
-  nt_node_set_ref(ntm, id, field, nt_paren_single(c->nt, nt_ref(ntm, id, field)));
+  nt_node_set_ref(ntm, id, field, nt_paren_peel(ntm, nt_ref(ntm, id, field)));
   return 1;
 }
 
@@ -48921,6 +48921,7 @@ static void an_phase_desugar_register(Compiler *c) {
   desugar_class_reopen(c);               /* class Class / Class.class_eval -> a module */
   AN_STEP_V("desugar_inline_struct_blocks", desugar_inline_struct_blocks(c));      /* Struct.new(:x) { .. } -> (__spinel_struct_1 = Struct.new(:x) { .. }) */
   AN_STEP_V("desugar_singleton_class_meta", desugar_singleton_class_meta(c));      /* Foo.singleton_class.attr_accessor :a -> class << Foo; attr_accessor :a; end */
+  lower_run(c, &lc, LW_CLASS_BODY_VALUES);         /* x = class A; def k; end -> x = (class A; def k; end; :k) */
   /* Class.new(B) do..end held by no constant -> an anonymous class, a body
      the host grafts (its class_eval "<text>") and lowers as a class body;
      a constant's builder keeps its block, the class's frame */

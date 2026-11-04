@@ -460,9 +460,10 @@ int vp_up_block_call(const NodeTable *nt, const int *par, const VpUp *up) {
 
 int vp_up_effect_clause(const NodeTable *nt, const VpUp *up) {
   if (up->kind != VPU_ENDED) return 0;
-  if (nt_kind(nt, up->parent) == NK_BeginNode)
+  NodeKind k = nt_kind(nt, up->parent);
+  if (k == NK_BeginNode)
     return nt_ref(nt, up->parent, "else_clause") >= 0 && nt_ref(nt, up->parent, "statements") == up->node;
-  return nt_kind(nt, up->parent) == NK_EnsureNode;
+  return k == NK_EnsureNode || k == NK_PreExecutionNode || k == NK_PostExecutionNode;
 }
 
 /* ---- --dump-value-positions ---- */

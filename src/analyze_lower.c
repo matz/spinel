@@ -142,6 +142,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_alias_method_values_at, desugar_alias_method_values_left, "a value-used `alias_method` in a body" },
   [LW_REASSIGNED_BLOCK_PARAMS] = { "desugar_reassigned_block_params", 0, { NK_BlockNode },
     desugar_reassigned_block_params_at, desugar_reassigned_block_params_left, "a block parameter the body assigns" },
+  [LW_CLASS_BODY_VALUES] = { "desugar_class_body_values", 0, { NK_ClassNode, NK_ModuleNode, NK_SingletonClassNode },
+    desugar_class_body_values_at, desugar_class_body_values_left, "a class, module or singleton class body whose value is taken" },
   [LW_ITSELF_RECEIVER] = { "desugar_itself_receiver", 0, { NK_CallNode },
     desugar_itself_receiver_at, desugar_itself_receiver_left, "`x.itself` on a variable", desugar_itself_receiver_gate },
   [LW_TAP_VALUE_WRITE] = { "desugar_tap_value_write", 0, { NK_LocalVariableWriteNode },

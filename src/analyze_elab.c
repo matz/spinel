@@ -346,8 +346,26 @@ static ElabPos elab_body_pos(const NodeTable *nt, int b, ElabPos q) {
    require's (its file), or the parts of `x rescue y` */
 static ElabPos elab_value_pos(const NodeTable *nt, int v, ElabPos q) {
   NodeKind k = nt_kind(nt, v);
-  if (k == NK_CallNode || k == NK_RescueModifierNode || k == NK_LoadNode) q.kind = EP_SPINE;
+  if (k == NK_CallNode || k == NK_RescueModifierNode || k == NK_LoadNode || k == NK_ParenthesesNode) q.kind = EP_SPINE;
   return q;
+}
+
+/* The writes whose value is placed where the write stands: a plain write's,
+   and, with *may set, the value of `||=` and `&&=`, which may not run. */
+int elab_write_value_kind(NodeKind k, int *may) {
+  *may = 0;
+  switch (k) {
+    case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_LocalVariableWriteNode:
+    case NK_InstanceVariableWriteNode: case NK_GlobalVariableWriteNode: case NK_ClassVariableWriteNode:
+      return 1;
+    case NK_ConstantOrWriteNode: case NK_ConstantPathOrWriteNode: case NK_LocalVariableOrWriteNode:
+    case NK_InstanceVariableOrWriteNode: case NK_GlobalVariableOrWriteNode: case NK_ClassVariableOrWriteNode:
+    case NK_ConstantAndWriteNode: case NK_ConstantPathAndWriteNode: case NK_LocalVariableAndWriteNode:
+    case NK_InstanceVariableAndWriteNode: case NK_GlobalVariableAndWriteNode: case NK_ClassVariableAndWriteNode:
+      *may = 1;
+      return 1;
+    default: return 0;
+  }
 }
 
 /* Where the load phase stands at child ch of node p, which stands at pp.
@@ -421,18 +439,8 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       }
       if (spine) q.kind = EP_SPINE;   /* its rescue clauses, else and ensure */
       break;
-    case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_LocalVariableWriteNode:
-    case NK_InstanceVariableWriteNode: case NK_GlobalVariableWriteNode: case NK_ClassVariableWriteNode:
-      if (spine && ch == nt_ref(nt, p, "value")) return elab_value_pos(nt, ch, q);
-      break;
     case NK_AndNode: case NK_OrNode:   /* the right side runs only if the left decides so: a lone expression, which may not run */
       if (spine && ch == nt_ref(nt, p, "right")) { q.may = q.fmay = 1; return elab_body_pos(nt, ch, q); }
-      break;
-    case NK_ConstantOrWriteNode: case NK_ConstantPathOrWriteNode: case NK_LocalVariableOrWriteNode:
-    case NK_InstanceVariableOrWriteNode: case NK_GlobalVariableOrWriteNode: case NK_ClassVariableOrWriteNode:
-    case NK_ConstantAndWriteNode: case NK_ConstantPathAndWriteNode: case NK_LocalVariableAndWriteNode:
-    case NK_InstanceVariableAndWriteNode: case NK_GlobalVariableAndWriteNode: case NK_ClassVariableAndWriteNode:
-      if (spine && ch == nt_ref(nt, p, "value")) { q.may = q.fmay = 1; return elab_value_pos(nt, ch, q); }
       break;
     case NK_RescueModifierNode:
       if (!spine) break;
@@ -451,7 +459,14 @@ ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp) {
       else { q.partial = q.fpartial = 1; q.rep = pp->e; }   /* an iterator's: zero times, or several */
       break;
     }
-    default: break;
+    default: {
+      int may;
+      if (spine && elab_write_value_kind(k, &may) && ch == nt_ref(nt, p, "value")) {
+        if (may) q.may = q.fmay = 1;
+        return elab_value_pos(nt, ch, q);
+      }
+      break;
+    }
   }
   return q;
 }

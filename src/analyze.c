@@ -53520,6 +53520,19 @@ static void an_phase_proc_returns(Compiler *c) {
           TyKind vt = infer_type(c, vnode), nw = PW_JOIN(gv->type, vt);
           if (nw != gv->type) { lv_set_type(gv, nw); changed = 1; }
         }
+        /* (7a) a constant written a poly array or a boxed element (`T = m`
+           whose method's return step (3) widened); step (5) follows an
+           Integer constant only */
+        for (int id = 0; id < nt->count; id++) {
+          NodeKind k = nt_kind(nt, id);
+          if (k != NK_ConstantWriteNode && k != NK_ConstantOrWriteNode) continue;
+          int vnode = nt_ref(nt, id, "value");
+          const char *nm = nt_str(nt, id, "name");
+          LocalVar *cv = vnode >= 0 && nm ? comp_const(c, nm) : NULL;
+          if (!cv || !PW_TYPED_ARR(cv->type)) continue;
+          TyKind nw = PW_JOIN(cv->type, infer_type(c, vnode));
+          if (nw != cv->type) { lv_set_type(cv, nw); changed = 1; }
+        }
         /* (8) a multiple assignment: a splat target collects a poly array
            from a boxed scalar or a poly-array source, and a plain target
            takes a boxed element out of a poly-array source */

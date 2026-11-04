@@ -19353,7 +19353,8 @@ static sp_RbVal sp_poly_upto_enum(sp_RbVal r, sp_RbVal lim, int up) {
     if (sp_poly_cmp_ck(span, sp_box_int(0)) >= 0) size = sp_poly_add(span, sp_box_int(1));
     /* a Float count (CRuby counts a Float limit in Floats too) as the
        Integer it is, not narrowed to a word, which a far limit overflows */
-    if (size.tag == SP_TAG_FLT) size = sp_box_bigint(sp_bigint_new_double(size.v.f));
+    /* (one past the Floats, `(-2**1023).upto(Float::MAX)`, stays Infinity, as CRuby's) */
+    if (size.tag == SP_TAG_FLT && isfinite(size.v.f)) size = sp_box_bigint(sp_bigint_new_double(size.v.f));
   }
   return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_gen(sp_big_step_gen, cap, size), r, op, &lim, 1),
                              SP_BUILTIN_ENUMERATOR);

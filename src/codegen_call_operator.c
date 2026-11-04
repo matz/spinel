@@ -1032,6 +1032,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         emit_float_bigint_cmp(c, recv, argv[0], name, b)) return 1;
     if ((rt == TY_BIGINT || repr_of(c, argv[0]).big) &&
         bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(repr_of(c, argv[0]).as_ty)) {
+      if (emit_bigint_cmp_inexact(c, recv, argv[0], name, b)) return 1;
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
       buf_puts(b, ", ");

@@ -554,6 +554,39 @@ int bigint_cmp_operand_ok(TyKind t) {
   return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_RATIONAL ||
          t == TY_POLY || t == TY_UNKNOWN;
 }
+/* A Bignum compared with a boxed side (any class at run time) compares
+   through sp_bigint_poly_eq, sp_poly_bigint_lt, ...: an Integer as a
+   bigint, any other value the way the runtime compares two boxed values.
+   sp_poly_as_bigint read a boxed Rational as 0: `2**64 == [r, 1].first`
+   with r = Rational(2**64, 1) was false. A static Rational side is not one:
+   that shape stays refused. The operands are emitted as the sp_bigint_cmp
+   call below emits them; two boxed sides compare as sp_poly_eq does. 0,
+   having emitted nothing, when neither side is boxed. */
+static int bigint_cmp_side_boxed(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  return !r.big && (r.kind == RK_BOXED || r.as_ty == TY_POLY);
+}
+int emit_bigint_cmp_inexact(Compiler *c, int recv, int arg, const char *op, Buf *b) {
+  int rb = bigint_cmp_side_boxed(c, recv), ab = bigint_cmp_side_boxed(c, arg);
+  if (!rb && !ab) return 0;
+  int ne = sp_streq(op, "!=");
+  const char *fn = sp_streq(op, "==") || ne ? "eq" : sp_streq(op, "<") ? "lt"
+                 : sp_streq(op, "<=") ? "le" : sp_streq(op, ">") ? "gt" : "ge";
+  if (rb && ab) {
+    char pf[16]; snprintf(pf, sizeof pf, "sp_poly_%s", fn);
+    if (ne) buf_puts(b, "(!");
+    emit_poly_cmp_ordered(c, pf, recv, arg, b);
+    if (ne) buf_puts(b, ")");
+    return 1;
+  }
+  buf_printf(b, "%s%s_%s(", ne ? "(!" : "", rb ? "sp_poly_bigint" : "sp_bigint_poly", fn);
+  if (rb) emit_boxed(c, recv, b); else emit_bigint_operand(c, recv, b);
+  buf_puts(b, ", ");
+  if (ab) emit_boxed(c, arg, b); else emit_bigint_operand(c, arg, b);
+  buf_puts(b, ne ? "))" : ")");
+  c->args_in_call = recv;
+  return 1;
+}
 /* A FLOAT against a BIGINT compares as doubles -- which is what the runtime's
    own sp_poly_cmp does for the same pair, so the two paths agree. Coercing the
    float into a bigint truncated it to int64 and saturated there, so
@@ -16703,6 +16736,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     if ((rt == TY_BIGINT || a0 == TY_BIGINT) &&
         bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(a0) &&
         !((rr.kind == RK_BOXED || a0r.kind == RK_BOXED) && repr_of(c, id).kind == RK_BOXED)) {
+      if (emit_bigint_cmp_inexact(c, recv, argv[0], eq ? "==" : "!=", b)) return 1;
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
       buf_puts(b, ", ");

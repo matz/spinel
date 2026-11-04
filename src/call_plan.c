@@ -44,6 +44,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->absent = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
   p->core_hook = 0;
+  p->answers_receiver = 0;
 }
 
 /* The core id of the class a builtin receiver kind is reopened as, or -1. */
@@ -504,6 +505,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);
   else if (k == NK_CallNode) {
     cplan_resolve_call(c, id, p);
+    p->answers_receiver = p->via == UC_CMETH && cmethod_receiver_class(c, p->mi, p->owner_ci) >= 0;
     int recv = nt_ref(c->nt, id, "receiver");
     const char *name = nt_str(c->nt, id, "name");
     if (recv >= 0 && comp_ntype(c, recv) == TY_POLY &&
@@ -1514,17 +1516,18 @@ int cplan_entry_finds(const Compiler *c, int e) {
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
 }
-/* The program's `new` a call reaches on record class ci (cplan_user_new),
-   and in *unplaced whether the record can tell neither that version nor
-   the builtin constructor there: a def call_target finds that is proven
-   made neither at the call nor over its window, nor proven absent there.
-   Such a call takes no guess; it is refused (CRF_RECORD_NEW). */
+/* The program's `new` a call reaches on class ci (cplan_user_new): the one
+   call_target finds, and on a record class also in *unplaced whether the
+   record can tell neither that version nor the builtin constructor there:
+   a def call_target finds that is proven made neither at the call nor over
+   its window, nor proven absent there. Such a call takes no guess; it is
+   refused (CRF_RECORD_NEW). */
 static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   /* (`S[x]`, which desugar_struct_index_ctor gives new's name, is the
      class's own `[]`: a program's `new` is not what it calls) */
   const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
-  if (ct_pin_of(c, id) != -1) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
-  if (!c->classes[ci].is_struct) return comp_cmethod_in_chain(c, ci, "new", NULL);   /* (index_ctor marks a record's only) */
+  /* (index_ctor marks a record's only: any other class's name is `new`) */
+  if (ct_pin_of(c, id) != -1 || !c->classes[ci].is_struct) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1), absent = at == ELAB_NO;

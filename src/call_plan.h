@@ -77,6 +77,7 @@ typedef struct {
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
   unsigned char core_hook; /* a super in a class method that reaches only a core hook's no-op: nothing of the program's answers it, and emit_super answers nil */
+  unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
 } CallPlan;
 
@@ -759,8 +760,10 @@ int cplan_entry_finds(const Compiler *c, int e);
    there, or made over all the statements a call in a method or a block may
    run in), its builtin constructor answering a call before the def and one
    the record cannot place (as the constructor answered every call
-   before); for any other class the tables', which also decide whether the
-   class builds its own constructor. */
+   before); for any other class the one call_target finds where the call
+   runs, its version entry where the call may reach two or more of the
+   class's `self.new`, so that inference, the emitter and the call plan
+   name one method. */
 int cplan_user_new(Compiler *c, int id, int ci);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top

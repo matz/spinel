@@ -566,6 +566,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
 == test/reject/const_get_runtime_name.rb [promote] rc=1
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
+== test/reject/const_path_value_parent_leaf_collides.rb [default] rc=1
+spinel: test/reject/const_path_value_parent_leaf_collides.rb:7: a constant path through a run-time value (`x::Foo`) is not supported when classes in more than one scope are named Foo: which one it names is decided at run time
+== test/reject/const_path_value_parent_leaf_collides.rb [promote] rc=1
+spinel: test/reject/const_path_value_parent_leaf_collides.rb:7: a constant path through a run-time value (`x::Foo`) is not supported when classes in more than one scope are named Foo: which one it names is decided at run time
 == test/reject/const_set_ambiguous_receiver.rb [default] rc=1
 spinel: test/reject/const_set_ambiguous_receiver.rb:11: const_set(:X, ...) on a receiver whose class or module is known only at run time is not supported when more than one module holds a constant X: constants are compile-time globals, and which module's X this sets is not known at compile time. Write `Mod.const_set(:X, v)` or `Mod::X = v` (see docs/limitations.md)
 spinel: 1 refusal, nothing written

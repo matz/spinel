@@ -3386,6 +3386,45 @@ void rewrite_const_alias_receivers(Compiler *c) {
   alias_renames_apply(c, &q);
 }
 
+/* Does a class or module nested under another one (renamed apart by the
+   qualifying pass, `Ext__Foo`, or registered under a qualified Ruby name)
+   share class k's leaf name? */
+static int class_leaf_nested_elsewhere(Compiler *c, int k) {
+  const char *nm = c->classes[k].name;
+  size_t nl = nm ? strlen(nm) : 0;
+  for (int j = 0; nm && j < c->nclasses; j++) {
+    if (j == k || !c->classes[j].name) continue;
+    const char *cn = c->classes[j].name, *rn = c->classes[j].ruby_name_cache;
+    size_t cl = strlen(cn), rl = rn ? strlen(rn) : 0;
+    if (cl > nl + 2 && sp_streq(cn + cl - nl, nm) && !strncmp(cn + cl - nl - 2, "__", 2)) return 1;
+    if (rl > nl + 2 && sp_streq(rn + rl - nl, nm) && !strncmp(rn + rl - nl - 2, "::", 2)) return 1;
+  }
+  return 0;
+}
+
+/* `m::Foo` where m is a value (a local, a parameter, a call's answer):
+   which Foo it names is the one m's class or module holds, known only at
+   run time. The path is resolved by its leaf name, to the top-level class
+   Foo, so when a class nested under some module has the same leaf the
+   answer is a guess, and CRuby's can be the other class: refused. */
+static void refuse_dyn_parent_class_leaf(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) {
+    int par = nt_ref(nt, id, "parent");
+    if (par < 0) continue;
+    NodeKind pk = nt_kind(nt, par);
+    if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int k = nm ? comp_class_index(c, nm) : -1;
+    if (k < 0 || c->classes[k].enclosing_class >= 0 || c->classes[k].ruby_name_cache ||
+        !class_leaf_nested_elsewhere(c, k)) continue;
+    char msg[400];
+    snprintf(msg, sizeof msg, "a constant path through a run-time value (`x::%s`) is not supported when classes "
+             "in more than one scope are named %s: which one it names is decided at run time", nm, nm);
+    unsupported_feature_collect(c, id, msg);
+  }
+}
+
 /* Asks the class a `raise` argument or a `rescue` exception names when it is
    a class alias, and queues its rename (rewrite_const_alias_raise_targets). */
 static void ask_raise_target(Compiler *c, int t, AliasRenames *q) {
@@ -49042,6 +49081,7 @@ static void an_phase_desugar_register(Compiler *c) {
   if (elab_check_on(c)) elab_check_surface(c);
   register_globals_consts(c);
   AN_STEP_V("rewrite_const_alias_receivers", rewrite_const_alias_receivers(c));
+  AN_STEP_V("refuse_dyn_parent_class_leaf", refuse_dyn_parent_class_leaf(c));
   AN_STEP_V("rewrite_builtin_cm_alias_calls", rewrite_builtin_cm_alias_calls(c));   /* Time.stamp -> Time.now, the builtin's */
   AN_STEP_V("route_self_builtin_calls", route_self_builtin_calls(c));   /* U.rand(2) before U's def self.rand -> rand(2), Kernel's */
   desugar_env_values(c);

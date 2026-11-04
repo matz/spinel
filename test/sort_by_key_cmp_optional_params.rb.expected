@@ -1,0 +1,9 @@
+[3, 2, 1]
+[3, 2, 1]
+[3, 2, 1]
+[3, 2, 1]
+[3, 2, 1]
+[3, 2, 1]
+ArgumentError: wrong number of arguments (given 1, expected 2)
+-1
+[3, 2, 1]

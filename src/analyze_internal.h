@@ -968,6 +968,7 @@ int desugar_masgn_to_ary(Compiler *c);
    nested target list? */
 int masgn_nests(const NodeTable *nt, int id);
 int widen_shared_cmp_params(Compiler *c);
+int widen_block_key_cmp_params(Compiler *c);
 int desugar_reduce_proc_arg(Compiler *c);
 int desugar_reduce_splat_args(Compiler *c);
 int desugar_block_capture_wrap(Compiler *c);

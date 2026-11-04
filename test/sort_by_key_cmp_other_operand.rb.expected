@@ -1,0 +1,12 @@
+nil
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of NilSelf with NilSelf failed
+ArgumentError: comparison of Array with Array failed
+ArgumentError: comparison of Array with Array failed
+-1
+[1, 2, 0]
+[1, 2, 0]

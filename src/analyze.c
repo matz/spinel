@@ -51173,6 +51173,8 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_inherited_ivars", infer_inherited_ivars(c));
     ch |= AN_PASS("infer_return_types", infer_return_types(c));
     ch |= AN_PASS("backprop_hash_return_types", backprop_hash_return_types(c));
+    /* (not on a guess still held at bottom: the widening only grows) */
+    if (!g_infer_optimistic) ch |= AN_PASS("widen_block_key_cmp_params", widen_block_key_cmp_params(c));
     if (!ch) {
       /* Converged with the ambiguous guesses held at bottom. Clear the flag
          and keep going: a slot whose evidence never arrived is genuinely
@@ -51435,6 +51437,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
            freshly re-derived type, not the cleared UNKNOWN (#3227 P4) */
         { int _w = AN_PASS_T("promote_forwarded_rest_args", promote_forwarded_rest_args(c)); ch |= _w; ch_other |= _w; }
         { int _w = AN_PASS_T("widen_shared_cmp_params", widen_shared_cmp_params(c)); ch |= _w; ch_other |= _w; }
+        { int _w = AN_PASS_T("widen_block_key_cmp_params", widen_block_key_cmp_params(c)); ch |= _w; ch_other |= _w; }
         { int _w = AN_PASS_T("infer_cvar_types", infer_cvar_types(c, 0)); ch |= _w; ch_other |= _w; }
         int ivsame = c->nclasses == ivncls;
         for (int ci = 0; ivsame && ci < ivncls; ci++)

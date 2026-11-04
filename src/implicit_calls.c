@@ -34,7 +34,7 @@ static int ic_builtin_callbacks(IcSink *s, const char *name, const char *recv_cl
   const BopCallback *cbs = NULL;
   int n = recv_class ? bop_class_callbacks(recv_class, name, &cbs) : bop_name_callbacks(name, &cbs);
   for (int i = 0; i < n; i++)
-    for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)
+    for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)   /* (BCR_KEY qualifies the BLOCK call; it is none of its own) */
       if (bit != BCR_GVAR /* the assignment's row, not a call's */ && (cbs[i].roles & bit) && (roles_wanted & bit)) ic_push(s, cbs[i].name, operand, bit, recv);
   return n;
 }
@@ -288,7 +288,7 @@ static int ic_may_hold_elems(Compiler *c, int node, const char *name) {
 }
 
 /* the last statement's node of a block's body, -1 when it has none */
-static int ic_block_value(const NodeTable *nt, int blk) {
+int ic_block_value(const NodeTable *nt, int blk) {
   int body = nt_ref(nt, blk, "body"), n = 0;
   const int *stmts;
   if (body < 0) return -1;

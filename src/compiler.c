@@ -5096,6 +5096,44 @@ const char *comp_prep_chain_target(Compiler *c, int class_id, const char *name) 
    parent, and past the top of an explicit chain, Object -- where a method the
    program defines on Object is every class's superclass method. A module's
    super is its includer's, and a class method's chain has no such end. */
+/* Is class ci under BasicObject with no Kernel among its ancestors? The
+   includes registration recorded are asked first (an `include` through a
+   constant alias, in a block or a class method of the body), then the
+   bodies' text (class_lacks_kernel), which runs for such a class alone. */
+static int blank_slate_without_kernel(Compiler *c, int ci) {
+  int ans = class_is_blank_slate(c, ci);
+  int ke = comp_core_class(c, CORE_KERNEL);
+  for (int k = ci, d = 0; ans && k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
+    const ClassInfo *ki = &c->classes[k];
+    for (int i = 0; ans && i < ki->nincluded_mod_names; i++) {
+      const char *n = ki->included_mod_names[i], *l = n ? strrchr(n, ':') : NULL;
+      if (n && sp_streq(l ? l + 1 : n, "Kernel")) ans = 0;
+    }
+    for (int i = 0; ans && ke >= 0 && i < ki->nincluded_mods; i++) {
+      int m = ki->included_mods[i];
+      if (m == ke || (m >= 0 && comp_module_includes(c, m, ke, 0))) ans = 0;
+    }
+  }
+  if (!ans || !class_lacks_kernel(c, ci)) return 0;
+  /* an `include` the body makes another way (through a constant alias, in
+     a block, in a class method it calls) may bring Kernel in: such a chain
+     keeps the lookup it had */
+  NodeTable *nt = (NodeTable *)c->nt;
+  for (int k = ci, d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
+    int body = c->classes[k].def_node >= 0 ? nt_ref(nt, c->classes[k].def_node, "body") : -1;
+    if (body < 0) continue;
+    int n = 0, found = 0, *ids = nt_subtree_ids(nt, &body, 1, &n);
+    for (int i = 0; i < n && !found; i++) {
+      if (nt_kind(nt, ids[i]) != NK_CallNode || nt_ref(nt, ids[i], "arguments") < 0) continue;
+      const char *nm = nt_str(nt, ids[i], "name");
+      int r = nt_ref(nt, ids[i], "receiver");
+      found = nm && sp_streq(nm, "include") && (r < 0 || nt_kind(nt, r) == NK_SelfNode);
+    }
+    free(ids);
+    if (found) return 0;
+  }
+  return 1;
+}
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   if (class_id < 0) return -1;
   int p = c->classes[class_id].parent;
@@ -5103,6 +5141,10 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0 || obj == class_id) return -1;
   if (comp_class_is_module(c, &c->classes[class_id])) return -1;
+  /* under BasicObject with no `include Kernel`, neither Object nor Kernel
+     is in the chain: a super finds no method there (one that includes
+     Kernel reaches Kernel's methods through Object's chain, as before) */
+  if (blank_slate_without_kernel(c, class_id)) return -1;
   return obj;
 }
 

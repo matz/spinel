@@ -25962,10 +25962,52 @@ int desugar_safe_nav_attr_write_at(Compiler *c, LowerCtx *lc, int id) {
   return 1;
 }
 
+/* Is self at node id a class or module: a statement of a class or module
+   body, or in a `def self.m` or a def of the body's `class << self`? A block
+   of a call that gives its block another self (define_method, instance_eval,
+   class_eval and their kin, a class builder's) on the way says no, as does
+   `class << obj`; any other block or a lambda keeps self. */
+static int ca_self_is_class(Compiler *c, LowerCtx *lc, int id) {
+  const NodeTable *nt = c->nt;
+  const int *par = lower_parents(c, lc);
+  if (!par) return 0;
+  int def = -1;
+  for (int n = par[id]; n >= 0; n = par[n]) {
+    NodeKind k = nt_kind(nt, n);
+    if (k == NK_DefNode) {
+      if (def >= 0) return 0;   /* a def inside a def: the outer's self is not it */
+      def = n;
+      int r = nt_ref(nt, n, "receiver");
+      if (r >= 0) return nt_kind(nt, r) == NK_SelfNode;
+      continue;
+    }
+    if (k == NK_SingletonClassNode) {
+      int e = nt_ref(nt, n, "expression");
+      return def >= 0 && e >= 0 && nt_kind(nt, e) == NK_SelfNode;
+    }
+    if (k == NK_ClassNode || k == NK_ModuleNode) return def < 0;
+    if (k == NK_BlockNode) {
+      int call = par[n];
+      const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+      if (!cn || is_class_eval_family(cn) || sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec") ||
+          sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") || is_new_name(cn) ||
+          sp_streq(cn, "define"))
+        return 0;
+    }
+  }
+  return 0;
+}
+
 int desugar_const_attr_op_assign_left(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) return 0;
+  if (recv < 0) return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  /* a constant, or self where self is a class: `self.a op= v` in a class
+     method reads and writes the class the method was called on, a subclass
+     included, which `self.a = self.a op v` does and the attribute emitters,
+     which know the object receivers, did not */
+  if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode && !(rk == NK_SelfNode && ca_self_is_class(c, lc, id))) return 0;
   /* the dumper spells the attribute once, as `name`; the writer is name= */
   const char *rn = nt_str(nt, id, "name");
   if (!rn || !rn[0] || nt_ref(nt, id, "value") < 0 || nt_ref(nt, id, "arguments") >= 0) return 0;

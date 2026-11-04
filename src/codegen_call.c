@@ -20085,6 +20085,12 @@ static int kwh_counts(const char *cls, const char *name) {
     if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
   return 0;
 }
+/* Does any builtin class or module have a class method `m` (Integer.sqrt)? */
+int builtin_cmethod_name_known(const char *m) {
+  for (int i = 0; m && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++)
+    if (sp_builtin_cmeth_arity_spec_tbl[i].m && sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, m)) return 1;
+  return 0;
+}
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {
   for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
     const SpAritySpec *r = &sp_builtin_cmeth_arity_spec_tbl[i];
@@ -22265,6 +22271,12 @@ static int object_reopen_builtin_owns(Compiler *c, int id, int oci, const char *
    that name (any_class: of any class), a module's instance method (an
    `extend` gives it; for one known class cls, a module cls extends), or a
    reopened Class or Module's? */
+/* Does Class (or Module, which it inherits) have a method `vnm` of its own,
+   which a class value reaches before Object's? */
+int builtin_cmethod_name_known(const char *m);
+static int class_value_builtin_answers(const char *vnm) {
+  return builtin_instance_method_known("Class", vnm) || builtin_instance_method_known("Module", vnm);
+}
 static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const char *vnm, int any_class, int cls) {
   for (int k = 0; k < c->nclasses; k++) {
     if (k == oci) continue;
@@ -22316,6 +22328,9 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     if (ci < 0 || ci >= c->nclasses) return 0;
     if (call_target(c, id, ci, vnm, CT_CMETHOD, NULL) >= 0 || object_reopen_class_value_owns(c, id, oci, vnm, 0, ci))
       return 0;
+    /* a class value answers Class's and Module's public methods (K.name)
+       before Object's */
+    if (class_value_builtin_answers(vnm)) return 0;
     snprintf(cvname, sizeof cvname, "%s %s", comp_class_is_module(c, &c->classes[ci]) ? "module" : "class",
              class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
     cname = cvname; named = 1;
@@ -22649,11 +22664,14 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   /* Object's own class method is in every class's singleton chain, so
      every class value answers it */
   int obj_cmeth = call_target(c, id, oci, vnm, CT_CMETHOD, NULL) >= 0;
-  if (obj_cmeth || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
+  /* and Class's and Module's own public methods (name, ancestors) answer
+     every class value before Object's */
+  int cls_builtin = class_value_builtin_answers(vnm);
+  if (obj_cmeth || cls_builtin || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
     Buf cv; memset(&cv, 0, sizeof cv);
     /* (a module Object extends answers every class value, as does a
        reopened Class or Module, which the per-class rule counts) */
-    int every = obj_cmeth;
+    int every = obj_cmeth || cls_builtin;
     for (int m = 0; m < c->nclasses && !every; m++)
       every = m != oci && comp_class_is_module(c, &c->classes[m]) && call_target(c, id, m, vnm, CT_OWN, NULL) >= 0 &&
               comp_class_singleton_has_module(c, oci, m);
@@ -22663,7 +22681,12 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
                        object_reopen_class_value_owns(c, id, oci, vnm, 0, k)))
         buf_printf(&cv, " || _t%d.cls_id == %d", tv, k);
     if (every) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
-    else buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id >= %d%s))", tv, tv, tv, c->nclasses, cv.p ? cv.p : "");
+    /* a builtin class value (Integer, a name-boxed one) passes only when
+       some builtin class has a class method of the name (Integer.sqrt) */
+    else if (builtin_cmethod_name_known(vnm))
+      buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id >= %d%s))", tv, tv, tv, c->nclasses, cv.p ? cv.p : "");
+    else if (cv.p)
+      buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (0%s))", tv, cv.p);
     free(cv.p);
   }
   /* `x&.public_send(:top)` never calls on nil */

@@ -1785,6 +1785,7 @@ void sp_sched_ev_forget(int fd) { (void)fd; }
 #endif
 
 static unsigned   g_next_id = 1;
+static void sp_thread_raise_main_locked(const char *cls, const char *msg, void *obj);
 static unsigned char g_report_default = 1;  /* Thread.report_on_exception default */
 
 #ifdef SP_THREADS
@@ -2976,8 +2977,16 @@ static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: s
          for this one, then lets the exception surface at join and terminate
          with its status. Reporting it printed a scary line for an ordinary
          `exit` inside a thread. */
-      do_report = t->report_on_exception &&
-                  !(ec && strcmp(ec, "SystemExit") == 0);
+      int is_exit = ec && sp_exc_cls_matches(ec, "SystemExit");
+      do_report = t->report_on_exception && !is_exit;
+      /* ... and it ends the program from any wait main is in, ensures and
+         at_exit hooks included, as CRuby raises it in the main thread. Ahead
+         of the joiners' wake, so a main joining t raises it once. */
+      if (is_exit) {
+        if (!locked) SCHED_LOCK();
+        sp_thread_raise_main_locked(ec, em, eo);
+        if (!locked) SCHED_UNLOCK();
+      }
     }
     /* DEAD goes up after retval and the exception fields, with release:
        #status and #inspect read has_exc once they see it, without the lock. */
@@ -5090,6 +5099,19 @@ static void sp_sched_timer_expire(const sp_tm_ent *timer, double now) {
 }
 #endif
 
+/* Queue a raise on the root fiber main runs on and wake a main parked in a
+   wait; the scheduler lock is held. */
+static void sp_thread_raise_main_locked(const char *cls, const char *msg, void *obj) {
+  sp_thread *t = &g_main_thread;
+  if (!g_main_root) return;
+  sp_fiber_set_raise_inject(g_main_root, cls, msg, obj);
+  if (SP_TH_STATE(t) == SP_TH_BLOCKED) {
+    sp_sched_unpark(t);
+    SP_TH_SET_STATE(t, SP_TH_RUNNABLE);
+  }
+  SCHED_WAKE_MAIN();   /* a joining main pumps without being BLOCKED */
+}
+
 /* #kill / #raise: deliver an inject to the target so it terminates (running its
    ensures) or raises. The current thread acts on itself immediately; another
    thread gets the inject queued on its fiber and is made runnable, so the inject
@@ -5111,14 +5133,7 @@ static void sp_thread_deliver(sp_thread *t, int is_kill,
      to fill then deadlocked. #kill of main is still a no-op: CRuby ends the
      process for it (see the Thread row in docs/limitations.md). */
   if (t == &g_main_thread) {
-    if (!is_kill && g_main_root) {
-      sp_fiber_set_raise_inject(g_main_root, cls, msg, obj);
-      if (SP_TH_STATE(t) == SP_TH_BLOCKED) {
-        sp_sched_unpark(t);
-        SP_TH_SET_STATE(t, SP_TH_RUNNABLE);
-      }
-      SCHED_WAKE_MAIN();   /* a joining main pumps without being BLOCKED */
-    }
+    if (!is_kill) sp_thread_raise_main_locked(cls, msg, obj);
     SCHED_UNLOCK();
     return;
   }

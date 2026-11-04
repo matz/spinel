@@ -16495,11 +16495,17 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     if (bcase && defcls != k) continue;
     Scope *m = &c->scopes[mi];
     if (!m->reachable) continue;   /* nothing calls it: reachability keeps a `<=>` that a sort, a max or a Comparable operator can reach */
-    if (m->nparams < 1 || m->rest_idx >= 0) continue;     /* need exactly the one operand */
+    if (m->nparams < 1) continue;
     /* a `<=>` that answers no number (always nil) still runs: Comparable's
        == and the sorts call it and read its answer as not-comparable */
     int non_numeric = m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT;
-    TyKind pt = scope_param_type(m, 0);
+    /* the operand's parameter, the one the argument layout binds it to: not
+       the first when an optional comes ahead of it (`def <=>(s = 1, o)`);
+       none when a rest takes it (`def <=>(*r)`): the boxed operand, which
+       emit_arm_args_text packs into the rest. A method that cannot take one
+       argument raises below. */
+    int api = arm_arg_param(c, m);
+    TyKind pt = api >= 0 ? scope_param_type(m, api) : TY_POLY;
     const char *dcn = c->classes[defcls].c_name;
     int self_vt = c->classes[defcls].is_value_type;
     int cid = k;

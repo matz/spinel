@@ -14194,7 +14194,8 @@ int widen_shared_cmp_params(Compiler *c) {
     for (int k = 0; k < c->nclasses && users < 2; k++)
       if (comp_method_in_chain(c, k, "<=>", NULL) == mi) users++;
     if (users < 2) continue;
-    LocalVar *p = scope_local(m, m->pnames[0]);
+    int api = arm_arg_param(c, m);   /* the operand's parameter, as the dispatch binds it */
+    LocalVar *p = api >= 0 ? scope_local(m, m->pnames[api]) : NULL;
     if (p && p->type != TY_POLY) { lv_set_type(p, TY_POLY); changed = 1; }
   }
   return changed;
@@ -14212,18 +14213,24 @@ static int builtin_orders_block_keys(const char *name) {
   return 0;
 }
 
-/* The program's instance `<=>` methods whose operand is a key's: collected
-   once per call of widen_block_key_cmp_params. */
-typedef struct { int *v; int n; int built; } KeyCmps;
+/* The program's instance `<=>` methods whose operand is a key's, each with
+   the parameter the operand binds to (op, arm_arg_param: an optional may come
+   ahead of it): collected once per call of widen_block_key_cmp_params. */
+typedef struct { int *v; int *op; int n; int built; } KeyCmps;
 
 static void key_cmps_build(Compiler *c, KeyCmps *K) {
   K->built = 1;
-  K->v = malloc(sizeof *K->v * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
-  if (!K->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  size_t cap = (size_t)(c->nscopes > 0 ? c->nscopes : 1);
+  K->v = malloc(sizeof *K->v * cap);
+  K->op = malloc(sizeof *K->op * cap);
+  if (!K->v || !K->op) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int mi = 0; mi < c->nscopes; mi++) {
-    const Scope *m = &c->scopes[mi];
-    if (is_spaceship_name(m->name) && m->class_id >= 0 && !m->is_cmethod && m->nparams >= 1 && m->pnames[0])
-      K->v[K->n++] = mi;
+    Scope *m = &c->scopes[mi];
+    if (!is_spaceship_name(m->name) || m->class_id < 0 || m->is_cmethod || m->nparams < 1) continue;
+    int api = arm_arg_param(c, m);
+    if (api < 0 || !m->pnames[api]) continue;
+    K->v[K->n] = mi;
+    K->op[K->n++] = api;
   }
 }
 
@@ -14246,7 +14253,7 @@ static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, TyKind kt, int node) 
   for (int j = 0; j < K->n; j++) {
     int mi = K->v[j];
     if (ty_is_object(kt) && comp_method_in_chain(c, ty_object_class(kt), "<=>", NULL) != mi) continue;
-    LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
+    LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[K->op[j]]);
     if (!p || p->rbs_seeded) continue;
     if (!ty_is_object(kt)) {
       p->key_operand = 1;
@@ -14292,7 +14299,7 @@ static int widen_answer_cmp_operands(Compiler *c, KeyCmps *K, int node, int dept
 int widen_block_key_cmp_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  KeyCmps K = { NULL, 0, 0 };
+  KeyCmps K = { NULL, NULL, 0, 0 };
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     int blk = nt_ref(nt, id, "block");
@@ -14306,7 +14313,7 @@ int widen_block_key_cmp_params(Compiler *c) {
       changed |= widen_key_cmp_operands(c, &K, TY_POLY, -1);
     }
   }
-  free(K.v);
+  free(K.v); free(K.op);
   return changed;
 }
 

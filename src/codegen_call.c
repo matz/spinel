@@ -32561,9 +32561,16 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   if (fwd) {
     LocalVar *lv = scope_local(s, s->pnames[0]);
     nt_ty = lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY;
-    buf_printf(&nm, "lv_%s", rename_local(s->pnames[0]));
+    /* an Integer or Float parameter that also takes nil goes in boxed */
+    if (lv && slot_is_oint(lv)) { emit_boxed_fwd_param(c, s, 0, &nm); nt_ty = TY_POLY; }
+    else buf_printf(&nm, "lv_%s", rename_local(s->pnames[0]));
   }
-  else { nt_ty = comp_ntype(c, argv[0]); emit_expr(c, argv[0], &nm); }
+  else {
+    nt_ty = comp_ntype(c, argv[0]);
+    /* any other argument goes in boxed (emit_boxed knows its slot) */
+    if (nt_ty == TY_SYMBOL || nt_ty == TY_STRING) emit_expr(c, argv[0], &nm);
+    else { emit_boxed(c, argv[0], &nm); nt_ty = TY_POLY; }
+  }
   buf_printf(b, "({ sp_sym _s%d = ", t);
   if (nt_ty == TY_SYMBOL) buf_puts(b, nm.p ? nm.p : "0");
   else if (nt_ty == TY_STRING) buf_printf(b, "sp_sym_intern(%s)", nm.p ? nm.p : "\"\"");
@@ -32571,7 +32578,11 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
     int tn = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tn);
     emit_boxed_text(c, nt_ty, nm.p ? nm.p : "sp_box_nil()", b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })", tn, tn, tn);
+    /* not a Symbol or a String is CRuby's TypeError */
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if (_t%d.tag != SP_TAG_SYM && !sp_poly_check_str(_t%d)) "
+                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", sp_poly_inspect(_t%d))); "
+                  "_t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })",
+               tn, tn, tn, tn, tn, tn, tn);
   }
   free(nm.p);
   /* include_all: the second argument or parameter, false when absent */
@@ -32580,7 +32591,9 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   if (fwd && s->nparams >= 2) {
     LocalVar *lv = scope_local(s, s->pnames[1]);
     ia_ty = lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY;
-    buf_printf(&ia, "lv_%s", rename_local(s->pnames[1])); have_ia = 1;
+    if (lv && slot_is_oint(lv)) { emit_boxed_fwd_param(c, s, 1, &ia); ia_ty = TY_POLY; }
+    else buf_printf(&ia, "lv_%s", rename_local(s->pnames[1]));
+    have_ia = 1;
     /* `def respond_to?(name, *)`: the second parameter is the rest Array,
        whose first element (if any) is include_all */
     if (s->rest_idx == 1 && ty_is_array(ia_ty)) {
@@ -32592,7 +32605,11 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
       ia_ty = TY_BOOL;
     }
   }
-  else if (!fwd && argc >= 2) { ia_ty = comp_ntype(c, argv[1]); emit_expr(c, argv[1], &ia); have_ia = 1; }
+  else if (!fwd && argc >= 2) {
+    ia_ty = comp_ntype(c, argv[1]); have_ia = 1;
+    if (ia_ty == TY_BOOL) emit_expr(c, argv[1], &ia);
+    else { emit_boxed(c, argv[1], &ia); ia_ty = TY_POLY; }
+  }
   if (!have_ia) buf_puts(b, "0");
   else if (ia_ty == TY_BOOL) buf_puts(b, ia.p ? ia.p : "0");
   else { buf_puts(b, "sp_poly_truthy("); emit_boxed_text(c, ia_ty, ia.p ? ia.p : "sp_box_nil()", b); buf_puts(b, ")"); }

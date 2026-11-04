@@ -15661,7 +15661,7 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
    NoMethodError. */
 /* A super's forwarded parameter pi, boxed: an Integer or Float parameter
    that also takes nil boxes as its oint. */
-static void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
+void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
   LocalVar *lv = scope_local(s, s->pnames[pi]);
   Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[pi]));
   if (lv && slot_is_oint(lv)) buf_printf(b, "%s(%s)", oint_box(lv->type), pn.p);

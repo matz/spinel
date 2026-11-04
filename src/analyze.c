@@ -3507,8 +3507,9 @@ static int dyn_holder_parent(Compiler *c, int k) {
   if (c->classes[k].parent >= 0) return c->classes[k].parent;
   int sc = class_def_super(c->nt, c->classes[k].def_node);
   if (sc < 0) return -1;
-  NodeKind sk = nt_kind(c->nt, sc);
-  const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_str(c->nt, sc, "name") : NULL;
+  /* (a path superclass, `< Other::Base`, is not matched by its leaf: the
+     arms keep their order for it) */
+  const char *sn = nt_kind(c->nt, sc) == NK_ConstantReadNode ? nt_str(c->nt, sc, "name") : NULL;
   if (!sn) return -1;
   /* the superclass as written beside k (Kid < Base in one scope) */
   int e = c->classes[k].enclosing_class;

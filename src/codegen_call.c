@@ -18880,9 +18880,11 @@ static void emit_object_methods_list(Compiler *c, int cid, const char *name, int
    class at run time, as a typed receiver's is picked at compile time. The
    classes are those the receiver can hold (poly_recv_classes; every
    instantiated class of the program when the walk bounds none); any other
-   value is CRuby's NoMethodError. 0, for the caller's own handling, when a
-   class the receiver can hold has no such list or the arguments are not a
-   list's (an_poly_object_methods_listable, which also types the call). */
+   value is CRuby's NoMethodError, and an instance of a class whose list
+   cannot be made ahead of time a NotImplementedError naming it. 0, for the
+   caller's own handling, when the arguments are not a list's, a class the
+   receiver can hold defines the name, or none lists it
+   (an_poly_object_methods_listable, which also types the call). */
 int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
                                         const int *argv, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
@@ -18902,6 +18904,14 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
+    if (!an_object_methods_listable(c, k, name)) {
+      /* a class whose list cannot be made ahead of time: said so, should
+         the receiver be its instance, rather than CRuby's answer missed */
+      buf_printf(b, " case %d: sp_raise_cls(\"NotImplementedError\", \"spinel: %s of an instance of %s is not listed:"
+                    " an exception, a native class or a class under a builtin; see docs/limitations.md\"); break;",
+                 k, name, c->classes[k].name);
+      continue;
+    }
     buf_printf(b, " case %d: _t%d = ", k, ta);
     emit_object_methods_list(c, k, name, pub, prot, sg, an_object_methods_all_arg(c, k, argc, argv),
                              argc > 0 ? argv[0] : -1, b);

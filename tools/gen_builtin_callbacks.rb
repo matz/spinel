@@ -732,7 +732,20 @@ def probe_kernel
   probe("Kernel", "open") { |mk| o = mk.(:arg); -> { open(o) { |f| f } } }
   probe("Kernel", "format") { |mk| o = mk.(:arg); -> { format("%s %d %f", o, o, o) } }
   probe("Kernel", "sprintf") { |mk| o = mk.(:arg); -> { sprintf("%s %d %f", o, o, o) } }
+  # a Hash argument holds the values a named reference (%{a}, %<b>s) reads:
+  # they are its elements, not the argument
+  %i[format sprintf printf].each do |mname|
+    probe("Kernel", mname.to_s) { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; -> { Kernel.__send__(mname, "%{a} %<b>s", h) } }
+  end
+  probe("File", "printf") { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; f = File.new(File::NULL, "w"); -> { f.printf("%{a} %<b>s", h) } }
+  probe("StringIO", "printf") { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; io = StringIO.new(+""); -> { io.printf("%{a} %<b>s", h) } }
   probe("String", "%") { |mk| o = mk.(:arg); -> { +"%s %d %f" % [o, o, o] } }
+  # the Array or Hash a program writes as the argument holds the values the
+  # format reads: they are its elements, not the argument
+  probe("String", "%") { |mk| a = [mk.(:elem), mk.(:elem)]; -> { +"%s %d" % a } }
+  probe("String", "%") { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; -> { +"%{a} %<b>s" % h } }
+  # a String argument joins the elements: to_str, to_ary, then to_s
+  probe("Array", "*") { |mk| a = [mk.(:elem), mk.(:elem)]; -> { a * "," } }
   probe("Array", "pack") { |mk| a = [mk.(:elem), mk.(:elem)]; -> { a.pack("aw") } }
   probe("IO.", "select") { |mk| o = mk.(:elem); -> { IO.select([o], nil, nil, 0) } }
   probe("Kernel", "select") { |mk| o = mk.(:elem); -> { select([o], nil, nil, 0) } }

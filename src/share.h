@@ -119,6 +119,8 @@ int share_value_fresh(Compiler *c, int n, int depth);
 /* Is node n the frozen String literal itself (a literal, or a freeze, -@ or
    dedup of one)? Its handle is the literal's own, never a new one. */
 int share_frozen_literal(Compiler *c, int n);
+/* ...with nothing run besides it: no statements before it in parentheses */
+int share_frozen_literal_alone(Compiler *c, int n);
 /* ...or a read of a builtin String constant (RUBY_ENGINE ...), one frozen
    object too (share_frozen_string) */
 int share_frozen_string(Compiler *c, int n);

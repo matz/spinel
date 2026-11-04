@@ -1555,6 +1555,17 @@ int share_frozen_literal(Compiler *c, int n) {
       (bop_share_named(TY_STRING, nt_str(nt, n, "name")) != BSH_FROZEN && !is_freeze_name(nt_str(nt, n, "name")))) return 0;
   return share_frozen_literal(c, nt_ref(nt, n, "receiver"));
 }
+/* Is node n a frozen literal (share_frozen_literal) that runs nothing
+   besides: each parenthesis on the way holds the literal alone,
+   `("lit")` or `("lit").freeze`, never `(f; "lit")`, whose statements run
+   before the literal answers? */
+int share_frozen_literal_alone(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  n = nt_paren_single(nt, n);
+  if (nt_kind(nt, n) == NK_ParenthesesNode || !share_frozen_literal(c, n)) return 0;
+  /* (a freeze of one is one when its receiver is) */
+  return nt_kind(nt, n) != NK_CallNode || share_frozen_literal_alone(c, nt_ref(nt, n, "receiver"));
+}
 /* Is unary `+` of n a new String: n a builtin String constant
    (share_frozen_string), or what the builtin freeze answers, frozen
    whatever its receiver (`+RUBY_ENGINE.freeze`, `+s.freeze`)? */

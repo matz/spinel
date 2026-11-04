@@ -24121,9 +24121,11 @@ static int civ_name_ok(const char *iv) {
     if (!(isalnum((unsigned char)*q) || *q == '_')) return 0;
   return !isdigit((unsigned char)iv[1]);
 }
-/* the accessors: `kind` 0 the getter, 1 the setter, 2 `defined?(@x)` */
+/* the accessors: `kind` 0 the getter, 1 the setter, 2 `defined?(@x)`, 3
+   `instance_variable_defined?(:@x)` (true or false where 2 answers
+   defined?'s string or nil) */
 static const char *const CIV_ACCESSOR_FMT[] = {
-  "__spinel_civget_%s", "__spinel_civset_%s", "__spinel_civdef_%s" };
+  "__spinel_civget_%s", "__spinel_civset_%s", "__spinel_civdef_%s", "__spinel_civhas_%s" };
 /* the accessor of `kind` in class node m's body, added once */
 static void civ_ensure_accessor(NodeTable *nt, int m, const char *iv, int kind) {
   char mname[256];
@@ -24153,11 +24155,12 @@ static void civ_ensure_accessor(NodeTable *nt, int m, const char *iv, int kind) 
   else {
     e = fwd_new_node_like(nt, m, "InstanceVariableReadNode");
     nt_node_set_str(nt, e, "name", iv);
-    if (kind == 2) {
+    if (kind >= 2) {
       int q = fwd_new_node_like(nt, m, "DefinedNode");
       nt_node_set_ref(nt, q, "value", e);
       e = q;
     }
+    if (kind == 3) e = fwd_new_call(nt, fwd_new_call(nt, e, "nil?", -1), "!", -1);   /* !defined?(@x).nil? */
   }
   nt_node_set_arr(nt, db, "body", &e, 1);
   nt_node_set_str(nt, d, "name", mname);
@@ -24341,7 +24344,8 @@ int desugar_const_ivar_access(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     int setter = nm && sp_streq(nm, "instance_variable_set");
-    if (!setter && !(nm && sp_streq(nm, "instance_variable_get"))) continue;
+    int has = nm && sp_streq(nm, "instance_variable_defined?");
+    if (!setter && !has && !(nm && sp_streq(nm, "instance_variable_get"))) continue;
     if (nt_ref(nt, id, "block") >= 0) continue;
     int r = nt_ref(nt, id, "receiver");
     if (r < 0) continue;
@@ -24364,9 +24368,10 @@ int desugar_const_ivar_access(Compiler *c) {
     }
     if (m < 0) continue;
     char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
-    civ_ensure_accessor(nt, m, iv, setter);
+    int kind = setter ? 1 : has ? 3 : 0;
+    civ_ensure_accessor(nt, m, iv, kind);
     char mname[256];
-    snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[setter], iv + 1);
+    snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
     nt_node_set_str(nt, id, "name", mname);
     if (setter) {
       int v = av[1];

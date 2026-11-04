@@ -452,6 +452,44 @@ static int obj_defines_own(Compiler *c, int recv, const char *name) {
   return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
 }
 
+/* Only the builtin-only fallback calls this: user methods and reflection
+   overrides have already selected their own paths. The core method inventory
+   proves absence, including inherited methods. Tags with no single core
+   surface (objects and class values) keep the runtime lookup. A Boolean tag
+   is absent only when both of its classes lack the name. */
+static int emit_boxed_responds_builtin_absent(Compiler *c, int recv, const char *name, Buf *b) {
+  static const struct { const char *core, *other, *mask; } kinds[] = {
+    { "Integer", NULL, "(UINT32_C(1) << SP_TAG_INT) | (UINT32_C(1) << SP_TAG_BIGINT)" },
+    { "Float", NULL, "(UINT32_C(1) << SP_TAG_FLT)" },
+    { "String", NULL, "(UINT32_C(1) << SP_TAG_STR)" },
+    { "Symbol", NULL, "(UINT32_C(1) << SP_TAG_SYM)" },
+    { "NilClass", NULL, "(UINT32_C(1) << SP_TAG_NIL)" },
+    { "TrueClass", "FalseClass", "(UINT32_C(1) << SP_TAG_BOOL)" }
+  };
+  unsigned absent = 0;
+  for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++)
+    if (core_method_vis(kinds[i].core, name, 1) == 0 &&
+        (!kinds[i].other || core_method_vis(kinds[i].other, name, 1) == 0))
+      absent |= 1u << i;
+  if (!absent) return 0;
+  int tv = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+  emit_boxed(c, recv, b);
+  /* A future tag outside the mask's width must fall back, not shift by an
+     invalid count. Current tags all fit, including the separate Bigint tag. */
+  buf_printf(b, "; ((unsigned)_t%d.tag >= 32u || !((", tv);
+  int first = 1;
+  for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++) {
+    if (!(absent & (1u << i))) continue;
+    buf_printf(b, "%s%s", first ? "" : " | ", kinds[i].mask);
+    first = 0;
+  }
+  buf_printf(b, ") & (UINT32_C(1) << _t%d.tag))) && sp_poly_responds_builtin(_t%d, \"", tv, tv);
+  emit_c_escaped(b, name);
+  buf_puts(b, "\"); })");
+  return 1;
+}
+
 /* respond_to?, method_defined? and its kin, const_set / const_get / const_defined? */
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
@@ -592,6 +630,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         else if ((rt == TY_CLASS && class_value_responds(c, 0, qm, NULL)) ||
                  ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm))) {
           int tv = class_value_responds(c, 0, qm, NULL) ? ++g_tmp : 0;
+          if (!tv && argc == 1 && (rt == TY_POLY || rt == TY_UNKNOWN) &&
+              emit_boxed_responds_builtin_absent(c, recv, qm, b)) return 1;
           if (tv) { buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b); buf_printf(b, "; sp_poly_responds_builtin(_t%d", tv); }
           else { buf_puts(b, "sp_poly_responds_builtin("); emit_boxed(c, recv, b); }
           buf_puts(b, ", \"");

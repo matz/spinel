@@ -37,3 +37,4 @@ near = [2**64 + 1, "s"][ARGV.size]
 p near.upto((2**64).to_f).size, near.upto((2**64).to_f).to_a
 down = [2**64, "s"][ARGV.size]
 p down.downto(1.8446744073709552e19).size
+p [-2**1023, "s"][ARGV.size].upto(Float::MAX).first(1).size

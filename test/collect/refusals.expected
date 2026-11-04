@@ -1424,6 +1424,12 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/rational_pow_bignum.rb:7: the receiver of a Float `**` given a Rational, which no conversion keeps in its sp_float slot
 spinel: 1 refusal, nothing written
 == test/reject/rational_pow_bignum.rb [promote] rc=0
+== test/reject/record_capture_in_lambda_before_def.rb [default] rc=1
+spinel: test/reject/record_capture_in_lambda_before_def.rb:5: a Method of a Struct or Data class's class method, made where the method's def may not have run yet: CRuby raises NameError before the def runs
+spinel: 1 refusal, nothing written
+== test/reject/record_capture_in_lambda_before_def.rb [promote] rc=1
+spinel: test/reject/record_capture_in_lambda_before_def.rb:5: a Method of a Struct or Data class's class method, made where the method's def may not have run yet: CRuby raises NameError before the def runs
+spinel: 1 refusal, nothing written
 == test/reject/recursive_default_reads_block.rb [default] rc=1
 spinel: test/reject/recursive_default_reads_block.rb:5: unsupported default of `m`'s parameter `y` that calls `m` again with that argument omitted (one reading the caller's block or `super` cannot be moved into a method of its own): node N (ParenthesesNode)
 spinel: 1 refusal, nothing written

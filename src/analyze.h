@@ -427,6 +427,13 @@ int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, L
    has no point there (a file the load graph does not place). */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
+/* The calls that run the closure node id is in, with no def or block
+   between (a lambda, `proc { }`), into sites[0..cap): the call that invokes
+   it (is_proc_invoke), or each that invokes a read of the local it is
+   written to whole, in the same body. How many; -1 for no closure or past
+   cap. Where its value, or a read of that local, goes anywhere else it may
+   run at any time, which no site places. */
+int elab_closure_runs(Compiler *c, int id, int *sites, int cap);
 /* ...and whether node id is in a block the record takes to run at once
    (ELAB_BLK_ASSUMED) whose typed call target keeps it (Call node
    `blk_kept`), with no def or lambda between: node id may then run any

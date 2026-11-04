@@ -660,6 +660,7 @@ int cplan_plain_ctx(void) {
 
 static int cplan_capture_absent(Compiler *c, int id, int mi);
 static int cm_capture_class(Compiler *c, int id, const char **name);
+static int cplan_capture_gap(Compiler *c, int id);
 /* A bound Method already carries its target. Its arguments are bound by
    the Method adapter, not by the generic call-target argument walk.
    Metadata readers also need the captured target and dispatch kind. */
@@ -1911,6 +1912,42 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   }
   else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL) ? (sg ? 2 : 1) : 0;
+}
+/* Is ci's class method `name` defined wherever node at runs? */
+static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
+  ElabWindow w;
+  const LrDef *ds[VER_MAX_ARMS];
+  int framed = elab_plan_enter(c, at), n = 0;
+  int live = elab_call_method(c, at, ci, name, 1) == ELAB_YES;
+  if (!live && elab_call_window(c, at, &w) == ELAB_YES && (n = elab_method_span(c, ci, name, 1, &w, ds, VER_MAX_ARMS)) >= 1) {
+    live = 1;
+    for (int k = 0; k < n && k < VER_MAX_ARMS; k++) live &= ds[k] != NULL;
+  }
+  if (framed) elab_plan_leave(c);
+  return live;
+}
+/* A capture of a record class's (Struct.new's, Data.define's) class method
+   the program defines, which the record neither proves defined where it
+   runs nor absent (cplan_capture_absent): it may run before the def (a
+   loop's body around both, a method a call ahead of the def runs). In a
+   closure, the calls that run it are asked (elab_closure_runs), not the
+   place it is made. No entry tests the def at run time (a name a
+   reflection reader names has none, lr_late_make), and the def bound
+   there makes a Method where CRuby raises NameError. A closure that
+   escapes keeps the def bound, as before, since only a run-time test of
+   the def could place it; so do a plain class's capture and one of a name
+   a builtin answers. */
+static int cplan_capture_gap(Compiler *c, int id) {
+  const char *name = NULL;
+  int ci = nt_kind(c->nt, id) == NK_CallNode ? cm_capture_class(c, id, &name) : -1;
+  if (ci < 0 || elab_record_class_of(c, ci) < 0 || call_target(c, -1, ci, name, CT_CMETHOD, NULL) < 0 ||
+      cm_builtin_answers(c, ci, name) || cplan_capture_absent(c, id, -1))
+    return 0;
+  if (capture_live_at(c, id, ci, name)) return 0;
+  int sites[16], n = elab_closure_runs(c, id, sites, 16);
+  for (int k = 0; k < n; k++)
+    if (!capture_live_at(c, sites[k], ci, name)) return 1;
+  return n < 0;
 }
 /* See call_plan.h. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
@@ -3364,6 +3401,12 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_TOP_SELF, CR_FEATURE,
                      "a top-level method's self is not modelled: this call finds main's singleton method when the "
                      "method runs on main and Object's when it runs on another object", buf, cap);
+    return;
+  }
+  if (!what && cplan_capture_gap(c, id)) {
+    cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE,
+                     "a Method of a Struct or Data class's class method, made where the method's def may not have "
+                     "run yet: CRuby raises NameError before the def runs", buf, cap);
     return;
   }
   if (!what) {

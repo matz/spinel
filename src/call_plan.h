@@ -48,7 +48,8 @@ typedef enum {
   CRF_EVAL,        /* Kernel#eval of a runtime string (diagnose_eval_call) */
   CRF_IO_REOPEN,   /* an IO reopening that yields (emit_io_reopen_call) */
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
-  CRF_TOP_SELF     /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
+  CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
+  CRF_CAPTURE      /* a record class's class method captured where its def may not have run (emit_call_method_obj_arms) */
 } CplanRefuseFrom;
 
 typedef struct {

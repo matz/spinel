@@ -3317,6 +3317,61 @@ static int lr_block_value(Compiler *c, int x, int def, const char **names, int *
   }
 }
 
+/* Is node x in a closure (a lambda, `proc { }`) before any def? Where that
+   closure runs is not where x is. */
+static int lr_in_closure(Compiler *c, const int *par, int n, int x) {
+  for (int p = x >= 0 && x < n ? par[x] : -1; p >= 0 && p < n; p = par[p]) {
+    NodeKind k = nt_kind(c->nt, p);
+    if (k == NK_DefNode) return 0;
+    if (k == NK_LambdaNode || (k == NK_BlockNode && par[p] >= 0 && lr_proc_made(c, par[p]))) return 1;
+  }
+  return 0;
+}
+/* The call that runs value x as its receiver (is_proc_invoke), for
+   elab_closure_runs, where that call is not itself in a closure; -1 where
+   x goes anywhere else */
+static int lr_closure_use(Compiler *c, const int *par, int n, int x) {
+  VpUp up;
+  VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
+  return k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node &&
+         is_proc_invoke(nt_str(c->nt, up.parent, "name")) && !lr_in_closure(c, par, n, up.parent) ? up.parent : -1;
+}
+int elab_closure_runs(Compiler *c, int id, int *sites, int cap) {
+  const NodeTable *nt = c->nt;
+  int n, lam = -1, ns = 0, at;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = id >= 0 && id < n ? par[id] : -1; p >= 0 && p < n && lam < 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode || (k == NK_BlockNode && !(par[p] >= 0 && lr_proc_made(c, par[p])))) return -1;
+    if (k == NK_LambdaNode) lam = p;
+    else if (k == NK_BlockNode) lam = par[p];
+  }
+  VpUp up;
+  if (lam < 0) return -1;
+  if (vp_climb(nt, par, lam, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode) {
+    if ((at = lr_closure_use(c, par, n, lam)) >= 0) {
+      if (cap < 1) return -1;
+      sites[ns++] = at;
+    }
+    return ns;
+  }
+  /* written whole to a local: each read of it in the same body that
+     invokes it (a write that reads it too, `l ||= ...`, does not) */
+  static const NodeKind reads[] = { NK_LocalVariableReadNode, NK_LocalVariableOperatorWriteNode,
+                                    NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode };
+  const char *ln = nt_str(nt, up.parent, "name");
+  int body = elab_body_def(c, up.parent);
+  for (int j = 0; ln && j < 4; j++)
+    NT_FOREACH_KIND(nt, reads[j], x) {
+      if (x >= n || !sp_streq(nt_str(nt, x, "name"), ln) || elab_body_def(c, x) != body) continue;
+      if (!j && (at = lr_closure_use(c, par, n, x)) >= 0) {
+        if (ns >= cap) return -1;
+        sites[ns++] = at;
+      }
+    }
+  return ns;
+}
+
 /* How the body of def node `def` holds the block it is given (LRB_*), from
    its uses: a yield, a read of the block parameter (or of a local it, or a
    closure holding it, is written to whole: `blk = b`, the &-parameter

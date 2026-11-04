@@ -1006,10 +1006,12 @@ static unsigned ver_mix(unsigned h) {
    hold none of them), and the late bit of the chain's histories
    (elab_versions_late), kept by (class, side, name) for the record as it
    stands (elab_stamp): every call asked of every class of a name asks it,
-   and the answer is the chain's. */
-struct VerChain { struct VerChainSlot { const char *name; int rcls, sg, n, def, body, late; } *slot; int cap, used; ElabStamp stamp; };
+   and the answer is the chain's. The names are its own copies, as in the
+   other version tables (Compiler.ver_entries). */
+struct VerChain { struct VerChainSlot { char *name; int rcls, sg, n, def, body, late; } *slot; int cap, used; ElabStamp stamp; };
 void ver_chain_free(Compiler *c) {
   if (!c->ver_chain) return;
+  for (int i = 0; i < c->ver_chain->cap; i++) free(c->ver_chain->slot[i].name);
   free(c->ver_chain->slot);
   free(c->ver_chain);
   c->ver_chain = NULL;
@@ -1048,7 +1050,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
   for (int k = 0; k < n; k++) any |= vs[k].v->body != 0;
-  m->slot[j] = (struct VerChainSlot){ name, rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
+  m->slot[j] = (struct VerChainSlot){ name_dup(name), rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;
   *body = any;
@@ -1136,7 +1138,7 @@ static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int
       !(c->ver_late = realloc(c->ver_late, sizeof *c->ver_late * (size_t)(c->nver_late ? 2 * c->nver_late : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
-  c->ver_late[c->nver_late++] = (struct VerLate){ name, rcls, sg, mi, ar, mm };
+  c->ver_late[c->nver_late++] = (struct VerLate){ name_dup(name), rcls, sg, mi, ar, mm };
 }
 /* The method_missing of class ci's own chain in the tables (its class
    side when cmethod), Object's left out; -1 for none, and for main (-1) */
@@ -1292,7 +1294,7 @@ static struct VerMemo *ver_memo_slot(Compiler *c, int id, int cls, const char *n
   unsigned h = ver_mix(((unsigned)id * 0x9E3779B1u) ^ (((unsigned)cls + 0x7F4A7C15u) * 0x85EBCA6Bu) ^ (flags * 0x27D4EB2Fu));
   for (int i = (int)(h & (unsigned)(c->ver_memo_cap - 1));; i = (i + 1) & (c->ver_memo_cap - 1)) {
     struct VerMemo *m = &c->ver_memo[i];
-    if (!m->name || (m->id == id && m->cls == cls && m->flags == flags && (m->name == name || sp_streq(m->name, name)))) return m;
+    if (!m->name || (m->id == id && m->cls == cls && m->flags == flags && sp_streq(m->name, name))) return m;
   }
 }
 /* ...asked in the record's frame for the call plan (elab_plan_enter): the
@@ -1308,7 +1310,7 @@ static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned f
   int framed = elab_plan_enter(c, id), dc = def_class ? *def_class : -1, now = dc, kept = -2;
   int vi = ct_version_at(c, id, cls, name, flags, mi, memo ? &kept : def_class ? &dc : NULL, span);
   if (memo) {   /* (the class it answers, -2 for the table's) */
-    *ver_memo_slot(c, id, cls, name, flags) = (struct VerMemo){ name, id, cls, flags, vi, kept };
+    *ver_memo_slot(c, id, cls, name, flags) = (struct VerMemo){ name_dup(name), id, cls, flags, vi, kept };
     c->ver_memo_n++;
     if (kept != -2) dc = kept;
   }
@@ -4803,11 +4805,12 @@ static int guard_entry_make(Compiler *c, int mi, int ar) {
   for (int k = 0; k < n - 1; k++) arm[k].callee = c->scopes[to[k]].name;
   return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, n - 1, to[n - 1], -1);
 }
-static void ver_entry_add(Compiler *c, struct VerEntry e) {
+static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
   if (!(c->nver_entries & (c->nver_entries - 1)) &&
       !(c->ver_entries = realloc(c->ver_entries, sizeof *c->ver_entries * (size_t)(c->nver_entries ? 2 * c->nver_entries : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
+  e.name = name_dup(name);
   c->ver_entries[c->nver_entries++] = e;
 }
 /* The entry of a history the load phase leaves open (elab_history_open):
@@ -4875,7 +4878,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   }
   for (int i = 0; i < nv; i++) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
   /* (an includer's: under the module's instance side) */
-  ver_entry_add(c, (struct VerEntry){ comp_scope_user_name(&c->scopes[e]), 2, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e });
+  ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, 2, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e });
 }
 /* ...its else arm, as ver_named_kind decided: NoMethodError's message
    names the receiver's class by its Ruby name, read at run time when cls
@@ -5499,7 +5502,7 @@ void ver_entries_build(Compiler *c) {
   for (int i = 0; i < o.n; i++) {
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
                          : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL);
-    ver_entry_add(c, (struct VerEntry){ e >= 0 ? c->scopes[e].name : o.v[i].name, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e });
+    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e });
   }
   free(o.v); free(o.ix);
   free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */
@@ -5710,6 +5713,7 @@ void ver_cells_write(Compiler *c) {
   ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
 }
 void ver_memo_drop(Compiler *c) {
+  for (int i = 0; i < c->ver_memo_cap; i++) free(c->ver_memo[i].name);
   free(c->ver_memo);
   c->ver_memo = NULL;
   c->ver_memo_cap = c->ver_memo_n = 0;
@@ -5736,7 +5740,7 @@ static int ver_late_make(Compiler *c) {
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
     e = ver_entry_make(c, &q, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent);
-    if (ix < 0) ver_entry_add(c, (struct VerEntry){ e >= 0 ? c->scopes[e].name : l->name, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1 });
+    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1 });
     else {
       c->ver_entries[ix].absent = absent ? 2 : 1;
       if (absent) c->ver_entries[ix].scope = e;   /* (its cells are written where the other was made) */
@@ -5744,6 +5748,7 @@ static int ver_late_make(Compiler *c) {
     made |= absent;
   }
   ver_named_facts_free(&q);
+  for (int i = 0; i < c->nver_late; i++) free(c->ver_late[i].name);
   c->nver_late = 0;
   return made;
 }

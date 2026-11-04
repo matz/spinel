@@ -43,8 +43,22 @@ static char *dup_n(const char *s, size_t n) {
   return p;
 }
 
-static void node_set_type(SpNode *nd, const char *type, size_t len) {
-  free(nd->type);
+/* A string the table no longer holds, kept until the table is freed: a
+   caller up the stack may hold the pointer nt_str or nt_type answered for
+   it (node_table.h, NodeTable.str_retired). */
+static void nt_retire(NodeTable *nt, char *s) {
+  if (!s) return;
+  if (nt->nstr_retired == nt->cstr_retired) {
+    int nc = nt->cstr_retired ? 2 * nt->cstr_retired : 64;
+    char **np = realloc(nt->str_retired, (size_t)nc * sizeof *np);
+    if (!np) nt_oom();
+    nt->str_retired = np; nt->cstr_retired = nc;
+  }
+  nt->str_retired[nt->nstr_retired++] = s;
+}
+
+static void node_set_type(NodeTable *nt, SpNode *nd, const char *type, size_t len) {
+  nt_retire(nt, nd->type);
   nd->type = dup_n(type, len);
 }
 
@@ -200,7 +214,7 @@ static SpNode *node_put(NodeTable *nt, int id) {
 
 void nt_put_type(NodeTable *nt, int id, const char *type) {
   SpNode *nd = node_put(nt, id);
-  if (nd) node_set_type(nd, type, strlen(type));
+  if (nd) node_set_type(nt, nd, type, strlen(type));
 }
 void nt_put_str(NodeTable *nt, int id, const char *key, const char *val, size_t len) {
   if (len == 16 && !memcmp(val, "__cext_extension", 16) && !strcmp(key, "name")) nt->has_cext_decls = 1;
@@ -226,7 +240,7 @@ void nt_put_arr(NodeTable *nt, int id, const char *key, int *ids, int n) {
 void nt_put_content(NodeTable *nt, int id, const char *content) {
   SpNode *nd = node_put(nt, id);
   if (!nd) return;
-  free(nd->content);
+  nt_retire(nt, nd->content);
   nd->content = dup_n(content, strlen(content));
 }
 void nt_put_source_file(NodeTable *nt, const char *path) {
@@ -464,7 +478,7 @@ void nt_node_set_type(NodeTable *nt, int id, const char *type) {
   if (id < 0 || id >= nt->count || !type) return;
   NodeKind was = nt_kind(nt, id);
   SpNode *nd = &nt->nodes[id];
-  node_set_type(nd, type, strlen(type));
+  node_set_type(nt, nd, type, strlen(type));
   nd->kind = 0;          /* the cached NodeKind is stale now */
   nt->version++; nt->edits++;
   nki_retyped(nt, id, was);
@@ -483,7 +497,7 @@ int nt_new_node(NodeTable *nt, const char *type) {
   nt_aux_reset(nt, id, id + 1);
   SpNode *nd = &nt->nodes[id];
   memset(nd, 0, sizeof(SpNode));
-  if (type) node_set_type(nd, type, strlen(type));
+  if (type) node_set_type(nt, nd, type, strlen(type));
   return id;
 }
 int nt_appended_only_local_reads(const NodeTable *nt, int from) {
@@ -533,15 +547,15 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   if (!nd) return;
   NodeKind was = nt_kind(nt, id);
   nt->version++; nt->edits++;
-  free(nd->type); nd->type = NULL;
-  free(nd->content); nd->content = NULL;
-  for (int j = 0; j < nd->ns; j++) { free(nd->s[j].key); free(nd->s[j].val); }
+  nt_retire(nt, nd->type); nd->type = NULL;
+  nt_retire(nt, nd->content); nd->content = NULL;
+  for (int j = 0; j < nd->ns; j++) { nt_retire(nt, nd->s[j].key); nt_retire(nt, nd->s[j].val); }
   for (int j = 0; j < nd->ni; j++) free(nd->i[j].key);
   for (int j = 0; j < nd->nr; j++) free(nd->r[j].key);
   for (int j = 0; j < nd->na; j++) { free(nd->a[j].key); free(nd->a[j].ids); }
   nd->ns = nd->ni = nd->nr = nd->na = 0;
   nd->kind = 0;
-  if (type) node_set_type(nd, type, strlen(type));
+  if (type) node_set_type(nt, nd, type, strlen(type));
   nki_retyped(nt, id, was);
 }
 
@@ -553,7 +567,7 @@ void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   if (vlen == 16 && !strcmp(val, "__cext_extension") && !strcmp(key, "name")) nt->has_cext_decls = 1;
   for (int j = 0; j < nd->ns; j++)
     if (sp_streq(nd->s[j].key, key)) {
-      free(nd->s[j].val); nd->s[j].val = dup_n(val, vlen); nd->s[j].val_len = vlen; return;
+      nt_retire(nt, nd->s[j].val); nd->s[j].val = dup_n(val, vlen); nd->s[j].val_len = vlen; return;
     }
   node_add_str(nd, key, klen, dup_n(val, vlen), vlen);
 }
@@ -568,8 +582,7 @@ static void nt_rename_note(NodeTable *nt, const char *from, const char *to) {
   memcpy(e->to, to ? to : "", tl + 1);
 }
 
-/* the replaced string is answered, not freed: a caller up the stack may hold
-   the pointer nt_str answered for it (node_table.h) */
+/* the replaced string is answered, for the restore to put back */
 char *nt_node_swap_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return NULL;
@@ -599,10 +612,10 @@ void nt_node_restore_str(NodeTable *nt, int id, const char *key, char *held) {
   }
   for (int j = 0; j < nd->ns; j++)
     if (sp_streq(nd->s[j].key, key)) {
-      free(nd->s[j].val);
+      nt_retire(nt, nd->s[j].val);
       if (held) { nd->s[j].val = held; nd->s[j].val_len = strlen(held); return; }
       /* the swap added the key: the node had none */
-      free(nd->s[j].key);
+      nt_retire(nt, nd->s[j].key);
       memmove(&nd->s[j], &nd->s[j + 1], (size_t)(nd->ns - j - 1) * sizeof nd->s[0]);
       nd->ns--;
       return;
@@ -715,6 +728,8 @@ void nt_free(NodeTable *nt) {
   nki_drop(nt);
   for (int i = 0; i < nt->nkind_retired; i++) free(nt->kind_retired[i]);
   free(nt->kind_retired);
+  for (int i = 0; i < nt->nstr_retired; i++) free(nt->str_retired[i]);
+  free(nt->str_retired);
   free(nt->kind_moved);
   free(nt->source_file);
   for (int k = 0; k < nt->nfiles; k++) free(nt->files[k]);
@@ -1028,7 +1043,7 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   size_t vlen = strlen(val);
   for (int j = 0; j < nd->ns; j++) {
     if (sp_streq(nd->s[j].key, key)) {
-      free(nd->s[j].val);
+      nt_retire(nt, nd->s[j].val);
       nd->s[j].val = dup_n(val, vlen);
       nd->s[j].val_len = vlen;
       return 1;

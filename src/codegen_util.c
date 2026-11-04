@@ -7557,21 +7557,10 @@ int scope_uses_ivars(Compiler *c, int mi) {
   return 0;
 }
 
-int scope_toplevel_included(Compiler *c, int s) {
-  if (s < 0 || s >= c->nscopes) return 0;
-  Scope *sc = &c->scopes[s];
-  if (sc->is_cmethod || sc->class_id < 0) return 0;
-  for (int i = 0; i < c->ntoplevel_includes; i++)
-    if (c->toplevel_includes[i] == sc->class_id) return 1;
-  return 0;
-}
-
 int scope_has_callable_symbol(Compiler *c, int s) {
   if (s < 0 || s >= c->nscopes) return 0;
   Scope *sc = &c->scopes[s];
-  return sc->reachable && !sc->yields &&
-         (!sc->is_transplanted_source || scope_toplevel_included(c, s)) &&
-         !scope_is_shadowed(c, s);
+  return comp_scope_may_run(c, s) && !sc->yields && !scope_is_shadowed(c, s);
 }
 /* What a keyword flag's value says at compile time: 1 for a literal Ruby
    treats as true (true, a number, a String, a Symbol, a container -- any

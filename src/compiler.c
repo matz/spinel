@@ -5167,6 +5167,32 @@ const char *comp_scope_user_name(const Scope *s) {
   return s->shadow_user ? s->shadow_user : s->name;
 }
 
+/* Is scope s an instance method of a class or module the top level includes
+   or extends? */
+static int scope_toplevel_included(Compiler *c, int s) {
+  if (s < 0 || s >= c->nscopes) return 0;
+  const Scope *sc = &c->scopes[s];
+  if (sc->is_cmethod || sc->class_id < 0) return 0;
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] == sc->class_id) return 1;
+  return 0;
+}
+
+/* Is scope s a method copied into its users, whose copies run in its place
+   (each binds its own calls, against its class)? is_transplanted_source marks
+   them: a module's methods an include, prepend, extend or hook copies, a
+   class method specialized per subclass and never called directly, a Struct
+   base's methods. The original still runs as itself where its module is also
+   included at the top level, which codegen emits as itself. */
+int comp_scope_copied_away(Compiler *c, int s) {
+  return c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s);
+}
+
+/* May scope s's body run as itself: reachable, and not copied away */
+int comp_scope_may_run(Compiler *c, int s) {
+  return c->scopes[s].reachable && !comp_scope_copied_away(c, s);
+}
+
 /* Is `name` the name of a hidden copy of the given kind? A SHADOW_PREP name is
    generated apart from every method the program names (comp_shadow_name), so
    a scope of that name is a copy or none is. A SHADOW_INC name is not checked,

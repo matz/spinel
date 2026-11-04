@@ -5338,6 +5338,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/poll_dynamic_call_reacher.rb -c --no-line-map -o "$$tmp/pdc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poll_dynamic_call_reacher: -c)"; ok=0; }; \
 	awk '/^[a-z].* sp_Device_peek\(.*\{$$/,/^}/' "$$tmp/pdc.c" | grep -q 'sp_sig_poll_raise()' && awk '/^[a-z].* sp_Bus_sum\(.*\{$$/,/^}/' "$$tmp/pdc.c" | grep -q 'sp_sig_poll_raise()' || { echo "infer-test: FAIL (a method making a proc's call, or the caller of a yielder making one, does not poll at its entry)"; ok=0; }; \
 	awk '/^[a-z].* sp_Bus_read\(.*\{$$/,/^}/' "$$tmp/pdc.c" | grep -q 'sp_sig_poll_raise()' && { echo "infer-test: FAIL (a method that only reaches a proc's call polls at its entry)"; ok=0; }; \
+	$(SPINEL) test/included_hook_copy_calls_class_method.rb -c --no-line-map -o "$$tmp/ihc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (included_hook_copy_calls_class_method: -c)"; ok=0; }; \
+	! grep -q '_s_record_entry(' "$$tmp/ihc.c" && grep -q 'sp_Order_s_record(sp_sym lv_event)' "$$tmp/ihc.c" || { echo "infer-test: FAIL (a call in a method an include copied away made a version entry that no copy calls, and widened the method it arms)"; ok=0; }; \
 	if [ "$(FFI_AVAILABLE)" = yes ]; then \
 	  for flags in '' --share-strings; do \
 	    $(SPINEL) $$flags --dump-repr packages/fiddle/test/fiddle_importer.rb > "$$tmp/fi.repr" 2>/dev/null || { echo "infer-test: FAIL (fiddle_importer $$flags)"; ok=0; }; \

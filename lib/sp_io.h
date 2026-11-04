@@ -146,6 +146,8 @@ void sp_io_rbuf_ungetc(sp_File *f, int c);
 size_t sp_io_rbuf_read(sp_File *f, void *buf, size_t n);
 ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap);
 char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size);
+size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n);
+size_t sp_io_rbuf_read_some(sp_File *f, char *buf, size_t n);
 size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
 /* Readers of an IO handle's stream call these instead of stdio: each is the
    stdio call of the same name on the handle's FILE, or, for a handle with
@@ -167,6 +169,13 @@ static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) {
 static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) {
   if (f->own_buf) return sp_io_rbuf_getline(f, buf, cap);
   return SP_SIG_BLOCKING(getline(buf, cap, f->fp));
+}
+/* Up to n of the bytes the handle already holds (sp_io_pending), never a
+   read: another thread may have taken some of them since they were
+   counted, so the answer can be smaller, even 0. */
+static inline size_t sp_io_take(sp_File *f, void *buf, size_t n) {
+  if (f->own_buf) return sp_io_rbuf_take(f, buf, n);
+  return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
 }
 static inline char *sp_io_fgets(sp_File *f, char *buf, int size) {
   if (f->own_buf) return sp_io_rbuf_fgets(f, buf, size);

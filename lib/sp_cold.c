@@ -2570,6 +2570,7 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   int bin = sp_File_reads_binary(f);
   int extra = bin ? 0 : ((ch & 0xE0) == 0xC0) ? 1 : ((ch & 0xF0) == 0xE0) ? 2 : ((ch & 0xF8) == 0xF0) ? 3 : 0;
   char *r = sp_str_alloc((size_t)(1 + extra));
+  SP_GC_ROOT_STR(r);   /* the next bytes' read can park (own_buf) */
   size_t n = 0;
   r[n++] = (char)ch;
   for (int i = 0; i < extra; i++) {

@@ -20,5 +20,5 @@ module Site
 end
 
 Dir.chdir("/")
-Site.clean("/nonexistent/x") rescue nil
+Site.clean("/nonexistent-#{Process.pid}/x") rescue nil
 puts "ok"

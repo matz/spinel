@@ -5702,6 +5702,16 @@ static int engine_root_plain(NodeTable *nt, const char *x) {
   return any;
 }
 
+/* `C.method_defined?(:m, false)`: is m absent from the own bodies of class
+   `cls` outside guard `in`, its ancestors not asked? 0 present, 1 absent, -1
+   not known: a class of the runtime's, whose own methods are not listed per
+   class here, or one the program does not define. */
+static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
+  if (me_body_defines(nt, cls, m, in)) return 0;
+  if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
+  return me_leaf_defined(nt, cls) ? 1 : -1;
+}
+
 static int engine_absent(Compiler *c, int e, int in) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *x = NULL;
@@ -5711,10 +5721,16 @@ static int engine_absent(Compiler *c, int e, int in) {
     const int *av = nt_arr(nt, nt_ref(nt, e, "arguments"), "arguments", &ac);
     const char *cls = r < 0 || nt_kind(nt, r) == NK_SelfNode ? engine_body_class(nt, in) :
                       nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
-    const char *m = ac != 1 ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") :
+    /* the second argument, inherit: true (the default) asks the ancestors
+       too, false the class's own bodies alone, as CRuby does */
+    int own = ac == 2 && nt_kind(nt, av[1]) == NK_FalseNode;
+    int ok = ac == 1 || own || (ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode);
+    const char *m = !ok ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") :
                     nt_kind(nt, av[0]) == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
-    int a = !cls || !m ? -1 : builtin_object_method_known(m) ? 0 : engine_method_absent(nt, cls, m, in, 0);
-    if (a > 0)
+    int a = !cls || !m ? -1 : own ? engine_method_own_absent(nt, cls, m, in) :
+            builtin_object_method_known(m) ? 0 : engine_method_absent(nt, cls, m, in, 0);
+    /* (a def elsewhere could reach the class through a mixin; not asked of the own bodies alone) */
+    if (a > 0 && !own)
       for (int id = 0; id < nt->count; id++)
         if (me_stmt_defines(nt, id, m) && !engine_inside(nt, in, id, 0) && !engine_def_mixed_in_only(nt, id, in)) return -1;
     if (a >= 0) comp_def_asked_add(c, m);

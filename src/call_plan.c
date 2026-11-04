@@ -41,6 +41,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->via = (unsigned char)via; p->dispatch = (unsigned char)dispatch;
   p->by_name = 0;
   p->chain = 0;
+  p->absent = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
   p->core_hook = 0;
 }
@@ -657,6 +658,8 @@ int cplan_plain_ctx(void) {
          inline_splice_depth() == 0;
 }
 
+static int cplan_capture_absent(Compiler *c, int id, int mi);
+static int cm_capture_class(Compiler *c, int id, const char **name);
 /* A bound Method already carries its target. Its arguments are bound by
    the Method adapter, not by the generic call-target argument walk.
    Metadata readers also need the captured target and dispatch kind. */
@@ -672,6 +675,8 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   an_pure_read_end();
   if (mi >= 0) cplan_set(&p, mi, c->scopes[mi].class_id, c->scopes[mi].is_cmethod ? UC_CMETH : UC_INST, CP_DIRECT);
   if (mi >= 0 && c->scopes[mi].entry) p.dispatch = CP_SWITCH;
+  p.absent = capture ? (unsigned char)cplan_capture_absent(c, id, mi) : 0;
+  if (p.absent && mi < 0) p.owner_ci = (short)cm_capture_class(c, id, NULL);
   p.method_node = mn;
   p.method_call = 1;
   return p;
@@ -1177,6 +1182,14 @@ static int ver_mm_at(Compiler *c, int rcls, int sg, LoadPoint p, int at, const E
   return om == 1 || cm == 1 ? 1 : (mm | om | cm) == 2 ? 2 : 3;
 }
 
+static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char *name, int entry);
+/* Does call id, asked with flags, make a Method of cls's `name` (side sg)
+   that keeps the table's method on a chain a method body makes a version
+   on: a capture whose NameError cannot be stated (cplan_capture_names)?
+   (A respond_to? that asks as a capture reads the cells all the same.) */
+static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const char *name, unsigned flags, int entry) {
+  return (flags & CT_CAPTURE) && id >= 0 && is_method_obj_call(c, id) && !cplan_capture_names(c, id, cls, sg, name, entry);
+}
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at
    a load point gets the version live there; any other (a load point in a
@@ -1198,12 +1211,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
   /* a call may meet the chain with no version made yet: the late bit of
      its histories, or a version a method body makes on the chain (its
-     extent opens where that body first runs). Not for a capture
-     (CT_CAPTURE): a Method made where no version is live would need an
-     entry that checks the method is there, which captures do not have
-     yet, so a capture keeps the table's answer until presence-checked
-     captures retire this */
-  int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), late = cl == 2 || (body && !(flags & CT_CAPTURE));
+     extent opens where that body first runs). A capture too: where no
+     version is live, its Method raises NameError (cplan_capture_absent);
+     one that cannot state that error (cplan_capture_names) keeps the
+     table's method, as a capture reader keeps a name off the late bit */
+  int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl);
+  int late = (cl == 2 || body) && !ct_capture_keeps_table(c, id, rcls, sg, name, flags, 1);
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
   if (nc == 1 && first_def && !late) {
@@ -1340,10 +1353,11 @@ static int cm_self_kind(Compiler *c, int self) {
    answers on any self (`U.format`, private in CRuby). */
 static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
-  /* (a capture on a chain a method body makes a version on keeps the
-     table's answer, as in ct_version_at, until captures check presence) */
-  int first_def = 0, body = 0, cl = 0;
-  if ((flags & CT_CAPTURE) && (ver_chain_count(c, flags & CT_TOP ? -1 : cls, (flags & CT_CMETHOD) != 0, name, &first_def, &body, &cl), body)) return 0;
+  /* (a capture that cannot state the NameError keeps the table's method
+     on a chain a method body makes a version on, as in ct_version_at) */
+  int rcls = flags & CT_TOP ? -1 : cls, sg = (flags & CT_CMETHOD) != 0, first_def = 0, body = 0, cl = 0;
+  if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
+    return 0;
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
@@ -1727,6 +1741,13 @@ int cplan_self_class(Compiler *c, int id) {
   if (framed) elab_plan_leave(c);
   return ci;
 }
+/* Does a builtin answer `name` on program class ci (main for -1): one on
+   any self, a core class's own? */
+static int cm_builtin_answers(Compiler *c, int ci, const char *name) {
+  const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
+  return builtin_self_method_known(name, cm_self_kind(c, ci)) ||
+         (cn && builtin_class_id(cn) && (builtin_cmethod_known(cn, name) || builtin_super_cmethod_known(cn, name)));
+}
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   const NodeTable *nt = c->nt;
   const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
@@ -1744,13 +1765,74 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   if ((!cm && !top) || (cm && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) ||
       (top && call_target(c, id, -1, name, CT_TOP, NULL) >= 0))
     return CM_NONE;
-  /* ...and no builtin answers: one on any self, a core class's own */
-  const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
-  if (builtin_self_method_known(name, cm_self_kind(c, ci)) ||
-      (cn && builtin_class_id(cn) && (builtin_cmethod_known(cn, name) || builtin_super_cmethod_known(cn, name))))
-    return CM_NONE;
+  if (cm_builtin_answers(c, ci, name)) return CM_NONE;
   if (anon) *anon = cm_self_name(c, ci, self_text, cap) ? -1 : ci;
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
+}
+/* The program class a bound capture (`S.method(:z)`, or on self or bare)
+   asks of, by the record where it runs, the name it asks into *name; -1
+   for any other node */
+static int cm_capture_class(Compiler *c, int id, const char **name) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  int cr = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
+  const char *sym = method_sym_arg(c, id);
+  if (!is_method_obj_call(c, id) || is_instance_method_name(nt_str(nt, id, "name")) ||
+      (recv >= 0 && !cr && rk != NK_SelfNode) || !sym)
+    return -1;
+  if (name) *name = sym;
+  int ci = cr ? cplan_const_recv_class(c, id, recv) : cplan_self_class(c, id);
+  return ci >= 0 && ci < c->nclasses ? ci : -1;
+}
+/* Can capture id (`K.method(:k)`, `public_method`) of cls's `name`, on
+   its class side for sg, state CRuby's NameError when it finds no method?
+   The message names the receiver's class, which must be the one asked: a
+   constant's (a Class.new class's by the constant that names it), self's
+   in a class body, or for a version entry's (entry) instance side a class
+   nothing inherits from. Not main's, nor a module's: a module's instance
+   side is an includer's, and its class side is named 'Module' until CRuby
+   makes its singleton class (a def on it, an extend, singleton_class),
+   which the record does not tell. method() also finds private methods,
+   which the call does not reach: not for a name a top-level function has
+   (Object's), nor for the class side one a builtin class's reopening
+   (Object's, Module's) or a module (an extend's) has as an instance
+   method. */
+static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char *name, int entry) {
+  int nd = 0;
+  if (cls < 0 || cls >= c->nclasses || !name || comp_class_is_module(c, &c->classes[cls])) return 0;
+  if (entry) {
+    int recv = nt_ref(c->nt, id, "receiver");
+    NodeKind rk = recv >= 0 ? nt_kind(c->nt, recv) : NK_SelfNode;
+    comp_descendants(c, cls, &nd);
+    if (nd && !(sg && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode))) return 0;
+  }
+  for (int s = an_scopes_named_first(c, name); s >= 0; s = an_scopes_named_next(c, name, s)) {
+    int sc = c->scopes[s].class_id;
+    if (sc < 0 || (sg && !c->scopes[s].is_cmethod && (comp_class_is_module(c, &c->classes[sc]) || c->classes[sc].is_builtin_const)))
+      return 0;
+  }
+  return 1;
+}
+/* Where does capture id (`K.method(:k)`, `public_method`; mi its target,
+   -1 for none) raise CRuby's NameError: 2, naming K's class side, where
+   the record proves no class method of the name is defined where it runs,
+   as a call there raises (ct_undefined_at, cplan_missing), with no builtin
+   answering it; for mi a version entry, 2 or 1 (its instance side) while
+   none of its versions is live, where the else arm the call runs then
+   finds no method (cplan_entry_finds), so neither does method(). 0
+   otherwise, and where the message cannot be stated
+   (cplan_capture_names). */
+static int cplan_capture_absent(Compiler *c, int id, int mi) {
+  const char *name = NULL;
+  const Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  int cls = m ? m->class_id : cm_capture_class(c, id, &name), sg = m ? m->is_cmethod : 1;
+  if (m) {
+    name = method_sym_arg(c, id);
+    if (m->entry != ENTRY_DISPATCH || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
+  }
+  else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
+  return cplan_capture_names(c, id, cls, sg, name, m != NULL) ? (sg ? 2 : 1) : 0;
 }
 /* See call_plan.h. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {

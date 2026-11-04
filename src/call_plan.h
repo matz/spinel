@@ -66,6 +66,11 @@ typedef struct {
                               stand-in, a subclass's override of a reader, a
                               reopen) */
   unsigned char method_call; /* a Method invocation, even with no source node */
+  unsigned char absent;    /* a `method(:sym)` that finds no method of
+                              owner_ci's side (2 its class side, 1 its
+                              instance side): CRuby's NameError, where it
+                              runs (mi -1) or while no version of the entry
+                              mi is live (cplan_capture_absent) */
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */

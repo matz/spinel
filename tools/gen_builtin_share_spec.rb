@@ -29,7 +29,7 @@ module BuiltinShareProbe
   # enter a native wait. They remain explicitly unprobed, even if arity-only
   # probing (which passes nil) can safely exercise them.
   UNSAFE = %w[exit exit! abort fork exec spawn system ` trap syscall sleep select
-    kill terminate stop run wakeup join raise fail wait wait2 waitpid waitpid2
+    kill terminate stop run wakeup join raise fail wait wait_priority wait2 waitpid waitpid2
     getpriority setpriority setproctitle handle_interrupt
     lock synchronize wait_signal signal broadcast resume transfer yield
     autoload require require_relative load eval instance_eval class_eval module_eval
@@ -262,6 +262,17 @@ module BuiltinShareProbe
     targets
   end
 
+  # Lines of HAVE that WANT does not account for, counting repeats: a line
+  # that WANT has once and HAVE twice is reported once. Order is ignored.
+  def self.unmatched_lines(have, want)
+    left = want.tally
+    have.reject do |l|
+      next false unless left.fetch(l, 0) > 0
+      left[l] -= 1
+      true
+    end
+  end
+
   def self.run
     opts = {}
     OptionParser.new do |p|
@@ -358,19 +369,36 @@ module BuiltinShareProbe
     elsif opts[:check]
       unless File.read(SPEC) == inc && File.read(DATA) == json && File.read(PURE) == pure
         old = JSON.parse(File.read(DATA))["rows"].to_h { |r| [[r["class"], r["method"]], r] }
+        reported = false
         rows.each do |r|
           prior = old.delete([r["class"], r["method"]])
           next if prior == r
           fields = r.keys.select { |k| !prior || prior[k] != r[k] }
           $stderr.puts "drift: #{r['class']} #{r['method']}: #{fields.join(', ')}"
           fields.each { |k| $stderr.puts "  #{k}: #{prior && prior[k]} -> #{r[k]}" }
+          reported = true
         end
-        old.each_key { |k| $stderr.puts "drift: #{k.join(' ')}: no longer generated" }
-        { SPEC => inc, PURE => pure }.each do |path, text|
+        old.each_key { |k| $stderr.puts "drift: #{k.join(' ')}: no longer generated"; reported = true }
+        { SPEC => inc, DATA => json, PURE => pure }.each do |path, text|
           have = File.readlines(path)
           want = text.lines
-          (have - want).each { |l| $stderr.puts "drift: #{File.basename(path)}: committed only: #{l.strip}" }
-          (want - have).each { |l| $stderr.puts "drift: #{File.basename(path)}: generated only: #{l.strip}" }
+          next if have == want
+          gone = unmatched_lines(have, want)
+          added = unmatched_lines(want, have)
+          # The rows loop has already reported DATA by row when it found
+          # anything; otherwise DATA is listed by line like the other files.
+          by_row = path == DATA && reported
+          unless by_row
+            gone.each { |l| $stderr.puts "drift: #{File.basename(path)}: committed only: #{l.strip}" }
+            added.each { |l| $stderr.puts "drift: #{File.basename(path)}: generated only: #{l.strip}" }
+          end
+          next unless !by_row && gone.empty? && added.empty?
+          # Nothing above names the difference: the same lines in another
+          # order, so point at the first line that differs.
+          n = have.zip(want).index { |a, b| a != b } || [have.size, want.size].min
+          $stderr.puts "drift: #{File.basename(path)}: line #{n + 1} differs (same lines, different order)"
+          $stderr.puts "  committed: #{(have[n] && have[n].chomp).inspect}"
+          $stderr.puts "  generated: #{(want[n] && want[n].chomp).inspect}"
         end
         abort "share observations drifted; regenerate with --write"
       end

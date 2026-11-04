@@ -45821,22 +45821,54 @@ static int tmcv_const(Compiler *c, int at, const char *name) {
 /* The program's class methods named `nm` a call of `argc` positionals can
    reach: not a parser rule `at(i)` beside tzinfo's two-argument `klass.at`,
    which that call would only raise ArgumentError in */
-static int tmcv_cands_taking(Compiler *c, const char *nm, int argc) {
-  int ncc = 0, fit = 0;
+static int tmcv_cands_taking(Compiler *c, const char *nm, int args) {
+  const NodeTable *nt = c->nt;
+  int ncc = 0, fit = 0, argc = 0, kw = 0;
   const PolyCand *cc = comp_cmethod_candidates(c, nm, &ncc);
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* a splat, a block argument or `...` passes a count only the run time
+     knows: every candidate may take it */
+  for (int i = 0; i < argc; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) return ncc;
+    if (ak == NK_KeywordHashNode) kw = 1;
+  }
+  int pos = argc - kw;
   for (int i = 0; i < ncc; i++) {
     int mi = cc[i].mi;
-    if (mi < 0 || mi >= c->nscopes) { fit++; continue; }
-    const Scope *s = &c->scopes[mi];
-    int req = 0, max = 0;
-    for (int p = 0; p < s->nparams; p++) {
-      if (p == s->rest_idx || p == s->kwrest_idx) continue;
-      max++;
-      if (!s->pdefault || s->pdefault[p] < 0) req++;
-    }
-    if (argc >= req && (s->rest_idx >= 0 || argc <= max)) fit++;
+    const Scope *s = mi >= 0 && mi < c->nscopes ? &c->scopes[mi] : NULL;
+    int pn = s && s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
+    if (!s || s->def_node < 0) { fit++; continue; }
+    if (pn < 0) { if (pos == 0 && !kw) fit++; continue; }
+    /* read off the parameter list: keywords are no positional, and
+       `def self.at(...)` (its synthetic __fwd_ requireds) takes any count */
+    int nreq = 0, nopt = 0, npost = 0, nkw = 0, rk = 0;
+    const int *kv = nt_arr(nt, pn, "keywords", &nkw);
+    nt_arr(nt, pn, "requireds", &nreq); nt_arr(nt, pn, "optionals", &nopt); nt_arr(nt, pn, "posts", &npost);
+    int kr = nt_ref(nt, pn, "keyword_rest");
+    int rest = nt_ref(nt, pn, "rest") >= 0;
+    if (kr >= 0 && nt_kind(nt, kr) == NK_ForwardingParameterNode) { fit++; continue; }
+    for (int k = 0; k < nkw; k++) if (nt_kind(nt, kv[k]) == NK_RequiredKeywordParameterNode) rk = 1;
+    /* a keyword hash the method takes no keywords for is one more positional */
+    int p2 = pos + (kw && nkw == 0 && kr < 0 ? 1 : 0);
+    if (rk && !kw) continue;
+    if (p2 >= nreq + npost && (rest || p2 <= nreq + nopt + npost)) fit++;
   }
   return fit;
+}
+/* A Time subclass that, or a class between it and Time, defines the maker
+   itself (`def self.at`): its own method answers the call, so it takes no
+   arm made of Time's and is left to the call as written */
+static int tmcv_sub_owns_maker(Compiler *c, int id, int k, const char *nm) {
+  return call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0;
+}
+static int tmcv_sub_arm(Compiler *c, int id, const char *rn, const char *nm, int args) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+  int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
+  int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
+  nt_node_set_int(nt, set, "builtin_only", 1);
+  return set;
 }
 static int rewrite_time_maker_class_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -45852,9 +45884,8 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
     if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
-    int args = nt_ref(nt, id, "arguments"), argc = 0;
-    if (args >= 0) nt_arr(nt, args, "arguments", &argc);
-    int ncc = tmcv_cands_taking(c, nm, argc);
+    int args = nt_ref(nt, id, "arguments");
+    int ncc = tmcv_cands_taking(c, nm, args);
     int base = nt->count;
     int tail;
     if (ncc > 0) {
@@ -45884,15 +45915,12 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     /* each Time subclass's, ahead of Time's: its instance, made of Time's */
     for (int k = 0; k < c->nclasses; k++) {
       if (!comp_ary_is_time(c, k) || !c->classes[k].name || sp_streq(c->classes[k].name, "Time")) continue;
+      if (tmcv_sub_owns_maker(c, id, k, nm)) continue;
       const char *rn = class_ruby_name(c, k);
       if (!rn) continue;
       int kc = tmcv_const(c, id, rn);
       int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
-      int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
-      int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
-      int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
-      nt_node_set_int(nt, set, "builtin_only", 1);
-      tail = tmcv_if(c, id, eq, set, tail);
+      tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, rn, nm, args), tail);
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = tmcv_node(c, "StatementsNode", id);
@@ -45969,15 +45997,12 @@ static void rewrite_time_maker_class_local(Compiler *c, int id) {
   int tail = orig;
   for (int k = 0; k < c->nclasses; k++) {
     if (!comp_ary_is_time(c, k) || !c->classes[k].name || sp_streq(c->classes[k].name, "Time")) continue;
+    if (tmcv_sub_owns_maker(c, id, k, nm)) continue;
     const char *rn = class_ruby_name(c, k);
     if (!rn) continue;
     int kc = tmcv_const(c, id, rn);
     int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
-    int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
-    int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
-    int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
-    nt_node_set_int(nt, set, "builtin_only", 1);
-    tail = tmcv_if(c, id, eq, set, tail);
+    tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, rn, nm, args), tail);
   }
   if (tail == orig) return;
   long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);

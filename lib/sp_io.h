@@ -132,6 +132,10 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   
    write(2), matching CRuby sockets' sync = true. `kind` labels the handle
    ("tcp", "tcpserver", ...) for #class rendering. (#2922) */
 sp_File *sp_io_fdopen_sock(int fd, const char *kind);
+/* IO.for_fd / IO.new over a connected TCP socket: the handle takes own_buf. */
+void sp_io_take_own_buf(sp_File *f);
+/* IO#putc's byte: through stdio, or straight to the descriptor (own_buf). */
+void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);

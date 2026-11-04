@@ -2643,12 +2643,12 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v) {
      as its bytes for the write only */
   sp_RbVal w = sp_rbval_str(v);
   SP_IO_OPEN(f);
-  if (v.tag == SP_TAG_INT) fputc((int)(v.v.i & 0xff), f->fp);
-  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) fputc(w.v.s[0], f->fp); }
+  if (v.tag == SP_TAG_INT) sp_File_put_byte(f, (int)(v.v.i & 0xff));
+  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) sp_File_put_byte(f, w.v.s[0]); }
   /* anything else is no character: CRuby converts it as an Integer and
      raises for nil (the boxed nil wrote nothing and answered nil) */
   else if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(0);
-  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) fputc((int)((sp_int)v.v.f & 0xff), f->fp);
+  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) sp_File_put_byte(f, (int)((sp_int)v.v.f & 0xff));
   else if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer" : "no implicit conversion of false into Integer");
   return v;
@@ -5776,10 +5776,11 @@ sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROO
     int d = dup((int)fd);
     if (d < 0) sp_raise_cls("SystemCallError", sp_sprintf("dup(2) failed for fd %d", (int)fd));
     sp_File *f = sp_io_fdopen_ex(d, mode && *mode ? mode : SPL("r"), 0);
-    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; }
+    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; sp_io_take_own_buf(f); }
     return f;
   }
   sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : SPL("r"), 0);
+  if (f) sp_io_take_own_buf(f);
   return f;
 }
 

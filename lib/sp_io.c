@@ -250,6 +250,20 @@ static int sp_io_sock_takes_own_buf(int fd) {
   return getpeername(fd, (struct sockaddr *)&ss, &sl) == 0;
 }
 
+/* A handle made over a descriptor someone else holds (IO.for_fd, IO.new):
+   when it is a connected TCP stream, the handle reads and writes as the
+   socket's own handle does. Its descriptor may share a non-blocking open
+   file with that handle, where stdio would read EAGAIN as the end of file
+   and drop a write that cannot finish. */
+void sp_io_take_own_buf(sp_File *f) {
+  int fd = fileno(f->fp);
+  if (!sp_io_sock_takes_own_buf(fd)) return;
+  int fl = fcntl(fd, F_GETFL);
+  if (fl < 0 || (!(fl & O_NONBLOCK) && fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0)) return;
+  f->own_buf = 1;
+  f->wstream = 1;
+}
+
 /* Wrap a socket fd (#2922). The FILE* serves the buffered READ side (gets and
    friends need lookahead); every write bypasses stdio straight to write(2) --
    see sp_sock_write below -- so a response is on the wire immediately, like
@@ -945,7 +959,7 @@ void sp_io_check_readable(sp_File *f) {
 }
 
 static sp_int sp_File_write_len(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
-  if (f->is_sock) return sp_sock_write(f, s, n);
+  if (f->is_sock || f->own_buf) return sp_sock_write(f, s, n);
   /* An IO.pipe write end is sync, so setvbuf left it unbuffered and stdio
      holds nothing between calls: the raw loop is what fwrite would do anyway,
      and it can park between attempts. Every other handle keeps stdio. */
@@ -990,7 +1004,7 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   if (!s) return 0;
-  if (f->is_sock) return sp_sock_write(f, s, n);
+  if (f->is_sock || f->own_buf) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
   return sp_io_write_raw(f, s, n);
 }
@@ -2322,7 +2336,7 @@ const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
 
 static void sp_File_puts_n(sp_File *f, const char *s, size_t n) {
   sp_io_check_writable(f);
-  if (f->is_sock) {
+  if (f->is_sock || f->own_buf) {
     sp_sock_write(f, s, n);
     if (n == 0 || s[n - 1] != '\n') sp_sock_write(f, "\n", 1);
     return;
@@ -2345,11 +2359,17 @@ void sp_File_puts_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s
   sp_File_puts_n(f, s, sp_str_byte_len(s));
 }
 
+/* IO#putc's one byte: stdio's, except on a handle with its own buffer, whose
+   writes go straight to its non-blocking descriptor. */
+void sp_File_put_byte(sp_File *f, int c) {SP_GC_ROOT(f);
+  if (f->own_buf) { char b = (char)c; sp_sock_write(f, &b, 1); return; }
+  fputc(c, f->fp);
+}
 void sp_File_print(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   if (!s || !s[0]) return;
   sp_io_check_writable(f);
-  if (f->is_sock) { sp_sock_write(f, s, strlen(s)); return; }
+  if (f->is_sock || f->own_buf) { sp_sock_write(f, s, strlen(s)); return; }
   fputs(s, f->fp);
 }
 
@@ -2584,6 +2604,20 @@ sp_bool sp_File_set_sync(sp_File *f, sp_bool on) {
 }
 sp_bool sp_File_autoclose_p(sp_File *f) { SP_IO_OPEN(f); return !f->no_autoclose; }
 void sp_File_set_autoclose(sp_File *f, sp_bool on) { SP_IO_OPEN(f); f->no_autoclose = !on; }
+/* #reopen: the handle's descriptor is another one now. The bytes rbuf held
+   were the old one's, and its flag answer too; the new one reads through
+   its own buffer only if it is a connected TCP stream as well. */
+static void sp_io_own_buf_reopened(sp_File *f) {
+  sp_io_rlock(f);
+  f->rpos = f->rlen = 0;
+  sp_io_runlock(f);
+  f->own_buf = 0;
+  f->wnonblock = 0;
+  f->park_first = 0;
+  f->park_first_run = 0;
+  sp_io_take_own_buf(f);
+}
+
 /* IO#reopen(io): rebind this handle's descriptor onto the other stream. */
 sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT(other); sp_gc_wb((void*)f);
   if (!f || !other) return f;
@@ -2594,6 +2628,7 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   fflush(other->fp);
   if (dup2(fileno(other->fp), fileno(f->fp)) < 0)
     sp_file_raise_errno("reopen", other->path ? other->path : "");
+  if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   f->path = other->path;
   f->mode = other->mode;
   f->lineno = 0;
@@ -2651,6 +2686,7 @@ sp_File *sp_File_dup(sp_File *f, int keep_frozen) {SP_GC_ROOT(f);
   g->bin_flag = f->bin_flag;
   g->ext_enc = f->ext_enc;
   g->is_sock = f->is_sock;
+  if (f->own_buf) { g->own_buf = 1; g->wstream = 1; }   /* the dup shares the non-blocking open file */
   g->rev_lookup = f->rev_lookup;
   g->is_file = f->is_file;
   g->frozen = keep_frozen ? f->frozen : 0;
@@ -2776,6 +2812,7 @@ sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_R
   SP_ATOMIC_STORE(&f->fp, nf, __ATOMIC_RELAXED);
   SP_ATOMIC_STORE(&f->closed, 0, __ATOMIC_RELAXED);
   if (reserved) SP_ATOMIC_STORE(&f->uses, 0, __ATOMIC_RELEASE);
+  if (f->own_buf) sp_io_own_buf_reopened(f);
   f->path = sp_str_retained(path);
   /* a mode given replaces the handle's, as CRuby's does: an earlier
      #binmode or #set_encoding no longer decides what a read answers */

@@ -8405,17 +8405,22 @@ static const NilByteMap *class_nilbyte_map(Compiler *c, int cid) {
   int root = class_root(c, cid);
   NilByteMap *m = &memo[root];
   if (m->count >= 0) return m;
+  /* the family's own classes, in class order (class_family), not every
+     class once per family (#10546) */
+  int nmem = 0;
+  const int *mem = class_family(c, root, &nmem);
   int maxn = 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (class_root(c, k) == root && c->classes[k].nivars > maxn) maxn = c->classes[k].nivars;
+  for (int j = 0; j < nmem; j++)
+    if (c->classes[mem[j]].nivars > maxn) maxn = c->classes[mem[j]].nivars;
   m->n = maxn;
   m->map = (int *)malloc(sizeof(int) * (size_t)(maxn > 0 ? maxn : 1));
   if (!m->map) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int iv = 0; iv < maxn; iv++) m->map[iv] = -1;
   int count = 0;
   for (int iv = 0; iv < maxn; iv++) {
-    for (int k = 0; k < c->nclasses; k++) {
-      if (class_root(c, k) != root || iv >= c->classes[k].nivars) continue;
+    for (int j = 0; j < nmem; j++) {
+      int k = mem[j];
+      if (iv >= c->classes[k].nivars) continue;
       if (ivar_has_nilbit(c, k, iv)) { m->map[iv] = count++; break; }
     }
   }

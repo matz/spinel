@@ -4146,8 +4146,13 @@ int cmethod_takes_self_cls(Compiler *c, int si) {
   if (!g_cm_selfcls) return 0;
   if (g_cm_selfcls[si] >= 0) return g_cm_selfcls[si];
   int ans = class_reopen_cmethod(c, -1, -1, s->name) == si, has_desc = 0;
-  for (int k = 0; k < c->nclasses && !has_desc && !ans; k++)
-    if (k != s->class_id && is_descendant(c, k, s->class_id)) has_desc = 1;
+  /* a descendant some reached code names (is_descendant), off the
+     class's descendant list rather than every class (#10546) */
+  if (!ans) {
+    int nd = 0;
+    const int *ds = comp_descendants(c, s->class_id, &nd);
+    for (int i = 0; i < nd && !has_desc; i++) if (!c->classes[ds[i]].unreferenced) has_desc = 1;
+  }
   if (has_desc) {
     for (int nid = 0; nid < c->nt->count && !ans; nid++) {
       if (c->nscope[nid] != si) continue;

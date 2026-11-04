@@ -1413,8 +1413,13 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       /* a def in a subclass overrides the reader for that subclass, as on
          self (infer_call): the call answers what either may */
       int base_mi = call_target(c, id, cid, name, 0, NULL);
-      for (int k = 0; k < c->nclasses; k++) {
-        if (k == cid || !is_descendant(c, k, cid)) continue;
+      /* (the descendants in class order, less those no reached code names,
+         as is_descendant answers: #10546) */
+      int nd = 0;
+      const int *ds = comp_descendants(c, cid, &nd);
+      for (int di = 0; di < nd; di++) {
+        int k = ds[di];
+        if (c->classes[k].unreferenced) continue;
         int kmi = call_target(c, id, k, name, 0, NULL);
         if (kmi < 0 || kmi == base_mi) continue;
         if (g_plan_check) an_user_call_record(c, id, kmi, UC_POLY, k);

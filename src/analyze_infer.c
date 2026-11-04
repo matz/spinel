@@ -9024,10 +9024,13 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         /* not where a subclass defines either name: over the alias, or
            over the reader the alias captured, which the renamed call would
            reach instead; nor for an alias whose visibility is its own */
-        int over = 0;
-        for (int k = 0; k < c->nclasses && !over; k++)
-          if (k != oci && is_descendant(c, k, oci) &&
+        int over = 0, nd = 0;
+        const int *ds = comp_descendants(c, oci, &nd);   /* (as is_descendant: less the unreferenced, #10546) */
+        for (int di = 0; di < nd && !over; di++) {
+          int k = ds[di];
+          if (!c->classes[k].unreferenced &&
               (call_target(c, id, k, name, CT_OWN, NULL) >= 0 || (rn && call_target(c, id, k, rn, CT_OWN, NULL) >= 0))) over = 1;
+        }
         if (!over && c->classes[oci].naliases > 0 && rn && !sp_streq(rn, name) && comp_reader_in_chain(c, oci, rn, NULL) &&
             comp_method_vis_in_chain(c, oci, name) == SP_VIS_PUBLIC) {
           if (!an_pure_reads) {

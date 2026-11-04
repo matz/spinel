@@ -1,0 +1,24 @@
+"NM"
+"NM"
+"E"
+"NM"
+"NM"
+"Integer"
+"String"
+"NilClass"
+"Array"
+"S"
+"FF"
+"FI"
+"F"
+"E"
+["NM", "C"]
+["E", "E"]
+["Integer", "Integer"]
+["String", "String"]
+["F", "FF"]
+"NM"
+"E"
+"NM"
+"G"
+nil

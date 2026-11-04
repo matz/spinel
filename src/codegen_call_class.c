@@ -5049,6 +5049,13 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (recv >= 0 && argc == 0 && is_name_reader(name) &&
       nt_kind(nt, recv) == NK_CallNode &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "class")) {
+    /* (a class method `name` / `to_s` / `inspect` of the program's own:
+       the class value dispatch calls it for the classes that define one) */
+    if (comp_ntype(c, recv) == TY_CLASS) {
+      int ncc = 0;
+      comp_cmethod_candidates(c, name, &ncc);
+      if (ncc > 0) return 0;
+    }
     if (comp_ntype(c, recv) == TY_CLASS) {
       /* every .class now yields an sp_Class (the poly path included, via
          sp_poly_class_val): stringify uniformly. */

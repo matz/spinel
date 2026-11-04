@@ -106,6 +106,7 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "strftime", "aref-str", "aref-sym", "aref-poly", "predicate(arg)",
                                      "default generic", "default replace", "default round(n)",
                                      "default numeric(n)", "default str-index", "default find_index",
+                                     "default upto/downto",
                                      "default first/last(n)", "default delete/dig/values_at",
                                      "default merge", "default aref2", "default aref/fetch",
                                      "block map!", "subclass re-entry", "array re-entry",
@@ -4851,6 +4852,7 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
       buf_printf(b, " _t%d = sp_poly_upto_enum(_t%d, %s, %d); break;",
                  tr, tv, ub.p ? ub.p : "sp_box_nil()", sp_streq(name, "upto"));
       free(ub.p);
+      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ND_UPTO, -1, TY_UNKNOWN, PC_SAME);
     }
     /* round(n) / ceil(n) / floor(n) / truncate(n): a class defining
        `round(digits)` took over the name, and the Integer or Float in

@@ -362,6 +362,7 @@ typedef enum {
   /* its `default:` arm (emit_poly_defaults_n): the generic one and what it
      answers first, or a name's own */
   PB_ND_GENERIC, PB_ND_REPLACE, PB_ND_ROUND, PB_ND_NUM, PB_ND_STR_INDEX, PB_ND_FIND_INDEX,
+  PB_ND_UPTO,
   PB_ND_FIRSTN, PB_ND_KEYS, PB_ND_MERGE, PB_ND_AREF2, PB_ND_AREF,
   /* the statement-level block dispatch's builtin default
      (emit_poly_recv_block_dispatch): map!/collect! over a builtin array */

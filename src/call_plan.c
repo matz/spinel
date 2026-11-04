@@ -3325,6 +3325,10 @@ static void cpoly_cases_n(Compiler *c, int id, const char *name, int argc, const
       !ps->pvalues_at && !ps->pfirstn && !ps->pmerge) {
     cpoly_family(p, cap, PB_ND_GENERIC);
     if (sp_streq(name, "replace") && argc == 1 && splat_a < 0 && ret == TY_POLY) cpoly_family(p, cap, PB_ND_REPLACE);
+    /* a blockless upto / downto's Enumerator, as emit_poly_defaults_n takes it */
+    else if ((sp_streq(name, "upto") || sp_streq(name, "downto")) && argc == 1 && ps->pos_argc == 1 &&
+             splat_a < 0 && nt_ref(c->nt, id, "block") < 0 && ret == TY_POLY)
+      cpoly_family(p, cap, PB_ND_UPTO);
     else if (is_round_family(name) && argc == 1 && splat_a < 0)
       cpoly_family(p, cap, PB_ND_ROUND);
     /* by the positional count, as emit_poly_defaults_n takes the arm */
@@ -3434,6 +3438,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
     cpoly_trial(p, cap, PT_STR);
   cpoly_cases_n(c, id, name, argc, argv, ret, atmp_ty, &ps, splat_a, p, cap);
   if (cpoly_has_family(p, PB_ND_GENERIC) && !cpoly_has_family(p, PB_ND_REPLACE) &&
+      !cpoly_has_family(p, PB_ND_UPTO) &&
       !cpoly_has_family(p, PB_ND_ROUND) && !cpoly_has_family(p, PB_ND_NUM) &&
       !cpoly_obj_default_n(c, id, name, kwh, pos_argc, splat_a, p, cap))
     cpoly_trial(p, cap, PT_GENERIC_TAIL);

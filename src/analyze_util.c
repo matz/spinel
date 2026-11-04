@@ -5749,3 +5749,26 @@ int loop_may_stop(Compiler *c, int loop_call) {
   if (loop_call < g_si.count) g_si.loop_memo[loop_call] = (signed char)r;
   return r;
 }
+
+/* See analyze_internal.h. */
+int respond_to_cells_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  const int *av = nt_kind(nt, id) == NK_CallNode && is_respond_to_name(nt_str(nt, id, "name")) &&
+                  nt_ref(nt, id, "block") < 0 ? call_args(nt, id, &ac) : NULL;
+  int recv = av ? nt_ref(nt, id, "receiver") : -1;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak = ac == 2 ? nt_kind(nt, av[1]) : NK_FalseNode;
+  return av && (ac == 1 || ac == 2) && nt_kind(nt, av[0]) == NK_SymbolNode && (ak == NK_TrueNode || ak == NK_FalseNode) &&
+         (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
+}
+/* See analyze_internal.h. */
+int capture_cells_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  const int *av = nt_kind(nt, id) == NK_CallNode && is_bound_method_maker(nt_str(nt, id, "name")) &&
+                  nt_ref(nt, id, "block") < 0 ? call_args(nt, id, &ac) : NULL;
+  int recv = av ? nt_ref(nt, id, "receiver") : -1;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+  return av && ac == 1 && nt_kind(nt, av[0]) == NK_SymbolNode &&
+         (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
+}
+/* See analyze_internal.h. */
+int respond_to_missing_defined(Compiler *c) { return !an_name_binder_free(c, "respond_to_missing?"); }

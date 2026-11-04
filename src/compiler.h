@@ -1754,11 +1754,13 @@ typedef struct {
      calls pinned to the method it runs. absent: asked for a call that may
      meet no version of the chain yet, 2 when the entry's else arm answers
      for none, 1 when it keeps the last version (ver_entries_demand);
-     cells: its histories' cells are written (ver_cells_write). Each name
-     is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
-     the chain counts: a caller may ask with a name it frees itself
+     cells: its histories' cells are written (ver_cells_write); finds:
+     what its else arm finds while no version is live, one of
+     VER_FINDS_* (call_plan.c, ver_else_finds). Each name is the entry's
+     own copy (ver_entry_add), as in ver_late, ver_memo and the chain
+     counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:

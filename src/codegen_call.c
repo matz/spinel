@@ -19320,8 +19320,8 @@ int class_object_answers_builtin(const char *qm, int is_module) {
    methods and singleton attrs only once one is defined where id runs, as
    the plan says (cplan_cmethod_later), and every builtin one; -1 for no
    call, the program's answer anywhere. */
+static int class_responds_builtin(Compiler *c, int ci, const char *qm);
 static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
-  const NodeTable *nt = c->nt;
   if (!cplan_cmethod_later(c, id, ci, qm)) {
     if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
     /* singleton attr_accessor/reader/writer via class << self */
@@ -19331,6 +19331,10 @@ static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
     }
     else if (comp_is_sg_reader(&c->classes[ci], qm)) return 1;
   }
+  return class_responds_builtin(c, ci, qm);
+}
+/* ...with none of its program's class methods: the builtin ones */
+static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   int is_module = comp_class_is_module(c, &c->classes[ci]);
   /* A module's `module_function` methods are recorded class-level and were
      already matched above. Its plain `def m` are instance methods, which the
@@ -19345,6 +19349,26 @@ static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
      odd one out (#3482). */
   if ((c->classes[ci].is_struct || c->classes[ci].is_data) && sp_streq(qm, "members")) return 1;
   return 0;
+}
+/* See codegen_call_arms.h. */
+int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {
+  int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
+  CplanCells cs;
+  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, &cs)) return 0;
+  /* a cell is an Integer global: an sp_int, or an sp_RbVal under
+     --int-overflow=promote, compared as the entry's arms compare it */
+  for (int i = 0; i < cs.n; i++) {
+    LocalVar *g = comp_gvar(c, cs.cell[i] + 1);
+    ReprKind k = g ? repr_slot_kind(c, g) : RK_NONE;
+    if (k != RK_SCALAR && k != RK_BOXED) return 0;
+  }
+  if (!b) return 1;
+  buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(" : "(");
+  for (int i = 0; i < cs.n; i++)
+    buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs.cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
+               cs.cell[i] + 1, cs.val[i]);
+  buf_printf(b, "%d)", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
+  return 1;
 }
 
 int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b) {
@@ -32598,6 +32622,8 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       if (lk == NK_FalseNode && (fa == 0 || fa == 1)) return fa;
       return -1;
     } }
+  /* a class's own class method whose answer the version cells hold */
+  if (emit_respond_to_cells(c, id, qm, argc, argv, NULL)) return -1;
   /* a compiler-synthesized helper (__enum_to_a) is not a real method: CRuby
      answers false, so never let the class-chain lookup below report it */
   if (name_is_synth_method(c, qm)) { resolved = 1; yes = 0; }

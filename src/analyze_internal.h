@@ -562,6 +562,18 @@ int class_is_comparable(Compiler *c, int cid);                   /* codegen_call
    declares the same). */
 int bare_call_class_owned(Compiler *c, int id);                  /* codegen_call.c */
 const int *call_args(const NodeTable *nt, int id, int *argc);    /* codegen_call.c */
+/* Is call id a respond_to? the version cells may answer (cplan_cmethod_presence):
+   by a literal Symbol, with a literal include_all if any, on a constant, self
+   or no receiver? The load record asks it of the source's readers
+   (lr_refl_take) before any class is known (analyze_util.c). */
+int respond_to_cells_shape(const NodeTable *nt, int id);
+/* ...and is it `method(:k)` / `public_method(:k)` by a literal Symbol on a
+   constant, self or no receiver: a Method's maker that takes the entry a
+   call of the name takes (lr_refl_take)? */
+int capture_cells_shape(const NodeTable *nt, int id);
+/* May a respond_to? answer for a name other than by the methods: the program
+   defines respond_to_missing?. The cells answer no respond_to? then. */
+int respond_to_missing_defined(Compiler *c);
 int exc_has_nonstring_msg_override(Compiler *c);                 /* codegen_util.c */
 int interp_is_literal_fold(const NodeTable *nt, int id);         /* codegen_expr.c */
 int is_fresh_array(Compiler *c, int v);                          /* analyze_pass.c */

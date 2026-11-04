@@ -66,6 +66,11 @@ typedef struct {
                               stand-in, a subclass's override of a reader, a
                               reopen) */
   unsigned char method_call; /* a Method invocation, even with no source node */
+  unsigned char absent;    /* a `method(:sym)` that finds no method of
+                              owner_ci's side (2 its class side, 1 its
+                              instance side): CRuby's NameError, where it
+                              runs (mi -1) or while no version of the entry
+                              mi is live (cplan_capture_absent) */
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
@@ -701,6 +706,31 @@ int cplan_sg_version(Compiler *c, int id, int ci, const char *name);
    accessor slot (cplan_sg_accessor). The reach pass then reaches no scope
    from it, though the version it binds to is the accessor's own. */
 int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name);
+/* The class whose own class methods `respond_to?` call id asks about: a
+   constant receiver's, or self's in a class method or a class body; -1 for
+   any other receiver, an instance's, and for a call of another shape
+   (respond_to_cells_shape). */
+int cplan_presence_class(Compiler *c, int id);
+/* The version cells that answer whether class cls has its class method
+   `name` where respond_to? call id runs: the cells of the version entry a
+   call of the name there would take, where the record cannot order the
+   call against a version (a method body's def, which may run any number
+   of times). Each cell holds one of the chain's versions while that
+   version is the method; only public ones unless include_all; and els,
+   whether the entry's else arm, which the call runs while none is live,
+   finds the method so (cplan_entry_finds). 1 with the
+   cells in *out, 0 where the answer is the table's or the record's at the
+   point (cplan_cmethod_later), for a chain whose entry arms an undef or
+   a remove, and in a program that defines respond_to_missing?
+   (respond_to_missing_defined). */
+typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; int els; } CplanCells;
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out);
+/* What version entry scope e's else arm finds while no version of its
+   chain is live, as respond_to? and a Method's maker see it
+   (VerEntry.finds): a public method, a private or protected one, or none
+   (NoMethodError, method_missing); -1 for a scope that is no entry */
+enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
+int cplan_entry_finds(const Compiler *c, int e);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

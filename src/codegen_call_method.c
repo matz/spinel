@@ -2111,8 +2111,32 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   return 0;
 }
 
+/* CRuby's NameError for capture id, whose plan finds no method (CallPlan.absent), as a statement. A
+   Class.new class is named as it prints at run time: by the constant written with it, once written
+   (obj_default_name's display). The method name is an argument of that format, not part of it: an
+   operator's name may hold a `%`. */
+static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan, Buf *b) {
+  const char *cn = class_ruby_name(c, plan->owner_ci), *open = plan->absent == 2 ? "#<Class:" : "", *close = plan->absent == 2 ? ">" : "";
+  if (comp_class_anonymous(c, plan->owner_ci)) {
+    buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"%s\", sp_class_display((sp_Class){%d})));",
+               open, close, method_sym_arg(c, id), plan->owner_ci);
+    return;
+  }
+  buf_printf(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s%s%s'\")[1]));",
+             method_sym_arg(c, id), open, cn ? cn : c->classes[plan->owner_ci].name, close);
+}
+
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   CallPlan plan = cplan_method_call(c, id);
+  /* no method of the name where it runs: CRuby's NameError, its receiver
+     evaluated first */
+  if (plan.absent && plan.mi < 0) {
+    buf_puts(b, "({ ");
+    if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
+    emit_capture_absent_raise(c, id, &plan, b);
+    buf_printf(b, " %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
+    return 1;
+  }
   int mi = is_method_object_maker(name) ? plan.mi : -1;
   if (mi < 0 || plan.dispatch != CP_SWITCH)
     return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi);
@@ -2129,6 +2153,14 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   for (int i = 0; i < n; i++) {
     if (i) buf_puts(b, "else ");
     if (tests[i] >= 0) { buf_puts(b, "if ("); emit_expr(c, tests[i], b); buf_puts(b, ") "); }
+    /* no version live, where the entry's else arm finds no method: CRuby's
+       NameError (CallPlan.absent) */
+    if (tests[i] < 0 && plan.absent) {
+      buf_puts(b, "{ ");
+      emit_capture_absent_raise(c, id, &plan, b);
+      buf_printf(b, " _t%d = NULL; }\n", tr);
+      continue;
+    }
     buf_printf(b, "{ _t%d = ", tr);
     if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i])) {
       if (vr >= 0) view_unbind(vr);

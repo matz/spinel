@@ -721,6 +721,8 @@ int is_method_owner_query(const char *n) {
 }
 
 int is_instance_method_name(const char *n) { return n && (sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method")); }
+/* method, public_method: a Method of the receiver's own method by name */
+int is_bound_method_maker(const char *n) { return n && (sp_streq(n, "method") || sp_streq(n, "public_method")); }
 int is_method_object_maker(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "singleton_method") ||
                sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method"));
@@ -1859,6 +1861,9 @@ int builtin_object_method_known(const char *m) {
   return m && builtin_name_in(m, OBJM2);
 }
 
+/* respond_to?: whether the receiver itself answers a name, publicly or
+   with include_all any */
+int is_respond_to_name(const char *n) { return n && sp_streq(n, "respond_to?"); }
 /* A question whether a receiver has a method: of one by name (1), or a
    list of its methods: one that answers the whole program (2), or one a
    receiver's own chain decides (3) */

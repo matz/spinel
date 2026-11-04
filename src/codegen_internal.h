@@ -1255,6 +1255,8 @@ char **dsend_candidates(Compiler *c, int *out_n);
 int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
 /* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
+/* a super's block argument run for its effect: "(void)(x); " */
+void emit_super_blockarg_effect(Compiler *c, int id, Buf *b);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 int emit_exc_reopen_pick_head(Compiler *c, const int *xr, int xn, const char *cls_expr, Buf *b);
 int class_has_subclass(Compiler *c, int ocid);

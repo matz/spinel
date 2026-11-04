@@ -57,3 +57,21 @@ rescue TypeError
   puts "TypeError"
 end
 p Ok.new.is_a?(Ok)
+
+# A block argument to such a super runs, after the arguments, though the
+# method it reaches takes no block.
+$n = 0
+def side
+  $n += 1
+  nil
+end
+class Blk
+  def ==(o) = super(o, &side)
+  def ! = super(&side)
+  def nil? = super(&side)
+  def frozen? = super(&side)
+  def itself = super(&side)
+  def is_a?(k) = super(k, &side)
+end
+g = Blk.new
+p g == g, !g, g.nil?, g.frozen?, g.itself.class, g.is_a?(Blk), $n

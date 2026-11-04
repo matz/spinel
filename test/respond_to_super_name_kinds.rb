@@ -40,3 +40,15 @@ begin
 rescue TypeError => e
   puts e.message
 end
+
+# A block argument runs too.
+$n = 0
+def side
+  $n += 1
+  nil
+end
+class R3
+  def respond_to?(n, a = false) = super(n, a, &side)
+  def hi = 1
+end
+p R3.new.respond_to?(:hi), $n

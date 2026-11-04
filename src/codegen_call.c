@@ -32622,7 +32622,10 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
     for (int k = 0; k < c->nclasses && ncls < 256; k++)
       if (k != cid && is_descendant(c, k, cid)) cls[ncls++] = k;
   if (ncls > 1) buf_printf(b, "; sp_int _c%d = sp_obj_cls_id_of((void *)%s)", t, g_self);
-  buf_printf(b, "; sp_bool _r%d = 0; switch (_s%d) {", t, t);
+  /* a block argument runs after the arguments, for its effect */
+  buf_puts(b, "; ");
+  emit_super_blockarg_effect(c, id, b);
+  buf_printf(b, "sp_bool _r%d = 0; switch (_s%d) {", t, t);
   int ncand = 0;
   char **cand = dsend_candidates(c, &ncand);
   /* the names every object has privately (Object's private methods), which

@@ -10,3 +10,5 @@ nil is not a symbol nor a string
 true
 false
 1 is not a symbol nor a string
+true
+1

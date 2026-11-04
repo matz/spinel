@@ -11261,23 +11261,25 @@ int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf *b) {
     return 1;
   }
   /* Time.new(str, in: zone): the keyword's zone reads a string that carries
-     none; one the string carries wins, as CRuby has it */
+     none; one the string carries wins, and the keyword is then evaluated but
+     never converted, as CRuby has it */
   if (is_new && argc == 2 && comp_ntype(c, argv[0]) == TY_STRING && nt_argv_kwh(nt, argv, argc) >= 0) {
     int inv = struct_kwarg_value(c, argv[1], "in");
     if (inv >= 0) {
-      int tsv = ++g_tmp, tu = ++g_tmp, tl = ++g_tmp, tz = ++g_tmp;
+      int tsv = ++g_tmp, tu = ++g_tmp, tl = ++g_tmp, tz = ++g_tmp, tk = ++g_tmp, th = ++g_tmp;
       TyKind zt = comp_ntype(c, inv);
       buf_printf(b, "({ const char *_t%d = ", tsv); emit_expr(c, argv[0], b);
-      buf_printf(b, "; int _t%d = 0, _t%d = 0; int64_t _t%d = ", tu, tl, tz);
-      if (zt == TY_STRING) { buf_puts(b, "sp_time_zone_arg_off("); emit_expr(c, inv, b); buf_printf(b, ", &_t%d)", tu); }
-      else if (zt == TY_INT) emit_int_expr(c, inv, b);
-      else {
-        int tb = ++g_tmp;
-        buf_printf(b, "({ sp_RbVal _t%d = ", tb); emit_boxed(c, inv, b);
-        buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (_t%d = 1, (int64_t)0) : sp_time_zone_val_off(_t%d, &_t%d); })",
-                   tb, tl, tb, tu);
-      }
-      buf_printf(b, "; sp_time_parse_in(_t%d, _t%d ? 0 : _t%d ? 1 : 2, _t%d); })", tsv, tl, tu, tz);
+      if (zt == TY_STRING) { buf_printf(b, "; const char *_t%d = ", tk); emit_expr(c, inv, b); }
+      else if (zt == TY_INT) { buf_printf(b, "; int64_t _t%d = ", tk); emit_int_expr(c, inv, b); }
+      else { buf_printf(b, "; sp_RbVal _t%d = ", tk); emit_boxed(c, inv, b); }
+      buf_printf(b, "; int _t%d = sp_time_str_has_zone(_t%d); int _t%d = 0, _t%d = 0; int64_t _t%d = 0;",
+                 th, tsv, tu, tl, tz);
+      buf_printf(b, " if (!_t%d) ", th);
+      if (zt == TY_STRING) buf_printf(b, "_t%d = sp_time_zone_arg_off(_t%d, &_t%d);", tz, tk, tu);
+      else if (zt == TY_INT) buf_printf(b, "_t%d = _t%d;", tz, tk);
+      else buf_printf(b, "{ if (_t%d.tag == SP_TAG_NIL) _t%d = 1; else _t%d = sp_time_zone_val_off(_t%d, &_t%d); }",
+                      tk, tl, tz, tk, tu);
+      buf_printf(b, " sp_time_parse_in(_t%d, _t%d ? 0 : _t%d ? 1 : 2, _t%d); })", tsv, tl, tu, tz);
       return 1;
     }
   }

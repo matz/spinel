@@ -8,3 +8,9 @@ puts Time.new("2026-11-04 10:20:30.5", in: "Z").subsec
 puts Time.new("2021", in: "UTC")
 zone = ARGV.empty? ? "-02:00" : 7
 puts Time.new("2026-11-04 10:20:30", in: zone)
+puts Time.new("2026-11-04 10:20:30 +09:00", in: "invalid")
+begin
+  Time.new("2026-11-04 10:20:30", in: "invalid")
+rescue ArgumentError
+  puts "ArgumentError"
+end

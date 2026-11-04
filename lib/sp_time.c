@@ -413,6 +413,19 @@ static sp_Time sp_timev_parse_dz(const char *s, int dz, int64_t doff) {SP_GC_ROO
 }
 
 sp_Time sp_timev_parse(const char *s) { return sp_timev_parse_dz(s, 0, 0); }
+/* Does the string form write its own zone? Then Time.new's `in:` is never
+   converted. A string the grammar refuses answers 0: the parse raises. */
+int sp_time_str_has_zone(const char *s) {
+  int y, mo, d, h, mi, sec, n = 0;
+  if (!s || sscanf(s, "%4d-%2d-%2d%n", &y, &mo, &d, &n) != 3 || n == 0) return 0;
+  const char *p = s + n;
+  n = 0;
+  if (sscanf(p, " %2d:%2d:%2d%n", &h, &mi, &sec, &n) != 3 || n == 0) return 0;
+  p += n;
+  if (*p == '.') { p++; while (*p >= '0' && *p <= '9') p++; }
+  while (*p == ' ') p++;
+  return *p != 0;
+}
 sp_Time sp_timev_parse_in(const char *s, int dz, int64_t doff) { return sp_timev_parse_dz(s, dz, doff); }
 
 sp_Time sp_timev_utc(sp_Time t) {

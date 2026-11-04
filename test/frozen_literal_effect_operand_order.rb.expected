@@ -1,0 +1,12 @@
+"assc"
+[:r, :s]
+"zbc"
+[:t, :u, :w]
+["lit", "bb"]
+[:a, :b]
+["lit", "qq"]
+[:p, :q]
+{"key" => "vv"}
+[:k, :v]
+ZeroDivisionError
+[]

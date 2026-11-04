@@ -601,6 +601,7 @@ int elab_builder_class(Compiler *c, int node);
    table alone: a class's def_node, or a node a pass walked to */
 int class_def_is_record_call(const NodeTable *nt, int val);   /* a `Struct.new(..)` / `Data.define(..)` call */
 int class_def_record(const NodeTable *nt, int def_node);   /* the record call a constant or local write holds, -1 for none */
+int class_def_record_is_data(const NodeTable *nt, int call);   /* is record call `call` Data.define's? */
 const NodeKind *class_def_kinds(int *n);   /* the node kinds a definition can be */
 const NodeKind *class_def_module_kinds(int *n);   /* ...a module's definition can be */
 int class_def_builder(const NodeTable *nt, int def_node);   /* a constant write's Class.new / Module.new call that defines a class, -1 for none */

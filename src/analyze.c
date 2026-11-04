@@ -3389,6 +3389,52 @@ void rewrite_const_alias_receivers(Compiler *c) {
   alias_renames_apply(c, &q);
 }
 
+/* How many classes and modules of the program have the Ruby leaf name nm
+   (`Ext::Foo` and a top-level `Foo` both count), and whether one of them
+   is nested under another class or module. */
+static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
+  int n = 0;
+  *nested = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    /* (not class_ruby_name, which caches the name it builds: this runs
+       while the passes still place classes) */
+    const ClassInfo *ci = &c->classes[k];
+    const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
+    if (l) leaf = l + 1;
+    else if (ci->enclosing_class >= 0 && leaf)
+      for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (!leaf || !sp_streq(leaf, nm)) continue;
+    n++;
+    if (l || ci->enclosing_class >= 0) *nested = 1;
+  }
+  return n;
+}
+
+/* `m::Foo` where m is a value (a local, a parameter, a call's answer):
+   which Foo it names is the one m's class or module holds, known only at
+   run time. The path is resolved by its leaf name, so when two classes or
+   modules in different scopes have that leaf, one nested under another,
+   the answer is a guess, and CRuby's can be the other one: refused. (A
+   value constant with a VALUE parent is read by a run-time switch on the
+   parent's class, and a leaf one class has is that class.) */
+static void refuse_dyn_parent_class_leaf(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) {
+    int par = nt_ref(nt, id, "parent");
+    if (par < 0) continue;
+    NodeKind pk = nt_kind(nt, par);
+    if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int nested = 0;
+    if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
+    char msg[400];
+    snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) is not supported when classes "
+             "or modules in more than one scope are named %s: which one it names is decided at run time "
+             "(see docs/limitations.md)", nm, nm);
+    unsupported_feature_collect(c, id, msg);
+  }
+}
+
 /* Asks the class a `raise` argument or a `rescue` exception names when it is
    a class alias, and queues its rename (rewrite_const_alias_raise_targets). */
 static void ask_raise_target(Compiler *c, int t, AliasRenames *q) {
@@ -49054,6 +49100,7 @@ static void an_phase_desugar_register(Compiler *c) {
   if (elab_check_on(c)) elab_check_surface(c);
   register_globals_consts(c);
   AN_STEP_V("rewrite_const_alias_receivers", rewrite_const_alias_receivers(c));
+  AN_STEP_V("refuse_dyn_parent_class_leaf", refuse_dyn_parent_class_leaf(c));
   AN_STEP_V("rewrite_builtin_cm_alias_calls", rewrite_builtin_cm_alias_calls(c));   /* Time.stamp -> Time.now, the builtin's */
   AN_STEP_V("route_self_builtin_calls", route_self_builtin_calls(c));   /* U.rand(2) before U's def self.rand -> rand(2), Kernel's */
   desugar_env_values(c);

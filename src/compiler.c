@@ -5103,6 +5103,10 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0 || obj == class_id) return -1;
   if (comp_class_is_module(c, &c->classes[class_id])) return -1;
+  /* under BasicObject with no `include Kernel`, neither Object nor Kernel
+     is in the chain: a super finds no method there (one that includes
+     Kernel reaches Kernel's methods through Object's chain, as before) */
+  if (class_lacks_kernel(c, class_id)) return -1;
   return obj;
 }
 

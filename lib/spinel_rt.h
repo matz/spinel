@@ -16597,41 +16597,20 @@ static const char *sp_bm_owner_name(sp_BoundMethod *m) {
     memcpy(r, p, n); r[n] = 0;
     return r; }
 }
-/* #parameters from the same rendering: `a`, `b=...`, `*r`, `**k` (#3692). */
+/* #parameters from the list the bind site stamped (sp_BoundMethod.params):
+   [kind] or [kind, name] per entry */
 static sp_PolyArray *sp_bm_parameters(sp_BoundMethod *m) {
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
-  if (!m || !m->desc) return out;
-  const char *o = strchr(m->desc, '(');
-  if (!o) return out;
-  const char *p = o + 1;
-  while (*p && *p != ')') {
-    while (*p == ' ' || *p == ',') p++;
-    if (!*p || *p == ')') break;
-    const char *kind = "req";
-    if (p[0] == '*' && p[1] == '*') { kind = "keyrest"; p += 2; }
-    else if (p[0] == '*') { kind = "rest"; p++; }
-    else if (p[0] == '&') { kind = "block"; p++; }
-    const char *ns = p;
-    while (*p && *p != ',' && *p != ')' && *p != '=' && *p != ':') p++;
-    { size_t n = (size_t)(p - ns);
-      char nm[128]; if (n >= sizeof nm) n = sizeof nm - 1;
-      memcpy(nm, ns, n); nm[n] = 0;
-      if (*p == '=') { kind = "opt"; while (*p && *p != ',' && *p != ')') p++; }
-      /* a keyword, as the description writes it: `k:` required, `k: ...`
-         with a default */
-      else if (*p == ':') {
-        p++;
-        while (*p == ' ') p++;
-        kind = *p == '.' ? "key" : "keyreq";
-        while (*p && *p != ',' && *p != ')') p++;
-      }
-      if (n) {
-        sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
-        sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern(kind)));
-        sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern(nm)));
-        sp_PolyArray_push(out, sp_box_poly_array(pair));
-      }
-    }
+  const char *p = m ? m->params : NULL;
+  while (p && *p) {
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    const char *colon = memchr(p, ':', (size_t)(e - p));
+    sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
+    sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern_n(p, (size_t)((colon ? colon : e) - p))));
+    if (colon) sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern_n(colon + 1, (size_t)(e - colon - 1))));
+    sp_PolyArray_push(out, sp_box_poly_array(pair));
+    p = *e ? e + 1 : e;
   }
   return out;
 }

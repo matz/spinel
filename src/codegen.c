@@ -9489,16 +9489,27 @@ static TyKind lambda_nonlocal_return_ty(Compiler *c, int id) {
    the suffix while the positional ones were stripped (#4045). */
 static const char *param_public_name(const Compiler *c, const char *n) {
   if (!n) return n;
-  if (!strncmp(n, "__blk_kwrest", 12)) return "**";   /* name_anon_block_kwrest */
-  /* the slot of a parameter the body assigns (desugar_reassigned_block_params)
-     stands for the name written, with or without the shadow rename's suffix */
-  size_t len = reassigned_param_written_len(c, n);
-  if (!n[len]) len = block_param_written_len(c, n);
+  size_t len = param_written_len(c, n);
   if (!n[len]) return n;
   { static char *buf; static size_t cap;   /* a name of any length: nothing is cut */
     if (len + 1 > cap) { cap = len + 1; buf = (char *)realloc(buf, cap); }
     memcpy(buf, n, len); buf[len] = 0;
     return buf; }
+}
+/* The symbol Proc#parameters reports for parameter node p: the name the
+   program wrote (param_public_name), `anon` for one with no name, CRuby's
+   text for an anonymous one the desugar named; -1 for a destructuring
+   group's slot, which has no name, and -2 for a parameter the desugar made
+   that is none, the implicit rest of a trailing comma (`|a,|`, #4045)
+   (desugared_param_name) */
+static int proc_param_sym(Compiler *c, int p, const char *anon) {
+  const char *w, *nm = nt_str(c->nt, p, "name");
+  switch (desugared_param_name(c->nt, p, &w)) {
+  case DPN_NONE: return -2;
+  case DPN_NAMELESS: return -1;
+  case DPN_WRITTEN: return comp_sym_intern(c, w);
+  default: nm = param_public_name(c, nm); return comp_sym_intern(c, nm ? nm : anon);
+  }
 }
 
 /* Lower a `proc {}` / `lambda {}` / `Proc.new {}` / `->(){}` literal: emit a
@@ -10178,9 +10189,10 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
       meta_arity = neg ? -(mandatory + 1) : mandatory;
       /* the trailing parameter synthesized for a `|x,|` rest is not one the
          signature has -- CRuby reports `proc { |x,| }.arity` as 1 */
-      for (int k = 0; k < arity; k++) {
-        const char *pnm = proc_param_name(c, create, k);
-        if (pnm && strncmp(pnm, "__implicit_rest_", 16) == 0) {
+      int nreq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nreq);
+      for (int k = 0; k < nreq; k++) {
+        const char *w;
+        if (desugared_param_name(nt, reqs[k], &w) == DPN_NONE) {
           meta_arity = meta_arity < 0 ? meta_arity + 1 : meta_arity - 1;
           break;
         }
@@ -10381,58 +10393,50 @@ else if (orecv >= 0 && onm) {
       const char *pos_kind = "req";
       (void)is_lambda;
       ids = nt_arr(nt, pn, "requireds", &n);
+      /* each by proc_param_sym: a destructuring group has no name of its
+         own, and neither the synthesized one nor a renamed local's suffix
+         leaks (#3679) */
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
-        /* the implicit rest a trailing comma synthesizes (`|a,|`) is not a
-           parameter Ruby reports at all (#4045) */
-        { const char *inm = nt_str(nt, ids[i], "name");
-          if (inm && strncmp(inm, "__implicit_rest", 15) == 0) continue; }
+        int s = proc_param_sym(c, ids[i], NULL);
+        if (s == -2) continue;
         pkind[meta_count] = pos_kind;
-        /* a destructuring group has no name of its own; the synthesized one
-           must not leak, and neither must a renamed local's suffix (#3679) */
-        const char *rnm = nt_str(nt, ids[i], "name");
-        pname[meta_count++] = (rnm && strncmp(rnm, "__destr_", 8) == 0)
-                                ? -1 : comp_sym_intern(c, param_public_name(c, rnm));
+        pname[meta_count++] = s;
       }
       ids = nt_arr(nt, pn, "optionals", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
-        { const char *inm = nt_str(nt, ids[i], "name");
-          if (inm && strncmp(inm, "__implicit_rest", 15) == 0) continue; }
+        int s = proc_param_sym(c, ids[i], NULL);
+        if (s == -2) continue;
         pkind[meta_count] = "opt";
-        { const char *onm = nt_str(nt, ids[i], "name");
-          pname[meta_count++] = (onm && strncmp(onm, "__destr_", 8) == 0)
-                                  ? -1 : comp_sym_intern(c, param_public_name(c, onm)); }
+        pname[meta_count++] = s;
       }
       int rest = nt_ref(nt, pn, "rest");
       NodeKind rk = nt_kind(nt, rest);
       if (rk == NK_RestParameterNode && meta_count < PMETA_MAX) {
-        const char *nm = param_public_name(c, nt_str(nt, rest, "name"));
         pkind[meta_count] = "rest";
-        pname[meta_count++] = comp_sym_intern(c, nm ? nm : "*");
+        pname[meta_count++] = proc_param_sym(c, rest, "*");
       }
       ids = nt_arr(nt, pn, "posts", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         pkind[meta_count] = pos_kind;
-        pname[meta_count++] = comp_sym_intern(c, param_public_name(c, nt_str(nt, ids[i], "name")));
+        pname[meta_count++] = proc_param_sym(c, ids[i], NULL);
       }
       ids = nt_arr(nt, pn, "keywords", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         NodeKind kk = nt_kind(nt, ids[i]);
         pkind[meta_count] = (kk == NK_OptionalKeywordParameterNode) ? "key" : "keyreq";
-        pname[meta_count++] = comp_sym_intern(c, param_public_name(c, nt_str(nt, ids[i], "name")));
+        pname[meta_count++] = proc_param_sym(c, ids[i], NULL);
       }
       int kwrest = nt_ref(nt, pn, "keyword_rest");
       NodeKind kwty_k = nt_kind(nt, kwrest);
       if (kwty_k == NK_KeywordRestParameterNode && meta_count < PMETA_MAX) {
-        const char *nm = param_public_name(c, nt_str(nt, kwrest, "name"));
         pkind[meta_count] = "keyrest";
-        pname[meta_count++] = comp_sym_intern(c, nm ? nm : "**");
+        pname[meta_count++] = proc_param_sym(c, kwrest, "**");
       }
       int bpar = nt_ref(nt, pn, "block");
       NodeKind bk = nt_kind(nt, bpar);
       if (bk == NK_BlockParameterNode && meta_count < PMETA_MAX) {
-        const char *nm = param_public_name(c, nt_str(nt, bpar, "name"));
         pkind[meta_count] = "block";
-        pname[meta_count++] = comp_sym_intern(c, nm ? nm : "&");
+        pname[meta_count++] = proc_param_sym(c, bpar, "&");
       }
     }
     else if (nnumbered > 0) {

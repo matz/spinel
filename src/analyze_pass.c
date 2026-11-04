@@ -15248,6 +15248,7 @@ int desugar_block_destructure_params_at(Compiler *c, LowerCtx *lc, int id) {
     int rp = nt_new_node(nt, "RequiredParameterNode");
     if (rp < 0) { ok = 0; break; }
     nt_node_set_str(nt, rp, "name", nm);
+    nt_node_set_int(nt, rp, "desugared_param", DPN_NAMELESS);
     newreqs[k] = rp;
     if (!bind) continue;  /* anonymous splat: nothing to assign */
     int rd = nt_new_node(nt, "LocalVariableReadNode");

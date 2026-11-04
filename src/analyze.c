@@ -6706,6 +6706,7 @@ int name_anon_block_kwrest_at(Compiler *c, LowerCtx *lc, int id) {
   char nm[48];
   snprintf(nm, sizeof nm, "__blk_kwrest%s", comp_node_tag(c, id));
   nt_node_set_str(nt, kr, "name", nm);
+  nt_node_set_int(nt, kr, "desugared_param", DPN_WRITTEN);
   return 1;
 }
 
@@ -50237,8 +50238,8 @@ static void an_phase_pre_fixpoint(Compiler *c) {
     int kwrest = nt_ref(c->nt, pn, "keyword_rest");
     if (kwrest >= 0) {
       comp_sym_intern(c, "keyrest");
-      const char *nm = nt_str(c->nt, kwrest, "name");
-      comp_sym_intern(c, nm && strncmp(nm, "__blk_kwrest", 12) ? nm : "**");
+      const char *w, *nm = nt_str(c->nt, kwrest, "name");
+      comp_sym_intern(c, desugared_param_name(c->nt, kwrest, &w) == DPN_WRITTEN ? w : nm ? nm : "**");
     }
     int bpar = nt_ref(c->nt, pn, "block");
     if (bpar >= 0) {

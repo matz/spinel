@@ -118,6 +118,13 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 #define SP_BM_RET_OBJ_OF(cls) (SP_BM_RET_OBJ | ((sp_int)(cls) << 8))
 typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int arity;
   const char *desc;   /* compile-time #inspect rendering ("#<Method: Owner#name(params)>"), or NULL */
+  const char *params; /* compile-time #parameters list, "kind[:name]" entries
+                         separated by spaces ("req:a opt:b rest:* req"), or
+                         NULL where the bind site knows no target: what
+                         sp_bm_parameters answers. The rendering cannot carry
+                         it: CRuby writes a parameter with no name (an
+                         accessor's, a builtin's) as `_`, as it writes one
+                         named `_`. */
   sp_int self_kind;  /* SP_BM_SELF_* */
   sp_int unbound;    /* built by #unbind on a boxed Method: reports UnboundMethod */
   sp_int recv_bound; /* the target's C ABI takes the bound receiver as its leading
@@ -198,7 +205,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -308,7 +315,7 @@ static inline sp_bool sp_bm_legacy_abi_ok(sp_BoundMethod *m, sp_int argc, const 
     if (!sp_bm_sig_pos_match(arg_sig + 8 * k, m->legacy_sig + 8 * k)) return FALSE;
   return TRUE;
 }
-static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; return m; }
+static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc, const char *params) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; m->params = params; return m; }
 /* Method#unbind on a BOXED method: the same target with the receiver dropped.
    A boxed value carries no syntax for the compile-time unbound rendering, so
    the copy records it (the #class arm reads `unbound`) (#3692). */
@@ -316,6 +323,7 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   if (!m) return NULL;
   sp_BoundMethod *u = sp_bound_method_new(NULL, SP_BM_SELF_NONE, m->fn, m->name, m->arity);
   u->desc = m->desc;
+  u->params = m->params;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

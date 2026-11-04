@@ -1094,6 +1094,11 @@ void ie_body_restore(Compiler *c, int *snap);
 int ie_call_kwhash(Compiler *c, int id);
 size_t block_param_written_len(const Compiler *c, const char *name);
 size_t reassigned_param_written_len(const Compiler *c, const char *name);
+size_t param_written_len(const Compiler *c, const char *n);
+/* What a parameter node the desugar made or named stands for, as its
+   "desugared_param" mark says (desugared_param_name) */
+enum { DPN_OWN, DPN_WRITTEN, DPN_NAMELESS, DPN_NONE };
+int desugared_param_name(const NodeTable *nt, int p, const char **written);
 int block_param_is_renamed(const Compiler *c, const char *name);
 int block_param_made_for(const Compiler *c, const char *name, int blk);   /* an invented name of that block */
 char *block_param_invent_name(Compiler *c, const char *written, int blk);

@@ -5651,13 +5651,11 @@ void emit_refl_im_params(Compiler *c, Buf *b) {
       seen[nseen++] = qm;
       int mi = comp_method_in_chain(c, k, qm, NULL);
       if (mi < 0 || comp_is_undeffed_in_chain(c, k, qm)) continue;
-      int dn = c->scopes[mi].def_node;
-      int pn = dn >= 0 ? nt_ref(c->nt, dn, "parameters") : -1;
       int tr = ++g_tmp;
       buf_puts(&rows, "    if (!strcmp(name, \"");
       emit_c_escaped(&rows, qm);
       buf_printf(&rows, "\")) { sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
-      if (pn >= 0) emit_method_parameters_pushes(c, pn, tr, &rows);
+      emit_scope_parameters_pushes(c, mi, tr, &rows);
       buf_printf(&rows, " return _t%d; }\n", tr);
       nrows++;
     }

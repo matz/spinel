@@ -10691,6 +10691,7 @@ int desugar_block_implicit_rest_at(Compiler *c, LowerCtx *lc, int id) {
   if (p < 0) return 0;
   char nm[64]; snprintf(nm, sizeof nm, "__implicit_rest_%s", comp_node_tag(c, id));
   nt_node_set_str(nt, p, "name", nm);
+  nt_node_set_int(nt, p, "desugared_param", DPN_NONE);
   copy[rn] = p;
   nt_node_set_arr(nt, pn, "requireds", copy, rn + 1);
   nt_node_set_ref(nt, pn, "rest", -1);
@@ -13009,21 +13010,41 @@ int desugar_define_method_keywords_at(Compiler *c, LowerCtx *lc, int stmt) {
   return 1;
 }
 
+/* The anonymous parameters a parameter list may have: the field, the node
+   kind, the name the desugar gives one, and what CRuby reports for it */
+static const struct { const char *field, *kind, *name, *written; } anon_params[] = {
+  { "block", "BlockParameterNode", "__anon_block", "&" },
+  { "rest", "RestParameterNode", "__anon_rest", "*" },
+  { "keyword_rest", "KeywordRestParameterNode", "__anon_kwrest", "**" },
+};
+/* What parameter node p reports as its name (Method#parameters,
+   Proc#parameters), from the mark the desugar sets on a parameter it names
+   or makes, never from the name, which the program may write too:
+   DPN_WRITTEN with *written for an anonymous one (anon_params_of; a block's
+   anonymous `**`, name_anon_block_kwrest), DPN_NAMELESS for a destructuring
+   group's slot, DPN_NONE for a trailing comma's implicit rest, which is no
+   parameter, and DPN_OWN for any parameter the program names. */
+int desugared_param_name(const NodeTable *nt, int p, const char **written) {
+  *written = NULL;
+  int how = p >= 0 ? (int)nt_int(nt, p, "desugared_param", DPN_OWN) : DPN_OWN;
+  if (how == DPN_WRITTEN)
+    for (unsigned a = 0; a < 3; a++)
+      if (sp_streq(nt_type(nt, p), anon_params[a].kind)) *written = anon_params[a].written;
+  return how;
+}
 /* The anonymous parameters of parameter list pn (bit 0 the block, 1 the
    rest, 2 the keyword rest); with `name`, each is given its name. */
 static unsigned anon_params_of(NodeTable *nt, int pn, int name) {
-  static const struct { const char *field, *kind, *name; } anon_params[] = {
-    { "block", "BlockParameterNode", "__anon_block" },
-    { "rest", "RestParameterNode", "__anon_rest" },
-    { "keyword_rest", "KeywordRestParameterNode", "__anon_kwrest" },
-  };
   unsigned anon = 0;
   for (unsigned a = 0; a < 3; a++) {
     int p = nt_ref(nt, pn, anon_params[a].field);
     const char *pty = p >= 0 ? nt_type(nt, p) : NULL;
     const char *bn = p >= 0 ? nt_str(nt, p, "name") : NULL;
     if (!pty || !sp_streq(pty, anon_params[a].kind) || (bn && bn[0])) continue;
-    if (name) nt_node_set_str(nt, p, "name", anon_params[a].name);
+    if (name) {
+      nt_node_set_str(nt, p, "name", anon_params[a].name);
+      nt_node_set_int(nt, p, "desugared_param", DPN_WRITTEN);
+    }
     anon |= 1u << a;
   }
   return anon;
@@ -19898,6 +19919,14 @@ size_t reassigned_param_written_len(const Compiler *c, const char *name) {
   for (int i = 0; i < c->nrbp_slots; i++)
     if (strlen(c->rbp_slot_names[i]) == n && !memcmp(c->rbp_slot_names[i], name, n)) return c->rbp_slot_lens[i];
   return strlen(name);
+}
+
+/* The length of the name parameter slot n stands for: the slot of a
+   parameter the body assigns (desugar_reassigned_block_params) stands for
+   the name written, with or without the shadow rename's suffix */
+size_t param_written_len(const Compiler *c, const char *n) {
+  size_t len = reassigned_param_written_len(c, n);
+  return n[len] ? len : block_param_written_len(c, n);
 }
 
 /* True when the program itself uses `name`. Only a name with `__bpin` in it

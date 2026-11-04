@@ -1,0 +1,11 @@
+[:ignore_header, :ignore_header=, :strict_header, :strict_header=]
+[:ignore_header, :ignore_header=, :strict_header, :strict_header=]
+[:mode]
+[:level=]
+[:root, :root=]
+[:backup, :backup=]
+true
+nil
+:fast
+"/srv"
+"/bak"

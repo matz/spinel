@@ -534,11 +534,28 @@ static void sp_io_rbuf_park(sp_File *f, int fd) {
 /* Bytes in rbuf: 1, or 0 at the end of the stream. When rbuf is empty, one
    read(2) fills it; a read that answers EAGAIN parks and tries again. The
    handle is held across the read(2) only, never across the park. If another
-   reader's fill brought bytes meanwhile, those are the answer. */
+   reader's fill brought bytes meanwhile, those are the answer.
+
+   A read that found nothing makes the next fill on an empty rbuf park before
+   it reads (park_first): a peer that was just answered is not sending its
+   next request yet, and the read(2) would only answer EAGAIN. A read that
+   finds bytes without parking, or fills all the free space after a park
+   (more were waiting: a stream), turns it off; and the sixteenth fill in a
+   row reads first anyway, so no peer stays parked-first for good. */
 int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
+  int parked = 0;   /* this fill has parked */
   for (;;) {
     FILE *fp = sp_io_use(f);
     int fd = fileno(fp);
+    if (!parked && f->park_first && !sp_io_pending(f)) {
+      if (++f->park_first_run < 16) {
+        sp_io_unuse(f);
+        sp_io_rbuf_park(f, fd);
+        parked = 1;
+        continue;
+      }
+      f->park_first_run = 0;
+    }
     sp_io_rlock(f);
     if (f->rpos < f->rlen) { sp_io_runlock(f); sp_io_unuse(f); return 1; }
     f->rpos = f->rlen = 0;
@@ -550,16 +567,22 @@ int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
         sp_raise_cls("NoMemoryError", "failed to allocate memory");
       }
     }
-    ssize_t r = read(fd, f->rbuf, f->rcap);
+    size_t space = f->rcap;
+    ssize_t r = read(fd, f->rbuf, space);
     int e = errno;
     if (r > 0) f->rlen = (size_t)r;
     sp_io_runlock(f);
     sp_io_unuse(f);
-    if (r > 0) return 1;
+    if (r > 0) {
+      if (!parked || (size_t)r == space) { f->park_first = 0; f->park_first_run = 0; }
+      return 1;
+    }
     if (r == 0) return 0;
     if (e == EINTR) continue;
     if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("read", ""); }
+    f->park_first = 1;
     sp_io_rbuf_park(f, fd);
+    parked = 1;
   }
 }
 
@@ -685,6 +708,7 @@ char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size) {
    rooted across the call, since the reads can park. */
 static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC_ROOT(f);
   size_t got = 0;
+  int parked = 0;   /* as in sp_io_rbuf_fill, for park_first */
   while (got < n) {
     FILE *fp = sp_io_use(f);
     int fd = fileno(fp);
@@ -701,6 +725,7 @@ static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC
     sp_io_runlock(f);
     sp_io_unuse(f);
     if (r > 0) {
+      if (!held && (!parked || (size_t)r == n - got)) { f->park_first = 0; f->park_first_run = 0; }
       got += (size_t)r;
       if (!all) break;
       continue;
@@ -708,7 +733,9 @@ static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC
     if (r == 0) break;
     if (e == EINTR) continue;
     if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("read", ""); }
+    f->park_first = 1;
     sp_io_rbuf_park(f, fd);
+    parked = 1;
   }
   return got;
 }

@@ -58,6 +58,9 @@ typedef struct {
   unsigned char own_buf;       /* reads take rbuf below, never stdio: the
                                   descriptor is non-blocking and a read that
                                   finds nothing parks in the runtime */
+  unsigned char park_first;    /* own_buf: the last read found nothing, so a
+                                  fill on an empty rbuf parks before it reads */
+  unsigned char park_first_run; /* own_buf: fills in a row that parked first */
   unsigned char rlock;         /* own_buf: held while a reader changes rbuf
                                   (sp_io_rlock, sp_io.c) */
   char *rbuf;                  /* own_buf: the bytes read and not yet taken

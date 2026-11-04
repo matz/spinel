@@ -45870,6 +45870,61 @@ static int tmcv_sub_arm(Compiler *c, int id, const char *rn, const char *nm, int
   nt_node_set_int(nt, set, "builtin_only", 1);
   return set;
 }
+/* A class whose maker of this name takes no call of this shape answers it
+   with ArgumentError, as CRuby does, not the NoMethodError of a class with
+   none: an arm per such class ahead of `tail` */
+static int tmcv_arity_arms(Compiler *c, int id, int recv, const char *nm, int args, int tail) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int ncc = 0, argc = 0, kw = 0;
+  const PolyCand *cc = comp_cmethod_candidates(c, nm, &ncc);
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  for (int i = 0; i < argc; i++) if (nt_kind(nt, av[i]) == NK_KeywordHashNode) kw = 1;
+  for (int i = 0; i < ncc; i++) {
+    int k = cc[i].cls, mi = cc[i].mi;
+    const char *rn = k >= 0 && k < c->nclasses ? class_ruby_name(c, k) : NULL;
+    const Scope *s = mi >= 0 && mi < c->nscopes ? &c->scopes[mi] : NULL;
+    int pn = s && s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
+    if (!rn) continue;
+    int nreq = 0, nopt = 0, npost = 0, nkw = 0;
+    const int *kv = NULL;
+    int rest = 0, kr = -1;
+    if (pn >= 0) {
+      nt_arr(nt, pn, "requireds", &nreq); nt_arr(nt, pn, "optionals", &nopt); nt_arr(nt, pn, "posts", &npost);
+      kv = nt_arr(nt, pn, "keywords", &nkw);
+      rest = nt_ref(nt, pn, "rest") >= 0; kr = nt_ref(nt, pn, "keyword_rest");
+    }
+    int given = argc - kw + (kw && nkw == 0 && kr < 0 ? 1 : 0), req = nreq + npost;
+    char msg[320], names[160] = "", bare[160] = "";
+    int nmiss = 0;
+    for (int j = 0; j < nkw; j++) {
+      if (nt_kind(nt, kv[j]) != NK_RequiredKeywordParameterNode || !nt_str(nt, kv[j], "name")) continue;
+      size_t l = strlen(names), lb = strlen(bare);
+      snprintf(names + l, sizeof names - l, "%s:%s", nmiss ? ", " : "", nt_str(nt, kv[j], "name"));
+      snprintf(bare + lb, sizeof bare - lb, "%s%s", nmiss ? ", " : "", nt_str(nt, kv[j], "name"));
+      nmiss++;
+    }
+    if (given < req || (!rest && given > req + nopt)) {
+      char exp[48];
+      if (rest) snprintf(exp, sizeof exp, "%d+", req);
+      else if (nopt) snprintf(exp, sizeof exp, "%d..%d", req, req + nopt);
+      else snprintf(exp, sizeof exp, "%d", req);
+      /* CRuby names the required keywords a call left out too */
+      if (nmiss && !kw) snprintf(msg, sizeof msg, "wrong number of arguments (given %d, expected %s; required keyword%s: %s)",
+                                 given, exp, nmiss > 1 ? "s" : "", bare);
+      else snprintf(msg, sizeof msg, "wrong number of arguments (given %d, expected %s)", given, exp);
+    }
+    else if (nmiss && !kw) snprintf(msg, sizeof msg, "missing keyword%s: %s", nmiss > 1 ? "s" : "", names);
+    else continue;
+    int str = tmcv_node(c, "StringNode", id);
+    nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
+    int rargs[2] = { tmcv_const(c, id, "ArgumentError"), str };
+    int err = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
+    int kc = tmcv_const(c, id, rn);
+    int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
+    tail = tmcv_if(c, id, eq, err, tail);
+  }
+  return tail;
+}
 static int rewrite_time_maker_class_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -45896,14 +45951,22 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     }
     else {
       /* the NoMethodError CRuby raises for any other class value */
-      char msg[96]; snprintf(msg, sizeof msg, "undefined method '%s' for class ", nm);
-      int str = tmcv_node(c, "StringNode", id);
-      if (str < 0) continue;
+      /* CRuby names a module value as one: `for module Comparable` */
+      char msg[96], mmsg[96];
+      snprintf(msg, sizeof msg, "undefined method '%s' for class ", nm);
+      snprintf(mmsg, sizeof mmsg, "undefined method '%s' for module ", nm);
+      int str = tmcv_node(c, "StringNode", id), mstr = tmcv_node(c, "StringNode", id);
+      if (str < 0 || mstr < 0) continue;
       nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
+      nt_node_set_str(nt, mstr, "unescaped", mmsg); nt_node_set_str(nt, mstr, "content", mmsg);
+      int cc0 = tmcv_const(c, id, "Class");
+      int is_cls = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "is_a?", arysub_args(c, id, &cc0, 1), -1);
+      int head = tmcv_if(c, id, is_cls, str, mstr);
       int kname = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "to_s", -1, -1);
-      int full = arysub_new_call(c, id, str, "+", arysub_args(c, id, &kname, 1), -1);
+      int full = arysub_new_call(c, id, head, "+", arysub_args(c, id, &kname, 1), -1);
       int rargs[2] = { tmcv_const(c, id, "NoMethodError"), full };
       tail = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
+      tail = tmcv_arity_arms(c, id, recv, nm, args, tail);
     }
     /* Time's own arm */
     {

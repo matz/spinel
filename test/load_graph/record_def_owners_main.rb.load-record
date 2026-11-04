@@ -28,6 +28,8 @@ block each line 23: now
 block define_method line 23: later
 block define line 25: assumed
 class Foo: body#1
+class P: body#6
+class D: body#17
 entity Foo: owner main leaf Foo
 const Foo: write#1
 Foo.x: def#2 end=yes
@@ -35,8 +37,12 @@ Foo.y: def#3 end=yes
 Foo.z: def#4 end=yes
 main.hi: def#5 end=yes
 const P: write#6
-form #10 runs code (maybe)
-form #12 runs code (maybe)
-form #14 runs code (maybe)
-form #16 runs code (maybe)
+P#m: def#7 end=yes
+P.make: def#9 end=yes
+P#h: def#10 private end=yes
+P#uses_h: def#11 end=yes
+P#dm: define_method#12 end=yes
+P#on: define_method#14 end=yes
+opaque P: opaque#16
 const D: write#17
+D#twice: def#18 end=yes

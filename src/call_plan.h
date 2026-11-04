@@ -48,7 +48,9 @@ typedef enum {
   CRF_EVAL,        /* Kernel#eval of a runtime string (diagnose_eval_call) */
   CRF_IO_REOPEN,   /* an IO reopening that yields (emit_io_reopen_call) */
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
-  CRF_TOP_SELF     /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
+  CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
+  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run (emit_call_method_obj_arms) */
+  CRF_RECORD_NEW   /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
 } CplanRefuseFrom;
 
 typedef struct {
@@ -290,6 +292,7 @@ const CallPlan *cplan_refuse(Compiler *c, int id);
    a limit down the receiver chain is the one to report */
 const char *cplan_feature_why(Compiler *c, int id, int *stop, char *buf, size_t cap);
 int cplan_define_method_early(Compiler *c, int id);
+int cplan_record_sclass_early(Compiler *c, int id);
 
 /* The plan of the same call read in a context the node does not carry
    itself: its self, or its receiver, is an instance of self_ci. That is an
@@ -697,7 +700,9 @@ int cplan_self_builtin(Compiler *c, int id);
    its statement does: not in a method body, a lambda or an END body, and
    in a block only when every block around it is certain to run at once
    (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
-   whose chain the record does not know. */
+   whose chain the record does not know. The respond_to? a `defined?(C.z)`
+   is answered by (desugar_defined_method_call) asks at the point of the
+   call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
 /* What call id of class method `name` on program class ci runs where ci
    has a `class << self` accessor of the name: CP_SG_NONE where it has none
@@ -747,6 +752,16 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    (NoMethodError, method_missing); -1 for a scope that is no entry */
 enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
 int cplan_entry_finds(const Compiler *c, int e);
+/* The program's `self.new` a `new` call id on class ci runs, -1 for
+   none: for an arm of a version entry, its pin (call_target); for a
+   Struct or Data class, the one call_target finds where the
+   call runs (its version entry, or the def where the record proves it made
+   there, or made over all the statements a call in a method or a block may
+   run in), its builtin constructor answering a call before the def and one
+   the record cannot place (as the constructor answered every call
+   before); for any other class the tables', which also decide whether the
+   class builds its own constructor. */
+int cplan_user_new(Compiler *c, int id, int ci);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

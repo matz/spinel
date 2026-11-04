@@ -120,8 +120,9 @@ Some answers wait for the whole record. A file in a region after region 0
 is walked after everything the entry does, so the answers recorded on the
 way (a mixin's module, a form's "runs program code", an alias's
 visibility) are asked again once all of it is made (`lr_settle_regions`).
-A class builder's class is made after the walk (`register_structs`), so
-`elab_record_builders` records its block again once it is.
+A class builder's class (`X = Struct.new(:a) do ... end`, a local's too) is
+made where the walk reaches its write (`record_write_class`), so its block
+is recorded as that class's body like a header's.
 
 ### What an answer means
 

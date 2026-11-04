@@ -12962,13 +12962,15 @@ void ctor_arity_emit(CtorArityArms *g, Buf *b) {
    with no arm for the classes that construct normally and a result typed
    from the user methods alone (a String one failed in C). Emits the arm for
    class `ci` into the switch whose result is the boxed `_t<rt2>`, and
-   returns 1; returns 0 when the class has no `self.new` of its own.
+   returns 1; returns 0 when the class has no `self.new` of its own, or the
+   call does not reach it (call_target: a version entry's else arm pinned to
+   the builtin, or a call that runs before every def of it).
    `hoisted` says the arguments are already the boxed temps `atmp`, else they
    are laid out from the call's own argument list (keywords, a splat). */
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp,
                              int hoisted, int rt2, Buf *b) {
   int kmi = comp_cmethod_in_chain(c, ci, "new", NULL);
-  if (kmi < 0) return 0;
+  if (kmi < 0 || call_target(c, id, ci, "new", CT_CMETHOD, NULL) < 0) return 0;
   Scope *ks = &c->scopes[kmi];
   if (!scope_has_callable_symbol(c, kmi)) return 1;   /* no symbol: the default raises */
   /* A `self.new` that YIELDS has no proc parameter to hand the block to --
@@ -13350,7 +13352,8 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     if (!class_has_ctor(&c->classes[ci])) continue;
     int initm = comp_method_in_chain(c, ci, "initialize", NULL);
     /* A Struct or Data class's generated constructor, reached with a sole
-       `*args` or a sole keyword hash: the arm builds it as the static
+       `*args`, a sole keyword hash, or both spread (`k.new(*r, **h)`, as a
+       forward passes them on): the arm builds it as the static
        `S.new(...)` does (emit_struct_new_call), the members from the array
        or by keyword -- the hash itself as the first member of a
        keyword_init: false Struct that can hold it -- its statements in the
@@ -13363,7 +13366,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
       ClassInfo *k = &c->classes[ci];
       int sole_kwh = argc == 1 && nt_kind(nt, argv[0]) == NK_KeywordHashNode;
       int ok = initm < 0 && (sole_splat >= 0 ? splat_operand_ok(c, sole_splat)
-               : sole_kwh && k->nreaders > 0 && dynamic_new_may_reach(c, id, ci) &&
+               : (sole_kwh || (kw_splat >= 0 && splat_operand_ok(c, kw_splat))) && k->nreaders > 0 && dynamic_new_may_reach(c, id, ci) &&
                  (k->is_data || k->kw_init >= 0 ||
                   struct_member_slot_type(k, k->readers[0]) == TY_POLY));
       if (!ok) continue;
@@ -15005,7 +15008,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                              comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
     /* native (C-backed) class: the declared constructor (see emit_native_ctor) */
     if (!reopen_builtin_new && emit_native_ctor(c, id, ci, argc, argv, b)) { *out = 1; return 1; }
-    if (ci >= 0 && c->classes[ci].is_struct) { *out = emit_struct_new_call(c, id, ci, argc, argv, b); return 1; }
+    if (ci >= 0 && c->classes[ci].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
+    if (ci >= 0 && c->classes[ci].is_struct && cplan_user_new(c, id, ci) < 0) { *out = emit_struct_new_call(c, id, ci, argc, argv, b); return 1; }
     if (ci >= 0 && !reopen_builtin_new) {
       /* user exception subclass: use the generated constructor */
       if (class_is_exc_subclass(c, ci)) {
@@ -15030,8 +15034,10 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* yielding initialize: inline its body at the call site (the block
          feeds the yields; the emitted constructor only allocates) */
       if (emit_ctor_yield_inline(c, id, ci, b) || emit_ctor_new_with_proc(c, id, ci, b)) { *out = 1; return 1; }
-      /* user-defined def self.new takes precedence over the constructor */
-      int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+      /* user-defined def self.new takes precedence over the constructor:
+         the one the call reaches (cplan_user_new; a Struct's may be its
+         version entry) */
+      int ucnew = cplan_user_new(c, id, ci);
       if (ucnew >= 0) {
         /* the receiving class rides in when the body reads it (#4217):
            an inherited `self.new` building with `super`, or naming it */
@@ -15984,14 +15990,8 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
      where the call reaches no program `members` (call_target: none, or
      one defined only after the call) */
   if (recv >= 0 && sp_streq(name, "members") && argc == 0) {
-    NodeKind mrk = nt_kind(nt, recv);
-    int mci = -1;
-    if (mrk == NK_ConstantReadNode || mrk == NK_ConstantPathNode)
-      mci = const_node_class_index(c, recv);
-    else if (mrk == NK_LocalVariableReadNode ||
-             (mrk == NK_CallNode && class_def_is_record_call(nt, recv)))
-      mci = class_var_static_ci(c, recv);
-    if (mci >= 0 && c->classes[mci].is_struct && call_target(c, id, mci, name, CT_CMETHOD, NULL) < 0) {
+    int mci = record_recv_class(c, recv);
+    if (mci >= 0 && call_target(c, id, mci, name, CT_CMETHOD, NULL) < 0) {
       ClassInfo *mcl = &c->classes[mci];
       int rm = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", rm, rm);
@@ -16006,13 +16006,8 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
      (a Data class is not keyword-init in CRuby's sense: keyword_init? is nil, but
      spinel has no separate nil-class answer here, so report false). */
   if (recv >= 0 && sp_streq(name, "keyword_init?") && argc == 0) {
-    NodeKind krk = nt_kind(nt, recv);
-    int kci = -1;
-    if (krk == NK_ConstantReadNode || krk == NK_ConstantPathNode)
-      kci = const_node_class_index(c, recv);
-    else if (krk == NK_LocalVariableReadNode)
-      kci = class_var_static_ci(c, recv);
-    if (kci >= 0 && c->classes[kci].is_struct && call_target(c, id, kci, name, CT_CMETHOD, NULL) < 0) {
+    int kci = record_recv_class(c, recv);
+    if (kci >= 0 && call_target(c, id, kci, name, CT_CMETHOD, NULL) < 0) {
       int kw = c->classes[kci].kw_init;
       buf_puts(b, kw == 1 ? "sp_box_bool(TRUE)" : kw == -1 ? "sp_box_bool(FALSE)" : "sp_box_nil()");
       return 1;
@@ -19429,12 +19424,12 @@ static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   /* builtin Class/Module methods every class object inherits; a module
      lacks Class's own (`new`, `superclass`, ...) */
   if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
-  /* A Struct or Data CLASS object carries the member list the same way its
-     instances do; the instance arm of the respond_to? fold already answered
-     these, so the class object saying false about its own `members` was the
-     odd one out (#3482). */
-  if ((c->classes[ci].is_struct || c->classes[ci].is_data) && sp_streq(qm, "members")) return 1;
-  return 0;
+  /* A Struct or Data CLASS object answers its record class's own builtins
+     (is_record_class_cmethod: `members`, a Struct's `keyword_init?`, ...)
+     the way its instances answer theirs (#3482), before a program's def of
+     one as after it, an anonymous `Struct.new(...)` too */
+  int sk = class_struct_kind(c, ci);
+  return sk && is_record_class_cmethod(qm, sk == 2);
 }
 /* See codegen_call_arms.h. */
 int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b) {

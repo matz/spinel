@@ -28,6 +28,23 @@ int is_record_class_builder(const char *recv, const char *meth) {
                           (sp_streq(recv, "Data") && sp_streq(meth, "define")));
 }
 
+/* The class methods a class Struct.new or Data.define makes answers of its
+   own (its singleton's, not Struct's or Data's): new, [], members, inspect,
+   and a Struct's keyword_init? (data: a Data class) */
+int is_record_class_cmethod(const char *n, int data) {
+  return n && (sp_streq(n, "new") || sp_streq(n, "[]") || sp_streq(n, "members") || sp_streq(n, "inspect") ||
+               (!data && sp_streq(n, "keyword_init?")));
+}
+/* ...of them, the ones that take arguments: the constructors, new and [] */
+int is_record_class_cmethod_with_args(const char *n) {
+  return n && (sp_streq(n, "new") || sp_streq(n, "[]"));
+}
+/* ...of them, the ones a block Struct.new or Data.define runs answers on
+   self, as Object's and Module's are: members, keyword_init? */
+int is_record_block_self_cmethod(const char *n) {
+  return n && (sp_streq(n, "members") || sp_streq(n, "keyword_init?"));
+}
+
 /* Class.new: the builder of an anonymous class */
 int is_class_new(const char *recv, const char *meth) { return is_new_name(meth) && is_class_const_name(recv); }
 /* Module.new: the builder of an anonymous module */
@@ -2389,6 +2406,14 @@ int is_attr_decl_reader(const char *n) {
 }
 int is_attr_decl_writer(const char *n) {
   return n && (is_attr_writer_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
+}
+/* The class-body declarations that run no code of the class's own: a
+   visibility change (of instance methods, class methods or constants), an
+   attribute, a mixin, an alias, or a method undefined or removed */
+int is_class_declaration_call(const char *n) {
+  return n && (visibility_of_name(n) || class_method_vis_of_name(n) || is_const_visibility_name(n) ||
+               is_attr_decl_reader(n) || is_attr_decl_writer(n) || is_mixin_call(n) || is_alias_method_name(n) ||
+               is_undef_method_name(n) || is_remove_method_name(n));
 }
 int class_method_vis_of_name(const char *n) {
   return !n ? 0 : sp_streq(n, "private_class_method") ? BVIS_PRIVATE : sp_streq(n, "public_class_method") ? BVIS_PUBLIC : 0;

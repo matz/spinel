@@ -660,6 +660,7 @@ int cplan_plain_ctx(void) {
 
 static int cplan_capture_absent(Compiler *c, int id, int mi);
 static int cm_capture_class(Compiler *c, int id, const char **name);
+static int cplan_capture_gap(Compiler *c, int id);
 /* A bound Method already carries its target. Its arguments are bound by
    the Method adapter, not by the generic call-target argument walk.
    Metadata readers also need the captured target and dispatch kind. */
@@ -1068,6 +1069,26 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
 static int ct_after_point(Compiler *c, int id) {
   return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
+/* The method call id meets as cls's `name` (singleton when sg) wherever
+   it runs: the one version of the name on cls's chain over the statements
+   id may run in (elab_call_window, elab_method_span), a def that ran there
+   for sure, as cls's copy of it when a mixin brought it (ct_def_version);
+   -1 where the record cannot prove one -- no version yet at some point of
+   the window (a def or the include that brings it comes later), more than
+   one, or one that may not have run (under a condition, or after a
+   statement that may raise in a begin body with rescue clauses:
+   elab_point_partial) */
+static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg) {
+  ElabWindow w;
+  const LrDef *ds[2];
+  if (elab_call_window(c, id, &w) != ELAB_YES) return -1;
+  if (ct_after_point(c, id)) elab_window_open(c, &w);
+  int n = elab_method_span(c, cls, name, sg, &w, ds, 2);
+  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
+      elab_point_partial(c, ds[0]->node)) return -1;
+  int dc = -1;
+  return ct_def_version(c, cls, name, sg, ds[0], &dc);
+}
 /* Does node id make the implied call `name` on operand op (a node, or an
    NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
    the rows the load record reads */
@@ -1080,29 +1101,15 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
 }
 /* The method the implied call `name` node id makes on operand op (a row:
    a multiple assignment's to_ary of its value, ct_implied_row) runs on an
-   instance of cls: the one version of `name` on cls's chain over the
-   statements id may run in (elab_call_window, elab_method_span), a def
-   that ran there for sure, as cls's copy of it when a mixin brought it
-   (ct_def_version); -1 where no row makes the call, or the record cannot
-   prove one -- no version yet at some point of the window (a def or the
-   include that brings it comes later), more than one, or one that may
-   not have run (under a condition, or after a statement that may raise
-   in a begin body with rescue clauses: elab_point_partial). The call is
-   lowered as a call of `name`, which binds through the method table:
-   where an undef of the name on cls's chain leaves the table without it
-   (comp_is_undeffed_in_chain), that call is not the version proved, and
-   there is no answer either. */
+   instance of cls: the version the call meets there (ct_window_version);
+   -1 where no row makes the call, or the record cannot prove one. The
+   call is lowered as a call of `name`, which binds through the method
+   table: where an undef of the name on cls's chain leaves the table
+   without it (comp_is_undeffed_in_chain), that call is not the version
+   proved, and there is no answer either. */
 static int ct_implied_version_at(Compiler *c, int id, const char *name, int op, int cls) {
-  ElabWindow w;
-  const LrDef *ds[2];
-  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name) ||
-      elab_call_window(c, id, &w) != ELAB_YES) return -1;
-  if (ct_after_point(c, id)) elab_window_open(c, &w);
-  int n = elab_method_span(c, cls, name, 0, &w, ds, 2);
-  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
-      elab_point_partial(c, ds[0]->node)) return -1;
-  int dc = -1;
-  return ct_def_version(c, cls, name, 0, ds[0], &dc);
+  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name)) return -1;
+  return ct_window_version(c, id, cls, name, 0);
 }
 /* ...asked in the record's frame for the call plan (elab_plan_enter), as
    ct_version asks: the passes that ask it append nodes between the asks */
@@ -1420,7 +1427,8 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
-                   builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
+                   builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
+                   !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
 /* See call_plan.h. */
 int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot, size_t cap) {
@@ -1453,6 +1461,8 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 }
 /* See call_plan.h. */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
+  int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
+  if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
   if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD)) return 0;
   int framed = elab_plan_enter(c, id);
   int now = elab_blocks_run_now(c, id);
@@ -1503,6 +1513,49 @@ int cplan_entry_finds(const Compiler *c, int e) {
   for (int i = 0; e >= 0 && i < c->nver_entries; i++)
     if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
   return -1;
+}
+/* The program's `new` a call reaches on record class ci (cplan_user_new),
+   and in *unplaced whether the record can tell neither that version nor
+   the builtin constructor there: a def call_target finds that is proven
+   made neither at the call nor over its window, nor proven absent there.
+   Such a call takes no guess; it is refused (CRF_RECORD_NEW). */
+static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
+  /* (`S[x]`, which desugar_struct_index_ctor gives new's name, is the
+     class's own `[]`: a program's `new` is not what it calls) */
+  const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
+  if (ct_pin_of(c, id) != -1) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
+  if (!c->classes[ci].is_struct) return comp_cmethod_in_chain(c, ci, "new", NULL);   /* (index_ctor marks a record's only) */
+  int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
+  if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1), absent = at == ELAB_NO;
+  /* (a call in a method or a block: the def in force over its window, or
+     none over all of it) */
+  int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1) == t;
+  ElabWindow w;
+  const LrDef *ds[2];
+  if (!made && !absent && elab_call_window(c, id, &w) == ELAB_YES)
+    absent = elab_method_span(c, ci, nm, 1, &w, ds, 2) == 1 && !ds[0];
+  if (framed) elab_plan_leave(c);
+  if (unplaced) *unplaced = !made && !absent;
+  return made ? t : -1;
+}
+/* See call_plan.h. */
+int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+/* Is call id a `new` (or a record class's `[]`) on a record class whose
+   target the record cannot place (user_new_at)? The class is the
+   receiver's constant, or self's in a class method (the copy's class for
+   an inherited one). */
+static int cplan_record_new_gap(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver"), ci = -1, unplaced = 0;
+  if (!is_new_name(nt_str(nt, id, "name"))) return 0;
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, id);
+    ci = s && s->is_cmethod ? s->class_id : -1;
+  }
+  else if (nt_kind_is_constant(nt_kind(nt, recv))) ci = class_recv_static_ci(c, recv);
+  if (ci >= 0 && c->classes[ci].is_struct) user_new_at(c, id, ci, &unplaced);
+  return unplaced;
 }
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
@@ -1802,10 +1855,11 @@ int cplan_self_class(Compiler *c, int id) {
   return ci;
 }
 /* Does a builtin answer `name` on program class ci (main for -1): one on
-   any self, a core class's own? */
+   any self, a core class's own, a record class's own
+   (elab_record_cmethod)? */
 static int cm_builtin_answers(Compiler *c, int ci, const char *name) {
   const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
-  return builtin_self_method_known(name, cm_self_kind(c, ci)) ||
+  return builtin_self_method_known(name, cm_self_kind(c, ci)) || (ci >= 0 && elab_record_cmethod(c, ci, name)) ||
          (cn && builtin_class_id(cn) && (builtin_cmethod_known(cn, name) || builtin_super_cmethod_known(cn, name)));
 }
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
@@ -1893,6 +1947,42 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   }
   else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL) ? (sg ? 2 : 1) : 0;
+}
+/* Is ci's class method `name` defined wherever node at runs? */
+static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
+  ElabWindow w;
+  const LrDef *ds[VER_MAX_ARMS];
+  int framed = elab_plan_enter(c, at), n = 0;
+  int live = elab_call_method(c, at, ci, name, 1) == ELAB_YES;
+  if (!live && elab_call_window(c, at, &w) == ELAB_YES && (n = elab_method_span(c, ci, name, 1, &w, ds, VER_MAX_ARMS)) >= 1) {
+    live = 1;
+    for (int k = 0; k < n && k < VER_MAX_ARMS; k++) live &= ds[k] != NULL;
+  }
+  if (framed) elab_plan_leave(c);
+  return live;
+}
+/* A capture of a record class's (Struct.new's, Data.define's) class method
+   the program defines, which the record neither proves defined where it
+   runs nor absent (cplan_capture_absent): it may run before the def (a
+   loop's body around both, a method a call ahead of the def runs). In a
+   closure, the calls that run it are asked (elab_closure_runs), not the
+   place it is made. No entry tests the def at run time (a name a
+   reflection reader names has none, lr_late_make), and the def bound
+   there makes a Method where CRuby raises NameError. A closure that
+   escapes keeps the def bound, as before, since only a run-time test of
+   the def could place it; so do a plain class's capture and one of a name
+   a builtin answers. */
+static int cplan_capture_gap(Compiler *c, int id) {
+  const char *name = NULL;
+  int ci = nt_kind(c->nt, id) == NK_CallNode ? cm_capture_class(c, id, &name) : -1;
+  if (ci < 0 || elab_record_class_of(c, ci) < 0 || call_target(c, -1, ci, name, CT_CMETHOD, NULL) < 0 ||
+      cm_builtin_answers(c, ci, name) || cplan_capture_absent(c, id, -1))
+    return 0;
+  if (capture_live_at(c, id, ci, name)) return 0;
+  int sites[16], n = elab_closure_runs(c, id, sites, 16);
+  for (int k = 0; k < n; k++)
+    if (!capture_live_at(c, sites[k], ci, name)) return 1;
+  return n < 0;
 }
 /* See call_plan.h. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
@@ -2760,6 +2850,37 @@ int cplan_define_method_early(Compiler *c, int id) {
   return 0;
 }
 
+/* A `class << x` in a method's body on a class a Struct.new or Data.define
+   makes at its write: x a constant the record resolves to that class, or
+   self in a class method of it. CRuby defines the body's methods each time
+   that method runs; the walk files them on the class's singleton from the
+   start, and the record holds no version of them to order the calls
+   against, so a call or respond_to? before the method runs (or in a
+   program that never runs it) would find them. Refused, reached or not,
+   where the program may ask the class for a method the body makes. */
+int cplan_record_sclass_early(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_SingletonClassNode || elab_body_def(c, id) < 0) return 0;
+  int ex = nt_ref(nt, id, "expression"), ci = -1;
+  if (nt_kind(nt, ex) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, id);
+    if (s && s->is_cmethod) ci = s->class_id;
+  }
+  else ci = elab_class_ref_at(c, ex, NULL);
+  if (ci < 0 || ci >= c->nclasses || class_def_record(nt, c->classes[ci].def_node) < 0) return 0;
+  /* asked: a call of its name (a Symbol's block among them) or a
+     reflection reader naming it (elab_method_asked); a body that does
+     more than def is taken as asked */
+  int body = nt_ref(nt, id, "body"), n = 0;
+  const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  if (body >= 0 && !st) return 1;
+  for (int i = 0; i < n; i++) {
+    const char *nm = nt_kind(nt, st[i]) == NK_DefNode ? nt_str(nt, st[i], "name") : NULL;
+    if (!nm || an_calls_named_first(c, nm) >= 0 || elab_method_asked(c, nm)) return 1;
+  }
+  return 0;
+}
+
 /* Does call id's receiver, an object of a class of the program's, answer
    `name` with a member or method of its class's own (a Struct member named
    `methods`), so that the call is no list of methods? */
@@ -3346,6 +3467,18 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_TOP_SELF, CR_FEATURE,
                      "a top-level method's self is not modelled: this call finds main's singleton method when the "
                      "method runs on main and Object's when it runs on another object", buf, cap);
+    return;
+  }
+  if (!what && cplan_record_new_gap(c, id)) {
+    cplan_refuse_set(p, CRF_RECORD_NEW, CR_FEATURE,
+                     "a Struct or Data class's `new` or `[]` the program defines, called where the record "
+                     "cannot tell whether that def has run: CRuby runs it once it has, the builtin before", buf, cap);
+    return;
+  }
+  if (!what && cplan_capture_gap(c, id)) {
+    cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE,
+                     "a Method of a Struct or Data class's class method, made where the method's def may not have "
+                     "run yet: CRuby raises NameError before the def runs", buf, cap);
     return;
   }
   if (!what) {
@@ -4902,7 +5035,8 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    VK_SUPER the method super reaches; VK_IVAR an inherited reader's
    instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
    inspect through super(); VK_BUILTIN the builtin a class answers on itself
-   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   (bop_class_answers, or a record class's own: elab_record_cmethod),
+   called on self; VK_NOMETHOD NoMethodError; VK_KEEP
    no entry, where none of these is CRuby's answer: the history keeps the
    handling it had (its last version taken as run); a version entry's
    else arm the same, VK_KEEP its last version (ver_entry_make) */
@@ -4911,18 +5045,21 @@ struct VerNamedAsks;
 static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm);
 static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced);
 static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last);
-/* Does cls's chain hold a builtin class other than Object (a reopened one,
-   a builtin superclass)? Its methods are not all in the builtin tables
-   (IO's on File, a socket's), so what a call meeting no version of the
-   program's runs there is not known: its entry keeps the table's answer.
-   Except a class-side name a public row of the builtin-op table gives every
-   class (bop_class_answers; elab asks only the readers name, to_s and
-   inspect): the lookup finds Module's text whatever the chain holds. A
-   Struct or Data class has an inspect of its own, but it adds only the
-   keyword_init suffix to that text, which the class tables carry
-   (comp_class_kw_init), and no builtin class above one defines name or to_s. */
+/* Does cls's chain (its class side when sg) hold a builtin class other
+   than Object (a reopened one, a builtin superclass)? Its methods are not
+   all in the builtin tables (IO's on File, a socket's), so what a call
+   meeting no version of the program's runs there is not known: its entry
+   keeps the table's answer. Except a class-side name a public row of the
+   builtin-op table gives every class (bop_class_answers; elab asks only the
+   readers name, to_s and inspect): the lookup finds Module's text whatever
+   the chain holds. A Struct or Data class has an inspect of its own, but it
+   adds only the keyword_init suffix to that text, which the class tables
+   carry (comp_class_kw_init), and no builtin class above one defines name
+   or to_s. Nor the class side of a class a record builder made, or of one
+   inheriting from it (elab_record_class_of): its builtin's class methods
+   are the ones elab_record_cmethod names, and Class's. */
 static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk) {
-  if (sg && bop_class_answers(name, ar, blk)) return 0;
+  if (sg && (bop_class_answers(name, ar, blk) || elab_record_class_of(c, cls) >= 0)) return 0;
   if (cls >= 0 && class_builtin_parent(c, cls) != builtin_class_at(CORE_OBJECT)->id) return 1;
   for (int k = cls, d = 0; k >= 0 && d < 64; k = c->classes[k].parent, d++)
     if (c->classes[k].is_builtin_const && !is_object_base_name(c->classes[k].name)) return 1;
@@ -5089,9 +5226,12 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   case VK_TEXT: return disp_super_call(nt, 0, 0);
   case VK_MM: comp_sym_intern(c, name); return disp_method_missing_call(nt, name, w->ar, w->blk);   /* (its Symbol, made after the literals were interned) */
   case VK_BUILTIN: {
-    int call = disp_self_call(nt, name, w->ar, w->blk);
+    /* (a record class's builtin that takes none, with `*r, **k` passed on:
+       called where both are empty, as CRuby passes it no argument then) */
+    int bare = w->ar < 0 && !is_record_class_cmethod_with_args(name);
+    int call = disp_self_call(nt, name, bare ? 0 : w->ar, w->blk);
     ver_pin(c, call, CT_PIN_BUILTIN);
-    return call;
+    return bare ? disp_when_unspread(c, call) : call;
   }
   case VK_IVAR: {
     char iv[256];
@@ -5117,7 +5257,8 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
 /* Does a method the entry's else arm cannot run answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
    builtin superclass's or an included builtin module's, cls's own reader,
-   or a Struct or Data member in its chain? */
+   a Struct or Data member in its chain, or on the class side a record
+   class's own builtin (elab_record_cmethod)? */
 static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
   int dc = -1, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
   if (builtin_every_object_answers(name, sg) || is_object_receiver_handoff(name) || is_method_missing_name(name) ||
@@ -5125,7 +5266,7 @@ static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
       builtin_self_method_known(name, !sg ? BSELF_MAIN : mod ? BSELF_MODULE : BSELF_CLASS)) return 1;
   if (cls < 0) return 0;
   if (builtin_class_id_answers(class_builtin_parent(c, cls), name, sg)) return 1;
-  if (sg) return 0;
+  if (sg) return elab_record_cmethod(c, cls, name);
   if (comp_reader_in_chain(c, cls, name, &dc) && dc >= 0 && (dc == cls || c->classes[dc].is_struct || c->classes[dc].is_data)) return 1;
   for (int k = cls; k >= 0; k = c->classes[k].parent) {
     int nmx = 0;
@@ -5172,7 +5313,8 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     return sc >= 0 && sv == vis ? VK_SUPER : VK_KEEP;
   }
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
-  if (sg && cls >= 0 && bop_class_answers(name, ar, blk)) return VK_BUILTIN;
+  /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
+  if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
   if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
@@ -5279,7 +5421,7 @@ static int ver_in_dropped_rescue(const Compiler *c, const int *par, int n) {
    or rename stands where no call reaches them. A history holding a version
    marked cond_lone (a lone def under an `if` that pass leaves to the
    record, a define_method a Struct or Data block may not run,
-   fix_struct_block_scopes) refuses where it would have none
+   lr_block_cond_dms) refuses where it would have none
    ("cond_def_override"); its entry's name is not answered by reflection
    (ver_refl_named). A module's instance history arms each class (each
    side) whose chain holds it (elab_chain_versions, through modules that

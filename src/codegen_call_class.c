@@ -4784,17 +4784,20 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
          For an inherited cls method specialized into a subclass, the emitting
          class is that subclass, so `new` resolves to the subclass constructor. */
       int new_cls = (g_emitting_class_id >= 0) ? g_emitting_class_id : encl->class_id;
-      /* ...unless the class defines its own `self.new`: bare `new` calls that
+      /* ...unless the call reaches the class's own `self.new`, as the plan
+         binds it (cplan_user_new: a version entry's arm reaches its
+         version, and its else arm none, the builtin): bare `new` calls that
          method, whose value the analysis types (#5405). The sibling class
          method call below reaches it. */
-      int user_new = sp_streq(name, "new") ? comp_cmethod_in_chain(c, new_cls, "new", NULL) : -1;
+      if (is_new_name(name) && c->classes[new_cls].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
+      int user_new = is_new_name(name) ? cplan_user_new(c, id, new_cls) : -1;
       if (user_new >= 0 && (&c->scopes[user_new] == encl ||
                             !scope_has_callable_symbol(c, user_new))) user_new = -1;
       if (sp_streq(name, "allocate")) {
         int oc = allocate_on_own_class(c, id);
         if (oc >= 0 && !class_is_exc_subclass(c, oc)) { emit_own_class_alloc(c, id, oc, b); return 1; }
       }
-      if (sp_streq(name, "new") && user_new < 0) {
+      if (is_new_name(name) && user_new < 0) {
         ClassInfo *ncls = &c->classes[new_cls];
         /* a native class's bare `new` uses the declared constructor, exactly
            as the receiver `Klass.new(...)` path does */

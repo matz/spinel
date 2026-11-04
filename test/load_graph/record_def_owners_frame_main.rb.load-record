@@ -43,6 +43,8 @@ block each line 35: now
 block define_method line 35: later
 class C: body#1
 class K: body#5
+class S: body#15
+class StructAnon_p5build_2r0pvl251a0pvl251: body#-1
 entity C: owner main leaf C
 entity K: owner main leaf K
 const C: write#1
@@ -55,8 +57,7 @@ K#cond_m#__cond2: def#11 may end=unknown open
 K#cond_m: def#13 end=yes
 K.mk: def#14 end=yes
 const S: write#15
-form #18 runs code (maybe)
-form #21 runs code (maybe)
+opaque S: opaque#18 opaque#21
 main#build: def#22 private end=yes
 const B: write#23
 opaque K: opaque#27

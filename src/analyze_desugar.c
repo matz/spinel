@@ -8069,8 +8069,11 @@ int desugar_defined_method_call(Compiler *c) {
       nt_node_set_ref(nt, rto, "arguments", rargs);
       nt_node_set_int(nt, rto, "node_line", line);
       /* CRuby looks the method up, so the receiver need not answer
-         respond_to? itself (an object below BasicObject does not) */
-      nt_node_set_int(nt, rto, "defined_ask", 1);
+         respond_to? itself (an object below BasicObject does not). The
+         mark names the call asked of, plus one: made after the load
+         record, the ask answers at that call's point, the defined?'s
+         (cplan_cmethod_later) */
+      nt_node_set_int(nt, rto, "defined_ask", lv[i] + 1);
       comp_sym_intern(c, m);
       int ask = rto, next = -1;
       if (pure && i == k - 1) nt_node_set_ref(nt, rto, "receiver", recv);
@@ -14015,6 +14018,46 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   int call = disp_forward_call(nt, callee, ar, blk);
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
+}
+/* ...and call, a dispatcher arm's call of a method that takes no
+   arguments, where the dispatcher passes on `*__condr, **__condk` (ar -1):
+   `__condr.empty? && __condk.empty? ? call : raise ArgumentError, "wrong
+   number of arguments (given N, expected 0)"`, N the rest's size and one
+   more for keywords, as CRuby counts the call's arguments */
+int disp_when_unspread(Compiler *c, int call) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode"), both = nt_new_node(nt, "AndNode");
+  nt_node_set_ref(nt, both, "left", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "empty?", -1));
+  nt_node_set_ref(nt, both, "right", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condk"), "empty?", -1));
+  int kw = nt_new_node(nt, "IfNode"), kel = nt_new_node(nt, "ElseNode"), zero = nt_new_node(nt, "IntegerNode"), one = nt_new_node(nt, "IntegerNode");
+  nt_node_set_int(nt, zero, "value", 0);
+  nt_node_set_int(nt, one, "value", 1);
+  nt_node_set_ref(nt, kw, "predicate", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condk"), "empty?", -1));
+  nt_node_set_ref(nt, kw, "statements", cdef_stmts(nt, zero));
+  nt_node_set_ref(nt, kel, "statements", cdef_stmts(nt, one));
+  nt_node_set_ref(nt, kw, "subsequent", kel);
+  int given = fwd_new_call(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1), "+", kw);
+  int msg = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode"), es = nt_new_node(nt, "EmbeddedStatementsNode"), tl = nt_new_node(nt, "StringNode");
+  nt_node_set_str(nt, hd, "unescaped", "wrong number of arguments (given ");
+  nt_node_set_str(nt, hd, "content", "wrong number of arguments (given ");
+  nt_node_set_str(nt, tl, "unescaped", ", expected 0)");
+  nt_node_set_str(nt, tl, "content", ", expected 0)");
+  nt_node_set_ref(nt, es, "statements", cdef_stmts(nt, given));
+  int parts[3] = { hd, es, tl };
+  nt_node_set_arr(nt, msg, "parts", parts, 3);
+  /* (::ArgumentError where a class or module body defines the name, as desugar_root_scoped_constants spells it) */
+  int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, "ArgumentError");
+  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode");
+  nt_node_set_str(nt, ec, "name", "ArgumentError");
+  if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);
+  int ra[2] = { ec, msg }, rargs = nt_new_node(nt, "ArgumentsNode"), raise = fwd_new_call(nt, -1, "raise", -1);
+  nt_node_set_arr(nt, rargs, "arguments", ra, 2);
+  nt_node_set_ref(nt, raise, "arguments", rargs);
+  nt_node_set_ref(nt, iff, "predicate", both);
+  nt_node_set_ref(nt, iff, "statements", cdef_stmts(nt, call));
+  nt_node_set_ref(nt, el, "statements", cdef_stmts(nt, raise));
+  nt_node_set_ref(nt, iff, "subsequent", el);
+  return iff;
 }
 /* ...and `super(<args>)`, the same arguments passed on to the method the
    ancestors answer; `method_missing(:name, <args>)` */
@@ -20485,10 +20528,57 @@ static void cn_raise_module_super(NodeTable *nt, int id, int par) {
  * class's is (class_new_anonymous): the class answers as an anonymous one
  * until the write names it (sp_class_assign_name, after the block's
  * statements). A class a local holds, or nothing (an inline block
- * desugar_inline_struct_blocks gives a local), is never named. */
+ * desugar_inline_struct_blocks gives a local), is never named. A constant's
+ * class is left named where its block only declares (block_only_declares). */
+
+/* Is argument a of a class-body declaration inert: a literal name or value,
+   a constant (a module to mix in), or a def (`private def x`)? */
+static int decl_arg_inert(const NodeTable *nt, int a) {
+  NodeKind k = nt_kind(nt, a);
+  return k == NK_SymbolNode || k == NK_StringNode || k == NK_IntegerNode || k == NK_FloatNode ||
+         k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode || k == NK_DefNode || nt_kind_is_constant(k);
+}
+/* Does block blk only declare, so that nothing it runs can see its class
+   unnamed? Each statement is a def, an alias or undef, a constant write of a
+   literal, or a receiverless class-body declaration (is_class_declaration_call)
+   with inert arguments and no block, whose name the program does not define
+   itself. Anything else may show the class, and a definition hook or
+   method_missing the program defines (hooks) runs program code at a
+   declaration. A statement this does not know costs the name path only. */
+static int block_only_declares(const NodeTable *nt, int blk, int hooks, const ANameHash *defnames) {
+  int body = nt_ref(nt, blk, "body"), n = 0;
+  if (hooks) return 0;
+  if (body < 0) return 1;
+  if (nt_kind(nt, body) != NK_StatementsNode) return 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, st[i]);
+    if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) continue;
+    if (k == NK_ConstantWriteNode) {
+      int v = nt_ref(nt, st[i], "value");
+      if (v >= 0 && nt_kind(nt, v) != NK_DefNode && decl_arg_inert(nt, v)) continue;
+      return 0;
+    }
+    const char *nm = k == NK_CallNode ? nt_str(nt, st[i], "name") : NULL;
+    if (!is_class_declaration_call(nm) || anh_has(defnames, nm) || nt_ref(nt, st[i], "receiver") >= 0 ||
+        nt_ref(nt, st[i], "block") >= 0)
+      return 0;
+    int args = nt_ref(nt, st[i], "arguments"), na = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+    for (int j = 0; j < na; j++) if (!decl_arg_inert(nt, av[j])) return 0;
+  }
+  return 1;
+}
 int desugar_struct_block_anonymous(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
+  int changed = 0, hooks = 0;
+  ANameHash defnames = {0};
+  for (int id = 0; id < nt->count; id++)
+    if (nt_kind(nt, id) == NK_DefNode) {
+      const char *dn = nt_str(nt, id, "name");
+      if (dn && !anh_has(&defnames, dn)) anh_add(&defnames, dn);
+      hooks |= is_definition_hook_name(dn) || is_method_missing_name(dn);
+    }
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantWriteNode && k != NK_LocalVariableWriteNode) continue;
@@ -20496,9 +20586,11 @@ int desugar_struct_block_anonymous(Compiler *c) {
     if (!class_def_is_record_call(nt, val)) continue;
     int blk = nt_ref(nt, val, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    if (k == NK_ConstantWriteNode && block_only_declares(nt, blk, hooks, &defnames)) continue;
     nt_node_set_int(nt, id, "class_new_anonymous", k == NK_ConstantWriteNode ? 1 : 2);
     changed = 1;
   }
+  anh_free(&defnames);
   return changed;
 }
 
@@ -22433,10 +22525,12 @@ static int cb_program_defines(const NodeTable *nt, const char *nm, const char *c
 }
 
 /* Struct's and Data's own class methods, which a block they build answers
-   on self as Object's and Module's are (`members`) */
+   on self as Object's and Module's are (`members`): always on self, even
+   where the program defines one too, whose def the plan finds where the
+   call runs (call_target) */
 static int cb_struct_act(const NodeTable *nt, int s) {
   const char *nm = nt_kind(nt, s) == NK_CallNode && nt_ref(nt, s, "receiver") < 0 ? nt_str(nt, s, "name") : NULL;
-  return nm && (sp_streq(nm, "members") || sp_streq(nm, "keyword_init?"));
+  return is_record_block_self_cmethod(nm);
 }
 
 static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct, const char *cname) {
@@ -22462,7 +22556,7 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
      reopened builtin class (String, Array), which answers them for the
      program's own methods alone: they are refused rather than answered
      without the builtin's methods. */
-  else if ((cb_self_act(nt, node) || (strct && cb_struct_act(nt, node))) && !cb_program_defines(nt, cm, cname) &&
+  else if (((strct && cb_struct_act(nt, node)) || (cb_self_act(nt, node) && !cb_program_defines(nt, cm, cname))) &&
            !(builtin && is_instance_method_table_read(cm))) {
     int self = fwd_new_node_like(nt, node, "SelfNode");
     if (self >= 0) {

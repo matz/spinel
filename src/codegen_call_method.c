@@ -2127,6 +2127,7 @@ static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan,
 }
 
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  refuse_from_plan(c, id, CRF_CAPTURE, "refuse-capture");
   CallPlan plan = cplan_method_call(c, id);
   /* no method of the name where it runs: CRuby's NameError, its receiver
      evaluated first */

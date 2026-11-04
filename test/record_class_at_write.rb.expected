@@ -1,0 +1,38 @@
+:k
+:k
+1
+14
+"N"
+2
+true
+A1
+B2
+"Foo"
+true
+1
+"hi"
+2
+9
+1
+1
+2
+2
+2
+"undefined method 'make' for class Early"
+1
+true
+2
+"A::B"
+true
+8
+true
+Struct
+Data
+true
+true
+#<struct a=1>
+#<data x=1>
+#<struct Bs a=2>
+3
+#<data Bd x=3>
+6

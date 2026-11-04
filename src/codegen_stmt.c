@@ -21187,7 +21187,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
          despite being declared and typed (a method reading them, e.g. a Linedef
          FLAGS[:TWOSIDED] flag helper, silently sees an empty constant). Mirrors
          the block's defs, which take the struct's class from the load record
-         (elab_record_builders). */
+         (the class the walk made at the write). */
       if (!isg && v >= 0 && elab_builder_class(c, id) >= 0) emit_builder_write(c, id, b, indent);
       /* a value that runs a call finding no method where it runs
          (cplan_missing: `zz`, `zz + 1`, `zz.to_s`, `id(zz)`) has no type

@@ -74,6 +74,7 @@ class M: body#17
 class N: body#41
 class N__Object: body#42
 class SpinelAnonClass1: body#47
+class S39: body#50
 class Object: body#53 body#56 body#62
 class SpinelAnonClass2: body#58
 entity K: owner main leaf K
@@ -115,6 +116,7 @@ const SpinelAnonClass1: write#47
 SpinelAnonClass1#hi: def#48 runs=#52 end=yes
 const Y39: write#49
 const S39: write#50
+S39#b: def#51 end=yes
 Object#zz: def#54 end=yes
 const O21: write#57
 const SpinelAnonClass2: write#58

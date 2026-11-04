@@ -27,6 +27,7 @@ class TopHelper: body#1
 class M: body#3 include TopHelper#4
 class V: body#5
 class C: body#8 include V#9
+class Pt: body#12
 class Q: body#17 include M#18
 entity TopHelper: owner main leaf TopHelper
 entity M: owner main leaf M
@@ -43,4 +44,6 @@ C#g: alias#10 (f: def#6) private end=yes
 C#call_g: def#11 end=yes
 const Pt: write#12
 visibility in #12: vis#13 private vis#15 public
+Pt#secret: def#14 private end=yes
+Pt#shown: def#16 end=yes
 const Q: write#17

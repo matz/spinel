@@ -269,9 +269,6 @@ typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);
-/* the class builders' blocks recorded as their classes' bodies, once
-   register_structs has made them */
-void elab_record_builders(Compiler *c);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the
@@ -308,8 +305,18 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    (a version or mixin a pass made or copied, one of the builtin prelude or
    of a package CRuby loads at boot, code the record cannot follow run on
    the chain before the call, a load it could not resolve). For the Class
-   reopening's class side, its instance side is searched too. */
+   reopening's class side, its instance side is searched too. Only the
+   program's methods: a builtin one that answers (a record class's own,
+   elab_record_cmethod) is the caller's to ask. */
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg);
+/* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
+   header's superclass is the class a builder makes (`class Foo <
+   Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it
+   the chain is the builtin Struct or Data's. */
+int elab_record_class_of(Compiler *c, int cls);
+/* does that class answer class method `name` with its own builtin (new,
+   [], members, inspect: is_record_class_cmethod) */
+int elab_record_cmethod(Compiler *c, int cls, const char *name);
 /* the class self is where node runs at its load point: a class or module
    body's, or a constant's class builder's block; -1 for main's top level;
    -2 for any other frame (a singleton class body, an eval form's or an
@@ -369,6 +376,10 @@ int elab_method_late(Compiler *c, const char *name);
    too in a program with an extend (lr_singleton_mixed). A respond_to?
    whose answer the version cells hold for a class method (sg) does not. */
 int elab_method_reflected(Compiler *c, const char *name, int sg);
+/* Does any reflection reader the record takes (lr_refl_take) name `name`:
+   one answering from the table, a respond_to? or defined? the cells
+   answer, a Method's maker; or one name any? */
+int elab_method_asked(Compiler *c, const char *name);
 /* The record's histories of method `name`, one class and side at a time:
    the first with i -1, then the one after i; -1 past the last. *cls the
    class (-1 main's), *sg 1 for its singleton side. */
@@ -420,6 +431,13 @@ int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, L
    has no point there (a file the load graph does not place). */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
+/* The calls that run the closure node id is in, with no def or block
+   between (a lambda, `proc { }`), into sites[0..cap): the call that invokes
+   it (is_proc_invoke), or each that invokes a read of the local it is
+   written to whole, in the same body. How many; -1 for no closure or past
+   cap. Where its value, or a read of that local, goes anywhere else it may
+   run at any time, which no site places. */
+int elab_closure_runs(Compiler *c, int id, int *sites, int cap);
 /* ...and whether node id is in a block the record takes to run at once
    (ELAB_BLK_ASSUMED) whose typed call target keeps it (Call node
    `blk_kept`), with no def or lambda between: node id may then run any
@@ -582,6 +600,7 @@ int elab_builder_class(Compiler *c, int node);
 /* the readers of a class definition node (analyze_scope.c), from the node
    table alone: a class's def_node, or a node a pass walked to */
 int class_def_is_record_call(const NodeTable *nt, int val);   /* a `Struct.new(..)` / `Data.define(..)` call */
+int class_def_record(const NodeTable *nt, int def_node);   /* the record call a constant or local write holds, -1 for none */
 const NodeKind *class_def_kinds(int *n);   /* the node kinds a definition can be */
 const NodeKind *class_def_module_kinds(int *n);   /* ...a module's definition can be */
 int class_def_builder(const NodeTable *nt, int def_node);   /* a constant write's Class.new / Module.new call that defines a class, -1 for none */

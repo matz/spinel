@@ -463,7 +463,6 @@ const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String 
 void register_struct_members(Compiler *c, ClassInfo *cls, int val);
 void register_structs(Compiler *c);
 void register_singleton_defs(Compiler *c);
-void fix_struct_block_scopes(Compiler *c);
 void register_attr_versions(Compiler *c);
 void register_attrs(Compiler *c);
 void register_aliases(Compiler *c);
@@ -1005,6 +1004,7 @@ int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar)
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
+int disp_when_unspread(Compiler *c, int call);
 int disp_super_call(NodeTable *nt, int ar, int blk);
 int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk);
 int desugar_dynamic_respond_to(Compiler *c);

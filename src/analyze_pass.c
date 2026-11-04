@@ -20257,6 +20257,14 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
           (ok >= 0 && call_target(c, id, ok, bxn, 0, NULL) >= 0))
         cr_add_name(out, n, cap, bxn);
     }
+    /* `S[x]` on a record class, renamed `new`, reaches the class's own
+       `def S.[]` the call plan answers for it (cplan_user_new), if any */
+    int ixc = (int)nt_int(nt, id, "index_ctor", 0) - 1, ixm = ixc >= 0 ? cplan_user_new(c, id, ixc) : -1;
+    if (ixm >= 0) {
+      char mark[24];
+      snprintf(mark, sizeof mark, "\x01%d", ixm);
+      cr_add_name(out, n, cap, mark);
+    }
     /* `method(:foo)` takes a reference to foo without calling it; the target
        must still be emitted, so treat the symbol arg as a called name. */
     if (nm && (sp_streq(nm, "method") || sp_streq(nm, "instance_method"))) {

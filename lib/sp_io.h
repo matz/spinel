@@ -130,6 +130,16 @@ void sp_fork_exec_unlock(void);
 void sp_io_wait_writable(sp_File *f);
 /* Bytes stdio already holds for this stream (readable without a read(2)). */
 size_t sp_io_stdio_buffered(FILE *fp);
+/* Readers of an IO handle's stream call these instead of stdio: each is the
+   stdio call of the same name on the handle's FILE. */
+static inline int sp_io_getc(sp_File *f) { return SP_SIG_BLOCKING(fgetc(f->fp)); }
+static inline void sp_io_ungetc(sp_File *f, int c) { ungetc(c, f->fp); }
+static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) { return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp)); }
+static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) { return SP_SIG_BLOCKING(getline(buf, cap, f->fp)); }
+static inline char *sp_io_fgets(sp_File *f, char *buf, int size) { return SP_SIG_BLOCKING(fgets(buf, size, f->fp)); }
+/* Bytes the handle has already read from its descriptor: a read of up to
+   this many answers without waiting. */
+static inline size_t sp_io_pending(sp_File *f) { return sp_io_stdio_buffered(f->fp); }
 /* IO#read with no count on a handle whose read can block: fill to EOF,
    parking between refills instead of sitting in the kernel (#4307). */
 const char *sp_slurp_stream_parked(sp_File *f);

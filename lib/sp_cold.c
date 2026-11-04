@@ -2475,7 +2475,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   if (sl == 1 && sep[0] == '\n' && limit <= 0) {
     char *buf = NULL;
     size_t bcap = 0;
-    ssize_t got = SP_SIG_BLOCKING(getline(&buf, &bcap, f->fp));
+    ssize_t got = sp_io_getline(f, &buf, &bcap);
     if (got < 0) { free(buf); return NULL; }
     size_t n = (size_t)got;
     /* chomp takes the "\r\n" of a line as well as its "\n" */
@@ -2493,12 +2493,12 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   int ch;
   /* a paragraph does not start with blank lines */
   if (para) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
   int ended = 0, extra = 16;
   sp_int lim = limit;
-  while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) != EOF) {
+  while ((ch = sp_io_getc(f)) != EOF) {
     if (len + 2 > cap) { cap *= 2; char *nb = (char *)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
     buf[len++] = (char)ch;
     /* the separator ends the line where it is matched whole, and not where
@@ -2518,8 +2518,8 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   }
   /* and the blank lines after one are not part of the next */
   if (para && ended) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
   if (len == 0) { free(buf); return NULL; }
   if (chomp && ended && sl && len >= sl && memcmp(buf + len - sl, sep, sl) == 0) {

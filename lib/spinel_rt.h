@@ -1219,7 +1219,7 @@ static inline const char *sp_File_gets(sp_File *f) {
      fiber stack holds none of the line. */
   char *buf = NULL;
   size_t cap = 0;
-  ssize_t got = SP_SIG_BLOCKING(getline(&buf, &cap, f->fp));
+  ssize_t got = sp_io_getline(f, &buf, &cap);
   if (got < 0) { free(buf); return NULL; }
   size_t n = (size_t)got;
   char *r = sp_str_alloc(n);
@@ -1234,7 +1234,7 @@ static inline const char *sp_File_gets(sp_File *f) {
 static inline const char *sp_File_gets_buf(sp_File *f, char *buf, int size) {
   if (!f || !f->fp || f->closed) return NULL;
   sp_io_wait_readable(f);
-  if (!SP_SIG_BLOCKING(fgets(buf, size, f->fp))) return NULL;
+  if (!sp_io_fgets(f, buf, size)) return NULL;
   return buf;
 }
 /* Like gets_buf, but into a reusable HEAP line string: the buffer carries a
@@ -1245,7 +1245,7 @@ static inline const char *sp_File_gets_buf(sp_File *f, char *buf, int size) {
 static inline const char *sp_File_gets_into(sp_File *f, char *s, int cap) {
   if (!f || !f->fp || f->closed) return NULL;
   sp_io_wait_readable(f);
-  if (!SP_SIG_BLOCKING(fgets(s, cap, f->fp))) return NULL;
+  if (!sp_io_fgets(f, s, cap)) return NULL;
   sp_str_set_len(s, strlen(s));
   f->lineno++;
   return s;

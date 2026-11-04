@@ -24,3 +24,13 @@ class Plain; def zed = super; end
     puts "NoMethodError"
   end
 end
+# An include the body makes through a constant alias or inside a block
+# can bring Kernel in: such a class keeps reaching Kernel's method.
+KAlias = Kernel
+class BO8 < BasicObject; include ::KAlias; def kz = super; end
+class BO9 < BasicObject
+  [1].each { include ::Kernel }
+  def kz = super
+end
+p BO8.new.kz
+p BO9.new.kz

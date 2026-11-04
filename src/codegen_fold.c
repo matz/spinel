@@ -8837,8 +8837,16 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
   /* a byref out-param arg is a slot address, not a heap value: it hoists its
      own rooted temp when one is needed (see emit_arg_or_default) */
   if (p && p->byref_out) { emit_arg_or_default(c, m, idx, provided, out); return; }
-  if (!arg_wants_root(c, pt, provided)) {
-    if (!arg_read_converts(c, pt, provided)) { emit_arg_or_default(c, m, idx, provided, out); return; }
+  /* a default is judged by its own node, as a passed argument is: a nil or a
+     plain read builds nothing and is held where it lives, and a String read
+     or literal a handle parameter takes is converted into a rooted temp
+     (arg_read_converts). One with no node (the `**kw` that nothing fills) is
+     a fresh allocation. Held where it lives, a read default is spelled in the
+     call, so a call that fills another default after it which runs code
+     binds them in order instead (call_defaults_ordered). */
+  int dn = provided < 0 && m->pdefault ? m->pdefault[idx] : provided;
+  if (!arg_wants_root(c, pt, dn)) {
+    if (!arg_read_converts(c, pt, dn)) { emit_arg_or_default(c, m, idx, provided, out); return; }
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_arg_or_default(c, m, idx, provided, &cb);
     /* a String a handle parameter takes made here (a handle around the
@@ -12214,6 +12222,31 @@ static int fwd_slot_base(Compiler *c, Scope *encl) {
   return 0;   /* no __fwd_ slot and no `...` of its own: forward all */
 }
 
+/* Does a call fill two or more defaults, one of which runs code? Then the
+   call binds every value in order to a rooted local, as an argument list
+   does once two of its arguments can observe each other
+   (emit_args_filled_argv, n_se): a default is spelled in the call, or
+   hoisted into the prelude when it builds a value (emit_arg_rooted), so
+   without the binding the hoist reorders them. A default that logs runs
+   after one that allocates, and a read that a later default rebinds sees it
+   rebound (`def m(a = X, b = swap)`, `def <=>(o, a = $v, b = bump)`). The
+   defaults a call fills are the layout's ARG_DEFAULT ones and the keywords
+   with a default that its keyword hash does not name (a dispatch arm passes
+   none, so every keyword with a default is filled); the `**kwrest` is not
+   one. The direct call (emit_args_filled_argv) and the dispatch arm
+   (emit_arm_args_text) both ask it. */
+static int call_defaults_ordered(Compiler *c, Scope *m, const ArgLayout *L) {
+  int filled = 0, effect = 0;
+  for (int i = 0; i < m->nparams; i++) {
+    int kwd = L->from[i] == ARG_BY_NAME && i != m->kwrest_idx && m->pdefault && m->pdefault[i] >= 0 &&
+              !(L->kwh >= 0 && m->pnames[i] && kwh_lookup(c->nt, L->kwh, m->pnames[i]) >= 0);
+    if (L->from[i] != ARG_DEFAULT && !kwd) continue;
+    filled++;
+    if (m->pdefault && m->pdefault[i] >= 0 && subtree_has_side_effect(c, m->pdefault[i])) effect = 1;
+  }
+  return filled >= 2 && effect;
+}
+
 /* See codegen_internal.h. */
 void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int argc, int argsNode,
                            const char *lead, Buf *out) {
@@ -12336,9 +12369,11 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
      default against a parameter nothing at the call site declared. A keyword
      a `**h` may supply is read out of h, its default under the same renames.
      A gather binds each positional from the gathered array, its default under
-     the renames too. */
+     the renames too. A call that fills two or more defaults, one of which
+     runs code, takes the same path for the order alone
+     (call_defaults_ordered). */
   if ((splat_idx < 0 || splat_all) &&
-      m->nparams <= 64 && default_refs_earlier_param(c, m)) {
+      m->nparams <= 64 && (default_refs_earlier_param(c, m) || call_defaults_ordered(c, m, &L))) {
     int uid = ++g_tmp;
     int ren_base = g_nren;
     char tmpnames[64][64];
@@ -12920,27 +12955,6 @@ int arm_arg_param(Compiler *c, Scope *m) {
   return -1;
 }
 
-/* Do two or more defaults an arm fills include one that runs code? A
-   keyword's default counts as a positional one does: the arm passes no
-   keyword hash, so every keyword with a default is filled. The defaults are
-   spelled in the call, or hoisted into the arm's prelude when they build a
-   value (emit_arg_rooted), so the hoist reorders them: a default that logs
-   would run after one that allocates, and one that reads what another
-   changes would see it changed (`def <=>(o, a = $v, b = bump)`). Such an
-   arm binds every value in order to a rooted local, as an argument list
-   does once two of its arguments can observe each other
-   (emit_args_filled_argv, n_se). */
-static int arm_defaults_ordered(Compiler *c, Scope *m, const ArgLayout *L) {
-  int filled = 0, effect = 0;
-  for (int i = 0; i < m->nparams; i++) {
-    int kwd = L->from[i] == ARG_BY_NAME && i != m->kwrest_idx && m->pdefault && m->pdefault[i] >= 0;
-    if (L->from[i] != ARG_DEFAULT && !kwd) continue;
-    filled++;
-    if (subtree_has_side_effect(c, m->pdefault[i])) effect = 1;
-  }
-  return filled >= 2 && effect;
-}
-
 /* See codegen_internal.h. */
 int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *const *argv, int argc,
                        Buf *pre, Buf *out, int *builds, char *raise, size_t rn) {
@@ -12968,7 +12982,7 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
     snprintf(what, sizeof what, "a dispatch arm cannot bind its arguments to `%s`", m->name ? m->name : "?");
     unsupported(c, m->def_node, what);
   }
-  int pd_uid = default_refs_earlier_param(c, m) || arm_defaults_ordered(c, m, &L) ? ++g_tmp : 0, pd_base = g_nren;
+  int pd_uid = default_refs_earlier_param(c, m) || call_defaults_ordered(c, m, &L) ? ++g_tmp : 0, pd_base = g_nren;
   Buf *sv_pre = g_pre; int sv_ind = g_indent;
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
@@ -12991,7 +13005,8 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
        direct call holds it (emit_arg_rooted): spelled inside the call, the
        value is held by nothing while a later default allocates, and C runs
        the arguments in no fixed order (`def <=>(o, x = {}, y = {})`). With
-       pd_uid, ctor_arm_arg binds every value to a rooted local already. */
+       pd_uid (call_defaults_ordered), ctor_arm_arg binds every value to a
+       rooted local already. */
     else if (!pd_uid) emit_arg_rooted(c, m, i, -1, 0, &vb);
     else emit_arg_or_default(c, m, i, -1, &vb);
     buf_puts(out, ", ");

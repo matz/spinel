@@ -890,6 +890,10 @@ static int ver_call_n(Compiler *c, int id) {
 }
 static int ver_arity(Compiler *c, int id, const int *to, int nto) {
   int n = ver_call_n(c, id);
+  int a = nt_ref(c->nt, id, "arguments"), ac = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
+  /* not the versions' required ones: a boxed receiver's arm cannot gather a splat into __cond0.. (arg_layout_gathers) */
+  if (nt_argv_has(c->nt, av, ac, NT_ARG_SPLAT)) return -1;
   int ar = ver_plain_arity(c, to[0]), fits = 1;
   for (int i = 0; i < nto; i++) {
     if (ver_plain_arity(c, to[i]) != ar) ar = -1;

@@ -20557,6 +20557,34 @@ static int scm_lift_attr_value(Compiler *c, NodeTable *nt, const int *parent, in
   return 1;
 }
 
+/* Is node b the literal block of a class_eval, class_exec, module_eval or
+   module_exec whose statements run in a class or module body, with that
+   class as self? One with no receiver (or self) that is a statement of a
+   class or module body; or a module's hook, `def self.included(base)`
+   (extended, prepended) whose body states `base.class_eval do ... end`,
+   which desugar_included_hooks splices into each including class's body. */
+static int scm_body_eval_block(const NodeTable *nt, const int *parent, int b) {
+  if (b < 0 || nt_kind(nt, b) != NK_BlockNode || nt_ref(nt, b, "parameters") >= 0) return 0;
+  int call = parent[b];
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != b ||
+      !is_class_eval_family(nt_str(nt, call, "name")) || nt_ref(nt, call, "arguments") >= 0) return 0;
+  int rv = nt_ref(nt, call, "receiver");
+  int st = parent[call], owner = st >= 0 ? parent[st] : -1;
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || owner < 0) return 0;
+  if (rv < 0 || nt_kind(nt, rv) == NK_SelfNode)
+    return nt_kind(nt, owner) == NK_ClassNode || nt_kind(nt, owner) == NK_ModuleNode;
+  if (nt_kind(nt, rv) != NK_LocalVariableReadNode || nt_kind(nt, owner) != NK_DefNode) return 0;
+  const char *dn = nt_str(nt, owner, "name");
+  int dr = nt_ref(nt, owner, "receiver");
+  if (!dn || dr < 0 || nt_kind(nt, dr) != NK_SelfNode ||
+      (!sp_streq(dn, "included") && !sp_streq(dn, "extended") && !sp_streq(dn, "prepended"))) return 0;
+  int ps = nt_ref(nt, owner, "parameters"), nr = 0;
+  const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &nr) : NULL;
+  const char *pn = nr == 1 ? nt_str(nt, rq[0], "name") : NULL;
+  int holder = parent[owner], mod = holder >= 0 ? parent[holder] : -1;
+  return pn && sp_streq(pn, nt_str(nt, rv, "name")) && mod >= 0 && nt_kind(nt, mod) == NK_ModuleNode;
+}
+
 int desugar_singleton_class_meta(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int *parent = NULL, changed = 0, n0 = nt->count;
@@ -20576,6 +20604,7 @@ int desugar_singleton_class_meta(Compiler *c) {
     if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) continue;
     int top = prog_is_root_stmts(c, st);
     int in_body = owner >= 0 && (nt_kind(nt, owner) == NK_ClassNode || nt_kind(nt, owner) == NK_ModuleNode);
+    if (!top && !in_body) in_body = scm_body_eval_block(nt, parent, owner);
     if (!top && !in_body) continue;
     int x = scm_class_receiver(nt, r, in_body);
     if (x == -2) continue;

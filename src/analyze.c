@@ -3426,6 +3426,17 @@ static int dyn_parent_copy(NodeTable *nt, int par) {
     return n;
   }
   if (k == NK_SelfNode) return nt_new_node(nt, "SelfNode");
+  if (k == NK_ConstantPathNode) {   /* m::Nest, the parent of m::Nest::Foo */
+    int pp = nt_ref(nt, par, "parent");
+    const char *nm = nt_str(nt, par, "name");
+    if (pp < 0 || !nm) return -1;
+    int pc = dyn_parent_copy(nt, pp);
+    if (pc < 0) return -1;
+    int n = nt_new_node(nt, "ConstantPathNode");
+    nt_node_set_str(nt, n, "name", nm);
+    nt_node_set_ref(nt, n, "parent", pc);
+    return n;
+  }
   if (k == NK_CallNode) {
     const char *nm = nt_str(nt, par, "name");
     int r = nt_ref(nt, par, "receiver");
@@ -3463,11 +3474,33 @@ static int dyn_class_ref(Compiler *c, int k, int *holder) {
 
    A holder takes m when m is it or has it as an ancestor (a class under
    it, a module including it); Object's own constants only through Object
-   itself, as CRuby looks them up through no other class. A path in a
+   itself, as CRuby looks them up through no other class. A parent that is
+   itself a path from a value (`m::Nest::Foo`) is read again in each arm,
+   as m is. A path in a
    class or module definition (its name or its superclass), in a rescue
    list, or through another parent stays refused (#10955). (A value
    constant with a VALUE parent is read by a run-time switch on the
    parent's class, and a leaf one class has is that class.) */
+/* For the parent `m::Nest` of `m::Nest::Foo`: 1 when the path's root is a
+   value (m: a local, self, a call's answer), so Nest and then Foo are
+   looked up in a module known only at run time. A path rooted in a
+   constant (`Ext::Nest`) or in `::` is 0: it names its class at compile
+   time. A middle name that classes in two scopes share is -1 (the lookup
+   of the middle step is itself a guess): the path is refused. */
+static int dyn_path_value_root(Compiler *c, int par) {
+  const NodeTable *nt = c->nt;
+  int root_value = 0, guess = 0;
+  for (int p = par; ; ) {
+    if (nt_kind(nt, p) != NK_ConstantPathNode) { root_value = nt_kind(nt, p) != NK_ConstantReadNode; break; }
+    const char *mid = nt_str(nt, p, "name");
+    int nested = 0;
+    if (mid && class_leaf_count(c, mid, &nested) >= 2 && nested) guess = 1;
+    p = nt_ref(nt, p, "parent");
+    if (p < 0) break;   /* ::Ext */
+  }
+  if (!root_value) return 0;
+  return guess ? -1 : 1;
+}
 static void desugar_dyn_parent_class_leaf(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3491,7 +3524,8 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int par = nt_ref(nt, id, "parent");
     if (par < 0) continue;
     NodeKind pk = nt_kind(nt, par);
-    if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) continue;
+    if (pk == NK_ConstantReadNode) continue;
+    if (pk == NK_ConstantPathNode && !dyn_path_value_root(c, par)) continue;
     const char *nm = nt_str(nt, id, "name");
     int nested = 0;
     if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
@@ -3503,10 +3537,15 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int par = nt_ref(nt, id, "parent");
     char nm[256];
     snprintf(nm, sizeof nm, "%s", nt_str(nt, id, "name"));
-    int probe = keep[id] ? -1 : dyn_parent_copy(nt, par);
+    int guessed_mid = nt_kind(nt, par) == NK_ConstantPathNode && dyn_path_value_root(c, par) < 0;
+    int probe = keep[id] || guessed_mid ? -1 : dyn_parent_copy(nt, par);
     if (probe < 0) {
       char msg[400];
-      snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) in a class or module "
+      if (guessed_mid)
+        snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::...::%s`) is not supported when "
+                 "a middle name of the path and %s each name classes or modules in more than one scope "
+                 "(see docs/limitations.md)", nm, nm);
+      else snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) in a class or module "
                "definition, a rescue list or through a value other than a local, self or its class is not "
                "supported when classes or modules in more than one scope are named %s (see docs/limitations.md)", nm, nm);
       unsupported_feature_collect(c, id, msg);

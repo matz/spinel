@@ -32,3 +32,39 @@ p call_v
 
 # the builtin class methods answer before any def
 p S.members, D.members
+
+# respond_to? of a class method a method body defines answers as that body
+# has run: from a method, beside a class-side attr, beside a class method
+# in the block, and receiverless in the block's class method
+RA = Struct.new(:a)
+def set_ra = (def RA.k = :ra)
+def go_ra = (RA.respond_to?(:k) ? RA.k : :none)
+p go_ra
+set_ra
+p go_ra
+
+RB = Struct.new(:a) do
+  class << self
+    attr_accessor :cfg
+  end
+end
+RB.cfg = 3
+def set_rb = (def RB.k = :rb)
+p RB.cfg, RB.respond_to?(:cfg), RB.respond_to?(:k)
+
+RC = Struct.new(:a) do
+  def self.j = :j
+end
+def set_rc = (def RC.k = :rc)
+def go_rc = (RC.respond_to?(:k) ? RC.k : :none)
+p go_rc
+set_rc
+p go_rc
+
+RD = Struct.new(:a) do
+  def self.j = (respond_to?(:k) ? :yes : :no)
+end
+def set_rd = (def RD.k = :rd)
+p RD.j
+set_rd
+p RD.j

@@ -42,6 +42,28 @@ int poll_is_method_name(Compiler *c, const char *nm) {
   return n > 0;
 }
 
+/* The methods call n may enter, for the call graph: the plan's list
+   (cplan_entries, tg), or where it cannot list them every method of the
+   names it bounds them by (cplan_entries_bound_names), as runs of
+   g_poll_names. */
+typedef struct { int tg[CPT_MAX], ntg, nrun, first[2], cnt[2]; } PollEntries;
+static int poll_entries(Compiler *c, int n, PollEntries *e) {
+  e->nrun = 0;
+  if ((e->ntg = cplan_entries(c, n, e->tg, CPT_MAX)) >= 0) return e->ntg;
+  const char *bn[2];
+  int nb = cplan_entries_bound_names(c, n, bn), all = 0;
+  for (int i = 0; i < nb; i++) { e->first[i] = poll_names_of(c, bn[i], &e->cnt[i]); all += e->cnt[i]; }
+  e->nrun = nb;
+  return all;
+}
+/* The i-th of the methods poll_entries found */
+static int poll_entry_at(const PollEntries *e, int i) {
+  if (e->ntg >= 0) return e->tg[i];
+  for (int r = 0; r < e->nrun; i -= e->cnt[r++])
+    if (i < e->cnt[r]) return g_poll_names[e->first[r] + i].scope;
+  return -1;
+}
+
 static unsigned char *g_poll_cyc;
 static void poll_edge(int **ef, int **et, int *ne, int *cap, int from, int to) {
   if (*ne == *cap) { *cap *= 2; *ef = realloc(*ef, *cap * sizeof(int)); *et = realloc(*et, *cap * sizeof(int)); }
@@ -81,16 +103,16 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
                sp_streq(nm, "call") || sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval")))
       dyn[t] = 1;
     else if (nm) {
-      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_targets(c, n, tg, CPT_MAX);
-      if (ntg >= 0) cnt = ntg;
-      else first = poll_names_of(c, nm, &cnt);
-      if (ntg < 0) {   /* every method of the name: one edge, to the name's hub */
-        if (cnt > 0) poll_edge(ef, et, ne, cap, t, poll_hub(c, first, cnt, ef, et, ne, cap));
+      PollEntries pe;
+      int cnt = poll_entries(c, n, &pe);
+      if (pe.ntg < 0) {   /* every method of the names it is bound by: one edge to each name's hub */
+        for (int r = 0; r < pe.nrun; r++)
+          if (pe.cnt[r] > 0) poll_edge(ef, et, ne, cap, t, poll_hub(c, pe.first[r], pe.cnt[r], ef, et, ne, cap));
       }
       else
         for (int i = 0; i < cnt; i++) {
-          poll_edge(ef, et, ne, cap, t, tg[i]);
-          if (tg[i] == t) g_poll_cyc[t] = 1;
+          poll_edge(ef, et, ne, cap, t, pe.tg[i]);
+          if (pe.tg[i] == t) g_poll_cyc[t] = 1;
         }
     }
   }
@@ -104,11 +126,12 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
   }
 }
 /* Is method scope si on a cycle of the call graph: a call reaches the
-   methods its plan names where the receiver's type settles them
-   (cplan_targets: a builtin receiver's call reaches none, #9377), else
-   every method of its name; a dynamic send, a yield, a block's or a
-   proc's call reaches every method? Only such a method polls at its entry
-   for a delivered signal (#9222): a call chain that ends returns to a loop
+   methods the plan says it enters where the receiver's type settles them
+   (cplan_entries: a builtin receiver's call reaches none, #9377, and a
+   builtin `new` the initialize it runs), else every method of the names
+   it bounds them by (an open `new`'s initialize too); a dynamic send, a
+   yield, a block's or a proc's call reaches every method? Only such a
+   method polls at its entry for a delivered signal (#9222): a call chain that ends returns to a loop
    or a method that polls. A method is on one when its strongly connected
    component has two methods or calls itself, or when it makes a call that
    may reach any method (a cycle through that call enters it again; the
@@ -151,23 +174,23 @@ int poll_scope_on_cycle(Compiler *c, int si) {
       /* a literal block runs inside each method of the name that yields: an
          edge from that method to what the block's body calls (its calls are
          the caller's edges too, as the block shares its scope) */
-      int tg[CPT_MAX], cnt, first = 0, ntg = cplan_targets(c, n, tg, CPT_MAX);
-      if (ntg >= 0) cnt = ntg;
-      else first = poll_names_of(c, nm, &cnt);
+      PollEntries pe;
+      int cnt = poll_entries(c, n, &pe);
       if (bk >= 0) {
         for (int k = 0; k < cnt; k++) {
-          int t = ntg >= 0 ? tg[k] : g_poll_names[first + k].scope;
+          int t = poll_entry_at(&pe, k);
           if (!c->scopes[t].yields) continue;
           poll_block_edges(c, nt_ref(nt, bk, "body"), t, &ef, &et, &ne, &cap, dyn, 0);
         }
       }
-      if (ntg < 0) {   /* every method of the name, through its hub */
-        if (cnt > 0) poll_edge(&ef, &et, &ne, &cap, from, poll_hub(c, first, cnt, &ef, &et, &ne, &cap));
+      if (pe.ntg < 0) {   /* every method of the names it is bound by, through each name's hub */
+        for (int r = 0; r < pe.nrun; r++)
+          if (pe.cnt[r] > 0) poll_edge(&ef, &et, &ne, &cap, from, poll_hub(c, pe.first[r], pe.cnt[r], &ef, &et, &ne, &cap));
         continue;
       }
       for (int k = 0; k < cnt; k++) {
-        poll_edge(&ef, &et, &ne, &cap, from, tg[k]);
-        if (tg[k] == from) g_poll_cyc[from] = 1;   /* calls itself */
+        poll_edge(&ef, &et, &ne, &cap, from, pe.tg[k]);
+        if (pe.tg[k] == from) g_poll_cyc[from] = 1;   /* calls itself */
       }
     }
     NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }

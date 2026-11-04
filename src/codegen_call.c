@@ -28356,9 +28356,10 @@ static void refuse_nonlocal_param_args(Compiler *c, int id, const char *name) {
   }
   if (!any) return;
   int tg[64], n = 0;
-  /* The sharing facts bind the call plan's targets, including a bare
-     class-method call. Ask the same plan when checking those routes. */
-  int planned = cplan_targets(c, id, tg, 64);
+  /* The sharing facts bind the methods the call plan says the call enters,
+     including a bare class-method call. Ask the same plan when checking
+     those routes. */
+  int planned = cplan_entries(c, id, tg, 64);
   if (planned >= 0) n = planned;
   else if (recv >= 0 && repr_of(c, recv).kind == RK_BOXED) {
     for (int k = 0; k < c->nclasses && n < 64; k++) {

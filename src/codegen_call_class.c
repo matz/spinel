@@ -1500,11 +1500,11 @@ static int subtree_changes_local(const NodeTable *nt, int n, const char *name, i
   return 0;
 }
 
-/* Does an explicit writer that call id can reach (cplan_targets) change
+/* Does an explicit writer that call id can enter (cplan_entries) change
    its parameter in place? */
 int writers_change_param(Compiler *c, int id) {
   int mis[CPT_MAX];
-  int n = cplan_targets(c, id, mis, CPT_MAX);
+  int n = cplan_entries(c, id, mis, CPT_MAX);
   if (n < 0) return 1;
   for (int i = 0; i < n; i++) {
     const Scope *m = &c->scopes[mis[i]];

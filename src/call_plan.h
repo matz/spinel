@@ -163,11 +163,12 @@ void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, 
    lasts until the next call. */
 const CallPlan *cplan_user_fresh(Compiler *c, int id);
 const CallPlan *cplan_const_user(Compiler *c, int id, int recv, int fresh);
-/* A constant receiver's builtin new reaches this initialize, or -1. */
-int cplan_initialize(Compiler *c, int id);
-int cplan_initializers(Compiler *c, int id, int *out, int cap);
-/* Every user method the call node id may reach, into out (at most cap):
-   its plan's method and, for a switch, each member. Answered from the types
+/* The user methods whose return is call node id's value, into out (at
+   most cap): its plan's method and, for a switch, each member. A reader of
+   what the call answers asks this; a reader of what the call enters (the
+   methods its arguments and block reach) asks cplan_entries, which differ
+   for a builtin `new`: it enters initialize but answers the object it
+   builds, which no method returns (0 here). Answered from the types
    as they stand, never kept past cplan_targets_drop.
      n >= 0      the methods, 0 for none (a builtin, a CP_REFUSE plan, a
                  node that is no call): follow nothing
@@ -188,7 +189,7 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
 /* The classes whose to_ary that call reaches on a boxed operand, where
    the record proves it: into out[0..cap), the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);
-/* cplan_targets, for a reader that wants the code the call's emission
+/* cplan_entries, for a reader that wants the code the call's emission
    names (reachability): the same answer, but for a call on a boxed receiver
    the methods of the arms its dispatch has, which the receiver's class
    facts bound, not every class's method of the name; and for a send on one,
@@ -201,6 +202,30 @@ int cplan_emitted_targets(Compiler *c, int id, int *out, int cap);
    builtin's. CPT_WHY_NONE where it lists the members. */
 enum { CPT_WHY_NONE = 0, CPT_WHY_CAP, CPT_WHY_RECV_UNTYPED };
 int cplan_targets_unknown_why(Compiler *c, int id, int cap);
+/* The user methods call node id enters, into out (at most cap): the
+   methods its arguments bind to and its block is handed to, which a call
+   graph, a parameter's or a block's facts follow. For a builtin `new`
+   (no program `new` answers it), the initialize methods it runs: the class
+   it builds and, for a `new` on the class its method runs for, each
+   subclass's; none for a builtin class; CPT_UNKNOWN for a receiver the
+   plan cannot name a class of, which may run any initialize of the
+   program. So for a super, bare or not, in a program `new` that reaches
+   the builtin Class#new: the initialize methods of the method's class and
+   its subclasses, CPT_UNKNOWN for a module's `new`. For any other call,
+   its cplan_targets. Same answers as cplan_targets otherwise (n >= 0,
+   CPT_UNKNOWN). Never what the call answers: that is cplan_targets'. */
+int cplan_entries(Compiler *c, int id, int *out, int cap);
+/* Where cplan_entries cannot list them (CPT_UNKNOWN), the names whose
+   program methods hold every method call node id may enter, into names (at
+   most 2), and how many: the call's own name (a super's, its method's),
+   and for a `new` initialize too (cplan_name_bound_names). A superset, for a reader that must see every body the
+   call may run (a call graph, the blocks or arguments a method may be
+   handed); a reader that needs the exact set takes CPT_UNKNOWN as it is. */
+int cplan_entries_bound_names(Compiler *c, int id, const char *names[2]);
+/* The same bound for a call of method name `name` that no node shows (a
+   Method or an UnboundMethod of it, a send): name, and initialize for
+   `new`. */
+int cplan_name_bound_names(const char *name, const char *names[2]);
 void cplan_targets_drop(void);
 /* Counts the drops (and a new compiler's first ask): an answer held at one
    count is the answer while it stands. */

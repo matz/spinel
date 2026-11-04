@@ -6592,7 +6592,7 @@ static int clp_extend(Compiler *c, int si, Scope *sc, int pi, unsigned ep) {
   const NodeTable *nt = c->nt;
   ClpEntry *e = clp_find(si, pi);
   int call = e->next;
-  int targets[CPT_MAX], nt_ = cplan_targets(c, call, targets, CPT_MAX), hit = 0;
+  int targets[CPT_MAX], nt_ = cplan_entries(c, call, targets, CPT_MAX), hit = 0;
   for (int t = 0; t < nt_ && !hit; t++) hit = targets[t] == si;
   int from = -1, an = 0;
   const int *av = NULL;
@@ -6694,7 +6694,7 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
       for (int call = pi < 0 ? -1 : resume != -2 ? resume : an_calls_named_first(c, sc->name);
            call >= 0 && nout < cap;
            call = an_calls_named_next(call)) {
-        int targets[CPT_MAX], nt_ = cplan_targets(c, call, targets, CPT_MAX), hit = 0;
+        int targets[CPT_MAX], nt_ = cplan_entries(c, call, targets, CPT_MAX), hit = 0;
         for (int t = 0; t < nt_ && !hit; t++) hit = targets[t] == si;
         if (!hit) continue;
         int a = nt_ref(nt, call, "arguments"), an = 0;
@@ -8676,16 +8676,9 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
     if (scope) for (int j = 0; j < scope->nparams; j++)
       if (scope->pnames[j] && sp_streq(scope->pnames[j], name)) { pi = j; break; }
     if (pi >= 0) NT_FOREACH_KIND(nt, NK_CallNode, call) {
-      int targets[CPT_MAX], n = cplan_targets(c, call, targets, CPT_MAX), reaches = 0;
+      /* (a builtin `new` enters the initialize of the class it builds) */
+      int targets[CPT_MAX], n = cplan_entries(c, call, targets, CPT_MAX), reaches = 0;
       for (int q = 0; q < n; q++) reaches |= targets[q] == si;
-      if(!reaches && scope->name && sp_streq(scope->name,"initialize") &&
-         nt_str(nt,call,"name") && sp_streq(nt_str(nt,call,"name"),"new")) {
-        int receiver=nt_ref(nt,call,"receiver");
-        int klass=receiver>=0 ? class_recv_static_ci(c,receiver) : -1;
-        if(klass<0 && receiver>=0 && (nt_kind(nt,receiver)==NK_ConstantReadNode || nt_kind(nt,receiver)==NK_ConstantPathNode))
-          klass=comp_class_index(c,nt_str(nt,receiver,"name"));
-        reaches=klass>=0 && comp_method_in_chain(c,klass,"initialize",NULL)==si;
-      }
       if (!reaches) continue;
       int arg = nt_ref(nt, call, "arguments"), ac = 0;
       const int *av = arg >= 0 ? nt_arr(nt, arg, "arguments", &ac) : NULL;
@@ -17687,7 +17680,7 @@ int infer_block_params(Compiler *c) {
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       int block = nt_ref(nt, id, "block");
       if (block < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
-      int targets[CPT_MAX], count = cplan_targets(c, id, targets, CPT_MAX), reaches = 0;
+      int targets[CPT_MAX], count = cplan_entries(c, id, targets, CPT_MAX), reaches = 0;
       for (int t = 0; t < count; t++) reaches |= cext_scope(c, targets[t]);
       if (!reaches) continue;
       int pn = a_proc_params_node(c, id);
@@ -19624,9 +19617,10 @@ static void cr_mark_version(Compiler *c, int id, const char *nm, int k, unsigned
 static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char ***out, int *n, int *cap) {
   const char *names[2];
   CrMarks m = { out, n, cap };
-  if (ct_version_marked(c, "initialize")) {
-    int init[CPT_MAX], ni = cplan_initializers(c, id, init, CPT_MAX);
-    for (int i = 0; i < ni; i++) {
+  /* a builtin `new`: the initialize methods the plan says it enters */
+  if (ct_version_marked(c, "initialize") && is_new_name(nt_str(nt, id, "name"))) {
+    int init[CPT_MAX], ni = cplan_entries(c, id, init, CPT_MAX);
+    for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
       char mark[24];
       snprintf(mark, sizeof mark, "\x01%d", init[i]);
       cr_add_name(out, n, cap, mark);

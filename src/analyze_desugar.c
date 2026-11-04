@@ -4608,6 +4608,24 @@ int send_family_program_owns(Compiler *c, const char *name) {
   return 0;
 }
 
+/* A boxed receiver: the program's send answers only where a class the value
+   may hold has it. Not every boxed value: a WebSocket class's `def send(data)`
+   took et-orbi's `to_time.send("year")` over a Time and typed it bool. With
+   no class set for the value, any class's send may answer. */
+static int send_poly_user_answers(Compiler *c, int id, int recv, const char *name) {
+  const ClsSet *s = cls_fact_node(c, recv);
+  if (!s || s->all) return 1;
+  for (int k = cls_set_next(s, -1); k >= 0; k = cls_set_next(s, k)) {
+    int cm = k >= c->nclasses;
+    if (send_own_in_chain(c, id, cm ? k - c->nclasses : k, name, cm)) return 1;
+  }
+  /* a builtin in the slot: the program's only through a reopening of its class */
+  if (s->bv)
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].name && is_builtin_reopen(c->classes[k].name) && send_own_in_chain(c, id, k, name, 0)) return 1;
+  return 0;
+}
+
 static int send_family_user_answers(Compiler *c, int id, int recv, const char *name) {
   int own = send_family_program_owns(c, name);
   if (own != 1) return own == 2;
@@ -4618,7 +4636,7 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
   }
   TyKind rt = infer_type(c, recv);
   if (ty_is_object(rt)) return send_own_in_chain(c, id, ty_object_class(rt), name, 0);
-  if (rt == TY_POLY || rt == TY_UNKNOWN) return 1;
+  if (rt == TY_POLY || rt == TY_UNKNOWN) return send_poly_user_answers(c, id, recv, name);
   /* a builtin receiver: the program's only through a reopening of its class */
   int bcls = builtin_class_of_type(rt) ? core_of_type(rt) : -1;
   int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
@@ -4707,6 +4725,112 @@ static int socket_send_boxed(Compiler *c, const NodeTable *nt, int id, TyKind re
    private/protected target. send/__send__ keep the visibility-blind textual
    rewrite in spinel_parse.c (CRuby's send ignores visibility). Mirrors
    desugar_implicit_send's node-retarget model. */
+static int fwd_new_call(NodeTable *nt, int recv, const char *name, int arg);
+/* The constant naming class ci, a chain of reads for a namespaced one. */
+static int sus_class_const(Compiler *c, int ci) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *name = class_ruby_name(c, ci);
+  int k = -1;
+  for (const char *p = name; p && *p; ) {
+    const char *q = strstr(p, "::");
+    size_t len = q ? (size_t)(q - p) : strlen(p);
+    char seg[256];
+    if (len >= sizeof seg) return -1;
+    memcpy(seg, p, len); seg[len] = 0;
+    int n = nt_new_node(nt, k < 0 ? "ConstantReadNode" : "ConstantPathNode");
+    if (n < 0) return -1;
+    nt_node_set_str(nt, n, "name", seg);
+    if (k >= 0) nt_node_set_ref(nt, n, "parent", k);
+    k = n;
+    p = q ? q + 2 : NULL;
+  }
+  return k;
+}
+/* `r.send(:m, args)` on a boxed receiver no class set describes, in a program
+   where some class defines its own send: the value is that class's only when
+   it is one, so the call becomes `(t = r; t.is_a?(K) ? t.send(:m, args) :
+   t.m(args))`. Kept whole, the class's send took every value (a WebSocket's
+   `def send(data)` answered et-orbi's `to_time.send("year")` over a Time). */
+static int send_split_by_owner(Compiler *c, int id, const char *nm) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || send_family_program_owns(c, nm) != 1) return 0;
+  TyKind rt = infer_type(c, recv);
+  if (rt != TY_POLY && rt != TY_UNKNOWN) return 0;
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  if (argc < 1 || argc > 65) return 0;
+  NodeKind a0k = nt_kind(nt, argv[0]);
+  const char *mname = a0k == NK_SymbolNode ? nt_str(nt, argv[0], "value") : a0k == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
+  if (!mname || !*mname || is_send_family(mname)) return 0;
+  int owners[64], nown = 0;
+  for (int k = 0; k < c->nclasses && nown < 64; k++) {
+    int mi = comp_method_in_class(c, k, nm);
+    if (mi >= 0 && !send_def_just_supers(c, mi) && class_ruby_name(c, k)) owners[nown++] = k;
+  }
+  if (nown == 0) return 0;
+  char mbuf[256], tname[64];
+  snprintf(mbuf, sizeof mbuf, "%s", mname);
+  snprintf(tname, sizeof tname, "__sus_%s", comp_node_tag(c, id));
+  int base = nt->count;
+  int rest[64], nrest = argc - 1;
+  for (int k = 0; k < nrest; k++) rest[k] = argv[k + 1];
+  /* the owner's arm: the send as written, on the local */
+  int keep = nt_clone_subtree(nt, id);
+  int tr1 = nt_new_node(nt, "LocalVariableReadNode");
+  nt_node_set_str(nt, tr1, "name", tname); nt_node_set_int(nt, tr1, "depth", 0);
+  nt_node_set_ref(nt, keep, "receiver", tr1);
+  nt_node_set_int(nt, keep, "user_send_split", 1);
+  /* everyone else's: the named method */
+  int tr2 = nt_new_node(nt, "LocalVariableReadNode");
+  nt_node_set_str(nt, tr2, "name", tname); nt_node_set_int(nt, tr2, "depth", 0);
+  int direct = fwd_new_call(nt, tr2, mbuf, -1);
+  if (nrest > 0) {
+    int na = nt_new_node(nt, "ArgumentsNode");
+    int cl[64];
+    for (int k = 0; k < nrest; k++) cl[k] = nt_clone_subtree(nt, rest[k]);
+    nt_node_set_arr(nt, na, "arguments", cl, nrest);
+    nt_node_set_ref(nt, direct, "arguments", na);
+  }
+  nt_set_ignore_visibility(nt, direct, 1);
+  int cond = -1;
+  for (int i = 0; i < nown; i++) {
+    int tr = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, tr, "name", tname); nt_node_set_int(nt, tr, "depth", 0);
+    int kc = sus_class_const(c, owners[i]);
+    if (kc < 0) return 0;
+    int test = fwd_new_call(nt, tr, "is_a?", kc);
+    if (cond < 0) cond = test;
+    else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", test); cond = o; }
+  }
+  int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
+  int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
+  nt_node_set_arr(nt, ys, "body", &keep, 1);
+  nt_node_set_arr(nt, ns, "body", &direct, 1);
+  nt_node_set_ref(nt, el, "statements", ns);
+  nt_node_set_ref(nt, ifn, "predicate", cond);
+  nt_node_set_ref(nt, ifn, "statements", ys);
+  nt_node_set_ref(nt, ifn, "subsequent", el);
+  int tw = nt_new_node(nt, "LocalVariableWriteNode");
+  nt_node_set_str(nt, tw, "name", tname); nt_node_set_int(nt, tw, "depth", 0);
+  nt_node_set_ref(nt, tw, "value", recv);
+  int body = nt_new_node(nt, "StatementsNode");
+  { int two[2] = { tw, ifn }; nt_node_set_arr(nt, body, "body", two, 2); }
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", body);
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    if (!nt_int(nt, j, "node_line", 0)) nt_node_set_int(nt, j, "node_line", line);
+    if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
+  }
+  scope_local_intern(comp_scope_of(c, id), tname);
+  return 1;
+}
+
 int desugar_public_send_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -4726,7 +4850,10 @@ int desugar_public_send_recv(Compiler *c) {
     int is_snd = nm && (sp_streq(nm, "send") || sp_streq(nm, "__send__"));
     if (!is_pub && !is_snd) continue;
     /* the receiver's class's own send answers it (send_family_user_answers) */
-    if (send_family_user_answers(c, id, nt_ref(nt, id, "receiver"), nm)) continue;
+    if (send_family_user_answers(c, id, nt_ref(nt, id, "receiver"), nm)) {
+      if (!nt_int(nt, id, "user_send_split", 0) && send_split_by_owner(c, id, nm)) changed = 1;
+      continue;
+    }
     /* A blank-slate receiver has no #send / #public_send (only __send__ is
        BasicObject's): leave the call unretargeted, and the blank-slate gate
        raises CRuby's NoMethodError for the send itself (#2725). */

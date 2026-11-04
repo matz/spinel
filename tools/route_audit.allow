@@ -65,6 +65,7 @@ src/analyze.c rd_builtin_string_method a name's presence
 src/analyze_desugar.c fwd_io_one_param_iter a name's presence in a File or IO reopening
 src/analyze_desugar.c iter_name_program_defined a name's presence in a reopened Array, Hash, Range or Enumerable
 src/analyze_desugar.c send_family_program_owns a name's presence
+src/analyze_desugar.c send_split_by_owner the classes that define a send-family name of their own
 src/analyze_infer.c an_any_class_cmethod a name's presence
 src/analyze_infer.c an_module_defines a name's presence
 src/analyze_infer.c an_module_methods_listable a name's presence

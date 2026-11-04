@@ -8222,12 +8222,15 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     buf_printf(b, "sp_Time *_t%d = _t%d->first; SP_GC_ROOT(_t%d);\n", tv, tr, tv);
     emit_indent(b, indent);
-    buf_printf(b, "for (; sp_trange_step_on(_t%d, _t%d, _t%d); _t%d = sp_trange_step_next(_t%d, _t%d)) {\n",
-               tr, tv, ts, tv, tv, ts);
+    buf_printf(b, "for (; sp_trange_step_on(_t%d, _t%d, _t%d); _t%d = sp_trange_step_next(_t%d, _t%d, _t%d)) {\n",
+               tr, tv, ts, tv, tr, tv, ts);
     if (p0) {
       char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
       emit_iter_param_assign(c, block, p0_orig, p0, TY_TIME, elem, b, indent + 1);
     }
+    { char rs_es[32]; snprintf(rs_es, sizeof rs_es, "_t%d", tv);
+      int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
+      emit_iter_bind_rest(c, block, rs_np, TY_TIME, rs_es, b, indent + 1); }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
     return 1;

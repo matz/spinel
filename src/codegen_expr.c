@@ -5611,7 +5611,7 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
     if (left >= 0) emit_boxed(c, left, b); else buf_puts(b, "sp_box_nil()");
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, tr);
     if (right >= 0) emit_boxed(c, right, b); else buf_puts(b, "sp_box_nil()");
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_orange_new(_t%d, _t%d, %d); })", tr, tl, tr, excl);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_orange_new_typed(_t%d, _t%d, %d); })", tr, tl, tr, excl);
     return 1;
   }
   /* ends decided at run time (`a[0]..a[1]` over a mixed Array) */

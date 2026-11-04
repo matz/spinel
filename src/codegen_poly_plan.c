@@ -3432,11 +3432,13 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   int is_strsetop_n = ps->strsetop_n, is_pstore = ps->pstore, is_strencode = ps->strencode;
   int is_strsplit = ps->strsplit, is_index = ps->index;
   /* a boxed Range of Times answers its methods through sp_trange_send */
-  if (trange_poly_name(name, pos_argc) && kwn == 0 && pos_argc == argc && (ret == TY_POLY || is_scalar_ret(ret))) {
+  if (trange_poly_name(name, pos_argc) && kwn == 0 && pos_argc == argc && !nt_argv_has_splat(nt, argv, argc) &&
+      (ret == TY_POLY || is_scalar_ret(ret))) {
     Buf call; memset(&call, 0, sizeof call);
     buf_printf(&call, "sp_trange_send((sp_TimeRange *)_t%d.v.p, \"%s\", %d, ", tv, name, pos_argc);
     if (pos_argc == 0) buf_puts(&call, "sp_box_nil()");
     else if (atmp_ty[0] == TY_POLY) buf_printf(&call, "_t%d", atmp[0]);
+    else if (atmp_ty[0] == TY_REGEX) buf_printf(&call, "sp_box_regexp(_t%d)", atmp[0]);
     else { char an[24]; snprintf(an, sizeof an, "_t%d", atmp[0]); emit_boxed_text(c, atmp_ty[0], an, &call); }
     buf_puts(&call, ")");
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME_RANGE && _t%d.v.p) { _t%d = ", tv, tv, tv, tr);

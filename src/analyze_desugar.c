@@ -19096,7 +19096,7 @@ int mark_match_ranges_at(Compiler *c, LowerCtx *lc, int id) {
        is built, so the literal stays out of the Time and object Ranges */
     if (an == 1 && sp_streq(mn, "clamp")) {
       int cr = nt_paren_single(c->nt, av[0]);
-      if (nt_kind(nt, cr) == NK_RangeNode) nt_node_set_int(nt, cr, "clamp_arg", 1);
+      if (nt_kind(nt, cr) == NK_RangeNode) nt_node_set_int(nt, cr, "clamp_arg", w + 1);
     }
     if (an != 1) return 0;
     if (!(sp_streq(mn, "===") || sp_streq(mn, "include?") || sp_streq(mn, "member?") ||

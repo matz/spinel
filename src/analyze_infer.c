@@ -9018,7 +9018,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* a Range of Times answers from its rows, ahead of the Range rules below */
   if (recv >= 0 && (infer_type(c, recv) == TY_TIME_RANGE || infer_type(c, recv) == TY_OBJ_RANGE)) {
     const BuiltinOp *op = an_bop_find_arg(c, id, infer_type(c, recv), name, argc, argv, nt_ref(nt, id, "block") >= 0);
-    if (op && op->result != TY_UNKNOWN) return op->result;
+    if (op && op->result != TY_UNKNOWN)
+      return !g_infer_ignore_brk && call_breaks(c, id) ? an_planned_call_ret(c, id, TY_POLY) : op->result;
   }
   { TyKind ar; if (infer_arysub_call(c, id, &ar)) return ar; }   /* Array's, on an Array subclass (#7449) */
 
@@ -11233,6 +11234,11 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind ht = hi >= 0 ? infer_type(c, hi) : TY_UNKNOWN;
     /* (t1..t2), (t..), (..t): a Range of Times, its ends the Times themselves */
     int clamp_arg = nt_int(nt, id, "clamp_arg", 0);
+    /* a clamp of the program's own receives the Range itself, not its bounds */
+    if (clamp_arg) {
+      TyKind ct = infer_type(c, nt_ref(nt, clamp_arg - 1, "receiver"));
+      if (ty_is_object(ct) && comp_method_in_chain(c, ty_object_class(ct), "clamp", NULL) >= 0) clamp_arg = 0;
+    }
     if (!clamp_arg && (lt == TY_TIME || ht == TY_TIME) &&
         (lo < 0 || lt == TY_TIME || lt == TY_NIL) && (hi < 0 || ht == TY_TIME || ht == TY_NIL))
       return TY_TIME_RANGE;

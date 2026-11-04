@@ -10896,7 +10896,7 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
     int tr = ++g_tmp;
     char sv[24]; snprintf(sv, sizeof sv, "_t%d", t);
     buf_printf(b, "({ sp_ObjRange *_t%d = ", tr); emit_expr(c, cond, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); _t%d && sp_orange_cover(_t%d, ", tr, tr, tr);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_orange_case_eq(_t%d, ", tr, tr);
     emit_boxed_text(c, pt, sv, b);
     buf_puts(b, "); })");
   }

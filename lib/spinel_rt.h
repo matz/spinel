@@ -4617,6 +4617,7 @@ static SP_UNUSED sp_RbVal sp_range_new_box(sp_RbVal f, sp_RbVal l, sp_int x) {
     int ft = f.tag == SP_TAG_OBJ && f.cls_id == SP_BUILTIN_TIME && f.v.p, lt = l.tag == SP_TAG_OBJ && l.cls_id == SP_BUILTIN_TIME && l.v.p;
     if ((ft || lt) && (ft || fn) && (lt || ln))
       return sp_box_trange(sp_trange_new(ft ? (sp_Time *)f.v.p : NULL, lt ? (sp_Time *)l.v.p : NULL, x));
+    if (ft || lt) sp_raise_cls("ArgumentError", "bad value for range");
     int fo = f.tag == SP_TAG_OBJ && f.cls_id >= 0, lo = l.tag == SP_TAG_OBJ && l.cls_id >= 0;
     if ((fo || lo) && (fo || fn) && (lo || ln)) {
       if (fo && lo) { sp_bool ok = FALSE; sp_poly_cmp(f, l, &ok); if (!ok) sp_raise_cls("ArgumentError", "bad value for range"); }
@@ -11304,8 +11305,12 @@ static sp_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
       /* a Range of Times is eql? to another with the same ends */
       if (a.cls_id == SP_BUILTIN_TIME_RANGE && b.cls_id == SP_BUILTIN_TIME_RANGE)
         return sp_trange_eq((sp_TimeRange *)a.v.p, (sp_TimeRange *)b.v.p);
-      if (a.cls_id == SP_BUILTIN_OBJ_RANGE && b.cls_id == SP_BUILTIN_OBJ_RANGE)
-        return sp_orange_eq((sp_ObjRange *)a.v.p, (sp_ObjRange *)b.v.p);
+      /* ...and a Range of objects by its ends' eql?, as Range#eql? asks, not their == */
+      if (a.cls_id == SP_BUILTIN_OBJ_RANGE && b.cls_id == SP_BUILTIN_OBJ_RANGE) {
+        const sp_ObjRange *ra = (const sp_ObjRange *)a.v.p, *rb = (const sp_ObjRange *)b.v.p;
+        if (!ra || !rb) return ra == rb;
+        return ra->excl == rb->excl && sp_rbval_eql_key(ra->first, rb->first) && sp_rbval_eql_key(ra->last, rb->last);
+      }
       /* Arrays are eql across storage kinds and element-wise eql (so 1 and 1.0
          stay distinct): an IntArray [0, 0] key and a PolyArray [0, 0] lookup
          (e.g. one from Array#product) must collide, so this runs BEFORE the
@@ -18440,6 +18445,14 @@ static int sp_orange_le(sp_RbVal a, sp_RbVal b, int strict) {
   sp_bool ok = FALSE; sp_int c = sp_poly_cmp(a, b, &ok);
   return ok && (strict ? c < 0 : c <= 0);
 }
+/* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
+static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {
+  if (f.tag != SP_TAG_NIL && l.tag != SP_TAG_NIL) {
+    sp_bool ok = FALSE; sp_poly_cmp(f, l, &ok);
+    if (!ok) sp_raise_cls("ArgumentError", "bad value for range");
+  }
+  return sp_orange_new(f, l, x);
+}
 static sp_bool sp_orange_cover(const sp_ObjRange *r, sp_RbVal v) {
   SP_GC_ROOT(r); SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) {
@@ -18463,10 +18476,16 @@ static sp_bool sp_orange_eq(const sp_ObjRange *a, const sp_ObjRange *b) {
 }
 static sp_int sp_orange_hash(const sp_ObjRange *r) {
   SP_GC_ROOT(r);   /* an end's #hash may allocate, and r may be a temporary */
-  sp_int h = r->excl ? 0x5bd1e995 : 0x1b873593;
+  uint64_t h = r->excl ? 0x5bd1e995u : 0x1b873593u;
   /* each end by its own #hash, as an Array's elements hash */
-  h = h * 31 + sp_rbval_hash_member(r->first);
-  return h * 31 + sp_rbval_hash_member(r->last);
+  h = h * 31 + (uint64_t)sp_rbval_hash_member(r->first);
+  return (sp_int)(h * 31 + (uint64_t)sp_rbval_hash_member(r->last));
+}
+/* a when arm: a variable holding nil matches nil, and Range#=== takes no Range */
+static SP_UNUSED sp_bool sp_orange_case_eq(const sp_ObjRange *r, sp_RbVal v) {
+  if (!r) return v.tag == SP_TAG_NIL;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE) return FALSE;
+  return sp_orange_cover(r, v);
 }
 /* Range#min / #max without iterating: the begin, or an inclusive end; nil
    for an empty Range. An exclusive max needs the succ walk */

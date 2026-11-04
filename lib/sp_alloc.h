@@ -1368,7 +1368,7 @@ void sp_trange_step_check_blk(const sp_TimeRange *r);
 sp_PolyArray *sp_trange_step_ary(const sp_TimeRange *r, double secs);
 sp_bool sp_trange_step_more(const sp_TimeRange *r, const sp_Time *t);
 sp_bool sp_trange_step_on(const sp_TimeRange *r, const sp_Time *t, double secs);
-sp_Time *sp_trange_step_next(const sp_Time *t, double secs);
+sp_Time *sp_trange_step_next(const sp_TimeRange *r, const sp_Time *t, double secs);
 /* A Range of the program's objects whose class defines <=> (a Date): a heap
    object holding its two ends boxed, nil for an open end. Its comparisons
    run through sp_poly_cmp in the generated TU (spinel_rt.h), which reaches

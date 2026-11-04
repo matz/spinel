@@ -11061,6 +11061,21 @@ int poly_cls_value_reaches(Compiler *c, int call, int k) {
              (kl == 6 && !strncmp(kn, "Object", 6)) || (kl == 11 && !strncmp(kn, "BasicObject", 11)) ||
              (kl == 6 && !strncmp(kn, "Kernel", 6))))
     return 1;
+  /* the receiver's class set (cls_fact), where it is bounded: one the
+     analysis narrowed holds no Class object of k or a class under it
+     (`list.pluck(*keys) if list.is_a?(Relation)` on an untyped `list`
+     holds a Relation, not Base, whose `self.pluck(col)` takes no splat,
+     #10939) */
+  int recv = nt_ref(c->nt, call, "receiver");
+  const ClsSet *cs = recv >= 0 ? cls_fact_node(c, recv) : NULL;
+  if (cs && !cs->all) {
+    int any = 0;
+    for (int m = cls_set_next(cs, c->nclasses - 1); m >= 0 && !any; m = cls_set_next(cs, m)) {
+      int v = m - c->nclasses;
+      if (v >= 0 && v < c->nclasses && (v == k || is_descendant(c, v, k))) any = 1;
+    }
+    if (!any) return 0;
+  }
   const char *cvals = poly_recv_class_values(c, call);
   if (!cvals) return 1;
   /* a value of the class or of a class under it (which inherits it) */

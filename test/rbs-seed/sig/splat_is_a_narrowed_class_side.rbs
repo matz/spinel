@@ -1,0 +1,3 @@
+module PluckExt
+  def self.pluck: (untyped list, *(Symbol | String | Integer) keys) -> Array[untyped]
+end

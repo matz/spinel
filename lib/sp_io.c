@@ -28,6 +28,9 @@
 #include <sys/time.h> /* utimes() for File.utime */
 #include <errno.h>
 #include <limits.h>  /* INT_MAX for the socket int arguments */
+#ifndef PIPE_BUF
+#define PIPE_BUF 512   /* POSIX's least (_POSIX_PIPE_BUF), for a target whose headers name none (MinGW) */
+#endif
 #include <fcntl.h>   /* fcntl flags for #close_on_exec?, #fcntl */
 #include <poll.h>    /* POLLIN for the socket read park */
 #include <time.h>

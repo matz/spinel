@@ -4860,6 +4860,22 @@ void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b) {
   ce.presence = const_has_flag(lv) ? lv : NULL;
   emit_const_read_close_checked(c, id, ce, b);
 }
+/* An optimized constant test still evaluates its constant before testing
+   the subject. The ordinary read's decision (const_read_raises) distinguishes
+   missing names from resolved aliases, FFI values and library classes, and
+   owns the warning, path message and parent evaluation order. Keep this at
+   the test, not in every constant-read prefix: native constructors and rescue
+   matchers can resolve names that are not first-class constant values. A
+   splatted constant (`when *Missing`) is its operand's read. */
+int emit_undefined_const_test(Compiler *c, int id, TyKind result, Buf *b) {
+  if (nt_kind(c->nt, id) == NK_SplatNode) id = nt_ref(c->nt, id, "expression");
+  if (id < 0 || !const_read_raises(c, id)) return 0;
+  buf_puts(b, "((void)(");
+  emit_expr_for_effect(c, id, b);
+  buf_printf(b, "), %s)", default_value_from_compiler(c, result));
+  return 1;
+}
+
 /* The effects of a statically resolved path, outermost parent first. The
    opening comma expression lets a caller retain the folded value or call. */
 int emit_const_read_prefix(Compiler *c, int id, Buf *b) {

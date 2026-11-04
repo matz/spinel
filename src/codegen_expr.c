@@ -4031,7 +4031,15 @@ int const_read_raises(Compiler *c, int id) {
   emit_expr(c, id, &t);
   g_pre = saved_pre; g_tmp = saved_tmp;
   static const char raise[] = "(sp_raise_cls(\"NameError\"";
-  int r = !pre.p && t.p && !strncmp(t.p, raise, sizeof raise - 1);
+  /* `klass::NM` on a Class value, NM a constant no class defines: the read
+     holds the value and raises naming it, whatever it is (emit_constant_value) */
+  static const char held[] = "({ sp_Class _t", held_raise[] = "; sp_raise_cls(\"NameError\", _t",
+                    held_end[] = "((sp_Class){-1}); })";
+  size_t n = t.p ? strlen(t.p) : 0;
+  int r = !pre.p && t.p &&
+          (!strncmp(t.p, raise, sizeof raise - 1) ||
+           (!strncmp(t.p, held, sizeof held - 1) && strstr(t.p, held_raise) &&
+            n >= sizeof held_end - 1 && !strcmp(t.p + n - (sizeof held_end - 1), held_end)));
   free(t.p); free(pre.p);
   return r;
 }

@@ -1221,8 +1221,10 @@ int effect_view_open(Compiler *c, int node);
 void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);
 void effect_view_close(Compiler *c, int v);
 /* Does a read of constant (path) node id raise NameError, the constant
-   being defined nowhere the program or the runtime can see? A rescue
-   operand is read so when an exception reaches its clause. */
+   being defined nowhere the program or the runtime can see? A path on a
+   Class value (`klass::NM`) whose NM no class defines raises whatever the
+   value is. A rescue operand is read so when an exception reaches its
+   clause. */
 int const_read_raises(Compiler *c, int id);
 /* The constant path as the program wrote it, for a NameError (codegen_expr.c) */
 void const_path_written(const NodeTable *nt, int id, char *out, size_t cap);
@@ -1891,6 +1893,7 @@ void emit_const_flag_set(const LocalVar *lv, const char *key, Buf *b, int indent
    after. They emit nothing for a constant with no flag. */
 int emit_const_read_stmt(Compiler *c, int id, Buf *b, int indent);
 int emit_const_read_prefix(Compiler *c, int id, Buf *b);
+int emit_undefined_const_test(Compiler *c, int id, TyKind result, Buf *b);
 void emit_const_read_open(Compiler *c, int id, const LocalVar *lv, Buf *b);
 void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b);
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *));

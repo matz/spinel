@@ -1557,6 +1557,27 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
   return 1;
 }
 
+/* A nullable Bigint holds nil or an Integer. Only their overrides matter. */
+static int bigint_not_overridden(Compiler *c) {
+  static const int roots[] = { CORE_NILCLASS, CORE_INTEGER, CORE_NUMERIC, CORE_COMPARABLE,
+                              CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  int top = comp_method_index(c, "!");
+  if (top >= 0 && !c->scopes[top].is_cmethod) return 1;
+  for (int r = 0; roots[r] >= 0; r++) {
+    int k = comp_core_class(c, roots[r]);
+    if (k < 0) continue;
+    if (comp_is_undeffed_in_chain(c, k, "!") || comp_method_in_chain(c, k, "!", NULL) >= 0 ||
+        comp_native_method_find(c, k, "!", 0, 0) >= 0) return 1;
+    /* The load record also holds prepends to builtin modules such as Kernel.
+       With no output slots, any version or an unknown chain returns -1. */
+    if (elab_chain_versions(c, k, 0, "!", NULL, 0) != 0) return 1;
+    ClassInfo *cl = &c->classes[k];
+    for (int i = 0; i < cl->naliases; i++)
+      if ((!cl->alias_sg || !cl->alias_sg[i]) && sp_streq(cl->alias_new[i], "!")) return 1;
+  }
+  return 0;
+}
+
 /* String concatenation, unary -@ +@ ~ !, element stores and the arithmetic on a poly operand */
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* An operator override owns its poly arm before the builtin protocol's
@@ -1894,7 +1915,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     }
     else if (rt == TY_STRING || ty_is_array(rt) || ty_is_hash(rt) || ty_is_object(rt) ||
-             rt == TY_PROC ||
+             (rt == TY_BIGINT && !bigint_not_overridden(c)) || rt == TY_PROC ||
              rt == TY_MATCHDATA || rt == TY_EXCEPTION || rt == TY_FIBER || rt == TY_IO) {
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == 0)");  /* NULL pointer is falsy */
     }

@@ -84,3 +84,25 @@ begin
 rescue OuterLongLongLongLongLongLongLongLongLongLong::InnerLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongLongError => err          # the rescue binds the class's own struct
   p err.message, err.code
 end
+
+# a long name whose 31-byte cut falls inside a character keeps whole ones
+class Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxéyyyyyyyyyyyyyyyyyyyy
+  def hi = :utf8
+end
+p Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxéyyyyyyyyyyyyyyyyyyyy.new.hi, Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxéyyyyyyyyyyyyyyyyyyyy.name.size
+# a short class named exactly what a long class's C name became, defined
+# after it and before it: the two still get distinct C names
+class Latexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  def hi = :late_long
+end
+class Latexxxxxxxxxxxxxxxxxxxxxxxxxxx_aaa7c339
+  def hi = :late_short
+end
+class Earlyxxxxxxxxxxxxxxxxxxxxxxxxxx_1097379c
+  def hi = :early_short
+end
+class Earlyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  def hi = :early_long
+end
+p [Latexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.new, 1][ARGV.size].hi, [Latexxxxxxxxxxxxxxxxxxxxxxxxxxx_aaa7c339.new, 1][ARGV.size].hi
+p [Earlyxxxxxxxxxxxxxxxxxxxxxxxxxx_1097379c.new, 1][ARGV.size].hi, [Earlyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.new, 1][ARGV.size].hi

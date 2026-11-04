@@ -1031,8 +1031,11 @@ static char *sp_class_c_name(const Compiler *c, const char *name) {
   if (!m || strlen(m) <= SP_CLASS_C_NAME_MAX) return m;
   char *s = malloc(SP_CLASS_C_NAME_MAX + 1);
   if (!s) return m;
+  /* the cut backs up to a character's first byte: a C identifier is UTF-8 */
+  int keep = SP_CLASS_C_NAME_MAX - 9;
+  while (keep > 0 && ((unsigned char)m[keep] & 0xC0) == 0x80) keep--;
   for (unsigned salt = 0;; salt++) {
-    snprintf(s, SP_CLASS_C_NAME_MAX + 1, "%.*s_%08x", SP_CLASS_C_NAME_MAX - 9, m, sp_strhash(m) + salt);
+    snprintf(s, SP_CLASS_C_NAME_MAX + 1, "%.*s_%08x", keep, m, sp_strhash(m) + salt);
     int clash = 0;
     for (int k = 0; k < c->nclasses && !clash; k++)
       clash = c->classes[k].c_name && sp_streq(c->classes[k].c_name, s) && !sp_streq(c->classes[k].name, name);

@@ -244,6 +244,7 @@ const char *ty_name(TyKind t) {
     case TY_ADDRINFO: return "addrinfo";
     case TY_SOCKOPT: return "sockopt";
     case TY_STR_RANGE: return "str_range";
+    case TY_TIME_RANGE: return "time_range";
     case TY_TMS:     return "tms";
     case TY_PROCESS_STATUS: return "process_status";
     case TY_OPENSTRUCT: return "openstruct";
@@ -308,7 +309,7 @@ int ty_never_callable(TyKind t) {
          t == TY_COMPLEX || t == TY_STRING || t == TY_STRBUF ||
          t == TY_SYMBOL || t == TY_BOOL ||
          t == TY_NIL || t == TY_RANGE || t == TY_FLOAT_RANGE ||
-         t == TY_STR_RANGE || t == TY_REGEX || t == TY_TIME ||
+         t == TY_STR_RANGE || t == TY_TIME_RANGE || t == TY_REGEX || t == TY_TIME ||
          t == TY_MATCHDATA || t == TY_EXCEPTION || t == TY_IO ||
          t == TY_ENUMERATOR || ty_is_array(t) || ty_is_obj_array(t) ||
          ty_is_hash(t);
@@ -1053,7 +1054,7 @@ int ty_object_protocol_family(TyKind t) {
   if (t == TY_STRING || t == TY_STRBUF) return 2;
   if (ty_is_array(t) || ty_is_obj_array(t)) return 3;
   if (ty_is_hash(t)) return 4;
-  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return 5;
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE) return 5;
   return 100 + (int)t;
 }
 
@@ -1122,7 +1123,7 @@ const TyTraits ty_traits_promote_rational = {
 int ty_builtin_ivar_less(TyKind t) {
   return t == TY_STRING || t == TY_STRBUF || t == TY_INT || t == TY_FLOAT || t == TY_BOOL || t == TY_NIL ||
          t == TY_SYMBOL || t == TY_BIGINT || t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE ||
-         t == TY_RANDOM || ty_is_array(t) || ty_is_hash(t);
+         t == TY_TIME_RANGE || t == TY_RANDOM || ty_is_array(t) || ty_is_hash(t);
 }
 
 /* Of those, the values whose identity Spinel keeps, so the runtime's map can

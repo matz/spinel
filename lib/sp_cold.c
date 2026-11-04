@@ -5522,6 +5522,111 @@ sp_RbVal sp_box_timev(sp_Time v) {
   return sp_box_obj(p, SP_BUILTIN_TIME);
 }
 sp_RbVal sp_box_time(sp_Time *p) { return sp_box_obj(p, SP_BUILTIN_TIME); }
+
+static void sp_trange_scan(void *p) {
+  sp_TimeRange *r = (sp_TimeRange *)p;
+  if (r->first) sp_gc_mark(r->first);
+  if (r->last) sp_gc_mark(r->last);
+}
+sp_TimeRange *sp_trange_new(sp_Time *first, sp_Time *last, sp_int excl) {
+  SP_GC_ROOT(first); SP_GC_ROOT(last);
+  sp_TimeRange *r = (sp_TimeRange *)sp_gc_alloc(sizeof(sp_TimeRange), NULL, sp_trange_scan);
+  r->first = first; r->last = last; r->excl = excl ? 1 : 0;
+  return r;
+}
+sp_RbVal sp_box_trange(sp_TimeRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_TIME_RANGE) : sp_box_nil(); }
+sp_RbVal sp_trange_begin_v(const sp_TimeRange *r) { return r->first ? sp_box_time(r->first) : sp_box_nil(); }
+sp_RbVal sp_trange_end_v(const sp_TimeRange *r) { return r->last ? sp_box_time(r->last) : sp_box_nil(); }
+void sp_trange_iterate_raise(void) { sp_raise_cls("TypeError", "can't iterate from Time"); }
+/* Range#min without iterating: the begin, nil for an empty Range */
+sp_RbVal sp_trange_min_v(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
+  if (r->last && sp_time_cmp(r->first, r->last) > (r->excl ? -1 : 0)) return sp_box_nil();
+  return sp_box_time(r->first);
+}
+/* Range#max without iterating: the end of an inclusive Range, CRuby's
+   TypeError for an exclusive one, which only iteration could answer */
+sp_RbVal sp_trange_max_v(const sp_TimeRange *r) {
+  if (r->excl) sp_raise_cls("TypeError", "can't iterate from Time");
+  if (!r->last) sp_raise_cls("RangeError", "cannot get the maximum of endless range");
+  if (r->first && sp_time_cmp(r->first, r->last) > 0) return sp_box_nil();
+  return sp_box_time(r->last);
+}
+sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t) {
+  if (!t) return 0;
+  if (r->first && sp_time_cmp(r->first, t) > 0) return 0;
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  return r->excl ? c < 0 : c <= 0;
+}
+/* a value that is no Time is never covered: Time#<=> answers nil for it */
+sp_bool sp_trange_cover_poly(const sp_TimeRange *r, sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) return sp_trange_cover(r, (sp_Time *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return sp_trange_cover_range(r, (sp_TimeRange *)v.v.p);
+  return 0;
+}
+/* Range#cover?(range), as CRuby's r_cover_range_p; the other's max, which
+   it falls back on for an exclusive end, raises for Times and so answers no */
+sp_bool sp_trange_cover_range(const sp_TimeRange *r, const sp_TimeRange *o) {
+  if (r->first && !o->first) return 0;
+  if (r->last && !o->last) return 0;
+  if (o->first && o->last && sp_time_cmp(o->first, o->last) > (o->excl ? -1 : 0)) return 0;
+  if (o->first && !sp_trange_cover(r, o->first)) return 0;
+  if (!r->last) return 1;
+  int cmp_end = sp_time_cmp(r->last, o->last);
+  if (r->excl == o->excl) return cmp_end >= 0;
+  if (r->excl) return cmp_end > 0;
+  return cmp_end >= 0;
+}
+static int sp_trange_end_eq(const sp_Time *a, const sp_Time *b) {
+  if (!a || !b) return a == b;
+  return a->tv_sec == b->tv_sec && a->tv_nsec == b->tv_nsec;
+}
+sp_bool sp_trange_eq(const sp_TimeRange *a, const sp_TimeRange *b) {
+  if (!a || !b) return a == b;
+  return a->excl == b->excl && sp_trange_end_eq(a->first, b->first) && sp_trange_end_eq(a->last, b->last);
+}
+sp_int sp_trange_hash(const sp_TimeRange *r) {
+  sp_int h = r->excl ? 0x5bd1e995 : 0x1b873593;
+  if (r->first) h = h * 31 + sp_time_hash(r->first);
+  if (r->last) h = h * 31 + sp_time_hash(r->last);
+  return h;
+}
+static const char *sp_trange_join(const sp_TimeRange *r, int inspect) {
+  const char *f = r->first ? (inspect ? sp_time_inspect_v(r->first) : sp_time_to_s_v(r->first)) : "";
+  SP_GC_ROOT_STR(f);
+  const char *l = r->last ? (inspect ? sp_time_inspect_v(r->last) : sp_time_to_s_v(r->last)) : "";
+  SP_GC_ROOT_STR(l);
+  /* CRuby's inspect writes the open ends as nil only when both are open */
+  if (inspect && !r->first && !r->last) f = l = "nil";
+  return sp_sprintf("%s%s%s", f, r->excl ? "..." : "..", l);
+}
+const char *sp_trange_to_s(const sp_TimeRange *r) { return sp_trange_join(r, 0); }
+const char *sp_trange_inspect(const sp_TimeRange *r) { return sp_trange_join(r, 1); }
+sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
+  SP_GC_ROOT(r);
+  if (argc == 0) {
+    if (!strcmp(n, "begin") || !strcmp(n, "first")) return sp_trange_begin_v(r);
+    if (!strcmp(n, "end") || !strcmp(n, "last")) return sp_trange_end_v(r);
+    if (!strcmp(n, "min")) return sp_trange_min_v(r);
+    if (!strcmp(n, "max")) return sp_trange_max_v(r);
+    if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
+    if (!strcmp(n, "to_s")) return sp_box_str(sp_trange_to_s(r));
+    if (!strcmp(n, "inspect")) return sp_box_str(sp_trange_inspect(r));
+    if (!strcmp(n, "hash")) return sp_box_int(sp_trange_hash(r));
+    if (!strcmp(n, "frozen?")) return sp_box_bool(1);
+    if (!strcmp(n, "to_a") || !strcmp(n, "entries") || !strcmp(n, "size") || !strcmp(n, "count") ||
+        !strcmp(n, "each") || !strcmp(n, "sum")) { sp_trange_iterate_raise(); return sp_box_nil(); }
+  }
+  if (argc == 1) {
+    if (!strcmp(n, "cover?") || !strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
+      return sp_box_bool(sp_trange_cover_poly(r, a0));
+    if (!strcmp(n, "==") || !strcmp(n, "eql?"))
+      return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_TIME_RANGE && sp_trange_eq(r, (sp_TimeRange *)a0.v.p));
+  }
+  sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of Range", n));
+  return sp_box_nil();
+}
 sp_Time *sp_file_mtime(const char *path) { return sp_time_ref(sp_filev_mtime(path)); }
 sp_Time *sp_file_atime(const char *path) { return sp_time_ref(sp_filev_atime(path)); }
 sp_Time *sp_file_ctime(const char *path) { return sp_time_ref(sp_filev_ctime(path)); }

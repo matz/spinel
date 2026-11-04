@@ -50,3 +50,4 @@
   /* 49 class */ { "sp_Class", "(SP_CLASS_NIL)", "(SP_CLASS_NIL)", NULL, "sp_box_class", NULL, "sp_box_class($e)", NULL, NULL, "sp_unbox_class($e)", "sp_unbox_class($e)", NULL, NULL, NULL, "sp_class_nil_p($e)", 0, 0, 1, 1, 3, 10 },
   /* 50 poly */ { "sp_RbVal", "sp_box_nil()", "sp_box_nil()", "sp_box_nil()", NULL, NULL, "$e", NULL, NULL, "$e", "$e", NULL, NULL, "%s", NULL, 0, 1, 0, 1, 4, 0 },
   /* 51 float_array_array */ { "sp_PtrArray *", "NULL", "NULL", NULL, NULL, NULL, "sp_box_ptr_array_k((void *)($e), SP_PTR_ELEM_FLT_ROWS, -1)", NULL, NULL, "sp_poly_as_ptr_array($e, SP_PTR_ELEM_FLT_ROWS, -1)", "sp_poly_as_ptr_array($e, SP_PTR_ELEM_FLT_ROWS, -1)", NULL, NULL, NULL, "!$e", 1, 1, 0, 1, 2, 17 },
+  /* 52 time_range */ { "sp_TimeRange *", "NULL", "NULL", NULL, NULL, NULL, "sp_box_nullable_obj((void *)($e), SP_BUILTIN_TIME_RANGE)", "SP_BUILTIN_TIME_RANGE", NULL, "(sp_TimeRange *)($e).v.p", "(sp_TimeRange *)($e).v.p", NULL, NULL, NULL, "!$e", 1, 1, 0, 1, 2, 11 },

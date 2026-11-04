@@ -800,6 +800,7 @@ void *sp_pl_realloc(void *p, size_t newn);   /* lib/sp_slab.c: a slab block know
                                            generator in an Array or a poly slot
                                            keeps its identity; it read as nil */
 /* SP_BUILTIN_ARGF (-51) is in sp_gc.h: the collector must not trace it */
+#define SP_BUILTIN_TIME_RANGE    (-52)  /* a Range of Times (sp_TimeRange *) */
 #define SP_BUILTIN_YIELDER       (-49)  /* Enumerator::Yielder: the generator's
                                           block parameter as a VALUE, for a
                                           proc inside the body that captures
@@ -1332,6 +1333,26 @@ sp_RbVal sp_box_complex(sp_Complex v);
 sp_RbVal sp_box_rational(sp_Rational v);
 sp_RbVal sp_box_timev(sp_Time v);
 sp_RbVal sp_box_time(sp_Time *p);   /* a Time is boxed as itself */
+/* A Range of Times: a heap object holding its two Times, either NULL for an
+   open end. It is never iterated (CRuby's TypeError); its readers and its
+   membership tests compare the endpoints. */
+typedef struct { sp_Time *first; sp_Time *last; sp_int excl; } sp_TimeRange;
+sp_TimeRange *sp_trange_new(sp_Time *first, sp_Time *last, sp_int excl);
+sp_RbVal sp_box_trange(sp_TimeRange *r);
+sp_RbVal sp_trange_begin_v(const sp_TimeRange *r);
+sp_RbVal sp_trange_end_v(const sp_TimeRange *r);
+sp_RbVal sp_trange_min_v(const sp_TimeRange *r);
+sp_RbVal sp_trange_max_v(const sp_TimeRange *r);
+sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t);
+sp_bool sp_trange_cover_poly(const sp_TimeRange *r, sp_RbVal v);
+sp_bool sp_trange_cover_range(const sp_TimeRange *r, const sp_TimeRange *o);
+sp_bool sp_trange_eq(const sp_TimeRange *a, const sp_TimeRange *b);
+sp_int sp_trange_hash(const sp_TimeRange *r);
+const char *sp_trange_to_s(const sp_TimeRange *r);
+const char *sp_trange_inspect(const sp_TimeRange *r);
+void sp_trange_iterate_raise(void);
+/* a boxed Range of Times asked one of its methods by name (the poly dispatch) */
+sp_RbVal sp_trange_send(sp_TimeRange *r, const char *name, int argc, sp_RbVal a0);
 sp_RbVal sp_box_tms(sp_Tms v);
 struct sp_ProcessStatus_s;   /* forward decl for the box helper */
 sp_RbVal sp_box_process_status(struct sp_ProcessStatus_s *v);

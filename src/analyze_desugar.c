@@ -16084,7 +16084,7 @@ static int ty_lacks_enumerable(TyKind t) {
   case TY_MATCHDATA: case TY_REGEX: case TY_EXCEPTION: case TY_PROC: case TY_CURRY:
   case TY_METHOD: case TY_FIBER: case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR:
   case TY_RANDOM: case TY_ADDRINFO: case TY_SOCKOPT: case TY_PROCESS_STATUS:
-  case TY_OPENSTRUCT:
+  case TY_OPENSTRUCT: case TY_TIME_RANGE:
     return 1;
   default:
     return 0;
@@ -16211,7 +16211,7 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
            c->classes[ty_object_class(rt)].is_struct)
     return enum_struct_owns(nm);
   else if (ty_is_hash(rt)) cls = "Hash";
-  else if (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE) cls = "Range";
+  else if (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE) cls = "Range";
   else if (rt == TY_ENUMERATOR) cls = "Enumerator";
   return enum_class_owns(cls, nm, nt_ref(nt, id, "block") >= 0);
 }

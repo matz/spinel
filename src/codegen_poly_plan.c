@@ -3404,6 +3404,15 @@ void emit_poly_str_aset_writeback(Compiler *c, int recv, const PolySpecialsN *ps
    switch: a Range's cover?, a class's try_convert, an Integer's gcdlcm and
    bit reference, a String's unpack1, include?, delete, partition, count
    and squeeze, encode, split and index, a Hash's store. */
+/* The methods sp_trange_send answers for a boxed Range of Times */
+int trange_poly_name(const char *name, int argc) {
+  static const char *const z[] = { "begin", "first", "end", "last", "min", "max", "exclude_end?", "to_s",
+                                   "inspect", "hash", "frozen?", "to_a", "entries", "size", "count", "sum", NULL };
+  static const char *const o[] = { "cover?", "include?", "member?", "===", "==", "eql?", NULL };
+  const char *const *l = argc == 0 ? z : argc == 1 ? o : NULL;
+  for (; l && *l; l++) if (sp_streq(name, *l)) return 1;
+  return 0;
+}
 void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T, Buf *b) {
   const NodeTable *nt = c->nt;
   int argc = T->argc, pos_argc = T->pos_argc, kwall = T->kwall, kwn = T->kwn;
@@ -3422,6 +3431,19 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   int is_include = ps->include, is_strdel = ps->strdel, is_strpart = ps->strpart;
   int is_strsetop_n = ps->strsetop_n, is_pstore = ps->pstore, is_strencode = ps->strencode;
   int is_strsplit = ps->strsplit, is_index = ps->index;
+  /* a boxed Range of Times answers its methods through sp_trange_send */
+  if (trange_poly_name(name, pos_argc) && kwn == 0 && pos_argc == argc && (ret == TY_POLY || is_scalar_ret(ret))) {
+    Buf call; memset(&call, 0, sizeof call);
+    buf_printf(&call, "sp_trange_send((sp_TimeRange *)_t%d.v.p, \"%s\", %d, ", tv, name, pos_argc);
+    if (pos_argc == 0) buf_puts(&call, "sp_box_nil()");
+    else if (atmp_ty[0] == TY_POLY) buf_printf(&call, "_t%d", atmp[0]);
+    else { char an[24]; snprintf(an, sizeof an, "_t%d", atmp[0]); emit_boxed_text(c, atmp_ty[0], an, &call); }
+    buf_puts(&call, ")");
+    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME_RANGE && _t%d.v.p) { _t%d = ", tv, tv, tv, tr);
+    if (ret == TY_POLY) buf_puts(b, call.p); else emit_unbox_text(c, ret, call.p, b);
+    buf_puts(b, "; }\nelse ");
+    free(call.p);
+  }
   /* Range#cover? on a runtime Range receiver (#3234) */
   if (is_cover) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_COVER, -1, TY_UNKNOWN, PC_SAME);

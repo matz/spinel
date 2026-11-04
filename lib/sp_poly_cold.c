@@ -414,6 +414,7 @@ const char *sp_poly_to_s(sp_RbVal v)
            renders it: a boxed one fell through to "" (`puts [f, d]`) */
         case SP_BUILTIN_IO: return sp_io_to_s((sp_File *)v.v.p);
         case SP_BUILTIN_DIR: return sp_Dir_to_s((sp_Dir *)v.v.p);
+        case SP_BUILTIN_TIME_RANGE: return sp_trange_to_s((sp_TimeRange *)v.v.p);
         case SP_BUILTIN_FIBER: return sp_Fiber_inspect((sp_Fiber *)v.v.p);
         case SP_BUILTIN_THREAD: return sp_Thread_inspect((sp_thread *)v.v.p);
         /* OpenStruct#to_s is its inspect, as sp_poly_inspect renders it */
@@ -519,6 +520,7 @@ const char *sp_poly_class_name(sp_RbVal v)
         case SP_BUILTIN_FIBER: return SPL("Fiber");
         case SP_BUILTIN_THREAD: return SPL("Thread");
         case SP_BUILTIN_DIR: return SPL("Dir");
+        case SP_BUILTIN_TIME_RANGE: return SPL("Range");
         case SP_BUILTIN_TMS: return SPL("Process::Tms");
         case SP_BUILTIN_OPENSTRUCT: return SPL("OpenStruct");
         /* These two had no arm of their own. They went unnoticed because their
@@ -707,6 +709,7 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_POLY_POLY_HASH: return sp_PolyPolyHash_inspect((sp_PolyPolyHash *)v.v.p);
         case SP_BUILTIN_OPENSTRUCT: return sp_OpenStruct_inspect((struct sp_OpenStruct_s *)v.v.p);
         case SP_BUILTIN_ENUMERATOR: return sp_enum_inspect_boxed(v);
+        case SP_BUILTIN_TIME_RANGE: return sp_trange_inspect((sp_TimeRange *)v.v.p);
         /* #<Dir:PATH>, as the typed Dir's inspect renders it (#3250) */
         case SP_BUILTIN_DIR: {
           const char *_dp = v.v.p ? ((sp_Dir *)v.v.p)->path : NULL;

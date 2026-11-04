@@ -2383,7 +2383,7 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
   const char *cn = rt == TY_NIL ? "NilClass" : rt == TY_BOOL ? "TrueClass"
                  : rt == TY_INT || rt == TY_BIGINT ? "Integer" : rt == TY_FLOAT ? "Float"
                  : rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol"
-                 : rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE ? "Range"
+                 : rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE ? "Range"
                  : rt == TY_REGEX ? "Regexp" : rt == TY_RATIONAL ? "Rational"
                  : rt == TY_PROC ? "Proc" : rt == TY_TIME ? "Time"
                  : ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
@@ -9015,6 +9015,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (!name) return TY_UNKNOWN;
   /* a boxed value's enum_for no generator serves (desugar_to_enum) */
   if (sp_streq(name, "__poly_enum_for")) return TY_ENUMERATOR;
+  /* a Range of Times answers from its rows, ahead of the Range rules below */
+  if (recv >= 0 && infer_type(c, recv) == TY_TIME_RANGE) {
+    const BuiltinOp *op = an_bop_find_arg(c, id, TY_TIME_RANGE, name, argc, argv, nt_ref(nt, id, "block") >= 0);
+    if (op && op->result != TY_UNKNOWN) return op->result;
+  }
   { TyKind ar; if (infer_arysub_call(c, id, &ar)) return ar; }   /* Array's, on an Array subclass (#7449) */
 
   /* Array#to_a and #to_ary answer the receiver itself, and a boxed typed
@@ -11226,6 +11231,10 @@ TyKind infer_uncached(Compiler *c, int id) {
     int lo = nt_ref(nt, id, "left"), hi = nt_ref(nt, id, "right");
     TyKind lt = lo >= 0 ? infer_type(c, lo) : TY_UNKNOWN;
     TyKind ht = hi >= 0 ? infer_type(c, hi) : TY_UNKNOWN;
+    /* (t1..t2), (t..), (..t): a Range of Times, its ends the Times themselves */
+    if ((lt == TY_TIME || ht == TY_TIME) &&
+        (lo < 0 || lt == TY_TIME || lt == TY_NIL) && (hi < 0 || ht == TY_TIME || ht == TY_NIL))
+      return TY_TIME_RANGE;
     /* (1.0..3.0): a BOUNDED range with both endpoints float lowers to the
        distinct sp_FloatRange type. A finite mixed int/float range (1..3.0)
        stays on the ordinary int TY_RANGE path, which serves it well (its

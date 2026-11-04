@@ -16448,15 +16448,20 @@ static SP_INLINE void *sp_errinfo(void) {
   void *h = sp_cur_handled();
   return h && strcmp(((sp_Exception *)h)->cls_name, "FiberKillSignal") == 0 ? NULL : h;
 }
+extern void *sp_at_exit_errinfo;        /* lib/sp_exc.c */
 /* Push a handled exception. sp_rescue_sp grows with recursion *through* rescue
    bodies (the handler stays pushed across the recursive call it makes, unlike a
    begin frame which is popped first), so a fixed SP_EXC_STACK_MAX can be reached;
-   fail loudly rather than write past sp_exc_handling. */
+   fail loudly rather than write past sp_exc_handling.
+   An exception an at_exit hook handles takes the place of the one ending the
+   program: `$!` is nil once that rescue is done, until the next hook, as in
+   CRuby, whose rescue clears the errinfo a hook started with. */
 static void sp_rescue_push(void *e) {
   if (sp_rescue_sp >= SP_EXC_STACK_MAX) {
     fprintf(stderr, "rescue nesting too deep (> %d)\n", SP_EXC_STACK_MAX);
     exit(1);
   }
+  if (sp_rescue_sp == 1 && sp_exc_handling[0] == sp_at_exit_errinfo) sp_exc_handling[0] = NULL;
   sp_exc_handling[sp_rescue_sp++] = e;
 }
 #if defined(SP_CEXT) && !defined(SPINEL_EXT_HOST)
@@ -16566,6 +16571,8 @@ struct sp_Exception_s;
    sp_ tokens, comments included, so a comment must not spell one either. */
 static int sp_at_exit_run(int status);
 extern int (*sp_at_exit_run_fn)(int);   /* lib/sp_exc.c: the raise's way to the hooks */
+extern int sp_at_exit_armed;            /* lib/sp_exc.c */
+void *sp_exc_ending_obj(const char *cls, const char *msg, void *obj, void *cause);   /* lib/sp_exc.c */
 void sp_fin_run_exit(void);   /* lib/sp_gc.c: finalizers still registered at exit */
 /* Print an uncaught exception in CRuby's tail format. Factored out because two
    places print it now: the end of sp_raise_cls, and a hook whose own exception
@@ -16906,6 +16913,7 @@ static void sp_mark_in_flight_exceptions(void) {
   if (sp_inflight_cause) sp_gc_mark(sp_inflight_cause);
   for (int i = 0; i < sp_rescue_sp; i++)
     if (sp_exc_handling[i]) sp_gc_mark(sp_exc_handling[i]);  /* handled exceptions */
+  if (sp_at_exit_errinfo) sp_gc_mark(sp_at_exit_errinfo);
 }
 
 /* sp_Exception: first-class exception object. cls_name is a pointer
@@ -16925,10 +16933,11 @@ void (*sp_user_exc_ivinit_fn)(void *) = NULL;
 void (*sp_exc_bivar_copy_fn)(void *, void *) = NULL;
 #endif
 /* Kernel#exit: raises a rescuable SystemExit carrying the status; with no
-   handler in scope it terminates directly (#2761). exit! stays direct. */
+   handler in scope and no at_exit hook to read it as `$!`, it terminates
+   directly (#2761). exit! stays direct. */
 static void sp_raise_exc(volatile sp_Exception *ve);   /* defined below */
 SP_NORETURN SP_COLD static void sp_exit_raise(int status) {
-  if (sp_exc_top > 0) {
+  if (sp_exc_top > 0 || sp_at_exit_armed) {
     sp_Exception *e = sp_exc_new("SystemExit", "exit");
     SP_GC_ROOT(e);
     e->result = sp_box_int((sp_int)status);
@@ -16940,7 +16949,7 @@ SP_NORETURN SP_COLD static void sp_exit_raise(int status) {
    SystemExit with status 1 carrying that message (#3077). */
 SP_NORETURN SP_COLD static void sp_abort_raise(const char *msg) {
   if (msg) { fputs(msg, stderr); fputc('\n', stderr); }
-  if (sp_exc_top > 0) {
+  if (sp_exc_top > 0 || sp_at_exit_armed) {
     sp_Exception *e = sp_exc_new("SystemExit", msg ? msg : "exit");
     SP_GC_ROOT(e);
     e->result = sp_box_int((sp_int)1);
@@ -18155,6 +18164,7 @@ static inline struct sp_Proc *sp_at_exit_push(struct sp_Proc *p) {
   SP_AT_EXIT_LOCK();
   sp_at_exit_hooks[sp_at_exit_count++] = p;
   SP_AT_EXIT_UNLOCK();
+  sp_at_exit_armed = 1;
   return p;
 }
 static void sp_mark_at_exit_hooks(void) {
@@ -20577,7 +20587,12 @@ static inline sp_int sp_proc_yield(sp_Proc *p, sp_int argc, sp_int *args) {
    registers another one during the drain gets it run (CRuby does too), and no
    hook can run twice. The popped hook is rooted for the duration of its call:
    the table is the collector's only handle on it, and the pop takes that handle
-   away. */
+   away.
+
+   Each hook reads `$!` as the exception ending the program, or as the last
+   hook's that raised or exited, and nil when there is none: it starts with
+   that one as the only exception being handled, so a raise in it takes that
+   one as its cause too, as in CRuby. */
 static int sp_at_exit_run(int status) {
   /* The hooks run at top level. A raise that reached here unhandled, or an exit
      from inside a walk, abandoned whatever walk it was inside; drop the frames
@@ -20594,6 +20609,13 @@ static int sp_at_exit_run(int status) {
   volatile int st = status;
   sp_int args[16] = {0};   /* sp_proc_call's fixed slot convention */
   for (;;) {
+    /* an END block runs later, from the C exit handlers, and reads it here too */
+    sp_rescue_sp = 0;
+    if (sp_at_exit_errinfo) {
+      sp_Exception *xe = (sp_Exception *)sp_at_exit_errinfo;
+      sp_rescue_push(xe);
+      if (!xe->backtrace) { sp_StrArray *xbt = sp_backtrace_captured(); sp_gc_wb((void *)xe); xe->backtrace = xbt; }
+    }
     SP_AT_EXIT_LOCK();
     sp_int n = sp_at_exit_count;
     sp_Proc *h = n > 0 ? sp_at_exit_hooks[--sp_at_exit_count] : NULL;
@@ -20635,6 +20657,9 @@ static int sp_at_exit_run(int status) {
         sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", emsg, eobj ? ((sp_Exception *)eobj)->backtrace : NULL);
         st = 1;
       }
+      /* the hooks after this one read it as `$!` */
+      sp_at_exit_errinfo = sp_exc_ending_obj(ecls ? ecls : "RuntimeError", emsg, eobj, sp_pending_cause);
+      sp_pending_cause = NULL;
     }
   }
   /* then the finalizers still registered, as CRuby's ruby_finalize runs them:

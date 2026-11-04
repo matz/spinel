@@ -1604,6 +1604,20 @@ void sp_exc_resignal(const char *cls, const char *msg);   /* lib/sp_cold.c */
 int (*sp_at_exit_run_fn)(int) = NULL;
 /* the program's at_exit drain, which answers the status to exit with */
 static int sp_exc_at_exit(int status) { return sp_at_exit_run_fn ? sp_at_exit_run_fn(status) : status; }
+/* Set once a hook is registered: a raise nothing takes then ends the program
+   with an exception its hooks can read. A program without hooks reaches its
+   end allocating nothing for it. */
+int sp_at_exit_armed = 0;
+/* What the hooks read as `$!`: the exception ending the program, and after a
+   hook that raises or exits, that hook's. */
+void *sp_at_exit_errinfo = NULL;
+/* A raise nothing takes as a rescue arm would have it: the object it carries,
+   or one made for it, with the cause it was raised with. */
+void *sp_exc_ending_obj(const char *cls, const char *msg, void *obj, void *cause) {
+  sp_Exception *e = obj ? (sp_Exception *)obj : sp_exc_new_for_catch(cls, msg);
+  if (!e->cause) { sp_gc_wb((void *)e); e->cause = (sp_Exception *)cause; }
+  return e;
+}
 /* Drop the catch entries, break scopes and proc-return homes a raise unwinds
    past. sp_raise_cls calls this just before it longjmps to sp_exc_stack
    [sp_exc_top-1]; that handler is the frame the exception lands in, and every
@@ -1766,6 +1780,19 @@ static SP_INLINE void *sp_exc_implicit_cause(void *c, void *obj) {
 #else
 # define SP_EXC_UNWINDS 1
 #endif
+/* The cause a raise leaves for what takes it. The implicit cause is the
+   exception being handled, unless that is the very object raised: re-raised
+   from its own rescue (a bare `raise`, `raise e`, or through an ensure), it
+   keeps the cause it had instead of becoming its own -- the pending cause is
+   that cause, so a rescue that stores the pending cause outright (a modifier
+   rescue) keeps it too. */
+static void *sp_exc_raise_cause(int cont, void *raised) {
+  if (cont && raised) return ((sp_Exception *)raised)->cause;
+  if (sp_explicit_cause_set) return sp_explicit_cause;
+  void *h = sp_cur_handled();
+  if (h) return h == raised ? (void *)((sp_Exception *)raised)->cause : sp_exc_implicit_cause(h, raised);
+  return sp_exc_implicit_cause(sp_inflight_cause, raised);
+}
 SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* a raise leaves any region a signal may be raised in at once (#9222):
      what follows allocates */
@@ -1814,7 +1841,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      offending name as the first quoted token ("undefined method 'foo' for
      ..."); materialize the carried object with #name set so a rescue binding
      reads it (#2758). Keyed on the exact runtime message shapes. */
-  if (!sp_pending_exc_obj && msg && cls && sp_exc_top > 0 &&
+  if (!sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
       (strcmp(cls, "NoMethodError") == 0 || strcmp(cls, "NameError") == 0) &&
       (strncmp(msg, "undefined method '", 18) == 0 ||
        strncmp(msg, "undefined local variable or method '", 36) == 0 ||   /* 36 = prefix len; 37 compared the NUL too (#3121) */
@@ -1824,7 +1851,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
        strncmp(msg, "uninitialized constant ", 23) == 0))   /* const_get / bad const (#3034) */
     sp_pending_exc_obj = sp_exc_recover_named(cls, msg);
   /* the introspection staging (receiver/key/value) rides the carried object */
-  if (sp_pending_exc_flags && msg && cls && sp_exc_top > 0)
+  if (sp_pending_exc_flags && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed))
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);
   sp_pending_exc_flags = 0;
   /* An explicit `cause:` replaces the cause the raised object already
@@ -1833,7 +1860,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      takes the cause, as in CRuby. A cause whose chain leads back to the
      object would close a cycle: CRuby raises ArgumentError instead. The
      object named as its own cause leaves its cause as it is. */
-  if (sp_exc_top > 0 && sp_explicit_cause_set && sp_explicit_cause && sp_pending_exc_obj) {
+  if ((sp_exc_top > 0 || sp_at_exit_armed) && sp_explicit_cause_set && sp_explicit_cause && sp_pending_exc_obj) {
     if (sp_explicit_cause == sp_pending_exc_obj) {
       sp_explicit_cause = ((sp_Exception *)sp_pending_exc_obj)->cause;
     }
@@ -1858,12 +1885,12 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      live (a --debug build). Without it there is no location to print, and an
      uncaught raise in a multi-file program said only what went wrong, never
      where (#3974). Frames are method-granularity, so there is no `:line:`. */
-  /* The implicit cause is the exception being handled, unless that is the
-     very object raised: re-raised from its own rescue (a bare `raise`,
-     `raise e`, or through an ensure), it keeps the cause it had instead of
-     becoming its own -- the pending cause is that cause, so a rescue that
-     stores the pending cause outright (a modifier rescue) keeps it too. */
-  if (SP_EXC_UNWINDS && sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; sp_exc_cls[sp_exc_top-1] = cls; void *raised = sp_pending_exc_obj; sp_exc_obj[sp_exc_top-1] = raised; sp_pending_exc_obj = NULL; sp_pending_cause = cont && raised ? (void *)((sp_Exception *)raised)->cause : sp_explicit_cause_set ? sp_explicit_cause : sp_cur_handled() ? (sp_cur_handled() == raised ? (void *)((sp_Exception *)raised)->cause : sp_exc_implicit_cause(sp_cur_handled(), raised)) : sp_exc_implicit_cause(sp_inflight_cause, raised); sp_inflight_cause = NULL; sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; sp_handler_stacks_unwind(); sp_poly_recur_unwind(); longjmp(sp_exc_stack[sp_exc_top-1], 1); }
+  if (SP_EXC_UNWINDS && sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; sp_exc_cls[sp_exc_top-1] = cls; void *raised = sp_pending_exc_obj; sp_exc_obj[sp_exc_top-1] = raised; sp_pending_exc_obj = NULL; sp_pending_cause = sp_exc_raise_cause(cont, raised); sp_inflight_cause = NULL; sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; sp_handler_stacks_unwind(); sp_poly_recur_unwind(); longjmp(sp_exc_stack[sp_exc_top-1], 1); }
+  /* Nothing takes it, so it ends the program, and the at_exit hooks read it as `$!` */
+  if (sp_at_exit_armed && strcmp(cls, "FiberKillSignal") != 0) {
+    sp_pending_cause = sp_exc_raise_cause(cont, sp_pending_exc_obj);   /* the marker's, across the allocation */
+    sp_at_exit_errinfo = sp_exc_ending_obj(cls, msg, sp_pending_exc_obj, sp_pending_cause);
+  }
   /* Uncaught SystemExit terminates silently with its status (Kernel#exit).
      Read the status BEFORE the hooks run: it lives in the pending exception
      object, which nothing roots once the hooks start allocating. */

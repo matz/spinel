@@ -18409,6 +18409,7 @@ static int sp_srange_empty_region(sp_srange_end_t b, sp_srange_end_t e, int excl
   return excl ? c >= 0 : c > 0;
 }
 static SP_UNUSED sp_bool sp_srange_overlap_v(sp_StrRange a, sp_RbVal o) {
+  if (o.tag == SP_TAG_OBJ && (o.cls_id == SP_BUILTIN_TIME_RANGE || o.cls_id == SP_BUILTIN_OBJ_RANGE)) return FALSE;   /* its ends do not compare with Strings */
   a = sp_srange_live(a);
   sp_srange_end_t ab = { !a.first, a.first, 0, {0} }, ae = { !a.last, a.last, 0, {0} };
   sp_srange_end_t ob, oe; int ox = 0;
@@ -18507,6 +18508,9 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
   return sp_box_nil();
 }
 static sp_bool sp_range_overlap_v(sp_RbVal a, sp_RbVal o) {
+  /* a Range of Times overlaps no Range of other ends, whichever side holds it: they do not compare */
+  if (o.tag == SP_TAG_OBJ && o.cls_id == SP_BUILTIN_TIME_RANGE && a.tag == SP_TAG_OBJ &&
+      (a.cls_id == SP_BUILTIN_RANGE || a.cls_id == SP_BUILTIN_FLOAT_RANGE || a.cls_id == SP_BUILTIN_STR_RANGE)) return FALSE;
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_STR_RANGE && a.v.p) return sp_srange_overlap_v(SP_SRANGE_OF(a.v.p), o);
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_TIME_RANGE && a.v.p) return sp_trange_overlap_poly((sp_TimeRange *)a.v.p, o);
   /* a Range of Times overlaps no Range of other ends: they do not compare */

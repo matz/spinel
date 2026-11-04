@@ -5576,14 +5576,29 @@ sp_bool sp_trange_step_more(const sp_TimeRange *r, const sp_Time *t) {
   int c = sp_time_cmp(t, r->last);
   return r->excl ? c < 0 : c <= 0;
 }
+/* Whether the walk is still inside: up to the end for a positive step, down
+   to it for a negative one (a descending Range), as CRuby walks both */
+sp_bool sp_trange_step_on(const sp_TimeRange *r, const sp_Time *t, double secs) {
+  if (!t || secs == 0 || secs != secs) return 0;
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  if (secs > 0) return r->excl ? c < 0 : c <= 0;
+  return r->excl ? c > 0 : c >= 0;
+}
+/* The next Time, or NULL when it does not move: a step below a nanosecond
+   lands on the same sp_Time, which CRuby's Rational subseconds would not */
+sp_Time *sp_trange_step_next(const sp_Time *t, double secs) {
+  sp_Time *n = sp_time_add_f(t, secs);
+  return sp_time_cmp(n, t) == 0 ? NULL : n;
+}
 sp_PolyArray *sp_trange_step_ary(const sp_TimeRange *r, double secs) {
   SP_GC_ROOT(r);
   sp_trange_step_check(r);
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
-  if (!(secs > 0)) return a;
+  if (secs == 0 || secs != secs) return a;
   if (!r->last) sp_raise_cls("NotImplementedError", "Range#step without a block over an endless Range of Times");
   sp_Time *t = r->first; SP_GC_ROOT(t);
-  while (sp_trange_step_more(r, t)) { sp_PolyArray_push(a, sp_box_time(t)); t = sp_time_add_f(t, secs); }
+  while (sp_trange_step_on(r, t, secs)) { sp_PolyArray_push(a, sp_box_time(t)); t = sp_trange_step_next(t, secs); }
   return a;
 }
 /* Range#min without iterating: the begin, nil for an empty Range */

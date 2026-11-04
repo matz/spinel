@@ -8222,8 +8222,8 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     buf_printf(b, "sp_Time *_t%d = _t%d->first; SP_GC_ROOT(_t%d);\n", tv, tr, tv);
     emit_indent(b, indent);
-    buf_printf(b, "for (; _t%d > 0 && sp_trange_step_more(_t%d, _t%d); _t%d = sp_time_add_f(_t%d, _t%d)) {\n",
-               ts, tr, tv, tv, tv, ts);
+    buf_printf(b, "for (; sp_trange_step_on(_t%d, _t%d, _t%d); _t%d = sp_trange_step_next(_t%d, _t%d)) {\n",
+               tr, tv, ts, tv, tv, ts);
     if (p0) {
       char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
       emit_iter_param_assign(c, block, p0_orig, p0, TY_TIME, elem, b, indent + 1);

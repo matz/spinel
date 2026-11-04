@@ -24,3 +24,10 @@ p (tt[2]..tt[2]).overlap?(tt[2]...tt[2]), (tt[2]..tt[4]).overlap?(tt[2]..tt[4])
 h = { r: tt[1]..tt[5] }
 p h[:r].overlap?(tt[3]..tt[4])
 p (tt[1]..tt[5]).overlap?(1..2)
+# A negative step walks a descending Range down, and a Range of Times
+# overlaps no Range of other ends.
+dn = Time.utc(2026, 1, 1, 2)
+up = Time.utc(2026, 1, 1)
+p (dn..up).step(-3600).map(&:hour), (dn...up).step(-3600).map(&:hour)
+(dn..up).step(-3600) { |t| puts t.hour }
+p ("a".."b").overlap?(up..dn), (1..2).overlap?(up..dn)

@@ -40,6 +40,71 @@ module FileUtils
     mode.is_a?(Integer) ? sprintf("%o", mode) : mode.to_s
   end
 
+  # A String mode is chmod(1)'s symbolic form, which reads the file's mode, so
+  # each path gets its own number.
+  def fu_mode(mode, path)
+    mode.is_a?(String) ? fu_symbolic_mode(mode, path) : mode
+  end
+
+  def fu_symbolic_mode(mode, path)
+    st = File.stat(path)
+    current = st.mode & 0o7777
+    mode.split(",").each do |clause|
+      # "u+x-w" is ["u", "+", "x", "-", "w"], the who and then op, perm pairs
+      parts = clause.split(/([=+-])/)
+      raise ArgumentError, "invalid file mode: #{mode}" if parts.length < 2
+      who = fu_who_mask(parts[0].empty? ? "a" : parts[0])
+      (1...parts.length).step(2) do |i|
+        op = parts[i]
+        apply = op == "="
+        bits = 0
+        perm = i + 1 < parts.length ? parts[i + 1] : ""
+        perm.each_char do |chr|
+          case chr
+          when "r" then bits |= 0o444
+          when "w" then bits |= 0o222
+          when "x" then bits |= 0o111
+          when "X" then bits |= 0o111 if st.directory?
+          when "s" then bits |= 0o6000
+          when "t" then bits |= 0o1000
+          when "u", "g", "o"
+            # `g=u`: the bits another class has now, moved to this one's place
+            current = fu_apply_mask(current, who, op, bits) if bits != 0
+            apply = false
+            from = fu_who_mask(chr)
+            bits = (current & from) / (from & 0o111) * (who & 0o111)
+          else
+            raise ArgumentError, "invalid 'perm' symbol in file mode: #{chr}"
+          end
+        end
+        current = fu_apply_mask(current, who, op, bits) if bits != 0 || apply
+      end
+    end
+    current
+  end
+
+  def fu_who_mask(target)
+    mask = 0
+    target.each_char do |chr|
+      case chr
+      when "u" then mask |= 0o4700
+      when "g" then mask |= 0o2070
+      when "o" then mask |= 0o1007
+      when "a" then mask |= 0o7777
+      else raise ArgumentError, "invalid 'who' symbol in file mode: #{chr}"
+      end
+    end
+    mask
+  end
+
+  def fu_apply_mask(mode, who, op, bits)
+    case op
+    when "=" then (mode & ~who) | (who & bits)
+    when "+" then mode | (who & bits)
+    else mode & ~(who & bits)
+    end
+  end
+
   # mkdir_p makes every missing component, and is NOT an error when the
   # directory is already there -- that is the whole difference from Dir.mkdir
   # and the reason nearly every caller wants this one.
@@ -260,7 +325,7 @@ module FileUtils
 
   # install copies each source unless the destination already holds the same
   # contents, making the destination's directory first, then gives the copy
-  # mode (an Integer, as chmod takes here) and, with preserve, the source's
+  # mode (read against the source, for a symbolic one) and, with preserve, the source's
   # times. A list of sources, or a destination that is a directory, takes
   # each source's basename inside it. There is no owner: or group:, which
   # would be chown.
@@ -286,7 +351,7 @@ module FileUtils
         copy_file(s, d)
       end
       File.utime(st.atime, st.mtime, d) if preserve
-      File.chmod(mode, d) if mode
+      File.chmod(fu_mode(mode, s), d) if mode
     end
     nil
   end
@@ -342,7 +407,7 @@ module FileUtils
   def chmod(mode, list, verbose: nil, noop: nil)
     fu_output_message("chmod #{fu_mode_to_s(mode)} #{fu_list(list).join(' ')}") if verbose
     return fu_list(list) if noop
-    fu_list(list).each { |path| File.chmod(mode, path) }
+    fu_list(list).each { |path| File.chmod(fu_mode(mode, path), path) }
     fu_list(list)
   end
 
@@ -354,7 +419,7 @@ module FileUtils
   end
 
   def fu_chmod_tree(mode, path)
-    File.chmod(mode, path)
+    File.chmod(fu_mode(mode, path), path)
     return nil unless File.directory?(path) && !File.symlink?(path)
     Dir.entries(path).each do |e|
       next if e == "." || e == ".."

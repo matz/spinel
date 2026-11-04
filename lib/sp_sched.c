@@ -5116,15 +5116,13 @@ static void sp_sched_timer_expire(const sp_tm_ent *timer, double now) {
 #endif
 
 /* Queue a raise on the root fiber main runs on and wake a main parked in a
-   wait; the scheduler lock is held, so no other raise lands between the read
-   and the write. The slot holds one, and an exit keeps it: a raise taking its
-   place could be rescued, and main would go on as if nothing had ended it. */
+   wait; the scheduler lock is held. The slot holds one, and an exit keeps it:
+   a raise taking its place could be rescued, and main would go on as if nothing
+   had ended it. */
 static void sp_thread_raise_main_locked(const char *cls, const char *msg, void *obj) {
   sp_thread *t = &g_main_thread;
   if (!g_main_root) return;
-  const char *held = sp_fiber_inject_cls(g_main_root);
-  if (!held || !sp_exc_cls_matches(held, "SystemExit"))
-    sp_fiber_set_raise_inject(g_main_root, cls, msg, obj);
+  sp_fiber_set_raise_inject_behind_exit(g_main_root, cls, msg, obj);
   if (SP_TH_STATE(t) == SP_TH_BLOCKED) {
     sp_sched_unpark(t);
     SP_TH_SET_STATE(t, SP_TH_RUNNABLE);

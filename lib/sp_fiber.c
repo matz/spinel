@@ -206,6 +206,7 @@ const char *sp_exc_cur_cls(void);
 const char *sp_exc_cur_msg(void);
 void *sp_exc_cur_obj(void);
 void sp_fiber_reraise(const char *cls, const char *msg, void *obj);
+int sp_exc_cls_matches(const char *raised, const char *target);   /* lib/sp_exc.c */
 
 static inline sp_RbVal sp_box_nil(void) { sp_RbVal r; r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.i = 0; return r; }
 static void sp_raise(const char *msg) {SP_GC_ROOT_STR(msg); sp_raise_cls("RuntimeError", msg); }
@@ -887,8 +888,14 @@ static void sp_fiber_consume_inject(sp_Fiber*f){SP_GC_ROOT(f);int kind=sp_fiber_
    the thread's next suspension point (sp_sched_block / sleep / Thread.pass /
    yield) delivers it inside the body, where its rescue/ensure can see it. */
 void sp_fiber_set_raise_inject(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);sp_fiber_inject_publish(f,3,cls,msg,obj);}
-/* The class of the raise waiting in f's slot, NULL when none is. */
-const char*sp_fiber_inject_cls(sp_Fiber*f){int kind=sp_fiber_inject_lock(f);const char*cl=f->inj_cls;sp_fiber_inject_unlock(f,kind);return cl;}
+/* A raise, unless an exit waits in f's slot. Read under the slot's lock, which
+   the consumer takes too, so an exit it has just taken leaves room for this. */
+void sp_fiber_set_raise_inject_behind_exit(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);
+  int kind=sp_fiber_inject_lock(f);
+  if(f->inj_cls&&sp_exc_cls_matches(f->inj_cls,"SystemExit")){sp_fiber_inject_unlock(f,kind);return;}
+  f->inj_cls=cls;f->inj_msg=msg;f->inj_obj=obj;
+  sp_fiber_inject_unlock(f,3);
+}
 /* (#8702) The slot held across a step of the scheduler's own. A thread that
    parks under a lock other than the scheduler's checks for a pending inject
    and publishes itself BLOCKED with its slot held. sp_thread_deliver publishes

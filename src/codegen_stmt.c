@@ -16654,7 +16654,6 @@ static int masgn_target_writes(const NodeTable *nt, int t, int id) {
     if (sp_streq(ty, VARS[v][0])) return masgn_reads(nt, id, VARS[v][1], nm);
   return 0;
 }
-static int masgn_store_runs_user_code(Compiler *c, int tgt);
 static void emit_const_target_class_name(Compiler *c, int tgt, const char *nm, Buf *b, int indent);
 /* A part that answers the same whenever it runs: a read, a literal, or
    arithmetic over them -- unless a target assigned before its store writes
@@ -16667,7 +16666,7 @@ static int masgn_part_plain(Compiler *c, int mw, int id, const int *lefts, int b
     /* a store that runs user code (a writer, a `[]=`) can change an
        instance, global or class variable the part reads, and the part is
        read before any store */
-    if (masgn_store_runs_user_code(c, lefts[i]) && masgn_reads_state(c->nt, id)) return 0;
+    if ((cplan_target_store_effect(c, lefts[i]) & CPS_CODE) && masgn_reads_state(c->nt, id)) return 0;
   }
   return 1;
 }
@@ -16910,42 +16909,24 @@ static int masgn_nil_el(Compiler *c, int el) {
   TyKind t = repr_of(c, el).as_ty;
   return t == TY_NIL || t == TY_VOID;
 }
-/* The `[]=` of an object receiver type taking a key and a value: its method
-   scope, the class defining it and its key parameter's type; -1 when none. */
+/* The `[]=` of an object receiver type taking a key and a value (the
+   plan's, cplan_index_writer): its method scope, the class defining it and
+   its key parameter's type; -1 when none. */
 static int masgn_index_writer(Compiler *c, TyKind rt, int *cdef, TyKind *kt) {
-  int dc = -1;
-  int wmi = comp_method_in_chain(c, ty_object_class(rt), "[]=", &dc);
-  if (wmi < 0 || dc < 0 || c->scopes[wmi].nparams != 2) return -1;
-  if (cdef) *cdef = dc;
+  int wmi = cplan_index_writer(c, ty_object_class(rt), cdef);
+  if (wmi < 0) return -1;
   if (kt) {
     LocalVar *kp = scope_local(&c->scopes[wmi], c->scopes[wmi].pnames[0]);
     *kt = kp ? kp->type : TY_UNKNOWN;
   }
   return wmi;
 }
-/* Whether storing into the target calls a method of the program: an index
-   store on a receiver typed at run time or on an object with a user `[]=`;
-   an attribute store on a receiver typed at run time or on an object whose
-   writer is a user method (a plain attr_writer is one field store). */
-static int masgn_store_runs_user_code(Compiler *c, int tgt) {
-  int r, k;
-  masgn_target_parts(c->nt, tgt, &r, &k);
-  if (r < 0) return 0;
-  TyKind rt = comp_ntype(c, r);
-  if (nt_kind(c->nt, tgt) == NK_CallTargetNode) {
-    const char *nm = nt_str(c->nt, tgt, "name");
-    int dc = -1;
-    return rt == TY_POLY || rt == TY_UNKNOWN ||
-           (nm && ty_is_object(rt) && call_target(c, tgt, ty_object_class(rt), nm, 0, &dc) >= 0 && dc >= 0);
-  }
-  return k >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN ||
-                    (ty_is_object(rt) && masgn_index_writer(c, rt, NULL, NULL) >= 0));
-}
 /* Whether storing into the target can allocate or run user code, and so
-   collect: that, or an index store on the general hash, on a String-keyed
-   hash (which copies a mutable key, #6410) or on a Struct. */
+   collect: that (the plan's cplan_target_store_effect), or an index store
+   on the general hash, on a String-keyed hash (which copies a mutable key,
+   #6410) or on a Struct. */
 static int masgn_store_allocates(Compiler *c, int tgt) {
-  if (masgn_store_runs_user_code(c, tgt)) return 1;
+  if (cplan_target_store_effect(c, tgt) & CPS_CODE) return 1;
   int r, k;
   masgn_target_parts(c->nt, tgt, &r, &k);
   if (r < 0 || k < 0 || nt_kind(c->nt, tgt) == NK_CallTargetNode) return 0;

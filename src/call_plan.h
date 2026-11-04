@@ -194,6 +194,18 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
 /* The classes whose to_ary that call reaches on a boxed operand, where
    the record proves it: into out[0..cap), the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);
+/* The program's `[]=` an index store on an instance of class cls calls:
+   its method scope, with the class defining it in *cdef when cdef is
+   given; -1 when the chain has none that takes a key and a value. */
+int cplan_index_writer(Compiler *c, int cls, int *cdef);
+/* What storing into attribute or index target tgt (`o.x`, `a[i]` of a
+   multiple assignment) does besides the store: CPS_CODE when it may call
+   a method of the program -- a store on a receiver typed at run time, a
+   writer that is a method of the program (a plain attr_writer is one
+   field store), the program's `[]=` (cplan_index_writer). 0 for any
+   other target. */
+enum { CPS_CODE = 1u };
+unsigned cplan_target_store_effect(Compiler *c, int tgt);
 /* cplan_entries, for a reader that wants the code the call's emission
    names (reachability): the same answer, but for a call on a boxed receiver
    the methods of the arms its dispatch has, which the receiver's class

@@ -1136,6 +1136,35 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
   }
   return n;
 }
+
+/* See call_plan.h. */
+int cplan_index_writer(Compiler *c, int cls, int *cdef) {
+  int dc = -1;
+  int wmi = cls >= 0 ? comp_method_in_chain(c, cls, "[]=", &dc) : -1;
+  if (wmi < 0 || dc < 0 || c->scopes[wmi].nparams != 2) return -1;
+  if (cdef) *cdef = dc;
+  return wmi;
+}
+/* See call_plan.h. A target is the receiver and name of the call its
+   store makes; an index target with no key stores nothing the program
+   sees. */
+unsigned cplan_target_store_effect(Compiler *c, int tgt) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, tgt);
+  int r = k == NK_CallTargetNode || k == NK_IndexTargetNode ? nt_ref(nt, tgt, "receiver") : -1;
+  if (r < 0) return 0;
+  TyKind rt = comp_ntype(c, r);
+  int open = rt == TY_POLY || rt == TY_UNKNOWN, cls = ty_is_object(rt) ? ty_object_class(rt) : -1;
+  if (k == NK_CallTargetNode) {
+    const char *nm = nt_str(nt, tgt, "name");
+    int dc = -1;
+    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &dc) >= 0 && dc >= 0) ? CPS_CODE : 0;
+  }
+  int args = nt_ref(nt, tgt, "arguments"), n = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &n);
+  if (n < 1) return 0;
+  return open || cplan_index_writer(c, cls, NULL) >= 0 ? CPS_CODE : 0;
+}
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
 static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {

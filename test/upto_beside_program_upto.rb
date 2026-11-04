@@ -31,3 +31,9 @@ p boxed.upto(2**64 + 2).size, boxed.downto(2**64 - 2).size, boxed.upto(2**64 - 1
 p boxed.upto(2**64 + 1.5).to_a
 # A String's walk has no size of its own.
 p "a".upto("c").size
+# A Float limit counts in Floats, as CRuby counts it (a rounded receiver
+# included), and its count is the Integer it is, however far off.
+near = [2**64 + 1, "s"][ARGV.size]
+p near.upto((2**64).to_f).size, near.upto((2**64).to_f).to_a
+down = [2**64, "s"][ARGV.size]
+p down.downto(1.8446744073709552e19).size

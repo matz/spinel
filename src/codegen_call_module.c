@@ -1763,17 +1763,9 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         return 1;
       }
     }
-    /* Exception class-level: Cls.exception(msg) is Cls.new (#2740);
-       Exception.to_tty? reports whether stderr is a terminal (#2757). */
-    if (tcn && is_exc_name(tcn)) {
-      if (sp_streq(name, "exception")) {
-        if (emit_syserr_family_new(c, id, tcn, argc, argv, b)) return 1;
-        emit_exc_new_msg(c, tcn, argc >= 1 ? argv[0] : -1, b);
-        return 1;
-      }
-      if (sp_streq(name, "to_tty?") && argc == 0) {
-        buf_puts(b, "(isatty(2) != 0)"); return 1;
-      }
+    /* Exception.to_tty? reports whether stderr is a terminal (#2757). */
+    if (tcn && is_exc_name(tcn) && sp_streq(name, "to_tty?") && argc == 0) {
+      buf_puts(b, "(isatty(2) != 0)"); return 1;
     }
     /* Addrinfo.tcp(host, port) / .udp(host, port) / .ip(host) / .unix(path) */
     if (tcn && sp_streq(tcn, "Addrinfo") && sp_feature_required("socket")) {

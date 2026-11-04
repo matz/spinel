@@ -22,3 +22,9 @@ class G; include M; end
 p G.new.class.name
 k = Class.new
 p k.new.class.name
+
+# a builtin value's class answers its own name beside the program's methods
+begin; raise ArgumentError; rescue => e; p e.class.name, e.class.to_s; end
+p ("a".."b").class.name, (1.0..2.0).class.name, Random.new.class.name
+e2 = (ARGV.size > 5 ? RuntimeError.new : nil)
+p e2.class.name

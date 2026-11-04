@@ -22,3 +22,9 @@
 "NM"
 "G"
 nil
+"ArgumentError"
+"ArgumentError"
+"Range"
+"Range"
+"Random"
+"NilClass"

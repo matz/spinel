@@ -1,6 +1,6 @@
 # Compiled with --defer-refusals: an attr call whose splat the compiler
-# cannot read (a constant changed before it, directly or through the Array
-# its to_a answers, or a local) would declare nothing, so it is refused,
+# cannot read (a constant or a local changed before it, directly or through
+# the Array its to_a answers) would declare nothing, so it is refused,
 # and raises NotImplementedError where it stands in the class body, after
 # the statements ahead of it. Without the flag it is refused.
 # spinel: defer-refusals: 4:start body true true true after
@@ -27,6 +27,7 @@ end
 begin
   class E
     names = [:q]
+    names << :r
     attr_reader(*names)
   end
 rescue NotImplementedError => e

@@ -27275,6 +27275,7 @@ static int sce_array_elems(const NodeTable *nt, int v, const char ***out) {
    this body, ahead of it, and never changed after (sce_const_unmutated).
    One written anywhere else could be shadowed by a superclass's or an
    enclosing scope's on the way, so only the body's own is read. -1 if not. */
+static int lsp_write_value(const NodeTable *nt, int st, const char *name);
 static int sce_const_elems(const NodeTable *nt, SceConsts *x, int body, int before, const char *name, int excused,
                               const char ***out) {
   int w = -1;
@@ -27286,15 +27287,19 @@ static int sce_const_elems(const NodeTable *nt, SceConsts *x, int body, int befo
     }
   /* the attr splat (the only caller with excused reads) takes no alias */
   if (w < 0 || !sce_const_unmutated(nt, x, name, excused, excused > 0)) return -1;
-  return sce_array_elems(nt, nt_ref(nt, w, "value"), out);
+  return sce_array_elems(nt, lsp_write_value(nt, w, NULL), out);
 }
 
 /* ---- `attr_accessor(*FLAGS)` in a class or module body ----
    FLAGS = %i[a b]; attr_accessor(*FLAGS) declares a and b. With FLAGS an
    Array literal of Symbols or Strings written once in the body ahead of the
    call and never changed (sce_const_elems), the splat becomes those names,
-   which the attr tables read. Any other splat is marked `attr_splat`: the
-   call would declare nothing, so it is refused (feature_limit). */
+   which the attr tables read. So does a local of the body (sce_local_elems),
+   `names = %i[a b]; attr_accessor(*names)`: written by one statement ahead
+   of the call and named by no other up to it. The call may be
+   `singleton_class.attr_accessor(*FLAGS)`, or stand in the body's
+   `class << self`. Any other splat is marked `attr_splat`: the call would
+   declare nothing, so it is refused (feature_limit). */
 static int attr_family(const char *nm) {
   return nm && (sp_streq(nm, "attr_accessor") || sp_streq(nm, "attr_reader") ||
                 sp_streq(nm, "attr_writer") || sp_streq(nm, "attr"));
@@ -27323,7 +27328,74 @@ static int attr_splat_reads(const NodeTable *nt, const char *name) {
   nt_kind_iter_close(&it);
   return n;
 }
-/* the call's arguments with each `*CONST` spelled out, or -1 (marked) */
+/* self, none, or a bare `singleton_class`: the class's own accessors, which
+   the attr tables read as `class << self` ones */
+static int attr_splat_recv_ok(const NodeTable *nt, int rcv) {
+  if (rcv < 0 || nt_kind(nt, rcv) == NK_SelfNode) return 1;
+  const char *nm = nt_kind(nt, rcv) == NK_CallNode ? nt_str(nt, rcv, "name") : NULL;
+  return nm && sp_streq(nm, "singleton_class") && nt_ref(nt, rcv, "receiver") < 0 &&
+         nt_ref(nt, rcv, "arguments") < 0 && nt_ref(nt, rcv, "block") < 0;
+}
+/* Does the subtree under id name local `name`, read or written? Not into a
+   def, class or module, whose locals are their own. */
+static int lsp_names_local(const NodeTable *nt, int id, const char *name) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, name)) return 1;
+  }
+  for (int j = 0; j < nt_num_refs(nt, id); j++) if (lsp_names_local(nt, nt_ref_at(nt, id, j), name)) return 1;
+  for (int j = 0; j < nt_num_arrs(nt, id); j++) {
+    int an = 0; const int *ids = nt_arr_at(nt, id, j, &an);
+    for (int m = 0; m < an; m++) if (lsp_names_local(nt, ids[m], name)) return 1;
+  }
+  return 0;
+}
+/* the Array literal statement st writes, through a chain of writes (`x = @x
+   = [..]`), frozen or not; -1 if not one. With name, the chain must write
+   local name. */
+static int lsp_write_value(const NodeTable *nt, int st, const char *name) {
+  int seen = !name, v = st;
+  while (v >= 0) {
+    NodeKind k = nt_kind(nt, v);
+    if (k == NK_LocalVariableWriteNode) {
+      const char *nm = nt_str(nt, v, "name");
+      if (name && nm && sp_streq(nm, name)) seen = 1;
+    } else if (k != NK_InstanceVariableWriteNode && k != NK_ClassVariableWriteNode &&
+               k != NK_GlobalVariableWriteNode && k != NK_ConstantWriteNode) break;
+    v = nt_ref(nt, v, "value");
+  }
+  if (!seen || v < 0) return -1;
+  const char *cn = nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
+  if (cn && sp_streq(cn, "freeze") && nt_ref(nt, v, "receiver") >= 0 &&
+      nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") < 0)
+    v = nt_ref(nt, v, "receiver");
+  return nt_kind(nt, v) == NK_ArrayNode ? v : -1;
+}
+/* the element texts of the literal array local `name` holds when statement
+   `before` of `body` runs: written by one statement of the body ahead of it,
+   and named by no other statement up to the call (one could change it,
+   `names << :c`, or rebind it). What follows the call cannot change what it
+   declared. -1 if not. */
+static int sce_local_elems(const NodeTable *nt, int body, int before, const char *name, const char ***out) {
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  int w = -1;
+  for (int i = 0; i < before && i < bn; i++) {
+    if (!lsp_names_local(nt, bb[i], name)) continue;
+    if (w >= 0) return -1;
+    w = bb[i];
+  }
+  if (w < 0) return -1;
+  int v = lsp_write_value(nt, w, name);
+  if (v < 0 || lsp_names_local(nt, v, name)) return -1;
+  return sce_array_elems(nt, v, out);
+}
+/* the call's arguments with each `*CONST` / `*local` spelled out, or -1
+   (marked); body and i: the class body and the statement the names are
+   looked up before */
 static int attr_splat_expand(NodeTable *nt, SceConsts *x, int body, int i, int st) {
   int args = nt_ref(nt, st, "arguments"), an = 0;
   const int *av0 = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
@@ -27335,9 +27407,12 @@ static int attr_splat_expand(NodeTable *nt, SceConsts *x, int body, int i, int s
     if (nt_kind(nt, av[a]) != NK_SplatNode) { xc_push(&out, &no, av[a]); continue; }
     any = 1;
     int e = nt_ref(nt, av[a], "expression");
-    const char *cn = e >= 0 && nt_kind(nt, e) == NK_ConstantReadNode ? nt_str(nt, e, "name") : NULL;
+    NodeKind ek = e >= 0 ? nt_kind(nt, e) : NK_NONE;
+    const char *cn = ek == NK_ConstantReadNode ? nt_str(nt, e, "name") : NULL;
+    const char *ln = ek == NK_LocalVariableReadNode ? nt_str(nt, e, "name") : NULL;
     const char **els = NULL;
-    int en = cn ? sce_const_elems(nt, x, body, i, cn, attr_splat_reads(nt, cn), &els) : -1;
+    int en = cn ? sce_const_elems(nt, x, body, i, cn, attr_splat_reads(nt, cn), &els) :
+             ln ? sce_local_elems(nt, body, i, ln, &els) : -1;
     if (en < 0) { ok = 0; break; }
     for (int j = 0; j < en && ok; j++) {
       int sym = nt_new_node(nt, "SymbolNode");
@@ -27367,14 +27442,28 @@ int desugar_attr_const_splat(Compiler *c) {
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
     for (int i = 0; i < bn; i++) {
       int st = bb[i];
+      if (nt_kind(nt, st) == NK_SingletonClassNode) {
+        /* the body's `class << self`: its attr calls read the body's constants */
+        int x = nt_ref(nt, st, "expression"), sb = nt_ref(nt, st, "body");
+        if (x < 0 || nt_kind(nt, x) != NK_SelfNode || sb < 0 || nt_kind(nt, sb) != NK_StatementsNode) continue;
+        int sn = 0; const int *ss = nt_arr(nt, sb, "body", &sn);
+        for (int j = 0; j < sn; j++) {
+          if (nt_kind(nt, ss[j]) != NK_CallNode || !attr_family(nt_str(nt, ss[j], "name"))) continue;
+          int rcv = nt_ref(nt, ss[j], "receiver");
+          if (rcv >= 0 && nt_kind(nt, rcv) != NK_SelfNode) continue;
+          changed |= attr_splat_expand(nt, &consts, body, i, ss[j]);
+          ss = nt_arr(nt, sb, "body", &sn);
+        }
+        bb = nt_arr(nt, body, "body", &bn);
+        continue;
+      }
       if (nt_kind(nt, st) != NK_CallNode || !attr_family(nt_str(nt, st, "name"))) continue;
-      int rcv = nt_ref(nt, st, "receiver");
-      if (rcv >= 0 && nt_kind(nt, rcv) != NK_SelfNode) continue;
+      if (!attr_splat_recv_ok(nt, nt_ref(nt, st, "receiver"))) continue;
       changed |= attr_splat_expand(nt, &consts, body, i, st);
       bb = nt_arr(nt, body, "body", &bn);   /* new nodes may have moved the table */
     }
   }
-  /* a splat left anywhere else (`class << self`, an explicit receiver) */
+  /* a splat left anywhere else (another receiver, a value, a method body) */
   NtKindIter it = nt_kind_iter_begin(nt, NK_CallNode);
   while (nt_kind_iter_next(&it)) {
     if (!attr_family(nt_str(nt, it.id, "name"))) continue;

@@ -3505,14 +3505,9 @@ static int dyn_path_value_root(Compiler *c, int par) {
    still place classes (ClassInfo.parent may not be set yet) */
 static int dyn_holder_parent(Compiler *c, int k) {
   if (c->classes[k].parent >= 0) return c->classes[k].parent;
-  int sc = class_def_super(c->nt, c->classes[k].def_node);
-  if (sc < 0) return -1;
-  /* (the class the superclass constant or path names, as resolve_parents
-     reads it: `< Base`, `< Other::Base`, `< Impl` after `Impl = Base`) */
-  NodeKind sk = nt_kind(c->nt, sc);
-  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return -1;
-  int q = const_node_class_index(c, sc), wr = -1;
-  if (q < 0) q = superclass_alias_target(c, nt_str(c->nt, sc, "name"), 0, &wr);
+  /* (the class its definition names, as resolve_parents reads it: `<
+     Base`, `< Other::Base`, `< Impl` after `Impl = Base`) */
+  int wr = -1, q = class_super_index(c, k, &wr);
   return q == k || q < 0 ? -1 : q;
 }
 /* The one class or module whose leaf name is nm (-1 for none or two) */

@@ -1,0 +1,13 @@
+sleep: exit 1
+queue: exit 2
+sized queue: exit 3
+pipe: exit 4
+accept: exit 5
+condition variable: exit 6
+join of another thread: exit 7
+join of that thread: exit 8
+the wait after: not raised
+rescued in the thread: 9
+nothing to raise: not raised
+ensure ran
+at_exit ran

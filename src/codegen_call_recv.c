@@ -11543,6 +11543,129 @@ static void emit_data_with_splats(Compiler *c, int id, ClassInfo *sc, int t, int
   free(et); free(onil);
 }
 
+/* `super` from a Data's own `with` that no ancestor defines is the builtin
+   Data#with on self: no keywords answer self, and otherwise a copy takes
+   each member the keywords name, the rest from self, after CRuby's check
+   for a key no member takes. The keywords are the super's own, or for a
+   bare super the method's keyword parameters and its `**rest`. Answers 0
+   when this is not that super. */
+int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
+  const NodeTable *nt = c->nt;
+  if (s->is_cmethod || s->class_id < 0) return 0;
+  int cid = s->class_id;
+  ClassInfo *sc = &c->classes[cid];
+  if (!sc->is_struct || !sc->is_data) return 0;
+  if (comp_method_in_chain(c, cid, "initialize", NULL) >= 0)
+    unsupported_feature(c, id, "`super` from Data#with on a Data with an initialize of its own");
+  /* the copy is built as this class: one of a subclass would change class */
+  for (int k = 0; k < c->nclasses; k++)
+    if (k != cid && c->classes[k].instantiated && is_descendant(c, k, cid))
+      unsupported_feature(c, id, "`super` from Data#with on a Data class that has a subclass");
+  int fwd = nt_kind(nt, id) == NK_ForwardingSuperNode;
+  int kwh = -1;
+  if (fwd) {
+    if (s->blk_param && s->blk_param[0])
+      unsupported_feature(c, id, "bare `super` from Data#with in a `with` that takes a block (CRuby hands it to to_h)");
+    for (int j = 0; j < s->nparams; j++)
+      if (j != s->kwrest_idx && !(s->pnames[j] && callee_param_is_declared_kwarg(c, s, s->pnames[j])))
+        unsupported_feature(c, id, "bare `super` from Data#with in a `with` with a parameter other than a keyword");
+  }
+  else {
+    if (nt_ref(nt, id, "block") >= 0)
+      unsupported_feature(c, id, "`super` from Data#with with a block (CRuby hands it to to_h)");
+    int sa = nt_ref(nt, id, "arguments"), san = 0;
+    const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+    if (san > 1 || (san == 1 && nt_kind(nt, sav[0]) != NK_KeywordHashNode))
+      unsupported_feature(c, id, "`super` from Data#with with a positional argument (keywords only)");
+    kwh = san == 1 ? sav[0] : -1;
+  }
+  TyKind rty = repr_of(c, id).as_ty;
+  int boxed = repr_of(c, id).kind == RK_BOXED;
+  Buf v; memset(&v, 0, sizeof v);
+  int ts = ++g_tmp, th = ++g_tmp, tr = ++g_tmp;
+  buf_printf(&v, "({ sp_%s *_t%d = %s; sp_RbVal _t%d = ", sc->c_name, ts, g_self, th);
+  if (!fwd && kwh < 0) buf_puts(&v, "sp_box_nil()");
+  else if (!fwd) {
+    TyKind mty; int mh = emit_ds_hash_merge(c, kwh, 1, &mty);
+    char mhn[32]; snprintf(mhn, sizeof mhn, "_t%d", mh);
+    emit_boxed_text(c, mty, mhn, &v);
+  }
+  else {
+    int nkw = 0;
+    for (int j = 0; j < s->nparams; j++) nkw += j != s->kwrest_idx;
+    if (nkw == 0 && s->kwrest_idx >= 0) {
+      LocalVar *kp = scope_local(s, s->pnames[s->kwrest_idx]);
+      char kn[300]; snprintf(kn, sizeof kn, "lv_%s", rename_local(s->pnames[s->kwrest_idx]));
+      emit_boxed_text(c, kp && kp->type != TY_UNKNOWN ? kp->type : TY_POLY, kn, &v);
+    }
+    else if (nkw == 0) buf_puts(&v, "sp_box_nil()");
+    else {
+      /* the named keywords, then the `**rest`, as a bare super passes them */
+      int hp = ++g_tmp;
+      buf_printf(&v, "({ sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d);", hp, hp);
+      for (int j = 0; j < s->nparams; j++) {
+        if (j == s->kwrest_idx) continue;
+        LocalVar *p = scope_local(s, s->pnames[j]);
+        char pn[300]; snprintf(pn, sizeof pn, "lv_%s", rename_local(s->pnames[j]));
+        buf_printf(&v, " sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), ", hp, s->pnames[j]);
+        if (p && slot_is_oint(p)) buf_printf(&v, "%s(%s)", p->type == TY_FLOAT ? "sp_box_ofloat" : "sp_box_oint", pn);
+        else emit_boxed_text(c, p && p->type != TY_UNKNOWN ? p->type : TY_POLY, pn, &v);
+        buf_puts(&v, ");");
+      }
+      if (s->kwrest_idx >= 0) {
+        LocalVar *kp = scope_local(s, s->pnames[s->kwrest_idx]);
+        char kn[300]; snprintf(kn, sizeof kn, "lv_%s", rename_local(s->pnames[s->kwrest_idx]));
+        int hr = ++g_tmp;
+        buf_printf(&v, " sp_RbVal _t%d = ", hr);
+        emit_boxed_text(c, kp && kp->type != TY_UNKNOWN ? kp->type : TY_POLY, kn, &v);
+        buf_printf(&v, "; SP_GC_ROOT_RBVAL(_t%d); for (sp_int _i = 0; _i < sp_poly_length(_t%d); _i++) "
+                       "{ sp_RbVal _k, _w; sp_poly_hash_pair(_t%d, _i, &_k, &_w); sp_PolyPolyHash_set(_t%d, _k, _w); }",
+                   hr, hr, hr, hp);
+      }
+      buf_printf(&v, " sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH); })", hp);
+    }
+  }
+  buf_printf(&v, "; SP_GC_ROOT_RBVAL(_t%d); sp_%s *_t%d = _t%d;", th, sc->c_name, tr, ts);
+  buf_printf(&v, " if (sp_poly_length(_t%d) > 0) { _t%d = sp_kw_splat_check(_t%d, (const char *const[]){", th, th, th);
+  for (int a = 0; a < sc->nmembers; a++) buf_printf(&v, "%s\"%s\"", a ? ", " : "", sc->ivars[a] + 1);
+  if (sc->nmembers == 0) buf_puts(&v, "\"\"");
+  buf_printf(&v, "}, %d, (const unsigned char[]){", sc->nmembers);
+  for (int a = 0; a < sc->nmembers; a++) buf_puts(&v, a ? ", 1" : "1");
+  if (sc->nmembers == 0) buf_puts(&v, "0");
+  buf_puts(&v, "}, 1);");
+  for (int a = 0; a < sc->nmembers; a++)
+    buf_printf(&v, " sp_bool _f%d_%d = 0; sp_RbVal _v%d_%d = sp_poly_hash_get_pair_val(_t%d, "
+                   "sp_box_sym(sp_sym_intern(\"%s\")), &_f%d_%d);", tr, a, tr, a, th, sc->ivars[a] + 1, tr, a);
+  buf_printf(&v, " _t%d = sp_%s_new(", tr, sc->c_name);
+  for (int a = 0; a < sc->nmembers; a++) {
+    TyKind mt = sc->ivar_types[a];
+    char vn[48]; snprintf(vn, sizeof vn, "_v%d_%d", tr, a);
+    buf_printf(&v, "%s_f%d_%d ? (", a ? ", " : "", tr, a);
+    if (mt == TY_POLY) buf_puts(&v, vn);
+    else if (oint_kind(mt) && ivar_has_nilbit(c, cid, a)) buf_printf(&v, "%s(%s).v", oint_unbox(mt), vn);
+    else if (oint_kind(mt)) emit_unbox_text(c, mt, vn, &v);
+    else emit_unbox_nilable_text(c, mt, vn, &v);
+    buf_printf(&v, ") : _t%d->iv_%s", ts, iv_c(sc->ivars[a] + 1));
+  }
+  buf_puts(&v, ");");
+  /* the constructor clears every nil byte: a given nil, or the receiver's */
+  for (int a = 0; a < sc->nmembers; a++) {
+    if (!oint_kind(sc->ivar_types[a]) || !ivar_has_nilbit(c, cid, a)) continue;
+    char tobj[32], robj[32], src[160], nb[200], dst[400];
+    snprintf(tobj, sizeof tobj, "_t%d->", tr); snprintf(robj, sizeof robj, "_t%d->", ts);
+    ivar_nilbit_test(c, cid, a, robj, src, sizeof src);
+    snprintf(nb, sizeof nb, "(_f%d_%d ? _v%d_%d.tag == SP_TAG_NIL : %s)", tr, a, tr, a, src);
+    ivar_nilbit_assign(c, cid, a, tobj, nb, dst, sizeof dst);
+    buf_printf(&v, " %s;", dst);
+  }
+  buf_printf(&v, " } _t%d; })", tr);
+  if (boxed) emit_boxed_text(c, ty_object(cid), v.p, b);
+  else if (ty_is_object(rty) && ty_object_class(rty) != cid) buf_printf(b, "((sp_%s *)%s)", c->classes[ty_object_class(rty)].c_name, v.p);
+  else buf_puts(b, v.p);
+  free(v.p);
+  return 1;
+}
+
 static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind res, int *out) {
   /* Struct instance methods (to_h / to_a / values / members / dig). */
   if (!(recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&

@@ -2212,6 +2212,7 @@ int kwh_merged(Compiler *c, Scope *m, int kwh);
    as a Data or Struct construction and a `**kwrest` of any key
    (kwrest_any_key) need (TY_POLY_POLY_HASH). */
 int emit_ds_hash_merge(Compiler *c, int kwh, int any_key, TyKind *out_type);
+int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
 /* True when emit_ds_hash_materialize runs keyword code with an effect ahead
    of the call's positionals: a kwh_merged call's merged hash, or a first
    `**` operand with a side effect that it evaluates. */

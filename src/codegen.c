@@ -16215,6 +16215,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
         return;
       }
     }
+    /* `super` in a Data's own with no ancestor defines is Data#with */
+    if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
     /* `super` in a ` override no ancestor defines is Kernel#` */
     if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
     /* `super` from the program's own send, __send__ or public_send that no

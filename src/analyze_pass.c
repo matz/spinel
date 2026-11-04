@@ -10497,6 +10497,66 @@ static int struct_with_binds_initialize(Compiler *c, int id, int ci, int imi) {
   return changed;
 }
 
+/* `super` from a Data's own `with` that no ancestor defines reaches the
+   builtin Data#with (emit_super_data_with): each value it forwards is one
+   a member can hold, as a direct `d.with(k: v)` binds it, and a `**hash`
+   can name any member. */
+static void with_super_widen(ClassInfo *cls, int a, TyKind vt, int *changed) {
+  if (a < 0 || vt == TY_UNKNOWN || class_ivar_pinned(cls, cls->ivars[a])) return;
+  TyKind m = ty_unify(cls->ivar_types[a], vt == TY_STRBUF ? TY_STRING : vt);
+  if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); *changed = 1; }
+}
+static int struct_with_super_types_members(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int pass = 0; pass < 2; pass++) {
+  NodeKind sk = pass ? NK_ForwardingSuperNode : NK_SuperNode;
+  NT_FOREACH_KIND(nt, sk, su) {
+    Scope *s = comp_scope_of(c, su);
+    if (!s || !s->name || !sp_streq(s->name, "with") || s->is_cmethod || s->class_id < 0) continue;
+    ClassInfo *cls = &c->classes[s->class_id];
+    if (!cls->is_struct || !cls->is_data ||
+        (cls->parent >= 0 && comp_method_in_chain(c, cls->parent, "with", NULL) >= 0)) continue;
+    if (pass) {
+      for (int j = 0; j < s->nparams; j++) {
+        const char *pn = s->pnames[j];
+        LocalVar *p = pn ? scope_local(s, pn) : NULL;
+        if (!p) continue;
+        if (j == s->kwrest_idx) {
+          TyKind ht = p->type;
+          TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+          for (int a = 0; a < cls->nmembers; a++) with_super_widen(cls, a, vt, &changed);
+        }
+        else if (callee_param_is_declared_kwarg(c, s, pn)) {
+          char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", pn);
+          with_super_widen(cls, comp_member_index(cls, ivn), p->type, &changed);
+        }
+      }
+      continue;
+    }
+    int sa = nt_ref(nt, su, "arguments"), san = 0;
+    const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+    if (san != 1 || nt_kind(nt, sav[0]) != NK_KeywordHashNode) continue;
+    int en = 0; const int *els = nt_arr(nt, sav[0], "elements", &en);
+    for (int e = 0; e < en; e++) {
+      int v = nt_ref(nt, els[e], "value");
+      if (v < 0) continue;
+      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) {
+        TyKind ht = infer_type(c, v);
+        TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+        for (int a = 0; a < cls->nmembers; a++) with_super_widen(cls, a, vt, &changed);
+        continue;
+      }
+      int key = nt_ref(nt, els[e], "key");
+      if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
+      char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", nt_str(nt, key, "value"));
+      with_super_widen(cls, comp_member_index(cls, ivn), struct_member_arg_type(c, v), &changed);
+    }
+  }
+  }
+  return changed;
+}
+
 /* The argument `v` (of type at) a Struct member that is the general
    container `mt` is built from: an attribute's ivar (`S.new(o.items)`)
    widens as the alias step widens it, anything else is followed back to
@@ -11111,6 +11171,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
   }
   changed |= bind_case_eqq_subjects(c, &changed, &any);
+  changed |= struct_with_super_types_members(c);
   const int *ids = NULL;
   int nids = nt->count;
   for (;;) {

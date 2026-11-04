@@ -121,6 +121,8 @@ end
 targets = [ExecA.new, ExecB.new]
 ByPolyExec.new.mark(targets[ARGV.size])
 p targets[0].flag
+ByPolyExec.new.mark(targets[ARGV.size + 1])
+p targets[1].flag
 
 # a super in a method of another name does not reach initialize
 class Plain

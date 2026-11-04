@@ -5513,6 +5513,52 @@ static int engine_autoload_reaches(NodeTable *nt, const char *x, int top) {
   return 0;
 }
 
+/* Is a constant named `leaf` written nowhere in the program: no constant
+   write, class or module of that name (as the leaf of any path), no
+   const_set of it or of a name only the run time knows, no autoload of it? */
+static int engine_leaf_unwritten(NodeTable *nt, const char *leaf) {
+  for (int id = 0; id < nt->count; id++) {
+    const char *wn = engine_written(nt, id);
+    if (wn) {
+      const char *l = strrchr(wn, ':');
+      if (sp_streq(l ? l + 1 : wn, leaf)) return 0;
+      continue;
+    }
+    const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+    if (!nm) continue;
+    int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
+    const char *a0 = ac >= 1 ? vis_arg_name(nt, av[0]) : NULL;
+    int via = is_send_family(nm) && a0 && is_const_set_name(a0);   /* (a send of a run-time name: not taken for one, as engine_removes_const) */
+    if (!via && !is_const_set_name(nm)) continue;
+    const char *set = ac > via ? vis_arg_name(nt, av[via]) : NULL;
+    if (!set || sp_streq(set, leaf)) return 0;
+  }
+  for (int k = 0; k < nt->nautoloads; k++) if (sp_streq(nt->autoloads[k].name, leaf)) return 0;
+  return 1;
+}
+/* Is every writer of `x` a module, or a class with no superclass, whose
+   body mixes nothing in? Such an x reaches no constant but its own and the
+   program's: a constant written nowhere (engine_leaf_unwritten) is not in
+   it. One with a superclass or a mixin could reach a constant of the
+   runtime's (`class A < File`, A::SEPARATOR). */
+static int engine_root_plain(NodeTable *nt, const char *x) {
+  int any = 0;
+  for (int id = 0; id < nt->count; id++) {
+    const char *wn = engine_written(nt, id);
+    if (!wn || !sp_streq(wn, x)) continue;
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_ModuleNode && (k != NK_ClassNode || nt_ref(nt, id, "superclass") >= 0)) return 0;
+    int body = nt_ref(nt, id, "body"), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int i = 0; i < bn; i++) {
+      const char *nm = nt_kind(nt, bb[i]) == NK_CallNode ? nt_str(nt, bb[i], "name") : NULL;
+      if (nm && (sp_streq(nm, "include") || sp_streq(nm, "prepend") || sp_streq(nm, "extend"))) return 0;
+    }
+    any = 1;
+  }
+  return any;
+}
+
 static int engine_absent(Compiler *c, int e, int in) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *x = NULL;
@@ -5607,6 +5653,18 @@ static int engine_absent(Compiler *c, int e, int in) {
      whatever the file defines: the run time answers) */
   if (!x || comp_is_wellknown_const(x) || is_builtin_class_name(x) || is_builtin_module_name(x) ||
       is_builtin_exception_name(x) || engine_autoload_reaches(nt, x, top)) return -1;
+  /* `defined?(A::B)` where nothing in the program writes a B anywhere
+     (engine_leaf_unwritten) and A is a plain module or class of the
+     program's (engine_root_plain): nil, whatever the load order, since A
+     reaches no B of the runtime's. A library spliced for a require defines
+     the names it has and not the rest: did_you_mean's package has no
+     Correctable, so `if defined?(DidYouMean::Correctable)` around a def
+     holds a dead def, not one only the run time decides. */
+  if (nt_kind(nt, e) == NK_DefinedNode) {
+    int val = nt_ref(nt, e, "value");
+    const char *leaf = nt_kind(nt, val) == NK_ConstantPathNode ? nt_str(nt, val, "name") : NULL;
+    if (leaf && engine_leaf_unwritten(nt, leaf) && engine_root_plain(nt, x)) return 1;
+  }
   for (int id = 0; id < nt->count; id++)
     if (engine_written(nt, id) && sp_streq(engine_written(nt, id), x) && !engine_inside(nt, in, id, 0) &&
         !(top && engine_writer_qualified(nt, id)) && !engine_exclusive_arms(nt, in, id)) return -1;

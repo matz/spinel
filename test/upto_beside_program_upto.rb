@@ -23,3 +23,11 @@ p big.upto(big + 1).to_a
 p (big + 1).downto(big).to_a
 p "a".upto("c").to_a
 p Span.new.upto(1), Span.new.downto(2)
+# A boxed Bignum's walk is read as far as it goes, not laid out (toward an
+# infinite Float it never ends), and its size counts the members between.
+boxed = [2**64, "s"][ARGV.size]
+p boxed.upto(Float::INFINITY).first(2)
+p boxed.upto(2**64 + 2).size, boxed.downto(2**64 - 2).size, boxed.upto(2**64 - 1).size
+p boxed.upto(2**64 + 1.5).to_a
+# A String's walk has no size of its own.
+p "a".upto("c").size

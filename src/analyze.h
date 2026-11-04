@@ -591,6 +591,7 @@ const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...writ
 void class_def_set_body(NodeTable *nt, int def_node, int body);   /* its body statements, as a pass rebuilds them */
 int class_def_body(const NodeTable *nt, int def_node);   /* its body statements, -1 for none */
 int class_def_super(const NodeTable *nt, int def_node);   /* its superclass reference, -1 for none */
+int superclass_alias_target(Compiler *c, const char *name, int depth, int *wr);   /* the class a superclass constant holds: -1 none, -2 run-time pick */
 int class_def_is_module(const NodeTable *nt, int def_node);
 int class_def_is_class(const NodeTable *nt, int def_node);   /* written as `class` */
 int class_def_opens_frame(const NodeTable *nt, int def_node);   /* self and definee are the class */

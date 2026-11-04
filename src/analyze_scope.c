@@ -6807,7 +6807,7 @@ static void mark_array_subclasses(Compiler *c) {
    builtin's name, or a name written twice), -2 (with the write in *wr)
    where the value is something else (a case, an if, a call): a class only
    the run time picks. */
-static int superclass_alias_target(Compiler *c, const char *name, int depth, int *wr) {
+int superclass_alias_target(Compiler *c, const char *name, int depth, int *wr) {
   const NodeTable *nt = c->nt;
   if (!name || depth > 8) return -1;
   int w = -1, nw = 0;

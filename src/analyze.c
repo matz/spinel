@@ -3507,20 +3507,13 @@ static int dyn_holder_parent(Compiler *c, int k) {
   if (c->classes[k].parent >= 0) return c->classes[k].parent;
   int sc = class_def_super(c->nt, c->classes[k].def_node);
   if (sc < 0) return -1;
-  /* (a path superclass, `< Other::Base`, is not matched by its leaf: the
-     arms keep their order for it) */
-  const char *sn = nt_kind(c->nt, sc) == NK_ConstantReadNode ? nt_str(c->nt, sc, "name") : NULL;
-  if (!sn) return -1;
-  /* the superclass as written beside k (Kid < Base in one scope) */
-  int e = c->classes[k].enclosing_class;
-  for (int q = 0; q < c->nclasses; q++) {
-    const ClassInfo *qi = &c->classes[q];
-    if (q == k || qi->enclosing_class != e || !qi->name) continue;
-    const char *leaf = qi->name;
-    if (e >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
-    if (sp_streq(leaf, sn)) return q;
-  }
-  return -1;
+  /* (the class the superclass constant or path names, as resolve_parents
+     reads it: `< Base`, `< Other::Base`, `< Impl` after `Impl = Base`) */
+  NodeKind sk = nt_kind(c->nt, sc);
+  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return -1;
+  int q = const_node_class_index(c, sc), wr = -1;
+  if (q < 0) q = superclass_alias_target(c, nt_str(c->nt, sc, "name"), 0, &wr);
+  return q == k || q < 0 ? -1 : q;
 }
 /* The one class or module whose leaf name is nm (-1 for none or two) */
 static int dyn_holder_named(Compiler *c, const char *nm) {

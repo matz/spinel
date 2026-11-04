@@ -9217,8 +9217,11 @@ void specialize_inherited_cls_new(Compiler *c) {
       if (ccres[ii] == s) called_direct = 1;
     }
     /* ... or if a bare call inside some class-method body still resolves to
-       this source (a class with no specialized copy of its own) */
-    for (int id = 0; id < node_count && !called_direct; id++) {
+       this source (a class with no specialized copy of its own). The bodies
+       cloned for the specialized copies (past node_count) count too: a
+       superclass method's copy made for the source's class calls the source
+       by name, and is emitted against it. */
+    for (int id = 0; id < nt->count && !called_direct; id++) {
       if (nt_kind(nt, id) != NK_CallNode) continue;
       int r2 = nt_ref(nt, id, "receiver");
       if (r2 >= 0 && nt_kind(nt, r2) != NK_SelfNode) continue;

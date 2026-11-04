@@ -19265,6 +19265,39 @@ static sp_Enumerator *sp_enum_step_labeled(sp_Enumerator *e, sp_RbVal src, const
   e->meth = m;
   return e;
 }
+/* A blockless Integer#upto / #downto (a Bignum's too) or String#upto on a
+   boxed receiver, where a program class's own method of the name took the
+   dispatch: the Enumerator the no-user-class path makes (#<Enumerator:
+   7:upto(9)>), and NoMethodError for any other value. */
+static sp_RbVal sp_poly_upto_enum(sp_RbVal r, sp_RbVal lim, int up) {
+  SP_GC_ROOT_RBVAL(r); SP_GC_ROOT_RBVAL(lim);
+  const char *op = up ? "upto" : "downto";
+  if (up && (r.tag == SP_TAG_STR || sp_poly_is_strbuf(r))) {
+    sp_StrArray *s = sp_StrArray_from_string_range(sp_poly_recv_s(r, "upto"), sp_poly_arg_str_chk(lim), 0);
+    SP_GC_ROOT(s);
+    return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_from(sp_box_nullable_obj((void *)s, SP_BUILTIN_STR_ARRAY)), r, op, &lim, 1),
+                               SP_BUILTIN_ENUMERATOR);
+  }
+  if (r.tag != SP_TAG_INT && r.tag != SP_TAG_BIGINT) sp_raise_nomethod(sp_nomethod_msg(op, r));
+  if (!(lim.tag == SP_TAG_INT || lim.tag == SP_TAG_BIGINT || lim.tag == SP_TAG_FLT))
+    sp_raise_cls("ArgumentError", sp_sprintf("comparison of Integer with %s failed", sp_poly_cmp_err_repr(lim)));
+  if (r.tag == SP_TAG_INT) {
+    sp_int l = sp_int_step_lim(lim, up);
+    sp_Range rg = up ? (sp_Range){ .first = r.v.i, .last = l, .excl = 0 } : sp_range_new_step(r.v.i, l, 0, -1LL);
+    return sp_box_nullable_obj((void *)sp_int_step_enum(rg, r.v.i, op, lim), SP_BUILTIN_ENUMERATOR);
+  }
+  /* a Bignum counts boxed, its members laid out ahead */
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  sp_RbVal cur = r;
+  SP_GC_ROOT_RBVAL(cur);
+  while (up ? sp_poly_cmp_ck(cur, lim) <= 0 : sp_poly_cmp_ck(cur, lim) >= 0) {
+    sp_PolyArray_push(a, cur);
+    cur = sp_poly_add(cur, sp_box_int(up ? 1 : -1));
+  }
+  return sp_box_nullable_obj((void *)sp_enum_step_labeled(sp_Enumerator_new_from(sp_box_poly_array(a)), r, op, &lim, 1),
+                             SP_BUILTIN_ENUMERATOR);
+}
 static sp_Enumerator *sp_Enumerator_new_from_rev(sp_RbVal arr) {
   SP_GC_ROOT_RBVAL(arr);   /* published into the enumerator below, after several allocations */
   sp_PolyArray *items = sp_enum_items_from(arr);

@@ -9534,7 +9534,9 @@ static int param_supplied_memo(Compiler *c, int s, int i) {
    asks about, a `send`/`method` naming `new` reaches an initialize, and an
    alias of the method (or of `new`) calls it under another name. A
    `super` reaches only a method of its own name, so only one in a method
-   of this name, or in a body with no def of its own, supplies it. */
+   of this name, or in a body with no def of its own, supplies it, and so
+   does one in a `self.new` for an initialize. A method the runtime calls
+   (method_name_implicitly_invoked) may be passed anything. */
 /* A Symbol or String argument's text, or NULL. */
 static const char *nil_param_lit(const NodeTable *nt, int node) {
   NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
@@ -9577,6 +9579,10 @@ static int nil_param_never_supplied(Compiler *c, int s, int i) {
   Scope *sc = &c->scopes[s];
   const NodeTable *nt = c->nt;
   if (!sc->name || sc->pdefault[i] < 0 || nt_kind(nt, sc->pdefault[i]) != NK_NilNode) return 0;
+  /* the runtime calls these with no call node of the program's (`2 + obj`
+     calls obj.coerce(2)), and so may pass the parameter */
+  if (method_name_implicitly_invoked(sc->name) || sp_streq(sc->name, "method_missing") ||
+      sp_streq(sc->name, "respond_to_missing?") || sp_streq(sc->name, "===")) return 0;
   int is_init = sp_streq(sc->name, "initialize");
   int is_kw = param_is_keyword(c, sc, i);
   const char *names[] = { sc->name, is_init ? "new" : NULL, "send", "__send__", "public_send", "method", "instance_method", "define_method" };
@@ -9604,6 +9610,8 @@ static int nil_param_never_supplied(Compiler *c, int s, int i) {
       Scope *ss = comp_scope_of(c, id);
       if (!ss || !ss->name || ss->def_node < 0 || nt_kind(nt, ss->def_node) != NK_DefNode) return 0;
       if (sp_streq(ss->name, sc->name) && nil_param_reaches(c, ss->class_id, sc->class_id)) return 0;
+      /* a `super` in `self.new` is Class#new, whose arguments reach initialize */
+      if (is_init && comp_super_is_class_new(c, id) && nil_param_reaches(c, ss->class_id, sc->class_id)) return 0;
     }
   }
   return 1;

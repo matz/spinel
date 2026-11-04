@@ -137,6 +137,7 @@ static double sp_io_deadline(sp_File *f) {
    autoclose:false path wraps a dup(2) instead and never pays it (#4208). */
 static void sp_File_fin(void *p) {
   sp_File *f = (sp_File *)p;
+  free(f->rbuf); f->rbuf = NULL;   /* freed here only: a reader takes rbuf without a use (sp_io_use) */
   if (!f->fp || f->closed) return;   /* closed: the FILE is the shared sentinel */
   if (f->no_autoclose && !f->fno_plus1) { fflush(f->fp); f->fp = NULL; return; }
   fclose(f->fp); f->fp = NULL;
@@ -458,6 +459,202 @@ static void sp_io_park_fd_readable(int fd, const unsigned char *closed) {
     }
   }
 #endif
+}
+
+/* The read buffer of a handle with own_buf set: rbuf[rpos, rlen) are the
+   bytes read from the descriptor and not yet taken. It starts at
+   SP_IO_RBUF_MIN bytes, grows only for an ungetc in front of a full one, and
+   shrinks back once it empties above SP_IO_RBUF_KEEP. */
+#define SP_IO_RBUF_MIN  16384
+#define SP_IO_RBUF_KEEP 65536
+
+/* Two threads can read one handle at once, on two OS workers, as stdio let
+   them: it locked the FILE for each call. rbuf's fields and bytes change only
+   under rlock, a spin lock held across a memcpy, a realloc or one read(2) of
+   a descriptor that is readable -- never across a park, a String allocation
+   or a raise -- so its holder lets go in a few instructions and a waiter
+   never spins past a collection's safepoint. Between two holds another
+   reader may take bytes, so a line two threads read at once can be split
+   between them, but no byte is lost or read twice. */
+#ifdef SP_THREADS
+static inline void sp_io_rlock(sp_File *f) {
+  unsigned char z = 0;
+  while (!SP_ATOMIC_CAS(&f->rlock, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) { z = 0; SP_CPU_RELAX(); }
+}
+static inline void sp_io_runlock(sp_File *f) { SP_ATOMIC_STORE(&f->rlock, 0, __ATOMIC_RELEASE); }
+#else
+static inline void sp_io_rlock(sp_File *f) { (void)f; }
+static inline void sp_io_runlock(sp_File *f) { (void)f; }
+#endif
+
+/* Room for one more byte in front of the bytes held, for an ungetc on a full
+   rbuf: under rlock. On failure the lock is let go before the raise. */
+static void sp_io_rbuf_grow(sp_File *f) {
+  size_t nc = f->rcap ? f->rcap * 2 : SP_IO_RBUF_MIN;
+  char *nb = (char *)realloc(f->rbuf, nc);
+  if (!nb) { sp_io_runlock(f); sp_raise_cls("NoMemoryError", "failed to allocate memory"); }
+  f->rbuf = nb;
+  f->rcap = nc;
+}
+
+/* Park until the descriptor is readable. The park is the readable park of
+   every other reader, without its zero-timeout poll first: this one comes
+   after a read(2) that already answered EAGAIN. */
+static void sp_io_rbuf_park(sp_File *f, int fd) {
+#ifdef SP_THREADS
+  extern int sp_sched_wait_io_unless(int fd, short events, const unsigned char *cancel);
+  sp_sched_wait_io_unless(fd, POLLIN, &f->closed);
+#else
+  sp_io_park_fd_readable(fd, &f->closed);
+#endif
+  /* woken by a close from another thread: as sp_io_wait_readable */
+  if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED)) sp_raise_cls("IOError", "stream closed in another thread");
+}
+
+/* Bytes in rbuf: 1, or 0 at the end of the stream. When rbuf is empty, one
+   read(2) fills it; a read that answers EAGAIN parks and tries again. The
+   handle is held across the read(2) only, never across the park. If another
+   reader's fill brought bytes meanwhile, those are the answer. */
+int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
+  for (;;) {
+    FILE *fp = sp_io_use(f);
+    int fd = fileno(fp);
+    sp_io_rlock(f);
+    if (f->rpos < f->rlen) { sp_io_runlock(f); sp_io_unuse(f); return 1; }
+    f->rpos = f->rlen = 0;
+    if (!f->rbuf || f->rcap > SP_IO_RBUF_KEEP) {   /* the first fill, or shrink back */
+      char *rb = (char *)realloc(f->rbuf, SP_IO_RBUF_MIN);
+      if (rb) { f->rbuf = rb; f->rcap = SP_IO_RBUF_MIN; }
+      else if (!f->rbuf) {
+        sp_io_runlock(f); sp_io_unuse(f);
+        sp_raise_cls("NoMemoryError", "failed to allocate memory");
+      }
+    }
+    ssize_t r = read(fd, f->rbuf, f->rcap);
+    int e = errno;
+    if (r > 0) f->rlen = (size_t)r;
+    sp_io_runlock(f);
+    sp_io_unuse(f);
+    if (r > 0) return 1;
+    if (r == 0) return 0;
+    if (e == EINTR) continue;
+    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("read", ""); }
+    sp_io_rbuf_park(f, fd);
+  }
+}
+
+/* Up to n of the bytes rbuf holds, never a read. */
+size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n) {
+  sp_io_rlock(f);
+  size_t avail = f->rlen - f->rpos, take = avail < n ? avail : n;
+  if (take) { memcpy(buf, f->rbuf + f->rpos, take); f->rpos += take; }
+  sp_io_runlock(f);
+  return take;
+}
+
+/* As getc. */
+int sp_io_rbuf_getc(sp_File *f) {
+  for (;;) {
+    unsigned char c;
+    if (sp_io_rbuf_take(f, &c, 1)) return c;
+    if (!sp_io_rbuf_fill(f)) return EOF;
+  }
+}
+
+/* As ungetc: c goes in front of the bytes not yet taken; EOF does nothing. */
+void sp_io_rbuf_ungetc(sp_File *f, int c) {
+  if (c == EOF) return;
+  sp_io_rlock(f);
+  if (f->rpos > 0) f->rbuf[--f->rpos] = (char)c;
+  else {
+    if (f->rlen == f->rcap) sp_io_rbuf_grow(f);
+    memmove(f->rbuf + 1, f->rbuf, f->rlen);
+    f->rbuf[0] = (char)c;
+    f->rlen++;
+  }
+  sp_io_runlock(f);
+}
+
+/* As fread: n bytes, fewer only at the end of the stream. */
+size_t sp_io_rbuf_read(sp_File *f, void *buf, size_t n) {
+  size_t got = 0;
+  while (got < n) {
+    got += sp_io_rbuf_take(f, (char *)buf + got, n - got);
+    if (got < n && !sp_io_rbuf_fill(f)) break;
+  }
+  return got;
+}
+
+/* As getline: the line with its "\n", however long, NUL-terminated in *buf
+   (grown as getline grows it); the last line of the stream without one; -1
+   at the end of the stream with nothing read. A line rbuf holds whole goes
+   straight to *buf. A longer one is gathered in memory the collector owns,
+   and reaches *buf only after the last fill: a fill can raise, or a
+   Thread#raise or #kill can land in its park, and neither would come back
+   to free what *buf held. Each turn moves what rbuf holds, up to a "\n",
+   so a line longer than rbuf never grows it. */
+ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap) {
+  char *acc = NULL;   /* the line so far, across fills */
+  SP_GC_ROOT_STR(acc);
+  size_t len = 0, acap = 0;
+  for (;;) {
+    sp_io_rlock(f);
+    size_t avail = f->rlen - f->rpos;
+    char *nl = avail ? (char *)memchr(f->rbuf + f->rpos, '\n', avail) : NULL;
+    size_t take = nl ? (size_t)(nl - (f->rbuf + f->rpos)) + 1 : avail;
+    if (!len && nl) {   /* the whole line is in rbuf */
+      if (*cap < take + 1) {
+        char *nb = (char *)realloc(*buf, take + 1);
+        if (!nb) { sp_io_runlock(f); return -1; }
+        *buf = nb;
+        *cap = take + 1;
+      }
+      memcpy(*buf, f->rbuf + f->rpos, take);
+      f->rpos += take;
+      sp_io_runlock(f);
+      (*buf)[take] = 0;
+      return (ssize_t)take;
+    }
+    if (take && len + take + 1 > acap) {   /* room first, with rlock let go: the allocation may collect */
+      sp_io_runlock(f);
+      size_t nc = acap * 2 > len + take + 1 ? acap * 2 : len + take + 1;
+      if (nc < 256) nc = 256;
+      char *na = sp_str_alloc(nc);
+      if (len) memcpy(na, acc, len);
+      acc = na;
+      acap = nc;
+      continue;
+    }
+    if (take) { memcpy(acc + len, f->rbuf + f->rpos, take); f->rpos += take; len += take; }
+    sp_io_runlock(f);
+    if (nl || !sp_io_rbuf_fill(f)) break;
+  }
+  if (!len) return -1;
+  if (*cap < len + 1) {
+    char *nb = (char *)realloc(*buf, len + 1);
+    if (!nb) return -1;
+    *buf = nb;
+    *cap = len + 1;
+  }
+  memcpy(*buf, acc, len);
+  (*buf)[len] = 0;
+  return (ssize_t)len;
+}
+
+/* As fgets: up to size - 1 bytes, through a "\n", NUL-terminated; NULL at
+   the end of the stream with nothing read. */
+char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size) {
+  if (size <= 0) return NULL;
+  int i = 0;
+  while (i < size - 1) {
+    int c = sp_io_getc(f);
+    if (c == EOF) break;
+    buf[i++] = (char)c;
+    if (c == '\n') break;
+  }
+  if (i == 0) return NULL;
+  buf[i] = 0;
+  return buf;
 }
 /* The descriptor form, for a pipe the runtime holds without a handle (a
    backtick's child): the same park, on the bare fd. */

@@ -1210,24 +1210,29 @@ const char *sp_slurp_stream(FILE *fp) {
 const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !f->fp) return &("\xff" "")[1];
   size_t cap = 8192, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return &("\xff" "")[1];
+  /* the collector's memory, not malloc's: a park below can raise (a close,
+     IO#timeout, a reset on a socket), or a Thread#raise or #kill can land
+     in it, and neither comes back to free the buffer */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   for (;;) {
     sp_io_wait_readable(f);
     int ch = sp_io_getc(f);
     if (ch == EOF) break;
     if (len + 2 >= cap) {
-      char *nb = (char *)realloc(buf, cap * 2);
-      if (!nb) { free(buf); return &("\xff" "")[1]; }
+      char *nb = sp_str_alloc(cap * 2);
+      memcpy(nb, buf, len);
       buf = nb; cap *= 2;
     }
     buf[len++] = (char)ch;
     /* whatever the same read(2) already delivered: no kernel wait for these */
     for (size_t avail; (avail = sp_io_pending(f)) > 0; ) {
-      while (len + avail + 1 >= cap) {
-        char *nb = (char *)realloc(buf, cap * 2);
-        if (!nb) { free(buf); return &("\xff" "")[1]; }
-        buf = nb; cap *= 2;
+      if (len + avail + 1 >= cap) {
+        size_t nc = cap * 2;
+        while (len + avail + 1 >= nc) nc *= 2;
+        char *nb = sp_str_alloc(nc);
+        memcpy(nb, buf, len);
+        buf = nb; cap = nc;
       }
       size_t got = sp_io_fread(f, buf + len, avail);
       len += got;
@@ -1238,7 +1243,6 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   return r;
 }
 
@@ -2488,8 +2492,11 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     return r;
   }
   size_t cap = 256, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return NULL;
+  /* the collector's memory: a read below can raise or park (a handle with
+     its own buffer, sp_io_rbuf_fill), and a raise would not come back to
+     free a malloc'd one */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   int ch;
   /* a paragraph does not start with blank lines */
   if (para) {
@@ -2499,7 +2506,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   int ended = 0, extra = 16;
   sp_int lim = limit;
   while ((ch = sp_io_getc(f)) != EOF) {
-    if (len + 2 > cap) { cap *= 2; char *nb = (char *)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
+    if (len + 2 > cap) { char *nb = sp_str_alloc(cap * 2); memcpy(nb, buf, len); buf = nb; cap *= 2; }
     buf[len++] = (char)ch;
     /* the separator ends the line where it is matched whole, and not where
        it would start inside a character (on a continuation byte) */
@@ -2521,7 +2528,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     while ((ch = sp_io_getc(f)) == '\n') { }
     if (ch != EOF) sp_io_ungetc(f, ch);
   }
-  if (len == 0) { free(buf); return NULL; }
+  if (len == 0) return NULL;
   if (chomp && ended && sl && len >= sl && memcmp(buf + len - sl, sep, sl) == 0) {
     len -= sl;
     if (sl == 1 && sep[0] == '\n' && len && buf[len - 1] == '\r') len--;
@@ -2529,7 +2536,6 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len); r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   f->lineno++;
   return r;
 }

@@ -55,6 +55,14 @@ typedef struct {
                                   read: 0 not yet asked, 1 never (a regular
                                   file is always ready), 2 park before a read
                                   that could block (#4307) */
+  unsigned char own_buf;       /* reads take rbuf below, never stdio: the
+                                  descriptor is non-blocking and a read that
+                                  finds nothing parks in the runtime */
+  unsigned char rlock;         /* own_buf: held while a reader changes rbuf
+                                  (sp_io_rlock, sp_io.c) */
+  char *rbuf;                  /* own_buf: the bytes read and not yet taken
+                                  are rbuf[rpos, rlen), in rcap bytes */
+  size_t rpos, rlen, rcap;
   unsigned char closed;        /* #close ran. Once no thread is inside a read
                                   or write of it (uses below), the FILE the
                                   handle carries is the shared /dev/null
@@ -131,17 +139,49 @@ void sp_fork_exec_lock(void);
 void sp_fork_exec_unlock(void);
 /* Park until the handle can take bytes (a socket, or an IO.pipe write end). */
 void sp_io_wait_writable(sp_File *f);
+/* The reads of a handle with own_buf set (lib/sp_io.c). */
+int sp_io_rbuf_fill(sp_File *f);
+int sp_io_rbuf_getc(sp_File *f);
+void sp_io_rbuf_ungetc(sp_File *f, int c);
+size_t sp_io_rbuf_read(sp_File *f, void *buf, size_t n);
+ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap);
+char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size);
+size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
 /* Readers of an IO handle's stream call these instead of stdio: each is the
-   stdio call of the same name on the handle's FILE. */
-static inline int sp_io_getc(sp_File *f) { return SP_SIG_BLOCKING(fgetc(f->fp)); }
-static inline void sp_io_ungetc(sp_File *f, int c) { ungetc(c, f->fp); }
-static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) { return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp)); }
-static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) { return SP_SIG_BLOCKING(getline(buf, cap, f->fp)); }
-static inline char *sp_io_fgets(sp_File *f, char *buf, int size) { return SP_SIG_BLOCKING(fgets(buf, size, f->fp)); }
+   stdio call of the same name on the handle's FILE, or, for a handle with
+   own_buf, the same answer from rbuf. A read of more bytes than
+   sp_io_pending answers can park on such a handle, so a caller that reads
+   into a String holds it rooted (SP_GC_ROOT_STR) across the read. */
+static inline int sp_io_getc(sp_File *f) {
+  if (f->own_buf) return sp_io_rbuf_getc(f);
+  return SP_SIG_BLOCKING(fgetc(f->fp));
+}
+static inline void sp_io_ungetc(sp_File *f, int c) {
+  if (f->own_buf) sp_io_rbuf_ungetc(f, c);
+  else ungetc(c, f->fp);
+}
+static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) {
+  if (f->own_buf) return sp_io_rbuf_read(f, buf, n);
+  return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
+}
+static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) {
+  if (f->own_buf) return sp_io_rbuf_getline(f, buf, cap);
+  return SP_SIG_BLOCKING(getline(buf, cap, f->fp));
+}
+static inline char *sp_io_fgets(sp_File *f, char *buf, int size) {
+  if (f->own_buf) return sp_io_rbuf_fgets(f, buf, size);
+  return SP_SIG_BLOCKING(fgets(buf, size, f->fp));
+}
 /* Bytes stdio has already buffered for this stream. They are readable without
    a read(2), so a drain of exactly this many cannot block -- which is what
-   lets a slurp fill from a pipe without ever sitting in the kernel. */
+   lets a slurp fill from a pipe without ever sitting in the kernel. For a
+   handle with own_buf, the bytes rbuf holds: read without its lock, so a
+   hint another reader can make stale, never a count to copy. */
 static inline size_t sp_io_pending(sp_File *f) {
+  if (f->own_buf) {
+    size_t len = SP_ATOMIC_LOAD(&f->rlen, __ATOMIC_RELAXED), pos = SP_ATOMIC_LOAD(&f->rpos, __ATOMIC_RELAXED);
+    return len > pos ? len - pos : 0;
+  }
   FILE *fp = f->fp;
   if (!fp) return 0;
 #if defined(__GLIBC__)

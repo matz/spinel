@@ -10757,13 +10757,14 @@ static int when_boxed_has_user_arm(Compiler *c) {
 static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   char subjp[32]; snprintf(subjp, sizeof subjp, "_t%d", t);
   int tpw = ++g_tmp;
+  /* The pattern is rooted on every path: it can be the only reference to
+     a fresh value (`when Holder.new.pattern`), and the arm then allocates
+     while it holds it -- a Proc pattern runs its own body, which reads its
+     captures after it allocates. */
   buf_printf(b, "({ sp_RbVal _t%d = ", tpw); emit_boxed(c, cond, b);
-  if (when_boxed_has_user_arm(c)) {
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tpw);
-    emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
-    buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
-  }
-  else buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tpw);
+  if (when_boxed_has_user_arm(c)) emit_when_boxed_user_arms(c, cond, t, pt, tpw, b);
+  buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
   buf_printf(b, " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw);
   if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
   buf_printf(b, ")) : sp_poly_case_eq_match(_t%d, ", tpw);

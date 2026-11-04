@@ -1935,7 +1935,8 @@ static int lr_node_dispatches(const NodeTable *nt, int n) {
     case NK_ArgumentsNode: case NK_BlockParametersNode: case NK_ParametersNode: case NK_RequiredParameterNode:
     case NK_OptionalParameterNode: case NK_LocalVariableReadNode: case NK_LocalVariableWriteNode:
     case NK_InstanceVariableReadNode: case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
-    case NK_InstanceVariableWriteNode: case NK_ClassVariableWriteNode:
+    case NK_InstanceVariableWriteNode: case NK_ClassVariableWriteNode: case NK_InstanceVariableOrWriteNode:
+    case NK_InstanceVariableAndWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
       return 0;
     default: return 1;
   }

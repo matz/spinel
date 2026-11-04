@@ -11,3 +11,20 @@ def fj = J.v
 puts fj
 def J.v = 2
 puts fj
+
+# A conditional write calls nothing back either.
+class K; def self.v = (@x ||= 1); v; end
+def fk = K.v
+puts fk
+def K.v = 2
+puts fk
+class L; def self.v = (@@x ||= 1); v; end
+def fl = L.v
+puts fl
+def L.v = 2
+puts fl
+class M; def self.v = (@x &&= 1); v; end
+def fm = M.v
+p fm
+def M.v = 2
+p fm

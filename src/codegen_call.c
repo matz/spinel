@@ -14662,6 +14662,50 @@ static int emit_array_new_from_value(Compiler *c, int arg, Buf *b) {
   return 1;
 }
 
+/* The locals a forwarded default block (`def mk(&b) = Hash.new(&b)`, mk
+   inlined) writes that nothing outside it reads or writes: a bare default
+   function declares only the hash and the key, and those locals were
+   declared in the caller's frame, where the function cannot see them. A
+   local the caller shares stays as it was: the function has no cell of it. */
+static void emit_dproc_block_locals(Compiler *c, int blk, const char *hp, const char *kp, Buf *pb) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  Scope *s = comp_scope_of(c, blk);
+  if (!s) return;
+  int n = 0;
+  int *ids = nt_subtree_ids(nt, &blk, 1, &n);
+  char *in = calloc((size_t)nt->count + 1, 1);
+  if (!ids || !in) { free(ids); free(in); return; }
+  for (int i = 0; i < n; i++) in[ids[i]] = 1;
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, ids[i]);
+    /* ... and the parameters of a block it runs (`k.each_char { |ch| }`), which the walk binds as locals of this frame */
+    if (k != NK_LocalVariableWriteNode && k != NK_LocalVariableTargetNode && k != NK_LocalVariableOperatorWriteNode &&
+        k != NK_LocalVariableOrWriteNode && k != NK_LocalVariableAndWriteNode && k != NK_RequiredParameterNode) continue;
+    const char *nm = nt_str(nt, ids[i], "name");
+    if (!nm || (hp && sp_streq(nm, hp)) || (kp && sp_streq(nm, kp))) continue;
+    int first = 1;
+    for (int j = 0; j < i && first; j++) {
+      NodeKind kj = nt_kind(nt, ids[j]);
+      if ((kj == NK_LocalVariableWriteNode || kj == NK_LocalVariableTargetNode || kj == NK_LocalVariableOperatorWriteNode ||
+           kj == NK_LocalVariableOrWriteNode || kj == NK_LocalVariableAndWriteNode || kj == NK_RequiredParameterNode) &&
+          nt_str(nt, ids[j], "name") && sp_streq(nt_str(nt, ids[j], "name"), nm)) first = 0;
+    }
+    if (!first) continue;
+    int shared = 0;
+    for (int m = 0; m < nt->count && !shared; m++) {
+      if (in[m]) continue;
+      NodeKind km = nt_kind(nt, m);
+      if (km != NK_LocalVariableReadNode && km != NK_LocalVariableWriteNode && km != NK_LocalVariableTargetNode &&
+          km != NK_LocalVariableOperatorWriteNode && km != NK_LocalVariableOrWriteNode && km != NK_LocalVariableAndWriteNode) continue;
+      if (comp_scope_of(c, m) == s && nt_str(nt, m, "name") && sp_streq(nt_str(nt, m, "name"), nm)) shared = 1;
+    }
+    LocalVar *lv = shared ? NULL : scope_local(s, nm);
+    if (!lv || lv->is_cell) continue;
+    declare_local(c, pb, lv, 0);
+  }
+  free(ids); free(in);
+}
+
 /* A .new call (and the default-hash form): user classes, Struct and Data, the builtin constructors (emit_class_new_call's arms, in their order) */
 /* Hash.new(&pr): the block argument is the default proc, a Proc held as
    itself (emit_block_arg_proc), which the hash's default calls through
@@ -15354,6 +15398,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         else buf_printf(pb, "  sp_PolyPolyHash *lv_%s = _self_h; (void)lv_%s;\n", rename_local(hp), rename_local(hp));
       }
       if (kp) buf_printf(pb, "  sp_RbVal lv_%s = _key; (void)lv_%s;\n", rename_local(kp), rename_local(kp));
+      if (hblk != nt_ref(nt, id, "block")) emit_dproc_block_locals(c, hblk, hp, kp, pb);
       Buf *sv_pre = g_pre; int sv_ind = g_indent; const char *sv_self = g_self;
       g_pre = pb; g_indent = 1;
       int bn = 0; const int *bb = hbody >= 0 ? nt_arr(nt, hbody, "body", &bn) : NULL;

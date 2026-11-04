@@ -234,6 +234,22 @@ static void sp_sock_raise_if_unresolved(const char *what) {
    socket takes it when it is made, and keeps its own copy after that */
 sp_bool sp_sock_dnrl_default = 1;
 
+/* A connected TCP stream reads through its own buffer on a non-blocking
+   descriptor; a listening socket, a datagram socket and a Unix socket keep
+   the stdio read side. SPINEL_SOCK_STDIO=1 keeps every socket on stdio. */
+static int sp_io_sock_takes_own_buf(int fd) {
+  static int stdio = -1;
+  if (stdio < 0) { const char *e = getenv("SPINEL_SOCK_STDIO"); stdio = e && *e && *e != '0'; }
+  if (stdio) return 0;
+  int type = 0; socklen_t tl = sizeof type;
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0 || type != SOCK_STREAM) return 0;
+  struct sockaddr_storage ss; socklen_t sl = sizeof ss;
+  if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) return 0;
+  if (ss.ss_family != AF_INET && ss.ss_family != AF_INET6) return 0;
+  sl = sizeof ss;
+  return getpeername(fd, (struct sockaddr *)&ss, &sl) == 0;
+}
+
 /* Wrap a socket fd (#2922). The FILE* serves the buffered READ side (gets and
    friends need lookahead); every write bypasses stdio straight to write(2) --
    see sp_sock_write below -- so a response is on the wire immediately, like
@@ -248,8 +264,11 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
   /* The scheduler-aware accept/connect helpers may hand us a non-blocking
      fd; the stdio read side must BLOCK (fgets treats EAGAIN as EOF), so
      clear O_NONBLOCK. Green threads still yield: every read entry point
-     parks on sp_io_wait_readable below before touching the stream. */
-  { int fl = fcntl(fd, F_GETFL); if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK); }
+     parks on sp_io_wait_readable below before touching the stream. A
+     handle with its own buffer has no stdio read side and keeps
+     O_NONBLOCK: its reads park on EAGAIN (sp_io_rbuf_fill). */
+  int own = sp_io_sock_takes_own_buf(fd);
+  { int fl = fcntl(fd, F_GETFL); if (fl >= 0) fcntl(fd, F_SETFL, own ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK)); }
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, "r+");
   if (!f->fp) { sp_raise_cls("IOError", "fdopen failed"); return NULL; }
@@ -257,6 +276,7 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
   f->mode = kind;
   f->lineno = 0;
   f->is_sock = 1; f->rev_lookup = !sp_sock_dnrl_default;
+  if (own) { f->own_buf = 1; f->wstream = 1; }
   return f;
 }
 
@@ -752,8 +772,9 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
      The probe alone was not enough: it answers "there is room", not "there is
      room for all of n", so a 64 KB write into a nearly full buffer still slept
      in the kernel with the collector waiting on this worker (the #4528 shape,
-     on the write side). */
-  int nb = 0;
+     on the write side). A socket that reads through its own buffer has no
+     stdio read side, and its descriptor is O_NONBLOCK like the pipe's. */
+  int nb = f->own_buf;
   if (!f->is_sock) {
     unsigned int gen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
     if (!f->wnonblock) {
@@ -796,7 +817,7 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
 #if defined(__linux__)
       long room = -1;
 #else
-      long room = f->wstream == 1 ? sp_sock_room(fd) : -1;
+      long room = f->wstream == 1 && !nb ? sp_sock_room(fd) : -1;
 #endif
       /* No room: go back to the park above, which is where waiting belongs.
          It cannot spin -- POLLOUT is raised only once the free space reaches
@@ -1724,6 +1745,21 @@ sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port);
   sp_sock_require(f, "send");
+  if (f->own_buf && !host) {
+    /* a non-blocking descriptor: a send that finds the buffer full waits for
+       room, as CRuby's does, instead of answering EAGAIN */
+    double deadline = sp_io_deadline(f);
+    for (;;) {
+      int fd = fileno(sp_io_use(f));
+      ssize_t put = send(fd, data, (size_t)len, sp_sock_int_arg(flags) | SP_MSG_DONTWAIT);
+      int e = errno;
+      sp_io_unuse(f);
+      if (put >= 0) return (sp_int)put;
+      if (e == EINTR) continue;
+      if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("send", ""); }
+      sp_io_write_wait(f, deadline);
+    }
+  }
   int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
   if (n < 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");

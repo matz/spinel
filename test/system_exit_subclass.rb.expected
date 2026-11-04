@@ -26,6 +26,16 @@ raise with a message: Stop status=0 success=true msg=text true
 raise with a status: Stop status=12 success=false msg=Stop true
 raise SystemExit with a status: SystemExit status=13 success=false msg=SystemExit true
 raise an instance with a message: Stop status=14 success=false msg=replaced true
+told more
+true
+direct more
+true
+true
+true
+2 SecondBare
+2 SecondNil
+2 SecondOwn
+2 second
 past a bare rescue: Stop status=15 success=false msg=Stop true
 16
 17

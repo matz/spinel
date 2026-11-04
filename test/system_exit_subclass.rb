@@ -99,6 +99,54 @@ rescue SystemExit => e
   show("raise an instance with a message", e)
 end
 
+# The message is the String given, which a change through it shows in.
+class Told < SystemExit
+  def initialize(m)
+    super(2, m)
+  end
+end
+given = +"told"
+told = Told.new(given)
+given << " more"
+puts told.message
+puts told.message.equal?(given)
+direct = +"direct"
+made = SystemExit.new(1, direct)
+direct << " more"
+puts made.message
+puts made.message.equal?(direct)
+puts SystemExit.new(1, "literal").message.frozen?
+puts SystemExit.new(1, "").message.empty?
+
+# A second super takes the place of the first, and without a message clears it.
+class SecondBare < SystemExit
+  def initialize
+    super(1, "first")
+    super(2)
+  end
+end
+class SecondNil < SystemExit
+  def initialize
+    super(1, "first")
+    super(2, nil)
+  end
+end
+class SecondOwn < SystemExit
+  def initialize(m)
+    super(1, m)
+    super(2)
+  end
+end
+class SecondMessage < SystemExit
+  def initialize
+    super(1, "first")
+    super(2, "second")
+  end
+end
+[SecondBare.new, SecondNil.new, SecondOwn.new(+"own"), SecondMessage.new].each do |e|
+  puts "#{e.status} #{e.message}"
+end
+
 # not a StandardError, so a bare rescue lets it through
 begin
   begin

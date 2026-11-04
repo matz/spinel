@@ -17175,13 +17175,19 @@ static const char *sp_sysexit_super(sp_Exception *self, sp_int argc, const sp_Rb
     sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 0..1)",
                                              (long long)(argc - lead)));
   self->result = sp_box_int(status);
+  /* as Exception#initialize: what it takes replaces the message before, and
+     none clears it. An explicitly given message stays, even empty (#3713). */
+  const char *m = NULL;
   if (argc > lead && av[lead].tag != SP_TAG_NIL) {
-    const char *m = sp_poly_to_s(av[lead]);
+    m = sp_poly_to_s(av[lead]);
     SP_GC_ROOT(m);
-    sp_gc_wb((void *)self);
-    /* an explicitly given message stays, even empty (#3713) */
-    self->msg = m[0] ? sp_str_retained(m) : sp_exc_no_msg;
+    m = sp_exc_msg_given(m);
   }
+  SP_GC_ROOT_STR(m);
+  sp_exc_set_msg(self, m);
+  /* a String is the message itself, as #message answers it */
+  if (argc > lead && av[lead].tag == SP_TAG_OBJ && av[lead].cls_id == SP_BUILTIN_STRBUF && av[lead].v.p)
+    sp_exc_attach_msg(self, av[lead].v.p);
   return self->msg;
 }
 /* KeyError#, NameError#, NoMethodError# and FrozenError#initialize, for the

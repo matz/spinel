@@ -11815,8 +11815,11 @@ int infer_ivar_types(Compiler *c) {
       int nil_write = ty_k != NK_InstanceVariableOperatorWriteNode &&
                       (vt == TY_NIL || comp_nil_chain_bottom(nt, vnode) >= 0);
       /* `@prev = prev` from a `prev = nil` parameter no call supplies
-         writes the nil it always is; the parameter itself stays boxed */
-      if (!nil_write && ty_k == NK_InstanceVariableWriteNode && vt == TY_POLY && nil_param_read(c, vnode)) {
+         writes the nil it always is; the parameter itself stays boxed. Not
+         inside an instance_eval/exec block, whose writes the receiver's
+         class takes */
+      if (!nil_write && ty_k == NK_InstanceVariableWriteNode && vt == TY_POLY && ie_class_of(c, id) < 0 &&
+          nil_param_read(c, vnode)) {
         nil_write = 1; vt = TY_NIL;
       }
       if (vt == TY_POLY && ivar_nullable_int_ternary(c, vnode) == TY_INT) vt = TY_INT;

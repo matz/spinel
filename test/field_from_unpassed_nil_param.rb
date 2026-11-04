@@ -2,7 +2,8 @@
 # takes the nil it always is, so the field is typed by its other writes:
 # Node's @prev and @next hold a Node or nil. Every other class here has a
 # call that may supply the parameter (a String, through a send,
-# alias_method, a super, a bind_call), or a method that writes the parameter;
+# alias_method, a super, a bind_call, a super in self.new; an Integer
+# through the runtime's coerce), or a method that writes the parameter;
 # its field stays boxed and holds the String.
 class Node
   attr_accessor :key, :prev, :next
@@ -59,6 +60,41 @@ class Rewritten
   end
 end
 p Rewritten.new(1).prev
+
+class BySelfNew
+  attr_accessor :prev
+  def self.new(k) = super(k, "self.new")
+  def initialize(k, prev = nil) = (@k = k; @prev = prev)
+end
+p BySelfNew.new(1).prev
+
+# the runtime calls coerce (`2 + v`) with no call of the program's
+class ByCoerce
+  attr_accessor :last
+  def initialize = (@last = nil)
+  def coerce(other = nil)
+    @last = other
+    [ByCoerce.new, self]
+  end
+  def +(o) = self
+end
+v = ByCoerce.new
+w = ByCoerce.new
+w.last = v
+2 + v
+p v.last
+
+# an instance_exec block writes the receiver's field
+class ExecTarget
+  attr_accessor :flag
+  def initialize = (@flag = ExecTarget)
+end
+class ByExec
+  def mark(t, value = nil) = t.instance_exec { @flag = value }
+end
+t = ExecTarget.new
+ByExec.new.mark(t)
+p t.flag
 
 # a super in a method of another name does not reach initialize
 class Plain

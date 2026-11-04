@@ -13,6 +13,9 @@ nil
 nil
 "bind_call"
 "or-write"
+"self.new"
+2
+nil
 true
 nil
 "PlainKid"

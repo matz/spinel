@@ -4763,15 +4763,16 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   NodeKind a0k = nt_kind(nt, argv[0]);
   const char *mname = a0k == NK_SymbolNode ? nt_str(nt, argv[0], "value") : a0k == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
   if (!mname || !*mname || is_send_family(mname)) return 0;
-  int owners[64], nown = 0;
+  /* every owner, however many: one left out would run the named method, and
+     left unsplit the call would take an owner's send for any value */
+  int *owners = malloc(sizeof(int) * (size_t)(c->nclasses + 1)), nown = 0;
+  if (!owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int k = 0; k < c->nclasses; k++) {
     int mi = comp_method_in_class(c, k, nm);
     if (mi < 0 || send_def_just_supers(c, mi) || !class_ruby_name(c, k)) continue;
-    /* not split on a part of the owners: one left out would run the named method */
-    if (nown == 64) return 0;
     owners[nown++] = k;
   }
-  if (nown == 0) return 0;
+  if (nown == 0) { free(owners); return 0; }
   char mbuf[256], tname[64];
   snprintf(mbuf, sizeof mbuf, "%s", mname);
   snprintf(tname, sizeof tname, "__sus_%s", comp_node_tag(c, id));
@@ -4800,7 +4801,11 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     nt_node_set_str(nt, direct, "vis_enforce", "1");
     nt_set_ignore_visibility(nt, direct, 0);
   }
-  else nt_set_ignore_visibility(nt, direct, 1);
+  else {
+    /* send's arm reaches what a send does: a private method, and a top-level def's fallback (send_blind) */
+    nt_set_ignore_visibility(nt, direct, 1);
+    nt_node_set_str(nt, direct, "send_blind", "1");
+  }
   /* `r&.send(:m)` answers nil for a nil receiver on either arm */
   if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, direct, 1);
   int cond = -1;
@@ -4808,7 +4813,7 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     int tr = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, tr, "name", tname); nt_node_set_int(nt, tr, "depth", 0);
     int kc = sus_class_const(c, owners[i]);
-    if (kc < 0) return 0;
+    if (kc < 0) { free(owners); return 0; }
     int test = fwd_new_call(nt, tr, "is_a?", kc);
     if (cond < 0) cond = test;
     else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", test); cond = o; }
@@ -4838,6 +4843,7 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
   }
   scope_local_intern(comp_scope_of(c, id), tname);
+  free(owners);
   return 1;
 }
 

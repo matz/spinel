@@ -11090,6 +11090,14 @@ static int range_indexes_seq(Compiler *c, int id) {
    over a mixed Array, `h[:k]` over a Hash of them)? Such an element can be
    a String. A boxed value that --int-overflow=promote makes of an Integer
    cannot, and the receiver of an Integer#[] is no such container. */
+/* A boxed end that the class facts show holds objects of the program's
+   alone (`Date.new` answers one boxed): no Integer, so under promote too
+   the Range is boxed and sp_range_new_box picks a Range of objects. */
+static int range_end_no_number(Compiler *c, int node) {
+  if (node < 0) return 0;
+  const ClsSet *s = cls_fact_node(c, node);
+  return s && !s->all && !s->bv && s->n > 0;
+}
 static int range_end_reads_poly_elem(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   if (n < 0 || vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
@@ -11386,7 +11394,8 @@ TyKind infer_uncached(Compiler *c, int id) {
          Array form above. */
       if (lt == TY_SYMBOL || ht == TY_SYMBOL) return TY_POLY;
       if (((lt == TY_POLY && (hi_open || ht == TY_POLY)) || (ht == TY_POLY && lo_open)) &&
-          (!g_promote_mode || range_end_reads_poly_elem(c, lo) || range_end_reads_poly_elem(c, hi)) &&
+          (!g_promote_mode || range_end_reads_poly_elem(c, lo) || range_end_reads_poly_elem(c, hi) ||
+           range_end_no_number(c, lo) || range_end_no_number(c, hi)) &&
           !range_indexes_seq(c, id) &&
           !(hi < 0 && nt_int(nt, id, "size_recv", 0)))
         return TY_POLY;

@@ -8516,18 +8516,18 @@ static int param_seed_holds_arg(Compiler *c, LocalVar *p, int anode, TyKind at) 
   return param_seed_holds(p, at);
 }
 
-/* Type method mi's parameters from the arguments `argv` of call_id. */
-/* A module method an include copied away never runs as itself: each copy
-   binds its own calls, typed against its class. The original, whose ivars
-   nothing writes, sent its arguments to every method of the name.
-   An unbound entry likewise supplies no arguments to its arms. */
+/* A method copied into its users never runs as itself
+   (comp_scope_may_run): each copy binds its own calls, typed against its
+   class. The original, whose ivars nothing writes, sent its arguments to
+   every method of the name. An unbound entry likewise supplies no
+   arguments to its arms. */
 static int call_in_inactive_scope(Compiler *c, int call_id) {
   Scope *cs = comp_scope_of(c, call_id);
   if (cs && cs->is_proc_form) {
     int s = proc_form_source(c, cs->idx);
     if (s >= 0 && c->scopes[s].entry != ENTRY_NONE) cs = &c->scopes[s];
   }
-  return cs && (cs->is_transplanted_source || (cs->entry != ENTRY_NONE && !cs->reachable));
+  return cs && (cs->is_transplanted_source || cs->entry != ENTRY_NONE) && !comp_scope_may_run(c, (int)(cs - c->scopes));
 }
 
 /* 1 when class `cls` writes instance variable `ivn` somewhere, and every
@@ -8929,6 +8929,7 @@ static TyKind kwrest_forward_hash_type(Compiler *c, Scope *m, const char *kname)
   return TY_UNKNOWN;
 }
 
+/* Type method mi's parameters from the arguments `argv` of call_id. */
 static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, int argc) {
   if (mi < 0) return 0;
   const NodeTable *nt = c->nt;

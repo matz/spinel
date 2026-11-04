@@ -4674,7 +4674,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             if (kmi < 0) continue;
             /* a method copied into each class a value can hold is not emitted
                itself: no value holds a class that answers by it */
-            if (c->scopes[kmi].is_transplanted_source && !scope_toplevel_included(c, kmi)) continue;
+            if (comp_scope_copied_away(c, kmi)) continue;
             int rarm9 = emit_reopen_arm_test(c, kmi, name, rcls9, rraise9, b);
             if (!rarm9) buf_printf(b, " case %d: ", k);
             rdef9 |= rarm9;

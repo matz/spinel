@@ -22327,7 +22327,7 @@ char *codegen_program(const NodeTable *nt) {
   /* A proc form is named only by a poly dispatch, which is emitted later, so
      the reachability pass cannot see it. Emit it and let the C compiler drop
      it if no arm ends up calling it (#3399). */
-  for (int s = 1; s < c->nscopes; s++) { if (prog_is_top_scope(c, &c->scopes[s]) || c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); if (poll_pure_wrapped(c, s)) poll_pure_proto(c, s, &b); }
+  for (int s = 1; s < c->nscopes; s++) { if (prog_is_top_scope(c, &c->scopes[s]) || c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || comp_scope_copied_away(c, s)) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); if (poll_pure_wrapped(c, s)) poll_pure_proto(c, s, &b); }
 
   emit_cext_dispatch(c, &b);
   emit_user_exc_dispatch(c, &b);
@@ -22659,7 +22659,7 @@ char *codegen_program(const NodeTable *nt) {
       if (cg_prev_s >= 0) cg_slow_note(cg_prev_s, now - cg_prev_t);
       cg_prev_s = s; cg_prev_t = now;
     }
-    if (prog_is_top_scope(c, &c->scopes[s]) || c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue;
+    if (prog_is_top_scope(c, &c->scopes[s]) || c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || comp_scope_copied_away(c, s)) continue;
     int ndiag0 = g_ndiags, ndefer0 = g_stmt_deferrals;
     int orphan = scope_is_orphan_method(c, s);
     if (orphan) g_unsup_quiet = 1;

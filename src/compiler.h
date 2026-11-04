@@ -2486,6 +2486,8 @@ void comp_shadow_name(Compiler *c, int ci, const char *name, char *out, size_t s
 void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user);
 void comp_scope_copy_shadow(Compiler *c, int dst, int src, const char *suffix);
 const char *comp_scope_user_name(const Scope *s);
+int comp_scope_copied_away(Compiler *c, int s);
+int comp_scope_may_run(Compiler *c, int s);
 int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind);
 const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod);
 const char *comp_scope_def_name(Compiler *c, const Scope *s);

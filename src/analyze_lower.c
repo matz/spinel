@@ -157,7 +157,7 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_safe_nav_attr_write_at, desugar_safe_nav_attr_write_left, "`r&.a op= v`" },
   [LW_CONST_ATTR_OP_ASSIGN] = { "desugar_const_attr_op_assign", 0,
     { NK_CallOperatorWriteNode, NK_CallOrWriteNode, NK_CallAndWriteNode },
-    desugar_const_attr_op_assign_at, desugar_const_attr_op_assign_left, "`Klass.a op= v`" },
+    desugar_const_attr_op_assign_at, desugar_const_attr_op_assign_left, "`Klass.a op= v`, `self.a op= v` with self a class" },
   [LW_STORED_ENUM_EACH] = { "desugar_stored_enum_each", 0, { NK_CallNode },
     desugar_stored_enum_each_at, NULL, "`e.each { }` on a stored enumerator" },
   [LW_SCOPE_NUMBERED_BLOCK_PARAMS] = { "scope_numbered_block_params", LF_PROGRAM, { NK_NONE },

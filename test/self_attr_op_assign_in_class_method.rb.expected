@@ -1,0 +1,11 @@
+[:start]
+{"start.evt" => true}
+[:start, :start]
+[]
+[:start, :start]
+[:x]
+[:x, :y]
+nil
+nil
+1
+3

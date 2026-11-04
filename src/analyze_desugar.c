@@ -12243,7 +12243,9 @@ static void extended_module_names(const NodeTable *nt, ANameHash *names) {
   }
 }
 
-static int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
+/* `def x = @x` (`def x=(value) = (@x = value)` for writer) for base, at
+   call's place in the source */
+int attr_as_def(NodeTable *nt, int call, const char *base, int writer) {
   char mn[256], ivn[256];
   snprintf(mn, sizeof mn, "%s%s", base, writer ? "=" : "");
   snprintf(ivn, sizeof ivn, "@%s", base);

@@ -678,6 +678,29 @@ int cplan_self_builtin(Compiler *c, int id);
    (elab_blocks_run_now: a builtin iterator on a literal); 0 too for a class
    whose chain the record does not know. */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
+/* What call id of class method `name` on program class ci runs where ci
+   has a `class << self` accessor of the name: CP_SG_NONE where it has none
+   (the call is an ordinary class method's); CP_SG_SLOT, the slot, named
+   into slot (the writer's base, the reader's name past an alias), where
+   the call binds to no method or to the accessor's own version (one a
+   later def replaces, Scope.attr_version) or where the record tells no
+   version; CP_SG_METHOD where it binds to that def or to the entry that
+   chooses between them at run time, which the call's emitter calls (an
+   accessor no def follows has no method: its calls take the slot). */
+enum { CP_SG_NONE, CP_SG_SLOT, CP_SG_METHOD, CP_SG_UNTOLD };
+int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot, size_t cap);
+/* For call node id of `name` on class ci, where a later def replaces ci's
+   class-side accessor of the name (elab_attr_replaced): CP_SG_SLOT where
+   the call binds to the accessor's own version, CP_SG_METHOD where it binds
+   to the def or the entry between them, CP_SG_UNTOLD where the record tells
+   no version (each emitter then keeps its answer without versions).
+   CP_SG_NONE where no def replaces the accessor. */
+int cplan_sg_version(Compiler *c, int id, int ci, const char *name);
+/* Does call node id, written with `name` (not a send or a capture of it),
+   run no method on class ci: the plan's answer for it is the class's
+   accessor slot (cplan_sg_accessor). The reach pass then reaches no scope
+   from it, though the version it binds to is the accessor's own. */
+int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

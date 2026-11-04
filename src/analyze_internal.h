@@ -461,6 +461,7 @@ void register_struct_members(Compiler *c, ClassInfo *cls, int val);
 void register_structs(Compiler *c);
 void register_singleton_defs(Compiler *c);
 void fix_struct_block_scopes(Compiler *c);
+void register_attr_versions(Compiler *c);
 void register_attrs(Compiler *c);
 void register_aliases(Compiler *c);
 void register_undefs(Compiler *c);
@@ -971,6 +972,7 @@ int desugar_engine_branches(Compiler *c);
 int desugar_conditional_defs(Compiler *c);
 int desugar_concat_builtin_version(Compiler *c);
 int desugar_method_override_super(Compiler *c);
+int attr_as_def(NodeTable *nt, int call, const char *base, int writer);   /* `def x = @x` / `def x=(value) = (@x = value)` (analyze_desugar.c) */
 /* A dispatcher def over arms `<sel> == <val>` calling `callee` with the
    def's parameters passed on, and an else arm (disp_def_build,
    analyze_desugar.c); for that arm `raise NoMethodError.new(msg, :name,

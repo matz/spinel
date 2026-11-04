@@ -48943,6 +48943,7 @@ static void an_phase_desugar_register(Compiler *c) {
   register_module_functions(c);
   register_locals(c);
   AN_STEP_V("desugar_block_arg_order", desugar_block_arg_order(c));   /* recv.m(a, &expr): receiver, args, then the block (#4992) */
+  register_attr_versions(c);
   register_attrs(c);
   register_method_visibility(c);
   register_aliases(c);

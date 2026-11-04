@@ -3469,6 +3469,11 @@ int cls_sg_accessor_first(Compiler *c, int call, int k, const char *name, int ar
   if (!rn) rn = name;
   if (setter ? !comp_sg_writer_reached(c, k, name, base, sizeof base) : !comp_is_sg_reader(&c->classes[k], rn))
     return 0;
+  /* where a later def replaces the accessor, the plan's answer: the slot
+     where the call binds to the accessor's own version, the def or entry
+     where it binds to one (cplan_sg_version) */
+  int v = cplan_sg_version(c, call, k, name);
+  if (v == CP_SG_SLOT || v == CP_SG_METHOD) return v == CP_SG_SLOT;
   for (int p = k, guard = 0; p >= 0 && guard < 256; p = c->classes[p].parent, guard++) {
     int pmi = call_target(c, call, p, name, CT_OWN | CT_CMETHOD, NULL);
     int own = comp_sg_accessor_own(c, p, name) || comp_sg_accessor_own(c, p, rn);

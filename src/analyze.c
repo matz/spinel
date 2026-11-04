@@ -51217,6 +51217,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_enumerable_chain", desugar_enumerable_chain(c));               /* x.chain(y) / enum+enum -> __enum_chain(x.to_a + y.to_a) */
     ch |= AN_PASS("desugar_implicit_send", desugar_implicit_send(c));            /* send(:m, a) -> m(a) on self */
     ch |= AN_PASS("desugar_public_send_recv", desugar_public_send_recv(c));         /* r.public_send(:m, a) -> r.m(a), visibility-stamped */
+    ch |= AN_PASS("desugar_class_value_builtin_cmethod", desugar_class_value_builtin_cmethod(c));   /* k.now on a boxed Time -> k.equal?(Time) ? Time.now : k.now */
     ch |= AN_PASS("desugar_symbol_string_methods", desugar_symbol_string_methods(c));    /* :sym.match(re) -> :sym.to_s.match(re) */
     ch |= AN_PASS("desugar_interp_reopened_to_s", desugar_interp_reopened_to_s(c));     /* "#{5}" with Integer#to_s reopened -> "#{5.to_s}" */
     ch |= AN_PASS("desugar_interp_elided_to_s", desugar_interp_elided_to_s(c));         /* "#{s}\<nl>" -> s.to_s (--share-strings) */

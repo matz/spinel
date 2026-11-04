@@ -4887,6 +4887,114 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   return 1;
 }
 
+/* The builtin classes the program reads as a value somewhere (not as a
+   call's receiver): the builtins a boxed receiver can be.
+   Their ids into bval; the count. */
+static int cvb_value_builtins(Compiler *c, int *bval, int cap) {
+  const NodeTable *nt = c->nt;
+  unsigned char *recv_of = calloc((size_t)nt->count + 1, 1);
+  if (!recv_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
+    int r = nt_ref(nt, u, "receiver");
+    if (r >= 0 && r < nt->count) recv_of[r] = 1;
+  }
+  int nb = 0;
+  for (int n = comp_kind_first(c, NK_ConstantReadNode); n >= 0; n = comp_kind_next(c, n)) {
+    if (nt_kind(nt, n) != NK_ConstantReadNode || recv_of[n] || const_node_class_index(c, n) >= 0) continue;
+    const char *nm = nt_str(nt, n, "name");
+    int bid = nm ? builtin_class_id(nm) : 0, seen = 0;
+    if (!bid) continue;
+    for (int i = 0; i < nb; i++) seen |= bval[i] == bid;
+    if (!seen && nb < cap) bval[nb++] = bid;
+  }
+  free(recv_of);
+  return nb;
+}
+static const char *cvb_builtin_name(int bid) {
+  const BuiltinClass *r = NULL;
+  for (int i = 0; (r = builtin_class_at(i)); i++) if (r->id == bid) return r->name;
+  return NULL;
+}
+/* `r.m(args)` on a boxed receiver, where m is a class method of a builtin
+   class the value can be (Time.now, Time.at): the dispatch knows the
+   program's class methods only, so a Time read back out of an Array raised
+   NoMethodError. The call becomes
+   `(r.equal?(B) ? B.m(args) : ... : r.m(args))`, r a local, an arm per such
+   builtin. A program class keeps the dispatch it has in the last arm. */
+static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int nb) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id)) return 0;
+  /* a local's read only: a temporary holding the value is typed a Class, whose last arm no class answers then */
+  if (nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
+  /* not a Class-typed one: rewrite_time_maker_class_value gives its Time makers their arms */
+  if (infer_type(c, recv) != TY_POLY) return 0;
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* not a keyword hash: its `**h` the boxed dispatch already counts as the run time's arguments */
+  if (argc > 16 || nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0 || bop_class_answers(nm, argc, 0)) return 0;
+  for (int a = 0; a < argc; a++) if (nt_kind(nt, argv[a]) == NK_BlockArgumentNode) return 0;
+  int arms[64], na = 0;
+  for (int i = 0; i < nb && na < 64; i++) {
+    const char *bn = cvb_builtin_name(bval[i]);
+    /* not where B's instances answer m too (`t.utc`): a boxed receiver is far more often the instance */
+    if (bn && builtin_cmethod_known(bn, nm) && !builtin_instance_method_known(bn, nm)) arms[na++] = bval[i];
+  }
+  if (na == 0) return 0;
+  int base = nt->count;
+  /* everything else: the call as written, left to the dispatch */
+  int keep = nt_clone_subtree(nt, id);
+  nt_node_set_int(nt, keep, "cvb_split", 1);
+  int tail = keep;
+  for (int i = na - 1; i >= 0; i--) {
+    int kc = nt_new_node(nt, "ConstantReadNode");
+    nt_node_set_str(nt, kc, "name", cvb_builtin_name(arms[i]));
+    int kc2 = nt_clone_subtree(nt, kc);
+    int arm = nt_clone_subtree(nt, id);
+    nt_node_set_ref(nt, arm, "receiver", kc2);
+    nt_node_set_int(nt, arm, "cvb_split", 1);
+    int test = fwd_new_call(nt, nt_clone_subtree(nt, recv), "equal?", kc);
+    int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
+    int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
+    nt_node_set_arr(nt, ys, "body", &arm, 1);
+    nt_node_set_arr(nt, ns, "body", &tail, 1);
+    nt_node_set_ref(nt, el, "statements", ns);
+    nt_node_set_ref(nt, ifn, "predicate", test);
+    nt_node_set_ref(nt, ifn, "statements", ys);
+    nt_node_set_ref(nt, ifn, "subsequent", el);
+    tail = ifn;
+  }
+  int body = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, body, "body", &tail, 1);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", body);
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    if (!nt_int(nt, j, "node_line", 0)) nt_node_set_int(nt, j, "node_line", line);
+    if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
+  }
+  return 1;
+}
+int desugar_class_value_builtin_cmethod(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int bval[32], nb = -1, changed = 0, n0 = nt->count;
+  for (int id = comp_kind_first(c, NK_CallNode); id >= 0 && id < n0; id = comp_kind_next(c, id)) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "cvb_split", 0)) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!nm || recv < 0) continue;
+    if (infer_type(c, recv) != TY_POLY) continue;
+    if (nb < 0) nb = cvb_value_builtins(c, bval, 32);
+    if (nb == 0) break;
+    if (cvb_split(c, id, nm, bval, nb)) changed = 1;
+  }
+  return changed;
+}
+
 int desugar_public_send_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

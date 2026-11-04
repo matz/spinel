@@ -978,6 +978,7 @@ int local_write_binds_value(NodeKind k);
 int desugar_enumerable_chain(Compiler *c);
 int desugar_implicit_send(Compiler *c);
 int desugar_public_send_recv(Compiler *c);
+int desugar_class_value_builtin_cmethod(Compiler *c);
 int type_block_rest_params(Compiler *c);
 void check_block_rest_support(Compiler *c);
 int desugar_dynamic_send(Compiler *c);

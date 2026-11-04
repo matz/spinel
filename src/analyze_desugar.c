@@ -25055,9 +25055,101 @@ static int cev_block_shares_ivar(const NodeTable *nt, int n, const int *hits, in
  * instance_eval / instance_exec runs on the class has its reads and
  * `defined?` rewritten the same way when it writes no ivar. */
 static int sce_program_owns_class_eval(const NodeTable *nt);
+/* Is the subtree under id an expression a class value's class_eval block
+   may run as the class's own statements once its ivars go through the
+   class's accessors: ivars, literals, constants, operators and calls on
+   those, and nothing whose self the block gave -- no bare call, self, def,
+   block, yield or local the block's own? */
+static int cvce_plain(const NodeTable *nt, int id) {
+  if (id < 0) return 1;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_SelfNode || k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || k == NK_YieldNode ||
+      k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_ClassNode || k == NK_ModuleNode ||
+      k == NK_SingletonClassNode || k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode ||
+      k == NK_ClassVariableReadNode || k == NK_ClassVariableWriteNode) return 0;
+  if (k == NK_CallNode && (nt_ref(nt, id, "receiver") < 0 || nt_ref(nt, id, "block") >= 0)) return 0;
+  for (int j = 0; j < nt_num_refs(nt, id); j++) if (!cvce_plain(nt, nt_ref_at(nt, id, j))) return 0;
+  for (int j = 0; j < nt_num_arrs(nt, id); j++) {
+    int an = 0; const int *ids = nt_arr_at(nt, id, j, &an);
+    for (int m = 0; m < an; m++) if (!cvce_plain(nt, ids[m])) return 0;
+  }
+  return 1;
+}
+/* a collected class-level access rewritten in place into the call of the
+   accessor on a clone of receiver `recv` (cbi_rewrite_access with a node
+   for the class in place of its constant) */
+static void cbi_rewrite_access_recv(NodeTable *nt, int id, int recv) {
+  const char *iv0;
+  int kind = cbi_access_kind(nt, id, &iv0);
+  if (kind < 0 || !iv0 || iv0[1] == '@') return;
+  char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
+  if (kind == 2) nt_node_reset(nt, cbi_defined_ivar_node(nt, id), "NilNode");
+  int line = (int)nt_int(nt, id, "node_line", 0), file = (int)nt_int(nt, id, "node_file", 0);
+  int rc = nt_clone_subtree(nt, recv);
+  char mname[256];
+  snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
+  int args = -1;
+  if (kind == 1) {
+    int v = nt_ref(nt, id, "value");
+    args = fwd_new_node_like(nt, id, "ArgumentsNode");
+    nt_node_set_arr(nt, args, "arguments", &v, 1);
+  }
+  nt_node_reset(nt, id, "CallNode");
+  nt_node_set_str(nt, id, "name", mname);
+  nt_node_set_ref(nt, id, "receiver", rc);
+  if (args >= 0) nt_node_set_ref(nt, id, "arguments", args);
+  if (line) nt_node_set_int(nt, id, "node_line", line);
+  if (file) nt_node_set_int(nt, id, "node_file", file);
+}
+/* `klass.class_eval do @x = v end` on a class value a method can only have
+   as the class or a subclass (civ_class_value_owner: an inherited hook's
+   parameter, self.class): self in the block is that class, so each ivar is
+   its class-level one, which the accessors of the owning class answer on
+   it as `klass.instance_variable_set(:@x, v)` does
+   (desugar_const_ivar_access). The block's statements, with their ivars
+   so rewritten, stand where the call stood; the block must be plain
+   (cvce_plain), with no parameters. 1 when rewritten. */
+static int cvce_rewrite(NodeTable *nt, const int *parent, int id, int r, int blk) {
+  int body = nt_ref(nt, blk, "body");
+  if (nt_ref(nt, blk, "parameters") >= 0 || body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int m = civ_class_value_owner(nt, parent, r);
+  if (m < 0) return 0;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  for (int i = 0; i < bn; i++) {
+    NodeKind k = nt_kind(nt, bb[i]);
+    if (k != NK_InstanceVariableWriteNode && k != NK_InstanceVariableOperatorWriteNode &&
+        k != NK_InstanceVariableOrWriteNode && k != NK_InstanceVariableAndWriteNode) return 0;
+    if (!cvce_plain(nt, nt_ref(nt, bb[i], "value"))) return 0;
+  }
+  for (int i = 0; i < bn; i++) {
+    NodeKind k = nt_kind(nt, bb[i]);
+    if (k != NK_InstanceVariableWriteNode) cbi_lower_op_writes(nt, bb[i]);
+  }
+  int *hits = NULL, cap = 0, nhits = 0, trigger = 0;
+  CbiProcLocals pl = {0};
+  pl.cev = 1;
+  cbi_collect(nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
+  for (int h = 0; h < nhits; h++) {
+    const char *iv0;
+    int kind = cbi_access_kind(nt, hits[h], &iv0);
+    if (kind < 0 || !civ_name_ok(iv0)) continue;
+    char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
+    civ_ensure_accessor(nt, m, iv, kind);
+    cbi_rewrite_access_recv(nt, hits[h], r);
+  }
+  free(hits); free(pl.names); free(pl.doubt);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", body);
+  if (line) nt_node_set_int(nt, id, "node_line", line);
+  if (file) nt_node_set_int(nt, id, "node_file", file);
+  return 1;
+}
+
 int desugar_class_eval_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  int *parent = NULL;
   /* a program that gives class_eval (or its kin) a method of its own runs
      the block as that says: its calls stay as they are. Asked once a
      candidate is seen. */
@@ -25072,6 +25164,12 @@ int desugar_class_eval_ivars(Compiler *c) {
     if (!ie && own < 0) own = sce_program_owns_class_eval(nt);
     if (ie ? own_ie : own) continue;
     int r = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+    if (r >= 0 && !ie && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, id, "arguments") < 0 &&
+        (nt_kind(nt, r) == NK_LocalVariableReadNode || nt_kind(nt, r) == NK_CallNode)) {
+      if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (cvce_rewrite(nt, parent, id, r, blk)) changed = 1;
+      continue;
+    }
     if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode || blk < 0 || nt_kind(nt, blk) != NK_BlockNode)
       continue;
     const char *cn = nt_str(nt, r, "name");
@@ -25125,6 +25223,7 @@ int desugar_class_eval_ivars(Compiler *c) {
     }
     free(hits); free(pl.names); free(pl.doubt);
   }
+  free(parent);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

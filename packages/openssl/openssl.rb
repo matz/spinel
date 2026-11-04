@@ -36,9 +36,36 @@ require "openssl/x509"
 require "openssl/random"
 
 module OpenSSL
+  def self.fixed_length_secure_compare(a, b)
+    a = comparison_string(a)
+    b = comparison_string(b)
+    Native.fixed_length_secure_compare(a, b) == 0
+  end
+
+  def self.secure_compare(a, b)
+    hashed_a = Digest.digest("SHA256", comparison_string(a))
+    hashed_b = Digest.digest("SHA256", comparison_string(b))
+    fixed_length_secure_compare(hashed_a, hashed_b) && a == b
+  end
+
+  def self.comparison_string(value)
+    case value
+    when String then return value
+    when nil, true, false then raise TypeError, "no implicit conversion of #{value.inspect} into String"
+    end
+    if value.respond_to?(:to_str, true)
+      converted = value.__send__(:to_str)
+      return converted if String === converted
+      raise TypeError, "can't convert #{value.class} to String (#{value.class}#to_str gives #{converted.class})"
+    end
+    raise TypeError, "no implicit conversion of #{value.class} into String"
+  end
+  private_class_method :comparison_string
+
   module Native
     native_lib "openssl"
     native_obj "packages/openssl/sp_openssl.o"
+    native_func :fixed_length_secure_compare, [:string, :string], :int, "sp_openssl_fixed_length_secure_compare"
     native_func :pending,      [:int],                :int,    "sp_ssl_pending"
     native_func :close,        [:int],                :int,    "sp_ssl_close"
     native_func :discard,      [:int],                :int,    "sp_ssl_discard"

@@ -1,0 +1,31 @@
+true
+false
+true
+ArgumentError: inputs must be of equal length
+true
+false
+false
+TypeError: no implicit conversion of nil into String
+TypeError: no implicit conversion of true into String
+TypeError: no implicit conversion of false into String
+TypeError: no implicit conversion of Integer into String
+TypeError: no implicit conversion of Object into String
+TypeError: no implicit conversion of Symbol into String
+TypeError: no implicit conversion of Integer into String
+TypeError: no implicit conversion of nil into String
+true
+TypeError: can't convert BadCompareInput to String (BadCompareInput#to_str gives Integer)
+TypeError: can't convert NilCompareInput to String (NilCompareInput#to_str gives NilClass)
+true
+ArgumentError: inputs must be of equal length
+true
+true
+false
+false
+true
+true
+false
+TypeError: no implicit conversion of nil into String
+true
+true
+true

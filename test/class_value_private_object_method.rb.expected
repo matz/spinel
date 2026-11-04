@@ -1,0 +1,9 @@
+"K"
+"mx"
+"K"
+"Integer"
+"private method 'name' called for an instance of Integer"
+2
+"private method 'top' called for class Integer"
+"private method 'top' called for class String"
+"private method 'top' called for class K"

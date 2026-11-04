@@ -1,0 +1,10 @@
+"uninitialized class variable @@n in Counter"
+NameError
+"uninitialized class variable @@n in Counter"
+"uninitialized class variable @@s in S"
+:@@b
+11
+2
+4
+[1, 2]
+4

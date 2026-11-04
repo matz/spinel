@@ -9812,6 +9812,11 @@ static int cvar_note_write(Compiler *c, int cid, int id, int nil_only) {
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
   ClassInfo *ci = &c->classes[comp_cvar_owner(c, cid, nm)];
+  /* (an op-write or and-write reads the variable first: it declares
+     nothing, and with no other write it raises NameError as a read does) */
+  NodeKind wk = nt_kind(nt, id);
+  if ((wk == NK_ClassVariableOperatorWriteNode || wk == NK_ClassVariableAndWriteNode) &&
+      comp_cvar_index(ci, nm) < 0) return 0;
   int old_n = ci->ncvars;
   int idx = comp_cvar_intern(ci, nm);
   int changed = ci->ncvars != old_n;

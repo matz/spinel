@@ -2979,7 +2979,7 @@ void emit_strbuf_node_read(Compiler *c, int id, const char *sref, Buf *b) {
    name the variable's, or RuntimeError at main's top level, where every
    class variable access raises (emit_cvar_name_error). Valued as the
    read's dead tail. */
-static void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
+void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
   if (h->cid == c->toplevel_class)
     buf_puts(b, "(sp_raise_cls(\"RuntimeError\", \"class variable access from toplevel\"), ");
   else {
@@ -3296,6 +3296,8 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     int v = nt_ref(nt, id, "value");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, "class variable op-write (no class scope)"); return 1; }
+    /* (the read an op-write starts with, of a variable no write declares) */
+    if (h.idx < 0 && !c->cvar_set_unplaced) { emit_cvar_undeclared_raise(c, id, &h, b); return 1; }
     int cid = h.cid, idx = h.idx;
     TyKind ct = idx >= 0 ? c->classes[cid].cvar_types[idx] : TY_INT;
     Buf ref; memset(&ref, 0, sizeof ref);
@@ -3354,6 +3356,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     const char *nm = nt_str(nt, id, "name");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, "class variable and-write (no class scope)"); return 1; }
+    if (h.idx < 0 && !c->cvar_set_unplaced) { emit_cvar_undeclared_raise(c, id, &h, b); return 1; }
     Buf ref; memset(&ref, 0, sizeof ref);
     holder_slot_buf(c, &h, &ref);
     TyKind at = h.idx >= 0 ? c->classes[h.cid].cvar_types[h.idx] : TY_UNKNOWN;

@@ -5869,6 +5869,26 @@ static int keep_general_array(TyKind cur, TyKind vt) {
 static TyKind nil_write_type(TyKind cur) {
   return an_ty_holds_nil(cur) ? cur : TY_POLY;
 }
+/* ...for a global's write of nil: a slot no other write has typed yet holds
+   nil (TY_NIL), as a local's does (local_write_ty), so a read of it is nil to
+   whatever it flows into. Left untyped, the read was no evidence: a local
+   that took it and a `false` was typed Boolean, and read the nil as false.
+   A nil-only global boxes after the fixpoint (an_phase_reconcile_check).
+   Not while another write of it brings no type (`untyped`,
+   gvar_has_untyped_write): the global is not written only nil, and TY_NIL
+   settled what read it at nil (`$a = nil; pr = proc { $a }; $a = {}`). */
+static TyKind gvar_nil_write_type(TyKind cur, int untyped) {
+  return cur == TY_UNKNOWN && !untyped ? TY_NIL : nil_write_type(cur);
+}
+/* ...and the join of a global's slot with a write's type vt: on a slot only
+   nil has reached so far, vt as a nil write after it would leave it
+   (nil_write_type), so the order of the writes does not change the slot:
+   `$p = nil; $p = proc { }` is the nullable Proc `$p = proc { }; $p = nil`
+   makes, where the general join would box it */
+static TyKind gvar_join(TyKind cur, TyKind vt) {
+  if (cur == TY_NIL && vt != TY_UNKNOWN && vt != TY_NIL) return nil_write_type(vt);
+  return ty_unify(cur, vt);
+}
 
 /* The first point at which something could read global gname, in the order
    the load phase runs (the load record): a read or update of it (also
@@ -5987,6 +6007,41 @@ static TyKind gvar_write_value_type(Compiler *c, const char *rn, LocalVar *lv, i
   return lit_takes_general_hash(c, lv, vnode, vt, changed);
 }
 
+/* Does a write of the global `lv` other than a nil one (`$g = v`, `$g ||= v`,
+   `$g &&= v`) bring no type yet: gvar_write_value_type answers TY_UNKNOWN,
+   for an empty `{}` no `[]=` of the global types, or a value not inferred
+   yet? The slots with such a write are collected once a round, on the first
+   ask, into *set (*nset of them; *nset < 0 until then; the caller frees it). */
+static int gvar_has_untyped_write(Compiler *c, LocalVar *lv, LocalVar ***set, int *nset, int *changed) {
+  const NodeTable *nt = c->nt;
+  if (*nset < 0) {
+    int cap = 0;
+    *nset = 0;
+    for (int id = 0; id < nt->count; id++) {
+      NodeKind k = nt_kind(nt, id);
+      if (k != NK_GlobalVariableWriteNode && k != NK_GlobalVariableOrWriteNode && k != NK_GlobalVariableAndWriteNode)
+        continue;
+      const char *nm = nt_str(nt, id, "name");
+      const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
+      LocalVar *g = rn ? comp_gvar(c, rn) : NULL;
+      if (!g || gvar_write_value_type(c, rn, g, nt_ref(nt, id, "value"), changed) != TY_UNKNOWN) continue;
+      int seen = 0;
+      for (int i = 0; i < *nset && !seen; i++) seen = (*set)[i] == g;
+      if (seen) continue;
+      if (*nset == cap) {
+        cap = cap ? cap * 2 : 8;
+        LocalVar **grown = realloc(*set, (size_t)cap * sizeof **set);
+        if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        *set = grown;
+      }
+      (*set)[(*nset)++] = g;
+    }
+  }
+  for (int i = 0; i < *nset; i++)
+    if ((*set)[i] == lv) return 1;
+  return 0;
+}
+
 /* Set while the store passes below run again after the late nullable marks
    (infer_changed_store_types): they then join only the stores whose input
    has widened since these types, and leave the rest as they settled. */
@@ -5998,20 +6053,26 @@ static int store_unchanged(Compiler *c, int id) {
 int infer_global_const_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
+  LocalVar **untyped = NULL;   /* gvar_has_untyped_write's slots */
+  int nuntyped = -1;
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
     if (!ty || store_unchanged(c, id)) continue;
     LocalVar *lv = NULL;
     TyKind vt = TY_UNKNOWN;
+    int gslot = 0;   /* lv is a global's slot (the joins below) */
     if (ty_k == NK_GlobalVariableWriteNode) {
       const char *nm = nt_str(nt, id, "name");
       const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
       if (rn) lv = comp_gvar(c, rn);
+      gslot = 1;
       int vnode = nt_ref(nt, id, "value");
       vt = gvar_write_value_type(c, rn, lv, vnode, &changed);
       if (vt == TY_NIL) {
-        if (lv && nil_write_type(lv->type) != lv->type) { lv_set_type(lv, nil_write_type(lv->type)); changed = 1; }
+        TyKind nw = lv ? gvar_nil_write_type(lv->type, lv->type == TY_UNKNOWN &&
+                                                  gvar_has_untyped_write(c, lv, &untyped, &nuntyped, &changed)) : TY_UNKNOWN;
+        if (lv && nw != lv->type) { lv_set_type(lv, nw); changed = 1; }
         continue;
       }
     }
@@ -6019,6 +6080,7 @@ int infer_global_const_types(Compiler *c) {
       const char *nm = nt_str(nt, id, "name");
       const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
       if (rn) lv = comp_gvar(c, rn);
+      gslot = 1;
       TyKind cur = lv ? lv->type : TY_UNKNOWN;
       TyKind v = infer_type(c, nt_ref(nt, id, "value"));
       if (cur == TY_STRING) vt = TY_STRING;
@@ -6034,6 +6096,7 @@ int infer_global_const_types(Compiler *c) {
       const char *nm = nt_str(nt, id, "name");
       const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
       if (rn) lv = comp_gvar(c, rn);
+      gslot = 1;
       /* `$g ||= []` writes the slot as `$g = []` does: typed only by its
          UNKNOWN value, the global `$stores = nil; $stores ||= []` stayed
          nil-typed, so `($stores || []).each` was typed from the literal
@@ -6042,7 +6105,9 @@ int infer_global_const_types(Compiler *c) {
          slot and the C did not build. */
       vt = gvar_write_value_type(c, rn, lv, nt_ref(nt, id, "value"), &changed);
       if (vt == TY_NIL) {
-        if (lv && nil_write_type(lv->type) != lv->type) { lv_set_type(lv, nil_write_type(lv->type)); changed = 1; }
+        TyKind nw = lv ? gvar_nil_write_type(lv->type, lv->type == TY_UNKNOWN &&
+                                                  gvar_has_untyped_write(c, lv, &untyped, &nuntyped, &changed)) : TY_UNKNOWN;
+        if (lv && nw != lv->type) { lv_set_type(lv, nw); changed = 1; }
         continue;
       }
     }
@@ -6104,7 +6169,7 @@ int infer_global_const_types(Compiler *c) {
         if (!glv) continue;
         TyKind vt2 = (els && i < en) ? infer_type(c, els[i]) : TY_UNKNOWN;
         if (vt2 == TY_NIL || vt2 == TY_UNKNOWN) continue;
-        TyKind merged2 = ty_unify(glv->type, vt2);
+        TyKind merged2 = gvar_join(glv->type, vt2);
         if (merged2 != glv->type) { lv_set_type(glv, merged2); changed = 1; }
       }
       /* handle splat-rest global target (*$rest = ...) */
@@ -6123,7 +6188,7 @@ int infer_global_const_types(Compiler *c) {
               rest_elem = ty_unify(rest_elem, infer_type(c, els[i]));
             TyKind rest_arr_t = (rest_elem != TY_UNKNOWN) ? ty_array_of(rest_elem) : TY_UNKNOWN;
             if (rest_arr_t != TY_UNKNOWN) {
-              TyKind merged3 = ty_unify(glv2->type, rest_arr_t);
+              TyKind merged3 = gvar_join(glv2->type, rest_arr_t);
               if (merged3 != glv2->type) { lv_set_type(glv2, merged3); changed = 1; }
             }
           }
@@ -6173,9 +6238,14 @@ int infer_global_const_types(Compiler *c) {
        Unifying with that type widened the constant every round and the
        narrowing put it back, so the fixpoint never settled. */
     if (ty_is_obj_array(lv->oa_pin) && lv->type == lv->oa_pin && ty_is_array(vt)) continue;
-    TyKind merged = keep_general_array(lv->type, vt) ? lv->type : ty_unify(lv->type, vt);
+    /* (a constant keeps the general join: its nil write, `K = nil`, joins
+       through it too, the same in either order, where a global's takes
+       gvar_nil_write_type) */
+    TyKind merged = keep_general_array(lv->type, vt) ? lv->type
+                  : gslot ? gvar_join(lv->type, vt) : ty_unify(lv->type, vt);
     if (merged != lv->type) { lv_set_type(lv, merged); changed = 1; }
   }
+  free(untyped);
   if (g_store_before) return changed;
   changed |= gvar_implicit_nil_writes(c);
   /* $stdout / $stderr start out holding the standard stream, so a program

@@ -132,7 +132,7 @@ struct LoadRecord {
   struct LrClass *cls; int ncls;
   char **names; int nnames, cnames;     /* the names the program defines methods by, sorted (lr_names_take) */
   LrSite *defs; int ndefs;              /* ...and its defs, sorted by name */
-  unsigned char callbacks;              /* lr_callbacks_define's memo: 1 no, 2 yes */
+  unsigned char callbacks;              /* lr_callbacks_define's memo: 1 + what they may do (LR_OPAQUE_*) */
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
   char **refl; int nrefl, crefl;        /* the names a reflection reader of the source names, sorted (lr_refl_take) */
@@ -1808,6 +1808,16 @@ static void lr_refl_take(Compiler *c) {
   if (r->nrefl_capt > 1) qsort(r->refl_capt, (size_t)r->nrefl_capt, sizeof *r->refl_capt, lr_name_cmp);
 }
 
+/* What code the record cannot follow may do, kept in its opaque entry's
+   vis, and what a method body may do when it runs (lr_body_defines): 0
+   nothing; LR_OPAQUE_WRITES, only write a variable (an instance variable,
+   a global, a class variable), as an attr's method (LR_READER, LR_WRITER)
+   or a def whose body does no more; LR_OPAQUE_DEFINES, anything (a send,
+   an eval, a mixin a pass made, a program method that may define, one the
+   record cannot pin). Only the defining ones may supply a method
+   (lr_unordered_supply). */
+enum { LR_OPAQUE_WRITES = 1, LR_OPAQUE_DEFINES };
+
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
 static int lr_callbacks_define(Compiler *c, int depth);
 
@@ -1881,25 +1891,33 @@ static int lr_body_held(Compiler *c, int def) {
   return held;
 }
 
-/* May a call of `name` in a method body run a method of the program's
-   that defines or writes something? Each place the program defines the
-   name must be a def whose body does neither (lr_body_defines), and one
-   the record has: a def not recorded yet (past the frontier, or in a
-   method body, while the record is made), an attr, an alias or a
-   define_method may. A name the program defines nowhere is a builtin's,
-   which lr_node_defines answers for by its name. */
+/* The larger of two answers of what code may do (LR_OPAQUE_*) */
+static int lr_most(int o, int w) {
+  return w > o ? w : o;
+}
+
+/* What may a call of `name` in a method body do, by the methods of the
+   program's it may run: 0 nothing, else the most any of them may
+   (LR_OPAQUE_*)? The most of what each place the program defines the name
+   may do (lr_body_defines), and define, where a def is not recorded yet
+   (past the frontier, or in a method body, while the record is made), or
+   the place is an attr, an alias or a define_method. A name the program
+   defines nowhere is a builtin's, which lr_node_defines answers for by its
+   name. */
 static int lr_callee_defines(Compiler *c, const char *name, int direct, int depth) {
   LoadRecord *r = c->lrec;
-  int nn = 0, nd = 0;
-  if (r->names_any) return 1;
+  int nn = 0, nd = 0, o = 0;
+  if (r->names_any) return LR_OPAQUE_DEFINES;
   lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
   const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
-  if (nd < nn) return 1;
+  if (nd < nn) return LR_OPAQUE_DEFINES;
   for (int i = 0; i < nd; i++) {
     LoadPoint p = elab_point_of(c, d[i].node);
-    if ((!r->recorded && (p.region < 0 || p.seq >= r->frontier)) || lr_body_defines(c, d[i].node, direct, depth + 1)) return 1;
+    if (!r->recorded && (p.region < 0 || p.seq >= r->frontier)) return LR_OPAQUE_DEFINES;
+    o = lr_most(o, lr_body_defines(c, d[i].node, direct, depth + 1));
+    if (o == LR_OPAQUE_DEFINES) return o;
   }
-  return 0;
+  return o;
 }
 
 /* May node n call into the runtime, which may call back a method of the
@@ -1917,95 +1935,121 @@ static int lr_node_dispatches(const NodeTable *nt, int n) {
     case NK_ArgumentsNode: case NK_BlockParametersNode: case NK_ParametersNode: case NK_RequiredParameterNode:
     case NK_OptionalParameterNode: case NK_LocalVariableReadNode: case NK_LocalVariableWriteNode:
     case NK_InstanceVariableReadNode: case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
+    case NK_InstanceVariableWriteNode: case NK_ClassVariableWriteNode:
       return 0;
     default: return 1;
   }
 }
 
-/* Does node n, run, define or write anything (lr_body_defines)? With
-   direct, the runtime's own calls back into the program are left out */
+/* Is k a write of a class variable or an instance variable? Neither calls
+   back into the program (a global's setter may: $stdout= asks the value
+   respond_to?, $0= asks it to_str). */
+static int lr_variable_write(NodeKind k) {
+  switch (k) {
+    case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
+    case NK_InstanceVariableOperatorWriteNode: case NK_InstanceVariableTargetNode:
+    case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
+    case NK_ClassVariableOperatorWriteNode: case NK_ClassVariableTargetNode:
+      return 1;
+    default: return 0;
+  }
+}
+
+/* What may a call of `nm` do, as lr_node_defines asks for a CallNode's: what
+   the program's methods of that name may do, a call of `new` its initialize
+   too; a load effect, or a name the record cannot read, may define */
+static int lr_call_defines(Compiler *c, const char *nm, int direct, int depth) {
+  if (!nm || is_load_effect_call(nm)) return LR_OPAQUE_DEFINES;
+  int w = lr_named(c, nm) ? lr_callee_defines(c, nm, direct, depth) : 0;
+  if (w != LR_OPAQUE_DEFINES && is_new_name(nm)) w = lr_most(w, lr_callee_defines(c, "initialize", direct, depth));
+  return w;
+}
+
+/* Is k an operator write of an instance variable or a class variable
+   (`@x **= 1`), which calls its operator on the value, and which
+   lr_node_defines asks for the way it asks for a CallNode's name? A local's,
+   one through a call or through an index calls a method too, and a global's
+   setter may: those are answered as before, the record not counting what
+   they call. */
+static int lr_variable_op_write(NodeKind k) {
+  return k == NK_InstanceVariableOperatorWriteNode || k == NK_ClassVariableOperatorWriteNode;
+}
+
+/* What may node n, run, do (lr_body_defines): 0 nothing, LR_OPAQUE_WRITES
+   write an instance variable or a class variable, LR_OPAQUE_DEFINES define
+   or write anything else. With direct, the runtime's own calls back into the
+   program are left out */
 static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   static const NodeKind kinds[] = {
     NK_DefNode, NK_SingletonClassNode, NK_AliasMethodNode, NK_AliasGlobalVariableNode, NK_UndefNode, NK_YieldNode,
     NK_SuperNode, NK_ForwardingSuperNode, NK_ForwardingArgumentsNode, NK_GlobalVariableWriteNode,
     NK_GlobalVariableOrWriteNode, NK_GlobalVariableAndWriteNode, NK_GlobalVariableOperatorWriteNode,
-    NK_GlobalVariableTargetNode, NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
-    NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode, NK_InstanceVariableTargetNode,
-    NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode, NK_ClassVariableAndWriteNode,
-    NK_ClassVariableOperatorWriteNode, NK_ClassVariableTargetNode };
+    NK_GlobalVariableTargetNode };
   const NodeTable *nt = c->nt;
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
-  int nc = 0;
+  int nc = 0, o = lr_variable_write(k) ? LR_OPAQUE_WRITES : 0;
   const NodeKind *ck = elab_const_write_kinds(&nc);
   if (k == NK_DefNode && lr_body_held(c, n)) return 0;   /* (the record follows it) */
-  for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return 1;
-  for (int i = 0; i < nc; i++) if (k == ck[i]) return 1;
-  if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return 1;   /* a block passed on */
-  if (k == NK_CallNode) {
-    const char *nm = nt_str(nt, n, "name");
-    if (!nm || is_load_effect_call(nm) || (lr_named(c, nm) && lr_callee_defines(c, nm, direct, depth)) ||
-        (is_new_name(nm) && lr_callee_defines(c, "initialize", direct, depth))) return 1;
-  }
-  if (!direct && lr_node_dispatches(nt, n) && lr_callbacks_define(c, depth)) return 1;
-  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++)
-    if (lr_node_defines(c, nt_ref_at(nt, n, i), direct, depth)) return 1;
-  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+  for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return LR_OPAQUE_DEFINES;
+  for (int i = 0; i < nc; i++) if (k == ck[i]) return LR_OPAQUE_DEFINES;
+  if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return LR_OPAQUE_DEFINES;   /* a block passed on */
+  if (k == NK_CallNode) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "name"), direct, depth));
+  if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
+  if (o != LR_OPAQUE_DEFINES && !direct && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr && o != LR_OPAQUE_DEFINES; i++)
+    o = lr_most(o, lr_node_defines(c, nt_ref_at(nt, n, i), direct, depth));
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na && o != LR_OPAQUE_DEFINES; i++) {
     int m = 0;
     const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (lr_node_defines(c, ids[j], direct, depth)) return 1;
+    for (int j = 0; j < m && o != LR_OPAQUE_DEFINES; j++) o = lr_most(o, lr_node_defines(c, ids[j], direct, depth));
   }
-  return 0;
+  return o;
 }
 
-/* Does the body of def node `def`, run, define or write anything: a def,
-   a class, module or alias, a call that changes what the record holds or
-   runs code it cannot follow (is_load_effect_call), a write of a
-   constant, a global, a class variable or an instance variable (its
-   class's, run on a class), a yield, a super or a block passed on, a call
-   of a method of the program's that may (lr_callee_defines; `new` runs
-   initialize), or, but with direct, a node by which the runtime may call
-   back one that may (lr_callbacks_define)? A def asked again while it is
-   asked (a cycle) may. Memoized by the def (LR_KEY_DEFINES; "direct" for
-   the direct answer). */
+/* What does the body of def node `def`, run, do: define anything (a def, a
+   class, module or alias, a call that changes what the record holds or runs
+   code it cannot follow (is_load_effect_call), a write of a constant, a
+   yield, a super or a block passed on, a call of a method of the program's
+   that may (lr_callee_defines; `new` runs initialize), or, but with direct,
+   a node by which the runtime may call back one that may
+   (lr_callbacks_define); a write of a global too, whose setter may call
+   back: LR_OPAQUE_DEFINES), write a variable and no more (a class variable
+   or an instance variable, its class's, run on a class, or a call of a
+   method that does no more: LR_OPAQUE_WRITES), or neither (0)? A def asked again while it is asked (a cycle) may define.
+   Memoized by the def (LR_KEY_DEFINES; "direct" for the direct answer). */
 static int lr_body_defines(Compiler *c, int def, int direct, int depth) {
   LoadRecord *r = c->lrec;
   const char *key = direct ? "direct" : "";
   const LrHist *h = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
   if (h && h->n) return h->v[h->n - 1].vis;
-  if (depth > 64) return 1;
-  lr_version(r, LR_KEY_DEFINES, def, key, (LrDef){ def, LR_OPAQUE, 1, 0, 0, NULL });   /* while it is asked */
-  int o = lr_node_defines(c, nt_ref(c->nt, def, "parameters"), direct, depth) ||
-          lr_node_defines(c, nt_ref(c->nt, def, "body"), direct, depth);
+  if (depth > 64) return LR_OPAQUE_DEFINES;
+  lr_version(r, LR_KEY_DEFINES, def, key, (LrDef){ def, LR_OPAQUE, LR_OPAQUE_DEFINES, 0, 0, NULL });   /* while it is asked */
+  int o = lr_node_defines(c, nt_ref(c->nt, def, "parameters"), direct, depth);
+  if (o != LR_OPAQUE_DEFINES) o = lr_most(o, lr_node_defines(c, nt_ref(c->nt, def, "body"), direct, depth));
   LrHist *m = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
   m->v[m->n - 1].vis = (unsigned char)o;
   return o;
 }
 
-/* May a method the runtime calls back by itself (a protocol's,
+/* What may a method the runtime calls back by itself (a protocol's,
    method_name_implicitly_invoked; one a builtin or a node's syntax
-   calls on an object, ic_core_callback) define or write something?
-   Its direct answer is enough: what it calls back in turn is one of these
-   too. Kept once no such method may, or once the record is made. */
+   calls on an object, ic_core_callback) do: 0 nothing, else the most any
+   may (LR_OPAQUE_*)? Its direct answer is enough: what it calls back in
+   turn is one of these too. Kept once no such method may, or once the
+   record is made. */
 static int lr_callbacks_define(Compiler *c, int depth) {
   LoadRecord *r = c->lrec;
-  if (r->callbacks) return r->callbacks == 2;
+  if (r->callbacks) return r->callbacks - 1;
   int o = 0;
-  for (int i = 0; i < r->nnames && !o; i++)
+  for (int i = 0; i < r->nnames && o != LR_OPAQUE_DEFINES; i++)
     if ((i == 0 || strcmp(r->names[i - 1], r->names[i]) != 0) &&
         (method_name_implicitly_invoked(r->names[i]) || ic_core_callback(r->names[i], 0)))
-      o = lr_callee_defines(c, r->names[i], 1, depth);
-  if (!o || r->recorded) r->callbacks = (unsigned char)(o ? 2 : 1);
+      o = lr_most(o, lr_callee_defines(c, r->names[i], 1, depth));
+  if (!o || r->recorded) r->callbacks = (unsigned char)(o + 1);
   return o;
 }
 
-/* What code the record cannot follow may do, kept in its opaque entry's
-   vis: LR_OPAQUE_WRITES, only write an instance variable, the method it
-   runs being an attr's (LR_READER, LR_WRITER), which defines nothing;
-   LR_OPAQUE_DEFINES, anything (a send, an eval, a mixin a pass made, a
-   program method that may define, one the record cannot pin). Only the
-   defining ones may supply a method (lr_unordered_supply). */
-enum { LR_OPAQUE_WRITES = 1, LR_OPAQUE_DEFINES };
 /* Does owner k's opaque history hold code that may define (LR_OPAQUE_DEFINES)? */
 static int lr_opaque_defines(LoadRecord *r, int k) {
   const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
@@ -2020,7 +2064,8 @@ static int lr_opaque_defines(LoadRecord *r, int k) {
 static int lr_runs_defining(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
   const LrDef *d = NULL;
   int o = lr_search(c, cls, sg, name, -1, p, 0, 0, &d, 0);
-  if (o == ELAB_NO || (o == ELAB_YES && d && d->kind == LR_DEF && !lr_body_defines(c, d->node, 0, 0))) return 0;
+  if (o == ELAB_NO) return 0;
+  if (o == ELAB_YES && d && d->kind == LR_DEF) return lr_body_defines(c, d->node, 0, 0);
   return o == ELAB_YES && d && (d->kind == LR_READER || d->kind == LR_WRITER) ? LR_OPAQUE_WRITES : LR_OPAQUE_DEFINES;
 }
 

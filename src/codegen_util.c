@@ -7999,8 +7999,11 @@ void emit_rooted_key_call(Compiler *c, const char *fn, const char *recv,
 }
 
 void emit_main_exit(Buf *b) {
+  /* the helpers stay up through the hooks: a thread a hook starts needs one */
+  if (g_uses_threads) buf_puts(b, "sp_sched_drain_runnable(); ");
+  buf_puts(b, "_sp_main_rc = sp_at_exit_run(0); ");
   if (g_uses_threads) buf_puts(b, "sp_sched_drain(); ");
-  buf_puts(b, "_sp_main_rc = sp_at_exit_run(0); return; }\n");
+  buf_puts(b, "return; }\n");
 }
 
 void emit_retf_return(int eid, int has_retval, Buf *b) {

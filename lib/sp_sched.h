@@ -202,6 +202,7 @@ sp_bool   sp_Thread_tls_key(sp_thread *t, sp_sym k);             /* Thread#key? 
 
 /* Run any remaining runnable threads to completion. Emitted at the end of
    main() so a fire-and-forget Thread still runs its body. */
+void       sp_sched_drain_runnable(void);
 void       sp_sched_drain(void);
 
 /* Safepoint (design 5.1). codegen emits, at loop back-edges of a threaded

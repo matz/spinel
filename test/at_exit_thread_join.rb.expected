@@ -1,0 +1,6 @@
+main done
+value from a hook's thread: 42
+queue filled by a hook's thread: pushed
+a thread main left sleeping woke
+last hook
+first hook

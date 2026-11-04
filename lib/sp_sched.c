@@ -3352,7 +3352,14 @@ static void sp_thread_await(sp_thread *t) {
 /* CRuby: #join and #value re-raise the thread's unhandled exception in the
    joining thread. */
 static void sp_thread_reraise_if_exc(sp_thread *t) {
-  if (t->has_exc) sp_fiber_reraise(t->exc_cls, t->exc_msg, t->exc_obj);
+  if (!t->has_exc) return;
+  /* An exit t ended with is also queued on main (sp_thread_raise_main_locked).
+     A join that found t already dead skips the wait's inject check, so the
+     queued one is this exception: raised here, it does not fire again at
+     main's next wait. */
+  if (g_current == &g_main_thread && g_main_root)
+    sp_fiber_drop_raise_inject(g_main_root, t->exc_cls, t->exc_msg, t->exc_obj);
+  sp_fiber_reraise(t->exc_cls, t->exc_msg, t->exc_obj);
 }
 
 sp_thread *sp_Thread_join(sp_thread *t) {

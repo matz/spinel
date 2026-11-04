@@ -907,6 +907,12 @@ void sp_fiber_fire_inject_if_pending(void){sp_Fiber*f=sp_fiber_current;if(!f||f-
   sp_Fiber*m=sp_thread_inject_home();if(!m||!SP_INJECT_PEEK(m))return;
   SP_GC_ROOT(m);int kind=sp_fiber_inject_lock(m);const char*cl=m->inj_cls;const char*ms=m->inj_msg;void*ob=m->inj_obj;m->inj_cls=NULL;m->inj_msg=NULL;m->inj_obj=NULL;sp_fiber_inject_unlock(m,0);
   if(kind==2)sp_raise_cls(SP_FIBER_KILL_CLS,(&("\xff" SP_FIBER_KILL_MAIN)[1]));else sp_fiber_reraise(cl,ms,ob);}
+/* Drop a queued Thread#raise of this exception (the exit a dead thread
+   queued on main, sp_thread_raise_main_locked), so a join that re-raises it
+   raises it once; 1 when it was queued. */
+int sp_fiber_drop_raise_inject(sp_Fiber*f,const char*cls,const char*msg,void*obj){if(!f)return 0;SP_GC_ROOT(f);int kind=sp_fiber_inject_lock(f);
+  if(kind==3&&(obj?f->inj_obj==obj:(!f->inj_obj&&f->inj_cls==cls&&f->inj_msg==msg))){f->inj_cls=NULL;f->inj_msg=NULL;f->inj_obj=NULL;sp_fiber_inject_unlock(f,0);return 1;}
+  sp_fiber_inject_unlock(f,kind);return 0;}
 /* Lock-free peek for the scheduler's pre-park checks (sp_sched_block etc.). */
 int sp_fiber_inject_pending(sp_Fiber*f){return SP_INJECT_PEEK(f)!=0;}
 SP_NORETURN void sp_fiber_raise_kill_self(void){sp_raise_cls(SP_FIBER_KILL_CLS,(&("\xff")[1]));}

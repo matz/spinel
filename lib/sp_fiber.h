@@ -133,6 +133,7 @@ void sp_mark_fiber_root_storage(void);
 /* Thread #kill / #raise: the scheduler queues a pending inject on a target
    fiber, then fires it when that thread next runs (in its own context). */
 void sp_fiber_set_raise_inject(sp_Fiber *f, const char *cls, const char *msg, void *obj);
+int sp_fiber_drop_raise_inject(sp_Fiber *f, const char *cls, const char *msg, void *obj);
 void sp_fiber_set_kill_inject(sp_Fiber *f);
 /* ConditionVariable waits defer async delivery until their mutex is reacquired. */
 void sp_fiber_defer_inject(void);

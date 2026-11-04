@@ -19367,7 +19367,7 @@ int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const i
   for (int i = 0; i < cs.n; i++)
     buf_printf(b, repr_slot_kind(c, comp_gvar(c, cs.cell[i] + 1)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL)) || " : "gv_%s == %d || ",
                cs.cell[i] + 1, cs.val[i]);
-  buf_printf(b, "%d)", class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
+  buf_printf(b, "%d)", cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci]))));
   return 1;
 }
 

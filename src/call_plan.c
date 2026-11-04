@@ -1420,7 +1420,15 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
     ver_cell_name(vs[i].hist, out->cell[out->n]);
     out->val[out->n++] = vs[i].n;
   }
+  /* (with none live, what the call runs: the entry's else arm) */
+  out->els = cplan_entry_finds(c, e) >= (include_all ? VER_FINDS_HIDDEN : VER_FINDS_PUBLIC);
   return 1;
+}
+/* See call_plan.h. */
+int cplan_entry_finds(const Compiler *c, int e) {
+  for (int i = 0; e >= 0 && i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == e) return c->ver_entries[i].finds;
+  return -1;
 }
 /* Does call id run with main as self and look on main first: receiverless
    or on `self`, in a file's top-level statements (a block there too) or
@@ -4701,7 +4709,8 @@ int cplan_nil(Compiler *c, int id) {
    arm, the else arm what the lookup finds with none of them made, where
    the versions are one history's of one visibility (ver_absent_else; the
    last version, as for the other calls, where that keeps the table's
-   answer); *absent tells which. */
+   answer); *absent tells which, and *finds what that else arm finds
+   (ver_else_finds). */
 /* Are defs a and b one def of the source, a file inlined twice (two
    requires of it the inline load model both keeps)? Its copies are one
    method: any of them answers as the others do. */
@@ -4746,9 +4755,20 @@ static void ver_list_put(NodeTable *nt, int list, int at, int after, int g) {
 }
 static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int ar, int blk, int spliced,
                           const DispArm *arm, const int *to, int na, int els_to, int els);
+/* What an open history's entry runs when no version has run yet, decided
+   for every history before any entry is made (ver_named_kind):
+   VK_SUPER the method super reaches; VK_IVAR an inherited reader's
+   instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
+   inspect through super(); VK_BUILTIN the builtin a class answers on itself
+   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   no entry, where none of these is CRuby's answer: the history keeps the
+   handling it had (its last version taken as run); a version entry's
+   else arm the same, VK_KEEP its last version (ver_entry_make) */
+enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP };
 struct VerNamedAsks;
-static int ver_absent_else(Compiler *c, const struct VerNamedAsks *q, int rcls, int sg, const char *name, int hist, int vis,
-                           const int *to, int na, int ar, int mm, int *blk, int *spliced);
+static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm);
+static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced);
+static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last);
 /* Does cls's chain hold a builtin class other than Object (a reopened one,
    a builtin superclass)? Its methods are not all in the builtin tables
    (IO's on File, a socket's), so what a call meeting no version of the
@@ -4771,10 +4791,11 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
    cell; asked for a call that may meet no version (q), its else arm what
    the lookup finds past every version of the chain (ver_absent_else),
    when they share a visibility. -1 for none. */
-static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int sg, const char *name, int mi, int ar, int mm, int *absent) {
+static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int sg, const char *name, int mi, int ar, int mm,
+                          int *absent, int *finds) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
-  int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi;
+  int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi, kind = VK_KEEP;
   int spliced = c->scopes[mi].yields;
   char sel[VER_MAX_ARMS][32];
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
@@ -4792,8 +4813,10 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
     if (nt_int(c->nt, c->scopes[s].def_node, "concat_builtin_version", 0)) fallback = s;
     same &= ver_same_source(c->nt, c->scopes[s].def_node, c->scopes[mi].def_node);
   }
-  if (q && na && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) els = ver_absent_else(c, q, rcls, sg, name, vs[nv - 1].hist, vs[0].v->vis, to, na, ar, mm, &blk, &spliced);
+  if (q && na && vis && !ver_builtin_chain(c, rcls, sg, name, ar, blk)) kind = ver_named_kind(q, rcls, sg, name, to, na, vs[nv - 1].hist, vs[0].v->vis, ar, blk, mm);
+  if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, to, na, ar, &blk, &spliced);
   if (absent) *absent = els >= 0;
+  *finds = ver_else_finds(c, kind, rcls, sg, name, nv > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, na ? to[na - 1] : -1);
   if (els < 0 && (q || nv < 2 || !na || same)) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
   return ver_entry_emit(c, rcls, sg, name, ar, blk, spliced, arm, to, na, fallback, els);
 }
@@ -4863,15 +4886,6 @@ static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
    hcls, the history's class. Every history is asked first and its entry
    made after the last ask (VerNamed), so that a made entry's nodes
    rebuild no ask's parent map. */
-/* What an open history's entry runs when no version has run yet, decided
-   for every history before any entry is made (ver_named_kind):
-   VK_SUPER the method super reaches; VK_IVAR an inherited reader's
-   instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
-   inspect through super(); VK_BUILTIN the builtin a class answers on itself
-   (bop_class_answers), called on self; VK_NOMETHOD NoMethodError; VK_KEEP
-   no entry, where none of these is CRuby's answer: the history keeps the
-   handling it had (its last version taken as run) */
-enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP };
 typedef struct {
   int cls, sg, hcls, nv, ar, blk, els, espl, refl, atdef;   /* (espl: the else arm lets a spliced block through, ver_else_block; refl: ver_refl_named; atdef: ver_named_refuse_defs) */
   const char *name, *refuse;
@@ -4916,7 +4930,8 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   }
   for (int i = 0; i < nv; i++) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
   /* (an includer's: under the module's instance side) */
-  ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, 2, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e });
+  ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, 2, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
+                                      .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, to[nv - 1]) });
 }
 /* ...its else arm, as ver_named_kind decided: NoMethodError's message
    names the receiver's class by its Ruby name, read at run time when cls
@@ -5040,17 +5055,14 @@ static int ver_else_block(Compiler *c, int cls, int sg, int last, int els) {
 }
 /* The else arm of rcls's version entry for a call that may meet no
    version of the chain yet (ver_entries_demand), the versions to[0..na),
-   of one visibility vis, past the farthest of whose histories (hist) the
-   lookup goes on: what it finds with none of them made, as an open
-   history's entry answers for none run (ver_named_kind, ver_named_else),
-   at the last version's line; -1 where that is VK_KEEP,
-   for which the entry keeps the last version (the table's answer). It
-   may take the caller's block on (ver_else_block). */
-static int ver_absent_else(Compiler *c, const VerNamedAsks *q, int rcls, int sg, const char *name, int hist, int vis,
-                           const int *to, int na, int ar, int mm, int *blk, int *spliced) {
+   of one visibility: what the lookup finds with none of them made, past
+   the farthest of their histories, as an open history's entry answers
+   for none run (ver_named_kind's els, not VK_KEEP, for which the entry
+   keeps the last version, the table's answer; ver_named_else), at the
+   last version's line. It may take the caller's block on
+   (ver_else_block). */
+static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int *blk, int *spliced) {
   static const char *const at[] = { "node_line", "node_file", "node_col" };
-  int els = ver_named_kind(q, rcls, sg, name, to, na, hist, vis, ar, *blk, mm);
-  if (els == VK_KEEP) return -1;
   int eb = ver_else_block(c, rcls, sg, to[na - 1], els), like = c->scopes[to[na - 1]].def_node;
   *blk |= eb != 0;
   *spliced &= eb != 1;
@@ -5058,6 +5070,29 @@ static int ver_absent_else(Compiler *c, const VerNamedAsks *q, int rcls, int sg,
   int e = ver_named_else(c, &w);
   for (int i = 0; i < 3; i++) nt_node_set_int((NodeTable *)c->nt, e, at[i], nt_int(c->nt, like, at[i], 0));
   return e;
+}
+/* What an entry's else arm of kind els finds of cls's method `name` on
+   side sg while no version of its chain is live, as respond_to? and a
+   Method's maker see it (VerEntry.finds), the versions of visibility vis,
+   the last last: VK_KEEP the table's method (main's, theirs); super's target, which has
+   theirs (ver_named_kind), but a module's hook no method of the program
+   answers, the core's private no-op; an inherited reader, which has
+   theirs too; a public builtin or Kernel text; no method for
+   NoMethodError and method_missing */
+static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last) {
+  int at;
+  switch (els) {
+  case VK_NOMETHOD: case VK_MM: return VER_FINDS_NONE;
+  case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
+  case VK_KEEP:   /* (main's: the versions', a private one unless declared) */
+    if (cls >= 0) vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
+    break;
+  case VK_SUPER:
+    if (last < 0 || cplan_super_target(c, -1, &c->scopes[last], &at) < 0) vis = SP_VIS_PRIVATE;
+    break;
+  default: break;
+  }
+  return vis == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : VER_FINDS_HIDDEN;
 }
 /* Does define_method call `dm` take keyword parameters, which its scope
    does not bind (the call sites bind keywords from a DefNode's)? */
@@ -5543,9 +5578,11 @@ void ver_entries_build(Compiler *c) {
     }
   }
   for (int i = 0; i < o.n; i++) {
+    /* (a guard entry's else arm runs the method behind the prepends) */
+    int finds = ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
-                         : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL);
-    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e });
+                         : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
+    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds });
   }
   free(o.v); free(o.ix);
   free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */
@@ -5779,14 +5816,17 @@ static int ver_late_make(Compiler *c) {
   qsort(c->ver_late, (size_t)c->nver_late, sizeof *c->ver_late, ver_late_cmp);
   for (int i = 0; i < c->nver_late; i++) {
     const struct VerLate *l = &c->ver_late[i];
-    int ix = ver_entry_ix(c, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0;
+    int ix = ver_entry_ix(c, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
-    e = ver_entry_make(c, &q, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent);
-    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1 });
+    e = ver_entry_make(c, &q, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent, &finds);
+    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });
     else {
       c->ver_entries[ix].absent = absent ? 2 : 1;
-      if (absent) c->ver_entries[ix].scope = e;   /* (its cells are written where the other was made) */
+      if (absent) {   /* (its cells are written where the other was made) */
+        c->ver_entries[ix].scope = e;
+        c->ver_entries[ix].finds = finds;
+      }
     }
     made |= absent;
   }

@@ -3933,9 +3933,22 @@ static int lr_under(Compiler *c, int cls, int k) {
 }
 
 /* Is class or module k one of cls's ancestors (its singleton's when sg)
-   at p, or may it be: cls, a superclass, a module mixed into one of them? */
+   at p, or may it be: cls, a superclass, a module mixed into one of them?
+   Only a superclass puts a class on a chain, whatever is mixed in, so the
+   answer for a class is exact: cls or a superclass of it; Object and
+   BasicObject, which end every class's chain whatever its superclass walk
+   says (lr_super ends at main), and a module's singleton's; and on a
+   singleton's chain the classes lr_sg_tail ends it in. */
 static int lr_in_ancestry(Compiler *c, int cls, int sg, int k, LoadPoint p) {
-  return lr_under(c, cls, k) || (k >= 0 && lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO);
+  int tail[5];
+  if (lr_under(c, cls, k)) return 1;
+  if (k >= 0 && k < c->nclasses && !comp_class_is_module(c, &c->classes[k])) {
+    if ((k == comp_core_class(c, CORE_OBJECT) || k == comp_core_class(c, CORE_BASIC_OBJECT)) &&
+        (sg || cls < 0 || !comp_class_is_module(c, &c->classes[cls]))) return 1;
+    for (int i = sg ? lr_sg_tail_of(c, cls, tail) : 5; i < 5; i++) if (tail[i] == k) return 1;
+    return 0;
+  }
+  return k >= 0 && lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO;
 }
 
 /* Does node's statement run strictly between p0 and p1, or is it not

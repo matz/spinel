@@ -11386,18 +11386,36 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
     buf_printf(b, "); (sp_%s *)NULL; })", sc->c_name);
     return;
   }
-  /* the receiver and each `**hash` are held by these temps alone while the
-     arguments run, a keyword default among them */
+  /* A `**hash`, or a keyword a later element names again, makes every
+     element run in source order after the receiver, each with its own
+     hoists (in the caller's prelude they ran before the receiver), into a
+     boxed temp: a later element neither runs first nor changes an earlier
+     value, and an overridden value still runs. These temps, and the
+     receiver's, hold the values alone while the arguments run, a keyword
+     default among them. */
+  int all = ds > 0;
+  for (int e = 0; e < en && !all; e++) {
+    int k1 = nt_ref(nt, els[e], "key");
+    if (k1 < 0 || nt_kind(nt, k1) != NK_SymbolNode) continue;
+    for (int e2 = e + 1; e2 < en && !all; e2++) {
+      int k2 = nt_ref(nt, els[e2], "key");
+      all = k2 >= 0 && nt_kind(nt, k2) == NK_SymbolNode && sp_streq(nt_str(nt, k1, "value"), nt_str(nt, k2, "value"));
+    }
+  }
   int t = ++g_tmp;
   Buf rb = expr_buf(c, recv);
   buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
   int *th = (int *)calloc((size_t)(en > 0 ? en : 1), sizeof(int));
   if (!th) { perror("calloc"); exit(1); }
-  for (int e = 0; e < en; e++) {
-    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) continue;
+  for (int e = 0; e < en && all; e++) {
+    int v = nt_ref(nt, els[e], "value");
+    if (v < 0) unsupported_feature(c, id, "Data#with with an anonymous `**`");
     th[e] = ++g_tmp;
-    buf_printf(b, " sp_RbVal _t%d = ", th[e]); emit_boxed(c, nt_ref(nt, els[e], "value"), b);
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", th[e]);
+    Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
+    g_pre = &pre; emit_boxed(c, v, &vb); g_pre = saved_pre;
+    if (pre.p) buf_printf(b, " %s", pre.p);
+    buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", th[e], vb.p ? vb.p : "sp_box_nil()", th[e]);
+    free(pre.p); free(vb.p);
   }
   int tn = ++g_tmp;
   buf_printf(b, " sp_%s *_t%d = sp_%s_new(", sc->c_name, tn, sc->c_name);
@@ -11410,10 +11428,10 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
        that carries it at run time, else the next one back */
     int opened = 0, given = -1;
     for (int e = en - 1; e >= 0 && given < 0; e--) {
-      if (!th[e]) {
+      if (nt_kind(nt, els[e]) != NK_AssocSplatNode) {
         int key = nt_ref(nt, els[e], "key");
         if (key >= 0 && nt_kind(nt, key) == NK_SymbolNode && sp_streq(nt_str(nt, key, "value"), pn))
-          given = nt_ref(nt, els[e], "value");
+          given = e;
         continue;
       }
       int f = ++g_tmp;
@@ -11426,14 +11444,13 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
       buf_puts(b, " : ");
       opened++;
     }
-    if (given >= 0) {
-      /* run only where no later `**hash` carries the key */
-      NodeKind gk = nt_kind(nt, given);
-      if (opened && !expr_is_held_ref(c, given) && gk != NK_IntegerNode && gk != NK_FloatNode &&
-          gk != NK_SymbolNode && gk != NK_StringNode && gk != NK_NilNode && gk != NK_TrueNode && gk != NK_FalseNode)
-        unsupported_feature(c, id, "Data#with with a computed keyword value before a `**hash`");
-      emit_arg_or_default(c, m, j, given, b);
+    if (given >= 0 && all) {
+      char vn[32]; snprintf(vn, sizeof vn, "_t%d", th[given]);
+      if (pt == TY_POLY) buf_puts(b, vn);
+      else if (slot_is_oint(p)) buf_printf(b, "%s(%s)", oint_unbox(pt), vn);
+      else emit_unbox_text(c, pt, vn, b);
     }
+    else if (given >= 0) emit_arg_or_default(c, m, j, nt_ref(nt, els[given], "value"), b);
     else {
       char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", pn);
       int i = comp_member_index(sc, ivn);

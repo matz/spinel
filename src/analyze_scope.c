@@ -11816,9 +11816,9 @@ int infer_ivar_types(Compiler *c) {
                       (vt == TY_NIL || comp_nil_chain_bottom(nt, vnode) >= 0);
       /* `@prev = prev` from a `prev = nil` parameter no call supplies
          writes the nil it always is; the parameter itself stays boxed. Not
-         inside an instance_eval/exec block, whose writes the receiver's
-         class takes */
-      if (!nil_write && ty_k == NK_InstanceVariableWriteNode && vt == TY_POLY && ie_class_of(c, id) < 0 &&
+         inside an instance_eval/exec block (one receiver class or several),
+         whose writes the receiver's class takes */
+      if (!nil_write && ty_k == NK_InstanceVariableWriteNode && vt == TY_POLY && ie_class_of(c, id) == -1 &&
           nil_param_read(c, vnode)) {
         nil_write = 1; vt = TY_NIL;
       }

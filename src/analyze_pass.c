@@ -9610,8 +9610,11 @@ static int nil_param_never_supplied(Compiler *c, int s, int i) {
       Scope *ss = comp_scope_of(c, id);
       if (!ss || !ss->name || ss->def_node < 0 || nt_kind(nt, ss->def_node) != NK_DefNode) return 0;
       if (sp_streq(ss->name, sc->name) && nil_param_reaches(c, ss->class_id, sc->class_id)) return 0;
-      /* a `super` in `self.new` is Class#new, whose arguments reach initialize */
-      if (is_init && comp_super_is_class_new(c, id) && nil_param_reaches(c, ss->class_id, sc->class_id)) return 0;
+      /* a `super` in `self.new` is Class#new, whose arguments reach the
+         initialize of the class it builds: one above the `self.new`'s, or,
+         for a `self.new` a subclass inherits, one below it */
+      if (is_init && comp_super_is_class_new(c, id) &&
+          (nil_param_reaches(c, ss->class_id, sc->class_id) || nil_param_reaches(c, sc->class_id, ss->class_id))) return 0;
     }
   }
   return 1;

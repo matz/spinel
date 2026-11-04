@@ -1012,15 +1012,37 @@ static int sp_name_collides_runtime(const char *n) {
   return 0;
 }
 /* The C-identifier stem for a class: the name, disambiguated if it would clash
-   with a runtime typedef. Caller owns the returned strdup'd string. */
-static char *sp_class_c_name(const char *name) {
+   with a runtime typedef. A stem past SP_CLASS_C_NAME_MAX keeps its first
+   characters and a hash of the whole (salted past another class's stem):
+   the emitters build casts and calls of a stem in fixed buffers, and a long
+   (namespaced) name cut them short, so the C did not compile. Caller owns
+   the returned string. */
+#define SP_CLASS_C_NAME_MAX 40
+static char *sp_class_c_name(const Compiler *c, const char *name) {
   if (!name) return NULL;
-  if (!sp_name_collides_runtime(name)) return strdup(name);
-  size_t n = strlen(name);
-  char *m = malloc(n + 3);
-  if (!m) return strdup(name);
-  m[0] = 'u'; m[1] = '_'; memcpy(m + 2, name, n + 1);
-  return m;
+  char *m;
+  if (!sp_name_collides_runtime(name)) m = strdup(name);
+  else {
+    size_t n = strlen(name);
+    m = malloc(n + 3);
+    if (!m) return strdup(name);
+    m[0] = 'u'; m[1] = '_'; memcpy(m + 2, name, n + 1);
+  }
+  if (!m || strlen(m) <= SP_CLASS_C_NAME_MAX) return m;
+  char *s = malloc(SP_CLASS_C_NAME_MAX + 1);
+  if (!s) return m;
+  /* the cut backs up to a character's first byte: a C identifier is UTF-8 */
+  int keep = SP_CLASS_C_NAME_MAX - 9;
+  while (keep > 0 && ((unsigned char)m[keep] & 0xC0) == 0x80) keep--;
+  for (unsigned salt = 0;; salt++) {
+    snprintf(s, SP_CLASS_C_NAME_MAX + 1, "%.*s_%08x", keep, m, sp_strhash(m) + salt);
+    int clash = 0;
+    for (int k = 0; k < c->nclasses && !clash; k++)
+      clash = c->classes[k].c_name && sp_streq(c->classes[k].c_name, s) && !sp_streq(c->classes[k].name, name);
+    if (!clash) break;
+  }
+  free(m);
+  return s;
 }
 /* name -> class index: chains over the classes' names, each name linked
    once, at its lowest index. comp_class_index is called per node during
@@ -1094,7 +1116,7 @@ ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node) {
   ci->ctor_site = 1;
   ci->name = name ? strdup(name) : NULL;
   class_hash_add(c, ci->idx);
-  ci->c_name = sp_class_c_name(name);
+  ci->c_name = sp_class_c_name(c, name);
   ci->is_builtin_const = is_builtin_class_name(name) || is_builtin_module_const_name(name);
   /* Creation is where a builtin's name becomes a class id. The fill moves
      to the class entity later (#9898); the first class of this name answers

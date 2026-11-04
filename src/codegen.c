@@ -12289,7 +12289,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
           comp_resolve_member(c, cid, "inspect", 0, NULL, NULL) == SP_MEMBER_ATTR) {
         /* (one-String mode: the member is the handle, answered as its bytes face) */
         buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return SP_STR_B(self->iv_inspect); }\n",
-                   ci->name, ci->name);
+                   ci->c_name, ci->c_name);
       }
       else if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
       const char *rn = class_ruby_name(c, cid); if (!rn) rn = ci->name;
@@ -12372,10 +12372,10 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                           (ci->ivar_types[tosidx] == TY_STRBUF)) &&
           comp_resolve_member(c, cid, "to_s", 0, NULL, NULL) == SP_MEMBER_ATTR)
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return SP_STR_B(self->iv_to_s); }\n",
-                   ci->name, ci->name);
+                   ci->c_name, ci->c_name);
       else
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return sp_%s_inspect(self); }\n",
-                   ci->name, ci->name, ci->name);
+                   ci->c_name, ci->c_name, ci->c_name);
     }
     return;
   }
@@ -16364,7 +16364,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     const char *builtin_guard = NULL; /* operand cls_id a boxed-builtin param requires */
     if (ty_is_object(pt)) {
       int pcls = ty_object_class(pt);
-      const char *pcn = c->classes[pcls].name;
+      const char *pcn = c->classes[pcls].c_name;
       pcid = pcls;   /* guard b against the OPERAND's class, not the receiver's */
       snprintf(argbuf, sizeof argbuf, "%s(sp_%s *)b.v.p",
                c->classes[pcls].is_value_type ? "*" : "", pcn);
@@ -16487,7 +16487,7 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
     snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && %s.cls_id == %d",
              v, v, pcls);
     snprintf(arg, asz, "%s(sp_%s *)%s.v.p",
-             c->classes[pcls].is_value_type ? "*" : "", c->classes[pcls].name, v);
+             c->classes[pcls].is_value_type ? "*" : "", c->classes[pcls].c_name, v);
   }
   else if (pt == TY_POLY) snprintf(arg, asz, "%s", v);
   /* a parameter slot that holds its nil takes nil too, as its oint */
@@ -16773,7 +16773,7 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
                        pcls2);
               cguard = cgb;
               snprintf(cargs, sizeof cargs, "%s(sp_%s *)b.v.p",
-                       c->classes[pcls2].is_value_type ? "*" : "", c->classes[pcls2].name);
+                       c->classes[pcls2].is_value_type ? "*" : "", c->classes[pcls2].c_name);
             }
             else snprintf(cargs, sizeof cargs, "b");
             buf_printf(b, "      if (strcmp(op, \"==\") == 0%s%s%s) {\n",

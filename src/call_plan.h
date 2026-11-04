@@ -564,6 +564,9 @@ TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */
 const PolyPlan *cplan_poly_sub(Compiler *c, int id);
+/* a nil-able String/Integer/Float receiver whose name only the program's
+   NilClass answers: dispatched boxed (PB_SUBDISPATCH) */
+int cplan_nil_scalar_reach(Compiler *c, int id);
 /* How a receiverless call id in a builtin class's reopening hands its
    block to mi, the reopening's own method it reaches (emit_reopen_own_call):
    ROB_NONE, it has none; ROB_PASS, as mi's `&blk` argument, as the

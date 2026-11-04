@@ -29341,7 +29341,33 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   buf_printf(b, "), %s)", default_value_from_compiler(c, repr_of(c, id).as_ty));
   return 1;
 }
+/* A String, Integer or Float receiver that may be nil, where nil runs the
+   program's NilClass method of the name and the receiver's class runs
+   another or none (cplan_nil_scalar_reach): the call is emitted again with
+   the receiver boxed, and the poly dispatch picks the method by the value's
+   class. 1 when it emitted the call. */
+static int emit_nil_scalar_reach(Compiler *c, int id, Buf *b) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv < 0 || g_n_argov >= MAX_ARG_OVERRIDE || g_subdispatch_id == id || !cplan_nil_scalar_reach(c, id))
+    return 0;
+  int tsd = ++g_tmp;
+  tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
+  view_bind(recv, "_t%d", tsd);
+  if (g_plan_check) {
+    int pa_frame = pa_begin(id);
+    pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SUBDISPATCH, -1, TY_UNKNOWN, PC_SAME);
+    pa_end(c, pa_frame, cplan_poly_sub(c, id));
+  }
+  int vw = view_push(c, recv, TY_POLY);
+  int svid = g_subdispatch_id; g_subdispatch_id = id;
+  emit_call(c, id, b);
+  g_subdispatch_id = svid;
+  view_pop(c, vw);
+  view_unbind(g_n_argov - 1);
+  return 1;
+}
 void emit_call(Compiler *c, int id, Buf *b) {
+  if (emit_nil_scalar_reach(c, id, b)) return;
   if (emit_autoload_register(c, id, b)) return;
   if (emit_call_on_missing_builtin_path(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;

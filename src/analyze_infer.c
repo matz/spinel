@@ -1895,7 +1895,7 @@ static int infer_int_shl_overflows(long long base, long long amount) {
          minimum, which is an sp_int: in raise mode the runtime helper raises
          its RangeError, in wrap mode the value is that minimum. Only promote
          mode keeps the Bignum. */
-      if (!g_promote_mode && amount < top && base > 0 &&
+      if (!g_promote_mode && amount <= top && base > 0 &&
           (unsigned long long)base == (1ULL << (top - amount)))
         return 0;
       return 1;

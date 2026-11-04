@@ -3122,6 +3122,10 @@ TyKind yield_value_type_via_super(Compiler *c, int mi) {
     int sb = nt_ref(nt, yvt_sup_ids[ii], "block");
     TyKind ft;
     if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) ft = yvt_literal_block_value(c, sb);
+    /* `super(a, &pr)` with a proc value of the child's own (not the child's
+       block forwarded on): mi's yield runs that proc, as a call's does */
+    else if (sb >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode && !call_forwards_own_block(c, yvt_sup_ids[ii]))
+      ft = yvt_proc_arg_value(c, sb);
     else {
       ft = yield_value_type(c, cmi);
       if (ft == TY_UNKNOWN) ft = yield_value_type_via_super(c, cmi);

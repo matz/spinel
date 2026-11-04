@@ -25315,7 +25315,9 @@ static void cbi_rewrite_access_recv(NodeTable *nt, int id, int recv) {
    it as `klass.instance_variable_set(:@x, v)` does
    (desugar_const_ivar_access). The block's statements, with their ivars
    so rewritten, stand where the call stood; the block must be plain
-   (cvce_plain), with no parameters. 1 when rewritten. */
+   (cvce_plain), with no parameters. A bare call among the statements is
+   the class's own, `klass.default_helper_module!`, and gets the class as
+   its receiver. 1 when rewritten. */
 /* Does the program give Module's class_eval family a method of its own: a
    def of the name in a reopening of Module, Class, Object, BasicObject or
    Kernel, which a class value's call would reach? One on a class of the
@@ -25342,12 +25344,21 @@ static int cvce_rewrite(NodeTable *nt, const int *parent, int id, int r, int blk
   int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
   for (int i = 0; i < bn; i++) {
     NodeKind k = nt_kind(nt, bb[i]);
+    /* a bare call is the class's: `klass.class_eval { default_helper_module! }` */
+    if (k == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 && nt_ref(nt, bb[i], "block") < 0 &&
+        !nt_safe_nav(nt, bb[i]) && nt_str(nt, bb[i], "name") &&
+        cvce_plain(nt, nt_ref(nt, bb[i], "arguments"))) continue;
     if (k != NK_InstanceVariableWriteNode && k != NK_InstanceVariableOperatorWriteNode &&
         k != NK_InstanceVariableOrWriteNode && k != NK_InstanceVariableAndWriteNode) return 0;
     if (!cvce_plain(nt, nt_ref(nt, bb[i], "value"))) return 0;
   }
   for (int i = 0; i < bn; i++) {
     NodeKind k = nt_kind(nt, bb[i]);
+    if (k == NK_CallNode) {
+      int rc = nt_clone_subtree(nt, r);
+      if (rc >= 0) nt_node_set_ref(nt, bb[i], "receiver", rc);
+      continue;
+    }
     if (k != NK_InstanceVariableWriteNode) cbi_lower_op_writes(nt, bb[i]);
   }
   int *hits = NULL, cap = 0, nhits = 0, trigger = 0;

@@ -5608,6 +5608,12 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
   /* __enum_chain(arr): the desugared Enumerable#chain / Enumerator#+. The arg is
      already the concatenation of every source's #to_a, so the chain enumerator
      just snapshots it. #2545 / #2548 / #2551 */
+  /* a class value a desugared `exception` is sent to */
+  if (recv < 0 && sp_streq(name, "__exc_class") && argc == 1) {
+    if (comp_ntype(c, argv[0]) == TY_CLASS) { buf_puts(b, "sp_exc_class("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else { buf_puts(b, "sp_exc_class(sp_unbox_class("); emit_boxed(c, argv[0], b); buf_puts(b, "))"); }
+    return 1;
+  }
   /* the desugared ENV snapshot (#2742) */
   if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) {
     /* (one representation: a String Hash holds the String it is handed,
@@ -19531,6 +19537,8 @@ static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   /* builtin Class/Module methods every class object inherits; a module
      lacks Class's own (`new`, `superclass`, ...) */
   if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
+  /* Exception's class-level `exception` */
+  if (is_exception_ctor_name(qm) && class_is_exc_subclass(c, ci)) return 1;
   /* A Struct or Data CLASS object answers its record class's own builtins
      (is_record_class_cmethod: `members`, a Struct's `keyword_init?`, ...)
      the way its instances answer theirs (#3482), before a program's def of

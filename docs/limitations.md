@@ -463,6 +463,18 @@ A typed-array adapter Method (`arr.method(:push)`) reports the CRuby arity of
 the Array op it stands in for (`-1`) except for `[]`, whose adapter Method still
 reports `1` through a poly slot where CRuby answers `-1`.
 
+#### `exception` on a class
+
+`K.exception(...)` builds what `K.new(...)` builds, keywords reaching `initialize`
+as the positional Hash CRuby hands it. Three forms differ:
+
+- `k.exception(...)` on a class value, in a program with a class method `exception`
+  anywhere, reaches only those methods. A class without one raises `NoMethodError`,
+  where CRuby's builds it.
+- A class with a `self.new` of its own has no `exception`, since `new` is what the
+  call is built with: the program is refused.
+- `raise K` and `raise K, msg` build `K` without calling a program's `self.exception`.
+
 #### Exception protocol from a genuinely poly value
 
 An `Exception` subclass instance held in a genuinely poly value -- read out of

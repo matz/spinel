@@ -21391,6 +21391,15 @@ static void sp_dyn_new_arity(sp_int given, sp_int max) {
   sp_arity_check(given, 0, max, NULL);
 }
 sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc *blk);
+/* The class `exception` is sent to as a value: a class of Exception, and
+   NoMethodError for any other. */
+static sp_Class sp_exc_class(sp_Class k) {
+  const char *cn = sp_class_to_s(k);
+  if (!sp_is_exc_subclass_cls(k.cls_id) &&
+      !(cn && (sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE || !strcmp(cn, "Exception") || sp_exc_parent_of_name(cn))))
+    sp_raise_nomethod(sp_nomethod_msg("exception", sp_box_class(k)));
+  return k;
+}
 /* The default arm of those dispatches: `cls` (named `cn`) is a builtin
    exception class, constructed as `RuntimeError.new(msg)` is, or a class
    the program cannot construct through a class value. */
@@ -21399,6 +21408,11 @@ static sp_RbVal sp_class_value_new_fallback(sp_RbVal cls, const char *cn, sp_int
     sp_raise_cls("TypeError", "can't create instance of singleton class");
   if (cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE)
     return sp_box_obj(sp_syserr_build(cn, argc, av), SP_BUILTIN_EXCEPTION);
+  if (cn && !strcmp(cn, "SystemExit")) {
+    sp_Exception *e = sp_exc_new(cn, sp_str_empty);
+    sp_sysexit_super(e, argc, av);
+    return sp_box_obj(e, SP_BUILTIN_EXCEPTION);
+  }
   if (cn && (!strcmp(cn, "Exception") || sp_exc_parent_of_name(cn))) {
     sp_dyn_new_arity(argc, 1);
     const char *msg = sp_str_empty;

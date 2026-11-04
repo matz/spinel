@@ -10256,6 +10256,183 @@ static void fwd_branch_on_callable(Compiler *c, int id, int cx) {
 }
 static void fwd_branch_on_block_given(Compiler *c, int id) { fwd_branch_on_callable(c, id, -1); }
 
+/* Does `exception` on the exception class `ci` reach Exception's own? A
+   class method of that name answers instead. Exception's builds through
+   allocate and initialize, so a `new` of the class's own never runs for it,
+   and there is no `new` to spell it with. */
+static int exc_ctor_reached(Compiler *c, int id, int ci) {
+  return call_target(c, id, ci, "exception", CT_CMETHOD, NULL) < 0 &&
+         call_target(c, id, ci, "new", CT_CMETHOD, NULL) < 0;
+}
+
+/* `k` as the class a desugared `exception` is sent to: `__exc_class(k)`,
+   which raises the NoMethodError any other class answers with. */
+static int exc_ctor_guard(Compiler *c, int id, int k) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int g = fwd_new_node_like(nt, id, "CallNode"), ga = fwd_new_node_like(nt, id, "ArgumentsNode");
+  nt_node_set_arr(nt, ga, "arguments", &k, 1);
+  nt_node_set_str(nt, g, "name", "__exc_class");
+  nt_node_set_ref(nt, g, "receiver", -1);
+  nt_node_set_ref(nt, g, "arguments", ga);
+  nt_node_set_ref(nt, g, "block", -1);
+  comp_grow_node_arrays(c);
+  c->nscope[g] = c->nscope[ga] = c->nscope[id];
+  c->node_cbody[g] = c->node_cbody[ga] = c->node_cbody[id];
+  return g;
+}
+
+/* Call `id` as `new`, as Exception's `exception` builds: past a private one,
+   and with keywords as the positional Hash it hands to initialize. */
+static void exc_ctor_spell_new(Compiler *c, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  nt_node_set_str(nt, id, "name", "new");
+  nt_set_ignore_visibility(nt, id, 1);
+  int args = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+  if (ac == 0 || nt_kind(nt, av[ac - 1]) != NK_KeywordHashNode) return;
+  int kw = av[ac - 1], en = 0, h = fwd_new_node_like(nt, id, "HashNode");
+  const int *ev = nt_arr(nt, kw, "elements", &en);
+  int *els = en > 0 ? malloc(sizeof(int) * (size_t)en) : NULL;
+  for (int e = 0; e < en; e++) els[e] = ev[e];
+  nt_node_set_arr(nt, h, "elements", els, en);
+  free(els);
+  int *moved = malloc(sizeof(int) * (size_t)ac);
+  av = nt_arr(nt, args, "arguments", &ac);
+  for (int k = 0; k < ac - 1; k++) moved[k] = av[k];
+  moved[ac - 1] = h;
+  nt_node_set_arr(nt, args, "arguments", moved, ac);
+  free(moved);
+  comp_grow_node_arrays(c);
+  c->nscope[h] = c->nscope[id];
+  c->node_cbody[h] = c->node_cbody[id];
+}
+
+/* `x.exception(a)` on a boxed x, which may hold a class or an instance, is
+   `(t = x).is_a?(Class) ? __exc_class(t).new(a) : t.exception(a)`, with x
+   itself for t where it is a variable. The instance's call keeps its name. */
+static void exc_ctor_branch_boxed(Compiler *c, int id, int recv) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int base = nt->count;
+  NodeKind rk = nt_kind(nt, recv);
+  int test = recv, t1, t2;
+  nt_node_set_ref(nt, id, "receiver", -1);
+  int inst = nt_clone_subtree(nt, id);
+  if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode) {
+    t1 = nt_clone_subtree(nt, recv);
+    t2 = nt_clone_subtree(nt, recv);
+  }
+  else {
+    char tname[48]; snprintf(tname, sizeof tname, "__exc_%d", id);
+    test = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+    t1 = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+    t2 = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+    nt_node_set_str(nt, test, "name", tname); nt_node_set_int(nt, test, "depth", 0);
+    nt_node_set_ref(nt, test, "value", recv);
+    nt_node_set_str(nt, t1, "name", tname); nt_node_set_int(nt, t1, "depth", 0);
+    nt_node_set_str(nt, t2, "name", tname); nt_node_set_int(nt, t2, "depth", 0);
+    scope_local_intern(comp_scope_of(c, id), tname);
+  }
+  int cls = fwd_new_node_like(nt, id, "ConstantReadNode"), pa = fwd_new_node_like(nt, id, "ArgumentsNode");
+  int pred = fwd_new_node_like(nt, id, "CallNode"), call = fwd_new_node_like(nt, id, "IfNode");
+  int then = nt_new_node(nt, "StatementsNode"), other = nt_new_node(nt, "StatementsNode");
+  int els = nt_new_node(nt, "ElseNode");
+  nt_node_set_str(nt, cls, "name", "Class");
+  nt_node_set_arr(nt, pa, "arguments", &cls, 1);
+  nt_node_set_str(nt, pred, "name", "is_a?");
+  nt_node_set_ref(nt, pred, "receiver", test);
+  nt_node_set_ref(nt, pred, "arguments", pa);
+  nt_node_set_ref(nt, pred, "block", -1);
+  nt_node_set_ref(nt, inst, "receiver", t2);
+  nt_node_set_int(nt, inst, "exc_instance", 1);
+  /* the call moves to a number of its own, the conditional takes `id`'s */
+  fwd_move_call(c, id, call, "IfNode");
+  nt_node_set_ref(nt, call, "receiver", exc_ctor_guard(c, id, t1));
+  exc_ctor_spell_new(c, call);
+  nt_node_set_arr(nt, then, "body", &call, 1);
+  nt_node_set_arr(nt, other, "body", &inst, 1);
+  nt_node_set_ref(nt, els, "statements", other);
+  nt_node_set_ref(nt, id, "predicate", pred);
+  nt_node_set_ref(nt, id, "statements", then);
+  nt_node_set_ref(nt, id, "subsequent", els);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+}
+
+/* A class of Exception answers `exception` as it answers `new`: the arguments
+   go to initialize, whichever class's that is, and SystemExit, SystemCallError
+   and the rest read theirs by their own rules. Spell the call `new`, which
+   knows each of them.
+
+   A receiver that names its class, a self that is one and a call with no
+   receiver in a class method or a class body are decided here. A class value
+   only the run time knows is checked there (exc_ctor_guard), and a boxed
+   receiver asked which it holds (exc_ctor_branch_boxed), once its type has
+   settled. A program with a class method `exception` keeps its call on both,
+   since the class may be that one. */
+int desugar_exception_class_ctor(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  static const char *const calls_of[] = { "exception", NULL };
+  int *calls, ncalls = an_calls_named_any(c, calls_of, n0, &calls);
+  for (int q = 0; q < ncalls; q++) {
+    int id = calls[q];
+    if (id >= c->node_cap || nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !is_exception_ctor_name(nm) || nt_int(nt, id, "exc_instance", 0)) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+    int constant = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
+    TyKind rt = recv >= 0 && rk != NK_SelfNode ? infer_type(c, recv) : TY_CLASS;
+    int ci = -1;
+    if (rk == NK_SelfNode) {
+      Scope *sc = comp_scope_of(c, id);
+      ci = sc && sc->name ? (sc->is_cmethod ? sc->class_id : -1) : c->node_cbody[id];
+      if (ci < 0) continue;
+    }
+    else if (constant || rt == TY_CLASS) {
+      ci = class_recv_static_ci(c, recv);
+      if (ci < 0 && constant && !const_class_value_only(c, recv)) {
+        const char *en = superclass_builtin_exc_name(nt, recv);
+        if (!en || !is_builtin_exception_name(en)) continue;
+        exc_ctor_spell_new(c, id);
+        changed = 1;
+        continue;
+      }
+    }
+    if (ci >= 0) {
+      if (!class_is_exc_subclass(c, ci) && !(is_builtin_reopen(c->classes[ci].name) && is_builtin_exception_name(c->classes[ci].name))) continue;
+      if (!exc_ctor_reached(c, id, ci)) continue;
+      if (recv < 0) {
+        int sn = fwd_new_node_like(nt, id, "SelfNode");
+        comp_grow_node_arrays(c);
+        c->nscope[sn] = c->nscope[id];
+        c->node_cbody[sn] = c->node_cbody[id];
+        nt_set_self_receiver(nt, id, sn);
+      }
+      exc_ctor_spell_new(c, id);
+    }
+    else {
+      if (g_infer_optimistic || (rt != TY_CLASS && rt != TY_POLY)) continue;
+      int ncand = 0;
+      comp_cmethod_candidates(c, "exception", &ncand);
+      if (ncand > 0) continue;
+      if (rt == TY_CLASS) {
+        int g = exc_ctor_guard(c, id, recv);
+        nt_node_set_ref(nt, id, "receiver", g);
+        exc_ctor_spell_new(c, id);
+      }
+      else exc_ctor_branch_boxed(c, id, recv);
+    }
+    changed = 1;
+  }
+  free(calls);
+  return changed;
+}
+
 /* Does e write the variable `name`, at any depth (closures = 0), or only
    inside a block or a lambda (closures = 1)? */
 static int fwd_subtree_writes(const NodeTable *nt, int e, const char *name, int closures, int inside) {

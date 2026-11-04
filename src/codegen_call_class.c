@@ -2684,7 +2684,7 @@ static void ctor_deferred_arm(int ci, const char *msg, Buf *b) {
 
 const unsigned char *g_poly_new_only = NULL;
 
-/* new and allocate on a Class value, a poly receiver, self's class or a constant, and Cls.exception */
+/* new and allocate on a Class value, a poly receiver, self's class or a constant */
 int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* .new WITH arguments on a Class value whose class is only known at run time.
      A local statically holding one class folds to that class and never gets
@@ -3345,19 +3345,6 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     if (cn && is_exc_name(cn) && !(ci < 0 && nt_ref(nt, recv, "parent") < 0)) {
       if (emit_syserr_family_new(c, id, cn, argc, argv, b)) return 1;
       emit_exc_new_msg(c, cn, argc >= 1 ? argv[0] : -1, b);
-      return 1;
-    }
-  }
-
-  /* Cls.exception(msg) is Cls.new for a builtin exception reached by its
-     path, too (Errno::ENOENT.exception) */
-  if (recv >= 0 && sp_streq(name, "exception") &&
-      nt_kind(nt, recv) == NK_ConstantPathNode &&
-      const_node_class_index(c, recv) < 0) {
-    const char *qn = superclass_builtin_exc_name(nt, recv);
-    if (qn) {
-      if (emit_syserr_family_new(c, id, qn, argc, argv, b)) return 1;
-      emit_exc_new_msg(c, qn, argc >= 1 ? argv[0] : -1, b);
       return 1;
     }
   }

@@ -7568,17 +7568,13 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
 
 /* An exception receiver: an exception class's methods and an exception-shaped instance's queries (infer_call_inner's rules, in their order) */
 static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, TyKind rt, TyKind *out) {
-  /* Exception class-level methods: Cls.exception(msg) is Cls.new (#2740);
-     Exception.to_tty? answers whether stderr is a terminal (#2757). */
+  /* Exception.to_tty? answers whether stderr is a terminal (#2757). */
   if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                      (nt_kind(nt, recv) == NK_ConstantPathNode &&
                       const_node_class_index(c, recv) < 0))) {
-    /* by its whole path: Errno::ENOENT.exception */
+    /* by its whole path: Errno::ENOENT.to_tty? */
     const char *ecn = superclass_builtin_exc_name(nt, recv);
-    if (ecn && is_builtin_exception_name(ecn)) {
-      if (sp_streq(name, "exception")) { *out = TY_EXCEPTION; return 1; }
-      if (sp_streq(name, "to_tty?")) { *out = TY_BOOL; return 1; }
-    }
+    if (ecn && is_builtin_exception_name(ecn) && sp_streq(name, "to_tty?")) { *out = TY_BOOL; return 1; }
   }
 
   /* exception receiver methods */
@@ -9557,6 +9553,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
   /* the desugared ENV snapshot (#2742) */
   if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) return TY_STR_STR_HASH;
+  /* the class value a desugared `exception` is sent to */
+  if (recv < 0 && sp_streq(name, "__exc_class") && argc == 1) return TY_CLASS;
   /* Exception-suppressed String or nullable conversion can answer nil, so it
      cannot use the unboxed numeric value type (#3893). */
   if (recv < 0 && (sp_streq(name, "Complex") || sp_streq(name, "Rational")) &&

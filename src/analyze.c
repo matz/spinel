@@ -51315,6 +51315,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_reduce_proc_arg", desugar_reduce_proc_arg(c));          /* reduce(&pr) -> reduce { |a,b| pr.call(a,b) } */
     ch |= AN_PASS("desugar_block_capture_wrap", desugar_block_capture_wrap(c));       /* { |i| ->{i} } -> { |i| (->(i){ ->{i} }).call(i) } */
     ch |= AN_PASS("desugar_user_not_match", desugar_user_not_match(c));            /* a !~ b -> !(a =~ b) for a user =~ (#3019) */
+    ch |= AN_PASS("desugar_exception_class_ctor", desugar_exception_class_ctor(c));   /* K.exception(a) -> K.new(a) */
     ch |= AN_PASS("desugar_env_enum", desugar_env_enum(c));                 /* ENV.keys/... -> __env_to_h.keys/... */
     ch |= AN_PASS("desugar_io_console_modes", desugar_io_console_modes(c));         /* io.raw { } / io.noecho { } -> mode, begin, ensure restore */
     ch |= AN_PASS("desugar_dir_surface", desugar_dir_surface(c));              /* Dir.foreach{} -> entries.each{}, chdir{} splice, ... */           /* C.class_eval { v } -> (->(){v}).call */

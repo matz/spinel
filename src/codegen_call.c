@@ -22530,8 +22530,29 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   emit_poly_dispatch_key(c, tv, 1, 1, poly_exc_cand(c, vnm), b);
   buf_printf(b, "; (void)_t%d; if (%s(0%s)", tk, positive ? "" : "!", own.p ? own.p : "");
   free(own.p);
-  /* a class value answers its own class method (`def self.top`) */
-  if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
+  /* a class value answers its own class method (`def self.top`), or a
+     module's method its class extends: only those classes' values pass (a
+     module's instance method no class extends answers no class value). A
+     reopened Class or Module answers every class value. */
+  if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
+    Buf cv; memset(&cv, 0, sizeof cv);
+    int every = 0;
+    for (int k = 0; k < c->nclasses && !every; k++) {
+      if (k == oci) continue;
+      const char *kn = c->classes[k].name;
+      if (kn && (sp_streq(kn, "Class") || sp_streq(kn, "Module")) && call_target(c, id, k, vnm, CT_OWN, NULL) >= 0) every = 1;
+    }
+    for (int k = 0; k < c->nclasses && !every; k++) {
+      int owns = call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0;
+      for (int m = 0; m < c->nclasses && !owns; m++)
+        owns = m != oci && comp_class_is_module(c, &c->classes[m]) && call_target(c, id, m, vnm, CT_OWN, NULL) >= 0 &&
+               comp_class_singleton_has_module(c, k, m);
+      if (owns) buf_printf(&cv, " || _t%d.cls_id == %d", tv, k);
+    }
+    if (every) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
+    else buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id >= %d%s))", tv, tv, tv, c->nclasses, cv.p ? cv.p : "");
+    free(cv.p);
+  }
   /* `x&.public_send(:top)` never calls on nil */
   if (nt_safe_nav(c->nt, id)) buf_printf(b, " && _t%d.tag != SP_TAG_NIL", tv);
   buf_puts(b, ") { ");

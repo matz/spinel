@@ -1,0 +1,26 @@
+false
+false
+false
+true
+false
+false
+true
+"RangeError: cannot get the first element of beginless range"
+"RangeError: cannot get the last element of endless range"
+nil
+nil
+"RangeError: cannot convert endless range to an array"
+Infinity
+"TypeError: can't iterate from Time"
+"TypeError: can't iterate from Time"
+"TypeError: can't iterate from Time"
+"TypeError: can't iterate from Time"
+false
+false
+false
+true
+true
+"TypeError: can't iterate from Time"
+out
+"1970-01-01 00:00:00 UTC..1970-01-01 00:00:10 UTC"
+"1970-01-01 00:00:00 UTC...1970-01-01 00:00:10 UTC"

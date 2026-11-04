@@ -4537,7 +4537,7 @@ int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg,
         const char *bcn = rvt == TY_STRING || rvt == TY_STRBUF ? "String"
                         : rvt == TY_INT ? "Integer" : rvt == TY_FLOAT ? "Float"
                         : rvt == TY_SYMBOL ? "Symbol"
-                        : rvt == TY_RANGE || rvt == TY_FLOAT_RANGE || rvt == TY_STR_RANGE || rvt == TY_TIME_RANGE ? "Range"
+                        : rvt == TY_RANGE || rvt == TY_FLOAT_RANGE || rvt == TY_STR_RANGE || rvt == TY_TIME_RANGE || rvt == TY_OBJ_RANGE ? "Range"
                         : rvt == TY_TIME ? "Time"
                         : ty_is_array(rvt) ? "Array" : ty_is_hash(rvt) ? "Hash" : NULL;
         if (bcn && !builtin_method_known(bcn, mname) &&
@@ -7609,6 +7609,7 @@ int eq_family(TyKind t) {
   if (t == TY_FLOAT_RANGE) return 6;
   if (t == TY_STR_RANGE) return 7;
   if (t == TY_TIME_RANGE) return 8;
+  if (t == TY_OBJ_RANGE) return 9;
   return 0;
 }
 /* Does class index k include program module `mod`, directly or through a
@@ -7699,7 +7700,7 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   case TY_INT: case TY_BIGINT: self_cls = "Integer"; break;
   case TY_FLOAT: self_cls = "Float"; break;
   case TY_SYMBOL: self_cls = "Symbol"; break;
-  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: self_cls = "Range"; break;
+  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: case TY_OBJ_RANGE: self_cls = "Range"; break;
   case TY_NIL: self_cls = "NilClass"; break;
   case TY_BOOL: self_cls = "Boolean"; break; /* true/false split handled at call site */
   case TY_FIBER: self_cls = "Fiber"; break;
@@ -7731,7 +7732,7 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
                                      t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
   if (sp_streq(cn, "Numeric") && (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT ||
                                   t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
-  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_TIME_RANGE ||
+  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
                                      t == TY_ENUMERATOR)) return 1;
   /* a program module the program mixed into this builtin by reopening it */
   if (tmc_prog_module_in_builtin(c, self_cls, cn)) return 1;

@@ -35575,7 +35575,7 @@ static const char *seed_ty_name_into(Compiler *c, TyKind t, char *buf, size_t n)
     case TY_BOOL:   return "bool";
     case TY_NIL:    return "nil";
     case TY_PROC:   return "Proc";
-    case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: return "Range";
+    case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: case TY_OBJ_RANGE: return "Range";
     case TY_TIME:   return "Time";
     case TY_POLY: case TY_UNKNOWN: return "untyped";
     default: break;

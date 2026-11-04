@@ -176,8 +176,10 @@ typedef enum {
      abi_sig_token encodes a kind as 100000 + (int)TyKind, so inserting mid-enum
      renumbers every kind after it. */
   TY_FLOAT_ARRAY_ARRAY,
-  TY_TIME_RANGE    /* (t1..t2): a Range of Times (sp_TimeRange *), after the
+  TY_TIME_RANGE,   /* (t1..t2): a Range of Times (sp_TimeRange *), after the
                       last for the same reason */
+  TY_OBJ_RANGE     /* (d1..d2): a Range of the program's objects whose class
+                      defines <=> (sp_ObjRange *, its ends boxed) */
 } TyKind;
 
 /* The receiver type an owner bit re-enters the typed emitter with. */
@@ -433,7 +435,7 @@ typedef struct {
   unsigned char store_class;  /* repr_store_class (SC_*) */
   unsigned char box_form;     /* the form --repr-check records for box_text (RF_*) */
 } TyTraits;
-#define TY_TRAITS_N ((int)TY_TIME_RANGE + 1)
+#define TY_TRAITS_N ((int)TY_OBJ_RANGE + 1)
 extern const TyTraits ty_traits[TY_TRAITS_N];
 /* the row of builtin kind t, or NULL (a user object's kind) */
 extern int g_traits_promote;   /* --int-overflow=promote (main.c) */

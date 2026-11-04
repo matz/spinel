@@ -3442,6 +3442,16 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME_RANGE && _t%d.v.p) { _t%d = ", tv, tv, tv, tr);
     if (ret == TY_POLY) buf_puts(b, call.p); else emit_unbox_text(c, ret, call.p, b);
     buf_puts(b, "; }\nelse ");
+    /* ...and a Range of objects through sp_orange_send, the same names but step and overlap? */
+    if (!sp_streq(name, "overlap?") && !sp_streq(name, "to_a") && !sp_streq(name, "entries") &&
+        !sp_streq(name, "size") && !sp_streq(name, "count") && !sp_streq(name, "sum")) {
+      Buf oc; memset(&oc, 0, sizeof oc);
+      buf_printf(&oc, "sp_orange_send((sp_ObjRange *)_t%d.v.p%s", tv, call.p + strlen("sp_trange_send((sp_TimeRange *)_t") + snprintf(NULL, 0, "%d", tv) + strlen(".v.p"));
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_OBJ_RANGE && _t%d.v.p) { _t%d = ", tv, tv, tv, tr);
+      if (ret == TY_POLY) buf_puts(b, oc.p); else emit_unbox_text(c, ret, oc.p, b);
+      buf_puts(b, "; }\nelse ");
+      free(oc.p);
+    }
     free(call.p);
   }
   /* Range#cover? on a runtime Range receiver (#3234) */

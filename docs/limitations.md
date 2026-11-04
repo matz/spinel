@@ -854,8 +854,10 @@ are exact.
 
 #### A `Range` object needs `Integer`/`Float`/`String`/`Time` bounds
 
-A `Range` is an unboxed value with `sp_int` bounds, so a Range **object** over
-user objects cannot be built (`rng = (Ver.new(1)..Ver.new(9))` is a compile
+An Integer Range is an unboxed value with `sp_int` bounds; a Range of
+Times and a Range of objects whose class defines `<=>` are their own
+kinds (below). A Range **object** over user objects without `<=>` cannot
+be built (`rng = (Ver.new(1)..Ver.new(9))` is a compile
 error naming the class). Comparing against such a range does not need one:
 `Comparable#clamp` folds the bounds straight into the comparison, so the inline
 and one-sided forms work.

@@ -5537,6 +5537,33 @@ sp_TimeRange *sp_trange_new(sp_Time *first, sp_Time *last, sp_int excl) {
 sp_RbVal sp_box_trange(sp_TimeRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_TIME_RANGE) : sp_box_nil(); }
 sp_RbVal sp_trange_begin_v(const sp_TimeRange *r) { return r->first ? sp_box_time(r->first) : sp_box_nil(); }
 sp_RbVal sp_trange_end_v(const sp_TimeRange *r) { return r->last ? sp_box_time(r->last) : sp_box_nil(); }
+/* first / last read an end CRuby's way: an open one is its RangeError, where begin / end answer nil */
+sp_RbVal sp_trange_first_v(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  return sp_box_time(r->first);
+}
+sp_RbVal sp_trange_last_v(const sp_TimeRange *r) {
+  if (!r->last) sp_raise_cls("RangeError", "cannot get the last element of endless range");
+  return sp_box_time(r->last);
+}
+/* dup answers an unfrozen copy and clone one as frozen as the receiver, each a new object */
+sp_TimeRange *sp_trange_copy(const sp_TimeRange *r, int keep_frozen) {
+  SP_GC_ROOT(r);
+  sp_TimeRange *n = sp_trange_new(r->first, r->last, r->excl);
+  n->unfrozen = keep_frozen ? r->unfrozen : 1;
+  return n;
+}
+/* to_a and count answer an endless Range CRuby's way before the iteration's TypeError */
+sp_RbVal sp_trange_to_a(const sp_TimeRange *r) {
+  if (!r->last) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_trange_iterate_raise();
+  return sp_box_nil();
+}
+sp_RbVal sp_trange_count(const sp_TimeRange *r) {
+  if (!r->last) return sp_box_float(HUGE_VAL);
+  sp_trange_iterate_raise();
+  return sp_box_nil();
+}
 void sp_trange_iterate_raise(void) { sp_raise_cls("TypeError", "can't iterate from Time"); }
 void sp_trange_step_check_blk(const sp_TimeRange *r) {
   if (!r->first) sp_raise_cls("ArgumentError", "#step iteration for beginless ranges is meaningless");
@@ -5574,7 +5601,7 @@ sp_RbVal sp_trange_max_v(const sp_TimeRange *r) {
   return sp_box_time(r->last);
 }
 sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t) {
-  if (!t) return 0;
+  if (!r || !t) return 0;
   if (r->first && sp_time_cmp(r->first, t) > 0) return 0;
   if (!r->last) return 1;
   int c = sp_time_cmp(t, r->last);
@@ -5582,9 +5609,14 @@ sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t) {
 }
 /* a value that is no Time is never covered: Time#<=> answers nil for it */
 sp_bool sp_trange_cover_poly(const sp_TimeRange *r, sp_RbVal v) {
+  if (!r) return 0;
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) return sp_trange_cover(r, (sp_Time *)v.v.p);
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return sp_trange_cover_range(r, (sp_TimeRange *)v.v.p);
   return 0;
+}
+/* cover? alone also takes a Range: include?, member? and === answer false for one */
+sp_bool sp_trange_cover_any(const sp_TimeRange *r, sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return sp_trange_cover_range(r, (sp_TimeRange *)v.v.p);
+  return sp_trange_cover_poly(r, v);
 }
 /* Range#cover?(range), as CRuby's r_cover_range_p; the other's max, which
    it falls back on for an exclusive end, raises for Times and so answers no */
@@ -5639,6 +5671,7 @@ sp_int sp_trange_hash(const sp_TimeRange *r) {
   return h;
 }
 static const char *sp_trange_join(const sp_TimeRange *r, int inspect) {
+  SP_GC_ROOT(r);
   const char *f = r->first ? (inspect ? sp_time_inspect_v(r->first) : sp_time_to_s_v(r->first)) : "";
   SP_GC_ROOT_STR(f);
   const char *l = r->last ? (inspect ? sp_time_inspect_v(r->last) : sp_time_to_s_v(r->last)) : "";
@@ -5647,25 +5680,69 @@ static const char *sp_trange_join(const sp_TimeRange *r, int inspect) {
   if (inspect && !r->first && !r->last) f = l = "nil";
   return sp_sprintf("%s%s%s", f, r->excl ? "..." : "..", l);
 }
+static void sp_orange_scan(void *p) {
+  sp_ObjRange *r = (sp_ObjRange *)p;
+  sp_mark_rbval(r->first);
+  sp_mark_rbval(r->last);
+}
+sp_ObjRange *sp_orange_new(sp_RbVal first, sp_RbVal last, sp_int excl) {
+  SP_GC_ROOT_RBVAL(first); SP_GC_ROOT_RBVAL(last);
+  sp_ObjRange *r = (sp_ObjRange *)sp_gc_alloc(sizeof(sp_ObjRange), NULL, sp_orange_scan);
+  r->first = first; r->last = last; r->excl = excl ? 1 : 0;
+  return r;
+}
+sp_RbVal sp_box_orange(sp_ObjRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_OBJ_RANGE) : sp_box_nil(); }
+sp_RbVal sp_orange_first(const sp_ObjRange *r) {
+  if (r->first.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  return r->first;
+}
+sp_RbVal sp_orange_last(const sp_ObjRange *r) {
+  if (r->last.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the last element of endless range");
+  return r->last;
+}
+sp_ObjRange *sp_orange_copy(const sp_ObjRange *r, int keep_frozen) {
+  SP_GC_ROOT(r);
+  sp_ObjRange *n = sp_orange_new(r->first, r->last, r->excl);
+  n->unfrozen = keep_frozen ? r->unfrozen : 1;
+  return n;
+}
+const char *sp_poly_to_s(sp_RbVal v);
+const char *sp_poly_inspect(sp_RbVal v);
+static const char *sp_orange_join(const sp_ObjRange *r, int inspect) {
+  SP_GC_ROOT(r);
+  int fo = r->first.tag == SP_TAG_NIL, lo = r->last.tag == SP_TAG_NIL;
+  const char *f = fo ? "" : inspect ? sp_poly_inspect(r->first) : sp_poly_to_s(r->first);
+  SP_GC_ROOT_STR(f);
+  const char *l = lo ? "" : inspect ? sp_poly_inspect(r->last) : sp_poly_to_s(r->last);
+  SP_GC_ROOT_STR(l);
+  if (inspect && fo && lo) f = l = "nil";
+  return sp_sprintf("%s%s%s", f, r->excl ? "..." : "..", l);
+}
+const char *sp_orange_to_s(const sp_ObjRange *r) { return sp_orange_join(r, 0); }
+const char *sp_orange_inspect(const sp_ObjRange *r) { return sp_orange_join(r, 1); }
 const char *sp_trange_to_s(const sp_TimeRange *r) { return sp_trange_join(r, 0); }
 const char *sp_trange_inspect(const sp_TimeRange *r) { return sp_trange_join(r, 1); }
 sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
   SP_GC_ROOT(r);
   if (argc == 0) {
-    if (!strcmp(n, "begin") || !strcmp(n, "first")) return sp_trange_begin_v(r);
-    if (!strcmp(n, "end") || !strcmp(n, "last")) return sp_trange_end_v(r);
+    if (!strcmp(n, "begin")) return sp_trange_begin_v(r);
+    if (!strcmp(n, "first")) return sp_trange_first_v(r);
+    if (!strcmp(n, "end")) return sp_trange_end_v(r);
+    if (!strcmp(n, "last")) return sp_trange_last_v(r);
     if (!strcmp(n, "min")) return sp_trange_min_v(r);
     if (!strcmp(n, "max")) return sp_trange_max_v(r);
     if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
     if (!strcmp(n, "to_s")) return sp_box_str(sp_trange_to_s(r));
     if (!strcmp(n, "inspect")) return sp_box_str(sp_trange_inspect(r));
     if (!strcmp(n, "hash")) return sp_box_int(sp_trange_hash(r));
-    if (!strcmp(n, "frozen?")) return sp_box_bool(1);
-    if (!strcmp(n, "to_a") || !strcmp(n, "entries") || !strcmp(n, "size") || !strcmp(n, "count") ||
-        !strcmp(n, "each") || !strcmp(n, "sum")) { sp_trange_iterate_raise(); return sp_box_nil(); }
+    if (!strcmp(n, "frozen?")) return sp_box_bool(!r->unfrozen);
+    if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_trange_to_a(r);
+    if (!strcmp(n, "count")) return sp_trange_count(r);
+    if (!strcmp(n, "size") || !strcmp(n, "each") || !strcmp(n, "sum")) { sp_trange_iterate_raise(); return sp_box_nil(); }
   }
   if (argc == 1) {
-    if (!strcmp(n, "cover?") || !strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
+    if (!strcmp(n, "cover?")) return sp_box_bool(sp_trange_cover_any(r, a0));
+    if (!strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
       return sp_box_bool(sp_trange_cover_poly(r, a0));
     if (!strcmp(n, "overlap?")) return sp_box_bool(sp_trange_overlap_poly(r, a0));
     if (!strcmp(n, "==") || !strcmp(n, "eql?"))

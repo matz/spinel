@@ -5604,6 +5604,16 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
     buf_printf(b, "; SP_GC_ROOT(_t%d); sp_trange_new(_t%d, _t%d, %d); })", tr, tl, tr, excl);
     return 1;
   }
+  /* (d1..d2): a Range of objects, its ends boxed; the begin is rooted while the end is made */
+  if (comp_ntype(c, id) == TY_OBJ_RANGE) {
+    int tl = ++g_tmp, tr = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tl);
+    if (left >= 0) emit_boxed(c, left, b); else buf_puts(b, "sp_box_nil()");
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, tr);
+    if (right >= 0) emit_boxed(c, right, b); else buf_puts(b, "sp_box_nil()");
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_orange_new(_t%d, _t%d, %d); })", tr, tl, tr, excl);
+    return 1;
+  }
   /* ends decided at run time (`a[0]..a[1]` over a mixed Array) */
   if (emit_range_boxed_ends(c, id, left, right, excl, b)) return 1;
   /* (1.0..3.0): the distinct float range, endpoints kept as sp_float.
@@ -5748,6 +5758,12 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
         "value with sp_int bounds, so it has nowhere to hold one. Comparing "
         "against the bounds directly (`x >= lo && x < hi`) needs no Range and "
         "does work (see docs/limitations.md)");
+      return 1;
+    }
+    /* a Time beside an end of another class: CRuby's "bad value for range";
+       the Integer builder below would take the Time as an sp_int */
+    if (lt == TY_TIME || rt2 == TY_TIME) {
+      unsupported_feature(c, id, "a Range of a Time and an end of another class: CRuby raises ArgumentError (bad value for range)");
       return 1;
     }
     if (ty_is_object(lt) || ty_is_object(rt2)) {

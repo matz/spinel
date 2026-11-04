@@ -16871,6 +16871,12 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         if (fr == 2) emit_str_eq_ordered(c, recv, argv[0], eq, b);
         else if (fr == 5) { buf_puts(b, eq ? "sp_range_eq(" : "(!sp_range_eq("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, eq ? ")" : "))"); }
         else if (fr == 6) { buf_puts(b, eq ? "sp_frange_eq(" : "(!sp_frange_eq("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, eq ? ")" : "))"); }
+        else if (fr == 9) {
+          int tl = ++g_tmp;
+          buf_printf(b, "({ sp_ObjRange *_t%d = ", tl); emit_expr(c, recv, b);
+          buf_printf(b, "; SP_GC_ROOT(_t%d); %ssp_orange_eq(_t%d, ", tl, eq ? "" : "!", tl);
+          emit_expr(c, argv[0], b); buf_puts(b, "); })");
+        }
         else if (fr == 8) {
           int tl = ++g_tmp;
           buf_printf(b, "({ sp_TimeRange *_t%d = ", tl); emit_expr(c, recv, b);
@@ -19246,7 +19252,7 @@ static const char *const *builtin_value_ancestry(TyKind rt) {
   static const char *const nil[] = { "NilClass", "Object", "Kernel", "BasicObject", NULL };
   static const char *const boolean[] = { "TrueClass", "FalseClass", "Object", "Kernel", "BasicObject", NULL };
   if (rt == TY_BOOL) return boolean;
-  const char *cn = rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE ? "Range" : builtin_class_of_type(rt);
+  const char *cn = rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE || rt == TY_OBJ_RANGE ? "Range" : builtin_class_of_type(rt);
   if (!cn) return NULL;
   for (int i = 0; i < 2; i++) if (sp_streq(cn, num[i][0])) return num[i];
   for (int i = 0; i < 3; i++) if (sp_streq(cn, cmp[i][0])) return cmp[i];
@@ -19759,7 +19765,7 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
                    at == TY_NIL ? "nil" :
                    (ty_is_array(at) || ty_is_obj_array(at)) ? "Array" :
                    ty_is_hash(at) ? "Hash" :
-                   (at == TY_RANGE || at == TY_FLOAT_RANGE || at == TY_STR_RANGE || at == TY_TIME_RANGE) ? "Range" : NULL;
+                   (at == TY_RANGE || at == TY_FLOAT_RANGE || at == TY_STR_RANGE || at == TY_TIME_RANGE || at == TY_OBJ_RANGE) ? "Range" : NULL;
   /* The conversion form names a Symbol by its CLASS (a boolean still by its
      inspect); the coercion form names both by inspect. */
   if (conv && at == TY_SYMBOL) cn = "Symbol";
@@ -20056,7 +20062,7 @@ static const char *bop_spec_class(TyKind k) {
   case TY_INT: case TY_BIGINT: return "Integer";
   case TY_FLOAT: return "Float";
   case TY_SYMBOL: return "Symbol";
-  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: return "Range";
+  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: case TY_OBJ_RANGE: return "Range";
   case TY_TIME: return "Time";
   case TY_COMPLEX: return "Complex";
   case TY_RATIONAL: return "Rational";
@@ -20447,7 +20453,7 @@ static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_r
     const char *bcn = rt == TY_STRING || rt == TY_STRBUF ? "String"
                     : rt == TY_INT ? "Integer" : rt == TY_FLOAT ? "Float"
                     : rt == TY_SYMBOL ? "Symbol"
-                    : rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE ? "Range"
+                    : rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE || rt == TY_TIME_RANGE || rt == TY_OBJ_RANGE ? "Range"
                     : rt == TY_TIME ? "Time"
                     : rt == TY_NIL ? "NilClass"
                     : rt == TY_BOOL ? "TrueClass"  /* FalseClass: same surface */
@@ -29160,6 +29166,14 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_call_on_missing_builtin_path(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;
   if (emit_missing_in_operand(c, id, b)) return;
+  /* a Range of Times or of objects answers from its rows, ahead of the
+     identity and equality arms that would take dup, === and == for it */
+  {
+    int rv = nt_ref(c->nt, id, "receiver");
+    TyKind rk = rv >= 0 ? comp_ntype(c, rv) : TY_UNKNOWN;
+    const char *nm = nt_str(c->nt, id, "name");
+    if ((rk == TY_TIME_RANGE || rk == TY_OBJ_RANGE) && nm && emit_builtin_op(c, id, rv, rk, nm, b)) return;
+  }
   int fm = frange_index_view(c, id);
   if (fm >= 0) {
     emit_call(c, id, b);

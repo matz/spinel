@@ -645,7 +645,7 @@ const char *conv_builtin_class_name(TyKind t) {
   if (t == TY_INT || t == TY_BIGINT) return "Integer";
   if (t == TY_FLOAT) return "Float";
   if (t == TY_SYMBOL) return "Symbol";
-  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE) return "Range";
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE) return "Range";
   if (t == TY_PROC) return "Proc";
   if (t == TY_TIME) return "Time";
   if (t == TY_COMPLEX) return "Complex";
@@ -662,7 +662,7 @@ const char *conv_builtin_class_name(TyKind t) {
 int conv_to_ary_impossible(TyKind t) {
   return t == TY_STRING || t == TY_STRBUF || t == TY_INT || t == TY_BIGINT ||
          t == TY_FLOAT || t == TY_SYMBOL || t == TY_PROC || t == TY_TIME ||
-         t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE ||
+         t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
          t == TY_COMPLEX || t == TY_RATIONAL || t == TY_REGEX || ty_is_hash(t);
 }
 /* Whether `name` is written as a Symbol or a String literal anywhere in
@@ -13957,7 +13957,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
   }
 
   /* a Range of Times: builtin-op rows (builtin_ops.c) */
-  if (recv >= 0 && rt == TY_TIME_RANGE && emit_builtin_op(c, id, recv, rt, name, b)) return 1;
+  if (recv >= 0 && (rt == TY_TIME_RANGE || rt == TY_OBJ_RANGE) && emit_builtin_op(c, id, recv, rt, name, b)) return 1;
   /* Process::Status readers: builtin-op rows (builtin_ops.c) */
   if (recv >= 0 && rt == TY_PROCESS_STATUS && emit_builtin_op(c, id, recv, rt, name, b)) return 1;
 

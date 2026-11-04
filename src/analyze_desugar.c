@@ -1861,6 +1861,7 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;   /* (made when a body's statement names another class: erm_body_declares) */
+  int parent_n = 0;     /* the node count it was made at: a rewrite adds class nodes, read past its end */
   for (int id = 0; id < n0; id++) {
     int is_prog = nt_kind(nt, id) == NK_ProgramNode;
     int stmts = is_prog ? nt_ref(nt, id, "statements")
@@ -1879,7 +1880,11 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     for (int i = 0; i < bn; i++) {
       int sd = is_prog ? erm_sclass_const_decl(nt, bb[i]) : 0;
       if (sd) { nb[i] = erm_sclass_const_rewrite(nt, bb[i], sd); any |= nb[i] != bb[i]; continue; }
-      if (!parent && !is_prog && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (!is_prog && (!parent || parent_n != nt->count)) {
+        free(parent);
+        if (!(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        parent_n = nt->count;
+      }
       int r = erm_rewrite_stmt(c, bb[i], self_leaf, parent, id);
       if (r == -2) { nb[i] = bb[i]; changed = 1; continue; }
       nb[i] = r; any |= r != bb[i];

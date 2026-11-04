@@ -5,6 +5,7 @@
 # pass kept them, and FileUtils.chmod reached the C with its reads untyped:
 # its boxed mode went into the sp_int slot of sp_file_chmod.
 require "fileutils"
+require "tmpdir"
 
 module Site
   def self.write(dir)
@@ -20,5 +21,5 @@ module Site
 end
 
 Dir.chdir("/")
-Site.clean("/nonexistent-#{Process.pid}/x") rescue nil
+Dir.mktmpdir { |d| Site.clean("#{d}/x") rescue nil }
 puts "ok"

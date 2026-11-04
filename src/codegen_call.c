@@ -22267,16 +22267,31 @@ static int object_reopen_builtin_owns(Compiler *c, int id, int oci, const char *
   }
   return 0;
 }
+/* Does every class and module value answer `vnm` with a public method of
+   Module's (name, ancestors) before Object's? Only a name CRuby's Module
+   has public (a Class-only one such as new or subclasses is not a
+   module's), that the call paths know, and that the program leaves alone
+   on a reopened Class or Module (private :name, undef_method, its own
+   def). */
+int builtin_cmethod_name_known(const char *m);   /* below */
+static int class_value_builtin_answers(Compiler *c, const char *vnm) {
+  if (core_method_vis("Module", vnm, 1) != 1) return 0;
+  if (!builtin_instance_method_known("Class", vnm) && !builtin_instance_method_known("Module", vnm)) return 0;
+  const char *cm[] = { "Class", "Module" };
+  for (int i = 0; i < 2; i++) {
+    int k = comp_class_index(c, cm[i]);
+    if (k < 0) continue;
+    const ClassInfo *ki = &c->classes[k];
+    for (int j = 0; j < ki->nvis; j++) if (sp_streq(ki->vis_names[j], vnm)) return 0;
+    for (int j = 0; j < ki->nundefs; j++) if (sp_streq(ki->undefs[j], vnm)) return 0;
+    if (comp_method_in_class(c, k, vnm) >= 0 || comp_cmethod_in_class(c, k, vnm) >= 0) return 0;
+  }
+  return 1;
+}
 /* Can a class or module value answer vnm below Object: a class method of
    that name (any_class: of any class), a module's instance method (an
    `extend` gives it; for one known class cls, a module cls extends), or a
    reopened Class or Module's? */
-/* Does Class (or Module, which it inherits) have a method `vnm` of its own,
-   which a class value reaches before Object's? */
-int builtin_cmethod_name_known(const char *m);
-static int class_value_builtin_answers(const char *vnm) {
-  return builtin_instance_method_known("Class", vnm) || builtin_instance_method_known("Module", vnm);
-}
 static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const char *vnm, int any_class, int cls) {
   for (int k = 0; k < c->nclasses; k++) {
     if (k == oci) continue;
@@ -22330,7 +22345,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
       return 0;
     /* a class value answers Class's and Module's public methods (K.name)
        before Object's */
-    if (class_value_builtin_answers(vnm)) return 0;
+    if (class_value_builtin_answers(c, vnm)) return 0;
     snprintf(cvname, sizeof cvname, "%s %s", comp_class_is_module(c, &c->classes[ci]) ? "module" : "class",
              class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
     cname = cvname; named = 1;
@@ -22666,7 +22681,7 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   int obj_cmeth = call_target(c, id, oci, vnm, CT_CMETHOD, NULL) >= 0;
   /* and Class's and Module's own public methods (name, ancestors) answer
      every class value before Object's */
-  int cls_builtin = class_value_builtin_answers(vnm);
+  int cls_builtin = class_value_builtin_answers(c, vnm);
   if (obj_cmeth || cls_builtin || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
     Buf cv; memset(&cv, 0, sizeof cv);
     /* (a module Object extends answers every class value, as does a

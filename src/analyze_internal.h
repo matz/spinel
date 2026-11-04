@@ -713,6 +713,7 @@ int revert_widened_builtin_scalar_calls(Compiler *c);
 enum { ROW_WALK_NONE, ROW_WALK_BINDS, ROW_WALK_SPLITS };
 int nested_row_iter_call(Compiler *c, int id);
 int fold_static_is_a(Compiler *c);
+extern int g_infer_getter_write_pending;
 int merge_block_recorded(Compiler *c);
 int narrow_empty_array_args_by_yield(Compiler *c);
 int builtin_enum_name_index(const char *name);

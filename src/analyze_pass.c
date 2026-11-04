@@ -4168,7 +4168,10 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         /* An unfinished receiver supplies no getter-owner evidence yet.
            If it stays unknown, the conservative phase still visits every
            possible owner; a runtime-broad receiver does so in both phases. */
-        if (!is_push && grt == TY_UNKNOWN && g_infer_optimistic) continue;
+        if (!is_push && grt == TY_UNKNOWN && g_infer_optimistic) {
+          g_infer_getter_write_pending = 1;
+          continue;
+        }
         gcid = ty_is_object(grt) ? ty_object_class(grt) : -1;
         /* An index write through a receiver of a known non-object type is
            no user getter's; a boxed or still-settling one may be any class

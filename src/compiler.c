@@ -1520,8 +1520,10 @@ static void sm_build(Compiler *c) {
    1 the class side), or, for side 2, a receiverless call's in an instance
    of the class: an instance method or a module function of the module,
    which is also its private instance method (the later of the two
-   answers) */
+   answers); never by name a method only a bound call reaches
+   (scope_by_name_hidden), which its version's lookup by def finds */
 static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
+  if (c->scopes[s].attr_version) return 0;
   if (side < 2) return sm_owns(c, s, class_id, side);
   return sm_owns(c, s, class_id, 0) || (scope_on_side(&c->scopes[s], 0) && sm_owns(c, s, class_id, 1));
 }

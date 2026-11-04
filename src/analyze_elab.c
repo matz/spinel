@@ -3049,6 +3049,9 @@ void elab_mark_versions(Compiler *c) {
     const LrVers *x = name && sc->def_node >= 0 ? lr_vers(r, name) : NULL;
     if (!x || (x->nver < 2 && !elab_method_late(c, name))) continue;
     { sc->versioned = 1; comp_touch_scope(sc->idx); }
+    /* an accessor's version (elab_attr_scope) is one the def that ends its
+       history replaces; its scope, made after that def's, takes no key */
+    if (sc->attr_version) { sc->replaced = 1; continue; }
     int def = nt_kind(c->nt, sc->def_node) == NK_DefNode;
     if (!x->replaced || (sc->class_id < 0 && !def)) continue;
     if (!(nk & (nk - 1)) && !(keys = realloc(keys, sizeof *keys * (size_t)(nk ? 2 * nk : 1)))) {
@@ -4128,14 +4131,18 @@ static void lr_rta_call(LrRta *t, const char *name, int how) {
                                                      ((how & RQ_CLASS) && (h->b || t->ext[h->a + 1])))) lr_rta_reach(t, i);
   }
 }
-/* name called on class k: its singleton chain's, its extended modules' */
-static void lr_rta_call_on(LrRta *t, const char *name, int k) {
+static void lr_rta_reach_by(LrRta *t, int hi);
+/* name called on class k: its singleton chain's, its extended modules'.
+   once: by a call that runs when statement t->s does and at no other time
+   (lr_rta_once), which reaches only the singleton versions made by then */
+static void lr_rta_call_on(LrRta *t, const char *name, int k, int once) {
   LoadRecord *r = t->r;
   lr_rta_call(t, name, RQ_INST);
   for (int a = k, d = 0; a >= LR_MAIN && a < t->c->nclasses && d < 64; a = lr_super(t->c, a), d++) {
     LrClass *kc = lr_class(r, a);
     LrHist *h = lr_hist(r, a, 1, name, 0);
-    if (h) lr_rta_reach(t, (int)(h - r->hist));
+    if (h && once) lr_rta_reach_by(t, (int)(h - r->hist));
+    else if (h) lr_rta_reach(t, (int)(h - r->hist));
     for (int j = 0; kc && j < kc->nmix; j++)
       if (elab_mix_on_singleton(kc->mix[j].kind)) lr_rta_call(t, name, RQ_CLASS);   /* the modules extended (lr_rta_ext) */
   }
@@ -4147,16 +4154,42 @@ static void lr_rta_unit(LrRta *t, int d) {
   t->stack[t->nstack++] = d;
 }
 static void lr_rta_all(LrRta *t, int inst);
+static void lr_rta_version(LrRta *t, const LrHist *h, const LrDef *v) {
+  if (v->kind == LR_DEF) lr_rta_unit(t, v->node);
+  else if ((v->kind == LR_ALIAS || v->kind == LR_COPY) && !v->target) lr_rta_all(t, 0);
+  else if (v->kind == LR_ALIAS || v->kind == LR_COPY) h->b ? lr_rta_call_on(t, v->target, h->a, 0) : lr_rta_call(t, v->target, RQ_INST);
+}
 static void lr_rta_reach(LrRta *t, int hi) {
   const LrHist *h = &t->r->hist[hi];
   if (t->hreach[hi]) return;
   t->hreach[hi] = 1;
+  for (int j = 0; j < h->n; j++) lr_rta_version(t, h, &h->v[j]);
+}
+/* ...its versions made by statement t->s: not one at a later statement of
+   region 0, which a call reaches once it is made. The history counts as
+   reached once none is left. */
+static void lr_rta_reach_by(LrRta *t, int hi) {
+  const LrHist *h = &t->r->hist[hi];
+  int all = 1;
+  if (t->hreach[hi]) return;
   for (int j = 0; j < h->n; j++) {
-    const LrDef *v = &h->v[j];
-    if (v->kind == LR_DEF) lr_rta_unit(t, v->node);
-    else if ((v->kind == LR_ALIAS || v->kind == LR_COPY) && !v->target) lr_rta_all(t, 0);
-    else if (v->kind == LR_ALIAS || v->kind == LR_COPY) h->b ? lr_rta_call_on(t, v->target, h->a) : lr_rta_call(t, v->target, RQ_INST);
+    LoadPoint q = h->v[j].body ? (LoadPoint){ -1, -1 } : elab_point_of(t->c, h->v[j].node);
+    if (q.region == 0 && q.seq > t->s) all = 0;
+    else lr_rta_version(t, h, &h->v[j]);
   }
+  t->hreach[hi] = (unsigned char)all;
+}
+/* Does call id run when statement t->s runs, and at no other time: a node
+   of the statement's own (no def around it), in no lambda and in no block
+   but one that runs at once (elab_blocks_run_now), the statement in no
+   body that runs again (a loop's)? */
+static int lr_rta_once(LrRta *t, int id) {
+  const LrStmt *st = &t->r->st[t->s];
+  NodeKind sk = nt_kind(t->c->nt, st->node);
+  if (t->key[id] != t->s || st->rep >= 0 || sk == NK_WhileNode || sk == NK_UntilNode || !elab_blocks_run_now(t->c, id)) return 0;
+  const int *par = comp_parent_map(t->c);
+  for (int p = par[id]; p >= 0 && p != st->node; p = par[p]) if (nt_kind(t->c->nt, p) == NK_LambdaNode) return 0;
+  return 1;
 }
 /* every name (disp 0: every instance method of E, every singleton
    method), or what the runtime may call back (disp 1: the implicitly
@@ -4285,7 +4318,7 @@ static void lr_rta_node(LrRta *t, int id) {
     if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_recv(t, m);
     else lr_rta_any(t);
   }
-  if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc);   /* a method called, sent or made a callable by its name */
+  if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc, by == nm && lr_rta_once(t, id));   /* a method called, sent or made a callable by its name */
   else lr_rta_call(t, by, RQ_INST | RQ_CLASS);
   if (lr_rta_ctor(t, by)) {
     lr_rta_made(t, id, recv);
@@ -4296,7 +4329,7 @@ static void lr_rta_node(LrRta *t, int id) {
   int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(nt_str(nt, recv, "name"), by) ? 1 : -1;
   ak = ka >= 0 && ka < ac ? nt_kind(nt, av[ka]) : NK_StringNode;
   if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
-    if ((d = lr_rta_const(t, av[ka])) >= LR_MAIN) lr_rta_call_on(t, "exception", d);
+    if ((d = lr_rta_const(t, av[ka])) >= LR_MAIN) lr_rta_call_on(t, "exception", d, 0);
     lr_rta_made(t, id, av[ka]);
     lr_rta_call(t, "initialize", RQ_INST);
   }
@@ -6602,6 +6635,52 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n) {
   free(v);
   *n = k;
   return out;
+}
+
+/* Does a class side's history hold an accessor version and end in a def? */
+static int lr_attr_then_def(const LrHist *h) {
+  int attr = 0, last = -1;
+  for (int j = 0; j < h->n; j++)
+    if (lr_is_version(&h->v[j])) {
+      attr |= h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER;
+      last = h->v[j].kind;
+    }
+  return attr && last == LR_DEF;
+}
+
+/* See analyze.h. */
+ElabEntry *elab_replaced_attrs(Compiler *c, int *n) {
+  LoadRecord *r = c->lrec;
+  ElabEntry *out = NULL;
+  int k = 0, cap = 0;
+  for (int i = 0; r && r->recorded && i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    if (h->a < 0 || !h->b || !lr_attr_then_def(h)) continue;
+    for (int j = 0; j < h->n; j++) {
+      const LrDef *d = &h->v[j];
+      if ((d->kind != LR_READER && d->kind != LR_WRITER) || !lr_is_version(d)) continue;
+      out = lr_grow(out, &cap, k, sizeof *out);
+      out[k++] = (ElabEntry){ h->a, h->b, d->kind, d->node, h->name, NULL, d->scope };
+    }
+  }
+  *n = k;
+  return out;
+}
+
+/* See analyze.h. */
+void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope) {
+  LrHist *h = c->lrec ? lr_hist(c->lrec, e->cls, e->sg, e->name, 0) : NULL;
+  for (int j = 0; h && j < h->n; j++)
+    if (h->v[j].node == e->node && h->v[j].kind == e->kind) h->v[j].scope = scope;
+}
+
+/* See analyze.h. */
+int elab_attr_replaced(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && cls >= 0 ? lr_hist(r, cls, 1, name, 0) : NULL;
+  for (int j = 0; h && j < h->n; j++)
+    if ((h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER) && h->v[j].scope) return 1;
+  return 0;
 }
 
 int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {

@@ -31536,10 +31536,12 @@ void emit_push_arg_list(Compiler *c, const int *argv, int argc, int tpa, Buf *b)
 int emit_sg_accessor(Compiler *c, int id, int ci, const char *cn, const char *name,
                             int argc, const int *argv, Buf *b) {
   ClassInfo *cls = &c->classes[ci];
+  /* the plan's answer: the slot, or no accessor here, or the def or entry
+     the call binds to, which the caller's call emits */
+  char base[256];
+  if (cplan_sg_accessor(c, id, ci, name, base, sizeof base) != CP_SG_SLOT) return 0;
   if (name_is_plain_setter(name)) {
     /* setter */
-    char base[256];
-    if (!comp_sg_writer_reached(c, ci, name, base, sizeof base)) return 0;
     if (comp_is_sg_civ(cls, base)) {
       char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", base);
       int ivi = comp_ivar_index(cls, ivn);
@@ -31582,9 +31584,7 @@ int emit_sg_accessor(Compiler *c, int id, int ci, const char *cn, const char *na
   }
   /* getter -- through the alias table, so `class << self; alias_method
      :shown?, :shown; end` reaches the reader it renames (#3776) */
-  const char *rn = comp_resolve_cm_alias_at(c, ci, name, NULL);
-  if (!rn) rn = name;
-  if (!comp_is_sg_reader(cls, rn)) return 0;
+  const char *rn = base;
   if (comp_is_sg_civ(cls, rn)) {
     /* a slot that holds its nil beside the Integer (an sp_oint) read where
        the plain Integer goes: the value, nil being CRuby's TypeError there,

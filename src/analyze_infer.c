@@ -3075,24 +3075,17 @@ static int an_reopen_method(Compiler *c, int cls, const char *name) {
 
 int class_has_subclass(Compiler *c, int ocid);
 
-static int sg_accessor_type(Compiler *c, int ci, const char *name, TyKind *out) {
+/* The type of call id where the plan answers the slot of ci's `class <<
+   self` accessor (cplan_sg_accessor); 0 for a call that runs a method. An
+   accessor backed by the class-level ivar reads that slot's type; the
+   alias table maps a renamed accessor onto it (#3776) */
+static int sg_accessor_type(Compiler *c, int id, int ci, const char *name, TyKind *out) {
   ClassInfo *cls = &c->classes[ci];
-  char base[256];
-  const char *rn;
-  if (setter_base_name(name, base, sizeof base)) {
-    if (!comp_is_sg_writer(cls, base)) return 0;
-    rn = base;
-  }
-  else {
-    /* an accessor backed by the class-level ivar reads that slot's type;
-       the alias table maps a renamed accessor onto it (#3776) */
-    rn = comp_resolve_cm_alias_at(c, ci, name, NULL);
-    if (!rn) rn = name;
-    if (!comp_is_sg_reader(cls, rn)) return 0;
-  }
+  char rn[256];
+  if (cplan_sg_accessor(c, id, ci, name, rn, sizeof rn) != CP_SG_SLOT) return 0;
   *out = TY_POLY;
   if (comp_is_sg_civ(cls, rn)) {
-    char ivn[sizeof base + 1]; snprintf(ivn, sizeof ivn, "@%s", rn);
+    char ivn[sizeof rn + 1]; snprintf(ivn, sizeof ivn, "@%s", rn);
     int ivi = comp_ivar_index(cls, ivn);
     if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) *out = ivar_value_ty(cls, ivi);
   }
@@ -6298,7 +6291,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     const char *cn = nt_str(nt, recv, "name");
     int ci = cn ? comp_class_index(c, cn) : -1;
     TyKind sgt;
-    if (ci >= 0 && sg_accessor_type(c, ci, name, &sgt)) { *out = sgt; return 1; }
+    if (ci >= 0 && sg_accessor_type(c, id, ci, name, &sgt)) { *out = sgt; return 1; }
   }
   /* self.singleton_writer= / self.singleton_reader: inside a class method
      or directly in a class/module body (node_cbody). */
@@ -6308,7 +6301,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     int _sg_cid = (_self && _self->is_cmethod && _self->class_id >= 0) ? _self->class_id : -1;
     if (_sg_cid < 0 && _self && _self->class_id < 0) _sg_cid = c->node_cbody[id];
     TyKind sgt;
-    if (_sg_cid >= 0 && sg_accessor_type(c, _sg_cid, name, &sgt)) { *out = sgt; return 1; }
+    if (_sg_cid >= 0 && sg_accessor_type(c, id, _sg_cid, name, &sgt)) { *out = sgt; return 1; }
   }
 
   /* FFI: call on a module that registered ffi_func/ffi_buffer/ffi_read_* */
@@ -6737,7 +6730,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
           { *out = r; return 1; }
         }
         TyKind sgt;
-        if (!class_has_subclass(c, cid) && sg_accessor_type(c, cid, name, &sgt)) { *out = sgt; return 1; }
+        if (!class_has_subclass(c, cid) && sg_accessor_type(c, id, cid, name, &sgt)) { *out = sgt; return 1; }
       }
     }
   }

@@ -126,8 +126,18 @@ static int scope_params_node(Compiler *c, int mi) {
   return pn >= 0 && nt_kind(nt, pn) == NK_BlockParametersNode ? nt_ref(nt, pn, "parameters") : pn;
 }
 
-/* The #parameters entries of method mi */
+/* The #parameters entries of method mi. A method made of an accessor
+   (Scope.attr_version) answers CRuby's accessor list, not its synthesized
+   def's: a writer's one parameter has no name ([[:req]]), a reader has
+   none ([]). */
 static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
+  if (mi >= 0 && c->scopes[mi].attr_version) {
+    MethodParam *v = NULL;
+    int n = 0, cap = 0;
+    for (int i = 0; i < c->scopes[mi].nparams; i++) method_param_add_n(&v, &n, &cap, "req", NULL, 0);
+    *out = v;
+    return n;
+  }
   return method_params_of(c, scope_params_node(c, mi), out);
 }
 
@@ -180,7 +190,9 @@ static void emit_method_desc_literal(Compiler *c, int mi, const char *sym, int u
   for (int i = 0; i < m->nparams; i++) {
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");
-    if (i == m->rest_idx) buf_printf(&d, "*%s", m->pnames[i]);
+    /* a method made of an accessor: its parameter has no name (`x=(_)`) */
+    if (m->attr_version) buf_puts(&d, "_");
+    else if (i == m->rest_idx) buf_printf(&d, "*%s", m->pnames[i]);
     else if (i == m->kwrest_idx) buf_printf(&d, "**%s", m->pnames[i]);
     else if (callee_param_is_declared_kwarg(c, m, m->pnames[i]))
       buf_printf(&d, m->pdefault[i] >= 0 ? "%s: ..." : "%s:", m->pnames[i]);

@@ -7278,7 +7278,7 @@ static void shadow_tab_build(Compiler *c, int raw) {
   if (!g_shadow_tab || !tab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int k = n - 1; k >= 0; k--) {
     Scope *sc = &c->scopes[k];
-    if (!sc->name || sc->entry == ENTRY_DISPATCH) continue;   /* a hidden entry shadows no method; the public guard does */
+    if (!sc->name || scope_by_name_hidden(sc)) continue;   /* a hidden entry shadows no method; the public guard does */
     /* by the scope's own class, whatever an instance_exec block has moved
        (comp_scope_own_class): the move defines nothing in the class it
        moves to, and the table then reads the same whenever it is built */
@@ -7312,7 +7312,7 @@ static int shadow_tab_extend(Compiler *c) {
   int n = c->nscopes;
   if (g_shadow_n < 0 || g_shadow_n > n) return 0;
   for (int k = g_shadow_n; k < n; k++)
-    if (c->scopes[k].name && c->scopes[k].entry != ENTRY_DISPATCH) return 0;
+    if (c->scopes[k].name && !scope_by_name_hidden(&c->scopes[k])) return 0;
   unsigned char *t = realloc(g_shadow_tab, (size_t)(n > 0 ? n : 1));
   if (!t) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memset(t + g_shadow_n, 0, (size_t)(n - g_shadow_n));
@@ -7358,7 +7358,7 @@ static int scope_is_shadowed_scan(Compiler *c, int s) {
   for (int k = s + 1; k < c->nscopes; k++) {
     Scope *o = &c->scopes[k];
     if (o->class_id == sc->class_id && o->is_cmethod == sc->is_cmethod &&
-        o->name && o->entry != ENTRY_DISPATCH && sp_streq(o->name, sc->name)) return 1;
+        o->name && !scope_by_name_hidden(o) && sp_streq(o->name, sc->name)) return 1;
   }
   return 0;
 }

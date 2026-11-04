@@ -779,14 +779,18 @@ static int ct_calls(Compiler *c, int id, const char *name) {
    side when sg; main when rcls < 0), as the record answered it: a def's
    scope (rcls's copy of it, when a mixin copied it); for an alias, the
    version of its target live where the alias was made, in the class whose
-   body made it. -1 for any other version (a define_method's, an
-   attribute's) or an alias made where the record has no point. A chain of
+   body made it; for a class-side accessor a later def replaces, the method
+   made of it (elab_attr_scope). -1 for any other version (a
+   define_method's, any other attribute's) or an alias made where the
+   record has no point. A chain of
    aliases ends: each step asks for the version live at an alias's point,
    one recorded ahead of that point, so the points only go back. */
 static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const LrDef *d, int *dc) {
   int cls = rcls;
   while (d) {
     if (d->kind == LR_DEF) return comp_method_version(c, rcls, name, sg, d->node, dc);
+    if ((d->kind == LR_READER || d->kind == LR_WRITER) && d->scope > 0)
+      return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
     if (d->kind != LR_ALIAS || !d->target) return -1;
     int at = d->node;
     name = d->target;
@@ -1181,7 +1185,8 @@ static int ver_mm_at(Compiler *c, int rcls, int sg, LoadPoint p, int at, const E
    (ver_absent_note), and made by ver_entries_demand. mi, the table's
    answer (the last version), where the record cannot tell or no entry
    was made. *span (when asked): how many versions the window reaches
-   (elab_method_span), 0 when no window was asked. */
+   (elab_method_span), 0 when no window was asked, -1 when the answer is
+   mi for want of a version or an entry. */
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, int *span) {
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
@@ -1249,8 +1254,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   if (span) *span = n;
   /* only a version that is a function of its own: a replaced one
      (lr_mark_versions), an entry, or one no later scope of its name
-     shadows; not one a scope no def made (a define_method's) passes over */
-  if (vi < 0 || (!c->scopes[vi].replaced && !c->scopes[vi].entry && scope_is_shadowed(c, vi))) return mi;
+     shadows; not one a scope no def made (a define_method's) passes over.
+     (*span -1: no version told and no entry asked, the table's answer) */
+  if (vi < 0 || (!c->scopes[vi].replaced && !c->scopes[vi].entry && scope_is_shadowed(c, vi))) {
+    if (span && !n) *span = -1;
+    return mi;
+  }
   if (ct_top_version(c, vi, flags)) return -1;
   if (def_class && !(flags & CT_TOP)) *def_class = dc;
   return vi;
@@ -1331,6 +1340,35 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)));
+}
+/* See call_plan.h. */
+int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot, size_t cap) {
+  if (name_is_plain_setter(name)) {
+    if (!comp_sg_writer_reached(c, ci, name, slot, cap)) return CP_SG_NONE;
+  }
+  else {
+    const char *rn = comp_resolve_cm_alias_at(c, ci, name, NULL);
+    if (!comp_is_sg_reader(&c->classes[ci], rn ? rn : name)) return CP_SG_NONE;
+    snprintf(slot, cap, "%s", rn ? rn : name);
+  }
+  /* the slot where the call runs the accessor's own version, and where the
+     record tells no version (master's answer: the table's would be the
+     def's, which nothing proves runs there) */
+  return cplan_sg_version(c, id, ci, name) == CP_SG_METHOD ? CP_SG_METHOD : CP_SG_SLOT;
+}
+/* See call_plan.h. */
+int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
+  if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
+  int m = call_target(c, id, ci, name, CT_CMETHOD, NULL), told = 0;
+  if (m < 0 || c->scopes[m].attr_version) return CP_SG_SLOT;
+  if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, NULL, &told);
+  return told < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
+}
+/* See call_plan.h. */
+int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
+  char slot[256];
+  const char *nm = id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
+  return nm && name && sp_streq(nm, name) && cplan_sg_accessor(c, id, ci, name, slot, sizeof slot) == CP_SG_SLOT;
 }
 /* See call_plan.h. */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {

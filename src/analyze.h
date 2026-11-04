@@ -247,7 +247,9 @@ typedef struct {
   int scope;            /* a def's or a define_method's: the method scope
                            the scope walk made of it (its Scope index; 0,
                            the program's top level, for none); a
-                           module_function copy's of one, that one's */
+                           module_function copy's of one, that one's; a
+                           class-side accessor's that a def replaces, the
+                           method made of it (elab_attr_scope) */
 } LrDef;
 typedef struct { int node, body; } LrOpen;
 typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /* LR_SG_PREPEND: a prepend of the singleton class, ahead of its own methods */
@@ -654,6 +656,16 @@ typedef struct { int cls, sg, kind, node; const char *name, *target; int scope; 
    time (lr_stmt_applied: 2) */
 enum { ELAB_ENTRY_MAY = 1 << 30 };
 ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
+/* The class-side accessor versions of each history that ends in a def
+   (`class << self; attr_writer :cfg; end`, then `def self.cfg=`): a call
+   that runs while one is live runs the accessor, any other the def, so
+   each is a version of its own, a method register_attr_versions makes and
+   elab_attr_scope links to it (LrDef.scope); *n of them, the caller frees
+   the array. An accessor no def follows stays its class's slot alone. */
+ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
+void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
+/* does class cls's own side hold such an accessor version of name? */
+int elab_attr_replaced(Compiler *c, int cls, const char *name);
 /* did code the record cannot follow (a send, an eval of a String, a mixin
    of a module it does not know, a computed method name, a method of the
    program its body calls) run on cls before p? */

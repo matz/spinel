@@ -3935,6 +3935,38 @@ static int cmethod_names_ivar(Compiler *c, int ci, const char *ivname) {
   return 0;
 }
 
+/* Each class-side accessor version a def after it replaces
+   (elab_replaced_attrs) as the method it is, `def self.x = @x` or
+   `def self.x=(value) = (@x = value)`, walked beside the call that
+   declares it: its scope is the version's (elab_attr_scope), which the
+   plan binds a call to where the accessor is live, and for which the
+   class's slot stands in at that call (cplan_sg_accessor). Its `@x` makes
+   the slot the class-level ivar's (register_attrs), the one the def
+   writes, and goes into the class's ivars now, which declare that slot,
+   whatever the rest of the program names. */
+void register_attr_versions(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n = 0;
+  ElabEntry *a = elab_replaced_attrs(c, &n);
+  for (int i = 0; i < n; i++) {
+    if (a[i].scope) continue;
+    int w = a[i].kind == LR_WRITER, e = c->nscopes;
+    char base[256], ivname[260];
+    if (w ? !setter_base_name(a[i].name, base, sizeof base) : snprintf(base, sizeof base, "%s", a[i].name) >= (int)sizeof base) continue;
+    int def = attr_as_def(nt, a[i].node, base, w);
+    if (def < 0) continue;
+    nt_node_set_ref(nt, def, "receiver", nt_new_node(nt, "SelfNode"));
+    comp_grow_node_arrays(c);
+    walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
+    if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
+    { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    snprintf(ivname, sizeof ivname, "@%s", base);
+    comp_ivar_intern(&c->classes[a[i].cls], ivname);
+    elab_attr_scope(c, &a[i], e);
+  }
+  free(a);
+}
+
 /* Each class side's attr readers and writers, from the load record
    (elab_entries), in the order the load phase defines them: an instance
    side's with their backing ivars, a singleton side's with the call that

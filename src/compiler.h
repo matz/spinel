@@ -481,8 +481,11 @@ typedef struct {
      method by name: the table answers it, and the versions it arms are
      replaced; main_n, codegen's
      number for a method of main's own whose name Object's methods have
-     too (both are top-level functions in C) */
-  unsigned char versioned, replaced;
+     too (both are top-level functions in C); attr_version, the method
+     made of a class-side accessor a later def replaces
+     (register_attr_versions), whose calls the slot stands in for
+     (cplan_sg_accessor) */
+  unsigned char versioned, replaced, attr_version;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;
   unsigned char cand_bound; /* a call on a poly receiver bound its arguments
@@ -719,6 +722,14 @@ typedef struct {
    is both, the module's own method and its private instance method */
 static inline int scope_on_side(const Scope *s, int cm) {
   return cm ? s->is_cmethod : !s->is_cmethod || s->is_module_function;
+}
+
+/* Is s a method no lookup by name answers, and which shadows none: a
+   version entry (ENTRY_DISPATCH), or the method made of an accessor a
+   later def replaces (attr_version)? Only the calls call_target binds to
+   it reach it. */
+static inline int scope_by_name_hidden(const Scope *s) {
+  return s->entry == ENTRY_DISPATCH || s->attr_version;
 }
 
 static inline TyKind scope_set_ret(Scope *s, TyKind t) {

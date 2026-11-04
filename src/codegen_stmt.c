@@ -13873,6 +13873,16 @@ static int unbox_ret_converts(Compiler *c, TyKind t) {
    compiler that only warns (#3420). Convert, as the array side already does. */
 static int emit_ret_hash_widen_conv(Compiler *c, TyKind slot, TyKind vty, int node, Buf *b) {
   if (!ty_is_hash(slot) || !ty_is_hash(vty) || slot == vty) return 0;
+  /* The general hash a Hash method on a boxed receiver answers (`h.except(k)`
+     where `h` is poly) narrowed into a seeded Hash[String, String] or
+     Hash[String, Integer] return: rebuilt, each entry checked. The pointer
+     returned as it stood was another struct's layout. */
+  if (vty == TY_POLY_POLY_HASH && (slot == TY_STR_STR_HASH || slot == TY_STR_INT_HASH)) {
+    buf_printf(b, "sp_%sHash_from_poly_hash(", slot == TY_STR_STR_HASH ? "StrStr" : "StrInt");
+    emit_expr(c, node, b);
+    buf_puts(b, ")");
+    return 1;
+  }
   const char *fn = slot == TY_STR_POLY_HASH  ? "sp_StrPolyHash_from_poly"
                  : slot == TY_SYM_POLY_HASH  ? "sp_SymPolyHash_from_poly"
                  : slot == TY_POLY_POLY_HASH ? "sp_PolyPolyHash_from_poly" : NULL;

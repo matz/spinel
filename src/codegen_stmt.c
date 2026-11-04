@@ -16120,7 +16120,11 @@ static void emit_const_visibility_missing(Compiler *c, int id, int ci, Buf *b, i
     NodeKind ak = nt_kind(c->nt, av[i]);
     const char *an = ak == NK_SymbolNode ? nt_str(c->nt, av[i], "value") :
                      ak == NK_StringNode ? nt_str(c->nt, av[i], "content") : NULL;
-    if (!an || !class_lacks_own_const(c, ci, an)) continue;
+    /* a computed name (or a non-name, CRuby's TypeError) is decided at
+       run time: stop at it */
+    if (!an) return;
+    if (!class_lacks_own_const(c, ci, an)) continue;
+    if (!const_visibility_call_is_builtin(c, id, ci)) return;
     char msg[512];
     snprintf(msg, sizeof msg, "constant %s::%s not defined", class_ruby_name(c, ci), an);
     emit_indent(b, indent);

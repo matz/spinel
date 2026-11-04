@@ -2058,6 +2058,7 @@ int comp_defined_reads(Compiler *c, int pred, int *reads, int cap);
    names (analyze_util.c) */
 int const_path_misses_member(Compiler *c, int id);
 int class_lacks_own_const(Compiler *c, int k, const char *nm);   /* private_constant :nm in k is a NameError */
+int const_visibility_call_is_builtin(Compiler *c, int call, int k);   /* ... when the call is Module's own */
 int const_node_class_index(Compiler *c, int id);
 /* Does scope s call `super` in its body or its parameter defaults (analyze.c).
    Analysis and codegen both ask it. */

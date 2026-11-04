@@ -38677,12 +38677,13 @@ int nullable_int_value(Compiler *c, int v) {
   }
   /* A Float global is declared holding nil, which it keeps until its first
      assignment; and any scalar global some write left nil in holds it after
-     (marked below, as a local is). */
+     (marked below, as a local is). One only nil is written to holds nothing
+     else (TY_NIL until it boxes after the fixpoint). */
   if (nt_kind(nt, v) == NK_GlobalVariableReadNode) {
     const char *gn = nt_str(nt, v, "name");
     const char *rn = gn ? comp_resolve_gvar(c, gn + 1) : NULL;
     LocalVar *g = rn ? comp_gvar(c, rn) : NULL;
-    if (g && (g->nullable_int || g->type == TY_POLY)) return 1;
+    if (g && (g->nullable_int || g->type == TY_POLY || g->type == TY_NIL)) return 1;
     return g && g->type == TY_FLOAT && !gvar_seeded_before_read(c, rn);
   }
   /* A constant holds nil where a write of it can leave one: it is boxed so
@@ -53995,20 +53996,21 @@ static void an_phase_reconcile_check(Compiler *c) {
   AN_STEP_V("check_seed_contradictions", check_seed_contradictions(c));
 
   /* A global the program only ever mentions holding nil -- `$log = nil` and
-     nothing else, or a read of one never assigned at all -- settles at no type,
-     and a global with no type gets no slot, so the reference does not compile.
-     Ruby's answer for both is nil, which the boxed form holds. Done after the
-     fixpoint so a global that any write gives a real type keeps it. */
+     nothing else, which settles at TY_NIL (gvar_nil_write_type), or a read of
+     one never assigned at all, which settles at no type -- has no slot type,
+     so the reference does not compile. Ruby's answer for both is nil, which
+     the boxed form holds. Done after the fixpoint so a global that any write
+     gives a real type keeps it. */
   { int promoted = 0;
     for (int i = 0; i < c->ngvars; i++)
-      if (c->gvars[i].type == TY_UNKNOWN) { lv_set_type(&c->gvars[i], TY_POLY); promoted = 1; }
+      if (c->gvars[i].type == TY_UNKNOWN || c->gvars[i].type == TY_NIL) { lv_set_type(&c->gvars[i], TY_POLY); promoted = 1; }
     /* Stamp the reads too: a node's type is cached from the round that typed
-       it, and every round so far saw this global as having no type. */
+       it, and every round so far saw this global as having no type, or nil. */
     if (promoted) {
       NodeTable *ntg = (NodeTable *)c->nt;
       for (int id = 0; id < ntg->count && id < c->node_cap; id++) {
         if (nt_kind(ntg, id) != NK_GlobalVariableReadNode) continue;
-        if (c->ntype[id] != TY_UNKNOWN) continue;
+        if (c->ntype[id] != TY_UNKNOWN && c->ntype[id] != TY_NIL) continue;
         const char *nm = nt_str(ntg, id, "name");
         const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
         LocalVar *g = rn ? comp_gvar(c, rn) : NULL;

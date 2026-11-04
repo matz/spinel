@@ -26,3 +26,19 @@ true
 [false, true, true, false]
 [false, true, true, false]
 [false, true, true, false]
+false
+true
+false
+true
+false
+true
+false
+false
+true
+ArgumentError
+true
+true
+true
+true
+true
+true

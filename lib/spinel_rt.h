@@ -6621,6 +6621,30 @@ static sp_bool sp_poly_lt(sp_RbVal a, sp_RbVal b) { SP_POLY_NIL_RECV("<"); SP_PO
 static sp_bool sp_poly_le(sp_RbVal a, sp_RbVal b) { SP_POLY_NIL_RECV("<="); SP_POLY_CLASS_CMP(<=); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return a.v.i <= b.v.i;   /* see sp_poly_eq */ SP_POLY_USER_CMP("<="); sp_poly_recv_ck(a, "<="); SP_POLY_COERCE_CMP("<="); if ((sp_poly_num_is_nan(a) || sp_poly_num_is_nan(b)) && sp_poly_tower_p(a) && sp_poly_tower_p(b)) return FALSE; sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp <= 0; }
 static sp_bool sp_poly_gt(sp_RbVal a, sp_RbVal b) { SP_POLY_NIL_RECV(">"); SP_POLY_CLASS_CMP(>); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return a.v.i > b.v.i;   /* see sp_poly_eq */ SP_POLY_USER_CMP(">"); sp_poly_recv_ck(a, ">"); SP_POLY_COERCE_CMP(">"); if ((sp_poly_num_is_nan(a) || sp_poly_num_is_nan(b)) && sp_poly_tower_p(a) && sp_poly_tower_p(b)) return FALSE; sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp > 0; }
 static sp_bool sp_poly_ge(sp_RbVal a, sp_RbVal b) { SP_POLY_NIL_RECV(">="); SP_POLY_CLASS_CMP(>=); if (a.tag == SP_TAG_INT && b.tag == SP_TAG_INT) return a.v.i >= b.v.i;   /* see sp_poly_eq */ SP_POLY_USER_CMP(">="); sp_poly_recv_ck(a, ">="); SP_POLY_COERCE_CMP(">="); if ((sp_poly_num_is_nan(a) || sp_poly_num_is_nan(b)) && sp_poly_tower_p(a) && sp_poly_tower_p(b)) return FALSE; sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp >= 0; }
+/* A typed Bignum compared with a boxed value (codegen's
+   emit_bigint_cmp_inexact), in either order: an Integer at run time
+   compares as a bigint, as the typed Bignum arm does, and any other value
+   -- a Rational, a Float, a program object -- the way sp_poly_eq and
+   sp_poly_lt compare it (sp_poly_as_bigint read a Rational as 0). */
+static SP_INLINE sp_Bigint *sp_poly_int_as_bigint(sp_RbVal v) {
+  return v.tag == SP_TAG_BIGINT ? (sp_Bigint *)v.v.p : sp_bigint_new_int(v.v.i);
+}
+#define SP_BIGINT_POLY_CMP(nm, fn, op) \
+  static SP_NOINLINE SP_COLD sp_bool sp_bigint_poly_##nm##_other(sp_RbVal a, sp_RbVal b) { return fn(a, b); } \
+  static SP_INLINE sp_bool sp_bigint_poly_##nm(sp_Bigint *a, sp_RbVal b) { \
+    if (SP_UNLIKELY(b.tag != SP_TAG_INT && b.tag != SP_TAG_BIGINT)) \
+      return sp_bigint_poly_##nm##_other(sp_box_bigint_or_nil(a), b); \
+    return sp_bigint_cmp(a, sp_poly_int_as_bigint(b)) op 0; } \
+  static SP_INLINE sp_bool sp_poly_bigint_##nm(sp_RbVal a, sp_Bigint *b) { \
+    if (SP_UNLIKELY(a.tag != SP_TAG_INT && a.tag != SP_TAG_BIGINT)) \
+      return sp_bigint_poly_##nm##_other(a, sp_box_bigint_or_nil(b)); \
+    return sp_bigint_cmp(sp_poly_int_as_bigint(a), b) op 0; }
+SP_BIGINT_POLY_CMP(eq, sp_poly_eq, ==)
+SP_BIGINT_POLY_CMP(lt, sp_poly_lt, <)
+SP_BIGINT_POLY_CMP(le, sp_poly_le, <=)
+SP_BIGINT_POLY_CMP(gt, sp_poly_gt, >)
+SP_BIGINT_POLY_CMP(ge, sp_poly_ge, >=)
+#undef SP_BIGINT_POLY_CMP
 /* `a < b` etc. where a user class's operator may answer a non-bool (ruby-vips'
    Image#> builds an image): the user method's own value, else the builtin
    comparison boxed. */

@@ -466,7 +466,14 @@ static int bop_result_fallback_allowed(const char *name) {
             alongside it. A String site mixed with Array ones compiles now,
             but on a literal still hits #2332's frozen-literal limitation at
             runtime, same as every other mutator this family has fixed. */
-         !strcmp(name, "slice!");
+         !strcmp(name, "slice!") ||
+         /* K-036: rotate!(n) -- its own row is BOPR_SELF for a plain Array
+            at every argc (0..127, same row as the 0-arg form yield_site_
+            listed now answers), but the 0-arg form's success does not
+            reach this argc>=1 allowlist on its own; verified with its own
+            RED (differing-kind sites, raw C pointer-type error) then
+            GREEN test, same as every other name here. */
+         !strcmp(name, "rotate!");
 }
 /* Whether a yield site answers `name` on a receiver of kind recv from the
    builtin-op rows rather than from a rule of its own: 1 for a listed pair,
@@ -514,6 +521,18 @@ static int yield_site_listed(const char *name, TyKind recv) {
       !strcmp(name, "last") || !strcmp(name, "min") || !strcmp(name, "max") ||
       !strcmp(name, "pop"))
     return ty_recv_is_plain_array(recv);
+  /* rotate!: its own row is already BOPR_SELF for a plain Array (every
+     argc, unlike push/append/unshift below) -- never gated here before
+     (kilau K-036), so a bare `yield.rotate!` across differing Array-kind
+     sites failed to compile with a raw C pointer-type error, the same
+     shape minmax had in K-033. push/append/unshift are NOT listed here:
+     their row is TY_UNKNOWN on purpose (a direct, non-yield multi-arg
+     push of a mismatched-kind element, e.g. an IntArray's push("s"),
+     relies on that placeholder to answer poly rather than the receiver's
+     narrow kind -- confirmed by a real regression, test/
+     array_push_lift_splat.rb, when this fix first tried widening their
+     row to BOPR_SELF instead of adding a dedicated 0-arg arm below). */
+  if (!strcmp(name, "rotate!")) return ty_recv_is_plain_array(recv);
   /* first/shift's own row states a Hash kind too (the [key, value] pair --
      K-033/kilau), unlike min/max/uniq/minmax above, whose Hash row is a
      placeholder TY_UNKNOWN (bop_result below declines it, so listing Hash
@@ -610,6 +629,21 @@ int ty_recv_builtin_result(const char *name, int argc, TyKind arg0, TyKind arg1,
       TyKind r = op ? bop_result(op, recv) : TY_UNKNOWN;
       if (r == TY_UNKNOWN) return 0;
       *out = r; if (row) *row = op;
+      return 1;
+    }
+    /* 0-arg push/append/unshift: each answers self (CRuby's own no-op
+       push/append/unshift of nothing). Answered here by name, bypassing
+       the row entirely -- their shared bop_rows row states TY_UNKNOWN on
+       purpose, read by a direct (non-yield) multi-arg call of a
+       mismatched-kind element (an IntArray's push("s")) to fall through
+       to a poly answer there; widening that row to BOPR_SELF for this
+       fix instead regressed test/array_push_lift_splat.rb, a real,
+       unrelated direct call, so this arm leaves the row untouched and
+       only ever answers the plain-Array 0-arg yield-receiver case
+       (kilau K-036). */
+    if (ty_recv_is_plain_array(recv) &&
+        (!strcmp(name, "push") || !strcmp(name, "append") || !strcmp(name, "unshift"))) {
+      *out = recv;
       return 1;
     }
     /* succ: a String or Symbol site always answers its own kind (String's

@@ -3468,9 +3468,11 @@ static int dyn_class_ref(Compiler *c, int k, int *holder) {
    another, the answer was a guess. It becomes the lookup CRuby does, over
    the classes and modules of that leaf:
 
-     (if m.is_a?(Module) && m <= Ext then Ext::Foo
+     (if m.is_a?(Module) && Ext >= m then Ext::Foo
       elsif m.equal?(Object) then ::Foo
-      else raise NameError, "uninitialized constant #{m}::Foo" end)
+      elsif m.is_a?(Module) then raise NameError, "uninitialized constant #{m}::Foo"
+                                 (Object's: "uninitialized constant Foo")
+      else raise TypeError, "#{m.inspect} is not a class/module" end)
 
    A holder takes m when m is it or has it as an ancestor (a class under
    it, a module including it); Object's own constants only through Object
@@ -3645,8 +3647,36 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int rargs = nt_new_node(nt, "ArgumentsNode");
     { int ra[2] = { te_const(nt, "NameError"), cat2 }; nt_node_set_arr(nt, rargs, "arguments", ra, 2); }
     int rz = te_call(nt, -1, "raise", rargs, -1);
+    /* (CRuby's TypeError for a value that is no class or module) */
+    int tmsg = nt_new_node(nt, "StringNode");
+    nt_node_set_str(nt, tmsg, "content", " is not a class/module");
+    nt_node_set_str(nt, tmsg, "unescaped", " is not a class/module");
+    int tins = te_call(nt, dyn_parent_copy(nt, par), "inspect", -1, -1);
+    int tcat = te_call(nt, tins, "+", te_args1(nt, tmsg), -1);
+    int targs = nt_new_node(nt, "ArgumentsNode");
+    { int ta[2] = { te_const(nt, "TypeError"), tcat }; nt_node_set_arr(nt, targs, "arguments", ta, 2); }
+    int tz = te_call(nt, -1, "raise", targs, -1);
+    int tels = nt_new_node(nt, "ElseNode");
+    nt_node_set_ref(nt, tels, "statements", te_stmts1(nt, tz));
+    int mif = nt_new_node(nt, "IfNode");
+    nt_node_set_ref(nt, mif, "predicate", te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1));
+    /* (Object::Foo's message names Foo alone) */
+    char onm[300]; snprintf(onm, sizeof onm, "uninitialized constant %s", nm);
+    int omsg = nt_new_node(nt, "StringNode");
+    nt_node_set_str(nt, omsg, "content", onm);
+    nt_node_set_str(nt, omsg, "unescaped", onm);
+    int oargs = nt_new_node(nt, "ArgumentsNode");
+    { int oa[2] = { te_const(nt, "NameError"), omsg }; nt_node_set_arr(nt, oargs, "arguments", oa, 2); }
+    int oels = nt_new_node(nt, "ElseNode");
+    nt_node_set_ref(nt, oels, "statements", te_stmts1(nt, rz));
+    int oif = nt_new_node(nt, "IfNode");
+    nt_node_set_ref(nt, oif, "predicate", te_call(nt, dyn_parent_copy(nt, par), "equal?", te_args1(nt, te_const(nt, "Object")), -1));
+    nt_node_set_ref(nt, oif, "statements", te_stmts1(nt, te_call(nt, -1, "raise", oargs, -1)));
+    nt_node_set_ref(nt, oif, "subsequent", oels);
+    nt_node_set_ref(nt, mif, "statements", te_stmts1(nt, oif));
+    nt_node_set_ref(nt, mif, "subsequent", tels);
     int els = nt_new_node(nt, "ElseNode");
-    nt_node_set_ref(nt, els, "statements", te_stmts1(nt, rz));
+    nt_node_set_ref(nt, els, "statements", te_stmts1(nt, mif));
     int tail_arm = els;
     if (top >= 0) {
       int obj = te_const(nt, "Object");
@@ -3659,7 +3689,9 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     }
     for (int i = na - 1; i >= 0; i--) {
       int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
-      int le = te_call(nt, dyn_parent_copy(nt, par), "<=", te_args1(nt, arms_h[i]), -1);
+      /* (Holder >= m, not m <= Holder: the same answer, and it builds where
+         m is never a module, a value the TypeError arm takes) */
+      int le = te_call(nt, arms_h[i], ">=", te_args1(nt, dyn_parent_copy(nt, par)), -1);
       int and = nt_new_node(nt, "AndNode");
       nt_node_set_ref(nt, and, "left", ism);
       nt_node_set_ref(nt, and, "right", le);

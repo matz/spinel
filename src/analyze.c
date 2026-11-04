@@ -55025,6 +55025,41 @@ void analyze_program(Compiler *c) {
     }
     free(was);
   }
+  /* A method this pass reached first (a by-name call's on a class whose
+     instances only it opened) had no parameter type from the backstops,
+     which widen the reached methods' unbound parameters ahead of it: its
+     C parameter was boxed while its reads stayed untyped, and a read went
+     raw into an sp_int slot (#10913, openssl's SSLSocket#read_nonblock).
+     Its unbound parameters are widened the same way now, the writes and
+     returns settle on them, and the nodes of those methods take the types
+     (their reads, and the expressions over them). */
+  {
+    unsigned char *wid = calloc((size_t)c->nscopes + 1, 1);
+    if (!wid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int widened = 0;
+    for (int s = 0; s < c->nscopes; s++) {
+      Scope *sc = &c->scopes[s];
+      if (!sc->reachable || sc->nparams == 0) continue;
+      for (int i = 0; i < sc->nparams; i++) {
+        LocalVar *p = sc->pnames[i] ? scope_local(sc, sc->pnames[i]) : NULL;
+        if (p && p->type == TY_UNKNOWN) {
+          slot_rule(c, p, TY_POLY, -1, "never bound: reached by the last reachability pass");
+          wid[s] = 1; widened = 1;
+        }
+      }
+    }
+    for (int iter = 0; widened && iter < 8; iter++) {
+      int ch = infer_write_types(c);
+      ch |= infer_return_types(c);
+      if (!ch) break;
+    }
+    if (widened)
+      for (int id = 0; id < c->nt->count; id++) {
+        int s = id < c->node_cap && c->nscope ? c->nscope[id] : -1;
+        if (s >= 0 && s < c->nscopes && wid[s]) infer_type(c, id);
+      }
+    free(wid);
+  }
   if (g_dump_implicit) { ic_dump(c, stdout); exit(0); }   /* the methods CRuby calls that the program does not name, and the defs kept */
 
   if (getenv("SP_FIXPOINT_LOG"))

@@ -17128,6 +17128,58 @@ static const char *sp_sysexit_super(sp_Exception *self, sp_int argc, const sp_Rb
   }
   return self->msg;
 }
+/* KeyError#, NameError#, NoMethodError# and FrozenError#initialize, for the
+   program's classes below them. As CRuby reads them: NoMethodError takes its
+   private flag and its args off the end, NameError its name, and what is left
+   goes to Exception#initialize, which takes one message. A key or a receiver
+   the keywords do not give stays unrecorded, and its reader raises. `kw` is
+   the call's keywords as a boxed Hash, nil for none. */
+static const char *sp_exc_attrs_super(sp_Exception *self, sp_int argc, const sp_RbVal *av, sp_RbVal kw) {
+  SP_GC_ROOT(self); SP_GC_ROOT_RBVAL(kw);
+  const char *cls = self->cls_name;
+  int keyed = sp_exc_cls_matches(cls, "KeyError");
+  int named = sp_exc_cls_matches(cls, "NameError");
+  int nometh = sp_exc_cls_matches(cls, "NoMethodError");
+  int has_key = 0, has_recv = 0;
+  sp_RbVal key = sp_box_nil(), recv = sp_box_nil();
+  SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(recv);
+  if (nometh && argc > 3) { self->priv_call = sp_poly_truthy(av[argc - 1]); argc--; }
+  sp_RbVal args = nometh && argc > 2 ? av[--argc] : sp_box_nil();
+  sp_RbVal name = named && argc > 1 ? av[--argc] : sp_box_nil();
+  if (argc > 1)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 0..1)", (long long)argc));
+  if (kw.tag == SP_TAG_OBJ) {
+    sp_PolyArray *ks = sp_poly_keys(kw); SP_GC_ROOT(ks);
+    char unknown[256]; int n = 0, cnt = 0; unknown[0] = 0;
+    for (sp_int i = 0; i < ks->len; i++) {
+      sp_RbVal k = ks->data[i];
+      const char *nm = k.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)k.v.i) : NULL;
+      if (nm && keyed && !strcmp(nm, "key")) { key = sp_poly_index_poly(kw, k); has_key = 1; }
+      else if (nm && !strcmp(nm, "receiver")) { recv = sp_poly_index_poly(kw, k); has_recv = 1; }
+      else sp_kwargs_list_add(unknown, &n, &cnt, sp_poly_inspect(k));
+    }
+    if (cnt) sp_raise_kw_error("unknown", cnt, unknown);
+  }
+  /* as Exception#initialize: what it takes replaces the message before, and
+     none clears it. An explicitly given message stays, even empty (#3713). */
+  const char *m = NULL;
+  if (argc > 0 && av[0].tag != SP_TAG_NIL) {
+    m = sp_poly_to_s(av[0]);
+    SP_GC_ROOT(m);
+    m = sp_exc_msg_given(m);
+  }
+  SP_GC_ROOT_STR(m);
+  sp_exc_set_msg(self, m);
+  /* a String is the message itself, as #message answers it */
+  if (argc > 0 && av[0].tag == SP_TAG_OBJ && av[0].cls_id == SP_BUILTIN_STRBUF && av[0].v.p)
+    sp_exc_attach_msg(self, av[0].v.p);
+  if (nometh) self->xkey = args;
+  if (named) self->xname = name;
+  if (has_key) { self->xkey = key; self->has_key = 1; }
+  if (has_recv) { self->xrecv = recv; self->has_recv = 1; }
+  sp_gc_wb((void *)self);
+  return self->msg;
+}
 /* SystemCallError.new(msg, errno = nil, func = nil): an errno with an Errno
    class builds an instance of that class (SystemCallError.new("x", 2) is an
    Errno::ENOENT); #errno answers the errno as given. A lone Integer is the
@@ -17326,7 +17378,9 @@ static sp_RbVal sp_poly_exc_acc(sp_RbVal v, const char *which) {
                  sp_sprintf("undefined method '%s' for an instance of %s", which, sp_poly_class_name(v)));
   sp_Exception *e = (sp_Exception *)v.v.p;
   if (!strcmp(which, "message")) return sp_box_str(sp_exc_message(e));
-  if (!strcmp(which, "result"))  return sp_exc_result(e);
+  if (!strcmp(which, "result"))  return sp_exc_result_acc(e);
+  if (!strcmp(which, "args"))    return sp_exc_args_acc(e);
+  if (!strcmp(which, "private_call?")) return sp_box_bool(sp_exc_private_call_acc(e));
   if (!strcmp(which, "errno"))   return sp_exc_errno_acc(e);
   if (!strcmp(which, "error_code")) return sp_exc_error_code_acc(e);
   if (!strcmp(which, "key"))     return sp_exc_key_acc(e);

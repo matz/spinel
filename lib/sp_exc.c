@@ -509,6 +509,19 @@ int sp_exc_exit_status(void *obj) {
   return (e && e->result.tag == SP_TAG_INT) ? (int)e->result.v.i : 0;
 }
 /* Exception#exception(msg): a copy of the receiver carrying the new message. */
+/* e's message, as sp_exc_new takes it, in place of the one before: a copy on
+   the heap, with the String it is a view of as the handle. NULL clears it. */
+void sp_exc_set_msg(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+  e->msg = NULL;
+  e->msg_h = NULL;
+  if ((msg && msg[0]) || sp_exc_msg_empty_given(msg)) {
+    e->msg = sp_exc_msg_copy(msg && msg[0] ? msg : "");
+    sp_gc_wb((void *)e);
+    if (msg == sp_exc_no_msg_frozen) ((unsigned char *)e->msg)[-1] = 0xfa;
+    sp_exc_one_attach(e, (sp_String *)_one_h);
+  }
+  sp_gc_wb((void *)e);
+}
 sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *n = sp_exc_dup(e);
   SP_GC_ROOT(n);
@@ -1168,6 +1181,10 @@ sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {SP_GC_ROOT(e);
 sp_RbVal sp_exc_path_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "LoadError", "path");
   return e->has_key ? e->xkey : sp_box_nil();
+}
+sp_RbVal sp_exc_result_acc(sp_Exception *e) {SP_GC_ROOT(e);
+  sp_exc_acc_gate(e, "StopIteration", "result");
+  return e->result;
 }
 sp_RbVal sp_exc_args_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "args");

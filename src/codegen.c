@@ -15629,6 +15629,38 @@ static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   return 1;
 }
 
+/* A bare `super` in the initialize of a class below KeyError and its like:
+   the method's parameters as they stand now, the positional ones gathered
+   into one Array, the keywords boxed as a Hash. */
+static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *self_text, Buf *b) {
+  int nkwd = 0;
+  for (int k = 0; k < s->nparams; k++)
+    if (k != s->kwrest_idx && callee_param_is_declared_kwarg(c, s, s->pnames[k])) nkwd++;
+  if (nt_ref(c->nt, id, "block") >= 0 || (nkwd > 0 && s->kwrest_idx >= 0))
+    unsupported(c, id, "a bare super forwarding a block, or named keywords beside a **rest, to the initialize of a KeyError, NameError or FrozenError subclass");
+  if (nkwd > 0 || s->kwrest_idx >= 0) g_uses_symbols = 1;
+  int ta = ++g_tmp, tk = ++g_tmp, th = nkwd > 0 ? ++g_tmp : 0;
+  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
+  if (nkwd > 0) buf_printf(b, "sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d); ", th, th);
+  buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); ", tk, tk);
+  for (int k = 0; k < s->nparams; k++) {
+    LocalVar *ep = scope_local(s, s->pnames[k]);
+    TyKind et = ep && ep->type != TY_UNKNOWN ? ep->type : TY_POLY;
+    Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[k], &txt);
+    Buf ab; memset(&ab, 0, sizeof ab);
+    emit_zsuper_boxed(c, ep, et, txt.p, &ab);
+    free(txt.p);
+    if (k == s->kwrest_idx) buf_printf(b, "_t%d = %s; ", tk, ab.p);
+    else if (callee_param_is_declared_kwarg(c, s, s->pnames[k]))
+      buf_printf(b, "sp_SymPolyHash_set(_t%d, (sp_sym)%d, %s); ", th, comp_sym_intern(c, s->pnames[k]), ab.p);
+    else if (k == s->rest_idx)
+      buf_printf(b, "sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(sp_splat_to_array(%s))); ", ta, ab.p);
+    else buf_printf(b, "sp_PolyArray_push(_t%d, %s); ", ta, ab.p);
+    free(ab.p);
+  }
+  if (nkwd > 0) buf_printf(b, "_t%d = sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); ", tk, th);
+  buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d); })", self_text, ta, ta, tk);
+}
 void emit_super(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
   if (repr_of(c, id).demand && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
@@ -15844,6 +15876,13 @@ void emit_super(Compiler *c, int id, Buf *b) {
       int argc2 = 0;
       const int *argv2 = NULL;
       if (args_id >= 0) argv2 = nt_arr(c->nt, args_id, "arguments", &argc2);
+      /* KeyError's key:, NameError's name and their like: more than a message */
+      if (class_takes_exc_attrs(c, s->class_id)) {
+        char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
+        if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
+        else emit_exc_attrs_call(c, id, self_text, argc2, argv2, b);
+        return;
+      }
       /* SystemCallError#initialize(msg = nil, func = nil) builds the message
          from the class's errno ("No such file or directory - msg") and
          stores #errno; a bare `super` forwards this initialize's parameters */

@@ -15659,6 +15659,45 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
    another shape (a splat, no argument, two) is refused. 0 where self has
    no Kernel#` above it (a BasicObject subclass): the caller raises
    NoMethodError. */
+/* emit_super's arm for comp_super_object_builtin. */
+static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, Buf *b) {
+  int kind = comp_super_object_builtin(c, s, uname, id);
+  /* a by-value object (detect_value_types) has no identity to compare:
+     the super raises as before */
+  if (!kind || c->classes[s->class_id].is_value_type) return 0;
+  Buf vb; memset(&vb, 0, sizeof vb);
+  TyKind vt = TY_BOOL;
+  if (kind == SUPER_OBJ_SAME) {
+    Buf kb; memset(&kb, 0, sizeof kb);
+    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) {
+      LocalVar *lv = scope_local(s, s->pnames[0]);
+      Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
+      emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
+      free(pn.p);
+    }
+    else {
+      int sa = nt_ref(c->nt, id, "arguments"), n = 0;
+      const int *av = nt_arr(c->nt, sa, "arguments", &n);
+      emit_boxed(c, av[0], &kb);
+    }
+    int tk = ++g_tmp;
+    buf_printf(&vb, "({ sp_RbVal _a%d = %s, _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); "
+                    "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })",
+               tk, kb.p ? kb.p : "sp_box_nil()", tk, g_self, tk, tk, tk, tk);
+    free(kb.p);
+  }
+  else if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0)");
+  else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s))", g_self);
+  else {
+    vt = ty_object(s->class_id);
+    buf_printf(&vb, "((sp_%s *)%s)", c->classes[s->class_id].c_name, g_self);
+  }
+  if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, vt, vb.p, b);
+  else buf_puts(b, vb.p);
+  free(vb.p);
+  return 1;
+}
+
 static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   int arg, shape = an_super_backtick_shape(c, id, s, &arg);
   if (shape < 0) return 0;
@@ -16321,6 +16360,11 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
     /* `super` in a ` override no ancestor defines is Kernel#` */
     if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
+    /* `super` in an ==, equal?, eql?, !, nil?, frozen? or itself override
+       no program ancestor defines is BasicObject's or Kernel's
+       (comp_super_object_builtin): the same object, false, the frozen bit
+       or the object itself */
+    if (uname && emit_super_object_builtin(c, id, s, uname, b)) return;
     /* `super` from the program's own send, __send__ or public_send that no
        ancestor of the program defines is Object's: it dispatches on the name
        at run time, which no emitted code here does, so it is refused rather

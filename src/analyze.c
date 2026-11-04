@@ -885,6 +885,7 @@ static int cr_alias_mark_own(CrLive *lv, const ClassInfo *cls, int ci, int i, co
 /* Retry each scope held on a side; the ones still held stay listed */
 static void cr_live_retry(CrLive *lv, int *head) {
   int t = *head;
+  if (t < 0) return;   /* (-2, a class that holds nothing back, stays so) */
   *head = -1;
   for (int nx; t >= 0; t = nx) {
     nx = lv->pend_next[t];

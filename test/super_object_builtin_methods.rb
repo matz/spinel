@@ -75,3 +75,12 @@ class Blk
 end
 g = Blk.new
 p g == g, !g, g.nil?, g.frozen?, g.itself.class, g.is_a?(Blk), $n
+
+# The method's own block, forwarded, builds too.
+class Fwd
+  def kind_of?(k, &b) = super(k, &b)
+  def equal?(o, &) = super(o, &)
+  def nil?(&b) = super(&b)
+end
+f = Fwd.new
+p f.kind_of?(Fwd) { }, f.equal?(f), f.nil?

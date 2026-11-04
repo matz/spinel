@@ -32571,18 +32571,16 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
     if (nt_ty == TY_SYMBOL || nt_ty == TY_STRING) emit_expr(c, argv[0], &nm);
     else { emit_boxed(c, argv[0], &nm); nt_ty = TY_POLY; }
   }
-  buf_printf(b, "({ sp_sym _s%d = ", t);
-  if (nt_ty == TY_SYMBOL) buf_puts(b, nm.p ? nm.p : "0");
-  else if (nt_ty == TY_STRING) buf_printf(b, "sp_sym_intern(%s)", nm.p ? nm.p : "\"\"");
+  /* a name of another kind is held boxed, and checked after the
+     arguments and the block argument have run */
+  int tn = -1;
+  if (nt_ty == TY_SYMBOL) buf_printf(b, "({ sp_sym _s%d = %s", t, nm.p ? nm.p : "0");
+  else if (nt_ty == TY_STRING) buf_printf(b, "({ sp_sym _s%d = sp_sym_intern(%s)", t, nm.p ? nm.p : "\"\"");
   else {
-    int tn = ++g_tmp;
+    tn = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tn);
     emit_boxed_text(c, nt_ty, nm.p ? nm.p : "sp_box_nil()", b);
-    /* not a Symbol or a String is CRuby's TypeError */
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if (_t%d.tag != SP_TAG_SYM && !sp_poly_check_str(_t%d)) "
-                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", sp_poly_inspect(_t%d))); "
-                  "_t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); })",
-               tn, tn, tn, tn, tn, tn, tn);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_sym _s%d = 0", tn, t);
   }
   free(nm.p);
   /* include_all: the second argument or parameter, false when absent */
@@ -32625,6 +32623,12 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   /* a block argument runs after the arguments, for its effect */
   buf_puts(b, "; ");
   emit_super_blockarg_effect(c, id, b);
+  /* not a Symbol or a String is CRuby's TypeError */
+  if (tn >= 0)
+    buf_printf(b, "if (_t%d.tag != SP_TAG_SYM && !sp_poly_check_str(_t%d)) "
+                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", sp_poly_inspect(_t%d))); "
+                  "_s%d = _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); ",
+               tn, tn, tn, t, tn, tn, tn);
   buf_printf(b, "sp_bool _r%d = 0; switch (_s%d) {", t, t);
   int ncand = 0;
   char **cand = dsend_candidates(c, &ncand);

@@ -15667,7 +15667,12 @@ void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
 void emit_super_blockarg_effect(Compiler *c, int id, Buf *b) {
   int bk = nt_ref(c->nt, id, "block");
   int e = bk >= 0 && nt_kind(c->nt, bk) == NK_BlockArgumentNode ? nt_ref(c->nt, bk, "expression") : -1;
-  if (e < 0) return;
+  /* a variable's read has no effect, and a block parameter of the
+     method is not in scope where the fold is emitted */
+  NodeKind ek = e >= 0 ? nt_kind(c->nt, e) : NK_NilNode;
+  if (e < 0 || ek == NK_LocalVariableReadNode || ek == NK_InstanceVariableReadNode ||
+      ek == NK_GlobalVariableReadNode || ek == NK_NilNode || ek == NK_SymbolNode)
+    return;
   buf_puts(b, "(void)(");
   emit_expr_for_effect(c, e, b);
   buf_puts(b, "); ");

@@ -12,3 +12,5 @@ false
 1 is not a symbol nor a string
 true
 1
+1 is not a symbol nor a string
+[:n, :a, :blk]

@@ -52,3 +52,19 @@ class R3
   def hi = 1
 end
 p R3.new.respond_to?(:hi), $n
+
+# The arguments and the block argument run before the name is checked.
+$log = []
+def blk(x)
+  $log << x
+  nil
+end
+class R4
+  def respond_to?(n, a = false) = super(($log << :n; n), ($log << :a; a), &blk(:blk))
+end
+begin
+  R4.new.respond_to?(1)
+rescue TypeError => e
+  puts e.message
+end
+p $log

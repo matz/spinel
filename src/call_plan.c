@@ -1099,14 +1099,20 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
    the version the record proves there (cplan_implied_version). An Array
    subclass is an Array already. A nested target's element converts at
    its own level, as its MultiTargetNode's implied to_ary of the element
-   it takes (emit_massign_poly_target). Into out[0..cap), ascending; the
-   count. */
+   it takes (emit_massign_poly_target). An operand node of a program
+   class's type (op >= 0) is boxed as that object, and reaches only the
+   to_ary of its class or a subclass; one of another type (a Hash, a
+   scalar) none. Into out[0..cap), ascending; the count. */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
   int n = 0, np = 0;
+  TyKind ot = op >= 0 ? comp_ntype(c, op) : TY_POLY;
+  int oc = ty_is_object(ot) ? ty_object_class(ot) : -1;
+  if (oc < 0 && ot != TY_POLY) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    if (oc >= 0 && !is_descendant(c, k, oc)) continue;
     if (cplan_implied_version(c, id, "to_ary", op, k) == mi) out[n++] = k;
   }
   return n;

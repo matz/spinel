@@ -46180,10 +46180,18 @@ static int tmcv_cands_taking(Compiler *c, const char *nm, int args) {
 static int tmcv_sub_owns_maker(Compiler *c, int id, int k, const char *nm) {
   return call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0;
 }
-static int tmcv_sub_arm(Compiler *c, int id, const char *rn, const char *nm, int args) {
+/* Class k as a read of its own name: not its Ruby path rebuilt, whose leaf
+   qualify_colliding_classes renamed where two modules nest one (two
+   `Parser`s), which then resolves to no class */
+static int tmcv_class_read(Compiler *c, int at, int k) {
+  int n = tmcv_node(c, "ConstantReadNode", at);
+  if (n >= 0) nt_node_set_str((NodeTable *)c->nt, n, "name", c->classes[k].name);
+  return n;
+}
+static int tmcv_sub_arm(Compiler *c, int id, int k, const char *nm, int args) {
   NodeTable *nt = (NodeTable *)c->nt;
   int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
-  int alloc = arysub_new_call(c, id, tmcv_const(c, id, rn), "allocate", -1, -1);
+  int alloc = arysub_new_call(c, id, tmcv_class_read(c, id, k), "allocate", -1, -1);
   int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
   nt_node_set_int(nt, set, "builtin_only", 1);
   return set;
@@ -46237,7 +46245,7 @@ static int tmcv_arity_arms(Compiler *c, int id, int recv, const char *nm, int ar
     nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
     int rargs[2] = { tmcv_const(c, id, "ArgumentError"), str };
     int err = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
-    int kc = tmcv_const(c, id, rn);
+    int kc = tmcv_class_read(c, id, k);
     int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
     tail = tmcv_if(c, id, eq, err, tail);
   }
@@ -46299,9 +46307,9 @@ static int rewrite_time_maker_class_value(Compiler *c) {
       if (tmcv_sub_owns_maker(c, id, k, nm)) continue;
       const char *rn = class_ruby_name(c, k);
       if (!rn) continue;
-      int kc = tmcv_const(c, id, rn);
+      int kc = tmcv_class_read(c, id, k);
       int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
-      tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, rn, nm, args), tail);
+      tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, k, nm, args), tail);
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = tmcv_node(c, "StatementsNode", id);
@@ -46381,9 +46389,9 @@ static void rewrite_time_maker_class_local(Compiler *c, int id) {
     if (tmcv_sub_owns_maker(c, id, k, nm)) continue;
     const char *rn = class_ruby_name(c, k);
     if (!rn) continue;
-    int kc = tmcv_const(c, id, rn);
+    int kc = tmcv_class_read(c, id, k);
     int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &kc, 1), -1);
-    tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, rn, nm, args), tail);
+    tail = tmcv_if(c, id, eq, tmcv_sub_arm(c, id, k, nm, args), tail);
   }
   if (tail == orig) return;
   long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);

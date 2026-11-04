@@ -4764,9 +4764,12 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
   const char *mname = a0k == NK_SymbolNode ? nt_str(nt, argv[0], "value") : a0k == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
   if (!mname || !*mname || is_send_family(mname)) return 0;
   int owners[64], nown = 0;
-  for (int k = 0; k < c->nclasses && nown < 64; k++) {
+  for (int k = 0; k < c->nclasses; k++) {
     int mi = comp_method_in_class(c, k, nm);
-    if (mi >= 0 && !send_def_just_supers(c, mi) && class_ruby_name(c, k)) owners[nown++] = k;
+    if (mi < 0 || send_def_just_supers(c, mi) || !class_ruby_name(c, k)) continue;
+    /* not split on a part of the owners: one left out would run the named method */
+    if (nown == 64) return 0;
+    owners[nown++] = k;
   }
   if (nown == 0) return 0;
   char mbuf[256], tname[64];
@@ -4792,7 +4795,14 @@ static int send_split_by_owner(Compiler *c, int id, const char *nm) {
     nt_node_set_arr(nt, na, "arguments", cl, nrest);
     nt_node_set_ref(nt, direct, "arguments", na);
   }
-  nt_set_ignore_visibility(nt, direct, 1);
+  /* public_send reaches only a public method, as the unsplit path enforces it */
+  if (sp_streq(nm, "public_send")) {
+    nt_node_set_str(nt, direct, "vis_enforce", "1");
+    nt_set_ignore_visibility(nt, direct, 0);
+  }
+  else nt_set_ignore_visibility(nt, direct, 1);
+  /* `r&.send(:m)` answers nil for a nil receiver on either arm */
+  if (nt_safe_nav(nt, id)) nt_set_safe_nav(nt, direct, 1);
   int cond = -1;
   for (int i = 0; i < nown; i++) {
     int tr = nt_new_node(nt, "LocalVariableReadNode");

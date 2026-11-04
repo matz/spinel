@@ -35,3 +35,30 @@ p pick(2).send(:upcase)
 p pick(1).send(:strftime, "%Y")
 p Wrap.new(1).year - 1969
 p Net2::Sock.new.send(:x)
+
+# `&.` keeps its nil answer on the non-owner arm, and public_send there
+# still refuses a private method.
+class Quiet
+  def initialize(v)
+    @v = v
+  end
+
+  private
+
+  def secret
+    @v
+  end
+end
+
+def maybe(i)
+  i == 0 ? Net2::Sock.new : (i == 1 ? nil : Quiet.new(4))
+end
+
+p maybe(1)&.send(:year)
+p maybe(0)&.send(:year)
+p maybe(2).send(:secret)
+begin
+  maybe(2).public_send(:secret)
+rescue NoMethodError => e
+  p e.class
+end

@@ -4,3 +4,7 @@
 "1970"
 1
 "sent x"
+nil
+"sent year"
+4
+NoMethodError

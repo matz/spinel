@@ -22897,11 +22897,24 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     HolderRef h9;
     LocalVar *lv9 = holder_of_node(c, id, &h9) ? h9.lv : NULL;
     TyKind lt9 = lv9 ? lv9->type : TY_UNKNOWN;
+    /* a local holding the shared handle answers its String, read out with
+       the handle published, as the ivar and global arms do: the caller's
+       pickup takes it. A boxed result takes the handle itself. */
+    int sb9 = lt9 == TY_STRBUF && h9.r.kind == RK_STRBUF &&
+              !(g_result_var ? g_result_poly : g_ret_type == TY_POLY);
+    if (sb9) lt9 = TY_STRING;
     int slot_ok = lv9 && tail_slot_reaches_ret(c, lt9);
     emit_stmt(c, id, b, indent);
     if (!slot_ok) return;
     Buf lref9; memset(&lref9, 0, sizeof lref9);
     holder_slot_buf(c, &h9, &lref9);
+    if (sb9) {
+      Buf hr9; memset(&hr9, 0, sizeof hr9);
+      str_read_handle(&hr9, lref9.p, 1);
+      free(lref9.p);
+      lref9 = hr9;
+      if (g_repr_check) repr_channel_note(c, id, RCH_PUBLISH);
+    }
     emit_indent(b, indent); emit_tail_lead(b);
     int want_poly9 = g_result_var ? g_result_poly : ((g_result_var ? g_result_ty : g_ret_type) == TY_POLY);
     int ores9 = g_result_var ? g_result_oint : g_ret_oint;

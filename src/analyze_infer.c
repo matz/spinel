@@ -8875,14 +8875,19 @@ static int infer_enum_desugar_call(const char *name, int argc, TyKind *out) {
    (an_value_methods_class) */
 /* See analyze.h: obj.methods / public_methods / singleton_methods on a boxed
    receiver, which the emitter lists per class
-   (emit_poly_object_methods_reflection). Every class the receiver can hold
-   (poly_recv_classes; every instantiated class of the program when the walk
-   bounds none) lists the name with these arguments, and none defines a
-   method or a reader of the name itself, which the call would reach instead. */
+   (emit_poly_object_methods_reflection). The arguments are a list's, no
+   class the receiver can hold (poly_recv_classes; every instantiated class
+   of the program when the walk bounds none) defines a method or a reader
+   of the name itself, which the call would reach instead, and some class
+   it can hold lists the name (an_object_methods_listable); one that does
+   not (an exception, a native class, a class under a builtin) is answered
+   with a NotImplementedError naming it, should the receiver be its
+   instance. */
 int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int argc, const int *argv) {
   if (!name || (!sp_streq(name, "methods") && !sp_streq(name, "public_methods") &&
                 !sp_streq(name, "singleton_methods"))) return 0;
-  if (argc > 1 || nt_ref(c->nt, id, "block") >= 0 || comp_object_defines(c, name)) return 0;
+  if (nt_ref(c->nt, id, "block") >= 0 || an_object_methods_all_arg(c, -1, argc, argv) < 0 ||
+      comp_object_defines(c, name)) return 0;
   int nk = 0;
   const int *ks = poly_recv_classes(c, id, &nk);
   int n = ks ? nk : c->nclasses, any = 0;
@@ -8890,8 +8895,7 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
     if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 0;
-    if (!an_object_methods_listable(c, k, name) || an_object_methods_all_arg(c, k, argc, argv) < 0) return 0;
-    any = 1;
+    if (an_object_methods_listable(c, k, name)) any = 1;
   }
   return any;
 }

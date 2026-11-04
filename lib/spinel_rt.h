@@ -22670,6 +22670,15 @@ static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
    handle inside it published is cleared after the answer is made, so a
    caller's pickup does not take that handle for it (one_tail_fresh) */
 static inline const char *sp_strface_unpub(const char *s) { _sp_ret_strbuf = NULL; return s; }
+/* At a method's return the channel names what its body read last (the test
+   of `c ? (t = s) : "Z"` publishes s), so the return names its answer: a
+   handle slot's handle, or the handle a conditional's bytes are a view of
+   (none for a new String) */
+static inline sp_String *sp_strface_pub_h(sp_String *h) { _sp_ret_strbuf = (void *)h; return h; }
+static inline const char *sp_strface_pub_b(const char *s) {
+  _sp_ret_strbuf = s && ((const unsigned char *)s)[-1] == 0xfd ? (void *)((sp_str_hdr *)sp_fd_base(s))->next : NULL;
+  return s;
+}
 /* A mutator whose receiver is no variable (`String(a[0]) << "!"`): when
    the receiver's bytes are a live payload's view the String is the
    payload's owner, which takes the new bytes, and the answer is its view

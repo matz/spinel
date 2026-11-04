@@ -4174,6 +4174,22 @@ int one_tail_fresh(Compiler *c, int n) {
   }
   return 0;
 }
+/* One representation: is String answer `n` a conditional (`c ? s : "Z"`, a
+   case), seen through its parentheses and their leading statements? Its arms
+   differ, a read of a handle beside a new String, and the read in its test
+   published another handle: its return publishes the handle of the bytes it
+   answers (sp_strface_pub_b), which a caller's pickup takes. */
+int one_tail_cond(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  while (n >= 0 && nt_kind(nt, n) == NK_ParenthesesNode) {
+    int body = nt_ref(nt, n, "body"), k = 0;
+    const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &k) : NULL;
+    n = k > 0 ? st[k - 1] : -1;
+  }
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  return k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode;
+}
 /* One representation: a write `dst = v` into a String slot, where the
    emitter writes v in the type's face (bytes) and the slot is the handle
    (every String holder is, repr_str_class_shares): v goes in through
@@ -8002,6 +8018,9 @@ void emit_retf_return(int eid, int has_retval, Buf *b) {
      go anyway -- a void function's caller cannot read it. Drop it and
      return, which is what the generated code already did in practice. */
   else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return;\n", eid);
+  /* (a handle slot's answer is published as it returns: the ensure's reads
+     published others) */
+  else if (has_retval && g_ret_type == TY_STRBUF) buf_printf(b, "if (_retf%d) return sp_strface_pub_h(_retv%d);\n", eid, eid);
   else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d;\n", eid, eid);
   else if (g_in_proc_body && g_result_var && g_result_poly)
     buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; }\n", eid, g_result_var);

@@ -604,6 +604,7 @@ extern int g_one_arm_bytes_node;   /* the dispatch whose arms answer into a byte
 void one_face_mark(int t, int node);   /* temp t holds node's String by face (__auto_type): its bound reads are SP_STR_B */
 int one_face_is(int t, int node);
 int one_tail_fresh(Compiler *c, int n);   /* a String answer that is a new String: its return clears the published channel */
+int one_tail_cond(Compiler *c, int n);    /* a String answer that is a conditional: its return publishes its bytes' handle */
 int one_str_to_open(Buf *b, TyKind st, const char *fmt, ...);   /* SP_STR_TO(dst, around a String slot write under the mode; close with ")" */
 void one_elem_bind_slot(LocalVar *lv, TyKind bt);
 /* When set, the arms of a boxed `new` (emit_call_new_arms) are only the

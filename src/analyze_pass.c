@@ -19024,6 +19024,38 @@ int scope_block_given_else_last(Compiler *c, Scope *sc) {
   return en > 0 ? eb[en - 1] : -1;
 }
 
+/* The return of a singleton override `def o.m` whose body answers `r`. An
+   object without the override (a #dup, or `o` before the def runs) calls
+   the parent's method through the override's C function (emit_method), so
+   the override's return must also hold the parent's answer. Where the
+   parent's type holds both, the override takes it; else both box. Before
+   this, an override answering a String unboxed a parent's Integer as a
+   String, and one over a parent of another concrete kind ran its own body
+   for the #dup. */
+static TyKind sg_override_ret(Compiler *c, const Scope *sc, TyKind r) {
+  if (r == TY_UNKNOWN || r == TY_VOID || r == TY_POLY) return r;
+  if (sc->class_id < 0 || sc->is_cmethod || !sc->name) return r;
+  const ClassInfo *k = &c->classes[sc->class_id];
+  if (!k->is_singleton_of || k->is_value_type || k->parent < 0) return r;
+  int pm = comp_method_in_chain(c, k->parent, sc->name, NULL);
+  if (pm < 0 || pm >= c->nscopes || &c->scopes[pm] == sc) return r;
+  const Scope *ps = &c->scopes[pm];
+  if (ps->nparams != sc->nparams) return r;
+  /* (a void parent answers nil: a slot that holds nil keeps its type) */
+  TyKind pr = ps->ret == TY_VOID ? TY_NIL : ps->ret;
+  if (pr == TY_UNKNOWN) return r;
+  if (pr == r) {
+    /* an Integer or a Float the parent answers as nil too, which the
+       override's plain slot has no room for */
+    int pnil = ps->ret_nullable_int || ps->ret_rbs_nilable;
+    int snil = sc->ret_nullable_int || sc->ret_rbs_nilable;
+    return (r == TY_INT || r == TY_FLOAT) && pnil && !snil ? TY_POLY : r;
+  }
+  TyKind w = ty_unify(r, pr);
+  if (w == pr || (pr == TY_NIL && w == r)) return w;
+  return TY_POLY;
+}
+
 static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   const NodeTable *nt = c->nt;
   TyKind *ret_acc = x->ret_acc; char *has_ret = x->has_ret; char *ret_empty = x->ret_empty;
@@ -19183,6 +19215,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
        an_empty_container_disagrees(ret_empty[s] & 2, r)))
     r = TY_POLY;
   ret_decided:
+  r = sg_override_ret(c, sc, r);
   /* A value a caller's parameter stores elements of another kind into is
      the general Array (widen_array_sources); its values re-derive their
      typed kinds, which unify to the poly scalar when they differ. One that

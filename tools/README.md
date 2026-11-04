@@ -817,6 +817,7 @@ file, no compiler, a bad option). This is a contract.
 | `case-root` | a `case` subject is not rooted across its `when` tests; denied, it is |
 | `masgn-root` | a multiple assignment's part is not rooted across the others; denied, it is |
 | `fetch-inert` | a Hash#fetch key or default is a local or a scalar literal, so the receiver takes no root and the default is evaluated up front; denied, the receiver is rooted and the default waits for a miss |
+| `fetch-slot` | a one-argument Array#fetch reads a plain rooted local with an inert integer index (a literal, local or builtin local-plus-literal); denied, the receiver temp is rooted |
 | `push-slot` | the temp holding the receiver of `a << x` (and of unshift, prepend) takes no root, the receiver's own slot keeping it; denied, it is rooted |
 | `aon-get` | an index read whose receiver is proved a poly array or nil skips the dispatch on its type; denied, it dispatches |
 | `index-sum` | an index `x + c` or `x - c` read or stored in a loop that holds the array's header is summed wrapped, its checked sum taken again only where the bounds compare fails (#8782); denied, the sum is checked first |

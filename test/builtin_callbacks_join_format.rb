@@ -34,3 +34,29 @@ class M
 end
 h = {b: M.new(2)}
 p "%<b>s" % h
+
+# format, sprintf and printf read a named reference's value from the Hash
+class P1
+  def initialize(v) = @v = v
+  def to_s = "P1:#{@v}"
+end
+s = format("%{a}", a: P1.new(1))
+p s
+
+class P2
+  def initialize(v) = @v = v
+  def to_s = "P2:#{@v}"
+end
+p sprintf("%<a>s", {a: P2.new(2)})
+
+class P3
+  def initialize(v) = @v = v
+  def to_s = "P3:#{@v}"
+end
+printf("%{a}\n", a: P3.new(3))
+
+class P4
+  def initialize(v) = @v = v
+  def to_s = "P4:#{@v}"
+end
+$stdout.printf("%{a}\n", a: P4.new(4))

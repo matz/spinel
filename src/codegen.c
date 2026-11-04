@@ -31,8 +31,8 @@ static int poll_names_of(Compiler *c, const char *nm, int *n) {
   poll_names_build(c);
   int lo = 0, hi = g_poll_nnames;
   while (lo < hi) { int m = (lo + hi) / 2; if (strcmp(g_poll_names[m].name, nm) < 0) lo = m + 1; else hi = m; }
-  int e = lo;
-  while (e < g_poll_nnames && sp_streq(g_poll_names[e].name, nm)) e++;
+  int e = lo, hi2 = g_poll_nnames;   /* the end of the name's run, by search too: a name every class defines is long */
+  while (e < hi2) { int m = (e + hi2) / 2; if (strcmp(g_poll_names[m].name, nm) <= 0) e = m + 1; else hi2 = m; }
   *n = e - lo;
   return lo;
 }
@@ -43,6 +43,29 @@ int poll_is_method_name(Compiler *c, const char *nm) {
 }
 
 static unsigned char *g_poll_cyc;
+static void poll_edge(int **ef, int **et, int *ne, int *cap, int from, int to) {
+  if (*ne == *cap) { *cap *= 2; *ef = realloc(*ef, *cap * sizeof(int)); *et = realloc(*et, *cap * sizeof(int)); }
+  if (!*ef || !*et) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  (*ef)[*ne] = from; (*et)[*ne] = to; (*ne)++;
+}
+/* A call that reaches every method of its name (no plan names its
+   targets) has one edge, to the name's hub: a node past the methods
+   (g_poll_hub_base + the name's first index in g_poll_names) with an edge
+   to each method of the name, made once. Reachability, and so every
+   strongly connected component's methods, is what an edge per method
+   gives, in edges linear in calls plus methods: a name every class
+   defines (to_s) made calls x classes edges (#10546). */
+static int g_poll_hub_base;
+static unsigned char *g_poll_hub_made;
+static int poll_hub(Compiler *c, int first, int cnt, int **ef, int **et, int *ne, int *cap) {
+  (void)c;
+  int h = g_poll_hub_base + first;
+  if (!g_poll_hub_made[first]) {
+    g_poll_hub_made[first] = 1;
+    for (int k = 0; k < cnt; k++) poll_edge(ef, et, ne, cap, h, g_poll_names[first + k].scope);
+  }
+  return h;
+}
 /* Edges from method t to what the calls in block body n reach (a block
    nested in it runs inside the method it is handed to, which the caller's
    own walk accounts for). */
@@ -61,12 +84,14 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
       int tg[CPT_MAX], cnt, first = 0, ntg = cplan_targets(c, n, tg, CPT_MAX);
       if (ntg >= 0) cnt = ntg;
       else first = poll_names_of(c, nm, &cnt);
-      for (int i = 0; i < cnt; i++) {
-        int to = ntg >= 0 ? tg[i] : g_poll_names[first + i].scope;
-        if (*ne == *cap) { *cap *= 2; *ef = realloc(*ef, *cap * sizeof(int)); *et = realloc(*et, *cap * sizeof(int)); }
-        (*ef)[*ne] = t; (*et)[*ne] = to; (*ne)++;
-        if (to == t) g_poll_cyc[t] = 1;
+      if (ntg < 0) {   /* every method of the name: one edge, to the name's hub */
+        if (cnt > 0) poll_edge(ef, et, ne, cap, t, poll_hub(c, first, cnt, ef, et, ne, cap));
       }
+      else
+        for (int i = 0; i < cnt; i++) {
+          poll_edge(ef, et, ne, cap, t, tg[i]);
+          if (tg[i] == t) g_poll_cyc[t] = 1;
+        }
     }
   }
   if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_user(c, n)->core_hook)) dyn[t] = 1;
@@ -100,6 +125,12 @@ int poll_scope_on_cycle(Compiler *c, int si) {
     if (!dyn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     unsigned char *forwarded = dyn + ns + 1;
     int cap = 1024, ne = 0; int *ef = malloc(cap * sizeof(int)), *et = malloc(cap * sizeof(int));
+    /* the graph's nodes: the methods, then one hub per name (poll_hub) */
+    poll_names_build(c);
+    g_poll_hub_base = ns;
+    int nv = ns + g_poll_nnames;
+    free(g_poll_hub_made); g_poll_hub_made = calloc((size_t)g_poll_nnames + 1, 1);
+    if (!g_poll_hub_made) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     NT_FOREACH_KIND(nt, NK_CallNode, n) {
       int from = c->nscope[n];
       if (from < 0 || from >= ns) continue;
@@ -130,29 +161,32 @@ int poll_scope_on_cycle(Compiler *c, int si) {
           poll_block_edges(c, nt_ref(nt, bk, "body"), t, &ef, &et, &ne, &cap, dyn, 0);
         }
       }
+      if (ntg < 0) {   /* every method of the name, through its hub */
+        if (cnt > 0) poll_edge(&ef, &et, &ne, &cap, from, poll_hub(c, first, cnt, &ef, &et, &ne, &cap));
+        continue;
+      }
       for (int k = 0; k < cnt; k++) {
-        if (ne == cap) { cap *= 2; ef = realloc(ef, cap * sizeof(int)); et = realloc(et, cap * sizeof(int)); }
-        ef[ne] = from; et[ne] = ntg >= 0 ? tg[k] : g_poll_names[first + k].scope; ne++;
-        if (et[ne - 1] == from) g_poll_cyc[from] = 1;   /* calls itself */
+        poll_edge(&ef, &et, &ne, &cap, from, tg[k]);
+        if (tg[k] == from) g_poll_cyc[from] = 1;   /* calls itself */
       }
     }
     NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
     NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
     /* the edges by source (CSR), and their reverse */
-    int *off = calloc((size_t)ns + 2, sizeof(int)), *adj = malloc(sizeof(int) * (size_t)(ne + 1));
-    int *roff = calloc((size_t)ns + 2, sizeof(int)), *radj = malloc(sizeof(int) * (size_t)(ne + 1));
+    int *off = calloc((size_t)nv + 2, sizeof(int)), *adj = malloc(sizeof(int) * (size_t)(ne + 1));
+    int *roff = calloc((size_t)nv + 2, sizeof(int)), *radj = malloc(sizeof(int) * (size_t)(ne + 1));
     for (int e = 0; e < ne; e++) { off[ef[e] + 1]++; roff[et[e] + 1]++; }
-    for (int v = 0; v < ns; v++) { off[v + 1] += off[v]; roff[v + 1] += roff[v]; }
-    int *fill = calloc((size_t)ns + 1, sizeof(int)), *rfill = calloc((size_t)ns + 1, sizeof(int));
+    for (int v = 0; v < nv; v++) { off[v + 1] += off[v]; roff[v + 1] += roff[v]; }
+    int *fill = calloc((size_t)nv + 1, sizeof(int)), *rfill = calloc((size_t)nv + 1, sizeof(int));
     for (int e = 0; e < ne; e++) { adj[off[ef[e]] + fill[ef[e]]++] = et[e]; radj[roff[et[e]] + rfill[et[e]]++] = ef[e]; }
     /* Tarjan's components, without recursion */
-    int *idx = malloc(sizeof(int) * (size_t)(ns + 1)), *low = malloc(sizeof(int) * (size_t)(ns + 1));
-    int *stk = malloc(sizeof(int) * (size_t)(ns + 1)), *cs = malloc(sizeof(int) * (size_t)(ns + 1));
-    int *ci = malloc(sizeof(int) * (size_t)(ns + 1));
-    unsigned char *on = calloc((size_t)ns + 1, 1);
-    for (int v = 0; v < ns; v++) idx[v] = -1;
+    int *idx = malloc(sizeof(int) * (size_t)(nv + 1)), *low = malloc(sizeof(int) * (size_t)(nv + 1));
+    int *stk = malloc(sizeof(int) * (size_t)(nv + 1)), *cs = malloc(sizeof(int) * (size_t)(nv + 1));
+    int *ci = malloc(sizeof(int) * (size_t)(nv + 1));
+    unsigned char *on = calloc((size_t)nv + 1, 1);
+    for (int v = 0; v < nv; v++) idx[v] = -1;
     int counter = 0, sp = 0;
-    for (int r = 0; r < ns; r++) {
+    for (int r = 0; r < nv; r++) {
       if (idx[r] >= 0) continue;
       int csp = 0;
       cs[csp] = r; ci[csp] = off[r]; csp++;
@@ -171,7 +205,8 @@ int poll_scope_on_cycle(Compiler *c, int si) {
         if (low[v] == idx[v]) {
           int size = 0, top = sp;
           do { int w = stk[--top]; size++; (void)w; } while (stk[top] != v);
-          while (1) { int w = stk[--sp]; on[w] = 0; if (size > 1) g_poll_cyc[w] = 1; if (w == v) break; }
+          /* (a hub with one method in its component is that method calling its own name) */
+          while (1) { int w = stk[--sp]; on[w] = 0; if (size > 1 && w < ns) g_poll_cyc[w] = 1; if (w == v) break; }
         }
         csp--;
         if (csp > 0) { int u = cs[csp - 1]; if (low[v] < low[u]) low[u] = low[v]; }
@@ -179,8 +214,8 @@ int poll_scope_on_cycle(Compiler *c, int si) {
     }
     /* a method that makes a call that may reach any method, and the
        callers of one that yields, whose body runs spliced into theirs */
-    int *q = malloc(sizeof(int) * (size_t)(ns + 1)), qh = 0, qt = 0;
-    unsigned char *seen = calloc((size_t)ns + 1, 1);
+    int *q = malloc(sizeof(int) * (size_t)(nv + 1)), qh = 0, qt = 0;
+    unsigned char *seen = calloc((size_t)nv + 1, 1);
     /* A target handed an unknown proc polls itself. That fact belongs to
        that invocation, not to another caller's literal block. Real dynamic
        calls in its body still propagate, and SCC edges still retain cycles. */
@@ -190,8 +225,11 @@ int poll_scope_on_cycle(Compiler *c, int si) {
     }
     while (qh < qt) {
       int v = q[qh++];
-      g_poll_cyc[v] = 1;
-      if (!c->scopes[v].yields) continue;
+      /* a hub passes the walk on to the name's callers */
+      if (v < ns) {
+        g_poll_cyc[v] = 1;
+        if (!c->scopes[v].yields) continue;
+      }
       for (int k = roff[v]; k < roff[v + 1]; k++) if (!seen[radj[k]]) { seen[radj[k]] = 1; q[qt++] = radj[k]; }
     }
     free(q); free(seen); free(idx); free(low); free(stk); free(cs); free(ci); free(on);

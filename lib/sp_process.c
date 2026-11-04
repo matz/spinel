@@ -145,6 +145,26 @@ static void close_redirect_srcs(int in_fd, int out_fd, int err_fd) {
   }
 }
 
+/* The child gets its redirected descriptors blocking. A pipe's write end
+   can be O_NONBLOCK (sp_sock_write), and a program that does not expect it
+   fails its write with EAGAIN once the pipe is full. The flag lives on the
+   description the child shares, so it is cleared here, before the fork,
+   and the parent's own handles on it ask for it again. */
+static void give_blocking(int in_fd, int out_fd, int err_fd) {
+  int fds[3] = { in_fd, out_fd, err_fd };
+  int given = 0;
+  for (int i = 0; i < 3; i++) {
+    if (fds[i] < 0) continue;
+    given = 1;
+    int fl = fcntl(fds[i], F_GETFL);
+    if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(fds[i], F_SETFL, fl & ~O_NONBLOCK);
+  }
+  if (given) {
+    extern void sp_io_child_fds_given(void);
+    sp_io_child_fds_given();
+  }
+}
+
 /* The fds this spawn opened itself, one slot each for in/out/err and -1
    where the slot came from the caller (an IO, an Integer, nothing). Only
    these are the spawn's to close: the child closes its copies after the
@@ -512,6 +532,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   /* what the parent has buffered for its streams is written before the
      child can write to the same descriptors, as CRuby flushes them */
   fflush(NULL);
+  give_blocking(in_fd, out_fd, err_fd);
   sp_fork_exec_lock();
   pid_t pid = fork();
   if (pid != 0) { sp_fork_exec_unlock(); free(envp); }

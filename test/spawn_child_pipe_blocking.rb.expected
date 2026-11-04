@@ -1,0 +1,3 @@
+out: exit=0 got=1000000
+err: exit=0 got=1000000
+system: ok=true got=1000000

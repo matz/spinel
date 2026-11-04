@@ -1230,7 +1230,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run) */
-    if (none && settled && in && in->reachable && c->ver_built && !span && (ix < 0 || !c->ver_entries[ix].absent))
+    if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !span && (ix < 0 || !c->ver_entries[ix].absent))
       ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w));
     vi = ix >= 0 && (many || c->ver_entries[ix].absent == 2) ? c->ver_entries[ix].scope : -1;
     n = ((span && many) || vi >= 0) && settled ? 2 : 0;
@@ -2882,13 +2882,13 @@ static int cplan_user_names(Compiler *c, const char *name) {
    so refusing a call in it would fail a program that merely contains it.
    walk_scope assigns every node -- including those inside blocks -- the
    enclosing method's scope, and the emit loop emits a scope's body only when
-   it is reachable */
+   it may run as itself (comp_scope_may_run) */
 static int cplan_reachable(Compiler *c, int id) {
   if (nt_int(c->nt, id, "refusal_dead", 0)) return 0;
   int proc = nt_int(c->nt, id, "refusal_proc", -1);
   if (proc >= 0 && proc_literal_uncalled(c, proc)) return 0;
   int sc = c->nscope[id];
-  return sc >= 0 && sc < c->nscopes && c->scopes[sc].reachable;
+  return sc >= 0 && sc < c->nscopes && comp_scope_may_run(c, sc);
 }
 
 static const char *cplan_runtime_send_what(Compiler *c, int id) {

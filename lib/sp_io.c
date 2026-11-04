@@ -65,9 +65,6 @@ static long sp_sock_room(int fd) {
   long room = (long)capacity - (long)queued;
   return room > 0 ? room : 0;
 }
-#if !defined(__APPLE__) && !defined(__GLIBC__)
-#include <stdio_ext.h>  /* musl __freadahead: pending stdio read-buffer bytes */
-#endif
 
 /* Provided by the generated TU / libspinel_rt.a. */
 extern void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *));
@@ -276,20 +273,6 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
    on SPINEL_WORKERS=1 (#4307). A character device (a tty, /dev/urandom) is
    the same shape. A regular file is always ready and pays only the one
    fstat, once per handle. */
-/* Bytes stdio has already buffered for this stream. They are readable without
-   a read(2), so a drain of exactly this many cannot block -- which is what
-   lets a slurp fill from a pipe without ever sitting in the kernel. */
-size_t sp_io_stdio_buffered(FILE *fp) {
-  if (!fp) return 0;
-#if defined(__GLIBC__)
-  return fp->_IO_read_end > fp->_IO_read_ptr ? (size_t)(fp->_IO_read_end - fp->_IO_read_ptr) : 0;
-#elif defined(__APPLE__)
-  return fp->_r > 0 ? (size_t)fp->_r : 0;
-#else
-  return __freadahead(fp);   /* musl */
-#endif
-}
-
 /* A thread reading or writing a handle's descriptor while another thread
    closes it (#4546's shape: a connection's two pumps, either of which may
    close both ends). The close used to fclose at once, and a reader that had

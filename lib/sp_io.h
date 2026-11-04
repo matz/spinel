@@ -10,6 +10,9 @@
 #define SP_IO_H
 
 #include <stdio.h>
+#if !defined(__APPLE__) && !defined(__GLIBC__)
+#include <stdio_ext.h>  /* musl __freadahead: pending stdio read-buffer bytes */
+#endif
 #include "sp_types.h"   /* sp_int, sp_bool */
 #include "sp_array.h"   /* sp_IntArray (for #winsize) */
 
@@ -128,8 +131,6 @@ void sp_fork_exec_lock(void);
 void sp_fork_exec_unlock(void);
 /* Park until the handle can take bytes (a socket, or an IO.pipe write end). */
 void sp_io_wait_writable(sp_File *f);
-/* Bytes stdio already holds for this stream (readable without a read(2)). */
-size_t sp_io_stdio_buffered(FILE *fp);
 /* Readers of an IO handle's stream call these instead of stdio: each is the
    stdio call of the same name on the handle's FILE. */
 static inline int sp_io_getc(sp_File *f) { return SP_SIG_BLOCKING(fgetc(f->fp)); }
@@ -137,9 +138,20 @@ static inline void sp_io_ungetc(sp_File *f, int c) { ungetc(c, f->fp); }
 static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) { return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp)); }
 static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) { return SP_SIG_BLOCKING(getline(buf, cap, f->fp)); }
 static inline char *sp_io_fgets(sp_File *f, char *buf, int size) { return SP_SIG_BLOCKING(fgets(buf, size, f->fp)); }
-/* Bytes the handle has already read from its descriptor: a read of up to
-   this many answers without waiting. */
-static inline size_t sp_io_pending(sp_File *f) { return sp_io_stdio_buffered(f->fp); }
+/* Bytes stdio has already buffered for this stream. They are readable without
+   a read(2), so a drain of exactly this many cannot block -- which is what
+   lets a slurp fill from a pipe without ever sitting in the kernel. */
+static inline size_t sp_io_pending(sp_File *f) {
+  FILE *fp = f->fp;
+  if (!fp) return 0;
+#if defined(__GLIBC__)
+  return fp->_IO_read_end > fp->_IO_read_ptr ? (size_t)(fp->_IO_read_end - fp->_IO_read_ptr) : 0;
+#elif defined(__APPLE__)
+  return fp->_r > 0 ? (size_t)fp->_r : 0;
+#else
+  return __freadahead(fp);   /* musl */
+#endif
+}
 /* IO#read with no count on a handle whose read can block: fill to EOF,
    parking between refills instead of sitting in the kernel (#4307). */
 const char *sp_slurp_stream_parked(sp_File *f);

@@ -2846,6 +2846,28 @@ static int yvt_proc_arg_body(Compiler *c, int blk) {
   return -1;
 }
 
+/* Does the body hold a `return` or `break` of its own? A `return` in a
+   nested def, lambda, class or module belongs to that body. A `break` also
+   belongs to a nested block or loop. In a lambda, `return v` and `break v`
+   make v the lambda's value. In a proc, `return` leaves the enclosing
+   method. */
+static int yvt_body_has_exit(const NodeTable *nt, int id, int in_loop, int depth) {
+  if (id < 0 || depth > 200) return depth > 200;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ReturnNode) return 1;
+  if (k == NK_BreakNode && !in_loop) return 1;
+  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_BlockNode || k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) in_loop = 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (yvt_body_has_exit(nt, nt_ref_at(nt, id, i), in_loop, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an; j++) if (yvt_body_has_exit(nt, ids[j], in_loop, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* What a callee yields to when the call passes a proc value of its own
    (call_forwards_own_block is 0): a literal written there types like an
    ordinary literal block, its tail being the value; any other callable is
@@ -2856,8 +2878,16 @@ static TyKind yvt_proc_arg_value(Compiler *c, int blk) {
   if (pbody < 0) return TY_POLY;
   int pn = 0; const int *pd = nt_arr(c->nt, pbody, "body", &pn);
   if (pn == 0) return TY_NIL;
+  /* (a `return v` or `break v` can give a value of any kind: only known
+     at run time) */
+  if (yvt_body_has_exit(c->nt, pbody, 0, 0)) return TY_POLY;
   TyKind pt = infer_type(c, pd[pn - 1]);
-  if (pt == TY_VOID) return TY_NIL;
+  if (pt == TY_VOID) pt = TY_NIL;
+  /* (a `next v` in the body gives v too. The proc's value arrives boxed,
+     so when v and the tail are of different kinds (`next 7 if c; nil`),
+     the value is only known at run time) */
+  TyKind nx = block_next_value_ty(c, pbody);
+  if (nx != TY_UNKNOWN && nx != pt) return TY_POLY;
   return pt == TY_UNKNOWN ? TY_POLY : pt;
 }
 
@@ -3041,6 +3071,7 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
         int pbody = yvt_proc_arg_body(c, blk);
         int pn = 0; const int *pd = pbody >= 0 ? nt_arr(nt, pbody, "body", &pn) : NULL;
         if (pd && pn > 0) out[n++] = pd[pn - 1];
+        if (yield_block_tails_next && pd && n < max) n += ybt_collect_next(nt, pbody, out + n, max - n, 0);
         continue;
       }
       Scope *encl = comp_scope_of(c, cid);

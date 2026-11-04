@@ -21476,6 +21476,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
  *
  *   base.class_eval do BODY end   ->  BODY           (self is the class)
  *   base.m(args)                  ->  m(args)        (a class-body call)
+ *   base.x = v                    ->  Base.x = v     (the class's own writer)
  *   any other read of base        ->  the class's constant
  *   self                          ->  M              (outside those blocks)
  *   m(args), m M's singleton      ->  M.__send__(:m, args)
@@ -21639,8 +21640,11 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
     else if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && !introspect &&
              nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), is->param)) {
       /* `base.class` keeps its receiver, which becomes the class below:
-         bare, `class` is the keyword */
-      if (!sp_streq(cm, "class")) nt_node_set_ref(nt, node, "receiver", -1);
+         bare, `class` is the keyword. So does a writer, `base.x = v`: the
+         class's own singleton accessor (or `def self.x=`) answers
+         `Base.x = v` in the body, where a bare `x=(v)` named a method no
+         class has. */
+      if (!sp_streq(cm, "class") && !nt_int(nt, node, "attr_write", 0)) nt_node_set_ref(nt, node, "receiver", -1);
     }
   }
   /* the hook's super reaches Module#included, #extended or #prepended */

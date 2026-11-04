@@ -5759,6 +5759,8 @@ sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
     if (!strcmp(n, "size") || !strcmp(n, "each") || !strcmp(n, "sum")) { sp_trange_iterate_raise(); return sp_box_nil(); }
   }
   if (argc == 1) {
+    /* min(n) / max(n) take elements, which iterates */
+    if (!strcmp(n, "min") || !strcmp(n, "max")) { sp_trange_iterate_raise(); return sp_box_nil(); }
     if (!strcmp(n, "cover?")) return sp_box_bool(sp_trange_cover_any(r, a0));
     if (!strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
       return sp_box_bool(sp_trange_cover_poly(r, a0));

@@ -1062,6 +1062,9 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME_RANGE, "min", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
   { TY_TIME_RANGE, "max", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
   { TY_TIME_RANGE, "each", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  /* min(n) / max(n) take the first or last n elements, which iterates */
+  { TY_TIME_RANGE, "min", 1, 1, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); (void)($e0); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "max", 1, 1, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); (void)($e0); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
   { TY_TIME_RANGE, "sum", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
   { TY_TIME_RANGE, "exclude_end?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)($r)->excl", 0 },
   { TY_TIME_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover(_t$T, $e0); })", BOP_K(TY_TIME) },

@@ -152,6 +152,8 @@ const char *sp_exc_message(volatile sp_Exception *ve);
 const char *sp_exc_msg_text(volatile sp_Exception *ve);
 /* e with the String handle h as its message (sp_Exception.msg_h); answers e */
 void *sp_exc_attach_msg(void *e, void *h);
+/* e's message in place of the one before; NULL clears it */
+void sp_exc_set_msg(sp_Exception *e, const char *msg);
 /* #to_s as #inspect renders it: a user override (the generated program's
    sp_user_exc_to_s, installed in the hook) else the stored message */
 extern const char *(*sp_user_exc_to_s_fn)(sp_Exception *);

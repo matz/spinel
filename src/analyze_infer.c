@@ -11349,12 +11349,15 @@ TyKind infer_uncached(Compiler *c, int id) {
   /* an assignment expression evaluates to the assigned value -- but codegen
      lowers `x = expr` to `({ lv_x = ...; lv_x; })`, so the chain value IS the
      slot. Return the local's slot type (when known) so a chained `a = b = expr`
-     boxes consistently with the slot, mirroring the ivar-write rule below. */
+     boxes consistently with the slot, mirroring the ivar-write rule below.
+     A handle slot's write, like its read, is the String face: the raw
+     TY_STRBUF typed a method whose body ends in the write `sp_String *`,
+     which callers that read the face took as bytes. */
   if (nk == NK_LocalVariableWriteNode) {
     const char *lwn = nt_str(nt, id, "name");
     Scope *lws = comp_scope_of(c, id);
     LocalVar *lwv = lwn ? scope_local(lws, lwn) : NULL;
-    if (lwv && lwv->type != TY_UNKNOWN) return lwv->type;
+    if (lwv && lwv->type != TY_UNKNOWN) return lwv->type == TY_STRBUF ? TY_STRING : lwv->type;
     return infer_type(c, nt_ref(nt, id, "value"));
   }
   if (nk == NK_InstanceVariableWriteNode ||
@@ -11421,7 +11424,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     const char *nm = nt_str(nt, id, "name");
     Scope *s = comp_scope_of(c, id);
     LocalVar *lv = nm ? scope_local(s, nm) : NULL;
-    TyKind ct = lv ? lv->type : TY_UNKNOWN;
+    /* (a handle slot is the String face, as for the plain write) */
+    TyKind ct = lv ? (lv->type == TY_STRBUF ? TY_STRING : lv->type) : TY_UNKNOWN;
     return ty_unify(ct, infer_type(c, nt_ref(nt, id, "value")));
   }
 

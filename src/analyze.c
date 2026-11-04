@@ -35869,6 +35869,9 @@ static void check_seed_contradictions(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *name = nt_str(nt, id, "name");
     if (!name) continue;
+    /* not every call: one in a method codegen drops as dead is never emitted, and its arguments carry only what no caller bound */
+    const Scope *in = comp_scope_of(c, id);
+    if (in && in->name && !in->reachable) continue;
     int mi = seed_call_target(c, id, name);
     if (mi < 0 || mi >= c->nscopes) continue;
     Scope *m = &c->scopes[mi];

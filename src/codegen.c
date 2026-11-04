@@ -22847,7 +22847,7 @@ char *codegen_program(const NodeTable *nt) {
      randomness pays nothing and one that does still varies per run. */
   /* Register END blocks (atexit runs LIFO, so they execute in reverse registration order) */
   for (int e = 1; e <= end_count; e++)
-    buf_printf(body, "    atexit(sp_end_fn_%d);\n", e);
+    buf_printf(body, "    sp_at_exit_armed = 1; atexit(sp_end_fn_%d);\n", e);
   size_t main_dbeg = body->len;
   int main_ndecl = c->scopes[0].nlocals;
   size_t *main_dends = (size_t *)calloc((size_t)(main_ndecl + 1), sizeof(size_t));

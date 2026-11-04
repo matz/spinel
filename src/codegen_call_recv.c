@@ -976,13 +976,13 @@ static int empty_array_poly_view(Compiler *c, int arg) {
    of them. */
 static int zip_hash_arm_builtin(Compiler *c) {
   static const char *const conv[] = { "to_ary", "method_missing" };
-  static const char *const owners[] = { "Hash", "Enumerable", "Object", "Kernel", "BasicObject" };
+  static const int owners[] = { CORE_HASH, CORE_ENUMERABLE, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT };
   int hc = comp_core_class(c, CORE_HASH);
   if (hc >= 0 && comp_method_in_chain(c, hc, "each", NULL) >= 0) return 0;
   for (size_t q = 0; q < sizeof(conv) / sizeof(conv[0]); q++) {
     if (call_target(c, -1, -1, conv[q], CT_TOP, NULL) >= 0) return 0;
     for (size_t o = 0; o < sizeof(owners) / sizeof(owners[0]); o++) {
-      int oc = comp_class_index(c, owners[o]);
+      int oc = comp_core_class(c, owners[o]);
       if (oc >= 0 && comp_method_in_chain(c, oc, conv[q], NULL) >= 0) return 0;
     }
   }

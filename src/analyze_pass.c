@@ -18406,7 +18406,7 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
                    : rt == TY_FLOAT ? "Float"
                    : rt == TY_SYMBOL ? "Symbol" : NULL;
     if (bn) {
-      int bc = comp_class_index(c, bn);
+      int bc = comp_builtin_class_named(c, bn);
       if (bc >= 0 && (call_target(c, last, bc, nm, 0, NULL) >= 0 ||
                       comp_reader_in_chain(c, bc, nm, NULL))) return 0;
     }

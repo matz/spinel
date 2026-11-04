@@ -2089,7 +2089,7 @@ int range_enum_redispatch(Compiler *c, int id) {
    Enumerable reopen; the builtin definition carries node_bi)? That method
    then answers a Hash's or an Enumerator's find_index, block and all. */
 int an_enum_own_find_index(Compiler *c) {
-  int en = comp_class_index(c, "Enumerable");
+  int en = comp_core_class(c, CORE_ENUMERABLE);
   int mi = en >= 0 ? comp_method_in_chain(c, en, "find_index", NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
@@ -2395,7 +2395,7 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
     size_t l = e ? (size_t)(e - p) : strlen(p);
     char an[64];
     snprintf(an, sizeof an, "%.*s", (int)l, p);
-    int uk = comp_class_index(c, an);
+    int uk = comp_builtin_class_named(c, an);
     if (uk >= 0 && comp_method_in_class(c, uk, name) >= 0) return NULL;
     p += l + (e ? 1 : 0);
   }
@@ -6883,7 +6883,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
       const char *own = rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer";
       const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
       if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
-        int aci = comp_class_index(c, anc);
+        int aci = comp_builtin_class_named(c, anc);
         int ami = aci >= 0 ? call_target(c, id, aci, name, 0, NULL) : -1;
         if (ami >= 0 && c->scopes[ami].class_id == aci)
           { *out = an_user_call(c, id, ami, UC_REOPEN, aci); return 1; }
@@ -9296,8 +9296,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      their place further down, where their rules have long been ordered. */
   if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) &&
       !bonly && !nt_int(nt, id, "builtin_only", 0)) {
-    const char *ecn = rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time" : "Class";
-    int eci = rt == TY_IO ? io_reopen_class(c, name) : comp_class_index(c, ecn);
+    int eci = rt == TY_IO ? io_reopen_class(c, name)
+            : comp_core_class(c, rt == TY_RANGE ? CORE_RANGE : rt == TY_TIME ? CORE_TIME : CORE_CLASS);
     int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;
     if (emi >= 0 && rt == TY_IO && io_reopen_ret_mixed(c, name)) return an_planned_call_ret(c, id, TY_POLY);
     /* a kind no reopening serves gets the builtin's answer: boxed when the
@@ -12325,7 +12325,7 @@ int an_range_step_rat(Compiler *c, int id, int infer) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || range_lit_endless(c, recv)) return 0;
   /* a program's own Range#step is not this walk */
-  int rg = comp_class_index(c, "Range");
+  int rg = comp_core_class(c, CORE_RANGE);
   int mi = rg >= 0 ? comp_method_in_chain(c, rg, "step", NULL) : -1;
   if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
       !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) return 0;
@@ -12429,7 +12429,7 @@ static int an_rat_slot_rewritten(Compiler *c, int local, const char *name, int k
 /* A program's own Rational (or Integer) operator answers what it likes. (A
    `class Rational` reopen lands on Object.) */
 static int an_rat_op_own1(Compiler *c, const char *cls, const char *op) {
-  int ci = comp_class_index(c, cls);
+  int ci = comp_builtin_class_named(c, cls);
   int mi = ci >= 0 ? comp_method_in_chain(c, ci, op, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);

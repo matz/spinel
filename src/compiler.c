@@ -1175,6 +1175,12 @@ void comp_class_set_def(Compiler *c, int k, int node) {
 int comp_core_class(const Compiler *c, int k) {
   return k < 0 ? -1 : c->core_cls[k];
 }
+/* The class of a builtin's name, through its core slot; a name no slot
+   has is looked up by name as before (#10793) */
+int comp_builtin_class_named(Compiler *c, const char *name) {
+  int k = builtin_core_class_slot(name);
+  return k >= 0 ? comp_core_class(c, k) : comp_class_index(c, name);
+}
 
 static unsigned name_idx_hash(const char *s) {
   unsigned h = 2166136261u;

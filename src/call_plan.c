@@ -475,7 +475,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     const char *own = rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer";
     const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
     if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
-      int aci = comp_class_index(c, anc);
+      int aci = comp_builtin_class_named(c, anc);
       int ami = aci >= 0 ? call_target(c, id, aci, name, 0, NULL) : -1;
       if (ami >= 0 && c->scopes[ami].class_id == aci) { cplan_set(p, ami, aci, UC_REOPEN, CP_DIRECT); return; }
     }

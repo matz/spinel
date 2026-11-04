@@ -18881,7 +18881,7 @@ static void refl_value_methods(Compiler *c, const char *cls, int prot, ReflNames
     size_t l = e ? (size_t)(e - p) : strlen(p);
     char an[64];
     snprintf(an, sizeof an, "%.*s", (int)l, p);
-    int uk = comp_class_index(c, an);
+    int uk = comp_builtin_class_named(c, an);
     if (uk >= 0 && c->classes[uk].is_builtin_const && c->classes[uk].enclosing_class < 0)
       refl_own_instance_methods(c, uk, 1, prot, 0, 1, r);
     core_own_methods_each(p, l, refl_core_note, &n);
@@ -18950,7 +18950,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
       if (!poly && !used[2 * i + prot]) continue;
       ReflNames r = {0};
       refl_value_methods(c, value_methods_classes[i], prot, &r);
-      int leaf = comp_class_index(c, value_methods_classes[i]);
+      int leaf = comp_builtin_class_named(c, value_methods_classes[i]);
       buf_printf(b, "  case %d: { static const char *const t[] = { ", 2 * i + prot);
       for (int j = 0; j < r.n; j++) {
         if (!r.show[j] || (leaf >= 0 && comp_is_undeffed_in_chain(c, leaf, r.v[j]))) continue;
@@ -19532,7 +19532,7 @@ int json_to_json_is_builtin(Compiler *c, int recv) {
                  : rt == TY_FLOAT ? "Float"
                  : rt == TY_SYMBOL ? "Symbol" : NULL;
   if (bn) {
-    int bc = comp_class_index(c, bn);
+    int bc = comp_builtin_class_named(c, bn);
     if (bc >= 0 && comp_method_in_chain(c, bc, "to_json", NULL) >= 0) return 0;
   }
   return 1;
@@ -19988,7 +19988,7 @@ int builtin_arity_admits(const char *cls, const char *name, int argc) {
    receiver's own or the other class its kind stands for -- defines the
    name: a def there keeps its dispatch, whatever the count. */
 static int reopened_owns(Compiler *c, const char *cls, const char *name) {
-  int bc = comp_class_index(c, cls);
+  int bc = comp_builtin_class_named(c, cls);
   return bc >= 0 && comp_method_in_chain(c, bc, name, NULL) >= 0;
 }
 
@@ -22090,11 +22090,11 @@ static int caller_includes_module(Compiler *c, int k, int mod) {
    of an Integer, Float or Comparable reopening's method (`__int_cmp__0`,
    self its `__self` parameter, desugar_builtin_scalar_defs), else -1. */
 static int scalar_copy_self_class(Compiler *c, const Scope *s) {
-  static const char *const pre[][2] = { { "__int_", "Integer" }, { "__flt_", "Float" }, { "__cmp_", "Comparable" } };
+  static const struct { const char *pre; int core; } pre[] = { { "__int_", CORE_INTEGER }, { "__flt_", CORE_FLOAT }, { "__cmp_", CORE_COMPARABLE } };
   if (!s || !s->name || s->class_id >= 0 || !s->pnames || s->nparams < 1 || !s->pnames[0] ||
       !sp_streq(s->pnames[0], "__self")) return -1;
   for (int i = 0; i < 3; i++)
-    if (!strncmp(s->name, pre[i][0], 6)) return comp_class_index(c, pre[i][1]);
+    if (!strncmp(s->name, pre[i].pre, 6)) return comp_core_class(c, pre[i].core);
   return -1;
 }
 /* Is receiver r self: `self`, or the `__self` parameter that stands for it
@@ -33688,7 +33688,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
                       : rtR == TY_IO ? "File"
                       : rtR == TY_CLASS ? "Class" : NULL;
       if (ocR) {
-        int ciR = rtR == TY_IO ? io_reopen_class(c, nmR) : comp_class_index(c, ocR);
+        int ciR = rtR == TY_IO ? io_reopen_class(c, nmR) : comp_core_class(c, builtin_core_class_slot(ocR));
         int miR = ciR >= 0 ? call_target(c, id, ciR, nmR, 0, NULL) : -1;
         if (miR >= 0 && emit_reopen_call_first(c, id, recvR, rtR, nmR, miR, b)) return;
         if (miR >= 0) { emit_reopen_primitive_call_o(c, id, ciR, miR, recvR, nmR, b); return; }
@@ -33790,8 +33790,8 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
         nt_ref(c->nt, id, "block") < 0 && !nt_int(c->nt, id, "builtin_only", 0)) {
       const char *ename = nt_str(c->nt, id, "name");
-      const char *ecn = ert == TY_RANGE ? "Range" : ert == TY_TIME ? "Time" : "Class";
-      int eci = ert == TY_IO ? io_reopen_class(c, ename) : comp_class_index(c, ecn);
+      int eci = ert == TY_IO ? io_reopen_class(c, ename)
+              : comp_core_class(c, ert == TY_RANGE ? CORE_RANGE : ert == TY_TIME ? CORE_TIME : CORE_CLASS);
       int emi = (eci >= 0 && ename) ? call_target(c, id, eci, ename, 0, NULL) : -1;
       if (emi >= 0 && ert == TY_IO) { emit_io_reopen_call(c, id, erecv, ename, b); return; }
       if (emi >= 0) {

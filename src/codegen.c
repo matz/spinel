@@ -19326,7 +19326,7 @@ static const char *const range_rat_walk_names[] = {
    from an Integer begin calls. Any of these may read the end the Range
    holds floored. */
 static int range_rat_walk_own_def(Compiler *c, const char *cls, const char *name) {
-  int ci = comp_class_index(c, cls);
+  int ci = comp_builtin_class_named(c, cls);
   int mi = ci >= 0 ? comp_method_in_chain(c, ci, name, NULL) : -1;
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);

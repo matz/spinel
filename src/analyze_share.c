@@ -1746,7 +1746,7 @@ static int sh_poly_to_s_self(const Compiler *c, int u) {
       call_plain_argc((Compiler *)c, u) != 0 || nt_ref(nt, u, "block") >= 0)
     return 0;
   int recv = nt_ref(nt, u, "receiver");
-  int sci = comp_class_index((Compiler *)c, "String");
+  int sci = comp_core_class(c, CORE_STRING);
   if (recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
       (sci >= 0 && comp_method_in_chain((Compiler *)c, sci, "to_s", NULL) >= 0))
     return 0;

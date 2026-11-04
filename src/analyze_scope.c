@@ -7855,7 +7855,7 @@ void register_includes(Compiler *c) {
      are copied away with no copy left, as a module's shadowed method is, so
      that neither a definition typed on an undeclared `sp_Struct` nor a
      dispatch arm of a dynamic send reaching it is emitted. */
-  int sbase = comp_class_index(c, "Struct");
+  int sbase = comp_core_class(c, CORE_STRUCT);
   if (sbase >= 0 && !c->classes[sbase].is_struct) {
     int any_record = 0;
     for (int ci = 0; ci < c->nclasses && !any_record; ci++)

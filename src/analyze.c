@@ -12440,7 +12440,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
      answered false on a concrete receiver for a method that otherwise
      works (K-026). The shape is LR_TO_SET's row. */
   const LowerRow *tsr = lower_row_nt(nt, id, LR_TO_SET);
-  if (tsr && comp_class_index(c, tsr->target) >= 0) {
+  if (tsr && comp_builtin_class_named(c, tsr->target) >= 0) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv >= 0) {
       TyKind rt = infer_type(c, recv);
@@ -12452,7 +12452,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
            rt == TY_STR_RANGE || rt == TY_ENUMERATOR)) decline = 1;
       /* Set#to_set is the receiver itself, which is also what keeps a
          `to_set.to_set` chain from nesting one Set.new inside another (#3623) */
-      else if (ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, tsr->target) &&
+      else if (ty_is_object(rt) && ty_object_class(rt) == comp_builtin_class_named(c, tsr->target) &&
                nt_ref(nt, id, "block") < 0) {
         nt_node_set_int(nt, id, "enum_self_result", recv);
         nt_node_set_str(nt, id, "name", "itself");

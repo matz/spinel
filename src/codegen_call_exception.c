@@ -454,6 +454,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       (sp_streq(name, "message") || sp_streq(name, "result") ||
        sp_streq(name, "errno") || sp_streq(name, "error_code") ||
        sp_streq(name, "key") || sp_streq(name, "receiver") ||
+       sp_streq(name, "args") || sp_streq(name, "private_call?") ||
        sp_streq(name, "backtrace") || sp_streq(name, "cause") ||
        is_exception_full_message(name)) &&
       repr_of(c, recv).as_ty == TY_POLY) {
@@ -692,11 +693,6 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     }
     if (sp_streq(name, "cause")) {
       buf_puts(b, "sp_exc_cause("); emit_expr(c, recv, b); buf_puts(b, ")");
-      return 1;
-    }
-    if (sp_streq(name, "result") && argc == 0) {
-      /* StopIteration#result: the finished iteration's return value. */
-      buf_puts(b, "sp_exc_result("); emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
     }
     if (sp_streq(name, "errno") && argc == 0) {

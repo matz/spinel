@@ -2228,14 +2228,21 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.cls_id == SP_BUILTIN_METHOD ? ", t);
       /* a Class.new class has no name until a constant names it: nil */
-      char cls_arm[120];
-      snprintf(cls_arm, sizeof cls_arm, c->has_anonymous_classes || comp_has_sclass_values(c)
-               ? "sp_box_nullable_str(sp_class_name_or_nil(sp_unbox_class(_t%d)))"
-               : "sp_box_str(sp_class_val_name(_t%d))", t);
-      if (sp_streq(name, "name"))
+      char cls_arm[220];
+      if (c->has_anonymous_classes || comp_has_sclass_values(c))
+        snprintf(cls_arm, sizeof cls_arm, "({ const char *_cn%d = sp_class_name_or_nil(sp_unbox_class(_t%d));"
+                 " _cn%d ? sp_box_str(sp_str_uminus_val(_cn%d)) : sp_box_nil(); })", t, t, t, t);
+      else snprintf(cls_arm, sizeof cls_arm, "sp_box_str(sp_str_uminus_val(sp_class_val_name(_t%d)))", t);
+      if (sp_streq(name, "name")) {
+        g_uses_symbols = 1;   /* a NameError's name is a Symbol */
         buf_printf(b, "sp_box_sym(sp_sym_intern(((sp_BoundMethod *)_t%d.v.p)->name))"
                       " : _t%d.tag == SP_TAG_CLASS ? %s"
-                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(_t%d.v.s)", t, t, cls_arm, t, t);
+                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(sp_str_uminus_val(_t%d.v.s))"
+                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str(sp_str_uminus_val(sp_sym_to_s((sp_sym)_t%d.v.i)))"
+                      " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
+                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
+                   t, t, cls_arm, t, t, t, t, t, t, t, t, t);
+      }
       else if (sp_streq(name, "owner"))
         buf_printf(b, "({ const char *_o = sp_bm_owner_name((sp_BoundMethod *)_t%d.v.p);"
                       " _o ? sp_box_class_name(_o) : sp_box_nil(); })", t);
@@ -2251,7 +2258,11 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
       else
         buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);
-      buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);
+      /* a bare identifier (`x.instance_eval { name }`) is a NameError, as CRuby's is */
+      if (nt_vcall(nt, id))
+        buf_printf(b, " : (sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%%s' for %%s\", "
+                      "\"%s\", sp_nomethod_recv_desc(_t%d)), _t%d)), sp_box_nil()); })", name, t, t);
+      else buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);
       return 1;
     }
   }

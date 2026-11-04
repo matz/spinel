@@ -3273,6 +3273,11 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         }
         else {
           if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return 1; }
+          if (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(nt, argv, argc) >= 0 || nt_argv_has_splat(nt, argv, argc))) {
+            emit_exc_attrs_new(c, id, ci, argc, argv, b);
+            return 1;
+          }
+          if (emit_exc_extra_args(c, id, ci, argc, argv, b)) return 1;
           /* no user initialize: create directly with first arg as message.
              An ivar-bearing subclass needs its dedicated struct size (#2772). */
           const char *cn2 = class_ruby_name(c, ci); if (!cn2) cn2 = c->classes[ci].name;

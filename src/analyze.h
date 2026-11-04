@@ -1099,6 +1099,7 @@ TyKind ewo_memo_elem_type(Compiler *c, int callid);
 int curry_apply_info(Compiler *c, int node, int *out_complete, TyKind *out_ret);
 int curry_count_max(Compiler *c, int recv);
 int an_program_builds_methods(Compiler *c);   /* the program builds Method objects at all */
+int an_program_names_name_error(Compiler *c);   /* the program names NameError or NoMethodError */
 int an_program_makes_dir(Compiler *c);   /* the program names Dir anywhere */
 int an_program_makes_bsearch_enum(Compiler *c);   /* Array#bsearch without a block, anywhere */
 int an_program_makes_io(Compiler *c);   /* a boxed value may be an IO (a syntactic test) */

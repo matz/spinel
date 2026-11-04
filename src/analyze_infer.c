@@ -2452,6 +2452,20 @@ int an_program_builds_methods(Compiler *c) {
   return memo;
 }
 
+/* Does the program name NameError or NoMethodError at all? A boxed value's
+   #name is then a Symbol or nil for one of them, beside a class's String. */
+int an_program_names_name_error(Compiler *c) {
+  static const NodeTable *memo_nt = NULL; static int memo = 0;
+  if (memo_nt == c->nt) return memo;
+  memo_nt = c->nt; memo = 0;
+  for (int id = 0; id < c->nt->count && !memo; id++) {
+    if (nt_kind(c->nt, id) != NK_ConstantReadNode && nt_kind(c->nt, id) != NK_ConstantPathNode) continue;
+    const char *n = nt_str(c->nt, id, "name");
+    if (n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"))) memo = 1;
+  }
+  return memo;
+}
+
 /* Does this subtree pull from an external Enumerator (`e.next`)? Such a call
    is what ends a break-less `loop` with StopIteration (#3588). */
 static int an_subtree_calls_enum_next(Compiler *c, int root) {
@@ -8765,7 +8779,8 @@ static TyKind infer_call_prelude(Compiler *c, int id) {
    ones sp_poly_exc_acc answers with a boxed value. */
 static int is_poly_exc_boxed_accessor(const char *name) {
   return sp_streq(name, "backtrace") || sp_streq(name, "result") || sp_streq(name, "errno") ||
-         sp_streq(name, "error_code") || sp_streq(name, "key") || sp_streq(name, "receiver");
+         sp_streq(name, "error_code") || sp_streq(name, "key") || sp_streq(name, "receiver") ||
+         sp_streq(name, "args") || sp_streq(name, "private_call?");
 }
 /* ...called with no argument, and #exception with or without a message:
    the receiver or a copy of it, boxed (the emitter's poly arm) */

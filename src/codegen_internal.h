@@ -1829,6 +1829,10 @@ const char *errno_canonical_name(const char *n);   /* analyze_util.c */
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int class_is_syserr(Compiler *c, int ci);          /* codegen_call.c */
 int class_is_sysexit(Compiler *c, int ci);         /* codegen_call.c */
+int class_takes_exc_attrs(Compiler *c, int ci);    /* codegen_call.c */
+void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b);
+void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 void emit_syserr_call(Compiler *c, int id, const char *fn, const char *lead,
                       int argc, const int *argv, Buf *b);   /* codegen_call.c */

@@ -5199,6 +5199,14 @@ int class_is_sysexit(Compiler *c, int ci) {
   return ci >= 0 && ci < c->nclasses && class_is_exc_subclass(c, ci) &&
          sp_streq(exc_builtin_parent(c, ci), "SystemExit");
 }
+/* Is class `ci` of the program below a builtin exception whose initialize
+   takes more than a message (KeyError's key:, NameError's name, ...)? */
+int class_takes_exc_attrs(Compiler *c, int ci) {
+  if (ci < 0 || ci >= c->nclasses || !class_is_exc_subclass(c, ci)) return 0;
+  const char *p = exc_builtin_parent(c, ci);
+  return sp_streq(p, "KeyError") || sp_streq(p, "NameError") ||
+         sp_streq(p, "NoMethodError") || sp_streq(p, "FrozenError");
+}
 /* A new exception of class `ci` with no message yet: the base-sized one of its
    builtin parent, or its own struct when it has instance variables. ci < 0 is
    SystemExit itself. `dim` is the temp's C type. */
@@ -5231,6 +5239,73 @@ void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Bu
   char lead[64]; snprintf(lead, sizeof lead, "(sp_Exception *)_t%d, ", te);
   emit_syserr_call(c, id, "sp_sysexit_super", lead, argc, argv, b);
   buf_printf(b, "; _t%d; })", te);
+}
+/* The arguments of an exception's `.new` or `super`, run in order in the
+   prelude (a keyword Hash's building hoists there): the positional ones
+   gathered into one Array `_t<*ta>` (a splat spreads into it), the keywords
+   boxed as their Hash `_t<*tk>`, nil for none. */
+static void emit_exc_args_gather(Compiler *c, int id, int argc, const int *argv, int *ta, int *tk) {
+  const NodeTable *nt = c->nt;
+  if (nt_argv_has(nt, argv, argc, NT_ARG_BLOCK | NT_ARG_FORWARDING))
+    unsupported(c, id, "a block argument to the constructor of a KeyError, NameError or FrozenError subclass");
+  int kwh = nt_argv_kwh(nt, argv, argc);
+  *ta = ++g_tmp; *tk = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", *ta, *ta);
+  for (int a = 0; a < argc - (kwh >= 0); a++) {
+    Buf ab; memset(&ab, 0, sizeof ab);
+    int spl = nt_kind(nt, argv[a]) == NK_SplatNode;
+    if (spl) {
+      int op = nt_ref(nt, argv[a], "expression");
+      if (op < 0 || !splat_operand_ok(c, op))
+        unsupported(c, id, "this splat in the constructor of a KeyError, NameError or FrozenError subclass");
+      emit_splat_operand_array(c, op, &ab);
+    }
+    else emit_boxed(c, argv[a], &ab);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "%s(_t%d, %s);\n", spl ? "sp_PolyArray_append_all" : "sp_PolyArray_push", *ta, ab.p);
+    free(ab.p);
+  }
+  Buf kb; memset(&kb, 0, sizeof kb);
+  if (kwh >= 0) { g_uses_symbols = 1; emit_boxed(c, kwh, &kb); }
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", *tk, kb.p ? kb.p : "sp_box_nil()", *tk);
+  free(kb.p);
+}
+/* sp_exc_attrs_super on the arguments of a `.new` or a `super`. */
+void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b) {
+  int ta, tk;
+  emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
+  buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d)", self_text, ta, ta, tk);
+}
+/* `Cls.new(...)` on such a class, with no initialize of the program's. */
+void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
+  int te = ++g_tmp;
+  Buf alloc; memset(&alloc, 0, sizeof alloc);
+  const char *dim = "sp_Exception";
+  emit_sysexit_alloc(c, ci, &dim, &alloc);
+  buf_printf(b, "({ %s *_t%d = %s; SP_GC_ROOT(_t%d); ", dim, te, alloc.p, te);
+  free(alloc.p);
+  char self_text[64]; snprintf(self_text, sizeof self_text, "(sp_Exception *)_t%d", te);
+  emit_exc_attrs_call(c, id, self_text, argc, argv, b);
+  buf_printf(b, "; _t%d; })", te);
+}
+/* `Cls.new(a, b)` on a class below an exception whose initialize takes one
+   message: the arguments run, and the call raises as CRuby's does. 0 where
+   the count is fine, or known only at run time, or the class's own rule. */
+int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
+  if (argc < 2 || class_is_syserr(c, ci) || nt_argv_has_splat(c->nt, argv, argc)) return 0;
+  /* the builtins whose initialize takes other arguments of its own */
+  static const char *const other[] = { "SystemExit", "UncaughtThrowError", "SignalException",
+                                       "Interrupt", "NoMatchingPatternKeyError", NULL };
+  const char *par = exc_builtin_parent(c, ci);
+  for (int i = 0; other[i]; i++) if (sp_streq(par, other[i])) return 0;
+  int ta, tk;
+  emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
+  buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 0..1)\"); ", argc);
+  if (c->classes[ci].nivars > 0) buf_printf(b, "(sp_%s *)NULL; })", c->classes[ci].c_name);
+  else buf_puts(b, "(sp_Exception *)NULL; })");
+  return 1;
 }
 /* A call of the runtime's SystemCallError constructors on the arguments of
    a `.new` / raise / super: `fn(lead argc, (sp_RbVal[]){...})`, each argument
@@ -5268,7 +5343,7 @@ const char *exc_gated_acc_fn(const char *name) {
     {"status", "sp_exc_status_acc"}, {"success?", "sp_exc_success_acc"},
     {"signo", "sp_exc_signo_acc"}, {"signm", "sp_exc_signm_acc"},
     {"errno", "sp_exc_errno_acc"}, {"name", "sp_exc_name_acc"},
-    {"error_code", "sp_exc_error_code_acc"},
+    {"error_code", "sp_exc_error_code_acc"}, {"result", "sp_exc_result_acc"},
     /* LoadError#path: the feature of a require that loaded nothing, and
        nil for a LoadError raised by hand, as in CRuby */
     {"path", "sp_exc_path_acc"},
@@ -12878,7 +12953,7 @@ int ctor_arity_error(Compiler *c, int ci, int initm, int argc, char *msg, size_t
     }
     if (argc == 0) return 0;
     if (class_is_exc_subclass(c, ci)) {
-      if (argc == 1 || class_is_sysexit(c, ci)) return 0;
+      if (argc == 1 || class_is_sysexit(c, ci) || class_takes_exc_attrs(c, ci)) return 0;
       arity_message(msg, n, argc, 0, 1, NULL);
       return 1;
     }
@@ -13173,6 +13248,16 @@ int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2
     buf_printf(b, "_t%d = sp_box_obj(_e, %d); } break; ", rt2, ci);
     return 1;
   }
+  if (class_takes_exc_attrs(c, ci) && argc > 1) {
+    Buf alloc; memset(&alloc, 0, sizeof alloc);
+    const char *dim = "sp_Exception";
+    emit_sysexit_alloc(c, ci, &dim, &alloc);
+    buf_printf(b, "case %d: { %s *_e = %s; SP_GC_ROOT(_e); sp_exc_attrs_super((sp_Exception *)_e, %d, (sp_RbVal[]){", ci, dim, alloc.p, argc);
+    free(alloc.p);
+    for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", atmp[a]);
+    buf_printf(b, "}, sp_box_nil()); _t%d = sp_box_obj(_e, %d); } break; ", rt2, ci);
+    return 1;
+  }
   if (class_is_syserr(c, ci)) {
     /* SystemCallError#initialize(msg = nil, func = nil): the errno text */
     buf_printf(b, "case %d: { const char *_m = sp_syserr_msg_a(\"%s\", %d, ", ci, cn, argc);
@@ -13378,6 +13463,18 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
       buf_printf(b, "case %d: { %s _t%d = ", ci, apre.p ? apre.p : "", rt2);
       emit_boxed_text(c, ty_object(ci), val.p ? val.p : "0", b);
       buf_puts(b, "; } break; ");
+      free(apre.p); free(val.p);
+      continue;
+    }
+    /* a class below KeyError and its like reads the keywords itself */
+    if (initm < 0 && class_takes_exc_attrs(c, ci)) {
+      if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      Buf val; memset(&val, 0, sizeof val);
+      Buf apre; memset(&apre, 0, sizeof apre);
+      Buf *sv_pre = g_pre; g_pre = &apre;
+      emit_exc_attrs_new(c, id, ci, argc, argv, &val);
+      g_pre = sv_pre;
+      buf_printf(b, "case %d: { %s _t%d = sp_box_obj(%s, %d); } break; ", ci, apre.p ? apre.p : "", rt2, val.p, ci);
       free(apre.p); free(val.p);
       continue;
     }
@@ -14720,6 +14817,11 @@ int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b) {
    class method both build with it. */
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
   if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return; }
+  if (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(c->nt, argv, argc) >= 0 || nt_argv_has_splat(c->nt, argv, argc))) {
+    emit_exc_attrs_new(c, id, ci, argc, argv, b);
+    return;
+  }
+  if (emit_exc_extra_args(c, id, ci, argc, argv, b)) return;
   /* An ivar-bearing subclass needs its dedicated struct size --
      sp_exc_new_sub would only allocate the base (#2772). */
   const char *cn2 = class_ruby_name(c, ci); if (!cn2) cn2 = c->classes[ci].name;

@@ -568,6 +568,7 @@ int is_new_name(const char *n);          /* new: a class's constructor */
 int is_native_share_decl(const char *n); /* native_share: a package's share declaration */
 int is_proc_new(const char *recv, const char *meth); /* Proc.new */
 int is_method_ref_name(const char *n);   /* method: Kernel#method */
+int is_method_handoff_name(const char *n); /* is_method_name_reflection less the define and ask names */
 int is_method_object_name(const char *n); /* method public_method instance_method: a Method of the name handed */
 int is_marshal_const(const char *n);     /* Marshal, whose load makes objects with any ivars */
 int is_env_const(const char *n);         /* ENV */

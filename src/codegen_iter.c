@@ -7890,6 +7890,19 @@ static int step_bind_recv(Compiler *c, int id, int recv, const char *cty, void (
   return t;
 }
 
+/* Does iteration call `id` hand a callable it forwards (`xs.sum(&h)`) to
+   the enumerable driver, its receiver known only at run time? The driver's
+   answer is the call's, and the statement form below drops it: at a
+   method's tail the value form carries it (emit_stmt_tail_inner). */
+int iter_fwd_proc_to_driver(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int rfb = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  return rfb >= 0 && nt_kind(nt, rfb) == NK_BlockArgumentNode && nm && poly_enum_op_for(nm) &&
+         recv >= 0 && repr_of(c, recv).kind == RK_BOXED;
+}
+
 static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int block = nt_ref(nt, id, "block");
@@ -8049,7 +8062,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       const char *inm = nt_str(nt, id, "name");
       int irecv = nt_ref(nt, id, "receiver");
       const char *pen = inm ? poly_enum_op_for(inm) : NULL;
-      if (rfb >= 0 && pen && irecv >= 0 && repr_of(c, irecv).kind == RK_BOXED) {
+      if (iter_fwd_proc_to_driver(c, id)) {
         Buf pb0; memset(&pb0, 0, sizeof pb0);
         if (!emit_forwarded_proc_arg(c, rfb, &pb0)) { free(pb0.p); return 0; }
         int tp0 = ++g_tmp;

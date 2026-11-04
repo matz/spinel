@@ -8161,11 +8161,14 @@ static int infer_block_iter_call(Compiler *c, int id, const NodeTable *nt, const
     int orecv = nt_ref(nt, recv, "receiver");
     if (orecv >= 0) { *out = infer_type(c, orecv); return 1; }
   }
-  /* A forwarded proc takes the receiver-valued runtime path. Keep this
-     structural rule here: builtin rows cannot distinguish a block argument
-     from a literal block. */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "each") &&
-      nt_call_has_block_arg(nt, id))
+  /* A forwarded proc takes the receiver-valued runtime path: the
+     enumerable driver answers the receiver for each, and for every other
+     walk its iterator rows say answers it where the plan has the driver
+     answer the call (cplan_driver_walks_recv; typed nil, a method answering
+     `a.reverse_each(&b)` returned a zero). Keep this structural rule here:
+     builtin rows cannot distinguish a block argument from a literal block. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_call_has_block_arg(nt, id) &&
+      (is_each_name(name) || (poly_enum_op_for(name) && iter_boxed_answers_recv(name) && cplan_driver_walks_recv(c, id))))
     { *out = TY_POLY; return 1; }
   /* A block each-family call returns its receiver (each, each_value/each_key/
      each_pair, each_with_index, reverse_each), so the value form composes:

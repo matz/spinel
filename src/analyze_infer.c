@@ -6993,7 +6993,8 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
 /* A Method or Proc object (method(:x), bind_call, composition, call), with a boxed Time's strftime, which sits between them (infer_call_inner's rules, in their order) */
 static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind *out) {
   /* method(:sym) / <recv>.method(:sym) -> a bound Method object */
-  if (name && sp_streq(name, "method") && method_sym_arg(c, id) != NULL) { *out = TY_METHOD; return 1; }
+  if (name && sp_streq(name, "method") && method_sym_arg(c, id) != NULL &&
+      (nt_int(nt, id, "builtin_only", 0) || !method_user_override_recv(c, id))) { *out = TY_METHOD; return 1; }
   /* `k.instance_method(:m).bind_call(obj, args)` on a Class value known only
      at run time: whichever class k holds binds its own `m`, each arm boxing
      its answer. */

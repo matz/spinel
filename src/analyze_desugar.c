@@ -7376,7 +7376,10 @@ static int desugar_dynamic_method_inner(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     int cls = ty_is_object(rt) ? ty_object_class(rt) : -1, own_method = 0;
     if (cls >= 0) own_method = comp_method_in_chain(c, cls, "method", NULL) >= 0;
-    if ((cls < 0 && rt != TY_POLY) || own_method) continue;
+    /* the builtin's own (a program `method`'s super, builtin_only): its arms
+       are the builtin's too, whatever the class defines */
+    int bonly = nt_int(nt, id, "builtin_only", 0);
+    if ((cls < 0 && rt != TY_POLY) || (own_method && !bonly)) continue;
     char **own = NULL;
     int nown = dsend_receiver_names(c, cls, 1, &own), base = nt->count;
     int *arms = (int *)malloc(sizeof(int) * (size_t)(nown > 0 ? nown : 1));
@@ -7390,6 +7393,7 @@ static int desugar_dynamic_method_inner(Compiler *c) {
       nt_set_ignore_visibility(nt, arms[k], nt_ignore_visibility(nt, id));
       nt_node_set_str(nt, arms[k], "dyn_name", own[k]);
       nt_node_set_int(nt, arms[k], "dyn_of", id);
+      if (bonly) nt_node_set_int(nt, arms[k], "builtin_only", 1);
       nt_node_set_ref(nt, arms[k], "arguments", na);
       comp_sym_intern(c, own[k]);
       free(own[k]);
@@ -10002,6 +10006,16 @@ static int fwd_stable_operand(Compiler *c, int e) {
 static int fwd_inert_method_lookup(Compiler *c, int e) {
   const NodeTable *nt = c->nt;
   if (!is_method_ref_name(nt_str(nt, e, "name"))) return 0;
+  /* a `method` the receiver's class writes itself is a call that runs
+     code, read once like any other (#10719) */
+  if (sp_streq(nt_str(nt, e, "name"), "method") && !nt_int(nt, e, "builtin_only", 0)) {
+    int r = nt_ref(nt, e, "receiver");
+    TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
+    int k = ty_is_object(rt) ? ty_object_class(rt) : -1;
+    int mi = k >= 0 ? comp_method_in_chain(c, k, "method", NULL) : -1;
+    if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 && !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0))
+      return 0;
+  }
   int args = nt_ref(nt, e, "arguments"), an = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   return an == 1 && av && fwd_stable_operand(c, nt_ref(nt, e, "receiver")) && fwd_stable_operand(c, av[0]);
@@ -13733,6 +13747,80 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   nt_node_set_ref(nt, def, "parameters", params);
   nt_node_set_ref(nt, def, "body", cdef_stmts(nt, chain));
   return def;
+}
+
+/* A program's own `def method(n)` in a class body (#10719): its `super`
+   is Object#method, the Method of self that the builtin makes, which a
+   call reaches by name only when nothing of the program answers it. Each
+   super in the def's body (not in a def or class nested in it) becomes
+   `self.method(args)` marked builtin_only, its own arguments or, for a
+   bare super, the def's required parameters. A def with other parameters,
+   or a super with a block, is left as it is. */
+static void dmo_rewrite(NodeTable *nt, int n, const int *preq, int npreq, int *changed) {
+  if (n < 0) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
+  if ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && nt_ref(nt, n, "block") < 0) {
+    int args = k == NK_SuperNode ? nt_ref(nt, n, "arguments") : -1;
+    if (k == NK_ForwardingSuperNode && npreq > 0) {
+      int *el = malloc(sizeof(int) * (size_t)npreq);
+      if (!el) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int i = 0; i < npreq; i++) {
+        el[i] = fwd_new_node_like(nt, n, "LocalVariableReadNode");
+        nt_node_set_str(nt, el[i], "name", nt_str(nt, preq[i], "name"));
+        nt_node_set_int(nt, el[i], "depth", 0);
+      }
+      args = fwd_new_node_like(nt, n, "ArgumentsNode");
+      nt_node_set_arr(nt, args, "arguments", el, npreq);
+      free(el);
+    }
+    int self = fwd_new_node_like(nt, n, "SelfNode");
+    long long line = nt_int(nt, n, "node_line", 0);
+    nt_node_reset(nt, n, "CallNode");
+    if (line) nt_node_set_int(nt, n, "node_line", line);
+    nt_node_set_str(nt, n, "name", "method");
+    nt_node_set_ref(nt, n, "receiver", self);
+    nt_node_set_ref(nt, n, "arguments", args);
+    nt_node_set_ref(nt, n, "block", -1);
+    nt_node_set_int(nt, n, "builtin_only", 1);
+    *changed = 1;
+    return;
+  }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) dmo_rewrite(nt, nt_ref_at(nt, n, i), preq, npreq, changed);
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) dmo_rewrite(nt, av[j], preq, npreq, changed);
+  }
+}
+int desugar_method_override_super(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, *parent = NULL, n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_DefNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "method")) continue;
+    if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    /* a statement of a class body (StatementsNode, then the ClassNode) */
+    int st = parent[id], owner = st >= 0 ? parent[st] : -1;
+    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || owner < 0 || nt_kind(nt, owner) != NK_ClassNode) continue;
+    int ps = nt_ref(nt, id, "parameters"), npreq = 0;
+    const int *preq = NULL;
+    if (ps >= 0) {
+      if (nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0) continue;
+      int no = 0, nk = 0, npo = 0;
+      nt_arr(nt, ps, "optionals", &no); nt_arr(nt, ps, "keywords", &nk); nt_arr(nt, ps, "posts", &npo);
+      if (no || nk || npo) continue;
+      preq = nt_arr(nt, ps, "requireds", &npreq);
+      int ok = 1;
+      for (int i = 0; i < npreq && ok; i++) ok = nt_kind(nt, preq[i]) == NK_RequiredParameterNode && nt_str(nt, preq[i], "name");
+      if (!ok) continue;
+    }
+    dmo_rewrite(nt, nt_ref(nt, id, "body"), preq, npreq, &changed);
+  }
+  free(parent);
+  return changed;
 }
 
 /* A program's Array#concat replaces an existing method. Keep that builtin

@@ -81,6 +81,7 @@ extern int an_ie_class_id;
 /* method(:sym) helpers (defined in analyze_util.c, shared with codegen) */
 const char *method_sym_arg(Compiler *c, int node);
 int is_method_obj_call(Compiler *c, int node);
+int method_user_override_recv(Compiler *c, int node);
 int method_obj_target_mi(Compiler *c, int node);
 int method_recv_node(Compiler *c, int recv);
 int method_recv_nodes(Compiler *c, int recv, int **out);
@@ -969,6 +970,7 @@ int desugar_builtin_method_defined_conds(Compiler *c);
 int desugar_engine_branches(Compiler *c);
 int desugar_conditional_defs(Compiler *c);
 int desugar_concat_builtin_version(Compiler *c);
+int desugar_method_override_super(Compiler *c);
 /* A dispatcher def over arms `<sel> == <val>` calling `callee` with the
    def's parameters passed on, and an else arm (disp_def_build,
    analyze_desugar.c); for that arm `raise NoMethodError.new(msg, :name,

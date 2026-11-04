@@ -4197,6 +4197,22 @@ const char *method_sym_arg(Compiler *c, int node) {
   return NULL;
 }
 
+/* Does call node's receiver hold an object whose class's chain has a
+   program def of `method` (an instance method the program wrote, not the
+   builtin's)? Only a receiver typed as one object class is asked. */
+int method_user_override_recv(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, node, "receiver");
+  if (recv < 0) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (!ty_is_object(rt)) return 0;
+  int k = ty_object_class(rt);
+  if (k < 0 || k >= c->nclasses) return 0;
+  int mi = comp_method_in_chain(c, k, "method", NULL);
+  return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+         !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0);
+}
+
 /* True if `node` is a `method(:sym)` / `<recv>.method(:sym)` call. */
 int is_method_obj_call(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
@@ -4204,8 +4220,14 @@ int is_method_obj_call(Compiler *c, int node) {
   const char *nm = nt_str(nt, node, "name");
   /* Module#instance_method builds the same object, unbound (NULL self); the
      Method machinery (name/arity/owner/call-after-bind) rides it (#2676) */
-  return nm && (sp_streq(nm, "method") || sp_streq(nm, "instance_method")) &&
-         method_sym_arg(c, node) != NULL;
+  if (!nm || !(sp_streq(nm, "method") || sp_streq(nm, "instance_method")) || method_sym_arg(c, node) == NULL)
+    return 0;
+  /* a receiver whose class has a `method` of the program's own calls that
+     (#10719); its super is the builtin, marked builtin_only
+     (desugar_method_override_super) */
+  if (sp_streq(nm, "method") && !nt_int(nt, node, "builtin_only", 0) && method_user_override_recv(c, node))
+    return 0;
+  return 1;
 }
 
 /* The target method scope index bound by a `method(:sym)` node, or -1

@@ -55,3 +55,11 @@ ow = Own
 puts ow::Foo.new.hi
 bb = Base
 puts bb::Foo.new.hi
+# A superclass written as a path, or as a constant holding a class, is the
+# class it names: Kid's own Foo comes before Other::Base's.
+module Other; class Base; class Foo; def hi = "other base"; end; end; end
+class PathKid < Other::Base; class Foo; def hi = "path kid"; end; end
+OtherBase = Other::Base
+class AliasKid < OtherBase; class Foo; def hi = "alias kid"; end; end
+module Inner; class NestKid < Base; class Foo; def hi = "nest kid"; end; end; end
+[PathKid, AliasKid, Inner::NestKid, Other::Base].each { |v| puts v::Foo.new.hi }

@@ -6827,6 +6827,33 @@ static int superclass_alias_target(Compiler *c, const char *name, int depth, int
   return -2;
 }
 
+/* The class of the program that class i's definition names as its
+   superclass, -1 for none (no superclass, a builtin), -2 (with the write in
+   *wr) for a constant whose class only the run time picks. `class R <
+   Options.new(:a)` / `R = Options.new(:a)`: the Struct.new class's parent
+   is Options (#9292). A superclass constant (`class Child < Handler`,
+   `class Child < M::Handler`) is the class the load record resolved it to
+   where the header stands. Where the record does not know, it is the class
+   registered under the constant's last name ("Handler"), as classes are
+   registered under their bare last name. A constant holding a class
+   (`class Sub < Impl` after `Impl = Base`) is that class: the record
+   follows the alias where the header stands (elab_class_super); where it
+   does not know, superclass_alias_target follows it by name, until the
+   class lookups read the record. */
+int class_super_index(Compiler *c, int i, int *wr) {
+  const NodeTable *nt = c->nt;
+  const char *spn = c->classes[i].def_node >= 0 ? nt_str(nt, c->classes[i].def_node, "struct_parent") : NULL;
+  if (spn) return comp_class_index(c, spn);
+  int sc = class_def_super(nt, c->classes[i].def_node);
+  if (sc < 0) return -1;
+  NodeKind sk = nt_kind(nt, sc);
+  if (sk != NK_ConstantReadNode && sk != NK_ConstantPathNode) return -1;
+  int p = elab_class_super(c, i);
+  if (p < 0) p = const_node_class_index(c, sc);
+  if (p < 0 && !builtin_value_superclass(c, sc)) p = superclass_alias_target(c, nt_str(nt, sc, "name"), 0, wr);
+  return p;
+}
+
 void resolve_parents(Compiler *c) {
   check_class_redeclarations(c);
   check_blk_param_writes(c);
@@ -6834,44 +6861,19 @@ void resolve_parents(Compiler *c) {
   check_builtin_subclasses(c);
   const NodeTable *nt = c->nt;
   for (int i = 0; i < c->nclasses; i++) {
-    int sc = class_def_super(nt, c->classes[i].def_node);
-    /* `class R < Options.new(:a)` / `R = Options.new(:a)`: the Struct.new
-       class's parent is Options (#9292) */
-    const char *spn = c->classes[i].def_node >= 0 ? nt_str(nt, c->classes[i].def_node, "struct_parent") : NULL;
-    if (spn) {
-      int p = comp_class_index(c, spn);
-      if (p >= 0 && p != i) { c->classes[i].parent = p; comp_class_shape_changed(); }
-      continue;
+    int wr = -1;
+    int p = class_super_index(c, i, &wr);
+    /* (one whose class only the run time picks is refused, where the
+       parent was left unset with no word) */
+    if (p == -2) {
+      int sc = class_def_super(nt, c->classes[i].def_node);
+      char msg[400];
+      snprintf(msg, sizeof msg, "class %s < %s: the superclass is a constant whose class is chosen at run time "
+               "(a case, an if or a call); write the class it holds, or assign it a class constant",
+               c->classes[i].name, nt_str(nt, sc, "name"));
+      unsupported_feature(c, sc, msg);
     }
-    if (sc < 0) continue;
-    NodeKind sk = nt_kind(nt, sc);
-    /* A superclass constant (`class Child < Handler`, `class Child <
-       M::Handler`) is the class the load record resolved it to where the
-       header stands. Where the record does not know, it is the class
-       registered under the constant's last name ("Handler"), as classes
-       are registered under their bare last name. */
-    if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) {
-      int p = elab_class_super(c, i);
-      if (p < 0) p = const_node_class_index(c, sc);
-      /* a constant holding a class (`class Sub < Impl` after `Impl = Base`)
-         is that class: the record follows the alias where the header stands
-         (elab_class_super); where it does not know, superclass_alias_target
-         follows it by name, until the class lookups read the record. One
-         whose class only the run time picks is refused, where the parent
-         was left unset with no word */
-      if (p < 0 && !builtin_value_superclass(c, sc)) {
-        int wr = -1;
-        p = superclass_alias_target(c, nt_str(nt, sc, "name"), 0, &wr);
-        if (p == -2) {
-          char msg[400];
-          snprintf(msg, sizeof msg, "class %s < %s: the superclass is a constant whose class is chosen at run time "
-                   "(a case, an if or a call); write the class it holds, or assign it a class constant",
-                   c->classes[i].name, nt_str(nt, sc, "name"));
-          unsupported_feature(c, sc, msg);
-        }
-      }
-      if (p >= 0 && p != i) { c->classes[i].parent = p; comp_class_shape_changed(); }
-    }
+    if (p >= 0 && p != i) { c->classes[i].parent = p; comp_class_shape_changed(); }
   }
   mark_array_subclasses(c);
   /* A class whose chain reaches a native class that may be subclassed

@@ -3505,21 +3505,10 @@ static int dyn_path_value_root(Compiler *c, int par) {
    still place classes (ClassInfo.parent may not be set yet) */
 static int dyn_holder_parent(Compiler *c, int k) {
   if (c->classes[k].parent >= 0) return c->classes[k].parent;
-  int sc = class_def_super(c->nt, c->classes[k].def_node);
-  if (sc < 0) return -1;
-  NodeKind sk = nt_kind(c->nt, sc);
-  const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_str(c->nt, sc, "name") : NULL;
-  if (!sn) return -1;
-  /* the superclass as written beside k (Kid < Base in one scope) */
-  int e = c->classes[k].enclosing_class;
-  for (int q = 0; q < c->nclasses; q++) {
-    const ClassInfo *qi = &c->classes[q];
-    if (q == k || qi->enclosing_class != e || !qi->name) continue;
-    const char *leaf = qi->name;
-    if (e >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
-    if (sp_streq(leaf, sn)) return q;
-  }
-  return -1;
+  /* (the class its definition names, as resolve_parents reads it: `<
+     Base`, `< Other::Base`, `< Impl` after `Impl = Base`) */
+  int wr = -1, q = class_super_index(c, k, &wr);
+  return q == k || q < 0 ? -1 : q;
 }
 /* The one class or module whose leaf name is nm (-1 for none or two) */
 static int dyn_holder_named(Compiler *c, const char *nm) {

@@ -5050,6 +5050,19 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       nt_kind(nt, recv) == NK_CallNode &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "class")) {
     if (comp_ntype(c, recv) == TY_CLASS) {
+      /* A class method `name` / `to_s` / `inspect` of the program's own:
+         the class value dispatch calls it for the classes that define one.
+         Only for the class of a program object (not an exception, whose
+         class value carries its class by name) or of a boxed value, whose
+         class value holds the class's own id; any other value's class is
+         a builtin one, which has no such method. */
+      int orr = nt_ref(nt, recv, "receiver");
+      TyKind ort = orr >= 0 ? comp_ntype(c, orr) : TY_UNKNOWN;
+      int ocid = ty_is_object(ort) ? ty_object_class(ort) : -1;
+      int own_cls = ort == TY_POLY || (ocid >= 0 && !class_is_exc_subclass(c, ocid));
+      int ncc = 0;
+      if (own_cls) comp_cmethod_candidates(c, name, &ncc);
+      if (ncc > 0) return 0;
       /* every .class now yields an sp_Class (the poly path included, via
          sp_poly_class_val): stringify uniformly. */
       int _clt = ++g_tmp;

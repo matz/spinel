@@ -1058,8 +1058,12 @@ static int mx_bind_params(MxCtx *c, MxCtx *sub, MxMacro *m, pm_arguments_node_t 
       return !strict;
   pm_parameters_node_t *ps = m->def->parameters;
   size_t nreq = ps ? ps->requireds.size : 0, nopt = ps ? ps->optionals.size : 0;
-  if (ps && (ps->rest || ps->posts.size || ps->keyword_rest || ps->block)) return !strict;
-  if (argc < nreq || argc > nreq + nopt) return !strict;
+  /* a named rest parameter takes the positional arguments past the others,
+     as an Array (`def delegate(*methods, to:)`) */
+  pm_rest_parameter_node_t *rest = ps && ps->rest && PM_NODE_TYPE(ps->rest) == PM_REST_PARAMETER_NODE
+                                     ? (pm_rest_parameter_node_t *)ps->rest : NULL;
+  if (ps && ((ps->rest && (!rest || !rest->name)) || ps->posts.size || ps->keyword_rest || ps->block)) return !strict;
+  if (argc < nreq || (!rest && argc > nreq + nopt)) return !strict;
   size_t ai = 0;
   for (size_t i = 0; i < nreq; i++, ai++) {
     Mv v;
@@ -1075,6 +1079,14 @@ static int mx_bind_params(MxCtx *c, MxCtx *sub, MxMacro *m, pm_arguments_node_t 
     else if (!pev_eval(&sub->ev, op->value, &v)) { if (strict) return 0; continue; }
     char *nm = mx_name(op->name);
     pev_bind(&sub->ev, nm, v); free(nm);
+  }
+  if (rest) {
+    Mv v; memset(&v, 0, sizeof v); v.k = MV_ARR;
+    v.a = calloc(argc - ai + 1, sizeof(Mv)); v.n = (int)(argc - ai);
+    int ok = 1;
+    for (size_t i = 0; ai + i < argc && ok; i++) ok = pev_eval(&c->ev, args->nodes[ai + i], &v.a[i]);
+    if (ok) { char *nm = mx_name(rest->name); pev_bind(&sub->ev, nm, v); free(nm); }
+    else if (strict) return 0;
   }
   size_t nkw = ps ? ps->keywords.size : 0;
   if (kw && nkw == 0) return !strict;
@@ -1295,6 +1307,9 @@ static int mx_is_self_macro_def(const pm_node_t *d) {
   return 0;
 }
 
+/* the path of a top-level `class Module` (or `class ::Module`) body */
+static int mx_is_module_reopen(const char *path) { return strcmp(path, "::Module") == 0; }
+
 /* The statements of a module body: every instance method it gives counts as
    a definition of that name, and the plain `def`s are the macros. */
 static void mx_collect_module(pm_statements_node_t *st, const char *path, int ffi) {
@@ -1356,7 +1371,9 @@ static bool mx_collect_visit(const pm_node_t *n, void *data) {
   int ffi = is_mod && ln && strcmp(ln, "FFI") == 0;
   free(ln);
   if (ffi) g_mx_in_ffi++;
-  if (is_mod && body && PM_NODE_TYPE(body) == PM_STATEMENTS_NODE)
+  /* a `class Module` reopening's instance methods are every class's and
+     module's: macros as a module's are (mx_module_macro_reaches) */
+  if ((is_mod || mx_is_module_reopen(full)) && body && PM_NODE_TYPE(body) == PM_STATEMENTS_NODE)
     mx_collect_module((pm_statements_node_t *)body, full, g_mx_in_ffi > 0);
   if (body && PM_NODE_TYPE(body) == PM_STATEMENTS_NODE && !g_mx_in_ffi)
     mx_collect_self_defs((pm_statements_node_t *)body, full);
@@ -2256,6 +2273,18 @@ static int mx_class_reaches(MxClass *k, const MxMacro *m, const char *name) {
   return 0;
 }
 
+/* Does the class-body call `s` reach the macro m of a `class Module`
+   reopening? Every class and module has it once the reopening has run: its
+   def comes before the call in the text (the text is the whole program),
+   and no ancestor left a call that may define a class method of the name. */
+static int mx_module_macro_reaches(MxClass *k, const MxMacro *m, const pm_node_t *s) {
+  if (m->self_def || !mx_is_module_reopen(m->module) || m->def->base.location.end > s->location.start) return 0;
+  int depth = 0;
+  for (MxClass *a = mx_class_find(k->super); a && depth < 32; a = mx_class_find(a->super), depth++)
+    if (a->unknown || a->noiv) return 0;
+  return 1;
+}
+
 /* a constant as written, found as Ruby would from inside `from`: the
    innermost enclosing path that has it, then the top level */
 static const char *mx_resolve_const(const char *from, const char *text) {
@@ -2537,7 +2566,7 @@ static void mx_class_body(pm_statements_node_t *st, MxEdits *ed, MxClass *k, int
     }
     int dyn = mx_macro_dynamic(m, 0);
     if (!dyn && !m->writer) { free(name); continue; }   /* neither defines nor writes: stays as it is */
-    int extended = mx_class_reaches(k, m, name);
+    int extended = mx_class_reaches(k, m, name) || mx_module_macro_reaches(k, m, s);
     free(name);
     /* a heredoc argument's body lies outside the call's range */
     int hd = 0;
@@ -2841,7 +2870,7 @@ static char *sp_expand_class_macros(const char *source) {
   /* cheap gate: a module_eval / const_set / public_send somewhere, or an
      attr_* call or a class method's define_method that names what it
      defines at run time */
-  if ((!strstr(source, "extend") ||
+  if (((!strstr(source, "extend") && !strstr(source, "class Module")) ||
        (!strstr(source, "module_eval") && !strstr(source, "class_eval") &&
         !strstr(source, "const_set") && !strstr(source, "public_send") &&
         !strstr(source, "define_singleton_method") && !strstr(source, "define_method"))) &&

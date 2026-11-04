@@ -554,6 +554,26 @@ int bigint_cmp_operand_ok(TyKind t) {
   return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_RATIONAL ||
          t == TY_POLY || t == TY_UNKNOWN;
 }
+/* A Bignum compared with a side sp_bigint_cmp cannot read exactly -- a
+   boxed value (any class at run time) or a Rational -- compares the way the
+   runtime compares two boxed numbers (sp_poly_eq, sp_poly_lt, ...).
+   sp_poly_as_bigint read a boxed Rational as 0, and a Rational was cut to an
+   Integer: `2**64 == Rational(2**64, 1)` answered false. 0 when both sides
+   are Integers. */
+static int bigint_cmp_side_inexact(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  return !r.big && (r.kind == RK_BOXED || r.as_ty == TY_POLY || r.as_ty == TY_RATIONAL);
+}
+int emit_bigint_cmp_inexact(Compiler *c, int recv, int arg, const char *op, Buf *b) {
+  if (!bigint_cmp_side_inexact(c, recv) && !bigint_cmp_side_inexact(c, arg)) return 0;
+  int ne = sp_streq(op, "!=");
+  const char *fn = sp_streq(op, "==") || ne ? "sp_poly_eq" : sp_streq(op, "<") ? "sp_poly_lt"
+                 : sp_streq(op, "<=") ? "sp_poly_le" : sp_streq(op, ">") ? "sp_poly_gt" : "sp_poly_ge";
+  if (ne) buf_puts(b, "(!");
+  emit_poly_cmp_ordered(c, fn, recv, arg, b);
+  if (ne) buf_puts(b, ")");
+  return 1;
+}
 /* A FLOAT against a BIGINT compares as doubles -- which is what the runtime's
    own sp_poly_cmp does for the same pair, so the two paths agree. Coercing the
    float into a bigint truncated it to int64 and saturated there, so
@@ -16646,6 +16666,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     if ((rt == TY_BIGINT || a0 == TY_BIGINT) &&
         bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(a0) &&
         !((rr.kind == RK_BOXED || a0r.kind == RK_BOXED) && repr_of(c, id).kind == RK_BOXED)) {
+      if (emit_bigint_cmp_inexact(c, recv, argv[0], eq ? "==" : "!=", b)) return 1;
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
       buf_puts(b, ", ");

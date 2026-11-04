@@ -1,0 +1,7 @@
+[:a]
+"undefined method 'pluck' for class Late"
+[:b]
+[:b, 1]
+[:c, :late]
+[:c, 2]
+[:d, :e]

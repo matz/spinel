@@ -1575,7 +1575,30 @@ static int is_builtin_module_mixin_name(const char *leaf) {
   return sp_streq(leaf, "Process") || sp_streq(leaf, "Kernel") || sp_streq(leaf, "Math") ||
          sp_streq(leaf, "GC") || sp_streq(leaf, "Signal") || sp_streq(leaf, "Warning");
 }
-static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf) {
+static void incl_qualified(const NodeTable *nt, const int *parent, int m, char *buf, size_t cap);
+/* Does the module or class whose body holds the statement (`encl`) declare
+   `leaf` itself: a class or module `Q::leaf`, Q its qualified name, in this
+   body or another of its reopenings? Then `class leaf; ...; end` nested in
+   the body reopens the class the bare constant resolves to, as CRuby looks
+   it up there first. 1 for a class, 2 for a module, 0 for none. */
+static int erm_body_declares(const NodeTable *nt, const int *parent, int encl, const char *leaf) {
+  char q[1024], want[1200];
+  incl_qualified(nt, parent, encl, q, sizeof q);
+  snprintf(want, sizeof want, "%s::%s", q, leaf);
+  int decl = 0, ndk = 0;
+  const NodeKind *dk = class_def_kinds(&ndk);
+  for (int dh = 0; dh < ndk; dh++)
+    NT_FOREACH_KIND(nt, dk[dh], k) {
+      if (!class_def_is_class(nt, k) && !class_def_is_module(nt, k)) continue;
+      char qk[1024];
+      incl_qualified(nt, parent, k, qk, sizeof qk);
+      if (!sp_streq(qk, want)) continue;
+      if (class_def_is_class(nt, k)) return 1;
+      decl = 2;
+    }
+  return decl;
+}
+static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const int *parent, int encl) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) return st;
   int args = nt_ref(nt, st, "arguments"), an = 0;
@@ -1626,9 +1649,18 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf) {
     if (attr ? k != NK_SymbolNode : (k != NK_ConstantReadNode && k != NK_ConstantPathNode)) return st;
   }
   /* in a class or module body a reopening would nest (`class K` inside
-     `class K` is K::K): there only the body's own class is rewritten, and
-     to the receiverless statement it is in that body */
-  if (self_leaf && (nt_kind(nt, recv) != NK_ConstantReadNode || !sp_streq(leaf, self_leaf))) return st;
+     `class K` is K::K): there the body's own class is rewritten to the
+     receiverless statement it is in that body, and another class only when
+     the body's module declares it itself (erm_body_declares), where the
+     nested reopening is that class: a sanitizer's `Sanitizer.extend(M)` in
+     a reopening of the module that holds Sanitizer */
+  int nested = 0;
+  if (self_leaf && (nt_kind(nt, recv) != NK_ConstantReadNode || !sp_streq(leaf, self_leaf))) {
+    if (attr || sclass >= 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return st;
+    nested = erm_body_declares(nt, parent, encl, leaf);
+    if (!nested) return st;
+    decl = nested;
+  }
   if (first) {
     nt_node_set_str(nt, st, "name", nm);
     int *rest = malloc(sizeof(int) * (size_t)(an - 1));
@@ -1639,7 +1671,7 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf) {
   }
   if (sclass >= 0) nt_node_set_ref(nt, sclass, "receiver", -1);
   else nt_node_set_ref(nt, st, "receiver", -1);
-  if (self_leaf) return -2;   /* rewritten in place */
+  if (self_leaf && !nested) return -2;   /* rewritten in place */
   int is_mod = decl == 2;
   int rn = nt_new_node(nt, is_mod ? "ModuleNode" : "ClassNode");
   int body = nt_new_node(nt, "StatementsNode");
@@ -1828,6 +1860,7 @@ static int desugar_method_body_singleton_mixin(Compiler *c) {
 int desugar_explicit_receiver_mixin(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  int *parent = NULL;   /* (made when a body's statement names another class: erm_body_declares) */
   for (int id = 0; id < n0; id++) {
     int is_prog = nt_kind(nt, id) == NK_ProgramNode;
     int stmts = is_prog ? nt_ref(nt, id, "statements")
@@ -1846,13 +1879,15 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     for (int i = 0; i < bn; i++) {
       int sd = is_prog ? erm_sclass_const_decl(nt, bb[i]) : 0;
       if (sd) { nb[i] = erm_sclass_const_rewrite(nt, bb[i], sd); any |= nb[i] != bb[i]; continue; }
-      int r = erm_rewrite_stmt(c, bb[i], self_leaf);
+      if (!parent && !is_prog && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int r = erm_rewrite_stmt(c, bb[i], self_leaf, parent, id);
       if (r == -2) { nb[i] = bb[i]; changed = 1; continue; }
       nb[i] = r; any |= r != bb[i];
     }
     if (any) { nt_node_set_arr(nt, stmts, "body", nb, bn); changed = 1; }
     free(nb);
   }
+  free(parent);
   changed |= desugar_method_body_singleton_mixin(c);
   if (changed) comp_grow_node_arrays(c);
   return changed;

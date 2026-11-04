@@ -96,6 +96,32 @@ t = ExecTarget.new
 ByExec.new.mark(t)
 p t.flag
 
+# a subclass's self.new reaches the initialize it inherits
+class BaseInit
+  attr_accessor :prev
+  def initialize(k, prev = nil) = (@k = k; @prev = prev)
+end
+class ChildNew < BaseInit
+  def self.new(k) = super(k, "child.new")
+end
+p ChildNew.new(1).prev
+
+# an instance_exec block on a receiver of two classes writes each one's field
+class ExecA
+  attr_accessor :flag
+  def initialize = (@flag = 3)
+end
+class ExecB
+  attr_accessor :flag
+  def initialize = (@flag = 4)
+end
+class ByPolyExec
+  def mark(t, value = nil) = t.instance_exec { @flag = value }
+end
+targets = [ExecA.new, ExecB.new]
+ByPolyExec.new.mark(targets[ARGV.size])
+p targets[0].flag
+
 # a super in a method of another name does not reach initialize
 class Plain
   attr_accessor :prev

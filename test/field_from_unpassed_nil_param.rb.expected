@@ -16,6 +16,8 @@ nil
 "self.new"
 2
 nil
+"child.new"
+nil
 true
 nil
 "PlainKid"

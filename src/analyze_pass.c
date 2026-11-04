@@ -9005,7 +9005,13 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
          parameter's below: the literal has no key or value to go by, and
          left alone it became the String-keyed default the seed then refused
          (#10656). A local a store has typed is not bound. */
-      if (anode >= 0) changed |= bind_empty_hash_arg(c, p->rbs_type != TY_UNKNOWN ? p->rbs_type : p->type, anode);
+      TyKind decl = p->rbs_type != TY_UNKNOWN ? p->rbs_type : p->type;
+      if (anode >= 0) changed |= bind_empty_hash_arg(c, decl, anode);
+      /* an empty-`[]`-only local is the declared Array too: left open, it
+         became the general Array, and the call converted it into a copy of
+         the declared kind that took the callee's pushes in its place */
+      if (anode >= 0 && ty_is_array(decl) && decl != TY_POLY_ARRAY)
+        changed |= fill_empty_array_arg(c, anode, ty_array_elem(decl));
       continue;
     }
     if (anode < 0 && !L.gather) {

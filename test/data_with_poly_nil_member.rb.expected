@@ -14,3 +14,7 @@ true
 #<data Pt a=5, f=3.5>
 [:rcv, :first, :"mark3.5"]
 "1 is not a symbol nor a string"
+"unknown keyword: :b"
+#<data Ht a="lit", f=1.5>
+#<data Ht a=1, f=4>
+#<data Ht a="text", f=1.5>

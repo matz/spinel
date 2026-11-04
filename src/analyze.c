@@ -41534,14 +41534,15 @@ static int nn_nil_only_leaf(const VpLeaf *leaf, void *ud) {
   LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
   return lv && lv->nil_only;
 }
-/* `x.with(...)` on a boxed receiver (sp_obj_with): member `mn` of every
-   Data the dispatch can copy, an Integer or Float one, takes a nil; NULL
-   names every member. 1 when one changed. */
-static int mark_poly_with_member_nullable(Compiler *c, const char *mn) {
+/* Member `mn` of the copy a `with` builds takes a nil: an Integer or Float
+   one gets its nil bit. The copy is of class `cid`, or for cid < 0 of any
+   Data a boxed receiver's `with` (sp_obj_with) can copy; NULL names every
+   member. 1 when one changed. */
+static int mark_with_member_nullable(Compiler *c, int cid, const char *mn) {
   int changed = 0;
-  for (int k = 0; k < c->nclasses; k++) {
+  for (int k = cid < 0 ? 0 : cid; k < (cid < 0 ? c->nclasses : cid + 1); k++) {
     ClassInfo *sci = &c->classes[k];
-    if (!sci->is_data || sci->nmembers <= 0 || comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+    if (cid < 0 && (!sci->is_data || comp_method_in_chain(c, k, "initialize", NULL) >= 0)) continue;
     for (int m = 0; m < sci->nmembers; m++) {
       if (mn && !sp_streq(sci->ivars[m] + 1, mn)) continue;
       if (sci->ivar_nullable_int[m] || (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT)) continue;
@@ -41550,11 +41551,13 @@ static int mark_poly_with_member_nullable(Compiler *c, const char *mn) {
   }
   return changed;
 }
-/* The keyword elements of a `with` on a boxed receiver that can give a
-   member nil: a nil or nullable value under a Symbol or String key, the
-   same in a Hash literal under `**`, and any `**` operand whose values can
-   be nil at run time, which can give every member nil. */
-static int mark_poly_with_nullable(Compiler *c, const int *ke, int kn) {
+/* The keyword elements of a `with` (or of a `super` that reaches the
+   builtin Data#with) that can give a member nil: a nil or nullable value
+   under a Symbol key, the same in a Hash literal under `**`. On a boxed
+   receiver (cid < 0) a String key names a member too, and a `**` operand
+   whose values can be nil can give every member nil; on a typed one such
+   an operand widens the members instead (struct_with_types_members). */
+static int mark_with_kw_nullable(Compiler *c, int cid, const int *ke, int kn) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   for (int e = 0; e < kn; e++) {
@@ -41563,20 +41566,25 @@ static int mark_poly_with_nullable(Compiler *c, const int *ke, int kn) {
     if (nt_kind(nt, ke[e]) == NK_AssocSplatNode) {
       if (nt_kind(nt, v) == NK_HashNode) {
         int hn = 0; const int *he = nt_arr(nt, v, "elements", &hn);
-        changed |= mark_poly_with_nullable(c, he, hn);
+        changed |= mark_with_kw_nullable(c, cid, he, hn);
         continue;
       }
+      if (cid >= 0) continue;
       TyKind ht = infer_type(c, v);
       TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : TY_POLY;
-      if (vt == TY_POLY || vt == TY_NIL) changed |= mark_poly_with_member_nullable(c, NULL);
+      /* a typed Integer-valued Hash can hold a nil value too
+         (hash_vals_nullable) */
+      if (vt == TY_POLY || vt == TY_NIL || hash_vals_nullable(c, v))
+        changed |= mark_with_member_nullable(c, cid, NULL);
       continue;
     }
     if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;
     int key = nt_ref(nt, ke[e], "key");
     NodeKind kk = key >= 0 ? nt_kind(nt, key) : NK_NilNode;
-    const char *mn = kk == NK_SymbolNode ? nt_str(nt, key, "value") : kk == NK_StringNode ? nt_str(nt, key, "content") : NULL;
+    const char *mn = kk == NK_SymbolNode ? nt_str(nt, key, "value")
+                   : kk == NK_StringNode && cid < 0 ? nt_str(nt, key, "content") : NULL;
     if (!mn || (nt_kind(nt, v) != NK_NilNode && !nullable_int_value(c, v))) continue;
-    changed |= mark_poly_with_member_nullable(c, mn);
+    changed |= mark_with_member_nullable(c, cid, mn);
   }
   return changed;
 }
@@ -42187,16 +42195,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
         if (san != 1 || nt_kind(nt, sav[0]) != NK_KeywordHashNode) continue;
         int kn = 0; const int *kv = nt_arr(nt, sav[0], "elements", &kn);
-        for (int e = 0; e < kn; e++) {
-          int key = nt_ref(nt, kv[e], "key"), v = nt_ref(nt, kv[e], "value");
-          if (nt_kind(nt, kv[e]) != NK_AssocNode || key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
-          char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", nt_str(nt, key, "value"));
-          int m = comp_ivar_index(sci, ivb);
-          if (m < 0 || m >= sci->nmembers || sci->ivar_nullable_int[m]) continue;
-          if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
-          if (!nullable_int_value(c, v)) continue;
-          { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
-        }
+        changed |= mark_with_kw_nullable(c, ws->class_id, kv, kn);
       }
     }
     /* `s[:x] = v` / `s["x"] = v` / `s[0] = v` on a Struct (or a boxed value
@@ -42247,7 +42246,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       TyKind wrt = infer_type(c, wrecv);
       if (wrt == TY_POLY) {
         int pn = 0; const int *pe = nt_arr(nt, wav[0], "elements", &pn);
-        changed |= mark_poly_with_nullable(c, pe, pn);
+        changed |= mark_with_kw_nullable(c, -1, pe, pn);
         continue;
       }
       if (!ty_is_object(wrt)) continue;
@@ -42275,29 +42274,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       }
       /* a Hash literal under `**` gives its members as literal keywords do */
       int kn = 0; const int *ke = nt_arr(nt, wav[0], "elements", &kn);
-      int nke = 0; int *ake = (int *)malloc((size_t)(kn > 0 ? kn : 1) * sizeof(int));
-      if (!ake) { perror("malloc"); exit(1); }
-      for (int e = 0; e < kn; e++) {
-        int hv = nt_kind(nt, ke[e]) == NK_AssocSplatNode ? nt_ref(nt, ke[e], "value") : -1;
-        if (hv < 0 || nt_kind(nt, hv) != NK_HashNode) { ake[nke++] = ke[e]; continue; }
-        int hn = 0; const int *he = nt_arr(nt, hv, "elements", &hn);
-        int *g = (int *)realloc(ake, (size_t)(nke + hn + kn) * sizeof(int));
-        if (!g) { perror("realloc"); exit(1); }
-        ake = g;
-        for (int k = 0; k < hn; k++) ake[nke++] = he[k];
-      }
-      for (int e = 0; e < nke; e++) {
-        if (nt_kind(nt, ake[e]) != NK_AssocNode) continue;
-        int key = nt_ref(nt, ake[e], "key"), v = nt_ref(nt, ake[e], "value");
-        const char *mn = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
-        if (!mn || v < 0 || (nt_kind(nt, v) != NK_NilNode && !nullable_int_value(c, v))) continue;
-        char ivb[300]; snprintf(ivb, sizeof ivb, "@%s", mn);
-        int m = comp_ivar_index(sci, ivb);
-        if (m < 0 || m >= sci->nmembers || sci->ivar_nullable_int[m]) continue;
-        if (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT) continue;
-        { sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); } changed = 1;
-      }
-      free(ake);
+      changed |= mark_with_kw_nullable(c, sci->idx, ke, kn);
     }
     /* `o.instance_variable_set(:@x, v)` with a nil, or a nullable number,
        stores it in the ivar as a plain write would. */

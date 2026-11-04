@@ -11294,6 +11294,36 @@ static void emit_struct_member_value(Compiler *c, TyKind mt, TyKind vt, const ch
   free(u.p);
 }
 
+/* Data#with keywords that run in source order after the receiver, each
+   into a boxed temp: a `**hash` among them, or a key a later element names
+   again, whose overridden value still runs */
+static int data_with_kw_in_order(const NodeTable *nt, const int *els, int en) {
+  for (int e = 0; e < en; e++) {
+    if (nt_kind(nt, els[e]) == NK_AssocSplatNode) return 1;
+    int k1 = nt_ref(nt, els[e], "key");
+    if (k1 < 0 || nt_kind(nt, k1) != NK_SymbolNode) continue;
+    for (int e2 = e + 1; e2 < en; e2++) {
+      int k2 = nt_ref(nt, els[e2], "key");
+      if (k2 >= 0 && nt_kind(nt, k2) == NK_SymbolNode && sp_streq(nt_str(nt, k1, "value"), nt_str(nt, k2, "value")))
+        return 1;
+    }
+  }
+  return 0;
+}
+
+/* One keyword element of Data#with, value `v`, run in its place with its
+   own hoists (in the caller's prelude they ran before the receiver) into
+   a rooted boxed temp; answers the temp's number */
+static int data_with_el_temp(Compiler *c, int v, Buf *b) {
+  int t = ++g_tmp;
+  Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
+  g_pre = &pre; emit_boxed(c, v, &vb); g_pre = saved_pre;
+  if (pre.p) buf_printf(b, " %s", pre.p);
+  buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", t, vb.p ? vb.p : "sp_box_nil()", t);
+  free(pre.p); free(vb.p);
+  return t;
+}
+
 /* Member i of the receiver held in _t<t>, in the slot of parameter j of
    initialize m, its nil included */
 static void emit_with_member_arg(Compiler *c, ClassInfo *sc, int i, int t, Scope *m, int j, Buf *b) {
@@ -11386,22 +11416,13 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
     buf_printf(b, "); (sp_%s *)NULL; })", sc->c_name);
     return;
   }
-  /* A `**hash`, or a keyword a later element names again, makes every
-     element run in source order after the receiver, each with its own
-     hoists (in the caller's prelude they ran before the receiver), into a
-     boxed temp: a later element neither runs first nor changes an earlier
-     value, and an overridden value still runs. These temps, and the
-     receiver's, hold the values alone while the arguments run, a keyword
-     default among them. */
-  int all = ds > 0;
-  for (int e = 0; e < en && !all; e++) {
-    int k1 = nt_ref(nt, els[e], "key");
-    if (k1 < 0 || nt_kind(nt, k1) != NK_SymbolNode) continue;
-    for (int e2 = e + 1; e2 < en && !all; e2++) {
-      int k2 = nt_ref(nt, els[e2], "key");
-      all = k2 >= 0 && nt_kind(nt, k2) == NK_SymbolNode && sp_streq(nt_str(nt, k1, "value"), nt_str(nt, k2, "value"));
-    }
-  }
+  /* When the keywords run in order (data_with_kw_in_order), every element
+     runs in source order after the receiver into a rooted boxed temp
+     (data_with_el_temp): a later element neither runs first nor changes an
+     earlier value, and an overridden value still runs. These temps, and
+     the receiver's, hold the values alone while the arguments run, a
+     keyword default among them. */
+  int all = data_with_kw_in_order(nt, els, en);
   int t = ++g_tmp;
   Buf rb = expr_buf(c, recv);
   buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
@@ -11410,12 +11431,7 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
   for (int e = 0; e < en && all; e++) {
     int v = nt_ref(nt, els[e], "value");
     if (v < 0) unsupported_feature(c, id, "Data#with with an anonymous `**`");
-    th[e] = ++g_tmp;
-    Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
-    g_pre = &pre; emit_boxed(c, v, &vb); g_pre = saved_pre;
-    if (pre.p) buf_printf(b, " %s", pre.p);
-    buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", th[e], vb.p ? vb.p : "sp_box_nil()", th[e]);
-    free(pre.p); free(vb.p);
+    th[e] = data_with_el_temp(c, v, b);
   }
   int tn = ++g_tmp;
   buf_printf(b, " sp_%s *_t%d = sp_%s_new(", sc->c_name, tn, sc->c_name);
@@ -11509,14 +11525,14 @@ static void data_with_pick(Compiler *c, ClassInfo *sc, int i, int t, const int *
   while (opened--) buf_puts(b, "; })");
 }
 
-/* Data#with with a `**hash` among its keywords, the receiver held in
-   _t<t>: every element runs in source order, each with its own hoists
-   (not in the caller's prelude, where they ran before the receiver), into
-   a rooted boxed temp, so a later `**hash` neither runs first nor changes
-   an earlier value. A member then takes the last element that names it,
-   as in a Hash literal. A member with a nil bit takes its value and its
-   nil through an oint temp, since the constructor clears every nil byte. */
-static void emit_data_with_splats(Compiler *c, int id, ClassInfo *sc, int t, int kwh, Buf *b) {
+/* Data#with whose keywords run in order (data_with_kw_in_order), the
+   receiver held in _t<t>: every element runs in source order into a
+   rooted boxed temp (data_with_el_temp), so a later `**hash` neither runs
+   first nor changes an earlier value, and an overridden value still runs.
+   A member then takes the last element that names it, as in a Hash
+   literal. A member with a nil bit takes its value and its nil through an
+   oint temp, since the constructor clears every nil byte. */
+static void emit_data_with_in_order(Compiler *c, int id, ClassInfo *sc, int t, int kwh, Buf *b) {
   const NodeTable *nt = c->nt;
   int scid = (int)(sc - c->classes);
   int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
@@ -11526,12 +11542,7 @@ static void emit_data_with_splats(Compiler *c, int id, ClassInfo *sc, int t, int
   for (int e = 0; e < en; e++) {
     int v = nt_ref(nt, els[e], "value");
     if (v < 0) { unsupported_feature(c, id, "Data#with with an anonymous `**`"); continue; }
-    et[e] = ++g_tmp;
-    Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
-    g_pre = &pre; emit_boxed(c, v, &vb); g_pre = saved_pre;
-    if (pre.p) buf_printf(b, " %s", pre.p);
-    buf_printf(b, " sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);", et[e], vb.p ? vb.p : "sp_box_nil()", et[e]);
-    free(pre.p); free(vb.p);
+    et[e] = data_with_el_temp(c, v, b);
   }
   for (int i = 0; i < sc->nmembers; i++) {
     if (!ivar_has_nilbit(c, scid, i)) continue;
@@ -11951,13 +11962,6 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     /* no arguments: CRuby answers the receiver itself, not a copy */
     if (wargc == 0) { emit_expr(c, recv, b); { *out = 1; return 1; } }
     int wkwh = nt_argv_kwh(nt, wargv, wargc);
-    /* a `**hash` double-splat in the keyword hash carries member overrides
-       only known at run time; look each member up in each (#2972) */
-    int wds = 0;
-    if (wkwh >= 0) {
-      int en = 0; const int *els = nt_arr(nt, wkwh, "elements", &en);
-      for (int e = 0; e < en; e++) wds += nt_kind(nt, els[e]) == NK_AssocSplatNode;
-    }
     /* Data#with takes keyword arguments only; a positional argument (the only
        arg, or one alongside the keyword hash) is an ArgumentError in CRuby. */
     if (wkwh < 0 || wargc > 1) {
@@ -12013,7 +12017,12 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     int scid = (int)(sc - c->classes);
     Buf rb = expr_buf(c, recv);
     buf_printf(b, "({ sp_%s *_t%d = %s; SP_GC_ROOT(_t%d);", sc->c_name, t, rb.p ? rb.p : "", t); free(rb.p);
-    if (wds) { emit_data_with_splats(c, id, sc, t, wkwh, b); { *out = 1; return 1; } }
+    /* a `**hash` carries member overrides only known at run time, so each
+       member looks itself up in each (#2972) */
+    if (wkwh >= 0) {
+      int en = 0; const int *els = nt_arr(nt, wkwh, "elements", &en);
+      if (data_with_kw_in_order(nt, els, en)) { emit_data_with_in_order(c, id, sc, t, wkwh, b); { *out = 1; return 1; } }
+    }
     /* A member that can hold nil keeps it in the copy (#8508): a given
        value's nil, read once into a temp ahead of the constructor, or the
        receiver's for a member the call leaves as it was; the constructor
@@ -19785,16 +19794,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         if (splat && val < 0) unsupported_feature(c, id, "Data#with with an anonymous `**`");
         if (!splat && !kn) unsupported_feature(c, id, "Data#with with a computed key on a boxed receiver");
         if (val < 0) continue;
-        Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
-        g_pre = &pre; emit_boxed(c, val, &vb); g_pre = saved_pre;
-        if (pre.p) buf_printf(b, " %s", pre.p);
-        if (splat) buf_printf(b, " sp_poly_with_kw_merge(_t%d, %s);", th, vb.p ? vb.p : "sp_box_nil()");
+        int tv = data_with_el_temp(c, val, b);
+        if (splat) buf_printf(b, " sp_poly_with_kw_merge(_t%d, _t%d);", th, tv);
         else {
           buf_printf(b, " sp_SymPolyHash_set(_t%d, sp_sym_intern(", th);
           emit_str_literal(b, kn);
-          buf_printf(b, "), %s);", vb.p ? vb.p : "sp_box_nil()");
+          buf_printf(b, "), _t%d);", tv);
         }
-        free(pre.p); free(vb.p);
       }
       buf_printf(b, " sp_poly_with_m(_t%d, sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH)); })", tr, th);
       return 1;

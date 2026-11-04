@@ -13530,6 +13530,15 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
     int idx = i;
     buf_printf(b, "    case %d: {\n", idx);
     buf_printf(b, "      sp_%s *o = (sp_%s *)v.v.p; (void)o;\n", ci->c_name, ci->c_name);
+    /* a key no member takes is CRuby's ArgumentError, as on a typed
+       receiver: a `**hash` can carry one */
+    buf_puts(b, "      if (sp_poly_length(ov) > 0) (void)sp_kw_splat_check(ov, (const char *const[]){");
+    for (int j = 0; j < ci->nmembers; j++) buf_printf(b, "%s\"%s\"", j ? ", " : "", ci->ivars[j] + 1);
+    if (ci->nmembers == 0) buf_puts(b, "\"\"");
+    buf_printf(b, "}, %d, (const unsigned char[]){", ci->nmembers);
+    for (int j = 0; j < ci->nmembers; j++) buf_puts(b, j ? ", 1" : "1");
+    if (ci->nmembers == 0) buf_puts(b, "0");
+    buf_puts(b, "}, 1);\n");
     /* A member with a nil bit takes its value and its nil, from `ov` or
        from the receiver, through an oint temp: the constructor clears every
        nil byte, so they are set after it */

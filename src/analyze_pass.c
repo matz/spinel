@@ -10383,18 +10383,6 @@ static TyKind struct_member_arg_type(Compiler *c, int v) {
   return at;
 }
 
-/* Struct construction: positional (or keyword) args set the member ivars
-   in order. Shared by every spelling that constructs the struct: the
-   constant, a qualified path, a local holding an anonymous struct, and a
-   bare `new` / `self.new` in one of the struct's own class methods, which
-   typed nothing and left every member boxed (#4842). */
-/* `d.with(k: v)` on a Struct or Data: each value a literal key gives a
-   member is one that member can hold, as a construction's is; a member the
-   call does not name keeps what it had. Unread, `Row.new(1).with(a: nil)`
-   left the Integer member unable to hold nil and stored 0 (#8508).
-   A `**hash` among the keywords: a Hash literal's Symbol keys each name
-   the member they give, as a literal keyword does; any other hash can
-   carry any member, so each member can hold the hash's value type. */
 /* a Hash literal whose every element is a Symbol-keyed pair */
 static int hash_lit_sym_keyed(const NodeTable *nt, int h) {
   int n = 0; const int *el = nt_arr(nt, h, "elements", &n);
@@ -10405,14 +10393,22 @@ static int hash_lit_sym_keyed(const NodeTable *nt, int h) {
   }
   return 1;
 }
-static int struct_with_types_members(Compiler *c, int id, int ci) {
+
+/* Struct construction: positional (or keyword) args set the member ivars
+   in order. Shared by every spelling that constructs the struct: the
+   constant, a qualified path, a local holding an anonymous struct, and a
+   bare `new` / `self.new` in one of the struct's own class methods, which
+   typed nothing and left every member boxed (#4842). */
+/* `d.with(k: v)` on a Struct or Data, keyword elements `ke`: each value a
+   literal key gives a member is one that member can hold, as a
+   construction's is; a member the call does not name keeps what it had.
+   Unread, `Row.new(1).with(a: nil)` left the Integer member unable to
+   hold nil and stored 0 (#8508).
+   A `**hash` among the keywords: a Hash literal's Symbol keys each name
+   the member they give, as a literal keyword does; any other hash can
+   carry any member, so each member can hold the hash's value type. */
+static int with_kw_types_members(Compiler *c, ClassInfo *cls, const int *ke, int kn) {
   const NodeTable *nt = c->nt;
-  ClassInfo *cls = &c->classes[ci];
-  int args = nt_ref(nt, id, "arguments");
-  int an = 0;
-  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an != 1 || nt_kind(nt, argv[0]) != NK_KeywordHashNode) return 0;
-  int kn = 0; const int *ke = nt_arr(nt, argv[0], "elements", &kn);
   int changed = 0;
   for (int e = 0; e < kn; e++) {
     if (nt_kind(nt, ke[e]) == NK_AssocSplatNode) {
@@ -10454,6 +10450,15 @@ static int struct_with_types_members(Compiler *c, int id, int ci) {
     }
   }
   return changed;
+}
+static int struct_with_types_members(Compiler *c, int id, int ci) {
+  const NodeTable *nt = c->nt;
+  int args = nt_ref(nt, id, "arguments");
+  int an = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (an != 1 || nt_kind(nt, argv[0]) != NK_KeywordHashNode) return 0;
+  int kn = 0; const int *ke = nt_arr(nt, argv[0], "elements", &kn);
+  return with_kw_types_members(c, &c->classes[ci], ke, kn);
 }
 
 /* ... and on a Data with an initialize of its own (imi): CRuby builds the
@@ -10538,20 +10543,7 @@ static int struct_with_super_types_members(Compiler *c) {
     const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
     if (san != 1 || nt_kind(nt, sav[0]) != NK_KeywordHashNode) continue;
     int en = 0; const int *els = nt_arr(nt, sav[0], "elements", &en);
-    for (int e = 0; e < en; e++) {
-      int v = nt_ref(nt, els[e], "value");
-      if (v < 0) continue;
-      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) {
-        TyKind ht = infer_type(c, v);
-        TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
-        for (int a = 0; a < cls->nmembers; a++) with_super_widen(cls, a, vt, &changed);
-        continue;
-      }
-      int key = nt_ref(nt, els[e], "key");
-      if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) continue;
-      char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", nt_str(nt, key, "value"));
-      with_super_widen(cls, comp_member_index(cls, ivn), struct_member_arg_type(c, v), &changed);
-    }
+    changed |= with_kw_types_members(c, cls, els, en);
   }
   }
   return changed;
@@ -11762,6 +11754,21 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
                            : struct_with_types_members(c, id, wci);
       continue;
+    }
+    /* `x.with(...)` on a boxed receiver (sp_obj_with) copies a Data with
+       no initialize or with of its own: each keyword types the members of
+       each such Data the receiver can hold (every one when that set is
+       unknown), as on a typed receiver. A user `with` still binds below. */
+    if (name && sp_streq(name, "with") && rt == TY_POLY) {
+      int nk = 0;
+      const int *ks = poly_recv_classes(c, id, &nk);
+      for (int q = 0; q < (ks ? nk : c->nclasses); q++) {
+        int k = ks ? ks[q] : q;
+        if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
+            comp_method_in_chain(c, k, "initialize", NULL) >= 0 ||
+            comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
+        changed |= struct_with_types_members(c, id, k);
+      }
     }
     /* A receiver that settled on NO type is emitted BOXED, exactly as a poly
        one is, so the call is a runtime dispatch that can reach any user method

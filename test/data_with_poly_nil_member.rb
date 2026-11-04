@@ -63,3 +63,23 @@ begin
 rescue TypeError => e
   p e.message
 end
+
+# a key no member takes, which a `**hash` can carry
+begin
+  x.with(**pass_h({b: 1}))
+rescue ArgumentError => e
+  p e.message
+end
+
+# A value of another kind than the member: the boxed copy keeps it, from
+# a literal keyword and from a `**hash` (classes of their own, so the
+# members above stay Integer and Float)
+Ht = Data.define(:a, :f)
+Hq = Data.define(:a, :f)
+def make_h(flag)
+  flag ? Ht.new(a: 1, f: 1.5) : Hq.new(a: 2, f: 2.5)
+end
+y = make_h(true)
+p y.with(a: "lit")
+p y.with(f: 4)
+p y.with(**pass_h({a: "text"}))

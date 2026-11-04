@@ -104,3 +104,9 @@ class FC
   def with(f: 3.0) = super(f: f > 2 ? nil : f)
 end
 p FC.new(f: 1.0).with, FC.new(f: 1.0).with(f: 1.5)
+# a nil that a Hash literal under `**` gives
+NL = Data.define(:n, :m)
+class NL
+  def with(**kw) = super(**kw, **{m: nil})
+end
+p NL.new(n: 1, m: 2).with(n: 3), NL.new(n: 1, m: 2).with

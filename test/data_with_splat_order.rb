@@ -69,3 +69,8 @@ v = V.new(a: 0, b: 0)
 sh = {a: "x"}
 p v.with(b: 1, **sh)
 p v.with(**sh, **{})
+
+# With no `**hash` among them, a keyword a later one names again still runs.
+$log = []
+p d.with(a: side_v, b: 8, a: 3)
+p $log

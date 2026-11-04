@@ -22530,8 +22530,30 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   emit_poly_dispatch_key(c, tv, 1, 1, poly_exc_cand(c, vnm), b);
   buf_printf(b, "; (void)_t%d; if (%s(0%s)", tk, positive ? "" : "!", own.p ? own.p : "");
   free(own.p);
-  /* a class value answers its own class method (`def self.top`) */
-  if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
+  /* a class value answers its own class method (`def self.top`), or a
+     module's method its class extends: only those classes' values pass (a
+     module's instance method no class extends answers no class value). A
+     reopened Class or Module answers every class value. */
+  /* Object's own class method is in every class's singleton chain, so
+     every class value answers it */
+  int obj_cmeth = call_target(c, id, oci, vnm, CT_CMETHOD, NULL) >= 0;
+  if (obj_cmeth || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
+    Buf cv; memset(&cv, 0, sizeof cv);
+    /* (a module Object extends answers every class value, as does a
+       reopened Class or Module, which the per-class rule counts) */
+    int every = obj_cmeth;
+    for (int m = 0; m < c->nclasses && !every; m++)
+      every = m != oci && comp_class_is_module(c, &c->classes[m]) && call_target(c, id, m, vnm, CT_OWN, NULL) >= 0 &&
+              comp_class_singleton_has_module(c, oci, m);
+    /* the rule the typed receiver's refusal asks (emit_object_reopen_vis_refusal) */
+    for (int k = 0; k < c->nclasses && !every; k++)
+      if (k != oci && (call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0 ||
+                       object_reopen_class_value_owns(c, id, oci, vnm, 0, k)))
+        buf_printf(&cv, " || _t%d.cls_id == %d", tv, k);
+    if (every) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
+    else buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id >= %d%s))", tv, tv, tv, c->nclasses, cv.p ? cv.p : "");
+    free(cv.p);
+  }
   /* `x&.public_send(:top)` never calls on nil */
   if (nt_safe_nav(c->nt, id)) buf_printf(b, " && _t%d.tag != SP_TAG_NIL", tv);
   buf_puts(b, ") { ");

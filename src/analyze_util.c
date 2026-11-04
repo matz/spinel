@@ -238,6 +238,100 @@ int const_path_misses_member(Compiler *c, int id) {
   const_path_scope(c, id, &missing);
   return missing;
 }
+/* Is NAME sure to be no constant of program class or module k's own table,
+   whatever runs: `private_constant :NAME` there is CRuby's NameError
+   ("constant K::NAME not defined"), which looks in k's own table only, not
+   its ancestors'. Sure only when nothing in the program can write the
+   name: no class or module nested in k has it, no constant write of the
+   name anywhere (in any scope, also one the qualifying passes renamed to
+   `Mod__NAME`), no path written through a dynamic parent, and no
+   const_set, autoload or eval that could place it. */
+int class_lacks_own_const(Compiler *c, int k, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (!nm || k < 0 || k >= c->nclasses || !c->classes[k].name || c->classes[k].is_builtin_const ||
+      c->classes[k].is_native_class) return 0;
+  size_t nl = strlen(nm);
+  for (int j = 0; j < c->nclasses; j++) {
+    const char *cn = c->classes[j].name;
+    size_t cl = cn ? strlen(cn) : 0;
+    if (cn && (sp_streq(class_leaf_name(cn), nm) || sp_streq(cn, nm))) return 0;
+    if (cl > nl + 2 && sp_streq(cn + cl - nl, nm) && !strncmp(cn + cl - nl - 2, "__", 2)) return 0;
+    const char *rn = c->classes[j].ruby_name_cache;
+    size_t rl = rn ? strlen(rn) : 0;
+    if (rl > nl + 2 && sp_streq(rn + rl - nl, nm) && !strncmp(rn + rl - nl - 2, "::", 2)) return 0;
+  }
+  static const NodeKind writes[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
+                                     NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
+  for (int i = 0; i < 5; i++)
+    NT_FOREACH_KIND(nt, writes[i], w) {
+      const char *wn = nt_str(nt, w, "name"), *on = nt_str(nt, w, "qc_orig_name");
+      size_t wl = wn ? strlen(wn) : 0;
+      if ((wn && sp_streq(wn, nm)) || (on && sp_streq(on, nm))) return 0;
+      if (wl > nl + 2 && sp_streq(wn + wl - nl, nm) && !strncmp(wn + wl - nl - 2, "__", 2)) return 0;
+    }
+  if (program_writes_const_in(c, c->classes[k].name, nm)) return 0;
+  const char *kl = class_leaf_name(c->classes[k].name);
+  if (kl != c->classes[k].name && program_writes_const_in(c, kl, nm)) return 0;
+  if (program_places_const_dynamically(c, nm)) return 0;
+  /* an autoload registers the name (the parser turns the call into a
+     require, so no call node is left), and an ffi_const defines it */
+  for (int i = 0; i < nt->nautoloads; i++) if (sp_streq(nt->autoloads[i].name, nm)) return 0;
+  for (int i = 0; i < c->n_ffi_consts; i++) if (sp_streq(c->ffi_consts[i].name, nm)) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    /* (an autoload the parser could not turn into a require stays a call) */
+    if (cn && (sp_streq(cn, "const_set") || sp_streq(cn, "eval") || sp_streq(cn, "autoload") ||
+               sp_streq(cn, "class_eval") || sp_streq(cn, "module_eval") || sp_streq(cn, "instance_eval") ||
+               sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")))
+      return 0;
+  }
+  return 1;
+}
+/* Does the subtree at `root` hold node `id`? */
+static int subtree_holds(const NodeTable *nt, int root, int id) {
+  if (root < 0) return 0;
+  if (root == id) return 1;
+  int nr = nt_num_refs(nt, root);
+  for (int i = 0; i < nr; i++) if (subtree_holds(nt, nt_ref_at(nt, root, i), id)) return 1;
+  int na = nt_num_arrs(nt, root);
+  for (int i = 0; i < na; i++) {
+    int m = 0;
+    const int *ids = nt_arr_at(nt, root, i, &m);
+    for (int j = 0; j < m; j++) if (subtree_holds(nt, ids[j], id)) return 1;
+  }
+  return 0;
+}
+/* Is call `call`, `private_constant` (or public_constant, deprecate_constant)
+   in a body of class k, sure to be Module's builtin, run on k itself? Not
+   when the program defines a method of that name anywhere (an extended
+   module, a reopened Module, a singleton def) or a method_missing, nor in
+   a `class << self` body (its receiver is the singleton class), nor for an
+   anonymous class, nor when the program freezes a class or module (a
+   frozen one raises FrozenError first). */
+int const_visibility_call_is_builtin(Compiler *c, int call, int k) {
+  const NodeTable *nt = c->nt;
+  const char *dn = nt_str(nt, call, "name");
+  if (!dn || k < 0 || k >= c->nclasses || comp_class_anonymous(c, k)) return 0;
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].name && (sp_streq(c->scopes[s].name, dn) || sp_streq(c->scopes[s].name, "method_missing"))) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, other) {
+    const char *on = nt_str(nt, other, "name");
+    if (!on) continue;
+    if (sp_streq(on, "define_method") || sp_streq(on, "alias_method") || sp_streq(on, "define_singleton_method"))
+      return 0;
+    if (sp_streq(on, "freeze")) {
+      int r = nt_ref(nt, other, "receiver");
+      NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+      if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
+    }
+  }
+  int naliases = 0;
+  nt_nodes_of_kind(nt, NK_AliasMethodNode, &naliases);
+  if (naliases > 0) return 0;
+  NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc)
+    if (subtree_holds(nt, sc, call)) return 0;
+  return 1;
+}
 /* The program class a constant or constant path names by its leaf, as
    comp_class_index answers for the name; -1 for a path to a top-level
    class whose parent, a class or module of the program, holds no member of

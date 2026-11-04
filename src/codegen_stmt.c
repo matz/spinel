@@ -16105,6 +16105,36 @@ static void emit_mixin_arg_reads(Compiler *c, int id, Buf *b, int indent) {
     if (emit_const_read_stmt(c, av[i], b, indent)) buf_puts(b, "\n");
 }
 
+/* `private_constant :NAME` (or public_constant, deprecate_constant) in the
+   body of class ci, naming a constant the class can never hold
+   (class_lacks_own_const): CRuby's NameError, raised at the first such
+   name. Any other such declaration emits nothing: a constant's visibility
+   is not enforced. */
+static void emit_const_visibility_missing(Compiler *c, int id, int ci, Buf *b, int indent) {
+  const char *dn = nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0 ? nt_str(c->nt, id, "name") : NULL;
+  if (ci < 0 || !dn || !(sp_streq(dn, "private_constant") || sp_streq(dn, "public_constant") ||
+                         sp_streq(dn, "deprecate_constant"))) return;
+  int argc = 0;
+  const int *av = call_args(c->nt, id, &argc);
+  for (int i = 0; av && i < argc; i++) {
+    NodeKind ak = nt_kind(c->nt, av[i]);
+    const char *an = ak == NK_SymbolNode ? nt_str(c->nt, av[i], "value") :
+                     ak == NK_StringNode ? nt_str(c->nt, av[i], "content") : NULL;
+    /* a computed name (or a non-name, CRuby's TypeError) is decided at
+       run time: stop at it */
+    if (!an) return;
+    if (!class_lacks_own_const(c, ci, an)) continue;
+    if (!const_visibility_call_is_builtin(c, id, ci)) return;
+    char msg[512];
+    snprintf(msg, sizeof msg, "constant %s::%s not defined", class_ruby_name(c, ci), an);
+    emit_indent(b, indent);
+    buf_puts(b, "sp_raise_cls(\"NameError\", \"");
+    emit_c_escaped_n(b, msg, strlen(msg));
+    buf_puts(b, "\");\n");
+    return;
+  }
+}
+
 void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (g_repr_check) repr_check_ask(c, id);
   emit_line_directive(c, id, b);
@@ -16118,8 +16148,10 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (g_class_body_id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0) {
     const char *dn = nt_str(c->nt, id, "name");
     if (dn && (sp_streq(dn, "private_constant") || sp_streq(dn, "public_constant") ||
-               sp_streq(dn, "deprecate_constant")))
+               sp_streq(dn, "deprecate_constant"))) {
+      emit_const_visibility_missing(c, id, g_class_body_id, b, indent);
       return;
+    }
   }
   /* saved and restored like the other re-entry markers: a block body inlined
      at two sites shares its node ids, so a setter that is a statement at one
@@ -17666,7 +17698,11 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
                    cn, ci >= 0 && comp_class_is_module(c, &c->classes[ci]) ? "module" : "class", rn ? rn : "Object");
         continue;
       }
-      if (!executable) { emit_mixin_arg_reads(c, stmts[k], b, indent); continue; }
+      if (!executable) {
+        emit_mixin_arg_reads(c, stmts[k], b, indent);
+        emit_const_visibility_missing(c, stmts[k], ci, b, indent);
+        continue;
+      }
     }
     emit_stmt_or_defer(c, stmts[k], b, indent);
   }

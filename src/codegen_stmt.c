@@ -20255,6 +20255,11 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     int v = nt_ref(nt, id, "value");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, "class variable op-write (no class scope)"); return 1; }
+    /* (the read an op-write starts with, of a variable no write declares) */
+    if (h.idx < 0 && !c->cvar_set_unplaced) {
+      emit_indent(b, indent); buf_puts(b, "(void)"); emit_cvar_undeclared_raise(c, id, &h, b); buf_puts(b, ";\n");
+      return 1;
+    }
     int sc = h.cid, idx = h.idx;
     TyKind ct = idx >= 0 ? c->classes[sc].cvar_types[idx] : TY_INT;
     Buf ref; memset(&ref, 0, sizeof ref);
@@ -20282,6 +20287,10 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     int v = nt_ref(nt, id, "value");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, is_or ? "class variable or-write (no class scope)" : "class variable and-write (no class scope)"); return 1; }
+    if (!is_or && h.idx < 0 && !c->cvar_set_unplaced) {
+      emit_indent(b, indent); buf_puts(b, "(void)"); emit_cvar_undeclared_raise(c, id, &h, b); buf_puts(b, ";\n");
+      return 1;
+    }
     int sc = h.cid;
     Buf ref; memset(&ref, 0, sizeof ref);
     holder_slot_buf(c, &h, &ref);

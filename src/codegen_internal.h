@@ -1898,6 +1898,7 @@ int cvar_defined_probed(Compiler *c, const char *nm);
 void emit_cvar_set_flag(Compiler *c, int cid, const char *nm, int as_expr, Buf *b);
 void emit_cvar_set_flag_after(Compiler *c, int cid, const char *nm, Buf *b);
 void emit_cvar_name_error(Compiler *c, int cid, const char *nm, Buf *b);
+void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b);   /* NameError for a read of an undeclared class variable, valued as the read's dead tail */
 extern int g_ivar_nil_guarded_id;
 int ivar_nil_recv_guard(Compiler *c, int id, int *recv_out);
 /* the same for any receiver the call guards: an ivar as above, or a param or

@@ -1,0 +1,14 @@
+#<data Pt x=5, y=7>
+[:rcv, :first, :mark7]
+#<data Pt x=3, y=4>
+[:mark9]
+#<data Pt x=2, y=2>
+[:mark1, :mark2]
+#<data Pt x=1, y=8>
+11
+#<data Pt x=6, y=2>
+#<data Pt x=4, y=2>
+#<data Tag name="a", n=nil>
+#<data Tag name="b", n=nil>
+#<data Tag name="c", n=nil>
+#<data Tag name="d", n=3>

@@ -147,6 +147,9 @@ int ver_entries_demand(Compiler *c);
    renders the class by the builtin's own table, not by a class method the
    program defines: that method is the one the entry has not reached */
 int cplan_pinned_builtin(const Compiler *c, int id);
+/* Is call id an entry's arm (or else arm) call, pinned to the method it
+   runs or to the builtin (ver_entry_targets lists the methods)? */
+int cplan_pinned(const Compiler *c, int id);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its
    last version (the method a Method object of it captured before) */

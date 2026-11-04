@@ -1003,8 +1003,9 @@ static int lr_form_answer(Compiler *c, int node, int cls, int sg);
 /* a: class, or -2 - ElabVar; b: singleton; nlink: the next method history
    of the same name (lr_vers_index); open: the history's end-of-load version
    may be a later one than the last the load phase surely applies
-   (elab_history_open) */
-typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next, nlink; unsigned char open; } LrHist;
+   (elab_history_open); late: lr_late_make's late bit of the history, 1
+   no, 2 yes, 3 not asked */
+typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next, nlink; unsigned char open, late; } LrHist;
 /* sup: the superclass the first header naming one names, as resolved
    there (has_sup); LR_UNKNOWN_CLASS when it is not a class the record knows */
 typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup; } LrClass;
@@ -2739,7 +2740,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no, 2 yes, 3 not asked (two histories) */
+typedef struct LrVers { const char *name; int first, nver, next, pend; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced; }
 
@@ -2758,7 +2759,7 @@ static void lr_vers_index(LoadRecord *r) {
     if (k < 0) {
       r->vers = lr_grow(r->vers, &r->cvers, r->nvers, sizeof *r->vers);
       k = r->nvers++;
-      r->vers[k] = (LrVers){ h->name, -1, 0, r->vers_head[b], 0 };
+      r->vers[k] = (LrVers){ h->name, -1, 0, r->vers_head[b], 0, 0 };
       r->vers_head[b] = k;
     }
     h->nlink = r->vers[k].first;
@@ -2788,48 +2789,72 @@ int elab_method_versions(Compiler *c, const char *name) {
   return x ? x->nver : 0;
 }
 
-/* The late bit of every name whose versions are one history's (LrVers.late),
-   once for all of them, as of the entries recorded: a call of the name
-   may run before the history's first version is made, its statement, or
-   the window of the bodies around it (elab_call_window), opening ahead
-   of that version's point in its region; any call, where a method body
-   makes that version (LrDef.body). The first version opens the
-   method; before it the name is absent. Whether a call meets that is
-   the typed receiver's fact (ct_version_at). A name of two histories is
-   not asked, nor one a builtin's method answers (Object's, or any builtin
-   class's): such a call may reach the builtin's, which no entry calls;
-   but a class's (or module's) own class-side history is, of a name the
-   class answers on itself as a reader, with no argument or block
-   (bop_class_answers), whose entry's else arm calls that builtin
-   (VK_BUILTIN). The bit is the name's, not one call's, so it asks the
-   name's shape; each entry asks again at its own arity and keeps the
-   table's answer where the builtin does not take it. Nor one a
-   reflection reader names (lr_refl_take): a call it guards
-   would take the entry where the reader answers the method is there, and
-   raise where the table's answer runs the def. */
+/* the first version of history h, NULL for none */
+static const LrDef *lr_first_version(const LrHist *h) {
+  for (int j = 0; j < h->n; j++) if (lr_is_version(&h->v[j])) return &h->v[j];
+  return NULL;
+}
+/* Is the late bit asked of history h of x's name, one of nh histories
+   that hold a version (lr_late_make)? */
+static int lr_late_asked(const LoadRecord *r, const LrVers *x, const LrHist *h, int nh) {
+  int cside = h->a >= 0 && h->b;
+  if (!lr_first_version(h) || r->refl_any || (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp)) ||
+      (nh > 1 && !cside)) return 0;
+  return (cside && bop_class_answers(x->name, 0, 0)) || !(builtin_object_method_known(x->name) || builtin_instance_name_known(x->name));
+}
+/* The late bit of every method history (LrHist.late), once for all of
+   them, as of the entries recorded: a call of the name may run before the
+   history's first version is made, its statement, or the window of the
+   bodies around it (elab_call_window), opening ahead of that version's
+   point in its region; any call, where a method body makes that version
+   (LrDef.body). The first version opens the method; before it the name
+   is absent on that class and side. Whether a call meets that is the
+   typed receiver's fact (ct_version_at), asked of the histories on its
+   chain (elab_versions_late). Not asked of a history of a name a
+   builtin's method answers (Object's, or any builtin class's): such a
+   call may reach the builtin's, which no entry calls; but a class's (or
+   module's) own class-side history is, of a name the class answers on
+   itself as a reader, with no argument or block (bop_class_answers),
+   whose entry's else arm calls that builtin (VK_BUILTIN). The ask is of
+   the name's shape, not one call's; each entry asks again at its own
+   arity and keeps the table's answer where the builtin does not take it.
+   Of a name of two or more histories, only the class-side ones are
+   asked: an instance's chain keeps the table's. Nor one a reflection
+   reader names (lr_refl_take): a call it guards would take the entry
+   where the reader answers the method is there, and raise where the
+   table's answer runs the def. LrVers.late is 2 where some history of the
+   name is late. */
 static void lr_late_make(Compiler *c) {
   LoadRecord *r = c->lrec;
   lr_vers_index(r);
   if (r->lated == r->nentries) return;
   r->lated = r->nentries;
-  for (int k = 0; k < r->nvers; k++) r->vers[k].late = 1;
+  for (int k = 0; k < r->nvers; k++) {
+    LrVers *x = &r->vers[k];
+    int nh = 0;
+    for (int h = x->first; h >= 0; h = r->hist[h].nlink) nh += lr_first_version(&r->hist[h]) != NULL;
+    x->pend = 0;
+    x->late = 3;
+    for (int h = x->first; h >= 0; h = r->hist[h].nlink) {
+      LrHist *y = &r->hist[h];
+      y->late = lr_late_asked(r, x, y, nh) ? 1 : 3;
+      if (y->late == 3) continue;
+      if (lr_first_version(y)->body) y->late = x->late = 2;   /* (a method body's: before its extent opens, lr_version_order) */
+      else { x->pend++; if (x->late == 3) x->late = 1; }
+    }
+  }
   NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
     LrVers *x = lr_vers(r, nt_str(c->nt, id, "name"));
-    const LrDef *v = NULL;
-    int nh = 0, own = 0;
     ElabWindow w;
-    if (!x || !x->nver || x->late != 1) continue;
-    for (int h = x->first; h >= 0 && nh < 2; h = r->hist[h].nlink)
-      for (int j = 0; j < r->hist[h].n; j++)
-        if (lr_is_version(&r->hist[h].v[j])) {
-          if (!nh++) { v = &r->hist[h].v[j]; own = r->hist[h].a >= 0 && r->hist[h].b && bop_class_answers(x->name, 0, 0); }
-          break;
-        }
-    if (nh != 1 || (!own && (builtin_object_method_known(x->name) || builtin_instance_name_known(x->name))) || r->refl_any ||
-        (r->nrefl && bsearch(&x->name, r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp))) { x->late = 3; continue; }
-    if (v && v->body) { x->late = 2; continue; }   /* (a method body's: before its extent opens, lr_version_order) */
-    LoadPoint q = v ? elab_point_of(c, v->node) : (LoadPoint){ -1, -1 };
-    if (q.region >= 0 && elab_call_window(c, id, &w) == ELAB_YES && w.from.region == q.region && w.from.seq < q.seq) x->late = 2;
+    int open = 0;
+    for (int h = x ? x->first : -1; h >= 0 && x->pend; h = r->hist[h].nlink) {
+      LrHist *y = &r->hist[h];
+      if (y->late != 1) continue;
+      LoadPoint q = elab_point_of(c, lr_first_version(y)->node);
+      if (q.region < 0) continue;
+      if (!open++ && elab_call_window(c, id, &w) != ELAB_YES) break;
+      if (w.from.region == q.region && w.from.seq < q.seq) { y->late = x->late = 2; x->pend--; }
+    }
   }
 }
 int elab_method_late(Compiler *c, const char *name) {
@@ -2838,6 +2863,17 @@ int elab_method_late(Compiler *c, const char *name) {
   if (!x || !x->nver) return 0;
   lr_late_make(c);
   return x->late == 2;
+}
+int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int n) {
+  LoadRecord *r = c->lrec;
+  const LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
+  int late = 1;
+  if (!x || !x->nver) return 1;
+  lr_late_make(c);
+  if (n < 0) return x->late == 2 ? 2 : 3;
+  for (int i = 0; i < n && late != 2; i++)
+    if (r->hist[vs[i].hist].late != 1) late = r->hist[vs[i].hist].late;
+  return late;
 }
 
 int elab_method_reflected(Compiler *c, const char *name) {

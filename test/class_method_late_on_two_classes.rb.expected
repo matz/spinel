@@ -1,0 +1,39 @@
+A
+B
+A+B
+A B
+aa
+B
+aa+B
+aa B
+aa
+B
+aa
+bb
+aa+bb
+aa bb
+P
+Q
+P
+qq
+pp
+qq
+R,S
+ri,ri
+ri,si
+M
+N
+mm
+N
+mm
+nn
+U
+V
+un
+vn
+[:none, :none]
+[:e, :none]
+[:e, :f]
+K
+"undefined method 'fnd' for module G"
+6

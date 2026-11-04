@@ -29,7 +29,7 @@ module BuiltinShareProbe
   # enter a native wait. They remain explicitly unprobed, even if arity-only
   # probing (which passes nil) can safely exercise them.
   UNSAFE = %w[exit exit! abort fork exec spawn system ` trap syscall sleep select
-    kill terminate stop run wakeup join raise fail wait wait2 waitpid waitpid2
+    kill terminate stop run wakeup join raise fail wait wait_priority wait2 waitpid waitpid2
     getpriority setpriority setproctitle handle_interrupt
     lock synchronize wait_signal signal broadcast resume transfer yield
     autoload require require_relative load eval instance_eval class_eval module_eval

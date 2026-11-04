@@ -423,7 +423,6 @@
   { TY_IO, "ungetbyte", BSH_PURE, 1 },
   { TY_IO, "ungetc", BSH_PURE, 1 },
   { TY_IO, "uniq", BSH_PURE, 1 },
-  { TY_IO, "wait_priority", BSH_PURE, 1 },
   { TY_IO, "wait_readable", BSH_PURE, 1 },
   { TY_IO, "wait_writable", BSH_PURE, 1 },
   { TY_IO, "write_nonblock", BSH_PURE, 1 },

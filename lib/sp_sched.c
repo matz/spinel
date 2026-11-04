@@ -3352,7 +3352,12 @@ static void sp_thread_await(sp_thread *t) {
 /* CRuby: #join and #value re-raise the thread's unhandled exception in the
    joining thread. */
 static void sp_thread_reraise_if_exc(sp_thread *t) {
-  if (t->has_exc) sp_fiber_reraise(t->exc_cls, t->exc_msg, t->exc_obj);
+  if (!t->has_exc) return;
+  /* An exit this thread forwarded to main and main has not met yet is this
+     same exception: raised from the slot it goes once, and a later wait does
+     not raise it again. A later join finds the slot empty and re-raises. */
+  sp_fiber_fire_inject_if_pending();
+  sp_fiber_reraise(t->exc_cls, t->exc_msg, t->exc_obj);
 }
 
 sp_thread *sp_Thread_join(sp_thread *t) {
@@ -5111,11 +5116,15 @@ static void sp_sched_timer_expire(const sp_tm_ent *timer, double now) {
 #endif
 
 /* Queue a raise on the root fiber main runs on and wake a main parked in a
-   wait; the scheduler lock is held. */
+   wait; the scheduler lock is held, so no other raise lands between the read
+   and the write. The slot holds one, and an exit keeps it: a raise taking its
+   place could be rescued, and main would go on as if nothing had ended it. */
 static void sp_thread_raise_main_locked(const char *cls, const char *msg, void *obj) {
   sp_thread *t = &g_main_thread;
   if (!g_main_root) return;
-  sp_fiber_set_raise_inject(g_main_root, cls, msg, obj);
+  const char *held = sp_fiber_inject_cls(g_main_root);
+  if (!held || !sp_exc_cls_matches(held, "SystemExit"))
+    sp_fiber_set_raise_inject(g_main_root, cls, msg, obj);
   if (SP_TH_STATE(t) == SP_TH_BLOCKED) {
     sp_sched_unpark(t);
     SP_TH_SET_STATE(t, SP_TH_RUNNABLE);

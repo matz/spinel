@@ -21514,6 +21514,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
  *   base.class_eval do BODY end   ->  BODY           (self is the class)
  *   base.m(args)                  ->  m(args)        (a class-body call)
  *   base.x = v                    ->  Base.x = v     (the class's own writer)
+ *   super                         ->  nil            (Module's own hook does nothing)
  *   any other read of base        ->  the class's constant
  *   self                          ->  M              (outside those blocks)
  *   m(args), m M's singleton      ->  M.__send__(:m, args)
@@ -21684,11 +21685,20 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
       if (!sp_streq(cm, "class") && !nt_int(nt, node, "attr_write", 0)) nt_node_set_ref(nt, node, "receiver", -1);
     }
   }
-  /* the hook's super reaches Module#included, #extended or #prepended */
+  /* the hook's super reaches Module#included, #extended or #prepended,
+     which do nothing: `defined?(super)` is its string, a call of it nil
+     (spliced as it was, it stood in a class body, where super has no method) */
   NodeKind dv = k == NK_DefinedNode ? nt_kind(nt, nt_ref(nt, node, "value")) : NK_NilNode;
   if (self_mod && (dv == NK_SuperNode || dv == NK_ForwardingSuperNode)) {
     nt_node_reset(nt, node, "StringNode");
     nt_node_set_str(nt, node, "content", "super");
+    return;
+  }
+  if (self_mod && (k == NK_SuperNode || k == NK_ForwardingSuperNode) && nt_ref(nt, node, "block") < 0) {
+    long long line = nt_int(nt, node, "node_line", 0), file = nt_int(nt, node, "node_file", 0);
+    nt_node_reset(nt, node, "NilNode");
+    if (line) nt_node_set_int(nt, node, "node_line", line);
+    if (file) nt_node_set_int(nt, node, "node_file", file);
     return;
   }
   if (k == NK_SelfNode && self_mod) {

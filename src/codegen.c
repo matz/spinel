@@ -15657,6 +15657,29 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
   free(ob.p);
   return 1;
 }
+/* A super's forwarded parameter pi, boxed: an Integer or Float parameter
+   that also takes nil boxes as its oint. */
+void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
+  LocalVar *lv = scope_local(s, s->pnames[pi]);
+  Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[pi]));
+  emit_zsuper_boxed(c, lv, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, b);
+  free(pn.p);
+}
+/* A super's block argument (`super(o, &side)`), run for its effect where
+   the method it reaches takes no block: "(void)(side); " into b. */
+void emit_super_blockarg_effect(Compiler *c, int id, Buf *b) {
+  int bk = nt_ref(c->nt, id, "block");
+  int e = bk >= 0 && nt_kind(c->nt, bk) == NK_BlockArgumentNode ? nt_ref(c->nt, bk, "expression") : -1;
+  /* a variable's read has no effect, and a block parameter of the
+     method is not in scope where the fold is emitted */
+  NodeKind ek = e >= 0 ? nt_kind(c->nt, e) : NK_NilNode;
+  if (e < 0 || ek == NK_LocalVariableReadNode || ek == NK_InstanceVariableReadNode ||
+      ek == NK_GlobalVariableReadNode || ek == NK_NilNode || ek == NK_SymbolNode)
+    return;
+  buf_puts(b, "(void)(");
+  emit_expr_for_effect(c, e, b);
+  buf_puts(b, "); ");
+}
 /* `super` in a ` override no ancestor defines is Kernel#`: it runs the
    command and answers its output (infer's twin, bt_super). A super of
    another shape (a splat, no argument, two) is refused. 0 where self has
@@ -15672,28 +15695,29 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   TyKind vt = TY_BOOL;
   if (kind == SUPER_OBJ_SAME) {
     Buf kb; memset(&kb, 0, sizeof kb);
-    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) {
-      LocalVar *lv = scope_local(s, s->pnames[0]);
-      Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
-      emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
-      free(pn.p);
-    }
+    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) emit_boxed_fwd_param(c, s, 0, &kb);
     else {
       int sa = nt_ref(c->nt, id, "arguments"), n = 0;
       const int *av = nt_arr(c->nt, sa, "arguments", &n);
       emit_boxed(c, av[0], &kb);
     }
     int tk = ++g_tmp;
-    buf_printf(&vb, "({ sp_RbVal _a%d = %s, _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); "
+    buf_printf(&vb, "({ sp_RbVal _a%d = %s; SP_GC_ROOT_RBVAL(_a%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
+    emit_super_blockarg_effect(c, id, &vb);
+    buf_printf(&vb, "sp_RbVal _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); "
                     "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })",
-               tk, kb.p ? kb.p : "sp_box_nil()", tk, g_self, tk, tk, tk, tk);
+               tk, g_self, tk, tk, tk, tk);
     free(kb.p);
   }
-  else if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0)");
-  else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s))", g_self);
   else {
-    vt = ty_object(s->class_id);
-    buf_printf(&vb, "((sp_%s *)%s)", c->classes[s->class_id].c_name, g_self);
+    buf_puts(&vb, "({ ");
+    emit_super_blockarg_effect(c, id, &vb);
+    if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
+    else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
+    else {
+      vt = ty_object(s->class_id);
+      buf_printf(&vb, "((sp_%s *)%s); })", c->classes[s->class_id].c_name, g_self);
+    }
   }
   if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, vt, vb.p, b);
   else buf_puts(b, vb.p);
@@ -15713,12 +15737,10 @@ static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   if (shape == 2) {
     /* the parameter, as the override took it: a String, or a box read as
        one (a non-String raises TypeError, as in CRuby) */
-    LocalVar *lv = scope_local(s, s->pnames[0]);
-    Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
     Buf kb; memset(&kb, 0, sizeof kb);
-    emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
+    emit_boxed_fwd_param(c, s, 0, &kb);
     buf_printf(&rb, "sp_poly_arg_str_chk(%s)", kb.p ? kb.p : "sp_box_nil()");
-    free(pn.p); free(kb.p);
+    free(kb.p);
   }
   else emit_str_expr(c, arg, &rb);
   buf_puts(&rb, ")");
@@ -16339,16 +16361,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
       if ((fwd && s->nparams == 1) || (!fwd && sargc == 1)) {
         int tk = ++g_tmp;
         Buf kb; memset(&kb, 0, sizeof kb);
-        if (fwd) {
-          LocalVar *lv = scope_local(s, s->pnames[0]);
-          Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
-          emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
-          free(pn.p);
-        }
+        if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
         else emit_boxed(c, sargv[0], &kb);
         Buf rb; memset(&rb, 0, sizeof rb);
-        buf_printf(&rb, "({ sp_RbVal _t%d = %s; if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ",
-                   tk, kb.p ? kb.p : "sp_box_nil()", tk);
+        buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
+        emit_super_blockarg_effect(c, id, &rb);
+        buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
         if (sp_streq(uname, "instance_of?"))
           buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s->cls_id); })", tk, g_self);
         else

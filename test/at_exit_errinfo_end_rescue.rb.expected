@@ -1,0 +1,3 @@
+[:last_registered, nil]
+[:middle, nil]
+[:first_registered, #<ArgumentError: boom>]

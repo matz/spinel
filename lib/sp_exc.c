@@ -1458,6 +1458,11 @@ SP_TLS void *sp_explicit_cause = NULL;
 SP_TLS int sp_explicit_cause_set = 0;
 SP_TLS int sp_reraise_continues = 0;
 SP_TLS void *sp_exc_handling[SP_EXC_STACK_MAX];
+/* Set while the bottom of the handler stack is the exception an at_exit hook
+   or END block started with, not one it handles. It belongs to the fiber
+   running the hook, so it travels with the handler stack: a thread or fiber
+   that runs during the hook starts without it. */
+SP_TLS int sp_at_exit_inherited = 0;
 SP_TLS int sp_rescue_sp = 0;
 SP_TLS int sp_rescue_mark[SP_EXC_STACK_MAX];
 SP_TLS int sp_poly_recur_mark[SP_EXC_STACK_MAX];
@@ -1543,7 +1548,7 @@ void sp_exc_ctx_save(void *p) {            /* current globals -> ctx */
     x->shand = (void **)realloc(x->shand, sizeof(void *) * rn);
     if (!x->shand) sp_oom_die(); }
   for (int i = 0; i < rn; i++) x->shand[i] = sp_exc_handling[i];
-  x->rn = rn; x->pcause = sp_pending_cause; x->icause = sp_inflight_cause;
+  x->rn = rn; x->hooked = sp_at_exit_inherited; x->pcause = sp_pending_cause; x->icause = sp_inflight_cause;
   /* The container-walk path travels with the green thread, like the handler
      stack above it: a fiber suspended in the middle of an #inspect resumes
      still knowing what it was inside, and the fiber that runs meanwhile starts
@@ -1582,7 +1587,7 @@ void sp_exc_ctx_load(void *p) {            /* ctx -> current globals */
   sp_proc_ret_head = x->prhead;
   sp_unwind_kind = x->uk; sp_unwind_target = x->ut; sp_unwind_exc_top = x->ue; sp_unwind_home = x->uh;
   for (int i = 0; i < x->rn; i++) sp_exc_handling[i] = x->shand[i];
-  sp_rescue_sp = x->rn; sp_pending_cause = x->pcause; sp_inflight_cause = x->icause;
+  sp_rescue_sp = x->rn; sp_at_exit_inherited = x->hooked; sp_pending_cause = x->pcause; sp_inflight_cause = x->icause;
   if (x->rrn > sp_poly_recur_cap) sp_poly_recur_grow(x->rrn);
   for (int i = 0; i < x->rrn; i++) sp_poly_recur_stack[i] = x->rrf[i];
   sp_poly_recur_top = x->rrn;

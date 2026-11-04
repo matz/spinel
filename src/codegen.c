@@ -22091,7 +22091,7 @@ static int emit_toplevel_fns(Compiler *c, Buf *body) {
       int stmts = nt_ref(c->nt, tbody[k], "statements");
       end_count++;
       { char et[32]; snprintf(et, sizeof et, "end_%d", end_count); unit_begin_in(body, et, "main"); }
-      buf_printf(body, "static void sp_end_fn_%d(void) { SP_GC_SAVE();\n", end_count);
+      buf_printf(body, "static void sp_end_fn_%d(void) { SP_GC_SAVE();\n  sp_at_exit_begin();\n", end_count);
       size_t end_frame_ins = body->len;
       EMIT_COLLECT_UNIT(emit_stmts(c, stmts, body, 1));
       buf_puts(body, "}\n");

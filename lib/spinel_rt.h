@@ -16486,15 +16486,15 @@ extern void *sp_at_exit_errinfo;        /* lib/sp_exc.c */
    bodies (the handler stays pushed across the recursive call it makes, unlike a
    begin frame which is popped first), so a fixed SP_EXC_STACK_MAX can be reached;
    fail loudly rather than write past sp_exc_handling.
-   An exception an at_exit hook handles takes the place of the one ending the
-   program: `$!` is nil once that rescue is done, until the next hook, as in
-   CRuby, whose rescue clears the errinfo a hook started with. */
+   An exception an at_exit hook handles takes the place of the one the hook
+   started with: `$!` is nil once that rescue is done, until the next hook, as
+   in CRuby, whose rescue clears the errinfo a hook started with. */
 static void sp_rescue_push(void *e) {
   if (sp_rescue_sp >= SP_EXC_STACK_MAX) {
     fprintf(stderr, "rescue nesting too deep (> %d)\n", SP_EXC_STACK_MAX);
     exit(1);
   }
-  if (sp_rescue_sp == 1 && sp_exc_handling[0] == sp_at_exit_errinfo) sp_exc_handling[0] = NULL;
+  if (sp_at_exit_inherited) { sp_at_exit_inherited = 0; sp_exc_handling[0] = NULL; }
   sp_exc_handling[sp_rescue_sp++] = e;
 }
 #if defined(SP_CEXT) && !defined(SPINEL_EXT_HOST)
@@ -20598,6 +20598,16 @@ static inline sp_int sp_proc_yield(sp_Proc *p, sp_int argc, sp_int *args) {
   return sp_proc_call(p, argc, args);
 }
 
+/* A hook or END block starts with `$!` as the exception ending the program */
+static void sp_at_exit_begin(void) {
+  sp_rescue_sp = 0; sp_at_exit_inherited = 0;
+  if (sp_at_exit_errinfo) {
+    sp_Exception *xe = (sp_Exception *)sp_at_exit_errinfo;
+    sp_rescue_push(xe);
+    sp_at_exit_inherited = 1;
+    if (!xe->backtrace) { sp_StrArray *xbt = sp_backtrace_captured(); sp_gc_wb((void *)xe); xe->backtrace = xbt; }
+  }
+}
 /* Run the at_exit hooks, most recently registered first, and answer the status
    the process should end with. `status` in is what the terminating path would
    have used on its own (0 falling off main's end, N for `exit N`, 1 for abort
@@ -20642,13 +20652,6 @@ static int sp_at_exit_run(int status) {
   volatile int st = status;
   sp_int args[16] = {0};   /* sp_proc_call's fixed slot convention */
   for (;;) {
-    /* an END block runs later, from the C exit handlers, and reads it here too */
-    sp_rescue_sp = 0;
-    if (sp_at_exit_errinfo) {
-      sp_Exception *xe = (sp_Exception *)sp_at_exit_errinfo;
-      sp_rescue_push(xe);
-      if (!xe->backtrace) { sp_StrArray *xbt = sp_backtrace_captured(); sp_gc_wb((void *)xe); xe->backtrace = xbt; }
-    }
     SP_AT_EXIT_LOCK();
     sp_int n = sp_at_exit_count;
     sp_Proc *h = n > 0 ? sp_at_exit_hooks[--sp_at_exit_count] : NULL;
@@ -20667,6 +20670,7 @@ static int sp_at_exit_run(int status) {
        as the block's own return and never reaches these stacks.) Only the
        exception stack is left alone: this loop's own frame is on it. */
     sp_proc_ret_head = NULL; sp_brk_top = 0; sp_catch_top = 0;
+    sp_at_exit_begin();
     /* The check every other arm of this stack has. It cannot fire here --
        every path into the drain arrives with the exception stack empty -- but
        an arm without it is the one a reader has to reason about. */

@@ -3410,16 +3410,84 @@ static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
   return n;
 }
 
-/* `m::Foo` where m is a value (a local, a parameter, a call's answer):
-   which Foo it names is the one m's class or module holds, known only at
-   run time. The path is resolved by its leaf name, so when two classes or
-   modules in different scopes have that leaf, one nested under another,
-   the answer is a guess, and CRuby's can be the other one: refused. (A
-   value constant with a VALUE parent is read by a run-time switch on the
+static int te_const(NodeTable *nt, const char *name);
+static int te_args1(NodeTable *nt, int a);
+static int te_call(NodeTable *nt, int recv, const char *name, int argsnode, int block);
+static int te_stmts1(NodeTable *nt, int s);
+/* A fresh copy of the parent of `m::Foo` when reading it again is the same
+   as reading it once: a local (a parameter, a block parameter), self, or
+   `.class` of one of those; -1 for any other parent. */
+static int dyn_parent_copy(NodeTable *nt, int par) {
+  NodeKind k = nt_kind(nt, par);
+  if (k == NK_LocalVariableReadNode) {
+    int n = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, n, "name", nt_str(nt, par, "name"));
+    nt_node_set_int(nt, n, "depth", nt_int(nt, par, "depth", 0));
+    return n;
+  }
+  if (k == NK_SelfNode) return nt_new_node(nt, "SelfNode");
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, par, "name");
+    int r = nt_ref(nt, par, "receiver");
+    if (!nm || !sp_streq(nm, "class") || r < 0 || nt_ref(nt, par, "arguments") >= 0 || nt_ref(nt, par, "block") >= 0) return -1;
+    int rc = dyn_parent_copy(nt, r);
+    if (rc < 0 || nt_kind(nt, r) == NK_CallNode) return -1;
+    int n = nt_new_node(nt, "CallNode");
+    nt_node_set_str(nt, n, "name", "class");
+    nt_node_set_ref(nt, n, "receiver", rc);
+    return n;
+  }
+  return -1;
+}
+/* A read of class k as the passes after qualification write one (its own
+   name, `Ext__Foo`), and of the class or module that holds it (-1 for a
+   top-level one, Object's). */
+static int dyn_class_ref(Compiler *c, int k, int *holder) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const ClassInfo *ci = &c->classes[k];
+  int h = ci->enclosing_class;
+  *holder = -1;
+  if (h >= 0 && h < c->nclasses && c->classes[h].name) *holder = te_const(nt, c->classes[h].name);
+  return te_const(nt, ci->name);
+}
+/* `m::Foo` where m is a value (a local, a parameter, self, `.class` of
+   one): which Foo it names is the one m's class or module holds, known
+   only at run time. The path was resolved by its leaf name, so when two
+   classes or modules in different scopes have that leaf, one nested under
+   another, the answer was a guess. It becomes the lookup CRuby does, over
+   the classes and modules of that leaf:
+
+     (if m.is_a?(Module) && m <= Ext then Ext::Foo
+      elsif m.equal?(Object) then ::Foo
+      else raise NameError, "uninitialized constant #{m}::Foo" end)
+
+   A holder takes m when m is it or has it as an ancestor (a class under
+   it, a module including it); Object's own constants only through Object
+   itself, as CRuby looks them up through no other class. A path in a
+   class or module definition (its name or its superclass), in a rescue
+   list, or through another parent stays refused (#10955). (A value
+   constant with a VALUE parent is read by a run-time switch on the
    parent's class, and a leaf one class has is that class.) */
-static void refuse_dyn_parent_class_leaf(Compiler *c) {
-  const NodeTable *nt = c->nt;
+static void desugar_dyn_parent_class_leaf(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count;
+  unsigned char *keep = calloc((size_t)n0 + 1, 1);
+  if (!keep) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  NT_FOREACH_KIND(nt, NK_ClassNode, id) {
+    int r = nt_ref(nt, id, "constant_path"); if (r >= 0 && r < n0) keep[r] = 1;
+    r = nt_ref(nt, id, "superclass"); if (r >= 0 && r < n0) keep[r] = 1;
+  }
+  NT_FOREACH_KIND(nt, NK_ModuleNode, id) {
+    int r = nt_ref(nt, id, "constant_path"); if (r >= 0 && r < n0) keep[r] = 1;
+  }
+  NT_FOREACH_KIND(nt, NK_RescueNode, id) {
+    int en = 0; const int *ev = nt_arr(nt, id, "exceptions", &en);
+    for (int i = 0; i < en; i++) if (ev[i] >= 0 && ev[i] < n0) keep[ev[i]] = 1;
+  }
+  int *todo = malloc(sizeof(int) * ((size_t)n0 + 1)), ntodo = 0;
+  if (!todo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) {
+    if (id >= n0) continue;
     int par = nt_ref(nt, id, "parent");
     if (par < 0) continue;
     NodeKind pk = nt_kind(nt, par);
@@ -3427,12 +3495,86 @@ static void refuse_dyn_parent_class_leaf(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int nested = 0;
     if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
-    char msg[400];
-    snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) is not supported when classes "
-             "or modules in more than one scope are named %s: which one it names is decided at run time "
-             "(see docs/limitations.md)", nm, nm);
-    unsupported_feature_collect(c, id, msg);
+    todo[ntodo++] = id;
   }
+  for (int t = 0; t < ntodo; t++) {
+    int id = todo[t];
+    int base = nt->count;   /* (this path's new nodes take its scope) */
+    int par = nt_ref(nt, id, "parent");
+    char nm[256];
+    snprintf(nm, sizeof nm, "%s", nt_str(nt, id, "name"));
+    int probe = keep[id] ? -1 : dyn_parent_copy(nt, par);
+    if (probe < 0) {
+      char msg[400];
+      snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) in a class or module "
+               "definition, a rescue list or through a value other than a local, self or its class is not "
+               "supported when classes or modules in more than one scope are named %s (see docs/limitations.md)", nm, nm);
+      unsupported_feature_collect(c, id, msg);
+      continue;
+    }
+    /* the arms: nested holders first, then Object's own */
+    int arms_c[64], arms_h[64], na = 0, top = -1;
+    for (int pass = 0; pass < 2; pass++)
+      for (int k = 0; k < c->nclasses && na < 63; k++) {
+        int nst = 0;
+        const ClassInfo *ci = &c->classes[k];
+        const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
+        if (l) leaf = l + 1;
+        else if (ci->enclosing_class >= 0 && leaf)
+          for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+        if (!leaf || !sp_streq(leaf, nm)) continue;
+        nst = l || ci->enclosing_class >= 0;
+        if ((pass == 0) != nst) continue;
+        int h = -1, path = dyn_class_ref(c, k, &h);
+        if (!nst) { top = path; continue; }
+        arms_c[na] = path; arms_h[na] = h; na++;
+      }
+    /* the else arm: CRuby's NameError */
+    int msg1 = nt_new_node(nt, "StringNode");
+    nt_node_set_str(nt, msg1, "content", "uninitialized constant ");
+    nt_node_set_str(nt, msg1, "unescaped", "uninitialized constant ");
+    char tail[300]; snprintf(tail, sizeof tail, "::%s", nm);
+    int msg2 = nt_new_node(nt, "StringNode");
+    nt_node_set_str(nt, msg2, "content", tail);
+    nt_node_set_str(nt, msg2, "unescaped", tail);
+    int ps = te_call(nt, dyn_parent_copy(nt, par), "to_s", -1, -1);
+    int cat1 = te_call(nt, msg1, "+", te_args1(nt, ps), -1);
+    int cat2 = te_call(nt, cat1, "+", te_args1(nt, msg2), -1);
+    int rargs = nt_new_node(nt, "ArgumentsNode");
+    { int ra[2] = { te_const(nt, "NameError"), cat2 }; nt_node_set_arr(nt, rargs, "arguments", ra, 2); }
+    int rz = te_call(nt, -1, "raise", rargs, -1);
+    int els = nt_new_node(nt, "ElseNode");
+    nt_node_set_ref(nt, els, "statements", te_stmts1(nt, rz));
+    int tail_arm = els;
+    if (top >= 0) {
+      int obj = te_const(nt, "Object");
+      int cond = te_call(nt, dyn_parent_copy(nt, par), "equal?", te_args1(nt, obj), -1);
+      int ifn = nt_new_node(nt, "IfNode");
+      nt_node_set_ref(nt, ifn, "predicate", cond);
+      nt_node_set_ref(nt, ifn, "statements", te_stmts1(nt, top));
+      nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
+      tail_arm = ifn;
+    }
+    for (int i = na - 1; i >= 0; i--) {
+      int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
+      int le = te_call(nt, dyn_parent_copy(nt, par), "<=", te_args1(nt, arms_h[i]), -1);
+      int and = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, and, "left", ism);
+      nt_node_set_ref(nt, and, "right", le);
+      int ifn = nt_new_node(nt, "IfNode");
+      nt_node_set_ref(nt, ifn, "predicate", and);
+      nt_node_set_ref(nt, ifn, "statements", te_stmts1(nt, arms_c[i]));
+      nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
+      tail_arm = ifn;
+    }
+    int body = te_stmts1(nt, tail_arm);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_ref(nt, id, "body", body);
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+  }
+  free(keep); free(todo);
 }
 
 /* Asks the class a `raise` argument or a `rescue` exception names when it is
@@ -49100,7 +49242,7 @@ static void an_phase_desugar_register(Compiler *c) {
   if (elab_check_on(c)) elab_check_surface(c);
   register_globals_consts(c);
   AN_STEP_V("rewrite_const_alias_receivers", rewrite_const_alias_receivers(c));
-  AN_STEP_V("refuse_dyn_parent_class_leaf", refuse_dyn_parent_class_leaf(c));
+  AN_STEP_V("desugar_dyn_parent_class_leaf", desugar_dyn_parent_class_leaf(c));
   AN_STEP_V("rewrite_builtin_cm_alias_calls", rewrite_builtin_cm_alias_calls(c));   /* Time.stamp -> Time.now, the builtin's */
   AN_STEP_V("route_self_builtin_calls", route_self_builtin_calls(c));   /* U.rand(2) before U's def self.rand -> rand(2), Kernel's */
   desugar_env_values(c);

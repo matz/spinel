@@ -365,6 +365,13 @@ module BuiltinShareProbe
           $stderr.puts "drift: #{r['class']} #{r['method']}: #{fields.join(', ')}"
           fields.each { |k| $stderr.puts "  #{k}: #{prior && prior[k]} -> #{r[k]}" }
         end
+        old.each_key { |k| $stderr.puts "drift: #{k.join(' ')}: no longer generated" }
+        { SPEC => inc, PURE => pure }.each do |path, text|
+          have = File.readlines(path)
+          want = text.lines
+          (have - want).each { |l| $stderr.puts "drift: #{File.basename(path)}: committed only: #{l.strip}" }
+          (want - have).each { |l| $stderr.puts "drift: #{File.basename(path)}: generated only: #{l.strip}" }
+        end
         abort "share observations drifted; regenerate with --write"
       end
     else

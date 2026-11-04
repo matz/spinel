@@ -5148,6 +5148,42 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   return obj;
 }
 
+/* What a `super` that no program ancestor answers reaches when the
+   method is one of BasicObject's or Kernel's that Spinel answers for any
+   object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same
+   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?),
+   SUPER_OBJ_HASH (hash) or SUPER_OBJ_SELF (itself); 0 for any other. argc
+   is the argument count the super passes. Only a plain class qualifies
+   (comp_plain_class): a builtin ancestor (Struct, Exception, an Array
+   subclass, a native class) or a core module it includes (Comparable) has
+   its own ==. Kernel's names need Kernel in the
+   chain, so a class under BasicObject without it still raises. A method of
+   the name in a program's Object, Kernel or BasicObject is not this one. */
+int class_is_comparable(Compiler *c, int cid);   /* codegen_call.c */
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int argc) {
+  if (!s || s->is_cmethod || !uname || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  int kind = 0, nargs = 0, kernel = 0;
+  if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
+  else if (sp_streq(uname, "eql?")) { kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; }
+  else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
+  else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
+  else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
+  else if (sp_streq(uname, "hash")) { kind = SUPER_OBJ_HASH; kernel = 1; }
+  else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
+  if (!kind || argc != nargs) return 0;
+  /* (Comparable reached through Object's own include answers == too) */
+  if (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id)) return 0;
+  int root = s->class_id;
+  for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
+  if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
+  const char *own[] = { "Object", "Kernel", "BasicObject" };
+  for (int i = 0; i < 3; i++) {
+    int k = comp_class_index(c, own[i]);
+    if (k >= 0 && comp_method_in_class(c, k, uname) >= 0) return 0;
+  }
+  return kind;
+}
+
 int comp_super_is_class_new(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;

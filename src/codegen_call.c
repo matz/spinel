@@ -18874,6 +18874,45 @@ static void emit_object_methods_list(Compiler *c, int cid, const char *name, int
   refl_free(&ro);
 }
 
+/* obj.methods / obj.public_methods / obj.singleton_methods on a boxed
+   receiver that may be an instance of several classes of the program: each
+   class's static list (emit_object_methods_list), picked by the object's
+   class at run time, as a typed receiver's is picked at compile time. The
+   classes are those the receiver can hold (poly_recv_classes; every
+   instantiated class of the program when the walk bounds none); any other
+   value is CRuby's NoMethodError. 0, for the caller's own handling, when a
+   class the receiver can hold has no such list or the arguments are not a
+   list's (an_poly_object_methods_listable, which also types the call). */
+int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
+                                        const int *argv, Buf *b) {
+  int pub = 1, prot = 0, sg = 0;
+  if (sp_streq(name, "methods")) prot = 1;
+  else if (sp_streq(name, "singleton_methods")) { prot = 1; sg = 1; }
+  else if (!sp_streq(name, "public_methods")) return 0;
+  if (!an_poly_object_methods_listable(c, id, name, argc, argv)) return 0;
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, id, &nk);
+  int n = ks ? nk : c->nclasses;
+  int tv = ++g_tmp, ta = ++g_tmp;
+  TyKind ct = comp_ntype(c, id);
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+  emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = NULL; if (sp_poly_is_user_obj(_t%d)) switch (_t%d.cls_id) {",
+             tv, ta, tv, tv);
+  for (int i = 0; i < n; i++) {
+    int k = ks ? ks[i] : i;
+    if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
+    buf_printf(b, " case %d: _t%d = ", k, ta);
+    emit_object_methods_list(c, k, name, pub, prot, sg, an_object_methods_all_arg(c, k, argc, argv),
+                             argc > 0 ? argv[0] : -1, b);
+    buf_puts(b, "; break;");
+  }
+  buf_printf(b, " default: break; } if (!_t%d) sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d));", ta, name, tv);
+  if (ct == TY_POLY_ARRAY) buf_printf(b, " _t%d; })", ta);
+  else buf_printf(b, " sp_box_poly_array(_t%d); })", ta);
+  return 1;
+}
+
 /* obj.methods / obj.public_methods / obj.singleton_methods on a typed user
    object: the class chain is static, so the list is too. The receiver is
    evaluated for its effects. `all` is an_object_methods_all_arg's answer:

@@ -636,6 +636,8 @@ int builtin_arity_violation(Compiler *c, int id);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);
+int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
+                                        const int *argv, Buf *b);
 int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, int all,
                                    int arg, Buf *b);
 int scope_reads_callee(Compiler *c, int si);

@@ -1054,7 +1054,8 @@ wasm-rt: $(SP_RT_WASI_LIB) $(BUNDLED_NATIVE_WASI_OBJS) $(SP_RT_WASI_NOEXC_LIB) $
 # too, is also built as a --jobs=2 split and an --incremental build, which
 # compile parts and link them with wasm-ld, and one is built again warm,
 # every unit from the cache. Not in the gate: it needs the sdk and an
-# engine. `make wasm-test` where both are.
+# engine. `make wasm-test` where both are. A program with
+# `# spinel: wasm-int-overflow: MODE` is built in that overflow mode.
 WASMTIME ?= wasmtime
 WASM_TESTS = $(shell grep -l '^\# spinel: wasm$$' test/*.rb)
 # --exceptions=abort: programs built without exception handling and run with
@@ -1074,9 +1075,10 @@ wasm-test: $(SPINEL) wasm-rt
 	unset SPINEL_NO_CACHE; export SPINEL_SPLIT_STRICT=1 SPINEL_INCREMENTAL_STRICT=1 SPINEL_CACHE_DIR=$$tmp/cache; \
 	for t in $(WASM_TESTS); do \
 	  bn=$$(basename $$t .rb); \
+	  ov=$$(sed -n "s/^# spinel: wasm-int-overflow: //p" $$t); \
 	  for mode in plain --jobs=2 --incremental; do \
 	    case $$mode in plain) m=; lbl=;; *) m=$$mode; lbl=" ($$mode)";; esac; \
-	    if ! WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi $$m --no-line-map $$t -o $$tmp/$$bn.wasm >/dev/null 2>$$tmp/$$bn.build; then \
+	    if ! WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi $$m $${ov:+--int-overflow=$$ov} --no-line-map $$t -o $$tmp/$$bn.wasm >/dev/null 2>$$tmp/$$bn.build; then \
 	      echo "wasm-test: FAIL (build$$lbl) $$t"; head -3 $$tmp/$$bn.build; ok=0; continue; fi; \
 	    if grep -q 'unused' $$tmp/$$bn.build; then \
 	      echo "wasm-test: FAIL (a flag the compile or the link does not use$$lbl) $$t"; grep 'unused' $$tmp/$$bn.build | head -3; ok=0; continue; fi; \
@@ -1104,7 +1106,8 @@ wasm-test: $(SPINEL) wasm-rt
 	  done; \
 	done; \
 	for t in $(firstword $(WASM_TESTS)); do \
-	  WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi --incremental --cache-stats --no-line-map $$t -o $$tmp/warm.wasm >/dev/null 2>$$tmp/warm.build; rc=$$?; \
+	  ov=$$(sed -n "s/^# spinel: wasm-int-overflow: //p" $$t); \
+	  WASI_SDK=$(WASI_SDK) $(SPINEL) --target=wasm32-wasi --incremental $${ov:+--int-overflow=$$ov} --cache-stats --no-line-map $$t -o $$tmp/warm.wasm >/dev/null 2>$$tmp/warm.build; rc=$$?; \
 	  if [ $$rc -eq 0 ] && grep -q '^spinel: cache: units=[0-9]* hit=[1-9][0-9]* miss=0 ' $$tmp/warm.build; then echo "wasm-test: pass (--incremental, warm: every unit from the cache) $$t"; \
 	  else echo "wasm-test: FAIL (--incremental, warm: rc=$$rc, or a unit missed the cache) $$t"; grep '^spinel: cache:' $$tmp/warm.build | head -3; head -3 $$tmp/warm.build; ok=0; fi; \
 	done; \

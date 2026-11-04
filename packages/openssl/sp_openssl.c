@@ -558,6 +558,9 @@ const char *sp_ssl_read_nb(sp_int h, sp_int maxlen) {
     memcpy(out, sp_ssl_rdbuf, (size_t)n);
     out[n] = 0;
     sp_str_set_len(out, (size_t)n);
+    /* Bytes off the wire, as IO#sysread's: a String that read as UTF-8 made the
+       buffer behind #read and #readpartial cut by characters, not bytes. */
+    sp_str_mark_binary(out);
     return out;
   }
   switch (SSL_get_error(c->ssl, n)) {

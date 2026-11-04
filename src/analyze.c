@@ -3501,6 +3501,71 @@ static int dyn_path_value_root(Compiler *c, int par) {
   if (!root_value) return 0;
   return guess ? -1 : 1;
 }
+/* The superclass of class k, read from its definition while the passes
+   still place classes (ClassInfo.parent may not be set yet) */
+static int dyn_holder_parent(Compiler *c, int k) {
+  if (c->classes[k].parent >= 0) return c->classes[k].parent;
+  int sc = class_def_super(c->nt, c->classes[k].def_node);
+  if (sc < 0) return -1;
+  NodeKind sk = nt_kind(c->nt, sc);
+  const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_str(c->nt, sc, "name") : NULL;
+  if (!sn) return -1;
+  /* the superclass as written beside k (Kid < Base in one scope) */
+  int e = c->classes[k].enclosing_class;
+  for (int q = 0; q < c->nclasses; q++) {
+    const ClassInfo *qi = &c->classes[q];
+    if (q == k || qi->enclosing_class != e || !qi->name) continue;
+    const char *leaf = qi->name;
+    if (e >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (sp_streq(leaf, sn)) return q;
+  }
+  return -1;
+}
+/* The one class or module whose leaf name is nm (-1 for none or two) */
+static int dyn_holder_named(Compiler *c, const char *nm) {
+  int found = -1;
+  for (int q = 0; q < c->nclasses; q++) {
+    const char *leaf = c->classes[q].name;
+    if (!leaf) continue;
+    if (c->classes[q].enclosing_class >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (!sp_streq(leaf, nm)) continue;
+    if (found >= 0) return -1;
+    found = q;
+  }
+  return found;
+}
+/* Does class or module a have b among its ancestors: a superclass, or a
+   module a class of the chain (or such a module) includes? */
+static int dyn_holder_reaches_d(Compiler *c, int a, int b, int depth) {
+  if (depth > 32) return 0;
+  for (int k = a, steps = 0; k >= 0 && k < c->nclasses && steps < 64; k = dyn_holder_parent(c, k), steps++) {
+    if (k != a && k == b) return 1;
+    const ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->nincluded_mods; i++) {
+      int m = ci->included_mods[i];
+      if (m == b || (m >= 0 && m != k && dyn_holder_reaches_d(c, m, b, depth + 1))) return 1;
+    }
+    /* (and an `include M` its body writes, before the include lists are made) */
+    const NodeTable *nt = c->nt;
+    int body = ci->def_node >= 0 ? nt_ref(nt, ci->def_node, "body") : -1, bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++) {
+      if (nt_kind(nt, bb[j]) != NK_CallNode || nt_ref(nt, bb[j], "receiver") >= 0 ||
+          !sp_streq(nt_str(nt, bb[j], "name"), "include")) continue;
+      int an = 0, args = nt_ref(nt, bb[j], "arguments");
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      for (int x = 0; x < an; x++) {
+        const char *mn = nt_str(nt, av[x], "name");
+        int m = mn ? dyn_holder_named(c, mn) : -1;
+        if (m == b || (m >= 0 && m != k && dyn_holder_reaches_d(c, m, b, depth + 1))) return 1;
+      }
+    }
+  }
+  return 0;
+}
+static int dyn_holder_reaches(Compiler *c, int a, int b) {
+  return a >= 0 && b >= 0 && a != b && dyn_holder_reaches_d(c, a, b, 0);
+}
 static void desugar_dyn_parent_class_leaf(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3552,7 +3617,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       continue;
     }
     /* the arms: nested holders first, then Object's own */
-    int arms_c[64], arms_h[64], na = 0, top = -1;
+    int arms_c[64], arms_h[64], arms_k[64], na = 0, top = -1;
     for (int pass = 0; pass < 2; pass++)
       for (int k = 0; k < c->nclasses && na < 63; k++) {
         int nst = 0;
@@ -3566,8 +3631,17 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         if ((pass == 0) != nst) continue;
         int h = -1, path = dyn_class_ref(c, k, &h);
         if (!nst) { top = path; continue; }
-        arms_c[na] = path; arms_h[na] = h; na++;
+        arms_c[na] = path; arms_h[na] = h; arms_k[na] = ci->enclosing_class; na++;
       }
+    /* a holder another holder reaches (Kid < Base, a module including
+       another) is tested first: CRuby finds the nearest ancestor's Foo */
+    for (int i = 0; i < na; i++)
+      for (int j = i + 1; j < na; j++)
+        if (dyn_holder_reaches(c, arms_k[j], arms_k[i]) && !dyn_holder_reaches(c, arms_k[i], arms_k[j])) {
+          int t0 = arms_c[i], t1 = arms_h[i], t2 = arms_k[i];
+          arms_c[i] = arms_c[j]; arms_h[i] = arms_h[j]; arms_k[i] = arms_k[j];
+          arms_c[j] = t0; arms_h[j] = t1; arms_k[j] = t2;
+        }
     /* the else arm: CRuby's NameError */
     int msg1 = nt_new_node(nt, "StringNode");
     nt_node_set_str(nt, msg1, "content", "uninitialized constant ");

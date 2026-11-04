@@ -40,3 +40,18 @@ puts m::Foo.new.hi
 n = Ext::Nest
 puts n::Foo.new.hi
 puts n::Deep::Foo.new.hi
+# A subclass's own Foo, and a class's own beside an included module's,
+# come before the Foo of the class or module it reaches.
+class Base; class Foo; def hi = "base"; end; end
+class Kid < Base; class Foo; def hi = "kid"; end; end
+module Wrap; K = Kid; end
+kk = Kid
+puts kk::Foo.new.hi
+w = Wrap
+puts w::K::Foo.new.hi
+module Mix; class Foo; def hi = "mix"; end; end
+class Own; include Mix; class Foo; def hi = "own"; end; end
+ow = Own
+puts ow::Foo.new.hi
+bb = Base
+puts bb::Foo.new.hi

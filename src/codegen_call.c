@@ -22534,11 +22534,14 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
      module's method its class extends: only those classes' values pass (a
      module's instance method no class extends answers no class value). A
      reopened Class or Module answers every class value. */
-  if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
+  /* Object's own class method is in every class's singleton chain, so
+     every class value answers it */
+  int obj_cmeth = call_target(c, id, oci, vnm, CT_CMETHOD, NULL) >= 0;
+  if (obj_cmeth || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
     Buf cv; memset(&cv, 0, sizeof cv);
     /* (a module Object extends answers every class value, as does a
        reopened Class or Module, which the per-class rule counts) */
-    int every = 0;
+    int every = obj_cmeth;
     for (int m = 0; m < c->nclasses && !every; m++)
       every = m != oci && comp_class_is_module(c, &c->classes[m]) && call_target(c, id, m, vnm, CT_OWN, NULL) >= 0 &&
               comp_class_singleton_has_module(c, oci, m);

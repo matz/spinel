@@ -6792,10 +6792,10 @@ static sp_RbVal sp_obj_clamp_range(sp_RbVal v, sp_Range r) {
    Schwartzian lowering: keys are precomputed once per element, so the comparator
    never re-runs the block. Bottom-up merge sort -- stable by construction, O(n log
    n), and (unlike qsort) carries the key array without a non-portable qsort_r. */
-static void sp_sort_idx_by_poly(sp_int *idx, const sp_RbVal *keys, sp_int n) {
-  if (n < 2) return;
-  sp_int *tmp = (sp_int *)malloc(sizeof(sp_int) * (size_t)n);
-  if (!tmp) sp_oom_die();
+/* The merge loop, on a buffer the caller owns. It sits in a function of its
+   own so that the caller's root (a cleanup and an address-taken slot) does
+   not slow the loop down. */
+static SP_NOINLINE void sp_sort_idx_merge(sp_int *idx, const sp_RbVal *keys, sp_int n, sp_int *tmp) {
   sp_int *src = idx, *dst = tmp;
   for (sp_int width = 1; width < n; width *= 2) {
     for (sp_int lo = 0; lo < n; lo += 2 * width) {
@@ -6813,7 +6813,13 @@ static void sp_sort_idx_by_poly(sp_int *idx, const sp_RbVal *keys, sp_int n) {
     sp_int *t = src; src = dst; dst = t;   /* ping-pong buffers; no per-level copy */
   }
   if (src != idx) for (sp_int x = 0; x < n; x++) idx[x] = src[x];   /* odd #levels: result is in tmp */
-  free(tmp);
+}
+static void sp_sort_idx_by_poly(sp_int *idx, const sp_RbVal *keys, sp_int n) {
+  if (n < 2) return;
+  /* the merge buffer belongs to the GC: a comparison that runs a key's own
+     `<=>` can raise out of the loop, and a malloc'd buffer would leak */
+  sp_int *tmp = (sp_int *)sp_gc_alloc((size_t)n * sizeof(sp_int), NULL, NULL); SP_GC_ROOT(tmp);
+  sp_sort_idx_merge(idx, keys, n, tmp);
 }
 /* sort_by's `<=>` for a pair of keys, as CRuby asks it: sp_poly_spaceship
    (a class's own `<=>` first, so a nil answer raises even for one object
@@ -6833,6 +6839,9 @@ static sp_oint sp_sort_key_cmp(sp_RbVal a, sp_RbVal b) SP_UNUSED;
 static sp_oint sp_sort_cmpint(sp_RbVal u) SP_UNUSED;
 static sp_oint sp_sort_cmpint(sp_RbVal u) {
   if (u.tag == SP_TAG_NIL) return sp_oint_nil();
+  /* a String (literal or handle) or Symbol answer is asked `> 0`, which Comparable refuses */
+  if (u.tag == SP_TAG_STR || sp_poly_is_strbuf(u) || u.tag == SP_TAG_SYM)
+    sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with 0 failed", sp_poly_class_name(u)));
   sp_bool ok; sp_int c = sp_poly_cmp(u, sp_box_int(0), &ok);
   if (ok) return sp_oint_of(c < 0 ? -1 : (c > 0 ? 1 : 0));
   return sp_oint_of(sp_poly_to_i(u));
@@ -6859,15 +6868,11 @@ static sp_oint sp_sort_key_cmp(sp_RbVal a, sp_RbVal b) {
 static void sp_sort_idx_by_poly_ck(sp_int *idx, const sp_RbVal *keys, sp_int n) SP_UNUSED;
 /* a pair of keys whose `<=>` is nil: CRuby's ArgumentError, out of line so
    the merge loop stays small enough to inline its comparator */
-static SP_NOINLINE SP_COLD SP_NORETURN void sp_sort_cmp_failed(sp_int *tmp, sp_RbVal ka, sp_RbVal kb) {
-  free(tmp);
+static SP_NOINLINE SP_COLD SP_NORETURN void sp_sort_cmp_failed(sp_RbVal ka, sp_RbVal kb) {
   sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(ka), sp_cmperr_desc(kb)));
   for (;;) {}
 }
-static void sp_sort_idx_by_poly_ck(sp_int *idx, const sp_RbVal *keys, sp_int n) {
-  if (n < 2) return;
-  sp_int *tmp = (sp_int *)malloc(sizeof(sp_int) * (size_t)n);
-  if (!tmp) sp_oom_die();
+static SP_NOINLINE void sp_sort_idx_merge_ck(sp_int *idx, const sp_RbVal *keys, sp_int n, sp_int *tmp) {
   sp_int *src = idx, *dst = tmp;
   for (sp_int width = 1; width < n; width *= 2) {
     for (sp_int lo = 0; lo < n; lo += 2 * width) {
@@ -6876,7 +6881,7 @@ static void sp_sort_idx_by_poly_ck(sp_int *idx, const sp_RbVal *keys, sp_int n) 
       sp_int i = lo, j = mid, k = lo;
       while (i < mid && j < hi) {
         sp_oint c = sp_sort_key_cmp(keys[src[i]], keys[src[j]]);
-        if (SP_UNLIKELY(c.nil)) sp_sort_cmp_failed(tmp, keys[src[i]], keys[src[j]]);
+        if (SP_UNLIKELY(c.nil)) sp_sort_cmp_failed(keys[src[i]], keys[src[j]]);
         if (c.v <= 0) dst[k++] = src[i++];   /* left wins ties -> stable */
         else dst[k++] = src[j++];
       }
@@ -6886,7 +6891,11 @@ static void sp_sort_idx_by_poly_ck(sp_int *idx, const sp_RbVal *keys, sp_int n) 
     sp_int *t = src; src = dst; dst = t;   /* ping-pong buffers; no per-level copy */
   }
   if (src != idx) for (sp_int x = 0; x < n; x++) idx[x] = src[x];   /* odd #levels: result is in tmp */
-  free(tmp);
+}
+static void sp_sort_idx_by_poly_ck(sp_int *idx, const sp_RbVal *keys, sp_int n) {
+  if (n < 2) return;
+  sp_int *tmp = (sp_int *)sp_gc_alloc((size_t)n * sizeof(sp_int), NULL, NULL); SP_GC_ROOT(tmp);   /* GC-owned, as in sp_sort_idx_by_poly */
+  sp_sort_idx_merge_ck(idx, keys, n, tmp);
 }
 /* Complex / a divisor whose kind is only known at run time. A REAL divisor
    divides each component, which is what the typed arms do and what MRI does:
@@ -10245,6 +10254,23 @@ static sp_PolyArray *sp_PolyArray_sort_by_first(sp_PolyArray *a) {
   for (sp_int i = 0; b && i < b->len; i++) sp_PolyArray_push(r, sp_poly_arr_get(b->data[i], 1));
   return r;
 }
+/* sort_by's second half, once the block has answered every element: the
+   elements in the order of their keys, through the checked index sort. CRuby
+   asks the block for every element first and orders the keys after, so a
+   pair of keys that do not compare raises only then; and the merge sort
+   keeps this O(n log n) where an insertion at each answer was O(n^2). Equal
+   keys keep input order. */
+static sp_PolyArray *sp_PolyArray_by_keys_ck(sp_PolyArray *elems, sp_PolyArray *keys) SP_UNUSED;
+static sp_PolyArray *sp_PolyArray_by_keys_ck(sp_PolyArray *elems, sp_PolyArray *keys) {
+  SP_GC_ROOT(elems); SP_GC_ROOT(keys);
+  sp_int n = elems->len;
+  sp_IntArray *idx = sp_IntArray_new(); SP_GC_ROOT(idx);
+  for (sp_int i = 0; i < n; i++) sp_IntArray_push(idx, i);
+  sp_sort_idx_by_poly_ck(idx->data + idx->start, keys->data, n);
+  sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
+  for (sp_int i = 0; i < n; i++) sp_PolyArray_push(r, elems->data[sp_IntArray_get(idx, i)]);
+  return r;
+}
 /* Hash#sort_by's [sort_key, value] tuples over keys that need not compare:
    the keys' order through the checked index sort, which raises for a pair
    whose `<=>` is nil, and the values in that order. */
@@ -10253,12 +10279,12 @@ static sp_PolyArray *sp_PolyArray_sort_by_first_ck(sp_PolyArray *a) {
   SP_GC_ROOT(a);
   sp_int n = a ? a->len : 0;
   sp_PolyArray *keys = sp_PolyArray_new(); SP_GC_ROOT(keys);
-  sp_IntArray *idx = sp_IntArray_new(); SP_GC_ROOT(idx);
-  for (sp_int i = 0; i < n; i++) { sp_PolyArray_push(keys, sp_poly_arr_get(a->data[i], 0)); sp_IntArray_push(idx, i); }
-  sp_sort_idx_by_poly_ck(idx->data + idx->start, keys->data, n);
-  sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
-  for (sp_int i = 0; i < n; i++) sp_PolyArray_push(r, sp_poly_arr_get(a->data[sp_IntArray_get(idx, i)], 1));
-  return r;
+  sp_PolyArray *vals = sp_PolyArray_new(); SP_GC_ROOT(vals);
+  for (sp_int i = 0; i < n; i++) {
+    sp_PolyArray_push(keys, sp_poly_arr_get(a->data[i], 0));
+    sp_PolyArray_push(vals, sp_poly_arr_get(a->data[i], 1));
+  }
+  return sp_PolyArray_by_keys_ck(vals, keys);
 }
 /* value-form bangs: CRuby returns self when the call CHANGED the receiver
    and nil when it was a no-op. The plain *_bang statements stay void. */
@@ -21588,26 +21614,18 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
       return acc;
     }
     case SP_PENUM_SORT_BY: {
-      /* keys computed once per element, as CRuby does, then a stable insertion
-         sort carrying keys and elements together. This is a runtime array
-         reached through a dispatch, not a hot path. */
+      /* the block answers every element first, in order, as CRuby's does;
+         the keys are ordered after, by the checked merge sort (a key's own
+         <=> included), so a pair that does not compare raises only then */
       sp_PolyArray *keys = sp_PolyArray_new(); SP_GC_ROOT(keys);
-      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      sp_PolyArray *elems = sp_PolyArray_new(); SP_GC_ROOT(elems);
       for (sp_int i = 0; i < SP_PENUM_LEN; i++) {
         sp_RbVal e = SP_PENUM_AT(i); SP_GC_ROOT_RBVAL(e);
-        sp_RbVal k = sp_penum_call1(blk, e);
-        sp_int pos = out->len;
-        while (pos > 0) {
-          sp_bool ok = FALSE;
-          sp_int cmp = sp_poly_cmp(keys->data[pos - 1], k, &ok);
-          if (!ok) sp_poly_cmp_fail(keys->data[pos - 1], k);
-          if (cmp <= 0) break;   /* <= keeps equal keys in input order */
-          pos--;
-        }
-        sp_PolyArray_insert(keys, pos, k);
-        sp_PolyArray_insert(out, pos, e);
+        sp_RbVal k = sp_penum_call1(blk, e); SP_GC_ROOT_RBVAL(k);
+        sp_PolyArray_push(keys, k);
+        sp_PolyArray_push(elems, e);
       }
-      return sp_box_poly_array(out);
+      return sp_box_poly_array(sp_PolyArray_by_keys_ck(elems, keys));
     }
     case SP_PENUM_MIN: case SP_PENUM_MAX: {
       /* the block is asked (element, best so far), as Array#max and

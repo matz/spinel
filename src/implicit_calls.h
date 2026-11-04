@@ -53,6 +53,10 @@ int ic_core_callback(const char *name, int class_side);
    program's. Before inference, or when the types do not settle it, yes. */
 int ic_operand_may_hold(Compiler *c, const IcCall *k);
 
+/* The node of the value a block answers: the last statement of its body, -1
+   for an empty one */
+int ic_block_value(const NodeTable *nt, int blk);
+
 /* Does call node `id` run a method of the program's (typed runs only), so that
    no builtin of its name runs? */
 int ic_runs_program_method(Compiler *c, int id);

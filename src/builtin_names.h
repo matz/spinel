@@ -649,6 +649,7 @@ int is_clone_name(const char *n); /* clone */
 int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
+int is_spaceship_name(const char *n); /* <=> */
 int is_puts_name(const char *n); /* puts */
 int is_to_f_name(const char *n); /* to_f */
 int is_to_i_name(const char *n); /* to_i */

@@ -2100,6 +2100,8 @@ int is_intersect_name(const char *n) { return n && sp_streq(n, "intersect?"); }
 
 int is_compare_by_identity_name(const char *n) { return n && sp_streq(n, "compare_by_identity"); }
 
+int is_spaceship_name(const char *n) { return n && sp_streq(n, "<=>"); }
+
 
 /* File::Stat's predicates, which the TY_IO arms answer for the handle a stat
    is carried in: the mode predicates by their slot in sp_stat_pred (zero?,

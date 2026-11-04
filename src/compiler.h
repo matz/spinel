@@ -425,6 +425,10 @@ typedef struct {
   TyKind body_write; /* (parameter) the join of what its own body assigns it, as
                         infer_write_types last folded the writes; TY_UNKNOWN when
                         nothing does */
+  unsigned char key_operand; /* (parameter) the operand of a `<=>` that a builtin calls on the
+                       values a block answers, left untyped by widen_block_key_cmp_params:
+                       the runtime hands it any class, so the body-usage inferences leave
+                       it alone and the method backstop boxes it after the fixpoint */
   int owner;        /* the scope that holds the slot (Scope.idx), -1 for a global
                        or a constant: the owner its writes move (comp_touch_scope) */
 } LocalVar;

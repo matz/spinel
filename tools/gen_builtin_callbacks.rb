@@ -75,6 +75,8 @@
 #   HOOK   the receiver, a class or module of the program, whose own singleton
 #          method the builtin calls: K.const_get(:Z) asks K for const_missing,
 #          K.define_method(:m) for method_added
+#   KEY    with BLOCK: the answer is compared with another answer of the block
+#          (sort_by, min_by), not with a number of the builtin's own (bsearch's 0)
 #
 # What it writes. Rows are (builtin, receiver, callbacks): the callbacks of
 # one builtin on one receiver ("Array", or "File." for a singleton method;
@@ -105,7 +107,7 @@ Warning[:deprecated] = false
 Warning[:experimental] = false
 $VERBOSE = nil
 
-ROLES = { arg: 1, elem: 2, block: 4, self: 8, class: 16, port: 32, asked: 64, loaded: 128, gvar: 256, hook: 512 }.freeze
+ROLES = { arg: 1, elem: 2, block: 4, self: 8, class: 16, port: 32, asked: 64, loaded: 128, gvar: 256, hook: 512, key: 1024 }.freeze
 ASKED_NAMES = %w[respond_to? respond_to_missing? method_missing].freeze
 # Methods an IO argument is asked for; the same names handed as an ordinary
 # argument are the port protocol, not a conversion
@@ -127,6 +129,14 @@ def ic_log(name, role)
   FORK_PIPE[0]&.write("#{name}\t#{role}\n")
   BUDGET[0] += 1
   raise ProbeStop, "budget" if BUDGET[0] > CALL_BUDGET
+end
+
+# `<=>` asked of a block's answer with another block's answer as its argument:
+# the answers are keys, ordered against one another (sort_by, min_by), where
+# bsearch asks an answer `<=>` the Integer 0. Logged as the KEY role beside
+# the BLOCK one the call is logged in.
+def ic_log_key(name, role, recv, args)
+  ic_log(name, :key) if role == :block && name == :<=> && args.first.class.equal?(recv.class)
 end
 
 # A candidate's answer, called with as many arguments as its body takes
@@ -220,10 +230,11 @@ module Probe
       CANDIDATES.each do |n, body|
         next if omit.include?(n.to_s)
         if bodies
-          k.define_method(n) { |*a, **kw, &b| ic_log(n, role); ic_answer(self, body, a, kw) }
+          k.define_method(n) { |*a, **kw, &b| ic_log(n, role); ic_log_key(n, role, self, a); ic_answer(self, body, a, kw) }
         else
           k.define_method(n) do |*a, **kw, &b|
             ic_log(n, role)
+            ic_log_key(n, role, self, a)
             defined?(super) ? super(*a, **kw, &b) : ic_answer(self, body, a, kw)
           end
         end
@@ -480,7 +491,7 @@ def probe_calls(label, mname, counts, build_recv, own: nil, elems: false, own_ro
         recv = build_recv.(mk)
         a = args.(mk)
         b = blk&.(mk)
-        b = proc { |*| b } if b && !b.is_a?(Proc)
+        b = (answer = b; proc { |*| answer }) if b && !b.is_a?(Proc)
         -> { recv.__send__(mname, *a, &b) }
       end
     end
@@ -670,7 +681,7 @@ def probe_forked(label, mname, mod)
             mk = Maker.new(kind, {})
             a = args.(mk)
             b = blk&.(mk)
-            b = proc { |*| b } if b && !b.is_a?(Proc)
+            b = (answer = b; proc { |*| answer }) if b && !b.is_a?(Proc)
             LOG.clear
             FORK_PIPE[0] = w
             $stdout = $stderr = File.open(File::NULL, "w")

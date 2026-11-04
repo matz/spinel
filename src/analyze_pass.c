@@ -9791,7 +9791,7 @@ int infer_params_from_ivar_hash_ops(Compiler *c) {
       if (ak == NK_LocalVariableReadNode) {
         const char *anm = nt_str(nt, argv[0], "name");
         LocalVar *lv = anm ? scope_local(s, anm) : NULL;
-        if (lv && lv->is_param && lv->type == TY_UNKNOWN) {
+        if (lv && lv->is_param && lv->type == TY_UNKNOWN && !lv->key_operand) {
           lv_set_type(lv, hk); changed = 1;
         }
       }
@@ -9801,7 +9801,7 @@ int infer_params_from_ivar_hash_ops(Compiler *c) {
       if (ak == NK_LocalVariableReadNode) {
         const char *anm = nt_str(nt, argv[1], "name");
         LocalVar *lv = anm ? scope_local(s, anm) : NULL;
-        if (lv && lv->is_param && lv->type == TY_UNKNOWN) {
+        if (lv && lv->is_param && lv->type == TY_UNKNOWN && !lv->key_operand) {
           lv_set_type(lv, hv); changed = 1;
         }
       }
@@ -9841,7 +9841,7 @@ int infer_hash_params(Compiler *c) {
       if (!wrnm) continue;
       Scope *ws = comp_scope_of(c, id);
       LocalVar *wlv = scope_local(ws, wrnm);
-      if (!wlv || !wlv->is_param || wlv->type != TY_UNKNOWN) continue;
+      if (!wlv || !wlv->is_param || wlv->type != TY_UNKNOWN || wlv->key_operand) continue;
       /* The same wait the `[]=` path below makes: typed here, `t[k] += 1` on a
          parameter a caller hands `Hash.new(0)` made the call convert a copy,
          which had lost the default, and the writes never reached the caller's
@@ -9869,7 +9869,7 @@ int infer_hash_params(Compiler *c) {
     if (rk != NK_LocalVariableReadNode) continue;
     Scope *s = comp_scope_of(c, id);
     LocalVar *lv = scope_local(s, nt_str(nt, recv, "name"));
-    if (!lv || !lv->is_param || lv->type != TY_UNKNOWN) continue;
+    if (!lv || !lv->is_param || lv->type != TY_UNKNOWN || lv->key_operand) continue;
     /* a caller's boxed hash, or one not typed yet, is not this body's to
        decide: typed here, the call converted a copy and the callee's
        writes never reached the caller's hash */
@@ -9949,7 +9949,7 @@ int infer_array_params(Compiler *c) {
     if (rk != NK_LocalVariableReadNode) continue;
     Scope *s = comp_scope_of(c, id);
     LocalVar *lv = scope_local(s, nt_str(nt, recv, "name"));
-    if (lv && lv->is_param && !lv->rbs_seeded &&
+    if (lv && lv->is_param && !lv->rbs_seeded && !lv->key_operand &&
         (lv->type == TY_UNKNOWN || (strong && ty_is_hash(lv->type)))) {
       lv_set_type(lv, TY_POLY_ARRAY); changed = 1;
     }
@@ -13878,7 +13878,7 @@ int widen_shared_cmp_params(Compiler *c) {
   int changed = 0;
   for (int mi = 0; mi < c->nscopes; mi++) {
     Scope *m = &c->scopes[mi];
-    if (!m->name || !sp_streq(m->name, "<=>") || m->class_id < 0) continue;
+    if (!is_spaceship_name(m->name) || m->class_id < 0) continue;
     if (m->nparams < 1) continue;
     int users = 0;
     for (int k = 0; k < c->nclasses && users < 2; k++)
@@ -13887,6 +13887,116 @@ int widen_shared_cmp_params(Compiler *c) {
     LocalVar *p = scope_local(m, m->pnames[0]);
     if (p && p->type != TY_POLY) { lv_set_type(p, TY_POLY); changed = 1; }
   }
+  return changed;
+}
+
+/* Does builtin `name` call `<=>` on the values its block answers with
+   another of them as the argument (sort_by, min_by: the table's KEY role)?
+   bsearch, sort, min and max ask an answer `<=>` or `>` a number of their
+   own, which hands the program's classes no other key. */
+static int builtin_orders_block_keys(const char *name) {
+  const BopCallback *cb = NULL;
+  int n = bop_name_callbacks(name, &cb);
+  for (int i = 0; i < n; i++)
+    if (is_spaceship_name(cb[i].name) && (cb[i].roles & BCR_KEY)) return 1;
+  return 0;
+}
+
+/* The program's instance `<=>` methods whose operand is a key's: collected
+   once per call of widen_block_key_cmp_params. */
+typedef struct { int *v; int n; int built; } KeyCmps;
+
+static void key_cmps_build(Compiler *c, KeyCmps *K) {
+  K->built = 1;
+  K->v = malloc(sizeof *K->v * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+  if (!K->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int mi = 0; mi < c->nscopes; mi++) {
+    const Scope *m = &c->scopes[mi];
+    if (is_spaceship_name(m->name) && m->class_id >= 0 && !m->is_cmethod && m->nparams >= 1 && m->pnames[0])
+      K->v[K->n++] = mi;
+  }
+}
+
+/* One key of type `kt`, answered by node `node` (-1 for a forwarded proc, whose
+   answer nothing places): an object of a class takes that class into the
+   operand of the `<=>` the class owns; an unplaced key (TY_POLY) widens an
+   operand a call has already typed and marks one that none has
+   (LocalVar.key_operand), for the method backstop to box after the fixpoint;
+   a builtin value hands the program's classes nothing. A boxed value the class
+   facts show can hold no object of the program, itself or in a container it may
+   be (ClsSet: no class, and not bv), is a builtin value too. */
+static int widen_key_cmp_operands(Compiler *c, KeyCmps *K, TyKind kt, int node) {
+  int changed = 0;
+  if (!ty_is_object(kt)) {
+    if (kt != TY_POLY) return 0;   /* a builtin value, or a type not settled yet */
+    const ClsSet *held = node >= 0 ? cls_fact_node(c, node) : NULL;
+    if (held && !held->all && !held->bv && held->n == 0) return 0;   /* (bv: a container or a Proc, which can hold an object of the program, and ic_boxed_builtin's callers do not ask for the elements) */
+  }
+  if (!K->built) key_cmps_build(c, K);
+  for (int j = 0; j < K->n; j++) {
+    int mi = K->v[j];
+    if (ty_is_object(kt) && comp_method_in_chain(c, ty_object_class(kt), "<=>", NULL) != mi) continue;
+    LocalVar *p = scope_local(&c->scopes[mi], c->scopes[mi].pnames[0]);
+    if (!p || p->rbs_seeded) continue;
+    if (!ty_is_object(kt)) {
+      p->key_operand = 1;
+      if (p->type == TY_UNKNOWN) continue;   /* boxed after the fixpoint */
+    }
+    if (lv_widen(p, ty_is_object(kt) ? kt : TY_POLY)) changed = 1;
+  }
+  return changed;
+}
+
+/* The keys a block's answer `node` makes: an Array literal's elements are keys
+   of their own (the sort compares them one by one), each typed alone, so that
+   a tuple of builtin values widens nothing; any other answer is one key. */
+static int widen_answer_cmp_operands(Compiler *c, KeyCmps *K, int node, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  if (nt_kind(nt, node) == NK_ArrayNode && depth < 4) {
+    int n = 0, changed = 0;
+    const int *el = nt_arr(nt, node, "elements", &n);
+    for (int i = 0; i < n; i++) changed |= widen_answer_cmp_operands(c, K, el[i], depth + 1);
+    return changed;
+  }
+  TyKind kt = nt_kind(nt, node) == NK_SplatNode ? TY_POLY : infer_type(c, node);
+  /* an Array key compares element by element: its elements are the keys */
+  for (int d = 0; d < 4 && ty_is_array(kt); d++) kt = ty_array_elem(kt);
+  return widen_key_cmp_operands(c, K, kt, node);
+}
+
+/* A user `<=>` that a builtin calls on the values a block answers (sort_by
+   and min_by order the block's keys) is handed the other key by the runtime,
+   of the class the block answers. Its operand has to hold that class: typed
+   from the calls that name it, an Integer, the dispatch arm was guarded on
+   the Integer and declined every other key, which the runtime then read as
+   an unordered pair or as the identity rule's 0 for a class that does
+   define `<=>`. A key of a class takes that class in; one the pass cannot
+   place (a forwarded proc, a boxed answer) widens an operand a call has
+   already typed, and marks one that none has: the body-usage inferences
+   leave a marked operand alone, and the method backstop boxes it after the
+   fixpoint with the other unbound parameters, so the calls on it inside the
+   fixpoint bind as they did. A builtin value hands the program's classes
+   nothing. (`&:name` is a literal block by now; the symbol arm below sees
+   operator symbols, which answer a builtin operator's value.) */
+int widen_block_key_cmp_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  KeyCmps K = { NULL, 0, 0 };
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int blk = nt_ref(nt, id, "block");
+    if (!nm || blk < 0 || !builtin_orders_block_keys(nm)) continue;
+    if (nt_kind(nt, blk) == NK_BlockNode) {
+      changed |= widen_answer_cmp_operands(c, &K, ic_block_value(nt, blk), 0);
+    }
+    else if (nt_kind(nt, blk) == NK_BlockArgumentNode) {
+      int ex = nt_ref(nt, blk, "expression");
+      if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode) continue;   /* an operator symbol */
+      changed |= widen_key_cmp_operands(c, &K, TY_POLY, -1);
+    }
+  }
+  free(K.v);
   return changed;
 }
 

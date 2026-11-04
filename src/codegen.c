@@ -16407,7 +16407,16 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else {
       continue;
     }
-    strncat(argbuf, bridge_blk_arg(c, mi), sizeof argbuf - strlen(argbuf) - 1);
+    /* the call's arguments after self: the operand, then what the method's other
+       parameters take (a default, the block slot), as the binop dispatch binds them */
+    char armself[160];
+    snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", bcase ? c->classes[k].name : dcn);
+    const char *opnd = argbuf;
+    Buf pre; memset(&pre, 0, sizeof pre);
+    Buf args; memset(&args, 0, sizeof args);
+    char raise[640];
+    int builds = 0;
+    int bound = emit_arm_args_text(c, mi, armself, &opnd, 1, &pre, &args, &builds, raise, sizeof raise);
     /* the callee and its self, as the class's own methods take them */
     char callee[200], selfarg[200];
     snprintf(callee, sizeof callee, "%s", mc_method(c, m));
@@ -16418,6 +16427,11 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else {
       snprintf(selfarg, sizeof selfarg, "%s(sp_%s *)a.v.p", self_vt ? "*" : "", dcn);
       buf_printf(b, "    case %d: {\n", cid);
+    }
+    if (!bound) {   /* the operand does not bind: CRuby's ArgumentError in place of the call */
+      buf_printf(b, "      %s\n    }\n", raise);
+      free(pre.p); free(args.p);
+      continue;
     }
     if (obj_operand) {
       /* The operand param was inferred to a single class (`pcid`), but the
@@ -16439,40 +16453,43 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "      if (b.tag != %s) { *comparable = FALSE; return 0; }\n", scalar_guard);
     if (builtin_guard)
       buf_printf(b, "      if (!(b.tag == SP_TAG_OBJ && b.cls_id == %s)) { *comparable = FALSE; return 0; }\n", builtin_guard);
+    if (builds) buf_puts(b, "      SP_GC_ROOT_RBVAL(b);\n");
+    if (pre.p && pre.p[0]) buf_printf(b, "      %s\n", pre.p);
     if (non_numeric) {
-      buf_printf(b, "      (void)%s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      (void)%s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      *comparable = FALSE; return 0;\n");
     }
     else if (m->ret == TY_INT && method_ret_is_oint(m)) {
       /* a `<=>` that also answers nil is a nullable Integer (the nil join):
          its nil is the not-comparable answer */
-      buf_printf(b, "      sp_oint _ro = %s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      sp_oint _ro = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      if (_ro.nil) { *comparable = FALSE; return 0; }\n");
       buf_puts(b, "      *comparable = TRUE; return _ro.v;\n");
     }
     else if (m->ret == TY_INT) {
-      buf_printf(b, "      sp_int _ri = (sp_int)%s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      sp_int _ri = (sp_int)%s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      *comparable = TRUE; return _ri;\n");
     }
     else if (m->ret == TY_FLOAT && method_ret_is_oint(m)) {
-      buf_printf(b, "      sp_ofloat _ro = %s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      sp_ofloat _ro = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      if (_ro.nil) { *comparable = FALSE; return 0; }\n");
       buf_puts(b, "      *comparable = TRUE; return (_ro.v > 0) - (_ro.v < 0);\n");
     }
     else if (m->ret == TY_FLOAT) {
       /* a Float `<=>` result is a valid comparison (CRuby): use its sign */
-      buf_printf(b, "      sp_float _rf = %s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      sp_float _rf = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      *comparable = TRUE; return (_rf > 0) - (_rf < 0);\n");
     }
     else {
       /* poly `<=>`: an Integer or Float result is comparable (use its sign);
          nil or any other type (String, ...) is incomparable -> ArgumentError */
-      buf_printf(b, "      sp_RbVal _r = %s(%s, %s);\n", callee, selfarg, argbuf);
+      buf_printf(b, "      sp_RbVal _r = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      if (_r.tag == SP_TAG_INT) { *comparable = TRUE; return _r.v.i; }\n");
       buf_puts(b, "      if (_r.tag == SP_TAG_FLT) { *comparable = TRUE; return (_r.v.f > 0) - (_r.v.f < 0); }\n");
       buf_puts(b, "      *comparable = FALSE; return 0;\n");
     }
     buf_puts(b, "    }\n");
+    free(pre.p); free(args.p);
   }
   buf_puts(b, "    default: break;\n");
   buf_puts(b, "  }\n  *comparable = FALSE; return 0;\n}\n");

@@ -9779,6 +9779,10 @@ static int int_arms_clamp_pow(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   else if (sp_streq(name, "pow") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
     buf_printf(b, "pow((double)(%s), ", r); emit_float_expr(c, argv[0], b); buf_puts(b, ")");
   }
+  /* a constant pair the analysis found past the word (`2.pow(70)`) */
+  else if (sp_streq(name, "pow") && argc == 1 && comp_ntype(c, id) == TY_BIGINT) {
+    buf_printf(b, "sp_bigint_pow(sp_bigint_new_int(%s), (int64_t)(", r); emit_int_expr(c, argv[0], b); buf_puts(b, "))");
+  }
   else if (sp_streq(name, "pow") && argc == 1) { buf_printf(b, "sp_int_pow(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
   else if (sp_streq(name, "coerce") && argc == 1) {
     Repr a0r = repr_of(c, argv[0]);

@@ -1864,29 +1864,39 @@ int an_unit_int_literal(const NodeTable *nt, int id) {
   return (int)v;
 }
 
-/* Whether base**exp does not fit in signed 64 bits (so it must be a Bignum). */
+/* Whether v is outside the target's Integer word (sp_int: 32 bits on
+   wasm32-wasi and other 32-bit targets, else 64). */
+static int infer_int_past_word(long long v) {
+  extern int sp_target_int_bits;
+  return sp_target_int_bits == 32 && (v > INT32_MAX || v < INT32_MIN);
+}
+
+/* Whether base**exp does not fit the target's word (so it must be a Bignum). */
 static int infer_int_pow_overflows(long long base, long long exp) {
   if (exp <= 0) return 0;
   if (base >= -1 && base <= 1) return 0;
   long long r = 1;
   for (long long i = 0; i < exp; i++)
-    if (__builtin_mul_overflow(r, base, &r)) return 1;
+    if (__builtin_mul_overflow(r, base, &r) || infer_int_past_word(r)) return 1;
   return 0;
 }
 
-/* Whether base << amount does not fit in signed 64 bits (a Bignum in CRuby --
+/* Whether base << amount does not fit the target's word (a Bignum in CRuby --
    `1 << 64` is 2**64, not a wrapped/UB C shift). */
 static int infer_int_shl_overflows(long long base, long long amount) {
+  extern int sp_target_int_bits;
   if (base == 0 || amount <= 0) return 0;
+  int top = sp_target_int_bits == 32 ? 31 : 63;
   long long r = base;
   for (long long i = 0; i < amount; i++)
-    if (__builtin_mul_overflow(r, 2, &r)) {
+    if (__builtin_mul_overflow(r, 2, &r) || infer_int_past_word(r)) {
       /* a product that lands exactly on 2**63 (`1 << 63`, `3 << 62`'s does
-         not) has the bit pattern of -2**63, which is an sp_int: in raise
-         mode the runtime helper raises its RangeError, in wrap mode the
-         value is -2**63. Only promote mode keeps the Bignum. */
-      if (!g_promote_mode && amount < 64 && base > 0 &&
-          (unsigned long long)base == (1ULL << (63 - amount)))
+         not; 2**31 on a 32-bit target) has the bit pattern of the word's
+         minimum, which is an sp_int: in raise mode the runtime helper raises
+         its RangeError, in wrap mode the value is that minimum. Only promote
+         mode keeps the Bignum. */
+      if (!g_promote_mode && amount < top && base > 0 &&
+          (unsigned long long)base == (1ULL << (top - amount)))
         return 0;
       return 1;
     }
@@ -5688,13 +5698,13 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
         }
         /* Two constants escape the word too when their result does: `max + 1`
            was typed sp_int and took the raising helper (#4968). Judged in
-           intptr_t, sp_int's own type in the compiler that emits for it. */
-        intptr_t ia = (intptr_t)pa, ib = (intptr_t)pb, ir;
-        if ((long long)ia != pa || (long long)ib != pb) { *out = TY_POLY; return 1; }
-        int ovf = sp_streq(name, "+") ? __builtin_add_overflow(ia, ib, &ir)
-                : sp_streq(name, "-") ? __builtin_sub_overflow(ia, ib, &ir)
-                : __builtin_mul_overflow(ia, ib, &ir);
-        if (ovf) { *out = TY_POLY; return 1; }
+           the target's word, which a 32-bit target's sp_int is. */
+        long long ir;
+        if (infer_int_past_word(pa) || infer_int_past_word(pb)) { *out = TY_POLY; return 1; }
+        int ovf = sp_streq(name, "+") ? __builtin_add_overflow(pa, pb, &ir)
+                : sp_streq(name, "-") ? __builtin_sub_overflow(pa, pb, &ir)
+                : __builtin_mul_overflow(pa, pb, &ir);
+        if (ovf || infer_int_past_word(ir)) { *out = TY_POLY; return 1; }
       }
       { *out = TY_INT; return 1; }
     }

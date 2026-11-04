@@ -20503,6 +20503,60 @@ static int scm_self_stmts(NodeTable *nt, int like, const int *in, int n, int *ou
   return n;
 }
 
+/* `x = @y = singleton_class.attr_accessor :a, :b`: the attr_* call becomes
+   a statement of its own ahead of the assignment, which takes the Array of
+   the names it defines ([:a, :a=, :b, :b=], what CRuby's attr_* answers).
+   Only for Symbol arguments, and an assignment (through any chain of
+   variable and constant writes) that is itself a statement; the call is
+   then one the statement form above takes, in a class or module body or
+   the program's. 1 when it moved. */
+static int scm_lift_attr_value(Compiler *c, NodeTable *nt, const int *parent, int id) {
+  const char *nm = nt_str(nt, id, "name");
+  int rd = nm && (sp_streq(nm, "attr_reader") || sp_streq(nm, "attr_accessor") || sp_streq(nm, "attr"));
+  int wr = nm && (sp_streq(nm, "attr_writer") || sp_streq(nm, "attr_accessor"));
+  if ((!rd && !wr) || nt_ref(nt, id, "block") >= 0) return 0;
+  int args = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+  if (ac < 1 || ac > 32) return 0;
+  for (int i = 0; i < ac; i++)
+    if (nt_kind(nt, av[i]) != NK_SymbolNode || !nt_str(nt, av[i], "value")) return 0;
+  int ch = id, w = parent[id];
+  while (w >= 0 && nt_ref(nt, w, "value") == ch &&
+         (nt_kind(nt, w) == NK_LocalVariableWriteNode || nt_kind(nt, w) == NK_InstanceVariableWriteNode ||
+          nt_kind(nt, w) == NK_ClassVariableWriteNode || nt_kind(nt, w) == NK_GlobalVariableWriteNode ||
+          nt_kind(nt, w) == NK_ConstantWriteNode)) { ch = w; w = parent[w]; }
+  if (ch == id || w < 0 || nt_kind(nt, w) != NK_StatementsNode) return 0;
+  int owner = parent[w];
+  int in_body = owner >= 0 && (nt_kind(nt, owner) == NK_ClassNode || nt_kind(nt, owner) == NK_ModuleNode);
+  if (!in_body && !prog_is_root_stmts(c, w)) return 0;
+  if (scm_class_receiver(nt, nt_ref(nt, id, "receiver"), in_body) == -2) return 0;
+  int el[64], ne = 0;
+  for (int i = 0; i < ac; i++) {
+    const char *an = nt_str(nt, av[i], "value");
+    char wn[256];
+    snprintf(wn, sizeof wn, "%s=", an);
+    for (int k = 0; k < 2; k++) {
+      if (!(k ? wr : rd)) continue;
+      int sym = fwd_new_node_like(nt, id, "SymbolNode");
+      if (sym < 0) return 0;
+      nt_node_set_str(nt, sym, "value", k ? wn : an);
+      el[ne++] = sym;
+    }
+  }
+  int arr = fwd_new_node_like(nt, id, "ArrayNode");
+  if (arr < 0) return 0;
+  nt_node_set_arr(nt, arr, "elements", el, ne);
+  nt_node_set_ref(nt, parent[id], "value", arr);
+  int bn = 0; const int *bb = nt_arr(nt, w, "body", &bn);
+  int *nb = malloc(sizeof(int) * (size_t)(bn + 1));
+  if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int o = 0;
+  for (int i = 0; i < bn; i++) { if (bb[i] == ch) nb[o++] = id; nb[o++] = bb[i]; }
+  nt_node_set_arr(nt, w, "body", nb, o);
+  free(nb);
+  return 1;
+}
+
 int desugar_singleton_class_meta(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int *parent = NULL, changed = 0, n0 = nt->count;
@@ -20512,6 +20566,11 @@ int desugar_singleton_class_meta(Compiler *c) {
     if (r < 0 || nt_kind(nt, r) != NK_CallNode || !nt_str(nt, r, "name") ||
         !sp_streq(nt_str(nt, r, "name"), "singleton_class")) continue;
     if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (parent[id] >= 0 && nt_kind(nt, parent[id]) != NK_StatementsNode && scm_lift_attr_value(c, nt, parent, id)) {
+      free(parent);   /* the body changed */
+      if (!(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      changed = 1;
+    }
     /* a statement of the program's body or of a class or module body */
     int st = parent[id], owner = st >= 0 ? parent[st] : -1;
     if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) continue;

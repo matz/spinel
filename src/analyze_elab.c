@@ -6039,11 +6039,36 @@ static int lr_form_leads(const NodeTable *nt, int stmt, int form) {
    does not know, or code it cannot follow ran on cls or a superclass before
    p (a class method that defines one), in a program that defines a method of
    that name somewhere */
+/* Does owner k's opaque history hold code that may give it a hook: one
+   that may define (LR_OPAQUE_DEFINES), but not an include, extend or
+   prepend of core modules alone (`include Comparable`), which the record
+   keeps as opaque since it does not hold the module, and which defines no
+   method of the program's on the includer (#11040) */
+static int lr_opaque_may_define_hook(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  const LrHist *op = lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
+  for (int j = 0; op && j < op->n; j++) {
+    if (op->v[j].vis != LR_OPAQUE_DEFINES) continue;
+    int n = op->v[j].node, core = 0;
+    const char *nm = n >= 0 && nt_kind(nt, n) == NK_CallNode ? nt_str(nt, n, "name") : NULL;
+    if (nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") || sp_streq(nm, "prepend"))) {
+      int an = nt_ref(nt, n, "arguments"), ac = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      core = ac > 0;
+      for (int q = 0; q < ac && core; q++)
+        core = nt_kind(nt, av[q]) == NK_ConstantReadNode && nt_str(nt, av[q], "name") &&
+               is_builtin_module_const_name(nt_str(nt, av[q], "name")) &&
+               lr_class_ref_at(c, av[q], NULL) < 0;
+    }
+    if (!core) return 1;
+  }
+  return 0;
+}
 static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, const LrDef **d) {
   if (elab_method_at(c, cls, hook, 1, p, d) != ELAB_NO) return 1;
   if (!lr_defines(c->lrec, hook)) return 0;
   for (int a = cls, i = 0; a >= 0 && i < 64; a = lr_super(c, a), i++)
-    if (elab_opaque_before(c, a, p) != ELAB_NO) return 1;
+    if (elab_opaque_before(c, a, p) != ELAB_NO && lr_opaque_may_define_hook(c, a)) return 1;
   return 0;
 }
 

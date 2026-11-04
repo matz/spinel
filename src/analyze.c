@@ -3426,6 +3426,17 @@ static int dyn_parent_copy(NodeTable *nt, int par) {
     return n;
   }
   if (k == NK_SelfNode) return nt_new_node(nt, "SelfNode");
+  if (k == NK_ConstantPathNode) {   /* m::Nest, the parent of m::Nest::Foo */
+    int pp = nt_ref(nt, par, "parent");
+    const char *nm = nt_str(nt, par, "name");
+    if (pp < 0 || !nm) return -1;
+    int pc = dyn_parent_copy(nt, pp);
+    if (pc < 0) return -1;
+    int n = nt_new_node(nt, "ConstantPathNode");
+    nt_node_set_str(nt, n, "name", nm);
+    nt_node_set_ref(nt, n, "parent", pc);
+    return n;
+  }
   if (k == NK_CallNode) {
     const char *nm = nt_str(nt, par, "name");
     int r = nt_ref(nt, par, "receiver");
@@ -3463,11 +3474,98 @@ static int dyn_class_ref(Compiler *c, int k, int *holder) {
 
    A holder takes m when m is it or has it as an ancestor (a class under
    it, a module including it); Object's own constants only through Object
-   itself, as CRuby looks them up through no other class. A path in a
+   itself, as CRuby looks them up through no other class. A parent that is
+   itself a path from a value (`m::Nest::Foo`) is read again in each arm,
+   as m is. A path in a
    class or module definition (its name or its superclass), in a rescue
    list, or through another parent stays refused (#10955). (A value
    constant with a VALUE parent is read by a run-time switch on the
    parent's class, and a leaf one class has is that class.) */
+/* For the parent `m::Nest` of `m::Nest::Foo`: 1 when the path's root is a
+   value (m: a local, self, a call's answer), so Nest and then Foo are
+   looked up in a module known only at run time. A path rooted in a
+   constant (`Ext::Nest`) or in `::` is 0: it names its class at compile
+   time. A middle name that classes in two scopes share is -1 (the lookup
+   of the middle step is itself a guess): the path is refused. */
+static int dyn_path_value_root(Compiler *c, int par) {
+  const NodeTable *nt = c->nt;
+  int root_value = 0, guess = 0;
+  for (int p = par; ; ) {
+    if (nt_kind(nt, p) != NK_ConstantPathNode) { root_value = nt_kind(nt, p) != NK_ConstantReadNode; break; }
+    const char *mid = nt_str(nt, p, "name");
+    int nested = 0;
+    if (mid && class_leaf_count(c, mid, &nested) >= 2 && nested) guess = 1;
+    p = nt_ref(nt, p, "parent");
+    if (p < 0) break;   /* ::Ext */
+  }
+  if (!root_value) return 0;
+  return guess ? -1 : 1;
+}
+/* The superclass of class k, read from its definition while the passes
+   still place classes (ClassInfo.parent may not be set yet) */
+static int dyn_holder_parent(Compiler *c, int k) {
+  if (c->classes[k].parent >= 0) return c->classes[k].parent;
+  int sc = class_def_super(c->nt, c->classes[k].def_node);
+  if (sc < 0) return -1;
+  NodeKind sk = nt_kind(c->nt, sc);
+  const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_str(c->nt, sc, "name") : NULL;
+  if (!sn) return -1;
+  /* the superclass as written beside k (Kid < Base in one scope) */
+  int e = c->classes[k].enclosing_class;
+  for (int q = 0; q < c->nclasses; q++) {
+    const ClassInfo *qi = &c->classes[q];
+    if (q == k || qi->enclosing_class != e || !qi->name) continue;
+    const char *leaf = qi->name;
+    if (e >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (sp_streq(leaf, sn)) return q;
+  }
+  return -1;
+}
+/* The one class or module whose leaf name is nm (-1 for none or two) */
+static int dyn_holder_named(Compiler *c, const char *nm) {
+  int found = -1;
+  for (int q = 0; q < c->nclasses; q++) {
+    const char *leaf = c->classes[q].name;
+    if (!leaf) continue;
+    if (c->classes[q].enclosing_class >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (!sp_streq(leaf, nm)) continue;
+    if (found >= 0) return -1;
+    found = q;
+  }
+  return found;
+}
+/* Does class or module a have b among its ancestors: a superclass, or a
+   module a class of the chain (or such a module) includes? */
+static int dyn_holder_reaches_d(Compiler *c, int a, int b, int depth) {
+  if (depth > 32) return 0;
+  for (int k = a, steps = 0; k >= 0 && k < c->nclasses && steps < 64; k = dyn_holder_parent(c, k), steps++) {
+    if (k != a && k == b) return 1;
+    const ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->nincluded_mods; i++) {
+      int m = ci->included_mods[i];
+      if (m == b || (m >= 0 && m != k && dyn_holder_reaches_d(c, m, b, depth + 1))) return 1;
+    }
+    /* (and an `include M` its body writes, before the include lists are made) */
+    const NodeTable *nt = c->nt;
+    int body = ci->def_node >= 0 ? nt_ref(nt, ci->def_node, "body") : -1, bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++) {
+      if (nt_kind(nt, bb[j]) != NK_CallNode || nt_ref(nt, bb[j], "receiver") >= 0 ||
+          !sp_streq(nt_str(nt, bb[j], "name"), "include")) continue;
+      int an = 0, args = nt_ref(nt, bb[j], "arguments");
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      for (int x = 0; x < an; x++) {
+        const char *mn = nt_str(nt, av[x], "name");
+        int m = mn ? dyn_holder_named(c, mn) : -1;
+        if (m == b || (m >= 0 && m != k && dyn_holder_reaches_d(c, m, b, depth + 1))) return 1;
+      }
+    }
+  }
+  return 0;
+}
+static int dyn_holder_reaches(Compiler *c, int a, int b) {
+  return a >= 0 && b >= 0 && a != b && dyn_holder_reaches_d(c, a, b, 0);
+}
 static void desugar_dyn_parent_class_leaf(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3491,7 +3589,8 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int par = nt_ref(nt, id, "parent");
     if (par < 0) continue;
     NodeKind pk = nt_kind(nt, par);
-    if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) continue;
+    if (pk == NK_ConstantReadNode) continue;
+    if (pk == NK_ConstantPathNode && !dyn_path_value_root(c, par)) continue;
     const char *nm = nt_str(nt, id, "name");
     int nested = 0;
     if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
@@ -3503,17 +3602,22 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int par = nt_ref(nt, id, "parent");
     char nm[256];
     snprintf(nm, sizeof nm, "%s", nt_str(nt, id, "name"));
-    int probe = keep[id] ? -1 : dyn_parent_copy(nt, par);
+    int guessed_mid = nt_kind(nt, par) == NK_ConstantPathNode && dyn_path_value_root(c, par) < 0;
+    int probe = keep[id] || guessed_mid ? -1 : dyn_parent_copy(nt, par);
     if (probe < 0) {
       char msg[400];
-      snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) in a class or module "
+      if (guessed_mid)
+        snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::...::%s`) is not supported when "
+                 "a middle name of the path and %s each name classes or modules in more than one scope "
+                 "(see docs/limitations.md)", nm, nm);
+      else snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) in a class or module "
                "definition, a rescue list or through a value other than a local, self or its class is not "
                "supported when classes or modules in more than one scope are named %s (see docs/limitations.md)", nm, nm);
       unsupported_feature_collect(c, id, msg);
       continue;
     }
     /* the arms: nested holders first, then Object's own */
-    int arms_c[64], arms_h[64], na = 0, top = -1;
+    int arms_c[64], arms_h[64], arms_k[64], na = 0, top = -1;
     for (int pass = 0; pass < 2; pass++)
       for (int k = 0; k < c->nclasses && na < 63; k++) {
         int nst = 0;
@@ -3527,8 +3631,17 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         if ((pass == 0) != nst) continue;
         int h = -1, path = dyn_class_ref(c, k, &h);
         if (!nst) { top = path; continue; }
-        arms_c[na] = path; arms_h[na] = h; na++;
+        arms_c[na] = path; arms_h[na] = h; arms_k[na] = ci->enclosing_class; na++;
       }
+    /* a holder another holder reaches (Kid < Base, a module including
+       another) is tested first: CRuby finds the nearest ancestor's Foo */
+    for (int i = 0; i < na; i++)
+      for (int j = i + 1; j < na; j++)
+        if (dyn_holder_reaches(c, arms_k[j], arms_k[i]) && !dyn_holder_reaches(c, arms_k[i], arms_k[j])) {
+          int t0 = arms_c[i], t1 = arms_h[i], t2 = arms_k[i];
+          arms_c[i] = arms_c[j]; arms_h[i] = arms_h[j]; arms_k[i] = arms_k[j];
+          arms_c[j] = t0; arms_h[j] = t1; arms_k[j] = t2;
+        }
     /* the else arm: CRuby's NameError */
     int msg1 = nt_new_node(nt, "StringNode");
     nt_node_set_str(nt, msg1, "content", "uninitialized constant ");

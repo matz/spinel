@@ -566,6 +566,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
 == test/reject/const_get_runtime_name.rb [promote] rc=1
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
+== test/reject/const_path_value_parent_middle_collides.rb [default] rc=1
+spinel: test/reject/const_path_value_parent_middle_collides.rb:9: a constant path through a run-time value (`<value>::...::Foo`) is not supported when a middle name of the path and Foo each name classes or modules in more than one scope (see docs/limitations.md)
+== test/reject/const_path_value_parent_middle_collides.rb [promote] rc=1
+spinel: test/reject/const_path_value_parent_middle_collides.rb:9: a constant path through a run-time value (`<value>::...::Foo`) is not supported when a middle name of the path and Foo each name classes or modules in more than one scope (see docs/limitations.md)
 == test/reject/const_path_value_parent_rescue.rb [default] rc=1
 spinel: test/reject/const_path_value_parent_rescue.rb:10: a constant path through a run-time value (`<value>::Err`) in a class or module definition, a rescue list or through a value other than a local, self or its class is not supported when classes or modules in more than one scope are named Err (see docs/limitations.md)
 == test/reject/const_path_value_parent_rescue.rb [promote] rc=1

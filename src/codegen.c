@@ -13486,6 +13486,7 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_with) return;
   buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "ov");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
@@ -13498,12 +13499,34 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
     int idx = i;
     buf_printf(b, "    case %d: {\n", idx);
     buf_printf(b, "      sp_%s *o = (sp_%s *)v.v.p; (void)o;\n", ci->c_name, ci->c_name);
-    buf_printf(b, "      return sp_box_obj(sp_%s_new(", ci->c_name);
+    /* a key no member takes is CRuby's ArgumentError, as on a typed
+       receiver: a `**hash` can carry one */
+    buf_puts(b, "      if (sp_poly_length(ov) > 0) (void)sp_kw_splat_check(ov, (const char *const[]){");
+    for (int j = 0; j < ci->nmembers; j++) buf_printf(b, "%s\"%s\"", j ? ", " : "", ci->ivars[j] + 1);
+    if (ci->nmembers == 0) buf_puts(b, "\"\"");
+    buf_printf(b, "}, %d, (const unsigned char[]){", ci->nmembers);
+    for (int j = 0; j < ci->nmembers; j++) buf_puts(b, j ? ", 1" : "1");
+    if (ci->nmembers == 0) buf_puts(b, "0");
+    buf_puts(b, "}, 1);\n");
+    /* A member with a nil bit takes its value and its nil, from `ov` or
+       from the receiver, through an oint temp: the constructor clears every
+       nil byte, so they are set after it */
+    for (int j = 0; j < ci->nmembers; j++) {
+      if (!ivar_has_nilbit(c, i, j)) continue;
+      TyKind mt = ci->ivar_types[j];
+      const char *iv = ci->ivars[j] + 1;
+      char nb[128]; ivar_nilbit_test(c, i, j, "o->", nb, sizeof nb);
+      buf_printf(b, "      %s _n%d = ({ sp_bool _f; sp_RbVal _pv = sp_poly_hash_probe(ov, sp_box_sym(sp_sym_intern(\"%s\")), &_f); "
+                    "_f ? %s(_pv) : (%s){ o->iv_%s, %s }; });\n",
+                 oint_ctype(mt), j, iv, oint_unbox(mt), oint_ctype(mt), iv_c(iv), nb);
+    }
+    buf_printf(b, "      sp_%s *_r = sp_%s_new(", ci->c_name, ci->c_name);
     for (int j = 0; j < ci->nmembers; j++) {
       TyKind mt = ci->ivar_types[j];
       const char *iv = ci->ivars[j] + 1;   /* sym key */
       const char *ivf = iv_c(iv);           /* C field id */
       if (j) buf_puts(b, ", ");
+      if (ivar_has_nilbit(c, i, j)) { buf_printf(b, "_n%d.v", j); continue; }
       /* a per-member statement-expr with its OWN found flag: sp_X_new's args
          evaluate in unspecified order, so a shared flag would race. */
       buf_printf(b, "({ sp_bool _f; sp_RbVal _pv = sp_poly_hash_probe(ov, sp_box_sym(sp_sym_intern(\"%s\")), &_f); _f ? ", iv);
@@ -13511,7 +13534,14 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
       buf_puts(b, ub.p ? ub.p : "_pv"); free(ub.p);
       buf_printf(b, " : o->iv_%s; })", ivf);
     }
-    buf_printf(b, "), %d);\n    }\n", idx);
+    buf_puts(b, ");\n");
+    for (int j = 0; j < ci->nmembers; j++) {
+      if (!ivar_has_nilbit(c, i, j)) continue;
+      char nf[32], dst[128]; snprintf(nf, sizeof nf, "_n%d.nil", j);
+      ivar_nilbit_assign(c, i, j, "_r->", nf, dst, sizeof dst);
+      buf_printf(b, "      %s;\n", dst);
+    }
+    buf_printf(b, "      return sp_box_obj(_r, %d);\n    }\n", idx);
   }
   buf_puts(b, "    default: sp_raise_cls(\"NoMethodError\", sp_sprintf(\"undefined method 'with' for %s\", sp_poly_class_name(v))); return sp_box_nil();\n  }\n}\n");
 }
@@ -16221,6 +16251,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
         return;
       }
     }
+    /* `super` in a Data's own with no ancestor defines is Data#with */
+    if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
     /* `super` in a ` override no ancestor defines is Kernel#` */
     if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
     /* `super` from the program's own send, __send__ or public_send that no

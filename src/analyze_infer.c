@@ -11933,6 +11933,10 @@ TyKind infer_uncached(Compiler *c, int id) {
                 : subs_super ? TY_POLY_ARRAY
                 : rto_super ? TY_BOOL
                 : freeze_super ? ty_object(s->class_id) : TY_UNKNOWN;
+    /* and `super` in a Data's own with reaches Data#with: a copy, or self
+       (emit_super_data_with) */
+    if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
+        c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
     if (p < 0) return none;
     /* super inside a class method resolves through the parent's CLASS-method
        chain (the instance chain would miss `def self.x` entirely). */

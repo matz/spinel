@@ -15788,6 +15788,20 @@ static sp_sym sp_thread_local_key(sp_RbVal k) {
   sp_raise_cls("TypeError", sp_sprintf("%s is not a symbol nor a string", sp_poly_inspect(k)));
   return (sp_sym)0;
 }
+/* A `**` operand of Data#with on a boxed receiver, bound into the override
+   hash `h` over the keys before it, as a later key binds. A String key
+   names the member its Symbol does; any other key is CRuby's TypeError. */
+static void sp_poly_with_kw_merge(sp_SymPolyHash *h, sp_RbVal s) {
+  s = sp_kw_splat_conv(s, 0);
+  if (s.tag == SP_TAG_NIL) return;
+  SP_GC_ROOT_RBVAL(s);
+  sp_int n = sp_poly_length(s);
+  for (sp_int i = 0; i < n; i++) {
+    sp_RbVal k, v;
+    sp_poly_hash_pair_i(s, i, &k, &v);
+    sp_SymPolyHash_set(h, sp_thread_local_key(k), v);
+  }
+}
 /* The operator inject / reduce is given when it is known only at run time:
    a Symbol, or a String naming one; anything else is CRuby's TypeError. */
 static sp_sym sp_poly_inject_op(sp_RbVal v) {

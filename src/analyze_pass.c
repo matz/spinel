@@ -10377,25 +10377,62 @@ static TyKind struct_member_arg_type(Compiler *c, int v) {
   return at;
 }
 
+/* a Hash literal whose every element is a Symbol-keyed pair */
+static int hash_lit_sym_keyed(const NodeTable *nt, int h) {
+  int n = 0; const int *el = nt_arr(nt, h, "elements", &n);
+  for (int e = 0; e < n; e++) {
+    if (nt_kind(nt, el[e]) != NK_AssocNode) return 0;
+    int key = nt_ref(nt, el[e], "key");
+    if (key < 0 || nt_kind(nt, key) != NK_SymbolNode) return 0;
+  }
+  return 1;
+}
+
 /* Struct construction: positional (or keyword) args set the member ivars
    in order. Shared by every spelling that constructs the struct: the
    constant, a qualified path, a local holding an anonymous struct, and a
    bare `new` / `self.new` in one of the struct's own class methods, which
    typed nothing and left every member boxed (#4842). */
-/* `d.with(k: v)` on a Struct or Data: each value a literal key gives a
-   member is one that member can hold, as a construction's is; a member the
-   call does not name keeps what it had. Unread, `Row.new(1).with(a: nil)`
-   left the Integer member unable to hold nil and stored 0 (#8508). */
-static int struct_with_types_members(Compiler *c, int id, int ci) {
+/* `d.with(k: v)` on a Struct or Data, keyword elements `ke`: each value a
+   literal key gives a member is one that member can hold, as a
+   construction's is; a member the call does not name keeps what it had.
+   Unread, `Row.new(1).with(a: nil)` left the Integer member unable to
+   hold nil and stored 0 (#8508).
+   A `**hash` among the keywords: a Hash literal's Symbol keys each name
+   the member they give, as a literal keyword does; any other hash can
+   carry any member, so each member can hold the hash's value type. */
+static int with_kw_types_members(Compiler *c, ClassInfo *cls, const int *ke, int kn) {
   const NodeTable *nt = c->nt;
-  ClassInfo *cls = &c->classes[ci];
-  int args = nt_ref(nt, id, "arguments");
-  int an = 0;
-  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an != 1 || nt_kind(nt, argv[0]) != NK_KeywordHashNode) return 0;
-  int kn = 0; const int *ke = nt_arr(nt, argv[0], "elements", &kn);
   int changed = 0;
   for (int e = 0; e < kn; e++) {
+    if (nt_kind(nt, ke[e]) == NK_AssocSplatNode) {
+      int hv = nt_ref(nt, ke[e], "value");
+      if (hv < 0) continue;
+      if (nt_kind(nt, hv) == NK_HashNode && hash_lit_sym_keyed(nt, hv)) {
+        int hn = 0; const int *he = nt_arr(nt, hv, "elements", &hn);
+        for (int k = 0; k < hn; k++) {
+          const char *kname = nt_str(nt, nt_ref(nt, he[k], "key"), "value");
+          int v = nt_ref(nt, he[k], "value");
+          if (!kname || v < 0) continue;
+          for (int a = 0; a < cls->nmembers; a++) {
+            if (!sp_streq(cls->ivars[a] + 1, kname) || class_ivar_pinned(cls, cls->ivars[a])) continue;
+            TyKind m = ty_unify(cls->ivar_types[a], struct_member_arg_type(c, v));
+            if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); changed = 1; }
+          }
+        }
+        continue;
+      }
+      TyKind ht = infer_type(c, hv);
+      TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+      if (vt == TY_UNKNOWN) continue;
+      if (vt == TY_NIL) vt = TY_POLY;
+      for (int a = 0; a < cls->nmembers; a++) {
+        if (class_ivar_pinned(cls, cls->ivars[a])) continue;
+        TyKind m = ty_unify(cls->ivar_types[a], vt);
+        if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); changed = 1; }
+      }
+      continue;
+    }
     if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;
     int key = nt_ref(nt, ke[e], "key"), v = nt_ref(nt, ke[e], "value");
     const char *kname = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
@@ -10407,6 +10444,15 @@ static int struct_with_types_members(Compiler *c, int id, int ci) {
     }
   }
   return changed;
+}
+static int struct_with_types_members(Compiler *c, int id, int ci) {
+  const NodeTable *nt = c->nt;
+  int args = nt_ref(nt, id, "arguments");
+  int an = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (an != 1 || nt_kind(nt, argv[0]) != NK_KeywordHashNode) return 0;
+  int kn = 0; const int *ke = nt_arr(nt, argv[0], "elements", &kn);
+  return with_kw_types_members(c, &c->classes[ci], ke, kn);
 }
 
 /* ... and on a Data with an initialize of its own (imi): CRuby builds the
@@ -10446,6 +10492,53 @@ static int struct_with_binds_initialize(Compiler *c, int id, int ci, int imi) {
     TyKind mt = cls->ivar_types[a];
     if (!p || p->rbs_seeded || mt == TY_UNKNOWN) continue;
     changed |= slot_take(c, p, mt == TY_STRBUF ? TY_STRING : mt, -1);
+  }
+  return changed;
+}
+
+/* `super` from a Data's own `with` that no ancestor defines reaches the
+   builtin Data#with (emit_super_data_with): each value it forwards is one
+   a member can hold, as a direct `d.with(k: v)` binds it, and a `**hash`
+   can name any member. */
+static void with_super_widen(ClassInfo *cls, int a, TyKind vt, int *changed) {
+  if (a < 0 || vt == TY_UNKNOWN || class_ivar_pinned(cls, cls->ivars[a])) return;
+  TyKind m = ty_unify(cls->ivar_types[a], vt == TY_STRBUF ? TY_STRING : vt);
+  if (m != cls->ivar_types[a]) { ivar_set_type(cls, a, m); *changed = 1; }
+}
+static int struct_with_super_types_members(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int pass = 0; pass < 2; pass++) {
+  NodeKind sk = pass ? NK_ForwardingSuperNode : NK_SuperNode;
+  NT_FOREACH_KIND(nt, sk, su) {
+    Scope *s = comp_scope_of(c, su);
+    if (!s || !s->name || !sp_streq(s->name, "with") || s->is_cmethod || s->class_id < 0) continue;
+    ClassInfo *cls = &c->classes[s->class_id];
+    if (!cls->is_struct || !cls->is_data ||
+        (cls->parent >= 0 && comp_method_in_chain(c, cls->parent, "with", NULL) >= 0)) continue;
+    if (pass) {
+      for (int j = 0; j < s->nparams; j++) {
+        const char *pn = s->pnames[j];
+        LocalVar *p = pn ? scope_local(s, pn) : NULL;
+        if (!p) continue;
+        if (j == s->kwrest_idx) {
+          TyKind ht = p->type;
+          TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : ht == TY_POLY ? TY_POLY : TY_UNKNOWN;
+          for (int a = 0; a < cls->nmembers; a++) with_super_widen(cls, a, vt, &changed);
+        }
+        else if (callee_param_is_declared_kwarg(c, s, pn)) {
+          char ivn[300]; snprintf(ivn, sizeof ivn, "@%s", pn);
+          with_super_widen(cls, comp_member_index(cls, ivn), p->type, &changed);
+        }
+      }
+      continue;
+    }
+    int sa = nt_ref(nt, su, "arguments"), san = 0;
+    const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &san) : NULL;
+    if (san != 1 || nt_kind(nt, sav[0]) != NK_KeywordHashNode) continue;
+    int en = 0; const int *els = nt_arr(nt, sav[0], "elements", &en);
+    changed |= with_kw_types_members(c, cls, els, en);
+  }
   }
   return changed;
 }
@@ -11064,6 +11157,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (ep && !ep->rbs_seeded && lv_widen(ep, TY_POLY)) changed = 1;
   }
   changed |= bind_case_eqq_subjects(c, &changed, &any);
+  changed |= struct_with_super_types_members(c);
   const int *ids = NULL;
   int nids = nt->count;
   for (;;) {
@@ -11654,6 +11748,21 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       changed |= wimi >= 0 ? struct_with_binds_initialize(c, id, wci, wimi)
                            : struct_with_types_members(c, id, wci);
       continue;
+    }
+    /* `x.with(...)` on a boxed receiver (sp_obj_with) copies a Data with
+       no initialize or with of its own: each keyword types the members of
+       each such Data the receiver can hold (every one when that set is
+       unknown), as on a typed receiver. A user `with` still binds below. */
+    if (name && sp_streq(name, "with") && rt == TY_POLY) {
+      int nk = 0;
+      const int *ks = poly_recv_classes(c, id, &nk);
+      for (int q = 0; q < (ks ? nk : c->nclasses); q++) {
+        int k = ks ? ks[q] : q;
+        if (k < 0 || k >= c->nclasses || !c->classes[k].is_data ||
+            comp_method_in_chain(c, k, "initialize", NULL) >= 0 ||
+            comp_method_in_chain(c, k, "with", NULL) >= 0) continue;
+        changed |= struct_with_types_members(c, id, k);
+      }
     }
     /* A receiver that settled on NO type is emitted BOXED, exactly as a poly
        one is, so the call is a runtime dispatch that can reach any user method

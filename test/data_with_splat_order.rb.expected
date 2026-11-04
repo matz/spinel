@@ -1,0 +1,25 @@
+#<data D a=10, b=20, c=3>
+#<data D a=100, b=2, c=3>
+#<data D a=1000, b=2, c=3>
+#<data D a=10, b=2, c=7>
+#<data D a=5, b=7, c=3>
+#<data D a=10, b=20, c=9>
+#<data D a=1, b=4, c=3>
+#<data D a=-1, b=0, c=-3>
+#<data S name="from-hash", tag=:t>
+#<data S name="from-hash", tag=:v>
+#<data S name="later", tag=:t>
+#<data N v=nil, w=5>
+#<data N v=nil, w=6>
+#<data D a=1, b=2, c=3>
+#<data D a=3, b=1, c=3>
+[:recv, :first, :mark, :side]
+#<data D a=1, b=2, c=3>
+#<data T a="text", b=0>
+#<data U a=nil, b=0, c=0>
+#<data U a=nil, b=3, c=0>
+#<data U a=4, b=0, c=1>
+#<data V a="x", b=1>
+#<data V a="x", b=0>
+#<data D a=3, b=8, c=3>
+[:side]

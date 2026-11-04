@@ -13635,27 +13635,32 @@ static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {
    Class#new: allocate the receiving class and run its initialize. A class
    with no descendant can only receive the call itself; otherwise the method
    takes the receiving class (cmethod_takes_self_cls) and each class it can
-   be gets an arm, the result boxed. */
+   be gets an arm, the result an object of the method's class, or boxed
+   as the super's representation is (comp_super_class_new_boxed). */
 void emit_super_class_new(Compiler *c, int id, Buf *b) {
   Scope *s = comp_scope_of(c, id);
+  int own = s->class_id, nd = 0;
+  const int *ds = comp_descendants(c, own, &nd);
+  int nr = comp_new_receivers(c, own);
   /* A spliced class method already has the receiving class at its site;
      there is no function parameter _sp_cls in the enclosing body. */
   if (s->yields && g_self && g_emitting_class_id >= 0) {
+    if (g_emitting_class_id != own) buf_printf(b, "(%s *)", class_ctype(c, own));
     emit_super_new_ctor(c, id, g_emitting_class_id, b);
     return;
   }
-  int own = s->class_id, has_desc = 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (k != own && is_descendant(c, k, own)) has_desc = 1;
-  if (!has_desc) { emit_super_new_ctor(c, id, own, b); return; }
-  int rt = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = sp_box_nil(); switch (_sp_cls.cls_id) {", rt);
-  for (int k = 0; k < c->nclasses; k++) {
-    if (k != own && !is_descendant(c, k, own)) continue;
+  if (!nr) { emit_super_new_ctor(c, id, own, b); return; }
+  int boxed = repr_of(c, id).kind == RK_BOXED, rt = ++g_tmp;
+  if (boxed) buf_printf(b, "({ sp_RbVal _t%d = sp_box_nil(); switch (_sp_cls.cls_id) {", rt);
+  else buf_printf(b, "({ %s *_t%d = NULL; switch (_sp_cls.cls_id) {", class_ctype(c, own), rt);
+  for (int d = -1; d < nd; d++) {
+    int k = d < 0 ? own : ds[d];
+    if (d >= 0 && !comp_new_receiver(c, k)) continue;
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_super_new_ctor(c, id, k, &cb);
     buf_printf(b, " case %d: _t%d = ", k, rt);
-    if (c->classes[k].is_value_type) buf_printf(b, "sp_box_vobj_%s(%s)", c->classes[k].c_name, cb.p ? cb.p : "");
+    if (!boxed) buf_printf(b, "(%s *)%s", class_ctype(c, own), cb.p ? cb.p : "NULL");
+    else if (c->classes[k].is_value_type) buf_printf(b, "sp_box_vobj_%s(%s)", c->classes[k].c_name, cb.p ? cb.p : "");
     else { buf_printf(b, "sp_box_obj(%s, ", cb.p ? cb.p : "NULL"); arysub_box_id(c, ty_object(k), b); buf_puts(b, ")"); }
     buf_puts(b, "; break;");
     free(cb.p);
@@ -29089,12 +29094,29 @@ void emit_call(Compiler *c, int id, Buf *b) {
   }
   emit_call_lifted(c, id, b);
 }
+/* The class call id's value narrows to past the C return of the method it
+   runs, or -1: a class method that answers its receiver's instance (the
+   call plan's answers_receiver, as an inherited `self.new` of `super`
+   does) is one function for every class that inherits it, returning a
+   pointer to its own class's type. The call is typed an instance of the
+   class it was called on, a pointer to an ancestor's type in C; the
+   representations name the C types. */
+static int call_ret_narrow_cls(Compiler *c, int id) {
+  const CallPlan *p = cplan_user(c, id);
+  if (!p->answers_receiver) return -1;
+  Repr r = repr_of(c, id), fr = repr_of_ret(c, &c->scopes[p->mi]);
+  if (r.kind != RK_PTR || !ty_is_object(r.as_ty) || fr.kind != RK_PTR || !ty_is_object(fr.as_ty) || fr.as_ty == r.as_ty) return -1;
+  return ty_object_class(r.as_ty);
+}
 static void emit_call_lifted(Compiler *c, int id, Buf *b) {
   /* one representation: the operands of a call with a block are held
      across the block (g_one_held) */
   int held = g_one_held;
   if (nt_ref(c->nt, id, "block") >= 0) g_one_held = 1;
+  int nk = call_ret_narrow_cls(c, id);
+  if (nk >= 0) buf_printf(b, "((%s *)(", class_ctype(c, nk));
   emit_reading_no_value(c, id, emit_call_inner, b);
+  if (nk >= 0) buf_puts(b, "))");
   g_one_held = held;
 }
 /* One-String mode: a builtin String method's argument that can change a

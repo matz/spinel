@@ -3186,10 +3186,19 @@ static TyKind cmethod_setter_assign_ty(Compiler *c, int id, int mi) {
   return rk;
 }
 
+/* Class method mi called on class ci, when it answers ci's instance
+   (cmethod_receiver_class): an instance of ci. TY_UNKNOWN otherwise, the
+   method's return standing. */
+static TyKind cmethod_receiver_ret(Compiler *c, int mi, int ci) {
+  int k = cmethod_receiver_class(c, mi, ci);
+  return k >= 0 ? ty_object(k) : TY_UNKNOWN;
+}
+
 TyKind an_user_call(Compiler *c, int id, int mi, int via, int owner_ci) {
   an_user_call_record(c, id, mi, via, owner_ci);
   if (via == UC_CMETH) {
     TyKind rk = cmethod_setter_assign_ty(c, id, mi);
+    if (rk == TY_UNKNOWN) rk = cmethod_receiver_ret(c, mi, owner_ci);
     if (rk != TY_UNKNOWN) return rk;
   }
   /* A yielding reopening is called through its proc form. Its return
@@ -4383,7 +4392,8 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
-          *out = (TyKind)c->scopes[ucnew].ret; return 1;
+          TyKind rr = cmethod_receiver_ret(c, ucnew, ci);
+          *out = rr != TY_UNKNOWN ? rr : (TyKind)c->scopes[ucnew].ret; return 1;
         }
         /* a reopened builtin (`class String; def ...`) keeps its builtin
            representation: `String.new` is a String, not a user object (#3109) */
@@ -4439,7 +4449,8 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
-          *out = (TyKind)c->scopes[ucnew].ret; return 1;
+          TyKind rr = cmethod_receiver_ret(c, ucnew, ci);
+          *out = rr != TY_UNKNOWN ? rr : (TyKind)c->scopes[ucnew].ret; return 1;
         }
         /* a reopened builtin keeps its builtin representation (#3109) */
         if (!(cn && is_builtin_reopen(cn))) { *out = ty_object(ci); return 1; }
@@ -11893,12 +11904,10 @@ TyKind infer_uncached(Compiler *c, int id) {
       return super_target_ret(c, s, mi, id);
     }
     /* Class#new: an instance of the receiving class, which is this one or,
-       through an inherited `self.new`, any descendant -- then boxed */
-    if (comp_super_is_class_new(c, id)) {
-      for (int k = 0; k < c->nclasses; k++)
-        if (k != s->class_id && is_descendant(c, k, s->class_id)) return TY_POLY;
-      return ty_object(s->class_id);
-    }
+       through an inherited `self.new`, any descendant (see
+       comp_super_class_new_boxed) */
+    if (comp_super_is_class_new(c, id))
+      return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
     int p = comp_super_parent(c, s->class_id, s->is_cmethod);
     const char *uname = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
     /* `super` in a respond_to? override no ancestor defines is Object's

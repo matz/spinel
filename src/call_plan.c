@@ -44,6 +44,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->absent = 0;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
   p->core_hook = 0;
+  p->answers_receiver = 0;
 }
 
 /* The core id of the class a builtin receiver kind is reopened as, or -1. */
@@ -504,6 +505,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) cplan_resolve_super(c, id, p);
   else if (k == NK_CallNode) {
     cplan_resolve_call(c, id, p);
+    p->answers_receiver = p->via == UC_CMETH && cmethod_receiver_class(c, p->mi, p->owner_ci) >= 0;
     int recv = nt_ref(c->nt, id, "receiver");
     const char *name = nt_str(c->nt, id, "name");
     if (recv >= 0 && comp_ntype(c, recv) == TY_POLY &&

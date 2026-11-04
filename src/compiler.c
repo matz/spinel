@@ -5117,6 +5117,34 @@ int comp_super_is_class_new(Compiler *c, int id) {
   return p < 0 || comp_cmethod_in_chain(c, p, "new", NULL) < 0;
 }
 
+/* Can a `self.new` called on class k build k, k a descendant of the class
+   whose method it is? Only where some reached code names k: a class none
+   does has no instance and none of its methods is compiled
+   (compute_reachable, #10592), so no arm builds it. */
+int comp_new_receiver(Compiler *c, int k) {
+  return k >= 0 && !c->classes[k].unreferenced;
+}
+/* How many classes below own the `self.new` of own can receive (comp_new_receiver) */
+int comp_new_receivers(Compiler *c, int own) {
+  int nd = 0, n = 0;
+  const int *ds = comp_descendants(c, own, &nd);
+  for (int i = 0; i < nd; i++) n += comp_new_receiver(c, ds[i]);
+  return n;
+}
+
+/* Does super id, Class#new (comp_super_is_class_new), answer a boxed value?
+   Where a class below it can receive the call (comp_new_receivers), it
+   answers an instance of that class, which an object of the method's class
+   holds as it holds any subclass instance, when the method answers nothing
+   else (method_answers_receiver). A method with another value (`a.empty? ?
+   :none : super`) answers a box, which holds any receiving class, and so
+   does an Array, Hash, String or Time subclass's, whose instances box as
+   their builtin, one arm per receiving class. */
+int comp_super_class_new_boxed(Compiler *c, int id) {
+  Scope *s = comp_scope_of(c, id);
+  return comp_new_receivers(c, s->class_id) > 0 && !method_answers_receiver(c, s->idx);
+}
+
 /* Does the program have a method or alias spelled `name`? Its scope is not a
    hidden copy (Scope.shadow), or an alias table names it. */
 static int program_names_method(Compiler *c, const char *name) {

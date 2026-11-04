@@ -6868,6 +6868,70 @@ int method_value_leaves_or_nil_narrow(Compiler *c, int mi, int *out, int cap) {
   return method_value_leaves_ex(c, mi, out, cap, VL_NIL | VL_NARROW);
 }
 
+/* Is local `name` of method mi, read as a value, always a `super` that
+   reaches Class#new (`object = super; object.instance_exec { ... }; object`)?
+   Not a parameter, and every node in the method's body that carries the
+   name, nested blocks and lambdas included, is a read or a write of such a
+   `super`: any other binding of it (a multiple assignment target, a `for`
+   index, `rescue => o`, a pattern or named capture, an operator write, a
+   block parameter or block-local) says no. */
+static int local_is_class_new_super(Compiler *c, int mi, const char *name) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  LocalVar *lv = name ? scope_local(m, name) : NULL;
+  if (!lv || lv->is_param || m->body < 0) return 0;
+  int n = 0, saw = 0, ok = 1;
+  int *ids = nt_subtree_ids((NodeTable *)nt, &m->body, 1, &n);
+  for (int i = 0; ids && i < n && ok; i++) {
+    const char *nm = nt_str(nt, ids[i], "name");
+    if (!nm || !sp_streq(nm, name) || nt_kind(nt, ids[i]) == NK_LocalVariableReadNode) continue;
+    int v = nt_kind(nt, ids[i]) == NK_LocalVariableWriteNode ? nt_paren_single(nt, nt_ref(nt, ids[i], "value")) : -1;
+    if (v < 0 || !comp_super_is_class_new(c, v)) ok = 0;
+    saw = 1;
+  }
+  free(ids);
+  return ok && saw;
+}
+
+/* Does class method mi answer an instance of the class its call reaches it
+   on? Every value it answers (the value-position walker, its returns
+   included) is a `super` that reaches Class#new (comp_super_is_class_new),
+   or a local that is no parameter and whose every binding is a read or
+   such a `super`: it builds the receiving class, the method's own or a
+   descendant that inherits the method, passed in (cmethod_takes_self_cls).
+   A builtin-rooted class's instances box instead. A `new` call is no such
+   value: a method other than a `self.new` does not receive its call's class
+   unless it is copied per class, and the `new` it calls builds its own, or
+   boxes. Not where a class that can receive the call has a `self.new` of
+   its own either. */
+int method_answers_receiver(Compiler *c, int mi) {
+  if (mi < 0 || !c->scopes[mi].is_cmethod || c->scopes[mi].class_id < 0 || comp_ary_root(c, c->scopes[mi].class_id) >= 0) return 0;
+  /* A class that can receive the call and has a `self.new` of its own
+     decides what its calls answer, so mi's answer is not its instance. */
+  int nd = 0;
+  const int *ds = comp_descendants(c, c->scopes[mi].class_id, &nd);
+  for (int i = 0; i < nd; i++)
+    if (comp_new_receiver(c, ds[i]) && comp_cmethod_in_class(c, ds[i], "new") >= 0) return 0;
+  int lv[16];
+  int n = method_value_leaves(c, mi, lv, 16);
+  if (n <= 0) return 0;
+  for (int i = 0; i < n; i++) {
+    if (comp_super_is_class_new(c, lv[i])) continue;
+    if (nt_kind(c->nt, lv[i]) == NK_LocalVariableReadNode && comp_scope_of(c, lv[i]) == &c->scopes[mi] &&
+        local_is_class_new_super(c, mi, nt_str(c->nt, lv[i], "name"))) continue;
+    return 0;
+  }
+  return 1;
+}
+
+/* The class a call of class method mi on class ci answers an instance of
+   (method_answers_receiver), or -1: a descendant of the method's class that
+   inherits it gets an instance of its own class, not of the method's. */
+int cmethod_receiver_class(Compiler *c, int mi, int ci) {
+  int own = mi >= 0 ? c->scopes[mi].class_id : -1;
+  return ci >= 0 && own >= 0 && ci != own && is_descendant(c, ci, own) && method_answers_receiver(c, mi) ? ci : -1;
+}
+
 /* 1 when a call bound to method scope `mi` can reach another definition: an
    override in a subclass, or the same method defined again. A scan of every
    scope, asked once per call the walks follow: remembered per scope while

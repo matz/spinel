@@ -3386,27 +3386,34 @@ void rewrite_const_alias_receivers(Compiler *c) {
   alias_renames_apply(c, &q);
 }
 
-/* Does a class or module nested under another one (renamed apart by the
-   qualifying pass, `Ext__Foo`, or registered under a qualified Ruby name)
-   share class k's leaf name? */
-static int class_leaf_nested_elsewhere(Compiler *c, int k) {
-  const char *nm = c->classes[k].name;
-  size_t nl = nm ? strlen(nm) : 0;
-  for (int j = 0; nm && j < c->nclasses; j++) {
-    if (j == k || !c->classes[j].name) continue;
-    const char *cn = c->classes[j].name, *rn = c->classes[j].ruby_name_cache;
-    size_t cl = strlen(cn), rl = rn ? strlen(rn) : 0;
-    if (cl > nl + 2 && sp_streq(cn + cl - nl, nm) && !strncmp(cn + cl - nl - 2, "__", 2)) return 1;
-    if (rl > nl + 2 && sp_streq(rn + rl - nl, nm) && !strncmp(rn + rl - nl - 2, "::", 2)) return 1;
+/* How many classes and modules of the program have the Ruby leaf name nm
+   (`Ext::Foo` and a top-level `Foo` both count), and whether one of them
+   is nested under another class or module. */
+static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
+  int n = 0;
+  *nested = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    /* (not class_ruby_name, which caches the name it builds: this runs
+       while the passes still place classes) */
+    const ClassInfo *ci = &c->classes[k];
+    const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
+    if (l) leaf = l + 1;
+    else if (ci->enclosing_class >= 0 && leaf)
+      for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    if (!leaf || !sp_streq(leaf, nm)) continue;
+    n++;
+    if (l || ci->enclosing_class >= 0) *nested = 1;
   }
-  return 0;
+  return n;
 }
 
 /* `m::Foo` where m is a value (a local, a parameter, a call's answer):
    which Foo it names is the one m's class or module holds, known only at
-   run time. The path is resolved by its leaf name, to the top-level class
-   Foo, so when a class nested under some module has the same leaf the
-   answer is a guess, and CRuby's can be the other class: refused. */
+   run time. The path is resolved by its leaf name, so when two classes or
+   modules in different scopes have that leaf, one nested under another,
+   the answer is a guess, and CRuby's can be the other one: refused. (A
+   value constant with a VALUE parent is read by a run-time switch on the
+   parent's class, and a leaf one class has is that class.) */
 static void refuse_dyn_parent_class_leaf(Compiler *c) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) {
@@ -3415,12 +3422,12 @@ static void refuse_dyn_parent_class_leaf(Compiler *c) {
     NodeKind pk = nt_kind(nt, par);
     if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) continue;
     const char *nm = nt_str(nt, id, "name");
-    int k = nm ? comp_class_index(c, nm) : -1;
-    if (k < 0 || c->classes[k].enclosing_class >= 0 || c->classes[k].ruby_name_cache ||
-        !class_leaf_nested_elsewhere(c, k)) continue;
+    int nested = 0;
+    if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
     char msg[400];
-    snprintf(msg, sizeof msg, "a constant path through a run-time value (`x::%s`) is not supported when classes "
-             "in more than one scope are named %s: which one it names is decided at run time", nm, nm);
+    snprintf(msg, sizeof msg, "a constant path through a run-time value (`<value>::%s`) is not supported when classes "
+             "or modules in more than one scope are named %s: which one it names is decided at run time "
+             "(see docs/limitations.md)", nm, nm);
     unsupported_feature_collect(c, id, msg);
   }
 }

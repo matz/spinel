@@ -2405,6 +2405,14 @@ int is_attr_decl_reader(const char *n) {
 int is_attr_decl_writer(const char *n) {
   return n && (is_attr_writer_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
 }
+/* The class-body declarations that run no code of the class's own: a
+   visibility change (of instance methods, class methods or constants), an
+   attribute, a mixin, an alias, or a method undefined or removed */
+int is_class_declaration_call(const char *n) {
+  return n && (visibility_of_name(n) || class_method_vis_of_name(n) || is_const_visibility_name(n) ||
+               is_attr_decl_reader(n) || is_attr_decl_writer(n) || is_mixin_call(n) || is_alias_method_name(n) ||
+               is_undef_method_name(n) || is_remove_method_name(n));
+}
 int class_method_vis_of_name(const char *n) {
   return !n ? 0 : sp_streq(n, "private_class_method") ? BVIS_PRIVATE : sp_streq(n, "public_class_method") ? BVIS_PUBLIC : 0;
 }

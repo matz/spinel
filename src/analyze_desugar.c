@@ -20378,10 +20378,57 @@ static void cn_raise_module_super(NodeTable *nt, int id, int par) {
  * class's is (class_new_anonymous): the class answers as an anonymous one
  * until the write names it (sp_class_assign_name, after the block's
  * statements). A class a local holds, or nothing (an inline block
- * desugar_inline_struct_blocks gives a local), is never named. */
+ * desugar_inline_struct_blocks gives a local), is never named. A constant's
+ * class is left named where its block only declares (block_only_declares). */
+
+/* Is argument a of a class-body declaration inert: a literal name or value,
+   a constant (a module to mix in), or a def (`private def x`)? */
+static int decl_arg_inert(const NodeTable *nt, int a) {
+  NodeKind k = nt_kind(nt, a);
+  return k == NK_SymbolNode || k == NK_StringNode || k == NK_IntegerNode || k == NK_FloatNode ||
+         k == NK_NilNode || k == NK_TrueNode || k == NK_FalseNode || k == NK_DefNode || nt_kind_is_constant(k);
+}
+/* Does block blk only declare, so that nothing it runs can see its class
+   unnamed? Each statement is a def, an alias or undef, a constant write of a
+   literal, or a receiverless class-body declaration (is_class_declaration_call)
+   with inert arguments and no block, whose name the program does not define
+   itself. Anything else may show the class, and a definition hook or
+   method_missing the program defines (hooks) runs program code at a
+   declaration. A statement this does not know costs the name path only. */
+static int block_only_declares(const NodeTable *nt, int blk, int hooks, const ANameHash *defnames) {
+  int body = nt_ref(nt, blk, "body"), n = 0;
+  if (hooks) return 0;
+  if (body < 0) return 1;
+  if (nt_kind(nt, body) != NK_StatementsNode) return 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, st[i]);
+    if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) continue;
+    if (k == NK_ConstantWriteNode) {
+      int v = nt_ref(nt, st[i], "value");
+      if (v >= 0 && nt_kind(nt, v) != NK_DefNode && decl_arg_inert(nt, v)) continue;
+      return 0;
+    }
+    const char *nm = k == NK_CallNode ? nt_str(nt, st[i], "name") : NULL;
+    if (!is_class_declaration_call(nm) || anh_has(defnames, nm) || nt_ref(nt, st[i], "receiver") >= 0 ||
+        nt_ref(nt, st[i], "block") >= 0)
+      return 0;
+    int args = nt_ref(nt, st[i], "arguments"), na = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+    for (int j = 0; j < na; j++) if (!decl_arg_inert(nt, av[j])) return 0;
+  }
+  return 1;
+}
 int desugar_struct_block_anonymous(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0;
+  int changed = 0, hooks = 0;
+  ANameHash defnames = {0};
+  for (int id = 0; id < nt->count; id++)
+    if (nt_kind(nt, id) == NK_DefNode) {
+      const char *dn = nt_str(nt, id, "name");
+      if (dn && !anh_has(&defnames, dn)) anh_add(&defnames, dn);
+      hooks |= is_definition_hook_name(dn) || is_method_missing_name(dn);
+    }
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantWriteNode && k != NK_LocalVariableWriteNode) continue;
@@ -20389,9 +20436,11 @@ int desugar_struct_block_anonymous(Compiler *c) {
     if (!class_def_is_record_call(nt, val)) continue;
     int blk = nt_ref(nt, val, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    if (k == NK_ConstantWriteNode && block_only_declares(nt, blk, hooks, &defnames)) continue;
     nt_node_set_int(nt, id, "class_new_anonymous", k == NK_ConstantWriteNode ? 1 : 2);
     changed = 1;
   }
+  anh_free(&defnames);
   return changed;
 }
 

@@ -617,6 +617,7 @@ int is_remove_method_name(const char *n); /* remove_method */
 int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? method_missing: what rb_check_funcall asks */
 int is_implicitly_private_name(const char *n); /* initialize initialize_copy/_clone/_dup respond_to_missing? */
 int is_alias_method_name(const char *n);  /* alias_method */
+int is_class_declaration_call(const char *n);  /* visibility, attr_*, include/extend/prepend, alias_method, undef/remove_method */
 /* The operations a String Array (whose elements are handles) answers
    itself, by name, argument count and block (0 none, 1 a literal block, 2
    a block argument). */

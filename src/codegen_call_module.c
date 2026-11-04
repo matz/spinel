@@ -378,31 +378,62 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_puts(b, "sp_file_truncate("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b); buf_puts(b, ")"); return 1;
     }
-    /* File.write(path, str, offset) / File.write(path, str, mode: "a", perm: 0o600) (#2782) */
-    if ((sp_streq(name, "write") || sp_streq(name, "binwrite")) && argc == 3) {
-      NodeKind k3_k = nt_kind(nt, argv[2]);
-      if (k3_k == NK_KeywordHashNode) {
-        int mv = struct_kwarg_value(c, argv[2], "mode");
-        int pv = struct_kwarg_value(c, argv[2], "perm");
-        if (pv >= 0) {
-          buf_puts(b, "sp_file_write_perm("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-          emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
-          if (mv >= 0) emit_str_expr(c, mv, b); else buf_puts(b, "\"w\"");
-          buf_puts(b, ", ");
-          if (comp_ntype(c, pv) == TY_NIL) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, pv, b); buf_puts(b, "); sp_oint_nil(); })"); }
-          else if (yield_site_type(c, pv) == TY_POLY) { buf_puts(b, "sp_poly_arg_perm("); emit_expr(c, pv, b); buf_puts(b, ")"); }
-          else emit_oint_expr(c, pv, TY_INT, b);
-          buf_puts(b, ")");
-          return 1;
-        }
-        if (mv >= 0) {
-          buf_puts(b, "sp_file_write_mode("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-          emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
-          emit_str_expr(c, mv, b); buf_puts(b, ")");
-          return 1;
+    /* File.write(path, str, [offset,] mode: "a", perm: 0o600, encoding: "UTF-8")
+       (#2782). An encoding the text already has (UTF-8, or BINARY, which
+       writes the same bytes) changes nothing, so the options hash is only
+       mode and perm. */
+    if ((sp_streq(name, "write") || sp_streq(name, "binwrite")) && (argc == 3 || argc == 4) &&
+        nt_kind(nt, argv[argc - 1]) == NK_KeywordHashNode) {
+      int kwh = argv[argc - 1];
+      int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
+      int mv = -1, pv = -1;
+      for (int i = 0; i < en; i++) {
+        int k = nt_kind(nt, els[i]) == NK_AssocNode ? nt_ref(nt, els[i], "key") : -1;
+        int v = k >= 0 ? nt_ref(nt, els[i], "value") : -1;
+        const char *kn = k >= 0 && nt_kind(nt, k) == NK_SymbolNode ? nt_str(nt, k, "value") : NULL;
+        if (kn && sp_streq(kn, "mode")) mv = v;
+        else if (kn && sp_streq(kn, "perm")) pv = v;
+        else if (!kn || !(sp_streq(kn, "encoding") || sp_streq(kn, "external_encoding") ||
+                          sp_streq(kn, "internal_encoding")) ||
+                 kwh_enc_value(nt, v) == KWH_ENC_NONE) {
+          unsupported_feature(c, id, "File.write with options other than mode:, perm: "
+                              "and an encoding (UTF-8 or BINARY) is not supported");
         }
       }
-      else if (comp_ntype(c, argv[2]) == TY_NIL) {
+      /* a nil OFFSET is "no offset", as in the three-argument form: the
+         options then apply to a plain write */
+      int nil_off = argc == 4 && comp_ntype(c, argv[2]) == TY_NIL;
+      if (argc == 4 && !nil_off) {
+        if (mv >= 0 || pv >= 0)
+          unsupported_feature(c, id, "File.write with an offset and mode: or perm: is not supported");
+        buf_puts(b, "sp_file_write_at("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[2], b); buf_puts(b, ")");
+        return 1;
+      }
+      if (nil_off) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[2], b); buf_puts(b, "); "); }
+      if (pv >= 0) {
+        buf_puts(b, "sp_file_write_perm("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
+        if (mv >= 0) emit_str_expr(c, mv, b); else buf_puts(b, "\"w\"");
+        buf_puts(b, ", ");
+        if (comp_ntype(c, pv) == TY_NIL) { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, pv, b); buf_puts(b, "); sp_oint_nil(); })"); }
+        else if (yield_site_type(c, pv) == TY_POLY) { buf_puts(b, "sp_poly_arg_perm("); emit_expr(c, pv, b); buf_puts(b, ")"); }
+        else emit_oint_expr(c, pv, TY_INT, b);
+        buf_puts(b, ")");
+      } else if (mv >= 0) {
+        buf_puts(b, "sp_file_write_mode("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_to_s_expr(c, argv[1], b); buf_puts(b, ", ");
+        emit_str_expr(c, mv, b); buf_puts(b, ")");
+      } else {
+        buf_puts(b, "sp_file_write("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_to_s_expr(c, argv[1], b); buf_puts(b, ")");
+      }
+      if (nil_off) buf_puts(b, "; })");
+      return 1;
+    }
+    if ((sp_streq(name, "write") || sp_streq(name, "binwrite")) && argc == 3) {
+      if (comp_ntype(c, argv[2]) == TY_NIL) {
         /* a nil OFFSET is "no offset" -- a plain truncating write, not a
            write at position 0 (which would keep the file's tail) */
         buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[2], b);

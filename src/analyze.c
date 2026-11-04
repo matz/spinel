@@ -55055,9 +55055,9 @@ void analyze_program(Compiler *c) {
      which widen the reached methods' unbound parameters ahead of it: its
      C parameter was boxed while its reads stayed untyped, and a read went
      raw into an sp_int slot (#10913, openssl's SSLSocket#read_nonblock).
-     Its unbound parameters are widened the same way now, the writes and
-     returns settle on them, and the nodes of those methods take the types
-     (their reads, and the expressions over them). */
+     Its unbound parameters are widened the same way now, and the nodes of
+     those methods take the types (their reads, and the expressions over
+     them). */
   {
     unsigned char *wid = calloc((size_t)c->nscopes + 1, 1);
     if (!wid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -55073,11 +55073,10 @@ void analyze_program(Compiler *c) {
         }
       }
     }
-    for (int iter = 0; widened && iter < 8; iter++) {
-      int ch = infer_write_types(c);
-      ch |= infer_return_types(c);
-      if (!ch) break;
-    }
+    /* (only those methods' nodes: a write or return re-run over the whole
+       program here re-derived locals the late passes had settled, and a
+       String-and-Integer Hash local of another method came back as an
+       Integer-valued one, #10937) */
     if (widened)
       for (int id = 0; id < c->nt->count; id++) {
         int s = id < c->node_cap && c->nscope ? c->nscope[id] : -1;

@@ -6029,6 +6029,14 @@ CLASS_QUAL_LIMIT ?= 3.1
 # rebuilding its table from the declarations and not from every node, is what
 # the codegen leg above sees (6.51x to 6.33x); this leg does not.
 SINGLETON_DEFS_LIMIT ?= 2.2
+# N Struct.new blocks of 128 calls each, beside sixteen top-level defs per
+# block (test/scale/struct_blocks.sh), analyzed at N=100 and N=200. The pass
+# that marks a block's class anonymous asks of every call in a block whether
+# the program defines a method of that name: a scan of the defs per call and
+# a node-table-sized buffer per block read 2.49x; the names hashed once and
+# one buffer for the pass, 2.13x, as a compiler without the asks reads. The
+# limit sits between them.
+STRUCT_BLOCKS_LIMIT ?= 2.3
 # Splices into one class (test/scale/splices.sh), compiled to C at K=200 and
 # K=400: an included hook whose class_eval block runs K class_eval texts in
 # its includer, and K texts in the class's own body, K over a constant list
@@ -6137,6 +6145,9 @@ scale-test: $(SPINEL_WORK)
 	gen singleton_defs 400 ud4.rb; gen singleton_defs 800 ud8.rb; \
 	uda=$$(sw -c -o "$$tmp/ud4.c" "$$tmp/ud4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	udb=$$(sw -c -o "$$tmp/ud8.c" "$$tmp/ud8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen struct_blocks 100 sb1.rb; gen struct_blocks 200 sb2.rb; \
+	sba=$$(sw --emit-rbs -o "$$tmp/sb1.rbs" "$$tmp/sb1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	sbb=$$(sw --emit-rbs -o "$$tmp/sb2.rbs" "$$tmp/sb2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6151,7 +6162,7 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$ka" ] || [ -z "$$kb" ] || [ -z "$$ea" ] || [ -z "$$eb" ] || [ -z "$$ra" ] || [ -z "$$rb" ] || [ -z "$$ta" ] || [ -z "$$tb" ] || \
 	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
-	   [ -z "$$uda" ] || [ -z "$$udb" ]; then \
+	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6202,6 +6213,9 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$uda" -v b="$$udb" -v lim="$(SINGLETON_DEFS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: singleton def check work at 2x the defs, compiled to C, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the arity check of a call scanned the singleton defs: see singleton_def_of)"; exit 1; }; \
+	awk -v a="$$sba" -v b="$$sbb" -v lim="$(STRUCT_BLOCKS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: Struct block anonymity work at 2x the blocks is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the anonymity pass scanned the program per call of a Struct block: see block_only_declares)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

@@ -24959,9 +24959,11 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
     if (i >= has_recv && !ran && an_const_read_keeps_class(c, v) && subtree_has_side_effect(c, v)) held[i] = 1;
     /* (a read of a shared String slot is no new value: its copy is taken
        last, after every other operand, by the copy-at-risk binding) */
+    /* (nor is a frozen literal, share_frozen_literal: every evaluation
+       answers the one static object, which no collection frees) */
     if (i >= has_recv && later && !ran && operand_binds_as_value(nt_kind(c->nt, v)) && !strbuf_read_copies(c, v) &&
         (needs_root(r.as_ty) || r.as_ty == TY_POLY) && r.as_ty != TY_STRBUF && !r.handle && !r.demand &&
-        operand_allocates_beside(c, v))
+        !share_frozen_literal(c, v) && operand_allocates_beside(c, v))
       held[i] = 1;
     if (!ran && operand_allocates_beside(c, v)) later = 1;
   }

@@ -1846,7 +1846,7 @@ test-run: decisions-test
 # would be named by no bisect. A key holds the whole of a long name.
 # Each kind also has its row in the table in tools/README.md.
 DECISION_TESTS = $(shell grep -l '^\# spinel: decisions$$' test/*.rb test/fixtures/decisions/*.rb)
-DECISION_KINDS = aon-get case-root fetch-inert gc-save index-sum inline-force masgn-root nn-inb nn-read no-alloc \
+DECISION_KINDS = aon-get case-root fetch-inert fetch-slot gc-save index-sum inline-force masgn-root nn-inb nn-read no-alloc \
                  pd-hoist push-slot root-elide root-frame strbuf-raw
 decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-decisions.XXXXXX); : > "$$tmp/none"; \

@@ -5042,7 +5042,8 @@ int iter_value_answers_recv(Compiler *c, int id) {
         (sp_streq(name, "step") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0 &&
          (comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_RANGE ||
           comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_FLOAT_RANGE ||
-          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_STR_RANGE));
+          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_STR_RANGE ||
+          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_TIME_RANGE));
 }
 
 /* A receiver the value of an iteration answers is read twice, once under the
@@ -8205,6 +8206,32 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     return 1;
   }
 
+  /* (t1..t2).step(secs) { |t| ... }: walked a step at a time, so an endless
+     one runs until the block breaks */
+  if (sp_streq(name, "step") && rt == TY_TIME_RANGE) {
+    int args = nt_ref(nt, id, "arguments"); int sargc = 0;
+    const int *sargv = args >= 0 ? nt_arr(nt, args, "arguments", &sargc) : NULL;
+    if (sargc != 1) return 0;
+    int tr = ++g_tmp, ts = ++g_tmp, tv = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_TimeRange *_t%d = ", tr); emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
+    emit_indent(b, indent);
+    buf_printf(b, "double _t%d = ", ts); emit_float_expr(c, sargv[0], b);
+    buf_printf(b, "; sp_trange_step_check_blk(_t%d);\n", tr);
+    emit_indent(b, indent);
+    buf_printf(b, "sp_Time *_t%d = _t%d->first; SP_GC_ROOT(_t%d);\n", tv, tr, tv);
+    emit_indent(b, indent);
+    buf_printf(b, "for (; _t%d > 0 && sp_trange_step_more(_t%d, _t%d); _t%d = sp_time_add_f(_t%d, _t%d)) {\n",
+               ts, tr, tv, tv, tv, ts);
+    if (p0) {
+      char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
+      emit_iter_param_assign(c, block, p0_orig, p0, TY_TIME, elem, b, indent + 1);
+    }
+    emit_loop_body(c, body, b, indent + 1);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return 1;
+  }
   /* (range).step(k) { |x| ... } -- materialise the stepped values (shared with
      the no-block path so they match exactly) and walk them; the element type
      follows the array, int or float. */

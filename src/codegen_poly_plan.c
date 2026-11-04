@@ -3408,7 +3408,7 @@ void emit_poly_str_aset_writeback(Compiler *c, int recv, const PolySpecialsN *ps
 int trange_poly_name(const char *name, int argc) {
   static const char *const z[] = { "begin", "first", "end", "last", "min", "max", "exclude_end?", "to_s",
                                    "inspect", "hash", "frozen?", "to_a", "entries", "size", "count", "sum", NULL };
-  static const char *const o[] = { "cover?", "include?", "member?", "===", "==", "eql?", NULL };
+  static const char *const o[] = { "cover?", "include?", "member?", "===", "==", "eql?", "overlap?", NULL };
   const char *const *l = argc == 0 ? z : argc == 1 ? o : NULL;
   for (; l && *l; l++) if (sp_streq(name, *l)) return 1;
   return 0;

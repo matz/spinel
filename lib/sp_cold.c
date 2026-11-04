@@ -5538,6 +5538,27 @@ sp_RbVal sp_box_trange(sp_TimeRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_TI
 sp_RbVal sp_trange_begin_v(const sp_TimeRange *r) { return r->first ? sp_box_time(r->first) : sp_box_nil(); }
 sp_RbVal sp_trange_end_v(const sp_TimeRange *r) { return r->last ? sp_box_time(r->last) : sp_box_nil(); }
 void sp_trange_iterate_raise(void) { sp_raise_cls("TypeError", "can't iterate from Time"); }
+void sp_trange_step_check_blk(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("ArgumentError", "#step iteration for beginless ranges is meaningless");
+}
+void sp_trange_step_check(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("ArgumentError", "#step for non-numeric beginless ranges is meaningless");
+}
+sp_bool sp_trange_step_more(const sp_TimeRange *r, const sp_Time *t) {
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  return r->excl ? c < 0 : c <= 0;
+}
+sp_PolyArray *sp_trange_step_ary(const sp_TimeRange *r, double secs) {
+  SP_GC_ROOT(r);
+  sp_trange_step_check(r);
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  if (!(secs > 0)) return a;
+  if (!r->last) sp_raise_cls("NotImplementedError", "Range#step without a block over an endless Range of Times");
+  sp_Time *t = r->first; SP_GC_ROOT(t);
+  while (sp_trange_step_more(r, t)) { sp_PolyArray_push(a, sp_box_time(t)); t = sp_time_add_f(t, secs); }
+  return a;
+}
 /* Range#min without iterating: the begin, nil for an empty Range */
 sp_RbVal sp_trange_min_v(const sp_TimeRange *r) {
   if (!r->first) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
@@ -5577,6 +5598,31 @@ sp_bool sp_trange_cover_range(const sp_TimeRange *r, const sp_TimeRange *o) {
   if (r->excl == o->excl) return cmp_end >= 0;
   if (r->excl) return cmp_end > 0;
   return cmp_end >= 0;
+}
+/* CRuby's empty_region_p: a begin past the end, or at an excluded end */
+static int sp_trange_empty_region(const sp_Time *beg, const sp_Time *end, int excl) {
+  if (!beg || !end) return 0;
+  int less = sp_time_cmp(beg, end);
+  return less > 0 || (excl && less == 0);
+}
+/* Range#overlap?, as CRuby's range_overlap */
+sp_bool sp_trange_overlap(const sp_TimeRange *a, const sp_TimeRange *b) {
+  if (sp_trange_empty_region(a->first, b->last, (int)b->excl)) return 0;
+  if (sp_trange_empty_region(b->first, a->last, (int)a->excl)) return 0;
+  if (a->first && b->first) { if (sp_time_cmp(a->first, b->first) == 0) return 1; }
+  else if (!a->first && !b->first) return 1;
+  if (sp_trange_empty_region(a->first, a->last, (int)a->excl)) return 0;
+  if (sp_trange_empty_region(b->first, b->last, (int)b->excl)) return 0;
+  return 1;
+}
+/* overlap? of a value known at run time: another Range of Times, any other
+   Range overlaps nothing of Times (its ends do not compare), anything else
+   is CRuby's TypeError */
+sp_bool sp_trange_overlap_poly(const sp_TimeRange *a, sp_RbVal b) {
+  if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_TIME_RANGE && b.v.p) return sp_trange_overlap(a, (sp_TimeRange *)b.v.p);
+  if (b.tag == SP_TAG_OBJ && (b.cls_id == SP_BUILTIN_RANGE || b.cls_id == SP_BUILTIN_FLOAT_RANGE || b.cls_id == SP_BUILTIN_STR_RANGE)) return 0;
+  sp_raise_cls("TypeError", "wrong argument type (expected Range)");
+  return 0;
 }
 static int sp_trange_end_eq(const sp_Time *a, const sp_Time *b) {
   if (!a || !b) return a == b;
@@ -5621,6 +5667,7 @@ sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
   if (argc == 1) {
     if (!strcmp(n, "cover?") || !strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
       return sp_box_bool(sp_trange_cover_poly(r, a0));
+    if (!strcmp(n, "overlap?")) return sp_box_bool(sp_trange_overlap_poly(r, a0));
     if (!strcmp(n, "==") || !strcmp(n, "eql?"))
       return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_TIME_RANGE && sp_trange_eq(r, (sp_TimeRange *)a0.v.p));
   }

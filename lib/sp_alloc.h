@@ -1347,10 +1347,19 @@ sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t);
 sp_bool sp_trange_cover_poly(const sp_TimeRange *r, sp_RbVal v);
 sp_bool sp_trange_cover_range(const sp_TimeRange *r, const sp_TimeRange *o);
 sp_bool sp_trange_eq(const sp_TimeRange *a, const sp_TimeRange *b);
+sp_bool sp_trange_overlap(const sp_TimeRange *a, const sp_TimeRange *b);
+sp_bool sp_trange_overlap_poly(const sp_TimeRange *a, sp_RbVal b);
 sp_int sp_trange_hash(const sp_TimeRange *r);
 const char *sp_trange_to_s(const sp_TimeRange *r);
 const char *sp_trange_inspect(const sp_TimeRange *r);
 void sp_trange_iterate_raise(void);
+/* Range#step(n) over Times: n seconds a step; nothing for n <= 0, CRuby's
+   ArgumentError from a beginless Range. The blockless form answers the Times
+   it walks, so an endless one is refused there */
+void sp_trange_step_check(const sp_TimeRange *r);
+void sp_trange_step_check_blk(const sp_TimeRange *r);
+sp_PolyArray *sp_trange_step_ary(const sp_TimeRange *r, double secs);
+sp_bool sp_trange_step_more(const sp_TimeRange *r, const sp_Time *t);
 /* a boxed Range of Times asked one of its methods by name (the poly dispatch) */
 sp_RbVal sp_trange_send(sp_TimeRange *r, const char *name, int argc, sp_RbVal a0);
 sp_RbVal sp_box_tms(sp_Tms v);

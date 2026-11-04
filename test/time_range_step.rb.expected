@@ -1,0 +1,23 @@
+[0, 1, 2]
+2
+[]
+[]
+[2026-01-01 00:00:00 UTC, 2026-01-01 00:00:01.5 UTC]
+0
+1
+2
+0
+30
+#step iteration for beginless ranges is meaningless
+2026-01-01 00:00:00 UTC..2026-01-01 02:00:00 UTC
+true
+false
+false
+true
+false
+true
+false
+false
+true
+true
+false

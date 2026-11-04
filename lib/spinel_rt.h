@@ -18403,6 +18403,9 @@ static SP_UNUSED sp_bool sp_srange_overlap_v(sp_StrRange a, sp_RbVal o) {
 }
 static sp_bool sp_range_overlap_v(sp_RbVal a, sp_RbVal o) {
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_STR_RANGE && a.v.p) return sp_srange_overlap_v(SP_SRANGE_OF(a.v.p), o);
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_TIME_RANGE && a.v.p) return sp_trange_overlap_poly((sp_TimeRange *)a.v.p, o);
+  /* a Range of Times overlaps no Range of other ends: they do not compare */
+  if (o.tag == SP_TAG_OBJ && o.cls_id == SP_BUILTIN_TIME_RANGE && a.tag == SP_TAG_OBJ && (a.cls_id == SP_BUILTIN_RANGE || a.cls_id == SP_BUILTIN_FLOAT_RANGE)) return FALSE;
   sp_range_end_t ab, ae, ob, oe; int ax = 0, ox = 0;
   if (!sp_range_ends(a, &ab, &ae, &ax)) sp_raise_nomethod(sp_nomethod_msg("overlap?", a));
   if (!sp_range_ends(o, &ob, &oe, &ox)) {

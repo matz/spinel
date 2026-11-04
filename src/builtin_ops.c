@@ -1082,6 +1082,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); (sp_bool)(_t$T == $e0); })", BOP_K(TY_TIME_RANGE) },
   { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.v.p == (void *)_t$T); })", BOP_K(TY_POLY) },
   { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_overlap(_t$T, $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_overlap_poly(_t$T, _a$T); })", 0 },
+  { TY_TIME_RANGE, "step", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_step_ary(_t$T, $f0); })", BOP_K(TY_INT) | BOP_K(TY_FLOAT) },
+  { TY_TIME_RANGE, "step", 1, 1, BF_REQUIRED, TY_TIME_RANGE, BOPE_NONE },  /* with a block: the receiver, as CRuby; codegen_iter walks it */
   { TY_TIME_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_to_s($r)", 0 },
   { TY_TIME_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_inspect($r)", 0 },
   { TY_TIME_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_trange_hash($r)", 0 },
@@ -3982,6 +3986,7 @@ static const IterRow iter_rows[] = {
   { TY_RANGE, "each_with_object", 1, 1, 2, { YS_ELEM, YS_MEMO }, IA_MEMO, IRF_GAP_FWD },
   { TY_RANGE, "step",             1, 1, 1, { YS_NUM }, IA_RECV, IRF_GAP_FWD },
   { TY_FLOAT_RANGE, "step",       1, 1, 1, { YS_NUM }, IA_RECV, 0 },
+  { TY_TIME_RANGE, "step",        1, 1, 1, { YS_NUM }, IA_RECV, 0 },
 
   { TY_INT, "times",   0, 0, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_INT, "upto",    1, 1, 1, { YS_NUM }, IA_RECV, 0 },
@@ -4236,7 +4241,7 @@ TyKind iter_yield_kind(const IterRow *r, int k, TyKind rt) {
   case YS_SUB:      return boxed || (r->flags & IRF_GAP_RUN_BOXED) ? TY_POLY_ARRAY : rt;
   case YS_TUPLE:    return TY_POLY_ARRAY;
   case YS_FRESH:    return TY_STRING;
-  case YS_NUM:      return rt == TY_FLOAT || rt == TY_FLOAT_RANGE ? TY_FLOAT : TY_INT;
+  case YS_NUM:      return rt == TY_TIME_RANGE ? TY_TIME : rt == TY_FLOAT || rt == TY_FLOAT_RANGE ? TY_FLOAT : TY_INT;
   case YS_INDEX:    return TY_INT;
   case YS_RECV:     return rt;
   default:          return TY_UNKNOWN;

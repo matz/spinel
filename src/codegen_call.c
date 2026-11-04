@@ -18289,7 +18289,8 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
   int self_ret = wrecv >= 0 && call_user_yield_mi(c, id) < 0 &&
                  (brk_iter_returns_self(wname) ||
                   /* a Float range's step answers the range too */
-                  (wname && sp_streq(wname, "step") && comp_ntype(c, wrecv) == TY_FLOAT_RANGE));
+                  (wname && sp_streq(wname, "step") && (comp_ntype(c, wrecv) == TY_FLOAT_RANGE ||
+                                                          comp_ntype(c, wrecv) == TY_TIME_RANGE)));
   /* `e.each { }` over an Enumerator walks the Enumerator itself (see
      emit_iteration_stmt): the marked `to_a` hop in front of it is never
      evaluated, so the Enumerator is what is held and answered */

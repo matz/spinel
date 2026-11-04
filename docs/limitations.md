@@ -874,7 +874,12 @@ keeps the two Times, and its ends, `cover?` / `include?` / `===` (a Time or
 another Range of Times), `==`, `eql?`, `hash`, `min`, `max`, `to_s`,
 `inspect` and `case`/`when` answer as CRuby's, typed or boxed. What would
 iterate it (`each`, `to_a`, `size`, `count`) raises CRuby's TypeError, as
-CRuby does; `step` is not supported.
+CRuby does. `overlap?` answers as CRuby's. `step(n)` walks n seconds at a
+time: with a block it runs until the end (an endless Range until the block
+breaks); without one it answers an Array of the Times, where CRuby answers an
+Enumerator (so its `size` and `inspect` differ), and an endless one raises
+NotImplementedError. A boxed Range of Times does not take `step` with a
+block.
 
 Ends known only at run time (`a[0]..a[1]` over a mixed Array) pick the
 Range's kind from their values: Integers an Integer Range, a Float begin a

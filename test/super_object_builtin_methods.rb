@@ -45,3 +45,15 @@ class Opt
 end
 q = Opt.new
 p q == 1, q == nil
+
+# The is_a? fold boxes such a parameter the same way.
+class Ok
+  def is_a?(k) = super
+end
+def kk(f) = f ? 1 : nil
+begin
+  p Ok.new.is_a?(kk(false))
+rescue TypeError
+  puts "TypeError"
+end
+p Ok.new.is_a?(Ok)

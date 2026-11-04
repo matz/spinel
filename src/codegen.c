@@ -15659,6 +15659,15 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
    another shape (a splat, no argument, two) is refused. 0 where self has
    no Kernel#` above it (a BasicObject subclass): the caller raises
    NoMethodError. */
+/* A super's forwarded parameter pi, boxed: an Integer or Float parameter
+   that also takes nil boxes as its oint. */
+static void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
+  LocalVar *lv = scope_local(s, s->pnames[pi]);
+  Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[pi]));
+  if (lv && slot_is_oint(lv)) buf_printf(b, "%s(%s)", oint_box(lv->type), pn.p);
+  else emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, b);
+  free(pn.p);
+}
 /* emit_super's arm for comp_super_object_builtin. */
 static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, Buf *b) {
   int kind = comp_super_object_builtin(c, s, uname, id);
@@ -15669,14 +15678,7 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   TyKind vt = TY_BOOL;
   if (kind == SUPER_OBJ_SAME) {
     Buf kb; memset(&kb, 0, sizeof kb);
-    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) {
-      LocalVar *lv = scope_local(s, s->pnames[0]);
-      Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
-      /* an Integer or Float parameter that also takes nil boxes as its oint */
-      if (lv && slot_is_oint(lv)) buf_printf(&kb, "%s(%s)", oint_box(lv->type), pn.p);
-      else emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
-      free(pn.p);
-    }
+    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) emit_boxed_fwd_param(c, s, 0, &kb);
     else {
       int sa = nt_ref(c->nt, id, "arguments"), n = 0;
       const int *av = nt_arr(c->nt, sa, "arguments", &n);
@@ -15712,12 +15714,10 @@ static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   if (shape == 2) {
     /* the parameter, as the override took it: a String, or a box read as
        one (a non-String raises TypeError, as in CRuby) */
-    LocalVar *lv = scope_local(s, s->pnames[0]);
-    Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
     Buf kb; memset(&kb, 0, sizeof kb);
-    emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
+    emit_boxed_fwd_param(c, s, 0, &kb);
     buf_printf(&rb, "sp_poly_arg_str_chk(%s)", kb.p ? kb.p : "sp_box_nil()");
-    free(pn.p); free(kb.p);
+    free(kb.p);
   }
   else emit_str_expr(c, arg, &rb);
   buf_puts(&rb, ")");
@@ -16338,12 +16338,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
       if ((fwd && s->nparams == 1) || (!fwd && sargc == 1)) {
         int tk = ++g_tmp;
         Buf kb; memset(&kb, 0, sizeof kb);
-        if (fwd) {
-          LocalVar *lv = scope_local(s, s->pnames[0]);
-          Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
-          emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
-          free(pn.p);
-        }
+        if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
         else emit_boxed(c, sargv[0], &kb);
         Buf rb; memset(&rb, 0, sizeof rb);
         buf_printf(&rb, "({ sp_RbVal _t%d = %s; if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ",

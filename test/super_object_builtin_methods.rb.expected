@@ -21,3 +21,5 @@ false
 NoMethodError
 false
 false
+TypeError
+true

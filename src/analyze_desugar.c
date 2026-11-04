@@ -10204,6 +10204,8 @@ static int fwd_inert_method_lookup(Compiler *c, int e) {
      code, read once like any other (#10719) */
   if (sp_streq(nt_str(nt, e, "name"), "method") && !nt_int(nt, e, "builtin_only", 0)) {
     int r = nt_ref(nt, e, "receiver");
+    /* (no receiver: self in an instance method of such a class) */
+    if (r < 0 && method_user_override_recv(c, e)) return 0;
     TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
     int k = ty_is_object(rt) ? ty_object_class(rt) : -1;
     int mi = k >= 0 ? comp_method_in_chain(c, k, "method", NULL) : -1;

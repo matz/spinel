@@ -4297,14 +4297,22 @@ const char *method_sym_arg(Compiler *c, int node) {
 
 /* Does call node's receiver hold an object whose class's chain has a
    program def of `method` (an instance method the program wrote, not the
-   builtin's)? Only a receiver typed as one object class is asked. */
+   builtin's)? Only a receiver typed as one object class is asked, or no
+   receiver in an instance method, whose self is an object of its class. */
 int method_user_override_recv(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  int recv = nt_ref(nt, node, "receiver");
-  if (recv < 0) return 0;
-  TyKind rt = comp_ntype(c, recv);
-  if (!ty_is_object(rt)) return 0;
-  int k = ty_object_class(rt);
+  int recv = nt_ref(nt, node, "receiver"), k;
+  if (recv < 0) {
+    int s = c->nscope ? c->nscope[node] : -1, cm = 0;
+    if (s <= 0 || s >= c->nscopes) return 0;
+    k = comp_scope_own_class(c, s, &cm);
+    if (cm || c->scopes[s].is_module_function) return 0;
+  }
+  else {
+    TyKind rt = comp_ntype(c, recv);
+    if (!ty_is_object(rt)) return 0;
+    k = ty_object_class(rt);
+  }
   if (k < 0 || k >= c->nclasses) return 0;
   int mi = comp_method_in_chain(c, k, "method", NULL);
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&

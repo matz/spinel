@@ -45810,10 +45810,6 @@ static int tmcv_const(Compiler *c, int at, const char *name) {
 static int rewrite_time_maker_class_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
-  if (comp_class_index(c, "Time") >= 0 && !comp_ary_is_time(c, comp_class_index(c, "Time"))) {
-    /* (a program class named Time of its own: not the builtin's) */
-    if (c->classes[comp_class_index(c, "Time")].def_node >= 0) return 0;
-  }
   int n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0) continue;
@@ -45824,21 +45820,29 @@ static int rewrite_time_maker_class_value(Compiler *c) {
           sp_streq(nm, "local") || sp_streq(nm, "mktime"))) continue;
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
-    if (infer_type(c, recv) != TY_CLASS) continue;
+    if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
     int ncc = 0;
     comp_cmethod_candidates(c, nm, &ncc);
-    if (ncc > 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int base = nt->count;
-    /* the NoMethodError CRuby raises for any other class value */
-    char msg[96]; snprintf(msg, sizeof msg, "undefined method '%s' for class ", nm);
-    int str = tmcv_node(c, "StringNode", id);
-    if (str < 0) continue;
-    nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
-    int kname = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "to_s", -1, -1);
-    int full = arysub_new_call(c, id, str, "+", arysub_args(c, id, &kname, 1), -1);
-    int rargs[2] = { tmcv_const(c, id, "NoMethodError"), full };
-    int tail = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
+    int tail;
+    if (ncc > 0) {
+      /* Not skipped when another class has the class method (a parser
+         rule `at` beside tzinfo's): that class's own answers from the else */
+      tail = arysub_new_call(c, id, nt_clone_subtree(nt, recv), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
+      nt_node_set_int(nt, tail, "tmcv_else", 1);
+    }
+    else {
+      /* the NoMethodError CRuby raises for any other class value */
+      char msg[96]; snprintf(msg, sizeof msg, "undefined method '%s' for class ", nm);
+      int str = tmcv_node(c, "StringNode", id);
+      if (str < 0) continue;
+      nt_node_set_str(nt, str, "unescaped", msg); nt_node_set_str(nt, str, "content", msg);
+      int kname = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "to_s", -1, -1);
+      int full = arysub_new_call(c, id, str, "+", arysub_args(c, id, &kname, 1), -1);
+      int rargs[2] = { tmcv_const(c, id, "NoMethodError"), full };
+      tail = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
+    }
     /* Time's own arm */
     {
       int tc = tmcv_const(c, id, "Time");
@@ -45887,7 +45891,8 @@ static int tmcv_const_is_time(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_ConstantReadNode || !nt_str(nt, v, "name")) return 0;
   const char *n = nt_str(nt, v, "name");
-  if (sp_streq(n, "Time")) return comp_class_index(c, "Time") < 0 || comp_ary_is_time(c, comp_class_index(c, "Time"));
+  /* Not only an unopened Time: a top-level `class Time` reopens the builtin (a runtime adding a method to it) */
+  if (sp_streq(n, "Time")) return 1;
   int k = comp_class_index(c, n);
   return k >= 0 && comp_ary_is_time(c, k);
 }
@@ -45927,9 +45932,6 @@ static void rewrite_time_maker_class_local(Compiler *c, int id) {
   if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
         sp_streq(nm, "local") || sp_streq(nm, "mktime"))) return;
   if (!tmcv_local_holds_time_class(c, id, nt_str(nt, recv, "name"))) return;
-  int ncc = 0;
-  comp_cmethod_candidates(c, nm, &ncc);
-  if (ncc > 0) return;
   int args = nt_ref(nt, id, "arguments");
   int base = nt->count;
   int orig = arysub_new_call(c, id, nt_clone_subtree(nt, recv), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);

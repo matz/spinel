@@ -335,6 +335,9 @@ The restricted C extension API provides `rb_obj_class` and
 so Ruby overrides of `class` and `name` do not affect them. The recorder refuses
 these runtime queries during `Init_`; extensions still require source
 compilation against the restricted headers rather than loading a CRuby binary.
+
+A class below `SystemExit` whose `initialize` never calls `super` answers `status`
+with 0, where CRuby's answers nil: the reader is typed as an Integer.
 `rb_const_defined` is answered during `Init_` only, from the extension's own
 definitions so far and the builtin classes the recorder knows, never from the
 program's Ruby, so the recorded `Init_` and the one the program runs take the

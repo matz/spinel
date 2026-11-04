@@ -16003,7 +16003,7 @@ static sp_RbVal sp_poly_thread_status(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) return sp_Thread_status((sp_thread *)v.v.p);
   /* a SystemExit's exit status, as the typed accessor reads it; any other
      exception keeps the NoMethodError below, which carries its receiver */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_EXCEPTION && v.v.p &&
+  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(v.cls_id)) && v.v.p &&
       sp_exc_cls_matches(((sp_Exception *)v.v.p)->cls_name, "SystemExit"))
     return sp_box_int(sp_exc_status_acc((sp_Exception *)v.v.p));
   sp_raise_nomethod(sp_nomethod_msg("status", v));
@@ -17102,6 +17102,31 @@ static const char *sp_syserr_super(sp_Exception *self, sp_int argc, const sp_RbV
   self->xkey = sp_box_nil();
   sp_exc_syserr_init(self);
   return m;
+}
+/* SystemExit#initialize, for it and the program's classes below it: a leading
+   true, false or number is the status, and what is left goes to
+   Exception#initialize, which takes one message. Anything else leads as that
+   message, with status 0. */
+static const char *sp_sysexit_super(sp_Exception *self, sp_int argc, const sp_RbVal *av) {
+  SP_GC_ROOT(self);
+  sp_int status = 0, lead = 0;
+  if (argc > 0) {
+    if (av[0].tag == SP_TAG_BOOL) { status = av[0].v.b ? 0 : 1; lead = 1; }
+    else if (av[0].tag == SP_TAG_INT) { status = av[0].v.i; lead = 1; }
+    else if (av[0].tag == SP_TAG_FLT) { status = (sp_int)sp_float_to_i_checked(av[0].v.f); lead = 1; }
+  }
+  if (argc - lead > 1)
+    sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 0..1)",
+                                             (long long)(argc - lead)));
+  self->result = sp_box_int(status);
+  if (argc > lead && av[lead].tag != SP_TAG_NIL) {
+    const char *m = sp_poly_to_s(av[lead]);
+    SP_GC_ROOT(m);
+    sp_gc_wb((void *)self);
+    /* an explicitly given message stays, even empty (#3713) */
+    self->msg = m[0] ? sp_str_retained(m) : sp_exc_no_msg;
+  }
+  return self->msg;
 }
 /* SystemCallError.new(msg, errno = nil, func = nil): an errno with an Errno
    class builds an instance of that class (SystemCallError.new("x", 2) is an
@@ -20605,7 +20630,7 @@ static int sp_at_exit_run(int status) {
       void *eobj = sp_exc_obj[sp_exc_top];
       SP_GC_ROOT_STR(emsg);   /* printing formats a backtrace, which allocates */
       SP_GC_ROOT(eobj);
-      if (ecls && strcmp(ecls, "SystemExit") == 0) st = sp_exc_exit_status(eobj);
+      if (ecls && sp_exc_cls_matches(ecls, "SystemExit")) st = sp_exc_exit_status(eobj);
       else {
         sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", emsg, eobj ? ((sp_Exception *)eobj)->backtrace : NULL);
         st = 1;

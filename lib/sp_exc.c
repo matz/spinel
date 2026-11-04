@@ -1867,7 +1867,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* Uncaught SystemExit terminates silently with its status (Kernel#exit).
      Read the status BEFORE the hooks run: it lives in the pending exception
      object, which nothing roots once the hooks start allocating. */
-  if (strcmp(cls, "SystemExit") == 0) exit(sp_exc_at_exit(sp_exc_exit_status(sp_pending_exc_obj)));
+  if (sp_exc_cls_matches(cls, "SystemExit")) exit(sp_exc_at_exit(sp_exc_exit_status(sp_pending_exc_obj)));
   /* A killed main fiber (Fiber#kill, lib/sp_fiber.c) ends the program with
      status 1 after the at_exit hooks, as CRuby does. */
   if (strcmp(cls, "FiberKillSignal") == 0) exit(sp_exc_at_exit(1));

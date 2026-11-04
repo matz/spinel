@@ -1063,6 +1063,12 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
           emit_boxed(c, av[1], b);
           buf_puts(b, "))");
         }
+        /* `raise SystemExit, 3` is SystemExit.new(3): a number is the status */
+        else if (xc >= 0 ? class_is_sysexit(c, xc) : (effn && sp_streq(effn, "SystemExit"))) {
+          buf_puts(b, "sp_raise_exc((sp_Exception *)");
+          emit_sysexit_new(c, id, xc, 1, &av[1], b);
+          buf_puts(b, ")");
+        }
         /* `raise Errno::ENOENT, "x"` is Errno::ENOENT.new("x"): the errno
            text, " - x" (SystemCallError.new("x") an unknown error) */
         else if ((xc >= 0 && class_is_syserr(c, xc)) || (xc < 0 && is_syserr_family_name(effn))) {

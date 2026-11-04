@@ -15847,7 +15847,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
       /* SystemCallError#initialize(msg = nil, func = nil) builds the message
          from the class's errno ("No such file or directory - msg") and
          stores #errno; a bare `super` forwards this initialize's parameters */
-      if (class_is_syserr(c, s->class_id)) {
+      /* SystemExit#initialize(status = true, msg = nil) stores the status */
+      int super_exit = class_is_sysexit(c, s->class_id);
+      const char *super_fn = super_exit ? "sp_sysexit_super" : "sp_syserr_super";
+      if (super_exit || class_is_syserr(c, s->class_id)) {
         char lead[64]; snprintf(lead, sizeof lead, "(sp_Exception *)%s, ", g_self);
         if (ty_k == NK_ForwardingSuperNode) {
           /* a declared keyword (`def initialize(msg:)`) goes over as a Hash
@@ -15856,8 +15859,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
           int nkwd = 0;
           if (pnd >= 0) (void)nt_arr(c->nt, pnd, "keywords", &nkwd);
           if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || nkwd > 0 || nt_ref(c->nt, id, "block") >= 0)
-            unsupported(c, id, "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize");
-          if (s->nparams == 0) { buf_printf(b, "sp_syserr_super(%s0, NULL)", lead); return; }
+            unsupported(c, id, super_exit ? "a bare super forwarding a rest, keyword or block parameter to SystemExit#initialize"
+                                          : "a bare super forwarding a rest, keyword or block parameter to SystemCallError#initialize");
+          if (s->nparams == 0) { buf_printf(b, "%s(%s0, NULL)", super_fn, lead); return; }
           int t0 = g_tmp + 1;
           g_tmp += s->nparams;
           buf_puts(b, "({ ");
@@ -15870,12 +15874,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
             buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", t0 + k);
             free(rn.p);
           }
-          buf_printf(b, "sp_syserr_super(%s%d, (sp_RbVal[]){", lead, s->nparams);
+          buf_printf(b, "%s(%s%d, (sp_RbVal[]){", super_fn, lead, s->nparams);
           for (int k = 0; k < s->nparams; k++) buf_printf(b, "%s_t%d", k ? ", " : "", t0 + k);
           buf_puts(b, "}); })");
           return;
         }
-        emit_syserr_call(c, id, "sp_syserr_super", lead, argc2, argv2, b);
+        emit_syserr_call(c, id, super_fn, lead, argc2, argv2, b);
         return;
       }
       if (argc2 > 0) {

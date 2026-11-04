@@ -5954,16 +5954,34 @@ int class_any_cmethod_eqq(Compiler *c, int ci) {
   return mi;
 }
 
-/* The same, only for a method of one plain parameter: the `when` and `in`
-   arms, grep and a class value call it. Another one (a keyword, a default,
-   a rest) is called only by a written `Klass === x`, through its call
-   plan. */
+/* Can the call give this default in its place, with no frame of the
+   method: a literal or a constant read, which reads no local, no self, and
+   calls nothing. (An Array or Hash literal is left out: the boxed dispatch
+   that grep and a class value use builds no value of its own. A String
+   literal too: given in place it is the frozen literal, where the method's
+   own default is a new String.) */
+static int eqq_default_is_plain(const NodeTable *nt, int node) {
+  switch (nt_kind(nt, node)) {
+    case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
+    case NK_FalseNode: case NK_SymbolNode: case NK_ConstantReadNode:
+      return 1;
+    default: return 0;
+  }
+}
+
+/* The same, only for a method the `when` and `in` arms, grep and a class
+   value can call with the one value: one plain parameter, then only
+   optional ones whose defaults are plain (eqq_default_is_plain). Another
+   one (a keyword, a rest, a default that needs the method's frame) is
+   called only by a written `Klass === x`, through its call plan. */
 int class_own_cmethod_eqq(Compiler *c, int ci) {
   int mi = class_any_cmethod_eqq(c, ci);
   if (mi < 0) return -1;
   const Scope *s = &c->scopes[mi];
-  if (s->nparams != 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->ps_nkw > 0 || s->blk_param || s->yields ||
+  if (s->nparams < 1 || s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->ps_nkw > 0 || s->blk_param || s->yields ||
       (s->pdefault && s->pdefault[0] >= 0)) return -1;
+  for (int i = 1; i < s->nparams; i++)
+    if (!s->pdefault || s->pdefault[i] < 0 || !eqq_default_is_plain(c->nt, s->pdefault[i])) return -1;
   return mi;
 }
 

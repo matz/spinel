@@ -10707,7 +10707,7 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   int mi = class_own_cmethod_eqq(c, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
-  LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
+  LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
   int raw = wp && wp->type == pt && pt != TY_POLY;
   int ret_ptr = needs_root(ws->ret) && !comp_ty_value_obj(c, ws->ret);
   if (!wp || (wp->type != TY_POLY && !raw) || ws->rest_idx >= 0 || ws->kwrest_idx >= 0 || ws->blk_param ||
@@ -10719,6 +10719,8 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, &cl));
   if (raw || pt == TY_POLY) buf_puts(&cl, subj);
   else emit_boxed_text(c, pt, subj, &cl);
+  /* (the optional parameters take their plain defaults) */
+  for (int i = 1; i < ws->nparams; i++) { buf_puts(&cl, ", "); emit_arg_or_default(c, ws, i, -1, &cl); }
   buf_puts(&cl, ")");
   const char *call = cl.p ? cl.p : "";
   /* boxed: the answer itself, as a boxed value */

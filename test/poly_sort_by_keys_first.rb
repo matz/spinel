@@ -22,10 +22,12 @@ class StrCmp
   def <=>(o) = "x"
 end
 
+# (which pair of keys a sort compares first is CRuby's own and differs by
+# platform, and so does the comparison error's message: only its kind)
 def t
   yield
 rescue StandardError => e
-  puts "#{e.class}: #{e.message}"
+  puts e.message.start_with?("comparison of") ? "#{e.class}: comparison failed" : "#{e.class}: #{e.message}"
 end
 
 # the pre-existing report, a proc forwarded to a boxed Array

@@ -1,7 +1,7 @@
 k 3
 k "a"
 k 1
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 k 3
 k 1
 k 2
@@ -9,15 +9,15 @@ k 2
 b 3
 b "a"
 b 1
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 m 3
 m "a"
 m 1
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 h 3
 h "x"
 h 1
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 h 3
 h 2
 h 1
@@ -25,22 +25,22 @@ h 1
 r 1
 r 2
 r 3
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 [3, 2, 1]
 d 3
 d "a"
 d 1
-ArgumentError: comparison of Integer with String failed
+ArgumentError: comparison failed
 [5]
 n 2
 n 5
 n 1
-ArgumentError: comparison of Integer with nil failed
+ArgumentError: comparison failed
 [1, 2, 2.5, 3.5]
 f 1.0
 f 0.0
 f 2.0
-ArgumentError: comparison of Float with NaN failed
+ArgumentError: comparison failed
 [:nils, [0, 1, 2]]
 [:true_true, [0, 1]]
 [:false_false, [0, 1]]
@@ -49,11 +49,11 @@ ArgumentError: comparison of Float with NaN failed
 [:equal_hashes, [0, 1]]
 [:one_hash_twice, [0, 1]]
 [:num_beside_ints, [2, 1, 0, 3]]
-ArgumentError: comparison of String with 0 failed
-ArgumentError: comparison of TrueClass with false failed
-ArgumentError: comparison of Symbol with String failed
+ArgumentError: comparison failed
+ArgumentError: comparison failed
+ArgumentError: comparison failed
 [:int_float, [3, 1, 2, 0]]
-ArgumentError: comparison of String with 0 failed
+ArgumentError: comparison failed
 e 3
 e "a"
 e 1

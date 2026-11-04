@@ -19249,6 +19249,18 @@ static void reject_define_method_early(Compiler *c) {
                                  "that method runs (see docs/limitations.md)");
 }
 
+/* A `class << K` in a method's body on a Struct or Data class
+   (cplan_record_sclass_early) is refused before any emission, with or
+   without --defer-refusals and whether the method is reached or not: its
+   methods answer from the start either way. */
+static void reject_record_sclass_early(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_SingletonClassNode, id)
+    if (cplan_record_sclass_early(c, id))
+      unsupported_feature(c, id, "`class << K` in a method body, on a class Struct.new or Data.define makes, is "
+                                 "not supported: its methods are defined from the start, not when that method "
+                                 "runs (see docs/limitations.md)");
+}
+
 /* define_method(:m, &blk) or define_method(:m, blk) in a method's body,
    where blk is a parameter of that method (its &block, or a Proc it is
    handed): the method's body is whatever block a caller passes, known
@@ -22138,6 +22150,7 @@ char *codegen_program(const NodeTable *nt) {
   reject_top_self(c);
   reject_time_parse(c);
   reject_define_method_early(c);
+  reject_record_sclass_early(c);
   reject_define_method_runtime_block(c);
   reject_range_reopen_nonint(c);
   reject_range_rational_bound(c);

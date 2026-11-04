@@ -3064,6 +3064,13 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
          lr_refl_cell_table(c, name, sg);
 }
 
+int elab_method_asked(Compiler *c, const char *name) {
+  const LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name) return 0;
+  return r->refl_any || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
+         lr_refl_has(r->refl_capt, r->nrefl_capt, name);
+}
+
 int elab_method_replaced(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   const LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;

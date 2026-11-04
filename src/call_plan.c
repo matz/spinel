@@ -2850,6 +2850,37 @@ int cplan_define_method_early(Compiler *c, int id) {
   return 0;
 }
 
+/* A `class << x` in a method's body on a class a Struct.new or Data.define
+   makes at its write: x a constant the record resolves to that class, or
+   self in a class method of it. CRuby defines the body's methods each time
+   that method runs; the walk files them on the class's singleton from the
+   start, and the record holds no version of them to order the calls
+   against, so a call or respond_to? before the method runs (or in a
+   program that never runs it) would find them. Refused, reached or not,
+   where the program may ask the class for a method the body makes. */
+int cplan_record_sclass_early(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_SingletonClassNode || elab_body_def(c, id) < 0) return 0;
+  int ex = nt_ref(nt, id, "expression"), ci = -1;
+  if (nt_kind(nt, ex) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, id);
+    if (s && s->is_cmethod) ci = s->class_id;
+  }
+  else ci = elab_class_ref_at(c, ex, NULL);
+  if (ci < 0 || ci >= c->nclasses || class_def_record(nt, c->classes[ci].def_node) < 0) return 0;
+  /* asked: a call of its name (a Symbol's block among them) or a
+     reflection reader naming it (elab_method_asked); a body that does
+     more than def is taken as asked */
+  int body = nt_ref(nt, id, "body"), n = 0;
+  const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  if (body >= 0 && !st) return 1;
+  for (int i = 0; i < n; i++) {
+    const char *nm = nt_kind(nt, st[i]) == NK_DefNode ? nt_str(nt, st[i], "name") : NULL;
+    if (!nm || an_calls_named_first(c, nm) >= 0 || elab_method_asked(c, nm)) return 1;
+  }
+  return 0;
+}
+
 /* Does call id's receiver, an object of a class of the program's, answer
    `name` with a member or method of its class's own (a Struct member named
    `methods`), so that the call is no list of methods? */

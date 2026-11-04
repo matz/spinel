@@ -14403,6 +14403,7 @@ static int emit_struct_new_call_members(Compiler *c, int id, int ci, int argc, c
     if (scust >= 0 && c->scopes[scust].reachable && !c->scopes[scust].yields) {
       buf_printf(b, "sp_%s_new(", cls->c_name);
       emit_args_filled(c, scust, nt_ref(nt, id, "arguments"), "", b);
+      emit_ctor_block_slot(c, id, scust, ctor_blk_lead(b), b);
       buf_puts(b, ")");
       return 1;
     }

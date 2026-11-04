@@ -12179,19 +12179,12 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
          at the .new site); the constructor just allocates blank and the inliner
          runs the body -- so skip the sp_X_initialize call for that case. */
       Scope *si = &c->scopes[sinit];
+      /* a named `&blk` the initialize keeps: the .new site's block, as a
+         plain class's constructor takes it (emit_ctor_params) */
+      int si_blk = si->blk_param && si->blk_param[0] && !si->yields;
       buf_printf(b, "SP_POOL_DEFINE(%s)\n", ci->c_name);
       buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
-      if (si->nparams > 0) {
-        for (int i = 0; i < si->nparams; i++) {
-          if (i) buf_puts(b, ", ");
-          TyKind pt = scope_param_type(si, i);
-          /* as the prototype declares it (an oint slot included) */
-          LocalVar *pl = scope_local(si, si->pnames[i]);
-          if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, b); else emit_ctype(c, pt, b);
-          buf_printf(b, " lv_%s", si->pnames[i]);
-        }
-      }
-      else buf_puts(b, "void");
+      emit_ctor_params(c, sinit, si_blk, b);
       buf_puts(b, ") {\n");
       /* Root the reference arguments before the object allocation, for the
          reason the Struct constructor below does: SP_POOL_NEW can collect, and
@@ -12224,6 +12217,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
         if (sinit_def != cid) buf_printf(b, "(sp_%s *)", c->classes[sinit_def].c_name);
         buf_puts(b, "self");
         for (int i = 0; i < si->nparams; i++) buf_printf(b, ", lv_%s", si->pnames[i]);
+        if (si_blk) buf_printf(b, ", lv_%s", si->blk_param);
         buf_puts(b, ");\n");
       }
       else {
@@ -22375,7 +22369,8 @@ char *codegen_program(const NodeTable *nt) {
           /* as emit_ctor_params declares it (an oint slot included) */
           if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, &b); else emit_ctype(c, pm, &b);
         }
-        if (s->nparams == 0) buf_puts(&b, "void");
+        if (s->blk_param && s->blk_param[0] && !s->yields) buf_puts(&b, s->nparams > 0 ? ", sp_Proc *" : "sp_Proc *");
+        else if (s->nparams == 0) buf_puts(&b, "void");
       }
       else {
         for (int m = 0; m < ci->nmembers; m++) { if (m) buf_puts(&b, ", "); emit_ctype(c, ci->ivar_types[m], &b); }

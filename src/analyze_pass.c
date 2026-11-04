@@ -16492,11 +16492,13 @@ static int const_recv_cmethod_mi(Compiler *c, int call, int recv, const char *na
   return cid >= 0 ? call_target(c, call, cid, name, CT_CMETHOD, NULL) : -1;
 }
 
-/* `run(s, &method(:m))`: bind m's parameters from every place the block
-   run receives is called -- a yield, a `blk.call` (block_sites), through a
-   pure `...` forwarder (forwarding_yield_target), and through a call run
-   hands its own `&blk` on to -- as a `method(:m).call(args)` binds them. */
-static int bind_method_obj_block_sites(Compiler *c, int ymi, int tmi, int call, int depth) {
+/* Every place the block `call` hands to method ymi is called -- a yield, a
+   `blk.call` (block_sites), through a pure `...` forwarder
+   (forwarding_yield_target), and through a call ymi hands its own `&blk` on
+   to -- with the arguments it passes: visit(c, site, argv, argc, ctx) for
+   each. Answers the OR of what visit answers. */
+int method_obj_block_sites_each(Compiler *c, int ymi, int call, int depth,
+                                int (*visit)(Compiler *, int, const int *, int, void *), void *ctx) {
   const NodeTable *nt = c->nt;
   int y = depth > 4 ? -1 : forwarding_yield_target(c, ymi, 0);
   if (y < 0) return 0;
@@ -16506,7 +16508,7 @@ static int bind_method_obj_block_sites(Compiler *c, int ymi, int tmi, int call, 
   for (int k = 0; k < ns; k++) {
     int ya = block_site_args(c, y, sites[k], y == ymi ? call : -1), yc = 0;
     const int *yv = ya >= 0 ? nt_arr(nt, ya, "arguments", &yc) : NULL;
-    changed |= bind_args_params(c, sites[k], tmi, yv, yc);
+    changed |= visit(c, sites[k], yv, yc, ctx);
   }
   Scope *m = &c->scopes[y];
   if (!m->blk_param || !m->blk_param[0]) return changed;
@@ -16523,9 +16525,20 @@ static int bind_method_obj_block_sites(Compiler *c, int ymi, int tmi, int call, 
     if (r < 0 || nt_kind(nt, r) == NK_SelfNode) t = comp_self_call_mi(c, u, un);
     else if (ty_is_object(infer_type(c, r))) t = call_target(c, u, ty_object_class(infer_type(c, r)), un, 0, NULL);
     else t = const_recv_cmethod_mi(c, u, r, un);
-    if (t >= 0 && t != y) changed |= bind_method_obj_block_sites(c, t, tmi, u, depth + 1);
+    if (t >= 0 && t != y) changed |= method_obj_block_sites_each(c, t, u, depth + 1, visit, ctx);
   }
   return changed;
+}
+
+static int bind_method_obj_site(Compiler *c, int site, const int *argv, int argc, void *ctx) {
+  return bind_args_params(c, site, *(const int *)ctx, argv, argc);
+}
+
+/* `run(s, &method(:m))`: bind m's parameters from every place the block
+   run receives is called (method_obj_block_sites_each), as a
+   `method(:m).call(args)` binds them. */
+static int bind_method_obj_block_sites(Compiler *c, int ymi, int tmi, int call) {
+  return method_obj_block_sites_each(c, ymi, call, 0, bind_method_obj_site, &tmi);
 }
 
 static int proc_params_poly(const NodeTable *nt, Scope *bs, int pn, const char *field) {
@@ -17556,9 +17569,17 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
     if (bx >= 0 && nt_kind(nt, bx) == NK_CallNode && nt_str(nt, bx, "name") &&
         sp_streq(nt_str(nt, bx, "name"), "to_proc") && nt_ref(nt, bx, "arguments") < 0)
       bx = nt_ref(nt, bx, "receiver");
-    int tmi = bx >= 0 && nt_kind(nt, bx) == NK_CallNode ? method_obj_target_mi(c, bx) : -1;
+    /* ... and `rd = method(:m); run(s, &rd)` names it through the local,
+       one target per method a local written more than once holds */
+    int *bmns = NULL;
+    int nbmn = bx >= 0 ? method_recv_nodes(c, bx, &bmns) : 0;
+    int ntgt = 0;
+    for (int j = 0; j < nbmn; j++) {
+      int tmi = method_obj_target_mi(c, bmns[j]);
+      if (tmi >= 0 && !method_call_param_shift(c, bmns[j], tmi)) bmns[ntgt++] = tmi;
+    }
     int ymi = -1;
-    if (tmi >= 0 && !method_call_param_shift(c, bx, tmi)) {
+    if (ntgt > 0) {
       if (recv < 0) ymi = comp_self_call_mi(c, id, name);
       else if (infer_type(c, recv) == TY_STRING || infer_type(c, recv) == TY_STRBUF) ymi = cplan_user_fresh(c, id)->mi;
       else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
@@ -17570,9 +17591,11 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       else ymi = const_recv_cmethod_mi(c, id, recv, name);
     }
     if (ymi >= 0 && forwarding_yield_target(c, ymi, 0) >= 0) {
-      changed |= bind_method_obj_block_sites(c, ymi, tmi, id, 0);
+      for (int j = 0; j < ntgt; j++) changed |= bind_method_obj_block_sites(c, ymi, bmns[j], id);
+      free(bmns);
       return changed | 2;
     }
+    free(bmns);
   }
 
   /* proc {} / lambda {} / Proc.new {}: type the literal's block params.

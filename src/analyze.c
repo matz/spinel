@@ -52538,6 +52538,75 @@ static void an_phase_procs(Compiler *c) {
   }
 }
 
+/* Does the program turn a Method value into a Proc: `m.to_proc`, `m.curry`
+   or `&m` on a receiver typed Method or a boxed one that can hold a Method?
+   A call on such a Proc calls the Method's target. */
+static int an_program_makes_method_procs(Compiler *c, AnMethodHolders *mh) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int r = nt_ref(nt, id, "receiver");
+    if (r >= 0 && is_proc_conversion_name(nm) &&
+        (c->ntype[r] == TY_METHOD || (c->ntype[r] == TY_POLY && an_poly_may_be_method(c, mh, r, 0))))
+      return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_BlockArgumentNode, id) {
+    int x = nt_ref(nt, id, "expression");
+    if (x >= 0 && (c->ntype[x] == TY_METHOD || (c->ntype[x] == TY_POLY && an_poly_may_be_method(c, mh, x, 0))))
+      return 1;
+  }
+  return 0;
+}
+
+/* Can Proc-valued receiver r hold a Method's to_proc whose target the
+   analysis did not name? One built only from literal blocks holds none, and
+   one proc_to_proc_method_nodes resolves had its call bind the target. */
+static int an_proc_may_hold_unnamed_method(Compiler *c, int r) {
+  if (sb_proc_only_literal(c, r, 0)) return 0;
+  int *mns = NULL;
+  int n = proc_to_proc_method_nodes(c, r, &mns);
+  free(mns);
+  return n == 0;
+}
+
+/* Is block argument `&x` a Method whose target the analysis does not name
+   (so no binding typed the target from the block's call sites)? */
+static int an_block_arg_unnamed_method(Compiler *c, AnMethodHolders *mh, int x) {
+  const NodeTable *nt = c->nt;
+  const char *xn = nt_kind(nt, x) == NK_CallNode ? nt_str(nt, x, "name") : NULL;
+  if (xn && sp_streq(xn, "to_proc") && nt_ref(nt, x, "arguments") < 0 && nt_ref(nt, x, "receiver") >= 0)
+    x = nt_ref(nt, x, "receiver");
+  TyKind xt = c->ntype[x];
+  if (xt != TY_METHOD && !(xt == TY_POLY && an_poly_may_be_method(c, mh, x, 0))) return 0;
+  return method_recv_node(c, x) < 0;
+}
+
+/* Fold the arguments of one dynamic call of a Method value into the
+   per-position evidence: a splat, a block or keywords widen every position. */
+static void an_dyn_evidence_add(Compiler *c, const int *av, int an, TyKind *dyn_arg, int *dyn_seen) {
+  if (nt_argv_has(c->nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS | NT_ARG_FORWARDING)) {
+    for (int k = 0; k < 16; k++) { dyn_arg[k] = TY_POLY; dyn_seen[k] = 1; }
+    return;
+  }
+  for (int k = 0; k < an && k < 16; k++) {
+    TyKind at = c->ntype[av[k]];
+    if (at == TY_UNKNOWN || at == TY_VOID) at = TY_POLY;
+    dyn_arg[k] = dyn_seen[k] ? ty_unify(dyn_arg[k], at) : at;
+    dyn_seen[k] = 1;
+  }
+}
+
+/* The per-position evidence an_dyn_evidence_add folds into, as the context
+   of a method_obj_block_sites_each visit. */
+typedef struct { TyKind *arg; int *seen; } AnDynEvidence;
+
+static int an_dyn_evidence_site(Compiler *c, int site, const int *av, int an, void *ctx) {
+  (void)site;
+  AnDynEvidence *ev = ctx;
+  an_dyn_evidence_add(c, av, an, ev->arg, ev->seen);
+  return 0;
+}
+
 /* The method backstops: params of a method reached only by method(:sym) (step 1), the ivar up-propagation and param re-binding, the method_missing warning, the block-splat check, params no typed call site bound (step 2), then the write and return re-inference (analyze_program's steps, in their order) */
 static void an_phase_method_backstops(Compiler *c) {
   /* Backstop step 1: a method reached only via method(:sym) is invoked through
@@ -52576,6 +52645,7 @@ static void an_phase_method_backstops(Compiler *c) {
   if (msym_n > 0) {
     AnMethodHolders mholders = {0};
     an_method_holders_build(c, &mholders);
+    int meth_procs = an_program_makes_method_procs(c, &mholders);
     for (int id = 0; id < c->nt->count; id++) {
       if (nt_kind(c->nt, id) != NK_CallNode) continue;
       const char *nm = nt_str(c->nt, id, "name");
@@ -52584,7 +52654,8 @@ static void an_phase_method_backstops(Compiler *c) {
       int r = nt_ref(c->nt, id, "receiver");
       if (r < 0) continue;
       TyKind rt = c->ntype[r];
-      if (rt != TY_METHOD && rt != TY_POLY) continue;
+      if (rt == TY_PROC ? !(meth_procs && an_proc_may_hold_unnamed_method(c, r))
+                        : rt != TY_METHOD && rt != TY_POLY) continue;
       int a = nt_ref(c->nt, id, "arguments");
       int an = 0; const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
       /* `[]` on a boxed value is mostly a Hash or Array read (`h[:k]`,
@@ -52596,7 +52667,7 @@ static void an_phase_method_backstops(Compiler *c) {
          `[method(:len), 1][i]["abc"]` kept the int default, and the call
          raised TypeError where `.call` answered (#6179). */
       if (sp_streq(nm, "===") && an != 1) continue;
-      if ((sp_streq(nm, "[]") || sp_streq(nm, "===")) && rt != TY_METHOD) {
+      if ((sp_streq(nm, "[]") || sp_streq(nm, "===")) && rt == TY_POLY) {
         int numeric = an > 0 && sp_streq(nm, "[]");
         for (int k = 0; k < an && numeric; k++) {
           TyKind at = c->ntype[av[k]];
@@ -52604,17 +52675,17 @@ static void an_phase_method_backstops(Compiler *c) {
         }
         if (!numeric && !an_poly_may_be_method(c, &mholders, r, 0)) continue;
       }
-      int splat = nt_argv_has(c->nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS | NT_ARG_FORWARDING);
-      if (splat) {
-        for (int k = 0; k < 16; k++) { dyn_arg[k] = TY_POLY; dyn_seen[k] = 1; }
-        continue;
-      }
-      for (int k = 0; k < an && k < 16; k++) {
-        TyKind at = c->ntype[av[k]];
-        if (at == TY_UNKNOWN || at == TY_VOID) at = TY_POLY;
-        dyn_arg[k] = dyn_seen[k] ? ty_unify(dyn_arg[k], at) : at;
-        dyn_seen[k] = 1;
-      }
+      an_dyn_evidence_add(c, av, an, dyn_arg, dyn_seen);
+    }
+    /* `run(&m)` with a Method m the analysis does not name (an instance
+       variable, a constant, a parameter): each place run calls its block
+       calls m's target */
+    NT_FOREACH_KIND(c->nt, NK_CallNode, u) {
+      int ba = nt_ref(c->nt, u, "block");
+      int bx = ba >= 0 && nt_kind(c->nt, ba) == NK_BlockArgumentNode ? nt_ref(c->nt, ba, "expression") : -1;
+      if (bx < 0 || !an_block_arg_unnamed_method(c, &mholders, bx)) continue;
+      AnDynEvidence ev = {dyn_arg, dyn_seen};
+      method_obj_block_sites_each(c, cplan_user_fresh(c, u)->mi, u, 0, an_dyn_evidence_site, &ev);
     }
     free(mholders.scope); free(mholders.name); free(mholders.memo[0]); free(mholders.memo[1]);
   }

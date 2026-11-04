@@ -1,0 +1,19 @@
+"one:1.5"
+"one:[1, 2]"
+"one:nil"
+"one:Show"
+"one:\"str\""
+"two:{k: 1},:sym"
+4
+2
+3
+"b:q"
+"a:q"
+"a:q"
+"a:q"
+"b:\"q\""
+"a:\"q\""
+"a:1"
+true
+false
+true

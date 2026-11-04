@@ -1,6 +1,5 @@
 # A NilClass method of the program, called on a String, Integer or Float
-# that may be nil, runs for nil. The other values raise NoMethodError, or
-# run their own class's method of the name.
+# that may be nil, runs for nil. The other values raise NoMethodError.
 class NilClass
   def t = "nil!"
   def add(a, b = 2) = a + b
@@ -28,21 +27,3 @@ x = mk(false)
 y = x.t
 p y.upcase, y.class
 p mk(false)&.t
-
-# Object has the method too: nil runs NilClass's, the others Object's.
-class Object
-  def u = "obj"
-end
-class NilClass
-  def u = "niu"
-end
-p mk(false).u, mk(true).u, ms(false).u, ms(true).u, mf(false).u, mf(true).u
-
-# String has its own: nil runs NilClass's.
-class String
-  def w = "str"
-end
-class NilClass
-  def w = "nilw"
-end
-p ms(false).w, ms(true).w

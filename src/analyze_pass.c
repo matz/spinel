@@ -1932,6 +1932,136 @@ static int alias_ivar_widened(Compiler *c, const LWIndex *ivw, const AliasSide *
   return ch;
 }
 
+/* (#10930) Locals that may hold a container of one allocation site
+   (LocalVar.ctr_sites, from the directed class walk's per-site objects)
+   hold the same Array or Hash, so they take one container kind, and every
+   site of theirs allocates it: the join of their kinds (the element kinds,
+   the key and value kinds, each its own where they agree and boxed where
+   not). Without it an assignment between two of them converted by
+   copying, and each name changed its own copy. Only locals typed as a
+   container join: one boxed holds the container as it is, and one of
+   another type cannot hold it (the walk's sets are wider than the types).
+   The groups are made again every round, from the types of that round. */
+static TyKind ctr_join_kind(TyKind a, TyKind b) { return a == b ? a : TY_POLY; }
+static int ctr_uf_find(int *p, int x) { while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+static int join_container_alias_groups(Compiler *c) {
+  if (c->nctr_site == 0) return 0;
+  /* (the optimistic rounds hold guesses a later round takes back: a
+     group joined on one keeps the kinds it gave its sites) */
+  if (g_infer_optimistic) return 0;
+  int n = c->nctr_site, ns = c->nscopes;
+  int *par = malloc(sizeof(int) * (size_t)n);
+  /* per group root: 0 none seen, 1 arrays, 2 hashes, 3 give up; the joined parts */
+  unsigned char *fam = calloc((size_t)n, 1);
+  TyKind *ea = malloc(sizeof(TyKind) * (size_t)n), *ka = malloc(sizeof(TyKind) * (size_t)n),
+         *va = malloc(sizeof(TyKind) * (size_t)n);
+  if (!par || !fam || !ea || !ka || !va) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) par[i] = i;
+/* (a local an --rbs seed types keeps the seed's kind, and the call
+   converts into it, as the seed asks: it joins no group, and a site it may
+   hold is copied there, so no group holds that site either) */
+/* (a block's parameter takes its container's element kind, so it agrees
+   with what it reads by construction; the walk's sets for it are wide (an
+   iterator's receiver, zip's other operand) and would join tables with
+   their rows: it joins no group) */
+#define CTR_JOINS_LV(lv) (!(lv)->rbs_seeded && !(lv)->is_block_param && (ty_is_array((lv)->type) || ty_is_hash((lv)->type)))
+  unsigned char *excl = calloc((size_t)n, 1);
+  if (!excl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (lv->rbs_seeded) for (int j = 0; j < lv->nctr_sites; j++) excl[lv->ctr_sites[j]] = 1;
+    }
+  /* a local's first site no seed copies, -1 for none */
+#define CTR_FIRST(lv) ({ int _f = -1; for (int _j = 0; _j < (lv)->nctr_sites && _f < 0; _j++) if (!excl[(lv)->ctr_sites[_j]]) _f = (lv)->ctr_sites[_j]; _f; })
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (lv->nctr_sites < 2 || !CTR_JOINS_LV(lv)) continue;
+      int f0 = CTR_FIRST(lv);
+      if (f0 < 0) continue;
+      int r0 = ctr_uf_find(par, f0);
+      for (int j = 0; j < lv->nctr_sites; j++) {
+        if (excl[lv->ctr_sites[j]]) continue;
+        int r = ctr_uf_find(par, lv->ctr_sites[j]); if (r != r0) par[r] = r0;
+      }
+    }
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (!lv->nctr_sites || !CTR_JOINS_LV(lv) || CTR_FIRST(lv) < 0) continue;
+      int g = ctr_uf_find(par, CTR_FIRST(lv));
+      if (fam[g] == 3) continue;
+      TyKind t = lv->type;
+      int f = ty_is_array(t) ? 1 : 2;
+      if (fam[g] && fam[g] != f) { fam[g] = 3; continue; }
+      if (f == 1) { TyKind e = ty_array_elem(t); ea[g] = fam[g] ? ctr_join_kind(ea[g], e) : e; }
+      else {
+        TyKind k = ty_hash_key(t), v = ty_hash_val(t);
+        if (fam[g]) { ka[g] = ctr_join_kind(ka[g], k); va[g] = ctr_join_kind(va[g], v); }
+        else { ka[g] = k; va[g] = v; }
+      }
+      fam[g] = (unsigned char)f;
+    }
+  /* the group's kind: the join of its parts */
+  TyKind *wantg = ea;
+  for (int g = 0; g < n; g++) {
+    if (par[g] != g) continue;
+    TyKind want = TY_UNKNOWN;
+    if (fam[g] == 1) { want = ty_array_of(ea[g]); if (want == TY_UNKNOWN) want = TY_POLY_ARRAY; }
+    else if (fam[g] == 2) {
+      want = ty_hash_of(ka[g], va[g]);
+      if (want == TY_UNKNOWN) want = ty_hash_of(ka[g], TY_POLY);
+      if (want == TY_UNKNOWN) want = TY_POLY_POLY_HASH;
+    }
+    wantg[g] = want;
+  }
+  int changed = 0;
+  /* a group whose locals disagree (fam bit 4): only there does a site
+     need the joined kind, which then stays its floor (a group of one
+     kind, a placeholder of an early round included, sets none) */
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (!lv->nctr_sites || !CTR_JOINS_LV(lv) || CTR_FIRST(lv) < 0) continue;
+      int g = ctr_uf_find(par, CTR_FIRST(lv));
+      if (wantg[g] != TY_UNKNOWN && wantg[g] != lv->type) fam[g] |= 4;
+    }
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (!lv->nctr_sites || !CTR_JOINS_LV(lv) || CTR_FIRST(lv) < 0) continue;
+      TyKind want = wantg[ctr_uf_find(par, CTR_FIRST(lv))];
+      if (want == TY_UNKNOWN) continue;
+      if (want != lv->type) lv_set_type(lv, want);
+      if (want != lv->ctr_join) { lv->ctr_join = want; changed = 1; }
+    }
+  /* and every site allocates its group's kind (none: its own) */
+  for (int x = 0; x < n; x++) {
+    if (excl[x]) continue;
+    int g = ctr_uf_find(par, x);
+    TyKind want = wantg[g];
+    int node = c->ctr_site_node[x];
+    if (!(fam[g] & 4) && c->ctr_site_kind[x] == TY_UNKNOWN) continue;
+    if (want == TY_UNKNOWN) continue;   /* (a site keeps its floor through an undecided round) */
+    /* (an Array site takes only an Array kind, a Hash site a Hash kind) */
+    if (node >= 0 && node < c->node_cap) {
+      NodeKind nk = nt_kind(c->nt, node);
+      int arr = nk == NK_ArrayNode || (nk == NK_CallNode && ty_is_array(comp_ntype(c, node)));
+      if (arr ? !ty_is_array(want) : !ty_is_hash(want)) continue;
+    }
+    if (c->ctr_site_kind[x] == want) continue;
+    c->ctr_site_kind[x] = want;
+    if (node >= 0 && node < c->ctr_site_cap) c->ctr_site_kind_of[node] = want;
+    if (node >= 0 && node < c->node_cap) comp_touch_node(c, node);
+    changed = 1;
+  }
+#undef CTR_JOINS_LV
+#undef CTR_FIRST
+  free(par); free(fam); free(ea); free(ka); free(va); free(excl);
+  return changed;
+}
+
 /* Propagates container widening across direct aliases (`b = a`, and the
    same between ivars, globals, class variables and constants: `@b = @a`,
    `$b = a`, `M = L`; a reader's call names its ivar: `@mine = o.items`,
@@ -5479,6 +5609,7 @@ int infer_write_types(Compiler *c) {
      runs AFTER the write-site unification, so an alias assigned before its
      source widened would keep the narrower container kind. */
   changed |= propagate_alias_widening(c, &ivw_ix);
+  changed |= join_container_alias_groups(c);
 
   /* The container-usage fold above can widen a hash's value layout after the
      main write-site scan has already typed a destination local. Reconcile the

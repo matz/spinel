@@ -11188,6 +11188,25 @@ TyKind an_self_node_type(Compiler *c, int id) {
   return t;
 }
 
+/* (#10930) the site whose own kind infer_uncached is asked for, under its
+   group's; and the join of the two */
+static int g_ctr_site_natural = -1;
+static TyKind ctr_site_join(TyKind nat, TyKind want) {
+  if (nat == TY_UNKNOWN || nat == want) return want;
+  if (ty_is_array(nat) && ty_is_array(want)) {
+    TyKind a = ty_array_elem(nat), b = ty_array_elem(want);
+    TyKind k = ty_array_of(a == b ? a : TY_POLY);
+    return k == TY_UNKNOWN ? TY_POLY_ARRAY : k;
+  }
+  if (ty_is_hash(nat) && ty_is_hash(want)) {
+    TyKind k1 = ty_hash_key(nat), k2 = ty_hash_key(want), v1 = ty_hash_val(nat), v2 = ty_hash_val(want);
+    TyKind kk = k1 == k2 ? k1 : TY_POLY, vv = v1 == v2 ? v1 : TY_POLY;
+    TyKind h = ty_hash_of(kk, vv);
+    if (h == TY_UNKNOWN) h = ty_hash_of(kk, TY_POLY);
+    return h == TY_UNKNOWN ? TY_POLY_POLY_HASH : h;
+  }
+  return nat;
+}
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -11763,6 +11782,23 @@ TyKind infer_uncached(Compiler *c, int id) {
   if (nk == NK_ElseNode) {
     int s = nt_ref(nt, id, "statements");
     return s >= 0 ? infer_type(c, s) : TY_NIL;
+  }
+  /* (#10930) a site of a container alias group allocates the kind its
+     group's names hold, joined with its own */
+  if ((nk == NK_ArrayNode || nk == NK_HashNode || nk == NK_CallNode) && id < c->ctr_site_cap && c->ctr_site_kind_of &&
+      c->ctr_site_kind_of[id] != TY_UNKNOWN && id != g_ctr_site_natural) {
+    int save = g_ctr_site_natural;
+    g_ctr_site_natural = id;
+    TyKind nat = infer_uncached(c, id);
+    g_ctr_site_natural = save;
+    TyKind want = c->ctr_site_kind_of[id];
+    /* (a group's walk sets are wider than its types: an Array site keeps
+       only an Array kind, a Hash site a Hash kind; Array.new and Hash.new
+       by the kind they answer) */
+    int arr = nk == NK_ArrayNode || (nk == NK_CallNode && ty_is_array(nat));
+    int hsh = nk == NK_HashNode || (nk == NK_CallNode && ty_is_hash(nat));
+    if (arr ? !ty_is_array(want) : hsh ? !ty_is_hash(want) : 1) return nat;
+    return ctr_site_join(nat, want);
   }
   if (nk == NK_ArrayNode) return infer_array_literal(c, id);
   if (nk == NK_HashNode || nk == NK_KeywordHashNode) {

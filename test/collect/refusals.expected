@@ -2152,12 +2152,6 @@ spinel: 1 refusal, nothing written
 == test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [promote] rc=1
 spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
 spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [default] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_mutated_param.rb:10: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
-spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [promote] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_mutated_param.rb:10: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
-spinel: 1 refusal, nothing written
 == test/reject/unresolved_builtin_method.rb [default] rc=1
 spinel: test/reject/unresolved_builtin_method.rb:7: unsupported Hash#transform_values on a value typed as Hash, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `transform_values`) recv=LocalVariableReadNode/ty28 argc=0
 spinel: 1 refusal, nothing written

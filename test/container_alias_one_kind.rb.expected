@@ -1,0 +1,17 @@
+true
+2
+2
+7
+"value"
+true
+{"s" => "value", "i" => 7}
+{"s" => "value", "i" => 7}
+true
+["s", :sym]
+["s", :sym]
+true
+2
+[1.5, "two"]
+{"a" => "1"}
+{"a" => "1", "x" => 1}
+false

@@ -5250,6 +5250,77 @@ int cls_fact_contents_kinds(Compiler *c, int node) {
 
 static unsigned char *cf_knoskip_arg;   /* (cf_solve 2) the calls that keep their receiver's flow */
 static int cf_kretry_out;
+/* (#10930) The allocation sites (an Array or Hash literal, Array.new,
+   Hash.new) whose containers two locals (parameters included) may hold:
+   each such local keeps the list of them (LocalVar.ctr_sites), and the
+   inference joins the kinds of the locals that share a site
+   (join_container_alias_groups), or an assignment between two of them
+   converts by copying and the program sees two containers. A local whose
+   set went past the cap (a summary), and a rest parameter, whose Array is
+   a new one at every call, are left out. */
+static int cf_container_site(CF *f, int x) {
+  const NodeTable *nt = f->nt;
+  NodeKind k = nt_kind(nt, x);
+  if (k == NK_ArrayNode || k == NK_HashNode) return 1;
+  if (k != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, x, "name");
+  int r = nt_ref(nt, x, "receiver");
+  if (!nm || !sp_streq(nm, "new") || r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
+  const char *cn = nt_str(nt, r, "name");
+  return cn && (sp_streq(cn, "Array") || sp_streq(cn, "Hash"));
+}
+static int cf_alias_local_el(CF *f, int s, int i) {
+  Compiler *c = f->c;
+  if (!f->nlv || i >= f->nlv[s] || !f->lv_el[s]) return -1;
+  int e = f->lv_el[s][i];
+  if (e < 0 || e >= f->nel || f->summ[e] >= 0) return -1;
+  const Scope *sc = &c->scopes[s];
+  const char *ln = sc->locals[i].name;
+  if (ln && ((sc->rest_idx >= 0 && sc->rest_idx < sc->nparams && sp_streq(ln, sc->pnames[sc->rest_idx])) ||
+             (sc->kwrest_idx >= 0 && sc->kwrest_idx < sc->nparams && sp_streq(ln, sc->pnames[sc->kwrest_idx]))))
+    return -1;
+  return e;
+}
+static void cf_alias_groups(CF *f) {
+  Compiler *c = f->c;
+  int ns = c->nscopes;
+  int *osite = malloc(sizeof(int) * ((size_t)f->nobj + 1)), *nhold = calloc((size_t)f->nobj + 1, sizeof(int)),
+      *oidx = malloc(sizeof(int) * ((size_t)f->nobj + 1));
+  if (!osite || !nhold || !oidx) cf_oom();
+  for (int o = 0; o < f->nobj; o++) { osite[o] = -1; oidx[o] = -1; }
+  for (int x = 0; x < f->nnodes && x < f->nel; x++)
+    if (f->elobj[x] >= 0 && f->elobj[x] < f->nobj && cf_container_site(f, x)) osite[f->elobj[x]] = x;
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      int e = cf_alias_local_el(f, s, i);
+      for (int j = 0; e >= 0 && j < f->npts[e]; j++) {
+        int o = f->pts[e][j];
+        if (o >= 0 && o < f->nobj && osite[o] >= 0 && o != f->gsum) nhold[o]++;
+      }
+    }
+  free(c->ctr_site_node); free(c->ctr_site_kind); free(c->ctr_site_kind_of);
+  c->nctr_site = 0;
+  for (int o = 0; o < f->nobj; o++) if (nhold[o] > 1) oidx[o] = c->nctr_site++;
+  c->ctr_site_node = malloc(sizeof(int) * ((size_t)c->nctr_site + 1));
+  c->ctr_site_kind = calloc((size_t)c->nctr_site + 1, sizeof(TyKind));
+  c->ctr_site_cap = f->nnodes;
+  c->ctr_site_kind_of = calloc((size_t)f->nnodes + 1, sizeof(TyKind));
+  if (!c->ctr_site_node || !c->ctr_site_kind || !c->ctr_site_kind_of) cf_oom();
+  for (int o = 0; o < f->nobj; o++) if (oidx[o] >= 0) c->ctr_site_node[oidx[o]] = osite[o];
+  for (int s = 0; s < ns; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      free(lv->ctr_sites); lv->ctr_sites = NULL; lv->nctr_sites = 0;
+      int e = cf_alias_local_el(f, s, i), n = 0;
+      for (int j = 0; e >= 0 && j < f->npts[e]; j++) { int o = f->pts[e][j]; if (o >= 0 && o < f->nobj && oidx[o] >= 0) n++; }
+      if (!n) continue;
+      lv->ctr_sites = malloc(sizeof(int) * (size_t)n);
+      if (!lv->ctr_sites) cf_oom();
+      for (int j = 0; j < f->npts[e]; j++) { int o = f->pts[e][j]; if (o >= 0 && o < f->nobj && oidx[o] >= 0) lv->ctr_sites[lv->nctr_sites++] = oidx[o]; }
+    }
+  free(osite); free(nhold); free(oidx);
+}
+
 static void cf_solve(Compiler *c, int directed, int dump_facts) {
   const NodeTable *nt = c->nt;
   CF f;
@@ -5593,6 +5664,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     c->cls_pool = f.pool; c->ncls_pool = f.npool;
     if (dump_facts) cf_dump_facts(c);
   }
+  if (f.directed && !f.closed && !f.kon) cf_alias_groups(&f);
   if (f.why) cf_why_report(&f);
   /* the pass's own */
   free(f.par); free(f.uf); free(f.set); free(f.ph); free(f.umemo);

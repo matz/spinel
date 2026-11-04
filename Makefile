@@ -2250,11 +2250,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -Eq "is not a (class|module)" "$$tmp/$$t.out" || \
 	    { echo "reject-test: FAIL (#4318: $$t rejected without saying why)"; sed -n 1,3p "$$tmp/$$t.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/typed_array_kept_by_struct_into_mutated_param.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tp.c" >"$$tmp/tp.out" 2>&1; then \
-	  echo "reject-test: FAIL (#4480: a typed array copied into a mutated general-Array parameter compiled)"; ok=0; \
-	else grep -q "which the method mutates" "$$tmp/tp.out" || \
-	  { echo "reject-test: FAIL (#4480: rejected without saying why)"; sed -n 1,5p "$$tmp/tp.out"; ok=0; }; fi; \
 	t=test/reject/system_env_options_hash.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/se.c" >"$$tmp/se.out" 2>&1; then \
 	  echo "reject-test: FAIL (system with an environment Hash and an options Hash compiled)"; ok=0; \

@@ -665,6 +665,7 @@ void comp_free(Compiler *c) {
   free(c->store_misfit_arg);
   free(c->ivar_widen_src);
   free((TyKind *)c->hash_want);
+  free(c->ctr_site_node); free(c->ctr_site_kind); free(c->ctr_site_kind_of);
   free((TyKind *)c->arr_want);
   free(c->oa_walked_node);
   free(c->oa_walked_kind);

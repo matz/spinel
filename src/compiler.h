@@ -431,6 +431,14 @@ typedef struct {
                        it alone and the method backstop boxes it after the fixpoint */
   int owner;        /* the scope that holds the slot (Scope.idx), -1 for a global
                        or a constant: the owner its writes move (comp_touch_scope) */
+  int *ctr_sites, nctr_sites;  /* (#10930) the allocation sites (indices
+                       into Compiler.ctr_site_node) of the containers this
+                       slot may hold that another slot may hold too (the
+                       directed class walk's per-site objects): slots of
+                       containers that share a site take one kind */
+  TyKind ctr_join;  /* (#10930) the kind the group's join gave the slot last
+                       round: a round that re-derives the slot and joins it
+                       to the same kind again is no change */
 } LocalVar;
 
 static inline TyKind lv_set_type(LocalVar *lv, TyKind t) {
@@ -1341,6 +1349,12 @@ typedef struct {
                           widens the ivar to the general Array, after the
                           fixpoint, as it does one passed directly */
   SP_TY_FIELD TyKind *hash_want; /* [node_cap] variant a hash literal should take from its use context (#3040) */
+  /* (#10930) the allocation sites (an Array or Hash literal, Array.new,
+     Hash.new) whose containers two slots may hold, by index: the node, and
+     the kind the join of its slots gave it (UNKNOWN for none); and the
+     kind of a site by node ([ctr_site_cap]) */
+  int *ctr_site_node; TyKind *ctr_site_kind; int nctr_site;
+  TyKind *ctr_site_kind_of; int ctr_site_cap;
   SP_TY_FIELD TyKind *arr_want;  /* [node_cap] array kind a node takes from its use context
                         rather than from its own contents: an empty `[]`
                         literal, or a `map` that narrow_object_arrays decided

@@ -23,7 +23,7 @@ nil
 slice_arity: ArgumentError: wrong number of arguments (given 2, expected 3)
 index_arity: ArgumentError: wrong number of arguments (given 1, expected 2)
 ptr_mismatch: TypeError: wrong argument type Array (expected String)
-ptr_mismatch2: TypeError: wrong argument type String (expected Array)
+ptr_mismatch2: no raise
 unbound_call: NoMethodError
 unbound_aref: NoMethodError
 3

@@ -197,9 +197,13 @@ int cplan_index_writer(Compiler *c, int cls, int *cdef);
    multiple assignment) does besides the store: CPS_CODE when it may call
    a method of the program -- a store on a receiver typed at run time, a
    writer that is a method of the program (a plain attr_writer is one
-   field store), the program's `[]=` (cplan_index_writer). 0 for any
-   other target. */
-enum { CPS_CODE = 1u };
+   field store), the program's `[]=` (cplan_index_writer), or a builtin
+   `[]=` whose callbacks on the keys it is handed (the builtin-callback
+   rows: a Hash's #hash and #eql?, an Array's #to_int) reach a method of
+   the program; CPS_CHANGES_ARRAY when it is a builtin `[]=` on an Array,
+   which changes its receiver in place (the name's mutation row). 0 for
+   any other target. */
+enum { CPS_CODE = 1u, CPS_CHANGES_ARRAY = 2u };
 unsigned cplan_target_store_effect(Compiler *c, int tgt);
 /* cplan_entries, for a reader that wants the code the call's emission
    names (reachability): the same answer, but for a call on a boxed receiver

@@ -59,7 +59,7 @@ Speaker#hum: define_method#19 end=yes
 Speaker.make: def#22 end=yes
 const Util: write#23
 visibility in #23: vis#24 module_function
-Util#twice: def#25 runs=never private end=yes
+Util#twice: def#25 runs=#33 private end=yes
 Util.twice: copy#25 end=yes
 $level: write#26
 main @main_ivar: write#27

@@ -4317,10 +4317,31 @@ static void lr_rta_unit(LrRta *t, int d) {
   t->stack[t->nstack++] = d;
 }
 static void lr_rta_all(LrRta *t, int inst);
+/* The instance versions of `name` on module a, and of the originals its
+   aliases take, as the copy of a module_function runs them though no object
+   of the module may exist to call them */
+static void lr_rta_inst(LrRta *t, int a, const char *name, int depth) {
+  const LrHist *h = depth < 64 ? lr_hist(t->r, a, 0, name, 0) : NULL;
+  if (!h || t->hreach[h - t->r->hist]) return;
+  lr_rta_reach(t, (int)(h - t->r->hist));
+  for (int j = 0; j < h->n; j++)
+    if (h->v[j].kind == LR_ALIAS && h->v[j].target) lr_rta_inst(t, a, h->v[j].target, depth + 1);
+}
+/* A module_function copy (on h, the singleton's history) runs the instance
+   method as it stood at the copy: the def of the copy's scope for a bare
+   copy; for a named one (`module_function :a`, which has no scope), the
+   instance history of the name */
+static void lr_rta_copy(LrRta *t, const LrHist *h, const LrDef *v) {
+  if (v->scope > 0) lr_rta_unit(t, t->c->scopes[v->scope].def_node);
+  else lr_rta_inst(t, h->a, v->target, 0);
+}
 static void lr_rta_version(LrRta *t, const LrHist *h, const LrDef *v) {
   if (v->kind == LR_DEF) lr_rta_unit(t, v->node);
   else if ((v->kind == LR_ALIAS || v->kind == LR_COPY) && !v->target) lr_rta_all(t, 0);
-  else if (v->kind == LR_ALIAS || v->kind == LR_COPY) h->b ? lr_rta_call_on(t, v->target, h->a, 0) : lr_rta_call(t, v->target, RQ_INST);
+  else if (v->kind == LR_ALIAS || v->kind == LR_COPY) {
+    h->b ? lr_rta_call_on(t, v->target, h->a, 0) : lr_rta_call(t, v->target, RQ_INST);
+    if (v->kind == LR_COPY) lr_rta_copy(t, h, v);
+  }
 }
 static void lr_rta_reach(LrRta *t, int hi) {
   const LrHist *h = &t->r->hist[hi];

@@ -4728,6 +4728,17 @@ static void sp_sched_report_stats(void) {
 #endif
 }
 
+/* main() is finishing and has at_exit hooks to run: the same turn for the
+   remaining runnable threads, with the helpers left up. A hook runs as CRuby's
+   does, while the program's threads are alive, and a thread it starts needs a
+   worker; sp_sched_drain ends them once the hooks are done. */
+void sp_sched_drain_runnable(void) {
+  if (g_current != &g_main_thread) return;
+  SCHED_LOCK();
+  sp_sched_pump(NULL, 2);
+  SCHED_UNLOCK();
+}
+
 void sp_sched_drain(void) {
   /* main() is finishing: run remaining runnable threads so fire-and-forget side
      effects happen, then shut the helper workers down. Only the main thread

@@ -24980,12 +24980,17 @@ static int nk_is_var_op_write(NodeKind k) {
 }
 
 /* Is v a Range literal (`a..b`, `a...b`) with both ends written, at least one
-   of which can run code? Its ends are ordered as separate operands. */
-static int range_lit_ends_ordered(Compiler *c, int v) {
+   of which can run code? Its ends are ordered as separate operands. Ruby
+   builds the Range right after its ends, and building it raises for ends
+   that do not compare (`at(1)..at("a")`, ArgumentError): an operand after
+   it must not run first. So the ends split only when the Range is the last
+   operand, or when both ends are Integers, which always make a Range. */
+static int range_lit_ends_ordered(Compiler *c, int v, int last) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_RangeNode) return 0;
   int lo = nt_ref(nt, v, "left"), hi = nt_ref(nt, v, "right");
   if (lo < 0 || hi < 0) return 0;
+  if (!last && !(comp_ntype(c, lo) == TY_INT && comp_ntype(c, hi) == TY_INT)) return 0;
   return subtree_has_side_effect(c, lo) || subtree_has_side_effect(c, hi);
 }
 
@@ -25043,7 +25048,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   int nmax = 1 + argc;
   for (int i = 0; i < argc; i++) {
     if (nt_kind(nt, argv[i]) == NK_KeywordHashNode) { int nk = 0; nt_arr(nt, argv[i], "elements", &nk); nmax += nk; }
-    else if (range_lit_ends_ordered(c, argv[i])) nmax++;
+    else if (range_lit_ends_ordered(c, argv[i], i == argc - 1)) nmax++;
   }
   int node[nmax], fresh[nmax], oo[nmax], copy[nmax], sh[nmax], fb[nmax], nb = 0;
   TyKind ty[nmax];
@@ -25063,7 +25068,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
        them to C as two arguments of one call (`x[(n += 1)..(n += 1)]` reached
        sp_IntArray_slice_range with both writes as its arguments, and gcc ran
        the end first), so each is bound in the order written */
-    if (!els && range_lit_ends_ordered(c, argv[i])) {
+    if (!els && range_lit_ends_ordered(c, argv[i], i == argc - 1)) {
       int lo = nt_ref(nt, argv[i], "left"), hi = nt_ref(nt, argv[i], "right");
       operand[nop++] = lo;
       operand[nop++] = hi;

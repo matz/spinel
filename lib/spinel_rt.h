@@ -17205,7 +17205,7 @@ static const char *sp_exc_attrs_super(sp_Exception *self, sp_int argc, const sp_
   int has_key = 0, has_recv = 0;
   sp_RbVal key = sp_box_nil(), recv = sp_box_nil();
   SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(recv);
-  if (nometh && argc > 3) { self->priv_call = sp_poly_truthy(av[argc - 1]); argc--; }
+  int priv = nometh && argc > 3 ? sp_poly_truthy(av[--argc]) : 0;
   sp_RbVal args = nometh && argc > 2 ? av[--argc] : sp_box_nil();
   sp_RbVal name = named && argc > 1 ? av[--argc] : sp_box_nil();
   if (argc > 1)
@@ -17235,7 +17235,7 @@ static const char *sp_exc_attrs_super(sp_Exception *self, sp_int argc, const sp_
   /* a String is the message itself, as #message answers it */
   if (argc > 0 && av[0].tag == SP_TAG_OBJ && av[0].cls_id == SP_BUILTIN_STRBUF && av[0].v.p)
     sp_exc_attach_msg(self, av[0].v.p);
-  if (nometh) self->xkey = args;
+  if (nometh) { self->xkey = args; self->priv_call = priv; }
   if (named) self->xname = name;
   if (has_key) { self->xkey = key; self->has_key = 1; }
   if (has_recv) { self->xrecv = recv; self->has_recv = 1; }

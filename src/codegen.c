@@ -5471,6 +5471,16 @@ static int sg_slot_convertible(TyKind from, TyKind to) {
   return from == TY_POLY || to == TY_POLY;
 }
 
+/* Whether the override `s` delegates to a parent `ps` whose answer is
+   always nil, which `s` then returns as its own slot's nil (method_ret_zero)
+   after the call: a void parent, or a nil-typed one under an override of
+   another concrete type (a poly override boxes a nil-typed answer). */
+static int sg_delegate_answers_nil(Scope *s, Scope *ps) {
+  if (method_is_void(s)) return 0;
+  if (method_is_void(ps)) return 1;
+  return ps->ret == TY_NIL && s->ret != TY_NIL && s->ret != TY_POLY;
+}
+
 /* The parent method a singleton subclass's `name` stands in front of, or -1.
    Only usable as a delegate when the C signature matches: same parameter count
    and types, and a return the caller's slot can take. A mismatch keeps today's
@@ -5489,12 +5499,15 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
   Scope *ps = &c->scopes[pm];
   if (ps->nparams != s->nparams) return -1;
   if ((ps->blk_param && ps->blk_param[0]) != (s->blk_param && s->blk_param[0])) return -1;
-  if (method_is_void(ps) != method_is_void(s)) return -1;
+  if (method_is_void(s) && !method_is_void(ps)) return -1;
   /* The parent's own signature can be WIDER than the override's -- the
      singleton bodies flowing through it are what widened it -- so accept a
-     poly on either side of any slot and convert at the boundary. Anything else
-     keeps today's behaviour rather than emitting C that does not compile. */
-  if (!sg_slot_convertible(s->ret, ps->ret)) return -1;
+     poly on either side of any slot and convert at the boundary. A parent
+     that answers nil (void, or nil-typed) leaves the override's own nil.
+     Anything else keeps today's behaviour rather than emitting C that does
+     not compile. */
+  if (!method_is_void(ps) && !sg_delegate_answers_nil(s, ps) &&
+      !sg_slot_convertible(s->ret, ps->ret)) return -1;
   for (int i = 0; i < s->nparams; i++) {
     LocalVar *a = scope_local(s, s->pnames[i]);
     LocalVar *bp = scope_local(ps, ps->pnames[i]);
@@ -7714,13 +7727,24 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
          carries the newest link's id and every ancestor's method has to run.
          "is my class an ancestor of the object's" is what sp_class_le answers,
          and is_a? asks it the same way. */
-      buf_printf(b, "  if (!sp_class_le((sp_Class){self->cls_id}, (sp_Class){%d})) %s", s->class_id,
-                 method_is_void(s) ? "{ " : "return ");
-      if (method_is_void(s) || s->ret == ps->ret) buf_puts(b, cb.p ? cb.p : "");
-      else if (s->ret == TY_POLY) emit_boxed_ret_call(c, ps, cb.p ? cb.p : "", b);
-      else emit_unbox_text(c, s->ret, cb.p ? cb.p : "", b);
-      buf_puts(b, ";");
-      buf_puts(b, method_is_void(s) ? " return; }\n" : "\n");
+      if (sg_delegate_answers_nil(s, ps)) {
+        const char *z = method_ret_zero(c, s);
+        buf_printf(b, "  if (!sp_class_le((sp_Class){self->cls_id}, (sp_Class){%d})) { (void)%s; return %s; }\n",
+                   s->class_id, cb.p ? cb.p : "", z ? z : "0");
+      }
+      else {
+        buf_printf(b, "  if (!sp_class_le((sp_Class){self->cls_id}, (sp_Class){%d})) %s", s->class_id,
+                   method_is_void(s) ? "{ " : "return ");
+        /* (an override that can answer nil holds the parent's plain
+           Integer or Float in its sp_oint / sp_ofloat) */
+        if (!method_is_void(s) && s->ret == ps->ret && method_ret_is_oint(s) && !method_ret_is_oint(ps))
+          buf_printf(b, "%s(%s)", oint_of(s->ret), cb.p ? cb.p : "");
+        else if (method_is_void(s) || s->ret == ps->ret) buf_puts(b, cb.p ? cb.p : "");
+        else if (s->ret == TY_POLY) emit_boxed_ret_call(c, ps, cb.p ? cb.p : "", b);
+        else emit_unbox_text(c, s->ret, cb.p ? cb.p : "", b);
+        buf_puts(b, ";");
+        buf_puts(b, method_is_void(s) ? " return; }\n" : "\n");
+      }
       free(cb.p);
     }
   }

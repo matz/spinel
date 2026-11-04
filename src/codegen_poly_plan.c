@@ -4838,6 +4838,20 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
                  tr, tv, rb9.p ? rb9.p : "sp_box_nil()");
       free(rb9.p);
     }
+    /* blockless upto / downto: a class defining the name took the
+       dispatch, and the Integer (a promote-mode sum is boxed) or String in
+       the same slot fell to the raise below (tzinfo's `(year + 1).upto(n)`
+       beside the date package's Date#upto) */
+    else if ((sp_streq(name, "upto") || sp_streq(name, "downto")) && argc == 1 && pos_argc == 1 &&
+             splat_a < 0 && blk_tmp2 < 0 && nt_ref(nt, id, "block") < 0 && ret == TY_POLY) {
+      Buf ub; memset(&ub, 0, sizeof ub);
+      { char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
+        if (atmp_ty[0] == TY_POLY) buf_puts(&ub, tn);
+        else emit_boxed_text(c, atmp_ty[0], tn, &ub); }
+      buf_printf(b, " _t%d = sp_poly_upto_enum(_t%d, %s, %d); break;",
+                 tr, tv, ub.p ? ub.p : "sp_box_nil()", sp_streq(name, "upto"));
+      free(ub.p);
+    }
     /* round(n) / ceil(n) / floor(n) / truncate(n): a class defining
        `round(digits)` took over the name, and the Integer or Float in
        the same slot fell to the raise below (#4532). The zero-arg forms

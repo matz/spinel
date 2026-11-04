@@ -34,3 +34,18 @@ class BO9 < BasicObject
 end
 p BO8.new.kz
 p BO9.new.kz
+# An include in a class or module the body nests goes to that class, not
+# to the outer one: the outer class still has no Object or Kernel.
+class BO10 < BasicObject
+  class Inner; include ::Kernel; end
+  module Mo; include ::Kernel; end
+  def zed = super
+  def kz = super
+end
+[-> { BO10.new.zed }, -> { BO10.new.kz }].each do |l|
+  begin
+    p l.call
+  rescue NoMethodError
+    puts "NoMethodError"
+  end
+end

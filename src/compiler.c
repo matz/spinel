@@ -5096,6 +5096,32 @@ const char *comp_prep_chain_target(Compiler *c, int class_id, const char *name) 
    parent, and past the top of an explicit chain, Object -- where a method the
    program defines on Object is every class's superclass method. A module's
    super is its includer's, and a class method's chain has no such end. */
+/* Marks (a calloc'd array over the node table, NULL when there is none to
+   mark) the nodes of ids[0..n) that sit in a ClassNode or ModuleNode nested
+   in that walk, less the nodes of a block or lambda inside one. */
+static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
+  int nn = 0, *roots = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
+  if (!roots) return NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, ids[i]);
+    if (k == NK_ClassNode || k == NK_ModuleNode) roots[nn++] = ids[i];
+  }
+  char *mark = nn > 0 ? calloc((size_t)nt->count, 1) : NULL;
+  if (!mark) { free(roots); return NULL; }
+  int m = 0, *in = nt_subtree_ids(nt, roots, nn, &m);
+  int nb = 0;
+  for (int i = 0; i < m; i++) {
+    mark[in[i]] = 1;
+    NodeKind k = nt_kind(nt, in[i]);
+    if (k == NK_BlockNode || k == NK_LambdaNode) roots[nb++] = in[i];
+  }
+  free(in);
+  int b = 0, *blk = nt_subtree_ids(nt, roots, nb, &b);
+  for (int i = 0; i < b; i++) mark[blk[i]] = 0;
+  free(blk);
+  free(roots);
+  return mark;
+}
 /* Is class ci under BasicObject with no Kernel among its ancestors? The
    includes registration recorded are asked first (an `include` through a
    constant alias, in a block or a class method of the body), then the
@@ -5123,13 +5149,20 @@ static int blank_slate_without_kernel(Compiler *c, int ci) {
     int body = c->classes[k].def_node >= 0 ? nt_ref(nt, c->classes[k].def_node, "body") : -1;
     if (body < 0) continue;
     int n = 0, found = 0, *ids = nt_subtree_ids(nt, &body, 1, &n);
+    /* a class or module the body nests is another self: its bare include
+       goes to that class (class B; class Inner; include Kernel). A block
+       there may run with this class as self (B.class_eval { include ... }),
+       so an include inside a block still counts. */
+    char *skip = nested_class_body_marks(nt, ids, n);
     for (int i = 0; i < n && !found; i++) {
+      if (skip && skip[ids[i]]) continue;
       if (nt_kind(nt, ids[i]) != NK_CallNode || nt_ref(nt, ids[i], "arguments") < 0) continue;
       const char *nm = nt_str(nt, ids[i], "name");
       int r = nt_ref(nt, ids[i], "receiver");
       found = nm && sp_streq(nm, "include") && (r < 0 || nt_kind(nt, r) == NK_SelfNode);
     }
     free(ids);
+    free(skip);
     if (found) return 0;
   }
   return 1;

@@ -2430,8 +2430,7 @@ static int const_top_level_walk(Compiler *c, int node, const char *cn, int depth
   }
   return 0;
 }
-int comp_is_wellknown_const(const char *cn) {
-  static const char *const wellknown[] = {
+static const char *const wellknown[] = {
     "Object", "BasicObject", "Kernel", "Module", "Class", "Array", "Hash",
     "String", "Integer", "Float", "Symbol", "Regexp", "Range", "NilClass",
     "TrueClass", "FalseClass", "Numeric", "Comparable", "Enumerable",
@@ -2439,8 +2438,13 @@ int comp_is_wellknown_const(const char *cn) {
     "STDOUT", "STDERR", "STDIN", "RUBY_VERSION", "RUBY_ENGINE", "RUBY_ENGINE_VERSION",
     "RUBY_PLATFORM", "RUBY_RELEASE_DATE", "RUBY_REVISION", "RUBY_COPYRIGHT", "RUBY_DESCRIPTION",
     "RUBY_PATCHLEVEL", NULL };
+int comp_is_wellknown_const(const char *cn) {
   for (int bi = 0; wellknown[bi]; bi++) if (sp_streq(cn, wellknown[bi])) return 1;
   return 0;
+}
+/* the i-th of those names, NULL past the last */
+const char *comp_wellknown_const_at(int i) {
+  return i >= 0 && i < (int)(sizeof wellknown / sizeof wellknown[0]) ? wellknown[i] : NULL;
 }
 int const_name_resolves_top_level(Compiler *c, const char *cn) {
   if (!cn) return 0;

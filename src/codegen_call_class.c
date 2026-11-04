@@ -3231,6 +3231,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
           buf_puts(b, ")");
         }
         else {
+          if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return 1; }
           /* no user initialize: create directly with first arg as message.
              An ivar-bearing subclass needs its dedicated struct size (#2772). */
           const char *cn2 = class_ruby_name(c, ci); if (!cn2) cn2 = c->classes[ci].name;

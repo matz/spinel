@@ -5149,6 +5149,45 @@ int class_is_syserr(Compiler *c, int ci) {
   return ci >= 0 && ci < c->nclasses && class_is_exc_subclass(c, ci) &&
          is_syserr_family_name(exc_builtin_parent(c, ci));
 }
+/* Is class `ci` of the program below SystemExit? Its construction runs
+   SystemExit#initialize, which takes the status ahead of the message. */
+int class_is_sysexit(Compiler *c, int ci) {
+  return ci >= 0 && ci < c->nclasses && class_is_exc_subclass(c, ci) &&
+         sp_streq(exc_builtin_parent(c, ci), "SystemExit");
+}
+/* A new exception of class `ci` with no message yet: the base-sized one of its
+   builtin parent, or its own struct when it has instance variables. ci < 0 is
+   SystemExit itself. `dim` is the temp's C type. */
+static void emit_sysexit_alloc(Compiler *c, int ci, const char **dim, Buf *b) {
+  static char ty[160];
+  if (ci < 0) { *dim = "sp_Exception"; buf_puts(b, "sp_exc_new(\"SystemExit\", (&(\"\\xff\")[1]))"); return; }
+  const char *cn = class_ruby_name(c, ci); if (!cn) cn = c->classes[ci].name;
+  if (c->classes[ci].nivars > 0) {
+    snprintf(ty, sizeof ty, "sp_%s", c->classes[ci].c_name);
+    *dim = ty;
+    buf_printf(b, "(sp_%s *)sp_exc_new_sub_sized(sizeof(sp_%s), \"%s\", (&(\"\\xff\")[1]))",
+               c->classes[ci].c_name, c->classes[ci].c_name, cn);
+    return;
+  }
+  *dim = "sp_Exception";
+  buf_printf(b, "sp_exc_new_sub(\"%s\", \"%s\", (&(\"\\xff\")[1]))", cn, exc_builtin_parent(c, ci));
+}
+/* `Cls.new(...)` with no initialize of the program's: SystemExit itself (ci < 0)
+   or a class below it. The status and the message are judged at run time, as
+   CRuby's initialize judges them. */
+void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
+  if (nt_argv_has(c->nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING))
+    unsupported(c, id, "a splat, keyword or block argument to a SystemExit constructor");
+  int te = ++g_tmp;
+  Buf alloc; memset(&alloc, 0, sizeof alloc);
+  const char *dim = "sp_Exception";
+  emit_sysexit_alloc(c, ci, &dim, &alloc);
+  buf_printf(b, "({ %s *_t%d = %s; SP_GC_ROOT(_t%d); ", dim, te, alloc.p, te);
+  free(alloc.p);
+  char lead[64]; snprintf(lead, sizeof lead, "(sp_Exception *)_t%d, ", te);
+  emit_syserr_call(c, id, "sp_sysexit_super", lead, argc, argv, b);
+  buf_printf(b, "; _t%d; })", te);
+}
 /* A call of the runtime's SystemCallError constructors on the arguments of
    a `.new` / raise / super: `fn(lead argc, (sp_RbVal[]){...})`, each argument
    boxed into a rooted temp first (a later argument's evaluation may
@@ -6536,9 +6575,9 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
                  tr2, tv, tv, ps_tri_fn, tv);
       /* a SystemExit answers success? too, as the typed accessor reads it;
          any other exception keeps the NoMethodError, with its receiver */
-      buf_printf(b, " : _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION && _t%d.v.p"
+      buf_printf(b, " : _t%d.tag == SP_TAG_OBJ && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)) && _t%d.v.p"
                     " && sp_exc_cls_matches(((sp_Exception *)_t%d.v.p)->cls_name, \"SystemExit\")"
-                    " ? (int)sp_exc_success_acc((sp_Exception *)_t%d.v.p)", tv, tv, tv, tv, tv);
+                    " ? (int)sp_exc_success_acc((sp_Exception *)_t%d.v.p)", tv, tv, tv, tv, tv, tv);
       buf_printf(b, " : (int)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0);"
                     " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })",
                  name, tv, tr2, tr2);
@@ -12760,7 +12799,7 @@ int ctor_arity_error(Compiler *c, int ci, int initm, int argc, char *msg, size_t
     }
     if (argc == 0) return 0;
     if (class_is_exc_subclass(c, ci)) {
-      if (argc == 1) return 0;
+      if (argc == 1 || class_is_sysexit(c, ci)) return 0;
       arity_message(msg, n, argc, 0, 1, NULL);
       return 1;
     }
@@ -13038,6 +13077,21 @@ static void emit_builtin_new_arms_text(Compiler *c, const char *pre, const char 
 int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b) {
   if (!class_is_exc_subclass(c, ci) || comp_method_in_chain(c, ci, "initialize", NULL) >= 0) return 0;
   const char *cn = class_ruby_name(c, ci); if (!cn) cn = c->classes[ci].name;
+  if (class_is_sysexit(c, ci)) {
+    Buf alloc; memset(&alloc, 0, sizeof alloc);
+    const char *dim = "sp_Exception";
+    emit_sysexit_alloc(c, ci, &dim, &alloc);
+    buf_printf(b, "case %d: { %s *_e = %s; SP_GC_ROOT(_e); sp_sysexit_super((sp_Exception *)_e, %d, ", ci, dim, alloc.p, argc);
+    free(alloc.p);
+    if (argc == 0) buf_puts(b, "NULL); ");
+    else {
+      buf_puts(b, "(sp_RbVal[]){");
+      for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", atmp[a]);
+      buf_puts(b, "}); ");
+    }
+    buf_printf(b, "_t%d = sp_box_obj(_e, %d); } break; ", rt2, ci);
+    return 1;
+  }
   if (class_is_syserr(c, ci)) {
     /* SystemCallError#initialize(msg = nil, func = nil): the errno text */
     buf_printf(b, "case %d: { const char *_m = sp_syserr_msg_a(\"%s\", %d, ", ci, cn, argc);
@@ -14582,6 +14636,7 @@ int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b) {
    its first argument the message. Klass.new(...) and a bare new(...) in a
    class method both build with it. */
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
+  if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return; }
   /* An ivar-bearing subclass needs its dedicated struct size --
      sp_exc_new_sub would only allocate the base (#2772). */
   const char *cn2 = class_ruby_name(c, ci); if (!cn2) cn2 = c->classes[ci].name;
@@ -14954,19 +15009,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* SystemExit.new(status = true, msg = "exit"): a leading Integer or
          boolean is the status; a String is the message (#2761) */
       if (sp_streq(cn, "SystemExit")) {
-        int te4 = ++g_tmp;
-        TyKind s0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
-        int has_status = argc >= 1 && (s0 == TY_INT || s0 == TY_BOOL);
-        int msg_i = has_status ? 1 : 0;
-        buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"SystemExit\", ", te4);
-        emit_exc_msg_arg(c, argc > msg_i ? argv[msg_i] : -1, b);   /* default message = class name */
-        buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d->result = sp_box_int(", te4, te4);
-        if (has_status) {
-          if (s0 == TY_BOOL) { buf_puts(b, "("); emit_expr(c, argv[0], b); buf_puts(b, ") ? 0 : 1"); }
-          else emit_expr(c, argv[0], b);
-        }
-        else buf_puts(b, "0");
-        buf_printf(b, "); _t%d; })", te4);
+        emit_sysexit_new(c, id, -1, argc, argv, b);
         { *out = 1; return 1; }
       }
       /* trailing `key:`/`receiver:` keywords (KeyError.new(msg, key:,

@@ -1,0 +1,34 @@
+no argument: Stop status=0 success=true msg=Stop true
+integer: Stop status=11 success=false msg=Stop true
+true: Stop status=0 success=true msg=Stop true
+false: Stop status=1 success=false msg=Stop true
+integer and message: Stop status=2 success=false msg=bye true
+true and message: Stop status=0 success=true msg=bye true
+message: Stop status=0 success=true msg=bye true
+empty message: Stop status=3 success=false msg= true
+nil: Stop status=0 success=true msg=Stop true
+float: Stop status=1 success=false msg=Stop true
+symbol: Stop status=0 success=true msg=sym true
+deeper: Deeper status=4 success=false msg=Deeper true
+super with both: Halt status=5 success=false msg=halted 5 true
+bare super: Forwarding status=6 success=false msg=Forwarding true
+super with a boolean: Quiet status=1 success=false msg=Quiet true
+super with a message: Named status=0 success=true msg=why true
+a class method's new: Built status=7 success=false msg=built true
+a class in a variable: Stop status=8 success=false msg=held true
+SystemExit itself: SystemExit status=1 success=false msg=SystemExit true
+with an ivar: Tagged status=9 success=false msg=tagged true
+kept
+wrong number of arguments (given 2, expected 0..1)
+wrong number of arguments (given 2, expected 0..1)
+raise the class: Stop status=0 success=true msg=Stop true
+raise with a message: Stop status=0 success=true msg=text true
+raise with a status: Stop status=12 success=false msg=Stop true
+raise SystemExit with a status: SystemExit status=13 success=false msg=SystemExit true
+raise an instance with a message: Stop status=14 success=false msg=replaced true
+past a bare rescue: Stop status=15 success=false msg=Stop true
+16
+17
+undefined method 'status' for an instance of RuntimeError
+ensure ran
+at_exit ran

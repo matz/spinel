@@ -137,7 +137,7 @@ struct LoadRecord {
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
   char **refl; int nrefl, crefl;        /* the names a reflection reader of the source names, sorted (lr_refl_take) */
-  char **refl_table; int nrefl_table, crefl_table;   /* ...those a reader that answers from the table names */
+  char **refl_table[2]; int nrefl_table[2], crefl_table[2];   /* ...those a reader that answers from the table names, by the side it reports (lr_refl_sides) */
   char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
@@ -1780,18 +1780,31 @@ static void lr_reopens_take(Compiler *c) {
    (capture_cells_shape) to refl_capt: of a class's own class method, they
    read the cells of the entry its call takes (cplan_cmethod_presence), or
    take the entry. Every other reader but a Method's maker answers from
-   the table (refl_table, elab_method_reflected). */
+   the table (refl_table, elab_method_reflected), kept by the sides whose
+   methods it may report (sides: 1 the instance side, 2 the class side). */
 enum { LR_REFL_TABLE, LR_REFL_MAKER, LR_REFL_CELL, LR_REFL_CAPT };
 static void lr_refl_list(LoadRecord *r, char ***l, int *n, int *cap, const char *name) {
   *l = lr_grow(*l, cap, *n, sizeof **l);
   if (!((*l)[(*n)++] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
 }
-static void lr_refl_add(LoadRecord *r, const char *name, int kind) {
+static void lr_refl_add(LoadRecord *r, const char *name, int kind, int sides) {
   if (!name) { r->refl_any = 1; return; }
   if (kind == LR_REFL_CELL) { lr_refl_list(r, &r->refl_cell, &r->nrefl_cell, &r->crefl_cell, name); return; }
   if (kind == LR_REFL_CAPT) { lr_refl_list(r, &r->refl_capt, &r->nrefl_capt, &r->crefl_capt, name); return; }
   lr_refl_list(r, &r->refl, &r->nrefl, &r->crefl, name);
-  if (kind == LR_REFL_TABLE) lr_refl_list(r, &r->refl_table, &r->nrefl_table, &r->crefl_table, name);
+  if (kind != LR_REFL_TABLE) return;
+  for (int sg = 0; sg < 2; sg++)
+    if (sides & (1 << sg)) lr_refl_list(r, &r->refl_table[sg], &r->nrefl_table[sg], &r->crefl_table[sg], name);
+}
+/* The sides whose methods table reader call n, asking rn, may report:
+   method_defined? and its kin a receiver's instance methods (1), but a
+   singleton class's class methods (2); any other reader an instance's on
+   `X.new` (1), and either on any other receiver (3) */
+static int lr_refl_sides(const NodeTable *nt, int n, const char *rn) {
+  int recv = nt_ref(nt, n, "receiver");
+  const char *rcn = recv >= 0 && nt_kind(nt, recv) == NK_CallNode ? nt_str(nt, recv, "name") : NULL;
+  if (is_method_defined_query(rn)) return is_singleton_class_name(rcn) ? 2 : 1;
+  return is_new_name(rcn) ? 1 : 3;
 }
 static void lr_refl_take(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -1802,22 +1815,23 @@ static void lr_refl_take(Compiler *c) {
     const int *av = call_args(nt, n, &ac);
     /* (each send's first argument names the method it calls: a send in turn) */
     while (rn && is_send_family(rn)) rn = a < ac ? vis_arg_name(nt, av[a++]) : "";
-    if (!rn) { lr_refl_add(r, NULL, LR_REFL_TABLE); continue; }
+    if (!rn) { lr_refl_add(r, NULL, LR_REFL_TABLE, 3); continue; }
     if ((pq = is_method_presence_query(rn)))
       lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL,
                   respond_to_cells_shape(nt, n) ? LR_REFL_CELL : capture_cells_shape(nt, n) ? LR_REFL_CAPT :
-                  is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE);
+                  is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE, lr_refl_sides(nt, n, rn));
   }
   NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
     int v = nt_ref(nt, n, "value"), rv = v >= 0 ? nt_ref(nt, v, "receiver") : -1;
     NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
     if (v >= 0 && nt_kind(nt, v) == NK_CallNode)
       lr_refl_add(r, nt_str(nt, v, "name"),
-                  rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? LR_REFL_CELL : LR_REFL_TABLE);
+                  rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? LR_REFL_CELL : LR_REFL_TABLE, 3);
   }
-  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], LR_REFL_TABLE);
+  for (int i = 0; i < c->ndef_asked; i++) lr_refl_add(r, c->def_asked[i], LR_REFL_TABLE, 3);
   if (r->nrefl > 1) qsort(r->refl, (size_t)r->nrefl, sizeof *r->refl, lr_name_cmp);
-  if (r->nrefl_table > 1) qsort(r->refl_table, (size_t)r->nrefl_table, sizeof *r->refl_table, lr_name_cmp);
+  for (int sg = 0; sg < 2; sg++)
+    if (r->nrefl_table[sg] > 1) qsort(r->refl_table[sg], (size_t)r->nrefl_table[sg], sizeof *r->refl_table[sg], lr_name_cmp);
   if (r->nrefl_cell > 1) qsort(r->refl_cell, (size_t)r->nrefl_cell, sizeof *r->refl_cell, lr_name_cmp);
   if (r->nrefl_capt > 1) qsort(r->refl_capt, (size_t)r->nrefl_capt, sizeof *r->refl_capt, lr_name_cmp);
 }
@@ -3057,10 +3071,22 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
   return late;
 }
 
+/* Does the record hold an extend, or a singleton class's include or
+   prepend: a module's instance methods become an object's own, a class's
+   class methods among them? */
+static int lr_singleton_mixed(const LoadRecord *r) {
+  for (int k = 0; k < r->ncls; k++)
+    for (int j = 0; j < r->cls[k].nmix; j++)
+      if (elab_mix_on_singleton(r->cls[k].mix[j].kind)) return 1;
+  return 0;
+}
 int elab_method_reflected(Compiler *c, const char *name, int sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
-  return r->refl_any || lr_refl_has(r->refl_table, r->nrefl_table, name) || lr_refl_cell_table(c, name, sg);
+  sg = sg != 0;
+  return r->refl_any || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
+         (sg && lr_refl_has(r->refl_table[0], r->nrefl_table[0], name) && lr_singleton_mixed(r)) ||
+         lr_refl_cell_table(c, name, sg);
 }
 
 int elab_method_replaced(Compiler *c, const char *name) {
@@ -7233,10 +7259,13 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
-  for (int i = 0; i < r->nrefl_table; i++) free(r->refl_table[i]);
+  for (int sg = 0; sg < 2; sg++) {
+    for (int i = 0; i < r->nrefl_table[sg]; i++) free(r->refl_table[sg][i]);
+    free(r->refl_table[sg]);
+  }
   for (int i = 0; i < r->nrefl_cell; i++) free(r->refl_cell[i]);
   for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);
-  free(r->refl_table); free(r->refl_cell); free(r->refl_capt);
+  free(r->refl_cell); free(r->refl_capt);
   free(r->names); free(r->defs); free(r->reopens); free(r->refl);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);

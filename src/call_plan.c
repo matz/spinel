@@ -1229,11 +1229,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      where a reader that answers from the table names the method
      (elab_method_reflected, the fact that keeps the name off the late
      bit): a respond_to? guarding the capture says it is there, so the
-     capture binds the table's method too, as the guarded call does. A
-     class method's respond_to? that reads the entry's cells
-     (cplan_cmethod_presence) leaves the capture on the entry, and is
-     itself given the entry (CT_CELLS). */
-  if ((flags & (CT_CAPTURE | CT_CELLS)) == CT_CAPTURE && p.region < 0 && elab_method_reflected(c, name, sg)) {
+     capture binds the table's method too, as the guarded call does. The
+     fact is the side's: a class method's respond_to? that reads the
+     entry's cells (cplan_cmethod_presence) asks only where it does not
+     hold, and an instance-side reader leaves a class-side capture on the
+     entry. */
+  if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name, sg)) {
     if (span) *span = 0;
     return mi;
   }
@@ -1415,16 +1416,18 @@ int cplan_presence_class(Compiler *c, int id) {
 }
 /* Does respond_to? call id ask the version cells of cls's class method
    name: one the record cannot order there, in a program whose
-   respond_to? asks only the methods (respond_to_missing_defined) */
+   respond_to? asks only the methods (respond_to_missing_defined), where
+   no reader answering from the table reports the class side's methods
+   (elab_method_reflected: a capture it guards binds the table's method) */
 static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name) {
   return id >= 0 && cls >= 0 && ct_version_named(c, name) && !cplan_cmethod_later(c, id, cls, name) &&
-         !respond_to_missing_defined(c);
+         !respond_to_missing_defined(c) && !elab_method_reflected(c, name, 1);
 }
 /* See call_plan.h. */
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out) {
   ElabVersion vs[VER_MAX_ARMS];
   if (!cplan_presence_asks(c, id, cls, name)) return 0;
-  int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE | CT_CELLS, NULL);
+  int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL);
   if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
   int nv = elab_chain_versions(c, cls, 1, name, vs, VER_MAX_ARMS);
   out->n = 0;

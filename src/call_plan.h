@@ -105,11 +105,8 @@ const CallPlan *cplan_user(Compiler *c, int id);
    name reached only by arms and captures. */
 /* CT_REACH asks the same lookup for an explicit route such as super.
    CT_CAPTURE selects the definition live at construction, or its entry
-   when the constructor must select an arm at run time. CT_CELLS, with
-   CT_CAPTURE, asks for that entry for a reader of its cells
-   (cplan_cmethod_presence), which a reader answering from the table does
-   not bind to the table's method as it binds a capture. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_CELLS = 32 };
+   when the constructor must select an arm at run time. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method

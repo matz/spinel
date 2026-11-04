@@ -8,6 +8,8 @@ NameError
 [true, :kq, :kq]
 "undefined method 'k' for class '#<Class:R2>'"
 :kr
+[false, NameError, true, true]
+[true, :kv, true, true]
 [NameError, "undefined method 'k' for class '#<Class:KC>'"]
 :kc
 [NameError, "undefined method '%' for class '#<Class:KC>'"]

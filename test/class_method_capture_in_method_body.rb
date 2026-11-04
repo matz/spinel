@@ -33,6 +33,18 @@ p cap_r
 set_r
 p cap_r
 
+# an instance method of the name elsewhere, and readers that report it,
+# leave the class side's capture and respond_to? alone
+class U
+  def k = :ku
+end
+class V; end
+def set_v = (def V.k = :kv)
+def look_v = [V.respond_to?(:k), (V.method(:k).call rescue $!.class), U.new.respond_to?(:k), U.method_defined?(:k)]
+p look_v
+set_v
+p look_v
+
 # a Class.new class is named by the constant written with it
 KC = Class.new
 def set_kc = (def KC.k = :kc)

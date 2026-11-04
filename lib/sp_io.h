@@ -45,8 +45,10 @@ typedef struct {
   unsigned char frozen;        /* Object#freeze; kept here, not in the GC header,
                                   because the standard streams are static storage
                                   with no header to flip (sp_io_stdout) */
-  unsigned char wnonblock;     /* write side of this handle is O_NONBLOCK:
-                                  0 not asked, 1 yes, 2 could not (#4307) */
+  unsigned char wnonblock;     /* the descriptor is O_NONBLOCK: a pipe's write
+                                  end, as the runtime set it; with own_buf, as
+                                  last found (sp_io_own_nb). 0 not asked,
+                                  1 yes, 2 no or could not (#4307) */
   unsigned char wstream;       /* SOCK_STREAM, asked once: 0 not yet, 1 yes,
                                   2 no. Only a byte stream may have a write
                                   split at the send buffer's free space; on a

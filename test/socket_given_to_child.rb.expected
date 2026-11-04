@@ -1,0 +1,4 @@
+child: exit=0 got=1000000
+parent read: hello
+parent write: got=4000000
+:allocated

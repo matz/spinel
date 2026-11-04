@@ -4150,6 +4150,12 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   else buf_printf(b, "_t%d; })", tacc);
   if (rlv0) lv_set_type(rlv0, rpt0);
   if (rlv1) lv_set_type(rlv1, rpt1);
+  /* the body's nodes back to the parameters' own types: they were typed
+     for this fold's accumulator, and the block emitted again elsewhere (a
+     program class's inject beside it takes the block as a proc, whose
+     parameters are boxed) read `a` as the seed's Array (#10931) */
+  if (rlv0 || rlv1)
+    for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   return 1;
 }
 

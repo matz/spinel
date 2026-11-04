@@ -47,6 +47,9 @@ int g_seed_box_settled = 0;
    boxes. Cleared once the fixpoint converges and iteration continues, so a
    slot whose evidence really never arrives still takes the pessimistic type. */
 int g_infer_optimistic = 0;
+/* A skipped getter write and the returns/locals it feeds must settle in
+   the conservative phase before a type-test arm can be discarded. */
+int g_infer_getter_write_pending = 0;
 int g_infer_write_round = 0;
 LocalVar *g_infer_self_write = NULL;
 int g_fixpoint_rounds = 0;
@@ -50783,6 +50786,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
   for (int pf_round = 0; pf_round < 2; pf_round++) {
   if (pf_round == 1 && !AN_STEP("make_yield_proc_forms", make_yield_proc_forms(c))) break;
   g_infer_optimistic = 1; comp_touch_global();   /* (a mode inference reads) */
+  g_infer_getter_write_pending = 0;
   AnRoundCap rc = { 128, 0, 0, NULL, 0 };
   for (int iter = 0; iter < rc.cap; iter++) {
     if (iter + 1 > g_fixpoint_rounds) g_fixpoint_rounds = iter + 1;
@@ -50952,7 +50956,8 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     }
     ch |= AN_PASS("desugar_builtin_scalar_calls", desugar_builtin_scalar_calls(c));     /* recv.m(a) -> __int_m(recv, a) etc */
     ch |= AN_PASS("narrow_empty_array_args_by_yield", narrow_empty_array_args_by_yield(c)); /* f([]) { |m| m << 1 }: the [] is an int array */
-    ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));                 /* if v.is_a?(Array) on a typed local: one arm */
+    if (!g_infer_getter_write_pending)
+      ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));               /* if v.is_a?(Array) on a typed local: one arm */
     ch |= AN_PASS("infer_block_params", infer_block_params(c));
     ch |= AN_PASS("infer_for_index", infer_for_index(c));
     ch |= AN_PASS("infer_catch_block_params", infer_catch_block_params(c));
@@ -50970,6 +50975,13 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_inherited_ivars", infer_inherited_ivars(c));
     ch |= AN_PASS("infer_return_types", infer_return_types(c));
     ch |= AN_PASS("backprop_hash_return_types", backprop_hash_return_types(c));
+    /* Visiting the deferred write is not enough: its getter return and a
+       caller's local may need further rounds to observe the widened field.
+       Only programs that deferred a getter write wait for a settled round. */
+    if (g_infer_getter_write_pending && !g_infer_optimistic && !ch) {
+      g_infer_getter_write_pending = 0;
+      ch |= AN_PASS("fold_static_is_a", fold_static_is_a(c));
+    }
     if (!ch) {
       /* Converged with the ambiguous guesses held at bottom. Clear the flag
          and keep going: a slot whose evidence never arrived is genuinely

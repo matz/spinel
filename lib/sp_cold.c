@@ -2555,7 +2555,7 @@ const char *sp_File_readline_sep(sp_File *f, const char *sep, sp_int limit, sp_b
 const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   if (ch == EOF) return NULL;
   /* A binary handle (a socket, a File opened "rb", one put in binmode or
      given ASCII-8BIT by set_encoding) has one-byte characters: reading on after a byte that looks like a UTF-8
@@ -2567,7 +2567,7 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   size_t n = 0;
   r[n++] = (char)ch;
   for (int i = 0; i < extra; i++) {
-    int c2 = SP_SIG_BLOCKING(fgetc(f->fp));
+    int c2 = sp_io_getc(f);
     if (c2 == EOF) break;
     r[n++] = (char)c2;
   }
@@ -2584,7 +2584,7 @@ const char *sp_File_readchar(sp_File *f) {SP_GC_ROOT(f);
 sp_oint sp_File_getbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   return ch == EOF ? sp_oint_nil() : sp_oint_of((sp_int)ch);
 }
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
@@ -2592,9 +2592,9 @@ sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
   SP_IO_OPEN(f);
   if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
     size_t n = sp_str_byte_len(v.v.s);
-    for (size_t i = n; i > 0; i--) ungetc((unsigned char)v.v.s[i - 1], f->fp);
+    for (size_t i = n; i > 0; i--) sp_io_ungetc(f, (unsigned char)v.v.s[i - 1]);
   }
-  else if (v.tag == SP_TAG_INT) ungetc((int)v.v.i, f->fp);
+  else if (v.tag == SP_TAG_INT) sp_io_ungetc(f, (int)v.v.i);
   return sp_box_nil();
 }
 sp_int sp_File_sysseek(sp_File *f, sp_int off, sp_int whence) {

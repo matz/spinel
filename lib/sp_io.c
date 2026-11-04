@@ -2027,9 +2027,9 @@ sp_int sp_File_flush(sp_File *f) {
 sp_bool sp_File_eof_p(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int c = SP_SIG_BLOCKING(fgetc(f->fp));
+  int c = sp_io_getc(f);
   if (c == EOF) return TRUE;
-  ungetc(c, f->fp);
+  sp_io_ungetc(f, c);
   return FALSE;
 }
 
@@ -2208,14 +2208,14 @@ void sp_file_rename(const char *from, const char *to) {SP_GC_ROOT_STR(from);SP_G
 sp_int sp_File_readbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   if (ch == EOF) sp_raise_cls("EOFError", "end of file reached");
   return (sp_int)(unsigned char)ch;
 }
 /* IO#ungetbyte: push one byte back onto the read buffer; returns nil. */
 void sp_File_ungetbyte(sp_File *f, sp_int byte) {
   SP_IO_OPEN(f);
-  ungetc((int)(unsigned char)byte, f->fp);
+  sp_io_ungetc(f, (int)(unsigned char)byte);
 }
 /* IO#binmode?: true after #binmode, or for a handle opened in binary mode.
    A socket is binary too, as CRuby's is (its encoding is BINARY). */

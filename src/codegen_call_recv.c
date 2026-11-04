@@ -19764,26 +19764,39 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   }
   /* Data#with on a poly receiver (a Data read out of a container): build a
      symbol-keyed override hash from the keyword args, then dispatch by cls_id
-     to a copy-update constructor (#2890). */
+     to a copy-update constructor (#2890). The receiver runs first, then each
+     element in source order with its own hoists (in the caller's prelude
+     they ran before the receiver); a `**hash` binds its keys over the ones
+     before it, as a later key does. */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "with") && argc == 1 &&
       nt_kind(nt, argv[0]) == NK_KeywordHashNode) {
     if (!poly_name_user_claimed(c, "with", argc)) {
       int en = 0; const int *els = nt_arr(nt, argv[0], "elements", &en);
-      int th = ++g_tmp;
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);\n", th, th);
+      int tr = ++g_tmp, th = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);",
+                 tr, th, th);
       for (int e = 0; e < en; e++) {
-        int key = nt_ref(nt, els[e], "key");
-        NodeKind kty_k = nt_kind(nt, key);
-        const char *kn = (kty_k == NK_SymbolNode) ? nt_str(nt, key, "value") : NULL;
+        int splat = nt_kind(nt, els[e]) == NK_AssocSplatNode;
+        int key = splat ? -1 : nt_ref(nt, els[e], "key");
+        NodeKind kk = key >= 0 ? nt_kind(nt, key) : NK_NilNode;
+        const char *kn = kk == NK_SymbolNode ? nt_str(nt, key, "value") : kk == NK_StringNode ? nt_str(nt, key, "content") : NULL;
         int val = nt_ref(nt, els[e], "value");
-        if (!kn || val < 0) continue;
-        emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", th, kn);
-        emit_boxed(c, val, g_pre); buf_puts(g_pre, ");\n");
+        if (splat && val < 0) unsupported_feature(c, id, "Data#with with an anonymous `**`");
+        if (!splat && !kn) unsupported_feature(c, id, "Data#with with a computed key on a boxed receiver");
+        if (val < 0) continue;
+        Buf pre = {0}, vb = {0}; Buf *saved_pre = g_pre;
+        g_pre = &pre; emit_boxed(c, val, &vb); g_pre = saved_pre;
+        if (pre.p) buf_printf(b, " %s", pre.p);
+        if (splat) buf_printf(b, " sp_poly_with_kw_merge(_t%d, %s);", th, vb.p ? vb.p : "sp_box_nil()");
+        else {
+          buf_printf(b, " sp_SymPolyHash_set(_t%d, sp_sym_intern(", th);
+          emit_str_literal(b, kn);
+          buf_printf(b, "), %s);", vb.p ? vb.p : "sp_box_nil()");
+        }
+        free(pre.p); free(vb.p);
       }
-      buf_puts(b, "sp_poly_with_m("); emit_expr(c, recv, b);
-      buf_printf(b, ", sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH))", th);
+      buf_printf(b, " sp_poly_with_m(_t%d, sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH)); })", tr, th);
       return 1;
     }
   }

@@ -41534,6 +41534,52 @@ static int nn_nil_only_leaf(const VpLeaf *leaf, void *ud) {
   LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
   return lv && lv->nil_only;
 }
+/* `x.with(...)` on a boxed receiver (sp_obj_with): member `mn` of every
+   Data the dispatch can copy, an Integer or Float one, takes a nil; NULL
+   names every member. 1 when one changed. */
+static int mark_poly_with_member_nullable(Compiler *c, const char *mn) {
+  int changed = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *sci = &c->classes[k];
+    if (!sci->is_data || sci->nmembers <= 0 || comp_method_in_chain(c, k, "initialize", NULL) >= 0) continue;
+    for (int m = 0; m < sci->nmembers; m++) {
+      if (mn && !sp_streq(sci->ivars[m] + 1, mn)) continue;
+      if (sci->ivar_nullable_int[m] || (sci->ivar_types[m] != TY_INT && sci->ivar_types[m] != TY_FLOAT)) continue;
+      sci->ivar_nullable_int[m] = 1; comp_touch_class(sci->idx); changed = 1;
+    }
+  }
+  return changed;
+}
+/* The keyword elements of a `with` on a boxed receiver that can give a
+   member nil: a nil or nullable value under a Symbol or String key, the
+   same in a Hash literal under `**`, and any `**` operand whose values can
+   be nil at run time, which can give every member nil. */
+static int mark_poly_with_nullable(Compiler *c, const int *ke, int kn) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int e = 0; e < kn; e++) {
+    int v = nt_ref(nt, ke[e], "value");
+    if (v < 0) continue;
+    if (nt_kind(nt, ke[e]) == NK_AssocSplatNode) {
+      if (nt_kind(nt, v) == NK_HashNode) {
+        int hn = 0; const int *he = nt_arr(nt, v, "elements", &hn);
+        changed |= mark_poly_with_nullable(c, he, hn);
+        continue;
+      }
+      TyKind ht = infer_type(c, v);
+      TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : TY_POLY;
+      if (vt == TY_POLY || vt == TY_NIL) changed |= mark_poly_with_member_nullable(c, NULL);
+      continue;
+    }
+    if (nt_kind(nt, ke[e]) != NK_AssocNode) continue;
+    int key = nt_ref(nt, ke[e], "key");
+    NodeKind kk = key >= 0 ? nt_kind(nt, key) : NK_NilNode;
+    const char *mn = kk == NK_SymbolNode ? nt_str(nt, key, "value") : kk == NK_StringNode ? nt_str(nt, key, "content") : NULL;
+    if (!mn || (nt_kind(nt, v) != NK_NilNode && !nullable_int_value(c, v))) continue;
+    changed |= mark_poly_with_member_nullable(c, mn);
+  }
+  return changed;
+}
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* A scalar local a read can reach before any write starts as its nil and
@@ -42199,6 +42245,11 @@ static void mark_nullable_int_locals(Compiler *c) {
       const int *wav = wa >= 0 ? nt_arr(nt, wa, "arguments", &wan) : NULL;
       if (wan != 1 || nt_kind(nt, wav[0]) != NK_KeywordHashNode) continue;
       TyKind wrt = infer_type(c, wrecv);
+      if (wrt == TY_POLY) {
+        int pn = 0; const int *pe = nt_arr(nt, wav[0], "elements", &pn);
+        changed |= mark_poly_with_nullable(c, pe, pn);
+        continue;
+      }
       if (!ty_is_object(wrt)) continue;
       ClassInfo *sci = &c->classes[ty_object_class(wrt)];
       if (!sci->is_struct || sci->nmembers <= 0) continue;

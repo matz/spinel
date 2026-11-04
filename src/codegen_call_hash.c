@@ -707,6 +707,10 @@ int emit_op_hash_delete(Compiler *c, const BopCtx *x, Buf *b) {
   /* a key no entry matches (hash_okey_miss) goes through the _okey ops */
   const char *ks = hash_okey_sfx(c, argv[0], ty_hash_key(rt));
   buf_printf(b, " %s _t%d = ", hash_key_ctype(c, argv[0], ty_hash_key(rt)), tk); emit_hash_key_o(c, argv[0], ty_hash_key(rt), b);
+  if (rt == TY_STR_POLY_HASH) {
+    buf_printf(b, "; sp_StrPolyHash_delete_value(_t%d, _t%d); })", th, tk);
+    return 1;
+  }
   /* a miss answers nil: an Integer value's nil is out of band (an sp_oint),
      not a deleted value of zero (#4531) */
   /* ... and a value the hash holds as nil is nil too: read with its nil

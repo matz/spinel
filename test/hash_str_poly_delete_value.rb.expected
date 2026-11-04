@@ -1,0 +1,34 @@
+7
+"value"
+nil
+false
+false
+false
+1
+true
+[1, 2]
+true
+nil
+nil
+"default"
+7
+["text"]
+nil
+[]
+"default"
+["absent"]
+1
+"nul"
+false
+true
+"two"
+["first", "last", "middle"]
+[1, nil, false]
+nil
+"missing absent"
+["first", "middle"]
+FrozenError
+true
+FrozenError
+true
+["integer", "text"]

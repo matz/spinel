@@ -5087,24 +5087,16 @@ const char *comp_prep_chain_target(Compiler *c, int class_id, const char *name) 
   return NULL;
 }
 
-/* Is this `super` (with or without arguments) Class#new? Inside a class
-   method `new` whose ancestors define no class method of that name, the
-   parent is Class itself: `def self.new(x) = super(x * 10)` allocates the
-   receiving class and runs its initialize. The class-method chain answered
-   "no superclass method", and so did every call that reached one. */
-/* The class a `super` in class_id's methods starts its lookup in: the
-   parent, and past the top of an explicit chain, Object -- where a method the
-   program defines on Object is every class's superclass method. A module's
-   super is its includer's, and a class method's chain has no such end. */
 /* Marks (a calloc'd array over the node table, NULL when there is none to
-   mark) the nodes of ids[0..n) that sit in a ClassNode or ModuleNode nested
-   in that walk, less the nodes of a block or lambda inside one. */
+   mark) the nodes of ids[0..n) that sit in a ClassNode nested in that walk,
+   less the nodes of a block or lambda inside one. A nested module is left
+   in: the outer body can include or prepend it, or send it :include. */
 static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
   int nn = 0, *roots = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
   if (!roots) return NULL;
   for (int i = 0; i < n; i++) {
     NodeKind k = nt_kind(nt, ids[i]);
-    if (k == NK_ClassNode || k == NK_ModuleNode) roots[nn++] = ids[i];
+    if (k == NK_ClassNode) roots[nn++] = ids[i];
   }
   char *mark = nn > 0 ? calloc((size_t)nt->count, 1) : NULL;
   if (!mark) { free(roots); return NULL; }
@@ -5122,6 +5114,15 @@ static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
   free(roots);
   return mark;
 }
+/* Is this `super` (with or without arguments) Class#new? Inside a class
+   method `new` whose ancestors define no class method of that name, the
+   parent is Class itself: `def self.new(x) = super(x * 10)` allocates the
+   receiving class and runs its initialize. The class-method chain answered
+   "no superclass method", and so did every call that reached one. */
+/* The class a `super` in class_id's methods starts its lookup in: the
+   parent, and past the top of an explicit chain, Object -- where a method the
+   program defines on Object is every class's superclass method. A module's
+   super is its includer's, and a class method's chain has no such end. */
 /* Is class ci under BasicObject with no Kernel among its ancestors? The
    includes registration recorded are asked first (an `include` through a
    constant alias, in a block or a class method of the body), then the
@@ -5149,8 +5150,8 @@ static int blank_slate_without_kernel(Compiler *c, int ci) {
     int body = c->classes[k].def_node >= 0 ? nt_ref(nt, c->classes[k].def_node, "body") : -1;
     if (body < 0) continue;
     int n = 0, found = 0, *ids = nt_subtree_ids(nt, &body, 1, &n);
-    /* a class or module the body nests is another self: its bare include
-       goes to that class (class B; class Inner; include Kernel). A block
+    /* a class the body nests is another self: its bare include goes to
+       that class (class B; class Inner; include Kernel). A block
        there may run with this class as self (B.class_eval { include ... }),
        so an include inside a block still counts. */
     char *skip = nested_class_body_marks(nt, ids, n);

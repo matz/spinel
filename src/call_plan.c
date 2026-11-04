@@ -5926,11 +5926,20 @@ static int ver_late_make(Compiler *c) {
    follows both (an_calls_named_first), their entries made and their cells
    written now, as the build made the others' (ver_named_asks,
    ver_cells_write); and the entries the typed calls that may meet no
-   version ask (ver_late_make). Changed when it made one. */
+   version ask, and the respond_to?s whose cells stand for such a call
+   (ver_late_make). Changed when it made one. */
 int ver_entries_demand(Compiler *c) {
-  int any = 0, e0 = c->nver_entries, late = c->nver_late;
+  int any = 0, e0 = c->nver_entries, late;
   for (int i = 0; i < c->nver_defer; i++)
     if (!c->ver_defer[i].taken && an_calls_named_first(c, c->ver_defer[i].name) >= 0) any = c->ver_defer[i].taken = 1;
+  /* a respond_to? the cells answer asks the entry a call of the name
+     would take where it runs, as such a call asks it (cplan_presence_class) */
+  for (int id = an_calls_named_first(c, "respond_to?"); id >= 0; id = an_calls_named_next(id)) {
+    int pc = cplan_presence_class(c, id);
+    const char *nm = pc >= 0 ? method_sym_arg(c, id) : NULL;
+    if (nm && cplan_presence_asks(c, id, pc, nm)) call_target(c, id, pc, nm, CT_CMETHOD | CT_CAPTURE, NULL);
+  }
+  late = c->nver_late;
   if (!any && !late) return 0;
   if (any) ver_named_asks(c, 1);
   any = c->nver_entries > e0;

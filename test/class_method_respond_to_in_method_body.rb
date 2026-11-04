@@ -66,3 +66,25 @@ def set_h = (def H.k = :kh)
 p H.respond_to?(:k), defined?(H.k)
 set_h if r.size > 5
 p H.respond_to?(:k)
+
+# a class Class.new builds: its block's accessors and class methods, and
+# respond_to? from a class method of the block where no call names the method
+J = Class.new do
+  class << self
+    attr_accessor :cfg
+  end
+  def self.j = :j
+end
+J.cfg = 3
+def set_j = (def J.k = :kj)
+def go_j = (J.respond_to?(:k) ? J.k : :none)
+p J.cfg, J.respond_to?(:cfg), J.respond_to?(:k), J.j, go_j
+set_j
+p J.respond_to?(:k), go_j
+N = Class.new do
+  def self.r = (respond_to?(:k) ? :yes : :no)
+end
+def set_n = (def N.k = :kn)
+p N.r
+set_n
+p N.r

@@ -46,6 +46,34 @@ end
 puts "rescued in the thread: #{kept.value}"
 ends("nothing to raise") { sleep 0.05 }
 
+# A thread already dead when main joins it: raised once as well, however main
+# joins it, and the wait after it has nothing to raise. A later join of that
+# thread raises it again, as any thread's exception.
+def died_of_exit(status)
+  t = Thread.new { exit(status) }
+  while t.alive?
+  end
+  t
+end
+
+ends("join of a dead thread") { died_of_exit(10).join }
+ends("the wait after") { sleep 0.01 }
+ends("value of a dead thread") { died_of_exit(11).value }
+ends("the wait after") { sleep 0.01 }
+ends("join with a limit of a dead thread") { died_of_exit(12).join(30) }
+ends("the wait after") { sleep 0.01 }
+ends("join with a limit of that thread") { exit_soon(13).join(30) }
+ends("the wait after") { sleep 0.05 }
+
+dead = nil
+ends("first join") do
+  dead = Thread.new { exit(14) }
+  while dead.alive?
+  end
+  dead.join
+end
+ends("second join") { dead.join }
+
 # Uncaught, it ends the program as an exit in main does.
 at_exit { puts "at_exit ran" }
 exit_soon(0)

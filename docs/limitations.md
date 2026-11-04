@@ -721,7 +721,11 @@ still works.
   `Thread#kill` of the main thread is a no-op, where CRuby ends the process.
   An `exit` or `abort` that ends another thread reaches main the same way, so
   a main that computes to its end without a wait finishes first, and the
-  program exits with main's status.
+  program exits with main's status. With `SPINEL_WORKERS=1` main shares its
+  worker with the other threads, and such an `exit` can reach it during a
+  computation, as in CRuby. Main holds one raise until its next wait: a later
+  one replaces it, except that a waiting `exit` stays and the later one is
+  dropped, where CRuby raises each in turn.
 - **An `--incremental` build is slower code than a release build.** It is a
   development-build mode: the program is compiled as many units, so methods
   are not inlined across units, and short methods lose the inline hint they

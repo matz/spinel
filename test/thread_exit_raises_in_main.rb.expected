@@ -9,5 +9,15 @@ join of that thread: exit 8
 the wait after: not raised
 rescued in the thread: 9
 nothing to raise: not raised
+join of a dead thread: exit 10
+the wait after: not raised
+value of a dead thread: exit 11
+the wait after: not raised
+join with a limit of a dead thread: exit 12
+the wait after: not raised
+join with a limit of that thread: exit 13
+the wait after: not raised
+first join: exit 14
+second join: exit 14
 ensure ran
 at_exit ran

@@ -29,12 +29,21 @@
 #include <openssl/evp.h>
 #include <openssl/ecdsa.h>
 #include <openssl/rsa.h>
+#include <openssl/crypto.h>
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 # include <openssl/decoder.h>
 #endif
 #include <limits.h>
 #include <string.h>
 #include <fcntl.h>
+
+sp_int sp_openssl_fixed_length_secure_compare(const char *a, const char *b) {
+  /* Byte lengths include embedded NULs; libcrypto owns the constant-time loop. */
+  size_t n = sp_str_byte_len(a);
+  if (n != sp_str_byte_len(b))
+    sp_raise_cls("ArgumentError", "inputs must be of equal length");
+  return CRYPTO_memcmp(a, b, n);
+}
 
 /* Version floor and the one API that moved. SSL_get1_peer_certificate is
    OpenSSL 3.0's name for what 1.1 called SSL_get_peer_certificate, and

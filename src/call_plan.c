@@ -1145,6 +1145,30 @@ int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   if (cdef) *cdef = dc;
   return wmi;
 }
+/* Does builtin `[]=` on a receiver of type rt call back, on one of the
+   keys keys[0..n) it is handed, a method of the program? Its rows name the
+   callbacks (bop_class_callbacks, BCR_ARG); a key of a program class
+   reaches its class's method, a boxed one any class's. A receiver class
+   the rows have not probed may call anything. The stored value is the
+   element the assignment takes, not handed over to be converted here. */
+static int cps_key_callbacks_run_code(Compiler *c, TyKind rt, const int *keys, int n) {
+  const char *rc = ty_is_obj_array(rt) ? "Array" : builtin_class_of_type(rt);
+  const BopCallback *cb = NULL;
+  int nc = rc ? bop_class_callbacks(rc, "[]=", &cb) : 0;
+  if (nc < 0) return 1;
+  for (int i = 0; i < nc; i++) {
+    if (!(cb[i].roles & BCR_ARG)) continue;
+    for (int j = 0; j < n; j++) {
+      TyKind kt = comp_ntype(c, keys[j]);
+      if (ty_is_object(kt) && comp_method_in_chain(c, ty_object_class(kt), cb[i].name, NULL) >= 0) return 1;
+      if (kt != TY_POLY && kt != TY_UNKNOWN) continue;
+      int np = 0;
+      const PolyCand *pc = comp_poly_candidates(c, cb[i].name, &np);
+      for (int q = 0; q < np; q++) if (!pc[q].native) return 1;
+    }
+  }
+  return 0;
+}
 /* See call_plan.h. A target is the receiver and name of the call its
    store makes; an index target with no key stores nothing the program
    sees. */
@@ -1161,9 +1185,13 @@ unsigned cplan_target_store_effect(Compiler *c, int tgt) {
     return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &dc) >= 0 && dc >= 0) ? CPS_CODE : 0;
   }
   int args = nt_ref(nt, tgt, "arguments"), n = 0;
-  if (args >= 0) nt_arr(nt, args, "arguments", &n);
+  const int *keys = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
   if (n < 1) return 0;
-  return open || cplan_index_writer(c, cls, NULL) >= 0 ? CPS_CODE : 0;
+  if (open || cplan_index_writer(c, cls, NULL) >= 0) return CPS_CODE;
+  if (cls >= 0) return 0;
+  unsigned e = cps_key_callbacks_run_code(c, rt, keys, n) ? CPS_CODE : 0;
+  if ((ty_is_array(rt) || ty_is_obj_array(rt)) && bop_name_mutates("[]=", BOP_MUT_CONTAINER)) e |= CPS_CHANGES_ARRAY;
+  return e;
 }
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */

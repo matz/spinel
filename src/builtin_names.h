@@ -22,6 +22,7 @@ int is_instance_of_query(const char *n);   /* instance_of? */
 int is_case_eq(const char *n);        /* === */
 int is_round_family(const char *n);   /* round ceil floor truncate */
 int is_push_alias(const char *n);     /* push << append */
+int fresh_array_builtin_name(const char *nm);   /* map sort split divmod ...: a new Array where it answers one */
 int is_bit_op(const char *n);         /* & | ^ */
 int is_basic_arith(const char *n);    /* + - * / (is_arith_op adds % and **) */
 int is_int_arith_op(const char *n);   /* + - * / %: an Integer's arithmetic that answers an Integer */

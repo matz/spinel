@@ -1338,7 +1338,10 @@ static int infer_case_pattern_locals(Compiler *c) {
    same reasoning as a push of a foreign element, on a mutation that rewrites
    the whole array rather than extending it. Without this the typed setter took
    the tail raw (`sp_IntArray_set(a, i, <a String>)`) and the C build failed.
-   Widening only: a receiver whose element type already fits is untouched. */
+   Widening only: a receiver whose element type already fits is untouched.
+   The receiver is the Array the mutation lands in (mutated_array), past the
+   calls before it that answer their receiver: `a.each_slice(1) { }.map! { }`
+   changes a. */
 int widen_arrays_from_map_bang(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -1353,6 +1356,7 @@ int widen_arrays_from_map_bang(Compiler *c) {
     TyKind tt = infer_type(c, bb[bn - 1]);
     if (tt == TY_UNKNOWN) continue;
     int recv = nt_ref(nt, id, "receiver");
+    if (recv >= 0) recv = mutated_array(c, recv);
     if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
     const char *rnm = nt_str(nt, recv, "name");
     Scope *ls = rnm ? comp_scope_of(c, recv) : NULL;
@@ -6388,18 +6392,6 @@ static int widen_arg_hash(Compiler *c, int arg) {
   }
   ty_ref_set(c, slot, TY_POLY_POLY_HASH);
   return 1;
-}
-
-/* A builtin of this name answers, where it answers an Array, a new one
-   nothing else holds. */
-int fresh_array_builtin_name(const char *nm) {
-  static const char *const fresh[] = {
-    "map", "collect", "flat_map", "collect_concat", "filter_map", "select", "filter",
-    "reject", "sort", "sort_by", "reverse", "uniq", "compact", "flatten", "zip",
-    "split", "chars", "bytes", "lines", "scan", "keys", "values", "dup",
-    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "each_slice",
-    "each_cons", "+", "-", "*", "&", "|", NULL };
-  return nm && str_in(nm, fresh);
 }
 
 /* 1 when `v` builds a new array nothing else holds: a literal, `Array.new`,

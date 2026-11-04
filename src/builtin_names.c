@@ -80,6 +80,18 @@ int is_push_alias(const char *n) {
   return sp_streq(n, "push") || sp_streq(n, "<<") || sp_streq(n, "append");
 }
 
+/* A builtin of this name answers, where it answers an Array, a new one
+   nothing else holds. */
+int fresh_array_builtin_name(const char *nm) {
+  static const char *const fresh[] = {
+    "map", "collect", "flat_map", "collect_concat", "filter_map", "select", "filter",
+    "reject", "sort", "sort_by", "reverse", "uniq", "compact", "flatten", "zip",
+    "split", "chars", "bytes", "lines", "scan", "keys", "values", "dup",
+    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod",
+    "+", "-", "*", "&", "|", NULL };
+  return nm && str_in(nm, fresh);
+}
+
 int is_bit_op(const char *n) {
   return sp_streq(n, "&") || sp_streq(n, "|") || sp_streq(n, "^");
 }
